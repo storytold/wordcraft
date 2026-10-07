@@ -191,7 +191,9 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
             let mut p = Paragraph::with_text("AaBbCcDd", CharProps::default()).styled(id);
             p.props.space_before = Some(0.0);
             p.props.align = Some(wordcraft_doc::Align::Left);
-            p.props.indent_left = Some(0.0);
+            // Keep hanging indents (bullets) but start the first line at the tile's left edge.
+            let first = doc.styles.resolve_para(&p.props).indent_first;
+            p.props.indent_left = Some(if first.is_finite() { (-first).max(0.0) } else { 0.0 });
             p.props.borders = None;
             p.props.shading = None;
             snippet(doc, p, 220.0, 30.0, ppp, 1.0)
@@ -200,9 +202,13 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
             let sz = h.size_vec2() / ppp;
             let ir = Rect::from_min_size(pos2(r.min.x + 3.0, r.min.y + 4.0), sz.min(vec2(68.0, 32.0)));
             let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2((ir.width() / sz.x).min(1.0), (ir.height() / sz.y).min(1.0)));
-            ui.painter().image(h.id(), ir, uv, egui::Color32::WHITE);
+            ui.painter().with_clip_rect(r).image(h.id(), ir, uv, egui::Color32::WHITE);
         }
-        ui.painter().text(pos2(r.center().x, r.max.y - 9.0), egui::Align2::CENTER_CENTER, name, regular(10.5), t.text);
+        let mut job = egui::text::LayoutJob::single_section(name.clone(), egui::TextFormat::simple(regular(10.5), t.text));
+        job.wrap = egui::text::TextWrapping::truncate_at_width(r.width() - 6.0);
+        let galley = ui.painter().layout_job(job);
+        let label_pos = pos2(r.center().x - galley.size().x / 2.0, r.max.y - 9.0 - galley.size().y / 2.0);
+        ui.painter().with_clip_rect(r).galley(label_pos, galley, t.text);
         if resp.on_hover_text(name).clicked() {
             let _ = app.run("para.style", json!({"style": id}));
         }
