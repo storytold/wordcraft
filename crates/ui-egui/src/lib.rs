@@ -9,6 +9,7 @@ pub mod backstage;
 pub mod canvas;
 pub mod chrome;
 pub mod control;
+pub mod credits;
 pub mod dialogs;
 pub mod icons;
 pub mod keys;

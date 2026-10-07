@@ -98,7 +98,10 @@ pub enum Dialog {
     Commands {
         query: String,
     },
-    About,
+    /// Tabs: 0 About, 1 Contributors, 2 Models.
+    About {
+        tab: u8,
+    },
 }
 
 impl Dialog {
@@ -119,7 +122,7 @@ impl Dialog {
             Dialog::NewStyle { .. } => "newStyle",
             Dialog::ModifyStyle { .. } => "modifyStyle",
             Dialog::Commands { .. } => "commands",
-            Dialog::About => "about",
+            Dialog::About { .. } => "about",
         }
     }
 
@@ -192,7 +195,9 @@ impl Dialog {
             "watermark" => Dialog::Watermark { text: "CONFIDENTIAL".into(), diagonal: true },
             "newStyle" => Dialog::NewStyle { name: "Style1".into(), based_on: "Normal".into() },
             "commands" => Dialog::Commands { query: String::new() },
-            "about" => Dialog::About,
+            "about" => Dialog::About { tab: 0 },
+            "contributors" => Dialog::About { tab: 1 },
+            "models" => Dialog::About { tab: 2 },
             _ => return None,
         })
     }
@@ -281,7 +286,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::NewStyle { .. } => "Create New Style",
         Dialog::ModifyStyle { .. } => "Modify Style",
         Dialog::Commands { .. } => "Search Commands",
-        Dialog::About => "About WordCraft",
+        Dialog::About { .. } => "About WordCraft",
     };
     egui::Window::new(title).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, -40.0)).open(&mut open).show(
         ctx,
@@ -695,20 +700,38 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             close || ui.input(|i| i.key_pressed(egui::Key::Escape))
         }
-        Dialog::About => {
-            ui.label(egui::RichText::new("WordCraft").font(semibold(22.0)));
-            ui.label(format!(
-                "Version {} ({})",
-                env!("CARGO_PKG_VERSION"),
-                option_env!("WORDCRAFT_BUILD_SHA").map(|s| s.get(..8).unwrap_or(s)).unwrap_or("development build")
-            ));
-            ui.label("A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.");
-            ui.add_space(6.0);
-            ui.hyperlink_to("getartcraft.com/apps/wordcraft", "https://getartcraft.com/apps/wordcraft");
-            ui.hyperlink_to("Join us on Discord: discord.gg/artcraft", "https://discord.gg/artcraft");
-            ui.hyperlink_to("Source code: github.com/storytold/wordcraft", "https://github.com/storytold/wordcraft");
-            ui.add_space(6.0);
-            ui.label(egui::RichText::new("MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.").small().weak());
+        Dialog::About { tab } => {
+            ui.set_width(660.0);
+            ui.horizontal(|ui| {
+                for (i, l) in ["About", "Contributors", "Models"].into_iter().enumerate() {
+                    let i = i as u8;
+                    if ui.selectable_label(*tab == i, l).clicked() {
+                        *tab = i;
+                    }
+                }
+            });
+            ui.separator();
+            match *tab {
+                1 => crate::credits::contributors_ui(ui),
+                2 => crate::credits::models_ui(ui),
+                _ => {
+                    ui.label(egui::RichText::new("WordCraft").font(semibold(22.0)));
+                    ui.label(format!(
+                        "Version {} ({})",
+                        env!("CARGO_PKG_VERSION"),
+                        option_env!("WORDCRAFT_BUILD_SHA").map(|s| s.get(..8).unwrap_or(s)).unwrap_or("development build")
+                    ));
+                    ui.label("A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.");
+                    ui.add_space(6.0);
+                    ui.hyperlink_to("getartcraft.com/apps/wordcraft", "https://getartcraft.com/apps/wordcraft");
+                    ui.hyperlink_to("Join us on Discord: discord.gg/artcraft", "https://discord.gg/artcraft");
+                    ui.hyperlink_to("Source code: github.com/storytold/wordcraft", "https://github.com/storytold/wordcraft");
+                    ui.add_space(6.0);
+                    ui.label(
+                        egui::RichText::new("MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.").small().weak(),
+                    );
+                }
+            }
             let (ok, cancel) = buttons(ui, "Close");
             ok || cancel
         }

@@ -23,3 +23,6 @@ log = { workspace = true }
 [dev-dependencies]
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
 image = { workspace = true }
+
+[build-dependencies]
+serde_json = { workspace = true }

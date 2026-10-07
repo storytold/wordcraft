@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "repo": "storytold/wordcraft",
+  "branch": "main",
+  "head": "05d0b41b7e52dcd3cdade9c38e3d475bd7644b04",
+  "head_date": "2026-10-07T21:25:33Z",
+  "commits": 23,
+  "unattributed_commits": 0,
+  "contributors": [
+    {
+      "login": "echelon",
+      "display_name": "Brandon Thomas",
+      "real_name": "Brandon Thomas",
+      "prs": 1,
+      "commits": 21,
+      "lines_added": 56356,
+      "lines_deleted": 1728,
+      "binary_added": 37,
+      "binary_deleted": 0,
+      "first_commit": "2026-10-06T00:23:39Z",
+      "last_commit": "2026-10-07T18:46:02Z"
+    },
+    {
+      "login": "Sirsyorrz",
+      "display_name": null,
+      "real_name": null,
+      "prs": 2,
+      "commits": 2,
+      "lines_added": 59,
+      "lines_deleted": 9,
+      "binary_added": 0,
+      "binary_deleted": 0,
+      "first_commit": "2026-10-07T21:25:27Z",
+      "last_commit": "2026-10-07T21:25:33Z"
+    }
+  ],
+  "models": [
+    {
+      "id": "anthropic/claude-opus/5.5",
+      "company": "Anthropic",
+      "model": "Claude Opus",
+      "version": "5.5",
+      "commits": 20,
+      "lines_added": 56349,
+      "lines_deleted": 1728
+    }
+  ]
+}
