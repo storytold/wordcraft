@@ -157,6 +157,20 @@ fn headers_and_page_fields() {
 }
 
 #[test]
+fn tall_first_page_header_pushes_body_down() {
+    let mut d = Document::from_text(&"para\n".repeat(120));
+    let tall: Vec<_> = (0..12).map(|_| wordcraft_doc::para_block(wordcraft_doc::Paragraph::new())).collect();
+    let id = d.add_part(wordcraft_doc::PartKind::Header, tall);
+    d.last_section.headers.first = Some(id);
+    d.last_section.title_page = true;
+    let l = lay(&d);
+    let first = l.caret(&Pos::body(0, 0)).unwrap();
+    assert!(first.top > d.last_section.margin_top + 50.0, "{first:?}");
+    let later = l.caret_on(&Pos::body(119, 0), l.pages.len() - 1).unwrap();
+    assert!(later.top < first.top, "{later:?}");
+}
+
+#[test]
 fn cache_reuses_unchanged_paragraphs() {
     let d = Document::from_text(&"some text here\n".repeat(50));
     let mut c = LayoutCache::new();

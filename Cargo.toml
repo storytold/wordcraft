@@ -42,7 +42,7 @@ regex = { version = "1", default-features = false, features = ["std", "unicode",
 skrifa = "0.47"
 harfrust = "0.13"
 vello_cpu = "0.2"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "tiff"] }
 krilla = { version = "0.8", features = ["pdf"] }
 quick-xml = "0.38"
 zip = { version = "3", default-features = false, features = ["deflate"] }

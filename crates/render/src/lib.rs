@@ -336,13 +336,22 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             let sx = r.width() / (pw * vis_w);
             let sy = r.height() / (ph * vis_h);
             ctx.set_transform(view);
+            // vello_cpu panics on image paints with sampler alpha != 1, so fade through a layer.
+            let alpha = if alpha.is_finite() { alpha.clamp(0.0, 1.0) } else { 1.0 };
+            let faded = alpha < 1.0;
+            if faded {
+                ctx.push_opacity_layer(alpha);
+            }
             ctx.set_paint(vello_cpu::Image {
                 image: vello_cpu::ImageSource::Pixmap(pm),
-                sampler: peniko::ImageSampler::default().with_quality(peniko::ImageQuality::Medium).with_alpha(alpha.clamp(0.0, 1.0)),
+                sampler: peniko::ImageSampler::default().with_quality(peniko::ImageQuality::Medium),
             });
             ctx.set_paint_transform(Affine::translate((r.x0 - cl * pw * sx, r.y0 - ct * ph * sy)) * Affine::scale_non_uniform(sx, sy));
             ctx.fill_rect(&r);
             ctx.reset_paint_transform();
+            if faded {
+                ctx.pop_layer();
+            }
         }
         Draw::Shape { rect, kind, fill, stroke, stroke_width } => {
             let r = kurbo::Rect::new(rect.x as f64, rect.y as f64, rect.right() as f64, rect.bottom() as f64);
@@ -459,6 +468,26 @@ mod tests {
         let big = render_page(&d, &l.pages[0], 1e9, &RenderOptions::default());
         assert!(big.width <= MAX_SIDE);
         assert!(decode_pixmap(b"not an image").is_none());
+    }
+
+    #[test]
+    fn dimmed_header_image_renders() {
+        let mut d = Document::from_text("body");
+        let mut png = Vec::new();
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([200, 0, 0, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let media = d.add_media(png, "png");
+        let mut hp = wordcraft_doc::Paragraph::new();
+        let obj = wordcraft_doc::para::InlineObject::Image { media, w: 40.0, h: 40.0, alt: String::new(), float: Default::default(), crop: [0.0; 4] };
+        hp.insert_object(0, obj, &Default::default()).unwrap();
+        let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(hp)]);
+        d.last_section.headers.default = Some(id);
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+        let opts = RenderOptions::default();
+        assert!(opts.display.dim_header);
+        let img = render_page(&d, &l.pages[0], 1.0, &opts);
+        assert!(!img.to_png().is_empty());
     }
 
     #[test]

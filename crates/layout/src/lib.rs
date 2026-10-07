@@ -627,7 +627,8 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
         let sect: &SectionProps = if web { sect_ref } else { sect };
         pb.sect = sect;
         pb.sect_idx = si;
-        let body_top = if web { sect.margin_top } else { body_top_for(&mut ctx, sect, si) };
+        let body_top = if web { sect.margin_top } else { body_top_for(&mut ctx, sect, sect.headers.default) };
+        let first_top = if web || !sect.title_page { body_top } else { body_top_for(&mut ctx, sect, sect.headers.first) };
         let restart = sect.page_num_start;
         if sect.line_numbers.as_ref().is_some_and(|l| l.restart == wordcraft_doc::section::LineNumberRestart::Section) {
             pb.line_no = 0;
@@ -639,7 +640,7 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
             if let Some(n) = restart {
                 pb.number = n.saturating_sub(1);
             }
-            pb.new_page(block, body_top);
+            pb.new_page(block, first_top);
             if !web && matches!(start, SectionStart::EvenPage | SectionStart::OddPage) {
                 let want_even = start == SectionStart::EvenPage;
                 if pb.number.is_multiple_of(2) != want_even {
@@ -745,8 +746,8 @@ fn item_bottom(y: f32, para: &ParaLayout, l0: usize, l1: usize) -> Option<f32> {
 }
 
 /// Where body text starts: the top margin, or below the header if it's taller.
-fn body_top_for(ctx: &mut Ctx, sect: &SectionProps, _si: usize) -> f32 {
-    let Some(id) = sect.headers.default else { return sect.margin_top };
+fn body_top_for(ctx: &mut Ctx, sect: &SectionProps, header: Option<u32>) -> f32 {
+    let Some(id) = header else { return sect.margin_top };
     let Some(part) = ctx.doc.parts.get(&id) else { return sect.margin_top };
     let blocks = part.blocks.clone();
     let (_, h) = layout_box(ctx, StoryRef::Part(id), &blocks, &[], sect.text_width(), None, 0);
