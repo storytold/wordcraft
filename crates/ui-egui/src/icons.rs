@@ -1002,6 +1002,10 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
         "chevronRight" => pen.line(&[(7.0, 4.0), (13.0, 10.0), (7.0, 16.0)]),
         "chevronUp" => pen.line(&[(4.0, 13.0), (10.0, 7.0), (16.0, 13.0)]),
         "chevronDown" => pen.line(&[(4.0, 7.0), (10.0, 13.0), (16.0, 7.0)]),
+        "chevronDoubleRight" => {
+            pen.line(&[(4.0, 4.0), (9.0, 10.0), (4.0, 16.0)]);
+            pen.line(&[(11.0, 4.0), (16.0, 10.0), (11.0, 16.0)]);
+        }
         "addins" => {
             pen.rect(3.0, 3.0, 9.0, 9.0, c);
             pen.rect(11.0, 3.0, 17.0, 9.0, c);

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Stroke, Visuals};
+use egui::{Align2, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Rect, Stroke, Visuals};
 
 /// WordCraft's app colour (and its darker ink for text on light backgrounds).
 pub const APP_COLOR: Color32 = Color32::from_rgb(0x3B, 0x5B, 0xDB);
@@ -93,7 +93,7 @@ impl Tokens {
             border: Color32::from_rgb(0x3A, 0x3A, 0x3A),
             border_strong: Color32::from_rgb(0x55, 0x55, 0x55),
             text: Color32::from_rgb(0xEE, 0xEE, 0xEE),
-            text_dim: Color32::from_rgb(0xB0, 0xB0, 0xB0),
+            text_dim: Color32::from_rgb(0xC8, 0xC8, 0xC8),
             text_disabled: Color32::from_rgb(0x6A, 0x6A, 0x6A),
             icon: Color32::from_rgb(0xDD, 0xDD, 0xDD),
             hover: Color32::from_rgb(0x3D, 0x3D, 0x3D),
@@ -177,6 +177,84 @@ pub fn semibold(size: f32) -> FontId {
 }
 pub fn regular(size: f32) -> FontId {
     FontId::proportional(size)
+}
+
+/// A UI type rung: size, weight pairing, and size-specific letter-spacing (large text is
+/// tightened, small text opened). Use these instead of raw `regular(size)`/`semibold(size)`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TypeRung {
+    /// Tab strip, title bar, centred window title.
+    Chrome,
+    /// Ribbon buttons, menus, dialogs.
+    Control,
+    /// Group labels, status bar, tooltips.
+    Caption,
+}
+
+impl TypeRung {
+    /// Font size in points.
+    pub fn size(self) -> f32 {
+        match self {
+            TypeRung::Chrome => 12.5,
+            TypeRung::Control => 11.5,
+            TypeRung::Caption => 11.0,
+        }
+    }
+    /// Extra letter-spacing in points (em-relative, so it scales with the size).
+    pub fn tracking(self) -> f32 {
+        match self {
+            TypeRung::Chrome => -0.012 * self.size(),
+            TypeRung::Control => 0.0,
+            TypeRung::Caption => 0.018 * self.size(),
+        }
+    }
+    /// Line height in points; tighter leading as the text grows.
+    pub fn line_height(self) -> f32 {
+        match self {
+            TypeRung::Chrome => 1.25 * self.size(),
+            TypeRung::Control => 1.42 * self.size(),
+            TypeRung::Caption => 1.5 * self.size(),
+        }
+    }
+
+    pub fn regular(self) -> FontId {
+        regular(self.size())
+    }
+    pub fn medium(self) -> FontId {
+        medium(self.size())
+    }
+    pub fn semibold(self) -> FontId {
+        semibold(self.size())
+    }
+}
+
+/// Width in points of one line of `tracking`-spaced text. `layout_no_wrap` ignores
+/// letter-spacing, so non-zero tracking goes through an explicit `LayoutJob`.
+pub fn text_width(painter: &egui::Painter, text: &str, font: &FontId, tracking: f32, color: Color32) -> f32 {
+    if text.is_empty() {
+        return 0.0;
+    }
+    if tracking.abs() <= 1e-6 {
+        return painter.layout_no_wrap(text.to_string(), font.clone(), color).size().x;
+    }
+    painter.layout_job(tracked_job(text, font, tracking, color)).size().x
+}
+
+/// Paint one line of tracked text with the given anchor and return its rect.
+pub fn paint_text(painter: &egui::Painter, pos: egui::Pos2, anchor: Align2, text: &str, font: &FontId, tracking: f32, color: Color32) -> Rect {
+    if tracking.abs() <= 1e-6 {
+        return painter.text(pos, anchor, text.to_string(), font.clone(), color);
+    }
+    let galley = painter.layout_job(tracked_job(text, font, tracking, color));
+    let rect = anchor.anchor_size(pos, galley.size());
+    painter.galley(rect.min, galley, color);
+    rect
+}
+
+/// A single-section, no-wrap `LayoutJob` carrying `tracking` (egui 0.36 has no `default_format`).
+fn tracked_job(text: &str, font: &FontId, tracking: f32, color: Color32) -> egui::text::LayoutJob {
+    let format = egui::text::TextFormat { font_id: font.clone(), extra_letter_spacing: tracking, line_height: None, color, ..Default::default() };
+    egui::text::LayoutJob::single_section(text.to_string(), format)
 }
 
 /// Apply tokens to egui's style.
