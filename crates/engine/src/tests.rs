@@ -361,3 +361,25 @@ fn copy_paste_text_box_makes_an_independent_copy() {
     run(&mut s, "edit.undo", json!({}));
     assert_eq!(s.doc.parts.len(), parts);
 }
+
+#[test]
+fn word_count_includes_text_boxes_by_default() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "one two "}));
+    run(&mut s, "insert.textBox", json!({"text": "three four five"}));
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 0)}));
+    assert_eq!(s.word_count(), 5);
+    let v = run(&mut s, "review.wordCount", json!({}));
+    assert_eq!((v["words"].as_u64(), v["includeTextBoxes"].as_bool()), (Some(5), Some(true)));
+    assert_eq!(v["paragraphs"].as_u64(), Some(2));
+    // Turned off: body only, and it sticks.
+    let v = run(&mut s, "review.wordCount", json!({"includeTextBoxes": false}));
+    assert_eq!(v["words"].as_u64(), Some(2));
+    assert_eq!(s.word_count(), 2);
+    assert_eq!(run(&mut s, "review.wordCount", json!({}))["words"].as_u64(), Some(2));
+    // Deleting the box drops its words (its story stays behind, unused).
+    run(&mut s, "review.wordCount", json!({"includeTextBoxes": true}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 8), "focus": Pos::body(0, 8 + 3)}));
+    run(&mut s, "text.delete", json!({}));
+    assert_eq!(s.word_count(), 2);
+}

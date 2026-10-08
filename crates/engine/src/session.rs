@@ -152,6 +152,8 @@ pub struct Session {
     pub merge: crate::cmd::mailings::MergeState,
     /// Requests from commands to the UI (open a dialog, scroll…), drained by the front end.
     pub ui_requests: Vec<Value>,
+    /// Word Count includes text boxes, footnotes and endnotes (Word's default).
+    pub count_notes: bool,
 }
 
 /// Maximum undo depth.
@@ -194,6 +196,7 @@ impl Session {
             bib_style: "APA".into(),
             merge: Default::default(),
             ui_requests: Vec::new(),
+            count_notes: true,
         }
     }
 
@@ -394,6 +397,11 @@ impl Session {
         }
         let f = &self.sel.focus;
         self.doc.para_at(f).map(|p| p.props_at(f.off).clone()).unwrap_or_default()
+    }
+
+    /// Words in the document, as the status bar shows them (see `count_notes`).
+    pub fn word_count(&self) -> usize {
+        if self.count_notes { self.doc.word_count_including_notes() } else { self.doc.word_count() }
     }
 
     /// Selected plain text.

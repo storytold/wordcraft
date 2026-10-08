@@ -95,3 +95,59 @@ fn text_box_anchor_finds_the_owning_shape() {
     assert_eq!(d.text_box_anchor(id), Some(end));
     assert_eq!(d.text_box_anchor(id + 1), None);
 }
+
+#[test]
+fn word_count_including_notes_counts_used_boxes_and_notes_only() {
+    let mut d = Document::from_text("one two");
+    let shape = |story| InlineObject::Shape {
+        kind: para::ShapeKind::TextBox,
+        w: 144.0,
+        h: 72.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.75,
+        float: Default::default(),
+        story: Some(story),
+    };
+    let para_of = |t: &str| vec![para_block(Paragraph::with_text(t, CharProps::default()))];
+    let boxed = d.add_part(PartKind::TextBox, para_of("three four"));
+    let nested = d.add_part(PartKind::TextBox, para_of("five"));
+    let note = d.add_part(PartKind::Footnote, para_of("six seven"));
+    // Not counted: an orphaned box (deleted or cut), a header, a comment.
+    d.add_part(PartKind::TextBox, para_of("orphan words here"));
+    d.add_part(PartKind::Header, para_of("header words"));
+    d.add_part(PartKind::Comment, para_of("comment words"));
+    d.insert_object(&Pos::body(0, 3), shape(boxed), &CharProps::default()).unwrap();
+    d.insert_object(&Pos { story: StoryRef::Part(boxed), path: Path::top(0), off: 0 }, shape(nested), &CharProps::default()).unwrap();
+    d.insert_object(
+        &Pos::body(0, 0),
+        InlineObject::NoteRef { kind: para::NoteKind::Footnote, id: note, custom: String::new() },
+        &CharProps::default(),
+    )
+    .unwrap();
+    // A box pointing at a header doesn't make the header count.
+    let hdr = d.parts.iter().find(|(_, p)| p.kind == PartKind::Header).map(|(k, _)| *k).unwrap();
+    d.insert_object(&Pos::body(0, 0), shape(hdr), &CharProps::default()).unwrap();
+    assert_eq!(d.word_count(), 2);
+    assert_eq!(d.word_count_including_notes(), 7);
+    assert_eq!(d.counted_stories(), vec![StoryRef::Body, StoryRef::Part(note), StoryRef::Part(boxed), StoryRef::Part(nested)]);
+}
+
+#[test]
+fn counted_stories_survive_self_nested_boxes() {
+    let mut d = Document::from_text("a");
+    let id = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("b", CharProps::default()))]);
+    let shape = InlineObject::Shape {
+        kind: para::ShapeKind::TextBox,
+        w: 10.0,
+        h: 10.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Default::default(),
+        story: Some(id),
+    };
+    d.insert_object(&Pos::body(0, 0), shape.clone(), &CharProps::default()).unwrap();
+    d.insert_object(&Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 }, shape, &CharProps::default()).unwrap();
+    assert_eq!(d.word_count_including_notes(), 2);
+}

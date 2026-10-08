@@ -37,7 +37,7 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({"showMarkup": s.view.show_markup}))
         })
         .pure(),
-        CommandSpec::new("review.wordCount", "Word Count", "Review › Proofing", word_count).pure(),
+        CommandSpec::new("review.wordCount", "Word Count", "Review › Proofing", word_count).params(r#"{"includeTextBoxes"?: bool}"#).pure(),
         CommandSpec::new("review.changes", "Reviewing Pane", "Review › Tracking", list_changes).pure(),
         CommandSpec::new("review.spelling", "Spelling & Grammar", "Review › Proofing", next_issue).key("F7").pure(),
         CommandSpec::new("review.issues", "Proofing Issues", "Review › Proofing", all_issues).pure(),
@@ -350,8 +350,12 @@ fn list_changes(s: &mut Session, _: &Value) -> CmdResult {
     ))
 }
 
-fn word_count(s: &mut Session, _: &Value) -> CmdResult {
-    let text = if s.sel.is_collapsed() { s.doc.plain_text(StoryRef::Body) } else { s.selected_text() };
+fn word_count(s: &mut Session, v: &Value) -> CmdResult {
+    if let Some(b) = p::bool(v, "includeTextBoxes") {
+        s.count_notes = b;
+    }
+    let stories = if s.count_notes { s.doc.counted_stories() } else { vec![StoryRef::Body] };
+    let text = if s.sel.is_collapsed() { stories.iter().map(|st| s.doc.plain_text(*st)).collect::<Vec<_>>().join("\n") } else { s.selected_text() };
     let words = wordcraft_doc::count_words(&text);
     let chars = text.chars().filter(|c| *c != '\n').count();
     let chars_no_spaces = text.chars().filter(|c| !c.is_whitespace()).count();
@@ -361,13 +365,22 @@ fn word_count(s: &mut Session, _: &Value) -> CmdResult {
         l.pages
             .iter()
             .flat_map(|p| p.items.iter())
-            .map(|it| if let wordcraft_layout::Placed::Lines { l0, l1, story: StoryRef::Body, .. } = it { l1 - l0 } else { 0 })
+            .map(|it| {
+                if let wordcraft_layout::Placed::Lines { l0, l1, story, .. } = it
+                    && stories.contains(story)
+                {
+                    l1 - l0
+                } else {
+                    0
+                }
+            })
             .sum()
     };
     let pages = s.layout().pages.len();
-    Ok(
-        json!({"pages": pages, "words": words, "characters": chars_no_spaces, "charactersWithSpaces": chars, "paragraphs": paragraphs, "lines": lines}),
-    )
+    Ok(json!({
+        "pages": pages, "words": words, "characters": chars_no_spaces, "charactersWithSpaces": chars, "paragraphs": paragraphs, "lines": lines,
+        "includeTextBoxes": s.count_notes,
+    }))
 }
 
 /// Issues (spelling + grammar) in one paragraph as positions.

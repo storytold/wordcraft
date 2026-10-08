@@ -599,6 +599,37 @@ impl Document {
         count_words(&self.plain_text(StoryRef::Body))
     }
 
+    /// Word's default count: the body plus its text boxes, footnotes and endnotes.
+    pub fn word_count_including_notes(&self) -> usize {
+        self.counted_stories().iter().map(|s| count_words(&self.plain_text(*s))).sum()
+    }
+
+    /// The body, then the text boxes, footnotes and endnotes it shows (nested ones too), in
+    /// document order. Headers, footers, comments and stories nothing points at aren't included.
+    pub fn counted_stories(&self) -> Vec<StoryRef> {
+        let mut out = vec![StoryRef::Body];
+        let mut seen = std::collections::BTreeSet::new();
+        let mut i = 0;
+        while let Some(s) = out.get(i).copied() {
+            i += 1;
+            for path in self.para_paths(s) {
+                let Some(p) = self.para(s, &path) else { continue };
+                for o in &p.objects {
+                    let (id, kinds): (u32, &[PartKind]) = match o {
+                        InlineObject::Shape { story: Some(id), .. } => (*id, &[PartKind::TextBox]),
+                        InlineObject::NoteRef { id, .. } => (*id, &[PartKind::Footnote, PartKind::Endnote]),
+                        _ => continue,
+                    };
+                    let story = StoryRef::Part(id);
+                    if self.parts.get(&id).is_some_and(|p| kinds.contains(&p.kind)) && seen.insert(id) {
+                        out.push(story);
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// Number of paragraphs in the body (all depths).
     pub fn paragraph_count(&self) -> usize {
         self.para_paths(StoryRef::Body).len()

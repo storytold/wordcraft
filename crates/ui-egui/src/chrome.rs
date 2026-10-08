@@ -250,9 +250,10 @@ impl WordApp {
     }
     /// Word count, recomputed only when the document changes.
     pub fn cached_word_count(&mut self) -> usize {
-        let rev = self.session.rev();
-        if self.word_count.0 != rev {
-            self.word_count = (rev, self.session.doc.word_count());
+        // The count option changes the count without a document change.
+        let key = self.session.rev().wrapping_mul(2) | u64::from(self.session.count_notes);
+        if self.word_count.0 != key {
+            self.word_count = (key, self.session.word_count());
         }
         self.word_count.1
     }
