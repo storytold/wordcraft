@@ -1,0 +1,20 @@
+[package]
+name = "wordcraft-macos-open"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "macOS application:openURLs: handler for files opened from Finder / `open`"
+
+# Objective-C interop needs `unsafe`, so this crate does not inherit the workspace
+# `unsafe_code = "forbid"`. The clippy lints match `[workspace.lints.clippy]`.
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+too_many_arguments = "allow"
+type_complexity = "allow"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "NSArray", "NSNotification", "NSOperation", "NSString", "NSURL"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder"] }

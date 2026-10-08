@@ -25,3 +25,6 @@ winresource = "0.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rfd = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+wordcraft-macos-open = { workspace = true }

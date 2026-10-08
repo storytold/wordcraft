@@ -15,6 +15,13 @@ use wordcraft_ui_egui::{Services, UiState, WordApp};
 
 struct App(WordApp);
 
+/// Files macOS delivered through `application:openURLs:` (Finder "Open With", `open -a`).
+#[cfg(target_os = "macos")]
+static PENDING_OPENS: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
+/// Wakes the UI when files arrive while the app is running.
+#[cfg(target_os = "macos")]
+static OPEN_CTX: std::sync::OnceLock<egui::Context> = std::sync::OnceLock::new();
+
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.0.logic(ctx);
@@ -24,6 +31,14 @@ impl eframe::App for App {
     }
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
         self.0.raw_input_hook(raw);
+        // Files opened from Finder open the same way as files given on the command line.
+        #[cfg(target_os = "macos")]
+        for p in PENDING_OPENS.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default() {
+            let path = p.to_string_lossy().to_string();
+            if let Err(e) = self.0.run("file.open", serde_json::json!({"path": path})) {
+                eprintln!("wordcraft: {path}: {e}");
+            }
+        }
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.0.ui(ui);
@@ -136,10 +151,22 @@ fn main() -> eframe::Result {
     if let Some(icon) = app_icon() {
         options.viewport = options.viewport.with_icon(icon);
     }
+    // Before the event loop runs, so the files that launch the app are not missed.
+    #[cfg(target_os = "macos")]
+    wordcraft_macos_open::install(|paths| {
+        if let Ok(mut pending) = PENDING_OPENS.lock() {
+            pending.extend(paths);
+        }
+        if let Some(ctx) = OPEN_CTX.get() {
+            ctx.request_repaint();
+        }
+    });
     eframe::run_native(
         "WordCraft",
         options,
         Box::new(move |cc| {
+            #[cfg(target_os = "macos")]
+            let _ = OPEN_CTX.set(cc.egui_ctx.clone());
             let doc = if sample { wordcraft_engine::sample::sample_document() } else { wordcraft_doc::Document::new() };
             let mut app = WordApp::new(Session::new(doc), services());
             load_prefs(&mut app);
