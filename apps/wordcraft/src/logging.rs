@@ -331,7 +331,8 @@ pub fn install_panic_hook() {
         if log::log_enabled!(log::Level::Error) {
             log::error!("{report}");
         } else {
-            eprintln!("wordcraft: {report}");
+            // `eprintln!` panics on a broken stderr pipe, and a panic inside the panic hook aborts.
+            let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("wordcraft: {report}\n"));
         }
     }));
 }

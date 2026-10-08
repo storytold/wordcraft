@@ -144,7 +144,8 @@ fn main() -> eframe::Result {
         match log_dir().filter(|_| prefs_enabled()) {
             Some(dir) => match logger.attach_dir(&dir) {
                 Ok(path) => log::info!("WordCraft {} ({}), log file {}", env!("CARGO_PKG_VERSION"), build_sha(), path.display()),
-                Err(e) => eprintln!("wordcraft: no log file: {e}"),
+                // Standard error only by now (`attach_dir` gave up on the file); unlike `eprintln!`, never panics.
+                Err(e) => log::warn!("no log file: {e}"),
             },
             None => logger.no_file(),
         }
