@@ -326,3 +326,38 @@ fn text_box_in_a_table_cell_keeps_the_caret_in_the_cell() {
     assert_eq!(s.sel.focus.story, StoryRef::Body);
     assert_eq!(s.sel.focus.path, cell.path);
 }
+
+#[test]
+fn copy_paste_text_box_makes_an_independent_copy() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "A"}));
+    let id = run(&mut s, "insert.textBox", json!({"text": "Original"}))["story"].as_u64().unwrap() as u32;
+    // Select "A" and the box in the body, copy, paste at the end.
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 1 + 3)}));
+    run(&mut s, "edit.copy", json!({}));
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 4)}));
+    let parts = s.doc.parts.len();
+    run(&mut s, "edit.paste", json!({}));
+    assert_eq!(s.doc.parts.len(), parts + 1);
+    let stories: Vec<u32> = s
+        .doc
+        .para(StoryRef::Body, &wordcraft_doc::Path::top(0))
+        .unwrap()
+        .objects
+        .iter()
+        .filter_map(|o| if let wordcraft_doc::InlineObject::Shape { story, .. } = o { *story } else { None })
+        .collect();
+    assert_eq!(stories.len(), 2);
+    assert_eq!(stories[0], id);
+    let copy = stories[1];
+    assert_ne!(copy, id);
+    // Typing in the copy leaves the original alone.
+    run(&mut s, "caret.set", json!({"pos": Pos { story: StoryRef::Part(copy), path: wordcraft_doc::Path::top(0), off: 0 }}));
+    run(&mut s, "text.insert", json!({"text": "Copy of "}));
+    assert_eq!(s.doc.plain_text(StoryRef::Part(copy)), "Copy of Original");
+    assert_eq!(s.doc.plain_text(StoryRef::Part(id)), "Original");
+    // Undo the typing and the paste: the copy's story goes too.
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.parts.len(), parts);
+}
