@@ -383,3 +383,91 @@ fn word_count_includes_text_boxes_by_default() {
     run(&mut s, "text.delete", json!({}));
     assert_eq!(s.word_count(), 2);
 }
+
+/// The laid-out area of the only text box.
+fn box_area(s: &mut Session) -> wordcraft_layout::hit::ObjectHit {
+    let l = s.layout();
+    l.find_object(0, |o| o.text_box.is_some()).unwrap()
+}
+
+fn select_box(s: &mut Session) {
+    let o = box_area(s);
+    let end = Pos { off: o.off + 3, ..o.pos() };
+    run(s, "select.range", json!({"anchor": o.pos(), "focus": end}));
+}
+
+#[test]
+fn arrange_bounds_resizes_and_moves_objects() {
+    use wordcraft_doc::para::{Anchor, Wrap};
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Some text "}));
+    run(&mut s, "insert.textBox", json!({"text": "Box"}));
+    select_box(&mut s);
+    // Resize: stays inline, keeps a text box's minimum.
+    run(&mut s, "arrange.bounds", json!({"width": 200, "height": 5}));
+    let o = box_area(&mut s);
+    assert_eq!((o.rect.w, o.rect.h, o.wrap), (200.0, 18.0, Wrap::Inline));
+    assert!(s.run("arrange.nudge", &json!({"dx": 5})).is_err(), "inline objects don't nudge");
+    // Move: floats exactly where it was dropped, still selected.
+    let r = run(&mut s, "arrange.bounds", json!({"page": 0, "x": 300, "y": 400}));
+    assert_eq!(r["object"]["float"]["wrap"], "square");
+    let o = box_area(&mut s);
+    assert_eq!((o.page, o.rect.x, o.rect.y), (0, 300.0, 400.0));
+    assert_eq!(s.doc.plain_text(StoryRef::Part(o.text_box.unwrap())), "Box");
+    // Moving a floating object on its page keeps its anchors and shifts its offsets.
+    let set = |s: &mut Session, f: &dyn Fn(&mut wordcraft_doc::para::Float)| {
+        let o = box_area(s);
+        let p = s.doc.para_mut(StoryRef::Body, &o.path).unwrap();
+        if let Some(wordcraft_doc::InlineObject::Shape { float, .. }) = p.object_at_mut(o.off) {
+            f(float);
+        }
+        p.touch();
+        s.touch();
+    };
+    set(&mut s, &|f| {
+        f.h_rel = Anchor::Column;
+        f.v_rel = Anchor::Paragraph;
+        f.x = 10.0;
+        f.y = 20.0;
+    });
+    let before = box_area(&mut s).rect;
+    select_box(&mut s);
+    run(&mut s, "arrange.bounds", json!({"x": before.x + 30.0, "y": before.y - 5.0}));
+    let o = box_area(&mut s);
+    assert!((o.rect.x - before.x - 30.0).abs() < 0.01 && (o.rect.y - before.y + 5.0).abs() < 0.01, "{:?} → {:?}", before, o.rect);
+    let p = s.doc.para(StoryRef::Body, &o.path).unwrap();
+    let Some(wordcraft_doc::InlineObject::Shape { float, .. }) = p.object_at(o.off) else { panic!() };
+    assert_eq!((float.h_rel, float.v_rel, float.x, float.y), (Anchor::Column, Anchor::Paragraph, 40.0, 15.0));
+    // Nudge.
+    run(&mut s, "arrange.nudge", json!({"dx": 6, "dy": -1}));
+    let n = box_area(&mut s).rect;
+    assert!((n.x - o.rect.x - 6.0).abs() < 0.01 && (n.y - o.rect.y + 1.0).abs() < 0.01);
+    // Hostile values stay on the page.
+    run(&mut s, "arrange.bounds", json!({"x": -1e9, "y": 1e9, "width": 1e9}));
+    let o = box_area(&mut s);
+    assert!(o.rect.right() >= 12.0 && o.rect.y <= 792.0 && o.rect.w <= 4000.0, "{:?}", o.rect);
+    // One undo per change.
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(box_area(&mut s).rect, n);
+}
+
+#[test]
+fn arrange_bounds_moves_an_object_to_another_page() {
+    let mut s = s();
+    for i in 0..60 {
+        run(&mut s, "text.insert", json!({"text": format!("Paragraph {i} of filler text.")}));
+        run(&mut s, "text.newParagraph", json!({}));
+    }
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 0)}));
+    run(&mut s, "insert.textBox", json!({"text": "Traveller"}));
+    select_box(&mut s);
+    assert!(s.layout().pages.len() >= 2);
+    run(&mut s, "arrange.bounds", json!({"page": 1, "x": 100, "y": 200}));
+    let o = box_area(&mut s);
+    assert_eq!((o.page, o.rect.x, o.rect.y), (1, 100.0, 200.0));
+    assert!(o.path.0[0] > 0, "anchored to text on page 2: {:?}", o.path);
+    assert_eq!(s.doc.plain_text(StoryRef::Part(o.text_box.unwrap())), "Traveller");
+    // The selection follows the object.
+    assert_eq!(s.sel.anchor, o.pos());
+    assert!(s.run("arrange.bounds", &json!({"page": 99, "x": 1, "y": 1})).is_err());
+}

@@ -97,12 +97,16 @@ pub enum Placed {
         cell: usize,
         story: StoryRef,
     },
-    /// A text box's area (for hit testing: clicks inside edit its story, `Document::parts` id).
-    /// `behind` is set for boxes behind the text, which body text wins over.
-    TextBox {
+    /// The area of a picture, shape or text box in a top-level body paragraph, for hit testing,
+    /// selection handles and dragging (drawn by `Image`/`Shape`/`Lines`). The object is the
+    /// U+FFFC at byte `off` of body paragraph `path`.
+    Object {
         rect: Rect,
-        part: u32,
-        behind: bool,
+        path: Path,
+        off: usize,
+        /// The text box story it shows (`Document::parts` id).
+        text_box: Option<u32>,
+        wrap: Wrap,
     },
 }
 
@@ -117,7 +121,7 @@ impl Placed {
             | Placed::Image { rect, .. }
             | Placed::Shape { rect, .. }
             | Placed::Cell { rect, .. }
-            | Placed::TextBox { rect, .. } => {
+            | Placed::Object { rect, .. } => {
                 rect.x += dx;
                 rect.y += dy;
             }
@@ -939,26 +943,37 @@ fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, 
                 }
             }
         }
-        // Text box contents (inline and floating shapes that own a story).
-        if let (Some(fl), Some(ll)) = (pl.lines.get(l0), pl.lines.get(l1.saturating_sub(1))) {
+        // Object areas (selection, dragging) and text box contents.
+        if let Some(fl) = pl.lines.get(l0) {
             for li in l0..l1 {
                 let Some(line) = pl.lines.get(li) else { continue };
                 for k in line.c0..line.c1 {
                     let Some(c) = pl.clusters.get(k) else { continue };
                     let para::ClKind::Object(oi) = c.kind else { continue };
-                    let Some(InlineObject::Shape { story: Some(id), w, h, float, .. }) = p.objects.get(oi) else { continue };
+                    let (w, h, float, story) = match p.objects.get(oi) {
+                        Some(InlineObject::Image { w, h, float, .. }) => (*w, *h, *float, None),
+                        Some(InlineObject::Shape { w, h, float, story, .. }) => (*w, *h, *float, *story),
+                        _ => continue,
+                    };
+                    // Same rect the object is drawn at.
                     let rect = match float_rects.get(&oi) {
                         Some(r) => *r,
+                        None if float.wrap != Wrap::Inline => float_rect(pb, x, y, w, h, &float),
                         None => {
                             let cx = x + line.xs.get(k - line.c0).copied().unwrap_or(0.0);
                             Rect::new(cx, y + (line.baseline - fl.top) - c.obj_h, c.adv, c.obj_h)
                         }
                     };
-                    let _ = (w, h, ll);
-                    let Some(part) = ctx.doc.parts.get(id) else { continue };
-                    items.push(Placed::TextBox { rect, part: *id, behind: float.wrap == Wrap::BehindText });
-                    let blocks = part.blocks.clone();
-                    let (inner, _) = layout_box(ctx, StoryRef::Part(*id), &blocks, &[], (rect.w - 14.4).max(12.0), None, 1);
+                    let part = story.and_then(|id| ctx.doc.parts.get(&id).map(|part| (id, part.blocks.clone())));
+                    items.push(Placed::Object {
+                        rect,
+                        path: Path(vec![block as u32]),
+                        off: c.start,
+                        text_box: part.as_ref().map(|p| p.0),
+                        wrap: float.wrap,
+                    });
+                    let Some((id, blocks)) = part else { continue };
+                    let (inner, _) = layout_box(ctx, StoryRef::Part(id), &blocks, &[], (rect.w - 14.4).max(12.0), None, 1);
                     for mut it in inner {
                         it.translate(rect.x + 7.2, rect.y + 3.6);
                         items.push(it);

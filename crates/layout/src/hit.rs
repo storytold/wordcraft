@@ -1,7 +1,8 @@
 //! Hit testing and caret geometry.
 
+use wordcraft_doc::para::Wrap;
 use wordcraft_doc::{Document, Path, Pos, StoryRef};
-use wordcraft_geom::Rect;
+use wordcraft_geom::{Point, Rect};
 
 use crate::para::ParaLayout;
 use crate::{DocLayout, Page, Placed};
@@ -27,6 +28,55 @@ pub struct LineHit<'a> {
     pub bottom: f32,
     pub left: f32,
     pub right: f32,
+}
+
+/// A picture, shape or text box as laid out (see [`Placed::Object`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ObjectHit {
+    pub page: usize,
+    pub rect: Rect,
+    pub path: Path,
+    pub off: usize,
+    pub text_box: Option<u32>,
+    pub wrap: Wrap,
+}
+
+impl ObjectHit {
+    /// The object's position in the body (its U+FFFC).
+    pub fn pos(&self) -> Pos {
+        Pos { story: StoryRef::Body, path: self.path.clone(), off: self.off }
+    }
+    pub fn floating(&self) -> bool {
+        self.wrap != Wrap::Inline
+    }
+    pub fn behind(&self) -> bool {
+        self.wrap == Wrap::BehindText
+    }
+}
+
+/// A page's objects, topmost first.
+fn objects(page: &Page, index: usize) -> impl Iterator<Item = ObjectHit> + '_ {
+    page.items.iter().rev().filter_map(move |it| match it {
+        Placed::Object { rect, path, off, text_box, wrap } => {
+            Some(ObjectHit { page: index, rect: *rect, path: path.clone(), off: *off, text_box: *text_box, wrap: *wrap })
+        }
+        _ => None,
+    })
+}
+
+/// The story of the text (not a text box's) near (x, y): body, footnotes, endnotes.
+fn text_at(p: &Page, index: usize, x: f32, y: f32) -> Option<StoryRef> {
+    let boxes: Vec<StoryRef> = objects(p, index).filter_map(|o| o.text_box.map(StoryRef::Part)).collect();
+    p.items.iter().find_map(|it| match it {
+        Placed::Lines { story, .. } if boxes.contains(story) => None,
+        Placed::Lines { story, para, l0, l1, x: lx, y: ly, .. } => {
+            let first = para.lines.get(*l0)?;
+            let last = para.lines.get(l1.checked_sub(1)?)?;
+            let bottom = ly + last.top + last.height - first.top;
+            (y >= *ly - 2.0 && y <= bottom + 2.0 && x >= *lx - 40.0 && x <= lx + last.right + 40.0).then_some(*story)
+        }
+        _ => None,
+    })
 }
 
 fn items_of(page: &Page, story: StoryRef) -> Box<dyn Iterator<Item = &Placed> + '_> {
@@ -74,31 +124,41 @@ impl DocLayout {
     /// wins where no body text is.
     pub fn story_at(&self, page: usize, x: f32, y: f32) -> Option<StoryRef> {
         let p = self.pages.get(page)?;
-        let pt = wordcraft_geom::Point::new(x, y);
         let text_box = |behind: bool| {
-            p.items.iter().rev().find_map(|it| match it {
-                Placed::TextBox { rect, part, behind: b } if *b == behind && rect.contains(pt) => Some(StoryRef::Part(*part)),
-                _ => None,
-            })
+            objects(p, page).find(|o| o.behind() == behind && o.text_box.is_some() && o.rect.contains(Point::new(x, y))).and_then(|o| o.text_box)
         };
-        let boxes: Vec<StoryRef> =
-            p.items.iter().filter_map(|it| if let Placed::TextBox { part, .. } = it { Some(StoryRef::Part(*part)) } else { None }).collect();
-        let is_box = |s: &StoryRef| boxes.contains(s);
-        text_box(false)
-            .or_else(|| {
-                p.items.iter().find_map(|it| match it {
-                    // A text box's lines only count inside its area (above).
-                    Placed::Lines { story, .. } if is_box(story) => None,
-                    Placed::Lines { story, para, l0, l1, x: lx, y: ly, .. } => {
-                        let first = para.lines.get(*l0)?;
-                        let last = para.lines.get(l1.checked_sub(1)?)?;
-                        let bottom = ly + last.top + last.height - first.top;
-                        (y >= *ly - 2.0 && y <= bottom + 2.0 && x >= *lx - 40.0 && x <= lx + last.right + 40.0).then_some(*story)
-                    }
-                    _ => None,
-                })
-            })
-            .or_else(|| text_box(true))
+        text_box(false).map(StoryRef::Part).or_else(|| text_at(p, page, x, y)).or_else(|| text_box(true).map(StoryRef::Part))
+    }
+
+    /// The object a press at (x, y) grabs: a picture or shape anywhere on it, a text box on its
+    /// border (within `edge` points either side; inside is its text). Topmost first; objects
+    /// behind the text only where there's no text.
+    pub fn object_at(&self, page: usize, x: f32, y: f32, edge: f32) -> Option<ObjectHit> {
+        let p = self.pages.get(page)?;
+        let pt = Point::new(x, y);
+        let grabs = |o: &ObjectHit| {
+            o.rect.expand(edge).contains(pt) && (o.text_box.is_none() || !o.rect.expand(-edge).contains(pt) || o.rect.w.min(o.rect.h) <= edge * 3.0)
+        };
+        objects(p, page)
+            .find(|o| !o.behind() && grabs(o))
+            .or_else(|| if text_at(p, page, x, y).is_some() { None } else { objects(p, page).find(|o| o.behind() && grabs(o)) })
+    }
+
+    /// Where the object at byte `off` of body paragraph `path` is laid out.
+    pub fn object(&self, path: &Path, off: usize, page_hint: usize) -> Option<ObjectHit> {
+        self.find_object(page_hint, |o| o.path == *path && o.off == off)
+    }
+
+    /// Where the text box showing story `part` is laid out.
+    pub fn text_box(&self, part: u32, page_hint: usize) -> Option<ObjectHit> {
+        self.find_object(page_hint, |o| o.text_box == Some(part))
+    }
+
+    /// The first object matching `f`, looking on `page_hint` first (where the caret is: one page
+    /// to scan, not the whole document).
+    pub fn find_object(&self, page_hint: usize, f: impl Fn(&ObjectHit) -> bool) -> Option<ObjectHit> {
+        let on = |i: usize| self.pages.get(i).and_then(|p| objects(p, i).find(|o| f(o)));
+        on(page_hint).or_else(|| (0..self.pages.len()).filter(|i| *i != page_hint).find_map(on))
     }
 
     /// Which header/footer (if any) is at (x, y) on a page — for double-click editing.

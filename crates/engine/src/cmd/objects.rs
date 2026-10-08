@@ -20,6 +20,12 @@ fn has_picture(s: &Session) -> Option<&'static str> {
 fn has_object(s: &Session) -> Option<&'static str> {
     if selected(s).is_some() { None } else { Some("select a picture or shape first") }
 }
+fn has_floating(s: &Session) -> Option<&'static str> {
+    match selected(s) {
+        Some((_, InlineObject::Image { float, .. } | InlineObject::Shape { float, .. })) if float.wrap != Wrap::Inline => None,
+        _ => Some("select a floating picture or shape first"),
+    }
+}
 fn has_shape(s: &Session) -> Option<&'static str> {
     match selected(s) {
         Some((_, InlineObject::Shape { .. })) => None,
@@ -238,6 +244,19 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"value": "left|center|right"}"#)
         .when(has_object),
         CommandSpec::new("arrange.selectionPane", "Selection Pane", "Layout › Arrange", objects_list).pure(),
+        CommandSpec::new("arrange.bounds", "Move or Resize", "Layout › Arrange", bounds)
+            .params(r#"{"width"?: pt, "height"?: pt, "x"?: pt, "y"?: pt, "page"?: n}  (x/y: the top-left on page `page` (0-based, default its page); moving an inline object floats it)"#)
+            .when(has_object),
+        CommandSpec::new("arrange.nudge", "Nudge", "Layout › Arrange", |s, v| {
+            let d = |k| p::f32(v, k).unwrap_or(0.0).clamp(-MAX_OFFSET, MAX_OFFSET);
+            let (dx, dy) = (d("dx"), d("dy"));
+            with_float(s, |f| {
+                f.x = (f.x + dx).clamp(-MAX_OFFSET, MAX_OFFSET);
+                f.y = (f.y + dy).clamp(-MAX_OFFSET, MAX_OFFSET);
+            })
+        })
+        .params(r#"{"dx"?: pt, "dy"?: pt}"#)
+        .when(has_floating),
         CommandSpec::new("select.objects", "Select Objects", "Home › Editing › Select", |s, v| {
             let n = p::u64(v, "index").unwrap_or(0) as usize;
             let list = all_objects(s);
@@ -307,6 +326,108 @@ pub fn selected(s: &Session) -> Option<(Pos, InlineObject)> {
         }
     }
     None
+}
+
+/// Smallest width/height an object can be resized to, points (a text box keeps room for a line).
+pub fn min_size(o: &InlineObject) -> f32 {
+    if matches!(o, InlineObject::Shape { story: Some(_), .. }) { 18.0 } else { 4.0 }
+}
+
+/// Largest object offset or move, points.
+const MAX_OFFSET: f32 = 4000.0;
+
+/// Resize and/or move the selected object (dragging its frame or handles).
+fn bounds(s: &mut Session, v: &Value) -> CmdResult {
+    let (pos, obj) = selected(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
+    let to = match (p::f32(v, "x"), p::f32(v, "y")) {
+        (Some(x), Some(y)) => Some((x, y)),
+        (None, None) => None,
+        _ => return Err(CmdError::Params("`x` and `y` go together".into())),
+    };
+    let (w0, h0) = obj_size(&obj);
+    let min = min_size(&obj);
+    let w = p::f32(v, "width").unwrap_or(w0).clamp(min, MAX_OFFSET);
+    let h = p::f32(v, "height").unwrap_or(h0).clamp(min, MAX_OFFSET);
+    if (w, h) != (w0, h0) {
+        with_obj(s, |o| {
+            if let InlineObject::Image { w: ow, h: oh, .. } | InlineObject::Shape { w: ow, h: oh, .. } = o {
+                *ow = w;
+                *oh = h;
+            }
+        })?;
+    }
+    let pos = match to {
+        Some((x, y)) => move_object(s, pos, p::u64(v, "page"), x, y, (w, h))?,
+        None => pos,
+    };
+    s.sel = Selection { anchor: pos.clone(), focus: Pos { off: pos.off + wordcraft_doc::para::OBJ.len_utf8(), ..pos.clone() } };
+    let o = s.doc.para_at(&pos).and_then(|p| p.object_at(pos.off)).cloned();
+    Ok(json!({"object": serde_json::to_value(o).unwrap_or(Value::Null), "pos": super::pos_json(&pos)}))
+}
+
+/// Put the object at `pos` with its top-left at (x, y) on `page` (default: where it is).
+/// A floating object on the same page keeps its anchors (offsets shift by the move); an inline
+/// object floats there, and an object moved to another page anchors to the text nearest the drop
+/// (both positioned relative to the page). Returns the object's position afterwards.
+fn move_object(s: &mut Session, pos: Pos, page: Option<u64>, x: f32, y: f32, (w, h): (f32, f32)) -> Result<Pos, CmdError> {
+    if pos.story != StoryRef::Body || pos.path.depth() > 0 {
+        return Err(CmdError::Disabled("only objects in the body text can be moved".into()));
+    }
+    let layout = s.layout();
+    let cur = layout.object(&pos.path, pos.off, s.page_hint).ok_or_else(|| CmdError::Failed("the object isn't laid out".into()))?;
+    let page = page.map_or(cur.page, |n| usize::try_from(n).unwrap_or(usize::MAX));
+    let pg = layout.pages.get(page).ok_or_else(|| CmdError::Params(format!("no page {page}")))?;
+    // Keep a corner of it on the page.
+    let x = x.max(12.0 - w).min(pg.w - 12.0);
+    let y = y.max(12.0 - h).min(pg.h.min(MAX_OFFSET) - 12.0);
+    if cur.floating() && page == cur.page {
+        let (dx, dy) = (x - cur.rect.x, y - cur.rect.y);
+        with_float(s, |f| {
+            f.x = (f.x + dx).clamp(-MAX_OFFSET, MAX_OFFSET);
+            f.y = (f.y + dy).clamp(-MAX_OFFSET, MAX_OFFSET);
+        })?;
+        return Ok(pos);
+    }
+    let anchor = if page == cur.page {
+        None
+    } else {
+        Some(nearest_line(&layout, page, y).ok_or_else(|| CmdError::Params("no text on that page to anchor to".into()))?)
+    };
+    let para = s.doc.para_mut(pos.story, &pos.path)?;
+    let mut obj = para.object_at(pos.off).cloned().ok_or_else(|| CmdError::Failed("object vanished".into()))?;
+    if let InlineObject::Image { float, .. } | InlineObject::Shape { float, .. } = &mut obj {
+        if float.wrap == Wrap::Inline {
+            float.wrap = Wrap::Square;
+        }
+        float.h_rel = wordcraft_doc::para::Anchor::Page;
+        float.v_rel = wordcraft_doc::para::Anchor::Page;
+        float.x = x;
+        float.y = y;
+    }
+    let Some(mut at) = anchor else {
+        *para.object_at_mut(pos.off).ok_or_else(|| CmdError::Failed("object vanished".into()))? = obj;
+        para.touch();
+        return Ok(pos);
+    };
+    let len = wordcraft_doc::para::OBJ.len_utf8();
+    s.doc.delete_range(&pos, &Pos { off: pos.off + len, ..pos.clone() })?;
+    if at.path == pos.path && at.off > pos.off {
+        at.off = at.off.saturating_sub(len);
+    }
+    let at = s.doc.clamp(&at);
+    s.doc.insert_object(&at, obj, &wordcraft_doc::CharProps::default())?;
+    Ok(at)
+}
+
+/// The start of the top-level body line on `page` nearest to `y`.
+fn nearest_line(layout: &wordcraft_layout::DocLayout, page: usize, y: f32) -> Option<Pos> {
+    let lines = wordcraft_layout::hit::page_lines(layout.pages.get(page)?, StoryRef::Body);
+    let best = lines.iter().filter(|l| l.path.depth() == 0).min_by(|a, b| {
+        let d = |l: &wordcraft_layout::hit::LineHit| if y < l.top { l.top - y } else { (y - l.bottom).max(0.0) };
+        d(a).total_cmp(&d(b))
+    })?;
+    let off = best.para.lines.get(best.li)?.start;
+    Some(Pos { story: StoryRef::Body, path: best.path.clone(), off })
 }
 
 fn obj_size(o: &InlineObject) -> (f32, f32) {

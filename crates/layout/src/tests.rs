@@ -467,7 +467,11 @@ fn text_box(d: &mut Document, at: usize, text: &str, w: f32, h: f32, float: word
 }
 
 fn box_rect(l: &DocLayout, id: u32) -> wordcraft_geom::Rect {
-    l.pages[0].items.iter().find_map(|i| if let Placed::TextBox { rect, part, .. } = i { (*part == id).then_some(*rect) } else { None }).unwrap()
+    l.pages[0]
+        .items
+        .iter()
+        .find_map(|i| if let Placed::Object { rect, text_box, .. } = i { (*text_box == Some(id)).then_some(*rect) } else { None })
+        .unwrap()
 }
 
 #[test]
@@ -511,4 +515,36 @@ fn body_text_wins_over_a_text_box_behind_it() {
     assert!(r.contains(wordcraft_geom::Point::new(c.x + 2.0, c.top + 2.0)), "box covers the text: {r:?} {c:?}");
     assert_eq!(l.story_at(0, c.x + 2.0, c.top + c.height / 2.0), Some(StoryRef::Body));
     assert_eq!(l.story_at(0, r.right() - 10.0, r.bottom() - 10.0), Some(StoryRef::Part(id)));
+}
+
+#[test]
+fn presses_grab_pictures_anywhere_and_text_boxes_by_their_border() {
+    let mut d = Document::from_text("Words before the objects.");
+    let id = text_box(&mut d, 0, "Inside", 144.0, 72.0, Default::default());
+    let shape = InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::Rectangle,
+        w: 60.0,
+        h: 40.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float: Default::default(),
+        story: None,
+    };
+    d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
+    let l = lay(&d);
+    let b = box_rect(&l, id);
+    // The text box: its border grabs it, inside is its text.
+    let edge = l.object_at(0, b.x + 1.0, b.y + b.h / 2.0, 4.0).unwrap();
+    assert_eq!(edge.text_box, Some(id));
+    assert_eq!(l.object(&edge.path, edge.off, 0).map(|o| o.rect), Some(b));
+    assert_eq!(l.text_box(id, 5).map(|o| o.rect), Some(b), "a bad hint still finds it");
+    assert!(l.object_at(0, b.x + b.w / 2.0, b.y + b.h / 2.0, 4.0).is_none());
+    // The shape: anywhere on it.
+    let s = l.find_object(0, |o| o.text_box.is_none()).unwrap();
+    let hit = l.object_at(0, s.rect.x + s.rect.w / 2.0, s.rect.y + s.rect.h / 2.0, 4.0).unwrap();
+    assert_eq!((hit.off, hit.text_box, hit.floating()), (0, None, false));
+    // Plain text: nothing.
+    let c = l.caret(&Pos::body(0, 10)).unwrap();
+    assert!(l.object_at(0, c.x, c.top + 2.0, 4.0).is_none());
 }

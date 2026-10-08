@@ -150,6 +150,18 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
             app.synthetic.push(egui::Event::PointerMoved(egui::pos2(x, y)));
             ok(json!({"queued": true}))
         }
+        "ui.press" | "ui.release" => {
+            let (Some(x), Some(y)) = (f("x"), f("y")) else { return err("missing x/y") };
+            let pos = egui::pos2(x, y);
+            app.synthetic.push(egui::Event::PointerMoved(pos));
+            app.synthetic.push(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: req.method == "ui.press",
+                modifiers: mods(p),
+            });
+            ok(json!({"queued": true}))
+        }
         "ui.drag" => {
             let (Some(x), Some(y), Some(tx), Some(ty)) = (f("x"), f("y"), f("toX"), f("toY")) else { return err("missing x/y/toX/toY") };
             let m = mods(p);

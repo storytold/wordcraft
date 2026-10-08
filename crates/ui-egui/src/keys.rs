@@ -120,6 +120,8 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                     continue;
                 }
                 if t.chars().all(|c| !c.is_control()) && !t.is_empty() {
+                    // Typing with a text box selected types into it.
+                    crate::objects::enter_text_box(app);
                     let _ = app.run("text.insert", json!({"text": t}));
                 }
             }
@@ -146,6 +148,9 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
             egui::Event::Key { key, pressed: true, modifiers, .. } => {
                 if key == Key::Escape && app.session.painter.is_some() {
                     app.session.painter = None;
+                    continue;
+                }
+                if crate::objects::key(app, key, modifiers) {
                     continue;
                 }
                 // Escape leaves a text box to just after it in the body.

@@ -154,7 +154,8 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     let _ = app.run("ui.dialog", json!({"name": "goto"}));
                 }
                 let words = app.cached_word_count();
-                let wtxt = if app.session.sel.is_collapsed() {
+                // A selected picture/shape/text box isn't a text selection: show the total.
+                let wtxt = if app.session.sel.is_collapsed() || crate::objects::selected(app).is_some() {
                     format!("{words} words")
                 } else {
                     let sw = wordcraft_doc::count_words(&app.session.selected_text());

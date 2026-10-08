@@ -38,6 +38,15 @@ pub struct CanvasState {
     pub want_focus: bool,
     pub context_issue: Option<serde_json::Value>,
     pub context_synonyms: Option<serde_json::Value>,
+    /// A picture, shape or text box being dragged by its frame.
+    pub(crate) obj_drag: Option<crate::objects::ObjectDrag>,
+}
+
+impl CanvasState {
+    /// The cached rendering of a page.
+    pub(crate) fn page_texture(&self, page: usize) -> Option<&TextureHandle> {
+        self.textures.get(&page).map(|(_, t)| t)
+    }
 }
 
 impl Default for CanvasState {
@@ -60,6 +69,7 @@ impl Default for CanvasState {
             want_focus: true,
             context_issue: None,
             context_synonyms: None,
+            obj_drag: None,
         }
     }
 }
@@ -139,7 +149,7 @@ fn page_key(app: &WordApp, page: &Page, scale_px: f32) -> u64 {
                 Placed::Rule { x0, y0, x1, y1, border } => format!("{x0}{y0}{x1}{y1}{border:?}").hash(&mut h),
                 Placed::Image { rect, media, .. } => format!("{rect:?}{media}").hash(&mut h),
                 Placed::Shape { rect, kind, fill, stroke, .. } => format!("{rect:?}{kind:?}{fill:?}{stroke:?}").hash(&mut h),
-                Placed::Cell { .. } | Placed::TextBox { .. } => {}
+                Placed::Cell { .. } | Placed::Object { .. } => {}
             }
         }
     }
@@ -270,8 +280,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         app.canvas.textures.retain(|k, _| *k < n);
         app.canvas.page_rects = rects.clone();
         balloons(app, ui, &painter, &rects, &layout, geo.scale);
-        // Selection.
-        if !app.session.sel.is_collapsed() {
+        // Selection (a selected object shows its frame instead).
+        if !app.session.sel.is_collapsed() && crate::objects::selected(app).is_none() {
             let (a, b) = app.session.sel.ordered();
             for (pi, r) in layout.selection_rects(&app.session.doc, &a, &b, app.session.page_hint) {
                 if let Some(pr) = rects.get(pi) {
@@ -310,6 +320,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 painter.line_segment([pos2(g.min.x, g.max.y), pos2(g.max.x, g.max.y)], Stroke::new(1.0, t.caret));
             }
         }
+        crate::objects::paint(app, &painter, &t, &layout, &rects, geo.scale);
         (resp, rects)
     });
     let (resp, rects) = out.inner;
@@ -339,8 +350,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         app.canvas.context_synonyms = app.session.run("review.thesaurus", &json!({})).ok().and_then(|v| v.get("synonyms").cloned());
     }
     resp.context_menu(|ui| context_menu(app, ui));
-    if resp.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+    if resp.hovered() || app.canvas.obj_drag.is_some() {
+        let over_object = ui.input(|i| i.pointer.latest_pos()).and_then(|p| crate::objects::cursor(app, &layout, &rects, geo.scale, p));
+        ui.ctx().set_cursor_icon(over_object.unwrap_or(egui::CursorIcon::Text));
     }
     if app.canvas.focused {
         crate::keys::canvas_events(app, ui.ctx());
@@ -457,7 +469,15 @@ pub fn page_at(rects: &[Rect], scale: f32, p: Pos2) -> Option<(usize, f32, f32)>
 }
 
 fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layout: &DocLayout, scale: f32) {
-    let Some(p) = resp.interact_pointer_pos().or_else(|| resp.hover_pos()) else { return };
+    let pointer = resp.interact_pointer_pos().or_else(|| resp.hover_pos());
+    // An object drag follows the pointer anywhere until it's released.
+    let object_pointer = pointer.or_else(|| app.canvas.obj_drag.as_ref().and_then(|_| ui.input(|i| i.pointer.latest_pos())));
+    if let Some(at) = object_pointer
+        && crate::objects::pointer(app, ui, resp, rects, layout, scale, at)
+    {
+        return;
+    }
+    let Some(p) = pointer else { return };
     let Some((page, x, y)) = page_at(rects, scale, p) else { return };
     let mods = ui.input(|i| i.modifiers);
     let story = app.session.sel.focus.story;
