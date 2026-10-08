@@ -287,3 +287,42 @@ fn caret_navigation() {
     run(&mut s, "caret.left", json!({}));
     assert_eq!(s.sel.focus.off, 10);
 }
+
+#[test]
+fn text_box_insert_puts_the_caret_inside() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Before "}));
+    let id = run(&mut s, "insert.textBox", json!({}))["story"].as_u64().unwrap() as u32;
+    let boxed = StoryRef::Part(id);
+    assert_eq!(s.sel.focus.story, boxed);
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    assert_eq!(s.doc.plain_text(boxed), "Hello");
+    assert!(!text(&s).contains("Hello"), "{}", text(&s));
+    // Leaving the box lands just after it in the body.
+    let anchor = s.doc.text_box_anchor(id).unwrap();
+    assert_eq!(anchor, Pos::body(0, "Before \u{FFFC}".len()));
+    run(&mut s, "caret.set", json!({"pos": anchor}));
+    run(&mut s, "text.insert", json!({"text": " after"}));
+    assert_eq!(s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).map(|p| p.text.as_str()), Some("Before \u{FFFC} after"));
+    // Undo goes back through the typing to before the box, in the body.
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.sel.focus.story, StoryRef::Body);
+    assert_eq!(text(&s), "Before ");
+    // Given text: the caret ends after it.
+    let id = run(&mut s, "insert.textBox", json!({"text": "Note"}))["story"].as_u64().unwrap() as u32;
+    assert_eq!(s.sel.focus, Pos { story: StoryRef::Part(id), path: wordcraft_doc::Path::top(0), off: 4 });
+}
+
+#[test]
+fn text_box_in_a_table_cell_keeps_the_caret_in_the_cell() {
+    // Layout doesn't show the text of boxes inside tables yet, so don't move into one.
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+    let cell = s.sel.focus.clone();
+    assert!(cell.path.0.len() > 1, "{cell:?}");
+    run(&mut s, "insert.textBox", json!({}));
+    assert_eq!(s.sel.focus.story, StoryRef::Body);
+    assert_eq!(s.sel.focus.path, cell.path);
+}

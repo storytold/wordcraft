@@ -448,3 +448,67 @@ fn auto_hyphenation_breaks_long_words() {
     let l2 = lay(&d2);
     let _ = hyphens(&l2);
 }
+
+fn text_box(d: &mut Document, at: usize, text: &str, w: f32, h: f32, float: wordcraft_doc::para::Float) -> u32 {
+    let id =
+        d.add_part(wordcraft_doc::PartKind::TextBox, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))]);
+    let shape = InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::TextBox,
+        w,
+        h,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.75,
+        float,
+        story: Some(id),
+    };
+    d.insert_object(&Pos::body(0, at), shape, &Default::default()).unwrap();
+    id
+}
+
+fn box_rect(l: &DocLayout, id: u32) -> wordcraft_geom::Rect {
+    l.pages[0].items.iter().find_map(|i| if let Placed::TextBox { rect, part, .. } = i { (*part == id).then_some(*rect) } else { None }).unwrap()
+}
+
+#[test]
+fn clicks_inside_a_text_box_hit_its_story() {
+    let mut d = Document::from_text("Before after");
+    let id = text_box(&mut d, 7, "Inside the box", 144.0, 72.0, Default::default());
+    let l = lay(&d);
+    let r = box_rect(&l, id);
+    assert!((r.w - 144.0).abs() < 0.5 && (r.h - 72.0).abs() < 0.5, "{r:?}");
+    let box_story = StoryRef::Part(id);
+    // Anywhere inside the box, even below its text, is the box.
+    for (x, y) in [(r.x + 20.0, r.y + 10.0), (r.x + r.w - 4.0, r.y + r.h - 4.0)] {
+        assert_eq!(l.story_at(0, x, y), Some(box_story), "({x}, {y}) in {r:?}");
+        assert_eq!(l.hit(0, x, y, box_story).map(|p| p.story), Some(box_story));
+    }
+    // The body text beside it is the body; so is the margin just right of the box, although the
+    // box's own lines are within reach there.
+    let c = l.caret(&Pos::body(0, 2)).unwrap();
+    assert_eq!(l.story_at(0, c.x, c.top + c.height / 2.0), Some(StoryRef::Body));
+    assert_ne!(l.story_at(0, r.right() + 8.0, r.y + 10.0), Some(box_story));
+    // The caret in the box sits inside it.
+    let bc = l.caret(&Pos { story: box_story, path: Path::top(0), off: 0 }).unwrap();
+    assert!(r.contains(wordcraft_geom::Point::new(bc.x, bc.top)), "{bc:?} outside {r:?}");
+}
+
+#[test]
+fn body_text_wins_over_a_text_box_behind_it() {
+    let mut d = Document::from_text("Hi");
+    let float = wordcraft_doc::para::Float {
+        wrap: wordcraft_doc::para::Wrap::BehindText,
+        h_rel: wordcraft_doc::para::Anchor::Column,
+        v_rel: wordcraft_doc::para::Anchor::Paragraph,
+        x: 0.0,
+        y: 0.0,
+        dist: 0.0,
+    };
+    let id = text_box(&mut d, 0, "Behind", 200.0, 150.0, float);
+    let l = lay(&d);
+    let r = box_rect(&l, id);
+    let c = l.caret(&Pos::body(0, 0)).unwrap();
+    assert!(r.contains(wordcraft_geom::Point::new(c.x + 2.0, c.top + 2.0)), "box covers the text: {r:?} {c:?}");
+    assert_eq!(l.story_at(0, c.x + 2.0, c.top + c.height / 2.0), Some(StoryRef::Body));
+    assert_eq!(l.story_at(0, r.right() - 10.0, r.bottom() - 10.0), Some(StoryRef::Part(id)));
+}

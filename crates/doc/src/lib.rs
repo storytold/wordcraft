@@ -496,6 +496,23 @@ impl Document {
         Pos { story: s, path, off }
     }
 
+    /// The position just after the shape that owns text box story `part` (body first, then the
+    /// other parts), for leaving the text box.
+    pub fn text_box_anchor(&self, part: u32) -> Option<Pos> {
+        let stories = std::iter::once(StoryRef::Body).chain(self.parts.keys().filter(|k| **k != part).map(|k| StoryRef::Part(*k)));
+        for story in stories {
+            for path in self.para_paths(story) {
+                let Some(p) = self.para(story, &path) else { continue };
+                for off in p.object_offsets() {
+                    if matches!(p.object_at(off), Some(InlineObject::Shape { story: Some(id), .. }) if *id == part) {
+                        return Some(Pos { story, path, off: off + para::OBJ.len_utf8() });
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// The next / previous paragraph path in document order.
     pub fn next_para(&self, s: StoryRef, path: &Path) -> Option<Path> {
         let all = self.para_paths(s);

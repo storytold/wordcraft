@@ -74,3 +74,24 @@ fn ensure_nonempty_repairs() {
     d.ensure_nonempty();
     assert!(matches!(d.body.last().map(|b| &**b), Some(Block::Para(_))));
 }
+
+#[test]
+fn text_box_anchor_finds_the_owning_shape() {
+    let mut d = Document::from_text("Before after");
+    let id = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("Inside", CharProps::default()))]);
+    let shape = |story| InlineObject::Shape {
+        kind: para::ShapeKind::TextBox,
+        w: 144.0,
+        h: 72.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.75,
+        float: Default::default(),
+        story,
+    };
+    // A plain shape before it doesn't count.
+    d.insert_object(&Pos::body(0, 0), shape(None), &CharProps::default()).unwrap();
+    let end = d.insert_object(&Pos::body(0, 10), shape(Some(id)), &CharProps::default()).unwrap();
+    assert_eq!(d.text_box_anchor(id), Some(end));
+    assert_eq!(d.text_box_anchor(id + 1), None);
+}

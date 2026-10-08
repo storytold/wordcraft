@@ -281,7 +281,10 @@ fn text_box(s: &mut Session, v: &Value) -> CmdResult {
         story: Some(id),
     };
     let end = s.doc.insert_object(&at, obj, &props)?;
-    s.sel = Selection::caret(end);
+    // Like Word, type straight into the new box. Layout only shows the text of boxes anchored
+    // in top-level body paragraphs; elsewhere the caret stays after the box.
+    s.sel =
+        if at.story == StoryRef::Body && at.path.0.len() == 1 { Selection::caret(s.doc.end_of(StoryRef::Part(id))) } else { Selection::caret(end) };
     Ok(json!({"story": id}))
 }
 

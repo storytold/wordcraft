@@ -69,18 +69,36 @@ impl DocLayout {
         Some(Pos { story: best.story, path: best.path.clone(), off })
     }
 
-    /// The story whose text is under a point (body, footnotes, endnotes; not headers/footers).
+    /// The story whose text is under a point (body, footnotes, endnotes, text boxes; not
+    /// headers/footers). A text box wins inside its area, except one behind the text, which only
+    /// wins where no body text is.
     pub fn story_at(&self, page: usize, x: f32, y: f32) -> Option<StoryRef> {
         let p = self.pages.get(page)?;
-        p.items.iter().find_map(|it| match it {
-            Placed::Lines { story, para, l0, l1, x: lx, y: ly, .. } => {
-                let first = para.lines.get(*l0)?;
-                let last = para.lines.get(l1.checked_sub(1)?)?;
-                let bottom = ly + last.top + last.height - first.top;
-                (y >= *ly - 2.0 && y <= bottom + 2.0 && x >= *lx - 40.0 && x <= lx + last.right + 40.0).then_some(*story)
-            }
-            _ => None,
-        })
+        let pt = wordcraft_geom::Point::new(x, y);
+        let text_box = |behind: bool| {
+            p.items.iter().rev().find_map(|it| match it {
+                Placed::TextBox { rect, part, behind: b } if *b == behind && rect.contains(pt) => Some(StoryRef::Part(*part)),
+                _ => None,
+            })
+        };
+        let boxes: Vec<StoryRef> =
+            p.items.iter().filter_map(|it| if let Placed::TextBox { part, .. } = it { Some(StoryRef::Part(*part)) } else { None }).collect();
+        let is_box = |s: &StoryRef| boxes.contains(s);
+        text_box(false)
+            .or_else(|| {
+                p.items.iter().find_map(|it| match it {
+                    // A text box's lines only count inside its area (above).
+                    Placed::Lines { story, .. } if is_box(story) => None,
+                    Placed::Lines { story, para, l0, l1, x: lx, y: ly, .. } => {
+                        let first = para.lines.get(*l0)?;
+                        let last = para.lines.get(l1.checked_sub(1)?)?;
+                        let bottom = ly + last.top + last.height - first.top;
+                        (y >= *ly - 2.0 && y <= bottom + 2.0 && x >= *lx - 40.0 && x <= lx + last.right + 40.0).then_some(*story)
+                    }
+                    _ => None,
+                })
+            })
+            .or_else(|| text_box(true))
     }
 
     /// Which header/footer (if any) is at (x, y) on a page — for double-click editing.

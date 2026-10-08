@@ -7,7 +7,7 @@ use std::hash::{Hash, Hasher};
 
 use egui::{Color32, Pos2, Rect, Sense, Stroke, TextureHandle, Ui, pos2, vec2};
 use serde_json::json;
-use wordcraft_doc::{Pos, StoryRef};
+use wordcraft_doc::{PartKind, Pos, StoryRef};
 use wordcraft_layout::{DocLayout, Page, Placed};
 
 use crate::WordApp;
@@ -139,7 +139,7 @@ fn page_key(app: &WordApp, page: &Page, scale_px: f32) -> u64 {
                 Placed::Rule { x0, y0, x1, y1, border } => format!("{x0}{y0}{x1}{y1}{border:?}").hash(&mut h),
                 Placed::Image { rect, media, .. } => format!("{rect:?}{media}").hash(&mut h),
                 Placed::Shape { rect, kind, fill, stroke, .. } => format!("{rect:?}{kind:?}{fill:?}{stroke:?}").hash(&mut h),
-                Placed::Cell { .. } => {}
+                Placed::Cell { .. } | Placed::TextBox { .. } => {}
             }
         }
     }
@@ -212,7 +212,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 let mut opts = wordcraft_render::RenderOptions::default();
                 opts.display.marks = app.session.view.marks;
                 opts.display.markup = app.session.view.show_markup;
-                let editing_hf = matches!(app.session.sel.focus.story, StoryRef::Part(_));
+                let editing_hf = matches!(app.session.sel.focus.story, StoryRef::Part(_)) && !in_text_box(app);
                 opts.display.dim_header = !editing_hf;
                 opts.display.dim_body = editing_hf;
                 let img = wordcraft_render::render_page(&app.session.doc, page, scale_px, &opts);
@@ -474,7 +474,7 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
             }
             return;
         }
-        if matches!(story, StoryRef::Part(_)) && layout.header_footer_at(page, y).is_none() {
+        if matches!(story, StoryRef::Part(_)) && !in_text_box(app) && layout.header_footer_at(page, y).is_none() {
             let _ = app.run("insert.closeHeader", json!({}));
             if let Some(pos) = layout.hit(page, x, y, StoryRef::Body) {
                 app.session.sel = wordcraft_engine::Selection::caret(pos);
@@ -490,22 +490,23 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
     }
     let pressed = ui.input(|i| i.pointer.primary_pressed()) && resp.contains_pointer();
     if pressed {
-        // Clicking into a footnote/endnote edits it; clicking the body from a note goes back.
-        let story = match layout.story_at(page, x, y) {
-            Some(StoryRef::Part(id))
-                if app
-                    .session
-                    .doc
-                    .parts
-                    .get(&id)
-                    .is_some_and(|p| matches!(p.kind, wordcraft_doc::PartKind::Footnote | wordcraft_doc::PartKind::Endnote)) =>
-            {
-                StoryRef::Part(id)
+        // Clicking into a footnote/endnote or a text box edits it; clicking elsewhere goes back to
+        // the body. Text boxes stay out of reach while editing a header/footer.
+        let story = {
+            let kind = |s: StoryRef| match s {
+                StoryRef::Part(id) => app.session.doc.parts.get(&id).map(|p| p.kind),
+                StoryRef::Body => None,
+            };
+            let is_note = |s: StoryRef| matches!(kind(s), Some(PartKind::Footnote | PartKind::Endnote));
+            let is_box = |s: StoryRef| kind(s) == Some(PartKind::TextBox);
+            let in_hf = matches!(kind(story), Some(PartKind::Header | PartKind::Footer));
+            match layout.story_at(page, x, y) {
+                Some(s) if is_note(s) => s,
+                Some(s) if is_box(s) && !in_hf => s,
+                Some(StoryRef::Body) if is_note(story) => StoryRef::Body,
+                _ if is_box(story) => StoryRef::Body,
+                _ => story,
             }
-            Some(StoryRef::Body) if matches!(story, StoryRef::Part(id) if app.session.doc.parts.get(&id).is_some_and(|p| matches!(p.kind, wordcraft_doc::PartKind::Footnote | wordcraft_doc::PartKind::Endnote))) => {
-                StoryRef::Body
-            }
-            _ => story,
         };
         let Some(pos) = layout.hit(page, x, y, story) else { return };
         // Ctrl/⌘+click follows a hyperlink.
@@ -702,6 +703,11 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
 pub fn page_to_screen(app: &WordApp, page: usize, x: f32, y: f32) -> Option<Pos2> {
     let r = app.canvas.page_rects.get(page)?;
     Some(to_screen(pos2(0.0, 0.0), *r, app.canvas.scale, x, y))
+}
+
+/// Whether the caret is in a text box's story.
+pub fn in_text_box(app: &WordApp) -> bool {
+    matches!(app.session.sel.focus.story, StoryRef::Part(id) if app.session.doc.parts.get(&id).is_some_and(|p| p.kind == PartKind::TextBox))
 }
 
 /// Caret position on screen.

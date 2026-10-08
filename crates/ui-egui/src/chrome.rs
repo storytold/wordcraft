@@ -163,7 +163,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                 if st(ui, &wtxt).clicked() {
                     let _ = app.run("ui.dialog", json!({"name": "wordCount"}));
                 }
-                if app.session.sel.focus.story != StoryRef::Body {
+                if app.session.sel.focus.story != StoryRef::Body && !crate::canvas::in_text_box(app) {
                     st(ui, "Editing header/footer");
                 }
                 st(ui, "English (United States)");

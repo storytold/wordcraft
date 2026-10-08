@@ -148,6 +148,16 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                     app.session.painter = None;
                     continue;
                 }
+                // Escape leaves a text box to just after it in the body.
+                if key == Key::Escape
+                    && crate::canvas::in_text_box(app)
+                    && app.session.sel.is_collapsed()
+                    && let wordcraft_doc::StoryRef::Part(id) = app.session.sel.focus.story
+                    && let Some(pos) = app.session.doc.text_box_anchor(id)
+                {
+                    let _ = app.run("caret.set", json!({"pos": pos}));
+                    continue;
+                }
                 if key == Key::Escape && matches!(app.session.sel.focus.story, wordcraft_doc::StoryRef::Part(_)) && app.session.sel.is_collapsed() {
                     let _ = app.run("insert.closeHeader", json!({}));
                     continue;
