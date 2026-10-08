@@ -9,6 +9,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod control_server;
+mod logging;
 
 use wordcraft_engine::Session;
 use wordcraft_ui_egui::{Services, UiState, WordApp};
@@ -47,8 +48,18 @@ fn prefs_path() -> Option<std::path::PathBuf> {
     base.map(|b| b.join("ui.json"))
 }
 
+/// Where the log files live: `logs` in the preferences folder (see `logging`).
+fn log_dir() -> Option<std::path::PathBuf> {
+    Some(prefs_path()?.parent()?.join("logs"))
+}
+
+/// Runs without preferences (`WORDCRAFT_NO_PREFS`, agents' test runs) neither read nor write them.
+fn prefs_enabled() -> bool {
+    std::env::var_os("WORDCRAFT_NO_PREFS").is_none()
+}
+
 fn load_prefs(app: &mut WordApp) {
-    if std::env::var_os("WORDCRAFT_NO_PREFS").is_some() {
+    if !prefs_enabled() {
         return;
     }
     if let Some(p) = prefs_path()
@@ -61,7 +72,7 @@ fn load_prefs(app: &mut WordApp) {
 }
 
 fn save_prefs(app: &WordApp) {
-    if std::env::var_os("WORDCRAFT_NO_PREFS").is_some() {
+    if !prefs_enabled() {
         return;
     }
     if let Some(p) = prefs_path() {
@@ -101,7 +112,15 @@ fn app_icon() -> Option<egui::IconData> {
     eframe::icon_data::from_png_bytes(png).map_err(|e| log::warn!("app icon: {e}")).ok()
 }
 
+/// The commit the build came from (short), or `dev`.
+fn build_sha() -> &'static str {
+    option_env!("WORDCRAFT_BUILD_SHA").map(|s| s.get(..8).unwrap_or(s)).unwrap_or("dev")
+}
+
 fn main() -> eframe::Result {
+    // First, so the panic hook and every start-up warning are recorded (`logging`).
+    let logger = logging::install();
+    logging::install_panic_hook();
     let mut control_port: Option<u16> = std::env::var("WORDCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok());
     let mut files = Vec::new();
     let mut sample = false;
@@ -111,14 +130,23 @@ fn main() -> eframe::Result {
             "--control" => control_port = args.next().and_then(|p| p.parse().ok()),
             "--sample" => sample = true,
             "--version" => {
-                println!(
-                    "wordcraft {} ({})",
-                    env!("CARGO_PKG_VERSION"),
-                    option_env!("WORDCRAFT_BUILD_SHA").map(|s| s.get(..8).unwrap_or(s)).unwrap_or("dev")
-                );
+                println!("wordcraft {} ({})", env!("CARGO_PKG_VERSION"), build_sha());
                 return Ok(());
             }
             _ => files.push(a),
+        }
+    }
+    // The log file lives in the settings directory, next to the preferences; opened after the
+    // arguments, so `--version` leaves no file behind. Records logged until now are written to it
+    // first. Runs without preferences (agents' test runs) log to standard error only, so they
+    // don't rotate away the user's own logs.
+    if let Some(logger) = logger {
+        match log_dir().filter(|_| prefs_enabled()) {
+            Some(dir) => match logger.attach_dir(&dir) {
+                Ok(path) => log::info!("WordCraft {} ({}), log file {}", env!("CARGO_PKG_VERSION"), build_sha(), path.display()),
+                Err(e) => eprintln!("wordcraft: no log file: {e}"),
+            },
+            None => logger.no_file(),
         }
     }
     let mut options = eframe::NativeOptions {
@@ -150,7 +178,7 @@ fn main() -> eframe::Result {
             }
             for f in files {
                 if let Err(e) = app.run("file.open", serde_json::json!({"path": f})) {
-                    eprintln!("wordcraft: {f}: {e}");
+                    log::warn!("{f}: {e}");
                 }
             }
             Ok(Box::new(App(app)))
