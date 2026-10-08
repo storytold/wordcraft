@@ -17,9 +17,9 @@ vendor: Learning Machines LLC
 homepage: https://getartcraft.com/apps/wordcraft
 license: MIT OR Apache-2.0
 description: |-
-  Open-source, native image editor that works the way Photoshop users expect.
-  Layers, masks, adjustment layers, layer styles, type and brushes; opens and
-  saves layered PSD/PSB files; 8/16/32-bit documents; GPU compositing (wgpu).
+  Open-source, native word processor that works the way Word users expect.
+  The ribbon, styles, tables, track changes, references and mail merge; reads
+  and writes .docx, opens .odt, .rtf, .html, .md and .txt, and exports PDF.
   Includes wordcraft-cli, a headless converter and command runner.
 
 # The binaries link only glibc and libgcc_s directly. Windowing (X11/Wayland, xkbcommon) and the
