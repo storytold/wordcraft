@@ -5010,6 +5010,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "toml",
  "wordcraft-doc",
  "wordcraft-engine",
  "wordcraft-fonts",
