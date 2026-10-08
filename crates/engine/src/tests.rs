@@ -414,22 +414,8 @@ fn arrange_bounds_resizes_and_moves_objects() {
     let o = box_area(&mut s);
     assert_eq!((o.page, o.rect.x, o.rect.y), (0, 300.0, 400.0));
     assert_eq!(s.doc.plain_text(StoryRef::Part(o.text_box.unwrap())), "Box");
-    // Moving a floating object on its page keeps its anchors and shifts its offsets.
-    let set = |s: &mut Session, f: &dyn Fn(&mut wordcraft_doc::para::Float)| {
-        let o = box_area(s);
-        let p = s.doc.para_mut(StoryRef::Body, &o.path).unwrap();
-        if let Some(wordcraft_doc::InlineObject::Shape { float, .. }) = p.object_at_mut(o.off) {
-            f(float);
-        }
-        p.touch();
-        s.touch();
-    };
-    set(&mut s, &|f| {
-        f.h_rel = Anchor::Column;
-        f.v_rel = Anchor::Paragraph;
-        f.x = 10.0;
-        f.y = 20.0;
-    });
+    // Moving it again anchors it to the paragraph under its top edge, relative to that
+    // paragraph (it moves with the text), landing exactly where dropped.
     let before = box_area(&mut s).rect;
     select_box(&mut s);
     run(&mut s, "arrange.bounds", json!({"x": before.x + 30.0, "y": before.y - 5.0}));
@@ -437,7 +423,8 @@ fn arrange_bounds_resizes_and_moves_objects() {
     assert!((o.rect.x - before.x - 30.0).abs() < 0.01 && (o.rect.y - before.y + 5.0).abs() < 0.01, "{:?} → {:?}", before, o.rect);
     let p = s.doc.para(StoryRef::Body, &o.path).unwrap();
     let Some(wordcraft_doc::InlineObject::Shape { float, .. }) = p.object_at(o.off) else { panic!() };
-    assert_eq!((float.h_rel, float.v_rel, float.x, float.y), (Anchor::Column, Anchor::Paragraph, 40.0, 15.0));
+    assert_eq!((float.h_rel, float.v_rel), (Anchor::Column, Anchor::Paragraph));
+    assert!((float.x - (o.rect.x - o.origin.x)).abs() < 0.01 && (float.y - (o.rect.y - o.origin.y)).abs() < 0.01);
     // Nudge.
     run(&mut s, "arrange.nudge", json!({"dx": 6, "dy": -1}));
     let n = box_area(&mut s).rect;
@@ -470,4 +457,36 @@ fn arrange_bounds_moves_an_object_to_another_page() {
     // The selection follows the object.
     assert_eq!(s.sel.anchor, o.pos());
     assert!(s.run("arrange.bounds", &json!({"page": 99, "x": 1, "y": 1})).is_err());
+}
+
+#[test]
+fn moved_text_box_makes_the_text_it_lands_on_wrap() {
+    let mut s = s();
+    for i in 0..6 {
+        run(
+            &mut s,
+            "text.insert",
+            json!({"text": format!("Paragraph {i}: the quick brown fox jumps over the lazy dog, again and again, across the page.")}),
+        );
+        run(&mut s, "text.newParagraph", json!({}));
+    }
+    run(&mut s, "caret.set", json!({"pos": Pos::body(4, 0)}));
+    run(&mut s, "insert.textBox", json!({"text": "Box"}));
+    select_box(&mut s);
+    // Drop it over paragraph 1, right half of the page: well above its own paragraph (4).
+    let l = s.layout();
+    let p1_top = wordcraft_layout::hit::page_lines(&l.pages[0], StoryRef::Body).iter().find(|ln| ln.path.0 == [1] && ln.li == 0).unwrap().top;
+    run(&mut s, "arrange.bounds", json!({"x": 300, "y": p1_top + 2.0}));
+    let o = box_area(&mut s);
+    assert_eq!(o.path.0, vec![1], "anchored to the paragraph it was dropped on");
+    assert_eq!((o.rect.x, o.rect.y), (300.0, p1_top + 2.0));
+    // Lines beside the box stop short of it; lines below it use the full width again.
+    let l = s.layout();
+    let lines = wordcraft_layout::hit::page_lines(&l.pages[0], StoryRef::Body);
+    let beside: Vec<_> = lines.iter().filter(|ln| ln.bottom > o.rect.y && ln.top < o.rect.bottom()).collect();
+    assert!(!beside.is_empty());
+    assert!(beside.iter().all(|ln| ln.right <= o.rect.x + 0.5 || ln.left >= o.rect.right() - 0.5), "text overlaps the box");
+    assert!(lines.iter().any(|ln| ln.top > o.rect.bottom() + 10.0 && ln.right > o.rect.right()));
+    // Its old paragraph no longer holds it.
+    assert!(s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(4)).unwrap().objects.is_empty());
 }

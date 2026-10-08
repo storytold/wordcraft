@@ -39,6 +39,8 @@ pub struct ObjectHit {
     pub off: usize,
     pub text_box: Option<u32>,
     pub wrap: Wrap,
+    /// Where column- and paragraph-relative offsets start (see [`Placed::Object`]).
+    pub origin: Point,
 }
 
 impl ObjectHit {
@@ -57,8 +59,8 @@ impl ObjectHit {
 /// A page's objects, topmost first.
 fn objects(page: &Page, index: usize) -> impl Iterator<Item = ObjectHit> + '_ {
     page.items.iter().rev().filter_map(move |it| match it {
-        Placed::Object { rect, path, off, text_box, wrap } => {
-            Some(ObjectHit { page: index, rect: *rect, path: path.clone(), off: *off, text_box: *text_box, wrap: *wrap })
+        Placed::Object { rect, path, off, text_box, wrap, origin } => {
+            Some(ObjectHit { page: index, rect: *rect, path: path.clone(), off: *off, text_box: *text_box, wrap: *wrap, origin: *origin })
         }
         _ => None,
     })

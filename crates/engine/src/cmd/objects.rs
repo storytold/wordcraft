@@ -365,11 +365,14 @@ fn bounds(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"object": serde_json::to_value(o).unwrap_or(Value::Null), "pos": super::pos_json(&pos)}))
 }
 
-/// Put the object at `pos` with its top-left at (x, y) on `page` (default: where it is).
-/// A floating object on the same page keeps its anchors (offsets shift by the move); an inline
-/// object floats there, and an object moved to another page anchors to the text nearest the drop
-/// (both positioned relative to the page). Returns the object's position afterwards.
+/// Put the object at `pos` with its top-left at (x, y) on `page` (default: where it is), as a
+/// drag does in Word: it floats (an inline object gets Square wrapping) and anchors to the
+/// paragraph under its top edge, positioned relative to that paragraph's column and top. So the
+/// text it lands on flows around it, and it moves with that text. On a page where no paragraph
+/// starts, it anchors to the nearest line and is positioned on the page. Returns the object's
+/// position afterwards.
 fn move_object(s: &mut Session, pos: Pos, page: Option<u64>, x: f32, y: f32, (w, h): (f32, f32)) -> Result<Pos, CmdError> {
+    use wordcraft_doc::para::Anchor;
     if pos.story != StoryRef::Body || pos.path.depth() > 0 {
         return Err(CmdError::Disabled("only objects in the body text can be moved".into()));
     }
@@ -380,43 +383,64 @@ fn move_object(s: &mut Session, pos: Pos, page: Option<u64>, x: f32, y: f32, (w,
     // Keep a corner of it on the page.
     let x = x.max(12.0 - w).min(pg.w - 12.0);
     let y = y.max(12.0 - h).min(pg.h.min(MAX_OFFSET) - 12.0);
-    if cur.floating() && page == cur.page {
-        let (dx, dy) = (x - cur.rect.x, y - cur.rect.y);
-        with_float(s, |f| {
-            f.x = (f.x + dx).clamp(-MAX_OFFSET, MAX_OFFSET);
-            f.y = (f.y + dy).clamp(-MAX_OFFSET, MAX_OFFSET);
-        })?;
-        return Ok(pos);
-    }
-    let anchor = if page == cur.page {
-        None
+    let (anchor, on_page) = match anchor_paragraph(&layout, page, y) {
+        Some(path) => (Pos { story: StoryRef::Body, path, off: 0 }, false),
+        None => (nearest_line(&layout, page, y).ok_or_else(|| CmdError::Params("no text on that page to anchor to".into()))?, true),
+    };
+    // Move its character to the anchor (unless it's already in that paragraph).
+    let at = if anchor.path == pos.path && !on_page {
+        pos
     } else {
-        Some(nearest_line(&layout, page, y).ok_or_else(|| CmdError::Params("no text on that page to anchor to".into()))?)
-    };
-    let para = s.doc.para_mut(pos.story, &pos.path)?;
-    let mut obj = para.object_at(pos.off).cloned().ok_or_else(|| CmdError::Failed("object vanished".into()))?;
-    if let InlineObject::Image { float, .. } | InlineObject::Shape { float, .. } = &mut obj {
-        if float.wrap == Wrap::Inline {
-            float.wrap = Wrap::Square;
+        let obj = s.doc.para_at(&pos).and_then(|p| p.object_at(pos.off)).cloned().ok_or_else(|| CmdError::Failed("object vanished".into()))?;
+        let len = wordcraft_doc::para::OBJ.len_utf8();
+        s.doc.delete_range(&pos, &Pos { off: pos.off + len, ..pos.clone() })?;
+        let mut at = anchor;
+        if at.path == pos.path && at.off > pos.off {
+            at.off = at.off.saturating_sub(len);
         }
-        float.h_rel = wordcraft_doc::para::Anchor::Page;
-        float.v_rel = wordcraft_doc::para::Anchor::Page;
-        float.x = x;
-        float.y = y;
-    }
-    let Some(mut at) = anchor else {
-        *para.object_at_mut(pos.off).ok_or_else(|| CmdError::Failed("object vanished".into()))? = obj;
-        para.touch();
-        return Ok(pos);
+        let at = s.doc.clamp(&at);
+        s.doc.insert_object(&at, obj, &wordcraft_doc::CharProps::default())?;
+        at
     };
-    let len = wordcraft_doc::para::OBJ.len_utf8();
-    s.doc.delete_range(&pos, &Pos { off: pos.off + len, ..pos.clone() })?;
-    if at.path == pos.path && at.off > pos.off {
-        at.off = at.off.saturating_sub(len);
-    }
-    let at = s.doc.clamp(&at);
-    s.doc.insert_object(&at, obj, &wordcraft_doc::CharProps::default())?;
+    let (h_rel, v_rel) = if on_page { (Anchor::Page, Anchor::Page) } else { (Anchor::Column, Anchor::Paragraph) };
+    edit_float(s, &at, |f| {
+        if f.wrap == Wrap::Inline {
+            f.wrap = Wrap::Square;
+        }
+        f.h_rel = h_rel;
+        f.v_rel = v_rel;
+        f.x = 0.0;
+        f.y = 0.0;
+    })?;
+    // Offsets from where the anchor puts it (its paragraph may have moved with the edit).
+    let origin = if on_page {
+        wordcraft_geom::Point::new(0.0, 0.0)
+    } else {
+        s.touch(); // lay out the edit so far
+        let layout = s.layout();
+        layout.object(&at.path, at.off, page).ok_or_else(|| CmdError::Failed("the object isn't laid out".into()))?.origin
+    };
+    edit_float(s, &at, |f| {
+        f.x = (x - origin.x).clamp(-MAX_OFFSET, MAX_OFFSET);
+        f.y = (y - origin.y).clamp(-MAX_OFFSET, MAX_OFFSET);
+    })?;
     Ok(at)
+}
+
+/// The top-level body paragraph under `y` on `page`: the last one starting at or above it (else
+/// the first starting on the page).
+fn anchor_paragraph(layout: &wordcraft_layout::DocLayout, page: usize, y: f32) -> Option<wordcraft_doc::Path> {
+    let starts: Vec<(&wordcraft_doc::Path, f32)> = layout
+        .pages
+        .get(page)?
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            wordcraft_layout::Placed::Lines { story: StoryRef::Body, path, l0: 0, y: top, .. } if path.depth() == 0 => Some((path, *top)),
+            _ => None,
+        })
+        .collect();
+    starts.iter().rev().find(|(_, top)| *top <= y + 0.5).or(starts.first()).map(|(p, _)| (*p).clone())
 }
 
 /// The start of the top-level body line on `page` nearest to `y`.
@@ -439,11 +463,26 @@ fn obj_size(o: &InlineObject) -> (f32, f32) {
 
 fn with_obj(s: &mut Session, f: impl Fn(&mut InlineObject)) -> CmdResult {
     let (pos, _) = selected(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
+    let o = edit_obj(s, &pos, f)?;
+    Ok(json!({"object": serde_json::to_value(o).unwrap_or(Value::Null)}))
+}
+
+/// Change the object at `pos`; returns it afterwards.
+fn edit_obj(s: &mut Session, pos: &Pos, f: impl Fn(&mut InlineObject)) -> Result<InlineObject, CmdError> {
     let para = s.doc.para_mut(pos.story, &pos.path)?;
     let o = para.object_at_mut(pos.off).ok_or_else(|| CmdError::Failed("object vanished".into()))?;
     f(o);
+    let o = o.clone();
     para.touch();
-    Ok(json!({"object": serde_json::to_value(para.object_at(pos.off)).unwrap_or(Value::Null)}))
+    Ok(o)
+}
+
+fn edit_float(s: &mut Session, pos: &Pos, f: impl Fn(&mut Float)) -> Result<InlineObject, CmdError> {
+    edit_obj(s, pos, |o| {
+        if let InlineObject::Image { float, .. } | InlineObject::Shape { float, .. } = o {
+            f(float);
+        }
+    })
 }
 
 fn with_float(s: &mut Session, f: impl Fn(&mut Float)) -> CmdResult {

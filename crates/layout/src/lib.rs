@@ -107,6 +107,9 @@ pub enum Placed {
         /// The text box story it shows (`Document::parts` id).
         text_box: Option<u32>,
         wrap: Wrap,
+        /// Its paragraph's column left and top: where offsets relative to the column and the
+        /// paragraph (`Anchor::Column` / `Anchor::Paragraph`) start.
+        origin: wordcraft_geom::Point,
     },
 }
 
@@ -117,13 +120,15 @@ impl Placed {
                 *x += dx;
                 *y += dy;
             }
-            Placed::Fill { rect, .. }
-            | Placed::Image { rect, .. }
-            | Placed::Shape { rect, .. }
-            | Placed::Cell { rect, .. }
-            | Placed::Object { rect, .. } => {
+            Placed::Fill { rect, .. } | Placed::Image { rect, .. } | Placed::Shape { rect, .. } | Placed::Cell { rect, .. } => {
                 rect.x += dx;
                 rect.y += dy;
+            }
+            Placed::Object { rect, origin, .. } => {
+                rect.x += dx;
+                rect.y += dy;
+                origin.x += dx;
+                origin.y += dy;
             }
             Placed::Rule { x0, y0, x1, y1, .. } => {
                 *x0 += dx;
@@ -971,6 +976,8 @@ fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, 
                         off: c.start,
                         text_box: part.as_ref().map(|p| p.0),
                         wrap: float.wrap,
+                        // As `float_rect` is given it, above.
+                        origin: if pb.web { wordcraft_geom::Point::new(x, y) } else { wordcraft_geom::Point::new(col_x, y0) },
                     });
                     let Some((id, blocks)) = part else { continue };
                     let (inner, _) = layout_box(ctx, StoryRef::Part(id), &blocks, &[], (rect.w - 14.4).max(12.0), None, 1);
