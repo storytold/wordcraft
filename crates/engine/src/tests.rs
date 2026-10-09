@@ -244,6 +244,30 @@ fn track_changes_and_accept() {
     assert_eq!(text(&s), "inal added");
 }
 
+/// The author of the revision `rid` points to.
+fn author_of(s: &Session, rid: Option<u32>) -> Option<String> {
+    rid.and_then(|r| s.doc.revisions.get(r as usize)).map(|r| r.author.clone())
+}
+
+#[test]
+fn tracked_delete_keeps_another_authors_deletion() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "alpha beta gamma"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Ana".into();
+    run(&mut s, "select.text", json!({"text": "beta"}));
+    run(&mut s, "text.delete", json!({}));
+    // A second author deletes the whole line, including the text Ana already deleted.
+    s.author = "Ben".into();
+    run(&mut s, "select.text", json!({"text": "alpha beta gamma"}));
+    run(&mut s, "text.delete", json!({}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    let by: Vec<(String, Option<String>)> = p.run_ranges().map(|(r, c)| (p.text[r].to_string(), author_of(&s, c.del))).collect();
+    assert!(by.iter().any(|(t, a)| t == "beta" && a.as_deref() == Some("Ana")), "{by:?}");
+    assert!(by.iter().any(|(t, a)| t.contains("alpha") && a.as_deref() == Some("Ben")), "{by:?}");
+    assert!(by.iter().any(|(t, a)| t.contains("gamma") && a.as_deref() == Some("Ben")), "{by:?}");
+}
+
 #[test]
 fn comments() {
     let mut s = s();

@@ -97,9 +97,10 @@ fn track_delete(s: &mut Session, a: &Pos, b: &Pos) -> Result<Pos, CmdError> {
         let Some(p) = s.doc.para(a.story, path) else { continue };
         let from = if *path == a.path { a.off } else { 0 };
         let to = if *path == b.path { b.off } else { p.len() };
+        // Text already deleted keeps its deletion (and its author), like Word.
         let ranges: Vec<(usize, usize, bool)> = p
             .run_ranges()
-            .filter(|(r, _)| r.end > from && r.start < to)
+            .filter(|(r, c)| r.end > from && r.start < to && c.del.is_none())
             .map(|(r, c)| {
                 let own = c.ins.and_then(|i| s.doc.revisions.get(i as usize)).is_some_and(|rv| rv.author == author);
                 (r.start.max(from), r.end.min(to), own)
