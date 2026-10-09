@@ -370,3 +370,33 @@ fn header_self_reference_and_escaping_targets() {
     let out = wordcraft_docx::write(&d).unwrap();
     wordcraft_docx::read(&out).unwrap();
 }
+
+/// A document whose settings part is `settings` (None: no settings part at all).
+fn with_settings(settings: Option<&str>) -> Document {
+    let body = "<w:p><w:r><w:t>x</w:t></w:r></w:p>";
+    match settings {
+        None => read_body(body),
+        Some(inner) => {
+            let s = format!(r#"<w:settings {W_NS}>{inner}</w:settings>"#);
+            wordcraft_docx::read(&docx(body, &[("rId1", "settings", "settings.xml")], &[("word/settings.xml", &s)])).unwrap()
+        }
+    }
+}
+
+#[test]
+fn compatibility_mode_is_read_and_defaults_to_word_2007() {
+    let compat = |v: &str| {
+        format!(r#"<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="{v}"/></w:compat>"#)
+    };
+    assert_eq!(with_settings(Some(&compat("15"))).settings.compat_mode, 15);
+    assert_eq!(with_settings(Some(&compat("14"))).settings.compat_mode, 14);
+    // Unnamed, out of range or junk values.
+    assert_eq!(with_settings(Some("<w:compat/>")).settings.compat_mode, wordcraft_doc::COMPAT_MODE_UNSPECIFIED);
+    assert_eq!(with_settings(None).settings.compat_mode, wordcraft_doc::COMPAT_MODE_UNSPECIFIED);
+    assert_eq!(with_settings(Some(&compat("-3"))).settings.compat_mode, 11);
+    assert_eq!(with_settings(Some(&compat("99999"))).settings.compat_mode, 99);
+    assert_eq!(with_settings(Some(&compat("abc"))).settings.compat_mode, wordcraft_doc::COMPAT_MODE_UNSPECIFIED);
+    // Another vendor's setting of the same name is ignored.
+    let other = r#"<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="urn:example" w:val="15"/></w:compat>"#;
+    assert_eq!(with_settings(Some(other)).settings.compat_mode, wordcraft_doc::COMPAT_MODE_UNSPECIFIED);
+}

@@ -612,6 +612,18 @@ fn shapes_textboxes_equations_dropcaps_round_trip() {
 }
 
 #[test]
+fn compatibility_mode_round_trips() {
+    // New documents are Word 2013+ documents; an older file keeps its mode, so saving it doesn't
+    // change how Word lays it out.
+    assert_eq!(rt(&Document::new()).settings.compat_mode, wordcraft_doc::COMPAT_MODE_CURRENT);
+    for mode in [11, 12, 14, 15] {
+        let mut d = Document::new();
+        d.settings.compat_mode = mode;
+        assert_eq!(rt(&d).settings.compat_mode, mode);
+    }
+}
+
+#[test]
 fn settings_core_theme_round_trip() {
     let mut d = Document::new();
     d.settings.track_changes = true;

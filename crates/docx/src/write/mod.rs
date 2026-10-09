@@ -686,7 +686,8 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool) -> Vec<u8> {
         w.close(tag);
     }
     w.open("w:compat", &[]);
-    w.empty("w:compatSetting", &[("w:name", "compatibilityMode"), ("w:uri", "http://schemas.microsoft.com/office/word"), ("w:val", "15")]);
+    let mode = s.compat_mode.clamp(11, 99).to_string();
+    w.empty("w:compatSetting", &[("w:name", "compatibilityMode"), ("w:uri", "http://schemas.microsoft.com/office/word"), ("w:val", &mode)]);
     w.close("w:compat");
     w.close("w:settings");
     w.into_bytes()

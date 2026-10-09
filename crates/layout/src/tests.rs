@@ -470,3 +470,60 @@ fn auto_hyphenation_breaks_long_words() {
     let l2 = lay(&d2);
     let _ = hyphens(&l2);
 }
+
+/// Line count and, per line, how far the text (trailing spaces excluded) reaches.
+fn justified_lines(text: &str, compat_mode: u8, align: Align) -> (usize, Vec<f32>) {
+    let mut d = Document::from_text(text);
+    d.settings.compat_mode = compat_mode;
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.align = Some(align)).unwrap();
+    let l = lay(&d);
+    let mut ends = Vec::new();
+    for p in &l.pages {
+        for it in &p.items {
+            if let Placed::Lines { para, l0, l1, x, .. } = it {
+                for li in *l0..*l1 {
+                    let line = &para.lines[li];
+                    let content = text[line.start..line.stop].trim_end().len();
+                    ends.push(para.x_of(li, line.start + content).unwrap() + x);
+                }
+            }
+        }
+    }
+    (lines_of(&l), ends)
+}
+
+#[test]
+fn justified_lines_shrink_spaces_in_word_2013_mode() {
+    let text = "We tie the spend to a pipe and to the books, so it is in an ad hoc view of all of it. ".repeat(40);
+    let (modern, ends) = justified_lines(&text, 15, Align::Justify);
+    let (legacy, legacy_ends) = justified_lines(&text, 14, Align::Justify);
+    assert!(modern < legacy, "mode 15 fits more per line: {modern} vs {legacy} lines");
+    // Shrinking only ever pulls a line back inside the margin.
+    for e in ends.iter().chain(&legacy_ends) {
+        assert!(*e <= 540.0 + 0.05, "line ends past the right margin: {e}");
+    }
+    // Justified lines still reach the margin; the last line is the only short one.
+    for e in &ends[..ends.len() - 1] {
+        assert!((*e - 540.0).abs() < 0.05, "justified line ends at {e}");
+    }
+}
+
+#[test]
+fn space_shrinking_is_only_for_justified_text() {
+    let text = "We tie the spend to a pipe and to the books, so it is in an ad hoc view of all of it. ".repeat(40);
+    for align in [Align::Left, Align::Center, Align::Right] {
+        assert_eq!(justified_lines(&text, 15, align).0, justified_lines(&text, 14, align).0, "{align:?}");
+    }
+}
+
+#[test]
+fn lines_with_tabs_never_shrink() {
+    let text = "Item\tWe tie the spend to a pipe and to the books, so it is in an ad hoc view of all of it. ".repeat(30);
+    let (modern, _) = justified_lines(&text, 15, Align::Justify);
+    let (legacy, _) = justified_lines(&text, 14, Align::Justify);
+    assert!(modern <= legacy);
+    let (_, ends) = justified_lines(&text, 15, Align::Justify);
+    for e in &ends {
+        assert!(*e <= 540.0 + 0.05, "{e}");
+    }
+}

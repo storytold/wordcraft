@@ -253,7 +253,17 @@ pub struct Settings {
     pub footnote_format: section::NumFormat,
     pub endnote_format: section::NumFormat,
     pub protection: Option<String>,
+    /// Word layout compatibility mode (`w:compatSetting compatibilityMode`): 15 for Word 2013 and
+    /// later (what we write for new documents), 14 for Word 2010, 12 or 11 for older files. Mode
+    /// 15 changes layout: justified lines may shrink their spaces to fit more text.
+    pub compat_mode: u8,
 }
+
+/// The compatibility mode of documents created by Word 2013 and later, and by WordCraft.
+pub const COMPAT_MODE_CURRENT: u8 = 15;
+
+/// The compatibility mode assumed for a .docx whose settings don't say (Word 2007).
+pub const COMPAT_MODE_UNSPECIFIED: u8 = 12;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -304,6 +314,7 @@ impl Default for Settings {
             footnote_format: section::NumFormat::Decimal,
             endnote_format: section::NumFormat::LowerRoman,
             protection: None,
+            compat_mode: COMPAT_MODE_CURRENT,
         }
     }
 }

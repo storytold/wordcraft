@@ -50,6 +50,8 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocxError> {
     let rels = pkg.rels(&main);
     let mut doc = Document::new();
     doc.body.clear();
+    // Word treats a document that names no compatibility mode as a Word 2007 one.
+    doc.settings.compat_mode = wordcraft_doc::COMPAT_MODE_UNSPECIFIED;
     let mut r = Reader {
         pkg: &pkg,
         doc,
@@ -464,6 +466,17 @@ impl Reader<'_> {
                 "w:evenAndOddHeaders" => s.even_odd_headers = on_off(k),
                 "w:mirrorMargins" => s.mirror_margins = on_off(k),
                 "w:autoHyphenation" => s.auto_hyphenation = on_off(k),
+                "w:compat" => {
+                    for c in k.children("w:compatSetting") {
+                        let mode = c.attr("w:val").and_then(int);
+                        if c.attr("w:name") == Some("compatibilityMode")
+                            && c.attr("w:uri").is_none_or(|u| u == "http://schemas.microsoft.com/office/word")
+                            && let Some(m) = mode
+                        {
+                            s.compat_mode = m.clamp(11, 99) as u8;
+                        }
+                    }
+                }
                 "w:footnotePr" => {
                     if let Some(f) = k.child_val("w:numFmt") {
                         s.footnote_format = NumFormat::from_ooxml(f);

@@ -576,6 +576,9 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
     let base_right = (width - rp.indent_right).max(1.0);
     let default_tab = env.doc.settings.default_tab;
     let first_left = rp.indent_left + rp.indent_first;
+    // Word 2013+ (compatibility mode 15) fits more text on a justified line by shrinking its
+    // spaces, up to MAX_SPACE_SHRINK of their width; never on lines with tabs.
+    let shrink_spaces = rp.align == Align::Justify && env.doc.settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT;
     let hanging_at = if rp.indent_first < 0.0 { Some(rp.indent_left) } else { None };
     let n = pl.clusters.len();
     let mut hcache: Vec<(u16, u32, f32)> = Vec::new();
@@ -659,6 +662,8 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
         let mut end = LineEnd::Para;
         let mut j = i;
         let mut pending_tab: Option<(usize, TabStop, f32)> = None; // tab cluster, stop, x where tab started
+        let mut space_w = 0.0f32; // width of the spaces so far on this line
+        let mut has_tab = false;
         while j < n {
             let Some(c) = pl.clusters.get(j).cloned() else { break };
             match c.kind {
@@ -674,6 +679,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
                     break;
                 }
                 ClKind::Tab => {
+                    has_tab = true;
                     resolve_tab(pl, &mut pending_tab, &mut xs, c0, x, &mut x);
                     let stop = next_tab(x, &rp.tabs, default_tab, hanging_at);
                     xs.push(x);
@@ -720,7 +726,8 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
                     _ => false,
                 }
             });
-            let fits = absorbs || x + c.adv <= right_edge + 0.01 || c.kind == ClKind::Space || c.kind == ClKind::Marker;
+            let shrink = if shrink_spaces && !has_tab { space_w * MAX_SPACE_SHRINK } else { 0.0 };
+            let fits = absorbs || x + c.adv <= right_edge + shrink + 0.01 || c.kind == ClKind::Space || c.kind == ClKind::Marker;
             if !fits && j > c0 {
                 // Wrap: back up to the last break opportunity on this line.
                 end = LineEnd::Wrap;
@@ -745,6 +752,9 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
             }
             xs.push(x);
             x += c.adv;
+            if c.kind == ClKind::Space {
+                space_w += c.adv;
+            }
             // Decimal/center/right tab: shift pending text as it grows.
             if let Some((tj, stop, tx)) = pending_tab {
                 let seg_w = x - tx;
@@ -790,7 +800,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
                 if !hyph {
                     last_break = Some(j);
                     last_plain = Some((j, x));
-                } else if x + hyphen_glyph(pl, c.style, &mut hcache).2 <= right_edge + 0.01 {
+                } else if x + hyphen_glyph(pl, c.style, &mut hcache).2 <= right_edge + shrink + 0.01 {
                     last_break = Some(j);
                 }
             }
@@ -888,7 +898,11 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
             }
         }
         let justify = (rp.align == Align::Justify && end == LineEnd::Wrap) || rp.align == Align::Distribute;
-        if justify && slack > 0.0 {
+        // A line that only fits with shrunk spaces is shrunk, the last line of the paragraph too.
+        let shrink = shrink_spaces && slack < 0.0 && last_tab.is_none();
+        if shrink {
+            shrink_line_spaces(pl, &mut xs, c0, c1, content_end, slack);
+        } else if justify && slack > 0.0 {
             // Spaces inside the content (after the last tab).
             let spaces: Vec<usize> = (align_from..c1)
                 .filter(|k| {
@@ -985,6 +999,39 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
 
 /// Word's default hyphenation zone (0.25"), points.
 const HYPHENATION_ZONE: f32 = 18.0;
+
+/// How much of their width the spaces of a justified line may give up to fit more text (Word
+/// 2013+, compatibility mode 15).
+const MAX_SPACE_SHRINK: f32 = 0.2;
+
+/// Take `-slack` (an overflow) out of the line's inner spaces, in proportion to their widths and
+/// never more than [`MAX_SPACE_SHRINK`] of them. Trailing spaces hang and are left alone.
+fn shrink_line_spaces(pl: &ParaLayout, xs: &mut [f32], c0: usize, c1: usize, content_end: f32, slack: f32) {
+    let spaces: Vec<(usize, f32)> = (c0..c1)
+        .filter_map(|k| {
+            let c = pl.clusters.get(k).filter(|c| c.kind == ClKind::Space)?;
+            (xs.get(k - c0).copied().unwrap_or(f32::MAX) < content_end - 0.01).then_some((k, c.adv))
+        })
+        .collect();
+    let total: f32 = spaces.iter().map(|s| s.1).sum();
+    if total <= 0.0 || !slack.is_finite() {
+        return;
+    }
+    let ratio = (-slack / total).clamp(0.0, MAX_SPACE_SHRINK);
+    let mut take = 0.0;
+    let mut next = spaces.iter().peekable();
+    for k in c0..c1 {
+        if let Some(v) = xs.get_mut(k - c0) {
+            *v -= take;
+        }
+        if let Some((_, adv)) = next.next_if(|s| s.0 == k) {
+            take += adv * ratio;
+        }
+    }
+    if let Some(v) = xs.last_mut() {
+        *v -= take;
+    }
+}
 
 /// The hyphen glyph and advance in a style (cached per paragraph).
 fn hyphen_glyph(pl: &ParaLayout, style: u16, cache: &mut Vec<(u16, u32, f32)>) -> (u16, u32, f32) {
