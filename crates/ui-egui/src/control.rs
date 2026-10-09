@@ -17,16 +17,38 @@ use serde_json::{Value, json};
 
 use crate::WordApp;
 
+pub use wordcraft_chat::Principal;
+
 pub struct ControlRequest {
     pub method: String,
     pub params: Value,
     pub reply: Sender<Value>,
+    /// Who sent it (host tool or a chat member). Members are checked in `handle`.
+    pub principal: Principal,
+    /// After this instant the sender has stopped waiting: the UI answers `expired` and does
+    /// not run it (a window that did not draw for a while must not apply old steps late).
+    pub deadline: Option<std::time::Instant>,
 }
 
 impl ControlRequest {
     pub fn new(method: impl Into<String>, params: Value) -> (Self, std::sync::mpsc::Receiver<Value>) {
         let (tx, rx) = std::sync::mpsc::channel();
-        (Self { method: method.into(), params, reply: tx }, rx)
+        (Self { method: method.into(), params, reply: tx, principal: Principal::Host, deadline: None }, rx)
+    }
+
+    pub fn with_principal(mut self, p: Principal) -> Self {
+        self.principal = p;
+        self
+    }
+
+    pub fn with_deadline(mut self, at: std::time::Instant) -> Self {
+        self.deadline = Some(at);
+        self
+    }
+
+    /// The sender gave up on it already.
+    pub fn expired(&self) -> bool {
+        self.deadline.is_some_and(|d| std::time::Instant::now() > d)
     }
 }
 
@@ -99,10 +121,54 @@ fn click_events(app: &mut WordApp, pos: egui::Pos2, button: egui::PointerButton,
     }
 }
 
+/// A chat member: gate first, then run as the member (or render a page).
+pub(crate) fn handle_member(app: &mut WordApp, handle: &str, req: &ControlRequest) -> Outcome {
+    // The key was checked when the request arrived; the owner may have removed the member since.
+    if !app.chat.as_ref().is_some_and(|h| h.members().iter().any(|m| m.handle == handle)) {
+        return err(format!("{handle} is not a member of this chat (removed)"));
+    }
+    let p = &req.params;
+    let command = p.get("command").or(p.get("id")).and_then(Value::as_str);
+    if !crate::chat_gate::member_allowed(&req.method, command) {
+        return err(format!("not allowed for {handle}"));
+    }
+    if req.method == "view.page" {
+        let page = p.get("page").and_then(Value::as_u64).unwrap_or(1);
+        let scale = p.get("scale").and_then(Value::as_f64).unwrap_or(1.0) as f32;
+        return match crate::chat_gate::view_page(app, page, scale) {
+            Ok(v) => ok(v),
+            Err(e) => err(e),
+        };
+    }
+    if req.method == "engine.commands" {
+        let reg = app.session.registry.clone();
+        let gate = crate::chat_gate::GATE_COMMANDS.iter().map(|(id, label, params)| json!({"id": id, "label": label, "location": "Chat", "shortcut": null, "params": params, "enabled": true}));
+        return ok(Value::Array(
+            reg.all()
+                .iter()
+                .filter(|c| crate::chat_gate::member_allowed("engine.execute", Some(c.id)))
+                .map(|c| json!({"id": c.id, "label": c.label, "location": c.location, "shortcut": c.shortcut, "params": c.params, "enabled": (c.enabled)(&app.session).is_none()}))
+                .chain(gate)
+                .collect(),
+        ));
+    }
+    let (id, params) = match req.method.as_str() {
+        "engine.execute" | "command" => (command.unwrap_or("").to_string(), p.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}))),
+        m => (m.to_string(), p.clone()),
+    };
+    match crate::chat_gate::run_as_member(app, handle, &id, params) {
+        Ok(v) => ok(v),
+        Err(e) => err(e),
+    }
+}
+
 pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let p = &req.params;
     let s = |k: &str| p.get(k).and_then(Value::as_str);
     let f = |k: &str| p.get(k).and_then(Value::as_f64).map(|v| v as f32);
+    if let Principal::Member(handle) = &req.principal {
+        return handle_member(app, handle, req);
+    }
     match req.method.as_str() {
         "engine.execute" | "command" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
