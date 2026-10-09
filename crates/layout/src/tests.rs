@@ -166,7 +166,9 @@ fn tall_first_page_header_pushes_body_down() {
     let l = lay(&d);
     let first = l.caret(&Pos::body(0, 0)).unwrap();
     assert!(first.top > d.last_section.margin_top + 50.0, "{first:?}");
-    let later = l.caret_on(&Pos::body(119, 0), l.pages.len() - 1).unwrap();
+    // The first paragraph on page 2 (which has no header) sits higher than page 1's first line,
+    // whatever the installed fonts do to pagination.
+    let later = (0..120).filter_map(|i| l.caret(&Pos::body(i, 0))).find(|c| c.page == 1).unwrap();
     assert!(later.top < first.top, "{later:?}");
 }
 
