@@ -10,7 +10,7 @@ use wordcraft_doc::edit::Fragment;
 use wordcraft_doc::para::OBJ;
 use wordcraft_doc::props::{LineSpacing, TabAlign, TabLeader, TabStop};
 use wordcraft_doc::styles::{Style, StyleKind};
-use wordcraft_doc::{CharProps, InlineObject, ParaProps, Pos, StoryRef};
+use wordcraft_doc::{CharProps, InlineObject, ParaProps, PartKind, Pos, StoryRef};
 use wordcraft_engine::{Selection, Session};
 
 use crate::fields::{self, ZField};
@@ -267,8 +267,33 @@ impl Bridge {
                 Self::end_edit(s);
                 Ok(Value::Null)
             }
-            // Fields are one kind in WordCraft; conversions between Zotero's kinds are no-ops.
-            "Document_convert" | "Field_convert" => Ok(Value::Null),
+            // Zotero's field kinds are one kind in WordCraft; only the note type matters: a
+            // citation moves between the text, footnotes and endnotes (switching styles).
+            "Document_convert" => {
+                let Value::Array(ids) = arg(c, 1)? else { return Err("field ids must be an array".into()) };
+                let ids: Vec<Value> = ids.iter().take(100_000).cloned().collect();
+                let notes = c.args.get(3).cloned().unwrap_or(Value::Null);
+                for (i, idv) in ids.iter().enumerate() {
+                    let id = match idv {
+                        Value::Number(n) => n.as_u64(),
+                        Value::String(x) => x.trim().parse().ok(),
+                        _ => None,
+                    }
+                    .ok_or("bad field id")?;
+                    let note = match &notes {
+                        Value::Array(a) => a.get(i).and_then(Value::as_i64).unwrap_or(0),
+                        v => v.as_i64().unwrap_or(0),
+                    };
+                    self.convert_field(s, id, note)?;
+                }
+                Ok(Value::Null)
+            }
+            "Field_convert" => {
+                let id = arg_id(c, 1)?;
+                let note = arg_i64(c, 3).unwrap_or(0);
+                self.convert_field(s, id, note)?;
+                Ok(Value::Null)
+            }
             "Document_complete" => {
                 let start_sel = self.start_sel.take();
                 if let Some(id) = self.caret_after.take()
@@ -289,7 +314,7 @@ impl Bridge {
                 self.begin_edit(s);
                 s.doc.delete_range(&f.start, &f.after()).map_err(|e| e.to_string())?;
                 self.forget(k);
-                remove_empty_note(s, &f);
+                let _ = remove_empty_note(s, &f);
                 Self::end_edit(s);
                 Ok(Value::Null)
             }
@@ -394,6 +419,64 @@ impl Bridge {
         Ok(())
     }
 
+    /// Move a citation to the text (`note` 0), a footnote (1) or an endnote (2). The field keeps
+    /// its place in document order, so its id stays valid.
+    fn convert_field(&mut self, s: &mut Session, id: u64, note: i64) -> Result<(), String> {
+        let (_, f) = self.field(s, id)?;
+        let target = match note {
+            1 => Some(PartKind::Footnote),
+            2 => Some(PartKind::Endnote),
+            _ => None,
+        };
+        let current = match f.start.story {
+            StoryRef::Body => None,
+            StoryRef::Part(pid) => match s.doc.parts.get(&pid).map(|p| p.kind) {
+                Some(k @ (PartKind::Footnote | PartKind::Endnote)) => Some(k),
+                _ => return Ok(()),
+            },
+        };
+        if current == target {
+            return Ok(());
+        }
+        self.begin_edit(s);
+        let saved = s.sel.clone();
+        let frag = s.doc.copy_range(&f.start, &f.after());
+        s.doc.delete_range(&f.start, &f.after()).map_err(|e| e.to_string())?;
+        // Where the citation goes in the text: where it was, or where its note's mark was.
+        let at = match f.start.story {
+            StoryRef::Body => f.start.clone(),
+            StoryRef::Part(pid) => match remove_empty_note(s, &f) {
+                Some(p) => p,
+                None => {
+                    let r = note_ref_pos(s, pid).ok_or("the note's reference mark was not found")?;
+                    Pos { off: r.off + OBJ.len_utf8(), ..r }
+                }
+            },
+        };
+        match target {
+            None => {
+                s.doc.insert_fragment(&at, &frag).map_err(|e| e.to_string())?;
+            }
+            Some(kind) => {
+                s.sel = Selection::caret(at.clone());
+                s.join_next_undo();
+                let cmd = if kind == PartKind::Footnote { "references.footnote" } else { "references.endnote" };
+                if let Err(e) = s.run(cmd, &json!({})) {
+                    // Put the citation back where it was taken from.
+                    let _ = s.doc.insert_fragment(&at, &frag);
+                    s.sel = saved;
+                    Self::end_edit(s);
+                    return Err(e.to_string());
+                }
+                let c = s.sel.focus.clone();
+                s.doc.insert_fragment(&c, &frag).map_err(|e| e.to_string())?;
+            }
+        }
+        s.sel = saved;
+        Self::end_edit(s);
+        Ok(())
+    }
+
     fn convert_placeholders(&mut self, s: &mut Session, ph: &[Value], note: i64) -> R {
         let mut ids = Vec::new();
         for v in ph {
@@ -460,11 +543,23 @@ fn find_link(s: &Session, url: &str) -> Option<(Pos, Pos)> {
     None
 }
 
+/// Where the body references note `id`.
+fn note_ref_pos(s: &Session, id: u32) -> Option<Pos> {
+    for path in s.doc.para_paths(StoryRef::Body) {
+        let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
+        let hit = p.object_offsets().into_iter().find(|o| matches!(p.object_at(*o), Some(InlineObject::NoteRef { id: n, .. }) if *n == id));
+        if let Some(off) = hit {
+            return Some(Pos::new(StoryRef::Body, path, off));
+        }
+    }
+    None
+}
+
 /// After deleting a citation that was alone in a note, remove the note too (as Word's plugin
-/// does for note styles).
-fn remove_empty_note(s: &mut Session, f: &ZField) {
-    let StoryRef::Part(id) = f.start.story else { return };
-    let Some(blocks) = s.doc.story(StoryRef::Part(id)) else { return };
+/// does for note styles). Returns where its reference mark was.
+fn remove_empty_note(s: &mut Session, f: &ZField) -> Option<Pos> {
+    let StoryRef::Part(id) = f.start.story else { return None };
+    let blocks = s.doc.story(StoryRef::Part(id))?;
     let mut rest = String::new();
     for b in blocks {
         if let Some(p) = b.as_para() {
@@ -472,21 +567,14 @@ fn remove_empty_note(s: &mut Session, f: &ZField) {
         }
     }
     if rest.chars().any(|c| c != OBJ && !c.is_whitespace()) {
-        return;
+        return None;
     }
-    for path in s.doc.para_paths(StoryRef::Body) {
-        let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
-        let hit = p.object_offsets().into_iter().find(|o| matches!(p.object_at(*o), Some(InlineObject::NoteRef { id: n, .. }) if *n == id));
-        if let Some(off) = hit {
-            let at = Pos::new(StoryRef::Body, path, off);
-            let after = Pos { off: off + OBJ.len_utf8(), ..at.clone() };
-            if s.doc.delete_range(&at, &after).is_ok() {
-                s.doc.parts.remove(&id);
-                s.sel = Selection::caret(at);
-            }
-            return;
-        }
-    }
+    let at = note_ref_pos(s, id)?;
+    let after = Pos { off: at.off + OBJ.len_utf8(), ..at.clone() };
+    s.doc.delete_range(&at, &after).ok()?;
+    s.doc.parts.remove(&id);
+    s.sel = Selection::caret(at.clone());
+    Some(at)
 }
 
 fn ensure_bib_style(s: &mut Session) {

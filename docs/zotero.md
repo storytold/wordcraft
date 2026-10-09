@@ -27,6 +27,10 @@ From a terminal, against a file:
 wordcraft-cli zotero refresh paper.docx --save paper.docx [--trace]
 ```
 
+Switching between an in-text style and a note style in Document Preferences moves the citations:
+into new footnotes (or endnotes) at the same place, and back into the text where the note marks
+were; a note that held only the citation is removed.
+
 ## Word compatibility
 
 Citations are stored as Word's Zotero plugin stores them — fields with the code

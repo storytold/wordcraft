@@ -432,3 +432,82 @@ mod props {
         }
     }
 }
+
+fn note_count(d: &Document, kind: wordcraft_doc::PartKind) -> usize {
+    d.parts.values().filter(|p| p.kind == kind).count()
+}
+
+#[test]
+fn switching_to_a_note_style_moves_citations_into_footnotes_and_back() {
+    use wordcraft_doc::PartKind;
+    let mut z = Z::new("One. Two.", 4);
+    z.begin();
+    let a = z.cite(0, r"{\rtf (Doe, {\i 2020})}");
+    let end = z.s.doc.para(StoryRef::Body, &Path::top(0)).unwrap().len();
+    z.s.sel = Selection::caret(Pos::body(0, end));
+    let b = z.cite(0, "(Roe 2019)");
+    z.ok("Document_complete", json!([1]));
+    let before = z.text();
+    assert_eq!(before, "One.(Doe, 2020) Two.(Roe 2019)");
+
+    // To footnotes (as Zotero does when the style becomes a note style).
+    z.begin();
+    z.ok("Document_convert", json!([1, [a, b], ["ReferenceMark", "ReferenceMark"], [1, 1], 2]));
+    assert_eq!(z.text().replace(OBJ, ""), "One. Two.");
+    assert_eq!(note_count(&z.s.doc, PartKind::Footnote), 2);
+    let f = z.ok("Document_getFields", json!([1, "ReferenceMark"]));
+    assert_eq!(f[0], json!([a, b]), "ids survive the move");
+    assert_eq!(f[2], json!([1, 2]));
+    let r = fields::list(&z.s.doc);
+    let StoryRef::Part(pid) = r[0].start.story else { panic!("not in a note") };
+    assert!(italic_at(&z.s.doc, StoryRef::Part(pid), &Path::top(0), "2020"));
+    assert_eq!(z.ok("Field_getText", json!([1, a])), "(Doe, 2020)");
+    z.ok("Document_complete", json!([1]));
+
+    // One to an endnote.
+    z.begin();
+    z.ok("Field_convert", json!([1, b, "ReferenceMark", 2]));
+    assert_eq!((note_count(&z.s.doc, PartKind::Footnote), note_count(&z.s.doc, PartKind::Endnote)), (1, 1));
+    let f = z.ok("Document_getFields", json!([1, "ReferenceMark"]));
+    assert_eq!(f[0], json!([a, b]));
+    assert_eq!(f[2], json!([1, 1]));
+    z.ok("Document_complete", json!([1]));
+
+    // Back to the text: the notes go, the citations sit where their marks were.
+    z.begin();
+    z.ok("Document_convert", json!([1, [a, b], ["ReferenceMark", "ReferenceMark"], 0, 2]));
+    assert_eq!(z.text(), before);
+    assert!(z.s.doc.parts.is_empty());
+    assert!(italic_at(&z.s.doc, StoryRef::Body, &Path::top(0), "2020"));
+    assert_eq!(z.ok("Document_getFields", json!([1, "ReferenceMark"]))[2], json!([0, 0]));
+    // Converting to where it already is changes nothing.
+    let rev = z.s.rev();
+    z.ok("Field_convert", json!([1, a, "ReferenceMark", 0]));
+    assert_eq!(z.s.rev(), rev);
+    z.ok("Document_complete", json!([1]));
+
+    // Each transaction was one undo step.
+    z.s.undo();
+    assert_eq!(note_count(&z.s.doc, PartKind::Endnote), 1);
+    z.s.undo();
+    assert_eq!(note_count(&z.s.doc, PartKind::Footnote), 2);
+}
+
+#[test]
+fn a_note_with_other_text_stays_when_its_citation_leaves() {
+    let mut z = Z::new("Text.", 5);
+    z.begin();
+    let a = z.cite(1, "Doe, Title.");
+    // The author adds a comment to the note.
+    let pid = *z.s.doc.parts.keys().next().unwrap();
+    let p = z.s.doc.para_mut(StoryRef::Part(pid), &Path::top(0)).unwrap();
+    let n = p.len();
+    p.insert_text(n, " See also chapter 2.", &Default::default()).unwrap();
+    z.ok("Field_convert", json!([1, a, "ReferenceMark", 0]));
+    assert_eq!(z.s.doc.parts.len(), 1);
+    assert!(z.s.doc.plain_text(StoryRef::Part(pid)).ends_with("See also chapter 2."));
+    assert_eq!(z.ok("Document_getFields", json!([1, "ReferenceMark"]))[2], json!([0]));
+    assert!(z.text().ends_with("Doe, Title."));
+    assert!(z.call("Document_convert", json!([1, "x", [], [], 0])).is_err());
+    assert!(z.call("Document_convert", json!([1, [999], [], [1], 1])).is_err());
+}
