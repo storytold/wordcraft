@@ -943,6 +943,10 @@ fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, 
                 l1 -= 1; // widow: take one more line along
             }
         }
+        // A row (text both sides of a floating object) stays together.
+        while l1 > l0 && l1 < n && pl.lines.get(l1).is_some_and(|l| l.beside) {
+            l1 -= 1;
+        }
         if l1 == l0 {
             if pb.at_top() {
                 l1 = l0 + 1; // can't fit even one line on an empty page: overflow
@@ -1037,7 +1041,7 @@ fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, 
             && let Some(first) = pl.lines.get(l0)
         {
             for li in l0..l1 {
-                let Some(line) = pl.lines.get(li) else { continue };
+                let Some(line) = pl.lines.get(li).filter(|l| !l.beside) else { continue };
                 pb.line_no += 1;
                 let n = pb.line_no + ln.start.saturating_sub(1);
                 if ln.count_by > 1 && !n.is_multiple_of(ln.count_by) {

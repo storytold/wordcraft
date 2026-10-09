@@ -587,3 +587,49 @@ fn text_box_hides_text_that_does_not_fit() {
     let id3 = text_box(&mut d3, 0, &long, 144.0, 18.0, Default::default());
     assert_eq!(box_lines(&lay(&d3), id3).0, 1);
 }
+
+#[test]
+fn square_wrap_flows_text_on_both_sides() {
+    let float = |x: f32| wordcraft_doc::para::Float {
+        wrap: wordcraft_doc::para::Wrap::Square,
+        h_rel: wordcraft_doc::para::Anchor::Column,
+        v_rel: wordcraft_doc::para::Anchor::Paragraph,
+        x,
+        y: 0.0,
+        dist: 9.0,
+    };
+    let text = "Words flow on both sides of the box in the middle here. ".repeat(20);
+    let mut d = Document::from_text(&text);
+    let id = text_box(&mut d, 0, "Middle", 144.0, 100.0, float(160.0));
+    let l = lay(&d);
+    let r = box_rect(&l, id);
+    let Placed::Lines { para, x, y, .. } = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { story: StoryRef::Body, .. })).unwrap() else {
+        panic!()
+    };
+    let beside: Vec<&para::Line> = para.lines.iter().filter(|ln| ln.beside).collect();
+    assert!(beside.len() >= 4, "{} rows have text on the far side", beside.len());
+    for (k, ln) in para.lines.iter().enumerate().filter(|(_, ln)| ln.beside) {
+        let prev = &para.lines[k - 1];
+        assert_eq!((prev.top, prev.height), (ln.top, ln.height), "one row");
+        assert!(x + prev.xs.last().unwrap() <= r.x, "left part stops before the box");
+        assert!(x + ln.xs[0] >= r.right(), "right part starts after it");
+        assert_eq!(prev.stop, ln.start, "text runs left part, then right part");
+    }
+    // Below the box: full-width rows again.
+    let below = para.lines.iter().find(|ln| y + ln.top > r.bottom() + 10.0).unwrap();
+    assert!(!below.beside && below.right - below.left > 400.0);
+    // The right-hand part is hittable and has a caret.
+    let ln = beside[0];
+    let pos = l.hit(0, x + ln.xs[1], y + ln.top + 2.0, StoryRef::Body).unwrap();
+    assert!(pos.off >= ln.start && pos.off <= ln.stop, "{pos:?}");
+    assert!(l.caret(&pos).unwrap().x >= r.right());
+    // A gap too narrow for text stays empty.
+    let mut d2 = Document::from_text(&text);
+    let id2 = text_box(&mut d2, 0, "Edge", 144.0, 100.0, float(468.0 - 144.0 - 20.0));
+    let l2 = lay(&d2);
+    let r2 = box_rect(&l2, id2);
+    let Placed::Lines { para, x, .. } = l2.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { story: StoryRef::Body, .. })).unwrap() else {
+        panic!()
+    };
+    assert!(para.lines.iter().all(|ln| !ln.beside && x + ln.xs.last().unwrap() <= r2.x.max(x + ln.right)));
+}

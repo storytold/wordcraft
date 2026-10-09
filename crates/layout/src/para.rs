@@ -104,6 +104,9 @@ pub struct Line {
     pub right: f32,
     /// The line ends at a hyphenation point: (style, glyph, advance) of the hyphen drawn there.
     pub hyphen: Option<(u16, u32, f32)>,
+    /// The text continues the previous line's row on the far side of a floating object (same top
+    /// and height): one row, two lines. Row counts (line numbers, keeping rows on one page) skip it.
+    pub beside: bool,
 }
 
 /// The list label drawn on the first line.
@@ -578,53 +581,41 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
         .map(|st| (st.ascent + st.descent) * if let LineSpacing::Multiple(m) = rp.line_spacing { m } else { 1.0 })
         .unwrap_or(14.0)
         .max(1.0);
+    // The rest of the current row: spans on the far side of floating objects, left to right.
+    let mut row_rest: Vec<(f32, f32)> = Vec::new();
+    let mut row_first = 0usize;
     loop {
-        let left;
-        let right_edge;
-        // Flow around floating objects: narrow the line or move it below them.
-        let mut guard = 0;
-        loop {
-            let (mut lo, mut hi) = (if first { first_left } else { rp.indent_left }, base_right);
-            if let Some((_, dl, dw)) = pl.drop_cap
-                && lines.len() < dl as usize
-            {
-                lo = first_left.max(rp.indent_left) + dw;
-            }
-            let mut push: Option<f32> = None;
-            for e in env.exclusions {
-                if e.bottom <= top || e.top >= top + est_h {
-                    continue;
+        let beside = !row_rest.is_empty();
+        let (left, right_edge) = if beside {
+            row_rest.remove(0)
+        } else {
+            // Flow around floating objects: the spans beside them, or below them.
+            let mut guard = 0;
+            loop {
+                let mut lo = if first { first_left } else { rp.indent_left };
+                if let Some((_, dl, dw)) = pl.drop_cap
+                    && lines.len() < dl as usize
+                {
+                    lo = first_left.max(rp.indent_left) + dw;
                 }
-                if e.top_bottom || (e.left <= lo + 1.0 && e.right >= hi - 1.0) {
-                    push = Some(push.map_or(e.bottom, |p: f32| p.max(e.bottom)));
-                    continue;
-                }
-                if (e.left + e.right) / 2.0 < (lo + hi) / 2.0 {
-                    lo = lo.max(e.right);
-                } else {
-                    hi = hi.min(e.left);
-                }
-            }
-            if push.is_none() && hi - lo < 36.0 {
-                push = env
-                    .exclusions
-                    .iter()
-                    .filter(|e| e.bottom > top && e.top < top + est_h)
-                    .map(|e| e.bottom)
-                    .fold(None, |a: Option<f32>, b| Some(a.map_or(b, |a| a.min(b))));
-            }
-            match push {
-                Some(y) if y > top && guard < 50 => {
-                    top = y;
-                    guard += 1;
-                }
-                _ => {
-                    left = lo;
-                    right_edge = hi.max(lo + 12.0);
-                    break;
+                match row_spans(env.exclusions, top, est_h, lo, base_right) {
+                    Ok(mut spans) => {
+                        let (a, b) = spans.remove(0);
+                        row_rest = spans;
+                        row_first = lines.len();
+                        break (a, b.max(a + 12.0));
+                    }
+                    Err(below) if below > top && guard < 50 => {
+                        top = below;
+                        guard += 1;
+                    }
+                    Err(_) => {
+                        row_first = lines.len();
+                        break (lo, base_right.max(lo + 12.0));
+                    }
                 }
             }
-        }
+        };
         let mut x = left;
         // Label on the first line.
         if first && let Some(lab) = pl.label.as_mut() {
@@ -913,10 +904,23 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
         }
         let start = pl.clusters.get(c0).map(|c| c.start).unwrap_or(pl.text_len);
         let stop = if c1 > c0 { pl.clusters.get(c1 - 1).map(|c| c.end).unwrap_or(pl.text_len) } else { start };
-        lines.push(Line { top, height, baseline, c0, c1, xs, leaders, end, start, stop, left, right: right_edge, hyphen });
-        top += height;
+        lines.push(Line { top, height, baseline, c0, c1, xs, leaders, end, start, stop, left, right: right_edge, hyphen, beside });
         first = false;
         i = j;
+        // Text that wrapped continues on the row's far side; anything else ends the row.
+        if end != LineEnd::Wrap || i >= n {
+            row_rest.clear();
+        }
+        if row_rest.is_empty() {
+            // The row is as tall as its tallest line.
+            let row = lines.get_mut(row_first..).unwrap_or_default();
+            let h = row.iter().map(|l| l.height).fold(0.0f32, f32::max);
+            for l in row {
+                l.baseline += h - l.height;
+                l.height = h;
+            }
+            top += h;
+        }
         if i >= n {
             // A paragraph ending with a line break gets an empty last line.
             if matches!(end, LineEnd::LineBreak | LineEnd::PageBreak | LineEnd::ColumnBreak) {
@@ -942,6 +946,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
                     left: x0,
                     right: base_right,
                     hyphen: None,
+                    beside: false,
                 });
                 top += h;
             }
@@ -970,6 +975,35 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
     }
     pl.height = top;
     pl.lines = lines;
+}
+
+/// Narrowest span text flows into beside a floating object, points.
+const MIN_SPAN: f32 = 36.0;
+
+/// The spans of a row at `top` (about `h` tall) between `lo` and `hi` that text can use around
+/// the exclusions, left to right (Square wrapping uses both sides of an object). `Err(y)`: none
+/// here, try again at `y` (below what's in the way).
+fn row_spans(exclusions: &[Exclusion], top: f32, h: f32, lo: f32, hi: f32) -> Result<Vec<(f32, f32)>, f32> {
+    let here: Vec<&Exclusion> = exclusions.iter().filter(|e| e.bottom > top && e.top < top + h && e.right > lo && e.left < hi).collect();
+    if here.is_empty() {
+        return Ok(vec![(lo, hi)]);
+    }
+    if let Some(below) = here.iter().filter(|e| e.top_bottom).map(|e| e.bottom).reduce(f32::max) {
+        return Err(below);
+    }
+    let mut spans = vec![(lo, hi)];
+    for e in &here {
+        spans = spans
+            .into_iter()
+            .flat_map(|(a, b)| if e.right <= a || e.left >= b { vec![(a, b)] } else { vec![(a, e.left.min(b)), (e.right.max(a), b)] })
+            .collect();
+    }
+    spans.retain(|(a, b)| b - a >= MIN_SPAN);
+    if spans.is_empty() {
+        // Nothing wide enough: the line goes below the first object that ends.
+        return Err(here.iter().map(|e| e.bottom).reduce(f32::min).unwrap_or(top));
+    }
+    Ok(spans)
 }
 
 /// Word's default hyphenation zone (0.25"), points.
