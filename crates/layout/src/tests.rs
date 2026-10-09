@@ -713,3 +713,33 @@ fn floating_tables_take_no_room_and_text_wraps_beside_them() {
     assert!((by - ny).abs() < 2.0, "body at {by}, narrow table text at {ny}");
     assert!(bx + bleft > nx + 200.0, "body text at {}, right of the narrow table", bx + bleft);
 }
+
+#[test]
+fn a_floating_table_taller_than_a_page_runs_across_pages() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::TableFloat;
+    let mut d = Document::from_text("After the table.");
+    let mut t = Table::new(80, 1, 300.0);
+    for (i, r) in t.rows.iter_mut().enumerate() {
+        r.cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("Row {i}"), Default::default()))];
+    }
+    t.props.float = Some(TableFloat { h_rel: Anchor::Margin, v_rel: Anchor::Paragraph, x: -30.0, overlap: false, ..Default::default() });
+    d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    assert!(l.pages.len() >= 2, "{} page(s)", l.pages.len());
+    // Every row is drawn on a page, none past a page's bottom margin, and all from the table's
+    // own left edge.
+    let mut rows = 0;
+    for p in &l.pages {
+        for it in &p.items {
+            if let Placed::Lines { x, y, story: StoryRef::Body, path, .. } = it
+                && path.0.len() > 1
+            {
+                rows += 1;
+                assert!(*y < 792.0 - 72.0, "row drawn at {y}, below the bottom margin");
+                assert!(*x < 72.0, "row text at {x}, not from the table's edge 30pt left of the margin");
+            }
+        }
+    }
+    assert_eq!(rows, 80);
+}

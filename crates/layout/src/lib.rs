@@ -1160,13 +1160,19 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32) -> f32 {
 fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, block: usize, body_top: f32) {
     pb.prev = None;
     let width = pb.col_w();
-    let tl = table::layout_table(ctx, StoryRef::Body, t, &[block as u32], width, 1);
+    let mut tl = table::layout_table(ctx, StoryRef::Body, t, &[block as u32], width, 1);
     if let Some(f) = t.props.float.filter(|_| !pb.web) {
         // Before Word 2013 layout (compatibility mode 15) an offset places the first cell's text,
         // so the edge sits a cell margin further out.
         let legacy = if ctx.doc.settings.compat_mode < 15 { table::first_cell_left_margin(t) } else { 0.0 };
-        place_floating_table(pb, &tl, &f, legacy, block, body_top);
-        return;
+        let h: f32 = tl.rows.iter().map(|r| r.height).sum();
+        if h <= pb.bottom - pb.top + 0.01 {
+            place_floating_table(pb, &tl, &f, legacy, block, body_top);
+            return;
+        }
+        // Too tall for a page: Word lets it run across pages like a table in the text, from its
+        // own left edge.
+        tl.x = float_table_x(pb, tl.width, &f, legacy) - pb.col_x();
     }
     // A table in the text flow starts below the floating objects in its way.
     let (x0, x1) = (pb.col_x() + tl.x, pb.col_x() + tl.x + tl.width);
@@ -1346,19 +1352,14 @@ fn place_floating_table(
     };
     for attempt in 0..2 {
         let s = pb.sect;
-        let (col_x, col_w) = (pb.col_x(), pb.col_w());
-        let h_area = match f.h_rel {
-            Anchor::Page => (0.0, s.page_w),
-            Anchor::Margin => (s.margin_left + s.gutter, s.text_width()),
-            _ => (col_x, col_w),
-        };
+        let h_area = float_table_h_area(pb, f);
         // The text a table anchored to it stands in: where the next paragraph starts.
         let v_area = match f.v_rel {
             Anchor::Page => (0.0, s.page_h),
             Anchor::Margin => (s.margin_top, s.text_height()),
             _ => (pb.y, 0.0),
         };
-        let x = place(h_area, f.x, w, f.h_align) - if f.h_align.is_none() { legacy } else { 0.0 };
+        let x = float_table_x(pb, w, f, legacy);
         let mut r = Rect::new(x, place(v_area, f.y, h, f.v_align), w, h);
         // Word moves a table that may not overlap below the floating tables in its way, keeping
         // (in Word 2013+ layout) its distance from the text's left edge.
@@ -1392,5 +1393,27 @@ fn place_floating_table(
         pb.excl.push((area, false));
         pb.float_tables.push(area);
         return;
+    }
+}
+
+/// The area a floating table's `x` is measured in: its start and width on the page.
+fn float_table_h_area(pb: &PageBuilder, f: &wordcraft_doc::props::TableFloat) -> (f32, f32) {
+    let s = pb.sect;
+    match f.h_rel {
+        Anchor::Page => (0.0, s.page_w),
+        Anchor::Margin => (s.margin_left + s.gutter, s.text_width()),
+        _ => (pb.col_x(), pb.col_w()),
+    }
+}
+
+/// A floating table's left edge on the page (`legacy`: the first cell's left margin before Word
+/// 2013 layout, when an offset places the cell's text).
+fn float_table_x(pb: &PageBuilder, w: f32, f: &wordcraft_doc::props::TableFloat, legacy: f32) -> f32 {
+    let (start, extent) = float_table_h_area(pb, f);
+    match f.h_align {
+        None => start + if f.x.is_finite() { f.x.clamp(-31_680.0, 31_680.0) } else { 0.0 } - legacy,
+        Some(FloatAlign::Start | FloatAlign::Inside) => start,
+        Some(FloatAlign::Center) => start + (extent - w) / 2.0,
+        Some(FloatAlign::End | FloatAlign::Outside) => start + extent - w,
     }
 }
