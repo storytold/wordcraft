@@ -40,6 +40,8 @@ pub struct ZoteroLink {
     pub busy: Option<Command>,
     /// How the last command ended.
     pub last: Option<Value>,
+    /// Zotero's calls in the command in flight (logged when it ends).
+    methods: Vec<String>,
 }
 
 /// Focus requests from the bridge.
@@ -121,6 +123,7 @@ fn start(app: &mut WordApp, cmd: Command, ctx: Option<egui::Context>) -> Result<
     z.calls = Some(call_rx);
     z.done = Some(done_rx);
     z.busy = Some(cmd);
+    log::info!("Zotero: {} started", cmd.wire_name());
     app.status(tl!("Waiting for Zotero…"));
     Ok(json!({"started": cmd.wire_name()}))
 }
@@ -156,9 +159,11 @@ pub fn poll(app: &mut WordApp, ctx: &egui::Context) {
         if p.call.method == "Document_displayAlert" {
             let text = p.call.args.get(1).and_then(Value::as_str).unwrap_or("").to_string();
             let buttons = p.call.args.get(3).and_then(Value::as_i64).unwrap_or(0);
+            app.zotero.methods.push(p.call.method.clone());
             app.zotero.alert = Some(Alert { text, buttons, reply: p.reply });
             continue;
         }
+        app.zotero.methods.push(p.call.method.clone());
         let rev = app.session.rev();
         let mut host = AppHost { ctx };
         let r = app.zotero.bridge.handle(&mut app.session, &mut host, &p.call);
@@ -176,6 +181,16 @@ pub fn poll(app: &mut WordApp, ctx: &egui::Context) {
         app.zotero.done = None;
         app.zotero.alert = None;
         let name = cmd.map(Command::wire_name).unwrap_or("");
+        let methods = std::mem::take(&mut app.zotero.methods).join(", ");
+        match &r {
+            Ok(o) => log::info!(
+                "Zotero: {name} {} after {} calls ({methods}){}",
+                if o.completed { "completed" } else { "ended without completing" },
+                o.calls,
+                if o.errors.is_empty() { String::new() } else { format!("; errors: {}", o.errors.join(" | ")) }
+            ),
+            Err(e) => log::warn!("Zotero: {name} failed: {e}"),
+        }
         match r {
             Ok(o) => {
                 app.zotero.last = Some(json!({"command": name, "completed": o.completed, "calls": o.calls, "errors": o.errors}));
