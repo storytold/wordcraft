@@ -1,5 +1,6 @@
 //! DOCX → [`Document`].
 
+mod math;
 mod props;
 mod story;
 

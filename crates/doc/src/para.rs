@@ -169,11 +169,15 @@ pub enum InlineObject {
     CommentEnd {
         id: u32,
     },
-    /// An equation in linear format (`x=(-b±√(b^2-4ac))/2a`).
+    /// An equation: its linear format (`x=(-b±√(b^2-4ac))/2a`, for plain text) and structure.
+    /// A display equation sits on a line of its own.
     Equation {
         linear: String,
         #[serde(default)]
         display: bool,
+        /// The structure; empty = parse `linear`.
+        #[serde(default, skip_serializing_if = "crate::math::Math::is_empty")]
+        math: crate::math::Math,
     },
     /// Something we don't model, kept for round-trip (raw XML of the source format).
     Opaque {

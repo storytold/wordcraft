@@ -580,7 +580,7 @@ fn shapes_textboxes_equations_dropcaps_round_trip() {
         float: Float::default(),
         story: None,
     };
-    let eq = InlineObject::Equation { linear: "x=(-b±√(b^2-4ac))/2a".into(), display: false };
+    let eq = InlineObject::Equation { linear: "x=(-b±√(b^2-4ac))/2a".into(), display: false, math: Default::default() };
     let mut p = Paragraph::with_text("shapes ", CharProps::default());
     for o in [tb, star.clone(), eq.clone()] {
         let end = p.len();
@@ -605,7 +605,14 @@ fn shapes_textboxes_equations_dropcaps_round_trip() {
         o => panic!("{o:?}"),
     }
     assert_eq!(got[0].objects[1], star);
-    assert_eq!(got[0].objects[2], eq);
+    match &got[0].objects[2] {
+        InlineObject::Equation { linear, display, math } => {
+            assert_eq!(linear, "x=(-b±√(b^2-4ac))/2a");
+            assert!(!display);
+            assert_eq!(math.nodes, wordcraft_doc::math::parse_linear(linear), "structure is written as OMML and read back");
+        }
+        o => panic!("{o:?}"),
+    }
     assert_eq!(got.len(), 2, "drop cap paragraph merges back");
     assert_eq!(got[1].text, dc.text);
     assert_eq!(got[1].props, dc.props);

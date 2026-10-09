@@ -73,7 +73,7 @@ pub fn specs() -> Vec<CommandSpec> {
             let lin = p::str(v, "linear").unwrap_or("a^2+b^2=c^2").to_string();
             let props = s.typing_props();
             let at = delete_selection(s)?;
-            let end = s.doc.insert_object(&at, InlineObject::Equation { linear: lin, display: false }, &props)?;
+            let end = s.doc.insert_object(&at, InlineObject::Equation { math: wordcraft_doc::math::Math { nodes: wordcraft_doc::math::parse_linear(&lin), ..Default::default() }, linear: lin, display: false }, &props)?;
             s.sel = Selection::caret(end);
             sel_result(s)
         })

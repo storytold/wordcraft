@@ -11,6 +11,7 @@
 pub mod display;
 pub mod fields;
 pub mod hit;
+pub mod math;
 pub mod para;
 mod table;
 

@@ -6,6 +6,7 @@ use wordcraft_doc::{Document, Path, StoryRef};
 use wordcraft_fonts::FaceRef;
 use wordcraft_geom::Rect;
 
+use crate::math::{MItem, MathLayout};
 use crate::para::{ClKind, LineEnd, ParaLayout};
 use crate::{Page, Placed};
 
@@ -395,6 +396,11 @@ fn lines(
                 Some(InlineObject::Shape { kind, fill, stroke, stroke_width, .. }) => {
                     out.push(Draw::Shape { rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width })
                 }
+                Some(InlineObject::Equation { .. }) => {
+                    if let Some((_, ml)) = pl.maths.iter().find(|(k, _)| *k == oi) {
+                        equation(ml, cx, base, alpha, out);
+                    }
+                }
                 _ => {}
             }
         }
@@ -434,6 +440,36 @@ fn lines(
             }
         }
         let _ = bottom;
+    }
+}
+
+/// An equation's glyphs and rules with its origin at (`x`, `base`).
+fn equation(ml: &MathLayout, x: f32, base: f32, alpha: f32, out: &mut Vec<Draw>) {
+    for it in &ml.items {
+        match it {
+            MItem::Glyphs { face, size, color, synth_bold, synth_italic, glyphs, text } => out.push(Draw::Glyphs {
+                face: *face,
+                size: *size,
+                glyphs: glyphs.iter().map(|(g, gx, gy)| (*g, x + gx, base - gy)).collect(),
+                color: *color,
+                alpha,
+                synth_bold: *synth_bold,
+                synth_italic: *synth_italic,
+                text: text.clone(),
+                link: None,
+            }),
+            MItem::Rect { x: rx, y, w, h, color } => out.push(Draw::Fill { rect: Rect::new(x + rx, base - y - h, *w, *h), color: *color, alpha }),
+            MItem::Line { x0, y0, x1, y1, width, color } => out.push(Draw::Line {
+                x0: x + x0,
+                y0: base - y0,
+                x1: x + x1,
+                y1: base - y1,
+                width: *width,
+                color: *color,
+                stroke: Stroke::Solid,
+                alpha,
+            }),
+        }
     }
 }
 

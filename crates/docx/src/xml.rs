@@ -154,6 +154,44 @@ impl El {
         }
         go(self, name, 0)
     }
+    /// The element as XML with canonical prefixes (for re-emitting kept content). Elements and
+    /// attributes in unknown namespaces are dropped.
+    pub fn to_xml(&self) -> String {
+        fn go(e: &El, s: &mut String, depth: usize) {
+            if depth > MAX_DEPTH || e.name.starts_with("?:") {
+                return;
+            }
+            s.push('<');
+            s.push_str(&e.name);
+            for (k, v) in &e.attrs {
+                if k.starts_with("?:") {
+                    continue;
+                }
+                s.push(' ');
+                s.push_str(k);
+                s.push_str("=\"");
+                s.push_str(&esc(v));
+                s.push('"');
+            }
+            if e.kids.is_empty() {
+                s.push_str("/>");
+                return;
+            }
+            s.push('>');
+            for n in &e.kids {
+                match n {
+                    Node::Text(t) => s.push_str(&esc(t)),
+                    Node::El(c) => go(c, s, depth + 1),
+                }
+            }
+            s.push_str("</");
+            s.push_str(&e.name);
+            s.push('>');
+        }
+        let mut s = String::new();
+        go(self, &mut s, 0);
+        s
+    }
     /// Local part of the name.
     pub fn local(&self) -> &str {
         self.name.rsplit(':').next().unwrap_or(&self.name)

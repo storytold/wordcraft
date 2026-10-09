@@ -310,12 +310,17 @@ impl Reader<'_> {
             "w:smartTag" | "w:customXml" | "w:dir" | "w:bdo" => self.read_inline_children(sc, pb, k, rels, ctx, depth + 1),
             "m:oMath" => {
                 let props = self.run_props_none(ctx);
-                self.emit_obj(sc, pb, InlineObject::Equation { linear: k.deep_text(), display: false }, &props);
+                let math = super::math::read_omath(k, Default::default());
+                let linear = wordcraft_doc::math::to_linear(&math.nodes);
+                self.emit_obj(sc, pb, InlineObject::Equation { linear, display: false, math }, &props);
             }
             "m:oMathPara" => {
                 let props = self.run_props_none(ctx);
+                let jc = super::math::para_jc(k);
                 for m in k.children("m:oMath") {
-                    self.emit_obj(sc, pb, InlineObject::Equation { linear: m.deep_text(), display: true }, &props);
+                    let math = super::math::read_omath(m, jc);
+                    let linear = wordcraft_doc::math::to_linear(&math.nodes);
+                    self.emit_obj(sc, pb, InlineObject::Equation { linear, display: true, math }, &props);
                 }
             }
             "mc:AlternateContent" => {

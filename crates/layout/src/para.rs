@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use wordcraft_doc::math::MathJc;
 use wordcraft_doc::numbering::{Level, LevelSuffix};
 use wordcraft_doc::para::{COLUMN_BREAK, InlineObject, LINE_BREAK, NoteKind, OBJ, PAGE_BREAK, SOFT_HYPHEN};
 use wordcraft_doc::props::{Align, CharProps, LineSpacing, TabAlign, TabLeader, TabStop};
@@ -66,6 +67,8 @@ pub struct Cluster {
     pub break_after: bool,
     /// Height above the baseline for objects (images), points.
     pub obj_h: f32,
+    /// Depth below the baseline for objects (equations), points.
+    pub obj_d: f32,
     /// The cluster is a decimal separator (decimal tabs align on it).
     pub dot: bool,
 }
@@ -138,6 +141,10 @@ pub struct ParaLayout {
     pub drop_cap: Option<(usize, u8, f32)>,
     /// Clusters after which the line may break with a hyphen (soft hyphens, auto hyphenation), sorted.
     pub hyph_after: Vec<u32>,
+    /// Laid-out equations by object index.
+    pub maths: Vec<(usize, Arc<crate::math::MathLayout>)>,
+    /// Display equations (on lines of their own): cluster index and justification.
+    pub displays: Vec<(usize, wordcraft_doc::math::MathJc)>,
 }
 
 /// Inputs that change a paragraph's layout beyond its own content.
@@ -287,6 +294,7 @@ impl<'a> Builder<'a> {
                     g1: if kind == ClKind::Marker { g0 } else { g1 },
                     break_after: false,
                     obj_h: 0.0,
+                    obj_d: 0.0,
                     dot: s == "." || s == ",",
                 });
             }
@@ -311,6 +319,7 @@ impl<'a> Builder<'a> {
                 g1: g,
                 break_after: false,
                 obj_h: 0.0,
+                obj_d: 0.0,
                 dot: false,
             });
             return;
@@ -326,7 +335,7 @@ impl<'a> Builder<'a> {
         let g0 = first.g0;
         let style = first.style;
         let g1 = added.last().map(|c| c.g1).unwrap_or(g0);
-        self.clusters.push(Cluster { start, end, adv: x, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, dot: false });
+        self.clusters.push(Cluster { start, end, adv: x, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, obj_d: 0.0, dot: false });
     }
 }
 
@@ -366,6 +375,8 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         .filter(|c| !matches!(*c, '\t' | LINE_BREAK | PAGE_BREAK | COLUMN_BREAK | OBJ | '\r' | ' '))
         .filter(|c| p.text.len() > c.len_utf8());
     let mut drop_cap = None;
+    let mut maths = Vec::new();
+    let mut displays = Vec::new();
     for (range, props) in p.run_ranges() {
         let rc = resolve(props);
         let Some(text) = p.text.get(range.clone()) else { continue };
@@ -386,6 +397,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                     g1: g,
                     break_after: false,
                     obj_h: 0.0,
+                    obj_d: 0.0,
                     dot: false,
                 });
             }
@@ -427,7 +439,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
             let si = b.style(&rc, None, false);
             let g = b.glyphs.len() as u32;
             let push = |b: &mut Builder, kind: ClKind, adv: f32, h: f32| {
-                b.clusters.push(Cluster { start, end, adv, kind, style: si, g0: g, g1: g, break_after: false, obj_h: h, dot: false })
+                b.clusters.push(Cluster { start, end, adv, kind, style: si, g0: g, g1: g, break_after: false, obj_h: h, obj_d: 0.0, dot: false })
             };
             match c {
                 '\t' => push(&mut b, ClKind::Tab, 0.0, 0.0),
@@ -468,11 +480,28 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                             b.shape_atomic(&num, start, end, &Arc::new(sup));
                             notes.push((b.clusters.len().saturating_sub(1), *id));
                         }
-                        Some(InlineObject::Equation { linear, .. }) => {
-                            let mut eq = (*rc).clone();
-                            eq.italic = true;
-                            eq.font = "Cambria Math".into();
-                            b.shape_atomic(linear, start, end, &Arc::new(eq));
+                        Some(InlineObject::Equation { linear, display, math }) => {
+                            let ml = crate::math::layout_equation(math, linear, &rc, *display);
+                            let st = b.styles.get(si as usize);
+                            // The line is at least as tall as the text around it.
+                            let (a, d) = st.map(|s| (s.ascent, s.descent)).unwrap_or((0.0, 0.0));
+                            b.clusters.push(Cluster {
+                                start,
+                                end,
+                                adv: ml.width,
+                                kind: ClKind::Object(k),
+                                style: si,
+                                g0: g,
+                                g1: g,
+                                break_after: false,
+                                obj_h: ml.ascent.max(a).max(0.01),
+                                obj_d: ml.descent.max(d),
+                                dot: false,
+                            });
+                            if *display {
+                                displays.push((b.clusters.len() - 1, math.jc));
+                            }
+                            maths.push((k, Arc::new(ml)));
                         }
                         Some(InlineObject::Opaque { text, .. }) => b.shape_atomic(text, start, end, &rc),
                         _ => push(&mut b, ClKind::Marker, 0.0, 0.0),
@@ -542,6 +571,8 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         issues: if env.proofing { proof_issues(p) } else { Vec::new() },
         drop_cap,
         hyph_after: Vec::new(),
+        maths,
+        displays,
     };
     pl.hyph_after = hyphenation_points(p, &pl, env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens);
     for k in pl.hyph_after.clone() {
@@ -711,6 +742,12 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
                 }
                 _ => {}
             }
+            // A display equation sits on a line of its own.
+            let is_display = pl.displays.iter().any(|(ci, _)| *ci == j);
+            if is_display && (c0..j).any(|k| pl.clusters.get(k).is_some_and(|c| c.kind != ClKind::Marker)) {
+                end = LineEnd::Wrap;
+                break;
+            }
             // Text after a right/centre tab grows leftwards into the tab's space first.
             let absorbs = pending_tab.is_some_and(|(tj, stop, _)| {
                 let room = pl.clusters.get(tj).map(|t| t.adv).unwrap_or(0.0);
@@ -785,6 +822,16 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
                     x += delta;
                 }
             }
+            if is_display {
+                // Markers right after it stay on its line; anything else starts a new one.
+                j += 1;
+                while j < n && pl.clusters.get(j).is_some_and(|c| c.kind == ClKind::Marker) {
+                    xs.push(x);
+                    j += 1;
+                }
+                end = if j >= n { LineEnd::Para } else { LineEnd::Wrap };
+                break;
+            }
             if c.break_after {
                 let hyph = pl.hyph_after.binary_search(&(j as u32)).is_ok();
                 if !hyph {
@@ -834,7 +881,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
             }
             if let Some(st) = pl.styles.get(c.style as usize) {
                 let (a, d) = if matches!(c.kind, ClKind::Object(_)) && c.obj_h > 0.0 {
-                    (c.obj_h, 0.0)
+                    (c.obj_h, c.obj_d)
                 } else {
                     (st.ascent + st.shift.max(0.0), st.descent + (-st.shift).max(0.0))
                 };
@@ -877,9 +924,13 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
         let slack = right_edge - content_end;
         let last_tab = (c0..c1).rev().find(|k| pl.clusters.get(*k).is_some_and(|c| c.kind == ClKind::Tab));
         let align_from = last_tab.map(|k| k + 1).unwrap_or(c0);
-        let shift = match rp.align {
-            Align::Center => slack / 2.0,
-            Align::Right => slack,
+        let display = pl.displays.iter().find(|(ci, _)| *ci >= c0 && *ci < c1).map(|d| d.1);
+        let shift = match (display, rp.align) {
+            (Some(MathJc::Left), _) => 0.0,
+            (Some(MathJc::Right), _) => slack,
+            (Some(_), _) => slack / 2.0,
+            (None, Align::Center) => slack / 2.0,
+            (None, Align::Right) => slack,
             _ => 0.0,
         };
         if shift > 0.0 && slack > 0.0 {
@@ -887,7 +938,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
                 *v += shift;
             }
         }
-        let justify = (rp.align == Align::Justify && end == LineEnd::Wrap) || rp.align == Align::Distribute;
+        let justify = display.is_none() && ((rp.align == Align::Justify && end == LineEnd::Wrap) || rp.align == Align::Distribute);
         if justify && slack > 0.0 {
             // Spaces inside the content (after the last tab).
             let spaces: Vec<usize> = (align_from..c1)
