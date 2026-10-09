@@ -233,3 +233,26 @@ fn shapes_have_paths() {
     assert_eq!(parse_iso("garbage"), None);
     assert_eq!(civil(0), (1970, 1, 1, 0, 0, 0));
 }
+
+#[test]
+fn fields_put_their_shown_text_in_the_text_layer() {
+    // "Page 1 of 2" in the footer: the page fields' numbers, not the objects' placeholder
+    // characters, are what copying, search and screen readers get.
+    let mut d = Document::new();
+    let mut f = Paragraph::with_text("Page  of ", CharProps::default());
+    let field = |instr: &str| InlineObject::Field { instr: instr.into(), result: String::new(), locked: false };
+    f.insert_object(5, field("PAGE"), &CharProps::default()).unwrap();
+    let n = f.len();
+    f.insert_object(n, field("NUMPAGES"), &CharProps::default()).unwrap();
+    let id = d.add_part(wordcraft_doc::PartKind::Footer, vec![para_block(f)]);
+    d.last_section.footers.default = Some(id);
+    let mut body = Paragraph::with_text("Body", CharProps::default());
+    body.props.page_break_before = None;
+    let mut second = Paragraph::with_text("More", CharProps::default());
+    second.props.page_break_before = Some(true);
+    d.body = vec![para_block(body), para_block(second)];
+    let text = extract_text(&export(&d, &PdfOptions::default()).unwrap());
+    assert_eq!(text.len(), 2);
+    assert!(text.iter().all(|t| !t.contains('\u{FFFC}')), "{text:?}");
+    assert!(squash(&text[0]).contains("Page 1 of 2") && squash(&text[1]).contains("Page 2 of 2"), "{text:?}");
+}
