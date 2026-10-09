@@ -1,8 +1,11 @@
 //! The browser shell: web `Services`, drag-and-drop, and the eframe web runner.
 
+use serde_json::json;
 use wasm_bindgen::JsCast as _;
 use wordcraft_engine::Session;
 use wordcraft_ui_egui::{Inbox, Services, WordApp};
+
+use crate::host::{self, Host, Msg};
 
 const DOC_EXTS: &[&str] = &["docx", "docm", "dotx", "odt", "rtf", "txt", "md", "html", "htm", "json"];
 const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp"];
@@ -11,7 +14,11 @@ const LOADING_ID: &str = "wordcraft_loading";
 
 pub fn start() {
     eframe::WebLogger::init(log::LevelFilter::Info).ok();
-    wasm_bindgen_futures::spawn_local(async {
+    if let Some(c) = host::accent_from_url() {
+        wordcraft_ui_egui::theme::set_app_color(c);
+    }
+    let host = Host::from_url();
+    wasm_bindgen_futures::spawn_local(async move {
         let Some(document) = web_sys::window().and_then(|w| w.document()) else {
             log::error!("no document");
             return;
@@ -36,9 +43,14 @@ pub fn start() {
                     }
                     let inbox: Inbox = Inbox::default();
                     let doc = if query().contains("sample") { wordcraft_engine::sample::sample_document() } else { wordcraft_doc::Document::new() };
-                    let mut app = WordApp::new(Session::new(doc), services(inbox.clone(), cc.egui_ctx.clone()));
+                    let mut app = WordApp::new(Session::new(doc), services(inbox.clone(), cc.egui_ctx.clone(), host.clone()));
                     app.autosave = false;
-                    Ok(Box::new(WebShell { app, inbox }))
+                    if let Some(h) = &host {
+                        let ctx = cc.egui_ctx.clone();
+                        h.listen(move || ctx.request_repaint());
+                        h.post("ready", json!({}), None);
+                    }
+                    Ok(Box::new(WebShell { app, inbox, host, dirty_sent: false }))
                 }),
             )
             .await;
@@ -60,6 +72,54 @@ fn query() -> String {
 struct WebShell {
     app: WordApp,
     inbox: Inbox,
+    host: Option<Host>,
+    dirty_sent: bool,
+}
+
+impl WebShell {
+    /// Requests from the host page (host mode), and unsaved-changes news back to it.
+    fn host_messages(&mut self) {
+        let Some(host) = self.host.clone() else { return };
+        let msgs = std::mem::take(&mut *host.queue.borrow_mut());
+        for msg in msgs {
+            match msg {
+                // Opened right away (not through the inbox), so a `run` sent after `open` sees the new document.
+                Msg::Open { id, name, bytes } => {
+                    let data = wordcraft_engine::cmd::insert::base64_encode(&bytes);
+                    let r = self.app.run("file.open", json!({"path": name, "data": data}));
+                    if r.is_ok() {
+                        self.app.ui.backstage = false;
+                    }
+                    host.post("result", outcome(id, r), None);
+                }
+                Msg::Run { id, command, params } => {
+                    let r = self.app.run(&command, params);
+                    host.post("result", outcome(id, r), None);
+                }
+                Msg::Save { id, name } => {
+                    // The bytes go back through `download` (services), tagged with this id.
+                    *host.pending_save.borrow_mut() = Some(id.clone());
+                    let params = name.map(|n| json!({"path": n})).unwrap_or_else(|| json!({}));
+                    if let Err(error) = self.app.run("file.save", params) {
+                        host.pending_save.borrow_mut().take();
+                        host.post("result", outcome(id, Err(error)), None);
+                    }
+                }
+            }
+        }
+        if self.app.session.dirty != self.dirty_sent {
+            self.dirty_sent = self.app.session.dirty;
+            host.post("dirty", json!({"value": self.dirty_sent}), None);
+        }
+    }
+}
+
+/// A `result` message for the host.
+fn outcome(id: serde_json::Value, r: Result<serde_json::Value, String>) -> serde_json::Value {
+    match r {
+        Ok(result) => json!({"id": id, "ok": true, "result": result}),
+        Err(error) => json!({"id": id, "ok": false, "error": error}),
+    }
 }
 
 impl eframe::App for WebShell {
@@ -79,6 +139,7 @@ impl eframe::App for WebShell {
                 }
             });
         }
+        self.host_messages();
         self.app.logic(ctx);
     }
 
@@ -91,7 +152,7 @@ impl eframe::App for WebShell {
     }
 }
 
-fn services(inbox: Inbox, ctx: egui::Context) -> Services {
+fn services(inbox: Inbox, ctx: egui::Context, host: Option<Host>) -> Services {
     let open_inbox = inbox.clone();
     Services {
         open_async: Some(Box::new(move |purpose: &str| {
@@ -113,7 +174,15 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
         })),
         // Exports ask for a name; the browser decides where the download goes.
         pick_save: Some(Box::new(|name: &str| Some(name.to_string()))),
-        download: Some(Box::new(|name: &str, bytes: &[u8]| {
+        download: Some(Box::new(move |name: &str, bytes: &[u8]| {
+            // Host mode: a saved document goes back to the host page instead of downloading.
+            if let Some(h) = &host
+                && name.to_ascii_lowercase().ends_with(".docx")
+            {
+                let id = h.pending_save.borrow_mut().take().unwrap_or(serde_json::Value::Null);
+                h.post("saved", json!({"id": id, "name": name}), Some(bytes));
+                return;
+            }
             if let Err(e) = download(name, bytes) {
                 log::error!("download of {name} failed: {e}");
             }

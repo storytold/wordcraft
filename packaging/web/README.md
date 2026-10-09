@@ -73,6 +73,54 @@ Local test: `python3 -m http.server 8765` inside the folder, then open http://lo
   downloads) are blocked.
 - Don't send `X-Frame-Options: DENY` or a `frame-ancestors` CSP that excludes the embedding page.
 
+## Opening and saving through your page (`?host`)
+
+With `?host` on the iframe `src`, the embedding page opens and saves documents through
+`postMessage`, so they can live on your server instead of the visitor's disk. WordCraft accepts
+messages only from its parent window at the host's origin: its own origin by default, or the one
+given as `?host=https://example.com`. In this mode Save sends the `.docx` back to your page and
+never downloads it.
+
+`?accent=RRGGBB` (for example `?host&accent=008080`) gives the editor your site's colour for its
+buttons, tabs and selection.
+
+From your page:
+
+| Message | What it does |
+|---|---|
+| `{wordcraft: "open", id?, name, data}` | Open a document; `data` is an `ArrayBuffer` or `Uint8Array` |
+| `{wordcraft: "run", id?, command, params?}` | Run any command, such as `file.setAuthor`, `review.trackChanges`, `review.restrict` or `review.compare` |
+| `{wordcraft: "save", id?, name?}` | Send the document back as `.docx` |
+
+From WordCraft:
+
+| Message | When |
+|---|---|
+| `{wordcraft: "ready"}` | The editor is up and listening |
+| `{wordcraft: "result", id, ok, result \| error}` | After `open` and `run`, and after a `save` that failed |
+| `{wordcraft: "saved", id, name, data}` | The `.docx` bytes, after `save` or when the person chose Save (`id` is then `null`) |
+| `{wordcraft: "dirty", value}` | The document gained or lost unsaved changes |
+
+```js
+const frame = document.querySelector('iframe'); // src="/wordcraft/?host&accent=008080"
+const send = (msg) => frame.contentWindow.postMessage(msg, location.origin);
+addEventListener('message', async (e) => {
+  if (e.source !== frame.contentWindow) return;
+  const m = e.data;
+  if (m.wordcraft === 'ready') {
+    const data = await (await fetch('/papers/42.docx')).arrayBuffer();
+    send({ wordcraft: 'open', id: 1, name: 'paper.docx', data });
+    send({ wordcraft: 'run', id: 2, command: 'file.setAuthor', params: { name: 'Ada Lovelace' } });
+    send({ wordcraft: 'run', id: 3, command: 'review.trackChanges', params: { value: true } });
+  }
+  if (m.wordcraft === 'saved') await fetch('/papers/42.docx', { method: 'PUT', body: m.data });
+});
+```
+
+Messages are handled in order, so a `run` sent right after `open` applies to the opened document.
+To show what changed between two versions, open the older one and run `review.compare` with the
+newer one's bytes as base64 `data`.
+
 ## Renderer selection and fallback flags
 
 WordCraft renders with wgpu. It uses **WebGPU** when the browser has it and falls back to
