@@ -4840,9 +4840,19 @@ dependencies = [
  "rfd",
  "serde_json",
  "winresource",
+ "wordcraft-chat",
  "wordcraft-doc",
  "wordcraft-engine",
  "wordcraft-ui-egui",
+]
+
+[[package]]
+name = "wordcraft-chat"
+version = "0.3.0"
+dependencies = [
+ "getrandom 0.3.4",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -4955,6 +4965,7 @@ version = "0.3.0"
 dependencies = [
  "log",
  "serde_json",
+ "wordcraft-chat",
  "wordcraft-doc",
  "wordcraft-engine",
  "wordcraft-render",
@@ -5011,6 +5022,7 @@ dependencies = [
  "serde",
  "serde_json",
  "toml",
+ "wordcraft-chat",
  "wordcraft-doc",
  "wordcraft-engine",
  "wordcraft-fonts",

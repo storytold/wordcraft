@@ -24,6 +24,7 @@ wordcraft-proof = { path = "crates/proof" }
 wordcraft-engine = { path = "crates/engine" }
 wordcraft-mcp = { path = "crates/mcp" }
 wordcraft-ui-egui = { path = "crates/ui-egui" }
+wordcraft-chat = { path = "crates/chat" }
 
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }
