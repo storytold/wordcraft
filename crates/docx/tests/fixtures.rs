@@ -370,3 +370,22 @@ fn header_self_reference_and_escaping_targets() {
     let out = wordcraft_docx::write(&d).unwrap();
     wordcraft_docx::read(&out).unwrap();
 }
+
+#[test]
+fn style_rfonts_without_ascii_inherits_doc_defaults_font() {
+    // Issue #93: Normal names only East Asian / complex-script fonts, so Latin text keeps the
+    // docDefaults font. A run hinted as East Asian still uses its East Asian font.
+    let styles = format!(
+        r#"<w:styles {W_NS}>
+ <w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:eastAsia="Calibri" w:hAnsi="Calibri" w:cs="Calibri"/></w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults>
+ <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/><w:rPr><w:rFonts w:eastAsia="Times New Roman" w:cs="Times New Roman"/></w:rPr></w:style>
+</w:styles>"#
+    );
+    let body = r#"<w:p><w:r><w:t>Plain</w:t></w:r></w:p><w:p><w:r><w:rPr><w:rFonts w:hint="eastAsia" w:eastAsia="SimSun"/></w:rPr><w:t>漢字</w:t></w:r></w:p>"#;
+    let d = wordcraft_docx::read(&docx(body, &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)])).unwrap();
+    assert_eq!(d.styles.get("Normal").unwrap().chr.font, None);
+    let ps = paras(&d);
+    let font = |p: &Paragraph| d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props).font;
+    assert_eq!(font(ps[0]), "Calibri");
+    assert_eq!(font(ps[1]), "SimSun");
+}
