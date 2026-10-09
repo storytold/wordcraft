@@ -84,6 +84,32 @@ fn bold_toggles_selection_and_caret_word() {
 }
 
 #[test]
+fn border_toggles_and_saves() {
+    use wordcraft_doc::props::Border;
+    let border = |s: &Session| s.doc.para_at(&Pos::body(0, 0)).unwrap().props_of_char(5).border;
+    // Saved .docx carries the border iff it is on (read back: the reader maps only `w:bdr` to `border`).
+    let docx_has_bdr = |s: &Session| {
+        let back = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+        back.para_at(&Pos::body(0, 0)).unwrap().props_of_char(5).border.is_some()
+    };
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "make this boxed"}));
+    run(&mut s, "select.text", json!({"text": "this"}));
+    run(&mut s, "format.border", json!({}));
+    assert_eq!(border(&s), Some(Border::single(0.5)));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().props_of_char(0).border, None);
+    assert!(docx_has_bdr(&s));
+    run(&mut s, "format.border", json!({}));
+    assert_eq!(border(&s), None);
+    run(&mut s, "format.border", json!({"value": true}));
+    run(&mut s, "format.border", json!({"value": true}));
+    assert_eq!(border(&s), Some(Border::single(0.5)));
+    run(&mut s, "format.border", json!({"value": false}));
+    assert_eq!(border(&s), None);
+    assert!(!docx_has_bdr(&s));
+}
+
+#[test]
 fn pending_format_applies_to_typing() {
     let mut s = s();
     run(&mut s, "text.insert", json!({"text": "a "}));

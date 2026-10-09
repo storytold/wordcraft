@@ -203,6 +203,56 @@ fn display_has_glyphs_and_marks() {
     assert!(items.iter().any(|i| matches!(i, display::Draw::Mark { ch: '→', .. })));
 }
 
+fn border_lines(d: &Document) -> Vec<(f32, f32, f32, f32)> {
+    let l = lay(d);
+    display::page_display(d, &l.pages[0], &display::DisplayOptions::default())
+        .into_iter()
+        .filter_map(|i| if let display::Draw::Line { x0, y0, x1, y1, .. } = i { Some((x0, y0, x1, y1)) } else { None })
+        .collect()
+}
+
+#[test]
+fn character_border_draws_one_box_around_run() {
+    use wordcraft_doc::props::Border;
+    let mut d = Document::from_text("Hello world");
+    assert!(border_lines(&d).is_empty());
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, 5), &|c| c.border = Some(Border::single(0.5))).unwrap();
+    let lines = border_lines(&d);
+    assert_eq!(lines.len(), 4, "{lines:?}");
+    let l = lay(&d);
+    let Some(Placed::Lines { para, x, y, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+    let (gx0, gx1) = (x + para.x_of(0, 0).unwrap(), x + para.x_of(0, 5).unwrap());
+    let (top, bottom) = (*y, y + para.lines[0].height);
+    let horiz: Vec<_> = lines.iter().filter(|l| l.1 == l.3).collect();
+    let vert: Vec<_> = lines.iter().filter(|l| l.0 == l.2).collect();
+    assert_eq!(horiz.len(), 2);
+    assert_eq!(vert.len(), 2);
+    assert!(horiz.iter().any(|h| (h.1 - top).abs() < 0.01) && horiz.iter().any(|h| (h.1 - bottom).abs() < 0.01), "{lines:?}");
+    assert!(horiz.iter().all(|h| (h.0 - gx0).abs() < 0.01 && (h.2 - gx1).abs() < 0.01), "{lines:?} {gx0} {gx1}");
+}
+
+#[test]
+fn equal_adjacent_borders_share_a_box() {
+    use wordcraft_doc::props::Border;
+    let mut d = Document::from_text("ab");
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, 2), &|c| c.border = Some(Border::single(0.5))).unwrap();
+    d.format_range(&Pos::body(0, 1), &Pos::body(0, 2), &|c| c.bold = Some(true)).unwrap();
+    assert_eq!(border_lines(&d).len(), 4);
+    d.format_range(&Pos::body(0, 1), &Pos::body(0, 2), &|c| c.border = Some(Border::single(1.0))).unwrap();
+    assert_eq!(border_lines(&d).len(), 8);
+}
+
+#[test]
+fn wrapped_border_boxes_each_line() {
+    use wordcraft_doc::props::Border;
+    let text = "boxed ".repeat(20);
+    let mut d = Document::from_text(text.trim_end());
+    let n = d.para_at(&Pos::body(0, 0)).unwrap().len();
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, n), &|c| c.border = Some(Border::single(0.5))).unwrap();
+    assert_eq!(lines_of(&lay(&d)), 2);
+    assert_eq!(border_lines(&d).len(), 8);
+}
+
 #[test]
 fn web_view_is_one_page() {
     let d = Document::from_text(&"text ".repeat(3000));

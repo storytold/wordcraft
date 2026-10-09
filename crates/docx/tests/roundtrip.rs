@@ -66,6 +66,7 @@ fn every_char_prop_round_trips() {
         color: Some(TextColor::Rgb(Rgb(0xAA, 0x10, 0x20))),
         highlight: Some(Highlight::Turquoise),
         shading: Some(Rgb(0xEE, 0xEE, 0x00)),
+        border: Some(Border { style: BorderStyle::Double, width: 1.5, color: Some(Rgb(0xC0, 0, 0)), space: 2.0 }),
         vert_align: Some(VertAlign::Superscript),
         caps: Some(true),
         small_caps: Some(false),
@@ -695,4 +696,18 @@ fn ensure_empty_and_table_end_document_is_valid() {
     e.body.clear();
     let r = rt(&e);
     assert_eq!(r.body.len(), 1);
+}
+
+#[test]
+fn char_border_written_between_u_and_shd() {
+    let c =
+        CharProps { border: Some(Border::single(0.5)), underline: Some(Underline::Single), shading: Some(Rgb(0xFF, 0xFF, 0)), ..Default::default() };
+    let bytes = wordcraft_docx::write(&doc_with(vec![para_runs(&[("x", c)])])).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let bdr = r#"<w:bdr w:val="single" w:sz="4" w:space="0" w:color="auto"/>"#;
+    assert_eq!(xml.matches(bdr).count(), 1, "{xml}");
+    let at = xml.find(bdr).unwrap();
+    assert!(xml.find("<w:u ").unwrap() < at && at < xml.find("<w:shd ").unwrap(), "{xml}");
 }

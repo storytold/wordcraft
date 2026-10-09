@@ -250,6 +250,9 @@ pub struct CharProps {
     /// Character shading (background fill).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shading: Option<Rgb>,
+    /// Character border (`w:bdr`); `style: None` = explicitly no border.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border: Option<Border>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vert_align: Option<VertAlign>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -306,7 +309,7 @@ impl CharProps {
     /// Apply every `Some` field of `patch` on top of `self`.
     pub fn overlay(&mut self, patch: &CharProps) {
         overlay_fields!(self, patch; style, font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
-            shading, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl,
+            shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl,
             link, ins, del);
     }
     pub fn overlaid(mut self, patch: &CharProps) -> CharProps {

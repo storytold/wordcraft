@@ -189,7 +189,7 @@ impl<'a> Builder<'a> {
             face.id(),
             rc.strike || rc.double_strike || rc.link.is_some(),
         );
-        let key = (format!("{}|{:?}|{:?}|{:?}|{:?}|{}", key.0, rc.highlight, rc.shading, rc.ins, rc.del, rc.hidden), key.1, key.2);
+        let key = (format!("{}|{:?}|{:?}|{:?}|{:?}|{}|{:?}", key.0, rc.highlight, rc.shading, rc.ins, rc.del, rc.hidden, rc.border), key.1, key.2);
         if let Some(i) = self.style_index.get(&key) {
             return *i;
         }
