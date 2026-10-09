@@ -74,6 +74,52 @@ pub type Blocks = Vec<Arc<Block>>;
 /// Text boxes inside text boxes count (and show) this many levels deep.
 pub const MAX_TEXT_BOX_DEPTH: usize = 4;
 
+/// Bounds the work of expanding text boxes inside text boxes (layout, walks), whatever a document
+/// says: a box isn't expanded inside itself, nesting stops at [`MAX_TEXT_BOX_DEPTH`], an outermost
+/// box expands at most [`BoxBudget::MAX_NESTED`] boxes inside it, and one pass at most
+/// [`BoxBudget::MAX_TOTAL`] boxes in all. (A box whose shapes all show that same box, or chains of
+/// boxes each showing the next many times, would otherwise grow exponentially.)
+#[derive(Debug, Default)]
+pub struct BoxBudget {
+    open: Vec<u32>,
+    nested: usize,
+    total: usize,
+}
+
+impl BoxBudget {
+    /// Boxes expanded inside one outermost box.
+    pub const MAX_NESTED: usize = 64;
+    /// Boxes expanded in one pass (a layout, a walk).
+    pub const MAX_TOTAL: usize = 20_000;
+
+    /// Start expanding text box story `id`; false if it mustn't be (pair a true with `leave`).
+    pub fn enter(&mut self, id: u32) -> bool {
+        if self.open.contains(&id) || self.open.len() >= MAX_TEXT_BOX_DEPTH || self.total >= Self::MAX_TOTAL {
+            return false;
+        }
+        if self.open.is_empty() {
+            self.nested = 0;
+        } else if self.nested >= Self::MAX_NESTED {
+            return false;
+        } else {
+            self.nested += 1;
+        }
+        self.total += 1;
+        self.open.push(id);
+        true
+    }
+
+    /// Done expanding the box last entered.
+    pub fn leave(&mut self) {
+        self.open.pop();
+    }
+
+    /// Boxes expanded so far.
+    pub fn total(&self) -> usize {
+        self.total
+    }
+}
+
 pub fn para_block(p: Paragraph) -> Arc<Block> {
     Arc::new(Block::Para(p))
 }
@@ -637,35 +683,40 @@ impl Document {
     }
 
     /// Every inline object in reading order: the body's, with each text box's objects where the
-    /// box is (nested boxes too, a few levels deep).
+    /// box is (nested boxes too, within a [`BoxBudget`]).
     pub fn objects_in_reading_order(&self, f: &mut dyn FnMut(&InlineObject)) {
-        self.walk_objects(&self.body, 0, f);
+        self.walk_objects(&self.body, &mut BoxBudget::default(), f);
     }
 
     /// The footnotes and endnotes referenced inside text box story `part` (nested boxes too), in
     /// reading order.
     pub fn notes_in_text_box(&self, part: u32) -> Vec<u32> {
         let mut out = Vec::new();
-        if let Some(p) = self.parts.get(&part).filter(|p| p.kind == PartKind::TextBox) {
-            self.walk_objects(&p.blocks, 1, &mut |o| {
+        let mut budget = BoxBudget::default();
+        if let Some(p) = self.parts.get(&part).filter(|p| p.kind == PartKind::TextBox)
+            && budget.enter(part)
+        {
+            self.walk_objects(&p.blocks, &mut budget, &mut |o| {
                 if let InlineObject::NoteRef { id, .. } = o {
                     out.push(*id);
                 }
             });
+            budget.leave();
         }
         out
     }
 
-    fn walk_objects(&self, blocks: &Blocks, depth: usize, f: &mut dyn FnMut(&InlineObject)) {
+    fn walk_objects(&self, blocks: &Blocks, budget: &mut BoxBudget, f: &mut dyn FnMut(&InlineObject)) {
         for b in blocks {
             edit::each_para(b, 0, &mut |p| {
                 for o in &p.objects {
                     f(o);
                     if let InlineObject::Shape { story: Some(id), .. } = o
-                        && depth < MAX_TEXT_BOX_DEPTH
                         && let Some(part) = self.parts.get(id).filter(|p| p.kind == PartKind::TextBox)
+                        && budget.enter(*id)
                     {
-                        self.walk_objects(&part.blocks, depth + 1, f);
+                        self.walk_objects(&part.blocks, budget, f);
+                        budget.leave();
                     }
                 }
             });

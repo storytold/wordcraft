@@ -3,7 +3,7 @@
 //! give a page rect (points) and get back where the drag puts it, so pictures, shapes, text boxes
 //! and anything else with a page rect share it.
 
-use egui::{Color32, CursorIcon, Painter, Pos2, Stroke, pos2, vec2};
+use egui::{CursorIcon, Painter, Pos2, Stroke, pos2, vec2};
 use wordcraft_geom::Rect;
 
 use crate::theme::Tokens;
@@ -96,11 +96,10 @@ pub fn paint(painter: &Painter, t: &Tokens, f: egui::Rect, dashed: bool, with_ha
     if !with_handles {
         return;
     }
-    let shadow = Color32::from_black_alpha(if t.dark { 90 } else { 40 });
     for h in handles(f) {
         let c = h.at(f);
-        painter.circle_filled(c + vec2(0.0, 0.75), HANDLE_R + 1.0, shadow);
-        painter.circle(c, HANDLE_R, Color32::WHITE, Stroke::new(1.25, t.accent));
+        painter.circle_filled(c + vec2(0.0, 0.75), HANDLE_R + 1.0, t.handle_shadow);
+        painter.circle(c, HANDLE_R, t.handle, Stroke::new(1.25, t.accent));
     }
 }
 

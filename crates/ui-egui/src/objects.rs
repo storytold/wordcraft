@@ -19,6 +19,8 @@ use crate::theme::Tokens;
 
 /// The band along a text box's border that grabs the box rather than its text, screen points.
 const EDGE: f32 = 5.0;
+/// How opaque the drag preview of an object's pixels is (0–255).
+const PREVIEW_OPACITY: u8 = 170;
 /// Arrow-key nudge, points (Ctrl/Alt: fine).
 const NUDGE: f32 = 6.0;
 const NUDGE_FINE: f32 = 1.0;
@@ -146,7 +148,7 @@ pub fn paint(app: &WordApp, painter: &Painter, t: &Tokens, layout: &DocLayout, p
             let r = d.object.rect;
             let (w, h) = (pg.w.max(1.0), pg.h.max(1.0));
             let uv = Rect::from_min_max(egui::pos2(r.x / w, r.y / h), egui::pos2(r.right() / w, r.bottom() / h));
-            painter.image(tex.id(), to, uv, Color32::from_white_alpha(170));
+            painter.image(tex.id(), to, uv, Color32::from_white_alpha(PREVIEW_OPACITY));
         }
         frame::paint(painter, t, to, false, false);
         return;

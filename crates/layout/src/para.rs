@@ -1,6 +1,7 @@
 //! Paragraph layout: resolve runs, shape them into clusters, break lines (first-fit, as word
 //! processors do), place tabs, list labels and alignment.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use wordcraft_doc::numbering::{Level, LevelSuffix};
@@ -593,12 +594,12 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
         .unwrap_or(14.0)
         .max(1.0);
     // The rest of the current row: spans on the far side of floating objects, left to right.
-    let mut row_rest: Vec<(f32, f32)> = Vec::new();
+    let mut row_rest: VecDeque<(f32, f32)> = VecDeque::new();
     let mut row_first = 0usize;
     loop {
         let beside = !row_rest.is_empty();
-        let (left, right_edge) = if beside {
-            row_rest.remove(0)
+        let (left, right_edge) = if let Some(span) = row_rest.pop_front() {
+            span
         } else {
             // Flow around floating objects: the spans beside them, or below them.
             let mut guard = 0;
@@ -609,10 +610,9 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
                 {
                     lo = first_left.max(rp.indent_left) + dw;
                 }
-                match row_spans(env.exclusions, top, est_h, lo, base_right) {
-                    Ok(mut spans) => {
-                        let (a, b) = spans.remove(0);
-                        row_rest = spans;
+                match row_spans(env.exclusions, top, est_h, lo, base_right).map(|mut spans| (spans.pop_front(), spans)) {
+                    Ok((Some((a, b)), rest)) => {
+                        row_rest = rest;
                         row_first = lines.len();
                         break (a, b.max(a + 12.0));
                     }
@@ -620,7 +620,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
                         top = below;
                         guard += 1;
                     }
-                    Err(_) => {
+                    Ok((None, _)) | Err(_) => {
                         row_first = lines.len();
                         break (lo, base_right.max(lo + 12.0));
                     }
@@ -994,10 +994,10 @@ const MIN_SPAN: f32 = 36.0;
 /// The spans of a row at `top` (about `h` tall) between `lo` and `hi` that text can use around
 /// the exclusions, left to right (Square wrapping uses both sides of an object). `Err(y)`: none
 /// here, try again at `y` (below what's in the way).
-fn row_spans(exclusions: &[Exclusion], top: f32, h: f32, lo: f32, hi: f32) -> Result<Vec<(f32, f32)>, f32> {
+fn row_spans(exclusions: &[Exclusion], top: f32, h: f32, lo: f32, hi: f32) -> Result<VecDeque<(f32, f32)>, f32> {
     let here: Vec<&Exclusion> = exclusions.iter().filter(|e| e.bottom > top && e.top < top + h && e.right > lo && e.left < hi).collect();
     if here.is_empty() {
-        return Ok(vec![(lo, hi)]);
+        return Ok(VecDeque::from([(lo, hi)]));
     }
     if let Some(below) = here.iter().filter(|e| e.top_bottom).map(|e| e.bottom).reduce(f32::max) {
         return Err(below);
@@ -1014,7 +1014,7 @@ fn row_spans(exclusions: &[Exclusion], top: f32, h: f32, lo: f32, hi: f32) -> Re
         // Nothing wide enough: the line goes below the first object that ends.
         return Err(here.iter().map(|e| e.bottom).reduce(f32::min).unwrap_or(top));
     }
-    Ok(spans)
+    Ok(spans.into())
 }
 
 /// Word's default hyphenation zone (0.25"), points.

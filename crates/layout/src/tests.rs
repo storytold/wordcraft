@@ -738,3 +738,65 @@ fn footnotes_inside_text_boxes_are_numbered_and_placed() {
     let nums = note_numbers(&d);
     assert_eq!((nums.get(&in_box), nums.get(&after)), (Some(&1), Some(&2)));
 }
+
+/// A document whose text box `ids[k]` holds `fan` shapes showing `ids[k + 1]` (the last one shows
+/// itself, `fan` times): crafted, since the app never builds these.
+fn box_fan_out(levels: usize, fan: usize) -> (Document, Vec<u32>) {
+    let (w, h) = (40.0, 20.0);
+    let mut d = Document::from_text("Body");
+    let ids: Vec<u32> = (0..levels)
+        .map(|k| {
+            d.add_part(
+                wordcraft_doc::PartKind::TextBox,
+                vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("Level {k}"), Default::default()))],
+            )
+        })
+        .collect();
+    let shape = |story| InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::TextBox,
+        w,
+        h,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Default::default(),
+        story: Some(story),
+    };
+    for (k, id) in ids.iter().enumerate() {
+        let next = *ids.get(k + 1).unwrap_or(id);
+        for _ in 0..fan {
+            d.insert_object(&Pos { story: StoryRef::Part(*id), path: Path::top(0), off: 0 }, shape(next), &Default::default()).unwrap();
+        }
+    }
+    d.insert_object(&Pos::body(0, 0), shape(ids[0]), &Default::default()).unwrap();
+    (d, ids)
+}
+
+#[test]
+fn self_showing_and_fanned_out_text_boxes_stay_bounded() {
+    // A box whose 30 shapes all show itself: laid out once.
+    let (d, ids) = box_fan_out(1, 30);
+    assert_eq!(lay(&d).text_boxes, 1);
+    // Chains of boxes each showing the next 30 times (30^4 expansions unbounded).
+    let (d, ids2) = box_fan_out(5, 30);
+    let t0 = std::time::Instant::now();
+    let l = lay(&d);
+    assert!(l.text_boxes <= 1 + wordcraft_doc::BoxBudget::MAX_NESTED, "{} boxes laid out", l.text_boxes);
+    assert!(t0.elapsed().as_secs_f64() < 5.0, "{:?}", t0.elapsed());
+    // Footnote numbering's walk is bounded the same way.
+    let mut visits = 0usize;
+    d.objects_in_reading_order(&mut |_| visits += 1);
+    assert!(visits < 5_000, "{visits} visits");
+    let _ = (ids, ids2);
+}
+
+#[test]
+fn a_text_box_inside_a_text_box_still_shows_its_text() {
+    let mut d = Document::from_text("Body");
+    let outer = text_box(&mut d, 0, "Outer ", 300.0, 200.0, Default::default());
+    let e = d.end_of(StoryRef::Part(outer));
+    let inner = text_box_at(&mut d, &e, "Inner", 120.0, 40.0, Default::default());
+    let l = lay(&d);
+    assert_eq!(l.text_boxes, 2);
+    assert!(l.caret(&d.start_of(StoryRef::Part(inner))).is_some(), "the inner box's text is laid out");
+}

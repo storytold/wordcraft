@@ -170,6 +170,8 @@ pub struct DocLayout {
     pub index: HashMap<(StoryRef, Path), Vec<(usize, usize)>>,
     /// Layout time, milliseconds.
     pub ms: f64,
+    /// Text box stories laid out (each time a box's text was).
+    pub text_boxes: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -237,6 +239,8 @@ struct Ctx<'a> {
     fields: FieldCtx,
     notes_hash: u64,
     numbers: HashMap<u32, Arc<ParaLayout>>,
+    /// Bounds laying out text boxes inside text boxes, for the whole layout.
+    boxes: wordcraft_doc::BoxBudget,
 }
 
 impl Ctx<'_> {
@@ -656,6 +660,7 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
         },
         notes_hash,
         numbers: HashMap::new(),
+        boxes: wordcraft_doc::BoxBudget::default(),
     };
     let sections = doc.sections();
     let web = opts.view != ViewMode::Print;
@@ -809,7 +814,7 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
             }
         }
     }
-    DocLayout { pages, index, ms: now_ms() - t0 }
+    DocLayout { pages, index, ms: now_ms() - t0, text_boxes: ctx.boxes.total() }
 }
 
 fn item_bottom(y: f32, para: &ParaLayout, l0: usize, l1: usize) -> Option<f32> {
@@ -918,11 +923,13 @@ fn place_objects(
                 wrap: float.wrap,
                 origin: Point::new(frame.col_x, frame.para_y),
             });
-            let Some((id, blocks)) = text_box.filter(|_| depth < wordcraft_doc::MAX_TEXT_BOX_DEPTH) else { continue };
+            // Its text, unless the box budget says no (a box inside itself, too deep, too many).
+            let Some((id, blocks)) = text_box.filter(|(id, _)| ctx.boxes.enter(*id)) else { continue };
             let (inner, _) = layout_box(ctx, StoryRef::Part(id), &blocks, &[], (rect.w - 2.0 * BOX_INSET_X).max(12.0), None, depth + 1, None);
+            ctx.boxes.leave();
             let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
-            // Text that doesn't fit is hidden, as in Word.
-            for mut it in fit_box(inner, rect.h - BOX_INSET_Y) {
+            // Text that doesn't fit inside the margins is hidden, as in Word.
+            for mut it in fit_box(inner, rect.h - 2.0 * BOX_INSET_Y) {
                 it.translate(rect.x + BOX_INSET_X, rect.y + BOX_INSET_Y);
                 layer.push(it);
             }
