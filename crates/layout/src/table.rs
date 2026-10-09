@@ -18,12 +18,17 @@ pub struct RowLayout {
 pub struct TableLayout {
     /// Table x offset within the column.
     pub x: f32,
-    #[allow(dead_code)]
     pub width: f32,
     pub rows: Vec<RowLayout>,
 }
 
 const DEFAULT_MARGINS: [f32; 4] = [0.0, 5.4, 0.0, 5.4];
+
+/// The first cell's left margin: how far its text sits inside the table's edge.
+pub(crate) fn first_cell_left_margin(t: &Table) -> f32 {
+    let def = t.props.cell_margins.unwrap_or(DEFAULT_MARGINS);
+    t.rows.first().and_then(|r| r.cells.first()).and_then(|c| c.props.margins).unwrap_or(def)[1]
+}
 
 fn style_parts(ctx: &Ctx, t: &Table) -> Option<TableStyleParts> {
     let id = t.props.style.as_deref()?;
@@ -77,7 +82,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             let border = first_cell.and_then(|c| c.props.borders.and_then(|b| b.left)).or(tborders.and_then(|b| b.left));
             indent + border.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0) / 2.0)
         }
-        _ => indent - first_cell.and_then(|c| c.props.margins).unwrap_or(margins_def)[1],
+        _ => indent - first_cell_left_margin(t),
     };
     let nrows = t.rows.len();
     let header_rows = t.props.look.header_row;

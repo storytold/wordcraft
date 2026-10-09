@@ -601,6 +601,29 @@ pub struct TableProps {
     pub shading: Option<Rgb>,
     /// Alternative text.
     pub caption: Option<String>,
+    /// Floating placement (`w:tblpPr`); `None` for a table in the text flow.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub float: Option<TableFloat>,
+}
+
+/// Where a floating table sits; the text after it wraps around it.
+#[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TableFloat {
+    /// What `x` is measured from: the column (`Column`), the margin or the page.
+    pub h_rel: crate::para::Anchor,
+    /// What `y` is measured from: the text where the table stands (`Paragraph`), the margin or
+    /// the page.
+    pub v_rel: crate::para::Anchor,
+    /// Offsets, points (used when the matching alignment is `None`).
+    pub x: f32,
+    pub y: f32,
+    pub h_align: Option<crate::para::FloatAlign>,
+    pub v_align: Option<crate::para::FloatAlign>,
+    /// Distance from surrounding text: left, top, right, bottom (points).
+    pub dist: [f32; 4],
+    /// Whether it may overlap other floating tables (`w:tblOverlap`); Word's default is yes.
+    pub overlap: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

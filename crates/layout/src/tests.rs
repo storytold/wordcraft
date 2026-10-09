@@ -679,3 +679,37 @@ fn compatibility_mode_decides_where_a_table_s_edge_sits() {
     assert!((cell_text_x(15) - (72.0 + 0.25 + 5.4)).abs() < 0.01, "{}", cell_text_x(15));
     assert!((cell_text_x(12) - 72.0).abs() < 0.01, "{}", cell_text_x(12));
 }
+
+#[test]
+fn floating_tables_take_no_room_and_text_wraps_beside_them() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::TableFloat;
+    let mut d = Document::from_text("Body text beside the narrow table.");
+    let cell = |t: &mut Table, text: &str| {
+        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))]
+    };
+    let mut wide = Table::new(1, 1, 468.0);
+    cell(&mut wide, "Wide");
+    wide.props.float = Some(TableFloat { h_rel: Anchor::Margin, v_rel: Anchor::Paragraph, overlap: false, ..Default::default() });
+    let mut narrow = Table::new(1, 1, 200.0);
+    cell(&mut narrow, "Narrow");
+    narrow.props.float =
+        Some(TableFloat { h_rel: Anchor::Column, v_rel: Anchor::Paragraph, dist: [9.0, 0.0, 9.0, 0.0], overlap: false, ..Default::default() });
+    d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(wide)).unwrap();
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(narrow)).unwrap();
+    let l = lay(&d);
+    let lines: Vec<(f32, f32, f32)> = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|i| if let Placed::Lines { x, y, para, .. } = i { Some((*x, *y, para.lines[0].left)) } else { None })
+        .collect();
+    let [(wx, wy, _), (nx, ny, _), (bx, by, bleft)] = lines.as_slice() else { panic!("{lines:?}") };
+    // The wide table stands where the text is; the narrow one may not overlap it, so it goes
+    // right below, keeping its 9pt from the text's left edge.
+    assert!(*wy >= 72.0 && *wy < 80.0, "wide at {wy}");
+    assert!(*ny > *wy + 10.0, "narrow at {ny}, below the wide table at {wy}");
+    assert!((nx - wx - 9.0).abs() < 0.01, "narrow text at {nx}, wide text at {wx}");
+    // The paragraph doesn't wait below them: it runs beside the narrow table, level with it.
+    assert!((by - ny).abs() < 2.0, "body at {by}, narrow table text at {ny}");
+    assert!(bx + bleft > nx + 200.0, "body text at {}, right of the narrow table", bx + bleft);
+}
