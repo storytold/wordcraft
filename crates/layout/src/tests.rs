@@ -2680,3 +2680,24 @@ fn a_split_row_moves_shading_below_the_cut_with_it() {
     let nested = moved.get(1).copied().unwrap_or_default();
     assert!(nested.0 > 0.0 && (nested.1 - 50.0).abs() < 0.01, "the nested shading keeps its place and size: {moved:?}");
 }
+
+#[test]
+fn multiple_line_spacing_adds_its_space_below_the_text() {
+    use wordcraft_doc::props::LineSpacing;
+    let first_line = |spacing: LineSpacing| {
+        let mut d = Document::from_text(&"Words that wrap onto a second line of text. ".repeat(4));
+        if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+            p.props.line_spacing = Some(spacing);
+            p.props.space_before = Some(0.0);
+        }
+        let l = lay(&d);
+        let Some(Placed::Lines { para, y, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        (*y, para.lines[0].baseline - para.lines[0].top, para.lines[1].baseline - para.lines[0].baseline)
+    };
+    let (y1, base1, pitch1) = first_line(LineSpacing::Multiple(1.0));
+    let (y2, base2, pitch2) = first_line(LineSpacing::Multiple(1.5));
+    // Word: the first baseline stays one ascent below the paragraph's top; only the pitch grows.
+    assert_eq!(y1, y2);
+    assert!((base2 - base1).abs() < 0.01, "first baseline {base2} with 1.5 spacing, {base1} single");
+    assert!((pitch2 - pitch1 * 1.5).abs() < 0.01, "pitch {pitch2} vs {pitch1}");
+}
