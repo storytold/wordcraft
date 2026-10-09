@@ -349,3 +349,123 @@ fn caret_navigation() {
     run(&mut s, "caret.left", json!({}));
     assert_eq!(s.sel.focus.off, 10);
 }
+
+fn para_style(s: &Session, i: usize) -> Option<String> {
+    s.doc.para_at(&Pos::body(i, 0)).and_then(|p| p.props.style.clone())
+}
+
+#[test]
+fn styles_apply_by_name() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Title text"}));
+    run(&mut s, "styles.apply", json!({"style": "Heading 1"}));
+    assert_eq!(para_style(&s, 0).as_deref(), Some("Heading1"));
+    assert_eq!(s.undo_label(), Some("Apply Style"));
+    assert!(s.dirty);
+}
+
+#[test]
+fn styles_apply_pane_is_not_an_edit() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    s.dirty = false;
+    let undo = s.undo_labels();
+    s.view.styles_pane = false;
+    assert_eq!(run(&mut s, "styles.apply", json!({})), json!({"pane": true}));
+    assert!(s.view.styles_pane);
+    // Shows, never toggles.
+    run(&mut s, "styles.apply", json!({}));
+    assert!(s.view.styles_pane);
+    assert_eq!(s.undo_labels(), undo);
+    assert!(!s.dirty);
+    // Works on a read-only document.
+    s.doc.settings.protection = Some("readOnly".into());
+    s.view.styles_pane = false;
+    run(&mut s, "styles.apply", json!({}));
+    assert!(s.view.styles_pane);
+}
+
+#[test]
+fn styles_apply_rejects_bad_style_params() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    let undo = s.undo_labels();
+    let before = text(&s);
+    for bad in [json!(5), json!(null), json!([]), json!({}), json!(""), json!("   "), json!(true)] {
+        let r = s.run("styles.apply", &json!({"style": bad}));
+        assert!(matches!(r, Err(crate::CmdError::Params(_))), "{bad}: {r:?}");
+    }
+    assert_eq!(s.undo_labels(), undo);
+    assert_eq!(text(&s), before);
+    assert_eq!(para_style(&s, 0), None);
+}
+
+#[test]
+fn styles_apply_unknown_style_changes_nothing() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    let undo = s.undo_labels();
+    let doc = s.doc.clone();
+    assert!(s.run("styles.apply", &json!({"style": "No Such Style"})).is_err());
+    assert_eq!(s.undo_labels(), undo);
+    assert_eq!(s.doc, doc);
+    assert!(!s.can_redo());
+}
+
+#[test]
+fn styles_apply_undo_redo() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    run(&mut s, "styles.apply", json!({"style": "Heading 2"}));
+    assert_eq!(para_style(&s, 0).as_deref(), Some("Heading2"));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(para_style(&s, 0), None);
+    assert_eq!(text(&s), "Hello");
+    run(&mut s, "edit.redo", json!({}));
+    assert_eq!(para_style(&s, 0).as_deref(), Some("Heading2"));
+}
+
+#[test]
+fn styles_apply_character_style() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "make this strong"}));
+    run(&mut s, "select.text", json!({"text": "this"}));
+    run(&mut s, "styles.apply", json!({"style": "Strong"}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    assert_eq!(p.props_of_char(6).style.as_deref(), Some("Strong"));
+    assert_eq!(p.props_of_char(0).style, None);
+    // A character style leaves the paragraph style alone.
+    assert_eq!(p.props.style, None);
+}
+
+#[test]
+fn styles_apply_multi_paragraph_selection() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "One"}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Two"}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Three"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "styles.apply", json!({"style": "Quote"}));
+    for i in 0..3 {
+        assert_eq!(para_style(&s, i).as_deref(), Some("Quote"), "paragraph {i}");
+    }
+    // One undo step for the whole selection.
+    run(&mut s, "edit.undo", json!({}));
+    for i in 0..3 {
+        assert_eq!(para_style(&s, i), None, "paragraph {i}");
+    }
+}
+
+#[test]
+fn styles_apply_rejected_on_protected_document() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    s.doc.settings.protection = Some("readOnly".into());
+    let undo = s.undo_labels();
+    let r = s.run("styles.apply", &json!({"style": "Heading 1"}));
+    assert!(matches!(r, Err(crate::CmdError::Disabled(_))), "{r:?}");
+    assert_eq!(para_style(&s, 0), None);
+    assert_eq!(s.undo_labels(), undo);
+}
