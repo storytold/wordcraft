@@ -21,6 +21,9 @@ use crate::wire::Call;
 pub const PROTOCOL_VERSION: i64 = 3;
 /// Paragraph style for bibliography entries (the name Word's Zotero plugin uses).
 pub const BIB_STYLE: &str = "Bibliography";
+/// The text a new field holds until Zotero writes its result. Zotero reads a new field back
+/// before filling it, and takes an empty bibliography for one the user deleted (and unlinks it).
+const PLACEHOLDER: &str = "{Citation}";
 /// Where Zotero's placeholder links point.
 const PLACEHOLDER_URL: &str = "https://www.zotero.org/?";
 
@@ -386,8 +389,9 @@ impl Bridge {
             .doc
             .insert_object(&start, InlineObject::FieldStart { instr: fields::PREFIX.to_string(), locked: false }, &base)
             .map_err(|e| e.to_string())?;
-        if let Some(frag) = content {
-            cur = s.doc.insert_fragment(&cur, &frag).map_err(|e| e.to_string())?;
+        match content {
+            Some(frag) => cur = s.doc.insert_fragment(&cur, &frag).map_err(|e| e.to_string())?,
+            None => cur = s.doc.insert_text(&cur, PLACEHOLDER, &base).map_err(|e| e.to_string())?,
         }
         let after = s.doc.insert_object(&cur, InlineObject::FieldEnd, &base).map_err(|e| e.to_string())?;
         s.sel = Selection::caret(after);

@@ -511,3 +511,22 @@ fn a_note_with_other_text_stays_when_its_citation_leaves() {
     assert!(z.call("Document_convert", json!([1, "x", [], [], 0])).is_err());
     assert!(z.call("Document_convert", json!([1, [999], [], [1], 1])).is_err());
 }
+
+/// Zotero reads a new bibliography field back before filling it, and unlinks it when it is
+/// empty (it takes that for a bibliography the user deleted). Seen with Zotero 10: Add/Edit
+/// Bibliography did nothing.
+#[test]
+fn a_new_field_is_never_empty_so_zotero_keeps_a_new_bibliography() {
+    let mut z = Z::new("Text. ", 6);
+    z.begin();
+    let r = z.ok("Document_insertField", json!([1, "ReferenceMark", 0]));
+    let id = r[0].as_u64().unwrap();
+    z.ok("Field_setCode", json!([1, id, "TEMP"]));
+    z.ok("Field_setCode", json!([1, id, "BIBL {} CSL_BIBLIOGRAPHY"]));
+    let text = z.ok("Field_getText", json!([1, id]));
+    assert!(!text.as_str().unwrap().is_empty(), "Zotero would unlink this bibliography");
+    // Zotero's result replaces the placeholder.
+    z.ok("Field_setText", json!([1, id, r"{\rtf Doe, J. (2020).\par}", true]));
+    z.ok("Document_complete", json!([1]));
+    assert_eq!(z.text(), "Text. Doe, J. (2020).");
+}

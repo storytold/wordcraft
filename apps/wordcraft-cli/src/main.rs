@@ -20,10 +20,11 @@ USAGE:
   wordcraft-cli commands [--json]             list every command
   wordcraft-cli parity [--markdown]           feature-catalog parity
   wordcraft-cli mcp [--connect HOST:PORT]     MCP server on stdio (headless, or bridged to the app)
-  wordcraft-cli zotero <command> <file> [--save OUT] [--trace] [--port P]
+  wordcraft-cli zotero <command> <file> [--cmd 'id={json}' …] [--save OUT] [--trace] [--port P]
                                               run a Zotero command on a document (Zotero must be
                                               running): addEditCitation, addEditBibliography,
                                               addNote, refresh, removeCodes, setDocPrefs
+                                              (--cmd runs first, e.g. --cmd caret.docEnd)
   wordcraft-cli --version
 ";
 
@@ -159,6 +160,13 @@ fn run(args: &[String]) -> Result<(), String> {
             let command = wordcraft_zotero::Command::from_name(&name).ok_or_else(|| format!("unknown Zotero command `{name}`\n\n{USAGE}"))?;
             let file = pos(1)?;
             let mut s = open(&file)?;
+            for spec in rest.iter().zip(rest.iter().skip(1)).filter(|(a, _)| *a == "--cmd").map(|(_, v)| v) {
+                let (id, params) = match spec.split_once('=') {
+                    Some((id, p)) => (id.to_string(), serde_json::from_str::<Value>(p).map_err(|e| format!("{id}: bad JSON params: {e}"))?),
+                    None => (spec.clone(), json!({})),
+                };
+                s.run(&id, &params).map_err(|e| format!("{id}: {e}"))?;
+            }
             let mut opts = wordcraft_zotero::client::Options::default();
             if let Some(p) = arg_value(&rest, "--port") {
                 opts.addr.set_port(p.parse().map_err(|_| format!("bad port `{p}`"))?);
