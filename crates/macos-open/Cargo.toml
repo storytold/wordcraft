@@ -1,0 +1,23 @@
+[package]
+name = "wordcraft-macos-open"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Finder Open Documents (odoc Apple Event) support for the WordCraft macOS app"
+
+# The workspace lints, except that `unsafe_code` is `deny` rather than `forbid`: Objective-C
+# messaging needs `unsafe`, allowed only in this crate's macOS-only `imp` module.
+[lints.rust]
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+too_many_arguments = "allow"
+type_complexity = "allow"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSObject", "NSString"] }

@@ -21,6 +21,12 @@ struct App(WordApp, Option<WindowGeometry>);
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        for path in wordcraft_macos_open::take_pending() {
+            match self.0.run("file.open", serde_json::json!({"path": path})) {
+                Ok(_) => self.0.ui.backstage = false,
+                Err(e) => self.0.status(format!("Couldn't open {path}: {e}")),
+            }
+        }
         self.0.logic(ctx);
         let prev = self.0.ui.window;
         self.0.ui.window = ctx.input(|i| WindowGeometry::track(prev, i.viewport(), i.viewport_rect().size()));
@@ -188,11 +194,16 @@ fn main() -> eframe::Result {
     if let Some(window) = restored {
         options.viewport = window.apply(options.viewport);
     }
+    wordcraft_macos_open::install();
     eframe::run_native(
         "WordCraft",
         options,
         Box::new(move |cc| {
             let doc = if sample { wordcraft_engine::sample::sample_document() } else { wordcraft_doc::Document::new() };
+            {
+                let ctx = cc.egui_ctx.clone();
+                wordcraft_macos_open::set_waker(move || ctx.request_repaint());
+            }
             let mut app = WordApp::new(Session::new(doc), services());
             load_prefs(&mut app);
             app.ui.window = restored;

@@ -4851,6 +4851,7 @@ dependencies = [
  "winresource",
  "wordcraft-doc",
  "wordcraft-engine",
+ "wordcraft-macos-open",
  "wordcraft-ui-egui",
 ]
 
@@ -4956,6 +4957,14 @@ dependencies = [
  "wordcraft-fonts",
  "wordcraft-geom",
  "wordcraft-proof",
+]
+
+[[package]]
+name = "wordcraft-macos-open"
+version = "0.3.0"
+dependencies = [
+ "objc2 0.6.5",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]

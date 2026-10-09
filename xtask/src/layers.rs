@@ -34,6 +34,8 @@ impl Class {
 /// prefix.
 pub const TABLE: &[(&str, Class)] = &[
     ("geom", Class::Layer(0)),
+    // Finder open-document events for the macOS app (no workspace deps).
+    ("macos-open", Class::Standalone),
     ("doc", Class::Layer(1)),
     ("fonts", Class::Layer(1)),
     ("proof", Class::Layer(1)),
