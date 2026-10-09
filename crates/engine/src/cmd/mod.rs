@@ -162,6 +162,7 @@ pub fn split_para(s: &mut Session, at: &Pos) -> Result<Pos, CmdError> {
         para.touch();
         return Ok(at.clone());
     }
+    let mark_revs = s.doc.para_at(at).map(|p| (p.mark.ins, p.mark.del)).unwrap_or_default();
     let new = s.doc.split_paragraph(at)?;
     if at_end && let Some(st) = style.as_deref() {
         let next = s.doc.styles.get(st).and_then(|x| x.next.clone());
@@ -179,6 +180,11 @@ pub fn split_para(s: &mut Session, at: &Pos) -> Result<Pos, CmdError> {
         let rid = new_revision(s, RevisionKind::Insert);
         let p = s.doc.para_mut(at.story, &at.path)?;
         p.mark.ins = Some(rid);
+        // The paragraph after the split ends with the original mark: it keeps that mark's
+        // revisions, never those of the text at the split point (which would credit the split
+        // to the author who inserted that text).
+        let t = s.doc.para_mut(new.story, &new.path)?;
+        (t.mark.ins, t.mark.del) = mark_revs;
     }
     Ok(new)
 }

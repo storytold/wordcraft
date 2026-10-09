@@ -269,6 +269,29 @@ fn tracked_delete_keeps_another_authors_deletion() {
 }
 
 #[test]
+fn tracked_split_gives_the_new_paragraph_mark_to_its_author() {
+    // Ben presses Enter at the end of Ana's insertion, and in the middle of it.
+    for off in [None, Some(8)] {
+        let mut s = s();
+        run(&mut s, "text.insert", json!({"text": "alpha"}));
+        run(&mut s, "review.trackChanges", json!({"value": true}));
+        s.author = "Ana".into();
+        run(&mut s, "text.insert", json!({"text": " beta"}));
+        s.author = "Ben".into();
+        if let Some(off) = off {
+            run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [0], "off": off}}));
+        }
+        run(&mut s, "text.newParagraph", json!({}));
+        let head = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+        let tail = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap();
+        assert_eq!(author_of(&s, head.mark.ins).as_deref(), Some("Ben"), "split at {off:?}: the new paragraph mark is Ben's");
+        // The second paragraph ends with the original mark, which nobody inserted (not Ana).
+        assert_eq!(tail.mark.ins, None, "split at {off:?}");
+        assert_eq!(tail.mark.del, None, "split at {off:?}");
+    }
+}
+
+#[test]
 fn comments() {
     let mut s = s();
     run(&mut s, "text.insert", json!({"text": "Some text here"}));
