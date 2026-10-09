@@ -349,3 +349,25 @@ fn caret_navigation() {
     run(&mut s, "caret.left", json!({}));
     assert_eq!(s.sel.focus.off, 10);
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn html_pictures_load_relative_to_the_file() {
+    // Issue #98: `<img src="logo.png">` beside an HTML file is embedded when it is opened.
+    let dir = std::env::temp_dir().join(format!("wordcraft-html-img-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("img")).unwrap();
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(4, 2, image::Rgba([10, 20, 30, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    std::fs::write(dir.join("img/my logo.png"), &png).unwrap();
+    std::fs::write(dir.join("secret.txt"), b"not a picture").unwrap();
+    let html = r#"<p><img src="img/my%20logo.png" alt="Logo"></p><p><img src="secret.txt" alt="T"></p><p><img src="http://example.com/x.png" alt="Web"></p>"#;
+    std::fs::write(dir.join("page.html"), html).unwrap();
+    let doc = crate::io::open_path(&dir.join("page.html"));
+    let _ = std::fs::remove_dir_all(&dir);
+    let doc = doc.unwrap();
+    assert_eq!(doc.media.len(), 1);
+    let text = doc.plain_text(StoryRef::Body);
+    assert!(!text.contains("Logo") && text.contains('T') && text.contains("Web"), "{text:?}");
+}

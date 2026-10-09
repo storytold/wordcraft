@@ -47,7 +47,35 @@ pub fn open_path(path: &std::path::Path) -> Result<Document, String> {
         return Err(format!("{}: file is larger than 2 GB", path.display()));
     }
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    open_bytes(&path.to_string_lossy(), &bytes)
+    let name = path.to_string_lossy();
+    if matches!(ext_of(&name).as_str(), "html" | "htm" | "xhtml") {
+        // Pictures referenced by a relative path load from beside the HTML file.
+        let dir = path.parent().unwrap_or(std::path::Path::new(""));
+        let mut doc = wordcraft_formats::html::import_with(&wordcraft_formats::html::decode(&bytes), &|src| local_image(dir, src));
+        doc.ensure_nonempty();
+        return Ok(doc);
+    }
+    open_bytes(&name, &bytes)
+}
+
+/// Bytes of the picture an HTML `src` names by a path relative to `dir`. URLs (`http:`, `file:`…)
+/// and absolute paths are not followed.
+#[cfg(not(target_arch = "wasm32"))]
+fn local_image(dir: &std::path::Path, src: &str) -> Option<Vec<u8>> {
+    let src = src.split(['#', '?']).next().unwrap_or("");
+    if src.is_empty() || src.starts_with("//") || src.split_once(':').is_some_and(|(scheme, _)| !scheme.contains('/')) {
+        return None;
+    }
+    let rel = String::from_utf8(wordcraft_formats::model::percent_decode(src)).ok()?;
+    let rel = std::path::Path::new(&rel);
+    if rel.has_root() {
+        return None;
+    }
+    let path = dir.join(rel);
+    if std::fs::metadata(&path).ok()?.len() > 256 << 20 {
+        return None;
+    }
+    std::fs::read(path).ok()
 }
 
 #[cfg(target_arch = "wasm32")]
