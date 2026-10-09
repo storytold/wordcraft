@@ -82,6 +82,16 @@ const CT_WML: &str = "application/vnd.openxmlformats-officedocument.wordprocessi
 
 /// Write a `.docx` package.
 pub fn write(doc: &Document) -> Result<Vec<u8>, DocxError> {
+    // A range field must be whole in the file: drop markers that lost their partner in editing.
+    let balanced;
+    let doc = if doc.has_unbalanced_field_ranges() {
+        let mut d = doc.clone();
+        d.balance_field_ranges();
+        balanced = d;
+        &balanced
+    } else {
+        doc
+    };
     let mut wr = Writer {
         doc,
         media_files: BTreeMap::new(),
@@ -302,11 +312,9 @@ pub fn write(doc: &Document) -> Result<Vec<u8>, DocxError> {
     overrides.push(("/docProps/core.xml".into(), "application/vnd.openxmlformats-package.core-properties+xml".into()));
     entries.push(("docProps/app.xml".into(), app_xml(doc)));
     overrides.push(("/docProps/app.xml".into(), "application/vnd.openxmlformats-officedocument.extended-properties+xml".into()));
-    if let Some(custom) = doc.passthrough.get("docProps/custom.xml")
-        && xml::parse(custom).is_ok()
-    {
+    if !doc.custom_props.is_empty() {
         root.add(rt::CUSTOM, "docProps/custom.xml", false);
-        entries.push(("docProps/custom.xml".into(), custom.to_vec()));
+        entries.push(("docProps/custom.xml".into(), crate::custom::write(&doc.custom_props)));
         overrides.push(("/docProps/custom.xml".into(), "application/vnd.openxmlformats-officedocument.custom-properties+xml".into()));
     }
     entries.insert(0, ("_rels/.rels".into(), root.xml()));

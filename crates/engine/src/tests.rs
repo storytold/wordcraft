@@ -349,3 +349,20 @@ fn caret_navigation() {
     run(&mut s, "caret.left", json!({}));
     assert_eq!(s.sel.focus.off, 10);
 }
+
+#[test]
+fn custom_properties_set_read_remove_and_undo() {
+    let mut s = s();
+    let r = run(&mut s, "file.properties", json!({"custom": {"ZOTERO_PREF_1": "<data/>", "Status": "draft"}}));
+    let custom = r["custom"].as_array().cloned().unwrap_or_default();
+    assert!(custom.iter().any(|p| p["name"] == "Status" && p["value"] == "draft" && p["kind"] == "lpwstr"));
+    assert_eq!(custom.len(), 2);
+    assert_eq!(s.doc.custom_prop("zotero_pref_1"), Some("<data/>"));
+    let r = run(&mut s, "file.properties", json!({"custom": {"status": null}}));
+    assert_eq!(r["custom"].as_array().map(|a| a.len()), Some(1));
+    assert!(s.run("file.properties", &json!({"custom": "x"})).is_err());
+    assert!(s.run("file.properties", &json!({"custom": {"": "x"}})).is_err());
+    assert!(s.run("file.properties", &json!({"custom": {"n": 3}})).is_err());
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.custom_prop("Status"), Some("draft"));
+}

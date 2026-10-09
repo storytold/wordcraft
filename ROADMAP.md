@@ -55,7 +55,7 @@ the icon art).
 | Page layout (margins, size, orientation, columns, breaks, sections) | Good; page borders, line numbers, vertical alignment, drop caps, hyphenation; columns don't balance | 72% |
 | Headers/footers, page numbers, fields | Good; first/even/odd, link to previous | 70% |
 | Footnotes/endnotes | Placed and editable; long notes don't continue onto the next page | 60% |
-| References (TOC, citations APA/MLA/Chicago/IEEE, bibliography, index, figures, cross-refs, TOA) | Working first versions | 60% |
+| References (TOC, citations APA/MLA/Chicago/IEEE, bibliography, index, figures, cross-refs, TOA) | Working first versions; Zotero/Mendeley `ADDIN` fields and custom properties round-trip (Zotero integration step 1 of 5) | 60% |
 | Review (spelling, grammar, thesaurus, comments, track changes, compare, protect) | Good; comment balloons in the margin; no track-changes balloons | 75% |
 | Mailings (mail merge, rules, preview, envelopes, labels) | Working | 70% |
 | Pictures & shapes (insert, size, crop, recolour, effects, styles, float position) | Text wraps around floats (rectangular); text boxes render their text; no tight/contour wrap, no rotation handles | 55% |

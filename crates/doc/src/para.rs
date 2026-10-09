@@ -149,6 +149,17 @@ pub enum InlineObject {
         #[serde(default)]
         locked: bool,
     },
+    /// The start of a field whose result is ordinary content — formatted, possibly spanning
+    /// paragraphs — up to the matching [`InlineObject::FieldEnd`]. Citation managers' `ADDIN`
+    /// fields (Zotero, Mendeley, EndNote) are kept this way; `instr` is the field code. See
+    /// [`crate::fields`].
+    FieldStart {
+        instr: String,
+        #[serde(default)]
+        locked: bool,
+    },
+    /// The end of the innermost open [`InlineObject::FieldStart`].
+    FieldEnd,
     NoteRef {
         kind: NoteKind,
         /// `Document::parts` id of the note's story.
@@ -193,6 +204,8 @@ impl InlineObject {
                 | InlineObject::BookmarkEnd { .. }
                 | InlineObject::CommentStart { .. }
                 | InlineObject::CommentEnd { .. }
+                | InlineObject::FieldStart { .. }
+                | InlineObject::FieldEnd
         )
     }
     pub fn is_floating(&self) -> bool {

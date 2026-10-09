@@ -299,6 +299,16 @@ impl Writer<'_> {
                 }
             }
             InlineObject::Field { instr, result, locked } => self.field(w, instr, result, *locked, props),
+            InlineObject::FieldStart { instr, locked } => {
+                self.rev_open(w, props);
+                self.field_begin(w, instr, *locked, props);
+                self.rev_close(w, props);
+            }
+            InlineObject::FieldEnd => {
+                self.rev_open(w, props);
+                field_run(w, props, &|w| w.empty("w:fldChar", &[("w:fldCharType", "end")]));
+                self.rev_close(w, props);
+            }
             InlineObject::NoteRef { kind, id, custom } => {
                 let foot = *kind == NoteKind::Footnote;
                 if self.current_note == Some((foot, *id)) {
@@ -458,16 +468,10 @@ impl Writer<'_> {
         }
     }
 
-    fn field(&mut self, w: &mut W, instr: &str, result: &str, locked: bool, props: &CharProps) {
+    /// `begin`, the field code and `separate`: everything before a field's result.
+    fn field_begin(&mut self, w: &mut W, instr: &str, locked: bool, props: &CharProps) {
         let del = self.is_del(props);
-        let run = |w: &mut W, f: &dyn Fn(&mut W)| {
-            w.open("w:r", &[]);
-            rpr(w, props);
-            f(w);
-            w.close("w:r");
-        };
-        self.rev_open(w, props);
-        run(w, &|w| {
+        field_run(w, props, &|w| {
             if locked {
                 w.empty("w:fldChar", &[("w:fldCharType", "begin"), ("w:fldLock", "1")])
             } else {
@@ -475,8 +479,15 @@ impl Writer<'_> {
             }
         });
         let instr_text = format!(" {} ", instr.trim());
-        run(w, &|w| w.leaf(if del { "w:delInstrText" } else { "w:instrText" }, &[("xml:space", "preserve")], &instr_text));
-        run(w, &|w| w.empty("w:fldChar", &[("w:fldCharType", "separate")]));
+        field_run(w, props, &|w| w.leaf(if del { "w:delInstrText" } else { "w:instrText" }, &[("xml:space", "preserve")], &instr_text));
+        field_run(w, props, &|w| w.empty("w:fldChar", &[("w:fldCharType", "separate")]));
+    }
+
+    fn field(&mut self, w: &mut W, instr: &str, result: &str, locked: bool, props: &CharProps) {
+        let del = self.is_del(props);
+        let run = |w: &mut W, f: &dyn Fn(&mut W)| field_run(w, props, f);
+        self.rev_open(w, props);
+        self.field_begin(w, instr, locked, props);
         if !result.is_empty() {
             run(w, &|w| {
                 let mut buf = String::new();
@@ -716,6 +727,14 @@ fn xfrm(w: &mut W, cw: f32, ch: f32) {
     w.empty("a:off", &[("x", "0"), ("y", "0")]);
     w.empty("a:ext", &[("cx", &emu(cw.max(0.0))), ("cy", &emu(ch.max(0.0)))]);
     w.close("a:xfrm");
+}
+
+/// One `w:r` with `props`, holding what `f` writes (a field character or code).
+fn field_run(w: &mut W, props: &CharProps, f: &dyn Fn(&mut W)) {
+    w.open("w:r", &[]);
+    rpr(w, props);
+    f(w);
+    w.close("w:r");
 }
 
 /// Word's Table of Contents content control, which gives the TOC its frame and Update Table.
