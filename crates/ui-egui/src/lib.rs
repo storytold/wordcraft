@@ -28,6 +28,7 @@ pub mod ribbon;
 pub mod theme;
 pub mod widgets;
 pub mod window_geometry;
+pub mod zotero;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -117,6 +118,10 @@ pub struct WordApp {
     pub autosave: bool,
     pub word_count: (u64, usize),
     last_autosave: f64,
+    /// Zotero commands in flight (`ui.zotero.*`).
+    pub zotero: zotero::ZoteroLink,
+    /// The egui context, once the first frame has run (background work wakes the UI with it).
+    pub(crate) ctx: Option<egui::Context>,
 }
 
 impl WordApp {
@@ -144,6 +149,8 @@ impl WordApp {
             autosave: true,
             word_count: (0, 0),
             last_autosave: 0.0,
+            zotero: zotero::ZoteroLink::default(),
+            ctx: None,
         }
     }
 
@@ -173,6 +180,13 @@ impl WordApp {
     /// Run a command; UI-level commands (`ui.*`) are handled here, the rest by the engine.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
         if let Some(r) = self.ui_command(id, &params) {
+            return r;
+        }
+        let ctx = self.ctx.clone();
+        if let Some(r) = zotero::command(self, id, &params, ctx.as_ref()) {
+            if let Err(e) = &r {
+                self.status(e.clone());
+            }
             return r;
         }
         // Web: saving and exporting become downloads.
@@ -368,7 +382,11 @@ impl WordApp {
             theme::apply(ctx, &if dark { theme::Tokens::dark() } else { theme::Tokens::light() });
             self.applied_dark = Some(dark);
         }
+        if self.ctx.is_none() {
+            self.ctx = Some(ctx.clone());
+        }
         self.drain_control(ctx);
+        zotero::poll(self, ctx);
         self.drain_inbox();
         // AutoSave: write a saved document a couple of seconds after the last change.
         let now = now_ms();
@@ -443,6 +461,7 @@ impl WordApp {
             });
         }
         dialogs::show(self, &ctx);
+        zotero::show_alert(self, &ctx);
         keys::global_shortcuts(self, &ctx);
         if let Some(url) = self.canvas.open_url.take() {
             ctx.open_url(egui::OpenUrl::new_tab(url));

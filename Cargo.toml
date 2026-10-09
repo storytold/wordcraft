@@ -23,6 +23,7 @@ wordcraft-pdf = { path = "crates/pdf" }
 wordcraft-proof = { path = "crates/proof" }
 wordcraft-engine = { path = "crates/engine" }
 wordcraft-mcp = { path = "crates/mcp" }
+wordcraft-zotero = { path = "crates/zotero" }
 wordcraft-ui-egui = { path = "crates/ui-egui" }
 
 # foundation

@@ -4863,6 +4863,7 @@ dependencies = [
  "wordcraft-engine",
  "wordcraft-mcp",
  "wordcraft-render",
+ "wordcraft-zotero",
 ]
 
 [[package]]
@@ -5027,6 +5028,7 @@ dependencies = [
  "wordcraft-geom",
  "wordcraft-layout",
  "wordcraft-render",
+ "wordcraft-zotero",
 ]
 
 [[package]]

@@ -68,6 +68,11 @@ pub struct Bridge {
     checkpointed: bool,
     /// Field (by id) the caret should end up after: the one just inserted.
     caret_after: Option<u64>,
+    /// The selection when the transaction began, restored at the end when Zotero only moved
+    /// it to show a citation (`Field_select`).
+    start_sel: Option<Selection>,
+    /// Zotero selected a field during this transaction.
+    selected: bool,
     /// `Document_complete` arrived.
     pub completed: bool,
 }
@@ -192,6 +197,8 @@ impl Bridge {
                 self.checkpointed = false;
                 self.caret_after = None;
                 self.completed = false;
+                self.start_sel = Some(s.sel.clone());
+                self.selected = false;
                 Ok(json!([theirs.clamp(1, PROTOCOL_VERSION), self.doc_id]))
             }
             "Document_displayAlert" => {
@@ -263,12 +270,17 @@ impl Bridge {
             // Fields are one kind in WordCraft; conversions between Zotero's kinds are no-ops.
             "Document_convert" | "Field_convert" => Ok(Value::Null),
             "Document_complete" => {
+                let start_sel = self.start_sel.take();
                 if let Some(id) = self.caret_after.take()
                     && let Ok((_, f)) = self.field(s, id)
                 {
                     s.sel = Selection::caret(f.after());
-                    s.clamp_selection();
+                } else if std::mem::take(&mut self.selected)
+                    && let Some(sel) = start_sel
+                {
+                    s.sel = sel;
                 }
+                s.clamp_selection();
                 self.completed = true;
                 Ok(Value::Null)
             }
@@ -285,6 +297,7 @@ impl Bridge {
                 let (_, f) = self.field(s, arg_id(c, 1)?)?;
                 s.sel = Selection { anchor: f.start.clone(), focus: f.after() };
                 s.clamp_selection();
+                self.selected = true;
                 Ok(Value::Null)
             }
             "Field_removeCode" => {

@@ -181,6 +181,10 @@ fn remove_codes_keeps_text_and_select_delete_work() {
     let b = z.cite(0, "(Roe 2019)");
     z.ok("Field_select", json!([1, b]));
     assert_eq!(z.s.selected_text(), "(Roe 2019)");
+    // A selection Zotero made to show a citation is undone when it finishes.
+    z.ok("Document_complete", json!([1]));
+    assert!(z.s.sel.is_collapsed());
+    z.begin();
     z.ok("Field_removeCode", json!([1, a]));
     assert_eq!(z.text(), "A(Doe 2020) B(Roe 2019)");
     assert_eq!(fields::list(&z.s.doc).len(), 1);

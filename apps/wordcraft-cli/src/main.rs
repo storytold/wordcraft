@@ -20,6 +20,10 @@ USAGE:
   wordcraft-cli commands [--json]             list every command
   wordcraft-cli parity [--markdown]           feature-catalog parity
   wordcraft-cli mcp [--connect HOST:PORT]     MCP server on stdio (headless, or bridged to the app)
+  wordcraft-cli zotero <command> <file> [--save OUT] [--trace] [--port P]
+                                              run a Zotero command on a document (Zotero must be
+                                              running): addEditCitation, addEditBibliography,
+                                              addNote, refresh, removeCodes, setDocPrefs
   wordcraft-cli --version
 ";
 
@@ -150,6 +154,37 @@ fn run(args: &[String]) -> Result<(), String> {
             let stdin = std::io::stdin();
             server.serve(stdin.lock(), std::io::stdout()).map_err(|e| e.to_string())
         }
+        "zotero" => {
+            let name = pos(0)?;
+            let command = wordcraft_zotero::Command::from_name(&name).ok_or_else(|| format!("unknown Zotero command `{name}`\n\n{USAGE}"))?;
+            let file = pos(1)?;
+            let mut s = open(&file)?;
+            let mut opts = wordcraft_zotero::client::Options::default();
+            if let Some(p) = arg_value(&rest, "--port") {
+                opts.addr.set_port(p.parse().map_err(|_| format!("bad port `{p}`"))?);
+            }
+            let trace = rest.iter().any(|a| a == "--trace");
+            let mut bridge = wordcraft_zotero::Bridge::new();
+            let mut host = wordcraft_zotero::Headless::default();
+            let out = wordcraft_zotero::client::run_command(&opts, command, &mut |call| {
+                let r = bridge.handle(&mut s, &mut host, call);
+                if trace {
+                    eprintln!("← {} {}", call.method, clip(&Value::Array(call.args.clone()).to_string()));
+                    eprintln!("→ {}", clip(&String::from_utf8_lossy(&wordcraft_zotero::wire::encode_reply(&r))));
+                }
+                r
+            })
+            .map_err(|e| e.to_string())?;
+            for a in &host.alerts {
+                eprintln!("Zotero: {a}");
+            }
+            eprintln!("{} calls, {}", out.calls, if out.completed { "completed" } else { "ended without completing (cancelled?)" });
+            if let Some(o) = arg_value(&rest, "--save") {
+                s.run("file.save", &json!({"path": o})).map_err(|e| e.to_string())?;
+                eprintln!("wrote {o}");
+            }
+            Ok(())
+        }
         "--version" | "-V" => {
             println!("wordcraft-cli {}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -159,6 +194,14 @@ fn run(args: &[String]) -> Result<(), String> {
             Ok(())
         }
         other => Err(format!("unknown command `{other}`\n\n{USAGE}")),
+    }
+}
+
+/// At most 400 characters of `s`, for traces.
+fn clip(s: &str) -> String {
+    match s.char_indices().nth(400) {
+        Some((i, _)) => format!("{}…", s.get(..i).unwrap_or(s)),
+        None => s.to_string(),
     }
 }
 
