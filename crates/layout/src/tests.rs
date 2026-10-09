@@ -659,3 +659,23 @@ fn list_items_beside_a_float_in_a_cell_are_counted_once() {
     d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
     assert_eq!(labels(&lay(&d)), ["1.", "2.", "3."]);
 }
+
+#[test]
+fn compatibility_mode_decides_where_a_table_s_edge_sits() {
+    use wordcraft_doc::props::{Border, BorderStyle, Borders};
+    let cell_text_x = |mode: u32| {
+        let mut d = Document::from_text("");
+        d.settings.compat_mode = mode;
+        let line = Some(Border { style: BorderStyle::Single, width: 0.5, color: None, space: 0.0 });
+        let mut t = Table::new(1, 1, 200.0);
+        t.props.borders = Some(Borders { top: line, left: line, bottom: line, right: line, between: line, inside_v: line });
+        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("cell", Default::default()))];
+        d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t))];
+        let l = lay(&d);
+        l.pages[0].items.iter().find_map(|i| if let Placed::Lines { x, .. } = i { Some(*x) } else { None }).unwrap()
+    };
+    // Word 2013+: the border at the margin (moved in by half its width), the text a cell margin
+    // inside it. Earlier modes: the text at the margin, the border a cell margin outside it.
+    assert!((cell_text_x(15) - (72.0 + 0.25 + 5.4)).abs() < 0.01, "{}", cell_text_x(15));
+    assert!((cell_text_x(12) - 72.0).abs() < 0.01, "{}", cell_text_x(12));
+}

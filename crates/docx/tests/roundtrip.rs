@@ -779,3 +779,14 @@ fn ensure_empty_and_table_end_document_is_valid() {
     let r = rt(&e);
     assert_eq!(r.body.len(), 1);
 }
+
+#[test]
+fn compatibility_mode_round_trips() {
+    let mut d = Document::new();
+    assert_eq!(d.settings.compat_mode, 15, "new documents are Word 2013+ documents");
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(back.settings.compat_mode, 15);
+    d.settings.compat_mode = 14;
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(back.settings.compat_mode, 14);
+}

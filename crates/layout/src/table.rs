@@ -62,15 +62,23 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
         acc += w;
     }
     colx.push(acc);
-    // Word places the table so cell text lines up with the margin: shift left by the left cell margin.
+    // Word 2013 and later (compatibility mode 15) put the table's border at the margin (plus its
+    // indent); earlier modes line the first cell's text up with it instead.
     let margins_def = t.props.cell_margins.unwrap_or(DEFAULT_MARGINS);
     let indent = t.props.indent.unwrap_or(0.0);
+    let tborders = t.props.borders.or_else(|| parts.as_ref().and_then(|p| p.borders));
+    let first_cell = t.rows.first().and_then(|r| r.cells.first());
     let x = match t.props.align {
         Some(Align::Center) => (avail - total) / 2.0,
         Some(Align::Right) => avail - total,
-        _ => indent - margins_def[1],
+        _ if ctx.doc.settings.compat_mode >= 15 => {
+            // The border is centred on the edge, so half of it sits outside: Word moves the
+            // table in by that half.
+            let border = first_cell.and_then(|c| c.props.borders.and_then(|b| b.left)).or(tborders.and_then(|b| b.left));
+            indent + border.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0) / 2.0)
+        }
+        _ => indent - first_cell.and_then(|c| c.props.margins).unwrap_or(margins_def)[1],
     };
-    let tborders = t.props.borders.or_else(|| parts.as_ref().and_then(|p| p.borders));
     let nrows = t.rows.len();
     let header_rows = t.props.look.header_row;
     // First pass: lay out every cell's content.

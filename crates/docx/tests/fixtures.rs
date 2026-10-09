@@ -398,3 +398,8 @@ fn anchor_alignment_reference_areas_and_distances() {
     assert_eq!((b.h_rel, b.h_align, b.x, b.v_rel, b.v_align), (Anchor::LeftMargin, None, 5.0, Anchor::Line, Some(FloatAlign::End)));
     assert_eq!((b.dist, b.dist_top, b.dist_bottom), (0.0, 0.0, 0.0));
 }
+
+#[test]
+fn documents_without_a_compatibility_mode_are_laid_out_as_word_2007() {
+    assert_eq!(read_body("<w:p/>").settings.compat_mode, wordcraft_doc::LEGACY_COMPAT_MODE);
+}
