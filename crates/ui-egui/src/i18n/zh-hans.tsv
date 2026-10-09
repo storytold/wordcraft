@@ -782,3 +782,18 @@
 	📂  Browse…	📂  浏览…
 	{words} words	{words} 个字
 	{selected} of {words} words	{selected}/{words} 个字
+# Zotero integration
+	Zotero	Zotero
+	Citations	引文
+	Document	文档
+	Add/Edit\nCitation	添加/编辑\n引文
+	Add\nNote	添加\n笔记
+	Add/Edit\nBibliography	添加/编辑\n参考文献
+	Refresh	刷新
+	Document\nPreferences	文档\n首选项
+	Unlink\nCitations	取消链接\n引文
+	Waiting for Zotero…	正在等待 Zotero…
+	Zotero: done	Zotero：完成
+	Zotero: cancelled	Zotero：已取消
+	Yes	是
+	No	否

@@ -771,3 +771,18 @@
 	📂  Browse…	📂  参照…
 	{words} words	{words} 語
 	{selected} of {words} words	{selected}/{words} 語
+# Zotero integration
+	Zotero	Zotero
+	Citations	引用文献
+	Document	文書
+	Add/Edit\nCitation	引用文献の\n追加/編集
+	Add\nNote	メモの\n追加
+	Add/Edit\nBibliography	参考文献の\n追加/編集
+	Refresh	更新
+	Document\nPreferences	文書の\n設定
+	Unlink\nCitations	引用文献の\nリンク解除
+	Waiting for Zotero…	Zotero を待っています…
+	Zotero: done	Zotero: 完了
+	Zotero: cancelled	Zotero: キャンセルしました
+	Yes	はい
+	No	いいえ
