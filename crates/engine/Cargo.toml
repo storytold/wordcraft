@@ -24,3 +24,7 @@ thiserror = { workspace = true }
 log = { workspace = true }
 regex = { workspace = true }
 image = { workspace = true }
+
+# The browser's clock, for revision and comment dates in the web build.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"

@@ -86,8 +86,10 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"enabled"?: bool, "add"?: {"from": string, "to": string}}"#)
         .pure(),
-        CommandSpec::new("review.compare", "Compare", "Review › Compare", compare).params(r#"{"path"?: string, "text"?: string (revised version)}"#),
-        CommandSpec::new("review.combine", "Combine", "Review › Compare", compare).params(r#"{"path"?: string}"#),
+        CommandSpec::new("review.compare", "Compare", "Review › Compare", compare)
+            .params(r#"{"path"?: string, "data"?: string (base64 file), "name"?: string, "text"?: string (revised version)}"#),
+        CommandSpec::new("review.combine", "Combine", "Review › Compare", compare)
+            .params(r#"{"path"?: string, "data"?: string (base64 file), "name"?: string}"#),
         CommandSpec::new("file.accessibility", "Check Accessibility", "Review › Accessibility", accessibility).pure(),
         CommandSpec::new("file.inspect", "Inspect Document", "File › Info", inspect_doc)
             .params(r#"{"remove"?: ["comments", "revisions", "properties", "hidden", "headers"]}"#),
@@ -495,10 +497,14 @@ pub fn autocorrect(s: &mut Session) -> Result<(), CmdError> {
 fn compare(s: &mut Session, v: &Value) -> CmdResult {
     let revised = if let Some(t) = p::str(v, "text") {
         Document::from_text(t)
+    } else if let Some(data) = p::str(v, "data") {
+        // The revised document's bytes (base64), for hosts without a file system (the web build).
+        let bytes = super::insert::base64_decode(data).ok_or_else(|| CmdError::Params("`data` is not valid base64".into()))?;
+        crate::io::open_bytes(p::str(v, "name").unwrap_or("revised.docx"), &bytes).map_err(CmdError::Failed)?
     } else if let Some(path) = p::str(v, "path") {
         crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?
     } else {
-        return Err(CmdError::Params("`path` or `text` of the revised document is required".into()));
+        return Err(CmdError::Params("`path`, `data` or `text` of the revised document is required".into()));
     };
     let old: Vec<Paragraph> = s.doc.body.iter().filter_map(|b| b.as_para().cloned()).collect();
     let new: Vec<Paragraph> = revised.body.iter().filter_map(|b| b.as_para().cloned()).collect();
@@ -514,44 +520,40 @@ fn compare(s: &mut Session, v: &Value) -> CmdResult {
     let mut changes = 0usize;
     let mut k = 0;
     while k < ops.len() {
-        match ops.get(k) {
-            Some(Op::Same) => {
-                if let Some(p) = old.get(i) {
-                    out.push(p.clone());
-                }
-                i += 1;
-                j += 1;
-                k += 1;
+        if matches!(ops.get(k), Some(Op::Same)) {
+            if let Some(p) = old.get(i) {
+                out.push(p.clone());
             }
-            Some(Op::Del) if matches!(ops.get(k + 1), Some(Op::Ins)) => {
-                // A changed paragraph: diff its words.
-                let (a, b) = (old.get(i).cloned().unwrap_or_default(), new.get(j).cloned().unwrap_or_default());
-                out.push(word_diff(&a, &b, ins, del));
-                changes += 1;
-                i += 1;
-                j += 1;
-                k += 2;
-            }
-            Some(Op::Del) => {
-                let mut p = old.get(i).cloned().unwrap_or_default();
-                let len = p.len();
-                let _ = p.format(0, len, &|c| c.del = Some(del));
-                out.push(p);
-                changes += 1;
-                i += 1;
-                k += 1;
-            }
-            Some(Op::Ins) => {
-                let mut p = new.get(j).cloned().unwrap_or_default();
-                let len = p.len();
-                let _ = p.format(0, len, &|c| c.ins = Some(ins));
-                out.push(p);
-                changes += 1;
-                j += 1;
-                k += 1;
-            }
-            None => break,
+            i += 1;
+            j += 1;
+            k += 1;
+            continue;
         }
+        // A block of edits between unchanged paragraphs: pair its old and new paragraphs up in order
+        // and diff their words; only the leftovers are whole deleted or inserted paragraphs.
+        let run = ops[k..].iter().take_while(|o| !matches!(o, Op::Same)).count();
+        let dels = ops[k..k + run].iter().filter(|o| matches!(o, Op::Del)).count();
+        let inss = run - dels;
+        let pairs = dels.min(inss);
+        for n in 0..pairs {
+            let (a, b) = (old.get(i + n).cloned().unwrap_or_default(), new.get(j + n).cloned().unwrap_or_default());
+            if let Some(p) = word_diff(&a, &b, ins, del) {
+                out.push(p);
+            } else {
+                out.push(marked(a, |c| c.del = Some(del)));
+                out.push(marked(b, |c| c.ins = Some(ins)));
+            }
+        }
+        for n in pairs..dels {
+            out.push(marked(old.get(i + n).cloned().unwrap_or_default(), |c| c.del = Some(del)));
+        }
+        for n in pairs..inss {
+            out.push(marked(new.get(j + n).cloned().unwrap_or_default(), |c| c.ins = Some(ins)));
+        }
+        changes += pairs + (dels - pairs) + (inss - pairs);
+        i += dels;
+        j += inss;
+        k += run;
     }
     s.doc.body = out.into_iter().map(para_block).collect();
     s.doc.ensure_nonempty();
@@ -617,32 +619,60 @@ fn tokens(s: &str) -> Vec<String> {
     v
 }
 
-fn word_diff(a: &Paragraph, b: &Paragraph, ins: u32, del: u32) -> Paragraph {
-    let (ta, tb) = (tokens(&a.plain_text()), tokens(&b.plain_text()));
+/// A whole paragraph marked as inserted or deleted.
+fn marked(mut p: Paragraph, mark: impl Fn(&mut CharProps)) -> Paragraph {
+    let len = p.len();
+    let _ = p.format(0, len, &mark);
+    p
+}
+
+/// `b` as an edit of `a`: their words diffed, each keeping its own formatting. `None` when either
+/// holds inline objects (pictures, fields, equations), which a text diff would lose.
+fn word_diff(a: &Paragraph, b: &Paragraph, ins: u32, del: u32) -> Option<Paragraph> {
+    if !a.objects.is_empty() || !b.objects.is_empty() {
+        return None;
+    }
+    let (ta, tb) = (tokens(&a.text), tokens(&b.text));
     let ops = lcs_ops(&ta, &tb);
     let mut p = Paragraph::new();
     p.props = b.props.clone();
-    let base = a.runs.first().map(|r| r.props.clone()).unwrap_or_default();
-    let (mut i, mut j) = (0, 0);
+    p.mark = b.mark.clone();
+    let (mut i, mut j, mut oa, mut ob) = (0, 0, 0, 0);
     for op in ops {
-        let at = p.len();
         match op {
             Op::Same => {
-                let _ = p.insert_text(at, ta.get(i).map(String::as_str).unwrap_or(""), &base);
-                i += 1;
-                j += 1;
+                let n = ta.get(i).map_or(0, String::len);
+                append_span(&mut p, a, oa, oa + n, |_| {});
+                (i, j, oa, ob) = (i + 1, j + 1, oa + n, ob + tb.get(j).map_or(0, String::len));
             }
             Op::Del => {
-                let _ = p.insert_text(at, ta.get(i).map(String::as_str).unwrap_or(""), &CharProps { del: Some(del), ..base.clone() });
-                i += 1;
+                let n = ta.get(i).map_or(0, String::len);
+                append_span(&mut p, a, oa, oa + n, |c| c.del = Some(del));
+                (i, oa) = (i + 1, oa + n);
             }
             Op::Ins => {
-                let _ = p.insert_text(at, tb.get(j).map(String::as_str).unwrap_or(""), &CharProps { ins: Some(ins), ..base.clone() });
-                j += 1;
+                let n = tb.get(j).map_or(0, String::len);
+                append_span(&mut p, b, ob, ob + n, |c| c.ins = Some(ins));
+                (j, ob) = (j + 1, ob + n);
             }
         }
     }
-    p
+    Some(p)
+}
+
+/// Append `src.text[from..to]` to `p`, run by run with `src`'s formatting, changed by `mark`.
+fn append_span(p: &mut Paragraph, src: &Paragraph, from: usize, to: usize, mark: impl Fn(&mut CharProps)) {
+    let Some(text) = src.text.get(from..to) else { return };
+    let mut start = 0;
+    while start < text.len() {
+        let props = src.props_of_char(from + start).clone();
+        let end = text[start..].char_indices().find(|(o, _)| src.props_of_char(from + start + o) != &props).map_or(text.len(), |(o, _)| start + o);
+        let mut props = props;
+        mark(&mut props);
+        let at = p.len();
+        let _ = p.insert_text(at, text.get(start..end).unwrap_or(""), &props);
+        start = end;
+    }
 }
 
 fn accessibility(s: &mut Session, _: &Value) -> CmdResult {

@@ -185,17 +185,14 @@ pub fn split_para(s: &mut Session, at: &Pos) -> Result<Pos, CmdError> {
 /// ISO-8601 timestamp (UTC, seconds).
 pub fn now_iso() -> String {
     #[cfg(not(target_arch = "wasm32"))]
-    {
-        let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-        let days = (secs / 86_400) as i64;
-        let (y, m, d) = civil_from_days(days);
-        let t = secs % 86_400;
-        format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", t / 3600, t / 60 % 60, t % 60)
-    }
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    // `SystemTime` panics in the browser; ask the page's clock instead.
     #[cfg(target_arch = "wasm32")]
-    {
-        "2026-01-01T00:00:00Z".to_string()
-    }
+    let secs = (js_sys::Date::now() / 1000.0).max(0.0) as u64;
+    let days = (secs / 86_400) as i64;
+    let (y, m, d) = civil_from_days(days);
+    let t = secs % 86_400;
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", t / 3600, t / 60 % 60, t % 60)
 }
 
 /// Days since 1970-01-01 → (year, month, day) (Howard Hinnant's algorithm).

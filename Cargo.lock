@@ -4896,6 +4896,7 @@ name = "wordcraft-engine"
 version = "0.3.0"
 dependencies = [
  "image",
+ "js-sys",
  "log",
  "regex",
  "serde",

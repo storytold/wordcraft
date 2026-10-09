@@ -349,3 +349,55 @@ fn caret_navigation() {
     run(&mut s, "caret.left", json!({}));
     assert_eq!(s.sel.focus.off, 10);
 }
+
+#[test]
+fn compare_with_document_bytes() {
+    // The web build has no file system: the revised version arrives as base64 bytes.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("First paragraph.\nSecond paragraph.\nThird paragraph."));
+    let revised = wordcraft_doc::Document::from_text("First paragraph.\nA new second paragraph.\nThird paragraph.");
+    let bytes = crate::io::save_bytes("revised.docx", &revised).unwrap();
+    let data = cmd::insert::base64_encode(&bytes);
+    let r = run(&mut s, "review.compare", json!({"data": data, "name": "revised.docx"}));
+    assert!(r.to_string().contains("change") || !s.doc.revisions.is_empty(), "{r}");
+    let changes = run(&mut s, "review.changes", json!({}));
+    assert!(!changes.as_array().unwrap().is_empty(), "the replaced paragraph shows as tracked changes");
+    assert!(s.run("review.compare", &json!({"data": "not base64!"})).is_err());
+}
+
+#[test]
+fn compare_diffs_edited_paragraph_blocks_word_by_word() {
+    use wordcraft_doc::{CharProps, Paragraph, para_block};
+    let para = |parts: &[(&str, bool)]| {
+        let mut p = Paragraph::new();
+        for (t, bold) in parts {
+            let at = p.len();
+            p.insert_text(at, t, &CharProps { bold: bold.then_some(true), ..Default::default() }).unwrap();
+        }
+        para_block(p)
+    };
+    let mut doc = wordcraft_doc::Document::new();
+    doc.body = vec![
+        para(&[("Intro.", false)]),
+        para(&[("Particles travel through doorways.", false)]),
+        para(&[("We measured ", false), ("twelve", true), (" offices.", false)]),
+        para(&[("End.", false)]),
+    ];
+    let mut s = Session::new(doc);
+    let revised =
+        wordcraft_doc::Document::from_text("Intro.\nParticles travel through open doorways.\nWe measured fourteen offices.\nA new paragraph.\nEnd.");
+    let data = cmd::insert::base64_encode(&crate::io::save_bytes("revised.docx", &revised).unwrap());
+    // Two edited paragraphs and one new one: three changes, not five whole-paragraph ones.
+    assert_eq!(run(&mut s, "review.compare", json!({"data": data}))["changes"], 3);
+    let paras: Vec<&Paragraph> = s.doc.body.iter().filter_map(|b| b.as_para()).collect();
+    assert_eq!(paras.len(), 5);
+    assert_eq!(paras[1].text, "Particles travel through open doorways.");
+    let measured = paras[2];
+    assert_eq!(measured.text, "We measured twelve fourteen offices.");
+    let twelve = measured.text.find("twelve").unwrap();
+    assert_eq!(measured.props_of_char(twelve).bold, Some(true), "the deleted word keeps its bold");
+    assert!(measured.props_of_char(twelve).del.is_some());
+    let fourteen = measured.text.find("fourteen").unwrap();
+    assert!(measured.props_of_char(fourteen).ins.is_some());
+    assert!(measured.props_of_char(0).ins.is_none() && measured.props_of_char(0).del.is_none());
+    assert!(paras[3].props_of_char(0).ins.is_some(), "the new paragraph is an insertion");
+}
