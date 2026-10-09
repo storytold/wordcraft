@@ -526,3 +526,29 @@ fn inline_picture_keeps_room_for_its_effects() {
     let r = display::inline_rect(Some(&obj), 10.0, 200.0, c.adv, c.obj_h);
     assert_eq!((r.x, r.y, r.w, r.h), (16.0, 123.0, 100.0, 50.0));
 }
+
+/// Tops of the body text lines drawn on page one, in order.
+fn line_tops(l: &DocLayout) -> Vec<f32> {
+    l.pages[0].items.iter().filter_map(|i| if let Placed::Lines { y, story: StoryRef::Body, .. } = i { Some(*y) } else { None }).collect()
+}
+
+#[test]
+fn at_least_rows_add_cell_margins_and_border_bands() {
+    use wordcraft_doc::props::{Border, BorderStyle, Borders, HeightRule};
+    let mut d = Document::from_text("");
+    let line = Some(Border { style: BorderStyle::Single, width: 0.5, color: None, space: 0.0 });
+    let mut t = Table::new(2, 1, 200.0);
+    t.props.borders = Some(Borders { top: line, left: line, bottom: line, right: line, between: line, inside_v: line });
+    t.props.cell_margins = Some([5.0, 5.4, 5.0, 5.4]);
+    for (r, text) in t.rows.iter_mut().zip(["one", "two"]) {
+        r.props.height = Some(30.0);
+        r.props.height_rule = HeightRule::AtLeast;
+        r.cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))];
+    }
+    d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t))];
+    let tops = line_tops(&lay(&d));
+    // Word: a 30pt at-least row with 5pt margins and 0.5pt borders steps 40.5pt, and the text
+    // starts below the top border and the top margin.
+    assert!((tops[1] - tops[0] - 40.5).abs() < 0.01, "row pitch {}", tops[1] - tops[0]);
+    assert!((tops[0] - (72.0 + 0.5 + 5.0)).abs() < 0.01, "first cell text at {}", tops[0]);
+}
