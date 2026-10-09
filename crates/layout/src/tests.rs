@@ -470,3 +470,120 @@ fn auto_hyphenation_breaks_long_words() {
     let l2 = lay(&d2);
     let _ = hyphens(&l2);
 }
+
+/// A table of `rows` x 2 with text in every cell, after a "before" paragraph.
+fn styled_table_doc(style: Option<&str>, rows: usize) -> Document {
+    let mut d = Document::from_text("before\nafter");
+    let mut t = Table::new(rows, 2, 468.0);
+    t.props.style = style.map(str::to_string);
+    for (r, row) in t.rows.iter_mut().enumerate() {
+        for (c, cell) in row.cells.iter_mut().enumerate() {
+            cell.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("R{r} C{c}"), Default::default()))];
+        }
+    }
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+    d
+}
+
+fn row_height(l: &DocLayout, row: usize) -> f32 {
+    l.pages[0].items.iter().find_map(|i| if let Placed::Cell { rect, row: r, .. } = i { (*r == row).then_some(rect.h) } else { None }).unwrap()
+}
+
+/// The laid-out paragraph in cell (row, col) of the table at body index 1.
+fn cell_para(l: &DocLayout, row: u32, col: u32) -> Arc<ParaLayout> {
+    l.pages[0]
+        .items
+        .iter()
+        .find_map(|i| if let Placed::Lines { path, para, .. } = i { (path.0 == vec![1, row, col, 0]).then(|| para.clone()) } else { None })
+        .unwrap()
+}
+
+/// Text in a table cell takes its table style's paragraph and run formatting over the document
+/// defaults (ECMA-376 §17.7.2): Table Grid's single spacing and no space after, not the defaults'
+/// 8 pt after and 1.15 lines.
+#[test]
+fn table_style_paragraph_props_beat_document_defaults() {
+    let d = styled_table_doc(Some("TableGrid"), 3);
+    let plain = styled_table_doc(None, 3);
+    let (lg, lp) = (lay(&d), lay(&plain));
+    let p = cell_para(&lg, 1, 0);
+    assert_eq!((p.rp.space_after, p.rp.line_spacing), (0.0, wordcraft_doc::props::LineSpacing::Multiple(1.0)));
+    let q = cell_para(&lp, 1, 0);
+    assert_eq!((q.rp.space_after, q.rp.line_spacing), (8.0, wordcraft_doc::props::LineSpacing::Multiple(1.15)));
+    let (g, n) = (row_height(&lg, 1), row_height(&lp, 1));
+    assert!(g + 8.0 < n, "Table Grid row {g}, unstyled row {n}");
+    assert!(g < 18.0, "one 12 pt line, single spaced: {g}");
+}
+
+/// The paragraph's own style (Normal included) and direct formatting beat the table style; the
+/// table style only fills in what they leave unset.
+#[test]
+fn paragraph_style_and_direct_formatting_beat_table_style() {
+    let mut d = styled_table_doc(Some("TableGrid"), 3);
+    d.styles.upsert(wordcraft_doc::Style {
+        id: "Spaced".into(),
+        name: "Spaced".into(),
+        based_on: Some("Normal".into()),
+        para: ParaProps { space_after: Some(12.0), ..Default::default() },
+        ..Default::default()
+    });
+    d.format_paragraphs(
+        &Pos { story: StoryRef::Body, path: Path(vec![1, 0, 0, 0]), off: 0 },
+        &Pos { story: StoryRef::Body, path: Path(vec![1, 0, 0, 0]), off: 0 },
+        &|p| p.style = Some("Spaced".into()),
+    )
+    .unwrap();
+    d.format_paragraphs(
+        &Pos { story: StoryRef::Body, path: Path(vec![1, 1, 0, 0]), off: 0 },
+        &Pos { story: StoryRef::Body, path: Path(vec![1, 1, 0, 0]), off: 0 },
+        &|p| p.space_after = Some(3.0),
+    )
+    .unwrap();
+    let l = lay(&d);
+    let styled = cell_para(&l, 0, 0);
+    assert_eq!(styled.rp.space_after, 12.0, "paragraph style");
+    assert_eq!(styled.rp.line_spacing, wordcraft_doc::props::LineSpacing::Multiple(1.0), "unset by the style: from the table style");
+    assert_eq!(cell_para(&l, 1, 0).rp.space_after, 3.0, "direct formatting");
+    assert_eq!(cell_para(&l, 2, 0).rp.space_after, 0.0, "table style");
+    // Normal setting its own spacing wins too, even where it equals nothing in the defaults.
+    if let Some(n) = d.styles.get_mut("Normal") {
+        n.para.space_after = Some(10.0);
+    }
+    assert_eq!(cell_para(&lay(&d), 2, 0).rp.space_after, 10.0, "Normal");
+}
+
+/// A table style based on another keeps the base style's borders and cell text formatting, and
+/// adds its own run formatting and conditional formats.
+#[test]
+fn derived_table_style_merges_its_base() {
+    use wordcraft_doc::styles::TableStyleParts;
+    let red = wordcraft_doc::Rgb(0xC0, 0, 0);
+    let mut d = styled_table_doc(Some("RedGrid"), 3);
+    d.styles.upsert(wordcraft_doc::Style {
+        id: "RedGrid".into(),
+        name: "Red Grid".into(),
+        kind: wordcraft_doc::StyleKind::Table,
+        based_on: Some("TableGrid".into()),
+        chr: CharProps { bold: Some(true), color: Some(wordcraft_doc::TextColor::Rgb(red)), ..Default::default() },
+        table: Some(TableStyleParts { header_chr: CharProps { italic: Some(true), ..Default::default() }, ..Default::default() }),
+        ..Default::default()
+    });
+    let l = lay(&d);
+    let rules = l.pages[0].items.iter().filter(|i| matches!(i, Placed::Rule { .. })).count();
+    assert!(rules >= 18, "Table Grid's borders: {rules}");
+    let body = cell_para(&l, 1, 1);
+    let rc = &body.styles[0].rc;
+    assert!(rc.bold && !rc.italic, "{rc:?}");
+    assert_eq!(rc.color, wordcraft_doc::TextColor::Rgb(red));
+    assert_eq!(body.rp.space_after, 0.0, "Table Grid's paragraph formatting");
+    let head = &cell_para(&l, 0, 0).styles[0].rc;
+    assert!(head.bold && head.italic, "{head:?}");
+    // Direct formatting still wins over the table style.
+    let mut d2 = d.clone();
+    let path = Path(vec![1, 2, 0, 0]);
+    d2.format_range(&Pos { story: StoryRef::Body, path: path.clone(), off: 0 }, &Pos { story: StoryRef::Body, path, off: 5 }, &|c| {
+        c.bold = Some(false)
+    })
+    .unwrap();
+    assert!(!cell_para(&lay(&d2), 2, 0).styles[0].rc.bold);
+}

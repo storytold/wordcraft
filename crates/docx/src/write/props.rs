@@ -260,7 +260,7 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool) {
     }
 }
 
-fn margins(w: &mut W, tag: &str, m: &[f32; 4]) {
+pub fn margins(w: &mut W, tag: &str, m: &[f32; 4]) {
     w.open(tag, &[]);
     for (name, v) in ["w:top", "w:left", "w:bottom", "w:right"].iter().zip(m.iter()) {
         w.empty(name, &[("w:w", &twips(v.clamp(0.0, 1584.0))), ("w:type", "dxa")]);

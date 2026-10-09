@@ -157,7 +157,7 @@ struct Key {
     width: u32,
     label: Option<String>,
     page: Option<(u32, u32, u32, u32)>,
-    table_chr: u64,
+    table: u64,
     notes: u64,
     excl: u64,
 }
@@ -236,7 +236,7 @@ impl Ctx<'_> {
             label: None,
             fields: &self.fields,
             show_hidden: false,
-            table_chr: None,
+            table: None,
             proofing: false,
             exclusions: &[],
         };
@@ -245,11 +245,11 @@ impl Ctx<'_> {
         pl
     }
 
-    fn para(&mut self, p: &Paragraph, width: f32, table_chr: Option<&CharProps>) -> Arc<ParaLayout> {
-        self.para_x(p, width, table_chr, &[])
+    fn para(&mut self, p: &Paragraph, width: f32, table: Option<&para::CellText>) -> Arc<ParaLayout> {
+        self.para_x(p, width, table, &[])
     }
 
-    fn para_x(&mut self, p: &Paragraph, width: f32, table_chr: Option<&CharProps>, exclusions: &[para::Exclusion]) -> Arc<ParaLayout> {
+    fn para_x(&mut self, p: &Paragraph, width: f32, table: Option<&para::CellText>, exclusions: &[para::Exclusion]) -> Arc<ParaLayout> {
         let label = p.props.numbering.or_else(|| self.doc.styles.resolve_para(&p.props).numbering).filter(|n| n.num != 0).and_then(|n| {
             // Only count paragraphs that will show (list labels advance in order).
             self.counters.next_label(&self.doc.numbering, n.num, n.level)
@@ -260,7 +260,7 @@ impl Ctx<'_> {
             width: width.to_bits(),
             label: label.as_ref().map(|(t, l)| format!("{t}|{}|{}|{:?}", l.indent, l.hanging, l.suffix)),
             page,
-            table_chr: table_chr.map(|c| hash_of(&format!("{c:?}"))).unwrap_or(0),
+            table: table.map(|t| hash_of(&format!("{t:?}"))).unwrap_or(0),
             notes: if p.objects.iter().any(|o| matches!(o, InlineObject::NoteRef { .. })) { self.notes_hash } else { 0 },
             excl: if exclusions.is_empty() { 0 } else { hash_of(&format!("{exclusions:?}")) },
         };
@@ -276,7 +276,7 @@ impl Ctx<'_> {
             label,
             fields: &self.fields,
             show_hidden: self.opts.show_hidden,
-            table_chr,
+            table,
             proofing: self.opts.proofing,
             exclusions,
         };
@@ -320,7 +320,7 @@ fn layout_box(
     blocks: &Blocks,
     prefix: &[u32],
     width: f32,
-    table_chr: Option<&CharProps>,
+    table: Option<&para::CellText>,
     depth: usize,
 ) -> (Vec<Placed>, f32) {
     let mut items = Vec::new();
@@ -332,7 +332,7 @@ fn layout_box(
         path.push(i as u32);
         match &**b {
             Block::Para(p) => {
-                let pl = ctx.para(p, width, table_chr);
+                let pl = ctx.para(p, width, table);
                 let ctxl = pl.rp.contextual_spacing;
                 let same = prev_style.as_ref().is_some_and(|(s, c)| *s == pl.rp.style && (*c || ctxl));
                 let before = if same && ctxl { 0.0 } else { pl.rp.space_before };
@@ -1013,7 +1013,7 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32) -> f32 {
                 label: None,
                 fields: &ctx.fields,
                 show_hidden: ctx.opts.show_hidden,
-                table_chr: None,
+                table: None,
                 proofing: false,
                 exclusions: &[],
             };
