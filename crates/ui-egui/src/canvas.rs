@@ -514,8 +514,10 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
         {
             if let Some(name) = link.strip_prefix('#') {
                 let _ = app.run("edit.goto", json!({"bookmark": name}));
-            } else {
+            } else if is_followable_link(&link) {
                 app.canvas.open_url = Some(link);
+            } else {
+                app.status(tl!("Only web (http, https) and email (mailto) links can be followed"));
             }
             return;
         }
@@ -804,5 +806,40 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
             item(ui, app, "Delete Table", "table.deleteTable", json!({}));
         });
         item(ui, app, "Merge Cells", "table.merge", json!({}));
+    }
+}
+
+/// Whether Ctrl/⌘+click may hand a document's hyperlink to the system: web and email links only,
+/// so a document can't launch `file:` paths, programs or custom-scheme handlers.
+fn is_followable_link(url: &str) -> bool {
+    let Some((scheme, _)) = url.split_once(':') else { return false };
+    ["http", "https", "mailto"].iter().any(|s| scheme.eq_ignore_ascii_case(s))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_web_and_email_links_are_followed() {
+        for ok in ["https://example.com/a?b#c", "http://example.com", "HTTPS://EXAMPLE.COM", "mailto:someone@example.com"] {
+            assert!(is_followable_link(ok), "{ok}");
+        }
+        for bad in [
+            "file:///etc/passwd",
+            "file://C:/Windows/System32/calc.exe",
+            "C:\\Windows\\System32\\calc.exe",
+            "/usr/bin/xterm",
+            "javascript:alert(1)",
+            "ms-msdt:/id",
+            "smb://host/share",
+            " https://example.com",
+            "\thttps://example.com",
+            "https\u{0}://example.com",
+            "",
+            "example.com",
+        ] {
+            assert!(!is_followable_link(bad), "{bad:?}");
+        }
     }
 }

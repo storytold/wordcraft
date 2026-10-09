@@ -448,6 +448,7 @@
 	OK	确定
 	One	一栏
 	One Page	单页
+	Only web (http, https) and email (mailto) links can be followed	只能打开网页（http、https）和电子邮件（mailto）链接
 	Open	打开
 	OpenDocument Text (*.odt)	OpenDocument 文本 (*.odt)
 	Optional Hyphen	可选连字符

@@ -437,6 +437,7 @@
 	OK	OK
 	One	1 段
 	One Page	1 ページ
+	Only web (http, https) and email (mailto) links can be followed	開けるのは Web（http、https）とメール（mailto）のリンクだけです
 	Open	開く
 	OpenDocument Text (*.odt)	OpenDocument テキスト (*.odt)
 	Optional Hyphen	任意指定のハイフン
