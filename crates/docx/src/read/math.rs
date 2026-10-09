@@ -7,7 +7,7 @@ use crate::xml::El;
 
 /// An `m:oMath` element as an equation (structure plus its source XML).
 pub fn read_omath(e: &El, jc: MathJc) -> Math {
-    Math { nodes: merge_runs(arg(e, 0)), omml: e.to_xml(), jc }
+    Math { nodes: merge_runs(arg(e, 0)), omml: e.to_xml(), jc, linear: false }
 }
 
 /// `m:oMathParaPr/m:jc`.

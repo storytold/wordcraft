@@ -285,7 +285,13 @@ impl Writer<'_> {
                     w.close("w:r");
                 }
             }
-            InlineObject::Equation { linear, display, math } => super::math::write_equation(w, linear, *display, math),
+            InlineObject::Equation { linear, display, math } => {
+                // Automatic equation numbers become text: Word numbers nothing by itself.
+                match super::math::resolve_numbers(math, *display, &mut self.eq_number) {
+                    Some(m) => super::math::write_equation(w, linear, *display, &m),
+                    None => super::math::write_equation(w, linear, *display, math),
+                }
+            }
             InlineObject::Field { instr, result, locked } => self.field(w, instr, result, *locked, props),
             InlineObject::NoteRef { kind, id, custom } => {
                 let foot = *kind == NoteKind::Footnote;

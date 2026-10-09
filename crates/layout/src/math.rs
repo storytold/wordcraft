@@ -10,7 +10,9 @@
 
 use std::sync::Arc;
 
-use wordcraft_doc::math::{Arg, ColJc, FracKind, LimLoc, MAX_DEPTH, MNode, MRun, MScr, MSty, ScriptKind, is_integral, parse_linear};
+use wordcraft_doc::math::{
+    Arg, ColJc, FracKind, LimLoc, MAX_DEPTH, MClass, MNode, MRun, MScr, MSty, ScriptKind, is_integral, math_alnum, parse_linear,
+};
 use wordcraft_doc::props::{Rgb, TextColor};
 use wordcraft_doc::resolve::ResolvedChar;
 use wordcraft_fonts::math::{C, Construction, MathTable, glyph_bounds};
@@ -44,7 +46,10 @@ pub enum MItem {
         y1: f32,
         width: f32,
         color: Rgb,
+        dotted: bool,
     },
+    /// Drawn on screen only (placeholders for empty slots, the empty-equation hint).
+    ScreenOnly(Box<MItem>),
 }
 
 impl MItem {
@@ -66,8 +71,21 @@ impl MItem {
                 *y0 += dy;
                 *y1 += dy;
             }
+            MItem::ScreenOnly(i) => i.shift(dx, dy),
         }
     }
+}
+
+/// A caret position inside an equation, where it is drawn: `x`, the baseline `y` (up from the
+/// equation's baseline) and the caret's extent above (`a`) and below (`d`) it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Slot {
+    pub path: Vec<(usize, usize)>,
+    pub off: usize,
+    pub x: f32,
+    pub y: f32,
+    pub a: f32,
+    pub d: f32,
 }
 
 /// A laid-out equation.
@@ -78,13 +96,96 @@ pub struct MathLayout {
     pub ascent: f32,
     pub descent: f32,
     pub items: Vec<MItem>,
+    /// Every caret position, for drawing the caret and hit testing.
+    pub slots: Vec<Slot>,
+}
+
+impl MathLayout {
+    /// Where the caret at (`path`, `off`) is drawn.
+    pub fn slot(&self, path: &[(usize, usize)], off: usize) -> Option<&Slot> {
+        self.slots
+            .iter()
+            .find(|s| s.path == path && s.off == off)
+            .or_else(|| self.slots.iter().filter(|s| s.path == path).min_by_key(|s| s.off.abs_diff(off)))
+    }
+    /// The caret position nearest to (`x`, `y`) (y up from the baseline).
+    pub fn hit(&self, x: f32, y: f32) -> Option<&Slot> {
+        self.slots.iter().min_by(|a, b| slot_dist(a, x, y).total_cmp(&slot_dist(b, x, y)))
+    }
+}
+
+fn slot_dist(s: &Slot, x: f32, y: f32) -> f32 {
+    let (top, bottom) = (s.y + s.a, s.y - s.d);
+    let dy = if y > top {
+        y - top
+    } else if y < bottom {
+        bottom - y
+    } else {
+        0.0
+    };
+    // Inside a slot's height, prefer the innermost (shortest) argument.
+    let h = (s.a + s.d).max(0.1);
+    (s.x - x).abs() + dy * 3.0 + if dy == 0.0 { h * 0.05 } else { 0.0 }
+}
+
+/// Numbered rows (`#`) in an equation: they advance the automatic numbering.
+pub fn auto_numbers(math: &wordcraft_doc::math::Math, display: bool) -> u32 {
+    if !display {
+        return 0;
+    }
+    match math.nodes.as_slice() {
+        [MNode::EqArr { rows }] => rows.iter().filter(|r| split_number(r).is_some()).count() as u32,
+        _ => 0,
+    }
+}
+
+/// A row's equation and number parts around its top-level `#`, and the units before the `#`.
+fn split_number(row: &[MNode]) -> Option<(Arg, Arg, usize)> {
+    let mut eq = Vec::new();
+    let mut units = 0usize;
+    for (i, n) in row.iter().enumerate() {
+        if let MNode::Run(r) = n
+            && !r.lit
+            && let Some(b) = r.text.find('#')
+        {
+            let mut left = r.clone();
+            left.text = r.text.get(..b).unwrap_or("").to_string();
+            let mut right = r.clone();
+            right.text = r.text.get(b + 1..).unwrap_or("").to_string();
+            units += left.text.chars().count();
+            if !left.text.is_empty() {
+                eq.push(MNode::Run(left));
+            }
+            let mut num = Vec::new();
+            if !right.text.is_empty() {
+                num.push(MNode::Run(right));
+            }
+            num.extend(row.get(i + 1..).unwrap_or(&[]).iter().cloned());
+            return Some((eq, num, units));
+        }
+        units += match n {
+            MNode::Run(r) => r.text.chars().count(),
+            _ => 1,
+        };
+        eq.push(n.clone());
+    }
+    None
 }
 
 /// Lay out an equation set at the size and colour of `rc`. `display`: an equation on a line of
 /// its own (bigger operators, limits above and below, full-size fractions).
-pub fn layout_equation(math: &wordcraft_doc::math::Math, linear: &str, rc: &ResolvedChar, display: bool) -> MathLayout {
+/// `avail` is the width of the line (numbered display equations fill it); `counter` counts the
+/// document's automatic equation numbers so far and advances past this equation's.
+pub fn layout_equation(
+    math: &wordcraft_doc::math::Math,
+    linear: &str,
+    rc: &ResolvedChar,
+    display: bool,
+    avail: f32,
+    counter: &mut u32,
+) -> MathLayout {
     let parsed;
-    let nodes: &Arg = if math.nodes.is_empty() {
+    let nodes: &Arg = if math.nodes.is_empty() && !math.linear {
         parsed = parse_linear(linear);
         &parsed
     } else {
@@ -96,10 +197,33 @@ pub fn layout_equation(math: &wordcraft_doc::math::Math, linear: &str, rc: &Reso
         TextColor::Auto => Rgb::BLACK,
     };
     let base = rc.draw_size().clamp(1.0, 1638.0);
-    let mut cx = Ctx { face, t: table, upem: face.upem.max(1.0) as f32, base, color, text_font: rc.font.clone(), nodes: 0 };
+    let mut cx = Ctx {
+        face,
+        t: table,
+        upem: face.upem.max(1.0) as f32,
+        base,
+        color,
+        text_font: rc.font.clone(),
+        nodes: 0,
+        path: Vec::new(),
+        node_stack: Vec::new(),
+    };
     let st = St { level: 0, display, cramped: false, upright: false };
-    let b = cx.arg(nodes, st, 0);
-    MathLayout { width: b.w.max(0.0), ascent: b.a.max(0.0), descent: b.d.max(0.0), items: b.items }
+    let avail = if avail.is_finite() { avail.clamp(0.0, 1e5) } else { 0.0 };
+    let b = match nodes.as_slice() {
+        [] => cx.hint(st),
+        [MNode::EqArr { rows }] if display && rows.iter().any(|r| split_number(r).is_some()) => cx.numbered(rows, st, avail, counter),
+        _ => cx.arg(nodes, st, 0),
+    };
+    let mut slots = b.slots;
+    let em = base;
+    for s in &mut slots {
+        if s.a <= 0.0 && s.d <= 0.0 {
+            s.a = em * 0.75;
+            s.d = em * 0.25;
+        }
+    }
+    MathLayout { width: b.w.max(0.0), ascent: b.a.max(0.0), descent: b.d.max(0.0), items: b.items, slots }
 }
 
 /// Layout style: script level (0 = text size, 1 = script, 2 = script-script), display or inline,
@@ -179,6 +303,10 @@ struct Bx {
     glyph: Option<(FaceRef, u32, f32)>,
     /// Takes no part in inter-atom spacing (spaces).
     transparent: bool,
+    /// Caret positions inside, relative to the box.
+    slots: Vec<Slot>,
+    /// Text atoms: x of each character boundary (one more than the characters).
+    cuts: Vec<f32>,
 }
 
 impl Bx {
@@ -195,6 +323,14 @@ impl Bx {
             it.shift(dx, dy);
             self.items.push(it);
         }
+        for mut sl in o.slots {
+            sl.x += dx;
+            sl.y += dy;
+            self.slots.push(sl);
+        }
+    }
+    fn slot(&mut self, path: &[(usize, usize)], off: usize, x: f32) {
+        self.slots.push(Slot { path: path.to_vec(), off, x, y: 0.0, a: 0.0, d: 0.0 });
     }
     fn rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: Rgb) {
         if w > 0.0 && h > 0.0 {
@@ -214,6 +350,10 @@ struct Ctx {
     text_font: String,
     /// Nodes laid out so far (caps work on hostile input).
     nodes: usize,
+    /// The argument being laid out (for caret slots).
+    path: Vec<(usize, usize)>,
+    /// Index of the node being laid out in its argument, innermost last.
+    node_stack: Vec<usize>,
 }
 
 const MAX_NODES: usize = 200_000;
@@ -277,122 +417,16 @@ fn fallback(c: C) -> f32 {
 
 /// Characters drawn as operators with their own spacing class.
 fn class_of(c: char) -> Cls {
-    match c {
-        '+' | '−' | '-' | '±' | '∓' | '×' | '÷' | '·' | '∙' | '∗' | '*' | '∘' | '⊕' | '⊖' | '⊗' | '⊘' | '⊙' | '∪' | '∩' | '∧' | '∨' | '∖' | '⋅'
-        | '⋆' | '⊎' | '⊓' | '⊔' | '⋄' | '⊞' | '⊟' | '⊠' | '⊡' | '⋉' | '⋊' => Cls::Bin,
-        '=' | '<' | '>' | '≤' | '≥' | '≠' | '≈' | '≡' | '≢' | '∼' | '≃' | '≅' | '≐' | '∝' | '≪' | '≫' | '≺' | '≻' | '⊂' | '⊃' | '⊆' | '⊇' | '⊄'
-        | '⊅' | '∈' | '∉' | '∋' | '∌' | '⊥' | '∥' | '∣' | '≔' | '≝' | '≜' | '→' | '←' | '↔' | '⇒' | '⇐' | '⇔' | '↦' | '⟶' | '⟵' | '⟷' | '⟹' | '⟸'
-        | '⟺' | '↑' | '↓' | '⊢' | '⊨' | '≲' | '≳' | '≍' | '⊏' | '⊐' | '⊑' | '⊒' | '≶' | '≷' | '≮' | '≯' | '≰' | '≱' | '≦' | '≧' | '⩽' | '⩾' | ':'
-        | '∶' | '≗' | '≙' | '≟' | '⇌' | '⇋' | '↪' | '↩' | '⊊' | '⊋' => Cls::Rel,
-        '(' | '[' | '{' | '⟨' | '⌈' | '⌊' | '⟦' | '〈' => Cls::Open,
-        ')' | ']' | '}' | '⟩' | '⌉' | '⌋' | '⟧' | '〉' | '!' => Cls::Close,
-        ',' | ';' => Cls::Punct,
-        c if wordcraft_doc::math::is_nary_char(c) => Cls::Op,
-        _ => Cls::Ord,
+    match wordcraft_doc::math::math_class(c) {
+        MClass::Ord => Cls::Ord,
+        MClass::Op => Cls::Op,
+        MClass::Bin => Cls::Bin,
+        MClass::Rel => Cls::Rel,
+        MClass::Open => Cls::Open,
+        MClass::Close => Cls::Close,
+        MClass::Punct => Cls::Punct,
+        MClass::Inner => Cls::Inner,
     }
-}
-
-/// Mathematical alphanumeric for `c` in a style and alphabet (Unicode block U+1D400).
-fn math_char(c: char, bold: bool, italic: bool, scr: MScr) -> char {
-    let off = |base: u32, k: u32| char::from_u32(base + k).unwrap_or(c);
-    let upper = c.is_ascii_uppercase();
-    let lower = c.is_ascii_lowercase();
-    if upper || lower {
-        let k = if upper { c as u32 - 'A' as u32 } else { c as u32 - 'a' as u32 };
-        // Letters that live in the Letterlike Symbols block.
-        let hole = |table: &[(char, char)]| table.iter().find(|(f, _)| *f == c).map(|(_, t)| *t);
-        let (base_u, base_l) = match (scr, bold, italic) {
-            (MScr::Roman, false, false) => return c,
-            (MScr::Roman, true, false) => (0x1D400, 0x1D41A),
-            (MScr::Roman, false, true) => {
-                if c == 'h' {
-                    return '\u{210E}';
-                }
-                (0x1D434, 0x1D44E)
-            }
-            (MScr::Roman, true, true) => (0x1D468, 0x1D482),
-            (MScr::Script, false, _) => {
-                if let Some(t) = hole(&[
-                    ('B', 'ℬ'),
-                    ('E', 'ℰ'),
-                    ('F', 'ℱ'),
-                    ('H', 'ℋ'),
-                    ('I', 'ℐ'),
-                    ('L', 'ℒ'),
-                    ('M', 'ℳ'),
-                    ('R', 'ℛ'),
-                    ('e', 'ℯ'),
-                    ('g', 'ℊ'),
-                    ('o', 'ℴ'),
-                ]) {
-                    return t;
-                }
-                (0x1D49C, 0x1D4B6)
-            }
-            (MScr::Script, true, _) => (0x1D4D0, 0x1D4EA),
-            (MScr::Fraktur, false, _) => {
-                if let Some(t) = hole(&[('C', 'ℭ'), ('H', 'ℌ'), ('I', 'ℑ'), ('R', 'ℜ'), ('Z', 'ℨ')]) {
-                    return t;
-                }
-                (0x1D504, 0x1D51E)
-            }
-            (MScr::Fraktur, true, _) => (0x1D56C, 0x1D586),
-            (MScr::DoubleStruck, _, _) => {
-                if let Some(t) = hole(&[('C', 'ℂ'), ('H', 'ℍ'), ('N', 'ℕ'), ('P', 'ℙ'), ('Q', 'ℚ'), ('R', 'ℝ'), ('Z', 'ℤ')]) {
-                    return t;
-                }
-                (0x1D538, 0x1D552)
-            }
-            (MScr::SansSerif, false, false) => (0x1D5A0, 0x1D5BA),
-            (MScr::SansSerif, true, false) => (0x1D5D4, 0x1D5EE),
-            (MScr::SansSerif, false, true) => (0x1D608, 0x1D622),
-            (MScr::SansSerif, true, true) => (0x1D63C, 0x1D656),
-            (MScr::Monospace, _, _) => (0x1D670, 0x1D68A),
-        };
-        return off(if upper { base_u } else { base_l }, k);
-    }
-    if c.is_ascii_digit() {
-        let k = c as u32 - '0' as u32;
-        return match (scr, bold) {
-            (MScr::Roman, true) => off(0x1D7CE, k),
-            (MScr::DoubleStruck, _) => off(0x1D7D8, k),
-            (MScr::SansSerif, false) => off(0x1D7E2, k),
-            (MScr::SansSerif, true) => off(0x1D7EC, k),
-            (MScr::Monospace, _) => off(0x1D7F6, k),
-            _ => c,
-        };
-    }
-    // Greek (roman alphabet only).
-    if scr == MScr::Roman && (bold || italic) {
-        let (cap, small) = match (bold, italic) {
-            (true, false) => (0x1D6A8, 0x1D6C2),
-            (false, true) => (0x1D6E2, 0x1D6FC),
-            _ => (0x1D71C, 0x1D736),
-        };
-        let u = c as u32;
-        if (0x391..=0x3A9).contains(&u) && u != 0x3A2 {
-            return off(cap, u - 0x391);
-        }
-        if (0x3B1..=0x3C9).contains(&u) {
-            return off(small, u - 0x3B1);
-        }
-        let extra = match c {
-            '∂' => Some(25),
-            'ϵ' => Some(26),
-            'ϑ' => Some(27),
-            'ϰ' => Some(28),
-            'ϕ' => Some(29),
-            'ϱ' => Some(30),
-            'ϖ' => Some(31),
-            _ => None,
-        };
-        if let Some(e) = extra
-            && italic
-        {
-            return off(small, e);
-        }
-    }
-    c
 }
 
 /// Accents drawn across the whole base (stretched horizontally).
@@ -449,39 +483,106 @@ impl Ctx {
     }
 
     fn arg(&mut self, a: &[MNode], st: St, depth: usize) -> Bx {
-        let atoms = self.row(a, st, depth);
-        compose(atoms.into_iter().map(|(b, _)| b).collect(), st, self.em(st))
+        let atoms = self.row(a, st, depth, 0);
+        let em = self.em(st);
+        let mut b = compose(atoms.into_iter().map(|(b, _)| b).collect(), st, em);
+        finalize(&mut b, &self.path, em);
+        b
     }
 
-    /// The atoms of a row with their alignment segment (`&` starts a new segment).
-    fn row(&mut self, a: &[MNode], st: St, depth: usize) -> Vec<(Bx, usize)> {
+    /// Child argument `c` of the node being laid out; an empty one shows a placeholder.
+    fn sub(&mut self, c: usize, a: &[MNode], st: St, depth: usize) -> Bx {
+        let me = self.node_stack.last().copied().unwrap_or(0);
+        self.path.push((me, c));
+        let b = if a.is_empty() { self.placeholder(st) } else { self.arg(a, st, depth) };
+        self.path.pop();
+        b
+    }
+
+    /// The dotted box an empty argument shows on screen.
+    fn placeholder(&mut self, st: St) -> Bx {
+        let em = self.em(st);
+        let (w, a, d, pad) = (em * 0.56, em * 0.7, em * 0.06, em * 0.05);
+        let mut b = Bx { w: w + 2.0 * pad, a, d, ..Default::default() };
+        let (x0, x1, y0, y1) = (pad, pad + w, -d, a);
+        let width = (em * 0.035).max(0.4);
+        for ((ax, ay), (bx, by)) in [((x0, y0), (x1, y0)), ((x1, y0), (x1, y1)), ((x1, y1), (x0, y1)), ((x0, y1), (x0, y0))] {
+            let line = MItem::Line { x0: ax, y0: ay, x1: bx, y1: by, width, color: Rgb(0x60, 0x60, 0x60), dotted: true };
+            b.items.push(MItem::ScreenOnly(Box::new(line)));
+        }
+        let path = self.path.clone();
+        b.slot(&path, 0, pad);
+        finalize(&mut b, &path, em);
+        b
+    }
+
+    /// An empty equation: a grey prompt (screen only).
+    fn hint(&mut self, st: St) -> Bx {
+        let size = self.size(st);
+        let rs = wordcraft_fonts::word::resolve(&self.text_font, false, false);
+        let mut g = self.glyphs(rs.face, "Type an equation", size, 0, Rgb(0x80, 0x80, 0x80), (rs.synth_bold, rs.synth_italic));
+        g.items = std::mem::take(&mut g.items).into_iter().map(|i| MItem::ScreenOnly(Box::new(i))).collect();
+        g.glyph = None;
+        g.cuts.clear();
+        g.slots.clear();
+        g.slot(&[], 0, 0.0);
+        finalize(&mut g, &[], size);
+        g
+    }
+
+    /// The atoms of a row with their alignment segment (`&` starts a new segment). `u0`: the
+    /// unit offset of the row's first node (for caret slots).
+    fn row(&mut self, a: &[MNode], st: St, depth: usize, u0: usize) -> Vec<(Bx, usize)> {
         let mut out = Vec::new();
         if depth > MAX_DEPTH {
             return out;
         }
         let mut seg = 0usize;
-        for n in a {
+        let mut u = u0;
+        for (i, n) in a.iter().enumerate() {
             self.nodes += 1;
             if self.nodes > MAX_NODES {
                 break;
             }
+            let path = self.path.clone();
             match n {
                 MNode::Run(r) => {
-                    for part in self.run_atoms(r, st) {
+                    for part in self.run_atoms(r, st, u, &path) {
                         match part {
                             RunPart::Atom(b) => out.push((b, seg)),
-                            RunPart::Align => seg += 1,
+                            RunPart::Align(b) => {
+                                seg += 1;
+                                out.push((b, seg));
+                            }
                         }
                     }
+                    u += r.text.chars().count();
                 }
                 MNode::Nary { .. } | MNode::Func { .. } => {
-                    for b in self.op_atoms(n, st, depth + 1) {
+                    self.node_stack.push(i);
+                    let mut atoms = self.op_atoms(n, st, depth + 1);
+                    self.node_stack.pop();
+                    if let Some(f) = atoms.first_mut() {
+                        f.slot(&path, u, 0.0);
+                    }
+                    if let Some(l) = atoms.last_mut() {
+                        let w = l.w;
+                        l.slot(&path, u + 1, w);
+                    }
+                    for b in atoms {
                         out.push((b, seg));
                     }
+                    u += 1;
                 }
                 _ => {
-                    let b = self.node(n, st, depth + 1);
+                    self.node_stack.push(i);
+                    let mut b = self.node(n, st, depth + 1);
+                    self.node_stack.pop();
+                    let w = b.w;
+                    b.slot(&path, u, 0.0);
+                    b.slot(&path, u + 1, w);
                     out.push((b, seg));
+                    u += 1;
                 }
             }
         }
@@ -510,6 +611,22 @@ impl Ctx {
             last_gid = Some(g.gid);
         }
         b.w = x;
+        // Character boundaries: where the first glyph of each character starts.
+        let mut cuts = Vec::with_capacity(text.len() + 1);
+        for (cb, _) in text.char_indices() {
+            let mut gx = 0.0f32;
+            let mut found = None;
+            for g in &shaped {
+                if g.cluster >= cb {
+                    found = Some(gx);
+                    break;
+                }
+                gx += g.x_advance as f32 * k;
+            }
+            cuts.push(found.unwrap_or(x));
+        }
+        cuts.push(x);
+        b.cuts = cuts;
         if let (Some(t), Some(g)) = (&self.t, last_gid)
             && face.id() == self.face.id()
         {
@@ -547,7 +664,18 @@ impl Ctx {
         b
     }
 
-    fn run_atoms(&self, r: &MRun, st: St) -> Vec<RunPart> {
+    /// A text atom with caret slots at its character boundaries (`k0`: the unit offset of its
+    /// first character).
+    fn text_atom(&self, face: FaceRef, text: &str, size: f32, level: u8, color: Rgb, synth: (bool, bool), path: &[(usize, usize)], k0: usize) -> Bx {
+        let mut b = self.glyphs(face, text, size, level, color, synth);
+        let cuts = std::mem::take(&mut b.cuts);
+        for (j, x) in cuts.iter().enumerate() {
+            b.slot(path, k0 + j, *x);
+        }
+        b
+    }
+
+    fn run_atoms(&self, r: &MRun, st: St, u0: usize, path: &[(usize, usize)]) -> Vec<RunPart> {
         let mut out = Vec::new();
         let size = r.size.filter(|s| s.is_finite()).unwrap_or(self.base).clamp(1.0, 1638.0) * self.scale(st.level);
         let color = r.color.unwrap_or(self.color);
@@ -561,27 +689,35 @@ impl Ctx {
                 _ => (false, false),
             };
             let rs = wordcraft_fonts::word::resolve(&fam, bold, italic);
-            let mut b = self.glyphs(rs.face, &r.text, size, 0, color, (rs.synth_bold, rs.synth_italic));
+            let mut b = self.text_atom(rs.face, &r.text, size, 0, color, (rs.synth_bold, rs.synth_italic), path, u0);
             b.glyph = None;
             out.push(RunPart::Atom(b.cls(Cls::Ord)));
             return out;
         }
         // Map characters (math alphabets, operators) and split into atoms by class.
         let mut cur = String::new();
+        let mut cur_k0 = 0usize;
         let mut cur_face: Option<FaceRef> = None;
         let mut synth_italic = false;
-        let flush = |cur: &mut String, face: Option<FaceRef>, synth_italic: bool, out: &mut Vec<RunPart>| {
+        let flush = |cur: &mut String, k0: usize, face: Option<FaceRef>, synth_italic: bool, out: &mut Vec<RunPart>| {
             if !cur.is_empty() {
                 let f = face.unwrap_or(self.face);
-                let b = self.glyphs(f, cur, size, st.level, color, (false, synth_italic));
+                let b = self.text_atom(f, cur, size, st.level, color, (false, synth_italic), path, u0 + k0);
                 out.push(RunPart::Atom(b.cls(Cls::Ord)));
                 cur.clear();
             }
         };
-        for c in r.text.chars() {
+        // A zero-width (or space) atom that takes no part in spacing, with its two slots.
+        let blank = |w: f32, k: usize| {
+            let mut b = Bx { w, transparent: true, ..Default::default() };
+            b.slot(path, u0 + k, 0.0);
+            b.slot(path, u0 + k + 1, w);
+            b
+        };
+        for (k, c) in r.text.chars().enumerate() {
             if c == '&' && !r.lit {
-                flush(&mut cur, cur_face, synth_italic, &mut out);
-                out.push(RunPart::Align);
+                flush(&mut cur, cur_k0, cur_face, synth_italic, &mut out);
+                out.push(RunPart::Align(blank(0.0, k)));
                 continue;
             }
             let c = if r.lit {
@@ -601,9 +737,9 @@ impl Ctx {
                 Some(MSty::Bold) => (true, false),
                 Some(MSty::Italic) => (false, true),
                 Some(MSty::BoldItalic) => (true, true),
-                None => (false, is_letter && !greek_cap && !st.upright && r.scr == MScr::Roman),
+                None => (false, is_letter && !greek_cap && !st.upright && r.scr == MScr::Roman && !r.lit),
             };
-            let mapped = math_char(c, bold, italic, r.scr);
+            let mapped = math_alnum(c, bold, italic, r.scr);
             // Fall back to the plain letter (slanted) when the face lacks the math alphabet.
             let (ch, slant) = if mapped != c && !self.face.covers(mapped) { (c, italic) } else { (mapped, false) };
             let face = if self.face.covers(ch) || ch.is_whitespace() {
@@ -611,31 +747,31 @@ impl Ctx {
             } else {
                 FontDb::global().fallback_for(ch, self.face.id()).map(|f| FaceRef::of(&f))
             };
-            let cls = class_of(ch);
-            if ch == ' ' || ch == '\u{2061}' || ch == '\u{2062}' || ch == '\u{2063}' {
-                flush(&mut cur, cur_face, synth_italic, &mut out);
-                if ch == ' ' {
-                    // Word sets a typed space in an equation about 0.4 em wide.
-                    let b = Bx { w: size * 0.4, transparent: true, ..Default::default() };
-                    out.push(RunPart::Atom(b));
-                }
+            let cls = if r.lit { Cls::Ord } else { class_of(ch) };
+            if ch == ' ' || ch == '\u{2061}' || ch == '\u{2062}' || ch == '\u{2063}' || ch == '\u{200B}' {
+                flush(&mut cur, cur_k0, cur_face, synth_italic, &mut out);
+                // Word sets a typed space in an equation about 0.4 em wide.
+                out.push(RunPart::Atom(blank(if ch == ' ' { size * 0.4 } else { 0.0 }, k)));
                 continue;
             }
             let same_face = cur_face.map(|f| f.id()) == face.map(|f| f.id());
             if cls != Cls::Ord || !same_face || slant != synth_italic {
-                flush(&mut cur, cur_face, synth_italic, &mut out);
+                flush(&mut cur, cur_k0, cur_face, synth_italic, &mut out);
             }
             if cls != Cls::Ord {
                 let f = face.unwrap_or(self.face);
-                let b = self.glyphs(f, &ch.to_string(), size, st.level, color, (false, slant));
+                let b = self.text_atom(f, &ch.to_string(), size, st.level, color, (false, slant), path, u0 + k);
                 out.push(RunPart::Atom(b.cls(cls)));
                 continue;
+            }
+            if cur.is_empty() {
+                cur_k0 = k;
             }
             cur_face = face;
             synth_italic = slant;
             cur.push(ch);
         }
-        flush(&mut cur, cur_face, synth_italic, &mut out);
+        flush(&mut cur, cur_k0, cur_face, synth_italic, &mut out);
         out
     }
 
@@ -643,7 +779,7 @@ impl Ctx {
     fn op_atoms(&mut self, n: &MNode, st: St, depth: usize) -> Vec<Bx> {
         match n {
             MNode::Nary { chr, lim_loc, grow, sub_hide, sup_hide, sub, sup, e } => {
-                let e = self.arg(e, st, depth);
+                let e = self.sub(2, e, st, depth);
                 let loc = lim_loc.unwrap_or(if is_integral(*chr) { LimLoc::SubSup } else { LimLoc::UndOvr });
                 let loc = if st.display { loc } else { LimLoc::SubSup };
                 let size = self.size(st);
@@ -685,8 +821,8 @@ impl Ctx {
                 let mut ob = Bx { w: op.w, ..Default::default() };
                 let ic = op.ic;
                 ob.put(op, 0.0, dy);
-                let sub = if *sub_hide || sub.is_empty() { None } else { Some(self.arg(sub, st.script().cramp(), depth)) };
-                let sup = if *sup_hide || sup.is_empty() { None } else { Some(self.arg(sup, st.script(), depth)) };
+                let sub = if *sub_hide { None } else { Some(self.sub(0, sub, st.script().cramp(), depth)) };
+                let sup = if *sup_hide { None } else { Some(self.sub(1, sup, st.script(), depth)) };
                 let opb = match loc {
                     LimLoc::UndOvr => self.limits(ob, sub, sup, ic, st, true),
                     LimLoc::SubSup => {
@@ -697,8 +833,8 @@ impl Ctx {
                 vec![opb.cls(Cls::Op), e]
             }
             MNode::Func { name, e } => {
-                let name = self.arg(name, St { upright: true, ..st }, depth);
-                let e = self.arg(e, st, depth);
+                let name = self.sub(0, name, St { upright: true, ..st }, depth);
+                let e = self.sub(1, e, St { upright: false, ..st }, depth);
                 vec![name.cls(Cls::Op), e]
             }
             _ => Vec::new(),
@@ -918,26 +1054,25 @@ impl Ctx {
         match n {
             MNode::Run(r) => {
                 let atoms: Vec<Bx> = self
-                    .run_atoms(r, st)
+                    .run_atoms(r, st, 0, &self.path.clone())
                     .into_iter()
-                    .filter_map(|p| match p {
-                        RunPart::Atom(b) => Some(b),
-                        RunPart::Align => None,
+                    .map(|p| match p {
+                        RunPart::Atom(b) | RunPart::Align(b) => b,
                     })
                     .collect();
                 compose(atoms, st, em)
             }
             MNode::Frac { kind, num, den } => self.frac(*kind, num, den, st, d),
             MNode::Script { kind, base, sub, sup } => {
-                let b = self.arg(base, st, d);
+                let b = self.sub(0, base, st, d);
                 let char_base = b.glyph.is_some();
-                let sub_b = if matches!(kind, ScriptKind::Sub | ScriptKind::SubSup | ScriptKind::Pre) && !sub.is_empty() {
-                    Some(self.arg(sub, st.script().cramp(), d))
+                let sub_b = if matches!(kind, ScriptKind::Sub | ScriptKind::SubSup | ScriptKind::Pre) {
+                    Some(self.sub(1, sub, st.script().cramp(), d))
                 } else {
                     None
                 };
-                let sup_b = if matches!(kind, ScriptKind::Sup | ScriptKind::SubSup | ScriptKind::Pre) && !sup.is_empty() {
-                    Some(self.arg(sup, st.script(), d))
+                let sup_b = if matches!(kind, ScriptKind::Sup | ScriptKind::SubSup | ScriptKind::Pre) {
+                    Some(self.sub(2, sup, st.script(), d))
                 } else {
                     None
                 };
@@ -961,7 +1096,7 @@ impl Ctx {
                 compose(atoms, st, em)
             }
             MNode::Delim { beg, end, sep, grow, shp_match, elems } => {
-                let parts: Vec<Bx> = elems.iter().map(|e| self.arg(e, st, d)).collect();
+                let parts: Vec<Bx> = elems.iter().enumerate().map(|(k, e)| self.sub(k, e, st, d)).collect();
                 let a = parts.iter().map(|b| b.a).fold(0.0f32, f32::max);
                 let dd = parts.iter().map(|b| b.d).fold(0.0f32, f32::max);
                 let mut row: Vec<Bx> = Vec::new();
@@ -987,9 +1122,9 @@ impl Ctx {
                 out
             }
             MNode::Lim { upper, e, lim } => {
-                let base = self.arg(e, st, d);
+                let base = self.sub(0, e, st, d);
                 let ls = St { upright: false, ..st.script() };
-                let l = self.arg(lim, if *upper { ls } else { ls.cramp() }, d);
+                let l = self.sub(1, lim, if *upper { ls } else { ls.cramp() }, d);
                 let (f, la) = (base.first, base.last);
                 let mut out =
                     if *upper { self.limits(base, None, Some(l), 0.0, st, false) } else { self.limits(base, Some(l), None, 0.0, st, false) };
@@ -999,7 +1134,7 @@ impl Ctx {
             }
             MNode::Acc { chr, e } => self.accent(*chr, e, st, d),
             MNode::Bar { top, e } => {
-                let b = self.arg(e, st, d);
+                let b = self.sub(0, e, st, d);
                 let (w, a, dd) = (b.w, b.a, b.d);
                 let mut out = Bx { w, ..Default::default() };
                 out.put(b, 0.0, 0.0);
@@ -1018,7 +1153,7 @@ impl Ctx {
                 out
             }
             MNode::BorderBox { hide, strike, e } => {
-                let b = self.arg(e, st, d);
+                let b = self.sub(0, e, st, d);
                 let t = self.k(C::FractionRuleThickness, st).max(0.4);
                 let pad = em * 0.12;
                 let (w, a, dd) = (b.w + 2.0 * pad, b.a + pad, b.d + pad);
@@ -1041,8 +1176,9 @@ impl Ctx {
                 }
                 let [sh, sv, bltr, tlbr] = *strike;
                 let mid = (a - dd) / 2.0;
-                let line =
-                    |out: &mut Bx, p: (f32, f32, f32, f32)| out.items.push(MItem::Line { x0: p.0, y0: p.1, x1: p.2, y1: p.3, width: t, color });
+                let line = |out: &mut Bx, p: (f32, f32, f32, f32)| {
+                    out.items.push(MItem::Line { x0: p.0, y0: p.1, x1: p.2, y1: p.3, width: t, color, dotted: false })
+                };
                 if sh {
                     line(&mut out, (x0, mid, x1, mid));
                 }
@@ -1059,9 +1195,9 @@ impl Ctx {
                 out.d = out.d.max(-y0);
                 out
             }
-            MNode::Boxed { e } => self.arg(e, st, d),
+            MNode::Boxed { e } => self.sub(0, e, st, d),
             MNode::GroupChr { chr, top, e } => {
-                let b = self.arg(e, st, d);
+                let b = self.sub(0, e, st, d);
                 let size = self.size(st);
                 let gid = self.face.glyph_for(*chr);
                 let g =
@@ -1083,7 +1219,7 @@ impl Ctx {
             MNode::EqArr { rows } => self.eq_arr(rows, st, d),
             MNode::Matrix { rows, col_jc } => self.matrix(rows, col_jc, st, d),
             MNode::Phant { show, zero_wid, zero_asc, zero_desc, e } => {
-                let mut b = self.arg(e, st, d);
+                let mut b = self.sub(0, e, st, d);
                 if !show {
                     b.items.clear();
                 }
@@ -1106,14 +1242,14 @@ impl Ctx {
         let em = self.em(st);
         match kind {
             FracKind::Linear => {
-                let n = self.arg(num, st, d);
-                let dn = self.arg(den, st, d);
+                let n = self.sub(0, num, st, d);
+                let dn = self.sub(1, den, st, d);
                 let slash = self.glyphs(self.face, "/", self.size(st), st.level, self.color, (false, false)).cls(Cls::Ord);
                 hcat(vec![n, slash, dn])
             }
             FracKind::Skewed => {
-                let n = self.arg(num, st.script(), d);
-                let dn = self.arg(den, st.script().cramp(), d);
+                let n = self.sub(0, num, st.script(), d);
+                let dn = self.sub(1, den, st.script().cramp(), d);
                 let size = self.size(st);
                 let slash = self.glyphs(self.face, "\u{2044}", size, 0, self.color, (false, false));
                 let gap = self.k(C::SkewedFractionHorizontalGap, st) / 2.0;
@@ -1127,8 +1263,8 @@ impl Ctx {
             }
             FracKind::Bar | FracKind::NoBar => {
                 let cs = st.frac();
-                let n = self.arg(num, St { cramped: st.cramped, ..cs }, d);
-                let dn = self.arg(den, cs.cramp(), d);
+                let n = self.sub(0, num, St { cramped: st.cramped, ..cs }, d);
+                let dn = self.sub(1, den, cs.cramp(), d);
                 let axis = self.axis(st);
                 let (u, v) = if kind == FracKind::Bar {
                     let t = self.k(C::FractionRuleThickness, st);
@@ -1181,7 +1317,7 @@ impl Ctx {
     }
 
     fn radical(&mut self, deg: &[MNode], deg_hide: bool, e: &[MNode], st: St, d: usize) -> Bx {
-        let b = self.arg(e, st.cramp(), d);
+        let b = self.sub(1, e, st.cramp(), d);
         let size = self.size(st);
         let t = self.k(C::RadicalRuleThickness, st).max(0.4);
         let mut gap = if st.display { self.k(C::RadicalDisplayStyleVerticalGap, st) } else { self.k(C::RadicalVerticalGap, st) };
@@ -1205,8 +1341,8 @@ impl Ctx {
         // Degree.
         let mut x0 = 0.0f32;
         let mut out = Bx::default();
-        if !deg_hide && !deg.is_empty() {
-            let db = self.arg(deg, St { level: (st.level + 2).min(2), display: false, cramped: true, upright: st.upright }, d);
+        if !deg_hide {
+            let db = self.sub(0, deg, St { level: (st.level + 2).min(2), display: false, cramped: true, upright: st.upright }, d);
             let kb = self.k(C::RadicalKernBeforeDegree, st);
             let ka = self.k(C::RadicalKernAfterDegree, st);
             let raise = self.t.as_ref().map_or(60.0, |t| t.radical_degree_bottom_raise_percent) / 100.0 * (ga + gd);
@@ -1225,7 +1361,7 @@ impl Ctx {
     }
 
     fn accent(&mut self, chr: char, e: &[MNode], st: St, d: usize) -> Bx {
-        let b = self.arg(e, st.cramp(), d);
+        let b = self.sub(0, e, st.cramp(), d);
         let size = self.size(st);
         let color = self.color;
         // Overline-style accents are rules.
@@ -1290,7 +1426,7 @@ impl Ctx {
 
     /// Rows stacked and centred on the math axis; `gap`: least space between rows, `min_skip`:
     /// least baseline-to-baseline distance.
-    fn stack_rows(&self, rows: Vec<(Bx, f32)>, st: St, gap: f32, min_skip: f32) -> Bx {
+    fn stack_rows(&self, rows: Vec<(Bx, f32)>, st: St, gap: f32, min_skip: f32) -> (Bx, Vec<f32>) {
         // (row box, x) → baselines going down.
         let mut ys = Vec::with_capacity(rows.len());
         let mut y = 0.0f32;
@@ -1307,19 +1443,31 @@ impl Ctx {
         // Centre on the axis.
         let shift = self.axis(st) + (bottom - top) / 2.0;
         let mut out = Bx::default();
+        let mut bases = Vec::with_capacity(ys.len());
         for ((b, x), yy) in rows.into_iter().zip(ys) {
             out.w = out.w.max(x + b.w);
             out.put(b, x, yy + shift);
+            bases.push(yy + shift);
         }
-        out
+        (out, bases)
     }
 
     fn eq_arr(&mut self, rows: &[Arg], st: St, d: usize) -> Bx {
+        self.eq_rows(rows, st, d).0
+    }
+
+    /// Equation-array rows aligned at `&`, and each row's baseline.
+    fn eq_rows(&mut self, rows: &[Arg], st: St, d: usize) -> (Bx, Vec<f32>) {
         let em = self.em(st);
+        let me = self.node_stack.last().copied().unwrap_or(0);
         // Each row: segments split at `&`.
         let mut segs_rows: Vec<Vec<Bx>> = Vec::new();
-        for r in rows.iter().take(1000) {
-            let atoms = self.row(r, st, d);
+        let mut row_paths = Vec::new();
+        for (ri, r) in rows.iter().take(1000).enumerate() {
+            self.path.push((me, ri));
+            row_paths.push(self.path.clone());
+            let atoms = if r.is_empty() { vec![(self.placeholder(st), 0)] } else { self.row(r, st, d, 0) };
+            self.path.pop();
             let n = atoms.iter().map(|(_, s)| *s + 1).max().unwrap_or(1).min(64);
             let all: Vec<Bx> = atoms.iter().map(|(b, _)| b.clone()).collect();
             let gaps = gaps_between(&all, st, em);
@@ -1349,7 +1497,7 @@ impl Ctx {
         }
         let total: f32 = col_w.iter().sum();
         let mut placed = Vec::new();
-        for r in segs_rows {
+        for (r, path) in segs_rows.into_iter().zip(row_paths) {
             let mut row = Bx::default();
             let mut x = 0.0f32;
             let single = r.len() == 1 && ncols > 1;
@@ -1371,16 +1519,93 @@ impl Ctx {
                 row.w = row.w.max(x);
             }
             let rx = if ncols == 1 { (total - row.w) / 2.0 } else { 0.0 };
+            finalize(&mut row, &path, em);
             placed.push((row, rx.max(0.0)));
         }
-        let mut out = self.stack_rows(placed, st, em * 0.1, em * 1.1);
+        let (mut out, bases) = self.stack_rows(placed, st, em * 0.1, em * 1.1);
         out.w = out.w.max(total);
+        (out, bases)
+    }
+
+    /// A display equation with numbers (`#`): the equation centred on the line, each row's
+    /// number at the right margin. Automatic numbers (`#` alone) count up from `counter`.
+    fn numbered(&mut self, rows: &[Arg], st: St, avail: f32, counter: &mut u32) -> Bx {
+        let em = self.em(st);
+        let parts: Vec<(Arg, Arg, usize)> =
+            rows.iter().take(1000).map(|r| split_number(r).unwrap_or_else(|| (r.clone(), Vec::new(), usize::MAX))).collect();
+        self.node_stack.push(0);
+        let eq_rows: Vec<Arg> = parts.iter().map(|(e, _, _)| e.clone()).collect();
+        let (eq, bases) = self.eq_rows(&eq_rows, st, 1);
+        // Numbers.
+        let mut nums = Vec::new();
+        for (ri, (_, num, hash)) in parts.iter().enumerate() {
+            if *hash == usize::MAX {
+                nums.push(None);
+                continue;
+            }
+            self.path.push((0, ri));
+            let path = self.path.clone();
+            // Every numbered equation counts; `#` alone shows the count.
+            *counter = counter.saturating_add(1);
+            let b = if num.is_empty() {
+                let r = MRun { text: format!("({counter})"), sty: Some(MSty::Plain), ..Default::default() };
+                let mut b = compose(
+                    self.run_atoms(&r, St { upright: true, ..st }, 0, &path)
+                        .into_iter()
+                        .map(|p| match p {
+                            RunPart::Atom(b) | RunPart::Align(b) => b,
+                        })
+                        .collect(),
+                    st,
+                    em,
+                );
+                b.slots.clear();
+                b.slot(&path, hash + 1, 0.0);
+                b
+            } else {
+                let atoms = self.row(num, st, 2, hash + 1);
+                let mut b = compose(atoms.into_iter().map(|(b, _)| b).collect(), st, em);
+                b.slot(&path, hash + 1, 0.0);
+                b
+            };
+            let mut b = b;
+            finalize(&mut b, &path, em);
+            self.path.pop();
+            nums.push(Some(b));
+        }
+        self.node_stack.pop();
+        let num_w = nums.iter().flatten().map(|b| b.w).fold(0.0f32, f32::max);
+        let gap = em;
+        let mut x_eq = ((avail - eq.w) / 2.0).max(0.0);
+        if x_eq + eq.w + gap + num_w > avail {
+            x_eq = (avail - num_w - gap - eq.w).max(0.0);
+        }
+        let width = avail.max(x_eq + eq.w + gap + num_w);
+        let mut out = Bx { w: width, ..Default::default() };
+        out.put(eq, x_eq, 0.0);
+        for (b, y) in nums.into_iter().zip(bases) {
+            if let Some(b) = b {
+                let bw = b.w;
+                out.put(b, width - bw, y);
+            }
+        }
         out
     }
 
     fn matrix(&mut self, rows: &[Vec<Arg>], col_jc: &[ColJc], st: St, d: usize) -> Bx {
         let em = self.em(st);
-        let cells: Vec<Vec<Bx>> = rows.iter().take(1000).map(|r| r.iter().take(64).map(|c| self.arg(c, st, d)).collect()).collect();
+        let mut cells: Vec<Vec<Bx>> = Vec::new();
+        let mut flat = 0usize;
+        for r in rows.iter().take(1000) {
+            let mut row = Vec::new();
+            for (ci, c) in r.iter().enumerate() {
+                if ci < 64 {
+                    row.push(self.sub(flat, c, st, d));
+                }
+                flat += 1;
+            }
+            cells.push(row);
+        }
         let ncols = cells.iter().map(|r| r.len()).max().unwrap_or(0);
         let mut col_w = vec![0.0f32; ncols];
         for r in &cells {
@@ -1409,7 +1634,7 @@ impl Ctx {
             row.w = (x - gap).max(0.0);
             placed.push((row, 0.0));
         }
-        let mut out = self.stack_rows(placed, st, em * 0.25, em * 1.2);
+        let (mut out, _) = self.stack_rows(placed, st, em * 0.25, em * 1.2);
         out.w = col_w.iter().sum::<f32>() + gap * ncols.saturating_sub(1) as f32;
         out
     }
@@ -1417,7 +1642,19 @@ impl Ctx {
 
 enum RunPart {
     Atom(Bx),
-    Align,
+    /// An `&` alignment mark (a zero-width atom holding its caret slots).
+    Align(Bx),
+}
+
+/// Give the caret slots of argument `path` in `b` the argument's height.
+fn finalize(b: &mut Bx, path: &[(usize, usize)], em: f32) {
+    let (a, d) = (b.a.max(em * 0.72), b.d.max(em * 0.22));
+    for s in &mut b.slots {
+        if s.path == path && s.a <= 0.0 && s.d <= 0.0 {
+            s.a = a - s.y;
+            s.d = d + s.y;
+        }
+    }
 }
 
 /// Spacing before each atom (TeX rules: a binary operator after nothing, an operator, a
@@ -1508,7 +1745,7 @@ mod tests {
     }
 
     fn lay(lin: &str, display: bool) -> MathLayout {
-        layout_equation(&Math::default(), lin, &rc(), display)
+        layout_equation(&Math::default(), lin, &rc(), display, 400.0, &mut 0)
     }
 
     #[test]
@@ -1586,7 +1823,7 @@ mod tests {
             MNode::Run(MRun { text: "R".into(), scr: MScr::DoubleStruck, ..Default::default() }),
         ];
         for n in nodes {
-            let m = layout_equation(&Math { nodes: vec![n.clone()], ..Default::default() }, "", &rc(), true);
+            let m = layout_equation(&Math { nodes: vec![n.clone()], ..Default::default() }, "", &rc(), true, 400.0, &mut 0);
             assert!(m.width > 0.0 && m.ascent + m.descent > 0.0, "{n:?} → {m:?}");
             for it in &m.items {
                 if let MItem::Glyphs { glyphs, .. } = it {
@@ -1597,13 +1834,67 @@ mod tests {
     }
 
     #[test]
+    fn caret_slots_cover_every_position() {
+        use wordcraft_doc::math_edit::{MathPos, move_right, units};
+        let math = Math { nodes: wordcraft_doc::math::parse_linear("x=(-b±√(b^2-4ac))/2a+■(a&b@c&d)"), ..Default::default() };
+        let m = layout_equation(&math, "", &rc(), true, 400.0, &mut 0);
+        // Walking the caret through the equation, every position has a slot.
+        let mut p = MathPos::default();
+        let mut seen = 0;
+        loop {
+            let s = m.slots.iter().find(|s| s.path == p.path && s.off == p.off);
+            assert!(s.is_some(), "no slot for {p:?}");
+            seen += 1;
+            match move_right(&math.nodes, &p) {
+                Some(n) => p = n,
+                None => break,
+            }
+            assert!(seen < 500);
+        }
+        assert_eq!(p.off, units(&math.nodes));
+        // Hit testing finds the denominator below the bar.
+        let den = m.slots.iter().find(|s| s.path == vec![(1, 1)]).unwrap();
+        let hit = m.hit(den.x + 1.0, den.y).unwrap();
+        assert_eq!(hit.path, vec![(1, 1)]);
+    }
+
+    #[test]
+    fn empty_slots_show_placeholders_on_screen_only() {
+        let math = Math { nodes: wordcraft_doc::math::parse_linear("⬚/⬚"), ..Default::default() };
+        let m = layout_equation(&math, "", &rc(), true, 400.0, &mut 0);
+        assert!(m.items.iter().all(|i| matches!(i, MItem::ScreenOnly(_) | MItem::Rect { .. })), "{:?}", m.items);
+        assert!(m.slots.iter().any(|s| s.path == vec![(0, 0)] && s.off == 0));
+        let empty = layout_equation(&Math::default(), "", &rc(), true, 400.0, &mut 0);
+        assert!(empty.width > 10.0 && empty.items.iter().all(|i| matches!(i, MItem::ScreenOnly(_))));
+    }
+
+    #[test]
+    fn numbered_equations_fill_the_line_with_the_number_at_the_right() {
+        let math = Math { nodes: wordcraft_doc::math::parse_linear("E=mc^2#(1)"), ..Default::default() };
+        let m = layout_equation(&math, "", &rc(), true, 400.0, &mut 0);
+        assert!((m.width - 400.0).abs() < 0.01, "{}", m.width);
+        let xs: Vec<f32> =
+            m.items.iter().filter_map(|i| if let MItem::Glyphs { glyphs, .. } = i { glyphs.first().map(|g| g.1) } else { None }).collect();
+        let max = xs.iter().cloned().fold(0.0f32, f32::max);
+        assert!(max > 350.0, "number at the right margin: {xs:?}");
+        let min = xs.iter().cloned().fold(f32::MAX, f32::min);
+        assert!(min > 120.0 && min < 220.0, "equation centred: {xs:?}");
+        // Automatic numbers count.
+        let auto = Math { nodes: wordcraft_doc::math::parse_linear("a=b#"), ..Default::default() };
+        let mut n = 4;
+        let _ = layout_equation(&auto, "", &rc(), true, 400.0, &mut n);
+        assert_eq!(n, 5);
+        assert_eq!(auto_numbers(&auto, true), 1);
+    }
+
+    #[test]
     fn math_alphabets() {
-        assert_eq!(math_char('x', false, true, MScr::Roman), '𝑥');
-        assert_eq!(math_char('h', false, true, MScr::Roman), 'ℎ');
-        assert_eq!(math_char('R', false, false, MScr::DoubleStruck), 'ℝ');
-        assert_eq!(math_char('α', false, true, MScr::Roman), '𝛼');
-        assert_eq!(math_char('2', false, true, MScr::Roman), '2');
-        assert_eq!(math_char('A', true, false, MScr::Roman), '𝐀');
+        assert_eq!(math_alnum('x', false, true, MScr::Roman), '𝑥');
+        assert_eq!(math_alnum('h', false, true, MScr::Roman), 'ℎ');
+        assert_eq!(math_alnum('R', false, false, MScr::DoubleStruck), 'ℝ');
+        assert_eq!(math_alnum('α', false, true, MScr::Roman), '𝛼');
+        assert_eq!(math_alnum('2', false, true, MScr::Roman), '2');
+        assert_eq!(math_alnum('A', true, false, MScr::Roman), '𝐀');
     }
 
     #[test]
@@ -1614,7 +1905,7 @@ mod tests {
         for _ in 0..500 {
             n = vec![MNode::Frac { kind: FracKind::Bar, num: n.clone(), den: Vec::new() }];
         }
-        let _ = layout_equation(&Math { nodes: n, ..Default::default() }, "", &rc(), true);
+        let _ = layout_equation(&Math { nodes: n, ..Default::default() }, "", &rc(), true, 400.0, &mut 0);
         // Empty everything.
         let empty = vec![
             MNode::Nary { chr: '\0', lim_loc: None, grow: true, sub_hide: false, sup_hide: false, sub: vec![], sup: vec![], e: vec![] },
@@ -1623,7 +1914,7 @@ mod tests {
             MNode::EqArr { rows: vec![] },
             MNode::Run(MRun { text: String::new(), size: Some(f32::NAN), ..Default::default() }),
         ];
-        let m = layout_equation(&Math { nodes: empty, ..Default::default() }, "", &rc(), true);
+        let m = layout_equation(&Math { nodes: empty, ..Default::default() }, "", &rc(), true, 400.0, &mut 0);
         assert!(m.width.is_finite() && m.ascent.is_finite());
     }
 }

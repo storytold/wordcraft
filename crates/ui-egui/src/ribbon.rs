@@ -15,6 +15,17 @@ fn in_table(app: &WordApp) -> bool {
 
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
+    // Editing an equation brings up the Equation tab; leaving it goes back.
+    if app.session.math.is_some() {
+        if app.equation_prev_tab.is_none() {
+            app.equation_prev_tab = Some(app.ui.tab.clone());
+            app.ui.tab = "Equation".into();
+        }
+    } else if let Some(prev) = app.equation_prev_tab.take()
+        && app.ui.tab == "Equation"
+    {
+        app.ui.tab = prev;
+    }
     // Tab strip.
     egui::Panel::top("tabs")
         .exact_size(30.0)
@@ -27,8 +38,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     tabs.push("Table Design");
                     tabs.push("Table Layout");
                 }
+                if app.session.math.is_some() {
+                    tabs.push("Equation");
+                }
                 for tab in tabs {
-                    let contextual = tab.starts_with("Table ");
+                    let contextual = tab.starts_with("Table ") || tab == "Equation";
                     let shown = tl!(tab);
                     let w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(shown.to_string(), medium(12.5), t.text).size().x) + 18.0;
                     let (r, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
@@ -113,6 +127,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         "Help" => help(app, ui),
                         "Table Design" => table_design(app, ui),
                         "Table Layout" => table_layout(app, ui),
+                        "Equation" if app.session.math.is_some() => crate::equation_tab::show(app, ui),
                         _ => home(app, ui),
                     }
                 });
@@ -462,7 +477,7 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Symbols", None, app, |ui, app| {
-        big(ui, app, "equation", "Equation", "insert.equation", json!({}), false);
+        crate::equation_tab::insert_button(ui, app);
         menu_button(ui, app, "symbol", Some("Symbol"), "Symbol", true, |ui, app| {
             egui::Grid::new("syms").show(ui, |ui| {
                 for (i, c) in [

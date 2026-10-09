@@ -771,3 +771,46 @@
 	📂  Browse…	📂  参照…
 	{words} words	{words} 語
 	{selected} of {words} words	{selected}/{words} 語
+# Equations.
+	Change Structure	構造の変更
+	Change to Display	別行表示に変更
+	Change to Inline	行内表示に変更
+	Conversions	変換
+	Delete Back in Equation	数式内で前を削除
+	Delete in Equation	数式内で削除
+	Edit Equation	数式の編集
+	Enter in Equation	数式内で Enter
+	Equation Gallery	数式ギャラリー
+	Equation Info	数式の情報
+	Equation Number	数式番号
+	Input Format	入力形式
+	Insert Structure	構造の挿入
+	Insert Symbol	記号の挿入
+	Justification	配置
+	Leave Equation	数式を終了
+	Move in Equation	数式内で移動
+	Normal Text	標準テキスト
+	Set Equation	数式の設定
+	Structure Actions	構造の操作
+	Structures	構造
+	Tools	ツール
+	Type in Equation	数式に入力
+	Inline	行内
+	Number	番号
+	Close Equation	数式を閉じる
+	Insert New Equation	新しい数式の挿入
+	Built-In	組み込み
+	Professional	2 次元形式
+	Linear	線形形式
+	Fraction	分数
+	Script	上付き/下付き
+	Radical	べき乗根
+	Integral	積分
+	Large\nOperator	大型\n演算子
+	Bracket	かっこ
+	Function	関数
+	Accent	アクセント
+	Limit and\nLog	極限と\n対数
+	Operator	演算子
+	Equation Options	数式のオプション
+	All symbol sets	すべての記号セット

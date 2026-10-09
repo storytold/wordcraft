@@ -449,7 +449,7 @@ impl Exporter<'_> {
         {
             self.tagged(s, Role::Artifact(ArtifactType::Watermark), None, |me, s| me.watermark(s, &wm, w, h));
         }
-        let dopts = DisplayOptions { marks: false, dim_header: false, dim_body: false, markup: self.opts.include_markup };
+        let dopts = DisplayOptions { marks: false, dim_header: false, dim_body: false, markup: self.opts.include_markup, placeholders: false };
         for it in page.header.iter().chain(page.footer.iter()) {
             let draws = self.draws(page, it, &dopts);
             self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| {

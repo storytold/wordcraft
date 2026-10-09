@@ -6,7 +6,7 @@ use wordcraft_doc::{Document, Path, StoryRef};
 use wordcraft_fonts::FaceRef;
 use wordcraft_geom::Rect;
 
-use crate::math::{MItem, MathLayout};
+use crate::math::MItem;
 use crate::para::{ClKind, LineEnd, ParaLayout};
 use crate::{Page, Placed};
 
@@ -80,11 +80,13 @@ pub struct DisplayOptions {
     pub dim_body: bool,
     /// Show tracked changes as markup (coloured, underlined/struck).
     pub markup: bool,
+    /// Show on-screen-only marks: equation placeholders and prompts (never in print or PDF).
+    pub placeholders: bool,
 }
 
 impl Default for DisplayOptions {
     fn default() -> Self {
-        DisplayOptions { marks: false, dim_header: true, dim_body: false, markup: true }
+        DisplayOptions { marks: false, dim_header: true, dim_body: false, markup: true, placeholders: false }
     }
 }
 
@@ -398,7 +400,7 @@ fn lines(
                 }
                 Some(InlineObject::Equation { .. }) => {
                     if let Some((_, ml)) = pl.maths.iter().find(|(k, _)| *k == oi) {
-                        equation(ml, cx, base, alpha, out);
+                        equation(&ml.items, cx, base, alpha, opts.placeholders, out);
                     }
                 }
                 _ => {}
@@ -444,8 +446,8 @@ fn lines(
 }
 
 /// An equation's glyphs and rules with its origin at (`x`, `base`).
-fn equation(ml: &MathLayout, x: f32, base: f32, alpha: f32, out: &mut Vec<Draw>) {
-    for it in &ml.items {
+fn equation(items: &[MItem], x: f32, base: f32, alpha: f32, screen: bool, out: &mut Vec<Draw>) {
+    for it in items {
         match it {
             MItem::Glyphs { face, size, color, synth_bold, synth_italic, glyphs, text } => out.push(Draw::Glyphs {
                 face: *face,
@@ -459,16 +461,21 @@ fn equation(ml: &MathLayout, x: f32, base: f32, alpha: f32, out: &mut Vec<Draw>)
                 link: None,
             }),
             MItem::Rect { x: rx, y, w, h, color } => out.push(Draw::Fill { rect: Rect::new(x + rx, base - y - h, *w, *h), color: *color, alpha }),
-            MItem::Line { x0, y0, x1, y1, width, color } => out.push(Draw::Line {
+            MItem::Line { x0, y0, x1, y1, width, color, dotted } => out.push(Draw::Line {
                 x0: x + x0,
                 y0: base - y0,
                 x1: x + x1,
                 y1: base - y1,
                 width: *width,
                 color: *color,
-                stroke: Stroke::Solid,
+                stroke: if *dotted { Stroke::Dotted } else { Stroke::Solid },
                 alpha,
             }),
+            MItem::ScreenOnly(inner) => {
+                if screen {
+                    equation(std::slice::from_ref(inner), x, base, alpha, screen, out);
+                }
+            }
         }
     }
 }

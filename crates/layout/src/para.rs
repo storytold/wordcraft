@@ -161,6 +161,8 @@ pub struct ParaEnv<'a> {
     /// Areas text must flow around (floating objects), relative to the paragraph: x from the
     /// column's left edge, y from the top of the first line.
     pub exclusions: &'a [Exclusion],
+    /// Automatic equation numbers used before this paragraph.
+    pub eq_number: u32,
 }
 
 /// An area text wraps around.
@@ -377,6 +379,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let mut drop_cap = None;
     let mut maths = Vec::new();
     let mut displays = Vec::new();
+    let mut eq_counter = env.eq_number;
     for (range, props) in p.run_ranges() {
         let rc = resolve(props);
         let Some(text) = p.text.get(range.clone()) else { continue };
@@ -481,7 +484,8 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                             notes.push((b.clusters.len().saturating_sub(1), *id));
                         }
                         Some(InlineObject::Equation { linear, display, math }) => {
-                            let ml = crate::math::layout_equation(math, linear, &rc, *display);
+                            let avail = (env.width - rp.indent_left.max(0.0) - rp.indent_right.max(0.0)).max(12.0);
+                            let ml = crate::math::layout_equation(math, linear, &rc, *display, avail, &mut eq_counter);
                             let st = b.styles.get(si as usize);
                             // The line is at least as tall as the text around it.
                             let (a, d) = st.map(|s| (s.ascent, s.descent)).unwrap_or((0.0, 0.0));

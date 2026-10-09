@@ -76,7 +76,7 @@ the icon art).
    grouping, z-order polish, track-changes balloons and formatting revisions.
 3. **Draw tab / ink** (≈15 h).
 4. **Charts (own renderer) and SmartArt-style diagrams** (≈20 h).
-5. **Equation editor** — OMML read/write and 2D layout done; remaining: in-place structural editing, equation tools ribbon, line breaking of long display equations (≈8 h).
+5. **Equation editor** — done: OMML read/write, 2D layout, in-place editing with Word's Equation tab (structures, symbols, built-ins, Unicode/LaTeX input, build-up, Math AutoCorrect, `#` numbers, structure commands). Remaining: line breaking of long display equations, ink equations (≈4 h).
 6. **Dialog depth**: every Word dialog with all its options (Font, Paragraph, Tabs, Borders and
    Shading, Page Setup, Styles, Columns, Index/TOC options, Mail Merge wizard, Options panes) (≈20 h).
 7. **Accessibility (screen readers), localisation, RTL and complex scripts** (≈15 h).

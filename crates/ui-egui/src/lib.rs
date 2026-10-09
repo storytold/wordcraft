@@ -19,6 +19,7 @@ pub mod chrome;
 pub mod control;
 pub mod credits;
 pub mod dialogs;
+pub mod equation_tab;
 pub mod i18n;
 pub mod icons;
 pub mod keys;
@@ -117,6 +118,8 @@ pub struct WordApp {
     pub autosave: bool,
     pub word_count: (u64, usize),
     last_autosave: f64,
+    /// The tab shown before the Equation tab came up (restored when editing ends).
+    pub(crate) equation_prev_tab: Option<String>,
 }
 
 impl WordApp {
@@ -144,6 +147,7 @@ impl WordApp {
             autosave: true,
             word_count: (0, 0),
             last_autosave: 0.0,
+            equation_prev_tab: None,
         }
     }
 

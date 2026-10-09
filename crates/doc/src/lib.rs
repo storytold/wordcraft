@@ -12,6 +12,10 @@
 
 pub mod edit;
 pub mod math;
+pub mod math_edit;
+pub mod math_latex;
+pub mod math_linear;
+pub mod math_symbols;
 pub mod numbering;
 pub mod para;
 pub mod props;

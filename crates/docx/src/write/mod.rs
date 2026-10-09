@@ -53,6 +53,8 @@ impl PartRels {
 
 pub(crate) struct Writer<'d> {
     doc: &'d Document,
+    /// Numbered display equations written so far (automatic numbers are written as text).
+    pub(crate) eq_number: u32,
     /// Media key → file name under `word/media/`.
     media_files: BTreeMap<String, String>,
     bookmarks: HashMap<String, u32>,
@@ -84,6 +86,7 @@ const CT_WML: &str = "application/vnd.openxmlformats-officedocument.wordprocessi
 /// Write a `.docx` package.
 pub fn write(doc: &Document) -> Result<Vec<u8>, DocxError> {
     let mut wr = Writer {
+        eq_number: 0,
         doc,
         media_files: BTreeMap::new(),
         bookmarks: HashMap::new(),

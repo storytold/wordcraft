@@ -10,6 +10,7 @@ pub mod catalog;
 pub mod cmd;
 pub mod io;
 mod io_ext;
+pub mod math_gallery;
 pub mod sample;
 mod session;
 
@@ -17,7 +18,7 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-pub use session::{FindState, Selection, Session, ViewState};
+pub use session::{FindState, MathEdit, Selection, Session, ViewState};
 pub use wordcraft_doc as doc;
 pub use wordcraft_layout as layout;
 pub use wordcraft_render as render;

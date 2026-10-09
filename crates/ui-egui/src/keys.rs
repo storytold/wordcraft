@@ -109,10 +109,58 @@ fn dispatch(app: &mut WordApp, key: Key, m: Modifiers) -> bool {
     false
 }
 
+/// Keys while editing inside an equation. Returns true when handled.
+fn equation_key(app: &mut WordApp, key: Key, m: Modifiers) -> bool {
+    if m.command || m.alt || (m.ctrl && !cfg!(target_os = "macos")) {
+        return false;
+    }
+    let (id, params) = match key {
+        Key::ArrowLeft => ("equation.move", json!({"dir": "left"})),
+        Key::ArrowRight => ("equation.move", json!({"dir": "right"})),
+        Key::ArrowUp => ("equation.move", json!({"dir": "up"})),
+        Key::ArrowDown => ("equation.move", json!({"dir": "down"})),
+        Key::Home => ("equation.move", json!({"dir": "home"})),
+        Key::End => ("equation.move", json!({"dir": "end"})),
+        Key::Tab => ("equation.move", json!({"dir": if m.shift { "prev" } else { "next" }})),
+        Key::Backspace => ("equation.backspace", json!({})),
+        Key::Delete => ("equation.delete", json!({})),
+        Key::Enter => ("equation.enter", json!({})),
+        Key::Escape => ("equation.exit", json!({})),
+        _ => return false,
+    };
+    let _ = app.run(id, params);
+    true
+}
+
 /// Events for the focused canvas: text, editing keys, clipboard, IME.
 pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
     let events = ctx.input(|i| i.events.clone());
     for e in events {
+        // Editing an equation: text and editing keys go into it.
+        if app.session.math.is_some() {
+            match &e {
+                egui::Event::Text(t) => {
+                    let m = ctx.input(|i| i.modifiers);
+                    if !(m.command || (m.ctrl && !cfg!(target_os = "macos"))) && !t.is_empty() && t.chars().all(|c| !c.is_control()) {
+                        let _ = app.run("equation.type", json!({"text": t}));
+                    }
+                    continue;
+                }
+                egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
+                    app.canvas.ime_preedit.clear();
+                    if !text.is_empty() {
+                        let _ = app.run("equation.type", json!({"text": text}));
+                    }
+                    continue;
+                }
+                egui::Event::Paste(t) => {
+                    let _ = app.run("equation.type", json!({"text": t}));
+                    continue;
+                }
+                egui::Event::Key { key, pressed: true, modifiers, .. } if equation_key(app, *key, *modifiers) => continue,
+                _ => {}
+            }
+        }
         match e {
             egui::Event::Text(t) => {
                 let m = ctx.input(|i| i.modifiers);

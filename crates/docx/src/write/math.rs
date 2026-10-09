@@ -40,6 +40,46 @@ pub fn write_equation(w: &mut W, linear: &str, display: bool, math: &Math) {
     }
 }
 
+/// Count the equation's numbered rows; when some use an automatic number (`#` alone), a copy
+/// with the numbers written out as `(n)`.
+pub fn resolve_numbers(math: &Math, display: bool, counter: &mut u32) -> Option<Math> {
+    if !display {
+        return None;
+    }
+    let [MNode::EqArr { rows }] = math.nodes.as_slice() else { return None };
+    let mut out = rows.clone();
+    let mut changed = false;
+    for row in out.iter_mut() {
+        if !wordcraft_doc::math::has_number_mark(row) {
+            continue;
+        }
+        *counter = counter.saturating_add(1);
+        // Nothing after the `#`: an automatic number.
+        let mut after = false;
+        let mut empty = true;
+        for n in row.iter() {
+            match n {
+                MNode::Run(r) if !after => {
+                    if let Some(k) = r.text.find('#') {
+                        after = true;
+                        if !r.text.get(k + 1..).unwrap_or("").is_empty() {
+                            empty = false;
+                        }
+                    }
+                }
+                _ if after => empty = false,
+                _ => {}
+            }
+        }
+        if empty {
+            let n = vec![MNode::Run(MRun::new(counter.to_string()))];
+            row.push(MNode::Delim { beg: Some('('), end: Some(')'), sep: None, grow: true, shp_match: false, elems: vec![n] });
+            changed = true;
+        }
+    }
+    changed.then(|| Math { nodes: vec![MNode::EqArr { rows: out }], omml: String::new(), ..math.clone() })
+}
+
 /// The kept XML with namespace declarations, for validating it on its own.
 fn wrap_ns(xml: &str) -> String {
     let decl: String = crate::xml::body_ns().iter().filter(|(k, _)| k.starts_with("xmlns:")).map(|(k, v)| format!(" {k}=\"{v}\"")).collect();
@@ -268,6 +308,10 @@ fn node(w: &mut W, n: &MNode, depth: usize) {
         MNode::EqArr { rows } => {
             w.open("m:eqArr", &[]);
             w.open("m:eqArrPr", &[]);
+            // Numbered rows (`#`) stretch across the line so the number reaches the margin.
+            if rows.iter().any(|r| wordcraft_doc::math::has_number_mark(r)) {
+                val(w, "m:maxDist", "1");
+            }
             ctrl(w);
             w.close("m:eqArrPr");
             for r in rows {
