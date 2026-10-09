@@ -116,6 +116,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 let (_, _, d) = s.versions.get(i as usize).cloned().ok_or_else(|| CmdError::Params("no such version".into()))?;
                 s.checkpoint("Restore Version");
                 s.doc = d;
+                // Same document, older content: saved positions are stale, the chat stays.
+                s.doc_replaced += 1;
                 s.touch();
                 s.clamp_selection();
             }
