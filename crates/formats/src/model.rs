@@ -371,7 +371,7 @@ impl Builder<'_> {
         let aid = numbering.abstracts.iter().map(|a| a.id + 1).max().unwrap_or(0);
         numbering.abstracts.push(AbstractNum { id: aid, name: None, levels });
         let nid = numbering.nums.iter().map(|n| n.id + 1).max().unwrap_or(1).max(1);
-        numbering.nums.push(Num { id: nid, abstract_id: aid, start_overrides: Vec::new() });
+        numbering.nums.push(Num { id: nid, abstract_id: aid, ..Default::default() });
         nid
     }
 

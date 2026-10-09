@@ -389,16 +389,20 @@ impl Reader<'_> {
         let mut nums = Vec::new();
         for n in root.children("w:num").take(10_000) {
             let (Some(id), Some(abs)) = (n.attr("w:numId").and_then(u32_of), n.child_val("w:abstractNumId").and_then(u32_of)) else { continue };
-            let mut start_overrides = Vec::new();
-            for o in n.children("w:lvlOverride") {
+            let (mut start_overrides, mut level_overrides) = (Vec::new(), Vec::new());
+            for o in n.children("w:lvlOverride").take(9) {
                 let lvl = o.attr("w:ilvl").and_then(u32_of).unwrap_or(0).min(8) as u8;
                 if let Some(s) = o.child_val("w:startOverride").and_then(u32_of) {
                     start_overrides.push((lvl, s));
                 } else if let Some(s) = o.child("w:lvl").and_then(|l| l.child_val("w:start")).and_then(u32_of) {
                     start_overrides.push((lvl, s));
                 }
+                // A whole level definition replaces the abstract list's for this list.
+                if let Some(l) = o.child("w:lvl") {
+                    level_overrides.push((lvl, self.level(l, lvl as usize)));
+                }
             }
-            nums.push(Num { id, abstract_id: abs, start_overrides });
+            nums.push(Num { id, abstract_id: abs, start_overrides, level_overrides });
         }
         // Abstracts that only link to a numbering style take that style's list levels.
         for (aid, style) in links {

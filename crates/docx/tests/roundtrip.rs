@@ -761,3 +761,26 @@ fn ensure_empty_and_table_end_document_is_valid() {
     let r = rt(&e);
     assert_eq!(r.body.len(), 1);
 }
+
+#[test]
+fn list_level_overrides_round_trip() {
+    use wordcraft_doc::numbering::{Counters, Level};
+    use wordcraft_doc::section::NumFormat;
+    let mut d = Document::new();
+    let num = d.numbering.add_list(ListKind::Numbered);
+    let restart = d.numbering.restart(num).unwrap();
+    let own = Level { format: NumFormat::DecimalZero, text: "%1.%2".into(), indent: 26.5, hanging: 26.5, ..Level::default() };
+    if let Some(n) = d.numbering.nums.iter_mut().find(|n| n.id == restart) {
+        n.level_overrides = vec![(1, own.clone())];
+    }
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    let n = back.numbering.num(restart).unwrap();
+    assert_eq!(n.level_overrides.len(), 1);
+    let (lvl, got) = &n.level_overrides[0];
+    assert_eq!((*lvl, got.format, got.text.as_str(), got.indent, got.hanging), (1, NumFormat::DecimalZero, "%1.%2", 26.5, 26.5));
+    // The start overrides that `restart` wrote survive beside it.
+    assert_eq!(n.start_overrides, d.numbering.num(restart).unwrap().start_overrides);
+    let mut c = Counters::default();
+    assert_eq!(c.next_label(&back.numbering, restart, 0).unwrap().0, "1.");
+    assert_eq!(c.next_label(&back.numbering, restart, 1).unwrap().0, "1.01");
+}
