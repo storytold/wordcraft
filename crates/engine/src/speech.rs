@@ -25,6 +25,7 @@ const MAX_SENTENCES: usize = 20_000;
 pub const MIN_RATE: f32 = 0.5;
 pub const MAX_RATE: f32 = 3.0;
 /// Words per minute at speed 1.0 (`say` and `espeak` both default to about this).
+#[cfg(not(target_arch = "wasm32"))]
 const BASE_WPM: f32 = 180.0;
 
 /// Words that end with a full stop without ending the sentence.
