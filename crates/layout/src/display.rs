@@ -146,7 +146,7 @@ fn rule(x0: f32, y0: f32, x1: f32, y1: f32, b: &Border, alpha: f32) -> Draw {
 }
 
 /// Closed box around one line segment of a character-border group, widened by `space`.
-// ponytail: border drawn outside text advance, reserve width in line breaking if overlap shows.
+// Note: border drawn outside text advance, reserve width in line breaking if overlap shows.
 fn char_box(b: &Border, x0: f32, x1: f32, top: f32, bottom: f32, alpha: f32, out: &mut Vec<Draw>) {
     let (l, r) = (x0 - b.space, x1 + b.space);
     out.push(rule(l, top, r, top, b, alpha));

@@ -226,7 +226,10 @@ fn display_has_glyphs_and_marks() {
 }
 
 fn border_lines(d: &Document) -> Vec<(f32, f32, f32, f32)> {
-    let l = lay(d);
+    border_lines_in(d, &lay(d))
+}
+
+fn border_lines_in(d: &Document, l: &DocLayout) -> Vec<(f32, f32, f32, f32)> {
     display::page_display(d, &l.pages[0], &display::DisplayOptions::default())
         .into_iter()
         .filter_map(|i| if let display::Draw::Line { x0, y0, x1, y1, .. } = i { Some((x0, y0, x1, y1)) } else { None })
@@ -239,9 +242,10 @@ fn character_border_draws_one_box_around_run() {
     let mut d = Document::from_text("Hello world");
     assert!(border_lines(&d).is_empty());
     d.format_range(&Pos::body(0, 0), &Pos::body(0, 5), &|c| c.border = Some(Border::single(0.5))).unwrap();
-    let lines = border_lines(&d);
-    assert_eq!(lines.len(), 4, "{lines:?}");
+    // One layout for both the draw list and the expected geometry: the background font scan can change metrics between layouts.
     let l = lay(&d);
+    let lines = border_lines_in(&d, &l);
+    assert_eq!(lines.len(), 4, "{lines:?}");
     let Some(Placed::Lines { para, x, y, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
     let (gx0, gx1) = (x + para.x_of(0, 0).unwrap(), x + para.x_of(0, 5).unwrap());
     let (top, bottom) = (*y, y + para.lines[0].height);

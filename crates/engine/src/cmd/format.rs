@@ -32,7 +32,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .key("Mod+Shift+W"),
         CommandSpec::new("format.strikethrough", "Strikethrough", "Home › Font", |s, v| toggle(s, v, |r| r.strike, |c, on| c.strike = Some(on)))
             .params(r#"{"value"?: bool}"#),
-        // ponytail: off clears the direct property only; a border inherited from a character style stays on.
+        // Note: off clears the direct property only; a border inherited from a character style stays on.
         CommandSpec::new("format.border", "Character Border", "Home › Font", |s, v| {
             toggle(s, v, |r| r.border.is_some(), |c, on| c.border = on.then(|| Border::single(0.5)))
         })
