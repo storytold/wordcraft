@@ -548,3 +548,42 @@ fn presses_grab_pictures_anywhere_and_text_boxes_by_their_border() {
     let c = l.caret(&Pos::body(0, 10)).unwrap();
     assert!(l.object_at(0, c.x, c.top + 2.0, 4.0).is_none());
 }
+
+/// (lines placed, lines laid out) of a text box's story, and its area.
+fn box_lines(l: &DocLayout, id: u32) -> (usize, usize, wordcraft_geom::Rect) {
+    let mut shown = 0;
+    let mut total = 0;
+    for it in &l.pages[0].items {
+        if let Placed::Lines { story: StoryRef::Part(p), para, l0, l1, y, .. } = it
+            && *p == id
+        {
+            shown += l1 - l0;
+            total += para.lines.len();
+            let first = &para.lines[*l0];
+            let last = &para.lines[l1 - 1];
+            let bottom = y + last.top + last.height - first.top;
+            let r = box_rect(l, id);
+            assert!(bottom <= r.bottom() + 0.5 || shown == 1, "a placed line overflows: {bottom} > {}", r.bottom());
+        }
+    }
+    (shown, total, box_rect(l, id))
+}
+
+#[test]
+fn text_box_hides_text_that_does_not_fit() {
+    let long = "The quick brown fox jumps over the lazy dog. ".repeat(12);
+    let mut d = Document::from_text("Body");
+    let id = text_box(&mut d, 0, &long, 144.0, 72.0, Default::default());
+    let (shown, total, r) = box_lines(&lay(&d), id);
+    assert!(shown >= 2 && shown < total, "{shown} of {total} lines shown in {r:?}");
+    // Nothing below the box belongs to it.
+    let l = lay(&d);
+    assert_ne!(l.story_at(0, r.x + 20.0, r.bottom() + 6.0), Some(StoryRef::Part(id)));
+    // A taller box shows more; a tiny one still shows its first line.
+    let mut d2 = Document::from_text("Body");
+    let id2 = text_box(&mut d2, 0, &long, 144.0, 560.0, Default::default());
+    assert_eq!(box_lines(&lay(&d2), id2).0, total);
+    let mut d3 = Document::from_text("Body");
+    let id3 = text_box(&mut d3, 0, &long, 144.0, 18.0, Default::default());
+    assert_eq!(box_lines(&lay(&d3), id3).0, 1);
+}

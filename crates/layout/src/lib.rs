@@ -389,6 +389,49 @@ fn layout_box(
     (items, y.max(0.0))
 }
 
+/// A text box's internal margins (Word's defaults: 0.1" left/right, 0.05" top/bottom).
+const BOX_INSET_X: f32 = 7.2;
+const BOX_INSET_Y: f32 = 3.6;
+
+/// Keep what fits in a box `height` tall (items relative to its top): lines that don't fit are
+/// dropped (whole lines; a line that only partly fits too) and so is anything starting below.
+/// The first line always stays, so even a tiny box shows the start of its text.
+fn fit_box(items: Vec<Placed>, height: f32) -> Vec<Placed> {
+    let limit = height + 0.5;
+    let mut out = Vec::with_capacity(items.len());
+    let mut kept_line = false;
+    for it in items {
+        match it {
+            Placed::Lines { story, path, para, l0, l1, x, y } => {
+                let Some(first) = para.lines.get(l0) else { continue };
+                let mut end = l0;
+                for k in l0..l1 {
+                    let Some(l) = para.lines.get(k) else { break };
+                    if y + (l.top - first.top) + l.height > limit && kept_line {
+                        break;
+                    }
+                    end = k + 1;
+                    kept_line = true;
+                }
+                if end > l0 {
+                    out.push(Placed::Lines { story, path, para, l0, l1: end, x, y });
+                }
+            }
+            Placed::Fill { rect, color } if rect.y < limit => {
+                out.push(Placed::Fill { rect: Rect::new(rect.x, rect.y, rect.w, rect.h.min(limit - rect.y)), color });
+            }
+            Placed::Rule { x0, y0, x1, y1, border } if y0.min(y1) < limit => {
+                out.push(Placed::Rule { x0, y0: y0.min(limit), x1, y1: y1.min(limit), border });
+            }
+            Placed::Image { rect, .. } | Placed::Shape { rect, .. } | Placed::Cell { rect, .. } | Placed::Object { rect, .. } if rect.y < limit => {
+                out.push(it);
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// Paragraph lines plus their shading and borders.
 fn push_para(items: &mut Vec<Placed>, story: StoryRef, path: &[u32], pl: &Arc<ParaLayout>, l0: usize, l1: usize, x: f32, y: f32, width: f32) {
     let (Some(first), Some(last)) = (pl.lines.get(l0), l1.checked_sub(1).and_then(|k| pl.lines.get(k))) else {
@@ -980,9 +1023,10 @@ fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, 
                         origin: if pb.web { wordcraft_geom::Point::new(x, y) } else { wordcraft_geom::Point::new(col_x, y0) },
                     });
                     let Some((id, blocks)) = part else { continue };
-                    let (inner, _) = layout_box(ctx, StoryRef::Part(id), &blocks, &[], (rect.w - 14.4).max(12.0), None, 1);
-                    for mut it in inner {
-                        it.translate(rect.x + 7.2, rect.y + 3.6);
+                    let (inner, _) = layout_box(ctx, StoryRef::Part(id), &blocks, &[], (rect.w - 2.0 * BOX_INSET_X).max(12.0), None, 1);
+                    // Text that doesn't fit is hidden, as in Word.
+                    for mut it in fit_box(inner, rect.h - BOX_INSET_Y) {
+                        it.translate(rect.x + BOX_INSET_X, rect.y + BOX_INSET_Y);
                         items.push(it);
                     }
                 }
