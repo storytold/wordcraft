@@ -4845,10 +4845,12 @@ version = "0.3.0"
 dependencies = [
  "eframe",
  "egui",
+ "getrandom 0.3.4",
  "log",
  "rfd",
  "serde_json",
  "winresource",
+ "wordcraft-control-key",
  "wordcraft-doc",
  "wordcraft-engine",
  "wordcraft-ui-egui",
@@ -4864,6 +4866,10 @@ dependencies = [
  "wordcraft-mcp",
  "wordcraft-render",
 ]
+
+[[package]]
+name = "wordcraft-control-key"
+version = "0.3.0"
 
 [[package]]
 name = "wordcraft-doc"
@@ -4964,6 +4970,7 @@ version = "0.3.0"
 dependencies = [
  "log",
  "serde_json",
+ "wordcraft-control-key",
  "wordcraft-doc",
  "wordcraft-engine",
  "wordcraft-render",

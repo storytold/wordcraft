@@ -11,6 +11,10 @@ wordcraft-cli mcp --connect 127.0.0.1:7981 # …including clicks, keys and scree
 
 Claude Code: `claude mcp add wordcraft -- wordcraft-cli mcp`.
 
+With `--connect`, the bridge sends the app's control key, which it reads from
+`WORDCRAFT_CONTROL_KEY` or from the key file the app writes at start. It sends the key only to
+loopback addresses; see [Keys](control-protocol.md#keys).
+
 ## Tools
 
 | Tool | What it does |
