@@ -54,7 +54,7 @@ fn selected_text_box(app: &WordApp) -> Option<u32> {
 pub fn active(app: &WordApp, layout: &DocLayout) -> Option<(ObjectHit, bool)> {
     let hint = app.session.page_hint;
     if let Some((pos, _)) = selected(app) {
-        return layout.object(&pos.path, pos.off, hint).map(|o| (o, false));
+        return layout.object(&pos, hint).map(|o| (o, false));
     }
     match app.session.sel.focus.story {
         StoryRef::Part(id) if crate::canvas::in_text_box(app) => layout.text_box(id, hint).map(|o| (o, true)),
@@ -85,7 +85,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
     }
     let pressed = ui.input(|i| i.pointer.primary_pressed()) && resp.contains_pointer();
     let multi = resp.double_clicked() || resp.triple_clicked();
-    if !(pressed || multi) || editing_header_footer(app) {
+    if !(pressed || multi) || crate::canvas::editing_header_footer(app, layout) {
         return false;
     }
     let Some((object, grab)) = grab_at(app, layout, pages, scale, at) else { return false };
@@ -97,25 +97,30 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
             Some((_, o)) => (wordcraft_engine::cmd::objects::min_size(o), matches!(o, InlineObject::Image { .. })),
             None => return true,
         };
-        app.canvas.obj_drag = Some(ObjectDrag { drag: Drag::new(grab, object.page, object.rect, at), object, min, picture });
+        // Objects in table cells can be selected and resized, not moved.
+        if grab != Grab::Move || movable(&object) {
+            app.canvas.obj_drag = Some(ObjectDrag { drag: Drag::new(grab, object.page, object.rect, at), object, min, picture });
+        }
     }
     true
 }
 
 /// What a press at `at` would grab: a handle of the shown frame, else an object.
 fn grab_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Pos2) -> Option<(ObjectHit, Grab)> {
-    let handle = active(app, layout).and_then(|(o, _)| {
+    let handle = active(app, layout).filter(|(o, _)| o.story == StoryRef::Body).and_then(|(o, _)| {
         let f = screen(pages, scale, o.page, o.rect)?;
         frame::handle_at(f, at).map(|h| (o, Grab::Resize(h)))
     });
     handle.or_else(|| {
         let (page, x, y) = crate::canvas::page_at(pages, scale, at)?;
-        layout.object_at(page, x, y, EDGE / scale.max(0.01)).map(|o| (o, Grab::Move))
+        // Selectable: body objects (table cells too); notes' objects aren't yet.
+        layout.object_at(page, x, y, EDGE / scale.max(0.01)).filter(|o| o.story == StoryRef::Body).map(|o| (o, Grab::Move))
     })
 }
 
-fn editing_header_footer(app: &WordApp) -> bool {
-    matches!(app.session.sel.focus.story, StoryRef::Part(id) if app.session.doc.parts.get(&id).is_some_and(|p| matches!(p.kind, PartKind::Header | PartKind::Footer)))
+/// Objects that can be dragged to a new place: those in the body's own paragraphs.
+fn movable(o: &ObjectHit) -> bool {
+    o.story == StoryRef::Body && o.path.depth() == 0
 }
 
 /// Commit a finished drag as one command.
@@ -127,7 +132,7 @@ fn drop(app: &mut WordApp, d: &ObjectDrag) {
     let params = match d.drag.grab {
         Grab::Move => json!({"page": d.drag.to_page, "x": r.x, "y": r.y}),
         // An inline object stays in the text; a floating one keeps its far edges put.
-        Grab::Resize(_) if d.object.floating() => json!({"width": r.w, "height": r.h, "page": d.drag.page, "x": r.x, "y": r.y}),
+        Grab::Resize(_) if d.object.floating() && movable(&d.object) => json!({"width": r.w, "height": r.h, "page": d.drag.page, "x": r.x, "y": r.y}),
         Grab::Resize(_) => json!({"width": r.w, "height": r.h}),
     };
     let _ = app.run("arrange.bounds", params);
@@ -154,7 +159,8 @@ pub fn paint(app: &WordApp, painter: &Painter, t: &Tokens, layout: &DocLayout, p
     if let Some((o, editing)) = active(app, layout)
         && let Some(f) = screen(pages, scale, o.page, o.rect)
     {
-        frame::paint(painter, t, f, editing, true);
+        // Handles where it can be resized (body objects).
+        frame::paint(painter, t, f, editing, o.story == StoryRef::Body);
     }
 }
 
@@ -163,7 +169,7 @@ pub fn cursor(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at:
     if let Some(d) = &app.canvas.obj_drag {
         return Some(d.drag.grab.cursor());
     }
-    if editing_header_footer(app) {
+    if crate::canvas::editing_header_footer(app, layout) {
         return None;
     }
     grab_at(app, layout, pages, scale, at).map(|(_, g)| g.cursor())

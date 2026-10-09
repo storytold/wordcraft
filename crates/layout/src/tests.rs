@@ -450,6 +450,10 @@ fn auto_hyphenation_breaks_long_words() {
 }
 
 fn text_box(d: &mut Document, at: usize, text: &str, w: f32, h: f32, float: wordcraft_doc::para::Float) -> u32 {
+    text_box_at(d, &Pos::body(0, at), text, w, h, float)
+}
+
+fn text_box_at(d: &mut Document, pos: &Pos, text: &str, w: f32, h: f32, float: wordcraft_doc::para::Float) -> u32 {
     let id =
         d.add_part(wordcraft_doc::PartKind::TextBox, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))]);
     let shape = InlineObject::Shape {
@@ -462,7 +466,7 @@ fn text_box(d: &mut Document, at: usize, text: &str, w: f32, h: f32, float: word
         float,
         story: Some(id),
     };
-    d.insert_object(&Pos::body(0, at), shape, &Default::default()).unwrap();
+    d.insert_object(pos, shape, &Default::default()).unwrap();
     id
 }
 
@@ -537,7 +541,7 @@ fn presses_grab_pictures_anywhere_and_text_boxes_by_their_border() {
     // The text box: its border grabs it, inside is its text.
     let edge = l.object_at(0, b.x + 1.0, b.y + b.h / 2.0, 4.0).unwrap();
     assert_eq!(edge.text_box, Some(id));
-    assert_eq!(l.object(&edge.path, edge.off, 0).map(|o| o.rect), Some(b));
+    assert_eq!(l.object(&edge.pos(), 0).map(|o| o.rect), Some(b));
     assert_eq!(l.text_box(id, 5).map(|o| o.rect), Some(b), "a bad hint still finds it");
     assert!(l.object_at(0, b.x + b.w / 2.0, b.y + b.h / 2.0, 4.0).is_none());
     // The shape: anywhere on it.
@@ -632,4 +636,83 @@ fn square_wrap_flows_text_on_both_sides() {
         panic!()
     };
     assert!(para.lines.iter().all(|ln| !ln.beside && x + ln.xs.last().unwrap() <= r2.x.max(x + ln.right)));
+}
+
+fn footnote(d: &mut Document, pos: &Pos, text: &str) -> u32 {
+    let id =
+        d.add_part(wordcraft_doc::PartKind::Footnote, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))]);
+    d.insert_object(pos, InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Footnote, id, custom: String::new() }, &Default::default())
+        .unwrap();
+    id
+}
+
+fn page_float(x: f32, y: f32) -> wordcraft_doc::para::Float {
+    wordcraft_doc::para::Float {
+        wrap: wordcraft_doc::para::Wrap::InFrontOfText,
+        h_rel: wordcraft_doc::para::Anchor::Page,
+        v_rel: wordcraft_doc::para::Anchor::Page,
+        x,
+        y,
+        dist: 0.0,
+    }
+}
+
+#[test]
+fn text_boxes_show_in_headers_footers_cells_and_notes() {
+    let mut d = Document::from_text(&"Body paragraph.\n".repeat(4));
+    // Header: an inline box and a box placed on the page.
+    let hid =
+        d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Head", Default::default()))]);
+    d.last_section.headers.default = Some(hid);
+    let e = d.end_of(StoryRef::Part(hid));
+    let inline = text_box_at(&mut d, &e, "Inline in header", 100.0, 30.0, Default::default());
+    let e = d.end_of(StoryRef::Part(hid));
+    let placed = text_box_at(&mut d, &e, "On the page", 100.0, 40.0, page_float(400.0, 20.0));
+    // Footer: a box placed on the page (the footer is laid out twice to find it).
+    let fid =
+        d.add_part(wordcraft_doc::PartKind::Footer, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Foot", Default::default()))]);
+    d.last_section.footers.default = Some(fid);
+    let e = d.end_of(StoryRef::Part(fid));
+    let in_footer = text_box_at(&mut d, &e, "Footer box", 100.0, 30.0, page_float(300.0, 740.0));
+    // A table cell and a footnote.
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(wordcraft_doc::Table::new(1, 1, 300.0))).unwrap();
+    let cell = Pos { story: StoryRef::Body, path: Path(vec![1, 0, 0, 0]), off: 0 };
+    let in_cell = text_box_at(&mut d, &cell, "In a cell", 120.0, 30.0, Default::default());
+    let note = footnote(&mut d, &Pos::body(0, 4), "Note: ");
+    let e = d.end_of(StoryRef::Part(note));
+    let in_note = text_box_at(&mut d, &e, "In a note", 120.0, 30.0, Default::default());
+    let l = lay(&d);
+    let p = &l.pages[0];
+    let shows =
+        |id: u32| p.header.iter().chain(&p.footer).chain(&p.items).any(|i| matches!(i, Placed::Lines { story: StoryRef::Part(s), .. } if *s == id));
+    for (name, id) in
+        [("inline header box", inline), ("page header box", placed), ("footer box", in_footer), ("cell box", in_cell), ("note box", in_note)]
+    {
+        assert!(shows(id), "{name}: no text");
+        assert!(l.caret(&d.start_of(StoryRef::Part(id))).is_some(), "{name}: no caret");
+    }
+    // Page-anchored boxes land where they say, header and footer alike; their shapes are drawn.
+    assert_eq!(l.text_box(placed, 0).map(|o| (o.rect.x, o.rect.y)), Some((400.0, 20.0)));
+    assert_eq!(l.text_box(in_footer, 0).map(|o| (o.rect.x, o.rect.y)), Some((300.0, 740.0)));
+    assert!(p.header.iter().any(|i| matches!(i, Placed::Shape { rect, .. } if rect.x == 400.0)));
+    // Header boxes are found for clicks while editing the header.
+    let r = l.text_box(inline, 0).unwrap().rect;
+    assert_eq!(l.header_footer_text_box_at(0, r.x + 5.0, r.y + 5.0), Some(inline));
+}
+
+#[test]
+fn footnotes_inside_text_boxes_are_numbered_and_placed() {
+    let mut d = Document::from_text(&"Body text line.\n".repeat(30));
+    let id = text_box_at(&mut d, &Pos::body(2, 0), "Box text", 144.0, 40.0, Default::default());
+    let e = d.end_of(StoryRef::Part(id));
+    let in_box = footnote(&mut d, &e, "Note from the box.");
+    let after = footnote(&mut d, &Pos::body(5, 4), "Note from the body.");
+    let l = lay(&d);
+    // Both notes are at the bottom of page 1, the box's first (reading order).
+    let a = l.caret(&d.start_of(StoryRef::Part(in_box))).expect("the box's footnote is placed");
+    let b = l.caret(&d.start_of(StoryRef::Part(after))).unwrap();
+    assert_eq!((a.page, b.page), (0, 0));
+    assert!(a.top > 600.0 && a.top < b.top, "{a:?} {b:?}");
+    let nums = note_numbers(&d);
+    assert_eq!((nums.get(&in_box), nums.get(&after)), (Some(&1), Some(&2)));
 }

@@ -316,15 +316,19 @@ fn text_box_insert_puts_the_caret_inside() {
 }
 
 #[test]
-fn text_box_in_a_table_cell_keeps_the_caret_in_the_cell() {
-    // Layout doesn't show the text of boxes inside tables yet, so don't move into one.
+fn text_box_in_a_table_cell_shows_its_text() {
     let mut s = s();
     run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
-    let cell = s.sel.focus.clone();
-    assert!(cell.path.0.len() > 1, "{cell:?}");
-    run(&mut s, "insert.textBox", json!({}));
-    assert_eq!(s.sel.focus.story, StoryRef::Body);
-    assert_eq!(s.sel.focus.path, cell.path);
+    assert!(s.sel.focus.path.0.len() > 1);
+    let id = run(&mut s, "insert.textBox", json!({}))["story"].as_u64().unwrap() as u32;
+    // The caret goes into the box, and typing shows there (it has a caret position).
+    assert_eq!(s.sel.focus.story, StoryRef::Part(id));
+    run(&mut s, "text.insert", json!({"text": "In a cell"}));
+    let caret = s.layout().caret(&s.sel.focus).expect("laid out");
+    let cell = s.layout().find_object(0, |o| o.text_box == Some(id)).unwrap();
+    assert!(cell.rect.contains(wordcraft_geom::Point::new(caret.x, caret.top)), "{caret:?} in {:?}", cell.rect);
+    // No text box inside a text box.
+    assert!(s.run("insert.textBox", &json!({})).is_err());
 }
 
 #[test]

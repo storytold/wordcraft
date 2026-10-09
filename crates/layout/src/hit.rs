@@ -35,6 +35,7 @@ pub struct LineHit<'a> {
 pub struct ObjectHit {
     pub page: usize,
     pub rect: Rect,
+    pub story: StoryRef,
     pub path: Path,
     pub off: usize,
     pub text_box: Option<u32>,
@@ -44,9 +45,9 @@ pub struct ObjectHit {
 }
 
 impl ObjectHit {
-    /// The object's position in the body (its U+FFFC).
+    /// The object's position (its U+FFFC).
     pub fn pos(&self) -> Pos {
-        Pos { story: StoryRef::Body, path: self.path.clone(), off: self.off }
+        Pos { story: self.story, path: self.path.clone(), off: self.off }
     }
     pub fn floating(&self) -> bool {
         self.wrap != Wrap::Inline
@@ -56,12 +57,28 @@ impl ObjectHit {
     }
 }
 
-/// A page's objects, topmost first.
+/// A page's objects (not its header's or footer's), topmost first.
 fn objects(page: &Page, index: usize) -> impl Iterator<Item = ObjectHit> + '_ {
-    page.items.iter().rev().filter_map(move |it| match it {
-        Placed::Object { rect, path, off, text_box, wrap, origin } => {
-            Some(ObjectHit { page: index, rect: *rect, path: path.clone(), off: *off, text_box: *text_box, wrap: *wrap, origin: *origin })
-        }
+    objects_in(&page.items, index)
+}
+
+/// A page's objects including its header's and footer's.
+fn all_objects(page: &Page, index: usize) -> impl Iterator<Item = ObjectHit> + '_ {
+    objects_in(&page.items, index).chain(objects_in(&page.header, index)).chain(objects_in(&page.footer, index))
+}
+
+fn objects_in(items: &[Placed], index: usize) -> impl Iterator<Item = ObjectHit> + '_ {
+    items.iter().rev().filter_map(move |it| match it {
+        Placed::Object { rect, story, path, off, text_box, wrap, origin } => Some(ObjectHit {
+            page: index,
+            rect: *rect,
+            story: *story,
+            path: path.clone(),
+            off: *off,
+            text_box: *text_box,
+            wrap: *wrap,
+            origin: *origin,
+        }),
         _ => None,
     })
 }
@@ -84,11 +101,9 @@ fn text_at(p: &Page, index: usize, x: f32, y: f32) -> Option<StoryRef> {
 fn items_of(page: &Page, story: StoryRef) -> Box<dyn Iterator<Item = &Placed> + '_> {
     match story {
         StoryRef::Body => Box::new(page.items.iter()),
-        StoryRef::Part(id) => {
-            let h = page.header_story == Some(id);
-            let f = page.footer_story == Some(id);
-            Box::new(page.header.iter().filter(move |_| h).chain(page.footer.iter().filter(move |_| f)).chain(page.items.iter()))
-        }
+        // Headers and footers, and the text boxes in them, are drawn with the page's header and
+        // footer; everything else is in its items.
+        StoryRef::Part(_) => Box::new(page.header.iter().chain(page.footer.iter()).chain(page.items.iter())),
     }
 }
 
@@ -146,9 +161,18 @@ impl DocLayout {
             .or_else(|| if text_at(p, page, x, y).is_some() { None } else { objects(p, page).find(|o| o.behind() && grabs(o)) })
     }
 
-    /// Where the object at byte `off` of body paragraph `path` is laid out.
-    pub fn object(&self, path: &Path, off: usize, page_hint: usize) -> Option<ObjectHit> {
-        self.find_object(page_hint, |o| o.path == *path && o.off == off)
+    /// The text box in the header or footer at (x, y) on `page`.
+    pub fn header_footer_text_box_at(&self, page: usize, x: f32, y: f32) -> Option<u32> {
+        let p = self.pages.get(page)?;
+        objects_in(&p.header, page)
+            .chain(objects_in(&p.footer, page))
+            .find(|o| o.text_box.is_some() && o.rect.contains(Point::new(x, y)))
+            .and_then(|o| o.text_box)
+    }
+
+    /// Where the object at `pos` (its U+FFFC) is laid out.
+    pub fn object(&self, pos: &Pos, page_hint: usize) -> Option<ObjectHit> {
+        self.find_object(page_hint, |o| o.story == pos.story && o.path == pos.path && o.off == pos.off)
     }
 
     /// Where the text box showing story `part` is laid out.
@@ -159,7 +183,7 @@ impl DocLayout {
     /// The first object matching `f`, looking on `page_hint` first (where the caret is: one page
     /// to scan, not the whole document).
     pub fn find_object(&self, page_hint: usize, f: impl Fn(&ObjectHit) -> bool) -> Option<ObjectHit> {
-        let on = |i: usize| self.pages.get(i).and_then(|p| objects(p, i).find(|o| f(o)));
+        let on = |i: usize| self.pages.get(i).and_then(|p| all_objects(p, i).find(|o| f(o)));
         on(page_hint).or_else(|| (0..self.pages.len()).filter(|i| *i != page_hint).find_map(on))
     }
 

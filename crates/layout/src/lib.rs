@@ -23,7 +23,7 @@ use wordcraft_doc::para::{InlineObject, Wrap};
 use wordcraft_doc::props::{Border, CharProps, Rgb};
 use wordcraft_doc::section::{SectionProps, SectionStart};
 use wordcraft_doc::{Block, Blocks, Document, Paragraph, Path, StoryRef};
-use wordcraft_geom::Rect;
+use wordcraft_geom::{Point, Rect};
 
 pub use fields::FieldCtx;
 pub use para::{LineEnd, ParaLayout};
@@ -97,11 +97,12 @@ pub enum Placed {
         cell: usize,
         story: StoryRef,
     },
-    /// The area of a picture, shape or text box in a top-level body paragraph, for hit testing,
-    /// selection handles and dragging (drawn by `Image`/`Shape`/`Lines`). The object is the
-    /// U+FFFC at byte `off` of body paragraph `path`.
+    /// The area of a picture, shape or text box, for hit testing, selection handles and dragging
+    /// (drawn by `Image`/`Shape`/`Lines`). The object is the U+FFFC at byte `off` of paragraph
+    /// `path` in `story`.
     Object {
         rect: Rect,
+        story: StoryRef,
         path: Path,
         off: usize,
         /// The text box story it shows (`Document::parts` id).
@@ -310,30 +311,30 @@ impl Ctx<'_> {
 fn note_numbers(doc: &Document) -> HashMap<u32, u32> {
     let mut m = HashMap::new();
     let (mut f, mut e) = (0u32, 0u32);
-    for path in doc.para_paths(StoryRef::Body) {
-        if let Some(p) = doc.para(StoryRef::Body, &path) {
-            for o in &p.objects {
-                if let InlineObject::NoteRef { kind, id, .. } = o {
-                    let n = match kind {
-                        wordcraft_doc::para::NoteKind::Footnote => {
-                            f += 1;
-                            f
-                        }
-                        wordcraft_doc::para::NoteKind::Endnote => {
-                            e += 1;
-                            e
-                        }
-                    };
-                    m.insert(*id, n);
+    // Reading order, text boxes included where they are.
+    doc.objects_in_reading_order(&mut |o| {
+        if let InlineObject::NoteRef { kind, id, .. } = o {
+            let n = match kind {
+                wordcraft_doc::para::NoteKind::Footnote => {
+                    f += 1;
+                    f
                 }
-            }
+                wordcraft_doc::para::NoteKind::Endnote => {
+                    e += 1;
+                    e
+                }
+            };
+            m.insert(*id, n);
         }
-    }
+    });
     m
 }
 
 /// Lay out a block list into a free-standing box of `width` (no page breaks): table cells,
-/// headers, footers, text boxes. Returns items relative to (0, 0) and the height.
+/// headers, footers, notes, text boxes. Returns items relative to (0, 0) and the height. `page`
+/// says where the page is relative to the box, for floating objects positioned on the page or
+/// margins; without it (cells, notes, text boxes) they're positioned in the box.
+#[allow(clippy::too_many_arguments)]
 fn layout_box(
     ctx: &mut Ctx,
     story: StoryRef,
@@ -342,6 +343,7 @@ fn layout_box(
     width: f32,
     table_chr: Option<&CharProps>,
     depth: usize,
+    page: Option<BoxPage>,
 ) -> (Vec<Placed>, f32) {
     let mut items = Vec::new();
     let mut y = 0.0f32;
@@ -361,7 +363,15 @@ fn layout_box(
                 }
                 // Word: space between paragraphs is before + after (no collapsing).
                 y += if i == 0 { before } else { before.max(0.0) };
+                let start = items.len();
                 push_para(&mut items, story, &path, &pl, 0, pl.lines.len(), 0.0, y, width);
+                if !p.objects.is_empty() {
+                    let at = page.unwrap_or(BoxPage { page: Point::new(0.0, 0.0), margin: Point::new(0.0, 0.0) });
+                    let frame = AnchorFrame { col_x: 0.0, para_y: y, margin: at.margin, page: at.page };
+                    let (behind, front) = place_objects(ctx, story, &path, p, &pl, (0, pl.lines.len()), (0.0, y), &frame, &HashMap::new(), depth);
+                    items.splice(start..start, behind);
+                    items.extend(front);
+                }
                 y += pl.height + pl.rp.space_after;
                 prev_after = if same && ctxl { 0.0 } else { pl.rp.space_after };
                 prev_style = Some((pl.rp.style.clone(), ctxl));
@@ -757,7 +767,7 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
         for id in endnotes {
             let Some(part) = doc.parts.get(&id) else { continue };
             let blocks = part.blocks.clone();
-            let (items, h) = layout_box(&mut ctx, StoryRef::Part(id), &blocks, &[], pb.col_w(), None, 0);
+            let (items, h) = layout_box(&mut ctx, StoryRef::Part(id), &blocks, &[], pb.col_w(), None, 0, None);
             if pb.y + h > pb.bottom && !pb.at_top() {
                 pb.advance(block, pb.top);
             }
@@ -813,23 +823,112 @@ fn body_top_for(ctx: &mut Ctx, sect: &SectionProps, header: Option<u32>) -> f32 
     let Some(id) = header else { return sect.margin_top };
     let Some(part) = ctx.doc.parts.get(&id) else { return sect.margin_top };
     let blocks = part.blocks.clone();
-    let (_, h) = layout_box(ctx, StoryRef::Part(id), &blocks, &[], sect.text_width(), None, 0);
+    let (_, h) = layout_box(ctx, StoryRef::Part(id), &blocks, &[], sect.text_width(), None, 0, None);
     sect.margin_top.max(sect.header + h + 6.0)
 }
 
-/// Where a floating object goes: page coordinates for an anchor paragraph whose top is `y0`.
-fn float_rect(pb: &PageBuilder, col_x: f32, y0: f32, w: f32, h: f32, float: &wordcraft_doc::para::Float) -> Rect {
+/// What a paragraph's floating objects are positioned against, where the paragraph is laid out:
+/// its column's left and its top, the margins' top-left and the page's top-left.
+#[derive(Clone, Copy, Debug)]
+struct AnchorFrame {
+    col_x: f32,
+    para_y: f32,
+    margin: Point,
+    page: Point,
+}
+
+/// Where a box's page and margins are, relative to the box (see `layout_box`).
+#[derive(Clone, Copy, Debug)]
+struct BoxPage {
+    page: Point,
+    margin: Point,
+}
+
+/// Where a floating object goes.
+fn float_rect(f: &AnchorFrame, w: f32, h: f32, float: &wordcraft_doc::para::Float) -> Rect {
+    use wordcraft_doc::para::Anchor;
     let fx = match float.h_rel {
-        wordcraft_doc::para::Anchor::Page => float.x,
-        wordcraft_doc::para::Anchor::Margin => pb.sect.margin_left + pb.sect.gutter + float.x,
-        _ => col_x + float.x,
+        Anchor::Page => f.page.x + float.x,
+        Anchor::Margin => f.margin.x + float.x,
+        _ => f.col_x + float.x,
     };
     let fy = match float.v_rel {
-        wordcraft_doc::para::Anchor::Page => float.y,
-        wordcraft_doc::para::Anchor::Margin => pb.top + float.y,
-        _ => y0 + float.y,
+        Anchor::Page => f.page.y + float.y,
+        Anchor::Margin => f.margin.y + float.y,
+        _ => f.para_y + float.y,
     };
     Rect::new(fx, fy, w.clamp(1.0, 4000.0), h.clamp(1.0, 4000.0))
+}
+
+/// The pictures, shapes and text boxes in lines `l0..l1` of paragraph `p` (story `story`, at
+/// `path`), whose lines start at (x, y): floating ones drawn, every one's area (hit testing,
+/// selection) and text boxes' text. Floating rects come from `floats` (by object index) or the
+/// anchor `frame`. Returns what goes behind the text, and what goes in front.
+#[allow(clippy::too_many_arguments)]
+fn place_objects(
+    ctx: &mut Ctx,
+    story: StoryRef,
+    path: &[u32],
+    p: &Paragraph,
+    pl: &ParaLayout,
+    (l0, l1): (usize, usize),
+    (x, y): (f32, f32),
+    frame: &AnchorFrame,
+    floats: &HashMap<usize, Rect>,
+    depth: usize,
+) -> (Vec<Placed>, Vec<Placed>) {
+    let (mut behind, mut front) = (Vec::new(), Vec::new());
+    let Some(fl) = pl.lines.get(l0) else { return (behind, front) };
+    for li in l0..l1 {
+        let Some(line) = pl.lines.get(li) else { continue };
+        for k in line.c0..line.c1 {
+            let Some(c) = pl.clusters.get(k) else { continue };
+            let para::ClKind::Object(oi) = c.kind else { continue };
+            let Some(obj @ (InlineObject::Image { w, h, float, .. } | InlineObject::Shape { w, h, float, .. })) = p.objects.get(oi) else { continue };
+            let floating = float.wrap != Wrap::Inline;
+            let rect = if floating {
+                floats.get(&oi).copied().unwrap_or_else(|| float_rect(frame, *w, *h, float))
+            } else {
+                let cx = x + line.xs.get(k - line.c0).copied().unwrap_or(0.0);
+                Rect::new(cx, y + (line.baseline - fl.top) - c.obj_h, c.adv, c.obj_h)
+            };
+            let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
+            // Floating ones are drawn here; inline ones with their line.
+            if floating {
+                layer.push(match obj {
+                    InlineObject::Image { media, crop, .. } => {
+                        Placed::Image { rect, media: media.clone(), crop: *crop, story, path: Path(path.to_vec()), off: c.start }
+                    }
+                    InlineObject::Shape { kind, fill, stroke, stroke_width, .. } => {
+                        Placed::Shape { rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width }
+                    }
+                    _ => continue,
+                });
+            }
+            let text_box = match obj {
+                InlineObject::Shape { story: Some(id), .. } => ctx.doc.parts.get(id).map(|part| (*id, part.blocks.clone())),
+                _ => None,
+            };
+            front.push(Placed::Object {
+                rect,
+                story,
+                path: Path(path.to_vec()),
+                off: c.start,
+                text_box: text_box.as_ref().map(|t| t.0),
+                wrap: float.wrap,
+                origin: Point::new(frame.col_x, frame.para_y),
+            });
+            let Some((id, blocks)) = text_box.filter(|_| depth < wordcraft_doc::MAX_TEXT_BOX_DEPTH) else { continue };
+            let (inner, _) = layout_box(ctx, StoryRef::Part(id), &blocks, &[], (rect.w - 2.0 * BOX_INSET_X).max(12.0), None, depth + 1, None);
+            let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
+            // Text that doesn't fit is hidden, as in Word.
+            for mut it in fit_box(inner, rect.h - BOX_INSET_Y) {
+                it.translate(rect.x + BOX_INSET_X, rect.y + BOX_INSET_Y);
+                layer.push(it);
+            }
+        }
+    }
+    (behind, front)
 }
 
 fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, body_top: f32) {
@@ -838,13 +937,14 @@ fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, 
     // Floating objects anchored here join the page's wrap areas before the text is laid out.
     let col_x = pb.col_x();
     let y0 = pb.y + ctx.doc.styles.resolve_para(&p.props).space_before;
+    let frame = AnchorFrame { col_x, para_y: y0, margin: Point::new(pb.sect.margin_left + pb.sect.gutter, pb.top), page: Point::new(0.0, 0.0) };
     let mut float_rects: HashMap<usize, Rect> = HashMap::new();
     if !pb.web {
         for (oi, o) in p.objects.iter().enumerate() {
             if let InlineObject::Image { w, h, float, .. } | InlineObject::Shape { w, h, float, .. } = o
                 && float.wrap != Wrap::Inline
             {
-                let r = float_rect(pb, col_x, y0, *w, *h, float);
+                let r = float_rect(&frame, *w, *h, float);
                 float_rects.insert(oi, r);
                 if !matches!(float.wrap, Wrap::BehindText | Wrap::InFrontOfText) {
                     pb.excl.push((r, float.wrap == Wrap::TopAndBottom, float.dist.max(9.0)));
@@ -865,6 +965,17 @@ fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, 
         .filter(|e| e.bottom > 0.0)
         .collect();
     let pl = ctx.para_x(p, width, None, &rel);
+    // Footnotes referenced here: in the text, and inside its text boxes (on the box's line).
+    let mut notes = pl.notes.clone();
+    if p.objects.iter().any(|o| matches!(o, InlineObject::Shape { story: Some(_), .. })) {
+        for (ci, c) in pl.clusters.iter().enumerate() {
+            if let para::ClKind::Object(oi) = c.kind
+                && let Some(InlineObject::Shape { story: Some(id), .. }) = p.objects.get(oi)
+            {
+                notes.extend(ctx.doc.notes_in_text_box(*id).into_iter().map(|n| (ci, n)));
+            }
+        }
+    }
     if pl.rp.page_break_before && !pb.at_top() && !pb.web {
         pb.new_page(block, body_top);
     }
@@ -903,14 +1014,14 @@ fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, 
             // Footnotes referenced on this line go to the bottom of this page.
             let mut line_notes = Vec::new();
             if !pb.web {
-                for (ci, id) in &pl.notes {
+                for (ci, id) in &notes {
                     if *ci >= l.c0
                         && *ci < l.c1
                         && !pb.notes.iter().chain(new_notes.iter()).any(|x| x.0 == *id)
                         && let Some(part) = ctx.doc.parts.get(id).filter(|p| p.kind == wordcraft_doc::PartKind::Footnote)
                     {
                         let blocks = part.blocks.clone();
-                        let (items, h) = layout_box(ctx, StoryRef::Part(*id), &blocks, &[], pb.sect.text_width(), None, 0);
+                        let (items, h) = layout_box(ctx, StoryRef::Part(*id), &blocks, &[], pb.sect.text_width(), None, 0, None);
                         line_notes.push((*id, items, h));
                     }
                 }
@@ -957,7 +1068,7 @@ fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, 
         }
         // Keep only the notes of the lines that are placed.
         let placed_end = pl.lines.get(l1.saturating_sub(1)).map(|l| l.c1).unwrap_or(0);
-        new_notes.retain(|(id, ..)| pl.notes.iter().any(|(ci, nid)| nid == id && *ci < placed_end));
+        new_notes.retain(|(id, ..)| notes.iter().any(|(ci, nid)| nid == id && *ci < placed_end));
         let before = pb.notes_h();
         pb.notes.extend(new_notes);
         pb.bottom -= pb.notes_h() - before;
@@ -965,77 +1076,10 @@ fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, 
         let y = pb.y;
         let mut items = Vec::new();
         push_para(&mut items, StoryRef::Body, &[block as u32], &pl, l0, l1, x, y, width);
-        // Floating pictures/shapes anchored in these lines.
-        let mut behind = Vec::new();
-        if let (Some(fl), Some(ll)) = (pl.lines.get(l0), pl.lines.get(l1.saturating_sub(1))) {
-            for k in fl.c0..ll.c1 {
-                let Some(c) = pl.clusters.get(k) else { continue };
-                let para::ClKind::Object(oi) = c.kind else { continue };
-                let Some(obj) = p.objects.get(oi) else { continue };
-                let (w, h, float) = match obj {
-                    InlineObject::Image { w, h, float, .. } | InlineObject::Shape { w, h, float, .. } if float.wrap != Wrap::Inline => {
-                        (*w, *h, *float)
-                    }
-                    _ => continue,
-                };
-                let rect = float_rects.get(&oi).copied().unwrap_or_else(|| float_rect(pb, x, y, w, h, &float));
-                let it = match obj {
-                    InlineObject::Image { media, crop, .. } => {
-                        Placed::Image { rect, media: media.clone(), crop: *crop, story: StoryRef::Body, path: Path(vec![block as u32]), off: c.start }
-                    }
-                    InlineObject::Shape { kind, fill, stroke, stroke_width, .. } => {
-                        Placed::Shape { rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width }
-                    }
-                    _ => continue,
-                };
-                if float.wrap == Wrap::BehindText {
-                    behind.push(it);
-                } else {
-                    items.push(it);
-                }
-            }
-        }
-        // Object areas (selection, dragging) and text box contents.
-        if let Some(fl) = pl.lines.get(l0) {
-            for li in l0..l1 {
-                let Some(line) = pl.lines.get(li) else { continue };
-                for k in line.c0..line.c1 {
-                    let Some(c) = pl.clusters.get(k) else { continue };
-                    let para::ClKind::Object(oi) = c.kind else { continue };
-                    let (w, h, float, story) = match p.objects.get(oi) {
-                        Some(InlineObject::Image { w, h, float, .. }) => (*w, *h, *float, None),
-                        Some(InlineObject::Shape { w, h, float, story, .. }) => (*w, *h, *float, *story),
-                        _ => continue,
-                    };
-                    // Same rect the object is drawn at.
-                    let rect = match float_rects.get(&oi) {
-                        Some(r) => *r,
-                        None if float.wrap != Wrap::Inline => float_rect(pb, x, y, w, h, &float),
-                        None => {
-                            let cx = x + line.xs.get(k - line.c0).copied().unwrap_or(0.0);
-                            Rect::new(cx, y + (line.baseline - fl.top) - c.obj_h, c.adv, c.obj_h)
-                        }
-                    };
-                    let part = story.and_then(|id| ctx.doc.parts.get(&id).map(|part| (id, part.blocks.clone())));
-                    items.push(Placed::Object {
-                        rect,
-                        path: Path(vec![block as u32]),
-                        off: c.start,
-                        text_box: part.as_ref().map(|p| p.0),
-                        wrap: float.wrap,
-                        // As `float_rect` is given it, above.
-                        origin: if pb.web { wordcraft_geom::Point::new(x, y) } else { wordcraft_geom::Point::new(col_x, y0) },
-                    });
-                    let Some((id, blocks)) = part else { continue };
-                    let (inner, _) = layout_box(ctx, StoryRef::Part(id), &blocks, &[], (rect.w - 2.0 * BOX_INSET_X).max(12.0), None, 1);
-                    // Text that doesn't fit is hidden, as in Word.
-                    for mut it in fit_box(inner, rect.h - BOX_INSET_Y) {
-                        it.translate(rect.x + BOX_INSET_X, rect.y + BOX_INSET_Y);
-                        items.push(it);
-                    }
-                }
-            }
-        }
+        // Pictures, shapes and text boxes in these lines (web view: placed by this piece).
+        let piece = if pb.web { AnchorFrame { col_x: x, para_y: y, ..frame } } else { frame };
+        let (behind, front) = place_objects(ctx, StoryRef::Body, &[block as u32], p, &pl, (l0, l1), (x, y), &piece, &float_rects, 0);
+        items.extend(front);
         // Line numbers in the left margin.
         if let Some(ln) = pb.sect.line_numbers.clone().filter(|_| !pb.web && pl.rp.style != "Header" && p.props.suppress_line_numbers != Some(true))
             && let Some(first) = pl.lines.get(l0)
@@ -1208,7 +1252,7 @@ fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &Secti
             && let Some(part) = ctx.doc.parts.get(&id)
         {
             let blocks = part.blocks.clone();
-            let (mut items, _) = layout_box(ctx, StoryRef::Part(id), &blocks, &[], w, None, 0);
+            let (mut items, _) = layout_box(ctx, StoryRef::Part(id), &blocks, &[], w, None, 0, Some(box_page(sect, x, sect.header)));
             for it in &mut items {
                 it.translate(x, sect.header);
             }
@@ -1219,14 +1263,24 @@ fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &Secti
             && let Some(part) = ctx.doc.parts.get(&id)
         {
             let blocks = part.blocks.clone();
-            let (mut items, h) = layout_box(ctx, StoryRef::Part(id), &blocks, &[], w, None, 0);
+            let (mut items, h) = layout_box(ctx, StoryRef::Part(id), &blocks, &[], w, None, 0, None);
+            let top = sect.page_h - sect.footer - h;
+            // Its place depends on its height: lay out again to position floating objects.
+            if items.iter().any(|i| matches!(i, Placed::Image { .. } | Placed::Shape { .. })) {
+                items = layout_box(ctx, StoryRef::Part(id), &blocks, &[], w, None, 0, Some(box_page(sect, x, top))).0;
+            }
             for it in &mut items {
-                it.translate(x, sect.page_h - sect.footer - h);
+                it.translate(x, top);
             }
             page.footer = items;
             page.footer_story = Some(id);
         }
     }
+}
+
+/// The page and margins relative to a box placed at (x, y) on the page.
+fn box_page(sect: &SectionProps, x: f32, y: f32) -> BoxPage {
+    BoxPage { page: Point::new(-x, -y), margin: Point::new(sect.margin_left + sect.gutter - x, sect.margin_top - y) }
 }
 
 /// Is an object floating (not laid out inline)?

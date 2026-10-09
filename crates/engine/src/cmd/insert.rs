@@ -27,7 +27,13 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("insert.picture", "Pictures", "Insert › Illustrations", picture).params(r#"{"path"?: string, "data"?: base64, "width"?: pt, "alt"?: string}"#),
         CommandSpec::new("insert.shape", "Shapes", "Insert › Illustrations", shape)
             .params(r#"{"kind": "rectangle|roundedRectangle|ellipse|triangle|diamond|line|arrow|star|heart", "width"?: pt, "height"?: pt, "fill"?: "RRGGBB", "stroke"?: "RRGGBB"}"#),
-        CommandSpec::new("insert.textBox", "Text Box", "Insert › Text", text_box).params(r#"{"text"?: string, "width"?: pt, "height"?: pt}"#),
+        CommandSpec::new("insert.textBox", "Text Box", "Insert › Text", text_box)
+            .params(r#"{"text"?: string, "width"?: pt, "height"?: pt}"#)
+            .when(|s| {
+                // As in Word: no text box inside a text box.
+                matches!(s.sel.focus.story, StoryRef::Part(id) if s.doc.parts.get(&id).is_some_and(|p| p.kind == PartKind::TextBox))
+                    .then_some("text boxes can't go inside a text box")
+            }),
         CommandSpec::new("insert.link", "Link", "Insert › Links", link).key("Mod+K").params(r#"{"url": string, "text"?: string}"#),
         CommandSpec::new("insert.removeLink", "Remove Hyperlink", "Insert › Links", |s, _| super::format::apply(s, &|c| {
             c.link = None;
@@ -280,11 +286,9 @@ fn text_box(s: &mut Session, v: &Value) -> CmdResult {
         float: Float::default(),
         story: Some(id),
     };
-    let end = s.doc.insert_object(&at, obj, &props)?;
-    // Like Word, type straight into the new box. Layout only shows the text of boxes anchored
-    // in top-level body paragraphs; elsewhere the caret stays after the box.
-    s.sel =
-        if at.story == StoryRef::Body && at.path.0.len() == 1 { Selection::caret(s.doc.end_of(StoryRef::Part(id))) } else { Selection::caret(end) };
+    s.doc.insert_object(&at, obj, &props)?;
+    // Like Word, type straight into the new box.
+    s.sel = Selection::caret(s.doc.end_of(StoryRef::Part(id)));
     Ok(json!({"story": id}))
 }
 

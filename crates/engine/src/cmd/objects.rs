@@ -377,7 +377,7 @@ fn move_object(s: &mut Session, pos: Pos, page: Option<u64>, x: f32, y: f32, (w,
         return Err(CmdError::Disabled("only objects in the body text can be moved".into()));
     }
     let layout = s.layout();
-    let cur = layout.object(&pos.path, pos.off, s.page_hint).ok_or_else(|| CmdError::Failed("the object isn't laid out".into()))?;
+    let cur = layout.object(&pos, s.page_hint).ok_or_else(|| CmdError::Failed("the object isn't laid out".into()))?;
     let page = page.map_or(cur.page, |n| usize::try_from(n).unwrap_or(usize::MAX));
     let pg = layout.pages.get(page).ok_or_else(|| CmdError::Params(format!("no page {page}")))?;
     // Keep a corner of it on the page.
@@ -418,7 +418,7 @@ fn move_object(s: &mut Session, pos: Pos, page: Option<u64>, x: f32, y: f32, (w,
     } else {
         s.touch(); // lay out the edit so far
         let layout = s.layout();
-        layout.object(&at.path, at.off, page).ok_or_else(|| CmdError::Failed("the object isn't laid out".into()))?.origin
+        layout.object(&at, page).ok_or_else(|| CmdError::Failed("the object isn't laid out".into()))?.origin
     };
     edit_float(s, &at, |f| {
         f.x = (x - origin.x).clamp(-MAX_OFFSET, MAX_OFFSET);

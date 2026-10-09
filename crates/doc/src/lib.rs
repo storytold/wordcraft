@@ -71,6 +71,9 @@ impl Block {
 
 pub type Blocks = Vec<Arc<Block>>;
 
+/// Text boxes inside text boxes count (and show) this many levels deep.
+pub const MAX_TEXT_BOX_DEPTH: usize = 4;
+
 pub fn para_block(p: Paragraph) -> Arc<Block> {
     Arc::new(Block::Para(p))
 }
@@ -631,6 +634,42 @@ impl Document {
         let before = self.parts.len();
         self.parts.retain(|id, p| p.kind != PartKind::TextBox || live.contains(&StoryRef::Part(*id)));
         before - self.parts.len()
+    }
+
+    /// Every inline object in reading order: the body's, with each text box's objects where the
+    /// box is (nested boxes too, a few levels deep).
+    pub fn objects_in_reading_order(&self, f: &mut dyn FnMut(&InlineObject)) {
+        self.walk_objects(&self.body, 0, f);
+    }
+
+    /// The footnotes and endnotes referenced inside text box story `part` (nested boxes too), in
+    /// reading order.
+    pub fn notes_in_text_box(&self, part: u32) -> Vec<u32> {
+        let mut out = Vec::new();
+        if let Some(p) = self.parts.get(&part).filter(|p| p.kind == PartKind::TextBox) {
+            self.walk_objects(&p.blocks, 1, &mut |o| {
+                if let InlineObject::NoteRef { id, .. } = o {
+                    out.push(*id);
+                }
+            });
+        }
+        out
+    }
+
+    fn walk_objects(&self, blocks: &Blocks, depth: usize, f: &mut dyn FnMut(&InlineObject)) {
+        for b in blocks {
+            edit::each_para(b, 0, &mut |p| {
+                for o in &p.objects {
+                    f(o);
+                    if let InlineObject::Shape { story: Some(id), .. } = o
+                        && depth < MAX_TEXT_BOX_DEPTH
+                        && let Some(part) = self.parts.get(id).filter(|p| p.kind == PartKind::TextBox)
+                    {
+                        self.walk_objects(&part.blocks, depth + 1, f);
+                    }
+                }
+            });
+        }
     }
 
     /// `roots`, then every story their objects lead to (`follow`: an object's story id and the

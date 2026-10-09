@@ -129,13 +129,12 @@ pub fn geometry(app: &WordApp, l: &DocLayout, avail: egui::Vec2) -> Geometry {
 }
 
 /// Fingerprint of a page's content for the texture cache.
-fn page_key(app: &WordApp, page: &Page, scale_px: f32) -> u64 {
+fn page_key(app: &WordApp, page: &Page, scale_px: f32, dim_body: bool) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     scale_px.to_bits().hash(&mut h);
     let v = &app.session.view;
     (v.marks, v.show_markup).hash(&mut h);
-    let editing_hf = matches!(app.session.sel.focus.story, StoryRef::Part(id) if Some(id) == page.header_story || Some(id) == page.footer_story);
-    editing_hf.hash(&mut h);
+    dim_body.hash(&mut h);
     format!("{:?}{:?}", app.session.doc.settings.page_color, app.session.doc.settings.watermark).hash(&mut h);
     (page.w.to_bits(), page.h.to_bits()).hash(&mut h);
     for list in [&page.items, &page.header, &page.footer] {
@@ -177,6 +176,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let geo = geometry(app, &layout, area.size() - vec2(14.0, 0.0));
     app.canvas.scale = geo.scale;
     let caret = layout.caret_on(&app.session.sel.focus, app.session.page_hint);
+    // Editing a header/footer (or a note) dims the body; once per frame, for every page.
+    let dim_body = dims_body(app, &layout);
     if let Some(c) = caret {
         app.session.page_hint = c.page;
     }
@@ -216,15 +217,14 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             painter.rect_filled(sr.translate(vec2(0.0, 2.0)).expand(1.5), 1.0, t.page_shadow);
             painter.rect_filled(sr, 0.0, Color32::WHITE);
             let scale_px = (geo.scale * ppp).min(max_tex / page.w.max(1.0)).min(max_tex / page.h.clamp(1.0, 1e6)).max(0.05);
-            let key = page_key(app, page, scale_px);
+            let key = page_key(app, page, scale_px, dim_body);
             let fresh = app.canvas.textures.get(&i).is_some_and(|(k, _)| *k == key);
             if !fresh && (rendered < 2 || !app.canvas.textures.contains_key(&i) && rendered < 4) {
                 let mut opts = wordcraft_render::RenderOptions::default();
                 opts.display.marks = app.session.view.marks;
                 opts.display.markup = app.session.view.show_markup;
-                let editing_hf = matches!(app.session.sel.focus.story, StoryRef::Part(_)) && !in_text_box(app);
-                opts.display.dim_header = !editing_hf;
-                opts.display.dim_body = editing_hf;
+                opts.display.dim_header = !dim_body;
+                opts.display.dim_body = dim_body;
                 let img = wordcraft_render::render_page(&app.session.doc, page, scale_px, &opts);
                 let px = img.to_straight();
                 let ci = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &px);
@@ -510,21 +510,20 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
     }
     let pressed = ui.input(|i| i.pointer.primary_pressed()) && resp.contains_pointer();
     if pressed {
-        // Clicking into a footnote/endnote or a text box edits it; clicking elsewhere goes back to
-        // the body. Text boxes stay out of reach while editing a header/footer.
+        // Clicking into a footnote/endnote or a text box edits it; clicking outside a text box goes
+        // back to where it is. While editing a header/footer, only its own text boxes are in reach.
         let story = {
-            let kind = |s: StoryRef| match s {
-                StoryRef::Part(id) => app.session.doc.parts.get(&id).map(|p| p.kind),
-                StoryRef::Body => None,
-            };
-            let is_note = |s: StoryRef| matches!(kind(s), Some(PartKind::Footnote | PartKind::Endnote));
-            let is_box = |s: StoryRef| kind(s) == Some(PartKind::TextBox);
-            let in_hf = matches!(kind(story), Some(PartKind::Header | PartKind::Footer));
-            match layout.story_at(page, x, y) {
-                Some(s) if is_note(s) => s,
-                Some(s) if is_box(s) && !in_hf => s,
-                Some(StoryRef::Body) if is_note(story) => StoryRef::Body,
-                _ if is_box(story) => StoryRef::Body,
+            let is_note = |s: StoryRef| matches!(part_kind(app, s), Some(PartKind::Footnote | PartKind::Endnote));
+            let is_box = |s: StoryRef| part_kind(app, s) == Some(PartKind::TextBox);
+            let host = if is_box(story) { text_box_host(app, layout).unwrap_or(StoryRef::Body) } else { story };
+            let in_hf = matches!(part_kind(app, host), Some(PartKind::Header | PartKind::Footer));
+            let hf_box = if in_hf { layout.header_footer_text_box_at(page, x, y).map(StoryRef::Part) } else { None };
+            match (hf_box, layout.story_at(page, x, y)) {
+                (Some(b), _) => b,
+                (None, Some(s)) if is_note(s) => s,
+                (None, Some(s)) if is_box(s) && !in_hf => s,
+                (None, Some(StoryRef::Body)) if is_note(story) => StoryRef::Body,
+                _ if is_box(story) => host,
                 _ => story,
             }
         };
@@ -727,7 +726,37 @@ pub fn page_to_screen(app: &WordApp, page: usize, x: f32, y: f32) -> Option<Pos2
 
 /// Whether the caret is in a text box's story.
 pub fn in_text_box(app: &WordApp) -> bool {
-    matches!(app.session.sel.focus.story, StoryRef::Part(id) if app.session.doc.parts.get(&id).is_some_and(|p| p.kind == PartKind::TextBox))
+    part_kind(app, app.session.sel.focus.story) == Some(PartKind::TextBox)
+}
+
+fn part_kind(app: &WordApp, s: StoryRef) -> Option<PartKind> {
+    match s {
+        StoryRef::Part(id) => app.session.doc.parts.get(&id).map(|p| p.kind),
+        StoryRef::Body => None,
+    }
+}
+
+/// The story a text box's story sits in (where the box is), when the caret is in a text box.
+fn text_box_host(app: &WordApp, layout: &DocLayout) -> Option<StoryRef> {
+    match app.session.sel.focus.story {
+        StoryRef::Part(id) if in_text_box(app) => layout.text_box(id, app.session.page_hint).map(|o| o.story),
+        _ => None,
+    }
+}
+
+/// Editing a header or footer, or a text box in one.
+pub fn editing_header_footer(app: &WordApp, layout: &DocLayout) -> bool {
+    let story = text_box_host(app, layout).unwrap_or(app.session.sel.focus.story);
+    matches!(part_kind(app, story), Some(PartKind::Header | PartKind::Footer))
+}
+
+/// The body is dimmed while editing anything but the body (or a text box in it).
+fn dims_body(app: &WordApp, layout: &DocLayout) -> bool {
+    match app.session.sel.focus.story {
+        StoryRef::Body => false,
+        StoryRef::Part(_) if in_text_box(app) => editing_header_footer(app, layout),
+        StoryRef::Part(_) => true,
+    }
 }
 
 /// Caret position on screen.
