@@ -49,16 +49,10 @@ impl Previews {
                 ui.painter().rect_filled(r, 3.0, t.hover);
             }
             let tex = tex.or_else(|| {
-<<<<<<< HEAD
                 // Context accessors share a lock: read input before taking the data write lock.
                 let now = ui.input(|i| i.time);
                 let n = ui.ctx().data_mut(|d| {
                     let c = d.get_temp_mut_or_default::<(f64, u32)>(egui::Id::new("font_preview_budget"));
-=======
-                let n = ui.ctx().data_mut(|d| {
-                    let c = d.get_temp_mut_or_default::<(f64, u32)>(egui::Id::new("font_preview_budget"));
-                    let now = ui.input(|i| i.time);
->>>>>>> 7584b9b2930ffddfe7db96b6eba977262e55135c
                     if c.0 != now {
                         *c = (now, 0);
                     }
@@ -302,7 +296,6 @@ pub fn table_style_tile(ui: &mut Ui, app: &mut WordApp, style: &str) -> Response
     }
     resp
 }
-<<<<<<< HEAD
 
 #[cfg(test)]
 mod tests {
@@ -345,5 +338,3 @@ mod tests {
         worker.join().unwrap();
     }
 }
-=======
->>>>>>> 7584b9b2930ffddfe7db96b6eba977262e55135c

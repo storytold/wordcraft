@@ -194,7 +194,6 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"align"?: "left|center|right"}"#)),
         CommandSpec::new("table.fromText", "Convert Text to Table", "Insert › Tables", from_text).params(r#"{"separator"?: "tab|comma"}"#),
         CommandSpec::new("table.quick", "Quick Tables", "Insert › Tables", quick_table).params(r#"{"kind"?: "calendar|tabular|matrix"}"#),
-<<<<<<< HEAD
         
         // Nuevo comando integrado correctamente
         t(CommandSpec::new("table.size", "Table Size", "Table Layout › Table", |s, v| {
@@ -222,8 +221,6 @@ pub fn specs() -> Vec<CommandSpec> {
             })
         })
         .params(r#"{"width"?: pt, "percent"?: 1..100}"#)),
-=======
->>>>>>> 7584b9b2930ffddfe7db96b6eba977262e55135c
     ]
 }
 

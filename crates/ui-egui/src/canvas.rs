@@ -74,7 +74,6 @@ pub struct Geometry {
 /// Width of the markup area beside each page for comment balloons (points), or 0.
 pub fn markup_width(app: &WordApp) -> f32 {
     let v = &app.session.view;
-    // Word shows comments either in balloons (contextual) or in the Comments pane (list).
     let on = v.show_markup && !v.comments_pane && !v.read_mode && !v.multi_page && v.mode == wordcraft_layout::ViewMode::Print;
     if on && !app.session.doc.comments.is_empty() { 216.0 } else { 0.0 }
 }
@@ -108,7 +107,6 @@ pub fn geometry(app: &WordApp, l: &DocLayout, avail: egui::Vec2) -> Geometry {
         let h = chunk.iter().map(|p| p.h.min(1e6) * scale).fold(0.0f32, f32::max);
         let mut x = (content_w - row_w) / 2.0;
         for p in chunk {
-            // Pages narrower than the widest keep their markup area beside them.
             let px = x + (maxw - markup - p.w).max(0.0) * scale / 2.0;
             rects.push(Rect::from_min_size(pos2(px, y), vec2(p.w * scale, p.h.min(1e6) * scale)));
             x += maxw * scale + GAP;
@@ -118,7 +116,6 @@ pub fn geometry(app: &WordApp, l: &DocLayout, avail: egui::Vec2) -> Geometry {
     Geometry { rects, size: vec2(content_w, y.max(avail.y)), scale }
 }
 
-/// Fingerprint of a page's content for the texture cache.
 fn page_key(app: &WordApp, page: &Page, scale_px: f32) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     scale_px.to_bits().hash(&mut h);
@@ -202,7 +199,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 continue;
             }
             let Some(page) = layout.pages.get(i) else { continue };
-            // Shadow and paper.
+            
             painter.rect_filled(sr.translate(vec2(0.0, 2.0)).expand(1.5), 1.0, t.page_shadow);
             painter.rect_filled(sr, 0.0, Color32::WHITE);
             let scale_px = (geo.scale * ppp).min(max_tex / page.w.max(1.0)).min(max_tex / page.h.clamp(1.0, 1e6)).max(0.05);
@@ -235,7 +232,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             if let Some((_, tex)) = app.canvas.textures.get(&i) {
                 painter.image(tex.id(), sr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
             }
-            // Header/footer editing chrome.
+            
             if let StoryRef::Part(id) = app.session.sel.focus.story {
                 let sect_body = page.body;
                 if page.header_story == Some(id) || page.footer_story == Some(id) {
@@ -249,49 +246,42 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     }
                 }
             }
-<<<<<<< HEAD
 
             // Table cells: Draw gridlines and handle resizing interactions
             for it in &page.items {
                 if let Placed::Cell { rect, .. } = it {
-                    // Physical rectangle on screen
                     let r = Rect::from_min_size(
                         pos2(sr.min.x + rect.x * geo.scale, sr.min.y + rect.y * geo.scale),
                         vec2(rect.w * geo.scale, rect.h * geo.scale),
                     );
 
-                    // Draw gridlines if they are enabled
                     if app.session.view.gridlines {
                         painter.rect_stroke(r, 0.0, Stroke::new(0.5, t.blue.linear_multiply(0.6)), egui::StrokeKind::Middle);
                     }
 
                     // --- RESIZE COLUMNS (Right border) ---
-                    // Create an invisible area 6 pixels wide right over the right border
                     let col_drag_rect = Rect::from_min_max(pos2(r.max.x - 3.0, r.min.y), pos2(r.max.x + 3.0, r.max.y));
                     let col_id = ui.id().with(("col_resize", rect.x.to_bits(), rect.y.to_bits()));
                     let col_resp = ui.interact(col_drag_rect, col_id, Sense::drag());
 
                     if col_resp.hovered() || col_resp.dragged() {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeColumn); // Change cursor to ↔
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeColumn);
                     }
                     if col_resp.dragged() {
-                        // Identify which cell we are dragging
                         if let Some(pos) = layout.hit(i, rect.x, rect.y, app.session.sel.focus.story) {
                             app.session.sel = wordcraft_engine::Selection::caret(pos);
-                            // Calculate the new size adding the drag delta (un-scaled to actual points)
                             let new_width = rect.w + (col_resp.drag_delta().x / geo.scale);
                             let _ = app.run("table.columnWidth", json!({"width": new_width}));
                         }
                     }
 
                     // --- RESIZE ROWS (Bottom border) ---
-                    // Create an invisible area 6 pixels high over the bottom border
                     let row_drag_rect = Rect::from_min_max(pos2(r.min.x, r.max.y - 3.0), pos2(r.max.x, r.max.y + 3.0));
                     let row_id = ui.id().with(("row_resize", rect.x.to_bits(), rect.y.to_bits()));
                     let row_resp = ui.interact(row_drag_rect, row_id, Sense::drag());
 
                     if row_resp.hovered() || row_resp.dragged() {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeRow); // Change cursor to ↕
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeRow);
                     }
                     if row_resp.dragged() {
                         if let Some(pos) = layout.hit(i, rect.x, rect.y, app.session.sel.focus.story) {
@@ -300,30 +290,18 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             let _ = app.run("table.rowHeight", json!({"height": new_height}));
                         }
                     }
-=======
-            // Table gridlines.
-            if app.session.view.gridlines {
-                for it in &page.items {
-                    if let Placed::Cell { rect, .. } = it {
-                        let r = Rect::from_min_size(
-                            pos2(sr.min.x + rect.x * geo.scale, sr.min.y + rect.y * geo.scale),
-                            vec2(rect.w * geo.scale, rect.h * geo.scale),
-                        );
-                        painter.rect_stroke(r, 0.0, Stroke::new(0.5, t.blue.linear_multiply(0.6)), egui::StrokeKind::Middle);
-                    }
->>>>>>> 7584b9b2930ffddfe7db96b6eba977262e55135c
                 }
             }
         }
         if rendered > 0 {
             app.canvas.render_ms = crate::now_ms() - t0;
         }
-        // Drop textures of pages that no longer exist.
+        
         let n = layout.pages.len();
         app.canvas.textures.retain(|k, _| *k < n);
         app.canvas.page_rects = rects.clone();
         balloons(app, ui, &painter, &rects, &layout, geo.scale);
-        // Selection.
+        
         if !app.session.sel.is_collapsed() {
             let (a, b) = app.session.sel.ordered();
             for (pi, r) in layout.selection_rects(&app.session.doc, &a, &b, app.session.page_hint) {
@@ -334,7 +312,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
             }
         }
-        // Caret.
+        
         let focused = resp.has_focus() || app.canvas.focused;
         if let Some(c) = layout.caret_on(&app.session.sel.focus, app.session.page_hint)
             && let Some(pr) = rects.get(c.page)
@@ -350,7 +328,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             if focused {
                 ui.ctx().request_repaint_after(std::time::Duration::from_millis(530 - (since as u64 % 530)));
             }
-            // IME candidate window placement.
+            
             let cr = Rect::from_min_max(pos2(x, y0), pos2(x + 1.0, y1));
             if focused {
                 ui.ctx().output_mut(|o| {
@@ -366,7 +344,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         (resp, rects)
     });
     let (resp, rects) = out.inner;
-    // Focus: the canvas takes keyboard focus on click and keeps Tab/arrows.
+    
     if resp.clicked() || resp.drag_started() || app.canvas.want_focus {
         resp.request_focus();
         app.canvas.want_focus = false;
@@ -378,7 +356,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     }
     app.canvas.focused = resp.has_focus();
     mouse(app, ui, &resp, &rects, &layout, geo.scale);
-    // Right-click: move the caret there (unless inside the selection), then the context menu.
+    
     if resp.secondary_clicked()
         && let Some(p) = resp.interact_pointer_pos()
         && let Some((page, x, y)) = page_at(&rects, geo.scale, p)
@@ -404,7 +382,6 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     }
 }
 
-/// Comment balloons in the markup area right of each page, joined to their anchors.
 fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, rects: &[Rect], layout: &DocLayout, scale: f32) {
     let mw = markup_width(app);
     if mw <= 0.0 {
@@ -412,7 +389,6 @@ fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, rects: &[Re
     }
     let t = Tokens::get(ui.ctx());
     let clip = ui.clip_rect();
-    // (page, anchor x, anchor y, id) for each anchored, unresolved-or-not comment.
     let mut by_page: HashMap<usize, Vec<(f32, f32, u32, Pos)>> = HashMap::new();
     for (id, pos) in wordcraft_engine::cmd::review::comment_list(&app.session) {
         let Some(pos) = pos else { continue };
@@ -422,7 +398,7 @@ fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, rects: &[Re
     let palette = [t.blue, Color32::from_rgb(0xB0, 0x3A, 0x2E), Color32::from_rgb(0x2E, 0x7D, 0x32), Color32::from_rgb(0x8E, 0x44, 0xAD), t.orange];
     let mut authors: Vec<String> = Vec::new();
     let mut clicked: Option<Pos> = None;
-    // The markup area extends each page.
+    
     for pr in rects {
         let area = Rect::from_min_max(pos2(pr.max.x, pr.min.y), pos2(pr.max.x + mw * scale, pr.max.y));
         if area.intersects(clip) {
@@ -460,7 +436,6 @@ fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, rects: &[Re
                 continue;
             }
             let selected = app.session.sel.focus.path == pos.path && app.session.sel.focus.story == pos.story;
-            // Leader: from the anchor along the text to the page edge, then to the card.
             let lead = Stroke::new(if selected { 1.5 } else { 1.0 }, color.linear_multiply(if selected { 1.0 } else { 0.7 }));
             dashed(painter, anchor, pos2(pr.max.x, anchor.y), lead);
             painter.line_segment([pos2(pr.max.x, anchor.y), pos2(x0, top + 10.0)], lead);
@@ -489,7 +464,6 @@ fn dashed(p: &egui::Painter, a: Pos2, b: Pos2, s: Stroke) {
     p.extend(egui::Shape::dashed_line(&[a, b], s, 4.0, 3.0));
 }
 
-/// Page index and document coordinates under a screen point.
 pub fn page_at(rects: &[Rect], scale: f32, p: Pos2) -> Option<(usize, f32, f32)> {
     let mut best: Option<(usize, f32)> = None;
     for (i, r) in rects.iter().enumerate() {
@@ -514,7 +488,7 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
     let Some((page, x, y)) = page_at(rects, scale, p) else { return };
     let mods = ui.input(|i| i.modifiers);
     let story = app.session.sel.focus.story;
-    // Double-click in the header/footer area edits it; double-click in the body leaves it.
+    
     if resp.double_clicked() {
         if let Some((s, header)) = layout.header_footer_at(page, y)
             && story == StoryRef::Body
@@ -543,7 +517,6 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
     }
     let pressed = ui.input(|i| i.pointer.primary_pressed()) && resp.contains_pointer();
     if pressed {
-        // Clicking into a footnote/endnote edits it; clicking the body from a note goes back.
         let story = match layout.story_at(page, x, y) {
             Some(StoryRef::Part(id))
                 if app
@@ -561,7 +534,6 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
             _ => story,
         };
         let Some(pos) = layout.hit(page, x, y, story) else { return };
-        // Ctrl/⌘+click follows a hyperlink.
         if mods.command
             && let Some(link) = app.session.doc.para_at(&pos).and_then(|pp| pp.props_of_char(pos.off).link.clone())
         {
@@ -579,7 +551,6 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
         }
         app.session.page_hint = page;
         app.canvas.dragging = true;
-        // Format painter applies on mouse up.
     } else if app.canvas.dragging && ui.input(|i| i.pointer.primary_down()) {
         if let Some(pos) = layout.hit(page, x, y, story)
             && pos != app.session.sel.focus
@@ -588,14 +559,13 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
             app.session.page_hint = page;
             app.canvas.caret_visible_since = crate::now_ms();
         }
-        // Auto-scroll near the edges is handled by egui's scroll area drag.
     } else if app.canvas.dragging && ui.input(|i| i.pointer.primary_released()) {
         app.canvas.dragging = false;
         if app.session.painter.is_some() && !app.session.sel.is_collapsed() {
             let _ = app.run("edit.pasteFormat", json!({}));
         }
     }
-    // Hover a link: show its target.
+    
     if resp.hovered()
         && !app.canvas.dragging
         && let Some(pos) = layout.hit(page, x, y, story)
@@ -608,7 +578,6 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
     }
 }
 
-/// Horizontal and vertical rulers for the caret's page and paragraph.
 fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layout: &DocLayout, scale: f32) {
     let t = Tokens::get(ui.ctx());
     let p = ui.painter();
@@ -618,7 +587,7 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
     let pi = app.session.page_hint.min(layout.pages.len().saturating_sub(1));
     let (Some(page), Some(pr)) = (layout.pages.get(pi), rects.get(pi)) else { return };
     let sect = app.session.doc.sections().get(page.section).map(|(_, s)| (*s).clone()).unwrap_or_default();
-    // Horizontal.
+    
     let hp = ui.painter_at(h);
     let x0 = pr.min.x;
     let bar = Rect::from_min_max(pos2(x0, h.min.y + 4.0), pos2(x0 + page.w * scale, h.max.y - 3.0));
@@ -661,7 +630,7 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
             break;
         }
     }
-    // Indent markers for the caret's paragraph (relative to its column).
+    
     let col_x = page.body.x;
     if let Some(para) = app.session.doc.para_at(&app.session.sel.focus) {
         let rp = app.session.doc.styles.resolve_para(&para.props);
@@ -696,7 +665,7 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
             hp.line_segment([pos2(tx, bar.max.y - 6.0), pos2(tx, bar.max.y - 1.0)], Stroke::new(1.5, t.text));
             hp.line_segment([pos2(tx, bar.max.y - 1.0), pos2(tx + 4.0, bar.max.y - 1.0)], Stroke::new(1.5, t.text));
         }
-        // Dragging the left-indent marker.
+        
         let id = ui.id().with("ruler_left");
         let mr = Rect::from_center_size(pos2(left, bar.max.y - 3.0), vec2(12.0, 12.0));
         let r = ui.interact(mr, id, Sense::drag());
@@ -724,7 +693,7 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
             let _ = app.run("para.indents", json!({"right": (pt / 4.5).round() * 4.5}));
         }
     }
-    // Vertical.
+    
     let vp = ui.painter_at(v);
     let y0 = pr.min.y;
     let vbar = Rect::from_min_max(pos2(v.min.x + 4.0, y0), pos2(v.max.x - 3.0, y0 + page.h.min(20_000.0) * scale));
@@ -751,13 +720,11 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
     let _ = sect;
 }
 
-/// Convert a page position (points) to screen coordinates (for agents and tests).
 pub fn page_to_screen(app: &WordApp, page: usize, x: f32, y: f32) -> Option<Pos2> {
     let r = app.canvas.page_rects.get(page)?;
     Some(to_screen(pos2(0.0, 0.0), *r, app.canvas.scale, x, y))
 }
 
-/// Caret position on screen.
 pub fn caret_screen(app: &mut WordApp) -> Option<(Pos2, f32)> {
     let l = app.session.layout();
     let c = l.caret_on(&app.session.sel.focus, app.session.page_hint)?;
