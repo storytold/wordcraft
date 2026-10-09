@@ -1036,6 +1036,30 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
         "chevronRight" => pen.line(&[(7.0, 4.0), (13.0, 10.0), (7.0, 16.0)]),
         "chevronUp" => pen.line(&[(4.0, 13.0), (10.0, 7.0), (16.0, 13.0)]),
         "chevronDown" => pen.line(&[(4.0, 7.0), (10.0, 13.0), (16.0, 7.0)]),
+        // Read Aloud player
+        "mediaPlay" => pen.fill(&[(6.0, 4.0), (16.0, 10.0), (6.0, 16.0)], c),
+        "mediaPause" => {
+            pen.frect(5.5, 4.0, 8.5, 16.0, c);
+            pen.frect(11.5, 4.0, 14.5, 16.0, c);
+        }
+        "mediaStop" => pen.frect(5.0, 5.0, 15.0, 15.0, c),
+        "mediaPrev" => {
+            pen.frect(4.0, 5.0, 6.0, 15.0, c);
+            pen.fill(&[(16.0, 5.0), (7.0, 10.0), (16.0, 15.0)], c);
+        }
+        "mediaNext" => {
+            pen.frect(14.0, 5.0, 16.0, 15.0, c);
+            pen.fill(&[(4.0, 5.0), (13.0, 10.0), (4.0, 15.0)], c);
+        }
+        // Move past citation: a bracketed citation with an arrow hopping over it to the caret.
+        "pastCitation" => {
+            pen.line_c(&[(4.5, 9.0), (3.0, 9.0), (3.0, 17.0), (4.5, 17.0)], c);
+            pen.line_c(&[(11.5, 9.0), (13.0, 9.0), (13.0, 17.0), (11.5, 17.0)], c);
+            pen.lines(5.5, 10.5, &[12.0, 14.5]);
+            pen.line_c(&[(4.0, 6.0), (8.0, 2.5), (14.0, 2.5), (16.5, 7.0)], a);
+            pen.line_c(&[(14.0, 6.0), (16.5, 7.0), (17.5, 4.5)], a);
+            pen.line_c(&[(17.0, 9.0), (17.0, 17.5)], a);
+        }
         "addins" => {
             pen.rect(3.0, 3.0, 9.0, 9.0, c);
             pen.rect(11.0, 3.0, 17.0, 9.0, c);

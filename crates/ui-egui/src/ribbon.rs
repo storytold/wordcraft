@@ -793,6 +793,7 @@ fn zotero(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Citations", None, app, |ui, app| {
         big(ui, app, "citation", "Add/Edit\nCitation", "ui.zotero.addEditCitation", json!({}), false);
         big(ui, app, "addNote", "Add\nNote", "ui.zotero.addNote", json!({}), false);
+        big(ui, app, "pastCitation", "Move Past\nCitation", "caret.pastCitation", json!({}), false);
     });
     group(ui, "Bibliography", None, app, |ui, app| {
         big(ui, app, "bibliography", "Add/Edit\nBibliography", "ui.zotero.addEditBibliography", json!({}), false);

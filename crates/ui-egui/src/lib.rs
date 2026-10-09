@@ -24,6 +24,7 @@ pub mod icons;
 pub mod keys;
 pub mod panes;
 pub mod previews;
+pub mod read_aloud;
 pub mod ribbon;
 pub mod theme;
 pub mod widgets;
@@ -72,6 +73,9 @@ pub struct UiState {
     pub window: Option<window_geometry::WindowGeometry>,
     /// Interface language: `auto` (follow the system) or a code from [`i18n::LANGUAGES`].
     pub language: String,
+    /// Read Aloud speed (1 = normal) and whether it skips citations and bibliographies.
+    pub read_aloud_rate: f32,
+    pub read_aloud_skip_citations: bool,
 }
 
 impl Default for UiState {
@@ -88,6 +92,8 @@ impl Default for UiState {
             author: String::new(),
             window: None,
             language: i18n::AUTO.into(),
+            read_aloud_rate: 1.0,
+            read_aloud_skip_citations: true,
         }
     }
 }
@@ -122,6 +128,9 @@ pub struct WordApp {
     pub zotero: zotero::ZoteroLink,
     /// The egui context, once the first frame has run (background work wakes the UI with it).
     pub(crate) ctx: Option<egui::Context>,
+    /// Read Aloud: the start of the sentence the caret was last moved to, and the last error shown.
+    pub(crate) read_aloud_at: Option<wordcraft_engine::doc::Pos>,
+    pub(crate) read_aloud_error: Option<String>,
 }
 
 impl WordApp {
@@ -151,6 +160,8 @@ impl WordApp {
             last_autosave: 0.0,
             zotero: zotero::ZoteroLink::default(),
             ctx: None,
+            read_aloud_at: None,
+            read_aloud_error: None,
         }
     }
 
@@ -163,6 +174,8 @@ impl WordApp {
     pub fn prefs(&self) -> UiState {
         let mut ui = self.ui.clone();
         ui.author = self.session.author.clone();
+        ui.read_aloud_rate = self.session.read_aloud.rate();
+        ui.read_aloud_skip_citations = self.session.read_aloud.skip_citations;
         ui
     }
 
@@ -175,6 +188,8 @@ impl WordApp {
         if !author.trim().is_empty() {
             self.session.author = author;
         }
+        self.session.read_aloud.set_rate(self.ui.read_aloud_rate);
+        self.session.read_aloud.skip_citations = self.ui.read_aloud_skip_citations;
     }
 
     /// Run a command; UI-level commands (`ui.*`) are handled here, the rest by the engine.
@@ -387,6 +402,7 @@ impl WordApp {
         }
         self.drain_control(ctx);
         zotero::poll(self, ctx);
+        read_aloud::poll(self, ctx);
         self.drain_inbox();
         // AutoSave: write a saved document a couple of seconds after the last change.
         let now = now_ms();
@@ -462,6 +478,7 @@ impl WordApp {
         }
         dialogs::show(self, &ctx);
         zotero::show_alert(self, &ctx);
+        read_aloud::show(self, &ctx);
         keys::global_shortcuts(self, &ctx);
         if let Some(url) = self.canvas.open_url.take() {
             ctx.open_url(egui::OpenUrl::new_tab(url));

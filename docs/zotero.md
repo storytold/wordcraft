@@ -29,6 +29,17 @@ From a terminal, against a file:
 wordcraft-cli zotero refresh paper.docx --save paper.docx [--trace]
 ```
 
+Two engine commands work with Zotero's fields without Zotero running:
+
+- `caret.pastCitation` (Zotero › Move Past Citation) moves the caret to just after the citation
+  it is in or before. Adjacent citations count as one. If there is none, it moves past the next
+  citation.
+- Read Aloud (`review.readAloud`, Review › Speech, Mod+Alt+Space) skips citations and the
+  bibliography by default. This covers Zotero, Mendeley, EndNote and Word's own citation
+  fields. The player window has previous/next sentence, pause, stop and speed (0.5–3×).
+  Its commands are `readAloud.playPause`, `.next`, `.previous`, `.stop`, `.speed {"value"}`,
+  `.skipCitations {"value"}` and `.status`. Set `WORDCRAFT_SPEECH=off` to keep it silent.
+
 Switching between an in-text style and a note style in Document Preferences moves the citations:
 into new footnotes (or endnotes) at the same place, and back into the text where the note marks
 were; a note that held only the citation is removed.
