@@ -143,7 +143,13 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         "mcp" => {
             let backend: Box<dyn wordcraft_mcp::Backend> = match arg_value(&rest, "--connect") {
-                Some(addr) => Box::new(wordcraft_mcp::Remote::connect(&addr).map_err(|e| format!("can't reach the WordCraft app at {addr}: {e}"))?),
+                Some(addr) => {
+                    let remote = wordcraft_mcp::Remote::connect(&addr).map_err(|e| format!("can't reach the WordCraft app at {addr}: {e}"))?;
+                    if let Some(w) = remote.key_warning() {
+                        eprintln!("wordcraft-cli: {w}");
+                    }
+                    Box::new(remote)
+                }
                 None => Box::new(wordcraft_mcp::Headless::default()),
             };
             let mut server = wordcraft_mcp::Server::new(backend);
