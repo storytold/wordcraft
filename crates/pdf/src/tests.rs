@@ -233,3 +233,20 @@ fn shapes_have_paths() {
     assert_eq!(parse_iso("garbage"), None);
     assert_eq!(civil(0), (1970, 1, 1, 0, 0, 0));
 }
+
+#[test]
+fn field_results_are_extractable_text() {
+    // Issue #97: a field's glyphs mapped to the U+FFFC placeholder, not the result shown.
+    let mut d = Document::new();
+    let mut p = Paragraph::with_text("See  for details.", CharProps::default());
+    p.insert_object(
+        4,
+        InlineObject::Field { instr: " REF _RefTarget \\h ".into(), result: "Section 3.01".into(), locked: false },
+        &CharProps::default(),
+    )
+    .unwrap();
+    d.body = vec![para_block(p)];
+    let text = extract_text(&export(&d, &PdfOptions::default()).unwrap()).concat();
+    assert!(!text.contains('\u{FFFC}'), "{text:?}");
+    assert!(squash(&text).contains("See Section 3.01 for details."), "{text:?}");
+}

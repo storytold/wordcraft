@@ -271,7 +271,7 @@ fn lines(
                         glyphs.push((g.gid, cx + g.dx, base - st.shift - g.dy));
                     }
                     if let Some(p) = para {
-                        text.push_str(p.text.get(c.start..c.end).unwrap_or(""));
+                        text.push_str(pl.cluster_text(p, c));
                     }
                 }
                 k += 1;

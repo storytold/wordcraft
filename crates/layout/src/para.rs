@@ -138,6 +138,9 @@ pub struct ParaLayout {
     pub drop_cap: Option<(usize, u8, f32)>,
     /// Clusters after which the line may break with a hyphen (soft hyphens, auto hyphenation), sorted.
     pub hyph_after: Vec<u32>,
+    /// Text shown by object clusters drawn as text (field results, note numbers, equations), by
+    /// byte start. The paragraph text holds only U+FFFC there.
+    pub object_text: Vec<(usize, String)>,
 }
 
 /// Inputs that change a paragraph's layout beyond its own content.
@@ -177,6 +180,7 @@ struct Builder<'a> {
     style_index: std::collections::HashMap<(String, u32, bool), u16>,
     glyphs: Vec<Glyph>,
     clusters: Vec<Cluster>,
+    object_text: Vec<(usize, String)>,
 }
 
 impl<'a> Builder<'a> {
@@ -327,6 +331,7 @@ impl<'a> Builder<'a> {
         let style = first.style;
         let g1 = added.last().map(|c| c.g1).unwrap_or(g0);
         self.clusters.push(Cluster { start, end, adv: x, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, dot: false });
+        self.object_text.push((start, text.to_string()));
     }
 }
 
@@ -353,7 +358,8 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
             None => Arc::new(doc.styles.resolve_char(para_style, c)),
         }
     };
-    let mut b = Builder { env, styles: Vec::new(), style_index: Default::default(), glyphs: Vec::new(), clusters: Vec::new() };
+    let mut b =
+        Builder { env, styles: Vec::new(), style_index: Default::default(), glyphs: Vec::new(), clusters: Vec::new(), object_text: Vec::new() };
     let mark_rc = resolve(&p.mark);
     let mark_style = b.style(&mark_rc, None, false);
     let mut has_page_fields = false;
@@ -542,6 +548,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         issues: if env.proofing { proof_issues(p) } else { Vec::new() },
         drop_cap,
         hyph_after: Vec::new(),
+        object_text: b.object_text,
     };
     pl.hyph_after = hyphenation_points(p, &pl, env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens);
     for k in pl.hyph_after.clone() {
@@ -1076,6 +1083,14 @@ fn resolve_tab(pl: &mut ParaLayout, pending: &mut Option<(usize, TabStop, f32)>,
 }
 
 impl ParaLayout {
+    /// Text a cluster shows: the paragraph text it covers, or an object's displayed text.
+    pub fn cluster_text<'p>(&'p self, p: &'p Paragraph, c: &Cluster) -> &'p str {
+        match self.object_text.iter().find(|(s, _)| *s == c.start) {
+            Some((_, t)) => t,
+            None => p.text.get(c.start..c.end).unwrap_or(""),
+        }
+    }
+
     /// x of byte offset `off` within line `li` (clamped to the line).
     pub fn x_of(&self, li: usize, off: usize) -> Option<f32> {
         let l = self.lines.get(li)?;
