@@ -95,10 +95,49 @@ pub struct FindState {
     pub current: usize,
 }
 
+#[derive(Clone)]
 struct Undo {
     label: String,
     doc: Document,
     sel: Selection,
+}
+
+/// What [`Session::restore`] needs to take commands back exactly: the document, the selection,
+/// the undo and redo stacks (also the oldest undo steps the undo limit pushes out meanwhile), the
+/// open typing group, a pending [`Session::join_next_undo`] and the dirty flag. See
+/// [`Session::edit_snapshot`].
+pub struct EditSnapshot {
+    doc: Document,
+    sel: Selection,
+    history_len: usize,
+    /// `Session::undo_evicted` when the snapshot was taken.
+    evicted: u64,
+    /// The oldest undo steps, kept only when the stack is near its limit (the commands that
+    /// follow may push them out); at most [`SNAPSHOT_HEAD`].
+    head: Vec<Undo>,
+    redo: Vec<Undo>,
+    typing_open: bool,
+    join_next: bool,
+    dirty: bool,
+}
+
+/// Undo steps that the commands run between [`Session::edit_snapshot`] and [`Session::restore`]
+/// may push out of a full stack and still come back.
+const SNAPSHOT_HEAD: usize = 4;
+
+impl EditSnapshot {
+    /// The document when the snapshot was taken.
+    pub fn doc(&self) -> &Document {
+        &self.doc
+    }
+    /// The dirty flag then.
+    pub fn dirty(&self) -> bool {
+        self.dirty
+    }
+    /// The number of undo steps then.
+    pub fn undo_depth(&self) -> usize {
+        self.history_len
+    }
 }
 
 /// An editing session.
@@ -126,6 +165,8 @@ pub struct Session {
     /// Last message for the status bar / agents.
     pub status: String,
     history: Vec<Undo>,
+    /// Undo steps dropped so far because of the undo limit.
+    undo_evicted: u64,
     redo: Vec<Undo>,
     /// Typing is coalesced into one undo step until something else happens.
     typing_open: bool,
@@ -179,6 +220,7 @@ impl Session {
             painter: None,
             status: String::new(),
             history: Vec::new(),
+            undo_evicted: 0,
             redo: Vec::new(),
             typing_open: false,
             join_next: false,
@@ -246,6 +288,7 @@ impl Session {
         self.history.push(Undo { label: label.to_string(), doc: self.doc.clone(), sel: self.sel.clone() });
         if self.history.len() > MAX_UNDO {
             self.history.remove(0);
+            self.undo_evicted += 1;
         }
         self.redo.clear();
     }
@@ -270,6 +313,10 @@ impl Session {
     }
     pub fn redo_label(&self) -> Option<&str> {
         self.redo.last().map(|u| u.label.as_str())
+    }
+    /// The number of undo steps.
+    pub fn undo_depth(&self) -> usize {
+        self.history.len()
     }
     pub fn undo_labels(&self) -> Vec<String> {
         self.history.iter().rev().map(|u| u.label.clone()).collect()
@@ -307,6 +354,95 @@ impl Session {
         self.touch();
         self.dirty = false;
         self.relayout();
+    }
+
+    /// A snapshot to put back with [`Session::restore`], for a caller that runs a command and
+    /// may want to take it back without a trace (cheap: the document's blocks are shared).
+    ///
+    /// Covered: `doc`, `sel`, the undo stack (its length, and its oldest steps when it is near
+    /// the limit), `redo`, the open typing group, a pending `join_next_undo` and `dirty`. `rev`,
+    /// `cache` and `layout` are derived (`restore` bumps `rev`). The other fields are not
+    /// covered: a caller that lets the command change them (the view, the find state, the
+    /// clipboard, macros, the file path…) saves and puts them back itself.
+    ///
+    /// `restore` is exact when the commands in between only add undo steps (every mutating
+    /// command adds at most one; up to [`SNAPSHOT_HEAD`] may push old steps out of a full
+    /// stack). Taking steps off the stack (`edit.undo`) or clearing it (`file.new`,
+    /// `file.open`) in between is not covered.
+    ///
+    /// The destructuring lists every field, so a new field does not build until someone decides
+    /// whether a snapshot must cover it.
+    pub fn edit_snapshot(&self) -> EditSnapshot {
+        let Session {
+            doc,
+            sel,
+            view: _,
+            pending: _,
+            path: _,
+            dirty,
+            clipboard: _,
+            clipboard_text: _,
+            find: _,
+            goal_x: _,
+            page_hint: _,
+            registry: _,
+            author: _,
+            painter: _,
+            status: _,
+            history,
+            undo_evicted,
+            redo,
+            typing_open,
+            join_next,
+            rev: _,
+            cache: _,
+            layout: _,
+            originals: _,
+            last_command: _,
+            recording: _,
+            macros: _,
+            autocorrect_on: _,
+            autocorrect_user: _,
+            versions: _,
+            building_blocks: _,
+            autosave: _,
+            bib_style: _,
+            merge: _,
+            ui_requests: _,
+        } = self;
+        let head = if history.len() + SNAPSHOT_HEAD > MAX_UNDO { history.iter().take(SNAPSHOT_HEAD).cloned().collect() } else { Vec::new() };
+        EditSnapshot {
+            doc: doc.clone(),
+            sel: sel.clone(),
+            history_len: history.len(),
+            evicted: *undo_evicted,
+            head,
+            redo: redo.clone(),
+            typing_open: *typing_open,
+            join_next: *join_next,
+            dirty: *dirty,
+        }
+    }
+
+    /// Put a snapshot back: the commands run since leave no trace in the document, the
+    /// selection or undo/redo (undo steps the limit pushed out meanwhile come back). The layout
+    /// is recomputed.
+    pub fn restore(&mut self, snap: EditSnapshot) {
+        let EditSnapshot { doc, sel, history_len, evicted, head, redo, typing_open, join_next, dirty } = snap;
+        let gone = usize::try_from(self.undo_evicted.saturating_sub(evicted)).unwrap_or(usize::MAX);
+        if gone > 0 {
+            let back = gone.min(head.len());
+            self.history.splice(0..0, head.into_iter().take(back));
+        }
+        self.undo_evicted = evicted;
+        self.doc = doc;
+        self.sel = sel;
+        self.history.truncate(history_len);
+        self.redo = redo;
+        self.typing_open = typing_open;
+        self.join_next = join_next;
+        self.touch();
+        self.dirty = dirty;
     }
 
     /// Make the selection valid for the current document.

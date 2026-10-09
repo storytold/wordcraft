@@ -68,6 +68,96 @@ fn joined_commands_are_one_undo_step() {
 }
 
 #[test]
+fn restore_takes_a_command_back_exactly() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "alpha beta"}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.insert", json!({"text": "gamma"}));
+    run(&mut s, "edit.undo", json!({}));
+    assert!(s.can_redo());
+    let (doc, sel, labels, depth, rev) = (s.doc.clone(), s.sel.clone(), s.undo_labels(), s.undo_depth(), s.rev());
+    s.dirty = false;
+    let snap = s.edit_snapshot();
+    assert_eq!(snap.doc(), &doc);
+    assert_eq!(snap.undo_depth(), depth);
+    assert!(!snap.dirty());
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.bold", json!({}));
+    assert_ne!(s.doc, doc);
+    assert_eq!(s.undo_depth(), depth + 1);
+    assert!(!s.can_redo(), "a new command clears redo");
+    s.restore(snap);
+    assert_eq!(s.doc, doc);
+    assert_eq!(s.sel, sel);
+    assert_eq!(s.undo_labels(), labels, "the command's undo step is gone");
+    assert!(s.can_redo(), "redo is back");
+    assert!(!s.dirty);
+    assert!(s.rev() > rev, "the layout is recomputed");
+    run(&mut s, "edit.redo", json!({}));
+    assert_eq!(text(&s), "alpha beta\ngamma");
+}
+
+#[test]
+fn restore_is_exact_at_the_undo_limit() {
+    // 510 steps, each with its own indent: the stack holds the newest 500.
+    let build = || {
+        let mut s = s();
+        run(&mut s, "text.insert", json!({"text": "alpha"}));
+        for i in 0..510 {
+            run(&mut s, "para.indents", json!({"left": f64::from(i)}));
+        }
+        s
+    };
+    // What undo walks through: (label, indent) for every step, newest first.
+    let walk = |s: &mut Session| {
+        let mut steps = Vec::new();
+        while let Some(label) = s.undo_label().map(str::to_string) {
+            s.undo();
+            steps.push((label, s.doc.para_at(&Pos::body(0, 0)).and_then(|p| p.props.indent_left)));
+        }
+        steps
+    };
+    let expected = walk(&mut build());
+    assert_eq!(expected.len(), 500);
+    // One command, and several (each pushes the oldest step out of the full stack).
+    for n in [1, 2, 4] {
+        let mut s = build();
+        let snap = s.edit_snapshot();
+        for _ in 0..n {
+            run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+        }
+        assert_eq!(s.undo_label(), Some("Table"));
+        assert_eq!(s.undo_depth(), 500);
+        s.restore(snap);
+        assert_eq!(walk(&mut s), expected, "{n} command(s): the oldest steps are back, the commands' steps are gone");
+    }
+}
+
+#[test]
+fn restore_keeps_the_open_undo_step() {
+    // Typing in progress: text typed after the restore joins the same undo step.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "alpha"}));
+    let depth = s.undo_depth();
+    let snap = s.edit_snapshot();
+    run(&mut s, "para.alignCenter", json!({}));
+    s.restore(snap);
+    run(&mut s, "text.insert", json!({"text": " beta"}));
+    assert_eq!(s.undo_depth(), depth, "still one typing step");
+    // A drag in progress (`join_next_undo`): its next frame joins the same undo step.
+    run(&mut s, "para.indents", json!({"left": 9.0}));
+    s.join_next_undo();
+    let depth = s.undo_depth();
+    let snap = s.edit_snapshot();
+    run(&mut s, "para.indents", json!({"left": 18.0}));
+    s.restore(snap);
+    run(&mut s, "para.indents", json!({"left": 27.0}));
+    assert_eq!(s.undo_depth(), depth, "still one drag step");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).and_then(|p| p.props.indent_left), None);
+}
+
+#[test]
 fn backspace_and_delete() {
     let mut s = s();
     run(&mut s, "text.insert", json!({"text": "abc"}));
