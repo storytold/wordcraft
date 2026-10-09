@@ -578,3 +578,15 @@ fn deleted_text_box_takes_its_text_with_it_until_undo() {
     assert_eq!(part.kind, wordcraft_doc::PartKind::TextBox);
     assert_eq!(s.doc.word_count_including_notes(), 2);
 }
+
+#[test]
+fn word_count_with_an_object_selected_counts_the_document() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "one two "}));
+    run(&mut s, "insert.textBox", json!({"text": "three"}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 8), "focus": Pos::body(0, 8 + 3)}));
+    assert_eq!(run(&mut s, "review.wordCount", json!({}))["words"].as_u64(), Some(3));
+    // A real text selection still counts just itself.
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    assert_eq!(run(&mut s, "review.wordCount", json!({}))["words"].as_u64(), Some(1));
+}

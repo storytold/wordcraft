@@ -355,7 +355,12 @@ fn word_count(s: &mut Session, v: &Value) -> CmdResult {
         s.prefs.count_notes = b;
     }
     let stories = if s.prefs.count_notes { s.doc.counted_stories() } else { vec![StoryRef::Body] };
-    let text = if s.sel.is_collapsed() { stories.iter().map(|st| s.doc.plain_text(*st)).collect::<Vec<_>>().join("\n") } else { s.selected_text() };
+    // A selected picture, shape or text box isn't a text selection: count the document.
+    let text = if s.sel.is_collapsed() || super::objects::object_selection(s).is_some() {
+        stories.iter().map(|st| s.doc.plain_text(*st)).collect::<Vec<_>>().join("\n")
+    } else {
+        s.selected_text()
+    };
     let words = wordcraft_doc::count_words(&text);
     let chars = text.chars().filter(|c| *c != '\n').count();
     let chars_no_spaces = text.chars().filter(|c| !c.is_whitespace()).count();

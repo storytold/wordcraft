@@ -304,6 +304,17 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+/// The selection when it is exactly one picture, shape or text box (its U+FFFC), rather than
+/// text: what clicking an object selects.
+pub fn object_selection(s: &Session) -> Option<(Pos, &InlineObject)> {
+    let (a, b) = s.sel.ordered();
+    if a.story != b.story || a.path != b.path || b.off != a.off + wordcraft_doc::para::OBJ.len_utf8() {
+        return None;
+    }
+    let o = s.doc.para_at(&a)?.object_at(a.off)?;
+    matches!(o, InlineObject::Image { .. } | InlineObject::Shape { .. }).then_some((a, o))
+}
+
 /// The first picture/shape in the selection, or just before a collapsed caret.
 pub fn selected(s: &Session) -> Option<(Pos, InlineObject)> {
     let (a, b) = s.sel.ordered();

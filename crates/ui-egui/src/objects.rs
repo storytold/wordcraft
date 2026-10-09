@@ -34,12 +34,7 @@ pub struct ObjectDrag {
 
 /// The selected object: the selection is exactly one picture, shape or text box in the body.
 pub fn selected(app: &WordApp) -> Option<(Pos, &InlineObject)> {
-    let (a, b) = app.session.sel.ordered();
-    if a.story != StoryRef::Body || a.path != b.path || b.off != a.off + OBJ.len_utf8() {
-        return None;
-    }
-    let o = app.session.doc.para_at(&a)?.object_at(a.off)?;
-    matches!(o, InlineObject::Image { .. } | InlineObject::Shape { .. }).then_some((a, o))
+    wordcraft_engine::cmd::objects::object_selection(&app.session).filter(|(p, _)| p.story == StoryRef::Body)
 }
 
 /// The story of the selected text box.
