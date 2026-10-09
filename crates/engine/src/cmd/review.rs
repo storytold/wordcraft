@@ -352,9 +352,9 @@ fn list_changes(s: &mut Session, _: &Value) -> CmdResult {
 
 fn word_count(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(b) = p::bool(v, "includeTextBoxes") {
-        s.count_notes = b;
+        s.prefs.count_notes = b;
     }
-    let stories = if s.count_notes { s.doc.counted_stories() } else { vec![StoryRef::Body] };
+    let stories = if s.prefs.count_notes { s.doc.counted_stories() } else { vec![StoryRef::Body] };
     let text = if s.sel.is_collapsed() { stories.iter().map(|st| s.doc.plain_text(*st)).collect::<Vec<_>>().join("\n") } else { s.selected_text() };
     let words = wordcraft_doc::count_words(&text);
     let chars = text.chars().filter(|c| *c != '\n').count();
@@ -379,7 +379,7 @@ fn word_count(s: &mut Session, v: &Value) -> CmdResult {
     let pages = s.layout().pages.len();
     Ok(json!({
         "pages": pages, "words": words, "characters": chars_no_spaces, "charactersWithSpaces": chars, "paragraphs": paragraphs, "lines": lines,
-        "includeTextBoxes": s.count_notes,
+        "includeTextBoxes": s.prefs.count_notes,
     }))
 }
 

@@ -74,6 +74,16 @@ impl Default for UiState {
     }
 }
 
+/// Everything saved between runs: the UI's state and the editing preferences. The UI fields
+/// stay at the top level, so files from before `editing` existed still load.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SavedPrefs {
+    #[serde(flatten)]
+    pub ui: UiState,
+    pub editing: wordcraft_engine::Prefs,
+}
+
 /// The application.
 pub struct WordApp {
     pub session: Session,
@@ -284,6 +294,18 @@ impl WordApp {
         }
     }
 
+    /// What to save between runs.
+    pub fn saved_prefs(&self) -> SavedPrefs {
+        SavedPrefs { ui: self.ui.clone(), editing: self.session.prefs.clone() }
+    }
+
+    /// Restore what [`WordApp::saved_prefs`] saved (Backstage starts closed).
+    pub fn restore_prefs(&mut self, p: SavedPrefs) {
+        self.ui = p.ui;
+        self.ui.backstage = false;
+        self.session.prefs = p.editing;
+    }
+
     /// Document title for the title bar.
     pub fn title_stem(&self) -> String {
         match &self.session.path {
@@ -485,5 +507,37 @@ pub fn now_ms() -> f64 {
     #[cfg(target_arch = "wasm32")]
     {
         0.0
+    }
+}
+
+#[cfg(test)]
+mod prefs_tests {
+    use super::*;
+
+    fn app() -> WordApp {
+        WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default())
+    }
+
+    #[test]
+    fn prefs_from_before_editing_still_load() {
+        let old = r#"{"tab": "Insert", "dark": true, "recent": ["/tmp/a.docx"]}"#;
+        let p: SavedPrefs = serde_json::from_str(old).unwrap();
+        let mut a = app();
+        a.restore_prefs(p);
+        assert_eq!((a.ui.tab.as_str(), a.ui.dark, a.ui.recent.len()), ("Insert", true, 1));
+        assert!(a.session.prefs.count_notes, "Word's default");
+    }
+
+    #[test]
+    fn word_count_setting_survives_a_restart() {
+        let mut a = app();
+        a.session.run("review.wordCount", &json!({"includeTextBoxes": false})).unwrap();
+        a.ui.backstage = true;
+        let saved = serde_json::to_string(&a.saved_prefs()).unwrap();
+        let mut b = app();
+        b.restore_prefs(serde_json::from_str(&saved).unwrap());
+        assert!(!b.session.prefs.count_notes);
+        assert!(!b.ui.backstage, "Backstage starts closed");
+        assert!(saved.contains(r#""editing":{"countNotes":false}"#), "{saved}");
     }
 }

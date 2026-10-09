@@ -152,8 +152,22 @@ pub struct Session {
     pub merge: crate::cmd::mailings::MergeState,
     /// Requests from commands to the UI (open a dialog, scroll…), drained by the front end.
     pub ui_requests: Vec<Value>,
+    /// Preferences the front end saves between runs.
+    pub prefs: Prefs,
+}
+
+/// Editing preferences that persist between runs (the front end saves and restores them).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Prefs {
     /// Word Count includes text boxes, footnotes and endnotes (Word's default).
     pub count_notes: bool,
+}
+
+impl Default for Prefs {
+    fn default() -> Self {
+        Prefs { count_notes: true }
+    }
 }
 
 /// Maximum undo depth.
@@ -196,7 +210,7 @@ impl Session {
             bib_style: "APA".into(),
             merge: Default::default(),
             ui_requests: Vec::new(),
-            count_notes: true,
+            prefs: Prefs::default(),
         }
     }
 
@@ -400,9 +414,9 @@ impl Session {
         self.doc.para_at(f).map(|p| p.props_at(f.off).clone()).unwrap_or_default()
     }
 
-    /// Words in the document, as the status bar shows them (see `count_notes`).
+    /// Words in the document, as the status bar shows them (see [`Prefs::count_notes`]).
     pub fn word_count(&self) -> usize {
-        if self.count_notes { self.doc.word_count_including_notes() } else { self.doc.word_count() }
+        if self.prefs.count_notes { self.doc.word_count_including_notes() } else { self.doc.word_count() }
     }
 
     /// Selected plain text.

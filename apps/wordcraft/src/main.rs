@@ -11,7 +11,7 @@
 mod control_server;
 
 use wordcraft_engine::Session;
-use wordcraft_ui_egui::{Services, UiState, WordApp};
+use wordcraft_ui_egui::{SavedPrefs, Services, WordApp};
 
 struct App(WordApp);
 
@@ -53,10 +53,9 @@ fn load_prefs(app: &mut WordApp) {
     }
     if let Some(p) = prefs_path()
         && let Ok(bytes) = std::fs::read(&p)
-        && let Ok(ui) = serde_json::from_slice::<UiState>(&bytes)
+        && let Ok(prefs) = serde_json::from_slice::<SavedPrefs>(&bytes)
     {
-        app.ui = ui;
-        app.ui.backstage = false;
+        app.restore_prefs(prefs);
     }
 }
 
@@ -68,7 +67,7 @@ fn save_prefs(app: &WordApp) {
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        if let Ok(bytes) = serde_json::to_vec_pretty(&app.ui) {
+        if let Ok(bytes) = serde_json::to_vec_pretty(&app.saved_prefs()) {
             let _ = std::fs::write(&p, bytes);
         }
     }
