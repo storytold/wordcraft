@@ -42,7 +42,7 @@ fn lookup_key(env: Option<String>, settings: Option<&Path>, port: Option<u16>) -
     let (Some(settings), Some(port)) = (settings, port) else {
         return Err("no control key: set WORDCRAFT_CONTROL_KEY (no settings folder or port to find the key file)".to_string());
     };
-    let path = crate::control_key::key_path(settings, port);
+    let path = wordcraft_control_key::key_path(settings, port);
     match std::fs::read_to_string(&path).map(|k| k.trim().to_string()) {
         Ok(k) if !k.is_empty() => Ok(k),
         _ => Err(format!("no control key: set WORDCRAFT_CONTROL_KEY, or start the app with --control {port} (it writes {})", path.display())),
@@ -52,7 +52,7 @@ fn lookup_key(env: Option<String>, settings: Option<&Path>, port: Option<u16>) -
 /// The key for the app at `addr`, from the environment or the app's key file.
 fn find_key(addr: &str) -> Result<String, String> {
     let port = addr.rsplit_once(':').and_then(|(_, p)| p.parse().ok());
-    lookup_key(std::env::var("WORDCRAFT_CONTROL_KEY").ok(), crate::control_key::settings_dir().as_deref(), port)
+    lookup_key(std::env::var("WORDCRAFT_CONTROL_KEY").ok(), wordcraft_control_key::settings_dir().as_deref(), port)
 }
 
 /// Whether `addr` (`HOST:PORT`, as given to `--connect`) names a loopback address: 127.0.0.0/8,
@@ -236,7 +236,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("wordcraft-mcp-key-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let path = crate::control_key::key_path(&dir, 7981);
+        let path = wordcraft_control_key::key_path(&dir, 7981);
         // Neither: the error names the variable and the file it looked for.
         let e = lookup_key(None, Some(&dir), Some(7981)).unwrap_err();
         assert!(e.contains("WORDCRAFT_CONTROL_KEY") && e.contains(&path.display().to_string()), "{e}");

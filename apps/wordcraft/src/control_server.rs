@@ -53,7 +53,7 @@ pub fn start(port: u16, ctx: egui::Context, settings: Option<&Path>) -> Option<(
     };
     let key_file = match settings {
         Some(dir) => {
-            let p = wordcraft_mcp::control_key::key_path(dir, port);
+            let p = wordcraft_control_key::key_path(dir, port);
             match write_key_file(&p, &key) {
                 Ok(()) => Some(KeyFile(p)),
                 Err(e) => {
@@ -462,7 +462,7 @@ mod tests {
         // Bound: the key file holds the key that opens the port.
         let (rx, key_file) = start(port, egui::Context::default(), Some(&dir)).unwrap();
         let key_file = key_file.unwrap();
-        assert_eq!(key_file.path(), wordcraft_mcp::control_key::key_path(&dir, port));
+        assert_eq!(key_file.path(), wordcraft_control_key::key_path(&dir, port));
         let key = std::fs::read_to_string(key_file.path()).unwrap();
         assert_eq!(key.len(), 64);
         #[cfg(unix)]

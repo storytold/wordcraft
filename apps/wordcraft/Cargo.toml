@@ -15,7 +15,7 @@ wordcraft-doc = { workspace = true }
 wordcraft-engine = { workspace = true }
 wordcraft-ui-egui = { workspace = true }
 # The control key file's location (shared with the MCP bridge).
-wordcraft-mcp = { workspace = true }
+wordcraft-control-key = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11", "links"] }
 egui = { workspace = true }
 serde_json = { workspace = true }

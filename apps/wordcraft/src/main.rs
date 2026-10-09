@@ -49,7 +49,7 @@ impl eframe::App for App {
 
 /// `ui.json` in the settings folder, which the MCP bridge also uses to find the control key.
 fn prefs_path() -> Option<std::path::PathBuf> {
-    wordcraft_mcp::control_key::settings_dir().map(|b| b.join("ui.json"))
+    wordcraft_control_key::settings_dir().map(|b| b.join("ui.json"))
 }
 
 /// Where the log files live: `logs` in the preferences folder (see `logging`).
@@ -195,7 +195,7 @@ fn main() -> eframe::Result {
             app.integrated_titlebar = cfg!(target_os = "macos");
             let mut key_file = None;
             if let Some(port) = control_port
-                && let Some((rx, file)) = control_server::start(port, cc.egui_ctx.clone(), wordcraft_mcp::control_key::settings_dir().as_deref())
+                && let Some((rx, file)) = control_server::start(port, cc.egui_ctx.clone(), wordcraft_control_key::settings_dir().as_deref())
             {
                 app = app.with_control(rx);
                 key_file = file;
