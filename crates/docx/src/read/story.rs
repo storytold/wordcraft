@@ -446,6 +446,15 @@ impl Reader<'_> {
                     *note = Some((kind, id, custom));
                 }
             }
+            // The note's own number at the start of its text: a reference to the note being read.
+            "w:footnoteRef" | "w:endnoteRef" => {
+                let kind = if k.name == "w:footnoteRef" { NoteKind::Footnote } else { NoteKind::Endnote };
+                if let Some((nk, id)) = self.current_note
+                    && nk == kind
+                {
+                    *note = Some((kind, id, None));
+                }
+            }
             "w:commentReference" => {
                 if let Some(cid) = k.attr("w:id").and_then(|i| self.comment_id(i))
                     && !self.comments_ended.contains(&cid)

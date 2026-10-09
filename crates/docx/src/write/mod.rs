@@ -448,6 +448,15 @@ impl Writer<'_> {
         self.para_ids.get(&(p as *const _ as usize)).cloned()
     }
 
+    /// Whether `p` holds a reference to the note being written.
+    fn holds_own_ref(&self, p: &wordcraft_doc::Paragraph) -> bool {
+        let Some((foot, id)) = self.current_note else { return false };
+        p.objects.iter().any(|o| match o {
+            wordcraft_doc::InlineObject::NoteRef { kind, id: nid, .. } => *nid == id && (*kind == wordcraft_doc::para::NoteKind::Footnote) == foot,
+            _ => false,
+        })
+    }
+
     /// Note stories: the first paragraph starts with the note's own reference mark.
     fn note_blocks(&mut self, w: &mut W, blocks: &Blocks, rels: &mut PartRels, foot: bool, part: u32) {
         self.pending_mark = Some(if foot { "w:footnoteRef" } else { "w:endnoteRef" });

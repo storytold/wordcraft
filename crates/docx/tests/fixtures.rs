@@ -252,7 +252,8 @@ fn styles_numbering_settings_notes_comments_from_parts() {
     match &p[0].objects[..] {
         [InlineObject::CommentStart { id: 5 }, InlineObject::NoteRef { kind: NoteKind::Footnote, id, .. }, InlineObject::CommentEnd { id: 5 }] => {
             let note = d.parts.get(id).unwrap().blocks[0].as_para().unwrap();
-            assert_eq!(note.text, " Note text");
+            assert_eq!(note.text, format!("{} Note text", wordcraft_doc::para::OBJ));
+            assert_eq!(note.objects, vec![InlineObject::NoteRef { kind: NoteKind::Footnote, id: *id, custom: String::new() }]);
         }
         o => panic!("{o:?}"),
     }
@@ -273,6 +274,61 @@ fn styles_numbering_settings_notes_comments_from_parts() {
     assert_eq!(d.parts.get(&hid).unwrap().blocks[0].as_para().unwrap().text, "H");
     assert_eq!(d.core.title, "Doc Title");
     assert_eq!(d.core.revision, 3);
+}
+
+/// Word starts every note with a `w:footnoteRef` / `w:endnoteRef` mark: the note's own number.
+/// It reads as a reference to the note itself, so the note text shows its number.
+#[test]
+fn note_marks_reference_their_own_note() {
+    let note = |tag: &str, mark: &str, style: &str, id: u32, text: &str| {
+        format!(
+            r#"<w:{tag} w:id="{id}"><w:p><w:pPr><w:pStyle w:val="{style}Text"/></w:pPr><w:r><w:rPr><w:rStyle w:val="{style}Reference"/></w:rPr><w:{mark}/></w:r><w:r><w:t xml:space="preserve"> {text}</w:t></w:r></w:p></w:{tag}>"#
+        )
+    };
+    let sep = |tag: &str| {
+        format!(
+            r#"<w:{tag} w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:{tag}><w:{tag} w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:{tag}>"#
+        )
+    };
+    // The second footnote has a stray endnote mark, which is not its number.
+    let footnotes = format!(
+        r#"<w:footnotes {W_NS}>{}{}<w:footnote w:id="2"><w:p><w:r><w:endnoteRef/><w:t>Stray</w:t></w:r></w:p></w:footnote>{}</w:footnotes>"#,
+        sep("footnote"),
+        note("footnote", "footnoteRef", "Footnote", 1, "First."),
+        note("footnote", "footnoteRef", "Footnote", 3, "Third."),
+    );
+    let endnotes = format!(r#"<w:endnotes {W_NS}>{}{}</w:endnotes>"#, sep("endnote"), note("endnote", "endnoteRef", "Endnote", 1, "End."));
+    // A mark outside a note (here in the body) refers to nothing.
+    let body = r#"<w:p><w:r><w:footnoteRef/><w:t>A</w:t></w:r><w:r><w:footnoteReference w:id="1"/></w:r><w:r><w:footnoteReference w:id="2"/></w:r><w:r><w:footnoteReference w:id="3"/></w:r><w:r><w:endnoteReference w:id="1"/></w:r></w:p>"#;
+    let bytes = docx(
+        body,
+        &[("rId1", "footnotes", "footnotes.xml"), ("rId2", "endnotes", "endnotes.xml")],
+        &[("word/footnotes.xml", &footnotes), ("word/endnotes.xml", &endnotes)],
+    );
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    let p = paras(&d)[0];
+    assert_eq!(p.text.chars().filter(|c| *c == wordcraft_doc::para::OBJ).count(), 4, "{:?}", p.objects);
+    let refs: Vec<(NoteKind, u32)> = p
+        .objects
+        .iter()
+        .map(|o| match o {
+            InlineObject::NoteRef { kind, id, .. } => (*kind, *id),
+            o => panic!("{o:?}"),
+        })
+        .collect();
+    let first_para = |id: u32| d.parts.get(&id).unwrap().blocks[0].as_para().unwrap();
+    for (kind, id) in [refs[0], refs[2], refs[3]] {
+        let n = first_para(id);
+        assert_eq!(n.objects, vec![InlineObject::NoteRef { kind, id, custom: String::new() }], "note {id}");
+        assert!(n.text.starts_with(wordcraft_doc::para::OBJ), "{:?}", n.text);
+        let style = if kind == NoteKind::Footnote { "FootnoteReference" } else { "EndnoteReference" };
+        assert_eq!(n.props_of_char(0).style.as_deref(), Some(style));
+    }
+    assert_eq!(first_para(refs[0].1).plain_text(), " First.");
+    assert_eq!(first_para(refs[3].1).plain_text(), " End.");
+    let stray = first_para(refs[1].1);
+    assert!(stray.objects.is_empty(), "{:?}", stray.objects);
+    assert_eq!(stray.text, "Stray");
 }
 
 #[test]

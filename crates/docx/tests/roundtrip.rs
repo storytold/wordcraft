@@ -475,6 +475,62 @@ fn note_never_references_itself() {
     assert_eq!(part_text(&r, Some(*id)).trim(), "The note.");
 }
 
+/// A note read from a Word file starts with its own number (a reference to itself, from the
+/// `w:footnoteRef` mark). Saving writes that mark back exactly once, with its character style, and
+/// never as a `w:footnoteReference`; reading the saved file gives the same note again.
+#[test]
+fn word_note_mark_round_trips_once() {
+    let mut d = Document::new();
+    let f = d.add_part(PartKind::Footnote, Vec::new());
+    let e = d.add_part(PartKind::Endnote, Vec::new());
+    for (id, kind, style) in [(f, NoteKind::Footnote, "FootnoteReference"), (e, NoteKind::Endnote, "EndnoteReference")] {
+        let mut note =
+            Paragraph::with_text(" The note.", CharProps::default()).styled(if kind == NoteKind::Footnote { "FootnoteText" } else { "EndnoteText" });
+        note.insert_object(
+            0,
+            InlineObject::NoteRef { kind, id, custom: String::new() },
+            &CharProps { style: Some(style.into()), ..Default::default() },
+        )
+        .unwrap();
+        // A second paragraph: the mark is not repeated there.
+        d.parts.get_mut(&id).unwrap().blocks = vec![para_block(note), para_block(Paragraph::with_text("More.", CharProps::default()))];
+    }
+    let mut p = Paragraph::with_text("Text", CharProps::default());
+    p.insert_object(4, InlineObject::NoteRef { kind: NoteKind::Footnote, id: f, custom: String::new() }, &CharProps::default()).unwrap();
+    let end = p.len();
+    p.insert_object(end, InlineObject::NoteRef { kind: NoteKind::Endnote, id: e, custom: String::new() }, &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+
+    let mut doc = d;
+    for pass in 0..2 {
+        let bytes = wordcraft_docx::write(&doc).expect("write");
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+        for (file, mark, reference, style) in [
+            ("word/footnotes.xml", "<w:footnoteRef/>", "<w:footnoteReference", "FootnoteReference"),
+            ("word/endnotes.xml", "<w:endnoteRef/>", "<w:endnoteReference", "EndnoteReference"),
+        ] {
+            let mut xml = String::new();
+            std::io::Read::read_to_string(&mut zip.by_name(file).unwrap(), &mut xml).unwrap();
+            assert_eq!(xml.matches(mark).count(), 1, "pass {pass}: {xml}");
+            assert!(!xml.contains(reference), "pass {pass}: a note cites itself: {xml}");
+            assert!(xml.contains(&format!(r#"<w:rStyle w:val="{style}"/></w:rPr>{mark}"#)), "pass {pass}: {xml}");
+        }
+        let r = wordcraft_docx::read(&bytes).expect("read");
+        let body = paras(&r)[0];
+        assert_eq!(body.objects.len(), 2, "pass {pass}");
+        for o in &body.objects {
+            let InlineObject::NoteRef { kind, id, .. } = o else { panic!("{o:?}") };
+            let blocks = &r.parts.get(id).unwrap().blocks;
+            assert_eq!(blocks.len(), 2, "pass {pass}");
+            let first = blocks[0].as_para().unwrap();
+            assert_eq!(first.objects, vec![InlineObject::NoteRef { kind: *kind, id: *id, custom: String::new() }], "pass {pass}");
+            assert_eq!(first.plain_text(), " The note.");
+            assert!(blocks[1].as_para().unwrap().objects.is_empty(), "pass {pass}");
+        }
+        doc = r;
+    }
+}
+
 /// The TOC is a `Contents` paragraph ending in an empty `TOC` field, followed by TOC-styled entries.
 /// In the file the field must contain the entries, inside Word's Table of Contents content control,
 /// or Word shows them as plain text with no Update Table.
