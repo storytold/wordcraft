@@ -117,7 +117,7 @@ Every screenshot below is WordCraft itself, rendered offscreen by its own UI tes
 | **References** | Table of contents, footnotes and endnotes, citations and bibliography (APA, MLA, Chicago, IEEE), captions, table of figures, cross-references, index, table of authorities |
 | **Review** | Spelling and grammar with suggestions, thesaurus, word count, comments in margin balloons or a pane, track changes, accept/reject, compare documents, restrict editing, accessibility checker, document inspector |
 | **Mailings** | Mail merge from CSV, merge fields, address block, greeting line, rules, preview, finish to a document; envelopes and labels |
-| **View** | Print layout, web layout, draft, read mode, focus, zoom, one/multiple pages, page width, Navigation pane, rulers, gridlines, dark mode |
+| **View** | Print layout, web layout, draft, read mode, focus, zoom, one/multiple pages, page width, Navigation pane, rulers, gridlines, dark mode; interface in English, 简体中文, 繁體中文 or 日本語 (follows the system language by default) |
 | **Files** | .docx read/write (opens in Word), PDF export, .odt, .rtf, .html, .md, .txt import/export, page images |
 
 The honest picture, area by area, is in [ROADMAP.md](ROADMAP.md) and the generated
@@ -160,6 +160,25 @@ can check their work through `inspect_document` without screenshots. See [docs/m
 and the [control protocol](docs/control-protocol.md). Macros record any sequence of commands and
 play it back (`tools.recordMacro`, `tools.macros`).
 
+## Logs
+
+The desktop app writes its log records to standard error and to `logs/wordcraft.log` next to its
+preferences: on Linux `$XDG_CONFIG_HOME/wordcraft/logs/` (by default `~/.config/wordcraft/logs/`),
+on macOS `~/Library/Application Support/WordCraft/logs/`, on Windows `%APPDATA%\WordCraft\logs\`.
+A start from a desktop menu or the Dock has no terminal, so this file is what to attach to a bug
+report: unreadable parts of a .docx, pictures or fonts a PDF export had to leave out and panics the
+command guard recovered from land there. Each launch moves the previous log to `wordcraft.1.log`
+(and that one to `wordcraft.2.log`), so the log of a run that crashed survives the next start; a
+log stops growing at 16 MiB. `--version` writes no file, and runs with `WORDCRAFT_NO_PREFS` (agents'
+test runs) log to standard error only. Document text is never logged; a panic message leaves out
+the text it quotes.
+
+By default WordCraft's own crates log at `info` and everything else at `warn`. `RUST_LOG` replaces
+that with env_logger-style directives, for example `RUST_LOG=debug`,
+`RUST_LOG=warn,wordcraft_docx=trace` or `RUST_LOG=info,wgpu_core=warn`; a directive ending in `*`
+covers every target starting with it (`wordcraft*=debug`). The logger is
+`apps/wordcraft/src/logging.rs`.
+
 ## Architecture
 
 | Layer | Crate | Job |
@@ -197,6 +216,21 @@ Details and estimates: [ROADMAP.md](ROADMAP.md).
 | x86 (32-bit) | `wordcraft-<ver>-windows-x86.msi` | `wordcraft-<ver>-windows-x86-portable.zip` |
 
 Installers and executables are code-signed.
+
+**If the app doesn't open on Windows:** the desktop app initializes only DirectX 12 by default.
+Letting wgpu also create an OpenGL instance can crash some graphics drivers (AMD's
+`atio6axx.dll`) before the window appears, so the app would flash in Task Manager and quit.
+`WGPU_BACKEND` overrides the default for troubleshooting (for example `dx12` or `vulkan`). In
+PowerShell, from the folder containing the executable:
+
+```powershell
+$env:WGPU_BACKEND = "vulkan"
+& .\wordcraft.exe
+Remove-Item Env:WGPU_BACKEND                     # restore the default for later launches
+```
+
+An explicit `gl` override can bring the driver crash back on affected systems. The macOS, Linux
+and web backend defaults are unchanged.
 
 ### macOS
 

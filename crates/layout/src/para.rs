@@ -502,9 +502,20 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let label = env.label.as_ref().map(|(text, lvl)| {
         let lc = p.mark.clone().overlaid(&lvl.chr);
         let rc = resolve(&lc);
+        // A Symbol/Wingdings bullet (U+F0B7…) without that font installed, or in a face that has
+        // no glyph at the private-use code: draw the standard character instead, since a
+        // substitute has another glyph, or none, there.
+        let r = wordcraft_fonts::word::resolve(&rc.font, rc.bold, rc.italic);
+        let text: String = text
+            .chars()
+            .map(|c| match wordcraft_fonts::word::symbol_font_char(&rc.font, c) {
+                Some(u) if r.substituted || !r.face.covers(c) => u,
+                _ => c,
+            })
+            .collect();
         let before_c = b.clusters.len();
         let before_g = b.glyphs.len();
-        b.shape(text, 0, &rc, None);
+        b.shape(&text, 0, &rc, None);
         let cl: Vec<Cluster> = b.clusters.drain(before_c..).collect();
         let mut glyphs = Vec::new();
         let mut x = 0.0;
@@ -517,7 +528,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
             x += c.adv;
         }
         b.glyphs.truncate(before_g);
-        Label { text: text.clone(), style, glyphs, x: 0.0, width: x }
+        Label { text, style, glyphs, x: 0.0, width: x }
     });
 
     let mut pl = ParaLayout {

@@ -19,6 +19,8 @@ egui = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+# The system's preferred interface languages (#8). Native: OS APIs; wasm: none (English).
+sys-locale = "0.3"
 
 [dev-dependencies]
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }

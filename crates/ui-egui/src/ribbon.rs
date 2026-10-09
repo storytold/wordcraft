@@ -29,14 +29,15 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
                 for tab in tabs {
                     let contextual = tab.starts_with("Table ");
-                    let w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(tab.to_string(), medium(12.5), t.text).size().x) + 18.0;
+                    let shown = tl!(tab);
+                    let w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(shown.to_string(), medium(12.5), t.text).size().x) + 18.0;
                     let (r, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
                     let active = app.ui.tab == tab && !app.ui.backstage;
                     if resp.hovered() && !active {
                         ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, t.hover);
                     }
                     let color = if contextual || active { t.accent_text } else { t.text };
-                    ui.painter().text(r.center(), Align2::CENTER_CENTER, tab, if active { semibold(12.5) } else { medium(12.5) }, color);
+                    ui.painter().text(r.center(), Align2::CENTER_CENTER, shown, if active { semibold(12.5) } else { medium(12.5) }, color);
                     if active {
                         let u = Rect::from_center_size(pos2(r.center().x, r.max.y - 2.0), vec2(w - 16.0, 3.0));
                         ui.painter().rect_filled(u, 2.0, t.accent);
@@ -50,7 +51,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // Share, Editing mode, Comments.
-                    let (r, resp) = ui.allocate_exact_size(vec2(74.0, 24.0), Sense::click());
+                    let share = tl!("Share");
+                    let share_w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(share.to_string(), medium(12.0), t.text).size().x);
+                    let (r, resp) = ui.allocate_exact_size(vec2((share_w + 36.0).max(74.0), 24.0), Sense::click());
                     ui.painter().rect_filled(r, 4.0, if resp.hovered() { t.accent_text } else { t.accent });
                     icons::paint(
                         ui.painter(),
@@ -59,24 +62,27 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         egui::Color32::WHITE,
                         egui::Color32::WHITE,
                     );
-                    ui.painter().text(pos2(r.min.x + 26.0, r.center().y), Align2::LEFT_CENTER, "Share", medium(12.0), egui::Color32::WHITE);
-                    if resp.on_hover_text("Export a copy to share (PDF, Word document)").clicked() {
+                    ui.painter().text(pos2(r.min.x + 26.0, r.center().y), Align2::LEFT_CENTER, share, medium(12.0), egui::Color32::WHITE);
+                    if resp.on_hover_text(tl!("Export a copy to share (PDF, Word document)")).clicked() {
                         let _ = app.run("ui.backstage", json!({"value": true, "page": "export"}));
                     }
                     ui.add_space(6.0);
                     let track = app.session.doc.settings.track_changes;
-                    ui.menu_button(egui::RichText::new(if track { "✎ Reviewing ▾" } else { "✎ Editing ▾" }).font(regular(12.0)), |ui| {
-                        if ui.selectable_label(!track, "Editing — edit the document directly").clicked() {
-                            let _ = app.run("review.trackChanges", json!({"value": false}));
-                            ui.close();
-                        }
-                        if ui.selectable_label(track, "Reviewing — edits become suggestions").clicked() {
-                            let _ = app.run("review.trackChanges", json!({"value": true}));
-                            ui.close();
-                        }
-                    });
+                    ui.menu_button(
+                        egui::RichText::new(format!("✎ {} ▾", if track { tl!("Reviewing") } else { tl!("Editing") })).font(regular(12.0)),
+                        |ui| {
+                            if ui.selectable_label(!track, tl!(tl!("Editing — edit the document directly"))).clicked() {
+                                let _ = app.run("review.trackChanges", json!({"value": false}));
+                                ui.close();
+                            }
+                            if ui.selectable_label(track, tl!(tl!("Reviewing — edits become suggestions"))).clicked() {
+                                let _ = app.run("review.trackChanges", json!({"value": true}));
+                                ui.close();
+                            }
+                        },
+                    );
                     ui.add_space(4.0);
-                    if ui.button(egui::RichText::new("💬 Comments").font(regular(12.0))).clicked() {
+                    if ui.button(egui::RichText::new(format!("💬 {}", tl!("Comments"))).font(regular(12.0))).clicked() {
                         let _ = app.run("view.commentsPane", json!({}));
                     }
                 });
@@ -124,7 +130,7 @@ fn stack(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
 fn mi(ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: Value) {
     let sc = crate::widgets::shortcut_text(app, id);
     let enabled = crate::widgets::enabled(app, id);
-    let resp = ui.add_enabled(enabled, egui::Button::new(label).shortcut_text(sc).min_size(vec2(200.0, 0.0)));
+    let resp = ui.add_enabled(enabled, egui::Button::new(tl!(label)).shortcut_text(sc).min_size(vec2(200.0, 0.0)));
     if resp.clicked() {
         let _ = app.run(id, params);
         ui.close();
@@ -252,7 +258,7 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
         stack(ui, |ui| {
             crate::widgets::row(ui, |ui| {
                 split(ui, app, "bullets", "Bullets", "para.bullets", json!({}), false, None, |ui, app| {
-                    ui.label(egui::RichText::new("Bullet Library").small().weak());
+                    ui.label(egui::RichText::new(tl!("Bullet Library")).small().weak());
                     ui.horizontal(|ui| {
                         for c in ["•", "○", "▪", "◆", "➢", "✓", "–"] {
                             if ui.button(egui::RichText::new(c).size(16.0)).clicked() {
@@ -377,7 +383,7 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
             ui.separator();
             mi(ui, app, "Insert Table…", "ui.dialog", json!({"name": "insertTable"}));
             mi(ui, app, "Convert Text to Table…", "table.fromText", json!({}));
-            ui.menu_button("Quick Tables", |ui| {
+            ui.menu_button(tl!("Quick Tables"), |ui| {
                 mi(ui, app, "Tabular List", "table.quick", json!({"kind": "tabular"}));
                 mi(ui, app, "Matrix", "table.quick", json!({"kind": "matrix"}));
                 mi(ui, app, "Calendar", "table.quick", json!({"kind": "calendar"}));
@@ -597,11 +603,11 @@ fn layout(app: &mut WordApp, ui: &mut Ui) {
         });
         stack(ui, |ui| {
             menu_button(ui, app, "breaks", Some("Breaks"), "Breaks", false, |ui, app| {
-                ui.label(egui::RichText::new("Page Breaks").strong());
+                ui.label(egui::RichText::new(tl!("Page Breaks")).strong());
                 mi(ui, app, "Page", "layout.break", json!({"kind": "page"}));
                 mi(ui, app, "Column", "layout.break", json!({"kind": "column"}));
                 mi(ui, app, "Text Wrapping", "layout.break", json!({"kind": "textWrapping"}));
-                ui.label(egui::RichText::new("Section Breaks").strong());
+                ui.label(egui::RichText::new(tl!("Section Breaks")).strong());
                 mi(ui, app, "Next Page", "layout.break", json!({"kind": "nextPage"}));
                 mi(ui, app, "Continuous", "layout.break", json!({"kind": "continuous"}));
                 mi(ui, app, "Even Page", "layout.break", json!({"kind": "evenPage"}));
@@ -625,21 +631,21 @@ fn layout(app: &mut WordApp, ui: &mut Ui) {
         let rp = app.session.doc.para_at(&app.session.sel.focus).map(|p| app.session.doc.styles.resolve_para(&p.props));
         let Some(rp) = rp else { return };
         egui::Grid::new("layout_para").spacing(vec2(6.0, 4.0)).show(ui, |ui| {
-            ui.label(egui::RichText::new("Indent").small().strong());
+            ui.label(egui::RichText::new(tl!("Indent")).small().strong());
             ui.label("");
-            ui.label(egui::RichText::new("Spacing").small().strong());
+            ui.label(egui::RichText::new(tl!("Spacing")).small().strong());
             ui.end_row();
             let mut l = rp.indent_left / 72.0;
             let mut b = rp.space_before;
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Left:").small());
+                ui.label(egui::RichText::new(tl!("Left:")).small());
                 if ui.add(egui::DragValue::new(&mut l).speed(0.05).range(-11.0..=22.0).suffix("\"").max_decimals(2)).changed() {
                     let _ = app.run("para.indents", json!({"left": l * 72.0}));
                 }
             });
             ui.label("");
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Before:").small());
+                ui.label(egui::RichText::new(tl!("Before:")).small());
                 if ui.add(egui::DragValue::new(&mut b).speed(1.0).range(0.0..=1584.0).suffix(" pt")).changed() {
                     let _ = app.run("para.spacing", json!({"before": b}));
                 }
@@ -648,14 +654,14 @@ fn layout(app: &mut WordApp, ui: &mut Ui) {
             let mut r = rp.indent_right / 72.0;
             let mut a = rp.space_after;
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Right:").small());
+                ui.label(egui::RichText::new(tl!("Right:")).small());
                 if ui.add(egui::DragValue::new(&mut r).speed(0.05).range(-11.0..=22.0).suffix("\"").max_decimals(2)).changed() {
                     let _ = app.run("para.indents", json!({"right": r * 72.0}));
                 }
             });
             ui.label("");
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("After:").small());
+                ui.label(egui::RichText::new(tl!("After:")).small());
                 if ui.add(egui::DragValue::new(&mut a).speed(1.0).range(0.0..=1584.0).suffix(" pt")).changed() {
                     let _ = app.run("para.spacing", json!({"after": a}));
                 }
@@ -874,15 +880,15 @@ fn view(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Show", None, app, |ui, app| {
         stack(ui, |ui| {
             let mut r = v.ruler;
-            if ui.checkbox(&mut r, "Ruler").changed() {
+            if ui.checkbox(&mut r, tl!("Ruler")).changed() {
                 let _ = app.run("view.ruler", json!({"value": r}));
             }
             let mut g = v.gridlines;
-            if ui.checkbox(&mut g, "Gridlines").changed() {
+            if ui.checkbox(&mut g, tl!("Gridlines")).changed() {
                 let _ = app.run("view.gridlines", json!({"value": g}));
             }
             let mut n = v.nav_pane;
-            if ui.checkbox(&mut n, "Navigation Pane").changed() {
+            if ui.checkbox(&mut n, tl!("Navigation Pane")).changed() {
                 let _ = app.run("view.navigationPane", json!({"value": n}));
             }
         });

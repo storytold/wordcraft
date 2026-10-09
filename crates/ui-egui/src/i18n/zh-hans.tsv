@@ -1,0 +1,787 @@
+# Simplified Chinese (zh-hans) interface catalog. Columns, separated by a TAB:
+#   context <TAB> English source <TAB> translation
+#   context    empty (WordCraft uses no contexts yet)
+#   source     the English text exactly as in the code (tl!(...), ribbon labels, command labels)
+#   escapes    \n  \t  \\  inside a column. `{name}` placeholders must appear in both columns, and a
+#              trailing "…" in one needs one in the other.
+#   Lines starting with # and blank lines are ignored. A missing entry shows in English.
+#
+# Clean room: every entry was written from the plain meaning of the English label in ordinary
+# computing vocabulary. No Microsoft Word (or other product) localisation, string table or
+# translated UI was consulted or copied; add entries the same way.
+# Product, format and technology names (WordCraft, PDF, Markdown, MCP …) stay in Latin letters.
+
+	(no suggestions)	（无建议）
+	1.5 Line Spacing	1.5 倍行距
+	A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.	一款用 Rust 从零编写的免费开源文字处理软件。\n属于 ArtCraft 团队的 Crafting Apps 系列。
+	About	关于
+	About WordCraft	关于 WordCraft
+	Accept	接受
+	Accept All Changes	接受所有修订
+	Accept This Change	接受此修订
+	Accessibility	辅助功能
+	Add	添加
+	Add a comment	添加批注
+	Add a Table	添加表格
+	Add Space Before Paragraph	在段前添加间距
+	Add Text	添加文字
+	Add to Dictionary	添加到词典
+	Add to Style Gallery	添加到样式库
+	Address Block	地址块
+	Address:	地址：
+	Address\nBlock	地址块
+	Adjust	调整
+	Advanced	高级
+	After:	段后：
+	Agents	智能体
+	Align	对齐
+	Align Left	左对齐
+	Align Right	右对齐
+	Alignment	对齐方式
+	All Borders	所有框线
+	All Caps	全部大写
+	All caps	全部大写
+	All Markup	所有标记
+	Alt Text	替代文字
+	Apply Character Style	应用字符样式
+	Apply Style	应用样式
+	Arrange	排列
+	Arrange\nAll	全部重排
+	Arrow	箭头
+	Artistic Effects	艺术效果
+	Author	作者
+	AutoCorrect Options	自动更正选项
+	AutoFit	自动调整
+	AutoFit Contents	根据内容自动调整
+	AutoFit Window	根据窗口自动调整
+	Automatic	自动
+	Automatic ({language})	自动（{language}）
+	Automatic follows your system's language. Menus and commands change; your documents don't.	“自动”跟随系统语言。菜单和命令会改变，文档内容不会改变。
+	Automatic Table 1 (3 levels)	自动目录 1（3 级）
+	Automatic Table 2 (2 levels)	自动目录 2（2 级）
+	AutoSave	自动保存
+	AutoSave documents that have been saved	自动保存已保存过的文档
+	AutoSave saves every change to the file (needs a saved document)	自动保存会把每次更改写入文件（文档需已保存）
+	AutoText	自动图文集
+	Backspace	退格
+	Banded Columns	镶边列
+	Banded Rows	镶边行
+	Before:	段前：
+	Bibliography	参考文献
+	Binary assets added	新增二进制资源
+	Binary assets removed	删除二进制资源
+	Blank	空白
+	Blank (Three Columns)	空白（三栏）
+	Blank document	空白文档
+	Blank Page	空白页
+	Block\nAuthors	阻止作者
+	Bold	加粗
+	Bookmark	书签
+	Bookmark name:	书签名：
+	Border Painter	边框刷
+	Border\nPainter	边框刷
+	Borders	边框
+	Bottom Border	下框线
+	Bottom of Page	页面底端
+	Bottom:	下：
+	Box	方框
+	Breaks	分隔符
+	Bring Forward	上移一层
+	Bullet Library	项目符号库
+	Bullets	项目符号
+	Calendar	日历
+	Cancel	取消
+	Capitalize Each Word	每个单词首字母大写
+	Captions	题注
+	Cell Margins	单元格边距
+	Cell Size	单元格大小
+	Cell\nMargins	单元格边距
+	Center	居中
+	Change	更改
+	Change Case	更改大小写
+	Change List Level	更改列表级别
+	Change Picture	更改图片
+	Change Shape	更改形状
+	Changes	修订
+	Character Position	字符位置
+	Character Scale	字符缩放
+	Character Shading	字符底纹
+	Character Spacing	字符间距
+	Characters (no spaces)	字符数（不计空格）
+	Characters (with spaces)	字符数（计空格）
+	Chart	图表
+	Check Accessibility	检查辅助功能
+	Check Compatibility	检查兼容性
+	Check for Errors	检查错误
+	Check Spelling as You Type	键入时检查拼写
+	Check\nAccessibility	检查辅助功能
+	Citation Style	引文样式
+	Citations & Bibliography	引文与参考文献
+	Clear	清除
+	Clear All Formatting	清除所有格式
+	Clipboard	剪贴板
+	Close	关闭
+	Close Header and Footer	关闭页眉和页脚
+	Collapse Selection	折叠选定内容
+	Color	颜色
+	Color:	颜色：
+	Colors	颜色
+	Column	栏
+	Column Break	分栏符
+	Columns	栏
+	Combine	合并
+	Commands	命令
+	Comment	批注
+	Comments	批注
+	Comments Pane	批注窗格
+	Community\nDiscord	社区\nDiscord
+	Compact	紧凑
+	Compare	比较
+	Compress Pictures	压缩图片
+	Continuous	连续
+	Convert	转换
+	Convert Text to Table	文本转换成表格
+	Convert Text to Table…	文本转换成表格…
+	Convert to Text	转换为文本
+	Copy	复制
+	Copy Formatting	复制格式
+	Corrections	更正
+	Count words in text boxes and notes	统计文本框和脚注中的字数
+	Cover Page	封面
+	Create	创建
+	Create a Style	创建样式
+	Create an interactive outline of your document.\n\nIt's a great way to keep track of where you are or quickly move your content around.\n\nTo get started, go to the Home tab and apply Heading styles to the headings in your document.	为文档创建交互式大纲。\n\n用它可以随时知道自己在文档中的位置，或快速移动内容。\n\n要开始使用，请转到“开始”选项卡，为文档中的标题应用标题样式。
+	Create New Style	创建新样式
+	Crop	裁剪
+	Cross-reference	交叉引用
+	Current Position	当前位置
+	Current style: {style}	当前样式：{style}
+	Custom Margins…	自定义页边距…
+	Custom Watermark	自定义水印
+	Custom Watermark…	自定义水印…
+	Customize Quick Access Toolbar	自定义快速访问工具栏
+	Cut	剪切
+	Dark Mode	深色模式
+	Dark mode	深色模式
+	Dashed	虚线
+	Data	数据
+	Date & Time	日期和时间
+	Decrease Font Size	减小字号
+	Decrease Indent	减少缩进量
+	Default	默认
+	Define New Bullet	定义新项目符号
+	Define New Number Format	定义新编号格式
+	Delete	删除
+	Delete Cells	删除单元格
+	Delete Columns	删除列
+	Delete Comment	删除批注
+	Delete Next Word	删除后一个单词
+	Delete Previous Word	删除前一个单词
+	Delete Rows	删除行
+	Delete Style	删除样式
+	Delete Table	删除表格
+	Design	设计
+	development build	开发版本
+	Diagonal	斜式
+	Diamond	菱形
+	Dictate	听写
+	Different First Page	首页不同
+	Different Odd & Even Pages	奇偶页不同
+	Discord	Discord
+	Discord community	Discord 社区
+	Display	显示
+	Display for Review	显示以供审阅
+	Distribute Columns	平均分布各列
+	Distribute Rows	平均分布各行
+	Distributed	分散对齐
+	Do Not Show in TOC	不在目录中显示
+	Document End	文档结尾
+	Document Formatting	文档格式
+	Document Property	文档属性
+	Document Start	文档开头
+	Document Text	文档文本
+	Document Title	文档标题
+	Documents you open will show up here.	打开过的文档会显示在这里。
+	Dot-dash	点划线
+	Dotted	点线
+	Double	双线
+	Double Spacing	双倍行距
+	Double Strikethrough	双删除线
+	Double Underline	双下划线
+	Down	下
+	Draft	草稿
+	Draw	绘图
+	Drawing Tools	绘图工具
+	Drawing\nCanvas	绘图画布
+	Drop Cap	首字下沉
+	Edit Footer	编辑页脚
+	Edit Header	编辑页眉
+	Edit Recipient List	编辑收件人列表
+	Edit\nRecipient List	编辑收件人列表
+	Edited	已编辑
+	Editing	编辑
+	Editing header/footer	正在编辑页眉/页脚
+	Editing — edit the document directly	编辑 — 直接编辑文档
+	Editor	编辑器
+	Effects	效果
+	Emboss	阳文
+	Encrypt with Password	用密码进行加密
+	English (United States)	英语（美国）
+	Engrave	阴文
+	Enter page number:	输入页码：
+	Envelopes	信封
+	Equation	公式
+	Eraser	橡皮擦
+	Even Page	偶数页
+	Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel.	每个命令都可供脚本和 AI 智能体使用：运行 `wordcraft-cli mcp` 启动 MCP 服务器，或使用 `--control <port>` 启动应用以打开 JSON 控制通道。
+	Export	导出
+	Export a copy to share (PDF, Word document)	导出副本以共享（PDF、Word 文档）
+	Export Page as PNG	将页面导出为 PNG
+	Export PDF	导出 PDF
+	Exported {path}	已导出 {path}
+	Extend Selection	扩展选定范围
+	Field	域
+	File	文件
+	Find	查找
+	Find and Replace	查找和替换
+	Find Next	查找下一处
+	Find Previous	查找上一处
+	Find Recipient	查找收件人
+	Find what:	查找内容：
+	Finish	完成
+	Finish & Merge	完成并合并
+	Finish &\nMerge	完成并合并
+	First Column	第一列
+	First commit	首次提交
+	First line:	首行：
+	Fixed Column Width	固定列宽
+	Focus	专注
+	Font	字体
+	Font Color	字体颜色
+	Font color:	字体颜色：
+	Font Dialog	字体对话框
+	Font Size	字号
+	Font:	字体：
+	Fonts	字体
+	Footer	页脚
+	Footnote and Endnote	脚注和尾注
+	Footnotes	脚注
+	Format	格式
+	Format Page Numbers	设置页码格式
+	Format Page Numbers…	设置页码格式…
+	Format Painter	格式刷
+	Formatting at Selection	选定内容的格式
+	Formula	公式
+	General	常规
+	Go To	定位
+	Go to	转到
+	Go To (⌘⌥G)	定位 (⌘⌥G)
+	Grab bag	随机展示
+	Greeting Line	问候语
+	Greeting\nLine	问候语
+	Gridlines	网格线
+	Group	组合
+	Grow Font 1 Point	字号增大 1 磅
+	Hanging Indent	悬挂缩进
+	Header	页眉
+	Header & Footer	页眉和页脚
+	Header Row	标题行
+	Header/Footer Position	页眉/页脚位置
+	Heading 1	标题 1
+	Heading 2	标题 2
+	Heading 3	标题 3
+	Headings	标题
+	Heart	心形
+	Help	帮助
+	Hidden	隐藏
+	Highlight Merge Fields	突出显示合并域
+	Highlight\nMerge Fields	突出显示合并域
+	Highlighter	荧光笔
+	Home	开始
+	Horizontal	水平
+	Horizontal Line	横线
+	Hyphenation	断字
+	Icons	图标
+	Ignore All	全部忽略
+	Illustrations	插图
+	Immersive	沉浸式
+	Immersive Reader	沉浸式阅读器
+	Immersive\nReader	沉浸式阅读器
+	Increase Font Size	增大字号
+	Increase Indent	增加缩进量
+	Indent	缩进
+	Indentation	缩进
+	Indents	缩进
+	Index	索引
+	Info	信息
+	Ink to\nMath	墨迹转公式
+	Ink to\nShape	墨迹转形状
+	Ink\nReplay	墨迹重播
+	Insert	插入
+	Insert Above	在上方插入
+	Insert Below	在下方插入
+	Insert Caption	插入题注
+	Insert Citation	插入引文
+	Insert Endnote	插入尾注
+	Insert Footnote	插入脚注
+	Insert Hyperlink	插入超链接
+	Insert Index	插入索引
+	Insert Left	在左侧插入
+	Insert Merge Field	插入合并域
+	Insert Merge\nField	插入合并域
+	Insert Right	在右侧插入
+	Insert Shapes	插入形状
+	Insert Table	插入表格
+	Insert Table of Authorities	插入引文目录
+	Insert Table of Figures	插入表目录
+	Insert Table…	插入表格…
+	Insert\nAbove	在上方插入
+	Insert\nCaption	插入题注
+	Insert\nCitation	插入引文
+	Insert\nFootnote	插入脚注
+	Inside Borders	内部框线
+	Inspect Document	检查文档
+	Interface language:	界面语言：
+	Italic	倾斜
+	Join the ArtCraft community on Discord	加入 Discord 上的 ArtCraft 社区
+	Join us on Discord: discord.gg/artcraft	在 Discord 上加入我们：discord.gg/artcraft
+	Justify	两端对齐
+	Keep Lines Together	段中不分页
+	Keep lines together	段中不分页
+	Keep Text Only	只保留文本
+	Keep with Next	与下段同页
+	Keep with next	与下段同页
+	Labels	标签
+	Landscape	横向
+	Language	语言
+	Lasso	套索
+	Last Column	最后一列
+	Last commit	最近提交
+	Layout	布局
+	Layout Summary	布局摘要
+	Left	左
+	Left Border	左框线
+	Left:	左：
+	Letter	信函
+	Line	直线
+	Line and Page Breaks	换行和分页
+	Line and Paragraph Spacing	行和段落间距
+	Line Break	换行符
+	Line delta	行数变化
+	Line End	行尾
+	Line Numbers	行号
+	Line Spacing	行距
+	Line Spacing Options…	行距选项…
+	Line spacing:	行距：
+	Line Start	行首
+	Lines	行数
+	Lines added	新增行数
+	Lines deleted	删除行数
+	Link	链接
+	Link to Previous	链接到前一节
+	Links	链接
+	Location: {path}	位置：{path}
+	lowercase	全部小写
+	Macros	宏
+	Mailings	邮件
+	Manage Sources	管理源
+	Many pages	多页
+	Margins	页边距
+	Mark Citation	标记引文
+	Mark Entry	标记条目
+	Mark\nCitation	标记引文
+	Mark\nEntry	标记条目
+	Markdown (*.md)	Markdown (*.md)
+	Match case	区分大小写
+	Match Fields	匹配域
+	Matrix	矩阵
+	Merge	合并
+	Merge Cells	合并单元格
+	Merge Formatting	合并格式
+	Merged PRs	已合并的 PR
+	Mirrored	对称
+	MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.	MIT OR Apache-2.0。版权所有 (c) 2026 ArtCraft 团队及 WordCraft 贡献者。
+	Moderate	适中
+	Modify Style	修改样式
+	Modify…	修改…
+	Move or Resize	移动或调整大小
+	Multilevel List	多级列表
+	Multiple Pages	多页
+	Name (A–Z)	名称（A–Z）
+	Name:	名称：
+	Narrow  0.5" all	窄  四周 0.5"
+	Navigation	导航
+	Navigation Pane	导航窗格
+	New	新建
+	New Comment	新建批注
+	New from Template	从模板新建
+	New Paragraph	新段落
+	New Style…	新建样式…
+	New Window	新建窗口
+	New\nComment	新建批注
+	New\nWindow	新建窗口
+	Next	下一条
+	Next Change	下一处修订
+	Next Comment	下一条批注
+	Next Footnote	下一条脚注
+	Next Page	下一页
+	Next Record	下一记录
+	Next Section	下一节
+	No Border	无框线
+	No Color	无颜色
+	No contributor data was built into this copy.	此版本未内置贡献者数据。
+	No Markup	无标记
+	No model credits were built into this copy.	此版本未内置模型致谢信息。
+	No Paragraph Space	无段落间距
+	Nonbreaking Hyphen	不间断连字符
+	Nonbreaking Space	不间断空格
+	None	无
+	Normal  1" all	常规  四周 1"
+	Normal Style	正文样式
+	Not available right now	当前不可用
+	Not saved	未保存
+	Not saved yet	尚未保存
+	Nudge	微移
+	Number of columns:	列数：
+	Number of rows:	行数：
+	Numbering	编号
+	Object	对象
+	Odd Page	奇数页
+	Office 2003 Default	Office 2003 默认设置
+	OK	确定
+	One	一栏
+	One Page	单页
+	Open	打开
+	OpenDocument Text (*.odt)	OpenDocument 文本 (*.odt)
+	Optional Hyphen	可选连字符
+	Options	选项
+	Orientation	纸张方向
+	Outline	大纲
+	Outline Level	大纲级别
+	Outside Borders	外侧框线
+	Oval	椭圆
+	Page	页面
+	Page Background	页面背景
+	Page Borders	页面边框
+	Page Break	分页符
+	Page Break Before	段前分页
+	Page break before	段前分页
+	Page Breaks	分页符
+	Page Color	页面颜色
+	Page Down	下一屏
+	Page image (*.png)	页面图像 (*.png)
+	Page Movement	翻页方式
+	Page Number	页码
+	Page Setup	页面设置
+	Page Up	上一屏
+	Page Width	页宽
+	Page width	页宽
+	Page X of Y	第 X 页，共 Y 页
+	Page {page}	第 {page} 页
+	Page {page} of {pages}	第 {page} 页，共 {pages} 页
+	Page\nBorders	页面边框
+	Page\nColor	页面颜色
+	Page\nNumber	页码
+	Pages	页面
+	Paragraph	段落
+	Paragraph Details	段落详细信息
+	Paragraph Down	下移一段
+	Paragraph Settings	段落设置
+	Paragraph Spacing	段落间距
+	Paragraph Up	上移一段
+	Paragraphs	段落数
+	Paste	粘贴
+	Paste (⌘V)	粘贴 (⌘V)
+	Paste Formatting	粘贴格式
+	Paste: Keep Text Only	粘贴：只保留文本
+	Paste: Merge Formatting	粘贴：合并格式
+	PDF document (*.pdf)	PDF 文档 (*.pdf)
+	Pen	笔
+	Pencil	铅笔
+	Picture Border	图片边框
+	Picture Format	图片格式
+	Picture Styles	图片样式
+	Pictures	图片
+	Plain text (*.txt)	纯文本 (*.txt)
+	Portrait	纵向
+	Position	位置
+	Preview Results	预览结果
+	Preview\nResults	预览结果
+	Previous	上一条
+	Previous Change	上一处修订
+	Previous Comment	上一条批注
+	Previous Record	上一记录
+	Previous Section	上一节
+	Print	打印
+	Print Layout	页面视图
+	Print\nLayout	页面视图
+	Proofing	校对
+	Proofing Issues	校对问题
+	Properties	属性
+	Protect	保护
+	Protect Document	保护文档
+	Quick Access Toolbar	快速访问工具栏
+	Quick Parts	文档部件
+	Quick Tables	快速表格
+	Read Aloud	朗读
+	Read Mode	阅读视图
+	Read\nAloud	朗读
+	Read\nMode	阅读视图
+	Recent	最近
+	Record Macro	录制宏
+	Recover Unsaved Documents	恢复未保存的文档
+	Rectangle	矩形
+	Redo	恢复
+	Reduce Hanging Indent	减少悬挂缩进
+	References	引用
+	Reject	拒绝
+	Reject All Changes	拒绝所有修订
+	Reject Change	拒绝修订
+	Relaxed	宽松
+	Remove Background	删除背景
+	Remove Footer	删除页脚
+	Remove Header	删除页眉
+	Remove Hyperlink	取消超链接
+	Remove Space After Paragraph	删除段后间距
+	Remove Table of Contents	删除目录
+	Remove Watermark	删除水印
+	Repeat	重复
+	Repeat Header Rows	重复标题行
+	Replace	替换
+	Replace All	全部替换
+	Replace Document Text	替换文档文本
+	Replace with:	替换为：
+	Replay	重播
+	Reply	答复
+	Report	报告
+	Research	研究
+	Researcher	研究工具
+	Reset Picture	重设图片
+	Resolve	解决
+	Resolved	已解决
+	Restart at 1	从 1 重新开始
+	Restart Each Page	每页重新编号
+	Restart Each Section	每节重新编号
+	Restrict Editing	限制编辑
+	Restrict\nEditing	限制编辑
+	Results	结果
+	Reverse the order	反转顺序
+	Review	审阅
+	Reviewing	审阅
+	Reviewing Pane	审阅窗格
+	Reviewing — edits become suggestions	审阅 — 编辑内容将成为修订建议
+	Rich Text Format (*.rtf)	RTF 格式 (*.rtf)
+	Right	右
+	Right Border	右框线
+	Right-to-Left Text Direction	从右向左文字方向
+	Right:	右：
+	Rotate	旋转
+	Rounded Rectangle	圆角矩形
+	Rows & Columns	行和列
+	Ruler	标尺
+	Rules	规则
+	Résumé	简历
+	Save	保存
+	Save a copy in another format. Printing goes through a PDF you can print from any viewer.	以其他格式保存副本。打印时先生成 PDF，可在任意查看器中打印。
+	Save As	另存为
+	Save as Template	另存为模板
+	Saved	已保存
+	Search Commands	搜索命令
+	Search commands and help	搜索命令和帮助
+	Search document	搜索文档
+	Section Breaks	分节符
+	Section Properties	节属性
+	Sections	节数
+	Select	选择
+	Select All	全选
+	Select Cell	选择单元格
+	Select Line	选择行
+	Select Objects	选择对象
+	Select Paragraph	选择段落
+	Select Range	选择范围
+	Select Recipients	选择收件人
+	Select Row	选择行
+	Select Sentence	选择句子
+	Select Table	选择表格
+	Select Text	选择文本
+	Select Text with Similar Formatting	选择格式相似的文本
+	Select Word	选择单词
+	Select\nRecipients	选择收件人
+	Selection	选择
+	Selection Pane	选择窗格
+	Send Backward	下移一层
+	Sentence case.	句首字母大写。
+	Set as Default	设为默认值
+	Set Caret	设置光标
+	Set Character Formatting	设置字符格式
+	Set Numbering Value	设置编号值
+	Set Paragraph Formatting	设置段落格式
+	Shading	底纹
+	Shadow	阴影
+	Shape Fill	形状填充
+	Shape Format	形状格式
+	Shape Outline	形状轮廓
+	Shape Styles	形状样式
+	Shapes	形状
+	Share	共享
+	Shift+Tab	Shift+Tab
+	Show	显示
+	Show all formatting marks	显示所有格式标记
+	Show Comments	显示批注
+	Show Markup	显示标记
+	Show Notes	显示备注
+	Show rulers	显示标尺
+	Show the community button in the title bar	在标题栏中显示社区按钮
+	Show/Hide ¶	显示/隐藏 ¶
+	Show\nComments	显示批注
+	Shrink Font 1 Point	字号减小 1 磅
+	Side to Side	并排
+	Side\nto Side	并排
+	Signature Line	签名行
+	Single	单线
+	Single Spacing	单倍行距
+	Size	纸张大小
+	Size:	字号：
+	Small Caps	小型大写字母
+	Small caps	小型大写字母
+	SmartArt	SmartArt
+	Sort	排序
+	Source code: github.com/storytold/wordcraft	源代码：github.com/storytold/wordcraft
+	Space before/after:	段前/段后间距：
+	Spacing	间距
+	Spacing (pt):	间距（磅）：
+	Speech	语音
+	Spelling & Grammar	拼写和语法
+	Spelling &\nGrammar	拼写和语法
+	Spelling Suggestions	拼写建议
+	Split	拆分
+	Split Cells	拆分单元格
+	Split Table	拆分表格
+	Spreadsheet Table	电子表格
+	Standard Colors	标准色
+	Star	星形
+	Start Mail Merge	开始邮件合并
+	Start Mail\nMerge	开始邮件合并
+	Statistics	统计信息
+	Status Bar	状态栏
+	Strikethrough	删除线
+	Studio cover	工作室封面
+	Studio handbook (sample)	工作室手册（示例）
+	Style	样式
+	Style based on:	样式基于：
+	Style Set	样式集
+	Style: APA	样式：APA
+	Styles	样式
+	Styles Pane	样式窗格
+	Subscript	下标
+	Superscript	上标
+	Switch Modes	切换模式
+	Switch\nModes	切换模式
+	Symbol	符号
+	Symbols	符号
+	Synonyms	同义词
+	Tab	制表符
+	Table	表格
+	Table Column Width	表格列宽
+	Table Design	表设计
+	Table Layout	表布局
+	Table of Authorities	引文目录
+	Table of Contents	目录
+	Table of\nContents	目录
+	Table Properties	表格属性
+	Table Row Height	表格行高
+	Table Style Options	表格样式选项
+	Table Styles	表格样式
+	Tables	表格
+	Tabs	制表位
+	Tabular List	表格列表
+	Text	文本
+	Text Box	文本框
+	Text Direction	文字方向
+	Text Effects	文本效果
+	Text Effects and Typography	文本效果和版式
+	Text from File	文件中的文字
+	Text Highlight Color	文本突出显示颜色
+	Text to display:	要显示的文字：
+	Text Wrapping	文字环绕
+	Text:	文字：
+	Text\nBox	文本框
+	Text\nDirection	文字方向
+	The new style takes the formatting of the current paragraph.	新样式将采用当前段落的格式。
+	Theme Colors	主题颜色
+	Theme Fonts	主题字体
+	Theme List	主题列表
+	Themes	主题
+	Thesaurus	同义词库
+	Thick	粗线
+	Three	三栏
+	Tight	紧密
+	Top Border	上框线
+	Top of Page	页面顶端
+	Top:	上：
+	Total Row	汇总行
+	Track Changes	修订
+	Track Changes: On	修订：打开
+	Tracking	修订
+	Translate	翻译
+	Transparency	透明度
+	Triangle	三角形
+	Two	两栏
+	Type a command, e.g. "insert table"	键入命令，例如 "insert table"
+	Type Text	键入文本
+	Underline	下划线
+	Underline Words Only	仅给字词加下划线
+	Undo	撤消
+	Undo {action}	撤消{action}
+	Up	上
+	Update Field	更新域
+	Update Index	更新索引
+	Update Style to Match Selection	更新样式以匹配所选内容
+	Update Table	更新目录
+	Update Table of Figures	更新表目录
+	Update to Match	更新以匹配
+	Update to Match Selection	更新以匹配所选内容
+	UPPERCASE	全部大写
+	User Name	用户名
+	User name:	用户名：
+	Version History	版本历史记录
+	Version {version} ({build})	版本 {version}（{build}）
+	Vertical	垂直
+	Vertical Alignment	垂直对齐方式
+	View	视图
+	View Gridlines	查看网格线
+	View State	视图状态
+	Views	视图
+	Voice	语音
+	Watermark	水印
+	Wave	波浪线
+	Web Layout	Web 版式视图
+	Web page (*.html)	网页 (*.html)
+	Web\nLayout	Web 版式视图
+	Whole page	整页
+	Whole words	全字匹配
+	Wide	宽
+	Widow/Orphan Control	孤行控制
+	Widow/Orphan control	孤行控制
+	Wildcards (regex)	通配符（正则表达式）
+	Window	窗口
+	Word Count	字数统计
+	Word document (*.docx)	Word 文档 (*.docx)
+	Word Left	左移一个单词
+	Word Right	右移一个单词
+	WordArt	艺术字
+	WordCraft	WordCraft
+	Words	字数
+	Words only	仅字词
+	Wrap Text	环绕文字
+	Wrap\nText	环绕文字
+	Write & Insert Fields	编写和插入域
+	Zoom	缩放
+	Zoom In	放大
+	Zoom Out	缩小
+	{group} settings	{group}设置
+	{key}+Click to follow link	按住 {key} 并单击可访问链接
+	➕ New comment	➕ 新建批注
+	📂  Browse…	📂  浏览…
+	{words} words	{words} 个字
+	{selected} of {words} words	{selected}/{words} 个字

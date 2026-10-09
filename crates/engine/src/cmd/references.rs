@@ -160,20 +160,26 @@ pub fn update_toc(s: &mut Session) -> Result<(), CmdError> {
     }
     let width = super::page::sect(s).text_width();
     let entries = headings(s, levels);
+    // A heading typed after a manual page break starts with that break; its page is where the
+    // text after the break lands, so look the page up past any leading breaks.
+    let leads: Vec<usize> =
+        entries.iter().map(|(path, ..)| s.doc.para(StoryRef::Body, path).map_or(0, |p| p.text.bytes().take_while(|b| *b == 0x0C).count())).collect();
     for pass in 0..2 {
+        // Pass 1 lays out with the entries in place, so headings sit `entries.len()` blocks
+        // further down and their pages account for the TOC's own length.
+        s.touch();
+        let l = s.layout();
         if pass == 1 {
             // Replace the page numbers now that the entries exist.
             for _ in 0..entries.len() {
                 s.doc.remove_block(StoryRef::Body, &Path::top(start + 1))?;
             }
         }
-        s.touch();
-        let l = s.layout();
         let shift = if pass == 0 { 0 } else { entries.len() };
         for (k, (path, level, text)) in entries.iter().enumerate() {
             let target = Path::top(path.last() + shift);
-            let page =
-                l.caret(&Pos { story: StoryRef::Body, path: target, off: 0 }).and_then(|c| l.pages.get(c.page)).map(|pg| pg.number).unwrap_or(1);
+            let off = leads.get(k).copied().unwrap_or(0);
+            let page = l.caret(&Pos { story: StoryRef::Body, path: target, off }).and_then(|c| l.pages.get(c.page)).map(|pg| pg.number).unwrap_or(1);
             let mut para = Paragraph::with_text(&format!("{text}\t{page}"), CharProps::default()).styled(&format!("TOC{}", level + 1));
             para.props.tabs = Some(vec![TabStop { pos: width - 0.5, align: TabAlign::Right, leader: TabLeader::Dot }]);
             s.doc.insert_block(StoryRef::Body, &Path::top(start + 1 + k), Block::Para(para))?;

@@ -255,7 +255,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         dashed(&painter, pos2(sr.min.x, y), pos2(sr.max.x, y), Stroke::new(1.0, t.accent));
                         let tr = Rect::from_min_size(pos2(sr.min.x + 2.0, if label == "Header" { y } else { y - 18.0 }), vec2(52.0, 18.0));
                         painter.rect_filled(tr, 2.0, t.checked);
-                        painter.text(tr.center(), egui::Align2::CENTER_CENTER, label, regular(11.0), t.accent_text);
+                        painter.text(tr.center(), egui::Align2::CENTER_CENTER, tl!(label), regular(11.0), t.accent_text);
                     }
                 }
             }
@@ -401,7 +401,7 @@ fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, rects: &[Re
         for (ax, ay, id, pos) in list.iter() {
             let Some(c) = app.session.doc.comments.get(id) else { continue };
             let text = app.session.doc.plain_text(StoryRef::Part(c.part));
-            let author = if c.author.is_empty() { "Author".to_string() } else { c.author.clone() };
+            let author = if c.author.is_empty() { tl!("Author").to_string() } else { c.author.clone() };
             let ai = authors.iter().position(|a| *a == author).unwrap_or_else(|| {
                 authors.push(author.clone());
                 authors.len() - 1
@@ -568,7 +568,8 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
         && let Some(pos) = layout.hit(page, x, y, story)
         && let Some(link) = app.session.doc.para_at(&pos).and_then(|pp| pp.props_of_char(pos.off).link.clone())
     {
-        let tip = format!("{link}\n{}+Click to follow link", if cfg!(target_os = "macos") { "⌘" } else { "Ctrl" });
+        let key = if cfg!(target_os = "macos") { "⌘" } else { "Ctrl" };
+        let tip = format!("{link}\n{}", crate::i18n::fmt(tl!("{key}+Click to follow link"), &[("key", key)]));
         egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), egui::Id::new("link_tip"), egui::PopupAnchor::Pointer).show(|ui| {
             ui.label(tip);
         });
@@ -672,6 +673,9 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
         {
             let pt = ((pp.x - x0) / scale - col_x).clamp(-col_x, page.body.w - 18.0);
             let snapped = (pt / 4.5).round() * 4.5;
+            if !r.drag_started() {
+                app.session.join_next_undo();
+            }
             let _ = app.run("para.indents", json!({"left": snapped}));
         }
         let fr = Rect::from_center_size(pos2(first, bar.min.y + 3.0), vec2(12.0, 10.0));
@@ -680,6 +684,9 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
             && let Some(pp) = r.interact_pointer_pos()
         {
             let pt = (pp.x - x0) / scale - col_x - rp.indent_left;
+            if !r.drag_started() {
+                app.session.join_next_undo();
+            }
             let _ = app.run("para.indents", json!({"firstLine": (pt / 4.5).round() * 4.5}));
         }
         let rr = Rect::from_center_size(pos2(right, bar.max.y - 3.0), vec2(12.0, 12.0));
@@ -688,6 +695,9 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
             && let Some(pp) = r.interact_pointer_pos()
         {
             let pt = page.body.w - ((pp.x - x0) / scale - col_x);
+            if !r.drag_started() {
+                app.session.join_next_undo();
+            }
             let _ = app.run("para.indents", json!({"right": (pt / 4.5).round() * 4.5}));
         }
     }
@@ -791,7 +801,7 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
             .unwrap_or_default();
         ui.label(egui::RichText::new(issue.get("message").and_then(|m| m.as_str()).unwrap_or("")).small().weak());
         if sugg.is_empty() {
-            ui.label(egui::RichText::new("(no suggestions)").italics());
+            ui.label(egui::RichText::new(tl!("(no suggestions)")).italics());
         }
         for sgt in sugg {
             if ui.button(egui::RichText::new(&sgt).strong()).clicked() {
@@ -806,7 +816,7 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
         ui.separator();
     }
     item(ui, app, "Cut", "edit.cut", json!({}));
-    if ui.add(egui::Button::new("Copy").shortcut_text(crate::widgets::shortcut_text(app, "edit.copy"))).clicked() {
+    if ui.add(egui::Button::new(tl!("Copy")).shortcut_text(crate::widgets::shortcut_text(app, "edit.copy"))).clicked() {
         if let Ok(r) = app.run("edit.copy", json!({}))
             && let Some(t) = r.get("text").and_then(|t| t.as_str())
         {
@@ -817,7 +827,7 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     item(ui, app, "Paste", "edit.paste", json!({}));
     ui.separator();
     if let Some(syn) = app.canvas.context_synonyms.clone().and_then(|v| v.as_array().cloned()).filter(|a| !a.is_empty()) {
-        ui.menu_button("Synonyms", |ui| {
+        ui.menu_button(tl!("Synonyms"), |ui| {
             for w in syn.iter().filter_map(|x| x.as_str()) {
                 if ui.button(w).clicked() {
                     let _ = app.run("select.word", json!({}));
@@ -837,13 +847,13 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     item(ui, app, "New Comment", "review.newComment", json!({}));
     if app.session.sel.focus.path.cell().is_some() {
         ui.separator();
-        ui.menu_button("Insert", |ui| {
+        ui.menu_button(tl!("Insert"), |ui| {
             item(ui, app, "Insert Rows Above", "table.insertRowAbove", json!({}));
             item(ui, app, "Insert Rows Below", "table.insertRowBelow", json!({}));
             item(ui, app, "Insert Columns to the Left", "table.insertColumnLeft", json!({}));
             item(ui, app, "Insert Columns to the Right", "table.insertColumnRight", json!({}));
         });
-        ui.menu_button("Delete", |ui| {
+        ui.menu_button(tl!("Delete"), |ui| {
             item(ui, app, "Delete Rows", "table.deleteRow", json!({}));
             item(ui, app, "Delete Columns", "table.deleteColumn", json!({}));
             item(ui, app, "Delete Table", "table.deleteTable", json!({}));

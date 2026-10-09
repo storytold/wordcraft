@@ -35,7 +35,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
 fn header(ui: &mut Ui, title: &str) -> bool {
     let mut close = false;
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(title).font(semibold(15.0)));
+        ui.label(egui::RichText::new(tl!(title)).font(semibold(15.0)));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.small_button("✕").clicked() {
                 close = true;
@@ -53,7 +53,7 @@ fn nav(app: &mut WordApp, ui: &mut Ui) {
     }
     let qid = egui::Id::new("nav_query");
     let mut q = ui.data(|d| d.get_temp::<String>(qid)).unwrap_or_default();
-    let r = ui.add(egui::TextEdit::singleline(&mut q).hint_text("Search document").desired_width(f32::INFINITY));
+    let r = ui.add(egui::TextEdit::singleline(&mut q).hint_text(tl!("Search document")).desired_width(f32::INFINITY));
     if r.changed() {
         ui.data_mut(|d| d.insert_temp(qid, q.clone()));
         if !q.is_empty() {
@@ -65,7 +65,7 @@ fn nav(app: &mut WordApp, ui: &mut Ui) {
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         for (k, l) in [("headings", "Headings"), ("pages", "Pages"), ("results", "Results")] {
-            if ui.selectable_label(app.ui.nav_tab == k, l).clicked() {
+            if ui.selectable_label(app.ui.nav_tab == k, tl!(l)).clicked() {
                 app.ui.nav_tab = k.into();
             }
         }
@@ -75,7 +75,7 @@ fn nav(app: &mut WordApp, ui: &mut Ui) {
         "pages" => {
             let l = app.session.layout();
             for (i, p) in l.pages.iter().enumerate() {
-                let label = format!("Page {}", p.number);
+                let label = crate::i18n::fmt(tl!("Page {page}"), &[("page", &p.number.to_string())]);
                 if ui.selectable_label(app.session.page_hint == i, label).clicked() {
                     let _ = app.run("edit.goto", json!({"page": i + 1}));
                 }
@@ -122,7 +122,7 @@ fn nav(app: &mut WordApp, ui: &mut Ui) {
                 }
             }
             if items.is_empty() {
-                ui.label(egui::RichText::new("Create an interactive outline of your document.\n\nIt's a great way to keep track of where you are or quickly move your content around.\n\nTo get started, go to the Home tab and apply Heading styles to the headings in your document.").weak());
+                ui.label(egui::RichText::new(tl!("Create an interactive outline of your document.\n\nIt's a great way to keep track of where you are or quickly move your content around.\n\nTo get started, go to the Home tab and apply Heading styles to the headings in your document.")).weak());
             }
             for (i, (path, lv, txt)) in items.into_iter().enumerate() {
                 ui.horizontal(|ui| {
@@ -145,15 +145,18 @@ fn styles(app: &mut WordApp, ui: &mut Ui) {
     }
     let st = app.session.run("format.state", &json!({})).unwrap_or_default();
     let cur = st.get("style").and_then(Value::as_str).unwrap_or("Normal").to_string();
-    ui.label(egui::RichText::new(format!("Current style: {}", st.get("styleName").and_then(Value::as_str).unwrap_or(""))).small());
+    ui.label(
+        egui::RichText::new(crate::i18n::fmt(tl!("Current style: {style}"), &[("style", st.get("styleName").and_then(Value::as_str).unwrap_or(""))]))
+            .small(),
+    );
     ui.horizontal(|ui| {
-        if ui.button("New Style…").clicked() {
+        if ui.button(tl!("New Style…")).clicked() {
             app.dialog = crate::dialogs::Dialog::open("newStyle", app);
         }
-        if ui.button("Update to Match").clicked() {
+        if ui.button(tl!("Update to Match")).clicked() {
             let _ = app.run("styles.updateToMatch", json!({}));
         }
-        if ui.button("Clear").clicked() {
+        if ui.button(tl!("Clear")).clicked() {
             let _ = app.run("format.clear", json!({}));
         }
     });
@@ -180,15 +183,15 @@ fn styles(app: &mut WordApp, ui: &mut Ui) {
                     app.canvas.want_focus = true;
                 }
                 r.context_menu(|ui| {
-                    if ui.button("Modify…").clicked() {
+                    if ui.button(tl!("Modify…")).clicked() {
                         app.dialog = crate::dialogs::Dialog::modify_style(app, &id);
                         ui.close();
                     }
-                    if ui.button("Update to Match Selection").clicked() {
+                    if ui.button(tl!("Update to Match Selection")).clicked() {
                         let _ = app.run("styles.updateToMatch", json!({"style": id}));
                         ui.close();
                     }
-                    if ui.button("Delete").clicked() {
+                    if ui.button(tl!("Delete")).clicked() {
                         let _ = app.run("styles.delete", json!({"style": id}));
                         ui.close();
                     }
@@ -203,7 +206,7 @@ fn comments(app: &mut WordApp, ui: &mut Ui) {
         let _ = app.run("view.commentsPane", json!({"value": false}));
         return;
     }
-    if ui.button("➕ New comment").clicked() {
+    if ui.button(tl!("➕ New comment")).clicked() {
         let _ = app.run("review.newComment", json!({"text": ""}));
     }
     ui.separator();
@@ -222,7 +225,7 @@ fn comments(app: &mut WordApp, ui: &mut Ui) {
                     ui.label(egui::RichText::new(c.get("author").and_then(Value::as_str).unwrap_or("")).font(semibold(12.0)));
                     ui.label(egui::RichText::new(c.get("date").and_then(Value::as_str).unwrap_or("").get(..10).unwrap_or("")).small().weak());
                     if c.get("resolved").and_then(Value::as_bool).unwrap_or(false) {
-                        ui.label(egui::RichText::new("Resolved").small().color(t.green));
+                        ui.label(egui::RichText::new(tl!("Resolved")).small().color(t.green));
                     }
                 });
                 // Editable comment text (writes back to the comment's story).
@@ -230,7 +233,7 @@ fn comments(app: &mut WordApp, ui: &mut Ui) {
                 if let Some(part) = part {
                     let key = egui::Id::new(("comment_edit", id));
                     let mut text = ui.data(|d| d.get_temp::<String>(key)).unwrap_or_else(|| app.session.doc.plain_text(StoryRef::Part(part)));
-                    let r = ui.add(egui::TextEdit::multiline(&mut text).desired_rows(1).desired_width(f32::INFINITY).hint_text("Add a comment"));
+                    let r = ui.add(egui::TextEdit::multiline(&mut text).desired_rows(1).desired_width(f32::INFINITY).hint_text(tl!("Add a comment")));
                     if r.changed() {
                         ui.data_mut(|d| d.insert_temp(key, text.clone()));
                     }
@@ -243,15 +246,15 @@ fn comments(app: &mut WordApp, ui: &mut Ui) {
                     }
                 }
                 ui.horizontal(|ui| {
-                    if ui.small_button("Go to").clicked()
+                    if ui.small_button(tl!("Go to")).clicked()
                         && let Some(a) = c.get("anchor").filter(|a| !a.is_null())
                     {
                         let _ = app.run("caret.set", json!({"pos": a}));
                     }
-                    if ui.small_button("Resolve").clicked() {
+                    if ui.small_button(tl!("Resolve")).clicked() {
                         let _ = app.run("review.resolveComment", json!({"id": id}));
                     }
-                    if ui.small_button("Delete").clicked() {
+                    if ui.small_button(tl!("Delete")).clicked() {
                         let _ = app.run("review.deleteComment", json!({"id": id}));
                     }
                 });

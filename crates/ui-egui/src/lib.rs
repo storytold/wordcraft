@@ -5,6 +5,14 @@
 //! the menus, ribbon, shortcuts, control channel and MCP all reach the same behaviour.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+/// An English UI string in the current interface language ([`i18n::t`]).
+#[macro_export]
+macro_rules! tl {
+    ($s:expr) => {
+        $crate::i18n::t($s)
+    };
+}
+
 pub mod backstage;
 pub mod canvas;
 pub mod chrome;
@@ -12,6 +20,7 @@ pub mod control;
 pub mod credits;
 pub mod dialogs;
 pub mod frame;
+pub mod i18n;
 pub mod icons;
 pub mod keys;
 pub mod objects;
@@ -20,6 +29,7 @@ pub mod previews;
 pub mod ribbon;
 pub mod theme;
 pub mod widgets;
+pub mod window_geometry;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -57,6 +67,14 @@ pub struct UiState {
     pub dark: bool,
     pub nav_tab: String,
     pub show_discord: bool,
+    /// User name (File › Options) for comments and tracked changes; empty keeps the default.
+    pub author: String,
+    /// Desktop: the main window's size and position, restored at the next launch.
+    pub window: Option<window_geometry::WindowGeometry>,
+    /// Interface language: `auto` (follow the system) or a code from [`i18n::LANGUAGES`].
+    pub language: String,
+    /// Editing preferences; the session owns them while running (see [`WordApp::prefs`]).
+    pub editing: wordcraft_engine::Prefs,
 }
 
 impl Default for UiState {
@@ -70,18 +88,12 @@ impl Default for UiState {
             dark: false,
             nav_tab: "headings".into(),
             show_discord: true,
+            author: String::new(),
+            window: None,
+            language: i18n::AUTO.into(),
+            editing: wordcraft_engine::Prefs::default(),
         }
     }
-}
-
-/// Everything saved between runs: the UI's state and the editing preferences. The UI fields
-/// stay at the top level, so files from before `editing` existed still load.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct SavedPrefs {
-    #[serde(flatten)]
-    pub ui: UiState,
-    pub editing: wordcraft_engine::Prefs,
 }
 
 /// The application.
@@ -101,6 +113,8 @@ pub struct WordApp {
     pending_shots: Vec<(u64, Option<String>, std::sync::mpsc::Sender<Value>, f64)>,
     pub(crate) synthetic: Vec<egui::Event>,
     styled: bool,
+    /// The CJK face order the installed UI fonts use (Chinese first, or Japanese first).
+    fonts_hans: bool,
     fonts_frames: u32,
     applied_dark: Option<bool>,
     pub frame_ms: f64,
@@ -127,6 +141,7 @@ impl WordApp {
             pending_shots: Vec::new(),
             synthetic: Vec::new(),
             styled: false,
+            fonts_hans: false,
             fonts_frames: 0,
             applied_dark: None,
             frame_ms: 0.0,
@@ -140,6 +155,27 @@ impl WordApp {
     pub fn with_control(mut self, rx: std::sync::mpsc::Receiver<ControlRequest>) -> Self {
         self.control_rx = Some(rx);
         self
+    }
+
+    /// Preferences to save between runs: the UI state plus the current user name and editing
+    /// preferences.
+    pub fn prefs(&self) -> UiState {
+        let mut ui = self.ui.clone();
+        ui.author = self.session.author.clone();
+        ui.editing = self.session.prefs.clone();
+        ui
+    }
+
+    /// Restore preferences saved by [`WordApp::prefs`].
+    pub fn apply_prefs(&mut self, ui: UiState) {
+        self.ui = ui;
+        self.ui.backstage = false;
+        // The session owns the name from here on; `prefs` copies it back when saving.
+        let author = std::mem::take(&mut self.ui.author);
+        if !author.trim().is_empty() {
+            self.session.author = author;
+        }
+        self.session.prefs = std::mem::take(&mut self.ui.editing);
     }
 
     /// Run a command; UI-level commands (`ui.*`) are handled here, the rest by the engine.
@@ -247,6 +283,20 @@ impl WordApp {
                 self.ui.dark = p.get("value").and_then(Value::as_bool).unwrap_or(!self.ui.dark);
                 json!({"dark": self.ui.dark})
             }
+            "ui.language" => {
+                // `auto` (follow the system) or a language code; anything else is an error.
+                if let Some(v) = s("value") {
+                    match i18n::normalize_pref(v) {
+                        Some(code) => self.ui.language = code.to_string(),
+                        None => {
+                            let codes: Vec<&str> = i18n::Lang::all().map(i18n::Lang::code).collect();
+                            return Some(Err(format!("unknown language `{v}`; use auto or one of {}", codes.join(", "))));
+                        }
+                    }
+                }
+                let lang = i18n::Lang::from_pref(&self.ui.language);
+                json!({"language": self.ui.language, "effective": lang.code(), "available": i18n::Lang::all().map(|l| json!({"code": l.code(), "name": l.name()})).collect::<Vec<_>>()})
+            }
             "ui.openFileDialog" => {
                 self.open_dialog();
                 json!({})
@@ -294,18 +344,6 @@ impl WordApp {
         }
     }
 
-    /// What to save between runs.
-    pub fn saved_prefs(&self) -> SavedPrefs {
-        SavedPrefs { ui: self.ui.clone(), editing: self.session.prefs.clone() }
-    }
-
-    /// Restore what [`WordApp::saved_prefs`] saved (Backstage starts closed).
-    pub fn restore_prefs(&mut self, p: SavedPrefs) {
-        self.ui = p.ui;
-        self.ui.backstage = false;
-        self.session.prefs = p.editing;
-    }
-
     /// Document title for the title bar.
     pub fn title_stem(&self) -> String {
         match &self.session.path {
@@ -322,8 +360,15 @@ impl WordApp {
 
     /// Per-frame logic before layout: control requests, screenshots, shortcuts, file drops.
     pub fn logic(&mut self, ctx: &egui::Context) {
-        if !self.styled {
-            theme::install_fonts(ctx);
+        let lang = i18n::Lang::from_pref(&self.ui.language);
+        i18n::set_current(lang);
+        // Chinese text wants the Chinese face before the Japanese one (one glyph style per line).
+        if !self.styled || lang.prefers_hans() != self.fonts_hans {
+            theme::install_fonts_for(ctx, lang.prefers_hans());
+            self.fonts_hans = lang.prefers_hans();
+            // Mod with -, = and 0 are Word shortcuts (optional hyphen, subscript, paragraph spacing);
+            // egui's keyboard zoom would also scale the whole window on them. Zoom is View › Zoom.
+            ctx.options_mut(|o| o.zoom_with_keyboard = false);
             self.styled = true;
         }
         let dark = self.ui.dark || self.session.view.dark_mode;
@@ -386,6 +431,7 @@ impl WordApp {
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         let t0 = now_ms();
         let ctx = ui.ctx().clone();
+        i18n::set_current(i18n::Lang::from_pref(&self.ui.language));
         // Fonts installed by `logic` take effect on the next frame.
         if self.fonts_frames < 2 {
             self.fonts_frames += 1;
@@ -511,33 +557,75 @@ pub fn now_ms() -> f64 {
 }
 
 #[cfg(test)]
-mod prefs_tests {
+mod tests {
     use super::*;
+
+    fn mod_key(key: egui::Key) -> egui::Event {
+        egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND }
+    }
+
+    /// Issue #14: Mod+- (optional hyphen) also zoomed the whole window out, so it read as "zoom out".
+    #[test]
+    fn word_shortcuts_do_not_zoom_the_window() {
+        let ctx = egui::Context::default();
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        let mut frame = |events: Vec<egui::Event>| {
+            let input = egui::RawInput { events, ..Default::default() };
+            // No painter here: dropping the font atlas delta unapplied trips an epaint debug assertion.
+            ctx.run_ui(input, |ui| app.logic(ui.ctx())).drop_without_applying_deltas();
+        };
+        frame(Vec::new());
+        frame(vec![mod_key(egui::Key::Minus)]);
+        frame(vec![mod_key(egui::Key::Minus)]);
+        frame(Vec::new());
+        assert_eq!(ctx.zoom_factor(), 1.0);
+    }
 
     fn app() -> WordApp {
         WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default())
     }
 
     #[test]
-    fn prefs_from_before_editing_still_load() {
-        let old = r#"{"tab": "Insert", "dark": true, "recent": ["/tmp/a.docx"]}"#;
-        let p: SavedPrefs = serde_json::from_str(old).unwrap();
+    fn user_name_survives_restart() {
+        let mut first = app();
+        first.run("file.setAuthor", json!({"name": "Ada Lovelace"})).unwrap();
+        let saved = serde_json::to_vec(&first.prefs()).unwrap();
+
+        let mut second = app();
+        second.apply_prefs(serde_json::from_slice(&saved).unwrap());
+        assert_eq!(second.session.author, "Ada Lovelace");
+
+        // A later rename is what gets saved next, not the name loaded at startup.
+        second.run("file.setAuthor", json!({"name": "Grace Hopper"})).unwrap();
+        assert_eq!(second.prefs().author, "Grace Hopper");
+    }
+
+    #[test]
+    fn prefs_without_user_name_keep_default() {
         let mut a = app();
-        a.restore_prefs(p);
-        assert_eq!((a.ui.tab.as_str(), a.ui.dark, a.ui.recent.len()), ("Insert", true, 1));
-        assert!(a.session.prefs.count_notes, "Word's default");
+        let default = a.session.author.clone();
+        a.apply_prefs(serde_json::from_str(r#"{"dark": true, "backstage": true}"#).unwrap());
+        assert_eq!(a.session.author, default);
+        assert!(a.ui.dark);
+        assert!(!a.ui.backstage);
     }
 
     #[test]
     fn word_count_setting_survives_a_restart() {
         let mut a = app();
         a.session.run("review.wordCount", &json!({"includeTextBoxes": false})).unwrap();
-        a.ui.backstage = true;
-        let saved = serde_json::to_string(&a.saved_prefs()).unwrap();
-        let mut b = app();
-        b.restore_prefs(serde_json::from_str(&saved).unwrap());
-        assert!(!b.session.prefs.count_notes);
-        assert!(!b.ui.backstage, "Backstage starts closed");
+        let saved = serde_json::to_string(&a.prefs()).unwrap();
         assert!(saved.contains(r#""editing":{"countNotes":false}"#), "{saved}");
+        let mut b = app();
+        b.apply_prefs(serde_json::from_str(&saved).unwrap());
+        assert!(!b.session.prefs.count_notes);
+    }
+
+    #[test]
+    fn prefs_without_editing_keep_its_defaults() {
+        let mut a = app();
+        a.apply_prefs(serde_json::from_str(r#"{"tab": "Insert", "dark": true}"#).unwrap());
+        assert_eq!((a.ui.tab.as_str(), a.ui.dark), ("Insert", true));
+        assert!(a.session.prefs.count_notes, "text boxes and notes count by default");
     }
 }
