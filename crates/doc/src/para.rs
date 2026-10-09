@@ -67,6 +67,62 @@ pub enum Anchor {
     Margin,
     Page,
     Paragraph,
+    /// The page's left margin area (from the page's left edge to the text).
+    LeftMargin,
+    /// The page's right margin area (from the text to the page's right edge).
+    RightMargin,
+    /// The page's top margin area (from the page's top edge to the text).
+    TopMargin,
+    /// The page's bottom margin area (from the text to the page's bottom edge).
+    BottomMargin,
+    /// The inside margin (left on odd pages, right on even pages when mirrored).
+    InsideMargin,
+    /// The outside margin.
+    OutsideMargin,
+    /// The anchor character (horizontal only).
+    Character,
+    /// The anchor line (vertical only).
+    Line,
+}
+
+/// Alignment of a floating object within its [`Anchor`] area, instead of an offset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FloatAlign {
+    /// Left or top.
+    Start,
+    Center,
+    /// Right or bottom.
+    End,
+    Inside,
+    Outside,
+}
+
+impl FloatAlign {
+    /// From an OOXML alignment (`wp:align`, `w:tblpXSpec`, `w:tblpYSpec`).
+    pub fn from_ooxml(v: &str) -> Option<FloatAlign> {
+        match v {
+            "left" | "top" => Some(FloatAlign::Start),
+            "center" => Some(FloatAlign::Center),
+            "right" | "bottom" => Some(FloatAlign::End),
+            "inside" => Some(FloatAlign::Inside),
+            "outside" => Some(FloatAlign::Outside),
+            _ => None,
+        }
+    }
+
+    /// The OOXML name on the horizontal (`left`, `right`) or vertical (`top`, `bottom`) axis.
+    pub fn ooxml(self, horizontal: bool) -> &'static str {
+        match (self, horizontal) {
+            (FloatAlign::Start, true) => "left",
+            (FloatAlign::Start, false) => "top",
+            (FloatAlign::Center, _) => "center",
+            (FloatAlign::End, true) => "right",
+            (FloatAlign::End, false) => "bottom",
+            (FloatAlign::Inside, _) => "inside",
+            (FloatAlign::Outside, _) => "outside",
+        }
+    }
 }
 
 /// Floating placement (ignored when `wrap` is `Inline`).
@@ -76,11 +132,19 @@ pub struct Float {
     pub wrap: Wrap,
     pub h_rel: Anchor,
     pub v_rel: Anchor,
-    /// Offsets, points.
+    /// Offsets, points (used when the matching alignment is `None`).
     pub x: f32,
     pub y: f32,
-    /// Distance from surrounding text (points).
+    /// Alignments within the anchor area; they take precedence over the offsets.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub h_align: Option<FloatAlign>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub v_align: Option<FloatAlign>,
+    /// Distance from surrounding text at the left and right (points).
     pub dist: f32,
+    /// Distance from surrounding text above and below (points).
+    pub dist_top: f32,
+    pub dist_bottom: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]

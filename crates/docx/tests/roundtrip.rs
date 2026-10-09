@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use wordcraft_doc::numbering::ListKind;
-use wordcraft_doc::para::{Anchor, Float, NoteKind, ShapeKind, Wrap};
+use wordcraft_doc::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CharProps, HeightRule, Highlight, LineSpacing, NumRef, ParaProps, Rgb, RowProps, TabAlign, TabLeader,
     TabStop, TableLook, TextColor, Underline, VAlign, VMerge, VertAlign,
@@ -326,17 +326,35 @@ fn images_round_trip() {
         w: 100.0,
         h: 50.0,
         alt: String::new(),
-        float: Float { wrap: Wrap::Square, h_rel: Anchor::Page, v_rel: Anchor::Margin, x: 36.0, y: 12.5, dist: 9.0 },
+        float: Float { wrap: Wrap::Square, h_rel: Anchor::Page, v_rel: Anchor::Margin, x: 36.0, y: 12.5, dist: 9.0, ..Default::default() },
         crop: [0.0; 4],
     };
-    let mut floats = vec![floating.clone()];
+    let aligned = InlineObject::Image {
+        media: key.clone(),
+        w: 20.0,
+        h: 20.0,
+        alt: String::new(),
+        float: Float {
+            wrap: Wrap::Square,
+            h_rel: Anchor::RightMargin,
+            h_align: Some(FloatAlign::Center),
+            v_rel: Anchor::TopMargin,
+            v_align: Some(FloatAlign::End),
+            dist: 9.0,
+            dist_top: 2.5,
+            dist_bottom: 4.0,
+            ..Default::default()
+        },
+        crop: [0.0; 4],
+    };
+    let mut floats = vec![floating.clone(), aligned];
     for wrap in [Wrap::Tight, Wrap::Through, Wrap::TopAndBottom, Wrap::BehindText, Wrap::InFrontOfText] {
         floats.push(InlineObject::Image {
             media: key.clone(),
             w: 10.0,
             h: 10.0,
             alt: String::new(),
-            float: Float { wrap, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 0.0, y: 0.0, dist: 0.0 },
+            float: Float { wrap, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 0.0, y: 0.0, dist: 0.0, ..Default::default() },
             crop: [0.0; 4],
         });
     }
@@ -567,7 +585,7 @@ fn shapes_textboxes_equations_dropcaps_round_trip() {
         fill: Some(Rgb(255, 255, 200)),
         stroke: Some(Rgb(0, 0, 0)),
         stroke_width: 1.0,
-        float: Float { wrap: Wrap::Square, h_rel: Anchor::Margin, v_rel: Anchor::Paragraph, x: 10.0, y: 20.0, dist: 0.0 },
+        float: Float { wrap: Wrap::Square, h_rel: Anchor::Margin, v_rel: Anchor::Paragraph, x: 10.0, y: 20.0, dist: 0.0, ..Default::default() },
         story: Some(story),
     };
     let star = InlineObject::Shape {

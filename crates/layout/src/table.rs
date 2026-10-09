@@ -123,7 +123,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             let (mut items, h) = if cell.props.vmerge == VMerge::Continue {
                 (Vec::new(), 0.0)
             } else {
-                layout_box(ctx, story, &cell.blocks, &cpath, cw, chr.as_ref(), depth)
+                layout_box(ctx, story, &cell.blocks, &cpath, cw, chr.as_ref(), depth, None)
             };
             for it in &mut items {
                 it.translate(x0 + margins[1], margins[0]);
