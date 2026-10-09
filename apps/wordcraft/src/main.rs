@@ -21,6 +21,10 @@ struct App(WordApp, Option<WindowGeometry>);
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(target_os = "macos")]
+        for path in wordcraft_macos_open::take() {
+            open_from_system(&mut self.0, &path);
+        }
         self.0.logic(ctx);
         let prev = self.0.ui.window;
         self.0.ui.window = ctx.input(|i| WindowGeometry::track(prev, i.viewport(), i.viewport_rect().size()));
@@ -119,6 +123,26 @@ fn services() -> Services {
     }
 }
 
+/// A document macOS asked to open (Finder "Open With", double-click, Dock drop). It replaces the
+/// window's document only while that is an untouched blank one; anything else opens in a new
+/// WordCraft window, so unsaved work is never discarded.
+#[cfg(target_os = "macos")]
+fn open_from_system(app: &mut WordApp, path: &std::path::Path) {
+    let file = path.to_string_lossy().to_string();
+    if app.session.path.is_none() && !app.session.dirty {
+        if let Err(e) = app.run("file.open", serde_json::json!({"path": file})) {
+            log::warn!("{file}: {e}");
+            app.status(format!("Couldn't open {file}: {e}"));
+        }
+        return;
+    }
+    let spawned = std::env::current_exe().and_then(|exe| std::process::Command::new(exe).arg(path).spawn());
+    if let Err(e) = spawned {
+        log::warn!("{file}: couldn't start a new window: {e}");
+        app.status(format!("Couldn't open {file} in a new window: {e}"));
+    }
+}
+
 /// Window, Dock and taskbar icon.
 fn app_icon() -> Option<egui::IconData> {
     #[cfg(target_os = "macos")]
@@ -188,25 +212,43 @@ fn main() -> eframe::Result {
     if let Some(window) = restored {
         options.viewport = window.apply(options.viewport);
     }
-    eframe::run_native(
-        "WordCraft",
-        options,
-        Box::new(move |cc| {
-            let doc = if sample { wordcraft_engine::sample::sample_document() } else { wordcraft_doc::Document::new() };
-            let mut app = WordApp::new(Session::new(doc), services());
-            load_prefs(&mut app);
-            app.ui.window = restored;
-            app.integrated_titlebar = cfg!(target_os = "macos");
-            if let Some(port) = control_port {
-                let rx = control_server::start(port, cc.egui_ctx.clone());
-                app = app.with_control(rx);
+    let creator: eframe::AppCreator<'_> = Box::new(move |cc| {
+        let doc = if sample { wordcraft_engine::sample::sample_document() } else { wordcraft_doc::Document::new() };
+        let mut app = WordApp::new(Session::new(doc), services());
+        load_prefs(&mut app);
+        app.ui.window = restored;
+        app.integrated_titlebar = cfg!(target_os = "macos");
+        if let Some(port) = control_port {
+            let rx = control_server::start(port, cc.egui_ctx.clone());
+            app = app.with_control(rx);
+        }
+        for f in files {
+            if let Err(e) = app.run("file.open", serde_json::json!({"path": f})) {
+                log::warn!("{f}: {e}");
             }
-            for f in files {
-                if let Err(e) = app.run("file.open", serde_json::json!({"path": f})) {
-                    log::warn!("{f}: {e}");
-                }
-            }
-            Ok(Box::new(App(app, restored)))
-        }),
-    )
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let ctx = cc.egui_ctx.clone();
+            wordcraft_macos_open::set_waker(move || ctx.request_repaint());
+        }
+        Ok(Box::new(App(app, restored)))
+    });
+    run(options, creator)
+}
+
+/// macOS: runs eframe on our own winit event loop, so the "open documents" delegate is in place
+/// before AppKit finishes launching and delivers the files the app was launched with.
+#[cfg(target_os = "macos")]
+fn run(options: eframe::NativeOptions, creator: eframe::AppCreator<'_>) -> eframe::Result {
+    let event_loop = winit::event_loop::EventLoop::<eframe::UserEvent>::with_user_event().build()?;
+    wordcraft_macos_open::install();
+    let mut app = eframe::create_native("WordCraft", options, creator, &event_loop);
+    event_loop.run_app(&mut app)?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn run(options: eframe::NativeOptions, creator: eframe::AppCreator<'_>) -> eframe::Result {
+    eframe::run_native("WordCraft", options, creator)
 }

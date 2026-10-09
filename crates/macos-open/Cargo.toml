@@ -1,0 +1,24 @@
+[package]
+name = "wordcraft-macos-open"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Receives macOS 'open documents' requests (Finder Open With, double-click, Dock drops) for the WordCraft app"
+
+# The one crate allowed `unsafe`: an Objective-C handler class can only be defined and registered
+# through objc2's unsafe class definition and messages. Same lints as the workspace otherwise (the workspace forbids unsafe).
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[dependencies]
+log = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSAppleEventDescriptor", "NSAppleEventManager", "NSNotification", "NSString", "NSURL"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder"] }

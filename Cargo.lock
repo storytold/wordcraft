@@ -4848,9 +4848,11 @@ dependencies = [
  "log",
  "rfd",
  "serde_json",
+ "winit",
  "winresource",
  "wordcraft-doc",
  "wordcraft-engine",
+ "wordcraft-macos-open",
  "wordcraft-ui-egui",
 ]
 
@@ -4956,6 +4958,16 @@ dependencies = [
  "wordcraft-fonts",
  "wordcraft-geom",
  "wordcraft-proof",
+]
+
+[[package]]
+name = "wordcraft-macos-open"
+version = "0.3.0"
+dependencies = [
+ "log",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]

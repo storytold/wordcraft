@@ -25,3 +25,8 @@ winresource = "0.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rfd = { workspace = true }
+
+# Finder "Open With" / double-click: the app runs its own winit event loop to install the delegate.
+[target.'cfg(target_os = "macos")'.dependencies]
+wordcraft-macos-open = { workspace = true }
+winit = { version = "0.30", default-features = false }
