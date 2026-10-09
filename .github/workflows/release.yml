@@ -1,9 +1,12 @@
 # Release pipeline: every push to `release` builds signed installers for every platform and
 # creates or updates the draft GitHub Release "WordCraft v<version>". See docs/releasing.md.
 #
-# All jobs run in the `release` environment (restricted to the `release` branch), which holds
-# the signing secrets. Every secret is optional: missing ones produce unsigned artifacts and a
-# warning, never a failed build.
+# The signing jobs (macOS, Windows) and the job that drafts the release run in the `release`
+# environment (restricted to the `release` branch), which holds the signing secrets. Every secret
+# is optional: missing ones produce unsigned artifacts and a warning, never a failed build. The
+# jobs that sign nothing (version, Linux, Flatpak, FreeBSD, web) get no environment and no
+# secrets, so a `workflow_dispatch` on any branch dry-runs them; there the signing jobs are refused
+# by the environment's branch rule, and the release job, which needs them, is skipped.
 name: Release
 
 on:
@@ -35,7 +38,6 @@ jobs:
   version:
     name: version
     runs-on: ubuntu-latest
-    environment: release
     outputs:
       version: ${{ steps.v.outputs.version }}
       date: ${{ steps.v.outputs.date }}
@@ -175,7 +177,7 @@ jobs:
     # The oldest GitHub-hosted image, so the binaries only need glibc >= 2.35 (Ubuntu 22.04+,
     # Debian 12+, Fedora 36+, RHEL 10). See docs/releasing.md.
     runs-on: ${{ matrix.runner }}
-    environment: release
+    # No `environment: release`: this job signs nothing, so it gets no release secrets.
     strategy:
       fail-fast: false
       matrix:
@@ -200,7 +202,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev \
-            desktop-file-utils appstream python3-yaml
+            desktop-file-utils appstream python3-yaml zsync
           curl -fsSL -o "$RUNNER_TEMP/nfpm.deb" \
             "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_${{ matrix.deb }}.deb"
           sudo dpkg -i "$RUNNER_TEMP/nfpm.deb"
@@ -225,6 +227,9 @@ jobs:
           for appimage in dist/release/*.AppImage; do
             chmod +x "$appimage"
             APPIMAGE_EXTRACT_AND_RUN=1 "$appimage" --version
+            # Update information is embedded, and the .zsync for delta updates sits beside it.
+            "$appimage" --appimage-updateinformation | grep -F 'gh-releases-zsync|'
+            test -s "$appimage.zsync"
           done
       - uses: actions/upload-artifact@v4
         with:
@@ -232,11 +237,49 @@ jobs:
           path: dist/release/*
           if-no-files-found: error
 
+  flatpak:
+    name: Flatpak ${{ matrix.arch }}
+    needs: [version, linux]
+    # Repackages the Linux job's tarball (the same binaries as the AppImage/deb/rpm); no Rust
+    # build here. 24.04 for a newer flatpak-builder (1.4) than 22.04 ships.
+    runs-on: ${{ matrix.runner }}
+    # No `environment: release`: this job signs nothing, so it gets no release secrets.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-24.04 }
+          - { arch: aarch64, runner: ubuntu-24.04-arm }
+    env:
+      WORDCRAFT_VERSION: ${{ needs.version.outputs.version }}
+      WORDCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-linux-${{ matrix.arch }}
+          path: dist/linux
+      - name: Install flatpak-builder
+        run: |
+          sudo apt-get update
+          # librsvg2-common: the SVG pixbuf loader. flatpak-builder runs the host's
+          # `appstreamcli compose`, which renders the scalable icon and fails without it.
+          sudo apt-get install -y --no-install-recommends flatpak flatpak-builder librsvg2-common
+          # Ubuntu 24.04's AppArmor blocks the unprivileged user namespaces bubblewrap needs.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Build the Flatpak bundle
+        run: packaging/linux/flatpak-bundle.sh "dist/linux/wordcraft-$WORDCRAFT_VERSION-linux-${{ matrix.arch }}.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-flatpak-${{ matrix.arch }}
+          path: dist/release/*.flatpak
+          if-no-files-found: error
+
   web:
     name: Web (wasm)
     needs: version
     runs-on: ubuntu-latest
-    environment: release
+    # No `environment: release`: this job signs nothing, so it gets no release secrets.
     env:
       WORDCRAFT_VERSION: ${{ needs.version.outputs.version }}
       WORDCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
@@ -280,10 +323,20 @@ jobs:
     needs: version
     runs-on: ubuntu-latest
     timeout-minutes: 300
+    # No `environment: release`: this job signs nothing, so it gets no release secrets.
     env:
       WORDCRAFT_VERSION: ${{ needs.version.outputs.version }}
+      WORDCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
     steps:
       - uses: actions/checkout@v4
+      # Optional font input (docs: storytold/craft-fonts docs/integration.md); releases always embed it.
+      # Synced into the VM with the sources.
+      - name: Check out craft-fonts
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: storytold/craft-fonts
+          ref: abb83316d96aa59c1cf64784289e378fe9fa5695
+          path: craft-fonts
       - name: Build in a FreeBSD VM
         uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1
         with:
@@ -291,7 +344,7 @@ jobs:
           usesh: true
           cpu: 4
           mem: 12288
-          envs: WORDCRAFT_VERSION
+          envs: "WORDCRAFT_VERSION WORDCRAFT_BUILD_DATE WORDCRAFT_BUILD_SHA"
           copyback: true
           prepare: |
             pkg install -y git curl pkgconf cmake python3 libxkbcommon wayland libX11 libXcursor libXrandr libXi libxcb mesa-libs vulkan-loader gtk3 fontconfig freetype2 alsa-lib
@@ -300,12 +353,14 @@ jobs:
             . "$HOME/.cargo/env"
             git config --global --add safe.directory "*"
             cargo run -q -p xtask -- version set "$WORDCRAFT_VERSION"
-            cargo build --release --locked -p wordcraft -p wordcraft-cli
+            CRAFT_FONTS_DIR="$PWD/craft-fonts" CRAFT_FONTS_REQUIRED=1 cargo build --release --locked -p wordcraft -p wordcraft-cli
             name="wordcraft-$WORDCRAFT_VERSION-freebsd-x86_64"
             mkdir -p "dist/release/$name"
             cp target/release/wordcraft target/release/wordcraft-cli LICENSE-MIT LICENSE-APACHE NOTICE ATTRIBUTION.md README.md "dist/release/$name/"
             cp packaging/linux/ai.storyteller.wordcraft.desktop "dist/release/$name/"
             cp assets/app-icon/hicolor/256x256/apps/ai.storyteller.wordcraft.png "dist/release/$name/"
+            # The embedded craft-fonts' licences, as in the Linux packages (OFL-<family>.txt).
+            for f in craft-fonts/fonts/*/OFL.txt; do cp "$f" "dist/release/$name/OFL-$(basename "$(dirname "$f")").txt"; done
             tar -C dist/release -czf "dist/release/$name.tar.gz" "$name"
             rm -rf "dist/release/$name" target
       - uses: actions/upload-artifact@v4
@@ -316,7 +371,8 @@ jobs:
 
   release:
     name: Draft GitHub Release
-    needs: [version, macos, windows, linux, web, freebsd]
+    # Needs the signing jobs, which only run on `release`: a branch dry run never gets here.
+    needs: [version, macos, windows, linux, flatpak, freebsd, web]
     runs-on: ubuntu-latest
     environment: release
     permissions:

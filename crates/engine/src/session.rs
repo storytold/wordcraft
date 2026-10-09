@@ -129,6 +129,8 @@ pub struct Session {
     redo: Vec<Undo>,
     /// Typing is coalesced into one undo step until something else happens.
     typing_open: bool,
+    /// The next mutating command joins the previous undo step (later frames of a drag).
+    join_next: bool,
     rev: u64,
     cache: LayoutCache,
     layout: Option<(u64, f32, ViewMode, Arc<DocLayout>, bool)>,
@@ -179,6 +181,7 @@ impl Session {
             history: Vec::new(),
             redo: Vec::new(),
             typing_open: false,
+            join_next: false,
             rev: 1,
             cache: LayoutCache::new(),
             layout: None,
@@ -246,6 +249,12 @@ impl Session {
         }
         self.redo.clear();
     }
+    /// Make the next mutating command part of the previous undo step instead of a new one, so a
+    /// drag that runs a command every frame is a single Undo. Call it on every frame of the drag
+    /// except the first; it is consumed by the next `run`.
+    pub fn join_next_undo(&mut self) {
+        self.join_next = true;
+    }
     /// Close an open typing group (caret moved, other command).
     pub fn close_typing(&mut self) {
         self.typing_open = false;
@@ -310,6 +319,7 @@ impl Session {
     /// control channel). Mutating commands are undoable; a failed command leaves the document as
     /// it was; a panic inside a command becomes an error.
     pub fn run(&mut self, id: &str, params: &Value) -> Result<Value, CmdError> {
+        let join = std::mem::take(&mut self.join_next);
         let reg = self.registry.clone();
         let Some(spec) = reg.get(id) else { return Err(CmdError::Unknown(id.to_string())) };
         if let Some(why) = (spec.enabled)(self) {
@@ -343,7 +353,9 @@ impl Session {
         }
         if spec.mutates {
             let label = if spec.id == "text.insert" { "Typing" } else { spec.label };
-            self.checkpoint(label);
+            if !join || self.history.is_empty() {
+                self.checkpoint(label);
+            }
         } else if !spec.id.starts_with("caret.") && !spec.id.starts_with("view.") {
             // Non-mutating commands other than caret movement keep the typing group.
         } else if spec.id.starts_with("caret.") {

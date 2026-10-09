@@ -18,6 +18,7 @@ pub mod previews;
 pub mod ribbon;
 pub mod theme;
 pub mod widgets;
+pub mod window_geometry;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -55,6 +56,10 @@ pub struct UiState {
     pub dark: bool,
     pub nav_tab: String,
     pub show_discord: bool,
+    /// User name (File › Options) for comments and tracked changes; empty keeps the default.
+    pub author: String,
+    /// Desktop: the main window's size and position, restored at the next launch.
+    pub window: Option<window_geometry::WindowGeometry>,
 }
 
 impl Default for UiState {
@@ -68,6 +73,8 @@ impl Default for UiState {
             dark: false,
             nav_tab: "headings".into(),
             show_discord: true,
+            author: String::new(),
+            window: None,
         }
     }
 }
@@ -128,6 +135,24 @@ impl WordApp {
     pub fn with_control(mut self, rx: std::sync::mpsc::Receiver<ControlRequest>) -> Self {
         self.control_rx = Some(rx);
         self
+    }
+
+    /// Preferences to save between runs: the UI state plus the current user name.
+    pub fn prefs(&self) -> UiState {
+        let mut ui = self.ui.clone();
+        ui.author = self.session.author.clone();
+        ui
+    }
+
+    /// Restore preferences saved by [`WordApp::prefs`].
+    pub fn apply_prefs(&mut self, ui: UiState) {
+        self.ui = ui;
+        self.ui.backstage = false;
+        // The session owns the name from here on; `prefs` copies it back when saving.
+        let author = std::mem::take(&mut self.ui.author);
+        if !author.trim().is_empty() {
+            self.session.author = author;
+        }
     }
 
     /// Run a command; UI-level commands (`ui.*`) are handled here, the rest by the engine.
@@ -300,6 +325,9 @@ impl WordApp {
     pub fn logic(&mut self, ctx: &egui::Context) {
         if !self.styled {
             theme::install_fonts(ctx);
+            // Mod with -, = and 0 are Word shortcuts (optional hyphen, subscript, paragraph spacing);
+            // egui's keyboard zoom would also scale the whole window on them. Zoom is View › Zoom.
+            ctx.options_mut(|o| o.zoom_with_keyboard = false);
             self.styled = true;
         }
         let dark = self.ui.dark || self.session.view.dark_mode;
@@ -483,5 +511,60 @@ pub fn now_ms() -> f64 {
     #[cfg(target_arch = "wasm32")]
     {
         0.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mod_key(key: egui::Key) -> egui::Event {
+        egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND }
+    }
+
+    /// Issue #14: Mod+- (optional hyphen) also zoomed the whole window out, so it read as "zoom out".
+    #[test]
+    fn word_shortcuts_do_not_zoom_the_window() {
+        let ctx = egui::Context::default();
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        let mut frame = |events: Vec<egui::Event>| {
+            let input = egui::RawInput { events, ..Default::default() };
+            // No painter here: dropping the font atlas delta unapplied trips an epaint debug assertion.
+            ctx.run_ui(input, |ui| app.logic(ui.ctx())).drop_without_applying_deltas();
+        };
+        frame(Vec::new());
+        frame(vec![mod_key(egui::Key::Minus)]);
+        frame(vec![mod_key(egui::Key::Minus)]);
+        frame(Vec::new());
+        assert_eq!(ctx.zoom_factor(), 1.0);
+    }
+
+    fn app() -> WordApp {
+        WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default())
+    }
+
+    #[test]
+    fn user_name_survives_restart() {
+        let mut first = app();
+        first.run("file.setAuthor", json!({"name": "Ada Lovelace"})).unwrap();
+        let saved = serde_json::to_vec(&first.prefs()).unwrap();
+
+        let mut second = app();
+        second.apply_prefs(serde_json::from_slice(&saved).unwrap());
+        assert_eq!(second.session.author, "Ada Lovelace");
+
+        // A later rename is what gets saved next, not the name loaded at startup.
+        second.run("file.setAuthor", json!({"name": "Grace Hopper"})).unwrap();
+        assert_eq!(second.prefs().author, "Grace Hopper");
+    }
+
+    #[test]
+    fn prefs_without_user_name_keep_default() {
+        let mut a = app();
+        let default = a.session.author.clone();
+        a.apply_prefs(serde_json::from_str(r#"{"dark": true, "backstage": true}"#).unwrap());
+        assert_eq!(a.session.author, default);
+        assert!(a.ui.dark);
+        assert!(!a.ui.backstage);
     }
 }

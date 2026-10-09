@@ -448,6 +448,71 @@ fn notes_round_trip() {
     assert_eq!(r.settings.endnote_format, NumFormat::UpperRoman);
 }
 
+/// `references.footnote` starts the note's own text with a reference to the note, so the editor shows
+/// its number. In the file that is the `w:footnoteRef` mark; a `w:footnoteReference` there would make
+/// the note cite itself, which LibreOffice refuses to open.
+#[test]
+fn note_never_references_itself() {
+    let mut d = Document::new();
+    let f = d.add_part(PartKind::Footnote, Vec::new());
+    let mut note = Paragraph::with_text(" The note.", CharProps::default());
+    note.insert_object(0, InlineObject::NoteRef { kind: NoteKind::Footnote, id: f, custom: String::new() }, &CharProps::default()).unwrap();
+    d.parts.get_mut(&f).unwrap().blocks = vec![para_block(note)];
+    let mut p = Paragraph::with_text("Text", CharProps::default());
+    p.insert_object(4, InlineObject::NoteRef { kind: NoteKind::Footnote, id: f, custom: String::new() }, &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/footnotes.xml").unwrap(), &mut xml).unwrap();
+    assert!(!xml.contains("<w:footnoteReference"), "a footnote cites itself: {xml}");
+    assert_eq!(xml.matches("<w:footnoteRef/>").count(), 1, "{xml}");
+
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    let got = paras(&r)[0];
+    let Some(InlineObject::NoteRef { id, .. }) = got.objects.first() else { panic!("{:?}", got.objects) };
+    assert_eq!(part_text(&r, Some(*id)).trim(), "The note.");
+}
+
+/// The TOC is a `Contents` paragraph ending in an empty `TOC` field, followed by TOC-styled entries.
+/// In the file the field must contain the entries, inside Word's Table of Contents content control,
+/// or Word shows them as plain text with no Update Table.
+#[test]
+fn toc_field_wraps_its_entries() {
+    let mut head = Paragraph::with_text("Contents", CharProps::default()).styled("TOCHeading");
+    let end = head.len();
+    head.insert_object(
+        end,
+        InlineObject::Field { instr: "TOC \\o \"1-2\" \\h \\z \\u".into(), result: String::new(), locked: false },
+        &CharProps::default(),
+    )
+    .unwrap();
+    let entries = [("Intro\t1", "TOC1"), ("Detail\t2", "TOC2")];
+    let mut blocks = vec![head];
+    blocks.extend(entries.iter().map(|(t, st)| Paragraph::with_text(t, CharProps::default()).styled(st)));
+    blocks.push(Paragraph::with_text("Body", CharProps::default()));
+    let d = doc_with(blocks);
+
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let sdt = xml.find("<w:sdt>").expect("TOC content control");
+    assert!(xml.contains(r#"<w:docPartGallery w:val="Table of Contents"/>"#), "{xml}");
+    let (begin, fend) = (xml.find(r#"fldCharType="begin""#).unwrap(), xml.find(r#"fldCharType="end""#).unwrap());
+    let last_entry = xml.find("Detail").unwrap();
+    assert!(sdt < xml.find("Contents").unwrap() && xml.find("</w:sdt>").unwrap() < xml.find(">Body<").unwrap(), "{xml}");
+    assert!(begin < xml.find("Intro").unwrap() && fend > last_entry && fend < xml.find("</w:sdt>").unwrap(), "field must span the entries: {xml}");
+
+    // WordCraft reads its own TOC back unchanged.
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    let ps = paras(&r);
+    assert_eq!(ps.iter().map(|p| p.plain_text()).collect::<Vec<_>>(), ["Contents", "Intro\t1", "Detail\t2", "Body"]);
+    assert!(matches!(ps[0].objects.first(), Some(InlineObject::Field { instr, .. }) if instr.starts_with("TOC")), "{:?}", ps[0].objects);
+    assert_eq!(ps[1].props.style.as_deref(), Some("TOC1"));
+}
+
 #[test]
 fn tracked_changes_round_trip() {
     let mut d = Document::new();

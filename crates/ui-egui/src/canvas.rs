@@ -652,6 +652,9 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
         {
             let pt = ((pp.x - x0) / scale - col_x).clamp(-col_x, page.body.w - 18.0);
             let snapped = (pt / 4.5).round() * 4.5;
+            if !r.drag_started() {
+                app.session.join_next_undo();
+            }
             let _ = app.run("para.indents", json!({"left": snapped}));
         }
         let fr = Rect::from_center_size(pos2(first, bar.min.y + 3.0), vec2(12.0, 10.0));
@@ -660,6 +663,9 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
             && let Some(pp) = r.interact_pointer_pos()
         {
             let pt = (pp.x - x0) / scale - col_x - rp.indent_left;
+            if !r.drag_started() {
+                app.session.join_next_undo();
+            }
             let _ = app.run("para.indents", json!({"firstLine": (pt / 4.5).round() * 4.5}));
         }
         let rr = Rect::from_center_size(pos2(right, bar.max.y - 3.0), vec2(12.0, 12.0));
@@ -668,6 +674,9 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
             && let Some(pp) = r.interact_pointer_pos()
         {
             let pt = page.body.w - ((pp.x - x0) / scale - col_x);
+            if !r.drag_started() {
+                app.session.join_next_undo();
+            }
             let _ = app.run("para.indents", json!({"right": (pt / 4.5).round() * 4.5}));
         }
     }

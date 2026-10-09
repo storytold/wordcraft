@@ -121,6 +121,26 @@ fn lists_get_labels_and_indent() {
 }
 
 #[test]
+fn symbol_font_bullet_without_the_font_draws_a_bullet() {
+    // Word's default bullet: U+F0B7 in Symbol.
+    let mut d = Document::from_text("one");
+    let id = d.numbering.add_list(wordcraft_doc::ListKind::BulletChar('\u{F0B7}'));
+    for a in &mut d.numbering.abstracts {
+        if let Some(l) = a.levels.first_mut() {
+            l.chr.font = Some("Symbol".into());
+        }
+    }
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })).unwrap();
+    let l = lay(&d);
+    let label = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { para.label.clone() } else { None }).unwrap();
+    // Where a real Symbol font with the private-use code is installed (Windows), the code stays.
+    let symbol = wordcraft_fonts::word::resolve("Symbol", false, false);
+    let expected = if symbol.substituted || !symbol.face.covers('\u{F0B7}') { "\u{2022}" } else { "\u{F0B7}" };
+    assert_eq!(label.text, expected);
+    assert_eq!(label.glyphs.len(), 1);
+}
+
+#[test]
 fn tables_lay_out_cells() {
     let mut d = Document::from_text("before\nafter");
     let mut t = Table::new(2, 3, 468.0);
@@ -166,7 +186,9 @@ fn tall_first_page_header_pushes_body_down() {
     let l = lay(&d);
     let first = l.caret(&Pos::body(0, 0)).unwrap();
     assert!(first.top > d.last_section.margin_top + 50.0, "{first:?}");
-    let later = l.caret_on(&Pos::body(119, 0), l.pages.len() - 1).unwrap();
+    // The first paragraph on page 2 (which has no header) sits higher than page 1's first line,
+    // whatever the installed fonts do to pagination.
+    let later = (0..120).filter_map(|i| l.caret(&Pos::body(i, 0))).find(|c| c.page == 1).unwrap();
     assert!(later.top < first.top, "{later:?}");
 }
 
