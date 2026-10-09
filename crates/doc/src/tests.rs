@@ -151,3 +151,35 @@ fn counted_stories_survive_self_nested_boxes() {
     d.insert_object(&Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 }, shape, &CharProps::default()).unwrap();
     assert_eq!(d.word_count_including_notes(), 2);
 }
+
+#[test]
+fn prune_text_boxes_drops_only_unshown_ones() {
+    let shape = |story| InlineObject::Shape {
+        kind: para::ShapeKind::TextBox,
+        w: 50.0,
+        h: 20.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Default::default(),
+        story: Some(story),
+    };
+    let para_of = |t: &str| vec![para_block(Paragraph::with_text(t, CharProps::default()))];
+    let mut d = Document::from_text("body");
+    assert_eq!(d.prune_text_boxes(), 0, "nothing to do without text boxes");
+    let shown = d.add_part(PartKind::TextBox, para_of("shown"));
+    let nested = d.add_part(PartKind::TextBox, para_of("inside shown"));
+    let orphan = d.add_part(PartKind::TextBox, para_of("deleted box"));
+    let orphan_child = d.add_part(PartKind::TextBox, para_of("inside the deleted box"));
+    let hdr = d.add_part(PartKind::Header, para_of("header"));
+    let in_header = d.add_part(PartKind::TextBox, para_of("box in the header"));
+    d.insert_object(&Pos::body(0, 0), shape(shown), &CharProps::default()).unwrap();
+    let at = |id| Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 };
+    d.insert_object(&at(shown), shape(nested), &CharProps::default()).unwrap();
+    d.insert_object(&at(orphan), shape(orphan_child), &CharProps::default()).unwrap();
+    d.insert_object(&at(hdr), shape(in_header), &CharProps::default()).unwrap();
+    assert_eq!(d.prune_text_boxes(), 2);
+    let kept: Vec<u32> = d.parts.keys().copied().collect();
+    assert_eq!(kept, vec![shown, nested, hdr, in_header]);
+    assert_eq!(d.prune_text_boxes(), 0);
+}

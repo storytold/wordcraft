@@ -46,7 +46,7 @@ const MAX_BOX_DEPTH: usize = 8;
 const MAX_PASTED_BOXES: usize = 4096;
 
 /// Call `f` on every paragraph of a block (tables descended, depth-limited).
-fn each_para<'a>(b: &'a Block, depth: usize, f: &mut dyn FnMut(&'a Paragraph)) {
+pub(crate) fn each_para<'a>(b: &'a Block, depth: usize, f: &mut dyn FnMut(&'a Paragraph)) {
     match b {
         Block::Para(p) => f(p),
         Block::Table(t) if depth < 16 => {

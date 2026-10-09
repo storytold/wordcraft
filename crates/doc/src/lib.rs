@@ -607,23 +607,49 @@ impl Document {
     /// The body, then the text boxes, footnotes and endnotes it shows (nested ones too), in
     /// document order. Headers, footers, comments and stories nothing points at aren't included.
     pub fn counted_stories(&self) -> Vec<StoryRef> {
-        let mut out = vec![StoryRef::Body];
-        let mut seen = std::collections::BTreeSet::new();
+        self.reachable(vec![StoryRef::Body], &|o| match o {
+            InlineObject::Shape { story: Some(id), .. } => Some((*id, &[PartKind::TextBox])),
+            InlineObject::NoteRef { id, .. } => Some((*id, &[PartKind::Footnote, PartKind::Endnote])),
+            _ => None,
+        })
+    }
+
+    /// Drop the text box stories no box shows any more (a deleted or cut box's text), nested
+    /// ones too. Undo snapshots and the clipboard keep their own copies. Free for a document
+    /// without text boxes; otherwise one pass over its paragraphs. Returns how many went.
+    pub fn prune_text_boxes(&mut self) -> usize {
+        if !self.parts.values().any(|p| p.kind == PartKind::TextBox) {
+            return 0;
+        }
+        let roots = std::iter::once(StoryRef::Body)
+            .chain(self.parts.iter().filter(|(_, p)| p.kind != PartKind::TextBox).map(|(id, _)| StoryRef::Part(*id)))
+            .collect();
+        let live = self.reachable(roots, &|o| match o {
+            InlineObject::Shape { story: Some(id), .. } => Some((*id, &[PartKind::TextBox])),
+            _ => None,
+        });
+        let before = self.parts.len();
+        self.parts.retain(|id, p| p.kind != PartKind::TextBox || live.contains(&StoryRef::Part(*id)));
+        before - self.parts.len()
+    }
+
+    /// `roots`, then every story their objects lead to (`follow`: an object's story id and the
+    /// part kinds that count), transitively, in the order found.
+    fn reachable(&self, roots: Vec<StoryRef>, follow: &dyn Fn(&InlineObject) -> Option<(u32, &'static [PartKind])>) -> Vec<StoryRef> {
+        let mut out = roots;
+        let mut seen: std::collections::BTreeSet<StoryRef> = out.iter().copied().collect();
         let mut i = 0;
         while let Some(s) = out.get(i).copied() {
             i += 1;
-            for path in self.para_paths(s) {
-                let Some(p) = self.para(s, &path) else { continue };
-                for o in &p.objects {
-                    let (id, kinds): (u32, &[PartKind]) = match o {
-                        InlineObject::Shape { story: Some(id), .. } => (*id, &[PartKind::TextBox]),
-                        InlineObject::NoteRef { id, .. } => (*id, &[PartKind::Footnote, PartKind::Endnote]),
-                        _ => continue,
-                    };
-                    let story = StoryRef::Part(id);
-                    if self.parts.get(&id).is_some_and(|p| kinds.contains(&p.kind)) && seen.insert(id) {
-                        out.push(story);
-                    }
+            let mut found = Vec::new();
+            for b in self.story(s).into_iter().flatten() {
+                edit::each_para(b, 0, &mut |p| {
+                    found.extend(p.objects.iter().filter_map(follow));
+                });
+            }
+            for (id, kinds) in found {
+                if self.parts.get(&id).is_some_and(|p| kinds.contains(&p.kind)) && seen.insert(StoryRef::Part(id)) {
+                    out.push(StoryRef::Part(id));
                 }
             }
         }

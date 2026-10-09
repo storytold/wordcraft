@@ -490,3 +490,25 @@ fn moved_text_box_makes_the_text_it_lands_on_wrap() {
     // Its old paragraph no longer holds it.
     assert!(s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(4)).unwrap().objects.is_empty());
 }
+
+#[test]
+fn deleted_text_box_takes_its_text_with_it_until_undo() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "A"}));
+    let id = run(&mut s, "insert.textBox", json!({"text": "Inside"}))["story"].as_u64().unwrap() as u32;
+    let box_sel = json!({"anchor": Pos::body(0, 1), "focus": Pos::body(0, 1 + 3)});
+    run(&mut s, "select.range", box_sel.clone());
+    run(&mut s, "text.delete", json!({}));
+    assert!(!s.doc.parts.contains_key(&id), "the deleted box's text is gone");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.plain_text(StoryRef::Part(id)), "Inside", "undo brings it back");
+    // Cut and paste: one box, one story, same text.
+    run(&mut s, "select.range", box_sel);
+    run(&mut s, "edit.cut", json!({}));
+    assert!(s.doc.parts.is_empty());
+    run(&mut s, "edit.paste", json!({}));
+    assert_eq!(s.doc.parts.len(), 1);
+    let (_, part) = s.doc.parts.iter().next().unwrap();
+    assert_eq!(part.kind, wordcraft_doc::PartKind::TextBox);
+    assert_eq!(s.doc.word_count_including_notes(), 2);
+}

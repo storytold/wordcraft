@@ -366,6 +366,7 @@ impl Session {
                 if spec.mutates {
                     self.touch();
                     self.doc.ensure_nonempty();
+                    self.doc.prune_text_boxes();
                 }
                 self.clamp_selection();
             }
