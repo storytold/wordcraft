@@ -24,6 +24,7 @@ wordcraft-proof = { path = "crates/proof" }
 wordcraft-engine = { path = "crates/engine" }
 wordcraft-mcp = { path = "crates/mcp" }
 wordcraft-control-key = { path = "crates/control-key" }
+wordcraft-chat = { path = "crates/chat" }
 wordcraft-ui-egui = { path = "crates/ui-egui" }
 
 # foundation

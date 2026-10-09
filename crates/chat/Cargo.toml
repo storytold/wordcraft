@@ -1,0 +1,17 @@
+[package]
+name = "wordcraft-chat"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "WordCraft chat: members, invites, keys, messages, rules and the log format (no UI, no network; the app supplies the clock and the random bytes)"
+
+[lints]
+workspace = true
+
+[features]
+# Deterministic clock, bytes and port for other crates' tests; only dev-dependencies turn it on.
+testing = []
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
