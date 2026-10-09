@@ -209,7 +209,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             let key = page_key(app, page, scale_px);
             let fresh = app.canvas.textures.get(&i).is_some_and(|(k, _)| *k == key);
             if !fresh && (rendered < 2 || !app.canvas.textures.contains_key(&i) && rendered < 4) {
-                let mut opts = wordcraft_render::RenderOptions::default();
+                let mut opts = screen_render_options();
                 opts.display.marks = app.session.view.marks;
                 opts.display.markup = app.session.view.show_markup;
                 let editing_hf = matches!(app.session.sel.focus.story, StoryRef::Part(_));
@@ -233,7 +233,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 ui.ctx().request_repaint();
             }
             if let Some((_, tex)) = app.canvas.textures.get(&i) {
-                painter.image(tex.id(), sr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                painter.image(tex.id(), pixel_aligned(sr, tex.size_vec2(), ppp), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
             }
             // Header/footer editing chrome.
             if let StoryRef::Part(id) = app.session.sel.focus.story {
@@ -804,5 +804,46 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
             item(ui, app, "Delete Table", "table.deleteTable", json!({}));
         });
         item(ui, app, "Merge Cells", "table.merge", json!({}));
+    }
+}
+
+/// Render options for page rasters shown on screen: on macOS, text is darkened the way the system
+/// draws it, so a page looks as it does in other Mac apps (exports never are).
+pub(crate) fn screen_render_options() -> wordcraft_render::RenderOptions {
+    wordcraft_render::RenderOptions { text_darkening: cfg!(target_os = "macos"), ..Default::default() }
+}
+
+/// Where to draw a page texture of `tex` pixels meant to fill `rect`: when the texture is the
+/// rect at screen resolution (to within the pixel its size was rounded up by), put it on whole
+/// device pixels at its own size, so each texel is one screen pixel. Scrolling leaves pages at
+/// fractional positions, and resampling there blurs every glyph edge, which makes text look
+/// lighter than it is.
+pub(crate) fn pixel_aligned(rect: Rect, tex: egui::Vec2, ppp: f32) -> Rect {
+    let want = rect.size() * ppp;
+    if ppp <= 0.0 || (tex.x - want.x).abs() > 1.0 || (tex.y - want.y).abs() > 1.0 {
+        return rect;
+    }
+    let min = pos2((rect.min.x * ppp).round() / ppp, (rect.min.y * ppp).round() / ppp);
+    Rect::from_min_size(min, tex / ppp)
+}
+
+#[cfg(test)]
+mod pixel_tests {
+    use super::*;
+
+    #[test]
+    fn page_textures_land_on_whole_pixels() {
+        // A 612 pt page at 2x scrolled to a fractional offset.
+        let rect = Rect::from_min_size(pos2(10.3, 99.77), vec2(612.0, 792.0));
+        let r = pixel_aligned(rect, vec2(1224.0, 1584.0), 2.0);
+        assert_eq!(r.min, pos2(10.5, 100.0));
+        assert_eq!(r.size(), vec2(612.0, 792.0));
+        // A texture rounded up by a pixel is drawn at its own size, not stretched.
+        let r = pixel_aligned(Rect::from_min_size(pos2(0.0, 0.0), vec2(100.2, 50.0)), vec2(201.0, 100.0), 2.0);
+        assert_eq!(r.size(), vec2(100.5, 50.0));
+        // Not a screen-resolution texture (clamped to the GPU limit): left as it was.
+        let big = Rect::from_min_size(pos2(0.3, 0.3), vec2(5000.0, 5000.0));
+        assert_eq!(pixel_aligned(big, vec2(8192.0, 8192.0), 2.0), big);
+        assert_eq!(pixel_aligned(rect, vec2(1224.0, 1584.0), 0.0), rect);
     }
 }
