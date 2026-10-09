@@ -5,7 +5,7 @@
 use egui::{Align, CornerRadius, Layout, Order, Rect, Sense, Vec2, pos2};
 use serde_json::{Value, json};
 
-use crate::theme::{Tokens, regular};
+use crate::theme::Tokens;
 use crate::{WordApp, widgets};
 
 /// Height of the bar (a little taller than the ribbon's 22 pt button row).
@@ -54,6 +54,11 @@ pub fn visible(app: &WordApp) -> bool {
     if app.canvas.drag_selecting() {
         return false;
     }
+    // Never while keytips are showing: the ribbon owns the letters, and the bar's buttons reuse
+    // the ribbon's widgets, so they would record duplicate badges.
+    if app.ui.keytips != crate::keytips::Phase::Off {
+        return false;
+    }
     // Never for a collapsed caret.
     !app.session.sel.is_collapsed()
 }
@@ -68,27 +73,20 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context, selection: Rect, viewport: R
     let t = Tokens::get(ctx);
     // The bar sits above the document but below every popup, and is not movable: it is an overlay
     // pinned to the selection, so moving it would lose the association.
-    let area = egui::Area::new(egui::Id::new("wc_mini_toolbar")).order(Order::Tooltip).interactable(true).fixed_pos(bar.min);
-    let resp = area.show(ctx, |ui| {
+    // Draw the bar pinned above the selection. egui stops a click at the topmost widget, so a
+    // click on the bar never reaches the document underneath.
+    let _area = egui::Area::new(egui::Id::new("wc_mini_toolbar")).order(Order::Tooltip).interactable(true).fixed_pos(bar.min);
+    _area.show(ctx, |ui| {
         ui.set_clip_rect(bar);
-        let fill = if t.dark {
-            egui::Color32::from_rgba_unmultiplied(0x2B, 0x2B, 0x2B, 0xF4)
-        } else {
-            egui::Color32::from_rgba_unmultiplied(0xFF, 0xFF, 0xFF, 0xF4)
-        };
         let painter = ui.painter();
         painter.rect_filled(bar.translate(Vec2::new(0.0, 2.0)), CornerRadius::same(6), t.page_shadow);
-        painter.rect_filled(bar, CornerRadius::same(6), fill);
+        painter.rect_filled(bar, CornerRadius::same(6), t.menu);
         painter.rect_stroke(bar, CornerRadius::same(6), egui::Stroke::new(1.0, t.border_strong), egui::StrokeKind::Inside);
         let inner = bar.shrink2(Vec2::new(PAD_X, 0.0));
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(Layout::left_to_right(Align::Center)));
         child.spacing_mut().item_spacing = Vec2::new(1.0, 0.0);
         content(app, &mut child, &t);
     });
-    // A click that lands on the bar must not also reach the document. egui already stops the
-    // click at the topmost widget; we only make sure the bar itself never looks "hoverable" like
-    // text underneath (the canvas sets the I-beam on hover of its own rect).
-    let _ = resp;
 }
 
 /// The controls, reusing the ribbon's widgets so the bar matches the ribbon exactly.
@@ -183,7 +181,6 @@ fn font_color_menu(ui: &mut egui::Ui, app: &mut WordApp) {
             ui.close();
         }
     });
-    let _ = regular(10.0); // keep the theme font helper referenced by this module's public surface
 }
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
 //! Word-style keytips: Alt (or F10) shows letter badges over ribbon tabs, then over a tab's
 //! controls; the badge's command runs on press. Typing never reaches the document while active.
 
-use egui::{Align2, Color32, CornerRadius, Rect, Stroke, Ui, Vec2};
+use egui::{Align2, CornerRadius, Rect, Stroke, Ui, Vec2};
 
 use crate::WordApp;
 use crate::theme::{Tokens, semibold};
@@ -34,7 +34,7 @@ pub enum Phase {
     /// Badges over the tabs.
     Tabs,
     /// Badges over one tab's groups and buttons.
-    Commands { tab: u8 },
+    Commands,
 }
 
 /// Which ribbon item a letter is bound to, and what pressing it does.
@@ -470,7 +470,7 @@ pub fn badge(ui: &Ui, rect: Rect, letter: &str) {
     let p = ui.painter();
     p.rect_filled(r, CornerRadius::same(3), t.accent);
     p.rect_stroke(r, CornerRadius::same(3), Stroke::new(1.0, t.menu), egui::StrokeKind::Inside);
-    p.text(r.center(), Align2::CENTER_CENTER, letter, semibold(10.0), Color32::WHITE);
+    p.text(r.center(), Align2::CENTER_CENTER, letter, semibold(10.0), t.on_accent);
 }
 
 /// Record a tab badge over a tab's real rect, called as each tab is laid out.
@@ -525,12 +525,12 @@ pub fn handle_key(app: &mut WordApp, key: egui::Key) -> bool {
                         match hit {
                             Some(tab) => {
                                 let _ = app.run("ui.tab", serde_json::json!({ "tab": tab }));
-                                app.ui.keytips = Phase::Commands { tab: 0 };
+                                app.ui.keytips = Phase::Commands;
                             }
                             None => app.ui.keytips = Phase::Off,
                         }
                     }
-                    Phase::Commands { .. } => {
+                    Phase::Commands => {
                         let tab = app.ui.tab.clone();
                         let ls = letters_for(app, &tab);
                         let ctrls = controls(&tab);
@@ -574,28 +574,58 @@ pub fn suppressed(app: &WordApp, ctx: &egui::Context) -> bool {
 /// Read keytip input every frame, before layout, so the frame paints the new state. Suppression
 /// cancels keytips so letters reach the text; Alt still reaches the rest of the UI (the
 /// registry's Alt+letter shortcuts are untouched).
+///
+/// Keytips arm on a bare Alt *release* with no key pressed in between — the same chord Word
+/// uses. On macOS they never arm from Alt at all, because Option is how you type accented
+/// characters there and hijacking it would swallow the next letter.
 pub fn logic(app: &mut WordApp, ctx: &egui::Context) {
     if suppressed(app, ctx) {
         app.ui.keytips = Phase::Off;
         return;
     }
+    // On macOS Option+key types accents, so Alt must never arm keytips there.
+    const ALT_ARMS: bool = !cfg!(target_os = "macos");
     let events: Vec<egui::Event> = ctx.input(|i| i.events.clone());
-    for e in events {
-        if let egui::Event::Key { key, pressed: true, modifiers, .. } = e {
-            if is_alt(key) && !modifiers.any() {
-                app.ui.keytips = if app.ui.keytips == Phase::Tabs { Phase::Off } else { Phase::Tabs };
-            } else if key == egui::Key::F10 && !modifiers.any() {
-                activate(app);
-            } else if app.ui.keytips != Phase::Off {
-                handle_key(app, key);
+    let mut other_key = false;
+    let mut alt_released = false;
+    let mut f10 = false;
+    for e in &events {
+        if let egui::Event::Key { key, pressed, modifiers, .. } = e {
+            if is_alt(*key) {
+                if *pressed && modifiers.any() {
+                    // Alt combined with another modifier is a shortcut, not a keytip chord.
+                    other_key = true;
+                } else if !*pressed && !modifiers.any() {
+                    alt_released = true;
+                }
+            } else if *pressed {
+                other_key = true;
+                if *key == egui::Key::F10 && !modifiers.any() {
+                    f10 = true;
+                }
             }
         }
+    }
+    // Route letter/navigation keys to the keytips while they are showing.
+    for e in &events {
+        if let egui::Event::Key { key, pressed: true, modifiers, .. } = e
+            && app.ui.keytips != Phase::Off
+            && !is_alt(*key)
+            && !(*key == egui::Key::F10 && !modifiers.any())
+        {
+            handle_key(app, *key);
+        }
+    }
+    if ALT_ARMS && alt_released && !other_key {
+        app.ui.keytips = if app.ui.keytips == Phase::Tabs { Phase::Off } else { Phase::Tabs };
+    } else if f10 {
+        activate(app);
     }
     // Publish the state the ribbon widgets read to place their badges, and clear last frame's.
     ctx.data_mut(|d| {
         d.insert_temp(phase_id(), app.ui.keytips);
         d.insert_temp(tab_id(), app.ui.tab.clone());
-        if matches!(app.ui.keytips, Phase::Commands { .. }) {
+        if matches!(app.ui.keytips, Phase::Commands) {
             d.insert_temp(letters_id().with(&app.ui.tab), letters_for(app, &app.ui.tab));
             d.insert_temp(rects_id(), Vec::<(egui::Rect, String)>::new());
         } else {
@@ -611,7 +641,6 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context, ui: &mut Ui) {
     if app.ui.keytips == Phase::Off || suppressed(app, ctx) {
         return;
     }
-    let _ = ctx;
     // Tab badges were recorded during layout; command badges were published to egui memory by
     // the widgets themselves (they own their rects).
     let tabs = std::mem::take(&mut app.keytip_rects);
@@ -700,7 +729,7 @@ mod tests {
         activate(&mut a);
         assert!(handle_key(&mut a, egui::Key::H));
         assert_eq!(a.ui.tab, "Home");
-        assert_eq!(a.ui.keytips, Phase::Commands { tab: 0 });
+        assert_eq!(a.ui.keytips, Phase::Commands);
         assert!(handle_key(&mut a, egui::Key::F));
         assert_eq!(a.ui.keytips, Phase::Off);
     }

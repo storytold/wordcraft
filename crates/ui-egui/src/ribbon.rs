@@ -105,88 +105,63 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin { left: 8, right: 8, top: 4, bottom: 4 }).stroke(Stroke::new(1.0, t.border)),
         )
         .show(ui, |ui| {
+            // Reserve the » strip on the right first, then give the tab's groups the remaining
+            // width. The button appears whenever the measured content is wider than that space,
+            // and clicking it scrolls the groups left ~150pt; no sticky flag, so widening the
+            // window removes it immediately.
+            const OVERFLOW_W: f32 = 18.0;
             let scroll_id = egui::Id::new("ribbon_scroll");
-            let overflow = ui.data(|d| d.get_temp::<bool>(scroll_id)).unwrap_or(false);
-            if overflow {
-                // Nudge the ribbon ~150pt per click (» affordance).
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
                 let avail = ui.available_width();
-                let (ar, aresp) = ui.allocate_exact_size(vec2(18.0, CONTENT_H + LABEL_H), Sense::click());
-                ui.painter().rect_filled(ar, 0.0, if aresp.hovered() { t.hover } else { t.ribbon });
-                ui.painter().rect_stroke(ar, 0.0, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
-                crate::icons::paint(ui.painter(), ar.shrink(2.0), "chevronDoubleRight", t.icon, t.accent);
-                let target = aresp.on_hover_text("More commands (scroll ribbon)");
-                let mut delta = 0.0f32;
-                if target.clicked() {
-                    delta = 150.0;
-                }
-                let mut sa = egui::ScrollArea::horizontal()
+                let off = ui.data(|d| d.get_temp::<f32>(scroll_id.with("off"))).unwrap_or(0.0);
+                let r = egui::ScrollArea::horizontal()
                     .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                     .auto_shrink([false, false])
-                    .max_width(avail - 20.0);
-                if delta != 0.0 {
-                    sa = sa.horizontal_scroll_offset(ui.data(|d| d.get_temp::<f32>(scroll_id.with("off"))).unwrap_or(0.0) + delta);
-                }
-                let r = sa.show(ui, |ui| {
-                    ui.horizontal_top(|ui| {
-                        ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
-                        match app.ui.tab.as_str() {
-                            "Home" => home(app, ui),
-                            "Insert" => insert(app, ui),
-                            "Draw" => draw(app, ui),
-                            "Design" => design(app, ui),
-                            "Layout" => layout(app, ui),
-                            "References" => references(app, ui),
-                            "Mailings" => mailings(app, ui),
-                            "Review" => review(app, ui),
-                            "View" => view(app, ui),
-                            "Help" => help(app, ui),
-                            "Table Design" => table_design(app, ui),
-                            "Table Layout" => table_layout(app, ui),
-                            _ => home(app, ui),
-                        }
-                    });
-                });
-                let off = r.state.offset.x;
-                ui.data_mut(|d| d.insert_temp(scroll_id.with("off"), off));
-                let max = r.content_size.x - r.inner_rect.width();
-                let of = max - off > 1.0 || off > 1.0;
-                if of != overflow {
-                    ui.data_mut(|d| d.insert_temp(scroll_id, of));
-                }
-            } else {
-                // Clear the » affordance and reset the offset, so widening the window removes
-                // it immediately instead of leaving a dead button until the tab changes.
-                if overflow {
-                    ui.data_mut(|d| {
-                        d.insert_temp(scroll_id, false);
-                        d.insert_temp(scroll_id.with("off"), 0.0f32);
-                    });
-                }
-                egui::ScrollArea::horizontal()
-                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-                    .auto_shrink([false, false])
+                    .max_width(avail - OVERFLOW_W)
+                    .horizontal_scroll_offset(off)
                     .show(ui, |ui| {
                         ui.horizontal_top(|ui| {
                             ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
-                            match app.ui.tab.as_str() {
-                                "Home" => home(app, ui),
-                                "Insert" => insert(app, ui),
-                                "Draw" => draw(app, ui),
-                                "Design" => design(app, ui),
-                                "Layout" => layout(app, ui),
-                                "References" => references(app, ui),
-                                "Mailings" => mailings(app, ui),
-                                "Review" => review(app, ui),
-                                "View" => view(app, ui),
-                                "Help" => help(app, ui),
-                                "Table Design" => table_design(app, ui),
-                                "Table Layout" => table_layout(app, ui),
-                                _ => home(app, ui),
-                            }
+                            ribbon_tab(app, ui);
                         });
                     });
-            }
+                let max_off = (r.content_size.x - r.inner_rect.width()).max(0.0);
+                let clamped = off.clamp(0.0, max_off);
+                if (clamped - off).abs() > 0.5 {
+                    ui.data_mut(|d| d.insert_temp(scroll_id.with("off"), clamped));
+                }
+                if max_off > 1.0 {
+                    let (ar, aresp) = ui.allocate_exact_size(vec2(OVERFLOW_W, CONTENT_H + LABEL_H), Sense::click());
+                    ui.painter().rect_filled(ar, 0.0, if aresp.hovered() { t.hover } else { t.ribbon });
+                    ui.painter().rect_stroke(ar, 0.0, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+                    icons::paint(ui.painter(), ar.shrink(2.0), "chevronDoubleRight", t.icon, t.accent);
+                    if aresp.on_hover_text("More commands (scroll ribbon)").clicked() {
+                        let next = (clamped + 150.0).clamp(0.0, max_off);
+                        ui.data_mut(|d| d.insert_temp(scroll_id.with("off"), next));
+                    }
+                }
+            });
         });
+}
+
+/// Dispatch the active tab's groups. Kept as one closure so the ribbon body has a single copy.
+fn ribbon_tab(app: &mut WordApp, ui: &mut Ui) {
+    match app.ui.tab.as_str() {
+        "Home" => home(app, ui),
+        "Insert" => insert(app, ui),
+        "Draw" => draw(app, ui),
+        "Design" => design(app, ui),
+        "Layout" => layout(app, ui),
+        "References" => references(app, ui),
+        "Mailings" => mailings(app, ui),
+        "Review" => review(app, ui),
+        "View" => view(app, ui),
+        "Help" => help(app, ui),
+        "Table Design" => table_design(app, ui),
+        "Table Layout" => table_layout(app, ui),
+        _ => home(app, ui),
+    }
 }
 
 fn stack(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
