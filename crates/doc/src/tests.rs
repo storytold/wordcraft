@@ -183,3 +183,31 @@ fn prune_text_boxes_drops_only_unshown_ones() {
     assert_eq!(kept, vec![shown, nested, hdr, in_header]);
     assert_eq!(d.prune_text_boxes(), 0);
 }
+
+#[test]
+fn notes_in_text_box_follow_nested_boxes_once() {
+    let shape = |story| InlineObject::Shape {
+        kind: para::ShapeKind::TextBox,
+        w: 50.0,
+        h: 20.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Default::default(),
+        story: Some(story),
+    };
+    let note = |id| InlineObject::NoteRef { kind: para::NoteKind::Footnote, id, custom: String::new() };
+    let mut d = Document::new();
+    let outer = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::new())]);
+    let inner = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::new())]);
+    let (n1, n2) = (d.add_part(PartKind::Footnote, Vec::new()), d.add_part(PartKind::Footnote, Vec::new()));
+    let at = |id| Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 };
+    // outer: [note n1][box inner][box outer (itself)]; inner: [note n2]
+    d.insert_object(&at(outer), shape(outer), &CharProps::default()).unwrap();
+    d.insert_object(&at(outer), shape(inner), &CharProps::default()).unwrap();
+    d.insert_object(&at(outer), note(n1), &CharProps::default()).unwrap();
+    d.insert_object(&at(inner), note(n2), &CharProps::default()).unwrap();
+    assert_eq!(d.notes_in_text_box(outer), vec![n1, n2]);
+    assert_eq!(d.notes_in_text_box(inner), vec![n2]);
+    assert!(d.notes_in_text_box(n1).is_empty(), "not a text box");
+}

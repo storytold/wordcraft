@@ -424,8 +424,10 @@ impl Writer<'_> {
                     }
                 }
                 w.close("wps:spPr");
-                if let Some(part) = story.and_then(|s| self.doc.parts.get(&s))
-                    && depth < 4
+                // Its text, within the same bounds layout shows boxes inside boxes with.
+                if let Some(id) = *story
+                    && let Some(part) = self.doc.parts.get(&id).filter(|p| p.kind == wordcraft_doc::PartKind::TextBox)
+                    && self.boxes.enter(id)
                 {
                     w.open("wps:txbx", &[]);
                     w.open("w:txbxContent", &[]);
@@ -433,6 +435,7 @@ impl Writer<'_> {
                     self.blocks(w, &blocks, rels, false, depth + 1);
                     w.close("w:txbxContent");
                     w.close("wps:txbx");
+                    self.boxes.leave();
                 }
                 w.empty("wps:bodyPr", &[]);
                 w.close("wps:wsp");

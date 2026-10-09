@@ -75,6 +75,8 @@ pub(crate) struct Writer<'d> {
     toc_end_here: bool,
     /// Media keys actually referenced by a written drawing.
     used_media: std::collections::BTreeSet<String>,
+    /// Bounds writing text boxes inside text boxes (as layout shows them).
+    boxes: wordcraft_doc::BoxBudget,
 }
 
 const CT_MAIN: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml";
@@ -98,6 +100,7 @@ pub fn write(doc: &Document) -> Result<Vec<u8>, DocxError> {
         toc_hold_end: false,
         toc_end_here: false,
         used_media: Default::default(),
+        boxes: wordcraft_doc::BoxBudget::default(),
     };
     wr.assign_media();
     let mut entries: Vec<(String, Vec<u8>)> = Vec::new();

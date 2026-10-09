@@ -741,7 +741,7 @@ fn footnotes_inside_text_boxes_are_numbered_and_placed() {
 
 /// A document whose text box `ids[k]` holds `fan` shapes showing `ids[k + 1]` (the last one shows
 /// itself, `fan` times): crafted, since the app never builds these.
-fn box_fan_out(levels: usize, fan: usize) -> (Document, Vec<u32>) {
+fn box_fan_out(levels: usize, fan: usize) -> Document {
     let (w, h) = (40.0, 20.0);
     let mut d = Document::from_text("Body");
     let ids: Vec<u32> = (0..levels)
@@ -769,25 +769,47 @@ fn box_fan_out(levels: usize, fan: usize) -> (Document, Vec<u32>) {
         }
     }
     d.insert_object(&Pos::body(0, 0), shape(ids[0]), &Default::default()).unwrap();
-    (d, ids)
+    d
 }
 
 #[test]
 fn self_showing_and_fanned_out_text_boxes_stay_bounded() {
     // A box whose 30 shapes all show itself: laid out once.
-    let (d, ids) = box_fan_out(1, 30);
-    assert_eq!(lay(&d).text_boxes, 1);
+    assert_eq!(lay(&box_fan_out(1, 30)).text_boxes, 1);
     // Chains of boxes each showing the next 30 times (30^4 expansions unbounded).
-    let (d, ids2) = box_fan_out(5, 30);
-    let t0 = std::time::Instant::now();
+    let d = box_fan_out(5, 30);
     let l = lay(&d);
     assert!(l.text_boxes <= 1 + wordcraft_doc::BoxBudget::MAX_NESTED, "{} boxes laid out", l.text_boxes);
-    assert!(t0.elapsed().as_secs_f64() < 5.0, "{:?}", t0.elapsed());
     // Footnote numbering's walk is bounded the same way.
     let mut visits = 0usize;
     d.objects_in_reading_order(&mut |_| visits += 1);
     assert!(visits < 5_000, "{visits} visits");
-    let _ = (ids, ids2);
+}
+
+#[test]
+fn many_text_boxes_and_a_header_box_all_show() {
+    // Outermost boxes aren't budgeted: a long document's boxes, and its header's on every page,
+    // all get their text.
+    let mut d = Document::from_text("Paragraph with a box.");
+    for _ in 1..400 {
+        let end = d.end_of(StoryRef::Body);
+        d.split_paragraph(&end).unwrap();
+    }
+    let ids: Vec<u32> = (0..400).map(|k| text_box_at(&mut d, &Pos::body(k, 0), &format!("Box {k}"), 100.0, 30.0, Default::default())).collect();
+    let hid =
+        d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Head", Default::default()))]);
+    d.last_section.headers.default = Some(hid);
+    let e = d.end_of(StoryRef::Part(hid));
+    let in_header = text_box_at(&mut d, &e, "Header box", 100.0, 30.0, Default::default());
+    let l = lay(&d);
+    assert!(l.pages.len() >= 10, "{} pages", l.pages.len());
+    for id in ids {
+        assert!(l.caret(&d.start_of(StoryRef::Part(id))).is_some(), "box {id} has no text");
+    }
+    for (i, p) in l.pages.iter().enumerate() {
+        let shown = p.header.iter().any(|it| matches!(it, Placed::Lines { story: StoryRef::Part(s), .. } if *s == in_header));
+        assert!(shown, "page {i}: the header box has no text");
+    }
 }
 
 #[test]

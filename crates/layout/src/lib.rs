@@ -911,7 +911,9 @@ fn place_objects(
                 });
             }
             let text_box = match obj {
-                InlineObject::Shape { story: Some(id), .. } => ctx.doc.parts.get(id).map(|part| (*id, part.blocks.clone())),
+                InlineObject::Shape { story: Some(id), .. } if ctx.doc.parts.get(id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox) => {
+                    Some(*id)
+                }
                 _ => None,
             };
             front.push(Placed::Object {
@@ -919,12 +921,13 @@ fn place_objects(
                 story,
                 path: Path(path.to_vec()),
                 off: c.start,
-                text_box: text_box.as_ref().map(|t| t.0),
+                text_box,
                 wrap: float.wrap,
                 origin: Point::new(frame.col_x, frame.para_y),
             });
             // Its text, unless the box budget says no (a box inside itself, too deep, too many).
-            let Some((id, blocks)) = text_box.filter(|(id, _)| ctx.boxes.enter(*id)) else { continue };
+            let Some(id) = text_box.filter(|id| ctx.boxes.enter(*id)) else { continue };
+            let blocks = ctx.doc.parts.get(&id).map(|p| p.blocks.clone()).unwrap_or_default();
             let (inner, _) = layout_box(ctx, StoryRef::Part(id), &blocks, &[], (rect.w - 2.0 * BOX_INSET_X).max(12.0), None, depth + 1, None);
             ctx.boxes.leave();
             let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
