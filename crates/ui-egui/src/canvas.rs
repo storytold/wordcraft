@@ -745,8 +745,8 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
             }
         }
         if issue.get("kind").and_then(|k| k.as_str()) == Some("spelling") {
-            item(ui, app, "Ignore All", "review.ignoreAll", json!({}));
-            item(ui, app, "Add to Dictionary", "review.addToDictionary", json!({}));
+            item(ui, app, "התעלם מהכול", "review.ignoreAll", json!({}));
+            item(ui, app, "הוסף למילון", "review.addToDictionary", json!({}));
         }
         ui.separator();
     }
@@ -776,23 +776,23 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
             }
         });
     }
-    item(ui, app, "Font…", "ui.dialog", json!({"name": "font"}));
-    item(ui, app, "Paragraph…", "ui.dialog", json!({"name": "paragraph"}));
+    item(ui, app, "גופן…", "ui.dialog", json!({"name": "font"}));
+    item(ui, app, "פסקה…", "ui.dialog", json!({"name": "paragraph"}));
     item(ui, app, "Link…", "ui.dialog", json!({"name": "link"}));
     item(ui, app, "New Comment", "review.newComment", json!({}));
     if app.session.sel.focus.path.cell().is_some() {
         ui.separator();
         ui.menu_button("Insert", |ui| {
-            item(ui, app, "Insert Rows Above", "table.insertRowAbove", json!({}));
-            item(ui, app, "Insert Rows Below", "table.insertRowBelow", json!({}));
-            item(ui, app, "Insert Columns to the Left", "table.insertColumnLeft", json!({}));
-            item(ui, app, "Insert Columns to the Right", "table.insertColumnRight", json!({}));
+            item(ui, app, "הוסף שורות מעל", "table.insertRowAbove", json!({}));
+            item(ui, app, "הוסף שורות מתחת", "table.insertRowBelow", json!({}));
+            item(ui, app, "הוסף עמודות משמאל", "table.insertColumnLeft", json!({}));
+            item(ui, app, "הוסף עמודות מימין", "table.insertColumnRight", json!({}));
         });
         ui.menu_button("Delete", |ui| {
-            item(ui, app, "Delete Rows", "table.deleteRow", json!({}));
-            item(ui, app, "Delete Columns", "table.deleteColumn", json!({}));
-            item(ui, app, "Delete Table", "table.deleteTable", json!({}));
+            item(ui, app, "מחק שורות", "table.deleteRow", json!({}));
+            item(ui, app, "מחק עמודות", "table.deleteColumn", json!({}));
+            item(ui, app, "מחק טבלה", "table.deleteTable", json!({}));
         });
-        item(ui, app, "Merge Cells", "table.merge", json!({}));
+        item(ui, app, "מזג תאים", "table.merge", json!({}));
     }
 }

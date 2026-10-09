@@ -6,6 +6,9 @@ use wordcraft_doc::StoryRef;
 
 use crate::theme::{Tokens, medium, regular, semibold};
 use crate::{WordApp, icons};
+use crate::i18n::{Language, tr};
+
+fn tl(app: &WordApp, s: &str) -> String { tr(app.ui_language(), s) }
 
 fn qat_button(ui: &mut Ui, app: &mut WordApp, icon: &str, tip: &str, id: &str, enabled: bool) {
     let t = Tokens::get(ui.ctx());
@@ -65,6 +68,12 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                     }
                 }
                 ui.add_space(8.0);
+                let lang_label = if app.is_rtl() { "EN" } else { "עב" };
+                if ui.button(egui::RichText::new(lang_label).font(semibold(11.0))).on_hover_text(tl(app, "Language")).clicked() {
+                    let next = if app.is_rtl() { "en" } else { "he" };
+                    let _ = app.run("ui.language", json!({"language": next}));
+                    ui.ctx().request_repaint();
+                }
                 qat_button(ui, app, "save", "Save", "file.save", true);
                 let can_undo = app.session.can_undo();
                 let can_redo = app.session.can_redo();
@@ -100,7 +109,7 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                         }
                         ui.add_space(8.0);
                     }
-                    // Search ("Tell me").
+                    // Search ("אמור לי").
                     let (r, resp) = ui.allocate_exact_size(vec2(260.0, 26.0), Sense::click());
                     ui.painter().rect(r, 6.0, if resp.hovered() { t.input } else { t.ribbon }, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
                     icons::paint(ui.painter(), Rect::from_min_size(r.min + vec2(8.0, 5.0), vec2(16.0, 16.0)), "search", t.text_dim, t.accent);
@@ -120,7 +129,7 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                 } else if app.session.path.is_some() {
                     "Saved"
                 } else {
-                    "Not saved"
+                    "לא נשמר"
                 }
             );
             let g = ui.ctx().fonts_mut(|f| f.layout_no_wrap(title.clone(), semibold(12.5), t.text));
@@ -166,7 +175,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                 if app.session.sel.focus.story != StoryRef::Body {
                     st(ui, "Editing header/footer");
                 }
-                st(ui, "English (United States)");
+                st(ui, if app.is_rtl() { "עברית (ישראל)" } else { "English (United States)" });
                 if app.session.doc.settings.track_changes {
                     st(ui, "Track Changes: On");
                 }
@@ -184,7 +193,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     {
                         let _ = app.run("ui.dialog", json!({"name": "zoom"}));
                     }
-                    if small_icon(ui, "plus", "Zoom In") {
+                    if small_icon(ui, "plus", "הגדל תצוגה") {
                         let _ = app.run("view.zoomIn", json!({}));
                     }
                     // Zoom slider (10%–500%, 100% in the middle).
@@ -194,7 +203,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     if ui.add(slider).changed() {
                         let _ = app.run("view.zoom", json!({"value": (v * 100.0).round()}));
                     }
-                    if small_icon(ui, "minus", "Zoom Out") {
+                    if small_icon(ui, "minus", "הקטן תצוגה") {
                         let _ = app.run("view.zoomOut", json!({}));
                     }
                     ui.add_space(10.0);
@@ -222,7 +231,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                         ui.painter().rect_filled(r, 3.0, t.hover);
                     }
                     icons::paint(ui.painter(), Rect::from_min_size(r.min + vec2(2.0, 2.0), vec2(16.0, 16.0)), "focus", t.icon, t.accent);
-                    ui.painter().text(pos2(r.min.x + 22.0, r.center().y), Align2::LEFT_CENTER, "Focus", regular(11.5), t.text_dim);
+                    ui.painter().text(pos2(r.min.x + 22.0, r.center().y), Align2::LEFT_CENTER, tl(app, "Focus"), regular(11.5), t.text_dim);
                     if resp.clicked() {
                         let _ = app.run("view.focus", json!({}));
                     }

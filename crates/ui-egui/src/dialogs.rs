@@ -274,19 +274,19 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::Font { .. } => "Font",
         Dialog::Paragraph { .. } => "Paragraph",
         Dialog::Find { replace_mode: false, .. } => "Find",
-        Dialog::Find { .. } => "Find and Replace",
+        Dialog::Find { .. } => "חיפוש והחלפה",
         Dialog::Goto { .. } => "Go To",
         Dialog::InsertTable { .. } => "Insert Table",
-        Dialog::PageSetup { .. } => "Page Setup",
-        Dialog::Link { .. } => "Insert Hyperlink",
+        Dialog::PageSetup { .. } => "הגדרת עמוד",
+        Dialog::Link { .. } => "הוסף היפר-קישור",
         Dialog::Bookmark { .. } => "Bookmark",
-        Dialog::WordCount { .. } => "Word Count",
+        Dialog::WordCount { .. } => "ספירת מילים",
         Dialog::Zoom { .. } => "Zoom",
         Dialog::Watermark { .. } => "Custom Watermark",
-        Dialog::NewStyle { .. } => "Create New Style",
-        Dialog::ModifyStyle { .. } => "Modify Style",
-        Dialog::Commands { .. } => "Search Commands",
-        Dialog::About { .. } => "About WordCraft",
+        Dialog::NewStyle { .. } => "צור סגנון חדש",
+        Dialog::ModifyStyle { .. } => "שנה סגנון",
+        Dialog::Commands { .. } => "חיפוש פקודות",
+        Dialog::About { .. } => "אודות WordCraft",
     };
     egui::Window::new(title).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, -40.0)).open(&mut open).show(
         ctx,
@@ -333,7 +333,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 ui.label("Font color:");
                 ui.text_edit_singleline(color);
                 ui.end_row();
-                ui.label("Spacing (pt):");
+                ui.label("מרווח (נקודות):");
                 ui.add(egui::DragValue::new(spacing).speed(0.1).range(-20.0..=20.0));
                 ui.end_row();
             });
@@ -377,7 +377,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             ok || cancel
         }
         Dialog::Paragraph { align, left, right, first, before, after, line, keep_next, keep_lines, page_break, widow } => {
-            ui.label(egui::RichText::new("General").font(semibold(12.5)));
+            ui.label(egui::RichText::new("כללי").font(semibold(12.5)));
             egui::ComboBox::from_label("Alignment").selected_text(align.clone()).show_ui(ui, |ui| {
                 for a in ["left", "center", "right", "justify"] {
                     ui.selectable_value(align, a.to_string(), a);
@@ -390,7 +390,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 ui.label("Right:");
                 ui.add(egui::DragValue::new(right).speed(0.05).suffix("\"").max_decimals(2));
                 ui.end_row();
-                ui.label("First line:");
+                ui.label("שורה ראשונה:");
                 ui.add(egui::DragValue::new(first).speed(0.05).suffix("\"").max_decimals(2));
                 ui.end_row();
             });
@@ -398,17 +398,17 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             egui::Grid::new("sp").num_columns(4).show(ui, |ui| {
                 ui.label("Before:");
                 ui.add(egui::DragValue::new(before).speed(1.0).range(0.0..=1584.0).suffix(" pt"));
-                ui.label("Line spacing:");
+                ui.label("מרווח שורות:");
                 ui.add(egui::DragValue::new(line).speed(0.05).range(0.5..=5.0));
                 ui.end_row();
                 ui.label("After:");
                 ui.add(egui::DragValue::new(after).speed(1.0).range(0.0..=1584.0).suffix(" pt"));
                 ui.end_row();
             });
-            ui.label(egui::RichText::new("Line and Page Breaks").font(semibold(12.5)));
+            ui.label(egui::RichText::new("מעברי שורות ועמודים").font(semibold(12.5)));
             ui.checkbox(widow, "Widow/Orphan control");
-            ui.checkbox(keep_next, "Keep with next");
-            ui.checkbox(keep_lines, "Keep lines together");
+            ui.checkbox(keep_next, "השאר עם הבא");
+            ui.checkbox(keep_lines, "השאר שורות יחד");
             ui.checkbox(page_break, "Page break before");
             let (ok, cancel) = buttons(ui, "OK");
             if ok {
@@ -434,18 +434,18 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 }
             });
             ui.horizontal(|ui| {
-                ui.label("Find what:");
+                ui.label("חפש את:");
                 ui.add(egui::TextEdit::singleline(query).desired_width(240.0));
             });
             if *replace_mode {
                 ui.horizontal(|ui| {
-                    ui.label("Replace with:");
+                    ui.label("החלף ב:");
                     ui.add(egui::TextEdit::singleline(replace).desired_width(228.0));
                 });
             }
             ui.horizontal(|ui| {
-                ui.checkbox(match_case, "Match case");
-                ui.checkbox(whole_word, "Whole words");
+                ui.checkbox(match_case, "התאם רישיות");
+                ui.checkbox(whole_word, "מילים שלמות");
                 ui.checkbox(regex, "Wildcards (regex)");
             });
             if !message.is_empty() {
@@ -455,7 +455,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             let mut close = false;
             ui.horizontal(|ui| {
                 if *replace_mode {
-                    if ui.button("Replace All").clicked() {
+                    if ui.button("החלף הכול").clicked() {
                         match app.run("edit.replaceAll", opts.clone()) {
                             Ok(r) => *message = format!("All done. We made {} replacements.", r["replaced"]),
                             Err(e) => *message = e,
@@ -465,14 +465,14 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                         let _ = app.run("edit.replace", opts.clone());
                     }
                 }
-                if ui.button("Find Next").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                if ui.button("חפש הבא").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     let _ = app.session.run("edit.find", &opts);
                     match app.run("edit.findNext", json!({})) {
                         Ok(r) => *message = format!("Match {} of {}", r["index"].as_u64().unwrap_or(0) + 1, r["count"]),
                         Err(e) => *message = e,
                     }
                 }
-                if ui.button("Close").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                if ui.button("סגור").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                     close = true;
                 }
             });
@@ -491,10 +491,10 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         }
         Dialog::InsertTable { rows, cols } => {
             egui::Grid::new("it").num_columns(2).show(ui, |ui| {
-                ui.label("Number of columns:");
+                ui.label("מספר עמודות:");
                 ui.add(egui::DragValue::new(cols).range(1..=63));
                 ui.end_row();
-                ui.label("Number of rows:");
+                ui.label("מספר שורות:");
                 ui.add(egui::DragValue::new(rows).range(1..=1000));
                 ui.end_row();
             });
@@ -533,7 +533,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         }
         Dialog::Link { url, text } => {
             egui::Grid::new("lnk").num_columns(2).show(ui, |ui| {
-                ui.label("Text to display:");
+                ui.label("טקסט להצגה:");
                 ui.text_edit_singleline(text);
                 ui.end_row();
                 ui.label("Address:");
@@ -564,11 +564,11 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         Dialog::WordCount { stats } => {
             egui::Grid::new("wc").num_columns(2).spacing(vec2(30.0, 6.0)).show(ui, |ui| {
                 for (l, k) in [
-                    ("Pages", "pages"),
+                    ("עמודים", "pages"),
                     ("Words", "words"),
-                    ("Characters (no spaces)", "characters"),
-                    ("Characters (with spaces)", "charactersWithSpaces"),
-                    ("Paragraphs", "paragraphs"),
+                    ("תווים (ללא רווחים)", "characters"),
+                    ("תווים (עם רווחים)", "charactersWithSpaces"),
+                    ("פסקאות", "paragraphs"),
                     ("Lines", "lines"),
                 ] {
                     ui.label(l);
@@ -576,7 +576,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                     ui.end_row();
                 }
             });
-            let (ok, cancel) = buttons(ui, "Close");
+            let (ok, cancel) = buttons(ui, "סגור");
             ok || cancel
         }
         Dialog::Zoom { percent } => {
@@ -588,10 +588,10 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             ui.add(egui::Slider::new(percent, 10.0..=500.0).suffix("%"));
             let mut fit = None;
             ui.horizontal(|ui| {
-                if ui.button("Page width").clicked() {
+                if ui.button("רוחב עמוד").clicked() {
                     fit = Some("pageWidth");
                 }
-                if ui.button("Whole page").clicked() {
+                if ui.button("עמוד שלם").clicked() {
                     fit = Some("onePage");
                 }
                 if ui.button("Many pages").clicked() {
@@ -628,7 +628,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 ui.label("Name:");
                 ui.text_edit_singleline(name);
                 ui.end_row();
-                ui.label("Style based on:");
+                ui.label("סגנון מבוסס על:");
                 ui.text_edit_singleline(based_on);
                 ui.end_row();
             });
@@ -653,7 +653,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 ui.label("Color:");
                 ui.text_edit_singleline(color);
                 ui.end_row();
-                ui.label("Space before/after:");
+                ui.label("מרווח לפני/אחרי:");
                 ui.horizontal(|ui| {
                     ui.add(egui::DragValue::new(before).range(0.0..=1584.0));
                     ui.add(egui::DragValue::new(after).range(0.0..=1584.0));
@@ -703,7 +703,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         Dialog::About { tab } => {
             ui.set_width(660.0);
             ui.horizontal(|ui| {
-                for (i, l) in ["About", "Contributors", "Models"].into_iter().enumerate() {
+                for (i, l) in ["אודות", "תורמים", "מודלים"].into_iter().enumerate() {
                     let i = i as u8;
                     if ui.selectable_label(*tab == i, l).clicked() {
                         *tab = i;
@@ -719,7 +719,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                     ui.label(format!(
                         "Version {} ({})",
                         env!("CARGO_PKG_VERSION"),
-                        option_env!("WORDCRAFT_BUILD_SHA").map(|s| s.get(..8).unwrap_or(s)).unwrap_or("development build")
+                        option_env!("WORDCRAFT_BUILD_SHA").map(|s| s.get(..8).unwrap_or(s)).unwrap_or("גרסת פיתוח")
                     ));
                     ui.label("A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.");
                     ui.add_space(6.0);
@@ -732,7 +732,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                     );
                 }
             }
-            let (ok, cancel) = buttons(ui, "Close");
+            let (ok, cancel) = buttons(ui, "סגור");
             ok || cancel
         }
     }

@@ -9,18 +9,18 @@ use crate::{WordApp, icons};
 const PAGES: [(&str, &str); 9] = [
     ("home", "Home"),
     ("new", "New"),
-    ("open", "Open"),
-    ("info", "Info"),
-    ("save", "Save"),
-    ("saveAs", "Save As"),
-    ("print", "Print"),
-    ("export", "Export"),
-    ("options", "Options"),
+    ("open", "פתח"),
+    ("info", "מידע"),
+    ("save", "שמור"),
+    ("saveAs", "שמור בשם"),
+    ("print", "הדפס"),
+    ("export", "ייצוא"),
+    ("options", "אפשרויות"),
 ];
 
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    egui::Panel::left("backstage_nav")
+    if app.is_rtl() { egui::Panel::right("backstage_nav") } else { egui::Panel::left("backstage_nav") }
         .exact_size(200.0)
         .frame(egui::Frame::NONE.fill(APP_COLOR).inner_margin(egui::Margin { left: 0, right: 0, top: 12, bottom: 12 }))
         .show(ui, |ui| {
@@ -47,7 +47,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
                 ui.painter().text(
                     pos2(r.min.x + 22.0, r.center().y),
-                    Align2::LEFT_CENTER,
+                    if app.is_rtl() { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER },
                     label,
                     if active { semibold(14.0) } else { medium(14.0) },
                     egui::Color32::WHITE,
@@ -66,12 +66,12 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
             }
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                for (label, id) in [("About", "about"), ("Discord community", "discord")] {
+                for (label, id) in [("אודות", "about"), ("קהילת Discord", "discord")] {
                     let (r, resp) = ui.allocate_exact_size(vec2(200.0, 32.0), Sense::click());
                     if resp.hovered() {
                         ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(26));
                     }
-                    ui.painter().text(pos2(r.min.x + 22.0, r.center().y), Align2::LEFT_CENTER, label, regular(13.0), egui::Color32::WHITE);
+                    ui.painter().text(pos2(r.min.x + 22.0, r.center().y), if app.is_rtl() { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER }, label, regular(13.0), egui::Color32::WHITE);
                     if resp.clicked() {
                         if id == "discord" {
                             let _ = app.run("ui.discord", json!({}));
@@ -144,20 +144,20 @@ fn new_page(app: &mut WordApp, ui: &mut Ui) {
     heading(
         ui,
         if hour < 12 {
-            "Good morning"
+            "בוקר טוב"
         } else if hour < 18 {
-            "Good afternoon"
+            "אחר צהריים טובים"
         } else {
-            "Good evening"
+            "ערב טוב"
         },
     );
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(18.0, 0.0);
-        template_tile(ui, app, "Blank document", "blank");
-        template_tile(ui, app, "Studio handbook (sample)", "sample");
-        template_tile(ui, app, "Letter", "letter");
-        template_tile(ui, app, "Résumé", "resume");
-        template_tile(ui, app, "Report", "report");
+        template_tile(ui, app, "מסמך ריק", "blank");
+        template_tile(ui, app, "מדריך סטודיו (דוגמה)", "sample");
+        template_tile(ui, app, "מכתב", "letter");
+        template_tile(ui, app, "קורות חיים", "resume");
+        template_tile(ui, app, "דוח", "report");
     });
     ui.add_space(28.0);
     open_list(app, ui);
@@ -165,10 +165,10 @@ fn new_page(app: &mut WordApp, ui: &mut Ui) {
 
 fn open_list(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    ui.label(egui::RichText::new("Recent").font(semibold(16.0)));
+    ui.label(egui::RichText::new("אחרונים").font(semibold(16.0)));
     ui.add_space(6.0);
     if app.ui.recent.is_empty() {
-        ui.label(egui::RichText::new("Documents you open will show up here.").color(t.text_dim));
+        ui.label(egui::RichText::new("מסמכים שתפתח יופיעו כאן.").color(t.text_dim));
     }
     for p in app.ui.recent.clone() {
         let name = std::path::Path::new(&p).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(p.clone());
@@ -188,8 +188,8 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
 }
 
 fn open_page(app: &mut WordApp, ui: &mut Ui) {
-    heading(ui, "Open");
-    if ui.button(egui::RichText::new("📂  Browse…").font(medium(14.0))).clicked() {
+    heading(ui, "פתח");
+    if ui.button(egui::RichText::new("📂  עיון…").font(medium(14.0))).clicked() {
         let _ = app.run("ui.openFileDialog", json!({}));
     }
     ui.add_space(18.0);
@@ -197,15 +197,15 @@ fn open_page(app: &mut WordApp, ui: &mut Ui) {
 }
 
 fn info_page(app: &mut WordApp, ui: &mut Ui) {
-    heading(ui, "Info");
+    heading(ui, "מידע");
     let info = app.session.run("file.info", &json!({})).unwrap_or_default();
     ui.columns(2, |cols| {
         let ui = &mut cols[0];
-        ui.label(egui::RichText::new("Properties").font(semibold(15.0)));
+        ui.label(egui::RichText::new("מאפיינים").font(semibold(15.0)));
         let mut props = app.session.doc.core.clone();
         let mut changed = false;
         egui::Grid::new("props").num_columns(2).spacing(vec2(12.0, 6.0)).show(ui, |ui| {
-            for (l, v) in [("Title", &mut props.title), ("Subject", &mut props.subject), ("Author", &mut props.creator), ("Keywords", &mut props.keywords), ("Category", &mut props.category)] {
+            for (l, v) in [("כותרת", &mut props.title), ("נושא", &mut props.subject), ("מחבר", &mut props.creator), ("מילות מפתח", &mut props.keywords), ("קטגוריה", &mut props.category)] {
                 ui.label(l);
                 changed |= ui.text_edit_singleline(v).lost_focus();
                 ui.end_row();
@@ -215,27 +215,27 @@ fn info_page(app: &mut WordApp, ui: &mut Ui) {
             let _ = app.run("file.properties", json!({"title": props.title, "subject": props.subject, "author": props.creator, "keywords": props.keywords, "category": props.category}));
         }
         let ui = &mut cols[1];
-        ui.label(egui::RichText::new("Statistics").font(semibold(15.0)));
-        for (l, k) in [("Pages", "pages"), ("Words", "words"), ("Paragraphs", "paragraphs"), ("Sections", "sections"), ("Comments", "comments")] {
+        ui.label(egui::RichText::new("סטטיסטיקה").font(semibold(15.0)));
+        for (l, k) in [("עמודים", "pages"), ("Words", "words"), ("פסקאות", "paragraphs"), ("מקטעים", "sections"), ("הערות", "comments")] {
             ui.label(format!("{l}: {}", info.get(k).map(|v| v.to_string()).unwrap_or_default()));
         }
-        ui.label(format!("Location: {}", info.get("path").and_then(|v| v.as_str()).unwrap_or("Not saved yet")));
+        ui.label(format!("Location: {}", info.get("path").and_then(|v| v.as_str()).unwrap_or("טרם נשמר")));
     });
 }
 
 fn export_page(app: &mut WordApp, ui: &mut Ui) {
-    heading(ui, if app.ui.backstage_page == "print" { "Print" } else { "Export" });
-    ui.label("Save a copy in another format. Printing goes through a PDF you can print from any viewer.");
+    heading(ui, if app.ui.backstage_page == "print" { "הדפס" } else { "ייצוא" });
+    ui.label("שמור עותק בפורמט אחר. ההדפסה מתבצעת באמצעות PDF שניתן להדפיס מכל מציג.");
     ui.add_space(12.0);
     for (label, ext) in [
-        ("PDF document (*.pdf)", "pdf"),
-        ("Word document (*.docx)", "docx"),
-        ("OpenDocument Text (*.odt)", "odt"),
-        ("Rich Text Format (*.rtf)", "rtf"),
-        ("Web page (*.html)", "html"),
+        ("מסמך PDF (*.pdf)", "pdf"),
+        ("מסמך Word (*.docx)", "docx"),
+        ("טקסט OpenDocument (*.odt)", "odt"),
+        ("טקסט עשיר (*.rtf)", "rtf"),
+        ("דף אינטרנט (*.html)", "html"),
         ("Markdown (*.md)", "md"),
-        ("Plain text (*.txt)", "txt"),
-        ("Page image (*.png)", "png"),
+        ("טקסט פשוט (*.txt)", "txt"),
+        ("תמונת עמוד (*.png)", "png"),
     ] {
         if ui.add(egui::Button::new(egui::RichText::new(label).font(medium(13.5))).min_size(vec2(320.0, 34.0))).clicked() {
             let name = format!("{}.{ext}", app.title_stem());
@@ -252,32 +252,32 @@ fn export_page(app: &mut WordApp, ui: &mut Ui) {
 }
 
 fn options_page(app: &mut WordApp, ui: &mut Ui) {
-    heading(ui, "Options");
-    ui.label(egui::RichText::new("General").font(semibold(15.0)));
+    heading(ui, "אפשרויות");
+    ui.label(egui::RichText::new("כללי").font(semibold(15.0)));
     ui.horizontal(|ui| {
-        ui.label("User name:");
+        ui.label("שם משתמש:");
         let mut n = app.session.author.clone();
         if ui.text_edit_singleline(&mut n).changed() {
             app.session.author = n;
         }
     });
     let mut dark = app.ui.dark;
-    if ui.checkbox(&mut dark, "Dark mode").changed() {
+    if ui.checkbox(&mut dark, "מצב כהה").changed() {
         let _ = app.run("ui.dark", json!({"value": dark}));
     }
-    ui.checkbox(&mut app.autosave, "AutoSave documents that have been saved");
-    ui.checkbox(&mut app.ui.show_discord, "Show the community button in the title bar");
+    ui.checkbox(&mut app.autosave, "שמירה אוטומטית של מסמכים שנשמרו");
+    ui.checkbox(&mut app.ui.show_discord, "הצג את כפתור הקהילה בשורת הכותרת");
     ui.add_space(10.0);
-    ui.label(egui::RichText::new("Display").font(semibold(15.0)));
+    ui.label(egui::RichText::new("תצוגה").font(semibold(15.0)));
     let mut marks = app.session.view.marks;
-    if ui.checkbox(&mut marks, "Show all formatting marks").changed() {
+    if ui.checkbox(&mut marks, "הצג את כל סימני העיצוב").changed() {
         let _ = app.run("view.marks", json!({"value": marks}));
     }
     let mut ruler = app.session.view.ruler;
-    if ui.checkbox(&mut ruler, "Show rulers").changed() {
+    if ui.checkbox(&mut ruler, "הצג סרגלים").changed() {
         let _ = app.run("view.ruler", json!({"value": ruler}));
     }
     ui.add_space(10.0);
-    ui.label(egui::RichText::new("Agents").font(semibold(15.0)));
+    ui.label(egui::RichText::new("סוכנים").font(semibold(15.0)));
     ui.label("Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel.");
 }

@@ -56,6 +56,12 @@ fn load_prefs(app: &mut WordApp) {
         && let Ok(ui) = serde_json::from_slice::<UiState>(&bytes)
     {
         app.ui = ui;
+        if app.ui.language_auto {
+            app.ui.language = match wordcraft_ui_egui::i18n::system_language() {
+                wordcraft_ui_egui::i18n::Language::Hebrew => "he",
+                wordcraft_ui_egui::i18n::Language::English => "en",
+            }.into();
+        }
         app.ui.backstage = false;
     }
 }

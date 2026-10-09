@@ -12,6 +12,7 @@ pub mod control;
 pub mod credits;
 pub mod dialogs;
 pub mod icons;
+pub mod i18n;
 pub mod keys;
 pub mod panes;
 pub mod previews;
@@ -55,7 +56,13 @@ pub struct UiState {
     pub dark: bool,
     pub nav_tab: String,
     pub show_discord: bool,
+    /// Interface language code (`en`/`he`). When `language_auto` is true this follows the OS UI language.
+    pub language: String,
+    #[serde(default = "default_language_auto")]
+    pub language_auto: bool,
 }
+
+fn default_language_auto() -> bool { true }
 
 impl Default for UiState {
     fn default() -> Self {
@@ -68,6 +75,8 @@ impl Default for UiState {
             dark: false,
             nav_tab: "headings".into(),
             show_discord: true,
+            language: match i18n::system_language() { i18n::Language::Hebrew => "he", i18n::Language::English => "en" }.into(),
+            language_auto: true,
         }
     }
 }
@@ -123,6 +132,14 @@ impl WordApp {
             word_count: (0, 0),
             last_autosave: 0.0,
         }
+    }
+
+    pub fn is_rtl(&self) -> bool {
+        self.ui.language == "he"
+    }
+
+    pub fn ui_language(&self) -> i18n::Language {
+        if self.is_rtl() { i18n::Language::Hebrew } else { i18n::Language::English }
     }
 
     pub fn with_control(mut self, rx: std::sync::mpsc::Receiver<ControlRequest>) -> Self {
@@ -234,6 +251,12 @@ impl WordApp {
             "ui.dark" => {
                 self.ui.dark = p.get("value").and_then(Value::as_bool).unwrap_or(!self.ui.dark);
                 json!({"dark": self.ui.dark})
+            }
+            "ui.language" => {
+                let lang = s("language").unwrap_or("he");
+                self.ui.language = if lang == "en" { "en" } else { "he" }.into();
+                self.ui.language_auto = false;
+                json!({"language": self.ui.language, "rtl": self.is_rtl()})
             }
             "ui.openFileDialog" => {
                 self.open_dialog();
@@ -369,16 +392,24 @@ impl WordApp {
             return;
         }
         let t = theme::Tokens::get(&ctx);
-        if self.ui.backstage {
-            backstage::show(self, ui);
+        let rtl = self.is_rtl();
+        let mut render = |ui: &mut egui::Ui| {
+            if self.ui.backstage {
+                backstage::show(self, ui);
+            } else {
+                chrome::title_bar(self, ui);
+                ribbon::show(self, ui);
+                chrome::status_bar(self, ui);
+                panes::show(self, ui);
+                egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
+                    canvas::show(self, ui);
+                });
+            }
+        };
+        if rtl {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| render(ui));
         } else {
-            chrome::title_bar(self, ui);
-            ribbon::show(self, ui);
-            chrome::status_bar(self, ui);
-            panes::show(self, ui);
-            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
-                canvas::show(self, ui);
-            });
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| render(ui));
         }
         dialogs::show(self, &ctx);
         keys::global_shortcuts(self, &ctx);

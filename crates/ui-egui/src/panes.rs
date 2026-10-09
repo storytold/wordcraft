@@ -10,21 +10,21 @@ use crate::theme::{Tokens, regular, semibold};
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     if app.session.view.nav_pane {
-        egui::Panel::left("nav_pane")
+        if app.is_rtl() { egui::Panel::right("nav_pane") } else { egui::Panel::left("nav_pane") }
             .default_size(260.0)
             .resizable(true)
             .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
             .show(ui, |ui| nav(app, ui));
     }
     if app.session.view.styles_pane {
-        egui::Panel::right("styles_pane")
+        if app.is_rtl() { egui::Panel::left("styles_pane") } else { egui::Panel::right("styles_pane") }
             .default_size(250.0)
             .resizable(true)
             .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
             .show(ui, |ui| styles(app, ui));
     }
     if app.session.view.comments_pane {
-        egui::Panel::right("comments_pane")
+        if app.is_rtl() { egui::Panel::left("comments_pane") } else { egui::Panel::right("comments_pane") }
             .default_size(290.0)
             .resizable(true)
             .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
@@ -47,13 +47,13 @@ fn header(ui: &mut Ui, title: &str) -> bool {
 }
 
 fn nav(app: &mut WordApp, ui: &mut Ui) {
-    if header(ui, "Navigation") {
+    if header(ui, "ניווט") {
         let _ = app.run("view.navigationPane", json!({"value": false}));
         return;
     }
     let qid = egui::Id::new("nav_query");
     let mut q = ui.data(|d| d.get_temp::<String>(qid)).unwrap_or_default();
-    let r = ui.add(egui::TextEdit::singleline(&mut q).hint_text("Search document").desired_width(f32::INFINITY));
+    let r = ui.add(egui::TextEdit::singleline(&mut q).hint_text("חיפוש במסמך").desired_width(f32::INFINITY));
     if r.changed() {
         ui.data_mut(|d| d.insert_temp(qid, q.clone()));
         if !q.is_empty() {
@@ -64,7 +64,7 @@ fn nav(app: &mut WordApp, ui: &mut Ui) {
     }
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        for (k, l) in [("headings", "Headings"), ("pages", "Pages"), ("results", "Results")] {
+        for (k, l) in [("headings", "כותרות"), ("pages", "עמודים"), ("results", "תוצאות")] {
             if ui.selectable_label(app.ui.nav_tab == k, l).clicked() {
                 app.ui.nav_tab = k.into();
             }
@@ -139,7 +139,7 @@ fn nav(app: &mut WordApp, ui: &mut Ui) {
 }
 
 fn styles(app: &mut WordApp, ui: &mut Ui) {
-    if header(ui, "Styles") {
+    if header(ui, "סגנונות") {
         let _ = app.run("view.stylesPane", json!({"value": false}));
         return;
     }
@@ -147,13 +147,13 @@ fn styles(app: &mut WordApp, ui: &mut Ui) {
     let cur = st.get("style").and_then(Value::as_str).unwrap_or("Normal").to_string();
     ui.label(egui::RichText::new(format!("Current style: {}", st.get("styleName").and_then(Value::as_str).unwrap_or(""))).small());
     ui.horizontal(|ui| {
-        if ui.button("New Style…").clicked() {
+        if ui.button("סגנון חדש…").clicked() {
             app.dialog = crate::dialogs::Dialog::open("newStyle", app);
         }
-        if ui.button("Update to Match").clicked() {
+        if ui.button("עדכן להתאמה").clicked() {
             let _ = app.run("styles.updateToMatch", json!({}));
         }
-        if ui.button("Clear").clicked() {
+        if ui.button("נקה").clicked() {
             let _ = app.run("format.clear", json!({}));
         }
     });
@@ -180,15 +180,15 @@ fn styles(app: &mut WordApp, ui: &mut Ui) {
                     app.canvas.want_focus = true;
                 }
                 r.context_menu(|ui| {
-                    if ui.button("Modify…").clicked() {
+                    if ui.button("שנה…").clicked() {
                         app.dialog = crate::dialogs::Dialog::modify_style(app, &id);
                         ui.close();
                     }
-                    if ui.button("Update to Match Selection").clicked() {
+                    if ui.button("עדכן להתאמה לבחירה").clicked() {
                         let _ = app.run("styles.updateToMatch", json!({"style": id}));
                         ui.close();
                     }
-                    if ui.button("Delete").clicked() {
+                    if ui.button("מחק").clicked() {
                         let _ = app.run("styles.delete", json!({"style": id}));
                         ui.close();
                     }
@@ -199,11 +199,11 @@ fn styles(app: &mut WordApp, ui: &mut Ui) {
 }
 
 fn comments(app: &mut WordApp, ui: &mut Ui) {
-    if header(ui, "Comments") {
+    if header(ui, "הערות") {
         let _ = app.run("view.commentsPane", json!({"value": false}));
         return;
     }
-    if ui.button("➕ New comment").clicked() {
+    if ui.button("➕ הערה חדשה").clicked() {
         let _ = app.run("review.newComment", json!({"text": ""}));
     }
     ui.separator();
@@ -222,7 +222,7 @@ fn comments(app: &mut WordApp, ui: &mut Ui) {
                     ui.label(egui::RichText::new(c.get("author").and_then(Value::as_str).unwrap_or("")).font(semibold(12.0)));
                     ui.label(egui::RichText::new(c.get("date").and_then(Value::as_str).unwrap_or("").get(..10).unwrap_or("")).small().weak());
                     if c.get("resolved").and_then(Value::as_bool).unwrap_or(false) {
-                        ui.label(egui::RichText::new("Resolved").small().color(t.green));
+                        ui.label(egui::RichText::new("טופל").small().color(t.green));
                     }
                 });
                 // Editable comment text (writes back to the comment's story).
@@ -230,7 +230,7 @@ fn comments(app: &mut WordApp, ui: &mut Ui) {
                 if let Some(part) = part {
                     let key = egui::Id::new(("comment_edit", id));
                     let mut text = ui.data(|d| d.get_temp::<String>(key)).unwrap_or_else(|| app.session.doc.plain_text(StoryRef::Part(part)));
-                    let r = ui.add(egui::TextEdit::multiline(&mut text).desired_rows(1).desired_width(f32::INFINITY).hint_text("Add a comment"));
+                    let r = ui.add(egui::TextEdit::multiline(&mut text).desired_rows(1).desired_width(f32::INFINITY).hint_text("הוסף הערה"));
                     if r.changed() {
                         ui.data_mut(|d| d.insert_temp(key, text.clone()));
                     }
@@ -243,15 +243,15 @@ fn comments(app: &mut WordApp, ui: &mut Ui) {
                     }
                 }
                 ui.horizontal(|ui| {
-                    if ui.small_button("Go to").clicked()
+                    if ui.small_button("עבור אל").clicked()
                         && let Some(a) = c.get("anchor").filter(|a| !a.is_null())
                     {
                         let _ = app.run("caret.set", json!({"pos": a}));
                     }
-                    if ui.small_button("Resolve").clicked() {
+                    if ui.small_button("סמן כטופל").clicked() {
                         let _ = app.run("review.resolveComment", json!({"id": id}));
                     }
-                    if ui.small_button("Delete").clicked() {
+                    if ui.small_button("מחק").clicked() {
                         let _ = app.run("review.deleteComment", json!({"id": id}));
                     }
                 });

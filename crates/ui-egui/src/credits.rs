@@ -50,7 +50,7 @@ impl NameMode {
     pub fn label(self) -> &'static str {
         match self {
             NameMode::Username => "Username",
-            NameMode::DisplayName => "Display name",
+            NameMode::DisplayName => "שם תצוגה",
             NameMode::RealName => "Real name",
         }
     }
@@ -247,7 +247,7 @@ pub fn contributors_ui(ui: &mut egui::Ui) {
     ui.separator();
     egui::ScrollArea::both().auto_shrink([false, true]).max_height(360.0).show(ui, |ui| {
         if list.is_empty() {
-            ui.label("No contributor data was built into this copy.");
+            ui.label("נתוני תורמים לא נכללו בעותק זה.");
         } else if v.table {
             table(ui, &list, &mut v);
         } else {
@@ -297,7 +297,7 @@ fn table(ui: &mut egui::Ui, list: &[&Contributor], v: &mut View) {
 /// About ▸ Models: AI models credited in Co-Authored-By trailers.
 pub fn models_ui(ui: &mut egui::Ui) {
     if MODELS.is_empty() {
-        ui.label("No model credits were built into this copy.");
+        ui.label("פרטי קרדיט של המודלים לא נכללו בעותק זה.");
         return;
     }
     let assisted: u64 = MODELS.iter().map(|m| m.commits).max().unwrap_or(0).max(1);

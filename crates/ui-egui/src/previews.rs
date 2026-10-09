@@ -249,7 +249,7 @@ pub fn style_set_gallery(app: &mut WordApp, ui: &mut Ui) {
             let _ = s.run("design.styleSet", &json!({"name": name}));
             let blocks = vec![
                 Block::Para(Paragraph::with_text("Title", CharProps::default()).styled("Title")),
-                Block::Para(Paragraph::with_text("Heading 1", CharProps::default()).styled("Heading1")),
+                Block::Para(Paragraph::with_text("כותרת 1", CharProps::default()).styled("Heading1")),
                 Block::Para(Paragraph::with_text("Body text in a short paragraph to show spacing.", CharProps::default())),
             ];
             snippet_blocks(&s.doc, blocks, 120.0, 110.0, ppp * 0.42, 6.0, None)

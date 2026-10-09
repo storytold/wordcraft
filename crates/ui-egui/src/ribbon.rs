@@ -6,8 +6,11 @@ use serde_json::{Value, json};
 use crate::theme::{Tokens, medium, regular, semibold};
 use crate::widgets::{CONTENT_H, LABEL_H, big, color_grid, combo, group, menu_button, small, split};
 use crate::{WordApp, icons};
+use crate::i18n::{Language, tr};
 
 pub const TABS: [&str; 11] = ["File", "Home", "Insert", "Draw", "Design", "Layout", "References", "Mailings", "Review", "View", "Help"];
+
+fn tl(app: &WordApp, s: &str) -> String { tr(app.ui_language(), s) }
 
 fn in_table(app: &WordApp) -> bool {
     app.session.sel.focus.path.cell().is_some()
@@ -20,7 +23,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         .exact_size(30.0)
         .frame(egui::Frame::NONE.fill(t.tab_strip).inner_margin(egui::Margin { left: 8, right: 10, top: 0, bottom: 0 }))
         .show(ui, |ui| {
-            ui.horizontal_centered(|ui| {
+            ui.with_layout(if app.is_rtl() { egui::Layout::right_to_left(egui::Align::Center) } else { egui::Layout::left_to_right(egui::Align::Center) }, |ui| {
                 ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
                 let mut tabs: Vec<&str> = TABS.to_vec();
                 if in_table(app) {
@@ -29,14 +32,15 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
                 for tab in tabs {
                     let contextual = tab.starts_with("Table ");
-                    let w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(tab.to_string(), medium(12.5), t.text).size().x) + 18.0;
+                    let display_tab = tl(app, tab);
+                    let w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(display_tab.clone(), medium(12.5), t.text).size().x) + 18.0;
                     let (r, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
                     let active = app.ui.tab == tab && !app.ui.backstage;
                     if resp.hovered() && !active {
                         ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, t.hover);
                     }
                     let color = if contextual || active { t.accent_text } else { t.text };
-                    ui.painter().text(r.center(), Align2::CENTER_CENTER, tab, if active { semibold(12.5) } else { medium(12.5) }, color);
+                    ui.painter().text(r.center(), Align2::CENTER_CENTER, display_tab, if active { semibold(12.5) } else { medium(12.5) }, color);
                     if active {
                         let u = Rect::from_center_size(pos2(r.center().x, r.max.y - 2.0), vec2(w - 16.0, 3.0));
                         ui.painter().rect_filled(u, 2.0, t.accent);
@@ -65,18 +69,18 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     }
                     ui.add_space(6.0);
                     let track = app.session.doc.settings.track_changes;
-                    ui.menu_button(egui::RichText::new(if track { "✎ Reviewing ▾" } else { "✎ Editing ▾" }).font(regular(12.0)), |ui| {
-                        if ui.selectable_label(!track, "Editing — edit the document directly").clicked() {
+                    ui.menu_button(egui::RichText::new(if track { format!("✎ {} ▾", tl(app, "Reviewing")) } else { format!("✎ {} ▾", tl(app, "Editing")) }).font(regular(12.0)), |ui| {
+                        if ui.selectable_label(!track, tl(app, "Editing — edit the document directly")).clicked() {
                             let _ = app.run("review.trackChanges", json!({"value": false}));
                             ui.close();
                         }
-                        if ui.selectable_label(track, "Reviewing — edits become suggestions").clicked() {
+                        if ui.selectable_label(track, tl(app, "Reviewing — edits become suggestions")).clicked() {
                             let _ = app.run("review.trackChanges", json!({"value": true}));
                             ui.close();
                         }
                     });
                     ui.add_space(4.0);
-                    if ui.button(egui::RichText::new("💬 Comments").font(regular(12.0))).clicked() {
+                    if ui.button(egui::RichText::new(format!("💬 {}", tl(app, "Comments"))).font(regular(12.0))).clicked() {
                         let _ = app.run("view.commentsPane", json!({}));
                     }
                 });
@@ -92,7 +96,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         )
         .show(ui, |ui| {
             egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
-                ui.horizontal_top(|ui| {
+                ui.with_layout(if app.is_rtl() { egui::Layout::right_to_left(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) }, |ui| {
                     ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
                     match app.ui.tab.as_str() {
                         "Home" => home(app, ui),
@@ -122,6 +126,7 @@ fn stack(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
 }
 
 fn mi(ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: Value) {
+    let label = tl(app, label);
     let sc = crate::widgets::shortcut_text(app, id);
     let enabled = crate::widgets::enabled(app, id);
     let resp = ui.add_enabled(enabled, egui::Button::new(label).shortcut_text(sc).min_size(vec2(200.0, 0.0)));
@@ -138,7 +143,7 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
         menu_button(ui, app, "paste", Some("Paste"), "Paste (⌘V)", true, |ui, app| {
             mi(ui, app, "Paste", "edit.paste", json!({}));
             mi(ui, app, "Keep Text Only", "edit.pasteText", json!({}));
-            mi(ui, app, "Merge Formatting", "edit.pasteMerge", json!({}));
+            mi(ui, app, "מזג עיצוב", "edit.pasteMerge", json!({}));
         });
         stack(ui, |ui| {
             small(ui, app, "cut", Some("Cut"), "Cut", "edit.cut", json!({}), false);
@@ -147,7 +152,7 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                 ui.ctx().copy_text(app.session.clipboard_text.clone());
             }
             let active = app.session.painter.is_some();
-            small(ui, app, "painter", Some("Format"), "Format Painter", "edit.formatPainter", json!({}), active);
+            small(ui, app, "painter", Some("Format"), "מברשת עיצוב", "edit.formatPainter", json!({}), active);
         });
     });
     group(ui, "Font", Some("format.fontDialog"), app, |ui, app| {
@@ -174,14 +179,14 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                 ui.add_space(3.0);
                 small(ui, app, "grow", None, "Increase Font Size", "format.growFont", json!({}), false);
                 small(ui, app, "shrink", None, "Decrease Font Size", "format.shrinkFont", json!({}), false);
-                menu_button(ui, app, "case", None, "Change Case", false, |ui, app| {
+                menu_button(ui, app, "case", None, "שינוי רישיות", false, |ui, app| {
                     mi(ui, app, "Sentence case.", "format.changeCase", json!({"mode": "sentence"}));
                     mi(ui, app, "lowercase", "format.changeCase", json!({"mode": "lower"}));
                     mi(ui, app, "UPPERCASE", "format.changeCase", json!({"mode": "upper"}));
                     mi(ui, app, "Capitalize Each Word", "format.changeCase", json!({"mode": "title"}));
                     mi(ui, app, "tOGGLE cASE", "format.changeCase", json!({"mode": "toggle"}));
                 });
-                small(ui, app, "clear", None, "Clear All Formatting", "format.clear", json!({}), false);
+                small(ui, app, "clear", None, "נקה את כל העיצוב", "format.clear", json!({}), false);
             });
             ui.add_space(3.0);
             crate::widgets::row(ui, |ui| {
@@ -196,7 +201,7 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                         ("Dashed", "dash"),
                         ("Dot-dash", "dotDash"),
                         ("Wave", "wave"),
-                        ("Words only", "words"),
+                        ("מילים בלבד", "words"),
                     ] {
                         mi(ui, app, l, "format.underline", json!({"style": s}));
                     }
@@ -205,12 +210,12 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                 small(ui, app, "subscript", None, "Subscript", "format.subscript", json!({}), flag("subscript"));
                 small(ui, app, "superscript", None, "Superscript", "format.superscript", json!({}), flag("superscript"));
                 ui.add_space(4.0);
-                menu_button(ui, app, "effects", None, "Text Effects and Typography", false, |ui, app| {
+                menu_button(ui, app, "effects", None, "אפקטי טקסט וטיפוגרפיה", false, |ui, app| {
                     mi(ui, app, "Outline", "format.outline", json!({}));
                     mi(ui, app, "Shadow", "format.shadow", json!({}));
                     mi(ui, app, "Small Caps", "format.smallCaps", json!({}));
-                    mi(ui, app, "All Caps", "format.allCaps", json!({}));
-                    mi(ui, app, "Double Strikethrough", "format.doubleStrikethrough", json!({}));
+                    mi(ui, app, "כל האותיות גדולות", "format.allCaps", json!({}));
+                    mi(ui, app, "קו חוצה כפול", "format.doubleStrikethrough", json!({}));
                 });
                 let hl = app.canvas.last_highlight.clone();
                 split(ui, app, "highlight", "Text Highlight Color", "format.highlight", json!({"color": hl}), false, None, |ui, app| {
@@ -230,7 +235,7 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                             }
                         }
                     });
-                    mi(ui, app, "No Color", "format.highlight", json!({"color": "none"}));
+                    mi(ui, app, "ללא צבע", "format.highlight", json!({"color": "none"}));
                 });
                 let fc = app.canvas.last_font_color.clone();
                 let sw = wordcraft_doc::Rgb::parse(&fc).map(crate::theme::c32);
@@ -252,7 +257,7 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
         stack(ui, |ui| {
             crate::widgets::row(ui, |ui| {
                 split(ui, app, "bullets", "Bullets", "para.bullets", json!({}), false, None, |ui, app| {
-                    ui.label(egui::RichText::new("Bullet Library").small().weak());
+                    ui.label(egui::RichText::new("ספריית תבליטים").small().weak());
                     ui.horizontal(|ui| {
                         for c in ["•", "○", "▪", "◆", "➢", "✓", "–"] {
                             if ui.button(egui::RichText::new(c).size(16.0)).clicked() {
@@ -275,10 +280,10 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                         mi(ui, app, l, "para.numbering", json!({"kind": k}));
                     }
                     ui.separator();
-                    mi(ui, app, "Restart at 1", "para.restartNumbering", json!({}));
+                    mi(ui, app, "התחל ב־1", "para.restartNumbering", json!({}));
                     mi(ui, app, "None", "para.numbering", json!({"off": true}));
                 });
-                split(ui, app, "multilevel", "Multilevel List", "para.multilevel", json!({}), false, None, |ui, app| {
+                split(ui, app, "multilevel", "רשימה מרובת רמות", "para.multilevel", json!({}), false, None, |ui, app| {
                     mi(ui, app, "1. 1.1. 1.1.1.", "para.multilevel", json!({"kind": "legal"}));
                     mi(ui, app, "I. A. 1. a.", "para.multilevel", json!({"kind": "outline"}));
                     ui.separator();
@@ -292,27 +297,27 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                 ui.add_space(4.0);
                 small(ui, app, "sort", None, "Sort", "para.sort", json!({}), false);
                 let marks = app.session.view.marks;
-                small(ui, app, "pilcrow", None, "Show/Hide ¶", "view.marks", json!({}), marks);
+                small(ui, app, "pilcrow", None, "הצג/הסתר ¶", "view.marks", json!({}), marks);
             });
             ui.add_space(3.0);
             crate::widgets::row(ui, |ui| {
                 use wordcraft_doc::Align as A;
-                small(ui, app, "alignLeft", None, "Align Left", "para.alignLeft", json!({}), align == A::Left);
+                small(ui, app, "alignLeft", None, "יישור לשמאל", "para.alignLeft", json!({}), align == A::Left);
                 small(ui, app, "alignCenter", None, "Center", "para.alignCenter", json!({}), align == A::Center);
-                small(ui, app, "alignRight", None, "Align Right", "para.alignRight", json!({}), align == A::Right);
+                small(ui, app, "alignRight", None, "יישור לימין", "para.alignRight", json!({}), align == A::Right);
                 small(ui, app, "justify", None, "Justify", "para.justify", json!({}), align == A::Justify);
                 ui.add_space(4.0);
-                menu_button(ui, app, "lineSpacing", None, "Line and Paragraph Spacing", false, |ui, app| {
+                menu_button(ui, app, "lineSpacing", None, "מרווח שורות ופסקאות", false, |ui, app| {
                     for v in [1.0, 1.15, 1.5, 2.0, 2.5, 3.0] {
                         mi(ui, app, &format!("{v}"), "para.lineSpacing", json!({"value": v}));
                     }
                     ui.separator();
-                    mi(ui, app, "Add Space Before Paragraph", "para.addSpaceBefore", json!({}));
-                    mi(ui, app, "Remove Space After Paragraph", "para.removeSpaceAfter", json!({}));
-                    mi(ui, app, "Line Spacing Options…", "para.dialog", json!({}));
+                    mi(ui, app, "הוסף מרווח לפני פסקה", "para.addSpaceBefore", json!({}));
+                    mi(ui, app, "הסר מרווח אחרי פסקה", "para.removeSpaceAfter", json!({}));
+                    mi(ui, app, "אפשרויות מרווח שורות…", "para.dialog", json!({}));
                 });
                 split(ui, app, "shading", "Shading", "para.shading", json!({"color": app.canvas.last_shading.clone()}), false, None, |ui, app| {
-                    mi(ui, app, "No Color", "para.shading", json!({"color": null}));
+                    mi(ui, app, "ללא צבע", "para.shading", json!({"color": null}));
                     let theme = app.session.doc.settings.theme_colors.clone();
                     if let Some(hex) = color_grid(ui, &theme) {
                         app.canvas.last_shading = hex.clone();
@@ -322,19 +327,19 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                 });
                 split(ui, app, "borders", "Borders", "para.borders", json!({"kind": "bottom"}), false, None, |ui, app| {
                     for (l, k) in [
-                        ("Bottom Border", "bottom"),
-                        ("Top Border", "top"),
-                        ("Left Border", "left"),
-                        ("Right Border", "right"),
-                        ("No Border", "none"),
-                        ("All Borders", "all"),
-                        ("Outside Borders", "outside"),
+                        ("גבול תחתון", "bottom"),
+                        ("גבול עליון", "top"),
+                        ("גבול שמאלי", "left"),
+                        ("גבול ימני", "right"),
+                        ("ללא גבול", "none"),
+                        ("כל הגבולות", "all"),
+                        ("גבולות חיצוניים", "outside"),
                         ("Inside Borders", "inside"),
                     ] {
                         mi(ui, app, l, "para.borders", json!({"kind": k}));
                     }
                     ui.separator();
-                    mi(ui, app, "Horizontal Line", "insert.horizontalLine", json!({}));
+                    mi(ui, app, "קו אופקי", "insert.horizontalLine", json!({}));
                 });
             });
         });
@@ -347,9 +352,9 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
             small(ui, app, "find", Some("Find"), "Find", "ui.dialog", json!({"name": "find"}), false).clicked();
             small(ui, app, "replace", Some("Replace"), "Replace", "ui.dialog", json!({"name": "replace"}), false);
             menu_button(ui, app, "select", Some("Select"), "Select", false, |ui, app| {
-                mi(ui, app, "Select All", "select.all", json!({}));
-                mi(ui, app, "Select Paragraph", "select.paragraph", json!({}));
-                mi(ui, app, "Select Sentence", "select.sentence", json!({}));
+                mi(ui, app, "בחר הכול", "select.all", json!({}));
+                mi(ui, app, "בחר פסקה", "select.paragraph", json!({}));
+                mi(ui, app, "בחר משפט", "select.sentence", json!({}));
             });
         });
     });
@@ -364,21 +369,21 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
 fn insert(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Pages", None, app, |ui, app| {
         stack(ui, |ui| {
-            menu_button(ui, app, "coverPage", Some("Cover Page"), "Cover Page", false, |ui, app| {
+            menu_button(ui, app, "coverPage", Some("עמוד שער"), "עמוד שער", false, |ui, app| {
                 mi(ui, app, "Studio cover", "insert.coverPage", json!({}));
             });
-            small(ui, app, "blankPage", Some("Blank Page"), "Blank Page", "insert.blankPage", json!({}), false);
-            small(ui, app, "pageBreak", Some("Page Break"), "Page Break", "insert.pageBreak", json!({}), false);
+            small(ui, app, "blankPage", Some("עמוד ריק"), "עמוד ריק", "insert.blankPage", json!({}), false);
+            small(ui, app, "pageBreak", Some("מעבר עמוד"), "מעבר עמוד", "insert.pageBreak", json!({}), false);
         });
     });
     group(ui, "Tables", None, app, |ui, app| {
-        menu_button(ui, app, "table", Some("Table"), "Add a Table", true, |ui, app| {
+        menu_button(ui, app, "table", Some("Table"), "הוסף טבלה", true, |ui, app| {
             crate::dialogs::table_grid_picker(ui, app);
             ui.separator();
-            mi(ui, app, "Insert Table…", "ui.dialog", json!({"name": "insertTable"}));
-            mi(ui, app, "Convert Text to Table…", "table.fromText", json!({}));
-            ui.menu_button("Quick Tables", |ui| {
-                mi(ui, app, "Tabular List", "table.quick", json!({"kind": "tabular"}));
+            mi(ui, app, "הוסף טבלה…", "ui.dialog", json!({"name": "insertTable"}));
+            mi(ui, app, "המר טקסט לטבלה…", "table.fromText", json!({}));
+            ui.menu_button("טבלאות מהירות", |ui| {
+                mi(ui, app, "רשימה טבלאית", "table.quick", json!({"kind": "tabular"}));
                 mi(ui, app, "Matrix", "table.quick", json!({"kind": "matrix"}));
                 mi(ui, app, "Calendar", "table.quick", json!({"kind": "calendar"}));
             });
@@ -417,41 +422,41 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Comments", None, app, |ui, app| {
         big(ui, app, "newComment", "Comment", "review.newComment", json!({}), false);
     });
-    group(ui, "Header & Footer", None, app, |ui, app| {
+    group(ui, "כותרת עליונה ותחתונה", None, app, |ui, app| {
         menu_button(ui, app, "header", Some("Header"), "Header", true, |ui, app| {
             mi(ui, app, "Blank", "insert.header", json!({"preset": "blank"}));
             mi(ui, app, "Blank (Three Columns)", "insert.header", json!({"preset": "blankThree"}));
-            mi(ui, app, "Document Title", "insert.header", json!({"preset": "title"}));
+            mi(ui, app, "כותרת מסמך", "insert.header", json!({"preset": "title"}));
             ui.separator();
-            mi(ui, app, "Edit Header", "insert.editHeader", json!({}));
-            mi(ui, app, "Remove Header", "insert.removeHeader", json!({}));
+            mi(ui, app, "ערוך כותרת עליונה", "insert.editHeader", json!({}));
+            mi(ui, app, "הסר כותרת עליונה", "insert.removeHeader", json!({}));
         });
         menu_button(ui, app, "footer", Some("Footer"), "Footer", true, |ui, app| {
             mi(ui, app, "Blank", "insert.footer", json!({"preset": "blank"}));
             mi(ui, app, "Blank (Three Columns)", "insert.footer", json!({"preset": "blankThree"}));
             mi(ui, app, "Page Number", "insert.footer", json!({"preset": "pageNumber"}));
             ui.separator();
-            mi(ui, app, "Edit Footer", "insert.editFooter", json!({}));
-            mi(ui, app, "Remove Footer", "insert.removeFooter", json!({}));
+            mi(ui, app, "ערוך כותרת תחתונה", "insert.editFooter", json!({}));
+            mi(ui, app, "הסר כותרת תחתונה", "insert.removeFooter", json!({}));
         });
         menu_button(ui, app, "pageNumber", Some("Page\nNumber"), "Page Number", true, |ui, app| {
-            mi(ui, app, "Top of Page", "insert.pageNumber", json!({"position": "top", "align": "right"}));
-            mi(ui, app, "Bottom of Page", "insert.pageNumber", json!({"position": "bottom", "align": "center"}));
+            mi(ui, app, "ראש העמוד", "insert.pageNumber", json!({"position": "top", "align": "right"}));
+            mi(ui, app, "תחתית העמוד", "insert.pageNumber", json!({"position": "bottom", "align": "center"}));
             mi(ui, app, "Page X of Y", "insert.pageNumber", json!({"position": "bottom", "format": "x of y"}));
             mi(ui, app, "Current Position", "insert.pageNumber", json!({"position": "current"}));
-            mi(ui, app, "Format Page Numbers…", "layout.pageNumberFormat", json!({}));
+            mi(ui, app, "עצב מספרי עמודים…", "layout.pageNumberFormat", json!({}));
         });
     });
     group(ui, "Text", None, app, |ui, app| {
-        big(ui, app, "textBox", "Text\nBox", "insert.textBox", json!({}), false);
+        big(ui, app, "textBox", "תיבת\nטקסט", "insert.textBox", json!({}), false);
         stack(ui, |ui| {
-            small(ui, app, "quickParts", Some("Quick Parts"), "Quick Parts", "insert.quickParts", json!({}), false);
+            small(ui, app, "quickParts", Some("חלקים מהירים"), "חלקים מהירים", "insert.quickParts", json!({}), false);
             small(ui, app, "wordArt", Some("WordArt"), "WordArt", "insert.wordArt", json!({}), false);
-            small(ui, app, "dropCap", Some("Drop Cap"), "Drop Cap", "insert.dropCap", json!({}), false);
+            small(ui, app, "dropCap", Some("אות פתיחה"), "אות פתיחה", "insert.dropCap", json!({}), false);
         });
         stack(ui, |ui| {
-            small(ui, app, "signature", None, "Signature Line", "insert.signatureLine", json!({}), false);
-            small(ui, app, "dateTime", None, "Date & Time", "insert.dateTime", json!({}), false);
+            small(ui, app, "signature", None, "שורת חתימה", "insert.signatureLine", json!({}), false);
+            small(ui, app, "dateTime", None, "תאריך ושעה", "insert.dateTime", json!({}), false);
             small(ui, app, "object", None, "Object", "insert.object", json!({}), false);
         });
     });
@@ -508,7 +513,7 @@ fn design(app: &mut WordApp, ui: &mut Ui) {
             }
         });
     });
-    group(ui, "Document Formatting", None, app, |ui, app| {
+    group(ui, "עיצוב מסמך", None, app, |ui, app| {
         crate::previews::style_set_gallery(app, ui);
         stack(ui, |ui| {
             menu_button(ui, app, "colors", Some("Colors"), "Theme Colors", false, |ui, app| {
@@ -516,17 +521,17 @@ fn design(app: &mut WordApp, ui: &mut Ui) {
                     mi(ui, app, name, "design.themeColors", json!({"name": name}));
                 }
             });
-            menu_button(ui, app, "fonts", Some("Fonts"), "Theme Fonts", false, |ui, app| {
+            menu_button(ui, app, "fonts", Some("Fonts"), "גופני ערכת נושא", false, |ui, app| {
                 for (name, h, b, _) in wordcraft_engine::cmd::design::THEMES {
                     mi(ui, app, &format!("{name}: {h} / {b}"), "design.themeFonts", json!({"heading": h, "body": b}));
                 }
             });
         });
         stack(ui, |ui| {
-            menu_button(ui, app, "paraSpacing", Some("Paragraph Spacing"), "Paragraph Spacing", false, |ui, app| {
+            menu_button(ui, app, "paraSpacing", Some("מרווח פסקה"), "מרווח פסקה", false, |ui, app| {
                 for (l, v) in [
                     ("Default", "default"),
-                    ("No Paragraph Space", "none"),
+                    ("ללא מרווח פסקה", "none"),
                     ("Compact", "compact"),
                     ("Tight", "tight"),
                     ("Open", "open"),
@@ -540,17 +545,17 @@ fn design(app: &mut WordApp, ui: &mut Ui) {
             small(ui, app, "setDefault", Some("Set as Default"), "Set as Default", "design.setDefault", json!({}), false);
         });
     });
-    group(ui, "Page Background", None, app, |ui, app| {
+    group(ui, "רקע עמוד", None, app, |ui, app| {
         menu_button(ui, app, "watermark", Some("Watermark"), "Watermark", true, |ui, app| {
             for w in ["DRAFT", "CONFIDENTIAL", "DO NOT COPY", "SAMPLE", "ASAP", "URGENT"] {
                 mi(ui, app, w, "design.watermark", json!({"text": w}));
             }
             ui.separator();
-            mi(ui, app, "Custom Watermark…", "ui.dialog", json!({"name": "watermark"}));
-            mi(ui, app, "Remove Watermark", "design.watermark", json!({"remove": true}));
+            mi(ui, app, "סימן מים מותאם אישית…", "ui.dialog", json!({"name": "watermark"}));
+            mi(ui, app, "הסר סימן מים", "design.watermark", json!({"remove": true}));
         });
         menu_button(ui, app, "pageColor", Some("Page\nColor"), "Page Color", true, |ui, app| {
-            mi(ui, app, "No Color", "design.pageColor", json!({"color": null}));
+            mi(ui, app, "ללא צבע", "design.pageColor", json!({"color": null}));
             let theme = app.session.doc.settings.theme_colors.clone();
             if let Some(hex) = color_grid(ui, &theme) {
                 let _ = app.run("design.pageColor", json!({"color": hex}));
@@ -565,7 +570,7 @@ fn design(app: &mut WordApp, ui: &mut Ui) {
 }
 
 fn layout(app: &mut WordApp, ui: &mut Ui) {
-    group(ui, "Page Setup", Some("ui.dialog"), app, |ui, app| {
+    group(ui, "הגדרת עמוד", Some("ui.dialog"), app, |ui, app| {
         menu_button(ui, app, "margins", Some("Margins"), "Margins", true, |ui, app| {
             for (l, k) in [
                 ("Normal  1\" all", "normal"),
@@ -577,7 +582,7 @@ fn layout(app: &mut WordApp, ui: &mut Ui) {
             ] {
                 mi(ui, app, l, "layout.margins", json!({"preset": k}));
             }
-            mi(ui, app, "Custom Margins…", "ui.dialog", json!({"name": "pageSetup"}));
+            mi(ui, app, "שוליים מותאמים אישית…", "ui.dialog", json!({"name": "pageSetup"}));
         });
         menu_button(ui, app, "orientation", Some("Orientation"), "Orientation", true, |ui, app| {
             mi(ui, app, "Portrait", "layout.orientation", json!({"value": "portrait"}));
@@ -597,19 +602,19 @@ fn layout(app: &mut WordApp, ui: &mut Ui) {
         });
         stack(ui, |ui| {
             menu_button(ui, app, "breaks", Some("Breaks"), "Breaks", false, |ui, app| {
-                ui.label(egui::RichText::new("Page Breaks").strong());
+                ui.label(egui::RichText::new("מעברי עמוד").strong());
                 mi(ui, app, "Page", "layout.break", json!({"kind": "page"}));
                 mi(ui, app, "Column", "layout.break", json!({"kind": "column"}));
-                mi(ui, app, "Text Wrapping", "layout.break", json!({"kind": "textWrapping"}));
-                ui.label(egui::RichText::new("Section Breaks").strong());
-                mi(ui, app, "Next Page", "layout.break", json!({"kind": "nextPage"}));
+                mi(ui, app, "גלישת טקסט", "layout.break", json!({"kind": "textWrapping"}));
+                ui.label(egui::RichText::new("מעברי מקטעים").strong());
+                mi(ui, app, "העמוד הבא", "layout.break", json!({"kind": "nextPage"}));
                 mi(ui, app, "Continuous", "layout.break", json!({"kind": "continuous"}));
                 mi(ui, app, "Even Page", "layout.break", json!({"kind": "evenPage"}));
                 mi(ui, app, "Odd Page", "layout.break", json!({"kind": "oddPage"}));
             });
-            menu_button(ui, app, "lineNumbers", Some("Line Numbers"), "Line Numbers", false, |ui, app| {
+            menu_button(ui, app, "lineNumbers", Some("מספרי שורות"), "מספרי שורות", false, |ui, app| {
                 for (l, v) in
-                    [("None", "none"), ("Continuous", "continuous"), ("Restart Each Page", "restartPage"), ("Restart Each Section", "restartSection")]
+                    [("None", "none"), ("Continuous", "continuous"), ("התחל מחדש בכל עמוד", "restartPage"), ("התחל מחדש בכל מקטע", "restartSection")]
                 {
                     mi(ui, app, l, "layout.lineNumbers", json!({"value": v}));
                 }
@@ -665,11 +670,11 @@ fn layout(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Arrange", None, app, |ui, app| {
         big(ui, app, "position", "Position", "arrange.position", json!({}), false);
-        big(ui, app, "wrapText", "Wrap\nText", "arrange.wrap", json!({}), false);
+        big(ui, app, "wrapText", "גלישת\nטקסט", "arrange.wrap", json!({}), false);
         stack(ui, |ui| {
-            small(ui, app, "bringForward", Some("Bring Forward"), "Bring Forward", "arrange.bringForward", json!({}), false);
-            small(ui, app, "sendBackward", Some("Send Backward"), "Send Backward", "arrange.sendBackward", json!({}), false);
-            small(ui, app, "selectionPane", Some("Selection Pane"), "Selection Pane", "arrange.selectionPane", json!({}), false);
+            small(ui, app, "bringForward", Some("הבא לחזית"), "הבא לחזית", "arrange.bringForward", json!({}), false);
+            small(ui, app, "sendBackward", Some("שלח לאחור"), "שלח לאחור", "arrange.sendBackward", json!({}), false);
+            small(ui, app, "selectionPane", Some("חלונית בחירה"), "חלונית בחירה", "arrange.selectionPane", json!({}), false);
         });
         stack(ui, |ui| {
             small(ui, app, "align", None, "Align", "arrange.align", json!({}), false);
@@ -680,14 +685,14 @@ fn layout(app: &mut WordApp, ui: &mut Ui) {
 }
 
 fn references(app: &mut WordApp, ui: &mut Ui) {
-    group(ui, "Table of Contents", None, app, |ui, app| {
-        menu_button(ui, app, "toc", Some("Table of\nContents"), "Table of Contents", true, |ui, app| {
+    group(ui, "תוכן העניינים", None, app, |ui, app| {
+        menu_button(ui, app, "toc", Some("Table of\nContents"), "תוכן העניינים", true, |ui, app| {
             mi(ui, app, "Automatic Table 1 (3 levels)", "references.toc", json!({"levels": 3}));
-            mi(ui, app, "Automatic Table 2 (2 levels)", "references.toc", json!({"levels": 2, "title": "Table of Contents"}));
-            mi(ui, app, "Remove Table of Contents", "references.removeToc", json!({}));
+            mi(ui, app, "Automatic Table 2 (2 levels)", "references.toc", json!({"levels": 2, "title": "תוכן העניינים"}));
+            mi(ui, app, "הסר תוכן עניינים", "references.removeToc", json!({}));
         });
         stack(ui, |ui| {
-            menu_button(ui, app, "addText", Some("Add Text"), "Add Text", false, |ui, app| {
+            menu_button(ui, app, "addText", Some("הוסף טקסט"), "הוסף טקסט", false, |ui, app| {
                 mi(ui, app, "Do Not Show in TOC", "references.addText", json!({"level": 0}));
                 for l in 1..=3u64 {
                     mi(ui, app, &format!("Level {l}"), "references.addText", json!({"level": l}));
@@ -699,18 +704,18 @@ fn references(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Footnotes", None, app, |ui, app| {
         big(ui, app, "footnote", "Insert\nFootnote", "references.footnote", json!({}), false);
         stack(ui, |ui| {
-            small(ui, app, "endnote", Some("Insert Endnote"), "Insert Endnote", "references.endnote", json!({}), false);
-            small(ui, app, "nextFootnote", Some("Next Footnote"), "Next Footnote", "references.nextFootnote", json!({}), false);
-            small(ui, app, "showNotes", Some("Show Notes"), "Show Notes", "references.notes", json!({}), false);
+            small(ui, app, "endnote", Some("הוסף הערת סיום"), "הוסף הערת סיום", "references.endnote", json!({}), false);
+            small(ui, app, "nextFootnote", Some("הערת השוליים הבאה"), "הערת השוליים הבאה", "references.nextFootnote", json!({}), false);
+            small(ui, app, "showNotes", Some("הצג הערות"), "הצג הערות", "references.notes", json!({}), false);
         });
     });
     group(ui, "Research", None, app, |ui, app| {
         big(ui, app, "researcher", "Researcher", "references.researcher", json!({}), false);
     });
-    group(ui, "Citations & Bibliography", None, app, |ui, app| {
+    group(ui, "ציטוטים וביבליוגרפיה", None, app, |ui, app| {
         big(ui, app, "citation", "Insert\nCitation", "references.citation", json!({}), false);
         stack(ui, |ui| {
-            small(ui, app, "sources", Some("Manage Sources"), "Manage Sources", "references.sources", json!({}), false);
+            small(ui, app, "sources", Some("ניהול מקורות"), "ניהול מקורות", "references.sources", json!({}), false);
             small(ui, app, "styles", Some("Style: APA"), "Citation Style", "references.citationStyle", json!({}), false);
             small(ui, app, "bibliography", Some("Bibliography"), "Bibliography", "references.bibliography", json!({}), false);
         });
@@ -735,11 +740,11 @@ fn references(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Index", None, app, |ui, app| {
         big(ui, app, "markEntry", "Mark\nEntry", "references.markEntry", json!({}), false);
         stack(ui, |ui| {
-            small(ui, app, "index", Some("Insert Index"), "Insert Index", "references.index", json!({}), false);
+            small(ui, app, "index", Some("הוסף אינדקס"), "הוסף אינדקס", "references.index", json!({}), false);
             small(ui, app, "update", Some("Update Index"), "Update Index", "references.updateIndex", json!({}), false);
         });
     });
-    group(ui, "Table of Authorities", None, app, |ui, app| {
+    group(ui, "טבלת אסמכתאות", None, app, |ui, app| {
         big(ui, app, "markCitation", "Mark\nCitation", "references.markCitation", json!({}), false);
         small(ui, app, "tableOfAuthorities", None, "Insert Table of Authorities", "references.tableOfAuthorities", json!({}), false);
     });
@@ -750,12 +755,12 @@ fn mailings(app: &mut WordApp, ui: &mut Ui) {
         big(ui, app, "envelope", "Envelopes", "mailings.envelopes", json!({}), false);
         big(ui, app, "labels", "Labels", "mailings.labels", json!({}), false);
     });
-    group(ui, "Start Mail Merge", None, app, |ui, app| {
+    group(ui, "התחל מיזוג דואר", None, app, |ui, app| {
         big(ui, app, "mailMerge", "Start Mail\nMerge", "mailings.start", json!({}), false);
         big(ui, app, "recipients", "Select\nRecipients", "mailings.recipients", json!({}), false);
         big(ui, app, "editRecipients", "Edit\nRecipient List", "mailings.editRecipients", json!({}), false);
     });
-    group(ui, "Write & Insert Fields", None, app, |ui, app| {
+    group(ui, "כתוב והוסף שדות", None, app, |ui, app| {
         big(ui, app, "highlightFields", "Highlight\nMerge Fields", "mailings.highlightFields", json!({}), false);
         big(ui, app, "addressBlock", "Address\nBlock", "mailings.addressBlock", json!({}), false);
         big(ui, app, "greetingLine", "Greeting\nLine", "mailings.greetingLine", json!({}), false);
@@ -765,15 +770,15 @@ fn mailings(app: &mut WordApp, ui: &mut Ui) {
             small(ui, app, "matchFields", Some("Match Fields"), "Match Fields", "mailings.matchFields", json!({}), false);
         });
     });
-    group(ui, "Preview Results", None, app, |ui, app| {
+    group(ui, "תצוגה מקדימה של תוצאות", None, app, |ui, app| {
         big(ui, app, "preview", "Preview\nResults", "mailings.preview", json!({}), false);
         stack(ui, |ui| {
             crate::widgets::row(ui, |ui| {
-                small(ui, app, "previous", None, "Previous Record", "mailings.previous", json!({}), false);
-                small(ui, app, "next", None, "Next Record", "mailings.next", json!({}), false);
+                small(ui, app, "previous", None, "הרשומה הקודמת", "mailings.previous", json!({}), false);
+                small(ui, app, "next", None, "הרשומה הבאה", "mailings.next", json!({}), false);
             });
-            small(ui, app, "find", Some("Find Recipient"), "Find Recipient", "mailings.findRecipient", json!({}), false);
-            small(ui, app, "checkErrors", Some("Check for Errors"), "Check for Errors", "mailings.checkErrors", json!({}), false);
+            small(ui, app, "find", Some("חפש נמען"), "חפש נמען", "mailings.findRecipient", json!({}), false);
+            small(ui, app, "checkErrors", Some("בדוק שגיאות"), "בדוק שגיאות", "mailings.checkErrors", json!({}), false);
         });
     });
     group(ui, "Finish", None, app, |ui, app| {
@@ -783,14 +788,14 @@ fn mailings(app: &mut WordApp, ui: &mut Ui) {
 
 fn review(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Proofing", None, app, |ui, app| {
-        big(ui, app, "spelling", "Spelling &\nGrammar", "review.spelling", json!({}), false);
+        big(ui, app, "spelling", "איות ו\nדקדוק", "review.spelling", json!({}), false);
         stack(ui, |ui| {
             small(ui, app, "thesaurus", Some("Thesaurus"), "Thesaurus", "review.thesaurus", json!({}), false);
-            small(ui, app, "wordCount", Some("Word Count"), "Word Count", "ui.dialog", json!({"name": "wordCount"}), false);
+            small(ui, app, "wordCount", Some("ספירת מילים"), "ספירת מילים", "ui.dialog", json!({"name": "wordCount"}), false);
         });
     });
     group(ui, "Speech", None, app, |ui, app| {
-        big(ui, app, "readAloud", "Read\nAloud", "review.readAloud", json!({}), false);
+        big(ui, app, "readAloud", "הקרא\nבקול", "review.readAloud", json!({}), false);
     });
     group(ui, "Accessibility", None, app, |ui, app| {
         big(ui, app, "accessibility", "Check\nAccessibility", "file.accessibility", json!({}), false);
@@ -802,45 +807,45 @@ fn review(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Comments", None, app, |ui, app| {
         big(ui, app, "newComment", "New\nComment", "review.newComment", json!({}), false);
         stack(ui, |ui| {
-            small(ui, app, "deleteComment", Some("Delete"), "Delete Comment", "review.deleteComment", json!({}), false);
-            small(ui, app, "prevComment", Some("Previous"), "Previous Comment", "review.previousComment", json!({}), false);
-            small(ui, app, "nextComment", Some("Next"), "Next Comment", "review.nextComment", json!({}), false);
+            small(ui, app, "deleteComment", Some("Delete"), "מחק הערה", "review.deleteComment", json!({}), false);
+            small(ui, app, "prevComment", Some("Previous"), "ההערה הקודמת", "review.previousComment", json!({}), false);
+            small(ui, app, "nextComment", Some("Next"), "ההערה הבאה", "review.nextComment", json!({}), false);
         });
         let shown = app.session.view.comments_pane;
-        big(ui, app, "showComments", "Show\nComments", "view.commentsPane", json!({"value": !shown}), false);
+        big(ui, app, "showComments", "הצג\nהערות", "view.commentsPane", json!({"value": !shown}), false);
     });
     group(ui, "Tracking", None, app, |ui, app| {
         let on = app.session.doc.settings.track_changes;
-        let r = big(ui, app, "trackChanges", if on { "Track\nChanges ✓" } else { "Track\nChanges" }, "review.trackChanges", json!({}), false);
+        let r = big(ui, app, "trackChanges", if on { "Track\nChanges ✓" } else { "מעקב אחר\nשינויים" }, "review.trackChanges", json!({}), false);
         let _ = r;
         stack(ui, |ui| {
             menu_button(
                 ui,
                 app,
                 "markup",
-                Some(if app.session.view.show_markup { "All Markup" } else { "No Markup" }),
+                Some(if app.session.view.show_markup { "כל הסימונים" } else { "ללא סימונים" }),
                 "Display for Review",
                 false,
                 |ui, app| {
-                    mi(ui, app, "All Markup", "review.markup", json!({"value": "all"}));
-                    mi(ui, app, "No Markup", "review.markup", json!({"value": "noMarkup"}));
+                    mi(ui, app, "כל הסימונים", "review.markup", json!({"value": "all"}));
+                    mi(ui, app, "ללא סימונים", "review.markup", json!({"value": "noMarkup"}));
                 },
             );
-            small(ui, app, "reviewingPane", Some("Reviewing Pane"), "Reviewing Pane", "review.changes", json!({}), false);
+            small(ui, app, "reviewingPane", Some("חלונית סקירה"), "חלונית סקירה", "review.changes", json!({}), false);
         });
     });
     group(ui, "Changes", None, app, |ui, app| {
         menu_button(ui, app, "accept", Some("Accept"), "Accept", true, |ui, app| {
-            mi(ui, app, "Accept This Change", "review.accept", json!({}));
-            mi(ui, app, "Accept All Changes", "review.acceptAll", json!({}));
+            mi(ui, app, "אשר שינוי זה", "review.accept", json!({}));
+            mi(ui, app, "אשר את כל השינויים", "review.acceptAll", json!({}));
         });
         menu_button(ui, app, "reject", Some("Reject"), "Reject", true, |ui, app| {
-            mi(ui, app, "Reject Change", "review.reject", json!({}));
-            mi(ui, app, "Reject All Changes", "review.rejectAll", json!({}));
+            mi(ui, app, "דחה שינוי", "review.reject", json!({}));
+            mi(ui, app, "דחה את כל השינויים", "review.rejectAll", json!({}));
         });
         stack(ui, |ui| {
-            small(ui, app, "prevChange", Some("Previous"), "Previous Change", "review.previousChange", json!({}), false);
-            small(ui, app, "nextChange", Some("Next"), "Next Change", "review.nextChange", json!({}), false);
+            small(ui, app, "prevChange", Some("Previous"), "השינוי הקודם", "review.previousChange", json!({}), false);
+            small(ui, app, "nextChange", Some("Next"), "השינוי הבא", "review.nextChange", json!({}), false);
         });
     });
     group(ui, "Compare", None, app, |ui, app| {
@@ -855,9 +860,9 @@ fn review(app: &mut WordApp, ui: &mut Ui) {
 fn view(app: &mut WordApp, ui: &mut Ui) {
     let v = app.session.view.clone();
     group(ui, "Views", None, app, |ui, app| {
-        big(ui, app, "readMode", "Read\nMode", "view.readMode", json!({}), false);
+        big(ui, app, "readMode", "מצב\nקריאה", "view.readMode", json!({}), false);
         big(ui, app, "printLayout", "Print\nLayout", "view.printLayout", json!({}), false);
-        big(ui, app, "webLayout", "Web\nLayout", "view.webLayout", json!({}), false);
+        big(ui, app, "webLayout", "פריסת\nאינטרנט", "view.webLayout", json!({}), false);
         stack(ui, |ui| {
             small(ui, app, "outline", Some("Outline"), "Outline", "view.outline", json!({}), false);
             small(ui, app, "draft", Some("Draft"), "Draft", "view.draft", json!({}), false);
@@ -867,7 +872,7 @@ fn view(app: &mut WordApp, ui: &mut Ui) {
         big(ui, app, "focus", "Focus", "view.focus", json!({}), false);
         big(ui, app, "immersive", "Immersive\nReader", "view.immersive", json!({}), false);
     });
-    group(ui, "Page Movement", None, app, |ui, app| {
+    group(ui, "תנועת עמוד", None, app, |ui, app| {
         big(ui, app, "vertical", "Vertical", "view.vertical", json!({}), false);
         big(ui, app, "sideToSide", "Side\nto Side", "view.sideToSide", json!({}), false);
     });
@@ -882,7 +887,7 @@ fn view(app: &mut WordApp, ui: &mut Ui) {
                 let _ = app.run("view.gridlines", json!({"value": g}));
             }
             let mut n = v.nav_pane;
-            if ui.checkbox(&mut n, "Navigation Pane").changed() {
+            if ui.checkbox(&mut n, "חלונית ניווט").changed() {
                 let _ = app.run("view.navigationPane", json!({"value": n}));
             }
         });
@@ -891,8 +896,8 @@ fn view(app: &mut WordApp, ui: &mut Ui) {
         big(ui, app, "zoom", "Zoom", "ui.dialog", json!({"name": "zoom"}), false);
         big(ui, app, "zoom100", "100%", "view.zoom100", json!({}), false);
         stack(ui, |ui| {
-            small(ui, app, "onePage", Some("One Page"), "One Page", "view.onePage", json!({}), v.fit == "onePage");
-            small(ui, app, "multiplePages", Some("Multiple Pages"), "Multiple Pages", "view.multiplePages", json!({}), v.multi_page);
+            small(ui, app, "onePage", Some("עמוד אחד"), "עמוד אחד", "view.onePage", json!({}), v.fit == "onePage");
+            small(ui, app, "multiplePages", Some("מספר עמודים"), "מספר עמודים", "view.multiplePages", json!({}), v.multi_page);
             small(ui, app, "pageWidth", Some("Page Width"), "Page Width", "view.pageWidth", json!({}), v.fit == "pageWidth");
         });
     });
@@ -901,7 +906,7 @@ fn view(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Window", None, app, |ui, app| {
         big(ui, app, "newWindow", "New\nWindow", "view.newWindow", json!({}), false);
-        big(ui, app, "arrangeAll", "Arrange\nAll", "view.arrangeAll", json!({}), false);
+        big(ui, app, "arrangeAll", "סדר הכול", "view.arrangeAll", json!({}), false);
         big(ui, app, "split", "Split", "view.split", json!({}), false);
     });
     group(ui, "Macros", None, app, |ui, app| {
@@ -921,12 +926,12 @@ fn help(app: &mut WordApp, ui: &mut Ui) {
 
 fn table_design(app: &mut WordApp, ui: &mut Ui) {
     let look = app.session.sel.focus.path.cell().and_then(|(tp, _, _)| app.session.doc.table(app.session.sel.focus.story, &tp).map(|t| t.props.look));
-    group(ui, "Table Style Options", None, app, |ui, app| {
+    group(ui, "אפשרויות סגנון טבלה", None, app, |ui, app| {
         let Some(l) = look else { return };
         egui::Grid::new("look").show(ui, |ui| {
             for (row, items) in [
-                [("Header Row", "headerRow", l.header_row), ("First Column", "firstColumn", l.first_column)],
-                [("Total Row", "totalRow", l.total_row), ("Last Column", "lastColumn", l.last_column)],
+                [("שורת כותרת", "headerRow", l.header_row), ("עמודה ראשונה", "firstColumn", l.first_column)],
+                [("שורת סיכום", "totalRow", l.total_row), ("עמודה אחרונה", "lastColumn", l.last_column)],
                 [("Banded Rows", "bandedRows", l.banded_rows), ("Banded Columns", "bandedColumns", l.banded_columns)],
             ]
             .iter()
@@ -943,7 +948,7 @@ fn table_design(app: &mut WordApp, ui: &mut Ui) {
             }
         });
     });
-    group(ui, "Table Styles", None, app, |ui, app| {
+    group(ui, "סגנונות טבלה", None, app, |ui, app| {
         let styles: Vec<(String, String)> = app
             .session
             .doc
@@ -964,7 +969,7 @@ fn table_design(app: &mut WordApp, ui: &mut Ui) {
         });
         stack(ui, |ui| {
             split(ui, app, "shading", "Shading", "table.shading", json!({"color": app.canvas.last_shading.clone()}), false, None, |ui, app| {
-                mi(ui, app, "No Color", "table.shading", json!({"color": null}));
+                mi(ui, app, "ללא צבע", "table.shading", json!({"color": null}));
                 let theme = app.session.doc.settings.theme_colors.clone();
                 if let Some(hex) = color_grid(ui, &theme) {
                     app.canvas.last_shading = hex.clone();
@@ -977,12 +982,12 @@ fn table_design(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Borders", None, app, |ui, app| {
         menu_button(ui, app, "borders", Some("Borders"), "Borders", true, |ui, app| {
             for (l, k) in [
-                ("All Borders", "all"),
-                ("Outside Borders", "outside"),
+                ("כל הגבולות", "all"),
+                ("גבולות חיצוניים", "outside"),
                 ("Inside Borders", "inside"),
-                ("No Border", "none"),
-                ("Top Border", "top"),
-                ("Bottom Border", "bottom"),
+                ("ללא גבול", "none"),
+                ("גבול עליון", "top"),
+                ("גבול תחתון", "bottom"),
             ] {
                 mi(ui, app, l, "table.borders", json!({"kind": k}));
             }
@@ -995,45 +1000,45 @@ fn table_layout(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Table", None, app, |ui, app| {
         stack(ui, |ui| {
             menu_button(ui, app, "selectTable", Some("Select"), "Select", false, |ui, app| {
-                mi(ui, app, "Select Cell", "table.selectCell", json!({}));
-                mi(ui, app, "Select Row", "table.selectRow", json!({}));
-                mi(ui, app, "Select Table", "table.selectTable", json!({}));
+                mi(ui, app, "בחר תא", "table.selectCell", json!({}));
+                mi(ui, app, "בחר שורה", "table.selectRow", json!({}));
+                mi(ui, app, "בחר טבלה", "table.selectTable", json!({}));
             });
             let g = app.session.view.gridlines;
-            small(ui, app, "gridlines", Some("View Gridlines"), "View Gridlines", "view.gridlines", json!({}), g);
-            small(ui, app, "properties", Some("Properties"), "Table Properties", "table.properties", json!({}), false);
+            small(ui, app, "gridlines", Some("הצג קווי רשת"), "הצג קווי רשת", "view.gridlines", json!({}), g);
+            small(ui, app, "properties", Some("Properties"), "מאפייני טבלה", "table.properties", json!({}), false);
         });
     });
-    group(ui, "Rows & Columns", None, app, |ui, app| {
+    group(ui, "שורות ועמודות", None, app, |ui, app| {
         menu_button(ui, app, "deleteTable", Some("Delete"), "Delete", true, |ui, app| {
-            mi(ui, app, "Delete Cells", "table.deleteCells", json!({}));
-            mi(ui, app, "Delete Columns", "table.deleteColumn", json!({}));
-            mi(ui, app, "Delete Rows", "table.deleteRow", json!({}));
-            mi(ui, app, "Delete Table", "table.deleteTable", json!({}));
+            mi(ui, app, "מחק תאים", "table.deleteCells", json!({}));
+            mi(ui, app, "מחק עמודות", "table.deleteColumn", json!({}));
+            mi(ui, app, "מחק שורות", "table.deleteRow", json!({}));
+            mi(ui, app, "מחק טבלה", "table.deleteTable", json!({}));
         });
         big(ui, app, "insertAbove", "Insert\nAbove", "table.insertRowAbove", json!({}), false);
         stack(ui, |ui| {
-            small(ui, app, "insertBelow", Some("Insert Below"), "Insert Below", "table.insertRowBelow", json!({}), false);
-            small(ui, app, "insertLeft", Some("Insert Left"), "Insert Left", "table.insertColumnLeft", json!({}), false);
-            small(ui, app, "insertRight", Some("Insert Right"), "Insert Right", "table.insertColumnRight", json!({}), false);
+            small(ui, app, "insertBelow", Some("הוסף מתחת"), "הוסף מתחת", "table.insertRowBelow", json!({}), false);
+            small(ui, app, "insertLeft", Some("הוסף משמאל"), "הוסף משמאל", "table.insertColumnLeft", json!({}), false);
+            small(ui, app, "insertRight", Some("הוסף מימין"), "הוסף מימין", "table.insertColumnRight", json!({}), false);
         });
     });
     group(ui, "Merge", None, app, |ui, app| {
         stack(ui, |ui| {
-            small(ui, app, "merge", Some("Merge Cells"), "Merge Cells", "table.merge", json!({}), false);
-            small(ui, app, "splitCells", Some("Split Cells"), "Split Cells", "table.split", json!({}), false);
-            small(ui, app, "splitTable", Some("Split Table"), "Split Table", "table.splitTable", json!({}), false);
+            small(ui, app, "merge", Some("מזג תאים"), "מזג תאים", "table.merge", json!({}), false);
+            small(ui, app, "splitCells", Some("פצל תאים"), "פצל תאים", "table.split", json!({}), false);
+            small(ui, app, "splitTable", Some("פצל טבלה"), "פצל טבלה", "table.splitTable", json!({}), false);
         });
     });
     group(ui, "Cell Size", None, app, |ui, app| {
         menu_button(ui, app, "autofit", Some("AutoFit"), "AutoFit", true, |ui, app| {
-            mi(ui, app, "AutoFit Contents", "table.autofit", json!({"mode": "contents"}));
-            mi(ui, app, "AutoFit Window", "table.autofit", json!({"mode": "window"}));
-            mi(ui, app, "Fixed Column Width", "table.autofit", json!({"mode": "fixed"}));
+            mi(ui, app, "התאם תוכן אוטומטית", "table.autofit", json!({"mode": "contents"}));
+            mi(ui, app, "התאם לחלון אוטומטית", "table.autofit", json!({"mode": "window"}));
+            mi(ui, app, "רוחב עמודה קבוע", "table.autofit", json!({"mode": "fixed"}));
         });
         stack(ui, |ui| {
-            small(ui, app, "distributeRows", Some("Distribute Rows"), "Distribute Rows", "table.distributeRows", json!({}), false);
-            small(ui, app, "distributeCols", Some("Distribute Columns"), "Distribute Columns", "table.distributeColumns", json!({}), false);
+            small(ui, app, "distributeRows", Some("פזר שורות"), "פזר שורות", "table.distributeRows", json!({}), false);
+            small(ui, app, "distributeCols", Some("פזר עמודות"), "פזר עמודות", "table.distributeColumns", json!({}), false);
         });
     });
     group(ui, "Alignment", None, app, |ui, app| {
@@ -1046,14 +1051,14 @@ fn table_layout(app: &mut WordApp, ui: &mut Ui) {
                 ui.end_row();
             }
         });
-        big(ui, app, "textDirection", "Text\nDirection", "table.textDirection", json!({}), false);
+        big(ui, app, "textDirection", "כיוון\nטקסט", "table.textDirection", json!({}), false);
         big(ui, app, "cellMargins", "Cell\nMargins", "table.cellMargins", json!({}), false);
     });
     group(ui, "Data", None, app, |ui, app| {
         big(ui, app, "sort", "Sort", "table.sort", json!({}), false);
         stack(ui, |ui| {
-            small(ui, app, "repeatHeader", Some("Repeat Header Rows"), "Repeat Header Rows", "table.repeatHeader", json!({}), false);
-            small(ui, app, "toText", Some("Convert to Text"), "Convert to Text", "table.toText", json!({}), false);
+            small(ui, app, "repeatHeader", Some("חזור על שורות כותרת"), "חזור על שורות כותרת", "table.repeatHeader", json!({}), false);
+            small(ui, app, "toText", Some("המר לטקסט"), "המר לטקסט", "table.toText", json!({}), false);
             small(ui, app, "formula", Some("Formula"), "Formula", "table.formula", json!({}), false);
         });
     });
