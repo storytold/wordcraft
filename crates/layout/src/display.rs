@@ -389,8 +389,9 @@ fn lines(
                 continue;
             }
             let cx = x + line.xs.get(k - line.c0).copied().unwrap_or(0.0);
-            let rect = Rect::new(cx, base - c.obj_h, c.adv, c.obj_h);
-            match para.and_then(|p| p.objects.get(oi)) {
+            let obj = para.and_then(|p| p.objects.get(oi));
+            let rect = inline_rect(obj, cx, base, c.adv, c.obj_h);
+            match obj {
                 Some(InlineObject::Image { media, crop, .. }) => out.push(Draw::Image { rect, media: media.clone(), crop: *crop, alpha }),
                 Some(InlineObject::Shape { kind, fill, stroke, stroke_width, .. }) => {
                     out.push(Draw::Shape { rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width })
@@ -459,4 +460,14 @@ pub fn text_color(c: &TextColor, background: Option<Rgb>) -> Rgb {
             }
         }
     }
+}
+
+/// Where inline object `obj` is drawn, given its cluster's box (`adv` × `obj_h` standing on the
+/// baseline at `cx`): inside the room kept for its effects.
+pub(crate) fn inline_rect(obj: Option<&InlineObject>, cx: f32, base: f32, adv: f32, obj_h: f32) -> Rect {
+    let [l, t, r, b] = match obj {
+        Some(InlineObject::Image { float, .. } | InlineObject::Shape { float, .. }) => float.effect_extent(),
+        _ => [0.0; 4],
+    };
+    Rect::new(cx + l, base - obj_h + t, (adv - l - r).max(0.0), (obj_h - t - b).max(0.0))
 }

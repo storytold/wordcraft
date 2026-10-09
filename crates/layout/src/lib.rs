@@ -751,7 +751,8 @@ fn body_top_for(ctx: &mut Ctx, sect: &SectionProps, header: Option<u32>) -> f32 
     let Some(part) = ctx.doc.parts.get(&id) else { return sect.margin_top };
     let blocks = part.blocks.clone();
     let (_, h) = layout_box(ctx, StoryRef::Part(id), &blocks, &[], sect.text_width(), None, 0);
-    sect.margin_top.max(sect.header + h + 6.0)
+    // Word starts the body right below a header that reaches past the top margin, no gap.
+    sect.margin_top.max(sect.header + h)
 }
 
 /// Where a floating object goes: page coordinates for an anchor paragraph whose top is `y0`.
@@ -940,7 +941,7 @@ fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, 
                         Some(r) => *r,
                         None => {
                             let cx = x + line.xs.get(k - line.c0).copied().unwrap_or(0.0);
-                            Rect::new(cx, y + (line.baseline - fl.top) - c.obj_h, c.adv, c.obj_h)
+                            display::inline_rect(p.objects.get(oi), cx, y + (line.baseline - fl.top), c.adv, c.obj_h)
                         }
                     };
                     let _ = (w, h, ll);

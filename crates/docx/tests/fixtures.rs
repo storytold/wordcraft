@@ -370,3 +370,14 @@ fn header_self_reference_and_escaping_targets() {
     let out = wordcraft_docx::write(&d).unwrap();
     wordcraft_docx::read(&out).unwrap();
 }
+
+#[test]
+fn line_rule_is_read_case_insensitively() {
+    // Word accepts `atleast` as well as the spec's `atLeast`.
+    let d = read_body(
+        r#"<w:p><w:pPr><w:spacing w:line="280" w:lineRule="atleast"/></w:pPr><w:r><w:t>x</w:t></w:r></w:p><w:p><w:pPr><w:spacing w:line="300" w:lineRule="EXACT"/></w:pPr></w:p>"#,
+    );
+    let p = paras(&d);
+    assert_eq!(p[0].props.line_spacing, Some(wordcraft_doc::props::LineSpacing::AtLeast(14.0)));
+    assert_eq!(p[1].props.line_spacing, Some(wordcraft_doc::props::LineSpacing::Exactly(15.0)));
+}

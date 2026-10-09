@@ -318,7 +318,8 @@ fn images_round_trip() {
         w: 72.0,
         h: 48.0,
         alt: "A tiny picture".into(),
-        float: Float::default(),
+        // Room for a shadow: kept through save and load.
+        float: Float { effect: [12.0, 12.0, 27.0, 27.0], ..Default::default() },
         crop: [0.1, 0.0, 0.25, 0.05],
     };
     let floating = InlineObject::Image {
@@ -326,7 +327,7 @@ fn images_round_trip() {
         w: 100.0,
         h: 50.0,
         alt: String::new(),
-        float: Float { wrap: Wrap::Square, h_rel: Anchor::Page, v_rel: Anchor::Margin, x: 36.0, y: 12.5, dist: 9.0 },
+        float: Float { wrap: Wrap::Square, h_rel: Anchor::Page, v_rel: Anchor::Margin, x: 36.0, y: 12.5, dist: 9.0, ..Default::default() },
         crop: [0.0; 4],
     };
     let mut floats = vec![floating.clone()];
@@ -336,7 +337,7 @@ fn images_round_trip() {
             w: 10.0,
             h: 10.0,
             alt: String::new(),
-            float: Float { wrap, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 0.0, y: 0.0, dist: 0.0 },
+            float: Float { wrap, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 0.0, y: 0.0, dist: 0.0, ..Default::default() },
             crop: [0.0; 4],
         });
     }
@@ -567,7 +568,7 @@ fn shapes_textboxes_equations_dropcaps_round_trip() {
         fill: Some(Rgb(255, 255, 200)),
         stroke: Some(Rgb(0, 0, 0)),
         stroke_width: 1.0,
-        float: Float { wrap: Wrap::Square, h_rel: Anchor::Margin, v_rel: Anchor::Paragraph, x: 10.0, y: 20.0, dist: 0.0 },
+        float: Float { wrap: Wrap::Square, h_rel: Anchor::Margin, v_rel: Anchor::Paragraph, x: 10.0, y: 20.0, dist: 0.0, ..Default::default() },
         story: Some(story),
     };
     let star = InlineObject::Shape {

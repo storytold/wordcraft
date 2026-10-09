@@ -443,7 +443,9 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                                 let maxw = (env.width - rp.indent_left.max(0.0) - rp.indent_right.max(0.0)).max(18.0);
                                 let (w, h) = (w.clamp(1.0, 4000.0), h.clamp(1.0, 4000.0));
                                 let s = if w > maxw { maxw / w } else { 1.0 };
-                                push(&mut b, ClKind::Object(k), w * s, h * s);
+                                // The line makes room for effects (shadows) around the picture too.
+                                let [el, et, er, eb] = float.effect_extent();
+                                push(&mut b, ClKind::Object(k), w * s + el + er, h * s + et + eb);
                             } else {
                                 push(&mut b, ClKind::Object(k), 0.0, 0.0);
                             }
@@ -826,6 +828,8 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
 
         // Vertical metrics.
         let (mut asc, mut desc) = (0.0f32, 0.0f32);
+        // The tallest picture on the line (it sits on the baseline).
+        let mut obj_asc = 0.0f32;
         let mut any = false;
         let dropped = pl.drop_cap.map_or(0, |d| d.0);
         for (k, c) in pl.clusters.get(c0..c1).into_iter().flatten().enumerate() {
@@ -833,8 +837,11 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
                 continue;
             }
             if let Some(st) = pl.styles.get(c.style as usize) {
+                // A picture sits on the baseline of its run: the line keeps that font's ascent
+                // and descent, and grows above the baseline to fit a taller picture.
                 let (a, d) = if matches!(c.kind, ClKind::Object(_)) && c.obj_h > 0.0 {
-                    (c.obj_h, 0.0)
+                    obj_asc = obj_asc.max(c.obj_h);
+                    (st.ascent, st.descent)
                 } else {
                     (st.ascent + st.shift.max(0.0), st.descent + (-st.shift).max(0.0))
                 };
@@ -856,10 +863,13 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
             asc = asc.max(st.ascent);
             desc = desc.max(st.descent);
         }
+        // Line spacing scales the text's height, never a picture's: a line is at least as tall
+        // as its tallest picture plus the descent below the baseline.
         let natural = asc + desc;
+        let pictures = if obj_asc > asc { obj_asc + desc } else { 0.0 };
         let height = match rp.line_spacing {
-            LineSpacing::Multiple(m) => natural * m,
-            LineSpacing::AtLeast(v) => natural.max(v),
+            LineSpacing::Multiple(m) => (natural * m).max(pictures),
+            LineSpacing::AtLeast(v) => natural.max(pictures).max(v),
             LineSpacing::Exactly(v) => v,
         };
         let baseline = top + height - desc;

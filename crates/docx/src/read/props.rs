@@ -134,10 +134,11 @@ impl PropCtx {
                         p.space_after = Some(v.max(0.0));
                     }
                     if let Some(line) = k.attr("w:line") {
-                        let rule = k.attr("w:lineRule").unwrap_or("auto");
-                        p.line_spacing = match rule {
+                        // Word reads the rule case-insensitively (`atleast` is seen in the wild).
+                        let rule = k.attr("w:lineRule").unwrap_or("auto").to_ascii_lowercase();
+                        p.line_spacing = match rule.as_str() {
                             "exact" => measure(line, 20.0).map(|v| LineSpacing::Exactly(v.abs())),
-                            "atLeast" => measure(line, 20.0).map(|v| LineSpacing::AtLeast(v.abs())),
+                            "atleast" => measure(line, 20.0).map(|v| LineSpacing::AtLeast(v.abs())),
                             _ => measure(line, 240.0).map(|v| LineSpacing::Multiple(v.abs().clamp(0.06, 132.0))),
                         };
                     }
@@ -314,7 +315,7 @@ pub fn trpr(e: &El) -> RowProps {
         match k.name.as_str() {
             "w:trHeight" => {
                 r.height = tw(k, "w:val").map(|v| v.abs());
-                r.height_rule = match k.attr("w:hRule") {
+                r.height_rule = match k.attr("w:hRule").map(str::to_ascii_lowercase).as_deref() {
                     Some("exact") => HeightRule::Exact,
                     Some("auto") => HeightRule::Auto,
                     _ => HeightRule::AtLeast,

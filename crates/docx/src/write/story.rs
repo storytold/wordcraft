@@ -564,7 +564,8 @@ impl Writer<'_> {
             w.close("wp:positionV");
         }
         w.empty("wp:extent", &[("cx", &cx), ("cy", &cy)]);
-        w.empty("wp:effectExtent", &[("l", "0"), ("t", "0"), ("r", "0"), ("b", "0")]);
+        let [el, et, er, eb] = float.effect_extent().map(emu);
+        w.empty("wp:effectExtent", &[("l", &el), ("t", &et), ("r", &er), ("b", &eb)]);
         match float.wrap {
             Wrap::Inline => {}
             Wrap::Square => w.empty("wp:wrapSquare", &[("wrapText", "bothSides")]),
