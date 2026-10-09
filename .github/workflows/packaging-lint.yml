@@ -51,6 +51,25 @@ jobs:
           if grep -oE '<Icon Id="[^"]*"' packaging/windows/wordcraft.wxs | grep -vE '\.(ico|exe)"$'; then
             echo "::error::Icon Id must end in .ico or .exe"; exit 1
           fi
+          # Each Craft app needs its own MSI UpgradeCode and component GUIDs. Sharing one with a
+          # sibling makes Windows Installer treat the two apps as versions of one product (#4).
+          # Codes the sibling apps' installers use:
+          siblings='D9660F32-2D0A-4ABE-B73D-17BE25F1542C A6DE41B7-A80F-4C59-A17E-BB68065BF67E
+            601C6437-08AE-4645-ADCC-27F036C2EA2F 0E8C6C5E-DE4A-4E1D-9DB0-44E8E38C2103
+            31E6FB14-9DBC-41DD-B24B-26B71FB31B62 15933017-925B-4963-8992-52000EB26AAA
+            229BB552-5EFD-479A-BA86-8CB6D926390C 8A1D3A39-F7C1-47B1-97AE-40C80BF82F4A
+            EA00C367-7270-4C50-9D8B-A7A5C88AD27F E724C1C6-091F-4E21-A685-80D089FDBE21
+            DC028192-C233-4F99-9A77-ED458C60DF26 F6948627-32AB-4D78-8865-0FDF417CE442
+            AACA8593-C6ED-40A8-BA6C-CB325D8529F9 BA719860-95FE-4154-B265-47006B8E9083
+            49E87D30-BB68-4896-AA1D-F45C833CFC3C DE018EF3-EE87-4E36-9F76-0B7B060A195E'
+          for code in $siblings; do
+            if grep -qi "$code" packaging/windows/wordcraft.wxs; then
+              echo "::error file=packaging/windows/wordcraft.wxs::$code belongs to a sibling Craft app's MSI; generate a new GUID"; exit 1
+            fi
+          done
+          if [ "$(grep -oiE '(UpgradeCode|Guid)="[0-9A-F-]{36}"' packaging/windows/wordcraft.wxs | cut -d'"' -f2 | sort -f | uniq -di)" ]; then
+            echo "::error file=packaging/windows/wordcraft.wxs::duplicate GUID"; exit 1
+          fi
           desktop-file-validate packaging/linux/ai.storyteller.wordcraft.desktop
           sed -e 's/@VERSION@/0.0.0/' -e 's/@DATE@/2026-01-01/' packaging/linux/ai.storyteller.wordcraft.metainfo.xml.in >"$RUNNER_TEMP/ai.storyteller.wordcraft.metainfo.xml"
           appstreamcli validate --no-net --explain "$RUNNER_TEMP/ai.storyteller.wordcraft.metainfo.xml"

@@ -24,9 +24,10 @@ pub fn shortcut_text(app: &WordApp, id: &str) -> String {
     }
 }
 
+/// `label` is already in the interface language.
 fn tooltip(app: &WordApp, resp: Response, label: &str, id: &str) -> Response {
     let sc = shortcut_text(app, id);
-    let desc = app.session.registry.get(id).map(|s| s.location).unwrap_or("");
+    let desc = app.session.registry.get(id).map(|s| crate::i18n::location(s.location)).unwrap_or_default();
     let enabled = app.session.registry.get(id).map(|s| (s.enabled)(&app.session).is_none()).unwrap_or(true);
     resp.on_hover_ui(|ui| {
         ui.set_max_width(260.0);
@@ -39,7 +40,7 @@ fn tooltip(app: &WordApp, resp: Response, label: &str, id: &str) -> Response {
             ui.label(egui::RichText::new(desc).small().weak());
         }
         if !enabled {
-            ui.label(egui::RichText::new("Not available right now").small().weak());
+            ui.label(egui::RichText::new(tl!("Not available right now")).small().weak());
         }
     })
 }
@@ -70,6 +71,7 @@ fn bg(ui: &Ui, r: Rect, resp: &Response, checked: bool, t: &Tokens) {
 
 /// A large ribbon button: 32 px icon over a (possibly two-line) label.
 pub fn big(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value, menu: bool) -> Response {
+    let label = tl!(label);
     let t = Tokens::get(ui.ctx());
     let galley_w =
         label.split('\n').map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x)).fold(0.0, f32::max);
@@ -96,6 +98,7 @@ pub fn big(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, pa
 
 /// A small button: 16 px icon with an optional label; `checked` draws the toggled state.
 pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, tip: &str, id: &str, params: Value, checked: bool) -> Response {
+    let (label, tip) = (label.map(|l| tl!(l)), tl!(tip));
     let t = Tokens::get(ui.ctx());
     let text_w = label.map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x) + 6.0).unwrap_or(0.0);
     let (r, resp) = ui.allocate_exact_size(vec2(24.0 + text_w, 22.0), Sense::click());
@@ -126,6 +129,7 @@ pub fn split(
     swatch: Option<Color32>,
     menu: impl FnOnce(&mut Ui, &mut WordApp),
 ) {
+    let tip = tl!(tip);
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(vec2(24.0, 22.0), Sense::click());
     let (ar, aresp) = ui.allocate_exact_size(vec2(11.0, 22.0), Sense::click());
@@ -157,6 +161,7 @@ pub fn menu_button(
     big_btn: bool,
     menu: impl FnOnce(&mut Ui, &mut WordApp),
 ) {
+    let (label, tip) = (label.map(|l| tl!(l)), tl!(tip));
     let t = Tokens::get(ui.ctx());
     let resp = if big_btn {
         let galley_w = label
@@ -196,6 +201,9 @@ pub fn menu_button(
 
 /// A ribbon group: content, a centred label below and a divider on the right.
 pub fn group(ui: &mut Ui, title: &str, launcher: Option<&str>, app: &mut WordApp, add: impl FnOnce(&mut Ui, &mut WordApp)) {
+    // The English title keys the launcher's id; the drawn title is translated.
+    let id_title = title;
+    let title = tl!(title);
     let t = Tokens::get(ui.ctx());
     let label_w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(title.to_string(), regular(11.0), t.group_label).size().x);
     let start = ui.cursor().min;
@@ -211,12 +219,12 @@ pub fn group(ui: &mut Ui, title: &str, launcher: Option<&str>, app: &mut WordApp
     ui.painter().text(pos2(r.center().x, r.max.y - 8.0), Align2::CENTER_CENTER, title, regular(11.0), t.group_label);
     if let Some(cmd) = launcher {
         let lr = Rect::from_center_size(pos2(r.max.x - 6.0, r.max.y - 8.0), vec2(11.0, 11.0));
-        let resp = ui.interact(lr, ui.id().with(("launch", title)), Sense::click());
+        let resp = ui.interact(lr, ui.id().with(("launch", id_title)), Sense::click());
         if resp.hovered() {
             ui.painter().rect_filled(lr.expand(2.0), 2.0, t.hover);
         }
         icons::paint(ui.painter(), lr, "launcher", t.text_dim, t.accent);
-        if resp.on_hover_text(format!("{title} settings")).clicked() {
+        if resp.on_hover_text(crate::i18n::fmt(tl!("{group} settings"), &[("group", title)])).clicked() {
             let _ = app.run(cmd, serde_json::json!({}));
         }
     }
@@ -237,7 +245,7 @@ pub fn row(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
 /// Word's standard colour grid (theme colours + tints, standard colours). Returns a picked hex.
 pub fn color_grid(ui: &mut Ui, theme: &[wordcraft_doc::Rgb]) -> Option<String> {
     let mut picked = None;
-    ui.label(egui::RichText::new("Theme Colors").small().weak());
+    ui.label(egui::RichText::new(tl!("Theme Colors")).small().weak());
     let base: Vec<wordcraft_doc::Rgb> = theme.iter().take(10).copied().collect();
     let tint = |c: wordcraft_doc::Rgb, k: f32| {
         let f = |v: u8| if k >= 0.0 { (v as f32 + (255.0 - v as f32) * k) as u8 } else { (v as f32 * (1.0 + k)) as u8 };
@@ -257,7 +265,7 @@ pub fn color_grid(ui: &mut Ui, theme: &[wordcraft_doc::Rgb]) -> Option<String> {
         });
     }
     ui.add_space(4.0);
-    ui.label(egui::RichText::new("Standard Colors").small().weak());
+    ui.label(egui::RichText::new(tl!("Standard Colors")).small().weak());
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(3.0, 0.0);
         for hex in ["C00000", "FF0000", "FFC000", "FFFF00", "92D050", "00B050", "00B0F0", "0070C0", "002060", "7030A0"] {

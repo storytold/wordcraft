@@ -48,7 +48,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 ui.painter().text(
                     pos2(r.min.x + 22.0, r.center().y),
                     Align2::LEFT_CENTER,
-                    label,
+                    tl!(label),
                     if active { semibold(14.0) } else { medium(14.0) },
                     egui::Color32::WHITE,
                 );
@@ -71,7 +71,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     if resp.hovered() {
                         ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(26));
                     }
-                    ui.painter().text(pos2(r.min.x + 22.0, r.center().y), Align2::LEFT_CENTER, label, regular(13.0), egui::Color32::WHITE);
+                    ui.painter().text(pos2(r.min.x + 22.0, r.center().y), Align2::LEFT_CENTER, tl!(label), regular(13.0), egui::Color32::WHITE);
                     if resp.clicked() {
                         if id == "discord" {
                             let _ = app.run("ui.discord", json!({}));
@@ -95,7 +95,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
 }
 
 fn heading(ui: &mut Ui, s: &str) {
-    ui.label(egui::RichText::new(s).font(semibold(26.0)));
+    ui.label(egui::RichText::new(tl!(s)).font(semibold(26.0)));
     ui.add_space(16.0);
 }
 
@@ -130,7 +130,7 @@ fn template_tile(ui: &mut Ui, app: &mut WordApp, label: &str, template: &str) {
         if let Some(h) = tex {
             ui.painter().image(h.id(), r.shrink(1.0), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), egui::Color32::WHITE);
         }
-        ui.label(egui::RichText::new(label).font(regular(12.5)));
+        ui.label(egui::RichText::new(tl!(label)).font(regular(12.5)));
         if resp.clicked() {
             let _ = app.run("file.new", json!({"template": template}));
             app.ui.backstage = false;
@@ -165,10 +165,10 @@ fn new_page(app: &mut WordApp, ui: &mut Ui) {
 
 fn open_list(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    ui.label(egui::RichText::new("Recent").font(semibold(16.0)));
+    ui.label(egui::RichText::new(tl!("Recent")).font(semibold(16.0)));
     ui.add_space(6.0);
     if app.ui.recent.is_empty() {
-        ui.label(egui::RichText::new("Documents you open will show up here.").color(t.text_dim));
+        ui.label(egui::RichText::new(tl!("Documents you open will show up here.")).color(t.text_dim));
     }
     for p in app.ui.recent.clone() {
         let name = std::path::Path::new(&p).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(p.clone());
@@ -189,7 +189,7 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
 
 fn open_page(app: &mut WordApp, ui: &mut Ui) {
     heading(ui, "Open");
-    if ui.button(egui::RichText::new("📂  Browse…").font(medium(14.0))).clicked() {
+    if ui.button(egui::RichText::new(tl!("📂  Browse…")).font(medium(14.0))).clicked() {
         let _ = app.run("ui.openFileDialog", json!({}));
     }
     ui.add_space(18.0);
@@ -201,12 +201,12 @@ fn info_page(app: &mut WordApp, ui: &mut Ui) {
     let info = app.session.run("file.info", &json!({})).unwrap_or_default();
     ui.columns(2, |cols| {
         let ui = &mut cols[0];
-        ui.label(egui::RichText::new("Properties").font(semibold(15.0)));
+        ui.label(egui::RichText::new(tl!("Properties")).font(semibold(15.0)));
         let mut props = app.session.doc.core.clone();
         let mut changed = false;
         egui::Grid::new("props").num_columns(2).spacing(vec2(12.0, 6.0)).show(ui, |ui| {
             for (l, v) in [("Title", &mut props.title), ("Subject", &mut props.subject), ("Author", &mut props.creator), ("Keywords", &mut props.keywords), ("Category", &mut props.category)] {
-                ui.label(l);
+                ui.label(tl!(l));
                 changed |= ui.text_edit_singleline(v).lost_focus();
                 ui.end_row();
             }
@@ -215,17 +215,18 @@ fn info_page(app: &mut WordApp, ui: &mut Ui) {
             let _ = app.run("file.properties", json!({"title": props.title, "subject": props.subject, "author": props.creator, "keywords": props.keywords, "category": props.category}));
         }
         let ui = &mut cols[1];
-        ui.label(egui::RichText::new("Statistics").font(semibold(15.0)));
+        ui.label(egui::RichText::new(tl!("Statistics")).font(semibold(15.0)));
         for (l, k) in [("Pages", "pages"), ("Words", "words"), ("Paragraphs", "paragraphs"), ("Sections", "sections"), ("Comments", "comments")] {
-            ui.label(format!("{l}: {}", info.get(k).map(|v| v.to_string()).unwrap_or_default()));
+            ui.label(format!("{}: {}", tl!(l), info.get(k).map(|v| v.to_string()).unwrap_or_default()));
         }
-        ui.label(format!("Location: {}", info.get("path").and_then(|v| v.as_str()).unwrap_or("Not saved yet")));
+        let path = info.get("path").and_then(|v| v.as_str()).unwrap_or(tl!("Not saved yet"));
+        ui.label(crate::i18n::fmt(tl!("Location: {path}"), &[("path", path)]));
     });
 }
 
 fn export_page(app: &mut WordApp, ui: &mut Ui) {
     heading(ui, if app.ui.backstage_page == "print" { "Print" } else { "Export" });
-    ui.label("Save a copy in another format. Printing goes through a PDF you can print from any viewer.");
+    ui.label(tl!("Save a copy in another format. Printing goes through a PDF you can print from any viewer."));
     ui.add_space(12.0);
     for (label, ext) in [
         ("PDF document (*.pdf)", "pdf"),
@@ -237,13 +238,13 @@ fn export_page(app: &mut WordApp, ui: &mut Ui) {
         ("Plain text (*.txt)", "txt"),
         ("Page image (*.png)", "png"),
     ] {
-        if ui.add(egui::Button::new(egui::RichText::new(label).font(medium(13.5))).min_size(vec2(320.0, 34.0))).clicked() {
+        if ui.add(egui::Button::new(egui::RichText::new(tl!(label)).font(medium(13.5))).min_size(vec2(320.0, 34.0))).clicked() {
             let name = format!("{}.{ext}", app.title_stem());
             let picked = app.services.pick_save.as_ref().and_then(|f| f(&name));
             if let Some(path) = picked {
                 let r = if ext == "png" { app.run("file.exportPng", json!({"path": path})) } else { app.run("file.saveAs", json!({"path": path})) };
                 if r.is_ok() {
-                    app.status(format!("Exported {path}"));
+                    app.status(crate::i18n::fmt(tl!("Exported {path}"), &[("path", &path)]));
                 }
             }
         }
@@ -253,31 +254,54 @@ fn export_page(app: &mut WordApp, ui: &mut Ui) {
 
 fn options_page(app: &mut WordApp, ui: &mut Ui) {
     heading(ui, "Options");
-    ui.label(egui::RichText::new("General").font(semibold(15.0)));
+    ui.label(egui::RichText::new(tl!("General")).font(semibold(15.0)));
+    language_picker(app, ui);
     ui.horizontal(|ui| {
-        ui.label("User name:");
+        ui.label(tl!("User name:"));
         let mut n = app.session.author.clone();
         if ui.text_edit_singleline(&mut n).changed() {
             app.session.author = n;
         }
     });
     let mut dark = app.ui.dark;
-    if ui.checkbox(&mut dark, "Dark mode").changed() {
+    if ui.checkbox(&mut dark, tl!("Dark mode")).changed() {
         let _ = app.run("ui.dark", json!({"value": dark}));
     }
-    ui.checkbox(&mut app.autosave, "AutoSave documents that have been saved");
-    ui.checkbox(&mut app.ui.show_discord, "Show the community button in the title bar");
+    ui.checkbox(&mut app.autosave, tl!("AutoSave documents that have been saved"));
+    ui.checkbox(&mut app.ui.show_discord, tl!("Show the community button in the title bar"));
     ui.add_space(10.0);
-    ui.label(egui::RichText::new("Display").font(semibold(15.0)));
+    ui.label(egui::RichText::new(tl!("Display")).font(semibold(15.0)));
     let mut marks = app.session.view.marks;
-    if ui.checkbox(&mut marks, "Show all formatting marks").changed() {
+    if ui.checkbox(&mut marks, tl!("Show all formatting marks")).changed() {
         let _ = app.run("view.marks", json!({"value": marks}));
     }
     let mut ruler = app.session.view.ruler;
-    if ui.checkbox(&mut ruler, "Show rulers").changed() {
+    if ui.checkbox(&mut ruler, tl!("Show rulers")).changed() {
         let _ = app.run("view.ruler", json!({"value": ruler}));
     }
     ui.add_space(10.0);
-    ui.label(egui::RichText::new("Agents").font(semibold(15.0)));
-    ui.label("Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel.");
+    ui.label(egui::RichText::new(tl!("Agents")).font(semibold(15.0)));
+    ui.label(tl!("Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel."));
+}
+
+/// File ▸ Options ▸ Interface language: follow the system (the default) or pick one (#8).
+fn language_picker(app: &mut WordApp, ui: &mut Ui) {
+    use crate::i18n::{AUTO, Lang};
+    let system = crate::i18n::system_lang();
+    let auto_label = crate::i18n::fmt(tl!("Automatic ({language})"), &[("language", system.name())]);
+    let current = if app.ui.language == AUTO { auto_label.clone() } else { Lang::from_pref(&app.ui.language).name().to_string() };
+    ui.horizontal(|ui| {
+        ui.label(tl!("Interface language:"));
+        egui::ComboBox::from_id_salt("interface_language").selected_text(current).width(220.0).show_ui(ui, |ui| {
+            if ui.selectable_label(app.ui.language == AUTO, auto_label.as_str()).clicked() {
+                let _ = app.run("ui.language", json!({"value": AUTO}));
+            }
+            for lang in Lang::all() {
+                if ui.selectable_label(app.ui.language == lang.code(), lang.name()).clicked() {
+                    let _ = app.run("ui.language", json!({"value": lang.code()}));
+                }
+            }
+        });
+    });
+    ui.label(egui::RichText::new(tl!("Automatic follows your system's language. Menus and commands change; your documents don't.")).small().weak());
 }

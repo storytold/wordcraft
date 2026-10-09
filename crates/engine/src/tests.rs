@@ -45,6 +45,29 @@ fn typing_enter_undo() {
 }
 
 #[test]
+fn joined_commands_are_one_undo_step() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    run(&mut s, "para.indents", json!({"left": 9.0}));
+    run(&mut s, "para.indents", json!({"left": 18.0}));
+    for x in [27.0, 36.0] {
+        s.join_next_undo();
+        run(&mut s, "para.indents", json!({"left": x}));
+    }
+    let indent = |s: &Session| s.doc.para_at(&s.sel.focus).and_then(|p| p.props.indent_left);
+    assert_eq!(indent(&s), Some(36.0));
+    // One undo reverts the whole second drag, not just its last frame.
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(indent(&s), Some(9.0));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(indent(&s), None);
+    assert_eq!(text(&s), "Hello");
+    run(&mut s, "edit.redo", json!({}));
+    run(&mut s, "edit.redo", json!({}));
+    assert_eq!(indent(&s), Some(36.0));
+}
+
+#[test]
 fn backspace_and_delete() {
     let mut s = s();
     run(&mut s, "text.insert", json!({"text": "abc"}));
@@ -142,6 +165,27 @@ fn styles_and_lists() {
     run(&mut s, "text.insert", json!({"text": "1."}));
     run(&mut s, "text.insert", json!({"text": " "}));
     assert!(s.doc.para_at(&s.sel.focus).unwrap().props.numbering.is_some_and(|n| n.num != 0));
+}
+
+#[test]
+fn applying_a_heading_clears_list_numbering() {
+    // Applying a heading (or Title/Normal) to a numbered paragraph removes its direct list
+    // numbering. A dead `&& id == "Normal"` term used to let only Normal clear it, so headings
+    // kept the numbering.
+    for style_cmd in ["para.heading1", "para.heading2", "para.normal"] {
+        let mut s = s();
+        run(&mut s, "text.insert", json!({"text": "item"}));
+        run(&mut s, "para.bullets", json!({}));
+        assert!(
+            s.doc.para_at(&Pos::body(0, 0)).unwrap().props.numbering.is_some_and(|n| n.num != 0),
+            "{style_cmd}: expected list numbering before applying the style"
+        );
+        run(&mut s, style_cmd, json!({}));
+        assert!(
+            !s.doc.para_at(&Pos::body(0, 0)).unwrap().props.numbering.is_some_and(|n| n.num != 0),
+            "{style_cmd}: should clear direct list numbering"
+        );
+    }
 }
 
 #[test]
@@ -251,6 +295,24 @@ fn toc_and_fields() {
     assert!(t.contains("Summary\t1"), "{t}");
     run(&mut s, "references.updateToc", json!({}));
     assert_eq!(s.doc.plain_text(StoryRef::Body).matches("Summary\t").count(), 1, "one TOC entry after update");
+}
+
+#[test]
+fn toc_page_numbers_follow_headings() {
+    let mut s = s();
+    run(&mut s, "references.toc", json!({}));
+    run(&mut s, "caret.docEnd", json!({}));
+    for name in ["Alpha", "Bravo", "Charlie"] {
+        run(&mut s, "text.pageBreak", json!({}));
+        run(&mut s, "text.insert", json!({"text": name}));
+        run(&mut s, "para.heading1", json!({}));
+        run(&mut s, "text.newParagraph", json!({}));
+    }
+    run(&mut s, "references.updateToc", json!({}));
+    let t = text(&s);
+    for (name, page) in [("Alpha", 2), ("Bravo", 3), ("Charlie", 4)] {
+        assert!(t.contains(&format!("{name}\t{page}")), "{name} should be on page {page}: {t}");
+    }
 }
 
 #[test]

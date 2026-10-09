@@ -30,10 +30,29 @@ impl Writer<'_> {
             w.raw("<w:p/>");
             return;
         }
-        for b in bl {
+        let toc = if top { toc_span(bl) } else { None };
+        // Whether the heading's TOC field was written and still needs its end.
+        let mut toc_field_open = false;
+        for (i, b) in bl.iter().enumerate() {
+            if let Some((start, end)) = toc {
+                if i == start {
+                    w.raw(TOC_SDT_OPEN);
+                    self.toc_hold_end = true;
+                }
+                self.toc_end_here = toc_field_open && i == end;
+            }
             match &**b {
                 Block::Para(p) => self.para(w, p, rels, top, depth),
                 Block::Table(t) => self.table(w, t, rels, depth),
+            }
+            if let Some((start, end)) = toc {
+                if i == start {
+                    // `field` clears the flag when it leaves the TOC field open.
+                    toc_field_open = !std::mem::take(&mut self.toc_hold_end);
+                }
+                if i == end {
+                    w.raw("</w:sdtContent></w:sdt>");
+                }
             }
         }
         if bl.last().is_none_or(|b| matches!(**b, Block::Table(_))) {
@@ -93,6 +112,9 @@ impl Writer<'_> {
             w.raw("</w:r>");
         }
         self.para_content(w, p, rels, depth);
+        if std::mem::take(&mut self.toc_end_here) {
+            w.raw(r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#);
+        }
         w.close("w:p");
     }
 
@@ -279,6 +301,10 @@ impl Writer<'_> {
             InlineObject::Field { instr, result, locked } => self.field(w, instr, result, *locked, props),
             InlineObject::NoteRef { kind, id, custom } => {
                 let foot = *kind == NoteKind::Footnote;
+                if self.current_note == Some((foot, *id)) {
+                    // The note's own number: already written as the w:footnoteRef / w:endnoteRef mark.
+                    return;
+                }
                 let nid = self.note_id(*id, foot);
                 let mut p = props.clone();
                 if p.style.is_none() && p.vert_align.is_none() {
@@ -477,7 +503,13 @@ impl Writer<'_> {
                 flush(w, &mut buf);
             });
         }
-        run(w, &|w| w.empty("w:fldChar", &[("w:fldCharType", "end")]));
+        // A TOC heading's field is closed after its last entry (see `toc_span`).
+        let toc_open = self.toc_hold_end && is_toc(instr);
+        if toc_open {
+            self.toc_hold_end = false;
+        } else {
+            run(w, &|w| w.empty("w:fldChar", &[("w:fldCharType", "end")]));
+        }
         self.rev_close(w, props);
     }
 
@@ -684,4 +716,30 @@ fn xfrm(w: &mut W, cw: f32, ch: f32) {
     w.empty("a:off", &[("x", "0"), ("y", "0")]);
     w.empty("a:ext", &[("cx", &emu(cw.max(0.0))), ("cy", &emu(ch.max(0.0)))]);
     w.close("a:xfrm");
+}
+
+/// Word's Table of Contents content control, which gives the TOC its frame and Update Table.
+const TOC_SDT_OPEN: &str =
+    r#"<w:sdt><w:sdtPr><w:docPartObj><w:docPartGallery w:val="Table of Contents"/><w:docPartUnique/></w:docPartObj></w:sdtPr><w:sdtContent>"#;
+
+fn is_toc(instr: &str) -> bool {
+    instr.trim_start().get(..3).is_some_and(|k| k.eq_ignore_ascii_case("TOC"))
+}
+
+/// The engine's TOC: a paragraph holding an empty `TOC` field, then its TOC-styled entries.
+/// Returns (heading, last entry) so the field can be written spanning the entries, as Word does.
+fn toc_span(bl: &Blocks) -> Option<(usize, usize)> {
+    let start = bl.iter().position(|b| {
+        b.as_para().is_some_and(|p| {
+            p.section.is_none()
+                && p.objects.iter().any(|o| matches!(o, InlineObject::Field { instr, result, .. } if is_toc(instr) && result.is_empty()))
+        })
+    })?;
+    let entries = bl[start + 1..]
+        .iter()
+        .take_while(|b| {
+            b.as_para().is_some_and(|p| p.section.is_none() && p.props.style.as_deref().is_some_and(|st| st.starts_with("TOC") && st != "TOCHeading"))
+        })
+        .count();
+    (entries > 0).then_some((start, start + entries))
 }

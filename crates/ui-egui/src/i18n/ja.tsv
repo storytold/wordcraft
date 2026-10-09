@@ -1,0 +1,773 @@
+# Japanese (ja) interface catalog. Same format and clean-room rules as zh-hans.tsv.
+
+	(no suggestions)	（候補なし）
+	1.5 Line Spacing	1.5 行
+	A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.	Rust でゼロから書かれた、無料のオープンソース ワープロです。\nArtCraft チームの Crafting Apps のひとつです。
+	About	情報
+	About WordCraft	WordCraft について
+	Accept	承諾
+	Accept All Changes	すべての変更を承諾
+	Accept This Change	この変更を承諾
+	Accessibility	アクセシビリティ
+	Add	追加
+	Add a comment	コメントを追加
+	Add a Table	表を追加
+	Add Space Before Paragraph	段落前に間隔を追加
+	Add Text	テキストの追加
+	Add to Dictionary	辞書に追加
+	Add to Style Gallery	スタイル ギャラリーに追加
+	Address Block	住所ブロック
+	Address:	アドレス:
+	Address\nBlock	住所ブロック
+	Adjust	調整
+	Advanced	詳細
+	After:	段落後:
+	Agents	エージェント
+	Align	配置
+	Align Left	左揃え
+	Align Right	右揃え
+	Alignment	配置
+	All Borders	格子
+	All Caps	すべて大文字
+	All caps	すべて大文字
+	All Markup	すべての変更履歴
+	Alt Text	代替テキスト
+	Apply Character Style	文字スタイルを適用
+	Apply Style	スタイルを適用
+	Arrange	配置
+	Arrange\nAll	整列
+	Arrow	矢印
+	Artistic Effects	アート効果
+	Author	作成者
+	AutoCorrect Options	オートコレクトのオプション
+	AutoFit	自動調整
+	AutoFit Contents	文字列の幅に合わせる
+	AutoFit Window	ウィンドウ幅に合わせる
+	Automatic	自動
+	Automatic ({language})	自動（{language}）
+	Automatic follows your system's language. Menus and commands change; your documents don't.	「自動」はシステムの言語に従います。メニューとコマンドの表示が変わり、文書の内容は変わりません。
+	Automatic Table 1 (3 levels)	自動目次 1（3 レベル）
+	Automatic Table 2 (2 levels)	自動目次 2（2 レベル）
+	AutoSave	自動保存
+	AutoSave documents that have been saved	保存済みの文書を自動保存する
+	AutoSave saves every change to the file (needs a saved document)	自動保存は変更のたびにファイルへ保存します（保存済みの文書が必要です）
+	AutoText	定型句
+	Backspace	Backspace
+	Banded Columns	縞模様（列）
+	Banded Rows	縞模様（行）
+	Before:	段落前:
+	Bibliography	参考文献
+	Binary assets added	追加したバイナリ アセット
+	Binary assets removed	削除したバイナリ アセット
+	Blank	空白
+	Blank (Three Columns)	空白（3 列）
+	Blank document	白紙の文書
+	Blank Page	空白のページ
+	Block\nAuthors	作成者のブロック
+	Bold	太字
+	Bookmark	ブックマーク
+	Bookmark name:	ブックマーク名:
+	Border Painter	罫線の書式設定
+	Border\nPainter	罫線の書式設定
+	Borders	罫線
+	Bottom Border	下罫線
+	Bottom of Page	ページの下部
+	Bottom:	下:
+	Box	囲み
+	Breaks	区切り
+	Bring Forward	前面へ移動
+	Bullet Library	行頭文字ライブラリ
+	Bullets	箇条書き
+	Calendar	カレンダー
+	Cancel	キャンセル
+	Capitalize Each Word	各単語の先頭を大文字にする
+	Captions	図表番号
+	Cell Margins	セルの余白
+	Cell Size	セルのサイズ
+	Cell\nMargins	セルの余白
+	Center	中央揃え
+	Change	変更
+	Change Case	大文字/小文字の変換
+	Change List Level	リスト レベルの変更
+	Change Picture	図の変更
+	Change Shape	図形の変更
+	Changes	変更箇所
+	Character Position	文字位置
+	Character Scale	文字の拡大/縮小
+	Character Shading	文字の網かけ
+	Character Spacing	文字間隔
+	Characters (no spaces)	文字数（スペースを含めない）
+	Characters (with spaces)	文字数（スペースを含める）
+	Chart	グラフ
+	Check Accessibility	アクセシビリティ チェック
+	Check Compatibility	互換性チェック
+	Check for Errors	エラーのチェック
+	Check Spelling as You Type	入力時にスペル チェックを行う
+	Check\nAccessibility	アクセシビリティ チェック
+	Citation Style	引用文献のスタイル
+	Citations & Bibliography	引用文献と文献目録
+	Clear	クリア
+	Clear All Formatting	すべての書式をクリア
+	Clipboard	クリップボード
+	Close	閉じる
+	Close Header and Footer	ヘッダーとフッターを閉じる
+	Collapse Selection	選択範囲を縮小
+	Color	色
+	Color:	色:
+	Colors	配色
+	Column	段
+	Column Break	段区切り
+	Columns	段組み
+	Combine	組み込み
+	Commands	コマンド
+	Comment	コメント
+	Comments	コメント
+	Comments Pane	コメント ウィンドウ
+	Community\nDiscord	コミュニティ\nDiscord
+	Compact	コンパクト
+	Compare	比較
+	Compress Pictures	図の圧縮
+	Continuous	現在の位置から開始
+	Convert	変換
+	Convert Text to Table	文字列を表にする
+	Convert Text to Table…	文字列を表にする…
+	Convert to Text	表の解除
+	Copy	コピー
+	Copy Formatting	書式のコピー
+	Corrections	修整
+	Cover Page	表紙
+	Create	作成
+	Create a Style	スタイルの作成
+	Create an interactive outline of your document.\n\nIt's a great way to keep track of where you are or quickly move your content around.\n\nTo get started, go to the Home tab and apply Heading styles to the headings in your document.	文書の対話型アウトラインを作成します。\n\n今どこを編集しているかを把握したり、内容をすばやく移動したりするのに便利です。\n\nまず [ホーム] タブで、文書の見出しに見出しスタイルを適用してください。
+	Create New Style	新しいスタイルの作成
+	Crop	トリミング
+	Cross-reference	相互参照
+	Current Position	現在の位置
+	Current style: {style}	現在のスタイル: {style}
+	Custom Margins…	ユーザー設定の余白…
+	Custom Watermark	ユーザー設定の透かし
+	Custom Watermark…	ユーザー設定の透かし…
+	Customize Quick Access Toolbar	クイック アクセス ツール バーのユーザー設定
+	Cut	切り取り
+	Dark Mode	ダーク モード
+	Dark mode	ダーク モード
+	Dashed	破線
+	Data	データ
+	Date & Time	日付と時刻
+	Decrease Font Size	フォント サイズの縮小
+	Decrease Indent	インデントを減らす
+	Default	既定
+	Define New Bullet	新しい行頭文字の定義
+	Define New Number Format	新しい番号書式の定義
+	Delete	削除
+	Delete Cells	セルの削除
+	Delete Columns	列の削除
+	Delete Comment	コメントの削除
+	Delete Next Word	次の単語を削除
+	Delete Previous Word	前の単語を削除
+	Delete Rows	行の削除
+	Delete Style	スタイルの削除
+	Delete Table	表の削除
+	Design	デザイン
+	development build	開発ビルド
+	Diagonal	対角線
+	Diamond	ひし形
+	Dictate	ディクテーション
+	Different First Page	先頭ページのみ別指定
+	Different Odd & Even Pages	奇数/偶数ページ別指定
+	Discord	Discord
+	Discord community	Discord コミュニティ
+	Display	表示
+	Display for Review	変更内容の表示
+	Distribute Columns	列の幅を揃える
+	Distribute Rows	行の高さを揃える
+	Distributed	均等割り付け
+	Do Not Show in TOC	目次に表示しない
+	Document End	文書の末尾
+	Document Formatting	ドキュメントの書式設定
+	Document Property	文書のプロパティ
+	Document Start	文書の先頭
+	Document Text	文書のテキスト
+	Document Title	文書のタイトル
+	Documents you open will show up here.	開いた文書がここに表示されます。
+	Dot-dash	一点鎖線
+	Dotted	点線
+	Double	二重線
+	Double Spacing	2 行
+	Double Strikethrough	二重取り消し線
+	Double Underline	二重下線
+	Down	下
+	Draft	下書き
+	Draw	描画
+	Drawing Tools	描画ツール
+	Drawing\nCanvas	描画キャンバス
+	Drop Cap	ドロップ キャップ
+	Edit Footer	フッターの編集
+	Edit Header	ヘッダーの編集
+	Edit Recipient List	アドレス帳の編集
+	Edit\nRecipient List	アドレス帳の編集
+	Edited	編集済み
+	Editing	編集
+	Editing header/footer	ヘッダー/フッターを編集中
+	Editing — edit the document directly	編集 — 文書を直接編集します
+	Editor	エディター
+	Effects	文字飾り
+	Emboss	浮き出し
+	Encrypt with Password	パスワードを使用して暗号化
+	English (United States)	英語（米国）
+	Engrave	浮き彫り
+	Enter page number:	ページ番号を入力:
+	Envelopes	封筒
+	Equation	数式
+	Eraser	消しゴム
+	Even Page	偶数ページから開始
+	Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel.	すべてのコマンドはスクリプトと AI エージェントから利用できます。`wordcraft-cli mcp` で MCP サーバーを起動するか、`--control <port>` を付けてアプリを起動すると JSON 制御チャネルが使えます。
+	Export	エクスポート
+	Export a copy to share (PDF, Word document)	共有用にコピーをエクスポート（PDF、Word 文書）
+	Export Page as PNG	ページを PNG としてエクスポート
+	Export PDF	PDF にエクスポート
+	Exported {path}	{path} にエクスポートしました
+	Extend Selection	選択範囲の拡張
+	Field	フィールド
+	File	ファイル
+	Find	検索
+	Find and Replace	検索と置換
+	Find Next	次を検索
+	Find Previous	前を検索
+	Find Recipient	宛先の検索
+	Find what:	検索する文字列:
+	Finish	完了
+	Finish & Merge	完了と差し込み
+	Finish &\nMerge	完了と差し込み
+	First Column	最初の列
+	First commit	最初のコミット
+	First line:	最初の行:
+	Fixed Column Width	列の幅を固定する
+	Focus	フォーカス
+	Font	フォント
+	Font Color	フォントの色
+	Font color:	フォントの色:
+	Font Dialog	フォント ダイアログ
+	Font Size	フォント サイズ
+	Font:	フォント:
+	Fonts	フォント
+	Footer	フッター
+	Footnote and Endnote	脚注と文末脚注
+	Footnotes	脚注
+	Format	書式
+	Format Page Numbers	ページ番号の書式設定
+	Format Page Numbers…	ページ番号の書式設定…
+	Format Painter	書式のコピー/貼り付け
+	Formatting at Selection	選択範囲の書式
+	Formula	計算式
+	General	全般
+	Go To	ジャンプ
+	Go to	移動
+	Go To (⌘⌥G)	ジャンプ (⌘⌥G)
+	Grab bag	ランダム表示
+	Greeting Line	あいさつ文
+	Greeting\nLine	あいさつ文
+	Gridlines	グリッド線
+	Group	グループ化
+	Grow Font 1 Point	フォントを 1 ポイント拡大
+	Hanging Indent	ぶら下げインデント
+	Header	ヘッダー
+	Header & Footer	ヘッダーとフッター
+	Header Row	タイトル行
+	Header/Footer Position	ヘッダー/フッターの位置
+	Heading 1	見出し 1
+	Heading 2	見出し 2
+	Heading 3	見出し 3
+	Headings	見出し
+	Heart	ハート
+	Help	ヘルプ
+	Hidden	隠し文字
+	Highlight Merge Fields	差し込みフィールドの強調表示
+	Highlight\nMerge Fields	差し込みフィールドの強調表示
+	Highlighter	蛍光ペン
+	Home	ホーム
+	Horizontal	横
+	Horizontal Line	横線
+	Hyphenation	ハイフネーション
+	Icons	アイコン
+	Ignore All	すべて無視
+	Illustrations	図
+	Immersive	イマーシブ
+	Immersive Reader	イマーシブ リーダー
+	Immersive\nReader	イマーシブ リーダー
+	Increase Font Size	フォント サイズの拡大
+	Increase Indent	インデントを増やす
+	Indent	インデント
+	Indentation	インデント
+	Indents	インデント
+	Index	索引
+	Info	情報
+	Ink to\nMath	インクを数式に変換
+	Ink to\nShape	インクを図形に変換
+	Ink\nReplay	インクの再生
+	Insert	挿入
+	Insert Above	上に行を挿入
+	Insert Below	下に行を挿入
+	Insert Caption	図表番号の挿入
+	Insert Citation	引用文献の挿入
+	Insert Endnote	文末脚注の挿入
+	Insert Footnote	脚注の挿入
+	Insert Hyperlink	ハイパーリンクの挿入
+	Insert Index	索引の挿入
+	Insert Left	左に列を挿入
+	Insert Merge Field	差し込みフィールドの挿入
+	Insert Merge\nField	差し込みフィールドの挿入
+	Insert Right	右に列を挿入
+	Insert Shapes	図形の挿入
+	Insert Table	表の挿入
+	Insert Table of Authorities	引用文献一覧の挿入
+	Insert Table of Figures	図表目次の挿入
+	Insert Table…	表の挿入…
+	Insert\nAbove	上に行を挿入
+	Insert\nCaption	図表番号の挿入
+	Insert\nCitation	引用文献の挿入
+	Insert\nFootnote	脚注の挿入
+	Inside Borders	内側の罫線
+	Inspect Document	ドキュメント検査
+	Interface language:	表示言語:
+	Italic	斜体
+	Join the ArtCraft community on Discord	Discord の ArtCraft コミュニティに参加
+	Join us on Discord: discord.gg/artcraft	Discord で参加: discord.gg/artcraft
+	Justify	両端揃え
+	Keep Lines Together	段落を分割しない
+	Keep lines together	段落を分割しない
+	Keep Text Only	テキストのみ保持
+	Keep with Next	次の段落と分離しない
+	Keep with next	次の段落と分離しない
+	Labels	ラベル
+	Landscape	横
+	Language	言語
+	Lasso	なげなわ
+	Last Column	最後の列
+	Last commit	最後のコミット
+	Layout	レイアウト
+	Layout Summary	レイアウトの概要
+	Left	左
+	Left Border	左罫線
+	Left:	左:
+	Letter	レター
+	Line	直線
+	Line and Page Breaks	改ページと改行
+	Line and Paragraph Spacing	行と段落の間隔
+	Line Break	改行
+	Line delta	行数の増減
+	Line End	行末
+	Line Numbers	行番号
+	Line Spacing	行間
+	Line Spacing Options…	行間のオプション…
+	Line spacing:	行間:
+	Line Start	行頭
+	Lines	行数
+	Lines added	追加行数
+	Lines deleted	削除行数
+	Link	リンク
+	Link to Previous	前と同じヘッダー/フッター
+	Links	リンク
+	Location: {path}	場所: {path}
+	lowercase	小文字
+	Macros	マクロ
+	Mailings	差し込み文書
+	Manage Sources	資料文献の管理
+	Many pages	複数ページ
+	Margins	余白
+	Mark Citation	引用文のマーク
+	Mark Entry	索引登録
+	Mark\nCitation	引用文のマーク
+	Mark\nEntry	索引登録
+	Markdown (*.md)	Markdown (*.md)
+	Match case	大文字と小文字を区別する
+	Match Fields	フィールドの対応
+	Matrix	行列
+	Merge	結合
+	Merge Cells	セルの結合
+	Merge Formatting	書式を結合
+	Merged PRs	マージ済みの PR
+	Mirrored	見開きページ
+	MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.	MIT OR Apache-2.0。Copyright (c) 2026 ArtCraft チームおよび WordCraft の貢献者。
+	Moderate	やや狭い
+	Modify Style	スタイルの変更
+	Modify…	変更…
+	Multilevel List	アウトライン
+	Multiple Pages	複数ページ
+	Name (A–Z)	名前（A–Z）
+	Name:	名前:
+	Narrow  0.5" all	狭い  上下左右 0.5"
+	Navigation	ナビゲーション
+	Navigation Pane	ナビゲーション ウィンドウ
+	New	新規
+	New Comment	新しいコメント
+	New from Template	テンプレートから新規作成
+	New Paragraph	新しい段落
+	New Style…	新しいスタイル…
+	New Window	新しいウィンドウ
+	New\nComment	新しいコメント
+	New\nWindow	新しいウィンドウ
+	Next	次へ
+	Next Change	次の変更箇所
+	Next Comment	次のコメント
+	Next Footnote	次の脚注
+	Next Page	次のページから開始
+	Next Record	次のレコード
+	Next Section	次へ
+	No Border	枠なし
+	No Color	色なし
+	No contributor data was built into this copy.	このビルドには貢献者のデータが含まれていません。
+	No Markup	変更履歴/コメントなし
+	No model credits were built into this copy.	このビルドにはモデルのクレジットが含まれていません。
+	No Paragraph Space	段落間隔なし
+	Nonbreaking Hyphen	改行なしハイフン
+	Nonbreaking Space	改行なしスペース
+	None	なし
+	Normal  1" all	標準  上下左右 1"
+	Normal Style	標準スタイル
+	Not available right now	現在は使用できません
+	Not saved	未保存
+	Not saved yet	まだ保存されていません
+	Number of columns:	列数:
+	Number of rows:	行数:
+	Numbering	段落番号
+	Object	オブジェクト
+	Odd Page	奇数ページから開始
+	Office 2003 Default	Office 2003 の既定値
+	OK	OK
+	One	1 段
+	One Page	1 ページ
+	Open	開く
+	OpenDocument Text (*.odt)	OpenDocument テキスト (*.odt)
+	Optional Hyphen	任意指定のハイフン
+	Options	オプション
+	Orientation	印刷の向き
+	Outline	アウトライン
+	Outline Level	アウトライン レベル
+	Outside Borders	外枠
+	Oval	楕円
+	Page	ページ
+	Page Background	ページの背景
+	Page Borders	ページ罫線
+	Page Break	改ページ
+	Page Break Before	段落前で改ページする
+	Page break before	段落前で改ページする
+	Page Breaks	改ページ
+	Page Color	ページの色
+	Page Down	下へスクロール
+	Page image (*.png)	ページ画像 (*.png)
+	Page Movement	ページの移動
+	Page Number	ページ番号
+	Page Setup	ページ設定
+	Page Up	上へスクロール
+	Page Width	ページ幅を基準に表示
+	Page width	ページ幅
+	Page X of Y	X / Y ページ
+	Page {page}	{page} ページ
+	Page {page} of {pages}	{page} / {pages} ページ
+	Page\nBorders	ページ罫線
+	Page\nColor	ページの色
+	Page\nNumber	ページ番号
+	Pages	ページ
+	Paragraph	段落
+	Paragraph Details	段落の詳細
+	Paragraph Down	次の段落へ
+	Paragraph Settings	段落の設定
+	Paragraph Spacing	段落の間隔
+	Paragraph Up	前の段落へ
+	Paragraphs	段落数
+	Paste	貼り付け
+	Paste (⌘V)	貼り付け (⌘V)
+	Paste Formatting	書式の貼り付け
+	Paste: Keep Text Only	貼り付け: テキストのみ保持
+	Paste: Merge Formatting	貼り付け: 書式を結合
+	PDF document (*.pdf)	PDF 文書 (*.pdf)
+	Pen	ペン
+	Pencil	鉛筆
+	Picture Border	図の枠線
+	Picture Format	図の形式
+	Picture Styles	図のスタイル
+	Pictures	画像
+	Plain text (*.txt)	テキスト (*.txt)
+	Portrait	縦
+	Position	位置
+	Preview Results	結果のプレビュー
+	Preview\nResults	結果のプレビュー
+	Previous	前へ
+	Previous Change	前の変更箇所
+	Previous Comment	前のコメント
+	Previous Record	前のレコード
+	Previous Section	前へ
+	Print	印刷
+	Print Layout	印刷レイアウト
+	Print\nLayout	印刷レイアウト
+	Proofing	文章校正
+	Proofing Issues	文章校正の問題
+	Properties	プロパティ
+	Protect	保護
+	Protect Document	文書の保護
+	Quick Access Toolbar	クイック アクセス ツール バー
+	Quick Parts	クイック パーツ
+	Quick Tables	クイック表作成
+	Read Aloud	音声読み上げ
+	Read Mode	閲覧モード
+	Read\nAloud	音声読み上げ
+	Read\nMode	閲覧モード
+	Recent	最近使ったファイル
+	Record Macro	マクロの記録
+	Recover Unsaved Documents	保存されていない文書の回復
+	Rectangle	四角形
+	Redo	やり直し
+	Reduce Hanging Indent	ぶら下げインデントを減らす
+	References	参考資料
+	Reject	元に戻す
+	Reject All Changes	すべての変更を元に戻す
+	Reject Change	変更を元に戻す
+	Relaxed	ゆったり
+	Remove Background	背景の削除
+	Remove Footer	フッターの削除
+	Remove Header	ヘッダーの削除
+	Remove Hyperlink	ハイパーリンクの削除
+	Remove Space After Paragraph	段落後の間隔を削除
+	Remove Table of Contents	目次の削除
+	Remove Watermark	透かしの削除
+	Repeat	繰り返し
+	Repeat Header Rows	タイトル行の繰り返し
+	Replace	置換
+	Replace All	すべて置換
+	Replace Document Text	文書のテキストを置換
+	Replace with:	置換後の文字列:
+	Replay	再生
+	Reply	返信
+	Report	レポート
+	Research	調査
+	Researcher	リサーチツール
+	Reset Picture	図のリセット
+	Resolve	解決
+	Resolved	解決済み
+	Restart at 1	1 から振り直す
+	Restart Each Page	ページごとに振り直し
+	Restart Each Section	セクションごとに振り直し
+	Restrict Editing	編集の制限
+	Restrict\nEditing	編集の制限
+	Results	結果
+	Reverse the order	順序を逆にする
+	Review	校閲
+	Reviewing	校閲
+	Reviewing Pane	[変更履歴] ウィンドウ
+	Reviewing — edits become suggestions	校閲 — 編集内容は提案として記録されます
+	Rich Text Format (*.rtf)	リッチ テキスト形式 (*.rtf)
+	Right	右
+	Right Border	右罫線
+	Right-to-Left Text Direction	右から左への文字方向
+	Right:	右:
+	Rotate	回転
+	Rounded Rectangle	角丸四角形
+	Rows & Columns	行と列
+	Ruler	ルーラー
+	Rules	ルール
+	Résumé	履歴書
+	Save	保存
+	Save a copy in another format. Printing goes through a PDF you can print from any viewer.	コピーを別の形式で保存します。印刷は PDF を経由し、任意のビューアーから印刷できます。
+	Save As	名前を付けて保存
+	Save as Template	テンプレートとして保存
+	Saved	保存済み
+	Search Commands	コマンドの検索
+	Search commands and help	コマンドとヘルプを検索
+	Search document	文書内を検索
+	Section Breaks	セクション区切り
+	Section Properties	セクションのプロパティ
+	Sections	セクション数
+	Select	選択
+	Select All	すべて選択
+	Select Cell	セルの選択
+	Select Line	行の選択
+	Select Objects	オブジェクトの選択
+	Select Paragraph	段落の選択
+	Select Range	範囲の選択
+	Select Recipients	宛先の選択
+	Select Row	行の選択
+	Select Sentence	文の選択
+	Select Table	表の選択
+	Select Text	テキストの選択
+	Select Text with Similar Formatting	同じ書式のテキストを選択
+	Select Word	単語の選択
+	Select\nRecipients	宛先の選択
+	Selection	選択範囲
+	Selection Pane	オブジェクトの選択と表示
+	Send Backward	背面へ移動
+	Sentence case.	文の先頭文字を大文字にする。
+	Set as Default	既定に設定
+	Set Caret	カーソル位置の設定
+	Set Character Formatting	文字書式の設定
+	Set Numbering Value	番号の設定
+	Set Paragraph Formatting	段落書式の設定
+	Shading	網かけ
+	Shadow	影
+	Shape Fill	図形の塗りつぶし
+	Shape Format	図形の書式
+	Shape Outline	図形の枠線
+	Shape Styles	図形のスタイル
+	Shapes	図形
+	Share	共有
+	Shift+Tab	Shift+Tab
+	Show	表示
+	Show all formatting marks	すべての編集記号を表示する
+	Show Comments	コメントの表示
+	Show Markup	変更履歴とコメントの表示
+	Show Notes	注の表示
+	Show rulers	ルーラーを表示する
+	Show the community button in the title bar	タイトル バーにコミュニティ ボタンを表示する
+	Show/Hide ¶	編集記号の表示/非表示 ¶
+	Show\nComments	コメントの表示
+	Shrink Font 1 Point	フォントを 1 ポイント縮小
+	Side to Side	左右に並べる
+	Side\nto Side	左右に並べる
+	Signature Line	署名欄
+	Single	一重線
+	Single Spacing	1 行
+	Size	サイズ
+	Size:	サイズ:
+	Small Caps	小型英大文字
+	Small caps	小型英大文字
+	SmartArt	SmartArt
+	Sort	並べ替え
+	Source code: github.com/storytold/wordcraft	ソース コード: github.com/storytold/wordcraft
+	Space before/after:	段落前/後の間隔:
+	Spacing	間隔
+	Spacing (pt):	間隔 (pt):
+	Speech	音声
+	Spelling & Grammar	スペル チェックと文章校正
+	Spelling &\nGrammar	スペル チェックと文章校正
+	Spelling Suggestions	スペルの候補
+	Split	分割
+	Split Cells	セルの分割
+	Split Table	表の分割
+	Spreadsheet Table	スプレッドシート
+	Standard Colors	標準の色
+	Star	星
+	Start Mail Merge	差し込み印刷の開始
+	Start Mail\nMerge	差し込み印刷の開始
+	Statistics	統計
+	Status Bar	ステータス バー
+	Strikethrough	取り消し線
+	Studio cover	スタジオ表紙
+	Studio handbook (sample)	スタジオ ハンドブック（サンプル）
+	Style	スタイル
+	Style based on:	基準にするスタイル:
+	Style Set	スタイル セット
+	Style: APA	スタイル: APA
+	Styles	スタイル
+	Styles Pane	スタイル ウィンドウ
+	Subscript	下付き
+	Superscript	上付き
+	Switch Modes	モードの切り替え
+	Switch\nModes	モードの切り替え
+	Symbol	記号と特殊文字
+	Symbols	記号と特殊文字
+	Synonyms	類義語
+	Tab	タブ
+	Table	表
+	Table Column Width	表の列の幅
+	Table Design	テーブル デザイン
+	Table Layout	表のレイアウト
+	Table of Authorities	引用文献一覧
+	Table of Contents	目次
+	Table of\nContents	目次
+	Table Properties	表のプロパティ
+	Table Row Height	表の行の高さ
+	Table Style Options	表スタイルのオプション
+	Table Styles	表のスタイル
+	Tables	表
+	Tabs	タブ
+	Tabular List	表形式の一覧
+	Text	テキスト
+	Text Box	テキスト ボックス
+	Text Direction	文字列の方向
+	Text Effects	文字の効果
+	Text Effects and Typography	文字の効果と体裁
+	Text from File	ファイルからテキストを挿入
+	Text Highlight Color	蛍光ペンの色
+	Text to display:	表示文字列:
+	Text Wrapping	文字列の折り返し
+	Text:	テキスト:
+	Text\nBox	テキスト ボックス
+	Text\nDirection	文字列の方向
+	The new style takes the formatting of the current paragraph.	新しいスタイルには現在の段落の書式が使われます。
+	Theme Colors	テーマの色
+	Theme Fonts	テーマのフォント
+	Theme List	テーマの一覧
+	Themes	テーマ
+	Thesaurus	類義語辞典
+	Thick	太線
+	Three	3 段
+	Tight	狭い
+	Top Border	上罫線
+	Top of Page	ページの上部
+	Top:	上:
+	Total Row	集計行
+	Track Changes	変更履歴の記録
+	Track Changes: On	変更履歴の記録: オン
+	Tracking	変更履歴
+	Translate	翻訳
+	Transparency	透明度
+	Triangle	三角形
+	Two	2 段
+	Type a command, e.g. "insert table"	コマンドを入力（例: "insert table"）
+	Type Text	テキストを入力
+	Underline	下線
+	Underline Words Only	単語のみ下線
+	Undo	元に戻す
+	Undo {action}	元に戻す: {action}
+	Up	上
+	Update Field	フィールドの更新
+	Update Index	索引の更新
+	Update Style to Match Selection	選択箇所と一致するようにスタイルを更新
+	Update Table	目次の更新
+	Update Table of Figures	図表目次の更新
+	Update to Match	一致するように更新
+	Update to Match Selection	選択箇所と一致するように更新
+	UPPERCASE	大文字
+	User Name	ユーザー名
+	User name:	ユーザー名:
+	Version History	バージョン履歴
+	Version {version} ({build})	バージョン {version}（{build}）
+	Vertical	縦
+	Vertical Alignment	垂直方向の配置
+	View	表示
+	View Gridlines	グリッド線の表示
+	View State	表示の状態
+	Views	表示
+	Voice	音声
+	Watermark	透かし
+	Wave	波線
+	Web Layout	Web レイアウト
+	Web page (*.html)	Web ページ (*.html)
+	Web\nLayout	Web レイアウト
+	Whole page	ページ全体
+	Whole words	単語単位で探す
+	Wide	広い
+	Widow/Orphan Control	改ページ時 1 行残して段落を区切らない
+	Widow/Orphan control	改ページ時 1 行残して段落を区切らない
+	Wildcards (regex)	ワイルドカード（正規表現）
+	Window	ウィンドウ
+	Word Count	文字カウント
+	Word document (*.docx)	Word 文書 (*.docx)
+	Word Left	前の単語へ
+	Word Right	次の単語へ
+	WordArt	ワードアート
+	WordCraft	WordCraft
+	Words	単語数
+	Words only	単語のみ
+	Wrap Text	文字列の折り返し
+	Wrap\nText	文字列の折り返し
+	Write & Insert Fields	文章入力とフィールドの挿入
+	Zoom	ズーム
+	Zoom In	拡大
+	Zoom Out	縮小
+	{group} settings	{group} の設定
+	{key}+Click to follow link	{key} キーを押しながらクリックしてリンク先を表示
+	➕ New comment	➕ 新しいコメント
+	📂  Browse…	📂  参照…
+	{words} words	{words} 語
+	{selected} of {words} words	{selected}/{words} 語

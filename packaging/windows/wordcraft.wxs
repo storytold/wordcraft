@@ -4,16 +4,19 @@
 
     wix build wordcraft.wxs -arch x64 -d Version=1.2.3 -d BinDir=... -d IconPath=... -o out.msi
 
-  Per-machine install into Program Files, a Start Menu shortcut, `.pcraft` owned by WordCraft,
-  and WordCraft offered under "Open with" for PSD/PSB and the image formats it reads (without
-  taking over the user's default app for them).
+  Per-machine install into Program Files with a Start Menu shortcut.
+
+  UpgradeCode and the component GUIDs below belong to WordCraft alone. Never copy them from (or
+  into) a sibling Craft app: Windows Installer treats every package sharing an UpgradeCode as one
+  product, so a shared code makes one app's installer refuse to install ("a newer version is
+  already installed") or silently uninstall the other. packaging-lint.yml checks this.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Package
       Name="WordCraft"
       Manufacturer="Learning Machines LLC"
       Version="$(var.Version)"
-      UpgradeCode="49E87D30-BB68-4896-AA1D-F45C833CFC3C"
+      UpgradeCode="075497F9-E861-45D0-9C7F-A74F8C34E6BA"
       Scope="perMachine"
       Compressed="yes"
       Language="1033">
@@ -42,7 +45,7 @@
 
   <Fragment>
     <ComponentGroup Id="WordcraftFiles" Directory="INSTALLFOLDER">
-      <Component Id="WordcraftApp" Guid="DE018EF3-EE87-4E36-9F76-0B7B060A195E">
+      <Component Id="WordcraftApp" Guid="855DCEC6-9285-444F-9382-9654B83B34F6">
         <File Id="WordcraftExe" Source="$(var.BinDir)\wordcraft.exe" KeyPath="yes">
           <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="WordCraft"
               Description="WordCraft word processor" WorkingDirectory="INSTALLFOLDER" Advertise="yes"

@@ -45,7 +45,7 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                 ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
                 // AutoSave toggle (on when the document has a path).
                 let has_path = app.session.path.is_some();
-                ui.label(egui::RichText::new("AutoSave").font(regular(11.5)).color(t.text_dim));
+                ui.label(egui::RichText::new(tl!("AutoSave")).font(regular(11.5)).color(t.text_dim));
                 let (r, resp) = ui.allocate_exact_size(vec2(30.0, 16.0), Sense::click());
                 let on = has_path && app.canvas_autosave();
                 ui.painter().rect(
@@ -57,7 +57,7 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                 );
                 let knob = if on { r.max.x - 8.0 } else { r.min.x + 8.0 };
                 ui.painter().circle_filled(pos2(knob, r.center().y), 5.0, if on { egui::Color32::WHITE } else { t.text_dim });
-                if resp.on_hover_text("AutoSave saves every change to the file (needs a saved document)").clicked() {
+                if resp.on_hover_text(tl!("AutoSave saves every change to the file (needs a saved document)")).clicked() {
                     if has_path {
                         app.toggle_autosave();
                     } else {
@@ -65,12 +65,12 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                     }
                 }
                 ui.add_space(8.0);
-                qat_button(ui, app, "save", "Save", "file.save", true);
+                qat_button(ui, app, "save", tl!("Save"), "file.save", true);
                 let can_undo = app.session.can_undo();
                 let can_redo = app.session.can_redo();
-                qat_button(ui, app, "undo", &format!("Undo {}", app.session.undo_label().unwrap_or("")), "edit.undo", can_undo);
-                qat_button(ui, app, "redo", "Redo", "edit.redo", can_redo);
-                qat_button(ui, app, "more", "Customize Quick Access Toolbar", "ui.dialog", true);
+                qat_button(ui, app, "undo", &crate::i18n::prefixed("Undo", app.session.undo_label().unwrap_or("")), "edit.undo", can_undo);
+                qat_button(ui, app, "redo", tl!("Redo"), "edit.redo", can_redo);
+                qat_button(ui, app, "more", tl!("Customize Quick Access Toolbar"), "ui.dialog", true);
                 qat_end = ui.min_rect().max.x;
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // Account / community.
@@ -94,8 +94,14 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                             egui::Color32::WHITE,
                             egui::Color32::WHITE,
                         );
-                        ui.painter().text(pos2(r.min.x + 24.0, r.center().y), Align2::LEFT_CENTER, "Discord", medium(11.5), egui::Color32::WHITE);
-                        if resp.on_hover_text("Join the ArtCraft community on Discord").clicked() {
+                        ui.painter().text(
+                            pos2(r.min.x + 24.0, r.center().y),
+                            Align2::LEFT_CENTER,
+                            tl!("Discord"),
+                            medium(11.5),
+                            egui::Color32::WHITE,
+                        );
+                        if resp.on_hover_text(tl!("Join the ArtCraft community on Discord")).clicked() {
                             let _ = app.run("ui.discord", json!({}));
                         }
                         ui.add_space(8.0);
@@ -104,7 +110,13 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                     let (r, resp) = ui.allocate_exact_size(vec2(260.0, 26.0), Sense::click());
                     ui.painter().rect(r, 6.0, if resp.hovered() { t.input } else { t.ribbon }, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
                     icons::paint(ui.painter(), Rect::from_min_size(r.min + vec2(8.0, 5.0), vec2(16.0, 16.0)), "search", t.text_dim, t.accent);
-                    ui.painter().text(pos2(r.min.x + 30.0, r.center().y), Align2::LEFT_CENTER, "Search commands and help", regular(12.0), t.text_dim);
+                    ui.painter().text(
+                        pos2(r.min.x + 30.0, r.center().y),
+                        Align2::LEFT_CENTER,
+                        tl!("Search commands and help"),
+                        regular(12.0),
+                        t.text_dim,
+                    );
                     if resp.clicked() {
                         let _ = app.run("ui.dialog", json!({"name": "commands"}));
                     }
@@ -116,11 +128,11 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                 "{} — {}",
                 app.title_stem(),
                 if app.session.dirty {
-                    "Edited"
+                    tl!("Edited")
                 } else if app.session.path.is_some() {
-                    "Saved"
+                    tl!("Saved")
                 } else {
-                    "Not saved"
+                    tl!("Not saved")
                 }
             );
             let g = ui.ctx().fonts_mut(|f| f.layout_no_wrap(title.clone(), semibold(12.5), t.text));
@@ -150,25 +162,28 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                 let st = |ui: &mut Ui, s: &str| {
                     ui.add(egui::Label::new(egui::RichText::new(s).font(regular(11.5)).color(t.text_dim)).sense(Sense::click()))
                 };
-                if st(ui, &format!("Page {page} of {}", l.pages.len())).on_hover_text("Go To (⌘⌥G)").clicked() {
+                if st(ui, &crate::i18n::fmt(tl!("Page {page} of {pages}"), &[("page", &page.to_string()), ("pages", &l.pages.len().to_string())]))
+                    .on_hover_text(tl!("Go To (⌘⌥G)"))
+                    .clicked()
+                {
                     let _ = app.run("ui.dialog", json!({"name": "goto"}));
                 }
                 let words = app.cached_word_count();
                 let wtxt = if app.session.sel.is_collapsed() {
-                    format!("{words} words")
+                    crate::i18n::fmt(tl!("{words} words"), &[("words", &words.to_string())])
                 } else {
                     let sw = wordcraft_doc::count_words(&app.session.selected_text());
-                    format!("{sw} of {words} words")
+                    crate::i18n::fmt(tl!("{selected} of {words} words"), &[("selected", &sw.to_string()), ("words", &words.to_string())])
                 };
                 if st(ui, &wtxt).clicked() {
                     let _ = app.run("ui.dialog", json!({"name": "wordCount"}));
                 }
                 if app.session.sel.focus.story != StoryRef::Body {
-                    st(ui, "Editing header/footer");
+                    st(ui, tl!("Editing header/footer"));
                 }
-                st(ui, "English (United States)");
+                st(ui, tl!("English (United States)"));
                 if app.session.doc.settings.track_changes {
-                    st(ui, "Track Changes: On");
+                    st(ui, tl!("Track Changes: On"));
                 }
                 if let Some((msg, at)) = &app.status_msg
                     && crate::now_ms() - at < 6000.0
@@ -184,7 +199,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     {
                         let _ = app.run("ui.dialog", json!({"name": "zoom"}));
                     }
-                    if small_icon(ui, "plus", "Zoom In") {
+                    if small_icon(ui, "plus", tl!("Zoom In")) {
                         let _ = app.run("view.zoomIn", json!({}));
                     }
                     // Zoom slider (10%–500%, 100% in the middle).
@@ -194,7 +209,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     if ui.add(slider).changed() {
                         let _ = app.run("view.zoom", json!({"value": (v * 100.0).round()}));
                     }
-                    if small_icon(ui, "minus", "Zoom Out") {
+                    if small_icon(ui, "minus", tl!("Zoom Out")) {
                         let _ = app.run("view.zoomOut", json!({}));
                     }
                     ui.add_space(10.0);
@@ -217,12 +232,14 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                         }
                     }
                     ui.add_space(8.0);
-                    let (r, resp) = ui.allocate_exact_size(vec2(56.0, 20.0), Sense::click());
+                    let focus = tl!("Focus");
+                    let focus_w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(focus.to_string(), regular(11.5), t.text_dim).size().x);
+                    let (r, resp) = ui.allocate_exact_size(vec2((focus_w + 26.0).max(56.0), 20.0), Sense::click());
                     if resp.hovered() {
                         ui.painter().rect_filled(r, 3.0, t.hover);
                     }
                     icons::paint(ui.painter(), Rect::from_min_size(r.min + vec2(2.0, 2.0), vec2(16.0, 16.0)), "focus", t.icon, t.accent);
-                    ui.painter().text(pos2(r.min.x + 22.0, r.center().y), Align2::LEFT_CENTER, "Focus", regular(11.5), t.text_dim);
+                    ui.painter().text(pos2(r.min.x + 22.0, r.center().y), Align2::LEFT_CENTER, focus, regular(11.5), t.text_dim);
                     if resp.clicked() {
                         let _ = app.run("view.focus", json!({}));
                     }

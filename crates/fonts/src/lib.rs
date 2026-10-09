@@ -50,6 +50,23 @@ pub fn japanese_ui_fonts(bold: bool) -> Vec<&'static CraftFont> {
     v
 }
 
+/// The craft-fonts faces for Simplified Chinese (`"Hans"`), in manifest order. Empty without
+/// craft-fonts.
+pub fn chinese_fonts() -> impl Iterator<Item = &'static CraftFont> {
+    CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Hans"))
+}
+
+/// The CJK interface faces, Regular styles only (the UI fakes no bold): the Japanese UI face and
+/// the Chinese face, Chinese first when `prefer_hans` (a Chinese interface), Japanese first
+/// otherwise. Mixing the two within a line would mix glyph styles, so the first face should
+/// cover the interface language. Empty without craft-fonts.
+pub fn ui_cjk_fonts(prefer_hans: bool) -> Vec<&'static CraftFont> {
+    let regular = |f: &&CraftFont| f.style == "Regular";
+    let ja = japanese_ui_fonts(false).into_iter().filter(regular).take(1);
+    let zh = chinese_fonts().filter(regular).take(1);
+    if prefer_hans { zh.chain(ja).collect() } else { ja.chain(zh).collect() }
+}
+
 /// The bundled serif used when a document asks for nothing better.
 pub const DEFAULT_FAMILY: &str = "Source Serif 4";
 
