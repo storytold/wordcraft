@@ -249,6 +249,58 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     }
                 }
             }
+<<<<<<< HEAD
+
+            // Table cells: Draw gridlines and handle resizing interactions
+            for it in &page.items {
+                if let Placed::Cell { rect, .. } = it {
+                    // Physical rectangle on screen
+                    let r = Rect::from_min_size(
+                        pos2(sr.min.x + rect.x * geo.scale, sr.min.y + rect.y * geo.scale),
+                        vec2(rect.w * geo.scale, rect.h * geo.scale),
+                    );
+
+                    // Draw gridlines if they are enabled
+                    if app.session.view.gridlines {
+                        painter.rect_stroke(r, 0.0, Stroke::new(0.5, t.blue.linear_multiply(0.6)), egui::StrokeKind::Middle);
+                    }
+
+                    // --- RESIZE COLUMNS (Right border) ---
+                    // Create an invisible area 6 pixels wide right over the right border
+                    let col_drag_rect = Rect::from_min_max(pos2(r.max.x - 3.0, r.min.y), pos2(r.max.x + 3.0, r.max.y));
+                    let col_id = ui.id().with(("col_resize", rect.x.to_bits(), rect.y.to_bits()));
+                    let col_resp = ui.interact(col_drag_rect, col_id, Sense::drag());
+
+                    if col_resp.hovered() || col_resp.dragged() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeColumn); // Change cursor to ↔
+                    }
+                    if col_resp.dragged() {
+                        // Identify which cell we are dragging
+                        if let Some(pos) = layout.hit(i, rect.x, rect.y, app.session.sel.focus.story) {
+                            app.session.sel = wordcraft_engine::Selection::caret(pos);
+                            // Calculate the new size adding the drag delta (un-scaled to actual points)
+                            let new_width = rect.w + (col_resp.drag_delta().x / geo.scale);
+                            let _ = app.run("table.columnWidth", json!({"width": new_width}));
+                        }
+                    }
+
+                    // --- RESIZE ROWS (Bottom border) ---
+                    // Create an invisible area 6 pixels high over the bottom border
+                    let row_drag_rect = Rect::from_min_max(pos2(r.min.x, r.max.y - 3.0), pos2(r.max.x, r.max.y + 3.0));
+                    let row_id = ui.id().with(("row_resize", rect.x.to_bits(), rect.y.to_bits()));
+                    let row_resp = ui.interact(row_drag_rect, row_id, Sense::drag());
+
+                    if row_resp.hovered() || row_resp.dragged() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeRow); // Change cursor to ↕
+                    }
+                    if row_resp.dragged() {
+                        if let Some(pos) = layout.hit(i, rect.x, rect.y, app.session.sel.focus.story) {
+                            app.session.sel = wordcraft_engine::Selection::caret(pos);
+                            let new_height = rect.h + (row_resp.drag_delta().y / geo.scale);
+                            let _ = app.run("table.rowHeight", json!({"height": new_height}));
+                        }
+                    }
+=======
             // Table gridlines.
             if app.session.view.gridlines {
                 for it in &page.items {
@@ -259,6 +311,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         );
                         painter.rect_stroke(r, 0.0, Stroke::new(0.5, t.blue.linear_multiply(0.6)), egui::StrokeKind::Middle);
                     }
+>>>>>>> 7584b9b2930ffddfe7db96b6eba977262e55135c
                 }
             }
         }

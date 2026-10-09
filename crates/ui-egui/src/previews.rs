@@ -49,9 +49,16 @@ impl Previews {
                 ui.painter().rect_filled(r, 3.0, t.hover);
             }
             let tex = tex.or_else(|| {
+<<<<<<< HEAD
+                // Context accessors share a lock: read input before taking the data write lock.
+                let now = ui.input(|i| i.time);
+                let n = ui.ctx().data_mut(|d| {
+                    let c = d.get_temp_mut_or_default::<(f64, u32)>(egui::Id::new("font_preview_budget"));
+=======
                 let n = ui.ctx().data_mut(|d| {
                     let c = d.get_temp_mut_or_default::<(f64, u32)>(egui::Id::new("font_preview_budget"));
                     let now = ui.input(|i| i.time);
+>>>>>>> 7584b9b2930ffddfe7db96b6eba977262e55135c
                     if c.0 != now {
                         *c = (now, 0);
                     }
@@ -295,3 +302,48 @@ pub fn table_style_tile(ui: &mut Ui, app: &mut WordApp, style: &str) -> Response
     }
     resp
 }
+<<<<<<< HEAD
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn font_menu_previews_render_defer_and_reuse_without_deadlocking() {
+        // A nested Context lock used to hang the first uncached menu entry. Bound the wait so
+        // a regression fails the test instead of hanging the entire test suite.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let ctx = egui::Context::default();
+            let preview = Previews::default().font_preview_fn();
+            let budget_id = egui::Id::new("font_preview_budget");
+            let sans_id = egui::Id::new("font:Source Sans 3");
+            let inter_id = egui::Id::new("font:Inter");
+            ctx.data_mut(|d| d.insert_temp(budget_id, (1.0_f64, 11_u32)));
+
+            for time in [1.0, 2.0, 3.0] {
+                let input = egui::RawInput { time: Some(time), ..Default::default() };
+                ctx.run_ui(input, |ui| {
+                    preview(ui, "Source Sans 3");
+                    preview(ui, "Inter");
+                })
+                .drop_without_applying_deltas();
+                ctx.data(|d| {
+                    assert!(d.get_temp::<TextureHandle>(sans_id).is_some());
+                    if time == 1.0 {
+                        assert!(d.get_temp::<TextureHandle>(inter_id).is_none(), "over-budget entry should defer");
+                        assert_eq!(d.get_temp::<(f64, u32)>(budget_id), Some((1.0, 13)));
+                    } else {
+                        assert!(d.get_temp::<TextureHandle>(inter_id).is_some(), "deferred entry should render next frame");
+                        assert_eq!(d.get_temp::<(f64, u32)>(budget_id), Some((2.0, 1)), "cached entries should not consume budget");
+                    }
+                });
+            }
+            tx.send(()).unwrap();
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(30)).expect("font menu preview rendering hung or failed");
+        worker.join().unwrap();
+    }
+}
+=======
+>>>>>>> 7584b9b2930ffddfe7db96b6eba977262e55135c

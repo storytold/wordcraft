@@ -194,6 +194,36 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"align"?: "left|center|right"}"#)),
         CommandSpec::new("table.fromText", "Convert Text to Table", "Insert › Tables", from_text).params(r#"{"separator"?: "tab|comma"}"#),
         CommandSpec::new("table.quick", "Quick Tables", "Insert › Tables", quick_table).params(r#"{"kind"?: "calendar|tabular|matrix"}"#),
+<<<<<<< HEAD
+        
+        // Nuevo comando integrado correctamente
+        t(CommandSpec::new("table.size", "Table Size", "Table Layout › Table", |s, v| {
+            let width = p::f32(v, "width");
+            let percent = p::f32(v, "percent");
+            
+            with_table(s, |t| {
+                if let Some(w) = width {
+                    let w = w.clamp(10.0, 3000.0);
+                    let total_current: f32 = t.grid.iter().sum();
+                    
+                    if total_current > 0.0 {
+                        let scale = w / total_current;
+                        t.grid.iter_mut().for_each(|col_width| *col_width *= scale);
+                    }
+                    
+                    t.props.width = Some(w);
+                    t.props.width_pct = None;
+                    t.props.fixed = true;
+                } else if let Some(pct) = percent {
+                    t.props.width_pct = Some(pct.clamp(1.0, 100.0));
+                    t.props.width = None;
+                    t.props.fixed = false;
+                }
+            })
+        })
+        .params(r#"{"width"?: pt, "percent"?: 1..100}"#)),
+=======
+>>>>>>> 7584b9b2930ffddfe7db96b6eba977262e55135c
     ]
 }
 
