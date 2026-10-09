@@ -12,5 +12,6 @@ workspace = true
 wordcraft-doc = { workspace = true }
 wordcraft-engine = { workspace = true }
 wordcraft-render = { workspace = true }
+wordcraft-chat = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }

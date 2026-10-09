@@ -22,12 +22,36 @@ pub struct Remote {
     addr: String,
     conn: Option<(BufReader<TcpStream>, TcpStream)>,
     next_id: u64,
+    /// Control key (env `WORDCRAFT_CONTROL_KEY` or the per-instance key file), read lazily.
+    key: Option<String>,
+}
+
+/// Key lookup order: `env` (`WORDCRAFT_CONTROL_KEY`), then the per-instance key file in
+/// `config_dir`. The error names the path that was tried.
+fn lookup_key(env: Option<String>, config_dir: Option<&std::path::Path>, port: Option<u16>) -> Result<String, String> {
+    if let Some(k) = env.map(|k| k.trim().to_string()).filter(|k| !k.is_empty()) {
+        return Ok(k);
+    }
+    let (Some(dir), Some(port)) = (config_dir, port) else {
+        return Err("no control key: set WORDCRAFT_CONTROL_KEY (no config directory or port to look in)".to_string());
+    };
+    let path = wordcraft_chat::control_key_path(dir, port);
+    match std::fs::read_to_string(&path).map(|k| k.trim().to_string()) {
+        Ok(k) if !k.is_empty() => Ok(k),
+        _ => Err(format!("no control key: set WORDCRAFT_CONTROL_KEY (looked in {})", path.display())),
+    }
+}
+
+/// The control key for the app on `addr`, looked up fresh (the app picks a new key at every start).
+fn find_key(addr: &str) -> Result<String, String> {
+    let port = addr.rsplit(':').next().and_then(|p| p.parse().ok());
+    lookup_key(std::env::var("WORDCRAFT_CONTROL_KEY").ok(), wordcraft_chat::config_dir().as_deref(), port)
 }
 
 impl Remote {
     /// Connect to `addr` (`127.0.0.1:7981`), failing fast when nothing is listening.
     pub fn connect(addr: &str) -> std::io::Result<Self> {
-        let mut r = Self { addr: addr.to_string(), conn: None, next_id: 1 };
+        let mut r = Self { addr: addr.to_string(), conn: None, next_id: 1, key: None };
         r.reconnect()?;
         Ok(r)
     }
@@ -73,23 +97,50 @@ impl Remote {
     }
 }
 
-impl Backend for Remote {
-    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
-        let id = self.next_id;
-        self.next_id += 1;
-        let line = json!({"id": id, "method": method, "params": params}).to_string();
-        // One retry with a fresh connection (the app may have restarted).
-        let reply = match self.roundtrip(&line) {
+impl Remote {
+    /// Send one request and parse the reply. Looks the key up when none is cached, and retries
+    /// once on a new connection (with a new key lookup) when the connection fails.
+    fn exchange(&mut self, id: u64, method: &str, params: &Value) -> Result<Value, String> {
+        let attempt = |this: &mut Self| -> std::io::Result<Result<String, String>> {
+            if this.key.is_none() {
+                match find_key(&this.addr) {
+                    Ok(k) => this.key = Some(k),
+                    Err(e) => return Ok(Err(e)),
+                }
+            }
+            let key = this.key.clone().unwrap_or_default();
+            let line = json!({"id": id, "key": key, "method": method, "params": params}).to_string();
+            this.roundtrip(&line).map(Ok)
+        };
+        let reply = match attempt(self) {
             Ok(r) => r,
             Err(_) => {
                 self.conn = None;
-                self.roundtrip(&line).map_err(|e| {
+                self.key = None;
+                attempt(self).map_err(|e| {
                     self.conn = None;
                     format!("WordCraft app at {} is not reachable: {e}", self.addr)
                 })?
             }
         };
-        let v: Value = serde_json::from_str(reply.trim()).map_err(|e| format!("bad reply from app: {e}"))?;
+        let reply = reply?;
+        serde_json::from_str(reply.trim()).map_err(|e| format!("bad reply from app: {e}"))
+    }
+}
+
+impl Backend for Remote {
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        let id = self.next_id;
+        self.next_id += 1;
+        // One retry with a fresh connection (the app may have restarted); a fresh connection
+        // also means a fresh key lookup.
+        let mut v = self.exchange(id, method, &params)?;
+        if v.get("error").and_then(Value::as_str) == Some("unauthorized") {
+            // Stale key (app restarted): drop it, reconnect, look it up again, retry once.
+            self.key = None;
+            self.conn = None;
+            v = self.exchange(id, method, &params)?;
+        }
         if v.get("ok").and_then(Value::as_bool) == Some(true) {
             Ok(v.get("result").cloned().unwrap_or(Value::Null))
         } else {
@@ -103,5 +154,36 @@ impl Backend for Remote {
 
     fn describe(&self) -> String {
         format!("connected to the WordCraft app at {}", self.addr)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn key_lookup_order() {
+        let dir = std::env::temp_dir().join(format!("wc-mcp-key-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{e}"));
+        let path = wordcraft_chat::control_key_path(&dir, 7981);
+
+        // Neither: the error names the path it looked for.
+        let e = lookup_key(None, Some(&dir), Some(7981)).unwrap_err();
+        assert!(e.contains(&path.display().to_string()), "{e}");
+        assert!(e.contains("WORDCRAFT_CONTROL_KEY"));
+
+        // File only: content is trimmed.
+        std::fs::write(&path, "  filekey\n").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(lookup_key(None, Some(&dir), Some(7981)).unwrap_or_default(), "filekey");
+        assert_eq!(lookup_key(Some("  ".into()), Some(&dir), Some(7981)).unwrap_or_default(), "filekey");
+
+        // Env wins over the file.
+        assert_eq!(lookup_key(Some(" envkey ".into()), Some(&dir), Some(7981)).unwrap_or_default(), "envkey");
+
+        // A new file content is seen on the next lookup (app restarted with a new key).
+        std::fs::write(&path, "newkey").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(lookup_key(None, Some(&dir), Some(7981)).unwrap_or_default(), "newkey");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

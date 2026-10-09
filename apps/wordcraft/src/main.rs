@@ -4,7 +4,8 @@
 //!
 //! `--control <port>` (or `WORDCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server:
 //! `{"id":1,"method":"engine.execute","params":{"command":"text.insert","params":{"text":"Hi"}}}`.
-//! See `docs/control-protocol.md`.
+//! Every request needs the key the app writes to `<config>/wordcraft/control-key.<instance>`
+//! (mode 0600, removed on exit) as top-level `"key"`; see `docs/control-protocol.md`.
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -13,7 +14,7 @@ mod control_server;
 use wordcraft_engine::Session;
 use wordcraft_ui_egui::{Services, UiState, WordApp};
 
-struct App(WordApp);
+struct App(WordApp, Option<std::path::PathBuf>);
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -30,21 +31,42 @@ impl eframe::App for App {
     }
     fn on_exit(&mut self) {
         save_prefs(&self.0);
+        if let Some(p) = &self.1 {
+            let _ = std::fs::remove_file(p);
+        }
     }
 }
 
 fn prefs_path() -> Option<std::path::PathBuf> {
-    let base = if cfg!(target_os = "macos") {
-        std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join("Library/Application Support/WordCraft"))
-    } else if cfg!(windows) {
-        std::env::var_os("APPDATA").map(|a| std::path::PathBuf::from(a).join("WordCraft"))
-    } else {
-        std::env::var_os("XDG_CONFIG_HOME")
-            .map(std::path::PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))
-            .map(|c| c.join("wordcraft"))
-    };
-    base.map(|b| b.join("ui.json"))
+    wordcraft_chat::config_dir().map(|b| b.join("ui.json"))
+}
+
+/// `<config>/wordcraft/control-key.<instance>` (mode 0600): the host tools' key for this instance
+/// of the control channel. The MCP bridge computes the same path with `wordcraft_chat::control_key_path`.
+fn control_key_path(port: u16) -> Option<std::path::PathBuf> {
+    prefs_path().and_then(|p| p.parent().map(|d| wordcraft_chat::control_key_path(d, port)))
+}
+
+/// Write the key file (create_new, 0600). `Err` carries a message for the user.
+fn write_control_key(p: &std::path::Path, key: &str) -> Result<(), String> {
+    if let Some(d) = p.parent() {
+        std::fs::create_dir_all(d).map_err(|e| format!("cannot create {}: {e}", d.display()))?;
+    }
+    let _ = std::fs::remove_file(p);
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(p)
+            .map_err(|e| format!("cannot create {}: {e}", p.display()))?;
+        f.write_all(key.as_bytes()).map_err(|e| format!("cannot write {}: {e}", p.display()))
+    }
+    #[cfg(not(unix))]
+    std::fs::write(p, key).map_err(|e| format!("cannot write {}: {e}", p.display()))
 }
 
 fn load_prefs(app: &mut WordApp) {
@@ -57,6 +79,9 @@ fn load_prefs(app: &mut WordApp) {
     {
         app.ui = ui;
         app.ui.backstage = false;
+        if wordcraft_ui_egui::chat_pane::valid_owner_name(&app.ui.owner_name) {
+            app.session.author = app.ui.owner_name.trim().to_string();
+        }
     }
 }
 
@@ -124,7 +149,7 @@ fn main() -> eframe::Result {
     let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("WordCraft")
-            .with_app_id("ai.storyteller.wordcraft")
+            .with_app_id(option_env!("WORDCRAFT_APP_ID").unwrap_or("ai.storyteller.wordcraft"))
             .with_inner_size([1440.0, 920.0])
             .with_min_inner_size([760.0, 480.0])
             .with_drag_and_drop(true)
@@ -144,16 +169,39 @@ fn main() -> eframe::Result {
             let mut app = WordApp::new(Session::new(doc), services());
             load_prefs(&mut app);
             app.integrated_titlebar = cfg!(target_os = "macos");
+            let mut key_file = None;
             if let Some(port) = control_port {
-                let rx = control_server::start(port, cc.egui_ctx.clone());
-                app = app.with_control(rx);
+                // Bind first: a failed bind must not touch any key file.
+                match std::net::TcpListener::bind(("127.0.0.1", port)) {
+                    Err(e) => eprintln!("wordcraft: control server failed to bind 127.0.0.1:{port}: {e}"),
+                    Ok(listener) => match wordcraft_chat::keys::random_hex(32) {
+                        Err(e) => eprintln!("wordcraft: no random key ({e}); control channel disabled"),
+                        Ok(key) => {
+                            match control_key_path(port) {
+                                Some(p) => match write_control_key(&p, &key) {
+                                    Ok(()) => key_file = Some(p),
+                                    Err(e) => eprintln!("wordcraft: control key file not written ({e}); host tools cannot connect"),
+                                },
+                                None => eprintln!("wordcraft: no config directory; control key file not written, host tools cannot connect"),
+                            }
+                            // Chat language: WORDCRAFT_CHAT_LANG (en | pt), English by default.
+                            let hub = wordcraft_chat::Hub::with_lang(key, wordcraft_chat::Lang::from_env());
+                            let ctx = cc.egui_ctx.clone();
+                            hub.set_notify(Box::new(move || ctx.request_repaint()));
+                            eprintln!("wordcraft: control server listening on 127.0.0.1:{port}");
+                            let rx = control_server::start_with(listener, cc.egui_ctx.clone(), hub.clone());
+                            app = app.with_control(rx).with_chat(hub);
+                            app.chat_logs_dir = wordcraft_chat::config_dir().map(|d| d.join("chat-logs"));
+                        }
+                    },
+                }
             }
             for f in files {
                 if let Err(e) = app.run("file.open", serde_json::json!({"path": f})) {
                     eprintln!("wordcraft: {f}: {e}");
                 }
             }
-            Ok(Box::new(App(app)))
+            Ok(Box::new(App(app, key_file)))
         }),
     )
 }
