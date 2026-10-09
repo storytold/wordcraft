@@ -8,6 +8,26 @@ use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId,
 pub const APP_COLOR: Color32 = Color32::from_rgb(0x3B, 0x5B, 0xDB);
 pub const APP_INK: Color32 = Color32::from_rgb(0x2B, 0x47, 0xB5);
 
+/// An app colour chosen by the page hosting WordCraft (the web build's `?accent=RRGGBB`), so the editor
+/// matches the site it is embedded in. It replaces the blue in both themes. Set it before the first frame.
+static HOST_ACCENT: std::sync::OnceLock<Color32> = std::sync::OnceLock::new();
+
+/// Use `color` instead of WordCraft's blue (first call wins).
+pub fn set_app_color(color: Color32) {
+    let _ = HOST_ACCENT.set(color);
+}
+
+/// The app colour in use: the host's, or WordCraft's blue.
+pub fn app_color() -> Color32 {
+    HOST_ACCENT.get().copied().unwrap_or(APP_COLOR)
+}
+
+/// `a` moved toward `b` by `t` (0..=1).
+fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
+    let m = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * t).round().clamp(0.0, 255.0) as u8;
+    Color32::from_rgb(m(a.r(), b.r()), m(a.g(), b.g()), m(a.b(), b.b()))
+}
+
 /// Every colour the UI uses; widgets never hard-code colours.
 #[derive(Clone, Copy, Debug)]
 pub struct Tokens {
@@ -47,6 +67,29 @@ pub struct Tokens {
 
 impl Tokens {
     pub fn light() -> Self {
+        Self::light_base().with_host_accent()
+    }
+    pub fn dark() -> Self {
+        Self::dark_base().with_host_accent()
+    }
+    /// The host's app colour in place of the blue: accent, accent ink, checked buttons and selection.
+    fn with_host_accent(mut self) -> Self {
+        let Some(&c) = HOST_ACCENT.get() else { return self };
+        if self.dark {
+            let light = mix(c, Color32::WHITE, 0.35);
+            self.accent = light;
+            self.accent_text = mix(c, Color32::WHITE, 0.55);
+            self.checked = mix(c, Color32::BLACK, 0.55);
+            self.selection = Color32::from_rgba_unmultiplied(light.r(), light.g(), light.b(), 0x55);
+        } else {
+            self.accent = c;
+            self.accent_text = mix(c, Color32::BLACK, 0.2);
+            self.checked = mix(c, Color32::WHITE, 0.84);
+            self.selection = Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 0x48);
+        }
+        self
+    }
+    fn light_base() -> Self {
         Tokens {
             dark: false,
             title_bar: Color32::from_rgb(0xF0, 0xF0, 0xF0),
@@ -82,7 +125,7 @@ impl Tokens {
             orange: Color32::from_rgb(0xE0, 0x7B, 0x1F),
         }
     }
-    pub fn dark() -> Self {
+    fn dark_base() -> Self {
         Tokens {
             dark: true,
             title_bar: Color32::from_rgb(0x1F, 0x1F, 0x1F),

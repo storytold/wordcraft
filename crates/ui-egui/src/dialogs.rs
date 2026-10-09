@@ -313,7 +313,7 @@ fn buttons(ui: &mut Ui, ok: &str) -> (bool, bool) {
             if ui.button(tl!("Cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 r.1 = true;
             }
-            let okb = ui.add(egui::Button::new(egui::RichText::new(ok).color(egui::Color32::WHITE)).fill(crate::theme::APP_COLOR));
+            let okb = ui.add(egui::Button::new(egui::RichText::new(ok).color(egui::Color32::WHITE)).fill(crate::theme::app_color()));
             if okb.clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 r.0 = true;
             }

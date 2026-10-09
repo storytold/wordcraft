@@ -3,7 +3,7 @@
 use egui::{Align2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use serde_json::json;
 
-use crate::theme::{APP_COLOR, Tokens, medium, regular, semibold};
+use crate::theme::{Tokens, app_color, medium, regular, semibold};
 use crate::{WordApp, icons};
 
 const PAGES: [(&str, &str); 9] = [
@@ -22,7 +22,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     egui::Panel::left("backstage_nav")
         .exact_size(200.0)
-        .frame(egui::Frame::NONE.fill(APP_COLOR).inner_margin(egui::Margin { left: 0, right: 0, top: 12, bottom: 12 }))
+        .frame(egui::Frame::NONE.fill(app_color()).inner_margin(egui::Margin { left: 0, right: 0, top: 12, bottom: 12 }))
         .show(ui, |ui| {
             let (r, resp) = ui.allocate_exact_size(vec2(200.0, 40.0), Sense::click());
             icons::paint(
