@@ -120,21 +120,24 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     }
                     ui.add_space(6.0);
                     let track = app.session.doc.settings.track_changes;
-                    ui.menu_button(
-                        egui::RichText::new(format!("✎ {} ▾", if track { tl!("Reviewing") } else { tl!("Editing") })).font(regular(12.0)),
-                        |ui| {
-                            if ui.selectable_label(!track, tl!(tl!("Editing — edit the document directly"))).clicked() {
-                                let _ = app.run("review.trackChanges", json!({"value": false}));
-                                ui.close();
-                            }
-                            if ui.selectable_label(track, tl!(tl!("Reviewing — edits become suggestions"))).clicked() {
-                                let _ = app.run("review.trackChanges", json!({"value": true}));
-                                ui.close();
-                            }
-                        },
+                    let mode = crate::widgets::icon_text_button(
+                        ui,
+                        "pencil",
+                        &format!("{} ▾", if track { tl!("Reviewing") } else { tl!("Editing") }),
+                        regular(12.0),
                     );
+                    egui::Popup::menu(&mode).show(|ui| {
+                        if ui.selectable_label(!track, tl!(tl!("Editing — edit the document directly"))).clicked() {
+                            let _ = app.run("review.trackChanges", json!({"value": false}));
+                            ui.close();
+                        }
+                        if ui.selectable_label(track, tl!(tl!("Reviewing — edits become suggestions"))).clicked() {
+                            let _ = app.run("review.trackChanges", json!({"value": true}));
+                            ui.close();
+                        }
+                    });
                     ui.add_space(4.0);
-                    if ui.button(egui::RichText::new(format!("💬 {}", tl!("Comments"))).font(regular(12.0))).clicked() {
+                    if crate::widgets::icon_text_button(ui, "comment", tl!("Comments"), regular(12.0)).clicked() {
                         let _ = app.run("view.commentsPane", json!({}));
                     }
                 });
@@ -366,7 +369,16 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                     ui.label(egui::RichText::new(tl!("Bullet Library")).small().weak());
                     ui.horizontal(|ui| {
                         for c in ["•", "○", "▪", "◆", "➢", "✓", "–"] {
-                            if ui.button(egui::RichText::new(c).size(16.0)).clicked() {
+                            // The interface fonts have no ➢, so its tile draws the arrowhead.
+                            let label = if c == "➢" { " " } else { c };
+                            let resp = ui.button(egui::RichText::new(label).size(16.0));
+                            if c == "➢" {
+                                let m = resp.rect.center();
+                                let pts = [(-4.0, -5.0), (5.0, 0.0), (-4.0, 5.0), (-1.5, 0.0)].map(|(x, y)| m + vec2(x, y));
+                                ui.painter().add(egui::Shape::convex_polygon(vec![pts[0], pts[1], pts[3]], Tokens::get(ui.ctx()).text, Stroke::NONE));
+                                ui.painter().add(egui::Shape::convex_polygon(vec![pts[3], pts[1], pts[2]], Tokens::get(ui.ctx()).text, Stroke::NONE));
+                            }
+                            if resp.clicked() {
                                 let _ = app.run("para.bullets", json!({"kind": c}));
                                 ui.close();
                             }

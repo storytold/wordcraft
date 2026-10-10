@@ -210,7 +210,7 @@ fn symbols(ui: &mut Ui, app: &mut WordApp) {
         if ui.add_enabled(start + page < all.len(), egui::Button::new("▼").min_size(vec2(16.0, 22.0))).clicked() {
             ui.data_mut(|d| d.insert_temp(start_id, start + per_row));
         }
-        let resp = ui.add(egui::Button::new("⋯").min_size(vec2(16.0, 22.0))).on_hover_text(tl!("All symbol sets"));
+        let resp = ui.add(egui::Button::new("…").min_size(vec2(16.0, 22.0))).on_hover_text(tl!("All symbol sets"));
         egui::Popup::menu(&resp).show(|ui| {
             ui.set_width(420.0);
             ui.horizontal_wrapped(|ui| {
