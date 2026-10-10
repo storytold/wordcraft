@@ -56,8 +56,8 @@ pub struct ViewState {
     pub ruler: bool,
     /// View › Show › Gridlines: the drawing grid over the page's text area (on screen only).
     pub gridlines: bool,
-    /// Table Layout › View Gridlines: outlines of table cells (on screen only).
-    #[serde(default)]
+    /// Table Layout › View Gridlines: outlines of table cells (on screen only); on by default, as in Word.
+    #[serde(default = "on")]
     pub table_gridlines: bool,
     pub nav_pane: bool,
     pub styles_pane: bool,
@@ -76,6 +76,10 @@ pub struct ViewState {
     pub proofing: bool,
 }
 
+fn on() -> bool {
+    true
+}
+
 impl Default for ViewState {
     fn default() -> Self {
         ViewState {
@@ -86,7 +90,7 @@ impl Default for ViewState {
             marks: false,
             ruler: true,
             gridlines: false,
-            table_gridlines: false,
+            table_gridlines: true,
             nav_pane: false,
             styles_pane: false,
             style_inspector: false,
@@ -241,9 +245,6 @@ pub struct Session {
     pub column: Option<ColumnBlock>,
     /// Column selection mode (Ctrl+Shift+F8): caret movement extends the block.
     pub column_mode: bool,
-    /// More pictures and shapes selected along with the one the selection holds (Shift+click),
-    /// for Group. Cleared by any edit or selection change other than adding to it.
-    pub also_selected: Vec<Pos>,
 }
 
 /// The equation being edited.
@@ -315,7 +316,6 @@ impl Session {
             math: None,
             math_latex: false,
             math_normal_text: false,
-            also_selected: Vec::new(),
             prefs: Prefs::default(),
             read_aloud: Default::default(),
             column: None,
@@ -484,7 +484,6 @@ impl Session {
         self.pending = None;
         self.column = None;
         self.column_mode = false;
-        self.also_selected.clear();
         self.reset_history();
         self.touch();
         self.dirty = false;
@@ -554,7 +553,6 @@ impl Session {
             // Column selection, like `sel`'s shape: valid only while `sel` matches it.
             column: _,
             column_mode: _,
-            also_selected: _,
         } = self;
         let head = if history.len() + SNAPSHOT_HEAD > MAX_UNDO { history.iter().take(SNAPSHOT_HEAD).cloned().collect() } else { Vec::new() };
         EditSnapshot {
@@ -583,7 +581,6 @@ impl Session {
         self.undo_evicted = evicted;
         self.doc = doc;
         self.sel = sel;
-        self.also_selected.clear();
         self.history.truncate(history_len);
         self.redo = redo;
         self.typing_open = typing_open;
@@ -682,7 +679,6 @@ impl Session {
         } else if spec.id.starts_with("caret.") {
             self.typing_open = false;
         }
-        let sel_before = self.sel.clone();
         let run = spec.run;
         let mutates = spec.mutates;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::cmd::column::dispatch(self, id, mutates, run, params)));
@@ -701,10 +697,6 @@ impl Session {
                     self.doc.prune_text_boxes();
                 }
                 self.clamp_selection();
-                // Extra selected objects last until something else is edited or selected.
-                if !matches!(id, "select.addObject" | "arrange.ungroup") && (spec.mutates || self.sel != sel_before) {
-                    self.also_selected.clear();
-                }
             }
             Err(e) => {
                 if let Some((d, s, h, r, t, ev, c)) = before_doc {

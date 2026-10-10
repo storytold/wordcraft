@@ -14,6 +14,7 @@ pub mod bidi;
 pub mod edit;
 pub mod encoding;
 pub mod fields;
+pub mod graphic;
 pub mod math;
 pub mod math_edit;
 pub mod math_latex;
@@ -326,6 +327,9 @@ pub struct Settings {
     /// 2013 and later, which places a table's border at the margin rather than its text and lets
     /// justified lines shrink their spaces to fit more text.
     pub compat_mode: u32,
+    /// Drawing grid spacing in points, across and down (View › Gridlines); ECMA-376's default is 1/8 inch.
+    pub grid_h: f32,
+    pub grid_v: f32,
 }
 
 /// Word's compatibility mode for documents that don't state one.
@@ -333,6 +337,9 @@ pub const LEGACY_COMPAT_MODE: u32 = 12;
 
 /// The compatibility mode of documents created by Word 2013 and later, and by WordCraft.
 pub const COMPAT_MODE_CURRENT: u32 = 15;
+
+/// ECMA-376 §17.15.1.44/45: 180 twentieths of a point when a document doesn't say.
+pub const DEFAULT_GRID: f32 = 9.0;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -384,6 +391,8 @@ impl Default for Settings {
             endnote_format: section::NumFormat::LowerRoman,
             protection: None,
             compat_mode: COMPAT_MODE_CURRENT,
+            grid_h: DEFAULT_GRID,
+            grid_v: DEFAULT_GRID,
         }
     }
 }
@@ -587,7 +596,7 @@ impl Document {
             for path in self.para_paths(story) {
                 let Some(p) = self.para(story, &path) else { continue };
                 for off in p.object_offsets() {
-                    if p.object_at(off).is_some_and(|o| o.text_boxes().contains(&part)) {
+                    if matches!(p.object_at(off), Some(InlineObject::Shape { story: Some(id), .. }) if *id == part) {
                         return Some(Pos { story, path, off: off + para::OBJ.len_utf8() });
                     }
                 }
@@ -691,8 +700,9 @@ impl Document {
     /// document order. Headers, footers, comments and stories nothing points at aren't included.
     pub fn counted_stories(&self) -> Vec<StoryRef> {
         self.reachable(vec![StoryRef::Body], &|o| match o {
-            InlineObject::NoteRef { id, .. } => vec![(*id, &[PartKind::Footnote, PartKind::Endnote][..])],
-            o => o.text_boxes().into_iter().map(|id| (id, &[PartKind::TextBox][..])).collect(),
+            InlineObject::Shape { story: Some(id), .. } => Some((*id, &[PartKind::TextBox])),
+            InlineObject::NoteRef { id, .. } => Some((*id, &[PartKind::Footnote, PartKind::Endnote])),
+            _ => None,
         })
     }
 
@@ -706,7 +716,10 @@ impl Document {
         let roots = std::iter::once(StoryRef::Body)
             .chain(self.parts.iter().filter(|(_, p)| p.kind != PartKind::TextBox).map(|(id, _)| StoryRef::Part(*id)))
             .collect();
-        let live = self.reachable(roots, &|o| o.text_boxes().into_iter().map(|id| (id, &[PartKind::TextBox][..])).collect());
+        let live = self.reachable(roots, &|o| match o {
+            InlineObject::Shape { story: Some(id), .. } => Some((*id, &[PartKind::TextBox])),
+            _ => None,
+        });
         let before = self.parts.len();
         self.parts.retain(|id, p| p.kind != PartKind::TextBox || live.contains(&StoryRef::Part(*id)));
         before - self.parts.len()
@@ -752,16 +765,13 @@ impl Document {
         for b in blocks {
             edit::each_para(b, 0, &mut |p| {
                 for (k, o) in p.objects.iter().enumerate() {
-                    if !f(p, k) {
-                        continue;
-                    }
-                    for id in o.text_boxes() {
-                        if let Some(part) = self.parts.get(&id).filter(|p| p.kind == PartKind::TextBox)
-                            && budget.enter(id)
-                        {
-                            self.walk_objects(&part.blocks, budget, f);
-                            budget.leave();
-                        }
+                    if f(p, k)
+                        && let InlineObject::Shape { story: Some(id), .. } = o
+                        && let Some(part) = self.parts.get(id).filter(|p| p.kind == PartKind::TextBox)
+                        && budget.enter(*id)
+                    {
+                        self.walk_objects(&part.blocks, budget, f);
+                        budget.leave();
                     }
                 }
             });
@@ -770,7 +780,7 @@ impl Document {
 
     /// `roots`, then every story their objects lead to (`follow`: an object's story id and the
     /// part kinds that count), transitively, in the order found.
-    fn reachable(&self, roots: Vec<StoryRef>, follow: &dyn Fn(&InlineObject) -> Vec<(u32, &'static [PartKind])>) -> Vec<StoryRef> {
+    fn reachable(&self, roots: Vec<StoryRef>, follow: &dyn Fn(&InlineObject) -> Option<(u32, &'static [PartKind])>) -> Vec<StoryRef> {
         let mut out = roots;
         let mut seen: std::collections::BTreeSet<StoryRef> = out.iter().copied().collect();
         let mut i = 0;
@@ -779,7 +789,7 @@ impl Document {
             let mut found = Vec::new();
             for b in self.story(s).into_iter().flatten() {
                 edit::each_para(b, 0, &mut |p| {
-                    found.extend(p.objects.iter().flat_map(follow));
+                    found.extend(p.objects.iter().filter_map(follow));
                 });
             }
             for (id, kinds) in found {

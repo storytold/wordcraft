@@ -54,6 +54,8 @@ pub fn inspect(app: &mut WordApp, ctx: &egui::Context) -> Value {
         "pages": app.canvas.page_rects.iter().map(|r| [r.left(), r.top(), r.width(), r.height()]).collect::<Vec<_>>(),
         "scale": app.canvas.scale,
         "caret": caret,
+        "balloons": app.canvas.balloon_rects.iter().map(|(id, r)| json!({"id": id, "rect": [r.left(), r.top(), r.width(), r.height()]})).collect::<Vec<_>>(),
+        "balloon": app.canvas.balloon,
         "focused": app.canvas.focused,
         "title": app.title_stem(),
         "dirty": app.session.dirty,

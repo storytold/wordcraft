@@ -22,18 +22,20 @@ fn has_object(s: &Session) -> Option<&'static str> {
 }
 fn has_floating(s: &Session) -> Option<&'static str> {
     match selected(s) {
-        Some((_, o)) if o.is_floating() => None,
+        Some((_, InlineObject::Graphic { .. })) => Some(FROZEN),
+        Some((_, InlineObject::Image { float, .. } | InlineObject::Shape { float, .. })) if float.wrap != Wrap::Inline => None,
         _ => Some("select a floating picture or shape first"),
     }
 }
-fn has_group(s: &Session) -> Option<&'static str> {
+/// Charts and diagrams are not written back on save yet, so their size, position and wrapping stay
+/// as imported: they can be selected and deleted, not moved, resized or arranged.
+const FROZEN: &str = "charts and diagrams can't be moved or resized yet";
+/// `has_object` for the geometry commands: a chart or diagram is frozen.
+fn has_movable(s: &Session) -> Option<&'static str> {
     match selected(s) {
-        Some((_, InlineObject::Group { .. })) => None,
-        _ => Some("select a group first"),
+        Some((_, InlineObject::Graphic { .. })) => Some(FROZEN),
+        _ => has_object(s),
     }
-}
-fn can_group(s: &Session) -> Option<&'static str> {
-    if picked_objects(s).len() >= 2 { None } else { Some("select two or more pictures or shapes first (Shift+click)") }
 }
 fn has_shape(s: &Session) -> Option<&'static str> {
     match selected(s) {
@@ -44,7 +46,7 @@ fn has_shape(s: &Session) -> Option<&'static str> {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("picture.size", "Size", "Picture Format › Size", size).params(r#"{"width"?: pt, "height"?: pt, "lockAspect"?: bool, "scale"?: percent}"#).when(has_object),
+        CommandSpec::new("picture.size", "Size", "Picture Format › Size", size).params(r#"{"width"?: pt, "height"?: pt, "lockAspect"?: bool, "scale"?: percent}"#).when(has_movable),
         CommandSpec::new("picture.crop", "Crop", "Picture Format › Size", |s, v| {
             let c = [p::f32(v, "left"), p::f32(v, "top"), p::f32(v, "right"), p::f32(v, "bottom")].map(|x| x.unwrap_or(0.0).clamp(0.0, 0.45));
             with_obj(s, |o| {
@@ -211,7 +213,7 @@ pub fn specs() -> Vec<CommandSpec> {
             with_float(s, |f| f.wrap = wrap)
         })
         .params(r#"{"wrap": "inline|square|tight|through|topAndBottom|behindText|inFrontOfText"}"#)
-        .when(has_object),
+        .when(has_movable),
         CommandSpec::new("arrange.position", "Position", "Layout › Arrange", |s, v| {
             let preset = p::str(v, "preset").unwrap_or("middleCenter").to_string();
             let (x, y) = (p::f32(v, "x"), p::f32(v, "y"));
@@ -232,9 +234,9 @@ pub fn specs() -> Vec<CommandSpec> {
             })
         })
         .params(r#"{"preset"?: "topLeft|topCenter|topRight|middleLeft|middleCenter|middleRight|bottomLeft|bottomCenter|bottomRight", "x"?: pt, "y"?: pt}"#)
-        .when(has_object),
-        CommandSpec::new("arrange.bringForward", "Bring Forward", "Layout › Arrange", |s, _| with_float(s, |f| f.wrap = Wrap::InFrontOfText)).when(has_object),
-        CommandSpec::new("arrange.sendBackward", "Send Backward", "Layout › Arrange", |s, _| with_float(s, |f| f.wrap = Wrap::BehindText)).when(has_object),
+        .when(has_movable),
+        CommandSpec::new("arrange.bringForward", "Bring Forward", "Layout › Arrange", |s, _| with_float(s, |f| f.wrap = Wrap::InFrontOfText)).when(has_movable),
+        CommandSpec::new("arrange.sendBackward", "Send Backward", "Layout › Arrange", |s, _| with_float(s, |f| f.wrap = Wrap::BehindText)).when(has_movable),
         CommandSpec::new("arrange.align", "Align", "Layout › Arrange", |s, v| {
             let h = p::str(v, "value").unwrap_or("center").to_string();
             let tw = super::page::sect(s).text_width();
@@ -253,11 +255,11 @@ pub fn specs() -> Vec<CommandSpec> {
             })
         })
         .params(r#"{"value": "left|center|right"}"#)
-        .when(has_object),
+        .when(has_movable),
         CommandSpec::new("arrange.selectionPane", "Selection Pane", "Layout › Arrange", objects_list).pure(),
         CommandSpec::new("arrange.bounds", "Move or Resize", "Layout › Arrange", bounds)
             .params(r#"{"width"?: pt, "height"?: pt, "x"?: pt, "y"?: pt, "page"?: n}  (x/y: the top-left on page `page` (0-based, default its page); moving an inline object floats it)"#)
-            .when(has_object),
+            .when(has_movable),
         CommandSpec::new("arrange.nudge", "Nudge", "Layout › Arrange", |s, v| {
             let d = |k| p::f32(v, k).unwrap_or(0.0).clamp(-MAX_OFFSET, MAX_OFFSET);
             let (dx, dy) = (d("dx"), d("dy"));
@@ -269,13 +271,6 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"dx"?: pt, "dy"?: pt}"#)
         .when(has_floating),
-        CommandSpec::new("arrange.group", "Group", "Layout › Arrange", group)
-            .params(r#"{}  (groups the selected pictures, shapes and text boxes: the selected one plus those added with select.addObject)"#)
-            .when(can_group),
-        CommandSpec::new("arrange.ungroup", "Ungroup", "Layout › Arrange", ungroup).when(has_group),
-        CommandSpec::new("select.addObject", "Add Object to Selection", "Home › Editing › Select", add_object)
-            .params(r#"{"pos"?: Pos, "index"?: n, "objects"?: [Pos | n]}  (n: its Selection Pane index; with no object selected yet, the first one becomes the selection)"#)
-            .pure(),
         CommandSpec::new("select.objects", "Select Objects", "Home › Editing › Select", |s, v| {
             let n = p::u64(v, "index").unwrap_or(0) as usize;
             let list = all_objects(s);
@@ -331,7 +326,7 @@ pub fn object_selection(s: &Session) -> Option<(Pos, &InlineObject)> {
         return None;
     }
     let o = s.doc.para_at(&a)?.object_at(a.off)?;
-    o.is_drawing().then_some((a, o))
+    matches!(o, InlineObject::Image { .. } | InlineObject::Graphic { .. } | InlineObject::Shape { .. }).then_some((a, o))
 }
 
 /// The first picture/shape in the selection, or just before a collapsed caret.
@@ -350,7 +345,7 @@ pub fn selected(s: &Session) -> Option<(Pos, InlineObject)> {
             if !inside {
                 continue;
             }
-            if let Some(o) = p.object_at(off).filter(|o| o.is_drawing()) {
+            if let Some(o @ (InlineObject::Image { .. } | InlineObject::Graphic { .. } | InlineObject::Shape { .. })) = p.object_at(off) {
                 return Some((Pos { story, path: path.clone(), off }, o.clone()));
             }
         }
@@ -379,7 +374,14 @@ fn bounds(s: &mut Session, v: &Value) -> CmdResult {
     let w = p::f32(v, "width").unwrap_or(w0).clamp(min, MAX_OFFSET);
     let h = p::f32(v, "height").unwrap_or(h0).clamp(min, MAX_OFFSET);
     if (w, h) != (w0, h0) {
-        with_obj(s, |o| o.set_size(w, h))?;
+        with_obj(s, |o| {
+            if let InlineObject::Image { w: ow, h: oh, .. } | InlineObject::Graphic { w: ow, h: oh, .. } | InlineObject::Shape { w: ow, h: oh, .. } =
+                o
+            {
+                *ow = w;
+                *oh = h;
+            }
+        })?;
     }
     let pos = match to {
         Some((x, y)) => move_object(s, pos, p::u64(v, "page"), x, y, (w, h))?,
@@ -459,7 +461,7 @@ fn move_object(s: &mut Session, pos: Pos, page: Option<u64>, x: f32, y: f32, (w,
 fn unalign(s: &mut Session) -> Result<(), CmdError> {
     use wordcraft_doc::para::Anchor;
     let (pos, obj) = selected(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
-    let Some((_, _, float)) = obj.frame() else { return Ok(()) };
+    let (InlineObject::Image { float, .. } | InlineObject::Graphic { float, .. } | InlineObject::Shape { float, .. }) = &obj else { return Ok(()) };
     if float.h_align.is_none() && float.v_align.is_none() {
         return Ok(());
     }
@@ -508,7 +510,10 @@ fn nearest_line(layout: &wordcraft_layout::DocLayout, page: usize, y: f32) -> Op
 }
 
 fn obj_size(o: &InlineObject) -> (f32, f32) {
-    o.frame().map_or((0.0, 0.0), |(w, h, _)| (w, h))
+    match o {
+        InlineObject::Image { w, h, .. } | InlineObject::Graphic { w, h, .. } | InlineObject::Shape { w, h, .. } => (*w, *h),
+        _ => (0.0, 0.0),
+    }
 }
 
 fn with_obj(s: &mut Session, f: impl Fn(&mut InlineObject)) -> CmdResult {
@@ -529,15 +534,15 @@ fn edit_obj(s: &mut Session, pos: &Pos, f: impl Fn(&mut InlineObject)) -> Result
 
 fn edit_float(s: &mut Session, pos: &Pos, f: impl Fn(&mut Float)) -> Result<InlineObject, CmdError> {
     edit_obj(s, pos, |o| {
-        if let Some(float) = o.float_mut() {
+        if let InlineObject::Image { float, .. } | InlineObject::Graphic { float, .. } | InlineObject::Shape { float, .. } = o {
             f(float);
         }
     })
 }
 
 fn with_float(s: &mut Session, f: impl Fn(&mut Float)) -> CmdResult {
-    with_obj(s, |o| {
-        if let Some(float) = o.float_mut() {
+    with_obj(s, |o| match o {
+        InlineObject::Image { float, .. } | InlineObject::Graphic { float, .. } | InlineObject::Shape { float, .. } => {
             let was_inline = float.wrap == Wrap::Inline;
             f(float);
             // Word's distance from text for a newly wrapped object: 0.125" at the sides.
@@ -545,6 +550,7 @@ fn with_float(s: &mut Session, f: impl Fn(&mut Float)) -> CmdResult {
                 float.dist = 9.0;
             }
         }
+        _ => {}
     })
 }
 
@@ -578,7 +584,7 @@ fn size(s: &mut Session, v: &Value) -> CmdResult {
     }
     let (w, h) = (w.clamp(1.0, 4000.0), h.clamp(1.0, 4000.0));
     with_obj(s, |o| match o {
-        InlineObject::Image { w: ow, h: oh, .. } | InlineObject::Shape { w: ow, h: oh, .. } => {
+        InlineObject::Image { w: ow, h: oh, .. } | InlineObject::Graphic { w: ow, h: oh, .. } | InlineObject::Shape { w: ow, h: oh, .. } => {
             *ow = w;
             *oh = h;
         }
@@ -744,188 +750,12 @@ fn picture_style(img: image::DynamicImage, style: &str) -> image::DynamicImage {
     }
 }
 
-/// The selected pictures, shapes, text boxes and groups: the one the selection holds, then
-/// those added to it ([`Session::also_selected`]), each once, in the body.
-pub fn picked_objects(s: &Session) -> Vec<Pos> {
-    let Some((first, _)) = object_selection(s) else { return Vec::new() };
-    let mut out = vec![first];
-    for p in &s.also_selected {
-        if !out.contains(p) && s.doc.para_at(p).and_then(|q| q.object_at(p.off)).is_some_and(InlineObject::is_drawing) {
-            out.push(p.clone());
-        }
-    }
-    out
-}
-
-/// The object a `select.addObject` item names: a position, or a Selection Pane index.
-fn object_ref(s: &Session, v: &Value) -> Result<Pos, CmdError> {
-    let pos = match v.as_u64() {
-        Some(n) => all_objects(s).into_iter().nth(usize::try_from(n).unwrap_or(usize::MAX)).map(|(p, _)| p),
-        None => super::parse_pos(v),
-    };
-    pos.filter(|p| p.story == StoryRef::Body && s.doc.para_at(p).and_then(|q| q.object_at(p.off)).is_some_and(InlineObject::is_drawing))
-        .ok_or_else(|| CmdError::Params("no picture or shape there".into()))
-}
-
-/// Add objects to the selection (Shift+click): the first one is selected if no object is yet;
-/// one already selected is taken out again.
-fn add_object(s: &mut Session, v: &Value) -> CmdResult {
-    let mut items: Vec<Value> = match v.get("objects").and_then(Value::as_array) {
-        Some(a) => a.iter().take(1000).cloned().collect(),
-        None => Vec::new(),
-    };
-    if let Some(p) = v.get("pos") {
-        items.push(p.clone());
-    }
-    if let Some(i) = v.get("index") {
-        items.push(i.clone());
-    }
-    if items.is_empty() {
-        return Err(CmdError::Params("`pos`, `index` or `objects` required".into()));
-    }
-    for it in &items {
-        let pos = object_ref(s, it)?;
-        match object_selection(s).map(|(p, _)| p) {
-            None => {
-                s.also_selected.clear();
-                s.sel = Selection { anchor: pos.clone(), focus: Pos { off: pos.off + wordcraft_doc::para::OBJ.len_utf8(), ..pos } };
-            }
-            Some(first) if first == pos => {}
-            Some(_) => {
-                if let Some(i) = s.also_selected.iter().position(|p| *p == pos) {
-                    s.also_selected.remove(i);
-                } else {
-                    s.also_selected.push(pos);
-                }
-            }
-        }
-    }
-    Ok(json!({"selected": picked_objects(s).iter().map(super::pos_json).collect::<Vec<_>>()}))
-}
-
-/// Group the selected objects (Layout › Arrange › Group): one floating group object, anchored
-/// where the first of them was, in the box around them all; they keep their places and sizes.
-/// A group among them is merged in (its members join the new group).
-fn group(s: &mut Session, _: &Value) -> CmdResult {
-    use wordcraft_doc::para::GroupChild;
-    let mut picks = picked_objects(s);
-    if picks.len() < 2 {
-        return Err(CmdError::Disabled("select two or more pictures or shapes first".into()));
-    }
-    picks.sort();
-    let layout = s.layout();
-    let mut found = Vec::new();
-    for pos in &picks {
-        if pos.story != StoryRef::Body || pos.path.depth() > 0 {
-            return Err(CmdError::Disabled("only objects in the body text (not in tables) can be grouped".into()));
-        }
-        let obj = s.doc.para_at(pos).and_then(|p| p.object_at(pos.off)).cloned().ok_or_else(|| CmdError::Failed("object vanished".into()))?;
-        if !obj.is_floating() {
-            return Err(CmdError::Disabled("objects in line with text can't be grouped: choose a text wrapping for them first".into()));
-        }
-        let hit = layout.object(pos, s.page_hint).ok_or_else(|| CmdError::Failed("the object isn't laid out".into()))?;
-        found.push((obj, hit));
-    }
-    let page = found.first().map(|(_, h)| h.page).unwrap_or(0);
-    if found.iter().any(|(_, h)| h.page != page) {
-        return Err(CmdError::Disabled("objects on different pages can't be grouped".into()));
-    }
-    let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
-    for (_, h) in &found {
-        (x0, y0) = (x0.min(h.rect.x), y0.min(h.rect.y));
-        (x1, y1) = (x1.max(h.rect.right()), y1.max(h.rect.bottom()));
-    }
-    let (w, h) = ((x1 - x0).clamp(1.0, MAX_OFFSET), (y1 - y0).clamp(1.0, MAX_OFFSET));
-    let mut children = Vec::new();
-    let member = |obj: &InlineObject, r: [f32; 4]| {
-        let mut obj = obj.clone();
-        obj.set_size(r[2], r[3]);
-        if let Some(f) = obj.float_mut() {
-            *f = Float::default();
-        }
-        GroupChild { x: r[0] - x0, y: r[1] - y0, obj }
-    };
-    for (obj, hit) in &found {
-        let r = hit.rect;
-        match obj {
-            InlineObject::Group { .. } => children.extend(obj.group_rects(r.x, r.y, r.w, r.h).into_iter().map(|(cr, c)| member(c, cr))),
-            _ => children.push(member(obj, [r.x, r.y, r.w, r.h])),
-        }
-    }
-    let float = found.first().and_then(|(o, _)| o.frame()).map(|(_, _, f)| *f).unwrap_or_default();
-    let grouped = InlineObject::Group { w, h, float, ch_w: w, ch_h: h, children };
-    // Take the members out, last first so the earlier positions hold, and put the group where
-    // the first one was.
-    let len = wordcraft_doc::para::OBJ.len_utf8();
-    for pos in picks.iter().rev() {
-        s.doc.delete_range(pos, &Pos { off: pos.off + len, ..pos.clone() })?;
-    }
-    let first = picks.first().cloned().ok_or_else(|| CmdError::Failed("nothing to group".into()))?;
-    let at = s.doc.clamp(&first);
-    s.doc.insert_object(&at, grouped, &wordcraft_doc::CharProps::default())?;
-    s.touch();
-    let pos = move_object(s, at, Some(page as u64), x0, y0, (w, h))?;
-    s.also_selected.clear();
-    s.sel = Selection { anchor: pos.clone(), focus: Pos { off: pos.off + len, ..pos.clone() } };
-    let o = s.doc.para_at(&pos).and_then(|p| p.object_at(pos.off)).cloned();
-    Ok(json!({"object": serde_json::to_value(o).unwrap_or(Value::Null), "pos": super::pos_json(&pos)}))
-}
-
-/// Split the selected group back into its pictures and shapes (Layout › Arrange › Ungroup), in
-/// the places and sizes the group shows them, anchored where the group was. They stay
-/// selected, so Group puts them back together.
-fn ungroup(s: &mut Session, _: &Value) -> CmdResult {
-    let (pos, obj) = selected(s).ok_or_else(|| CmdError::Disabled("select a group first".into()))?;
-    let InlineObject::Group { w, h, float, .. } = &obj else { return Err(CmdError::Disabled("select a group first".into())) };
-    // Its offsets, explicit: the members are placed from the same anchor.
-    let pos = if float.wrap == Wrap::Inline {
-        if pos.story != StoryRef::Body || pos.path.depth() > 0 {
-            return Err(CmdError::Disabled("only groups in the body text can be ungrouped in line with text".into()));
-        }
-        let hit = s.layout().object(&pos, s.page_hint).ok_or_else(|| CmdError::Failed("the object isn't laid out".into()))?;
-        move_object(s, pos, Some(hit.page as u64), hit.rect.x, hit.rect.y, (*w, *h))?
-    } else {
-        unalign(s)?;
-        pos
-    };
-    let obj = s.doc.para_at(&pos).and_then(|p| p.object_at(pos.off)).cloned().ok_or_else(|| CmdError::Failed("object vanished".into()))?;
-    let Some((w, h, float)) = obj.frame() else { return Err(CmdError::Failed("object vanished".into())) };
-    let float = *float;
-    let members: Vec<InlineObject> = obj
-        .group_rects(0.0, 0.0, w, h)
-        .into_iter()
-        .map(|([x, y, cw, ch], c)| {
-            let mut c = c.clone();
-            c.set_size(cw.max(min_size(&c)), ch.max(min_size(&c)));
-            if let Some(f) = c.float_mut() {
-                *f = Float { x: (float.x + x).clamp(-MAX_OFFSET, MAX_OFFSET), y: (float.y + y).clamp(-MAX_OFFSET, MAX_OFFSET), ..float };
-            }
-            c
-        })
-        .collect();
-    if members.is_empty() {
-        return Err(CmdError::Failed("the group is empty".into()));
-    }
-    let len = wordcraft_doc::para::OBJ.len_utf8();
-    s.doc.delete_range(&pos, &Pos { off: pos.off + len, ..pos.clone() })?;
-    let mut at = s.doc.clamp(&pos);
-    let mut placed = Vec::new();
-    for m in members {
-        placed.push(at.clone());
-        at = s.doc.insert_object(&at, m, &wordcraft_doc::CharProps::default())?;
-    }
-    let first = placed.first().cloned().unwrap_or(pos);
-    s.sel = Selection { anchor: first.clone(), focus: Pos { off: first.off + len, ..first } };
-    s.also_selected = placed.into_iter().skip(1).collect();
-    sel_result(s)
-}
-
 fn all_objects(s: &Session) -> Vec<(Pos, InlineObject)> {
     let mut v = Vec::new();
     for path in s.doc.para_paths(StoryRef::Body) {
         let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
         for off in p.object_offsets() {
-            if let Some(o) = p.object_at(off).filter(|o| o.is_drawing()) {
+            if let Some(o @ (InlineObject::Image { .. } | InlineObject::Graphic { .. } | InlineObject::Shape { .. })) = p.object_at(off) {
                 v.push((Pos { story: StoryRef::Body, path: path.clone(), off }, o.clone()));
             }
         }
@@ -942,7 +772,7 @@ fn objects_list(s: &mut Session, _: &Value) -> CmdResult {
                 let (kind, name) = match &o {
                     InlineObject::Image { alt, .. } => ("picture", if alt.is_empty() { format!("Picture {}", i + 1) } else { alt.clone() }),
                     InlineObject::Shape { kind, .. } => ("shape", format!("{kind:?} {}", i + 1)),
-                    InlineObject::Group { .. } => ("group", format!("Group {}", i + 1)),
+                    InlineObject::Graphic { graphic, .. } => ("graphic", format!("{:?} {}", graphic.kind, i + 1)),
                     _ => ("object", format!("Object {}", i + 1)),
                 };
                 json!({"index": i, "kind": kind, "name": name, "pos": super::pos_json(&pos), "size": obj_size(&o)})
@@ -1044,66 +874,6 @@ mod tests {
         s.run("select.collapse", &json!({"end": true})).unwrap();
         s.run("text.insert", &json!({"text": "x"})).unwrap();
         assert!(s.run("picture.crop", &json!({"left": 0.1})).is_err());
-    }
-
-    /// The page rectangle of the object at `pos`.
-    fn rect_of(s: &mut Session, pos: &Pos) -> [f32; 4] {
-        let r = s.layout().object(pos, 0).unwrap().rect;
-        [r.x, r.y, r.w, r.h]
-    }
-
-    fn near(a: [f32; 4], b: [f32; 4]) -> bool {
-        a.iter().zip(b).all(|(x, y)| (x - y).abs() < 0.5)
-    }
-
-    /// Two floating shapes, Shift+clicked together and grouped: one object that moves as one with
-    /// its members in place; ungrouping puts them back where the group showed them, still
-    /// selected, so Group regroups them.
-    #[test]
-    fn group_moves_as_one_and_ungroups() {
-        let mut s = Session::new(wordcraft_doc::Document::new());
-        s.run("document.setText", &json!({"text": "one\ntwo\nthree\nfour"})).unwrap();
-        s.sel = Selection::caret(s.doc.start_of(StoryRef::Body));
-        s.run("insert.shape", &json!({"kind": "rectangle", "width": 100, "height": 50})).unwrap();
-        s.run("arrange.bounds", &json!({"page": 0, "x": 100, "y": 150})).unwrap();
-        s.run("select.collapse", &json!({"end": true})).unwrap();
-        s.run("insert.shape", &json!({"kind": "ellipse", "width": 60, "height": 40})).unwrap();
-        s.run("arrange.bounds", &json!({"page": 0, "x": 300, "y": 200})).unwrap();
-        // One shape selected: nothing to group yet.
-        assert!(s.run("arrange.group", &json!({})).is_err());
-        let r = s.run("select.addObject", &json!({"index": 0})).unwrap();
-        assert_eq!(r["selected"].as_array().unwrap().len(), 2);
-        let g = s.run("arrange.group", &json!({})).unwrap();
-        let pos: Pos = serde_json::from_value(g["pos"].clone()).unwrap();
-        let list = s.run("arrange.selectionPane", &json!({})).unwrap();
-        assert_eq!(list.as_array().unwrap().len(), 1, "{list}");
-        assert_eq!(list[0]["kind"], "group");
-        assert!(s.also_selected.is_empty());
-        assert!(near(rect_of(&mut s, &pos), [100.0, 150.0, 260.0, 90.0]), "{:?}", rect_of(&mut s, &pos));
-
-        // Moving the group moves its members with it.
-        s.run("arrange.nudge", &json!({"dx": 20, "dy": 10})).unwrap();
-        let (pos, obj) = selected(&s).unwrap();
-        let [x, y, w, h] = rect_of(&mut s, &pos);
-        let members: Vec<[f32; 4]> = obj.group_rects(x, y, w, h).into_iter().map(|(r, _)| r).collect();
-        assert!(near(members[0], [120.0, 160.0, 100.0, 50.0]) && near(members[1], [320.0, 210.0, 60.0, 40.0]), "{members:?}");
-        // Drawn there too: the page shows both shapes inside the group's frame.
-        let shapes = s.layout().pages[0].items.iter().filter(|i| matches!(i, wordcraft_layout::Placed::Shape { .. })).count();
-        assert_eq!(shapes, 2);
-
-        // Ungroup: two shapes again, where the group showed them, both still selected.
-        s.run("arrange.ungroup", &json!({})).unwrap();
-        let list = all_objects(&s);
-        assert_eq!(list.len(), 2);
-        let rects: Vec<[f32; 4]> = list.iter().map(|(p, _)| rect_of(&mut s, p)).collect();
-        assert!(rects.iter().any(|r| near(*r, [120.0, 160.0, 100.0, 50.0])), "{rects:?}");
-        assert!(rects.iter().any(|r| near(*r, [320.0, 210.0, 60.0, 40.0])), "{rects:?}");
-        assert_eq!(picked_objects(&s).len(), 2);
-        s.run("arrange.group", &json!({})).unwrap();
-        assert_eq!(all_objects(&s).len(), 1);
-        // Undo goes back step by step.
-        s.run("edit.undo", &json!({})).unwrap();
-        assert_eq!(all_objects(&s).len(), 2);
     }
 
     #[test]

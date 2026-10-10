@@ -235,6 +235,8 @@ fn tables_with_merges_round_trip() {
         c.props.text_direction = TextDirection::Up;
         c.props.no_wrap = true;
         c.props.margins = Some([2.0, 3.0, 4.0, 5.0]);
+        c.props.width = None;
+        c.props.width_pct = Some(40.0);
         c.props.borders = Some(Borders::box_(Border { style: BorderStyle::Dashed, width: 1.0, color: Some(Rgb(0, 0, 255)), space: 0.0 }));
         c.blocks = vec![para_block(Paragraph::with_text("red", CharProps::default()))];
     }
@@ -846,75 +848,6 @@ fn shapes_textboxes_equations_dropcaps_round_trip() {
     assert_eq!(got[1].props, dc.props);
 }
 
-/// A group of a picture, a shape and a text box (`wpg:wgp`) comes back as it was saved: its
-/// size, placement and members' space, and each member's offset, size and content.
-#[test]
-fn groups_round_trip() {
-    use wordcraft_doc::para::GroupChild;
-    let mut d = Document::new();
-    let key = d.add_media(tiny_png(), "png");
-    let story = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("In the group", CharProps::default()))]);
-    let pic = InlineObject::Image { media: key, w: 60.0, h: 40.0, alt: "A picture".into(), float: Float::default(), crop: [0.0; 4] };
-    let oval = InlineObject::Shape {
-        kind: ShapeKind::Ellipse,
-        w: 50.0,
-        h: 30.0,
-        fill: Some(Rgb(200, 0, 0)),
-        stroke: None,
-        stroke_width: 0.0,
-        float: Float::default(),
-        story: None,
-    };
-    let tb = InlineObject::Shape {
-        kind: ShapeKind::TextBox,
-        w: 100.0,
-        h: 40.0,
-        fill: Some(Rgb(255, 255, 255)),
-        stroke: Some(Rgb(0, 0, 0)),
-        stroke_width: 0.75,
-        float: Float::default(),
-        story: Some(story),
-    };
-    let float = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 20.0, y: 10.0, dist: 9.0, ..Default::default() };
-    let group = InlineObject::Group {
-        w: 240.0,
-        h: 120.0,
-        float,
-        ch_w: 200.0,
-        ch_h: 100.0,
-        children: vec![
-            GroupChild { x: 0.0, y: 0.0, obj: pic },
-            GroupChild { x: 150.0, y: 10.0, obj: oval.clone() },
-            GroupChild { x: 50.0, y: 60.0, obj: tb },
-        ],
-    };
-    let mut p = Paragraph::with_text("grouped ", CharProps::default());
-    let end = p.len();
-    p.insert_object(end, group, &CharProps::default()).unwrap();
-    d.body = vec![para_block(p)];
-    let r = rt(&d);
-    let got = paras(&r);
-    let InlineObject::Group { w, h, float: f, ch_w, ch_h, children } = &got[0].objects[0] else { panic!("{:?}", got[0].objects) };
-    assert_eq!((*w, *h, *ch_w, *ch_h), (240.0, 120.0, 200.0, 100.0));
-    assert_eq!(*f, float);
-    assert_eq!(children.iter().map(|c| (c.x, c.y)).collect::<Vec<_>>(), [(0.0, 0.0), (150.0, 10.0), (50.0, 60.0)]);
-    match &children[0].obj {
-        InlineObject::Image { media, w, h, alt, .. } => {
-            assert_eq!((*w, *h, alt.as_str()), (60.0, 40.0, "A picture"));
-            assert_eq!(r.media.get(media).map(|m| m.as_slice()), Some(tiny_png().as_slice()));
-        }
-        o => panic!("{o:?}"),
-    }
-    assert_eq!(children[1].obj, oval);
-    match &children[2].obj {
-        InlineObject::Shape { kind, w, h, story, .. } => {
-            assert_eq!((*kind, *w, *h), (ShapeKind::TextBox, 100.0, 40.0));
-            assert_eq!(part_text(&r, *story), "In the group");
-        }
-        o => panic!("{o:?}"),
-    }
-}
-
 #[test]
 fn compatibility_mode_round_trips() {
     // New documents are Word 2013+ documents; an older file keeps its mode, so saving it doesn't
@@ -941,6 +874,8 @@ fn settings_core_theme_round_trip() {
     d.settings.theme_colors[4] = Rgb(1, 2, 3);
     d.settings.theme_name = "Mine".into();
     d.settings.protection = Some("readOnly".into());
+    d.settings.grid_h = 5.5;
+    d.settings.grid_v = 18.0;
     d.core.title = "Title & <stuff>".into();
     d.core.subject = "Subj".into();
     d.core.creator = "Me".into();
