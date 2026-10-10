@@ -1928,7 +1928,7 @@ fn manage_styles(app: &mut WordApp, ui: &mut Ui, alphabetical: &mut bool, select
                 let glyph = match st.get("type").and_then(Value::as_str) {
                     Some("character") => "a",
                     Some("linked") => "¶a",
-                    Some("table") => "▦",
+                    Some("table") => "⊞",
                     _ => "¶",
                 };
                 let hidden = st.get("hidden").and_then(Value::as_bool).unwrap_or(false);
