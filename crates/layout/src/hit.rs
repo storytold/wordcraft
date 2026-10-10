@@ -16,6 +16,16 @@ pub struct Caret {
     pub height: f32,
 }
 
+/// Result of [`DocLayout::visual_step`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum VisualStep {
+    /// The position one visual step away on the same line.
+    Moved(Pos),
+    /// Already at that visual end of the line: the line's byte range, whether it is the
+    /// paragraph's last line, and whether the paragraph reads right to left.
+    Edge { start: usize, stop: usize, last_line: bool, rtl: bool },
+}
+
 /// One placed line, resolved to page coordinates.
 #[derive(Clone, Debug)]
 pub struct LineHit<'a> {
@@ -312,7 +322,9 @@ impl DocLayout {
             if matches!(l.end, crate::LineEnd::LineBreak | crate::LineEnd::PageBreak | crate::LineEnd::ColumnBreak) && end > l.start {
                 end = para.clusters.get(l.c1.saturating_sub(1)).map(|c| c.start).unwrap_or(end);
             } else if l.end == crate::LineEnd::Wrap {
-                end = para.off_at_x(li, l.right + 1000.0);
+                // Before the wrapped line's trailing space: its last reachable offset, in logical
+                // order (the far edge is the left one in right-to-left text).
+                end = para.line_offsets(li).into_iter().max().unwrap_or(end);
             }
             let mk = |off| Pos { story: pos.story, path: pos.path.clone(), off };
             return Some((mk(l.start), mk(end)));
@@ -341,6 +353,20 @@ impl DocLayout {
                     if from > to {
                         continue;
                     }
+                    let top = y + (l.top - first.top);
+                    if !l.vis.is_empty() {
+                        // Bidirectional line: the selected text can be several visual pieces.
+                        for (x0, x1) in para.x_spans(li, from, to) {
+                            out.push((pi, Rect::new(x + x0, top, (x1 - x0).max(0.0), l.height)));
+                        }
+                        // Selection continuing past the paragraph end shows the paragraph mark.
+                        if li + 1 == para.lines.len() && path != b.path {
+                            let ex = l.end_x();
+                            let x0 = if l.rtl { ex - 5.0 } else { ex };
+                            out.push((pi, Rect::new(x + x0, top, 5.0, l.height)));
+                        }
+                        continue;
+                    }
                     let x0 = para.x_of(li, from).unwrap_or(l.left);
                     let mut x1 = para.x_of(li, to).unwrap_or(x0);
                     // Selection continuing past the paragraph end shows the paragraph mark.
@@ -354,12 +380,39 @@ impl DocLayout {
                     if x1 <= x0 && !(last_line && path != b.path) {
                         continue;
                     }
-                    let top = y + (l.top - first.top);
                     out.push((pi, Rect::new(x + x0, top, (x1 - x0).max(0.0), l.height)));
                 }
             }
         }
         out
+    }
+
+    /// One step left or right from `pos` in visual order on its line (arrow keys in
+    /// bidirectional text). `Edge` when `pos` is already at that end of the line.
+    pub fn visual_step(&self, pos: &Pos, left: bool, page_hint: usize) -> Option<VisualStep> {
+        for (_, it) in self.pieces(pos.story, &pos.path, page_hint) {
+            let Placed::Lines { para, l0, l1, .. } = it else { continue };
+            let li = para.line_of(pos.off);
+            if li < *l0 || li >= *l1 {
+                continue;
+            }
+            let l = para.lines.get(li)?;
+            let here = para.x_of(li, pos.off)?;
+            let mut best: Option<(usize, f32)> = None;
+            for off in para.line_offsets(li) {
+                let Some(x) = para.x_of(li, off) else { continue };
+                let ahead = if left { x < here - 0.01 } else { x > here + 0.01 };
+                let d = (x - here).abs();
+                if ahead && best.is_none_or(|b| d < b.1) {
+                    best = Some((off, d));
+                }
+            }
+            return Some(match best {
+                Some((off, _)) => VisualStep::Moved(Pos { story: pos.story, path: pos.path.clone(), off }),
+                None => VisualStep::Edge { start: l.start, stop: l.stop, last_line: li + 1 == para.lines.len(), rtl: l.rtl },
+            });
+        }
+        None
     }
 
     /// Where the equation at `pos` (its U+FFFC) is drawn: page, x of its left edge and its
@@ -380,7 +433,7 @@ impl DocLayout {
                     continue;
                 }
                 let ml = para.maths.iter().find(|(o, _)| *o == oi)?.1.clone();
-                let cx = l.xs.get(k - l.c0).copied()?;
+                let cx = l.cl_left(k)?;
                 let base = y + (l.baseline - first.top);
                 return Some((pi, x + cx, base, ml));
             }
@@ -398,7 +451,7 @@ impl DocLayout {
                 let Some(c) = l.para.clusters.get(k) else { continue };
                 let crate::para::ClKind::Object(oi) = c.kind else { continue };
                 let Some((_, ml)) = l.para.maths.iter().find(|(o, _)| *o == oi) else { continue };
-                let x0 = l.x + line.xs.get(k - line.c0).copied().unwrap_or(0.0);
+                let x0 = l.x + line.cl_left(k).unwrap_or(0.0);
                 let pad = 2.0;
                 if x < x0 - pad || x > x0 + ml.width + pad || y < base - ml.ascent - pad || y > base + ml.descent + pad {
                     continue;

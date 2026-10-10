@@ -59,6 +59,9 @@ pub struct Services {
     /// Web: told whether the document has unsaved changes after each pass, for the browser's
     /// leave-page guard (`beforeunload` runs between frames and can't ask the app).
     pub on_dirty: Option<Box<dyn Fn(bool)>>,
+    /// Web: hand PDF bytes to the browser's print flow directly (no download, no intermediate
+    /// file) — opens the system print dialog on that PDF. An error means no dialog was opened.
+    pub print: Option<Box<dyn Fn(&[u8]) -> Result<(), String>>>,
 }
 
 /// Files delivered asynchronously.
@@ -492,12 +495,38 @@ impl WordApp {
                 self.open_dialog();
                 json!({})
             }
+            // Send the document to the system print dialog (web). `file.print` opens the Print
+            // page; this is the button on it, and the one programmatic call that opens system UI
+            // here, like `ui.openFileDialog` — only when the host can print.
+            "ui.print" => return Some(self.print_to_system()),
             "ui.discord" => {
                 self.canvas.open_url = Some("https://discord.gg/artcraft".into());
                 json!({})
             }
             _ => return None,
         }))
+    }
+
+    /// `ui.print`: export the document to PDF in memory and hand it to the host's print hook.
+    /// An error when the host can't print (desktop: File › Print saves a PDF instead).
+    fn print_to_system(&mut self) -> Result<Value, String> {
+        if self.services.print.is_none() {
+            return Err("printing to the system print dialog isn't available here; export a PDF instead".into());
+        }
+        let result = wordcraft_engine::io::save_bytes("document.pdf", &self.session.doc)
+            .and_then(|bytes| self.services.print.as_ref().map_or(Ok(()), |print| print(&bytes)).map(|()| bytes.len()));
+        match result {
+            Ok(len) => {
+                self.status(tl!("Opening print dialog…"));
+                Ok(json!({"printing": true, "bytes": len}))
+            }
+            Err(e) => {
+                log::error!("print failed: {e}");
+                let msg = i18n::fmt(tl!("Print failed: {error}"), &[("error", &e)]);
+                self.status(msg.clone());
+                Err(msg)
+            }
+        }
     }
 
     pub fn status(&mut self, s: impl Into<String>) {
@@ -1129,6 +1158,72 @@ mod tests {
             assert_eq!(a.quit_requested, quits, "{focus:?}: quit");
             assert_eq!(std::fs::read(&path).unwrap() != before, saves, "{focus:?}: file written");
             let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// `ui.print` hands the document's PDF to the host's print hook, and is an error (with
+    /// nothing printed) when the host has none, as on desktop.
+    #[test]
+    fn ui_print_needs_the_hosts_print_hook() {
+        let mut a = typed();
+        assert!(a.run("ui.print", json!({})).is_err(), "no print hook: an error");
+
+        let got = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = got.clone();
+        a.services.print = Some(Box::new(move |bytes| {
+            seen.borrow_mut().push(bytes.to_vec());
+            Ok(())
+        }));
+        let r = a.run("ui.print", json!({})).unwrap();
+        assert_eq!(r["printing"], true);
+        assert_eq!(got.borrow().len(), 1, "printed once");
+        assert!(got.borrow().first().is_some_and(|b| b.starts_with(b"%PDF")), "the hook got a PDF");
+        assert!(a.session.dirty, "printing is not a save");
+
+        a.services.print = Some(Box::new(|_| Err("blocked by the browser".into())));
+        a.status_msg = None;
+        let e = a.run("ui.print", json!({})).unwrap_err();
+        assert!(e.contains("blocked by the browser"), "{e}");
+        assert!(a.status_msg.as_ref().is_some_and(|(m, _)| m.contains("blocked by the browser")), "the status bar says why");
+    }
+
+    /// The Print page shows the Print button only when the host can print, and the button
+    /// prints through `ui.print`.
+    #[test]
+    fn the_print_button_shows_only_with_a_print_hook() {
+        use egui_kittest::kittest::Queryable;
+        const BLURB: &str = "Send the document straight to the system print dialog, or save a copy in another format below.";
+        for hook in [false, true] {
+            let printed = std::rc::Rc::new(std::cell::Cell::new(0));
+            let mut a = app();
+            if hook {
+                let seen = printed.clone();
+                a.services.print = Some(Box::new(move |_| {
+                    seen.set(seen.get() + 1);
+                    Ok(())
+                }));
+            }
+            a.run("file.print", json!({})).unwrap();
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+                |ui, app: &mut WordApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                a,
+            );
+            for _ in 0..4 {
+                h.step();
+            }
+            assert!(h.state().ui.backstage && h.state().ui.backstage_page == "print", "the Print page is open");
+            assert_eq!(h.query_by_label(BLURB).is_some(), hook, "hook {hook}: the Print button's blurb");
+            assert!(h.query_by_label("PDF document (*.pdf)").is_some(), "hook {hook}: the page rendered its export choices");
+            if hook {
+                h.get_by_role_and_label(egui::accesskit::Role::Button, "Print").click();
+                h.step();
+                h.step();
+                assert_eq!(printed.get(), 1, "the button printed");
+            }
         }
     }
 

@@ -583,6 +583,7 @@
 	Right	右
 	Right Border	右框线
 	Right-to-Left Text Direction	从右向左文字方向
+	Left-to-Right Text Direction	从左向右文字方向
 	Right:	右：
 	Rotate	旋转
 	Rounded Rectangle	圆角矩形
@@ -795,6 +796,9 @@
 	📂  Browse…	📂  浏览…
 	{words} words	{words} 个字
 	{selected} of {words} words	{selected}/{words} 个字
+	Direction:	方向：
+	Right-to-left	从右向左
+	Left-to-right	从左向右
 # Zotero integration
 	Zotero	Zotero
 	Citations	引文
@@ -878,3 +882,8 @@
 	Operator	运算符
 	Equation Options	公式选项
 	All symbol sets	所有符号集
+	Send the document straight to the system print dialog, or save a copy in another format below.	将文档直接发送到系统打印对话框，或在下方以其他格式保存副本。
+	Or save a copy in another format:	或以其他格式保存副本：
+	Opening print dialog…	正在打开打印对话框…
+	Print failed: {error}	打印失败：{error}
+	Couldn't open {path}: {error}	无法打开 {path}：{error}

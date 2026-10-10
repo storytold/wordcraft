@@ -572,6 +572,7 @@
 	Right	右
 	Right Border	右罫線
 	Right-to-Left Text Direction	右から左への文字方向
+	Left-to-Right Text Direction	左から右への文字方向
 	Right:	右:
 	Rotate	回転
 	Rounded Rectangle	角丸四角形
@@ -784,6 +785,9 @@
 	📂  Browse…	📂  参照…
 	{words} words	{words} 語
 	{selected} of {words} words	{selected}/{words} 語
+	Direction:	方向:
+	Right-to-left	右から左
+	Left-to-right	左から右
 # Zotero integration
 	Zotero	Zotero
 	Citations	引用文献
@@ -867,3 +871,8 @@
 	Operator	演算子
 	Equation Options	数式のオプション
 	All symbol sets	すべての記号セット
+	Send the document straight to the system print dialog, or save a copy in another format below.	文書をシステムの印刷ダイアログに直接送るか、下で別の形式のコピーを保存します。
+	Or save a copy in another format:	または、別の形式でコピーを保存:
+	Opening print dialog…	印刷ダイアログを開いています…
+	Print failed: {error}	印刷できませんでした: {error}
+	Couldn't open {path}: {error}	{path} を開けませんでした: {error}

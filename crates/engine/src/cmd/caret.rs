@@ -14,8 +14,12 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("caret.right", "Right", "Navigation", |s, v| lr(s, v, false)).key("Right").params(EXTEND).pure(),
         CommandSpec::new("caret.up", "Up", "Navigation", |s, v| vert(s, v, -1)).key("Up").params(EXTEND).pure(),
         CommandSpec::new("caret.down", "Down", "Navigation", |s, v| vert(s, v, 1)).key("Down").params(EXTEND).pure(),
-        CommandSpec::new("caret.wordLeft", "Word Left", "Navigation", |s, v| mv(s, v, word_left)).key("Mod+Left / Alt+Left").params(EXTEND).pure(),
-        CommandSpec::new("caret.wordRight", "Word Right", "Navigation", |s, v| mv(s, v, word_right))
+        // In a right-to-left paragraph the word to the left is the next one.
+        CommandSpec::new("caret.wordLeft", "Word Left", "Navigation", |s, v| mv(s, v, if rtl_para(s) { word_right } else { word_left }))
+            .key("Mod+Left / Alt+Left")
+            .params(EXTEND)
+            .pure(),
+        CommandSpec::new("caret.wordRight", "Word Right", "Navigation", |s, v| mv(s, v, if rtl_para(s) { word_left } else { word_right }))
             .key("Mod+Right / Alt+Right")
             .params(EXTEND)
             .pure(),
@@ -79,15 +83,62 @@ fn mv(s: &mut Session, v: &Value, f: fn(&mut Session, &Pos) -> Pos) -> CmdResult
     sel_result(s)
 }
 
+/// Does the caret's paragraph read right to left?
+fn rtl_para(s: &Session) -> bool {
+    s.doc.para_at(&s.sel.focus).is_some_and(|p| s.doc.styles.resolve_para(&p.props).bidi)
+}
+
+/// Is the caret's paragraph bidirectional (right to left, or with right-to-left text)? Arrow keys
+/// move visually there.
+fn bidi_para(s: &Session) -> bool {
+    s.doc.para_at(&s.sel.focus).is_some_and(|p| wordcraft_doc::bidi::has_rtl(&p.text) || s.doc.styles.resolve_para(&p.props).bidi)
+}
+
 /// Left/Right: with a selection and no Shift, collapse to its edge.
 fn lr(s: &mut Session, v: &Value, is_left: bool) -> CmdResult {
     if !extend(v) && !s.sel.is_collapsed() {
         let (a, b) = s.sel.ordered();
-        s.sel = Selection::caret(if is_left { a } else { b });
+        // The left edge of a selection in right-to-left text is its logical end.
+        let to_start = is_left != rtl_para(s);
+        s.sel = Selection::caret(if to_start { a } else { b });
         s.goal_x = None;
         return sel_result(s);
     }
+    if bidi_para(s) {
+        return visual_lr(s, v, is_left);
+    }
     mv(s, v, if is_left { left } else { right })
+}
+
+/// Left/Right in bidirectional text: one caret position to the left or right on the screen.
+/// Past the line's visual end the caret goes to the neighbouring line in reading order (the
+/// previous line when moving toward the paragraph's start edge).
+fn visual_lr(s: &mut Session, v: &Value, is_left: bool) -> CmdResult {
+    let ext = extend(v);
+    s.goal_x = None;
+    let from = s.sel.focus.clone();
+    let l = s.layout();
+    let to = match l.visual_step(&from, is_left, s.page_hint) {
+        Some(wordcraft_layout::VisualStep::Moved(p)) => p,
+        Some(wordcraft_layout::VisualStep::Edge { start, stop, last_line, rtl }) => {
+            let at = |off| Pos { off, ..from.clone() };
+            if is_left != rtl {
+                match s.doc.para_at(&from) {
+                    Some(para) if start > 0 => at(para.prev_boundary(start)),
+                    _ => left(s, &at(0)),
+                }
+            } else if !last_line {
+                at(stop)
+            } else {
+                let len = s.doc.para_at(&from).map_or(stop, |p| p.len());
+                right(s, &at(len))
+            }
+        }
+        None if is_left => left(s, &from),
+        None => right(s, &from),
+    };
+    apply(s, to, ext);
+    sel_result(s)
 }
 
 fn left(s: &mut Session, p: &Pos) -> Pos {

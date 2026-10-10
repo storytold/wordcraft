@@ -27,6 +27,7 @@ use wordcraft_doc::{Block, Blocks, Document, Paragraph, Path, StoryRef};
 use wordcraft_geom::{Point, Rect};
 
 pub use fields::FieldCtx;
+pub use hit::VisualStep;
 pub use para::{LineEnd, ParaLayout};
 
 /// How the document is viewed.
@@ -554,8 +555,11 @@ fn push_para(items: &mut Vec<Placed>, story: StoryRef, path: &[u32], pl: &Arc<Pa
         return;
     };
     let h = last.top + last.height - first.top;
-    let left = x + pl.rp.indent_left.min(pl.rp.indent_left + pl.rp.indent_first);
-    let right = x + width - pl.rp.indent_right;
+    // Indents are logical: a right-to-left paragraph's start indent (and hanging indent) is on the right.
+    let start = pl.rp.indent_left.min(pl.rp.indent_left + pl.rp.indent_first);
+    let (li, ri) = if pl.rp.bidi { (pl.rp.indent_right, start) } else { (start, pl.rp.indent_right) };
+    let left = x + li;
+    let right = x + width - ri;
     if let Some(c) = pl.rp.shading {
         let pad = pl.rp.borders.as_ref().map(|b| b.left.map(|l| l.space).unwrap_or(4.0)).unwrap_or(0.0);
         items.push(Placed::Fill { rect: Rect::new(left - pad, y, right - left + pad * 2.0, h), color: c });
@@ -1114,7 +1118,7 @@ fn place_objects(
             let rect = if floating {
                 floats.get(&oi).copied().unwrap_or_else(|| float_rect(at.page, at.col, at.para_y, *w, *h, float))
             } else {
-                let cx = x + line.xs.get(k - line.c0).copied().unwrap_or(0.0);
+                let cx = x + line.cl_left(k).unwrap_or(0.0);
                 display::inline_rect(Some(obj), cx, y + (line.baseline - fl.top), c.adv, c.obj_h)
             };
             let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
@@ -1628,3 +1632,5 @@ pub fn now_ms() -> f64 {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_bidi;
