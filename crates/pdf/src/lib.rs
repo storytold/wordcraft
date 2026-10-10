@@ -259,15 +259,20 @@ fn parse_iso(s: &str) -> Option<Civil> {
     Some((y, mo as u8, d as u8, h as u8, mi as u8, sec as u8))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+/// The system clock, or the browser's on the web.
 fn now_unix() -> Option<i64> {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs() as i64)
-}
-
-#[cfg(target_arch = "wasm32")]
-fn now_unix() -> Option<i64> {
-    None
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let secs = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
+        i64::try_from(secs).ok()
+    }
+    // `SystemTime::now()` panics on wasm32-unknown-unknown, so ask the browser's clock.
+    #[cfg(target_arch = "wasm32")]
+    {
+        let ms = js_sys::Date::now();
+        (ms.is_finite() && ms > 0.0).then(|| (ms / 1000.0) as i64)
+    }
 }
 
 /// Unix seconds (UTC) → civil time (proleptic Gregorian).

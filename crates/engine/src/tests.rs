@@ -1502,3 +1502,17 @@ fn styles_apply_rejected_on_protected_document() {
     assert_eq!(para_style(&s, 0), None);
     assert_eq!(s.undo_labels(), undo);
 }
+
+/// Comments, revisions and dates read the real clock (#188: the web stamped 2026-01-01).
+#[test]
+fn timestamps_come_from_the_clock() {
+    let before = cmd::now_unix();
+    assert!(before > 1_760_000_000, "{before}");
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Dated"}));
+    run(&mut s, "select.text", json!({"text": "Dated"}));
+    run(&mut s, "review.newComment", json!({"text": "When?"}));
+    let date = run(&mut s, "review.comments", json!({}))[0]["date"].as_str().unwrap_or_default().to_string();
+    // Fixed-width ISO strings sort by time.
+    assert!(date >= cmd::iso_from_unix_secs(before) && date <= cmd::iso_from_unix_secs(cmd::now_unix()), "{date}");
+}

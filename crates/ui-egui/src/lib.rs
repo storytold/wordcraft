@@ -862,15 +862,18 @@ fn discards_document(id: &str, params: &Value) -> bool {
     }
 }
 
+/// Wall-clock milliseconds since the Unix epoch: the system clock, or the browser's on the web.
 pub fn now_ms() -> f64 {
     #[cfg(not(target_arch = "wasm32"))]
     {
         use std::time::{SystemTime, UNIX_EPOCH};
         SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64() * 1000.0).unwrap_or(0.0)
     }
+    // `SystemTime::now()` panics on wasm32-unknown-unknown, so ask the browser's clock.
     #[cfg(target_arch = "wasm32")]
     {
-        0.0
+        let ms = js_sys::Date::now();
+        if ms.is_finite() && ms > 0.0 { ms } else { 0.0 }
     }
 }
 
