@@ -93,6 +93,11 @@ pub struct FindState {
     #[serde(skip)]
     pub results: Vec<(Pos, Pos)>,
     pub current: usize,
+    /// Reading Highlight: mark every match of `query` in the body.
+    pub highlight: bool,
+    /// Highlighted matches, for the document revision they were found in.
+    #[serde(skip)]
+    pub highlights: Option<(u64, Vec<(Pos, Pos)>)>,
 }
 
 #[derive(Clone)]
@@ -297,6 +302,18 @@ impl Session {
     pub fn touch(&mut self) {
         self.rev = self.rev.wrapping_add(1);
         self.dirty = true;
+    }
+
+    /// Reading Highlight ranges for the current document (searched again after edits); empty when it's off.
+    pub fn find_highlights(&mut self) -> &[(Pos, Pos)] {
+        if !self.find.highlight {
+            return &[];
+        }
+        if self.find.highlights.as_ref().is_none_or(|(r, _)| *r != self.rev) {
+            let found = crate::cmd::edit::search(self, StoryRef::Body).unwrap_or_default();
+            self.find.highlights = Some((self.rev, found));
+        }
+        self.find.highlights.as_ref().map(|(_, v)| v.as_slice()).unwrap_or(&[])
     }
 
     /// The current layout (recomputed when the document or view changed).

@@ -35,6 +35,8 @@
 	Address\nBlock	Bloque de\ndirección
 	Adjust	Ajustar
 	Advanced	Avanzado
+	Advanced Find	Búsqueda avanzada
+	Advanced Find…	Búsqueda avanzada…
 	After:	Después:
 	Agents	Agentes
 	Align	Alinear
@@ -274,6 +276,7 @@
 	General	General
 	Go To	Ir a
 	Go To (⌘⌥G)	Ir a (⌘⌥G)
+	Go To…	Ir a…
 	Go to	Ir a
 	Grab bag	Bolsa de datos adicionales
 	Greeting Line	Línea de saludo
@@ -527,6 +530,7 @@
 	Read Mode	Modo lectura
 	Read\nAloud	Leer en\nvoz alta
 	Read\nMode	Modo\nlectura
+	Reading Highlight	Resaltado de lectura
 	Recent	Recientes
 	Record Macro	Grabar macro
 	Recover Unsaved Documents	Recuperar documentos sin guardar

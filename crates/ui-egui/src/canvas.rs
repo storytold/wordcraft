@@ -386,6 +386,17 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         app.canvas.textures.retain(|k, _| *k < n);
         app.canvas.page_rects = rects.clone();
         balloons(app, ui, &painter, &rects, &layout, geo.scale);
+        // Find › Reading Highlight.
+        let marks: Vec<(Pos, Pos)> = app.session.find_highlights().iter().take(5000).cloned().collect();
+        for (a, b) in &marks {
+            for (pi, r) in layout.selection_rects(&app.session.doc, a, b, app.session.page_hint) {
+                if let Some(pr) = rects.get(pi) {
+                    let scale = layout.pages.get(pi).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
+                    let hr = Rect::from_min_size(pos2(pr.min.x + r.x * scale, pr.min.y + r.y * scale), vec2(r.w * scale, r.h * scale));
+                    painter.rect_filled(hr, 0.0, t.find_highlight);
+                }
+            }
+        }
         // Selection (a selected object shows its frame instead).
         if !app.session.sel.is_collapsed() && crate::objects::selected(app).is_none() {
             let (a, b) = app.session.sel.ordered();

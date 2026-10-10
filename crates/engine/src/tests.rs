@@ -1700,3 +1700,34 @@ fn timestamps_come_from_the_clock() {
     // Fixed-width ISO strings sort by time.
     assert!(date >= cmd::iso_from_unix_secs(before) && date <= cmd::iso_from_unix_secs(cmd::now_unix()), "{date}");
 }
+
+/// Home › Editing › Find › Advanced Find: every match, in the body or a selection, with Reading Highlight.
+#[test]
+fn advanced_find_lists_and_highlights_matches() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "cat dog cat"}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Cat"}));
+    // From the UI it opens the dialog.
+    run(&mut s, "edit.advancedFind", json!({}));
+    assert_eq!(s.ui_requests.last(), Some(&json!({"open": "find"})));
+    let r = run(&mut s, "edit.advancedFind", json!({"text": "cat", "highlight": true}));
+    assert_eq!(r["count"], 3);
+    assert_eq!(s.find_highlights().len(), 3);
+    assert_eq!(run(&mut s, "edit.advancedFind", json!({"text": "cat", "matchCase": true}))["count"], 2);
+    // Highlights follow edits and the latest search.
+    assert_eq!(s.find_highlights().len(), 2);
+    run(&mut s, "text.insert", json!({"text": " cat"}));
+    assert_eq!(s.find_highlights().len(), 3);
+    // Only inside the selection.
+    run(&mut s, "select.text", json!({"text": "cat dog"}));
+    assert_eq!(run(&mut s, "edit.advancedFind", json!({"text": "cat", "in": "selection"}))["count"], 1);
+    run(&mut s, "edit.advancedFind", json!({"highlight": false}));
+    assert!(s.find_highlights().is_empty());
+    // Hostile params.
+    assert!(s.run("edit.advancedFind", &json!({"text": "x", "in": "elsewhere"})).is_err());
+    assert!(s.run("edit.advancedFind", &json!({"text": "(", "regex": true})).is_err());
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "text.delete", json!({}));
+    assert!(s.run("edit.advancedFind", &json!({"text": "x", "in": "selection"})).is_err());
+}

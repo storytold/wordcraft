@@ -647,10 +647,24 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 ui.checkbox(whole_word, tl!("Whole words"));
                 ui.checkbox(regex, tl!("Wildcards (regex)"));
             });
+            let opts = json!({"text": query, "with": replace, "matchCase": *match_case, "wholeWord": *whole_word, "regex": *regex});
+            if !*replace_mode {
+                ui.horizontal(|ui| {
+                    let lit = app.session.find.highlight;
+                    if ui.selectable_label(lit, tl!("Reading Highlight")).clicked() {
+                        let mut v = opts.clone();
+                        v["highlight"] = json!(!lit);
+                        match app.run("edit.advancedFind", v) {
+                            Ok(r) if !lit => *message = format!("{} items highlighted", r["count"]),
+                            Ok(_) => message.clear(),
+                            Err(e) => *message = e,
+                        }
+                    }
+                });
+            }
             if !message.is_empty() {
                 ui.label(egui::RichText::new(message.as_str()).weak());
             }
-            let opts = json!({"text": query, "with": replace, "matchCase": *match_case, "wholeWord": *whole_word, "regex": *regex});
             let mut close = false;
             ui.horizontal(|ui| {
                 if *replace_mode {

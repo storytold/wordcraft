@@ -457,7 +457,11 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Editing", None, app, |ui, app| {
         stack(ui, |ui| {
-            small(ui, app, "find", Some("Find"), "Find", "ui.dialog", json!({"name": "find"}), false).clicked();
+            menu_button(ui, app, "find", Some("Find"), "Find", false, |ui, app| {
+                mi(ui, app, "Find", "ui.dialog", json!({"name": "find"}));
+                mi(ui, app, "Advanced Find…", "edit.advancedFind", json!({}));
+                mi(ui, app, "Go To…", "ui.dialog", json!({"name": "goto"}));
+            });
             small(ui, app, "replace", Some("Replace"), "Replace", "ui.dialog", json!({"name": "replace"}), false);
             menu_button(ui, app, "select", Some("Select"), "Select", false, |ui, app| {
                 mi(ui, app, "Select All", "select.all", json!({}));
