@@ -147,6 +147,8 @@ const SNIPPETS: &[&str] = &[
     "</w:tc>",
     r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
     r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+    r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>ADDIN ZOTERO_ITEM {}</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+    r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
     r#"<w:br w:type="page"/>"#,
     r#"<w:sz w:val="-99999999999"/>"#,
     r#"<w:gridSpan w:val="0"/>"#,

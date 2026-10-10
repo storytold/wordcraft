@@ -58,7 +58,6 @@
 	AutoFit Contents	Ajustar al contenido
 	AutoFit Window	Ajustar a la ventana
 	AutoSave	Autoguardado
-	AutoSave documents that have been saved	Autoguardar los documentos que ya se han guardado
 	AutoSave saves every change to the file (needs a saved document)	El autoguardado guarda cada cambio en el archivo (requiere un documento guardado)
 	AutoText	Texto automático
 	Automatic	Automático
@@ -797,3 +796,48 @@
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Muestra los documentos con los colores invertidos, como en Vista › Cambiar modos. Guardar, imprimir y los PDF no cambian.
 	Only web (http, https) and email (mailto) links can be followed	Solo se pueden seguir vínculos web (http, https) y de correo electrónico (mailto)
 	Character Border	Borde de carácter
+# Zotero integration
+	Zotero	Zotero
+	Citations	Citas
+	Document	Documento
+	Add/Edit\nCitation	Añadir/editar\ncita
+	Add\nNote	Añadir\nnota
+	Add/Edit\nBibliography	Añadir/editar\nbibliografía
+	Refresh	Actualizar
+	Document\nPreferences	Preferencias\ndel documento
+	Unlink\nCitations	Desvincular\ncitas
+	Waiting for Zotero…	Esperando a Zotero…
+	Zotero: done	Zotero: listo
+	Zotero: cancelled	Zotero: cancelado
+	Yes	Sí
+	No	No
+# Read Aloud player
+	Move Past Citation	Mover después de la cita
+	Move Past\nCitation	Mover después\nde la cita
+	Next Sentence	Frase siguiente
+	Previous Sentence	Frase anterior
+	Next sentence	Frase siguiente
+	Previous sentence	Frase anterior
+	Play/Pause	Reproducir/pausar
+	Read Aloud Status	Estado de la lectura en voz alta
+	Reading Speed	Velocidad de lectura
+	Skip Citations and Bibliography	Omitir citas y bibliografía
+	Skip citations & bibliography	Omitir citas y bibliografía
+	Stop Reading	Detener la lectura
+	Don't read Zotero, Mendeley or EndNote citations and bibliographies	No leer las citas ni las bibliografías de Zotero, Mendeley o EndNote
+	Play	Reproducir
+	Pause	Pausar
+	Stop	Detener
+	Sentence	Frase
+	Paused	En pausa
+	Finished	Terminado
+	Stopped	Detenido
+	Speed	Velocidad
+	Normal speed	Velocidad normal
+	AutoSave documents you have saved in WordCraft	Autoguardar los documentos que haya guardado en WordCraft
+	AutoSave failed: {error}. Save the document to turn AutoSave back on.	Error de autoguardado: {error}. Guarde el documento para volver a activar el autoguardado.
+	Couldn't download {name}: {error}	No se pudo descargar {name}: {error}
+	Do you want to save changes to {name}?	¿Desea guardar los cambios en {name}?
+	Don't Save	No guardar
+	That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.	Ese formato no conserva todo, así que el documento sigue abierto. Guárdelo como documento de Word (.docx) para continuar.
+	Your changes will be lost if you don't save them.	Si no guarda los cambios, se perderán.

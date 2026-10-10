@@ -12,6 +12,7 @@ pub mod io;
 mod io_ext;
 pub mod sample;
 mod session;
+pub mod speech;
 
 use std::collections::HashMap;
 

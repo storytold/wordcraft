@@ -109,8 +109,12 @@ fn dispatch(app: &mut WordApp, key: Key, m: Modifiers) -> bool {
     false
 }
 
-/// Events for the focused canvas: text, editing keys, clipboard, IME.
+/// Events for the focused canvas: text, editing keys, clipboard, IME. While keytips are showing
+/// every key belongs to them (letters pick badges, Escape cancels), so nothing here runs.
 pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
+    if app.ui.keytips != crate::keytips::Phase::Off {
+        return;
+    }
     let events = ctx.input(|i| i.events.clone());
     for e in events {
         match e {

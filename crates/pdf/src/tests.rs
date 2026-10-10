@@ -209,6 +209,167 @@ fn hostile_documents_export() {
 }
 
 #[test]
+fn tracked_deletions_are_left_out_without_markup() {
+    use wordcraft_doc::{Revision, RevisionKind};
+    let mut d = Document::new();
+    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Ada".into(), date: String::new() });
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Ada".into(), date: String::new() });
+    let mut p = Paragraph::with_text("Keep ", CharProps::default());
+    let n = p.len();
+    p.insert_text(n, "DELETEDTEXT ", &CharProps { del: Some(0), ..Default::default() }).unwrap();
+    let n = p.len();
+    p.insert_text(n, "INSERTED", &CharProps { ins: Some(1), ..Default::default() }).unwrap();
+    d.body = vec![para_block(p)];
+    // The default export shows the final text, as Word's "No Markup" does.
+    let text = squash(&extract_text(&export(&d, &PdfOptions::default()).unwrap()).concat());
+    assert_eq!(text, "Keep INSERTED");
+    // With markup the deletion is still there (struck through).
+    let text = squash(&extract_text(&export(&d, &PdfOptions { include_markup: true, ..Default::default() }).unwrap()).concat());
+    assert_eq!(text, "Keep DELETEDTEXT INSERTED");
+}
+
+#[test]
+fn deleted_heading_text_stays_out_of_bookmarks_and_tags() {
+    use wordcraft_doc::{Revision, RevisionKind};
+    let mut d = Document::new();
+    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Ada".into(), date: String::new() });
+    let del = CharProps { del: Some(0), ..Default::default() };
+    // "Intro SECRET Part" with "SECRET " deleted, then a heading deleted as a whole.
+    let mut h = Paragraph::with_text("Intro ", CharProps::default()).styled("Heading1");
+    let n = h.len();
+    h.insert_text(n, "SECRET ", &del).unwrap();
+    let n = h.len();
+    h.insert_text(n, "Part", &CharProps::default()).unwrap();
+    let gone = Paragraph::with_text("GONE", del.clone()).styled("Heading1");
+    d.body = vec![para_block(h), para_block(Paragraph::with_text("Body text", CharProps::default())), para_block(gone)];
+    let raw = |opts: PdfOptions| String::from_utf8_lossy(&export(&d, &PdfOptions { compress: false, ..opts }).unwrap()).into_owned();
+    // Bookmarks alone (untagged), then bookmarks and heading tags: the final text only.
+    for tagged in [false, true] {
+        let pdf = raw(PdfOptions { tagged, ..Default::default() });
+        assert!(!pdf.contains("SECRET") && !pdf.contains("GONE"), "tagged {tagged}: deleted heading text in the PDF");
+        assert!(pdf.contains("/Outlines") && pdf.contains("Intro Part"), "tagged {tagged}: no bookmark for the heading");
+    }
+    // With markup the deleted text is shown, and so it is in the bookmarks.
+    let pdf = raw(PdfOptions { include_markup: true, ..Default::default() });
+    assert!(pdf.contains("Intro SECRET Part") && pdf.contains("GONE"));
+}
+
+#[test]
+fn hidden_heading_text_stays_out_of_bookmarks_and_tags() {
+    let mut d = Document::new();
+    // Hidden text both directly and through a character style.
+    d.styles.upsert(wordcraft_doc::Style {
+        id: "Secret".into(),
+        name: "Secret".into(),
+        kind: wordcraft_doc::StyleKind::Character,
+        chr: CharProps { hidden: Some(true), ..Default::default() },
+        ..Default::default()
+    });
+    let hidden = CharProps { hidden: Some(true), ..Default::default() };
+    // "Intro SECRET Part" with "SECRET " hidden, a heading hidden as a whole, and one hidden by style.
+    let mut h = Paragraph::with_text("Intro ", CharProps::default()).styled("Heading1");
+    let n = h.len();
+    h.insert_text(n, "SECRET ", &hidden).unwrap();
+    let n = h.len();
+    h.insert_text(n, "Part", &CharProps::default()).unwrap();
+    let gone = Paragraph::with_text("GONE", hidden.clone()).styled("Heading1");
+    let styled = Paragraph::with_text("STYLED", CharProps { style: Some("Secret".into()), ..Default::default() }).styled("Heading1");
+    d.body = vec![
+        para_block(h),
+        para_block(Paragraph::with_text("Body text", CharProps::default())),
+        para_block(gone),
+        para_block(styled),
+        para_block(Paragraph::with_text("More text", CharProps::default())),
+    ];
+    let raw = |opts: PdfOptions| String::from_utf8_lossy(&export(&d, &PdfOptions { compress: false, ..opts }).unwrap()).into_owned();
+    // The PDF never prints hidden text, with or without markup, so neither do bookmarks or tags.
+    for (tagged, include_markup) in [(false, false), (true, false), (true, true)] {
+        let pdf = raw(PdfOptions { tagged, include_markup, ..Default::default() });
+        let what = format!("tagged {tagged} markup {include_markup}");
+        assert!(!pdf.contains("SECRET") && !pdf.contains("GONE") && !pdf.contains("STYLED"), "{what}: hidden heading text in the PDF");
+        assert!(pdf.contains("/Outlines") && pdf.contains("Intro Part"), "{what}: no bookmark for the heading");
+    }
+}
+
+#[test]
+fn long_fragmented_hidden_headings_export_in_linear_time() {
+    // Headings of n chars in one-char runs: all hidden with bold alternating, and hidden and visible
+    // alternating. Layout and the bookmark/tag titles once scanned every left-out range for every
+    // char, quadratic in n. Machine-independent: the time for 4n against n, linear ~4, quadratic ~16.
+    let doc = |n: usize| {
+        let heading = |visible_every_other: bool| {
+            let mut h = Paragraph::with_text(&"abcdefg ".repeat(n / 8), CharProps::default()).styled("Heading1");
+            h.runs = (0..n)
+                .map(|i| {
+                    let hidden = !(visible_every_other && i % 2 == 1);
+                    wordcraft_doc::Run { len: 1, props: CharProps { hidden: Some(hidden), bold: Some(i % 4 < 2), ..Default::default() } }
+                })
+                .collect();
+            para_block(h)
+        };
+        let mut d = Document::new();
+        d.body = vec![heading(false), heading(true), para_block(Paragraph::with_text("After", CharProps::default()))];
+        d
+    };
+    let opts = PdfOptions { compress: false, ..Default::default() };
+    // The fastest of a few runs, after a warm-up, so one slow run on a busy machine counts less.
+    let fastest = |d: &Document| {
+        (0..3)
+            .map(|_| {
+                let t = std::time::Instant::now();
+                export(d, &opts).unwrap();
+                t.elapsed().as_secs_f64()
+            })
+            .fold(f64::INFINITY, f64::min)
+    };
+    let n = 25_000;
+    let (small, big) = (doc(n), doc(4 * n));
+    export(&small, &opts).unwrap();
+    let (t1, t4) = (fastest(&small), fastest(&big));
+    let ratio = t4 / t1.max(1e-9);
+    eprintln!("t(n) {t1:.3} s, t(4n) {t4:.3} s, ratio {ratio:.1}");
+    assert!(ratio < 8.0, "4x the text took {ratio:.1}x the time ({t1:.3} s → {t4:.3} s): not linear");
+    let pdf = String::from_utf8_lossy(&export(&big, &opts).unwrap()).into_owned();
+    // The all-hidden heading has no bookmark; the other is titled with its visible chars only.
+    assert!(!pdf.contains("abcd"), "hidden heading text in a title");
+    assert!(pdf.contains("bdf bdf"), "no title for the half-visible heading");
+}
+
+#[test]
+fn table_style_hidden_heading_text_stays_out_of_bookmarks_and_tags() {
+    // Hidden by the table style's header row, so only the layout's resolution (table conditional
+    // formatting under the runs' own) says the text is hidden.
+    let mut d = Document::new();
+    d.styles.upsert(wordcraft_doc::Style {
+        id: "SecretHeader".into(),
+        name: "Secret Header".into(),
+        kind: wordcraft_doc::StyleKind::Table,
+        table: Some(wordcraft_doc::styles::TableStyleParts {
+            header_chr: CharProps { hidden: Some(true), ..Default::default() },
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let mut t = Table::new(2, 2, 400.0);
+    t.props.style = Some("SecretHeader".into());
+    // Header row: a heading hidden as a whole, and "Shown SECRET" where "Shown " is unhidden directly.
+    let mut partly = Paragraph::with_text("Shown ", CharProps { hidden: Some(false), ..Default::default() }).styled("Heading1");
+    let n = partly.len();
+    partly.insert_text(n, "SECRET", &CharProps::default()).unwrap();
+    t.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("GONE", CharProps::default()).styled("Heading1"))];
+    t.rows[0].cells[1].blocks = vec![para_block(partly)];
+    t.rows[1].cells[0].blocks = vec![para_block(Paragraph::with_text("Body cell", CharProps::default()))];
+    d.body = vec![para_block(Paragraph::with_text("Before", CharProps::default())), Arc::new(Block::Table(t))];
+    let raw = |opts: PdfOptions| String::from_utf8_lossy(&export(&d, &PdfOptions { compress: false, ..opts }).unwrap()).into_owned();
+    for (tagged, include_markup) in [(false, false), (true, false), (true, true)] {
+        let pdf = raw(PdfOptions { tagged, include_markup, ..Default::default() });
+        let what = format!("tagged {tagged} markup {include_markup}");
+        assert!(!pdf.contains("SECRET") && !pdf.contains("GONE"), "{what}: hidden table heading text in the PDF");
+        assert!(pdf.contains("/Outlines") && pdf.contains("Shown"), "{what}: no bookmark for the visible part");
+    }
+}
+
+#[test]
 fn text_mapping_handles_ligatures_and_extras() {
     let d = Document::from_text("office affine");
     let lay = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());

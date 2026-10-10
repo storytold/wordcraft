@@ -17,6 +17,15 @@ fn text(s: &Session) -> String {
 }
 
 #[test]
+fn doc_extension_dispatches_to_docbin() {
+    // Garbage bytes with a .doc name must produce an error through the Word 97-2003
+    // reader — never a panic and never a silently empty document.
+    for name in ["x.doc", "x.dot"] {
+        assert!(crate::io::open_bytes(name, &[0u8; 64]).is_err(), "{name} should fail");
+    }
+}
+
+#[test]
 fn every_command_has_unique_id() {
     let reg = cmd::registry();
     let mut ids: Vec<&str> = reg.all().iter().map(|c| c.id).collect();
@@ -487,6 +496,27 @@ fn track_changes_and_accept() {
 }
 
 #[test]
+fn no_markup_view_lays_out_the_final_text() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "original"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "select.text", json!({"text": "orig"}));
+    run(&mut s, "text.delete", json!({}));
+    let gap = |s: &mut Session| {
+        let l = s.layout();
+        let x = |off| l.caret(&Pos::body(0, off)).map(|c| c.x).unwrap_or(f32::NAN);
+        x(4) - x(0)
+    };
+    assert!(gap(&mut s) > 5.0, "markup shows the deletion");
+    run(&mut s, "review.markup", json!({"value": "noMarkup"}));
+    assert!(gap(&mut s).abs() < 0.01, "No Markup leaves it out");
+    run(&mut s, "review.showMarkup", json!({"value": true}));
+    assert!(gap(&mut s) > 5.0);
+    run(&mut s, "review.showMarkup", json!({"value": false}));
+    assert!(gap(&mut s).abs() < 0.01);
+}
+
+#[test]
 fn replace_all_is_tracked() {
     let mut s = s();
     let original = "We walked towards the light, then towards home.";
@@ -590,13 +620,14 @@ fn hostile_params_never_panic() {
         json!({"value": -1e308, "rows": 1e9}),
     ];
     for spec in reg.all() {
-        // These reach outside the session: files, and Read Aloud starts the system speech
-        // synthesiser (`say` on macOS), which would read the sample document aloud on every run.
-        if spec.id.starts_with("file.") || spec.id == "insert.picture" || spec.id == "insert.textFromFile" || spec.id == "review.readAloud" {
+        // These reach outside the session (files). Read Aloud (`review.readAloud`, `readAloud.*`)
+        // is fuzzed too: under `cfg(test)` its backend is the silent `Hold`, asserted below.
+        if spec.id.starts_with("file.") || spec.id == "insert.picture" || spec.id == "insert.textFromFile" {
             continue;
         }
         for j in &junk {
             let mut s = Session::new(crate::sample::sample_document());
+            assert_ne!(s.read_aloud.backend, crate::speech::Backend::System, "tests must never start real speech");
             let _ = s.run(spec.id, j);
             s.clamp_selection();
             let _ = s.layout();
@@ -903,6 +934,239 @@ fn word_count_with_an_object_selected_counts_the_document() {
     // A real text selection still counts just itself.
     run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
     assert_eq!(run(&mut s, "review.wordCount", json!({}))["words"].as_u64(), Some(1));
+}
+
+#[test]
+fn custom_properties_set_read_remove_and_undo() {
+    let mut s = s();
+    let r = run(&mut s, "file.properties", json!({"custom": {"ZOTERO_PREF_1": "<data/>", "Status": "draft"}}));
+    let custom = r["custom"].as_array().cloned().unwrap_or_default();
+    assert!(custom.iter().any(|p| p["name"] == "Status" && p["value"] == "draft" && p["kind"] == "lpwstr"));
+    assert_eq!(custom.len(), 2);
+    assert_eq!(s.doc.custom_prop("zotero_pref_1"), Some("<data/>"));
+    let r = run(&mut s, "file.properties", json!({"custom": {"status": null}}));
+    assert_eq!(r["custom"].as_array().map(|a| a.len()), Some(1));
+    assert!(s.run("file.properties", &json!({"custom": "x"})).is_err());
+    assert!(s.run("file.properties", &json!({"custom": {"": "x"}})).is_err());
+    assert!(s.run("file.properties", &json!({"custom": {"n": 3}})).is_err());
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.custom_prop("Status"), Some("draft"));
+}
+
+/// `document_id` tells an edit from a replacement (the UI drops a "Save changes?" prompt
+/// about a document that has been replaced).
+#[test]
+fn document_id_changes_only_when_the_document_is_replaced() {
+    let mut s = s();
+    let first = s.document_id();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    run(&mut s, "format.bold", json!({}));
+    assert_eq!(s.document_id(), first);
+    run(&mut s, "file.new", json!({"template": "letter"}));
+    let second = s.document_id();
+    assert_ne!(second, first);
+    run(&mut s, "file.new", json!({}));
+    assert_ne!(s.document_id(), second);
+}
+
+/// Envelopes, Labels and Finish & Merge make a new, untitled document, as Word does, and like New
+/// its undo history starts afresh. Undo/Redo across the swap put the wrong document under a file
+/// (Undo, Save As, Redo, Save wrote the envelope over the saved file), so it isn't offered; the UI
+/// asks to save the replaced document first.
+#[test]
+fn mailings_results_are_new_untitled_documents() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-mailings-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let original = dir.join("letter.docx");
+    let saved_as = dir.join("saved-as.docx");
+    let on_file = |p: &std::path::Path| crate::io::open_path(p).unwrap().plain_text(StoryRef::Body);
+    for id in ["mailings.envelopes", "mailings.labels", "mailings.finish"] {
+        let mut s = s();
+        run(&mut s, "mailings.recipients", json!({"csv": "First Name\nAda\nAlan"}));
+        run(&mut s, "text.insert", json!({"text": "Dear "}));
+        run(&mut s, "mailings.insertField", json!({"field": "First Name"}));
+        run(&mut s, "file.save", json!({"path": original.to_string_lossy()}));
+        let on_disk = std::fs::read(&original).unwrap();
+        run(&mut s, "text.insert", json!({"text": ", unsaved"}));
+        let before = text(&s);
+        let document = s.document_id();
+
+        run(&mut s, id, json!({}));
+        let result = text(&s);
+        assert_ne!(result, before, "{id}: the result replaced the document");
+        assert_ne!(s.document_id(), document, "{id}: a different document");
+        assert_eq!(s.path, None, "{id}: the result is untitled");
+        assert_eq!(run(&mut s, "file.save", json!({}))["saved"], false, "{id}: Save asks where (Save As)");
+        assert_eq!(std::fs::read(&original).unwrap(), on_disk, "{id}: the original file is untouched");
+
+        // Undo doesn't bring the old document back under the new one's identity; Redo can't
+        // put the result back under a file saved in between.
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(text(&s), result, "{id}: history starts afresh, like New");
+        run(&mut s, "file.saveAs", json!({"path": saved_as.to_string_lossy()}));
+        let written = on_file(&saved_as);
+        run(&mut s, "edit.redo", json!({}));
+        assert_eq!(text(&s), result, "{id}: nothing to redo");
+        run(&mut s, "file.save", json!({}));
+        assert_eq!(on_file(&saved_as), written, "{id}: the saved file still holds what was saved");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn html_pictures_load_relative_to_the_file() {
+    // Issue #98: `<img src="logo.png">` beside an HTML file is embedded when it is opened.
+    let dir = std::env::temp_dir().join(format!("wordcraft-html-img-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("img")).unwrap();
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(4, 2, image::Rgba([10, 20, 30, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    std::fs::write(dir.join("img/my logo.png"), &png).unwrap();
+    std::fs::write(dir.join("secret.txt"), b"not a picture").unwrap();
+    let html = r#"<p><img src="img/my%20logo.png" alt="Logo"></p><p><img src="secret.txt" alt="T"></p><p><img src="http://example.com/x.png" alt="Web"></p>"#;
+    std::fs::write(dir.join("page.html"), html).unwrap();
+    let doc = crate::io::open_path(&dir.join("page.html"));
+    let _ = std::fs::remove_dir_all(&dir);
+    let doc = doc.unwrap();
+    assert_eq!(doc.media.len(), 1);
+    let text = doc.plain_text(StoryRef::Body);
+    assert!(!text.contains("Logo") && text.contains('T') && text.contains("Web"), "{text:?}");
+}
+
+/// A fresh, empty scratch folder for one test.
+#[cfg(not(target_arch = "wasm32"))]
+fn scratch_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("wordcraft-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn tiny_png() -> Vec<u8> {
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(2, 2, image::Rgba([200, 30, 30, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    png
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn html_pictures_outside_the_folder_are_not_loaded() {
+    // #98 review: `..` must not reach files outside the HTML file's folder.
+    let root = scratch_dir("html-img-escape");
+    std::fs::create_dir_all(root.join("site/img")).unwrap();
+    std::fs::write(root.join("outside.png"), tiny_png()).unwrap();
+    std::fs::write(root.join("site/inside.png"), tiny_png()).unwrap();
+    let html = r#"<p><img src="../outside.png" alt="Up"></p><p><img src="img/../../outside.png" alt="Sneak"></p><p><img src="img/../inside.png" alt="In"></p>"#;
+    std::fs::write(root.join("site/page.html"), html).unwrap();
+    let doc = crate::io::open_path(&root.join("site/page.html"));
+    let _ = std::fs::remove_dir_all(&root);
+    let doc = doc.unwrap();
+    assert_eq!(doc.media.len(), 1, "only the picture inside the folder loads");
+    let text = doc.plain_text(StoryRef::Body);
+    assert!(text.contains("Up") && text.contains("Sneak") && !text.contains("In"), "{text:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn html_pictures_through_a_symlink_out_of_the_folder_are_not_loaded() {
+    // #98 review: a symlink inside the folder must not lead outside it.
+    let root = scratch_dir("html-img-symlink");
+    std::fs::create_dir_all(root.join("site")).unwrap();
+    std::fs::write(root.join("outside.png"), tiny_png()).unwrap();
+    std::os::unix::fs::symlink(root.join("outside.png"), root.join("site/link.png")).unwrap();
+    std::fs::write(root.join("site/page.html"), r#"<p><img src="link.png" alt="Link"></p>"#).unwrap();
+    let doc = crate::io::open_path(&root.join("site/page.html"));
+    let _ = std::fs::remove_dir_all(&root);
+    let doc = doc.unwrap();
+    assert!(doc.media.is_empty());
+    assert!(doc.plain_text(StoryRef::Body).contains("Link"));
+}
+
+#[cfg(unix)]
+#[test]
+fn html_picture_that_is_a_named_pipe_is_skipped_without_blocking() {
+    // #98 review: opening a FIFO blocks until a writer appears; it must never be opened.
+    let dir = scratch_dir("html-img-fifo");
+    let fifo = dir.join("pipe.png");
+    let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+    if !made.is_ok_and(|s| s.success()) {
+        let _ = std::fs::remove_dir_all(&dir);
+        eprintln!("mkfifo unavailable; skipping");
+        return;
+    }
+    std::fs::write(dir.join("page.html"), r#"<p><img src="pipe.png" alt="Pipe"></p>"#).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let page = dir.join("page.html");
+    std::thread::spawn(move || {
+        let _ = tx.send(crate::io::open_path(&page));
+    });
+    let got = rx.recv_timeout(std::time::Duration::from_secs(10));
+    if got.is_err() {
+        // Unblock the stuck reader so the thread ends, then fail.
+        let _ = std::fs::OpenOptions::new().write(true).open(&fifo);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    let doc = got.expect("opening the HTML file blocked on a named pipe").unwrap();
+    assert!(doc.media.is_empty());
+    assert!(doc.plain_text(StoryRef::Body).contains("Pipe"));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn html_picture_size_limit_holds_whatever_length_the_file_reports() {
+    use crate::io::LocalImages;
+    let dir = scratch_dir("html-img-limit");
+    std::fs::write(dir.join("ten.bin"), [7u8; 10]).unwrap();
+    std::fs::write(dir.join("eleven.bin"), [7u8; 11]).unwrap();
+    let images = LocalImages::with_limits(&dir, 10, 1000);
+    let ten = images.load("ten.bin").map(|d| d.len());
+    let eleven = images.load("eleven.bin");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(ten, Some(10));
+    assert!(eleven.is_none());
+    #[cfg(unix)]
+    {
+        // A device reports a length of 0 and never ends: it is not a regular file, and the read is
+        // bounded anyway.
+        let dev = LocalImages::with_limits(std::path::Path::new("/dev"), 1 << 20, 1 << 20);
+        assert!(dev.load("zero").is_none());
+        assert!(dev.load("null").is_none());
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn html_pictures_share_one_read_and_a_per_document_budget() {
+    // #98 review: a picture referenced many times is read once, and every reference counts
+    // against the document's budget so a large picture can't be multiplied without bound.
+    use crate::io::LocalImages;
+    let dir = scratch_dir("html-img-budget");
+    let png = tiny_png();
+    let n = png.len() as u64;
+    std::fs::write(dir.join("a.png"), &png).unwrap();
+    let images = LocalImages::with_limits(&dir, 1 << 20, 3 * n);
+    let first = images.load("a.png").unwrap();
+    std::fs::write(dir.join("a.png"), b"changed on disk").unwrap();
+    let second = images.load("./a.png").unwrap();
+    assert!(std::sync::Arc::ptr_eq(&first, &second), "the second reference reuses the first read");
+    assert_eq!(*second, png);
+    assert!(images.load("a.png").is_some());
+    assert!(images.load("a.png").is_none(), "budget spent");
+    // Files over the per-picture limit still cost what was read.
+    std::fs::write(dir.join("big.bin"), vec![1u8; 100]).unwrap();
+    std::fs::write(dir.join("small.bin"), [1u8; 5]).unwrap();
+    let images = LocalImages::with_limits(&dir, 10, 25);
+    assert!(images.load("big.bin").is_none());
+    assert!(images.load("big.bin").is_none());
+    let small = images.load("small.bin");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(small.is_none(), "two oversized reads used up the budget");
 }
 
 fn para_style(s: &Session, i: usize) -> Option<String> {

@@ -315,6 +315,16 @@ impl Writer<'_> {
                 }
             }
             InlineObject::Field { instr, result, locked } => self.field(w, instr, result, *locked, props),
+            InlineObject::FieldStart { instr, locked } => {
+                self.rev_open(w, props);
+                self.field_start(w, instr, *locked, props);
+                self.rev_close(w, props);
+            }
+            InlineObject::FieldEnd => {
+                self.rev_open(w, props);
+                field_run(w, props, &|w| w.empty("w:fldChar", &[("w:fldCharType", "end")]));
+                self.rev_close(w, props);
+            }
             InlineObject::NoteRef { kind, id, custom } => {
                 let foot = *kind == NoteKind::Footnote;
                 if self.current_note == Some((foot, *id)) {
@@ -762,6 +772,14 @@ fn xfrm(w: &mut W, cw: f32, ch: f32) {
     w.empty("a:off", &[("x", "0"), ("y", "0")]);
     w.empty("a:ext", &[("cx", &emu(cw.max(0.0))), ("cy", &emu(ch.max(0.0)))]);
     w.close("a:xfrm");
+}
+
+/// One `w:r` with `props`, holding what `f` writes (a field character or code).
+fn field_run(w: &mut W, props: &CharProps, f: &dyn Fn(&mut W)) {
+    w.open("w:r", &[]);
+    rpr(w, props);
+    f(w);
+    w.close("w:r");
 }
 
 /// Word's Table of Contents content control, which gives the TOC its frame and Update Table.
