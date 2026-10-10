@@ -86,6 +86,7 @@
 	Border\nPainter	Pincel de\nbordes
 	Borders	Bordes
 	Bottom Border	Borde inferior
+	Bottom Margin	Margen inferior
 	Bottom of Page	Parte inferior de la página
 	Bottom:	Inferior:
 	Box	Cuadro
@@ -224,6 +225,7 @@
 	Drawing\nCanvas	Lienzo de\ndibujo
 	Drop Cap	Letra capital
 	Drops all formatting and pastes plain text.	Quita todo el formato y pega texto sin formato.
+	Edit Comment	Editar comentario
 	Edit Footer	Editar pie de página
 	Edit Header	Editar encabezado
 	Edit Recipient List	Editar lista de destinatarios
@@ -375,6 +377,7 @@
 	Layout Summary	Resumen de disposición
 	Left	Izquierda
 	Left Border	Borde izquierdo
+	Left Margin	Margen izquierdo
 	Left:	Izquierda:
 	Letter	Carta
 	Line	Línea
@@ -566,6 +569,7 @@
 	Remove Space After Paragraph	Quitar espacio después del párrafo
 	Remove Table of Contents	Quitar tabla de contenido
 	Remove Watermark	Quitar marca de agua
+	Reopen	Reabrir
 	Repeat	Repetir
 	Repeat Header Rows	Repetir filas de encabezado
 	Replace	Reemplazar
@@ -596,6 +600,7 @@
 	Rich Text Format (RTF)	Formato de texto enriquecido (RTF)
 	Right	Derecha
 	Right Border	Borde derecho
+	Right Margin	Margen derecho
 	Right-to-Left Text Direction	Dirección de texto de derecha a izquierda
 	Left-to-Right Text Direction	Dirección de texto de izquierda a derecha
 	Right:	Derecha:
@@ -744,6 +749,7 @@
 	Three	Tres
 	Tight	Ajustado
 	Top Border	Borde superior
+	Top Margin	Margen superior
 	Top of Page	Parte superior de la página
 	Top:	Superior:
 	Total Row	Fila de totales
@@ -804,6 +810,7 @@
 	Wrap Text	Ajustar texto
 	Wrap\nText	Ajustar\ntexto
 	Write & Insert Fields	Escribir e insertar campos
+	Write a reply	Escribir una respuesta
 	Zoom	Zoom
 	Zoom In	Acercar
 	Zoom Out	Alejar

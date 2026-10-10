@@ -52,9 +52,14 @@
 	AutoSave	自動保存
 	AutoSave documents you have saved in WordCraft	WordCraft で保存した文書を自動保存する
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	自動保存できませんでした: {error}。文書を保存し直すと、自動保存が再開します。
+	Bottom Margin	下余白
 	Dark page (white text on black)	ダーク ページ (黒地に白い文字)
+	Edit Comment	コメントを編集
+	Left Margin	左余白
 	More templates →	その他のテンプレート →
 	No templates match your search.	検索に一致するテンプレートはありません。
+	Reopen	再度開く
+	Right Margin	右余白
 	Search for templates	テンプレートを検索
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	表示 › モードの切り替えと同様に、文書の色を反転して表示します。保存、印刷、PDF は変わりません。
 	AutoSave saves every change to the file (needs a saved document)	自動保存は変更のたびにファイルへ保存します（保存済みの文書が必要です）
@@ -719,6 +724,7 @@
 	Three	3 段
 	Tight	狭い
 	Top Border	上罫線
+	Top Margin	上余白
 	Top of Page	ページの上部
 	Top:	上:
 	Total Row	集計行
@@ -778,6 +784,7 @@
 	Wrap Text	文字列の折り返し
 	Wrap\nText	文字列の折り返し
 	Write & Insert Fields	文章入力とフィールドの挿入
+	Write a reply	返信を入力
 	Zoom	ズーム
 	Zoom In	拡大
 	Zoom Out	縮小

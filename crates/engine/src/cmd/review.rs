@@ -11,6 +11,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("review.newComment", "New Comment", "Review › Comments", new_comment).key("Mod+Alt+M").params(r#"{"text": string}"#),
         CommandSpec::new("review.reply", "Reply", "Review › Comments", reply).params(r#"{"id": n, "text": string}"#),
+        CommandSpec::new("review.editComment", "Edit Comment", "Review › Comments", edit_comment).params(r#"{"id": n, "text": string}"#),
         CommandSpec::new("review.deleteComment", "Delete", "Review › Comments", delete_comment).params(r#"{"id"?: n, "all"?: bool}"#),
         CommandSpec::new("review.resolveComment", "Resolve", "Review › Comments", |s, v| {
             let id = p::u64(v, "id").map(|x| x as u32).or_else(|| comment_at_caret(s)).ok_or_else(|| CmdError::Params("`id` required".into()))?;
@@ -129,6 +130,16 @@ fn reply(s: &mut Session, v: &Value) -> CmdResult {
     let id = s.doc.comments.keys().next_back().map(|k| k + 1).unwrap_or(0);
     let initials: String = s.author.split_whitespace().filter_map(|w| w.chars().next()).collect();
     s.doc.comments.insert(id, Comment { author: s.author.clone(), initials, date: now_iso(), parent: Some(parent), resolved: false, part });
+    Ok(json!({"id": id}))
+}
+
+/// Replace a comment's (or reply's) text; each line becomes a paragraph.
+fn edit_comment(s: &mut Session, v: &Value) -> CmdResult {
+    let id = p::u64(v, "id").and_then(|x| u32::try_from(x).ok()).ok_or_else(|| CmdError::Params("`id` required".into()))?;
+    let text = p::req_str(v, "text")?;
+    let part = s.doc.comments.get(&id).map(|c| c.part).ok_or_else(|| CmdError::Params("no such comment".into()))?;
+    let blocks = text.split('\n').take(10_000).map(|l| para_block(Paragraph::with_text(l.trim_end_matches('\r'), Default::default()))).collect();
+    s.doc.set_story(StoryRef::Part(part), blocks)?;
     Ok(json!({"id": id}))
 }
 
