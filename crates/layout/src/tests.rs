@@ -2100,7 +2100,8 @@ fn floating_header_text_box_leaves_the_body_at_the_top_margin() {
     let body: Vec<String> = (1..=40).map(|i| format!("Body paragraph {i}: synthetic public test content.")).collect();
     let make = |float: Option<Float>| {
         let mut d = Document::from_text(&body.join("\n"));
-        d.last_section.header = 36.0;
+        // Low enough that the two header lines end above the top margin with any font.
+        d.last_section.header = 18.0;
         // A label, then the paragraph the box is anchored to (empty in the control).
         let tight = ParaProps { space_before: Some(0.0), space_after: Some(0.0), ..Default::default() };
         let mut label = wordcraft_doc::Paragraph::with_text("Header label", Default::default());
