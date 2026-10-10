@@ -95,6 +95,9 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocxError> {
         let ex = part(rt::COMMENTS_EX);
         lenient("comments", r.read_comments(&p, ex.as_deref()));
     }
+    if let Some(p) = part(rt::BIBLIOGRAPHY) {
+        lenient("bibliography", r.read_bibliography(&p));
+    }
 
     if let Some(bg) = root.child("w:background").and_then(|b| b.attr("w:color")).and_then(Rgb::parse) {
         r.doc.settings.page_color = Some(bg);
@@ -570,6 +573,50 @@ impl Reader<'_> {
             }
         }
         self.doc.comments = entries;
+        Ok(())
+    }
+
+    fn read_bibliography(&mut self, path: &str) -> Result<(), DocxError> {
+        let Some(root) = self.xml(path)? else { return Ok(()) };
+        // Bibliography part uses the schema: http://schemas.openxmlformats.org/officeDocument/2006/bibliography
+        // The sources are in <b:Sources> with <b:Source> children
+        for src_el in root.children("b:Source") {
+            let tag = src_el.child("b:Tag").map(|e| e.text()).unwrap_or_default();
+            let kind = src_el.child("b:SourceType").map(|e| e.text()).filter(|t| !t.is_empty()).unwrap_or_else(|| "book".to_string());
+            let author = src_el
+                .child("b:Author")
+                .map(|a| {
+                    let mut authors = Vec::new();
+                    for name_el in a.children("b:NameList").flat_map(|n| n.children("b:Person")) {
+                        let last = name_el.child("b:Last").map(|e| e.text()).unwrap_or_default();
+                        let first = name_el.child("b:First").map(|e| e.text()).unwrap_or_default();
+                        let middle = name_el.child("b:Middle").map(|e| e.text()).unwrap_or_default();
+                        let name = if !first.is_empty() && !middle.is_empty() {
+                            format!("{}, {} {}", last, first, middle)
+                        } else if !first.is_empty() {
+                            format!("{}, {}", last, first)
+                        } else {
+                            last
+                        };
+                        authors.push(name);
+                    }
+                    authors.join("; ")
+                })
+                .unwrap_or_default();
+            let title = src_el.child("b:Title").map(|e| e.text()).unwrap_or_default();
+            let year = src_el.child("b:Year").map(|e| e.text()).unwrap_or_default();
+            let city = src_el.child("b:City").map(|e| e.text()).unwrap_or_default();
+            let publisher = src_el.child("b:Publisher").map(|e| e.text()).unwrap_or_default();
+            let journal = src_el.child("b:JournalName").map(|e| e.text()).unwrap_or_default();
+            let volume = src_el.child("b:Volume").map(|e| e.text()).unwrap_or_default();
+            let pages = src_el.child("b:Pages").map(|e| e.text()).unwrap_or_default();
+            let url = src_el.child("b:URL").map(|e| e.text()).unwrap_or_default();
+
+            // Only add if has meaningful content
+            if !tag.is_empty() || !title.is_empty() || !author.is_empty() {
+                self.doc.sources.push(wordcraft_doc::Source { tag, kind, author, title, year, city, publisher, journal, volume, pages, url });
+            }
+        }
         Ok(())
     }
 

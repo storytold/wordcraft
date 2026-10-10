@@ -31,6 +31,7 @@ pub mod rt {
     pub const FOOTER: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer";
     pub const IMAGE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
     pub const HYPERLINK: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
+    pub const BIBLIOGRAPHY: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/bibliography";
 }
 
 /// Does relationship type `t` end with `suffix` (ignoring the transitional/strict prefix)?

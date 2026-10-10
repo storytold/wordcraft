@@ -275,6 +275,12 @@ pub fn write(doc: &Document) -> Result<Vec<u8>, DocxError> {
         PartRels::default(),
     );
 
+    // Bibliography sources — linked from the document-level rels, per ECMA-376 §19.4.
+    if !doc.sources.is_empty() {
+        rels.add(rt::BIBLIOGRAPHY, "customXml/item1.xml", false);
+        entries.push(("word/customXml/item1.xml".into(), bibliography_xml(doc)));
+    }
+
     // Media referenced by some drawing (orphan parts would make the package suspect).
     let mut media_types: BTreeMap<String, &str> = BTreeMap::new();
     for (key, file) in &wr.media_files {
@@ -800,5 +806,76 @@ fn app_xml(doc: &Document) -> Vec<u8> {
     w.leaf("Paragraphs", &[], &doc.paragraph_count().to_string());
     w.leaf("DocSecurity", &[], "0");
     w.close("Properties");
+    w.into_bytes()
+}
+
+fn bibliography_xml(doc: &Document) -> Vec<u8> {
+    let mut w = W::new();
+    w.open(
+        "b:Sources",
+        &[
+            ("xmlns:b", "http://schemas.openxmlformats.org/officeDocument/2006/bibliography"),
+            ("xmlns", "http://schemas.openxmlformats.org/officeDocument/2006/bibliography"),
+        ],
+    );
+    for src in &doc.sources {
+        w.open("b:Source", &[]);
+        w.leaf("b:Tag", &[], &src.tag);
+        w.leaf("b:SourceType", &[], &src.kind);
+        // Author
+        if !src.author.is_empty() {
+            w.open("b:Author", &[]);
+            w.open("b:NameList", &[]);
+            let authors: Vec<_> = src.author.split(';').map(str::trim).filter(|s| !s.is_empty()).collect();
+            for a in authors {
+                w.open("b:Person", &[]);
+                // Parse "Last, First" or "Last, First Middle"
+                let (last, first_middle) = match a.split_once(',') {
+                    Some((l, f)) => (l.trim(), f.trim()),
+                    None => (a, ""),
+                };
+                w.leaf("b:Last", &[], last);
+                if !first_middle.is_empty() {
+                    let parts: Vec<_> = first_middle.split_whitespace().collect();
+                    if !parts.is_empty() {
+                        w.leaf("b:First", &[], parts[0]);
+                    }
+                    if parts.len() > 1 {
+                        let mid = parts[1..].join(" ");
+                        w.leaf("b:Middle", &[], &mid);
+                    }
+                }
+                w.close("b:Person");
+            }
+            w.close("b:NameList");
+            w.close("b:Author");
+        }
+        if !src.title.is_empty() {
+            w.leaf("b:Title", &[], &src.title);
+        }
+        if !src.year.is_empty() {
+            w.leaf("b:Year", &[], &src.year);
+        }
+        if !src.city.is_empty() {
+            w.leaf("b:City", &[], &src.city);
+        }
+        if !src.publisher.is_empty() {
+            w.leaf("b:Publisher", &[], &src.publisher);
+        }
+        if !src.journal.is_empty() {
+            w.leaf("b:JournalName", &[], &src.journal);
+        }
+        if !src.volume.is_empty() {
+            w.leaf("b:Volume", &[], &src.volume);
+        }
+        if !src.pages.is_empty() {
+            w.leaf("b:Pages", &[], &src.pages);
+        }
+        if !src.url.is_empty() {
+            w.leaf("b:URL", &[], &src.url);
+        }
+        w.close("b:Source");
+    }
+    w.close("b:Sources");
     w.into_bytes()
 }

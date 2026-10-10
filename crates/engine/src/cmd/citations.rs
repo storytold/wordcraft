@@ -546,6 +546,23 @@ mod tests {
     }
 
     #[test]
+    fn bibliography_round_trip_docx() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("text.insert", &json!({"text": "Studios matter "})).unwrap();
+        s.run("references.citation", &json!({"source": {"author": "Rivera, Alex; Chen, Mei", "title": "Shared Spaces", "year": "2021", "publisher": "Harbor Books", "city": "Portland"}})).unwrap();
+        s.run("text.newParagraph", &json!({})).unwrap();
+        s.run("references.bibliography", &json!({})).unwrap();
+
+        // Serialize to DOCX and back — sources must survive.
+        let bytes = wordcraft_docx::write(&s.doc).expect("docx write");
+        let doc = wordcraft_docx::read(&bytes).expect("docx read");
+        eprintln!("sources after round trip: {:?}", doc.sources);
+        assert_eq!(doc.sources.len(), 1, "round-tripped sources: {:?}", doc.sources);
+        assert_eq!(doc.sources[0].author, "Rivera, Alex; Chen, Mei");
+        assert_eq!(doc.sources[0].title, "Shared Spaces");
+    }
+
+    #[test]
     fn index_and_figures() {
         let mut s = Session::new(wordcraft_doc::Document::from_text("Kilns are hot.\nPresses are heavy.\nMore kilns."));
         s.run("select.text", &json!({"text": "Kilns"})).unwrap();

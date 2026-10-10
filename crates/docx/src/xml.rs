@@ -32,6 +32,7 @@ pub const NAMESPACES: &[(&str, &str)] = &[
     ("v", "urn:schemas-microsoft-com:vml"),
     ("o", "urn:schemas-microsoft-com:office:office"),
     ("w10", "urn:schemas-microsoft-com:office:word"),
+    ("b", "http://schemas.openxmlformats.org/officeDocument/2006/bibliography"),
 ];
 
 /// Namespaces that only appear in non-body parts.
