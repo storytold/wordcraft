@@ -595,6 +595,12 @@ impl Reader<'_> {
                     }
                 }
                 "w:evenAndOddHeaders" => s.even_odd_headers = on_off(k),
+                "w:drawingGridHorizontalSpacing" | "w:drawingGridVerticalSpacing" => {
+                    if let Some(v) = tw(k, "w:val").filter(|v| *v > 0.0) {
+                        let v = v.clamp(0.5, 1584.0);
+                        if k.name == "w:drawingGridHorizontalSpacing" { s.grid_h = v } else { s.grid_v = v }
+                    }
+                }
                 "w:mirrorMargins" => s.mirror_margins = on_off(k),
                 "w:autoHyphenation" => s.auto_hyphenation = on_off(k),
                 "w:footnotePr" => {

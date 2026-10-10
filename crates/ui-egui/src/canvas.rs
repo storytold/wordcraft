@@ -259,31 +259,30 @@ fn page_screen_scale(rect: Rect, page: &Page, fallback: f32) -> f32 {
     if page.w > 0.0 { rect.width() / page.w } else { fallback }
 }
 
-/// Spacing of the View › Gridlines drawing grid: 0.5 cm, in points.
-const DRAWING_GRID_PT: f32 = 72.0 * 0.5 / 2.54;
 /// Closest the drawing grid's lines get on screen; zoomed far out, every other line is skipped.
 const DRAWING_GRID_MIN_PX: f32 = 4.0;
 /// Most grid lines drawn each way on one page (page sizes come from files).
 const DRAWING_GRID_MAX_LINES: usize = 2000;
 
 /// The View › Gridlines drawing grid over a page's text area, in document points: the x of each
-/// vertical line and the y of each horizontal line, starting at the margins and `step` apart,
-/// never outside the margins. Drawn on screen only — never printed or exported.
-fn drawing_grid(body: wordcraft_geom::Rect, step: f32) -> (Vec<f32>, Vec<f32>) {
-    let axis = |start: f32, len: f32| -> Vec<f32> {
+/// vertical line and the y of each horizontal line, starting at the margins and `step` (across,
+/// down) apart, never outside the margins. Drawn on screen only — never printed or exported.
+fn drawing_grid(body: wordcraft_geom::Rect, step: (f32, f32)) -> (Vec<f32>, Vec<f32>) {
+    let axis = |start: f32, len: f32, step: f32| -> Vec<f32> {
         if !(step.is_finite() && step > 0.0 && start.is_finite() && len.is_finite() && len >= 0.0) {
             return Vec::new();
         }
         let end = start + len + 0.01;
         (0..DRAWING_GRID_MAX_LINES).map(|k| start + k as f32 * step).take_while(|p| *p <= end).collect()
     };
-    (axis(body.x, body.w), axis(body.y, body.h))
+    (axis(body.x, body.w, step.0), axis(body.y, body.h, step.1))
 }
 
-/// The drawing grid's spacing in points at a screen scale: the default 0.5 cm, doubled until the
-/// lines are at least [`DRAWING_GRID_MIN_PX`] apart on screen.
-fn drawing_grid_step(scale: f32) -> f32 {
-    let mut step = DRAWING_GRID_PT;
+/// The drawing grid's spacing in points at a screen scale: the document's spacing (`w:drawingGrid*Spacing`;
+/// ECMA-376's 1/8 inch when it doesn't say), doubled until the lines are at least
+/// [`DRAWING_GRID_MIN_PX`] apart on screen.
+fn drawing_grid_step(spacing: f32, scale: f32) -> f32 {
+    let mut step = if spacing.is_finite() && spacing > 0.0 { spacing } else { wordcraft_doc::DEFAULT_GRID };
     if !(scale.is_finite() && scale > 0.0) {
         return step;
     }
@@ -449,7 +448,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             }
             // View › Gridlines: the drawing grid over the text area (Print Layout, on screen only).
             if app.session.view.gridlines && app.session.view.mode == wordcraft_layout::ViewMode::Print && !app.session.view.read_mode {
-                let (xs, ys) = drawing_grid(page.body, drawing_grid_step(page_scale));
+                let settings = &app.session.doc.settings;
+                let step = (drawing_grid_step(settings.grid_h, page_scale), drawing_grid_step(settings.grid_v, page_scale));
+                let (xs, ys) = drawing_grid(page.body, step);
                 let stroke = Stroke::new(1.0, t.blue.linear_multiply(0.22));
                 let (x0, x1) = (visual_sr.min.x + page.body.x * page_scale, visual_sr.min.x + page.body.right() * page_scale);
                 let (y0, y1) = (visual_sr.min.y + page.body.y * page_scale, visual_sr.min.y + page.body.bottom() * page_scale);
@@ -1378,11 +1379,14 @@ mod tests {
         assert_eq!(visual.size(), vec2(80.5, 120.5));
     }
 
+    /// 0.5 cm in points.
+    const HALF_CM: f32 = 72.0 * 0.5 / 2.54;
+
     #[test]
     fn drawing_grid_starts_at_the_margins_and_stays_inside_them() {
         // Letter page with 1" margins: the text area is 468 x 648 pt from (72, 72).
         let body = wordcraft_geom::Rect::new(72.0, 72.0, 468.0, 648.0);
-        let (xs, ys) = drawing_grid(body, DRAWING_GRID_PT);
+        let (xs, ys) = drawing_grid(body, (HALF_CM, HALF_CM));
         assert_eq!(xs.first().copied(), Some(72.0));
         assert_eq!(ys.first().copied(), Some(72.0));
         assert!(xs.iter().all(|x| (72.0..=540.0).contains(x)), "{xs:?}");
@@ -1391,10 +1395,13 @@ mod tests {
         assert_eq!(xs.len(), 34);
         assert_eq!(ys.len(), 46);
         for w in xs.windows(2).chain(ys.windows(2)) {
-            assert!((w[1] - w[0] - DRAWING_GRID_PT).abs() < 0.01, "{w:?}");
+            assert!((w[1] - w[0] - HALF_CM).abs() < 0.01, "{w:?}");
         }
+        // The document's own spacing, different across and down: 1/8 inch across, 1/4 inch down.
+        let (xs, ys) = drawing_grid(body, (9.0, 18.0));
+        assert_eq!((xs.len(), ys.len()), (53, 37));
         // A grid line that lands on the margin is kept.
-        let (xs, _) = drawing_grid(wordcraft_geom::Rect::new(0.0, 0.0, 100.0, 10.0), 25.0);
+        let (xs, _) = drawing_grid(wordcraft_geom::Rect::new(0.0, 0.0, 100.0, 10.0), (25.0, 25.0));
         assert_eq!(xs, vec![0.0, 25.0, 50.0, 75.0, 100.0]);
     }
 
@@ -1405,18 +1412,24 @@ mod tests {
             (r(72.0, 72.0, 468.0, 648.0), 0.0),
             (r(72.0, 72.0, 468.0, 648.0), -5.0),
             (r(72.0, 72.0, 468.0, 648.0), f32::NAN),
-            (wordcraft_geom::Rect { x: f32::NAN, y: 0.0, w: f32::INFINITY, h: -10.0 }, DRAWING_GRID_PT),
+            (wordcraft_geom::Rect { x: f32::NAN, y: 0.0, w: f32::INFINITY, h: -10.0 }, HALF_CM),
         ] {
-            let (xs, ys) = drawing_grid(body, step);
+            let (xs, ys) = drawing_grid(body, (step, step));
             assert!(xs.is_empty() && ys.is_empty(), "{body:?} {step}");
         }
-        let (xs, ys) = drawing_grid(r(0.0, 0.0, 1.0e9, 1.0e9), DRAWING_GRID_PT);
+        let (xs, ys) = drawing_grid(r(0.0, 0.0, 1.0e9, 1.0e9), (HALF_CM, HALF_CM));
         assert_eq!((xs.len(), ys.len()), (DRAWING_GRID_MAX_LINES, DRAWING_GRID_MAX_LINES));
         // Zoomed far out, lines thin out instead of filling the page.
-        assert_eq!(drawing_grid_step(PX_PER_PT), DRAWING_GRID_PT);
-        assert!(drawing_grid_step(0.1) * 0.1 >= DRAWING_GRID_MIN_PX);
-        assert_eq!(drawing_grid_step(0.0), DRAWING_GRID_PT);
-        assert_eq!(drawing_grid_step(f32::NAN), DRAWING_GRID_PT);
+        let grid = wordcraft_doc::DEFAULT_GRID;
+        assert_eq!(drawing_grid_step(grid, PX_PER_PT), grid);
+        assert_eq!(drawing_grid_step(HALF_CM, PX_PER_PT), HALF_CM);
+        assert!(drawing_grid_step(grid, 0.1) * 0.1 >= DRAWING_GRID_MIN_PX);
+        assert_eq!(drawing_grid_step(grid, 0.0), grid);
+        assert_eq!(drawing_grid_step(grid, f32::NAN), grid);
+        // A missing or broken spacing falls back to the spec's 1/8 inch.
+        for bad in [0.0, -3.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(drawing_grid_step(bad, PX_PER_PT), grid);
+        }
     }
 
     #[test]

@@ -56,8 +56,8 @@ pub struct ViewState {
     pub ruler: bool,
     /// View › Show › Gridlines: the drawing grid over the page's text area (on screen only).
     pub gridlines: bool,
-    /// Table Layout › View Gridlines: outlines of table cells (on screen only).
-    #[serde(default)]
+    /// Table Layout › View Gridlines: outlines of table cells (on screen only); on by default, as in Word.
+    #[serde(default = "on")]
     pub table_gridlines: bool,
     pub nav_pane: bool,
     pub styles_pane: bool,
@@ -76,6 +76,10 @@ pub struct ViewState {
     pub proofing: bool,
 }
 
+fn on() -> bool {
+    true
+}
+
 impl Default for ViewState {
     fn default() -> Self {
         ViewState {
@@ -86,7 +90,7 @@ impl Default for ViewState {
             marks: false,
             ruler: true,
             gridlines: false,
-            table_gridlines: false,
+            table_gridlines: true,
             nav_pane: false,
             styles_pane: false,
             style_inspector: false,

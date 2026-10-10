@@ -872,6 +872,8 @@ fn settings_core_theme_round_trip() {
     d.settings.theme_colors[4] = Rgb(1, 2, 3);
     d.settings.theme_name = "Mine".into();
     d.settings.protection = Some("readOnly".into());
+    d.settings.grid_h = 5.5;
+    d.settings.grid_v = 18.0;
     d.core.title = "Title & <stuff>".into();
     d.core.subject = "Subj".into();
     d.core.creator = "Me".into();

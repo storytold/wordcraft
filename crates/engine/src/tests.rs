@@ -2051,7 +2051,9 @@ fn page_and_table_gridlines_toggle_independently() {
     let mut s = s();
     run(&mut s, "text.insert", json!({"text": "Hello"}));
     let undo = s.undo_labels();
-    assert!(!s.view.gridlines && !s.view.table_gridlines);
+    // Table cell outlines are on by default, as in Word; the page grid is off.
+    assert!(!s.view.gridlines && s.view.table_gridlines);
+    assert_eq!(run(&mut s, "table.viewGridlines", json!({"value": false}))["value"], false);
 
     assert_eq!(run(&mut s, "view.gridlines", json!({}))["value"], true);
     assert!(s.view.gridlines && !s.view.table_gridlines);
