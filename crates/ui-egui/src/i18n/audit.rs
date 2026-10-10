@@ -26,7 +26,8 @@ fn texts(shape: &egui::Shape, out: &mut Vec<String>) {
 /// Run a frame per entry of `steps` (its events), then a few quiet ones, and return every text
 /// drawn in the last.
 fn frames(ctx: &egui::Context, app: &mut WordApp, steps: Vec<Vec<egui::Event>>) -> Vec<String> {
-    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0));
+    // Wide enough that no ribbon tab overflows behind its scroll arrows.
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(2560.0, 900.0));
     let mut drawn = Vec::new();
     let n = steps.len() + 3;
     let mut steps = steps.into_iter();
@@ -209,8 +210,8 @@ fn untranslated_interface_text() {
         record(&app, &format!("pane {pane}"), drawn);
         let _ = app.run(pane, json!({"value": false}));
     }
-    // Right-click on the page.
-    let drawn = frames(&ctx, &mut app, click(egui::pos2(720.0, 520.0), egui::PointerButton::Secondary));
+    // Right-click on the page (centred in the window).
+    let drawn = frames(&ctx, &mut app, click(egui::pos2(1280.0, 520.0), egui::PointerButton::Secondary));
     record(&app, "context menu", drawn);
     frames(&ctx, &mut app, escape());
     // Contextual tabs: a table, then an equation.
