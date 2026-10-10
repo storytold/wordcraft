@@ -276,6 +276,24 @@ fn styles_numbering_settings_notes_comments_from_parts() {
 }
 
 #[test]
+fn empty_tbl_borders_elements_leave_sides_unset() {
+    // Style TS: single borders on all six sides. Document: table styled TS with an empty
+    // paired <w:tblBorders></w:tblBorders> and empty <w:tcBorders></w:tcBorders> per cell.
+    // (Hand-written from ECMA-376 §17.4.39/§17.4.43; do not use files produced by Word.)
+    let styles = format!(
+        r#"<w:styles {W_NS}><w:style w:type="table" w:styleId="TS"><w:name w:val="TS"/><w:tblPr><w:tblBorders><w:top w:val="single" w:sz="2" w:color="000000"/><w:left w:val="single" w:sz="2" w:color="000000"/><w:bottom w:val="single" w:sz="2" w:color="000000"/><w:right w:val="single" w:sz="2" w:color="000000"/><w:insideH w:val="single" w:sz="2" w:color="000000"/><w:insideV w:val="single" w:sz="2" w:color="000000"/></w:tblBorders></w:tblPr></w:style></w:styles>"#
+    );
+    let body = r#"<w:tbl><w:tblPr><w:tblStyle w:val="TS"/><w:tblBorders></w:tblBorders></w:tblPr><w:tblGrid><w:gridCol w:w="4000"/><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcBorders></w:tcBorders></w:tcPr><w:p/></w:tc><w:tc><w:tcPr><w:tcBorders></w:tcBorders></w:tcPr><w:p/></w:tc></w:tr></w:tbl>"#;
+    let d = wordcraft_docx::read(&docx(body, &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)])).unwrap();
+    let t = d.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.props.borders, Some(wordcraft_doc::props::Borders::default()));
+    assert_eq!(t.rows[0].cells[0].props.borders, Some(wordcraft_doc::props::Borders::default()));
+    let parts = d.styles.get("TS").unwrap().table.clone().unwrap();
+    let b = parts.borders.unwrap();
+    assert!(b.top.is_some() && b.between.is_some() && b.inside_v.is_some());
+}
+
+#[test]
 fn vml_image_and_inline_drawing() {
     let png: &[u8] = b"\x89PNG\r\n\x1a\nnot really a png";
     let body = r#"
