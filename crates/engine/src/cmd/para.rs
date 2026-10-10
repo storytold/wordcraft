@@ -317,14 +317,7 @@ fn list(s: &mut Session, v: &Value, default: ListKind) -> CmdResult {
     };
     let remove = off || (!current.is_empty() && current.iter().all(|n| n.as_ref().is_some_and(same_kind)));
     if remove {
-        return fmt(s, &|p| {
-            p.numbering = Some(NumRef { num: 0, level: 0 });
-            p.indent_left = None;
-            p.indent_first = None;
-            if p.style.as_deref() == Some("ListParagraph") {
-                p.style = None;
-            }
-        });
+        return fmt(s, &super::leave_list);
     }
     // Continue the list of the previous paragraph if it has the same kind; else a new list.
     let prev_num = s

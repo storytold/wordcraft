@@ -349,3 +349,36 @@ fn caret_navigation() {
     run(&mut s, "caret.left", json!({}));
     assert_eq!(s.sel.focus.off, 10);
 }
+
+/// Issue #95: leaving a list with Enter on an empty item or Backspace at the start of an item
+/// kept the List Paragraph style's indent, and Enter on the paragraph left behind did nothing.
+#[test]
+fn leaving_a_list_removes_its_indent() {
+    let indent = |s: &Session| {
+        let p = s.doc.para_at(&s.sel.focus).unwrap();
+        s.doc.styles.resolve_para(&p.props).indent_left
+    };
+    // Enter on an empty item leaves the list and its indent; Enter again then adds a paragraph.
+    let mut a = s();
+    run(&mut a, "para.bullets", json!({}));
+    run(&mut a, "text.insert", json!({"text": "item"}));
+    run(&mut a, "text.newParagraph", json!({}));
+    assert_eq!(indent(&a), 36.0);
+    run(&mut a, "text.newParagraph", json!({}));
+    assert_eq!(indent(&a), 0.0);
+    assert_eq!(text(&a), "item\n");
+    run(&mut a, "text.newParagraph", json!({}));
+    assert_eq!(text(&a), "item\n\n");
+
+    // Backspace at the start of an item: first the bullet goes, then the indent.
+    let mut b = s();
+    run(&mut b, "para.bullets", json!({}));
+    run(&mut b, "text.insert", json!({"text": "item"}));
+    run(&mut b, "text.newParagraph", json!({}));
+    run(&mut b, "text.backspace", json!({}));
+    assert!(b.doc.para_at(&b.sel.focus).unwrap().props.numbering.is_none_or(|n| n.num == 0));
+    assert_eq!(indent(&b), 36.0);
+    run(&mut b, "text.backspace", json!({}));
+    assert_eq!(indent(&b), 0.0);
+    assert_eq!(text(&b), "item\n");
+}

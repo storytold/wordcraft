@@ -210,9 +210,17 @@ fn backspace(s: &mut Session, _: &Value) -> CmdResult {
         return sel_result(s);
     }
     // At the start of a paragraph.
+    // Two steps out of a list, as in Word: the first Backspace takes the bullet or number away
+    // (the paragraph keeps its indent); the next one takes the list's indent too.
     if para.props.numbering.is_some_and(|n| n.num != 0) {
         let p = s.doc.para_mut(f.story, &f.path)?;
         p.props.numbering = Some(NumRef { num: 0, level: 0 });
+        p.touch();
+        return sel_result(s);
+    }
+    if para.props.style.as_deref() == Some("ListParagraph") {
+        let p = s.doc.para_mut(f.story, &f.path)?;
+        super::leave_list(&mut p.props);
         p.touch();
         return sel_result(s);
     }
