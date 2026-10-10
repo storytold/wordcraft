@@ -1243,7 +1243,7 @@ impl Body<'_> {
                 if let Some(t) = self.tables.pop()
                     && !t.rows.is_empty()
                 {
-                    self.container().push(FBlock::Table(FTable { rows: t.rows, widths: Vec::new() }));
+                    self.container().push(FBlock::Table(FTable { rows: t.rows, widths: Vec::new(), borderless: false }));
                 }
             }
             "desc" | "title" => self.in_desc = false,
@@ -1366,7 +1366,7 @@ pub fn parse(bytes: &[u8]) -> Result<Flow, String> {
     let mut blocks = body.containers.pop().unwrap_or_default();
     for t in body.tables.drain(..) {
         if !t.rows.is_empty() {
-            blocks.push(FBlock::Table(FTable { rows: t.rows, widths: Vec::new() }));
+            blocks.push(FBlock::Table(FTable { rows: t.rows, widths: Vec::new(), borderless: false }));
         }
     }
     if blocks.is_empty() {

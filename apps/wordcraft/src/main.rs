@@ -15,7 +15,10 @@ mod graphics;
 mod logging;
 
 use wordcraft_engine::Session;
-use wordcraft_ui_egui::{Services, UiState, WordApp, window_geometry::WindowGeometry};
+use wordcraft_ui_egui::{
+    Services, UiState, WordApp,
+    window_geometry::{WindowGeometry, take_rescue},
+};
 
 /// The app, the restored window geometry until the first frame has checked it, and the control
 /// server's key file (removed on exit).
@@ -26,7 +29,7 @@ impl eframe::App for App {
         self.0.logic(ctx);
         let prev = self.0.ui.window;
         self.0.ui.window = ctx.input(|i| WindowGeometry::track(prev, i.viewport(), i.viewport_rect().size()));
-        if let Some(pos) = self.1.take().and_then(|g| ctx.input(|i| g.rescue_position(i.viewport()))) {
+        if let Some(pos) = ctx.input(|i| take_rescue(&mut self.1, i.viewport())) {
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
         }
         if self.0.quit_requested {

@@ -10,7 +10,8 @@ It listens on `127.0.0.1` only. Send one JSON object per line, with the window's
 ```
 
 Errors come back as `{"id": …, "ok": false, "error": "message"}`. A failed command leaves the
-document unchanged.
+document unchanged. A line that isn't valid JSON gets one error reply, then the server closes the
+connection (so an HTTP request sent to the port can't run a command); reconnect to continue.
 
 ## Keys
 
@@ -49,7 +50,7 @@ and set `WORDCRAFT_CONTROL_KEY` to that app's key.
 
 | Method | Params | Result |
 |---|---|---|
-| `engine.execute` | `command`, `params` | the command's result (any id from `engine.commands`, including UI commands `ui.tab`, `ui.dialog`, `ui.backstage`, `ui.language` (`{"value": "auto"|"en"|"zh-hans"|"zh-hant"|"ja"}`)…) |
+| `engine.execute` | `command`, `params` | the command's result (any id from `engine.commands`, including UI commands `ui.tab`, `ui.dialog`, `ui.backstage`, `ui.language` (`{"value": "auto"|"en"|"zh-hans"|"zh-hant"|"ja"|"pt-br"}`)…) |
 | `engine.commands` | — | every command: id, label, location, shortcut, params, enabled |
 | `document.inspect` | `text?` | blocks (text, style, runs, lists, tables), parts, sections, selection, pages |
 | `ui.inspect` | — | UI state, view, dialog, window size, page rects on screen, caret, perf |
