@@ -108,7 +108,7 @@ pub(crate) fn pick_face(data: &[u8], probe: char, hans: bool) -> Option<(u32, St
         if f.charmap().map(probe).is_none() {
             continue;
         }
-        let Some((family, style)) = crate::fontdb::face_names(&f) else { continue };
+        let Some((family, style, _)) = crate::fontdb::face_names(&f) else { continue };
         let regional = !hans || family.ends_with(" SC") || family.ends_with(" GB") || family.contains("YaHei");
         let score = (style.eq_ignore_ascii_case("Regular"), regional);
         if best.as_ref().is_none_or(|(s, ..)| score > *s) {

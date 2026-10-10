@@ -279,10 +279,7 @@ fn options_page(app: &mut WordApp, ui: &mut Ui) {
             app.session.author = n;
         }
     });
-    let mut dark = app.ui.dark;
-    if ui.checkbox(&mut dark, tl!("Dark mode")).changed() {
-        let _ = app.run("ui.dark", json!({"value": dark}));
-    }
+    theme_picker(app, ui);
     ui.checkbox(&mut app.autosave, tl!("AutoSave documents you have saved in WordCraft"));
     let mut dark_page = app.session.view.dark_mode;
     if ui
@@ -306,6 +303,21 @@ fn options_page(app: &mut WordApp, ui: &mut Ui) {
     ui.add_space(10.0);
     ui.label(egui::RichText::new(tl!("Agents")).font(semibold(15.0)));
     ui.label(tl!("Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel."));
+}
+
+/// File ▸ Options ▸ Interface theme: Light, Dark, or follow the system's appearance (#115).
+fn theme_picker(app: &mut WordApp, ui: &mut Ui) {
+    use crate::theme::Appearance;
+    ui.horizontal(|ui| {
+        ui.label(tl!("Interface theme:"));
+        egui::ComboBox::from_id_salt("interface_theme").selected_text(tl!(app.ui.theme.label())).width(220.0).show_ui(ui, |ui| {
+            for a in Appearance::ALL {
+                if ui.selectable_label(app.ui.theme == a, tl!(a.label())).clicked() {
+                    let _ = app.run("ui.theme", json!({"value": a.code()}));
+                }
+            }
+        });
+    });
 }
 
 /// File ▸ Options ▸ Interface language: follow the system (the default) or pick one (#8).
