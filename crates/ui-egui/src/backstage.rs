@@ -57,7 +57,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         "save" => {
                             let _ = app.run("file.save", json!({}));
                         }
-                        "saveAs" => app.save_as_dialog(),
+                        "saveAs" => {
+                            app.save_as_dialog();
+                        }
                         "open" => {
                             app.ui.backstage_page = id.into();
                         }
@@ -270,7 +272,7 @@ fn options_page(app: &mut WordApp, ui: &mut Ui) {
     if ui.checkbox(&mut dark, tl!("Dark mode")).changed() {
         let _ = app.run("ui.dark", json!({"value": dark}));
     }
-    ui.checkbox(&mut app.autosave, tl!("AutoSave documents that have been saved"));
+    ui.checkbox(&mut app.autosave, tl!("AutoSave documents you have saved in WordCraft"));
     let mut dark_page = app.session.view.dark_mode;
     if ui
         .checkbox(&mut dark_page, tl!("Dark page (white text on black)"))
