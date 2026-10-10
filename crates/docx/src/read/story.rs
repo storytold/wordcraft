@@ -238,6 +238,17 @@ impl Reader<'_> {
             let (props, mark) = self.pc.ppr(ppr);
             para.props = props;
             para.mark = mark;
+            // A tracked paragraph mark (ECMA-376 §17.13.5.16 / §17.13.5.15): `w:ins` / `w:del`
+            // in the mark's `w:rPr`.
+            if let Some(rpr) = ppr.child("w:rPr") {
+                for k in rpr.els() {
+                    match k.name.as_str() {
+                        "w:ins" | "w:moveTo" => para.mark.ins = Some(self.revision(RevisionKind::Insert, k)),
+                        "w:del" | "w:moveFrom" => para.mark.del = Some(self.revision(RevisionKind::Delete, k)),
+                        _ => {}
+                    }
+                }
+            }
             if let Some(s) = ppr.child("w:sectPr") {
                 para.section = Some(Box::new(self.read_section(s, rels)));
             }
