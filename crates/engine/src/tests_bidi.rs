@@ -166,3 +166,20 @@ fn typing_persian_keeps_logical_order() {
     run(&mut s, "select.text", json!({"text": "سلام"}));
     assert_eq!(s.selected_text(), "سلام");
 }
+
+#[test]
+fn explicit_alignment_sets_without_toggling() {
+    for rtl in [false, true] {
+        let mut s = session("متن", rtl);
+        for v in ["center", "center", "right", "right", "left", "left"] {
+            run(&mut s, "para.align", json!({"value": v}));
+            let shown = props(&s, 0).align.unwrap_or_default().visual(rtl);
+            let want = match v {
+                "center" => Align::Center,
+                "right" => Align::Right,
+                _ => Align::Left,
+            };
+            assert_eq!(shown, want, "{v} twice stays {v} (rtl={rtl})");
+        }
+    }
+}

@@ -28,7 +28,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 "end" => return fmt(s, &|p| p.align = Some(Align::Right)),
                 x => return Err(CmdError::Params(format!("unknown alignment `{x}`"))),
             };
-            align(s, a)
+            // An explicit value sets it (no toggling back to the start edge like the buttons).
+            set_align(s, a)
         })
         .params(r#"{"value": "left|center|right|justify|distribute (as seen on the page) | start|end (reading direction)"}"#),
         CommandSpec::new("para.rtl", "Right-to-Left Text Direction", "Home › Paragraph", |s, v| direction(s, v, true))
@@ -208,6 +209,12 @@ fn align(s: &mut Session, a: Align) -> CmdResult {
         let rtl = p.bidi.unwrap_or(focus_rtl);
         p.align = Some(target.map_or(Align::Left, |a| a.visual(rtl)));
     })
+}
+
+/// Set the alignment as seen on the page in every selected paragraph, in its own direction.
+fn set_align(s: &mut Session, a: Align) -> CmdResult {
+    let focus_rtl = cur(s).bidi;
+    fmt(s, &|p| p.align = Some(a.visual(p.bidi.unwrap_or(focus_rtl))))
 }
 
 /// Paragraph reading order (Word's Right-to-Left / Left-to-Right Text Direction buttons). Only
