@@ -333,7 +333,7 @@ fn controls(tab: &str) -> Vec<Control> {
         }
         "Table Layout" => vec![
             m("Select", "table.selectCell"),
-            c("View Gridlines", "view.gridlines"),
+            c("View Gridlines", "table.viewGridlines"),
             c("Properties", "table.properties"),
             m("Delete", "table.deleteCells"),
             c("Insert Above", "table.insertRowAbove"),
@@ -590,20 +590,36 @@ pub fn logic(app: &mut WordApp, ctx: &egui::Context) {
     let mut alt_released = false;
     let mut f10 = false;
     for e in &events {
-        if let egui::Event::Key { key, pressed, modifiers, .. } = e {
-            if is_alt(*key) {
-                if *pressed && modifiers.any() {
-                    // Alt combined with another modifier is a shortcut, not a keytip chord.
+        match e {
+            egui::Event::Key { key, pressed, repeat, modifiers, .. } => {
+                if is_alt(*key) {
+                    if *pressed {
+                        // A new Alt press starts a fresh chord (auto-repeat keeps the current one).
+                        if !*repeat {
+                            app.ui.alt_chord_used = false;
+                        }
+                        if modifiers.any() {
+                            // Alt combined with another modifier is a shortcut, not a keytip chord.
+                            other_key = true;
+                        }
+                    } else if !modifiers.any() {
+                        // Alt+click and Alt+drag (column selection), or Alt+key held across frames,
+                        // end with a bare Alt release too; only an untouched Alt tap counts.
+                        alt_released = !std::mem::take(&mut app.ui.alt_chord_used);
+                    }
+                } else if *pressed {
                     other_key = true;
-                } else if !*pressed && !modifiers.any() {
-                    alt_released = true;
-                }
-            } else if *pressed {
-                other_key = true;
-                if *key == egui::Key::F10 && !modifiers.any() {
-                    f10 = true;
+                    app.ui.alt_chord_used = true;
+                    if *key == egui::Key::F10 && !modifiers.any() {
+                        f10 = true;
+                    }
                 }
             }
+            egui::Event::PointerButton { pressed: true, .. } => {
+                other_key = true;
+                app.ui.alt_chord_used = true;
+            }
+            _ => {}
         }
     }
     // Route letter/navigation keys to the keytips while they are showing.
@@ -737,6 +753,40 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Alt+drag selects a column (#237); releasing Alt afterwards must not open keytips. A bare
+    /// Alt tap still does (off macOS, where Option types accents).
+    #[test]
+    fn alt_click_or_drag_does_not_arm_keytips_on_release() {
+        let ctx = egui::Context::default();
+        let mut a = app();
+        a.ui.backstage = false;
+        a.dialog = None;
+        let alt = egui::Modifiers { alt: true, ..Default::default() };
+        let key = |pressed, modifiers| egui::Event::Key { key: egui::Key::AltLeft, physical_key: None, pressed, repeat: false, modifiers };
+        let pos = egui::pos2(400.0, 300.0);
+        let frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+            let input = egui::RawInput { events, ..Default::default() };
+            ctx.run_ui(input, |ui| logic(a, ui.ctx())).drop_without_applying_deltas();
+        };
+        // Alt down, drag with the mouse over several frames, Alt up.
+        frame(&mut a, vec![key(true, alt)]);
+        frame(&mut a, vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: alt }]);
+        frame(&mut a, vec![egui::Event::PointerMoved(pos + egui::vec2(60.0, 40.0))]);
+        frame(&mut a, vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: alt }]);
+        frame(&mut a, vec![key(false, egui::Modifiers::NONE)]);
+        assert_eq!(a.ui.keytips, Phase::Off, "Alt+drag then Alt up leaves keytips off");
+        // Alt held while a key is pressed in a later frame: also a chord.
+        frame(&mut a, vec![key(true, alt)]);
+        frame(&mut a, vec![egui::Event::Key { key: egui::Key::ArrowDown, physical_key: None, pressed: true, repeat: false, modifiers: alt }]);
+        frame(&mut a, vec![key(false, egui::Modifiers::NONE)]);
+        assert_eq!(a.ui.keytips, Phase::Off, "Alt+key then Alt up leaves keytips off");
+        // A bare tap (press and release in separate frames) arms them.
+        frame(&mut a, vec![key(true, alt)]);
+        frame(&mut a, vec![key(false, egui::Modifiers::NONE)]);
+        let tap = if cfg!(target_os = "macos") { Phase::Off } else { Phase::Tabs };
+        assert_eq!(a.ui.keytips, tap);
     }
 
     #[test]

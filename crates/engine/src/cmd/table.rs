@@ -44,7 +44,7 @@ pub fn specs() -> Vec<CommandSpec> {
         t(CommandSpec::new("table.splitTable", "Split Table", "Table Layout › Merge", split_table)),
         t(CommandSpec::new("table.style", "Table Styles", "Table Design › Table Styles", |s, v| {
             let st = p::req_str(v, "style")?;
-            let id = s.doc.styles.find(st).map(|x| x.id.clone()).ok_or_else(|| CmdError::Params(format!("no table style `{st}`")))?;
+            let id = super::table_style::table_style_id(s, st).ok_or_else(|| CmdError::Params(format!("no table style `{st}`")))?;
             with_table(s, |t| t.props.style = Some(id.clone()))
         })
         .params(r#"{"style": string}"#)),
@@ -242,7 +242,6 @@ fn with_cells(s: &mut Session, f: impl Fn(&mut wordcraft_doc::Cell)) -> CmdResul
     sel_result(s)
 }
 
-/// Bump the revision of every paragraph in a table (table style changes alter their layout).
 /// Table Layout › Text Direction: turn the selected cells' text. Without a value it cycles the
 /// caret cell's direction (horizontal → down → up) and gives every selected cell the result.
 fn text_direction(s: &mut Session, v: &Value) -> CmdResult {
@@ -260,7 +259,8 @@ fn text_direction(s: &mut Session, v: &Value) -> CmdResult {
     with_cells(s, |cl| cl.props.text_direction = dir)
 }
 
-fn touch_cells(s: &mut Session, tp: &Path) -> Result<(), CmdError> {
+/// Bump the revision of every paragraph in a table (table style changes alter their layout).
+pub(crate) fn touch_cells(s: &mut Session, tp: &Path) -> Result<(), CmdError> {
     let story = s.sel.focus.story;
     let paths: Vec<Path> = s.doc.para_paths(story).into_iter().filter(|p| p.0.len() > tp.0.len() && p.0.starts_with(&tp.0)).collect();
     for p in paths {

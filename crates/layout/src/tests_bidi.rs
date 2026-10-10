@@ -303,24 +303,38 @@ fn arabic_face() -> Option<wordcraft_fonts::FaceRef> {
     wordcraft_fonts::FontDb::global().fallback_for('ب', 0).map(|f| wordcraft_fonts::FaceRef::of(&f)).filter(|f| f.covers('پ'))
 }
 
+/// The glyph ids of each cluster, in order. A font may draw a letter as several glyphs (Noto
+/// Naskh Arabic draws ب as its dotless form plus the dot), so letters are compared by cluster.
+fn cluster_glyphs(glyphs: &[wordcraft_fonts::ShapedGlyph]) -> Vec<Vec<u32>> {
+    let mut out: Vec<(usize, Vec<u32>)> = Vec::new();
+    for g in glyphs {
+        match out.last_mut() {
+            Some((c, ids)) if *c == g.cluster => ids.push(g.gid),
+            _ => out.push((g.cluster, vec![g.gid])),
+        }
+    }
+    out.into_iter().map(|(_, ids)| ids).collect()
+}
+
 #[test]
 fn persian_letters_join_and_brackets_mirror() {
     let Some(face) = arabic_face() else {
         eprintln!("skipped: no font with Persian letters installed");
         return;
     };
-    let isolated = wordcraft_fonts::shape_run(&face, "ب", &[], |c| c, true);
-    let joined = wordcraft_fonts::shape_run(&face, "ببب", &[], |c| c, true);
-    assert_eq!(joined.len(), 3);
-    assert!(joined.iter().all(|g| g.gid != 0), "the font has the letters");
+    let isolated = cluster_glyphs(&wordcraft_fonts::shape_run(&face, "ب", &[], |c| c, true));
+    assert_eq!(isolated.len(), 1, "{isolated:?}");
+    let shaped = wordcraft_fonts::shape_run(&face, "ببب", &[], |c| c, true);
+    let joined = cluster_glyphs(&shaped);
+    assert_eq!(joined.len(), 3, "one cluster per letter: {joined:?}");
+    assert!(shaped.iter().all(|g| g.gid != 0), "the font has the letters");
     // Initial, medial and final forms differ from the isolated letter.
-    assert!(joined.iter().any(|g| g.gid != isolated[0].gid), "cursive joining picks contextual forms");
+    assert!(joined.iter().any(|g| *g != isolated[0]), "cursive joining picks contextual forms: {joined:?} {isolated:?}");
     // Clusters come back in logical order.
-    assert!(joined.windows(2).all(|w| w[0].cluster <= w[1].cluster));
+    assert!(shaped.windows(2).all(|w| w[0].cluster <= w[1].cluster));
     // ZWNJ (نیم‌فاصله) breaks the join: "می‌خواهم" keeps می separate.
-    let with_zwnj = wordcraft_fonts::shape_run(&face, "ب\u{200C}ب", &[], |c| c, true);
-    let first = with_zwnj.first().map(|g| g.gid);
-    assert_eq!(first, Some(isolated[0].gid), "a letter before ZWNJ takes its isolated form");
+    let with_zwnj = cluster_glyphs(&wordcraft_fonts::shape_run(&face, "ب\u{200C}ب", &[], |c| c, true));
+    assert_eq!(with_zwnj.first(), isolated.first(), "a letter before ZWNJ takes its isolated form");
     // In right-to-left text, "(" is drawn with the mirrored glyph.
     let open = wordcraft_fonts::shape_run(&face, "(", &[], |c| c, true);
     let close = wordcraft_fonts::shape_run(&face, ")", &[], |c| c, false);
@@ -354,6 +368,10 @@ fn glyph_runs_carry_their_text_for_pdf_export() {
     let s = "سلام WordCraft می‌خواهم";
     let d = doc_of(&[(s, true)]);
     let l = lay(&d);
+    let lam_alef_ligature = arabic_face().is_some_and(|f| {
+        let g = wordcraft_fonts::shape_run(&f, "لا", &[], |c| c, true);
+        !g.is_empty() && g.iter().all(|g| g.cluster == 0)
+    });
     let mut all = String::new();
     for it in display::page_display(&d, &l.pages[0], &Default::default()) {
         if let display::Draw::Glyphs { glyphs, text, ranges, .. } = it {
@@ -361,8 +379,9 @@ fn glyph_runs_carry_their_text_for_pdf_export() {
             for r in &ranges {
                 assert!(text.get(r.clone()).is_some_and(|t| !t.is_empty()), "{r:?} in {text:?}");
             }
-            // A ligature glyph (لا) shows both its letters (when a Persian font draws it).
-            for r in ranges.iter().filter(|_| arabic_face().is_some()) {
+            // A ligature glyph (لا) shows both its letters (when the Persian font draws one: some,
+            // such as Noto Naskh Arabic, draw the lam and the alef as glyphs of their own).
+            for r in ranges.iter().filter(|_| lam_alef_ligature) {
                 if text.get(r.clone()) == Some("ل") {
                     panic!("the lam of لا is drawn as one glyph with the alef: {text:?} {ranges:?}");
                 }
