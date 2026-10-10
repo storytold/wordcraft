@@ -429,7 +429,8 @@ fn comments_round_trip() {
     }
 }
 
-/// A table style's cell text formatting, whole-table shading and cell margins survive a save.
+/// A table style's cell text formatting, whole-table shading, cell margins and its header row and
+/// row band conditional formats (#146) survive a save.
 #[test]
 fn table_style_formatting_round_trips() {
     use wordcraft_doc::styles::TableStyleParts;
@@ -440,6 +441,11 @@ fn table_style_formatting_round_trips() {
         cell_margins: Some([1.0, 14.4, 0.0, 14.4]),
         header_chr: CharProps { italic: Some(true), ..Default::default() },
         header_fill: Some(Rgb(0xFF, 0xFF, 0)),
+        header_borders: Some(Borders::all(Border::single(1.5))),
+        band_fill: Some(Rgb(0xF2, 0xF2, 0xF2)),
+        band_chr: CharProps { bold: Some(true), color: Some(TextColor::Rgb(Rgb(0, 0x70, 0xC0))), ..Default::default() },
+        band_borders: Some(Borders::box_(Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 })),
+        band_size: Some(3),
         ..Default::default()
     };
     d.styles.upsert(Style {

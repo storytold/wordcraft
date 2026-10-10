@@ -657,6 +657,20 @@ fn selection_rects_cover_range() {
 }
 
 #[test]
+fn column_segments_take_the_same_x_range_on_every_line() {
+    let d = Document::from_text("abcdef\nabcdef\nab");
+    let l = lay(&d);
+    let left = l.caret(&Pos::body(0, 2)).unwrap().x;
+    let right = l.caret(&Pos::body(0, 4)).unwrap().x;
+    let segs = l.column_segments(&d, &Pos::body(2, 2), &Pos::body(0, 2), right, left, 0, 100);
+    let offs: Vec<(u32, usize, usize)> = segs.iter().map(|(a, b)| (a.path.0[0], a.off, b.off)).collect();
+    assert_eq!(offs, vec![(0, 2, 4), (1, 2, 4), (2, 2, 2)]);
+    // Capped, and junk x gives nothing.
+    assert_eq!(l.column_segments(&d, &Pos::body(0, 2), &Pos::body(2, 2), left, right, 0, 2).len(), 2);
+    assert!(l.column_segments(&d, &Pos::body(0, 2), &Pos::body(2, 2), f32::NAN, right, 0, 100).is_empty());
+}
+
+#[test]
 fn display_has_glyphs_and_marks() {
     let mut d = Document::from_text("Hello\tworld");
     d.format_range(&Pos::body(0, 0), &Pos::body(0, 5), &|c| c.underline = Some(wordcraft_doc::props::Underline::Single)).unwrap();
