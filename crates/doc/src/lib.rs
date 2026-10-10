@@ -12,8 +12,10 @@
 
 pub mod bidi;
 pub mod edit;
+pub mod effects;
 pub mod encoding;
 pub mod fields;
+pub mod freeform;
 pub mod graphic;
 pub mod math;
 pub mod math_edit;
@@ -596,7 +598,7 @@ impl Document {
             for path in self.para_paths(story) {
                 let Some(p) = self.para(story, &path) else { continue };
                 for off in p.object_offsets() {
-                    if matches!(p.object_at(off), Some(InlineObject::Shape { story: Some(id), .. }) if *id == part) {
+                    if p.object_at(off).is_some_and(|o| o.text_boxes().contains(&part)) {
                         return Some(Pos { story, path, off: off + para::OBJ.len_utf8() });
                     }
                 }
@@ -700,9 +702,8 @@ impl Document {
     /// document order. Headers, footers, comments and stories nothing points at aren't included.
     pub fn counted_stories(&self) -> Vec<StoryRef> {
         self.reachable(vec![StoryRef::Body], &|o| match o {
-            InlineObject::Shape { story: Some(id), .. } => Some((*id, &[PartKind::TextBox])),
-            InlineObject::NoteRef { id, .. } => Some((*id, &[PartKind::Footnote, PartKind::Endnote])),
-            _ => None,
+            InlineObject::NoteRef { id, .. } => vec![(*id, &[PartKind::Footnote, PartKind::Endnote][..])],
+            o => o.text_boxes().into_iter().map(|id| (id, &[PartKind::TextBox][..])).collect(),
         })
     }
 
@@ -716,10 +717,7 @@ impl Document {
         let roots = std::iter::once(StoryRef::Body)
             .chain(self.parts.iter().filter(|(_, p)| p.kind != PartKind::TextBox).map(|(id, _)| StoryRef::Part(*id)))
             .collect();
-        let live = self.reachable(roots, &|o| match o {
-            InlineObject::Shape { story: Some(id), .. } => Some((*id, &[PartKind::TextBox])),
-            _ => None,
-        });
+        let live = self.reachable(roots, &|o| o.text_boxes().into_iter().map(|id| (id, &[PartKind::TextBox][..])).collect());
         let before = self.parts.len();
         self.parts.retain(|id, p| p.kind != PartKind::TextBox || live.contains(&StoryRef::Part(*id)));
         before - self.parts.len()
@@ -765,13 +763,16 @@ impl Document {
         for b in blocks {
             edit::each_para(b, 0, &mut |p| {
                 for (k, o) in p.objects.iter().enumerate() {
-                    if f(p, k)
-                        && let InlineObject::Shape { story: Some(id), .. } = o
-                        && let Some(part) = self.parts.get(id).filter(|p| p.kind == PartKind::TextBox)
-                        && budget.enter(*id)
-                    {
-                        self.walk_objects(&part.blocks, budget, f);
-                        budget.leave();
+                    if !f(p, k) {
+                        continue;
+                    }
+                    for id in o.text_boxes() {
+                        if let Some(part) = self.parts.get(&id).filter(|p| p.kind == PartKind::TextBox)
+                            && budget.enter(id)
+                        {
+                            self.walk_objects(&part.blocks, budget, f);
+                            budget.leave();
+                        }
                     }
                 }
             });
@@ -780,7 +781,7 @@ impl Document {
 
     /// `roots`, then every story their objects lead to (`follow`: an object's story id and the
     /// part kinds that count), transitively, in the order found.
-    fn reachable(&self, roots: Vec<StoryRef>, follow: &dyn Fn(&InlineObject) -> Option<(u32, &'static [PartKind])>) -> Vec<StoryRef> {
+    fn reachable(&self, roots: Vec<StoryRef>, follow: &dyn Fn(&InlineObject) -> Vec<(u32, &'static [PartKind])>) -> Vec<StoryRef> {
         let mut out = roots;
         let mut seen: std::collections::BTreeSet<StoryRef> = out.iter().copied().collect();
         let mut i = 0;
@@ -789,7 +790,7 @@ impl Document {
             let mut found = Vec::new();
             for b in self.story(s).into_iter().flatten() {
                 edit::each_para(b, 0, &mut |p| {
-                    found.extend(p.objects.iter().filter_map(follow));
+                    found.extend(p.objects.iter().flat_map(follow));
                 });
             }
             for (id, kinds) in found {

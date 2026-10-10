@@ -1,12 +1,15 @@
 //! Dialogs: Font, Paragraph, Find & Replace, Go To, Insert Table, Page Setup, Link, Bookmark,
-//! Word Count, Zoom, Watermark, New/Modify Style, New/Modify Table Style, Table Properties,
-//! Command search, Paste Special, About, Save Changes, and the mail-merge Recipient List, Insert
-//! Merge Field, Find Recipient, merge rules, Match Fields and Check for Errors. Every dialog ends
-//! by running a command (or shows one's result), so agents get the same result without the dialog.
+//! Word Count, Zoom, Watermark, New/Modify Style, Manage Styles, New/Modify Table Style, Table
+//! Properties, Command search, Paste Special, About, Save Changes, the password to open a
+//! document and Encrypt with Password, and the mail-merge Recipient List, Insert Merge Field, Find
+//! Recipient, merge rules, Match Fields and Check for Errors. Every dialog ends by running a
+//! command (or shows one's result), so agents get the same result without the dialog.
 
 use egui::{Sense, Ui, vec2};
 use serde::Serialize;
 use serde_json::{Value, json};
+
+use wordcraft_engine::Password;
 
 use crate::WordApp;
 use crate::theme::{Tokens, semibold};
@@ -45,6 +48,15 @@ pub enum Dialog {
         keep_lines: bool,
         page_break: bool,
         widow: bool,
+        /// Page: 0 Indents and Spacing, 1 Line and Page Breaks, 2 Asian Typography.
+        tab: u8,
+        /// Asian Typography as the model has it (`para.asianTypography`): kinsoku, word wrap,
+        /// hanging punctuation, compress punctuation at line start, space between Asian and
+        /// Latin text, space between Asian text and numbers.
+        asian: [bool; 6],
+        /// `asian` when the dialog opened: OK sets only the flags that changed.
+        #[serde(skip)]
+        asian_was: [bool; 6],
     },
     Find {
         query: String,
@@ -89,8 +101,13 @@ pub enum Dialog {
     NewStyle {
         name: String,
         based_on: String,
+        /// Opened from Manage Styles, which comes back when this closes.
+        #[serde(skip)]
+        back: bool,
     },
     ModifyStyle {
+        #[serde(skip)]
+        back: bool,
         id: String,
         name: String,
         font: String,
@@ -101,6 +118,12 @@ pub enum Dialog {
         before: f32,
         after: f32,
     },
+    /// Manage Styles: every style with its preview and description; modify, create, delete and
+    /// show or hide them.
+    ManageStyles {
+        alphabetical: bool,
+        selected: String,
+    },
     /// Table Design › New / Modify Table Style: one formatting region at a time.
     TableStyle {
         /// The style being modified; `None` creates one.
@@ -108,13 +131,13 @@ pub enum Dialog {
         name: String,
         /// Style id.
         based_on: String,
-        /// Index into `regions`: whole table, header row, banded rows.
+        /// Index into `regions` (see [`REGION_LABELS`]).
         region: usize,
-        regions: Box<[TableRegion; 3]>,
+        regions: Box<[TableRegion; 7]>,
         /// What the regions showed when the dialog opened (or the base style changed): only
         /// changes are sent, so everything else stays inherited.
         #[serde(skip)]
-        basis: Box<[TableRegion; 3]>,
+        basis: Box<[TableRegion; 7]>,
     },
     Commands {
         query: String,
@@ -186,6 +209,25 @@ pub enum Dialog {
         form: Box<TableForm>,
         #[serde(skip)]
         basis: Box<TableForm>,
+    },
+    /// Opening a password-protected document (#55): the password, then `file.open` with
+    /// `params` again. The password is never serialised or printed.
+    Password {
+        name: String,
+        #[serde(skip)]
+        params: Value,
+        #[serde(skip)]
+        password: Password,
+        message: String,
+    },
+    /// File › Info › Protect Document › Encrypt with Password: a password typed twice
+    /// (`file.encrypt`); left empty, it removes the password.
+    EncryptPassword {
+        #[serde(skip)]
+        password: Password,
+        #[serde(skip)]
+        confirm: Password,
+        message: String,
     },
 }
 
@@ -352,8 +394,11 @@ pub struct TableRegion {
     pub color: String,
 }
 
+/// The Table Style dialog's regions, in the order of `table_style::REGIONS` (the param names).
+const REGION_LABELS: [&str; 7] = ["Whole Table", "Header Row", "Total Row", "First Column", "Last Column", "Banded Rows", "Banded Columns"];
+
 /// The regions of table style `id` as resolved through its based-on chain.
-fn table_regions(app: &WordApp, id: &str) -> Box<[TableRegion; 3]> {
+fn table_regions(app: &WordApp, id: &str) -> Box<[TableRegion; 7]> {
     let Some(st) = app.session.doc.styles.table_style(id) else { return Default::default() };
     let p = &st.parts;
     let hex = |c: Option<wordcraft_doc::Rgb>| c.map(|c| c.hex()).unwrap_or_default();
@@ -362,15 +407,134 @@ fn table_regions(app: &WordApp, id: &str) -> Box<[TableRegion; 3]> {
         _ => String::new(),
     };
     let lines = |b: Option<wordcraft_doc::props::Borders>| b.is_some_and(|b| b.any_visible());
-    let mut header_chr = st.chr.clone();
-    header_chr.overlay(&p.header_chr);
-    let mut band_chr = st.chr.clone();
-    band_chr.overlay(&p.band_chr);
+    // A region's text: the whole table's formatting with the region's over it.
+    let region = |borders: Option<wordcraft_doc::props::Borders>, fill: Option<wordcraft_doc::Rgb>, chr: &wordcraft_doc::CharProps| {
+        let mut c = st.chr.clone();
+        c.overlay(chr);
+        TableRegion { borders: lines(borders), fill: hex(fill), bold: c.bold.unwrap_or(false), color: text(&c) }
+    };
+    let none = wordcraft_doc::CharProps::default();
     Box::new([
-        TableRegion { borders: lines(p.borders), fill: hex(p.fill), bold: st.chr.bold.unwrap_or(false), color: text(&st.chr) },
-        TableRegion { borders: lines(p.header_borders), fill: hex(p.header_fill), bold: header_chr.bold.unwrap_or(false), color: text(&header_chr) },
-        TableRegion { borders: lines(p.band_borders), fill: hex(p.band_fill), bold: band_chr.bold.unwrap_or(false), color: text(&band_chr) },
+        region(p.borders, p.fill, &none),
+        region(p.header_borders, p.header_fill, &p.header_chr),
+        region(p.total_borders, p.total_fill, &p.total_chr),
+        region(p.first_col_borders, p.first_col_fill, &p.first_col_chr),
+        region(p.last_col_borders, p.last_col_fill, &p.last_col_chr),
+        region(p.band_borders, p.band_fill, &p.band_chr),
+        region(p.col_band_borders, p.col_band_fill, &p.col_band_chr),
     ])
+}
+
+/// The params `table.newStyle` / `table.modifyStyle` take for the Table Style dialog's state:
+/// only what changed from `basis`, so the rest stays inherited.
+fn table_style_params(id: Option<&str>, name: &str, based_on: &str, regions: &[TableRegion; 7], basis: &[TableRegion; 7]) -> Value {
+    let mut v = json!({"name": name.trim(), "basedOn": based_on});
+    for ((key, r), b) in wordcraft_engine::cmd::table_style::REGIONS.into_iter().zip(regions.iter()).zip(basis.iter()) {
+        let ch = region_changes(r, b);
+        if ch.as_object().is_some_and(|o| !o.is_empty()) {
+            v[key] = ch;
+        }
+    }
+    if let Some(id) = id {
+        v["style"] = json!(id);
+    }
+    v
+}
+
+/// A small sample table drawn with `style` (5 columns, a header, three body rows and a total
+/// row), showing the regions `look` turns on: the Table Style dialog's live preview.
+fn table_style_preview(ui: &mut Ui, style: Option<&wordcraft_doc::styles::TableStyleProps>, look: wordcraft_doc::props::TableLook) {
+    use wordcraft_doc::props::{Border, Borders};
+    const COLS: usize = 5;
+    const ROWS: usize = 5;
+    const TEXT: [[&str; COLS]; ROWS] = [
+        ["", "Mon", "Tue", "Wed", "Sum"],
+        ["North", "4", "7", "2", "13"],
+        ["South", "6", "1", "5", "12"],
+        ["West", "3", "8", "4", "15"],
+        ["Total", "13", "16", "11", "40"],
+    ];
+    let (rect, _) = ui.allocate_exact_size(vec2(300.0, 120.0), Sense::hover());
+    let painter = ui.painter_at(rect);
+    // The page is white whatever the interface theme.
+    painter.rect_filled(rect, 2.0, egui::Color32::WHITE);
+    let t = Tokens::get(ui.ctx());
+    painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    let Some(st) = style else { return };
+    let p = &st.parts;
+    let table = rect.shrink2(vec2(14.0, 10.0));
+    let (cw, rh) = (table.width() / COLS as f32, table.height() / ROWS as f32);
+    let rgb = |c: wordcraft_doc::Rgb| egui::Color32::from_rgb(c.0, c.1, c.2);
+    let tb = p.borders.unwrap_or_default();
+    for (ri, row) in TEXT.iter().enumerate() {
+        let header = look.header_row && ri == 0;
+        let total = look.total_row && ri + 1 == ROWS;
+        let band = look.banded_rows
+            && !header
+            && (ri.saturating_sub(usize::from(look.header_row)) / p.band_size.unwrap_or(1).clamp(1, 1000) as usize).is_multiple_of(2);
+        for (ci, txt) in row.iter().enumerate() {
+            let first = look.first_column && ci == 0;
+            let last = look.last_column && ci + 1 == COLS;
+            let col_band = look.banded_columns && !first && ci.saturating_sub(usize::from(look.first_column)).is_multiple_of(2);
+            let cell = egui::Rect::from_min_size(table.min + vec2(ci as f32 * cw, ri as f32 * rh), vec2(cw, rh));
+            // Regions from lowest to highest priority, as layout applies them.
+            let regions = [
+                (col_band, p.col_band_fill, &p.col_band_chr, p.col_band_borders),
+                (band, p.band_fill, &p.band_chr, p.band_borders),
+                (first, p.first_col_fill, &p.first_col_chr, p.first_col_borders),
+                (last, p.last_col_fill, &p.last_col_chr, p.last_col_borders),
+                (header, p.header_fill, &p.header_chr, p.header_borders),
+                (total, p.total_fill, &p.total_chr, p.total_borders),
+            ];
+            let mut fill = p.fill;
+            let mut chr = st.chr.clone();
+            let mut b = Borders {
+                top: if ri == 0 { tb.top } else { tb.between },
+                bottom: if ri + 1 == ROWS { tb.bottom } else { tb.between },
+                left: if ci == 0 { tb.left } else { tb.inside_v },
+                right: if ci + 1 == COLS { tb.right } else { tb.inside_v },
+                between: None,
+                inside_v: None,
+            };
+            for (on, f, c, rb) in regions {
+                if !on {
+                    continue;
+                }
+                fill = f.or(fill);
+                chr.overlay(c);
+                if let Some(rb) = rb {
+                    b.overlay(&Borders { between: None, inside_v: None, ..rb });
+                }
+            }
+            if total && p.total_borders.is_none_or(|x| x.top.is_none()) {
+                b.top = p.total_border_top.or(b.top);
+            }
+            if let Some(f) = fill {
+                painter.rect_filled(cell, 0.0, rgb(f));
+            }
+            let edge = |from: egui::Pos2, to: egui::Pos2, e: Option<Border>| {
+                if let Some(e) = e.filter(Border::is_visible) {
+                    let color = e.color.map_or(egui::Color32::BLACK, rgb);
+                    painter.line_segment([from, to], egui::Stroke::new(e.width.clamp(0.5, 3.0) * 1.3, color));
+                }
+            };
+            edge(cell.left_top(), cell.right_top(), b.top);
+            edge(cell.left_bottom(), cell.right_bottom(), b.bottom);
+            edge(cell.left_top(), cell.left_bottom(), b.left);
+            edge(cell.right_top(), cell.right_bottom(), b.right);
+            let color = match chr.color {
+                Some(wordcraft_doc::TextColor::Rgb(c)) => rgb(c),
+                _ => egui::Color32::BLACK,
+            };
+            let font = egui::FontId::proportional(11.0);
+            let pos = cell.left_center() + vec2(4.0, 0.0);
+            painter.text(pos, egui::Align2::LEFT_CENTER, *txt, font.clone(), color);
+            if chr.bold.unwrap_or(false) {
+                // A second pass a hair to the right reads as bold at this size.
+                painter.text(pos + vec2(0.6, 0.0), egui::Align2::LEFT_CENTER, *txt, font, color);
+            }
+        }
+    }
 }
 
 /// The style of the table at the caret, when it is a table style.
@@ -446,6 +610,7 @@ impl Dialog {
             Dialog::Watermark { .. } => "watermark",
             Dialog::NewStyle { .. } => "newStyle",
             Dialog::ModifyStyle { .. } => "modifyStyle",
+            Dialog::ManageStyles { .. } => "manageStyles",
             Dialog::TableStyle { id: None, .. } => "newTableStyle",
             Dialog::TableStyle { .. } => "modifyTableStyle",
             Dialog::Commands { .. } => "commands",
@@ -460,6 +625,8 @@ impl Dialog {
             Dialog::MatchFields { .. } => "matchFields",
             Dialog::CheckErrors { .. } => "checkErrors",
             Dialog::TableProperties { .. } => "tableProperties",
+            Dialog::Password { .. } => "password",
+            Dialog::EncryptPassword { .. } => "encryptPassword",
         }
     }
 
@@ -499,7 +666,7 @@ impl Dialog {
                 color: s("color"),
                 spacing: 0.0,
             },
-            "paragraph" => {
+            "paragraph" | "asianTypography" => {
                 let rp = app.session.doc.para_at(&app.session.sel.focus).map(|p| app.session.doc.styles.resolve_para(&p.props));
                 let rp = rp?;
                 let line = match rp.line_spacing {
@@ -520,6 +687,9 @@ impl Dialog {
                     keep_lines: rp.keep_lines,
                     page_break: rp.page_break_before,
                     widow: rp.widow_control,
+                    tab: if name == "asianTypography" { 2 } else { 0 },
+                    asian: [rp.kinsoku, rp.word_wrap, rp.overflow_punct, rp.top_line_punct, rp.auto_space_de, rp.auto_space_dn],
+                    asian_was: [rp.kinsoku, rp.word_wrap, rp.overflow_punct, rp.top_line_punct, rp.auto_space_de, rp.auto_space_dn],
                 }
             }
             "find" | "replace" => Dialog::Find {
@@ -547,8 +717,9 @@ impl Dialog {
             "bookmark" => Dialog::Bookmark { name: String::new() },
             "wordCount" => Dialog::WordCount { stats: app.session.run("review.wordCount", &json!({})).unwrap_or_default() },
             "zoom" => Dialog::Zoom { percent: (app.session.view.zoom * 100.0).round() },
-            "watermark" => Dialog::Watermark { text: tl!("CONFIDENTIAL").into(), diagonal: true },
-            "newStyle" => Dialog::NewStyle { name: "Style1".into(), based_on: "Normal".into() },
+            "watermark" => Dialog::Watermark { text: "CONFIDENTIAL".into(), diagonal: true },
+            "newStyle" => Dialog::NewStyle { name: "Style1".into(), based_on: "Normal".into(), back: false },
+            "manageStyles" => Dialog::ManageStyles { alphabetical: false, selected: s("style") },
             "newTableStyle" => {
                 let based_on = current_table_style(app).unwrap_or_else(|| "TableGrid".into());
                 let styles = &app.session.doc.styles;
@@ -588,6 +759,7 @@ impl Dialog {
                 Dialog::InsertMergeField { field: fields.first().cloned().unwrap_or_default(), fields }
             }
             "findRecipient" => Dialog::FindRecipient { text: String::new(), message: String::new() },
+            "encryptPassword" => Dialog::EncryptPassword { password: Password::default(), confirm: Password::default(), message: String::new() },
             "ruleIf" | "ruleSkipIf" => {
                 let fields = app.session.merge.headers.clone();
                 Dialog::MergeRule {
@@ -630,6 +802,7 @@ impl Dialog {
         );
         let rp = app.session.doc.styles.resolve_para(&wordcraft_doc::ParaProps { style: Some(id.into()), ..Default::default() });
         Some(Dialog::ModifyStyle {
+            back: false,
             id: id.into(),
             name: st.name.clone(),
             font: rc.font,
@@ -706,6 +879,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::Watermark { .. } => "Custom Watermark",
         Dialog::NewStyle { .. } => "Create New Style",
         Dialog::ModifyStyle { .. } => "Modify Style",
+        Dialog::ManageStyles { .. } => "Manage Styles",
         Dialog::TableStyle { id: None, .. } => "New Table Style",
         Dialog::TableStyle { .. } => "Modify Table Style",
         Dialog::Commands { .. } => "Search Commands",
@@ -720,6 +894,8 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::MatchFields { .. } => "Match Fields",
         Dialog::CheckErrors { .. } => "Check for Errors",
         Dialog::TableProperties { .. } => "Table Properties",
+        Dialog::Password { .. } => "Password",
+        Dialog::EncryptPassword { .. } => "Encrypt with Password",
     };
     egui::Window::new(tl!(title))
         .id(egui::Id::new(("dialog", title)))
@@ -839,53 +1015,99 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             ok || cancel
         }
-        Dialog::Paragraph { rtl, align, left, right, first, before, after, line, keep_next, keep_lines, page_break, widow } => {
-            ui.label(egui::RichText::new(tl!("General")).font(semibold(12.5)));
+        Dialog::Paragraph {
+            rtl,
+            align,
+            left,
+            right,
+            first,
+            before,
+            after,
+            line,
+            keep_next,
+            keep_lines,
+            page_break,
+            widow,
+            tab,
+            asian,
+            asian_was,
+        } => {
             ui.horizontal(|ui| {
-                ui.label(tl!("Direction:"));
-                ui.radio_value(rtl, true, tl!("Right-to-left"));
-                ui.radio_value(rtl, false, tl!("Left-to-right"));
-            });
-            const ALIGNS: [(&str, &str); 4] = [("left", "Left"), ("center", "Center"), ("right", "Right"), ("justify", "Justify")];
-            ui.horizontal(|ui| {
-                ui.label(tl!("Alignment:"));
-                let shown = ALIGNS.iter().find(|(v, _)| v == align).map_or(align.as_str(), |(_, l)| tl!(l));
-                egui::ComboBox::from_id_salt("para_align").selected_text(shown).show_ui(ui, |ui| {
-                    for (v, l) in ALIGNS {
-                        ui.selectable_value(align, v.to_string(), tl!(l));
+                for (k, name) in ["Indents and Spacing", "Line and Page Breaks", "Asian Typography"].into_iter().enumerate() {
+                    if ui.selectable_label(*tab as usize == k, tl!(name)).clicked() {
+                        *tab = k as u8;
                     }
-                });
+                }
             });
-            ui.label(egui::RichText::new(tl!("Indentation")).font(semibold(12.5)));
-            egui::Grid::new("ind").num_columns(4).show(ui, |ui| {
-                ui.label(tl!("Left:"));
-                ui.add(egui::DragValue::new(left).speed(0.05).suffix("\"").max_decimals(2));
-                ui.label(tl!("Right:"));
-                ui.add(egui::DragValue::new(right).speed(0.05).suffix("\"").max_decimals(2));
-                ui.end_row();
-                ui.label(tl!("First line:"));
-                ui.add(egui::DragValue::new(first).speed(0.05).suffix("\"").max_decimals(2));
-                ui.end_row();
-            });
-            ui.label(egui::RichText::new(tl!("Spacing")).font(semibold(12.5)));
-            egui::Grid::new("sp").num_columns(4).show(ui, |ui| {
-                ui.label(tl!("Before:"));
-                ui.add(egui::DragValue::new(before).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt"))));
-                ui.label(tl!("Line spacing:"));
-                ui.add(egui::DragValue::new(line).speed(0.05).range(0.5..=5.0));
-                ui.end_row();
-                ui.label(tl!("After:"));
-                ui.add(egui::DragValue::new(after).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt"))));
-                ui.end_row();
-            });
-            ui.label(egui::RichText::new(tl!("Line and Page Breaks")).font(semibold(12.5)));
-            ui.checkbox(widow, tl!("Widow/Orphan control"));
-            ui.checkbox(keep_next, tl!("Keep with next"));
-            ui.checkbox(keep_lines, tl!("Keep lines together"));
-            ui.checkbox(page_break, tl!("Page break before"));
+            ui.separator();
+            match *tab {
+                0 => {
+                    ui.label(egui::RichText::new(tl!("General")).font(semibold(12.5)));
+                    ui.horizontal(|ui| {
+                        ui.label(tl!("Direction:"));
+                        ui.radio_value(rtl, true, tl!("Right-to-left"));
+                        ui.radio_value(rtl, false, tl!("Left-to-right"));
+                    });
+                    const ALIGNS: [(&str, &str); 4] = [("left", "Left"), ("center", "Center"), ("right", "Right"), ("justify", "Justify")];
+                    ui.horizontal(|ui| {
+                        ui.label(tl!("Alignment:"));
+                        let shown = ALIGNS.iter().find(|(v, _)| v == align).map_or(align.as_str(), |(_, l)| tl!(l));
+                        egui::ComboBox::from_id_salt("para_align").selected_text(shown).show_ui(ui, |ui| {
+                            for (v, l) in ALIGNS {
+                                ui.selectable_value(align, v.to_string(), tl!(l));
+                            }
+                        });
+                    });
+                    ui.label(egui::RichText::new(tl!("Indentation")).font(semibold(12.5)));
+                    egui::Grid::new("ind").num_columns(4).show(ui, |ui| {
+                        ui.label(tl!("Left:"));
+                        ui.add(egui::DragValue::new(left).speed(0.05).suffix("\"").max_decimals(2));
+                        ui.label(tl!("Right:"));
+                        ui.add(egui::DragValue::new(right).speed(0.05).suffix("\"").max_decimals(2));
+                        ui.end_row();
+                        ui.label(tl!("First line:"));
+                        ui.add(egui::DragValue::new(first).speed(0.05).suffix("\"").max_decimals(2));
+                        ui.end_row();
+                    });
+                    ui.label(egui::RichText::new(tl!("Spacing")).font(semibold(12.5)));
+                    egui::Grid::new("sp").num_columns(4).show(ui, |ui| {
+                        ui.label(tl!("Before:"));
+                        ui.add(egui::DragValue::new(before).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt"))));
+                        ui.label(tl!("Line spacing:"));
+                        ui.add(egui::DragValue::new(line).speed(0.05).range(0.5..=5.0));
+                        ui.end_row();
+                        ui.label(tl!("After:"));
+                        ui.add(egui::DragValue::new(after).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt"))));
+                        ui.end_row();
+                    });
+                }
+                1 => {
+                    ui.label(egui::RichText::new(tl!("Line and Page Breaks")).font(semibold(12.5)));
+                    ui.checkbox(widow, tl!("Widow/Orphan control"));
+                    ui.checkbox(keep_next, tl!("Keep with next"));
+                    ui.checkbox(keep_lines, tl!("Keep lines together"));
+                    ui.checkbox(page_break, tl!("Page break before"));
+                }
+                _ => {
+                    let [kinsoku, word_wrap, overflow, top_line, de, dn] = asian;
+                    ui.label(egui::RichText::new(tl!("Line breaking")).font(semibold(12.5)));
+                    ui.checkbox(kinsoku, tl!("Apply Asian line-breaking rules (kinsoku)"));
+                    // The model's flag is "wrap whole words"; the box offers the opposite.
+                    let mut mid_word = !*word_wrap;
+                    if ui.checkbox(&mut mid_word, tl!("Allow Latin text to wrap in the middle of a word")).changed() {
+                        *word_wrap = !mid_word;
+                    }
+                    ui.checkbox(overflow, tl!("Allow hanging punctuation"));
+                    ui.label(egui::RichText::new(tl!("Character Spacing")).font(semibold(12.5)));
+                    ui.checkbox(top_line, tl!("Compress punctuation at the start of a line"));
+                    ui.checkbox(de, tl!("Add space between Asian and Latin text"));
+                    ui.checkbox(dn, tl!("Add space between Asian text and numbers"));
+                }
+            }
             let (ok, cancel) = buttons(ui, tl!("OK"));
             if ok {
                 apply_paragraph(app, *rtl, align, *left, *right, *first, *before, *after, *line, [*keep_next, *keep_lines, *page_break, *widow]);
+                apply_asian(app, *asian, *asian_was);
             }
             ok || cancel
         }
@@ -1122,7 +1344,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             ok || cancel
         }
-        Dialog::NewStyle { name, based_on } => {
+        Dialog::NewStyle { name, based_on, back } => {
             egui::Grid::new("ns").num_columns(2).show(ui, |ui| {
                 ui.label(tl!("Name:"));
                 ui.text_edit_singleline(name);
@@ -1133,12 +1355,17 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             });
             ui.label(egui::RichText::new(tl!("The new style takes the formatting of the current paragraph.")).small().weak());
             let (ok, cancel) = buttons(ui, tl!("OK"));
+            let mut created = None;
             if ok {
-                let _ = app.run("styles.create", json!({"name": name, "basedOn": based_on}));
+                created =
+                    app.run("styles.create", json!({"name": name, "basedOn": based_on})).ok().and_then(|v| v.get("id")?.as_str().map(str::to_string));
+            }
+            if (ok || cancel) && *back {
+                app.dialog = Some(Dialog::ManageStyles { alphabetical: false, selected: created.unwrap_or_default() });
             }
             ok || cancel
         }
-        Dialog::ModifyStyle { id, name, font, size, bold, italic, color, before, after } => {
+        Dialog::ModifyStyle { back, id, name, font, size, bold, italic, color, before, after } => {
             egui::Grid::new("ms").num_columns(2).show(ui, |ui| {
                 ui.label(tl!("Name:"));
                 ui.text_edit_singleline(name);
@@ -1172,8 +1399,12 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 let _ =
                     app.run("styles.modify", json!({"style": id, "name": name, "chr": chr, "para": {"spaceBefore": *before, "spaceAfter": *after}}));
             }
+            if (ok || cancel) && *back {
+                app.dialog = Some(Dialog::ManageStyles { alphabetical: false, selected: id.clone() });
+            }
             ok || cancel
         }
+        Dialog::ManageStyles { alphabetical, selected } => manage_styles(app, ui, alphabetical, selected),
         Dialog::TableStyle { id, name, based_on, region, regions, basis } => {
             let styles: Vec<(String, String)> = app
                 .session
@@ -1201,12 +1432,11 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 });
                 ui.end_row();
                 ui.label(tl!("Apply formatting to:"));
-                let names = ["Whole Table", "Header Row", "Banded Rows"];
                 egui::ComboBox::from_id_salt("tstyle_region")
                     .width(200.0)
-                    .selected_text(tl!(names.get(*region).copied().unwrap_or("Whole Table")))
+                    .selected_text(tl!(REGION_LABELS.get(*region).copied().unwrap_or("Whole Table")))
                     .show_ui(ui, |ui| {
-                        for (i, n) in names.iter().enumerate() {
+                        for (i, n) in REGION_LABELS.iter().enumerate() {
                             ui.selectable_value(region, i, tl!(n));
                         }
                     });
@@ -1233,24 +1463,32 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                     ui.end_row();
                 });
             }
+            // Live preview: the style as OK would leave it, on the current table's options with
+            // the region being edited turned on.
+            let v = table_style_params(id.as_deref(), name, based_on, regions, basis);
+            let mut look = app
+                .session
+                .sel
+                .focus
+                .path
+                .cell()
+                .and_then(|(tp, _, _)| app.session.doc.table(app.session.sel.focus.story, &tp).map(|t| t.props.look))
+                .unwrap_or_default();
+            match *region {
+                1 => look.header_row = true,
+                2 => look.total_row = true,
+                3 => look.first_column = true,
+                4 => look.last_column = true,
+                5 => look.banded_rows = true,
+                6 => look.banded_columns = true,
+                _ => {}
+            }
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(tl!("Preview")).small().weak());
+            table_style_preview(ui, wordcraft_engine::cmd::table_style::preview(&app.session, &v).as_ref(), look);
             let (ok, cancel) = buttons(ui, tl!("OK"));
             if ok {
-                let mut v = json!({"name": name.trim(), "basedOn": based_on});
-                for (i, key) in ["wholeTable", "headerRow", "bandedRows"].into_iter().enumerate() {
-                    if let (Some(r), Some(b)) = (regions.get(i), basis.get(i)) {
-                        let ch = region_changes(r, b);
-                        if ch.as_object().is_some_and(|o| !o.is_empty()) {
-                            v[key] = ch;
-                        }
-                    }
-                }
-                let cmd = match id {
-                    Some(sid) => {
-                        v["style"] = json!(sid);
-                        "table.modifyStyle"
-                    }
-                    None => "table.newStyle",
-                };
+                let cmd = if id.is_some() { "table.modifyStyle" } else { "table.newStyle" };
                 if let Err(e) = app.run(cmd, v) {
                     app.status(e);
                     return false;
@@ -1405,6 +1643,86 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             if ok && !field.trim().is_empty() {
                 let _ = app.run("mailings.insertField", json!({"field": field.trim()}));
                 return true;
+            }
+            cancel
+        }
+        Dialog::Password { name, params, password, message } => {
+            ui.label(crate::i18n::fmt(tl!("{name} is protected with a password."), &[("name", name)]));
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label(tl!("Password:"));
+                let r = ui.add(egui::TextEdit::singleline(password.as_mut_string()).password(true).desired_width(220.0));
+                if password.is_empty() && !r.has_focus() {
+                    r.request_focus();
+                }
+            });
+            if !message.is_empty() {
+                ui.label(egui::RichText::new(message.as_str()).small().color(ui.visuals().error_fg_color));
+            }
+            let (ok, cancel) = buttons(ui, tl!("OK"));
+            if ok && !password.is_empty() {
+                let mut p = params.clone();
+                if let Some(o) = p.as_object_mut() {
+                    o.insert("password".into(), json!(password.as_str()));
+                }
+                // `execute`, not `run`: Save Changes was asked when the open began.
+                match app.execute("file.open", p) {
+                    Ok(_) => {
+                        app.ui.backstage = false;
+                        return true;
+                    }
+                    Err(e) if wordcraft_engine::io::wrong_password(&e) => {
+                        *message = tl!("That password isn't right. Check it (passwords are case-sensitive) and try again.").to_string();
+                        password.as_mut_string().clear();
+                    }
+                    Err(e) => *message = e,
+                }
+            }
+            cancel
+        }
+        Dialog::EncryptPassword { password, confirm, message } => {
+            ui.label(tl!("Anyone who opens the document will need this password."));
+            ui.add_space(4.0);
+            egui::Grid::new("encrypt_password").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+                ui.label(tl!("Password:"));
+                let r = ui.add(egui::TextEdit::singleline(password.as_mut_string()).password(true).desired_width(220.0));
+                if password.is_empty() && confirm.is_empty() && !r.has_focus() {
+                    r.request_focus();
+                }
+                ui.end_row();
+                ui.label(tl!("Confirm password:"));
+                ui.add(egui::TextEdit::singleline(confirm.as_mut_string()).password(true).desired_width(220.0));
+                ui.end_row();
+            });
+            ui.label(
+                egui::RichText::new(tl!(
+                    "Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password."
+                ))
+                .small()
+                .weak(),
+            );
+            if !message.is_empty() {
+                ui.label(egui::RichText::new(message.as_str()).small().color(ui.visuals().error_fg_color));
+            }
+            let (ok, cancel) = buttons(ui, tl!("OK"));
+            if ok {
+                if password != confirm {
+                    *message = tl!("The passwords don't match.").to_string();
+                    confirm.as_mut_string().clear();
+                    return false;
+                }
+                let pw = if password.is_empty() { Value::Null } else { json!(password.as_str()) };
+                match app.run("file.encrypt", json!({"password": pw})) {
+                    Ok(_) => {
+                        app.status(if password.is_empty() {
+                            tl!("The password is removed. Save the document to keep the change.")
+                        } else {
+                            tl!("The document will be saved with a password. Save it to protect it.")
+                        });
+                        return true;
+                    }
+                    Err(e) => *message = e,
+                }
             }
             cancel
         }
@@ -1686,6 +2004,175 @@ fn apply_paragraph(
     );
 }
 
+/// The Paragraph dialog's Asian Typography: sets the flags that changed since it opened, so an
+/// untouched tab adds no direct formatting.
+fn apply_asian(app: &mut WordApp, asian: [bool; 6], was: [bool; 6]) {
+    let keys = ["kinsoku", "wordWrap", "overflowPunct", "topLinePunct", "autoSpaceDE", "autoSpaceDN"];
+    let changed: serde_json::Map<String, Value> =
+        keys.iter().zip(asian.iter().zip(was)).filter(|(_, (now, was))| **now != *was).map(|(k, (now, _))| (k.to_string(), json!(now))).collect();
+    if !changed.is_empty() {
+        let _ = app.run("para.asianTypography", Value::Object(changed));
+    }
+}
+
+/// Manage Styles' body. Reads the list from `styles.manage`'s data (never re-running the command,
+/// which would ask to open this dialog again) and acts through commands.
+fn manage_styles(app: &mut WordApp, ui: &mut Ui, alphabetical: &mut bool, selected: &mut String) -> bool {
+    let list = wordcraft_engine::cmd::para::manage_list(&app.session, *alphabetical);
+    let list = list.as_array().cloned().unwrap_or_default();
+    let str_of = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    if !list.iter().any(|x| str_of(x, "id") == *selected) {
+        *selected = list.first().map(|x| str_of(x, "id")).unwrap_or_default();
+    }
+    ui.horizontal(|ui| {
+        ui.label(tl!("Sort order:"));
+        egui::ComboBox::from_id_salt("manage_styles_sort")
+            .selected_text(if *alphabetical { tl!("Alphabetical") } else { tl!("As Recommended") })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(alphabetical, false, tl!("As Recommended"));
+                ui.selectable_value(alphabetical, true, tl!("Alphabetical"));
+            });
+    });
+    let t = Tokens::get(ui.ctx());
+    let shown = egui::Id::new("manage_styles_shown");
+    egui::Frame::NONE.stroke(egui::Stroke::new(1.0, t.border)).inner_margin(4).show(ui, |ui| {
+        egui::ScrollArea::vertical().id_salt("manage_styles_list").max_height(200.0).auto_shrink([false, false]).show(ui, |ui| {
+            ui.set_width(380.0);
+            for st in &list {
+                let id = str_of(st, "id");
+                let glyph = match st.get("type").and_then(Value::as_str) {
+                    Some("character") => "a",
+                    Some("linked") => "¶a",
+                    Some("table") => "⊞",
+                    _ => "¶",
+                };
+                let hidden = st.get("hidden").and_then(Value::as_bool).unwrap_or(false);
+                let mut name = egui::RichText::new(format!("{glyph}  {}", str_of(st, "name")));
+                if hidden {
+                    name = name.weak();
+                }
+                let r = ui.selectable_label(*selected == id, name);
+                // Bring the selection into view once, when it changes (opening, New Style…).
+                if *selected == id && ui.data(|d| d.get_temp::<String>(shown)).as_deref() != Some(id.as_str()) {
+                    r.scroll_to_me(Some(egui::Align::Center));
+                    ui.data_mut(|d| d.insert_temp(shown, id.clone()));
+                }
+                if r.clicked() {
+                    ui.data_mut(|d| d.insert_temp(shown, id.clone()));
+                    *selected = id.clone();
+                }
+                if r.double_clicked() {
+                    *selected = id;
+                    if let Some(Dialog::ModifyStyle { id, name, font, size, bold, italic, color, before, after, .. }) =
+                        Dialog::modify_style(app, selected)
+                    {
+                        app.dialog = Some(Dialog::ModifyStyle { back: true, id, name, font, size, bold, italic, color, before, after });
+                    }
+                }
+            }
+        });
+    });
+    let leave = |ui: &mut Ui| {
+        ui.data_mut(|d| d.remove::<String>(shown));
+        true
+    };
+    if app.dialog.is_some() {
+        return leave(ui);
+    }
+    let Some(cur) = list.iter().find(|x| str_of(x, "id") == *selected).cloned() else { return close_button(ui) && leave(ui) };
+    let ty = str_of(&cur, "type");
+    ui.add_space(6.0);
+    crate::previews::style_preview(app, ui, selected, &ty, vec2(388.0, if ty == "table" { 64.0 } else { 40.0 }));
+    ui.add_space(4.0);
+    ui.add(egui::Label::new(egui::RichText::new(describe(&cur)).small()).wrap());
+    ui.add_space(6.0);
+    let builtin = cur.get("builtIn").and_then(Value::as_bool).unwrap_or(true);
+    if ty != "table" {
+        let mut gallery = cur.get("inGallery").and_then(Value::as_bool).unwrap_or(false);
+        if ui.checkbox(&mut gallery, tl!("Show in the Styles gallery")).changed() {
+            let _ = app.run("styles.setVisibility", json!({"style": selected, "gallery": gallery}));
+        }
+    }
+    let mut hidden = cur.get("hidden").and_then(Value::as_bool).unwrap_or(false);
+    if ui.checkbox(&mut hidden, tl!("Hide from style lists")).changed() {
+        let _ = app.run("styles.setVisibility", json!({"style": selected, "hidden": hidden}));
+    }
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        // Table styles are edited from Table Design.
+        if ui.add_enabled(ty != "table", egui::Button::new(tl!("Modify…"))).clicked()
+            && let Some(Dialog::ModifyStyle { id, name, font, size, bold, italic, color, before, after, .. }) = Dialog::modify_style(app, selected)
+        {
+            app.dialog = Some(Dialog::ModifyStyle { back: true, id, name, font, size, bold, italic, color, before, after });
+        }
+        if ui.button(tl!("New Style…")).clicked() {
+            app.dialog = Some(Dialog::NewStyle { name: "Style1".into(), based_on: str_of(&cur, "name"), back: true });
+        }
+        let del = ui.add_enabled(!builtin, egui::Button::new(tl!("Delete")));
+        let del = if builtin { del.on_disabled_hover_text(tl!("Built-in styles can't be deleted.")) } else { del };
+        if del.clicked() {
+            let _ = app.run("styles.delete", json!({"style": selected}));
+            selected.clear();
+        }
+    });
+    (app.dialog.is_some() || close_button(ui)) && leave(ui)
+}
+
+/// A dialog's single Close button (Escape too).
+fn close_button(ui: &mut Ui) -> bool {
+    ui.add_space(8.0);
+    let mut close = ui.input(|i| i.key_pressed(egui::Key::Escape));
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        close |= ui.add(egui::Button::new(egui::RichText::new(tl!("Close")).color(egui::Color32::WHITE)).fill(crate::theme::APP_COLOR)).clicked();
+    });
+    close
+}
+
+/// A style's description: its type, the formatting it sets and what it is based on.
+fn describe(st: &Value) -> String {
+    let f = st.get("format").cloned().unwrap_or_default();
+    let fs = |k: &str| f.get(k).and_then(Value::as_str);
+    let fnum = |k: &str| f.get(k).and_then(Value::as_f64);
+    let pt = |x: f64| format!("{}", (x * 10.0).round() / 10.0);
+    let mut parts: Vec<String> = vec![
+        match st.get("type").and_then(Value::as_str) {
+            Some("character") => tl!("Character style"),
+            Some("linked") => tl!("Linked style (paragraph and character)"),
+            Some("table") => tl!("Table style"),
+            _ => tl!("Paragraph style"),
+        }
+        .to_string(),
+    ];
+    if st.get("builtIn").and_then(Value::as_bool).unwrap_or(false) {
+        parts.push(tl!("Built-in style").to_string());
+    }
+    if let Some(x) = fs("font") {
+        parts.push(crate::i18n::fmt(tl!("Font: {font}"), &[("font", x)]));
+    }
+    if let Some(x) = fnum("size") {
+        parts.push(crate::i18n::fmt(tl!("{size} pt"), &[("size", &pt(x))]));
+    }
+    if f.get("bold").and_then(Value::as_bool) == Some(true) {
+        parts.push(tl!("Bold").to_string());
+    }
+    if f.get("italic").and_then(Value::as_bool) == Some(true) {
+        parts.push(tl!("Italic").to_string());
+    }
+    if let Some(x) = fs("color") {
+        parts.push(crate::i18n::fmt(tl!("Color: {color}"), &[("color", &format!("#{x}"))]));
+    }
+    if let Some(x) = fnum("spaceBefore") {
+        parts.push(crate::i18n::fmt(tl!("Space before: {pt} pt"), &[("pt", &pt(x))]));
+    }
+    if let Some(x) = fnum("spaceAfter") {
+        parts.push(crate::i18n::fmt(tl!("Space after: {pt} pt"), &[("pt", &pt(x))]));
+    }
+    if let Some(b) = st.get("basedOn").and_then(Value::as_str) {
+        parts.push(crate::i18n::fmt(tl!("Based on: {style}"), &[("style", b)]));
+    }
+    parts.join(", ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1704,7 +2191,7 @@ mod tests {
 
     /// Open the Paragraph dialog and press OK without changing anything.
     fn ok_unchanged(app: &mut WordApp) {
-        let Some(Dialog::Paragraph { rtl, align, left, right, first, before, after, line, keep_next, keep_lines, page_break, widow }) =
+        let Some(Dialog::Paragraph { rtl, align, left, right, first, before, after, line, keep_next, keep_lines, page_break, widow, .. }) =
             Dialog::open("paragraph", app)
         else {
             panic!("no paragraph dialog")

@@ -1,6 +1,6 @@
 # Where WordCraft falls short of Word
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (beta distance restated: ~15 points, ~150–230 h; previously: first version; every known shortfall from the 2026-10-10 re-measure, ranked) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** trivial (Draw Table and Eraser landed, #303; previously minor: beta distance restated: ~15 points, ~150–230 h; previously: first version; every known shortfall from the 2026-10-10 re-measure, ranked) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 The work list. One entry per shortfall, ranked by how much it stops a Word user from switching
 (**B** = blocks beta). Each says what's missing, the evidence, who it hurts, an Opus 5.5 agent
@@ -13,7 +13,7 @@ first (`gh pr list`), and update this file and the parity doc when a gap closes.
 |---|---|---|---|---|---|---|
 | 1 | **DOCX never tested on real-world files.** No corpus of files from Word, Google Docs, LibreOffice and Pages has been opened, rendered and round-tripped and compared with Word page by page | B | No corpus in the repo; `crates/docx/tests` are synthetic fixtures; "DOCX fidelity corpus: not started" since 2026-10-06 | Everyone: the files people receive are the files that break | 30–50 | [file-format-parity.md](file-format-parity.md) |
 | 2 | **Charts, SmartArt, OLE objects, ink and group shapes are dropped on open and lost on save, silently** | B | No `c:chart`, `dgm`, `wpg`, `w:object` handling in `crates/docx` | Business and academic documents lose content without warning | 10–15 to preserve and show fallback pictures; 45–70 to render and edit charts and SmartArt | [file-format-parity.md](file-format-parity.md) |
-| 3 | **Crashes and freezes in the field**: startup crash on Intel UHD Graphics (#170), freezes (#77, #59 Thai fonts, #31 font selector), no writes without admin on Windows 11 (#218), broken shape tool (#142), images can't be moved (#82) | B | 62 open issues, ~15 of them crashes, hangs or data-path failures | Anyone hit loses work or trust; the never-crash standard covers panics, not hangs or GPU driver faults | 20–30 | [target-app-parity.md](target-app-parity.md) (Stability) |
+| 3 | **Crashes and freezes in the field**: startup crash on Intel UHD Graphics (#170) (lag on GPUs without a DirectX 12 driver fixed, #316), freezes (#77, #59 Thai fonts, #31 font selector), no writes without admin on Windows 11 (#218), broken shape tool (#142), images can't be moved (#82) | B | 62 open issues, ~15 of them crashes, hangs or data-path failures | Anyone hit loses work or trust; the never-crash standard covers panics, not hangs or GPU driver faults | 20–30 | [target-app-parity.md](target-app-parity.md) (Stability) |
 | 4 | **Pagination differs from Word**: Aptos has no metric-matched substitute; columns don't balance; long footnotes don't continue; legacy compatibility options ignored; no page-by-page comparison harness | B | [layout-parity.md](layout-parity.md); [typing-parity.md](typing-parity.md) Known gaps | Page counts and line breaks differ, which matters for forms, legal and academic work | 30–50 + owner (font) | [layout-parity.md](layout-parity.md) |
 | 5 | **Formatting revisions, move tracking and content controls** are lost (`w:rPrChange`/`w:pPrChange` absent; `w:sdt` unwrapped) | B | Issue #41; source grep | Legal and editorial review workflows; templates with form controls | 12–18 | [file-format-parity.md](file-format-parity.md) |
 | 6 | **No native printing** on desktop: File › Print opens the PDF in the system viewer, which prints (#286); no print dialog of our own (printer, copies, ranges); web prints through the browser (#209) | B | `ui.print` → `apps/wordcraft/src/print.rs`; issue #15 | Everyone who prints | 5–8 | [hardware-parity.md](hardware-parity.md) |
@@ -22,7 +22,7 @@ first (`gh pr list`), and update this file and the parity doc when a gap closes.
 | 9 | **Password-protected files** can't be opened or saved | | #55; `docbin` detects and refuses RC4/XOR | Corporate and legal users | 6–10 | [file-format-parity.md](file-format-parity.md) |
 | 10 | **Objects**: no group (#267 open), rotation handle, contour (tight/through) wrap, shape effects, WordArt, connectors, Drawing Canvas, Icons | | [parity-checklist.md](parity-checklist.md) (Shape Format 2/6, Layout › Group) | Newsletters, flyers, reports with diagrams | 20–30 | [target-app-parity.md](target-app-parity.md) |
 | 11 | **Interface languages**: 8 of the 12 key languages missing (hi, ar, fr, id, de, ko, vi, pt-PT); no mirrored RTL interface; ~5% of strings still English in the six translated catalogs | | [localization-parity.md](localization-parity.md) | Most of the world's writers | 50–80 | [localization-parity.md](localization-parity.md) |
-| 12 | **Draw tab / ink**: all 11 commands missing | | [parity-checklist.md](parity-checklist.md) (Draw 0/11) | Pen and tablet users | 15–25 | [hardware-parity.md](hardware-parity.md) |
+| 12 | **Draw tab / ink**: pens, pencil, highlighter, eraser, Select and Hide Ink landed (#307); missing: Lasso Select, Add Pen, Ink to Shape, Ink to Math, Ink Replay, pressure, Word's own ink (`w14:contentPart`/InkML) | | [parity-checklist.md](parity-checklist.md) (Draw 5/11) | Pen and tablet users | 8–14 | [hardware-parity.md](hardware-parity.md) |
 | 13 | **Charts and SmartArt editing** (own renderer, chart data editing, SmartArt layouts) | | `insert.chart`, `insert.smartArt` missing | Reports and business documents | 45–70 | [target-app-parity.md](target-app-parity.md) |
 | 14 | **`.doc` can't be written; metafile pictures and Word 6/95 files refused** | | `crates/docbin` is read-only | Users exchanging files with old Word or legacy systems | 25–40 | [file-format-parity.md](file-format-parity.md) |
 | 15 | **References depth**: 4 of Word's 12 bibliography styles; sources not saved in DOCX (#169 open); no EndNote/Mendeley desktop integration | | Word's `Resources/Style` lists 12 styles | Students and researchers | 10–15 | [target-app-parity.md](target-app-parity.md) |
@@ -50,9 +50,9 @@ full number from ~60% to ~75%. Everything else is depth on the way to full parit
 The same gaps grouped the way the parity documents are, for agents working in one area.
 
 - **Feature gaps:** #2 (preserve), #5, #10, #12, #13, #15, #17, #21, #25, #27, #28, #29; Clipboard
-  pane, Manage Styles, Group, Draw Table (open PRs exist for the first three — review and merge
-  before re-implementing). Paste Special, Advanced Find, Column Selection, Style Inspector and
-  custom table styles landed on 2026-10-10.
+  pane, Manage Styles, Group (open PRs exist for the first three — review and merge before
+  re-implementing). Paste Special, Advanced Find, Column Selection, Style Inspector, custom table
+  styles, and Draw Table and Eraser (#303) landed on 2026-10-10.
 - **UI/UX gaps:** #7, #18, #24; rotation and crop handles on the canvas; table column drag on the
   ruler (#49, #217); context menus for objects and tables; Linux title bar theming (#78).
 - **File-format gaps:** #1, #2, #5, #9, #14, #19, #23, #26; embedded fonts; glossary/building blocks.
@@ -64,6 +64,9 @@ The same gaps grouped the way the parity documents are, for agents working in on
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | trivial | #307: Draw tab pens, eraser and Hide Ink landed; ink gap narrowed |
+| 2026-10-10 | trivial | #3: Windows lag on GPUs without a DirectX 12 driver fixed with an OpenGL fallback (#316) |
+| 2026-10-10 | trivial | Draw Table and Eraser landed (#303); removed from the feature-gap list |
 | 2026-10-10 | trivial | #6: desktop File › Print opens the system PDF viewer (#286) |
 | 2026-10-10 | trivial | Table Properties dialog landed (#44); removed from the dialog-depth list |
 | 2026-10-10 | trivial | Merged main: landed features removed from the feature-gap list |
