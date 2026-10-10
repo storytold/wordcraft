@@ -494,7 +494,18 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             // View › Gridlines: the drawing grid over the text area (Print Layout, on screen only).
             if app.session.view.gridlines && app.session.view.mode == wordcraft_layout::ViewMode::Print && !app.session.view.read_mode {
                 let settings = &app.session.doc.settings;
-                let step = (drawing_grid_step(settings.grid_h, page_scale), drawing_grid_step(settings.grid_v, page_scale));
+                // A section with a document grid (`w:docGrid`) shows that grid: lines at the line
+                // pitch and, for a character grid, columns at the character pitch.
+                let sections = app.session.doc.sections();
+                let sect = sections.get(page.section).map(|(_, s)| *s);
+                let step = match sect.and_then(|s| s.grid_line_pitch().map(|lp| (s, lp))) {
+                    Some((s, lp)) => {
+                        let size = app.session.doc.styles.resolve_char(Some("Normal"), &Default::default()).size;
+                        let cp = s.grid_char_pitch(size).map_or(f32::INFINITY, |cp| drawing_grid_step(cp, page_scale));
+                        (cp, drawing_grid_step(lp, page_scale))
+                    }
+                    None => (drawing_grid_step(settings.grid_h, page_scale), drawing_grid_step(settings.grid_v, page_scale)),
+                };
                 let (xs, ys) = drawing_grid(page.body, step);
                 let stroke = Stroke::new(1.0, t.blue.linear_multiply(0.22));
                 let (x0, x1) = (visual_sr.min.x + page.body.x * page_scale, visual_sr.min.x + page.body.right() * page_scale);

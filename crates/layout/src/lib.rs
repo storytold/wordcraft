@@ -287,6 +287,7 @@ struct Key {
     notes: u64,
     excl: u64,
     eq: u32,
+    grid: (u32, u32, u32, bool),
 }
 
 /// Memoised paragraph layouts.
@@ -347,6 +348,8 @@ struct Ctx<'a> {
     eq_count: u32,
     /// Bounds laying out text boxes inside text boxes, for the whole layout.
     boxes: wordcraft_doc::BoxBudget,
+    /// The current section's document grid (body text only: none for headers and footers).
+    grid: para::Grid,
 }
 
 impl Ctx<'_> {
@@ -372,6 +375,7 @@ impl Ctx<'_> {
             proofing: false,
             exclusions: &[],
             eq_number: 0,
+            grid: para::Grid::default(),
         };
         let pl = Arc::new(para::layout_para(&p, &env));
         self.numbers.insert(n, pl.clone());
@@ -416,6 +420,7 @@ impl Ctx<'_> {
             notes: if p.objects.iter().any(|o| matches!(o, InlineObject::NoteRef { .. })) { self.notes_hash } else { 0 },
             excl: if exclusions.is_empty() { 0 } else { hash_of(&format!("{exclusions:?}")) },
             eq: if eq_here > 0 { eq_number } else { 0 },
+            grid: self.grid.key(),
         };
         self.cache.used.insert(key.clone());
         if let Some(pl) = self.cache.paras.get(&key) {
@@ -434,6 +439,7 @@ impl Ctx<'_> {
             proofing: self.opts.proofing,
             exclusions,
             eq_number,
+            grid: self.grid,
         };
         let pl = Arc::new(para::layout_para(p, &env));
         self.cache.paras.insert(key, pl.clone());
@@ -1137,6 +1143,7 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
         numbers: HashMap::new(),
         eq_count: 0,
         boxes: wordcraft_doc::BoxBudget::default(),
+        grid: para::Grid::default(),
     };
     let sections = doc.sections();
     let web = opts.view != ViewMode::Print;
@@ -1183,8 +1190,10 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
         let sect: &SectionProps = if web { sect_ref } else { sect };
         pb.sect = sect;
         pb.sect_idx = si;
+        ctx.grid = para::Grid::default();
         let body_top = if web { sect.margin_top } else { body_top_for(&mut ctx, sect, sect.headers.default) };
         let first_top = if web || !sect.title_page { body_top } else { body_top_for(&mut ctx, sect, sect.headers.first) };
+        ctx.grid = para::Grid::of(doc, sect);
         let restart = sect.page_num_start;
         if sect.line_numbers.as_ref().is_some_and(|l| l.restart == wordcraft_doc::section::LineNumberRestart::Section) {
             pb.line_no = 0;
@@ -1287,6 +1296,7 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
             .fold(0.0f32, f32::max);
         p.h = bottom + 36.0;
     }
+    ctx.grid = para::Grid::default();
     if !web {
         headers_footers(&mut ctx, &mut pages, &sections);
     }
@@ -1831,6 +1841,7 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32) -> f32 {
                 proofing: false,
                 exclusions: &[],
                 eq_number: ctx.eq_count,
+                grid: ctx.grid,
             };
             let _ = rp;
             let pl = para::layout_para(p, &env);
@@ -2083,3 +2094,5 @@ pub fn now_ms() -> f64 {
 mod tests;
 #[cfg(test)]
 mod tests_bidi;
+#[cfg(test)]
+mod tests_grid;

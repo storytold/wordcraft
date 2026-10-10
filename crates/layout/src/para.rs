@@ -288,6 +288,79 @@ pub struct ParaEnv<'a> {
     pub exclusions: &'a [Exclusion],
     /// Automatic equation numbers used before this paragraph.
     pub eq_number: u32,
+    /// The section's document grid (`Grid::default()`: none).
+    pub grid: Grid,
+}
+
+/// The section's document grid as layout applies it (`w:docGrid`, ECMA-376 §17.6.5).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Grid {
+    /// Line pitch, points: line heights snap to multiples of it.
+    pub line: Option<f32>,
+    /// Character pitch, points: East Asian characters advance by it.
+    pub chars: Option<f32>,
+    /// The default font size the character pitch is based on, points.
+    pub font_size: f32,
+    /// `snapToChars`: all text snaps to the character grid, not just East Asian characters.
+    pub snap_all: bool,
+}
+
+impl Grid {
+    /// The grid of section `s` of `doc` (its default font size from the Normal style).
+    pub fn of(doc: &Document, s: &wordcraft_doc::SectionProps) -> Grid {
+        let Some(line) = s.grid_line_pitch() else { return Grid::default() };
+        let size = doc.styles.resolve_char(Some("Normal"), &CharProps::default()).size;
+        let font_size = if size.is_finite() { size.clamp(1.0, 1584.0) } else { 10.5 };
+        let chars = s.grid_char_pitch(font_size);
+        let snap_all = s.doc_grid.is_some_and(|g| g.kind == wordcraft_doc::section::DocGridType::SnapToChars);
+        Grid { line: Some(line), chars, font_size, snap_all }
+    }
+    /// A cache key for paragraph layouts.
+    pub fn key(&self) -> (u32, u32, u32, bool) {
+        (self.line.map_or(0, f32::to_bits), self.chars.map_or(0, f32::to_bits), self.font_size.to_bits(), self.snap_all)
+    }
+    /// `h` rounded up to whole line pitches (unchanged without a line grid).
+    pub fn snap_height(&self, h: f32) -> f32 {
+        match self.line {
+            Some(p) if h.is_finite() => ((h / p - 0.001).ceil().clamp(1.0, 10_000.0) * p).min(1e6),
+            _ => h,
+        }
+    }
+}
+
+/// East Asian characters the character grid places on its pitch: CJK ideographs, kana, Hangul,
+/// CJK punctuation and full-width forms.
+pub fn is_east_asian(c: char) -> bool {
+    matches!(c as u32,
+        0x1100..=0x11FF | 0x2E80..=0x2FDF | 0x2FF0..=0x303F | 0x3040..=0x30FF | 0x3100..=0x312F | 0x3130..=0x318F
+        | 0x3190..=0x31FF | 0x3200..=0x4DBF | 0x4E00..=0x9FFF | 0xA960..=0xA97F | 0xAC00..=0xD7FF | 0xF900..=0xFAFF
+        | 0xFE30..=0xFE4F | 0xFF01..=0xFF60 | 0xFFE0..=0xFFE6 | 0x20000..=0x3FFFF)
+}
+
+/// Character grid: East Asian characters (all text with `snapToChars`) take whole cells of the
+/// pitch, the glyph centred in them. A character at the default size takes one cell, a larger one
+/// as many as its size needs; Latin text stays proportional unless everything snaps.
+fn snap_chars(b: &mut Builder, text: &str, grid: &Grid) {
+    let Some(pitch) = grid.chars else { return };
+    let base = grid.font_size.max(1.0);
+    for c in b.clusters.iter_mut() {
+        if !matches!(c.kind, ClKind::Text | ClKind::Space) || c.adv <= 0.0 {
+            continue;
+        }
+        let Some(ch) = text.get(c.start..).and_then(|t| t.chars().next()) else { continue };
+        let east_asian = is_east_asian(ch);
+        if !(east_asian || (grid.snap_all && c.kind == ClKind::Text)) {
+            continue;
+        }
+        let size = b.styles.get(c.style as usize).map_or(base, |st| st.size);
+        let cells = if east_asian { (size / base).round() } else { (c.adv / pitch - 0.01).ceil() }.clamp(1.0, 64.0);
+        let adv = cells * pitch;
+        let shift = (adv - c.adv) / 2.0;
+        for g in b.glyphs.get_mut(c.g0 as usize..c.g1 as usize).into_iter().flatten() {
+            g.dx += shift;
+        }
+        c.adv = adv;
+    }
 }
 
 /// An area text wraps around.
@@ -804,6 +877,9 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
             b.shape(s, range.start + seg, &rc, None);
         }
     }
+    if rp.snap_to_grid {
+        snap_chars(&mut b, &p.text, &env.grid);
+    }
     // Break opportunities and hyphenation points come from the text as laid out: hidden text that is
     // not shown and, without markup, tracked deletions are left out, so a space or soft hyphen there
     // is no place to break, and words are hyphenated as they read.
@@ -950,6 +1026,9 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, level: Optio
     // the list label and alignment are measured from the right. Lines are mirrored back (and
     // bidirectional text reordered) once broken; floating objects are mirrored in.
     let rtl_para = rp.bidi;
+    // The document grid's line pitch, for paragraphs that snap to it.
+    let grid = Some(env.grid).filter(|g| g.line.is_some() && rp.snap_to_grid);
+    let grid = grid.as_ref();
     let bidi = rtl_para || !pl.bidi_levels.is_empty();
     let mirrored: Vec<Exclusion>;
     let exclusions: &[Exclusion] = if rtl_para {
@@ -1273,12 +1352,20 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, level: Optio
         // no rule tried so far (none, only the text's descent) matched both; it needs Word probes.
         let natural = asc + desc;
         let pictures = if obj_asc > asc { obj_asc + desc } else { 0.0 };
-        let height = match rp.line_spacing {
-            LineSpacing::Multiple(m) => (natural * m).max(pictures),
-            LineSpacing::AtLeast(v) => natural.max(pictures).max(v),
-            LineSpacing::Exactly(v) => v,
+        // Document grid: the line takes whole line pitches, its text centred in them.
+        let (height, centred) = match (rp.line_spacing, grid) {
+            (LineSpacing::Multiple(m), Some(g)) => ((g.snap_height(natural) * m).max(g.snap_height(pictures)), true),
+            (LineSpacing::AtLeast(v), Some(g)) => (g.snap_height(natural.max(pictures)).max(v), true),
+            (LineSpacing::Multiple(m), None) => ((natural * m).max(pictures), false),
+            (LineSpacing::AtLeast(v), None) => (natural.max(pictures).max(v), false),
+            (LineSpacing::Exactly(v), _) => (v, false),
         };
-        let baseline = top + height - desc;
+        let baseline = if centred {
+            let up = asc.max(obj_asc);
+            top + ((height - up - desc) / 2.0).max(0.0) + up
+        } else {
+            top + height - desc
+        };
 
         // Alignment / justification (trailing spaces hang).
         let mut content_end = xs.last().copied().unwrap_or(line_start_x);
@@ -1394,10 +1481,12 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, level: Optio
             if matches!(end, LineEnd::LineBreak | LineEnd::PageBreak | LineEnd::ColumnBreak) {
                 let (asc, desc) = pl.styles.get(mark_style as usize).map(|s| (s.ascent, s.descent)).unwrap_or((10.0, 3.0));
                 let natural = asc + desc;
-                let h = match rp.line_spacing {
-                    LineSpacing::Multiple(m) => natural * m,
-                    LineSpacing::AtLeast(v) => natural.max(v),
-                    LineSpacing::Exactly(v) => v,
+                let h = match (rp.line_spacing, grid) {
+                    (LineSpacing::Multiple(m), Some(g)) => g.snap_height(natural) * m,
+                    (LineSpacing::AtLeast(v), Some(g)) => g.snap_height(natural).max(v),
+                    (LineSpacing::Multiple(m), None) => natural * m,
+                    (LineSpacing::AtLeast(v), None) => natural.max(v),
+                    (LineSpacing::Exactly(v), _) => v,
                 };
                 let x0 = rp.indent_left;
                 let (x0, left, right) = if rtl_para { (width - x0, width - base_right, width - x0) } else { (x0, x0, base_right) };

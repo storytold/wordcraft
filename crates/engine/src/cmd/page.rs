@@ -1,7 +1,9 @@
 //! Layout tab: page setup (margins, orientation, size, columns), breaks, line numbers, hyphenation.
 
 use serde_json::{Value, json};
-use wordcraft_doc::section::{Columns, LineNumbering, SectionProps, SectionStart};
+use wordcraft_doc::section::{
+    Columns, DocGrid, DocGridType, LineNumbering, MAX_CHAR_SPACE, MAX_GRID_PITCH, MIN_GRID_PITCH, SectionProps, SectionStart,
+};
 use wordcraft_doc::{Block, Pos};
 
 use super::sel_result;
@@ -81,6 +83,9 @@ pub fn specs() -> Vec<CommandSpec> {
             })
         })
         .params(r#"{"format"?: "decimal|lowerRoman|upperRoman|lowerLetter|upperLetter", "start"?: n}"#),
+        CommandSpec::new("layout.documentGrid", "Document Grid", "Layout › Page Setup › Document Grid", document_grid).params(
+            r#"{"type"?: "none|lines|linesAndChars|snapToChars", "linesPerPage"?: n (sets the line pitch from the text height), "charsPerLine"?: n (sets the character pitch from the text width), "linePitch"?: pt, "charSpace"?: n (4096ths of a point added to the default font size: the character pitch)} — left out stays as it is; returns the grid with its lines per page and characters per line"#,
+        ),
         CommandSpec::new("layout.section", "Section Properties", "Layout › Page Setup", |s, _| {
             Ok(serde_json::to_value(sect(s)).unwrap_or(Value::Null))
         })
@@ -109,6 +114,62 @@ fn with_sect(s: &mut Session, f: impl Fn(&mut SectionProps)) -> CmdResult {
         f(s.doc.section_mut(block));
     }
     Ok(serde_json::to_value(sect(s)).unwrap_or(Value::Null))
+}
+
+/// The default font size (Normal style), which the character pitch is based on.
+fn grid_font_size(s: &Session) -> f32 {
+    let size = s.doc.styles.resolve_char(Some("Normal"), &wordcraft_doc::CharProps::default()).size;
+    if size.is_finite() { size.clamp(1.0, 1584.0) } else { 10.5 }
+}
+
+fn grid_result(x: &SectionProps, font_size: f32) -> Value {
+    let g = x.doc_grid.unwrap_or_default();
+    json!({
+        "type": if g.kind == DocGridType::Default { "none" } else { g.kind.ooxml() },
+        "linePitch": g.line_pitch(),
+        "charSpace": g.char_space,
+        "charPitch": g.char_pitch(font_size),
+        "linesPerPage": x.grid_lines_per_page(),
+        "charsPerLine": x.grid_chars_per_line(font_size),
+    })
+}
+
+/// Layout › Page Setup › Document Grid: the grid type, lines per page and characters per line.
+fn document_grid(s: &mut Session, v: &Value) -> CmdResult {
+    let kind = match p::str(v, "type") {
+        None => None,
+        Some("none" | "default") => Some(DocGridType::Default),
+        Some(t) => Some(DocGridType::from_ooxml(t).ok_or_else(|| CmdError::Params(format!("unknown grid type `{t}`")))?),
+    };
+    let lines = p::u64(v, "linesPerPage").map(|n| n.clamp(1, 1000) as f32);
+    let chars = p::u64(v, "charsPerLine").map(|n| n.clamp(1, 1000) as f32);
+    let line_pitch = p::f32(v, "linePitch").map(|x| x.clamp(MIN_GRID_PITCH, MAX_GRID_PITCH));
+    let char_space =
+        v.get("charSpace").and_then(Value::as_f64).filter(|x| x.is_finite()).map(|x| x.clamp(-(MAX_CHAR_SPACE as f64), MAX_CHAR_SPACE as f64) as i32);
+    let size = grid_font_size(s);
+    if kind.is_none() && lines.is_none() && chars.is_none() && line_pitch.is_none() && char_space.is_none() {
+        return Ok(grid_result(&sect(s), size));
+    }
+    with_sect(s, |x| {
+        let mut g = x.doc_grid.unwrap_or_default();
+        if let Some(k) = kind {
+            g.kind = k;
+        }
+        if let Some(n) = lines {
+            g.line_pitch = (x.text_height() / n).clamp(MIN_GRID_PITCH, MAX_GRID_PITCH);
+        }
+        if let Some(pt) = line_pitch {
+            g.line_pitch = pt;
+        }
+        if let Some(n) = chars {
+            g.char_space = DocGrid::char_space_for(x.text_width() / n, size);
+        }
+        if let Some(cs) = char_space {
+            g.char_space = cs;
+        }
+        x.doc_grid = Some(g);
+    })?;
+    Ok(grid_result(&sect(s), size))
 }
 
 fn margins(s: &mut Session, v: &Value) -> CmdResult {

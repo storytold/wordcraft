@@ -1324,3 +1324,10 @@
 	Width and spacing	Laius ja vahe
 	from Unicode (hex)	Unicode (kuueteistkümnend)
 	Formatted	Vormindatud
+	Document Grid	Dokumendi ruudustik
+	No grid	Ruudustikuta
+	Lines only	Ainult read
+	Lines and characters	Read ja märgid
+	Text snaps to characters	Tekst joondub märkide ruudustikku
+	Characters per line:	Märke reas:
+	Lines per page:	Ridu lehel:

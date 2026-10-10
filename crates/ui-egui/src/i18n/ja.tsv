@@ -1311,3 +1311,10 @@
 	Flip Vertical	上下反転
 	Flip Horizontal	左右反転
 	Formatted	書式変更
+	Document Grid	文書グリッド
+	No grid	グリッドなし
+	Lines only	行のみ
+	Lines and characters	行と文字
+	Text snaps to characters	文字をグリッドに合わせる
+	Characters per line:	1 行の文字数:
+	Lines per page:	1 ページの行数:

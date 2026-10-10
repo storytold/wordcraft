@@ -152,6 +152,8 @@ pub struct ResolvedPara {
     pub top_line_punct: bool,
     pub auto_space_de: bool,
     pub auto_space_dn: bool,
+    /// Lines snap to the document grid, when the section has one.
+    pub snap_to_grid: bool,
 }
 
 const MAX_INDENT: f32 = 1584.0; // 22"
@@ -203,6 +205,7 @@ impl ResolvedPara {
             top_line_punct: p.top_line_punct.unwrap_or(false),
             auto_space_de: p.auto_space_de.unwrap_or(true),
             auto_space_dn: p.auto_space_dn.unwrap_or(true),
+            snap_to_grid: p.snap_to_grid.unwrap_or(true),
         }
     }
 }

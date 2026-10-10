@@ -2732,3 +2732,26 @@ fn deleting_the_last_cell_column_never_leaves_a_table_without_rows() {
     run(&mut s, "edit.undo", json!({}));
     assert!(s.doc.body.iter().any(|b| b.as_table().is_some_and(|t| !t.rows.is_empty())));
 }
+
+#[test]
+fn document_grid_sets_lines_and_characters_in_one_undo_step() {
+    // #391: Layout › Page Setup › Document Grid.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "日本語"}));
+    let undo = s.undo_labels().len();
+    let r = run(&mut s, "layout.documentGrid", json!({"type": "linesAndChars", "linesPerPage": 40, "charsPerLine": 30}));
+    assert_eq!(r["type"], "linesAndChars");
+    assert_eq!(r["linesPerPage"], 40);
+    assert_eq!(r["charsPerLine"], 30);
+    let g = crate::cmd::page::sect(&s).doc_grid.unwrap();
+    assert!((g.line_pitch - 648.0 / 40.0).abs() < 1e-3, "{g:?}");
+    assert_eq!(s.undo_labels().len(), undo + 1);
+    // Hostile values are clamped, not trusted.
+    let r = run(&mut s, "layout.documentGrid", json!({"linePitch": -5, "charSpace": 1e15}));
+    assert_eq!(r["linePitch"], 1.0);
+    assert!(r["charPitch"].as_f64().unwrap() <= 1584.0);
+    assert!(s.run("layout.documentGrid", &json!({"type": "diagonal"})).is_err());
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(crate::cmd::page::sect(&s).doc_grid, None);
+}
