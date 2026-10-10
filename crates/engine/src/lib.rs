@@ -19,6 +19,7 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
+pub use io::Password;
 pub use session::{ColumnBlock, EditSnapshot, FindState, MathEdit, Prefs, Selection, Session, ViewState};
 pub use wordcraft_doc as doc;
 pub use wordcraft_layout as layout;

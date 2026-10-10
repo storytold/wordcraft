@@ -63,6 +63,16 @@ fn part_of(rels: &Rels, id: &str, kind: &str) -> Option<String> {
 
 /// Read a `.docx` package.
 pub fn read(bytes: &[u8]) -> Result<Document, DocxError> {
+    // A password-protected document is a compound file, not a zip: say so rather than failing
+    // as a broken zip (`read_with_password` opens it).
+    if crate::is_encrypted(bytes) {
+        return crate::read_with_password(bytes, None);
+    }
+    read_package(bytes)
+}
+
+/// [`read`] for bytes known not to be an encrypted package.
+pub(crate) fn read_package(bytes: &[u8]) -> Result<Document, DocxError> {
     let pkg = Package::open(bytes)?;
     let root_rels = pkg.rels("");
     let main = root_rels.by_type(rt::OFFICE_DOC).filter(|r| !r.external).map(|r| r.target.clone()).unwrap_or_else(|| "word/document.xml".to_string());

@@ -1099,3 +1099,18 @@
 	Hide from style lists	Ocultar das listas de estilos
 	Built-in styles can't be deleted.	Estilos integrados não podem ser excluídos.
 	Delete Table Style	Excluir estilo de tabela
+	Password	Senha
+	Password:	Senha:
+	Confirm password:	Confirmar senha:
+	Encrypt with Password…	Criptografar com senha…
+	Change Password…	Alterar senha…
+	Remove Password	Remover senha
+	A password is required to open this document.	É necessária uma senha para abrir este documento.
+	Anyone can open this document. Encrypt it with a password to keep it private.	Qualquer pessoa pode abrir este documento. Criptografe-o com uma senha para mantê-lo privado.
+	Anyone who opens the document will need this password.	Quem abrir o documento precisará desta senha.
+	{name} is protected with a password.	{name} está protegido por senha.
+	That password isn't right. Check it (passwords are case-sensitive) and try again.	A senha está incorreta. Verifique-a (as senhas diferenciam maiúsculas de minúsculas) e tente novamente.
+	The document will be saved with a password. Save it to protect it.	O documento será salvo com senha. Salve-o para protegê-lo.
+	The password is removed. Save the document to keep the change.	A senha foi removida. Salve o documento para manter a alteração.
+	The passwords don't match.	As senhas não coincidem.
+	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	Guarde a senha em um lugar seguro: sem ela, ninguém, nem o WordCraft, consegue abrir o documento. Deixe as duas caixas vazias para remover a senha.

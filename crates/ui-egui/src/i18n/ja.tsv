@@ -1087,3 +1087,18 @@
 	Hide from style lists	スタイルの一覧に表示しない
 	Built-in styles can't be deleted.	組み込みスタイルは削除できません。
 	Delete Table Style	表スタイルの削除
+	Password	パスワード
+	Password:	パスワード:
+	Confirm password:	パスワードの確認:
+	Encrypt with Password…	パスワードを使用して暗号化…
+	Change Password…	パスワードの変更…
+	Remove Password	パスワードの削除
+	A password is required to open this document.	この文書を開くにはパスワードが必要です。
+	Anyone can open this document. Encrypt it with a password to keep it private.	この文書は誰でも開けます。パスワードで暗号化すると内容を保護できます。
+	Anyone who opens the document will need this password.	この文書を開くすべての人にこのパスワードが必要になります。
+	{name} is protected with a password.	{name} はパスワードで保護されています。
+	That password isn't right. Check it (passwords are case-sensitive) and try again.	パスワードが正しくありません。確認して（大文字と小文字は区別されます）もう一度お試しください。
+	The document will be saved with a password. Save it to protect it.	文書はパスワード付きで保存されます。保護するには文書を保存してください。
+	The password is removed. Save the document to keep the change.	パスワードを削除しました。変更を保持するには文書を保存してください。
+	The passwords don't match.	パスワードが一致しません。
+	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	パスワードは安全な場所に保管してください。パスワードがないと、WordCraft を含め誰も文書を開けません。パスワードを削除するには両方のボックスを空にします。
