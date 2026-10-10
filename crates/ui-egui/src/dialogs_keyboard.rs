@@ -41,7 +41,7 @@ impl KeyboardForm {
 
 /// Categories: the ribbon tabs commands live on, in ribbon order, then the other places
 /// (Navigation, Editing…) alphabetically.
-fn categories(app: &WordApp) -> Vec<String> {
+pub(crate) fn categories(app: &WordApp) -> Vec<String> {
     let mut other: Vec<String> = Vec::new();
     let mut tabs: Vec<&str> = Vec::new();
     for spec in app.session.registry.all() {
@@ -59,7 +59,7 @@ fn categories(app: &WordApp) -> Vec<String> {
 }
 
 /// A category's commands as (id, label in the interface language), sorted by label.
-fn commands(app: &WordApp, category: &str) -> Vec<(&'static str, String)> {
+pub(crate) fn commands(app: &WordApp, category: &str) -> Vec<(&'static str, String)> {
     let mut out: Vec<(&'static str, String)> = app
         .session
         .registry
@@ -101,7 +101,7 @@ fn pressed_key(ui: &Ui) -> Option<String> {
 }
 
 /// A bordered, scrolling list of (value, text) rows; returns the clicked value.
-fn list(ui: &mut Ui, id: &str, size: egui::Vec2, rows: &[(String, String)], selected: &str) -> Option<String> {
+pub(crate) fn list(ui: &mut Ui, id: &str, size: egui::Vec2, rows: &[(String, String)], selected: &str) -> Option<String> {
     let mut picked = None;
     egui::Frame::new().stroke(ui.visuals().widgets.noninteractive.bg_stroke).inner_margin(2.0).show(ui, |ui| {
         ui.set_width(size.x);

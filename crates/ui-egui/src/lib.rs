@@ -23,6 +23,7 @@ pub mod dialogs_insert;
 pub mod dialogs_keyboard;
 pub mod dialogs_lists;
 pub mod dialogs_para;
+pub mod dialogs_ribbon;
 pub mod equation_tab;
 pub mod file_dialogs;
 pub mod frame;
@@ -127,6 +128,9 @@ pub struct UiState {
     pub dark_page: bool,
     /// Custom keyboard shortcuts (Customize Keyboard, #368); the session owns them while running.
     pub keyboard: wordcraft_engine::KeyMap,
+    /// Custom ribbon tabs and groups, hidden tabs and the Quick Access Toolbar (Customize Ribbon,
+    /// #379); the session owns them while running.
+    pub ribbon: wordcraft_engine::RibbonLayout,
 }
 
 impl Default for UiState {
@@ -152,6 +156,7 @@ impl Default for UiState {
             alt_chord_used: false,
             dark_page: false,
             keyboard: wordcraft_engine::KeyMap::default(),
+            ribbon: wordcraft_engine::RibbonLayout::default(),
         }
     }
 }
@@ -294,6 +299,7 @@ impl WordApp {
         ui.read_aloud_skip_citations = self.session.read_aloud.skip_citations;
         ui.dark_page = self.session.view.dark_mode;
         ui.keyboard = self.session.keymap.clone();
+        ui.ribbon = self.session.ribbon.clone();
         ui
     }
 
@@ -318,6 +324,9 @@ impl WordApp {
         self.session.keymap = std::mem::take(&mut self.ui.keyboard);
         let reg = self.session.registry.clone();
         self.session.keymap.retain_known(&reg);
+        // So are ribbon and toolbar commands.
+        self.session.ribbon = std::mem::take(&mut self.ui.ribbon);
+        self.session.ribbon.retain_known(&reg);
     }
 
     /// Run a command the user asked for (ribbon, shortcut, Backstage, file drop). New, Open,

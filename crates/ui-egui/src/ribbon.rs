@@ -7,7 +7,7 @@ use crate::theme::{Tokens, medium, regular, semibold};
 use crate::widgets::{CONTENT_H, LABEL_H, big, big_toggle, color_grid, combo, font_combo, group, menu_button, small, split};
 use crate::{WordApp, icons};
 
-pub const TABS: [&str; 12] = ["File", "Home", "Insert", "Draw", "Design", "Layout", "References", "Mailings", "Review", "View", "Zotero", "Help"];
+pub const TABS: [&str; 12] = wordcraft_engine::ribbon::TABS;
 
 /// True when the caret/selection touches a picture (#147).
 pub fn has_picture_selected(s: &wordcraft_engine::Session) -> bool {
@@ -62,11 +62,21 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     {
         app.ui.tab = prev;
     }
-    // A contextual tab (Table, Picture Format) may be stored while the selection moved away.
+    // The tabs shown: File, the user's tabs in their order (Customize Ribbon, #379), then the
+    // contextual ones. A contextual tab (Table, Picture Format) may be stored while the selection
+    // moved away, and a tab may have been hidden.
+    let user_tabs = app.session.ribbon.tabs().into_owned();
+    let mut tabs: Vec<(String, bool)> = vec![("File".to_string(), false)];
+    tabs.extend(user_tabs.iter().filter(|e| !e.hidden).map(|e| (e.name.clone(), e.custom)));
+    for ct in contextual_tabs(&app.session) {
+        if !tabs.iter().any(|(n, _)| n == ct) {
+            tabs.push((ct.to_string(), false));
+        }
+    }
     {
-        let mut tabs: Vec<&str> = TABS.to_vec();
-        tabs.extend(contextual_tabs(&app.session));
-        let next = resolve_tab(&app.ui.tab, &tabs);
+        let names: Vec<&str> = tabs.iter().map(|(n, _)| n.as_str()).collect();
+        let next = resolve_tab(&app.ui.tab, &names);
+        let next = if names.contains(&next) { next } else { names.iter().copied().find(|n| *n != "File").unwrap_or(next) };
         if next != app.ui.tab {
             app.ui.tab = next.to_string();
         }
@@ -78,15 +88,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
-                let mut tabs: Vec<&str> = TABS.to_vec();
-                for ct in contextual_tabs(&app.session) {
-                    if !tabs.contains(&ct) {
-                        tabs.push(ct);
-                    }
-                }
-                for tab in tabs {
-                    let contextual = tab.starts_with("Table ") || tab.ends_with(" Format") || tab == "Equation";
-                    let shown = tl!(tab);
+                for (tab, custom) in &tabs {
+                    let (tab, custom) = (tab.as_str(), *custom);
+                    let contextual = !custom && wordcraft_engine::ribbon::CONTEXTUAL_TABS.contains(&tab);
+                    // A custom tab's name is the user's own text: shown as typed.
+                    let shown = if custom { tab } else { tl!(tab) };
                     let w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(shown.to_string(), medium(12.5), t.text).size().x) + 18.0;
                     let (r, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
                     if app.ui.keytips == crate::keytips::Phase::Tabs {
@@ -108,6 +114,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     if resp.double_clicked() && tab != "File" {
                         let _ = app.run("ui.collapseRibbon", json!({}));
                     }
+                    resp.context_menu(|ui| crate::widgets::customize_menu_items(ui, app));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // Share, Editing mode, Comments.
@@ -160,9 +167,20 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin { left: 8, right: 8, top: 4, bottom: 4 }).stroke(Stroke::new(1.0, t.border)),
         )
         .show(ui, |ui| {
+            // Right-click on the ribbon (outside a button): Customize Ribbon. Registered first, so
+            // the buttons drawn over it keep their own clicks.
+            let bg = ui.interact(ui.max_rect(), ui.id().with("ribbon_background"), Sense::click());
+            bg.context_menu(|ui| crate::widgets::customize_menu_items(ui, app));
+            let entry = user_tabs.iter().find(|e| e.name == app.ui.tab);
             let scroll = egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
                 ui.horizontal_top(|ui| {
                     ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+                    match entry {
+                        // Every tab hidden: nothing to show.
+                        Some(e) if e.hidden => return,
+                        Some(e) if e.custom => return custom_groups(app, ui, &e.groups),
+                        _ => {}
+                    }
                     match app.ui.tab.as_str() {
                         "Home" => home(app, ui),
                         "Insert" => insert(app, ui),
@@ -181,6 +199,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         "Picture Format" => picture_format(app, ui),
                         "Shape Format" => shape_format(app, ui),
                         _ => home(app, ui),
+                    }
+                    if let Some(e) = entry {
+                        custom_groups(app, ui, &e.groups);
                     }
                 });
             });
@@ -209,6 +230,44 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 state.store(ui.ctx(), scroll.id);
             }
         });
+}
+
+/// Custom groups (Customize Ribbon, #379): up to three commands as large buttons, more as small
+/// labelled buttons in columns of three. Each shows the command's own icon and label.
+fn custom_groups(app: &mut WordApp, ui: &mut Ui, groups: &[wordcraft_engine::ribbon::CustomGroup]) {
+    for g in groups {
+        let ids: Vec<(&str, String)> =
+            g.commands.iter().filter_map(|id| app.session.registry.get(id).map(|s| (s.id, tl!(s.label).to_string()))).collect();
+        crate::widgets::group_titled(ui, &g.name, &g.name, None, app, |ui, app| {
+            if ids.len() <= 3 {
+                for (id, label) in &ids {
+                    big(ui, app, crate::widgets::command_icon(id), &two_lines(label), id, json!({}), false);
+                }
+                return;
+            }
+            for column in ids.chunks(3) {
+                stack(ui, |ui| {
+                    for (id, label) in column {
+                        small(ui, app, crate::widgets::command_icon(id), Some(label), label, id, json!({}), false);
+                    }
+                });
+            }
+        });
+    }
+}
+
+/// A large button's label on two lines when it is long (broken at the space nearest the middle).
+fn two_lines(label: &str) -> String {
+    let n = label.chars().count();
+    if n <= 10 {
+        return label.to_string();
+    }
+    let mid = n / 2;
+    let best = label.char_indices().filter(|(_, c)| *c == ' ').min_by_key(|(i, _)| label[..*i].chars().count().abs_diff(mid)).map(|(i, _)| i);
+    match best {
+        Some(i) => format!("{}\n{}", &label[..i], label[i..].trim_start()),
+        None => label.to_string(),
+    }
 }
 
 /// A chevron over a ribbon edge that is also a button; `true` on the frame it is clicked.

@@ -412,6 +412,12 @@ fn options_page(app: &mut WordApp, ui: &mut Ui) {
             let _ = app.run("tools.customizeKeyboard", json!({}));
         }
     });
+    ui.horizontal(|ui| {
+        ui.label(tl!("Ribbon and Quick Access Toolbar:"));
+        if ui.button(tl!("Customize…")).clicked() {
+            let _ = app.run("tools.customizeRibbon", json!({}));
+        }
+    });
     ui.add_space(10.0);
     ui.label(egui::RichText::new(tl!("Agents")).font(semibold(15.0)));
     ui.label(tl!("Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel."));
