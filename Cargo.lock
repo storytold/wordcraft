@@ -4980,6 +4980,7 @@ version = "0.3.0"
 dependencies = [
  "log",
  "serde_json",
+ "wordcraft-chat",
  "wordcraft-control-key",
  "wordcraft-doc",
  "wordcraft-engine",

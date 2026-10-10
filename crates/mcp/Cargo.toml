@@ -13,5 +13,9 @@ wordcraft-doc = { workspace = true }
 wordcraft-engine = { workspace = true }
 wordcraft-render = { workspace = true }
 wordcraft-control-key = { workspace = true }
+wordcraft-chat = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+
+[dev-dependencies]
+wordcraft-chat = { workspace = true, features = ["testing"] }

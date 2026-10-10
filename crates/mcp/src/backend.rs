@@ -57,7 +57,7 @@ fn find_key(addr: &str) -> Result<String, String> {
 
 /// Whether `addr` (`HOST:PORT`, as given to `--connect`) names a loopback address: 127.0.0.0/8,
 /// ::1 or `localhost`. Other host names are not resolved: they never count.
-fn is_loopback_addr(addr: &str) -> bool {
+pub(crate) fn is_loopback_addr(addr: &str) -> bool {
     let loopback = |ip: IpAddr| ip.to_canonical().is_loopback();
     if let Ok(sa) = addr.parse::<SocketAddr>() {
         return loopback(sa.ip());
