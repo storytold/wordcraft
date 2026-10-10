@@ -472,6 +472,7 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                     }
                     ui.separator();
                     mi(ui, app, "Horizontal Line", "insert.horizontalLine", json!({}));
+                    mi(ui, app, "Borders and Shading…", "para.borders", json!({}));
                 });
             });
         });
@@ -698,10 +699,7 @@ fn design(app: &mut WordApp, ui: &mut Ui) {
                 ui.close();
             }
         });
-        menu_button(ui, app, "pageBorders", Some("Page\nBorders"), "Page Borders", true, |ui, app| {
-            mi(ui, app, "Box", "design.pageBorders", json!({"kind": "box"}));
-            mi(ui, app, "None", "design.pageBorders", json!({"kind": "none"}));
-        });
+        big(ui, app, "pageBorders", "Page\nBorders", "design.pageBorders", json!({}), false);
     });
 }
 

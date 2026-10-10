@@ -138,6 +138,29 @@
 	Border Painter	边框刷
 	Border\nPainter	边框刷
 	Borders	边框
+	Tab stop position:	制表位位置：
+	Default tab stops:	默认制表位：
+	Tab stops to be cleared:	要清除的制表位：
+	All	全部
+	Decimal	小数点对齐
+	Bar	竖线对齐
+	Leader	前导符
+	Set	设置
+	Page Border	页面边框线
+	Apply to:	应用于：
+	Whole document	整篇文档
+	This section	本节
+	Fill	填充
+	Setting:	设置：
+	3-D	三维
+	Custom	自定义
+	Style:	样式：
+	Dot dash	点划线
+	Triple	三线
+	Between	段落之间
+	Borders and Shading	边框和底纹
+	Tabs…	制表位…
+	Borders and Shading…	边框和底纹…
 	Bottom Border	下框线
 	Bottom of Page	页面底端
 	Bottom:	下：

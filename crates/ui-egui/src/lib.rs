@@ -20,6 +20,7 @@ pub mod control;
 pub mod credits;
 pub mod dialogs;
 pub mod dialogs_lists;
+pub mod dialogs_para;
 pub mod equation_tab;
 pub mod file_dialogs;
 pub mod frame;
@@ -1088,6 +1089,10 @@ fn input_dialog(id: &str, params: &Value) -> Option<&'static str> {
         // Define New Multilevel List and Track Changes Options without settings show their dialogs.
         "list.define" if params.get("levels").is_none() => Some("defineList"),
         "review.trackingOptions" if params.as_object().is_none_or(|m| m.is_empty()) => Some("trackChangesOptions"),
+        // Tabs, Borders and Shading, and Page Borders without settings show their dialogs (#320).
+        "para.tabs" if params.as_object().is_none_or(|m| m.is_empty()) => Some("tabs"),
+        "para.borders" if params.as_object().is_none_or(|m| m.is_empty()) => Some("borders"),
+        "design.pageBorders" if params.as_object().is_none_or(|m| m.is_empty()) => Some("pageBorders"),
         _ => None,
     }
 }

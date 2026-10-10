@@ -127,6 +127,29 @@
 	Border Painter	罫線の書式設定
 	Border\nPainter	罫線の書式設定
 	Borders	罫線
+	Tab stop position:	タブ位置:
+	Default tab stops:	既定のタブ間隔:
+	Tab stops to be cleared:	削除するタブ:
+	All	すべて
+	Decimal	小数点揃え
+	Bar	縦線
+	Leader	リーダー
+	Set	設定
+	Page Border	ページ罫線の設定
+	Apply to:	適用先:
+	Whole document	文書全体
+	This section	このセクション
+	Fill	塗りつぶし
+	Setting:	種類:
+	3-D	立体
+	Custom	カスタム
+	Style:	線種:
+	Dot dash	一点鎖線
+	Triple	三重線
+	Between	段落の間
+	Borders and Shading	罫線と網かけ
+	Tabs…	タブ…
+	Borders and Shading…	罫線と網かけ…
 	Bottom Border	下罫線
 	Bottom of Page	ページの下部
 	Bottom:	下:
