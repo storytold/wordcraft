@@ -1095,6 +1095,8 @@ fn input_dialog(id: &str, params: &Value) -> Option<&'static str> {
         // Symbol without a character and Field without a code show their dialogs (#321).
         "insert.symbol" if !has("char") => Some("symbol"),
         "insert.field" if !has("instr") => Some("field"),
+        // Edit Field Code shows the selected field's code (#339).
+        "fields.setCode" if !has("code") => Some("editFieldCode"),
         // Table Properties without settings shows the dialog (with settings it applies them).
         "table.properties" if params.as_object().is_none_or(|m| m.is_empty()) => Some("tableProperties"),
         // Tabs, Borders and Shading, and Page Borders without settings show their dialogs (#320).
@@ -2426,6 +2428,24 @@ mod tests {
         // Programmatic calls never open dialogs.
         let mut b = app();
         assert!(b.execute("mailings.recipients", json!({})).is_err());
+        assert!(b.dialog.is_none());
+    }
+
+    /// #339: Ctrl+F9 opens the Field dialog (#321) and Edit Field… shows the selected field's code;
+    /// scripts and agents get an error instead of a dialog.
+    #[test]
+    fn field_code_dialogs_open_for_users_only() {
+        let mut a = app();
+        assert_eq!(a.run("insert.field", json!({})).unwrap(), json!({"pending": "field"}));
+        a.dialog = None;
+        a.run("insert.field", json!({"instr": "PAGE"})).unwrap();
+        a.run("caret.docStart", json!({})).unwrap();
+        assert_eq!(a.run("fields.setCode", json!({})).unwrap(), json!({"pending": "editFieldCode"}));
+        let Some(dialogs::Dialog::FieldCode { code, edit: true, .. }) = &a.dialog else { panic!("{:?}", a.dialog) };
+        assert_eq!(code, "PAGE");
+        let mut b = app();
+        assert!(b.execute("insert.field", json!({})).is_err());
+        assert!(b.execute("fields.setCode", json!({})).is_err());
         assert!(b.dialog.is_none());
     }
 

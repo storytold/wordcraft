@@ -7,6 +7,7 @@ pub mod design;
 pub mod draw;
 pub mod edit;
 pub mod equation;
+pub mod fields;
 pub mod file;
 pub mod fmt_revisions;
 pub mod format;
@@ -57,6 +58,7 @@ pub fn registry() -> Registry {
     v.extend(file::specs());
     v.extend(design::specs());
     v.extend(references::specs());
+    v.extend(fields::specs());
     v.extend(mailings::specs());
     v.extend(citations::specs());
     v.extend(objects::specs());

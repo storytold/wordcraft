@@ -144,7 +144,11 @@ fn quote(f: &str) -> String {
 fn insert_field(s: &mut Session, instr: &str, placeholder: &str) -> CmdResult {
     let props = s.typing_props();
     let at = delete_selection(s)?;
-    let end = s.doc.insert_object(&at, InlineObject::Field { instr: instr.to_string(), result: placeholder.to_string(), locked: false }, &props)?;
+    let end = s.doc.insert_object(
+        &at,
+        InlineObject::Field { instr: instr.to_string(), result: placeholder.to_string(), locked: false, code: false },
+        &props,
+    )?;
     s.sel = Selection::caret(end);
     refresh(s);
     sel_result(s)

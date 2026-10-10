@@ -367,7 +367,7 @@ impl Writer<'_> {
                     None => super::math::write_equation(w, linear, *display, math),
                 }
             }
-            InlineObject::Field { instr, result, locked } => self.field(w, instr, result, *locked, props),
+            InlineObject::Field { instr, result, locked, .. } => self.field(w, instr, result, *locked, props),
             InlineObject::FieldStart { instr, locked } => {
                 self.rev_open(w, props);
                 self.field_start(w, instr, *locked, props);

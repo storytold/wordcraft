@@ -54,6 +54,9 @@ pub struct LayoutOptions {
     pub hide_deleted: bool,
     /// Check spelling and grammar (squiggles).
     pub proofing: bool,
+    /// Show field codes (`{ PAGE }`, shaded) instead of field results (View › Field Codes, Alt+F9).
+    /// A field whose own `code` flag is set shows the other one.
+    pub field_codes: bool,
 }
 
 /// Something placed on a page (page coordinates, points, y down).
@@ -322,7 +325,15 @@ fn hash_of<T: Hash>(t: &T) -> u64 {
 
 fn env_hash(doc: &Document, opts: &LayoutOptions) -> u64 {
     let s = serde_json::to_string(&(&doc.styles, &doc.numbering, doc.settings.default_tab, &doc.settings.footnote_format)).unwrap_or_default();
-    hash_of(&(s, opts.show_hidden, opts.hide_deleted, opts.proofing, wordcraft_proof::user_dictionary().len(), doc.settings.auto_hyphenation))
+    hash_of(&(
+        s,
+        opts.show_hidden,
+        opts.hide_deleted,
+        opts.proofing,
+        opts.field_codes,
+        wordcraft_proof::user_dictionary().len(),
+        doc.settings.auto_hyphenation,
+    ))
 }
 
 fn has_page_fields(p: &Paragraph) -> bool {
@@ -367,6 +378,7 @@ impl Ctx<'_> {
             label: None,
             fields: &self.fields,
             show_hidden: false,
+            field_codes: false,
             hide_deleted: false,
             table: None,
             proofing: false,
@@ -429,6 +441,7 @@ impl Ctx<'_> {
             label,
             fields: &self.fields,
             show_hidden: self.opts.show_hidden,
+            field_codes: self.opts.field_codes,
             hide_deleted: self.opts.hide_deleted,
             table,
             proofing: self.opts.proofing,
@@ -1826,6 +1839,7 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32) -> f32 {
                 label: None,
                 fields: &ctx.fields,
                 show_hidden: ctx.opts.show_hidden,
+                field_codes: ctx.opts.field_codes,
                 hide_deleted: ctx.opts.hide_deleted,
                 table: None,
                 proofing: false,

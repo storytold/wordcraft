@@ -164,6 +164,7 @@ pub fn measure_table_columns(doc: &wordcraft_doc::Document, t: &Table) -> Vec<(f
                 label: None,
                 fields: &fields,
                 show_hidden: false,
+                field_codes: false,
                 hide_deleted: false,
                 table: text.as_ref(),
                 proofing: false,

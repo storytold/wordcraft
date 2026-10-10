@@ -436,6 +436,14 @@ Editing|Selection|Select Sentence|select.sentence
 Editing|Selection|Select Paragraph|select.paragraph
 Editing|Selection|Extend Selection (F8)|select.extend
 Editing|Selection|Column Selection|select.column
+Editing|Fields|Show Field Codes|view.fieldCodes
+Editing|Fields|Toggle Field Codes|fields.toggleCode
+Editing|Fields|Edit Field Code|fields.setCode
+Editing|Fields|Unlink Fields|fields.unlink
+Editing|Fields|Lock Fields|fields.lock
+Editing|Fields|Unlock Fields|fields.unlock
+Editing|Fields|Next Field|fields.next
+Editing|Fields|Previous Field|fields.previous
 Tools|Proofing|AutoCorrect Options|tools.autocorrect
 Tools|Proofing|Set Proofing Language|review.language
 Tools|Customize|Customize Ribbon|tools.customizeRibbon
