@@ -349,3 +349,24 @@ fn bundled_interface_fonts_cover_brazilian_portuguese_without_system_fallbacks()
         }
     }
 }
+
+#[test]
+fn proofing_messages_are_translated_into_german() {
+    let de = lang("de");
+    for m in [
+        "Possible spelling mistake",
+        "Use \"an\" before a vowel sound",
+        "Use \"a\" before a consonant sound",
+        "Remove the space before the punctuation",
+        "Extra space",
+        "Capitalize the first word of a sentence",
+    ] {
+        assert!(has(de, m), "{m}");
+    }
+    // The message Review reports for a German typo is that key.
+    let mut s = wordcraft_engine::Session::new(wordcraft_doc::Document::new());
+    s.run("file.new", &serde_json::json!({"language": "de"})).unwrap();
+    s.run("text.insert", &serde_json::json!({"text": "Ein Fehlr."})).unwrap();
+    let issues = s.run("review.issues", &serde_json::json!({})).unwrap();
+    assert_eq!(tr(de, issues[0]["message"].as_str().unwrap()), "Möglicher Rechtschreibfehler");
+}

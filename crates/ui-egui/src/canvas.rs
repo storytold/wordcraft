@@ -820,7 +820,8 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
             .and_then(|v| v.as_array())
             .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
             .unwrap_or_default();
-        ui.label(egui::RichText::new(issue.get("message").and_then(|m| m.as_str()).unwrap_or("")).small().weak());
+        // Proofing messages are English keys like any other label.
+        ui.label(egui::RichText::new(tl!(issue.get("message").and_then(|m| m.as_str()).unwrap_or(""))).small().weak());
         if sugg.is_empty() {
             ui.label(egui::RichText::new(tl!("(no suggestions)")).italics());
         }
