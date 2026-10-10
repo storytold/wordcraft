@@ -232,6 +232,7 @@ fn many_hidden_float_anchors_lay_out_in_linear_time() {
             stroke_width: 1.0,
             float,
             story: None,
+            freeform: None,
             effects: Default::default(),
         };
         let obj = wordcraft_doc::para::OBJ.to_string();
@@ -1048,6 +1049,7 @@ fn text_wraps_around_square_float() {
         stroke_width: 1.0,
         float,
         story: None,
+        freeform: None,
         effects: Default::default(),
     };
     d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
@@ -1086,6 +1088,7 @@ fn deleted_float_leaves_no_wrap_area_without_markup() {
         stroke_width: 1.0,
         float,
         story: None,
+        freeform: None,
         effects: Default::default(),
     };
     d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
@@ -1138,6 +1141,7 @@ fn hidden_float_leaves_no_wrap_area_when_hidden_text_is_not_shown() {
         stroke_width: 1.0,
         float,
         story: None,
+        freeform: None,
         effects: Default::default(),
     };
     d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
@@ -1175,6 +1179,7 @@ fn line_numbers_borders_text_boxes() {
         stroke_width: 1.0,
         float: Default::default(),
         story: Some(id),
+        freeform: None,
         effects: Default::default(),
     };
     d.insert_object(&Pos::body(2, 5), tb, &Default::default()).unwrap();
@@ -1469,6 +1474,7 @@ fn text_box_at(d: &mut Document, pos: &Pos, text: &str, w: f32, h: f32, float: w
         stroke_width: 0.75,
         float,
         story: Some(id),
+        freeform: None,
         effects: Default::default(),
     };
     d.insert_object(pos, shape, &Default::default()).unwrap();
@@ -1540,6 +1546,7 @@ fn presses_grab_pictures_anywhere_and_text_boxes_by_their_border() {
         stroke_width: 1.0,
         float: Default::default(),
         story: None,
+        freeform: None,
         effects: Default::default(),
     };
     d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
@@ -1760,6 +1767,7 @@ fn box_fan_out(levels: usize, fan: usize) -> Document {
         stroke_width: 0.0,
         float: Default::default(),
         story: Some(story),
+        freeform: None,
         effects: Default::default(),
     };
     for (k, id) in ids.iter().enumerate() {
@@ -1833,6 +1841,7 @@ fn picture(w: f32, h: f32, float: wordcraft_doc::para::Float) -> InlineObject {
         stroke_width: 1.0,
         float,
         story: None,
+        freeform: None,
         effects: Default::default(),
     }
 }
@@ -1981,6 +1990,7 @@ fn rect_shape(w: f32, h: f32, float: wordcraft_doc::para::Float) -> InlineObject
         stroke_width: 1.0,
         float,
         story: None,
+        freeform: None,
         effects: Default::default(),
     }
 }
@@ -2150,6 +2160,7 @@ fn floating_header_text_box_leaves_the_body_at_the_top_margin() {
                 stroke_width: 0.75,
                 float,
                 story: Some(story),
+                freeform: None,
                 effects: Default::default(),
             };
             anchor.insert_object(0, tb, &Default::default()).unwrap();
@@ -2759,6 +2770,7 @@ fn rotated_float_wraps_around_its_rotated_bounds() {
             stroke_width: 1.0,
             float,
             story: None,
+            freeform: None,
             effects: Default::default(),
         };
         d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
@@ -2802,6 +2814,7 @@ fn rotated_group_turns_its_members_and_their_shadows() {
         stroke_width: 0.0,
         float: Float { rot, ..Default::default() },
         story: None,
+        freeform: None,
         effects: ShapeEffects { shadow: Some(Shadow { angle: 0.0, rot_with_shape, ..Default::default() }), ..Default::default() },
     };
     let float =

@@ -81,6 +81,7 @@
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	Automatsko čuvanje neuspelo: {error}. Sačuvajte dokument da biste ga ponovo uključili.
 	Balloons	Oblačići
 	Bottom Margin	Donja margina
+	Click a border between two cells to merge them. Esc stops.	Kliknite ivicu između dve ćelije da ih spojite. Esc završava.
 	Based on: {style}	Zasnovan na: {style}
 	Built-in style	Ugrađeni stil
 	Built-in styles can't be deleted.	Ugrađeni stilovi ne mogu da se obrišu.
@@ -98,6 +99,8 @@
 	Compress punctuation at the start of a line	Sažmi interpunkciju na početku reda
 	Confirm password:	Potvrdite lozinku:
 	Dark page (white text on black)	Tamna stranica (beo tekst na crnom)
+	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	Prevucite pravougaonik da nacrtate tabelu ili liniju preko ćelija da ih podelite. Esc završava.
+	Draw Table	Nacrtaj tabelu
 	Define New Multilevel List	Definiši novu višenivosku listu
 	Define New Multilevel List…	Definiši novu višenivosku listu…
 	Deletions:	Brisanja:
@@ -1175,7 +1178,63 @@
 	Insert a new equation (Alt+=)	Umetni novu jednačinu (Alt+=)
 	Leave the equation (Esc)	Napusti jednačinu (Esc)
 	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft
+	Draw Ink	Crtaj mastilom
+	Erase Ink	Obriši mastilo
+	Hide Ink	Sakrij mastilo
+	Hide\nInk	Sakrij\nmastilo
+	Pens	Pera
+	Thickness	Debljina
 
+# Interface text routed through translation (#313)
+	Align Top Left	Poravnaj gore levo
+	Align Top Center	Poravnaj gore po sredini
+	Align Top Right	Poravnaj gore desno
+	Align Center Left	Poravnaj u sredini levo
+	Align Center	Poravnaj po sredini
+	Align Center Right	Poravnaj u sredini desno
+	Align Bottom Left	Poravnaj dole levo
+	Align Bottom Center	Poravnaj dole po sredini
+	Align Bottom Right	Poravnaj dole desno
+	{contributors} contributors · {commits} commits	Saradnika: {contributors} · commit-ova: {commits}
+	{cols}×{rows} Table	Tabela {cols}×{rows}
+	AaBbYyZz	AaBbYyZz ČčĐđ
+	pt	pt
+	Document1	Dokument1
+	Username	Korisničko ime
+	Display name	Ime za prikaz
+	Real name	Pravo ime
+	Name	Ime
+	PRs	PR-ovi
+	Commits	Commit-ovi
+	First	Prvi
+	Last	Zadnji
+	Model	Model
+	Version	Verzija
+	% of all commits	% svih commit-ova
+	Lines +/−	Redovi +/−
+	Craft	Zanat
+	Studio	Studio
+	Atelier	Atelje
+	Darkroom	Mračna komora
+	Gallery	Galerija
+	Sketchbook	Blok za skice
+	Change Picture…	Promeni sliku…
+	Font…	Font…
+	Paragraph…	Pasus…
+	Link…	Veza…
+	Size and Crop…	Veličina i isecanje…
+	Insert Columns to the Left	Umetni kolone levo
+	Insert Columns to the Right	Umetni kolone desno
+	Insert Rows Above	Umetni redove iznad
+	Insert Rows Below	Umetni redove ispod
+	Mon	Pon
+	Tue	Uto
+	Wed	Sre
+	Sum	Zbir
+	North	Sever
+	South	Jug
+	West	Zapad
+	Total	Ukupno
 # Columns, Symbol and Field dialogs (#321).
 	(All)	(Sve)
 	(none)	(nema)

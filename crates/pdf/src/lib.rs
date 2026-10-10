@@ -389,7 +389,8 @@ fn shape_path(kind: ShapeKind, r: &Rect) -> Option<Path> {
         pb.close();
     };
     match kind {
-        ShapeKind::Rectangle | ShapeKind::TextBox => poly(&mut pb, &[(x0, y0), (x1, y0), (x1, y1), (x0, y1)]),
+        // A freeform is drawn from its own paths; without them, its frame.
+        ShapeKind::Rectangle | ShapeKind::TextBox | ShapeKind::Freeform => poly(&mut pb, &[(x0, y0), (x1, y0), (x1, y1), (x0, y1)]),
         ShapeKind::RoundedRectangle => {
             let rad = r.w.min(r.h) * 0.16;
             let k = rad * (1.0 - K);
@@ -753,6 +754,36 @@ impl Exporter<'_> {
                     s.draw_path(&p);
                 }
                 s.set_fill(None);
+                s.set_stroke(None);
+            }
+            Draw::Ink { pts, color, width, alpha } => {
+                let mut pb = PathBuilder::new();
+                let mut used = 0usize;
+                let mut last = (0.0, 0.0);
+                for &(x, y) in pts.iter().filter(|(x, y)| ok(*x) && ok(*y)) {
+                    if used > 0 {
+                        pb.line_to(x, y);
+                    } else {
+                        pb.move_to(x, y);
+                    }
+                    used += 1;
+                    last = (x, y);
+                }
+                // A tap (one usable point): a zero-length line, which round caps draw as a dot.
+                if used == 1 {
+                    pb.line_to(last.0, last.1);
+                }
+                let Some(p) = pb.finish() else { return };
+                s.set_fill(None);
+                s.set_stroke(Some(Stroke {
+                    paint: rgb::Color::new(color.0, color.1, color.2).into(),
+                    width: if width.is_finite() { width.clamp(0.25, 200.0) } else { 1.0 },
+                    opacity: norm(*alpha),
+                    line_cap: LineCap::Round,
+                    line_join: LineJoin::Round,
+                    ..Default::default()
+                }));
+                s.draw_path(&p);
                 s.set_stroke(None);
             }
             Draw::Shape { rect, kind, fill: f, stroke, stroke_width, effects } => {

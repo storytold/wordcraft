@@ -88,6 +88,7 @@ fn text_box_anchor_finds_the_owning_shape() {
         stroke_width: 0.75,
         float: Default::default(),
         story,
+        freeform: None,
         effects: Default::default(),
     };
     // A plain shape before it doesn't count.
@@ -109,6 +110,7 @@ fn word_count_including_notes_counts_used_boxes_and_notes_only() {
         stroke_width: 0.75,
         float: Default::default(),
         story: Some(story),
+        freeform: None,
         effects: Default::default(),
     };
     let para_of = |t: &str| vec![para_block(Paragraph::with_text(t, CharProps::default()))];
@@ -148,6 +150,7 @@ fn counted_stories_survive_self_nested_boxes() {
         stroke_width: 0.0,
         float: Default::default(),
         story: Some(id),
+        freeform: None,
         effects: Default::default(),
     };
     d.insert_object(&Pos::body(0, 0), shape.clone(), &CharProps::default()).unwrap();
@@ -166,6 +169,7 @@ fn prune_text_boxes_drops_only_unshown_ones() {
         stroke_width: 0.0,
         float: Default::default(),
         story: Some(story),
+        freeform: None,
         effects: Default::default(),
     };
     let para_of = |t: &str| vec![para_block(Paragraph::with_text(t, CharProps::default()))];
@@ -199,6 +203,7 @@ fn notes_in_text_box_follow_nested_boxes_once() {
         stroke_width: 0.0,
         float: Default::default(),
         story: Some(story),
+        freeform: None,
         effects: Default::default(),
     };
     let note = |id| InlineObject::NoteRef { kind: para::NoteKind::Footnote, id, custom: String::new() };

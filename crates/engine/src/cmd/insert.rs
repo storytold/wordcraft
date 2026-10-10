@@ -263,6 +263,7 @@ fn shape(s: &mut Session, v: &Value) -> CmdResult {
         stroke_width: 1.0,
         float: Float { wrap: Wrap::Inline, ..Default::default() },
         story: None,
+        freeform: None,
         effects: Default::default(),
     };
     let end = s.doc.insert_object(&at, obj, &props)?;
@@ -286,6 +287,7 @@ fn text_box(s: &mut Session, v: &Value) -> CmdResult {
         stroke_width: 0.75,
         float: Float::default(),
         story: Some(id),
+        freeform: None,
         effects: Default::default(),
     };
     s.doc.insert_object(&at, obj, &props)?;

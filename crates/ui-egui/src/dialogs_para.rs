@@ -500,11 +500,14 @@ fn lines(ui: &mut Ui, id: &str, l: &mut LineForm, theme: &[Rgb], fill: Option<Rg
             ui.label(tl!("Color:"));
             color_menu(ui, theme, &mut l.color);
             ui.label(tl!("Width:"));
-            egui::ComboBox::from_id_salt((id, "width")).selected_text(format!("{} pt", l.width)).width(120.0).show_ui(ui, |ui| {
-                for w in WIDTHS {
-                    ui.selectable_value(&mut l.width, w, format!("{w} pt"));
-                }
-            });
+            egui::ComboBox::from_id_salt((id, "width"))
+                .selected_text(crate::i18n::fmt(tl!("{n} pt"), &[("n", &l.width.to_string())]))
+                .width(120.0)
+                .show_ui(ui, |ui| {
+                    for w in WIDTHS {
+                        ui.selectable_value(&mut l.width, w, crate::i18n::fmt(tl!("{n} pt"), &[("n", &w.to_string())]));
+                    }
+                });
         });
         ui.add_space(8.0);
         ui.vertical(|ui| {

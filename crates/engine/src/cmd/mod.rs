@@ -4,6 +4,7 @@ pub mod caret;
 pub mod citations;
 pub mod column;
 pub mod design;
+pub mod draw;
 pub mod edit;
 pub mod equation;
 pub mod file;
@@ -20,6 +21,7 @@ pub mod references;
 pub mod review;
 pub mod speech;
 pub mod table;
+pub mod table_draw;
 pub mod table_style;
 pub mod text;
 pub mod tools;
@@ -49,6 +51,7 @@ pub fn registry() -> Registry {
     v.extend(page::specs());
     v.extend(table::specs());
     v.extend(table_style::specs());
+    v.extend(table_draw::specs());
     v.extend(review::specs());
     v.extend(file::specs());
     v.extend(design::specs());
@@ -56,6 +59,7 @@ pub fn registry() -> Registry {
     v.extend(mailings::specs());
     v.extend(citations::specs());
     v.extend(objects::specs());
+    v.extend(draw::specs());
     v.extend(tools::specs());
     v.extend(speech::specs());
     Registry::new(v)
