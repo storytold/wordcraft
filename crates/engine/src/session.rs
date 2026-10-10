@@ -45,6 +45,9 @@ pub struct ViewState {
     pub nav_pane: bool,
     pub styles_pane: bool,
     pub comments_pane: bool,
+    /// The Clipboard pane (Home › Clipboard): items collected by Copy and Cut.
+    #[serde(default)]
+    pub clipboard_pane: bool,
     pub multi_page: bool,
     /// Zoom to fit: "pageWidth", "onePage", "multiplePages", or empty.
     pub fit: String,
@@ -69,6 +72,7 @@ impl Default for ViewState {
             nav_pane: false,
             styles_pane: false,
             comments_pane: false,
+            clipboard_pane: false,
             multi_page: false,
             fit: String::new(),
             web_width: 800.0,
@@ -152,6 +156,8 @@ pub struct Session {
     pub clipboard: Option<Fragment>,
     /// Plain text mirror of the clipboard (for the system clipboard).
     pub clipboard_text: String,
+    /// Items collected by Copy and Cut this session, for the Clipboard pane.
+    pub clip_history: crate::cmd::edit::ClipHistory,
     pub find: FindState,
     /// Page x the caret tries to keep on Up/Down.
     pub goal_x: Option<f32>,
@@ -250,6 +256,7 @@ impl Session {
             dirty: false,
             clipboard: None,
             clipboard_text: String::new(),
+            clip_history: Default::default(),
             find: FindState::default(),
             goal_x: None,
             page_hint: 0,
@@ -447,6 +454,7 @@ impl Session {
             dirty,
             clipboard: _,
             clipboard_text: _,
+            clip_history: _,
             find: _,
             goal_x: _,
             page_hint: _,

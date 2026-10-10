@@ -122,6 +122,15 @@
 	Clear	Borrar
 	Clear All Formatting	Borrar todo el formato
 	Clipboard	Portapapeles
+	Clipboard Pane	Panel del portapapeles
+	Clipboard Items	Elementos del portapapeles
+	Paste Clipboard Item	Pegar elemento del portapapeles
+	Paste All	Pegar todo
+	Delete Clipboard Item	Eliminar elemento del portapapeles
+	Clear All	Borrar todo
+	Click an item to paste it.	Haz clic en un elemento para pegarlo.
+	Nothing collected yet. Items you copy or cut appear here.	Aún no hay nada. Lo que copies o cortes aparecerá aquí.
+	(picture or object)	(imagen u objeto)
 	Close	Cerrar
 	Close Header and Footer	Cerrar encabezado y pie de página
 	Collapse Selection	Contraer selección

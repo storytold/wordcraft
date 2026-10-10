@@ -119,6 +119,15 @@
 	Clear	Limpar
 	Clear All Formatting	Limpar toda a formatação
 	Clipboard	Área de transferência
+	Clipboard Pane	Painel da área de transferência
+	Clipboard Items	Itens da área de transferência
+	Paste Clipboard Item	Colar item da área de transferência
+	Paste All	Colar tudo
+	Delete Clipboard Item	Excluir item da área de transferência
+	Clear All	Limpar tudo
+	Click an item to paste it.	Clique em um item para colá-lo.
+	Nothing collected yet. Items you copy or cut appear here.	Nada coletado ainda. Os itens que você copiar ou recortar aparecem aqui.
+	(picture or object)	(imagem ou objeto)
 	Close	Fechar
 	Close Header and Footer	Fechar cabeçalho e rodapé
 	Collapse Selection	Recolher seleção
