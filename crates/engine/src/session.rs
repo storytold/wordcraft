@@ -122,6 +122,10 @@ pub struct Session {
     pub registry: Arc<Registry>,
     /// Author name for comments and tracked changes.
     pub author: String,
+    /// Language of the documents `file.new` makes when the call names none (`en`, `de`): German
+    /// templates are German text on A4. The app sets it to its interface language; headless
+    /// sessions (CLI, MCP) keep English.
+    pub template_language: String,
     /// Format painter: copied formatting waiting to be applied (and whether it stays on).
     pub painter: Option<(CharProps, wordcraft_doc::props::ParaProps, bool)>,
     /// Last message for the status bar / agents.
@@ -182,6 +186,7 @@ impl Session {
             page_hint: 0,
             registry: Arc::new(crate::cmd::registry()),
             author: "WordCraft User".into(),
+            template_language: "en".into(),
             painter: None,
             status: String::new(),
             history: Vec::new(),

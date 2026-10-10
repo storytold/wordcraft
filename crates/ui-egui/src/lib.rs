@@ -529,9 +529,16 @@ impl WordApp {
     fn default_save_name(&self) -> String {
         let ext = self.session.path.as_ref().and_then(|p| p.extension()).map(|e| e.to_string_lossy().to_string());
         match ext {
-            Some(e) if wordcraft_engine::io::is_word_package(&e) => format!("{}.{e}", self.title_stem()),
-            _ => format!("{}.docx", self.title_stem()),
+            Some(e) if wordcraft_engine::io::is_word_package(&e) => format!("{}.{e}", self.display_title()),
+            _ => format!("{}.docx", self.display_title()),
         }
+    }
+
+    /// [`title_stem`](Self::title_stem) as people see it (title bar, suggested file names): an
+    /// untitled document is named in the interface language, e.g. `Dokument1`.
+    pub fn display_title(&self) -> String {
+        let stem = self.title_stem();
+        if stem == "Document1" { tl!("Document1").to_string() } else { stem }
     }
 
     /// Document title for the title bar.
@@ -548,10 +555,25 @@ impl WordApp {
         }
     }
 
+    /// New documents follow the interface language (a German interface makes German, A4
+    /// documents). The first blank document exists before the language is known, so it is made
+    /// again in the new language while nobody has touched it.
+    fn follow_language(&mut self, lang: i18n::Lang) {
+        if self.session.template_language == lang.code() {
+            return;
+        }
+        self.session.template_language = lang.code().to_string();
+        let s = &self.session;
+        if s.path.is_none() && !s.dirty && !s.can_undo() && s.doc.word_count() == 0 {
+            let _ = self.session.run("file.new", &json!({}));
+        }
+    }
+
     /// Per-frame logic before layout: control requests, screenshots, shortcuts, file drops.
     pub fn logic(&mut self, ctx: &egui::Context) {
         let lang = i18n::Lang::from_pref(&self.ui.language);
         i18n::set_current(lang);
+        self.follow_language(lang);
         // Chinese text wants the Chinese face before the Japanese one (one glyph style per line).
         if !self.styled || lang.prefers_hans() != self.fonts_hans {
             theme::install_fonts_for(ctx, lang.prefers_hans());
@@ -670,7 +692,7 @@ impl WordApp {
         if let Some(url) = self.canvas.open_url.take() {
             ctx.open_url(egui::OpenUrl::new_tab(url));
         }
-        let title = format!("{}{} - WordCraft", self.title_stem(), if self.session.dirty { " •" } else { "" });
+        let title = format!("{}{} - WordCraft", self.display_title(), if self.session.dirty { " •" } else { "" });
         if title != self.sent_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.sent_title = title;

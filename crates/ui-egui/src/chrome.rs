@@ -78,7 +78,7 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                     ui.painter().circle_filled(r.center(), 12.0, t.accent);
                     let initials: String = app.session.author.split_whitespace().filter_map(|w| w.chars().next()).take(2).collect();
                     ui.painter().text(r.center(), Align2::CENTER_CENTER, initials, semibold(10.5), egui::Color32::WHITE);
-                    resp.on_hover_text(format!("{} — set your name in File › Options", app.session.author));
+                    resp.on_hover_text(crate::i18n::fmt(tl!("{name} — set your name in File › Options"), &[("name", &app.session.author)]));
                     ui.add_space(8.0);
                     if app.ui.show_discord {
                         let (r, resp) = ui.allocate_exact_size(vec2(84.0, 22.0), Sense::click());
@@ -131,7 +131,7 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
             // Centred title.
             let title = format!(
                 "{} — {}",
-                app.title_stem(),
+                app.display_title(),
                 if app.session.dirty {
                     tl!("Edited")
                 } else if app.session.path.is_some() {
@@ -200,7 +200,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                 if app.session.sel.focus.story != StoryRef::Body {
                     st(ui, tl!("Editing header/footer"));
                 }
-                st(ui, tl!("English (United States)"));
+                st(ui, &language_name(app));
                 if app.session.doc.settings.track_changes {
                     st(ui, tl!("Track Changes: On"));
                 }
@@ -305,4 +305,20 @@ impl WordApp {
         }
         self.word_count.1
     }
+}
+
+/// The proofing language at the caret for the status bar (`English (United States)`); the tag
+/// itself for languages without a name here.
+fn language_name(app: &WordApp) -> String {
+    let s = &app.session;
+    let lang = s.doc.para_at(&s.sel.focus).and_then(|p| s.doc.styles.resolve_char(p.props.style.as_deref(), p.props_of_char(s.sel.focus.off)).lang);
+    let name = match lang.as_deref().map(str::to_ascii_lowercase).as_deref() {
+        None | Some("en-us") => "English (United States)",
+        Some("en-gb") => "English (United Kingdom)",
+        Some("de-de") => "German (Germany)",
+        Some("de-at") => "German (Austria)",
+        Some("de-ch") => "German (Switzerland)",
+        Some(_) => return lang.unwrap_or_default(),
+    };
+    tl!(name).to_string()
 }

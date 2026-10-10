@@ -9,8 +9,19 @@ use crate::{WordApp, icons};
 /// Height of the ribbon content area (without group labels).
 pub const CONTENT_H: f32 = 66.0;
 pub const LABEL_H: f32 = 16.0;
+/// Big buttons: icon centre and first label line from the button's top, and the line height. A
+/// two-line label (`Table of / Contents ▾`, common in German) ends inside the button, so the
+/// hover highlight covers it and it stays clear of the group name below.
+const BIG_ICON_Y: f32 = 18.0;
+const BIG_LABEL_Y: f32 = 36.0;
+const BIG_LINE_H: f32 = 13.0;
+// The second line's top plus one line of 11.5 pt text (about 1.3 em with descenders) ends inside
+// the button, and the 32 px icon stays above the first line.
+const _: () = assert!(BIG_LABEL_Y + BIG_LINE_H + 11.5 * 1.3 <= CONTENT_H);
+const _: () = assert!(BIG_ICON_Y + 16.0 <= BIG_LABEL_Y);
 
-/// Shortcut text for a command (`⌘B` on macOS, `Ctrl+B` elsewhere).
+/// Shortcut text for a command (`⌘B` on macOS, `Ctrl+B` elsewhere; the interface language names
+/// the modifier keys, e.g. German `Strg+Umschalt+F`).
 pub fn shortcut_text(app: &WordApp, id: &str) -> String {
     let Some(spec) = app.session.registry.get(id) else { return String::new() };
     let sc = spec.shortcut.split(" / ").next().unwrap_or("");
@@ -20,8 +31,18 @@ pub fn shortcut_text(app: &WordApp, id: &str) -> String {
     if cfg!(target_os = "macos") {
         sc.replace("Mod+", "⌘").replace("Shift+", "⇧").replace("Alt+", "⌥").replace("Ctrl+", "⌃")
     } else {
-        sc.replace("Mod+", "Ctrl+")
+        let ctrl = format!("{}+", crate::i18n::t("Ctrl"));
+        let shift = format!("{}+", crate::i18n::t("Shift"));
+        sc.replace("Mod+", &ctrl).replace("Ctrl+", &ctrl).replace("Shift+", &shift)
     }
+}
+
+/// A length field: `value` is in the interface's length unit ([`crate::i18n::length_unit`]),
+/// shown as `1.25"` or `2,5 cm`.
+pub fn length_value(value: &mut f32) -> egui::DragValue<'_> {
+    let u = crate::i18n::length_unit();
+    let field = egui::DragValue::new(value).speed(u.speed).suffix(u.suffix).max_decimals(2);
+    if u.decimal_comma { field.custom_formatter(move |n, _| u.number(n, 2)).custom_parser(move |s| u.parse(s)) } else { field }
 }
 
 /// `label` is already in the interface language.
@@ -108,15 +129,15 @@ pub fn big(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, pa
     keytip_badge(ui, r, id, &label.replace('\n', " "));
     let on = enabled(app, id);
     bg(ui, r, &resp, false, &t);
-    let ic = Rect::from_center_size(pos2(r.center().x, r.min.y + 20.0), vec2(32.0, 32.0));
+    let ic = Rect::from_center_size(pos2(r.center().x, r.min.y + BIG_ICON_Y), vec2(32.0, 32.0));
     let (c, a) = if on { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
     icons::paint(ui.painter(), ic, icon, c, a);
-    let mut y = r.min.y + 43.0;
+    let mut y = r.min.y + BIG_LABEL_Y;
     let lines: Vec<&str> = label.split('\n').collect();
     for (i, l) in lines.iter().enumerate() {
         let txt = if menu && i + 1 == lines.len() { format!("{l} ▾") } else { (*l).to_string() };
         ui.painter().text(pos2(r.center().x, y), Align2::CENTER_TOP, txt, regular(11.5), if on { t.text } else { t.text_disabled });
-        y += 13.0;
+        y += BIG_LINE_H;
     }
     let resp = tooltip(app, resp, &label.replace('\n', " "), id);
     if resp.clicked() && on && !menu {
@@ -204,13 +225,13 @@ pub fn menu_button(
         let (r, resp) = ui.allocate_exact_size(vec2(w, CONTENT_H), Sense::click());
         keytip_badge(ui, r, "menu", tip);
         bg(ui, r, &resp, false, &t);
-        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.center().x, r.min.y + 20.0), vec2(32.0, 32.0)), icon, t.icon, t.accent);
+        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.center().x, r.min.y + BIG_ICON_Y), vec2(32.0, 32.0)), icon, t.icon, t.accent);
         let lines: Vec<&str> = label.unwrap_or("").split('\n').collect();
-        let mut y = r.min.y + 43.0;
+        let mut y = r.min.y + BIG_LABEL_Y;
         for (i, l) in lines.iter().enumerate() {
             let txt = if i + 1 == lines.len() { format!("{l} ▾") } else { (*l).to_string() };
             ui.painter().text(pos2(r.center().x, y), Align2::CENTER_TOP, txt, regular(11.5), t.text);
-            y += 13.0;
+            y += BIG_LINE_H;
         }
         resp
     } else {

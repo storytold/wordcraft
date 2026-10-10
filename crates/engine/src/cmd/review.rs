@@ -370,15 +370,26 @@ fn word_count(s: &mut Session, _: &Value) -> CmdResult {
     )
 }
 
-/// Issues (spelling + grammar) in one paragraph as positions.
+/// The proofing language of each run of a paragraph (`None`: not checked).
+fn proof_runs(s: &Session, p: &wordcraft_doc::Paragraph) -> Vec<(std::ops::Range<usize>, Option<wordcraft_proof::Language>)> {
+    p.run_ranges()
+        .map(|(r, c)| {
+            let skip = c.no_proof == Some(true) || c.link.is_some();
+            (r, if skip { None } else { wordcraft_proof::proofing_language(s.doc.styles.resolve_char(p.props.style.as_deref(), c).lang.as_deref()) })
+        })
+        .collect()
+}
+
+/// Issues (spelling + grammar) in one paragraph as positions, each run checked in its language.
 fn para_issues(s: &Session, story: StoryRef, path: &wordcraft_doc::Path) -> Vec<(Pos, Pos, wordcraft_proof::Issue)> {
     let Some(p) = s.doc.para(story, path) else { return Vec::new() };
+    let runs = proof_runs(s, p);
+    if runs.iter().all(|(_, l)| l.is_none()) {
+        return Vec::new();
+    }
     let text = wordcraft_layout::para::proof_text(p);
-    let mut v: Vec<wordcraft_proof::Issue> = wordcraft_proof::check_spelling(&text);
-    v.extend(wordcraft_proof::check_grammar(&text));
-    v.sort_by_key(|i| i.start);
-    v.into_iter()
-        .filter(|i| !p.run_ranges().any(|(r, c)| r.start < i.end && i.start < r.end && (c.no_proof == Some(true) || c.link.is_some())))
+    wordcraft_proof::check_text(&text, &runs)
+        .into_iter()
         .map(|i| (Pos { story, path: path.clone(), off: i.start }, Pos { story, path: path.clone(), off: i.end }, i))
         .collect()
 }
@@ -390,7 +401,13 @@ fn issue_at(s: &Session, at: &Pos) -> Option<(Pos, Pos, wordcraft_proof::Issue)>
 
 fn issue_json(s: &Session, a: &Pos, b: &Pos, i: &wordcraft_proof::Issue) -> Value {
     let word = s.doc.para_at(a).and_then(|p| p.text.get(a.off..b.off)).unwrap_or("").to_string();
-    let sugg = if i.kind == wordcraft_proof::IssueKind::Spelling { wordcraft_proof::suggest(&word, 6) } else { i.suggestions.clone() };
+    // Suggestions come from the word list of the language the word is written in.
+    let lang = s
+        .doc
+        .para_at(a)
+        .and_then(|p| proof_runs(s, p).into_iter().find(|(r, _)| r.start <= a.off && a.off < r.end).and_then(|(_, l)| l))
+        .unwrap_or(wordcraft_proof::Language::English);
+    let sugg = if i.kind == wordcraft_proof::IssueKind::Spelling { wordcraft_proof::suggest_in(&word, 6, lang) } else { i.suggestions.clone() };
     json!({"start": pos_json(a), "end": pos_json(b), "text": word, "kind": if i.kind == wordcraft_proof::IssueKind::Spelling { "spelling" } else { "grammar" }, "message": i.message, "suggestions": sugg})
 }
 

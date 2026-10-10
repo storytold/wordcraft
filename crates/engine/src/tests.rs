@@ -632,6 +632,71 @@ fn caret_navigation() {
     assert_eq!(s.sel.focus.off, 10);
 }
 
+#[test]
+fn new_documents_follow_the_template_language() {
+    let mut s = s();
+    run(&mut s, "file.new", json!({"template": "letter", "language": "de"}));
+    assert!(text(&s).contains("Mit freundlichen Grüßen"));
+    assert_eq!(s.doc.styles.default_chr.lang.as_deref(), Some("de-DE"));
+    // Without a language, the session's template language decides (English by default).
+    run(&mut s, "file.new", json!({"template": "letter"}));
+    assert!(text(&s).contains("Sincerely,"));
+    assert_eq!(wordcraft_geom::paper_name(s.doc.last_section.page_w, s.doc.last_section.page_h), Some("Letter"));
+    s.template_language = "de".into();
+    run(&mut s, "file.new", json!({}));
+    assert_eq!(wordcraft_geom::paper_name(s.doc.last_section.page_w, s.doc.last_section.page_h), Some("A4"));
+    assert!(!s.dirty && s.path.is_none());
+    // Languages without templates of their own get the English ones.
+    run(&mut s, "file.new", json!({"template": "report", "language": "ja"}));
+    assert!(text(&s).contains("Report Title"));
+}
+
+#[test]
+fn dates_follow_the_language() {
+    let mut s = s();
+    // English: 10/10/2026.
+    run(&mut s, "insert.dateTime", json!({}));
+    assert!(text(&s).contains('/'), "{}", text(&s));
+    // German, asked for or from the session: 10.10.2026, as German Word writes it.
+    run(&mut s, "file.new", json!({}));
+    run(&mut s, "insert.dateTime", json!({"language": "de"}));
+    let t = text(&s);
+    assert!(!t.contains('/') && t.matches('.').count() == 2, "{t}");
+    run(&mut s, "file.new", json!({}));
+    s.template_language = "de".into();
+    run(&mut s, "insert.dateTime", json!({"update": true}));
+    let t = text(&s);
+    assert!(t.matches('.').count() == 2, "{t}");
+    // A cover page dates itself `10. Oktober 2026`.
+    run(&mut s, "file.new", json!({}));
+    run(&mut s, "insert.coverPage", json!({}));
+    let months = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
+    assert!(months.iter().any(|m| text(&s).contains(&format!(". {m} "))), "{}", text(&s));
+}
+
+#[test]
+fn german_text_is_checked_against_the_german_word_list() {
+    let mut s = s();
+    // Our German templates are spelled correctly (and not checked against English).
+    for t in ["letter", "resume", "report", "sample"] {
+        run(&mut s, "file.new", json!({"template": t, "language": "de"}));
+        let issues = run(&mut s, "review.issues", json!({}));
+        assert_eq!(issues.as_array().map(Vec::len), Some(0), "{t}: {issues}");
+    }
+    // A German typo is flagged with German suggestions; German words and compounds are not.
+    run(&mut s, "file.new", json!({"language": "de"}));
+    run(&mut s, "text.insert", json!({"text": "Das Haushaltsbudget für die Kinderzimmerlampe hat einen Fehlr. "}));
+    let issues = run(&mut s, "review.issues", json!({}));
+    let found = issues.as_array().cloned().unwrap_or_default();
+    assert_eq!(found.len(), 1, "{issues}");
+    assert_eq!(found[0]["text"], "Fehlr");
+    assert_eq!(found[0]["suggestions"][0], "Fehler", "{issues}");
+    run(&mut s, "file.new", json!({"template": "letter"}));
+    run(&mut s, "text.insert", json!({"text": "Thsi is wrnog. "}));
+    let issues = run(&mut s, "review.issues", json!({}));
+    assert!(issues.as_array().is_some_and(|a| !a.is_empty()), "English text is still checked: {issues}");
+}
+
 /// `document_id` tells an edit from a replacement (the UI drops a "Save changes?" prompt
 /// about a document that has been replaced).
 #[test]

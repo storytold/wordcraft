@@ -13,7 +13,8 @@
 //!
 //! # Adding a language
 //! 1. Add `xx.tsv` next to `zh-hans.tsv` (copy its header; translate from the *meaning* of the
-//!    English text, clean-room: never from Microsoft Word's or another product's localisation).
+//!    English text, clean-room: never copy Microsoft Word's or another product's localisation.
+//!    Feature names may use the terms established in that language, as `de.tsv` does).
 //! 2. Add one row to [`LANGUAGES`].
 //!
 //! The Options dropdown, the system-language match and the catalog tests pick it up from there.
@@ -21,11 +22,14 @@
 //! # Looking strings up
 //! - [`tl!`](crate::tl) / [`t`]: a string in the current language. [`tr`]: in a given one.
 //! - [`location`]: a ribbon location such as `Home › Font`, segment by segment.
+//! - [`t_at`]: a label at a ribbon location, for the few English words a language translates
+//!   two ways (German `Open`: `Öffnen` in File, `Offen` under Paragraph Spacing).
 //! - [`fmt`]: fill `{name}` placeholders after a lookup; translators may reorder them.
 
 mod catalog;
 
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use catalog::Catalog;
@@ -43,23 +47,51 @@ pub struct LangInfo {
     pub source: &'static str,
     /// Which CJK interface face comes first (Chinese text wants the Chinese face).
     pub prefer_hans: bool,
+    /// Lengths in centimetres with a decimal comma, as Word shows them in this language (German);
+    /// otherwise inches.
+    pub centimetres: bool,
     catalog: OnceLock<Catalog>,
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 7] = [
-    LangInfo { code: "en", name: "English", source: "", prefer_hans: false, catalog: OnceLock::new() },
+pub static LANGUAGES: [LangInfo; 8] = [
+    LangInfo { code: "en", name: "English", source: "", prefer_hans: false, centimetres: false, catalog: OnceLock::new() },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` resolve here (see `candidates`).
-    LangInfo { code: "zh-hans", name: "简体中文", source: include_str!("zh-hans.tsv"), prefer_hans: true, catalog: OnceLock::new() },
+    LangInfo {
+        code: "zh-hans",
+        name: "简体中文",
+        source: include_str!("zh-hans.tsv"),
+        prefer_hans: true,
+        centimetres: false,
+        catalog: OnceLock::new(),
+    },
     // Traditional Chinese (Taiwan vocabulary); `zh-TW`, `zh-HK`, `zh-MO` and `zh-Hant-*` resolve here.
-    LangInfo { code: "zh-hant", name: "繁體中文", source: include_str!("zh-hant.tsv"), prefer_hans: true, catalog: OnceLock::new() },
-    LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), prefer_hans: false, catalog: OnceLock::new() },
-    LangInfo { code: "uk", name: "Українська", source: include_str!("uk.tsv"), prefer_hans: false, catalog: OnceLock::new() },
+    LangInfo {
+        code: "zh-hant",
+        name: "繁體中文",
+        source: include_str!("zh-hant.tsv"),
+        prefer_hans: true,
+        centimetres: false,
+        catalog: OnceLock::new(),
+    },
+    LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), prefer_hans: false, centimetres: false, catalog: OnceLock::new() },
+    LangInfo {
+        code: "uk", name: "Українська", source: include_str!("uk.tsv"), prefer_hans: false, centimetres: false, catalog: OnceLock::new()
+    },
     // Spanish, neutral across Spain and Latin America; `es-ES`, `es-MX`, `es-419` … resolve here.
-    LangInfo { code: "es", name: "Español", source: include_str!("es.tsv"), prefer_hans: false, catalog: OnceLock::new() },
+    LangInfo { code: "es", name: "Español", source: include_str!("es.tsv"), prefer_hans: false, centimetres: false, catalog: OnceLock::new() },
     // Brazilian Portuguese; `pt-BR` and `pt-BR-*` resolve here. Plain `pt` and `pt-PT` have no
     // catalog yet (the European vocabulary differs), so they stay in English.
-    LangInfo { code: "pt-br", name: "Português (Brasil)", source: include_str!("pt-br.tsv"), prefer_hans: false, catalog: OnceLock::new() },
+    LangInfo {
+        code: "pt-br",
+        name: "Português (Brasil)",
+        source: include_str!("pt-br.tsv"),
+        prefer_hans: false,
+        centimetres: false,
+        catalog: OnceLock::new(),
+    },
+    // German; `de-DE`, `de-AT`, `de-CH` and the other regions resolve here.
+    LangInfo { code: "de", name: "Deutsch", source: include_str!("de.tsv"), prefer_hans: false, centimetres: true, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
@@ -205,6 +237,17 @@ pub fn current() -> Lang {
     CURRENT.get()
 }
 
+/// The date part of an ISO timestamp (`2026-10-10T09:30:00Z`) as the current language writes a
+/// short date: `10.10.2026` in German; other languages keep `2026-10-10`.
+pub fn short_date(iso: &str) -> String {
+    let date = iso.get(..10).unwrap_or(iso);
+    let mut parts = date.split('-');
+    match (current().code(), parts.next(), parts.next(), parts.next()) {
+        ("de", Some(y), Some(m), Some(d)) if y.len() == 4 && m.len() == 2 && d.len() == 2 => format!("{d}.{m}.{y}"),
+        _ => date.to_string(),
+    }
+}
+
 /// Does `lang` have a catalog entry for this string? (English never does: it is the source.)
 pub fn has(lang: Lang, s: &str) -> bool {
     lang.catalog().plain(s).is_some()
@@ -220,9 +263,69 @@ pub fn tr(lang: Lang, s: &str) -> &str {
     lang.catalog().plain(s).unwrap_or(s)
 }
 
+/// The unit lengths are shown in (rulers, indent and margin fields, paper sizes).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LengthUnit {
+    /// Points per unit.
+    pub points: f32,
+    pub suffix: &'static str,
+    /// Drag speed of a length field, in units.
+    pub speed: f64,
+    /// Ruler ticks per unit (eighths of an inch, quarters of a centimetre).
+    pub ruler_steps: i32,
+    pub decimal_comma: bool,
+}
+
+impl LengthUnit {
+    pub const INCHES: LengthUnit = LengthUnit { points: 72.0, suffix: "\"", speed: 0.05, ruler_steps: 8, decimal_comma: false };
+    pub const CENTIMETRES: LengthUnit = LengthUnit { points: 72.0 / 2.54, suffix: " cm", speed: 0.1, ruler_steps: 4, decimal_comma: true };
+
+    /// A number in this unit's notation, with at most `decimals` decimals (`2,5` in German).
+    pub fn number(self, value: f64, decimals: usize) -> String {
+        let s = format!("{value:.decimals$}");
+        let s = if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.').to_string() } else { s };
+        if self.decimal_comma { s.replace('.', ",") } else { s }
+    }
+
+    /// Read a number typed in this unit's notation (a decimal comma is fine in either).
+    pub fn parse(self, text: &str) -> Option<f64> {
+        text.trim().trim_end_matches(self.suffix.trim()).trim().replace(',', ".").parse().ok()
+    }
+}
+
+/// The length unit of the current language.
+pub fn length_unit() -> LengthUnit {
+    if current().0.centimetres { LengthUnit::CENTIMETRES } else { LengthUnit::INCHES }
+}
+
 /// A ribbon location (`Home › Font`) in the current language, segment by segment.
 pub fn location(loc: &str) -> String {
     loc.split(" › ").map(t).collect::<Vec<_>>().join(" › ")
+}
+
+/// `s` as labelled at a ribbon location (`Home › Font › Text Effects`): a catalog entry scoped
+/// to the location's last segment (`Text Effects › Outline`) wins over the plain one. Only the
+/// few English words a language needs to translate two ways have scoped entries.
+pub fn t_at(location: &str, s: &str) -> String {
+    let group = location.rsplit(" › ").next().unwrap_or(location);
+    let lang = current();
+    match lang.catalog().plain(&format!("{group} › {s}")) {
+        Some(scoped) => scoped.to_string(),
+        None => tr(lang, s).to_string(),
+    }
+}
+
+/// A style's name for display. Built-in styles (`Normal`, `Heading 1`, `Title` …) show their
+/// name in the interface language, as Word does; documents keep the English names, and styles
+/// people name themselves are never translated. Word files store some built-in names in lower
+/// case (`heading 1`, `toc 1`), so the match ignores case.
+pub fn style_name(name: &str) -> &str {
+    static BUILTIN: OnceLock<HashMap<String, String>> = OnceLock::new();
+    let builtin = BUILTIN.get_or_init(|| wordcraft_doc::StyleSheet::builtin().styles.into_iter().map(|s| (s.name.to_lowercase(), s.name)).collect());
+    match builtin.get(&name.to_lowercase()) {
+        Some(canonical) => t(canonical),
+        None => name,
+    }
 }
 
 /// A label with an action after a fixed English prefix, e.g. `Undo Typing`: both parts translated

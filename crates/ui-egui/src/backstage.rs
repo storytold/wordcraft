@@ -113,10 +113,12 @@ fn template_tile(ui: &mut Ui, app: &mut WordApp, label: &str, template: &str) {
             egui::StrokeKind::Inside,
         );
         let ppp = ui.ctx().pixels_per_point();
-        let key = format!("tpl:{template}:{ppp}");
+        // Templates are written in the interface language where there is one (German), as in Word.
+        let language = crate::i18n::current().code();
+        let key = format!("tpl:{template}:{language}:{ppp}");
         let tex = ui.ctx().data(|d| d.get_temp::<egui::TextureHandle>(egui::Id::new(&key))).or_else(|| {
             let mut s = wordcraft_engine::Session::new(wordcraft_doc::Document::new());
-            let _ = s.run("file.new", &json!({"template": template}));
+            let _ = s.run("file.new", &json!({"template": template, "language": language}));
             let l = s.export_layout();
             let page = l.pages.first()?;
             let img = wordcraft_render::render_page(&s.doc, page, 150.0 / page.w * ppp, &crate::canvas::screen_render_options());
@@ -134,7 +136,7 @@ fn template_tile(ui: &mut Ui, app: &mut WordApp, label: &str, template: &str) {
         }
         ui.label(egui::RichText::new(tl!(label)).font(regular(12.5)));
         if resp.clicked() {
-            let _ = app.run("file.new", json!({"template": template}));
+            let _ = app.run("file.new", json!({"template": template, "language": language}));
             app.ui.backstage = false;
             app.canvas.want_focus = true;
         }
@@ -242,7 +244,7 @@ fn export_page(app: &mut WordApp, ui: &mut Ui) {
         ("Page image (*.png)", "png"),
     ] {
         if ui.add(egui::Button::new(egui::RichText::new(tl!(label)).font(medium(13.5))).min_size(vec2(320.0, 34.0))).clicked() {
-            let name = format!("{}.{ext}", app.title_stem());
+            let name = format!("{}.{ext}", app.display_title());
             let picked = app.services.pick_save.as_ref().and_then(|f| f(&name));
             if let Some(path) = picked {
                 let r = if ext == "png" { app.run("file.exportPng", json!({"path": path})) } else { app.run("file.saveAs", json!({"path": path})) };

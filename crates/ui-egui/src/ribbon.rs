@@ -201,7 +201,9 @@ fn stack(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
 fn mi(ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: Value) {
     let sc = crate::widgets::shortcut_text(app, id);
     let enabled = crate::widgets::enabled(app, id);
-    let resp = ui.add_enabled(enabled, egui::Button::new(tl!(label)).shortcut_text(sc).min_size(vec2(200.0, 0.0)));
+    let location = app.session.registry.get(id).map(|s| s.location).unwrap_or("");
+    let label = crate::i18n::t_at(location, label);
+    let resp = ui.add_enabled(enabled, egui::Button::new(label).shortcut_text(sc).min_size(vec2(200.0, 0.0)));
     if resp.clicked() {
         let _ = app.run(id, params);
         ui.close();
@@ -361,7 +363,8 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                     mi(ui, app, "I. A. 1. a.", "para.multilevel", json!({"kind": "outline"}));
                     ui.separator();
                     for lv in 0..5u64 {
-                        mi(ui, app, &format!("Change to Level {}", lv + 1), "para.listLevel", json!({"level": lv}));
+                        let level = (lv + 1).to_string();
+                        mi(ui, app, &crate::i18n::fmt(tl!("Change to Level {level}"), &[("level", &level)]), "para.listLevel", json!({"level": lv}));
                     }
                 });
                 ui.add_space(4.0);
@@ -663,7 +666,9 @@ fn layout(app: &mut WordApp, ui: &mut Ui) {
         });
         menu_button(ui, app, "size", Some("Size"), "Size", true, |ui, app| {
             for (n, w, h) in wordcraft_geom::PAPER_SIZES {
-                mi(ui, app, &format!("{n}   {:.2}\" × {:.2}\"", w / 72.0, h / 72.0), "layout.size", json!({"name": n}));
+                let u = crate::i18n::length_unit();
+                let size = |pt: f32| if u.decimal_comma { u.number(f64::from(pt / u.points), 1) } else { format!("{:.2}", pt / u.points) };
+                mi(ui, app, &format!("{n}   {}{} × {}{}", size(*w), u.suffix, size(*h), u.suffix), "layout.size", json!({"name": n}));
             }
         });
         menu_button(ui, app, "columns", Some("Columns"), "Columns", true, |ui, app| {
@@ -702,17 +707,20 @@ fn layout(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Paragraph", Some("para.dialog"), app, |ui, app| {
         let rp = app.session.doc.para_at(&app.session.sel.focus).map(|p| app.session.doc.styles.resolve_para(&p.props));
         let Some(rp) = rp else { return };
-        egui::Grid::new("layout_para").spacing(vec2(6.0, 4.0)).show(ui, |ui| {
+        // Two rows of fields under their headings fit the ribbon's content height.
+        egui::Grid::new("layout_para").spacing(vec2(6.0, 1.0)).show(ui, |ui| {
             ui.label(egui::RichText::new(tl!("Indent")).small().strong());
             ui.label("");
             ui.label(egui::RichText::new(tl!("Spacing")).small().strong());
             ui.end_row();
-            let mut l = rp.indent_left / 72.0;
+            let unit = crate::i18n::length_unit().points;
+            let indent_range = -792.0 / unit..=1584.0 / unit;
+            let mut l = rp.indent_left / unit;
             let mut b = rp.space_before;
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(tl!("Left:")).small());
-                if ui.add(egui::DragValue::new(&mut l).speed(0.05).range(-11.0..=22.0).suffix("\"").max_decimals(2)).changed() {
-                    let _ = app.run("para.indents", json!({"left": l * 72.0}));
+                if ui.add(crate::widgets::length_value(&mut l).range(indent_range.clone())).changed() {
+                    let _ = app.run("para.indents", json!({"left": l * unit}));
                 }
             });
             ui.label("");
@@ -723,12 +731,12 @@ fn layout(app: &mut WordApp, ui: &mut Ui) {
                 }
             });
             ui.end_row();
-            let mut r = rp.indent_right / 72.0;
+            let mut r = rp.indent_right / unit;
             let mut a = rp.space_after;
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(tl!("Right:")).small());
-                if ui.add(egui::DragValue::new(&mut r).speed(0.05).range(-11.0..=22.0).suffix("\"").max_decimals(2)).changed() {
-                    let _ = app.run("para.indents", json!({"right": r * 72.0}));
+                if ui.add(crate::widgets::length_value(&mut r).range(indent_range)).changed() {
+                    let _ = app.run("para.indents", json!({"right": r * unit}));
                 }
             });
             ui.label("");
@@ -768,7 +776,7 @@ fn references(app: &mut WordApp, ui: &mut Ui) {
             menu_button(ui, app, "addText", Some("Add Text"), "Add Text", false, |ui, app| {
                 mi(ui, app, "Do Not Show in TOC", "references.addText", json!({"level": 0}));
                 for l in 1..=3u64 {
-                    mi(ui, app, &format!("Level {l}"), "references.addText", json!({"level": l}));
+                    mi(ui, app, &crate::i18n::fmt(tl!("Level {level}"), &[("level", &l.to_string())]), "references.addText", json!({"level": l}));
                 }
             });
             small(ui, app, "updateTable", Some("Update Table"), "Update Table", "references.updateToc", json!({}), false);

@@ -166,11 +166,12 @@ impl Dialog {
                     wordcraft_doc::props::LineSpacing::Multiple(m) => m,
                     _ => 1.0,
                 };
+                let unit = crate::i18n::length_unit().points;
                 Dialog::Paragraph {
                     align: format!("{:?}", rp.align).to_lowercase(),
-                    left: rp.indent_left / 72.0,
-                    right: rp.indent_right / 72.0,
-                    first: rp.indent_first / 72.0,
+                    left: rp.indent_left / unit,
+                    right: rp.indent_right / unit,
+                    first: rp.indent_first / unit,
                     before: rp.space_before,
                     after: rp.space_after,
                     line,
@@ -193,11 +194,12 @@ impl Dialog {
             "insertTable" => Dialog::InsertTable { rows: 2, cols: 5 },
             "pageSetup" => {
                 let sp = wordcraft_engine::cmd::page::sect(&app.session);
+                let unit = crate::i18n::length_unit().points;
                 Dialog::PageSetup {
-                    top: sp.margin_top / 72.0,
-                    bottom: sp.margin_bottom / 72.0,
-                    left: sp.margin_left / 72.0,
-                    right: sp.margin_right / 72.0,
+                    top: sp.margin_top / unit,
+                    bottom: sp.margin_bottom / unit,
+                    left: sp.margin_left / unit,
+                    right: sp.margin_right / unit,
                     landscape: sp.landscape,
                 }
             }
@@ -430,12 +432,12 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             ui.label(egui::RichText::new(tl!("Indentation")).font(semibold(12.5)));
             egui::Grid::new("ind").num_columns(4).show(ui, |ui| {
                 ui.label(tl!("Left:"));
-                ui.add(egui::DragValue::new(left).speed(0.05).suffix("\"").max_decimals(2));
+                ui.add(crate::widgets::length_value(left));
                 ui.label(tl!("Right:"));
-                ui.add(egui::DragValue::new(right).speed(0.05).suffix("\"").max_decimals(2));
+                ui.add(crate::widgets::length_value(right));
                 ui.end_row();
                 ui.label(tl!("First line:"));
-                ui.add(egui::DragValue::new(first).speed(0.05).suffix("\"").max_decimals(2));
+                ui.add(crate::widgets::length_value(first));
                 ui.end_row();
             });
             ui.label(egui::RichText::new(tl!("Spacing")).font(semibold(12.5)));
@@ -456,11 +458,12 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             ui.checkbox(page_break, tl!("Page break before"));
             let (ok, cancel) = buttons(ui, tl!("OK"));
             if ok {
+                let unit = crate::i18n::length_unit().points;
                 let _ = app.run("para.align", json!({"value": align}));
                 let _ = app.run(
                     "para.set",
                     json!({"props": {
-                        "indentLeft": *left * 72.0, "indentRight": *right * 72.0, "indentFirst": *first * 72.0,
+                        "indentLeft": *left * unit, "indentRight": *right * unit, "indentFirst": *first * unit,
                         "spaceBefore": *before, "spaceAfter": *after, "lineSpacing": {"rule": "multiple", "value": *line},
                         "keepNext": *keep_next, "keepLines": *keep_lines, "pageBreakBefore": *page_break, "widowControl": *widow,
                     }}),
@@ -501,7 +504,9 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 if *replace_mode {
                     if ui.button(tl!("Replace All")).clicked() {
                         match app.run("edit.replaceAll", opts.clone()) {
-                            Ok(r) => *message = format!("All done. We made {} replacements.", r["replaced"]),
+                            Ok(r) => {
+                                *message = crate::i18n::fmt(tl!("All done. We made {count} replacements."), &[("count", &r["replaced"].to_string())])
+                            }
                             Err(e) => *message = e,
                         }
                     }
@@ -512,7 +517,10 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 if ui.button(tl!("Find Next")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     let _ = app.session.run("edit.find", &opts);
                     match app.run("edit.findNext", json!({})) {
-                        Ok(r) => *message = format!("Match {} of {}", r["index"].as_u64().unwrap_or(0) + 1, r["count"]),
+                        Ok(r) => {
+                            let index = r["index"].as_u64().unwrap_or(0).saturating_add(1).to_string();
+                            *message = crate::i18n::fmt(tl!("Match {index} of {count}"), &[("index", &index), ("count", &r["count"].to_string())]);
+                        }
                         Err(e) => *message = e,
                     }
                 }
@@ -552,14 +560,14 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             ui.label(egui::RichText::new(tl!("Margins")).font(semibold(12.5)));
             egui::Grid::new("ps").num_columns(4).show(ui, |ui| {
                 ui.label(tl!("Top:"));
-                ui.add(egui::DragValue::new(top).speed(0.05).suffix("\"").max_decimals(2));
+                ui.add(crate::widgets::length_value(top));
                 ui.label(tl!("Bottom:"));
-                ui.add(egui::DragValue::new(bottom).speed(0.05).suffix("\"").max_decimals(2));
+                ui.add(crate::widgets::length_value(bottom));
                 ui.end_row();
                 ui.label(tl!("Left:"));
-                ui.add(egui::DragValue::new(left).speed(0.05).suffix("\"").max_decimals(2));
+                ui.add(crate::widgets::length_value(left));
                 ui.label(tl!("Right:"));
-                ui.add(egui::DragValue::new(right).speed(0.05).suffix("\"").max_decimals(2));
+                ui.add(crate::widgets::length_value(right));
                 ui.end_row();
             });
             ui.label(egui::RichText::new(tl!("Orientation")).font(semibold(12.5)));
@@ -569,9 +577,10 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             });
             let (ok, cancel) = buttons(ui, tl!("OK"));
             if ok {
+                let unit = crate::i18n::length_unit().points;
                 let _ = app.run("layout.orientation", json!({"value": if *landscape { "landscape" } else { "portrait" }}));
                 let _ =
-                    app.run("layout.margins", json!({"top": *top * 72.0, "bottom": *bottom * 72.0, "left": *left * 72.0, "right": *right * 72.0}));
+                    app.run("layout.margins", json!({"top": *top * unit, "bottom": *bottom * unit, "left": *left * unit, "right": *right * unit}));
             }
             ok || cancel
         }
@@ -730,7 +739,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 .filter(|c| {
                     !q.is_empty()
                         && (c.label.to_lowercase().contains(&q)
-                            || tl!(c.label).to_lowercase().contains(&q)
+                            || crate::i18n::t_at(c.location, c.label).to_lowercase().contains(&q)
                             || c.id.to_lowercase().contains(&q)
                             || c.location.to_lowercase().contains(&q)
                             || crate::i18n::location(c.location).to_lowercase().contains(&q))
@@ -740,7 +749,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             let mut close = false;
             for c in hits {
                 let sc = crate::widgets::shortcut_text(app, c.id);
-                let label = format!("{}   —   {}", tl!(c.label), crate::i18n::location(c.location));
+                let label = format!("{}   —   {}", crate::i18n::t_at(c.location, c.label), crate::i18n::location(c.location));
                 if ui.add(egui::Button::new(label).shortcut_text(sc).min_size(vec2(380.0, 0.0))).clicked() {
                     let _ = app.run(c.id, json!({}));
                     close = true;

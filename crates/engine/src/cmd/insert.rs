@@ -6,6 +6,7 @@ use wordcraft_doc::props::{Align, CharProps, Rgb, TabAlign, TabStop, TextColor};
 use wordcraft_doc::{Block, Paragraph, PartKind, Path, Pos, StoryRef, Table, para_block};
 
 use super::{delete_selection, sel_result, split_para, type_text};
+use crate::sample::Lang;
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -22,7 +23,8 @@ pub fn specs() -> Vec<CommandSpec> {
             s.sel = Selection::caret(at);
             sel_result(s)
         }),
-        CommandSpec::new("insert.coverPage", "Cover Page", "Insert › Pages", cover_page).params(r#"{"title"?: string, "subtitle"?: string, "author"?: string}"#),
+        CommandSpec::new("insert.coverPage", "Cover Page", "Insert › Pages", cover_page)
+            .params(r#"{"title"?: string, "subtitle"?: string, "author"?: string, "language"?: "de" (date as 10. Oktober 2026)}"#),
         CommandSpec::new("insert.table", "Table", "Insert › Tables", table).params(r#"{"rows": n, "cols": n, "style"?: string}"#),
         CommandSpec::new("insert.picture", "Pictures", "Insert › Illustrations", picture).params(r#"{"path"?: string, "data"?: base64, "width"?: pt, "alt"?: string}"#),
         CommandSpec::new("insert.shape", "Shapes", "Insert › Illustrations", shape)
@@ -62,7 +64,8 @@ pub fn specs() -> Vec<CommandSpec> {
             s.doc.last_section.footers = Default::default();
             sel_result(s)
         }),
-        CommandSpec::new("insert.dateTime", "Date & Time", "Insert › Text", date_time).params(r#"{"format"?: "M/d/yyyy", "update"?: bool}"#),
+        CommandSpec::new("insert.dateTime", "Date & Time", "Insert › Text", date_time)
+            .params(r#"{"format"?: "M/d/yyyy" (German: "dd.MM.yyyy"), "update"?: bool, "language"?: "de"}"#),
         CommandSpec::new("insert.symbol", "Symbol", "Insert › Symbols", |s, v| {
             let c = p::req_str(v, "char")?;
             type_text(s, c)?;
@@ -427,9 +430,24 @@ fn page_number(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"story": id}))
 }
 
+/// The language dates are written in: the call's `language`, else the session's (the app's
+/// interface language; English for headless sessions).
+fn date_lang(s: &Session, v: &Value) -> Lang {
+    Lang::from_tag(p::str(v, "language").unwrap_or(&s.template_language))
+}
+
+/// Word's default date picture in a language: `10/10/2026`, or `10.10.2026` in German.
+pub(crate) fn default_date_picture(lang: Lang) -> &'static str {
+    match lang {
+        Lang::English => "M/d/yyyy",
+        Lang::German => "dd.MM.yyyy",
+    }
+}
+
 fn date_time(s: &mut Session, v: &Value) -> CmdResult {
-    let fmt = p::str(v, "format").unwrap_or("M/d/yyyy");
-    let text = format_date(fmt);
+    let lang = date_lang(s, v);
+    let fmt = p::str(v, "format").unwrap_or(default_date_picture(lang));
+    let text = format_date_in(fmt, lang);
     if p::bool(v, "update").unwrap_or(false) {
         let props = s.typing_props();
         let at = delete_selection(s)?;
@@ -443,6 +461,11 @@ fn date_time(s: &mut Session, v: &Value) -> CmdResult {
 
 /// Format today's date with a Word picture (`M/d/yyyy`, `MMMM d, yyyy`, `yyyy-MM-dd`, `dddd`…).
 pub fn format_date(fmt: &str) -> String {
+    format_date_in(fmt, Lang::English)
+}
+
+/// [`format_date`] with month and day names in `lang` (`Oktober`, `Samstag`, `Okt`, `Sa`).
+pub fn format_date_in(fmt: &str, lang: Lang) -> String {
     let iso = super::now_iso();
     let y: i64 = iso.get(0..4).and_then(|x| x.parse().ok()).unwrap_or(2026);
     let m: usize = iso.get(5..7).and_then(|x| x.parse().ok()).unwrap_or(1);
@@ -452,6 +475,14 @@ pub fn format_date(fmt: &str) -> String {
     const MONTHS: [&str; 12] =
         ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
     const DAYS: [&str; 7] = ["Thursday", "Friday", "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday"];
+    const DE_MONTHS: [&str; 12] =
+        ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
+    const DE_DAYS: [&str; 7] = ["Donnerstag", "Freitag", "Samstag", "Sonntag", "Montag", "Dienstag", "Mittwoch"];
+    let (months, days, day_abbr) = match lang {
+        Lang::English => (MONTHS, DAYS, 3),
+        // German abbreviates days to two letters (`Sa`) and months to three (`Okt`).
+        Lang::German => (DE_MONTHS, DE_DAYS, 2),
+    };
     let days_since = {
         // Days since epoch for weekday.
         let secs = {
@@ -466,8 +497,9 @@ pub fn format_date(fmt: &str) -> String {
         };
         (secs / 86_400) as usize
     };
-    let month = MONTHS.get(m.saturating_sub(1)).copied().unwrap_or("January");
-    let day = DAYS.get(days_since % 7).copied().unwrap_or("Monday");
+    let month = months.get(m.saturating_sub(1)).copied().unwrap_or("January");
+    let day = days.get(days_since % 7).copied().unwrap_or("Monday");
+    let abbr = |name: &'static str, n: usize| name.char_indices().nth(n).map_or(name, |(i, _)| name.get(..i).unwrap_or(name));
     let mut out = String::new();
     let chars: Vec<char> = fmt.chars().collect();
     let mut i = 0;
@@ -481,11 +513,11 @@ pub fn format_date(fmt: &str) -> String {
             ('y', 4..) => out.push_str(&format!("{y:04}")),
             ('y', _) => out.push_str(&format!("{:02}", y % 100)),
             ('M', 4..) => out.push_str(month),
-            ('M', 3) => out.push_str(month.get(..3).unwrap_or(month)),
+            ('M', 3) => out.push_str(abbr(month, 3)),
             ('M', 2) => out.push_str(&format!("{m:02}")),
             ('M', 1) => out.push_str(&m.to_string()),
             ('d', 4..) => out.push_str(day),
-            ('d', 3) => out.push_str(day.get(..3).unwrap_or(day)),
+            ('d', 3) => out.push_str(abbr(day, day_abbr)),
             ('d', 2) => out.push_str(&format!("{d:02}")),
             ('d', 1) => out.push_str(&d.to_string()),
             ('H', 2..) => out.push_str(&format!("{hh:02}")),
@@ -541,7 +573,12 @@ fn cover_page(s: &mut Session, v: &Value) -> CmdResult {
     }
     blocks
         .push(Block::Para(Paragraph::with_text(&author, CharProps { bold: Some(true), color: Some(TextColor::Rgb(accent)), ..Default::default() })));
-    let mut date = Paragraph::with_text(&format_date("MMMM d, yyyy"), CharProps::default());
+    let lang = date_lang(s, v);
+    let picture = match lang {
+        Lang::English => "MMMM d, yyyy",
+        Lang::German => "d. MMMM yyyy",
+    };
+    let mut date = Paragraph::with_text(&format_date_in(picture, lang), CharProps::default());
     date.insert_text(date.len(), "\u{000C}", &CharProps::default())?;
     blocks.push(Block::Para(date));
     let frag = wordcraft_doc::edit::Fragment { blocks };
@@ -569,5 +606,25 @@ mod tests {
         let d = format_date("yyyy-MM-dd");
         assert_eq!(d.len(), 10);
         assert!(format_date("MMMM d, yyyy").contains(", "));
+    }
+
+    #[test]
+    fn german_date_pictures() {
+        const MONTHS: [&str; 12] =
+            ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
+        const DAYS: [&str; 7] = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"];
+        let short = format_date_in("dd.MM.yyyy", Lang::German);
+        let b = short.as_bytes();
+        assert!(short.len() == 10 && b[2] == b'.' && b[5] == b'.', "{short}");
+        assert!(MONTHS.contains(&format_date_in("MMMM", Lang::German).as_str()));
+        assert!(DAYS.contains(&format_date_in("dddd", Lang::German).as_str()));
+        let abbr = format_date_in("ddd", Lang::German);
+        assert!(DAYS.iter().any(|d| d.starts_with(&abbr)) && abbr.chars().count() == 2, "{abbr}");
+        let long = format_date_in("d. MMMM yyyy", Lang::German);
+        assert!(MONTHS.iter().any(|m| long.contains(m)), "{long}");
+        // English is unchanged.
+        assert_eq!(format_date_in("yyyy-MM-dd", Lang::English), format_date("yyyy-MM-dd"));
+        assert_eq!(default_date_picture(Lang::German), "dd.MM.yyyy");
+        assert_eq!(default_date_picture(Lang::English), "M/d/yyyy");
     }
 }

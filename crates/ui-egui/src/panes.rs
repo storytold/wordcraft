@@ -146,8 +146,11 @@ fn styles(app: &mut WordApp, ui: &mut Ui) {
     let st = app.session.run("format.state", &json!({})).unwrap_or_default();
     let cur = st.get("style").and_then(Value::as_str).unwrap_or("Normal").to_string();
     ui.label(
-        egui::RichText::new(crate::i18n::fmt(tl!("Current style: {style}"), &[("style", st.get("styleName").and_then(Value::as_str).unwrap_or(""))]))
-            .small(),
+        egui::RichText::new(crate::i18n::fmt(
+            tl!("Current style: {style}"),
+            &[("style", crate::i18n::style_name(st.get("styleName").and_then(Value::as_str).unwrap_or("")))],
+        ))
+        .small(),
     );
     ui.horizontal(|ui| {
         if ui.button(tl!("New Style…")).clicked() {
@@ -168,7 +171,7 @@ fn styles(app: &mut WordApp, ui: &mut Ui) {
         .styles
         .iter()
         .filter(|s| !s.hidden && s.kind != wordcraft_doc::StyleKind::Table)
-        .map(|s| (s.id.clone(), s.name.clone(), s.kind == wordcraft_doc::StyleKind::Character))
+        .map(|s| (s.id.clone(), crate::i18n::style_name(&s.name).to_string(), s.kind == wordcraft_doc::StyleKind::Character))
         .collect();
     list.sort_by_key(|s| s.1.to_lowercase());
     egui::ScrollArea::vertical().show(ui, |ui| {
@@ -223,7 +226,7 @@ fn comments(app: &mut WordApp, ui: &mut Ui) {
                 }
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(c.get("author").and_then(Value::as_str).unwrap_or("")).font(semibold(12.0)));
-                    ui.label(egui::RichText::new(c.get("date").and_then(Value::as_str).unwrap_or("").get(..10).unwrap_or("")).small().weak());
+                    ui.label(egui::RichText::new(crate::i18n::short_date(c.get("date").and_then(Value::as_str).unwrap_or(""))).small().weak());
                     if c.get("resolved").and_then(Value::as_bool).unwrap_or(false) {
                         ui.label(egui::RichText::new(tl!("Resolved")).small().color(t.green));
                     }

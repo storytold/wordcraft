@@ -23,6 +23,13 @@ list (author, source, license) is in ATTRIBUTION.md.
 - English word list (assets/hyphenation/en-us.dic) — derived from the Moby Hyphenator II list by
   Grady Ward, public domain (Project Gutenberg eBook #3204). The hyphenation patterns
   (assets/hyphenation/en-us.pat) were trained from it and are released as CC0-1.0.
+- German word list (assets/spelling/de.words) — word forms from LanguageTool's German
+  part-of-speech dictionary (german-pos-dict 1.2.4, Daniel Naber and contributors; data based on
+  Morphy and korrekturen.de) and from german-nouns (Gregor Weichbrodt; compiled from German
+  Wiktionary), both CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/), with a few
+  words added by WordCraft contributors (assets/spelling/de-extra.txt). Changes: part-of-speech
+  data removed, the forms merged, filtered to single words and stored compressed. The list
+  itself is shared under CC BY-SA 4.0 as well.
 - All UI icons are drawn in code (crates/ui-egui/src/icons.rs) and are original work, MIT OR Apache-2.0.
 
 Rust dependencies (egui, eframe, vello_cpu, skrifa, harfrust, krilla, quick-xml, zip, image, …)

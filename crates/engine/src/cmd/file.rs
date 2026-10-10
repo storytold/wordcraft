@@ -8,7 +8,10 @@ use crate::{CmdError, CmdResult, CommandSpec, Session, p};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("file.new", "New", "File", new).key("Mod+N").params(r#"{"template"?: "blank|sample|letter|resume|report"}"#).pure(),
+        CommandSpec::new("file.new", "New", "File", new)
+            .key("Mod+N")
+            .params(r#"{"template"?: "blank|sample|letter|resume|report", "language"?: "en|de" (default: the session's template language)}"#)
+            .pure(),
         CommandSpec::new("file.open", "Open", "File", open).key("Mod+O").params(r#"{"path": string}"#).pure(),
         CommandSpec::new("file.save", "Save", "File", save).key("Mod+S").params(r#"{"path"?: string}"#).pure(),
         CommandSpec::new("file.saveAs", "Save As", "File", save_as).key("F12").params(r#"{"path": string}"#).pure(),
@@ -77,13 +80,8 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 fn new(s: &mut Session, v: &Value) -> CmdResult {
-    let doc = match p::str(v, "template").unwrap_or("blank") {
-        "sample" => crate::sample::sample_document(),
-        "letter" => crate::sample::letter(),
-        "resume" => crate::sample::resume(),
-        "report" => crate::sample::report(),
-        _ => Document::new(),
-    };
+    let lang = crate::sample::Lang::from_tag(p::str(v, "language").unwrap_or(&s.template_language));
+    let doc = crate::sample::template(p::str(v, "template").unwrap_or("blank"), lang);
     s.set_document(doc);
     s.path = None;
     sel_result(s)
