@@ -766,7 +766,7 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool) -> Vec<u8> {
     }
     w.val("w:characterSpacingControl", "doNotCompress");
     for (tag, fmt, used, el) in
-        [("w:footnotePr", s.footnote_format, footnotes, "w:footnote"), ("w:endnotePr", s.endnote_format, endnotes, "w:endnote")]
+        [("w:footnotePr", s.footnote_format.clone(), footnotes, "w:footnote"), ("w:endnotePr", s.endnote_format.clone(), endnotes, "w:endnote")]
     {
         w.open(tag, &[]);
         w.val("w:numFmt", fmt.ooxml());

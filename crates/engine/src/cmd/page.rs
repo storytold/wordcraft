@@ -72,13 +72,13 @@ pub fn specs() -> Vec<CommandSpec> {
             let fmt = p::str(v, "format").map(wordcraft_doc::section::NumFormat::from_ooxml);
             let start = p::u64(v, "start").map(|x| x.min(100_000) as u32);
             with_sect(s, |x| {
-                if let Some(f) = fmt {
+                if let Some(f) = fmt.clone() {
                     x.page_num_format = f;
                 }
                 x.page_num_start = start;
             })
         })
-        .params(r#"{"format"?: "decimal|lowerRoman|upperRoman|lowerLetter|upperLetter", "start"?: n}"#),
+        .params(r#"{"format"?: "decimal|lowerRoman|upperRoman|lowerLetter|upperLetter|arabicAlpha|arabicAbjad|hindiNumbers", "start"?: n}"#),
         CommandSpec::new("layout.section", "Section Properties", "Layout › Page Setup", |s, _| {
             Ok(serde_json::to_value(sect(s)).unwrap_or(Value::Null))
         })

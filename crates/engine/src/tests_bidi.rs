@@ -257,3 +257,28 @@ fn rtl_table_layout_mirrors_columns_but_keeps_reading_order() {
     run(&mut s, "text.backTab", json!({}));
     assert_eq!(s.sel.focus.path.0, vec![0, 0, 0, 0]);
 }
+
+#[test]
+fn arabic_numbering_commands_reach_lists_and_page_fields() {
+    use wordcraft_doc::section::NumFormat;
+    let mut s = session("أول\nثان\nثالث", false);
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "para.defineNumber", json!({"format": "arabicAbjad"}));
+    let num = s.doc.para(StoryRef::Body, &Path::top(0)).unwrap().props.numbering.unwrap().num;
+    assert_eq!(s.doc.numbering.level(num, 0).map(|l| l.format.clone()), Some(NumFormat::ArabicAbjad));
+    // Restart keeps the chosen format.
+    run(&mut s, "para.restartNumbering", json!({}));
+    run(&mut s, "layout.pageNumberFormat", json!({"format": "hindiNumbers"}));
+    assert_eq!(s.doc.last_section.page_num_format, NumFormat::HindiNumbers);
+    let l = s.layout();
+    let mut labels = Vec::new();
+    for it in &l.pages[0].items {
+        if let crate::layout::Placed::Lines { para, .. } = it
+            && let Some(label) = &para.label
+        {
+            labels.push(label.text.clone());
+        }
+    }
+    labels.dedup();
+    assert_eq!(labels, ["ا.", "ب.", "ا."], "abjad counting survives restart: {labels:?}");
+}

@@ -34,6 +34,46 @@ fn doc_with(blocks: Vec<Paragraph>) -> Document {
     d
 }
 
+/// A part of a written package (numbering, settings, …).
+fn part_xml(bytes: &[u8], name: &str) -> String {
+    use std::io::Read as _;
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut s = String::new();
+    z.by_name(name).unwrap().read_to_string(&mut s).unwrap();
+    s
+}
+
+#[test]
+fn arabic_numbering_formats_round_trip() {
+    let mut d = Document::new();
+    let id = d.numbering.add_list(ListKind::Numbered);
+    if let Some(a) = d.numbering.abstract_of(id).map(|a| a.id)
+        && let Some(abs) = d.numbering.abstracts.iter_mut().find(|x| x.id == a)
+        && let Some(l) = abs.levels.first_mut()
+    {
+        l.format = NumFormat::ArabicAbjad;
+    }
+    d.last_section.page_num_format = NumFormat::HindiNumbers;
+    d.last_section.page_num_start = Some(3);
+    d.settings.footnote_format = NumFormat::ArabicAlpha;
+    // An unimplemented identifier is preserved, not replaced.
+    d.settings.endnote_format = NumFormat::Custom("thaiNumbers".into());
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let numbering = part_xml(&bytes, "word/numbering.xml");
+    assert!(numbering.contains(r#"w:val="arabicAbjad""#), "list format identifier: {numbering}");
+    let document = part_xml(&bytes, "word/document.xml");
+    assert!(document.contains(r#"w:fmt="hindiNumbers""#), "page number identifier: {document}");
+    let settings = part_xml(&bytes, "word/settings.xml");
+    assert!(settings.contains(r#"w:val="arabicAlpha""#), "footnote identifier: {settings}");
+    assert!(settings.contains(r#"w:val="thaiNumbers""#), "unknown identifier preserved: {settings}");
+    let r = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(r.numbering.level(id, 0).map(|l| l.format.clone()), Some(NumFormat::ArabicAbjad));
+    assert_eq!(r.last_section.page_num_format, NumFormat::HindiNumbers);
+    assert_eq!(r.last_section.page_num_start, Some(3));
+    assert_eq!(r.settings.footnote_format, NumFormat::ArabicAlpha);
+    assert_eq!(r.settings.endnote_format, NumFormat::Custom("thaiNumbers".into()));
+}
+
 /// A paragraph built from (text, props) runs.
 fn para_runs(runs: &[(&str, CharProps)]) -> Paragraph {
     let mut p = Paragraph::new();
@@ -1035,7 +1075,7 @@ fn list_level_overrides_round_trip() {
     let n = back.numbering.num(restart).unwrap();
     assert_eq!(n.level_overrides.len(), 1);
     let (lvl, got) = &n.level_overrides[0];
-    assert_eq!((*lvl, got.format, got.text.as_str(), got.indent, got.hanging), (1, NumFormat::DecimalZero, "%1.%2", 26.5, 26.5));
+    assert_eq!((*lvl, got.format.clone(), got.text.as_str(), got.indent, got.hanging), (1, NumFormat::DecimalZero, "%1.%2", 26.5, 26.5));
     // The start overrides that `restart` wrote survive beside it.
     assert_eq!(n.start_overrides, d.numbering.num(restart).unwrap().start_overrides);
     let mut c = Counters::default();

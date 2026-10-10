@@ -9,7 +9,6 @@ use wordcraft_doc::para::{InlineObject, OBJ, PAGE_BREAK};
 use wordcraft_doc::props::{
     Border, BorderStyle, Borders, CellProps, CharProps, NumRef, ParaProps, RowProps, TextColor, Underline, VMerge, VertAlign,
 };
-use wordcraft_doc::section::NumFormat;
 use wordcraft_doc::styles::{Style, StyleKind};
 use wordcraft_doc::{Align, Block, Blocks, Document, Paragraph, Rgb, Table, para_block};
 
@@ -622,7 +621,7 @@ pub fn para_kind(doc: &Document, p: &Paragraph) -> (Kind, Option<ListInfo>) {
     };
     let list = rp.numbering.and_then(|n| {
         let lv = doc.numbering.level(n.num, n.level)?;
-        Some(ListInfo { ordered: !matches!(lv.format, NumFormat::Bullet | NumFormat::None), level: n.level.min(8) })
+        Some(ListInfo { ordered: lv.format.is_ordered(), level: n.level.min(8) })
     });
     (kind, list)
 }

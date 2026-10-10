@@ -1594,7 +1594,7 @@ fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &Secti
         let hid = pick(&|s: &SectionProps| s.headers);
         let fid = pick(&|s: &SectionProps| s.footers);
         ctx.fields.page = page.number;
-        ctx.fields.page_format = sect.page_num_format;
+        ctx.fields.page_format = sect.page_num_format.clone();
         ctx.fields.pages = total;
         ctx.fields.section_pages = per_section.get(&page.section).copied().unwrap_or(1);
         ctx.fields.section = page.section as u32 + 1;

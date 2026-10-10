@@ -15,7 +15,7 @@ pub enum SectionStart {
     NextColumn,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum NumFormat {
     #[default]
@@ -30,10 +30,21 @@ pub enum NumFormat {
     DecimalZero,
     Bullet,
     None,
+    /// Arabic alphabet letters (OOXML `arabicAlpha`): ا، ب، ت … ي; past 28, repeated like `aa`.
+    ArabicAlpha,
+    /// Abjad numerals (OOXML `arabicAbjad`): ا=1 … غ=1000, composed additively, largest first.
+    ArabicAbjad,
+    /// Arabic-Indic digits (OOXML `hindiNumbers`): ٠١٢٣٤٥٦٧٨٩. User-entered numbers are never
+    /// rewritten; only counters render this way. Persian/Extended digits (۰۱۲…) come from the
+    /// run's locale and font, not from the numbering format.
+    HindiNumbers,
+    /// Any other OOXML `ST_NumberFormat` value, kept so save/reopen preserves documents whose
+    /// format isn't implemented yet; renders as decimal.
+    Custom(String),
 }
 
 impl NumFormat {
-    pub fn ooxml(self) -> &'static str {
+    pub fn ooxml(&self) -> &str {
         match self {
             NumFormat::Decimal => "decimal",
             NumFormat::UpperRoman => "upperRoman",
@@ -46,6 +57,10 @@ impl NumFormat {
             NumFormat::DecimalZero => "decimalZero",
             NumFormat::Bullet => "bullet",
             NumFormat::None => "none",
+            NumFormat::ArabicAlpha => "arabicAlpha",
+            NumFormat::ArabicAbjad => "arabicAbjad",
+            NumFormat::HindiNumbers => "hindiNumbers",
+            NumFormat::Custom(s) => s,
         }
     }
     pub fn from_ooxml(s: &str) -> NumFormat {
@@ -61,13 +76,20 @@ impl NumFormat {
             NumFormat::DecimalZero,
             NumFormat::Bullet,
             NumFormat::None,
+            NumFormat::ArabicAlpha,
+            NumFormat::ArabicAbjad,
+            NumFormat::HindiNumbers,
         ]
         .into_iter()
         .find(|f| f.ooxml() == s)
-        .unwrap_or(NumFormat::Decimal)
+        .unwrap_or(NumFormat::Custom(s.to_string()))
+    }
+    /// Whether the format numbers items (anything but bullets and placeholders).
+    pub fn is_ordered(&self) -> bool {
+        *self != NumFormat::Bullet && *self != NumFormat::None
     }
     /// Format `n` (1-based).
-    pub fn format(self, n: u32) -> String {
+    pub fn format(&self, n: u32) -> String {
         match self {
             NumFormat::Decimal => n.to_string(),
             NumFormat::DecimalZero => format!("{n:02}"),
@@ -78,7 +100,12 @@ impl NumFormat {
             NumFormat::Ordinal => format!("{n}{}", ordinal_suffix(n)),
             NumFormat::CardinalText => cardinal_text(n),
             NumFormat::OrdinalText => ordinal_text(n),
+            NumFormat::ArabicAlpha => arabic_alpha(n),
+            NumFormat::ArabicAbjad => arabic_abjad(n),
+            NumFormat::HindiNumbers => hindi_numbers(n),
             NumFormat::Bullet | NumFormat::None => String::new(),
+            // An unimplemented format still counts: fall back to decimal digits.
+            NumFormat::Custom(_) => n.to_string(),
         }
     }
 }
@@ -130,6 +157,75 @@ pub fn letters(n: u32) -> String {
     let k = (n - 1) / 26 + 1;
     let c = (b'a' + ((n - 1) % 26) as u8) as char;
     std::iter::repeat_n(c, k as usize).collect()
+}
+
+/// The Arabic hija'i alphabet, in `arabicAlpha` order.
+const AR_ALPHA: [char; 28] =
+    ['ا', 'ب', 'ت', 'ث', 'ج', 'ح', 'خ', 'د', 'ذ', 'ر', 'ز', 'س', 'ش', 'ص', 'ض', 'ط', 'ظ', 'ع', 'غ', 'ف', 'ق', 'ك', 'ل', 'م', 'ن', 'ه', 'و', 'ي'];
+
+/// Arabic alphabet numbering: ا..ي, then اا.. (repeated letter, like [`letters`]).
+pub fn arabic_alpha(n: u32) -> String {
+    if n == 0 {
+        return String::new();
+    }
+    let n = n.min(28 * 30);
+    let k = (n - 1) / 28 + 1;
+    let c = AR_ALPHA.get(((n - 1) % 28) as usize).copied().unwrap_or('ا');
+    std::iter::repeat_n(c, k as usize).collect()
+}
+
+/// Abjad letter values, ascending: ا=1 … ط=9, ي=10 … ص=90, ق=100 … غ=1000.
+const ABJAD: [(char, u32); 28] = [
+    ('ا', 1),
+    ('ب', 2),
+    ('ج', 3),
+    ('د', 4),
+    ('ه', 5),
+    ('و', 6),
+    ('ز', 7),
+    ('ح', 8),
+    ('ط', 9),
+    ('ي', 10),
+    ('ك', 20),
+    ('ل', 30),
+    ('م', 40),
+    ('ن', 50),
+    ('س', 60),
+    ('ع', 70),
+    ('ف', 80),
+    ('ص', 90),
+    ('ق', 100),
+    ('ر', 200),
+    ('ش', 300),
+    ('ت', 400),
+    ('ث', 500),
+    ('خ', 600),
+    ('ذ', 700),
+    ('ض', 800),
+    ('ظ', 900),
+    ('غ', 1000),
+];
+
+/// Abjad numerals: additive composition, largest value first (`11` → `يا`, `21` → `كا`).
+/// Thousands repeat غ, as `m` repeats in [`roman`]; 0 renders empty.
+pub fn arabic_abjad(n: u32) -> String {
+    if n == 0 {
+        return String::new();
+    }
+    let mut rest = n.min(100_000);
+    let mut s = String::new();
+    for (c, v) in ABJAD.iter().rev() {
+        while rest >= *v {
+            s.push(*c);
+            rest -= v;
+        }
+    }
+    s
+}
+
+/// Arabic-Indic digits (U+0660..U+0669): `123` → `١٢٣`.
+pub fn hindi_numbers(n: u32) -> String {
+    n.to_string().chars().map(|c| c.to_digit(10).map(|d| char::from_u32(0x0660 + d).unwrap_or(c)).unwrap_or(c)).collect()
 }
 
 const ONES: [&str; 20] = [
@@ -396,6 +492,35 @@ mod tests {
         assert_eq!(NumFormat::DecimalZero.format(3), "03");
         assert!(!NumFormat::UpperRoman.format(u32::MAX).is_empty());
         assert_eq!(NumFormat::LowerLetter.format(u32::MAX).len(), 30);
+    }
+
+    #[test]
+    fn arabic_number_formats() {
+        // `arabicAlpha`: the hija'i alphabet, then repeated letters.
+        assert_eq!(NumFormat::ArabicAlpha.format(1), "ا");
+        assert_eq!(NumFormat::ArabicAlpha.format(2), "ب");
+        assert_eq!(NumFormat::ArabicAlpha.format(28), "ي");
+        assert_eq!(NumFormat::ArabicAlpha.format(29), "اا");
+        assert_eq!(NumFormat::ArabicAlpha.format(0), "");
+        // `arabicAbjad`: additive letter values, largest first.
+        assert_eq!(NumFormat::ArabicAbjad.format(1), "ا");
+        assert_eq!(NumFormat::ArabicAbjad.format(10), "ي");
+        assert_eq!(NumFormat::ArabicAbjad.format(11), "يا");
+        assert_eq!(NumFormat::ArabicAbjad.format(21), "كا");
+        assert_eq!(NumFormat::ArabicAbjad.format(100), "ق");
+        assert_eq!(NumFormat::ArabicAbjad.format(1000), "غ");
+        assert_eq!(NumFormat::ArabicAbjad.format(0), "");
+        // `hindiNumbers`: Arabic-Indic digits; user text is never rewritten, only counters.
+        assert_eq!(NumFormat::HindiNumbers.format(0), "٠");
+        assert_eq!(NumFormat::HindiNumbers.format(123), "١٢٣");
+        assert_eq!(NumFormat::HindiNumbers.format(1403), "١٤٠٣");
+        // Unknown identifiers survive the round trip and count as decimal.
+        assert_eq!(NumFormat::from_ooxml("thaiNumbers"), NumFormat::Custom("thaiNumbers".into()));
+        assert_eq!(NumFormat::Custom("thaiNumbers".into()).ooxml(), "thaiNumbers");
+        assert_eq!(NumFormat::Custom("thaiNumbers".into()).format(7), "7");
+        assert!(NumFormat::Custom("thaiNumbers".into()).is_ordered());
+        assert_eq!(NumFormat::from_ooxml("arabicAbjad"), NumFormat::ArabicAbjad);
+        assert_eq!(NumFormat::ArabicAbjad.ooxml(), "arabicAbjad");
     }
 
     #[test]
