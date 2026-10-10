@@ -108,13 +108,13 @@ pub enum Dialog {
         name: String,
         /// Style id.
         based_on: String,
-        /// Index into `regions`: whole table, header row, banded rows.
+        /// Index into `regions` (see [`REGION_LABELS`]).
         region: usize,
-        regions: Box<[TableRegion; 3]>,
+        regions: Box<[TableRegion; 7]>,
         /// What the regions showed when the dialog opened (or the base style changed): only
         /// changes are sent, so everything else stays inherited.
         #[serde(skip)]
-        basis: Box<[TableRegion; 3]>,
+        basis: Box<[TableRegion; 7]>,
     },
     Commands {
         query: String,
@@ -236,8 +236,11 @@ pub struct TableRegion {
     pub color: String,
 }
 
+/// The Table Style dialog's regions, in the order of `table_style::REGIONS` (the param names).
+const REGION_LABELS: [&str; 7] = ["Whole Table", "Header Row", "Total Row", "First Column", "Last Column", "Banded Rows", "Banded Columns"];
+
 /// The regions of table style `id` as resolved through its based-on chain.
-fn table_regions(app: &WordApp, id: &str) -> Box<[TableRegion; 3]> {
+fn table_regions(app: &WordApp, id: &str) -> Box<[TableRegion; 7]> {
     let Some(st) = app.session.doc.styles.table_style(id) else { return Default::default() };
     let p = &st.parts;
     let hex = |c: Option<wordcraft_doc::Rgb>| c.map(|c| c.hex()).unwrap_or_default();
@@ -246,15 +249,134 @@ fn table_regions(app: &WordApp, id: &str) -> Box<[TableRegion; 3]> {
         _ => String::new(),
     };
     let lines = |b: Option<wordcraft_doc::props::Borders>| b.is_some_and(|b| b.any_visible());
-    let mut header_chr = st.chr.clone();
-    header_chr.overlay(&p.header_chr);
-    let mut band_chr = st.chr.clone();
-    band_chr.overlay(&p.band_chr);
+    // A region's text: the whole table's formatting with the region's over it.
+    let region = |borders: Option<wordcraft_doc::props::Borders>, fill: Option<wordcraft_doc::Rgb>, chr: &wordcraft_doc::CharProps| {
+        let mut c = st.chr.clone();
+        c.overlay(chr);
+        TableRegion { borders: lines(borders), fill: hex(fill), bold: c.bold.unwrap_or(false), color: text(&c) }
+    };
+    let none = wordcraft_doc::CharProps::default();
     Box::new([
-        TableRegion { borders: lines(p.borders), fill: hex(p.fill), bold: st.chr.bold.unwrap_or(false), color: text(&st.chr) },
-        TableRegion { borders: lines(p.header_borders), fill: hex(p.header_fill), bold: header_chr.bold.unwrap_or(false), color: text(&header_chr) },
-        TableRegion { borders: lines(p.band_borders), fill: hex(p.band_fill), bold: band_chr.bold.unwrap_or(false), color: text(&band_chr) },
+        region(p.borders, p.fill, &none),
+        region(p.header_borders, p.header_fill, &p.header_chr),
+        region(p.total_borders, p.total_fill, &p.total_chr),
+        region(p.first_col_borders, p.first_col_fill, &p.first_col_chr),
+        region(p.last_col_borders, p.last_col_fill, &p.last_col_chr),
+        region(p.band_borders, p.band_fill, &p.band_chr),
+        region(p.col_band_borders, p.col_band_fill, &p.col_band_chr),
     ])
+}
+
+/// The params `table.newStyle` / `table.modifyStyle` take for the Table Style dialog's state:
+/// only what changed from `basis`, so the rest stays inherited.
+fn table_style_params(id: Option<&str>, name: &str, based_on: &str, regions: &[TableRegion; 7], basis: &[TableRegion; 7]) -> Value {
+    let mut v = json!({"name": name.trim(), "basedOn": based_on});
+    for ((key, r), b) in wordcraft_engine::cmd::table_style::REGIONS.into_iter().zip(regions.iter()).zip(basis.iter()) {
+        let ch = region_changes(r, b);
+        if ch.as_object().is_some_and(|o| !o.is_empty()) {
+            v[key] = ch;
+        }
+    }
+    if let Some(id) = id {
+        v["style"] = json!(id);
+    }
+    v
+}
+
+/// A small sample table drawn with `style` (5 columns, a header, three body rows and a total
+/// row), showing the regions `look` turns on: the Table Style dialog's live preview.
+fn table_style_preview(ui: &mut Ui, style: Option<&wordcraft_doc::styles::TableStyleProps>, look: wordcraft_doc::props::TableLook) {
+    use wordcraft_doc::props::{Border, Borders};
+    const COLS: usize = 5;
+    const ROWS: usize = 5;
+    const TEXT: [[&str; COLS]; ROWS] = [
+        ["", "Mon", "Tue", "Wed", "Sum"],
+        ["North", "4", "7", "2", "13"],
+        ["South", "6", "1", "5", "12"],
+        ["West", "3", "8", "4", "15"],
+        ["Total", "13", "16", "11", "40"],
+    ];
+    let (rect, _) = ui.allocate_exact_size(vec2(300.0, 120.0), Sense::hover());
+    let painter = ui.painter_at(rect);
+    // The page is white whatever the interface theme.
+    painter.rect_filled(rect, 2.0, egui::Color32::WHITE);
+    let t = Tokens::get(ui.ctx());
+    painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    let Some(st) = style else { return };
+    let p = &st.parts;
+    let table = rect.shrink2(vec2(14.0, 10.0));
+    let (cw, rh) = (table.width() / COLS as f32, table.height() / ROWS as f32);
+    let rgb = |c: wordcraft_doc::Rgb| egui::Color32::from_rgb(c.0, c.1, c.2);
+    let tb = p.borders.unwrap_or_default();
+    for (ri, row) in TEXT.iter().enumerate() {
+        let header = look.header_row && ri == 0;
+        let total = look.total_row && ri + 1 == ROWS;
+        let band = look.banded_rows
+            && !header
+            && (ri.saturating_sub(usize::from(look.header_row)) / p.band_size.unwrap_or(1).clamp(1, 1000) as usize).is_multiple_of(2);
+        for (ci, txt) in row.iter().enumerate() {
+            let first = look.first_column && ci == 0;
+            let last = look.last_column && ci + 1 == COLS;
+            let col_band = look.banded_columns && !first && ci.saturating_sub(usize::from(look.first_column)).is_multiple_of(2);
+            let cell = egui::Rect::from_min_size(table.min + vec2(ci as f32 * cw, ri as f32 * rh), vec2(cw, rh));
+            // Regions from lowest to highest priority, as layout applies them.
+            let regions = [
+                (col_band, p.col_band_fill, &p.col_band_chr, p.col_band_borders),
+                (band, p.band_fill, &p.band_chr, p.band_borders),
+                (first, p.first_col_fill, &p.first_col_chr, p.first_col_borders),
+                (last, p.last_col_fill, &p.last_col_chr, p.last_col_borders),
+                (header, p.header_fill, &p.header_chr, p.header_borders),
+                (total, p.total_fill, &p.total_chr, p.total_borders),
+            ];
+            let mut fill = p.fill;
+            let mut chr = st.chr.clone();
+            let mut b = Borders {
+                top: if ri == 0 { tb.top } else { tb.between },
+                bottom: if ri + 1 == ROWS { tb.bottom } else { tb.between },
+                left: if ci == 0 { tb.left } else { tb.inside_v },
+                right: if ci + 1 == COLS { tb.right } else { tb.inside_v },
+                between: None,
+                inside_v: None,
+            };
+            for (on, f, c, rb) in regions {
+                if !on {
+                    continue;
+                }
+                fill = f.or(fill);
+                chr.overlay(c);
+                if let Some(rb) = rb {
+                    b.overlay(&Borders { between: None, inside_v: None, ..rb });
+                }
+            }
+            if total && p.total_borders.is_none_or(|x| x.top.is_none()) {
+                b.top = p.total_border_top.or(b.top);
+            }
+            if let Some(f) = fill {
+                painter.rect_filled(cell, 0.0, rgb(f));
+            }
+            let edge = |from: egui::Pos2, to: egui::Pos2, e: Option<Border>| {
+                if let Some(e) = e.filter(Border::is_visible) {
+                    let color = e.color.map_or(egui::Color32::BLACK, rgb);
+                    painter.line_segment([from, to], egui::Stroke::new(e.width.clamp(0.5, 3.0) * 1.3, color));
+                }
+            };
+            edge(cell.left_top(), cell.right_top(), b.top);
+            edge(cell.left_bottom(), cell.right_bottom(), b.bottom);
+            edge(cell.left_top(), cell.left_bottom(), b.left);
+            edge(cell.right_top(), cell.right_bottom(), b.right);
+            let color = match chr.color {
+                Some(wordcraft_doc::TextColor::Rgb(c)) => rgb(c),
+                _ => egui::Color32::BLACK,
+            };
+            let font = egui::FontId::proportional(11.0);
+            let pos = cell.left_center() + vec2(4.0, 0.0);
+            painter.text(pos, egui::Align2::LEFT_CENTER, *txt, font.clone(), color);
+            if chr.bold.unwrap_or(false) {
+                // A second pass a hair to the right reads as bold at this size.
+                painter.text(pos + vec2(0.6, 0.0), egui::Align2::LEFT_CENTER, *txt, font, color);
+            }
+        }
+    }
 }
 
 /// The style of the table at the caret, when it is a table style.
@@ -1027,12 +1149,11 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 });
                 ui.end_row();
                 ui.label(tl!("Apply formatting to:"));
-                let names = ["Whole Table", "Header Row", "Banded Rows"];
                 egui::ComboBox::from_id_salt("tstyle_region")
                     .width(200.0)
-                    .selected_text(tl!(names.get(*region).copied().unwrap_or("Whole Table")))
+                    .selected_text(tl!(REGION_LABELS.get(*region).copied().unwrap_or("Whole Table")))
                     .show_ui(ui, |ui| {
-                        for (i, n) in names.iter().enumerate() {
+                        for (i, n) in REGION_LABELS.iter().enumerate() {
                             ui.selectable_value(region, i, tl!(n));
                         }
                     });
@@ -1059,24 +1180,32 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                     ui.end_row();
                 });
             }
+            // Live preview: the style as OK would leave it, on the current table's options with
+            // the region being edited turned on.
+            let v = table_style_params(id.as_deref(), name, based_on, regions, basis);
+            let mut look = app
+                .session
+                .sel
+                .focus
+                .path
+                .cell()
+                .and_then(|(tp, _, _)| app.session.doc.table(app.session.sel.focus.story, &tp).map(|t| t.props.look))
+                .unwrap_or_default();
+            match *region {
+                1 => look.header_row = true,
+                2 => look.total_row = true,
+                3 => look.first_column = true,
+                4 => look.last_column = true,
+                5 => look.banded_rows = true,
+                6 => look.banded_columns = true,
+                _ => {}
+            }
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(tl!("Preview")).small().weak());
+            table_style_preview(ui, wordcraft_engine::cmd::table_style::preview(&app.session, &v).as_ref(), look);
             let (ok, cancel) = buttons(ui, tl!("OK"));
             if ok {
-                let mut v = json!({"name": name.trim(), "basedOn": based_on});
-                for (i, key) in ["wholeTable", "headerRow", "bandedRows"].into_iter().enumerate() {
-                    if let (Some(r), Some(b)) = (regions.get(i), basis.get(i)) {
-                        let ch = region_changes(r, b);
-                        if ch.as_object().is_some_and(|o| !o.is_empty()) {
-                            v[key] = ch;
-                        }
-                    }
-                }
-                let cmd = match id {
-                    Some(sid) => {
-                        v["style"] = json!(sid);
-                        "table.modifyStyle"
-                    }
-                    None => "table.newStyle",
-                };
+                let cmd = if id.is_some() { "table.modifyStyle" } else { "table.newStyle" };
                 if let Err(e) = app.run(cmd, v) {
                     app.status(e);
                     return false;

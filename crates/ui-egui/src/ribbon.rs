@@ -1233,18 +1233,20 @@ fn table_design(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Table Styles", None, app, |ui, app| {
-        let styles: Vec<(String, String)> = app
+        // The document's own styles first, so a new one shows without scrolling.
+        let mut styles: Vec<(bool, String, String)> = app
             .session
             .doc
             .styles
             .styles
             .iter()
             .filter(|s| s.kind == wordcraft_doc::StyleKind::Table && !s.hidden)
-            .map(|s| (s.id.clone(), s.name.clone()))
+            .map(|s| (s.builtin, s.id.clone(), s.name.clone()))
             .collect();
+        styles.sort_by_key(|(builtin, _, _)| *builtin);
         egui::ScrollArea::horizontal().max_width(420.0).show(ui, |ui| {
             ui.horizontal(|ui| {
-                for (id, name) in styles {
+                for (_, id, name) in styles {
                     if crate::previews::table_style_tile(ui, app, &id).on_hover_text(name).clicked() {
                         let _ = app.run("table.style", json!({"style": id}));
                     }
@@ -1252,19 +1254,24 @@ fn table_design(app: &mut WordApp, ui: &mut Ui) {
             });
         });
         stack(ui, |ui| {
-            let can_modify = look.is_some()
-                && app
-                    .session
-                    .sel
-                    .focus
-                    .path
-                    .cell()
-                    .and_then(|(tp, _, _)| app.session.doc.table(app.session.sel.focus.story, &tp)?.props.style.clone())
-                    .is_some();
+            let current = look.and_then(|_| {
+                let (tp, _, _) = app.session.sel.focus.path.cell()?;
+                let id = app.session.doc.table(app.session.sel.focus.story, &tp)?.props.style.clone()?;
+                app.session.doc.styles.get(&id).filter(|st| st.kind == wordcraft_doc::StyleKind::Table).map(|st| st.builtin)
+            });
+            let can_modify = current.is_some();
+            // Built-in table styles can't be deleted.
+            let can_delete = current == Some(false);
             menu_button(ui, app, "styles", Some("Styles"), "Table Styles", false, |ui, app| {
                 mi(ui, app, "New Table Style…", "ui.dialog", json!({"name": "newTableStyle"}));
                 if ui.add_enabled(can_modify, egui::Button::new(tl!("Modify Table Style…")).min_size(vec2(200.0, 0.0))).clicked() {
                     let _ = app.run("ui.dialog", json!({"name": "modifyTableStyle"}));
+                    ui.close();
+                }
+                if ui.add_enabled(can_delete, egui::Button::new(tl!("Delete Table Style")).min_size(vec2(200.0, 0.0))).clicked() {
+                    if let Err(e) = app.run("table.deleteStyle", json!({})) {
+                        app.status(e);
+                    }
                     ui.close();
                 }
             });
