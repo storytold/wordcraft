@@ -129,7 +129,17 @@ impl WordApp {
             }
             AfterPick::Export { ext } => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
-                let r = if ext == "png" { self.run("file.exportPng", json!({"path": path})) } else { self.run("file.saveAs", json!({"path": path})) };
+                let dirty = self.session.dirty;
+                let r = if ext == "png" {
+                    self.run("file.exportPng", json!({"path": path}))
+                } else if ext == "pdf" {
+                    self.run("file.exportPdf", json!({"path": path}))
+                } else {
+                    self.run("file.saveAs", json!({"path": path}))
+                };
+                if !crate::keeps_everything(&path) {
+                    self.session.dirty = dirty;
+                }
                 if r.is_ok() {
                     self.status(crate::i18n::fmt(tl!("Exported {path}"), &[("path", &path)]));
                 }
@@ -338,5 +348,24 @@ mod tests {
         assert_eq!(a.poll_file_dialog().unwrap().unwrap(), json!({"cancelled": true}));
         assert_eq!(a.session.merge.rows.len(), 2);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Exports (PDF, PNG, TXT, MD, etc.) are lossy copies or secondary views; they do not clear
+    /// the editable document's dirty state (#168).
+    #[test]
+    fn exports_leave_the_document_dirty() {
+        for ext in ["pdf", "png", "txt", "md", "html"] {
+            let dir = scratch(&format!("export-{ext}"));
+            let path = dir.join(format!("copy.{ext}"));
+            let (mut a, shown) = async_app();
+            typed(&mut a);
+            assert!(a.session.dirty);
+            a.export_dialog(ext);
+            assert!(a.file_dialog_open());
+            answer(&shown, Some(&path.to_string_lossy()));
+            a.poll_file_dialog().unwrap().unwrap();
+            assert!(a.session.dirty, "{ext}: export should keep dirty");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 }
