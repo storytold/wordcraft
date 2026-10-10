@@ -8,6 +8,8 @@ pub const RESERVED: [&str; 4] = ["@owner", "@all", "@you", "@me"];
 const NOT_MENTIONS: [&str; 2] = ["@you", "@me"];
 /// Mentions that address every member.
 pub const EVERYONE: [&str; 1] = ["@all"];
+/// Distinct mentions kept per message: later ones are not mentions.
+pub const MAX_MENTIONS: usize = 32;
 
 /// The mentions address every member (`@all`).
 pub fn addresses_everyone(mentions: &[String]) -> bool {
@@ -15,7 +17,9 @@ pub fn addresses_everyone(mentions: &[String]) -> bool {
 }
 
 /// `@name` tokens not preceded by a letter, digit, `.` or `_` (so e-mail addresses don't count),
-/// lowercased, in order, without duplicates; `@you` and `@me` are not mentions.
+/// lowercased, in order, without duplicates; `@you` and `@me` are not mentions. Only the first
+/// [`MAX_MENTIONS`] distinct ones count, so one message cannot make the work grow with its length
+/// squared.
 pub fn mentions(text: &str) -> Vec<String> {
     let chars: Vec<char> = text.chars().collect();
     let word = |c: Option<&char>| c.is_some_and(|c| c.is_alphanumeric() || *c == '.' || *c == '_');
@@ -31,6 +35,9 @@ pub fn mentions(text: &str) -> Vec<String> {
                     std::iter::once('@').chain(chars.iter().skip(i.saturating_add(1)).take(len).copied()).collect::<String>().to_ascii_lowercase();
                 if !out.contains(&h) && !NOT_MENTIONS.contains(&h.as_str()) {
                     out.push(h);
+                    if out.len() >= MAX_MENTIONS {
+                        break;
+                    }
                 }
             }
             i = i.saturating_add(len).saturating_add(1);
@@ -59,16 +66,41 @@ pub fn is_bidi_control(c: char) -> bool {
     matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{200E}' | '\u{200F}' | '\u{061C}')
 }
 
-/// Invisible characters (zero-width space, non-joiner, joiner, word joiner, BOM): they can hide
-/// inside a word so that two lines look the same and are not.
+/// Invisible characters: they can hide inside a word so that two lines look the same and are
+/// not, or carry text that a model reads and a person does not see.
+/// - zero-width space, non-joiner and joiner, word joiner, BOM, soft hyphen, the invisible math
+///   operators (U+2061..=U+2064) and the Mongolian vowel separator;
+/// - the Tags block (U+E0000..=U+E007F) and the variation selectors (U+FE00..=U+FE0F,
+///   U+E0100..=U+E01EF);
+/// - blank "filler" letters (Hangul fillers U+115F, U+1160, U+3164, U+FFA0; Braille blank U+2800)
+///   and the interlinear annotation marks (U+FFF9..=U+FFFB).
 pub fn is_invisible(c: char) -> bool {
-    matches!(c, '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{FEFF}')
+    matches!(
+        c,
+        '\u{200B}'
+            | '\u{200C}'
+            | '\u{200D}'
+            | '\u{2060}'
+            | '\u{FEFF}'
+            | '\u{AD}'
+            | '\u{2061}'..='\u{2064}'
+            | '\u{180E}'
+            | '\u{E0000}'..='\u{E007F}'
+            | '\u{FE00}'..='\u{FE0F}'
+            | '\u{E0100}'..='\u{E01EF}'
+            | '\u{115F}'
+            | '\u{1160}'
+            | '\u{3164}'
+            | '\u{FFA0}'
+            | '\u{2800}'
+            | '\u{FFF9}'..='\u{FFFB}'
+    )
 }
 
 /// Agent text on one line: line breaks (CR LF, CR, LF, U+2028, U+2029, U+0085) become " ⏎ " and
-/// other control characters except tab are dropped, bidi controls and zero-width characters
-/// too, so an agent cannot fake an "OWNER …" line in another agent's `listen` output or in the
-/// pane.
+/// other control characters except tab are dropped, bidi controls and invisible characters
+/// ([`is_invisible`]) too, so an agent cannot fake an "OWNER …" line in another agent's `listen`
+/// output or in the pane.
 pub fn one_line(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
@@ -150,6 +182,29 @@ mod tests {
     #[test]
     fn one_line_drops_zero_width_characters() {
         assert_eq!(one_line("o\u{200B}k\u{200C} \u{200D}O\u{2060}WNER\u{FEFF}"), "ok OWNER");
+    }
+
+    #[test]
+    fn one_line_drops_tags_variation_selectors_and_fillers() {
+        // Tag characters spell "OWNER" for a model and show nothing to a person.
+        let tags: String = "OWNER".chars().filter_map(|c| char::from_u32(0xE0000 + c as u32)).collect();
+        assert_eq!(one_line(&format!("ok\u{E0001}{tags}\u{E007F}")), "ok");
+        assert_eq!(one_line("a\u{FE00}b\u{FE0F}c\u{E0100}d\u{E01EF}e"), "abcde");
+        assert_eq!(one_line("f\u{115F}g\u{1160}h\u{3164}i\u{FFA0}j\u{2800}k\u{AD}l"), "fghijkl");
+        assert_eq!(one_line("m\u{2061}n\u{2062}o\u{2063}p\u{2064}q\u{180E}r\u{FFF9}s\u{FFFA}t\u{FFFB}u"), "mnopqrstu");
+        assert_eq!(one_line("café ✅ 中文"), "café ✅ 中文");
+    }
+
+    #[test]
+    fn mentions_are_capped() {
+        let text: String = (0..5_000).map(|i| format!("@n{i} ")).collect();
+        let m = mentions(&text);
+        assert_eq!(m.len(), MAX_MENTIONS);
+        assert_eq!(m.first().map(String::as_str), Some("@n0"));
+        assert_eq!(m.last().map(String::as_str), Some("@n31"));
+        // Repeats do not use up the cap.
+        let text = format!("{} @pi", "@claude ".repeat(5_000));
+        assert_eq!(mentions(&text), vec!["@claude", "@pi"]);
     }
 
     #[test]

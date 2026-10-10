@@ -287,9 +287,10 @@ impl Hub {
 
     fn push(&self, from: &str, role: Role, text: &str) -> Message {
         let ts_ms = self.env.now_ms();
+        // Outside the lock: the UI thread locks the hub every frame.
+        let mut mentions = rules::mentions(text);
         let msg = {
             let mut st = self.lock();
-            let mut mentions = rules::mentions(text);
             // Single-agent rule: with exactly one member, an owner line that mentions nobody is
             // for that member.
             if role == Role::Owner
@@ -736,6 +737,26 @@ mod tests {
         assert_eq!(m[0].mentions, vec!["@claude"]);
         let _ = h.post_owner("new line");
         assert_eq!(h.messages().last().map(|x| (x.role, x.from.clone())), Some((Role::Owner, OWNER.to_string())));
+    }
+
+    #[test]
+    fn a_message_with_thousands_of_mentions_posts_fast() {
+        let (h, _) = hub();
+        let mut text = String::new();
+        let mut i: u32 = 0;
+        while text.len() < MAX_TEXT - 16 {
+            text.push_str(&format!("@x{i} "));
+            i += 1;
+        }
+        assert!(i > 10_000);
+        let t0 = std::time::Instant::now();
+        let a = h.post_agent("@pi", &text).unwrap();
+        let o = h.post_owner(&text).unwrap();
+        let took = t0.elapsed();
+        assert_eq!(a.mentions.len(), rules::MAX_MENTIONS);
+        assert_eq!(o.mentions.len(), rules::MAX_MENTIONS);
+        assert!(h.messages().iter().all(|m| m.mentions.len() <= rules::MAX_MENTIONS));
+        assert!(took < Duration::from_secs(1), "{took:?}");
     }
 
     #[test]
