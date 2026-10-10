@@ -1,4 +1,5 @@
 use serde_json::json;
+use wordcraft_doc::props::BorderStyle;
 use wordcraft_doc::{Pos, StoryRef};
 
 use crate::{Session, cmd};
@@ -208,6 +209,46 @@ fn tables_commands() {
     run(&mut s, "table.deleteTable", json!({}));
     assert!(s.doc.body.iter().all(|b| b.as_table().is_none()));
     assert!(s.run("table.merge", &json!({})).is_err());
+}
+
+#[test]
+fn table_border_presets_mask_the_sides_they_clear() {
+    // On a default (TableGrid) table the "outside"/"inside" presets must write nil over the
+    // sides they clear; without it those sides inherit the style's grid (#143) and every
+    // preset renders like "all".
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    // Distinct vertical/horizontal rule positions on page 0.
+    let rule_pos = |s: &mut Session| {
+        let (mut vx, mut hy) = (Vec::new(), Vec::new());
+        for it in &s.layout().pages[0].items {
+            if let crate::layout::Placed::Rule { x0, y0, x1, y1, .. } = it {
+                if (x0 - x1).abs() < 1e-3 && !vx.contains(x0) {
+                    vx.push(*x0);
+                }
+                if (y0 - y1).abs() < 1e-3 && !hy.contains(y0) {
+                    hy.push(*y0);
+                }
+            }
+        }
+        (vx, hy)
+    };
+    // Style default: a full 2x2 grid — 3 vertical + 3 horizontal lines.
+    let (vx, hy) = rule_pos(&mut s);
+    assert_eq!((vx.len(), hy.len()), (3, 3), "baseline grid: {vx:?} {hy:?}");
+    run(&mut s, "table.borders", json!({"kind": "outside"}));
+    let (vx, hy) = rule_pos(&mut s);
+    assert_eq!((vx.len(), hy.len()), (2, 2), "outside keeps only the frame: {vx:?} {hy:?}");
+    let b = s.doc.body.iter().find_map(|x| x.as_table()).unwrap().props.borders.unwrap();
+    assert!(b.between.is_some_and(|x| x.style == BorderStyle::None));
+    assert!(b.inside_v.is_some_and(|x| x.style == BorderStyle::None));
+    run(&mut s, "table.borders", json!({"kind": "inside"}));
+    let (vx, hy) = rule_pos(&mut s);
+    assert_eq!((vx.len(), hy.len()), (1, 1), "inside keeps only the inner rules: {vx:?} {hy:?}");
+    let b = s.doc.body.iter().find_map(|x| x.as_table()).unwrap().props.borders.unwrap();
+    for side in [b.top, b.bottom, b.left, b.right] {
+        assert!(side.is_some_and(|x| x.style == BorderStyle::None));
+    }
 }
 
 #[test]
