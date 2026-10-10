@@ -277,6 +277,7 @@ mod tests {
             float: Default::default(),
             story: None,
             effects: Default::default(),
+            freeform: None,
         };
         let (app, hit) = app_with(shape);
         assert!(!fixed(&app, &hit));

@@ -101,6 +101,8 @@ pub enum Placed {
         stroke_width: f32,
         effects: wordcraft_doc::effects::ShapeEffects,
         spin: Spin,
+        /// A freeform's paths (ink strokes among them).
+        freeform: Option<Arc<wordcraft_doc::freeform::Freeform>>,
     },
     /// A floating chart or diagram, drawn from its items inside `rect`. The object is the U+FFFC at
     /// byte `off` of paragraph `path` (its alt text).
@@ -1410,8 +1412,17 @@ fn float_items(o: &InlineObject, rect: Rect, outer: (Spin, Point), story: StoryR
         InlineObject::Image { media, crop, .. } => {
             vec![Placed::Image { rect, media: media.clone(), crop: *crop, story, path: Path(path.to_vec()), off, spin }]
         }
-        InlineObject::Shape { kind, fill, stroke, stroke_width, effects, .. } => {
-            vec![Placed::Shape { rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width, effects: *effects, spin }]
+        InlineObject::Shape { kind, fill, stroke, stroke_width, effects, freeform, .. } => {
+            vec![Placed::Shape {
+                rect,
+                kind: *kind,
+                fill: *fill,
+                stroke: *stroke,
+                stroke_width: *stroke_width,
+                effects: *effects,
+                spin,
+                freeform: freeform.clone(),
+            }]
         }
         InlineObject::Graphic { graphic, .. } => {
             vec![Placed::Graphic { rect, graphic: graphic.clone(), story, path: Path(path.to_vec()), off, spin }]

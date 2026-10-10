@@ -456,6 +456,12 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.closed(&[(3.0, 13.0), (11.0, 5.0), (17.0, 11.0), (11.0, 17.0), (7.0, 17.0)], c);
             pen.fill(&[(3.0, 13.0), (7.0, 9.0), (13.0, 15.0), (11.0, 17.0), (7.0, 17.0)], Color32::from_rgb(0xE8, 0x6F, 0xA0));
         }
+        // Ink thickness: three strokes, thin to thick.
+        "thickness" => {
+            pen.frect(3.0, 4.5, 17.0, 5.5, c);
+            pen.frect(3.0, 9.0, 17.0, 11.0, c);
+            pen.frect(3.0, 14.0, 17.0, 17.0, a);
+        }
         "lasso" => {
             pen.closed(&[(4.0, 7.0), (9.0, 3.0), (16.0, 5.0), (16.0, 11.0), (10.0, 13.0), (4.0, 11.0)], c);
             pen.line_c(&[(6.0, 12.5), (5.0, 17.5)], a);

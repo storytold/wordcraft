@@ -604,7 +604,7 @@ fn unalign(s: &mut Session) -> Result<(), CmdError> {
 
 /// The top-level body paragraph under `y` on `page`: the last one starting at or above it (else
 /// the first starting on the page).
-fn anchor_paragraph(layout: &wordcraft_layout::DocLayout, page: usize, y: f32) -> Option<wordcraft_doc::Path> {
+pub(crate) fn anchor_paragraph(layout: &wordcraft_layout::DocLayout, page: usize, y: f32) -> Option<wordcraft_doc::Path> {
     let starts: Vec<(&wordcraft_doc::Path, f32)> = layout
         .pages
         .get(page)?
@@ -619,7 +619,7 @@ fn anchor_paragraph(layout: &wordcraft_layout::DocLayout, page: usize, y: f32) -
 }
 
 /// The start of the top-level body line on `page` nearest to `y`.
-fn nearest_line(layout: &wordcraft_layout::DocLayout, page: usize, y: f32) -> Option<Pos> {
+pub(crate) fn nearest_line(layout: &wordcraft_layout::DocLayout, page: usize, y: f32) -> Option<Pos> {
     let lines = wordcraft_layout::hit::page_lines(layout.pages.get(page)?, StoryRef::Body);
     let best = lines.iter().filter(|l| l.path.depth() == 0).min_by(|a, b| {
         let d = |l: &wordcraft_layout::hit::LineHit| if y < l.top { l.top - y } else { (y - l.bottom).max(0.0) };

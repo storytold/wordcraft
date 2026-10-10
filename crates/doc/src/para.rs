@@ -207,6 +207,8 @@ pub enum ShapeKind {
     Heart,
     /// A text box (rectangle with a text story).
     TextBox,
+    /// A shape drawn point by point, such as ink (its geometry is the shape's `freeform`).
+    Freeform,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -265,6 +267,9 @@ pub enum InlineObject {
         /// Shadow, glow and soft edges.
         #[serde(default, skip_serializing_if = "crate::effects::ShapeEffects::is_empty")]
         effects: crate::effects::ShapeEffects,
+        /// A freeform's geometry (`ShapeKind::Freeform`): its paths, or an ink stroke.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        freeform: Option<std::sync::Arc<crate::freeform::Freeform>>,
     },
     /// Pictures, shapes and text boxes grouped into one object (Layout › Arrange › Group): it
     /// moves, wraps and resizes as one. Its members are laid out in the group's own coordinate
@@ -453,6 +458,13 @@ impl InlineObject {
             | InlineObject::Shape { float, .. }
             | InlineObject::Group { float, .. } => float.wrap != Wrap::Inline,
             _ => false,
+        }
+    }
+    /// The geometry of an ink stroke (a freeform shape drawn with a pen), if this is one.
+    pub fn ink(&self) -> Option<&crate::freeform::Freeform> {
+        match self {
+            InlineObject::Shape { freeform: Some(f), .. } if f.is_ink() => Some(f),
+            _ => None,
         }
     }
     /// The text this object contributes to plain-text extraction.

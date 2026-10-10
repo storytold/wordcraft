@@ -424,13 +424,18 @@ impl Writer<'_> {
                 w.close("w:r");
                 self.rev_close(w, props);
             }
-            InlineObject::Shape { w: sw, h: sh, float, effects, .. } => {
+            InlineObject::Shape { kind, w: sw, h: sh, float, effects, freeform, .. } => {
                 self.rev_open(w, props);
                 w.open("w:r", &[]);
                 rpr(w, props);
                 w.open("w:drawing", &[]);
                 let docpr = self.next_docpr();
-                let name = format!("Shape {docpr}");
+                let geom = freeform.as_deref().filter(|_| *kind == ShapeKind::Freeform);
+                // Ink is told apart by its name (and its pen), which reading looks for.
+                let name = match geom.and_then(|f| f.ink) {
+                    Some(tool) => format!("Ink {} {docpr}", ink_name(tool)),
+                    None => format!("Shape {docpr}"),
+                };
                 // The effect extent leaves room for the shadow and glow.
                 let mut float = *float;
                 for (e, fx) in float.effect.iter_mut().zip(effects.extent()) {
@@ -611,7 +616,8 @@ impl Writer<'_> {
     /// A shape's or text box's `wps:wsp`, at `off` in its group (or 0, 0). In a group it carries
     /// its own `wps:cNvPr` with drawing id `id`.
     fn wsp(&mut self, w: &mut W, o: &InlineObject, id: Option<&str>, off: (f32, f32), rels: &mut PartRels, depth: usize) {
-        let InlineObject::Shape { kind, w: sw, h: sh, fill, stroke, stroke_width, story, effects, float } = o else { return };
+        let InlineObject::Shape { kind, w: sw, h: sh, fill, stroke, stroke_width, story, effects, float, freeform } = o else { return };
+        let geom = freeform.as_deref().filter(|_| *kind == ShapeKind::Freeform);
         w.open("wps:wsp", &[]);
         if let Some(id) = id {
             let name = format!("Shape {id}");
@@ -625,7 +631,7 @@ impl Writer<'_> {
         w.open("wps:spPr", &[]);
         xfrm(w, off, *sw, *sh, float.spin());
         let prst = match kind {
-            ShapeKind::Rectangle | ShapeKind::TextBox => "rect",
+            ShapeKind::Rectangle | ShapeKind::TextBox | ShapeKind::Freeform => "rect",
             ShapeKind::RoundedRectangle => "roundRect",
             ShapeKind::Ellipse => "ellipse",
             ShapeKind::Triangle => "triangle",
@@ -635,10 +641,17 @@ impl Writer<'_> {
             ShapeKind::Star => "star5",
             ShapeKind::Heart => "heart",
         };
-        w.open("a:prstGeom", &[("prst", prst)]);
-        w.empty("a:avLst", &[]);
-        w.close("a:prstGeom");
-        match fill {
+        match geom {
+            Some(f) => cust_geom(w, f, *sw, *sh),
+            None => {
+                w.open("a:prstGeom", &[("prst", prst)]);
+                w.empty("a:avLst", &[]);
+                w.close("a:prstGeom");
+            }
+        }
+        let alpha = geom.map_or(1.0, |f| f.alpha);
+        let ink = geom.is_some_and(|f| f.is_ink());
+        match fill.filter(|_| !ink) {
             Some(c) => {
                 w.open("a:solidFill", &[]);
                 w.empty("a:srgbClr", &[("val", &c.hex())]);
@@ -648,10 +661,21 @@ impl Writer<'_> {
         }
         match stroke {
             Some(c) => {
-                w.open("a:ln", &[("w", &emu(stroke_width.clamp(0.0, 100.0)))]);
+                let width = emu(stroke_width.clamp(0.0, 100.0));
+                let ln: &[(&str, &str)] = if ink { &[("w", width.as_str()), ("cap", "rnd")] } else { &[("w", width.as_str())] };
+                w.open("a:ln", ln);
                 w.open("a:solidFill", &[]);
-                w.empty("a:srgbClr", &[("val", &c.hex())]);
+                if alpha < 1.0 {
+                    w.open("a:srgbClr", &[("val", &c.hex())]);
+                    w.empty("a:alpha", &[("val", &n((alpha.clamp(0.0, 1.0) * 100_000.0).round() as i64))]);
+                    w.close("a:srgbClr");
+                } else {
+                    w.empty("a:srgbClr", &[("val", &c.hex())]);
+                }
                 w.close("a:solidFill");
+                if ink {
+                    w.empty("a:round", &[]);
+                }
                 w.close("a:ln");
             }
             None => {
@@ -933,6 +957,53 @@ fn effect_list(w: &mut W, effects: &ShapeEffects) {
         w.empty("a:softEdge", &[("rad", &emu(r))]);
     }
     w.close("a:effectLst");
+}
+
+fn ink_name(tool: wordcraft_doc::freeform::InkTool) -> &'static str {
+    match tool {
+        wordcraft_doc::freeform::InkTool::Pen => "Pen",
+        wordcraft_doc::freeform::InkTool::Pencil => "Pencil",
+        wordcraft_doc::freeform::InkTool::Highlighter => "Highlighter",
+    }
+}
+
+/// A freeform's geometry as DrawingML custom geometry (`a:custGeom`): each path in EMUs of its
+/// own coordinate space (the shape's size when it has none), from `a:moveTo` along `a:lnTo`.
+fn cust_geom(w: &mut W, f: &wordcraft_doc::freeform::Freeform, sw: f32, sh: f32) {
+    let (pw, ph) = (if f.w > 0.0 { f.w } else { sw.max(0.0) }, if f.h > 0.0 { f.h } else { sh.max(0.0) });
+    w.open("a:custGeom", &[]);
+    w.empty("a:avLst", &[]);
+    w.empty("a:gdLst", &[]);
+    w.empty("a:ahLst", &[]);
+    w.empty("a:cxnLst", &[]);
+    w.empty("a:rect", &[("l", "0"), ("t", "0"), ("r", "r"), ("b", "b")]);
+    w.open("a:pathLst", &[]);
+    let pt = |w: &mut W, tag: &str, [x, y]: [f32; 2]| {
+        w.open(tag, &[]);
+        w.empty("a:pt", &[("x", &emu(x)), ("y", &emu(y))]);
+        w.close(tag);
+    };
+    for p in f.paths.iter().take(wordcraft_doc::freeform::MAX_PATHS) {
+        let mut attrs = vec![("w", emu(pw)), ("h", emu(ph))];
+        if !p.closed || f.is_ink() {
+            attrs.push(("fill", "none".to_string()));
+        }
+        let attrs: Vec<(&str, &str)> = attrs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        w.open("a:path", &attrs);
+        for (i, xy) in p.pts.iter().take(wordcraft_doc::freeform::MAX_POINTS).enumerate() {
+            pt(w, if i == 0 { "a:moveTo" } else { "a:lnTo" }, *xy);
+        }
+        // A tap: a zero-length line, so it shows as a dot.
+        if let (1, Some(xy)) = (p.pts.len(), p.pts.first()) {
+            pt(w, "a:lnTo", *xy);
+        }
+        if p.closed {
+            w.empty("a:close", &[]);
+        }
+        w.close("a:path");
+    }
+    w.close("a:pathLst");
+    w.close("a:custGeom");
 }
 
 fn xfrm(w: &mut W, (x, y): (f32, f32), cw: f32, ch: f32, spin: wordcraft_geom::Spin) {

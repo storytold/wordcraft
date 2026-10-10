@@ -89,6 +89,7 @@ fn text_box_anchor_finds_the_owning_shape() {
         float: Default::default(),
         story,
         effects: Default::default(),
+        freeform: None,
     };
     // A plain shape before it doesn't count.
     d.insert_object(&Pos::body(0, 0), shape(None), &CharProps::default()).unwrap();
@@ -110,6 +111,7 @@ fn word_count_including_notes_counts_used_boxes_and_notes_only() {
         float: Default::default(),
         story: Some(story),
         effects: Default::default(),
+        freeform: None,
     };
     let para_of = |t: &str| vec![para_block(Paragraph::with_text(t, CharProps::default()))];
     let boxed = d.add_part(PartKind::TextBox, para_of("three four"));
@@ -149,6 +151,7 @@ fn counted_stories_survive_self_nested_boxes() {
         float: Default::default(),
         story: Some(id),
         effects: Default::default(),
+        freeform: None,
     };
     d.insert_object(&Pos::body(0, 0), shape.clone(), &CharProps::default()).unwrap();
     d.insert_object(&Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 }, shape, &CharProps::default()).unwrap();
@@ -167,6 +170,7 @@ fn prune_text_boxes_drops_only_unshown_ones() {
         float: Default::default(),
         story: Some(story),
         effects: Default::default(),
+        freeform: None,
     };
     let para_of = |t: &str| vec![para_block(Paragraph::with_text(t, CharProps::default()))];
     let mut d = Document::from_text("body");
@@ -200,6 +204,7 @@ fn notes_in_text_box_follow_nested_boxes_once() {
         float: Default::default(),
         story: Some(story),
         effects: Default::default(),
+        freeform: None,
     };
     let note = |id| InlineObject::NoteRef { kind: para::NoteKind::Footnote, id, custom: String::new() };
     let mut d = Document::new();

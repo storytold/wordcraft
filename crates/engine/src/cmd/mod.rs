@@ -4,6 +4,7 @@ pub mod caret;
 pub mod citations;
 pub mod column;
 pub mod design;
+pub mod draw;
 pub mod edit;
 pub mod equation;
 pub mod file;
@@ -56,6 +57,7 @@ pub fn registry() -> Registry {
     v.extend(mailings::specs());
     v.extend(citations::specs());
     v.extend(objects::specs());
+    v.extend(draw::specs());
     v.extend(tools::specs());
     v.extend(speech::specs());
     Registry::new(v)

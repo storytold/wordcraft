@@ -1250,3 +1250,9 @@
 	Rotate Left 90°	左へ 90 度回転
 	Flip Vertical	上下反転
 	Flip Horizontal	左右反転
+	Draw Ink	インクで描く
+	Erase Ink	インクを消す
+	Hide Ink	インクを隠す
+	Hide\nInk	インクを\n隠す
+	Pens	ペン
+	Thickness	太さ

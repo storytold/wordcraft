@@ -4,6 +4,7 @@ mod chart;
 mod diagram;
 mod drawing_color;
 mod embed;
+mod freeform;
 mod math;
 mod props;
 mod story;

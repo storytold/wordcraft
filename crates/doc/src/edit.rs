@@ -573,6 +573,7 @@ mod tests {
             float: Default::default(),
             story,
             effects: Default::default(),
+            freeform: None,
         }
     }
 
