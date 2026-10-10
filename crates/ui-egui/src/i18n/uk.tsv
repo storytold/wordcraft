@@ -789,3 +789,46 @@
 	Scroll ribbon left	Прокрутити стрічку ліворуч
 	Scroll ribbon right	Прокрутити стрічку праворуч
 	Character Border	Межа символу
+# Equations.
+	Change Structure	Змінити структуру
+	Change to Display	Змінити на окремий рядок
+	Change to Inline	Змінити на вбудований
+	Conversions	Перетворення
+	Delete Back in Equation	Видалити назад у рівнянні
+	Delete in Equation	Видалити в рівнянні
+	Edit Equation	Редагувати рівняння
+	Enter in Equation	Enter у рівнянні
+	Equation Gallery	Колекція рівнянь
+	Equation Info	Відомості про рівняння
+	Equation Number	Номер рівняння
+	Input Format	Формат введення
+	Insert Structure	Вставити структуру
+	Insert Symbol	Вставити символ
+	Justification	Вирівнювання
+	Leave Equation	Вийти з рівняння
+	Move in Equation	Переміщення в рівнянні
+	Normal Text	Звичайний текст
+	Set Equation	Задати рівняння
+	Structure Actions	Дії зі структурою
+	Structures	Структури
+	Tools	Знаряддя
+	Type in Equation	Введення в рівнянні
+	Inline	Вбудований
+	Number	Номер
+	Close Equation	Закрити рівняння
+	Insert New Equation	Вставити нове рівняння
+	Built-In	Вбудовані
+	Professional	Професійний
+	Linear	Лінійний
+	Fraction	Дріб
+	Script	Індекс
+	Radical	Радикал
+	Integral	Інтеграл
+	Large\nOperator	Великий\nоператор
+	Bracket	Дужки
+	Function	Функція
+	Accent	Діакритичний знак
+	Limit and\nLog	Границя та\nлогарифм
+	Operator	Оператор
+	Equation Options	Параметри рівняння
+	All symbol sets	Усі набори символів
