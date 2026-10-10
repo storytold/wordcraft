@@ -253,8 +253,12 @@ fn bidi_display_draws_every_glyph_inside_the_line() {
     let items = display::page_display(&d, &l.pages[0], &Default::default());
     let mut n = 0;
     for it in &items {
-        if let display::Draw::Glyphs { glyphs, .. } = it {
-            for (_, x, _) in glyphs {
+        if let display::Draw::Glyphs { glyphs, text, ranges, .. } = it {
+            for (k, (_, x, _)) in glyphs.iter().enumerate() {
+                // A wrapped line's trailing spaces hang past its end edge: the left margin here.
+                if ranges.get(k).and_then(|r| text.get(r.clone())).is_some_and(|t| t.trim().is_empty()) {
+                    continue;
+                }
                 assert!(*x >= 72.0 - 1.0 && *x <= 540.0 + 1.0, "glyph at {x} outside the text column");
                 n += 1;
             }
