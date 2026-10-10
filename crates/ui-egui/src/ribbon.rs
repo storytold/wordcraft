@@ -1048,6 +1048,11 @@ fn view(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Zoom", None, app, |ui, app| {
         big(ui, app, "zoom", "Zoom", "ui.dialog", json!({"name": "zoom"}), false);
         big(ui, app, "zoom100", "100%", "view.zoom100", json!({}), false);
+        // Step the zoom up and down by 10% (issue #67), from whatever the page shows now.
+        stack(ui, |ui| {
+            small(ui, app, "zoomIn", Some("Zoom In"), "Zoom In", "view.zoomIn", json!({}), false);
+            small(ui, app, "zoomOut", Some("Zoom Out"), "Zoom Out", "view.zoomOut", json!({}), false);
+        });
         stack(ui, |ui| {
             small(ui, app, "onePage", Some("One Page"), "One Page", "view.onePage", json!({}), v.fit == "onePage");
             small(ui, app, "multiplePages", Some("Multiple Pages"), "Multiple Pages", "view.multiplePages", json!({}), v.multi_page);
@@ -1256,6 +1261,22 @@ fn table_design(app: &mut WordApp, ui: &mut Ui) {
             });
         });
         stack(ui, |ui| {
+            let can_modify = look.is_some()
+                && app
+                    .session
+                    .sel
+                    .focus
+                    .path
+                    .cell()
+                    .and_then(|(tp, _, _)| app.session.doc.table(app.session.sel.focus.story, &tp)?.props.style.clone())
+                    .is_some();
+            menu_button(ui, app, "styles", Some("Styles"), "Table Styles", false, |ui, app| {
+                mi(ui, app, "New Table Style…", "ui.dialog", json!({"name": "newTableStyle"}));
+                if ui.add_enabled(can_modify, egui::Button::new(tl!("Modify Table Style…")).min_size(vec2(200.0, 0.0))).clicked() {
+                    let _ = app.run("ui.dialog", json!({"name": "modifyTableStyle"}));
+                    ui.close();
+                }
+            });
             split(ui, app, "shading", "Shading", "table.shading", json!({"color": app.canvas.last_shading.clone()}), false, None, |ui, app| {
                 mi(ui, app, "No Color", "table.shading", json!({"color": null}));
                 let theme = app.session.doc.settings.theme_colors.clone();
@@ -1292,8 +1313,8 @@ fn table_layout(app: &mut WordApp, ui: &mut Ui) {
                 mi(ui, app, "Select Row", "table.selectRow", json!({}));
                 mi(ui, app, "Select Table", "table.selectTable", json!({}));
             });
-            let g = app.session.view.gridlines;
-            small(ui, app, "gridlines", Some("View Gridlines"), "View Gridlines", "view.gridlines", json!({}), g);
+            let g = app.session.view.table_gridlines;
+            small(ui, app, "gridlines", Some("View Gridlines"), "View Gridlines", "table.viewGridlines", json!({}), g);
             small(ui, app, "properties", Some("Properties"), "Table Properties", "table.properties", json!({}), false);
         });
     });

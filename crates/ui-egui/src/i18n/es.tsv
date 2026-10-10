@@ -952,3 +952,11 @@
 	Dark	Oscuro
 	Use system setting	Usar la configuración del sistema
 	A file dialog is already open.	Ya hay un cuadro de diálogo de archivo abierto.
+	New Table Style	Nuevo estilo de tabla
+	Modify Table Style	Modificar estilo de tabla
+	New Table Style…	Nuevo estilo de tabla…
+	Modify Table Style…	Modificar estilo de tabla…
+	Apply formatting to:	Aplicar formato a:
+	Whole Table	Toda la tabla
+	Fill color:	Color de relleno:
+	{count} items highlighted	{count} elementos resaltados

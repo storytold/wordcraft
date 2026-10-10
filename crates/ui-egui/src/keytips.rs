@@ -333,7 +333,7 @@ fn controls(tab: &str) -> Vec<Control> {
         }
         "Table Layout" => vec![
             m("Select", "table.selectCell"),
-            c("View Gridlines", "view.gridlines"),
+            c("View Gridlines", "table.viewGridlines"),
             c("Properties", "table.properties"),
             m("Delete", "table.deleteCells"),
             c("Insert Above", "table.insertRowAbove"),

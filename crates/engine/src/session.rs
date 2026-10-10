@@ -41,7 +41,11 @@ pub struct ViewState {
     pub focus_mode: bool,
     pub marks: bool,
     pub ruler: bool,
+    /// View › Show › Gridlines: the drawing grid over the page's text area (on screen only).
     pub gridlines: bool,
+    /// Table Layout › View Gridlines: outlines of table cells (on screen only).
+    #[serde(default)]
+    pub table_gridlines: bool,
     pub nav_pane: bool,
     pub styles_pane: bool,
     pub comments_pane: bool,
@@ -66,6 +70,7 @@ impl Default for ViewState {
             marks: false,
             ruler: true,
             gridlines: false,
+            table_gridlines: false,
             nav_pane: false,
             styles_pane: false,
             comments_pane: false,
