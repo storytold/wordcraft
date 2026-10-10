@@ -3,6 +3,7 @@
 mod chart;
 mod diagram;
 mod drawing_color;
+mod embed;
 mod math;
 mod props;
 mod story;
@@ -20,7 +21,7 @@ use wordcraft_doc::styles::{Style, StyleKind, StyleSheet, TableStyleParts};
 use wordcraft_doc::{Block, Blocks, Comment, Document, InlineObject, PartKind, Revision, RevisionKind};
 
 use crate::DocxError;
-use crate::package::{ContentTypes, MAX_VBA_RELATED, Package, Rels, VBA_PROJECT_PART, VBA_RELATED, rel_is, rt};
+use crate::package::{ContentTypes, EMBEDDED_PARTS, EmbeddedManifest, MAX_VBA_RELATED, Package, Rels, VBA_PROJECT_PART, VBA_RELATED, rel_is, rt};
 use crate::units::{flag, int, on_off, tw, u32_of};
 use crate::xml::El;
 pub(crate) use props::PropCtx;
@@ -53,6 +54,12 @@ pub(crate) struct Reader<'p> {
     graphics: HashMap<(GraphicKind, String, u32, u32), Arc<Graphic>>,
     /// Graphic work left before charts and diagrams are left empty (see [`MAX_GRAPHIC_WORK`]).
     graphic_budget: usize,
+    /// The main document part's name.
+    main: String,
+    /// The package's content types, read when first needed.
+    content_types: Option<ContentTypes>,
+    /// Parts kept for charts, diagrams and OLE objects (see `embed`).
+    embedded: EmbeddedManifest,
 }
 
 /// The package path that internal relationship `id` points at, if it has type `kind` (an `rt`
@@ -91,6 +98,9 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocxError> {
         graphic_parts: HashMap::new(),
         graphics: HashMap::new(),
         graphic_budget: MAX_GRAPHIC_WORK,
+        main: main.clone(),
+        content_types: None,
+        embedded: EmbeddedManifest::default(),
     };
     r.pc.major_font = r.doc.settings.major_font.clone();
     r.pc.minor_font = r.doc.settings.minor_font.clone();
@@ -157,6 +167,10 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocxError> {
     {
         r.doc.passthrough.insert(VBA_PROJECT_PART.into(), Arc::new(b.to_vec()));
         r.read_vba_related(&v);
+    }
+    if !r.embedded.parts.is_empty() {
+        let manifest = r.embedded.to_bytes();
+        r.doc.passthrough.insert(EMBEDDED_PARTS.into(), Arc::new(manifest));
     }
     let mut doc = r.doc;
     doc.ensure_nonempty();
@@ -236,7 +250,8 @@ impl Reader<'_> {
     /// content types (see [`VBA_RELATED`]). Parts outside `word/`, relationship parts, the project
     /// itself and missing targets are skipped (logged); at most [`MAX_VBA_RELATED`] are kept.
     fn read_vba_related(&mut self, project: &str) {
-        let types = ContentTypes::read(self.pkg);
+        let pkg = self.pkg;
+        let types = self.content_types.get_or_insert_with(|| ContentTypes::read(pkg));
         let mut manifest = String::new();
         let mut kept = 0usize;
         for rel in self.pkg.rels(project).list.iter().filter(|r| !r.external) {
