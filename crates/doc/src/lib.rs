@@ -15,6 +15,7 @@ pub mod edit;
 pub mod effects;
 pub mod encoding;
 pub mod fields;
+pub mod freeform;
 pub mod graphic;
 pub mod math;
 pub mod math_edit;

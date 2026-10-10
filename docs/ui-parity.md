@@ -10,7 +10,7 @@ own (`AGENTS.md`: no Microsoft iconography, ever).
 
 | Area | WordCraft | Word | Parity | Hours |
 |---|---|---|---|---|
-| Ribbon tabs and groups | All Word tabs including contextual Table Design/Layout, Picture Format, Shape Format, Header & Footer, Equation; ribbon overflow (#43, #129). Missing: Draw tab content | Same plus Draw | 85% | (Draw in features) |
+| Ribbon tabs and groups | All Word tabs including contextual Table Design/Layout, Picture Format, Shape Format, Header & Footer, Equation; ribbon overflow (#43, #129). Draw tab: Select, Eraser, Pen, Pencil, Highlighter with colour and thickness (#307); missing: Lasso, Add Pen, Ink to Shape/Math, Ink Replay | Same plus Draw | 85% | (Draw in features) |
 | Keytips (Alt / ⌃⌥ letters) | ✅ (#43) | ✅ | 85% | 1–2 |
 | Mini-toolbar on selection | ✅ (#43) | ✅ | 80% | 1–2 |
 | Quick Access Toolbar | Undo, Redo, Repeat, AutoSave | customizable | 50% | 2–3 |
@@ -48,3 +48,4 @@ own (`AGENTS.md`: no Microsoft iconography, ever).
 | 2026-10-10 | trivial | Table Properties dialog and Table Layout Height/Width boxes (#44) |
 | 2026-10-10 | minor | Merged main: Style Inspector, Column Selection, zoom buttons, inertial scrolling, File Info landed |
 | 2026-10-10 | major | First version: ribbon, dialog, shortcut and interaction inventory |
+| 2026-10-10 | trivial | Draw tab tools and Review › Hide Ink (#307) |

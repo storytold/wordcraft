@@ -4,7 +4,7 @@ use egui::{Align2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use serde_json::{Value, json};
 
 use crate::theme::{Tokens, medium, regular, semibold};
-use crate::widgets::{CONTENT_H, LABEL_H, big, color_grid, combo, font_combo, group, menu_button, small, split};
+use crate::widgets::{CONTENT_H, LABEL_H, big, big_toggle, color_grid, combo, font_combo, group, menu_button, small, split};
 use crate::{WordApp, icons};
 
 pub const TABS: [&str; 12] = ["File", "Home", "Insert", "Draw", "Design", "Layout", "References", "Mailings", "Review", "View", "Zotero", "Help"];
@@ -228,9 +228,14 @@ fn stack(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
 }
 
 fn mi(ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: Value) {
+    mi_text(ui, app, tl!(label), id, params);
+}
+
+/// A menu item whose text is already in the interface language.
+fn mi_text(ui: &mut Ui, app: &mut WordApp, text: &str, id: &str, params: Value) {
     let sc = crate::widgets::shortcut_text(app, id);
     let enabled = crate::widgets::enabled(app, id);
-    let resp = ui.add_enabled(enabled, egui::Button::new(tl!(label)).shortcut_text(sc).min_size(vec2(200.0, 0.0)));
+    let resp = ui.add_enabled(enabled, egui::Button::new(text).shortcut_text(sc).min_size(vec2(200.0, 0.0)));
     if resp.clicked() {
         let _ = app.run(id, params);
         ui.close();
@@ -518,6 +523,8 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
             crate::dialogs::table_grid_picker(ui, app);
             ui.separator();
             mi(ui, app, "Insert Table…", "ui.dialog", json!({"name": "insertTable"}));
+            let drawing = app.canvas.table_tool == Some(crate::table_pen::TableTool::Draw);
+            mi_check(ui, app, "Draw Table", drawing, "table.draw", json!({}));
             mi(ui, app, "Convert Text to Table…", "table.fromText", json!({}));
             ui.menu_button(tl!("Quick Tables"), |ui| {
                 mi(ui, app, "Tabular List", "table.quick", json!({"kind": "tabular"}));
@@ -643,13 +650,41 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
 }
 
 fn draw(app: &mut WordApp, ui: &mut Ui) {
+    use wordcraft_doc::freeform::InkTool;
+    use wordcraft_engine::cmd::draw::DrawMode;
+    let mode = app.session.view.draw.mode;
+    // The pen the colour and thickness menus change: the one in use, else the pen.
+    let tool = mode.pen().unwrap_or(InkTool::Pen);
+    let pen_id = |t: InkTool| match t {
+        InkTool::Pen => "draw.pen",
+        InkTool::Pencil => "draw.pencil",
+        InkTool::Highlighter => "draw.highlighter",
+    };
     group(ui, "Drawing Tools", None, app, |ui, app| {
-        big(ui, app, "select", "Select", "draw.select", json!({}), false);
+        big_toggle(ui, app, "select", "Select", "draw.select", mode == DrawMode::Select);
         big(ui, app, "lasso", "Lasso", "draw.lasso", json!({}), false);
-        big(ui, app, "eraser", "Eraser", "draw.eraser", json!({}), false);
-        big(ui, app, "pen", "Pen", "draw.pen", json!({}), false);
-        big(ui, app, "pencil", "Pencil", "draw.pencil", json!({}), false);
-        big(ui, app, "highlight", "Highlighter", "draw.highlighter", json!({}), false);
+        big_toggle(ui, app, "eraser", "Eraser", "draw.eraser", mode == DrawMode::Eraser);
+        big_toggle(ui, app, "pen", "Pen", "draw.pen", mode == DrawMode::Pen(InkTool::Pen));
+        big_toggle(ui, app, "pencil", "Pencil", "draw.pencil", mode == DrawMode::Pen(InkTool::Pencil));
+        big_toggle(ui, app, "highlight", "Highlighter", "draw.highlighter", mode == DrawMode::Pen(InkTool::Highlighter));
+        let set = app.session.view.draw.settings(tool);
+        stack(ui, |ui| {
+            let sw = Some(crate::theme::c32(set.color));
+            split(ui, app, "fontcolor", "Color", pen_id(tool), json!({}), false, sw, |ui, app| {
+                let theme = app.session.doc.settings.theme_colors.clone();
+                if let Some(hex) = color_grid(ui, &theme) {
+                    let _ = app.run(pen_id(tool), json!({"color": hex}));
+                    ui.close();
+                }
+            });
+            menu_button(ui, app, "thickness", None, "Thickness", false, |ui, app| {
+                let widths: &[f32] = if tool == InkTool::Highlighter { &[4.0, 8.0, 12.0, 18.0, 24.0] } else { &[0.5, 1.0, 1.5, 2.5, 3.5, 5.0] };
+                for w in widths {
+                    let label = crate::i18n::fmt(tl!("{n} pt"), &[("n", &w.to_string())]);
+                    mi_check(ui, app, &label, (set.width - w).abs() < 0.01, pen_id(tool), json!({"width": w}));
+                }
+            });
+        });
     });
     group(ui, "Convert", None, app, |ui, app| {
         big(ui, app, "inkToShape", "Ink to\nShape", "draw.inkToShape", json!({}), false);
@@ -681,7 +716,7 @@ fn design(app: &mut WordApp, ui: &mut Ui) {
             });
             menu_button(ui, app, "fonts", Some("Fonts"), "Theme Fonts", false, |ui, app| {
                 for (name, h, b, _) in wordcraft_engine::cmd::design::THEMES {
-                    mi(ui, app, &format!("{name}: {h} / {b}"), "design.themeFonts", json!({"heading": h, "body": b}));
+                    mi_text(ui, app, &format!("{}: {h} / {b}", tl!(name)), "design.themeFonts", json!({"heading": h, "body": b}));
                 }
             });
         });
@@ -802,7 +837,7 @@ fn layout(app: &mut WordApp, ui: &mut Ui) {
             ui.label("");
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(tl!("Before:")).small());
-                if ui.add(egui::DragValue::new(&mut b).speed(1.0).range(0.0..=1584.0).suffix(" pt")).changed() {
+                if ui.add(egui::DragValue::new(&mut b).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt")))).changed() {
                     let _ = app.run("para.spacing", json!({"before": b}));
                 }
             });
@@ -818,7 +853,7 @@ fn layout(app: &mut WordApp, ui: &mut Ui) {
             ui.label("");
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(tl!("After:")).small());
-                if ui.add(egui::DragValue::new(&mut a).speed(1.0).range(0.0..=1584.0).suffix(" pt")).changed() {
+                if ui.add(egui::DragValue::new(&mut a).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt")))).changed() {
                     let _ = app.run("para.spacing", json!({"after": a}));
                 }
             });
@@ -1085,6 +1120,10 @@ fn review(app: &mut WordApp, ui: &mut Ui) {
         big(ui, app, "blockAuthors", "Block\nAuthors", "review.blockAuthors", json!({}), false);
         big(ui, app, "restrict", "Restrict\nEditing", "review.restrict", json!({}), false);
     });
+    group(ui, "Ink", None, app, |ui, app| {
+        let hidden = app.session.view.hide_ink;
+        big_toggle(ui, app, "hideInk", "Hide\nInk", "review.hideInk", hidden);
+    });
 }
 
 fn view(app: &mut WordApp, ui: &mut Ui) {
@@ -1333,7 +1372,7 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
             crate::widgets::row(ui, |ui| {
                 ui.label(egui::RichText::new(tl!("W:")).small());
                 let mut w = w0;
-                let r = ui.add(egui::DragValue::new(&mut w).speed(1.0).range(4.0..=2000.0).suffix(" pt"));
+                let r = ui.add(egui::DragValue::new(&mut w).speed(1.0).range(4.0..=2000.0).suffix(format!(" {}", tl!("pt"))));
                 if r.changed() {
                     if r.dragged() && !r.drag_started() {
                         app.session.join_next_undo();
@@ -1342,7 +1381,7 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
                 }
                 ui.label(egui::RichText::new(tl!("H:")).small());
                 let mut h = h0;
-                let r = ui.add(egui::DragValue::new(&mut h).speed(1.0).range(4.0..=2000.0).suffix(" pt"));
+                let r = ui.add(egui::DragValue::new(&mut h).speed(1.0).range(4.0..=2000.0).suffix(format!(" {}", tl!("pt"))));
                 if r.changed() {
                     if r.dragged() && !r.drag_started() {
                         app.session.join_next_undo();
@@ -1410,7 +1449,7 @@ fn table_design(app: &mut WordApp, ui: &mut Ui) {
                 let _ = row;
                 for (label, key, val) in items {
                     let mut v = *val;
-                    if ui.checkbox(&mut v, *label).changed() {
+                    if ui.checkbox(&mut v, tl!(label)).changed() {
                         let _ = app.run("table.look", json!({ *key: v }));
                     }
                 }
@@ -1557,6 +1596,12 @@ fn table_layout(app: &mut WordApp, ui: &mut Ui) {
             small(ui, app, "properties", Some("Properties"), "Table Properties", "table.properties", json!({}), false);
         });
     });
+    group(ui, "Draw", None, app, |ui, app| {
+        use crate::table_pen::TableTool;
+        let tool = app.canvas.table_tool;
+        crate::widgets::big_toggle(ui, app, "drawTable", "Draw\nTable", "table.draw", tool == Some(TableTool::Draw));
+        crate::widgets::big_toggle(ui, app, "eraser", "Eraser", "table.eraser", tool == Some(TableTool::Erase));
+    });
     group(ui, "Rows & Columns", None, app, |ui, app| {
         menu_button(ui, app, "deleteTable", Some("Delete"), "Delete", true, |ui, app| {
             mi(ui, app, "Delete Cells", "table.deleteCells", json!({}));
@@ -1592,10 +1637,13 @@ fn table_layout(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Alignment", None, app, |ui, app| {
         egui::Grid::new("cellalign").spacing(vec2(1.0, 1.0)).show(ui, |ui| {
-            for row in [["topLeft", "topCenter", "topRight"], ["centerLeft", "center", "centerRight"], ["bottomLeft", "bottomCenter", "bottomRight"]]
-            {
-                for v in row {
-                    small(ui, app, "cellAlign", None, v, "table.cellAlign", json!({"value": v}), false);
+            for row in [
+                [("topLeft", "Align Top Left"), ("topCenter", "Align Top Center"), ("topRight", "Align Top Right")],
+                [("centerLeft", "Align Center Left"), ("center", "Align Center"), ("centerRight", "Align Center Right")],
+                [("bottomLeft", "Align Bottom Left"), ("bottomCenter", "Align Bottom Center"), ("bottomRight", "Align Bottom Right")],
+            ] {
+                for (v, tip) in row {
+                    small(ui, app, "cellAlign", None, tip, "table.cellAlign", json!({"value": v}), false);
                 }
                 ui.end_row();
             }

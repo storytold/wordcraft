@@ -27,6 +27,7 @@ pub mod file_dialogs;
 pub mod frame;
 pub mod i18n;
 pub mod icons;
+pub mod ink;
 pub mod keys;
 pub mod keytips;
 pub mod mini_toolbar;
@@ -37,6 +38,7 @@ pub mod previews;
 pub mod read_aloud;
 pub mod ribbon;
 pub mod scroll;
+pub mod table_pen;
 pub mod theme;
 pub mod widgets;
 pub mod window_geometry;
@@ -359,6 +361,9 @@ impl WordApp {
         }
         if id == "file.autosave" {
             return self.set_autosave(&params);
+        }
+        if let Some(r) = table_pen::toggle(self, id, &params) {
+            return r;
         }
         let ctx = self.ctx.clone();
         if let Some(r) = zotero::command(self, id, &params, ctx.as_ref()) {
@@ -741,13 +746,14 @@ impl WordApp {
         }
     }
 
-    /// Document title for the title bar.
+    /// Document title for the title bar (and the suggested file name). An untitled document is
+    /// named in the interface language, as `Document1` is in English.
     pub fn title_stem(&self) -> String {
         match &self.session.path {
-            Some(p) => p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Document1".into()),
+            Some(p) => p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| tl!("Document1").into()),
             None => {
                 if self.session.doc.core.title.is_empty() {
-                    "Document1".into()
+                    tl!("Document1").into()
                 } else {
                     self.session.doc.core.title.clone()
                 }

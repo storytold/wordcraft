@@ -191,6 +191,7 @@
 	Clear Character Style	Очистити стиль символів
 	Clear Formatting Level	Очистити рівень форматування
 	Clear Paragraph Formatting	Очистити форматування абзацу
+	Click a border between two cells to merge them. Esc stops.	Клацніть межу між двома клітинками, щоб об'єднати їх. Esc завершує.
 	Clipboard	Буфер обміну
 	Clipboard Pane	Панель буфера обміну
 	Clipboard Items	Елементи буфера обміну
@@ -261,6 +262,8 @@
 	Delete Style	Видалити стиль
 	Delete Table	Видалити таблицю
 	Design	Дизайн
+	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	Перетягніть прямокутник, щоб намалювати таблицю, або лінію через клітинки, щоб їх розділити. Esc завершує.
+	Draw Table	Намалювати таблицю
 	Edit Comment	Редагувати коментар
 	Left Margin	Ліве поле
 	Indents and Spacing	Відступи й інтервали
@@ -1122,6 +1125,12 @@
 	Leave the equation (Esc)	Вийти з рівняння (Esc)
 	Preview	Попередній перегляд
 	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft
+	Draw Ink	Малювати чорнилом
+	Erase Ink	Стерти чорнило
+	Hide Ink	Сховати чорнило
+	Hide\nInk	Сховати\nчорнило
+	Pens	Пера
+	Thickness	Товщина
 
 # Columns, Symbol and Field dialogs (#321).
 	(All)	(Усі)
@@ -1256,6 +1265,57 @@
 	The password is removed. Save the document to keep the change.	Пароль видалено. Збережіть документ, щоб зберегти зміну.
 	The passwords don't match.	Паролі не збігаються.
 	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	Зберігайте пароль у надійному місці: без нього ніхто, зокрема WordCraft, не зможе відкрити документ. Залиште обидва поля порожніми, щоб видалити пароль.
+
+# Interface text routed through translation (#313)
+	Align Top Left	Вирівняти вгорі ліворуч
+	Align Top Center	Вирівняти вгорі по центру
+	Align Top Right	Вирівняти вгорі праворуч
+	Align Center Left	Вирівняти посередині ліворуч
+	Align Center	Вирівняти по центру
+	Align Center Right	Вирівняти посередині праворуч
+	Align Bottom Left	Вирівняти внизу ліворуч
+	Align Bottom Center	Вирівняти внизу по центру
+	Align Bottom Right	Вирівняти внизу праворуч
+	{contributors} contributors · {commits} commits	Учасників: {contributors} · комітів: {commits}
+	{cols}×{rows} Table	Таблиця {cols}×{rows}
+	AaBbYyZz	AaBbYyZz ЄєЇї
+	pt	пт
+	Document1	Документ1
+	Username	Ім'я користувача
+	Display name	Відображуване ім'я
+	Real name	Справжнє ім'я
+	Name	Ім'я
+	PRs	PR
+	Commits	Коміти
+	First	Перший
+	Last	Останній
+	Model	Модель
+	Version	Версія
+	% of all commits	% усіх комітів
+	Lines +/−	Рядки +/−
+	Craft	Ремесло
+	Studio	Студія
+	Atelier	Ательє
+	Darkroom	Фотолабораторія
+	Gallery	Галерея
+	Sketchbook	Альбом для ескізів
+	Change Picture…	Змінити зображення…
+	Font…	Шрифт…
+	Paragraph…	Абзац…
+	Link…	Посилання…
+	Size and Crop…	Розмір і обтинання…
+	Insert Columns to the Left	Вставити стовпці ліворуч
+	Insert Columns to the Right	Вставити стовпці праворуч
+	Insert Rows Above	Вставити рядки вище
+	Insert Rows Below	Вставити рядки нижче
+	Mon	Пн
+	Tue	Вт
+	Wed	Ср
+	Sum	Сума
+	North	Північ
+	South	Південь
+	West	Захід
+	Total	Разом
 	Rotation	Поворот
 	Rotation:	Поворот:
 	Rotate Right 90°	Повернути праворуч на 90°
