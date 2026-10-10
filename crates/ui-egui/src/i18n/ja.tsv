@@ -23,6 +23,8 @@
 	Advanced	詳細
 	After:	段落後:
 	Agents	エージェント
+	Agents join at {address}	エージェントの参加先: {address}
+	Agents wait for you (8 messages in a row).	エージェントはあなたの返信を待っています (8 件連続のメッセージ)。
 	Align	配置
 	Align Left	左揃え
 	Align Right	右揃え
@@ -100,6 +102,7 @@
 	Characters (with spaces)	文字数（スペースを含める）
 	Chart	グラフ
 	Chat	チャット
+	Chat log not saved: {error}	チャットの記録を保存できませんでした: {error}
 	Chat Members	チャットのメンバー
 	Check Accessibility	アクセシビリティ チェック
 	Check Compatibility	互換性チェック
@@ -230,6 +233,7 @@
 	Export PDF	PDF にエクスポート
 	Exported {path}	{path} にエクスポートしました
 	Extend Selection	選択範囲の拡張
+	Failed: {error}	失敗しました: {error}
 	Field	フィールド
 	File	ファイル
 	Find	検索
@@ -263,6 +267,7 @@
 	Formatting at Selection	選択範囲の書式
 	Formula	計算式
 	General	全般
+	Give this line to the agent. It works once, for 10 minutes.	この行をエージェントに渡してください。1 回だけ、10 分間有効です。
 	Go To	ジャンプ
 	Go to	移動
 	Go To (⌘⌥G)	ジャンプ (⌘⌥G)
@@ -386,10 +391,12 @@
 	Match case	大文字と小文字を区別する
 	Match Fields	フィールドの対応
 	Matrix	行列
+	Members	メンバー
 	Merge	結合
 	Merge Cells	セルの結合
 	Merge Formatting	書式を結合
 	Merged PRs	マージ済みの PR
+	Message (@name …), Enter to send	メッセージ (@名前 …)、Enter で送信
 	Mirrored	見開きページ
 	MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.	MIT OR Apache-2.0。Copyright (c) 2026 ArtCraft チームおよび WordCraft の貢献者。
 	Moderate	やや狭い
@@ -417,7 +424,9 @@
 	Next Page	次のページから開始
 	Next Record	次のレコード
 	Next Section	次へ
+	No agents in the chat yet.	まだチャットにエージェントはいません。
 	No Border	枠なし
+	No chat in this window.	このウィンドウにはチャットがありません。
 	No Color	色なし
 	No contributor data was built into this copy.	このビルドには貢献者のデータが含まれていません。
 	No Markup	変更履歴/コメントなし
@@ -431,6 +440,7 @@
 	Not available right now	現在は使用できません
 	Not saved	未保存
 	Not saved yet	まだ保存されていません
+	Not sent: {error}	送信されませんでした: {error}
 	Number of columns:	列数:
 	Number of rows:	行数:
 	Numbering	段落番号
@@ -527,6 +537,7 @@
 	Reject All Changes	すべての変更を元に戻す
 	Reject Change	変更を元に戻す
 	Relaxed	ゆったり
+	Remove	削除
 	Remove Agent	エージェントを削除
 	Remove Background	背景の削除
 	Remove Footer	フッターの削除
@@ -688,6 +699,7 @@
 	Tables	表
 	Tabs	タブ
 	Tabular List	表形式の一覧
+	Talk with AI agents about this document. Start Chat opens a port on this computer for them.	この文書について AI エージェントと話し合います。「チャットを開始」で、このコンピューターにエージェント用のポートが開きます。
 	Text	テキスト
 	Text Box	テキスト ボックス
 	Text Direction	文字列の方向
@@ -700,7 +712,9 @@
 	Text:	テキスト:
 	Text\nBox	テキスト ボックス
 	Text\nDirection	文字列の方向
+	The chat is kept in memory until you save the document.	文書を保存するまで、チャットはメモリー上にだけ保持されます。
 	The new style takes the formatting of the current paragraph.	新しいスタイルには現在の段落の書式が使われます。
+	The user name cannot start with @.	ユーザー名を @ で始めることはできません。
 	Theme Colors	テーマの色
 	Theme Fonts	テーマのフォント
 	Theme List	テーマの一覧

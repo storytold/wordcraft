@@ -16,8 +16,9 @@ macro_rules! tl {
 pub mod backstage;
 pub mod canvas;
 pub mod chat_gate;
-mod chat_log;
 pub mod chat_guard;
+mod chat_log;
+pub mod chat_pane;
 pub mod chat_shift;
 pub mod chrome;
 pub mod control;
@@ -75,6 +76,8 @@ pub struct UiState {
     pub window: Option<window_geometry::WindowGeometry>,
     /// Interface language: `auto` (follow the system) or a code from [`i18n::LANGUAGES`].
     pub language: String,
+    /// The chat pane (Review › Chat) is open.
+    pub chat_pane: bool,
 }
 
 impl Default for UiState {
@@ -91,6 +94,7 @@ impl Default for UiState {
             author: String::new(),
             window: None,
             language: i18n::AUTO.into(),
+            chat_pane: false,
         }
     }
 }
@@ -221,7 +225,7 @@ impl WordApp {
 
     fn after_command(&mut self, id: &str) {
         self.canvas.caret_visible_since = now_ms();
-        if !id.starts_with("view.") && !id.starts_with("document.") && !id.starts_with("format.state") {
+        if !id.starts_with("view.") && !id.starts_with("document.") && !id.starts_with("format.state") && !id.starts_with("chat.") {
             self.canvas.scroll_to_caret = true;
         }
         for req in std::mem::take(&mut self.session.ui_requests) {
@@ -261,6 +265,9 @@ impl WordApp {
         }
         if req.get("close").is_some() {
             self.quit_requested = true;
+        }
+        if let Some(open) = req.get("chatPane").and_then(Value::as_bool) {
+            self.ui.chat_pane = open;
         }
     }
 
@@ -463,6 +470,7 @@ impl WordApp {
             chrome::title_bar(self, ui);
             ribbon::show(self, ui);
             chrome::status_bar(self, ui);
+            chat_pane::show(self, ui);
             panes::show(self, ui);
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
                 canvas::show(self, ui);

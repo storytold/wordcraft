@@ -699,6 +699,11 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.rect(3.0, 3.0, 17.0, 17.0, c);
             pen.frect(12.0, 3.0, 17.0, 17.0, a.linear_multiply(0.4));
         }
+        "chat" => {
+            // Two speech bubbles: the owner's (outline) and an agent's (accent).
+            pen.closed(&[(2.0, 3.0), (12.0, 3.0), (12.0, 10.0), (6.5, 10.0), (4.0, 12.5), (4.0, 10.0), (2.0, 10.0)], c);
+            pen.closed(&[(8.0, 8.0), (18.0, 8.0), (18.0, 15.0), (16.0, 15.0), (16.0, 17.5), (13.5, 15.0), (8.0, 15.0)], a);
+        }
         "resolve" => {
             pen.closed(&[(2.5, 3.5), (17.5, 3.5), (17.5, 13.5), (9.0, 13.5), (5.0, 17.0), (5.0, 13.5), (2.5, 13.5)], c);
             pen.line_c(&[(6.5, 8.5), (9.0, 11.0), (13.5, 6.0)], green);

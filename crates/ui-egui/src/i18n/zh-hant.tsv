@@ -24,6 +24,8 @@
 	Advanced	進階
 	After:	段落後：
 	Agents	代理程式
+	Agents join at {address}	代理程式透過 {address} 加入
+	Agents wait for you (8 messages in a row).	代理程式正在等你（已連續 8 則訊息）。
 	Align	對齊
 	Align Left	靠左對齊
 	Align Right	靠右對齊
@@ -101,6 +103,7 @@
 	Characters (with spaces)	字元數（含空格）
 	Chart	圖表
 	Chat	聊天
+	Chat log not saved: {error}	聊天記錄未儲存：{error}
 	Chat Members	聊天成員
 	Check Accessibility	檢查協助工具
 	Check Compatibility	檢查相容性
@@ -231,6 +234,7 @@
 	Export PDF	匯出 PDF
 	Exported {path}	已匯出 {path}
 	Extend Selection	擴大選取範圍
+	Failed: {error}	失敗：{error}
 	Field	功能變數
 	File	檔案
 	Find	尋找
@@ -264,6 +268,7 @@
 	Formatting at Selection	選取範圍的格式
 	Formula	公式
 	General	一般
+	Give this line to the agent. It works once, for 10 minutes.	把這一行交給代理程式。它只能使用一次，10 分鐘內有效。
 	Go To	移至
 	Go to	移至
 	Go To (⌘⌥G)	移至 (⌘⌥G)
@@ -387,10 +392,12 @@
 	Match case	大小寫須相符
 	Match Fields	對應欄位
 	Matrix	矩陣
+	Members	成員
 	Merge	合併
 	Merge Cells	合併儲存格
 	Merge Formatting	合併格式設定
 	Merged PRs	已合併的 PR
+	Message (@name …), Enter to send	訊息（@名稱 …），按 Enter 傳送
 	Mirrored	左右對稱
 	MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.	MIT OR Apache-2.0。著作權所有 (c) 2026 ArtCraft 團隊及 WordCraft 貢獻者。
 	Moderate	中等
@@ -418,7 +425,9 @@
 	Next Page	下一頁
 	Next Record	下一筆記錄
 	Next Section	下一節
+	No agents in the chat yet.	聊天中還沒有代理程式。
 	No Border	無框線
+	No chat in this window.	此視窗沒有聊天。
 	No Color	無色彩
 	No contributor data was built into this copy.	此版本未內建貢獻者資料。
 	No Markup	無標記
@@ -432,6 +441,7 @@
 	Not available right now	目前無法使用
 	Not saved	未儲存
 	Not saved yet	尚未儲存
+	Not sent: {error}	未傳送：{error}
 	Number of columns:	欄數：
 	Number of rows:	列數：
 	Numbering	編號
@@ -528,6 +538,7 @@
 	Reject All Changes	拒絕所有變更
 	Reject Change	拒絕變更
 	Relaxed	寬鬆
+	Remove	移除
 	Remove Agent	移除代理程式
 	Remove Background	移除背景
 	Remove Footer	移除頁尾
@@ -689,6 +700,7 @@
 	Tables	表格
 	Tabs	定位點
 	Tabular List	表格式清單
+	Talk with AI agents about this document. Start Chat opens a port on this computer for them.	與 AI 代理程式討論此文件。「開始聊天」會在本機為它們開啟一個連接埠。
 	Text	文字
 	Text Box	文字方塊
 	Text Direction	文字方向
@@ -701,7 +713,9 @@
 	Text:	文字：
 	Text\nBox	文字方塊
 	Text\nDirection	文字方向
+	The chat is kept in memory until you save the document.	在儲存文件之前，聊天內容只保留在記憶體中。
 	The new style takes the formatting of the current paragraph.	新樣式會採用目前段落的格式。
+	The user name cannot start with @.	使用者名稱不能以 @ 開頭。
 	Theme Colors	佈景主題色彩
 	Theme Fonts	佈景主題字型
 	Theme List	佈景主題清單
