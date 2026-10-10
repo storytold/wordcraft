@@ -156,7 +156,15 @@ pub struct DisplayOptions {
 
 impl Default for DisplayOptions {
     fn default() -> Self {
-        DisplayOptions { marks: false, dim_header: true, dim_body: false, markup: true, placeholders: false, hide_ink: false, revisions: MarkupOptions::default() }
+        DisplayOptions {
+            marks: false,
+            dim_header: true,
+            dim_body: false,
+            markup: true,
+            placeholders: false,
+            hide_ink: false,
+            revisions: MarkupOptions::default(),
+        }
     }
 }
 

@@ -1413,7 +1413,16 @@ fn float_items(o: &InlineObject, rect: Rect, outer: (Spin, Point), story: StoryR
             vec![Placed::Image { rect, media: media.clone(), crop: *crop, story, path: Path(path.to_vec()), off, spin }]
         }
         InlineObject::Shape { kind, fill, stroke, stroke_width, effects, freeform, .. } => {
-            vec![Placed::Shape { rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width, effects: *effects, freeform: freeform.clone(), spin }]
+            vec![Placed::Shape {
+                rect,
+                kind: *kind,
+                fill: *fill,
+                stroke: *stroke,
+                stroke_width: *stroke_width,
+                effects: *effects,
+                freeform: freeform.clone(),
+                spin,
+            }]
         }
         InlineObject::Graphic { graphic, .. } => {
             vec![Placed::Graphic { rect, graphic: graphic.clone(), story, path: Path(path.to_vec()), off, spin }]
