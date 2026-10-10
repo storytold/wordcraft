@@ -2635,3 +2635,112 @@ fn builtin_table_styles_marked_custom_in_a_docx_cant_be_deleted() {
     let id = s.doc.table(StoryRef::Body, &tp).unwrap().props.style.clone().unwrap();
     assert!(s.doc.styles.get(&id).is_some(), "the table's style still exists");
 }
+
+/// Review › Language and the proofing commands work in Polish end to end: the language makes
+/// the document's words Polish, F7 and the issue list use the Polish dictionary and grammar,
+/// suggestions come from it, and a suggestion fixes the text.
+#[test]
+fn polish_proofing_through_the_review_commands() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Płynie żeka, a wogóle to wiem że tak."}));
+    // English by default: the Polish words are English misspellings.
+    assert!(run(&mut s, "review.issues", json!({})).as_array().unwrap().len() >= 5);
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "review.language", json!({"lang": "pl_PL", "default": true}));
+    assert_eq!(s.doc.styles.default_chr.lang.as_deref(), Some("pl-PL"), "the tag is normalized");
+    assert_eq!(run(&mut s, "format.state", json!({}))["lang"], "pl-PL");
+    let issues = run(&mut s, "review.issues", json!({}));
+    let arr = issues.as_array().unwrap();
+    let has = |text: &str, kind: &str, sugg: &str| {
+        arr.iter()
+            .any(|i| i["text"] == text && i["kind"] == kind && i["lang"] == "pl" && i["suggestions"].as_array().unwrap().iter().any(|x| x == sugg))
+    };
+    assert!(has("żeka", "spelling", "rzeka"), "{issues}");
+    assert!(has("wogóle", "spelling", "w ogóle"), "{issues}");
+    assert!(has(" że", "grammar", ", że"), "{issues}");
+    assert_eq!(arr.len(), 3, "{issues}");
+    assert!(arr.iter().any(|i| i["message"] == "Brak przecinka przed „że”"), "{issues}");
+    // F7 from the start selects the first issue; Change applies a suggestion.
+    run(&mut s, "caret.docStart", json!({}));
+    let first = run(&mut s, "review.spelling", json!({}));
+    assert_eq!(first["text"], "żeka");
+    run(&mut s, "review.applySuggestion", json!({"text": "rzeka"}));
+    assert!(text(&s).starts_with("Płynie rzeka,"), "{}", text(&s));
+    // Add to Dictionary works for Polish words too.
+    run(&mut s, "review.addToDictionary", json!({"word": "wogóle"}));
+    let left = run(&mut s, "review.issues", json!({}));
+    assert_eq!(left.as_array().unwrap().len(), 1, "{left}");
+}
+
+/// `review.language`: tags are validated and normalized, `noProof` alone keeps the language,
+/// no parameters keep the old meaning (US English), and `default` needs a language.
+#[test]
+fn review_language_validates_tags_and_marks_text_unchecked() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Hello wrold"}));
+    run(&mut s, "select.all", json!({}));
+    assert!(s.run("review.language", &json!({"lang": "not a tag!"})).is_err());
+    assert!(s.run("review.language", &json!({"lang": ""})).is_err());
+    assert!(s.run("review.language", &json!({"default": true, "noProof": true})).is_err(), "default needs a language");
+    assert_eq!(text(&s), "Hello wrold", "a refused command changes nothing");
+    run(&mut s, "review.language", json!({"noProof": true}));
+    let st = run(&mut s, "format.state", json!({}));
+    assert_eq!((st["noProof"].clone(), st["lang"].clone()), (json!(true), json!("en-US")));
+    assert_eq!(run(&mut s, "review.issues", json!({})), json!([]));
+    run(&mut s, "review.language", json!({"noProof": false}));
+    assert_eq!(run(&mut s, "review.issues", json!({})).as_array().unwrap().len(), 1);
+    run(&mut s, "review.language", json!({"lang": "PL"}));
+    assert_eq!(run(&mut s, "format.state", json!({}))["lang"], "pl");
+    run(&mut s, "review.language", json!({}));
+    assert_eq!(run(&mut s, "format.state", json!({}))["lang"], "en-US");
+    // A language without proofing tools: no marks.
+    run(&mut s, "review.language", json!({"lang": "fr-FR"}));
+    assert_eq!(run(&mut s, "review.issues", json!({})), json!([]));
+}
+
+/// The editing language (set by the front end from the interface language): new blank
+/// documents and opened plain text are written in it; the untouched first document switches,
+/// a document with changes never does, and templates stay English.
+#[test]
+fn new_documents_follow_the_editing_language() {
+    let mut s = s();
+    s.set_editing_language(Some("pl-PL"));
+    assert_eq!(s.doc.styles.default_chr.lang.as_deref(), Some("pl-PL"), "the untouched blank document switches");
+    assert!(!s.dirty && !s.can_undo(), "no change to save or undo");
+    run(&mut s, "text.insert", json!({"text": "Zażółć gęślą jaźń."}));
+    assert_eq!(run(&mut s, "review.issues", json!({})), json!([]));
+    s.set_editing_language(None);
+    assert_eq!(s.doc.styles.default_chr.lang.as_deref(), Some("pl-PL"), "a document with changes keeps its language");
+    s.set_editing_language(Some("pl"));
+    run(&mut s, "file.new", json!({}));
+    assert_eq!(s.doc.styles.default_chr.lang.as_deref(), Some("pl"));
+    run(&mut s, "file.new", json!({"template": "letter"}));
+    assert_eq!(s.doc.styles.default_chr.lang.as_deref(), Some("en-US"), "templates are English text");
+    let data = crate::cmd::insert::base64_encode("Płynie rzeka.".as_bytes());
+    run(&mut s, "file.open", json!({"path": "notatka.txt", "data": data}));
+    assert_eq!(s.doc.styles.default_chr.lang.as_deref(), Some("pl"));
+    assert_eq!(run(&mut s, "review.issues", json!({})), json!([]));
+    // Malformed tags fall back to US English.
+    s.set_editing_language(Some("not a tag"));
+    assert_eq!(s.editing_lang, None);
+}
+
+/// A Polish document keeps its languages through .docx: the default (`w:docDefaults`) and an
+/// English run (`w:lang`) come back, and so does the proofing.
+#[test]
+fn proofing_languages_survive_a_docx_round_trip() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Płynie żeka. Hello wrold."}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "review.language", json!({"lang": "pl-PL", "default": true}));
+    run(&mut s, "select.text", json!({"text": "Hello wrold."}));
+    run(&mut s, "review.language", json!({"lang": "en-GB"}));
+    let bytes = crate::io::save_bytes("polski.docx", &s.doc).unwrap();
+    let doc = crate::io::open_bytes("polski.docx", &bytes).unwrap();
+    assert_eq!(doc.styles.default_chr.lang.as_deref(), Some("pl-PL"));
+    let mut back = Session::new(doc);
+    let issues = run(&mut back, "review.issues", json!({}));
+    let found: Vec<(String, String)> =
+        issues.as_array().unwrap().iter().map(|i| (i["text"].as_str().unwrap().to_string(), i["lang"].as_str().unwrap().to_string())).collect();
+    assert_eq!(found, [("żeka".to_string(), "pl".to_string()), ("wrold".to_string(), "en".to_string())], "{issues}");
+}

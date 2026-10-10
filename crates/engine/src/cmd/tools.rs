@@ -340,17 +340,8 @@ pub fn specs() -> Vec<CommandSpec> {
             })
         })
         .params(r#"{"format": "decimal|upperRoman|lowerLetter…", "text"?: "%1.", "start"?: n}"#),
-        CommandSpec::new("review.language", "Language", "Review › Language", |s, v| {
-            let lang = p::str(v, "lang").unwrap_or("en-US").to_string();
-            let no_proof = p::bool(v, "noProof");
-            super::format::apply(s, &|c| {
-                c.lang = Some(lang.clone());
-                if let Some(np) = no_proof {
-                    c.no_proof = Some(np);
-                }
-            })
-        })
-        .params(r#"{"lang": "en-US|en-GB|fr-FR|…", "noProof"?: bool}"#),
+        CommandSpec::new("review.language", "Language", "Review › Language", set_language)
+            .params(r#"{"lang"?: "en-US|en-GB|pl-PL|fr-FR|…" (BCP 47; default en-US), "noProof"?: bool, "default"?: bool (also the document's default language)}"#),
         CommandSpec::new("review.showMarkup", "Show Markup", "Review › Tracking", |s, v| {
             s.view.show_markup = p::bool(v, "value").unwrap_or(!s.view.show_markup);
             s.relayout();
@@ -900,6 +891,34 @@ fn select_similar(s: &mut Session, _: &Value) -> CmdResult {
         s.sel = Selection { anchor: a, focus: b };
     }
     Ok(json!({"runs": count}))
+}
+
+/// Review › Language: the proofing language of the selection (`lang`, a BCP 47 tag such as
+/// `pl-PL`; `en-US` when neither `lang` nor `noProof` is given), and/or whether it is checked at
+/// all (`noProof`). With `default`, `lang` also becomes the document's default language (its
+/// default run formatting, `w:docDefaults` in .docx): text with no language of its own follows.
+fn set_language(s: &mut Session, v: &Value) -> CmdResult {
+    let no_proof = p::bool(v, "noProof");
+    let lang = match p::str(v, "lang") {
+        Some(t) => Some(
+            wordcraft_proof::lang::normalize_tag(t)
+                .ok_or_else(|| CmdError::Params(format!("`lang` must be a language tag such as pl-PL or en-US, not {t:?}")))?,
+        ),
+        None if no_proof.is_some() => None,
+        None => Some("en-US".to_string()),
+    };
+    if p::bool(v, "default") == Some(true) {
+        let Some(l) = &lang else { return Err(CmdError::Params("`default` needs `lang`".into())) };
+        s.doc.styles.default_chr.lang = Some(l.clone());
+    }
+    super::format::apply(s, &|c| {
+        if let Some(l) = &lang {
+            c.lang = Some(l.clone());
+        }
+        if let Some(np) = no_proof {
+            c.no_proof = Some(np);
+        }
+    })
 }
 
 #[cfg(test)]

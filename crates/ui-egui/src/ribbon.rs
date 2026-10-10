@@ -237,6 +237,46 @@ fn mi(ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: Value) {
     }
 }
 
+/// The proofing languages the Language menu offers: tag and English name (translated when drawn).
+pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 3] =
+    [("en-US", "English (United States)"), ("en-GB", "English (United Kingdom)"), ("pl-PL", "Polish")];
+
+/// The English name of a proofing language tag, as the status bar shows it (no tag: WordCraft's
+/// default, US English; a tag without a name here: the tag).
+pub(crate) fn language_name(tag: Option<&str>) -> String {
+    let tag = tag.unwrap_or("en-US");
+    if let Some((_, name)) = PROOFING_LANGUAGES.iter().find(|(t, _)| t.eq_ignore_ascii_case(tag)) {
+        return (*name).to_string();
+    }
+    match wordcraft_engine::proof::ProofLang::from_tag(Some(tag)) {
+        wordcraft_engine::proof::ProofLang::Pl => "Polish".into(),
+        wordcraft_engine::proof::ProofLang::En if tag.eq_ignore_ascii_case("en") => "English (United States)".into(),
+        _ => tag.to_string(),
+    }
+}
+
+/// The language at the caret (resolved through the styles), translated, for the status bar.
+pub(crate) fn caret_language(app: &WordApp) -> String {
+    let s = &app.session;
+    let style = s.doc.para_at(&s.sel.focus).and_then(|p| p.props.style.clone());
+    let rc = s.doc.styles.resolve_char(style.as_deref(), &s.typing_props());
+    tl!(&language_name(rc.lang.as_deref())).to_string()
+}
+
+/// Review › Language (and the status bar's language): set the selection's proofing language, or
+/// leave it unchecked. The current choice has a check mark.
+pub(crate) fn language_menu(ui: &mut Ui, app: &mut WordApp) {
+    let st = app.session.run("format.state", &json!({})).unwrap_or_default();
+    let current = st.get("lang").and_then(Value::as_str).unwrap_or("").to_string();
+    let no_proof = st.get("noProof").and_then(Value::as_bool).unwrap_or(false);
+    for (tag, name) in PROOFING_LANGUAGES {
+        let on = current.eq_ignore_ascii_case(tag) || (tag == "pl-PL" && current.eq_ignore_ascii_case("pl"));
+        mi_check(ui, app, name, on, "review.language", json!({"lang": tag}));
+    }
+    ui.separator();
+    mi_check(ui, app, "Do Not Check Spelling or Grammar", no_proof, "review.language", json!({"noProof": !no_proof}));
+}
+
 /// A menu item with a check mark when `checked` (the current choice of several).
 fn mi_check(ui: &mut Ui, app: &mut WordApp, label: &str, checked: bool, id: &str, params: Value) {
     // An invisible mark keeps the unchecked labels aligned with the checked one.
@@ -985,7 +1025,7 @@ fn review(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Language", None, app, |ui, app| {
         big(ui, app, "translate", "Translate", "review.translate", json!({}), false);
-        big(ui, app, "language", "Language", "review.language", json!({}), false);
+        menu_button(ui, app, "language", Some("Language"), "Language", true, language_menu);
     });
     group(ui, "Comments", None, app, |ui, app| {
         big(ui, app, "newComment", "New\nComment", "review.newComment", json!({}), false);

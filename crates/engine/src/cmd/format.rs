@@ -490,6 +490,9 @@ pub fn state(s: &Session) -> Value {
         "highlight": same(&|r| json!(r.highlight.map(|c| c.hex()))),
         "style": style,
         "styleName": style_name,
+        // The proofing language (a BCP 47 tag; null when mixed or unset) and "Do not check".
+        "lang": same(&|r| json!(r.lang)),
+        "noProof": all.iter().all(|r| r.no_proof),
     })
 }
 

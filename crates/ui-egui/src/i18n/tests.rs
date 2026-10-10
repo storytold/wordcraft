@@ -361,3 +361,108 @@ fn only_cjk_languages_ask_for_an_installed_cjk_font() {
     let cjk: Vec<&str> = Lang::all().filter(|l| l.uses_cjk()).map(Lang::code).collect();
     assert_eq!(cjk, ["zh-hans", "zh-hant", "ja"]);
 }
+
+#[test]
+fn polish_locales_and_saved_preference_work_without_changing_the_document() {
+    let pl = lang("pl");
+    for tag in ["pl", "pl-PL", "pl_PL.UTF-8", "PL-pl", "pl_PL.UTF-8@euro", "pl-Latn-PL"] {
+        assert_eq!(lang_from_tag(tag), Some(pl), "{tag}");
+    }
+    assert_eq!(first_supported(["fr-FR", "pl-PL", "en-US"]), Some(pl));
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), Default::default());
+    let before = serde_json::to_value(&app.session.doc).unwrap();
+    let result = app.run("ui.language", serde_json::json!({"value": "PL"})).unwrap();
+    assert_eq!(result["effective"], "pl");
+    assert_eq!(app.ui.language, "pl");
+    assert_eq!(serde_json::to_value(&app.session.doc).unwrap(), before);
+    let saved = serde_json::to_string(&app.ui).unwrap();
+    let restored: crate::UiState = serde_json::from_str(&saved).unwrap();
+    assert_eq!(Lang::from_pref(&restored.language), pl);
+    assert_eq!(pl.name(), "Polski");
+}
+
+#[test]
+fn polish_covers_every_key_of_every_other_catalog() {
+    use std::collections::HashSet;
+    let keys = |source| parse_entries(source).0.into_iter().map(|e| e.source).collect::<HashSet<_>>();
+    let polish = keys(lang("pl").0.source);
+    for other in Lang::all().filter(|l| *l != Lang::EN && l.code() != "pl") {
+        let mut missing: Vec<String> = keys(other.0.source).difference(&polish).cloned().collect();
+        missing.sort();
+        assert!(missing.is_empty(), "pl lacks {}'s {missing:?}", other.code());
+    }
+    let pl = lang("pl");
+    assert_eq!(tr(pl, "File"), "Plik");
+    assert_eq!(tr(pl, "Home"), "Start");
+    assert_eq!(tr(pl, "Insert"), "Wstaw");
+    assert_eq!(tr(pl, "Review"), "Recenzja");
+    assert_eq!(tr(pl, "Save"), "Zapisz");
+    assert_eq!(tr(pl, "Spelling & Grammar"), "Pisownia i gramatyka");
+    assert_eq!(tr(pl, "Polish"), "Polski");
+    assert_eq!(tr(pl, "unknown future label"), "unknown future label");
+    assert_eq!(fmt(tr(pl, "Exported {path}"), &[("path", "draft-{words}.docx")]), "Wyeksportowano: draft-{words}.docx");
+    assert_eq!(fmt(tr(pl, "Page {page} of {pages}"), &[("page", "3"), ("pages", "9")]), "Strona 3 z 9");
+    // Count-neutral wording reads grammatically for every Polish number form (1, 2–4, 5+, 12–14, 22).
+    for count in [0, 1, 2, 4, 5, 12, 14, 22, 25, 101, 1000] {
+        let words = count.to_string();
+        assert_eq!(fmt(tr(pl, "{words} words"), &[("words", &words)]), format!("Słowa: {count}"));
+        assert_eq!(fmt(tr(pl, "{selected} of {words} words"), &[("selected", "1"), ("words", &words)]), format!("Słowa: 1 z {count}"));
+    }
+    set_current(pl);
+    assert_eq!(location("Review › Proofing"), "Recenzja › Sprawdzanie");
+    assert_eq!(prefixed("Undo", "Bold"), "Cofnij: Pogrubienie");
+    set_current(Lang::EN);
+}
+
+#[test]
+fn bundled_interface_fonts_cover_polish_without_system_fallbacks() {
+    let db = wordcraft_fonts::FontDb::with_font_dirs(Vec::new());
+    let (entries, errors) = parse_entries(lang("pl").0.source);
+    assert!(errors.is_empty(), "{errors:?}");
+    // Polish letters beyond ASCII, both cases, and the Polish quotation marks.
+    let polish = "ĄąĆćĘęŁłŃńÓóŚśŹźŻż„”";
+    let chars: std::collections::HashSet<char> =
+        entries.iter().flat_map(|e| e.translation.chars()).filter(|c| polish.contains(*c)).chain(polish.chars()).collect();
+    for (family, style) in [("Inter", "Regular"), ("Inter", "Medium"), ("Inter", "SemiBold"), ("JetBrains Mono", "Regular")] {
+        let face = db.face(family, style);
+        assert_eq!(face.family, family, "must use the bundled interface face");
+        for ch in &chars {
+            assert_ne!(face.glyph_for(*ch), 0, "{family} {style} lacks {ch}");
+        }
+    }
+}
+
+#[test]
+fn a_polish_interface_writes_new_documents_in_polish() {
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    let ctx = egui::Context::default();
+    let frame = |app: &mut crate::WordApp| ctx.run_ui(egui::RawInput::default(), |ui| app.logic(ui.ctx())).drop_without_applying_deltas();
+    frame(&mut app);
+    assert_eq!(app.session.editing_lang, None, "English interface: WordCraft's default, US English");
+    assert_eq!(app.session.doc.styles.default_chr.lang.as_deref(), Some("en-US"));
+    app.run("ui.language", serde_json::json!({"value": "pl"})).unwrap();
+    frame(&mut app);
+    assert_eq!(app.session.editing_lang.as_deref(), Some("pl-PL"));
+    assert_eq!(app.session.doc.styles.default_chr.lang.as_deref(), Some("pl-PL"), "the untouched first document follows");
+    assert!(!app.session.dirty);
+    app.run("file.new", serde_json::json!({})).unwrap();
+    assert_eq!(app.session.doc.styles.default_chr.lang.as_deref(), Some("pl-PL"));
+    // Typing Polish then shows no spelling marks; the status bar names the language.
+    app.session.run("text.insert", &serde_json::json!({"text": "Zażółć gęślą jaźń"})).unwrap();
+    assert_eq!(app.session.run("review.issues", &serde_json::json!({})).unwrap(), serde_json::json!([]));
+    set_current(lang("pl"));
+    assert_eq!(crate::ribbon::caret_language(&app), "Polski");
+    set_current(Lang::EN);
+    assert_eq!(crate::ribbon::caret_language(&app), "Polish");
+    // Back to English: documents already written keep their language.
+    app.run("ui.language", serde_json::json!({"value": "en"})).unwrap();
+    frame(&mut app);
+    assert_eq!(app.session.editing_lang, None);
+    assert_eq!(app.session.doc.styles.default_chr.lang.as_deref(), Some("pl-PL"));
+}
+
+#[test]
+fn only_polish_has_an_editing_language() {
+    let with: Vec<(&str, &str)> = Lang::all().filter_map(|l| l.editing_lang().map(|e| (l.code(), e))).collect();
+    assert_eq!(with, [("pl", "pl-PL")]);
+}
