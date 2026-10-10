@@ -1078,7 +1078,7 @@ fn keeps_everything(name: &str) -> bool {
 /// the command's own error or default instead): Select Recipients and Edit Recipient List without
 /// data, Insert Merge Field without a field, Find Recipient without text, the If and Skip
 /// Record If rules (or Rules with no rule at all) without a field, Table Properties without
-/// settings, and Symbol and Field without a character or code.
+/// settings, Symbol and Field without a character or code, and Enclose Characters without a shape.
 fn input_dialog(id: &str, params: &Value) -> Option<&'static str> {
     let has = |k: &str| params.get(k).is_some_and(|v| !v.is_null());
     let rule = params.get("rule").and_then(Value::as_str).map(str::to_ascii_uppercase);
@@ -1106,6 +1106,8 @@ fn input_dialog(id: &str, params: &Value) -> Option<&'static str> {
         // Define New Multilevel List and Track Changes Options without settings show their dialogs.
         "list.define" if params.get("levels").is_none() => Some("defineList"),
         "review.trackingOptions" if params.as_object().is_none_or(|m| m.is_empty()) => Some("trackChangesOptions"),
+        // Enclose Characters without a shape (null is one: it takes the enclosure away).
+        "format.enclose" if params.get("shape").is_none() => Some("enclose"),
         _ => None,
     }
 }
@@ -1215,6 +1217,24 @@ mod tests {
         assert_eq!(t.props.align, Some(wordcraft_doc::props::Align::Center));
         assert_eq!((t.rows[0].props.height, t.rows[0].props.header), (Some(36.0), true));
         assert_eq!(dialogs::TableForm::read(&a).unwrap().changes(&f), json!({}), "the dialog reopens with the new values");
+    }
+
+    /// Home › Font › Enclose Characters (#297): the button opens the dialog on the selected
+    /// character; the dialog's OK is `format.enclose`, and it reopens showing the enclosure.
+    #[test]
+    fn enclose_characters_button_opens_the_dialog() {
+        let mut a = app();
+        a.run("text.insert", json!({"text": "a 字 b"})).unwrap();
+        a.run("select.text", json!({"text": "字"})).unwrap();
+        a.run("format.enclose", json!({})).unwrap();
+        let Some(dialogs::Dialog::Enclose { style, text, shape }) = a.dialog.clone() else { panic!("no dialog: {:?}", a.dialog) };
+        assert_eq!((style.as_str(), text.as_str(), shape.as_str()), ("shrink", "字", "circle"));
+        a.dialog = None;
+        a.run("format.enclose", json!({"shape": "square", "style": "enlarge", "text": "字"})).unwrap();
+        assert!(a.dialog.is_none(), "a shape applies without the dialog");
+        a.run("format.enclose", json!({})).unwrap();
+        let Some(dialogs::Dialog::Enclose { style, shape, .. }) = a.dialog.clone() else { panic!("no dialog") };
+        assert_eq!((style.as_str(), shape.as_str()), ("enlarge", "square"));
     }
 
     /// Issue #139: Ctrl+wheel over the page didn't zoom.

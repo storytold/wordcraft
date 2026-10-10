@@ -2,6 +2,7 @@
 
 use serde_json::{Value, json};
 use wordcraft_doc::Pos;
+use wordcraft_doc::eq::{EncloseShape, EncloseStyle, Enclosure};
 use wordcraft_doc::props::{Border, CharProps, Highlight, Rgb, TextColor, Underline, VertAlign};
 use wordcraft_doc::resolve::ResolvedChar;
 
@@ -136,6 +137,8 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .key("Mod+D")
         .pure(),
+        CommandSpec::new("format.enclose", "Enclose Characters", "Home › Font", enclose)
+            .params(r#"{"shape": "circle|square|triangle|diamond" | null, "style"?: "shrink|enlarge", "text"?: string}"#),
         CommandSpec::new("format.state", "Formatting at Selection", "Home › Font", |s, _| Ok(state(s))).pure(),
     ]
 }
@@ -504,4 +507,104 @@ mod tests {
         assert_eq!(convert("Hello", "toggle", true), "hELLO");
         assert_eq!(convert("straße", "upper", true), "STRASSE");
     }
+}
+
+/// What Enclose Characters works on: the selected text (one full-width or up to two half-width
+/// characters), or enclosed characters already there (selected, or beside the caret).
+#[derive(Clone, Debug, PartialEq)]
+pub struct EncloseTarget {
+    /// The range to replace.
+    pub from: Pos,
+    pub to: Pos,
+    pub text: String,
+    pub props: CharProps,
+    /// The enclosure there now.
+    pub current: Option<Enclosure>,
+}
+
+/// The selection as Enclose Characters sees it (an error says why it can't be enclosed).
+pub fn enclose_target(s: &Session) -> Result<EncloseTarget, CmdError> {
+    use wordcraft_doc::para::OBJ;
+    let (a, b) = s.sel.ordered();
+    if a.story != b.story || a.path != b.path {
+        return Err(CmdError::Failed("select characters within one paragraph".into()));
+    }
+    let para = s.doc.para_at(&a).ok_or_else(|| CmdError::Failed("no paragraph at the selection".into()))?;
+    let enclosed = |off: usize| -> Option<EncloseTarget> {
+        let Some(wordcraft_doc::InlineObject::Field { instr, .. }) = para.object_at(off) else { return None };
+        let e = Enclosure::parse(instr)?;
+        let end = off + OBJ.len_utf8();
+        Some(EncloseTarget {
+            from: Pos { off, ..a.clone() },
+            to: Pos { off: end, ..a.clone() },
+            text: e.text.clone(),
+            props: para.props_at(end).clone(),
+            current: Some(e),
+        })
+    };
+    if a.off == b.off {
+        // A caret just after (or before) enclosed characters.
+        let before = para.text.get(..a.off).and_then(|t| t.chars().next_back()).filter(|c| *c == OBJ).map(|c| a.off - c.len_utf8());
+        return before.and_then(enclosed).or_else(|| enclosed(a.off)).ok_or_else(|| CmdError::Failed("select the characters to enclose".into()));
+    }
+    let text = para.text.get(a.off..b.off).ok_or_else(|| CmdError::Failed("bad selection".into()))?;
+    if text == OBJ.to_string()
+        && let Some(t) = enclosed(a.off)
+    {
+        return Ok(t);
+    }
+    if !wordcraft_doc::eq::fits_enclosure(text) {
+        return Err(CmdError::Failed("select one full-width character or up to two half-width characters".into()));
+    }
+    let first = text.chars().next().map(char::len_utf8).unwrap_or(0);
+    Ok(EncloseTarget { from: a.clone(), to: b, text: text.to_string(), props: para.props_at(a.off + first).clone(), current: None })
+}
+
+/// Home › Font › Enclose Characters: put the selected character(s) in a circle, square, triangle
+/// or diamond (an `EQ \o` field, see [`wordcraft_doc::eq`]), or (`shape: null`) take them out.
+fn enclose(s: &mut Session, v: &Value) -> CmdResult {
+    let shape = match v.get("shape") {
+        None => return Err(CmdError::Params("`shape` is required: circle, square, triangle, diamond, or null to remove".into())),
+        Some(Value::Null) => None,
+        Some(x) => {
+            Some(x.as_str().and_then(EncloseShape::parse).ok_or_else(|| CmdError::Params("shape: circle|square|triangle|diamond|null".into()))?)
+        }
+    };
+    let style = match p::str(v, "style") {
+        Some(x) => Some(EncloseStyle::parse(x).ok_or_else(|| CmdError::Params("style: shrink|enlarge".into()))?),
+        None => None,
+    };
+    // Text typed in the dialog replaces the selection's (or goes in at the caret).
+    let given = match p::str(v, "text") {
+        Some(t) if shape.is_some() && !wordcraft_doc::eq::fits_enclosure(t) => {
+            return Err(CmdError::Params("text: one full-width character or up to two half-width characters".into()));
+        }
+        Some(t) if shape.is_some() => Some(t.to_string()),
+        _ => None,
+    };
+    let t = match (enclose_target(s), given) {
+        (Ok(t), None) => t,
+        (Ok(t), Some(text)) => EncloseTarget { text, ..t },
+        (Err(_), Some(text)) if s.sel.anchor == s.sel.focus => {
+            let at = s.sel.focus.clone();
+            EncloseTarget { from: at.clone(), to: at, text, props: s.typing_props(), current: None }
+        }
+        (Err(e), _) => return Err(e),
+    };
+    if shape.is_none() && t.current.is_none() {
+        return Err(CmdError::Failed("no enclosed characters at the selection".into()));
+    }
+    s.sel = crate::Selection { anchor: t.from.clone(), focus: t.to.clone() };
+    let at = super::delete_selection(s)?;
+    let end = match shape {
+        Some(shape) => {
+            let style = style.or(t.current.as_ref().map(|e| e.style)).unwrap_or_default();
+            let e = Enclosure { shape, style, text: t.text.clone() };
+            let obj = wordcraft_doc::InlineObject::Field { instr: e.instr(), result: t.text, locked: false };
+            s.doc.insert_object(&at, obj, &t.props)?
+        }
+        None => s.doc.insert_text(&at, &t.text, &t.props)?,
+    };
+    s.sel = crate::Selection { anchor: at, focus: end };
+    sel_result(s)
 }

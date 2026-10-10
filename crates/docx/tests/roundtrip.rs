@@ -1460,3 +1460,41 @@ fn rotated_group_and_shadow_rotation_round_trip() {
         .collect();
     assert_eq!(got, [(20.0, Some(true)), (20.0, Some(false))]);
 }
+
+/// Enclosed characters (#297) are written as Word stores them — an `eq \o\ac(○,字)` field with no
+/// result, the symbol and the text in runs of their own sizes — and read back with their style,
+/// whether the field's size is set on the run or comes from the styles.
+#[test]
+fn enclosed_characters_round_trip_in_words_structure() {
+    use wordcraft_doc::eq::{EncloseShape, EncloseStyle, Enclosure};
+    let mut p = Paragraph::new();
+    let cases = [
+        (EncloseShape::Circle, EncloseStyle::Shrink, Some(11.0)),
+        (EncloseShape::Triangle, EncloseStyle::Enlarge, Some(11.0)),
+        (EncloseShape::Square, EncloseStyle::Shrink, None),
+        (EncloseShape::Diamond, EncloseStyle::Enlarge, None),
+    ];
+    for (shape, style, size) in cases {
+        let e = Enclosure { shape, style, text: "字".into() };
+        let off = p.len();
+        p.insert_object(off, InlineObject::Field { instr: e.instr(), result: "字".into(), locked: false }, &CharProps { size, ..Default::default() })
+            .unwrap();
+    }
+    let doc = doc_with(vec![p]);
+    let bytes = wordcraft_docx::write(&doc).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.clone())).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<w:instrText xml:space="preserve"> eq \o\ac(○</w:instrText>"#), "{xml}");
+    assert!(!xml.contains("separate") && !xml.contains("enlarge"), "{xml}");
+    // Shrink text at 11 pt: the character at 7.5 pt (half-points 15), raised.
+    assert!(xml.contains(r#"<w:sz w:val="15"/>"#), "{xml}");
+    let back = wordcraft_docx::read(&bytes).unwrap();
+    let got: Vec<Enclosure> = paras(&back)[0]
+        .objects
+        .iter()
+        .filter_map(|o| if let InlineObject::Field { instr, result, .. } = o { Enclosure::parse(instr).filter(|_| result == "字") } else { None })
+        .collect();
+    let want: Vec<Enclosure> = cases.iter().map(|(shape, style, _)| Enclosure { shape: *shape, style: *style, text: "字".into() }).collect();
+    assert_eq!(got, want);
+}

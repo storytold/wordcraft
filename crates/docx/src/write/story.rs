@@ -563,6 +563,12 @@ impl Writer<'_> {
             self.toc_field = Some((instr.to_string(), locked, props.clone()));
             return;
         }
+        if let Some(e) = wordcraft_doc::eq::Enclosure::parse(instr) {
+            self.rev_open(w, props);
+            self.enclosure(w, &e, locked, props);
+            self.rev_close(w, props);
+            return;
+        }
         let del = self.is_del(props);
         let run = |w: &mut W, f: &dyn Fn(&mut W)| {
             w.open("w:r", &[]);
@@ -600,6 +606,52 @@ impl Writer<'_> {
         }
         run(w, &|w| w.empty("w:fldChar", &[("w:fldCharType", "end")]));
         self.rev_close(w, props);
+    }
+
+    /// Enclosed characters as Word stores them: an `eq \o\ac(○,字)` field with no result, whose
+    /// code is split so the symbol and the text get their own sizes: "shrink text" makes the text
+    /// smaller (raised to sit in the middle), "enlarge symbol" makes the symbol bigger (lowered).
+    fn enclosure(&self, w: &mut W, e: &wordcraft_doc::eq::Enclosure, locked: bool, props: &CharProps) {
+        use wordcraft_doc::eq::EncloseStyle;
+        let del = self.is_del(props);
+        let tag = if del { "w:delInstrText" } else { "w:instrText" };
+        let base = props.size.unwrap_or_else(|| self.doc.styles.resolve_char(None, props).size).clamp(1.0, 1638.0);
+        let half = |pt: f32| (pt * 2.0).round() / 2.0;
+        let (mut sym, mut txt) = (props.clone(), props.clone());
+        match e.style {
+            EncloseStyle::Shrink => {
+                txt.size = Some(half(base * 0.7).max(1.0));
+                txt.position = Some(half(base * 0.1));
+            }
+            EncloseStyle::Enlarge => {
+                sym.size = Some(half(base * 1.5));
+                sym.position = Some(-half(base * 0.2));
+            }
+        }
+        let run = |w: &mut W, p: &CharProps, f: &dyn Fn(&mut W)| {
+            w.open("w:r", &[]);
+            rpr(w, p);
+            f(w);
+            w.close("w:r");
+        };
+        run(w, props, &|w| {
+            if locked {
+                w.empty("w:fldChar", &[("w:fldCharType", "begin"), ("w:fldLock", "1")])
+            } else {
+                w.empty("w:fldChar", &[("w:fldCharType", "begin")])
+            }
+        });
+        let code = e.word_instr();
+        // `eq \o\ac(` + symbol, `,`, the text, `)`.
+        let open = code.find('(').map(|i| i + 1).unwrap_or(0);
+        let comma = open + e.shape.symbol().len_utf8();
+        let (head, rest) = code.split_at(comma.min(code.len()));
+        let text = rest.get(1..rest.len().saturating_sub(1)).unwrap_or("");
+        run(w, &sym, &|w| w.leaf(tag, &[("xml:space", "preserve")], &format!(" {head}")));
+        run(w, props, &|w| w.leaf(tag, &[("xml:space", "preserve")], ","));
+        run(w, &txt, &|w| w.leaf(tag, &[("xml:space", "preserve")], text));
+        run(w, props, &|w| w.leaf(tag, &[("xml:space", "preserve")], ")"));
+        run(w, props, &|w| w.empty("w:fldChar", &[("w:fldCharType", "end")]));
     }
 
     /// A field's begin, instruction and separate runs.

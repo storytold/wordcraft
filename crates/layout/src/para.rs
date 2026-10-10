@@ -259,6 +259,21 @@ pub struct ParaLayout {
     /// equations) rather than for the paragraph's own text, by cluster index, sorted, with each of
     /// the cluster's glyphs' byte range in that text (a ligature's glyph spans its letters).
     pub shown: Vec<(usize, String, Vec<std::ops::Range<usize>>)>,
+    /// Shapes drawn around overstruck field text (enclosed characters, `EQ \o`), by cluster index.
+    pub enclosures: Vec<(usize, Enclosed)>,
+}
+
+/// A shape drawn over a cluster (an enclosed character's circle, square, triangle or diamond),
+/// relative to the cluster's left edge and baseline, in the cluster's text colour.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Enclosed {
+    pub kind: wordcraft_doc::para::ShapeKind,
+    /// Left edge from the cluster's x; top above the baseline (up is positive), points.
+    pub x: f32,
+    pub top: f32,
+    pub w: f32,
+    pub h: f32,
+    pub stroke: f32,
 }
 
 /// What a table style gives the text of a cell: its paragraph and run formatting, with the
@@ -597,6 +612,144 @@ impl<'a> Builder<'a> {
         self.shown.push((self.clusters.len(), text.to_string(), ranges));
         self.clusters.push(Cluster { start, end, adv: x, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, obj_d: 0.0, dot: false });
     }
+
+    /// Shape `texts` on top of one another as one cluster for `start..end`: each aligned within
+    /// the cluster (at least `width` wide) and raised `dy`. Returns the cluster's index.
+    #[allow(clippy::too_many_arguments)]
+    fn shape_overstruck(
+        &mut self,
+        texts: &[&str],
+        start: usize,
+        end: usize,
+        rc: &Arc<ResolvedChar>,
+        align: wordcraft_doc::eq::OAlign,
+        width: f32,
+        dy: f32,
+    ) -> Option<usize> {
+        use wordcraft_doc::eq::OAlign;
+        let (c0, s0) = (self.clusters.len(), self.shown.len());
+        for t in texts {
+            self.shape_atomic(t, start, end, rc);
+        }
+        let added: Vec<Cluster> = self.clusters.drain(c0..).collect();
+        let shown: Vec<(usize, String, Vec<std::ops::Range<usize>>)> = self.shown.drain(s0..).collect();
+        let adv = added.iter().filter(|c| c.kind == ClKind::Text).map(|c| c.adv).fold(width.max(0.0), f32::max);
+        let (mut text, mut ranges) = (String::new(), Vec::new());
+        let (mut g0, mut g1) = (u32::MAX, 0u32);
+        for (ci, t, r) in &shown {
+            let Some(c) = added.get(ci.saturating_sub(c0)) else { continue };
+            let dx = match align {
+                OAlign::Left => 0.0,
+                OAlign::Center => (adv - c.adv) / 2.0,
+                OAlign::Right => adv - c.adv,
+            };
+            for g in self.glyphs.get_mut(c.g0 as usize..c.g1 as usize).into_iter().flatten() {
+                g.dx += dx;
+                g.dy += dy;
+            }
+            let off = text.len();
+            ranges.extend(r.iter().map(|x| x.start + off..x.end + off));
+            text.push_str(t);
+            g0 = g0.min(c.g0);
+            g1 = g1.max(c.g1);
+        }
+        let g = self.glyphs.len() as u32;
+        let (g0, g1) = if g0 <= g1 { (g0, g1) } else { (g, g) };
+        let style = match added.iter().find(|c| c.kind == ClKind::Text) {
+            Some(c) => c.style,
+            None => self.style(rc, None, false),
+        };
+        let k = self.clusters.len();
+        if !text.is_empty() {
+            self.shown.push((k, text, ranges));
+        }
+        self.clusters.push(Cluster { start, end, adv, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, obj_d: 0.0, dot: false });
+        Some(k)
+    }
+}
+
+/// Lay out an `EQ \o` field (ECMA-376 Part 1 §17.16.5.20): its arguments drawn on top of one
+/// another, as one cluster. An enclosure symbol among them (○ □ △ ◇, see
+/// [`wordcraft_doc::eq::EncloseShape`]) is drawn as a shape around the text rather than as a
+/// glyph, so it never depends on the font: "shrink text" scales the text to fit inside a shape
+/// one em high, "enlarge symbol" grows the shape around text at its own size.
+fn overstrike(
+    b: &mut Builder,
+    o: &wordcraft_doc::eq::Overstrike,
+    instr: &str,
+    start: usize,
+    end: usize,
+    rc: &Arc<ResolvedChar>,
+    enclosures: &mut Vec<(usize, Enclosed)>,
+) {
+    use wordcraft_doc::eq::{EncloseShape, EncloseStyle, Enclosure};
+    use wordcraft_doc::para::ShapeKind;
+    let shapes: Vec<EncloseShape> = o.args.iter().filter_map(|a| EncloseShape::from_symbol(a)).collect();
+    let texts: Vec<&str> = o.args.iter().filter(|a| !a.is_empty() && EncloseShape::from_symbol(a).is_none()).map(String::as_str).collect();
+    let Some(shape) = shapes.first().copied() else {
+        b.shape_overstruck(&texts, start, end, rc, o.align, 0.0, 0.0);
+        return;
+    };
+    let style = Enclosure::parse(instr).map(|e| e.style).unwrap_or_default();
+    let s = rc.size.clamp(1.0, 1638.0);
+    // The widest text at the run's own size.
+    let (c0, g0, s0) = (b.clusters.len(), b.glyphs.len(), b.shown.len());
+    for t in &texts {
+        b.shape_atomic(t, start, end, rc);
+    }
+    let w0 = b.clusters.get(c0..).map(|cs| cs.iter().map(|c| c.adv).fold(0.0f32, f32::max)).unwrap_or(0.0).max(0.0);
+    b.clusters.truncate(c0);
+    b.glyphs.truncate(g0);
+    b.shown.truncate(s0);
+    // The shape's box (`bw` × `bh`, centred `cy` above the baseline) and the text's size.
+    let cy = s * 0.34;
+    let (bw, bh, size) = match style {
+        EncloseStyle::Shrink => {
+            // Room for the text inside each shape: (height, width) as fractions of the box.
+            let (fh, fw) = match shape {
+                EncloseShape::Circle => (0.62, 0.7),
+                EncloseShape::Square => (0.68, 0.78),
+                EncloseShape::Triangle => (0.45, 0.5),
+                EncloseShape::Diamond => (0.5, 0.55),
+            };
+            let bh = s * 1.05;
+            let mut t = s * fh;
+            if w0 > 0.0 && w0 * t / s > bh * fw {
+                t = bh * fw * s / w0;
+            }
+            (bh, bh, t.max(s * 0.2))
+        }
+        EncloseStyle::Enlarge => {
+            let (kh, kw) = match shape {
+                EncloseShape::Circle => (1.4, 1.4),
+                EncloseShape::Square => (1.3, 1.3),
+                EncloseShape::Triangle => (1.75, 2.0),
+                EncloseShape::Diamond => (1.7, 1.8),
+            };
+            let bh = s * kh;
+            (bh.max(w0 * kw), bh, s)
+        }
+    };
+    // A triangle's middle is low; the text sits there.
+    let ty = if shape == EncloseShape::Triangle { cy - bh * 0.13 } else { cy };
+    let trc = if (size - rc.size).abs() > 0.01 {
+        let mut r = (**rc).clone();
+        r.size = size;
+        Arc::new(r)
+    } else {
+        rc.clone()
+    };
+    let pad = s * 0.05;
+    let Some(k) = b.shape_overstruck(&texts, start, end, &trc, o.align, bw + 2.0 * pad, ty - size * 0.34) else { return };
+    let adv = b.clusters.get(k).map(|c| c.adv).unwrap_or(bw);
+    let kind = match shape {
+        EncloseShape::Circle => ShapeKind::Ellipse,
+        EncloseShape::Square => ShapeKind::Rectangle,
+        EncloseShape::Triangle => ShapeKind::Triangle,
+        EncloseShape::Diamond => ShapeKind::Diamond,
+    };
+    let stroke = (s * 0.06).clamp(0.4, 4.0);
+    enclosures.push((k, Enclosed { kind, x: (adv - bw) / 2.0, top: cy + bh / 2.0, w: bw, h: bh, stroke }));
 }
 
 /// Whether text with this formatting is left out of the layout: hidden text unless it is shown, and
@@ -638,6 +791,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let mut drop_cap = None;
     let mut drop_cap_w = 0.0;
     let mut maths = Vec::new();
+    let mut enclosures = Vec::new();
     let mut displays = Vec::new();
     let mut eq_counter = env.eq_number;
     let math_props = doc.settings.math.clone().unwrap_or_default();
@@ -750,11 +904,14 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                                 push(&mut b, ClKind::Object(k), 0.0, 0.0);
                             }
                         }
-                        Some(InlineObject::Field { instr, result, .. }) => {
-                            let (t, page_dep) = field_text(instr, result, env.fields);
-                            has_page_fields |= page_dep;
-                            b.shape_atomic(&t, start, end, &rc);
-                        }
+                        Some(InlineObject::Field { instr, result, .. }) => match wordcraft_doc::eq::parse_overstrike(instr) {
+                            Some(o) => overstrike(&mut b, &o, instr, start, end, &rc, &mut enclosures),
+                            None => {
+                                let (t, page_dep) = field_text(instr, result, env.fields);
+                                has_page_fields |= page_dep;
+                                b.shape_atomic(&t, start, end, &rc);
+                            }
+                        },
                         Some(InlineObject::NoteRef { kind, id, custom }) => {
                             let num = if custom.is_empty() {
                                 let n = env.fields.note_number(*id);
@@ -905,6 +1062,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         maths,
         displays,
         left_out: Vec::new(),
+        enclosures,
     };
     pl.hyph_after = hyphenation_points(&text, to_para, &pl, env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens);
     pl.left_out = left;
