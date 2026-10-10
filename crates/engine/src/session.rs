@@ -249,6 +249,8 @@ pub struct Session {
     pub read_aloud: crate::speech::ReadAloud,
     /// Preferences the front end saves between runs.
     pub prefs: Prefs,
+    /// Custom keyboard shortcuts (`tools.customizeKeyboard`); the front end saves them too.
+    pub keymap: crate::KeyMap,
     /// Editing inside an equation: which one and the caret in it.
     pub math: Option<MathEdit>,
     /// Equations are typed in LaTeX rather than the linear format.
@@ -343,6 +345,7 @@ impl Session {
             math_normal_text: false,
             also_selected: Vec::new(),
             prefs: Prefs::default(),
+            keymap: crate::KeyMap::default(),
             read_aloud: Default::default(),
             password: None,
             column: None,
@@ -576,6 +579,7 @@ impl Session {
             document_id: _,
             read_aloud: _,
             prefs: _,
+            keymap: _,
             // Equation editing mode, like `view`: not part of the document or its history.
             math: _,
             math_latex: _,
