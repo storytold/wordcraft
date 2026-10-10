@@ -140,7 +140,8 @@ pub fn encrypt_with_spin_count(package: &[u8], password: &str, spin_count: u32) 
     let password_salt = random(SALT)?;
     let key = random(key_bytes)?;
     let verifier = random(SALT)?;
-    let hmac_salt = random(SALT)?;
+    // The HMAC key is a salt as long as the hash (MS-OFFCRYPTO §2.3.4.14).
+    let hmac_salt = random(hash.size())?;
 
     // The package, segment by segment; the last segment is zero-padded to the block size.
     let mut stream = Vec::with_capacity(package.len().saturating_add(8 + BLOCK));
