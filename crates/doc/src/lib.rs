@@ -219,6 +219,29 @@ pub enum PartKind {
     TextBox,
 }
 
+/// A document's own separators and continuation notice for its footnotes or its endnotes
+/// (ECMA-376 §17.11: the `w:footnote`/`w:endnote` entries of type `separator`,
+/// `continuationSeparator` and `continuationNotice`). `None` = the default: a short line above
+/// the notes, a line across the column above notes continued from the page before, no notice.
+/// The lines themselves are [`InlineObject::note_separator`] objects in the paragraphs.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct NoteSeparators {
+    /// Above the notes on a page.
+    pub separator: Option<Blocks>,
+    /// Above the rest of a note continued from the page before.
+    pub continuation_separator: Option<Blocks>,
+    /// Below the part of a note that continues on the next page.
+    pub continuation_notice: Option<Blocks>,
+}
+
+impl NoteSeparators {
+    /// No separator of the document's own: the defaults apply.
+    pub fn is_empty(&self) -> bool {
+        self.separator.is_none() && self.continuation_separator.is_none() && self.continuation_notice.is_none()
+    }
+}
+
 /// A secondary story.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 pub struct Part {
@@ -421,6 +444,12 @@ pub struct Document {
     pub sources: Vec<Source>,
     /// Custom document properties, in file order.
     pub custom_props: Vec<CustomProp>,
+    /// The document's own footnote separators and continuation notice.
+    #[serde(skip_serializing_if = "NoteSeparators::is_empty")]
+    pub footnote_separators: NoteSeparators,
+    /// The document's own endnote separators and continuation notice.
+    #[serde(skip_serializing_if = "NoteSeparators::is_empty")]
+    pub endnote_separators: NoteSeparators,
     /// Embedded media (images) by key.
     #[serde(skip)]
     pub media: BTreeMap<String, Arc<Vec<u8>>>,
@@ -450,6 +479,8 @@ impl Document {
             core: CoreProps::default(),
             sources: Vec::new(),
             custom_props: Vec::new(),
+            footnote_separators: NoteSeparators::default(),
+            endnote_separators: NoteSeparators::default(),
             media: BTreeMap::new(),
             passthrough: BTreeMap::new(),
         }

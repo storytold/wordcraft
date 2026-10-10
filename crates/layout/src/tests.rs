@@ -2985,3 +2985,55 @@ fn footnote_longer_than_pages_ends() {
     assert!(pieces.len() >= 3 && l.pages.len() == pieces.len(), "{} pages, {pieces:?}", l.pages.len());
     assert!(pieces.windows(2).all(|w| w[0].2 == w[1].1 && w[1].0 == w[0].0 + 1), "{pieces:?}");
 }
+
+#[test]
+fn document_note_separators_and_continuation_notice() {
+    let mut d = Document::from_text(&"Body text line.\n".repeat(16));
+    let long = footnote(&mut d, &Pos::body(4, 4), &"A long footnote that runs on and on. ".repeat(100));
+    let sep = |cont: bool| {
+        let mut p = wordcraft_doc::Paragraph::new();
+        p.props.space_after = Some(0.0);
+        p.insert_object(0, InlineObject::note_separator(cont), &Default::default()).unwrap();
+        Some(vec![wordcraft_doc::para_block(p)])
+    };
+    let mut notice = wordcraft_doc::Paragraph::with_text("(continued)", Default::default());
+    notice.props.space_after = Some(0.0);
+    d.footnote_separators = wordcraft_doc::NoteSeparators {
+        separator: sep(false),
+        continuation_separator: sep(true),
+        continuation_notice: Some(vec![wordcraft_doc::para_block(notice)]),
+    };
+    let l = lay(&d);
+    let pieces = note_pieces(&l, long);
+    assert!(pieces.len() >= 2 && (pieces[0].0, pieces[1].0) == (0, 1), "{pieces:?}");
+    // The document's separators are paragraphs: their lines are drawn across the separator's
+    // place, short on page 1 and across the text on page 2.
+    let decor = |pi: usize| -> Vec<(f32, f32)> {
+        l.pages[pi]
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Placed::Lines { story, y, para, l0, l1, .. } if *story == DECOR_STORY => Some((*y, item_bottom(*y, para, *l0, *l1).unwrap())),
+                _ => None,
+            })
+            .collect()
+    };
+    let (d0, d1) = (decor(0), decor(1));
+    assert_eq!((d0.len(), d1.len()), (2, 1), "separator and notice on page 1, continuation separator on page 2");
+    assert_eq!(rules_below(&l, 0, 0.0), vec![144.0]);
+    assert_eq!(rules_below(&l, 1, 0.0), vec![468.0]);
+    // The notice sits right under the part of the note on page 1, inside the page.
+    let note_bottom = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Lines { story: StoryRef::Part(s), y, para, l0, l1, .. } if *s == long => item_bottom(*y, para, *l0, *l1),
+            _ => None,
+        })
+        .fold(0.0f32, f32::max);
+    let (ny, nb) = d0[1];
+    assert!((ny - note_bottom).abs() < 0.01, "notice at {ny}, note ends at {note_bottom}");
+    assert!(nb <= 720.01, "notice inside the page: {nb}");
+    // The separators and notice aren't text anyone clicks into.
+    assert_ne!(l.story_at(0, 80.0, ny + 2.0), Some(DECOR_STORY));
+}
