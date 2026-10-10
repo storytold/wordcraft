@@ -144,6 +144,15 @@ wordcraft-cli run --template sample \
 
 Web: `cd apps/wordcraft-web && trunk serve`, then open <http://127.0.0.1:8771/?sample>.
 
+Each [GitHub release](https://github.com/storytold/wordcraft/releases) has ready-made builds, on Linux as an AppImage, a `.deb`, an `.rpm` and a tarball. On Gentoo, the community [::snakebyte overlay](https://github.com/switch87/snakebyte-overlay) packages the Linux release as `app-office/wordcraft-bin` (not maintained by the WordCraft team):
+
+```sh
+eselect repository add snakebyte git https://github.com/switch87/snakebyte-overlay.git
+emaint sync -r snakebyte
+echo 'app-office/wordcraft-bin ~amd64' >> /etc/portage/package.accept_keywords/wordcraft
+emerge --ask app-office/wordcraft-bin
+```
+
 ## For agents: CLI and MCP
 
 WordCraft was designed to be driven by people *and* by AI agents.
