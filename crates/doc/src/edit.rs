@@ -74,19 +74,21 @@ fn each_para_mut(b: &mut Block, depth: usize, f: &mut dyn FnMut(&mut Paragraph))
     }
 }
 
-/// Whether a paragraph or table anywhere in `b` uses style `id` (depth-limited like `each_para`).
+/// Whether a paragraph anywhere in `b` (also inside tables) uses paragraph or character style
+/// `id` (depth-limited like `each_para`). Table styles are the engine's `table.deleteStyle`'s job.
 fn uses_style(b: &Block, id: &str, depth: usize) -> bool {
     let is = |s: &Option<String>| s.as_deref() == Some(id);
     match b {
         Block::Para(p) => is(&p.props.style) || is(&p.mark.style) || p.runs.iter().any(|r| is(&r.props.style)),
         Block::Table(t) if depth < 16 => {
-            is(&t.props.style) || t.rows.iter().flat_map(|r| r.cells.iter()).flat_map(|c| c.blocks.iter()).any(|cb| uses_style(cb, id, depth + 1))
+            t.rows.iter().flat_map(|r| r.cells.iter()).flat_map(|c| c.blocks.iter()).any(|cb| uses_style(cb, id, depth + 1))
         }
-        Block::Table(t) => is(&t.props.style),
+        Block::Table(_) => false,
     }
 }
 
-/// Point every use of style `from` in `b` at `to`; returns how many paragraphs and tables changed.
+/// Point every paragraph and run in `b` that uses style `from` at `to`; returns how many
+/// paragraphs changed.
 fn restyle_block(b: &mut Block, from: &str, to: &Option<String>, depth: usize) -> usize {
     let fix = |s: &mut Option<String>| {
         if s.as_deref() == Some(from) {
@@ -110,7 +112,7 @@ fn restyle_block(b: &mut Block, from: &str, to: &Option<String>, depth: usize) -
             usize::from(changed)
         }
         Block::Table(t) => {
-            let mut n = usize::from(fix(&mut t.props.style));
+            let mut n = 0;
             if depth < 16 {
                 for cell in t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
                     for cb in &mut cell.blocks {
@@ -131,8 +133,9 @@ fn box_ids(p: &Paragraph) -> impl Iterator<Item = u32> + '_ {
 }
 
 impl Document {
-    /// Point every paragraph, run and table that uses style `from` at `to` (`None`: the default
-    /// style), in every story. Returns how many paragraphs and tables changed.
+    /// Point every paragraph and run that uses paragraph or character style `from` at `to`
+    /// (`None`: the default style), in every story, tables included. Returns how many paragraphs
+    /// changed. (Tables' own table styles are retargeted by the engine's table style deletion.)
     pub fn restyle(&mut self, from: &str, to: Option<String>) -> usize {
         let stories: Vec<crate::StoryRef> =
             std::iter::once(crate::StoryRef::Body).chain(self.parts.keys().map(|k| crate::StoryRef::Part(*k))).collect();

@@ -2244,6 +2244,29 @@ fn deleting_a_style_falls_back_to_its_base_and_undoes() {
     assert!(s.doc.styles.get("Heading1").is_some());
 }
 
+/// Manage Styles' Delete on a table style is Table Design's Delete Table Style: its tables take
+/// Table Grid, styles based on it keep their look, and Word's built-in table styles are refused.
+#[test]
+fn deleting_a_table_style_from_manage_styles_uses_table_style_deletion() {
+    use wordcraft_doc::Rgb;
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    let (tp, _, _) = s.sel.focus.path.cell().unwrap();
+    run(&mut s, "table.newStyle", json!({"name": "Base", "headerRow": {"fill": "C00000"}}));
+    run(&mut s, "table.newStyle", json!({"name": "Child", "basedOn": "Base", "apply": false}));
+    let r = run(&mut s, "styles.delete", json!({"style": "Base"}));
+    assert_eq!((r["deleted"][0].as_str(), r["restyled"].as_u64()), (Some("Base"), Some(1)));
+    assert_eq!(s.doc.table(StoryRef::Body, &tp).unwrap().props.style.as_deref(), Some("TableGrid"));
+    assert_eq!(s.doc.styles.table_style("Child").unwrap().parts.header_fill, Some(Rgb(0xC0, 0, 0)), "the child keeps its look");
+    for st in s.doc.styles.styles.iter_mut() {
+        st.builtin = false;
+    }
+    assert!(s.run("styles.delete", &json!({"style": "Table Grid"})).is_err());
+    let list = run(&mut s, "styles.manage", json!({}));
+    let grid = list.as_array().unwrap().iter().find(|x| x["name"] == "Table Grid").unwrap();
+    assert_eq!(grid["builtIn"], true);
+}
+
 #[test]
 fn style_visibility_round_trips_through_docx() {
     let mut s = s();

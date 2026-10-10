@@ -596,6 +596,16 @@ fn update_to_match(s: &mut Session, v: &Value) -> CmdResult {
 fn delete_style(s: &mut Session, v: &Value) -> CmdResult {
     let id = style_id(s, p::req_str(v, "style")?)?;
     let Some(st) = s.doc.styles.get(&id).cloned() else { return Err(CmdError::Params(format!("no style `{id}`"))) };
+    // Table styles: their tables take Table Grid and styles based on them keep their look.
+    if st.kind == StyleKind::Table {
+        let mut out = super::table_style::delete(s, &id)?;
+        if let Some(o) = out.as_object_mut() {
+            let tables = o.get("tables").cloned().unwrap_or(json!(0));
+            o.insert("deleted".into(), json!([id]));
+            o.insert("restyled".into(), tables);
+        }
+        return Ok(out);
+    }
     if st.builtin {
         return Err(CmdError::Failed(format!("`{}` is a built-in style and can't be deleted", st.name)));
     }
@@ -680,7 +690,7 @@ pub fn manage_list(s: &Session, alphabetical: bool) -> Value {
                     "id": st.id,
                     "name": st.name,
                     "type": ty,
-                    "builtIn": st.builtin,
+                    "builtIn": st.builtin || (st.kind == StyleKind::Table && super::table_style::is_builtin_table_style(st)),
                     "inGallery": st.quick && !st.hidden && st.kind != StyleKind::Table,
                     "hidden": st.hidden,
                     "basedOn": st.based_on.as_deref().and_then(|b| sheet.get(b)).map(|b| b.name.clone()),

@@ -162,7 +162,17 @@ pub fn preview(s: &Session, v: &Value) -> Option<TableStyleProps> {
 /// tables get), or no style when the document has no Table Grid.
 fn delete_style(s: &mut Session, v: &Value) -> CmdResult {
     let id = target(s, v)?;
+    delete(s, &id)
+}
+
+/// Delete table style `id` (also what `styles.delete` runs for a table style): see
+/// [`delete_style`].
+pub fn delete(s: &mut Session, id: &str) -> CmdResult {
+    let id = id.to_string();
     let st = s.doc.styles.get(&id).cloned().ok_or_else(|| CmdError::Params("no such style".into()))?;
+    if st.kind != StyleKind::Table {
+        return Err(CmdError::Params(format!("`{}` isn't a table style", st.name)));
+    }
     if is_builtin_table_style(&st) {
         return Err(CmdError::Failed(format!("`{}` is a built-in table style and can't be deleted", st.name)));
     }
