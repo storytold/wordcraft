@@ -77,7 +77,8 @@ fn backspace_and_delete() {
     run(&mut s, "text.insert", json!({"text": "cd"}));
     run(&mut s, "caret.home", json!({}));
     run(&mut s, "text.backspace", json!({}));
-    assert_eq!(text(&s), "abcd");
+    // Enter capitalised the first word, as Word's AutoCorrect does.
+    assert_eq!(text(&s), "Abcd");
     run(&mut s, "caret.docStart", json!({}));
     run(&mut s, "text.delete", json!({}));
     assert_eq!(text(&s), "bcd");
@@ -134,7 +135,7 @@ fn styles_and_lists() {
     assert_eq!(n1.num, n2.num);
     run(&mut s, "text.newParagraph", json!({}));
     run(&mut s, "text.newParagraph", json!({})); // empty item ends the list
-    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().props.numbering.map(|n| n.num), Some(0));
+    assert!(s.doc.para_at(&s.sel.focus).unwrap().props.numbering.is_none_or(|n| n.num == 0));
     // "1. " autoformat.
     run(&mut s, "text.insert", json!({"text": "1."}));
     run(&mut s, "text.insert", json!({"text": " "}));
@@ -289,6 +290,30 @@ fn toc_page_numbers_follow_headings() {
     }
 }
 
+/// A heading above the TOC keeps its index when the entries go in below it, so its page is read
+/// where it is, not `entries` blocks further down.
+#[test]
+fn toc_page_number_for_heading_above_toc() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Preface"}));
+    run(&mut s, "para.heading1", json!({}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.pageBreak", json!({}));
+    run(&mut s, "references.toc", json!({}));
+    run(&mut s, "caret.docEnd", json!({}));
+    for name in ["Alpha", "Bravo"] {
+        run(&mut s, "text.pageBreak", json!({}));
+        run(&mut s, "text.insert", json!({"text": name}));
+        run(&mut s, "para.heading1", json!({}));
+        run(&mut s, "text.newParagraph", json!({}));
+    }
+    run(&mut s, "references.updateToc", json!({}));
+    let t = text(&s);
+    for (name, page) in [("Preface", 1), ("Alpha", 3), ("Bravo", 4)] {
+        assert!(t.contains(&format!("{name}\t{page}")), "{name} should be on page {page}: {t:?}");
+    }
+}
+
 #[test]
 fn failed_command_leaves_document_unchanged() {
     let mut s = s();
@@ -310,7 +335,9 @@ fn hostile_params_never_panic() {
         json!({"value": -1e308, "rows": 1e9}),
     ];
     for spec in reg.all() {
-        if spec.id.starts_with("file.") || spec.id == "insert.picture" || spec.id == "insert.textFromFile" {
+        // These reach outside the session: files, and Read Aloud starts the system speech
+        // synthesiser (`say` on macOS), which would read the sample document aloud on every run.
+        if spec.id.starts_with("file.") || spec.id == "insert.picture" || spec.id == "insert.textFromFile" || spec.id == "review.readAloud" {
             continue;
         }
         for j in &junk {
