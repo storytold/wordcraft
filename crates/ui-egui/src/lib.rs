@@ -187,6 +187,10 @@ pub struct WordApp {
     autosave_path: Option<std::path::PathBuf>,
     /// The file dialog the host is showing, and what its answer is for ([`file_dialogs`]).
     file_dialog: Option<file_dialogs::PendingDialog>,
+    /// File › Info: the property field being typed in and the document revision after its last
+    /// keystroke, so one visit's keystrokes make a single undo step (and anything else in
+    /// between, such as an Undo, starts a new one).
+    pub(crate) info_editing: Option<(&'static str, u64)>,
 }
 
 /// The answer to "Do you want to save changes?" (`ui.saveChanges`).
@@ -246,6 +250,7 @@ impl WordApp {
             change_picture_target: None,
             recipient_list_pending: false,
             file_dialog: None,
+            info_editing: None,
         }
     }
 
@@ -336,6 +341,10 @@ impl WordApp {
         if self.services.download.is_some() && matches!(id, "file.save" | "file.saveAs" | "file.exportPdf" | "file.exportPng") {
             let name = params.get("path").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| self.default_save_name());
             let name = if id == "file.exportPdf" && !name.ends_with(".pdf") { format!("{name}.pdf") } else { name };
+            // A save is a save, download or not: advance the revision and modified stamp (#262).
+            if matches!(id, "file.save" | "file.saveAs") {
+                self.session.stamp_save();
+            }
             let bytes = wordcraft_engine::io::save_bytes(&name, &self.session.doc)?;
             if let Some(d) = &self.services.download
                 && let Err(e) = d(&name, &bytes)

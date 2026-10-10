@@ -362,6 +362,18 @@ impl Session {
     pub fn join_next_undo(&mut self) {
         self.join_next = true;
     }
+    /// Stamp the document's save metadata (modified time, last modified by, revision; created
+    /// when it has none) the way Word does on every save. `file.save` calls it, and so does any
+    /// front end that writes the bytes itself (the web build's download, #262).
+    pub fn stamp_save(&mut self) {
+        let core = &mut self.doc.core;
+        core.modified = crate::cmd::now_iso();
+        if core.created.is_empty() {
+            core.created = core.modified.clone();
+        }
+        core.last_modified_by = self.author.clone();
+        core.revision = core.revision.saturating_add(1);
+    }
     /// Close an open typing group (caret moved, other command).
     pub fn close_typing(&mut self) {
         self.typing_open = false;
