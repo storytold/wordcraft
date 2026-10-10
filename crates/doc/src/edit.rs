@@ -133,6 +133,87 @@ fn box_ids(p: &Paragraph) -> impl Iterator<Item = u32> + '_ {
 }
 
 impl Document {
+    /// Convert notes between footnotes and endnotes: footnotes (`foot`) become endnotes and
+    /// endnotes (`end`) footnotes, both at once to swap them. Each note's kind changes, as do its
+    /// reference marks wherever they are (the body, text boxes, the note's own mark) and the
+    /// note styles (Footnote Text and Footnote Reference to their endnote twins and back).
+    /// Returns how many notes changed.
+    pub fn convert_notes(&mut self, foot: bool, end: bool) -> usize {
+        use crate::para::NoteKind;
+        let flips: std::collections::HashSet<u32> = self
+            .parts
+            .iter()
+            .filter(|(_, p)| (foot && p.kind == PartKind::Footnote) || (end && p.kind == PartKind::Endnote))
+            .map(|(id, _)| *id)
+            .collect();
+        if flips.is_empty() {
+            return 0;
+        }
+        let swap = |s: &mut Option<String>| {
+            let to = match s.as_deref() {
+                Some("FootnoteText") => "EndnoteText",
+                Some("EndnoteText") => "FootnoteText",
+                Some("FootnoteReference") => "EndnoteReference",
+                Some("EndnoteReference") => "FootnoteReference",
+                _ => return,
+            };
+            *s = Some(to.to_string());
+        };
+        let refers = |p: &Paragraph| p.objects.iter().any(|o| matches!(o, InlineObject::NoteRef { id, .. } if flips.contains(id)));
+        // In a paragraph: flip the converted notes' marks and their runs' reference style; in a
+        // converted note's own story also the paragraph style.
+        let convert = |p: &mut Paragraph, in_note: bool| {
+            if !in_note && !refers(p) {
+                return;
+            }
+            let offs = p.object_offsets();
+            let mut at = Vec::new();
+            for (k, o) in p.objects.iter_mut().enumerate() {
+                if let InlineObject::NoteRef { kind, id, .. } = o
+                    && flips.contains(id)
+                {
+                    *kind = if *kind == NoteKind::Footnote { NoteKind::Endnote } else { NoteKind::Footnote };
+                    at.extend(offs.get(k).copied());
+                }
+            }
+            let mut start = 0usize;
+            for r in &mut p.runs {
+                let end = start.saturating_add(r.len);
+                if at.iter().any(|&o| o >= start && o < end) {
+                    swap(&mut r.props.style);
+                }
+                start = end;
+            }
+            if in_note {
+                swap(&mut p.props.style);
+                swap(&mut p.mark.style);
+            }
+            p.touch();
+        };
+        let touches = |b: &Block| {
+            let mut any = false;
+            each_para(b, 0, &mut |p| any |= refers(p));
+            any
+        };
+        for b in self.body.iter_mut() {
+            if touches(b) {
+                each_para_mut(Arc::make_mut(b), 0, &mut |p| convert(p, false));
+            }
+        }
+        for (id, part) in self.parts.iter_mut() {
+            let own = flips.contains(id);
+            if own {
+                part.kind = if part.kind == PartKind::Footnote { PartKind::Endnote } else { PartKind::Footnote };
+            }
+            for b in part.blocks.iter_mut() {
+                if own || touches(b) {
+                    each_para_mut(Arc::make_mut(b), 0, &mut |p| convert(p, own));
+                }
+            }
+        }
+        flips.len()
+    }
+
     /// Point every paragraph and run that uses paragraph or character style `from` at `to`
     /// (`None`: the default style), in every story, tables included. Returns how many paragraphs
     /// changed. (Tables' own table styles are retargeted by the engine's table style deletion.)

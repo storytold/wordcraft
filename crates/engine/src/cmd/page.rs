@@ -98,7 +98,7 @@ pub fn sect(s: &Session) -> SectionProps {
 }
 
 /// Apply to the section(s) of the selection.
-fn with_sect(s: &mut Session, f: impl Fn(&mut SectionProps)) -> CmdResult {
+pub(crate) fn with_sect(s: &mut Session, f: impl Fn(&mut SectionProps)) -> CmdResult {
     let (a, b) = s.sel.ordered();
     let (i0, i1) = (a.path.0.first().copied().unwrap_or(0) as usize, b.path.0.first().copied().unwrap_or(0) as usize);
     let ends: Vec<usize> = s.doc.sections().iter().map(|(e, _)| *e).collect();

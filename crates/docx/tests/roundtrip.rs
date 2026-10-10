@@ -528,6 +528,44 @@ fn notes_round_trip() {
     assert_eq!(r.settings.endnote_format, NumFormat::UpperRoman);
 }
 
+/// #385: footnote and endnote options round-trip for the document (settings) and per section
+/// (`w:sectPr`), in schema order: `w:footnotePr` and `w:endnotePr` before `w:type`.
+#[test]
+fn note_options_round_trip_per_section() {
+    use wordcraft_doc::section::{NotePos, NoteProps, NoteRestart};
+    let mut d = Document::new();
+    d.settings.footnote_format = NumFormat::UpperLetter;
+    d.settings.footnote_pr =
+        NoteProps { pos: Some(NotePos::BeneathText), num_start: Some(4), num_restart: Some(NoteRestart::EachPage), ..Default::default() };
+    d.settings.endnote_pr = NoteProps { pos: Some(NotePos::SectEnd), ..Default::default() };
+    let mut first = Paragraph::with_text("Section one", CharProps::default());
+    let own = NoteProps { num_fmt: Some(NumFormat::LowerRoman), num_start: Some(7), num_restart: Some(NoteRestart::EachSect), ..Default::default() };
+    first.section = Some(Box::new(SectionProps {
+        footnote_pr: own,
+        endnote_pr: NoteProps { num_fmt: Some(NumFormat::Decimal), ..Default::default() },
+        ..Default::default()
+    }));
+    d.body = vec![para_block(first), para_block(Paragraph::with_text("Section two", CharProps::default()))];
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let r = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(r.settings.footnote_format, NumFormat::UpperLetter);
+    assert_eq!((r.settings.footnote_pr, r.settings.endnote_pr), (d.settings.footnote_pr, d.settings.endnote_pr));
+    let sections = r.sections();
+    assert_eq!(sections[0].1.footnote_pr, own);
+    assert_eq!(sections[0].1.endnote_pr.num_fmt, Some(NumFormat::Decimal));
+    assert!(sections[1].1.footnote_pr.is_empty() && sections[1].1.endnote_pr.is_empty());
+    assert_eq!(r.note_options(sections[0].1, false).num_start, 7);
+    assert_eq!(r.note_options(sections[1].1, false).num_start, 4);
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let at = |s: &str| xml.find(s).unwrap_or_else(|| panic!("{s} missing"));
+    assert!(
+        at("<w:footnotePr><w:numFmt w:val=\"lowerRoman\"/><w:numStart w:val=\"7\"/><w:numRestart w:val=\"eachSect\"/></w:footnotePr>")
+            < at("<w:type")
+    );
+}
+
 /// `references.footnote` starts the note's own text with a reference to the note, so the editor shows
 /// its number. In the file that is the `w:footnoteRef` mark; a `w:footnoteReference` there would make
 /// the note cite itself, which LibreOffice refuses to open.

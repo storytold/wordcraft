@@ -757,11 +757,11 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                         }
                         Some(InlineObject::NoteRef { kind, id, custom }) => {
                             let num = if custom.is_empty() {
-                                let n = env.fields.note_number(*id);
-                                match kind {
-                                    NoteKind::Footnote => doc.settings.footnote_format.format(n),
-                                    NoteKind::Endnote => doc.settings.endnote_format.format(n),
-                                }
+                                let fmt = match kind {
+                                    NoteKind::Footnote => doc.settings.footnote_format,
+                                    NoteKind::Endnote => doc.settings.endnote_format,
+                                };
+                                env.fields.note_mark(*id, fmt)
                             } else {
                                 custom.clone()
                             };

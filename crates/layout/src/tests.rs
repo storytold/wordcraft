@@ -3037,3 +3037,75 @@ fn document_note_separators_and_continuation_notice() {
     // The separators and notice aren't text anyone clicks into.
     assert_ne!(l.story_at(0, 80.0, ny + 2.0), Some(DECOR_STORY));
 }
+
+/// The glyphs of each note reference mark in the body, by note id.
+fn note_marks(l: &DocLayout) -> HashMap<u32, Vec<u32>> {
+    let mut marks = HashMap::new();
+    for it in l.pages.iter().flat_map(|p| p.items.iter()) {
+        if let Placed::Lines { story: StoryRef::Body, para, .. } = it {
+            for (ci, id) in &para.notes {
+                let c = &para.clusters[*ci];
+                marks.insert(*id, para.glyphs[c.g0 as usize..c.g1 as usize].iter().map(|g| g.gid).collect::<Vec<_>>());
+            }
+        }
+    }
+    marks
+}
+
+#[test]
+fn footnotes_restart_on_each_page_and_section() {
+    use wordcraft_doc::section::{NoteProps, NoteRestart};
+    let mut d = Document::from_text(&"Body text line.\n".repeat(120));
+    let a = footnote(&mut d, &Pos::body(2, 4), "First note.");
+    let b = footnote(&mut d, &Pos::body(4, 4), "Second note.");
+    let c = footnote(&mut d, &Pos::body(110, 4), "A later page's note.");
+    let l = lay(&d);
+    let page = |l: &DocLayout, id: u32| l.caret(&d.start_of(StoryRef::Part(id))).unwrap().page;
+    assert!(page(&l, c) > page(&l, a), "the third note is on a later page");
+    let marks = note_marks(&l);
+    assert_ne!(marks[&c], marks[&a], "numbered on: 3 is not 1");
+    // Restart each page: the later page's note is 1 again; the first page counts 1, 2.
+    d.settings.footnote_pr = NoteProps { num_restart: Some(NoteRestart::EachPage), ..Default::default() };
+    let marks = note_marks(&lay(&d));
+    assert_eq!(marks[&c], marks[&a]);
+    assert_ne!(marks[&b], marks[&a]);
+    // Restart each section, starting at 5, in a second section that starts at paragraph 50.
+    d.settings.footnote_pr = NoteProps::default();
+    d.para_mut(StoryRef::Body, &Path::top(49)).unwrap().section = Some(Box::new(SectionProps::default()));
+    d.last_section.footnote_pr = NoteProps { num_restart: Some(NoteRestart::EachSect), num_start: Some(5), ..Default::default() };
+    let nums = note_numbers(&d, false);
+    assert_eq!((nums[&a], nums[&b], nums[&c]), (1, 2, 5));
+}
+
+#[test]
+fn endnotes_at_section_end_and_footnotes_below_text() {
+    use wordcraft_doc::section::{NotePos, NoteProps};
+    let mut d = Document::from_text("Alpha\nBeta\nGamma\nDelta");
+    let eid = d.add_part(
+        wordcraft_doc::PartKind::Endnote,
+        vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("An endnote.", Default::default()))],
+    );
+    d.insert_object(
+        &Pos::body(0, 5),
+        InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Endnote, id: eid, custom: String::new() },
+        &Default::default(),
+    )
+    .unwrap();
+    // Two sections, the second on a new page.
+    d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().section = Some(Box::new(SectionProps::default()));
+    let end_page = |d: &Document| {
+        let l = lay(d);
+        (l.caret(&d.start_of(StoryRef::Part(eid))).unwrap().page, l.caret(&Pos::body(2, 0)).unwrap().page)
+    };
+    assert_eq!(end_page(&d), (1, 1), "end of document: after the second section's text");
+    d.settings.endnote_pr = NoteProps { pos: Some(NotePos::SectEnd), ..Default::default() };
+    assert_eq!(end_page(&d), (0, 1), "end of section: on the first section's page");
+    // A footnote below the text sits right under the last line, above where it'd be at the bottom.
+    let fid = footnote(&mut d, &Pos::body(0, 2), "A footnote.");
+    let top = |d: &Document| lay(d).caret(&d.start_of(StoryRef::Part(fid))).unwrap().top;
+    let bottom = top(&d);
+    d.settings.footnote_pr = NoteProps { pos: Some(NotePos::BeneathText), ..Default::default() };
+    let below = top(&d);
+    let text = lay(&d).caret(&Pos::body(1, 0)).unwrap();
+    assert!(below > text.top + text.height && below < bottom - 100.0, "{below} {bottom} {text:?}");
+}

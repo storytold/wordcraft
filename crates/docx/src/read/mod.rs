@@ -698,11 +698,13 @@ impl Reader<'_> {
                     if let Some(f) = k.child_val("w:numFmt") {
                         s.footnote_format = NumFormat::from_ooxml(f);
                     }
+                    s.footnote_pr = props::note_pr(k, false);
                 }
                 "w:endnotePr" => {
                     if let Some(f) = k.child_val("w:numFmt") {
                         s.endnote_format = NumFormat::from_ooxml(f);
                     }
+                    s.endnote_pr = props::note_pr(k, false);
                 }
                 "w:documentProtection" => {
                     let enforced = k.attr("w:enforcement").is_some_and(|v| !matches!(v, "0" | "false" | "off"));

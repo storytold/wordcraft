@@ -347,6 +347,12 @@ pub struct Settings {
     pub theme_name: String,
     pub footnote_format: section::NumFormat,
     pub endnote_format: section::NumFormat,
+    /// The document's footnote and endnote placement, start and restart (`w:footnotePr` /
+    /// `w:endnotePr` in the settings); sections may override them.
+    #[serde(skip_serializing_if = "section::NoteProps::is_empty")]
+    pub footnote_pr: section::NoteProps,
+    #[serde(skip_serializing_if = "section::NoteProps::is_empty")]
+    pub endnote_pr: section::NoteProps,
     pub protection: Option<String>,
     /// Word compatibility mode the document is laid out in (`compatibilityMode`): 15 for Word
     /// 2013 and later, which places a table's border at the margin rather than its text and lets
@@ -417,6 +423,8 @@ impl Default for Settings {
             theme_name: "Craft".into(),
             footnote_format: section::NumFormat::Decimal,
             endnote_format: section::NumFormat::LowerRoman,
+            footnote_pr: section::NoteProps::default(),
+            endnote_pr: section::NoteProps::default(),
             protection: None,
             compat_mode: COMPAT_MODE_CURRENT,
             grid_h: DEFAULT_GRID,
@@ -693,6 +701,31 @@ impl Document {
         v
     }
 
+    /// The footnote (`endnote` false) or endnote options in effect in section `sect`: its own,
+    /// else the document's, else Word's defaults (footnotes at the page bottom in 1, 2, 3;
+    /// endnotes at the end of the document in i, ii, iii; numbered on through the document).
+    /// Placements that don't apply to the kind fall back to its default.
+    pub fn note_options(&self, sect: &SectionProps, endnote: bool) -> section::NoteOptions {
+        use section::NotePos;
+        let (own, doc, fmt) = if endnote {
+            (&sect.endnote_pr, &self.settings.endnote_pr, self.settings.endnote_format)
+        } else {
+            (&sect.footnote_pr, &self.settings.footnote_pr, self.settings.footnote_format)
+        };
+        let pos = own.pos.or(doc.pos);
+        let pos = if endnote {
+            pos.filter(|p| matches!(p, NotePos::SectEnd | NotePos::DocEnd)).unwrap_or(NotePos::DocEnd)
+        } else {
+            pos.filter(|p| matches!(p, NotePos::PageBottom | NotePos::BeneathText)).unwrap_or(NotePos::PageBottom)
+        };
+        section::NoteOptions {
+            pos,
+            num_fmt: own.num_fmt.unwrap_or(fmt),
+            num_start: own.num_start.or(doc.num_start).unwrap_or(1).clamp(1, section::MAX_NOTE_START),
+            num_restart: own.num_restart.or(doc.num_restart).unwrap_or_default(),
+        }
+    }
+
     /// The section that contains top-level body block `block` (index into `sections()`).
     pub fn section_index_of(&self, block: usize) -> usize {
         self.sections().iter().position(|(end, _)| block <= *end).unwrap_or(0)
@@ -775,6 +808,15 @@ impl Document {
         self.walk_objects(&self.body, &mut BoxBudget::default(), f);
     }
 
+    /// Like [`Document::objects_in_reading_order_at`], also giving the top-level body block each
+    /// object is in (for objects in text boxes, the block of the box's anchor).
+    pub fn objects_in_reading_order_by_block(&self, f: &mut dyn FnMut(usize, &Paragraph, usize) -> bool) {
+        let mut budget = BoxBudget::default();
+        for (i, b) in self.body.iter().enumerate() {
+            self.walk_objects(std::slice::from_ref(b), &mut budget, &mut |p, k| f(i, p, k));
+        }
+    }
+
     /// The footnotes and endnotes referenced inside text box story `part` (nested boxes too), in
     /// reading order.
     pub fn notes_in_text_box(&self, part: u32) -> Vec<u32> {
@@ -794,7 +836,7 @@ impl Document {
         out
     }
 
-    fn walk_objects(&self, blocks: &Blocks, budget: &mut BoxBudget, f: &mut dyn FnMut(&Paragraph, usize) -> bool) {
+    fn walk_objects(&self, blocks: &[Arc<Block>], budget: &mut BoxBudget, f: &mut dyn FnMut(&Paragraph, usize) -> bool) {
         for b in blocks {
             edit::each_para(b, 0, &mut |p| {
                 for (k, o) in p.objects.iter().enumerate() {

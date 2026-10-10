@@ -21,6 +21,7 @@ pub mod credits;
 pub mod dialogs;
 pub mod dialogs_insert;
 pub mod dialogs_lists;
+pub mod dialogs_notes;
 pub mod dialogs_para;
 pub mod equation_tab;
 pub mod file_dialogs;
@@ -1106,6 +1107,8 @@ fn input_dialog(id: &str, params: &Value) -> Option<&'static str> {
         // Define New Multilevel List and Track Changes Options without settings show their dialogs.
         "list.define" if params.get("levels").is_none() => Some("defineList"),
         "review.trackingOptions" if params.as_object().is_none_or(|m| m.is_empty()) => Some("trackChangesOptions"),
+        // Footnote and Endnote without settings shows its dialog (#385).
+        "references.noteOptions" if params.as_object().is_none_or(|m| m.is_empty()) => Some("noteOptions"),
         _ => None,
     }
 }

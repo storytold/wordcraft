@@ -925,7 +925,7 @@ fn references(app: &mut WordApp, ui: &mut Ui) {
             small(ui, app, "updateTable", Some("Update Table"), "Update Table", "references.updateToc", json!({}), false);
         });
     });
-    group(ui, "Footnotes", None, app, |ui, app| {
+    group(ui, "Footnotes", Some("references.noteOptions"), app, |ui, app| {
         big(ui, app, "footnote", "Insert\nFootnote", "references.footnote", json!({}), false);
         stack(ui, |ui| {
             small(ui, app, "endnote", Some("Insert Endnote"), "Insert Endnote", "references.endnote", json!({}), false);

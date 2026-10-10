@@ -477,15 +477,25 @@ fn left_out_objects(doc: &Document, p: &Paragraph, table_chr: Option<&CharProps>
     move |k| left.get(k).copied().unwrap_or(false)
 }
 
-/// Note part ids in document order → numbers (footnotes and endnotes numbered separately). With
-/// `hide_deleted`, notes whose reference mark is a tracked deletion are left out, as in the final text.
-fn note_numbers(doc: &Document, hide_deleted: bool) -> HashMap<u32, u32> {
+/// Footnote and endnote numbers (each kind counted separately), in document order, as each
+/// section's options say: starting at its "start at", numbered on, or starting again in each
+/// section or (footnotes) on each page. `pages` gives the page each footnote was placed on by an
+/// earlier pass (empty: numbered on). With `hide_deleted`, notes whose reference mark is a
+/// tracked deletion are left out, as in the final text.
+fn note_info(doc: &Document, hide_deleted: bool, pages: &HashMap<u32, usize>) -> HashMap<u32, fields::NoteNum> {
+    use wordcraft_doc::section::NoteRestart;
+    let sections = doc.sections();
+    let opts: Vec<[wordcraft_doc::section::NoteOptions; 2]> =
+        sections.iter().map(|(_, s)| [doc.note_options(s, false), doc.note_options(s, true)]).collect();
     let mut m = HashMap::new();
-    let (mut f, mut e) = (0u32, 0u32);
+    // Per kind (footnotes, endnotes): the last number, and the section and page of the last note.
+    let mut last: [Option<(u32, usize, Option<usize>)>; 2] = [None, None];
+    let mut order = [0u32; 2];
+    let mut si = 0usize;
     // Reading order, text boxes included where they are. A hidden reference mark still takes
     // its number, as in Word; a deleted one (or one in a deleted text box) does not.
     let mut cur: Option<(usize, Vec<bool>)> = None;
-    doc.objects_in_reading_order_at(&mut |p, k| {
+    doc.objects_in_reading_order_by_block(&mut |block, p, k| {
         let key = p as *const Paragraph as usize;
         if cur.as_ref().is_none_or(|(at, _)| *at != key) {
             let deleted = left_out_objects(doc, p, None, true, hide_deleted);
@@ -495,20 +505,54 @@ fn note_numbers(doc: &Document, hide_deleted: bool) -> HashMap<u32, u32> {
             return false;
         }
         if let Some(InlineObject::NoteRef { kind, id, .. }) = p.objects.get(k) {
-            let n = match kind {
-                wordcraft_doc::para::NoteKind::Footnote => {
-                    f += 1;
-                    f
-                }
-                wordcraft_doc::para::NoteKind::Endnote => {
-                    e += 1;
-                    e
+            while sections.get(si).is_some_and(|(end, _)| block > *end) && si + 1 < sections.len() {
+                si += 1;
+            }
+            let ki = usize::from(*kind == wordcraft_doc::para::NoteKind::Endnote);
+            let Some(o) = opts.get(si).and_then(|o| o.get(ki)) else { return true };
+            let page = if ki == 0 { pages.get(id).copied() } else { None };
+            let Some(slot) = last.get_mut(ki) else { return true };
+            let n = match *slot {
+                None => o.num_start,
+                Some((prev, psect, ppage)) => {
+                    let again = match o.num_restart {
+                        NoteRestart::Continuous => false,
+                        NoteRestart::EachSect => psect != si,
+                        NoteRestart::EachPage => page.is_some() && page != ppage,
+                    };
+                    if again { o.num_start } else { prev.saturating_add(1) }
                 }
             };
-            m.insert(*id, n);
+            *slot = Some((n, si, page));
+            let ord = order.get_mut(ki).map(|c| {
+                *c = c.saturating_add(1);
+                *c
+            });
+            m.insert(*id, fields::NoteNum { n, fmt: o.num_fmt, section: si, order: ord.unwrap_or(0) });
         }
         true
     });
+    m
+}
+
+/// Note part ids → numbers, numbered on (see [`note_info`]).
+#[cfg(test)]
+fn note_numbers(doc: &Document, hide_deleted: bool) -> HashMap<u32, u32> {
+    note_info(doc, hide_deleted, &HashMap::new()).into_iter().map(|(id, n)| (id, n.n)).collect()
+}
+
+/// The page each footnote's text starts on.
+fn footnote_pages(doc: &Document, pages: &[Page]) -> HashMap<u32, usize> {
+    let mut m = HashMap::new();
+    for (pi, p) in pages.iter().enumerate() {
+        for it in &p.items {
+            if let Placed::Lines { story: StoryRef::Part(id), .. } | Placed::Cell { story: StoryRef::Part(id), .. } = it
+                && doc.parts.get(id).is_some_and(|part| part.kind == wordcraft_doc::PartKind::Footnote)
+            {
+                m.entry(*id).or_insert(pi);
+            }
+        }
+    }
     m
 }
 
@@ -813,6 +857,10 @@ struct PageBuilder<'a> {
     page_items_start: usize,
     /// The document's own footnote separators, laid out for the section's text width.
     seps: NoteSeps,
+    /// The section's footnotes go right below its text, not at the page bottom ...
+    sect_beneath: bool,
+    /// ... and so do the current page's (set as the page starts).
+    beneath: bool,
 }
 
 /// Gap above the footnote separator and its length.
@@ -1040,7 +1088,12 @@ impl PageBuilder<'_> {
         // The note area starts below the text (a page of continued notes alone: at its top).
         let area = self.bottom.max(self.body_floor());
         let fits = total <= self.orig_bottom - area + 0.01;
-        let top = if fits { self.orig_bottom - total } else { area };
+        let top = match (fits, self.beneath) {
+            (false, _) => area,
+            // Below the page's last line of text.
+            (true, true) => self.body_floor().min(self.orig_bottom - total),
+            (true, false) => self.orig_bottom - total,
+        };
         let notes = std::mem::take(&mut self.notes);
         // A page that starts with a continued note gets the continuation separator.
         let cont = notes.first().is_some_and(|n| n.cont);
@@ -1123,6 +1176,7 @@ impl PageBuilder<'_> {
     fn new_page(&mut self, first_block: usize, body_top: f32) {
         self.apply_valign();
         self.flush_notes();
+        self.beneath = self.sect_beneath;
         self.excl.clear();
         self.float_tables.clear();
         if self.sect.line_numbers.as_ref().is_some_and(|l| l.restart == wordcraft_doc::section::LineNumberRestart::Page) {
@@ -1195,8 +1249,34 @@ impl PageBuilder<'_> {
     }
 }
 
+/// Passes the layout makes at most for footnotes numbered again on each page: their numbers
+/// depend on the pages they land on, which (barely) depend on the numbers' widths.
+const MAX_NOTE_PASSES: usize = 3;
+
 /// Lay out the whole document.
 pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> DocLayout {
+    let t0 = now_ms();
+    let mut pages = HashMap::new();
+    let mut l = layout_pass(doc, cache, opts, &pages);
+    let per_page = opts.view == ViewMode::Print
+        && doc.sections().iter().any(|(_, s)| doc.note_options(s, false).num_restart == wordcraft_doc::section::NoteRestart::EachPage);
+    if per_page {
+        // Number each page's footnotes from where the pass before placed them, until they stay.
+        for _ in 1..MAX_NOTE_PASSES {
+            let placed = footnote_pages(doc, &l.pages);
+            if placed == pages {
+                break;
+            }
+            pages = placed;
+            l = layout_pass(doc, cache, opts, &pages);
+        }
+    }
+    l.ms = now_ms() - t0;
+    l
+}
+
+/// One layout pass, numbering footnotes restarted on each page by `note_pages` ([`note_info`]).
+fn layout_pass(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions, note_pages: &HashMap<u32, usize>) -> DocLayout {
     let t0 = now_ms();
     let env = env_hash(doc, opts);
     if env != cache.env {
@@ -1204,10 +1284,10 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
         cache.env = env;
     }
     cache.used.clear();
-    let notes = note_numbers(doc, opts.hide_deleted);
+    let notes = note_info(doc, opts.hide_deleted, note_pages);
     let notes_hash = hash_of(&{
-        let mut v: Vec<_> = notes.iter().map(|(a, b)| (*a, *b)).collect();
-        v.sort();
+        let mut v: Vec<_> = notes.iter().map(|(a, b)| (*a, b.n, b.fmt)).collect();
+        v.sort_by_key(|(a, ..)| *a);
         v
     });
     let mut ctx = Ctx {
@@ -1270,12 +1350,29 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
         line_no: 0,
         page_items_start: 0,
         seps: NoteSeps::default(),
+        sect_beneath: false,
+        beneath: false,
+    };
+    // Endnotes in document order, with the section of their reference; placed at the end of a
+    // section that keeps them there, else at the end of the document.
+    let mut endnotes: std::collections::VecDeque<(u32, usize)> = {
+        let mut ids: Vec<(u32, u32, usize)> = ctx
+            .fields
+            .notes
+            .iter()
+            .filter(|(id, _)| doc.parts.get(id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::Endnote))
+            .map(|(id, n)| (n.order, *id, n.section))
+            .collect();
+        ids.sort();
+        ids.into_iter().map(|(_, id, sect)| (id, sect)).collect()
     };
     let mut block = 0usize;
     for (si, (end, sect)) in sections.iter().enumerate() {
         let sect: &SectionProps = if web { sect_ref } else { sect };
         pb.sect = sect;
         pb.sect_idx = si;
+        let (foot, end_opts) = (doc.note_options(sect, false), doc.note_options(sect, true));
+        pb.sect_beneath = foot.pos == wordcraft_doc::section::NotePos::BeneathText;
         if !web && !doc.footnote_separators.is_empty() {
             pb.seps = NoteSeps::new(&mut ctx, &doc.footnote_separators, sect.text_width());
         }
@@ -1314,59 +1411,22 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
             }
             block += 1;
         }
+        // Endnotes at the end of the section: those referenced so far.
+        if end_opts.pos == wordcraft_doc::section::NotePos::SectEnd && !pb.pages.is_empty() {
+            let mut here = Vec::new();
+            while let Some((id, _)) = endnotes.front().filter(|(_, s)| *s <= si).copied() {
+                endnotes.pop_front();
+                here.push(id);
+            }
+            place_endnotes(&mut ctx, &mut pb, here, block.saturating_sub(1));
+        }
     }
     if pb.pages.is_empty() {
         pb.new_page(0, sect_ref.margin_top);
     }
-    // Endnotes after the last paragraph.
-    let endnotes: Vec<u32> = {
-        let mut ids: Vec<(u32, u32)> = ctx
-            .fields
-            .notes
-            .iter()
-            .filter(|(id, _)| doc.parts.get(id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::Endnote))
-            .map(|(a, b)| (*b, *a))
-            .collect();
-        ids.sort();
-        ids.into_iter().map(|(_, id)| id).collect()
-    };
-    if !endnotes.is_empty() && !web {
-        // The document's own endnote separator, else a short line.
-        let width = pb.col_w();
-        if let Some((items, h)) = doc.endnote_separators.separator.as_ref().map(|b| sep_box(&mut ctx, b, width)) {
-            let (x, y) = (pb.col_x(), pb.y);
-            if let Some(pg) = pb.page() {
-                pg.items.extend(items.into_iter().map(|mut it| {
-                    it.translate(x, y);
-                    it
-                }));
-            }
-            pb.y += h;
-        } else {
-            pb.y += 12.0;
-            let (x, ry) = (pb.col_x(), pb.y);
-            if let Some(pg) = pb.page() {
-                pg.items.push(Placed::Rule { x0: x, y0: ry, x1: x + NOTE_SEP_W, y1: ry, border: Border::single(0.5) });
-            }
-            pb.y += 8.0;
-        }
-        for id in endnotes {
-            let Some(part) = doc.parts.get(&id) else { continue };
-            let blocks = part.blocks.clone();
-            let BoxLayout { items, height: h, .. } = layout_box(&mut ctx, StoryRef::Part(id), &blocks, &[], pb.col_w(), None, 0, None);
-            if pb.y + h > pb.bottom && !pb.at_top() {
-                pb.advance(block, pb.top);
-            }
-            let (x, y) = (pb.col_x(), pb.y);
-            if let Some(pg) = pb.page() {
-                for mut it in items {
-                    it.translate(x, y);
-                    pg.items.push(it);
-                }
-            }
-            pb.y += h;
-        }
-    }
+    // The rest of the endnotes after the last paragraph.
+    let rest: Vec<u32> = endnotes.into_iter().map(|(id, _)| id).collect();
+    place_endnotes(&mut ctx, &mut pb, rest, block);
     pb.apply_valign();
     pb.flush_notes();
     // Footnotes still continuing after the last page get pages of their own. Each page takes at
@@ -1408,6 +1468,49 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
         }
     }
     DocLayout { pages, index, ms: now_ms() - t0, text_boxes: ctx.boxes.total() }
+}
+
+/// Place endnotes `ids` below the text so far: a separator (the document's own, else a short
+/// line), then each note, moving to the next column or page when one doesn't fit.
+fn place_endnotes(ctx: &mut Ctx, pb: &mut PageBuilder, ids: Vec<u32>, block: usize) {
+    if ids.is_empty() || pb.web {
+        return;
+    }
+    // The document's own endnote separator, else a short line.
+    let width = pb.col_w();
+    if let Some((items, h)) = ctx.doc.endnote_separators.separator.as_ref().map(|b| sep_box(ctx, b, width)) {
+        let (x, y) = (pb.col_x(), pb.y);
+        if let Some(pg) = pb.page() {
+            pg.items.extend(items.into_iter().map(|mut it| {
+                it.translate(x, y);
+                it
+            }));
+        }
+        pb.y += h;
+    } else {
+        pb.y += 12.0;
+        let (x, ry) = (pb.col_x(), pb.y);
+        if let Some(pg) = pb.page() {
+            pg.items.push(Placed::Rule { x0: x, y0: ry, x1: x + NOTE_SEP_W, y1: ry, border: Border::single(0.5) });
+        }
+        pb.y += 8.0;
+    }
+    for id in ids {
+        let Some(part) = ctx.doc.parts.get(&id) else { continue };
+        let blocks = part.blocks.clone();
+        let BoxLayout { items, height: h, .. } = layout_box(ctx, StoryRef::Part(id), &blocks, &[], pb.col_w(), None, 0, None);
+        if pb.y + h > pb.bottom && !pb.at_top() {
+            pb.advance(block, pb.top);
+        }
+        let (x, y) = (pb.col_x(), pb.y);
+        if let Some(pg) = pb.page() {
+            for mut it in items {
+                it.translate(x, y);
+                pg.items.push(it);
+            }
+        }
+        pb.y += h;
+    }
 }
 
 fn item_bottom(y: f32, para: &ParaLayout, l0: usize, l1: usize) -> Option<f32> {

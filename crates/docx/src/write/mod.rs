@@ -849,11 +849,12 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool) -> Vec<u8> {
         }
     }
     w.val("w:characterSpacingControl", "doNotCompress");
-    for (tag, fmt, used, el) in
-        [("w:footnotePr", s.footnote_format, footnotes, "w:footnote"), ("w:endnotePr", s.endnote_format, endnotes, "w:endnote")]
-    {
+    for (tag, fmt, pr, used, el) in [
+        ("w:footnotePr", s.footnote_format, &s.footnote_pr, footnotes, "w:footnote"),
+        ("w:endnotePr", s.endnote_format, &s.endnote_pr, endnotes, "w:endnote"),
+    ] {
         w.open(tag, &[]);
-        w.val("w:numFmt", fmt.ooxml());
+        story::note_pr_inner(&mut w, &wordcraft_doc::section::NoteProps { num_fmt: Some(fmt), ..*pr });
         if used {
             w.empty(el, &[("w:id", "-1")]);
             w.empty(el, &[("w:id", "0")]);
