@@ -7,7 +7,8 @@ use crate::theme::{Tokens, medium, regular, semibold};
 use crate::widgets::{CONTENT_H, LABEL_H, big, big_toggle, color_grid, combo, font_combo, group, menu_button, small, split};
 use crate::{WordApp, icons};
 
-pub const TABS: [&str; 12] = ["File", "Home", "Insert", "Draw", "Design", "Layout", "References", "Mailings", "Review", "View", "Zotero", "Help"];
+pub const TABS: [&str; 13] =
+    ["File", "Home", "Insert", "Draw", "Design", "Layout", "References", "Mailings", "Review", "View", "Developer", "Zotero", "Help"];
 
 /// True when the caret/selection touches a picture (#147).
 pub fn has_picture_selected(s: &wordcraft_engine::Session) -> bool {
@@ -173,6 +174,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         "Mailings" => mailings(app, ui),
                         "Review" => review(app, ui),
                         "View" => view(app, ui),
+                        "Developer" => developer(app, ui),
                         "Zotero" => zotero(app, ui),
                         "Help" => help(app, ui),
                         "Table Design" => table_design(app, ui),
@@ -1123,6 +1125,44 @@ fn review(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Ink", None, app, |ui, app| {
         let hidden = app.session.view.hide_ink;
         big_toggle(ui, app, "hideInk", "Hide\nInk", "review.hideInk", hidden);
+    });
+}
+
+/// Developer › Controls: content controls.
+fn developer(app: &mut WordApp, ui: &mut Ui) {
+    let design = app.session.view.design_mode;
+    group(ui, "Controls", None, app, |ui, app| {
+        let rows: [[(&str, &str, &str); 3]; 3] = [
+            [
+                ("ccRichText", "Rich Text Content Control", "developer.richText"),
+                ("ccPlainText", "Plain Text Content Control", "developer.plainText"),
+                ("ccPicture", "Picture Content Control", "developer.picture"),
+            ],
+            [
+                ("ccGallery", "Building Block Gallery Content Control", "developer.buildingBlock"),
+                ("ccCheckBox", "Check Box Content Control", "developer.checkBox"),
+                ("ccComboBox", "Combo Box Content Control", "developer.comboBox"),
+            ],
+            [
+                ("ccDropDown", "Drop-Down List Content Control", "developer.dropDown"),
+                ("ccDate", "Date Picker Content Control", "developer.datePicker"),
+                ("ccRepeat", "Repeating Section Content Control", "developer.repeatingSection"),
+            ],
+        ];
+        stack(ui, |ui| {
+            for row in rows {
+                crate::widgets::row(ui, |ui| {
+                    for (icon, tip, id) in row {
+                        small(ui, app, icon, None, tip, id, json!({}), false);
+                    }
+                });
+                ui.add_space(3.0);
+            }
+        });
+        stack(ui, |ui| {
+            small(ui, app, "designMode", Some("Design Mode"), "Design Mode", "developer.designMode", json!({}), design);
+            small(ui, app, "properties", Some("Properties"), "Properties", "developer.properties", json!({}), false);
+        });
     });
 }
 

@@ -53,7 +53,7 @@ Measured by grepping `crates/docx/src/read` and `src/write` for the OOXML elemen
 | Formatting revisions (`w:rPrChange`, `w:pPrChange`, `w:sectPrChange`, `w:tblPrChange`, `w:trPrChange`, `w:tcPrChange`, `w:numberingChange`) | ✅ | ✅ | #41: kept on open and save, schema order (change element last); changes inside `styles.xml` are dropped. RTF/ODT ignore them |
 | Move tracking (`w:moveFrom`/`w:moveTo`) | 🟡 | ❌ | Read as plain insert/delete |
 | Fields (`w:fldChar`, `w:fldSimple`), TOC, cross-references, `ADDIN` citations | ✅ | ✅ | Field codes Word supports but we don't evaluate keep their cached result |
-| Content controls (`w:sdt`) | 🟡 | ❌ | Content kept, the control (type, binding, placeholder, lock) dropped |
+| Content controls (`w:sdt`) | ✅ | ✅ | Block, inline, row and cell level, nested; title, tag, id, lock, placeholder, temporary, rich/plain text, `w14:checkbox`, combo box, drop-down list, date, picture, building block gallery, `w15` repeating sections; other `w:sdtPr` children (data binding, appearance) kept verbatim (#381). A TOC's control is rebuilt by the TOC |
 | Legacy form fields (`w:ffData`), check boxes, drop-downs | ❌ | ❌ | |
 | DrawingML pictures inline and anchored (`wp:anchor`), wrap square/tight/through/top-bottom | ✅ | ✅ | Tight/through read and written, laid out as square |
 | Group shapes (`wpg:`), drawing canvas | 🟡 | 🟡 | Group shapes read and written (#267); drawing canvas (`wpc:`) dropped |
@@ -74,15 +74,16 @@ Measured by grepping `crates/docx/src/read` and `src/write` for the OOXML elemen
 
 1. A **real-world DOCX corpus** opened, rendered and round-tripped, compared page by page with
    Word (local only: Word output can't be committed; keep a manifest and our own renders).
-2. **Preserve what we can't render**: ink, group shapes and content controls survive a round trip
+2. **Preserve what we can't render**: ink and drawing canvases survive a round trip
    (keep the parts and the run). Charts, SmartArt and OLE objects do (#292, #319).
-3. Formatting revisions and content controls read and written.
+3. Move tracking (`w:moveFrom`/`w:moveTo`) read and written (formatting revisions: #41; content controls: #381).
 4. Encrypted `.docx` opens with a password.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | trivial | Content controls read and written with their properties and nesting (#381) |
 | 2026-10-11 | trivial | Formatting revisions (`w:rPrChange`, `w:pPrChange`, table, row, cell, section and numbering changes) read and written (#41) |
 | 2026-10-10 | trivial | OLE objects turned or flipped in WordCraft keep the turn on save (VML `rotation`/`flip`, DrawingML `a:xfrm` with the rotated effect extent); test counts refreshed |
 | 2026-10-10 | trivial | Charts, SmartArt and OLE objects written back on save with their parts (#319); chart/SmartArt reading (#292) recorded |

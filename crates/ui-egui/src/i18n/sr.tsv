@@ -1325,3 +1325,37 @@
 	Flip Vertical	Окрени вертикално
 	Flip Horizontal	Окрени хоризонтално
 	Formatted	Форматирано
+	Developer	Програмер
+	Controls	Контроле
+	Rich Text Content Control	Контрола садржаја за обогаћени текст
+	Plain Text Content Control	Контрола садржаја за обичан текст
+	Picture Content Control	Контрола садржаја за слику
+	Building Block Gallery Content Control	Контрола садржаја за галерију градивних блокова
+	Check Box Content Control	Контрола садржаја за поље за потврду
+	Combo Box Content Control	Контрола садржаја за комбиновано поље
+	Drop-Down List Content Control	Контрола садржаја за падајућу листу
+	Date Picker Content Control	Контрола садржаја за бирање датума
+	Repeating Section Content Control	Контрола садржаја за одељак који се понавља
+	Design Mode	Режим дизајна
+	Content Control at Selection	Контрола садржаја на избору
+	Toggle Check Box	Промени поље за потврду
+	Choose List Item	Изабери ставку листе
+	Set Date	Постави датум
+	Remove Content Control	Уклони контролу садржаја
+	Content Control Properties	Својства контроле садржаја
+	Title	Наслов
+	Tag	Ознака
+	Placeholder text	Текст чувара места
+	Can't be deleted	Не може да се избрише
+	Contents can't be edited	Садржај не може да се уређује
+	Remove the control once edited	Уклони контролу после уређивања
+	Allow line breaks	Дозволи преломе реда
+	Date format	Формат датума
+	Checked symbol	Симбол за потврђено
+	Unchecked symbol	Симбол за непотврђено
+	List entries	Ставке листе
+	Display text	Приказани текст
+	Value	Вредност
+	Remove	Уклони
+	Today	Данас
+	Put the caret in a content control first.	Прво поставите курсор у контролу садржаја.

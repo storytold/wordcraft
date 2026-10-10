@@ -327,6 +327,17 @@ View|Window|Switch Windows|view.switchWindows
 View|Macros|Macros|tools.macros
 View|Macros|Record Macro|tools.recordMacro
 View|SharePoint|Properties|file.properties
+Developer|Controls|Rich Text Content Control|developer.richText
+Developer|Controls|Plain Text Content Control|developer.plainText
+Developer|Controls|Picture Content Control|developer.picture
+Developer|Controls|Building Block Gallery Content Control|developer.buildingBlock
+Developer|Controls|Check Box Content Control|developer.checkBox
+Developer|Controls|Combo Box Content Control|developer.comboBox
+Developer|Controls|Drop-Down List Content Control|developer.dropDown
+Developer|Controls|Date Picker Content Control|developer.datePicker
+Developer|Controls|Repeating Section Content Control|developer.repeatingSection
+Developer|Controls|Design Mode|developer.designMode
+Developer|Controls|Properties|developer.properties
 Table Design|Table Style Options|Table Style Options|table.look
 Table Design|Table Styles|Table Styles|table.style
 Table Design|Table Styles|New Table Style|table.newStyle

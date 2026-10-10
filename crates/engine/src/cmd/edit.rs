@@ -99,6 +99,7 @@ fn copy(s: &mut Session, _: &Value) -> CmdResult {
 fn cut(s: &mut Session, v: &Value) -> CmdResult {
     let r = copy(s, v)?;
     delete_selection(s)?;
+    super::controls::restore_placeholder(s)?;
     Ok(r)
 }
 

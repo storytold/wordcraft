@@ -316,7 +316,7 @@ fn split_rows(s: &mut Session, l: &DocLayout, page: usize, y: f32, (xa, xb): (f3
     }
     let t = s.doc.table_mut(story, &tp)?;
     let Some(row) = t.rows.get_mut(r) else { return Err(CmdError::Failed("the row isn't there any more".into())) };
-    let mut new_row = wordcraft_doc::Row { props: row.props.clone(), cells: Vec::with_capacity(row.cells.len()) };
+    let mut new_row = wordcraft_doc::Row { props: row.props.clone(), cells: Vec::with_capacity(row.cells.len()), controls: Default::default() };
     new_row.props.header = false;
     if top.is_finite() && bottom.is_finite() && bottom > top {
         let rule = if row.props.height_rule == HeightRule::Exact { HeightRule::Exact } else { HeightRule::AtLeast };

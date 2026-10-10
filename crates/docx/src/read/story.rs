@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use wordcraft_doc::control::{ContentControl, ControlKind, ControlWrap};
 use wordcraft_doc::effects::{Glow, Shadow, ShapeEffects};
 use wordcraft_doc::graphic::{Embedded, Graphic, GraphicItem, GraphicKind};
 use wordcraft_doc::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
@@ -166,11 +167,7 @@ impl Reader<'_> {
                         out.push(Arc::new(Block::Table(t)));
                     }
                 }
-                "w:sdt" => {
-                    if let Some(c) = e.child("w:sdtContent") {
-                        self.read_blocks(sc, c, rels, out, depth + 1);
-                    }
-                }
+                "w:sdt" => self.read_block_sdt(sc, e, rels, out, depth),
                 "w:customXml" | "w:smartTag" | "w:ins" | "w:moveTo" => self.read_blocks(sc, e, rels, out, depth + 1),
                 "mc:AlternateContent" => {
                     if let Some(c) = children_of_choice(e) {
@@ -185,6 +182,48 @@ impl Reader<'_> {
                 _ => {}
             }
         }
+    }
+
+    /// A block-level content control: its content's blocks, between a start marker at the start
+    /// of the first paragraph and an end marker at the end of the last (a table at either end
+    /// carries the control instead).
+    fn read_block_sdt(&mut self, sc: &mut StoryCtx, e: &El, rels: &Rels, out: &mut Blocks, depth: usize) {
+        let Some(content) = e.child("w:sdtContent") else { return };
+        let mut ctl = super::sdt::sdt_pr(e.child("w:sdtPr"), true);
+        ctl.end_pr_xml = super::sdt::sdt_end_pr(e.child("w:sdtEndPr"));
+        let mut inner = Blocks::new();
+        self.read_blocks(sc, content, rels, &mut inner, depth + 1);
+        // A table of contents' control belongs to the TOC: the writer puts it back around the
+        // TOC field and its entries, which References › Update Table rebuilds.
+        let toc = matches!(&ctl.kind, ControlKind::Gallery { list: false, gallery, .. } if gallery == "Table of Contents");
+        if inner.is_empty() || toc {
+            out.extend(inner);
+            return;
+        }
+        if ctl.showing_placeholder
+            && let Some(Block::Para(p)) = inner.first().map(|b| &**b)
+        {
+            ctl.placeholder_text = placeholder_of(&p.plain_text());
+        }
+        if let Some(first) = inner.first_mut() {
+            match Arc::make_mut(first) {
+                Block::Para(p) => {
+                    let props = p.props_of_char(0).clone();
+                    let _ = p.insert_object(0, InlineObject::ControlStart { control: Box::new(ctl) }, &props);
+                }
+                Block::Table(t) => t.controls.open.insert(0, ctl),
+            }
+        }
+        if let Some(last) = inner.last_mut() {
+            match Arc::make_mut(last) {
+                Block::Para(p) => {
+                    let (at, props) = (p.len(), p.runs.last().map(|r| r.props.clone()).unwrap_or_else(|| p.mark.clone()));
+                    let _ = p.insert_object(at, InlineObject::ControlEnd, &props);
+                }
+                Block::Table(t) => t.controls.close = t.controls.close.saturating_add(1),
+            }
+        }
+        out.extend(inner);
     }
 
     /// Markers left over at the end of a story go to its last paragraph.
@@ -360,9 +399,23 @@ impl Reader<'_> {
                 }
             }
             "w:sdt" => {
-                if let Some(c) = k.child("w:sdtContent") {
-                    self.read_inline_children(sc, pb, c, rels, ctx, depth + 1);
+                let Some(c) = k.child("w:sdtContent") else { return };
+                let mut ctl = super::sdt::sdt_pr(k.child("w:sdtPr"), false);
+                ctl.end_pr_xml = super::sdt::sdt_end_pr(k.child("w:sdtEndPr"));
+                // The markers take the formatting of the content's first run (typing at the
+                // start of the content continues it).
+                let props = c.find("w:rPr").map(|p| self.run_props(p, ctx)).unwrap_or_else(|| self.run_props_none(ctx));
+                let (at, k0) = (pb.text.len(), pb.objects.len());
+                pb.push_obj(InlineObject::ControlStart { control: Box::new(ctl) }, &props);
+                self.read_inline_children(sc, pb, c, rels, ctx, depth + 1);
+                if let Some(InlineObject::ControlStart { control }) = pb.objects.get_mut(k0)
+                    && control.showing_placeholder
+                {
+                    let shown: String = pb.text.get(at..).unwrap_or("").chars().filter(|c| *c != wordcraft_doc::para::OBJ).collect();
+                    control.placeholder_text = placeholder_of(&shown);
                 }
+                let end_props = pb.runs.last().map(|r| r.props.clone()).unwrap_or(props);
+                pb.push_obj(InlineObject::ControlEnd, &end_props);
             }
             "w:smartTag" | "w:customXml" | "w:dir" | "w:bdo" => self.read_inline_children(sc, pb, k, rels, ctx, depth + 1),
             "m:oMath" => {
@@ -975,16 +1028,16 @@ impl Reader<'_> {
                 .collect();
         }
         let mut rows = Vec::new();
-        collect(t, "w:tr", &mut rows, 0);
-        for tr in rows.into_iter().take(MAX_ROWS) {
-            let mut row = Row { props: tr.child("w:trPr").map(trpr).unwrap_or_default(), cells: Vec::new() };
+        collect(t, "w:tr", &mut rows, &mut Vec::new(), 0);
+        for (tr, row_controls) in rows.into_iter().take(MAX_ROWS) {
+            let mut row = Row { props: tr.child("w:trPr").map(trpr).unwrap_or_default(), cells: Vec::new(), controls: row_controls };
             if let Some(ch) = tr.child("w:trPr").and_then(|p| p.child("w:trPrChange")) {
                 let old = ch.child("w:trPr").map(trpr).unwrap_or_default();
                 row.props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
             }
             let mut tcs = Vec::new();
-            collect(tr, "w:tc", &mut tcs, 0);
-            for tc in tcs.into_iter().take(MAX_COLS) {
+            collect(tr, "w:tc", &mut tcs, &mut Vec::new(), 0);
+            for (tc, cell_controls) in tcs.into_iter().take(MAX_COLS) {
                 let (mut props, hcont) =
                     tc.child("w:tcPr").map(tcpr).unwrap_or_else(|| (wordcraft_doc::props::CellProps { span: 1, ..Default::default() }, false));
                 if let Some(ch) = tc.child("w:tcPr").and_then(|p| p.child("w:tcPrChange")) {
@@ -998,7 +1051,7 @@ impl Reader<'_> {
                 let mut blocks = Blocks::new();
                 self.read_blocks(sc, tc, rels, &mut blocks, depth + 4);
                 self.flush_pending(sc, &mut blocks);
-                row.cells.push(Cell { props, blocks });
+                row.cells.push(Cell { props, blocks, controls: cell_controls });
             }
             if !row.cells.is_empty() {
                 table.rows.push(row);
@@ -1015,22 +1068,41 @@ impl Reader<'_> {
     }
 }
 
-/// Gather `name` children, looking through `w:sdt`/`w:customXml` wrappers.
-fn collect<'a>(e: &'a El, name: &str, out: &mut Vec<&'a El>, depth: usize) {
+/// Gather `name` children (rows, cells), looking through `w:sdt`/`w:customXml` wrappers; each
+/// with the content controls that open before it and how many close after it. `pending` holds
+/// controls opened but not yet given to an element.
+fn collect<'a>(e: &'a El, name: &str, out: &mut Vec<(&'a El, ControlWrap)>, pending: &mut Vec<ContentControl>, depth: usize) {
     if depth > 8 {
         return;
     }
     for k in e.els() {
         if k.name == name {
-            out.push(k);
+            out.push((k, ControlWrap { open: std::mem::take(pending), close: 0 }));
         } else if k.name == "w:sdt" {
             if let Some(c) = k.child("w:sdtContent") {
-                collect(c, name, out, depth + 1);
+                let mut ctl = super::sdt::sdt_pr(k.child("w:sdtPr"), true);
+                ctl.end_pr_xml = super::sdt::sdt_end_pr(k.child("w:sdtEndPr"));
+                let before = out.len();
+                pending.push(ctl);
+                collect(c, name, out, pending, depth + 1);
+                let grew = out.len() > before;
+                match out.last_mut() {
+                    Some((_, w)) if grew => w.close = w.close.saturating_add(1),
+                    // Nothing inside: the control goes (as before).
+                    _ => {
+                        pending.pop();
+                    }
+                }
             }
         } else if k.name == "w:customXml" {
-            collect(k, name, out, depth + 1);
+            collect(k, name, out, pending, depth + 1);
         }
     }
+}
+
+/// Placeholder text as read from a control showing it: one line, bounded.
+fn placeholder_of(s: &str) -> String {
+    s.chars().map(|c| if c.is_control() { ' ' } else { c }).take(wordcraft_doc::control::MAX_CONTROL_TEXT).collect::<String>().trim().to_string()
 }
 
 fn on_off_attr(e: &El, name: &str) -> bool {

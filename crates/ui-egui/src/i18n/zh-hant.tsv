@@ -1312,3 +1312,37 @@
 	Flip Vertical	垂直翻轉
 	Flip Horizontal	水平翻轉
 	Formatted	已設定格式
+	Developer	開發人員
+	Controls	控制項
+	Rich Text Content Control	RTF 文字內容控制項
+	Plain Text Content Control	純文字內容控制項
+	Picture Content Control	圖片內容控制項
+	Building Block Gallery Content Control	建置組塊庫內容控制項
+	Check Box Content Control	核取方塊內容控制項
+	Combo Box Content Control	下拉式方塊內容控制項
+	Drop-Down List Content Control	下拉式清單內容控制項
+	Date Picker Content Control	日期選擇器內容控制項
+	Repeating Section Content Control	重複區段內容控制項
+	Design Mode	設計模式
+	Content Control at Selection	選取範圍的內容控制項
+	Toggle Check Box	切換核取方塊
+	Choose List Item	選擇清單項目
+	Set Date	設定日期
+	Remove Content Control	移除內容控制項
+	Content Control Properties	內容控制項屬性
+	Title	標題
+	Tag	標籤
+	Placeholder text	預留位置文字
+	Can't be deleted	無法刪除
+	Contents can't be edited	無法編輯內容
+	Remove the control once edited	編輯後移除控制項
+	Allow line breaks	允許換行
+	Date format	日期格式
+	Checked symbol	已勾選符號
+	Unchecked symbol	未勾選符號
+	List entries	清單項目
+	Display text	顯示文字
+	Value	值
+	Remove	移除
+	Today	今天
+	Put the caret in a content control first.	請先將游標放在內容控制項中。

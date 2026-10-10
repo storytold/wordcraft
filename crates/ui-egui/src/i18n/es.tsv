@@ -1327,3 +1327,37 @@
 	Flip Vertical	Voltear verticalmente
 	Flip Horizontal	Voltear horizontalmente
 	Formatted	Con formato
+	Developer	Programador
+	Controls	Controles
+	Rich Text Content Control	Control de contenido de texto enriquecido
+	Plain Text Content Control	Control de contenido de texto sin formato
+	Picture Content Control	Control de contenido de imagen
+	Building Block Gallery Content Control	Control de contenido de galería de bloques de creación
+	Check Box Content Control	Control de contenido de casilla
+	Combo Box Content Control	Control de contenido de cuadro combinado
+	Drop-Down List Content Control	Control de contenido de lista desplegable
+	Date Picker Content Control	Control de contenido de selector de fecha
+	Repeating Section Content Control	Control de contenido de sección repetida
+	Design Mode	Modo Diseño
+	Content Control at Selection	Control de contenido en la selección
+	Toggle Check Box	Alternar casilla
+	Choose List Item	Elegir elemento de la lista
+	Set Date	Establecer fecha
+	Remove Content Control	Quitar control de contenido
+	Content Control Properties	Propiedades del control de contenido
+	Title	Título
+	Tag	Etiqueta
+	Placeholder text	Texto del marcador de posición
+	Can't be deleted	No se puede eliminar
+	Contents can't be edited	El contenido no se puede editar
+	Remove the control once edited	Quitar el control al editarlo
+	Allow line breaks	Permitir saltos de línea
+	Date format	Formato de fecha
+	Checked symbol	Símbolo marcado
+	Unchecked symbol	Símbolo sin marcar
+	List entries	Entradas de la lista
+	Display text	Texto mostrado
+	Value	Valor
+	Remove	Quitar
+	Today	Hoy
+	Put the caret in a content control first.	Coloque primero el cursor en un control de contenido.

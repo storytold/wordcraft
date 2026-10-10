@@ -1324,3 +1324,37 @@
 	Width and spacing	Laius ja vahe
 	from Unicode (hex)	Unicode (kuueteistkümnend)
 	Formatted	Vormindatud
+	Developer	Arendaja
+	Controls	Juhtelemendid
+	Rich Text Content Control	Vormindatud teksti sisujuhtelement
+	Plain Text Content Control	Lihtteksti sisujuhtelement
+	Picture Content Control	Pildi sisujuhtelement
+	Building Block Gallery Content Control	Ehitusplokkide galerii sisujuhtelement
+	Check Box Content Control	Märkeruudu sisujuhtelement
+	Combo Box Content Control	Liitboksi sisujuhtelement
+	Drop-Down List Content Control	Ripploendi sisujuhtelement
+	Date Picker Content Control	Kuupäevavalija sisujuhtelement
+	Repeating Section Content Control	Korduva jaotise sisujuhtelement
+	Design Mode	Kujundusrežiim
+	Content Control at Selection	Valiku sisujuhtelement
+	Toggle Check Box	Lülita märkeruutu
+	Choose List Item	Vali loendi üksus
+	Set Date	Määra kuupäev
+	Remove Content Control	Eemalda sisujuhtelement
+	Content Control Properties	Sisujuhtelemendi atribuudid
+	Title	Pealkiri
+	Tag	Silt
+	Placeholder text	Kohatäite tekst
+	Can't be deleted	Ei saa kustutada
+	Contents can't be edited	Sisu ei saa redigeerida
+	Remove the control once edited	Eemalda juhtelement pärast redigeerimist
+	Allow line breaks	Luba reavahetused
+	Date format	Kuupäeva vorming
+	Checked symbol	Märgitud sümbol
+	Unchecked symbol	Märkimata sümbol
+	List entries	Loendi kirjed
+	Display text	Kuvatav tekst
+	Value	Väärtus
+	Remove	Eemalda
+	Today	Täna
+	Put the caret in a content control first.	Pange kursor esmalt sisujuhtelementi.

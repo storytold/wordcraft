@@ -565,6 +565,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         } else {
             app.canvas.mini_anchor = None;
         }
+        // Content controls: the frame of the one the caret is in (all of them in Design Mode).
+        crate::content_controls::paint(app, &painter, &t, &layout, &rects, geo.scale);
         // Read Aloud: the sentence being spoken.
         if let Some((a, b)) = crate::read_aloud::highlight(app) {
             for (pi, r) in layout.selection_rects(&app.session.doc, &a, &b, app.session.page_hint) {
@@ -675,6 +677,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     if !crate::table_pen::pointer(app, ui, &resp, &rects, &layout, geo.scale) {
         mouse(app, ui, &resp, &rects, &layout, geo.scale);
     }
+    // A click on a check box ticks it; on a list's button opens the list.
+    crate::content_controls::clicks(app, &resp);
     // Right-click: move the caret there (unless inside the selection), then the context menu.
     // Right-click in an equation puts the caret there and opens the equation menu.
     if resp.secondary_clicked()

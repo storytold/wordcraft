@@ -1323,3 +1323,37 @@
 	Flip Vertical	Віддзеркалити по вертикалі
 	Flip Horizontal	Віддзеркалити по горизонталі
 	Formatted	Відформатовано
+	Developer	Розробник
+	Controls	Елементи керування
+	Rich Text Content Control	Елемент керування вмістом «Форматований текст»
+	Plain Text Content Control	Елемент керування вмістом «Звичайний текст»
+	Picture Content Control	Елемент керування вмістом «Зображення»
+	Building Block Gallery Content Control	Елемент керування вмістом «Колекція стандартних блоків»
+	Check Box Content Control	Елемент керування вмістом «Прапорець»
+	Combo Box Content Control	Елемент керування вмістом «Поле зі списком»
+	Drop-Down List Content Control	Елемент керування вмістом «Розкривний список»
+	Date Picker Content Control	Елемент керування вмістом «Вибір дати»
+	Repeating Section Content Control	Елемент керування вмістом «Розділ, що повторюється»
+	Design Mode	Режим конструктора
+	Content Control at Selection	Елемент керування вмістом у виділенні
+	Toggle Check Box	Перемкнути прапорець
+	Choose List Item	Вибрати елемент списку
+	Set Date	Задати дату
+	Remove Content Control	Видалити елемент керування вмістом
+	Content Control Properties	Властивості елемента керування вмістом
+	Title	Назва
+	Tag	Тег
+	Placeholder text	Текст заповнювача
+	Can't be deleted	Не можна видалити
+	Contents can't be edited	Вміст не можна редагувати
+	Remove the control once edited	Видалити елемент після редагування
+	Allow line breaks	Дозволити розриви рядків
+	Date format	Формат дати
+	Checked symbol	Символ увімкненого стану
+	Unchecked symbol	Символ вимкненого стану
+	List entries	Елементи списку
+	Display text	Текст для показу
+	Value	Значення
+	Remove	Видалити
+	Today	Сьогодні
+	Put the caret in a content control first.	Спершу поставте курсор в елемент керування вмістом.

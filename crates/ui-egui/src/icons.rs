@@ -1132,6 +1132,65 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.circle(10.0, 10.0, 7.0, c);
             pen.text(10.0, 10.0, 10.0, "?", a, true);
         }
+        // Developer › Controls: a field's frame with what it holds.
+        "ccRichText" => {
+            pen.rect(2.5, 5.0, 17.5, 15.0, a);
+            pen.text(7.5, 10.0, 8.0, "A", c, true);
+            pen.text(13.0, 10.5, 7.0, "a", c, false);
+        }
+        "ccPlainText" => {
+            pen.rect(2.5, 5.0, 17.5, 15.0, a);
+            pen.text(8.0, 10.0, 8.0, "A", c, false);
+            pen.line(&[(12.0, 7.5), (12.0, 12.5)]);
+        }
+        "ccPicture" => {
+            pen.rect(2.5, 4.0, 17.5, 16.0, a);
+            pen.line(&[(4.5, 14.0), (8.5, 9.5), (11.5, 12.5), (13.5, 10.5), (15.5, 14.0)]);
+            pen.fcircle(13.5, 7.0, 1.2, c);
+        }
+        "ccGallery" => {
+            pen.rect(2.5, 3.0, 17.5, 17.0, a);
+            pen.frect(5.0, 5.5, 9.0, 9.5, c);
+            pen.frect(11.0, 5.5, 15.0, 9.5, c);
+            pen.lines(5.0, 15.0, &[12.5, 15.0]);
+        }
+        "ccCheckBox" => {
+            pen.rect(4.0, 4.0, 16.0, 16.0, c);
+            pen.line_c(&[(6.5, 10.0), (9.0, 13.0), (14.0, 6.5)], a);
+        }
+        "ccComboBox" => {
+            pen.rect(2.5, 6.0, 17.5, 14.0, c);
+            pen.line(&[(13.0, 6.0), (13.0, 14.0)]);
+            pen.lines(4.5, 10.5, &[10.0]);
+            pen.arrow_down(15.25, 10.0, a);
+        }
+        "ccDropDown" => {
+            pen.rect(2.5, 3.0, 17.5, 9.0, c);
+            pen.line(&[(13.0, 3.0), (13.0, 9.0)]);
+            pen.arrow_down(15.25, 6.0, a);
+            pen.rect(2.5, 9.0, 13.0, 17.0, c);
+            pen.lines(4.5, 11.0, &[11.5, 14.5]);
+        }
+        "ccDate" => {
+            pen.rect(3.0, 4.5, 17.0, 17.0, c);
+            pen.frect(3.0, 4.5, 17.0, 8.0, a);
+            pen.line(&[(6.5, 3.0), (6.5, 6.0)]);
+            pen.line(&[(13.5, 3.0), (13.5, 6.0)]);
+            for (x, y) in [(6.5, 11.0), (10.0, 11.0), (13.5, 11.0), (6.5, 14.5), (10.0, 14.5)] {
+                pen.fcircle(x, y, 0.9, c);
+            }
+        }
+        "ccRepeat" => {
+            pen.rect(2.5, 3.0, 17.5, 17.0, a);
+            pen.rect(5.0, 5.5, 15.0, 9.5, c);
+            pen.rect(5.0, 11.0, 15.0, 15.0, c);
+            pen.line_c(&[(10.0, 15.0), (10.0, 18.5)], a);
+        }
+        "designMode" => {
+            pen.line(&[(4.0, 16.0), (16.0, 16.0), (4.0, 4.0), (4.0, 16.0)]);
+            pen.line_c(&[(4.0, 12.0), (8.0, 16.0)], a);
+            pen.line(&[(7.0, 13.0), (7.0, 12.0)]);
+        }
         _ => {
             // Fallback: a rounded tile with the first letter.
             p.rect_stroke(r.shrink(r.width() * 0.12), 3.0, Stroke::new(1.0, c), egui::StrokeKind::Middle);

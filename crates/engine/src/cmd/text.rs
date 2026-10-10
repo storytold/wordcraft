@@ -210,6 +210,11 @@ fn ins_char(s: &mut Session, c: char) -> CmdResult {
 }
 
 fn new_paragraph(s: &mut Session, _: &Value) -> CmdResult {
+    // Enter in a one-line plain text control (or a check box or list) does nothing, as in Word.
+    if super::controls::refuses_paragraph(s) {
+        return sel_result(s);
+    }
+    super::controls::prepare_edit(s)?;
     let mut at = delete_selection(s)?;
     if border_line_autoformat(s, &at)? {
         return sel_result(s);
@@ -291,7 +296,13 @@ fn back_tab(s: &mut Session, _: &Value) -> CmdResult {
     super::para::outdent(s, &Value::Null)
 }
 
-fn backspace(s: &mut Session, _: &Value) -> CmdResult {
+fn backspace(s: &mut Session, v: &Value) -> CmdResult {
+    let r = backspace_inner(s, v)?;
+    super::controls::restore_placeholder(s)?;
+    Ok(r)
+}
+
+fn backspace_inner(s: &mut Session, _: &Value) -> CmdResult {
     s.goal_x = None;
     s.pending = None;
     if !s.sel.is_collapsed() {
@@ -360,7 +371,13 @@ fn backspace(s: &mut Session, _: &Value) -> CmdResult {
     sel_result(s)
 }
 
-fn delete(s: &mut Session, _: &Value) -> CmdResult {
+fn delete(s: &mut Session, v: &Value) -> CmdResult {
+    let r = delete_inner(s, v)?;
+    super::controls::restore_placeholder(s)?;
+    Ok(r)
+}
+
+fn delete_inner(s: &mut Session, _: &Value) -> CmdResult {
     s.goal_x = None;
     s.pending = None;
     if !s.sel.is_collapsed() {
@@ -419,6 +436,7 @@ fn delete_word_back(s: &mut Session, v: &Value) -> CmdResult {
     let a = Pos { off: para.word_start(f.off), ..f.clone() };
     s.sel = Selection { anchor: a, focus: f };
     delete_selection(s)?;
+    super::controls::restore_placeholder(s)?;
     sel_result(s)
 }
 
@@ -434,5 +452,6 @@ fn delete_word_fwd(s: &mut Session, v: &Value) -> CmdResult {
     let b = Pos { off: para.word_end(f.off), ..f.clone() };
     s.sel = Selection { anchor: f, focus: b };
     delete_selection(s)?;
+    super::controls::restore_placeholder(s)?;
     sel_result(s)
 }
