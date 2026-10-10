@@ -4850,6 +4850,7 @@ dependencies = [
  "rfd",
  "serde_json",
  "winresource",
+ "wordcraft-chat",
  "wordcraft-control-key",
  "wordcraft-doc",
  "wordcraft-engine",
