@@ -19,8 +19,14 @@ const CSLW: u16 = 0x0016;
 /// `cbRgFcLcb` for each known `nFib` ([MS-DOC] Fib.cbRgFcLcb table).
 const CB_RG_FCLCB: &[(u16, u16)] = &[(0x00C1, 0x005D), (0x00D9, 0x006C), (0x0101, 0x0088), (0x010C, 0x00A4), (0x0112, 0x00B7)];
 
-/// Index of the `fcClx`/`lcbClx` pair inside `FibRgFcLcb97` (each pair is 8 bytes).
-pub(crate) const PAIR_CLX: usize = 33;
+/// Indices of `fc`/`lcb` pairs inside `FibRgFcLcb97` (each pair is 8 bytes: fc then lcb).
+pub(crate) mod pair {
+    pub(crate) const STSHF: usize = 1;
+    pub(crate) const PLCF_BTE_CHPX: usize = 12;
+    pub(crate) const PLCF_BTE_PAPX: usize = 13;
+    pub(crate) const STTBF_FFN: usize = 15;
+    pub(crate) const CLX: usize = 33;
+}
 
 /// Character-position ranges of the subdocuments, from `FibRgLw97`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

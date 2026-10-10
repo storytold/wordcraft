@@ -13,13 +13,16 @@ const MAX_PIECES: usize = 1_000_000;
 struct Pcd {
     fc: u32,
     compressed: bool,
+    /// `Prm`: either a single sprm (Prm0) or an index into the Clx's Prc grpprls (Prm1).
+    prm: u16,
 }
 
-/// The parsed piece table.
+/// The parsed piece table plus the grpprls of the Prcs that Prm1 references.
 pub(crate) struct PieceTable {
     /// n+1 character-position starts.
     cps: Vec<u32>,
     pieces: Vec<Pcd>,
+    prc_grpprls: Vec<Vec<u8>>,
 }
 
 impl PieceTable {
@@ -32,8 +35,9 @@ impl PieceTable {
         }
         let end = fc.checked_add(lcb).ok_or_else(|| DocbinError::Malformed("Clx offset overflow".into()))?;
         let clx = table.get(fc..end).ok_or_else(|| DocbinError::Malformed(format!("Clx at {fc}+{lcb} is outside the Table stream")))?;
-        // A Clx is an array of Prc (clxt 0x01, skipped — they only carry pre-Word-97 revision
-        // properties) followed by the Pcdt (clxt 0x02) that holds the piece table.
+        // A Clx is an array of Prc (clxt 0x01, each holding a grpprl that Prm1 values can
+        // reference) followed by the Pcdt (clxt 0x02) that holds the piece table.
+        let mut prc_grpprls = Vec::new();
         let mut i = 0usize;
         let plc = loop {
             let Some(&clxt) = clx.get(i) else {
@@ -45,7 +49,13 @@ impl PieceTable {
                         .get(i + 1..i + 3)
                         .map(|b| u16::from_le_bytes([b[0], b[1]]) as usize)
                         .ok_or_else(|| DocbinError::Malformed("truncated Prc".into()))?;
-                    i = i.checked_add(3).and_then(|v| v.checked_add(cb)).ok_or_else(|| DocbinError::Malformed("Prc size overflow".into()))?;
+                    let stop = i.checked_add(3).and_then(|v| v.checked_add(cb)).ok_or_else(|| DocbinError::Malformed("Prc size overflow".into()))?;
+                    if let Some(g) = clx.get(i + 3..stop)
+                        && prc_grpprls.len() < MAX_PIECES
+                    {
+                        prc_grpprls.push(g.to_vec());
+                    }
+                    i = stop;
                 }
                 0x02 => {
                     let lcb_plc = clx
@@ -81,9 +91,37 @@ impl PieceTable {
             let Some(fc_raw) = plc.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])) else {
                 return Err(DocbinError::Malformed("truncated aPcd".into()));
             };
-            pieces.push(Pcd { fc: fc_raw & 0x3FFF_FFFF, compressed: fc_raw & 0x4000_0000 != 0 });
+            let prm = plc.get(at + 4..at + 6).map(|b| u16::from_le_bytes([b[0], b[1]])).unwrap_or(0);
+            pieces.push(Pcd { fc: fc_raw & 0x3FFF_FFFF, compressed: fc_raw & 0x4000_0000 != 0, prm });
         }
-        Ok(PieceTable { cps, pieces })
+        Ok(PieceTable { cps, pieces, prc_grpprls })
+    }
+
+    /// The Prls this piece's `Prm` adds: Prm0 holds one short sprm (isprm, val), Prm1
+    /// references a grpprl from one of the Clx's Prcs ([MS-DOC] Prm).
+    pub(crate) fn piece_prm(&self, cp: u32) -> PrmRef<'_> {
+        match self.piece_of(cp) {
+            Some(p) if p.prm & 0x8000 == 0 && (p.prm & 0x7F) != 0 => PrmRef::Sprm0 { isprm: (p.prm & 0x7F) as u8, val: (p.prm >> 8) as u8 },
+            Some(p) if p.prm & 0x8000 != 0 => PrmRef::Grpprl(self.prc_grpprls.get((p.prm & 0x7FFF) as usize).map(|v| v.as_slice())),
+            _ => PrmRef::None,
+        }
+    }
+
+    fn piece_of(&self, cp: u32) -> Option<&Pcd> {
+        let i = self.cps.partition_point(|&c| c <= cp).checked_sub(1)?;
+        if i >= self.pieces.len() {
+            return None;
+        }
+        self.pieces.get(i)
+    }
+
+    /// The FC of a character position: within a piece, consecutive characters are 2 FC units
+    /// apart in both encodings (compressed text stores `fc = 2 × byte offset`).
+    pub(crate) fn fc_of_cp(&self, cp: u32) -> Option<u32> {
+        let p = self.piece_of(cp)?;
+        let i = self.cps.partition_point(|&c| c <= cp).checked_sub(1)?;
+        let cp0 = *self.cps.get(i)?;
+        p.fc.checked_add((cp - cp0).checked_mul(2)? & 0x3FFF_FFFF)
     }
 
     /// Text of the CP range `[start, end)` as it is stored (control characters included);
@@ -122,4 +160,16 @@ impl PieceTable {
         }
         out
     }
+}
+
+/// What a piece's `Prm` refers to.
+pub(crate) enum PrmRef<'a> {
+    None,
+    /// Prm0: a short sprm index into the isprm table, with a 1-byte operand.
+    Sprm0 {
+        isprm: u8,
+        val: u8,
+    },
+    /// Prm1: a grpprl from a Prc (absent if out of range).
+    Grpprl(Option<&'a [u8]>),
 }
