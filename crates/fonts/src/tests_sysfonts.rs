@@ -144,6 +144,31 @@ fn a_link_back_to_a_parent_folder_ends_the_scan() {
 }
 
 #[test]
+fn fallback_lookups_are_remembered_until_fonts_load() {
+    // Layout asks for a fallback once per character the font lacks; each search sorts every
+    // loaded face, which froze Thai text once many fonts were loaded (#59, #121).
+    let dir = font_dir("fallbacks");
+    let db = FontDb::with_font_dirs(vec![dir]);
+    db.set_system_fallback(false);
+    let latin = db.face(FALLBACK_FAMILY, "Regular");
+    let thai = 'ก';
+    assert!(db.fallback_for(thai, latin.id()).is_none(), "no bundled Thai font");
+    let a = db.fallback_for('A', latin.id()).unwrap();
+    assert_eq!(db.fallback_for('A', latin.id()).unwrap().id(), a.id(), "the same answer from the cache");
+    {
+        let cache = db.fallbacks.read().unwrap();
+        assert_eq!(cache.faces, db.read_faces().len());
+        assert!(cache.map.contains_key(&(thai, latin.id())) && cache.map.contains_key(&('A', latin.id())));
+    }
+    // Loading fonts (here, the installed family) makes the remembered answers stale.
+    assert_eq!(db.face(FAMILY, "Regular").family, FAMILY);
+    assert_eq!(db.fallback_for('A', latin.id()).unwrap().id(), a.id());
+    let cache = db.fallbacks.read().unwrap();
+    assert_eq!(cache.faces, db.read_faces().len());
+    assert!(!cache.map.contains_key(&(thai, latin.id())), "entries from before the fonts loaded are dropped");
+}
+
+#[test]
 fn the_scan_reads_names_without_loading_the_font() {
     let dir = font_dir("names");
     assert_eq!(file_face_names(&dir.join("Sysfont-Regular.ttf")), [(FAMILY.to_string(), "Regular".to_string(), FAMILY.to_string())]);
