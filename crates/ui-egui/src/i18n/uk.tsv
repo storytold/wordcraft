@@ -23,7 +23,10 @@
 	Add	Додати
 	Add a comment	Додати коментар
 	Add a Table	Додати таблицю
+	Add Object to Selection	Додати об'єкт до виділення
 	Add Space Before Paragraph	Додати інтервал перед абзацом
+	Add space between Asian and Latin text	Додавати інтервал між азійським і латинським текстом
+	Add space between Asian text and numbers	Додавати інтервал між азійським текстом і числами
 	Add Text	Додати текст
 	Add to Dictionary	Додати до словника
 	Add to Style Gallery	Додати до колекції стилів
@@ -44,13 +47,17 @@
 	All Caps	Усі великі літери
 	All caps	Усі великі літери
 	All Markup	Усі позначки
+	Allow hanging punctuation	Дозволити висячу пунктуацію
+	Allow Latin text to wrap in the middle of a word	Дозволити розрив латинського тексту посеред слова
 	Alt Text	Альтернативний текст
+	Apply Asian line-breaking rules (kinsoku)	Застосовувати азійські правила розриву рядків (кінсоку)
 	Apply Character Style	Застосувати стиль символів
 	Apply Style	Застосувати стиль
 	Arrange	Упорядкувати
 	Arrange\nAll	Упорядкувати\nвсі
 	Arrow	Стрілка
 	Artistic Effects	Художні ефекти
+	Asian Typography	Азійська типографіка
 	Author	Автор
 	AutoCorrect Options	Параметри автовиправлення
 	AutoFit	Добір розміру
@@ -132,6 +139,14 @@
 	Clear Formatting Level	Очистити рівень форматування
 	Clear Paragraph Formatting	Очистити форматування абзацу
 	Clipboard	Буфер обміну
+	Clipboard Pane	Панель буфера обміну
+	Clipboard Items	Елементи буфера обміну
+	Paste Clipboard Item	Вставити елемент буфера обміну
+	Paste All	Вставити все
+	Delete Clipboard Item	Видалити елемент буфера обміну
+	Click an item to paste it.	Клацніть елемент, щоб вставити його.
+	Nothing collected yet. Items you copy or cut appear here.	Поки що порожньо. Тут з'являться елементи, які ви скопіюєте або виріжете.
+	(picture or object)	(зображення або об'єкт)
 	Close	Закрити
 	Close Header and Footer	Закрити колонтитули
 	Collapse Selection	Зняти виділення
@@ -150,6 +165,7 @@
 	Compact	Компактний
 	Compare	Порівняти
 	Compress Pictures	Стиснути зображення
+	Compress punctuation at the start of a line	Стискати розділові знаки на початку рядка
 	Continuous	Безперервний
 	Convert	Перетворити
 	Convert Text to Table	Перетворити текст на таблицю
@@ -194,6 +210,8 @@
 	Design	Дизайн
 	Edit Comment	Редагувати коментар
 	Left Margin	Ліве поле
+	Indents and Spacing	Відступи й інтервали
+	Line breaking	Розрив рядків
 	More templates →	Більше шаблонів →
 	No templates match your search.	Немає шаблонів, що відповідають пошуку.
 	Reopen	Відкрити знову
@@ -771,6 +789,7 @@
 	Underline Words Only	Підкреслити лише слова
 	Undo	Скасувати
 	Undo {action}	Скасувати {action}
+	Ungroup	Розгрупувати
 	Unformatted Text	Неформатований текст
 	Up	Угору
 	Update Field	Оновити поле
@@ -1124,3 +1143,57 @@
 	Whole document	Увесь документ
 	Width and spacing	Ширина й інтервал
 	from Unicode (hex)	з Unicode (шістн.)
+	Shape Effects	Ефекти фігури
+	Glow	Світіння
+	Soft Edges	М'які краї
+	No Shadow	Без тіні
+	No Glow	Без світіння
+	No Soft Edges	Без м'яких країв
+	Glow Colors	Кольори світіння
+	Weight	Товщина
+	Shadow, glow and soft edges	Тінь, світіння та м'які краї
+	Offset: Bottom Right	Зміщення: вниз праворуч
+	Offset: Bottom	Зміщення: вниз
+	Offset: Bottom Left	Зміщення: вниз ліворуч
+	Offset: Right	Зміщення: праворуч
+	Offset: Center	Зміщення: по центру
+	Offset: Left	Зміщення: ліворуч
+	Offset: Top Right	Зміщення: вгору праворуч
+	Offset: Top	Зміщення: вгору
+	Offset: Top Left	Зміщення: вгору ліворуч
+	Manage Styles	Керування стилями
+	Show or Hide Style	Показати або сховати стиль
+	Manage Styles…	Керування стилями…
+	Sort order:	Порядок сортування:
+	As Recommended	Як рекомендовано
+	Alphabetical	За абеткою
+	Font: {font}	Шрифт: {font}
+	{size} pt	{size} пт
+	Color: {color}	Колір: {color}
+	Space before: {pt} pt	Інтервал перед: {pt} пт
+	Space after: {pt} pt	Інтервал після: {pt} пт
+	Based on: {style}	На основі: {style}
+	Paragraph style	Стиль абзацу
+	Character style	Стиль символів
+	Linked style (paragraph and character)	Зв’язаний стиль (абзац і символи)
+	Table style	Стиль таблиці
+	Built-in style	Вбудований стиль
+	Show in the Styles gallery	Показувати в колекції стилів
+	Hide from style lists	Сховати зі списків стилів
+	Built-in styles can't be deleted.	Вбудовані стилі не можна видалити.
+	Delete Table Style	Видалити стиль таблиці
+	Password	Пароль
+	Password:	Пароль:
+	Confirm password:	Підтвердження пароля:
+	Encrypt with Password…	Зашифрувати паролем…
+	Change Password…	Змінити пароль…
+	Remove Password	Видалити пароль
+	A password is required to open this document.	Щоб відкрити цей документ, потрібен пароль.
+	Anyone can open this document. Encrypt it with a password to keep it private.	Цей документ може відкрити будь-хто. Зашифруйте його паролем, щоб захистити.
+	Anyone who opens the document will need this password.	Кожному, хто відкриватиме документ, знадобиться цей пароль.
+	{name} is protected with a password.	{name} захищено паролем.
+	That password isn't right. Check it (passwords are case-sensitive) and try again.	Пароль неправильний. Перевірте його (паролі враховують регістр) і спробуйте ще раз.
+	The document will be saved with a password. Save it to protect it.	Документ буде збережено з паролем. Збережіть його, щоб захистити.
+	The password is removed. Save the document to keep the change.	Пароль видалено. Збережіть документ, щоб зберегти зміну.
+	The passwords don't match.	Паролі не збігаються.
+	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	Зберігайте пароль у надійному місці: без нього ніхто, зокрема WordCraft, не зможе відкрити документ. Залиште обидва поля порожніми, щоб видалити пароль.
