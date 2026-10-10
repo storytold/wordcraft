@@ -32,6 +32,8 @@
 	Address\nBlock	Блок\nадреси
 	Adjust	Налаштувати
 	Advanced	Додатково
+	Advanced Find	Розширений пошук
+	Advanced Find…	Розширений пошук…
 	After:	Після:
 	Agents	Агенти
 	Align	Вирівняти
@@ -106,6 +108,7 @@
 	Character Scale	Масштаб символів
 	Character Shading	Заливка символів
 	Character Spacing	Інтервал між символами
+	Characters	Символи
 	Characters (no spaces)	Символи (без пробілів)
 	Characters (with spaces)	Символи (з пробілами)
 	Chart	Діаграма
@@ -117,8 +120,21 @@
 	Citation Style	Стиль цитування
 	Citations & Bibliography	Цитати й бібліографія
 	Clear	Очистити
+	Clear All	Очистити все
 	Clear All Formatting	Очистити все форматування
+	Clear Character Formatting	Очистити форматування символів
+	Clear Character Style	Очистити стиль символів
+	Clear Formatting Level	Очистити рівень форматування
+	Clear Paragraph Formatting	Очистити форматування абзацу
 	Clipboard	Буфер обміну
+	Clipboard Pane	Панель буфера обміну
+	Clipboard Items	Елементи буфера обміну
+	Paste Clipboard Item	Вставити елемент буфера обміну
+	Paste All	Вставити все
+	Delete Clipboard Item	Видалити елемент буфера обміну
+	Click an item to paste it.	Клацніть елемент, щоб вставити його.
+	Nothing collected yet. Items you copy or cut appear here.	Поки що порожньо. Тут з'являться елементи, які ви скопіюєте або виріжете.
+	(picture or object)	(зображення або об'єкт)
 	Close	Закрити
 	Close Header and Footer	Закрити колонтитули
 	Collapse Selection	Зняти виділення
@@ -188,6 +204,7 @@
 	Dictate	Диктувати
 	Different First Page	Інша перша сторінка
 	Different Odd & Even Pages	Різні парні й непарні сторінки
+	Direct formatting	Пряме форматування
 	Discord	Discord
 	Discord community	Спільнота Discord
 	Display	Відображення
@@ -215,6 +232,7 @@
 	Drawing Tools	Знаряддя малювання
 	Drawing\nCanvas	Полотно\nмалювання
 	Drop Cap	Буквиця
+	Drops all formatting and pastes plain text.	Відкидає все форматування й вставляє звичайний текст.
 	Edit Footer	Редагувати нижній колонтитул
 	Edit Header	Редагувати верхній колонтитул
 	Edit Recipient List	Редагувати список одержувачів
@@ -271,12 +289,14 @@
 	Format Page Numbers	Формат номерів сторінок
 	Format Page Numbers…	Формат номерів сторінок…
 	Format Painter	Пензель форматування
+	Formatted Text	Форматований текст
 	Formatting at Selection	Форматування виділення
 	Formula	Формула
 	General	Загальні
 	Go To	Перейти
 	Go to	Перейти
 	Go To (⌘⌥G)	Перейти (⌘⌥G)
+	Go To…	Перейти…
 	Grab bag	Різне
 	Greeting Line	Рядок привітання
 	Greeting\nLine	Рядок\nпривітання
@@ -301,6 +321,7 @@
 	Home	Основне
 	Horizontal	Горизонтальна
 	Horizontal Line	Горизонтальна лінія
+	HTML Format	Формат HTML
 	Hyphenation	Перенесення слів
 	Icons	Піктограми
 	Ignore All	Ігнорувати всі
@@ -342,6 +363,7 @@
 	Insert\nFootnote	Вставити\nвиноску
 	Inside Borders	Внутрішні межі
 	Inspect Document	Перевірити документ
+	Inspect Styles at Selection	Переглянути стилі у виділенні
 	Interface language:	Мова інтерфейсу:
 	Italic	Курсив
 	Join the ArtCraft community on Discord	Приєднатися до спільноти ArtCraft у Discord
@@ -352,6 +374,7 @@
 	Keep Text Only	Зберегти лише текст
 	Keep with Next	Не відривати від наступного
 	Keep with next	Не відривати від наступного
+	Keeps the fonts and formatting of the copied text.	Зберігає шрифти й форматування скопійованого тексту.
 	Labels	Етикетки
 	Landscape	Альбомна
 	Language	Мова
@@ -493,7 +516,10 @@
 	Paragraphs	Абзаци
 	Paste	Вставити
 	Paste (⌘V)	Вставити (⌘V)
+	Paste as:	Вставити як:
 	Paste Formatting	Вставити форматування
+	Paste Special	Спеціальна вставка
+	Paste Special…	Спеціальна вставка…
 	Paste: Keep Text Only	Вставлення: зберегти лише текст
 	Paste: Merge Formatting	Вставлення: об'єднати форматування
 	PDF document (*.pdf)	Документ PDF (*.pdf)
@@ -528,6 +554,9 @@
 	Read Mode	Режим читання
 	Read\nAloud	Читати\nвголос
 	Read\nMode	Режим\nчитання
+	Reads the clipboard's rich text and keeps its formatting.	Читає форматований текст (RTF) із буфера обміну та зберігає його форматування.
+	Reads the clipboard's web content and keeps its formatting.	Читає вебвміст із буфера обміну та зберігає його форматування.
+	Reading Highlight	Виділення під час читання
 	Recent	Останні
 	Record Macro	Записати макрос
 	Recover Unsaved Documents	Відновити незбережені документи
@@ -558,6 +587,7 @@
 	Research	Дослідження
 	Researcher	Дослідник
 	Reset Picture	Скинути зображення
+	Reset to Normal	Скинути до звичайного
 	Resolve	Вирішити
 	Resolved	Вирішено
 	Restart at 1	Почати з 1
@@ -565,6 +595,7 @@
 	Restart Each Section	Починати в кожному розділі
 	Restrict Editing	Обмежити редагування
 	Restrict\nEditing	Обмежити\nредагування
+	Result	Результат
 	Results	Результати
 	Reverse the order	Зворотний порядок
 	Review	Рецензування
@@ -572,6 +603,7 @@
 	Reviewing Pane	Панель рецензування
 	Reviewing — edits become suggestions	Рецензування — зміни стають пропозиціями
 	Rich Text Format (*.rtf)	Форматований текст (*.rtf)
+	Rich Text Format (RTF)	Формат RTF (Rich Text Format)
 	Right	Праворуч
 	Right Border	Права межа
 	Right-to-Left Text Direction	Напрямок тексту справа наліво
@@ -671,6 +703,7 @@
 	Studio handbook (sample)	Посібник студії (приклад)
 	Style	Стиль
 	Style based on:	Стиль на основі:
+	Style Inspector	Інспектор стилів
 	Style Set	Набір стилів
 	Style: APA	Стиль: APA
 	Styles	Стилі
@@ -709,6 +742,7 @@
 	Text:	Текст:
 	Text\nBox	Текстове\nполе
 	Text\nDirection	Напрямок\nтексту
+	The clipboard is empty.	Буфер обміну порожній.
 	The new style takes the formatting of the current paragraph.	Новий стиль використовує форматування поточного абзацу.
 	Theme Colors	Кольори теми
 	Theme Fonts	Шрифти теми
@@ -735,6 +769,7 @@
 	Underline Words Only	Підкреслити лише слова
 	Undo	Скасувати
 	Undo {action}	Скасувати {action}
+	Unformatted Text	Неформатований текст
 	Up	Угору
 	Update Field	Оновити поле
 	Update Index	Оновити покажчик
@@ -890,6 +925,42 @@
 	Opening print dialog…	Відкриття діалогу друку…
 	Print failed: {error}	Не вдалося надрукувати: {error}
 	Couldn't open {path}: {error}	Не вдалося відкрити {path}: {error}
+	Column Selection	Виділення стовпця
+	New Table Style	Новий стиль таблиці
+	Modify Table Style	Змінити стиль таблиці
+	New Table Style…	Новий стиль таблиці…
+	Modify Table Style…	Змінити стиль таблиці…
+	Apply formatting to:	Застосувати форматування до:
+	Whole Table	Уся таблиця
+	Fill color:	Колір заливки:
+	{count} items highlighted	Виділено елементів: {count}
+	{n} pt	{n} пт
+	Not {name}	Без: {name}
+	Level {n}	Рівень {n}
+	Body Text	Основний текст
+	{n} lines	Рядків: {n}
+	At least {n}	Щонайменше {n}
+	Exactly {n}	Точно {n}
+	Centered	По центру
+	Character spacing	Інтервал між символами
+	Don't add space between paragraphs of the same style	Не додавати інтервал між абзацами одного стилю
+	Don't hyphenate	Без перенесення слів
+	Double strikethrough	Подвійне закреслення
+	Drop cap	Буквиця
+	First line	Перший рядок
+	Font color	Колір шрифту
+	Highlight	Виділення кольором
+	Justified	За шириною
+	Left indent	Відступ ліворуч
+	Line spacing	Міжрядковий інтервал
+	Outline level	Рівень плану
+	Raised/lowered	Піднято/опущено
+	Right indent	Відступ праворуч
+	Scale	Масштаб
+	Space after	Інтервал після
+	Space before	Інтервал перед
+	Suppress line numbers	Без номерів рядків
+	Underline color	Колір підкреслення
 	Letters	Листи
 	E-mail Messages	Повідомлення електронної пошти
 	Directory	Каталог
@@ -943,3 +1014,25 @@
 	Dark	Темна
 	Use system setting	Як у системі
 	A file dialog is already open.	Діалогове вікно файлу вже відкрито.
+	Manage Styles	Керування стилями
+	Show or Hide Style	Показати або сховати стиль
+	Manage Styles…	Керування стилями…
+	Sort order:	Порядок сортування:
+	As Recommended	Як рекомендовано
+	Alphabetical	За абеткою
+	Font: {font}	Шрифт: {font}
+	{size} pt	{size} пт
+	Color: {color}	Колір: {color}
+	Space before: {pt} pt	Інтервал перед: {pt} пт
+	Space after: {pt} pt	Інтервал після: {pt} пт
+	Based on: {style}	На основі: {style}
+	Paragraph style	Стиль абзацу
+	Character style	Стиль символів
+	Linked style (paragraph and character)	Зв’язаний стиль (абзац і символи)
+	Table style	Стиль таблиці
+	Built-in style	Вбудований стиль
+	Show in the Styles gallery	Показувати в колекції стилів
+	Hide from style lists	Сховати зі списків стилів
+	Built-in styles can't be deleted.	Вбудовані стилі не можна видалити.
+	Delete Table Style	Видалити стиль таблиці
+	Preview	Попередній перегляд

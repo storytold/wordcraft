@@ -117,6 +117,15 @@
 	Clear	クリア
 	Clear All Formatting	すべての書式をクリア
 	Clipboard	クリップボード
+	Clipboard Pane	クリップボード ウィンドウ
+	Clipboard Items	クリップボードの項目
+	Paste Clipboard Item	クリップボードの項目を貼り付け
+	Paste All	すべて貼り付け
+	Delete Clipboard Item	クリップボードの項目を削除
+	Clear All	すべてクリア
+	Click an item to paste it.	項目をクリックすると貼り付けます。
+	Nothing collected yet. Items you copy or cut appear here.	まだ何もありません。コピーまたは切り取った項目がここに表示されます。
+	(picture or object)	（画像またはオブジェクト）
 	Close	閉じる
 	Close Header and Footer	ヘッダーとフッターを閉じる
 	Collapse Selection	選択範囲を縮小
@@ -878,6 +887,68 @@
 	Opening print dialog…	印刷ダイアログを開いています…
 	Print failed: {error}	印刷できませんでした: {error}
 	Couldn't open {path}: {error}	{path} を開けませんでした: {error}
+	Column Selection	矩形選択
+	Style Inspector	スタイル インスペクター
+	Inspect Styles at Selection	選択箇所のスタイルを調べる
+	Clear Formatting Level	書式のレベルをクリア
+	Characters	文字
+	Direct formatting	直接の書式
+	Reset to Normal	標準に戻す
+	Clear Paragraph Formatting	段落の書式をクリア
+	Clear Character Style	文字スタイルをクリア
+	Clear Character Formatting	文字の書式をクリア
+	Paste Special	形式を選択して貼り付け
+	Paste Special…	形式を選択して貼り付け…
+	Paste as:	貼り付ける形式:
+	The clipboard is empty.	クリップボードは空です。
+	Formatted Text	書式付きテキスト
+	Rich Text Format (RTF)	リッチ テキスト形式 (RTF)
+	HTML Format	HTML 形式
+	Unformatted Text	書式なしテキスト
+	Result	結果
+	Keeps the fonts and formatting of the copied text.	コピーしたテキストのフォントと書式を保持します。
+	Reads the clipboard's rich text and keeps its formatting.	クリップボードの RTF を読み込み、書式を保持します。
+	Reads the clipboard's web content and keeps its formatting.	クリップボードの Web コンテンツを読み込み、書式を保持します。
+	Drops all formatting and pastes plain text.	書式をすべて取り除き、プレーン テキストとして貼り付けます。
+	Advanced Find	高度な検索
+	Advanced Find…	高度な検索…
+	Go To…	ジャンプ…
+	Reading Highlight	検索結果を強調表示
+	New Table Style	新しい表スタイル
+	Modify Table Style	表スタイルの変更
+	New Table Style…	新しい表スタイル…
+	Modify Table Style…	表スタイルの変更…
+	Apply formatting to:	書式の適用先:
+	Whole Table	表全体
+	Fill color:	塗りつぶしの色:
+	{count} items highlighted	{count} 件を強調表示しました
+	{n} pt	{n} pt
+	Not {name}	{name} なし
+	Level {n}	レベル {n}
+	Body Text	本文
+	{n} lines	{n} 行
+	At least {n}	最小値 {n}
+	Exactly {n}	固定値 {n}
+	Centered	中央揃え
+	Character spacing	文字間隔
+	Don't add space between paragraphs of the same style	同じスタイルの段落間に間隔を追加しない
+	Don't hyphenate	ハイフネーションなし
+	Double strikethrough	二重取り消し線
+	Drop cap	ドロップ キャップ
+	First line	最初の行
+	Font color	フォントの色
+	Highlight	蛍光ペン
+	Justified	両端揃え
+	Left indent	左インデント
+	Line spacing	行間
+	Outline level	アウトライン レベル
+	Raised/lowered	上げ/下げ
+	Right indent	右インデント
+	Scale	倍率
+	Space after	段落後の間隔
+	Space before	段落前の間隔
+	Suppress line numbers	行番号を表示しない
+	Underline color	下線の色
 	Letters	レター
 	E-mail Messages	電子メール
 	Directory	ディレクトリ
@@ -931,3 +1002,25 @@
 	Dark	ダーク
 	Use system setting	システム設定を使用
 	A file dialog is already open.	ファイル ダイアログが既に開いています。
+	Manage Styles	スタイルの管理
+	Show or Hide Style	スタイルの表示/非表示
+	Manage Styles…	スタイルの管理…
+	Sort order:	並べ替え順:
+	As Recommended	推奨順
+	Alphabetical	アルファベット順
+	Font: {font}	フォント: {font}
+	{size} pt	{size} pt
+	Color: {color}	色: {color}
+	Space before: {pt} pt	前の間隔: {pt} pt
+	Space after: {pt} pt	後の間隔: {pt} pt
+	Based on: {style}	基準: {style}
+	Paragraph style	段落スタイル
+	Character style	文字スタイル
+	Linked style (paragraph and character)	リンク スタイル (段落と文字)
+	Table style	表スタイル
+	Built-in style	組み込みスタイル
+	Show in the Styles gallery	スタイル ギャラリーに表示
+	Hide from style lists	スタイルの一覧に表示しない
+	Built-in styles can't be deleted.	組み込みスタイルは削除できません。
+	Delete Table Style	表スタイルの削除
+	Preview	プレビュー

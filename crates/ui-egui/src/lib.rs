@@ -33,6 +33,7 @@ pub mod paste_picture;
 pub mod previews;
 pub mod read_aloud;
 pub mod ribbon;
+pub mod scroll;
 pub mod theme;
 pub mod widgets;
 pub mod window_geometry;
@@ -108,6 +109,10 @@ pub struct UiState {
     /// Keytips (Alt) state; not persisted, it resets each session.
     #[serde(skip)]
     pub keytips: crate::keytips::Phase,
+    /// Since the last Alt press, another key or a mouse button was pressed: the Alt release
+    /// that follows ends a chord (Alt+click, Alt+drag column selection), not a keytip tap.
+    #[serde(skip)]
+    pub alt_chord_used: bool,
     /// View › Switch Modes: show pages dark (white text on black), kept between runs.
     pub dark_page: bool,
 }
@@ -131,6 +136,7 @@ impl Default for UiState {
             read_aloud_rate: 1.0,
             read_aloud_skip_citations: true,
             keytips: crate::keytips::Phase::Off,
+            alt_chord_used: false,
             dark_page: false,
         }
     }
@@ -191,6 +197,10 @@ pub struct WordApp {
     autosave_path: Option<std::path::PathBuf>,
     /// The file dialog the host is showing, and what its answer is for ([`file_dialogs`]).
     file_dialog: Option<file_dialogs::PendingDialog>,
+    /// File › Info: the property field being typed in and the document revision after its last
+    /// keystroke, so one visit's keystrokes make a single undo step (and anything else in
+    /// between, such as an Undo, starts a new one).
+    pub(crate) info_editing: Option<(&'static str, u64)>,
 }
 
 /// The answer to "Do you want to save changes?" (`ui.saveChanges`).
@@ -250,6 +260,7 @@ impl WordApp {
             change_picture_target: None,
             recipient_list_pending: false,
             file_dialog: None,
+            info_editing: None,
         }
     }
 
@@ -348,6 +359,10 @@ impl WordApp {
         if self.services.download.is_some() && matches!(id, "file.save" | "file.saveAs" | "file.exportPdf" | "file.exportPng") {
             let name = params.get("path").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| self.default_save_name());
             let name = if id == "file.exportPdf" && !name.ends_with(".pdf") { format!("{name}.pdf") } else { name };
+            // A save is a save, download or not: advance the revision and modified stamp (#262).
+            if matches!(id, "file.save" | "file.saveAs") {
+                self.session.stamp_save();
+            }
             let bytes = wordcraft_engine::io::save_bytes(&name, &self.session.doc)?;
             if let Some(d) = &self.services.download
                 && let Err(e) = d(&name, &bytes)
@@ -487,6 +502,7 @@ impl WordApp {
                     self.ui.backstage = true;
                     self.ui.backstage_page = "options".into();
                 }
+                "pasteSpecial" => self.dialog = Some(dialogs::Dialog::paste_special(self, req)),
                 other => self.dialog = dialogs::Dialog::open(other, self),
             }
         }
@@ -1086,6 +1102,91 @@ mod tests {
             frame(&mut a, Vec::new());
         }
         assert!(a.canvas.scale < zoomed, "Ctrl+wheel down zooms out");
+    }
+
+    /// Issue #67: View › Zoom In from a fit mode zoomed *out*: Page Width showed 163% but Zoom In
+    /// stepped from the stale manual 100% to 110%.
+    #[test]
+    fn view_tab_zoom_steps_from_the_shown_zoom_in_fit_modes() {
+        let ctx = egui::Context::default();
+        let mut a = app();
+        a.run("ui.tab", json!({"tab": "View"})).unwrap();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0));
+        let frame = |a: &mut WordApp| {
+            for _ in 0..4 {
+                let input = egui::RawInput { screen_rect: Some(screen), ..Default::default() };
+                ctx.run_ui(input, |ui| {
+                    a.logic(ui.ctx());
+                    a.ui(ui);
+                })
+                .drop_without_applying_deltas();
+            }
+            a.canvas.scale / canvas::PX_PER_PT
+        };
+        let base = frame(&mut a);
+        assert!((base - 1.0).abs() < 1e-3);
+        for fit in ["view.pageWidth", "view.onePage", "view.multiplePages"] {
+            a.run(fit, json!({})).unwrap();
+            let fitted = frame(&mut a);
+            assert!((fitted - base).abs() > 0.05, "{fit} changes the zoom");
+            assert!((a.session.view.zoom - fitted).abs() < 1e-3, "{fit}: session zoom follows the shown zoom");
+            a.run("view.zoomIn", json!({})).unwrap();
+            let zin = frame(&mut a);
+            assert!(zin > fitted, "{fit}: Zoom In zooms in: {fitted} -> {zin}");
+            a.run(fit, json!({})).unwrap();
+            frame(&mut a);
+            a.run("view.zoomOut", json!({})).unwrap();
+            let zout = frame(&mut a);
+            assert!(zout < fitted, "{fit}: Zoom Out zooms out: {fitted} -> {zout}");
+            // The Zoom dialog opens at the shown zoom.
+            a.run(fit, json!({})).unwrap();
+            frame(&mut a);
+            a.run("ui.dialog", json!({"name": "zoom"})).unwrap();
+            assert!(matches!(a.dialog, Some(dialogs::Dialog::Zoom { percent }) if (percent - (fitted * 100.0).round()).abs() < 1.0));
+            a.dialog = None;
+        }
+        a.run("view.zoom100", json!({})).unwrap();
+        assert!((frame(&mut a) - 1.0).abs() < 1e-3);
+    }
+
+    /// Issue #122: touchpad deltas scroll the page 1:1 at once; a wheel notch eases in to about
+    /// three lines.
+    #[test]
+    fn touchpad_scrolls_one_to_one_and_wheel_notches_ease_in() {
+        let ctx = egui::Context::default();
+        let mut a = app();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 600.0));
+        let mut t = 0.0;
+        let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+            t += 1.0 / 60.0;
+            let input = egui::RawInput { events, time: Some(t), screen_rect: Some(screen), ..Default::default() };
+            ctx.run_ui(input, |ui| {
+                a.logic(ui.ctx());
+                a.ui(ui);
+            })
+            .drop_without_applying_deltas();
+        };
+        for _ in 0..3 {
+            frame(&mut a, Vec::new());
+        }
+        let over_page = a.canvas.canvas_rect.unwrap().center();
+        frame(&mut a, vec![egui::Event::PointerMoved(over_page)]);
+        let wheel = |unit, y: f32, phase| egui::Event::MouseWheel { unit, delta: egui::vec2(0.0, y), phase, modifiers: egui::Modifiers::NONE };
+        let start = a.canvas.scroll_offset.y;
+        frame(&mut a, vec![wheel(egui::MouseWheelUnit::Point, -40.0, egui::TouchPhase::Start)]);
+        assert_eq!(a.canvas.scroll_offset.y, start + 40.0, "the first touchpad delta lands in the same frame");
+        // Fingers lift; the coast after it is left to the unit tests (crate::scroll).
+        frame(&mut a, vec![wheel(egui::MouseWheelUnit::Point, 0.0, egui::TouchPhase::End)]);
+        a.canvas.wheel = Default::default();
+        let at = a.canvas.scroll_offset.y;
+        frame(&mut a, vec![wheel(egui::MouseWheelUnit::Line, -1.0, egui::TouchPhase::Move)]);
+        let first = a.canvas.scroll_offset.y - at;
+        for _ in 0..30 {
+            frame(&mut a, Vec::new());
+        }
+        let notch = crate::scroll::notch_px(a.canvas.scale / crate::canvas::PX_PER_PT);
+        assert!(first > 0.0 && first < notch, "a notch eases in: {first}");
+        assert!((a.canvas.scroll_offset.y - at - notch).abs() < 0.5, "a notch scrolls {notch}: {}", a.canvas.scroll_offset.y - at);
     }
 
     /// Issue #123: zoomed out, pages sit side by side, and clicks map to the page under the pointer.

@@ -373,6 +373,40 @@ impl DocLayout {
         None
     }
 
+    /// Column (block) selection: the piece of every line from the line holding `a` to the line
+    /// holding `b` (document order) that lies between page x `left` and `right`. One `(start,
+    /// end)` pair per line, both in the same paragraph; lines shorter than `left` give an empty
+    /// pair. At most `max` lines.
+    pub fn column_segments(&self, doc: &Document, a: &Pos, b: &Pos, left: f32, right: f32, page_hint: usize, max: usize) -> Vec<(Pos, Pos)> {
+        let (a, b) = if a <= b { (a, b) } else { (b, a) };
+        let (left, right) = if left <= right { (left, right) } else { (right, left) };
+        let mut out = Vec::new();
+        if a.story != b.story || !left.is_finite() || !right.is_finite() {
+            return out;
+        }
+        for path in doc.paths_between(a, b) {
+            for (_, it) in self.pieces(a.story, &path, page_hint) {
+                let Placed::Lines { para, l0, l1, x, .. } = it else { continue };
+                let first = if path == a.path { para.line_of(a.off) } else { 0 };
+                let last = if path == b.path { para.line_of(b.off) } else { usize::MAX };
+                for li in *l0..*l1 {
+                    if li < first || li > last {
+                        continue;
+                    }
+                    if out.len() >= max {
+                        return out;
+                    }
+                    let o0 = para.off_at_x(li, left - x);
+                    let o1 = para.off_at_x(li, right - x);
+                    let (o0, o1) = if o0 <= o1 { (o0, o1) } else { (o1, o0) };
+                    let mk = |off| Pos { story: a.story, path: path.clone(), off };
+                    out.push((mk(o0), mk(o1)));
+                }
+            }
+        }
+        out
+    }
+
     /// Highlight rectangles for the selection `a..b`, per page.
     pub fn selection_rects(&self, doc: &Document, a: &Pos, b: &Pos, page_hint: usize) -> Vec<(usize, Rect)> {
         let (a, b) = if a <= b { (a, b) } else { (b, a) };

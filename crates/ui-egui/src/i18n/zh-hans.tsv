@@ -128,6 +128,15 @@
 	Clear	清除
 	Clear All Formatting	清除所有格式
 	Clipboard	剪贴板
+	Clipboard Pane	剪贴板窗格
+	Clipboard Items	剪贴板项目
+	Paste Clipboard Item	粘贴剪贴板项目
+	Paste All	全部粘贴
+	Delete Clipboard Item	删除剪贴板项目
+	Clear All	全部清除
+	Click an item to paste it.	单击项目即可粘贴。
+	Nothing collected yet. Items you copy or cut appear here.	尚无内容。复制或剪切的项目会显示在这里。
+	(picture or object)	（图片或对象）
 	Close	关闭
 	Close Header and Footer	关闭页眉和页脚
 	Collapse Selection	折叠选定内容
@@ -889,6 +898,68 @@
 	Opening print dialog…	正在打开打印对话框…
 	Print failed: {error}	打印失败：{error}
 	Couldn't open {path}: {error}	无法打开 {path}：{error}
+	Column Selection	矩形选择
+	Style Inspector	样式检查器
+	Inspect Styles at Selection	检查所选内容的样式
+	Clear Formatting Level	清除格式级别
+	Characters	字符
+	Direct formatting	直接格式
+	Reset to Normal	重置为正文
+	Clear Paragraph Formatting	清除段落格式
+	Clear Character Style	清除字符样式
+	Clear Character Formatting	清除字符格式
+	Paste Special	选择性粘贴
+	Paste Special…	选择性粘贴…
+	Paste as:	粘贴为：
+	The clipboard is empty.	剪贴板为空。
+	Formatted Text	带格式文本
+	Rich Text Format (RTF)	RTF 格式
+	HTML Format	HTML 格式
+	Unformatted Text	无格式文本
+	Result	结果
+	Keeps the fonts and formatting of the copied text.	保留所复制文本的字体和格式。
+	Reads the clipboard's rich text and keeps its formatting.	读取剪贴板中的 RTF 内容并保留其格式。
+	Reads the clipboard's web content and keeps its formatting.	读取剪贴板中的网页内容并保留其格式。
+	Drops all formatting and pastes plain text.	去除所有格式，粘贴纯文本。
+	Advanced Find	高级查找
+	Advanced Find…	高级查找…
+	Go To…	定位…
+	Reading Highlight	突出显示查找结果
+	New Table Style	新建表格样式
+	Modify Table Style	修改表格样式
+	New Table Style…	新建表格样式…
+	Modify Table Style…	修改表格样式…
+	Apply formatting to:	将格式应用于：
+	Whole Table	整个表格
+	Fill color:	填充颜色：
+	{count} items highlighted	已突出显示 {count} 项
+	{n} pt	{n} 磅
+	Not {name}	非{name}
+	Level {n}	{n} 级
+	Body Text	正文文本
+	{n} lines	{n} 行
+	At least {n}	最小值 {n}
+	Exactly {n}	固定值 {n}
+	Centered	居中
+	Character spacing	字符间距
+	Don't add space between paragraphs of the same style	相同样式的段落间不添加间距
+	Don't hyphenate	不断字
+	Double strikethrough	双删除线
+	Drop cap	首字下沉
+	First line	首行
+	Font color	字体颜色
+	Highlight	突出显示
+	Justified	两端对齐
+	Left indent	左缩进
+	Line spacing	行距
+	Outline level	大纲级别
+	Raised/lowered	提升/降低
+	Right indent	右缩进
+	Scale	缩放
+	Space after	段后间距
+	Space before	段前间距
+	Suppress line numbers	取消行号
+	Underline color	下划线颜色
 	Letters	信函
 	E-mail Messages	电子邮件
 	Directory	目录
@@ -942,3 +1013,25 @@
 	Dark	深色
 	Use system setting	使用系统设置
 	A file dialog is already open.	已有一个文件对话框处于打开状态。
+	Manage Styles	管理样式
+	Show or Hide Style	显示或隐藏样式
+	Manage Styles…	管理样式…
+	Sort order:	排序方式：
+	As Recommended	按推荐
+	Alphabetical	按字母顺序
+	Font: {font}	字体：{font}
+	{size} pt	{size} 磅
+	Color: {color}	颜色：{color}
+	Space before: {pt} pt	段前间距：{pt} 磅
+	Space after: {pt} pt	段后间距：{pt} 磅
+	Based on: {style}	基于：{style}
+	Paragraph style	段落样式
+	Character style	字符样式
+	Linked style (paragraph and character)	链接样式（段落和字符）
+	Table style	表格样式
+	Built-in style	内置样式
+	Show in the Styles gallery	在样式库中显示
+	Hide from style lists	在样式列表中隐藏
+	Built-in styles can't be deleted.	内置样式不能删除。
+	Delete Table Style	删除表格样式
+	Preview	预览

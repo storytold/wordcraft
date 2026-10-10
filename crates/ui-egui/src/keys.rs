@@ -38,6 +38,7 @@ pub fn key_name(k: Key) -> Option<&'static str> {
         Key::F3 => "F3",
         Key::F5 => "F5",
         Key::F7 => "F7",
+        Key::F8 => "F8",
         Key::F9 => "F9",
         Key::F12 => "F12",
         Key::A => "A",
@@ -203,7 +204,13 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                 }
             }
             egui::Event::Paste(t) => {
-                let id = if ctx.input(|i| i.modifiers.shift && i.modifiers.alt) { "edit.pasteText" } else { "edit.paste" };
+                // Mod+Alt+V arrives as a paste too (the shell reads the clipboard): Paste Special.
+                let m = ctx.input(|i| i.modifiers);
+                let id = match (m.alt, m.shift) {
+                    (true, true) => "edit.pasteText",
+                    (true, false) => "edit.pasteSpecial",
+                    _ => "edit.paste",
+                };
                 let _ = app.run(id, json!({"text": t}));
             }
             egui::Event::Copy | egui::Event::Cut => {
