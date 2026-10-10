@@ -36,8 +36,7 @@ pub fn start() {
                     }
                     let inbox: Inbox = Inbox::default();
                     let doc = if query().contains("sample") { wordcraft_engine::sample::sample_document() } else { wordcraft_doc::Document::new() };
-                    let mut app = WordApp::new(Session::new(doc), services(inbox.clone(), cc.egui_ctx.clone()));
-                    app.autosave = false;
+                    let app = WordApp::new(Session::new(doc), services(inbox.clone(), cc.egui_ctx.clone()));
                     Ok(Box::new(WebShell { app, inbox }))
                 }),
             )

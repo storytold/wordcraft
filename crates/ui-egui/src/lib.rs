@@ -71,6 +71,8 @@ pub struct UiState {
     pub window: Option<window_geometry::WindowGeometry>,
     /// Interface language: `auto` (follow the system) or a code from [`i18n::LANGUAGES`].
     pub language: String,
+    /// File › Options: AutoSave every document (otherwise each starts with AutoSave off).
+    pub autosave_all: bool,
 }
 
 impl Default for UiState {
@@ -87,6 +89,7 @@ impl Default for UiState {
             author: String::new(),
             window: None,
             language: i18n::AUTO.into(),
+            autosave_all: false,
         }
     }
 }
@@ -114,7 +117,6 @@ pub struct WordApp {
     applied_dark: Option<bool>,
     pub frame_ms: f64,
     pub quit_requested: bool,
-    pub autosave: bool,
     pub word_count: (u64, usize),
     last_autosave: f64,
 }
@@ -141,7 +143,6 @@ impl WordApp {
             applied_dark: None,
             frame_ms: 0.0,
             quit_requested: false,
-            autosave: true,
             word_count: (0, 0),
             last_autosave: 0.0,
         }
@@ -156,6 +157,7 @@ impl WordApp {
     pub fn prefs(&self) -> UiState {
         let mut ui = self.ui.clone();
         ui.author = self.session.author.clone();
+        ui.autosave_all = self.session.autosave_all;
         ui
     }
 
@@ -168,6 +170,8 @@ impl WordApp {
         if !author.trim().is_empty() {
             self.session.author = author;
         }
+        self.session.autosave_all = self.ui.autosave_all;
+        self.session.autosave = self.ui.autosave_all;
     }
 
     /// Run a command; UI-level commands (`ui.*`) are handled here, the rest by the engine.
@@ -372,7 +376,7 @@ impl WordApp {
         self.drain_inbox();
         // AutoSave: write a saved document a couple of seconds after the last change.
         let now = now_ms();
-        if self.autosave
+        if self.session.autosave
             && self.session.dirty
             && self.session.path.is_some()
             && now - self.last_autosave > 2500.0
@@ -384,7 +388,7 @@ impl WordApp {
                 let _ = self.session.run("file.save", &json!({}));
             }
         }
-        if self.autosave && self.session.dirty && self.session.path.is_some() {
+        if self.session.autosave && self.session.dirty && self.session.path.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(1000));
         }
         self.collect_screenshots(ctx);
@@ -590,6 +594,20 @@ mod tests {
         // A later rename is what gets saved next, not the name loaded at startup.
         second.run("file.setAuthor", json!({"name": "Grace Hopper"})).unwrap();
         assert_eq!(second.prefs().author, "Grace Hopper");
+    }
+
+    #[test]
+    fn autosave_all_survives_restart() {
+        let mut first = app();
+        assert!(!first.session.autosave);
+        first.run("file.autosaveAll", json!({"value": true})).unwrap();
+        let saved = serde_json::to_vec(&first.prefs()).unwrap();
+
+        let mut second = app();
+        second.apply_prefs(serde_json::from_slice(&saved).unwrap());
+        assert!(second.session.autosave_all && second.session.autosave);
+        second.run("file.new", json!({})).unwrap();
+        assert!(second.session.autosave);
     }
 
     #[test]

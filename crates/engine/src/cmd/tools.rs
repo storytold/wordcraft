@@ -149,6 +149,15 @@ pub fn specs() -> Vec<CommandSpec> {
             s.autosave = p::bool(v, "value").unwrap_or(!s.autosave);
             Ok(json!({"value": s.autosave}))
         })
+        .params(r#"{"value"?: bool}"#)
+        .pure(),
+        // The default for documents opened or created from now on; it also applies to this one.
+        CommandSpec::new("file.autosaveAll", "AutoSave All Documents", "File › Options › Save", |s, v| {
+            s.autosave_all = p::bool(v, "value").unwrap_or(!s.autosave_all);
+            s.autosave = s.autosave_all;
+            Ok(json!({"value": s.autosave_all}))
+        })
+        .params(r#"{"value"?: bool}"#)
         .pure(),
         CommandSpec::new("file.compatibility", "Check Compatibility", "File › Info", |s, _| {
             let mut issues = Vec::new();

@@ -147,7 +147,10 @@ pub struct Session {
     pub versions: Vec<(String, String, Document)>,
     /// Quick Parts / AutoText entries.
     pub building_blocks: std::collections::BTreeMap<String, Fragment>,
+    /// AutoSave for this document (off for new and opened documents unless `autosave_all`).
     pub autosave: bool,
+    /// File › Options: turn AutoSave on for every document opened or created.
+    pub autosave_all: bool,
     /// Citation style: APA, MLA, Chicago, IEEE.
     pub bib_style: String,
     /// Mail merge data source and preview.
@@ -193,7 +196,8 @@ impl Session {
             autocorrect_user: Vec::new(),
             versions: Vec::new(),
             building_blocks: Default::default(),
-            autosave: true,
+            autosave: false,
+            autosave_all: false,
             bib_style: "APA".into(),
             merge: Default::default(),
             ui_requests: Vec::new(),

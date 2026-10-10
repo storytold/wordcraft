@@ -260,10 +260,10 @@ fn small_icon(ui: &mut Ui, icon: &str, tip: &str) -> bool {
 
 impl WordApp {
     pub fn canvas_autosave(&self) -> bool {
-        self.autosave
+        self.session.autosave
     }
     pub fn toggle_autosave(&mut self) {
-        self.autosave = !self.autosave;
+        let _ = self.run("file.autosave", json!({}));
     }
     /// Word count, recomputed only when the document changes.
     pub fn cached_word_count(&mut self) -> usize {

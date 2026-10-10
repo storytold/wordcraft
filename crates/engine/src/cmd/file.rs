@@ -86,6 +86,7 @@ fn new(s: &mut Session, v: &Value) -> CmdResult {
     };
     s.set_document(doc);
     s.path = None;
+    s.autosave = s.autosave_all;
     sel_result(s)
 }
 
@@ -102,6 +103,7 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     };
     s.set_document(doc);
     s.path = Some(path.into());
+    s.autosave = s.autosave_all;
     Ok(json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count()}))
 }
 

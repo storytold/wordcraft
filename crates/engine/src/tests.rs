@@ -349,3 +349,31 @@ fn caret_navigation() {
     run(&mut s, "caret.left", json!({}));
     assert_eq!(s.sel.focus.off, 10);
 }
+
+#[test]
+fn autosave_is_off_per_document_unless_on_for_all() {
+    let dir = std::env::temp_dir().join(format!("wc-autosave-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("a.docx");
+    let mut s = s();
+    assert!(!s.autosave, "new documents start with AutoSave off");
+    run(&mut s, "file.saveAs", json!({"path": path.to_string_lossy()}));
+    assert!(!s.autosave, "saving doesn't turn it on");
+    run(&mut s, "file.autosave", json!({}));
+    assert!(s.autosave, "the title-bar switch turns it on for this document");
+    run(&mut s, "file.new", json!({}));
+    assert!(!s.autosave, "the next document starts off again");
+
+    run(&mut s, "file.autosaveAll", json!({"value": true}));
+    assert!(s.autosave_all && s.autosave);
+    run(&mut s, "file.new", json!({}));
+    assert!(s.autosave);
+    run(&mut s, "file.open", json!({"path": path.to_string_lossy()}));
+    assert!(s.autosave);
+    run(&mut s, "file.autosave", json!({"value": false}));
+    assert!(!s.autosave && s.autosave_all, "one document can still opt out");
+    run(&mut s, "file.autosaveAll", json!({"value": false}));
+    run(&mut s, "file.open", json!({"path": path.to_string_lossy()}));
+    assert!(!s.autosave);
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -267,7 +267,10 @@ fn options_page(app: &mut WordApp, ui: &mut Ui) {
     if ui.checkbox(&mut dark, tl!("Dark mode")).changed() {
         let _ = app.run("ui.dark", json!({"value": dark}));
     }
-    ui.checkbox(&mut app.autosave, tl!("AutoSave documents that have been saved"));
+    let mut all = app.session.autosave_all;
+    if ui.checkbox(&mut all, tl!("AutoSave all documents")).on_hover_text(tl!("Turn AutoSave on for every document you open or save. When off, each document starts with AutoSave off; turn it on per document with the AutoSave switch in the title bar.")).changed() {
+        let _ = app.run("file.autosaveAll", json!({"value": all}));
+    }
     ui.checkbox(&mut app.ui.show_discord, tl!("Show the community button in the title bar"));
     ui.add_space(10.0);
     ui.label(egui::RichText::new(tl!("Display")).font(semibold(15.0)));

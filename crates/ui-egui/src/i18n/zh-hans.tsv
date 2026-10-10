@@ -60,7 +60,9 @@
 	Automatic Table 1 (3 levels)	自动目录 1（3 级）
 	Automatic Table 2 (2 levels)	自动目录 2（2 级）
 	AutoSave	自动保存
-	AutoSave documents that have been saved	自动保存已保存过的文档
+	AutoSave All Documents	自动保存所有文档
+	AutoSave all documents	自动保存所有文档
+	Turn AutoSave on for every document you open or save. When off, each document starts with AutoSave off; turn it on per document with the AutoSave switch in the title bar.	为打开或保存的每个文档开启自动保存。关闭时，每个文档开始时自动保存为关闭状态；可用标题栏中的自动保存开关为单个文档开启。
 	AutoSave saves every change to the file (needs a saved document)	自动保存会把每次更改写入文件（文档需已保存）
 	AutoText	自动图文集
 	Backspace	退格
