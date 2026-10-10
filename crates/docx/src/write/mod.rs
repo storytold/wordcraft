@@ -622,9 +622,14 @@ fn style_xml(w: &mut W, st: &Style) {
         w.close("w:rPr");
     }
     if let Some(t) = &st.table {
-        if let Some(b) = &t.borders {
+        if t.borders.is_some() || t.cell_margins.is_some() {
             w.open("w:tblPr", &[]);
-            props::borders(w, "w:tblBorders", b, Some("w:insideH"), &[]);
+            if let Some(b) = &t.borders {
+                props::borders(w, "w:tblBorders", b, Some("w:insideH"), &[]);
+            }
+            if let Some(m) = &t.cell_margins {
+                props::margins(w, "w:tblCellMar", m);
+            }
             w.close("w:tblPr");
         }
         let cond =
@@ -651,6 +656,7 @@ fn style_xml(w: &mut W, st: &Style) {
                 }
                 w.close("w:tblStylePr");
             };
+        cond(w, "wholeTable", &wordcraft_doc::CharProps::default(), t.fill, None);
         cond(w, "firstRow", &t.header_chr, t.header_fill, None);
         cond(w, "lastRow", &t.total_chr, None, t.total_border_top.as_ref());
         cond(w, "firstCol", &t.first_col_chr, None, None);

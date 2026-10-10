@@ -7,7 +7,7 @@ use std::sync::Arc;
 use wordcraft_doc::math::MathJc;
 use wordcraft_doc::numbering::{Level, LevelSuffix};
 use wordcraft_doc::para::{COLUMN_BREAK, InlineObject, LINE_BREAK, NoteKind, OBJ, PAGE_BREAK, SOFT_HYPHEN};
-use wordcraft_doc::props::{Align, CharProps, LineSpacing, TabAlign, TabLeader, TabStop};
+use wordcraft_doc::props::{Align, CharProps, LineSpacing, ParaProps, TabAlign, TabLeader, TabStop};
 use wordcraft_doc::resolve::{ResolvedChar, ResolvedPara};
 use wordcraft_doc::{Document, Paragraph};
 use wordcraft_fonts::FaceRef;
@@ -157,6 +157,15 @@ pub struct ParaLayout {
     pub shown: Vec<(usize, String)>,
 }
 
+/// What a table style gives the text of a cell: its paragraph and run formatting, with the
+/// cell's conditional formatting (header row, first column…) applied. It sits between document
+/// defaults and the paragraph's style (`StyleSheet::resolve_para_in`, `resolve_char_in`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CellText {
+    pub para: ParaProps,
+    pub chr: CharProps,
+}
+
 /// Inputs that change a paragraph's layout beyond its own content.
 pub struct ParaEnv<'a> {
     pub doc: &'a Document,
@@ -167,8 +176,8 @@ pub struct ParaEnv<'a> {
     pub show_hidden: bool,
     /// Leave tracked deletions out, like hidden text (the final, "No Markup" text).
     pub hide_deleted: bool,
-    /// Extra style applied to every run (table style conditional formatting), under direct formatting.
-    pub table_chr: Option<&'a CharProps>,
+    /// The table style's formatting for text in this paragraph's cell (`None` outside tables).
+    pub table: Option<&'a CellText>,
     pub proofing: bool,
     /// Areas text must flow around (floating objects), relative to the paragraph: x from the
     /// column's left edge, y from the top of the first line.
@@ -376,7 +385,7 @@ pub(crate) fn left_out(rc: &ResolvedChar, show_hidden: bool, hide_deleted: bool)
 /// Lay out one paragraph.
 pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let doc = env.doc;
-    let mut rp = doc.styles.resolve_para(&p.props);
+    let mut rp = doc.styles.resolve_para_in(&p.props, env.table.map(|t| &t.para));
     // List level indents apply unless the paragraph sets its own.
     if let Some((_, lvl)) = &env.label {
         if p.props.indent_left.is_none() {
@@ -387,15 +396,8 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         }
     }
     let para_style = p.props.style.as_deref();
-    let resolve = |c: &CharProps| -> Arc<ResolvedChar> {
-        match env.table_chr {
-            Some(t) => {
-                let merged = t.clone().overlaid(c);
-                Arc::new(doc.styles.resolve_char(para_style, &merged))
-            }
-            None => Arc::new(doc.styles.resolve_char(para_style, c)),
-        }
-    };
+    let table_chr = env.table.map(|t| &t.chr);
+    let resolve = |c: &CharProps| -> Arc<ResolvedChar> { Arc::new(doc.styles.resolve_char_in(para_style, table_chr, c)) };
     let mut b = Builder { env, styles: Vec::new(), style_index: Default::default(), glyphs: Vec::new(), clusters: Vec::new(), shown: Vec::new() };
     let mark_rc = resolve(&p.mark);
     let mark_style = b.style(&mark_rc, None, false);

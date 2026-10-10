@@ -423,6 +423,38 @@ fn comments_round_trip() {
     }
 }
 
+/// A table style's cell text formatting, whole-table shading and cell margins survive a save.
+#[test]
+fn table_style_formatting_round_trips() {
+    use wordcraft_doc::styles::TableStyleParts;
+    let mut d = doc_with(vec![Paragraph::with_text("x", CharProps::default())]);
+    let parts = TableStyleParts {
+        borders: Some(Borders { top: Some(Border::single(1.0)), ..Default::default() }),
+        fill: Some(Rgb(0xDD, 0xEB, 0xF7)),
+        cell_margins: Some([1.0, 14.4, 0.0, 14.4]),
+        header_chr: CharProps { italic: Some(true), ..Default::default() },
+        header_fill: Some(Rgb(0xFF, 0xFF, 0)),
+        ..Default::default()
+    };
+    d.styles.upsert(Style {
+        id: "Whole".into(),
+        name: "Whole".into(),
+        kind: StyleKind::Table,
+        based_on: Some("TableGrid".into()),
+        para: ParaProps { align: Some(Align::Center), space_after: Some(0.0), ..Default::default() },
+        chr: CharProps { bold: Some(true), color: Some(TextColor::Rgb(Rgb(0xC0, 0, 0))), ..Default::default() },
+        table: Some(parts.clone()),
+        ..Default::default()
+    });
+    let r = rt(&d);
+    let got = r.styles.get("Whole").unwrap();
+    assert_eq!(got.based_on.as_deref(), Some("TableGrid"));
+    assert_eq!(got.para.align, Some(Align::Center));
+    assert_eq!(got.para.space_after, Some(0.0));
+    assert_eq!((got.chr.bold, got.chr.color), (Some(true), Some(TextColor::Rgb(Rgb(0xC0, 0, 0)))));
+    assert_eq!(got.table.as_ref(), Some(&parts));
+}
+
 #[test]
 fn notes_round_trip() {
     let mut d = Document::new();

@@ -276,6 +276,35 @@ fn styles_numbering_settings_notes_comments_from_parts() {
     assert_eq!(d.core.revision, 3);
 }
 
+/// A table style's own pPr/rPr, its `wholeTable` region (which covers every cell) and its table
+/// shading and cell margins; a derived style keeps only what it sets itself.
+#[test]
+fn table_style_whole_table_shading_and_margins() {
+    let styles = format!(
+        r#"<w:styles {W_NS}>
+ <w:style w:type="table" w:styleId="Base"><w:name w:val="Base"/><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:tblPr><w:shd w:val="clear" w:color="auto" w:fill="EEEEEE"/><w:tblCellMar><w:top w:w="20" w:type="dxa"/><w:left w:w="288" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/><w:right w:w="288" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style>
+ <w:style w:type="table" w:styleId="Whole"><w:name w:val="Whole"/><w:basedOn w:val="Base"/><w:rPr><w:b/></w:rPr><w:tblStylePr w:type="wholeTable"><w:pPr><w:jc w:val="center"/></w:pPr><w:rPr><w:color w:val="1F4E79"/></w:rPr><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="DDEBF7"/></w:tcPr></w:tblStylePr><w:tblStylePr w:type="bogus"/><w:tblStylePr/></w:style>
+</w:styles>"#
+    );
+    let bytes = docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)]);
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    let base = d.styles.get("Base").unwrap();
+    let parts = base.table.as_ref().unwrap();
+    assert_eq!(parts.fill, Some(wordcraft_doc::Rgb(0xEE, 0xEE, 0xEE)));
+    assert_eq!(parts.cell_margins, Some([1.0, 14.4, 0.0, 14.4]));
+    let whole = d.styles.get("Whole").unwrap();
+    assert_eq!(whole.para.align, Some(Align::Center));
+    assert_eq!(whole.chr.bold, Some(true));
+    assert_eq!(whole.chr.color, Some(TextColor::Rgb(wordcraft_doc::Rgb(0x1F, 0x4E, 0x79))));
+    assert_eq!(whole.table.as_ref().unwrap().fill, Some(wordcraft_doc::Rgb(0xDD, 0xEB, 0xF7)));
+    assert_eq!(whole.table.as_ref().unwrap().cell_margins, None);
+    let merged = d.styles.table_style("Whole").unwrap();
+    assert_eq!(merged.para.space_after, Some(0.0), "from Base");
+    assert_eq!(merged.para.align, Some(Align::Center));
+    assert_eq!(merged.parts.fill, Some(wordcraft_doc::Rgb(0xDD, 0xEB, 0xF7)));
+    assert_eq!(merged.parts.cell_margins, Some([1.0, 14.4, 0.0, 14.4]), "from Base");
+}
+
 /// Word starts every note with a `w:footnoteRef` / `w:endnoteRef` mark: the note's own number.
 /// It reads as a reference to the note itself, so the note text shows its number.
 #[test]
