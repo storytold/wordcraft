@@ -156,7 +156,7 @@ fn snippet_blocks(
     d.last_section.margin_bottom = 0.0;
     let l = wordcraft_layout::layout(&d, &mut wordcraft_layout::LayoutCache::new(), &Default::default());
     let page = l.pages.first()?;
-    let mut opts = wordcraft_render::RenderOptions::default();
+    let mut opts = crate::canvas::screen_render_options();
     if let Some(p) = paper {
         opts.paper = p;
     }

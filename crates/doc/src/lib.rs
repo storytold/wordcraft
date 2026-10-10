@@ -301,7 +301,17 @@ pub struct Settings {
     pub footnote_format: section::NumFormat,
     pub endnote_format: section::NumFormat,
     pub protection: Option<String>,
+    /// Word compatibility mode the document is laid out in (`compatibilityMode`): 15 for Word
+    /// 2013 and later, which places a table's border at the margin rather than its text and lets
+    /// justified lines shrink their spaces to fit more text.
+    pub compat_mode: u32,
 }
+
+/// Word's compatibility mode for documents that don't state one.
+pub const LEGACY_COMPAT_MODE: u32 = 12;
+
+/// The compatibility mode of documents created by Word 2013 and later, and by WordCraft.
+pub const COMPAT_MODE_CURRENT: u32 = 15;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -352,6 +362,7 @@ impl Default for Settings {
             footnote_format: section::NumFormat::Decimal,
             endnote_format: section::NumFormat::LowerRoman,
             protection: None,
+            compat_mode: COMPAT_MODE_CURRENT,
         }
     }
 }

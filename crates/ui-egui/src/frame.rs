@@ -135,7 +135,8 @@ impl Drag {
         match self.grab {
             Grab::Move => {
                 let Some(origin) = pages.get(self.page) else { return };
-                let Some((page, x, y)) = crate::canvas::page_at(pages, scale, pointer) else { return };
+                let Some((page, r)) = crate::canvas::nearest_page(pages, pointer).and_then(|i| Some((i, pages.get(i)?))) else { return };
+                let (x, y) = ((pointer.x - r.min.x) / scale, (pointer.y - r.min.y) / scale);
                 // The grabbed point within the frame, points.
                 let gx = (self.press.x - origin.min.x) / scale - self.start.x;
                 let gy = (self.press.y - origin.min.y) / scale - self.start.y;

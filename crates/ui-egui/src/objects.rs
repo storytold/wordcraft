@@ -109,7 +109,7 @@ fn grab_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Po
         frame::handle_at(f, at).map(|h| (o, Grab::Resize(h)))
     });
     handle.or_else(|| {
-        let (page, x, y) = crate::canvas::page_at(pages, scale, at)?;
+        let (page, x, y) = crate::canvas::page_at(pages, layout, scale, at)?;
         // Selectable: body objects (table cells too); notes' objects aren't yet.
         layout.object_at(page, x, y, EDGE / scale.max(0.01)).filter(|o| o.story == StoryRef::Body).map(|o| (o, Grab::Move))
     })
