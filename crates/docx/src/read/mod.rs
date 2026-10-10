@@ -3,6 +3,7 @@
 mod chart;
 mod diagram;
 mod drawing_color;
+mod embed;
 mod math;
 mod props;
 mod story;
@@ -20,7 +21,7 @@ use wordcraft_doc::styles::{Style, StyleKind, StyleSheet, TableStyleParts};
 use wordcraft_doc::{Block, Blocks, Comment, Document, InlineObject, PartKind, Revision, RevisionKind};
 
 use crate::DocxError;
-use crate::package::{ContentTypes, MAX_VBA_RELATED, Package, Rels, VBA_PROJECT_PART, VBA_RELATED, rel_is, rt};
+use crate::package::{ContentTypes, EMBEDDED_PARTS, EmbeddedManifest, MAX_VBA_RELATED, Package, Rels, VBA_PROJECT_PART, VBA_RELATED, rel_is, rt};
 use crate::units::{flag, int, on_off, tw, u32_of};
 use crate::xml::El;
 pub(crate) use props::PropCtx;
@@ -53,6 +54,12 @@ pub(crate) struct Reader<'p> {
     graphics: HashMap<(GraphicKind, String, u32, u32), Arc<Graphic>>,
     /// Graphic work left before charts and diagrams are left empty (see [`MAX_GRAPHIC_WORK`]).
     graphic_budget: usize,
+    /// The main document part's name.
+    main: String,
+    /// The package's content types, read when first needed.
+    content_types: Option<ContentTypes>,
+    /// Parts kept for charts, diagrams and OLE objects (see `embed`).
+    embedded: EmbeddedManifest,
 }
 
 /// The package path that internal relationship `id` points at, if it has type `kind` (an `rt`
@@ -63,6 +70,16 @@ fn part_of(rels: &Rels, id: &str, kind: &str) -> Option<String> {
 
 /// Read a `.docx` package.
 pub fn read(bytes: &[u8]) -> Result<Document, DocxError> {
+    // A password-protected document is a compound file, not a zip: say so rather than failing
+    // as a broken zip (`read_with_password` opens it).
+    if crate::is_encrypted(bytes) {
+        return crate::read_with_password(bytes, None);
+    }
+    read_package(bytes)
+}
+
+/// [`read`] for bytes known not to be an encrypted package.
+pub(crate) fn read_package(bytes: &[u8]) -> Result<Document, DocxError> {
     let pkg = Package::open(bytes)?;
     let root_rels = pkg.rels("");
     let main = root_rels.by_type(rt::OFFICE_DOC).filter(|r| !r.external).map(|r| r.target.clone()).unwrap_or_else(|| "word/document.xml".to_string());
@@ -91,6 +108,9 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocxError> {
         graphic_parts: HashMap::new(),
         graphics: HashMap::new(),
         graphic_budget: MAX_GRAPHIC_WORK,
+        main: main.clone(),
+        content_types: None,
+        embedded: EmbeddedManifest::default(),
     };
     r.pc.major_font = r.doc.settings.major_font.clone();
     r.pc.minor_font = r.doc.settings.minor_font.clone();
@@ -157,6 +177,10 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocxError> {
     {
         r.doc.passthrough.insert(VBA_PROJECT_PART.into(), Arc::new(b.to_vec()));
         r.read_vba_related(&v);
+    }
+    if !r.embedded.parts.is_empty() {
+        let manifest = r.embedded.to_bytes();
+        r.doc.passthrough.insert(EMBEDDED_PARTS.into(), Arc::new(manifest));
     }
     let mut doc = r.doc;
     doc.ensure_nonempty();
@@ -236,7 +260,8 @@ impl Reader<'_> {
     /// content types (see [`VBA_RELATED`]). Parts outside `word/`, relationship parts, the project
     /// itself and missing targets are skipped (logged); at most [`MAX_VBA_RELATED`] are kept.
     fn read_vba_related(&mut self, project: &str) {
-        let types = ContentTypes::read(self.pkg);
+        let pkg = self.pkg;
+        let types = self.content_types.get_or_insert_with(|| ContentTypes::read(pkg));
         let mut manifest = String::new();
         let mut kept = 0usize;
         for rel in self.pkg.rels(project).list.iter().filter(|r| !r.external) {
@@ -615,7 +640,17 @@ impl Reader<'_> {
             _ => LevelSuffix::Tab,
         };
         lv.legal = flag(l, "w:isLgl").unwrap_or(false);
-        lv.restart = l.child_val("w:lvlRestart").and_then(int).is_none_or(|v| v != 0);
+        let restart = l.child_val("w:lvlRestart").and_then(int);
+        lv.restart = restart.is_none_or(|v| v != 0);
+        lv.restart_after = restart.filter(|v| (1..=9).contains(v)).map(|v| v as u8);
+        // The tab stop after the number ("num" tab in the level's paragraph properties).
+        lv.tab = l
+            .child("w:pPr")
+            .and_then(|p| p.child("w:tabs"))
+            .and_then(|t| t.children("w:tab").find(|t| t.attr("w:val") == Some("num")))
+            .and_then(|t| tw(t, "w:pos"))
+            .filter(|v| v.is_finite())
+            .map(|v| v.clamp(-1584.0, 1584.0));
         lv.style = l.child_val("w:pStyle").filter(|s| !s.is_empty()).map(|s| self.pc.style_id(s));
         lv
     }
@@ -651,6 +686,7 @@ impl Reader<'_> {
                         if k.name == "w:drawingGridHorizontalSpacing" { s.grid_h = v } else { s.grid_v = v }
                     }
                 }
+                "m:mathPr" => s.math = Some(math::read_math_pr(k)),
                 "w:mirrorMargins" => s.mirror_margins = on_off(k),
                 "w:autoHyphenation" => s.auto_hyphenation = on_off(k),
                 "w:footnotePr" => {

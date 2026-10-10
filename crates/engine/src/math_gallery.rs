@@ -435,7 +435,7 @@ pub const STRUCTURES: &[Gallery] = &[
                     t("op.eqAbove", "Text over Equal", "=┴⬚"),
                 ],
             ),
-            ("Common Operator Structures", &[t("op.yields", "Yields", "⟶┴yields"), t("op.deltaArrow", "Delta over arrow", "⟶┴∆")]),
+            ("Common Operator Structures", &[t("op.yields", "Yields", "⟶┴(yields)"), t("op.deltaArrow", "Delta over arrow", "⟶┴∆")]),
         ],
     },
     Gallery {
@@ -486,7 +486,7 @@ pub const STRUCTURES: &[Gallery] = &[
             (
                 "Sparse Matrices",
                 &[
-                    t("mat.sparse", "n×n Matrix", "(■(a_11&⋯&a_1n@⋮&⋱&⋮@a_m1&⋯&a_mn))"),
+                    t("mat.sparse", "n×n Matrix", "(■(a_11&⋯&a_(1n)@⋮&⋱&⋮@a_(m1)&⋯&a_(mn)))"),
                     t("mat.identityN", "n×n Identity Matrix", "[■(1&0&⋯&0@0&1&⋯&0@⋮&⋮&⋱&⋮@0&0&⋯&1)]"),
                 ],
             ),
@@ -546,6 +546,28 @@ mod tests {
                 (0..wordcraft_doc::math_edit::child_count(other)).any(|c| wordcraft_doc::math_edit::child(other, c).is_some_and(|x| has_leftover(x)))
             }
         })
+    }
+
+    /// A script or above/below operand takes one letter unless it is grouped (`a_(mn)`), as in
+    /// Word; letters right after one mean a template split a word (`⟶┴yields` put only `y` above
+    /// the arrow).
+    fn split_operand(a: &[MNode]) -> bool {
+        a.windows(2).any(|w| {
+            matches!(w[0], MNode::Lim { .. } | MNode::Script { .. })
+                && matches!(&w[1], MNode::Run(r) if r.text.starts_with(|c: char| c.is_alphabetic()))
+        }) || a
+            .iter()
+            .any(|n| (0..wordcraft_doc::math_edit::child_count(n)).any(|c| wordcraft_doc::math_edit::child(n, c).is_some_and(|x| split_operand(x))))
+    }
+
+    #[test]
+    fn multi_letter_operands_are_grouped() {
+        for tpl in templates() {
+            assert!(!split_operand(&tpl.nodes()), "{} splits an operand: {}", tpl.id, tpl.linear);
+        }
+        for (id, _, lin) in BUILT_INS {
+            assert!(!split_operand(&parse_linear(lin)), "{id} splits an operand: {lin}");
+        }
     }
 
     #[test]

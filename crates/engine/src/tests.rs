@@ -2353,6 +2353,131 @@ fn accessibility_reports_a_chart_without_alt_text() {
     assert!(issues.iter().any(|i| i["issue"] == "Chart or diagram has no alternative text"), "{issues:?}");
 }
 
+/// #320: the Tabs dialog's command sets and clears stops (inherited ones too), changes the
+/// default interval, and is one undo step.
+#[test]
+fn para_tabs_set_clear_and_undo() {
+    use wordcraft_doc::props::{TabAlign, TabLeader};
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Name\tPrice"}));
+    run(&mut s, "para.style", json!({"style": "Header"}));
+    let stops = |s: &Session| {
+        let p = s.doc.para_at(&s.sel.focus).map(|p| p.props.clone()).unwrap_or_default();
+        s.doc.styles.resolve_para(&p).tabs.iter().map(|t| (t.pos, t.align, t.leader)).collect::<Vec<_>>()
+    };
+    assert_eq!(stops(&s).len(), 2, "Header's own stops");
+    run(
+        &mut s,
+        "para.tabs",
+        json!({"set": [{"pos": 100.0, "align": "decimal", "leader": "dot"}, {"pos": 300.0}], "clear": [234.0], "default": 18.0}),
+    );
+    assert_eq!(
+        stops(&s),
+        vec![(100.0, TabAlign::Decimal, TabLeader::Dot), (300.0, TabAlign::Left, TabLeader::None), (468.0, TabAlign::Right, TabLeader::None)]
+    );
+    assert_eq!(s.doc.settings.default_tab, 18.0);
+    // Setting a stop at an existing position replaces it.
+    run(&mut s, "para.tabs", json!({"set": [{"pos": 300.0, "align": "bar"}]}));
+    assert!(stops(&s).contains(&(300.0, TabAlign::Bar, TabLeader::None)));
+    run(&mut s, "para.tabs", json!({"clearAll": true}));
+    assert!(stops(&s).is_empty(), "Clear All removes inherited stops too");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(stops(&s).len(), 3);
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(stops(&s).len(), 2);
+    assert_eq!(s.doc.settings.default_tab, 36.0, "one undo step restores stops and default together");
+    assert!(s.run("para.tabs", &json!({"set": [{"pos": f64::MAX}]})).is_err());
+    assert!(s.run("para.tabs", &json!({"clear": "x"})).is_err());
+}
+
+/// #320: changing only the default tab interval (a document setting) is its own undo step,
+/// and redo puts it back.
+#[test]
+fn para_tabs_default_only_undoes() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "a\tb"}));
+    let before = s.doc.settings.default_tab;
+    run(&mut s, "para.tabs", json!({"default": 72.0}));
+    assert_eq!(s.doc.settings.default_tab, 72.0);
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.settings.default_tab, before, "undo restores the default interval");
+    assert!(text(&s).contains("a\tb"), "only the setting was undone");
+    run(&mut s, "edit.redo", json!({}));
+    assert_eq!(s.doc.settings.default_tab, 72.0, "redo sets it again");
+}
+
+/// #320: exact border sides with a style, for paragraphs and page borders.
+#[test]
+fn border_sides_apply_exactly() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Boxed"}));
+    let side = json!({"style": "double", "width": 1.5, "color": "C00000"});
+    run(&mut s, "para.borders", json!({"sides": {"top": side, "bottom": side, "left": side, "right": side}}));
+    let b = s.doc.para_at(&s.sel.focus).and_then(|p| p.props.borders).unwrap();
+    for x in [b.top, b.bottom, b.left, b.right] {
+        let x = x.unwrap();
+        assert_eq!((x.style, x.width, x.color), (BorderStyle::Double, 1.5, Some(wordcraft_doc::props::Rgb(0xC0, 0, 0))));
+    }
+    assert!(b.between.is_none());
+    run(&mut s, "para.borders", json!({"sides": {}}));
+    assert!(!s.doc.para_at(&s.sel.focus).and_then(|p| p.props.borders).unwrap().any_visible());
+    run(&mut s, "design.pageBorders", json!({"sides": {"top": {"style": "dashed", "width": 3.0}}, "applyTo": "document"}));
+    let pb = s.doc.last_section.page_borders.unwrap();
+    assert_eq!(pb.top.map(|t| (t.style, t.width)), Some((BorderStyle::Dashed, 3.0)));
+    assert!(pb.left.is_none());
+    run(&mut s, "design.pageBorders", json!({"kind": "box", "style": "thick"}));
+    assert_eq!(s.doc.last_section.page_borders.unwrap().left.map(|t| t.style), Some(BorderStyle::Thick));
+    run(&mut s, "design.pageBorders", json!({"sides": {}}));
+    assert!(s.doc.last_section.page_borders.is_none());
+}
+
+/// Encrypt with Password (#55): a document saved with a password opens only with it, keeps it
+/// for the next save, and saves unencrypted once the password is removed.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn password_protected_documents_round_trip() {
+    let dir = scratch_dir("password");
+    let path = dir.join("secret.docx");
+    let path_str = path.to_string_lossy().to_string();
+    let mut a = s();
+    run(&mut a, "document.setText", json!({"text": "Quarterly numbers"}));
+    let r = run(&mut a, "file.save", json!({"path": path_str, "password": "hunter2"}));
+    assert_eq!(r["encrypted"], true);
+    assert!(wordcraft_docx::is_encrypted(&std::fs::read(&path).unwrap()));
+    assert!(a.run("file.save", &json!({"path": dir.join("x.txt").to_string_lossy(), "password": "pw"})).is_err(), "only Word packages encrypt");
+
+    // No password, then a wrong one: clear errors, and the open document stays.
+    let mut t = s();
+    let e = t.run("file.open", &json!({"path": path_str})).unwrap_err().to_string();
+    assert!(crate::io::needs_password(&e), "{e}");
+    let e = t.run("file.open", &json!({"path": path_str, "password": "hunter3"})).unwrap_err().to_string();
+    assert!(crate::io::wrong_password(&e), "{e}");
+    assert!(t.path.is_none());
+
+    let r = run(&mut t, "file.open", json!({"path": path_str, "password": "hunter2"}));
+    assert_eq!(r["encrypted"], true);
+    assert_eq!(text(&t), "Quarterly numbers");
+    assert_eq!(run(&mut t, "file.info", json!({}))["encrypted"], true);
+    // Saving again keeps the password, as Word does.
+    run(&mut t, "text.insert", json!({"text": "Q3 "}));
+    run(&mut t, "file.save", json!({}));
+    let (doc, encrypted) = crate::io::open_path_with(&path, Some("hunter2")).unwrap();
+    assert!(encrypted && doc.plain_text(StoryRef::Body).contains("Q3"));
+
+    // Removing the password saves the document unencrypted.
+    assert!(t.run("file.encrypt", &json!({})).is_err());
+    assert!(t.run("file.encrypt", &json!({"password": "x".repeat(300)})).is_err());
+    t.dirty = false;
+    assert_eq!(run(&mut t, "file.encrypt", json!({"password": null}))["encrypted"], false);
+    assert!(t.dirty, "removing the password is a change to save");
+    run(&mut t, "file.save", json!({}));
+    assert!(crate::io::open_path(&path).unwrap().plain_text(StoryRef::Body).contains("Quarterly"));
+    // A password never shows in debug output.
+    assert_eq!(format!("{:?}", crate::io::Password::new("hunter2")), "Password(***)");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Shape Format › Shape Effects (#275): presets and custom values apply to the selected shape,
 /// an omitted key is kept, hostile numbers are clamped and each change is one undo step.
 #[test]

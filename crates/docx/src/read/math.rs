@@ -1,6 +1,8 @@
 //! Office Math (OMML, ECMA-376 Part 1 §22.1) → [`wordcraft_doc::math`] tree.
 
-use wordcraft_doc::math::{Arg, ColJc, FracKind, LimLoc, MAX_DEPTH, MNode, MRun, MScr, MSty, Math, MathJc, ScriptKind, merge_runs};
+use wordcraft_doc::math::{
+    Arg, BrkBin, BrkBinSub, ColJc, FracKind, LimLoc, MAX_DEPTH, MNode, MRun, MScr, MSty, Math, MathJc, MathProps, ScriptKind, merge_runs,
+};
 use wordcraft_doc::props::Rgb;
 
 use crate::xml::El;
@@ -18,6 +20,27 @@ pub fn para_jc(para: &El) -> MathJc {
         Some("center") => MathJc::Center,
         _ => MathJc::CenterGroup,
     }
+}
+
+/// The settings part's `m:mathPr`: how display equations wrap.
+pub fn read_math_pr(e: &El) -> MathProps {
+    let mut m = MathProps::default();
+    let pr = Some(e);
+    m.brk_bin = match val(pr, "m:brkBin") {
+        Some("after") => BrkBin::After,
+        Some("repeat") => BrkBin::Repeat,
+        _ => BrkBin::Before,
+    };
+    m.brk_bin_sub = match val(pr, "m:brkBinSub") {
+        Some("-+") => BrkBinSub::MinusPlus,
+        Some("+-") => BrkBinSub::PlusMinus,
+        _ => BrkBinSub::MinusMinus,
+    };
+    if let Some(v) = e.child("m:wrapIndent").and_then(|c| crate::units::tw(c, "m:val")).filter(|v| v.is_finite() && *v >= 0.0) {
+        m.wrap_indent = v.min(1584.0);
+    }
+    m.wrap_right = prop(pr, "m:wrapRight", false);
+    m
 }
 
 /// OMML on/off property: absent `m:val` = on.
@@ -251,6 +274,10 @@ fn run(r: &El) -> Option<MRun> {
         };
         out.nor = pr.child("m:nor").is_some_and(on);
         out.lit = pr.child("m:lit").is_some_and(on);
+        if let Some(b) = pr.child("m:brk") {
+            let aln = b.attr("m:alnAt").and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(0);
+            out.brk = Some(aln.min(255) as u8);
+        }
     }
     wrpr(r.child("w:rPr"), &mut out);
     Some(out)

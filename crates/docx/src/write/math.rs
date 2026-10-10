@@ -1,6 +1,8 @@
 //! [`wordcraft_doc::math`] tree → Office Math (OMML).
 
-use wordcraft_doc::math::{Arg, ColJc, FracKind, LimLoc, MAX_DEPTH, MNode, MRun, MScr, MSty, Math, MathJc, ScriptKind, parse_linear};
+use wordcraft_doc::math::{
+    Arg, BrkBin, BrkBinSub, ColJc, FracKind, LimLoc, MAX_DEPTH, MNode, MRun, MScr, MSty, Math, MathJc, MathProps, ScriptKind, parse_linear,
+};
 
 use crate::xml::W;
 
@@ -84,6 +86,30 @@ pub fn resolve_numbers(math: &Math, display: bool, counter: &mut u32) -> Option<
 fn wrap_ns(xml: &str) -> String {
     let decl: String = crate::xml::body_ns().iter().filter(|(k, _)| k.starts_with("xmlns:")).map(|(k, v)| format!(" {k}=\"{v}\"")).collect();
     format!("<w:x{decl}>{xml}</w:x>")
+}
+
+/// The settings part's `m:mathPr` (CT_MathPr order; `m:wrapIndent` and `m:wrapRight` are a choice).
+pub fn math_pr(w: &mut W, m: &MathProps) {
+    w.open("m:mathPr", &[]);
+    let bin = match m.brk_bin {
+        BrkBin::Before => "before",
+        BrkBin::After => "after",
+        BrkBin::Repeat => "repeat",
+    };
+    val(w, "m:brkBin", bin);
+    let sub = match m.brk_bin_sub {
+        BrkBinSub::MinusMinus => "--",
+        BrkBinSub::MinusPlus => "-+",
+        BrkBinSub::PlusMinus => "+-",
+    };
+    val(w, "m:brkBinSub", sub);
+    if m.wrap_right {
+        w.empty("m:wrapRight", &[]);
+    } else {
+        let indent = if m.wrap_indent.is_finite() { m.wrap_indent.clamp(0.0, 1584.0) } else { wordcraft_doc::math::DEFAULT_WRAP_INDENT };
+        val(w, "m:wrapIndent", &crate::units::twips(indent));
+    }
+    w.close("m:mathPr");
 }
 
 fn val(w: &mut W, name: &str, v: &str) {
@@ -382,7 +408,7 @@ fn run(w: &mut W, r: &MRun) {
         MScr::SansSerif => Some("sans-serif"),
         MScr::Monospace => Some("monospace"),
     };
-    if sty.is_some() || scr.is_some() || r.nor || r.lit {
+    if sty.is_some() || scr.is_some() || r.nor || r.lit || r.brk.is_some() {
         w.open("m:rPr", &[]);
         if r.lit {
             w.empty("m:lit", &[]);
@@ -395,6 +421,11 @@ fn run(w: &mut W, r: &MRun) {
         }
         if let Some(s) = sty {
             val(w, "m:sty", s);
+        }
+        match r.brk {
+            Some(0) => w.empty("m:brk", &[]),
+            Some(n) => w.empty("m:brk", &[("m:alnAt", &n.to_string())]),
+            None => {}
         }
         w.close("m:rPr");
     }

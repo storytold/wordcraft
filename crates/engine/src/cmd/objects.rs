@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use wordcraft_doc::para::{Float, InlineObject, Wrap};
 use wordcraft_doc::props::Rgb;
 use wordcraft_doc::{Pos, StoryRef};
+use wordcraft_geom::Spin;
 
 use super::sel_result;
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
@@ -198,25 +199,30 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"color"?: "RRGGBB", "width"?: px}"#)
         .when(has_picture),
         CommandSpec::new("arrange.rotate", "Rotate", "Layout › Arrange", |s, v| {
-            let how = p::str(v, "direction").unwrap_or("right").to_string();
-            let swap = how == "right" || how == "left";
-            let r = adjust(s, move |img| match how.as_str() {
-                "left" => img.rotate270(),
-                "flipH" => img.fliph(),
-                "flipV" => img.flipv(),
-                _ => img.rotate90(),
-            })?;
-            if swap {
-                with_obj(s, |o| {
-                    if let InlineObject::Image { w, h, .. } = o {
-                        std::mem::swap(w, h);
-                    }
-                })?;
-            }
-            Ok(r)
+            // Turns and flips are the object's angle and mirroring (DrawingML `a:xfrm`): the
+            // picture's pixels are never rewritten. A flip mirrors what is on the page, so a
+            // rotated object's angle reverses too.
+            let by = match p::str(v, "direction").unwrap_or("right") {
+                "left" => Spin::new(270.0, false, false),
+                "flipHorizontal" | "flipH" => Spin::new(0.0, true, false),
+                "flipVertical" | "flipV" => Spin::new(0.0, false, true),
+                "right" => Spin::new(90.0, false, false),
+                other => return Err(CmdError::Params(format!("unknown direction `{other}`"))),
+            };
+            with_float(s, |f| f.set_spin(f.spin().within(by)))
         })
-        .params(r#"{"direction": "right|left|flipH|flipV"}"#)
-        .when(has_picture),
+        .params(r#"{"direction": "right|left|flipVertical|flipHorizontal"}  (turns 90° or mirrors the selected picture, shape or text box; its pixels are kept)"#)
+        .when(has_movable),
+        CommandSpec::new("arrange.rotation", "Rotation", "Layout › Arrange", |s, v| {
+            let deg = p::req_f32(v, "degrees")?;
+            let (fh, fv) = (p::bool(v, "flipH"), p::bool(v, "flipV"));
+            with_float(s, |f| {
+                let cur = f.spin();
+                f.set_spin(Spin::new(deg, fh.unwrap_or(cur.flip_h), fv.unwrap_or(cur.flip_v)));
+            })
+        })
+        .params(r#"{"degrees": number, "flipH"?: bool, "flipV"?: bool}  (the exact angle, clockwise, of the selected picture, shape or text box; normalised to 0–360)"#)
+        .when(has_movable),
         CommandSpec::new("arrange.wrap", "Wrap Text", "Layout › Arrange", |s, v| {
             let wrap: Wrap = serde_json::from_value(v.get("wrap").cloned().unwrap_or(json!("square"))).map_err(|e| CmdError::Params(e.to_string()))?;
             with_float(s, |f| f.wrap = wrap)
@@ -1154,7 +1160,8 @@ mod tests {
         s.run("picture.removeBackground", &json!({})).unwrap();
         assert!(s.doc.media.len() > before);
         s.run("arrange.rotate", &json!({"direction": "right"})).unwrap();
-        assert_eq!(obj_size(&selected(&s).unwrap().1), (50.0, 100.0));
+        // The frame keeps its size; it turns.
+        assert_eq!(obj_size(&selected(&s).unwrap().1), (100.0, 50.0));
         s.run("picture.reset", &json!({})).unwrap();
         s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
         s.run("arrange.position", &json!({"preset": "topRight"})).unwrap();
@@ -1164,6 +1171,45 @@ mod tests {
         s.run("select.collapse", &json!({"end": true})).unwrap();
         s.run("text.insert", &json!({"text": "x"})).unwrap();
         assert!(s.run("picture.crop", &json!({"left": 0.1})).is_err());
+    }
+
+    /// #332: Rotate and Flip turn the frame (an angle and mirroring), never the pixels; an exact
+    /// angle is normalised; each is one undo step; the rotated frame takes its rotated room.
+    #[test]
+    fn rotate_and_flip_turn_the_frame_not_the_pixels() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        let data = super::super::insert::base64_encode(&png(20, 10));
+        s.run("insert.picture", &json!({"data": data, "width": 200})).unwrap();
+        let (pos, before) = selected(&s).unwrap();
+        let InlineObject::Image { media, .. } = &before else { panic!("a picture") };
+        let (media, media_count) = (media.clone(), s.doc.media.len());
+        let spin = |s: &Session| selected(s).unwrap().1.frame().unwrap().2.spin();
+        s.run("arrange.rotate", &json!({"direction": "right"})).unwrap();
+        assert_eq!(spin(&s).deg, 90.0);
+        let (_, o) = selected(&s).unwrap();
+        assert!(matches!(&o, InlineObject::Image { media: m, w: 200.0, h: 100.0, .. } if *m == media), "{o:?}");
+        assert_eq!(s.doc.media.len(), media_count, "no new bitmap");
+        // Inline, the line makes room for the turned picture: 100 wide, 200 tall.
+        let r = s.layout().object(&pos, 0).unwrap();
+        let b = r.bounds();
+        assert!((b.w - 100.0).abs() < 0.5 && (b.h - 200.0).abs() < 0.5, "{b:?}");
+        s.run("arrange.rotate", &json!({"direction": "left"})).unwrap();
+        s.run("arrange.rotate", &json!({"direction": "left"})).unwrap();
+        assert_eq!(spin(&s).deg, 270.0);
+        // A flip mirrors the page view: the angle reverses.
+        s.run("arrange.rotate", &json!({"direction": "flipHorizontal"})).unwrap();
+        assert_eq!(spin(&s), wordcraft_geom::Spin::new(90.0, true, false));
+        s.run("arrange.rotation", &json!({"degrees": -30.0})).unwrap();
+        assert_eq!(spin(&s), wordcraft_geom::Spin::new(330.0, true, false));
+        assert!(s.run("arrange.rotation", &json!({"degrees": "NaN"})).is_err());
+        assert!(s.run("arrange.rotate", &json!({"direction": "sideways"})).is_err());
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(spin(&s), wordcraft_geom::Spin::new(90.0, true, false));
+        // Shapes and text boxes turn too.
+        s.run("select.collapse", &json!({"end": true})).unwrap();
+        s.run("insert.shape", &json!({"kind": "textBox"})).unwrap();
+        s.run("arrange.rotation", &json!({"degrees": 45})).unwrap();
+        assert_eq!(spin(&s).deg, 45.0);
     }
 
     /// The page rectangle of the object at `pos`.

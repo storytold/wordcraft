@@ -1,13 +1,15 @@
 //! Dialogs: Font, Paragraph, Find & Replace, Go To, Insert Table, Page Setup, Link, Bookmark,
 //! Word Count, Zoom, Watermark, New/Modify Style, Manage Styles, New/Modify Table Style, Table
-//! Properties, Command search, Paste Special, About, Save Changes, and the mail-merge Recipient
-//! List, Insert Merge Field, Find Recipient, merge rules, Match Fields and Check for Errors. Every
-//! dialog ends by running a command (or shows one's result), so agents get the same result without
-//! the dialog.
+//! Properties, Command search, Paste Special, About, Save Changes, the password to open a
+//! document and Encrypt with Password, and the mail-merge Recipient List, Insert Merge Field, Find
+//! Recipient, merge rules, Match Fields and Check for Errors. Every dialog ends by running a
+//! command (or shows one's result), so agents get the same result without the dialog.
 
 use egui::{Sense, Ui, vec2};
 use serde::Serialize;
 use serde_json::{Value, json};
+
+use wordcraft_engine::Password;
 
 use crate::WordApp;
 use crate::theme::{Tokens, semibold};
@@ -55,6 +57,14 @@ pub enum Dialog {
         /// `asian` when the dialog opened: OK sets only the flags that changed.
         #[serde(skip)]
         asian_was: [bool; 6],
+    },
+    /// Tabs (#320).
+    Tabs {
+        form: Box<crate::dialogs_para::TabsForm>,
+    },
+    /// Borders and Shading (#320).
+    Borders {
+        form: Box<crate::dialogs_para::BordersForm>,
     },
     Find {
         query: String,
@@ -140,6 +150,8 @@ pub enum Dialog {
     Commands {
         query: String,
     },
+    /// Columns, Symbol and Field ([`crate::dialogs_insert`], #321).
+    Insert(Box<crate::dialogs_insert::InsertDialog>),
     /// Paste Special: the clipboard's formats and the chosen one. The clipboard payload stays out
     /// of the serialized dialog state (it can be megabytes).
     PasteSpecial {
@@ -207,6 +219,33 @@ pub enum Dialog {
         form: Box<TableForm>,
         #[serde(skip)]
         basis: Box<TableForm>,
+    },
+    /// Opening a password-protected document (#55): the password, then `file.open` with
+    /// `params` again. The password is never serialised or printed.
+    Password {
+        name: String,
+        #[serde(skip)]
+        params: Value,
+        #[serde(skip)]
+        password: Password,
+        message: String,
+    },
+    /// File › Info › Protect Document › Encrypt with Password: a password typed twice
+    /// (`file.encrypt`); left empty, it removes the password.
+    EncryptPassword {
+        #[serde(skip)]
+        password: Password,
+        #[serde(skip)]
+        confirm: Password,
+        message: String,
+    },
+    /// Home › Paragraph › Multilevel List › Define New Multilevel List (#328).
+    DefineList {
+        form: Box<crate::dialogs_lists::ListForm>,
+    },
+    /// Review › Tracking › Track Changes Options (#328).
+    TrackOptions {
+        form: Box<crate::dialogs_lists::TrackForm>,
     },
 }
 
@@ -544,7 +583,7 @@ fn region_changes(r: &TableRegion, basis: &TableRegion) -> Value {
 }
 
 /// A colour menu: a swatch with the colour grid and No Color. `value` is hex, empty for none.
-fn color_menu(ui: &mut Ui, theme: &[wordcraft_doc::Rgb], value: &mut String) {
+pub(crate) fn color_menu(ui: &mut Ui, theme: &[wordcraft_doc::Rgb], value: &mut String) {
     let c = wordcraft_doc::Rgb::parse(value);
     ui.horizontal(|ui| {
         let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
@@ -577,6 +616,8 @@ impl Dialog {
         match self {
             Dialog::Font { .. } => "font",
             Dialog::Paragraph { .. } => "paragraph",
+            Dialog::Tabs { .. } => "tabs",
+            Dialog::Borders { .. } => "borders",
             Dialog::Find { replace_mode: false, .. } => "find",
             Dialog::Find { .. } => "replace",
             Dialog::Goto { .. } => "goto",
@@ -593,6 +634,7 @@ impl Dialog {
             Dialog::TableStyle { id: None, .. } => "newTableStyle",
             Dialog::TableStyle { .. } => "modifyTableStyle",
             Dialog::Commands { .. } => "commands",
+            Dialog::Insert(d) => d.name(),
             Dialog::PasteSpecial { .. } => "pasteSpecial",
             Dialog::About { .. } => "about",
             Dialog::SaveChanges { .. } => "saveChanges",
@@ -604,6 +646,10 @@ impl Dialog {
             Dialog::MatchFields { .. } => "matchFields",
             Dialog::CheckErrors { .. } => "checkErrors",
             Dialog::TableProperties { .. } => "tableProperties",
+            Dialog::Password { .. } => "password",
+            Dialog::EncryptPassword { .. } => "encryptPassword",
+            Dialog::DefineList { .. } => "defineList",
+            Dialog::TrackOptions { .. } => "trackChangesOptions",
         }
     }
 
@@ -624,6 +670,9 @@ impl Dialog {
     }
 
     pub fn open(name: &str, app: &mut WordApp) -> Option<Dialog> {
+        if let Some(d) = crate::dialogs_insert::open(name, app) {
+            return Some(Dialog::Insert(Box::new(d)));
+        }
         let st = app.session.run("format.state", &json!({})).unwrap_or_default();
         let s = |k: &str| st.get(k).and_then(Value::as_str).unwrap_or("").to_string();
         let b = |k: &str| st.get(k).and_then(Value::as_bool).unwrap_or(false);
@@ -668,6 +717,15 @@ impl Dialog {
                     asian: [rp.kinsoku, rp.word_wrap, rp.overflow_punct, rp.top_line_punct, rp.auto_space_de, rp.auto_space_dn],
                     asian_was: [rp.kinsoku, rp.word_wrap, rp.overflow_punct, rp.top_line_punct, rp.auto_space_de, rp.auto_space_dn],
                 }
+            }
+            "tabs" => Dialog::Tabs { form: Box::new(crate::dialogs_para::TabsForm::read(app)?) },
+            "borders" | "pageBorders" | "shading" => {
+                let tab = match name {
+                    "pageBorders" => 1,
+                    "shading" => 2,
+                    _ => 0,
+                };
+                Dialog::Borders { form: Box::new(crate::dialogs_para::BordersForm::read(app, tab)?) }
             }
             "find" | "replace" => Dialog::Find {
                 query: if app.session.sel.is_collapsed() { app.session.find.query.clone() } else { app.session.selected_text() },
@@ -736,6 +794,7 @@ impl Dialog {
                 Dialog::InsertMergeField { field: fields.first().cloned().unwrap_or_default(), fields }
             }
             "findRecipient" => Dialog::FindRecipient { text: String::new(), message: String::new() },
+            "encryptPassword" => Dialog::EncryptPassword { password: Password::default(), confirm: Password::default(), message: String::new() },
             "ruleIf" | "ruleSkipIf" => {
                 let fields = app.session.merge.headers.clone();
                 Dialog::MergeRule {
@@ -751,6 +810,8 @@ impl Dialog {
                 let id = if name == "matchFields" { "mailings.matchFields" } else { "mailings.checkErrors" };
                 return Self::report(id, &app.session.run(id, &json!({})).unwrap_or_default());
             }
+            "defineList" => Dialog::DefineList { form: Box::new(crate::dialogs_lists::ListForm::read(app)) },
+            "trackChangesOptions" => Dialog::TrackOptions { form: Box::new(crate::dialogs_lists::TrackForm::read(app)) },
             _ => return None,
         })
     }
@@ -839,6 +900,8 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     let title = match &d {
         Dialog::Font { .. } => "Font",
         Dialog::Paragraph { .. } => "Paragraph",
+        Dialog::Tabs { .. } => "Tabs",
+        Dialog::Borders { .. } => "Borders and Shading",
         Dialog::Find { replace_mode: false, .. } => "Find",
         Dialog::Find { .. } => "Find and Replace",
         Dialog::Goto { .. } => "Go To",
@@ -855,6 +918,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::TableStyle { id: None, .. } => "New Table Style",
         Dialog::TableStyle { .. } => "Modify Table Style",
         Dialog::Commands { .. } => "Search Commands",
+        Dialog::Insert(d) => d.title(),
         Dialog::PasteSpecial { .. } => "Paste Special",
         Dialog::About { .. } => "About WordCraft",
         Dialog::SaveChanges { .. } => "WordCraft",
@@ -866,6 +930,10 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::MatchFields { .. } => "Match Fields",
         Dialog::CheckErrors { .. } => "Check for Errors",
         Dialog::TableProperties { .. } => "Table Properties",
+        Dialog::Password { .. } => "Password",
+        Dialog::EncryptPassword { .. } => "Encrypt with Password",
+        Dialog::DefineList { .. } => "Define New Multilevel List",
+        Dialog::TrackOptions { .. } => "Track Changes Options",
     };
     egui::Window::new(tl!(title))
         .id(egui::Id::new(("dialog", title)))
@@ -884,7 +952,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     }
 }
 
-fn buttons(ui: &mut Ui, ok: &str) -> (bool, bool) {
+pub(crate) fn buttons(ui: &mut Ui, ok: &str) -> (bool, bool) {
     let mut r = (false, false);
     ui.add_space(8.0);
     ui.horizontal(|ui| {
@@ -1069,13 +1137,21 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                     ui.checkbox(dn, tl!("Add space between Asian text and numbers"));
                 }
             }
+            ui.add_space(6.0);
+            let tabs = ui.button(tl!("Tabs…")).clicked();
             let (ok, cancel) = buttons(ui, tl!("OK"));
-            if ok {
+            if ok || tabs {
                 apply_paragraph(app, *rtl, align, *left, *right, *first, *before, *after, *line, [*keep_next, *keep_lines, *page_break, *widow]);
                 apply_asian(app, *asian, *asian_was);
             }
-            ok || cancel
+            // Tabs… keeps what was set here and moves on to the Tabs dialog.
+            if tabs {
+                app.dialog = Dialog::open("tabs", app);
+            }
+            ok || cancel || tabs
         }
+        Dialog::Tabs { form } => crate::dialogs_para::tabs(app, ui, form),
+        Dialog::Borders { form } => crate::dialogs_para::borders(app, ui, form),
         Dialog::Find { query, replace, match_case, whole_word, regex, replace_mode, message } => {
             ui.horizontal(|ui| {
                 if ui.selectable_label(!*replace_mode, tl!("Find")).clicked() {
@@ -1461,6 +1537,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             ok || cancel
         }
+        Dialog::Insert(f) => crate::dialogs_insert::body(app, ui, f),
         Dialog::Commands { query } => {
             let r = ui.add(egui::TextEdit::singleline(query).hint_text(tl!("Type a command, e.g. \"insert table\"")).desired_width(380.0));
             r.request_focus();
@@ -1611,6 +1688,88 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             cancel
         }
+        Dialog::Password { name, params, password, message } => {
+            ui.label(crate::i18n::fmt(tl!("{name} is protected with a password."), &[("name", name)]));
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label(tl!("Password:"));
+                let r = ui.add(egui::TextEdit::singleline(password.as_mut_string()).password(true).desired_width(220.0));
+                if password.is_empty() && !r.has_focus() {
+                    r.request_focus();
+                }
+            });
+            if !message.is_empty() {
+                ui.label(egui::RichText::new(message.as_str()).small().color(ui.visuals().error_fg_color));
+            }
+            let (ok, cancel) = buttons(ui, tl!("OK"));
+            if ok && !password.is_empty() {
+                let mut p = params.clone();
+                if let Some(o) = p.as_object_mut() {
+                    o.insert("password".into(), json!(password.as_str()));
+                }
+                // `execute`, not `run`: Save Changes was asked when the open began.
+                match app.execute("file.open", p) {
+                    Ok(_) => {
+                        app.ui.backstage = false;
+                        return true;
+                    }
+                    Err(e) if wordcraft_engine::io::wrong_password(&e) => {
+                        *message = tl!("That password isn't right. Check it (passwords are case-sensitive) and try again.").to_string();
+                        password.as_mut_string().clear();
+                    }
+                    Err(e) => *message = e,
+                }
+            }
+            cancel
+        }
+        Dialog::EncryptPassword { password, confirm, message } => {
+            ui.label(tl!("Anyone who opens the document will need this password."));
+            ui.add_space(4.0);
+            egui::Grid::new("encrypt_password").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+                ui.label(tl!("Password:"));
+                let r = ui.add(egui::TextEdit::singleline(password.as_mut_string()).password(true).desired_width(220.0));
+                if password.is_empty() && confirm.is_empty() && !r.has_focus() {
+                    r.request_focus();
+                }
+                ui.end_row();
+                ui.label(tl!("Confirm password:"));
+                ui.add(egui::TextEdit::singleline(confirm.as_mut_string()).password(true).desired_width(220.0));
+                ui.end_row();
+            });
+            ui.label(
+                egui::RichText::new(tl!(
+                    "Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password."
+                ))
+                .small()
+                .weak(),
+            );
+            if !message.is_empty() {
+                ui.label(egui::RichText::new(message.as_str()).small().color(ui.visuals().error_fg_color));
+            }
+            let (ok, cancel) = buttons(ui, tl!("OK"));
+            if ok {
+                if password != confirm {
+                    *message = tl!("The passwords don't match.").to_string();
+                    confirm.as_mut_string().clear();
+                    return false;
+                }
+                let pw = if password.is_empty() { Value::Null } else { json!(password.as_str()) };
+                match app.run("file.encrypt", json!({"password": pw})) {
+                    Ok(_) => {
+                        app.status(if password.is_empty() {
+                            tl!("The password is removed. Save the document to keep the change.")
+                        } else {
+                            tl!("The document will be saved with a password. Save it to protect it.")
+                        });
+                        return true;
+                    }
+                    Err(e) => *message = e,
+                }
+            }
+            cancel
+        }
+        Dialog::DefineList { form } => crate::dialogs_lists::define_list(app, ui, form),
+        Dialog::TrackOptions { form } => crate::dialogs_lists::track_options(app, ui, form),
         Dialog::FindRecipient { text, message } => {
             ui.horizontal(|ui| {
                 ui.label(tl!("Find:"));
