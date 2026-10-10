@@ -210,6 +210,10 @@ pub struct Session {
     pub math_latex: bool,
     /// Text typed into equations is normal (non-math) text.
     pub math_normal_text: bool,
+    /// The password Word documents are saved with (File › Info › Protect Document › Encrypt with
+    /// Password, `file.encrypt`); `None` saves them unencrypted. Kept from a password-protected
+    /// file that was opened, cleared when the document is replaced.
+    pub password: Option<crate::io::Password>,
 }
 
 /// The equation being edited.
@@ -283,6 +287,7 @@ impl Session {
             math_normal_text: false,
             prefs: Prefs::default(),
             read_aloud: Default::default(),
+            password: None,
         }
     }
 
@@ -413,6 +418,7 @@ impl Session {
         self.document_id = self.document_id.wrapping_add(1);
         self.doc = doc;
         self.doc.ensure_nonempty();
+        self.password = None;
         self.sel = Selection::caret(self.doc.start_of(StoryRef::Body));
         self.pending = None;
         self.reset_history();
@@ -481,6 +487,8 @@ impl Session {
             math: _,
             math_latex: _,
             math_normal_text: _,
+            // The save password, like the file path: not an edit to the document.
+            password: _,
         } = self;
         let head = if history.len() + SNAPSHOT_HEAD > MAX_UNDO { history.iter().take(SNAPSHOT_HEAD).cloned().collect() } else { Vec::new() };
         EditSnapshot {

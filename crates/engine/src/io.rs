@@ -36,9 +36,63 @@ pub fn is_word_package(ext: &str) -> bool {
     wordcraft_docx::Flavor::from_ext(ext).is_some()
 }
 
+/// A document password: wiped from memory when dropped, never printed (`Debug` shows `***`).
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct Password(zeroize::Zeroizing<String>);
+
+impl Password {
+    pub fn new(s: &str) -> Password {
+        Password(zeroize::Zeroizing::new(s.to_string()))
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+    /// The text, for a password box to edit in place.
+    pub fn as_mut_string(&mut self) -> &mut String {
+        &mut self.0
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl std::fmt::Debug for Password {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Password(***)")
+    }
+}
+
+/// Does this open error mean the file is password-protected and no password was given?
+pub fn needs_password(err: &str) -> bool {
+    err.contains(wordcraft_docx::PASSWORD_REQUIRED)
+}
+
+/// Does this open error mean the password given was wrong?
+pub fn wrong_password(err: &str) -> bool {
+    err.contains(wordcraft_docx::WRONG_PASSWORD)
+}
+
+/// Can files with this extension be saved with a password (Word's packages)?
+pub fn can_encrypt(name: &str) -> bool {
+    is_word_package(&ext_of(name))
+}
+
 /// Parse a document from bytes; `name` gives the format by extension.
 pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<Document, String> {
+    open_bytes_with(name, bytes, None).map(|(doc, _)| doc)
+}
+
+/// [`open_bytes`] for a file that may be password-protected: a Word document encrypted with a
+/// password ([MS-OFFCRYPTO] agile encryption) is decrypted with `password` first. Also says
+/// whether the file was encrypted. Without the password needed the error satisfies
+/// [`needs_password`]; with a wrong one, [`wrong_password`].
+pub fn open_bytes_with(name: &str, bytes: &[u8], password: Option<&str>) -> Result<(Document, bool), String> {
     let ext = ext_of(name);
+    if matches!(ext.as_str(), "docx" | "docm" | "dotx" | "dotm" | "doc" | "dot") && wordcraft_docx::is_encrypted(bytes) {
+        let mut doc = wordcraft_docx::read_with_password(bytes, password).map_err(|e| e.to_string())?;
+        doc.ensure_nonempty();
+        return Ok((doc, true));
+    }
     let mut doc = match ext.as_str() {
         "txt" | "text" | "" => Document::from_text(&decode_text(bytes)),
         "json" => serde_json::from_slice::<Document>(bytes).map_err(|e| format!("{name}: {e}"))?,
@@ -48,7 +102,7 @@ pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<Document, String> {
         },
     };
     doc.ensure_nonempty();
-    Ok(doc)
+    Ok((doc, false))
 }
 
 /// Serialise a document; `name` gives the format by extension.
@@ -64,8 +118,23 @@ pub fn save_bytes(name: &str, doc: &Document) -> Result<Vec<u8>, String> {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+/// [`save_bytes`], encrypted with `password` when there is one and the format is a Word package
+/// (other formats are copies and are written as they are).
+pub fn save_bytes_with(name: &str, doc: &Document, password: Option<&str>) -> Result<Vec<u8>, String> {
+    let bytes = save_bytes(name, doc)?;
+    match password {
+        Some(pw) if can_encrypt(name) => wordcraft_docx::encrypt(&bytes, pw).map_err(|e| e.to_string()),
+        _ => Ok(bytes),
+    }
+}
+
 pub fn open_path(path: &std::path::Path) -> Result<Document, String> {
+    open_path_with(path, None).map(|(doc, _)| doc)
+}
+
+/// [`open_path`] for a file that may be password-protected (see [`open_bytes_with`]).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn open_path_with(path: &std::path::Path, password: Option<&str>) -> Result<(Document, bool), String> {
     let meta = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
     if meta.len() > 2 << 30 {
         return Err(format!("{}: file is larger than 2 GB", path.display()));
@@ -77,9 +146,9 @@ pub fn open_path(path: &std::path::Path) -> Result<Document, String> {
         let images = LocalImages::new(path.parent().unwrap_or(std::path::Path::new("")));
         let mut doc = wordcraft_formats::html::import_with(&wordcraft_formats::html::decode(&bytes), &|src| images.load(src));
         doc.ensure_nonempty();
-        return Ok(doc);
+        return Ok((doc, false));
     }
-    open_bytes(&name, &bytes)
+    open_bytes_with(&name, &bytes, password)
 }
 
 /// The pictures an HTML file names by a path relative to its folder.
@@ -186,13 +255,18 @@ fn read_regular_file(path: &std::path::Path, limit: u64) -> Option<Vec<u8>> {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn open_path(path: &std::path::Path) -> Result<Document, String> {
+pub fn open_path_with(path: &std::path::Path, _password: Option<&str>) -> Result<(Document, bool), String> {
     Err(format!("{}: files are opened through the browser on the web", path.display()))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub fn save_path(path: &std::path::Path, doc: &Document) -> Result<(), String> {
-    let bytes = save_bytes(&path.to_string_lossy(), doc)?;
+    save_path_with(path, doc, None)
+}
+
+/// [`save_path`], encrypted with `password` as [`save_bytes_with`] does.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn save_path_with(path: &std::path::Path, doc: &Document, password: Option<&str>) -> Result<(), String> {
+    let bytes = save_bytes_with(&path.to_string_lossy(), doc, password)?;
     // Write atomically: temp file next to the target, then rename.
     let tmp = path.with_extension(format!("{}.tmp", ext_of(&path.to_string_lossy())));
     std::fs::write(&tmp, &bytes).map_err(|e| format!("{}: {e}", tmp.display()))?;
@@ -200,7 +274,7 @@ pub fn save_path(path: &std::path::Path, doc: &Document) -> Result<(), String> {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn save_path(path: &std::path::Path, _doc: &Document) -> Result<(), String> {
+pub fn save_path_with(path: &std::path::Path, _doc: &Document, _password: Option<&str>) -> Result<(), String> {
     Err(format!("{}: files are saved through the browser on the web", path.display()))
 }
 

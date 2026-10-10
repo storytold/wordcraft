@@ -1,12 +1,14 @@
 //! Dialogs: Font, Paragraph, Find & Replace, Go To, Insert Table, Page Setup, Link, Bookmark,
-//! Word Count, Zoom, Watermark, New/Modify Style, Command search, About, Save Changes, and the
-//! mail-merge Recipient List, Insert Merge Field, Find Recipient, merge rules, Match Fields and
+//! Word Count, Zoom, Watermark, New/Modify Style, Command search, About, Save Changes, the
+//! password to open a document and Encrypt with Password, and the mail-merge Recipient List, Insert Merge Field, Find Recipient, merge rules, Match Fields and
 //! Check for Errors. Every dialog ends by running a command (or shows one's result), so agents get
 //! the same result without the dialog.
 
 use egui::{Sense, Ui, vec2};
 use serde::Serialize;
 use serde_json::{Value, json};
+
+use wordcraft_engine::Password;
 
 use crate::WordApp;
 use crate::theme::{Tokens, semibold};
@@ -157,6 +159,25 @@ pub enum Dialog {
         unknown: Vec<String>,
         records: u64,
     },
+    /// Opening a password-protected document (#55): the password, then `file.open` with
+    /// `params` again. The password is never serialised or printed.
+    Password {
+        name: String,
+        #[serde(skip)]
+        params: Value,
+        #[serde(skip)]
+        password: Password,
+        message: String,
+    },
+    /// File › Info › Protect Document › Encrypt with Password: a password typed twice
+    /// (`file.encrypt`); left empty, it removes the password.
+    EncryptPassword {
+        #[serde(skip)]
+        password: Password,
+        #[serde(skip)]
+        confirm: Password,
+        message: String,
+    },
 }
 
 /// The address parts Match Fields lists, with their keys in `mailings.matchFields`' `address`.
@@ -238,6 +259,8 @@ impl Dialog {
             Dialog::MergeRule { .. } => "ruleIf",
             Dialog::MatchFields { .. } => "matchFields",
             Dialog::CheckErrors { .. } => "checkErrors",
+            Dialog::Password { .. } => "password",
+            Dialog::EncryptPassword { .. } => "encryptPassword",
         }
     }
 
@@ -347,6 +370,7 @@ impl Dialog {
                 Dialog::InsertMergeField { field: fields.first().cloned().unwrap_or_default(), fields }
             }
             "findRecipient" => Dialog::FindRecipient { text: String::new(), message: String::new() },
+            "encryptPassword" => Dialog::EncryptPassword { password: Password::default(), confirm: Password::default(), message: String::new() },
             "ruleIf" | "ruleSkipIf" => {
                 let fields = app.session.merge.headers.clone();
                 Dialog::MergeRule {
@@ -459,6 +483,8 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::MergeRule { .. } => "If…Then…Else",
         Dialog::MatchFields { .. } => "Match Fields",
         Dialog::CheckErrors { .. } => "Check for Errors",
+        Dialog::Password { .. } => "Password",
+        Dialog::EncryptPassword { .. } => "Encrypt with Password",
     };
     egui::Window::new(tl!(title))
         .id(egui::Id::new(("dialog", title)))
@@ -999,6 +1025,86 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             if ok && !field.trim().is_empty() {
                 let _ = app.run("mailings.insertField", json!({"field": field.trim()}));
                 return true;
+            }
+            cancel
+        }
+        Dialog::Password { name, params, password, message } => {
+            ui.label(crate::i18n::fmt(tl!("{name} is protected with a password."), &[("name", name)]));
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label(tl!("Password:"));
+                let r = ui.add(egui::TextEdit::singleline(password.as_mut_string()).password(true).desired_width(220.0));
+                if password.is_empty() && !r.has_focus() {
+                    r.request_focus();
+                }
+            });
+            if !message.is_empty() {
+                ui.label(egui::RichText::new(message.as_str()).small().color(ui.visuals().error_fg_color));
+            }
+            let (ok, cancel) = buttons(ui, tl!("OK"));
+            if ok && !password.is_empty() {
+                let mut p = params.clone();
+                if let Some(o) = p.as_object_mut() {
+                    o.insert("password".into(), json!(password.as_str()));
+                }
+                // `execute`, not `run`: Save Changes was asked when the open began.
+                match app.execute("file.open", p) {
+                    Ok(_) => {
+                        app.ui.backstage = false;
+                        return true;
+                    }
+                    Err(e) if wordcraft_engine::io::wrong_password(&e) => {
+                        *message = tl!("That password isn't right. Check it (passwords are case-sensitive) and try again.").to_string();
+                        password.as_mut_string().clear();
+                    }
+                    Err(e) => *message = e,
+                }
+            }
+            cancel
+        }
+        Dialog::EncryptPassword { password, confirm, message } => {
+            ui.label(tl!("Anyone who opens the document will need this password."));
+            ui.add_space(4.0);
+            egui::Grid::new("encrypt_password").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+                ui.label(tl!("Password:"));
+                let r = ui.add(egui::TextEdit::singleline(password.as_mut_string()).password(true).desired_width(220.0));
+                if password.is_empty() && confirm.is_empty() && !r.has_focus() {
+                    r.request_focus();
+                }
+                ui.end_row();
+                ui.label(tl!("Confirm password:"));
+                ui.add(egui::TextEdit::singleline(confirm.as_mut_string()).password(true).desired_width(220.0));
+                ui.end_row();
+            });
+            ui.label(
+                egui::RichText::new(tl!(
+                    "Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password."
+                ))
+                .small()
+                .weak(),
+            );
+            if !message.is_empty() {
+                ui.label(egui::RichText::new(message.as_str()).small().color(ui.visuals().error_fg_color));
+            }
+            let (ok, cancel) = buttons(ui, tl!("OK"));
+            if ok {
+                if password != confirm {
+                    *message = tl!("The passwords don't match.").to_string();
+                    confirm.as_mut_string().clear();
+                    return false;
+                }
+                let pw = if password.is_empty() { Value::Null } else { json!(password.as_str()) };
+                match app.run("file.encrypt", json!({"password": pw})) {
+                    Ok(_) => {
+                        app.status(if password.is_empty() {
+                            tl!("The password is removed. Save the document to keep the change.")
+                        } else {
+                            tl!("The document will be saved with a password. Save it to protect it.")
+                        });
+                        return true;
+                    }
+                    Err(e) => *message = e,
+                }
             }
             cancel
         }

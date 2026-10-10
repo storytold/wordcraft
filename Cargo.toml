@@ -51,6 +51,14 @@ krilla = { version = "0.8", features = ["pdf"] }
 quick-xml = "0.38"
 zip = { version = "3", default-features = false, features = ["deflate"] }
 cfb = "0.15"
+# Password-protected (agile-encrypted) Word documents: pure-Rust RustCrypto primitives.
+aes = "0.9"
+sha1 = "0.11"
+sha2 = "0.11"
+hmac = "0.13"
+base64 = "0.22"
+getrandom = "0.3"
+zeroize = "1"
 
 # ui
 egui = "0.36"
