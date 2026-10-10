@@ -117,13 +117,34 @@ Every screenshot below is WordCraft itself, rendered offscreen by its own UI tes
 | **References** | Table of contents, footnotes and endnotes, citations and bibliography (APA, MLA, Chicago, IEEE), captions, table of figures, cross-references, index, table of authorities |
 | **Review** | Spelling and grammar with suggestions, thesaurus, word count, comments in margin balloons or a pane, track changes, accept/reject, compare documents, restrict editing, accessibility checker, document inspector |
 | **Mailings** | Mail merge from CSV, merge fields, address block, greeting line, rules, preview, finish to a document; envelopes and labels |
-| **View** | Print layout, web layout, draft, read mode, focus, zoom, one/multiple pages, page width, Navigation pane, rulers, gridlines, dark mode; interface in English, 简体中文, 繁體中文, 日本語, Português (Brasil), Español or Українська (follows the system language by default) |
+| **View** | Print layout, web layout, draft, read mode, focus, zoom, one/multiple pages, page width, Navigation pane, rulers, gridlines, dark mode; interface in English, 简体中文, 繁體中文, 日本語, Português (Brasil), Español, Українська, Norsk bokmål or Norsk nynorsk (follows the system language by default) |
 | **Files** | .docx read/write (opens in Word), PDF export, .odt, .rtf, .html, .md, .tex, .txt import/export, page images |
 
 The honest picture, area by area, is in [ROADMAP.md](ROADMAP.md) and the generated
 [feature parity report](docs/parity.md).
 
 ## Quick start
+
+Choose **File → Options → Interface language → Norsk bokmål** for Norwegian menus, centimeter
+measurements and rulers, decimal commas, and dates in `dd.MM.yyyy` format. New documents and
+templates use A4 and the `nb-NO` document language; existing documents retain their page setup.
+Norwegian system locales (`nb-NO`, `nb_NO`, legacy `no_NO`) are detected automatically. Bokmål spelling works offline with 613,686 full forms from
+[Norsk ordbank / Språkbanken](https://www.nb.no/sprakbanken/ressurskatalog/oai-nb-no-sbr-5/)
+(CC BY 4.0). Squiggles, F7 and correction suggestions use the document/run language;
+select text and choose **Review → Language → Norwegian Bokmål** for imported documents.
+English spelling remains available for English text. Norwegian grammar checks cover
+basic spacing, punctuation and repeated words; new compounds may need a personal dictionary entry.
+
+Choose **Norsk nynorsk** in the same language setting for a separate Nynorsk interface,
+A4, centimeters, decimal commas and Norwegian dates. `nn-NO` / `nn_NO` system locales
+select Nynorsk automatically; legacy `no_NO` still selects Bokmål. New documents use
+`nn-NO`, and **Review → Language → Norwegian Nynorsk** marks selected/imported text.
+Offline Nynorsk spelling uses 409,690 current standard full forms from
+[Norsk ordbank – nynorsk 2012](https://www.nb.no/sprakbanken/ressurskatalog/oai-nb-no-sbr-41/)
+(CC BY 4.0). Bokmål, Nynorsk and English text can coexist in one document; each uses
+its own spelling dictionary. Nynorsk grammar checks and compound handling have the
+same limitations as Bokmål. Templates retain their existing text while adopting A4
+and the selected document language.
 
 ```sh
 git clone https://github.com/storytold/wordcraft

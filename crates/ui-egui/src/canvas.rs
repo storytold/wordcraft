@@ -610,19 +610,21 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
     hp.rect_filled(bar, 0.0, t.ruler_margin);
     let text = Rect::from_min_max(pos2(x0 + page.body.x * scale, bar.min.y), pos2(x0 + page.body.right() * scale, bar.max.y));
     hp.rect_filled(text, 0.0, t.ruler);
-    let unit = 72.0;
+    let unit = crate::i18n::current().measurement_unit().pt_per_unit();
+    let subdivisions = if crate::i18n::current().is_norwegian() { 10 } else { 8 };
+    let snap = unit / (subdivisions * 2) as f32;
     let origin = page.body.x;
-    let mut k = -((origin / unit).ceil() as i32) * 8;
+    let mut k = -((origin / unit).ceil() as i32) * subdivisions;
     loop {
-        let xpt = origin + k as f32 * unit / 8.0;
+        let xpt = origin + k as f32 * unit / subdivisions as f32;
         if xpt > page.w {
             break;
         }
         if xpt >= 0.0 {
             let sx = x0 + xpt * scale;
-            let (len, label) = if k % 8 == 0 {
-                (0.0, Some(k / 8))
-            } else if k % 4 == 0 {
+            let (len, label) = if k % subdivisions == 0 {
+                (0.0, Some(k / subdivisions))
+            } else if k % (subdivisions / 2) == 0 {
                 (5.0, None)
             } else if k % 2 == 0 {
                 (3.0, None)
@@ -635,7 +637,7 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
                 }
                 Some(_) => {}
                 None => {
-                    if scale * unit / 8.0 > 4.0 || k % 2 == 0 {
+                    if scale * unit / subdivisions as f32 > 4.0 || k % 2 == 0 {
                         hp.line_segment([pos2(sx, bar.center().y - len / 2.0), pos2(sx, bar.center().y + len / 2.0)], Stroke::new(1.0, t.ruler_tick));
                     }
                 }
@@ -689,7 +691,7 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
             && let Some(pp) = r.interact_pointer_pos()
         {
             let pt = ((pp.x - x0) / scale - col_x).clamp(-col_x, page.body.w - 18.0);
-            let snapped = (pt / 4.5).round() * 4.5;
+            let snapped = (pt / snap).round() * snap;
             if !r.drag_started() {
                 app.session.join_next_undo();
             }
@@ -704,7 +706,7 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
             if !r.drag_started() {
                 app.session.join_next_undo();
             }
-            let _ = app.run("para.indents", json!({"firstLine": (pt / 4.5).round() * 4.5}));
+            let _ = app.run("para.indents", json!({"firstLine": (pt / snap).round() * snap}));
         }
         let rr = Rect::from_center_size(pos2(right, bar.max.y - 3.0), vec2(12.0, 12.0));
         let r = ui.interact(rr, ui.id().with("ruler_right"), Sense::drag());
@@ -715,7 +717,7 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
             if !r.drag_started() {
                 app.session.join_next_undo();
             }
-            let _ = app.run("para.indents", json!({"right": (pt / 4.5).round() * 4.5}));
+            let _ = app.run("para.indents", json!({"right": (pt / snap).round() * snap}));
         }
     }
     // Vertical.
@@ -725,15 +727,21 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
     vp.rect_filled(vbar, 0.0, t.ruler_margin);
     vp.rect_filled(Rect::from_min_max(pos2(vbar.min.x, y0 + page.body.y * scale), pos2(vbar.max.x, y0 + page.body.bottom() * scale)), 0.0, t.ruler);
     let origin = page.body.y;
-    let mut k = -((origin / unit).ceil() as i32) * 8;
+    let mut k = -((origin / unit).ceil() as i32) * subdivisions;
     loop {
-        let ypt = origin + k as f32 * unit / 8.0;
+        let ypt = origin + k as f32 * unit / subdivisions as f32;
         if ypt > page.h.min(20_000.0) {
             break;
         }
-        if ypt >= 0.0 && k % 8 == 0 && k != 0 {
-            vp.text(pos2(vbar.center().x, y0 + ypt * scale), egui::Align2::CENTER_CENTER, (k / 8).abs().to_string(), regular(9.5), t.ruler_tick);
-        } else if ypt >= 0.0 && k % 4 == 0 {
+        if ypt >= 0.0 && k % subdivisions == 0 && k != 0 {
+            vp.text(
+                pos2(vbar.center().x, y0 + ypt * scale),
+                egui::Align2::CENTER_CENTER,
+                (k / subdivisions).abs().to_string(),
+                regular(9.5),
+                t.ruler_tick,
+            );
+        } else if ypt >= 0.0 && k % (subdivisions / 2) == 0 {
             let sy = y0 + ypt * scale;
             vp.line_segment([pos2(vbar.center().x - 2.5, sy), pos2(vbar.center().x + 2.5, sy)], Stroke::new(1.0, t.ruler_tick));
         }
@@ -779,7 +787,7 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     let item = |ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: serde_json::Value| {
         let sc = crate::widgets::shortcut_text(app, id);
         let on = crate::widgets::enabled(app, id);
-        if ui.add_enabled(on, egui::Button::new(label).shortcut_text(sc)).clicked() {
+        if ui.add_enabled(on, egui::Button::new(crate::i18n::t(label)).shortcut_text(sc)).clicked() {
             let _ = app.run(id, params);
             ui.close();
         }
@@ -790,7 +798,13 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
             .and_then(|v| v.as_array())
             .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
             .unwrap_or_default();
-        ui.label(egui::RichText::new(issue.get("message").and_then(|m| m.as_str()).unwrap_or("")).small().weak());
+        let message = issue.get("message").and_then(|m| m.as_str()).unwrap_or("");
+        let message = if let Some(word) = message.strip_prefix("Repeated word: \"").and_then(|s| s.strip_suffix('"')) {
+            crate::i18n::fmt(tl!("Repeated word: \"{word}\""), &[("word", word)])
+        } else {
+            crate::i18n::t(message).to_string()
+        };
+        ui.label(egui::RichText::new(message).small().weak());
         if sugg.is_empty() {
             ui.label(egui::RichText::new(tl!("(no suggestions)")).italics());
         }
@@ -914,5 +928,53 @@ mod tests {
         let visual = texel_aligned_rect(layout, vec2(160.0, 240.0), 2.0);
 
         assert_eq!(visual, layout);
+    }
+}
+
+#[cfg(test)]
+mod context_menu_tests {
+    use super::*;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    #[test]
+    fn norwegian_context_menu_renders_translated_actions_but_preserves_suggestions() {
+        for (code, add, link, spelling, repeated) in [
+            ("nb", "Legg til i ordlisten", "Lenke…", "Mulig stavefeil", "Gjentatt ord: «Open»"),
+            ("nn", "Legg til i ordlista", "Lenkje…", "Mogleg stavefeil", "Gjenteke ord: «Open»"),
+        ] {
+            crate::i18n::set_current(crate::i18n::Lang::from_code(code).unwrap());
+            let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+            app.canvas.context_issue = Some(json!({"kind": "spelling", "message": "Possible spelling mistake", "suggestions": ["Open"]}));
+            let mut harness = Harness::new_ui_state(|ui, app| context_menu(app, ui), app);
+            for label in ["Ignorer alle", add, "Klipp ut", "Kopier", "Lim inn", "Skrift…", "Avsnitt…", link, "Ny kommentar"] {
+                harness.get_by_label_contains(label);
+            }
+            harness.get_by_label(spelling);
+            harness.get_by_label("Open"); // Replacement text is document content, not an interface label.
+            harness.state_mut().canvas.context_issue =
+                Some(json!({"kind": "grammar", "message": "Repeated word: \"Open\"", "suggestions": ["Open"]}));
+            harness.run();
+            harness.get_by_label(repeated);
+        }
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+    }
+
+    #[test]
+    fn norwegian_table_context_menu_translates_its_insertion_submenu() {
+        for (code, insert, left, right) in [
+            ("nb", "Sett inn", "Sett inn kolonner til venstre", "Sett inn kolonner til høyre"),
+            ("nn", "Set inn", "Set inn kolonnar til venstre", "Set inn kolonnar til høgre"),
+        ] {
+            crate::i18n::set_current(crate::i18n::Lang::from_code(code).unwrap());
+            let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+            app.session.run("insert.table", &json!({"rows": 2, "cols": 2})).unwrap();
+            let mut harness = Harness::new_ui_state(|ui, app| context_menu(app, ui), app);
+            harness.get_by_label(insert).click();
+            harness.run();
+            for label in [format!("{insert} rader over"), format!("{insert} rader under"), left.to_string(), right.to_string()] {
+                harness.get_by_label_contains(&label);
+            }
+        }
+        crate::i18n::set_current(crate::i18n::Lang::EN);
     }
 }

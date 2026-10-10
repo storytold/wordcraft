@@ -20,6 +20,27 @@ and agent control. This file tracks where we are honestly. Generated numbers com
 Catalog coverage overstates parity: many commands are first versions. The real-parity estimate
 weighs each area by how much of Word's behaviour it reproduces, and by how often people use it.
 
+## Norwegian proofing (2026-10-10)
+
+Bokmål spelling works offline with 613,686 standard full forms from Norsk ordbank
+(Språkbanken, CC BY 4.0). Document and run language select English or Bokmål for
+squiggles, F7 and suggestions; mixed-language DOCX documents retain their language.
+Norwegian grammar checks remain limited to basic punctuation, spacing and repeated words.
+
+## Nynorsk interface and proofing (2026-10-10)
+
+Nynorsk has its own interface catalog, `nn-NO` documents, Norwegian A4/centimeter/
+decimal-comma/date defaults and offline spelling with 409,690 standard full forms
+from Norsk ordbank – nynorsk 2012 (Språkbanken, CC BY 4.0). English, Bokmål and Nynorsk
+can coexist in DOCX documents; squiggles and review commands follow each run's language.
+Nynorsk grammar checks remain basic; new compounds may need a personal dictionary entry.
+
+## Context-menu localization (2026-10-10)
+
+Document right-click action buttons use interface translations, including spelling
+ignore/add-to-dictionary actions, clipboard actions and formatting dialogs. Both Norwegian catalogs
+cover the table insertion submenu. Correction words remain document content.
+
 ## Alpha
 
 **What we mean by alpha:** someone can write, format and review real documents every day, open

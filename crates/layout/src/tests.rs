@@ -1005,3 +1005,69 @@ fn no_line_break_right_after_a_slash() {
     }
     assert!(lines > 10, "{lines} lines");
 }
+
+#[test]
+fn bokmal_squiggles_match_review_and_follow_language_and_no_proof_styles() {
+    use wordcraft_doc::{Block, CharProps, Paragraph};
+    let mut d = Document::new();
+    d.styles.default_chr.lang = Some("nb-NO".into());
+    let mut p = Paragraph::with_text("Bøkene er åpne. ", CharProps::default());
+    p.insert_text(p.len(), "Hello wrold.", &CharProps { lang: Some("en-US".into()), ..Default::default() }).unwrap();
+    let issues = para::proof_issues(&p, &d.styles);
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert_eq!(p.text.get(issues[0].start..issues[0].end), Some("wrold"));
+    d.body = vec![std::sync::Arc::new(Block::Para(p))];
+    let mut cache = LayoutCache::new();
+    let opts = LayoutOptions { proofing: true, ..Default::default() };
+    let l = layout(&d, &mut cache, &opts);
+    let squiggles: Vec<_> = l
+        .pages
+        .iter()
+        .flat_map(|p| &p.items)
+        .filter_map(|item| match item {
+            Placed::Lines { para, .. } => Some(para.issues.clone()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(squiggles, [(issues[0].start, issues[0].end, false)]);
+    d.styles.default_chr.no_proof = Some(true);
+    let l = layout(&d, &mut cache, &opts);
+    assert!(l.pages.iter().flat_map(|p| &p.items).all(|item| match item {
+        Placed::Lines { para, .. } => para.issues.is_empty(),
+        _ => true,
+    }));
+}
+
+#[test]
+fn nynorsk_squiggles_match_review_and_follow_language_and_no_proof_styles() {
+    use wordcraft_doc::{Block, CharProps, Paragraph};
+    let mut d = Document::new();
+    d.styles.default_chr.lang = Some("nn-NO".into());
+    let mut p = Paragraph::with_text("Eg skriv ikkje bokmål. Bøkene er opne. ", CharProps::default());
+    p.insert_text(p.len(), "Hello wrold.", &CharProps { lang: Some("en-US".into()), ..Default::default() }).unwrap();
+    let issues = para::proof_issues(&p, &d.styles);
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert_eq!(p.text.get(issues[0].start..issues[0].end), Some("wrold"));
+    d.body = vec![std::sync::Arc::new(Block::Para(p))];
+    let mut cache = LayoutCache::new();
+    let opts = LayoutOptions { proofing: true, ..Default::default() };
+    let l = layout(&d, &mut cache, &opts);
+    let squiggles: Vec<_> = l
+        .pages
+        .iter()
+        .flat_map(|p| &p.items)
+        .filter_map(|item| match item {
+            Placed::Lines { para, .. } => Some(para.issues.clone()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(squiggles, [(issues[0].start, issues[0].end, false)]);
+    d.styles.default_chr.no_proof = Some(true);
+    let l = layout(&d, &mut cache, &opts);
+    assert!(l.pages.iter().flat_map(|p| &p.items).all(|item| match item {
+        Placed::Lines { para, .. } => para.issues.is_empty(),
+        _ => true,
+    }));
+}
