@@ -230,6 +230,10 @@ impl Counters {
         let abs = numbering.abstract_of(num)?;
         let lv = (level as usize).min(8);
         let def = abs.levels.get(lv)?.clone();
+        // A "none" level shows no label at all (Word's numFmt none) — not even its text.
+        if def.format == NumFormat::None {
+            return None;
+        }
         let st = self.state.entry(abs.id).or_insert([0; 9]);
         if let std::collections::hash_map::Entry::Vacant(e) = self.seen.entry(num) {
             e.insert(true);

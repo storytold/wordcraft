@@ -569,7 +569,7 @@ fn character_formatting_applied() {
             (6, grpprl(&[(0x0835, &[0x01])])),                     // bold
             (11, grpprl(&[(0x0835, &[0x01]), (0x2A42, &[0x06])])), // bold + red (ico 6)
         ],
-        papx_entries: vec![(16, 0, Vec::new())],
+        papx_entries: vec![(0, 0, Vec::new())],
     };
     let doc = read(&rich_doc(&spec)).expect("opens");
     let p = para0(&doc);
@@ -591,7 +591,7 @@ fn font_and_size_from_style_and_direct() {
         ],
         fonts: vec!["Times New Roman", "Arial"],
         chpx_runs: vec![(0, grpprl(&[(0x4A4F, &1u16.to_le_bytes())]))],
-        papx_entries: vec![(5, 0, Vec::new())],
+        papx_entries: vec![(0, 0, Vec::new())],
     };
     let doc = read(&rich_doc(&spec)).expect("opens");
     assert!(doc.styles.styles.iter().any(|s| s.name == "Normal" && s.chr.size == Some(12.0)), "Normal 12pt");
@@ -609,7 +609,7 @@ fn paragraph_props_and_heading_style() {
         ],
         fonts: vec!["Times New Roman"],
         chpx_runs: vec![(0, Vec::new())],
-        papx_entries: vec![(8, 1, Vec::new()), (15, 0, grpprl(&[(0x845E, &720u16.to_le_bytes())]))],
+        papx_entries: vec![(0, 1, Vec::new()), (9, 0, grpprl(&[(0x845E, &720u16.to_le_bytes())]))],
     };
     let doc = read(&rich_doc(&spec)).expect("opens");
     let heading = doc.styles.styles.iter().find(|s| s.name == "Heading 1").expect("style");
@@ -823,7 +823,7 @@ fn section_props_parsed() {
         header_stories: vec![],
         sections: vec![(2, grpprl(&[(0xB01F, &12240u16.to_le_bytes()), (0xB020, &15840u16.to_le_bytes()), (0xB021, &1440u16.to_le_bytes())]))],
         chpx_runs: vec![(0, Vec::new())],
-        papx_entries: vec![(1, 0, Vec::new()), (3, 0, Vec::new())],
+        papx_entries: vec![(0, 0, Vec::new()), (2, 0, Vec::new())],
         plf_lst: Vec::new(),
         plf_lfo: Vec::new(),
         note_stories: vec![],
@@ -845,7 +845,7 @@ fn two_sections_box_the_first() {
         header_stories: vec![],
         sections: vec![(6, grpprl(&[(0x300A, &[0x01])])), (12, Vec::new())],
         chpx_runs: vec![(0, Vec::new())],
-        papx_entries: vec![(5, 0, Vec::new()), (12, 0, Vec::new())],
+        papx_entries: vec![(0, 0, Vec::new()), (6, 0, Vec::new())],
         plf_lst: Vec::new(),
         plf_lfo: Vec::new(),
         note_stories: vec![],
@@ -867,7 +867,7 @@ fn header_story_becomes_part() {
         header_stories: vec!["Header text\r\r"],
         sections: vec![(5, Vec::new())],
         chpx_runs: vec![(0, Vec::new())],
-        papx_entries: vec![(4, 0, Vec::new())],
+        papx_entries: vec![(0, 0, Vec::new())],
         plf_lst: Vec::new(),
         plf_lfo: Vec::new(),
         note_stories: vec![],
@@ -913,11 +913,11 @@ fn table_assembled_from_marks() {
         sections: vec![(text.chars().count() as u32, Vec::new())],
         chpx_runs: vec![(0, Vec::new())],
         papx_entries: vec![
-            (2, 0, in_tbl.clone()), // "a" cell end
-            (4, 0, ttp.clone()),    // "b" cell end + TTP row 1
-            (6, 0, in_tbl),         // "c" cell end
-            (8, 0, ttp),            // "d" cell end + TTP row 2
-            (13, 0, Vec::new()),    // "tail" paragraph mark
+            (0, 0, in_tbl.clone()), // "a" cell paragraph
+            (2, 0, ttp.clone()),    // "b" cell paragraph, ends the row (TTP)
+            (4, 0, in_tbl),         // "c" cell paragraph
+            (6, 0, ttp),            // "d" cell paragraph, ends the row (TTP)
+            (8, 0, Vec::new()),     // "tail" paragraph
         ],
         plf_lst: Vec::new(),
         plf_lfo: Vec::new(),
@@ -992,12 +992,12 @@ fn table_merges_borders_shading() {
         sections: vec![(text.chars().count() as u32, Vec::new())],
         chpx_runs: vec![(0, Vec::new())],
         papx_entries: vec![
+            (0, 0, in_tbl.clone()),
             (2, 0, in_tbl.clone()),
-            (4, 0, in_tbl.clone()),
-            (6, 0, std::mem::take(&mut row1)), // "c" cell end + TTP row 1 (merge 0..2)
-            (8, 0, in_tbl),
-            (10, 0, std::mem::take(&mut row2)), // "e" cell end + TTP row 2
-            (11, 0, Vec::new()),
+            (4, 0, std::mem::take(&mut row1)), // "c" cell paragraph, ends row 1 (merge 0..2)
+            (6, 0, in_tbl),
+            (8, 0, std::mem::take(&mut row2)), // "e" cell paragraph, ends row 2
+            (10, 0, Vec::new()),
         ],
         plf_lst: Vec::new(),
         plf_lfo: Vec::new(),
@@ -1089,7 +1089,7 @@ fn list_numbering_parsed() {
         header_stories: vec![],
         sections: vec![(text.chars().count() as u32, Vec::new())],
         chpx_runs: vec![(0, Vec::new())],
-        papx_entries: vec![(4, 0, listed(false)), (8, 0, listed(false)), (14, 0, listed(true))],
+        papx_entries: vec![(0, 0, listed(false)), (4, 0, listed(false)), (8, 0, listed(true))],
         plf_lst: plf_lst(0x1000, false, &levels),
         plf_lfo: plf_lfo(0x1000),
         note_stories: vec![],
@@ -1136,11 +1136,11 @@ fn structured_doc() -> Vec<u8> {
         ],
         chpx_runs: vec![(0, Vec::new())],
         papx_entries: vec![
-            (6, 0, Vec::new()),                   // "Intro" mark, ends section 1
-            (8, 0, grpprl(&[(0x2416, &[0x01])])), // "a" cell end
-            (10, 0, std::mem::take(&mut row)),    // "b" cell end + TTP
-            (16, 0, listed.clone()),              // "first" mark, in the list
-            (23, 0, listed),                      // "second" mark
+            (0, 0, Vec::new()),                   // "Intro" paragraph, ends section 1
+            (6, 0, grpprl(&[(0x2416, &[0x01])])), // "a" cell paragraph
+            (8, 0, std::mem::take(&mut row)),     // "b" cell paragraph, ends the row
+            (10, 0, listed.clone()),              // "first" paragraph, in the list
+            (16, 0, listed),                      // "second" paragraph
         ],
         plf_lst: plf_lst(0x2000, false, &levels),
         plf_lfo: plf_lfo(0x2000),
@@ -1355,7 +1355,7 @@ fn structured_spec(text: &'static str, ccp: u32) -> StructSpec {
         sections: vec![(ccp, Vec::new())],
         chpx_runs: vec![(0, Vec::new())],
         // The PAPX entry key is the CP just past the paragraph mark.
-        papx_entries: vec![(ccp, 0, Vec::new())],
+        papx_entries: vec![(0, 0, Vec::new())],
         plf_lst: Vec::new(),
         plf_lfo: Vec::new(),
         note_stories: vec![],

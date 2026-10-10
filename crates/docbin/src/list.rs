@@ -35,6 +35,18 @@ struct RawLvl {
     xst: Vec<u16>,
 }
 
+/// A bullet level's character, with the 0xF000 flag bits stripped and the common
+/// Symbol/Wingdings glyphs mapped to their Unicode equivalents so every font renders them.
+fn bullet_char(c: u16) -> char {
+    match c & 0x0FFF {
+        0xB7 => '\u{2022}',        // Symbol bullet
+        0xA7 => '\u{25AA}',        // Wingdings small square
+        0x6F => '\u{25CB}',        // Symbol open circle
+        0x77 | 0x78 => '\u{25CF}', // Wingdings filled circles
+        other => char::from_u32(other as u32).unwrap_or('\u{2022}'),
+    }
+}
+
 /// MSONFC → model number format ([MS-OSHARED] §2.2.1.3; 0x17 = bullets, 0xFF = none).
 fn num_format(nfc: u8) -> NumFormat {
     match nfc {
@@ -236,7 +248,7 @@ fn level_of(l: &RawLvl, lvl_index: usize, fonts: &[String]) -> Level {
             text.push('%');
             text.push((b'1' + c as u8) as char);
         } else {
-            text.push(char::from_u32((c & 0x0FFF) as u32).unwrap_or('\u{2022}'));
+            text.push(bullet_char(c));
         }
     }
     if text.is_empty() {

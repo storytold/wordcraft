@@ -318,10 +318,10 @@ fn walk(ctx: &WalkCtx, cp_start: u32, cp_end: u32, pending: &mut Vec<media::Pict
         let c = ctx.pieces.text(ctx.word, cp, cp + 1).chars().next().unwrap_or('\u{FFFD}');
         match c {
             '\r' | '\u{7}' => {
-                // Paragraph mark: its PAPX (queried at the FC of the *next* character)
-                // carries the paragraph's style and direct formatting; its CHPX the mark's.
-                let fc_next = ctx.pieces.fc_of_cp(cp).and_then(|f| f.checked_add(2)).unwrap_or(0);
-                let (istd, papx) = ctx.papx_bins.papx(ctx.word, fc_next);
+                // Paragraph mark: its PAPX covers the FC range of the paragraph it ends, so
+                // querying at the mark's own FC finds that paragraph's properties.
+                let fc_mark = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
+                let (istd, papx) = ctx.papx_bins.papx(ctx.word, fc_mark);
                 if let Some(st) = ctx.raw_styles.get(istd as usize).filter(|s| !s.name.is_empty()) {
                     pb.props.style = Some(fmt::style_id(&st.name));
                 }

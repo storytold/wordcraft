@@ -115,13 +115,16 @@ impl PieceTable {
         self.pieces.get(i)
     }
 
-    /// The FC of a character position: within a piece, consecutive characters are 2 FC units
-    /// apart in both encodings (compressed text stores `fc = 2 × byte offset`).
+    /// The FC of a character position in the space the FKP bin tables use: true byte
+    /// offsets into the WordDocument stream. A compressed piece stores its base `fc`
+    /// doubled (`byte = fc/2`), so the doubling unwinds here; an uncompressed piece's `fc`
+    /// already is its byte offset and each character covers two bytes.
     pub(crate) fn fc_of_cp(&self, cp: u32) -> Option<u32> {
         let p = self.piece_of(cp)?;
         let i = self.cps.partition_point(|&c| c <= cp).checked_sub(1)?;
         let cp0 = *self.cps.get(i)?;
-        p.fc.checked_add((cp - cp0).checked_mul(2)? & 0x3FFF_FFFF)
+        let step = (cp - cp0).checked_mul(2)?;
+        if p.compressed { p.fc.checked_add(step)?.checked_div(2) } else { p.fc.checked_add(step) }
     }
 
     /// Text of the CP range `[start, end)` as it is stored (control characters included);
