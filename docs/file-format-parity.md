@@ -57,7 +57,7 @@ Measured by grepping `crates/docx/src/read` and `src/write` for the OOXML elemen
 | Legacy form fields (`w:ffData`), check boxes, drop-downs | ❌ | ❌ | |
 | DrawingML pictures inline and anchored (`wp:anchor`), wrap square/tight/through/top-bottom | ✅ | ✅ | Tight/through read and written, laid out as square |
 | DrawingML shapes and text boxes (`wps:`) | ✅ | ✅ | Preset geometries subset |
-| Freeform shapes (`a:custGeom`: `a:moveTo`, `a:lnTo`, Bézier curves flattened) and WordCraft ink | ✅ | ✅ | Ink is written as a freeform `wps:wsp` in a `wp:anchor` (round caps, alpha for highlighter) and recognised again by its drawing name (#307); arcs drawn straight |
+| Freeform shapes (`a:custGeom`: `a:moveTo`, `a:lnTo`, Bézier curves flattened) and WordCraft ink | ✅ | ✅ | Ink is written as a freeform `wps:wsp` in a `wp:anchor` (round caps, alpha for highlighter) and recognised again by its drawing name (#307). It is saved as a custom-geometry shape, not as Word's own ink (InkML in `w14:contentPart`), so Word shows WordCraft ink as a freeform shape it can move and recolour but not erase with its ink eraser; arcs drawn straight |
 | Group shapes (`wpg:`), drawing canvas | ❌ | ❌ | Dropped |
 | VML (`w:pict`, `v:shape`, `v:textbox`) | 🟡 | ❌ | Pictures and text boxes, best effort (#242) |
 | Charts (`c:chart`), SmartArt (`dgm`), Word ink (`w14:contentPart`, InkML), 3D models, OLE objects (`w:object`) | ❌ | ❌ | Dropped on read, not preserved on save. A document with a chart loses it silently |

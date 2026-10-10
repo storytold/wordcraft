@@ -754,18 +754,20 @@ impl Exporter<'_> {
             }
             Draw::Ink { pts, color, width, alpha } => {
                 let mut pb = PathBuilder::new();
-                let mut started = false;
+                let mut used = 0usize;
+                let mut last = (0.0, 0.0);
                 for &(x, y) in pts.iter().filter(|(x, y)| ok(*x) && ok(*y)) {
-                    if started {
+                    if used > 0 {
                         pb.line_to(x, y);
                     } else {
                         pb.move_to(x, y);
-                        started = true;
                     }
+                    used += 1;
+                    last = (x, y);
                 }
-                // A tap: a zero-length line, which round caps draw as a dot.
-                if let (true, 1, Some((x, y))) = (started, pts.len(), pts.first()) {
-                    pb.line_to(*x, *y);
+                // A tap (one usable point): a zero-length line, which round caps draw as a dot.
+                if used == 1 {
+                    pb.line_to(last.0, last.1);
                 }
                 let Some(p) = pb.finish() else { return };
                 s.set_fill(None);

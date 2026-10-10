@@ -481,7 +481,7 @@ mod tests {
     fn drawn_buttons_fade_in_on_hover_and_darken_while_pressed() {
         // #305's drawn replacements for ✕, 💬, ✎ and ➕ must react like egui's buttons.
         let ctx = egui::Context::default();
-        crate::theme::apply(&ctx, &Tokens::light());
+        crate::theme::apply(&ctx, crate::theme::Appearance::Light);
         let clock = std::cell::Cell::new(0u32);
         let seen = std::cell::Cell::new((Rect::NOTHING, Rect::NOTHING, Color32::PLACEHOLDER, Color32::PLACEHOLDER));
         // One 60 fps frame; returns both buttons' rects and fills (framed, frameless).

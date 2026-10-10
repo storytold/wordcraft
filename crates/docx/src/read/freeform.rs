@@ -18,6 +18,10 @@ pub fn cust_geom(sppr: &El, w: f32, h: f32) -> Option<Freeform> {
     let list = sppr.child("a:custGeom")?.child("a:pathLst")?;
     let mut paths = Vec::new();
     for p in list.children("a:path").take(MAX_PATHS) {
+        // Subpaths count too: stop once the shape has as many paths as it may keep.
+        if paths.len() >= MAX_PATHS {
+            break;
+        }
         let dim = |n: &str, shape: f32| p.attr(n).and_then(int).filter(|v| *v > 0).map_or(shape as f64 * 12_700.0, |v| v as f64);
         let (pw, ph) = (dim("w", w), dim("h", h));
         let scale = |[x, y]: [f64; 2]| -> [f32; 2] {
@@ -63,7 +67,7 @@ pub fn cust_geom(sppr: &El, w: f32, h: f32) -> Option<Freeform> {
         if !cur.is_empty() {
             done.push((cur, false));
         }
-        for (pts, closed) in done {
+        for (pts, closed) in done.into_iter().take(MAX_PATHS.saturating_sub(paths.len())) {
             paths.push(FreePath { pts: pts.into_iter().take(MAX_POINTS).map(scale).collect(), closed: closed && !fill_none });
         }
     }

@@ -372,4 +372,22 @@ mod tests {
         s.run("draw.select", &json!({})).unwrap();
         assert_eq!(s.view.draw.mode, super::DrawMode::Select);
     }
+
+    /// `draw.eraser` is a view command, but with a point it erases through `draw.erase`, which
+    /// changes the document: that must be one undo step and mark the document changed.
+    #[test]
+    fn erasing_through_the_eraser_command_is_undoable_and_marks_the_document_dirty() {
+        let mut s = session();
+        s.run("draw.stroke", &json!({"page": 0, "points": [[100, 100], [200, 100]], "width": 2})).unwrap();
+        s.dirty = false;
+        let steps = s.undo_depth();
+        s.run("draw.eraser", &json!({"page": 0, "x": 150, "y": 101})).unwrap();
+        assert!(ink(&s).is_empty());
+        assert!(s.dirty, "erasing is an unsaved change");
+        assert_eq!(s.undo_depth(), steps + 1, "one undo step");
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(ink(&s).len(), 1, "undo brings the stroke back");
+        s.run("edit.redo", &json!({})).unwrap();
+        assert!(ink(&s).is_empty());
+    }
 }

@@ -731,12 +731,13 @@ fn ink_path(pts: &[(f32, f32)]) -> Option<BezPath> {
         }
         last = Some(pt);
     }
-    let first = pts.first()?;
+    // Only sanitized points reach the path: a tap is drawn at the one usable point.
+    let only = last?;
     if p.elements().len() == 1 {
         // A tap: a zero-length line, which round caps draw as a dot.
-        p.line_to((first.0 as f64, first.1 as f64));
+        p.line_to(only);
     }
-    last.map(|_| p)
+    Some(p)
 }
 
 /// Outline of a basic shape in a rectangle.
