@@ -737,8 +737,9 @@ impl WordApp {
             self.styled = true;
         }
         // Re-checked every frame, so `System` follows an OS appearance change live (egui reports it
-        // and repaints).
-        let dark = self.ui.theme.is_dark(ctx.system_theme()) || self.session.view.dark_mode;
+        // and repaints). Dark page (`session.view.dark_mode`) affects document paper rendering (#312),
+        // not the interface chrome theme.
+        let dark = self.ui.theme.is_dark(ctx.system_theme());
         if self.applied_dark != Some(dark) {
             theme::apply(ctx, &if dark { theme::Tokens::dark() } else { theme::Tokens::light() });
             self.applied_dark = Some(dark);
@@ -2162,6 +2163,24 @@ mod tests {
         assert_eq!(a.run("ui.theme", json!({"value": "dark"})).unwrap()["theme"], "dark");
         assert_eq!(a.run("ui.dark", json!({})).unwrap()["theme"], "light", "ui.dark toggles the manual choice");
         assert_eq!(a.run("ui.theme", json!({})).unwrap()["theme"], "light");
+    }
+
+    /// #312: Dark page (`view.darkMode`) only controls document rendering, not interface chrome theme.
+    #[test]
+    fn dark_page_does_not_override_interface_theme() {
+        let mut a = app();
+        a.run("ui.theme", json!({"value": "system"})).unwrap();
+        a.run("view.darkMode", json!({"value": true})).unwrap();
+
+        let ctx = egui::Context::default();
+        let raw_input = egui::RawInput { system_theme: Some(egui::Theme::Light), ..Default::default() };
+        let mut full_output = ctx.run_ui(raw_input, |_| {
+            a.logic(&ctx);
+        });
+        full_output.textures_delta.clear();
+
+        assert_eq!(a.applied_dark, Some(false), "System theme with OS Light should keep interface chrome light even when Dark page is enabled");
+        assert!(a.session.view.dark_mode, "Dark page setting must remain true");
     }
 
     #[test]
