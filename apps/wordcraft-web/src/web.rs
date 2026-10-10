@@ -25,8 +25,13 @@ pub fn start() {
             log::error!("missing <canvas id=\"{CANVAS_ID}\">");
             return;
         };
+        // `?host=parent`: a same-origin page framing WordCraft (such as the Nextcloud app) opens
+        // files in it and stores what it saves (`host`). It guards leaving the page itself.
+        let bridge = if query_param("host").as_deref() == Some("parent") { host::Bridge::new() } else { None };
         let dirty = Rc::new(Cell::new(false));
-        if let Err(e) = guard_unload(dirty.clone()) {
+        if bridge.is_none()
+            && let Err(e) = guard_unload(dirty.clone())
+        {
             log::error!("no unsaved-changes guard: {e}");
         }
         let mut options = eframe::WebOptions::default();
@@ -35,6 +40,7 @@ pub fn start() {
         {
             create.instance_descriptor.backends = eframe::wgpu::Backends::GL;
         }
+        let app_bridge = bridge.clone();
         let result = eframe::WebRunner::new()
             .start(
                 canvas,
@@ -48,12 +54,27 @@ pub fn start() {
                         log::error!("pasting pictures is unavailable: {e}");
                     }
                     let doc = if query().contains("sample") { wordcraft_engine::sample::sample_document() } else { wordcraft_doc::Document::new() };
-                    let mut app = WordApp::new(Session::new(doc), services(inbox.clone(), cc.egui_ctx.clone(), dirty));
+                    let mut services = services(inbox.clone(), cc.egui_ctx.clone(), dirty);
+                    if let Some(bridge) = &app_bridge {
+                        bridge.connect(&mut services, inbox.clone(), cc.egui_ctx.clone());
+                    }
+                    let mut app = WordApp::new(Session::new(doc), services);
                     app.autosave = false;
+                    if let Some(bridge) = &app_bridge {
+                        // `?author=`: the host's name for the user signs comments and tracked
+                        // changes (the browser keeps no File › Options name between visits).
+                        if let Some(author) = query_param("author") {
+                            let _ = app.session.run("file.setAuthor", &serde_json::json!({ "name": author }));
+                        }
+                        bridge.post_ready();
+                    }
                     Ok(Box::new(WebShell { app, inbox }))
                 }),
             )
             .await;
+        if let (Err(e), Some(bridge)) = (&result, &bridge) {
+            bridge.post_failed(&format!("{e:?}"));
+        }
         if let Some(el) = document.get_element_by_id(LOADING_ID) {
             match result {
                 Ok(()) => el.remove(),
@@ -65,6 +86,10 @@ pub fn start() {
 
 fn query() -> String {
     web_sys::window().and_then(|w| w.location().search().ok()).unwrap_or_default()
+}
+
+fn query_param(key: &str) -> Option<String> {
+    web_sys::UrlSearchParams::new_with_str(&query()).ok()?.get(key)
 }
 
 /// Wraps the app to read dropped files asynchronously (browsers can't read them synchronously)
@@ -307,5 +332,169 @@ fn mime_for(name: &str) -> &'static str {
         Some("tex") => "application/x-tex",
         Some("json") => "application/json",
         _ => "application/octet-stream",
+    }
+}
+
+/// The `postMessage` bridge to a same-origin parent page (`?host=parent`). Messages are plain
+/// objects with a `type`:
+///
+/// - `wordcraft:ready` (to the parent): the app is listening; send a document now.
+/// - `wordcraft:open` (from the parent): `{ name, bytes }`, bytes an `ArrayBuffer` or
+///   `Uint8Array`. It opens like a file picked with File › Open.
+/// - `wordcraft:save` (to the parent): `{ name, bytes }` (a transferred `ArrayBuffer`) for Save,
+///   Save As and Export. `name` is the document's file name for Save, or the path the parent
+///   picked for Save As and Export. The parent stores the file and reports failures itself.
+/// - `wordcraft:pick-save` (to the parent): `{ id, name }` when Save As or Export asks where to
+///   save, with a suggested file name.
+/// - `wordcraft:picked` (from the parent): `{ id, path }` answers it; a missing or empty `path`
+///   cancels.
+/// - `wordcraft:dirty` (to the parent): `{ dirty }` whenever unsaved changes appear or go away.
+/// - `wordcraft:failed` (to the parent): `{ error }` when the app couldn't start.
+///
+/// Only the parent window on the page's own origin is heard or answered.
+mod host {
+    use std::cell::{Cell, RefCell};
+    use std::collections::HashMap;
+    use std::rc::Rc;
+    use std::sync::mpsc::{Receiver, Sender, channel};
+
+    use wasm_bindgen::JsCast as _;
+    use wasm_bindgen::JsValue;
+    use wasm_bindgen::closure::Closure;
+    use wordcraft_ui_egui::file_dialogs::FileDialogRequest;
+    use wordcraft_ui_egui::{Inbox, Services};
+
+    #[derive(Clone)]
+    pub struct Bridge {
+        window: web_sys::Window,
+        parent: web_sys::Window,
+        origin: String,
+        /// Save locations asked of the parent and not answered yet, by request id.
+        pending: Rc<RefCell<HashMap<u32, Sender<Option<String>>>>>,
+        next_id: Rc<Cell<u32>>,
+    }
+
+    impl Bridge {
+        /// `None` when the page isn't framed (there is no parent to talk to).
+        pub fn new() -> Option<Self> {
+            let window = web_sys::window()?;
+            let parent = window.parent().ok().flatten()?;
+            if js_sys::Object::is(&parent, &window) {
+                return None;
+            }
+            let origin = window.location().origin().ok()?;
+            Some(Self { window, parent, origin, pending: Rc::default(), next_id: Rc::default() })
+        }
+
+        /// Route Save, Export, save locations and the unsaved-changes state to the parent, and
+        /// hear documents and answers from it.
+        pub fn connect(&self, services: &mut Services, inbox: Inbox, ctx: egui::Context) {
+            self.listen(inbox, ctx);
+            let bridge = self.clone();
+            services.download = Some(Box::new(move |name: &str, bytes: &[u8]| bridge.post_save(name, bytes)));
+            let bridge = self.clone();
+            services.file_dialog = Some(Box::new(move |request: FileDialogRequest| bridge.ask(request)));
+            let bridge = self.clone();
+            let reported = Cell::new(None);
+            services.on_dirty = Some(Box::new(move |dirty: bool| {
+                if reported.get() != Some(dirty) {
+                    reported.set(Some(dirty));
+                    bridge.send(&[("type", "wordcraft:dirty".into()), ("dirty", dirty.into())]);
+                }
+            }));
+        }
+
+        pub fn post_ready(&self) {
+            self.send(&[("type", "wordcraft:ready".into()), ("version", env!("CARGO_PKG_VERSION").into())]);
+        }
+
+        pub fn post_failed(&self, error: &str) {
+            self.send(&[("type", "wordcraft:failed".into()), ("error", error.into())]);
+        }
+
+        fn post_save(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
+            let buffer = js_sys::Uint8Array::from(bytes).buffer();
+            let message = message(&[("type", "wordcraft:save".into()), ("name", name.into()), ("bytes", buffer.clone().into())])
+                .ok_or_else(|| "couldn't build the message".to_string())?;
+            self.parent
+                .post_message_with_transfer(&message, &self.origin, &js_sys::Array::of1(&buffer))
+                .map_err(|e| e.as_string().unwrap_or_else(|| format!("{e:?}")))
+        }
+
+        /// Save As and Export ask the parent where to save; the answer arrives as
+        /// `wordcraft:picked`. Opening uses the browser's file picker (`Services::open_async`),
+        /// so other requests are cancelled at once.
+        fn ask(&self, request: FileDialogRequest) -> Receiver<Option<String>> {
+            let (tx, rx) = channel();
+            if let FileDialogRequest::Save { name } = request {
+                let id = self.next_id.get().wrapping_add(1);
+                self.next_id.set(id);
+                if self.send(&[("type", "wordcraft:pick-save".into()), ("id", id.into()), ("name", name.as_str().into())]) {
+                    self.pending.borrow_mut().insert(id, tx);
+                }
+            }
+            rx
+        }
+
+        fn listen(&self, inbox: Inbox, ctx: egui::Context) {
+            let parent = self.parent.clone();
+            let origin = self.origin.clone();
+            let pending = self.pending.clone();
+            let on_message = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
+                if event.origin() != origin || !event.source().is_some_and(|s| js_sys::Object::is(&s, &parent)) {
+                    return;
+                }
+                let data = event.data();
+                match string(&data, "type").as_deref() {
+                    Some("wordcraft:open") => {
+                        let name = string(&data, "name").filter(|n| !n.trim().is_empty()).unwrap_or_else(|| "Document.docx".to_string());
+                        let Ok(bytes) = js_sys::Reflect::get(&data, &JsValue::from_str("bytes")) else { return };
+                        let bytes = if let Some(array) = bytes.dyn_ref::<js_sys::Uint8Array>() {
+                            array.to_vec()
+                        } else if bytes.is_instance_of::<js_sys::ArrayBuffer>() {
+                            js_sys::Uint8Array::new(&bytes).to_vec()
+                        } else {
+                            return;
+                        };
+                        inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
+                    }
+                    Some("wordcraft:picked") => {
+                        let Some(id) = number(&data, "id") else { return };
+                        let Some(tx) = pending.borrow_mut().remove(&id) else { return };
+                        // The app polls for the answer each frame; a closed app just drops it.
+                        let _ = tx.send(string(&data, "path").filter(|p| !p.trim().is_empty()));
+                    }
+                    _ => return,
+                }
+                ctx.request_repaint();
+            });
+            if self.window.add_event_listener_with_callback("message", on_message.as_ref().unchecked_ref()).is_ok() {
+                // The listener lives as long as the page.
+                on_message.forget();
+            }
+        }
+
+        /// Post a message to the parent; false if it couldn't be sent.
+        fn send(&self, fields: &[(&str, JsValue)]) -> bool {
+            message(fields).is_some_and(|m| self.parent.post_message(&m, &self.origin).is_ok())
+        }
+    }
+
+    fn message(fields: &[(&str, JsValue)]) -> Option<js_sys::Object> {
+        let m = js_sys::Object::new();
+        for (key, value) in fields {
+            js_sys::Reflect::set(&m, &JsValue::from_str(key), value).ok()?;
+        }
+        Some(m)
+    }
+
+    fn string(data: &JsValue, key: &str) -> Option<String> {
+        js_sys::Reflect::get(data, &JsValue::from_str(key)).ok()?.as_string()
+    }
+
+    /// A request id: a whole number that fits in `u32`.
+    fn number(data: &JsValue, key: &str) -> Option<u32> {
+        let n = js_sys::Reflect::get(data, &JsValue::from_str(key)).ok()?.as_f64()?;
+        (n.fract() == 0.0 && (0.0..=f64::from(u32::MAX)).contains(&n)).then_some(n as u32)
     }
 }
