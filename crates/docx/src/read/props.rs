@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CellProps, CharProps, HeightRule, Highlight, LineSpacing, NumRef, ParaProps, Rgb, RowProps, TabAlign,
-    TabLeader, TabStop, TableFloat, TableLook, TableProps, TextColor, Underline, VAlign, VMerge, VertAlign,
+    TabLeader, TabStop, TableFloat, TableLook, TableProps, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
 };
 use wordcraft_doc::section::{Columns, LineNumberRestart, LineNumbering, NumFormat, SectionProps, SectionStart};
 
@@ -142,6 +142,12 @@ impl PropCtx {
                 "w:suppressAutoHyphens" => p.suppress_hyphens = Some(on_off(k)),
                 "w:suppressLineNumbers" => p.suppress_line_numbers = Some(on_off(k)),
                 "w:bidi" => p.bidi = Some(on_off(k)),
+                "w:kinsoku" => p.kinsoku = Some(on_off(k)),
+                "w:wordWrap" => p.word_wrap = Some(on_off(k)),
+                "w:overflowPunct" => p.overflow_punct = Some(on_off(k)),
+                "w:topLinePunct" => p.top_line_punct = Some(on_off(k)),
+                "w:autoSpaceDE" => p.auto_space_de = Some(on_off(k)),
+                "w:autoSpaceDN" => p.auto_space_dn = Some(on_off(k)),
                 "w:framePr" => {
                     if matches!(k.attr("w:dropCap"), Some("drop") | Some("margin")) {
                         p.drop_cap = Some(k.attr("w:lines").and_then(u32_of).unwrap_or(3).clamp(1, 10) as u8);
@@ -387,7 +393,7 @@ pub fn tcpr(e: &El) -> (CellProps, bool) {
             "w:shd" => c.shading = shd_fill(k),
             "w:noWrap" => c.no_wrap = on_off(k),
             "w:tcMar" => c.margins = Some(margins(k)),
-            "w:textDirection" => c.vertical_text = !matches!(k.attr("w:val"), None | Some("lrTb") | Some("lrTbV") | Some("tb")),
+            "w:textDirection" => c.text_direction = TextDirection::from_ooxml(k.attr("w:val").unwrap_or("")),
             "w:vAlign" => {
                 c.valign = match k.attr("w:val") {
                     Some("center") => VAlign::Center,

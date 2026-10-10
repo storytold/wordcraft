@@ -11,6 +11,7 @@
 pub mod display;
 pub mod fields;
 pub mod hit;
+pub mod kinsoku;
 pub mod math;
 pub mod para;
 mod table;
@@ -21,7 +22,7 @@ use std::sync::Arc;
 
 use wordcraft_doc::numbering::{Counters, Level};
 use wordcraft_doc::para::{Anchor, Float, FloatAlign, InlineObject, Wrap};
-use wordcraft_doc::props::{Border, CharProps, Rgb, TableFloat};
+use wordcraft_doc::props::{Border, CharProps, Rgb, TableFloat, TextDirection};
 use wordcraft_doc::section::{SectionProps, SectionStart};
 use wordcraft_doc::{Block, Blocks, Document, Paragraph, Path, StoryRef};
 use wordcraft_geom::{Point, Rect};
@@ -58,6 +59,8 @@ pub struct LayoutOptions {
 #[derive(Clone, Debug)]
 pub enum Placed {
     /// Lines `l0..l1` of a paragraph; `y` is the top of line `l0`; `x` the column's left edge.
+    /// Turned lines (a table cell's text direction) run as `turn` says from the page point
+    /// (`x`, `y`): see [`turn_point`].
     Lines {
         story: StoryRef,
         path: Path,
@@ -66,6 +69,7 @@ pub enum Placed {
         l1: usize,
         x: f32,
         y: f32,
+        turn: TextDirection,
     },
     Fill {
         rect: Rect,
@@ -142,6 +146,75 @@ impl Placed {
                 *y1 += dy;
             }
         }
+    }
+
+    /// The page area of turned lines (`None` for anything else).
+    pub fn turned_bounds(&self) -> Option<Rect> {
+        let Placed::Lines { para, l0, l1, x, y, turn, .. } = self else { return None };
+        if !turn.is_turned() {
+            return None;
+        }
+        let first = para.lines.get(*l0)?;
+        let last = para.lines.get(l1.checked_sub(1)?)?;
+        let len = para.lines.get(*l0..*l1).unwrap_or(&[]).iter().map(|l| l.right).fold(0.0f32, f32::max);
+        Some(turn_rect(*turn, *x, *y, Rect::new(0.0, 0.0, len, last.top + last.height - first.top)))
+    }
+
+    /// Move an item laid out in a turned frame (a table cell's text running `turn`) onto the
+    /// page, the frame's origin landing on page point (`x`, `y`).
+    fn turn(&mut self, turn: TextDirection, x: f32, y: f32) {
+        if !turn.is_turned() {
+            self.translate(x, y);
+            return;
+        }
+        match self {
+            Placed::Lines { x: lx, y: ly, turn: t, .. } => {
+                (*lx, *ly) = turn_point(turn, x, y, *lx, *ly);
+                // Turned text inside turned text keeps its own direction (no 180° text).
+                if !t.is_turned() {
+                    *t = turn;
+                }
+            }
+            Placed::Fill { rect, .. } | Placed::Image { rect, .. } | Placed::Shape { rect, .. } | Placed::Cell { rect, .. } => {
+                *rect = turn_rect(turn, x, y, *rect);
+            }
+            Placed::Object { rect, origin, .. } => {
+                *rect = turn_rect(turn, x, y, *rect);
+                (origin.x, origin.y) = turn_point(turn, x, y, origin.x, origin.y);
+            }
+            Placed::Rule { x0, y0, x1, y1, .. } => {
+                (*x0, *y0) = turn_point(turn, x, y, *x0, *y0);
+                (*x1, *y1) = turn_point(turn, x, y, *x1, *y1);
+            }
+        }
+    }
+}
+
+/// Where point (`u`, `v`) of a frame turned `turn` lands on the page, the frame's origin being
+/// page point (`x`, `y`): `u` runs along the lines, `v` across them (down for horizontal text).
+pub fn turn_point(turn: TextDirection, x: f32, y: f32, u: f32, v: f32) -> (f32, f32) {
+    match turn {
+        TextDirection::Horizontal => (x + u, y + v),
+        TextDirection::Down => (x - v, y + u),
+        TextDirection::Up => (x + v, y - u),
+    }
+}
+
+/// The inverse of [`turn_point`]: the frame point at page point (`px`, `py`).
+pub fn unturn_point(turn: TextDirection, x: f32, y: f32, px: f32, py: f32) -> (f32, f32) {
+    match turn {
+        TextDirection::Horizontal => (px - x, py - y),
+        TextDirection::Down => (py - y, x - px),
+        TextDirection::Up => (y - py, px - x),
+    }
+}
+
+/// The page rectangle a frame rectangle covers (see [`turn_point`]).
+pub fn turn_rect(turn: TextDirection, x: f32, y: f32, r: Rect) -> Rect {
+    match turn {
+        TextDirection::Horizontal => Rect::new(x + r.x, y + r.y, r.w, r.h),
+        TextDirection::Down => Rect::new(x - r.y - r.h, y + r.x, r.h, r.w),
+        TextDirection::Up => Rect::new(x + r.y, y - r.x - r.w, r.h, r.w),
     }
 }
 
@@ -518,8 +591,15 @@ fn fit_box(items: Vec<Placed>, height: f32) -> Vec<Placed> {
     let mut out = Vec::with_capacity(items.len());
     let mut kept_line = false;
     for it in items {
+        if let Some(r) = it.turned_bounds() {
+            // Turned text (in a table cell) stays whole.
+            if r.y < limit {
+                out.push(it);
+            }
+            continue;
+        }
         match it {
-            Placed::Lines { story, path, para, l0, l1, x, y } => {
+            Placed::Lines { story, path, para, l0, l1, x, y, turn } => {
                 let Some(first) = para.lines.get(l0) else { continue };
                 let mut end = l0;
                 for k in l0..l1 {
@@ -531,7 +611,7 @@ fn fit_box(items: Vec<Placed>, height: f32) -> Vec<Placed> {
                     kept_line = true;
                 }
                 if end > l0 {
-                    out.push(Placed::Lines { story, path, para, l0, l1: end, x, y });
+                    out.push(Placed::Lines { story, path, para, l0, l1: end, x, y, turn });
                 }
             }
             Placed::Fill { rect, color } if rect.y < limit => {
@@ -564,7 +644,7 @@ fn push_para(items: &mut Vec<Placed>, story: StoryRef, path: &[u32], pl: &Arc<Pa
         let pad = pl.rp.borders.as_ref().map(|b| b.left.map(|l| l.space).unwrap_or(4.0)).unwrap_or(0.0);
         items.push(Placed::Fill { rect: Rect::new(left - pad, y, right - left + pad * 2.0, h), color: c });
     }
-    items.push(Placed::Lines { story, path: Path(path.to_vec()), para: pl.clone(), l0, l1, x, y });
+    items.push(Placed::Lines { story, path: Path(path.to_vec()), para: pl.clone(), l0, l1, x, y, turn: TextDirection::Horizontal });
     if let Some(b) = &pl.rp.borders {
         let sp = |o: &Option<Border>| o.map(|b| b.space).unwrap_or(0.0);
         let (lx, rx) = (left - sp(&b.left), right + sp(&b.right));
@@ -1354,6 +1434,7 @@ fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, 
                     l1: 1,
                     x: pb.sect.margin_left + pb.sect.gutter - dist - w,
                     y: ly,
+                    turn: TextDirection::Horizontal,
                 });
             }
         }

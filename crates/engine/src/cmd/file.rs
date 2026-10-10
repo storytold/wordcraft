@@ -131,12 +131,7 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
             return Ok(json!({"saved": false}));
         }
     };
-    s.doc.core.modified = super::now_iso();
-    if s.doc.core.created.is_empty() {
-        s.doc.core.created = s.doc.core.modified.clone();
-    }
-    s.doc.core.last_modified_by = s.author.clone();
-    s.doc.core.revision = s.doc.core.revision.saturating_add(1);
+    s.stamp_save();
     crate::io::save_path(&path, &s.doc).map_err(CmdError::Failed)?;
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     if ["docx", "docm", "dotx", "dotm", "odt", "rtf", "json"].contains(&ext.as_str()) {

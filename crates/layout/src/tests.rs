@@ -1,6 +1,6 @@
 use super::*;
 use wordcraft_doc::para::InlineObject;
-use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, ParaProps};
+use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, ParaProps, TextDirection};
 use wordcraft_doc::{Pos, Table};
 
 fn lay(doc: &Document) -> DocLayout {
@@ -260,10 +260,14 @@ fn many_hidden_float_anchors_lay_out_in_linear_time() {
 #[test]
 fn fragmented_hidden_text_lays_out_like_the_visible_text() {
     // Visible words with a hidden multi-byte char after every visible one, formatted in alternating
-    // runs (bold on and off) so no two left-out runs are adjacent or merge.
+    // runs (bold on and off) so no two left-out runs are adjacent or merge. The plain paragraph has
+    // the same visible runs without the hidden chars, so both lay out the same widths whatever font
+    // the default font resolves to.
     let words = "Hyphenation wraps international words across narrow columns of text ".repeat(6);
     let mut d = Document::from_text("");
     d.settings.auto_hyphenation = true;
+    let mut plain = Document::from_text("");
+    plain.settings.auto_hyphenation = true;
     let mut text = String::new();
     let mut kept = Vec::new();
     for (i, c) in words.chars().enumerate() {
@@ -276,10 +280,11 @@ fn fragmented_hidden_text_lays_out_like_the_visible_text() {
         d.insert_text(&Pos::body(0, n), &c.to_string(), &bold).unwrap();
         let hidden = wordcraft_doc::CharProps { hidden: Some(true), bold: Some(i % 2 == 1), ..Default::default() };
         d.insert_text(&Pos::body(0, at), "é", &hidden).unwrap();
+        let n = plain.para(StoryRef::Body, &Path::top(0)).unwrap().len();
+        plain.insert_text(&Pos::body(0, n), &c.to_string(), &bold).unwrap();
     }
     assert_eq!(d.para(StoryRef::Body, &Path::top(0)).unwrap().text, text);
-    let mut plain = Document::from_text(&words);
-    plain.settings.auto_hyphenation = true;
+    assert_eq!(plain.para(StoryRef::Body, &Path::top(0)).unwrap().text, words);
     for doc in [&mut d, &mut plain] {
         doc.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.indent_right = Some(468.0 - 90.0)).unwrap();
     }
@@ -440,6 +445,116 @@ fn tables_lay_out_cells() {
     assert!(l.cell_at(0, c.x, c.top + 2.0).is_some());
 }
 
+/// A 1×3 table after "before" whose middle cell holds `text` running `dir`.
+fn turned_table(dir: TextDirection, text: &str, row: Option<f32>) -> Document {
+    let mut d = Document::from_text("before\nafter");
+    let mut t = Table::new(1, 3, 468.0);
+    t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("plain", Default::default()))];
+    t.rows[0].cells[1].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))];
+    t.rows[0].cells[1].props.text_direction = dir;
+    if let Some(h) = row {
+        t.rows[0].props.height = Some(h);
+        t.rows[0].props.height_rule = wordcraft_doc::props::HeightRule::Exact;
+    }
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+    d
+}
+
+fn turned_lines(l: &DocLayout) -> &Placed {
+    l.pages[0].items.iter().find(|it| matches!(it, Placed::Lines { path, .. } if path.0 == [1, 0, 1, 0])).unwrap()
+}
+
+/// Table Layout › Text Direction (#226): turned cell text runs along the cell's height, the row
+/// grows to fit it, and caret, clicks and drawing follow the turn.
+#[test]
+fn turned_cell_text_runs_down_the_cell() {
+    let text = "Turned cell text";
+    let d = turned_table(TextDirection::Down, text, None);
+    let l = lay(&d);
+    let it = turned_lines(&l);
+    assert!(matches!(it, Placed::Lines { turn: TextDirection::Down, l0: 0, l1: 1, .. }), "one unwrapped line: {it:?}");
+    let b = it.turned_bounds().unwrap();
+    // Tall and narrow, against the cell's right edge (cell 2 spans x 228..384, 5.4pt margins).
+    assert!(b.h > 60.0 && b.w < 20.0, "{b:?}");
+    assert!((b.right() - (72.0 + 312.0 - 5.4)).abs() < 1.0 && b.x > 72.0 + 156.0, "{b:?}");
+    // The row grew to hold the text: the next paragraph starts below it.
+    let after = l.caret(&Pos::body(2, 0)).unwrap();
+    assert!(after.top > b.bottom(), "{after:?} vs {b:?}");
+    let cell = l.pages[0].items.iter().find_map(|i| if let Placed::Cell { rect, cell: 1, .. } = i { Some(*rect) } else { None }).unwrap();
+    assert!(cell.h >= b.h, "{cell:?}");
+    // The caret lies across the page and moves down as the text goes on.
+    let pos = |off| Pos { story: StoryRef::Body, path: Path(vec![1, 0, 1, 0]), off };
+    let c0 = l.caret(&pos(0)).unwrap();
+    let c1 = l.caret(&pos(text.len())).unwrap();
+    assert!(c0.width > 5.0 && c0.height == 0.0, "{c0:?}");
+    assert!((c0.top - b.y).abs() < 1.0 && c1.top > c0.top + 50.0, "{c0:?} {c1:?}");
+    assert!(c0.x >= b.x - 0.5 && c0.x + c0.width <= b.right() + 0.5, "{c0:?} {b:?}");
+    // A click on the turned text lands in it, by how far down the click is.
+    let hit = l.hit(0, b.x + b.w / 2.0, b.y + b.h * 0.6, StoryRef::Body).unwrap();
+    assert_eq!(hit.path, Path(vec![1, 0, 1, 0]));
+    assert!(hit.off > 3 && hit.off < text.len(), "{hit:?}");
+    // Selection highlights are turned too: tall, inside the text's area.
+    let sel = l.selection_rects(&d, &pos(0), &pos(text.len()), 0);
+    assert!(sel.iter().all(|(_, r)| r.h > r.w && r.x >= b.x - 1.0 && r.right() <= b.right() + 1.0), "{sel:?}");
+    // Drawn in a turned frame.
+    let draws = display::page_display(&d, &l.pages[0], &Default::default());
+    let turned = draws.iter().find_map(|x| if let display::Draw::Turned { turn, items, .. } = x { Some((*turn, items)) } else { None });
+    let (turn, items) = turned.expect("turned draw");
+    assert_eq!(turn, TextDirection::Down);
+    assert!(items.iter().any(|x| matches!(x, display::Draw::Glyphs { text, .. } if text.contains("Turned"))), "{items:?}");
+}
+
+#[test]
+fn turned_up_cell_text_reads_bottom_to_top() {
+    let text = "Bottom to top";
+    let d = turned_table(TextDirection::Up, text, None);
+    let l = lay(&d);
+    let b = turned_lines(&l).turned_bounds().unwrap();
+    // Against the cell's left edge; the text starts at the bottom and climbs.
+    assert!((b.x - (72.0 + 156.0 + 5.4)).abs() < 1.0, "{b:?}");
+    let pos = |off| Pos { story: StoryRef::Body, path: Path(vec![1, 0, 1, 0]), off };
+    let (c0, c1) = (l.caret(&pos(0)).unwrap(), l.caret(&pos(text.len())).unwrap());
+    assert!((c0.top - b.bottom()).abs() < 1.0 && c1.top < c0.top - 50.0, "{c0:?} {c1:?} {b:?}");
+    let hit = l.hit(0, b.x + b.w / 2.0, b.bottom() - 2.0, StoryRef::Body).unwrap();
+    assert_eq!((hit.path, hit.off), (Path(vec![1, 0, 1, 0]), 0));
+}
+
+#[test]
+fn turned_text_wraps_in_an_exact_row() {
+    let d = turned_table(TextDirection::Down, &"word ".repeat(30), Some(72.0));
+    let l = lay(&d);
+    let it = turned_lines(&l);
+    let lines = if let Placed::Lines { l0, l1, .. } = it { l1 - l0 } else { 0 };
+    assert!(lines > 2, "the text wraps at the row height");
+    let b = it.turned_bounds().unwrap();
+    assert!(b.h <= 72.0 && b.w > 30.0, "{b:?}");
+    let after = l.caret(&Pos::body(2, 0)).unwrap();
+    assert!(after.top < b.y + 72.0 + 30.0, "the row keeps its exact height: {after:?}");
+}
+
+#[test]
+fn hostile_turned_cells_never_panic() {
+    // Empty, huge and nested turned cells, in exact rows too small for anything.
+    for dir in [TextDirection::Down, TextDirection::Up] {
+        for row in [None, Some(0.5), Some(1e9)] {
+            let mut d = turned_table(dir, "", row);
+            let l = lay(&d);
+            let _ = l.caret(&Pos { story: StoryRef::Body, path: Path(vec![1, 0, 1, 0]), off: 0 });
+            let mut inner = Table::new(1, 1, 20.0);
+            inner.rows[0].cells[0].props.text_direction = dir;
+            if let Some(Block::Table(t)) = d.body.get_mut(1).map(Arc::make_mut) {
+                t.rows[0].cells[1].blocks.insert(0, Arc::new(Block::Table(inner)));
+            }
+            let l = lay(&d);
+            for p in &l.pages {
+                let _ = display::page_display(&d, p, &Default::default());
+            }
+        }
+    }
+    let l = lay(&turned_table(TextDirection::Down, &"long ".repeat(5000), None));
+    assert!(!l.pages.is_empty());
+}
+
 fn rules_on_page0(l: &DocLayout) -> Vec<f32> {
     l.pages[0].items.iter().filter_map(|i| if let Placed::Rule { border, .. } = i { Some(border.width) } else { None }).collect()
 }
@@ -547,6 +662,20 @@ fn selection_rects_cover_range() {
 }
 
 #[test]
+fn column_segments_take_the_same_x_range_on_every_line() {
+    let d = Document::from_text("abcdef\nabcdef\nab");
+    let l = lay(&d);
+    let left = l.caret(&Pos::body(0, 2)).unwrap().x;
+    let right = l.caret(&Pos::body(0, 4)).unwrap().x;
+    let segs = l.column_segments(&d, &Pos::body(2, 2), &Pos::body(0, 2), right, left, 0, 100);
+    let offs: Vec<(u32, usize, usize)> = segs.iter().map(|(a, b)| (a.path.0[0], a.off, b.off)).collect();
+    assert_eq!(offs, vec![(0, 2, 4), (1, 2, 4), (2, 2, 2)]);
+    // Capped, and junk x gives nothing.
+    assert_eq!(l.column_segments(&d, &Pos::body(0, 2), &Pos::body(2, 2), left, right, 0, 2).len(), 2);
+    assert!(l.column_segments(&d, &Pos::body(0, 2), &Pos::body(2, 2), f32::NAN, right, 0, 100).is_empty());
+}
+
+#[test]
 fn display_has_glyphs_and_marks() {
     let mut d = Document::from_text("Hello\tworld");
     d.format_range(&Pos::body(0, 0), &Pos::body(0, 5), &|c| c.underline = Some(wordcraft_doc::props::Underline::Single)).unwrap();
@@ -572,6 +701,63 @@ fn a_tracked_paragraph_mark_shows_in_its_authors_colour() {
     };
     assert_eq!(marks(true), [Some(display::revision_color(0)), None]);
     assert_eq!(marks(false), [None, None]);
+}
+
+#[test]
+fn section_breaks_show_with_formatting_marks() {
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    // Two sections: "One" ends the first; the second starts as `start`.
+    let doc = |start: SectionStart| {
+        let mut d = Document::from_text("One\nTwo");
+        d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().section = Some(Box::new(SectionProps::default()));
+        d.last_section.start = start;
+        d
+    };
+    let labels = |d: &Document, marks: bool| -> (Vec<String>, usize) {
+        let l = lay(d);
+        let items = display::page_display(d, &l.pages[0], &display::DisplayOptions { marks, ..Default::default() });
+        let texts = items.iter().filter_map(|i| if let display::Draw::MarkText { text, .. } = i { Some(text.clone()) } else { None }).collect();
+        let pilcrows = items.iter().filter(|i| matches!(i, display::Draw::Mark { ch: '¶', .. })).count();
+        (texts, pilcrows)
+    };
+    let d = doc(SectionStart::Continuous);
+    // The break replaces the first paragraph's ¶; the last paragraph keeps its own.
+    assert_eq!(labels(&d, true), (vec!["Section Break (Continuous)".to_string()], 1));
+    assert_eq!(labels(&d, false), (vec![], 0));
+    assert_eq!(labels(&doc(SectionStart::NextPage), true).0, ["Section Break (Next Page)"]);
+    assert_eq!(labels(&doc(SectionStart::EvenPage), true).0, ["Section Break (Even Page)"]);
+    assert_eq!(labels(&doc(SectionStart::OddPage), true).0, ["Section Break (Odd Page)"]);
+    // A document with one section has no break.
+    assert_eq!(labels(&Document::from_text("One\nTwo"), true), (vec![], 2));
+}
+
+#[test]
+fn paragraph_marks_sit_past_text_running_the_other_way() {
+    // A left-to-right paragraph ending in Hebrew, and a right-to-left one ending in Latin: the
+    // logically last letters are at the wrong edge, but the ¶ still goes past every glyph.
+    let mut d = Document::from_text("Hello \u{5e9}\u{5dc}\u{5d5}\u{5dd}\n\u{5e9}\u{5dc}\u{5d5}\u{5dd} abc");
+    let at = Pos::body(1, 0);
+    d.format_paragraphs(&at, &at, &|p: &mut ParaProps| p.bidi = Some(true)).unwrap();
+    let l = lay(&d);
+    // Leftmost and rightmost glyph edges (page x) of each paragraph's single line.
+    let extents: Vec<(f32, f32)> = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| if let Placed::Lines { para, x, .. } = it { Some((para, *x)) } else { None })
+        .map(|(pl, x)| {
+            let ln = &pl.lines[0];
+            let edges = (ln.c0..ln.c1).filter_map(|k| Some((ln.cl_left(k)?, ln.cl_right(k)?)));
+            edges.fold((f32::MAX, f32::MIN), |(a, b), (l, r)| (a.min(x + l), b.max(x + r)))
+        })
+        .collect();
+    let marks: Vec<(f32, f32)> = display::page_display(&d, &l.pages[0], &display::DisplayOptions { marks: true, ..Default::default() })
+        .into_iter()
+        .filter_map(|i| if let display::Draw::Mark { ch: '¶', x, size, .. } = i { Some((x, size)) } else { None })
+        .collect();
+    assert_eq!((extents.len(), marks.len()), (2, 2));
+    let ((ltr_x, _), (rtl_x, size)) = (marks[0], marks[1]);
+    assert!(ltr_x >= extents[0].1, "LTR ¶ at {ltr_x} should be right of all glyphs {:?}", extents[0]);
+    assert!(rtl_x + size * 0.5 <= extents[1].0, "RTL ¶ at {rtl_x} should be left of all glyphs {:?}", extents[1]);
 }
 
 fn border_lines(d: &Document) -> Vec<(f32, f32, f32, f32)> {
@@ -2185,4 +2371,26 @@ fn hidden_float_in_a_text_box_is_not_placed() {
     let (shown, shown_areas) = count(true);
     let (hidden_n, hidden_areas) = count(false);
     assert_eq!((shown - hidden_n, shown_areas - hidden_areas), (1, 1), "shown {shown}/{shown_areas}, hidden {hidden_n}/{hidden_areas}");
+}
+
+#[test]
+fn kinsoku_keeps_a_manual_line_break_before_a_closing_bracket() {
+    // #269: kinsoku forbids a line starting with 」, but a manual line break (Shift+Enter) right
+    // before one still ends the line there.
+    let text = "日本語\n」テスト";
+    let mut d = Document::from_text("");
+    d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))];
+    let l = lay(&d);
+    let mut lines = Vec::new();
+    for p in &l.pages {
+        for it in &p.items {
+            if let Placed::Lines { para, l0, l1, .. } = it {
+                lines.extend(para.lines[*l0..*l1].iter().map(|line| (line.start, line.end)));
+            }
+        }
+    }
+    let bracket = text.find('」').unwrap();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(lines[0].1, LineEnd::LineBreak, "{lines:?}");
+    assert_eq!(lines[1].0, bracket, "the second line starts at the bracket: {lines:?}");
 }

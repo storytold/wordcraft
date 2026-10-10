@@ -540,6 +540,23 @@ fn field_results_are_extractable_text() {
 }
 
 #[test]
+fn field_result_ligatures_extract_all_their_letters() {
+    // A field result is shaped as one cluster; a ligature in it (Carlito, the Calibri substitute,
+    // joins "ti") used to get only its first letter, shifting the rest: "Sectio  3.01". Bundled
+    // Source Sans 3 joins "fi" and "ffi", so this doesn't depend on the installed fonts.
+    let font = CharProps { font: Some("Source Sans 3".into()), ..Default::default() };
+    let result = "the first office";
+    let face = wordcraft_fonts::FontDb::global().face("Source Sans 3", "Regular");
+    assert!(wordcraft_fonts::shape(&face, result, &[], |c| c).len() < result.chars().count(), "the result has ligatures");
+    let mut d = Document::new();
+    let mut p = Paragraph::with_text("See  here.", font.clone());
+    p.insert_object(4, InlineObject::Field { instr: " REF _RefTarget \\h ".into(), result: result.into(), locked: false }, &font).unwrap();
+    d.body = vec![para_block(p)];
+    let text = extract_text(&export(&d, &PdfOptions::default()).unwrap()).concat();
+    assert!(squash(&text).contains("See the first office here."), "{text:?}");
+}
+
+#[test]
 fn synthetic_bold_text_is_extracted_once() {
     // JetBrains Mono ships without a bold face, so its bold is filled and stroked: the text
     // layer still holds each character once.
@@ -548,4 +565,19 @@ fn synthetic_bold_text_is_extracted_once() {
     d.body = vec![para_block(Paragraph::with_text("Mono bold", bold))];
     let text = squash(&extract_text(&export(&d, &PdfOptions::default()).unwrap()).concat());
     assert!(text.contains("Mono bold"), "{text:?}");
+}
+
+#[test]
+fn turned_cell_text_exports_as_text() {
+    // Table Layout › Text Direction (#226): turned cell text is drawn in a turned frame and
+    // stays real text in the PDF.
+    for dir in [wordcraft_doc::props::TextDirection::Down, wordcraft_doc::props::TextDirection::Up] {
+        let mut t = Table::new(1, 2, 300.0);
+        t.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("Turned", CharProps::default()))];
+        t.rows[0].cells[0].props.text_direction = dir;
+        let mut d = Document::new();
+        d.body = vec![Arc::new(Block::Table(t)), para_block(Paragraph::with_text("Below", CharProps::default()))];
+        let text = squash(&extract_text(&export(&d, &PdfOptions::default()).unwrap()).concat());
+        assert!(text.contains("Turned") && text.contains("Below"), "{dir:?}: {text:?}");
+    }
 }

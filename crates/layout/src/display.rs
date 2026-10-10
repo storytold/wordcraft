@@ -1,8 +1,9 @@
 //! Page → draw items, shared by the raster renderer, the PDF exporter and thumbnails.
 
 use wordcraft_doc::para::{InlineObject, ShapeKind};
-use wordcraft_doc::props::{Border, BorderStyle, Rgb, TextColor, Underline};
-use wordcraft_doc::{Document, Path, StoryRef};
+use wordcraft_doc::props::{Border, BorderStyle, Rgb, TextColor, TextDirection, Underline};
+use wordcraft_doc::section::SectionStart;
+use wordcraft_doc::{Block, Document, Path, StoryRef};
 use wordcraft_fonts::FaceRef;
 use wordcraft_geom::Rect;
 
@@ -74,6 +75,34 @@ pub enum Draw {
         ch: char,
         color: Option<Rgb>,
     },
+    /// Turned text (a table cell's text direction): `items` are drawn in a frame turned `turn`
+    /// whose origin is page point (`x`, `y`) (see [`crate::turn_point`]).
+    Turned {
+        x: f32,
+        y: f32,
+        turn: TextDirection,
+        items: Vec<Draw>,
+    },
+    /// A formatting-mark label (a section break's name) in the UI's mark colour, left edge at
+    /// `x`, drawn with the same face as [`Draw::Mark`]. Screen only, like every mark.
+    MarkText {
+        x: f32,
+        baseline: f32,
+        size: f32,
+        text: String,
+    },
+}
+
+impl Draw {
+    /// The affine map (a, b, c, d, e, f: x' = a·x + c·y + e, y' = b·x + d·y + f) from a frame
+    /// turned `turn` with its origin at page point (`x`, `y`) to the page.
+    pub fn turn_matrix(turn: TextDirection, x: f32, y: f32) -> [f32; 6] {
+        match turn {
+            TextDirection::Horizontal => [1.0, 0.0, 0.0, 1.0, x, y],
+            TextDirection::Down => [0.0, 1.0, -1.0, 0.0, x, y],
+            TextDirection::Up => [0.0, -1.0, 1.0, 0.0, x, y],
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -172,7 +201,18 @@ fn item(doc: &Document, it: &Placed, opts: &DisplayOptions, alpha: f32, out: &mu
             out.push(Draw::Shape { rect: *rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width })
         }
         Placed::Cell { .. } | Placed::Object { .. } => {}
-        Placed::Lines { story, path, para, l0, l1, x, y } => lines(doc, *story, path, para, *l0, *l1, *x, *y, opts, alpha, out),
+        Placed::Lines { story, path, para, l0, l1, x, y, turn } if turn.is_turned() => {
+            let mut items = Vec::new();
+            lines(doc, *story, path, para, *l0, *l1, 0.0, 0.0, opts, alpha, &mut items);
+            // Link areas are axis-aligned page rectangles: turned text gets none.
+            for d in &mut items {
+                if let Draw::Glyphs { link, .. } = d {
+                    *link = None;
+                }
+            }
+            out.push(Draw::Turned { x: *x, y: *y, turn: *turn, items });
+        }
+        Placed::Lines { story, path, para, l0, l1, x, y, .. } => lines(doc, *story, path, para, *l0, *l1, *x, *y, opts, alpha, out),
     }
 }
 
@@ -312,26 +352,36 @@ fn lines(
                 if matches!(c.kind, ClKind::Text | ClKind::Space) {
                     let a = text.len();
                     // An object's cluster (a field, a note number) stands for the text it shows.
-                    let mut shown = false;
-                    if let Ok(i) = pl.shown.binary_search_by_key(&k, |(i, _)| *i)
-                        && let Some((_, s)) = pl.shown.get(i)
+                    let mut shown = None;
+                    if let Ok(i) = pl.shown.binary_search_by_key(&k, |(i, _, _)| *i)
+                        && let Some((_, s, r)) = pl.shown.get(i)
                     {
                         text.push_str(s);
-                        shown = true;
+                        shown = Some(r);
                     } else if let Some(p) = para {
                         text.push_str(p.text.get(c.start..c.end).unwrap_or(""));
                     }
                     let b = text.len();
                     let cg = pl.glyphs.get(c.g0 as usize..c.g1 as usize).unwrap_or(&[]);
-                    if shown && cg.len() > 1 {
-                        // A whole field result is one cluster of many glyphs: give them a character
-                        // each (the last takes any remainder), not the whole text as one ligature.
+                    if let Some(shown) = shown
+                        && cg.len() > 1
+                    {
+                        // A whole field result is one cluster of many glyphs: each glyph gets the
+                        // text it was shaped from (a ligature its letters), not the whole text as
+                        // one ligature. Without that, a character each (the last takes any remainder).
                         let bounds: Vec<usize> = text.get(a..b).unwrap_or("").char_indices().map(|(i, _)| a + i).collect();
+                        let known = shown.len() == cg.len();
                         for (n, g) in cg.iter().enumerate() {
-                            let from = bounds.get(n).or(bounds.last()).copied().unwrap_or(a);
-                            let to = if n + 1 == cg.len() { b } else { bounds.get(n + 1).copied().unwrap_or(b) };
+                            let r = match shown.get(n).filter(|_| known) {
+                                Some(r) => (a + r.start).min(b)..(a + r.end).min(b),
+                                None => {
+                                    let from = bounds.get(n).or(bounds.last()).copied().unwrap_or(a);
+                                    let to = if n + 1 == cg.len() { b } else { bounds.get(n + 1).copied().unwrap_or(b) };
+                                    from..to
+                                }
+                            };
                             glyphs.push((g.gid, cx + g.dx, base - st.shift - g.dy));
-                            ranges.push(from..to.max(from));
+                            ranges.push(r.start..r.end.max(r.start));
                         }
                         k += 1;
                         continue;
@@ -539,7 +589,9 @@ fn lines(
                 }
             }
             if line.end == LineEnd::Para {
-                let ex = x + line.end_x();
+                // The mark follows the line's visual end, past every glyph, even where the
+                // logically last text runs against the paragraph's direction.
+                let ex = x + line.visual_end_x();
                 let size = pl.lines.first().map(|_| msize).unwrap_or(msize);
                 // A right-to-left paragraph's mark sits at its end, on the left.
                 let mx = if line.rtl { ex - 1.0 - size * 0.6 } else { ex + 1.0 };
@@ -548,11 +600,73 @@ fn lines(
                     .and_then(|p| p.mark.ins.or(p.mark.del))
                     .filter(|_| opts.markup)
                     .map(|r| revision_color(doc.revisions.get(r as usize).map(|v| author_index(doc, &v.author)).unwrap_or(0)));
-                out.push(Draw::Mark { x: mx, baseline: base, size, ch: '¶', color });
+                // The last paragraph of a section ends in a section break instead of a plain ¶.
+                if let Some(start) = section_break_after(doc, story, path) {
+                    let (x0, x1) = if line.rtl { (x + line.left, ex - 2.0) } else { (ex + 2.0, x + line.right) };
+                    section_break_mark(start, x0, x1, base, size, alpha, out);
+                } else {
+                    out.push(Draw::Mark { x: mx, baseline: base, size, ch: '¶', color });
+                }
             }
         }
         let _ = bottom;
     }
+}
+
+/// The kind of section break that ends at body paragraph `path`: the start type of the section
+/// that follows it. `None` for any other paragraph, and for the document's last section.
+fn section_break_after(doc: &Document, story: StoryRef, path: &Path) -> Option<SectionStart> {
+    if story != StoryRef::Body || path.0.len() != 1 {
+        return None;
+    }
+    let i = *path.0.first()? as usize;
+    match doc.body.get(i).map(|b| &**b) {
+        Some(Block::Para(p)) if p.section.is_some() => {}
+        _ => return None,
+    }
+    let secs = doc.sections();
+    let k = secs.iter().position(|(end, _)| *end == i)?;
+    secs.get(k + 1).map(|(_, s)| s.start)
+}
+
+/// On-screen name of a section break.
+pub fn section_break_label(start: SectionStart) -> &'static str {
+    match start {
+        SectionStart::NextPage => "Section Break (Next Page)",
+        SectionStart::Continuous => "Section Break (Continuous)",
+        SectionStart::EvenPage => "Section Break (Even Page)",
+        SectionStart::OddPage => "Section Break (Odd Page)",
+        SectionStart::NextColumn => "Section Break (Next Column)",
+    }
+}
+
+/// Width of a [`Draw::MarkText`] label.
+pub fn mark_text_width(text: &str, size: f32) -> f32 {
+    let face = wordcraft_fonts::word::resolve("Source Sans 3", false, false).face;
+    let k = size / face.upem.max(1.0) as f32;
+    text.chars().map(|c| face.advance(face.glyph_for(c)) as f32 * k).sum()
+}
+
+/// A section break mark between `x0` and `x1`: a dotted double rule with the break's name centred
+/// in it (just the name when there is no room for the rule).
+fn section_break_mark(start: SectionStart, x0: f32, x1: f32, base: f32, size: f32, alpha: f32, out: &mut Vec<Draw>) {
+    let text = section_break_label(start);
+    let lsize = (size * 0.8).clamp(6.0, 11.0);
+    let w = mark_text_width(text, lsize);
+    let gap = lsize * 0.4;
+    let mid = base - size * 0.3;
+    let color = Rgb(0x60, 0x60, 0x60);
+    if x1 - x0 <= w + 4.0 * gap {
+        out.push(Draw::MarkText { x: x0, baseline: base, size: lsize, text: text.into() });
+        return;
+    }
+    let tx = (x0 + x1 - w) / 2.0;
+    for (a, b) in [(x0, tx - gap), (tx + w + gap, x1)] {
+        for y in [mid - 1.2, mid + 1.2] {
+            out.push(Draw::Line { x0: a, y0: y, x1: b, y1: y, width: 0.5, color, stroke: Stroke::Dotted, alpha });
+        }
+    }
+    out.push(Draw::MarkText { x: tx, baseline: mid + lsize * 0.33, size: lsize, text: text.into() });
 }
 
 /// An equation's glyphs and rules with its origin at (`x`, `base`).
