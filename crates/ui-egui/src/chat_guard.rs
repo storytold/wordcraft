@@ -14,10 +14,13 @@
 //! halves of an owner paragraph split by a member's Enter), so the Enter cannot hide a change to
 //! the owner's paragraph. A member's own new paragraph (only its tracked text) is free.
 //! Accept/reject commands are checked with the accepted or rejected view instead: they may only
-//! resolve revisions.
+//! resolve revisions, and never in a comment by someone else.
 //!
 //! Every comparison below destructures the document structs field by field (no `..`): a new
 //! upstream field breaks the build here until someone decides how the guard treats it.
+//!
+//! The guard fails closed: what the views cannot see is never ignored. A document with tables
+//! nested deeper than [`MAX_DEPTH`] levels gets no change from a member at all.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -34,8 +37,13 @@ const DOC: &str = "document-wide settings (page setup, sections, styles, theme) 
 const LIST: &str = "list definitions (numbers, bullets, label text) are the owner's";
 const JUDGE: &str = "accept/reject did more than resolve tracked changes";
 const COMMENT: &str = "the text of a comment by someone else cannot change (only your own comments and replies)";
+const DEEP: &str = "tables nested more than 16 levels deep: the guard cannot check them, so it refuses every change to this document";
 /// Reason for a command that is not supposed to edit and changed the document or the undo stack.
 pub const PURE: &str = "this command must not change the document, and it did";
+
+/// The deepest table nesting the views see: blocks in a cell of a table that is nested deeper
+/// are not in them (the same limit as [`Document::para_paths`]).
+pub const MAX_DEPTH: usize = 16;
 
 /// What a member command did to the document.
 #[derive(Debug, PartialEq, Eq)]
@@ -50,10 +58,10 @@ pub enum Verdict {
 
 /// A command that is not accept/reject, run by `handle`.
 pub fn check_member(before: &Document, after: &Document, handle: &str) -> Verdict {
-    // The text of a comment is shown plain everywhere (balloon, pane, review.comments): even a
-    // tracked change there would be invisible. Comments of others stay exactly as they were.
-    let others_changed = before.comments.values().filter(|c| c.author != handle).any(|c| before.parts.get(&c.part) != after.parts.get(&c.part));
-    if others_changed {
+    if too_deep(before) || too_deep(after) {
+        return Verdict::Refuse(DEEP);
+    }
+    if others_comments_changed(before, after, handle) {
         return Verdict::Refuse(COMMENT);
     }
     let own: BTreeSet<u32> = before.comments.iter().chain(after.comments.iter()).filter(|(_, c)| c.author == handle).map(|(k, _)| *k).collect();
@@ -75,6 +83,28 @@ pub fn check_member(before: &Document, after: &Document, handle: &str) -> Verdic
     if b.same(&a) && before.numbering == after.numbering { Verdict::Clean } else { Verdict::Format }
 }
 
+/// The text of a comment is shown plain everywhere (balloon, pane, review.comments): even a
+/// tracked change there would be invisible. Comments of others stay exactly as they were.
+fn others_comments_changed(before: &Document, after: &Document, handle: &str) -> bool {
+    before.comments.values().filter(|c| c.author != handle).any(|c| before.parts.get(&c.part) != after.parts.get(&c.part))
+}
+
+/// Some story holds blocks the views do not see (tables nested deeper than [`MAX_DEPTH`]).
+fn too_deep(doc: &Document) -> bool {
+    hides(&doc.body, 0) || doc.parts.values().any(|p| hides(&p.blocks, 0))
+}
+
+/// [`Viewer::blocks`] at `depth` leaves out a block of `bl`.
+fn hides(bl: &Blocks, depth: usize) -> bool {
+    if depth > MAX_DEPTH {
+        return !bl.is_empty();
+    }
+    bl.iter().any(|b| match &**b {
+        Block::Para(_) => false,
+        Block::Table(t) => t.rows.iter().flat_map(|r| r.cells.iter()).any(|c| hides(&c.blocks, depth.saturating_add(1))),
+    })
+}
+
 /// A command that is not supposed to edit (`.pure()`): any change to the document is refused.
 pub fn check_unchanged(before: &Document, after: &Document) -> Verdict {
     if before == after { Verdict::Clean } else { Verdict::Refuse(PURE) }
@@ -82,7 +112,8 @@ pub fn check_unchanged(before: &Document, after: &Document) -> Verdict {
 
 /// Tracked characters per author in every story (body, headers, footers, notes, comments):
 /// inserted and deleted characters, an inserted or deleted paragraph mark counts as one. Counting
-/// characters (not changes) makes a partial accept/reject show too.
+/// characters (not changes) makes a partial accept/reject show too. It sees what the views see
+/// ([`MAX_DEPTH`]); [`check_judging`] refuses a document that holds more.
 fn tally(doc: &Document) -> BTreeMap<String, usize> {
     let mut out: BTreeMap<String, usize> = BTreeMap::new();
     let author = |r: u32| doc.revisions.get(r as usize).map(|x| x.author.clone()).unwrap_or_else(|| "?".into());
@@ -157,9 +188,16 @@ fn lists_kept(before: &Numbering, after: &Numbering) -> bool {
     abs_kept && nums_kept
 }
 
-/// `review.accept*` (`accept`) or `review.reject*`: the accepted (or rejected) document must be
-/// the same before and after.
-pub fn check_judging(before: &Document, after: &Document, accept: bool) -> Verdict {
+/// `review.accept*` (`accept`) or `review.reject*` run by `handle`: the accepted (or rejected)
+/// document must be the same before and after, and comments by others must not change (as in
+/// [`check_member`]).
+pub fn check_judging(before: &Document, after: &Document, accept: bool, handle: &str) -> Verdict {
+    if too_deep(before) || too_deep(after) {
+        return Verdict::Refuse(DEEP);
+    }
+    if others_comments_changed(before, after, handle) {
+        return Verdict::Refuse(COMMENT);
+    }
     let lens = if accept { Lens::Accepted } else { Lens::Rejected };
     let none = BTreeSet::new();
     let (b, a) = (view(before, lens, &none), view(after, lens, &none));
@@ -434,9 +472,11 @@ impl Viewer<'_> {
         Tails { allowed: looks(&mask_key(&expected, Mask::Allowed), &mask_key(&got, Mask::Allowed)), strict: looks(&expected, &got) }
     }
 
+    /// The view of `bl`; empty past [`MAX_DEPTH`] (the checks refuse such a document first, see
+    /// [`too_deep`]).
     fn blocks(&self, bl: &Blocks, depth: usize) -> Vec<NBlock> {
         let mut out: Vec<NBlock> = Vec::new();
-        if depth > 16 {
+        if depth > MAX_DEPTH {
             return out;
         }
         // The pieces joined so far into the last paragraph of `out`: (properties, holds text).
@@ -832,20 +872,85 @@ mod tests {
         // Accept: the owner's insertion loses its mark; accepted view unchanged.
         let mut acc = before.clone();
         fmt(&mut acc, 5, 10, &|c| c.ins = None);
-        assert_eq!(check_judging(&before, &acc, true), Verdict::Clean);
+        assert_eq!(check_judging(&before, &acc, true, "@claude"), Verdict::Clean);
         // "Accept" that also changes text.
         let mut bad = acc.clone();
         if let Ok(p) = bad.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)) {
             let _ = p.insert_text(0, "X", &CharProps::default());
         }
-        assert_eq!(check_judging(&before, &bad, true), Verdict::Refuse(JUDGE));
+        assert_eq!(check_judging(&before, &bad, true, "@claude"), Verdict::Refuse(JUDGE));
         // Reject: the owner's insertion is removed; rejected view unchanged.
         let mut rej = before.clone();
         if let Ok(p) = rej.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)) {
             let _ = p.delete(5, 10);
         }
-        assert_eq!(check_judging(&before, &rej, false), Verdict::Clean);
-        assert_eq!(check_judging(&before, &rej, true), Verdict::Refuse(JUDGE));
+        assert_eq!(check_judging(&before, &rej, false, "@claude"), Verdict::Clean);
+        assert_eq!(check_judging(&before, &rej, true, "@claude"), Verdict::Refuse(JUDGE));
+    }
+
+    /// `before` with a comment by `author` whose text holds the owner's tracked insertion
+    /// "NOT " (revision 0), and that comment's part.
+    fn comment_with_owner_insertion(author: &str) -> (Document, u32) {
+        let mut d = doc();
+        let part = d.add_part(PartKind::Comment, vec![wordcraft_doc::para_block(Paragraph::with_text("NOT I accept", CharProps::default()))]);
+        if let Ok(p) = d.para_mut(StoryRef::Part(part), &wordcraft_doc::Path::top(0)) {
+            let _ = p.format(0, 4, &|c| c.ins = Some(0));
+        }
+        d.comments.insert(0, wordcraft_doc::Comment { author: author.into(), part, ..Default::default() });
+        (d, part)
+    }
+
+    #[test]
+    fn judging_never_changes_a_comment_by_someone_else() {
+        for (author, verdict) in [("Owner", Verdict::Refuse(COMMENT)), ("@claude", Verdict::Clean)] {
+            let (before, part) = comment_with_owner_insertion(author);
+            // Accept: the mark goes, the text stays.
+            let mut acc = before.clone();
+            if let Ok(p) = acc.para_mut(StoryRef::Part(part), &wordcraft_doc::Path::top(0)) {
+                let _ = p.format(0, 4, &|c| c.ins = None);
+            }
+            assert_eq!(check_judging(&before, &acc, true, "@claude"), verdict, "accept, comment by {author}");
+            // Reject: the text goes.
+            let mut rej = before.clone();
+            if let Ok(p) = rej.para_mut(StoryRef::Part(part), &wordcraft_doc::Path::top(0)) {
+                let _ = p.delete(0, 4);
+            }
+            assert_eq!(check_judging(&before, &rej, false, "@claude"), verdict, "reject, comment by {author}");
+        }
+    }
+
+    /// "Top.", then `depth` 1x1 tables, each one in the cell of the one before, around "Deep.".
+    fn nested(depth: usize) -> Document {
+        let mut d = Document::from_text("Top.");
+        let mut inner: Blocks = vec![wordcraft_doc::para_block(Paragraph::with_text("Deep.", CharProps::default()))];
+        for _ in 0..depth {
+            let mut t = Table::default();
+            t.rows.push(wordcraft_doc::Row { cells: vec![wordcraft_doc::Cell { blocks: inner, ..Default::default() }], ..Default::default() });
+            inner = vec![std::sync::Arc::new(Block::Table(t))];
+        }
+        d.body.extend(inner.iter().cloned());
+        d
+    }
+
+    #[test]
+    fn a_document_deeper_than_the_views_is_refused_whole() {
+        assert!(DEEP.contains(&format!(" {MAX_DEPTH} ")));
+        for depth in [0, 1, MAX_DEPTH] {
+            assert!(!too_deep(&nested(depth)), "{depth}");
+        }
+        let seen = nested(MAX_DEPTH);
+        let deep = nested(MAX_DEPTH + 1);
+        assert!(too_deep(&deep));
+        // Equal views, yet every check refuses: the change could be where the views do not look.
+        assert_eq!(check_member(&deep, &deep, "@claude"), Verdict::Refuse(DEEP));
+        assert_eq!(check_judging(&deep, &deep, true, "@claude"), Verdict::Refuse(DEEP));
+        assert_eq!(check_judging(&seen, &deep, false, "@claude"), Verdict::Refuse(DEEP));
+        assert_eq!(check_member(&seen, &seen, "@claude"), Verdict::Clean);
+        // In a comment or a header too.
+        let mut d = doc();
+        let blocks = nested(MAX_DEPTH + 1).body.clone();
+        d.add_part(PartKind::Comment, blocks);
+        assert!(too_deep(&d));
     }
 
     #[test]
