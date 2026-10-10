@@ -67,8 +67,9 @@ pub struct Services {
     /// Web: told whether the document has unsaved changes after each pass, for the browser's
     /// leave-page guard (`beforeunload` runs between frames and can't ask the app).
     pub on_dirty: Option<Box<dyn Fn(bool)>>,
-    /// Web: hand PDF bytes to the browser's print flow directly (no download, no intermediate
-    /// file) — opens the system print dialog on that PDF. An error means no dialog was opened.
+    /// Hand PDF bytes to the system's print flow. Web: the browser's print dialog on that PDF (no
+    /// download, no intermediate file). Desktop: the PDF opens in the system's viewer (a temporary
+    /// file), where the user prints (#15). An error means nothing was opened.
     pub print: Option<Box<dyn Fn(&[u8]) -> Result<(), String>>>,
 }
 
@@ -591,7 +592,7 @@ impl WordApp {
                 self.pick_recipient_list();
                 json!({"pending": self.recipient_list_pending})
             }
-            // Send the document to the system print dialog (web). `file.print` opens the Print
+            // Send the document to the system print flow (web, desktop). `file.print` opens the Print
             // page; this is the button on it, and the one programmatic call that opens system UI
             // here, like `ui.openFileDialog` — only when the host can print.
             "ui.print" => return Some(self.print_to_system()),
@@ -604,7 +605,7 @@ impl WordApp {
     }
 
     /// `ui.print`: export the document to PDF in memory and hand it to the host's print hook.
-    /// An error when the host can't print (desktop: File › Print saves a PDF instead).
+    /// An error when the host can't print (File › Print then only saves a PDF).
     fn print_to_system(&mut self) -> Result<Value, String> {
         if self.services.print.is_none() {
             return Err("printing to the system print dialog isn't available here; export a PDF instead".into());
@@ -1441,7 +1442,7 @@ mod tests {
     }
 
     /// `ui.print` hands the document's PDF to the host's print hook, and is an error (with
-    /// nothing printed) when the host has none, as on desktop.
+    /// nothing printed) when the host has none.
     #[test]
     fn ui_print_needs_the_hosts_print_hook() {
         let mut a = typed();

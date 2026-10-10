@@ -53,9 +53,14 @@
 	AutoSave	自動儲存
 	AutoSave documents you have saved in WordCraft	自動儲存在 WordCraft 中儲存過的文件
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	自動儲存失敗：{error}。重新儲存文件後將恢復自動儲存。
+	Bottom Margin	下邊界
 	Dark page (white text on black)	深色頁面（黑底白字）
+	Edit Comment	編輯註解
+	Left Margin	左邊界
 	More templates →	更多範本 →
 	No templates match your search.	沒有符合搜尋的範本。
+	Reopen	重新開啟
+	Right Margin	右邊界
 	Search for templates	搜尋範本
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	像「檢視 › 切換模式」一樣以反轉的色彩顯示文件。儲存、列印和 PDF 不受影響。
 	AutoSave saves every change to the file (needs a saved document)	自動儲存會將每次變更寫入檔案（文件需已儲存）
@@ -720,6 +725,7 @@
 	Three	三欄
 	Tight	緊密
 	Top Border	上框線
+	Top Margin	上邊界
 	Top of Page	頁面頂端
 	Top:	上：
 	Total Row	合計列
@@ -779,6 +785,7 @@
 	Wrap Text	文繞圖
 	Wrap\nText	文繞圖
 	Write & Insert Fields	書寫與插入欄位
+	Write a reply	撰寫回覆
 	Zoom	縮放
 	Zoom In	放大
 	Zoom Out	縮小
@@ -1010,3 +1017,13 @@
 	Vertical alignment:	垂直對齊方式：
 	Top	上
 	Bottom	下
+	Alt text	替代文字
+	Alt:	替代文字：
+	W:	寬：
+	H:	高：
+	Reset	重設
+	Reset Crop	重設裁剪
+	Insert a new equation (Alt+=)	插入新方程式 (Alt+=)
+	Leave the equation (Esc)	離開方程式 (Esc)
+	Preview	預覽
+	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft

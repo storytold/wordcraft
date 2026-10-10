@@ -1125,6 +1125,14 @@ fn comments() {
     let l = run(&mut s, "review.comments", json!({}));
     assert_eq!(l[0]["text"], "Nice");
     assert_eq!(text(&s), "Some text here");
+    // Editing the text is one undo step; replies hang off their comment.
+    run(&mut s, "review.editComment", json!({"id": id, "text": "Nicer\nTwo lines"}));
+    assert_eq!(run(&mut s, "review.comments", json!({}))[0]["text"], "Nicer\nTwo lines");
+    assert!(s.undo());
+    assert_eq!(run(&mut s, "review.comments", json!({}))[0]["text"], "Nice");
+    assert!(s.run("review.editComment", &json!({"id": 999, "text": "x"})).is_err());
+    let r = run(&mut s, "review.reply", json!({"id": id, "text": "Agreed"}));
+    assert_eq!(s.doc.comments.get(&(r["id"].as_u64().unwrap() as u32)).unwrap().parent, Some(id as u32));
     run(&mut s, "review.deleteComment", json!({"id": id}));
     assert!(s.doc.comments.is_empty());
     assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().objects.len(), 0);
@@ -2160,7 +2168,9 @@ fn page_and_table_gridlines_toggle_independently() {
     let mut s = s();
     run(&mut s, "text.insert", json!({"text": "Hello"}));
     let undo = s.undo_labels();
-    assert!(!s.view.gridlines && !s.view.table_gridlines);
+    // Table cell outlines are on by default, as in Word; the page grid is off.
+    assert!(!s.view.gridlines && s.view.table_gridlines);
+    assert_eq!(run(&mut s, "table.viewGridlines", json!({"value": false}))["value"], false);
 
     assert_eq!(run(&mut s, "view.gridlines", json!({}))["value"], true);
     assert!(s.view.gridlines && !s.view.table_gridlines);

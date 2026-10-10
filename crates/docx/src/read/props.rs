@@ -375,11 +375,16 @@ pub fn tcpr(e: &El) -> (CellProps, bool) {
     let mut hcont = false;
     for k in e.els() {
         match k.name.as_str() {
-            "w:tcW" => {
-                if matches!(k.attr("w:type"), None | Some("dxa")) {
-                    c.width = tw(k, "w:w").filter(|v| *v > 0.0);
+            "w:tcW" => match k.attr("w:type") {
+                None | Some("dxa") => c.width = tw(k, "w:w").filter(|v| *v > 0.0),
+                Some("pct") => {
+                    let w = k.attr("w:w").unwrap_or("0");
+                    c.width_pct = if let Some(p) = w.strip_suffix('%') { measure(p, 1.0) } else { measure(w, 50.0) }
+                        .map(|v| v.clamp(0.0, 100.0))
+                        .filter(|v| *v > 0.0);
                 }
-            }
+                _ => {}
+            },
             "w:gridSpan" => c.span = k.attr("w:val").and_then(u32_of).unwrap_or(1).clamp(1, 63),
             "w:hMerge" => hcont = k.attr("w:val") != Some("restart"),
             "w:vMerge" => c.vmerge = if k.attr("w:val") == Some("restart") { VMerge::Restart } else { VMerge::Continue },
