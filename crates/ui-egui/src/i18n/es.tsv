@@ -783,7 +783,7 @@
 	Style Inspector	Inspector de estilos
 	Style Set	Conjunto de estilos
 	Style based on:	Estilo basado en:
-	Style: APA	Estilo: APA
+	Style: {style}	Estilo: {style}
 	Styles	Estilos
 	Styles Pane	Panel de estilos
 	Subscript	Subíndice

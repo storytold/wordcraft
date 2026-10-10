@@ -940,7 +940,13 @@ fn references(app: &mut WordApp, ui: &mut Ui) {
         big(ui, app, "citation", "Insert\nCitation", "references.citation", json!({}), false);
         stack(ui, |ui| {
             small(ui, app, "sources", Some("Manage Sources"), "Manage Sources", "references.sources", json!({}), false);
-            small(ui, app, "styles", Some("Style: APA"), "Citation Style", "references.citationStyle", json!({}), false);
+            let current = app.session.bib_style.clone();
+            let label = crate::i18n::fmt(tl!("Style: {style}"), &[("style", &current)]);
+            menu_button(ui, app, "styles", Some(&label), "Citation Style", false, |ui, app| {
+                for st in &wordcraft_engine::cmd::citations::STYLES {
+                    mi_check(ui, app, st.name, st.name == current, "references.citationStyle", json!({"style": st.name}));
+                }
+            });
             small(ui, app, "bibliography", Some("Bibliography"), "Bibliography", "references.bibliography", json!({}), false);
         });
     });

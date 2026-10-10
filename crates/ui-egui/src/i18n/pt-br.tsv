@@ -761,7 +761,7 @@
 	Style	Estilo
 	Style based on:	Estilo baseado em:
 	Style Set	Conjunto de estilos
-	Style: APA	Estilo: APA
+	Style: {style}	Estilo: {style}
 	Styles	Estilos
 	Styles Pane	Painel de estilos
 	Subscript	Subscrito
