@@ -23,6 +23,8 @@ pub struct CanvasState {
     pub scroll_to_caret: bool,
     pub caret_visible_since: f64,
     dragging: bool,
+    /// Alt+drag: where the column (block) selection started (page, x, y) and its last end.
+    column_drag: Option<((usize, f32, f32), (usize, f32, f32))>,
     pub last_highlight: String,
     pub last_font_color: String,
     pub last_shading: String,
@@ -62,6 +64,7 @@ impl Default for CanvasState {
             scroll_to_caret: true,
             caret_visible_since: 0.0,
             dragging: false,
+            column_drag: None,
             last_highlight: "yellow".into(),
             last_font_color: "C00000".into(),
             last_shading: "FFF2CC".into(),
@@ -388,16 +391,22 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         balloons(app, ui, &painter, &rects, &layout, geo.scale);
         // Selection (a selected object shows its frame instead).
         if !app.session.sel.is_collapsed() && crate::objects::selected(app).is_none() {
-            let (a, b) = app.session.sel.ordered();
+            // A column selection highlights each row's piece.
+            let pieces: Vec<(Pos, Pos)> = match app.session.column_segments() {
+                Some(segs) => segs.to_vec(),
+                None => vec![app.session.sel.ordered()],
+            };
             let mut first: Option<Rect> = None;
-            for (pi, r) in layout.selection_rects(&app.session.doc, &a, &b, app.session.page_hint) {
-                if let Some(pr) = rects.get(pi) {
-                    let scale = layout.pages.get(pi).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
-                    let sr = Rect::from_min_size(pos2(pr.min.x + r.x * scale, pr.min.y + r.y * scale), vec2(r.w * scale, r.h * scale));
-                    painter.rect_filled(sr, 0.0, t.selection);
-                    // Track the topmost rect: the mini toolbar anchors on the selection's first line.
-                    if first.is_none_or(|f| sr.min.y < f.min.y) {
-                        first = Some(sr);
+            for (a, b) in &pieces {
+                for (pi, r) in layout.selection_rects(&app.session.doc, a, b, app.session.page_hint) {
+                    if let Some(pr) = rects.get(pi) {
+                        let scale = layout.pages.get(pi).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
+                        let sr = Rect::from_min_size(pos2(pr.min.x + r.x * scale, pr.min.y + r.y * scale), vec2(r.w * scale, r.h * scale));
+                        painter.rect_filled(sr, 0.0, t.selection);
+                        // Track the topmost rect: the mini toolbar anchors on the selection's first line.
+                        if first.is_none_or(|f| sr.min.y < f.min.y) {
+                            first = Some(sr);
+                        }
                     }
                 }
             }
@@ -757,6 +766,15 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
             return;
         }
         let pj = serde_json::to_value(&pos).unwrap_or_default();
+        // Alt+drag selects a column (block) of text.
+        if mods.alt && !mods.shift && !mods.command {
+            let _ = app.run("caret.set", json!({"pos": pj}));
+            app.session.page_hint = page;
+            app.canvas.column_drag = Some(((page, x, y), (page, x, y)));
+            app.canvas.dragging = true;
+            return;
+        }
+        app.canvas.column_drag = None;
         let _ = app.run("caret.set", json!({"pos": pj, "extend": mods.shift}));
         if mods.command && !mods.shift {
             let _ = app.run("select.sentence", json!({}));
@@ -764,6 +782,18 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
         app.session.page_hint = page;
         app.canvas.dragging = true;
         // Format painter applies on mouse up.
+    } else if app.canvas.dragging
+        && ui.input(|i| i.pointer.primary_down())
+        && let Some((from, last)) = app.canvas.column_drag
+    {
+        if last != (page, x, y) {
+            app.canvas.column_drag = Some((from, (page, x, y)));
+            let story = app.session.sel.focus.story;
+            let _ = app.run(
+                "select.column",
+                json!({"from": {"page": from.0, "x": from.1, "y": from.2}, "to": {"page": page, "x": x, "y": y}, "story": story}),
+            );
+        }
     } else if app.canvas.dragging && ui.input(|i| i.pointer.primary_down()) {
         if let Some(pos) = layout.hit(page, x, y, story)
             && pos != app.session.sel.focus
@@ -775,6 +805,7 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
         // Auto-scroll near the edges is handled by egui's scroll area drag.
     } else if app.canvas.dragging && ui.input(|i| i.pointer.primary_released()) {
         app.canvas.dragging = false;
+        app.canvas.column_drag = None;
         if app.session.painter.is_some() && !app.session.sel.is_collapsed() {
             let _ = app.run("edit.pasteFormat", json!({}));
         }

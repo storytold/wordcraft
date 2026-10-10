@@ -1700,3 +1700,113 @@ fn timestamps_come_from_the_clock() {
     // Fixed-width ISO strings sort by time.
     assert!(date >= cmd::iso_from_unix_secs(before) && date <= cmd::iso_from_unix_secs(cmd::now_unix()), "{date}");
 }
+
+fn column_doc() -> Session {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "abcdef\nabcdef\nabcdef"}));
+    s
+}
+
+fn block(s: &mut Session) {
+    let a = serde_json::to_value(Pos::body(0, 2)).unwrap();
+    let f = serde_json::to_value(Pos::body(2, 4)).unwrap();
+    let r = run(s, "select.column", json!({"anchor": a, "focus": f}));
+    assert_eq!(r["rows"], json!(["cd", "cd", "cd"]));
+}
+
+#[test]
+fn column_selection_copies_the_block() {
+    let mut s = column_doc();
+    block(&mut s);
+    let r = run(&mut s, "edit.copy", json!({}));
+    assert_eq!(r["text"], "cd\ncd\ncd");
+    assert_eq!(s.clipboard.as_ref().map(|f| f.blocks.len()), Some(3));
+    // A caret move drops the block; pasting the copy gives three paragraphs.
+    run(&mut s, "caret.docEnd", json!({}));
+    assert!(s.column_segments().is_none());
+    s.autocorrect_on = false;
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "edit.paste", json!({}));
+    assert_eq!(text(&s), "abcdef\nabcdef\nabcdef\ncd\ncd\ncd");
+}
+
+#[test]
+fn column_selection_deletes_only_the_block() {
+    let mut s = column_doc();
+    block(&mut s);
+    run(&mut s, "text.delete", json!({}));
+    assert_eq!(text(&s), "abef\nabef\nabef");
+    assert_eq!(s.sel, crate::Selection::caret(Pos::body(0, 2)));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(text(&s), "abcdef\nabcdef\nabcdef");
+    // Cut copies and deletes; typing replaces the block.
+    block(&mut s);
+    let r = run(&mut s, "edit.cut", json!({}));
+    assert_eq!(r["text"], "cd\ncd\ncd");
+    assert_eq!(text(&s), "abef\nabef\nabef");
+    run(&mut s, "edit.undo", json!({}));
+    block(&mut s);
+    run(&mut s, "text.insert", json!({"text": "X"}));
+    assert_eq!(text(&s), "abXef\nabef\nabef");
+}
+
+#[test]
+fn column_selection_formats_each_row() {
+    let mut s = column_doc();
+    block(&mut s);
+    run(&mut s, "format.bold", json!({}));
+    for i in 0..3 {
+        let p = s.doc.para_at(&Pos::body(i, 0)).unwrap();
+        assert_ne!(p.props_of_char(1).bold, Some(true));
+        assert_eq!(p.props_of_char(2).bold, Some(true));
+        assert_eq!(p.props_of_char(3).bold, Some(true));
+        assert_ne!(p.props_of_char(4).bold, Some(true));
+    }
+    // The block survives formatting, and a second Bold turns it off again.
+    assert!(s.column_segments().is_some());
+    run(&mut s, "format.bold", json!({}));
+    assert_ne!(s.doc.para_at(&Pos::body(1, 0)).unwrap().props_of_char(2).bold, Some(true));
+    run(&mut s, "format.changeCase", json!({"mode": "upper"}));
+    assert_eq!(text(&s), "abCDef\nabCDef\nabCDef");
+}
+
+#[test]
+fn column_mode_extends_with_the_arrow_keys() {
+    let mut s = column_doc();
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 1}}));
+    let r = run(&mut s, "select.column", json!({}));
+    assert_eq!(r["columnMode"], true);
+    run(&mut s, "caret.right", json!({}));
+    run(&mut s, "caret.right", json!({}));
+    run(&mut s, "caret.down", json!({}));
+    let r = run(&mut s, "caret.down", json!({}));
+    assert_eq!(r["rows"], json!(["bc", "bc", "bc"]));
+    run(&mut s, "text.backspace", json!({}));
+    assert_eq!(text(&s), "adef\nadef\nadef");
+    assert!(!s.column_mode);
+    // Escape leaves the mode.
+    run(&mut s, "select.column", json!({}));
+    run(&mut s, "select.collapse", json!({}));
+    assert!(!s.column_mode);
+}
+
+#[test]
+fn column_selection_from_points() {
+    let mut s = column_doc();
+    let l = s.layout();
+    let a = l.caret(&Pos::body(0, 1)).unwrap();
+    let b = l.caret(&Pos::body(1, 5)).unwrap();
+    let r = run(
+        &mut s,
+        "select.column",
+        json!({"from": {"page": a.page, "x": a.x, "y": a.top + 2.0}, "to": {"page": b.page, "x": b.x, "y": b.top + 2.0}}),
+    );
+    assert_eq!(r["rows"], json!(["bcde", "bcde"]));
+    for bad in [
+        json!({"from": {"page": 99, "x": 1, "y": 1}, "to": {"page": 0, "x": 1, "y": 1}}),
+        json!({"from": 1, "to": "x"}),
+        json!({"anchor": 1, "focus": {}}),
+    ] {
+        assert!(s.run("select.column", &bad).is_err());
+    }
+}

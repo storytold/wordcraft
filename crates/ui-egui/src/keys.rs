@@ -38,6 +38,7 @@ pub fn key_name(k: Key) -> Option<&'static str> {
         Key::F3 => "F3",
         Key::F5 => "F5",
         Key::F7 => "F7",
+        Key::F8 => "F8",
         Key::F9 => "F9",
         Key::F12 => "F12",
         Key::A => "A",

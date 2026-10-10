@@ -31,6 +31,19 @@ impl Selection {
     }
 }
 
+/// A column (block) selection: the same x range on every line between two corners.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ColumnBlock {
+    /// The stream selection the block was made with (its corners). The block is current only
+    /// while `Session::sel` still equals it, so any ordinary caret move or selection drops it.
+    pub sel: Selection,
+    /// Page x of the anchor and focus corners (points); the block spans the range between.
+    pub anchor_x: f32,
+    pub focus_x: f32,
+    /// One `(start, end)` per line, in document order, each inside one paragraph.
+    pub segments: Vec<(Pos, Pos)>,
+}
+
 /// View state that commands can change (ribbon View tab, status bar).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -210,6 +223,10 @@ pub struct Session {
     pub math_latex: bool,
     /// Text typed into equations is normal (non-math) text.
     pub math_normal_text: bool,
+    /// Column (block) selection, if one was made (see [`Session::column_segments`]).
+    pub column: Option<ColumnBlock>,
+    /// Column selection mode (Ctrl+Shift+F8): caret movement extends the block.
+    pub column_mode: bool,
 }
 
 /// The equation being edited.
@@ -283,7 +300,15 @@ impl Session {
             math_normal_text: false,
             prefs: Prefs::default(),
             read_aloud: Default::default(),
+            column: None,
+            column_mode: false,
         }
+    }
+
+    /// The line pieces of the current column selection, if there is one (the selection hasn't
+    /// moved since the block was made).
+    pub fn column_segments(&self) -> Option<&[(Pos, Pos)]> {
+        self.column.as_ref().filter(|c| c.sel == self.sel).map(|c| c.segments.as_slice())
     }
 
     /// Document revision (bumped by every change).
@@ -415,6 +440,8 @@ impl Session {
         self.doc.ensure_nonempty();
         self.sel = Selection::caret(self.doc.start_of(StoryRef::Body));
         self.pending = None;
+        self.column = None;
+        self.column_mode = false;
         self.reset_history();
         self.touch();
         self.dirty = false;
@@ -481,6 +508,9 @@ impl Session {
             math: _,
             math_latex: _,
             math_normal_text: _,
+            // Column selection, like `sel`'s shape: valid only while `sel` matches it.
+            column: _,
+            column_mode: _,
         } = self;
         let head = if history.len() + SNAPSHOT_HEAD > MAX_UNDO { history.iter().take(SNAPSHOT_HEAD).cloned().collect() } else { Vec::new() };
         EditSnapshot {
@@ -581,7 +611,15 @@ impl Session {
         // The undo stacks are snapshotted whole, not as a length: commands run nested commands,
         // whose checkpoints, undos and redos (and evictions at the limit) must be put back too.
         let before_doc = if spec.mutates {
-            Some((self.doc.clone(), self.sel.clone(), self.history.clone(), self.redo.clone(), self.typing_open, self.undo_evicted))
+            Some((
+                self.doc.clone(),
+                self.sel.clone(),
+                self.history.clone(),
+                self.redo.clone(),
+                self.typing_open,
+                self.undo_evicted,
+                self.column.clone(),
+            ))
         } else {
             None
         };
@@ -600,7 +638,8 @@ impl Session {
             self.typing_open = false;
         }
         let run = spec.run;
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(self, params)));
+        let mutates = spec.mutates;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::cmd::column::dispatch(self, id, mutates, run, params)));
         let result = match result {
             Ok(r) => r,
             Err(p) => {
@@ -618,7 +657,7 @@ impl Session {
                 self.clamp_selection();
             }
             Err(e) => {
-                if let Some((d, s, h, r, t, ev)) = before_doc {
+                if let Some((d, s, h, r, t, ev, c)) = before_doc {
                     self.doc = d;
                     self.sel = s;
                     self.history = h;
@@ -626,6 +665,7 @@ impl Session {
                     self.typing_open = t;
                     // The steps the command pushed out are back, so they no longer count as gone.
                     self.undo_evicted = ev;
+                    self.column = c;
                 }
                 self.status = e.to_string();
             }
