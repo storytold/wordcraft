@@ -789,3 +789,7 @@
 	Track\nChanges ✓	Control de\ncambios ✓
 	Scroll ribbon left	Desplazar la cinta a la izquierda
 	Scroll ribbon right	Desplazar la cinta a la derecha
+	Apply Styles	Aplicar estilos
+	Dark page (white text on black)	Página oscura (texto blanco sobre negro)
+	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Muestra los documentos con los colores invertidos, como en Vista › Cambiar modos. Guardar, imprimir y los PDF no cambian.
+	Only web (http, https) and email (mailto) links can be followed	Solo se pueden seguir vínculos web (http, https) y de correo electrónico (mailto)
