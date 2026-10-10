@@ -262,6 +262,7 @@ fn shape(s: &mut Session, v: &Value) -> CmdResult {
         float: Float { wrap: Wrap::Inline, ..Default::default() },
         story: None,
         freeform: None,
+        effects: Default::default(),
     };
     let end = s.doc.insert_object(&at, obj, &props)?;
     s.sel = Selection { anchor: at, focus: end };
@@ -285,6 +286,7 @@ fn text_box(s: &mut Session, v: &Value) -> CmdResult {
         float: Float::default(),
         story: Some(id),
         freeform: None,
+        effects: Default::default(),
     };
     s.doc.insert_object(&at, obj, &props)?;
     // Like Word, type straight into the new box.

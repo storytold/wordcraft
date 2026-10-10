@@ -230,6 +230,12 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool) {
         w.close("w:tabs");
     }
     toggle(w, "w:suppressAutoHyphens", p.suppress_hyphens);
+    toggle(w, "w:kinsoku", p.kinsoku);
+    toggle(w, "w:wordWrap", p.word_wrap);
+    toggle(w, "w:overflowPunct", p.overflow_punct);
+    toggle(w, "w:topLinePunct", p.top_line_punct);
+    toggle(w, "w:autoSpaceDE", p.auto_space_de);
+    toggle(w, "w:autoSpaceDN", p.auto_space_dn);
     toggle(w, "w:bidi", p.bidi);
     if p.space_before.is_some() || p.space_after.is_some() || p.line_spacing.is_some() {
         let before = p.space_before.map(|v| twips(v.max(0.0)));

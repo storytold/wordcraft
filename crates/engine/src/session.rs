@@ -65,6 +65,9 @@ pub struct ViewState {
     #[serde(default)]
     pub style_inspector: bool,
     pub comments_pane: bool,
+    /// The Clipboard pane (Home › Clipboard): items collected by Copy and Cut.
+    #[serde(default)]
+    pub clipboard_pane: bool,
     pub multi_page: bool,
     /// Zoom to fit: "pageWidth", "onePage", "multiplePages", or empty.
     pub fit: String,
@@ -101,6 +104,7 @@ impl Default for ViewState {
             styles_pane: false,
             style_inspector: false,
             comments_pane: false,
+            clipboard_pane: false,
             multi_page: false,
             fit: String::new(),
             web_width: 800.0,
@@ -191,6 +195,8 @@ pub struct Session {
     pub clipboard: Option<Fragment>,
     /// Plain text mirror of the clipboard (for the system clipboard).
     pub clipboard_text: String,
+    /// Items collected by Copy and Cut this session, for the Clipboard pane.
+    pub clip_history: crate::cmd::edit::ClipHistory,
     pub find: FindState,
     /// Page x the caret tries to keep on Up/Down.
     pub goal_x: Option<f32>,
@@ -249,6 +255,13 @@ pub struct Session {
     pub math_latex: bool,
     /// Text typed into equations is normal (non-math) text.
     pub math_normal_text: bool,
+    /// The password Word documents are saved with (File › Info › Protect Document › Encrypt with
+    /// Password, `file.encrypt`); `None` saves them unencrypted. Kept from a password-protected
+    /// file that was opened, cleared when the document is replaced.
+    pub password: Option<crate::io::Password>,
+    /// More pictures and shapes selected along with the one the selection holds (Shift+click),
+    /// for Group. Cleared by any edit or selection change other than adding to it.
+    pub also_selected: Vec<Pos>,
     /// Column (block) selection, if one was made (see [`Session::column_segments`]).
     pub column: Option<ColumnBlock>,
     /// Column selection mode (Ctrl+Shift+F8): caret movement extends the block.
@@ -293,6 +306,7 @@ impl Session {
             dirty: false,
             clipboard: None,
             clipboard_text: String::new(),
+            clip_history: Default::default(),
             find: FindState::default(),
             goal_x: None,
             page_hint: 0,
@@ -324,8 +338,10 @@ impl Session {
             math: None,
             math_latex: false,
             math_normal_text: false,
+            also_selected: Vec::new(),
             prefs: Prefs::default(),
             read_aloud: Default::default(),
+            password: None,
             column: None,
             column_mode: false,
         }
@@ -488,8 +504,10 @@ impl Session {
         self.document_id = self.document_id.wrapping_add(1);
         self.doc = doc;
         self.doc.ensure_nonempty();
+        self.password = None;
         self.sel = Selection::caret(self.doc.start_of(StoryRef::Body));
         self.pending = None;
+        self.also_selected.clear();
         self.column = None;
         self.column_mode = false;
         self.reset_history();
@@ -524,6 +542,7 @@ impl Session {
             dirty,
             clipboard: _,
             clipboard_text: _,
+            clip_history: _,
             find: _,
             goal_x: _,
             page_hint: _,
@@ -558,6 +577,9 @@ impl Session {
             math: _,
             math_latex: _,
             math_normal_text: _,
+            // The save password, like the file path: not an edit to the document.
+            password: _,
+            also_selected: _,
             // Column selection, like `sel`'s shape: valid only while `sel` matches it.
             column: _,
             column_mode: _,
@@ -589,6 +611,7 @@ impl Session {
         self.undo_evicted = evicted;
         self.doc = doc;
         self.sel = sel;
+        self.also_selected.clear();
         self.history.truncate(history_len);
         self.redo = redo;
         self.typing_open = typing_open;
@@ -687,6 +710,7 @@ impl Session {
         } else if spec.id.starts_with("caret.") {
             self.typing_open = false;
         }
+        let sel_before = self.sel.clone();
         let run = spec.run;
         let mutates = spec.mutates;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::cmd::column::dispatch(self, id, mutates, run, params)));
@@ -705,6 +729,10 @@ impl Session {
                     self.doc.prune_text_boxes();
                 }
                 self.clamp_selection();
+                // Extra selected objects last until something else is edited or selected.
+                if !matches!(id, "select.addObject" | "arrange.ungroup") && (spec.mutates || self.sel != sel_before) {
+                    self.also_selected.clear();
+                }
             }
             Err(e) => {
                 if let Some((d, s, h, r, t, ev, c)) = before_doc {

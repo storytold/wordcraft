@@ -257,6 +257,7 @@ fn stroke(s: &mut Session, v: &Value) -> CmdResult {
         float: Float { wrap, ..Default::default() },
         story: None,
         freeform: Some(Arc::new(Freeform::ink(tool, fw, fh, local))),
+        effects: Default::default(),
     };
     let at = place(s, &layout, obj, page, (fx, fy), first[1])?;
     Ok(json!({"pos": pos_json(&at), "page": page, "rect": [fx, fy, fw, fh]}))

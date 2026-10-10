@@ -16,8 +16,10 @@
 # Product, format and technology names (WordCraft, PDF, Markdown, MCP …) stay in Latin letters.
 
 	(no suggestions)	(нема предлога)
+	(picture or object)	(слика или објекат)
 	1.5 Line Spacing	Проређеност 1,5
 	A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.	Бесплатан, отворени обрађивач текста написан од нуле у Rust-у.\nДео Crafting Apps пакета тима ArtCraft.
+	A password is required to open this document.	За отварање овог документа потребна је лозинка.
 	About	О програму
 	About WordCraft	О WordCraft-у
 	Accept	Прихвати
@@ -27,7 +29,10 @@
 	Add	Додај
 	Add a comment	Додај коментар
 	Add a Table	Додај табелу
+	Add Object to Selection	Додај објекат у избор
 	Add Space Before Paragraph	Додај размак пре пасуса
+	Add space between Asian and Latin text	Додај размак између азијског и латиничног текста
+	Add space between Asian text and numbers	Додај размак између азијског текста и бројева
 	Add Text	Додај текст
 	Add to Dictionary	Додај у речник
 	Add to Style Gallery	Додај у галерију стилова
@@ -46,7 +51,13 @@
 	All Caps	Сва велика слова
 	All caps	Сва велика слова
 	All Markup	Све измене
+	Allow hanging punctuation	Дозволи висећу интерпункцију
+	Allow Latin text to wrap in the middle of a word	Дозволи прелом латиничног текста усред речи
+	Alphabetical	Азбучно
 	Alt Text	Алтернативни текст
+	Anyone can open this document. Encrypt it with a password to keep it private.	Свако може да отвори овај документ. Шифрујте га лозинком да би остао приватан.
+	Anyone who opens the document will need this password.	Свакоме ко отвори документ биће потребна ова лозинка.
+	Apply Asian line-breaking rules (kinsoku)	Примени азијска правила прелома редова (кинсоку)
 	Apply Character Style	Примени стил знакова
 	Apply Style	Примени стил
 	Apply Styles	Изабери и примени стилове
@@ -54,6 +65,8 @@
 	Arrange\nAll	Распореди\nсве
 	Arrow	Стрелица
 	Artistic Effects	Уметнички ефекти
+	As Recommended	Као што је препоручено
+	Asian Typography	Азијска типографија
 	Author	Аутор
 	AutoCorrect Options	Опције аутоматске исправке
 	AutoFit	Аутоматско уклапање
@@ -68,11 +81,57 @@
 	AutoSave documents you have saved in WordCraft	Аутоматски чувај документе које сте већ сачували у WordCraft-у
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	Аутоматско чување неуспело: {error}. Сачувајте документ да бисте га поново укључили.
 	Bottom Margin	Доња маргина
+	Based on: {style}	Заснован на: {style}
+	Built-in style	Уграђени стил
+	Built-in styles can't be deleted.	Уграђени стилови не могу да се обришу.
+	Change Password…	Промени лозинку…
+	Character style	Стил знакова
+	Click an item to paste it.	Кликните на ставку да бисте је налепили.
+	Clipboard Items	Ставке оставе
+	Clipboard Pane	Окно оставе
+	Color: {color}	Боја: {color}
+	Compress punctuation at the start of a line	Сажми интерпункцију на почетку реда
+	Confirm password:	Потврдите лозинку:
 	Dark page (white text on black)	Тамна страница (бео текст на црном)
 	Edit Comment	Уреди коментар
 	Left Margin	Лева маргина
 	Reopen	Поново отвори
 	Right Margin	Десна маргина
+	Delete Clipboard Item	Обриши ставку из оставе
+	Delete Table Style	Обриши стил табеле
+	Encrypt with Password…	Шифруј лозинком…
+	Font: {font}	Фонт: {font}
+	Glow	Сјај
+	Glow Colors	Боје сјаја
+	Hide from style lists	Сакриј са листа стилова
+	Indents and Spacing	Увлачења и размаци
+	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	Чувајте лозинку на сигурном месту: без ње нико, па ни WordCraft, не може да отвори документ. Оставите оба поља празна да бисте уклонили лозинку.
+	Line breaking	Прелом редова
+	Linked style (paragraph and character)	Повезани стил (пасус и знакови)
+	Manage Styles	Управљање стиловима
+	Manage Styles…	Управљање стиловима…
+	No Glow	Без сјаја
+	No Shadow	Без сенке
+	No Soft Edges	Без меких ивица
+	Nothing collected yet. Items you copy or cut appear here.	Још ништа није прикупљено. Овде се појављује оно што копирате или исечете.
+	Offset: Bottom	Помак: доле
+	Offset: Bottom Left	Помак: доле лево
+	Offset: Bottom Right	Помак: доле десно
+	Offset: Center	Помак: центар
+	Offset: Left	Помак: лево
+	Offset: Right	Помак: десно
+	Offset: Top	Помак: горе
+	Offset: Top Left	Помак: горе лево
+	Offset: Top Right	Помак: горе десно
+	Paragraph style	Стил пасуса
+	Password	Лозинка
+	Password:	Лозинка:
+	Paste All	Налепи све
+	Paste Clipboard Item	Налепи ставку из оставе
+	Preview	Преглед
+	Remove Password	Уклони лозинку
+	Shadow, glow and soft edges	Сенка, сјај и меке ивице
+	Shape Effects	Ефекти облика
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Прикажи документе са инвертованим бојама, као код Приказ › Промени режим. Чување, штампање и PDF нису погођени.
 	AutoSave saves every change to the file (needs a saved document)	Аутоматско чување уписује сваку измену у фајл (документ мора бити већ сачуван)
 	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	Аутоматско чување није доступно у прегледачу: не може да уписује у ваше фајлове. Чување преузима копију.
@@ -650,8 +709,10 @@
 	Show	Прикажи
 	Show all formatting marks	Прикажи све знаке форматирања
 	Show Comments	Прикажи коментаре
+	Show in the Styles gallery	Прикажи у галерији стилова
 	Show Markup	Прикажи измене
 	Show Notes	Прикажи напомене
+	Show or Hide Style	Прикажи или сакриј стил
 	Show rulers	Прикажи лењире
 	Show the community button in the title bar	Прикажи дугме заједнице у траци наслова
 	Show/Hide ¶	Прикажи/сакриј ¶
@@ -667,9 +728,13 @@
 	Small Caps	Капителке
 	Small caps	капителке
 	SmartArt	SmartArt
+	Soft Edges	Меке ивице
 	Sort	Сортирај
+	Sort order:	Редослед сортирања:
 	Source code: github.com/storytold/wordcraft	Изворни код: github.com/storytold/wordcraft
+	Space after: {pt} pt	Размак после: {pt} пт
 	Space before/after:	Размак пре/после:
+	Space before: {pt} pt	Размак пре: {pt} пт
 	Spacing	Размак
 	Spacing (pt):	Размак (пт):
 	Speech	Говор
@@ -712,6 +777,7 @@
 	Table of\nContents	Садржај
 	Table Properties	Својства табеле
 	Table Row Height	Висина реда табеле
+	Table style	Стил табеле
 	Table Style Options	Опције стила табеле
 	Table Styles	Стилови табеле
 	Tables	Табеле
@@ -730,7 +796,11 @@
 	Text\nBox	Оквир\nза текст
 	Text\nDirection	Смер\nтекста
 	That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.	Тај формат не чува све, па је документ и даље отворен. Сачувајте га као Word документ (.docx) да бисте наставили.
+	That password isn't right. Check it (passwords are case-sensitive) and try again.	Лозинка није исправна. Проверите је (лозинке разликују велика и мала слова) и покушајте поново.
+	The document will be saved with a password. Save it to protect it.	Документ ће бити сачуван са лозинком. Сачувајте га да бисте га заштитили.
 	The new style takes the formatting of the current paragraph.	Нови стил преузима форматирање тренутног пасуса.
+	The password is removed. Save the document to keep the change.	Лозинка је уклоњена. Сачувајте документ да бисте задржали измену.
+	The passwords don't match.	Лозинке се не подударају.
 	Theme Colors	Боје теме
 	Theme Fonts	Фонтови теме
 	Theme List	Листа тема
@@ -757,6 +827,7 @@
 	Underline Words Only	Подвуци само речи
 	Undo	Опозови
 	Undo {action}	Опозови {action}
+	Ungroup	Разгруписање
 	Up	Горе
 	Update Field	Ажурирај поље
 	Update Index	Ажурирај индекс
@@ -782,6 +853,7 @@
 	Web Layout	Веб распоред
 	Web page (*.html)	Веб страна (*.html)
 	Web\nLayout	Веб\nраспоред
+	Weight	Дебљина
 	Whole page	Цела страна
 	Whole words	Само целе речи
 	Wide	Широко
@@ -806,6 +878,8 @@
 	Zoom Out	Умањи
 	{group} settings	Подешавања за {group}
 	{key}+Click to follow link	{key}+клик за отварање везе
+	{name} is protected with a password.	{name} је заштићен лозинком.
+	{size} pt	{size} пт
 	Browse…	Потражи…
 	{words} words	{words} речи
 	{selected} of {words} words	{selected} од {words} речи
@@ -1042,7 +1116,6 @@
 	Reset Crop	Поништи исецање
 	Insert a new equation (Alt+=)	Уметни нову једначину (Alt+=)
 	Leave the equation (Esc)	Напусти једначину (Esc)
-	Preview	Преглед
 	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft
 	Draw Ink	Цртај мастилом
 	Erase Ink	Обриши мастило

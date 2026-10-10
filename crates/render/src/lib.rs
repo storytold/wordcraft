@@ -650,10 +650,54 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             ctx.set_stroke(kurbo::Stroke::new(w as f64).with_caps(kurbo::Cap::Round).with_join(kurbo::Join::Round));
             ctx.stroke_path(&path);
         }
-        Draw::Shape { rect, kind, fill, stroke, stroke_width } => {
+        Draw::Shape { rect, kind, fill, stroke, stroke_width, effects } => {
             let r = kurbo::Rect::new(rect.x as f64, rect.y as f64, rect.right() as f64, rect.bottom() as f64);
             let path = shape_path(*kind, r);
             ctx.set_transform(view);
+            let fx = effects.sanitized();
+            let can_fill = *kind != ShapeKind::Line && fill.is_some();
+            if !fx.is_empty() && (can_fill || stroke.is_some()) {
+                let sw = if stroke_width.is_finite() { stroke_width.clamp(0.25, 200.0) as f64 } else { 0.75 };
+                // The shape's silhouette grown by `g` points and moved by `d`, in the current paint.
+                let silhouette = |ctx: &mut RenderContext, g: f32, d: kurbo::Vec2| {
+                    let g = g as f64;
+                    if can_fill {
+                        let grow = g + if stroke.is_some() { sw / 2.0 } else { 0.0 };
+                        let rr = r.inflate(grow, grow) + d;
+                        if rr.width() > 0.0 && rr.height() > 0.0 {
+                            ctx.fill_path(&shape_path(*kind, rr));
+                        }
+                    } else if sw + 2.0 * g > 0.05 {
+                        ctx.set_stroke(kurbo::Stroke::new(sw + 2.0 * g));
+                        ctx.stroke_path(&shape_path(*kind, r + d));
+                    }
+                };
+                if let Some(sh) = fx.shadow {
+                    let (dx, dy) = sh.offset();
+                    for (g, a) in wordcraft_doc::effects::bands(-sh.blur / 2.0, sh.blur / 2.0, sh.opacity()) {
+                        ctx.set_paint(color(opts.ink(sh.color), a));
+                        silhouette(ctx, g, kurbo::Vec2::new(dx as f64, dy as f64));
+                    }
+                }
+                if let Some(gl) = fx.glow {
+                    for (g, a) in wordcraft_doc::effects::bands(0.0, gl.size, gl.opacity()) {
+                        ctx.set_paint(color(opts.ink(gl.color), a));
+                        silhouette(ctx, g, kurbo::Vec2::ZERO);
+                    }
+                }
+            }
+            // Soft edges: the fill fades out toward the outline (which fades with it).
+            if let (Some(rad), Some(f), true) = (fx.soft_edge, fill, can_fill) {
+                let rad = rad.min(rect.w.min(rect.h) / 2.0).max(0.0);
+                for (g, a) in wordcraft_doc::effects::bands(-rad, 0.0, 1.0) {
+                    let rr = r.inflate(g as f64, g as f64);
+                    if rr.width() > 0.0 && rr.height() > 0.0 {
+                        ctx.set_paint(color(opts.ink(*f), a));
+                        ctx.fill_path(&shape_path(*kind, rr));
+                    }
+                }
+                return;
+            }
             if let Some(f) = fill {
                 ctx.set_paint(color(opts.ink(*f), 1.0));
                 ctx.fill_path(&path);
@@ -805,6 +849,62 @@ mod tests {
         assert_eq!(ink(TextDirection::Horizontal), 0, "horizontal text stays in its line");
         assert!(ink(TextDirection::Down) > 30, "down");
         assert!(ink(TextDirection::Up) > 30, "up");
+    }
+
+    /// Shape Effects (#275): an outer shadow paints dark pixels beside the shape on the side it is
+    /// cast to, and none on the other; a glow surrounds it.
+    #[test]
+    fn shape_shadow_is_cast_offset_from_the_shape() {
+        use wordcraft_doc::effects::{Glow, Shadow, ShapeEffects};
+        use wordcraft_doc::para::InlineObject;
+        let draw = |effects: ShapeEffects| {
+            let mut d = Document::from_text("");
+            let shape = InlineObject::Shape {
+                kind: ShapeKind::Rectangle,
+                w: 100.0,
+                h: 60.0,
+                fill: Some(Rgb(0, 0, 255)),
+                stroke: None,
+                stroke_width: 0.0,
+                float: Default::default(),
+                story: None,
+                freeform: None,
+                effects,
+            };
+            let at = wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 0 };
+            d.insert_object(&at, shape, &Default::default()).unwrap();
+            let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+            render_page(&d, &l.pages[0], 1.0, &RenderOptions::default())
+        };
+        let plain = draw(ShapeEffects::default());
+        let blue = |img: &Rendered| {
+            let px: Vec<(u32, u32)> = (0..612)
+                .flat_map(|x| (0..400).map(move |y| (x, y)))
+                .filter(|(x, y)| matches!(img.pixel(*x, *y), [r, _, b, _] if r < 40 && b > 200))
+                .collect();
+            let (x0, x1) = (px.iter().map(|p| p.0).min().unwrap(), px.iter().map(|p| p.0).max().unwrap());
+            let (y0, y1) = (px.iter().map(|p| p.1).min().unwrap(), px.iter().map(|p| p.1).max().unwrap());
+            (x0, y0, x1, y1)
+        };
+        let (x0, y0, x1, y1) = blue(&plain);
+        assert!(x1 - x0 > 90 && y1 - y0 > 50, "{:?}", (x0, y0, x1, y1));
+        // Grey (not white, not blue) pixels in a strip just outside an edge.
+        let grey = |img: &Rendered, xs: std::ops::Range<u32>, ys: std::ops::Range<u32>| {
+            xs.flat_map(|x| ys.clone().map(move |y| (x, y)))
+                .filter(|(x, y)| matches!(img.pixel(*x, *y), [r, g, b, _] if r < 200 && r == g && g == b))
+                .count()
+        };
+        let right = |img: &Rendered| grey(img, x1 + 2..x1 + 6, y0 + 10..y1);
+        let left = |img: &Rendered| grey(img, x0.saturating_sub(6)..x0.saturating_sub(2), y0 + 10..y1);
+        assert_eq!((right(&plain), left(&plain)), (0, 0));
+        let shadow = Shadow { color: Rgb::BLACK, transparency: 30.0, blur: 2.0, distance: 8.0, angle: 0.0 };
+        let img = draw(ShapeEffects { shadow: Some(shadow), ..Default::default() });
+        assert_eq!(blue(&img), (x0, y0, x1, y1), "the shape itself is unchanged");
+        assert!(right(&img) > 100, "shadow to the right: {}", right(&img));
+        assert_eq!(left(&img), 0, "nothing on the left");
+        let img = draw(ShapeEffects { glow: Some(Glow { color: Rgb(255, 0, 0), size: 6.0, transparency: 0.0 }), ..Default::default() });
+        let reddish = |x: u32, y: u32| matches!(img.pixel(x, y), [r, g, _, _] if r > 200 && g < 200);
+        assert!(reddish(x1 + 2, (y0 + y1) / 2) && reddish(x0 - 2, (y0 + y1) / 2), "glow on both sides");
     }
 
     #[test]

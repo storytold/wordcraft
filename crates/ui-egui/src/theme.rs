@@ -8,8 +8,9 @@ use egui::{Align2, Color32, CornerRadius, FontData, FontDefinitions, FontFamily,
 pub const APP_COLOR: Color32 = Color32::from_rgb(0x3B, 0x5B, 0xDB);
 pub const APP_INK: Color32 = Color32::from_rgb(0x2B, 0x47, 0xB5);
 
-/// The interface theme setting (File › Options › General, View › Dark Mode): a fixed light or
-/// dark palette, or `System`, which follows the OS light/dark appearance live (#115).
+/// The interface theme setting (File › Options › General, View › Interface Theme): a fixed light or
+/// dark palette, or `System`, which follows the OS light/dark appearance live (#115). Dark page
+/// (View › Switch Modes) is separate: it changes how pages are drawn, never the interface (#312).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(from = "String", into = "String")]
 pub enum Appearance {
@@ -52,6 +53,15 @@ impl Appearance {
             Appearance::Light => false,
             Appearance::Dark => true,
             Appearance::System => system == Some(egui::Theme::Dark),
+        }
+    }
+
+    /// The egui theme preference: `System` stays automatic rather than resolving to a fixed theme.
+    pub fn preference(self) -> egui::ThemePreference {
+        match self {
+            Appearance::Light => egui::ThemePreference::Light,
+            Appearance::Dark => egui::ThemePreference::Dark,
+            Appearance::System => egui::ThemePreference::System,
         }
     }
 }
@@ -365,8 +375,35 @@ fn tracked_job(text: &str, font: &FontId, tracking: f32, color: Color32) -> egui
     egui::text::LayoutJob::single_section(text.to_string(), format)
 }
 
-/// Apply tokens to egui's style.
-pub fn apply(ctx: &egui::Context, t: &Tokens) {
+/// Apply the interface theme setting to egui. Both palettes go in, our light one as egui's light
+/// style and our dark one as its dark style, and egui picks between them each frame: `System`
+/// leaves egui's theme preference on `System`, so it follows the OS appearance it reports (light
+/// when the OS reports none, like [`Appearance::is_dark`]) and the native window keeps its own
+/// appearance; a manual Light or Dark pins egui (and the window decorations) to that theme.
+/// Setting a concrete theme for `System` would pin the native window too, and macOS then stops
+/// reporting appearance changes (#311).
+pub fn apply(ctx: &egui::Context, appearance: Appearance) {
+    ctx.set_visuals_of(egui::Theme::Light, visuals(&Tokens::light()));
+    ctx.set_visuals_of(egui::Theme::Dark, visuals(&Tokens::dark()));
+    ctx.all_styles_mut(|s| {
+        s.spacing.item_spacing = egui::vec2(6.0, 4.0);
+        s.spacing.button_padding = egui::vec2(8.0, 3.0);
+        s.spacing.interact_size = egui::vec2(24.0, 22.0);
+        s.spacing.menu_margin = egui::Margin::same(6);
+        s.text_styles.insert(egui::TextStyle::Body, regular(12.5));
+        s.text_styles.insert(egui::TextStyle::Button, regular(12.5));
+        s.text_styles.insert(egui::TextStyle::Small, regular(10.5));
+        s.text_styles.insert(egui::TextStyle::Heading, semibold(17.0));
+        s.interaction.tooltip_delay = 0.45;
+    });
+    ctx.options_mut(|o| {
+        o.fallback_theme = egui::Theme::Light;
+        o.theme_preference = appearance.preference();
+    });
+}
+
+/// egui's visuals for one of our palettes.
+fn visuals(t: &Tokens) -> Visuals {
     let mut v = if t.dark { Visuals::dark() } else { Visuals::light() };
     v.panel_fill = t.ribbon;
     v.window_fill = t.menu;
@@ -398,21 +435,7 @@ pub fn apply(ctx: &egui::Context, t: &Tokens) {
     v.widgets.open.weak_bg_fill = t.pressed;
     v.popup_shadow = egui::Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(if t.dark { 120 } else { 40 }) };
     v.window_shadow = egui::Shadow { offset: [0, 8], blur: 28, spread: 0, color: Color32::from_black_alpha(if t.dark { 140 } else { 50 }) };
-    // Pin egui's own theme to ours: left on its default (follow the OS), egui would swap to its
-    // other, unstyled light/dark style the moment the OS appearance changed.
-    ctx.set_theme(if t.dark { egui::Theme::Dark } else { egui::Theme::Light });
-    ctx.set_visuals(v);
-    ctx.global_style_mut(|s| {
-        s.spacing.item_spacing = egui::vec2(6.0, 4.0);
-        s.spacing.button_padding = egui::vec2(8.0, 3.0);
-        s.spacing.interact_size = egui::vec2(24.0, 22.0);
-        s.spacing.menu_margin = egui::Margin::same(6);
-        s.text_styles.insert(egui::TextStyle::Body, regular(12.5));
-        s.text_styles.insert(egui::TextStyle::Button, regular(12.5));
-        s.text_styles.insert(egui::TextStyle::Small, regular(10.5));
-        s.text_styles.insert(egui::TextStyle::Heading, semibold(17.0));
-        s.interaction.tooltip_delay = 0.45;
-    });
+    v
 }
 
 pub fn c32(c: wordcraft_doc::Rgb) -> Color32 {
