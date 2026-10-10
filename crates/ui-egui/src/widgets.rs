@@ -327,7 +327,8 @@ fn swatch(ui: &mut Ui, c: wordcraft_doc::Rgb) -> bool {
     resp.on_hover_text(format!("#{}", c.hex())).clicked()
 }
 
-/// A ribbon-style text field with a dropdown list. Returns a chosen/typed value.
+/// A ribbon-style text field with a dropdown list. Returns a chosen/typed value; Enter commits
+/// the typed text as is (the font size box relies on that: "1" must not become "10").
 pub fn combo(
     ui: &mut Ui,
     id: &str,
@@ -336,21 +337,139 @@ pub fn combo(
     items: &[String],
     preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
 ) -> Option<String> {
+    combo_impl(ui, id, width, current, items, preview, false)
+}
+
+/// The font box: a [`combo`] where typing lists the matching families under the field (#359).
+/// Up/Down move the highlight, Enter or a click applies the highlighted family ("arial" applies
+/// "Arial"), Escape restores the current font. Text matching no family is applied as typed, as
+/// Word allows fonts that are not installed.
+pub fn font_combo(
+    ui: &mut Ui,
+    id: &str,
+    width: f32,
+    current: &str,
+    items: &[String],
+    preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
+) -> Option<String> {
+    combo_impl(ui, id, width, current, items, preview, true)
+}
+
+/// Indices of the `items` matching `query`, ignoring case: exact matches, then the names starting
+/// with it, then those containing it, each group in list order. A blank query matches everything.
+pub fn font_matches(query: &str, items: &[String]) -> Vec<usize> {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return (0..items.len()).collect();
+    }
+    let (mut exact, mut prefix, mut inner) = (Vec::new(), Vec::new(), Vec::new());
+    for (i, it) in items.iter().enumerate() {
+        let name = it.to_lowercase();
+        if name == q {
+            exact.push(i);
+        } else if name.starts_with(&q) {
+            prefix.push(i);
+        } else if name.contains(&q) {
+            inner.push(i);
+        }
+    }
+    exact.extend(prefix);
+    exact.extend(inner);
+    exact
+}
+
+/// A searching combo's state between frames.
+#[derive(Clone, Default)]
+struct ComboSearch {
+    /// The match list is showing (the user typed since focusing the field).
+    open: bool,
+    /// The query `matches` were computed for, and the list length then.
+    query: String,
+    items_len: usize,
+    matches: std::sync::Arc<Vec<usize>>,
+    /// Index into `matches`.
+    highlight: usize,
+    /// Where the list was drawn last frame, its scroll offset and visible height.
+    popup: Option<Rect>,
+    offset: f32,
+    view_h: f32,
+}
+
+fn combo_impl(
+    ui: &mut Ui,
+    id: &str,
+    width: f32,
+    current: &str,
+    items: &[String],
+    preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
+    search: bool,
+) -> Option<String> {
     let mut out = None;
     let edit_id = ui.id().with(("combo_text", id));
+    let te_id = ui.id().with(("combo_edit", id));
+    let search_id = ui.id().with(("combo_search", id));
     let mut text = ui.data_mut(|d| d.get_temp::<String>(edit_id)).unwrap_or_else(|| current.to_string());
+    let mut s: ComboSearch = if search { ui.data_mut(|d| d.get_temp(search_id)).unwrap_or_default() } else { ComboSearch::default() };
+    let mut focused = false;
     let t = Tokens::get(ui.ctx());
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
-        let te = egui::TextEdit::singleline(&mut text).desired_width(width - 16.0).font(regular(12.0)).margin(vec2(4.0, 3.0));
+        // Up/Down move the list's highlight: take them before the text field moves its cursor.
+        let mut step = 0i32;
+        if s.open && ui.memory(|m| m.has_focus(te_id)) {
+            ui.input_mut(|i| {
+                if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
+                    step += 1;
+                }
+                if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
+                    step -= 1;
+                }
+            });
+        }
+        let te = egui::TextEdit::singleline(&mut text).id(te_id).desired_width(width - 16.0).font(regular(12.0)).margin(vec2(4.0, 3.0));
         let resp = ui.add(te);
         keytip_badge(ui, resp.rect, "combo", id);
-        if resp.has_focus() {
-            ui.data_mut(|d| d.insert_temp(edit_id, text.clone()));
-        } else {
-            ui.data_mut(|d| d.remove::<String>(edit_id));
+        focused = resp.has_focus();
+        let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let mut reveal = step != 0;
+        if search && resp.changed() {
+            s.open = true;
+            s.highlight = 0;
+            reveal = true;
         }
-        if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+        let mut regain_focus = false;
+        if s.open {
+            if s.query != text || s.items_len != items.len() {
+                s.matches = std::sync::Arc::new(font_matches(&text, items));
+                s.query = text.clone();
+                s.items_len = items.len();
+            }
+            let last = s.matches.len().saturating_sub(1);
+            s.highlight = match step {
+                1.. => s.highlight.saturating_add(1),
+                0 => s.highlight,
+                _ => s.highlight.saturating_sub(1),
+            }
+            .min(last);
+            if enter {
+                let picked = s.matches.get(s.highlight).and_then(|&i| items.get(i));
+                out = Some(match picked {
+                    Some(name) if !text.trim().is_empty() => name.clone(),
+                    _ => text.clone(),
+                });
+                s.open = false;
+            } else if ui.input(|i| i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::Tab)) {
+                s.open = false;
+            } else if !focused {
+                // A click in the list takes focus from the field: keep the list, give focus back.
+                let over = ui.input(|i| i.pointer.latest_pos()).is_some_and(|p| s.popup.is_some_and(|r| r.contains(p)));
+                if over {
+                    regain_focus = true;
+                } else {
+                    s.open = false;
+                }
+            }
+        } else if enter {
             out = Some(text.clone());
         }
         let (ar, aresp) = ui.allocate_exact_size(vec2(16.0, resp.rect.height()), Sense::click());
@@ -362,6 +481,43 @@ pub fn combo(
                 ui.close();
             }
         });
+        if s.open && !s.matches.is_empty() {
+            let matches = s.matches.clone();
+            let scroll = reveal.then_some((s.offset, s.view_h));
+            let shown = egui::Area::new(search_id.with("list")).order(egui::Order::Tooltip).fixed_pos(resp.rect.left_bottom()).show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style())
+                    .show(ui, |ui| {
+                        let item = |k: usize| matches.get(k).and_then(|&i| items.get(i));
+                        list_rows(ui, width, current, matches.len(), &item, Some(s.highlight), scroll, preview)
+                    })
+                    .inner
+            });
+            s.popup = Some(shown.response.rect);
+            let (picked, offset, view_h) = shown.inner;
+            (s.offset, s.view_h) = (offset, view_h);
+            if let Some(v) = picked {
+                out = Some(v);
+                s.open = false;
+                regain_focus = false;
+                ui.memory_mut(|m| m.surrender_focus(te_id));
+            }
+        } else {
+            s.popup = None;
+        }
+        if regain_focus && s.open {
+            ui.memory_mut(|m| m.request_focus(te_id));
+        }
+    });
+    let keep = (focused || s.open) && out.is_none();
+    ui.data_mut(|d| {
+        if keep {
+            d.insert_temp(edit_id, text);
+        } else {
+            d.remove::<String>(edit_id);
+        }
+        if search {
+            d.insert_temp(search_id, s);
+        }
     });
     out
 }
@@ -373,21 +529,59 @@ pub const COMBO_PREVIEW_ROW_H: f32 = 24.0;
 /// family and each preview loads that font, so building all rows loaded every font on the system
 /// (gigabytes on large font collections) and froze the app (#121).
 pub fn combo_list(ui: &mut Ui, width: f32, current: &str, items: &[String], preview: Option<&dyn Fn(&mut Ui, &str) -> Response>) -> Option<String> {
+    list_rows(ui, width, current, items.len(), &|k| items.get(k), None, None, preview).0
+}
+
+/// The rows of [`combo_list`], virtualised, for `n` items fetched by index. With a `highlight`
+/// that row is marked instead of `current`; `scroll` (last frame's offset and visible height)
+/// scrolls the highlight into view. Returns the clicked item, the scroll offset and the height.
+fn list_rows<'a>(
+    ui: &mut Ui,
+    width: f32,
+    current: &str,
+    n: usize,
+    item: &dyn Fn(usize) -> Option<&'a String>,
+    highlight: Option<usize>,
+    scroll: Option<(f32, f32)>,
+    preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
+) -> (Option<String>, f32, f32) {
     let mut out = None;
     let row_h = if preview.is_some() { COMBO_PREVIEW_ROW_H } else { ui.spacing().interact_size.y };
-    egui::ScrollArea::vertical().max_height(420.0).show_rows(ui, row_h, items.len(), |ui, range| {
+    let mut area = egui::ScrollArea::vertical().max_height(420.0);
+    if let (Some(h), Some((offset, view_h))) = (highlight, scroll) {
+        let top = h as f32 * (row_h + ui.spacing().item_spacing.y);
+        let bottom = top + row_h;
+        let offset = if top < offset || view_h <= 0.0 {
+            top
+        } else if bottom > offset + view_h {
+            bottom - view_h
+        } else {
+            offset
+        };
+        area = area.vertical_scroll_offset(offset.max(0.0));
+    }
+    let fill = Tokens::get(ui.ctx()).checked;
+    let shown = area.show_rows(ui, row_h, n, |ui, range| {
         ui.set_min_width(width + 60.0);
-        for it in items.get(range).unwrap_or_default() {
+        for k in range {
+            let Some(it) = item(k) else { continue };
+            let lit = highlight == Some(k);
             let clicked = match preview {
-                Some(p) => p(ui, it).clicked(),
-                None => ui.selectable_label(it == current, it).clicked(),
+                Some(p) => {
+                    if lit {
+                        let r = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), row_h));
+                        ui.painter().rect_filled(r, 3.0, fill);
+                    }
+                    p(ui, it).clicked()
+                }
+                None => ui.selectable_label(if highlight.is_some() { lit } else { it == current }, it.as_str()).clicked(),
             };
             if clicked {
                 out = Some(it.clone());
             }
         }
     });
-    out
+    (out, shown.state.offset.y, shown.inner_rect.height())
 }
 
 /// How a drawn button looks this frame. Hover fades in over egui's animation time and the
@@ -519,6 +713,52 @@ mod tests {
         assert_eq!(after.2, w.inactive.weak_bg_fill);
         frame(vec![press(frameless.center(), true)]);
         assert_eq!(settle().3, t.pressed);
+    }
+
+    #[test]
+    fn font_matches_puts_exact_and_prefix_before_substring() {
+        let items: Vec<String> = ["Arial Black", "Arial", "Courier New", "Times New Roman", "Roman Serif"].map(String::from).to_vec();
+        // Case-insensitive; the exact name first, then prefixes, then other substrings.
+        assert_eq!(font_matches("ARIAL", &items), vec![1, 0]);
+        assert_eq!(font_matches("roman", &items), vec![4, 3]);
+        assert_eq!(font_matches(" new ", &items), vec![2, 3]);
+        assert!(font_matches("zapfino", &items).is_empty());
+        assert_eq!(font_matches("", &items), vec![0, 1, 2, 3, 4]);
+    }
+
+    /// Focuses a fresh combo, types `typed`, presses `keys` (one per frame) and returns its value.
+    fn type_into_combo(search: bool, items: &[String], typed: &str, keys: &[egui::Key]) -> Option<String> {
+        let ctx = egui::Context::default();
+        let key = |k| egui::Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+        let mut frames = vec![vec![], vec![egui::Event::Text(typed.into())]];
+        frames.extend(keys.iter().map(|&k| vec![key(k)]));
+        let mut out = None;
+        for (n, events) in frames.into_iter().enumerate() {
+            ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+                if n == 0 {
+                    ui.memory_mut(|m| m.request_focus(ui.id().with(("combo_edit", "f"))));
+                }
+                let v = if search { font_combo(ui, "f", 150.0, "", items, None) } else { combo(ui, "f", 150.0, "", items, None) };
+                out = out.take().or(v);
+            })
+            .drop_without_applying_deltas();
+        }
+        out
+    }
+
+    #[test]
+    fn typing_in_the_font_box_finds_the_family() {
+        // #359: typing "arial" or "roman" picks the installed family; the size box stays literal.
+        use egui::Key::{ArrowDown, Enter, Escape};
+        let fonts: Vec<String> = ["Arial", "Arial Black", "Courier New", "Times New Roman"].map(String::from).to_vec();
+        assert_eq!(type_into_combo(true, &fonts, "arial", &[Enter]).as_deref(), Some("Arial"));
+        assert_eq!(type_into_combo(true, &fonts, "roman", &[Enter]).as_deref(), Some("Times New Roman"));
+        assert_eq!(type_into_combo(true, &fonts, "arial", &[ArrowDown, Enter]).as_deref(), Some("Arial Black"));
+        // Not installed: applied as typed, as Word allows.
+        assert_eq!(type_into_combo(true, &fonts, "Zapfino", &[Enter]).as_deref(), Some("Zapfino"));
+        assert_eq!(type_into_combo(true, &fonts, "arial", &[Escape]), None);
+        let sizes: Vec<String> = ["10", "11", "12"].map(String::from).to_vec();
+        assert_eq!(type_into_combo(false, &sizes, "1", &[Enter]).as_deref(), Some("1"));
     }
 
     #[test]
