@@ -15,6 +15,9 @@ macro_rules! tl {
 
 pub mod backstage;
 pub mod canvas;
+pub mod chat_gate;
+pub mod chat_guard;
+pub mod chat_shift;
 pub mod chrome;
 pub mod control;
 pub mod credits;
@@ -91,6 +94,15 @@ impl Default for UiState {
     }
 }
 
+/// A chat member's own selection, kept between its commands, with the text it selected then.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct MemberSel {
+    pub sel: wordcraft_engine::Selection,
+    /// Text under `sel` when it was stored: an edit by someone else that changes it makes the
+    /// member select again before it writes.
+    pub text: String,
+}
+
 /// The application.
 pub struct WordApp {
     pub session: Session,
@@ -103,6 +115,11 @@ pub struct WordApp {
     /// macOS: the window has no title bar; leave room for the traffic lights.
     pub integrated_titlebar: bool,
     control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
+    /// Each chat member's own selection (see `chat_gate`).
+    pub member_sel: std::collections::HashMap<String, MemberSel>,
+    /// `Session::doc_replaced` the `member_sel` entries belong to; a new document or a version
+    /// restore clears them.
+    pub member_sel_gen: u64,
     shot_token: u64,
     queued_shots: Vec<(u64, f64, u32)>,
     pending_shots: Vec<(u64, Option<String>, std::sync::mpsc::Sender<Value>, f64)>,
@@ -131,6 +148,8 @@ impl WordApp {
             previews: previews::Previews::default(),
             integrated_titlebar: false,
             control_rx: None,
+            member_sel: std::collections::HashMap::new(),
+            member_sel_gen: 0,
             shot_token: 0,
             queued_shots: Vec::new(),
             pending_shots: Vec::new(),
@@ -470,20 +489,29 @@ impl WordApp {
     fn drain_control(&mut self, ctx: &egui::Context) {
         let Some(rx) = self.control_rx.take() else { return };
         while let Ok(req) = rx.try_recv() {
-            let reply = req.reply.clone();
-            match control::handle(self, ctx, &req) {
-                control::Outcome::Done(v) => {
-                    let _ = reply.send(v);
-                }
-                control::Outcome::Screenshot { path } => {
-                    self.shot_token += 1;
-                    let token = self.shot_token;
-                    self.queued_shots.push((token, now_ms() + 120.0, 0));
-                    self.pending_shots.push((token, path, reply, now_ms() + 8000.0));
-                }
-            }
+            self.answer_control(ctx, req);
         }
         self.control_rx = Some(rx);
+    }
+
+    /// Run one control request and answer it; a request past its deadline is not run.
+    pub fn answer_control(&mut self, ctx: &egui::Context, req: ControlRequest) {
+        let reply = req.reply.clone();
+        if req.expired() {
+            let _ = reply.send(json!({"ok": false, "error": "expired"}));
+            return;
+        }
+        match control::handle(self, ctx, &req) {
+            control::Outcome::Done(v) => {
+                let _ = reply.send(v);
+            }
+            control::Outcome::Screenshot { path } => {
+                self.shot_token = self.shot_token.wrapping_add(1);
+                let token = self.shot_token;
+                self.queued_shots.push((token, now_ms() + 120.0, 0));
+                self.pending_shots.push((token, path, reply, now_ms() + 8000.0));
+            }
+        }
     }
 
     fn issue_screenshots(&mut self, ctx: &egui::Context) {

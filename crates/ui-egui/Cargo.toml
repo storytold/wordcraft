@@ -15,6 +15,7 @@ wordcraft-fonts = { workspace = true }
 wordcraft-layout = { workspace = true }
 wordcraft-render = { workspace = true }
 wordcraft-engine = { workspace = true }
+wordcraft-chat = { workspace = true }
 egui = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -25,6 +26,7 @@ sys-locale = "0.3"
 [dev-dependencies]
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
 image = { workspace = true }
+wordcraft-chat = { workspace = true, features = ["testing"] }
 
 [build-dependencies]
 serde_json = { workspace = true }
