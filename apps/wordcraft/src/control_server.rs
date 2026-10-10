@@ -1,10 +1,10 @@
 //! Loopback JSON-lines control server: one request per line, one reply per line.
 //! This is the transport the MCP server (`wordcraft-cli mcp --connect`) wraps.
 //!
-//! Every request needs a key: the window's key (written by Start chat or `--control`, #124) or a
-//! chat member's key from `chat.join`. `chat.*` is answered on the server thread, so a long poll
-//! never waits on the UI thread; everything else goes to the UI thread with the caller's identity
-//! and a deadline.
+//! Every request needs a key: the window's key (written by Start chat or `--control`, see Keys in
+//! `docs/control-protocol.md`) or a chat member's key from `chat.join`. `chat.*` is answered on the
+//! server thread, so a long poll never waits on the UI thread; everything else goes to the UI
+//! thread with the caller's identity and a deadline.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -151,7 +151,7 @@ impl ControlPort {
         }
     }
 
-    /// Key, key file (#124), accept thread.
+    /// Key, key file (see Keys in `docs/control-protocol.md`), accept thread.
     fn start_running(&self, listener: TcpListener, by_flag: bool) -> Result<Running, String> {
         let addr = listener.local_addr().map_err(|e| e.to_string())?;
         let key = random_key().map_err(|e| format!("control server off: no random key ({e})"))?;

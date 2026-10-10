@@ -455,7 +455,7 @@ mod tests {
         a
     }
 
-    /// Probe E1/E10 sample: three owner paragraphs.
+    /// Three owner paragraphs.
     fn three() -> WordApp {
         let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Default::default());
         a.session.author = "Owner".into();
@@ -906,7 +906,6 @@ mod tests {
 
     #[test]
     fn a_member_enter_does_not_join_an_owner_paragraph_to_the_owner_list() {
-        // Probe E10.
         let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Default::default());
         a.session.author = "Owner".into();
         let _ = a.run("document.setText", json!({"text": "Clause one.\nThe owner's loose text.\nClause two.\nClause three."}));
@@ -957,7 +956,6 @@ mod tests {
 
     #[test]
     fn list_label_text_cannot_be_written_by_a_member() {
-        // Probe E4.
         for id in ["para.defineNumber", "para.defineBullet", "para.setNumberingValue", "para.restartNumbering"] {
             assert!(!agent_allowed(id), "{id}");
         }
@@ -983,7 +981,7 @@ mod tests {
 
     #[test]
     fn commands_that_should_not_edit_are_checked_too() {
-        // Probe E2: every allowed command marked as not changing the document.
+        // Every allowed command marked as not changing the document.
         let reg = a_registry();
         let mut hits = Vec::new();
         for c in reg.all().iter().filter(|c| !c.mutates && agent_allowed(c.id)) {
@@ -1019,7 +1017,7 @@ mod tests {
 
     #[test]
     fn refused_command_at_a_full_undo_stack_leaves_undo_identical() {
-        // Probe E3: 500 owner steps, then a refused member command.
+        // 500 owner steps, then a refused member command.
         let mut a = app();
         let _ = a.run("select.text", json!({"text": "Price"}));
         for i in 0..510 {
@@ -1258,7 +1256,7 @@ mod tests {
         assert!(lines.contains(&"@pi accepted 18 characters from @claude".to_string()), "{lines:?}");
     }
 
-    /// The owner's tracked insertion " term of 24 months" after "Delta" (probe N10).
+    /// The owner's tracked insertion " term of 24 months" after "Delta".
     fn owner_insertion() -> WordApp {
         let mut a = three();
         let _ = a.run("review.trackChanges", json!({"value": true}));
@@ -1293,7 +1291,7 @@ mod tests {
         assert_eq!(system_lines(&a).len(), n);
     }
 
-    /// An owner's comment "I accept this clause" on "Zeta" (probe N1); returns its part.
+    /// An owner's comment "I accept this clause" on "Zeta"; returns its part.
     fn owner_comment(a: &mut WordApp) -> u32 {
         let _ = a.run("select.text", json!({"text": "Zeta"}));
         let _ = a.run("review.newComment", json!({"text": "I accept this clause"}));
@@ -1341,7 +1339,7 @@ mod tests {
 
     #[test]
     fn list_label_formatting_after_a_member_enter_is_checked() {
-        // Probe N9: the owner's lettered list; clause 2's text in caps, its mark (which formats
+        // The owner's lettered list; clause 2's text in caps, its mark (which formats
         // the list label) not.
         let body = |i: usize, off: usize| wordcraft_engine::cmd::pos_json(&wordcraft_doc::Pos::body(i, off));
         for enter in [false, true] {
@@ -1383,7 +1381,7 @@ mod tests {
 
     #[test]
     fn a_member_empty_paragraph_does_not_set_the_expected_mark() {
-        // Probe N14: the owner's list item "delta epsilon end." with "epsilon end." in caps (or
+        // The owner's list item "delta epsilon end." with "epsilon end." in caps (or
         // small caps) but not its mark. The member presses Enter twice after "delta ", then one
         // format.set from its empty paragraph through the end of the owner's second half.
         let body = |i: usize, off: usize| wordcraft_engine::cmd::pos_json(&wordcraft_doc::Pos::body(i, off));
@@ -1427,7 +1425,7 @@ mod tests {
 
     #[test]
     fn member_text_before_the_split_does_not_set_the_expected_mark() {
-        // Probe N15: Enter after "delta ", the member types "x" there, then one format.set from
+        // Enter after "delta ", the member types "x" there, then one format.set from
         // its "x" through the end of the owner's half (runs already caps, mark not).
         let body = |i: usize, off: usize| wordcraft_engine::cmd::pos_json(&wordcraft_doc::Pos::body(i, off));
         for prop in [json!({"caps": true}), json!({"smallCaps": true})] {
@@ -1539,7 +1537,7 @@ mod tests {
 
     #[test]
     fn member_cannot_reject_new_paragraphs_and_gets_a_clear_error() {
-        // Probe E6: the engine does not join paragraphs on reject.
+        // The engine does not join paragraphs on reject.
         let mut a = app();
         let _ = run_as_member(&mut a, "@claude", "select.text", json!({"text": "12 months."}));
         let _ = run_as_member(&mut a, "@claude", "select.collapse", json!({"end": true}));
