@@ -4,6 +4,7 @@ pub mod caret;
 pub mod citations;
 pub mod design;
 pub mod edit;
+pub mod equation;
 pub mod file;
 pub mod format;
 pub mod insert;
@@ -35,6 +36,7 @@ pub fn registry() -> Registry {
     v.extend(para::specs());
     v.extend(view::specs());
     v.extend(insert::specs());
+    v.extend(equation::specs());
     v.extend(page::specs());
     v.extend(table::specs());
     v.extend(review::specs());

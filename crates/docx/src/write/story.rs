@@ -301,17 +301,11 @@ impl Writer<'_> {
                     w.close("w:r");
                 }
             }
-            InlineObject::Equation { linear, display } => {
-                if *display {
-                    w.open("m:oMathPara", &[]);
-                }
-                w.open("m:oMath", &[]);
-                w.open("m:r", &[]);
-                w.leaf("m:t", &[("xml:space", "preserve")], linear);
-                w.close("m:r");
-                w.close("m:oMath");
-                if *display {
-                    w.close("m:oMathPara");
+            InlineObject::Equation { linear, display, math } => {
+                // Automatic equation numbers become text: Word numbers nothing by itself.
+                match super::math::resolve_numbers(math, *display, &mut self.eq_number) {
+                    Some(m) => super::math::write_equation(w, linear, *display, &m),
+                    None => super::math::write_equation(w, linear, *display, math),
                 }
             }
             InlineObject::Field { instr, result, locked } => self.field(w, instr, result, *locked, props),

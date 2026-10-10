@@ -11,6 +11,7 @@
 pub mod display;
 pub mod fields;
 pub mod hit;
+pub mod math;
 pub mod para;
 mod table;
 
@@ -185,6 +186,7 @@ struct Key {
     table: u64,
     notes: u64,
     excl: u64,
+    eq: u32,
 }
 
 /// Memoised paragraph layouts.
@@ -241,6 +243,8 @@ struct Ctx<'a> {
     fields: FieldCtx,
     notes_hash: u64,
     numbers: HashMap<u32, Arc<ParaLayout>>,
+    /// Automatic equation numbers so far.
+    eq_count: u32,
     /// Bounds laying out text boxes inside text boxes, for the whole layout.
     boxes: wordcraft_doc::BoxBudget,
 }
@@ -267,6 +271,7 @@ impl Ctx<'_> {
             table: None,
             proofing: false,
             exclusions: &[],
+            eq_number: 0,
         };
         let pl = Arc::new(para::layout_para(&p, &env));
         self.numbers.insert(n, pl.clone());
@@ -291,6 +296,17 @@ impl Ctx<'_> {
         label: Option<(String, Level)>,
     ) -> Arc<ParaLayout> {
         let page = if has_page_fields(p) { Some(self.fields.page_key()) } else { None };
+        // Automatic equation numbers count through the document.
+        let eq_here: u32 = p
+            .objects
+            .iter()
+            .map(|o| match o {
+                InlineObject::Equation { math, display, .. } => math::auto_numbers(math, *display),
+                _ => 0,
+            })
+            .sum();
+        let eq_number = self.eq_count;
+        self.eq_count = self.eq_count.saturating_add(eq_here);
         let key = Key {
             rev: p.rev,
             width: width.to_bits(),
@@ -299,6 +315,7 @@ impl Ctx<'_> {
             table: table.map(|t| hash_of(&format!("{t:?}"))).unwrap_or(0),
             notes: if p.objects.iter().any(|o| matches!(o, InlineObject::NoteRef { .. })) { self.notes_hash } else { 0 },
             excl: if exclusions.is_empty() { 0 } else { hash_of(&format!("{exclusions:?}")) },
+            eq: if eq_here > 0 { eq_number } else { 0 },
         };
         self.cache.used.insert(key.clone());
         if let Some(pl) = self.cache.paras.get(&key) {
@@ -316,6 +333,7 @@ impl Ctx<'_> {
             table,
             proofing: self.opts.proofing,
             exclusions,
+            eq_number,
         };
         let pl = Arc::new(para::layout_para(p, &env));
         self.cache.paras.insert(key, pl.clone());
@@ -747,6 +765,7 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
         },
         notes_hash,
         numbers: HashMap::new(),
+        eq_count: 0,
         boxes: wordcraft_doc::BoxBudget::default(),
     };
     let sections = doc.sections();
@@ -1351,6 +1370,7 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32) -> f32 {
                 table: None,
                 proofing: false,
                 exclusions: &[],
+                eq_number: ctx.eq_count,
             };
             let _ = rp;
             let pl = para::layout_para(p, &env);

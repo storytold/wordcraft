@@ -362,6 +362,55 @@ impl DocLayout {
         out
     }
 
+    /// Where the equation at `pos` (its U+FFFC) is drawn: page, x of its left edge and its
+    /// baseline (page coordinates), and its layout.
+    pub fn equation_geom(&self, pos: &Pos, page_hint: usize) -> Option<(usize, f32, f32, std::sync::Arc<crate::math::MathLayout>)> {
+        for (pi, it) in self.pieces(pos.story, &pos.path, page_hint) {
+            let Placed::Lines { para, l0, l1, x, y, .. } = it else { continue };
+            let li = para.line_of(pos.off);
+            if li < *l0 || li >= *l1 {
+                continue;
+            }
+            let first = para.lines.get(*l0)?;
+            let l = para.lines.get(li)?;
+            for k in l.c0..l.c1 {
+                let Some(c) = para.clusters.get(k) else { continue };
+                let crate::para::ClKind::Object(oi) = c.kind else { continue };
+                if c.start != pos.off {
+                    continue;
+                }
+                let ml = para.maths.iter().find(|(o, _)| *o == oi)?.1.clone();
+                let cx = l.xs.get(k - l.c0).copied()?;
+                let base = y + (l.baseline - first.top);
+                return Some((pi, x + cx, base, ml));
+            }
+        }
+        None
+    }
+
+    /// The equation under (x, y) on `page` and the caret position inside it nearest the point.
+    pub fn equation_hit(&self, page: usize, x: f32, y: f32, story: StoryRef) -> Option<(Pos, wordcraft_doc::math_edit::MathPos)> {
+        let p = self.pages.get(page)?;
+        for l in page_lines(p, story) {
+            let Some(line) = l.para.lines.get(l.li) else { continue };
+            let base = l.top + (line.baseline - line.top);
+            for k in line.c0..line.c1 {
+                let Some(c) = l.para.clusters.get(k) else { continue };
+                let crate::para::ClKind::Object(oi) = c.kind else { continue };
+                let Some((_, ml)) = l.para.maths.iter().find(|(o, _)| *o == oi) else { continue };
+                let x0 = l.x + line.xs.get(k - line.c0).copied().unwrap_or(0.0);
+                let pad = 2.0;
+                if x < x0 - pad || x > x0 + ml.width + pad || y < base - ml.ascent - pad || y > base + ml.descent + pad {
+                    continue;
+                }
+                let slot = ml.hit(x - x0, base - y)?;
+                let pos = Pos { story: l.story, path: l.path.clone(), off: c.start };
+                return Some((pos, wordcraft_doc::math_edit::MathPos { path: slot.path.clone(), off: slot.off }));
+            }
+        }
+        None
+    }
+
     /// Page index for a body position (first page showing its line).
     pub fn page_of(&self, pos: &Pos) -> Option<usize> {
         self.caret(pos).map(|c| c.page)
