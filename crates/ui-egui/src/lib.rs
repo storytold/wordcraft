@@ -1106,6 +1106,9 @@ fn input_dialog(id: &str, params: &Value) -> Option<&'static str> {
         // Define New Multilevel List and Track Changes Options without settings show their dialogs.
         "list.define" if params.get("levels").is_none() => Some("defineList"),
         "review.trackingOptions" if params.as_object().is_none_or(|m| m.is_empty()) => Some("trackChangesOptions"),
+        "insert.bookmark" if !has("name") => Some("bookmark"),
+        // Word Count from the keyboard or command search shows its dialog, as the ribbon does.
+        "review.wordCount" if params.as_object().is_none_or(|m| m.is_empty()) => Some("wordCount"),
         _ => None,
     }
 }
@@ -1725,6 +1728,36 @@ mod tests {
         h.step();
         assert!(h.state().session.dirty, "the keystroke reached the document");
         assert_eq!(reported.get(), Some(true), "the host was told before the frame ended");
+    }
+
+    /// #330: Word's shortcuts work from the keyboard — Ctrl+Alt+1 (⌘⌥1) applies Heading 1, and
+    /// an Alt shortcut doesn't also type the character its key would produce.
+    #[test]
+    fn word_shortcuts_run_from_the_keyboard() {
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app(),
+        );
+        for _ in 0..6 {
+            h.step();
+        }
+        let key = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+        h.event(egui::Event::Text("Kilns".into()));
+        h.step();
+        h.event(key(egui::Key::Num1, egui::Modifiers::COMMAND | egui::Modifiers::ALT));
+        h.step();
+        let style =
+            |h: &egui_kittest::Harness<WordApp>| h.state().session.doc.para_at(&wordcraft_doc::Pos::body(0, 0)).and_then(|p| p.props.style.clone());
+        assert_eq!(style(&h).as_deref(), Some("Heading1"));
+        // Alt+F7 (next misspelling) can come with key text on some platforms; none is typed.
+        h.event(key(egui::Key::F7, egui::Modifiers::ALT));
+        h.event(egui::Event::Text("x".into()));
+        h.step();
+        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Kilns");
     }
 
     /// Save writes the document first, then carries on with what the user asked for.

@@ -66,6 +66,17 @@ pub fn registry() -> Registry {
     Registry::new(v)
 }
 
+/// A shortcut that differs on macOS, where Word for Mac moves it (⌘Q quits, ⌘Space is
+/// Spotlight, ⌘⌥H hides other apps…): `mac` there, `other` everywhere else.
+pub const fn mac_or(mac: &'static str, other: &'static str) -> &'static str {
+    if cfg!(target_os = "macos") { mac } else { other }
+}
+
+/// A shortcut with no macOS equivalent (Option+letter types the character there).
+pub const fn non_mac(k: &'static str) -> &'static str {
+    mac_or("", k)
+}
+
 /// Parse a position from JSON (`{"story":"body","path":[0],"off":3}` or `{"block":0,"off":3}`).
 pub fn parse_pos(v: &Value) -> Option<Pos> {
     if let Ok(p) = serde_json::from_value::<Pos>(v.clone()) {

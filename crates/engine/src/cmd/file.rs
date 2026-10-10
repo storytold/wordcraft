@@ -30,11 +30,11 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("file.new", "New", "File", new).key("Mod+N").params(r#"{"template"?: "blank|sample|letter|resume|report"}"#).pure(),
         CommandSpec::new("file.open", "Open", "File", open)
-            .key("Mod+O")
+            .key("Mod+O / Mod+F12")
             .params(r#"{"path": string, "data"?: base64 (the file's bytes; `path` then only names it), "password"?: string (for a password-protected Word document)}"#)
             .pure(),
         CommandSpec::new("file.save", "Save", "File", save)
-            .key("Mod+S")
+            .key("Mod+S / Shift+F12")
             .params(r#"{"path"?: string, "password"?: string (encrypt this and later saves with it, as file.encrypt does)}"#)
             .pure(),
         CommandSpec::new("file.saveAs", "Save As", "File", save_as).key("F12").params(r#"{"path": string, "password"?: string}"#).pure(),
@@ -58,13 +58,13 @@ pub fn specs() -> Vec<CommandSpec> {
             s.ui_requests.push(json!({"open": "print"}));
             sel_result(s)
         })
-        .key("Mod+P")
+        .key("Mod+P / Mod+Shift+F12 / Mod+F2")
         .pure(),
         CommandSpec::new("file.close", "Close", "File", |s, _| {
             s.ui_requests.push(json!({"close": true}));
             sel_result(s)
         })
-        .key("Mod+W")
+        .key("Mod+W / Mod+F4")
         .pure(),
         CommandSpec::new("file.properties", "Properties", "File › Info", properties)
             .params(r#"{"title"?, "subject"?, "author"?, "keywords"?, "comments"?, "category"?, "custom"?: {name: string | null (removes)}}"#),

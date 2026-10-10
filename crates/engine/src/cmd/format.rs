@@ -101,9 +101,12 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("format.growFont1", "Grow Font 1 Point", "Home › Font", |s, _| nudge_size(s, 1.0)).key("Mod+]"),
         CommandSpec::new("format.shrinkFont1", "Shrink Font 1 Point", "Home › Font", |s, _| nudge_size(s, -1.0)).key("Mod+["),
         CommandSpec::new("format.color", "Font Color", "Home › Font", color).params(r#"{"color": "RRGGBB" | "auto"}"#),
-        CommandSpec::new("format.highlight", "Text Highlight Color", "Home › Font", highlight).params(
-            r#"{"color": "yellow|brightGreen|turquoise|pink|blue|red|darkBlue|teal|green|violet|darkRed|darkYellow|gray50|gray25|black|none"}"#,
-        ),
+        CommandSpec::new("format.highlight", "Text Highlight Color", "Home › Font", highlight)
+            .params(
+                r#"{"color": "yellow|brightGreen|turquoise|pink|blue|red|darkBlue|teal|green|violet|darkRed|darkYellow|gray50|gray25|black|none"}"#,
+            )
+            // ⌘⌥H hides other apps on macOS.
+            .key(super::non_mac("Mod+Alt+H")),
         CommandSpec::new("format.shading", "Character Shading", "Home › Font", |s, v| {
             let c = p::str(v, "color").and_then(Rgb::parse);
             apply(s, &|x| x.shading = c)
@@ -112,7 +115,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("format.changeCase", "Change Case", "Home › Font", change_case)
             .key("Shift+F3")
             .params(r#"{"mode"?: "sentence|lower|upper|title|toggle"}"#),
-        CommandSpec::new("format.clear", "Clear All Formatting", "Home › Font", clear).key("Mod+Space"),
+        CommandSpec::new("format.clear", "Clear All Formatting", "Home › Font", clear),
+        // Word's Ctrl+Space; ⌘Space is Spotlight, so Word for Mac uses ⌃Space.
+        CommandSpec::new("format.resetChar", "Reset Character Formatting", "Home › Font", reset_char).key(super::mac_or("Ctrl+Space", "Mod+Space")),
         CommandSpec::new("format.spacing", "Character Spacing", "Home › Font › Font › Advanced", |s, v| {
             let x = p::req_f32(v, "points")?.clamp(-100.0, 100.0);
             apply(s, &|c| c.spacing = Some(x))
@@ -450,6 +455,15 @@ fn clear(s: &mut Session, _: &Value) -> CmdResult {
             let f = s.sel.focus.clone();
             s.doc.format_paragraphs(&f, &f, &|p| *p = Default::default())?;
         }
+    }
+    sel_result(s)
+}
+
+/// Remove direct character formatting, keeping the paragraph and any character style.
+fn reset_char(s: &mut Session, _: &Value) -> CmdResult {
+    match target(s) {
+        Some((a, b)) => s.doc.format_range(&a, &b, &|c| *c = CharProps { style: c.style.clone(), ..c.cleared() })?,
+        None => s.pending = Some(CharProps::default()),
     }
     sel_result(s)
 }

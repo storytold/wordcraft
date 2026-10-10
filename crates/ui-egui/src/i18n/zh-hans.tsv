@@ -550,6 +550,16 @@
 	Open	打开
 	OpenDocument Text (*.odt)	OpenDocument 文本 (*.odt)
 	Optional Hyphen	可选连字符
+	Copyright Sign	版权符号
+	Ellipsis	省略号
+	Em Dash	长破折号
+	Insert Date Field	插入日期域
+	Insert Page Field	插入页码域
+	Insert Time Field	插入时间域
+	Registered Sign	注册商标符号
+	Reset Character Formatting	重置字符格式
+	Reset Paragraph Formatting	重置段落格式
+	Trademark Sign	商标符号
 	Options	选项
 	Orientation	纸张方向
 	Outline	大纲
@@ -1150,8 +1160,6 @@
 	Document Information	文档信息
 	Double Closing Quote	右双引号
 	Double Opening Quote	左双引号
-	Ellipsis	省略号
-	Em Dash	长破折号
 	En Dash	短破折号
 	Em Space	全角空格
 	En Space	半角空格

@@ -549,6 +549,16 @@
 	Open	Abrir
 	OpenDocument Text (*.odt)	Texto de OpenDocument (*.odt)
 	Optional Hyphen	Guion opcional
+	Copyright Sign	Signo de copyright
+	Ellipsis	Puntos suspensivos
+	Em Dash	Raya
+	Insert Date Field	Insertar campo de fecha
+	Insert Page Field	Insertar campo de página
+	Insert Time Field	Insertar campo de hora
+	Registered Sign	Signo de marca registrada
+	Reset Character Formatting	Restablecer formato de caracteres
+	Reset Paragraph Formatting	Restablecer formato de párrafo
+	Trademark Sign	Signo de marca comercial
 	Options	Opciones
 	Orientation	Orientación
 	Outline	Esquema
@@ -1155,8 +1165,6 @@
 	Document Information	Información del documento
 	Double Closing Quote	Comilla doble de cierre
 	Double Opening Quote	Comilla doble de apertura
-	Ellipsis	Puntos suspensivos
-	Em Dash	Raya
 	En Dash	Guion medio
 	Em Space	Espacio eme
 	En Space	Espacio ene

@@ -52,6 +52,58 @@ fn every_shortcut_runs_one_command() {
 }
 
 #[test]
+fn word_default_shortcuts_resolve() {
+    // #330: Word's documented default shortcuts reach the matching commands, with Word for
+    // Mac's keys where macOS takes Word's (⌘Q quits, ⌘Space is Spotlight, ⌘⇧G is Find Previous).
+    let reg = cmd::registry();
+    let id = |k: &str| reg.by_shortcut(k).map(|c| c.id);
+    assert_eq!(id("Mod+Alt+1"), Some("para.heading1"));
+    assert_eq!(id("Mod+Alt+P"), Some("view.printLayout"));
+    assert_eq!(id("Mod+Alt+O"), Some("view.outline"));
+    assert_eq!(id("Mod+Alt+N"), Some("view.draft"));
+    assert_eq!(id("Mod+Alt+S"), Some("view.split"));
+    assert_eq!(id("Mod+Alt+-"), Some("text.emDash"));
+    assert_eq!(id("Mod+Shift+F5"), Some("insert.bookmark"));
+    assert_eq!(id("Alt+F7"), Some("review.spelling"));
+    assert_eq!(id("Shift+F12"), Some("file.save"));
+    assert_eq!(id(cmd::mac_or("Ctrl+Q", "Mod+Q")), Some("para.reset"));
+    assert_eq!(id(cmd::mac_or("Ctrl+Space", "Mod+Space")), Some("format.resetChar"));
+    assert_eq!(id(cmd::mac_or("Ctrl+Shift+D", "Alt+Shift+D")), Some("insert.dateField"));
+    if cfg!(target_os = "macos") {
+        assert_eq!(id("Mod+Shift+G"), Some("edit.findPrevious"));
+    } else {
+        assert_eq!(id("Mod+Shift+G"), Some("review.wordCount"));
+        assert_eq!(id("Mod+Alt+C"), Some("text.copyright"));
+        assert_eq!(id("Mod+Alt+H"), Some("format.highlight"));
+    }
+    assert_eq!(id("Mod+PageUp"), Some("edit.findPrevious"));
+}
+
+#[test]
+fn reset_shortcuts_remove_direct_formatting_but_keep_styles() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello world"}));
+    run(&mut s, "para.heading1", json!({}));
+    run(&mut s, "para.indent", json!({}));
+    run(&mut s, "para.alignCenter", json!({}));
+    run(&mut s, "para.reset", json!({}));
+    let props = s.doc.para_at(&Pos::body(0, 0)).unwrap().props.clone();
+    assert_eq!(props.style.as_deref(), Some("Heading1"), "Ctrl+Q keeps the paragraph style");
+    assert_eq!((props.indent_left, props.align), (None, None), "Ctrl+Q drops direct paragraph formatting");
+
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "format.resetChar", json!({}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    assert_eq!(p.props_of_char(1).bold, None, "Ctrl+Space drops direct character formatting");
+    assert_eq!(p.props.style.as_deref(), Some("Heading1"), "Ctrl+Space leaves the paragraph alone");
+
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.emDash", json!({}));
+    assert_eq!(text(&s), "Hello world—");
+}
+
+#[test]
 fn typing_enter_undo() {
     let mut s = s();
     run(&mut s, "text.insert", json!({"text": "Hello"}));

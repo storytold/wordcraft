@@ -587,6 +587,16 @@
 	Open	Otvori
 	OpenDocument Text (*.odt)	OpenDocument tekst (*.odt)
 	Optional Hyphen	Opcionalna crtica
+	Copyright Sign	Znak autorskog prava
+	Ellipsis	Tri tačke
+	Em Dash	Duga crta
+	Insert Date Field	Umetni polje datuma
+	Insert Page Field	Umetni polje strane
+	Insert Time Field	Umetni polje vremena
+	Registered Sign	Znak registrovanog žiga
+	Reset Character Formatting	Poništi formatiranje znakova
+	Reset Paragraph Formatting	Poništi formatiranje pasusa
+	Trademark Sign	Znak žiga
 	Options	Opcije
 	Orientation	Orijentacija
 	Outline	Kontura
@@ -1254,8 +1264,6 @@
 	Document Information	Informacije o dokumentu
 	Double Closing Quote	Zatvoreni dvostruki navodnik
 	Double Opening Quote	Otvoreni dvostruki navodnik
-	Ellipsis	Tri tačke
-	Em Dash	Duga crta
 	En Dash	Srednja crta
 	Em Space	Em razmak
 	En Space	En razmak

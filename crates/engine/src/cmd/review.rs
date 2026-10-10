@@ -46,9 +46,13 @@ pub fn specs() -> Vec<CommandSpec> {
                 r#"{"comments"?: bool, "ink"?: bool, "insertionsDeletions"?: bool, "formatting"?: bool, "balloons"?: "revisions|inline|commentsAndFormatting", "insertMark"?: "underline|doubleUnderline|bold|italic|strikethrough|colorOnly|none", "insertColor"?: "byAuthor" | "RRGGBB", "deleteMark"?: "strikethrough|doubleStrikethrough|hidden|caret|hash|underline|colorOnly", "deleteColor"?: "byAuthor" | "RRGGBB", "changedLines"?: "outside|left|right|none", "changedLinesColor"?: "auto" | "RRGGBB", "trackFormatting"?: bool} → the options (omit all to read them)"#,
             )
             .pure(),
-        CommandSpec::new("review.wordCount", "Word Count", "Review › Proofing", word_count).params(r#"{"includeTextBoxes"?: bool}"#).pure(),
+        CommandSpec::new("review.wordCount", "Word Count", "Review › Proofing", word_count)
+            .params(r#"{"includeTextBoxes"?: bool}"#)
+            // ⌘⇧G is Find Previous on macOS.
+            .key(super::non_mac("Mod+Shift+G"))
+            .pure(),
         CommandSpec::new("review.changes", "Reviewing Pane", "Review › Tracking", list_changes).pure(),
-        CommandSpec::new("review.spelling", "Spelling & Grammar", "Review › Proofing", next_issue).key("F7").pure(),
+        CommandSpec::new("review.spelling", "Spelling & Grammar", "Review › Proofing", next_issue).key("F7 / Alt+F7").pure(),
         CommandSpec::new("review.issues", "Proofing Issues", "Review › Proofing", all_issues).pure(),
         CommandSpec::new("review.suggestions", "Spelling Suggestions", "Review › Proofing", suggestions).params(r#"{"pos"?: Pos}"#).pure(),
         CommandSpec::new("review.addToDictionary", "Add to Dictionary", "Review › Proofing", |s, v| {

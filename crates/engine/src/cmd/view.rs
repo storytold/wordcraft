@@ -21,14 +21,15 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .key("Mod+Shift+8 / Mod+8")
         .pure(),
-        CommandSpec::new("view.printLayout", "Print Layout", "View › Views", |s, _| mode(s, ViewMode::Print, false)).pure(),
+        CommandSpec::new("view.printLayout", "Print Layout", "View › Views", |s, _| mode(s, ViewMode::Print, false)).key("Mod+Alt+P").pure(),
         CommandSpec::new("view.webLayout", "Web Layout", "View › Views", |s, _| mode(s, ViewMode::Web, false)).pure(),
-        CommandSpec::new("view.draft", "Draft", "View › Views", |s, _| mode(s, ViewMode::Draft, false)).pure(),
+        CommandSpec::new("view.draft", "Draft", "View › Views", |s, _| mode(s, ViewMode::Draft, false)).key("Mod+Alt+N").pure(),
         CommandSpec::new("view.outline", "Outline", "View › Views", |s, _| {
             mode(s, ViewMode::Draft, false)?;
             s.view.nav_pane = true;
             sel_result(s)
         })
+        .key("Mod+Alt+O")
         .pure(),
         CommandSpec::new("view.readMode", "Read Mode", "View › Views", |s, _| mode(s, ViewMode::Print, true)).pure(),
         CommandSpec::new("view.focus", "Focus", "View › Immersive", |s, v| toggle(s, v, |x| &mut x.focus_mode)).pure(),
@@ -71,6 +72,7 @@ pub fn specs() -> Vec<CommandSpec> {
             s.ui_requests.push(json!({"toggle": "split"}));
             sel_result(s)
         })
+        .key("Mod+Alt+S")
         .pure(),
         CommandSpec::new("view.state", "View State", "View", |s, _| serde_json::to_value(&s.view).map_err(|e| CmdError::Failed(e.to_string())))
             .pure(),
