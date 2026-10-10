@@ -309,7 +309,7 @@ fn arabic_numbering_commands_reach_lists_and_page_fields() {
         }
     }
     labels.dedup();
-    assert_eq!(labels, ["ا.", "ب.", "ا."], "abjad counting survives restart: {labels:?}");
+    assert_eq!(labels, ["أ.", "ب.", "أ."], "abjad counting survives restart: {labels:?}");
 }
 
 #[test]

@@ -95,11 +95,11 @@ mod tests {
     #[test]
     fn page_fields_use_arabic_formats() {
         let ctx = FieldCtx { page: 4, pages: 12, page_format: NumFormat::HindiNumbers, ..Default::default() };
-        assert_eq!(field_text("PAGE", "", &ctx).0, "٤");
+        assert_eq!(field_text("PAGE", "", &ctx).0, "४");
         assert_eq!(field_text("PAGE \\* ROMAN", "", &ctx).0, "IV", "an explicit switch still wins");
         let abjad = FieldCtx { page: 11, page_format: NumFormat::ArabicAbjad, ..Default::default() };
-        assert_eq!(field_text("PAGE", "", &abjad).0, "يا");
+        assert_eq!(field_text("PAGE", "", &abjad).0, "ك");
         let alpha = FieldCtx { pages: 29, page_format: NumFormat::ArabicAlpha, ..Default::default() };
-        assert_eq!(field_text("NUMPAGES", "", &alpha).0, "اا");
+        assert_eq!(field_text("NUMPAGES", "", &alpha).0, "أأ");
     }
 }
