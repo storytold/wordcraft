@@ -121,7 +121,7 @@ pub fn one_line(text: &str) -> String {
     out
 }
 
-/// `Claude` / `@Claude` → `@claude`.
+/// `Agent` / `@Agent` → `@agent`.
 pub fn normalize_handle(h: &str) -> String {
     let t = h.trim().trim_start_matches('@').to_ascii_lowercase();
     format!("@{t}")

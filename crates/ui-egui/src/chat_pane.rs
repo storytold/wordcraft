@@ -84,7 +84,7 @@ fn input_id() -> egui::Id {
 }
 
 /// The name the invite field starts with.
-const DEFAULT_HANDLE: &str = "@claude";
+const DEFAULT_HANDLE: &str = "@agent";
 
 /// The field's text now: what the user left there, else the default (real text, not a hint).
 fn invite_field(ui: &Ui) -> String {

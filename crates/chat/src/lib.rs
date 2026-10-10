@@ -115,7 +115,7 @@ impl Chat {
             *self.client.lock().unwrap_or_else(|e| e.into_inner()) = cmd.to_string();
         }
     }
-    /// Invite an agent by name (`Claude` or `@claude`).
+    /// Invite an agent by name (`Agent` or `@agent`).
     pub fn invite(&self, name: &str) -> Result<Invite, String> {
         let addr = self.address().filter(|_| self.hub.is_open()).ok_or_else(|| NOT_STARTED.to_string())?;
         let (handle, code) = self.hub.invite(name).map_err(|e| e.to_string())?;

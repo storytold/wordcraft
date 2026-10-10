@@ -219,7 +219,7 @@ impl Hub {
         self.lock().invites.iter().any(|i| keys::ct_eq(&i.code, code) && now <= i.expires_ms)
     }
 
-    /// A one-time invite for `handle` (`Claude` or `@claude`): the normalised handle and the
+    /// A one-time invite for `handle` (`Agent` or `@agent`): the normalised handle and the
     /// code. A new invite for the same handle replaces the old one.
     pub fn invite(&self, handle: &str) -> Result<(String, String), ChatError> {
         let h = rules::normalize_handle(handle);

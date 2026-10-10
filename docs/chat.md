@@ -4,6 +4,9 @@ Review › Chat lets you talk with AI agents about the document you have open. A
 you in the chat pane and edit the document as themselves: every text change they make is a
 tracked change under their own name.
 
+The chat is model-agnostic. Any agent that can run a command line can join, under any name.
+The invite field starts with the neutral name `@agent`.
+
 The rules below are a **policy for cooperating agents, not a sandbox**. WordCraft checks every
 command an agent runs and takes back anything outside the policy, but an agent can still
 misbehave inside it. Known limits:
@@ -25,8 +28,8 @@ misbehave inside it. Known limits:
 
 ## Invite an agent
 1. In **User name:**, type your name. It cannot start with @. It is the author of your own edits.
-2. Type the agent's name (for example `@claude`) and click **Invite Agent**. A line appears:
-   `wordcraft-cli chat join 127.0.0.1:7981 ABCD-EFGH-JKMN --as @claude`. The name in the line is
+2. Type the agent's name (for example `@agent`) and click **Invite Agent**. A line appears:
+   `wordcraft-cli chat join 127.0.0.1:7981 ABCD-EFGH-JKMN --as @agent`. The name in the line is
    the name bound to the code.
 3. Click **Copy** and give the line to the agent. The code works once, for 10 minutes. The line
    goes away when the agent joins or when the code expires.
@@ -40,7 +43,7 @@ rules it prints at join and with `help`. The usage text does not change.
 ## Write in the chat
 Type in "Message (@name …), Enter to send". **Enter** sends. **Shift+Enter** starts a new line.
 - With one agent in the chat, every line you write is for that agent.
-- With two or more agents, mention the agent that must act (`@claude`) or `@all`. A line without
+- With two or more agents, mention the agent that must act (`@agent`) or `@all`. A line without
   a mention is conversation.
 - `@owner`, `@all`, `@you` and `@me` are not agent names.
 - Only the first 32 different names in a line are mentions.
@@ -61,13 +64,13 @@ WordCraft runs only the commands on one explicit allow-list (`AGENT_COMMANDS` in
   the agent's name.
 - **Simple formatting**: bold, italic, underline, strike, font, size, colour, highlight, subscript
   and superscript; alignment, spacing, indents, paragraph style. Not tracked. The chat announces
-  it: `@claude formatted: format.bold`. Bullets and numbering only on the agent's own new
+  it: `@agent formatted: format.bold`. Bullets and numbering only on the agent's own new
   paragraphs.
 - **Comments**: add comments, reply, and delete their own comments. The text of a comment by
   someone else never changes, also not by accept or reject. The chat announces a resolved
-  comment: `@claude resolved the comment by Ann`.
+  comment: `@agent resolved the comment by Ann`.
 - **Review**: accept other authors' changes, and reject tracked changes. The chat announces each
-  one with the characters and their authors: `@claude rejected 2 characters from Ann`. An agent
+  one with the characters and their authors: `@agent rejected 2 characters from Ann`. An agent
   never accepts its own changes: it gets `accepting your own changes: ask the OWNER`, and you (or
   another agent) review them. An agent can reject any tracked change, its own too, except new
   paragraphs: it gets `rejecting new paragraphs: ask the OWNER`.
@@ -105,7 +108,7 @@ red.
 
 ## For agents: `wordcraft-cli chat`
 ```sh
-wordcraft-cli chat join 127.0.0.1:7981 ABCD-EFGH-JKMN --as @claude   # once; prints the rules
+wordcraft-cli chat join 127.0.0.1:7981 ABCD-EFGH-JKMN --as @agent   # once; prints the rules
 wordcraft-cli chat listen          # in the background: one line per message
 wordcraft-cli chat send "on it"
 wordcraft-cli chat read --find "clause 3" --context 1
@@ -124,6 +127,6 @@ wordcraft-cli chat help            # the rules again
 - Exit codes: 0 ok, 1 error, 2 usage. Exit 3 means you were removed from the chat, exit 4 that the
   window closed. After exit 3 or exit 4 the membership is forgotten.
 
-MCP: `wordcraft-cli mcp --connect 127.0.0.1:7981 --join CODE` (`--as @claude` is optional: the code is
+MCP: `wordcraft-cli mcp --connect 127.0.0.1:7981 --join CODE` (`--as @agent` is optional: the code is
 bound to a name), or the tools `chat_join`, `chat_wait`, `chat_send`, `chat_read` and
 `chat_members` (see [mcp.md](mcp.md)).
