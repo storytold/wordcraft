@@ -955,3 +955,15 @@
 	Reads the clipboard's rich text and keeps its formatting.	读取剪贴板中的 RTF 内容并保留其格式。
 	Reads the clipboard's web content and keeps its formatting.	读取剪贴板中的网页内容并保留其格式。
 	Drops all formatting and pastes plain text.	去除所有格式，粘贴纯文本。
+	Advanced Find	高级查找
+	Advanced Find…	高级查找…
+	Go To…	定位…
+	Reading Highlight	突出显示查找结果
+	New Table Style	新建表格样式
+	Modify Table Style	修改表格样式
+	New Table Style…	新建表格样式…
+	Modify Table Style…	修改表格样式…
+	Apply formatting to:	将格式应用于：
+	Whole Table	整个表格
+	Fill color:	填充颜色：
+	{count} items highlighted	已突出显示 {count} 项

@@ -17,6 +17,7 @@ pub mod references;
 pub mod review;
 pub mod speech;
 pub mod table;
+pub mod table_style;
 pub mod text;
 pub mod tools;
 pub mod view;
@@ -41,6 +42,7 @@ pub fn registry() -> Registry {
     v.extend(equation::specs());
     v.extend(page::specs());
     v.extend(table::specs());
+    v.extend(table_style::specs());
     v.extend(review::specs());
     v.extend(file::specs());
     v.extend(design::specs());

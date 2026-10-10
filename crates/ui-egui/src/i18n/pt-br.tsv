@@ -956,3 +956,15 @@
 	Reads the clipboard's rich text and keeps its formatting.	Lê o rich text da área de transferência e mantém a formatação.
 	Reads the clipboard's web content and keeps its formatting.	Lê o conteúdo web da área de transferência e mantém a formatação.
 	Drops all formatting and pastes plain text.	Remove toda a formatação e cola texto simples.
+	Advanced Find	Localização avançada
+	Advanced Find…	Localização avançada…
+	Go To…	Ir para…
+	Reading Highlight	Realçar resultados
+	New Table Style	Novo estilo de tabela
+	Modify Table Style	Modificar estilo de tabela
+	New Table Style…	Novo estilo de tabela…
+	Modify Table Style…	Modificar estilo de tabela…
+	Apply formatting to:	Aplicar formatação a:
+	Whole Table	Tabela inteira
+	Fill color:	Cor de preenchimento:
+	{count} items highlighted	{count} itens realçados

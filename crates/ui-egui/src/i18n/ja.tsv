@@ -944,3 +944,15 @@
 	Reads the clipboard's rich text and keeps its formatting.	クリップボードの RTF を読み込み、書式を保持します。
 	Reads the clipboard's web content and keeps its formatting.	クリップボードの Web コンテンツを読み込み、書式を保持します。
 	Drops all formatting and pastes plain text.	書式をすべて取り除き、プレーン テキストとして貼り付けます。
+	Advanced Find	高度な検索
+	Advanced Find…	高度な検索…
+	Go To…	ジャンプ…
+	Reading Highlight	検索結果を強調表示
+	New Table Style	新しい表スタイル
+	Modify Table Style	表スタイルの変更
+	New Table Style…	新しい表スタイル…
+	Modify Table Style…	表スタイルの変更…
+	Apply formatting to:	書式の適用先:
+	Whole Table	表全体
+	Fill color:	塗りつぶしの色:
+	{count} items highlighted	{count} 件を強調表示しました

@@ -35,6 +35,8 @@
 	Address\nBlock	Bloque de\ndirección
 	Adjust	Ajustar
 	Advanced	Avanzado
+	Advanced Find	Búsqueda avanzada
+	Advanced Find…	Búsqueda avanzada…
 	After:	Después:
 	Agents	Agentes
 	Align	Alinear
@@ -276,6 +278,7 @@
 	General	General
 	Go To	Ir a
 	Go To (⌘⌥G)	Ir a (⌘⌥G)
+	Go To…	Ir a…
 	Go to	Ir a
 	Grab bag	Bolsa de datos adicionales
 	Greeting Line	Línea de saludo
@@ -536,6 +539,7 @@
 	Read\nMode	Modo\nlectura
 	Reads the clipboard's rich text and keeps its formatting.	Lee el texto enriquecido del portapapeles y conserva su formato.
 	Reads the clipboard's web content and keeps its formatting.	Lee el contenido web del portapapeles y conserva su formato.
+	Reading Highlight	Resaltado de lectura
 	Recent	Recientes
 	Record Macro	Grabar macro
 	Recover Unsaved Documents	Recuperar documentos sin guardar
@@ -961,3 +965,11 @@
 	Dark	Oscuro
 	Use system setting	Usar la configuración del sistema
 	A file dialog is already open.	Ya hay un cuadro de diálogo de archivo abierto.
+	New Table Style	Nuevo estilo de tabla
+	Modify Table Style	Modificar estilo de tabla
+	New Table Style…	Nuevo estilo de tabla…
+	Modify Table Style…	Modificar estilo de tabla…
+	Apply formatting to:	Aplicar formato a:
+	Whole Table	Toda la tabla
+	Fill color:	Color de relleno:
+	{count} items highlighted	{count} elementos resaltados

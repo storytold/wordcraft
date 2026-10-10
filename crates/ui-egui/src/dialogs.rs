@@ -1,8 +1,8 @@
 //! Dialogs: Font, Paragraph, Find & Replace, Go To, Insert Table, Page Setup, Link, Bookmark,
-//! Word Count, Zoom, Watermark, New/Modify Style, Command search, Paste Special, About, Save
-//! Changes, and the mail-merge Recipient List, Insert Merge Field, Find Recipient, merge rules,
-//! Match Fields and Check for Errors. Every dialog ends by running a command (or shows one's
-//! result), so agents get the same result without the dialog.
+//! Word Count, Zoom, Watermark, New/Modify Style, New/Modify Table Style, Command search, Paste
+//! Special, About, Save Changes, and the mail-merge Recipient List, Insert Merge Field, Find
+//! Recipient, merge rules, Match Fields and Check for Errors. Every dialog ends by running a command
+//! (or shows one's result), so agents get the same result without the dialog.
 
 use egui::{Sense, Ui, vec2};
 use serde::Serialize;
@@ -100,6 +100,21 @@ pub enum Dialog {
         color: String,
         before: f32,
         after: f32,
+    },
+    /// Table Design › New / Modify Table Style: one formatting region at a time.
+    TableStyle {
+        /// The style being modified; `None` creates one.
+        id: Option<String>,
+        name: String,
+        /// Style id.
+        based_on: String,
+        /// Index into `regions`: whole table, header row, banded rows.
+        region: usize,
+        regions: Box<[TableRegion; 3]>,
+        /// What the regions showed when the dialog opened (or the base style changed): only
+        /// changes are sent, so everything else stays inherited.
+        #[serde(skip)]
+        basis: Box<[TableRegion; 3]>,
     },
     Commands {
         query: String,
@@ -219,6 +234,93 @@ pub fn recipient_table(fields: &[String], rows: &[Vec<String>]) -> Result<Value,
     Ok(json!({"fields": fields, "rows": rows}))
 }
 
+/// One table style region in the Table Style dialog: colours are hex, empty for none.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableRegion {
+    pub borders: bool,
+    pub fill: String,
+    pub bold: bool,
+    pub color: String,
+}
+
+/// The regions of table style `id` as resolved through its based-on chain.
+fn table_regions(app: &WordApp, id: &str) -> Box<[TableRegion; 3]> {
+    let Some(st) = app.session.doc.styles.table_style(id) else { return Default::default() };
+    let p = &st.parts;
+    let hex = |c: Option<wordcraft_doc::Rgb>| c.map(|c| c.hex()).unwrap_or_default();
+    let text = |c: &wordcraft_doc::CharProps| match c.color {
+        Some(wordcraft_doc::TextColor::Rgb(c)) => c.hex(),
+        _ => String::new(),
+    };
+    let lines = |b: Option<wordcraft_doc::props::Borders>| b.is_some_and(|b| b.any_visible());
+    let mut header_chr = st.chr.clone();
+    header_chr.overlay(&p.header_chr);
+    let mut band_chr = st.chr.clone();
+    band_chr.overlay(&p.band_chr);
+    Box::new([
+        TableRegion { borders: lines(p.borders), fill: hex(p.fill), bold: st.chr.bold.unwrap_or(false), color: text(&st.chr) },
+        TableRegion { borders: lines(p.header_borders), fill: hex(p.header_fill), bold: header_chr.bold.unwrap_or(false), color: text(&header_chr) },
+        TableRegion { borders: lines(p.band_borders), fill: hex(p.band_fill), bold: band_chr.bold.unwrap_or(false), color: text(&band_chr) },
+    ])
+}
+
+/// The style of the table at the caret, when it is a table style.
+fn current_table_style(app: &WordApp) -> Option<String> {
+    let s = &app.session;
+    let (tp, _, _) = s.sel.focus.path.cell()?;
+    let id = s.doc.table(s.sel.focus.story, &tp)?.props.style.clone()?;
+    s.doc.styles.get(&id).filter(|st| st.kind == wordcraft_doc::StyleKind::Table).map(|st| st.id.clone())
+}
+
+/// The params `table.newStyle` / `table.modifyStyle` need for what changed in one region.
+fn region_changes(r: &TableRegion, basis: &TableRegion) -> Value {
+    let color = |c: &str| if c.is_empty() { Value::Null } else { json!(c) };
+    let mut v = json!({});
+    if r.borders != basis.borders {
+        v["borders"] = json!(r.borders);
+    }
+    if r.fill != basis.fill {
+        v["fill"] = color(&r.fill);
+    }
+    if r.bold != basis.bold {
+        v["bold"] = json!(r.bold);
+    }
+    if r.color != basis.color {
+        v["color"] = color(&r.color);
+    }
+    v
+}
+
+/// A colour menu: a swatch with the colour grid and No Color. `value` is hex, empty for none.
+fn color_menu(ui: &mut Ui, theme: &[wordcraft_doc::Rgb], value: &mut String) {
+    let c = wordcraft_doc::Rgb::parse(value);
+    ui.horizontal(|ui| {
+        let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+        let t = Tokens::get(ui.ctx());
+        match c {
+            Some(c) => {
+                ui.painter().rect_filled(r, 2.0, crate::theme::c32(c));
+            }
+            None => {
+                ui.painter().line_segment([r.left_bottom(), r.right_top()], egui::Stroke::new(1.0, t.text_dim));
+            }
+        }
+        ui.painter().rect_stroke(r, 2.0, egui::Stroke::new(1.0, t.border_strong), egui::StrokeKind::Inside);
+        let label = if c.is_some() { value.clone() } else { tl!("No Color").to_string() };
+        ui.menu_button(label, |ui| {
+            if ui.button(tl!("No Color")).clicked() {
+                value.clear();
+                ui.close();
+            }
+            if let Some(hex) = crate::widgets::color_grid(ui, theme) {
+                *value = hex;
+                ui.close();
+            }
+        });
+    });
+}
+
 impl Dialog {
     pub fn name(&self) -> &'static str {
         match self {
@@ -236,6 +338,8 @@ impl Dialog {
             Dialog::Watermark { .. } => "watermark",
             Dialog::NewStyle { .. } => "newStyle",
             Dialog::ModifyStyle { .. } => "modifyStyle",
+            Dialog::TableStyle { id: None, .. } => "newTableStyle",
+            Dialog::TableStyle { .. } => "modifyTableStyle",
             Dialog::Commands { .. } => "commands",
             Dialog::PasteSpecial { .. } => "pasteSpecial",
             Dialog::About { .. } => "about",
@@ -336,6 +440,20 @@ impl Dialog {
             "zoom" => Dialog::Zoom { percent: (app.session.view.zoom * 100.0).round() },
             "watermark" => Dialog::Watermark { text: "CONFIDENTIAL".into(), diagonal: true },
             "newStyle" => Dialog::NewStyle { name: "Style1".into(), based_on: "Normal".into() },
+            "newTableStyle" => {
+                let based_on = current_table_style(app).unwrap_or_else(|| "TableGrid".into());
+                let styles = &app.session.doc.styles;
+                let name = (1..1000).map(|i| format!("Table Style {i}")).find(|n| styles.find(n).is_none()).unwrap_or_default();
+                let regions = table_regions(app, &based_on);
+                Dialog::TableStyle { id: None, name, based_on, region: 0, basis: regions.clone(), regions }
+            }
+            "modifyTableStyle" => {
+                let id = current_table_style(app)?;
+                let st = app.session.doc.styles.get(&id)?;
+                let (name, based_on) = (st.name.clone(), st.based_on.clone().unwrap_or_default());
+                let regions = table_regions(app, &id);
+                Dialog::TableStyle { id: Some(id), name, based_on, region: 0, basis: regions.clone(), regions }
+            }
             "commands" => Dialog::Commands { query: String::new() },
             "pasteSpecial" => Dialog::paste_special(app, &json!({})),
             "about" => Dialog::About { tab: 0 },
@@ -471,6 +589,8 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::Watermark { .. } => "Custom Watermark",
         Dialog::NewStyle { .. } => "Create New Style",
         Dialog::ModifyStyle { .. } => "Modify Style",
+        Dialog::TableStyle { id: None, .. } => "New Table Style",
+        Dialog::TableStyle { .. } => "Modify Table Style",
         Dialog::Commands { .. } => "Search Commands",
         Dialog::PasteSpecial { .. } => "Paste Special",
         Dialog::About { .. } => "About WordCraft",
@@ -670,10 +790,24 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 ui.checkbox(whole_word, tl!("Whole words"));
                 ui.checkbox(regex, tl!("Wildcards (regex)"));
             });
+            let opts = json!({"text": query, "with": replace, "matchCase": *match_case, "wholeWord": *whole_word, "regex": *regex});
+            if !*replace_mode {
+                ui.horizontal(|ui| {
+                    let lit = app.session.find.highlight;
+                    if ui.selectable_label(lit, tl!("Reading Highlight")).clicked() {
+                        let mut v = opts.clone();
+                        v["highlight"] = json!(!lit);
+                        match app.run("edit.advancedFind", v) {
+                            Ok(r) if !lit => *message = crate::i18n::fmt(tl!("{count} items highlighted"), &[("count", &r["count"].to_string())]),
+                            Ok(_) => message.clear(),
+                            Err(e) => *message = e,
+                        }
+                    }
+                });
+            }
             if !message.is_empty() {
                 ui.label(egui::RichText::new(message.as_str()).weak());
             }
-            let opts = json!({"text": query, "with": replace, "matchCase": *match_case, "wholeWord": *whole_word, "regex": *regex});
             let mut close = false;
             ui.horizontal(|ui| {
                 if *replace_mode {
@@ -813,7 +947,10 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                     ui.radio_value(percent, p, format!("{p}%"));
                 }
             });
-            ui.add(egui::Slider::new(percent, 10.0..=500.0).suffix("%"));
+            // Logarithmic like the status bar slider, and wide enough to aim: the default 100 pt
+            // linear slider jumped from 100% to 480% within a short drag (issue #67).
+            ui.spacing_mut().slider_width = 220.0;
+            ui.add(egui::Slider::new(percent, 10.0..=500.0).logarithmic(true).step_by(1.0).suffix("%"));
             let mut fit = None;
             ui.horizontal(|ui| {
                 if ui.button(tl!("Page width")).clicked() {
@@ -900,6 +1037,90 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 }
                 let _ =
                     app.run("styles.modify", json!({"style": id, "name": name, "chr": chr, "para": {"spaceBefore": *before, "spaceAfter": *after}}));
+            }
+            ok || cancel
+        }
+        Dialog::TableStyle { id, name, based_on, region, regions, basis } => {
+            let styles: Vec<(String, String)> = app
+                .session
+                .doc
+                .styles
+                .styles
+                .iter()
+                .filter(|s| s.kind == wordcraft_doc::StyleKind::Table && Some(&s.id) != id.as_ref())
+                .map(|s| (s.id.clone(), s.name.clone()))
+                .collect();
+            let base_name = styles.iter().find(|(i, _)| i == based_on).map(|(_, n)| n.clone()).unwrap_or_else(|| based_on.clone());
+            let mut rebased = false;
+            egui::Grid::new("tstyle").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+                ui.label(tl!("Name:"));
+                ui.text_edit_singleline(name);
+                ui.end_row();
+                ui.label(tl!("Style based on:"));
+                egui::ComboBox::from_id_salt("tstyle_base").width(200.0).selected_text(base_name).show_ui(ui, |ui| {
+                    for (sid, sname) in &styles {
+                        if ui.selectable_label(sid == based_on, sname).clicked() && sid != based_on {
+                            *based_on = sid.clone();
+                            rebased = true;
+                        }
+                    }
+                });
+                ui.end_row();
+                ui.label(tl!("Apply formatting to:"));
+                let names = ["Whole Table", "Header Row", "Banded Rows"];
+                egui::ComboBox::from_id_salt("tstyle_region")
+                    .width(200.0)
+                    .selected_text(tl!(names.get(*region).copied().unwrap_or("Whole Table")))
+                    .show_ui(ui, |ui| {
+                        for (i, n) in names.iter().enumerate() {
+                            ui.selectable_value(region, i, tl!(n));
+                        }
+                    });
+                ui.end_row();
+            });
+            // A new style shows its new base's formatting; a modified one keeps its own.
+            if rebased && id.is_none() {
+                *regions = table_regions(app, based_on);
+                *basis = regions.clone();
+            }
+            ui.separator();
+            let theme = app.session.doc.settings.theme_colors.clone();
+            if let Some(r) = regions.get_mut(*region) {
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut r.borders, tl!("Borders"));
+                    ui.checkbox(&mut r.bold, tl!("Bold"));
+                });
+                egui::Grid::new("tstyle_colors").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+                    ui.label(tl!("Fill color:"));
+                    color_menu(ui, &theme, &mut r.fill);
+                    ui.end_row();
+                    ui.label(tl!("Font color:"));
+                    color_menu(ui, &theme, &mut r.color);
+                    ui.end_row();
+                });
+            }
+            let (ok, cancel) = buttons(ui, tl!("OK"));
+            if ok {
+                let mut v = json!({"name": name.trim(), "basedOn": based_on});
+                for (i, key) in ["wholeTable", "headerRow", "bandedRows"].into_iter().enumerate() {
+                    if let (Some(r), Some(b)) = (regions.get(i), basis.get(i)) {
+                        let ch = region_changes(r, b);
+                        if ch.as_object().is_some_and(|o| !o.is_empty()) {
+                            v[key] = ch;
+                        }
+                    }
+                }
+                let cmd = match id {
+                    Some(sid) => {
+                        v["style"] = json!(sid);
+                        "table.modifyStyle"
+                    }
+                    None => "table.newStyle",
+                };
+                if let Err(e) = app.run(cmd, v) {
+                    app.status(e);
+                    return false;
+                }
             }
             ok || cancel
         }

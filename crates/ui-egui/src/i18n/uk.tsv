@@ -32,6 +32,8 @@
 	Address\nBlock	Блок\nадреси
 	Adjust	Налаштувати
 	Advanced	Додатково
+	Advanced Find	Розширений пошук
+	Advanced Find…	Розширений пошук…
 	After:	Після:
 	Agents	Агенти
 	Align	Вирівняти
@@ -279,6 +281,7 @@
 	Go To	Перейти
 	Go to	Перейти
 	Go To (⌘⌥G)	Перейти (⌘⌥G)
+	Go To…	Перейти…
 	Grab bag	Різне
 	Greeting Line	Рядок привітання
 	Greeting\nLine	Рядок\nпривітання
@@ -537,6 +540,7 @@
 	Read\nMode	Режим\nчитання
 	Reads the clipboard's rich text and keeps its formatting.	Читає форматований текст (RTF) із буфера обміну та зберігає його форматування.
 	Reads the clipboard's web content and keeps its formatting.	Читає вебвміст із буфера обміну та зберігає його форматування.
+	Reading Highlight	Виділення під час читання
 	Recent	Останні
 	Record Macro	Записати макрос
 	Recover Unsaved Documents	Відновити незбережені документи
@@ -956,3 +960,11 @@
 	Dark	Темна
 	Use system setting	Як у системі
 	A file dialog is already open.	Діалогове вікно файлу вже відкрито.
+	New Table Style	Новий стиль таблиці
+	Modify Table Style	Змінити стиль таблиці
+	New Table Style…	Новий стиль таблиці…
+	Modify Table Style…	Змінити стиль таблиці…
+	Apply formatting to:	Застосувати форматування до:
+	Whole Table	Уся таблиця
+	Fill color:	Колір заливки:
+	{count} items highlighted	Виділено елементів: {count}
