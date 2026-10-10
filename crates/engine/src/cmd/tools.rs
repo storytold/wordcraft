@@ -173,11 +173,6 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({"hint": "Save or export a copy (PDF, Word document) to share it."}))
         })
         .pure(),
-        CommandSpec::new("file.encrypt", "Encrypt with Password", "File › Info › Protect Document", |s, _| {
-            s.status = "Password encryption isn't available yet; use Restrict Editing to prevent changes.".into();
-            Err(CmdError::Failed("password encryption isn't available yet".into()))
-        })
-        .pure(),
         CommandSpec::new("insert.quickParts", "Quick Parts", "Insert › Text", quick_parts)
             .params(r#"{"save"?: name (from the selection), "insert"?: name, "delete"?: name} → list"#),
         CommandSpec::new("insert.autoText", "AutoText", "Insert › Text › Quick Parts", quick_parts).params(r#"{"save"?: name, "insert"?: name}"#),
