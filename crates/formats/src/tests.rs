@@ -369,7 +369,7 @@ fn html_img_sources_go_through_the_loader() {
     let seen = std::cell::RefCell::new(Vec::new());
     let d = crate::html::import_with(html, &|src| {
         seen.borrow_mut().push(src.to_string());
-        (src == "logo.png").then(|| pic.clone())
+        (src == "logo.png").then(|| std::sync::Arc::new(pic.clone()))
     });
     assert_eq!(*seen.borrow(), ["logo.png", "gone.png"]);
     assert_eq!(d.media.len(), 1);

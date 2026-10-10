@@ -11,6 +11,8 @@
 //!
 //! Export writes clean semantic HTML with inline CSS and pictures as `data:` URIs.
 
+use std::sync::Arc;
+
 use wordcraft_doc::{Align, Document};
 
 use crate::model::{
@@ -344,8 +346,9 @@ struct TableB {
 }
 
 /// Loads the bytes of an image an `img` names by a source other than a `data:` URI (a path
-/// relative to the HTML file). `None` when it can't be found.
-pub type ImageLoader<'a> = &'a dyn Fn(&str) -> Option<Vec<u8>>;
+/// relative to the HTML file). `None` when it can't be found. A picture used more than once can
+/// share one buffer.
+pub type ImageLoader<'a> = &'a dyn Fn(&str) -> Option<Arc<Vec<u8>>>;
 
 struct Builder<'r> {
     images: ImageLoader<'r>,
@@ -882,7 +885,7 @@ impl<'r> Builder<'r> {
                     }
                 }
                 let img = attr(attrs, "src")
-                    .and_then(|src| if src.trim_start().starts_with("data:") { data_uri(src) } else { (self.images)(src.trim()) })
+                    .and_then(|src| if src.trim_start().starts_with("data:") { data_uri(src).map(Arc::new) } else { (self.images)(src.trim()) })
                     .and_then(|d| make_img(d, w, h, &alt));
                 let f = self.fmt();
                 match img {
