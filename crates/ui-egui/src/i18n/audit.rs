@@ -61,18 +61,22 @@ fn escape() -> Vec<Vec<egui::Event>> {
     vec![vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }]]
 }
 
-/// Centres of the enabled, clickable widgets drawn last frame in the ribbon band.
+/// Centres of the enabled, clickable widgets drawn last frame in the ribbon: below the tab row
+/// and above the document area (the largest clickable widget).
 fn ribbon_controls(ctx: &egui::Context) -> Vec<egui::Pos2> {
     ctx.viewport(|v| {
-        v.prev_pass
+        let widgets: Vec<&egui::WidgetRect> = v
+            .prev_pass
             .widgets
             .layers()
             .filter(|(layer, _)| matches!(layer.order, egui::Order::Background | egui::Order::Middle))
             .flat_map(|(_, w)| w.iter())
-            .filter(|w| w.enabled && w.sense.senses_click() && w.rect.width() < 300.0)
-            .map(|w| w.rect.center())
-            .filter(|c| (52.0..125.0).contains(&c.y))
-            .collect()
+            .filter(|w| w.enabled && w.sense.senses_click())
+            .collect();
+        let page_top = widgets.iter().max_by(|a, b| a.rect.area().total_cmp(&b.rect.area())).map_or(f32::INFINITY, |w| w.rect.min.y);
+        // The tab row ends where the ribbon's first group label row starts; tabs sit near y = 53.
+        let tabs_bottom = 64.0;
+        widgets.iter().filter(|w| w.rect.width() < 300.0).map(|w| w.rect.center()).filter(|c| c.y > tabs_bottom && c.y < page_top).collect()
     })
 }
 
