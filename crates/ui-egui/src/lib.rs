@@ -735,13 +735,14 @@ impl WordApp {
         }
     }
 
-    /// Document title for the title bar.
+    /// Document title for the title bar (and the suggested file name). An untitled document is
+    /// named in the interface language, as `Document1` is in English.
     pub fn title_stem(&self) -> String {
         match &self.session.path {
-            Some(p) => p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Document1".into()),
+            Some(p) => p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| tl!("Document1").into()),
             None => {
                 if self.session.doc.core.title.is_empty() {
-                    "Document1".into()
+                    tl!("Document1").into()
                 } else {
                     self.session.doc.core.title.clone()
                 }
