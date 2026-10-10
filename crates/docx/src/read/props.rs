@@ -55,9 +55,15 @@ impl PropCtx {
                             .filter(|f| !f.is_empty())
                             .map(str::to_string)
                         });
+                    // The complex-script font (Persian, Arabic, Hebrew text). A `w:cstheme` font is
+                    // left to inherit: the theme's per-script fonts aren't read.
+                    c.font_cs = k.attr("w:cs").filter(|f| !f.is_empty() && f.len() < 256).map(str::to_string);
                 }
                 "w:b" => c.bold = Some(on_off(k)),
+                "w:bCs" => c.bold_cs = Some(on_off(k)),
                 "w:i" => c.italic = Some(on_off(k)),
+                "w:iCs" => c.italic_cs = Some(on_off(k)),
+                "w:cs" => c.cs = Some(on_off(k)),
                 "w:caps" => c.caps = Some(on_off(k)),
                 "w:smallCaps" => c.small_caps = Some(on_off(k)),
                 "w:strike" => c.strike = Some(on_off(k)),
@@ -81,6 +87,7 @@ impl PropCtx {
                 "w:kern" => c.kern = k.attr("w:val").and_then(|v| measure(v, 2.0)).map(|v| v.clamp(0.0, 1638.0)),
                 "w:position" => c.position = k.attr("w:val").and_then(|v| measure(v, 2.0)).map(|v| v.clamp(-1584.0, 1584.0)),
                 "w:sz" => c.size = k.attr("w:val").and_then(|v| measure(v, 2.0)).filter(|v| *v > 0.0).map(|v| v.clamp(1.0, 1638.0)),
+                "w:szCs" => c.size_cs = k.attr("w:val").and_then(|v| measure(v, 2.0)).filter(|v| *v > 0.0).map(|v| v.clamp(1.0, 1638.0)),
                 "w:highlight" => c.highlight = k.attr("w:val").map(Highlight::from_ooxml),
                 "w:u" => {
                     if let Some(v) = k.attr("w:val") {
@@ -99,9 +106,23 @@ impl PropCtx {
                         _ => VertAlign::Baseline,
                     })
                 }
-                "w:lang" => c.lang = k.attr("w:val").filter(|v| !v.is_empty() && v.len() < 64).map(str::to_string),
+                "w:lang" => {
+                    c.lang = k.attr("w:val").filter(|v| !v.is_empty() && v.len() < 64).map(str::to_string);
+                    c.lang_bidi = k.attr("w:bidi").filter(|v| !v.is_empty() && v.len() < 64).map(str::to_string);
+                }
                 _ => {}
             }
+        }
+        // A complex-script value equal to its plain one is the same as none (see
+        // `CharProps::overlay`), which keeps documents round-tripping exactly.
+        if c.size_cs.is_some() && c.size_cs == c.size {
+            c.size_cs = None;
+        }
+        if c.bold_cs.is_some() && c.bold_cs == c.bold {
+            c.bold_cs = None;
+        }
+        if c.italic_cs.is_some() && c.italic_cs == c.italic {
+            c.italic_cs = None;
         }
         c
     }
@@ -248,7 +269,7 @@ pub fn borders(e: &El) -> Borders {
 }
 
 /// Margins element (`w:tblCellMar`, `w:tcMar`) → [top, left, bottom, right].
-fn margins(e: &El) -> [f32; 4] {
+pub fn margins(e: &El) -> [f32; 4] {
     let get = |names: &[&str]| names.iter().find_map(|n| e.child(n)).and_then(|c| tw(c, "w:w")).unwrap_or(0.0).clamp(0.0, 1584.0);
     [get(&["w:top"]), get(&["w:left", "w:start"]), get(&["w:bottom"]), get(&["w:right", "w:end"])]
 }

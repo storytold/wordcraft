@@ -353,13 +353,6 @@ pub fn specs() -> Vec<CommandSpec> {
             })
         })
         .params(r#"{"format": "decimal|upperRoman|lowerLetter…", "text"?: "%1.", "start"?: n}"#),
-        CommandSpec::new("para.rtl", "Right-to-Left Text Direction", "Home › Paragraph", |s, v| {
-            let on = p::bool(v, "value").unwrap_or_else(|| !s.doc.para_at(&s.sel.focus).and_then(|x| x.props.bidi).unwrap_or(false));
-            super::para::fmt(s, &|pp| {
-                pp.bidi = Some(on);
-                pp.align = Some(if on { wordcraft_doc::Align::Right } else { wordcraft_doc::Align::Left });
-            })
-        }),
         CommandSpec::new("review.language", "Language", "Review › Language", |s, v| {
             let lang = p::str(v, "lang").unwrap_or("en-US").to_string();
             let no_proof = p::bool(v, "noProof");

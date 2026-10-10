@@ -573,6 +573,7 @@
 	Right	右
 	Right Border	右框線
 	Right-to-Left Text Direction	從右至左文字方向
+	Left-to-Right Text Direction	從左至右文字方向
 	Right:	右：
 	Rotate	旋轉
 	Rounded Rectangle	圓角矩形
@@ -785,6 +786,9 @@
 	📂  Browse…	📂  瀏覽…
 	{words} words	{words} 個字
 	{selected} of {words} words	{selected}/{words} 個字
+	Direction:	方向：
+	Right-to-left	從右至左
+	Left-to-right	從左至右
 # Zotero integration
 	Zotero	Zotero
 	Citations	引文
@@ -825,3 +829,51 @@
 	Your changes will be lost if you don't save them.	如果不儲存，您的變更將會遺失。
 	Scroll ribbon left	向左捲動功能區
 	Scroll ribbon right	向右捲動功能區
+# Equations.
+	Change Structure	變更結構
+	Change to Display	變更為顯示方程式
+	Change to Inline	變更為行內方程式
+	Conversions	轉換
+	Delete Back in Equation	在方程式中向前刪除
+	Delete in Equation	在方程式中刪除
+	Edit Equation	編輯方程式
+	Enter in Equation	在方程式中按 Enter
+	Equation Gallery	方程式庫
+	Equation Info	方程式資訊
+	Equation Number	方程式編號
+	Input Format	輸入格式
+	Insert Structure	插入結構
+	Insert Symbol	插入符號
+	Justification	對齊方式
+	Leave Equation	結束方程式
+	Move in Equation	在方程式中移動
+	Normal Text	一般文字
+	Set Equation	設定方程式
+	Structure Actions	結構操作
+	Structures	結構
+	Tools	工具
+	Type in Equation	在方程式中輸入
+	Inline	行內
+	Number	編號
+	Close Equation	關閉方程式
+	Insert New Equation	插入新方程式
+	Built-In	內建
+	Professional	二維格式
+	Linear	線性格式
+	Fraction	分數
+	Script	上下標
+	Radical	根式
+	Integral	積分
+	Large\nOperator	大型\n運算子
+	Bracket	括號
+	Function	函數
+	Accent	重音符號
+	Limit and\nLog	極限與\n對數
+	Operator	運算子
+	Equation Options	方程式選項
+	All symbol sets	所有符號集
+	Send the document straight to the system print dialog, or save a copy in another format below.	將文件直接傳送到系統列印對話方塊，或在下方以其他格式儲存副本。
+	Or save a copy in another format:	或以其他格式儲存副本：
+	Opening print dialog…	正在開啟列印對話方塊…
+	Print failed: {error}	列印失敗：{error}
+	Couldn't open {path}: {error}	無法開啟 {path}：{error}

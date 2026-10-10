@@ -82,6 +82,12 @@ fn every_char_prop_round_trips() {
         lang: Some("fr-FR".into()),
         no_proof: Some(true),
         rtl: Some(false),
+        cs: Some(true),
+        font_cs: Some("B Nazanin".into()),
+        size_cs: Some(13.0),
+        bold_cs: Some(false),
+        italic_cs: Some(true),
+        lang_bidi: Some("fa-IR".into()),
         link: None,
         ins: None,
         del: None,
@@ -423,6 +429,38 @@ fn comments_round_trip() {
     }
 }
 
+/// A table style's cell text formatting, whole-table shading and cell margins survive a save.
+#[test]
+fn table_style_formatting_round_trips() {
+    use wordcraft_doc::styles::TableStyleParts;
+    let mut d = doc_with(vec![Paragraph::with_text("x", CharProps::default())]);
+    let parts = TableStyleParts {
+        borders: Some(Borders { top: Some(Border::single(1.0)), ..Default::default() }),
+        fill: Some(Rgb(0xDD, 0xEB, 0xF7)),
+        cell_margins: Some([1.0, 14.4, 0.0, 14.4]),
+        header_chr: CharProps { italic: Some(true), ..Default::default() },
+        header_fill: Some(Rgb(0xFF, 0xFF, 0)),
+        ..Default::default()
+    };
+    d.styles.upsert(Style {
+        id: "Whole".into(),
+        name: "Whole".into(),
+        kind: StyleKind::Table,
+        based_on: Some("TableGrid".into()),
+        para: ParaProps { align: Some(Align::Center), space_after: Some(0.0), ..Default::default() },
+        chr: CharProps { bold: Some(true), color: Some(TextColor::Rgb(Rgb(0xC0, 0, 0))), ..Default::default() },
+        table: Some(parts.clone()),
+        ..Default::default()
+    });
+    let r = rt(&d);
+    let got = r.styles.get("Whole").unwrap();
+    assert_eq!(got.based_on.as_deref(), Some("TableGrid"));
+    assert_eq!(got.para.align, Some(Align::Center));
+    assert_eq!(got.para.space_after, Some(0.0));
+    assert_eq!((got.chr.bold, got.chr.color), (Some(true), Some(TextColor::Rgb(Rgb(0xC0, 0, 0)))));
+    assert_eq!(got.table.as_ref(), Some(&parts));
+}
+
 #[test]
 fn notes_round_trip() {
     let mut d = Document::new();
@@ -709,7 +747,7 @@ fn shapes_textboxes_equations_dropcaps_round_trip() {
         float: Float::default(),
         story: None,
     };
-    let eq = InlineObject::Equation { linear: "x=(-b±√(b^2-4ac))/2a".into(), display: false };
+    let eq = InlineObject::Equation { linear: "x=(-b±√(b^2-4ac))/2a".into(), display: false, math: Default::default() };
     let mut p = Paragraph::with_text("shapes ", CharProps::default());
     for o in [tb, star.clone(), eq.clone()] {
         let end = p.len();
@@ -734,7 +772,14 @@ fn shapes_textboxes_equations_dropcaps_round_trip() {
         o => panic!("{o:?}"),
     }
     assert_eq!(got[0].objects[1], star);
-    assert_eq!(got[0].objects[2], eq);
+    match &got[0].objects[2] {
+        InlineObject::Equation { linear, display, math } => {
+            assert_eq!(linear, "x=(-b±√(b^2-4ac))/2a");
+            assert!(!display);
+            assert_eq!(math.nodes, wordcraft_doc::math::parse_linear(linear), "structure is written as OMML and read back");
+        }
+        o => panic!("{o:?}"),
+    }
     assert_eq!(got.len(), 2, "drop cap paragraph merges back");
     assert_eq!(got[1].text, dc.text);
     assert_eq!(got[1].props, dc.props);

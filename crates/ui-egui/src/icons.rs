@@ -205,6 +205,19 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             ().then_lines(&pen, 8.0, 17.0, &[7.0, 13.0])
         }
         "justify" => pen.lines(3.0, 17.0, &[4.0, 7.0, 10.0, 13.0, 16.0]),
+        // Text direction: lines set from the start edge, an arrow in the reading direction.
+        "textLtr" => {
+            pen.lines(3.0, 14.0, &[4.0, 8.0]);
+            pen.lines(3.0, 10.0, &[12.0]);
+            pen.line_c(&[(3.0, 16.5), (16.5, 16.5)], a);
+            pen.line_c(&[(13.5, 14.0), (16.5, 16.5), (13.5, 19.0)], a);
+        }
+        "textRtl" => {
+            pen.lines(6.0, 17.0, &[4.0, 8.0]);
+            pen.lines(10.0, 17.0, &[12.0]);
+            pen.line_c(&[(17.0, 16.5), (3.5, 16.5)], a);
+            pen.line_c(&[(6.5, 14.0), (3.5, 16.5), (6.5, 19.0)], a);
+        }
         "lineSpacing" => {
             pen.lines(9.0, 17.0, &[5.0, 10.0, 15.0]);
             pen.line_c(&[(4.5, 3.0), (4.5, 17.0)], a);

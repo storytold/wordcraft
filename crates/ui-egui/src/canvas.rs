@@ -262,6 +262,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             if !fresh && (rendered < 2 || !app.canvas.textures.contains_key(&i) && rendered < 4) {
                 let mut opts = screen_render_options();
                 opts.display.marks = app.session.view.marks;
+                opts.display.placeholders = true;
                 opts.display.markup = app.session.view.show_markup;
                 opts.dark = dark_page;
                 opts.dark_paper = dark_paper;
@@ -355,7 +356,43 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         }
         // Caret.
         let focused = resp.has_focus() || app.canvas.focused;
-        if let Some(c) = layout.caret_on(&app.session.sel.focus, app.session.page_hint)
+        // Editing an equation: shade it and draw the caret inside it.
+        let mut math_caret = false;
+        if let Some(m) = app.session.math.clone()
+            && let Some((pi, ex, base, ml)) = layout.equation_geom(&m.at, app.session.page_hint)
+            && let Some(pr) = rects.get(pi)
+        {
+            math_caret = true;
+            let s = geo.scale;
+            let zone = Rect::from_min_max(
+                pos2(pr.min.x + ex * s - 2.0, pr.min.y + (base - ml.ascent) * s - 2.0),
+                pos2(pr.min.x + (ex + ml.width) * s + 2.0, pr.min.y + (base + ml.descent) * s + 2.0),
+            );
+            painter.rect_filled(zone, 2.0, Color32::from_black_alpha(16));
+            if let Some(slot) = ml.slot(&m.pos.path, m.pos.off) {
+                let x = (pr.min.x + (ex + slot.x) * s).round() + 0.5;
+                let y0 = pr.min.y + (base - slot.y - slot.a) * s;
+                let y1 = pr.min.y + (base - slot.y + slot.d) * s;
+                let since = crate::now_ms() - app.canvas.caret_visible_since;
+                if ((since / 530.0) as u64).is_multiple_of(2) && focused {
+                    painter.line_segment([pos2(x, y0), pos2(x, y1)], Stroke::new(1.5, t.caret));
+                }
+                if focused {
+                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(530 - (since as u64 % 530)));
+                    let cr = Rect::from_min_max(pos2(x, y0), pos2(x + 1.0, y1));
+                    ui.ctx().output_mut(|o| {
+                        o.ime = Some(egui::output::IMEOutput {
+                            rect: cr,
+                            cursor_rect: cr,
+                            purpose: Default::default(),
+                            should_interrupt_composition: false,
+                        });
+                    });
+                }
+            }
+        }
+        if !math_caret
+            && let Some(c) = layout.caret_on(&app.session.sel.focus, app.session.page_hint)
             && let Some(pr) = rects.get(c.page)
         {
             let scale = layout.pages.get(c.page).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
@@ -400,7 +437,24 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     app.canvas.focused = resp.has_focus();
     mouse(app, ui, &resp, &rects, &layout, geo.scale);
     // Right-click: move the caret there (unless inside the selection), then the context menu.
+    // Right-click in an equation puts the caret there and opens the equation menu.
     if resp.secondary_clicked()
+        && let Some(p) = resp.interact_pointer_pos()
+        && let Some((page, x, y)) = page_at(&rects, &layout, geo.scale, p)
+    {
+        match layout.equation_hit(page, x, y, app.session.sel.focus.story) {
+            Some((at, inner)) => {
+                app.session.sel = wordcraft_engine::Selection::caret(at);
+                let _ = app.run("equation.edit", json!({"pos": serde_json::to_value(&inner).unwrap_or_default()}));
+            }
+            None if app.session.math.is_some() => {
+                let _ = app.run("equation.exit", json!({}));
+            }
+            None => {}
+        }
+    }
+    if resp.secondary_clicked()
+        && app.session.math.is_none()
         && let Some(p) = resp.interact_pointer_pos()
         && let Some((page, x, y)) = page_at(&rects, &layout, geo.scale, p)
         && let Some(pos) = layout.hit(page, x, y, app.session.sel.focus.story)
@@ -559,6 +613,10 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
     let Some((page, x, y)) = page_at(rects, layout, scale, p) else { return };
     let mods = ui.input(|i| i.modifiers);
     let story = app.session.sel.focus.story;
+    // Inside an equation, clicks place the caret in it (and double-clicks don't select words).
+    if (resp.double_clicked() || resp.triple_clicked()) && layout.equation_hit(page, x, y, story).is_some() {
+        return;
+    }
     // Double-click in the header/footer area edits it; double-click in the body leaves it.
     if resp.double_clicked() {
         if let Some((s, header)) = layout.header_footer_at(page, y)
@@ -605,6 +663,17 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
                 _ => story,
             }
         };
+        if !mods.shift
+            && let Some((at, inner)) = layout.equation_hit(page, x, y, story)
+        {
+            app.session.sel = wordcraft_engine::Selection::caret(at);
+            let _ = app.run("equation.edit", json!({"pos": serde_json::to_value(&inner).unwrap_or_default()}));
+            app.session.page_hint = page;
+            return;
+        }
+        if app.session.math.is_some() {
+            let _ = app.run("equation.exit", json!({}));
+        }
         let Some(pos) = layout.hit(page, x, y, story) else { return };
         // Ctrl/⌘+click follows a hyperlink.
         if mods.command
@@ -714,9 +783,15 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
     let col_x = page.body.x;
     if let Some(para) = app.session.doc.para_at(&app.session.sel.focus) {
         let rp = app.session.doc.styles.resolve_para(&para.props);
-        let first = x0 + (col_x + rp.indent_left + rp.indent_first) * scale;
-        let left = x0 + (col_x + rp.indent_left) * scale;
-        let right = x0 + (col_x + page.body.w - rp.indent_right) * scale;
+        // Indents and tabs are measured from the paragraph's start edge: the right margin of a
+        // right-to-left paragraph, where the start-indent markers sit.
+        let rtl = rp.bidi;
+        let w = page.body.w;
+        let sx = |s: f32| if rtl { x0 + (col_x + w - s) * scale } else { x0 + (col_x + s) * scale };
+        let s_at = |x: f32| if rtl { col_x + w - (x - x0) / scale } else { (x - x0) / scale - col_x };
+        let first = sx(rp.indent_left + rp.indent_first);
+        let left = sx(rp.indent_left);
+        let right = sx(w - rp.indent_right);
         let c = t.text_dim;
         hp.add(egui::Shape::convex_polygon(
             vec![pos2(first - 4.5, bar.min.y), pos2(first + 4.5, bar.min.y), pos2(first, bar.min.y + 5.0)],
@@ -741,9 +816,10 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
             Stroke::new(1.0, c),
         ));
         for tab in &rp.tabs {
-            let tx = x0 + (col_x + tab.pos) * scale;
+            let tx = sx(tab.pos);
+            let foot = if rtl { -4.0 } else { 4.0 };
             hp.line_segment([pos2(tx, bar.max.y - 6.0), pos2(tx, bar.max.y - 1.0)], Stroke::new(1.5, t.text));
-            hp.line_segment([pos2(tx, bar.max.y - 1.0), pos2(tx + 4.0, bar.max.y - 1.0)], Stroke::new(1.5, t.text));
+            hp.line_segment([pos2(tx, bar.max.y - 1.0), pos2(tx + foot, bar.max.y - 1.0)], Stroke::new(1.5, t.text));
         }
         // Dragging the left-indent marker.
         let id = ui.id().with("ruler_left");
@@ -752,7 +828,7 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
         if r.dragged()
             && let Some(pp) = r.interact_pointer_pos()
         {
-            let pt = ((pp.x - x0) / scale - col_x).clamp(-col_x, page.body.w - 18.0);
+            let pt = s_at(pp.x).clamp(-col_x, page.body.w - 18.0);
             let snapped = (pt / 4.5).round() * 4.5;
             if !r.drag_started() {
                 app.session.join_next_undo();
@@ -764,7 +840,7 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
         if r.dragged()
             && let Some(pp) = r.interact_pointer_pos()
         {
-            let pt = (pp.x - x0) / scale - col_x - rp.indent_left;
+            let pt = s_at(pp.x) - rp.indent_left;
             if !r.drag_started() {
                 app.session.join_next_undo();
             }
@@ -775,7 +851,7 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
         if r.dragged()
             && let Some(pp) = r.interact_pointer_pos()
         {
-            let pt = page.body.w - ((pp.x - x0) / scale - col_x);
+            let pt = page.body.w - s_at(pp.x);
             if !r.drag_started() {
                 app.session.join_next_undo();
             }
@@ -873,7 +949,51 @@ pub fn pos_from_screen(app: &mut WordApp, p: Pos2) -> Option<Pos> {
     app.session.layout().hit(page, x, y, story)
 }
 
+/// Right-click inside an equation: its structures' actions, display and conversion.
+fn equation_menu(app: &mut WordApp, ui: &mut Ui) {
+    ui.set_min_width(260.0);
+    let acts = app.session.run("equation.structureActions", &json!({})).ok().and_then(|v| v.get("actions").cloned()).unwrap_or_default();
+    let mut last_level = None;
+    for a in acts.as_array().into_iter().flatten() {
+        let (Some(action), Some(label), Some(level)) =
+            (a.get("action").and_then(|v| v.as_str()), a.get("label").and_then(|v| v.as_str()), a.get("level").and_then(|v| v.as_u64()))
+        else {
+            continue;
+        };
+        if last_level.is_some_and(|l| l != level) {
+            ui.separator();
+        }
+        last_level = Some(level);
+        if ui.button(tl!(label)).clicked() {
+            let _ = app.run("equation.structure", json!({"action": action, "level": level}));
+            app.canvas.want_focus = true;
+            ui.close();
+        }
+    }
+    if last_level.is_some() {
+        ui.separator();
+    }
+    let display = app.session.run("equation.get", &json!({})).ok().and_then(|v| v.get("display").and_then(|d| d.as_bool())).unwrap_or(false);
+    let items: [(&str, &str, serde_json::Value); 5] = [
+        (if display { "Change to Inline" } else { "Change to Display" }, "equation.display", json!({"value": !display})),
+        ("Professional", "equation.convert", json!({"to": "professional"})),
+        ("Linear", "equation.convert", json!({"to": "linear"})),
+        ("Equation Number", "equation.number", json!({})),
+        ("Close Equation", "equation.exit", json!({})),
+    ];
+    for (label, id, params) in items {
+        if ui.button(tl!(label)).clicked() {
+            let _ = app.run(id, params);
+            app.canvas.want_focus = true;
+            ui.close();
+        }
+    }
+}
+
 fn context_menu(app: &mut WordApp, ui: &mut Ui) {
+    if app.session.math.is_some() {
+        return equation_menu(app, ui);
+    }
     ui.set_min_width(220.0);
     let item = |ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: serde_json::Value| {
         let sc = crate::widgets::shortcut_text(app, id);

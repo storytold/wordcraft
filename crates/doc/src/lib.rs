@@ -10,9 +10,15 @@
 //! compare in document order.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod bidi;
 pub mod edit;
 pub mod encoding;
 pub mod fields;
+pub mod math;
+pub mod math_edit;
+pub mod math_latex;
+pub mod math_linear;
+pub mod math_symbols;
 pub mod numbering;
 pub mod para;
 pub mod props;

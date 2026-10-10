@@ -371,7 +371,11 @@ impl Builder<'_> {
                 Inline::Equation { linear, display } => {
                     let linear = clean_text(linear);
                     if !linear.is_empty() {
-                        let _ = out.insert_object(end, InlineObject::Equation { linear, display: *display }, &CharProps::default());
+                        let _ = out.insert_object(
+                            end,
+                            InlineObject::Equation { linear, display: *display, math: Default::default() },
+                            &CharProps::default(),
+                        );
                     }
                 }
             }
@@ -684,11 +688,14 @@ pub fn flow_paras(doc: &Document, p: &Paragraph) -> Vec<Para> {
                         None => {}
                     }
                 }
-                Some(InlineObject::Equation { linear, display }) => {
+                Some(InlineObject::Equation { linear, display, math }) => {
                     if !buf.is_empty() {
                         out.push_text(&std::mem::take(&mut buf), &f);
                     }
-                    out.inlines.push(Inline::Equation { linear: linear.clone(), display: *display });
+                    // The linear format is the shared form; an equation known only by its
+                    // structure gets it from there.
+                    let linear = if linear.is_empty() { wordcraft_doc::math::to_linear(&math.nodes) } else { linear.clone() };
+                    out.inlines.push(Inline::Equation { linear, display: *display });
                 }
                 Some(InlineObject::BookmarkStart { name }) if name != "_GoBack" => {
                     if !buf.is_empty() {

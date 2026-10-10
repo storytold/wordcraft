@@ -254,11 +254,15 @@ pub enum InlineObject {
     CommentEnd {
         id: u32,
     },
-    /// An equation in linear format (`x=(-b±√(b^2-4ac))/2a`).
+    /// An equation: its linear format (`x=(-b±√(b^2-4ac))/2a`, for plain text) and structure.
+    /// A display equation sits on a line of its own.
     Equation {
         linear: String,
         #[serde(default)]
         display: bool,
+        /// The structure; empty = parse `linear`.
+        #[serde(default, skip_serializing_if = "crate::math::Math::is_empty")]
+        math: crate::math::Math,
     },
     /// Something we don't model, kept for round-trip (raw XML of the source format).
     Opaque {
@@ -726,7 +730,7 @@ impl Paragraph {
         let mut idx = off;
         let mut seen_word = false;
         for (i, c) in before.char_indices().rev() {
-            let w = c.is_alphanumeric() || c == '_' || c == '\'';
+            let w = crate::bidi::is_word_char(c);
             if w {
                 seen_word = true;
                 idx = i;
@@ -744,10 +748,10 @@ impl Paragraph {
         let Some(after) = self.text.get(off..) else { return self.text.len() };
         let it = after.char_indices().peekable();
         let mut end = self.text.len();
-        let first_word = after.chars().next().is_some_and(|c| c.is_alphanumeric() || c == '_');
+        let first_word = after.chars().next().is_some_and(|c| crate::bidi::is_word_char(c) && c != '\'');
         let mut in_space = false;
         for (i, c) in it {
-            let w = c.is_alphanumeric() || c == '_' || c == '\'';
+            let w = crate::bidi::is_word_char(c);
             if c == ' ' || c == NBSP {
                 in_space = true;
                 continue;
@@ -762,7 +766,7 @@ impl Paragraph {
     /// The word around `off` (double-click): (start, end) without trailing space.
     pub fn word_at(&self, off: usize) -> (usize, usize) {
         let off = self.clamp(off);
-        let is_w = |c: char| c.is_alphanumeric() || c == '_' || c == '\'';
+        let is_w = |c: char| crate::bidi::is_word_char(c);
         let mut a = off;
         for (i, c) in self.text.get(..off).unwrap_or("").char_indices().rev() {
             if !is_w(c) {

@@ -4,9 +4,10 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use wordcraft_doc::math::MathJc;
 use wordcraft_doc::numbering::{Level, LevelSuffix};
 use wordcraft_doc::para::{COLUMN_BREAK, InlineObject, LINE_BREAK, NoteKind, OBJ, PAGE_BREAK, SOFT_HYPHEN};
-use wordcraft_doc::props::{Align, CharProps, LineSpacing, TabAlign, TabLeader, TabStop};
+use wordcraft_doc::props::{Align, CharProps, LineSpacing, ParaProps, TabAlign, TabLeader, TabStop};
 use wordcraft_doc::resolve::{ResolvedChar, ResolvedPara};
 use wordcraft_doc::{Document, Paragraph};
 use wordcraft_fonts::FaceRef;
@@ -67,6 +68,8 @@ pub struct Cluster {
     pub break_after: bool,
     /// Height above the baseline for objects (images), points.
     pub obj_h: f32,
+    /// Depth below the baseline for objects (equations), points.
+    pub obj_d: f32,
     /// The cluster is a decimal separator (decimal tabs align on it).
     pub dot: bool,
 }
@@ -108,6 +111,96 @@ pub struct Line {
     /// The text continues the previous line's row on the far side of a floating object (same top
     /// and height): one row, two lines. Row counts (line numbers, keeping rows on one page) skip it.
     pub beside: bool,
+    /// Bidirectional lines (right-to-left text, or any line of a right-to-left paragraph): each
+    /// cluster's visual box, in cluster order (len = c1 - c0), after the Unicode Bidirectional
+    /// Algorithm reordered the line. Empty for plain left-to-right lines, whose clusters sit at
+    /// `xs`. Read cluster geometry through [`Line::cl_left`] and friends, which handle both.
+    pub vis: Vec<VisCl>,
+    /// The paragraph reads right to left (its start edge is on the right).
+    pub rtl: bool,
+}
+
+/// Where a cluster of a bidirectional line is drawn.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VisCl {
+    /// Left edge and width, points (paragraph coordinates, like `Line::xs`).
+    pub x: f32,
+    pub w: f32,
+    /// Embedding level after rule L1 of UAX #9 (odd = right to left).
+    pub level: u8,
+}
+
+impl VisCl {
+    pub fn is_rtl(&self) -> bool {
+        self.level % 2 == 1
+    }
+    /// The edge a caret before this cluster sits at (right edge of right-to-left text).
+    pub fn leading(&self) -> f32 {
+        if self.is_rtl() { self.x + self.w } else { self.x }
+    }
+    /// The edge a caret after this cluster sits at.
+    pub fn trailing(&self) -> f32 {
+        if self.is_rtl() { self.x } else { self.x + self.w }
+    }
+}
+
+impl Line {
+    /// Left edge of cluster `k` (a paragraph cluster index on this line).
+    pub fn cl_left(&self, k: usize) -> Option<f32> {
+        let i = k.checked_sub(self.c0)?;
+        if self.vis.is_empty() { self.xs.get(i).copied() } else { self.vis.get(i).map(|v| v.x) }
+    }
+    /// Right edge of cluster `k`.
+    pub fn cl_right(&self, k: usize) -> Option<f32> {
+        let i = k.checked_sub(self.c0)?;
+        if self.vis.is_empty() { self.xs.get(i + 1).copied() } else { self.vis.get(i).map(|v| v.x + v.w) }
+    }
+    /// Is cluster `k` right-to-left text?
+    pub fn cl_rtl(&self, k: usize) -> bool {
+        k.checked_sub(self.c0).and_then(|i| self.vis.get(i)).is_some_and(VisCl::is_rtl)
+    }
+    /// Caret x after the line's last cluster (its logical end), hyphen included.
+    pub fn end_x(&self) -> f32 {
+        let h = self.hyphen.map_or(0.0, |h| h.2);
+        match self.vis.last() {
+            Some(v) if v.is_rtl() => v.x - h,
+            Some(v) => v.x + v.w + h,
+            None => self.xs.last().copied().unwrap_or(self.left),
+        }
+    }
+    /// x where the hyphen of a hyphenated line (advance `adv`) is drawn.
+    pub fn hyphen_x(&self, adv: f32) -> f32 {
+        match self.vis.last() {
+            Some(v) if v.is_rtl() => v.x - adv,
+            Some(v) => v.x + v.w,
+            None => self.xs.last().copied().unwrap_or(0.0) - adv,
+        }
+    }
+    /// Visual extents, left to right, of clusters `k0..k1`: one span on a left-to-right line,
+    /// possibly several where bidirectional text splits a logical range.
+    pub fn spans(&self, k0: usize, k1: usize) -> Vec<(f32, f32)> {
+        let (k0, k1) = (k0.max(self.c0), k1.min(self.c1));
+        if k0 >= k1 {
+            return Vec::new();
+        }
+        if self.vis.is_empty() {
+            return match (self.cl_left(k0), self.cl_left(k1).or_else(|| self.xs.last().copied())) {
+                (Some(a), Some(b)) => vec![(a, b)],
+                _ => Vec::new(),
+            };
+        }
+        let mut boxes: Vec<(f32, f32)> =
+            self.vis.get(k0 - self.c0..k1 - self.c0).unwrap_or(&[]).iter().filter(|v| v.w > 0.0).map(|v| (v.x, v.x + v.w)).collect();
+        boxes.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut out: Vec<(f32, f32)> = Vec::new();
+        for (a, b) in boxes {
+            match out.last_mut() {
+                Some(last) if a <= last.1 + 0.01 => last.1 = last.1.max(b),
+                _ => out.push((a, b)),
+            }
+        }
+        out
+    }
 }
 
 /// The list label drawn on the first line.
@@ -142,12 +235,30 @@ pub struct ParaLayout {
     pub drop_cap: Option<(usize, u8, f32)>,
     /// Clusters after which the line may break with a hyphen (soft hyphens, auto hyphenation), sorted.
     pub hyph_after: Vec<u32>,
+    /// Bidi embedding level of each byte of the paragraph text (UAX #9, before the per-line
+    /// rule L1). Empty when the paragraph is plain left-to-right text.
+    pub bidi_levels: Vec<u8>,
+    /// Width of the drop cap letter itself (without the gap to the text).
+    pub drop_cap_w: f32,
+    /// Laid-out equations by object index.
+    pub maths: Vec<(usize, Arc<crate::math::MathLayout>)>,
+    /// Display equations (on lines of their own): cluster index and justification.
+    pub displays: Vec<(usize, wordcraft_doc::math::MathJc)>,
     /// Byte ranges of the text laid out as nothing ([`left_out`]): hidden text that is not shown,
     /// tracked deletions in the final text. Resolved as laid out, table formatting included.
     pub left_out: Vec<std::ops::Range<usize>>,
     /// The text drawn by clusters that stand for an object (field results, note numbers,
     /// equations) rather than for the paragraph's own text, by cluster index, sorted.
     pub shown: Vec<(usize, String)>,
+}
+
+/// What a table style gives the text of a cell: its paragraph and run formatting, with the
+/// cell's conditional formatting (header row, first column…) applied. It sits between document
+/// defaults and the paragraph's style (`StyleSheet::resolve_para_in`, `resolve_char_in`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CellText {
+    pub para: ParaProps,
+    pub chr: CharProps,
 }
 
 /// Inputs that change a paragraph's layout beyond its own content.
@@ -160,12 +271,14 @@ pub struct ParaEnv<'a> {
     pub show_hidden: bool,
     /// Leave tracked deletions out, like hidden text (the final, "No Markup" text).
     pub hide_deleted: bool,
-    /// Extra style applied to every run (table style conditional formatting), under direct formatting.
-    pub table_chr: Option<&'a CharProps>,
+    /// The table style's formatting for text in this paragraph's cell (`None` outside tables).
+    pub table: Option<&'a CellText>,
     pub proofing: bool,
     /// Areas text must flow around (floating objects), relative to the paragraph: x from the
     /// column's left edge, y from the top of the first line.
     pub exclusions: &'a [Exclusion],
+    /// Automatic equation numbers used before this paragraph.
+    pub eq_number: u32,
 }
 
 /// An area text wraps around.
@@ -186,8 +299,77 @@ struct Builder<'a> {
     style_index: std::collections::HashMap<u64, Vec<(u16, bool)>>,
     glyphs: Vec<Glyph>,
     clusters: Vec<Cluster>,
+    /// Bidi level per byte of the paragraph text (empty: all left to right).
+    levels: Vec<u8>,
     /// Text drawn by clusters that stand for an object, by cluster index (see `ParaLayout::shown`).
     shown: Vec<(usize, String)>,
+}
+
+/// What a piece of text is shaped as: one face, case, script formatting and direction.
+#[derive(Clone, Copy)]
+struct SegKey {
+    face: Option<FaceRef>,
+    small: bool,
+    /// Formatted with the complex-script properties (Persian, Arabic, Hebrew…).
+    complex: bool,
+    /// Odd bidi level: shaped right to left.
+    rtl: bool,
+}
+
+impl SegKey {
+    fn same(&self, o: &SegKey) -> bool {
+        self.face.map(|f| f.id()) == o.face.map(|f| f.id()) && self.small == o.small && self.complex == o.complex && self.rtl == o.rtl
+    }
+}
+
+/// Combining marks and joiners (bidi classes NSM, BN: harakat, ZWNJ, ZWJ) belong to the
+/// character before them: same font, same shaping run, so Arabic joining isn't broken.
+fn is_mark(c: char) -> bool {
+    use unicode_bidi::BidiClass::{BN, NSM};
+    matches!(unicode_bidi::bidi_class(c), NSM | BN) && !c.is_control()
+}
+
+/// Bidi embedding levels per byte of `text` (UAX #9 rules up to I2), or empty when the
+/// paragraph is left to right and has no right-to-left characters.
+pub fn bidi_levels(text: &str, rtl_para: bool) -> Vec<u8> {
+    if !rtl_para && !text.chars().any(wordcraft_fonts::is_rtl) {
+        return Vec::new();
+    }
+    let level = if rtl_para { unicode_bidi::Level::rtl() } else { unicode_bidi::Level::ltr() };
+    let info = unicode_bidi::ParagraphBidiInfo::new(text, Some(level));
+    info.levels.iter().map(|l| l.number()).collect()
+}
+
+/// Rule L2 of UAX #9: the visual order (left to right) of items with these levels: from the
+/// highest level down to the lowest odd one, reverse every run at that level or above.
+pub fn visual_order(levels: &[u8]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..levels.len()).collect();
+    let Some(min_odd) = levels.iter().copied().filter(|l| l % 2 == 1).min() else { return order };
+    let max = levels.iter().copied().max().unwrap_or(0);
+    let level_at = |order: &[usize], i: usize| order.get(i).and_then(|&o| levels.get(o)).copied().unwrap_or(0);
+    let mut lvl = max;
+    while lvl >= min_odd {
+        let mut i = 0;
+        while i < order.len() {
+            if level_at(&order, i) >= lvl {
+                let mut j = i;
+                while j < order.len() && level_at(&order, j) >= lvl {
+                    j += 1;
+                }
+                if let Some(run) = order.get_mut(i..j) {
+                    run.reverse();
+                }
+                i = j;
+            } else {
+                i += 1;
+            }
+        }
+        if lvl == 0 {
+            break;
+        }
+        lvl -= 1;
+    }
+    order
 }
 
 impl<'a> Builder<'a> {
@@ -221,11 +403,17 @@ impl<'a> Builder<'a> {
         let size = rc.draw_size() * if small { 0.8 } else { 1.0 };
         let (a, d) = wordcraft_fonts::word::line_metrics(&face);
         let k = size as f64 / face.upem.max(1.0);
+        // A fallback face (letters the requested font lacks) is emboldened or slanted when it has
+        // no bold or italic of its own.
+        let (synth_bold, synth_italic) = match face_override {
+            None => (r.synth_bold, r.synth_italic),
+            Some(f) => (rc.bold && f.get().weight < 600.0, rc.italic && !f.get().italic),
+        };
         let st = StyleRun {
             face,
             size,
-            synth_bold: r.synth_bold && face_override.is_none(),
-            synth_italic: r.synth_italic && face_override.is_none(),
+            synth_bold,
+            synth_italic,
             rc: rc.clone(),
             ascent: (a * k) as f32,
             descent: (d * k) as f32,
@@ -239,26 +427,49 @@ impl<'a> Builder<'a> {
 
     /// Shape `text` (a piece of the paragraph starting at byte `base`) in one style and append clusters.
     fn shape(&mut self, text: &str, base: usize, rc: &Arc<ResolvedChar>, kind_override: Option<ClKind>) {
+        self.shape_with(text, base, rc, kind_override, true);
+    }
+
+    /// `para_text`: `text` is paragraph text at `base`, so the paragraph's bidi levels apply
+    /// (false for field results and list labels, which are shaped on their own).
+    fn shape_with(&mut self, text: &str, base: usize, rc: &Arc<ResolvedChar>, kind_override: Option<ClKind>, para_text: bool) {
         if text.is_empty() {
             return;
         }
-        // Split by font coverage (fallback faces) and small caps case.
+        // Complex-script characters (Persian, Arabic…) use the run's complex-script font, size,
+        // bold and italic.
+        let rc_cs: Option<Arc<ResolvedChar>> = text.chars().any(|c| rc.uses_complex(c)).then(|| Arc::new(rc.complex()));
         let primary = wordcraft_fonts::word::resolve(&rc.font, rc.bold, rc.italic).face;
+        let primary_cs = rc_cs.as_ref().map(|r| wordcraft_fonts::word::resolve(&r.font, r.bold, r.italic).face);
+        let use_levels = para_text && !self.levels.is_empty();
+        // Split by font coverage (fallback faces), small caps case, script formatting and direction.
         let mut seg_start = 0;
-        let mut cur: Option<(Option<FaceRef>, bool)> = None;
-        let mut segs: Vec<(usize, usize, Option<FaceRef>, bool)> = Vec::new();
+        let mut cur: Option<SegKey> = None;
+        let mut segs: Vec<(usize, usize, SegKey)> = Vec::new();
         for (i, c) in text.char_indices() {
-            let face = if primary.covers(c) || c.is_whitespace() || c.is_control() || c == SOFT_HYPHEN {
-                None
-            } else {
-                wordcraft_fonts::FontDb::global().fallback_for(c, primary.id()).map(|f| FaceRef::of(&f))
+            let mark = is_mark(c);
+            let complex = match cur {
+                Some(k) if mark => k.complex,
+                _ => rc_cs.is_some() && rc.uses_complex(c),
+            };
+            let prim = if complex { primary_cs.unwrap_or(primary) } else { primary };
+            let face = match cur {
+                Some(k) if mark => k.face,
+                _ if prim.covers(c) || c.is_whitespace() || c.is_control() || c == SOFT_HYPHEN => None,
+                // Stay in the fallback face the word started in while it covers the letters.
+                Some(SegKey { face: Some(f), .. }) if f.covers(c) => Some(f),
+                _ => {
+                    let (bold, italic) = if complex { (rc.bold_cs, rc.italic_cs) } else { (rc.bold, rc.italic) };
+                    wordcraft_fonts::FontDb::global().fallback_styled(c, prim.id(), bold, italic).map(|f| FaceRef::of(&f))
+                }
             };
             let small = rc.small_caps && !rc.caps && c.is_lowercase();
-            let k = (face, small);
+            let rtl = use_levels && self.levels.get(base + i).is_some_and(|l| l % 2 == 1);
+            let k = SegKey { face, small, complex, rtl };
             match cur {
-                Some(p) if p.0.map(|f| f.id()) == k.0.map(|f| f.id()) && p.1 == k.1 => {}
+                Some(p) if p.same(&k) => {}
                 Some(p) => {
-                    segs.push((seg_start, i, p.0, p.1));
+                    segs.push((seg_start, i, p));
                     seg_start = i;
                     cur = Some(k);
                 }
@@ -266,14 +477,25 @@ impl<'a> Builder<'a> {
             }
         }
         if let Some(p) = cur {
-            segs.push((seg_start, text.len(), p.0, p.1));
+            segs.push((seg_start, text.len(), p));
         }
-        for (a, b, face, small) in segs {
+        for (a, b, key) in segs {
             let Some(sub) = text.get(a..b) else { continue };
-            let si = self.style(rc, face, small);
+            let rc = match (&rc_cs, key.complex) {
+                (Some(cs), true) => cs.clone(),
+                _ => rc.clone(),
+            };
+            let rc = &rc;
+            let small = key.small;
+            let si = self.style(rc, key.face, small);
             let Some(st) = self.styles.get(si as usize).cloned() else { continue };
             let upper = rc.caps || small;
-            let shaped = wordcraft_fonts::shape(&st.face, sub, &[], |c| if upper { c.to_uppercase().next().unwrap_or(c) } else { c });
+            let map = |c: char| if upper { c.to_uppercase().next().unwrap_or(c) } else { c };
+            let shaped = if use_levels {
+                wordcraft_fonts::shape_run(&st.face, sub, &[], map, key.rtl)
+            } else {
+                wordcraft_fonts::shape(&st.face, sub, &[], map)
+            };
             let k = st.size / st.face.upem.max(1.0) as f32;
             let hscale = rc.scale / 100.0;
             // Group glyphs by cluster byte offset; graphemes may span several shaper clusters.
@@ -312,6 +534,7 @@ impl<'a> Builder<'a> {
                     g1: if kind == ClKind::Marker { g0 } else { g1 },
                     break_after: false,
                     obj_h: 0.0,
+                    obj_d: 0.0,
                     dot: s == "." || s == ",",
                 });
             }
@@ -321,7 +544,7 @@ impl<'a> Builder<'a> {
     /// One cluster for a whole object with its display text (fields, note references).
     fn shape_atomic(&mut self, text: &str, start: usize, end: usize, rc: &Arc<ResolvedChar>) {
         let before = self.clusters.len();
-        self.shape(text, start, rc, None);
+        self.shape_with(text, start, rc, None, false);
         let added: Vec<Cluster> = self.clusters.drain(before..).collect();
         let Some(first) = added.first() else {
             let si = self.style(rc, None, false);
@@ -336,6 +559,7 @@ impl<'a> Builder<'a> {
                 g1: g,
                 break_after: false,
                 obj_h: 0.0,
+                obj_d: 0.0,
                 dot: false,
             });
             return;
@@ -352,7 +576,7 @@ impl<'a> Builder<'a> {
         let style = first.style;
         let g1 = added.last().map(|c| c.g1).unwrap_or(g0);
         self.shown.push((self.clusters.len(), text.to_string()));
-        self.clusters.push(Cluster { start, end, adv: x, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, dot: false });
+        self.clusters.push(Cluster { start, end, adv: x, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, obj_d: 0.0, dot: false });
     }
 }
 
@@ -365,7 +589,7 @@ pub(crate) fn left_out(rc: &ResolvedChar, show_hidden: bool, hide_deleted: bool)
 /// Lay out one paragraph.
 pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let doc = env.doc;
-    let mut rp = doc.styles.resolve_para(&p.props);
+    let mut rp = doc.styles.resolve_para_in(&p.props, env.table.map(|t| &t.para));
     // List level indents apply unless the paragraph sets its own.
     if let Some((_, lvl)) = &env.label {
         if p.props.indent_left.is_none() {
@@ -376,16 +600,11 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         }
     }
     let para_style = p.props.style.as_deref();
-    let resolve = |c: &CharProps| -> Arc<ResolvedChar> {
-        match env.table_chr {
-            Some(t) => {
-                let merged = t.clone().overlaid(c);
-                Arc::new(doc.styles.resolve_char(para_style, &merged))
-            }
-            None => Arc::new(doc.styles.resolve_char(para_style, c)),
-        }
-    };
-    let mut b = Builder { env, styles: Vec::new(), style_index: Default::default(), glyphs: Vec::new(), clusters: Vec::new(), shown: Vec::new() };
+    let table_chr = env.table.map(|t| &t.chr);
+    let resolve = |c: &CharProps| -> Arc<ResolvedChar> { Arc::new(doc.styles.resolve_char_in(para_style, table_chr, c)) };
+    let levels = bidi_levels(&p.text, rp.bidi);
+    let mut b =
+        Builder { env, styles: Vec::new(), style_index: Default::default(), glyphs: Vec::new(), clusters: Vec::new(), levels, shown: Vec::new() };
     let mark_rc = resolve(&p.mark);
     let mark_style = b.style(&mark_rc, None, false);
     let mut has_page_fields = false;
@@ -398,6 +617,10 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         .filter(|c| !matches!(*c, '\t' | LINE_BREAK | PAGE_BREAK | COLUMN_BREAK | OBJ | '\r' | ' '))
         .filter(|c| p.text.len() > c.len_utf8());
     let mut drop_cap = None;
+    let mut drop_cap_w = 0.0;
+    let mut maths = Vec::new();
+    let mut displays = Vec::new();
+    let mut eq_counter = env.eq_number;
     // The byte ranges of runs left out of the layout, in order, adjacent runs merged.
     let mut left: Vec<std::ops::Range<usize>> = Vec::new();
     for (range, props) in p.run_ranges() {
@@ -436,6 +659,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                     g1: g,
                     break_after: false,
                     obj_h: 0.0,
+                    obj_d: 0.0,
                     dot: false,
                 });
             }
@@ -455,6 +679,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
             b.shape(first, 0, &Arc::new(big), None);
             let w: f32 = b.clusters.get(before..).map(|c| c.iter().map(|c| c.adv).sum()).unwrap_or(0.0);
             drop_cap = Some((b.clusters.len() - before, rp.drop_cap, w + rc.size * 0.3));
+            drop_cap_w = w;
             // The letter hangs beside the text; lines flow at the indent `break_lines` adds.
             for c in b.clusters.iter_mut().skip(before) {
                 c.adv = 0.0;
@@ -477,7 +702,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
             let si = b.style(&rc, None, false);
             let g = b.glyphs.len() as u32;
             let push = |b: &mut Builder, kind: ClKind, adv: f32, h: f32| {
-                b.clusters.push(Cluster { start, end, adv, kind, style: si, g0: g, g1: g, break_after: false, obj_h: h, dot: false })
+                b.clusters.push(Cluster { start, end, adv, kind, style: si, g0: g, g1: g, break_after: false, obj_h: h, obj_d: 0.0, dot: false })
             };
             match c {
                 '\t' => push(&mut b, ClKind::Tab, 0.0, 0.0),
@@ -520,11 +745,29 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                             b.shape_atomic(&num, start, end, &Arc::new(sup));
                             notes.push((b.clusters.len().saturating_sub(1), *id));
                         }
-                        Some(InlineObject::Equation { linear, .. }) => {
-                            let mut eq = (*rc).clone();
-                            eq.italic = true;
-                            eq.font = "Cambria Math".into();
-                            b.shape_atomic(linear, start, end, &Arc::new(eq));
+                        Some(InlineObject::Equation { linear, display, math }) => {
+                            let avail = (env.width - rp.indent_left.max(0.0) - rp.indent_right.max(0.0)).max(12.0);
+                            let ml = crate::math::layout_equation(math, linear, &rc, *display, avail, &mut eq_counter);
+                            let st = b.styles.get(si as usize);
+                            // The line is at least as tall as the text around it.
+                            let (a, d) = st.map(|s| (s.ascent, s.descent)).unwrap_or((0.0, 0.0));
+                            b.clusters.push(Cluster {
+                                start,
+                                end,
+                                adv: ml.width,
+                                kind: ClKind::Object(k),
+                                style: si,
+                                g0: g,
+                                g1: g,
+                                break_after: false,
+                                obj_h: ml.ascent.max(a).max(0.01),
+                                obj_d: ml.descent.max(d),
+                                dot: false,
+                            });
+                            if *display {
+                                displays.push((b.clusters.len() - 1, math.jc));
+                            }
+                            maths.push((k, Arc::new(ml)));
                         }
                         Some(InlineObject::Opaque { text, .. }) => b.shape_atomic(text, start, end, &rc),
                         _ => push(&mut b, ClKind::Marker, 0.0, 0.0),
@@ -594,8 +837,15 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
             .collect();
         let before_c = b.clusters.len();
         let before_g = b.glyphs.len();
-        b.shape(&text, 0, &rc, None);
-        let cl: Vec<Cluster> = b.clusters.drain(before_c..).collect();
+        b.shape_with(&text, 0, &rc, None, false);
+        let mut cl: Vec<Cluster> = b.clusters.drain(before_c..).collect();
+        // A right-to-left paragraph's label reads right to left too ("1." shows as ".1").
+        if rp.bidi {
+            let lv = bidi_levels(&text, true);
+            let cl_lv: Vec<u8> = cl.iter().map(|c| lv.get(c.start).copied().unwrap_or(1)).collect();
+            let order = visual_order(&cl_lv);
+            cl = order.iter().filter_map(|&i| cl.get(i).cloned()).collect();
+        }
         let mut glyphs = Vec::new();
         let mut x = 0.0;
         let mut style = mark_style;
@@ -625,6 +875,10 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         issues: if env.proofing { proof_issues(p) } else { Vec::new() },
         drop_cap,
         hyph_after: Vec::new(),
+        bidi_levels: b.levels,
+        drop_cap_w,
+        maths,
+        displays,
         left_out: Vec::new(),
     };
     pl.hyph_after = hyphenation_points(&text, to_para, &pl, env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens);
@@ -666,6 +920,19 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
     let shrink_spaces = rp.align == Align::Justify && env.doc.settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT;
     let hanging_at = if rp.indent_first < 0.0 { Some(rp.indent_left) } else { None };
     let n = pl.clusters.len();
+    // A right-to-left paragraph is laid out from its start edge, as if mirrored: indents, tabs,
+    // the list label and alignment are measured from the right. Lines are mirrored back (and
+    // bidirectional text reordered) once broken; floating objects are mirrored in.
+    let rtl_para = rp.bidi;
+    let bidi = rtl_para || !pl.bidi_levels.is_empty();
+    let mirrored: Vec<Exclusion>;
+    let exclusions: &[Exclusion] = if rtl_para {
+        mirrored = env.exclusions.iter().map(|e| Exclusion { left: width - e.right, right: width - e.left, ..*e }).collect();
+        &mirrored
+    } else {
+        env.exclusions
+    };
+    let mut first_x0: Option<f32> = None;
     let mut hcache: Vec<(u16, u32, f32)> = Vec::new();
     let mut lines: Vec<Line> = Vec::new();
     let mut i = 0usize;
@@ -694,7 +961,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
                 {
                     lo = first_left.max(rp.indent_left) + dw;
                 }
-                match row_spans(env.exclusions, top, est_h, lo, base_right).map(|mut spans| (spans.pop_front(), spans)) {
+                match row_spans(exclusions, top, est_h, lo, base_right).map(|mut spans| (spans.pop_front(), spans)) {
                     Ok((Some((a, b)), rest)) => {
                         row_rest = rest;
                         row_first = lines.len();
@@ -789,6 +1056,12 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
                 }
                 _ => {}
             }
+            // A display equation sits on a line of its own.
+            let is_display = pl.displays.iter().any(|(ci, _)| *ci == j);
+            if is_display && (c0..j).any(|k| pl.clusters.get(k).is_some_and(|c| c.kind != ClKind::Marker)) {
+                end = LineEnd::Wrap;
+                break;
+            }
             // Text after a right/centre tab grows leftwards into the tab's space first.
             let absorbs = pending_tab.is_some_and(|(tj, stop, _)| {
                 let room = pl.clusters.get(tj).map(|t| t.adv).unwrap_or(0.0);
@@ -867,6 +1140,16 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
                     x += delta;
                 }
             }
+            if is_display {
+                // Markers right after it stay on its line; anything else starts a new one.
+                j += 1;
+                while j < n && pl.clusters.get(j).is_some_and(|c| c.kind == ClKind::Marker) {
+                    xs.push(x);
+                    j += 1;
+                }
+                end = if j >= n { LineEnd::Para } else { LineEnd::Wrap };
+                break;
+            }
             if c.break_after {
                 let hyph = pl.hyph_after.binary_search(&(j as u32)).is_ok();
                 if !hyph {
@@ -920,8 +1203,13 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
                 // A picture sits on the baseline of its run: the line keeps that font's ascent
                 // and descent, and grows above the baseline to fit a taller picture.
                 let (a, d) = if matches!(c.kind, ClKind::Object(_)) && c.obj_h > 0.0 {
-                    obj_asc = obj_asc.max(c.obj_h);
-                    (st.ascent, st.descent)
+                    if pl.maths.iter().any(|(k, _)| c.kind == ClKind::Object(*k)) {
+                        // An equation is text: its ascent and descent count like the text's.
+                        (c.obj_h, c.obj_d)
+                    } else {
+                        obj_asc = obj_asc.max(c.obj_h);
+                        (st.ascent, st.descent)
+                    }
                 } else {
                     (st.ascent + st.shift.max(0.0), st.descent + (-st.shift).max(0.0))
                 };
@@ -970,9 +1258,13 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
         let slack = right_edge - content_end;
         let last_tab = (c0..c1).rev().find(|k| pl.clusters.get(*k).is_some_and(|c| c.kind == ClKind::Tab));
         let align_from = last_tab.map(|k| k + 1).unwrap_or(c0);
-        let shift = match rp.align {
-            Align::Center => slack / 2.0,
-            Align::Right => slack,
+        let display = pl.displays.iter().find(|(ci, _)| *ci >= c0 && *ci < c1).map(|d| d.1);
+        let shift = match (display, rp.align) {
+            (Some(MathJc::Left), _) => 0.0,
+            (Some(MathJc::Right), _) => slack,
+            (Some(_), _) => slack / 2.0,
+            (None, Align::Center) => slack / 2.0,
+            (None, Align::Right) => slack,
             _ => 0.0,
         };
         if shift > 0.0 && slack > 0.0 {
@@ -980,9 +1272,9 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
                 *v += shift;
             }
         }
-        let justify = (rp.align == Align::Justify && end == LineEnd::Wrap) || rp.align == Align::Distribute;
+        let justify = display.is_none() && ((rp.align == Align::Justify && end == LineEnd::Wrap) || rp.align == Align::Distribute);
         // A line that only fits with shrunk spaces is shrunk, the last line of the paragraph too.
-        let shrink = shrink_spaces && slack < 0.0 && last_tab.is_none();
+        let shrink = display.is_none() && shrink_spaces && slack < 0.0 && last_tab.is_none();
         if shrink {
             shrink_line_spaces(pl, &mut xs, c0, c1, content_end, slack);
         } else if justify && slack > 0.0 {
@@ -1021,7 +1313,31 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
         }
         let start = pl.clusters.get(c0).map(|c| c.start).unwrap_or(pl.text_len);
         let stop = if c1 > c0 { pl.clusters.get(c1 - 1).map(|c| c.end).unwrap_or(pl.text_len) } else { start };
-        lines.push(Line { top, height, baseline, c0, c1, xs, leaders, end, start, stop, left, right: right_edge, hyphen, beside });
+        if first_x0.is_none() {
+            first_x0 = xs.first().copied();
+        }
+        let mut line = Line {
+            top,
+            height,
+            baseline,
+            c0,
+            c1,
+            xs,
+            leaders,
+            end,
+            start,
+            stop,
+            left,
+            right: right_edge,
+            hyphen,
+            beside,
+            vis: Vec::new(),
+            rtl: rtl_para,
+        };
+        if bidi {
+            reorder_line(pl, &mut line, width);
+        }
+        lines.push(line);
         first = false;
         i = j;
         // Text that wrapped continues on the row's far side; anything else ends the row.
@@ -1049,6 +1365,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
                     LineSpacing::Exactly(v) => v,
                 };
                 let x0 = rp.indent_left;
+                let (x0, left, right) = if rtl_para { (width - x0, width - base_right, width - x0) } else { (x0, x0, base_right) };
                 lines.push(Line {
                     top,
                     height: h,
@@ -1060,10 +1377,12 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
                     end: LineEnd::Para,
                     start: pl.text_len,
                     stop: pl.text_len,
-                    left: x0,
-                    right: base_right,
+                    left,
+                    right,
                     hyphen: None,
                     beside: false,
+                    vis: Vec::new(),
+                    rtl: rtl_para,
                 });
                 top += h;
             }
@@ -1079,7 +1398,9 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
     {
         let short = lines.len() < dl as usize;
         let dy = if short { (dl as f32 - 1.0) * l0.height } else { ln.baseline - l0.baseline };
-        let dx = dw.min(l0.xs.first().copied().unwrap_or(0.0) - first_left.max(rp.indent_left));
+        let dx = dw.min(first_x0.unwrap_or(0.0) - first_left.max(rp.indent_left));
+        // Toward the start edge: left, or right (and from the letter's right edge) when mirrored.
+        let dx = if rtl_para { pl.drop_cap_w - dx } else { dx };
         if short {
             top = top.max(l0.top + l0.height * dl as f32);
         }
@@ -1090,8 +1411,76 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
             }
         }
     }
+    if rtl_para && let Some(lab) = pl.label.as_mut() {
+        lab.x = width - lab.x - lab.width;
+    }
     pl.height = top;
     pl.lines = lines;
+}
+
+/// Finish a broken line of a bidirectional paragraph: resolve each cluster's level for the line
+/// (UAX #9 rule L1), order the clusters visually (rule L2) and give each its box. `line.xs`
+/// arrive in logical order measured from the paragraph's start edge (mirrored for a
+/// right-to-left paragraph); afterwards `line.vis` holds the boxes and `xs` their left edges.
+fn reorder_line(pl: &ParaLayout, line: &mut Line, width: f32) {
+    let rtl_para = line.rtl;
+    if rtl_para {
+        let (l, r) = (line.left, line.right);
+        line.left = width - r;
+        line.right = width - l;
+    }
+    let (c0, c1) = (line.c0, line.c1);
+    let n = c1.saturating_sub(c0);
+    if n == 0 {
+        if rtl_para {
+            line.xs = line.xs.iter().map(|x| width - x).collect();
+        }
+        return;
+    }
+    let para_level = u8::from(rtl_para);
+    let mut levels: Vec<u8> = (c0..c1).map(|k| pl.clusters.get(k).and_then(|c| pl.bidi_levels.get(c.start)).copied().unwrap_or(para_level)).collect();
+    // L1: tabs and breaks, and the whitespace before them or at the end of the line, take the
+    // paragraph level (so trailing spaces stay at the line's end edge).
+    let mut trailing = true;
+    for (i, k) in (c0..c1).enumerate().rev() {
+        let kind = pl.clusters.get(k).map(|c| c.kind);
+        let reset = match kind {
+            Some(ClKind::Tab | ClKind::LineBreak) => {
+                trailing = true;
+                true
+            }
+            Some(ClKind::Space | ClKind::PageBreak | ClKind::ColumnBreak | ClKind::Marker) => trailing,
+            _ => {
+                trailing = false;
+                false
+            }
+        };
+        if reset && let Some(v) = levels.get_mut(i) {
+            *v = para_level;
+        }
+    }
+    if !rtl_para && levels.iter().all(|l| *l == 0) {
+        return; // A left-to-right line of a paragraph with right-to-left text elsewhere.
+    }
+    let order = visual_order(&levels);
+    let hyph = line.hyphen.map_or(0.0, |h| h.2);
+    let mut w: Vec<f32> = (0..n).map(|i| line.xs.get(i + 1).zip(line.xs.get(i)).map_or(0.0, |(b, a)| b - a)).collect();
+    if let Some(last) = w.last_mut() {
+        *last -= hyph;
+    }
+    let total: f32 = w.iter().sum();
+    let x0 = line.xs.first().copied().unwrap_or(0.0);
+    let mut x = if rtl_para { width - x0 - total } else { x0 };
+    let mut vis = vec![VisCl { x: 0.0, w: 0.0, level: para_level }; n];
+    for &i in &order {
+        if let (Some(v), Some(wi), Some(l)) = (vis.get_mut(i), w.get(i), levels.get(i)) {
+            *v = VisCl { x, w: *wi, level: *l };
+            x += *wi;
+        }
+    }
+    line.vis = vis;
+    let end = line.end_x();
+    line.xs = line.vis.iter().map(|v| v.x).chain(std::iter::once(end)).collect();
 }
 
 /// Narrowest span text flows into beside a floating object, points.
@@ -1191,8 +1580,10 @@ fn hyphenation_points(text: &str, to_para: impl Fn(usize) -> Option<usize>, pl: 
             match (start, word_char) {
                 (None, true) => start = Some(i),
                 (Some(a), false) => {
+                    // The patterns are for Latin-script languages: never hyphenate Persian/Arabic words.
                     if let Some(w) = text.get(a..i)
                         && w.chars().count() >= lim.min_word
+                        && !w.chars().any(wordcraft_fonts::is_rtl)
                     {
                         let offs: Vec<usize> = w.char_indices().map(|(o, _)| o).collect();
                         for pt in wordcraft_proof::hyphen::hyphen_points(w, &lim) {
@@ -1254,6 +1645,9 @@ impl ParaLayout {
     /// x of byte offset `off` within line `li` (clamped to the line).
     pub fn x_of(&self, li: usize, off: usize) -> Option<f32> {
         let l = self.lines.get(li)?;
+        if !l.vis.is_empty() {
+            return self.x_of_bidi(l, off);
+        }
         for k in l.c0..l.c1 {
             let c = self.clusters.get(k)?;
             if off <= c.start {
@@ -1280,9 +1674,66 @@ impl ParaLayout {
         }
         self.lines.len().saturating_sub(1)
     }
+    /// Caret x on a bidirectional line: the leading edge of the cluster after `off` (the right
+    /// edge of right-to-left text), except where `off` leaves an embedded run (the cluster before
+    /// it has the higher level), which keeps the caret at that run's trailing edge, so each
+    /// visual boundary of the common mixed cases has its own offset.
+    fn x_of_bidi(&self, l: &Line, off: usize) -> Option<f32> {
+        let k = (l.c0..l.c1).find(|&k| self.clusters.get(k).is_some_and(|c| off < c.end || off <= c.start));
+        let Some(k) = k else { return Some(l.end_x()) };
+        let c = self.clusters.get(k)?;
+        let here = l.vis.get(k - l.c0)?;
+        if off > c.start || k == l.c0 {
+            return Some(here.leading());
+        }
+        let prev = l.vis.get(k - 1 - l.c0)?;
+        Some(if prev.level > here.level { prev.trailing() } else { here.leading() })
+    }
+
+    /// Visual extents, left to right, of the text between byte offsets `from..to` on line `li`
+    /// (one span unless bidirectional text splits the range).
+    pub fn x_spans(&self, li: usize, from: usize, to: usize) -> Vec<(f32, f32)> {
+        let Some(l) = self.lines.get(li) else { return Vec::new() };
+        if l.vis.is_empty() {
+            return match (self.x_of(li, from), self.x_of(li, to)) {
+                (Some(a), Some(b)) => vec![(a, b)],
+                _ => Vec::new(),
+            };
+        }
+        let ks: Vec<usize> = (l.c0..l.c1).filter(|&k| self.clusters.get(k).is_some_and(|c| c.start < to && c.end > from)).collect();
+        match (ks.first(), ks.last()) {
+            (Some(&a), Some(&b)) => l.spans(a, b + 1),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Caret offsets a click or arrow key can reach on line `li`: each cluster start and the line
+    /// end, except after a line-ending break or past a wrapped line's trailing space.
+    pub fn line_offsets(&self, li: usize) -> Vec<usize> {
+        let Some(l) = self.lines.get(li) else { return Vec::new() };
+        let mut v: Vec<usize> = (l.c0..l.c1).filter_map(|k| self.clusters.get(k).map(|c| c.start)).collect();
+        let last_break =
+            l.c1 > l.c0 && self.clusters.get(l.c1 - 1).is_some_and(|c| matches!(c.kind, ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak));
+        let wrapped = l.c1 > l.c0 && l.end == LineEnd::Wrap && self.lines.get(li + 1).is_some();
+        if !last_break && !wrapped || l.c1 == l.c0 {
+            v.push(l.stop);
+        }
+        v
+    }
+
     /// Byte offset closest to x on line `li`.
     pub fn off_at_x(&self, li: usize, x: f32) -> usize {
         let Some(l) = self.lines.get(li) else { return self.text_len };
+        if !l.vis.is_empty() {
+            let mut best = (l.start, f32::MAX);
+            for off in self.line_offsets(li) {
+                let d = self.x_of(li, off).map_or(f32::MAX, |cx| (cx - x).abs());
+                if d < best.1 {
+                    best = (off, d);
+                }
+            }
+            return best.0;
+        }
         let mut best = l.start;
         let mut bestd = f32::MAX;
         for k in l.c0..=l.c1 {

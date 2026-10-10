@@ -26,11 +26,19 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     if let Some(s) = &c.style {
         w.val("w:rStyle", s);
     }
-    if let Some(f) = &c.font {
-        w.empty("w:rFonts", &[("w:ascii", f), ("w:hAnsi", f), ("w:cs", f)]);
+    // The complex-script font is written only when set: without it, Persian/Arabic text keeps
+    // the style's. Complex-script bold, italic and size default to the plain ones (they come in
+    // pairs, see `CharProps::overlay`), so text formatted here looks the same in Word.
+    match (&c.font, &c.font_cs) {
+        (Some(f), Some(cs)) => w.empty("w:rFonts", &[("w:ascii", f), ("w:hAnsi", f), ("w:cs", cs)]),
+        (Some(f), None) => w.empty("w:rFonts", &[("w:ascii", f), ("w:hAnsi", f)]),
+        (None, Some(cs)) => w.empty("w:rFonts", &[("w:cs", cs)]),
+        (None, None) => {}
     }
     toggle(w, "w:b", c.bold);
+    toggle(w, "w:bCs", c.bold_cs.or(c.bold));
     toggle(w, "w:i", c.italic);
+    toggle(w, "w:iCs", c.italic_cs.or(c.italic));
     toggle(w, "w:caps", c.caps);
     toggle(w, "w:smallCaps", c.small_caps);
     toggle(w, "w:strike", c.strike);
@@ -58,10 +66,12 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     if let Some(p) = c.position {
         w.val("w:position", &n(wordcraft_geom::to_half_points(p.clamp(-1584.0, 1584.0))));
     }
+    let half = |s: f32| n(wordcraft_geom::to_half_points(s.clamp(1.0, 1638.0)).max(2));
     if let Some(s) = c.size {
-        let hp = n(wordcraft_geom::to_half_points(s.clamp(1.0, 1638.0)).max(2));
-        w.val("w:sz", &hp);
-        w.val("w:szCs", &hp);
+        w.val("w:sz", &half(s));
+    }
+    if let Some(s) = c.size_cs.or(c.size) {
+        w.val("w:szCs", &half(s));
     }
     if let Some(h) = c.highlight {
         w.val("w:highlight", if h == Highlight::None { "none" } else { h.ooxml() });
@@ -89,8 +99,12 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
         );
     }
     toggle(w, "w:rtl", c.rtl);
-    if let Some(l) = &c.lang {
-        w.val("w:lang", l);
+    toggle(w, "w:cs", c.cs);
+    match (&c.lang, &c.lang_bidi) {
+        (Some(l), Some(b)) => w.empty("w:lang", &[("w:val", l), ("w:bidi", b)]),
+        (Some(l), None) => w.val("w:lang", l),
+        (None, Some(b)) => w.empty("w:lang", &[("w:bidi", b)]),
+        (None, None) => {}
     }
 }
 
@@ -263,7 +277,7 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool) {
     }
 }
 
-fn margins(w: &mut W, tag: &str, m: &[f32; 4]) {
+pub fn margins(w: &mut W, tag: &str, m: &[f32; 4]) {
     w.open(tag, &[]);
     for (name, v) in ["w:top", "w:left", "w:bottom", "w:right"].iter().zip(m.iter()) {
         w.empty(name, &[("w:w", &twips(v.clamp(0.0, 1584.0))), ("w:type", "dxa")]);

@@ -242,6 +242,26 @@ struct SysFallback {
     misses: std::collections::HashSet<char>,
 }
 
+/// Families preferred for right-to-left scripts (Persian, Arabic, Urdu, Hebrew) when the
+/// document's font lacks them: open fonts with full Persian coverage first (the Persian-only
+/// letters پ چ ژ گ, the Persian digits), then the platforms' own.
+pub const RTL_FALLBACKS: &[&str] = &[
+    "Vazirmatn",
+    "Noto Naskh Arabic",
+    "Noto Sans Arabic",
+    "Noto Sans Arabic UI",
+    "Sahel",
+    "Shabnam",
+    "Samim",
+    "Noto Sans Hebrew",
+    "Segoe UI",
+    "Tahoma",
+    "Geeza Pro",
+    "SF Arabic",
+    "Arial",
+    "DejaVu Sans",
+];
+
 /// Families tried (when installed) for characters the loaded fonts lack: CJK, symbols, emoji.
 #[cfg(not(target_arch = "wasm32"))]
 const SYSTEM_FALLBACKS: &[&str] = &[
@@ -271,6 +291,12 @@ const SYSTEM_FALLBACKS: &[&str] = &[
     "Apple Color Emoji",
     "Noto Color Emoji",
 ];
+
+/// Arabic-script marks and digits (bidi classes NSM / AN): they belong with the Arabic letters
+/// around them when choosing a fallback font.
+fn arabic_block(c: char) -> bool {
+    matches!(u32::from(c), 0x0600..=0x06FF | 0x0750..=0x077F | 0x08A0..=0x08FF | 0xFB50..=0xFDFF | 0xFE70..=0xFEFF)
+}
 
 static NEXT_ID: AtomicU32 = AtomicU32::new(1);
 const OUTLINE_CACHE_MAX: usize = 50_000;
@@ -811,20 +837,44 @@ impl FontDb {
     /// First face (fallback family first, then load order) that covers `c`; on native, system
     /// fonts are cataloged and loaded lazily the first time no loaded face covers a character.
     pub fn fallback_for(&self, c: char, exclude: u32) -> Option<Arc<FontFace>> {
-        if let Some(f) = self.loaded_fallback(c, exclude) {
-            return Some(f);
+        self.fallback_styled(c, exclude, false, false)
+    }
+
+    /// [`Self::fallback_for`], preferring a bold and/or italic face of the chosen family (so
+    /// bold Persian text in a font without Persian letters stays bold).
+    pub fn fallback_styled(&self, c: char, exclude: u32, bold: bool, italic: bool) -> Option<Arc<FontFace>> {
+        let base = self.loaded_fallback(c, exclude).or_else(|| {
+            #[cfg(not(target_arch = "wasm32"))]
+            if self.system_fallback(c) {
+                return self.loaded_fallback(c, exclude);
+            }
+            None
+        })?;
+        if !bold && !italic {
+            return Some(base);
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        if self.system_fallback(c) {
-            return self.loaded_fallback(c, exclude);
-        }
-        None
+        let style = match (bold, italic) {
+            (true, true) => "Bold Italic",
+            (true, false) => "Bold",
+            _ => "Italic",
+        };
+        let styled = self.face(&base.family, style);
+        Some(if styled.family.eq_ignore_ascii_case(&base.family) && styled.covers(c) && styled.id != exclude { styled } else { base })
     }
 
     fn loaded_fallback(&self, c: char, exclude: u32) -> Option<Arc<FontFace>> {
         let faces = self.read_faces();
         let mut order: Vec<&Arc<FontFace>> = faces.iter().filter(|f| f.id != exclude).collect();
-        order.sort_by_key(|f| (!f.family.eq_ignore_ascii_case(FALLBACK_FAMILY), f.italic, (f.weight - 400.0).abs() as i32));
+        // Right-to-left letters prefer a font made for the script, so a word isn't split across
+        // fonts (that breaks Arabic joining).
+        let rank = |f: &FontFace| {
+            if crate::is_rtl(c) || arabic_block(c) {
+                RTL_FALLBACKS.iter().position(|n| f.family.eq_ignore_ascii_case(n)).unwrap_or(RTL_FALLBACKS.len())
+            } else {
+                0
+            }
+        };
+        order.sort_by_key(|f| (rank(f), !f.family.eq_ignore_ascii_case(FALLBACK_FAMILY), f.italic, (f.weight - 400.0).abs() as i32));
         order.into_iter().find(|f| f.covers(c)).cloned()
     }
 
@@ -843,7 +893,9 @@ impl FontDb {
         }
         let covered = |db: &FontDb| db.read_faces().iter().any(|f| f.covers(c));
         let cataloged: Vec<String> = self.read_catalog().iter().map(|e| e.family.clone()).collect();
-        for fam in SYSTEM_FALLBACKS {
+        let rtl = crate::is_rtl(c) || arabic_block(c);
+        let preferred = RTL_FALLBACKS.iter().filter(|_| rtl);
+        for fam in preferred.chain(SYSTEM_FALLBACKS.iter()) {
             if !self.is_loaded(fam) && cataloged.iter().any(|f| f.eq_ignore_ascii_case(fam)) {
                 self.load_cataloged(fam);
                 if covered(self) {

@@ -11,6 +11,7 @@
 pub mod display;
 pub mod fields;
 pub mod hit;
+pub mod math;
 pub mod para;
 mod table;
 
@@ -26,6 +27,7 @@ use wordcraft_doc::{Block, Blocks, Document, Paragraph, Path, StoryRef};
 use wordcraft_geom::{Point, Rect};
 
 pub use fields::FieldCtx;
+pub use hit::VisualStep;
 pub use para::{LineEnd, ParaLayout};
 
 /// How the document is viewed.
@@ -182,9 +184,10 @@ struct Key {
     width: u32,
     label: Option<String>,
     page: Option<(u32, u32, u32, u32)>,
-    table_chr: u64,
+    table: u64,
     notes: u64,
     excl: u64,
+    eq: u32,
 }
 
 /// Memoised paragraph layouts.
@@ -241,6 +244,8 @@ struct Ctx<'a> {
     fields: FieldCtx,
     notes_hash: u64,
     numbers: HashMap<u32, Arc<ParaLayout>>,
+    /// Automatic equation numbers so far.
+    eq_count: u32,
     /// Bounds laying out text boxes inside text boxes, for the whole layout.
     boxes: wordcraft_doc::BoxBudget,
 }
@@ -264,9 +269,10 @@ impl Ctx<'_> {
             fields: &self.fields,
             show_hidden: false,
             hide_deleted: false,
-            table_chr: None,
+            table: None,
             proofing: false,
             exclusions: &[],
+            eq_number: 0,
         };
         let pl = Arc::new(para::layout_para(&p, &env));
         self.numbers.insert(n, pl.clone());
@@ -286,19 +292,31 @@ impl Ctx<'_> {
         &mut self,
         p: &Paragraph,
         width: f32,
-        table_chr: Option<&CharProps>,
+        table: Option<&para::CellText>,
         exclusions: &[para::Exclusion],
         label: Option<(String, Level)>,
     ) -> Arc<ParaLayout> {
         let page = if has_page_fields(p) { Some(self.fields.page_key()) } else { None };
+        // Automatic equation numbers count through the document.
+        let eq_here: u32 = p
+            .objects
+            .iter()
+            .map(|o| match o {
+                InlineObject::Equation { math, display, .. } => math::auto_numbers(math, *display),
+                _ => 0,
+            })
+            .sum();
+        let eq_number = self.eq_count;
+        self.eq_count = self.eq_count.saturating_add(eq_here);
         let key = Key {
             rev: p.rev,
             width: width.to_bits(),
             label: label.as_ref().map(|(t, l)| format!("{t}|{}|{}|{:?}", l.indent, l.hanging, l.suffix)),
             page,
-            table_chr: table_chr.map(|c| hash_of(&format!("{c:?}"))).unwrap_or(0),
+            table: table.map(|t| hash_of(&format!("{t:?}"))).unwrap_or(0),
             notes: if p.objects.iter().any(|o| matches!(o, InlineObject::NoteRef { .. })) { self.notes_hash } else { 0 },
             excl: if exclusions.is_empty() { 0 } else { hash_of(&format!("{exclusions:?}")) },
+            eq: if eq_here > 0 { eq_number } else { 0 },
         };
         self.cache.used.insert(key.clone());
         if let Some(pl) = self.cache.paras.get(&key) {
@@ -313,9 +331,10 @@ impl Ctx<'_> {
             fields: &self.fields,
             show_hidden: self.opts.show_hidden,
             hide_deleted: self.opts.hide_deleted,
-            table_chr,
+            table,
             proofing: self.opts.proofing,
             exclusions,
+            eq_number,
         };
         let pl = Arc::new(para::layout_para(p, &env));
         self.cache.paras.insert(key, pl.clone());
@@ -325,17 +344,15 @@ impl Ctx<'_> {
 
 /// Which of `p`'s objects (by index) the layout leaves out ([`para::left_out`]): anchored in hidden
 /// text unless `show_hidden`, or in a tracked deletion with `hide_deleted`. `table_chr` is the
-/// table style's character formatting under the runs' own, as the paragraph is laid out with.
+/// cell's table-style character formatting ([`para::CellText::chr`]), resolved as the paragraph is
+/// laid out with (`StyleSheet::resolve_char_in`).
 fn left_out_objects(doc: &Document, p: &Paragraph, table_chr: Option<&CharProps>, show_hidden: bool, hide_deleted: bool) -> impl Fn(usize) -> bool {
     let mut left = Vec::new();
     // Nothing can be left out with hidden text shown and markup on.
     if (hide_deleted || !show_hidden) && !p.objects.is_empty() {
         let style = p.props.style.as_deref();
         let is_left = |c: &CharProps| {
-            let rc = match table_chr {
-                Some(t) => doc.styles.resolve_char(style, &t.clone().overlaid(c)),
-                None => doc.styles.resolve_char(style, c),
-            };
+            let rc = doc.styles.resolve_char_in(style, table_chr, c);
             para::left_out(&rc, show_hidden, hide_deleted)
         };
         // Runs and objects are both in order: one walk finds each object's run (past the last run,
@@ -407,7 +424,7 @@ fn layout_box(
     blocks: &Blocks,
     prefix: &[u32],
     width: f32,
-    table_chr: Option<&CharProps>,
+    table: Option<&para::CellText>,
     depth: usize,
     frame: Option<PageFrame>,
 ) -> (Vec<Placed>, f32) {
@@ -425,7 +442,7 @@ fn layout_box(
         match &**b {
             Block::Para(p) => {
                 let label = ctx.next_label(p);
-                let mut pl = ctx.para_labelled(p, width, table_chr, &[], label.clone());
+                let mut pl = ctx.para_labelled(p, width, table, &[], label.clone());
                 let ctxl = pl.rp.contextual_spacing;
                 let same = prev_style.as_ref().is_some_and(|(s, c)| *s == pl.rp.style && (*c || ctxl));
                 let before = if same && ctxl { 0.0 } else { pl.rp.space_before };
@@ -437,7 +454,7 @@ fn layout_box(
                 // Floating objects anchored here: place them, then wrap the text around them.
                 // One left out of the layout (hidden, or deleted in the final text) takes no room.
                 let mut floats = HashMap::new();
-                let left_out = left_out_objects(ctx.doc, p, table_chr, ctx.opts.show_hidden, ctx.opts.hide_deleted);
+                let left_out = left_out_objects(ctx.doc, p, table.map(|t| &t.chr), ctx.opts.show_hidden, ctx.opts.hide_deleted);
                 for (oi, o) in p.objects.iter().enumerate() {
                     let Some((w, h, float)) = floating(o) else { continue };
                     if left_out(oi) {
@@ -449,13 +466,13 @@ fn layout_box(
                 }
                 let rel = rel_exclusions(&excl, 0.0, y);
                 if !rel.is_empty() {
-                    pl = ctx.para_labelled(p, width, table_chr, &rel, label);
+                    pl = ctx.para_labelled(p, width, table, &rel, label);
                 }
                 let lead = pl.lines.first().map_or(0.0, |l| l.top.max(0.0));
                 push_para(&mut items, story, &path, &pl, 0, pl.lines.len(), 0.0, y + lead, width);
                 // Pictures, shapes and text boxes: drawn, their areas and text boxes' text.
                 if !p.objects.is_empty() {
-                    let at = ObjFrame { page: frame, col: (0.0, width), para_y: y, table_chr };
+                    let at = ObjFrame { page: frame, col: (0.0, width), para_y: y, table_chr: table.map(|t| &t.chr) };
                     let (back, front) = place_objects(ctx, story, &path, p, &pl, (0, pl.lines.len()), (0.0, y + lead), &at, &floats, depth);
                     let at = behind.min(items.len());
                     behind += back.len();
@@ -538,8 +555,11 @@ fn push_para(items: &mut Vec<Placed>, story: StoryRef, path: &[u32], pl: &Arc<Pa
         return;
     };
     let h = last.top + last.height - first.top;
-    let left = x + pl.rp.indent_left.min(pl.rp.indent_left + pl.rp.indent_first);
-    let right = x + width - pl.rp.indent_right;
+    // Indents are logical: a right-to-left paragraph's start indent (and hanging indent) is on the right.
+    let start = pl.rp.indent_left.min(pl.rp.indent_left + pl.rp.indent_first);
+    let (li, ri) = if pl.rp.bidi { (pl.rp.indent_right, start) } else { (start, pl.rp.indent_right) };
+    let left = x + li;
+    let right = x + width - ri;
     if let Some(c) = pl.rp.shading {
         let pad = pl.rp.borders.as_ref().map(|b| b.left.map(|l| l.space).unwrap_or(4.0)).unwrap_or(0.0);
         items.push(Placed::Fill { rect: Rect::new(left - pad, y, right - left + pad * 2.0, h), color: c });
@@ -749,6 +769,7 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
         },
         notes_hash,
         numbers: HashMap::new(),
+        eq_count: 0,
         boxes: wordcraft_doc::BoxBudget::default(),
     };
     let sections = doc.sections();
@@ -1097,7 +1118,7 @@ fn place_objects(
             let rect = if floating {
                 floats.get(&oi).copied().unwrap_or_else(|| float_rect(at.page, at.col, at.para_y, *w, *h, float))
             } else {
-                let cx = x + line.xs.get(k - line.c0).copied().unwrap_or(0.0);
+                let cx = x + line.cl_left(k).unwrap_or(0.0);
                 display::inline_rect(Some(obj), cx, y + (line.baseline - fl.top), c.adv, c.obj_h)
             };
             let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
@@ -1350,9 +1371,10 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32) -> f32 {
                 fields: &ctx.fields,
                 show_hidden: ctx.opts.show_hidden,
                 hide_deleted: ctx.opts.hide_deleted,
-                table_chr: None,
+                table: None,
                 proofing: false,
                 exclusions: &[],
+                eq_number: ctx.eq_count,
             };
             let _ = rp;
             let pl = para::layout_para(p, &env);
@@ -1370,7 +1392,7 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
     if let Some(f) = t.props.float.filter(|_| !pb.web) {
         // Before Word 2013 layout (compatibility mode 15) an offset places the first cell's text,
         // so the edge sits a cell margin further out.
-        let legacy = if ctx.doc.settings.compat_mode < 15 { table::first_cell_left_margin(t) } else { 0.0 };
+        let legacy = if ctx.doc.settings.compat_mode < 15 { table::first_cell_left_margin(ctx, t) } else { 0.0 };
         let h: f32 = tl.rows.iter().map(|r| r.height).sum();
         if h <= pb.bottom - pb.top + 0.01 {
             place_floating_table(pb, &tl, &f, legacy, block, body_top);
@@ -1610,3 +1632,5 @@ pub fn now_ms() -> f64 {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_bidi;

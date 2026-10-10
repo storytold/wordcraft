@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 mod fontdb;
+pub mod math;
 pub mod word;
 
 pub use fontdb::{FALLBACK_FAMILY, FaceRef, FontDb, FontFace, base_style, bundled, system_font_dirs};
@@ -94,6 +95,11 @@ pub fn feature(tag: &str) -> Option<Feature> {
     Some(Feature::new(Tag::new(&[b[0], b[1], b[2], b[3]]), on as u32, ..))
 }
 
+/// An OpenType feature with a value (`ssty` = 2 for second-level script glyphs).
+pub fn feature_value(tag: &[u8; 4], value: u32) -> Feature {
+    Feature::new(Tag::new(tag), value, ..)
+}
+
 /// A strong right-to-left character (Hebrew, Arabic, …)?
 pub fn is_rtl(c: char) -> bool {
     use unicode_bidi::BidiClass::{AL, R};
@@ -137,25 +143,35 @@ pub fn shape(face: &FontFace, text: &str, features: &[Feature], map: impl Fn(cha
     }
     let mut out = Vec::with_capacity(text.len());
     for (r, rtl) in direction_runs(text) {
-        let mut g = shape_dir(face, &text[r.clone()], features, &map, rtl);
+        let Some(sub) = text.get(r.clone()) else { continue };
+        let mut g = shape_run(face, sub, features, &map, rtl);
         for x in &mut g {
             x.cluster += r.start;
-        }
-        if rtl {
-            // Visual (clusters descending) → logical, cluster by cluster.
-            let mut groups: Vec<Vec<ShapedGlyph>> = Vec::new();
-            for x in g {
-                match groups.last_mut() {
-                    Some(last) if last[0].cluster == x.cluster => last.push(x),
-                    _ => groups.push(vec![x]),
-                }
-            }
-            groups.sort_by_key(|grp| grp[0].cluster);
-            g = groups.into_iter().flatten().collect();
         }
         out.extend(g);
     }
     out
+}
+
+/// Shape `text` as one run in a known direction (the caller ran the bidi algorithm: `rtl` is an
+/// odd embedding level). Right-to-left runs get Arabic joining, mirrored brackets and right-to-left
+/// mark positioning. Glyphs come back in logical order like [`shape`]: clusters in text order,
+/// each cluster's glyphs in the shaper's (visual) order.
+pub fn shape_run(face: &FontFace, text: &str, features: &[Feature], map: impl Fn(char) -> char, rtl: bool) -> Vec<ShapedGlyph> {
+    let g = shape_dir(face, text, features, &map, rtl);
+    if !rtl {
+        return g;
+    }
+    // Visual (clusters descending) → logical, cluster by cluster.
+    let mut groups: Vec<Vec<ShapedGlyph>> = Vec::new();
+    for x in g {
+        match groups.last_mut() {
+            Some(last) if last.first().is_some_and(|f| f.cluster == x.cluster) => last.push(x),
+            _ => groups.push(vec![x]),
+        }
+    }
+    groups.sort_by_key(|grp| grp.first().map_or(0, |f| f.cluster));
+    groups.into_iter().flatten().collect()
 }
 
 fn shape_dir(face: &FontFace, text: &str, features: &[Feature], map: &impl Fn(char) -> char, rtl: bool) -> Vec<ShapedGlyph> {

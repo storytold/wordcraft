@@ -572,6 +572,7 @@
 	Right	Derecha
 	Right Border	Borde derecho
 	Right-to-Left Text Direction	Dirección de texto de derecha a izquierda
+	Left-to-Right Text Direction	Dirección de texto de izquierda a derecha
 	Right:	Derecha:
 	Rotate	Girar
 	Rounded Rectangle	Rectángulo redondeado
@@ -796,6 +797,9 @@
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Muestra los documentos con los colores invertidos, como en Vista › Cambiar modos. Guardar, imprimir y los PDF no cambian.
 	Only web (http, https) and email (mailto) links can be followed	Solo se pueden seguir vínculos web (http, https) y de correo electrónico (mailto)
 	Character Border	Borde de carácter
+	Direction:	Dirección:
+	Right-to-left	De derecha a izquierda
+	Left-to-right	De izquierda a derecha
 # Zotero integration
 	Zotero	Zotero
 	Citations	Citas
@@ -841,3 +845,51 @@
 	Don't Save	No guardar
 	That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.	Ese formato no conserva todo, así que el documento sigue abierto. Guárdelo como documento de Word (.docx) para continuar.
 	Your changes will be lost if you don't save them.	Si no guarda los cambios, se perderán.
+# Equations.
+	Change Structure	Cambiar estructura
+	Change to Display	Cambiar a presentación
+	Change to Inline	Cambiar a en línea
+	Conversions	Conversiones
+	Delete Back in Equation	Eliminar hacia atrás en la ecuación
+	Delete in Equation	Eliminar en la ecuación
+	Edit Equation	Editar ecuación
+	Enter in Equation	Intro en la ecuación
+	Equation Gallery	Galería de ecuaciones
+	Equation Info	Información de la ecuación
+	Equation Number	Número de ecuación
+	Input Format	Formato de entrada
+	Insert Structure	Insertar estructura
+	Insert Symbol	Insertar símbolo
+	Justification	Alineación
+	Leave Equation	Salir de la ecuación
+	Move in Equation	Moverse en la ecuación
+	Normal Text	Texto normal
+	Set Equation	Establecer ecuación
+	Structure Actions	Acciones de estructura
+	Structures	Estructuras
+	Tools	Herramientas
+	Type in Equation	Escribir en la ecuación
+	Inline	En línea
+	Number	Número
+	Close Equation	Cerrar ecuación
+	Insert New Equation	Insertar nueva ecuación
+	Built-In	Integradas
+	Professional	Profesional
+	Linear	Lineal
+	Fraction	Fracción
+	Script	Índice
+	Radical	Radical
+	Integral	Integral
+	Large\nOperator	Operador\ngrande
+	Bracket	Corchete
+	Function	Función
+	Accent	Acento
+	Limit and\nLog	Límite y\nlogaritmo
+	Operator	Operador
+	Equation Options	Opciones de ecuación
+	All symbol sets	Todos los conjuntos de símbolos
+	Send the document straight to the system print dialog, or save a copy in another format below.	Envía el documento directamente al cuadro de diálogo de impresión del sistema o guarda una copia en otro formato a continuación.
+	Or save a copy in another format:	O guarda una copia en otro formato:
+	Opening print dialog…	Abriendo el cuadro de diálogo de impresión…
+	Print failed: {error}	Error al imprimir: {error}
+	Couldn't open {path}: {error}	No se pudo abrir {path}: {error}

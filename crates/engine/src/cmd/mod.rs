@@ -4,6 +4,7 @@ pub mod caret;
 pub mod citations;
 pub mod design;
 pub mod edit;
+pub mod equation;
 pub mod file;
 pub mod format;
 pub mod insert;
@@ -35,6 +36,7 @@ pub fn registry() -> Registry {
     v.extend(para::specs());
     v.extend(view::specs());
     v.extend(insert::specs());
+    v.extend(equation::specs());
     v.extend(page::specs());
     v.extend(table::specs());
     v.extend(review::specs());
@@ -99,9 +101,10 @@ fn track_delete(s: &mut Session, a: &Pos, b: &Pos) -> Result<Pos, CmdError> {
         let Some(p) = s.doc.para(a.story, path) else { continue };
         let from = if *path == a.path { a.off } else { 0 };
         let to = if *path == b.path { b.off } else { p.len() };
+        // Text already deleted keeps its deletion (and its author), like Word.
         let ranges: Vec<(usize, usize, bool)> = p
             .run_ranges()
-            .filter(|(r, _)| r.end > from && r.start < to)
+            .filter(|(r, c)| r.end > from && r.start < to && c.del.is_none())
             .map(|(r, c)| {
                 let own = c.ins.and_then(|i| s.doc.revisions.get(i as usize)).is_some_and(|rv| rv.author == author);
                 (r.start.max(from), r.end.min(to), own)
@@ -182,6 +185,7 @@ pub fn split_para(s: &mut Session, at: &Pos) -> Result<Pos, CmdError> {
         }
         return Ok(at.clone());
     }
+    let mark_revs = s.doc.para_at(at).map(|p| (p.mark.ins, p.mark.del)).unwrap_or_default();
     let new = s.doc.split_paragraph(at)?;
     if at_end && let Some(st) = style.as_deref() {
         let next = s.doc.styles.get(st).and_then(|x| x.next.clone());
@@ -199,8 +203,20 @@ pub fn split_para(s: &mut Session, at: &Pos) -> Result<Pos, CmdError> {
         let rid = new_revision(s, RevisionKind::Insert);
         let p = s.doc.para_mut(at.story, &at.path)?;
         p.mark.ins = Some(rid);
+        // The paragraph after the split ends with the original mark: it keeps that mark's
+        // revisions, never those of the text at the split point (which would credit the split
+        // to the author who inserted that text).
+        let t = s.doc.para_mut(new.story, &new.path)?;
+        (t.mark.ins, t.mark.del) = mark_revs;
     }
     Ok(new)
+}
+
+/// ISO-8601 timestamp (UTC, seconds) for `secs` since the Unix epoch.
+fn iso_from_unix_secs(secs: u64) -> String {
+    let (y, m, d) = civil_from_days((secs / 86_400) as i64);
+    let t = secs % 86_400;
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", t / 3600, t / 60 % 60, t % 60)
 }
 
 /// ISO-8601 timestamp (UTC, seconds).
@@ -208,14 +224,14 @@ pub fn now_iso() -> String {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-        let days = (secs / 86_400) as i64;
-        let (y, m, d) = civil_from_days(days);
-        let t = secs % 86_400;
-        format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", t / 3600, t / 60 % 60, t % 60)
+        iso_from_unix_secs(secs)
     }
+    // `SystemTime::now()` panics on wasm32-unknown-unknown, so ask the browser's clock.
     #[cfg(target_arch = "wasm32")]
     {
-        "2026-01-01T00:00:00Z".to_string()
+        let ms = js_sys::Date::now();
+        // Clamp a NaN or pre-epoch clock to 0 rather than fail.
+        iso_from_unix_secs(if ms.is_finite() && ms > 0.0 { (ms / 1000.0) as u64 } else { 0 })
     }
 }
 
@@ -236,4 +252,22 @@ pub fn civil_from_days(z: i64) -> (i64, u32, u32) {
 /// Story given in params (`"story": "body"` / `{"part": 3}`), else the caret's.
 pub fn story_param(s: &Session, v: &Value) -> StoryRef {
     v.get("story").and_then(|x| serde_json::from_value(x.clone()).ok()).unwrap_or(s.sel.focus.story)
+}
+
+#[cfg(test)]
+mod iso_tests {
+    use super::iso_from_unix_secs;
+
+    #[test]
+    fn formats_epoch_and_known_timestamps() {
+        assert_eq!(iso_from_unix_secs(0), "1970-01-01T00:00:00Z");
+        assert_eq!(iso_from_unix_secs(1_760_082_785), "2025-10-10T07:53:05Z");
+    }
+
+    #[test]
+    fn formats_leap_day_and_year_end() {
+        assert_eq!(iso_from_unix_secs(1_709_164_800), "2024-02-29T00:00:00Z");
+        assert_eq!(iso_from_unix_secs(951_782_400), "2000-02-29T00:00:00Z");
+        assert_eq!(iso_from_unix_secs(1_735_689_599), "2024-12-31T23:59:59Z");
+    }
 }

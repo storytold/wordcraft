@@ -75,16 +75,6 @@ pub fn specs() -> Vec<CommandSpec> {
             sel_result(s)
         })
         .params(r#"{"char": string}"#),
-        CommandSpec::new("insert.equation", "Equation", "Insert › Symbols", |s, v| {
-            let lin = p::str(v, "linear").unwrap_or("a^2+b^2=c^2").to_string();
-            let props = s.typing_props();
-            let at = delete_selection(s)?;
-            let end = s.doc.insert_object(&at, InlineObject::Equation { linear: lin, display: false }, &props)?;
-            s.sel = Selection::caret(end);
-            sel_result(s)
-        })
-        .key("Alt+=")
-        .params(r#"{"linear"?: string}"#),
         CommandSpec::new("insert.field", "Field", "Insert › Text › Quick Parts", field).key("Mod+F9").params(r#"{"instr": string, "result"?: string}"#),
         CommandSpec::new("insert.dropCap", "Drop Cap", "Insert › Text", |s, v| {
             let lines = p::u64(v, "lines").unwrap_or(3).min(10) as u8;

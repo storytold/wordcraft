@@ -46,12 +46,51 @@ pub struct Style {
 #[serde(default, rename_all = "camelCase")]
 pub struct TableStyleParts {
     pub borders: Option<Borders>,
+    /// Shading of every cell (`w:tblPr/w:shd`, or the `wholeTable` region's cell shading).
+    pub fill: Option<Rgb>,
+    /// Cell margins, points: [top, left, bottom, right] (`w:tblCellMar`).
+    pub cell_margins: Option<[f32; 4]>,
     pub header_fill: Option<Rgb>,
     pub header_chr: CharProps,
     pub band_fill: Option<Rgb>,
     pub first_col_chr: CharProps,
     pub total_chr: CharProps,
     pub total_border_top: Option<Border>,
+}
+
+impl TableStyleParts {
+    /// Apply `patch` (a style further down a based-on chain) over these parts: what it sets wins,
+    /// the rest is inherited; borders merge edge by edge.
+    pub fn overlay(&mut self, patch: &TableStyleParts) {
+        self.borders = match (self.borders, patch.borders) {
+            (Some(b), Some(p)) => Some(Borders {
+                top: p.top.or(b.top),
+                left: p.left.or(b.left),
+                bottom: p.bottom.or(b.bottom),
+                right: p.right.or(b.right),
+                between: p.between.or(b.between),
+                inside_v: p.inside_v.or(b.inside_v),
+            }),
+            (b, p) => p.or(b),
+        };
+        self.fill = patch.fill.or(self.fill);
+        self.cell_margins = patch.cell_margins.or(self.cell_margins);
+        self.header_fill = patch.header_fill.or(self.header_fill);
+        self.header_chr.overlay(&patch.header_chr);
+        self.band_fill = patch.band_fill.or(self.band_fill);
+        self.first_col_chr.overlay(&patch.first_col_chr);
+        self.total_chr.overlay(&patch.total_chr);
+        self.total_border_top = patch.total_border_top.or(self.total_border_top);
+    }
+}
+
+/// A table style with its based-on chain merged: what it gives the text in the table's cells
+/// (`para`, `chr`) and the table itself (`parts`).
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct TableStyleProps {
+    pub para: ParaProps,
+    pub chr: CharProps,
+    pub parts: TableStyleParts,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -362,6 +401,25 @@ impl StyleSheet {
         out.reverse();
         out
     }
+    /// Table style `id` with its based-on chain merged, base styles first (`None` when there is no
+    /// such table style). Styles of other kinds in the chain are skipped.
+    pub fn table_style(&self, id: &str) -> Option<TableStyleProps> {
+        let chain: Vec<&Style> = self.chain(id).into_iter().filter(|s| s.kind == StyleKind::Table).collect();
+        if chain.last().is_none_or(|s| s.id != id) {
+            return None;
+        }
+        let mut out = TableStyleProps::default();
+        for s in chain {
+            out.para.overlay(&s.para);
+            out.chr.overlay(&s.chr);
+            if let Some(t) = &s.table {
+                out.parts.overlay(t);
+            }
+        }
+        out.para.style = None;
+        out.chr.style = None;
+        Some(out)
+    }
     /// Add or replace a style.
     pub fn upsert(&mut self, st: Style) {
         match self.styles.iter_mut().find(|s| s.id == st.id) {
@@ -480,6 +538,41 @@ mod tests {
         }
         let c = s.chain("Heading1");
         assert!(c.len() <= 2);
+    }
+
+    /// A table style based on another inherits what it doesn't set itself; borders merge edge by
+    /// edge.
+    #[test]
+    fn table_style_merges_based_on_chain() {
+        let mut s = StyleSheet::builtin();
+        let red = Rgb(0xC0, 0, 0);
+        let thick = Border::single(2.0);
+        s.upsert(Style {
+            id: "RedGrid".into(),
+            kind: StyleKind::Table,
+            based_on: Some("TableGrid".into()),
+            chr: CharProps { bold: Some(true), color: color(red), ..chr() },
+            table: Some(TableStyleParts {
+                borders: Some(Borders { top: Some(thick), ..Default::default() }),
+                header_fill: Some(red),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let t = s.table_style("RedGrid").unwrap();
+        assert_eq!((t.para.space_after, t.para.line_spacing), (Some(0.0), Some(LineSpacing::Multiple(1.0))), "from Table Grid");
+        assert_eq!((t.chr.bold, t.chr.color), (Some(true), color(red)));
+        let b = t.parts.borders.unwrap();
+        assert_eq!(b.top, Some(thick));
+        assert_eq!(b.left, Some(Border::single(0.5)), "Table Grid's other edges");
+        assert_eq!(t.parts.header_fill, Some(red));
+        // Not a table style, unknown, or a based-on loop: no panic.
+        assert!(s.table_style("Normal").is_none());
+        assert!(s.table_style("Nope").is_none());
+        if let Some(g) = s.get_mut("TableGrid") {
+            g.based_on = Some("RedGrid".into());
+        }
+        assert!(s.table_style("RedGrid").is_some());
     }
 
     #[test]

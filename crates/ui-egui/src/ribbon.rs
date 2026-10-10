@@ -24,6 +24,10 @@ pub fn contextual_tabs(s: &wordcraft_engine::Session) -> Vec<&'static str> {
     if has_picture_selected(s) {
         tabs.push("Picture Format");
     }
+    // Editing an equation.
+    if s.math.is_some() {
+        tabs.push("Equation");
+    }
     tabs
 }
 
@@ -39,6 +43,17 @@ pub fn in_table_public(app: &WordApp) -> bool {
 
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
+    // Editing an equation brings up the Equation tab; leaving it goes back.
+    if app.session.math.is_some() {
+        if app.equation_prev_tab.is_none() {
+            app.equation_prev_tab = Some(app.ui.tab.clone());
+            app.ui.tab = "Equation".into();
+        }
+    } else if let Some(prev) = app.equation_prev_tab.take()
+        && app.ui.tab == "Equation"
+    {
+        app.ui.tab = prev;
+    }
     // A contextual tab (Table, Picture Format) may be stored while the selection moved away.
     {
         let mut tabs: Vec<&str> = TABS.to_vec();
@@ -62,7 +77,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     }
                 }
                 for tab in tabs {
-                    let contextual = tab.starts_with("Table ") || tab == "Picture Format";
+                    let contextual = tab.starts_with("Table ") || tab == "Picture Format" || tab == "Equation";
                     let shown = tl!(tab);
                     let w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(shown.to_string(), medium(12.5), t.text).size().x) + 18.0;
                     let (r, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
@@ -151,6 +166,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         "Help" => help(app, ui),
                         "Table Design" => table_design(app, ui),
                         "Table Layout" => table_layout(app, ui),
+                        "Equation" if app.session.math.is_some() => crate::equation_tab::show(app, ui),
                         "Picture Format" => picture_format(app, ui),
                         _ => home(app, ui),
                     }
@@ -327,7 +343,9 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Paragraph", Some("para.dialog"), app, |ui, app| {
         let rp = app.session.doc.para_at(&app.session.sel.focus).map(|p| app.session.doc.styles.resolve_para(&p.props));
-        let align = rp.as_ref().map(|r| r.align).unwrap_or_default();
+        // The buttons show alignment as seen on the page (Align Right is a right-to-left paragraph's start).
+        let align = rp.as_ref().map(|r| r.align.visual(r.bidi)).unwrap_or_default();
+        let rtl = rp.as_ref().is_some_and(|r| r.bidi);
         stack(ui, |ui| {
             crate::widgets::row(ui, |ui| {
                 split(ui, app, "bullets", "Bullets", "para.bullets", json!({}), false, None, |ui, app| {
@@ -380,6 +398,9 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                 small(ui, app, "alignCenter", None, "Center", "para.alignCenter", json!({}), align == A::Center);
                 small(ui, app, "alignRight", None, "Align Right", "para.alignRight", json!({}), align == A::Right);
                 small(ui, app, "justify", None, "Justify", "para.justify", json!({}), align == A::Justify);
+                ui.add_space(4.0);
+                small(ui, app, "textLtr", None, "Left-to-Right Text Direction", "para.ltr", json!({}), !rtl);
+                small(ui, app, "textRtl", None, "Right-to-Left Text Direction", "para.rtl", json!({}), rtl);
                 ui.add_space(4.0);
                 menu_button(ui, app, "lineSpacing", None, "Line and Paragraph Spacing", false, |ui, app| {
                     for v in [1.0, 1.15, 1.5, 2.0, 2.5, 3.0] {
@@ -535,7 +556,7 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Symbols", None, app, |ui, app| {
-        big(ui, app, "equation", "Equation", "insert.equation", json!({}), false);
+        crate::equation_tab::insert_button(ui, app);
         menu_button(ui, app, "symbol", Some("Symbol"), "Symbol", true, |ui, app| {
             egui::Grid::new("syms").show(ui, |ui| {
                 for (i, c) in [

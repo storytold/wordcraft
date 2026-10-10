@@ -123,6 +123,7 @@ fn services(inbox: Inbox, ctx: egui::Context, dirty: Rc<Cell<bool>>) -> Services
         // Exports ask for a name; the browser decides where the download goes.
         pick_save: Some(Box::new(|name: &str| Some(name.to_string()))),
         download: Some(Box::new(download)),
+        print: Some(Box::new(print_pdf)),
         inbox: Some(inbox),
         on_dirty: Some(Box::new(move |d| dirty.set(d))),
         ..Default::default()
@@ -170,6 +171,74 @@ fn download(path: &str, bytes: &[u8]) -> Result<(), String> {
         web_sys::Url::revoke_object_url(&url).ok();
     });
     window.set_timeout_with_callback_and_timeout_and_arguments_0(revoke.unchecked_ref(), 10_000).map_err(js)?;
+    Ok(())
+}
+
+/// The hidden iframe the last print loaded its PDF into.
+const PRINT_FRAME_ID: &str = "wordcraft-print-frame";
+
+/// Opens `bytes` (a PDF) as an object URL in a hidden iframe and calls the
+/// iframe's own `print()` once it has finished loading — this is the
+/// standard way to drive the browser's native print dialog on a PDF without
+/// a download or a popup window the browser might block. The previous
+/// print's iframe and object URL are removed first, so only one copy of the
+/// document's PDF stays in the page (the last one may still be printing).
+fn print_pdf(bytes: &[u8]) -> Result<(), String> {
+    let js = |e: wasm_bindgen::JsValue| format!("{e:?}");
+    let window = web_sys::window().ok_or("no window")?;
+    let document = window.document().ok_or("no document")?;
+
+    if let Some(old) = document.get_element_by_id(PRINT_FRAME_ID) {
+        if let Ok(frame) = old.clone().dyn_into::<web_sys::HtmlIFrameElement>() {
+            let src = frame.src();
+            if src.starts_with("blob:") {
+                web_sys::Url::revoke_object_url(&src).ok();
+            }
+        }
+        old.remove();
+    }
+
+    let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(bytes));
+    let opts = web_sys::BlobPropertyBag::new();
+    opts.set_type("application/pdf");
+    let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &opts).map_err(js)?;
+    let url = web_sys::Url::create_object_url_with_blob(&blob).map_err(js)?;
+
+    let iframe: web_sys::HtmlIFrameElement =
+        match document.create_element("iframe").map_err(js).and_then(|e| e.dyn_into().map_err(|_| "not an iframe".to_string())) {
+            Ok(f) => f,
+            Err(e) => {
+                web_sys::Url::revoke_object_url(&url).ok();
+                return Err(e);
+            }
+        };
+    iframe.set_id(PRINT_FRAME_ID);
+    let attached = iframe
+        .style()
+        .set_property("display", "none")
+        .map_err(js)
+        .and_then(|()| document.body().ok_or_else(|| "no body".to_string()))
+        .and_then(|body| body.append_child(&iframe).map_err(js));
+    if let Err(e) = attached {
+        iframe.remove();
+        web_sys::Url::revoke_object_url(&url).ok();
+        return Err(e);
+    }
+
+    // `onload` fires once the PDF has actually rendered inside the iframe;
+    // printing before that would show a blank page. Set the handler BEFORE
+    // `src` so a fast/cached load can't fire before we're listening.
+    let iframe_for_load = iframe.clone();
+    let on_load = wasm_bindgen::closure::Closure::once_into_js(move || {
+        if let Some(w) = iframe_for_load.content_window() {
+            // Ignore errors: some browsers (notably Firefox with a built-in
+            // PDF viewer) print fine but report a benign cross-origin-style
+            // error back on this call.
+            let _ = w.print();
+        }
+    });
+    iframe.set_onload(Some(on_load.unchecked_ref()));
+    iframe.set_src(&url);
     Ok(())
 }
 
