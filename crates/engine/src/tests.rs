@@ -37,6 +37,21 @@ fn every_command_has_unique_id() {
 }
 
 #[test]
+fn every_shortcut_runs_one_command() {
+    // `by_shortcut` takes the first match, so a shared key silently shadows the later command (#186).
+    let reg = cmd::registry();
+    let mut seen = std::collections::HashMap::new();
+    for c in reg.all() {
+        for k in c.shortcut.split(" / ").filter(|k| !k.is_empty()) {
+            if let Some(other) = seen.insert(k.to_ascii_lowercase(), c.id) {
+                panic!("{k} is bound to both {other} and {}", c.id);
+            }
+        }
+    }
+    assert_eq!(reg.by_shortcut("Shift+F3").map(|c| c.id), Some("format.changeCase"));
+}
+
+#[test]
 fn typing_enter_undo() {
     let mut s = s();
     run(&mut s, "text.insert", json!({"text": "Hello"}));
