@@ -20,23 +20,40 @@ const PAGES: [(&str, &str); 9] = [
 
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
+    let mac = app.integrated_titlebar;
     egui::Panel::left("backstage_nav")
         .exact_size(200.0)
-        .frame(egui::Frame::NONE.fill(APP_COLOR).inner_margin(egui::Margin { left: 0, right: 0, top: 12, bottom: 12 }))
+        .frame(egui::Frame::NONE.fill(APP_COLOR).inner_margin(egui::Margin { left: 0, right: 0, top: if mac { 0 } else { 12 }, bottom: 12 }))
         .show(ui, |ui| {
-            let (r, resp) = ui.allocate_exact_size(vec2(200.0, 40.0), Sense::click());
-            icons::paint(
-                ui.painter(),
-                Rect::from_center_size(pos2(r.min.x + 26.0, r.center().y), vec2(18.0, 18.0)),
-                "chevronLeft",
-                egui::Color32::WHITE,
-                egui::Color32::WHITE,
-            );
-            if resp.clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            let back = if mac {
+                // macOS (#222): the Backstage covers the title bar, so its top band is the title
+                // bar: the back button sits beside the traffic lights, centred with them and as far
+                // from them as the title bar's own controls, and the rest of the band drags the window.
+                let (band, drag) = ui.allocate_exact_size(vec2(200.0, crate::chrome::MAC_TITLE_BAR), Sense::click_and_drag());
+                if drag.drag_started() {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                }
+                // The chevron's stroke starts at the content edge.
+                let c = pos2(band.min.x + crate::chrome::MAC_CONTENT_LEFT + 3.0, band.center().y);
+                let resp = ui.interact(Rect::from_center_size(c, vec2(22.0, band.height())), ui.id().with("backstage_back"), Sense::click());
+                icons::paint(ui.painter(), Rect::from_center_size(c, vec2(18.0, 18.0)), "chevronLeft", egui::Color32::WHITE, egui::Color32::WHITE);
+                resp
+            } else {
+                let (r, resp) = ui.allocate_exact_size(vec2(200.0, 40.0), Sense::click());
+                icons::paint(
+                    ui.painter(),
+                    Rect::from_center_size(pos2(r.min.x + 26.0, r.center().y), vec2(18.0, 18.0)),
+                    "chevronLeft",
+                    egui::Color32::WHITE,
+                    egui::Color32::WHITE,
+                );
+                resp
+            };
+            if back.clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 app.ui.backstage = false;
                 app.canvas.want_focus = true;
             }
-            ui.add_space(6.0);
+            ui.add_space(if mac { 12.0 } else { 6.0 });
             for (id, label) in PAGES {
                 let (r, resp) = ui.allocate_exact_size(vec2(200.0, 38.0), Sense::click());
                 let active = app.ui.backstage_page == id;
@@ -86,12 +103,13 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         });
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin::symmetric(40, 30))).show(ui, |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| match app.ui.backstage_page.as_str() {
-            "new" | "home" => new_page(app, ui),
+            "home" => home_page(app, ui),
+            "new" => new_page(app, ui),
             "open" => open_page(app, ui),
             "info" => info_page(app, ui),
             "print" | "export" => export_page(app, ui),
             "options" => options_page(app, ui),
-            _ => new_page(app, ui),
+            _ => home_page(app, ui),
         });
     });
 }
@@ -104,6 +122,8 @@ fn heading(ui: &mut Ui, s: &str) {
 fn template_tile(ui: &mut Ui, app: &mut WordApp, label: &str, template: &str) {
     let t = Tokens::get(ui.ctx());
     ui.vertical(|ui| {
+        // The label sits right under the thumbnail whatever row gap the gallery uses.
+        ui.spacing_mut().item_spacing.y = 0.0;
         let (r, resp) = ui.allocate_exact_size(vec2(150.0, 194.0), Sense::click());
         ui.painter().rect(
             r,
@@ -141,7 +161,26 @@ fn template_tile(ui: &mut Ui, app: &mut WordApp, label: &str, template: &str) {
     });
 }
 
-fn new_page(app: &mut WordApp, ui: &mut Ui) {
+/// The built-in templates in gallery order: display label and the `file.new` template id.
+const TEMPLATES: [(&str, &str); 5] =
+    [("Blank document", "blank"), ("Studio handbook (sample)", "sample"), ("Letter", "letter"), ("Résumé", "resume"), ("Report", "report")];
+
+/// How many templates Home shows before "More templates" (the rest are on New).
+const HOME_TEMPLATES: usize = 4;
+
+/// The templates whose English or translated label, or id, contains `query` (case-insensitive;
+/// the id lets "resume" find "Résumé"); all of them for an empty query.
+fn matching_templates(query: &str) -> Vec<(&'static str, &'static str)> {
+    let q = query.trim().to_lowercase();
+    TEMPLATES
+        .into_iter()
+        .filter(|(label, id)| q.is_empty() || id.contains(&q) || label.to_lowercase().contains(&q) || tl!(label).to_lowercase().contains(&q))
+        .collect()
+}
+
+/// Home: a greeting, Blank plus a short row of templates with a link to New, then Recent.
+fn home_page(app: &mut WordApp, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
     let hour = wordcraft_engine::cmd::now_iso().get(11..13).and_then(|h| h.parse::<u32>().ok()).unwrap_or(9);
     heading(
         ui,
@@ -155,14 +194,41 @@ fn new_page(app: &mut WordApp, ui: &mut Ui) {
     );
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(18.0, 0.0);
-        template_tile(ui, app, "Blank document", "blank");
-        template_tile(ui, app, "Studio handbook (sample)", "sample");
-        template_tile(ui, app, "Letter", "letter");
-        template_tile(ui, app, "Résumé", "resume");
-        template_tile(ui, app, "Report", "report");
+        for (label, template) in TEMPLATES.into_iter().take(HOME_TEMPLATES) {
+            template_tile(ui, app, label, template);
+        }
     });
-    ui.add_space(28.0);
+    ui.add_space(8.0);
+    let more = ui.add(egui::Label::new(egui::RichText::new(tl!("More templates →")).font(medium(13.5)).color(t.accent)).sense(Sense::click()));
+    if more.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+        app.ui.backstage_page = "new".into();
+    }
+    ui.add_space(24.0);
     open_list(app, ui);
+}
+
+/// New: the whole template gallery with a search box; no Recent list (that is on Home and Open).
+fn new_page(app: &mut WordApp, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    heading(ui, "New");
+    let id = egui::Id::new("backstage_template_search");
+    let mut query = ui.ctx().data(|d| d.get_temp::<String>(id)).unwrap_or_default();
+    let search = ui.add(egui::TextEdit::singleline(&mut query).hint_text(tl!("Search for templates")).desired_width(360.0));
+    if search.changed() {
+        ui.ctx().data_mut(|d| d.insert_temp(id, query.clone()));
+    }
+    ui.add_space(18.0);
+    let found = matching_templates(&query);
+    if found.is_empty() {
+        ui.label(egui::RichText::new(tl!("No templates match your search.")).color(t.text_dim));
+        return;
+    }
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(18.0, 18.0);
+        for (label, template) in found {
+            template_tile(ui, app, label, template);
+        }
+    });
 }
 
 fn open_list(app: &mut WordApp, ui: &mut Ui) {
@@ -204,17 +270,35 @@ fn info_page(app: &mut WordApp, ui: &mut Ui) {
     ui.columns(2, |cols| {
         let ui = &mut cols[0];
         ui.label(egui::RichText::new(tl!("Properties")).font(semibold(15.0)));
+        // The fields edit a copy of the document's properties that is read afresh every frame,
+        // so each change goes into the document as it is typed (#260): waiting for the field to
+        // lose focus dropped the keystrokes, and leaving File with Escape never loses it at all.
+        // The keystrokes of one visit to a field are a single undo step.
         let mut props = app.session.doc.core.clone();
-        let mut changed = false;
+        let mut edited = None;
+        let mut focused = None;
         egui::Grid::new("props").num_columns(2).spacing(vec2(12.0, 6.0)).show(ui, |ui| {
             for (l, v) in [("Title", &mut props.title), ("Subject", &mut props.subject), ("Author", &mut props.creator), ("Keywords", &mut props.keywords), ("Category", &mut props.category)] {
-                ui.label(tl!(l));
-                changed |= ui.text_edit_singleline(v).lost_focus();
+                let label = ui.label(tl!(l));
+                let r = ui.add(egui::TextEdit::singleline(v).id_salt(("info-prop", l))).labelled_by(label.id);
+                if r.changed() {
+                    edited = Some(l);
+                }
+                if r.has_focus() {
+                    focused = Some(l);
+                }
                 ui.end_row();
             }
         });
-        if changed {
-            let _ = app.run("file.properties", json!({"title": props.title, "subject": props.subject, "author": props.creator, "keywords": props.keywords, "category": props.category}));
+        if let Some(field) = edited {
+            if app.info_editing == Some((field, app.session.rev())) {
+                app.session.join_next_undo();
+            }
+            let ok = app.run("file.properties", json!({"title": props.title, "subject": props.subject, "author": props.creator, "keywords": props.keywords, "category": props.category})).is_ok();
+            app.info_editing = ok.then(|| (field, app.session.rev()));
+        }
+        if focused != app.info_editing.map(|(f, _)| f) {
+            app.info_editing = None;
         }
         let ui = &mut cols[1];
         ui.label(egui::RichText::new(tl!("Statistics")).font(semibold(15.0)));
@@ -255,14 +339,7 @@ fn export_page(app: &mut WordApp, ui: &mut Ui) {
         ("Page image (*.png)", "png"),
     ] {
         if ui.add(egui::Button::new(egui::RichText::new(tl!(label)).font(medium(13.5))).min_size(vec2(320.0, 34.0))).clicked() {
-            let name = format!("{}.{ext}", app.title_stem());
-            let picked = app.services.pick_save.as_ref().and_then(|f| f(&name));
-            if let Some(path) = picked {
-                let r = if ext == "png" { app.run("file.exportPng", json!({"path": path})) } else { app.run("file.saveAs", json!({"path": path})) };
-                if r.is_ok() {
-                    app.status(crate::i18n::fmt(tl!("Exported {path}"), &[("path", &path)]));
-                }
-            }
+            app.export_dialog(ext);
         }
         ui.add_space(4.0);
     }
@@ -279,10 +356,7 @@ fn options_page(app: &mut WordApp, ui: &mut Ui) {
             app.session.author = n;
         }
     });
-    let mut dark = app.ui.dark;
-    if ui.checkbox(&mut dark, tl!("Dark mode")).changed() {
-        let _ = app.run("ui.dark", json!({"value": dark}));
-    }
+    theme_picker(app, ui);
     ui.checkbox(&mut app.autosave, tl!("AutoSave documents you have saved in WordCraft"));
     let mut dark_page = app.session.view.dark_mode;
     if ui
@@ -308,9 +382,26 @@ fn options_page(app: &mut WordApp, ui: &mut Ui) {
     ui.label(tl!("Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel."));
 }
 
+/// File ▸ Options ▸ Interface theme: Light, Dark, or follow the system's appearance (#115).
+fn theme_picker(app: &mut WordApp, ui: &mut Ui) {
+    use crate::theme::Appearance;
+    ui.horizontal(|ui| {
+        ui.label(tl!("Interface theme:"));
+        egui::ComboBox::from_id_salt("interface_theme").selected_text(tl!(app.ui.theme.label())).width(220.0).show_ui(ui, |ui| {
+            for a in Appearance::ALL {
+                if ui.selectable_label(app.ui.theme == a, tl!(a.label())).clicked() {
+                    let _ = app.run("ui.theme", json!({"value": a.code()}));
+                }
+            }
+        });
+    });
+}
+
 /// File ▸ Options ▸ Interface language: follow the system (the default) or pick one (#8).
 fn language_picker(app: &mut WordApp, ui: &mut Ui) {
     use crate::i18n::{AUTO, Lang};
+    // The language names are in their own scripts: fonts for them load from the next frame.
+    app.want_system_cjk = true;
     let system = crate::i18n::system_lang();
     let auto_label = crate::i18n::fmt(tl!("Automatic ({language})"), &[("language", system.name())]);
     let current = if app.ui.language == AUTO { auto_label.clone() } else { Lang::from_pref(&app.ui.language).name().to_string() };
@@ -328,4 +419,110 @@ fn language_picker(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     ui.label(egui::RichText::new(tl!("Automatic follows your system's language. Menus and commands change; your documents don't.")).small().weak());
+}
+
+#[cfg(test)]
+mod tests {
+    use egui_kittest::kittest::Queryable;
+    use serde_json::json;
+
+    use super::matching_templates;
+    use crate::{Services, WordApp};
+
+    #[test]
+    fn template_search_matches_labels_case_insensitively() {
+        let ids = |q: &str| matching_templates(q).into_iter().map(|(_, id)| id).collect::<Vec<_>>();
+        assert_eq!(ids(""), ["blank", "sample", "letter", "resume", "report"]);
+        assert_eq!(ids("  LETTER "), ["letter"]);
+        assert_eq!(ids("re"), ["resume", "report"]);
+        assert_eq!(ids("résumé"), ["resume"]);
+        assert!(ids("no such template").is_empty());
+    }
+
+    /// Home and New are different pages (#141): Home has the short template row, the link to New
+    /// and Recent; New has every template and no Recent list.
+    #[test]
+    fn home_and_new_show_different_sections() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+        a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        assert!(h.query_by_label("Recent").is_some(), "Home lists recent documents");
+        assert!(h.query_by_label("Letter").is_some(), "Home shows the first templates");
+        assert!(h.query_by_label("Report").is_none(), "Home shows only a short row of templates");
+        h.get_by_label("More templates →").click();
+        h.run_steps(4);
+        assert_eq!(h.state().ui.backstage_page, "new", "the link opens New");
+        assert!(h.query_by_label("Report").is_some(), "New shows every template");
+        assert!(h.query_by_label("Recent").is_none(), "New has no Recent list");
+    }
+
+    /// #260: File › Info's Title and Author fields dropped every keystroke (they edited a copy
+    /// re-read each frame and only wrote it back when the field lost focus), so a save had no
+    /// title or author. Typing now lands in the document as it happens, one undo step per field,
+    /// and the browser's Save downloads it with the save stamps advanced (#262).
+    #[test]
+    fn info_fields_keep_typed_properties_through_a_web_save() {
+        use egui::accesskit::Role;
+        let got: std::rc::Rc<std::cell::RefCell<Vec<(String, Vec<u8>)>>> = Default::default();
+        let sink = got.clone();
+        let services = Services {
+            download: Some(Box::new(move |n: &str, b: &[u8]| {
+                sink.borrow_mut().push((n.to_string(), b.to_vec()));
+                Ok(())
+            })),
+            ..Default::default()
+        };
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("XYZ")), services);
+        a.session.author = "GAMMA".into();
+        a.run("ui.backstage", json!({"value": true, "page": "info"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        for (field, text) in [("Title", "ALPHA"), ("Author", "BETA")] {
+            h.get_by_role_and_label(Role::TextInput, field).click();
+            h.run_steps(2);
+            for c in text.chars() {
+                h.get_by_role_and_label(Role::TextInput, field).type_text(&c.to_string());
+                h.run_steps(2);
+            }
+            assert_eq!(h.get_by_role_and_label(Role::TextInput, field).value().as_deref(), Some(text), "{field} shows what was typed");
+        }
+        let core = h.state().session.doc.core.clone();
+        assert_eq!((core.title.as_str(), core.creator.as_str()), ("ALPHA", "BETA"));
+        assert!(h.state().session.dirty, "the property edits are unsaved changes");
+
+        // Save (web: a download) writes them into docProps/core.xml, with fresh save stamps.
+        let a = h.state_mut();
+        let created = a.session.doc.core.created.clone();
+        a.run("file.save", json!({})).unwrap();
+        a.run("file.save", json!({})).unwrap();
+        let (name, bytes) = got.borrow_mut().pop().unwrap();
+        let back = wordcraft_engine::io::open_bytes(&name, &bytes).unwrap();
+        assert_eq!((back.core.title.as_str(), back.core.creator.as_str()), ("ALPHA", "BETA"));
+        assert_eq!(back.core.last_modified_by, "GAMMA");
+        assert_eq!(back.core.revision, core.revision + 2, "each save advances the revision");
+        assert!(created.is_empty() && !back.core.created.is_empty(), "the first save sets the creation time");
+        assert!(!back.core.modified.is_empty());
+        assert!(!a.session.dirty);
+
+        // Each field's typing is one undo step.
+        a.session.run("edit.undo", &json!({})).unwrap();
+        assert_eq!((a.session.doc.core.title.as_str(), a.session.doc.core.creator.as_str()), ("ALPHA", ""));
+        a.session.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(a.session.doc.core.title, "");
+    }
 }

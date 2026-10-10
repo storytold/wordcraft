@@ -64,6 +64,9 @@
 	AutoSave documents you have saved in WordCraft	自动保存在 WordCraft 中保存过的文档
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	自动保存失败：{error}。重新保存文档后将恢复自动保存。
 	Dark page (white text on black)	深色页面（黑底白字）
+	More templates →	更多模板 →
+	No templates match your search.	没有与搜索匹配的模板。
+	Search for templates	搜索模板
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	像“视图 › 切换模式”一样以反转的颜色显示文档。保存、打印和 PDF 不受影响。
 	AutoSave saves every change to the file (needs a saved document)	自动保存会把每次更改写入文件（文档需已保存）
 	AutoText	自动图文集
@@ -177,7 +180,6 @@
 	Customize Quick Access Toolbar	自定义快速访问工具栏
 	Cut	剪切
 	Dark Mode	深色模式
-	Dark mode	深色模式
 	Dashed	虚线
 	Data	数据
 	Date & Time	日期和时间
@@ -896,3 +898,118 @@
 	Opening print dialog…	正在打开打印对话框…
 	Print failed: {error}	打印失败：{error}
 	Couldn't open {path}: {error}	无法打开 {path}：{error}
+	Column Selection	矩形选择
+	Style Inspector	样式检查器
+	Inspect Styles at Selection	检查所选内容的样式
+	Clear Formatting Level	清除格式级别
+	Characters	字符
+	Direct formatting	直接格式
+	Reset to Normal	重置为正文
+	Clear Paragraph Formatting	清除段落格式
+	Clear Character Style	清除字符样式
+	Clear Character Formatting	清除字符格式
+	Paste Special	选择性粘贴
+	Paste Special…	选择性粘贴…
+	Paste as:	粘贴为：
+	The clipboard is empty.	剪贴板为空。
+	Formatted Text	带格式文本
+	Rich Text Format (RTF)	RTF 格式
+	HTML Format	HTML 格式
+	Unformatted Text	无格式文本
+	Result	结果
+	Keeps the fonts and formatting of the copied text.	保留所复制文本的字体和格式。
+	Reads the clipboard's rich text and keeps its formatting.	读取剪贴板中的 RTF 内容并保留其格式。
+	Reads the clipboard's web content and keeps its formatting.	读取剪贴板中的网页内容并保留其格式。
+	Drops all formatting and pastes plain text.	去除所有格式，粘贴纯文本。
+	Advanced Find	高级查找
+	Advanced Find…	高级查找…
+	Go To…	定位…
+	Reading Highlight	突出显示查找结果
+	New Table Style	新建表格样式
+	Modify Table Style	修改表格样式
+	New Table Style…	新建表格样式…
+	Modify Table Style…	修改表格样式…
+	Apply formatting to:	将格式应用于：
+	Whole Table	整个表格
+	Fill color:	填充颜色：
+	{count} items highlighted	已突出显示 {count} 项
+	{n} pt	{n} 磅
+	Not {name}	非{name}
+	Level {n}	{n} 级
+	Body Text	正文文本
+	{n} lines	{n} 行
+	At least {n}	最小值 {n}
+	Exactly {n}	固定值 {n}
+	Centered	居中
+	Character spacing	字符间距
+	Don't add space between paragraphs of the same style	相同样式的段落间不添加间距
+	Don't hyphenate	不断字
+	Double strikethrough	双删除线
+	Drop cap	首字下沉
+	First line	首行
+	Font color	字体颜色
+	Highlight	突出显示
+	Justified	两端对齐
+	Left indent	左缩进
+	Line spacing	行距
+	Outline level	大纲级别
+	Raised/lowered	提升/降低
+	Right indent	右缩进
+	Scale	缩放
+	Space after	段后间距
+	Space before	段前间距
+	Suppress line numbers	取消行号
+	Underline color	下划线颜色
+	Letters	信函
+	E-mail Messages	电子邮件
+	Directory	目录
+	Normal Word Document	普通文档
+	If…Then…Else…	如果…则…否则…
+	If…Then…Else	如果…则…否则
+	Merge Record #	合并记录编号
+	Skip Record If…	跳过记录条件…
+	Skip Record If	跳过记录条件
+	Equals:	等于：
+	Then insert:	则插入：
+	Otherwise insert:	否则插入：
+	Courtesy Title	称谓
+	First Name	名
+	Last Name	姓
+	Company	公司
+	Address	地址
+	City	城市
+	State	省/州
+	Postal Code	邮政编码
+	Country	国家/地区
+	(not matched)	（未匹配）
+	Leave a recipient out of the merge when a field has this value.	当某个域为此值时，在合并中跳过该收件人。
+	Insert one text or another, depending on a field's value.	根据域的值插入不同的文本。
+	Select recipients first to match their fields.	请先选择收件人，才能匹配其域。
+	The recipient-list field that fills each part of an address block and greeting line.	地址块和问候语的每一部分所使用的收件人列表域。
+	No errors found: every merge field is in the recipient list.	未发现错误：所有合并域都在收件人列表中。
+	These merge fields aren't in the recipient list:	以下合并域不在收件人列表中：
+	Add at least one field.	请至少添加一个域。
+	Add Field	添加域
+	Every field needs a name.	每个域都需要名称。
+	Field name	域名称
+	Field names must be different.	域名称不能重复。
+	Fields:	域：
+	Field:	域：
+	Find:	查找：
+	New Entry	新建条目
+	Recipient List	收件人列表
+	Recipients: {count}	收件人：{count}
+	Remove field	删除域
+	Remove recipient	删除收件人
+	Select recipients first to choose from their fields.	请先选择收件人，才能从其域中选择。
+	Type a New List…	键入新列表…
+	Type at least one recipient.	请至少键入一个收件人。
+	Type the recipients, or load them from a file.	键入收件人，或从文件加载。
+	Use an Existing List…	使用现有列表…
+	Interface theme:	界面主题：
+	Interface\nTheme	界面主题
+	Interface Theme	界面主题
+	Light	浅色
+	Dark	深色
+	Use system setting	使用系统设置
+	A file dialog is already open.	已有一个文件对话框处于打开状态。

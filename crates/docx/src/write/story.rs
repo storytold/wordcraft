@@ -94,12 +94,25 @@ impl Writer<'_> {
             pp.drop_cap = None;
         }
         let section = if top { p.section.as_deref() } else { None };
-        let has_mark = super::props::has_rpr(&p.mark);
+        // A tracked paragraph mark: `w:ins` / `w:del` first in the mark's `w:rPr` (CT_ParaRPr).
+        let mark_revs: Vec<(u32, &str)> = [(p.mark.ins, "w:ins"), (p.mark.del, "w:del")]
+            .into_iter()
+            .filter_map(|(idx, tag)| idx.filter(|i| self.rev_kind(Some(*i)).is_some_and(|k| k != RevisionKind::Format)).map(|i| (i, tag)))
+            .collect();
+        let has_mark = super::props::has_rpr(&p.mark) || !mark_revs.is_empty();
         if !pp.is_empty() || has_mark || section.is_some() {
             w.open("w:pPr", &[]);
             ppr_inner(w, &pp, framed);
             if has_mark {
                 w.open("w:rPr", &[]);
+                for (idx, tag) in mark_revs {
+                    let (id, author, date) = self.rev_attrs(idx);
+                    if date.is_empty() {
+                        w.empty(tag, &[("w:id", &id), ("w:author", &author)]);
+                    } else {
+                        w.empty(tag, &[("w:id", &id), ("w:author", &author), ("w:date", &date)]);
+                    }
+                }
                 rpr_inner(w, &p.mark);
                 w.close("w:rPr");
             }

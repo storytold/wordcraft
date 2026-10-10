@@ -54,6 +54,9 @@
 	AutoSave documents you have saved in WordCraft	自動儲存在 WordCraft 中儲存過的文件
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	自動儲存失敗：{error}。重新儲存文件後將恢復自動儲存。
 	Dark page (white text on black)	深色頁面（黑底白字）
+	More templates →	更多範本 →
+	No templates match your search.	沒有符合搜尋的範本。
+	Search for templates	搜尋範本
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	像「檢視 › 切換模式」一樣以反轉的色彩顯示文件。儲存、列印和 PDF 不受影響。
 	AutoSave saves every change to the file (needs a saved document)	自動儲存會將每次變更寫入檔案（文件需已儲存）
 	AutoText	自動圖文集
@@ -167,7 +170,6 @@
 	Customize Quick Access Toolbar	自訂快速存取工具列
 	Cut	剪下
 	Dark Mode	深色模式
-	Dark mode	深色模式
 	Dashed	虛線
 	Data	資料
 	Date & Time	日期及時間
@@ -886,3 +888,118 @@
 	Opening print dialog…	正在開啟列印對話方塊…
 	Print failed: {error}	列印失敗：{error}
 	Couldn't open {path}: {error}	無法開啟 {path}：{error}
+	Column Selection	矩形選取
+	Style Inspector	樣式檢查器
+	Inspect Styles at Selection	檢查選取範圍的樣式
+	Clear Formatting Level	清除格式層級
+	Characters	字元
+	Direct formatting	直接格式設定
+	Reset to Normal	重設為內文
+	Clear Paragraph Formatting	清除段落格式設定
+	Clear Character Style	清除字元樣式
+	Clear Character Formatting	清除字元格式設定
+	Paste Special	選擇性貼上
+	Paste Special…	選擇性貼上…
+	Paste as:	貼上為：
+	The clipboard is empty.	剪貼簿是空的。
+	Formatted Text	格式化文字
+	Rich Text Format (RTF)	RTF 格式
+	HTML Format	HTML 格式
+	Unformatted Text	純文字
+	Result	結果
+	Keeps the fonts and formatting of the copied text.	保留所複製文字的字型和格式。
+	Reads the clipboard's rich text and keeps its formatting.	讀取剪貼簿中的 RTF 內容並保留其格式。
+	Reads the clipboard's web content and keeps its formatting.	讀取剪貼簿中的網頁內容並保留其格式。
+	Drops all formatting and pastes plain text.	移除所有格式，貼上純文字。
+	Advanced Find	進階尋找
+	Advanced Find…	進階尋找…
+	Go To…	移至…
+	Reading Highlight	醒目提示尋找結果
+	New Table Style	新增表格樣式
+	Modify Table Style	修改表格樣式
+	New Table Style…	新增表格樣式…
+	Modify Table Style…	修改表格樣式…
+	Apply formatting to:	將格式套用至：
+	Whole Table	整個表格
+	Fill color:	填滿色彩：
+	{count} items highlighted	已醒目提示 {count} 個項目
+	{n} pt	{n} 點
+	Not {name}	非{name}
+	Level {n}	第 {n} 階
+	Body Text	本文
+	{n} lines	{n} 行
+	At least {n}	最小行高 {n}
+	Exactly {n}	固定行高 {n}
+	Centered	置中
+	Character spacing	字元間距
+	Don't add space between paragraphs of the same style	相同樣式的段落之間不新增間距
+	Don't hyphenate	不斷字
+	Double strikethrough	雙刪除線
+	Drop cap	首字放大
+	First line	第一行
+	Font color	字型色彩
+	Highlight	醒目提示
+	Justified	左右對齊
+	Left indent	左縮排
+	Line spacing	行距
+	Outline level	大綱階層
+	Raised/lowered	上移/下移
+	Right indent	右縮排
+	Scale	縮放
+	Space after	段落後間距
+	Space before	段落前間距
+	Suppress line numbers	隱藏行號
+	Underline color	底線色彩
+	Letters	信函
+	E-mail Messages	電子郵件
+	Directory	目錄
+	Normal Word Document	一般文件
+	If…Then…Else…	如果…則…否則…
+	If…Then…Else	如果…則…否則
+	Merge Record #	合併記錄編號
+	Skip Record If…	略過記錄條件…
+	Skip Record If	略過記錄條件
+	Equals:	等於：
+	Then insert:	則插入：
+	Otherwise insert:	否則插入：
+	Courtesy Title	稱謂
+	First Name	名字
+	Last Name	姓氏
+	Company	公司
+	Address	地址
+	City	城市
+	State	省/州
+	Postal Code	郵遞區號
+	Country	國家/地區
+	(not matched)	（未對應）
+	Leave a recipient out of the merge when a field has this value.	當某個欄位為此值時，在合併中略過該收件者。
+	Insert one text or another, depending on a field's value.	依據欄位的值插入不同的文字。
+	Select recipients first to match their fields.	請先選取收件者，才能對應其欄位。
+	The recipient-list field that fills each part of an address block and greeting line.	地址區塊和問候語的每個部分所使用的收件者清單欄位。
+	No errors found: every merge field is in the recipient list.	未發現錯誤：所有合併欄位都在收件者清單中。
+	These merge fields aren't in the recipient list:	以下合併欄位不在收件者清單中：
+	Add at least one field.	請至少新增一個欄位。
+	Add Field	新增欄位
+	Every field needs a name.	每個欄位都需要名稱。
+	Field name	欄位名稱
+	Field names must be different.	欄位名稱不可重複。
+	Fields:	欄位：
+	Field:	欄位：
+	Find:	尋找：
+	New Entry	新增項目
+	Recipient List	收件者清單
+	Recipients: {count}	收件者：{count}
+	Remove field	移除欄位
+	Remove recipient	移除收件者
+	Select recipients first to choose from their fields.	請先選取收件者，才能從其欄位中選擇。
+	Type a New List…	輸入新清單…
+	Type at least one recipient.	請至少輸入一位收件者。
+	Type the recipients, or load them from a file.	輸入收件者，或從檔案載入。
+	Use an Existing List…	使用現有清單…
+	Interface theme:	介面主題：
+	Interface\nTheme	介面主題
+	Interface Theme	介面主題
+	Light	淺色
+	Dark	深色
+	Use system setting	使用系統設定
+	A file dialog is already open.	已有一個檔案對話方塊開啟中。

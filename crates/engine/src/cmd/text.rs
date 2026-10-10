@@ -335,7 +335,10 @@ fn backspace(s: &mut Session, _: &Value) -> CmdResult {
             let a = Pos { story: f.story, path: prev_path, off: prev.len() };
             // An empty paragraph before a non-empty one takes the latter's formatting (Word).
             if s.doc.settings.track_changes {
-                s.sel = Selection::caret(a);
+                // Tracked: the paragraph mark above is marked deleted (or removed, when this
+                // author inserted it) and the caret moves before it, as in Word.
+                s.sel = Selection { anchor: a, focus: f };
+                delete_selection(s)?;
                 return sel_result(s);
             }
             let at = s.doc.delete_range(&a, &f)?;
@@ -375,10 +378,18 @@ fn delete(s: &mut Session, _: &Value) -> CmdResult {
     // At the end: join with the next paragraph in the same container.
     let next = f.path.with_last(f.path.last() + 1);
     if let Some(Block::Para(_)) = s.doc.block(f.story, &next) {
+        let b = Pos { story: f.story, path: next, off: 0 };
         if s.doc.settings.track_changes {
+            // Tracked: the paragraph mark is marked deleted (or removed, when this author
+            // inserted it). A mark left in place as a deletion is stepped over, as in Word.
+            let blocks = s.doc.container(f.story, &f.path).map(|c| c.len());
+            s.sel = Selection { anchor: f.clone(), focus: b.clone() };
+            delete_selection(s)?;
+            if s.doc.container(f.story, &f.path).map(|c| c.len()) == blocks && s.doc.para_at(&f).is_some_and(|p| p.mark.del.is_some()) {
+                s.sel = Selection::caret(b);
+            }
             return sel_result(s);
         }
-        let b = Pos { story: f.story, path: next, off: 0 };
         let at = s.doc.delete_range(&f, &b)?;
         s.sel = Selection::caret(at);
     } else if let Some(Block::Table(_)) = s.doc.block(f.story, &next) {

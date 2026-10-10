@@ -34,5 +34,8 @@ fmv-macos-events = "=0.1.0"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rfd = { workspace = true }
+# Waits for an `rfd::AsyncFileDialog` on a background thread (the dialogs don't block the UI, #94);
+# rfd itself already depends on it.
+pollster = "0.4"
 # The control server's random key.
 getrandom = "0.3"

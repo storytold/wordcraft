@@ -1,19 +1,23 @@
 //! Hit testing and caret geometry.
 
 use wordcraft_doc::para::Wrap;
+use wordcraft_doc::props::TextDirection;
 use wordcraft_doc::{Document, Path, Pos, StoryRef};
 use wordcraft_geom::{Point, Rect};
 
 use crate::para::ParaLayout;
 use crate::{DocLayout, Page, Placed};
 
-/// Caret geometry on a page.
+/// Caret geometry on a page: a bar from (`x`, `top`) to (`x + width`, `top + height`). It is
+/// upright (`width` 0) except in turned text (a table cell's text direction), where it lies
+/// across the page (`height` 0).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Caret {
     pub page: usize,
     pub x: f32,
     pub top: f32,
     pub height: f32,
+    pub width: f32,
 }
 
 /// Result of [`DocLayout::visual_step`].
@@ -98,6 +102,9 @@ fn text_at(p: &Page, index: usize, x: f32, y: f32) -> Option<StoryRef> {
     let boxes: Vec<StoryRef> = objects(p, index).filter_map(|o| o.text_box.map(StoryRef::Part)).collect();
     p.items.iter().find_map(|it| match it {
         Placed::Lines { story, .. } if boxes.contains(story) => None,
+        Placed::Lines { story, .. } if it.turned_bounds().is_some() => {
+            it.turned_bounds().filter(|r| r.expand(2.0).contains(Point::new(x, y))).map(|_| *story)
+        }
         Placed::Lines { story, para, l0, l1, x: lx, y: ly, .. } => {
             let first = para.lines.get(*l0)?;
             let last = para.lines.get(l1.checked_sub(1)?)?;
@@ -117,12 +124,13 @@ fn items_of(page: &Page, story: StoryRef) -> Box<dyn Iterator<Item = &Placed> + 
     }
 }
 
-/// Every line on a page that belongs to `story` (body, or a header/footer part).
+/// Every upright line on a page that belongs to `story` (body, or a header/footer part).
+/// Turned lines (see [`turned_hit`]) are left out.
 pub fn page_lines(page: &Page, story: StoryRef) -> Vec<LineHit<'_>> {
     let mut v = Vec::new();
     for it in items_of(page, story) {
-        if let Placed::Lines { story: s, path, para, l0, l1, x, y } = it {
-            if *s != story {
+        if let Placed::Lines { story: s, path, para, l0, l1, x, y, turn } = it {
+            if *s != story || turn.is_turned() {
                 continue;
             }
             let Some(first) = para.lines.get(*l0) else { continue };
@@ -136,10 +144,43 @@ pub fn page_lines(page: &Page, story: StoryRef) -> Vec<LineHit<'_>> {
     v
 }
 
+/// The position in turned text (a table cell's text direction) of `story` under page point
+/// (x, y), if there is turned text there.
+fn turned_hit(page: &Page, story: StoryRef, x: f32, y: f32) -> Option<Pos> {
+    items_of(page, story).find_map(|it| {
+        let Placed::Lines { story: s, path, para, l0, l1, x: ox, y: oy, turn } = it else { return None };
+        if *s != story || !it.turned_bounds()?.expand(2.0).contains(Point::new(x, y)) {
+            return None;
+        }
+        let (u, v) = crate::unturn_point(*turn, *ox, *oy, x, y);
+        let first = para.lines.get(*l0)?;
+        // The line across whose band v falls, else the nearest.
+        let li = (*l0..*l1)
+            .filter_map(|li| para.lines.get(li).map(|l| (li, l.top - first.top, l.height)))
+            .min_by(|a, b| band_dist(v, a.1, a.2).total_cmp(&band_dist(v, b.1, b.2)))?
+            .0;
+        Some(Pos { story: *s, path: path.clone(), off: para.off_at_x(li, u) })
+    })
+}
+
+/// How far `v` is outside the band `top..top + h`.
+fn band_dist(v: f32, top: f32, h: f32) -> f32 {
+    if v < top {
+        top - v
+    } else if v > top + h {
+        v - top - h
+    } else {
+        0.0
+    }
+}
+
 impl DocLayout {
     /// The position nearest to (x, y) on `page`, in `story`.
     pub fn hit(&self, page: usize, x: f32, y: f32, story: StoryRef) -> Option<Pos> {
         let p = self.pages.get(page)?;
+        if let Some(pos) = turned_hit(p, story, x, y) {
+            return Some(pos);
+        }
         let lines = page_lines(p, story);
         let best = lines.iter().min_by(|a, b| score(a, x, y).total_cmp(&score(b, x, y)))?;
         let off = best.para.off_at_x(best.li, x - best.x);
@@ -244,7 +285,7 @@ impl DocLayout {
 
     pub fn caret_on(&self, pos: &Pos, page_hint: usize) -> Option<Caret> {
         for (pi, it) in self.pieces(pos.story, &pos.path, page_hint) {
-            let Placed::Lines { para, l0, l1, x, y, .. } = it else { continue };
+            let Placed::Lines { para, l0, l1, x, y, turn, .. } = it else { continue };
             let li = para.line_of(pos.off);
             if li < *l0 || li >= *l1 {
                 continue;
@@ -252,14 +293,14 @@ impl DocLayout {
             let first = para.lines.get(*l0)?;
             let l = para.lines.get(li)?;
             let cx = para.x_of(li, pos.off)?;
-            let top = y + (l.top - first.top);
+            // In the lines' own frame (turned text turns it onto the page).
+            let top = l.top - first.top;
             // Caret spans the text height (ascent + descent), not the full line spacing.
             let (asc, desc) = para.caret_metrics(li);
             let base = top + (l.baseline - l.top);
-            let h = (asc + desc).min(l.height.max(asc + desc));
             let ctop = (base - asc).max(top);
-            let _ = h;
-            return Some(Caret { page: pi, x: x + cx, top: ctop, height: (base + desc - ctop).max(4.0) });
+            let r = crate::turn_rect(*turn, *x, *y, Rect::new(cx, ctop, 0.0, (base + desc - ctop).max(4.0)));
+            return Some(Caret { page: pi, x: r.x, top: r.y, height: r.h, width: r.w });
         }
         None
     }
@@ -332,14 +373,51 @@ impl DocLayout {
         None
     }
 
+    /// Column (block) selection: the piece of every line from the line holding `a` to the line
+    /// holding `b` (document order) that lies between page x `left` and `right`. One `(start,
+    /// end)` pair per line, both in the same paragraph; lines shorter than `left` give an empty
+    /// pair. At most `max` lines.
+    pub fn column_segments(&self, doc: &Document, a: &Pos, b: &Pos, left: f32, right: f32, page_hint: usize, max: usize) -> Vec<(Pos, Pos)> {
+        let (a, b) = if a <= b { (a, b) } else { (b, a) };
+        let (left, right) = if left <= right { (left, right) } else { (right, left) };
+        let mut out = Vec::new();
+        if a.story != b.story || !left.is_finite() || !right.is_finite() {
+            return out;
+        }
+        for path in doc.paths_between(a, b) {
+            for (_, it) in self.pieces(a.story, &path, page_hint) {
+                let Placed::Lines { para, l0, l1, x, .. } = it else { continue };
+                let first = if path == a.path { para.line_of(a.off) } else { 0 };
+                let last = if path == b.path { para.line_of(b.off) } else { usize::MAX };
+                for li in *l0..*l1 {
+                    if li < first || li > last {
+                        continue;
+                    }
+                    if out.len() >= max {
+                        return out;
+                    }
+                    let o0 = para.off_at_x(li, left - x);
+                    let o1 = para.off_at_x(li, right - x);
+                    let (o0, o1) = if o0 <= o1 { (o0, o1) } else { (o1, o0) };
+                    let mk = |off| Pos { story: a.story, path: path.clone(), off };
+                    out.push((mk(o0), mk(o1)));
+                }
+            }
+        }
+        out
+    }
+
     /// Highlight rectangles for the selection `a..b`, per page.
     pub fn selection_rects(&self, doc: &Document, a: &Pos, b: &Pos, page_hint: usize) -> Vec<(usize, Rect)> {
         let (a, b) = if a <= b { (a, b) } else { (b, a) };
         let mut out = Vec::new();
         for path in doc.paths_between(a, b) {
             for (pi, it) in self.pieces(a.story, &path, page_hint) {
-                let Placed::Lines { para, l0, l1, x, y, .. } = it else { continue };
+                let Placed::Lines { para, l0, l1, x, y, turn, .. } = it else { continue };
                 let Some(first) = para.lines.get(*l0) else { continue };
+                // Rectangles in the lines' own frame, turned onto the page.
+                let (ox, oy, turn) = (*x, *y, *turn);
+                let mut put = |r: Rect| out.push((pi, crate::turn_rect(turn, ox, oy, r)));
                 for li in *l0..*l1 {
                     let Some(l) = para.lines.get(li) else { continue };
                     let from = if path == a.path { a.off.max(l.start) } else { l.start };
@@ -353,17 +431,17 @@ impl DocLayout {
                     if from > to {
                         continue;
                     }
-                    let top = y + (l.top - first.top);
+                    let top = l.top - first.top;
                     if !l.vis.is_empty() {
                         // Bidirectional line: the selected text can be several visual pieces.
                         for (x0, x1) in para.x_spans(li, from, to) {
-                            out.push((pi, Rect::new(x + x0, top, (x1 - x0).max(0.0), l.height)));
+                            put(Rect::new(x0, top, (x1 - x0).max(0.0), l.height));
                         }
                         // Selection continuing past the paragraph end shows the paragraph mark.
                         if li + 1 == para.lines.len() && path != b.path {
                             let ex = l.end_x();
                             let x0 = if l.rtl { ex - 5.0 } else { ex };
-                            out.push((pi, Rect::new(x + x0, top, 5.0, l.height)));
+                            put(Rect::new(x0, top, 5.0, l.height));
                         }
                         continue;
                     }
@@ -380,7 +458,7 @@ impl DocLayout {
                     if x1 <= x0 && !(last_line && path != b.path) {
                         continue;
                     }
-                    out.push((pi, Rect::new(x + x0, top, (x1 - x0).max(0.0), l.height)));
+                    put(Rect::new(x0, top, (x1 - x0).max(0.0), l.height));
                 }
             }
         }
@@ -419,7 +497,8 @@ impl DocLayout {
     /// baseline (page coordinates), and its layout.
     pub fn equation_geom(&self, pos: &Pos, page_hint: usize) -> Option<(usize, f32, f32, std::sync::Arc<crate::math::MathLayout>)> {
         for (pi, it) in self.pieces(pos.story, &pos.path, page_hint) {
-            let Placed::Lines { para, l0, l1, x, y, .. } = it else { continue };
+            // Equations in turned text aren't edited in place.
+            let Placed::Lines { para, l0, l1, x, y, turn: TextDirection::Horizontal, .. } = it else { continue };
             let li = para.line_of(pos.off);
             if li < *l0 || li >= *l1 {
                 continue;

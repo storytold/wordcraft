@@ -245,8 +245,16 @@ fn nav_comment(s: &mut Session, dir: i32) -> CmdResult {
     sel_result(s)
 }
 
-/// Accept or reject a revision range in one paragraph.
-fn resolve_para(s: &mut Session, story: StoryRef, path: &wordcraft_doc::Path, from: usize, to: usize, accept: bool) -> Result<(), CmdError> {
+/// Accept or reject a revision range in one paragraph; `mark` includes its paragraph mark.
+fn resolve_para(
+    s: &mut Session,
+    story: StoryRef,
+    path: &wordcraft_doc::Path,
+    from: usize,
+    to: usize,
+    mark: bool,
+    accept: bool,
+) -> Result<(), CmdError> {
     let para = s.doc.para_mut(story, path)?;
     let ranges: Vec<(usize, usize, bool, bool)> = para
         .run_ranges()
@@ -263,10 +271,37 @@ fn resolve_para(s: &mut Session, story: StoryRef, path: &wordcraft_doc::Path, fr
             })?;
         }
     }
-    if para.mark.ins.is_some() {
-        para.mark.ins = None;
+    let (ins, del) = (para.mark.ins, para.mark.del);
+    if !mark || (ins.is_none() && del.is_none()) {
+        return Ok(());
     }
+    // An inserted paragraph mark that is rejected, or a deleted one that is accepted, goes away:
+    // the next paragraph joins this one (the split is undone). The mark at the end of a story
+    // or cell can't go, so it just stops being a revision.
+    if ((del.is_some() && accept) || (ins.is_some() && !accept)) && super::join_next_para(s, story, path)? {
+        return Ok(());
+    }
+    let para = s.doc.para_mut(story, path)?;
+    para.mark.ins = None;
+    para.mark.del = None;
+    para.touch();
     Ok(())
+}
+
+/// The tracked paragraph mark at the end of the paragraph at `path`, as a change range: from
+/// the paragraph's end to the start of the next paragraph (or the end itself when none follows).
+fn mark_change(s: &Session, story: StoryRef, path: &wordcraft_doc::Path) -> Option<(Pos, Pos, &'static str, Option<u32>)> {
+    let p = s.doc.para(story, path)?;
+    let kind = if p.mark.ins.is_some() {
+        "insert"
+    } else if p.mark.del.is_some() {
+        "delete"
+    } else {
+        return None;
+    };
+    let a = Pos { story, path: path.clone(), off: p.len() };
+    let b = if super::has_next_para(s, story, path) { Pos { story, path: path.with_last(path.last().saturating_add(1)), off: 0 } } else { a.clone() };
+    Some((a, b, kind, p.mark.ins.or(p.mark.del)))
 }
 
 fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
@@ -274,7 +309,7 @@ fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
     for st in stories {
         for path in s.doc.para_paths(st).into_iter().rev() {
             let len = s.doc.para(st, &path).map(|p| p.len()).unwrap_or(0);
-            resolve_para(s, st, &path, 0, len, accept)?;
+            resolve_para(s, st, &path, 0, len, true, accept)?;
         }
     }
     s.doc.revisions.clear();
@@ -284,14 +319,20 @@ fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
 
 fn resolve_sel(s: &mut Session, accept: bool) -> CmdResult {
     let (a, b) = s.sel.ordered();
+    // A caret right before a tracked paragraph mark (and no tracked text around it): that mark.
+    let mut caret_mark = None;
     let (a, b) = if a == b {
-        // The change at the caret: the run around it.
+        // The change at the caret: the run around it, else the paragraph mark right after it.
         let found = s
             .doc
             .para_at(&a)
             .and_then(|p| p.run_ranges().find(|(r, c)| r.start <= a.off && a.off <= r.end && (c.ins.is_some() || c.del.is_some())).map(|(r, _)| r));
         match found {
             Some(r) => (Pos { off: r.start, ..a.clone() }, Pos { off: r.end, ..a }),
+            None if mark_change(s, a.story, &a.path).is_some_and(|m| m.0 == a) => {
+                caret_mark = Some(a.path.clone());
+                (a.clone(), a)
+            }
             None => return nav_change(s, 1),
         }
     } else {
@@ -301,7 +342,9 @@ fn resolve_sel(s: &mut Session, accept: bool) -> CmdResult {
         let len = s.doc.para(a.story, &path).map(|p| p.len()).unwrap_or(0);
         let from = if path == a.path { a.off } else { 0 };
         let to = if path == b.path { b.off } else { len };
-        resolve_para(s, a.story, &path, from, to, accept)?;
+        // A paragraph's mark is in the selection when the selection goes on past it.
+        let mark = path != b.path || caret_mark.as_ref() == Some(&path);
+        resolve_para(s, a.story, &path, from, to, mark, accept)?;
     }
     s.sel = Selection::caret(a);
     s.clamp_selection();
@@ -323,6 +366,7 @@ fn changes(s: &Session) -> Vec<(Pos, Pos, &'static str, Option<u32>)> {
             let mk = |off| Pos { story: StoryRef::Body, path: path.clone(), off };
             out.push((mk(r.start), mk(r.end), kind, c.ins.or(c.del)));
         }
+        out.extend(mark_change(s, StoryRef::Body, &path));
     }
     out
 }
