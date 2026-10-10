@@ -12,7 +12,7 @@ use wordcraft_doc::resolve::{ResolvedChar, ResolvedPara};
 use wordcraft_doc::{Document, Paragraph};
 use wordcraft_fonts::FaceRef;
 
-use crate::fields::{FieldCtx, field_text};
+use crate::fields::{FIELD_SHADING, FieldCtx, field_code_text, field_text};
 
 /// A face at a size with the formatting needed to draw it.
 #[derive(Clone, Debug)]
@@ -278,6 +278,8 @@ pub struct ParaEnv<'a> {
     pub label: Option<(String, Level)>,
     pub fields: &'a FieldCtx,
     pub show_hidden: bool,
+    /// Show field codes instead of results ([`crate::LayoutOptions::field_codes`]).
+    pub field_codes: bool,
     /// Leave tracked deletions out, like hidden text (the final, "No Markup" text).
     pub hide_deleted: bool,
     /// The table style's formatting for text in this paragraph's cell (`None` outside tables).
@@ -750,10 +752,19 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                                 push(&mut b, ClKind::Object(k), 0.0, 0.0);
                             }
                         }
-                        Some(InlineObject::Field { instr, result, .. }) => {
-                            let (t, page_dep) = field_text(instr, result, env.fields);
-                            has_page_fields |= page_dep;
-                            b.shape_atomic(&t, start, end, &rc);
+                        Some(InlineObject::Field { instr, result, code, .. }) => {
+                            if env.field_codes != *code {
+                                // The code in braces on grey, like Word's field shading.
+                                let mut shaded = (*rc).clone();
+                                if shaded.highlight.is_none() && shaded.shading.is_none() {
+                                    shaded.shading = Some(FIELD_SHADING);
+                                }
+                                b.shape_atomic(&field_code_text(instr), start, end, &Arc::new(shaded));
+                            } else {
+                                let (t, page_dep) = field_text(instr, result, env.fields);
+                                has_page_fields |= page_dep;
+                                b.shape_atomic(&t, start, end, &rc);
+                            }
                         }
                         Some(InlineObject::NoteRef { kind, id, custom }) => {
                             let num = if custom.is_empty() {

@@ -612,7 +612,8 @@ fn table_without_style_stays_borderless() {
 fn headers_and_page_fields() {
     let mut d = Document::from_text(&"para\n".repeat(120));
     let mut hp = wordcraft_doc::Paragraph::new();
-    hp.insert_object(0, InlineObject::Field { instr: "PAGE".into(), result: String::new(), locked: false }, &Default::default()).unwrap();
+    hp.insert_object(0, InlineObject::Field { instr: "PAGE".into(), result: String::new(), locked: false, code: false }, &Default::default())
+        .unwrap();
     let id = d.add_part(wordcraft_doc::PartKind::Footer, vec![wordcraft_doc::para_block(hp)]);
     d.last_section.footers.default = Some(id);
     let l = lay(&d);
@@ -857,7 +858,11 @@ fn runs_differing_only_in_link_or_decoration_keep_their_own_style() {
 fn web_view_is_one_page() {
     let d = Document::from_text(&"text ".repeat(3000));
     let mut c = LayoutCache::new();
-    let l = layout(&d, &mut c, &LayoutOptions { view: ViewMode::Web, web_width: 800.0, show_hidden: false, hide_deleted: false, proofing: false });
+    let l = layout(
+        &d,
+        &mut c,
+        &LayoutOptions { view: ViewMode::Web, web_width: 800.0, show_hidden: false, hide_deleted: false, proofing: false, field_codes: false },
+    );
     assert_eq!(l.pages.len(), 1);
     assert!(l.pages[0].h > 800.0);
 }

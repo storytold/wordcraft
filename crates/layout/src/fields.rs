@@ -61,6 +61,14 @@ fn format_switch(instr: &str) -> Option<NumFormat> {
     None
 }
 
+/// The light grey behind a field shown as its code.
+pub const FIELD_SHADING: wordcraft_doc::props::Rgb = wordcraft_doc::props::Rgb(0xD9, 0xD9, 0xD9);
+
+/// What a field shows in code view: its instruction in braces, `{ PAGE }`.
+pub fn field_code_text(instr: &str) -> String {
+    format!("{{ {} }}", instr.trim())
+}
+
 /// Display text for a field and whether it depends on the page it lands on.
 pub fn field_text(instr: &str, result: &str, ctx: &FieldCtx) -> (String, bool) {
     let name = field_name(instr);
@@ -89,5 +97,7 @@ mod tests {
         assert_eq!(field_text("NUMPAGES \\* CardText", "", &ctx).0, "Twelve");
         assert_eq!(field_text("DATE \\@ \"M/d/yyyy\"", "1/2/2026", &ctx), ("1/2/2026".into(), false));
         assert_eq!(field_name("=SUM(ABOVE)"), "SUM(ABOVE)");
+        assert_eq!(field_code_text(" PAGE \\* ROMAN "), "{ PAGE \\* ROMAN }");
+        assert_eq!(field_code_text(""), "{  }");
     }
 }

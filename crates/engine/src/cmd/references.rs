@@ -57,8 +57,10 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("references.caption", "Insert Caption", "References › Captions", caption)
             .params(r#"{"label"?: "Figure|Table|Equation", "text"?: string}"#),
+        // F9: update fields; the selected ones that showed their code show their result again.
         CommandSpec::new("references.updateFields", "Update Field", "References", |s, _| {
             update_fields(s)?;
+            super::fields::show_results(s)?;
             sel_result(s)
         })
         .key("F9"),
@@ -142,7 +144,7 @@ fn insert_toc(s: &mut Session, v: &Value) -> CmdResult {
     let mut head = Paragraph::with_text(&title, CharProps::default()).styled("TOCHeading");
     head.insert_object(
         head.len(),
-        InlineObject::Field { instr: format!("TOC \\o \"1-{levels}\" \\h \\z \\u"), result: String::new(), locked: false },
+        InlineObject::Field { instr: format!("TOC \\o \"1-{levels}\" \\h \\z \\u"), result: String::new(), locked: false, code: false },
         &CharProps::default(),
     )?;
     let i = if s.doc.para_at(&at).is_some_and(|p| p.is_empty()) { at.path.last() } else { s.doc.split_paragraph(&at)?.path.last() };
@@ -253,7 +255,7 @@ fn caption(s: &mut Session, v: &Value) -> CmdResult {
     para.insert_text(0, &base, &CharProps::default())?;
     para.insert_object(
         base.len(),
-        InlineObject::Field { instr: format!("SEQ {label} \\* ARABIC"), result: n.to_string(), locked: false },
+        InlineObject::Field { instr: format!("SEQ {label} \\* ARABIC"), result: n.to_string(), locked: false, code: false },
         &CharProps::default(),
     )?;
     let end = para.len();

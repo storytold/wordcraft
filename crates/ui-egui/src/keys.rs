@@ -40,6 +40,7 @@ pub fn key_name(k: Key) -> Option<&'static str> {
         Key::F7 => "F7",
         Key::F8 => "F8",
         Key::F9 => "F9",
+        Key::F11 => "F11",
         Key::F12 => "F12",
         Key::A => "A",
         Key::B => "B",
@@ -275,7 +276,7 @@ pub fn global_shortcuts(app: &mut WordApp, ctx: &egui::Context) {
     let events = ctx.input(|i| i.events.clone());
     for e in events {
         if let egui::Event::Key { key, pressed: true, modifiers, .. } = e
-            && (modifiers.command || matches!(key, Key::F3 | Key::F5 | Key::F7 | Key::F9 | Key::F12))
+            && (modifiers.command || matches!(key, Key::F3 | Key::F5 | Key::F7 | Key::F9 | Key::F11 | Key::F12))
         {
             dispatch(app, key, modifiers);
         }

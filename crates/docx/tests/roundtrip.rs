@@ -277,7 +277,8 @@ fn sections_headers_footers_round_trip() {
     let mut d = Document::new();
     let page = |instr: &str| {
         let mut p = Paragraph::with_text("Page ", CharProps::default());
-        p.insert_object(5, InlineObject::Field { instr: instr.into(), result: "1".into(), locked: false }, &CharProps::default()).unwrap();
+        p.insert_object(5, InlineObject::Field { instr: instr.into(), result: "1".into(), locked: false, code: false }, &CharProps::default())
+            .unwrap();
         p
     };
     let h1 = d.add_part(PartKind::Header, vec![para_block(Paragraph::with_text("Header one", CharProps::default()))]);
@@ -322,7 +323,7 @@ fn sections_headers_footers_round_trip() {
     assert_eq!(part_text(&r, secs[0].1.headers.first), "First page header");
     assert_eq!(secs[0].1.headers.default, secs[1].1.headers.default, "shared header part stays shared");
     let fp = r.parts.get(&secs[0].1.footers.default.unwrap()).unwrap().blocks[0].as_para().unwrap();
-    assert_eq!(fp.objects, vec![InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false }]);
+    assert_eq!(fp.objects, vec![InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, code: false }]);
     assert_eq!(part_text(&r, secs[1].1.footers.default), "Page 1");
     assert_eq!(r.parts.get(&secs[0].1.headers.default.unwrap()).unwrap().kind, PartKind::Header);
 }
@@ -620,7 +621,7 @@ fn toc_field_wraps_its_entries() {
     let end = head.len();
     head.insert_object(
         end,
-        InlineObject::Field { instr: "TOC \\o \"1-2\" \\h \\z \\u".into(), result: String::new(), locked: false },
+        InlineObject::Field { instr: "TOC \\o \"1-2\" \\h \\z \\u".into(), result: String::new(), locked: false, code: false },
         &CharProps::default(),
     )
     .unwrap();
@@ -700,7 +701,7 @@ fn toc_field_skips_nested_stories() {
     let end = head.len();
     head.insert_object(
         end,
-        InlineObject::Field { instr: "TOC \\o \"1-1\" \\h \\z \\u".into(), result: String::new(), locked: false },
+        InlineObject::Field { instr: "TOC \\o \"1-1\" \\h \\z \\u".into(), result: String::new(), locked: false, code: false },
         &CharProps::default(),
     )
     .unwrap();
@@ -739,7 +740,7 @@ fn tracked_changes_round_trip() {
     let p = para_runs(&[("kept ", CharProps::default()), ("added\t", ins.clone()), ("removed", del.clone()), ("gone", both.clone())]);
     let mut p = p;
     let end = p.len();
-    p.insert_object(end, InlineObject::Field { instr: "DATE".into(), result: "today".into(), locked: false }, &del).unwrap();
+    p.insert_object(end, InlineObject::Field { instr: "DATE".into(), result: "today".into(), locked: false, code: false }, &del).unwrap();
     d.body = vec![para_block(p.clone())];
     let r = rt(&d);
     assert_eq!(r.revisions, d.revisions);
@@ -786,9 +787,9 @@ fn tracked_paragraph_marks_round_trip() {
 fn fields_and_special_chars_round_trip() {
     let mut p = Paragraph::with_text("a\tb\nc\u{000C}d\u{000E}e\u{2011}f\u{00AD}g  spaced  ", CharProps::default());
     let fields = [
-        InlineObject::Field { instr: "PAGE".into(), result: "4".into(), locked: false },
-        InlineObject::Field { instr: "DATE \\@ \"M/d/yyyy\"".into(), result: "1/2/2026".into(), locked: true },
-        InlineObject::Field { instr: "NUMPAGES".into(), result: String::new(), locked: false },
+        InlineObject::Field { instr: "PAGE".into(), result: "4".into(), locked: false, code: false },
+        InlineObject::Field { instr: "DATE \\@ \"M/d/yyyy\"".into(), result: "1/2/2026".into(), locked: true, code: false },
+        InlineObject::Field { instr: "NUMPAGES".into(), result: String::new(), locked: false, code: false },
     ];
     for f in &fields {
         let end = p.len();

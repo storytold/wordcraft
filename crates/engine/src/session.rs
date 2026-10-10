@@ -83,6 +83,9 @@ pub struct ViewState {
     /// Draw tab: the tool dragging on the page uses, and each pen's colour and thickness.
     #[serde(default)]
     pub draw: crate::cmd::draw::DrawState,
+    /// Show field codes instead of their results (`view.fieldCodes`, Alt+F9).
+    #[serde(default)]
+    pub field_codes: bool,
 }
 
 fn on() -> bool {
@@ -114,6 +117,7 @@ impl Default for ViewState {
             proofing: true,
             hide_ink: false,
             draw: Default::default(),
+            field_codes: false,
         }
     }
 }
@@ -398,6 +402,7 @@ impl Session {
             show_hidden: self.view.marks,
             hide_deleted: !self.view.show_markup || self.prefs.markup.hides_deletions(),
             proofing: self.view.proofing,
+            field_codes: self.view.field_codes,
         };
         let l = Arc::new(wordcraft_layout::layout(&self.doc, &mut self.cache, &opts));
         self.layout = Some((self.rev, ww, self.view.mode, l.clone(), self.view.proofing));
@@ -405,7 +410,8 @@ impl Session {
     }
     /// A layout for output (PDF, images, print): no proofing marks, print view.
     pub fn export_layout(&self) -> Arc<DocLayout> {
-        let opts = LayoutOptions { view: ViewMode::Print, web_width: 0.0, show_hidden: false, hide_deleted: false, proofing: false };
+        let opts =
+            LayoutOptions { view: ViewMode::Print, web_width: 0.0, show_hidden: false, hide_deleted: false, proofing: false, field_codes: false };
         Arc::new(wordcraft_layout::layout(&self.doc, &mut LayoutCache::new(), &opts))
     }
 

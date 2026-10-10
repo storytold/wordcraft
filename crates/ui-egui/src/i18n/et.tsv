@@ -1323,4 +1323,13 @@
 	Type the field's name and its switches, for example PAGE \\* roman.	Sisesta välja nimi ja lülitid, näiteks PAGE \\* roman.
 	Width and spacing	Laius ja vahe
 	from Unicode (hex)	Unicode (kuueteistkümnend)
+	Toggle Field Codes	Lülita väljakoodid sisse/välja
+	Edit Field Code	Redigeeri väljakoodi
+	Unlink Fields	Eemalda väljade link
+	Lock Fields	Lukusta väljad
+	Unlock Fields	Ava väljade lukk
+	Next Field	Järgmine väli
+	Previous Field	Eelmine väli
+	Selected Fields	Valitud väljad
+	Edit Field…	Redigeeri välja…
 	Formatted	Vormindatud

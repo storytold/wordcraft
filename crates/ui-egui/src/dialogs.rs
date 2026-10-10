@@ -188,6 +188,13 @@ pub enum Dialog {
         fields: Vec<String>,
         field: String,
     },
+    /// A field's code: a new field (Ctrl+F9, `edit` false) or the selected field's code to edit
+    /// (double-click a field showing its code, right-click › Edit Field…).
+    FieldCode {
+        code: String,
+        edit: bool,
+        message: String,
+    },
     /// Mailings › Find Recipient.
     FindRecipient {
         text: String,
@@ -641,6 +648,8 @@ impl Dialog {
             Dialog::RecipientList { .. } => "recipientList",
             Dialog::InsertMergeField { .. } => "insertMergeField",
             Dialog::FindRecipient { .. } => "findRecipient",
+            Dialog::FieldCode { edit: false, .. } => "fieldCode",
+            Dialog::FieldCode { .. } => "editFieldCode",
             Dialog::MergeRule { rule, .. } if rule == "SKIPIF" => "ruleSkipIf",
             Dialog::MergeRule { .. } => "ruleIf",
             Dialog::MatchFields { .. } => "matchFields",
@@ -794,6 +803,11 @@ impl Dialog {
                 Dialog::InsertMergeField { field: fields.first().cloned().unwrap_or_default(), fields }
             }
             "findRecipient" => Dialog::FindRecipient { text: String::new(), message: String::new() },
+            "fieldCode" => Dialog::FieldCode { code: String::new(), edit: false, message: String::new() },
+            "editFieldCode" => {
+                let field = wordcraft_engine::cmd::fields::selected(&app.session).into_iter().next()?;
+                Dialog::FieldCode { code: field.instr, edit: true, message: String::new() }
+            }
             "encryptPassword" => Dialog::EncryptPassword { password: Password::default(), confirm: Password::default(), message: String::new() },
             "ruleIf" | "ruleSkipIf" => {
                 let fields = app.session.merge.headers.clone();
@@ -929,6 +943,8 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::RecipientList { .. } => "Recipient List",
         Dialog::InsertMergeField { .. } => "Insert Merge Field",
         Dialog::FindRecipient { .. } => "Find Recipient",
+        Dialog::FieldCode { edit: false, .. } => "Field",
+        Dialog::FieldCode { .. } => "Edit Field Code",
         Dialog::MergeRule { rule, .. } if rule == "SKIPIF" => "Skip Record If",
         Dialog::MergeRule { .. } => "If…Then…Else",
         Dialog::MatchFields { .. } => "Match Fields",
@@ -1779,6 +1795,30 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         }
         Dialog::DefineList { form } => crate::dialogs_lists::define_list(app, ui, form),
         Dialog::TrackOptions { form } => crate::dialogs_lists::track_options(app, ui, form),
+        Dialog::FieldCode { code, edit, message } => {
+            ui.label(tl!("Field codes:"));
+            let r = ui.add(egui::TextEdit::singleline(code).desired_width(320.0).font(egui::TextStyle::Monospace));
+            if !r.has_focus() && code.is_empty() {
+                r.request_focus();
+            }
+            ui.label(egui::RichText::new("PAGE · NUMPAGES · DATE \\@ \"MMMM d, yyyy\" · AUTHOR · TITLE · SEQ Figure").small().weak());
+            if !message.is_empty() {
+                ui.label(egui::RichText::new(message.as_str()).small().weak());
+            }
+            let (ok, cancel) = buttons(ui, tl!("OK"));
+            if ok && !code.trim().is_empty() {
+                let r = if *edit {
+                    app.run("fields.setCode", json!({"code": code.trim()}))
+                } else {
+                    app.run("insert.field", json!({"instr": code.trim()}))
+                };
+                match r {
+                    Ok(_) => return true,
+                    Err(e) => *message = e,
+                }
+            }
+            cancel
+        }
         Dialog::FindRecipient { text, message } => {
             ui.horizontal(|ui| {
                 ui.label(tl!("Find:"));

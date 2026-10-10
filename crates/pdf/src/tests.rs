@@ -414,7 +414,7 @@ fn fields_put_their_shown_text_in_the_text_layer() {
     // characters, are what copying, search and screen readers get.
     let mut d = Document::new();
     let mut f = Paragraph::with_text("Page  of ", CharProps::default());
-    let field = |instr: &str| InlineObject::Field { instr: instr.into(), result: String::new(), locked: false };
+    let field = |instr: &str| InlineObject::Field { instr: instr.into(), result: String::new(), locked: false, code: false };
     f.insert_object(5, field("PAGE"), &CharProps::default()).unwrap();
     let n = f.len();
     f.insert_object(n, field("NUMPAGES"), &CharProps::default()).unwrap();
@@ -538,7 +538,7 @@ fn field_results_are_extractable_text() {
     let mut p = Paragraph::with_text("See  for details.", CharProps::default());
     p.insert_object(
         4,
-        InlineObject::Field { instr: " REF _RefTarget \\h ".into(), result: "Section 3.01".into(), locked: false },
+        InlineObject::Field { instr: " REF _RefTarget \\h ".into(), result: "Section 3.01".into(), locked: false, code: false },
         &CharProps::default(),
     )
     .unwrap();
@@ -559,7 +559,8 @@ fn field_result_ligatures_extract_all_their_letters() {
     assert!(wordcraft_fonts::shape(&face, result, &[], |c| c).len() < result.chars().count(), "the result has ligatures");
     let mut d = Document::new();
     let mut p = Paragraph::with_text("See  here.", font.clone());
-    p.insert_object(4, InlineObject::Field { instr: " REF _RefTarget \\h ".into(), result: result.into(), locked: false }, &font).unwrap();
+    p.insert_object(4, InlineObject::Field { instr: " REF _RefTarget \\h ".into(), result: result.into(), locked: false, code: false }, &font)
+        .unwrap();
     d.body = vec![para_block(p)];
     let text = extract_text(&export(&d, &PdfOptions::default()).unwrap()).concat();
     assert!(squash(&text).contains("See the first office here."), "{text:?}");

@@ -1321,4 +1321,13 @@
 	Rotate Left 90°	向左旋转 90°
 	Flip Vertical	垂直翻转
 	Flip Horizontal	水平翻转
+	Toggle Field Codes	切换域代码
+	Edit Field Code	编辑域代码
+	Unlink Fields	取消域链接
+	Lock Fields	锁定域
+	Unlock Fields	解除锁定域
+	Next Field	下一个域
+	Previous Field	上一个域
+	Selected Fields	所选域
+	Edit Field…	编辑域…
 	Formatted	已设置格式
