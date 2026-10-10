@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 use wordcraft_doc::para::{COLUMN_BREAK, NB_HYPHEN, NBSP, PAGE_BREAK, SOFT_HYPHEN};
-use wordcraft_doc::props::NumRef;
+use wordcraft_doc::props::{Border, BorderStyle, NumRef};
 use wordcraft_doc::{Block, ListKind, Pos};
 
 use super::{delete_selection, sel_result, split_para, type_text};
@@ -50,40 +50,64 @@ fn insert(s: &mut Session, v: &Value) -> CmdResult {
     let raw = p::bool(v, "raw").unwrap_or(false);
     let t = if raw { None } else { autoformat(s, text) };
     type_text(s, t.as_deref().unwrap_or(text))?;
-    if !raw && text.chars().count() == 1 && text.chars().all(|c| c == ' ' || ",.;:!?".contains(c)) {
+    let trigger = text.chars().count() == 1 && text.chars().all(|c| c == ' ' || ",.;:!?".contains(c));
+    if raw || !trigger {
+        return sel_result(s);
+    }
+    // The paragraph as typed, so an automatic change can be undone on its own.
+    let f = s.sel.focus.clone();
+    let typed = s.doc.para_at(&f).cloned().map(|p| (p, s.sel.clone()));
+    // A list label ("a. ") becomes a list before AutoCorrect could capitalise it.
+    let listed = text == " " && list_autoformat(s)?;
+    if !listed {
         super::tools::autocorrect(s)?;
     }
-    if !raw && text == " " {
-        list_autoformat(s)?;
+    if text == " " && !listed {
         dash_autoformat(s)?;
+    }
+    if let Some((para, sel)) = typed
+        && s.doc.para_at(&f) != Some(&para)
+    {
+        let mut doc = s.doc.clone();
+        if let Ok(p) = doc.para_mut(f.story, &f.path) {
+            *p = para;
+            p.touch();
+            s.push_undo("AutoFormat", doc, sel);
+        }
     }
     sel_result(s)
 }
 
 /// "* " / "- " → bullets, "1. " / "a) " → numbering, typed at the start of a paragraph.
-fn list_autoformat(s: &mut Session) -> Result<(), CmdError> {
+fn list_autoformat(s: &mut Session) -> Result<bool, CmdError> {
     let f = s.sel.focus.clone();
-    let Some(para) = s.doc.para_at(&f) else { return Ok(()) };
+    let Some(para) = s.doc.para_at(&f) else { return Ok(false) };
     if para.props.numbering.is_some_and(|n| n.num != 0) || f.off != para.len() {
-        return Ok(());
+        return Ok(false);
     }
     let kind = match para.text.as_str() {
-        "* " | "- " | "> " => ListKind::Bullet,
+        "* " | "> " => ListKind::Bullet,
+        "- " => ListKind::BulletChar('-'),
         "1. " => ListKind::Numbered,
         "1) " => ListKind::NumberedParen,
+        "a. " => ListKind::LowerLetterDot,
         "a) " => ListKind::LowerLetter,
         "A. " => ListKind::UpperLetter,
         "i. " => ListKind::LowerRoman,
-        _ => return Ok(()),
+        "I. " => ListKind::Outline,
+        _ => return Ok(false),
     };
-    let num = s.doc.numbering.find_kind(kind).unwrap_or_else(|| s.doc.numbering.add_list(kind));
+    // Bullets join an existing bullet list; typing "1. " always starts numbering again at 1,
+    // as in Word.
+    let found = if kind.is_bullet() { s.doc.numbering.find_kind(kind) } else { None };
+    let num = found.unwrap_or_else(|| s.doc.numbering.add_list(kind));
     let para = s.doc.para_mut(f.story, &f.path)?;
     let len = para.len();
     para.delete(0, len)?;
     para.props.numbering = Some(NumRef { num, level: 0 });
     para.props.style = Some("ListParagraph".into());
     s.sel = Selection::caret(Pos { off: 0, ..f });
-    Ok(())
+    Ok(true)
 }
 
 /// "word -- word" → en dash, "word--word" → em dash (on the space after).
@@ -92,6 +116,16 @@ fn dash_autoformat(s: &mut Session) -> Result<(), CmdError> {
     let Some(para) = s.doc.para_at(&f) else { return Ok(()) };
     let Some(before) = para.text.get(..f.off) else { return Ok(()) };
     if before.ends_with(' ')
+        && let Some(i) = before.trim_end().rfind(" -- ")
+        && before.trim_end().get(i + 4..).is_some_and(|w| !w.is_empty() && !w.contains(' '))
+    {
+        // "word -- word" → "word – word" once the next word is typed.
+        let p = s.doc.para_mut(f.story, &f.path)?;
+        let props = p.props_at(i + 1).clone();
+        p.delete(i + 1, i + 3)?;
+        p.insert_text(i + 1, "\u{2013}", &props)?;
+        s.sel = Selection::caret(Pos { off: f.off + 1, ..f });
+    } else if before.ends_with(' ')
         && let Some(i) = before.trim_end().rfind(" - ")
         && !before.trim_end()[i + 3..].contains(' ')
     {
@@ -114,6 +148,61 @@ fn dash_autoformat(s: &mut Session) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// AutoFormat border lines: Enter after "---", "___", "===", "***", "~~~" or "###" turns the
+/// characters into a bottom border on the paragraph above (or this one at the top of a story).
+fn border_line_autoformat(s: &mut Session, at: &Pos) -> Result<bool, CmdError> {
+    let Some(para) = s.doc.para_at(at) else { return Ok(false) };
+    let text = para.text.as_str();
+    let Some(c) = text.chars().next() else { return Ok(false) };
+    if !s.autocorrect_on
+        || at.off != text.len()
+        || text.len() < 3
+        || !text.chars().all(|x| x == c)
+        || para.props.numbering.is_some_and(|n| n.num != 0)
+    {
+        return Ok(false);
+    }
+    let (style, width) = match c {
+        '-' => (BorderStyle::Single, 0.75),
+        '_' => (BorderStyle::Thick, 1.5),
+        '=' => (BorderStyle::Double, 0.75),
+        '*' => (BorderStyle::Dotted, 2.25),
+        '~' => (BorderStyle::Wave, 0.75),
+        '#' => (BorderStyle::Triple, 0.75),
+        _ => return Ok(false),
+    };
+    let line = Border { style, width, color: None, space: 1.0 };
+    let set_bottom = |p: &mut wordcraft_doc::Paragraph| {
+        let mut b = p.props.borders.unwrap_or_default();
+        b.bottom = Some(line);
+        p.props.borders = Some(b);
+        p.touch();
+    };
+    let i = at.path.last();
+    let prev = if i > 0 { Some(at.path.with_last(i - 1)) } else { None };
+    let len = text.len();
+    let cur = s.doc.para_mut(at.story, &at.path)?;
+    cur.delete(0, len)?;
+    let start = Pos { off: 0, ..at.clone() };
+    match prev.filter(|q| matches!(s.doc.block(at.story, q), Some(Block::Para(_)))) {
+        Some(q) => {
+            // The characters' paragraph becomes the one typing continues in.
+            set_bottom(s.doc.para_mut(at.story, &q)?);
+            s.sel = Selection::caret(start);
+        }
+        None => {
+            set_bottom(s.doc.para_mut(at.story, &at.path)?);
+            let new = split_para(s, &start)?;
+            let p = s.doc.para_mut(new.story, &new.path)?;
+            p.props.borders = None;
+            p.touch();
+            s.sel = Selection::caret(new);
+        }
+    }
+    s.goal_x = None;
+    Ok(true)
+}
+
 fn ins_char(s: &mut Session, c: char) -> CmdResult {
     let mut b = [0u8; 4];
     type_text(s, c.encode_utf8(&mut b))?;
@@ -121,7 +210,15 @@ fn ins_char(s: &mut Session, c: char) -> CmdResult {
 }
 
 fn new_paragraph(s: &mut Session, _: &Value) -> CmdResult {
-    let at = delete_selection(s)?;
+    let mut at = delete_selection(s)?;
+    if border_line_autoformat(s, &at)? {
+        return sel_result(s);
+    }
+    // Enter finishes a word like a space does ("teh" → "the", sentence capitals, links).
+    if s.sel.is_collapsed() && at.off > 0 {
+        super::tools::autocorrect_word(s, true)?;
+        at = s.sel.focus.clone();
+    }
     let new = split_para(s, &at)?;
     s.sel = Selection::caret(new);
     s.goal_x = None;
@@ -211,9 +308,15 @@ fn backspace(s: &mut Session, _: &Value) -> CmdResult {
     }
     // At the start of a paragraph.
     if para.props.numbering.is_some_and(|n| n.num != 0) {
+        // First Backspace removes the number but keeps the item's indent (Word).
         let p = s.doc.para_mut(f.story, &f.path)?;
         p.props.numbering = Some(NumRef { num: 0, level: 0 });
         p.touch();
+        return sel_result(s);
+    }
+    if para.props.style.as_deref() == Some("ListParagraph") {
+        // The second one takes it out of the list's indent instead of joining paragraphs.
+        super::leave_list(s.doc.para_mut(f.story, &f.path)?);
         return sel_result(s);
     }
     if para.props.indent_first.is_some_and(|x| x > 0.0) {

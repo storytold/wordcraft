@@ -70,7 +70,10 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
         Some(Align::Right) => avail - total,
         _ => indent - margins_def[1],
     };
-    let tborders = t.props.borders.or_else(|| parts.as_ref().and_then(|p| p.borders));
+    let mut tborders = parts.as_ref().and_then(|p| p.borders).unwrap_or_default();
+    if let Some(own) = t.props.borders {
+        tborders.overlay(&own);
+    }
     let nrows = t.rows.len();
     let header_rows = t.props.look.header_row;
     // First pass: lay out every cell's content.
@@ -133,7 +136,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                 rh = rh.max(h);
             }
             // Effective borders: cell > table (outer vs inside).
-            let tb = tborders.unwrap_or_default();
+            let tb = tborders;
             let edge =
                 |own: Option<Border>, outer: bool, outer_b: Option<Border>, inner_b: Option<Border>| own.or(if outer { outer_b } else { inner_b });
             let cb = cell.props.borders.unwrap_or_default();
