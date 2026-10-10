@@ -635,17 +635,15 @@ impl WordApp {
         }
     }
 
-    /// Pick a recipient list (desktop: now; web: it arrives through the inbox).
+    /// Pick a recipient list (desktop: through the file dialog hook; web: it arrives through the
+    /// inbox).
     fn pick_recipient_list(&mut self) {
         if let Some(f) = &self.services.open_async {
             f("recipients");
             self.recipient_list_pending = true;
             return;
         }
-        let picked = self.services.pick_open.as_ref().and_then(|f| f("recipients"));
-        if let Some(path) = picked {
-            let _ = self.load_recipients(json!({"path": path}));
-        }
+        let _ = self.ask_file(file_dialogs::FileDialogRequest::Open { purpose: "recipients".into() }, file_dialogs::AfterPick::Recipients);
     }
 
     /// Load mail-merge recipients and say how many there are.

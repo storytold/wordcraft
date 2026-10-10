@@ -16,7 +16,8 @@ use crate::WordApp;
 /// A file dialog the app asks the host to show ([`Services::file_dialog`](crate::Services::file_dialog)).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FileDialogRequest {
-    /// Pick a file to open; `purpose` says what for (`document`, `picture`), as for `pick_open`.
+    /// Pick a file to open; `purpose` says what for (`document`, `picture`, `recipients`), as for
+    /// `pick_open`.
     Open { purpose: String },
     /// Pick a path to save to, given a suggested file name.
     Save { name: String },
@@ -32,6 +33,8 @@ pub(crate) enum AfterPick {
     SaveAs(AfterSave),
     /// Save a copy there in this format (`pdf`, `docx`, `png`…).
     Export { ext: String },
+    /// Load the picked CSV/TSV/text file as the mail-merge recipients (#240).
+    Recipients,
 }
 
 /// What to do once Save As has written the document.
@@ -119,6 +122,10 @@ impl WordApp {
                     return Ok(json!({"cancelled": true}));
                 };
                 self.insert_or_change_picture(json!({"path": path}))
+            }
+            AfterPick::Recipients => {
+                let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                self.load_recipients(json!({"path": path}))
             }
             AfterPick::Export { ext } => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
@@ -305,6 +312,31 @@ mod tests {
         a.poll_file_dialog();
         assert!(a.quit_requested, "closed once saved");
         assert!(saved_text(&path).contains(UNSAVED));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Desktop (#240 on #94): Use an Existing List… asks the host's file dialog for a recipient
+    /// list and, once the answer arrives, loads it as the mail-merge recipients, not as a document.
+    #[test]
+    fn a_recipient_list_picked_later_loads_recipients() {
+        let dir = scratch("recipients");
+        let csv = dir.join("people.csv");
+        std::fs::write(&csv, "First Name,City\nAda,London\nAlan,Wilmslow\n").unwrap();
+        let (mut a, shown) = async_app();
+        typed(&mut a);
+        a.run("ui.openRecipientList", json!({})).unwrap();
+        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Open { purpose: "recipients".into() });
+        assert!(a.file_dialog_open());
+        answer(&shown, Some(&csv.to_string_lossy()));
+        a.poll_file_dialog().unwrap().unwrap();
+        assert_eq!(a.session.merge.headers, vec!["First Name", "City"]);
+        assert_eq!(a.session.merge.rows.len(), 2);
+        assert!(body_text(&a).contains(UNSAVED), "the document stays open");
+        // Cancelling loads nothing.
+        a.run("ui.openRecipientList", json!({})).unwrap();
+        answer(&shown, None);
+        assert_eq!(a.poll_file_dialog().unwrap().unwrap(), json!({"cancelled": true}));
+        assert_eq!(a.session.merge.rows.len(), 2);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
