@@ -2176,3 +2176,24 @@ fn accessibility_reports_a_chart_without_alt_text() {
     let issues = v["issues"].as_array().expect("issues");
     assert!(issues.iter().any(|i| i["issue"] == "Chart or diagram has no alternative text"), "{issues:?}");
 }
+
+#[test]
+fn asian_typography_sets_flags_on_selected_paragraphs_and_undoes() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "一\n二\n三"}));
+    run(&mut s, "select.all", json!({}));
+    let r = run(&mut s, "para.asianTypography", json!({"kinsoku": false, "wordWrap": false, "topLinePunct": true}));
+    assert_eq!(r["asianTypography"]["kinsoku"], false);
+    assert_eq!(r["asianTypography"]["autoSpaceDE"], true, "a flag left out keeps its default");
+    for p in s.doc.body.iter().filter_map(|b| b.as_para()) {
+        assert_eq!(
+            (p.props.kinsoku, p.props.word_wrap, p.props.top_line_punct, p.props.overflow_punct),
+            (Some(false), Some(false), Some(true), None)
+        );
+    }
+    run(&mut s, "edit.undo", json!({}));
+    assert!(s.doc.body.iter().filter_map(|b| b.as_para()).all(|p| p.props.kinsoku.is_none() && p.props.word_wrap.is_none()));
+    // Without flags it only reports them.
+    let r = run(&mut s, "para.asianTypography", json!({}));
+    assert_eq!(r["asianTypography"]["kinsoku"], true);
+}

@@ -13,6 +13,8 @@
 	Add a comment	コメントを追加
 	Add a Table	表を追加
 	Add Space Before Paragraph	段落前に間隔を追加
+	Add space between Asian and Latin text	アジア文字と欧文の間隔を空ける
+	Add space between Asian text and numbers	アジア文字と数字の間隔を空ける
 	Add Text	テキストの追加
 	Add to Dictionary	辞書に追加
 	Add to Style Gallery	スタイル ギャラリーに追加
@@ -31,7 +33,10 @@
 	All Caps	すべて大文字
 	All caps	すべて大文字
 	All Markup	すべての変更履歴
+	Allow hanging punctuation	句読点のぶら下げを行う
+	Allow Latin text to wrap in the middle of a word	欧文を単語の途中で折り返す
 	Alt Text	代替テキスト
+	Apply Asian line-breaking rules (kinsoku)	アジア文字の禁則処理を行う
 	Apply Character Style	文字スタイルを適用
 	Apply Style	スタイルを適用
 	Apply Styles	スタイルを選んで適用
@@ -39,6 +44,7 @@
 	Arrange\nAll	整列
 	Arrow	矢印
 	Artistic Effects	アート効果
+	Asian Typography	アジア文字の組版
 	Author	作成者
 	AutoCorrect Options	オートコレクトのオプション
 	AutoFit	自動調整
@@ -56,6 +62,9 @@
 	Dark page (white text on black)	ダーク ページ (黒地に白い文字)
 	Edit Comment	コメントを編集
 	Left Margin	左余白
+	Compress punctuation at the start of a line	行頭の約物を詰める
+	Indents and Spacing	インデントと間隔
+	Line breaking	行の分割
 	More templates →	その他のテンプレート →
 	No templates match your search.	検索に一致するテンプレートはありません。
 	Reopen	再度開く
