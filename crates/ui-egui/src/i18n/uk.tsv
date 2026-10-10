@@ -60,7 +60,6 @@
 	Automatic Table 1 (3 levels)	Автоматичний зміст 1 (3 рівні)
 	Automatic Table 2 (2 levels)	Автоматичний зміст 2 (2 рівні)
 	AutoSave	Автозбереження
-	AutoSave documents that have been saved	Автоматично зберігати раніше збережені документи
 	AutoSave saves every change to the file (needs a saved document)	Автозбереження записує кожну зміну у файл (документ потрібно спочатку зберегти)
 	AutoText	Автоматичний текст
 	Backspace	Видалити попередній символ
@@ -789,3 +788,48 @@
 	Scroll ribbon left	Прокрутити стрічку ліворуч
 	Scroll ribbon right	Прокрутити стрічку праворуч
 	Character Border	Межа символу
+# Zotero integration
+	Zotero	Zotero
+	Citations	Цитати
+	Document	Документ
+	Add/Edit\nCitation	Додати/змінити\nцитату
+	Add\nNote	Додати\nпримітку
+	Add/Edit\nBibliography	Додати/змінити\nбібліографію
+	Refresh	Оновити
+	Document\nPreferences	Параметри\nдокумента
+	Unlink\nCitations	Від'єднати\nцитати
+	Waiting for Zotero…	Очікування Zotero…
+	Zotero: done	Zotero: готово
+	Zotero: cancelled	Zotero: скасовано
+	Yes	Так
+	No	Ні
+# Read Aloud player
+	Move Past Citation	Перейти за цитату
+	Move Past\nCitation	Перейти\nза цитату
+	Next Sentence	Наступне речення
+	Previous Sentence	Попереднє речення
+	Next sentence	Наступне речення
+	Previous sentence	Попереднє речення
+	Play/Pause	Відтворити/пауза
+	Read Aloud Status	Стан читання вголос
+	Reading Speed	Швидкість читання
+	Skip Citations and Bibliography	Пропускати цитати й бібліографію
+	Skip citations & bibliography	Пропускати цитати й бібліографію
+	Stop Reading	Зупинити читання
+	Don't read Zotero, Mendeley or EndNote citations and bibliographies	Не читати цитати й бібліографії Zotero, Mendeley чи EndNote
+	Play	Відтворити
+	Pause	Пауза
+	Stop	Зупинити
+	Sentence	Речення
+	Paused	Призупинено
+	Finished	Завершено
+	Stopped	Зупинено
+	Speed	Швидкість
+	Normal speed	Звичайна швидкість
+	AutoSave documents you have saved in WordCraft	Автоматично зберігати документи, збережені у WordCraft
+	AutoSave failed: {error}. Save the document to turn AutoSave back on.	Не вдалося виконати автозбереження: {error}. Збережіть документ, щоб знову ввімкнути автозбереження.
+	Couldn't download {name}: {error}	Не вдалося завантажити {name}: {error}
+	Do you want to save changes to {name}?	Зберегти зміни в {name}?
+	Don't Save	Не зберігати
+	That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.	Цей формат зберігає не все, тому документ залишається відкритим. Щоб продовжити, збережіть його як документ Word (.docx).
+	Your changes will be lost if you don't save them.	Якщо не зберегти зміни, їх буде втрачено.

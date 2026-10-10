@@ -38,6 +38,10 @@ pub struct CanvasState {
     pub want_focus: bool,
     pub context_issue: Option<serde_json::Value>,
     pub context_synonyms: Option<serde_json::Value>,
+    /// The right-click context menu is open (the mini toolbar stands down while it is).
+    pub context_menu_open: bool,
+    /// Screen rect of the selection's first line, for the floating mini toolbar.
+    pub mini_anchor: Option<Rect>,
 }
 
 impl Default for CanvasState {
@@ -60,7 +64,16 @@ impl Default for CanvasState {
             want_focus: true,
             context_issue: None,
             context_synonyms: None,
+            context_menu_open: false,
+            mini_anchor: None,
         }
+    }
+}
+
+impl CanvasState {
+    /// True while a mouse drag-select is in progress (the mini toolbar waits for mouse-up).
+    pub fn drag_selecting(&self) -> bool {
+        self.dragging
     }
 }
 
@@ -303,11 +316,30 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         // Selection.
         if !app.session.sel.is_collapsed() {
             let (a, b) = app.session.sel.ordered();
+            let mut first: Option<Rect> = None;
             for (pi, r) in layout.selection_rects(&app.session.doc, &a, &b, app.session.page_hint) {
                 if let Some(pr) = rects.get(pi) {
                     let scale = layout.pages.get(pi).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
                     let sr = Rect::from_min_size(pos2(pr.min.x + r.x * scale, pr.min.y + r.y * scale), vec2(r.w * scale, r.h * scale));
                     painter.rect_filled(sr, 0.0, t.selection);
+                    // Track the topmost rect: the mini toolbar anchors on the selection's first line.
+                    if first.is_none_or(|f| sr.min.y < f.min.y) {
+                        first = Some(sr);
+                    }
+                }
+            }
+            app.canvas.mini_anchor = first;
+        } else {
+            app.canvas.mini_anchor = None;
+        }
+        // Read Aloud: the sentence being spoken.
+        if let Some((a, b)) = crate::read_aloud::highlight(app) {
+            for (pi, r) in layout.selection_rects(&app.session.doc, &a, &b, app.session.page_hint) {
+                if let Some(pr) = rects.get(pi) {
+                    let sr =
+                        Rect::from_min_size(pos2(pr.min.x + r.x * geo.scale, pr.min.y + r.y * geo.scale), vec2(r.w * geo.scale, r.h * geo.scale));
+                    painter.rect_filled(sr, 0.0, t.accent.gamma_multiply(0.16));
+                    painter.hline(sr.x_range(), sr.max.y - 0.5, egui::Stroke::new(1.5, t.accent));
                 }
             }
         }
@@ -370,15 +402,22 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         app.canvas.context_synonyms = app.session.run("review.thesaurus", &json!({})).ok().and_then(|v| v.get("synonyms").cloned());
     }
     resp.context_menu(|ui| context_menu(app, ui));
+    // Stand down while the context menu owns the pointer so the two never double up;
+    // `context_menu_opened` also covers the click that dismisses the menu.
+    app.canvas.context_menu_open = resp.context_menu_opened();
     if resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
     }
-    if app.canvas.focused {
+    // While "Save changes?" is up, keys answer it rather than edit the document behind it.
+    if app.canvas.focused && !matches!(app.dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })) {
         crate::keys::canvas_events(app, ui.ctx());
     }
     let _ = origin;
     if let (Some(h), Some(v)) = (hruler, vruler) {
         rulers(app, ui, h, v, &rects, &layout, geo.scale);
+    }
+    if let Some(sel) = app.canvas.mini_anchor {
+        crate::mini_toolbar::show(app, ui.ctx(), sel, area);
     }
 }
 

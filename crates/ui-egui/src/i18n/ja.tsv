@@ -50,7 +50,8 @@
 	Automatic Table 1 (3 levels)	自動目次 1（3 レベル）
 	Automatic Table 2 (2 levels)	自動目次 2（2 レベル）
 	AutoSave	自動保存
-	AutoSave documents that have been saved	保存済みの文書を自動保存する
+	AutoSave documents you have saved in WordCraft	WordCraft で保存した文書を自動保存する
+	AutoSave failed: {error}. Save the document to turn AutoSave back on.	自動保存できませんでした: {error}。文書を保存し直すと、自動保存が再開します。
 	Dark page (white text on black)	ダーク ページ (黒地に白い文字)
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	表示 › モードの切り替えと同様に、文書の色を反転して表示します。保存、印刷、PDF は変わりません。
 	AutoSave saves every change to the file (needs a saved document)	自動保存は変更のたびにファイルへ保存します（保存済みの文書が必要です）
@@ -139,6 +140,7 @@
 	Copy	コピー
 	Copy Formatting	書式のコピー
 	Corrections	修整
+	Couldn't download {name}: {error}	{name} をダウンロードできませんでした: {error}
 	Cover Page	表紙
 	Create	作成
 	Create a Style	スタイルの作成
@@ -187,6 +189,8 @@
 	Distribute Rows	行の高さを揃える
 	Distributed	均等割り付け
 	Do Not Show in TOC	目次に表示しない
+	Do you want to save changes to {name}?	{name} への変更を保存しますか?
+	Don't Save	保存しない
 	Document End	文書の末尾
 	Document Formatting	ドキュメントの書式設定
 	Document Property	文書のプロパティ
@@ -698,6 +702,7 @@
 	Text:	テキスト:
 	Text\nBox	テキスト ボックス
 	Text\nDirection	文字列の方向
+	That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.	その形式ではすべてを保存できないため、文書は開いたままです。続けるには Word 文書 (.docx) として保存してください。
 	The new style takes the formatting of the current paragraph.	新しいスタイルには現在の段落の書式が使われます。
 	Theme Colors	テーマの色
 	Theme Fonts	テーマのフォント
@@ -776,5 +781,43 @@
 	📂  Browse…	📂  参照…
 	{words} words	{words} 語
 	{selected} of {words} words	{selected}/{words} 語
+# Zotero integration
+	Zotero	Zotero
+	Citations	引用文献
+	Document	文書
+	Add/Edit\nCitation	引用文献の\n追加/編集
+	Add\nNote	メモの\n追加
+	Add/Edit\nBibliography	参考文献の\n追加/編集
+	Refresh	更新
+	Document\nPreferences	文書の\n設定
+	Unlink\nCitations	引用文献の\nリンク解除
+	Waiting for Zotero…	Zotero を待っています…
+	Zotero: done	Zotero: 完了
+	Zotero: cancelled	Zotero: キャンセルしました
+	Yes	はい
+	No	いいえ
+	Move Past Citation	引用の後ろへ移動
+	Move Past\nCitation	引用の後ろ\nへ移動
+	Next Sentence	次の文
+	Previous Sentence	前の文
+	Next sentence	次の文
+	Previous sentence	前の文
+	Play/Pause	再生/一時停止
+	Read Aloud Status	読み上げの状態
+	Reading Speed	読み上げ速度
+	Skip Citations and Bibliography	引用と参考文献をスキップ
+	Skip citations & bibliography	引用と参考文献をスキップ
+	Stop Reading	読み上げを停止
+	Don't read Zotero, Mendeley or EndNote citations and bibliographies	Zotero、Mendeley、EndNote の引用と参考文献は読み上げません
+	Play	再生
+	Pause	一時停止
+	Stop	停止
+	Sentence	文
+	Paused	一時停止中
+	Finished	完了
+	Stopped	停止中
+	Speed	速度
+	Normal speed	標準の速度
+	Your changes will be lost if you don't save them.	保存しないと、変更内容は失われます。
 	Scroll ribbon left	リボンを左にスクロール
 	Scroll ribbon right	リボンを右にスクロール

@@ -74,3 +74,71 @@ fn ensure_nonempty_repairs() {
     d.ensure_nonempty();
     assert!(matches!(d.body.last().map(|b| &**b), Some(Block::Para(_))));
 }
+
+fn fs(instr: &str) -> InlineObject {
+    InlineObject::FieldStart { instr: instr.into(), locked: false }
+}
+
+#[test]
+fn field_ranges_pair_across_paragraphs_and_nest() {
+    let mut d = Document::from_text("See .\nBib one\nBib two");
+    let c = CharProps::default();
+    // Citation in paragraph 0: "See ␣[cite](Smith 2020)␣." with a nested field inside.
+    let p0 = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p0.insert_object(4, fs("ADDIN ZOTERO_ITEM CSL_CITATION {}"), &c).unwrap();
+    let n = p0.insert_text(7, "(Smith 2020)", &c).unwrap();
+    p0.insert_object(7 + n, InlineObject::FieldEnd, &c).unwrap();
+    p0.insert_object(7, fs("ADDIN inner"), &c).unwrap();
+    p0.insert_object(10, InlineObject::FieldEnd, &c).unwrap();
+    // Bibliography from paragraph 1 to the end of paragraph 2.
+    d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().insert_object(0, fs("ADDIN ZOTERO_BIBL {} CSL_BIBLIOGRAPHY"), &c).unwrap();
+    let p2 = d.para_mut(StoryRef::Body, &Path::top(2)).unwrap();
+    let end = p2.len();
+    p2.insert_object(end, InlineObject::FieldEnd, &c).unwrap();
+
+    let r = d.field_ranges(StoryRef::Body);
+    assert_eq!(r.len(), 3);
+    assert!(r[0].instr.starts_with("ADDIN ZOTERO_ITEM"));
+    assert_eq!((r[0].start.off, r[0].depth), (4, 0));
+    assert_eq!((r[1].instr.as_str(), r[1].depth), ("ADDIN inner", 1));
+    assert_eq!(r[2].start.path, Path::top(1));
+    assert_eq!(r[2].end.path, Path::top(2));
+    assert!(!d.has_unbalanced_field_ranges());
+    assert_eq!(d.balance_field_ranges(), 0);
+    // Markers contribute no text.
+    assert_eq!(d.plain_text(StoryRef::Body), "See (Smith 2020).\nBib one\nBib two");
+}
+
+#[test]
+fn orphan_field_markers_are_removed() {
+    let mut d = Document::from_text("ab\ncd");
+    let c = CharProps::default();
+    let p0 = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p0.insert_object(0, InlineObject::FieldEnd, &c).unwrap();
+    // OBJ is three bytes: "␣a[x]b]" → start after "␣a", end after "b".
+    p0.insert_object(4, fs("ADDIN x"), &c).unwrap();
+    p0.insert_object(8, InlineObject::FieldEnd, &c).unwrap();
+    d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().insert_object(1, fs("ADDIN open"), &c).unwrap();
+    assert!(d.has_unbalanced_field_ranges());
+    assert_eq!(d.balance_field_ranges(), 2);
+    assert!(!d.has_unbalanced_field_ranges());
+    let r = d.field_ranges(StoryRef::Body);
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].instr, "ADDIN x");
+    assert_eq!(d.plain_text(StoryRef::Body), "ab\ncd");
+}
+
+#[test]
+fn custom_props_set_get_remove() {
+    let mut d = Document::new();
+    assert_eq!(d.custom_prop("ZOTERO_PREF_1"), None);
+    d.set_custom_prop("ZOTERO_PREF_1", "<data/>");
+    d.set_custom_prop("Other", "x");
+    d.set_custom_prop("zotero_pref_1", "<data2/>");
+    assert_eq!(d.custom_props.len(), 2);
+    assert_eq!(d.custom_props[0].name, "ZOTERO_PREF_1");
+    assert_eq!(d.custom_prop("Zotero_Pref_1"), Some("<data2/>"));
+    assert!(d.remove_custom_prop("other"));
+    assert!(!d.remove_custom_prop("other"));
+    assert_eq!(d.custom_props.len(), 1);
+}

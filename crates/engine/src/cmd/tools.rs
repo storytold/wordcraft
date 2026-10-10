@@ -372,11 +372,11 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"lang": "en-US|en-GB|fr-FR|…", "noProof"?: bool}"#),
         CommandSpec::new("review.showMarkup", "Show Markup", "Review › Tracking", |s, v| {
             s.view.show_markup = p::bool(v, "value").unwrap_or(!s.view.show_markup);
+            s.relayout();
             Ok(json!({"value": s.view.show_markup}))
         })
         .pure(),
         CommandSpec::new("review.editor", "Editor", "Home › Editor", |s, v| s.run("review.spelling", v)).pure(),
-        CommandSpec::new("review.readAloud", "Read Aloud", "Review › Speech", read_aloud).pure(),
         CommandSpec::new("select.similar", "Select Text with Similar Formatting", "Home › Editing › Select", select_similar).pure(),
         CommandSpec::new("select.extend", "Extend Selection", "Editing › Selection", |s, _| {
             // F8 grows the selection: word → sentence → paragraph → document.
@@ -889,53 +889,6 @@ fn hf_nav(s: &mut Session, dir: i32) -> CmdResult {
     let next = ids.get(((i + dir).rem_euclid(n)) as usize).copied().unwrap_or(cur);
     s.sel = Selection::caret(s.doc.start_of(StoryRef::Part(next)));
     sel_result(s)
-}
-
-fn read_aloud(s: &mut Session, _: &Value) -> CmdResult {
-    let text = if s.sel.is_collapsed() {
-        let f = s.sel.focus.clone();
-        s.doc
-            .para_paths(f.story)
-            .into_iter()
-            .filter(|p| *p >= f.path)
-            .filter_map(|p| s.doc.para(f.story, &p).map(|x| x.plain_text()))
-            .collect::<Vec<_>>()
-            .join("\n")
-    } else {
-        s.selected_text()
-    };
-    let text: String = text.chars().take(20_000).collect();
-    #[cfg(target_arch = "wasm32")]
-    let _ = &text;
-    #[cfg(target_os = "macos")]
-    {
-        let _ = std::process::Command::new("say").arg(&text).spawn().map_err(|e| CmdError::Failed(e.to_string()))?;
-        return Ok(json!({"speaking": text.len()}));
-    }
-    #[cfg(target_os = "windows")]
-    {
-        let script =
-            format!("Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak([Console]::In.ReadToEnd())");
-        if let Ok(mut c) =
-            std::process::Command::new("powershell").args(["-NoProfile", "-Command", &script]).stdin(std::process::Stdio::piped()).spawn()
-            && let Some(mut i) = c.stdin.take()
-        {
-            use std::io::Write;
-            let _ = i.write_all(text.as_bytes());
-        }
-        return Ok(json!({"speaking": text.len()}));
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        let _ = std::process::Command::new("spd-say")
-            .arg(&text)
-            .spawn()
-            .or_else(|_| std::process::Command::new("espeak").arg(&text).spawn())
-            .map_err(|e| CmdError::Failed(format!("no speech engine found: {e}")))?;
-        return Ok(json!({"speaking": text.len()}));
-    }
-    #[allow(unreachable_code)]
-    Err(CmdError::Failed("Read Aloud isn't available on this platform".into()))
 }
 
 fn select_similar(s: &mut Session, _: &Value) -> CmdResult {

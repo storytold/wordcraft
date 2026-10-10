@@ -44,6 +44,8 @@ const OTHER_NAMESPACES: &[(&str, &str)] = &[
     ("xsi", "http://www.w3.org/2001/XMLSchema-instance"),
     ("xml", "http://www.w3.org/XML/1998/namespace"),
     ("ep", "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"),
+    ("op", "http://schemas.openxmlformats.org/officeDocument/2006/custom-properties"),
+    ("vt", "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"),
 ];
 
 /// ISO/IEC 29500 Strict namespaces map onto the transitional prefixes.
