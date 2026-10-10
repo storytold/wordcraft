@@ -250,6 +250,9 @@ pub struct CharProps {
     /// Character shading (background fill).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shading: Option<Rgb>,
+    /// Character border (`w:bdr`); `style: None` = explicitly no border.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border: Option<Border>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vert_align: Option<VertAlign>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -306,7 +309,7 @@ impl CharProps {
     /// Apply every `Some` field of `patch` on top of `self`.
     pub fn overlay(&mut self, patch: &CharProps) {
         overlay_fields!(self, patch; style, font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
-            shading, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl,
+            shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl,
             link, ins, del);
     }
     pub fn overlaid(mut self, patch: &CharProps) -> CharProps {
@@ -622,6 +625,36 @@ pub struct TableProps {
     pub shading: Option<Rgb>,
     /// Alternative text.
     pub caption: Option<String>,
+    /// Floating placement (`w:tblpPr`); `None` for a table in the text flow.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub float: Option<TableFloat>,
+}
+
+/// Where a floating table sits; the text after it wraps around it.
+#[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TableFloat {
+    /// What `x` is measured from: the column (`Column`), the margin or the page.
+    pub h_rel: crate::para::Anchor,
+    /// What `y` is measured from: the text where the table stands (`Paragraph`), the margin or
+    /// the page.
+    pub v_rel: crate::para::Anchor,
+    /// Offsets, points (used when the matching alignment is `None`).
+    pub x: f32,
+    pub y: f32,
+    pub h_align: Option<crate::para::FloatAlign>,
+    pub v_align: Option<crate::para::FloatAlign>,
+    /// Distance from surrounding text: left, top, right, bottom (points).
+    pub dist: [f32; 4],
+    /// Whether it may overlap other floating tables (`w:tblOverlap`); Word's default is yes.
+    pub overlap: bool,
+}
+
+impl TableFloat {
+    /// The distances from text, finite and clamped (left, top, right, bottom).
+    pub fn dist_from_text(&self) -> [f32; 4] {
+        self.dist.map(|v| if v.is_finite() { v.clamp(0.0, 1584.0) } else { 0.0 })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

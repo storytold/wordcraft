@@ -108,7 +108,12 @@ impl Writer<'_> {
             }
             w.close("w:pPr");
         }
-        if let Some(mark) = self.pending_mark.take() {
+        // A note's first paragraph starts with its reference mark. When the paragraph holds the
+        // note's reference to itself (notes read from a file, or made by references.footnote),
+        // the mark is written there instead, with that reference's formatting.
+        if !self.holds_own_ref(p)
+            && let Some(mark) = self.pending_mark.take()
+        {
             w.raw("<w:r><w:rPr><w:vertAlign w:val=\"superscript\"/></w:rPr>");
             w.empty(mark, &[]);
             w.raw("</w:r>");
@@ -313,7 +318,20 @@ impl Writer<'_> {
             InlineObject::NoteRef { kind, id, custom } => {
                 let foot = *kind == NoteKind::Footnote;
                 if self.current_note == Some((foot, *id)) {
-                    // The note's own number: already written as the w:footnoteRef / w:endnoteRef mark.
+                    // The note's own number is the w:footnoteRef / w:endnoteRef mark, written once
+                    // per note: here for its first reference to itself, never as a reference.
+                    if let Some(mark) = self.pending_mark.take() {
+                        let mut p = props.clone();
+                        if p.style.is_none() && p.vert_align.is_none() {
+                            p.vert_align = Some(wordcraft_doc::props::VertAlign::Superscript);
+                        }
+                        self.rev_open(w, props);
+                        w.open("w:r", &[]);
+                        rpr(w, &p);
+                        w.empty(mark, &[]);
+                        w.close("w:r");
+                        self.rev_close(w, props);
+                    }
                     return;
                 }
                 let nid = self.note_id(*id, foot);
@@ -543,13 +561,14 @@ impl Writer<'_> {
             w.open("wp:inline", &[("distT", "0"), ("distB", "0"), ("distL", "0"), ("distR", "0")]);
         } else {
             let d = emu(float.dist.clamp(0.0, 1584.0));
+            let (dt, db) = (emu(float.dist_top.clamp(0.0, 1584.0)), emu(float.dist_bottom.clamp(0.0, 1584.0)));
             self.z += 1;
             let behind = if float.wrap == Wrap::BehindText { "1" } else { "0" };
             w.open(
                 "wp:anchor",
                 &[
-                    ("distT", &d),
-                    ("distB", &d),
+                    ("distT", &dt),
+                    ("distB", &db),
                     ("distL", &d),
                     ("distR", &d),
                     ("simplePos", "0"),
@@ -561,33 +580,34 @@ impl Writer<'_> {
                 ],
             );
             w.empty("wp:simplePos", &[("x", "0"), ("y", "0")]);
-            let rel = |a: Anchor, horiz: bool| match a {
-                Anchor::Column => {
-                    if horiz {
-                        "column"
-                    } else {
-                        "paragraph"
-                    }
-                }
-                Anchor::Margin => "margin",
-                Anchor::Page => "page",
-                Anchor::Paragraph => {
-                    if horiz {
-                        "column"
-                    } else {
-                        "paragraph"
-                    }
-                }
+            let rel = |a: Anchor, horiz: bool| match (a, horiz) {
+                (Anchor::Margin, _) => "margin",
+                (Anchor::Page, _) => "page",
+                (Anchor::InsideMargin, _) => "insideMargin",
+                (Anchor::OutsideMargin, _) => "outsideMargin",
+                (Anchor::LeftMargin, true) => "leftMargin",
+                (Anchor::RightMargin, true) => "rightMargin",
+                (Anchor::Character, true) => "character",
+                (Anchor::TopMargin, false) => "topMargin",
+                (Anchor::BottomMargin, false) => "bottomMargin",
+                (Anchor::Line, false) => "line",
+                (_, true) => "column",
+                (_, false) => "paragraph",
             };
-            w.open("wp:positionH", &[("relativeFrom", rel(float.h_rel, true))]);
-            w.leaf("wp:posOffset", &[], &emu(float.x));
-            w.close("wp:positionH");
-            w.open("wp:positionV", &[("relativeFrom", rel(float.v_rel, false))]);
-            w.leaf("wp:posOffset", &[], &emu(float.y));
-            w.close("wp:positionV");
+            for (tag, horiz, a, rf, off) in
+                [("wp:positionH", true, float.h_align, float.h_rel, float.x), ("wp:positionV", false, float.v_align, float.v_rel, float.y)]
+            {
+                w.open(tag, &[("relativeFrom", rel(rf, horiz))]);
+                match a {
+                    Some(a) => w.leaf("wp:align", &[], a.ooxml(horiz)),
+                    None => w.leaf("wp:posOffset", &[], &emu(off)),
+                }
+                w.close(tag);
+            }
         }
         w.empty("wp:extent", &[("cx", &cx), ("cy", &cy)]);
-        w.empty("wp:effectExtent", &[("l", "0"), ("t", "0"), ("r", "0"), ("b", "0")]);
+        let [el, et, er, eb] = float.effect_extent().map(emu);
+        w.empty("wp:effectExtent", &[("l", &el), ("t", &et), ("r", &er), ("b", &eb)]);
         match float.wrap {
             Wrap::Inline => {}
             Wrap::Square => w.empty("wp:wrapSquare", &[("wrapText", "bothSides")]),

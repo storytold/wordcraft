@@ -4,12 +4,14 @@
 //! HTML's implicit closes for `p`, `li`, `tr`, `td`/`th` and headings. It understands `p`, `div`,
 //! `h1`–`h6`, `b`/`strong`, `i`/`em`, `u`, `s`/`strike`/`del`, `sup`/`sub`, `code`/`kbd`, `a`
 //! (links and `id`/`name` anchors), `br`, `hr`, `ul`/`ol`/`li` (nested), `table`/`tr`/`td`/`th`
-//! (colspan/rowspan), `img` with `data:` URIs, `blockquote`, `pre`, `font`, and the CSS
+//! (colspan/rowspan), `img` (`data:` URIs, other sources through a caller's [`ImageLoader`]), `blockquote`, `pre`, `font`, and the CSS
 //! properties `color`, `background-color`, `font-weight`, `font-style`, `font-size`,
 //! `font-family`, `text-decoration`, `vertical-align`, `text-align`, `white-space` and page
 //! breaks. Scripts and styles are skipped; nesting is capped.
 //!
 //! Export writes clean semantic HTML with inline CSS and pictures as `data:` URIs.
+
+use std::sync::Arc;
 
 use wordcraft_doc::{Align, Document};
 
@@ -362,7 +364,13 @@ fn declares_border(attrs: &[(String, String)], is_table: bool) -> bool {
     })
 }
 
-struct Builder {
+/// Loads the bytes of an image an `img` names by a source other than a `data:` URI (a path
+/// relative to the HTML file). `None` when it can't be found. A picture used more than once can
+/// share one buffer.
+pub type ImageLoader<'a> = &'a dyn Fn(&str) -> Option<Arc<Vec<u8>>>;
+
+struct Builder<'r> {
+    images: ImageLoader<'r>,
     containers: Vec<Vec<FBlock>>,
     cells: Vec<Cell>,
     tables: Vec<TableB>,
@@ -552,9 +560,10 @@ fn attr<'a>(attrs: &'a [(String, String)], name: &str) -> Option<&'a str> {
     attrs.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
 }
 
-impl Builder {
-    fn new() -> Builder {
+impl<'r> Builder<'r> {
+    fn new(images: ImageLoader<'r>) -> Builder<'r> {
         Builder {
+            images,
             containers: vec![Vec::new()],
             cells: Vec::new(),
             tables: Vec::new(),
@@ -906,7 +915,9 @@ impl Builder {
                         }
                     }
                 }
-                let img = attr(attrs, "src").and_then(data_uri).and_then(|d| make_img(d, w, h, &alt));
+                let img = attr(attrs, "src")
+                    .and_then(|src| if src.trim_start().starts_with("data:") { data_uri(src).map(Arc::new) } else { (self.images)(src.trim()) })
+                    .and_then(|d| make_img(d, w, h, &alt));
                 let f = self.fmt();
                 match img {
                     Some(im) => self.start_para().inlines.push(Inline::Image(im)),
@@ -1068,8 +1079,13 @@ impl Builder {
 
 /// Parse HTML text into the flow model.
 pub fn parse(s: &str) -> Flow {
+    parse_with(s, &|_| None)
+}
+
+/// [`parse`], loading pictures that aren't `data:` URIs through `images`.
+pub fn parse_with(s: &str, images: ImageLoader) -> Flow {
     let mut lx = Lexer { s, pos: 0 };
-    let mut b = Builder::new();
+    let mut b = Builder::new(images);
     let mut guard = 0usize;
     while let Some(t) = lx.next() {
         guard += 1;
@@ -1096,6 +1112,11 @@ pub fn parse(s: &str) -> Flow {
 /// Parse HTML into a document.
 pub fn import(s: &str) -> Document {
     model::to_doc(&parse(s))
+}
+
+/// [`import`], loading pictures that aren't `data:` URIs through `images`.
+pub fn import_with(s: &str, images: ImageLoader) -> Document {
+    model::to_doc(&parse_with(s, images))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1148,7 +1169,8 @@ fn text_html(t: &str) -> String {
 /// Inline spans → HTML.
 pub fn inlines_html(inlines: &[Inline]) -> String {
     let mut o = String::new();
-    for i in inlines {
+    let inlines = crate::model::equations_as_text(inlines);
+    for i in inlines.iter() {
         match i {
             Inline::Text(t, f) => {
                 let mut open = String::new();
@@ -1215,6 +1237,7 @@ pub fn inlines_html(inlines: &[Inline]) -> String {
                 ));
             }
             Inline::Anchor(a) => o.push_str(&format!("<a id=\"{}\"></a>", esc(a))),
+            Inline::Equation { .. } => {}
         }
     }
     o

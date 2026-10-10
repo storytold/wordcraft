@@ -84,7 +84,11 @@ fn extract_text(bytes: &[u8]) -> Vec<String> {
         fn draw_path(&mut self, _: &kurbo::BezPath, _: kurbo::Affine, _: &Paint<'_>, _: &PathDrawMode) {}
         fn push_clip_path(&mut self, _: &ClipPath) {}
         fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
-        fn draw_glyph(&mut self, g: &Glyph<'_>, _: kurbo::Affine, _: kurbo::Affine, _: &Paint<'_>, _: &GlyphDrawMode) {
+        fn draw_glyph(&mut self, g: &Glyph<'_>, _: kurbo::Affine, _: kurbo::Affine, _: &Paint<'_>, mode: &GlyphDrawMode) {
+            // Synthetic bold fills and then strokes each glyph: one character, two draws.
+            if matches!(mode, GlyphDrawMode::Stroke(_)) {
+                return;
+            }
             match g.as_unicode() {
                 Some(hayro_cmap::BfString::Char(c)) => self.0.push(c),
                 Some(hayro_cmap::BfString::String(s)) => self.0.push_str(&s),
@@ -234,6 +238,29 @@ fn shapes_have_paths() {
     assert_eq!(civil(0), (1970, 1, 1, 0, 0, 0));
 }
 
+#[test]
+fn fields_put_their_shown_text_in_the_text_layer() {
+    // "Page 1 of 2" in the footer: the page fields' numbers, not the objects' placeholder
+    // characters, are what copying, search and screen readers get.
+    let mut d = Document::new();
+    let mut f = Paragraph::with_text("Page  of ", CharProps::default());
+    let field = |instr: &str| InlineObject::Field { instr: instr.into(), result: String::new(), locked: false };
+    f.insert_object(5, field("PAGE"), &CharProps::default()).unwrap();
+    let n = f.len();
+    f.insert_object(n, field("NUMPAGES"), &CharProps::default()).unwrap();
+    let id = d.add_part(wordcraft_doc::PartKind::Footer, vec![para_block(f)]);
+    d.last_section.footers.default = Some(id);
+    let mut body = Paragraph::with_text("Body", CharProps::default());
+    body.props.page_break_before = None;
+    let mut second = Paragraph::with_text("More", CharProps::default());
+    second.props.page_break_before = Some(true);
+    d.body = vec![para_block(body), para_block(second)];
+    let text = extract_text(&export(&d, &PdfOptions::default()).unwrap());
+    assert_eq!(text.len(), 2);
+    assert!(text.iter().all(|t| !t.contains('\u{FFFC}')), "{text:?}");
+    assert!(squash(&text[0]).contains("Page 1 of 2") && squash(&text[1]).contains("Page 2 of 2"), "{text:?}");
+}
+
 /// Bundled Source Sans 3 renamed to `family`, with glyph `gid` turned into a composite glyph whose
 /// component list is cut off: fonts still parse and shape, but krilla's subsetter rejects it.
 fn unsubsettable_font(family: &str, gid: u16) -> Vec<u8> {
@@ -331,4 +358,33 @@ fn unsubsettable_font_is_drawn_as_outlines() {
     let (glyphs, paths) = count_glyphs_and_paths(&bytes);
     assert_eq!(glyphs, 0, "no text in the font krilla can't subset");
     assert!(paths > 0, "its glyphs are drawn as outlines");
+}
+
+#[test]
+fn field_results_are_extractable_text() {
+    // Issue #97 (test from #112 by @LloydNicholson): a REF field's result, not the U+FFFC
+    // placeholder, is what the text layer gets.
+    let mut d = Document::new();
+    let mut p = Paragraph::with_text("See  for details.", CharProps::default());
+    p.insert_object(
+        4,
+        InlineObject::Field { instr: " REF _RefTarget \\h ".into(), result: "Section 3.01".into(), locked: false },
+        &CharProps::default(),
+    )
+    .unwrap();
+    d.body = vec![para_block(p)];
+    let text = extract_text(&export(&d, &PdfOptions::default()).unwrap()).concat();
+    assert!(!text.contains('\u{FFFC}'), "{text:?}");
+    assert!(squash(&text).contains("See Section 3.01 for details."), "{text:?}");
+}
+
+#[test]
+fn synthetic_bold_text_is_extracted_once() {
+    // JetBrains Mono ships without a bold face, so its bold is filled and stroked: the text
+    // layer still holds each character once.
+    let mut d = Document::new();
+    let bold = CharProps { font: Some("JetBrains Mono".into()), bold: Some(true), ..Default::default() };
+    d.body = vec![para_block(Paragraph::with_text("Mono bold", bold))];
+    let text = squash(&extract_text(&export(&d, &PdfOptions::default()).unwrap()).concat());
+    assert!(text.contains("Mono bold"), "{text:?}");
 }

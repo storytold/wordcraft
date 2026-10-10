@@ -232,6 +232,61 @@ fn short_dates_follow_the_language() {
 }
 
 #[test]
+fn ukrainian_locales_and_saved_preference_work_without_changing_the_document() {
+    let uk = lang("uk");
+    for tag in ["uk", "uk-UA", "UK_ua.UTF-8", "uk-Cyrl-UA", "uk_UA.UTF-8@euro"] {
+        assert_eq!(lang_from_tag(tag), Some(uk), "{tag}");
+    }
+    assert_eq!(first_supported(["fr-FR", "uk-UA", "en-US"]), Some(uk));
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), Default::default());
+    let before = serde_json::to_value(&app.session.doc).unwrap();
+    let result = app.run("ui.language", serde_json::json!({"value": "UK"})).unwrap();
+    assert_eq!(result["effective"], "uk");
+    assert_eq!(app.ui.language, "uk");
+    assert_eq!(serde_json::to_value(&app.session.doc).unwrap(), before);
+    let saved = serde_json::to_string(&app.ui).unwrap();
+    let restored: crate::UiState = serde_json::from_str(&saved).unwrap();
+    assert_eq!(Lang::from_pref(&restored.language), uk);
+    assert_eq!(uk.name(), "Українська");
+}
+
+#[test]
+fn ukrainian_covers_the_entire_existing_interface_catalog() {
+    use std::collections::HashSet;
+    let keys = |source| parse_entries(source).0.into_iter().map(|e| e.source).collect::<HashSet<_>>();
+    assert_eq!(keys(lang("uk").0.source), keys(lang("zh-hans").0.source));
+    let uk = lang("uk");
+    assert_eq!(tr(uk, "Home"), "Основне");
+    assert_eq!(tr(uk, "Font"), "Шрифт");
+    assert_eq!(tr(uk, "Review"), "Рецензування");
+    assert_eq!(tr(uk, "Save"), "Зберегти");
+    assert_eq!(tr(uk, "unknown future label"), "unknown future label");
+    assert_eq!(fmt(tr(uk, "Exported {path}"), &[("path", "draft-{words}.docx")]), "Експортовано draft-{words}.docx");
+    // Count-neutral wording is grammatical for every Ukrainian integer category, including teens.
+    for count in [0, 1, 2, 5, 11, 12, 21, 22, 25, 111, 121] {
+        let words = count.to_string();
+        assert_eq!(fmt(tr(uk, "{words} words"), &[("words", &words)]), format!("Слів: {count}"));
+        assert_eq!(fmt(tr(uk, "{selected} of {words} words"), &[("selected", "1"), ("words", &words)]), format!("Слів: {count}; виділено: 1"));
+    }
+}
+
+#[test]
+fn bundled_interface_fonts_cover_ukrainian_without_system_fallbacks() {
+    let db = wordcraft_fonts::FontDb::with_font_dirs(Vec::new());
+    let (entries, errors) = parse_entries(lang("uk").0.source);
+    assert!(errors.is_empty());
+    let chars: std::collections::HashSet<char> =
+        entries.iter().flat_map(|e| e.translation.chars()).filter(|c| ('\u{0400}'..='\u{04ff}').contains(c)).chain("ҐґЄєІіЇї".chars()).collect();
+    for (family, style) in [("Inter", "Regular"), ("Inter", "Medium"), ("Inter", "SemiBold"), ("JetBrains Mono", "Regular")] {
+        let face = db.face(family, style);
+        assert_eq!(face.family, family, "must use the bundled interface face");
+        for ch in &chars {
+            assert_ne!(face.glyph_for(*ch), 0, "{family} {style} lacks {ch}");
+        }
+    }
+}
+
+#[test]
 fn brazilian_portuguese_locales_and_saved_preference_work_without_changing_the_document() {
     let pt = lang("pt-br");
     for tag in ["pt-BR", "pt_BR.UTF-8", "PT-BR", "pt-BR-latn", "pt_BR.UTF-8@euro"] {

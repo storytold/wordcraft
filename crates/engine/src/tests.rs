@@ -199,6 +199,32 @@ fn bold_toggles_selection_and_caret_word() {
 }
 
 #[test]
+fn border_toggles_and_saves() {
+    use wordcraft_doc::props::Border;
+    let border = |s: &Session| s.doc.para_at(&Pos::body(0, 0)).unwrap().props_of_char(5).border;
+    // Saved .docx carries the border iff it is on (read back: the reader maps only `w:bdr` to `border`).
+    let docx_has_bdr = |s: &Session| {
+        let back = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+        back.para_at(&Pos::body(0, 0)).unwrap().props_of_char(5).border.is_some()
+    };
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "make this boxed"}));
+    run(&mut s, "select.text", json!({"text": "this"}));
+    run(&mut s, "format.border", json!({}));
+    assert_eq!(border(&s), Some(Border::single(0.5)));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().props_of_char(0).border, None);
+    assert!(docx_has_bdr(&s));
+    run(&mut s, "format.border", json!({}));
+    assert_eq!(border(&s), None);
+    run(&mut s, "format.border", json!({"value": true}));
+    run(&mut s, "format.border", json!({"value": true}));
+    assert_eq!(border(&s), Some(Border::single(0.5)));
+    run(&mut s, "format.border", json!({"value": false}));
+    assert_eq!(border(&s), None);
+    assert!(!docx_has_bdr(&s));
+}
+
+#[test]
 fn pending_format_applies_to_typing() {
     let mut s = s();
     run(&mut s, "text.insert", json!({"text": "a "}));
@@ -248,7 +274,7 @@ fn applying_a_heading_clears_list_numbering() {
         );
         run(&mut s, style_cmd, json!({}));
         assert!(
-            !s.doc.para_at(&Pos::body(0, 0)).unwrap().props.numbering.is_some_and(|n| n.num != 0),
+            s.doc.para_at(&Pos::body(0, 0)).unwrap().props.numbering.is_none_or(|n| n.num == 0),
             "{style_cmd}: should clear direct list numbering"
         );
     }
@@ -669,6 +695,161 @@ fn german_text_is_checked_against_the_german_word_list() {
     run(&mut s, "text.insert", json!({"text": "Thsi is wrnog. "}));
     let issues = run(&mut s, "review.issues", json!({}));
     assert!(issues.as_array().is_some_and(|a| !a.is_empty()), "English text is still checked: {issues}");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn html_pictures_load_relative_to_the_file() {
+    // Issue #98: `<img src="logo.png">` beside an HTML file is embedded when it is opened.
+    let dir = std::env::temp_dir().join(format!("wordcraft-html-img-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("img")).unwrap();
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(4, 2, image::Rgba([10, 20, 30, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    std::fs::write(dir.join("img/my logo.png"), &png).unwrap();
+    std::fs::write(dir.join("secret.txt"), b"not a picture").unwrap();
+    let html = r#"<p><img src="img/my%20logo.png" alt="Logo"></p><p><img src="secret.txt" alt="T"></p><p><img src="http://example.com/x.png" alt="Web"></p>"#;
+    std::fs::write(dir.join("page.html"), html).unwrap();
+    let doc = crate::io::open_path(&dir.join("page.html"));
+    let _ = std::fs::remove_dir_all(&dir);
+    let doc = doc.unwrap();
+    assert_eq!(doc.media.len(), 1);
+    let text = doc.plain_text(StoryRef::Body);
+    assert!(!text.contains("Logo") && text.contains('T') && text.contains("Web"), "{text:?}");
+}
+
+/// A fresh, empty scratch folder for one test.
+#[cfg(not(target_arch = "wasm32"))]
+fn scratch_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("wordcraft-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn tiny_png() -> Vec<u8> {
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(2, 2, image::Rgba([200, 30, 30, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    png
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn html_pictures_outside_the_folder_are_not_loaded() {
+    // #98 review: `..` must not reach files outside the HTML file's folder.
+    let root = scratch_dir("html-img-escape");
+    std::fs::create_dir_all(root.join("site/img")).unwrap();
+    std::fs::write(root.join("outside.png"), tiny_png()).unwrap();
+    std::fs::write(root.join("site/inside.png"), tiny_png()).unwrap();
+    let html = r#"<p><img src="../outside.png" alt="Up"></p><p><img src="img/../../outside.png" alt="Sneak"></p><p><img src="img/../inside.png" alt="In"></p>"#;
+    std::fs::write(root.join("site/page.html"), html).unwrap();
+    let doc = crate::io::open_path(&root.join("site/page.html"));
+    let _ = std::fs::remove_dir_all(&root);
+    let doc = doc.unwrap();
+    assert_eq!(doc.media.len(), 1, "only the picture inside the folder loads");
+    let text = doc.plain_text(StoryRef::Body);
+    assert!(text.contains("Up") && text.contains("Sneak") && !text.contains("In"), "{text:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn html_pictures_through_a_symlink_out_of_the_folder_are_not_loaded() {
+    // #98 review: a symlink inside the folder must not lead outside it.
+    let root = scratch_dir("html-img-symlink");
+    std::fs::create_dir_all(root.join("site")).unwrap();
+    std::fs::write(root.join("outside.png"), tiny_png()).unwrap();
+    std::os::unix::fs::symlink(root.join("outside.png"), root.join("site/link.png")).unwrap();
+    std::fs::write(root.join("site/page.html"), r#"<p><img src="link.png" alt="Link"></p>"#).unwrap();
+    let doc = crate::io::open_path(&root.join("site/page.html"));
+    let _ = std::fs::remove_dir_all(&root);
+    let doc = doc.unwrap();
+    assert!(doc.media.is_empty());
+    assert!(doc.plain_text(StoryRef::Body).contains("Link"));
+}
+
+#[cfg(unix)]
+#[test]
+fn html_picture_that_is_a_named_pipe_is_skipped_without_blocking() {
+    // #98 review: opening a FIFO blocks until a writer appears; it must never be opened.
+    let dir = scratch_dir("html-img-fifo");
+    let fifo = dir.join("pipe.png");
+    let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+    if !made.is_ok_and(|s| s.success()) {
+        let _ = std::fs::remove_dir_all(&dir);
+        eprintln!("mkfifo unavailable; skipping");
+        return;
+    }
+    std::fs::write(dir.join("page.html"), r#"<p><img src="pipe.png" alt="Pipe"></p>"#).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let page = dir.join("page.html");
+    std::thread::spawn(move || {
+        let _ = tx.send(crate::io::open_path(&page));
+    });
+    let got = rx.recv_timeout(std::time::Duration::from_secs(10));
+    if got.is_err() {
+        // Unblock the stuck reader so the thread ends, then fail.
+        let _ = std::fs::OpenOptions::new().write(true).open(&fifo);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    let doc = got.expect("opening the HTML file blocked on a named pipe").unwrap();
+    assert!(doc.media.is_empty());
+    assert!(doc.plain_text(StoryRef::Body).contains("Pipe"));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn html_picture_size_limit_holds_whatever_length_the_file_reports() {
+    use crate::io::LocalImages;
+    let dir = scratch_dir("html-img-limit");
+    std::fs::write(dir.join("ten.bin"), [7u8; 10]).unwrap();
+    std::fs::write(dir.join("eleven.bin"), [7u8; 11]).unwrap();
+    let images = LocalImages::with_limits(&dir, 10, 1000);
+    let ten = images.load("ten.bin").map(|d| d.len());
+    let eleven = images.load("eleven.bin");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(ten, Some(10));
+    assert!(eleven.is_none());
+    #[cfg(unix)]
+    {
+        // A device reports a length of 0 and never ends: it is not a regular file, and the read is
+        // bounded anyway.
+        let dev = LocalImages::with_limits(std::path::Path::new("/dev"), 1 << 20, 1 << 20);
+        assert!(dev.load("zero").is_none());
+        assert!(dev.load("null").is_none());
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn html_pictures_share_one_read_and_a_per_document_budget() {
+    // #98 review: a picture referenced many times is read once, and every reference counts
+    // against the document's budget so a large picture can't be multiplied without bound.
+    use crate::io::LocalImages;
+    let dir = scratch_dir("html-img-budget");
+    let png = tiny_png();
+    let n = png.len() as u64;
+    std::fs::write(dir.join("a.png"), &png).unwrap();
+    let images = LocalImages::with_limits(&dir, 1 << 20, 3 * n);
+    let first = images.load("a.png").unwrap();
+    std::fs::write(dir.join("a.png"), b"changed on disk").unwrap();
+    let second = images.load("./a.png").unwrap();
+    assert!(std::sync::Arc::ptr_eq(&first, &second), "the second reference reuses the first read");
+    assert_eq!(*second, png);
+    assert!(images.load("a.png").is_some());
+    assert!(images.load("a.png").is_none(), "budget spent");
+    // Files over the per-picture limit still cost what was read.
+    std::fs::write(dir.join("big.bin"), vec![1u8; 100]).unwrap();
+    std::fs::write(dir.join("small.bin"), [1u8; 5]).unwrap();
+    let images = LocalImages::with_limits(&dir, 10, 25);
+    assert!(images.load("big.bin").is_none());
+    assert!(images.load("big.bin").is_none());
+    let small = images.load("small.bin");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(small.is_none(), "two oversized reads used up the budget");
 }
 
 fn para_style(s: &Session, i: usize) -> Option<String> {

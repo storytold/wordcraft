@@ -57,6 +57,12 @@ pub enum Inline {
     Image(Img),
     /// A bookmark (link target).
     Anchor(String),
+    /// An equation in the linear format WordCraft keeps them in (`x=(-b±√(b^2-4ac))/2a`). Formats
+    /// without equations write `linear` as text.
+    Equation {
+        linear: String,
+        display: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -106,12 +112,13 @@ impl Para {
         }
         self.inlines.push(Inline::Text(s.to_string(), f.clone()));
     }
-    /// The plain text (images and anchors left out).
+    /// The plain text (images and anchors left out; equations as their linear text).
     pub fn text(&self) -> String {
         let mut s = String::new();
         for i in &self.inlines {
-            if let Inline::Text(t, _) = i {
-                s.push_str(t);
+            match i {
+                Inline::Text(t, _) | Inline::Equation { linear: t, .. } => s.push_str(t),
+                Inline::Image(_) | Inline::Anchor(_) => {}
             }
         }
         s
@@ -119,6 +126,7 @@ impl Para {
     pub fn is_empty(&self) -> bool {
         self.inlines.iter().all(|i| matches!(i, Inline::Text(t, _) if t.is_empty()))
     }
+
     /// Remove whitespace at the very start and end of the paragraph's text.
     pub fn trim(&mut self) {
         while let Some(Inline::Text(t, _)) = self.inlines.first_mut() {
@@ -245,6 +253,23 @@ pub struct Flow {
     pub meta: Meta,
 }
 
+/// `inlines` with equations as their linear text (default formatting), for formats that have no
+/// equations.
+pub fn equations_as_text(inlines: &[Inline]) -> std::borrow::Cow<'_, [Inline]> {
+    if !inlines.iter().any(|i| matches!(i, Inline::Equation { .. })) {
+        return std::borrow::Cow::Borrowed(inlines);
+    }
+    let mut p = Para::default();
+    for i in inlines {
+        match i {
+            Inline::Equation { linear, .. } => p.push_text(linear, &Fmt::default()),
+            Inline::Text(t, f) => p.push_text(t, f),
+            other => p.inlines.push(other.clone()),
+        }
+    }
+    std::borrow::Cow::Owned(p.inlines)
+}
+
 // ---------------------------------------------------------------------------------------------
 // Flow → Document
 
@@ -342,6 +367,12 @@ impl Builder<'_> {
                     let _ = out.insert_object(end, InlineObject::BookmarkStart { name: name.clone() }, &CharProps::default());
                     let e2 = out.len();
                     let _ = out.insert_object(e2, InlineObject::BookmarkEnd { name: name.clone() }, &CharProps::default());
+                }
+                Inline::Equation { linear, display } => {
+                    let linear = clean_text(linear);
+                    if !linear.is_empty() {
+                        let _ = out.insert_object(end, InlineObject::Equation { linear, display: *display }, &CharProps::default());
+                    }
                 }
             }
         }
@@ -653,6 +684,12 @@ pub fn flow_paras(doc: &Document, p: &Paragraph) -> Vec<Para> {
                         None => {}
                     }
                 }
+                Some(InlineObject::Equation { linear, display }) => {
+                    if !buf.is_empty() {
+                        out.push_text(&std::mem::take(&mut buf), &f);
+                    }
+                    out.inlines.push(Inline::Equation { linear: linear.clone(), display: *display });
+                }
                 Some(InlineObject::BookmarkStart { name }) if name != "_GoBack" => {
                     if !buf.is_empty() {
                         out.push_text(&std::mem::take(&mut buf), &f);
@@ -758,7 +795,8 @@ pub fn image_px(data: &[u8]) -> Option<(u32, u32)> {
 
 /// A picture from bytes with an optional display size (points); the natural size (96 dpi) is
 /// used otherwise, shrunk to fit a 6.5" column.
-pub fn make_img(data: Vec<u8>, w: Option<f32>, h: Option<f32>, alt: &str) -> Option<Img> {
+pub fn make_img(data: impl Into<Arc<Vec<u8>>>, w: Option<f32>, h: Option<f32>, alt: &str) -> Option<Img> {
+    let data = data.into();
     let ext = sniff_image(&data)?;
     let (pw, ph) = image_px(&data).map(|(a, b)| (a as f32 * 0.75, b as f32 * 0.75)).unwrap_or((72.0, 72.0));
     let (pw, ph) = (pw.max(1.0), ph.max(1.0));
@@ -772,7 +810,7 @@ pub fn make_img(data: Vec<u8>, w: Option<f32>, h: Option<f32>, alt: &str) -> Opt
         h *= 468.0 / w;
         w = 468.0;
     }
-    Some(Img { data: Arc::new(data), ext: ext.to_string(), w: w.clamp(1.0, 1584.0), h: h.clamp(1.0, 1584.0), alt: alt.to_string() })
+    Some(Img { data, ext: ext.to_string(), w: w.clamp(1.0, 1584.0), h: h.clamp(1.0, 1584.0), alt: alt.to_string() })
 }
 
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

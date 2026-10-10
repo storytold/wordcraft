@@ -89,7 +89,7 @@ Every screenshot below is WordCraft itself, rendered offscreen by its own UI tes
 - **Familiar.** Word's ribbon tabs, groups, shortcuts and behaviour: Enter continues a list,
   Tab demotes it, Ctrl/⌘+B bolds the word under the caret, the Styles gallery previews styles live,
   F4 repeats, F7 checks spelling, F8 extends the selection.
-- **Your files.** Opens and saves .docx (OOXML), and also .odt, .rtf, .html, .md, .txt; exports PDF
+- **Your files.** Opens and saves .docx (OOXML), and also .odt, .rtf, .html, .md, .tex (LaTeX), .txt; exports PDF
   with real, selectable text, links and bookmarks.
 - **Fast.** Paragraph layout is cached, so typing in a 188-page document re-lays it out in about
   1.4 ms; pages render on demand.
@@ -117,8 +117,8 @@ Every screenshot below is WordCraft itself, rendered offscreen by its own UI tes
 | **References** | Table of contents, footnotes and endnotes, citations and bibliography (APA, MLA, Chicago, IEEE), captions, table of figures, cross-references, index, table of authorities |
 | **Review** | Spelling and grammar with suggestions, thesaurus, word count, comments in margin balloons or a pane, track changes, accept/reject, compare documents, restrict editing, accessibility checker, document inspector |
 | **Mailings** | Mail merge from CSV, merge fields, address block, greeting line, rules, preview, finish to a document; envelopes and labels |
-| **View** | Print layout, web layout, draft, read mode, focus, zoom, one/multiple pages, page width, Navigation pane, rulers, gridlines, dark mode; interface in English, 简体中文, 繁體中文, 日本語, Português (Brasil) or Deutsch (follows the system language by default; German also brings German templates on A4 and centimetres) |
-| **Files** | .docx read/write (opens in Word), PDF export, .odt, .rtf, .html, .md, .txt import/export, page images |
+| **View** | Print layout, web layout, draft, read mode, focus, zoom, one/multiple pages, page width, Navigation pane, rulers, gridlines, dark mode; interface in English, 简体中文, 繁體中文, 日本語, Português (Brasil), Español, Українська or Deutsch (follows the system language by default; German also brings German templates on A4 and centimetres) |
+| **Files** | .docx read/write (opens in Word), PDF export, .odt, .rtf, .html, .md, .tex, .txt import/export, page images |
 
 The honest picture, area by area, is in [ROADMAP.md](ROADMAP.md) and the generated
 [feature parity report](docs/parity.md).
@@ -135,7 +135,7 @@ cargo run --release -p wordcraft -- report.docx     # open a document
 Command line:
 
 ```sh
-wordcraft-cli convert report.docx report.pdf        # docx, pdf, odt, rtf, html, md, txt, png
+wordcraft-cli convert report.docx report.pdf        # docx, pdf, odt, rtf, html, md, tex, txt, png
 wordcraft-cli text report.docx                      # plain text
 wordcraft-cli inspect report.docx                   # structure as JSON
 wordcraft-cli run --template sample \

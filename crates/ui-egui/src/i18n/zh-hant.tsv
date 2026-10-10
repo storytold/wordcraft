@@ -100,6 +100,7 @@
 	Character Scale	字元縮放
 	Character Shading	字元網底
 	Character Spacing	字元間距
+	Character Border	字元邊框
 	Characters (no spaces)	字元數（不含空格）
 	Characters (with spaces)	字元數（含空格）
 	Chart	圖表
@@ -776,3 +777,5 @@
 	📂  Browse…	📂  瀏覽…
 	{words} words	{words} 個字
 	{selected} of {words} words	{selected}/{words} 個字
+	Scroll ribbon left	向左捲動功能區
+	Scroll ribbon right	向右捲動功能區

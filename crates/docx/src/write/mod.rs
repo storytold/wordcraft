@@ -494,6 +494,15 @@ impl Writer<'_> {
         self.para_ids.get(&(p as *const _ as usize)).cloned()
     }
 
+    /// Whether `p` holds a reference to the note being written.
+    fn holds_own_ref(&self, p: &wordcraft_doc::Paragraph) -> bool {
+        let Some((foot, id)) = self.current_note else { return false };
+        p.objects.iter().any(|o| match o {
+            wordcraft_doc::InlineObject::NoteRef { kind, id: nid, .. } => *nid == id && (*kind == wordcraft_doc::para::NoteKind::Footnote) == foot,
+            _ => false,
+        })
+    }
+
     /// Note stories: the first paragraph starts with the note's own reference mark.
     fn note_blocks(&mut self, w: &mut W, blocks: &Blocks, rels: &mut PartRels, foot: bool, part: u32) {
         self.pending_mark = Some(if foot { "w:footnoteRef" } else { "w:endnoteRef" });
@@ -747,7 +756,8 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool) -> Vec<u8> {
         w.close(tag);
     }
     w.open("w:compat", &[]);
-    w.empty("w:compatSetting", &[("w:name", "compatibilityMode"), ("w:uri", "http://schemas.microsoft.com/office/word"), ("w:val", "15")]);
+    let mode = doc.settings.compat_mode.clamp(11, 15).to_string();
+    w.empty("w:compatSetting", &[("w:name", "compatibilityMode"), ("w:uri", "http://schemas.microsoft.com/office/word"), ("w:val", &mode)]);
     w.close("w:compat");
     w.close("w:settings");
     w.into_bytes()
