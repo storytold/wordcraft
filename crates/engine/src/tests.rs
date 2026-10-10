@@ -787,6 +787,38 @@ fn arrange_bounds_resizes_and_moves_objects() {
 }
 
 #[test]
+fn nudging_an_aligned_object_moves_it_from_where_it_is() {
+    use wordcraft_doc::para::{Anchor, FloatAlign};
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Some text "}));
+    run(&mut s, "insert.textBox", json!({"text": "Box"}));
+    select_box(&mut s);
+    run(&mut s, "arrange.position", json!({"preset": "topLeft"}));
+    // As a .docx can place it: centred on the page, at the bottom margin.
+    let o = box_area(&mut s);
+    let p = s.doc.para_mut(StoryRef::Body, &o.path).unwrap();
+    if let Some(wordcraft_doc::InlineObject::Shape { float, .. }) = p.object_at_mut(o.off) {
+        (float.h_rel, float.h_align, float.v_rel, float.v_align) =
+            (Anchor::Page, Some(FloatAlign::Center), Anchor::BottomMargin, Some(FloatAlign::Start));
+    }
+    p.touch();
+    s.touch();
+    let before = box_area(&mut s).rect;
+    select_box(&mut s);
+    run(&mut s, "arrange.nudge", json!({"dx": 6, "dy": -2}));
+    let o = box_area(&mut s);
+    assert!((o.rect.x - before.x - 6.0).abs() < 0.01 && (o.rect.y - before.y + 2.0).abs() < 0.01, "{before:?} → {:?}", o.rect);
+    let p = s.doc.para(StoryRef::Body, &o.path).unwrap();
+    let Some(wordcraft_doc::InlineObject::Shape { float, .. }) = p.object_at(o.off) else { panic!() };
+    assert_eq!((float.h_align, float.v_align), (None, None));
+    // Dragging it clears alignment too, and it lands where dropped.
+    select_box(&mut s);
+    run(&mut s, "arrange.bounds", json!({"x": 100, "y": 150}));
+    let o = box_area(&mut s);
+    assert_eq!((o.rect.x, o.rect.y), (100.0, 150.0));
+}
+
+#[test]
 fn arrange_bounds_moves_an_object_to_another_page() {
     let mut s = s();
     for i in 0..60 {

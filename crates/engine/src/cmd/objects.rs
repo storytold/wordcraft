@@ -252,6 +252,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("arrange.nudge", "Nudge", "Layout › Arrange", |s, v| {
             let d = |k| p::f32(v, k).unwrap_or(0.0).clamp(-MAX_OFFSET, MAX_OFFSET);
             let (dx, dy) = (d("dx"), d("dy"));
+            unalign(s)?;
             with_float(s, |f| {
                 f.x = (f.x + dx).clamp(-MAX_OFFSET, MAX_OFFSET);
                 f.y = (f.y + dy).clamp(-MAX_OFFSET, MAX_OFFSET);
@@ -422,6 +423,8 @@ fn move_object(s: &mut Session, pos: Pos, page: Option<u64>, x: f32, y: f32, (w,
         }
         f.h_rel = h_rel;
         f.v_rel = v_rel;
+        f.h_align = None;
+        f.v_align = None;
         f.x = 0.0;
         f.y = 0.0;
     })?;
@@ -438,6 +441,32 @@ fn move_object(s: &mut Session, pos: Pos, page: Option<u64>, x: f32, y: f32, (w,
         f.y = (y - origin.y).clamp(-MAX_OFFSET, MAX_OFFSET);
     })?;
     Ok(at)
+}
+
+/// Turn the selected floating object's alignment (left, centred, …) into an offset from its
+/// column / paragraph that keeps it where it is, so it can be moved by an offset.
+fn unalign(s: &mut Session) -> Result<(), CmdError> {
+    use wordcraft_doc::para::Anchor;
+    let (pos, obj) = selected(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
+    let (InlineObject::Image { float, .. } | InlineObject::Shape { float, .. }) = &obj else { return Ok(()) };
+    if float.h_align.is_none() && float.v_align.is_none() {
+        return Ok(());
+    }
+    let hit = s.layout().object(&pos, s.page_hint).ok_or_else(|| CmdError::Failed("the object isn't laid out".into()))?;
+    let (ox, oy) = (hit.rect.x - hit.origin.x, hit.rect.y - hit.origin.y);
+    edit_float(s, &pos, |f| {
+        if f.h_align.is_some() {
+            f.h_align = None;
+            f.h_rel = Anchor::Column;
+            f.x = ox.clamp(-MAX_OFFSET, MAX_OFFSET);
+        }
+        if f.v_align.is_some() {
+            f.v_align = None;
+            f.v_rel = Anchor::Paragraph;
+            f.y = oy.clamp(-MAX_OFFSET, MAX_OFFSET);
+        }
+    })?;
+    Ok(())
 }
 
 /// The top-level body paragraph under `y` on `page`: the last one starting at or above it (else
