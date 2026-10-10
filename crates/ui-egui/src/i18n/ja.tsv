@@ -881,3 +881,16 @@
 	Light	ライト
 	Dark	ダーク
 	Use system setting	システム設定を使用
+	A file dialog is already open.	ファイル ダイアログが既に開いています。
+	Add Field	フィールドの追加
+	Field name	フィールド名
+	Field:	フィールド:
+	Fields:	フィールド:
+	Find:	検索:
+	New Entry	新しいエントリ
+	Recipients: {count}	宛先: {count}
+	Remove field	フィールドの削除
+	Remove recipient	宛先の削除
+	Select recipients first to choose from their fields.	先に宛先を選択すると、そのフィールドから選べます。
+	Type the recipients, or load them from a file.	宛先を入力するか、ファイルから読み込みます。
+	Use an Existing List…	既存のリストを使用…

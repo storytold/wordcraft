@@ -892,3 +892,16 @@
 	Light	浅色
 	Dark	深色
 	Use system setting	使用系统设置
+	A file dialog is already open.	已有一个文件对话框处于打开状态。
+	Add Field	添加域
+	Field name	域名称
+	Field:	域：
+	Fields:	域：
+	Find:	查找：
+	New Entry	新建条目
+	Recipients: {count}	收件人：{count}
+	Remove field	删除域
+	Remove recipient	删除收件人
+	Select recipients first to choose from their fields.	请先选择收件人，然后从其域中选择。
+	Type the recipients, or load them from a file.	键入收件人，或从文件加载。
+	Use an Existing List…	使用现有列表…

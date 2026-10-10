@@ -893,3 +893,16 @@
 	Light	Світла
 	Dark	Темна
 	Use system setting	Як у системі
+	A file dialog is already open.	Діалогове вікно файлу вже відкрито.
+	Add Field	Додати поле
+	Field name	Назва поля
+	Field:	Поле:
+	Fields:	Поля:
+	Find:	Знайти:
+	New Entry	Новий запис
+	Recipients: {count}	Одержувачі: {count}
+	Remove field	Видалити поле
+	Remove recipient	Видалити одержувача
+	Select recipients first to choose from their fields.	Спочатку виберіть одержувачів, щоб вибрати з їхніх полів.
+	Type the recipients, or load them from a file.	Введіть одержувачів або завантажте їх із файлу.
+	Use an Existing List…	Використати наявний список…

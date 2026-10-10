@@ -882,3 +882,16 @@
 	Light	淺色
 	Dark	深色
 	Use system setting	使用系統設定
+	A file dialog is already open.	已有一個檔案對話方塊開啟中。
+	Add Field	新增欄位
+	Field name	欄位名稱
+	Field:	欄位：
+	Fields:	欄位：
+	Find:	尋找：
+	New Entry	新增項目
+	Recipients: {count}	收件者：{count}
+	Remove field	移除欄位
+	Remove recipient	移除收件者
+	Select recipients first to choose from their fields.	請先選取收件者，才能從其欄位中選擇。
+	Type the recipients, or load them from a file.	輸入收件者，或從檔案載入。
+	Use an Existing List…	使用現有清單…

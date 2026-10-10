@@ -898,3 +898,16 @@
 	Light	Claro
 	Dark	Oscuro
 	Use system setting	Usar la configuración del sistema
+	A file dialog is already open.	Ya hay un cuadro de diálogo de archivo abierto.
+	Add Field	Añadir campo
+	Field name	Nombre del campo
+	Field:	Campo:
+	Fields:	Campos:
+	Find:	Buscar:
+	New Entry	Nueva entrada
+	Recipients: {count}	Destinatarios: {count}
+	Remove field	Quitar campo
+	Remove recipient	Quitar destinatario
+	Select recipients first to choose from their fields.	Selecciona primero los destinatarios para elegir entre sus campos.
+	Type the recipients, or load them from a file.	Escribe los destinatarios o cárgalos desde un archivo.
+	Use an Existing List…	Usar una lista existente…
