@@ -110,29 +110,49 @@ fn paste_text(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
-/// All matches of the find state in the current story.
+/// All matches of the find state in the current story. Text marked deleted by
+/// Track Changes is no longer part of the document, so the search reads each
+/// paragraph without it: a match lies within one stretch of live text, and word
+/// boundaries and anchors see the neighbouring live text, not the deleted text.
+/// Otherwise Replace would find its own deleted text again.
 fn search(s: &Session, story: StoryRef) -> Result<Vec<(Pos, Pos)>, CmdError> {
+    use regex_automata::{Input, meta, util::syntax};
     let f = &s.find;
     if f.query.is_empty() {
         return Ok(Vec::new());
     }
     let pat = if f.regex { f.query.clone() } else { regex::escape(&f.query) };
     let pat = if f.whole_word { format!(r"\b{pat}\b") } else { pat };
-    let re = regex::RegexBuilder::new(&pat)
-        .case_insensitive(!f.match_case)
-        .size_limit(1 << 20)
-        .build()
+    let re = meta::Regex::builder()
+        .syntax(syntax::Config::new().case_insensitive(!f.match_case))
+        .configure(meta::Config::new().nfa_size_limit(Some(1 << 20)))
+        .build(&pat)
         .map_err(|e| CmdError::Params(format!("bad pattern: {e}")))?;
     let mut out = Vec::new();
     for path in s.doc.para_paths(story) {
         let Some(p) = s.doc.para(story, &path) else { continue };
-        for m in re.find_iter(&p.text) {
-            if m.start() == m.end() {
-                continue;
+        // The paragraph as it reads, and its stretches of live text as
+        // (start in `live`, start in the paragraph, length).
+        let mut live = String::new();
+        let mut spans: Vec<(usize, usize, usize)> = Vec::new();
+        for (r, c) in p.run_ranges() {
+            let Some(t) = p.text.get(r.clone()).filter(|_| c.del.is_none()) else { continue };
+            match spans.last_mut() {
+                Some((_, raw, n)) if *raw + *n == r.start => *n += t.len(),
+                _ => spans.push((live.len(), r.start, t.len())),
             }
-            out.push((Pos { story, path: path.clone(), off: m.start() }, Pos { story, path: path.clone(), off: m.end() }));
-            if out.len() >= 100_000 {
-                return Ok(out);
+            live.push_str(t);
+        }
+        for (at, raw, n) in spans {
+            for m in re.find_iter(Input::new(&live).range(at..at + n)) {
+                if m.is_empty() {
+                    continue;
+                }
+                let (a, b) = (raw + m.start().saturating_sub(at), raw + m.end().saturating_sub(at));
+                out.push((Pos { story, path: path.clone(), off: a }, Pos { story, path: path.clone(), off: b }));
+                if out.len() >= 100_000 {
+                    return Ok(out);
+                }
             }
         }
     }
@@ -221,6 +241,12 @@ fn replace_all(s: &mut Session, v: &Value) -> CmdResult {
     let n = results.len();
     // Replace from the end so earlier positions stay valid.
     for (a, b) in results.into_iter().rev() {
+        if s.doc.settings.track_changes {
+            // Same path as a single replace, so the change is a reviewable revision.
+            s.sel = Selection { anchor: a, focus: b };
+            super::type_text(s, &with)?;
+            continue;
+        }
         let props = s.doc.para_at(&a).map(|p| p.props_of_char(a.off).clone()).unwrap_or_default();
         s.doc.delete_range(&a, &b)?;
         s.doc.insert_text(&a, &with, &props)?;

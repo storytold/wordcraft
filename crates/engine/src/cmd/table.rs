@@ -374,10 +374,18 @@ fn borders(s: &mut Session, v: &Value) -> CmdResult {
                 cur.bottom = Some(b);
                 cur.left = Some(b);
                 cur.right = Some(b);
+                // The cleared inside sides must not fall back to the table style (Word writes nil).
+                cur.between = Some(none);
+                cur.inside_v = Some(none);
             }
             "inside" => {
                 cur.between = Some(b);
                 cur.inside_v = Some(b);
+                // The cleared outer sides must not fall back to the table style (Word writes nil).
+                cur.top = Some(none);
+                cur.bottom = Some(none);
+                cur.left = Some(none);
+                cur.right = Some(none);
             }
             "top" => cur.top = Some(b),
             "bottom" => cur.bottom = Some(b),

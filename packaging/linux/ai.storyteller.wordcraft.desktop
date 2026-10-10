@@ -11,4 +11,4 @@ StartupNotify=true
 StartupWMClass=ai.storyteller.wordcraft
 Categories=Office;WordProcessor;
 Keywords=word;processor;document;docx;writer;text;letter;report;
-MimeType=application/vnd.openxmlformats-officedocument.wordprocessingml.document;application/vnd.oasis.opendocument.text;application/rtf;text/markdown;text/html;text/plain;
+MimeType=application/vnd.openxmlformats-officedocument.wordprocessingml.document;application/vnd.oasis.opendocument.text;application/rtf;text/markdown;text/x-tex;text/html;text/plain;
