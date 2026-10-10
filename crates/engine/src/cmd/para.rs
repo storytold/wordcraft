@@ -23,11 +23,19 @@ pub fn specs() -> Vec<CommandSpec> {
                 "right" => Align::Right,
                 "justify" | "both" => Align::Justify,
                 "distribute" => Align::Distribute,
+                // Logical edges, whatever the paragraph's direction.
+                "start" => return fmt(s, &|p| p.align = Some(Align::Left)),
+                "end" => return fmt(s, &|p| p.align = Some(Align::Right)),
                 x => return Err(CmdError::Params(format!("unknown alignment `{x}`"))),
             };
-            align(s, a)
+            // An explicit value sets it (no toggling back to the start edge like the buttons).
+            set_align(s, a)
         })
-        .params(r#"{"value": "left|center|right|justify|distribute"}"#),
+        .params(r#"{"value": "left|center|right|justify|distribute (as seen on the page) | start|end (reading direction)"}"#),
+        CommandSpec::new("para.rtl", "Right-to-Left Text Direction", "Home › Paragraph", |s, v| direction(s, v, true))
+            .params(r#"{"value"?: bool (false = left to right)}"#),
+        CommandSpec::new("para.ltr", "Left-to-Right Text Direction", "Home › Paragraph", |s, v| direction(s, v, false))
+            .params(r#"{"value"?: bool (false = right to left)}"#),
         CommandSpec::new("para.indent", "Increase Indent", "Home › Paragraph", indent).key("Mod+M"),
         CommandSpec::new("para.outdent", "Decrease Indent", "Home › Paragraph", outdent).key("Mod+Shift+M"),
         CommandSpec::new("para.hangingIndent", "Hanging Indent", "Home › Paragraph › Paragraph", |s, _| {
@@ -193,11 +201,33 @@ pub fn fmt(s: &mut Session, f: &dyn Fn(&mut ParaProps)) -> CmdResult {
     sel_result(s)
 }
 
+/// `a` is the alignment as seen on the page (the buttons): in a right-to-left paragraph
+/// Align Left is its end edge.
 fn align(s: &mut Session, a: Align) -> CmdResult {
-    // Clicking the active alignment again returns to left (Word).
-    let now = cur(s).align;
-    let target = if now == a && a != Align::Left { Align::Left } else { a };
-    fmt(s, &|p| p.align = Some(target))
+    let r = cur(s);
+    // Clicking the active alignment again returns to the start edge (Word).
+    let logical = a.visual(r.bidi);
+    let target = if r.align == logical && logical != Align::Left { None } else { Some(a) };
+    let focus_rtl = r.bidi;
+    fmt(s, &|p| {
+        let rtl = p.bidi.unwrap_or(focus_rtl);
+        p.align = Some(target.map_or(Align::Left, |a| a.visual(rtl)));
+    })
+}
+
+/// Set the alignment as seen on the page in every selected paragraph, in its own direction.
+fn set_align(s: &mut Session, a: Align) -> CmdResult {
+    let focus_rtl = cur(s).bidi;
+    fmt(s, &|p| p.align = Some(a.visual(p.bidi.unwrap_or(focus_rtl))))
+}
+
+/// Paragraph reading order (Word's Right-to-Left / Left-to-Right Text Direction buttons). Only
+/// the direction changes: alignment and indents are logical, so a start-aligned paragraph moves
+/// to the other side, as in Word. `rtl` is what the command turns on; `value: false` turns it off.
+fn direction(s: &mut Session, v: &Value, rtl: bool) -> CmdResult {
+    let on = p::bool(v, "value").unwrap_or(true);
+    let want = if on { rtl } else { !rtl };
+    fmt(s, &|p| p.bidi = Some(want))
 }
 
 fn tog(s: &mut Session, v: &Value, get: fn(&ParaProps) -> Option<bool>, set: fn(&mut ParaProps, bool)) -> CmdResult {
@@ -306,11 +336,15 @@ fn apply_style(s: &mut Session, v: &Value) -> CmdResult {
             let len = para.len();
             para.format(0, len, &|c| {
                 c.font = None;
+                c.font_cs = None;
                 c.size = None;
+                c.size_cs = None;
                 c.color = None;
             })?;
             para.mark.font = None;
+            para.mark.font_cs = None;
             para.mark.size = None;
+            para.mark.size_cs = None;
             para.mark.color = None;
         }
     }

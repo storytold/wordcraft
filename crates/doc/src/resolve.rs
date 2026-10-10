@@ -41,6 +41,15 @@ pub struct ResolvedChar {
     pub del: Option<u32>,
     pub no_proof: bool,
     pub lang: Option<String>,
+    /// Right-to-left run (`w:rtl`).
+    pub rtl: bool,
+    /// The whole run uses the complex-script properties (`w:cs`).
+    pub cs: bool,
+    /// Complex-script font, size, bold and italic (Arabic, Persian, Hebrew… text).
+    pub font_cs: String,
+    pub size_cs: f32,
+    pub bold_cs: bool,
+    pub italic_cs: bool,
 }
 
 impl ResolvedChar {
@@ -74,7 +83,23 @@ impl ResolvedChar {
             del: c.del,
             no_proof: c.no_proof.unwrap_or(false),
             lang: c.lang.clone(),
+            rtl: c.rtl.unwrap_or(false),
+            cs: c.cs.unwrap_or(false),
+            font_cs: c.font_cs.clone().or_else(|| c.font.clone()).unwrap_or_else(|| crate::styles::BODY_FONT.to_string()),
+            size_cs: c.size_cs.or(c.size).unwrap_or(11.0).clamp(1.0, 1638.0),
+            bold_cs: c.bold_cs.or(c.bold).unwrap_or(false),
+            italic_cs: c.italic_cs.or(c.italic).unwrap_or(false),
         }
+    }
+    /// The formatting complex-script text in this run is drawn with: the complex-script font,
+    /// size, bold and italic in place of the others (Word formats Arabic, Persian and Hebrew
+    /// characters, and every character of an `rtl`/`cs` run, this way).
+    pub fn complex(&self) -> ResolvedChar {
+        ResolvedChar { font: self.font_cs.clone(), size: self.size_cs, bold: self.bold_cs, italic: self.italic_cs, ..self.clone() }
+    }
+    /// Does a character of this run use the complex-script properties?
+    pub fn uses_complex(&self, c: char) -> bool {
+        self.rtl || self.cs || crate::bidi::is_complex_script(c)
     }
     /// The size glyphs are drawn at (super/subscript shrink to ~2/3).
     pub fn draw_size(&self) -> f32 {
@@ -119,6 +144,15 @@ pub struct ResolvedPara {
 }
 
 const MAX_INDENT: f32 = 1584.0; // 22"
+
+impl ResolvedPara {
+    /// Visual (left, right) indents. Indents, like alignment, are logical: `indent_left` is the
+    /// start (leading) edge, which is the right edge of a right-to-left paragraph (ISO 29500
+    /// `w:ind/@w:start`, read from `w:left` too).
+    pub fn visual_indents(&self) -> (f32, f32) {
+        if self.bidi { (self.indent_right, self.indent_left) } else { (self.indent_left, self.indent_right) }
+    }
+}
 
 impl ResolvedPara {
     fn from(p: &ParaProps, style: &str) -> ResolvedPara {
