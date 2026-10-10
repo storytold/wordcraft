@@ -110,6 +110,8 @@
 	Characters (no spaces)	字符数（不计空格）
 	Characters (with spaces)	字符数（计空格）
 	Chart	图表
+	Chat	聊天
+	Chat Members	聊天成员
 	Check Accessibility	检查辅助功能
 	Check Compatibility	检查兼容性
 	Check for Errors	检查错误
@@ -341,6 +343,7 @@
 	Inside Borders	内部框线
 	Inspect Document	检查文档
 	Interface language:	界面语言：
+	Invite Agent	邀请智能体
 	Italic	倾斜
 	Join the ArtCraft community on Discord	加入 Discord 上的 ArtCraft 社区
 	Join us on Discord: discord.gg/artcraft	在 Discord 上加入我们：discord.gg/artcraft
@@ -535,6 +538,7 @@
 	Reject All Changes	拒绝所有修订
 	Reject Change	拒绝修订
 	Relaxed	宽松
+	Remove Agent	移除智能体
 	Remove Background	删除背景
 	Remove Footer	删除页脚
 	Remove Header	删除页眉
@@ -607,6 +611,7 @@
 	Selection	选择
 	Selection Pane	选择窗格
 	Send Backward	下移一层
+	Send Chat Message	发送聊天消息
 	Sentence case.	句首字母大写。
 	Set as Default	设为默认值
 	Set Caret	设置光标
@@ -657,10 +662,12 @@
 	Spreadsheet Table	电子表格
 	Standard Colors	标准色
 	Star	星形
+	Start Chat	开始聊天
 	Start Mail Merge	开始邮件合并
 	Start Mail\nMerge	开始邮件合并
 	Statistics	统计信息
 	Status Bar	状态栏
+	Stop Chat	停止聊天
 	Strikethrough	删除线
 	Studio cover	工作室封面
 	Studio handbook (sample)	工作室手册（示例）

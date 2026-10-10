@@ -99,6 +99,8 @@
 	Characters (no spaces)	文字数（スペースを含めない）
 	Characters (with spaces)	文字数（スペースを含める）
 	Chart	グラフ
+	Chat	チャット
+	Chat Members	チャットのメンバー
 	Check Accessibility	アクセシビリティ チェック
 	Check Compatibility	互換性チェック
 	Check for Errors	エラーのチェック
@@ -330,6 +332,7 @@
 	Inside Borders	内側の罫線
 	Inspect Document	ドキュメント検査
 	Interface language:	表示言語:
+	Invite Agent	エージェントを招待
 	Italic	斜体
 	Join the ArtCraft community on Discord	Discord の ArtCraft コミュニティに参加
 	Join us on Discord: discord.gg/artcraft	Discord で参加: discord.gg/artcraft
@@ -524,6 +527,7 @@
 	Reject All Changes	すべての変更を元に戻す
 	Reject Change	変更を元に戻す
 	Relaxed	ゆったり
+	Remove Agent	エージェントを削除
 	Remove Background	背景の削除
 	Remove Footer	フッターの削除
 	Remove Header	ヘッダーの削除
@@ -596,6 +600,7 @@
 	Selection	選択範囲
 	Selection Pane	オブジェクトの選択と表示
 	Send Backward	背面へ移動
+	Send Chat Message	チャット メッセージを送信
 	Sentence case.	文の先頭文字を大文字にする。
 	Set as Default	既定に設定
 	Set Caret	カーソル位置の設定
@@ -646,10 +651,12 @@
 	Spreadsheet Table	スプレッドシート
 	Standard Colors	標準の色
 	Star	星
+	Start Chat	チャットを開始
 	Start Mail Merge	差し込み印刷の開始
 	Start Mail\nMerge	差し込み印刷の開始
 	Statistics	統計
 	Status Bar	ステータス バー
+	Stop Chat	チャットを停止
 	Strikethrough	取り消し線
 	Studio cover	スタジオ表紙
 	Studio handbook (sample)	スタジオ ハンドブック（サンプル）

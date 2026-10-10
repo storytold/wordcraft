@@ -488,3 +488,17 @@ fn caret_navigation() {
     run(&mut s, "caret.left", json!({}));
     assert_eq!(s.sel.focus.off, 10);
 }
+
+#[test]
+fn version_restore_keeps_the_document_identity() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Alpha"}));
+    run(&mut s, "file.versions", json!({"save": "v1"}));
+    run(&mut s, "text.insert", json!({"text": " beta"}));
+    let (generation, replaced) = (s.doc_generation, s.doc_replaced);
+    run(&mut s, "file.versions", json!({"restore": 0}));
+    assert_eq!(s.doc_generation, generation, "same document: the chat must not switch");
+    assert!(s.doc_replaced > replaced, "saved positions are no longer valid");
+    s.set_document(wordcraft_doc::Document::new());
+    assert!(s.doc_generation > generation);
+}

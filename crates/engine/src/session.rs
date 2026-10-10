@@ -195,6 +195,15 @@ pub struct Session {
     pub merge: crate::cmd::mailings::MergeState,
     /// Requests from commands to the UI (open a dialog, scroll…), drained by the front end.
     pub ui_requests: Vec<Value>,
+    /// The window's chat (Review › Chat), installed by the desktop app; `None` headless and on
+    /// the web, where every `chat.*` command answers "no chat in this window".
+    pub chat: Option<Arc<wordcraft_chat::Chat>>,
+    /// Bumped when another document replaces this one (open, new, a merge result): the chat
+    /// switches to that document's conversation.
+    pub doc_generation: u64,
+    /// Bumped whenever the whole content is swapped (as `doc_generation`, and Restore Version):
+    /// positions saved before are no longer valid.
+    pub doc_replaced: u64,
 }
 
 /// Maximum undo depth.
@@ -239,6 +248,9 @@ impl Session {
             bib_style: "APA".into(),
             merge: Default::default(),
             ui_requests: Vec::new(),
+            chat: None,
+            doc_generation: 0,
+            doc_replaced: 0,
         }
     }
 
@@ -347,6 +359,8 @@ impl Session {
     /// Replace the document (open/new).
     pub fn set_document(&mut self, doc: Document) {
         self.doc = doc;
+        self.doc_generation = self.doc_generation.wrapping_add(1);
+        self.doc_replaced = self.doc_replaced.wrapping_add(1);
         self.doc.ensure_nonempty();
         self.sel = Selection::caret(self.doc.start_of(StoryRef::Body));
         self.pending = None;
@@ -363,7 +377,8 @@ impl Session {
     /// the limit), `redo`, the open typing group, a pending `join_next_undo` and `dirty`. `rev`,
     /// `cache` and `layout` are derived (`restore` bumps `rev`). The other fields are not
     /// covered: a caller that lets the command change them (the view, the find state, the
-    /// clipboard, macros, the file path…) saves and puts them back itself.
+    /// clipboard, macros, the file path…) saves and puts them back itself. The chat is not
+    /// covered: agents cannot reach `chat.*`.
     ///
     /// `restore` is exact when the commands in between only add undo steps (every mutating
     /// command adds at most one; up to [`SNAPSHOT_HEAD`] may push old steps out of a full
@@ -409,6 +424,9 @@ impl Session {
             bib_style: _,
             merge: _,
             ui_requests: _,
+            chat: _,
+            doc_generation: _,
+            doc_replaced: _,
         } = self;
         let head = if history.len() + SNAPSHOT_HEAD > MAX_UNDO { history.iter().take(SNAPSHOT_HEAD).cloned().collect() } else { Vec::new() };
         EditSnapshot {

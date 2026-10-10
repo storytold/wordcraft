@@ -100,6 +100,8 @@
 	Characters (no spaces)	字元數（不含空格）
 	Characters (with spaces)	字元數（含空格）
 	Chart	圖表
+	Chat	聊天
+	Chat Members	聊天成員
 	Check Accessibility	檢查協助工具
 	Check Compatibility	檢查相容性
 	Check for Errors	檢查錯誤
@@ -331,6 +333,7 @@
 	Inside Borders	內框線
 	Inspect Document	檢查文件
 	Interface language:	介面語言：
+	Invite Agent	邀請代理程式
 	Italic	斜體
 	Join the ArtCraft community on Discord	加入 Discord 上的 ArtCraft 社群
 	Join us on Discord: discord.gg/artcraft	在 Discord 上加入我們：discord.gg/artcraft
@@ -525,6 +528,7 @@
 	Reject All Changes	拒絕所有變更
 	Reject Change	拒絕變更
 	Relaxed	寬鬆
+	Remove Agent	移除代理程式
 	Remove Background	移除背景
 	Remove Footer	移除頁尾
 	Remove Header	移除頁首
@@ -597,6 +601,7 @@
 	Selection	選取範圍
 	Selection Pane	選取窗格
 	Send Backward	下移一層
+	Send Chat Message	傳送聊天訊息
 	Sentence case.	句首字母大寫。
 	Set as Default	設定為預設值
 	Set Caret	設定游標
@@ -647,10 +652,12 @@
 	Spreadsheet Table	試算表
 	Standard Colors	標準色彩
 	Star	星形
+	Start Chat	開始聊天
 	Start Mail Merge	啟動合併列印
 	Start Mail\nMerge	啟動合併列印
 	Statistics	統計資料
 	Status Bar	狀態列
+	Stop Chat	停止聊天
 	Strikethrough	刪除線
 	Studio cover	工作室封面
 	Studio handbook (sample)	工作室手冊（範例）
