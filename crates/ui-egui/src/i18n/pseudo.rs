@@ -2,12 +2,19 @@
 //! wrapped in `⟦…⟧`, so text drawn without the marks never went through translation.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 thread_local! {
     static ON: Cell<bool> = const { Cell::new(false) };
     // Marked strings live for the test process; lookups hand out `&'static str`.
     static CACHE: RefCell<HashMap<String, &'static str>> = RefCell::new(HashMap::new());
+    // Every English string looked up while on, to check against a real catalog.
+    static LOOKED_UP: RefCell<BTreeSet<String>> = const { RefCell::new(BTreeSet::new()) };
+}
+
+/// Every English string looked up while the pseudo-language was on.
+pub fn looked_up() -> BTreeSet<String> {
+    LOOKED_UP.with_borrow(Clone::clone)
 }
 
 pub fn on() -> bool {
@@ -19,6 +26,7 @@ pub fn set(on: bool) {
 }
 
 pub fn mark(s: &str) -> &'static str {
+    LOOKED_UP.with_borrow_mut(|l| l.insert(s.to_string()));
     CACHE.with_borrow_mut(|c| *c.entry(s.to_string()).or_insert_with(|| Box::leak(format!("⟦{}⟧", s.replace('\n', "⟧\n⟦")).into_boxed_str())))
 }
 

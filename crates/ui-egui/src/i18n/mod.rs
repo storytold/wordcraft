@@ -237,6 +237,10 @@ pub fn tc<'a>(context: &str, s: &'a str) -> &'a str {
 
 /// [`tc`] in a given language.
 pub fn trc<'a>(lang: Lang, context: &str, s: &'a str) -> &'a str {
+    #[cfg(test)]
+    if pseudo::on() {
+        return pseudo::mark(s);
+    }
     lang.catalog().in_context(context, s).unwrap_or(s)
 }
 

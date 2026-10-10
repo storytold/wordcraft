@@ -824,8 +824,6 @@ preview	Title	Пример
 	{key}+Click to follow link	{key}+щелчок — перейти по ссылке
 	{selected} of {words} words	Слов: {selected} из {words}
 	{words} words	Слов: {words}
-	➕ New comment	➕ Новый комментарий
-	📂  Browse…	📂  Обзор…
 	Dark page (white text on black)	Тёмная страница (белый текст на чёрном)
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Показывать документы с инвертированными цветами, как «Вид › Сменить режим». Сохранение, печать и PDF не меняются.
 	Only web (http, https) and email (mailto) links can be followed	Переходить можно только по веб-ссылкам (http, https) и ссылкам на электронную почту (mailto)
@@ -1083,3 +1081,362 @@ preview	Title	Пример
 	Preview	Предварительный просмотр
 	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft
 	Browse…	Обзор…
+
+# Equation gallery, themes, watermarks, paper sizes, table styles and other strings the
+# interface audit (`i18n/audit.rs`) found without a Russian entry.
+	AaBbYyZz	АаБбЮюЯя
+	Align Top Left	По верхнему левому краю
+	Align Top Center	По верхнему краю, по центру
+	Align Top Right	По верхнему правому краю
+	Align Center Left	По центру, по левому краю
+	Align Center	По центру
+	Align Center Right	По центру, по правому краю
+	Align Bottom Left	По нижнему левому краю
+	Align Bottom Center	По нижнему краю, по центру
+	Align Bottom Right	По нижнему правому краю
+	Commits	Коммиты
+	{contributors} contributors · {commits} commits	Участников: {contributors} · коммитов: {commits}
+	Display name	Отображаемое имя
+	Real name	Настоящее имя
+	Username	Имя пользователя
+	Document1	Документ1
+	Font…	Шрифт…
+	Paragraph…	Абзац…
+	Link…	Ссылка…
+	Lines +/−	Строки +/−
+	Model	Модель
+	Version	Версия
+	% of all commits	% всех коммитов
+	pt	пт
+	Save the document to turn on AutoSave	Сохраните документ, чтобы включить автосохранение
+	Contributors	Участники
+	Models	Модели
+	Good evening	Добрый вечер
+	Good morning	Доброе утро
+	Good afternoon	Добрый день
+	Track\nChanges	Отслеживать\nизменения
+	Track\nChanges ✓	Отслеживать\nизменения ✓
+	tOGGLE cASE	иЗМЕНИТЬ рЕГИСТР
+	Change to Level 1	Перейти на уровень 1
+	Change to Level 2	Перейти на уровень 2
+	Change to Level 3	Перейти на уровень 3
+	Change to Level 4	Перейти на уровень 4
+	Change to Level 5	Перейти на уровень 5
+	Level 1	Уровень 1
+	Level 2	Уровень 2
+	Level 3	Уровень 3
+	ASAP	СРОЧНО
+	CONFIDENTIAL	КОНФИДЕНЦИАЛЬНО
+	DO NOT COPY	НЕ КОПИРОВАТЬ
+	DRAFT	ЧЕРНОВИК
+	SAMPLE	ОБРАЗЕЦ
+	URGENT	СРОЧНО!
+	Atelier	Ателье
+	Craft	Ремесло
+	Darkroom	Фотолаборатория
+	Gallery	Галерея
+	Sketchbook	Скетчбук
+	Studio	Студия
+	Letter   8.50" × 11.00"	Letter   8,50" × 11,00"
+	Legal   8.50" × 14.00"	Legal   8,50" × 14,00"
+	Executive   7.25" × 10.50"	Executive   7,25" × 10,50"
+	Statement   5.50" × 8.50"	Statement   5,50" × 8,50"
+	Tabloid   11.00" × 17.00"	Tabloid   11,00" × 17,00"
+	B4 (JIS)   10.12" × 14.33"	B4 (JIS)   10,12" × 14,33"
+	B5 (JIS)   7.17" × 10.12"	B5 (JIS)   7,17" × 10,12"
+	Envelope #10   4.12" × 9.50"	Конверт №10   4,12" × 9,50"
+	Envelope DL   4.33" × 8.66"	Конверт DL   4,33" × 8,66"
+	Plain Table 1	Простая таблица 1
+	Grid Table 1 Light	Таблица-сетка 1, светлая
+	Grid Table 4 – Blue	Таблица-сетка 4 — синяя
+	Grid Table 4 – Green	Таблица-сетка 4 — зелёная
+	Grid Table 4 – Orange	Таблица-сетка 4 — оранжевая
+	Grid Table 4 – Purple	Таблица-сетка 4 — фиолетовая
+	List Table 3 – Blue	Таблица-список 3 — синяя
+	List Table 3 – Green	Таблица-список 3 — зелёная
+	List Table 3 – Orange	Таблица-список 3 — оранжевая
+	List Table 3 – Purple	Таблица-список 3 — фиолетовая
+	Convert between built-up and linear form	Переключить между профессиональным и линейным видом
+	Justification of a display equation	Выравнивание отдельного уравнения
+	Number the equation; the number sits at the right margin (or type # then the number)	Пронумеровать уравнение; номер стоит у правого поля (или введите # и номер)
+	Show the equation in the line of text	Показать уравнение в строке текста
+	Show the equation on a line of its own	Показать уравнение на отдельной строке
+	Type equations in LaTeX	Вводить уравнения в LaTeX
+	Type equations in the linear format (UnicodeMath)	Вводить уравнения в линейном формате (UnicodeMath)
+	Type normal (non-math) text in the equation	Вводить в уравнении обычный (не математический) текст
+	Sides of a right triangle	Стороны прямоугольного треугольника
+	Circle area from its radius	Площадь круга по радиусу
+	Roots of ax²+bx+c	Корни ax²+bx+c
+	Binomial expansion of (x+a)ⁿ	Бином Ньютона для (x+a)ⁿ
+	Power series of (1+x)ⁿ	Степенной ряд (1+x)ⁿ
+	Euler's identity	Тождество Эйлера
+	Derivative as a limit	Производная как предел
+	Exponential series	Ряд для экспоненты
+	Integral of e^(−x²)	Интеграл от e^(−x²)
+	Sine and cosine series of f(x)	Ряд Фурье для f(x)
+	Sum or difference of sines	Сумма или разность синусов
+	Sum of cosines	Сумма косинусов
+	Normal probability density	Плотность нормального распределения
+	Bayes' rule	Формула Байеса
+	Accents	Диакритические знаки
+	Arrows	Стрелки
+	Basic Math	Основные математические
+	Boxed Formulas	Формулы в рамке
+	Cases and Stacks	Системы и столбцы
+	Common Accent Objects	Часто используемые объекты с диакритикой
+	Common Brackets	Часто используемые скобки
+	Common Fractions	Часто используемые дроби
+	Common Functions	Часто используемые функции
+	Common Large Operators	Часто используемые крупные операторы
+	Common Operator Structures	Часто используемые структуры операторов
+	Common Operators	Часто используемые операторы
+	Common Radicals	Часто используемые радикалы
+	Common Subscripts and Superscripts	Часто используемые индексы
+	Contour Integrals	Контурные интегралы
+	Differentials	Дифференциалы
+	Dots	Многоточия
+	Empty Matrices	Пустые матрицы
+	Functions	Функции
+	Geometry	Геометрия
+	Greek Letters	Греческие буквы
+	Hyperbolic Functions	Гиперболические функции
+	Identity Matrices	Единичные матрицы
+	Integrals	Интегралы
+	Inverse Functions	Обратные функции
+	Inverse Hyperbolic Functions	Обратные гиперболические функции
+	Letter-Like Symbols	Буквоподобные символы
+	Matrices with Brackets	Матрицы со скобками
+	Negated Relations	Отрицания отношений
+	Operator Structures	Структуры операторов
+	Operators	Операторы
+	Other Large Operators	Другие крупные операторы
+	Overbars and Underbars	Черта сверху и снизу
+	Products and Coproducts	Произведения и копроизведения
+	Radicals	Радикалы
+	Scripts	Индексы
+	Single Brackets	Одиночные скобки
+	Sparse Matrices	Разреженные матрицы
+	Subscripts and Superscripts	Нижние и верхние индексы
+	Summations	Суммы
+	Trigonometric Functions	Тригонометрические функции
+	Unions and Intersections	Объединения и пересечения
+	1×2 Empty Matrix	Пустая матрица 1×2
+	1×3 Empty Matrix	Пустая матрица 1×3
+	2×1 Empty Matrix	Пустая матрица 2×1
+	2×2 Empty Matrix	Пустая матрица 2×2
+	2×3 Empty Matrix	Пустая матрица 2×3
+	3×1 Empty Matrix	Пустая матрица 3×1
+	3×2 Empty Matrix	Пустая матрица 3×2
+	3×3 Empty Matrix	Пустая матрица 3×3
+	2×2 Determinant	Определитель 2×2
+	2×2 Identity Matrix	Единичная матрица 2×2
+	2×2 Identity Matrix (sparse)	Единичная матрица 2×2 (разреженная)
+	3×3 Identity Matrix	Единичная матрица 3×3
+	3×3 Identity Matrix (sparse)	Единичная матрица 3×3 (разреженная)
+	2×2 Matrix in Brackets	Матрица 2×2 в квадратных скобках
+	2×2 Matrix in Double Bars	Матрица 2×2 в двойных вертикальных чертах
+	2×2 Matrix in Parentheses	Матрица 2×2 в круглых скобках
+	n×n Identity Matrix	Единичная матрица n×n
+	n×n Matrix	Матрица n×n
+	A xor B	A исключающее ИЛИ B
+	Absolute value cases	Модуль по случаям
+	Acute	Акут
+	Angle Brackets	Угловые скобки
+	Angle Brackets with Separator	Угловые скобки с разделителем
+	Angle Brackets with Two Separators	Угловые скобки с двумя разделителями
+	Bar	Черта
+	Baseline Dots	Многоточие по базовой линии
+	Binomial Coefficient	Биномиальный коэффициент
+	Binomial Coefficient (angle)	Биномиальный коэффициент (угловые скобки)
+	Binomial Coefficient with Angle Brackets	Биномиальный коэффициент в угловых скобках
+	Boxed Formula	Формула в рамке
+	Boxed Formula (example)	Формула в рамке (пример)
+	Braces	Фигурные скобки
+	Braces with Separator	Фигурные скобки с разделителем
+	Brackets	Квадратные скобки
+	Brackets with Separators	Скобки с разделителями
+	Breve	Бреве
+	Cases (Three Conditions)	Система (три условия)
+	Cases (Two Conditions)	Система (два условия)
+	Ceiling	Округление вверх
+	Change in y over change in x	Приращение y к приращению x
+	Check	Гачек
+	Circled Dot	Точка в круге
+	Circled Plus	Плюс в круге
+	Circled Times	Умножение в круге
+	Colon Equal	Двоеточие-равно
+	Contour Integral	Контурный интеграл
+	Contour Integral with Limits	Контурный интеграл с пределами
+	Contour Integral with Stacked Limits	Контурный интеграл с пределами сверху и снизу
+	Coproduct	Копроизведение
+	Coproduct with Limits	Копроизведение с пределами
+	Coproduct with Lower Limit	Копроизведение с нижним пределом
+	Coproduct with Subscript-Superscript Limits	Копроизведение с пределами в индексах
+	Cosecant Function	Косеканс
+	Cosine 2x	Косинус 2x
+	Cosine Function	Косинус
+	Cotangent Function	Котангенс
+	Cube Root	Кубический корень
+	Delta Equal To	Равно по приращению
+	Delta over arrow	Дельта над стрелкой
+	Diagonal Dots	Диагональное многоточие
+	Differential	Дифференциал
+	Differential theta	Дифференциал тета
+	Differential x	Дифференциал x
+	Differential y	Дифференциал y
+	Dot	Точка
+	Double Bar	Двойная черта
+	Double Dot	Две точки
+	Double Integral	Двойной интеграл
+	Double Integral with Limits	Двойной интеграл с пределами
+	Double Integral with Stacked Limits	Двойной интеграл с пределами сверху и снизу
+	Double Left Arrow with Text Above	Двойная стрелка влево с текстом сверху
+	Double Left Arrow with Text Below	Двойная стрелка влево с текстом снизу
+	Double Left Right Arrow with Text Above	Двойная двусторонняя стрелка с текстом сверху
+	Double Left Right Arrow with Text Below	Двойная двусторонняя стрелка с текстом снизу
+	Double Right Arrow with Text Above	Двойная стрелка вправо с текстом сверху
+	Double Right Arrow with Text Below	Двойная стрелка вправо с текстом снизу
+	Double Square Brackets	Двойные квадратные скобки
+	Double Vertical Bars	Двойные вертикальные черты
+	Double summation	Двойная сумма
+	Equal Equal	Равно-равно
+	Equal by Definition	Равно по определению
+	Exponential	Экспонента
+	Floor	Округление вниз
+	Grave	Гравис
+	Grouping Character Above	Группирующий знак сверху
+	Grouping Character Below	Группирующий знак снизу
+	Hat	Крышка
+	Hyperbolic Cosecant Function	Гиперболический косеканс
+	Hyperbolic Cosine Function	Гиперболический косинус
+	Hyperbolic Cotangent Function	Гиперболический котангенс
+	Hyperbolic Secant Function	Гиперболический секанс
+	Hyperbolic Sine Function	Гиперболический синус
+	Hyperbolic Tangent Function	Гиперболический тангенс
+	Hypotenuse	Гипотенуза
+	Integral with Limits	Интеграл с пределами
+	Integral with Stacked Limits	Интеграл с пределами сверху и снизу
+	Intersection	Пересечение
+	Intersection with Limits	Пересечение с пределами
+	Intersection with Lower Limit	Пересечение с нижним пределом
+	Intersection with Subscript-Superscript Limits	Пересечение с пределами в индексах
+	Inverse Cosecant Function	Арккосеканс
+	Inverse Cosine Function	Арккосинус
+	Inverse Cotangent Function	Арккотангенс
+	Inverse Hyperbolic Cosecant Function	Обратный гиперболический косеканс
+	Inverse Hyperbolic Cosine Function	Обратный гиперболический косинус
+	Inverse Hyperbolic Cotangent Function	Обратный гиперболический котангенс
+	Inverse Hyperbolic Secant Function	Обратный гиперболический секанс
+	Inverse Hyperbolic Sine Function	Обратный гиперболический синус
+	Inverse Hyperbolic Tangent Function	Обратный гиперболический тангенс
+	Inverse Secant Function	Арксеканс
+	Inverse Sine Function	Арксинус
+	Inverse Tangent Function	Арктангенс
+	Left Arrow with Text Above	Стрелка влево с текстом сверху
+	Left Arrow with Text Below	Стрелка влево с текстом снизу
+	Left Bracket Twice	Две левые квадратные скобки
+	Left Right Arrow Above	Двусторонняя стрелка сверху
+	Left Right Arrow with Text Above	Двусторонняя стрелка с текстом сверху
+	Left Right Arrow with Text Below	Двусторонняя стрелка с текстом снизу
+	Left Subscript-Superscript	Левые нижний и верхний индексы
+	Leftwards Arrow Above	Стрелка влево сверху
+	Leftwards Harpoon Above	Гарпун влево сверху
+	Limit	Предел
+	Limit Example	Пример предела
+	Linear Fraction	Линейная дробь
+	Logarithm	Логарифм
+	Logarithm with Base	Логарифм по основанию
+	Logical AND	Логическое И
+	Logical AND with Limits	Логическое И с пределами
+	Logical OR	Логическое ИЛИ
+	Logical OR with Limits	Логическое ИЛИ с пределами
+	Maximum	Максимум
+	Maximum Example	Пример максимума
+	Measured By	Измеряется
+	Midline Dots	Многоточие по средней линии
+	Minimum	Минимум
+	Minus Equal	Минус-равно
+	Natural Logarithm	Натуральный логарифм
+	One half	Одна вторая
+	Outward Brackets	Внешние квадратные скобки
+	Overbar	Черта сверху
+	Overbrace	Фигурная скобка сверху
+	Parentheses	Круглые скобки
+	Parentheses with Separator	Круглые скобки с разделителем
+	Partial Differential	Частный дифференциал
+	Pi Over 2	Пи на 2
+	Plus Equal	Плюс-равно
+	Product	Произведение
+	Product of A	Произведение A
+	Product with Limits	Произведение с пределами
+	Product with Lower Limit	Произведение с нижним пределом
+	Product with Subscript-Superscript Limits	Произведение с пределами в индексах
+	Quadratic Root	Корень квадратного уравнения
+	Radical with Degree	Радикал со степенью
+	Right Arrow with Text Above	Стрелка вправо с текстом сверху
+	Right Arrow with Text Below	Стрелка вправо с текстом снизу
+	Right Bracket Twice	Две правые квадратные скобки
+	Rightwards Arrow Above	Стрелка вправо сверху
+	Rightwards Harpoon Above	Гарпун вправо сверху
+	Secant Function	Секанс
+	Sine Function	Синус
+	Sine theta	Синус тета
+	Single Left Angle	Одиночная левая угловая скобка
+	Single Left Bar	Одиночная левая черта
+	Single Left Brace	Одиночная левая фигурная скобка
+	Single Left Bracket	Одиночная левая квадратная скобка
+	Single Left Parenthesis	Одиночная левая круглая скобка
+	Single Right Brace	Одиночная правая фигурная скобка
+	Single Right Bracket	Одиночная правая квадратная скобка
+	Single Right Parenthesis	Одиночная правая круглая скобка
+	Skewed Fraction	Наклонная дробь
+	Small change	Малое приращение
+	Square	Квадрат
+	Square Root	Квадратный корень
+	Square Root with Degree	Квадратный корень со степенью
+	Square Union	Квадратное объединение
+	Stack Object	Столбец
+	Stack Object (Three)	Столбец (три элемента)
+	Stacked Fraction	Вертикальная дробь
+	Stacked, no bar	Друг над другом, без черты
+	Subscript-Superscript	Нижний и верхний индексы
+	Summation	Сумма
+	Summation from 0 to n	Сумма от 0 до n
+	Summation over binomials	Сумма биномиальных коэффициентов
+	Summation with Limits	Сумма с пределами
+	Summation with Lower Limit	Сумма с нижним пределом
+	Summation with Subscript Limit	Сумма с пределом в индексе
+	Summation with Subscript-Superscript Limits	Сумма с пределами в индексах
+	Surface Integral	Поверхностный интеграл
+	Surface Integral with Limits	Поверхностный интеграл с пределами
+	Surface Integral with Stacked Limits	Поверхностный интеграл с пределами сверху и снизу
+	Tangent Function	Тангенс
+	Tangent formula	Формула тангенса
+	Text over Colon Equal	Текст над двоеточием-равно
+	Text over Equal	Текст над знаком равенства
+	Tilde	Тильда
+	Triple Dot	Три точки
+	Triple Integral	Тройной интеграл
+	Triple Integral with Limits	Тройной интеграл с пределами
+	Triple Integral with Stacked Limits	Тройной интеграл с пределами сверху и снизу
+	Underbar	Черта снизу
+	Underbrace	Фигурная скобка снизу
+	Union	Объединение
+	Union of intersections	Объединение пересечений
+	Union with Limits	Объединение с пределами
+	Union with Lower Limit	Объединение с нижним пределом
+	Union with Plus	Объединение с плюсом
+	Union with Subscript-Superscript Limits	Объединение с пределами в индексах
+	Up Diagonal Dots	Диагональное многоточие вверх
+	Vector A	Вектор A
+	Vector AB	Вектор AB
+	Vertical Bars	Вертикальные черты
+	Vertical Dots	Вертикальное многоточие
+	Volume Integral	Объёмный интеграл
+	Volume Integral with Limits	Объёмный интеграл с пределами
+	Volume Integral with Stacked Limits	Объёмный интеграл с пределами сверху и снизу
+	Yields	Следует
+	x bar	x с чертой
+	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	В браузере автосохранение недоступно: оно не может записывать ваши файлы. «Сохранить» скачивает копию.
+	AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave.	Автосохранение работает только с файлами .docx, .odt и .rtf; {name} не сохраняет всё форматирование. Сохраните файл как .docx, чтобы включить автосохранение.
+	Save the document to turn on AutoSave (a file you have only opened isn't rewritten until you save it)	Сохраните документ, чтобы включить автосохранение (открытый файл не перезаписывается, пока вы его не сохраните)

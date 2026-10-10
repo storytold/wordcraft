@@ -68,6 +68,6 @@ Cyrillic and Latin (`sr`, `sr-latn`, #250) and Russian (`ru`), all partial (~95%
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-10 | minor | Russian interface (1,068 entries, built-in style names shown translated) |
+| 2026-10-10 | minor | Russian interface (1,422 entries, built-in style names shown translated; covers everything the interface audit finds) |
 | 2026-10-10 | minor | Serbian (Cyrillic and Latin) interface merged (#250) |
 | 2026-10-10 | major | First version: twelve-language table, catalog coverage measured, Word's 30 UI languages and 120 proofing tools listed |
