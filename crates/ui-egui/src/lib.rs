@@ -1063,7 +1063,7 @@ impl AutoSaveBlock {
 /// Whether saving to `name` keeps the whole document (the formats `file.save` treats as the
 /// document's own file, including macro-enabled documents and templates); anything else is a
 /// copy that leaves it unsaved. AutoSave writes only these formats.
-fn keeps_everything(name: &str) -> bool {
+pub(crate) fn keeps_everything(name: &str) -> bool {
     let ext = std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
     matches!(ext.as_str(), "docx" | "docm" | "dotx" | "dotm" | "odt" | "rtf" | "json")
 }
@@ -1765,11 +1765,17 @@ mod tests {
     /// the prompt and the leave-page guard let it go.
     #[test]
     fn web_downloads_that_drop_content_leave_the_document_unsaved() {
-        for name in ["novel.png", "novel.txt", "novel.md"] {
+        for (cmd, name) in [
+            ("file.saveAs", "novel.png"),
+            ("file.saveAs", "novel.txt"),
+            ("file.saveAs", "novel.md"),
+            ("file.exportPdf", "novel.pdf"),
+            ("file.exportPng", "novel.png"),
+        ] {
             let mut a = typed();
             a.services.download = Some(Box::new(|_, _| Ok(())));
-            a.execute("file.saveAs", json!({"path": name})).unwrap();
-            assert!(a.session.dirty, "{name}");
+            a.execute(cmd, json!({"path": name})).unwrap();
+            assert!(a.session.dirty, "{cmd} {name}");
         }
         for name in ["novel.docx", "novel.docm", "novel.DOTX", "novel.dotm", "novel.odt", "novel.rtf"] {
             let mut a = typed();
