@@ -54,6 +54,55 @@ pub enum MathJc {
     Right,
 }
 
+/// Where a display equation too wide for its line breaks at a binary operator (`m:brkBin`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BrkBin {
+    /// The operator starts the next line.
+    #[default]
+    Before,
+    /// The operator ends the line.
+    After,
+    /// The operator ends the line and starts the next one again.
+    Repeat,
+}
+
+/// How a minus repeats across a break when [`BrkBin::Repeat`] (`m:brkBinSub`): the operator
+/// ending the line, then the one starting the next.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BrkBinSub {
+    /// `--`
+    #[default]
+    MinusMinus,
+    /// `-+`
+    MinusPlus,
+    /// `+-`
+    PlusMinus,
+}
+
+/// Document-wide equation options (`m:mathPr` in the settings part) that layout uses: how long
+/// display equations wrap.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct MathProps {
+    pub brk_bin: BrkBin,
+    pub brk_bin_sub: BrkBinSub,
+    /// Indent of a wrapped equation's continuation lines, points (`m:wrapIndent`).
+    pub wrap_indent: f32,
+    /// Continuation lines align right instead (`m:wrapRight`).
+    pub wrap_right: bool,
+}
+
+/// `m:wrapIndent`'s default: 1440 twips, one inch.
+pub const DEFAULT_WRAP_INDENT: f32 = 72.0;
+
+impl Default for MathProps {
+    fn default() -> Self {
+        MathProps { brk_bin: BrkBin::Before, brk_bin_sub: BrkBinSub::MinusMinus, wrap_indent: DEFAULT_WRAP_INDENT, wrap_right: false }
+    }
+}
+
 /// Math run style (`m:sty`): plain, bold, italic, bold italic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -100,6 +149,10 @@ pub struct MRun {
     /// Font for normal text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font: Option<String>,
+    /// A manual line break before this run in a display equation (`m:brk`): `Some(0)` wraps as
+    /// usual, `Some(n)` aligns the new line at the `n`th operator of the first line (`m:alnAt`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brk: Option<u8>,
 }
 
 impl MRun {
@@ -662,6 +715,7 @@ pub fn merge_runs(a: Arg) -> Arg {
                     && prev.size == r.size
                     && prev.color == r.color
                     && prev.font == r.font
+                    && r.brk.is_none()
                 {
                     prev.text.push_str(&r.text);
                     continue;

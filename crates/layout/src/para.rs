@@ -640,6 +640,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let mut maths = Vec::new();
     let mut displays = Vec::new();
     let mut eq_counter = env.eq_number;
+    let math_props = doc.settings.math.clone().unwrap_or_default();
     // The byte ranges of runs left out of the layout, in order, adjacent runs merged.
     let mut left: Vec<std::ops::Range<usize>> = Vec::new();
     for (range, props) in p.run_ranges() {
@@ -732,10 +733,10 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                     let k = obj_index;
                     obj_index += 1;
                     match p.objects.get(k) {
-                        Some(InlineObject::Image { w, h, float, .. })
-                        | Some(InlineObject::Graphic { w, h, float, .. })
-                        | Some(InlineObject::Shape { w, h, float, .. }) => {
-                            if float.wrap == wordcraft_doc::para::Wrap::Inline {
+                        Some(o) if o.is_drawing() => {
+                            if let Some((w, h, float)) = o.frame()
+                                && float.wrap == wordcraft_doc::para::Wrap::Inline
+                            {
                                 let maxw = (env.width - rp.indent_left.max(0.0) - rp.indent_right.max(0.0)).max(18.0);
                                 let (w, h) = (w.clamp(1.0, 4000.0), h.clamp(1.0, 4000.0));
                                 let s = if w > maxw { maxw / w } else { 1.0 };
@@ -768,7 +769,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                         }
                         Some(InlineObject::Equation { linear, display, math }) => {
                             let avail = (env.width - rp.indent_left.max(0.0) - rp.indent_right.max(0.0)).max(12.0);
-                            let ml = crate::math::layout_equation(math, linear, &rc, *display, avail, &mut eq_counter);
+                            let ml = crate::math::layout_equation(math, linear, &rc, *display, avail, &math_props, &mut eq_counter);
                             let st = b.styles.get(si as usize);
                             // The line is at least as tall as the text around it.
                             let (a, d) = st.map(|s| (s.ascent, s.descent)).unwrap_or((0.0, 0.0));
@@ -824,19 +825,19 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let to_para = |i: usize| -> Option<usize> {
         if left.is_empty() { Some(i) } else { ends.binary_search_by_key(&i, |e| e.0).ok().and_then(|k| ends.get(k)).map(|e| e.1) }
     };
-    let mut opps = std::collections::HashSet::new();
+    let mut found = Vec::new();
     for (i, o) in unicode_linebreak::linebreaks(&text) {
         // Word keeps "and/or" and web addresses whole: no break right after a slash (a word
         // too long for the line still breaks anywhere).
         let after_slash =
             text.get(..i).is_some_and(|t| t.ends_with('/')) && text.get(i..).and_then(|t| t.chars().next()).is_some_and(char::is_alphanumeric);
-        if (o == unicode_linebreak::BreakOpportunity::Allowed || i < text.len())
-            && !after_slash
-            && let Some(end) = to_para(i)
-        {
-            opps.insert(end);
+        if (o == unicode_linebreak::BreakOpportunity::Allowed || i < text.len()) && !after_slash {
+            found.push(i);
         }
     }
+    // Asian typography: kinsoku and breaking Latin words anywhere.
+    crate::kinsoku::apply(&text, &mut found, rp.kinsoku, rp.word_wrap);
+    let opps: std::collections::HashSet<usize> = found.into_iter().filter_map(to_para).collect();
     for c in &mut b.clusters {
         c.break_after = opps.contains(&c.end) || matches!(c.kind, ClKind::Object(_) | ClKind::Tab);
     }

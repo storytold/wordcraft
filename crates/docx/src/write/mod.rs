@@ -683,9 +683,18 @@ fn style_xml(w: &mut W, st: &Style) {
         };
         cond(w, "wholeTable", &wordcraft_doc::CharProps::default(), t.fill, None);
         cond(w, "firstRow", &t.header_chr, t.header_fill, t.header_borders);
-        let total_top = t.total_border_top.map(|b| wordcraft_doc::props::Borders { top: Some(b), ..Default::default() });
-        cond(w, "lastRow", &t.total_chr, None, total_top);
-        cond(w, "firstCol", &t.first_col_chr, None, None);
+        // The total row's borders, its top edge falling back to the built-in top rule.
+        let total_borders = match (t.total_borders, t.total_border_top) {
+            (Some(mut b), top) => {
+                b.top = b.top.or(top);
+                Some(b)
+            }
+            (None, top) => top.map(|b| wordcraft_doc::props::Borders { top: Some(b), ..Default::default() }),
+        };
+        cond(w, "lastRow", &t.total_chr, t.total_fill, total_borders);
+        cond(w, "firstCol", &t.first_col_chr, t.first_col_fill, t.first_col_borders);
+        cond(w, "lastCol", &t.last_col_chr, t.last_col_fill, t.last_col_borders);
+        cond(w, "band1Vert", &t.col_band_chr, t.col_band_fill, t.col_band_borders);
         cond(w, "band1Horz", &t.band_chr, t.band_fill, t.band_borders);
     }
     w.close("w:style");
@@ -811,6 +820,9 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool) -> Vec<u8> {
     let mode = doc.settings.compat_mode.clamp(11, 15).to_string();
     w.empty("w:compatSetting", &[("w:name", "compatibilityMode"), ("w:uri", "http://schemas.microsoft.com/office/word"), ("w:val", &mode)]);
     w.close("w:compat");
+    if let Some(m) = &s.math {
+        math::math_pr(&mut w, m);
+    }
     w.close("w:settings");
     w.into_bytes()
 }
