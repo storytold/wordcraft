@@ -168,6 +168,14 @@ impl Line {
             None => self.xs.last().copied().unwrap_or(self.left),
         }
     }
+    /// x of the line's visual end for the paragraph's direction, where its paragraph mark goes:
+    /// the right edge of the rightmost cluster in a left-to-right paragraph, the left edge of the
+    /// leftmost in a right-to-left one. Differs from [`Line::end_x`] when the logically last text
+    /// runs the other way (Hebrew ending a left-to-right paragraph, Latin ending a right-to-left one).
+    pub fn visual_end_x(&self) -> f32 {
+        let end = self.end_x();
+        if self.rtl { self.vis.iter().map(|v| v.x).fold(end, f32::min) } else { self.vis.iter().map(|v| v.x + v.w).fold(end, f32::max) }
+    }
     /// x where the hyphen of a hyphenated line (advance `adv`) is drawn.
     pub fn hyphen_x(&self, adv: f32) -> f32 {
         match self.vis.last() {

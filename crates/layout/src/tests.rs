@@ -712,6 +712,35 @@ fn section_breaks_show_with_formatting_marks() {
     assert_eq!(labels(&Document::from_text("One\nTwo"), true), (vec![], 2));
 }
 
+#[test]
+fn paragraph_marks_sit_past_text_running_the_other_way() {
+    // A left-to-right paragraph ending in Hebrew, and a right-to-left one ending in Latin: the
+    // logically last letters are at the wrong edge, but the ¶ still goes past every glyph.
+    let mut d = Document::from_text("Hello \u{5e9}\u{5dc}\u{5d5}\u{5dd}\n\u{5e9}\u{5dc}\u{5d5}\u{5dd} abc");
+    let at = Pos::body(1, 0);
+    d.format_paragraphs(&at, &at, &|p: &mut ParaProps| p.bidi = Some(true)).unwrap();
+    let l = lay(&d);
+    // Leftmost and rightmost glyph edges (page x) of each paragraph's single line.
+    let extents: Vec<(f32, f32)> = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| if let Placed::Lines { para, x, .. } = it { Some((para, *x)) } else { None })
+        .map(|(pl, x)| {
+            let ln = &pl.lines[0];
+            let edges = (ln.c0..ln.c1).filter_map(|k| Some((ln.cl_left(k)?, ln.cl_right(k)?)));
+            edges.fold((f32::MAX, f32::MIN), |(a, b), (l, r)| (a.min(x + l), b.max(x + r)))
+        })
+        .collect();
+    let marks: Vec<(f32, f32)> = display::page_display(&d, &l.pages[0], &display::DisplayOptions { marks: true, ..Default::default() })
+        .into_iter()
+        .filter_map(|i| if let display::Draw::Mark { ch: '¶', x, size, .. } = i { Some((x, size)) } else { None })
+        .collect();
+    assert_eq!((extents.len(), marks.len()), (2, 2));
+    let ((ltr_x, _), (rtl_x, size)) = (marks[0], marks[1]);
+    assert!(ltr_x >= extents[0].1, "LTR ¶ at {ltr_x} should be right of all glyphs {:?}", extents[0]);
+    assert!(rtl_x + size * 0.5 <= extents[1].0, "RTL ¶ at {rtl_x} should be left of all glyphs {:?}", extents[1]);
+}
+
 fn border_lines(d: &Document) -> Vec<(f32, f32, f32, f32)> {
     border_lines_in(d, &lay(d))
 }

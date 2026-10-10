@@ -567,7 +567,9 @@ fn lines(
                 }
             }
             if line.end == LineEnd::Para {
-                let ex = x + line.end_x();
+                // The mark follows the line's visual end, past every glyph, even where the
+                // logically last text runs against the paragraph's direction.
+                let ex = x + line.visual_end_x();
                 let size = pl.lines.first().map(|_| msize).unwrap_or(msize);
                 // A right-to-left paragraph's mark sits at its end, on the left.
                 let mx = if line.rtl { ex - 1.0 - size * 0.6 } else { ex + 1.0 };
