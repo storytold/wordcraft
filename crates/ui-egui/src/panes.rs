@@ -145,10 +145,8 @@ fn styles(app: &mut WordApp, ui: &mut Ui) {
     }
     let st = app.session.run("format.state", &json!({})).unwrap_or_default();
     let cur = st.get("style").and_then(Value::as_str).unwrap_or("Normal").to_string();
-    ui.label(
-        egui::RichText::new(crate::i18n::fmt(tl!("Current style: {style}"), &[("style", st.get("styleName").and_then(Value::as_str).unwrap_or(""))]))
-            .small(),
-    );
+    let current_name = app.session.doc.styles.get(&cur).map(crate::i18n::style_name).unwrap_or("");
+    ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Current style: {style}"), &[("style", current_name)])).small());
     ui.horizontal(|ui| {
         if ui.button(tl!("New Style…")).clicked() {
             app.dialog = crate::dialogs::Dialog::open("newStyle", app);
@@ -168,7 +166,7 @@ fn styles(app: &mut WordApp, ui: &mut Ui) {
         .styles
         .iter()
         .filter(|s| !s.hidden && s.kind != wordcraft_doc::StyleKind::Table)
-        .map(|s| (s.id.clone(), s.name.clone(), s.kind == wordcraft_doc::StyleKind::Character))
+        .map(|s| (s.id.clone(), crate::i18n::style_name(s).to_string(), s.kind == wordcraft_doc::StyleKind::Character))
         .collect();
     list.sort_by_key(|s| s.1.to_lowercase());
     egui::ScrollArea::vertical().show(ui, |ui| {

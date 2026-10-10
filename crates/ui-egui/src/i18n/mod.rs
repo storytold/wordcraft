@@ -47,13 +47,14 @@ pub struct LangInfo {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 7] = [
+pub static LANGUAGES: [LangInfo; 8] = [
     LangInfo { code: "en", name: "English", source: "", prefer_hans: false, catalog: OnceLock::new() },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` resolve here (see `candidates`).
     LangInfo { code: "zh-hans", name: "简体中文", source: include_str!("zh-hans.tsv"), prefer_hans: true, catalog: OnceLock::new() },
     // Traditional Chinese (Taiwan vocabulary); `zh-TW`, `zh-HK`, `zh-MO` and `zh-Hant-*` resolve here.
     LangInfo { code: "zh-hant", name: "繁體中文", source: include_str!("zh-hant.tsv"), prefer_hans: true, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), prefer_hans: false, catalog: OnceLock::new() },
+    LangInfo { code: "nb", name: "Norsk bokmål", source: include_str!("nb.tsv"), prefer_hans: false, catalog: OnceLock::new() },
     LangInfo { code: "uk", name: "Українська", source: include_str!("uk.tsv"), prefer_hans: false, catalog: OnceLock::new() },
     // Spanish, neutral across Spain and Latin America; `es-ES`, `es-MX`, `es-419` … resolve here.
     LangInfo { code: "es", name: "Español", source: include_str!("es.tsv"), prefer_hans: false, catalog: OnceLock::new() },
@@ -107,6 +108,25 @@ impl Lang {
         self.0.prefer_hans
     }
 
+    /// Display measurements in centimeters for the Norwegian interface.
+    pub fn measurement_unit(self) -> wordcraft_geom::Unit {
+        if self.code() == "nb" { wordcraft_geom::Unit::Centimeters } else { wordcraft_geom::Unit::Inches }
+    }
+
+    pub fn document_locale(self) -> &'static str {
+        if self.code() == "nb" { "nb-NO" } else { "en-US" }
+    }
+
+    pub fn number(self, value: f64, decimals: usize) -> String {
+        let text = format!("{value:.decimals$}");
+        if self.code() == "nb" { text.replace('.', ",") } else { text }
+    }
+
+    pub fn measurement(self, points: f32) -> String {
+        let text = self.measurement_unit().format(points);
+        if self.code() == "nb" { text.replace('.', ",") } else { text }
+    }
+
     /// A language by its exact code (any case).
     pub fn from_code(code: &str) -> Option<Lang> {
         LANGUAGES.iter().find(|l| l.code.eq_ignore_ascii_case(code)).map(Lang)
@@ -150,6 +170,10 @@ fn candidates(tag: &str) -> Vec<String> {
         // Chinese by region when no script is given.
         let script = if parts.iter().any(|p| matches!(*p, "tw" | "hk" | "mo")) { "zh-hant" } else { "zh-hans" };
         out.insert(out.len().saturating_sub(1), script.to_string());
+    }
+    // `no` is the legacy Norwegian tag; Nynorsk (`nn`) remains distinct.
+    if primary == "no" {
+        out.push("nb".to_string());
     }
     out
 }
@@ -205,6 +229,27 @@ pub fn current() -> Lang {
     CURRENT.get()
 }
 
+/// Numeric fields accept both decimal separators; storage and command parameters stay numeric.
+pub fn parse_number(text: &str) -> Option<f64> {
+    let value: f64 = text.trim().replace(',', ".").parse().ok()?;
+    value.is_finite().then_some(value)
+}
+
+pub fn format_number(value: f64, decimals: std::ops::RangeInclusive<usize>) -> String {
+    let max = (*decimals.end()).min(10);
+    let min = (*decimals.start()).min(max);
+    let mut text = format!("{value:.max$}");
+    if let Some(dot) = text.find('.') {
+        while text.ends_with('0') && text.len() > dot + 1 + min {
+            text.pop();
+        }
+        if text.ends_with('.') {
+            text.pop();
+        }
+    }
+    if current().code() == "nb" { text.replace('.', ",") } else { text }
+}
+
 /// Does `lang` have a catalog entry for this string? (English never does: it is the source.)
 pub fn has(lang: Lang, s: &str) -> bool {
     lang.catalog().plain(s).is_some()
@@ -213,6 +258,11 @@ pub fn has(lang: Lang, s: &str) -> bool {
 /// `s` in the current language ([`tr`] with [`current`]).
 pub fn t(s: &str) -> &str {
     tr(current(), s)
+}
+
+/// Translate built-in style labels without changing document style names or custom styles.
+pub fn style_name(style: &wordcraft_doc::Style) -> &str {
+    if style.builtin { t(&style.name) } else { &style.name }
 }
 
 /// `s` in `lang`; strings without a translation come back unchanged.

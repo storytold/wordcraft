@@ -23,6 +23,11 @@ list (author, source, license) is in ATTRIBUTION.md.
 - English word list (assets/hyphenation/en-us.dic) — derived from the Moby Hyphenator II list by
   Grady Ward, public domain (Project Gutenberg eBook #3204). The hyphenation patterns
   (assets/hyphenation/en-us.pat) were trained from it and are released as CC0-1.0.
+- Norwegian Bokmål word list (assets/spelling/nb-NO.dic) — derived from Norsk ordbank –
+  bokmål 2005 (2022-02-01), Nasjonalbiblioteket / Språkbanken, CC BY 4.0.
+  Source: https://www.nb.no/sprakbanken/ressurskatalog/oai-nb-no-sbr-5/
+  License: https://creativecommons.org/licenses/by/4.0/ and assets/spelling/CC-BY-4.0.txt.
+  Current standard full forms were extracted, normalized, deduplicated and compressed.
 - All UI icons are drawn in code (crates/ui-egui/src/icons.rs) and are original work, MIT OR Apache-2.0.
 
 Rust dependencies (egui, eframe, vello_cpu, skrifa, harfrust, krilla, quick-xml, zip, image, …)

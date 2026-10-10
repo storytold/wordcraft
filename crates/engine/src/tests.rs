@@ -751,3 +751,32 @@ fn styles_apply_rejected_on_protected_document() {
     assert_eq!(para_style(&s, 0), None);
     assert_eq!(s.undo_labels(), undo);
 }
+
+#[test]
+fn norwegian_proofing_and_mixed_language_documents() {
+    let mut s = s();
+    run(&mut s, "file.new", json!({"locale": "nb-NO"}));
+    run(&mut s, "text.insert", json!({"text": "Ærlig norsk bokmål. Bøøkene er åpne."}));
+    let issues = run(&mut s, "review.issues", json!({}));
+    let issues = issues.as_array().unwrap();
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert_eq!(issues[0]["text"], "Bøøkene");
+    assert_eq!(issues[0]["kind"], "spelling");
+    assert!(issues[0]["suggestions"].as_array().unwrap().contains(&json!("Bøkene")));
+    run(&mut s, "select.text", json!({"text": "Bøøkene"}));
+    assert_eq!(run(&mut s, "review.suggestions", json!({}))["text"], "Bøøkene");
+    assert_eq!(run(&mut s, "review.spelling", json!({}))["text"], "Bøøkene");
+    run(&mut s, "text.insert", json!({"text": "Bøkene"}));
+    assert!(run(&mut s, "review.issues", json!({})).as_array().unwrap().is_empty());
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "review.language", json!({"lang": "en-US"}));
+    run(&mut s, "text.insert", json!({"text": "Hello wrold."}));
+    let issues = run(&mut s, "review.issues", json!({}));
+    assert_eq!(issues.as_array().unwrap().len(), 1, "{issues}");
+    assert_eq!(issues[0]["text"], "wrold");
+    assert!(issues[0]["suggestions"].as_array().unwrap().contains(&json!("world")));
+    let bytes = crate::io::save_bytes("mixed.docx", &s.doc).unwrap();
+    let mut reopened = Session::new(crate::io::open_bytes("mixed.docx", &bytes).unwrap());
+    assert_eq!(run(&mut reopened, "review.issues", json!({})), issues);
+}

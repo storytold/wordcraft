@@ -183,6 +183,25 @@ impl WordApp {
 
     /// Run a command; UI-level commands (`ui.*`) are handled here, the rest by the engine.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        let mut params = params;
+        if id == "file.new" && params.get("locale").is_none() {
+            if !params.is_object() {
+                params = json!({});
+            }
+            params["locale"] = json!(i18n::Lang::from_pref(&self.ui.language).document_locale());
+        }
+        if id == "insert.dateTime" && params.get("format").is_none() && i18n::Lang::from_pref(&self.ui.language).code() == "nb" {
+            if !params.is_object() {
+                params = json!({});
+            }
+            params["format"] = json!("dd.MM.yyyy");
+        }
+        if id == "review.language" && params.get("lang").is_none() && i18n::Lang::from_pref(&self.ui.language).code() == "nb" {
+            if !params.is_object() {
+                params = json!({});
+            }
+            params["lang"] = json!("nb-NO");
+        }
         // A pending Change Picture only survives until the next action (#147).
         if !matches!(id, "ui.changePicture" | "picture.change" | "insert.picture") {
             self.change_picture_target = None;
@@ -226,7 +245,7 @@ impl WordApp {
         }
         if !self.session.status.is_empty() {
             let s = std::mem::take(&mut self.session.status);
-            self.status(s);
+            self.status(i18n::t(&s).to_string());
         }
     }
 
@@ -403,10 +422,13 @@ impl WordApp {
     /// Document title for the title bar.
     pub fn title_stem(&self) -> String {
         match &self.session.path {
-            Some(p) => p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Document1".into()),
+            Some(p) => p
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| i18n::tr(i18n::Lang::from_pref(&self.ui.language), "Document1").into()),
             None => {
                 if self.session.doc.core.title.is_empty() {
-                    "Document1".into()
+                    i18n::tr(i18n::Lang::from_pref(&self.ui.language), "Document1").into()
                 } else {
                     self.session.doc.core.title.clone()
                 }
