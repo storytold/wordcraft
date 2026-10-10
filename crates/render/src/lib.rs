@@ -539,7 +539,7 @@ mod tests {
 
     /// Ink in a raster: the sum of how far each pixel is from white.
     fn ink(img: &Rendered) -> u64 {
-        img.pixels.chunks_exact(4).map(|p| 255 - p[0] as u64).sum()
+        img.pixels.as_chunks::<4>().0.iter().map(|p| 255 - p[0] as u64).sum()
     }
 
     #[test]
