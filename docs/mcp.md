@@ -11,6 +11,10 @@ wordcraft-cli mcp --connect 127.0.0.1:7981 # …including clicks, keys and scree
 
 Claude Code: `claude mcp add wordcraft -- wordcraft-cli mcp`.
 
+With `--connect`, the bridge sends the app's control key, which it reads from
+`WORDCRAFT_CONTROL_KEY` or from the key file the app writes at start. It sends the key only to
+loopback addresses; see [Keys](control-protocol.md#keys).
+
 ## Tools
 
 | Tool | What it does |
@@ -19,7 +23,7 @@ Claude Code: `claude mcp add wordcraft -- wordcraft-cli mcp`.
 | `execute` | run one command: `{command: "insert.table", params: {rows: 3, cols: 4}}` |
 | `batch` | run several commands in order |
 | `new_document` | blank, sample, letter, resume, report |
-| `open_document` / `save_document` | docx, odt, rtf, html, md, txt, json; save also pdf, png |
+| `open_document` / `save_document` | docx, doc (open only), odt, rtf, html, md, tex, txt, json; save also pdf, png |
 | `type_text` | type at the caret (`paragraphs: true` splits lines into paragraphs) |
 | `select_text` | select the n-th occurrence of some text |
 | `get_text` / `inspect_document` | read the document back (verify without screenshots) |

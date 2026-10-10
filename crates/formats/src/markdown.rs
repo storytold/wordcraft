@@ -1056,7 +1056,8 @@ enum Mark {
 fn inlines_md(inlines: &[Inline]) -> String {
     // Split into (text, fmt) pieces with whitespace moved outside emphasis.
     let mut pieces: Vec<(String, Fmt, Option<String>)> = Vec::new();
-    for i in inlines {
+    let inlines = crate::model::equations_as_text(inlines);
+    for i in inlines.iter() {
         match i {
             Inline::Text(t, f) => {
                 let has_emph = f.bold || f.italic || f.strike;
@@ -1086,6 +1087,7 @@ fn inlines_md(inlines: &[Inline]) -> String {
                 let safe: String = a.chars().filter(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | ':')).collect();
                 pieces.push((String::new(), Fmt::default(), Some(format!("<a id=\"{safe}\"></a>"))));
             }
+            Inline::Equation { .. } => {}
         }
     }
     let mut out = String::new();
@@ -1221,6 +1223,7 @@ fn write_blocks(blocks: &[FBlock], out: &mut Vec<String>) {
     let mut i = 0;
     let mut counters = [0u32; 9];
     let mut prev_list = false;
+    let mut prev_top_ordered = false;
     while let Some(b) = blocks.get(i) {
         match b {
             FBlock::Table(t) => {
@@ -1251,8 +1254,11 @@ fn write_blocks(blocks: &[FBlock], out: &mut Vec<String>) {
                 match p.list {
                     Some(li) => {
                         let lv = li.level.min(8) as usize;
-                        if !prev_list {
+                        if !prev_list || (lv == 0 && prev_top_ordered != li.ordered) {
                             counters = [0; 9];
+                        }
+                        if lv == 0 {
+                            prev_top_ordered = li.ordered;
                         }
                         let n = counters.get_mut(lv).map(|c| {
                             *c += 1;

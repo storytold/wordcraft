@@ -1,10 +1,14 @@
-//! The browser shell: web `Services`, drag-and-drop, and the eframe web runner.
+//! The browser shell: web `Services`, drag-and-drop, the unsaved-changes guard and the eframe
+//! web runner.
+
+use std::cell::Cell;
+use std::rc::Rc;
 
 use wasm_bindgen::JsCast as _;
 use wordcraft_engine::Session;
 use wordcraft_ui_egui::{Inbox, Services, WordApp};
 
-const DOC_EXTS: &[&str] = &["docx", "docm", "dotx", "odt", "rtf", "txt", "md", "html", "htm", "json"];
+const DOC_EXTS: &[&str] = &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "rtf", "txt", "md", "html", "htm", "tex", "json"];
 const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp"];
 const CANVAS_ID: &str = "wordcraft_canvas";
 const LOADING_ID: &str = "wordcraft_loading";
@@ -20,6 +24,10 @@ pub fn start() {
             log::error!("missing <canvas id=\"{CANVAS_ID}\">");
             return;
         };
+        let dirty = Rc::new(Cell::new(false));
+        if let Err(e) = guard_unload(dirty.clone()) {
+            log::error!("no unsaved-changes guard: {e}");
+        }
         let mut options = eframe::WebOptions::default();
         if query().contains("webgl")
             && let eframe::egui_wgpu::WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup
@@ -36,7 +44,7 @@ pub fn start() {
                     }
                     let inbox: Inbox = Inbox::default();
                     let doc = if query().contains("sample") { wordcraft_engine::sample::sample_document() } else { wordcraft_doc::Document::new() };
-                    let mut app = WordApp::new(Session::new(doc), services(inbox.clone(), cc.egui_ctx.clone()));
+                    let mut app = WordApp::new(Session::new(doc), services(inbox.clone(), cc.egui_ctx.clone(), dirty));
                     app.autosave = false;
                     Ok(Box::new(WebShell { app, inbox }))
                 }),
@@ -91,7 +99,8 @@ impl eframe::App for WebShell {
     }
 }
 
-fn services(inbox: Inbox, ctx: egui::Context) -> Services {
+/// `dirty` is the flag the `beforeunload` guard reads ([`guard_unload`]).
+fn services(inbox: Inbox, ctx: egui::Context, dirty: Rc<Cell<bool>>) -> Services {
     let open_inbox = inbox.clone();
     Services {
         open_async: Some(Box::new(move |purpose: &str| {
@@ -113,19 +122,29 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
         })),
         // Exports ask for a name; the browser decides where the download goes.
         pick_save: Some(Box::new(|name: &str| Some(name.to_string()))),
-        download: Some(Box::new(|name: &str, bytes: &[u8]| {
-            if let Err(e) = download(name, bytes) {
-                log::error!("download of {name} failed: {e}");
-            }
-        })),
-        print: Some(Box::new(|bytes: &[u8]| {
-            if let Err(e) = print_pdf(bytes) {
-                log::error!("print failed: {e}");
-            }
-        })),
+        download: Some(Box::new(download)),
+        print: Some(Box::new(print_pdf)),
         inbox: Some(inbox),
+        on_dirty: Some(Box::new(move |d| dirty.set(d))),
         ..Default::default()
     }
+}
+
+/// Closing, reloading or leaving the tab with unsaved changes asks first. Browsers show their own
+/// confirmation (a page can only ask for it), so there is no Save button: Cancel, then File › Save.
+fn guard_unload(dirty: Rc<Cell<bool>>) -> Result<(), String> {
+    let window = web_sys::window().ok_or("no window")?;
+    let on_unload = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::BeforeUnloadEvent)>::new(move |e: web_sys::BeforeUnloadEvent| {
+        if dirty.get() {
+            e.prevent_default();
+            // Older browsers ask only when `returnValue` is set.
+            e.set_return_value("unsaved changes");
+        }
+    });
+    window.add_event_listener_with_callback("beforeunload", on_unload.as_ref().unchecked_ref()).map_err(|e| format!("{e:?}"))?;
+    // The listener lives as long as the page.
+    on_unload.forget();
+    Ok(())
 }
 
 /// Trigger a browser download of `bytes` named after the last component of `path`.
@@ -203,6 +222,7 @@ fn mime_for(name: &str) -> &'static str {
         Some("rtf") => "application/rtf",
         Some("html") => "text/html",
         Some("md" | "txt") => "text/plain",
+        Some("tex") => "application/x-tex",
         Some("json") => "application/json",
         _ => "application/octet-stream",
     }

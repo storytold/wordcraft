@@ -130,6 +130,59 @@ impl Previews {
     }
 }
 
+/// An equation rasterised for a gallery tile or a button (`pt`: font size; `size`: the tile in
+/// points), with its empty slots shown. Cached by `key`; `None` while waiting for this frame's
+/// rendering budget.
+pub fn math_texture(
+    app: &mut WordApp,
+    ctx: &egui::Context,
+    key: &str,
+    nodes: &wordcraft_doc::math::Arg,
+    display: bool,
+    pt: f32,
+    size: egui::Vec2,
+) -> Option<TextureHandle> {
+    let ppp = ctx.pixels_per_point();
+    let k = format!("math:{key}:{pt}:{}x{}:{ppp}", size.x, size.y);
+    app.previews.get_or(ctx, &k, || math_image(nodes, display, pt, size.x, size.y, ppp))
+}
+
+fn math_image(nodes: &wordcraft_doc::math::Arg, display: bool, pt: f32, w: f32, h: f32, ppp: f32) -> Option<egui::ColorImage> {
+    use wordcraft_doc::math::{Math, to_linear};
+    let props = CharProps { size: Some(pt), ..Default::default() };
+    let mut p = Paragraph::with_text("", props.clone());
+    p.props.align = Some(wordcraft_doc::props::Align::Center);
+    p.props.space_before = Some(0.0);
+    p.props.space_after = Some(0.0);
+    p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
+    let eq = wordcraft_doc::InlineObject::Equation { linear: to_linear(nodes), display, math: Math { nodes: nodes.clone(), ..Default::default() } };
+    p.insert_object(0, eq, &props).ok()?;
+    let mut d = Document::new();
+    d.body = vec![para_block(p)];
+    d.last_section.page_w = w;
+    d.last_section.page_h = 2000.0;
+    d.last_section.margin_left = 0.0;
+    d.last_section.margin_right = 0.0;
+    d.last_section.margin_top = 0.0;
+    d.last_section.margin_bottom = 0.0;
+    let l = wordcraft_layout::layout(&d, &mut wordcraft_layout::LayoutCache::new(), &Default::default());
+    let page = l.pages.first()?;
+    // Centre the equation's line in the tile.
+    let mid = page
+        .items
+        .iter()
+        .find_map(|it| match it {
+            wordcraft_layout::Placed::Lines { para, y, .. } => Some(y + para.height / 2.0),
+            _ => None,
+        })
+        .unwrap_or(h / 2.0);
+    let mut opts = wordcraft_render::RenderOptions::default();
+    opts.display.placeholders = true;
+    let img = wordcraft_render::render_area(&d, page, 0.0, mid - h / 2.0, w, h, ppp, &opts);
+    let px = img.to_straight();
+    Some(egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &px))
+}
+
 /// Lay out `para` (with `base`'s styles) in a `w`×`h` pt box and rasterise it.
 pub fn snippet(base: &Document, para: Paragraph, w: f32, h: f32, ppp: f32, margin: f32) -> Option<egui::ColorImage> {
     snippet_blocks(base, vec![Block::Para(para)], w, h, ppp, margin, None)
@@ -156,7 +209,7 @@ fn snippet_blocks(
     d.last_section.margin_bottom = 0.0;
     let l = wordcraft_layout::layout(&d, &mut wordcraft_layout::LayoutCache::new(), &Default::default());
     let page = l.pages.first()?;
-    let mut opts = wordcraft_render::RenderOptions::default();
+    let mut opts = crate::canvas::screen_render_options();
     if let Some(p) = paper {
         opts.paper = p;
     }

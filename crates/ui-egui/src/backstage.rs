@@ -57,7 +57,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         "save" => {
                             let _ = app.run("file.save", json!({}));
                         }
-                        "saveAs" => app.save_as_dialog(),
+                        "saveAs" => {
+                            app.save_as_dialog();
+                        }
                         "open" => {
                             app.ui.backstage_page = id.into();
                         }
@@ -117,7 +119,7 @@ fn template_tile(ui: &mut Ui, app: &mut WordApp, label: &str, template: &str) {
             let _ = s.run("file.new", &json!({"template": template}));
             let l = s.export_layout();
             let page = l.pages.first()?;
-            let img = wordcraft_render::render_page(&s.doc, page, 150.0 / page.w * ppp, &Default::default());
+            let img = wordcraft_render::render_page(&s.doc, page, 150.0 / page.w * ppp, &crate::canvas::screen_render_options());
             let px = img.to_straight();
             let h = ui.ctx().load_texture(
                 &key,
@@ -232,12 +234,11 @@ fn export_page(app: &mut WordApp, ui: &mut Ui) {
         ui.add_space(12.0);
         if ui.add(egui::Button::new(egui::RichText::new(tl!("Print")).font(medium(13.5))).min_size(vec2(320.0, 34.0))).clicked() {
             match wordcraft_engine::io::save_bytes("x.pdf", &app.session.doc) {
-                Ok(bytes) => {
-                    if let Some(print) = &app.services.print {
-                        print(&bytes);
-                    }
-                    app.status(tl!("Opening print dialog…"));
-                }
+                Ok(bytes) => match app.services.print.as_ref().map(|print| print(&bytes)) {
+                    Some(Ok(())) => app.status(tl!("Opening print dialog…")),
+                    Some(Err(e)) => app.status(format!("{}: {e}", tl!("Print failed"))),
+                    None => {}
+                },
                 Err(e) => app.status(format!("{}: {e}", tl!("Print failed"))),
             }
         }
@@ -256,6 +257,7 @@ fn export_page(app: &mut WordApp, ui: &mut Ui) {
         ("Rich Text Format (*.rtf)", "rtf"),
         ("Web page (*.html)", "html"),
         ("Markdown (*.md)", "md"),
+        ("LaTeX (*.tex)", "tex"),
         ("Plain text (*.txt)", "txt"),
         ("Page image (*.png)", "png"),
     ] {
@@ -288,7 +290,15 @@ fn options_page(app: &mut WordApp, ui: &mut Ui) {
     if ui.checkbox(&mut dark, tl!("Dark mode")).changed() {
         let _ = app.run("ui.dark", json!({"value": dark}));
     }
-    ui.checkbox(&mut app.autosave, tl!("AutoSave documents that have been saved"));
+    ui.checkbox(&mut app.autosave, tl!("AutoSave documents you have saved in WordCraft"));
+    let mut dark_page = app.session.view.dark_mode;
+    if ui
+        .checkbox(&mut dark_page, tl!("Dark page (white text on black)"))
+        .on_hover_text(tl!("Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged."))
+        .changed()
+    {
+        let _ = app.run("view.darkMode", json!({"value": dark_page}));
+    }
     ui.checkbox(&mut app.ui.show_discord, tl!("Show the community button in the title bar"));
     ui.add_space(10.0);
     ui.label(egui::RichText::new(tl!("Display")).font(semibold(15.0)));

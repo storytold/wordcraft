@@ -250,6 +250,9 @@ pub struct CharProps {
     /// Character shading (background fill).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shading: Option<Rgb>,
+    /// Character border (`w:bdr`); `style: None` = explicitly no border.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border: Option<Border>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vert_align: Option<VertAlign>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -306,7 +309,7 @@ impl CharProps {
     /// Apply every `Some` field of `patch` on top of `self`.
     pub fn overlay(&mut self, patch: &CharProps) {
         overlay_fields!(self, patch; style, font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
-            shading, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl,
+            shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl,
             link, ins, del);
     }
     pub fn overlaid(mut self, patch: &CharProps) -> CharProps {
@@ -487,6 +490,27 @@ impl Borders {
     pub fn any_visible(&self) -> bool {
         [self.top, self.left, self.bottom, self.right, self.between, self.inside_v].iter().flatten().any(Border::is_visible)
     }
+    /// Apply every `Some` side of `patch` on top of `self`.
+    pub fn overlay(&mut self, patch: &Borders) {
+        if patch.top.is_some() {
+            self.top = patch.top;
+        }
+        if patch.left.is_some() {
+            self.left = patch.left;
+        }
+        if patch.bottom.is_some() {
+            self.bottom = patch.bottom;
+        }
+        if patch.right.is_some() {
+            self.right = patch.right;
+        }
+        if patch.between.is_some() {
+            self.between = patch.between;
+        }
+        if patch.inside_v.is_some() {
+            self.inside_v = patch.inside_v;
+        }
+    }
 }
 
 /// A reference to a numbering definition and level.
@@ -601,6 +625,36 @@ pub struct TableProps {
     pub shading: Option<Rgb>,
     /// Alternative text.
     pub caption: Option<String>,
+    /// Floating placement (`w:tblpPr`); `None` for a table in the text flow.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub float: Option<TableFloat>,
+}
+
+/// Where a floating table sits; the text after it wraps around it.
+#[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TableFloat {
+    /// What `x` is measured from: the column (`Column`), the margin or the page.
+    pub h_rel: crate::para::Anchor,
+    /// What `y` is measured from: the text where the table stands (`Paragraph`), the margin or
+    /// the page.
+    pub v_rel: crate::para::Anchor,
+    /// Offsets, points (used when the matching alignment is `None`).
+    pub x: f32,
+    pub y: f32,
+    pub h_align: Option<crate::para::FloatAlign>,
+    pub v_align: Option<crate::para::FloatAlign>,
+    /// Distance from surrounding text: left, top, right, bottom (points).
+    pub dist: [f32; 4],
+    /// Whether it may overlap other floating tables (`w:tblOverlap`); Word's default is yes.
+    pub overlap: bool,
+}
+
+impl TableFloat {
+    /// The distances from text, finite and clamped (left, top, right, bottom).
+    pub fn dist_from_text(&self) -> [f32; 4] {
+        self.dist.map(|v| if v.is_finite() { v.clamp(0.0, 1584.0) } else { 0.0 })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -690,6 +744,22 @@ mod tests {
         assert_eq!(r.bold, Some(true));
         assert_eq!(r.size, Some(14.0));
         assert_eq!(r.italic, Some(true));
+    }
+
+    #[test]
+    fn borders_overlay_per_side() {
+        let thin = Border::single(0.5);
+        let thick = Border::single(2.0);
+        let nil = Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 };
+        let mut b = Borders::all(thin);
+        b.overlay(&Borders { top: Some(thick), ..Default::default() });
+        assert_eq!(b.top, Some(thick));
+        assert_eq!(b.bottom, Some(thin));
+        b.overlay(&Borders::box_(nil));
+        assert_eq!(b.left, Some(nil)); // explicit nil overrides that side
+        assert_eq!(b.between, Some(thin)); // untouched sides survive
+        b.overlay(&Borders::default());
+        assert_eq!(b.left, Some(nil)); // empty patch changes nothing
     }
 
     #[test]

@@ -3,7 +3,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::props::{Align, Borders, CharProps, Highlight, LineSpacing, NumRef, ParaProps, Rgb, TabAlign, TabStop, TextColor, Underline, VertAlign};
+use crate::props::{
+    Align, Border, Borders, CharProps, Highlight, LineSpacing, NumRef, ParaProps, Rgb, TabAlign, TabStop, TextColor, Underline, VertAlign,
+};
 use crate::styles::{StyleKind, StyleSheet};
 
 /// Concrete character formatting.
@@ -21,6 +23,8 @@ pub struct ResolvedChar {
     pub color: TextColor,
     pub highlight: Option<Rgb>,
     pub shading: Option<Rgb>,
+    /// Visible character border only (`nil`/`none` resolve to `None`).
+    pub border: Option<Border>,
     pub vert_align: VertAlign,
     pub caps: bool,
     pub small_caps: bool,
@@ -53,6 +57,7 @@ impl ResolvedChar {
             color: c.color.unwrap_or_default(),
             highlight: c.highlight.and_then(Highlight::rgb),
             shading: c.shading,
+            border: c.border.filter(Border::is_visible),
             vert_align: c.vert_align.unwrap_or_default(),
             caps: c.caps.unwrap_or(false),
             small_caps: c.small_caps.unwrap_or(false),
@@ -154,8 +159,11 @@ impl ResolvedPara {
 impl StyleSheet {
     /// Paragraph properties after defaults and the style chain (without direct formatting).
     pub fn para_style_props(&self, style: &str) -> (ParaProps, CharProps) {
-        let mut pp = self.default_para.clone();
-        let mut cp = self.default_chr.clone();
+        self.para_style_props_over(style, self.default_para.clone(), self.default_chr.clone())
+    }
+
+    /// The paragraph style chain of `style` applied over `pp` / `cp`.
+    fn para_style_props_over(&self, style: &str, mut pp: ParaProps, mut cp: CharProps) -> (ParaProps, CharProps) {
         for s in self.chain(style) {
             if s.kind == StyleKind::Paragraph {
                 let mut sp = s.para.clone();
@@ -175,8 +183,21 @@ impl StyleSheet {
 
     /// Resolve a paragraph's properties.
     pub fn resolve_para(&self, p: &ParaProps) -> ResolvedPara {
+        self.resolve_para_in(p, None)
+    }
+
+    /// Resolve a paragraph's properties; `table` is the paragraph formatting of the table style of
+    /// the table the paragraph is in. The order is that of ECMA-376 §17.7.2: document defaults, the
+    /// table style, the paragraph style chain, direct formatting. So the table style replaces
+    /// document defaults (Table Grid's single spacing beats the defaults' 8 pt after), but any
+    /// property the paragraph style chain sets, Normal included, beats the table style.
+    pub fn resolve_para_in(&self, p: &ParaProps, table: Option<&ParaProps>) -> ResolvedPara {
         let style = p.style.clone().unwrap_or_else(|| "Normal".into());
-        let (mut base, _) = self.para_style_props(&style);
+        let mut defaults = self.default_para.clone();
+        if let Some(t) = table {
+            defaults.overlay(&ParaProps { style: None, ..t.clone() });
+        }
+        let (mut base, _) = self.para_style_props_over(&style, defaults, CharProps::default());
         let mut direct = p.clone();
         if let (Some(b), Some(d)) = (base.tabs.clone(), direct.tabs.clone()) {
             let mut merged: Vec<TabStop> = b.into_iter().filter(|t| !d.iter().any(|a| (a.pos - t.pos).abs() < 0.5)).collect();
@@ -189,7 +210,19 @@ impl StyleSheet {
 
     /// Resolve character formatting for a run in a paragraph of style `para_style`.
     pub fn resolve_char(&self, para_style: Option<&str>, c: &CharProps) -> ResolvedChar {
-        let (_, mut cp) = self.para_style_props(para_style.unwrap_or("Normal"));
+        self.resolve_char_in(para_style, None, c)
+    }
+
+    /// Resolve character formatting for a run in a paragraph of style `para_style`; `table` is the
+    /// run formatting of the table style (with the cell's conditional formatting) of the table the
+    /// paragraph is in. Order: document defaults, the table style, the paragraph style chain, the
+    /// character style chain, direct formatting (ECMA-376 §17.7.2).
+    pub fn resolve_char_in(&self, para_style: Option<&str>, table: Option<&CharProps>, c: &CharProps) -> ResolvedChar {
+        let mut defaults = self.default_chr.clone();
+        if let Some(t) = table {
+            defaults.overlay(&CharProps { style: None, ..t.clone() });
+        }
+        let (_, mut cp) = self.para_style_props_over(para_style.unwrap_or("Normal"), ParaProps::default(), defaults);
         if let Some(cs) = c.style.as_deref() {
             for s in self.chain(cs) {
                 if s.kind == StyleKind::Character || s.kind == StyleKind::Paragraph {
@@ -244,6 +277,52 @@ mod tests {
         assert_eq!(p.line_spacing, LineSpacing::Multiple(1.0));
         let c = s.resolve_char(None, &CharProps { size: Some(-4.0), ..Default::default() });
         assert_eq!(c.size, 1.0);
+    }
+
+    /// ECMA-376 §17.7.2 for text in a table: document defaults, then the table style, then the
+    /// paragraph style chain (Normal included), then direct formatting.
+    #[test]
+    fn table_style_sits_between_defaults_and_paragraph_style() {
+        let mut s = StyleSheet::builtin();
+        s.styles.push(crate::styles::Style {
+            id: "Spaced".into(),
+            based_on: Some("Normal".into()),
+            para: ParaProps { space_after: Some(12.0), ..Default::default() },
+            chr: CharProps { color: Some(TextColor::Rgb(Rgb(0, 0, 0xFF))), ..Default::default() },
+            ..Default::default()
+        });
+        let table_p = ParaProps { space_after: Some(0.0), line_spacing: Some(LineSpacing::Multiple(1.0)), ..Default::default() };
+        let red = TextColor::Rgb(Rgb(0xC0, 0, 0));
+        let table_c = CharProps { bold: Some(true), color: Some(red), size: Some(9.0), ..Default::default() };
+        // Document defaults alone (outside a table).
+        let out = s.resolve_para(&ParaProps::default());
+        assert_eq!((out.space_after, out.line_spacing), (8.0, LineSpacing::Multiple(1.15)));
+        // The table style replaces the defaults.
+        let p = s.resolve_para_in(&ParaProps::default(), Some(&table_p));
+        assert_eq!((p.space_after, p.line_spacing), (0.0, LineSpacing::Multiple(1.0)));
+        let c = s.resolve_char_in(None, Some(&table_c), &CharProps::default());
+        assert!(c.bold);
+        assert_eq!((c.color, c.size), (red, 9.0));
+        // A paragraph style beats it, for what the style sets only.
+        let spaced = ParaProps { style: Some("Spaced".into()), ..Default::default() };
+        let p = s.resolve_para_in(&spaced, Some(&table_p));
+        assert_eq!((p.space_after, p.line_spacing), (12.0, LineSpacing::Multiple(1.0)));
+        let c = s.resolve_char_in(Some("Spaced"), Some(&table_c), &CharProps::default());
+        assert!(c.bold);
+        assert_eq!((c.color, c.size), (TextColor::Rgb(Rgb(0, 0, 0xFF)), 9.0));
+        // A character style and direct formatting beat both.
+        let c =
+            s.resolve_char_in(Some("Spaced"), Some(&table_c), &CharProps { style: Some("Emphasis".into()), bold: Some(false), ..Default::default() });
+        assert!(!c.bold && c.italic);
+        let p = s.resolve_para_in(&ParaProps { space_after: Some(3.0), ..spaced }, Some(&table_p));
+        assert_eq!(p.space_after, 3.0);
+        // Normal setting a property itself beats the table style too (Word draws such rows tall).
+        if let Some(n) = s.get_mut("Normal") {
+            n.para.space_after = Some(10.0);
+            n.chr.size = Some(11.0);
+        }
+        assert_eq!(s.resolve_para_in(&ParaProps::default(), Some(&table_p)).space_after, 10.0);
+        assert_eq!(s.resolve_char_in(None, Some(&table_c), &CharProps::default()).size, 11.0);
     }
 
     #[test]

@@ -1,5 +1,5 @@
 //! WordCraft import/export for the "other" text formats: plain text, Markdown (CommonMark subset
-//! plus GFM tables and strikethrough), HTML, RTF and OpenDocument Text.
+//! plus GFM tables and strikethrough), HTML, RTF, OpenDocument Text and LaTeX.
 //!
 //! Every format maps to a small flow model ([`model::Flow`]: paragraphs with a kind, list
 //! membership, alignment and formatted spans; tables of cells), which [`model::to_doc`] and
@@ -9,6 +9,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod html;
+pub mod latex;
 pub mod markdown;
 pub mod model;
 pub mod odt;
@@ -18,7 +19,7 @@ pub mod txt;
 use wordcraft_doc::Document;
 
 /// Extensions this crate handles.
-pub const EXTENSIONS: &[&str] = &["txt", "text", "md", "markdown", "html", "htm", "xhtml", "rtf", "odt"];
+pub const EXTENSIONS: &[&str] = &["txt", "text", "md", "markdown", "html", "htm", "xhtml", "rtf", "odt", "tex", "latex", "ltx"];
 
 /// Import `bytes` in the format named by `ext` (no dot, any case). `None` = not our format.
 pub fn import(ext: &str, bytes: &[u8]) -> Option<Result<Document, String>> {
@@ -29,6 +30,7 @@ pub fn import(ext: &str, bytes: &[u8]) -> Option<Result<Document, String>> {
         "html" | "htm" | "xhtml" => Ok(html::import(&html::decode(bytes))),
         "rtf" => rtf::import(bytes),
         "odt" => odt::import(bytes),
+        "tex" | "latex" | "ltx" => Ok(latex::import(bytes)),
         _ => return None,
     };
     Some(r.map(|mut d| {
@@ -46,6 +48,7 @@ pub fn export(ext: &str, doc: &Document) -> Option<Result<Vec<u8>, String>> {
         "html" | "htm" | "xhtml" => Ok(html::export(doc).into_bytes()),
         "rtf" => Ok(rtf::export(doc).into_bytes()),
         "odt" => odt::export(doc),
+        "tex" | "latex" | "ltx" => Ok(latex::export(doc).into_bytes()),
         _ => return None,
     })
 }
