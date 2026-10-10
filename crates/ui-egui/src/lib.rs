@@ -114,7 +114,8 @@ pub struct UiState {
     /// that follows ends a chord (Alt+click, Alt+drag column selection), not a keytip tap.
     #[serde(skip)]
     pub alt_chord_used: bool,
-    /// View › Switch Modes: show pages dark (white text on black), kept between runs.
+    /// View › Switch Modes: show pages dark (white text on black), kept between runs. Only the
+    /// pages: the interface follows [`UiState::theme`] (#312).
     pub dark_page: bool,
 }
 
@@ -175,7 +176,8 @@ pub struct WordApp {
     /// File ▸ Options: load the installed CJK fallback font if no embedded face covers it.
     pub(crate) want_system_cjk: bool,
     fonts_frames: u32,
-    applied_dark: Option<bool>,
+    /// The interface theme setting last installed in egui ([`theme::apply`]).
+    applied_theme: Option<theme::Appearance>,
     pub frame_ms: f64,
     /// The window title last sent; a viewport command schedules a repaint, so only send changes.
     sent_title: String,
@@ -245,7 +247,7 @@ impl WordApp {
             fonts_system_cjk: false,
             want_system_cjk: false,
             fonts_frames: 0,
-            applied_dark: None,
+            applied_theme: None,
             frame_ms: 0.0,
             sent_title: String::new(),
             quit_requested: false,
@@ -736,12 +738,12 @@ impl WordApp {
             ctx.options_mut(|o| o.zoom_with_keyboard = false);
             self.styled = true;
         }
-        // Re-checked every frame, so `System` follows an OS appearance change live (egui reports it
-        // and repaints).
-        let dark = self.ui.theme.is_dark(ctx.system_theme()) || self.session.view.dark_mode;
-        if self.applied_dark != Some(dark) {
-            theme::apply(ctx, &if dark { theme::Tokens::dark() } else { theme::Tokens::light() });
-            self.applied_dark = Some(dark);
+        // Both palettes are installed and egui picks one: with `System` it follows an OS appearance
+        // change live (it reports it and repaints, #311). The interface follows the Interface theme
+        // setting alone; Dark page only changes how pages are drawn (#312).
+        if self.applied_theme != Some(self.ui.theme) {
+            theme::apply(ctx, self.ui.theme);
+            self.applied_theme = Some(self.ui.theme);
         }
         if self.ctx.is_none() {
             self.ctx = Some(ctx.clone());
@@ -2162,6 +2164,65 @@ mod tests {
         assert_eq!(a.run("ui.theme", json!({"value": "dark"})).unwrap()["theme"], "dark");
         assert_eq!(a.run("ui.dark", json!({})).unwrap()["theme"], "light", "ui.dark toggles the manual choice");
         assert_eq!(a.run("ui.theme", json!({})).unwrap()["theme"], "light");
+    }
+
+    /// One app frame with the OS appearance egui reports; returns the window commands it sent.
+    fn theme_frame(ctx: &egui::Context, a: &mut WordApp, os: Option<egui::Theme>) -> Vec<egui::ViewportCommand> {
+        let input = egui::RawInput { system_theme: os, ..Default::default() };
+        let mut out = ctx.run_ui(input, |ui| a.logic(ui.ctx()));
+        let commands = out.viewport_output.remove(&egui::ViewportId::ROOT).map(|v| v.commands).unwrap_or_default();
+        out.drop_without_applying_deltas();
+        commands
+    }
+
+    /// #311: with System, egui's theme preference stays System, so the native window is never
+    /// pinned to a concrete appearance (macOS would stop reporting OS changes), and our palette
+    /// follows each OS appearance egui reports.
+    #[test]
+    fn system_theme_follows_the_os_without_pinning_the_window() {
+        use egui::{SystemTheme, Theme, ThemePreference, ViewportCommand};
+        let ctx = egui::Context::default();
+        let mut a = app();
+        a.run("ui.theme", json!({"value": "system"})).unwrap();
+        let mut sent = Vec::new();
+        for (os, dark) in [(Some(Theme::Light), false), (Some(Theme::Dark), true), (Some(Theme::Light), false), (None, false)] {
+            sent.extend(theme_frame(&ctx, &mut a, os));
+            assert_eq!(ctx.options(|o| o.theme_preference), ThemePreference::System, "OS at {os:?}");
+            let want = if dark { theme::Tokens::dark() } else { theme::Tokens::light() };
+            assert_eq!(theme::Tokens::get(&ctx).dark, dark, "OS at {os:?}");
+            // Our palette, not egui's default style for that theme.
+            assert_eq!(ctx.global_style().visuals.panel_fill, want.ribbon, "OS at {os:?}");
+            assert_eq!(a.ui_is_dark(), dark, "OS at {os:?}");
+        }
+        assert!(sent.contains(&ViewportCommand::SetTheme(SystemTheme::SystemDefault)), "{sent:?}");
+        assert!(!sent.iter().any(|c| matches!(c, ViewportCommand::SetTheme(SystemTheme::Light | SystemTheme::Dark))), "{sent:?}");
+        // A manual choice pins the window, whatever the OS says.
+        a.run("ui.theme", json!({"value": "dark"})).unwrap();
+        let sent = theme_frame(&ctx, &mut a, Some(Theme::Light));
+        assert!(sent.contains(&ViewportCommand::SetTheme(SystemTheme::Dark)), "{sent:?}");
+        assert!(theme::Tokens::get(&ctx).dark);
+    }
+
+    /// #312: Dark page darkens only the pages; the interface keeps following its own setting.
+    #[test]
+    fn dark_page_leaves_the_interface_theme_alone() {
+        use egui::Theme::{Dark, Light};
+        for (setting, os, dark) in [
+            ("system", Some(Light), false),
+            ("system", None, false),
+            ("light", Some(Dark), false),
+            ("system", Some(Dark), true),
+            ("dark", Some(Light), true),
+        ] {
+            let ctx = egui::Context::default();
+            let mut a = app();
+            a.run("ui.theme", json!({"value": setting})).unwrap();
+            a.run("view.darkMode", json!({"value": true})).unwrap();
+            theme_frame(&ctx, &mut a, os);
+            assert!(a.session.view.dark_mode, "{setting} with the OS at {os:?}");
+            assert_eq!(theme::Tokens::get(&ctx).dark, dark, "{setting} with the OS at {os:?}");
+            assert_eq!(a.run("ui.theme", json!({})).unwrap()["dark"], dark, "{setting} with the OS at {os:?}");
+        }
     }
 
     #[test]
