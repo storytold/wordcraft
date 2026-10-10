@@ -426,3 +426,13 @@ fn header_self_reference_and_escaping_targets() {
     let out = wordcraft_docx::write(&d).unwrap();
     wordcraft_docx::read(&out).unwrap();
 }
+
+#[test]
+fn bare_break_directly_in_paragraph() {
+    let body = r#"<w:p><w:r><w:t>First</w:t></w:r><w:br/><w:r><w:t>Second</w:t></w:r><w:cr/><w:br w:type="page"/><w:r><w:t>Third</w:t></w:r></w:p>"#;
+    let d = read_body(body);
+    assert_eq!(paras(&d)[0].text, "First\nSecond\n\u{C}Third");
+    let out = wordcraft_docx::write(&d).unwrap();
+    let d2 = wordcraft_docx::read(&out).unwrap();
+    assert_eq!(paras(&d2)[0].text, "First\nSecond\n\u{C}Third");
+}

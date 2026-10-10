@@ -487,7 +487,11 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     // Break opportunities.
     let mut opps = std::collections::HashSet::new();
     for (i, o) in unicode_linebreak::linebreaks(&p.text) {
-        if o == unicode_linebreak::BreakOpportunity::Allowed || i < p.text.len() {
+        // Word keeps "and/or" and web addresses whole: no break right after a slash (a word
+        // too long for the line still breaks anywhere).
+        let after_slash =
+            p.text.get(..i).is_some_and(|t| t.ends_with('/')) && p.text.get(i..).and_then(|t| t.chars().next()).is_some_and(char::is_alphanumeric);
+        if (o == unicode_linebreak::BreakOpportunity::Allowed || i < p.text.len()) && !after_slash {
             opps.insert(i);
         }
     }
