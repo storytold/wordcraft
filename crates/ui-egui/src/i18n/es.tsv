@@ -884,3 +884,4 @@
 	Operator	Operador
 	Equation Options	Opciones de ecuación
 	All symbol sets	Todos los conjuntos de símbolos
+	Couldn't open {path}: {error}	No se pudo abrir {path}: {error}

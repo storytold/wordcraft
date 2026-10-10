@@ -867,3 +867,4 @@
 	Operator	演算子
 	Equation Options	数式のオプション
 	All symbol sets	すべての記号セット
+	Couldn't open {path}: {error}	{path} を開けませんでした: {error}

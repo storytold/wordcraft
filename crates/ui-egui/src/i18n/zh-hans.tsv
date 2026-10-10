@@ -878,3 +878,4 @@
 	Operator	运算符
 	Equation Options	公式选项
 	All symbol sets	所有符号集
+	Couldn't open {path}: {error}	无法打开 {path}：{error}

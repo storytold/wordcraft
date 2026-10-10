@@ -879,3 +879,4 @@
 	Operator	Оператор
 	Equation Options	Параметри рівняння
 	All symbol sets	Усі набори символів
+	Couldn't open {path}: {error}	Не вдалося відкрити {path}: {error}

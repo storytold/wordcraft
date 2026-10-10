@@ -5,7 +5,7 @@
 //! `kAEOpenDocuments` ('odoc') Apple event. winit 0.30 doesn't handle it and owns the
 //! `NSApplicationDelegate`, so AppKit answered "WordCraft cannot open files in the Word Document
 //! format". Handling it ourselves needs Objective-C class declarations, i.e. `unsafe`, which this
-//! workspace forbids. The audited `fmv-macos-events` crate (also used by PdfCraft and PhotoCraft)
+//! workspace forbids. The `fmv-macos-events` crate (also used by PdfCraft and PhotoCraft)
 //! wraps exactly that, an `NSAppleEventManager` handler registered before Finder's launch event
 //! that leaves winit's delegate alone, behind a safe main-thread API.
 
@@ -42,8 +42,15 @@ pub fn poll(inbox: &Inbox, app: &mut WordApp, ctx: &egui::Context) {
         match e {
             Event::Open(paths) => {
                 for p in paths.iter().filter_map(|p| p.to_str()) {
-                    if let Err(e) = app.run("file.open", serde_json::json!({"path": p})) {
-                        log::warn!("{p}: {e}");
+                    match app.run("file.open", serde_json::json!({"path": p})) {
+                        // Leave Backstage, as opening from the Open dialog does.
+                        Ok(_) => app.ui.backstage = false,
+                        Err(e) => {
+                            log::warn!("{p}: {e}");
+                            let e = e.to_string();
+                            let msg = wordcraft_ui_egui::tl!("Couldn't open {path}: {error}");
+                            app.status(wordcraft_ui_egui::i18n::fmt(msg, &[("path", p), ("error", &e)]));
+                        }
                     }
                 }
             }
