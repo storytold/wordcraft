@@ -282,7 +282,9 @@ fn inspector(app: &mut WordApp, ui: &mut Ui) {
         let _ = app.run("styles.inspector", json!({"value": false}));
         return;
     }
-    let r = app.session.run("styles.inspect", &json!({})).unwrap_or_default();
+    // Read-only, so call it directly: running the command every frame would pay for the command
+    // machinery and consume per-command state (a pending `join_next_undo`) just to draw the pane.
+    let r = wordcraft_engine::cmd::inspector::inspect(&app.session);
     let t = Tokens::get(ui.ctx());
     let none = tl!("None").to_string();
     let para = &r["paragraph"];

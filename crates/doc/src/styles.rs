@@ -52,7 +52,16 @@ pub struct TableStyleParts {
     pub cell_margins: Option<[f32; 4]>,
     pub header_fill: Option<Rgb>,
     pub header_chr: CharProps,
+    /// Cell borders of the header row (`firstRow` region's `w:tcBorders`): `between` is the
+    /// border between header rows, `inside_v` between its cells.
+    pub header_borders: Option<Borders>,
     pub band_fill: Option<Rgb>,
+    /// Character formatting of the odd row bands (`band1Horz` region).
+    pub band_chr: CharProps,
+    /// Cell borders of the odd row bands (`band1Horz` region's `w:tcBorders`).
+    pub band_borders: Option<Borders>,
+    /// Rows per band (`w:tblStyleRowBandSize`); one when unset.
+    pub band_size: Option<u32>,
     pub first_col_chr: CharProps,
     pub total_chr: CharProps,
     pub total_border_top: Option<Border>,
@@ -62,17 +71,18 @@ impl TableStyleParts {
     /// Apply `patch` (a style further down a based-on chain) over these parts: what it sets wins,
     /// the rest is inherited; borders merge edge by edge.
     pub fn overlay(&mut self, patch: &TableStyleParts) {
-        self.borders = match (self.borders, patch.borders) {
-            (Some(b), Some(p)) => Some(Borders {
-                top: p.top.or(b.top),
-                left: p.left.or(b.left),
-                bottom: p.bottom.or(b.bottom),
-                right: p.right.or(b.right),
-                between: p.between.or(b.between),
-                inside_v: p.inside_v.or(b.inside_v),
-            }),
+        let merge = |b: Option<Borders>, p: Option<Borders>| match (b, p) {
+            (Some(mut b), Some(p)) => {
+                b.overlay(&p);
+                Some(b)
+            }
             (b, p) => p.or(b),
         };
+        self.borders = merge(self.borders, patch.borders);
+        self.header_borders = merge(self.header_borders, patch.header_borders);
+        self.band_borders = merge(self.band_borders, patch.band_borders);
+        self.band_size = patch.band_size.or(self.band_size);
+        self.band_chr.overlay(&patch.band_chr);
         self.fill = patch.fill.or(self.fill);
         self.cell_margins = patch.cell_margins.or(self.cell_margins);
         self.header_fill = patch.header_fill.or(self.header_fill);

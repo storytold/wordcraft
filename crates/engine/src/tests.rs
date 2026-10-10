@@ -523,6 +523,84 @@ fn clipboard_round_trip() {
     assert_eq!(text(&s), "plain\ntext");
 }
 
+fn bold_at(s: &Session, block: usize, off: usize) -> bool {
+    let pos = Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(block), off };
+    s.doc.para_at(&pos).and_then(|p| p.props_of_char(off).bold).unwrap_or(false)
+}
+
+#[test]
+fn paste_special_lists_formats_and_pastes_text_without_formatting() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Bold words"}));
+    run(&mut s, "select.text", json!({"text": "Bold"}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "edit.copy", json!({}));
+    // No format: the formats are listed (and a front end is asked to show the dialog).
+    let r = run(&mut s, "edit.pasteSpecial", json!({}));
+    let ids: Vec<&str> = r["formats"].as_array().unwrap().iter().map(|f| f["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["formatted", "text"]);
+    assert_eq!(s.ui_requests.last().unwrap()["open"], "pasteSpecial");
+    run(&mut s, "caret.docEnd", json!({}));
+    let r = run(&mut s, "edit.pasteSpecial", json!({"as": "text"}));
+    assert_eq!(r["pastedAs"], "text");
+    assert_eq!(text(&s), "Bold wordsBold");
+    assert!(bold_at(&s, 0, 0));
+    assert!(!bold_at(&s, 0, 11), "unformatted text drops the bold");
+    // Formatted keeps it.
+    run(&mut s, "edit.pasteSpecial", json!({"as": "formatted"}));
+    assert_eq!(text(&s), "Bold wordsBoldBold");
+    assert!(bold_at(&s, 0, 15));
+    // Text that someone else copied since: our rich copy is no longer offered.
+    let r = run(&mut s, "edit.pasteSpecial", json!({"text": "elsewhere"}));
+    assert_eq!(r["formats"].as_array().unwrap().len(), 1);
+    assert!(s.run("edit.pasteSpecial", &json!({"as": "formatted", "text": "elsewhere"})).is_err());
+}
+
+#[test]
+fn paste_special_html_and_rtf_keep_bold() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "x"}));
+    run(&mut s, "caret.docEnd", json!({}));
+    let html = "<p>plain <b>strong</b></p>";
+    let r = run(&mut s, "edit.pasteSpecial", json!({"html": html, "text": "plain strong"}));
+    let ids: Vec<&str> = r["formats"].as_array().unwrap().iter().map(|f| f["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["html", "text"]);
+    run(&mut s, "edit.pasteSpecial", json!({"as": "html", "html": html}));
+    assert_eq!(text(&s), "xplain strong");
+    assert!(!bold_at(&s, 0, 2));
+    assert!(bold_at(&s, 0, 8), "the <b> run stays bold");
+    // HTML source copied as text can be pasted as HTML too.
+    run(&mut s, "document.setText", json!({"text": ""}));
+    run(&mut s, "edit.pasteSpecial", json!({"as": "html", "text": "<b>hi</b> there</p>"}));
+    assert_eq!(text(&s), "hi there");
+    assert!(bold_at(&s, 0, 0) && !bold_at(&s, 0, 4));
+    // RTF.
+    run(&mut s, "document.setText", json!({"text": ""}));
+    run(&mut s, "edit.pasteSpecial", json!({"as": "rtf", "rtf": r"{\rtf1\ansi {\b bold}\b0  then}"}));
+    assert!(text(&s).starts_with("bold"), "{}", text(&s));
+    assert!(bold_at(&s, 0, 0));
+    // Asking for a format the clipboard lacks is an error, not a panic.
+    assert!(s.run("edit.pasteSpecial", &json!({"as": "rtf", "text": "plain"})).is_err());
+    assert!(s.run("edit.pasteSpecial", &json!({"as": "bogus", "text": "plain"})).is_err());
+    let huge = "a".repeat(crate::cmd::paste::MAX_PASTE_BYTES + 1);
+    assert!(s.run("edit.pasteSpecial", &json!({"as": "text", "text": huge})).is_err());
+}
+
+#[test]
+fn paste_special_respects_track_changes_and_brings_lists() {
+    let mut s = s();
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "edit.pasteSpecial", json!({"as": "html", "html": "<ul><li>one</li><li>two</li></ul>"}));
+    assert!(text(&s).starts_with("one\ntwo"), "{}", text(&s));
+    let ch = run(&mut s, "review.changes", json!({}));
+    assert!(!ch.as_array().unwrap().is_empty(), "the paste is a tracked insertion");
+    let first = s.doc.body.first().and_then(|b| b.as_para()).unwrap();
+    let n = first.props.numbering.expect("list kept");
+    assert!(s.doc.numbering.nums.iter().any(|x| x.id == n.num), "the list definition came along");
+    run(&mut s, "review.acceptAll", json!({}));
+    assert!(text(&s).starts_with("one\ntwo"));
+}
+
 #[test]
 fn tables_commands() {
     let mut s = s();
@@ -1774,4 +1852,170 @@ fn style_inspector_pane_and_hostile_params() {
     s.sel.anchor = Pos::body(0, 0);
     assert!(s.run("styles.inspect", &json!({})).is_ok());
     assert!(s.run("styles.inspectorClear", &json!({"level": "characterFormatting"})).is_ok());
+}
+
+/// Home › Editing › Find › Advanced Find: every match, in the body or a selection, with Reading Highlight.
+#[test]
+fn advanced_find_lists_and_highlights_matches() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "cat dog cat"}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Cat"}));
+    // From the UI it opens the dialog.
+    run(&mut s, "edit.advancedFind", json!({}));
+    assert_eq!(s.ui_requests.last(), Some(&json!({"open": "find"})));
+    let r = run(&mut s, "edit.advancedFind", json!({"text": "cat", "highlight": true}));
+    assert_eq!(r["count"], 3);
+    assert_eq!(s.find_highlights().len(), 3);
+    assert_eq!(run(&mut s, "edit.advancedFind", json!({"text": "cat", "matchCase": true}))["count"], 2);
+    // Highlights follow edits and the latest search.
+    assert_eq!(s.find_highlights().len(), 2);
+    run(&mut s, "text.insert", json!({"text": " cat"}));
+    assert_eq!(s.find_highlights().len(), 3);
+    // Only inside the selection.
+    run(&mut s, "select.text", json!({"text": "cat dog"}));
+    assert_eq!(run(&mut s, "edit.advancedFind", json!({"text": "cat", "in": "selection"}))["count"], 1);
+    run(&mut s, "edit.advancedFind", json!({"highlight": false}));
+    assert!(s.find_highlights().is_empty());
+    // Hostile params.
+    assert!(s.run("edit.advancedFind", &json!({"text": "x", "in": "elsewhere"})).is_err());
+    assert!(s.run("edit.advancedFind", &json!({"text": "(", "regex": true})).is_err());
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "text.delete", json!({}));
+    assert!(s.run("edit.advancedFind", &json!({"text": "x", "in": "selection"})).is_err());
+}
+
+/// #146: a table style made by command styles the table at the caret (header row fill and bold
+/// text, banded rows), can be modified, and saves as a table style the table refers to.
+#[test]
+fn custom_table_style_applies_modifies_and_saves() {
+    use wordcraft_doc::{Rgb, StyleKind, TextColor};
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 3, "cols": 2}));
+    run(&mut s, "text.insert", json!({"text": "Head"}));
+    run(&mut s, "table.look", json!({"headerRow": true, "bandedRows": true}));
+    let (tp, _, _) = s.sel.focus.path.cell().unwrap();
+    let r = run(
+        &mut s,
+        "table.newStyle",
+        json!({"name": "Thesis Table", "basedOn": "Table Grid",
+            "wholeTable": {"size": 10},
+            "headerRow": {"fill": "1F3864", "bold": true, "color": "FFFFFF", "borders": true},
+            "bandedRows": {"fill": "EEEEEE", "italic": true}}),
+    );
+    let id = r["id"].as_str().unwrap().to_string();
+    let table_style = |s: &Session| s.doc.table(StoryRef::Body, &tp).unwrap().props.style.clone();
+    assert_eq!(table_style(&s).as_deref(), Some(id.as_str()), "applied to the current table");
+    assert!(s.run("table.newStyle", &json!({"name": "thesis table"})).is_err(), "names are unique");
+    assert!(s.run("table.newStyle", &json!({"name": "X", "basedOn": "Heading 1"})).is_err(), "bases are table styles");
+    assert!(s.run("table.style", &json!({"style": "Normal"})).is_err(), "only table styles apply to tables");
+
+    let fills = |s: &mut Session, c: Rgb| {
+        s.layout().pages[0].items.iter().filter(|i| matches!(i, crate::layout::Placed::Fill { color, .. } if *color == c)).count()
+    };
+    let head = |s: &mut Session| {
+        let mut p = tp.0.clone();
+        p.extend([0, 0, 0]);
+        s.layout().pages[0]
+            .items
+            .iter()
+            .find_map(
+                |i| if let crate::layout::Placed::Lines { path, para, .. } = i { (path.0 == p).then(|| para.styles[0].rc.clone()) } else { None },
+            )
+            .unwrap()
+    };
+    assert_eq!(fills(&mut s, Rgb(0x1F, 0x38, 0x64)), 2, "header cells");
+    assert_eq!(fills(&mut s, Rgb(0xEE, 0xEE, 0xEE)), 2, "first band");
+    let rc = head(&mut s);
+    assert!(rc.bold && rc.size == 10.0, "{rc:?}");
+    assert_eq!(rc.color, TextColor::Rgb(Rgb::WHITE));
+
+    // Modify the current table's style: the table follows.
+    run(&mut s, "table.modifyStyle", json!({"headerRow": {"fill": "C00000", "bold": false}, "bandSize": 2}));
+    assert_eq!(fills(&mut s, Rgb(0x1F, 0x38, 0x64)), 0);
+    assert_eq!(fills(&mut s, Rgb(0xC0, 0, 0)), 2);
+    assert_eq!(fills(&mut s, Rgb(0xEE, 0xEE, 0xEE)), 4, "two rows per band");
+    assert!(!head(&mut s).bold);
+
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+    let st = back.styles.get(&id).unwrap();
+    assert_eq!((st.kind, st.name.as_str(), st.based_on.as_deref()), (StyleKind::Table, "Thesis Table", Some("TableGrid")));
+    let parts = st.table.as_ref().unwrap();
+    assert_eq!((parts.header_fill, parts.band_fill, parts.band_size), (Some(Rgb(0xC0, 0, 0)), Some(Rgb(0xEE, 0xEE, 0xEE)), Some(2)));
+    assert_eq!((parts.header_chr.bold, parts.band_chr.italic), (Some(false), Some(true)));
+    assert!(parts.header_borders.is_some_and(|b| b.any_visible()));
+    let t = back.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.props.style.as_deref(), Some(id.as_str()), "w:tblStyle");
+}
+
+#[test]
+fn page_and_table_gridlines_toggle_independently() {
+    // #69: View › Gridlines (the page drawing grid) and Table Layout › View Gridlines (table cell
+    // outlines) are separate view switches; neither touches the document or the undo stack.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    let undo = s.undo_labels();
+    assert!(!s.view.gridlines && !s.view.table_gridlines);
+
+    assert_eq!(run(&mut s, "view.gridlines", json!({}))["value"], true);
+    assert!(s.view.gridlines && !s.view.table_gridlines);
+
+    // Works with the caret outside a table.
+    assert_eq!(run(&mut s, "table.viewGridlines", json!({}))["value"], true);
+    assert!(s.view.gridlines && s.view.table_gridlines);
+
+    assert_eq!(run(&mut s, "view.gridlines", json!({"value": false}))["value"], false);
+    assert!(!s.view.gridlines && s.view.table_gridlines);
+    assert_eq!(run(&mut s, "view.gridlines", json!({"value": false}))["value"], false);
+    assert!(!s.view.gridlines);
+
+    assert_eq!(run(&mut s, "table.viewGridlines", json!({}))["value"], false);
+    assert!(!s.view.gridlines && !s.view.table_gridlines);
+
+    assert_eq!(text(&s), "Hello");
+    assert_eq!(s.undo_labels(), undo);
+    let state = run(&mut s, "view.state", json!({}));
+    assert_eq!(state["gridlines"], false);
+    assert_eq!(state["tableGridlines"], false);
+}
+
+/// Issue #67: View › Zoom steps. Zoom In/Out leave a fit mode and step 10% from the current zoom
+/// (the UI keeps `view.zoom` equal to the shown zoom while a fit mode is on), and never get stuck
+/// short of the 10%–500% limits.
+#[test]
+fn zoom_in_and_out_step_from_current_zoom_and_leave_fit_modes() {
+    let mut s = s();
+    let pct = |s: &Session| (s.view.zoom * 100.0).round() as i32;
+    run(&mut s, "view.zoomIn", json!({}));
+    assert_eq!(pct(&s), 110);
+    run(&mut s, "view.zoomOut", json!({}));
+    run(&mut s, "view.zoomOut", json!({}));
+    assert_eq!(pct(&s), 90);
+    for fit in ["view.pageWidth", "view.onePage", "view.multiplePages"] {
+        run(&mut s, fit, json!({}));
+        assert!(!s.view.fit.is_empty());
+        // What the canvas reports while a fit mode shows the page at 163%.
+        s.view.zoom = 1.63;
+        run(&mut s, "view.zoomIn", json!({}));
+        assert_eq!((pct(&s), s.view.fit.as_str(), s.view.multi_page), (170, "", false), "{fit}");
+        run(&mut s, fit, json!({}));
+        s.view.zoom = 1.63;
+        run(&mut s, "view.zoomOut", json!({}));
+        assert_eq!((pct(&s), s.view.fit.as_str()), (150, ""), "{fit}");
+    }
+    let mut last = pct(&s);
+    for _ in 0..60 {
+        run(&mut s, "view.zoomIn", json!({}));
+        assert!(pct(&s) > last || pct(&s) == 500);
+        last = pct(&s);
+    }
+    assert_eq!(last, 500);
+    for _ in 0..60 {
+        run(&mut s, "view.zoomOut", json!({}));
+        assert!(pct(&s) < last || pct(&s) == 10);
+        last = pct(&s);
+    }
+    assert_eq!(last, 10);
+    run(&mut s, "view.zoom100", json!({}));
+    assert_eq!(pct(&s), 100);
 }

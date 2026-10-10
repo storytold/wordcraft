@@ -952,3 +952,55 @@
 	Clear Character Style	清除字符样式
 	Clear Character Formatting	清除字符格式
 	Clear All	全部清除
+	Paste Special	选择性粘贴
+	Paste Special…	选择性粘贴…
+	Paste as:	粘贴为：
+	The clipboard is empty.	剪贴板为空。
+	Formatted Text	带格式文本
+	Rich Text Format (RTF)	RTF 格式
+	HTML Format	HTML 格式
+	Unformatted Text	无格式文本
+	Result	结果
+	Keeps the fonts and formatting of the copied text.	保留所复制文本的字体和格式。
+	Reads the clipboard's rich text and keeps its formatting.	读取剪贴板中的 RTF 内容并保留其格式。
+	Reads the clipboard's web content and keeps its formatting.	读取剪贴板中的网页内容并保留其格式。
+	Drops all formatting and pastes plain text.	去除所有格式，粘贴纯文本。
+	Advanced Find	高级查找
+	Advanced Find…	高级查找…
+	Go To…	定位…
+	Reading Highlight	突出显示查找结果
+	New Table Style	新建表格样式
+	Modify Table Style	修改表格样式
+	New Table Style…	新建表格样式…
+	Modify Table Style…	修改表格样式…
+	Apply formatting to:	将格式应用于：
+	Whole Table	整个表格
+	Fill color:	填充颜色：
+	{count} items highlighted	已突出显示 {count} 项
+	{n} pt	{n} 磅
+	Not {name}	非{name}
+	Level {n}	{n} 级
+	Body Text	正文文本
+	{n} lines	{n} 行
+	At least {n}	最小值 {n}
+	Exactly {n}	固定值 {n}
+	Centered	居中
+	Character spacing	字符间距
+	Don't add space between paragraphs of the same style	相同样式的段落间不添加间距
+	Don't hyphenate	不断字
+	Double strikethrough	双删除线
+	Drop cap	首字下沉
+	First line	首行
+	Font color	字体颜色
+	Highlight	突出显示
+	Justified	两端对齐
+	Left indent	左缩进
+	Line spacing	行距
+	Outline level	大纲级别
+	Raised/lowered	提升/降低
+	Right indent	右缩进
+	Scale	缩放
+	Space after	段后间距
+	Space before	段前间距
+	Suppress line numbers	取消行号
+	Underline color	下划线颜色
