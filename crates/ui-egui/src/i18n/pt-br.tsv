@@ -1041,3 +1041,86 @@
 	Leave the equation (Esc)	Sair da equação (Esc)
 	Preview	Visualizar
 	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft
+
+# Columns, Symbol and Field dialogs (#321).
+	(All)	(Todos)
+	(none)	(nenhum)
+	(normal text)	(texto normal)
+	1/4 Em Space	Espaço de 1/4 de eme
+	A mail merge field	Um campo de mesclagem
+	A numbered sequence (figures, tables…)	Uma sequência numerada (figuras, tabelas…)
+	A table of contents	Um sumário
+	Apply to:	Aplicar a:
+	Categories:	Categorias:
+	Character	Caractere
+	Character code:	Código do caractere:
+	Col #:	Col. nº:
+	Copyright	Copyright
+	Date and Time	Data e hora
+	Date formats:	Formatos de data:
+	Description:	Descrição:
+	Document Information	Informações do documento
+	Double Closing Quote	Aspas duplas de fechamento
+	Double Opening Quote	Aspas duplas de abertura
+	Ellipsis	Reticências
+	Em Dash	Travessão
+	En Dash	Meia-risca
+	Em Space	Espaço eme
+	En Space	Espaço ene
+	Equal column width	Colunas de largura igual
+	Field Codes	Códigos de campo
+	Field code:	Código de campo:
+	Field codes:	Códigos de campo:
+	Field name:	Nome do campo:
+	Field names:	Nomes de campo:
+	Field properties	Propriedades do campo
+	Field…	Campo…
+	Format:	Formato:
+	Hide Codes	Ocultar códigos
+	Index and Tables	Índices e tabelas
+	Line between	Linha entre colunas
+	Links and References	Links e referências
+	Mail Merge	Mala direta
+	More Columns…	Mais colunas…
+	More Symbols…	Mais símbolos…
+	No-Width Non Break	Junção sem largura
+	No-Width Optional Break	Quebra opcional sem largura
+	Paragraph Mark	Marca de parágrafo
+	Please choose a field	Escolha um campo
+	Preserve formatting during updates	Preservar a formatação ao atualizar
+	Presets	Predefinições
+	Recently used symbols:	Símbolos usados recentemente:
+	Registered	Registrado
+	Section Mark	Marca de seção
+	Sequence name:	Nome da sequência:
+	Shortcut key:	Tecla de atalho:
+	Single Closing Quote	Aspas simples de fechamento
+	Single Opening Quote	Aspas simples de abertura
+	Spacing:	Espaçamento:
+	Special Characters	Caracteres especiais
+	Subset:	Subconjunto:
+	The current time	A hora atual
+	The date the document was created	A data em que o documento foi criado
+	The date the document was last printed	A data em que o documento foi impresso pela última vez
+	The date the document was last saved	A data em que o documento foi salvo pela última vez
+	The document has no bookmarks yet.	O documento ainda não tem indicadores.
+	The document's author	O autor do documento
+	The document's file name	O nome do arquivo do documento
+	The document's title	O título do documento
+	The number of pages in the document	O número de páginas do documento
+	The number of pages in the section	O número de páginas da seção
+	The number of the current page	O número da página atual
+	The number of the current section	O número da seção atual
+	The number of words in the document	O número de palavras do documento
+	The page number of a bookmark	O número da página de um indicador
+	The text of a bookmark	O texto de um indicador
+	This field has no options.	Este campo não tem opções.
+	This font has no characters to show.	Esta fonte não tem caracteres para mostrar.
+	This point forward	Deste ponto em diante
+	This section	Esta seção
+	Today's date	A data de hoje
+	Trademark	Marca comercial
+	Type the field's name and its switches, for example PAGE \\* roman.	Digite o nome do campo e suas opções, por exemplo PAGE \\* roman.
+	Whole document	Documento inteiro
+	Width and spacing	Largura e espaçamento
+	from Unicode (hex)	do Unicode (hex)

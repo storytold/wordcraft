@@ -69,12 +69,7 @@ pub fn specs() -> Vec<CommandSpec> {
             sel_result(s)
         }),
         CommandSpec::new("insert.dateTime", "Date & Time", "Insert › Text", date_time).params(r#"{"format"?: "M/d/yyyy", "update"?: bool}"#),
-        CommandSpec::new("insert.symbol", "Symbol", "Insert › Symbols", |s, v| {
-            let c = p::req_str(v, "char")?;
-            type_text(s, c)?;
-            sel_result(s)
-        })
-        .params(r#"{"char": string}"#),
+        CommandSpec::new("insert.symbol", "Symbol", "Insert › Symbols", symbol).params(r#"{"char": string, "font"?: family (the symbol's own font)}"#),
         CommandSpec::new("insert.field", "Field", "Insert › Text › Quick Parts", field).key("Mod+F9").params(r#"{"instr": string, "result"?: string}"#),
         CommandSpec::new("insert.dropCap", "Drop Cap", "Insert › Text", |s, v| {
             let lines = p::u64(v, "lines").unwrap_or(3).min(10) as u8;
@@ -446,6 +441,7 @@ pub fn format_date(fmt: &str) -> String {
     let d: u32 = iso.get(8..10).and_then(|x| x.parse().ok()).unwrap_or(1);
     let hh: u32 = iso.get(11..13).and_then(|x| x.parse().ok()).unwrap_or(0);
     let mm: u32 = iso.get(14..16).and_then(|x| x.parse().ok()).unwrap_or(0);
+    let ss: u32 = iso.get(17..19).and_then(|x| x.parse().ok()).unwrap_or(0);
     const MONTHS: [&str; 12] =
         ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
     const DAYS: [&str; 7] = ["Thursday", "Friday", "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday"];
@@ -458,6 +454,12 @@ pub fn format_date(fmt: &str) -> String {
     let mut i = 0;
     while i < chars.len() {
         let c = chars.get(i).copied().unwrap_or(' ');
+        // `am/pm` (any case) is one token: AM or PM.
+        if chars.get(i..i + 5).is_some_and(|w| w.iter().collect::<String>().eq_ignore_ascii_case("am/pm")) {
+            out.push_str(if hh < 12 { "AM" } else { "PM" });
+            i += 5;
+            continue;
+        }
         let mut n = 1;
         while chars.get(i + n) == Some(&c) {
             n += 1;
@@ -478,6 +480,8 @@ pub fn format_date(fmt: &str) -> String {
             ('h', _) => out.push_str(&(if hh.is_multiple_of(12) { 12 } else { hh % 12 }).to_string()),
             ('m', 2..) => out.push_str(&format!("{mm:02}")),
             ('m', _) => out.push_str(&mm.to_string()),
+            ('s', 2..) => out.push_str(&format!("{ss:02}")),
+            ('s', _) => out.push_str(&ss.to_string()),
             ('a' | 'A', _) => out.push_str(if hh < 12 { "AM" } else { "PM" }),
             _ => {
                 for _ in 0..n {
@@ -488,6 +492,32 @@ pub fn format_date(fmt: &str) -> String {
         i += n;
     }
     out
+}
+
+/// Insert › Symbol: the character at the caret, in its own font when `font` names one (the rest of
+/// the text keeps the caret's font).
+fn symbol(s: &mut Session, v: &Value) -> CmdResult {
+    let c = p::req_str(v, "char")?;
+    if c.is_empty() || c.chars().count() > 64 {
+        return Err(CmdError::Params("char: 1–64 characters".into()));
+    }
+    let font = p::str(v, "font").map(str::trim).filter(|f| !f.is_empty());
+    let Some(font) = font else {
+        type_text(s, c)?;
+        return sel_result(s);
+    };
+    if font.len() > 256 {
+        return Err(CmdError::Params("font: a family name".into()));
+    }
+    let base = s.typing_props();
+    let mut props = base.clone();
+    props.font = Some(font.to_string());
+    s.pending = Some(props);
+    let r = type_text(s, c);
+    // Typing on after the symbol goes on in the text's own font.
+    s.pending = Some(base);
+    r?;
+    sel_result(s)
 }
 
 fn field(s: &mut Session, v: &Value) -> CmdResult {
@@ -549,10 +579,31 @@ mod tests {
         assert!(base64_decode("!!!").is_none());
     }
 
+    /// Insert › Symbol with a font: only the symbol takes it, the caret's font carries on after.
+    #[test]
+    fn symbol_takes_its_own_font() {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("ab"));
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("insert.symbol", &json!({"char": "\u{2665}", "font": "DejaVu Sans"})).unwrap();
+        s.run("text.insert", &json!({"text": "c"})).unwrap();
+        let p = s.doc.para(StoryRef::Body, &Path::top(0)).unwrap();
+        assert_eq!(p.text, "ab\u{2665}c");
+        assert_eq!(p.props_of_char(2).font.as_deref(), Some("DejaVu Sans"), "the symbol");
+        assert_eq!(p.props_of_char(5).font, None, "typing after it (byte offsets)");
+        assert!(s.run("insert.symbol", &json!({"char": ""})).is_err());
+    }
+
     #[test]
     fn date_pictures() {
         let d = format_date("yyyy-MM-dd");
         assert_eq!(d.len(), 10);
         assert!(format_date("MMMM d, yyyy").contains(", "));
+        let t = format_date("h:mm:ss am/pm");
+        assert!(t.ends_with(" AM") || t.ends_with(" PM"), "{t}");
+        assert_eq!(t.matches(':').count(), 2, "{t}");
+        use super::super::references::date_picture;
+        assert_eq!(date_picture(r#"DATE \@ "MMMM d, yyyy" \* MERGEFORMAT"#).as_deref(), Some("MMMM d, yyyy"));
+        assert_eq!(date_picture(r#"TIME \@ HH:mm"#).as_deref(), Some("HH:mm"));
+        assert_eq!(date_picture("DATE"), None);
     }
 }

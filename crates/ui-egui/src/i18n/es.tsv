@@ -1045,3 +1045,86 @@
 	Leave the equation (Esc)	Salir de la ecuación (Esc)
 	Preview	Vista previa
 	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft
+
+# Columns, Symbol and Field dialogs (#321).
+	(All)	(Todos)
+	(none)	(ninguno)
+	(normal text)	(texto normal)
+	1/4 Em Space	Espacio de 1/4 de eme
+	A mail merge field	Un campo de combinación
+	A numbered sequence (figures, tables…)	Una secuencia numerada (figuras, tablas…)
+	A table of contents	Una tabla de contenido
+	Apply to:	Aplicar a:
+	Categories:	Categorías:
+	Character	Carácter
+	Character code:	Código de carácter:
+	Col #:	Col. n.º:
+	Copyright	Copyright
+	Date and Time	Fecha y hora
+	Date formats:	Formatos de fecha:
+	Description:	Descripción:
+	Document Information	Información del documento
+	Double Closing Quote	Comilla doble de cierre
+	Double Opening Quote	Comilla doble de apertura
+	Ellipsis	Puntos suspensivos
+	Em Dash	Raya
+	En Dash	Guion medio
+	Em Space	Espacio eme
+	En Space	Espacio ene
+	Equal column width	Columnas de igual ancho
+	Field Codes	Códigos de campo
+	Field code:	Código de campo:
+	Field codes:	Códigos de campo:
+	Field name:	Nombre del campo:
+	Field names:	Nombres de campo:
+	Field properties	Propiedades del campo
+	Field…	Campo…
+	Format:	Formato:
+	Hide Codes	Ocultar códigos
+	Index and Tables	Índices y tablas
+	Line between	Línea entre columnas
+	Links and References	Vínculos y referencias
+	Mail Merge	Combinar correspondencia
+	More Columns…	Más columnas…
+	More Symbols…	Más símbolos…
+	No-Width Non Break	Unión sin ancho
+	No-Width Optional Break	Salto opcional sin ancho
+	Paragraph Mark	Marca de párrafo
+	Please choose a field	Elija un campo
+	Preserve formatting during updates	Conservar el formato al actualizar
+	Presets	Preestablecidos
+	Recently used symbols:	Símbolos usados recientemente:
+	Registered	Registrado
+	Section Mark	Marca de sección
+	Sequence name:	Nombre de la secuencia:
+	Shortcut key:	Atajo de teclado:
+	Single Closing Quote	Comilla simple de cierre
+	Single Opening Quote	Comilla simple de apertura
+	Spacing:	Espaciado:
+	Special Characters	Caracteres especiales
+	Subset:	Subconjunto:
+	The current time	La hora actual
+	The date the document was created	La fecha en que se creó el documento
+	The date the document was last printed	La fecha en que se imprimió el documento por última vez
+	The date the document was last saved	La fecha en que se guardó el documento por última vez
+	The document has no bookmarks yet.	El documento aún no tiene marcadores.
+	The document's author	El autor del documento
+	The document's file name	El nombre de archivo del documento
+	The document's title	El título del documento
+	The number of pages in the document	El número de páginas del documento
+	The number of pages in the section	El número de páginas de la sección
+	The number of the current page	El número de la página actual
+	The number of the current section	El número de la sección actual
+	The number of words in the document	El número de palabras del documento
+	The page number of a bookmark	El número de página de un marcador
+	The text of a bookmark	El texto de un marcador
+	This field has no options.	Este campo no tiene opciones.
+	This font has no characters to show.	Esta fuente no tiene caracteres que mostrar.
+	This point forward	De aquí en adelante
+	This section	Esta sección
+	Today's date	La fecha de hoy
+	Trademark	Marca comercial
+	Type the field's name and its switches, for example PAGE \\* roman.	Escriba el nombre del campo y sus modificadores, por ejemplo PAGE \\* roman.
+	Whole document	Todo el documento
+	Width and spacing	Ancho y espaciado
+	from Unicode (hex)	de Unicode (hex)

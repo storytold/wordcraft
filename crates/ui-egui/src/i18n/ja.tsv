@@ -1029,3 +1029,86 @@
 	Leave the equation (Esc)	数式を終了 (Esc)
 	Preview	プレビュー
 	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft
+
+# Columns, Symbol and Field dialogs (#321).
+	(All)	(すべて)
+	(none)	(なし)
+	(normal text)	(標準テキスト)
+	1/4 Em Space	1/4 em スペース
+	A mail merge field	差し込み用のフィールド
+	A numbered sequence (figures, tables…)	連番 (図、表…)
+	A table of contents	目次
+	Apply to:	適用先:
+	Categories:	分類:
+	Character	文字
+	Character code:	文字コード:
+	Col #:	段:
+	Copyright	著作権記号
+	Date and Time	日付と時刻
+	Date formats:	日付の形式:
+	Description:	説明:
+	Document Information	文書の情報
+	Double Closing Quote	二重引用符 (閉じ)
+	Double Opening Quote	二重引用符 (開き)
+	Ellipsis	省略記号
+	Em Dash	em ダッシュ
+	En Dash	en ダッシュ
+	Em Space	em スペース
+	En Space	en スペース
+	Equal column width	段の幅を均等にする
+	Field Codes	フィールド コード
+	Field code:	フィールド コード:
+	Field codes:	フィールド コード:
+	Field name:	フィールド名:
+	Field names:	フィールドの名前:
+	Field properties	フィールドのプロパティ
+	Field…	フィールド…
+	Format:	書式:
+	Hide Codes	コードを隠す
+	Index and Tables	索引と目次
+	Line between	境界線を引く
+	Links and References	リンクと参照
+	Mail Merge	差し込み印刷
+	More Columns…	段組みの詳細設定…
+	More Symbols…	その他の記号…
+	No-Width Non Break	幅なし改行禁止
+	No-Width Optional Break	幅なし任意改行
+	Paragraph Mark	段落記号
+	Please choose a field	フィールドを選んでください
+	Preserve formatting during updates	更新時に書式を保持する
+	Presets	プリセット
+	Recently used symbols:	最近使った記号:
+	Registered	登録商標
+	Section Mark	節記号
+	Sequence name:	連番の名前:
+	Shortcut key:	ショートカット キー:
+	Single Closing Quote	一重引用符 (閉じ)
+	Single Opening Quote	一重引用符 (開き)
+	Spacing:	間隔:
+	Special Characters	特殊文字
+	Subset:	種類:
+	The current time	現在の時刻
+	The date the document was created	文書の作成日
+	The date the document was last printed	文書の最終印刷日
+	The date the document was last saved	文書の最終保存日
+	The document has no bookmarks yet.	この文書にはまだブックマークがありません。
+	The document's author	文書の作成者
+	The document's file name	文書のファイル名
+	The document's title	文書のタイトル
+	The number of pages in the document	文書のページ数
+	The number of pages in the section	セクションのページ数
+	The number of the current page	現在のページ番号
+	The number of the current section	現在のセクション番号
+	The number of words in the document	文書の単語数
+	The page number of a bookmark	ブックマークのページ番号
+	The text of a bookmark	ブックマークの文字列
+	This field has no options.	このフィールドにはオプションがありません。
+	This font has no characters to show.	このフォントには表示できる文字がありません。
+	This point forward	これ以降
+	This section	このセクション
+	Today's date	今日の日付
+	Trademark	商標
+	Type the field's name and its switches, for example PAGE \\* roman.	フィールド名とスイッチを入力します (例: PAGE \\* roman)。
+	Whole document	文書全体
+	Width and spacing	幅と間隔
+	from Unicode (hex)	Unicode (16 進)

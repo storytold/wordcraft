@@ -1040,3 +1040,86 @@
 	Leave the equation (Esc)	Napusti jednačinu (Esc)
 	Preview	Pregled
 	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft
+
+# Columns, Symbol and Field dialogs (#321).
+	(All)	(Sve)
+	(none)	(nema)
+	(normal text)	(običan tekst)
+	1/4 Em Space	Razmak od 1/4 em
+	A mail merge field	Polje za spajanje pošte
+	A numbered sequence (figures, tables…)	Numerisani niz (slike, tabele…)
+	A table of contents	Sadržaj
+	Apply to:	Primeni na:
+	Categories:	Kategorije:
+	Character	Znak
+	Character code:	Kod znaka:
+	Col #:	Kolona br.:
+	Copyright	Znak autorskog prava
+	Date and Time	Datum i vreme
+	Date formats:	Formati datuma:
+	Description:	Opis:
+	Document Information	Informacije o dokumentu
+	Double Closing Quote	Zatvoreni dvostruki navodnik
+	Double Opening Quote	Otvoreni dvostruki navodnik
+	Ellipsis	Tri tačke
+	Em Dash	Duga crta
+	En Dash	Srednja crta
+	Em Space	Em razmak
+	En Space	En razmak
+	Equal column width	Jednaka širina kolona
+	Field Codes	Kodovi polja
+	Field code:	Kod polja:
+	Field codes:	Kodovi polja:
+	Field name:	Naziv polja:
+	Field names:	Nazivi polja:
+	Field properties	Svojstva polja
+	Field…	Polje…
+	Format:	Format:
+	Hide Codes	Sakrij kodove
+	Index and Tables	Indeksi i tabele
+	Line between	Linija između kolona
+	Links and References	Veze i reference
+	Mail Merge	Spajanje pošte
+	More Columns…	Još kolona…
+	More Symbols…	Još simbola…
+	No-Width Non Break	Nedeljivi znak nulte širine
+	No-Width Optional Break	Opcioni prelom nulte širine
+	Paragraph Mark	Znak pasusa
+	Please choose a field	Izaberite polje
+	Preserve formatting during updates	Sačuvaj oblikovanje pri ažuriranju
+	Presets	Unapred zadato
+	Recently used symbols:	Nedavno korišćeni simboli:
+	Registered	Registrovani žig
+	Section Mark	Znak paragrafa
+	Sequence name:	Naziv niza:
+	Shortcut key:	Prečica na tastaturi:
+	Single Closing Quote	Zatvoreni jednostruki navodnik
+	Single Opening Quote	Otvoreni jednostruki navodnik
+	Spacing:	Razmak:
+	Special Characters	Specijalni znakovi
+	Subset:	Podskup:
+	The current time	Trenutno vreme
+	The date the document was created	Datum kada je dokument napravljen
+	The date the document was last printed	Datum kada je dokument poslednji put odštampan
+	The date the document was last saved	Datum kada je dokument poslednji put sačuvan
+	The document has no bookmarks yet.	Dokument još nema obeleživače.
+	The document's author	Autor dokumenta
+	The document's file name	Ime datoteke dokumenta
+	The document's title	Naslov dokumenta
+	The number of pages in the document	Broj stranica u dokumentu
+	The number of pages in the section	Broj stranica u odeljku
+	The number of the current page	Broj trenutne stranice
+	The number of the current section	Broj trenutnog odeljka
+	The number of words in the document	Broj reči u dokumentu
+	The page number of a bookmark	Broj stranice obeleživača
+	The text of a bookmark	Tekst obeleživača
+	This field has no options.	Ovo polje nema opcija.
+	This font has no characters to show.	Ovaj font nema znakove za prikaz.
+	This point forward	Od ovog mesta nadalje
+	This section	Ovaj odeljak
+	Today's date	Današnji datum
+	Trademark	Žig
+	Type the field's name and its switches, for example PAGE \\* roman.	Unesite naziv polja i njegove prekidače, na primer PAGE \\* roman.
+	Whole document	Ceo dokument
+	Width and spacing	Širina i razmak
+	from Unicode (hex)	iz Unicode (heks.)
