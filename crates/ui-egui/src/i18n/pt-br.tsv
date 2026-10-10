@@ -81,6 +81,7 @@
 	Border\nPainter	Pincel\nde bordas
 	Borders	Bordas
 	Bottom Border	Borda inferior
+	Bottom Margin	Margem inferior
 	Bottom of Page	Fim da página
 	Bottom:	Inferior:
 	Box	Caixa
@@ -179,8 +180,12 @@
 	Delete Style	Excluir estilo
 	Delete Table	Excluir tabela
 	Design	Design
+	Edit Comment	Editar comentário
+	Left Margin	Margem esquerda
 	More templates →	Mais modelos →
 	No templates match your search.	Nenhum modelo corresponde à pesquisa.
+	Reopen	Reabrir
+	Right Margin	Margem direita
 	Search for templates	Pesquisar modelos
 	development build	versão de desenvolvimento
 	Diagonal	Diagonal
@@ -719,6 +724,7 @@
 	Three	Três
 	Tight	Estreito
 	Top Border	Borda superior
+	Top Margin	Margem superior
 	Top of Page	Topo da página
 	Top:	Superior:
 	Total Row	Linha de totais
@@ -778,6 +784,7 @@
 	Wrap Text	Quebrar texto
 	Wrap\nText	Quebrar\ntexto
 	Write & Insert Fields	Escrever e inserir campos
+	Write a reply	Escrever uma resposta
 	Zoom	Zoom
 	Zoom In	Ampliar
 	Zoom Out	Reduzir
@@ -1006,5 +1013,28 @@
 	Dark	Escuro
 	Use system setting	Usar a configuração do sistema
 	A file dialog is already open.	Já há uma caixa de diálogo de arquivo aberta.
-	Delete Table Style	Excluir estilo de tabela
-	Preview	Visualização
+	Height:	Altura:
+	Width:	Largura:
+	Row	Linha
+	Cell	Célula
+	Preferred width:	Largura preferencial:
+	Alignment:	Alinhamento:
+	Indent from left:	Recuo à esquerda:
+	Specify height:	Especificar altura:
+	Exactly	Exatamente
+	At least	Pelo menos
+	Allow row to break across pages	Permitir quebra de linha entre páginas
+	Repeat as header row on each page	Repetir como linha de cabeçalho em cada página
+	Vertical alignment:	Alinhamento vertical:
+	Top	Superior
+	Bottom	Inferior
+	Alt text	Texto alternativo
+	Alt:	Alt.:
+	W:	L:
+	H:	A:
+	Reset	Redefinir
+	Reset Crop	Redefinir corte
+	Insert a new equation (Alt+=)	Inserir uma nova equação (Alt+=)
+	Leave the equation (Esc)	Sair da equação (Esc)
+	Preview	Visualizar
+	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft

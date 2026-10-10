@@ -1243,20 +1243,18 @@ fn table_design(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Table Styles", None, app, |ui, app| {
-        // The document's own styles first, so a new one shows without scrolling.
-        let mut styles: Vec<(bool, String, String)> = app
+        let styles: Vec<(String, String)> = app
             .session
             .doc
             .styles
             .styles
             .iter()
             .filter(|s| s.kind == wordcraft_doc::StyleKind::Table && !s.hidden)
-            .map(|s| (s.builtin, s.id.clone(), s.name.clone()))
+            .map(|s| (s.id.clone(), s.name.clone()))
             .collect();
-        styles.sort_by_key(|(builtin, _, _)| *builtin);
         egui::ScrollArea::horizontal().max_width(420.0).show(ui, |ui| {
             ui.horizontal(|ui| {
-                for (_, id, name) in styles {
+                for (id, name) in styles {
                     if crate::previews::table_style_tile(ui, app, &id).on_hover_text(name).clicked() {
                         let _ = app.run("table.style", json!({"style": id}));
                     }
@@ -1264,24 +1262,19 @@ fn table_design(app: &mut WordApp, ui: &mut Ui) {
             });
         });
         stack(ui, |ui| {
-            let current = look.and_then(|_| {
-                let (tp, _, _) = app.session.sel.focus.path.cell()?;
-                let id = app.session.doc.table(app.session.sel.focus.story, &tp)?.props.style.clone()?;
-                app.session.doc.styles.get(&id).filter(|st| st.kind == wordcraft_doc::StyleKind::Table).map(|st| st.builtin)
-            });
-            let can_modify = current.is_some();
-            // Built-in table styles can't be deleted.
-            let can_delete = current == Some(false);
+            let can_modify = look.is_some()
+                && app
+                    .session
+                    .sel
+                    .focus
+                    .path
+                    .cell()
+                    .and_then(|(tp, _, _)| app.session.doc.table(app.session.sel.focus.story, &tp)?.props.style.clone())
+                    .is_some();
             menu_button(ui, app, "styles", Some("Styles"), "Table Styles", false, |ui, app| {
                 mi(ui, app, "New Table Style…", "ui.dialog", json!({"name": "newTableStyle"}));
                 if ui.add_enabled(can_modify, egui::Button::new(tl!("Modify Table Style…")).min_size(vec2(200.0, 0.0))).clicked() {
                     let _ = app.run("ui.dialog", json!({"name": "modifyTableStyle"}));
-                    ui.close();
-                }
-                if ui.add_enabled(can_delete, egui::Button::new(tl!("Delete Table Style")).min_size(vec2(200.0, 0.0))).clicked() {
-                    if let Err(e) = app.run("table.deleteStyle", json!({})) {
-                        app.status(e);
-                    }
                     ui.close();
                 }
             });
@@ -1310,6 +1303,56 @@ fn table_design(app: &mut WordApp, ui: &mut Ui) {
             }
         });
         big(ui, app, "borderPainter", "Border\nPainter", "table.borderPainter", json!({}), false);
+    });
+}
+
+/// Table Layout › Cell Size: the caret cell's row height and column width, in inches. They show
+/// the size on the page (a row without a set height shows the height its text gives it) and
+/// editing runs `table.rowHeight` / `table.columnWidth`; dragging one is a single Undo.
+fn cell_size_boxes(ui: &mut Ui, app: &mut WordApp) {
+    let story = app.session.sel.focus.story;
+    let Some((tp, r, c)) = app.session.sel.focus.path.cell() else { return };
+    let Some(t) = app.session.doc.table(story, &tp) else { return };
+    let row = t.rows.get(r).map(|x| x.props.clone()).unwrap_or_default();
+    let stored_w = t.grid.get(t.grid_col(r, c)).copied();
+    let laid = app.session.layout().pages.iter().flat_map(|pg| pg.items.iter()).find_map(|it| match it {
+        wordcraft_layout::Placed::Cell { rect, table, row, cell, story: st } if *table == tp && *row == r && *cell == c && *st == story => {
+            Some(*rect)
+        }
+        _ => None,
+    });
+    let unit = wordcraft_geom::Unit::default();
+    let k = unit.pt_per_unit();
+    let h0 = row.height.or(laid.map(|x| x.h)).unwrap_or(0.0);
+    let w0 = laid.map(|x| x.w).or(stored_w).unwrap_or(0.0);
+    let exact = row.height_rule == wordcraft_doc::props::HeightRule::Exact;
+    // The edited value in points, and whether it continues a drag (joins the previous Undo step).
+    let boxed = |ui: &mut Ui, label: &str, pt: f32| -> Option<(f32, bool)> {
+        let mut out = None;
+        crate::widgets::row(ui, |ui| {
+            ui.add_sized(vec2(48.0, 18.0), egui::Label::new(egui::RichText::new(tl!(label)).small()));
+            let mut v = pt / k;
+            let r = ui.add_sized(vec2(72.0, 18.0), egui::DragValue::new(&mut v).speed(0.01).range(0.02..=22.0).suffix(unit.suffix()).max_decimals(2));
+            if r.changed() {
+                out = Some((v * k, r.dragged() && !r.drag_started()));
+            }
+        });
+        ui.add_space(2.0);
+        out
+    };
+    stack(ui, |ui| {
+        if let Some((h, join)) = boxed(ui, "Height:", h0) {
+            if join {
+                app.session.join_next_undo();
+            }
+            let _ = app.run("table.rowHeight", json!({"height": h, "rule": if exact { "exact" } else { "atLeast" }}));
+        }
+        if let Some((w, join)) = boxed(ui, "Width:", w0) {
+            if join {
+                app.session.join_next_undo();
+            }
+            let _ = app.run("table.columnWidth", json!({"width": w}));
+        }
     });
 }
 
@@ -1353,6 +1396,7 @@ fn table_layout(app: &mut WordApp, ui: &mut Ui) {
             mi(ui, app, "AutoFit Window", "table.autofit", json!({"mode": "window"}));
             mi(ui, app, "Fixed Column Width", "table.autofit", json!({"mode": "fixed"}));
         });
+        cell_size_boxes(ui, app);
         stack(ui, |ui| {
             small(ui, app, "distributeRows", Some("Distribute Rows"), "Distribute Rows", "table.distributeRows", json!({}), false);
             small(ui, app, "distributeCols", Some("Distribute Columns"), "Distribute Columns", "table.distributeColumns", json!({}), false);

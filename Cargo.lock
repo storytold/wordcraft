@@ -4870,6 +4870,7 @@ dependencies = [
  "fmv-macos-events",
  "getrandom 0.3.4",
  "log",
+ "open",
  "pollster 0.4.0",
  "rfd",
  "serde_json",
@@ -5021,6 +5022,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "wordcraft-metafile"
+version = "0.4.0"
+dependencies = [
+ "kurbo",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "wordcraft-pdf"
 version = "0.4.0"
 dependencies = [
@@ -5037,6 +5046,7 @@ dependencies = [
  "wordcraft-fonts",
  "wordcraft-geom",
  "wordcraft-layout",
+ "wordcraft-metafile",
 ]
 
 [[package]]
@@ -5059,6 +5069,7 @@ dependencies = [
  "wordcraft-fonts",
  "wordcraft-geom",
  "wordcraft-layout",
+ "wordcraft-metafile",
 ]
 
 [[package]]

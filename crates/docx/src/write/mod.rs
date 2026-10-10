@@ -665,18 +665,9 @@ fn style_xml(w: &mut W, st: &Style) {
         };
         cond(w, "wholeTable", &wordcraft_doc::CharProps::default(), t.fill, None);
         cond(w, "firstRow", &t.header_chr, t.header_fill, t.header_borders);
-        // The total row's borders, its top edge falling back to the built-in top rule.
-        let total_borders = match (t.total_borders, t.total_border_top) {
-            (Some(mut b), top) => {
-                b.top = b.top.or(top);
-                Some(b)
-            }
-            (None, top) => top.map(|b| wordcraft_doc::props::Borders { top: Some(b), ..Default::default() }),
-        };
-        cond(w, "lastRow", &t.total_chr, t.total_fill, total_borders);
-        cond(w, "firstCol", &t.first_col_chr, t.first_col_fill, t.first_col_borders);
-        cond(w, "lastCol", &t.last_col_chr, t.last_col_fill, t.last_col_borders);
-        cond(w, "band1Vert", &t.col_band_chr, t.col_band_fill, t.col_band_borders);
+        let total_top = t.total_border_top.map(|b| wordcraft_doc::props::Borders { top: Some(b), ..Default::default() });
+        cond(w, "lastRow", &t.total_chr, None, total_top);
+        cond(w, "firstCol", &t.first_col_chr, None, None);
         cond(w, "band1Horz", &t.band_chr, t.band_fill, t.band_borders);
     }
     w.close("w:style");
@@ -780,6 +771,11 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool) -> Vec<u8> {
     }
     if s.even_odd_headers {
         w.empty("w:evenAndOddHeaders", &[]);
+    }
+    for (tag, v) in [("w:drawingGridHorizontalSpacing", s.grid_h), ("w:drawingGridVerticalSpacing", s.grid_v)] {
+        if v.is_finite() && (v - wordcraft_doc::DEFAULT_GRID).abs() > 0.01 {
+            w.val(tag, &crate::units::twips(v.clamp(0.5, 1584.0)));
+        }
     }
     w.val("w:characterSpacingControl", "doNotCompress");
     for (tag, fmt, used, el) in

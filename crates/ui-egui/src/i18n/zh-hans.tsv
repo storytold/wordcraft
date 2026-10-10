@@ -63,9 +63,14 @@
 	AutoSave	自动保存
 	AutoSave documents you have saved in WordCraft	自动保存在 WordCraft 中保存过的文档
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	自动保存失败：{error}。重新保存文档后将恢复自动保存。
+	Bottom Margin	下边距
 	Dark page (white text on black)	深色页面（黑底白字）
+	Edit Comment	编辑批注
+	Left Margin	左边距
 	More templates →	更多模板 →
 	No templates match your search.	没有与搜索匹配的模板。
+	Reopen	重新打开
+	Right Margin	右边距
 	Search for templates	搜索模板
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	像“视图 › 切换模式”一样以反转的颜色显示文档。保存、打印和 PDF 不受影响。
 	AutoSave saves every change to the file (needs a saved document)	自动保存会把每次更改写入文件（文档需已保存）
@@ -730,6 +735,7 @@
 	Three	三栏
 	Tight	紧密
 	Top Border	上框线
+	Top Margin	上边距
 	Top of Page	页面顶端
 	Top:	上：
 	Total Row	汇总行
@@ -789,6 +795,7 @@
 	Wrap Text	环绕文字
 	Wrap\nText	环绕文字
 	Write & Insert Fields	编写和插入域
+	Write a reply	写回复
 	Zoom	缩放
 	Zoom In	放大
 	Zoom Out	缩小
@@ -1005,5 +1012,28 @@
 	Dark	深色
 	Use system setting	使用系统设置
 	A file dialog is already open.	已有一个文件对话框处于打开状态。
-	Delete Table Style	删除表格样式
+	Height:	高度：
+	Width:	宽度：
+	Row	行
+	Cell	单元格
+	Preferred width:	首选宽度：
+	Alignment:	对齐方式：
+	Indent from left:	左缩进：
+	Specify height:	指定高度：
+	Exactly	固定值
+	At least	最小值
+	Allow row to break across pages	允许跨页断行
+	Repeat as header row on each page	在各页重复作为标题行
+	Vertical alignment:	垂直对齐方式：
+	Top	顶端
+	Bottom	底端
+	Alt text	替代文字
+	Alt:	替代文字：
+	W:	宽：
+	H:	高：
+	Reset	重设
+	Reset Crop	重设裁剪
+	Insert a new equation (Alt+=)	插入新公式 (Alt+=)
+	Leave the equation (Esc)	退出公式 (Esc)
 	Preview	预览
+	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft

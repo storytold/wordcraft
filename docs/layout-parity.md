@@ -33,7 +33,7 @@ font can't match Word's metrics.
 | Body top below a tall header, footer pushes body up | ✅ | #138 | — |
 | Footnotes at the page bottom, endnotes at the end, note numbering | 🟡 | **A long note doesn't continue onto the next page**; no continuation separator/notice; per-section restart partial | 4–6 |
 | Tables: row heights (at least/exact), rows split across pages, header rows repeat, Can't Split | ✅ | 2026-10-06, #138 | — |
-| Tables: autofit to contents/window, fixed widths, Word 2013 edge | 🟡 | #137; autofit algorithm differs from Word's on mixed widths | 4–6 |
+| Tables: autofit to contents/window, fixed widths, Word 2013 edge | 🟡 | #137; #44: AutoFit Contents measures each column's narrowest and widest text and shares the width like Word, once (not live as you type); cell preferred widths and spans still differ | 3–5 |
 | Floating tables (`w:tblpPr`) | 🟡 | #137; overlap rules untested | 2–3 |
 | Nested tables | 🟡 | render; polish missing | 2–4 |
 | Floating pictures/shapes placement (relative to page/margin/column/paragraph/line/character) | ✅ | #136 | — |
@@ -68,4 +68,5 @@ font can't match Word's metrics.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | trivial | AutoFit Contents measures the text (#44) |
 | 2026-10-10 | major | First version: layout and pagination checklist with evidence from `crates/layout`, PRs and issues |

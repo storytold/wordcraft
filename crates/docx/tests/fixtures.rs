@@ -408,6 +408,59 @@ fn vml_image_and_inline_drawing() {
 }
 
 #[test]
+fn chart_and_diagram_drawings_are_graphic_objects() {
+    // A diagram's data holds a blip: the URI decides first, so no picture is read from it.
+    let drawing = |uri: &str, data: &str| {
+        format!(
+            r#"<w:r><w:drawing><wp:inline><wp:extent cx="2743200" cy="1828800"/><wp:docPr id="5" name="G" descr="sales"/><a:graphic><a:graphicData uri="{uri}">{data}</a:graphicData></a:graphic></wp:inline></w:drawing></w:r>"#
+        )
+    };
+    let body = format!(
+        "<w:p>{}{}</w:p>",
+        drawing("http://schemas.openxmlformats.org/drawingml/2006/chart", ""),
+        drawing("http://schemas.openxmlformats.org/drawingml/2006/diagram", r#"<a:blip r:embed="rIdImg"/>"#)
+    );
+    let d = read_body(&body);
+    let p = paras(&d);
+    assert_eq!(p[0].objects.len(), 2);
+    match (&p[0].objects[0], &p[0].objects[1]) {
+        (InlineObject::Graphic { w: w1, h: h1, alt, graphic: g1, .. }, InlineObject::Graphic { graphic: g2, .. }) => {
+            assert_eq!((*w1, *h1, alt.as_str()), (216.0, 144.0, "sales"));
+            assert_eq!(g1.kind, wordcraft_doc::graphic::GraphicKind::Chart);
+            assert_eq!(g2.kind, wordcraft_doc::graphic::GraphicKind::Diagram);
+            assert!(g1.items.is_empty() && g2.items.is_empty());
+        }
+        o => panic!("{o:?}"),
+    }
+}
+
+#[test]
+fn a_chart_part_is_built_once_and_only_through_a_chart_relationship() {
+    let chart = r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:barChart><c:ser><c:val><c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:numLit></c:val></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>"#;
+    let drawing = |id: &str| {
+        format!(
+            r#"<w:r><w:drawing><wp:inline><wp:extent cx="2743200" cy="1828800"/><wp:docPr id="5" name="G"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="{id}"/></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>"#
+        )
+    };
+    let body = format!("<w:p>{}{}{}</w:p>", drawing("rIdChart"), drawing("rIdChart"), drawing("rIdNotChart"));
+    let bytes = docx(
+        &body,
+        &[("rIdChart", "chart", "charts/chart1.xml"), ("rIdNotChart", "image", "charts/chart1.xml")],
+        &[("word/charts/chart1.xml", chart)],
+    );
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    let graphics: Vec<_> = paras(&d)[0]
+        .objects
+        .iter()
+        .filter_map(|o| if let InlineObject::Graphic { graphic, .. } = o { Some(graphic.clone()) } else { None })
+        .collect();
+    assert_eq!(graphics.len(), 3);
+    assert!(!graphics[0].items.is_empty(), "the chart is drawn");
+    assert!(std::sync::Arc::ptr_eq(&graphics[0], &graphics[1]), "one build for both references");
+    assert!(graphics[2].items.is_empty(), "an image relationship is not a chart");
+}
+
+#[test]
 fn strict_namespace_and_bad_numbers() {
     let doc = r#"<w:document xmlns:w="http://purl.oclc.org/ooxml/wordprocessingml/main"><w:body>
 <w:p><w:pPr><w:jc w:val="end"/><w:ind w:start="1in" w:hanging="abc"/><w:spacing w:before="-50" w:line="99999999999999999999" w:lineRule="exact"/><w:outlineLvl w:val="300"/><w:numPr><w:numId w:val="-4"/></w:numPr></w:pPr>

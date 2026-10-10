@@ -9,7 +9,6 @@
 # Neutral Spanish, understood across Spain and Latin America. Commands are infinitives (Guardar,
 # Copiar); second-person text uses tú; labels use sentence case; product and format names stay as
 # they are (WordCraft, PDF, Markdown, MCP …).
-#
 # Clean room: every entry was written from the plain meaning of the English label in ordinary
 # computing vocabulary. No Microsoft Word (or other product) localisation, string table or
 # translated UI was consulted or copied; add entries the same way.
@@ -86,6 +85,7 @@
 	Border\nPainter	Pincel de\nbordes
 	Borders	Bordes
 	Bottom Border	Borde inferior
+	Bottom Margin	Margen inferior
 	Bottom of Page	Parte inferior de la página
 	Bottom:	Inferior:
 	Box	Cuadro
@@ -224,6 +224,7 @@
 	Drawing\nCanvas	Lienzo de\ndibujo
 	Drop Cap	Letra capital
 	Drops all formatting and pastes plain text.	Quita todo el formato y pega texto sin formato.
+	Edit Comment	Editar comentario
 	Edit Footer	Editar pie de página
 	Edit Header	Editar encabezado
 	Edit Recipient List	Editar lista de destinatarios
@@ -375,6 +376,7 @@
 	Layout Summary	Resumen de disposición
 	Left	Izquierda
 	Left Border	Borde izquierdo
+	Left Margin	Margen izquierdo
 	Left:	Izquierda:
 	Letter	Carta
 	Line	Línea
@@ -566,6 +568,7 @@
 	Remove Space After Paragraph	Quitar espacio después del párrafo
 	Remove Table of Contents	Quitar tabla de contenido
 	Remove Watermark	Quitar marca de agua
+	Reopen	Reabrir
 	Repeat	Repetir
 	Repeat Header Rows	Repetir filas de encabezado
 	Replace	Reemplazar
@@ -596,6 +599,7 @@
 	Rich Text Format (RTF)	Formato de texto enriquecido (RTF)
 	Right	Derecha
 	Right Border	Borde derecho
+	Right Margin	Margen derecho
 	Right-to-Left Text Direction	Dirección de texto de derecha a izquierda
 	Left-to-Right Text Direction	Dirección de texto de izquierda a derecha
 	Right:	Derecha:
@@ -744,6 +748,7 @@
 	Three	Tres
 	Tight	Ajustado
 	Top Border	Borde superior
+	Top Margin	Margen superior
 	Top of Page	Parte superior de la página
 	Top:	Superior:
 	Total Row	Fila de totales
@@ -804,6 +809,7 @@
 	Wrap Text	Ajustar texto
 	Wrap\nText	Ajustar\ntexto
 	Write & Insert Fields	Escribir e insertar campos
+	Write a reply	Escribir una respuesta
 	Zoom	Zoom
 	Zoom In	Acercar
 	Zoom Out	Alejar
@@ -1011,5 +1017,28 @@
 	Dark	Oscuro
 	Use system setting	Usar la configuración del sistema
 	A file dialog is already open.	Ya hay un cuadro de diálogo de archivo abierto.
-	Delete Table Style	Eliminar estilo de tabla
+	Height:	Alto:
+	Width:	Ancho:
+	Row	Fila
+	Cell	Celda
+	Preferred width:	Ancho preferido:
+	Alignment:	Alineación:
+	Indent from left:	Sangría desde la izquierda:
+	Specify height:	Especificar alto:
+	Exactly	Exactamente
+	At least	Al menos
+	Allow row to break across pages	Permitir dividir la fila entre páginas
+	Repeat as header row on each page	Repetir como fila de encabezado en cada página
+	Vertical alignment:	Alineación vertical:
+	Top	Arriba
+	Bottom	Abajo
+	Alt text	Texto alternativo
+	Alt:	Alt.:
+	W:	An.:
+	H:	Al.:
+	Reset	Restablecer
+	Reset Crop	Restablecer recorte
+	Insert a new equation (Alt+=)	Insertar una ecuación nueva (Alt+=)
+	Leave the equation (Esc)	Salir de la ecuación (Esc)
 	Preview	Vista previa
+	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft

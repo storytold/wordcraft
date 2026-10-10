@@ -1,8 +1,8 @@
 //! Dialogs: Font, Paragraph, Find & Replace, Go To, Insert Table, Page Setup, Link, Bookmark,
-//! Word Count, Zoom, Watermark, New/Modify Style, New/Modify Table Style, Command search, Paste
-//! Special, About, Save Changes, and the mail-merge Recipient List, Insert Merge Field, Find
-//! Recipient, merge rules, Match Fields and Check for Errors. Every dialog ends by running a command
-//! (or shows one's result), so agents get the same result without the dialog.
+//! Word Count, Zoom, Watermark, New/Modify Style, New/Modify Table Style, Table Properties,
+//! Command search, Paste Special, About, Save Changes, and the mail-merge Recipient List, Insert
+//! Merge Field, Find Recipient, merge rules, Match Fields and Check for Errors. Every dialog ends
+//! by running a command (or shows one's result), so agents get the same result without the dialog.
 
 use egui::{Sense, Ui, vec2};
 use serde::Serialize;
@@ -108,13 +108,13 @@ pub enum Dialog {
         name: String,
         /// Style id.
         based_on: String,
-        /// Index into `regions` (see [`REGION_LABELS`]).
+        /// Index into `regions`: whole table, header row, banded rows.
         region: usize,
-        regions: Box<[TableRegion; 7]>,
+        regions: Box<[TableRegion; 3]>,
         /// What the regions showed when the dialog opened (or the base style changed): only
         /// changes are sent, so everything else stays inherited.
         #[serde(skip)]
-        basis: Box<[TableRegion; 7]>,
+        basis: Box<[TableRegion; 3]>,
     },
     Commands {
         query: String,
@@ -180,6 +180,114 @@ pub enum Dialog {
         unknown: Vec<String>,
         records: u64,
     },
+    /// Table Layout › Properties: the table, the caret's row, column and cell. Only what changed
+    /// from `basis` (the values when it opened) is applied, as one `table.properties` step.
+    TableProperties {
+        form: Box<TableForm>,
+        #[serde(skip)]
+        basis: Box<TableForm>,
+    },
+}
+
+/// The Table Properties dialog's fields. Lengths are in the interface unit
+/// ([`wordcraft_geom::Unit`], inches by default).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableForm {
+    pub width_on: bool,
+    pub width: f32,
+    /// `left`, `center` or `right`.
+    pub align: String,
+    pub indent: f32,
+    pub row_height_on: bool,
+    pub row_height: f32,
+    pub row_exact: bool,
+    pub allow_break: bool,
+    pub header_row: bool,
+    pub column_width: f32,
+    pub cell_width_on: bool,
+    pub cell_width: f32,
+    /// `top`, `center` or `bottom`.
+    pub valign: String,
+}
+
+impl TableForm {
+    /// The caret's table, row, column and cell as the dialog shows them.
+    pub fn read(app: &WordApp) -> Option<TableForm> {
+        use wordcraft_doc::props::{Align, HeightRule, VAlign};
+        let s = &app.session;
+        let (tp, r, c) = s.sel.focus.path.cell()?;
+        let t = s.doc.table(s.sel.focus.story, &tp)?;
+        let k = wordcraft_geom::Unit::default().pt_per_unit();
+        let row = t.rows.get(r).map(|x| x.props.clone()).unwrap_or_default();
+        let cell = t.rows.get(r).and_then(|x| x.cells.get(c)).map(|x| x.props.clone()).unwrap_or_default();
+        let tw = wordcraft_engine::cmd::page::sect(s).text_width();
+        let width = t.props.width_pct.filter(|p| *p > 0.0).map(|p| tw * p.min(100.0) / 100.0).or(t.props.width.filter(|w| *w > 0.0));
+        let fin = |v: f32| if v.is_finite() { v } else { 0.0 };
+        Some(TableForm {
+            width_on: width.is_some(),
+            width: fin(width.unwrap_or(tw)) / k,
+            align: match t.props.align {
+                Some(Align::Center) => "center",
+                Some(Align::Right) => "right",
+                _ => "left",
+            }
+            .into(),
+            indent: fin(t.props.indent.unwrap_or(0.0)) / k,
+            row_height_on: row.height.is_some() && row.height_rule != HeightRule::Auto,
+            row_height: fin(row.height.unwrap_or(18.0)) / k,
+            row_exact: row.height_rule == HeightRule::Exact,
+            allow_break: !row.cant_split,
+            header_row: row.header,
+            column_width: fin(t.grid.get(t.grid_col(r, c)).copied().unwrap_or(72.0)) / k,
+            cell_width_on: cell.width.is_some(),
+            cell_width: fin(cell.width.unwrap_or(72.0)) / k,
+            valign: match cell.valign {
+                VAlign::Center => "center",
+                VAlign::Bottom => "bottom",
+                _ => "top",
+            }
+            .into(),
+        })
+    }
+
+    /// `table.properties` parameters for what differs from `basis` (empty when nothing does).
+    pub fn changes(&self, basis: &TableForm) -> Value {
+        let k = wordcraft_geom::Unit::default().pt_per_unit();
+        let moved = |a: f32, b: f32| (a - b).abs() > 1e-4;
+        let mut v = serde_json::Map::new();
+        if self.width_on != basis.width_on || (self.width_on && moved(self.width, basis.width)) {
+            v.insert("width".into(), if self.width_on { json!(self.width * k) } else { Value::Null });
+        }
+        if self.align != basis.align {
+            v.insert("align".into(), json!(self.align));
+        }
+        if moved(self.indent, basis.indent) {
+            v.insert("indent".into(), json!(self.indent * k));
+        }
+        if self.row_height_on != basis.row_height_on
+            || (self.row_height_on && (moved(self.row_height, basis.row_height) || self.row_exact != basis.row_exact))
+        {
+            v.insert("rowHeight".into(), if self.row_height_on { json!(self.row_height * k) } else { Value::Null });
+            v.insert("rowHeightRule".into(), json!(if self.row_exact { "exact" } else { "atLeast" }));
+        }
+        if self.allow_break != basis.allow_break {
+            v.insert("allowBreak".into(), json!(self.allow_break));
+        }
+        if self.header_row != basis.header_row {
+            v.insert("headerRow".into(), json!(self.header_row));
+        }
+        if moved(self.column_width, basis.column_width) {
+            v.insert("columnWidth".into(), json!(self.column_width * k));
+        }
+        if self.cell_width_on != basis.cell_width_on || (self.cell_width_on && moved(self.cell_width, basis.cell_width)) {
+            v.insert("cellWidth".into(), if self.cell_width_on { json!(self.cell_width * k) } else { Value::Null });
+        }
+        if self.valign != basis.valign {
+            v.insert("valign".into(), json!(self.valign));
+        }
+        Value::Object(v)
+    }
 }
 
 /// The address parts Match Fields lists, with their keys in `mailings.matchFields`' `address`.
@@ -244,11 +352,8 @@ pub struct TableRegion {
     pub color: String,
 }
 
-/// The Table Style dialog's regions, in the order of `table_style::REGIONS` (the param names).
-const REGION_LABELS: [&str; 7] = ["Whole Table", "Header Row", "Total Row", "First Column", "Last Column", "Banded Rows", "Banded Columns"];
-
 /// The regions of table style `id` as resolved through its based-on chain.
-fn table_regions(app: &WordApp, id: &str) -> Box<[TableRegion; 7]> {
+fn table_regions(app: &WordApp, id: &str) -> Box<[TableRegion; 3]> {
     let Some(st) = app.session.doc.styles.table_style(id) else { return Default::default() };
     let p = &st.parts;
     let hex = |c: Option<wordcraft_doc::Rgb>| c.map(|c| c.hex()).unwrap_or_default();
@@ -257,134 +362,15 @@ fn table_regions(app: &WordApp, id: &str) -> Box<[TableRegion; 7]> {
         _ => String::new(),
     };
     let lines = |b: Option<wordcraft_doc::props::Borders>| b.is_some_and(|b| b.any_visible());
-    // A region's text: the whole table's formatting with the region's over it.
-    let region = |borders: Option<wordcraft_doc::props::Borders>, fill: Option<wordcraft_doc::Rgb>, chr: &wordcraft_doc::CharProps| {
-        let mut c = st.chr.clone();
-        c.overlay(chr);
-        TableRegion { borders: lines(borders), fill: hex(fill), bold: c.bold.unwrap_or(false), color: text(&c) }
-    };
-    let none = wordcraft_doc::CharProps::default();
+    let mut header_chr = st.chr.clone();
+    header_chr.overlay(&p.header_chr);
+    let mut band_chr = st.chr.clone();
+    band_chr.overlay(&p.band_chr);
     Box::new([
-        region(p.borders, p.fill, &none),
-        region(p.header_borders, p.header_fill, &p.header_chr),
-        region(p.total_borders, p.total_fill, &p.total_chr),
-        region(p.first_col_borders, p.first_col_fill, &p.first_col_chr),
-        region(p.last_col_borders, p.last_col_fill, &p.last_col_chr),
-        region(p.band_borders, p.band_fill, &p.band_chr),
-        region(p.col_band_borders, p.col_band_fill, &p.col_band_chr),
+        TableRegion { borders: lines(p.borders), fill: hex(p.fill), bold: st.chr.bold.unwrap_or(false), color: text(&st.chr) },
+        TableRegion { borders: lines(p.header_borders), fill: hex(p.header_fill), bold: header_chr.bold.unwrap_or(false), color: text(&header_chr) },
+        TableRegion { borders: lines(p.band_borders), fill: hex(p.band_fill), bold: band_chr.bold.unwrap_or(false), color: text(&band_chr) },
     ])
-}
-
-/// The params `table.newStyle` / `table.modifyStyle` take for the Table Style dialog's state:
-/// only what changed from `basis`, so the rest stays inherited.
-fn table_style_params(id: Option<&str>, name: &str, based_on: &str, regions: &[TableRegion; 7], basis: &[TableRegion; 7]) -> Value {
-    let mut v = json!({"name": name.trim(), "basedOn": based_on});
-    for ((key, r), b) in wordcraft_engine::cmd::table_style::REGIONS.into_iter().zip(regions.iter()).zip(basis.iter()) {
-        let ch = region_changes(r, b);
-        if ch.as_object().is_some_and(|o| !o.is_empty()) {
-            v[key] = ch;
-        }
-    }
-    if let Some(id) = id {
-        v["style"] = json!(id);
-    }
-    v
-}
-
-/// A small sample table drawn with `style` (5 columns, a header, three body rows and a total
-/// row), showing the regions `look` turns on: the Table Style dialog's live preview.
-fn table_style_preview(ui: &mut Ui, style: Option<&wordcraft_doc::styles::TableStyleProps>, look: wordcraft_doc::props::TableLook) {
-    use wordcraft_doc::props::{Border, Borders};
-    const COLS: usize = 5;
-    const ROWS: usize = 5;
-    const TEXT: [[&str; COLS]; ROWS] = [
-        ["", "Mon", "Tue", "Wed", "Sum"],
-        ["North", "4", "7", "2", "13"],
-        ["South", "6", "1", "5", "12"],
-        ["West", "3", "8", "4", "15"],
-        ["Total", "13", "16", "11", "40"],
-    ];
-    let (rect, _) = ui.allocate_exact_size(vec2(300.0, 120.0), Sense::hover());
-    let painter = ui.painter_at(rect);
-    // The page is white whatever the interface theme.
-    painter.rect_filled(rect, 2.0, egui::Color32::WHITE);
-    let t = Tokens::get(ui.ctx());
-    painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
-    let Some(st) = style else { return };
-    let p = &st.parts;
-    let table = rect.shrink2(vec2(14.0, 10.0));
-    let (cw, rh) = (table.width() / COLS as f32, table.height() / ROWS as f32);
-    let rgb = |c: wordcraft_doc::Rgb| egui::Color32::from_rgb(c.0, c.1, c.2);
-    let tb = p.borders.unwrap_or_default();
-    for (ri, row) in TEXT.iter().enumerate() {
-        let header = look.header_row && ri == 0;
-        let total = look.total_row && ri + 1 == ROWS;
-        let band = look.banded_rows
-            && !header
-            && (ri.saturating_sub(usize::from(look.header_row)) / p.band_size.unwrap_or(1).clamp(1, 1000) as usize).is_multiple_of(2);
-        for (ci, txt) in row.iter().enumerate() {
-            let first = look.first_column && ci == 0;
-            let last = look.last_column && ci + 1 == COLS;
-            let col_band = look.banded_columns && !first && ci.saturating_sub(usize::from(look.first_column)).is_multiple_of(2);
-            let cell = egui::Rect::from_min_size(table.min + vec2(ci as f32 * cw, ri as f32 * rh), vec2(cw, rh));
-            // Regions from lowest to highest priority, as layout applies them.
-            let regions = [
-                (col_band, p.col_band_fill, &p.col_band_chr, p.col_band_borders),
-                (band, p.band_fill, &p.band_chr, p.band_borders),
-                (first, p.first_col_fill, &p.first_col_chr, p.first_col_borders),
-                (last, p.last_col_fill, &p.last_col_chr, p.last_col_borders),
-                (header, p.header_fill, &p.header_chr, p.header_borders),
-                (total, p.total_fill, &p.total_chr, p.total_borders),
-            ];
-            let mut fill = p.fill;
-            let mut chr = st.chr.clone();
-            let mut b = Borders {
-                top: if ri == 0 { tb.top } else { tb.between },
-                bottom: if ri + 1 == ROWS { tb.bottom } else { tb.between },
-                left: if ci == 0 { tb.left } else { tb.inside_v },
-                right: if ci + 1 == COLS { tb.right } else { tb.inside_v },
-                between: None,
-                inside_v: None,
-            };
-            for (on, f, c, rb) in regions {
-                if !on {
-                    continue;
-                }
-                fill = f.or(fill);
-                chr.overlay(c);
-                if let Some(rb) = rb {
-                    b.overlay(&Borders { between: None, inside_v: None, ..rb });
-                }
-            }
-            if total && p.total_borders.is_none_or(|x| x.top.is_none()) {
-                b.top = p.total_border_top.or(b.top);
-            }
-            if let Some(f) = fill {
-                painter.rect_filled(cell, 0.0, rgb(f));
-            }
-            let edge = |from: egui::Pos2, to: egui::Pos2, e: Option<Border>| {
-                if let Some(e) = e.filter(Border::is_visible) {
-                    let color = e.color.map_or(egui::Color32::BLACK, rgb);
-                    painter.line_segment([from, to], egui::Stroke::new(e.width.clamp(0.5, 3.0) * 1.3, color));
-                }
-            };
-            edge(cell.left_top(), cell.right_top(), b.top);
-            edge(cell.left_bottom(), cell.right_bottom(), b.bottom);
-            edge(cell.left_top(), cell.left_bottom(), b.left);
-            edge(cell.right_top(), cell.right_bottom(), b.right);
-            let color = match chr.color {
-                Some(wordcraft_doc::TextColor::Rgb(c)) => rgb(c),
-                _ => egui::Color32::BLACK,
-            };
-            let font = egui::FontId::proportional(11.0);
-            let pos = cell.left_center() + vec2(4.0, 0.0);
-            painter.text(pos, egui::Align2::LEFT_CENTER, *txt, font.clone(), color);
-            if chr.bold.unwrap_or(false) {
-                // A second pass a hair to the right reads as bold at this size.
-                painter.text(pos + vec2(0.6, 0.0), egui::Align2::LEFT_CENTER, *txt, font, color);
-            }
-        }
-    }
 }
 
 /// The style of the table at the caret, when it is a table style.
@@ -473,6 +459,7 @@ impl Dialog {
             Dialog::MergeRule { .. } => "ruleIf",
             Dialog::MatchFields { .. } => "matchFields",
             Dialog::CheckErrors { .. } => "checkErrors",
+            Dialog::TableProperties { .. } => "tableProperties",
         }
     }
 
@@ -577,6 +564,10 @@ impl Dialog {
                 Dialog::TableStyle { id: Some(id), name, based_on, region: 0, basis: regions.clone(), regions }
             }
             "commands" => Dialog::Commands { query: String::new() },
+            "tableProperties" => {
+                let form = Box::new(TableForm::read(app)?);
+                Dialog::TableProperties { basis: form.clone(), form }
+            }
             "pasteSpecial" => Dialog::paste_special(app, &json!({})),
             "about" => Dialog::About { tab: 0 },
             "contributors" => Dialog::About { tab: 1 },
@@ -724,6 +715,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::MergeRule { .. } => "If…Then…Else",
         Dialog::MatchFields { .. } => "Match Fields",
         Dialog::CheckErrors { .. } => "Check for Errors",
+        Dialog::TableProperties { .. } => "Table Properties",
     };
     egui::Window::new(tl!(title))
         .id(egui::Id::new(("dialog", title)))
@@ -967,6 +959,17 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             ok || cancel
         }
+        Dialog::TableProperties { form, basis } => {
+            table_properties(ui, form);
+            let (ok, cancel) = buttons(ui, tl!("OK"));
+            if ok {
+                let changes = form.changes(basis);
+                if changes.as_object().is_some_and(|m| !m.is_empty()) {
+                    let _ = app.run("table.properties", changes);
+                }
+            }
+            ok || cancel
+        }
         Dialog::InsertTable { rows, cols } => {
             egui::Grid::new("it").num_columns(2).show(ui, |ui| {
                 ui.label(tl!("Number of columns:"));
@@ -1189,11 +1192,12 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 });
                 ui.end_row();
                 ui.label(tl!("Apply formatting to:"));
+                let names = ["Whole Table", "Header Row", "Banded Rows"];
                 egui::ComboBox::from_id_salt("tstyle_region")
                     .width(200.0)
-                    .selected_text(tl!(REGION_LABELS.get(*region).copied().unwrap_or("Whole Table")))
+                    .selected_text(tl!(names.get(*region).copied().unwrap_or("Whole Table")))
                     .show_ui(ui, |ui| {
-                        for (i, n) in REGION_LABELS.iter().enumerate() {
+                        for (i, n) in names.iter().enumerate() {
                             ui.selectable_value(region, i, tl!(n));
                         }
                     });
@@ -1220,32 +1224,24 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                     ui.end_row();
                 });
             }
-            // Live preview: the style as OK would leave it, on the current table's options with
-            // the region being edited turned on.
-            let v = table_style_params(id.as_deref(), name, based_on, regions, basis);
-            let mut look = app
-                .session
-                .sel
-                .focus
-                .path
-                .cell()
-                .and_then(|(tp, _, _)| app.session.doc.table(app.session.sel.focus.story, &tp).map(|t| t.props.look))
-                .unwrap_or_default();
-            match *region {
-                1 => look.header_row = true,
-                2 => look.total_row = true,
-                3 => look.first_column = true,
-                4 => look.last_column = true,
-                5 => look.banded_rows = true,
-                6 => look.banded_columns = true,
-                _ => {}
-            }
-            ui.add_space(4.0);
-            ui.label(egui::RichText::new(tl!("Preview")).small().weak());
-            table_style_preview(ui, wordcraft_engine::cmd::table_style::preview(&app.session, &v).as_ref(), look);
             let (ok, cancel) = buttons(ui, tl!("OK"));
             if ok {
-                let cmd = if id.is_some() { "table.modifyStyle" } else { "table.newStyle" };
+                let mut v = json!({"name": name.trim(), "basedOn": based_on});
+                for (i, key) in ["wholeTable", "headerRow", "bandedRows"].into_iter().enumerate() {
+                    if let (Some(r), Some(b)) = (regions.get(i), basis.get(i)) {
+                        let ch = region_changes(r, b);
+                        if ch.as_object().is_some_and(|o| !o.is_empty()) {
+                            v[key] = ch;
+                        }
+                    }
+                }
+                let cmd = match id {
+                    Some(sid) => {
+                        v["style"] = json!(sid);
+                        "table.modifyStyle"
+                    }
+                    None => "table.newStyle",
+                };
                 if let Err(e) = app.run(cmd, v) {
                     app.status(e);
                     return false;
@@ -1590,6 +1586,69 @@ fn recipient_list(app: &mut WordApp, ui: &mut Ui, fields: &mut Vec<String>, rows
 /// The Paragraph dialog's OK. `align`, `left` and `right` are as seen on the page; `flags` are
 /// keep with next, keep lines together, page break before, widow/orphan control.
 #[allow(clippy::too_many_arguments)]
+/// The Table Properties dialog's fields: Table, Row, Column and Cell sections.
+fn table_properties(ui: &mut Ui, f: &mut TableForm) {
+    let unit = wordcraft_geom::Unit::default();
+    fn len(v: &mut f32, lo: f32, unit: wordcraft_geom::Unit) -> egui::DragValue<'_> {
+        egui::DragValue::new(v).speed(0.01).range(lo..=22.0).suffix(unit.suffix()).max_decimals(2)
+    }
+    let heading = |ui: &mut Ui, s: &str| {
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new(tl!(s)).font(semibold(12.5)));
+    };
+    heading(ui, "Table");
+    egui::Grid::new("tp_table").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+        ui.checkbox(&mut f.width_on, tl!("Preferred width:"));
+        ui.add_enabled(f.width_on, len(&mut f.width, 0.1, unit));
+        ui.end_row();
+        ui.label(tl!("Alignment:"));
+        ui.horizontal(|ui| {
+            for (v, l) in [("left", "Left"), ("center", "Center"), ("right", "Right")] {
+                ui.radio_value(&mut f.align, v.to_string(), tl!(l));
+            }
+        });
+        ui.end_row();
+        ui.label(tl!("Indent from left:"));
+        ui.add_enabled(f.align == "left", egui::DragValue::new(&mut f.indent).speed(0.01).range(-11.0..=22.0).suffix(unit.suffix()).max_decimals(2));
+        ui.end_row();
+    });
+    heading(ui, "Row");
+    egui::Grid::new("tp_row").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+        ui.checkbox(&mut f.row_height_on, tl!("Specify height:"));
+        ui.horizontal(|ui| {
+            ui.add_enabled(f.row_height_on, len(&mut f.row_height, 0.02, unit));
+            ui.add_enabled_ui(f.row_height_on, |ui| {
+                egui::ComboBox::from_id_salt("tp_rule").selected_text(tl!(if f.row_exact { "Exactly" } else { "At least" })).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut f.row_exact, false, tl!("At least"));
+                    ui.selectable_value(&mut f.row_exact, true, tl!("Exactly"));
+                });
+            });
+        });
+        ui.end_row();
+    });
+    ui.checkbox(&mut f.allow_break, tl!("Allow row to break across pages"));
+    ui.checkbox(&mut f.header_row, tl!("Repeat as header row on each page"));
+    heading(ui, "Column");
+    egui::Grid::new("tp_col").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+        ui.label(tl!("Preferred width:"));
+        ui.add(len(&mut f.column_width, 0.1, unit));
+        ui.end_row();
+    });
+    heading(ui, "Cell");
+    egui::Grid::new("tp_cell").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+        ui.checkbox(&mut f.cell_width_on, tl!("Preferred width:"));
+        ui.add_enabled(f.cell_width_on, len(&mut f.cell_width, 0.1, unit));
+        ui.end_row();
+        ui.label(tl!("Vertical alignment:"));
+        ui.horizontal(|ui| {
+            for (v, l) in [("top", "Top"), ("center", "Center"), ("bottom", "Bottom")] {
+                ui.radio_value(&mut f.valign, v.to_string(), tl!(l));
+            }
+        });
+        ui.end_row();
+    });
+}
+
 fn apply_paragraph(
     app: &mut WordApp,
     rtl: bool,
