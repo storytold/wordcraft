@@ -1547,3 +1547,153 @@ preview	Title	Пример
 
 # Table Layout › Draw (#308)
 	Draw\nTable	Нарисовать\nтаблицу
+
+# Define New Multilevel List and Track Changes Options (#342)
+	(no style)	(нет стиля)
+	Add tab stop at:	Добавить позицию табуляции:
+	Aligned at:	Выравнивание на:
+	Balloons	Выноски
+	Bullet	Маркер
+	By author	По автору
+	Changed lines:	Изменённые строки:
+	Click level to modify:	Выберите уровень для изменения:
+	Color only	Только цвет
+	Define New Multilevel List	Определение нового многоуровневого списка
+	Define New Multilevel List…	Определить новый многоуровневый список…
+	Deletions:	Удаления:
+	Enter formatting for number:	Формат номера:
+	Follow number with:	Символ после номера:
+	Formatting	Форматирование
+	Include level number from:	Включить номер уровня:
+	Insertions and Deletions	Вставки и удаления
+	Insertions:	Вставки:
+	Left border	Левая граница
+	Legal style numbering	Нумерация в юридическом стиле
+	Link level to style:	Связать уровень со стилем:
+	List Definition	Определение списка
+	Nothing	Ничего
+	Number alignment:	Выравнивание номера:
+	Number format	Формат номера
+	Number style for this level:	Вид нумерации для этого уровня:
+	Outside border	Внешняя граница
+	Restart list after:	Начать список заново после:
+	Right border	Правая граница
+	Show all revisions inline	Показывать все изменения в тексте
+	Show only comments and formatting in balloons	Показывать в выносках только комментарии и форматирование
+	Show revisions in balloons	Показывать изменения в выносках
+	Space	Пробел
+	Start at:	Начать с:
+	Tab character	Знак табуляции
+	Text indent at:	Отступ текста:
+	Track Changes Options	Параметры отслеживания изменений
+	Track formatting	Отслеживать форматирование
+
+# Rotation and flips (#332)
+	Flip Horizontal	Отразить слева направо
+	Flip Vertical	Отразить сверху вниз
+	Rotate Left 90°	Повернуть влево на 90°
+	Rotate Right 90°	Повернуть вправо на 90°
+	Rotation	Поворот
+	Rotation:	Поворот:
+
+# Tabs, Borders and Shading (#327); Columns, Symbol and Field (#335)
+	Tab stop position:	Позиция табуляции:
+	Default tab stops:	Табуляция по умолчанию:
+	Tab stops to be cleared:	Удаляемые позиции табуляции:
+	All	Все
+	Decimal	По разделителю
+	Leader	Заполнитель
+	Set	Установить
+	Page Border	Граница страницы
+	Apply to:	Применить к:
+	Whole document	Ко всему документу
+	This section	К этому разделу
+	Fill	Заливка
+	Setting:	Тип:
+	3-D	Объёмная
+	Custom	Другая
+	Style:	Тип линии:
+	Dot dash	Штрихпунктир
+	Triple	Тройная
+	Between	Между абзацами
+	Borders and Shading	Границы и заливка
+	Tabs…	Табуляция…
+	Borders and Shading…	Границы и заливка…
+	(All)	(Все)
+	(none)	(нет)
+	(normal text)	(обычный текст)
+	1/4 Em Space	Пробел 1/4 em
+	A mail merge field	Поле слияния
+	A numbered sequence (figures, tables…)	Нумерованная последовательность (рисунки, таблицы…)
+	A table of contents	Оглавление
+	Categories:	Категории:
+	Character	Знак
+	Character code:	Код знака:
+	Col #:	Колонка №:
+	Copyright	Знак авторского права
+	Date and Time	Дата и время
+	Date formats:	Форматы даты:
+	Description:	Описание:
+	Document Information	Сведения о документе
+	Double Closing Quote	Закрывающая двойная кавычка
+	Double Opening Quote	Открывающая двойная кавычка
+	Ellipsis	Многоточие
+	Em Dash	Длинное тире
+	En Dash	Короткое тире
+	Em Space	Длинный пробел
+	En Space	Короткий пробел
+	Equal column width	Колонки одинаковой ширины
+	Field Codes	Коды полей
+	Field code:	Код поля:
+	Field codes:	Коды полей:
+	Field name:	Имя поля:
+	Field names:	Имена полей:
+	Field properties	Свойства поля
+	Field…	Поле…
+	Format:	Формат:
+	Hide Codes	Скрыть коды
+	Index and Tables	Указатели и таблицы
+	Line between	Разделитель
+	Links and References	Ссылки
+	Mail Merge	Слияние
+	More Columns…	Другие колонки…
+	More Symbols…	Другие символы…
+	No-Width Non Break	Неразрывный знак нулевой ширины
+	No-Width Optional Break	Необязательный разрыв нулевой ширины
+	Paragraph Mark	Знак абзаца
+	Pick a field from the list	Выберите поле в списке
+	Preserve formatting during updates	Сохранять формат при обновлении
+	Presets	Образцы
+	Recently used symbols:	Недавно использованные символы:
+	Registered	Зарегистрированный товарный знак
+	Section Mark	Знак параграфа
+	Sequence name:	Имя последовательности:
+	Shortcut key:	Сочетание клавиш:
+	Single Closing Quote	Закрывающая одинарная кавычка
+	Single Opening Quote	Открывающая одинарная кавычка
+	Spacing:	Промежуток:
+	Special Characters	Специальные знаки
+	Subset:	Набор:
+	The time right now	Текущее время
+	When this document was first created	Когда документ был создан
+	When this document was most recently printed	Когда документ последний раз печатался
+	When this document was most recently saved	Когда документ последний раз сохранялся
+	The document has no bookmarks yet.	В документе пока нет закладок.
+	Who the document properties name as author	Автор, указанный в свойствах документа
+	Name of the file this document is saved as	Имя файла, под которым сохранён документ
+	Title from the document properties	Название из свойств документа
+	How many pages the whole document has	Сколько страниц во всём документе
+	How many pages this section has	Сколько страниц в этом разделе
+	Number of the page the field sits on	Номер страницы, на которой стоит поле
+	Number of the section the field sits in	Номер раздела, в котором стоит поле
+	How many words the document holds	Сколько слов в документе
+	Page on which a bookmarked passage falls	Страница, на которой находится закладка
+	Copy of the text a bookmark marks	Копия текста закладки
+	This field has no options.	У этого поля нет параметров.
+	This font has no characters to show.	В этом шрифте нет знаков для показа.
+	This point forward	До конца документа
+	The date it is today	Сегодняшняя дата
+	Trademark	Товарный знак
+	Type the field's name and its switches, for example PAGE \\* roman.	Введите имя поля и его ключи, например PAGE \\* roman.
+	Width and spacing	Ширина и промежуток
+	from Unicode (hex)	Юникод (шестн.)

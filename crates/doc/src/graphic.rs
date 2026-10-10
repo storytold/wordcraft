@@ -19,6 +19,35 @@ pub struct Graphic {
     pub w: f32,
     #[serde(default)]
     pub h: f32,
+    /// Where the graphic was read from, so saving writes the chart or diagram itself back (not
+    /// only these items). `None` for graphics made some other way.
+    #[serde(skip)]
+    pub source: Option<std::sync::Arc<Embedded>>,
+}
+
+/// What an object read from a file needs to be written back as it was: its own markup in the
+/// source format and the package parts that markup refers to. Never edited; WordCraft only moves
+/// and resizes the object around it. The parts themselves (bytes, content type and their own
+/// relationships) are kept in [`crate::Document::passthrough`] under their part names.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Embedded {
+    /// The object's markup as a standalone XML element with its namespace declarations (DOCX:
+    /// the `a:graphic` of a chart or SmartArt diagram, the `w:object` of an OLE object).
+    pub xml: String,
+    /// The relationships it uses, by the ids in `xml` (or in its parts, for a SmartArt drawing).
+    pub refs: Vec<EmbeddedRef>,
+}
+
+/// One relationship an [`Embedded`] object uses.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct EmbeddedRef {
+    /// The relationship id the markup uses.
+    pub id: String,
+    /// Relationship type (a URI).
+    pub kind: String,
+    /// The part name (a `Document::passthrough` key), or the URL of an external target.
+    pub target: String,
+    pub external: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
