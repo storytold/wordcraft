@@ -2352,3 +2352,73 @@ fn accessibility_reports_a_chart_without_alt_text() {
     let issues = v["issues"].as_array().expect("issues");
     assert!(issues.iter().any(|i| i["issue"] == "Chart or diagram has no alternative text"), "{issues:?}");
 }
+
+/// #146: the first/last column, total row and banded column regions apply in layout (later
+/// regions win: the total row's fill beats the first column's) and round-trip through .docx.
+#[test]
+fn custom_table_style_column_and_total_regions() {
+    use wordcraft_doc::Rgb;
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 3, "cols": 4}));
+    run(
+        &mut s,
+        "table.look",
+        json!({"headerRow": false, "bandedRows": false, "firstColumn": true, "lastColumn": true, "totalRow": true, "bandedColumns": true}),
+    );
+    let r = run(
+        &mut s,
+        "table.newStyle",
+        json!({"name": "Ledger",
+            "firstColumn": {"fill": "112233", "bold": true},
+            "lastColumn": {"fill": "445566"},
+            "lastRow": {"fill": "778899", "borders": true},
+            "bandedColumns": {"fill": "ABCDEF"}}),
+    );
+    let id = r["id"].as_str().unwrap().to_string();
+    let fills = |s: &mut Session, c: Rgb| {
+        s.layout().pages[0].items.iter().filter(|i| matches!(i, crate::layout::Placed::Fill { color, .. } if *color == c)).count()
+    };
+    // 3 rows x 4 columns: the total row takes all 4 of its cells, the first and last columns the
+    // two cells above it, and the column band (column 2 of the inner columns 2 and 3) one each.
+    assert_eq!(fills(&mut s, Rgb(0x77, 0x88, 0x99)), 4, "total row");
+    assert_eq!(fills(&mut s, Rgb(0x11, 0x22, 0x33)), 2, "first column");
+    assert_eq!(fills(&mut s, Rgb(0x44, 0x55, 0x66)), 2, "last column");
+    assert_eq!(fills(&mut s, Rgb(0xAB, 0xCD, 0xEF)), 2, "first column band");
+
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+    let p = back.styles.get(&id).unwrap().table.clone().unwrap();
+    assert_eq!(
+        (p.first_col_fill, p.first_col_chr.bold, p.last_col_fill, p.total_fill, p.col_band_fill),
+        (Some(Rgb(0x11, 0x22, 0x33)), Some(true), Some(Rgb(0x44, 0x55, 0x66)), Some(Rgb(0x77, 0x88, 0x99)), Some(Rgb(0xAB, 0xCD, 0xEF)))
+    );
+    assert!(p.total_borders.is_some_and(|b| b.any_visible()));
+}
+
+/// #146: deleting a custom table style re-bases the styles based on it (keeping their look),
+/// puts its tables on Table Grid, refuses built-in styles, and undoes.
+#[test]
+fn delete_table_style_falls_back_and_undoes() {
+    use wordcraft_doc::Rgb;
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    let (tp, _, _) = s.sel.focus.path.cell().unwrap();
+    run(&mut s, "table.newStyle", json!({"name": "Base", "headerRow": {"fill": "C00000"}}));
+    run(&mut s, "table.newStyle", json!({"name": "Child", "basedOn": "Base", "apply": false, "wholeTable": {"bold": true}}));
+    let style = |s: &Session| s.doc.table(StoryRef::Body, &tp).unwrap().props.style.clone();
+    assert_eq!(style(&s).as_deref(), Some("Base"));
+    assert!(s.run("table.deleteStyle", &json!({"style": "Table Grid"})).is_err(), "built-in");
+    assert!(s.run("table.deleteStyle", &json!({"style": "Normal Table"})).is_err(), "built-in");
+
+    let r = run(&mut s, "table.deleteStyle", json!({}));
+    assert_eq!((r["deleted"].as_str(), r["tables"].as_u64()), (Some("Base"), Some(1)));
+    assert!(s.doc.styles.get("Base").is_none());
+    assert_eq!(style(&s).as_deref(), Some("TableGrid"), "tables fall back to Table Grid");
+    let child = s.doc.styles.table_style("Child").unwrap();
+    assert_eq!((child.parts.header_fill, child.chr.bold), (Some(Rgb(0xC0, 0, 0)), Some(true)), "the child keeps its look");
+    assert_eq!(s.doc.styles.get("Child").unwrap().based_on.as_deref(), Some("TableGrid"));
+
+    run(&mut s, "edit.undo", json!({}));
+    assert!(s.doc.styles.get("Base").is_some());
+    assert_eq!(style(&s).as_deref(), Some("Base"));
+    assert_eq!(s.doc.styles.get("Child").unwrap().based_on.as_deref(), Some("Base"));
+}

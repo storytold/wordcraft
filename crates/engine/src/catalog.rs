@@ -329,6 +329,7 @@ Table Design|Table Style Options|Table Style Options|table.look
 Table Design|Table Styles|Table Styles|table.style
 Table Design|Table Styles|New Table Style|table.newStyle
 Table Design|Table Styles|Modify Table Style|table.modifyStyle
+Table Design|Table Styles|Delete Table Style|table.deleteStyle
 Table Design|Table Styles|Shading|table.shading
 Table Design|Borders|Borders|table.borders
 Table Design|Borders|Border Painter|table.borderPainter
