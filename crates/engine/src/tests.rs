@@ -141,6 +141,21 @@ fn restore_is_exact_at_the_undo_limit() {
         s.restore(snap);
         assert_eq!(walk(&mut s), expected, "{n} command(s): the oldest steps are back, the commands' steps are gone");
     }
+    // A command that fails at the limit puts its eviction back with the stacks, so a later
+    // restore doesn't bring back a step that never left.
+    let mut s = build();
+    let snap = s.edit_snapshot();
+    assert!(s.run("para.align", &json!({"value": "bogus"})).is_err());
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+    s.restore(snap);
+    assert_eq!(walk(&mut s), expected, "a failed command between snapshot and restore");
+    // An automatic change recorded after the fact (`push_undo`) at the limit counts its eviction.
+    let mut s = build();
+    let snap = s.edit_snapshot();
+    let (doc, sel) = (s.doc.clone(), s.sel.clone());
+    s.push_undo("AutoCorrect", doc, sel);
+    s.restore(snap);
+    assert_eq!(walk(&mut s), expected, "push_undo between snapshot and restore");
 }
 
 #[test]
