@@ -403,38 +403,29 @@ pub fn tcpr(w: &mut W, c: &CellProps) {
 
 /// `w:tblpPr` and `w:tblOverlap` for a floating table.
 fn table_float(w: &mut W, f: &TableFloat) {
-    use wordcraft_doc::para::{Anchor, FloatAlign};
+    use wordcraft_doc::para::Anchor;
     let rel = |a: Anchor, text: &'static str| match a {
         Anchor::Page => "page",
         Anchor::Margin => "margin",
         _ => text,
     };
-    let align = |a: FloatAlign, horiz: bool| match (a, horiz) {
-        (FloatAlign::Start, true) => "left",
-        (FloatAlign::Start, false) => "top",
-        (FloatAlign::Center, _) => "center",
-        (FloatAlign::End, true) => "right",
-        (FloatAlign::End, false) => "bottom",
-        (FloatAlign::Inside, _) => "inside",
-        (FloatAlign::Outside, _) => "outside",
-    };
-    let d = f.dist.map(|v| twips(if v.is_finite() { v.clamp(0.0, 1584.0) } else { 0.0 }));
+    let [left, top, right, bottom] = f.dist_from_text().map(twips);
     let fin = |v: f32| twips(if v.is_finite() { v.clamp(-31_680.0, 31_680.0) } else { 0.0 });
     let (x, y) = (fin(f.x), fin(f.y));
     let mut a: Vec<(&str, &str)> = vec![
-        ("w:leftFromText", &d[0]),
-        ("w:rightFromText", &d[2]),
-        ("w:topFromText", &d[1]),
-        ("w:bottomFromText", &d[3]),
+        ("w:leftFromText", &left),
+        ("w:rightFromText", &right),
+        ("w:topFromText", &top),
+        ("w:bottomFromText", &bottom),
         ("w:vertAnchor", rel(f.v_rel, "text")),
         ("w:horzAnchor", rel(f.h_rel, "text")),
     ];
     match f.h_align {
-        Some(h) => a.push(("w:tblpXSpec", align(h, true))),
+        Some(h) => a.push(("w:tblpXSpec", h.ooxml(true))),
         None => a.push(("w:tblpX", &x)),
     }
     match f.v_align {
-        Some(v) => a.push(("w:tblpYSpec", align(v, false))),
+        Some(v) => a.push(("w:tblpYSpec", v.ooxml(false))),
         None => a.push(("w:tblpY", &y)),
     }
     w.empty("w:tblpPr", &a);

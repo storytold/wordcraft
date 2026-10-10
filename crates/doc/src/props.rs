@@ -626,6 +626,13 @@ pub struct TableFloat {
     pub overlap: bool,
 }
 
+impl TableFloat {
+    /// The distances from text, finite and clamped (left, top, right, bottom).
+    pub fn dist_from_text(&self) -> [f32; 4] {
+        self.dist.map(|v| if v.is_finite() { v.clamp(0.0, 1584.0) } else { 0.0 })
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct TableLook {

@@ -487,14 +487,7 @@ fn table_float(e: &El) -> TableFloat {
         Some("margin") => Anchor::Margin,
         _ => text,
     };
-    let align = |n: &str| match e.attr(n) {
-        Some("left" | "top") => Some(FloatAlign::Start),
-        Some("center") => Some(FloatAlign::Center),
-        Some("right" | "bottom") => Some(FloatAlign::End),
-        Some("inside") => Some(FloatAlign::Inside),
-        Some("outside") => Some(FloatAlign::Outside),
-        _ => None,
-    };
+    let align = |n: &str| e.attr(n).and_then(FloatAlign::from_ooxml);
     TableFloat {
         h_rel: rel("w:horzAnchor", Anchor::Column),
         v_rel: rel("w:vertAnchor", Anchor::Paragraph),
