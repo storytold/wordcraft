@@ -1127,3 +1127,54 @@
 	Pens	Пера
 	Ink	Мастило
 	Thickness	Дебљина
+
+# Interface text routed through translation (#313)
+	Align Top Left	Поравнај горе лево
+	Align Top Center	Поравнај горе по средини
+	Align Top Right	Поравнај горе десно
+	Align Center Left	Поравнај у средини лево
+	Align Center	Поравнај по средини
+	Align Center Right	Поравнај у средини десно
+	Align Bottom Left	Поравнај доле лево
+	Align Bottom Center	Поравнај доле по средини
+	Align Bottom Right	Поравнај доле десно
+	{contributors} contributors · {commits} commits	Сарадника: {contributors} · commit-ова: {commits}
+	{cols}×{rows} Table	Табела {cols}×{rows}
+	AaBbYyZz	AaBbYyZz ЂђЋћ
+	pt	пт
+	Document1	Документ1
+	Username	Корисничко име
+	Display name	Име за приказ
+	Real name	Право име
+	Name	Име
+	PRs	PR-ови
+	Commits	Commit-ови
+	First	Први
+	Last	Задњи
+	Model	Модел
+	Version	Верзија
+	% of all commits	% свих commit-ова
+	Lines +/−	Редови +/−
+	Craft	Занат
+	Studio	Студио
+	Atelier	Атеље
+	Darkroom	Мрачна комора
+	Gallery	Галерија
+	Sketchbook	Блок за скице
+	Change Picture…	Промени слику…
+	Font…	Фонт…
+	Paragraph…	Пасус…
+	Link…	Веза…
+	Size and Crop…	Величина и исецање…
+	Insert Columns to the Left	Уметни колоне лево
+	Insert Columns to the Right	Уметни колоне десно
+	Insert Rows Above	Уметни редове изнад
+	Insert Rows Below	Уметни редове испод
+	Mon	Пон
+	Tue	Уто
+	Wed	Сре
+	Sum	Збир
+	North	Север
+	South	Југ
+	West	Запад
+	Total	Укупно

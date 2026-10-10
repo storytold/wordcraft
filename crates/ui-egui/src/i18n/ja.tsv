@@ -1112,3 +1112,54 @@
 	The password is removed. Save the document to keep the change.	パスワードを削除しました。変更を保持するには文書を保存してください。
 	The passwords don't match.	パスワードが一致しません。
 	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	パスワードは安全な場所に保管してください。パスワードがないと、WordCraft を含め誰も文書を開けません。パスワードを削除するには両方のボックスを空にします。
+
+# Interface text routed through translation (#313)
+	Align Top Left	上揃え (左)
+	Align Top Center	上揃え (中央)
+	Align Top Right	上揃え (右)
+	Align Center Left	中央揃え (左)
+	Align Center	中央揃え
+	Align Center Right	中央揃え (右)
+	Align Bottom Left	下揃え (左)
+	Align Bottom Center	下揃え (中央)
+	Align Bottom Right	下揃え (右)
+	{contributors} contributors · {commits} commits	貢献者 {contributors} 人 · コミット {commits} 件
+	{cols}×{rows} Table	{cols}×{rows} の表
+	AaBbYyZz	AaBbYyZz あア亜
+	pt	pt
+	Document1	文書 1
+	Username	ユーザー名
+	Display name	表示名
+	Real name	本名
+	Name	名前
+	PRs	PR
+	Commits	コミット
+	First	最初
+	Last	最後
+	Model	モデル
+	Version	バージョン
+	% of all commits	全コミットに占める割合
+	Lines +/−	行数 +/−
+	Craft	クラフト
+	Studio	スタジオ
+	Atelier	アトリエ
+	Darkroom	暗室
+	Gallery	ギャラリー
+	Sketchbook	スケッチブック
+	Change Picture…	図の変更…
+	Font…	フォント…
+	Paragraph…	段落…
+	Link…	リンク…
+	Size and Crop…	サイズとトリミング…
+	Insert Columns to the Left	左に列を挿入
+	Insert Columns to the Right	右に列を挿入
+	Insert Rows Above	上に行を挿入
+	Insert Rows Below	下に行を挿入
+	Mon	月
+	Tue	火
+	Wed	水
+	Sum	計
+	North	北
+	South	南
+	West	西
+	Total	合計

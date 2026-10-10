@@ -1124,3 +1124,54 @@
 	The password is removed. Save the document to keep the change.	Пароль видалено. Збережіть документ, щоб зберегти зміну.
 	The passwords don't match.	Паролі не збігаються.
 	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	Зберігайте пароль у надійному місці: без нього ніхто, зокрема WordCraft, не зможе відкрити документ. Залиште обидва поля порожніми, щоб видалити пароль.
+
+# Interface text routed through translation (#313)
+	Align Top Left	Вирівняти вгорі ліворуч
+	Align Top Center	Вирівняти вгорі по центру
+	Align Top Right	Вирівняти вгорі праворуч
+	Align Center Left	Вирівняти посередині ліворуч
+	Align Center	Вирівняти по центру
+	Align Center Right	Вирівняти посередині праворуч
+	Align Bottom Left	Вирівняти внизу ліворуч
+	Align Bottom Center	Вирівняти внизу по центру
+	Align Bottom Right	Вирівняти внизу праворуч
+	{contributors} contributors · {commits} commits	Учасників: {contributors} · комітів: {commits}
+	{cols}×{rows} Table	Таблиця {cols}×{rows}
+	AaBbYyZz	AaBbYyZz ЄєЇї
+	pt	пт
+	Document1	Документ1
+	Username	Ім'я користувача
+	Display name	Відображуване ім'я
+	Real name	Справжнє ім'я
+	Name	Ім'я
+	PRs	PR
+	Commits	Коміти
+	First	Перший
+	Last	Останній
+	Model	Модель
+	Version	Версія
+	% of all commits	% усіх комітів
+	Lines +/−	Рядки +/−
+	Craft	Ремесло
+	Studio	Студія
+	Atelier	Ательє
+	Darkroom	Фотолабораторія
+	Gallery	Галерея
+	Sketchbook	Альбом для ескізів
+	Change Picture…	Змінити зображення…
+	Font…	Шрифт…
+	Paragraph…	Абзац…
+	Link…	Посилання…
+	Size and Crop…	Розмір і обтинання…
+	Insert Columns to the Left	Вставити стовпці ліворуч
+	Insert Columns to the Right	Вставити стовпці праворуч
+	Insert Rows Above	Вставити рядки вище
+	Insert Rows Below	Вставити рядки нижче
+	Mon	Пн
+	Tue	Вт
+	Wed	Ср
+	Sum	Сума
+	North	Північ
+	South	Південь
+	West	Захід
+	Total	Разом

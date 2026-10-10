@@ -1113,3 +1113,54 @@
 	The password is removed. Save the document to keep the change.	密碼已移除。儲存文件以保留此變更。
 	The passwords don't match.	兩次輸入的密碼不一致。
 	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	請妥善保管密碼：沒有密碼，任何人（包括 WordCraft）都無法開啟文件。兩個方塊都留空可移除密碼。
+
+# Interface text routed through translation (#313)
+	Align Top Left	靠上靠左對齊
+	Align Top Center	靠上置中對齊
+	Align Top Right	靠上靠右對齊
+	Align Center Left	垂直置中靠左對齊
+	Align Center	置中對齊
+	Align Center Right	垂直置中靠右對齊
+	Align Bottom Left	靠下靠左對齊
+	Align Bottom Center	靠下置中對齊
+	Align Bottom Right	靠下靠右對齊
+	{contributors} contributors · {commits} commits	{contributors} 位貢獻者 · {commits} 次提交
+	{cols}×{rows} Table	{cols}×{rows} 表格
+	AaBbYyZz	AaBbYyZz 中文
+	pt	點
+	Document1	文件1
+	Username	使用者名稱
+	Display name	顯示名稱
+	Real name	真實姓名
+	Name	名稱
+	PRs	PR
+	Commits	提交
+	First	首次
+	Last	最近
+	Model	模型
+	Version	版本
+	% of all commits	佔全部提交的百分比
+	Lines +/−	行數 +/−
+	Craft	工藝
+	Studio	工作室
+	Atelier	畫室
+	Darkroom	暗房
+	Gallery	畫廊
+	Sketchbook	素描本
+	Change Picture…	變更圖片…
+	Font…	字型…
+	Paragraph…	段落…
+	Link…	連結…
+	Size and Crop…	大小和裁剪…
+	Insert Columns to the Left	插入左方欄
+	Insert Columns to the Right	插入右方欄
+	Insert Rows Above	插入上方列
+	Insert Rows Below	插入下方列
+	Mon	週一
+	Tue	週二
+	Wed	週三
+	Sum	合計
+	North	北區
+	South	南區
+	West	西區
+	Total	總計

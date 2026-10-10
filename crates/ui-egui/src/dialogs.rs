@@ -528,10 +528,10 @@ fn table_style_preview(ui: &mut Ui, style: Option<&wordcraft_doc::styles::TableS
             };
             let font = egui::FontId::proportional(11.0);
             let pos = cell.left_center() + vec2(4.0, 0.0);
-            painter.text(pos, egui::Align2::LEFT_CENTER, *txt, font.clone(), color);
+            painter.text(pos, egui::Align2::LEFT_CENTER, tl!(*txt), font.clone(), color);
             if chr.bold.unwrap_or(false) {
                 // A second pass a hair to the right reads as bold at this size.
-                painter.text(pos + vec2(0.6, 0.0), egui::Align2::LEFT_CENTER, *txt, font, color);
+                painter.text(pos + vec2(0.6, 0.0), egui::Align2::LEFT_CENTER, tl!(*txt), font, color);
             }
         }
     }

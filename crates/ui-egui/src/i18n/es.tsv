@@ -1128,3 +1128,54 @@
 	The password is removed. Save the document to keep the change.	Se quitó la contraseña. Guarda el documento para conservar el cambio.
 	The passwords don't match.	Las contraseñas no coinciden.
 	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	Guarda la contraseña en un lugar seguro: sin ella nadie, ni siquiera WordCraft, puede abrir el documento. Deja ambos cuadros vacíos para quitar la contraseña.
+
+# Interface text routed through translation (#313)
+	Align Top Left	Alinear arriba a la izquierda
+	Align Top Center	Alinear arriba al centro
+	Align Top Right	Alinear arriba a la derecha
+	Align Center Left	Alinear al medio a la izquierda
+	Align Center	Alinear al centro
+	Align Center Right	Alinear al medio a la derecha
+	Align Bottom Left	Alinear abajo a la izquierda
+	Align Bottom Center	Alinear abajo al centro
+	Align Bottom Right	Alinear abajo a la derecha
+	{contributors} contributors · {commits} commits	{contributors} colaboradores · {commits} commits
+	{cols}×{rows} Table	Tabla de {cols}×{rows}
+	AaBbYyZz	AaBbYyZz ÑñÁá
+	pt	pt
+	Document1	Documento1
+	Username	Nombre de usuario
+	Display name	Nombre visible
+	Real name	Nombre real
+	Name	Nombre
+	PRs	PR
+	Commits	Commits
+	First	Primero
+	Last	Último
+	Model	Modelo
+	Version	Versión
+	% of all commits	% de todos los commits
+	Lines +/−	Líneas +/−
+	Craft	Artesanal
+	Studio	Estudio
+	Atelier	Taller
+	Darkroom	Cuarto oscuro
+	Gallery	Galería
+	Sketchbook	Cuaderno de bocetos
+	Change Picture…	Cambiar imagen…
+	Font…	Fuente…
+	Paragraph…	Párrafo…
+	Link…	Vínculo…
+	Size and Crop…	Tamaño y recorte…
+	Insert Columns to the Left	Insertar columnas a la izquierda
+	Insert Columns to the Right	Insertar columnas a la derecha
+	Insert Rows Above	Insertar filas encima
+	Insert Rows Below	Insertar filas debajo
+	Mon	Lun
+	Tue	Mar
+	Wed	Mié
+	Sum	Suma
+	North	Norte
+	South	Sur
+	West	Oeste
+	Total	Total
