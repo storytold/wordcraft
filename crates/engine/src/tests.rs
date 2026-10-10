@@ -1,4 +1,5 @@
 use serde_json::json;
+use wordcraft_doc::props::BorderStyle;
 use wordcraft_doc::{Pos, StoryRef};
 
 use crate::{Session, cmd};
@@ -68,6 +69,96 @@ fn joined_commands_are_one_undo_step() {
 }
 
 #[test]
+fn failed_command_keeps_undo_and_redo() {
+    // A command that fails after its undo checkpoint leaves the history exactly as it was:
+    // the redo stack survives, and no empty undo step is added.
+    for (id, params) in [("text.insert", json!({})), ("para.align", json!({"value": "bogus"}))] {
+        let mut s = s();
+        run(&mut s, "text.insert", json!({"text": "Hello"}));
+        run(&mut s, "edit.undo", json!({}));
+        assert!(s.can_redo());
+        assert!(s.run(id, &params).is_err(), "{id} should fail");
+        assert!(s.can_redo(), "{id}: redo lost");
+        assert!(!s.can_undo(), "{id}: failed command left an undo step");
+        run(&mut s, "edit.redo", json!({}));
+        assert_eq!(text(&s), "Hello", "{id}");
+    }
+
+    // At the undo limit, the oldest step is not evicted by a command that fails.
+    let mut s = s();
+    let steps = 600;
+    for i in 1..=steps {
+        run(&mut s, "para.indents", json!({"left": i as f32}));
+    }
+    let kept = s.undo_labels().len();
+    assert!(kept < steps, "the history should be at its limit");
+    assert!(s.run("para.align", &json!({"value": "bogus"})).is_err());
+    assert_eq!(s.undo_labels().len(), kept);
+    while s.can_undo() {
+        run(&mut s, "edit.undo", json!({}));
+    }
+    let indent = s.doc.para_at(&s.sel.focus).and_then(|p| p.props.indent_left);
+    assert_eq!(indent, Some((steps - kept) as f32));
+}
+
+#[test]
+fn failed_command_restores_history_changed_by_nested_commands() {
+    // `file.inspect` runs `review.deleteComment` (allowed in a comments-only document, and it
+    // checkpoints), then `review.acceptAll` (refused). The refusal must leave the undo and
+    // redo stacks exactly as they were, including at and next to the history limit, where the
+    // outer and nested checkpoints each evict the oldest step.
+    fn timeline(s: &mut Session) -> Vec<(Vec<String>, wordcraft_doc::Document)> {
+        let mut out = Vec::new();
+        while s.can_redo() {
+            run(s, "edit.redo", json!({}));
+        }
+        loop {
+            // Comments are stamped with the time to the second, and the two sessions compared
+            // are built a moment apart, so leave the stamp out of the comparison.
+            let mut doc = s.doc.clone();
+            doc.comments.values_mut().for_each(|c| c.date.clear());
+            out.push((s.undo_labels(), doc));
+            if !s.can_undo() {
+                return out;
+            }
+            run(s, "edit.undo", json!({}));
+        }
+    }
+    let kept = {
+        let mut s = s();
+        for i in 1..=600 {
+            run(&mut s, "para.indents", json!({"left": i as f32}));
+        }
+        s.undo_labels().len()
+    };
+    // Below the limit there is room for a redo step too; at the limit an Undo would leave one free.
+    for (len, redo) in [(kept - 1, Some("New Comment")), (kept, None)] {
+        let session = || {
+            let mut s = s();
+            run(&mut s, "text.insert", json!({"text": "note"}));
+            for i in 1..=len + usize::from(redo.is_some()) - 4 {
+                run(&mut s, "para.indents", json!({"left": i as f32}));
+            }
+            run(&mut s, "review.restrict", json!({"mode": "comments"}));
+            run(&mut s, "review.newComment", json!({"text": "one"}));
+            run(&mut s, "review.newComment", json!({"text": "two"}));
+            if redo.is_some() {
+                run(&mut s, "edit.undo", json!({}));
+            }
+            assert_eq!(s.undo_labels().len(), len);
+            assert_eq!(s.redo_label(), redo);
+            s
+        };
+        let mut failed = session();
+        let err = failed.run("file.inspect", &json!({"remove": ["comments", "revisions"]}));
+        assert!(matches!(err, Err(crate::CmdError::Disabled(_))), "{len}: {err:?}");
+        assert_eq!(failed.undo_labels().len(), len, "{len}: undo steps");
+        assert_eq!(failed.redo_label(), redo, "{len}: redo step");
+        assert!(timeline(&mut failed) == timeline(&mut session()), "{len}: undo history changed");
+    }
+}
+
+#[test]
 fn backspace_and_delete() {
     let mut s = s();
     run(&mut s, "text.insert", json!({"text": "abc"}));
@@ -77,7 +168,8 @@ fn backspace_and_delete() {
     run(&mut s, "text.insert", json!({"text": "cd"}));
     run(&mut s, "caret.home", json!({}));
     run(&mut s, "text.backspace", json!({}));
-    assert_eq!(text(&s), "abcd");
+    // Enter capitalised the first word, as Word's AutoCorrect does.
+    assert_eq!(text(&s), "Abcd");
     run(&mut s, "caret.docStart", json!({}));
     run(&mut s, "text.delete", json!({}));
     assert_eq!(text(&s), "bcd");
@@ -104,6 +196,32 @@ fn bold_toggles_selection_and_caret_word() {
     assert_eq!(p.props_of_char(10).italic, Some(true));
     assert_eq!(p.props_of_char(13).italic, Some(true));
     assert_eq!(p.props_of_char(9).italic, None);
+}
+
+#[test]
+fn border_toggles_and_saves() {
+    use wordcraft_doc::props::Border;
+    let border = |s: &Session| s.doc.para_at(&Pos::body(0, 0)).unwrap().props_of_char(5).border;
+    // Saved .docx carries the border iff it is on (read back: the reader maps only `w:bdr` to `border`).
+    let docx_has_bdr = |s: &Session| {
+        let back = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+        back.para_at(&Pos::body(0, 0)).unwrap().props_of_char(5).border.is_some()
+    };
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "make this boxed"}));
+    run(&mut s, "select.text", json!({"text": "this"}));
+    run(&mut s, "format.border", json!({}));
+    assert_eq!(border(&s), Some(Border::single(0.5)));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().props_of_char(0).border, None);
+    assert!(docx_has_bdr(&s));
+    run(&mut s, "format.border", json!({}));
+    assert_eq!(border(&s), None);
+    run(&mut s, "format.border", json!({"value": true}));
+    run(&mut s, "format.border", json!({"value": true}));
+    assert_eq!(border(&s), Some(Border::single(0.5)));
+    run(&mut s, "format.border", json!({"value": false}));
+    assert_eq!(border(&s), None);
+    assert!(!docx_has_bdr(&s));
 }
 
 #[test]
@@ -134,7 +252,7 @@ fn styles_and_lists() {
     assert_eq!(n1.num, n2.num);
     run(&mut s, "text.newParagraph", json!({}));
     run(&mut s, "text.newParagraph", json!({})); // empty item ends the list
-    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().props.numbering.map(|n| n.num), Some(0));
+    assert!(s.doc.para_at(&s.sel.focus).unwrap().props.numbering.is_none_or(|n| n.num == 0));
     // "1. " autoformat.
     run(&mut s, "text.insert", json!({"text": "1."}));
     run(&mut s, "text.insert", json!({"text": " "}));
@@ -156,7 +274,7 @@ fn applying_a_heading_clears_list_numbering() {
         );
         run(&mut s, style_cmd, json!({}));
         assert!(
-            !s.doc.para_at(&Pos::body(0, 0)).unwrap().props.numbering.is_some_and(|n| n.num != 0),
+            s.doc.para_at(&Pos::body(0, 0)).unwrap().props.numbering.is_none_or(|n| n.num == 0),
             "{style_cmd}: should clear direct list numbering"
         );
     }
@@ -173,6 +291,90 @@ fn find_replace() {
     assert_eq!(text(&s), "fox dog fox\nCat bird");
     let r = run(&mut s, "edit.find", json!({"text": "\\b\\w{3}\\b", "regex": true, "matchCase": false}));
     assert_eq!(r["count"], 4);
+}
+
+#[test]
+fn replace_under_track_changes_skips_deleted_text() {
+    // Replace marks the match deleted and leaves it in the text; the next
+    // step must not find it again, or Replace never advances.
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "one cat two cat"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "caret.docStart", json!({}));
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "cat"}))["count"], 2);
+    let mut remaining = Vec::new();
+    for _ in 0..4 {
+        remaining.push(run(&mut s, "edit.replace", json!({"text": "cat", "with": "dog"}))["remaining"].clone());
+    }
+    assert_eq!(remaining, [json!(1), json!(0), json!(0), json!(0)]);
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "cat"}))["count"], 0);
+    run(&mut s, "review.acceptAll", json!({}));
+    assert_eq!(text(&s), "one dog two dog");
+
+    // A match that runs across tracked-deleted text is not in the document.
+    let mut s = self::s();
+    run(&mut s, "document.setText", json!({"text": "cat"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 1}, "focus": {"block": 0, "off": 2}}));
+    run(&mut s, "text.delete", json!({}));
+    assert_eq!(text(&s), "cat", "the deletion is tracked, not applied");
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "cat"}))["count"], 0);
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "t"}))["count"], 1);
+
+    // Without Track Changes, Replace steps through every match as before.
+    let mut s = self::s();
+    run(&mut s, "document.setText", json!({"text": "one cat two cat"}));
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "edit.find", json!({"text": "cat"}));
+    run(&mut s, "edit.replace", json!({"text": "cat", "with": "dog"}));
+    let r = run(&mut s, "edit.replace", json!({"text": "cat", "with": "dog"}));
+    assert_eq!(r["remaining"], 0);
+    assert_eq!(text(&s), "one dog two dog");
+}
+
+#[test]
+fn find_reads_the_text_around_tracked_deletions() {
+    // `edits` are (start, end) byte ranges deleted with Track Changes on, last first.
+    fn tracked(text: &str, edits: &[(usize, usize)]) -> Session {
+        let mut s = self::s();
+        run(&mut s, "document.setText", json!({"text": text}));
+        run(&mut s, "review.trackChanges", json!({"value": true}));
+        for (a, b) in edits {
+            run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": a}, "focus": {"block": 0, "off": b}}));
+            run(&mut s, "text.delete", json!({}));
+        }
+        assert_eq!(text, self::text(&s), "the deletions are tracked, not applied");
+        s
+    }
+    let offs = |r: &serde_json::Value| -> Vec<(u64, u64)> {
+        r["matches"].as_array().unwrap().iter().map(|m| (m["start"]["off"].as_u64().unwrap(), m["end"]["off"].as_u64().unwrap())).collect()
+    };
+
+    // "aaa" with the first "a" deleted reads "aa": the rejected raw match 0..2 must not hide
+    // the live one at 1..3.
+    let mut s = tracked("aaa", &[(0, 1)]);
+    assert_eq!(offs(&run(&mut s, "edit.find", json!({"text": "aa"}))), [(1, 3)]);
+    assert_eq!(offs(&run(&mut s, "edit.find", json!({"text": "^a", "regex": true}))), [(1, 2)]);
+    assert_eq!(run(&mut s, "edit.replaceAll", json!({"text": "aa", "with": "b"}))["replaced"], 1);
+
+    // Whole words follow the live text: deleting the space joins "cat" and "fish"...
+    let mut s = tracked("cat fish", &[(3, 4)]);
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "fish", "wholeWord": true}))["count"], 0);
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "catfish", "wholeWord": true}))["count"], 0, "a match may not span a deletion");
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "fish", "wholeWord": false}))["count"], 1);
+    // ...and deleting the "X" leaves "fish" a word of its own.
+    let mut s = tracked("cat Xfish", &[(4, 5)]);
+    assert_eq!(offs(&run(&mut s, "edit.find", json!({"text": "FISH", "wholeWord": true}))), [(5, 9)]);
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "FISH", "wholeWord": true, "matchCase": true}))["count"], 0);
+
+    // Replace and the Find Next/Previous steps agree with Find.
+    let mut s = tracked("aaa aaa", &[(4, 5), (0, 1)]);
+    run(&mut s, "caret.docStart", json!({}));
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "aa"}))["count"], 2);
+    assert_eq!(run(&mut s, "edit.findNext", json!({}))["index"], 1);
+    assert_eq!(run(&mut s, "edit.findPrevious", json!({}))["index"], 0);
+    let r = run(&mut s, "edit.replace", json!({"text": "aa", "with": "b"}));
+    assert_eq!(r["remaining"], 1);
 }
 
 #[test]
@@ -211,6 +413,46 @@ fn tables_commands() {
 }
 
 #[test]
+fn table_border_presets_mask_the_sides_they_clear() {
+    // On a default (TableGrid) table the "outside"/"inside" presets must write nil over the
+    // sides they clear; without it those sides inherit the style's grid (#143) and every
+    // preset renders like "all".
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    // Distinct vertical/horizontal rule positions on page 0.
+    let rule_pos = |s: &mut Session| {
+        let (mut vx, mut hy) = (Vec::new(), Vec::new());
+        for it in &s.layout().pages[0].items {
+            if let crate::layout::Placed::Rule { x0, y0, x1, y1, .. } = it {
+                if (x0 - x1).abs() < 1e-3 && !vx.contains(x0) {
+                    vx.push(*x0);
+                }
+                if (y0 - y1).abs() < 1e-3 && !hy.contains(y0) {
+                    hy.push(*y0);
+                }
+            }
+        }
+        (vx, hy)
+    };
+    // Style default: a full 2x2 grid — 3 vertical + 3 horizontal lines.
+    let (vx, hy) = rule_pos(&mut s);
+    assert_eq!((vx.len(), hy.len()), (3, 3), "baseline grid: {vx:?} {hy:?}");
+    run(&mut s, "table.borders", json!({"kind": "outside"}));
+    let (vx, hy) = rule_pos(&mut s);
+    assert_eq!((vx.len(), hy.len()), (2, 2), "outside keeps only the frame: {vx:?} {hy:?}");
+    let b = s.doc.body.iter().find_map(|x| x.as_table()).unwrap().props.borders.unwrap();
+    assert!(b.between.is_some_and(|x| x.style == BorderStyle::None));
+    assert!(b.inside_v.is_some_and(|x| x.style == BorderStyle::None));
+    run(&mut s, "table.borders", json!({"kind": "inside"}));
+    let (vx, hy) = rule_pos(&mut s);
+    assert_eq!((vx.len(), hy.len()), (1, 1), "inside keeps only the inner rules: {vx:?} {hy:?}");
+    let b = s.doc.body.iter().find_map(|x| x.as_table()).unwrap().props.borders.unwrap();
+    for side in [b.top, b.bottom, b.left, b.right] {
+        assert!(side.is_some_and(|x| x.style == BorderStyle::None));
+    }
+}
+
+#[test]
 fn page_setup_and_breaks() {
     let mut s = s();
     run(&mut s, "layout.orientation", json!({"value": "landscape"}));
@@ -242,6 +484,20 @@ fn track_changes_and_accept() {
     assert_eq!(ch.as_array().unwrap().len(), 2);
     run(&mut s, "review.acceptAll", json!({}));
     assert_eq!(text(&s), "inal added");
+}
+
+#[test]
+fn replace_all_is_tracked() {
+    let mut s = s();
+    let original = "We walked towards the light, then towards home.";
+    run(&mut s, "document.setText", json!({"text": original}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    let r = run(&mut s, "edit.replaceAll", json!({"text": "towards", "with": "toward", "matchCase": true}));
+    assert_eq!(r["replaced"], 2);
+    let ch = run(&mut s, "review.changes", json!({}));
+    assert!(!ch.as_array().unwrap().is_empty(), "replace all must leave tracked revisions");
+    run(&mut s, "review.rejectAll", json!({}));
+    assert_eq!(text(&s), original);
 }
 
 #[test]
@@ -289,6 +545,30 @@ fn toc_page_numbers_follow_headings() {
     }
 }
 
+/// A heading above the TOC keeps its index when the entries go in below it, so its page is read
+/// where it is, not `entries` blocks further down.
+#[test]
+fn toc_page_number_for_heading_above_toc() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Preface"}));
+    run(&mut s, "para.heading1", json!({}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.pageBreak", json!({}));
+    run(&mut s, "references.toc", json!({}));
+    run(&mut s, "caret.docEnd", json!({}));
+    for name in ["Alpha", "Bravo"] {
+        run(&mut s, "text.pageBreak", json!({}));
+        run(&mut s, "text.insert", json!({"text": name}));
+        run(&mut s, "para.heading1", json!({}));
+        run(&mut s, "text.newParagraph", json!({}));
+    }
+    run(&mut s, "references.updateToc", json!({}));
+    let t = text(&s);
+    for (name, page) in [("Preface", 1), ("Alpha", 3), ("Bravo", 4)] {
+        assert!(t.contains(&format!("{name}\t{page}")), "{name} should be on page {page}: {t:?}");
+    }
+}
+
 #[test]
 fn failed_command_leaves_document_unchanged() {
     let mut s = s();
@@ -310,7 +590,9 @@ fn hostile_params_never_panic() {
         json!({"value": -1e308, "rows": 1e9}),
     ];
     for spec in reg.all() {
-        if spec.id.starts_with("file.") || spec.id == "insert.picture" || spec.id == "insert.textFromFile" {
+        // These reach outside the session: files, and Read Aloud starts the system speech
+        // synthesiser (`say` on macOS), which would read the sample document aloud on every run.
+        if spec.id.starts_with("file.") || spec.id == "insert.picture" || spec.id == "insert.textFromFile" || spec.id == "review.readAloud" {
             continue;
         }
         for j in &junk {
@@ -365,4 +647,279 @@ fn custom_properties_set_read_remove_and_undo() {
     assert!(s.run("file.properties", &json!({"custom": {"n": 3}})).is_err());
     run(&mut s, "edit.undo", json!({}));
     assert_eq!(s.doc.custom_prop("Status"), Some("draft"));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn html_pictures_load_relative_to_the_file() {
+    // Issue #98: `<img src="logo.png">` beside an HTML file is embedded when it is opened.
+    let dir = std::env::temp_dir().join(format!("wordcraft-html-img-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("img")).unwrap();
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(4, 2, image::Rgba([10, 20, 30, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    std::fs::write(dir.join("img/my logo.png"), &png).unwrap();
+    std::fs::write(dir.join("secret.txt"), b"not a picture").unwrap();
+    let html = r#"<p><img src="img/my%20logo.png" alt="Logo"></p><p><img src="secret.txt" alt="T"></p><p><img src="http://example.com/x.png" alt="Web"></p>"#;
+    std::fs::write(dir.join("page.html"), html).unwrap();
+    let doc = crate::io::open_path(&dir.join("page.html"));
+    let _ = std::fs::remove_dir_all(&dir);
+    let doc = doc.unwrap();
+    assert_eq!(doc.media.len(), 1);
+    let text = doc.plain_text(StoryRef::Body);
+    assert!(!text.contains("Logo") && text.contains('T') && text.contains("Web"), "{text:?}");
+}
+
+/// A fresh, empty scratch folder for one test.
+#[cfg(not(target_arch = "wasm32"))]
+fn scratch_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("wordcraft-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn tiny_png() -> Vec<u8> {
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(2, 2, image::Rgba([200, 30, 30, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    png
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn html_pictures_outside_the_folder_are_not_loaded() {
+    // #98 review: `..` must not reach files outside the HTML file's folder.
+    let root = scratch_dir("html-img-escape");
+    std::fs::create_dir_all(root.join("site/img")).unwrap();
+    std::fs::write(root.join("outside.png"), tiny_png()).unwrap();
+    std::fs::write(root.join("site/inside.png"), tiny_png()).unwrap();
+    let html = r#"<p><img src="../outside.png" alt="Up"></p><p><img src="img/../../outside.png" alt="Sneak"></p><p><img src="img/../inside.png" alt="In"></p>"#;
+    std::fs::write(root.join("site/page.html"), html).unwrap();
+    let doc = crate::io::open_path(&root.join("site/page.html"));
+    let _ = std::fs::remove_dir_all(&root);
+    let doc = doc.unwrap();
+    assert_eq!(doc.media.len(), 1, "only the picture inside the folder loads");
+    let text = doc.plain_text(StoryRef::Body);
+    assert!(text.contains("Up") && text.contains("Sneak") && !text.contains("In"), "{text:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn html_pictures_through_a_symlink_out_of_the_folder_are_not_loaded() {
+    // #98 review: a symlink inside the folder must not lead outside it.
+    let root = scratch_dir("html-img-symlink");
+    std::fs::create_dir_all(root.join("site")).unwrap();
+    std::fs::write(root.join("outside.png"), tiny_png()).unwrap();
+    std::os::unix::fs::symlink(root.join("outside.png"), root.join("site/link.png")).unwrap();
+    std::fs::write(root.join("site/page.html"), r#"<p><img src="link.png" alt="Link"></p>"#).unwrap();
+    let doc = crate::io::open_path(&root.join("site/page.html"));
+    let _ = std::fs::remove_dir_all(&root);
+    let doc = doc.unwrap();
+    assert!(doc.media.is_empty());
+    assert!(doc.plain_text(StoryRef::Body).contains("Link"));
+}
+
+#[cfg(unix)]
+#[test]
+fn html_picture_that_is_a_named_pipe_is_skipped_without_blocking() {
+    // #98 review: opening a FIFO blocks until a writer appears; it must never be opened.
+    let dir = scratch_dir("html-img-fifo");
+    let fifo = dir.join("pipe.png");
+    let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+    if !made.is_ok_and(|s| s.success()) {
+        let _ = std::fs::remove_dir_all(&dir);
+        eprintln!("mkfifo unavailable; skipping");
+        return;
+    }
+    std::fs::write(dir.join("page.html"), r#"<p><img src="pipe.png" alt="Pipe"></p>"#).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let page = dir.join("page.html");
+    std::thread::spawn(move || {
+        let _ = tx.send(crate::io::open_path(&page));
+    });
+    let got = rx.recv_timeout(std::time::Duration::from_secs(10));
+    if got.is_err() {
+        // Unblock the stuck reader so the thread ends, then fail.
+        let _ = std::fs::OpenOptions::new().write(true).open(&fifo);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    let doc = got.expect("opening the HTML file blocked on a named pipe").unwrap();
+    assert!(doc.media.is_empty());
+    assert!(doc.plain_text(StoryRef::Body).contains("Pipe"));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn html_picture_size_limit_holds_whatever_length_the_file_reports() {
+    use crate::io::LocalImages;
+    let dir = scratch_dir("html-img-limit");
+    std::fs::write(dir.join("ten.bin"), [7u8; 10]).unwrap();
+    std::fs::write(dir.join("eleven.bin"), [7u8; 11]).unwrap();
+    let images = LocalImages::with_limits(&dir, 10, 1000);
+    let ten = images.load("ten.bin").map(|d| d.len());
+    let eleven = images.load("eleven.bin");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(ten, Some(10));
+    assert!(eleven.is_none());
+    #[cfg(unix)]
+    {
+        // A device reports a length of 0 and never ends: it is not a regular file, and the read is
+        // bounded anyway.
+        let dev = LocalImages::with_limits(std::path::Path::new("/dev"), 1 << 20, 1 << 20);
+        assert!(dev.load("zero").is_none());
+        assert!(dev.load("null").is_none());
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn html_pictures_share_one_read_and_a_per_document_budget() {
+    // #98 review: a picture referenced many times is read once, and every reference counts
+    // against the document's budget so a large picture can't be multiplied without bound.
+    use crate::io::LocalImages;
+    let dir = scratch_dir("html-img-budget");
+    let png = tiny_png();
+    let n = png.len() as u64;
+    std::fs::write(dir.join("a.png"), &png).unwrap();
+    let images = LocalImages::with_limits(&dir, 1 << 20, 3 * n);
+    let first = images.load("a.png").unwrap();
+    std::fs::write(dir.join("a.png"), b"changed on disk").unwrap();
+    let second = images.load("./a.png").unwrap();
+    assert!(std::sync::Arc::ptr_eq(&first, &second), "the second reference reuses the first read");
+    assert_eq!(*second, png);
+    assert!(images.load("a.png").is_some());
+    assert!(images.load("a.png").is_none(), "budget spent");
+    // Files over the per-picture limit still cost what was read.
+    std::fs::write(dir.join("big.bin"), vec![1u8; 100]).unwrap();
+    std::fs::write(dir.join("small.bin"), [1u8; 5]).unwrap();
+    let images = LocalImages::with_limits(&dir, 10, 25);
+    assert!(images.load("big.bin").is_none());
+    assert!(images.load("big.bin").is_none());
+    let small = images.load("small.bin");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(small.is_none(), "two oversized reads used up the budget");
+}
+
+fn para_style(s: &Session, i: usize) -> Option<String> {
+    s.doc.para_at(&Pos::body(i, 0)).and_then(|p| p.props.style.clone())
+}
+
+#[test]
+fn styles_apply_by_name() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Title text"}));
+    run(&mut s, "styles.apply", json!({"style": "Heading 1"}));
+    assert_eq!(para_style(&s, 0).as_deref(), Some("Heading1"));
+    assert_eq!(s.undo_label(), Some("Apply Style"));
+    assert!(s.dirty);
+}
+
+#[test]
+fn styles_apply_pane_is_not_an_edit() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    s.dirty = false;
+    let undo = s.undo_labels();
+    s.view.styles_pane = false;
+    assert_eq!(run(&mut s, "styles.apply", json!({})), json!({"pane": true}));
+    assert!(s.view.styles_pane);
+    // Shows, never toggles.
+    run(&mut s, "styles.apply", json!({}));
+    assert!(s.view.styles_pane);
+    assert_eq!(s.undo_labels(), undo);
+    assert!(!s.dirty);
+    // Works on a read-only document.
+    s.doc.settings.protection = Some("readOnly".into());
+    s.view.styles_pane = false;
+    run(&mut s, "styles.apply", json!({}));
+    assert!(s.view.styles_pane);
+}
+
+#[test]
+fn styles_apply_rejects_bad_style_params() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    let undo = s.undo_labels();
+    let before = text(&s);
+    for bad in [json!(5), json!(null), json!([]), json!({}), json!(""), json!("   "), json!(true)] {
+        let r = s.run("styles.apply", &json!({"style": bad}));
+        assert!(matches!(r, Err(crate::CmdError::Params(_))), "{bad}: {r:?}");
+    }
+    assert_eq!(s.undo_labels(), undo);
+    assert_eq!(text(&s), before);
+    assert_eq!(para_style(&s, 0), None);
+}
+
+#[test]
+fn styles_apply_unknown_style_changes_nothing() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    let undo = s.undo_labels();
+    let doc = s.doc.clone();
+    assert!(s.run("styles.apply", &json!({"style": "No Such Style"})).is_err());
+    assert_eq!(s.undo_labels(), undo);
+    assert_eq!(s.doc, doc);
+    assert!(!s.can_redo());
+}
+
+#[test]
+fn styles_apply_undo_redo() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    run(&mut s, "styles.apply", json!({"style": "Heading 2"}));
+    assert_eq!(para_style(&s, 0).as_deref(), Some("Heading2"));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(para_style(&s, 0), None);
+    assert_eq!(text(&s), "Hello");
+    run(&mut s, "edit.redo", json!({}));
+    assert_eq!(para_style(&s, 0).as_deref(), Some("Heading2"));
+}
+
+#[test]
+fn styles_apply_character_style() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "make this strong"}));
+    run(&mut s, "select.text", json!({"text": "this"}));
+    run(&mut s, "styles.apply", json!({"style": "Strong"}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    assert_eq!(p.props_of_char(6).style.as_deref(), Some("Strong"));
+    assert_eq!(p.props_of_char(0).style, None);
+    // A character style leaves the paragraph style alone.
+    assert_eq!(p.props.style, None);
+}
+
+#[test]
+fn styles_apply_multi_paragraph_selection() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "One"}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Two"}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Three"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "styles.apply", json!({"style": "Quote"}));
+    for i in 0..3 {
+        assert_eq!(para_style(&s, i).as_deref(), Some("Quote"), "paragraph {i}");
+    }
+    // One undo step for the whole selection.
+    run(&mut s, "edit.undo", json!({}));
+    for i in 0..3 {
+        assert_eq!(para_style(&s, i), None, "paragraph {i}");
+    }
+}
+
+#[test]
+fn styles_apply_rejected_on_protected_document() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    s.doc.settings.protection = Some("readOnly".into());
+    let undo = s.undo_labels();
+    let r = s.run("styles.apply", &json!({"style": "Heading 1"}));
+    assert!(matches!(r, Err(crate::CmdError::Disabled(_))), "{r:?}");
+    assert_eq!(para_style(&s, 0), None);
+    assert_eq!(s.undo_labels(), undo);
 }

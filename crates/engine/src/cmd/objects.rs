@@ -208,6 +208,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 f.h_rel = wordcraft_doc::para::Anchor::Margin;
                 f.v_rel = wordcraft_doc::para::Anchor::Margin;
+                (f.h_align, f.v_align) = (None, None);
                 let (tw, th) = (sect.text_width(), sect.text_height());
                 let col = if preset.ends_with("Left") { 0.0 } else if preset.ends_with("Right") { tw - size.0 } else { (tw - size.0) / 2.0 };
                 let row = if preset.starts_with("top") { 0.0 } else if preset.starts_with("bottom") { th - size.1 } else { (th - size.1) / 2.0 };
@@ -228,6 +229,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     f.wrap = Wrap::Square;
                 }
                 f.h_rel = wordcraft_doc::para::Anchor::Margin;
+                f.h_align = None;
                 f.x = match h.as_str() {
                     "left" => 0.0,
                     "right" => tw - w,
@@ -327,7 +329,14 @@ fn with_obj(s: &mut Session, f: impl Fn(&mut InlineObject)) -> CmdResult {
 
 fn with_float(s: &mut Session, f: impl Fn(&mut Float)) -> CmdResult {
     with_obj(s, |o| match o {
-        InlineObject::Image { float, .. } | InlineObject::Shape { float, .. } => f(float),
+        InlineObject::Image { float, .. } | InlineObject::Shape { float, .. } => {
+            let was_inline = float.wrap == Wrap::Inline;
+            f(float);
+            // Word's distance from text for a newly wrapped object: 0.125" at the sides.
+            if was_inline && float.wrap != Wrap::Inline && float.dist == 0.0 {
+                float.dist = 9.0;
+            }
+        }
         _ => {}
     })
 }
@@ -570,7 +579,6 @@ mod tests {
         image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png).unwrap();
         b
     }
-
     #[test]
     fn picture_pipeline() {
         let mut s = Session::new(wordcraft_doc::Document::new());
@@ -595,5 +603,18 @@ mod tests {
         s.run("select.collapse", &json!({"end": true})).unwrap();
         s.run("text.insert", &json!({"text": "x"})).unwrap();
         assert!(s.run("picture.crop", &json!({"left": 0.1})).is_err());
+    }
+
+    #[test]
+    fn picture_alt_and_crop_round_trip() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        let data = super::super::insert::base64_encode(&png(20, 10));
+        s.run("insert.picture", &json!({"data": data})).unwrap();
+        s.run("picture.altText", &json!({"text": "A red box"})).unwrap();
+        s.run("picture.crop", &json!({"left": 0.1, "top": 0.2, "right": 0.05, "bottom": 0.0})).unwrap();
+        let (_, o) = selected(&s).unwrap();
+        let InlineObject::Image { alt, crop, .. } = o else { panic!("expected image") };
+        assert_eq!(alt, "A red box");
+        assert_eq!(crop, [0.1, 0.2, 0.05, 0.0]);
     }
 }

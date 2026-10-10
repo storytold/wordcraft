@@ -116,6 +116,10 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.text(10.0, 10.0, 12.0, "ab", c, false);
             pen.line_c(&[(3.0, 10.5), (17.0, 10.5)], c);
         }
+        "charborder" => {
+            pen.rect(3.0, 3.0, 17.0, 17.0, a);
+            pen.text(10.0, 6.0, 9.0, "A", c, false);
+        }
         "subscript" => {
             pen.text(8.0, 9.0, 13.0, "x", c, false);
             pen.text(15.0, 14.5, 8.0, "2", a, true);
@@ -1059,6 +1063,10 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.line_c(&[(4.0, 6.0), (8.0, 2.5), (14.0, 2.5), (16.5, 7.0)], a);
             pen.line_c(&[(14.0, 6.0), (16.5, 7.0), (17.5, 4.5)], a);
             pen.line_c(&[(17.0, 9.0), (17.0, 17.5)], a);
+        }
+        "chevronDoubleRight" => {
+            pen.line(&[(4.0, 4.0), (9.0, 10.0), (4.0, 16.0)]);
+            pen.line(&[(11.0, 4.0), (16.0, 10.0), (11.0, 16.0)]);
         }
         "addins" => {
             pen.rect(3.0, 3.0, 9.0, 9.0, c);

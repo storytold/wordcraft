@@ -45,6 +45,7 @@
 	Alt Text	替代文字
 	Apply Character Style	应用字符样式
 	Apply Style	应用样式
+	Apply Styles	选择并应用样式
 	Arrange	排列
 	Arrange\nAll	全部重排
 	Arrow	箭头
@@ -61,6 +62,8 @@
 	Automatic Table 2 (2 levels)	自动目录 2（2 级）
 	AutoSave	自动保存
 	AutoSave documents that have been saved	自动保存已保存过的文档
+	Dark page (white text on black)	深色页面（黑底白字）
+	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	像“视图 › 切换模式”一样以反转的颜色显示文档。保存、打印和 PDF 不受影响。
 	AutoSave saves every change to the file (needs a saved document)	自动保存会把每次更改写入文件（文档需已保存）
 	AutoText	自动图文集
 	Backspace	退格
@@ -107,6 +110,7 @@
 	Character Scale	字符缩放
 	Character Shading	字符底纹
 	Character Spacing	字符间距
+	Character Border	字符边框
 	Characters (no spaces)	字符数（不计空格）
 	Characters (with spaces)	字符数（计空格）
 	Chart	图表
@@ -448,6 +452,7 @@
 	OK	确定
 	One	一栏
 	One Page	单页
+	Only web (http, https) and email (mailto) links can be followed	只能打开网页（http、https）和电子邮件（mailto）链接
 	Open	打开
 	OpenDocument Text (*.odt)	OpenDocument 文本 (*.odt)
 	Optional Hyphen	可选连字符
@@ -819,3 +824,5 @@
 	Stopped	已停止
 	Speed	速度
 	Normal speed	正常速度
+	Scroll ribbon left	向左滚动功能区
+	Scroll ribbon right	向右滚动功能区

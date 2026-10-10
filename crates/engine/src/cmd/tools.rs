@@ -45,6 +45,9 @@ pub const AUTOCORRECT: &[(&str, &str)] = &[
     ("<-", "←"),
     ("=>", "⇒"),
     (":)", "☺"),
+    ("1/2", "½"),
+    ("1/4", "¼"),
+    ("3/4", "¾"),
 ];
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -445,8 +448,15 @@ fn macros(s: &mut Session, v: &Value) -> CmdResult {
     ))
 }
 
-/// Apply AutoCorrect to the word just before the caret (called after typing a space/punctuation).
+/// Apply AutoCorrect to the word just before the caret (called after typing a space/punctuation):
+/// replacements, then ordinal superscripts, web addresses as links and sentence capitals.
 pub fn autocorrect(s: &mut Session) -> Result<(), CmdError> {
+    autocorrect_word(s, false)
+}
+
+/// AutoCorrect the word ending at the caret; `on_enter` means Enter finished it (no trigger
+/// character was typed).
+pub fn autocorrect_word(s: &mut Session, on_enter: bool) -> Result<(), CmdError> {
     if !s.autocorrect_on {
         return Ok(());
     }
@@ -454,17 +464,17 @@ pub fn autocorrect(s: &mut Session) -> Result<(), CmdError> {
     let Some(text) = s.doc.para_at(&f).map(|p| p.text.clone()) else { return Ok(()) };
     let Some(before) = text.get(..f.off) else { return Ok(()) };
     let Some(last) = before.chars().next_back() else { return Ok(()) };
-    if !(last == ' ' || ",.;:!?".contains(last)) {
+    if !on_enter && !(last == ' ' || ",.;:!?".contains(last)) {
         return Ok(());
     }
-    let body = &before[..before.len() - last.len_utf8()];
+    let trigger = if on_enter { 0 } else { last.len_utf8() };
+    let Some(body) = before.get(..before.len() - trigger) else { return Ok(()) };
     let start = body.rfind(char::is_whitespace).map(|i| i + 1).unwrap_or(0);
     let Some(word) = body.get(start..).map(str::to_string) else { return Ok(()) };
-    let word = word.as_str();
     if word.is_empty() {
         return Ok(());
     }
-    let user = s.autocorrect_user.iter().find(|(a, _)| a == word).map(|(_, b)| b.clone());
+    let user = s.autocorrect_user.iter().find(|(a, _)| *a == word).map(|(_, b)| b.clone());
     let builtin = AUTOCORRECT
         .iter()
         .find(|(a, _)| {
@@ -478,15 +488,118 @@ pub fn autocorrect(s: &mut Session) -> Result<(), CmdError> {
                 b.to_string()
             }
         });
-    let Some(rep) = user.or(builtin) else { return Ok(()) };
-    let para = s.doc.para_mut(f.story, &f.path)?;
-    let props = para.props_of_char(start).clone();
-    let end = start + word.len();
-    para.delete(start, end)?;
-    para.insert_text(start, &rep, &props)?;
-    let off = (f.off + rep.len()).saturating_sub(word.len());
-    s.sel = Selection::caret(Pos { off, ..f });
+    // A whole-word replacement, else "wait..." → "wait…".
+    let (from, rep) = match user.or(builtin) {
+        Some(r) => (start, Some(r)),
+        None if word.len() > 3 && word.ends_with("...") => (start + word.len() - 3, Some("…".to_string())),
+        None => (start, None),
+    };
+    let mut caret = f.off;
+    if let Some(rep) = rep {
+        let end = start + word.len();
+        let para = s.doc.para_mut(f.story, &f.path)?;
+        let props = para.props_of_char(from).clone();
+        para.delete(from, end)?;
+        para.insert_text(from, &rep, &props)?;
+        caret = (f.off + rep.len()).saturating_sub(end - from);
+        s.sel = Selection::caret(Pos { off: caret, ..f.clone() });
+    }
+    let end = caret.saturating_sub(trigger);
+    let Some(word) = s.doc.para_at(&f).and_then(|p| p.text.get(start..end)).map(str::to_string) else { return Ok(()) };
+    let at = |off: usize| Pos { off, ..f.clone() };
+    // 1st, 22nd, 103rd → superscript suffix.
+    if let Some(n) = ordinal_suffix(&word) {
+        s.doc.format_range(&at(end - n), &at(end), &|c| c.vert_align = Some(wordcraft_doc::props::VertAlign::Superscript))?;
+        return Ok(());
+    }
+    // Web addresses become links (trailing punctuation stays outside).
+    let lower = word.to_ascii_lowercase();
+    if (lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("www.")) && word.len() > 8 {
+        let url = word.trim_end_matches(|c: char| ".,;:!?)]\"'”’".contains(c));
+        let href = if lower.starts_with("www.") { format!("http://{url}") } else { url.to_string() };
+        let url_end = start + url.len();
+        s.doc.format_range(&at(start), &at(url_end), &|c| {
+            c.link = Some(href.clone());
+            c.style = Some("Hyperlink".into());
+        })?;
+        // Typing after the link isn't part of it (but keeps the text's other formatting).
+        let mut after = s.doc.para_at(&f).map(|p| p.props_of_char(start).clone()).unwrap_or_default();
+        after.link = None;
+        after.style = None;
+        s.pending = Some(after);
+        return Ok(());
+    }
+    if starts_sentence(text.get(..start).unwrap_or("")) && should_capitalize(&word, if on_enter { '\n' } else { last }) {
+        let para = s.doc.para_mut(f.story, &f.path)?;
+        if let Some(c) = word.chars().next() {
+            let up: String = c.to_uppercase().collect();
+            let props = para.props_of_char(start).clone();
+            para.delete(start, start + c.len_utf8())?;
+            para.insert_text(start, &up, &props)?;
+            let off = (caret + up.len()).saturating_sub(c.len_utf8());
+            s.sel = Selection::caret(Pos { off, ..f });
+        }
+    }
     Ok(())
+}
+
+/// Byte length of an ordinal suffix to superscript ("1st" → 2), if `word` is a correct ordinal.
+fn ordinal_suffix(word: &str) -> Option<usize> {
+    let digits = word.find(|c: char| !c.is_ascii_digit())?;
+    let (num, suffix) = word.split_at(digits);
+    if num.is_empty() || num.len() > 9 {
+        return None;
+    }
+    let n: u64 = num.parse().ok()?;
+    let want = match (n % 100, n % 10) {
+        (11..=13, _) => "th",
+        (_, 1) => "st",
+        (_, 2) => "nd",
+        (_, 3) => "rd",
+        _ => "th",
+    };
+    (suffix == want).then_some(2)
+}
+
+/// Abbreviations whose full stop doesn't end a sentence.
+const NOT_SENTENCE_END: &[&str] = &[
+    "e.g.", "i.e.", "etc.", "vs.", "cf.", "mr.", "mrs.", "ms.", "dr.", "st.", "no.", "approx.", "fig.", "p.", "pp.", "jr.", "sr.", "ca.", "inc.",
+    "ltd.", "co.", "vol.", "a.m.", "p.m.",
+];
+
+/// Does a word typed after `before` (the paragraph text up to the word) begin a sentence?
+fn starts_sentence(before: &str) -> bool {
+    let t = before.trim_end();
+    if t.is_empty() {
+        return true;
+    }
+    if t.len() == before.len() {
+        return false; // no space between the previous text and the word
+    }
+    let t = t.trim_end_matches(|c: char| "\"'”’)]".contains(c));
+    if !t.ends_with(['.', '!', '?']) || t.ends_with("..") || t.ends_with('…') {
+        return false;
+    }
+    let prev = t.rsplit(char::is_whitespace).next().unwrap_or(t).trim_start_matches(|c: char| "\"'“‘([".contains(c));
+    let lower = prev.to_lowercase();
+    // "J." (an initial) or a known abbreviation.
+    let initial = prev.chars().count() == 2 && prev.chars().next().is_some_and(char::is_uppercase);
+    !initial && !NOT_SENTENCE_END.contains(&lower.as_str())
+}
+
+/// Only plain lowercase words are capitalised (not "iPhone", "x2", file names or addresses).
+fn should_capitalize(word: &str, next: char) -> bool {
+    // A single letter before a full stop is a list label or an initial ("a.", "j.").
+    if (next == '.' || word.ends_with('.')) && word.trim_end_matches('.').chars().count() < 2 {
+        return false;
+    }
+    if word == "e.g." || word == "i.e." {
+        return true;
+    }
+    word.chars().next().is_some_and(char::is_lowercase)
+        && word.chars().all(|c| c.is_alphabetic() || "'’-.".contains(c))
+        && !word.chars().any(char::is_uppercase)
+        && !word.trim_end_matches('.').contains('.')
 }
 
 /// Compare the current document (original) with a revised one: the result shows the
@@ -832,7 +945,8 @@ mod tests {
         for t in ["teh", " ", "Teh", " ", "(c)", " "] {
             s.run("text.insert", &json!({"text": t})).unwrap();
         }
-        assert_eq!(s.doc.plain_text(StoryRef::Body), "the The © ");
+        // The first word of a sentence is capitalised too.
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "The The © ");
     }
 
     #[test]

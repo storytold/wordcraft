@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use wordcraft_doc::numbering::{AbstractNum, Level, ListKind, Num, levels_for};
-use wordcraft_doc::para::{InlineObject, OBJ};
+use wordcraft_doc::para::{InlineObject, OBJ, PAGE_BREAK};
 use wordcraft_doc::props::{
     Border, BorderStyle, Borders, CellProps, CharProps, NumRef, ParaProps, RowProps, TextColor, Underline, VMerge, VertAlign,
 };
@@ -57,6 +57,12 @@ pub enum Inline {
     Image(Img),
     /// A bookmark (link target).
     Anchor(String),
+    /// An equation in the linear format WordCraft keeps them in (`x=(-b±√(b^2-4ac))/2a`). Formats
+    /// without equations write `linear` as text.
+    Equation {
+        linear: String,
+        display: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -106,12 +112,13 @@ impl Para {
         }
         self.inlines.push(Inline::Text(s.to_string(), f.clone()));
     }
-    /// The plain text (images and anchors left out).
+    /// The plain text (images and anchors left out; equations as their linear text).
     pub fn text(&self) -> String {
         let mut s = String::new();
         for i in &self.inlines {
-            if let Inline::Text(t, _) = i {
-                s.push_str(t);
+            match i {
+                Inline::Text(t, _) | Inline::Equation { linear: t, .. } => s.push_str(t),
+                Inline::Image(_) | Inline::Anchor(_) => {}
             }
         }
         s
@@ -119,6 +126,7 @@ impl Para {
     pub fn is_empty(&self) -> bool {
         self.inlines.iter().all(|i| matches!(i, Inline::Text(t, _) if t.is_empty()))
     }
+
     /// Remove whitespace at the very start and end of the paragraph's text.
     pub fn trim(&mut self) {
         while let Some(Inline::Text(t, _)) = self.inlines.first_mut() {
@@ -180,6 +188,8 @@ pub struct FTable {
     pub rows: Vec<Vec<Cell>>,
     /// Grid column widths in points (empty = equal widths).
     pub widths: Vec<f32>,
+    /// The source table had no borders (HTML default); the document table gets no grid style.
+    pub borderless: bool,
 }
 
 impl FTable {
@@ -241,6 +251,23 @@ pub struct Meta {
 pub struct Flow {
     pub blocks: Vec<FBlock>,
     pub meta: Meta,
+}
+
+/// `inlines` with equations as their linear text (default formatting), for formats that have no
+/// equations.
+pub fn equations_as_text(inlines: &[Inline]) -> std::borrow::Cow<'_, [Inline]> {
+    if !inlines.iter().any(|i| matches!(i, Inline::Equation { .. })) {
+        return std::borrow::Cow::Borrowed(inlines);
+    }
+    let mut p = Para::default();
+    for i in inlines {
+        match i {
+            Inline::Equation { linear, .. } => p.push_text(linear, &Fmt::default()),
+            Inline::Text(t, f) => p.push_text(t, f),
+            other => p.inlines.push(other.clone()),
+        }
+    }
+    std::borrow::Cow::Owned(p.inlines)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -341,6 +368,12 @@ impl Builder<'_> {
                     let e2 = out.len();
                     let _ = out.insert_object(e2, InlineObject::BookmarkEnd { name: name.clone() }, &CharProps::default());
                 }
+                Inline::Equation { linear, display } => {
+                    let linear = clean_text(linear);
+                    if !linear.is_empty() {
+                        let _ = out.insert_object(end, InlineObject::Equation { linear, display: *display }, &CharProps::default());
+                    }
+                }
             }
         }
         out
@@ -371,7 +404,7 @@ impl Builder<'_> {
         let aid = numbering.abstracts.iter().map(|a| a.id + 1).max().unwrap_or(0);
         numbering.abstracts.push(AbstractNum { id: aid, name: None, levels });
         let nid = numbering.nums.iter().map(|n| n.id + 1).max().unwrap_or(1).max(1);
-        numbering.nums.push(Num { id: nid, abstract_id: aid, start_overrides: Vec::new() });
+        numbering.nums.push(Num { id: nid, abstract_id: aid, ..Default::default() });
         nid
     }
 
@@ -381,11 +414,19 @@ impl Builder<'_> {
         while let Some(b) = blocks.get(i) {
             match b {
                 FBlock::Para(p) if p.list.is_some() => {
-                    // A run of consecutive list paragraphs is one list.
+                    // A run of consecutive list paragraphs is one list, until a top-level item of
+                    // the other kind (bulleted or numbered) starts a new one.
                     let mut j = i;
-                    let mut group = Vec::new();
+                    let mut group: Vec<ListInfo> = Vec::new();
+                    let mut top: Option<bool> = None;
                     while let Some(FBlock::Para(q)) = blocks.get(j) {
                         let Some(li) = q.list else { break };
+                        if li.level == 0 {
+                            if top.is_some_and(|o| o != li.ordered) {
+                                break;
+                            }
+                            top = Some(li.ordered);
+                        }
                         group.push(li);
                         j += 1;
                     }
@@ -426,6 +467,9 @@ impl Builder<'_> {
         let cols = t.cols().clamp(1, wordcraft_doc::table::MAX_COLS);
         let width = self.doc.last_section.text_width().max(72.0);
         let mut tb = Table::new(rows.len(), cols, width);
+        if t.borderless {
+            tb.props.style = None;
+        }
         if t.widths.len() == cols && t.widths.iter().all(|w| w.is_finite() && *w > 1.0) {
             tb.grid = t.widths.iter().map(|w| w.clamp(6.0, 1584.0)).collect();
         }
@@ -590,9 +634,11 @@ fn media_ext(key: &str, data: &[u8]) -> String {
     }
 }
 
-/// A document paragraph as a flow paragraph.
-pub fn flow_para(doc: &Document, p: &Paragraph) -> Para {
+/// A document paragraph as flow paragraphs: a page break character inside the text ends the
+/// paragraph, and the text after it starts a new one that carries `page_break`.
+pub fn flow_paras(doc: &Document, p: &Paragraph) -> Vec<Para> {
     let (kind, list) = para_kind(doc, p);
+    let mut done: Vec<Para> = Vec::new();
     let mut out = Para { kind, list, align: p.props.align, page_break: p.props.page_break_before.unwrap_or(false), inlines: Vec::new() };
     let in_code = kind == Kind::Code;
     let mut k = 0usize;
@@ -602,6 +648,20 @@ pub fn flow_para(doc: &Document, p: &Paragraph) -> Para {
         let f = fmt_of(doc, props, in_code);
         let mut buf = String::new();
         for c in text.chars() {
+            if c == PAGE_BREAK {
+                if !hidden {
+                    out.push_text(&std::mem::take(&mut buf), &f);
+                    let next = Para { kind, list: None, align: p.props.align, page_break: true, inlines: Vec::new() };
+                    let prev = std::mem::replace(&mut out, next);
+                    if prev.inlines.is_empty() {
+                        out.page_break |= prev.page_break;
+                        out.list = prev.list;
+                    } else {
+                        done.push(prev);
+                    }
+                }
+                continue;
+            }
             if c != OBJ {
                 buf.push(c);
                 continue;
@@ -624,6 +684,12 @@ pub fn flow_para(doc: &Document, p: &Paragraph) -> Para {
                         None => {}
                     }
                 }
+                Some(InlineObject::Equation { linear, display }) => {
+                    if !buf.is_empty() {
+                        out.push_text(&std::mem::take(&mut buf), &f);
+                    }
+                    out.inlines.push(Inline::Equation { linear: linear.clone(), display: *display });
+                }
                 Some(InlineObject::BookmarkStart { name }) if name != "_GoBack" => {
                     if !buf.is_empty() {
                         out.push_text(&std::mem::take(&mut buf), &f);
@@ -638,14 +704,15 @@ pub fn flow_para(doc: &Document, p: &Paragraph) -> Para {
             out.push_text(&buf, &f);
         }
     }
-    out
+    done.push(out);
+    done
 }
 
 fn flow_blocks(doc: &Document, bl: &Blocks, depth: usize) -> Vec<FBlock> {
     let mut out = Vec::new();
     for b in bl {
         match &**b {
-            Block::Para(p) => out.push(FBlock::Para(flow_para(doc, p))),
+            Block::Para(p) => out.extend(flow_paras(doc, p).into_iter().map(FBlock::Para)),
             Block::Table(t) if depth < MAX_DEPTH => out.push(FBlock::Table(flow_table(doc, t, depth))),
             Block::Table(t) => {
                 for r in &t.rows {
@@ -687,7 +754,7 @@ fn flow_table(doc: &Document, t: &Table, depth: usize) -> FTable {
         }
         rows.push(cells);
     }
-    FTable { rows, widths: t.grid.clone() }
+    FTable { rows, widths: t.grid.clone(), borderless: false }
 }
 
 /// The document body as a flow.
@@ -728,7 +795,8 @@ pub fn image_px(data: &[u8]) -> Option<(u32, u32)> {
 
 /// A picture from bytes with an optional display size (points); the natural size (96 dpi) is
 /// used otherwise, shrunk to fit a 6.5" column.
-pub fn make_img(data: Vec<u8>, w: Option<f32>, h: Option<f32>, alt: &str) -> Option<Img> {
+pub fn make_img(data: impl Into<Arc<Vec<u8>>>, w: Option<f32>, h: Option<f32>, alt: &str) -> Option<Img> {
+    let data = data.into();
     let ext = sniff_image(&data)?;
     let (pw, ph) = image_px(&data).map(|(a, b)| (a as f32 * 0.75, b as f32 * 0.75)).unwrap_or((72.0, 72.0));
     let (pw, ph) = (pw.max(1.0), ph.max(1.0));
@@ -742,7 +810,7 @@ pub fn make_img(data: Vec<u8>, w: Option<f32>, h: Option<f32>, alt: &str) -> Opt
         h *= 468.0 / w;
         w = 468.0;
     }
-    Some(Img { data: Arc::new(data), ext: ext.to_string(), w: w.clamp(1.0, 1584.0), h: h.clamp(1.0, 1584.0), alt: alt.to_string() })
+    Some(Img { data, ext: ext.to_string(), w: w.clamp(1.0, 1584.0), h: h.clamp(1.0, 1584.0), alt: alt.to_string() })
 }
 
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -963,7 +1031,11 @@ mod tests {
 
     #[test]
     fn covered_cells_inserted() {
-        let mut t = FTable { rows: vec![vec![Cell { rowspan: 2, ..Default::default() }, Cell::default()], vec![Cell::default()]], widths: vec![] };
+        let mut t = FTable {
+            rows: vec![vec![Cell { rowspan: 2, ..Default::default() }, Cell::default()], vec![Cell::default()]],
+            widths: vec![],
+            borderless: false,
+        };
         t.insert_covered();
         assert_eq!(t.rows[1].len(), 2);
         assert!(t.rows[1][0].covered);

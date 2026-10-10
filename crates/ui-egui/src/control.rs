@@ -73,6 +73,8 @@ fn key_from(name: &str) -> Option<egui::Key> {
         "down" => Some(egui::Key::ArrowDown),
         "space" => Some(egui::Key::Space),
         "tab" => Some(egui::Key::Tab),
+        "alt" | "altleft" | "altgr" => Some(egui::Key::AltLeft),
+        "altright" => Some(egui::Key::AltRight),
         "home" => Some(egui::Key::Home),
         "end" => Some(egui::Key::End),
         _ => None,
