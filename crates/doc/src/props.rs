@@ -487,6 +487,27 @@ impl Borders {
     pub fn any_visible(&self) -> bool {
         [self.top, self.left, self.bottom, self.right, self.between, self.inside_v].iter().flatten().any(Border::is_visible)
     }
+    /// Apply every `Some` side of `patch` on top of `self`.
+    pub fn overlay(&mut self, patch: &Borders) {
+        if patch.top.is_some() {
+            self.top = patch.top;
+        }
+        if patch.left.is_some() {
+            self.left = patch.left;
+        }
+        if patch.bottom.is_some() {
+            self.bottom = patch.bottom;
+        }
+        if patch.right.is_some() {
+            self.right = patch.right;
+        }
+        if patch.between.is_some() {
+            self.between = patch.between;
+        }
+        if patch.inside_v.is_some() {
+            self.inside_v = patch.inside_v;
+        }
+    }
 }
 
 /// A reference to a numbering definition and level.
@@ -690,6 +711,22 @@ mod tests {
         assert_eq!(r.bold, Some(true));
         assert_eq!(r.size, Some(14.0));
         assert_eq!(r.italic, Some(true));
+    }
+
+    #[test]
+    fn borders_overlay_per_side() {
+        let thin = Border::single(0.5);
+        let thick = Border::single(2.0);
+        let nil = Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 };
+        let mut b = Borders::all(thin);
+        b.overlay(&Borders { top: Some(thick), ..Default::default() });
+        assert_eq!(b.top, Some(thick));
+        assert_eq!(b.bottom, Some(thin));
+        b.overlay(&Borders::box_(nil));
+        assert_eq!(b.left, Some(nil)); // explicit nil overrides that side
+        assert_eq!(b.between, Some(thin)); // untouched sides survive
+        b.overlay(&Borders::default());
+        assert_eq!(b.left, Some(nil)); // empty patch changes nothing
     }
 
     #[test]

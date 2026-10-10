@@ -86,7 +86,7 @@ pub fn specs() -> Vec<CommandSpec> {
             let has = cur(s).space_after > 0.0;
             fmt(s, &|p| p.space_after = Some(if has { 0.0 } else { 8.0 }))
         }),
-        CommandSpec::new("para.style", "Apply Style", "Home › Styles", apply_style).params(r#"{"style": string (name or id)}"#).key("Mod+Shift+S"),
+        CommandSpec::new("para.style", "Apply Style", "Home › Styles", apply_style).params(r#"{"style": string (name or id)}"#),
         CommandSpec::new("para.normal", "Normal Style", "Home › Styles", |s, _| apply_style(s, &json!({"style": "Normal"}))).key("Mod+Shift+N"),
         CommandSpec::new("para.heading1", "Heading 1", "Home › Styles", |s, _| apply_style(s, &json!({"style": "Heading1"}))).key("Mod+Alt+1"),
         CommandSpec::new("para.heading2", "Heading 2", "Home › Styles", |s, _| apply_style(s, &json!({"style": "Heading2"}))).key("Mod+Alt+2"),
@@ -166,6 +166,10 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .key("Mod+Alt+Shift+S")
         .pure(),
+        CommandSpec::new("styles.apply", "Apply Styles", "Home › Styles", apply_styles)
+            .params(r#"{"style"?: string (name or id)}"#)
+            .key("Mod+Shift+S")
+            .pure(),
         CommandSpec::new("styles.addToGallery", "Add to Style Gallery", "Home › Styles", |s, v| {
             let id = style_id(s, p::req_str(v, "style")?)?;
             let on = p::bool(v, "value").unwrap_or(true);
@@ -261,6 +265,21 @@ fn line_spacing(s: &mut Session, v: &Value) -> CmdResult {
 
 fn style_id(s: &Session, name: &str) -> Result<String, CmdError> {
     s.doc.styles.find(name).map(|x| x.id.clone()).ok_or_else(|| CmdError::Params(format!("no style `{name}`")))
+}
+
+/// Apply Styles. Pure itself: with a `style` it runs `para.style` as its own command (so undo,
+/// protection, macro recording and Repeat see a real edit); without one it only shows the
+/// styles pane, which is view state and never an edit.
+fn apply_styles(s: &mut Session, v: &Value) -> CmdResult {
+    match v.get("style") {
+        None => {
+            s.view.styles_pane = true;
+            Ok(json!({"pane": true}))
+        }
+        Some(Value::String(name)) if !name.trim().is_empty() => s.run("para.style", &json!({"style": name})),
+        Some(Value::String(_)) => Err(CmdError::Params("`style` must not be empty".into())),
+        Some(_) => Err(CmdError::Params("`style` must be a string (name or id)".into())),
+    }
 }
 
 fn apply_style(s: &mut Session, v: &Value) -> CmdResult {
