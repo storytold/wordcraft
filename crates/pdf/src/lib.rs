@@ -707,7 +707,7 @@ impl Exporter<'_> {
                 s.set_fill(None);
                 s.set_stroke(None);
             }
-            Draw::Mark { .. } => {}
+            Draw::Mark { .. } | Draw::MarkText { .. } => {}
             Draw::Turned { x, y, turn, items } => {
                 if !ok(*x) || !ok(*y) {
                     return;

@@ -250,11 +250,12 @@ fn mi_check(ui: &mut Ui, app: &mut WordApp, label: &str, checked: bool, id: &str
 fn home(app: &mut WordApp, ui: &mut Ui) {
     let st = app.session.run("format.state", &json!({})).unwrap_or_default();
     let flag = |k: &str| st.get(k).and_then(Value::as_bool).unwrap_or(false);
-    group(ui, "Clipboard", None, app, |ui, app| {
+    group(ui, "Clipboard", Some("edit.clipboardPane"), app, |ui, app| {
         menu_button(ui, app, "paste", Some("Paste"), "Paste (⌘V)", true, |ui, app| {
             mi(ui, app, "Paste", "edit.paste", json!({}));
             mi(ui, app, "Keep Text Only", "edit.pasteText", json!({}));
             mi(ui, app, "Merge Formatting", "edit.pasteMerge", json!({}));
+            mi(ui, app, "Paste Special…", "edit.pasteSpecial", json!({}));
         });
         stack(ui, |ui| {
             small(ui, app, "cut", Some("Cut"), "Cut", "edit.cut", json!({}), false);
@@ -466,7 +467,11 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Editing", None, app, |ui, app| {
         stack(ui, |ui| {
-            small(ui, app, "find", Some("Find"), "Find", "ui.dialog", json!({"name": "find"}), false).clicked();
+            menu_button(ui, app, "find", Some("Find"), "Find", false, |ui, app| {
+                mi(ui, app, "Find", "ui.dialog", json!({"name": "find"}));
+                mi(ui, app, "Advanced Find…", "edit.advancedFind", json!({}));
+                mi(ui, app, "Go To…", "ui.dialog", json!({"name": "goto"}));
+            });
             small(ui, app, "replace", Some("Replace"), "Replace", "ui.dialog", json!({"name": "replace"}), false);
             menu_button(ui, app, "select", Some("Select"), "Select", false, |ui, app| {
                 mi(ui, app, "Select All", "select.all", json!({}));
@@ -795,9 +800,17 @@ fn layout(app: &mut WordApp, ui: &mut Ui) {
         });
         stack(ui, |ui| {
             small(ui, app, "align", None, "Align", "arrange.align", json!({}), false);
-            small(ui, app, "group", None, "Group", "arrange.group", json!({}), false);
+            group_menu(ui, app, None);
             small(ui, app, "rotate", None, "Rotate", "arrange.rotate", json!({}), false);
         });
+    });
+}
+
+/// Arrange › Group: Group (Shift+click objects to select several) and Ungroup.
+fn group_menu(ui: &mut Ui, app: &mut WordApp, label: Option<&str>) {
+    menu_button(ui, app, "group", label, "Group", false, |ui, app| {
+        mi(ui, app, "Group", "arrange.group", json!({}));
+        mi(ui, app, "Ungroup", "arrange.ungroup", json!({}));
     });
 }
 
@@ -1053,6 +1066,11 @@ fn view(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Zoom", None, app, |ui, app| {
         big(ui, app, "zoom", "Zoom", "ui.dialog", json!({"name": "zoom"}), false);
         big(ui, app, "zoom100", "100%", "view.zoom100", json!({}), false);
+        // Step the zoom up and down by 10% (issue #67), from whatever the page shows now.
+        stack(ui, |ui| {
+            small(ui, app, "zoomIn", Some("Zoom In"), "Zoom In", "view.zoomIn", json!({}), false);
+            small(ui, app, "zoomOut", Some("Zoom Out"), "Zoom Out", "view.zoomOut", json!({}), false);
+        });
         stack(ui, |ui| {
             small(ui, app, "onePage", Some("One Page"), "One Page", "view.onePage", json!({}), v.fit == "onePage");
             small(ui, app, "multiplePages", Some("Multiple Pages"), "Multiple Pages", "view.multiplePages", json!({}), v.multi_page);
@@ -1222,6 +1240,7 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
         stack(ui, |ui| {
             small(ui, app, "rotate", Some("Rotate"), "Rotate", "arrange.rotate", json!({}), false);
             small(ui, app, "align", Some("Align"), "Align", "arrange.align", json!({}), false);
+            group_menu(ui, app, Some("Group"));
         });
     });
     group(ui, "Size", None, app, |ui, app| {
@@ -1319,18 +1338,20 @@ fn table_design(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Table Styles", None, app, |ui, app| {
-        let styles: Vec<(String, String)> = app
+        // The document's own styles first, so a new one shows without scrolling.
+        let mut styles: Vec<(bool, String, String)> = app
             .session
             .doc
             .styles
             .styles
             .iter()
             .filter(|s| s.kind == wordcraft_doc::StyleKind::Table && !s.hidden)
-            .map(|s| (s.id.clone(), s.name.clone()))
+            .map(|s| (s.builtin, s.id.clone(), s.name.clone()))
             .collect();
+        styles.sort_by_key(|(builtin, _, _)| *builtin);
         egui::ScrollArea::horizontal().max_width(420.0).show(ui, |ui| {
             ui.horizontal(|ui| {
-                for (id, name) in styles {
+                for (_, id, name) in styles {
                     if crate::previews::table_style_tile(ui, app, &id).on_hover_text(name).clicked() {
                         let _ = app.run("table.style", json!({"style": id}));
                     }
@@ -1338,6 +1359,32 @@ fn table_design(app: &mut WordApp, ui: &mut Ui) {
             });
         });
         stack(ui, |ui| {
+            let current = look.and_then(|_| {
+                let (tp, _, _) = app.session.sel.focus.path.cell()?;
+                let id = app.session.doc.table(app.session.sel.focus.story, &tp)?.props.style.clone()?;
+                app.session
+                    .doc
+                    .styles
+                    .get(&id)
+                    .filter(|st| st.kind == wordcraft_doc::StyleKind::Table)
+                    .map(wordcraft_engine::cmd::table_style::is_builtin_table_style)
+            });
+            let can_modify = current.is_some();
+            // Built-in table styles can't be deleted.
+            let can_delete = current == Some(false);
+            menu_button(ui, app, "styles", Some("Styles"), "Table Styles", false, |ui, app| {
+                mi(ui, app, "New Table Style…", "ui.dialog", json!({"name": "newTableStyle"}));
+                if ui.add_enabled(can_modify, egui::Button::new(tl!("Modify Table Style…")).min_size(vec2(200.0, 0.0))).clicked() {
+                    let _ = app.run("ui.dialog", json!({"name": "modifyTableStyle"}));
+                    ui.close();
+                }
+                if ui.add_enabled(can_delete, egui::Button::new(tl!("Delete Table Style")).min_size(vec2(200.0, 0.0))).clicked() {
+                    if let Err(e) = app.run("table.deleteStyle", json!({})) {
+                        app.status(e);
+                    }
+                    ui.close();
+                }
+            });
             split(ui, app, "shading", "Shading", "table.shading", json!({"color": app.canvas.last_shading.clone()}), false, None, |ui, app| {
                 mi(ui, app, "No Color", "table.shading", json!({"color": null}));
                 let theme = app.session.doc.settings.theme_colors.clone();
@@ -1374,8 +1421,8 @@ fn table_layout(app: &mut WordApp, ui: &mut Ui) {
                 mi(ui, app, "Select Row", "table.selectRow", json!({}));
                 mi(ui, app, "Select Table", "table.selectTable", json!({}));
             });
-            let g = app.session.view.gridlines;
-            small(ui, app, "gridlines", Some("View Gridlines"), "View Gridlines", "view.gridlines", json!({}), g);
+            let g = app.session.view.table_gridlines;
+            small(ui, app, "gridlines", Some("View Gridlines"), "View Gridlines", "table.viewGridlines", json!({}), g);
             small(ui, app, "properties", Some("Properties"), "Table Properties", "table.properties", json!({}), false);
         });
     });

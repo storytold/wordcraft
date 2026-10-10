@@ -261,10 +261,14 @@ fn many_hidden_float_anchors_lay_out_in_linear_time() {
 #[test]
 fn fragmented_hidden_text_lays_out_like_the_visible_text() {
     // Visible words with a hidden multi-byte char after every visible one, formatted in alternating
-    // runs (bold on and off) so no two left-out runs are adjacent or merge.
+    // runs (bold on and off) so no two left-out runs are adjacent or merge. The plain paragraph has
+    // the same visible runs without the hidden chars, so both lay out the same widths whatever font
+    // the default font resolves to.
     let words = "Hyphenation wraps international words across narrow columns of text ".repeat(6);
     let mut d = Document::from_text("");
     d.settings.auto_hyphenation = true;
+    let mut plain = Document::from_text("");
+    plain.settings.auto_hyphenation = true;
     let mut text = String::new();
     let mut kept = Vec::new();
     for (i, c) in words.chars().enumerate() {
@@ -277,10 +281,11 @@ fn fragmented_hidden_text_lays_out_like_the_visible_text() {
         d.insert_text(&Pos::body(0, n), &c.to_string(), &bold).unwrap();
         let hidden = wordcraft_doc::CharProps { hidden: Some(true), bold: Some(i % 2 == 1), ..Default::default() };
         d.insert_text(&Pos::body(0, at), "é", &hidden).unwrap();
+        let n = plain.para(StoryRef::Body, &Path::top(0)).unwrap().len();
+        plain.insert_text(&Pos::body(0, n), &c.to_string(), &bold).unwrap();
     }
     assert_eq!(d.para(StoryRef::Body, &Path::top(0)).unwrap().text, text);
-    let mut plain = Document::from_text(&words);
-    plain.settings.auto_hyphenation = true;
+    assert_eq!(plain.para(StoryRef::Body, &Path::top(0)).unwrap().text, words);
     for doc in [&mut d, &mut plain] {
         doc.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.indent_right = Some(468.0 - 90.0)).unwrap();
     }
@@ -658,6 +663,20 @@ fn selection_rects_cover_range() {
 }
 
 #[test]
+fn column_segments_take_the_same_x_range_on_every_line() {
+    let d = Document::from_text("abcdef\nabcdef\nab");
+    let l = lay(&d);
+    let left = l.caret(&Pos::body(0, 2)).unwrap().x;
+    let right = l.caret(&Pos::body(0, 4)).unwrap().x;
+    let segs = l.column_segments(&d, &Pos::body(2, 2), &Pos::body(0, 2), right, left, 0, 100);
+    let offs: Vec<(u32, usize, usize)> = segs.iter().map(|(a, b)| (a.path.0[0], a.off, b.off)).collect();
+    assert_eq!(offs, vec![(0, 2, 4), (1, 2, 4), (2, 2, 2)]);
+    // Capped, and junk x gives nothing.
+    assert_eq!(l.column_segments(&d, &Pos::body(0, 2), &Pos::body(2, 2), left, right, 0, 2).len(), 2);
+    assert!(l.column_segments(&d, &Pos::body(0, 2), &Pos::body(2, 2), f32::NAN, right, 0, 100).is_empty());
+}
+
+#[test]
 fn display_has_glyphs_and_marks() {
     let mut d = Document::from_text("Hello\tworld");
     d.format_range(&Pos::body(0, 0), &Pos::body(0, 5), &|c| c.underline = Some(wordcraft_doc::props::Underline::Single)).unwrap();
@@ -683,6 +702,63 @@ fn a_tracked_paragraph_mark_shows_in_its_authors_colour() {
     };
     assert_eq!(marks(true), [Some(display::revision_color(0)), None]);
     assert_eq!(marks(false), [None, None]);
+}
+
+#[test]
+fn section_breaks_show_with_formatting_marks() {
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    // Two sections: "One" ends the first; the second starts as `start`.
+    let doc = |start: SectionStart| {
+        let mut d = Document::from_text("One\nTwo");
+        d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().section = Some(Box::new(SectionProps::default()));
+        d.last_section.start = start;
+        d
+    };
+    let labels = |d: &Document, marks: bool| -> (Vec<String>, usize) {
+        let l = lay(d);
+        let items = display::page_display(d, &l.pages[0], &display::DisplayOptions { marks, ..Default::default() });
+        let texts = items.iter().filter_map(|i| if let display::Draw::MarkText { text, .. } = i { Some(text.clone()) } else { None }).collect();
+        let pilcrows = items.iter().filter(|i| matches!(i, display::Draw::Mark { ch: '¶', .. })).count();
+        (texts, pilcrows)
+    };
+    let d = doc(SectionStart::Continuous);
+    // The break replaces the first paragraph's ¶; the last paragraph keeps its own.
+    assert_eq!(labels(&d, true), (vec!["Section Break (Continuous)".to_string()], 1));
+    assert_eq!(labels(&d, false), (vec![], 0));
+    assert_eq!(labels(&doc(SectionStart::NextPage), true).0, ["Section Break (Next Page)"]);
+    assert_eq!(labels(&doc(SectionStart::EvenPage), true).0, ["Section Break (Even Page)"]);
+    assert_eq!(labels(&doc(SectionStart::OddPage), true).0, ["Section Break (Odd Page)"]);
+    // A document with one section has no break.
+    assert_eq!(labels(&Document::from_text("One\nTwo"), true), (vec![], 2));
+}
+
+#[test]
+fn paragraph_marks_sit_past_text_running_the_other_way() {
+    // A left-to-right paragraph ending in Hebrew, and a right-to-left one ending in Latin: the
+    // logically last letters are at the wrong edge, but the ¶ still goes past every glyph.
+    let mut d = Document::from_text("Hello \u{5e9}\u{5dc}\u{5d5}\u{5dd}\n\u{5e9}\u{5dc}\u{5d5}\u{5dd} abc");
+    let at = Pos::body(1, 0);
+    d.format_paragraphs(&at, &at, &|p: &mut ParaProps| p.bidi = Some(true)).unwrap();
+    let l = lay(&d);
+    // Leftmost and rightmost glyph edges (page x) of each paragraph's single line.
+    let extents: Vec<(f32, f32)> = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| if let Placed::Lines { para, x, .. } = it { Some((para, *x)) } else { None })
+        .map(|(pl, x)| {
+            let ln = &pl.lines[0];
+            let edges = (ln.c0..ln.c1).filter_map(|k| Some((ln.cl_left(k)?, ln.cl_right(k)?)));
+            edges.fold((f32::MAX, f32::MIN), |(a, b), (l, r)| (a.min(x + l), b.max(x + r)))
+        })
+        .collect();
+    let marks: Vec<(f32, f32)> = display::page_display(&d, &l.pages[0], &display::DisplayOptions { marks: true, ..Default::default() })
+        .into_iter()
+        .filter_map(|i| if let display::Draw::Mark { ch: '¶', x, size, .. } = i { Some((x, size)) } else { None })
+        .collect();
+    assert_eq!((extents.len(), marks.len()), (2, 2));
+    let ((ltr_x, _), (rtl_x, size)) = (marks[0], marks[1]);
+    assert!(ltr_x >= extents[0].1, "LTR ¶ at {ltr_x} should be right of all glyphs {:?}", extents[0]);
+    assert!(rtl_x + size * 0.5 <= extents[1].0, "RTL ¶ at {rtl_x} should be left of all glyphs {:?}", extents[1]);
 }
 
 fn border_lines(d: &Document) -> Vec<(f32, f32, f32, f32)> {
@@ -2324,4 +2400,26 @@ fn hidden_float_in_a_text_box_is_not_placed() {
     let (shown, shown_areas) = count(true);
     let (hidden_n, hidden_areas) = count(false);
     assert_eq!((shown - hidden_n, shown_areas - hidden_areas), (1, 1), "shown {shown}/{shown_areas}, hidden {hidden_n}/{hidden_areas}");
+}
+
+#[test]
+fn kinsoku_keeps_a_manual_line_break_before_a_closing_bracket() {
+    // #269: kinsoku forbids a line starting with 」, but a manual line break (Shift+Enter) right
+    // before one still ends the line there.
+    let text = "日本語\n」テスト";
+    let mut d = Document::from_text("");
+    d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))];
+    let l = lay(&d);
+    let mut lines = Vec::new();
+    for p in &l.pages {
+        for it in &p.items {
+            if let Placed::Lines { para, l0, l1, .. } = it {
+                lines.extend(para.lines[*l0..*l1].iter().map(|line| (line.start, line.end)));
+            }
+        }
+    }
+    let bracket = text.find('」').unwrap();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(lines[0].1, LineEnd::LineBreak, "{lines:?}");
+    assert_eq!(lines[1].0, bracket, "the second line starts at the bracket: {lines:?}");
 }

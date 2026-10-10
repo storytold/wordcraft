@@ -24,7 +24,10 @@
 	Accept This Change	Aceptar este cambio
 	Accessibility	Accesibilidad
 	Add	Añadir
+	Add Object to Selection	Añadir objeto a la selección
 	Add Space Before Paragraph	Añadir espacio antes del párrafo
+	Add space between Asian and Latin text	Añadir espacio entre texto asiático y latino
+	Add space between Asian text and numbers	Añadir espacio entre texto asiático y números
 	Add Text	Añadir texto
 	Add a Table	Añadir una tabla
 	Add a comment	Añadir un comentario
@@ -35,6 +38,8 @@
 	Address\nBlock	Bloque de\ndirección
 	Adjust	Ajustar
 	Advanced	Avanzado
+	Advanced Find	Búsqueda avanzada
+	Advanced Find…	Búsqueda avanzada…
 	After:	Después:
 	Agents	Agentes
 	Align	Alinear
@@ -45,13 +50,17 @@
 	All Caps	Mayúsculas
 	All Markup	Todas las marcas
 	All caps	Mayúsculas
+	Allow hanging punctuation	Permitir puntuación colgante
+	Allow Latin text to wrap in the middle of a word	Permitir que el texto latino se divida en mitad de una palabra
 	Alt Text	Texto alternativo
+	Apply Asian line-breaking rules (kinsoku)	Aplicar las reglas asiáticas de división de líneas (kinsoku)
 	Apply Character Style	Aplicar estilo de carácter
 	Apply Style	Aplicar estilo
 	Arrange	Organizar
 	Arrange\nAll	Organizar\ntodo
 	Arrow	Flecha
 	Artistic Effects	Efectos artísticos
+	Asian Typography	Tipografía asiática
 	Author	Autor
 	AutoCorrect Options	Opciones de autocorrección
 	AutoFit	Ajustar automáticamente
@@ -109,6 +118,7 @@
 	Character Scale	Escala del carácter
 	Character Shading	Sombreado de carácter
 	Character Spacing	Espaciado de caracteres
+	Characters	Caracteres
 	Characters (no spaces)	Caracteres (sin espacios)
 	Characters (with spaces)	Caracteres (con espacios)
 	Chart	Gráfico
@@ -120,8 +130,21 @@
 	Citation Style	Estilo de cita
 	Citations & Bibliography	Citas y bibliografía
 	Clear	Borrar
+	Clear All	Borrar todo
 	Clear All Formatting	Borrar todo el formato
+	Clear Character Formatting	Borrar formato de carácter
+	Clear Character Style	Borrar estilo de carácter
+	Clear Formatting Level	Borrar nivel de formato
+	Clear Paragraph Formatting	Borrar formato de párrafo
 	Clipboard	Portapapeles
+	Clipboard Pane	Panel del portapapeles
+	Clipboard Items	Elementos del portapapeles
+	Paste Clipboard Item	Pegar elemento del portapapeles
+	Paste All	Pegar todo
+	Delete Clipboard Item	Eliminar elemento del portapapeles
+	Click an item to paste it.	Haz clic en un elemento para pegarlo.
+	Nothing collected yet. Items you copy or cut appear here.	Aún no hay nada. Lo que copies o cortes aparecerá aquí.
+	(picture or object)	(imagen u objeto)
 	Close	Cerrar
 	Close Header and Footer	Cerrar encabezado y pie de página
 	Collapse Selection	Contraer selección
@@ -140,6 +163,7 @@
 	Compact	Compacto
 	Compare	Comparar
 	Compress Pictures	Comprimir imágenes
+	Compress punctuation at the start of a line	Comprimir la puntuación al inicio de la línea
 	Continuous	Continuo
 	Convert	Convertir
 	Convert Text to Table	Convertir texto en tabla
@@ -187,6 +211,7 @@
 	Dictate	Dictar
 	Different First Page	Primera página diferente
 	Different Odd & Even Pages	Páginas pares e impares diferentes
+	Direct formatting	Formato directo
 	Discord	Discord
 	Discord community	Comunidad de Discord
 	Display	Mostrar
@@ -214,6 +239,7 @@
 	Drawing Tools	Herramientas de dibujo
 	Drawing\nCanvas	Lienzo de\ndibujo
 	Drop Cap	Letra capital
+	Drops all formatting and pastes plain text.	Quita todo el formato y pega texto sin formato.
 	Edit Footer	Editar pie de página
 	Edit Header	Editar encabezado
 	Edit Recipient List	Editar lista de destinatarios
@@ -269,11 +295,13 @@
 	Format Page Numbers	Formato de números de página
 	Format Page Numbers…	Formato de números de página…
 	Format Painter	Pincel de formato
+	Formatted Text	Texto con formato
 	Formatting at Selection	Formato en la selección
 	Formula	Fórmula
 	General	General
 	Go To	Ir a
 	Go To (⌘⌥G)	Ir a (⌘⌥G)
+	Go To…	Ir a…
 	Go to	Ir a
 	Grab bag	Bolsa de datos adicionales
 	Greeting Line	Línea de saludo
@@ -281,6 +309,7 @@
 	Gridlines	Líneas de cuadrícula
 	Group	Agrupar
 	Grow Font 1 Point	Aumentar fuente 1 punto
+	HTML Format	Formato HTML
 	Hanging Indent	Sangría francesa
 	Header	Encabezado
 	Header & Footer	Encabezado y pie de página
@@ -311,6 +340,7 @@
 	Indent	Sangría
 	Indentation	Sangría
 	Indents	Sangrías
+	Indents and Spacing	Sangría y espaciado
 	Index	Índice
 	Info	Información
 	Ink to\nMath	Tinta a\nfórmula
@@ -340,6 +370,7 @@
 	Insert\nFootnote	Insertar nota\nal pie
 	Inside Borders	Bordes interiores
 	Inspect Document	Inspeccionar documento
+	Inspect Styles at Selection	Inspeccionar estilos de la selección
 	Interface language:	Idioma de la interfaz:
 	Italic	Cursiva
 	Join the ArtCraft community on Discord	Únete a la comunidad de ArtCraft en Discord
@@ -350,6 +381,7 @@
 	Keep lines together	Mantener líneas juntas
 	Keep with Next	Mantener con el siguiente
 	Keep with next	Mantener con el siguiente
+	Keeps the fonts and formatting of the copied text.	Conserva las fuentes y el formato del texto copiado.
 	Labels	Etiquetas
 	Landscape	Horizontal
 	Language	Idioma
@@ -364,6 +396,7 @@
 	Letter	Carta
 	Line	Línea
 	Line Break	Salto de línea
+	Line breaking	División de líneas
 	Line End	Fin de línea
 	Line Numbers	Números de línea
 	Line Spacing	Interlineado
@@ -494,6 +527,9 @@
 	Paste	Pegar
 	Paste (⌘V)	Pegar (⌘V)
 	Paste Formatting	Pegar formato
+	Paste Special	Pegado especial
+	Paste Special…	Pegado especial…
+	Paste as:	Pegar como:
 	Paste: Keep Text Only	Pegar: mantener solo el texto
 	Paste: Merge Formatting	Pegar: combinar formato
 	Pen	Pluma
@@ -527,6 +563,9 @@
 	Read Mode	Modo lectura
 	Read\nAloud	Leer en\nvoz alta
 	Read\nMode	Modo\nlectura
+	Reads the clipboard's rich text and keeps its formatting.	Lee el texto enriquecido del portapapeles y conserva su formato.
+	Reads the clipboard's web content and keeps its formatting.	Lee el contenido web del portapapeles y conserva su formato.
+	Reading Highlight	Resaltado de lectura
 	Recent	Recientes
 	Record Macro	Grabar macro
 	Recover Unsaved Documents	Recuperar documentos sin guardar
@@ -557,6 +596,7 @@
 	Research	Investigación
 	Researcher	Investigador
 	Reset Picture	Restablecer imagen
+	Reset to Normal	Restablecer a Normal
 	Resolve	Resolver
 	Resolved	Resuelto
 	Restart Each Page	Reiniciar en cada página
@@ -564,12 +604,14 @@
 	Restart at 1	Reiniciar en 1
 	Restrict Editing	Restringir edición
 	Restrict\nEditing	Restringir\nedición
+	Result	Resultado
 	Results	Resultados
 	Reverse the order	Invertir el orden
 	Reviewing	Revisión
 	Reviewing Pane	Panel de revisión
 	Reviewing — edits become suggestions	Revisión — las ediciones pasan a ser sugerencias
 	Rich Text Format (*.rtf)	Formato de texto enriquecido (*.rtf)
+	Rich Text Format (RTF)	Formato de texto enriquecido (RTF)
 	Right	Derecha
 	Right Border	Borde derecho
 	Right-to-Left Text Direction	Dirección de texto de derecha a izquierda
@@ -669,6 +711,7 @@
 	Studio cover	Portada de Studio
 	Studio handbook (sample)	Manual de Studio (ejemplo)
 	Style	Estilo
+	Style Inspector	Inspector de estilos
 	Style Set	Conjunto de estilos
 	Style based on:	Estilo basado en:
 	Style: APA	Estilo: APA
@@ -708,6 +751,7 @@
 	Text:	Texto:
 	Text\nBox	Cuadro de\ntexto
 	Text\nDirection	Dirección del\ntexto
+	The clipboard is empty.	El portapapeles está vacío.
 	The new style takes the formatting of the current paragraph.	El nuevo estilo toma el formato del párrafo actual.
 	Theme Colors	Colores del tema
 	Theme Fonts	Fuentes del tema
@@ -730,11 +774,13 @@
 	Two	Dos
 	Type Text	Escribir texto
 	Type a command, e.g. "insert table"	Escribe un comando, p. ej. "insertar tabla"
+	Ungroup	Desagrupar
 	UPPERCASE	MAYÚSCULAS
 	Underline	Subrayado
 	Underline Words Only	Subrayar solo las palabras
 	Undo	Deshacer
 	Undo {action}	Deshacer {action}
+	Unformatted Text	Texto sin formato
 	Up	Arriba
 	Update Field	Actualizar campo
 	Update Index	Actualizar índice
@@ -895,6 +941,42 @@
 	Opening print dialog…	Abriendo el cuadro de diálogo de impresión…
 	Print failed: {error}	Error al imprimir: {error}
 	Couldn't open {path}: {error}	No se pudo abrir {path}: {error}
+	Column Selection	Selección de columna
+	New Table Style	Nuevo estilo de tabla
+	Modify Table Style	Modificar estilo de tabla
+	New Table Style…	Nuevo estilo de tabla…
+	Modify Table Style…	Modificar estilo de tabla…
+	Apply formatting to:	Aplicar formato a:
+	Whole Table	Toda la tabla
+	Fill color:	Color de relleno:
+	{count} items highlighted	{count} elementos resaltados
+	{n} pt	{n} pt
+	Not {name}	Sin {name}
+	Level {n}	Nivel {n}
+	Body Text	Texto independiente
+	{n} lines	{n} líneas
+	At least {n}	Mínimo {n}
+	Exactly {n}	Exacto {n}
+	Centered	Centrado
+	Character spacing	Espaciado de caracteres
+	Don't add space between paragraphs of the same style	No agregar espacio entre párrafos del mismo estilo
+	Don't hyphenate	No separar con guiones
+	Double strikethrough	Doble tachado
+	Drop cap	Letra capital
+	First line	Primera línea
+	Font color	Color de fuente
+	Highlight	Resaltado
+	Justified	Justificado
+	Left indent	Sangría izquierda
+	Line spacing	Interlineado
+	Outline level	Nivel de esquema
+	Raised/lowered	Elevado/bajado
+	Right indent	Sangría derecha
+	Scale	Escala
+	Space after	Espacio posterior
+	Space before	Espacio anterior
+	Suppress line numbers	Suprimir números de línea
+	Underline color	Color de subrayado
 	Letters	Cartas
 	E-mail Messages	Mensajes de correo electrónico
 	Directory	Directorio
@@ -966,3 +1048,25 @@
 	Offset: Top Right	Desplazamiento: arriba a la derecha
 	Offset: Top	Desplazamiento: arriba
 	Offset: Top Left	Desplazamiento: arriba a la izquierda
+	Manage Styles	Administrar estilos
+	Show or Hide Style	Mostrar u ocultar estilo
+	Manage Styles…	Administrar estilos…
+	Sort order:	Orden:
+	As Recommended	Recomendado
+	Alphabetical	Alfabético
+	Font: {font}	Fuente: {font}
+	{size} pt	{size} pt
+	Color: {color}	Color: {color}
+	Space before: {pt} pt	Espacio antes: {pt} pt
+	Space after: {pt} pt	Espacio después: {pt} pt
+	Based on: {style}	Basado en: {style}
+	Paragraph style	Estilo de párrafo
+	Character style	Estilo de carácter
+	Linked style (paragraph and character)	Estilo vinculado (párrafo y carácter)
+	Table style	Estilo de tabla
+	Built-in style	Estilo integrado
+	Show in the Styles gallery	Mostrar en la galería de estilos
+	Hide from style lists	Ocultar de las listas de estilos
+	Built-in styles can't be deleted.	Los estilos integrados no se pueden eliminar.
+	Delete Table Style	Eliminar estilo de tabla
+	Preview	Vista previa

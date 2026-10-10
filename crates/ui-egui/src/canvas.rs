@@ -23,6 +23,8 @@ pub struct CanvasState {
     pub scroll_to_caret: bool,
     pub caret_visible_since: f64,
     dragging: bool,
+    /// Alt+drag: where the column (block) selection started (page, x, y) and its last end.
+    column_drag: Option<((usize, f32, f32), (usize, f32, f32))>,
     pub last_highlight: String,
     pub last_font_color: String,
     pub last_shading: String,
@@ -44,8 +46,15 @@ pub struct CanvasState {
     pub mini_anchor: Option<Rect>,
     /// A picture, shape or text box being dragged by its frame.
     pub(crate) obj_drag: Option<crate::objects::ObjectDrag>,
+    /// Wheel/touchpad scrolling (smooth notches, touchpad momentum).
+    pub(crate) wheel: crate::scroll::CanvasScroll,
+    /// The scroll offset and its maximum at the end of last frame.
+    pub(crate) scroll_offset: egui::Vec2,
+    scroll_max: egui::Vec2,
     /// Pages per row last frame; when it changes the caret's page is scrolled back into view.
     pub cols: usize,
+    /// A paste event arrived since the last Mod+V release (see `keys::canvas_events`).
+    pub(crate) pasted: bool,
 }
 
 impl CanvasState {
@@ -62,6 +71,7 @@ impl Default for CanvasState {
             scroll_to_caret: true,
             caret_visible_since: 0.0,
             dragging: false,
+            column_drag: None,
             last_highlight: "yellow".into(),
             last_font_color: "C00000".into(),
             last_shading: "FFF2CC".into(),
@@ -78,6 +88,10 @@ impl Default for CanvasState {
             obj_drag: None,
             context_menu_open: false,
             mini_anchor: None,
+            pasted: false,
+            wheel: Default::default(),
+            scroll_offset: egui::Vec2::ZERO,
+            scroll_max: egui::Vec2::ZERO,
             cols: 1,
         }
     }
@@ -194,6 +208,18 @@ pub fn geometry(app: &WordApp, l: &DocLayout, avail: egui::Vec2) -> Geometry {
     Geometry { rects, size, scale, cols }
 }
 
+/// While a fit mode (Page Width, One Page, Multiple Pages) sizes the page, keep the session's zoom
+/// equal to what is shown, as Word does. Zoom In/Out, the Zoom dialog and `view.state` then start
+/// from the visible zoom; before, they stepped from the stale manual zoom, so Zoom In from a 163%
+/// Page Width jumped to 110% (issue #67).
+pub fn sync_fit_zoom(app: &mut WordApp, scale: f32) {
+    let v = &mut app.session.view;
+    if v.fit.is_empty() || v.read_mode || v.mode != wordcraft_layout::ViewMode::Print || !scale.is_finite() {
+        return;
+    }
+    v.zoom = (scale / PX_PER_PT).clamp(0.1, 5.0);
+}
+
 /// Fingerprint of a page's content for the texture cache.
 fn page_key(app: &WordApp, page: &Page, scale_px: f32, dim_body: bool) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -236,6 +262,43 @@ fn page_screen_scale(rect: Rect, page: &Page, fallback: f32) -> f32 {
     if page.w > 0.0 { rect.width() / page.w } else { fallback }
 }
 
+/// Spacing of the View › Gridlines drawing grid: 0.5 cm, in points.
+const DRAWING_GRID_PT: f32 = 72.0 * 0.5 / 2.54;
+/// Closest the drawing grid's lines get on screen; zoomed far out, every other line is skipped.
+const DRAWING_GRID_MIN_PX: f32 = 4.0;
+/// Most grid lines drawn each way on one page (page sizes come from files).
+const DRAWING_GRID_MAX_LINES: usize = 2000;
+
+/// The View › Gridlines drawing grid over a page's text area, in document points: the x of each
+/// vertical line and the y of each horizontal line, starting at the margins and `step` apart,
+/// never outside the margins. Drawn on screen only — never printed or exported.
+fn drawing_grid(body: wordcraft_geom::Rect, step: f32) -> (Vec<f32>, Vec<f32>) {
+    let axis = |start: f32, len: f32| -> Vec<f32> {
+        if !(step.is_finite() && step > 0.0 && start.is_finite() && len.is_finite() && len >= 0.0) {
+            return Vec::new();
+        }
+        let end = start + len + 0.01;
+        (0..DRAWING_GRID_MAX_LINES).map(|k| start + k as f32 * step).take_while(|p| *p <= end).collect()
+    };
+    (axis(body.x, body.w), axis(body.y, body.h))
+}
+
+/// The drawing grid's spacing in points at a screen scale: the default 0.5 cm, doubled until the
+/// lines are at least [`DRAWING_GRID_MIN_PX`] apart on screen.
+fn drawing_grid_step(scale: f32) -> f32 {
+    let mut step = DRAWING_GRID_PT;
+    if !(scale.is_finite() && scale > 0.0) {
+        return step;
+    }
+    for _ in 0..16 {
+        if step * scale >= DRAWING_GRID_MIN_PX {
+            break;
+        }
+        step *= 2.0;
+    }
+    step
+}
+
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let layout = app.session.layout();
@@ -262,6 +325,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     }
     let geo = geometry(app, &layout, area.size() - vec2(14.0, 0.0));
     app.canvas.scale = geo.scale;
+    sync_fit_zoom(app, geo.scale);
     // Zooming or resizing reflowed the pages into a different number of columns: the caret's page
     // moved, so bring it back into view rather than leave the reader somewhere else.
     if geo.cols != app.canvas.cols {
@@ -288,7 +352,28 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     app.canvas.scroll_to_caret = false;
     let mut origin = area.min;
     let mut ui_area = ui.new_child(egui::UiBuilder::new().max_rect(area));
-    let out = egui::ScrollArea::both().id_salt("canvas_scroll").auto_shrink([false, false]).show_viewport(&mut ui_area, |ui, viewport| {
+    // The canvas scrolls itself on wheel/touchpad input (crate::scroll): touchpads 1:1 with
+    // momentum, wheel notches eased in. Applied before drawing, so it shows this frame.
+    let hovered = ui.rect_contains_pointer(area) && ui.ctx().dragged_id().is_none();
+    let notch = crate::scroll::notch_px(app.canvas.scale / PX_PER_PT);
+    let opts = ui.ctx().options(|o| o.input_options);
+    let delta = ui.input(|i| app.canvas.wheel.frame(i, &opts, hovered, notch, area.height()));
+    let mut scroll_area = egui::ScrollArea::both()
+        .id_salt("canvas_scroll")
+        .auto_shrink([false, false])
+        .scroll_source(egui::scroll_area::ScrollSource { mouse_wheel: false, ..Default::default() });
+    if delta != egui::Vec2::ZERO {
+        let before = app.canvas.scroll_offset;
+        let after = (before - delta).clamp(egui::Vec2::ZERO, app.canvas.scroll_max);
+        if after == before {
+            app.canvas.wheel.hit_edge();
+        }
+        scroll_area = scroll_area.scroll_offset(after);
+    }
+    if app.canvas.wheel.is_animating() {
+        ui.ctx().request_repaint();
+    }
+    let out = scroll_area.show_viewport(&mut ui_area, |ui, viewport| {
         origin = ui.min_rect().min - viewport.min.to_vec2();
         let content = Rect::from_min_size(ui.min_rect().min, geo.size);
         let resp = ui.allocate_rect(content, Sense::click_and_drag());
@@ -365,8 +450,23 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     }
                 }
             }
-            // Table gridlines.
-            if app.session.view.gridlines {
+            // View › Gridlines: the drawing grid over the text area (Print Layout, on screen only).
+            if app.session.view.gridlines && app.session.view.mode == wordcraft_layout::ViewMode::Print && !app.session.view.read_mode {
+                let (xs, ys) = drawing_grid(page.body, drawing_grid_step(page_scale));
+                let stroke = Stroke::new(1.0, t.blue.linear_multiply(0.22));
+                let (x0, x1) = (visual_sr.min.x + page.body.x * page_scale, visual_sr.min.x + page.body.right() * page_scale);
+                let (y0, y1) = (visual_sr.min.y + page.body.y * page_scale, visual_sr.min.y + page.body.bottom() * page_scale);
+                for x in xs {
+                    let sx = visual_sr.min.x + x * page_scale;
+                    painter.line_segment([pos2(sx, y0), pos2(sx, y1)], stroke);
+                }
+                for y in ys {
+                    let sy = visual_sr.min.y + y * page_scale;
+                    painter.line_segment([pos2(x0, sy), pos2(x1, sy)], stroke);
+                }
+            }
+            // Table Layout › View Gridlines: table cell outlines (on screen only).
+            if app.session.view.table_gridlines {
                 for it in &page.items {
                     if let Placed::Cell { rect, .. } = it {
                         let r = Rect::from_min_size(
@@ -386,18 +486,35 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         app.canvas.textures.retain(|k, _| *k < n);
         app.canvas.page_rects = rects.clone();
         balloons(app, ui, &painter, &rects, &layout, geo.scale);
-        // Selection (a selected object shows its frame instead).
-        if !app.session.sel.is_collapsed() && crate::objects::selected(app).is_none() {
-            let (a, b) = app.session.sel.ordered();
-            let mut first: Option<Rect> = None;
-            for (pi, r) in layout.selection_rects(&app.session.doc, &a, &b, app.session.page_hint) {
+        // Find › Reading Highlight.
+        let marks: Vec<(Pos, Pos)> = app.session.find_highlights().iter().take(5000).cloned().collect();
+        for (a, b) in &marks {
+            for (pi, r) in layout.selection_rects(&app.session.doc, a, b, app.session.page_hint) {
                 if let Some(pr) = rects.get(pi) {
                     let scale = layout.pages.get(pi).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
-                    let sr = Rect::from_min_size(pos2(pr.min.x + r.x * scale, pr.min.y + r.y * scale), vec2(r.w * scale, r.h * scale));
-                    painter.rect_filled(sr, 0.0, t.selection);
-                    // Track the topmost rect: the mini toolbar anchors on the selection's first line.
-                    if first.is_none_or(|f| sr.min.y < f.min.y) {
-                        first = Some(sr);
+                    let hr = Rect::from_min_size(pos2(pr.min.x + r.x * scale, pr.min.y + r.y * scale), vec2(r.w * scale, r.h * scale));
+                    painter.rect_filled(hr, 0.0, t.find_highlight);
+                }
+            }
+        }
+        // Selection (a selected object shows its frame instead).
+        if !app.session.sel.is_collapsed() && crate::objects::selected(app).is_none() {
+            // A column selection highlights each row's piece.
+            let pieces: Vec<(Pos, Pos)> = match app.session.column_segments() {
+                Some(segs) => segs.to_vec(),
+                None => vec![app.session.sel.ordered()],
+            };
+            let mut first: Option<Rect> = None;
+            for (a, b) in &pieces {
+                for (pi, r) in layout.selection_rects(&app.session.doc, a, b, app.session.page_hint) {
+                    if let Some(pr) = rects.get(pi) {
+                        let scale = layout.pages.get(pi).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
+                        let sr = Rect::from_min_size(pos2(pr.min.x + r.x * scale, pr.min.y + r.y * scale), vec2(r.w * scale, r.h * scale));
+                        painter.rect_filled(sr, 0.0, t.selection);
+                        // Track the topmost rect: the mini toolbar anchors on the selection's first line.
+                        if first.is_none_or(|f| sr.min.y < f.min.y) {
+                            first = Some(sr);
+                        }
                     }
                 }
             }
@@ -491,6 +608,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         crate::objects::paint(app, &painter, &t, &layout, &rects, geo.scale);
         (resp, rects)
     });
+    app.canvas.scroll_offset = out.state.offset;
+    app.canvas.scroll_max = (out.content_size - out.inner_rect.size()).max(egui::Vec2::ZERO);
     let (resp, rects) = out.inner;
     // Focus: the canvas takes keyboard focus on click and keeps Tab/arrows.
     if resp.clicked() || resp.drag_started() || app.canvas.want_focus {
@@ -757,6 +876,15 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
             return;
         }
         let pj = serde_json::to_value(&pos).unwrap_or_default();
+        // Alt+drag selects a column (block) of text.
+        if mods.alt && !mods.shift && !mods.command {
+            let _ = app.run("caret.set", json!({"pos": pj}));
+            app.session.page_hint = page;
+            app.canvas.column_drag = Some(((page, x, y), (page, x, y)));
+            app.canvas.dragging = true;
+            return;
+        }
+        app.canvas.column_drag = None;
         let _ = app.run("caret.set", json!({"pos": pj, "extend": mods.shift}));
         if mods.command && !mods.shift {
             let _ = app.run("select.sentence", json!({}));
@@ -764,6 +892,18 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
         app.session.page_hint = page;
         app.canvas.dragging = true;
         // Format painter applies on mouse up.
+    } else if app.canvas.dragging
+        && ui.input(|i| i.pointer.primary_down())
+        && let Some((from, last)) = app.canvas.column_drag
+    {
+        if last != (page, x, y) {
+            app.canvas.column_drag = Some((from, (page, x, y)));
+            let story = app.session.sel.focus.story;
+            let _ = app.run(
+                "select.column",
+                json!({"from": {"page": from.0, "x": from.1, "y": from.2}, "to": {"page": page, "x": x, "y": y}, "story": story}),
+            );
+        }
     } else if app.canvas.dragging && ui.input(|i| i.pointer.primary_down()) {
         if let Some(pos) = layout.hit(page, x, y, story)
             && pos != app.session.sel.focus
@@ -775,6 +915,7 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
         // Auto-scroll near the edges is handled by egui's scroll area drag.
     } else if app.canvas.dragging && ui.input(|i| i.pointer.primary_released()) {
         app.canvas.dragging = false;
+        app.canvas.column_drag = None;
         if app.session.painter.is_some() && !app.session.sel.is_collapsed() {
             let _ = app.run("edit.pasteFormat", json!({}));
         }
@@ -1238,6 +1379,47 @@ mod tests {
 
         assert_eq!(visual.min, pos2(10.5, 21.0));
         assert_eq!(visual.size(), vec2(80.5, 120.5));
+    }
+
+    #[test]
+    fn drawing_grid_starts_at_the_margins_and_stays_inside_them() {
+        // Letter page with 1" margins: the text area is 468 x 648 pt from (72, 72).
+        let body = wordcraft_geom::Rect::new(72.0, 72.0, 468.0, 648.0);
+        let (xs, ys) = drawing_grid(body, DRAWING_GRID_PT);
+        assert_eq!(xs.first().copied(), Some(72.0));
+        assert_eq!(ys.first().copied(), Some(72.0));
+        assert!(xs.iter().all(|x| (72.0..=540.0).contains(x)), "{xs:?}");
+        assert!(ys.iter().all(|y| (72.0..=720.0).contains(y)), "{ys:?}");
+        // 0.5 cm apart, the same both ways: 468 pt holds 33 steps, 648 pt holds 45.
+        assert_eq!(xs.len(), 34);
+        assert_eq!(ys.len(), 46);
+        for w in xs.windows(2).chain(ys.windows(2)) {
+            assert!((w[1] - w[0] - DRAWING_GRID_PT).abs() < 0.01, "{w:?}");
+        }
+        // A grid line that lands on the margin is kept.
+        let (xs, _) = drawing_grid(wordcraft_geom::Rect::new(0.0, 0.0, 100.0, 10.0), 25.0);
+        assert_eq!(xs, vec![0.0, 25.0, 50.0, 75.0, 100.0]);
+    }
+
+    #[test]
+    fn drawing_grid_survives_hostile_sizes() {
+        let r = wordcraft_geom::Rect::new;
+        for (body, step) in [
+            (r(72.0, 72.0, 468.0, 648.0), 0.0),
+            (r(72.0, 72.0, 468.0, 648.0), -5.0),
+            (r(72.0, 72.0, 468.0, 648.0), f32::NAN),
+            (wordcraft_geom::Rect { x: f32::NAN, y: 0.0, w: f32::INFINITY, h: -10.0 }, DRAWING_GRID_PT),
+        ] {
+            let (xs, ys) = drawing_grid(body, step);
+            assert!(xs.is_empty() && ys.is_empty(), "{body:?} {step}");
+        }
+        let (xs, ys) = drawing_grid(r(0.0, 0.0, 1.0e9, 1.0e9), DRAWING_GRID_PT);
+        assert_eq!((xs.len(), ys.len()), (DRAWING_GRID_MAX_LINES, DRAWING_GRID_MAX_LINES));
+        // Zoomed far out, lines thin out instead of filling the page.
+        assert_eq!(drawing_grid_step(PX_PER_PT), DRAWING_GRID_PT);
+        assert!(drawing_grid_step(0.1) * 0.1 >= DRAWING_GRID_MIN_PX);
+        assert_eq!(drawing_grid_step(0.0), DRAWING_GRID_PT);
+        assert_eq!(drawing_grid_step(f32::NAN), DRAWING_GRID_PT);
     }
 
     #[test]

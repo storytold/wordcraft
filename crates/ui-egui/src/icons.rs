@@ -868,6 +868,14 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.line(&[(6.0, 8.5), (11.0, 8.5)]);
             pen.line(&[(8.5, 6.0), (8.5, 11.0)]);
         }
+        "zoomIn" | "zoomOut" => {
+            pen.circle(8.5, 8.5, 5.5, c);
+            pen.line_c(&[(12.5, 12.5), (17.5, 17.5)], a);
+            pen.line(&[(6.0, 8.5), (11.0, 8.5)]);
+            if name == "zoomIn" {
+                pen.line(&[(8.5, 6.0), (8.5, 11.0)]);
+            }
+        }
         "zoom100" => pen.text(10.0, 10.0, 7.5, "100", a, true),
         "onePage" => pen.page(5.0, 2.0, 15.0, 18.0),
         "multiplePages" => {

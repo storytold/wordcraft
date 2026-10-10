@@ -31,6 +31,19 @@ impl Selection {
     }
 }
 
+/// A column (block) selection: the same x range on every line between two corners.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ColumnBlock {
+    /// The stream selection the block was made with (its corners). The block is current only
+    /// while `Session::sel` still equals it, so any ordinary caret move or selection drops it.
+    pub sel: Selection,
+    /// Page x of the anchor and focus corners (points); the block spans the range between.
+    pub anchor_x: f32,
+    pub focus_x: f32,
+    /// One `(start, end)` per line, in document order, each inside one paragraph.
+    pub segments: Vec<(Pos, Pos)>,
+}
+
 /// View state that commands can change (ribbon View tab, status bar).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -41,10 +54,20 @@ pub struct ViewState {
     pub focus_mode: bool,
     pub marks: bool,
     pub ruler: bool,
+    /// View › Show › Gridlines: the drawing grid over the page's text area (on screen only).
     pub gridlines: bool,
+    /// Table Layout › View Gridlines: outlines of table cells (on screen only).
+    #[serde(default)]
+    pub table_gridlines: bool,
     pub nav_pane: bool,
     pub styles_pane: bool,
+    /// Style Inspector pane (Home › Styles).
+    #[serde(default)]
+    pub style_inspector: bool,
     pub comments_pane: bool,
+    /// The Clipboard pane (Home › Clipboard): items collected by Copy and Cut.
+    #[serde(default)]
+    pub clipboard_pane: bool,
     pub multi_page: bool,
     /// Zoom to fit: "pageWidth", "onePage", "multiplePages", or empty.
     pub fit: String,
@@ -66,9 +89,12 @@ impl Default for ViewState {
             marks: false,
             ruler: true,
             gridlines: false,
+            table_gridlines: false,
             nav_pane: false,
             styles_pane: false,
+            style_inspector: false,
             comments_pane: false,
+            clipboard_pane: false,
             multi_page: false,
             fit: String::new(),
             web_width: 800.0,
@@ -93,6 +119,11 @@ pub struct FindState {
     #[serde(skip)]
     pub results: Vec<(Pos, Pos)>,
     pub current: usize,
+    /// Reading Highlight: mark every match of `query` in the body.
+    pub highlight: bool,
+    /// Highlighted matches, for the document revision they were found in.
+    #[serde(skip)]
+    pub highlights: Option<(u64, Vec<(Pos, Pos)>)>,
 }
 
 #[derive(Clone)]
@@ -152,6 +183,8 @@ pub struct Session {
     pub clipboard: Option<Fragment>,
     /// Plain text mirror of the clipboard (for the system clipboard).
     pub clipboard_text: String,
+    /// Items collected by Copy and Cut this session, for the Clipboard pane.
+    pub clip_history: crate::cmd::edit::ClipHistory,
     pub find: FindState,
     /// Page x the caret tries to keep on Up/Down.
     pub goal_x: Option<f32>,
@@ -210,6 +243,13 @@ pub struct Session {
     pub math_latex: bool,
     /// Text typed into equations is normal (non-math) text.
     pub math_normal_text: bool,
+    /// More pictures and shapes selected along with the one the selection holds (Shift+click),
+    /// for Group. Cleared by any edit or selection change other than adding to it.
+    pub also_selected: Vec<Pos>,
+    /// Column (block) selection, if one was made (see [`Session::column_segments`]).
+    pub column: Option<ColumnBlock>,
+    /// Column selection mode (Ctrl+Shift+F8): caret movement extends the block.
+    pub column_mode: bool,
 }
 
 /// The equation being edited.
@@ -250,6 +290,7 @@ impl Session {
             dirty: false,
             clipboard: None,
             clipboard_text: String::new(),
+            clip_history: Default::default(),
             find: FindState::default(),
             goal_x: None,
             page_hint: 0,
@@ -281,9 +322,18 @@ impl Session {
             math: None,
             math_latex: false,
             math_normal_text: false,
+            also_selected: Vec::new(),
             prefs: Prefs::default(),
             read_aloud: Default::default(),
+            column: None,
+            column_mode: false,
         }
+    }
+
+    /// The line pieces of the current column selection, if there is one (the selection hasn't
+    /// moved since the block was made).
+    pub fn column_segments(&self) -> Option<&[(Pos, Pos)]> {
+        self.column.as_ref().filter(|c| c.sel == self.sel).map(|c| c.segments.as_slice())
     }
 
     /// Document revision (bumped by every change).
@@ -297,6 +347,18 @@ impl Session {
     pub fn touch(&mut self) {
         self.rev = self.rev.wrapping_add(1);
         self.dirty = true;
+    }
+
+    /// Reading Highlight ranges for the current document (searched again after edits); empty when it's off.
+    pub fn find_highlights(&mut self) -> &[(Pos, Pos)] {
+        if !self.find.highlight {
+            return &[];
+        }
+        if self.find.highlights.as_ref().is_none_or(|(r, _)| *r != self.rev) {
+            let found = crate::cmd::edit::search(self, StoryRef::Body).unwrap_or_default();
+            self.find.highlights = Some((self.rev, found));
+        }
+        self.find.highlights.as_ref().map(|(_, v)| v.as_slice()).unwrap_or(&[])
     }
 
     /// The current layout (recomputed when the document or view changed).
@@ -362,6 +424,18 @@ impl Session {
     pub fn join_next_undo(&mut self) {
         self.join_next = true;
     }
+    /// Stamp the document's save metadata (modified time, last modified by, revision; created
+    /// when it has none) the way Word does on every save. `file.save` calls it, and so does any
+    /// front end that writes the bytes itself (the web build's download, #262).
+    pub fn stamp_save(&mut self) {
+        let core = &mut self.doc.core;
+        core.modified = crate::cmd::now_iso();
+        if core.created.is_empty() {
+            core.created = core.modified.clone();
+        }
+        core.last_modified_by = self.author.clone();
+        core.revision = core.revision.saturating_add(1);
+    }
     /// Close an open typing group (caret moved, other command).
     pub fn close_typing(&mut self) {
         self.typing_open = false;
@@ -415,6 +489,9 @@ impl Session {
         self.doc.ensure_nonempty();
         self.sel = Selection::caret(self.doc.start_of(StoryRef::Body));
         self.pending = None;
+        self.also_selected.clear();
+        self.column = None;
+        self.column_mode = false;
         self.reset_history();
         self.touch();
         self.dirty = false;
@@ -447,6 +524,7 @@ impl Session {
             dirty,
             clipboard: _,
             clipboard_text: _,
+            clip_history: _,
             find: _,
             goal_x: _,
             page_hint: _,
@@ -481,6 +559,10 @@ impl Session {
             math: _,
             math_latex: _,
             math_normal_text: _,
+            also_selected: _,
+            // Column selection, like `sel`'s shape: valid only while `sel` matches it.
+            column: _,
+            column_mode: _,
         } = self;
         let head = if history.len() + SNAPSHOT_HEAD > MAX_UNDO { history.iter().take(SNAPSHOT_HEAD).cloned().collect() } else { Vec::new() };
         EditSnapshot {
@@ -509,6 +591,7 @@ impl Session {
         self.undo_evicted = evicted;
         self.doc = doc;
         self.sel = sel;
+        self.also_selected.clear();
         self.history.truncate(history_len);
         self.redo = redo;
         self.typing_open = typing_open;
@@ -581,7 +664,15 @@ impl Session {
         // The undo stacks are snapshotted whole, not as a length: commands run nested commands,
         // whose checkpoints, undos and redos (and evictions at the limit) must be put back too.
         let before_doc = if spec.mutates {
-            Some((self.doc.clone(), self.sel.clone(), self.history.clone(), self.redo.clone(), self.typing_open, self.undo_evicted))
+            Some((
+                self.doc.clone(),
+                self.sel.clone(),
+                self.history.clone(),
+                self.redo.clone(),
+                self.typing_open,
+                self.undo_evicted,
+                self.column.clone(),
+            ))
         } else {
             None
         };
@@ -599,8 +690,10 @@ impl Session {
         } else if spec.id.starts_with("caret.") {
             self.typing_open = false;
         }
+        let sel_before = self.sel.clone();
         let run = spec.run;
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(self, params)));
+        let mutates = spec.mutates;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::cmd::column::dispatch(self, id, mutates, run, params)));
         let result = match result {
             Ok(r) => r,
             Err(p) => {
@@ -616,9 +709,13 @@ impl Session {
                     self.doc.prune_text_boxes();
                 }
                 self.clamp_selection();
+                // Extra selected objects last until something else is edited or selected.
+                if !matches!(id, "select.addObject" | "arrange.ungroup") && (spec.mutates || self.sel != sel_before) {
+                    self.also_selected.clear();
+                }
             }
             Err(e) => {
-                if let Some((d, s, h, r, t, ev)) = before_doc {
+                if let Some((d, s, h, r, t, ev, c)) = before_doc {
                     self.doc = d;
                     self.sel = s;
                     self.history = h;
@@ -626,6 +723,7 @@ impl Session {
                     self.typing_open = t;
                     // The steps the command pushed out are back, so they no longer count as gone.
                     self.undo_evicted = ev;
+                    self.column = c;
                 }
                 self.status = e.to_string();
             }

@@ -370,10 +370,8 @@ impl Writer<'_> {
                 w.close("w:r");
                 self.rev_close(w, props);
             }
-            InlineObject::Image { media, w: iw, h: ih, alt, float, crop } => {
+            InlineObject::Image { media, w: iw, h: ih, alt, float, .. } => {
                 let Some(file) = self.media_files.get(media).cloned() else { return };
-                let rid = rels.add(rt::IMAGE, &format!("media/{file}"), false);
-                self.used_media.insert(media.clone());
                 self.rev_open(w, props);
                 w.open("w:r", &[]);
                 rpr(w, props);
@@ -384,30 +382,7 @@ impl Writer<'_> {
                 w.empty("wp:cNvGraphicFramePr", &[]);
                 w.open("a:graphic", &[]);
                 w.open("a:graphicData", &[("uri", "http://schemas.openxmlformats.org/drawingml/2006/picture")]);
-                w.open("pic:pic", &[]);
-                w.open("pic:nvPicPr", &[]);
-                w.empty("pic:cNvPr", &[("id", "0"), ("name", &file), ("descr", alt)]);
-                w.open("pic:cNvPicPr", &[]);
-                w.empty("a:picLocks", &[("noChangeAspect", "1"), ("noChangeArrowheads", "1")]);
-                w.close("pic:cNvPicPr");
-                w.close("pic:nvPicPr");
-                w.open("pic:blipFill", &[]);
-                w.empty("a:blip", &[("r:embed", &rid)]);
-                if crop.iter().any(|c| *c > 0.0) {
-                    let c = |v: f32| n((wordcraft_geom::finite(v).clamp(0.0, 1.0) * 100_000.0).round() as i64);
-                    w.empty("a:srcRect", &[("l", &c(crop[0])), ("t", &c(crop[1])), ("r", &c(crop[2])), ("b", &c(crop[3]))]);
-                }
-                w.open("a:stretch", &[]);
-                w.empty("a:fillRect", &[]);
-                w.close("a:stretch");
-                w.close("pic:blipFill");
-                w.open("pic:spPr", &[("bwMode", "auto")]);
-                xfrm(w, *iw, *ih);
-                w.open("a:prstGeom", &[("prst", "rect")]);
-                w.empty("a:avLst", &[]);
-                w.close("a:prstGeom");
-                w.close("pic:spPr");
-                w.close("pic:pic");
+                self.pic(w, o, &file, (0.0, 0.0), rels);
                 w.close("a:graphicData");
                 w.close("a:graphic");
                 w.close(if float.wrap == Wrap::Inline { "wp:inline" } else { "wp:anchor" });
@@ -415,7 +390,7 @@ impl Writer<'_> {
                 w.close("w:r");
                 self.rev_close(w, props);
             }
-            InlineObject::Shape { kind, w: sw, h: sh, fill, stroke, stroke_width, float, story, effects } => {
+            InlineObject::Shape { w: sw, h: sh, float, effects, .. } => {
                 self.rev_open(w, props);
                 w.open("w:r", &[]);
                 rpr(w, props);
@@ -432,67 +407,53 @@ impl Writer<'_> {
                 w.empty("wp:cNvGraphicFramePr", &[]);
                 w.open("a:graphic", &[]);
                 w.open("a:graphicData", &[("uri", "http://schemas.microsoft.com/office/word/2010/wordprocessingShape")]);
-                w.open("wps:wsp", &[]);
-                if *kind == ShapeKind::TextBox {
-                    w.empty("wps:cNvSpPr", &[("txBox", "1")]);
-                } else {
-                    w.empty("wps:cNvSpPr", &[]);
-                }
-                w.open("wps:spPr", &[]);
-                xfrm(w, *sw, *sh);
-                let prst = match kind {
-                    ShapeKind::Rectangle | ShapeKind::TextBox => "rect",
-                    ShapeKind::RoundedRectangle => "roundRect",
-                    ShapeKind::Ellipse => "ellipse",
-                    ShapeKind::Triangle => "triangle",
-                    ShapeKind::Diamond => "diamond",
-                    ShapeKind::Line => "line",
-                    ShapeKind::Arrow => "rightArrow",
-                    ShapeKind::Star => "star5",
-                    ShapeKind::Heart => "heart",
-                };
-                w.open("a:prstGeom", &[("prst", prst)]);
-                w.empty("a:avLst", &[]);
-                w.close("a:prstGeom");
-                match fill {
-                    Some(c) => {
-                        w.open("a:solidFill", &[]);
-                        w.empty("a:srgbClr", &[("val", &c.hex())]);
-                        w.close("a:solidFill");
+                self.wsp(w, o, None, (0.0, 0.0), rels, depth);
+                w.close("a:graphicData");
+                w.close("a:graphic");
+                w.close(if float.wrap == Wrap::Inline { "wp:inline" } else { "wp:anchor" });
+                w.close("w:drawing");
+                w.close("w:r");
+                self.rev_close(w, props);
+            }
+            InlineObject::Group { w: gw, h: gh, float, ch_w, ch_h, children } => {
+                self.rev_open(w, props);
+                w.open("w:r", &[]);
+                rpr(w, props);
+                w.open("w:drawing", &[]);
+                let docpr = self.next_docpr();
+                let name = format!("Group {docpr}");
+                self.drawing_open(w, float, *gw, *gh, &docpr, &name, "");
+                w.empty("wp:cNvGraphicFramePr", &[]);
+                w.open("a:graphic", &[]);
+                w.open("a:graphicData", &[("uri", "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup")]);
+                // ECMA-376 §20.1.7.6 (`a:xfrm` of a group): the members' space `a:chOff`/`a:chExt`
+                // maps onto the group's `a:off`/`a:ext`.
+                w.open("wpg:wgp", &[]);
+                w.empty("wpg:cNvGrpSpPr", &[]);
+                w.open("wpg:grpSpPr", &[]);
+                w.open("a:xfrm", &[]);
+                w.empty("a:off", &[("x", "0"), ("y", "0")]);
+                w.empty("a:ext", &[("cx", &emu(gw.max(0.0))), ("cy", &emu(gh.max(0.0)))]);
+                w.empty("a:chOff", &[("x", "0"), ("y", "0")]);
+                w.empty("a:chExt", &[("cx", &emu(ch_w.max(0.0))), ("cy", &emu(ch_h.max(0.0)))]);
+                w.close("a:xfrm");
+                w.close("wpg:grpSpPr");
+                for c in children.iter().take(wordcraft_doc::para::MAX_GROUP_CHILDREN) {
+                    let at = (c.x, c.y);
+                    match &c.obj {
+                        InlineObject::Image { media, .. } => {
+                            if let Some(file) = self.media_files.get(media).cloned() {
+                                self.pic(w, &c.obj, &file, at, rels);
+                            }
+                        }
+                        InlineObject::Shape { .. } => {
+                            let id = self.next_docpr();
+                            self.wsp(w, &c.obj, Some(&id), at, rels, depth);
+                        }
+                        _ => {}
                     }
-                    None => w.empty("a:noFill", &[]),
                 }
-                match stroke {
-                    Some(c) => {
-                        w.open("a:ln", &[("w", &emu(stroke_width.clamp(0.0, 100.0)))]);
-                        w.open("a:solidFill", &[]);
-                        w.empty("a:srgbClr", &[("val", &c.hex())]);
-                        w.close("a:solidFill");
-                        w.close("a:ln");
-                    }
-                    None => {
-                        w.open("a:ln", &[]);
-                        w.empty("a:noFill", &[]);
-                        w.close("a:ln");
-                    }
-                }
-                effect_list(w, effects);
-                w.close("wps:spPr");
-                // Its text, within the same bounds layout shows boxes inside boxes with.
-                if let Some(id) = *story
-                    && let Some(part) = self.doc.parts.get(&id).filter(|p| p.kind == wordcraft_doc::PartKind::TextBox)
-                    && self.boxes.enter(id)
-                {
-                    w.open("wps:txbx", &[]);
-                    w.open("w:txbxContent", &[]);
-                    let blocks = part.blocks.clone();
-                    self.blocks(w, &blocks, rels, false, depth + 1);
-                    w.close("w:txbxContent");
-                    w.close("wps:txbx");
-                    self.boxes.leave();
-                }
-                w.empty("wps:bodyPr", &[]);
-                w.close("wps:wsp");
+                w.close("wpg:wgp");
                 w.close("a:graphicData");
                 w.close("a:graphic");
                 w.close(if float.wrap == Wrap::Inline { "wp:inline" } else { "wp:anchor" });
@@ -580,6 +541,108 @@ impl Writer<'_> {
         let instr_text = format!(" {} ", instr.trim());
         run(w, &|w| w.leaf(if del { "w:delInstrText" } else { "w:instrText" }, &[("xml:space", "preserve")], &instr_text));
         run(w, &|w| w.empty("w:fldChar", &[("w:fldCharType", "separate")]));
+    }
+
+    /// A picture's `pic:pic` (the image in `media/{file}`), at `off` in its group (or 0, 0).
+    fn pic(&mut self, w: &mut W, o: &InlineObject, file: &str, off: (f32, f32), rels: &mut PartRels) {
+        let InlineObject::Image { media, w: iw, h: ih, alt, crop, .. } = o else { return };
+        let rid = rels.add(rt::IMAGE, &format!("media/{file}"), false);
+        self.used_media.insert(media.clone());
+        w.open("pic:pic", &[]);
+        w.open("pic:nvPicPr", &[]);
+        w.empty("pic:cNvPr", &[("id", "0"), ("name", file), ("descr", alt)]);
+        w.open("pic:cNvPicPr", &[]);
+        w.empty("a:picLocks", &[("noChangeAspect", "1"), ("noChangeArrowheads", "1")]);
+        w.close("pic:cNvPicPr");
+        w.close("pic:nvPicPr");
+        w.open("pic:blipFill", &[]);
+        w.empty("a:blip", &[("r:embed", &rid)]);
+        if crop.iter().any(|c| *c > 0.0) {
+            let c = |v: f32| n((wordcraft_geom::finite(v).clamp(0.0, 1.0) * 100_000.0).round() as i64);
+            w.empty("a:srcRect", &[("l", &c(crop[0])), ("t", &c(crop[1])), ("r", &c(crop[2])), ("b", &c(crop[3]))]);
+        }
+        w.open("a:stretch", &[]);
+        w.empty("a:fillRect", &[]);
+        w.close("a:stretch");
+        w.close("pic:blipFill");
+        w.open("pic:spPr", &[("bwMode", "auto")]);
+        xfrm(w, off, *iw, *ih);
+        w.open("a:prstGeom", &[("prst", "rect")]);
+        w.empty("a:avLst", &[]);
+        w.close("a:prstGeom");
+        w.close("pic:spPr");
+        w.close("pic:pic");
+    }
+
+    /// A shape's or text box's `wps:wsp`, at `off` in its group (or 0, 0). In a group it carries
+    /// its own `wps:cNvPr` with drawing id `id`.
+    fn wsp(&mut self, w: &mut W, o: &InlineObject, id: Option<&str>, off: (f32, f32), rels: &mut PartRels, depth: usize) {
+        let InlineObject::Shape { kind, w: sw, h: sh, fill, stroke, stroke_width, story, effects, .. } = o else { return };
+        w.open("wps:wsp", &[]);
+        if let Some(id) = id {
+            let name = format!("Shape {id}");
+            w.empty("wps:cNvPr", &[("id", id), ("name", &name)]);
+        }
+        if *kind == ShapeKind::TextBox {
+            w.empty("wps:cNvSpPr", &[("txBox", "1")]);
+        } else {
+            w.empty("wps:cNvSpPr", &[]);
+        }
+        w.open("wps:spPr", &[]);
+        xfrm(w, off, *sw, *sh);
+        let prst = match kind {
+            ShapeKind::Rectangle | ShapeKind::TextBox => "rect",
+            ShapeKind::RoundedRectangle => "roundRect",
+            ShapeKind::Ellipse => "ellipse",
+            ShapeKind::Triangle => "triangle",
+            ShapeKind::Diamond => "diamond",
+            ShapeKind::Line => "line",
+            ShapeKind::Arrow => "rightArrow",
+            ShapeKind::Star => "star5",
+            ShapeKind::Heart => "heart",
+        };
+        w.open("a:prstGeom", &[("prst", prst)]);
+        w.empty("a:avLst", &[]);
+        w.close("a:prstGeom");
+        match fill {
+            Some(c) => {
+                w.open("a:solidFill", &[]);
+                w.empty("a:srgbClr", &[("val", &c.hex())]);
+                w.close("a:solidFill");
+            }
+            None => w.empty("a:noFill", &[]),
+        }
+        match stroke {
+            Some(c) => {
+                w.open("a:ln", &[("w", &emu(stroke_width.clamp(0.0, 100.0)))]);
+                w.open("a:solidFill", &[]);
+                w.empty("a:srgbClr", &[("val", &c.hex())]);
+                w.close("a:solidFill");
+                w.close("a:ln");
+            }
+            None => {
+                w.open("a:ln", &[]);
+                w.empty("a:noFill", &[]);
+                w.close("a:ln");
+            }
+        }
+        effect_list(w, effects);
+        w.close("wps:spPr");
+        // Its text, within the same bounds layout shows boxes inside boxes with.
+        if let Some(id) = *story
+            && let Some(part) = self.doc.parts.get(&id).filter(|p| p.kind == wordcraft_doc::PartKind::TextBox)
+            && self.boxes.enter(id)
+        {
+            w.open("wps:txbx", &[]);
+            w.open("w:txbxContent", &[]);
+            let blocks = part.blocks.clone();
+            self.blocks(w, &blocks, rels, false, depth + 1);
+            w.close("w:txbxContent");
+            w.close("wps:txbx");
+            self.boxes.leave();
+        }
+        w.empty("wps:bodyPr", &[]);
+        w.close("wps:wsp");
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -826,9 +889,9 @@ fn effect_list(w: &mut W, effects: &ShapeEffects) {
     w.close("a:effectLst");
 }
 
-fn xfrm(w: &mut W, cw: f32, ch: f32) {
+fn xfrm(w: &mut W, (x, y): (f32, f32), cw: f32, ch: f32) {
     w.open("a:xfrm", &[]);
-    w.empty("a:off", &[("x", "0"), ("y", "0")]);
+    w.empty("a:off", &[("x", &emu(x)), ("y", &emu(y))]);
     w.empty("a:ext", &[("cx", &emu(cw.max(0.0))), ("cy", &emu(ch.max(0.0)))]);
     w.close("a:xfrm");
 }
