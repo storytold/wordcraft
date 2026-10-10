@@ -2285,3 +2285,49 @@ fn accessibility_reports_a_chart_without_alt_text() {
     let issues = v["issues"].as_array().expect("issues");
     assert!(issues.iter().any(|i| i["issue"] == "Chart or diagram has no alternative text"), "{issues:?}");
 }
+
+/// Encrypt with Password (#55): a document saved with a password opens only with it, keeps it
+/// for the next save, and saves unencrypted once the password is removed.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn password_protected_documents_round_trip() {
+    let dir = scratch_dir("password");
+    let path = dir.join("secret.docx");
+    let path_str = path.to_string_lossy().to_string();
+    let mut a = s();
+    run(&mut a, "document.setText", json!({"text": "Quarterly numbers"}));
+    let r = run(&mut a, "file.save", json!({"path": path_str, "password": "hunter2"}));
+    assert_eq!(r["encrypted"], true);
+    assert!(wordcraft_docx::is_encrypted(&std::fs::read(&path).unwrap()));
+    assert!(a.run("file.save", &json!({"path": dir.join("x.txt").to_string_lossy(), "password": "pw"})).is_err(), "only Word packages encrypt");
+
+    // No password, then a wrong one: clear errors, and the open document stays.
+    let mut t = s();
+    let e = t.run("file.open", &json!({"path": path_str})).unwrap_err().to_string();
+    assert!(crate::io::needs_password(&e), "{e}");
+    let e = t.run("file.open", &json!({"path": path_str, "password": "hunter3"})).unwrap_err().to_string();
+    assert!(crate::io::wrong_password(&e), "{e}");
+    assert!(t.path.is_none());
+
+    let r = run(&mut t, "file.open", json!({"path": path_str, "password": "hunter2"}));
+    assert_eq!(r["encrypted"], true);
+    assert_eq!(text(&t), "Quarterly numbers");
+    assert_eq!(run(&mut t, "file.info", json!({}))["encrypted"], true);
+    // Saving again keeps the password, as Word does.
+    run(&mut t, "text.insert", json!({"text": "Q3 "}));
+    run(&mut t, "file.save", json!({}));
+    let (doc, encrypted) = crate::io::open_path_with(&path, Some("hunter2")).unwrap();
+    assert!(encrypted && doc.plain_text(StoryRef::Body).contains("Q3"));
+
+    // Removing the password saves the document unencrypted.
+    assert!(t.run("file.encrypt", &json!({})).is_err());
+    assert!(t.run("file.encrypt", &json!({"password": "x".repeat(300)})).is_err());
+    t.dirty = false;
+    assert_eq!(run(&mut t, "file.encrypt", json!({"password": null}))["encrypted"], false);
+    assert!(t.dirty, "removing the password is a change to save");
+    run(&mut t, "file.save", json!({}));
+    assert!(crate::io::open_path(&path).unwrap().plain_text(StoryRef::Body).contains("Quarterly"));
+    // A password never shows in debug output.
+    assert_eq!(format!("{:?}", crate::io::Password::new("hunter2")), "Password(***)");
+    let _ = std::fs::remove_dir_all(&dir);
+}

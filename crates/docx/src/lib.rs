@@ -7,6 +7,7 @@
 //! error or a best-effort document, never a panic.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod crypt;
 mod custom;
 mod package;
 mod read;
@@ -14,8 +15,25 @@ mod units;
 mod write;
 mod xml;
 
+pub use crypt::{DEFAULT_SPIN_COUNT, MAX_PASSWORD_CHARS, check_password, decrypt, encrypt, encrypt_with_spin_count, is_encrypted};
 pub use read::read;
 pub use write::{write, write_as};
+
+/// What [`DocxError::PasswordRequired`] says.
+pub const PASSWORD_REQUIRED: &str = "this document is protected with a password";
+/// What [`DocxError::WrongPassword`] says.
+pub const WRONG_PASSWORD: &str = "the password is incorrect";
+
+/// Read a package that may be password-protected ([`is_encrypted`]): it is decrypted with
+/// `password` first. An encrypted package without a password gives
+/// [`DocxError::PasswordRequired`]; a wrong one, [`DocxError::WrongPassword`].
+pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<wordcraft_doc::Document, DocxError> {
+    if is_encrypted(bytes) {
+        let package = zeroize::Zeroizing::new(decrypt(bytes, password)?);
+        return read::read_package(&package);
+    }
+    read(bytes)
+}
 
 /// Which kind of WordprocessingML package to write. The main part's content type differs per
 /// kind, and Word refuses a file whose content type doesn't match its extension.
@@ -78,4 +96,14 @@ pub enum DocxError {
     /// The package is readable but isn't a WordprocessingML document.
     #[error("not a Word document: {0}")]
     NotWord(String),
+    /// The package is encrypted and no password was given.
+    #[error("{}", PASSWORD_REQUIRED)]
+    PasswordRequired,
+    /// The password doesn't open the package.
+    #[error("{}", WRONG_PASSWORD)]
+    WrongPassword,
+    /// The package is encrypted in a way WordCraft can't read, or its encryption data is damaged
+    /// (or encrypting failed).
+    #[error("encrypted document: {0}")]
+    Encryption(String),
 }

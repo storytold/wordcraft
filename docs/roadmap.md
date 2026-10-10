@@ -45,7 +45,7 @@ partial rows are fidelity gaps (beta work), not broken workflows. WordCraft stay
 | # | Milestone | State | Remaining |
 |---|---|---|---|
 | M0 | Skeleton and vertical slice (model, layout, render, engine, Word-style UI, CLI, MCP, web) | done | — |
-| M1 | DOCX I/O | done (first version); real-world corpus not started; charts/SmartArt/OLE dropped | 45–75 h |
+| M1 | DOCX I/O | done (first version); password-protected files open and save (agile encryption); real-world corpus not started; charts/SmartArt/OLE dropped | 45–75 h |
 | M2 | Home tab | done except Paste Special, Clipboard pane, Style Inspector, Manage Styles, Asian typography (PRs open for four) | 5–10 h |
 | M3 | Insert tab | mostly done; equations done (#191); charts, SmartArt, icons, 3D, screenshot, online media missing | 50–80 h |
 | M4 | Layout and Design tabs | done except column balancing, group | 6–10 h |
@@ -56,7 +56,7 @@ partial rows are fidelity gaps (beta work), not broken workflows. WordCraft stay
 | M9 | Mailings | done (first version); Excel/Outlook data sources and email merge missing | 6–10 h |
 | M10 | File/Backstage | mostly done; native printing, Options depth missing | 12–20 h |
 | M11 | Draw and objects | text wrap, text boxes, canvas handles done; ink, rotation, grouping, contour wrap missing | 35–55 h |
-| M12 | Formats breadth (PDF, ODT, RTF, HTML, MD, TXT, LaTeX, `.doc` import) | done (first versions); `.doc` write, encryption, minor formats missing | 60–100 h |
+| M12 | Formats breadth (PDF, ODT, RTF, HTML, MD, TXT, LaTeX, `.doc` import) | done (first versions); `.doc` write, `.doc` encryption, minor formats missing | 60–100 h |
 | M13 | Performance budgets | on track (1.4 ms relayout); large real-world documents unmeasured | 10–20 h |
 | M14 | 1.0 polish, packaging, signing | releases v0.1.0–v0.4.0 published (signed macOS, Windows MSI x64/x86/arm64, Linux, FreeBSD, web) | — |
 | M15 | Localization (12 key languages, RTL interface, proofing languages) | 9 UI languages, English proofing | 80–130 h |

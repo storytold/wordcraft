@@ -245,6 +245,10 @@ pub struct Session {
     pub column: Option<ColumnBlock>,
     /// Column selection mode (Ctrl+Shift+F8): caret movement extends the block.
     pub column_mode: bool,
+    /// The password Word documents are saved with (File › Info › Protect Document › Encrypt with
+    /// Password, `file.encrypt`); `None` saves them unencrypted. Kept from a password-protected
+    /// file that was opened, cleared when the document is replaced.
+    pub password: Option<crate::io::Password>,
 }
 
 /// The equation being edited.
@@ -320,6 +324,7 @@ impl Session {
             read_aloud: Default::default(),
             column: None,
             column_mode: false,
+            password: None,
         }
     }
 
@@ -480,6 +485,7 @@ impl Session {
         self.document_id = self.document_id.wrapping_add(1);
         self.doc = doc;
         self.doc.ensure_nonempty();
+        self.password = None;
         self.sel = Selection::caret(self.doc.start_of(StoryRef::Body));
         self.pending = None;
         self.column = None;
@@ -553,6 +559,8 @@ impl Session {
             // Column selection, like `sel`'s shape: valid only while `sel` matches it.
             column: _,
             column_mode: _,
+            // The save password, like the file path: not an edit to the document.
+            password: _,
         } = self;
         let head = if history.len() + SNAPSHOT_HEAD > MAX_UNDO { history.iter().take(SNAPSHOT_HEAD).cloned().collect() } else { Vec::new() };
         EditSnapshot {
