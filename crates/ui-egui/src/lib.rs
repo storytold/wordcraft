@@ -122,6 +122,8 @@ pub struct UiState {
     /// View › Switch Modes: show pages dark (white text on black), kept between runs. Only the
     /// pages: the interface follows [`UiState::theme`] (#312).
     pub dark_page: bool,
+    /// Quick Access Toolbar buttons (command ids). When empty, defaults to save, undo, redo (#376).
+    pub qat_items: Vec<String>,
 }
 
 impl Default for UiState {
@@ -146,8 +148,13 @@ impl Default for UiState {
             keytips: crate::keytips::Phase::Off,
             alt_chord_used: false,
             dark_page: false,
+            qat_items: default_qat(),
         }
     }
+}
+
+pub fn default_qat() -> Vec<String> {
+    vec!["file.save".into(), "edit.undo".into(), "edit.redo".into()]
 }
 
 /// The application.
@@ -650,6 +657,20 @@ impl WordApp {
             "ui.discord" => {
                 self.canvas.open_url = Some("https://discord.gg/artcraft".into());
                 json!({})
+            }
+            "ui.qat" => {
+                if let Some(arr) = p.get("items").and_then(Value::as_array) {
+                    self.ui.qat_items = arr.iter().filter_map(Value::as_str).map(str::to_string).collect();
+                } else if let Some(toggle) = p.get("toggle").and_then(Value::as_str) {
+                    if self.ui.qat_items.iter().any(|x| x == toggle) {
+                        self.ui.qat_items.retain(|x| x != toggle);
+                    } else {
+                        self.ui.qat_items.push(toggle.to_string());
+                    }
+                } else if p.get("reset").and_then(Value::as_bool).unwrap_or(false) {
+                    self.ui.qat_items = default_qat();
+                }
+                json!({"items": self.ui.qat_items})
             }
             _ => return None,
         }))
@@ -2391,6 +2412,31 @@ mod tests {
 
     fn dialog_name(a: &WordApp) -> Option<&'static str> {
         a.dialog.as_ref().map(dialogs::Dialog::name)
+    }
+
+    #[test]
+    fn qat_customize_and_persistence() {
+        let mut a = app();
+        assert_eq!(a.ui.qat_items, default_qat());
+        // Toggle an item (add file.new).
+        a.run("ui.qat", json!({"toggle": "file.new"})).unwrap();
+        assert!(a.ui.qat_items.contains(&"file.new".to_string()));
+        // Toggle again (remove file.new).
+        a.run("ui.qat", json!({"toggle": "file.new"})).unwrap();
+        assert!(!a.ui.qat_items.contains(&"file.new".to_string()));
+
+        // Explicit items setting.
+        a.run("ui.qat", json!({"items": ["file.save", "file.print"]})).unwrap();
+        assert_eq!(a.ui.qat_items, vec!["file.save".to_string(), "file.print".to_string()]);
+
+        // Saves and restores with preferences.
+        let saved = serde_json::to_string(&a.ui).unwrap();
+        let restored: UiState = serde_json::from_str(&saved).unwrap();
+        assert_eq!(restored.qat_items, vec!["file.save".to_string(), "file.print".to_string()]);
+
+        // Reset restores default.
+        a.run("ui.qat", json!({"reset": true})).unwrap();
+        assert_eq!(a.ui.qat_items, default_qat());
     }
 
     /// #240: Select Recipients needs data, so clicking it opens the recipient list instead of

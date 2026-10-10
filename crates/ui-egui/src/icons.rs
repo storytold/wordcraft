@@ -995,6 +995,19 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.frect(6.0, 3.0, 13.0, 7.5, a);
             pen.rect(6.0, 11.0, 14.0, 17.0, c);
         }
+        "new" => {
+            pen.page(4.0, 2.0, 16.0, 18.0);
+        }
+        "open" => {
+            pen.closed(&[(3.0, 6.0), (7.0, 6.0), (8.5, 8.0), (16.5, 8.0), (16.5, 17.0), (3.0, 17.0)], c);
+            pen.closed(&[(2.5, 10.0), (15.0, 10.0), (17.5, 17.0), (5.0, 17.0)], a);
+        }
+        "print" => {
+            pen.rect(5.0, 2.5, 15.0, 7.0, c);
+            pen.rect(3.0, 7.0, 17.0, 14.0, c);
+            pen.rect(5.5, 11.0, 14.5, 17.5, a);
+            pen.circle(14.5, 9.0, 0.8, a);
+        }
         "undo" => {
             pen.line(&[(5.0, 8.0), (13.0, 8.0)]);
             pen.p.add(Shape::line(
