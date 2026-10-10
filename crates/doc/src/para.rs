@@ -574,7 +574,7 @@ impl Paragraph {
         for (i, c) in self.text.char_indices() {
             // By start: once the ranges that end by `i` are skipped, `i` is dropped if the next has begun.
             while next.next_if(|r| r.end <= i).is_some() {}
-            let keep = !next.peek().is_some_and(|r| r.start <= i);
+            let keep = next.peek().is_none_or(|r| r.start > i);
             if c == OBJ {
                 if keep && let Some(o) = self.objects.get(k) {
                     out.push_str(o.plain_text());

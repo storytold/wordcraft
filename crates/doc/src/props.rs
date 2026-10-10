@@ -295,10 +295,10 @@ pub struct CharProps {
     /// Complex-script font (Arabic, Persian, Hebrew…; OOXML `w:rFonts/@w:cs`). `None` = `font`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font_cs: Option<String>,
-    /// Complex-script size, points (`w:szCs`). `None` = the same as `size` (see [`CharProps::overlay`]).
+    /// Complex-script size, points (`w:szCs`). `None` leaves the inherited value unchanged.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size_cs: Option<f32>,
-    /// Complex-script bold / italic (`w:bCs`, `w:iCs`). `None` = the same as `bold` / `italic`.
+    /// Complex-script bold / italic (`w:bCs`, `w:iCs`). `None` leaves the inherited value unchanged.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bold_cs: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -326,24 +326,12 @@ macro_rules! overlay_fields {
 impl CharProps {
     /// Apply every `Some` field of `patch` on top of `self`.
     ///
-    /// Size, bold and italic come in pairs with their complex-script values (Word's own buttons
-    /// set both): a patch that sets the plain value and leaves the complex-script one `None` sets
-    /// both, so a run's size or bold isn't overridden for its Persian/Arabic characters by an
-    /// inherited `w:szCs` / `w:bCs`. The complex-script font inherits on its own (Word often
-    /// sets only the Latin font and lets complex-script text keep the style's).
+    /// Plain and complex-script properties inherit independently. Commands that intend to
+    /// format both scripts must set both values explicitly.
     pub fn overlay(&mut self, patch: &CharProps) {
         overlay_fields!(self, patch; style, font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
             shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl,
             cs, font_cs, size_cs, bold_cs, italic_cs, lang_bidi, link, ins, del);
-        if patch.size.is_some() && patch.size_cs.is_none() {
-            self.size_cs = None;
-        }
-        if patch.bold.is_some() && patch.bold_cs.is_none() {
-            self.bold_cs = None;
-        }
-        if patch.italic.is_some() && patch.italic_cs.is_none() {
-            self.italic_cs = None;
-        }
     }
     pub fn overlaid(mut self, patch: &CharProps) -> CharProps {
         self.overlay(patch);

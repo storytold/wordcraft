@@ -446,7 +446,7 @@ pub fn autocorrect_word(s: &mut Session, on_enter: bool) -> Result<(), CmdError>
     let Some(text) = s.doc.para_at(&f).map(|p| p.text.clone()) else { return Ok(()) };
     let Some(before) = text.get(..f.off) else { return Ok(()) };
     let Some(last) = before.chars().next_back() else { return Ok(()) };
-    if !on_enter && !(last == ' ' || ",.;:!?".contains(last)) {
+    if !(on_enter || last == ' ' || ",.;:!?".contains(last)) {
         return Ok(());
     }
     let trigger = if on_enter { 0 } else { last.len_utf8() };

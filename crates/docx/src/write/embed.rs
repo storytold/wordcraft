@@ -353,9 +353,9 @@ fn vml_style_with(style: &str, w: f32, h: f32, float: &Float) -> String {
         .split(';')
         .filter(|d| {
             let key = d.split_once(':').map_or("", |(k, _)| k).trim().to_ascii_lowercase();
-            !d.trim().is_empty()
-                && !matches!(key.as_str(), "width" | "height")
-                && !(absolute && matches!(key.as_str(), "left" | "top" | "margin-left" | "margin-top"))
+            !(d.trim().is_empty()
+                || matches!(key.as_str(), "width" | "height")
+                || (absolute && matches!(key.as_str(), "left" | "top" | "margin-left" | "margin-top")))
         })
         .map(|d| d.trim().to_string())
         .collect();

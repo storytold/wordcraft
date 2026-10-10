@@ -219,11 +219,9 @@ fn node(k: &El, depth: usize, out: &mut Arg) {
             });
         }
         // Tracked insertions show; deletions don't.
-        "w:ins" | "w:moveTo" | "w:smartTag" | "w:customXml" | "m:oMath" => {
-            if depth <= MAX_DEPTH {
-                for c in k.els() {
-                    node(c, d, out);
-                }
+        "w:ins" | "w:moveTo" | "w:smartTag" | "w:customXml" | "m:oMath" if depth <= MAX_DEPTH => {
+            for c in k.els() {
+                node(c, d, out);
             }
         }
         "w:sdt" => {

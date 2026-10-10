@@ -1201,10 +1201,8 @@ impl Body<'_> {
         }
         match local(q) {
             "p" | "h" if !self.in_desc => self.end_para(),
-            "span" | "a" => {
-                if self.fmt.len() > usize::from(self.para.is_some()) {
-                    self.fmt.pop();
-                }
+            "span" | "a" if self.fmt.len() > usize::from(self.para.is_some()) => {
+                self.fmt.pop();
             }
             "list" => {
                 self.end_para();

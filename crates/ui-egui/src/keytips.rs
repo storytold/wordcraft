@@ -627,7 +627,7 @@ pub fn logic(app: &mut WordApp, ctx: &egui::Context) {
         if let egui::Event::Key { key, pressed: true, modifiers, .. } = e
             && app.ui.keytips != Phase::Off
             && !is_alt(*key)
-            && !(*key == egui::Key::F10 && !modifiers.any())
+            && (*key != egui::Key::F10 || modifiers.any())
         {
             handle_key(app, *key);
         }
