@@ -801,10 +801,9 @@ fn read_aloud(s: &mut Session, _: &Value) -> CmdResult {
     }
     #[cfg(target_os = "windows")]
     {
-        let script =
-            format!("Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak([Console]::In.ReadToEnd())");
+        let script = "Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak([Console]::In.ReadToEnd())";
         if let Ok(mut c) =
-            std::process::Command::new("powershell").args(["-NoProfile", "-Command", &script]).stdin(std::process::Stdio::piped()).spawn()
+            std::process::Command::new("powershell").args(["-NoProfile", "-Command", script]).stdin(std::process::Stdio::piped()).spawn()
             && let Some(mut i) = c.stdin.take()
         {
             use std::io::Write;

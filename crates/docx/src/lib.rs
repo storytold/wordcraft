@@ -35,3 +35,30 @@ pub enum DocxError {
     #[error("not a Word document: {0}")]
     NotWord(String),
 }
+
+#[cfg(test)]
+mod roundtrip_tests {
+    use super::*;
+    use wordcraft_doc::{Document, Source};
+
+    #[test]
+    fn bibliography_round_trip() {
+        let mut doc = Document::new();
+        doc.sources.push(Source {
+            tag: "Rivera2021".into(),
+            kind: "book".into(),
+            author: "Rivera, Alex; Chen, Mei".into(),
+            title: "Shared Spaces".into(),
+            year: "2021".into(),
+            publisher: "Harbor Books".into(),
+            city: "Portland".into(),
+            ..Default::default()
+        });
+
+        let bytes = write(&doc).expect("docx write");
+        let doc2 = read(&bytes).expect("docx read");
+        assert_eq!(doc2.sources.len(), 1, "round-tripped sources: {:?}", doc2.sources);
+        assert_eq!(doc2.sources[0].author, "Rivera, Alex; Chen, Mei");
+        assert_eq!(doc2.sources[0].title, "Shared Spaces");
+    }
+}
