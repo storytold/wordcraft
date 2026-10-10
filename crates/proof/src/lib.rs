@@ -2,15 +2,19 @@
 //!
 //! - **Spelling** against the public-domain Moby word list (~160k words, the same list that
 //!   drives hyphenation), with inflections (`-s`, `-es`, `-ed`, `-ing`, `-ly`, `'s`…), a user
-//!   dictionary and ignore lists; suggestions by edit distance.
+//!   dictionary and ignore lists; suggestions by edit distance. German text is checked against
+//!   LanguageTool's German word forms (~550k, CC BY-SA 4.0) with German capitalisation and
+//!   compounds ([`german`]); text in other languages is left alone.
 //! - **Grammar** checks that are cheap and reliable: repeated words, `a`/`an`, capital letter
 //!   after a sentence end, spaces before punctuation, doubled spaces.
 //! - **Hyphenation** ([`hyphen`]): dictionary, Liang patterns, heuristic.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod dict;
+mod german;
 pub mod hyphen;
 pub mod patterns;
+pub mod wordlist;
 
 use std::collections::HashSet;
 use std::sync::{OnceLock, RwLock};
@@ -39,6 +43,11 @@ fn user_words() -> &'static RwLock<HashSet<String>> {
 /// Add a word to the user dictionary ("Add to Dictionary").
 pub fn add_word(w: &str) {
     user_words().write().unwrap_or_else(|e| e.into_inner()).insert(w.to_lowercase());
+}
+
+/// Is `w` (any case) in the user dictionary?
+fn user_knows(w: &str) -> bool {
+    user_words().read().unwrap_or_else(|e| e.into_inner()).contains(&w.to_lowercase())
 }
 
 /// Words in the user dictionary.
@@ -185,19 +194,45 @@ fn known_core(w: &str) -> bool {
     false
 }
 
-/// Does proofing check text in this language (a BCP 47 tag such as `en-US` or `de-DE`)? The word
-/// list and the grammar rules are English, so text marked as another language is left alone
-/// rather than flagged word by word. Text without a language counts as English.
-pub fn checks_language(lang: Option<&str>) -> bool {
-    match lang {
-        None | Some("") => true,
-        Some(tag) => tag.split(['-', '_']).next().is_some_and(|primary| primary.eq_ignore_ascii_case("en")),
+/// A language proofing has a word list for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Language {
+    English,
+    German,
+    /// German as written in Switzerland: `ss` where Germany writes `ß`.
+    SwissGerman,
+}
+
+/// The proofing language of text marked with a BCP 47 tag (`en-US`, `de-DE`, `de-CH`), or `None`
+/// when proofing has no word list for it: such text is left alone rather than flagged word by
+/// word. Text without a language counts as English.
+pub fn proofing_language(lang: Option<&str>) -> Option<Language> {
+    let tag = match lang {
+        None | Some("") => return Some(Language::English),
+        Some(tag) => tag,
+    };
+    let mut parts = tag.split(['-', '_', '.']);
+    match parts.next().map(str::to_ascii_lowercase).as_deref() {
+        Some("en") => Some(Language::English),
+        Some("de") => Some(if parts.any(|p| p.eq_ignore_ascii_case("ch")) { Language::SwissGerman } else { Language::German }),
+        Some("gsw") => Some(Language::SwissGerman),
+        _ => None,
     }
 }
 
-/// Is `word` spelled correctly? Numbers, single letters, ALL-CAPS acronyms, URLs and words with
-/// digits are accepted.
+/// Does proofing check text in this language (a BCP 47 tag such as `en-US` or `de-DE`)?
+pub fn checks_language(lang: Option<&str>) -> bool {
+    proofing_language(lang).is_some()
+}
+
+/// Is `word` spelled correctly in English? Numbers, single letters, ALL-CAPS acronyms, URLs and
+/// words with digits are accepted.
 pub fn is_correct(word: &str) -> bool {
+    is_correct_in(word, Language::English)
+}
+
+/// Is `word` spelled correctly in `lang`?
+pub fn is_correct_in(word: &str, lang: Language) -> bool {
     let w = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'');
     let w = w.trim_matches('\'');
     if w.chars().count() <= 1 || w.chars().any(|c| c.is_ascii_digit()) || !w.chars().any(char::is_alphabetic) {
@@ -208,6 +243,11 @@ pub fn is_correct(word: &str) -> bool {
     }
     if !w.is_ascii() && !w.chars().any(|c| c.is_ascii_alphabetic()) {
         return true; // other scripts: no dictionary
+    }
+    match lang {
+        Language::English => {}
+        Language::German => return german::is_correct(w, false),
+        Language::SwissGerman => return german::is_correct(w, true),
     }
     let lower = w.to_lowercase().replace('’', "'");
     if known_core(&lower) {
@@ -220,8 +260,16 @@ pub fn is_correct(word: &str) -> bool {
     false
 }
 
-/// Spelling suggestions for a misspelled word (best first, at most `max`).
+/// Spelling suggestions for a misspelled English word (best first, at most `max`).
 pub fn suggest(word: &str, max: usize) -> Vec<String> {
+    suggest_in(word, max, Language::English)
+}
+
+/// Spelling suggestions for a word misspelled in `lang` (best first, at most `max`).
+pub fn suggest_in(word: &str, max: usize, lang: Language) -> Vec<String> {
+    if lang != Language::English {
+        return german::suggest(word, max);
+    }
     let lower = word.to_lowercase();
     let n = lower.chars().count();
     if n == 0 || n > 40 {
@@ -324,8 +372,53 @@ pub fn words(text: &str) -> Vec<(usize, usize)> {
         .collect()
 }
 
-/// Spelling issues in a paragraph of text (no suggestions; ask [`suggest`] on demand).
+/// Spelling issues in a paragraph of English text (no suggestions; ask [`suggest`] on demand).
 pub fn check_spelling(text: &str) -> Vec<Issue> {
+    check_spelling_in(text, Language::English)
+}
+
+/// A host or file name such as `portfolio.example.com` or `brief.docx` (a dot inside the token,
+/// a short ending of letters after the last one): not words to check.
+fn domain_like(token: &str) -> bool {
+    let t = token.trim_end_matches(|c: char| !c.is_alphanumeric());
+    t.rsplit_once('.').is_some_and(|(head, ext)| {
+        !head.is_empty() && !head.ends_with('.') && (2..=6).contains(&ext.chars().count()) && ext.chars().all(|c| c.is_ascii_alphabetic())
+    }) && !t.contains(char::is_whitespace)
+}
+
+/// Spelling and grammar issues in a paragraph whose runs may be in different languages.
+/// `runs` gives each byte range's proofing language (`None`: not checked, e.g. a link or text
+/// marked "Do not check spelling"). An issue is kept when every run it touches is in the
+/// language it was found in. Grammar rules are English and apply to English text only.
+pub fn check_text(text: &str, runs: &[(std::ops::Range<usize>, Option<Language>)]) -> Vec<Issue> {
+    let only = |i: &Issue, lang: Language| {
+        let mut touched = false;
+        for (r, l) in runs {
+            if r.start < i.end && i.start < r.end {
+                if *l != Some(lang) {
+                    return false;
+                }
+                touched = true;
+            }
+        }
+        touched
+    };
+    let mut langs: Vec<Language> = runs.iter().filter_map(|(_, l)| *l).collect();
+    langs.sort();
+    langs.dedup();
+    let mut v = Vec::new();
+    for lang in langs {
+        v.extend(check_spelling_in(text, lang).into_iter().filter(|i| only(i, lang)));
+        if lang == Language::English {
+            v.extend(check_grammar(text).into_iter().filter(|i| only(i, lang)));
+        }
+    }
+    v.sort_by_key(|i| i.start);
+    v
+}
+
+/// Spelling issues in a paragraph of text in `lang`.
+pub fn check_spelling_in(text: &str, lang: Language) -> Vec<Issue> {
     let mut v = Vec::new();
     for (a, b) in words(text) {
         let Some(w) = text.get(a..b) else { continue };
@@ -333,10 +426,10 @@ pub fn check_spelling(text: &str) -> Vec<Issue> {
         let ts = text.get(..a).and_then(|t| t.rfind(char::is_whitespace)).map(|i| i + 1).unwrap_or(0);
         let te = text.get(b..).and_then(|t| t.find(char::is_whitespace)).map(|i| b + i).unwrap_or(text.len());
         let token = text.get(ts..te).unwrap_or("");
-        if token.contains("://") || token.contains('@') || token.starts_with("www.") {
+        if token.contains("://") || token.contains('@') || token.starts_with("www.") || domain_like(token) {
             continue;
         }
-        if !is_correct(w) {
+        if !is_correct_in(w, lang) {
             v.push(Issue { start: a, end: b, kind: IssueKind::Spelling, message: "Possible spelling mistake".into(), suggestions: Vec::new() });
         }
     }
@@ -437,13 +530,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_english_text_is_checked() {
+    fn languages_with_a_word_list_are_checked() {
         for lang in [None, Some(""), Some("en"), Some("en-US"), Some("EN-gb"), Some("en_AU")] {
-            assert!(checks_language(lang), "{lang:?}");
+            assert_eq!(proofing_language(lang), Some(Language::English), "{lang:?}");
         }
-        for lang in [Some("de-DE"), Some("de"), Some("fr-FR"), Some("eng"), Some("e"), Some("-")] {
+        for lang in [Some("de-DE"), Some("de"), Some("de-AT"), Some("de_DE.UTF-8")] {
+            assert_eq!(proofing_language(lang), Some(Language::German), "{lang:?}");
+        }
+        assert_eq!(proofing_language(Some("de-CH")), Some(Language::SwissGerman));
+        for lang in [Some("fr-FR"), Some("eng"), Some("e"), Some("-"), Some("ja")] {
             assert!(!checks_language(lang), "{lang:?}");
         }
+    }
+
+    #[test]
+    fn mixed_language_paragraphs() {
+        let text = "Thsi is wrnog. Das ist ein Fehlr im Haushaltsbudget.";
+        let split = text.find("Das").unwrap();
+        let runs = vec![(0..split, Some(Language::English)), (split..text.len(), Some(Language::German))];
+        let found: Vec<&str> = check_text(text, &runs).iter().filter(|i| i.kind == IssueKind::Spelling).map(|i| &text[i.start..i.end]).collect();
+        assert_eq!(found, ["Thsi", "wrnog", "Fehlr"]);
+        // German grammar isn't checked by the English rules; text in other languages is left alone.
+        let german_only = vec![(0..text.len(), Some(Language::German))];
+        assert!(check_text("ist ist gut", &german_only).is_empty());
+        assert!(check_text(text, &[(0..text.len(), None)]).is_empty());
+        let s = suggest_in("Fehlr", 3, Language::German);
+        assert!(s.iter().any(|w| w == "Fehler"), "{s:?}");
+        assert!(is_correct_in("Straße", Language::German) && is_correct_in("Fussball", Language::SwissGerman));
+        // Host and file names aren't words.
+        assert!(check_spelling_in("Mehr auf portfolio.example.com und in brief.docx.", Language::German).is_empty());
+        assert!(!check_spelling_in("Ein Fehlr. Noch einer.", Language::German).is_empty());
     }
 
     #[test]

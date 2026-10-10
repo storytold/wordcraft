@@ -649,11 +649,22 @@ fn dates_follow_the_language() {
 }
 
 #[test]
-fn german_text_is_not_checked_against_the_english_word_list() {
+fn german_text_is_checked_against_the_german_word_list() {
     let mut s = s();
-    run(&mut s, "file.new", json!({"template": "letter", "language": "de"}));
+    // Our German templates are spelled correctly (and not checked against English).
+    for t in ["letter", "resume", "report", "sample"] {
+        run(&mut s, "file.new", json!({"template": t, "language": "de"}));
+        let issues = run(&mut s, "review.issues", json!({}));
+        assert_eq!(issues.as_array().map(Vec::len), Some(0), "{t}: {issues}");
+    }
+    // A German typo is flagged with German suggestions; German words and compounds are not.
+    run(&mut s, "file.new", json!({"language": "de"}));
+    run(&mut s, "text.insert", json!({"text": "Das Haushaltsbudget für die Kinderzimmerlampe hat einen Fehlr. "}));
     let issues = run(&mut s, "review.issues", json!({}));
-    assert_eq!(issues.as_array().map(Vec::len), Some(0), "{issues}");
+    let found = issues.as_array().cloned().unwrap_or_default();
+    assert_eq!(found.len(), 1, "{issues}");
+    assert_eq!(found[0]["text"], "Fehlr");
+    assert_eq!(found[0]["suggestions"][0], "Fehler", "{issues}");
     run(&mut s, "file.new", json!({"template": "letter"}));
     run(&mut s, "text.insert", json!({"text": "Thsi is wrnog. "}));
     let issues = run(&mut s, "review.issues", json!({}));

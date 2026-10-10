@@ -311,7 +311,8 @@ Bundled fonts, icons, images and other assets keep their own open licenses; each
 with its author, source and license in [ATTRIBUTION.md](ATTRIBUTION.md).
 
 The spelling dictionary and hyphenation come from Grady Ward's public-domain Moby Hyphenator II
-word list. The sample documents and templates are original text written for WordCraft.
+word list. German spelling uses word forms from LanguageTool's German dictionary and from
+german-nouns (German Wiktionary), both CC BY-SA 4.0 (see [ATTRIBUTION.md](ATTRIBUTION.md)). The sample documents and templates are original text written for WordCraft.
 
 The ArtCraft name, wordmark and logos in [`docs/brand/`](docs/brand/) are trademarks of the
 ArtCraft Team and are not covered by this license. They may be used only unmodified, and only as
