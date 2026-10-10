@@ -1,17 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  WordCraft MSI (WiX Toolset v5: `dotnet tool install -g wix`). Built by package.ps1:
+  WordCraft MSI (WiX Toolset v5: `dotnet tool install -g wix`, plus its UI and Util extensions:
+  `wix extension add -g WixToolset.UI.wixext/5.0.2` and the same for WixToolset.Util.wixext).
+  Built by package.ps1:
 
-    wix build wordcraft.wxs -arch x64 -d Version=1.2.3 -d BinDir=... -d IconPath=... -o out.msi
+    wix build wordcraft.wxs -arch x64 -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext
+      -d Version=1.2.3 -d BinDir=... -d IconPath=... -d LicenseRtf=... -o out.msi
 
-  Per-machine install into Program Files with a Start Menu shortcut.
+  Per-machine install into Program Files with a Start Menu shortcut. The installer shows the
+  standard WiX dialogs: welcome + license, progress, and a finish page.
 
   UpgradeCode and the component GUIDs below belong to WordCraft alone. Never copy them from (or
   into) a sibling Craft app: Windows Installer treats every package sharing an UpgradeCode as one
   product, so a shared code makes one app's installer refuse to install ("a newer version is
   already installed") or silently uninstall the other. packaging-lint.yml checks this.
 -->
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
   <Package
       Name="WordCraft"
       Manufacturer="Learning Machines LLC"
@@ -32,6 +36,23 @@
     <Property Id="ARPURLINFOABOUT" Value="https://getartcraft.com/apps/wordcraft" />
     <Property Id="ARPURLUPDATEINFO" Value="https://getartcraft.com/apps/wordcraft" />
     <Property Id="ARPHELPLINK" Value="https://discord.gg/artcraft" />
+
+    <!-- Installer UI (#198): WixUI_Minimal is welcome + license, progress, then a finish page so
+         people can see the install worked. Its dialogs and bitmaps are WiX's own
+         (WixToolset.UI.wixext); package.ps1 builds the license RTF from LICENSE-MIT and
+         LICENSE-APACHE. The finish page offers to launch WordCraft (ticked by default) through
+         WixShellExec (WixToolset.Util.wixext); silent installs (/qn) never show it. -->
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch WordCraft" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+    <Property Id="WixShellExecTarget" Value="[#WordcraftExe]" />
+    <CustomAction Id="LaunchWordcraft" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" DllEntry="WixShellExec"
+        Impersonate="yes" Return="ignore" />
+    <UI>
+      <ui:WixUI Id="WixUI_Minimal" />
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchWordcraft"
+          Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed" />
+    </UI>
 
     <StandardDirectory Id="ProgramFiles6432Folder">
       <Directory Id="INSTALLFOLDER" Name="WordCraft" />
