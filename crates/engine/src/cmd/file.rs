@@ -6,6 +6,26 @@ use wordcraft_doc::{Block, Document, StoryRef};
 use super::{pos_json, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Session, p};
 
+/// Longest user name kept, in characters; longer names are cut, not refused.
+pub const MAX_AUTHOR_CHARS: usize = 255;
+
+/// Sets the user name that new tracked changes and comments are recorded under. The name is
+/// trimmed, stripped of control characters (they can't go into the saved XML) and cut to
+/// [`MAX_AUTHOR_CHARS`]; a blank name is refused so revisions always carry an author.
+fn set_author(s: &mut Session, v: &Value) -> CmdResult {
+    let name: String = p::req_str(v, "name")?.trim().chars().filter(|c| !c.is_control()).take(MAX_AUTHOR_CHARS).collect();
+    let name = name.trim_end();
+    if name.is_empty() {
+        return Err(CmdError::Params("`name` must not be blank".into()));
+    }
+    s.author = name.to_string();
+    let mut r = sel_result(s)?;
+    if let Some(o) = r.as_object_mut() {
+        o.insert("name".into(), json!(s.author));
+    }
+    Ok(r)
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("file.new", "New", "File", new).key("Mod+N").params(r#"{"template"?: "blank|sample|letter|resume|report"}"#).pure(),
@@ -43,11 +63,9 @@ pub fn specs() -> Vec<CommandSpec> {
             sel_result(s)
         })
         .pure(),
-        CommandSpec::new("file.setAuthor", "User Name", "File › Options › General", |s, v| {
-            s.author = p::req_str(v, "name")?.to_string();
-            sel_result(s)
-        })
-        .pure(),
+        CommandSpec::new("file.setAuthor", "User Name", "File › Options › General", set_author)
+            .params(r#"{"name": string (author of new tracked changes and comments)}"#)
+            .pure(),
         CommandSpec::new("document.inspect", "Inspect Document", "Agents", inspect).params(r#"{"text"?: bool}"#).pure(),
         CommandSpec::new("document.text", "Document Text", "Agents", |s, v| {
             let story = super::story_param(s, v);

@@ -25,6 +25,7 @@ pub fn specs() -> Vec<CommandSpec> {
             s.doc.settings.track_changes = p::bool(v, "value").unwrap_or(!s.doc.settings.track_changes);
             Ok(json!({"value": s.doc.settings.track_changes}))
         })
+        .params(r#"{"value"?: bool (omit to toggle)}"#)
         .key("Mod+Shift+E"),
         CommandSpec::new("review.acceptAll", "Accept All Changes", "Review › Changes", |s, _| resolve_all(s, true)),
         CommandSpec::new("review.rejectAll", "Reject All Changes", "Review › Changes", |s, _| resolve_all(s, false)),
