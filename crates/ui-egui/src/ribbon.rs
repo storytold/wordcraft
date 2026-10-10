@@ -9,17 +9,45 @@ use crate::{WordApp, icons};
 
 pub const TABS: [&str; 11] = ["File", "Home", "Insert", "Draw", "Design", "Layout", "References", "Mailings", "Review", "View", "Help"];
 
-fn in_table(app: &WordApp) -> bool {
-    app.session.sel.focus.path.cell().is_some()
+/// True when the caret/selection touches a picture (#147).
+pub fn has_picture_selected(s: &wordcraft_engine::Session) -> bool {
+    matches!(wordcraft_engine::cmd::objects::selected(s), Some((_, wordcraft_doc::para::InlineObject::Image { .. })))
+}
+
+/// Contextual tabs for the current selection (pure, tested).
+pub fn contextual_tabs(s: &wordcraft_engine::Session) -> Vec<&'static str> {
+    let mut tabs = Vec::new();
+    if s.sel.focus.path.cell().is_some() {
+        tabs.push("Table Design");
+        tabs.push("Table Layout");
+    }
+    if has_picture_selected(s) {
+        tabs.push("Picture Format");
+    }
+    tabs
+}
+
+/// Tab to show when the stored tab is no longer applicable (pure, tested).
+pub fn resolve_tab<'a>(current: &'a str, available: &[&str]) -> &'a str {
+    if available.contains(&current) { current } else { "Home" }
 }
 
 /// Whether the caret is inside a table (so the contextual tabs and their badges are shown).
 pub fn in_table_public(app: &WordApp) -> bool {
-    in_table(app)
+    app.session.sel.focus.path.cell().is_some()
 }
 
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
+    // A contextual tab (Table, Picture Format) may be stored while the selection moved away.
+    {
+        let mut tabs: Vec<&str> = TABS.to_vec();
+        tabs.extend(contextual_tabs(&app.session));
+        let next = resolve_tab(&app.ui.tab, &tabs);
+        if next != app.ui.tab {
+            app.ui.tab = next.to_string();
+        }
+    }
     // Tab strip.
     egui::Panel::top("tabs")
         .exact_size(30.0)
@@ -28,12 +56,13 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
                 let mut tabs: Vec<&str> = TABS.to_vec();
-                if in_table(app) {
-                    tabs.push("Table Design");
-                    tabs.push("Table Layout");
+                for ct in contextual_tabs(&app.session) {
+                    if !tabs.contains(&ct) {
+                        tabs.push(ct);
+                    }
                 }
                 for tab in tabs {
-                    let contextual = tab.starts_with("Table ");
+                    let contextual = tab.starts_with("Table ") || tab == "Picture Format";
                     let shown = tl!(tab);
                     let w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(shown.to_string(), medium(12.5), t.text).size().x) + 18.0;
                     let (r, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
@@ -105,63 +134,61 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin { left: 8, right: 8, top: 4, bottom: 4 }).stroke(Stroke::new(1.0, t.border)),
         )
         .show(ui, |ui| {
-            // Reserve the » strip on the right first, then give the tab's groups the remaining
-            // width. The button appears whenever the measured content is wider than that space,
-            // and clicking it scrolls the groups left ~150pt; no sticky flag, so widening the
-            // window removes it immediately.
-            const OVERFLOW_W: f32 = 18.0;
-            let scroll_id = egui::Id::new("ribbon_scroll");
-            ui.horizontal_top(|ui| {
-                ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
-                let avail = ui.available_width();
-                let off = ui.data(|d| d.get_temp::<f32>(scroll_id.with("off"))).unwrap_or(0.0);
-                let r = egui::ScrollArea::horizontal()
-                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-                    .auto_shrink([false, false])
-                    .max_width(avail - OVERFLOW_W)
-                    .horizontal_scroll_offset(off)
-                    .show(ui, |ui| {
-                        ui.horizontal_top(|ui| {
-                            ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
-                            ribbon_tab(app, ui);
-                        });
-                    });
-                let max_off = (r.content_size.x - r.inner_rect.width()).max(0.0);
-                let clamped = off.clamp(0.0, max_off);
-                if (clamped - off).abs() > 0.5 {
-                    ui.data_mut(|d| d.insert_temp(scroll_id.with("off"), clamped));
-                }
-                if max_off > 1.0 {
-                    let (ar, aresp) = ui.allocate_exact_size(vec2(OVERFLOW_W, CONTENT_H + LABEL_H), Sense::click());
-                    ui.painter().rect_filled(ar, 0.0, if aresp.hovered() { t.hover } else { t.ribbon });
-                    ui.painter().rect_stroke(ar, 0.0, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
-                    icons::paint(ui.painter(), ar.shrink(2.0), "chevronDoubleRight", t.icon, t.accent);
-                    if aresp.on_hover_text("More commands (scroll ribbon)").clicked() {
-                        let next = (clamped + 150.0).clamp(0.0, max_off);
-                        ui.data_mut(|d| d.insert_temp(scroll_id.with("off"), next));
+            let scroll = egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
+                ui.horizontal_top(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+                    match app.ui.tab.as_str() {
+                        "Home" => home(app, ui),
+                        "Insert" => insert(app, ui),
+                        "Draw" => draw(app, ui),
+                        "Design" => design(app, ui),
+                        "Layout" => layout(app, ui),
+                        "References" => references(app, ui),
+                        "Mailings" => mailings(app, ui),
+                        "Review" => review(app, ui),
+                        "View" => view(app, ui),
+                        "Help" => help(app, ui),
+                        "Table Design" => table_design(app, ui),
+                        "Table Layout" => table_layout(app, ui),
+                        "Picture Format" => picture_format(app, ui),
+                        _ => home(app, ui),
                     }
-                }
+                });
             });
+            // The bar is hidden, so a row wider than the window would be clipped with no sign. Edge chevrons show
+            // where more is and scroll it on click. Every command also stays reachable through Search Commands.
+            let r = scroll.inner_rect;
+            let overflow = scroll.content_size.x - r.width();
+            let offset = scroll.state.offset.x;
+            let step = 160.0;
+            let mut next = None;
+            if offset > 1.0 {
+                let left = Rect::from_min_max(r.left_top(), pos2(r.left() + 18.0, r.bottom()));
+                if edge_cue(ui, left, "‹", tl!("Scroll ribbon left"), &t) {
+                    next = Some(offset - step);
+                }
+            }
+            if overflow - offset > 1.0 {
+                let right = Rect::from_min_max(pos2(r.right() - 18.0, r.top()), r.right_bottom());
+                if edge_cue(ui, right, "›", tl!("Scroll ribbon right"), &t) {
+                    next = Some(offset + step);
+                }
+            }
+            if let Some(x) = next {
+                let mut state = scroll.state;
+                state.offset.x = x.clamp(0.0, overflow.max(0.0));
+                state.store(ui.ctx(), scroll.id);
+            }
         });
 }
 
-/// Dispatch the active tab's groups. Kept as one closure so the ribbon body has a single copy.
-fn ribbon_tab(app: &mut WordApp, ui: &mut Ui) {
-    match app.ui.tab.as_str() {
-        "Home" => home(app, ui),
-        "Insert" => insert(app, ui),
-        "Draw" => draw(app, ui),
-        "Design" => design(app, ui),
-        "Layout" => layout(app, ui),
-        "References" => references(app, ui),
-        "Mailings" => mailings(app, ui),
-        "Review" => review(app, ui),
-        "View" => view(app, ui),
-        "Help" => help(app, ui),
-        "Table Design" => table_design(app, ui),
-        "Table Layout" => table_layout(app, ui),
-        _ => home(app, ui),
-    }
+/// A chevron over a ribbon edge that is also a button; `true` on the frame it is clicked.
+fn edge_cue(ui: &mut Ui, rect: Rect, glyph: &str, hint: &str, t: &Tokens) -> bool {
+    let resp = ui.interact(rect, ui.id().with(glyph), Sense::click()).on_hover_text(hint);
+    let ink = if resp.hovered() { t.text } else { t.text_dim };
+    ui.painter().rect_filled(rect, 0.0, t.ribbon);
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, glyph, egui::FontId::proportional(18.0), ink);
+    resp.clicked()
 }
 
 fn stack(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
@@ -254,6 +281,7 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                 small(ui, app, "strike", None, "Strikethrough", "format.strikethrough", json!({}), flag("strike"));
                 small(ui, app, "subscript", None, "Subscript", "format.subscript", json!({}), flag("subscript"));
                 small(ui, app, "superscript", None, "Superscript", "format.superscript", json!({}), flag("superscript"));
+                small(ui, app, "charborder", None, "Character Border", "format.border", json!({}), flag("border"));
                 ui.add_space(4.0);
                 menu_button(ui, app, "effects", None, "Text Effects and Typography", false, |ui, app| {
                     mi(ui, app, "Outline", "format.outline", json!({}));
@@ -969,6 +997,133 @@ fn help(app: &mut WordApp, ui: &mut Ui) {
     });
 }
 
+fn picture_format(app: &mut WordApp, ui: &mut Ui) {
+    group(ui, "Adjust", None, app, |ui, app| {
+        menu_button(ui, app, "picture", Some("Corrections"), "Brightness, contrast and sharpness", true, |ui, app| {
+            for (l, b, c) in
+                [("Brighter +20%", 20.0, 0.0), ("Darker −20%", -20.0, 0.0), ("More Contrast +20%", 0.0, 20.0), ("Less Contrast −20%", 0.0, -20.0)]
+            {
+                mi(ui, app, l, "picture.corrections", json!({"brightness": b, "contrast": c}));
+            }
+            ui.separator();
+            mi(ui, app, "Sharpen", "picture.corrections", json!({"sharpen": 40.0}));
+            mi(ui, app, "Soften", "picture.corrections", json!({"sharpen": -40.0}));
+        });
+        menu_button(ui, app, "picture", Some("Color"), "Saturation and recolor", true, |ui, app| {
+            for (l, v) in [("Full Saturation 100%", 100.0), ("Muted 50%", 50.0), ("Gray 0%", 0.0), ("Vivid 200%", 200.0)] {
+                mi(ui, app, l, "picture.color", json!({"mode": "saturation", "saturation": v}));
+            }
+            ui.separator();
+            mi(ui, app, "Grayscale", "picture.color", json!({"mode": "grayscale"}));
+            mi(ui, app, "Sepia", "picture.color", json!({"mode": "sepia"}));
+            mi(ui, app, "Washout", "picture.color", json!({"mode": "washout"}));
+        });
+        menu_button(ui, app, "picture", Some("Transparency"), "Picture transparency", true, |ui, app| {
+            for v in [0.0, 15.0, 30.0, 50.0, 65.0, 80.0, 95.0] {
+                mi(ui, app, &format!("{v:.0}%"), "picture.transparency", json!({"percent": v}));
+            }
+        });
+        stack(ui, |ui| {
+            small(ui, app, "picture", Some("Change"), "Change Picture", "ui.changePicture", json!({}), false);
+            small(ui, app, "picture", Some("Reset"), "Reset Picture", "picture.reset", json!({}), false);
+        });
+    });
+    group(ui, "Picture Styles", None, app, |ui, app| {
+        menu_button(ui, app, "picture", Some("Styles"), "Frames and effects", true, |ui, app| {
+            for (l, s) in [
+                ("Simple Frame", "simpleFrame"),
+                ("Thick Frame", "thickFrame"),
+                ("Rounded", "rounded"),
+                ("Soft Edge", "softEdge"),
+                ("Shadow", "shadow"),
+            ] {
+                mi(ui, app, l, "picture.style", json!({"style": s}));
+            }
+        });
+        menu_button(ui, app, "picture", Some("Border"), "Picture border", true, |ui, app| {
+            for (l, w) in [("Thin", 2), ("Medium", 4), ("Thick", 8)] {
+                mi(ui, app, l, "picture.border", json!({"width": w}));
+            }
+        });
+    });
+    group(ui, "Arrange", None, app, |ui, app| {
+        big(ui, app, "position", "Position", "arrange.position", json!({}), false);
+        big(ui, app, "wrapText", "Wrap\nText", "arrange.wrap", json!({}), false);
+        stack(ui, |ui| {
+            small(ui, app, "rotate", Some("Rotate"), "Rotate", "arrange.rotate", json!({}), false);
+            small(ui, app, "align", Some("Align"), "Align", "arrange.align", json!({}), false);
+        });
+    });
+    group(ui, "Size", None, app, |ui, app| {
+        let (media, off, w0, h0, crop0, alt0) = match wordcraft_engine::cmd::objects::selected(&app.session) {
+            Some((pos, wordcraft_doc::para::InlineObject::Image { media, w, h, alt, crop, .. })) => (media, pos.off, w, h, crop, alt),
+            _ => (String::new(), 0, 0.0, 0.0, [0.0; 4], String::new()),
+        };
+        // `picture.size` locks the aspect ratio unless told otherwise, so one dimension suffices.
+        stack(ui, |ui| {
+            crate::widgets::row(ui, |ui| {
+                ui.label(egui::RichText::new(tl!("W:")).small());
+                let mut w = w0;
+                let r = ui.add(egui::DragValue::new(&mut w).speed(1.0).range(4.0..=2000.0).suffix(" pt"));
+                if r.changed() {
+                    if r.dragged() && !r.drag_started() {
+                        app.session.join_next_undo();
+                    }
+                    let _ = app.run("picture.size", json!({"width": w}));
+                }
+                ui.label(egui::RichText::new(tl!("H:")).small());
+                let mut h = h0;
+                let r = ui.add(egui::DragValue::new(&mut h).speed(1.0).range(4.0..=2000.0).suffix(" pt"));
+                if r.changed() {
+                    if r.dragged() && !r.drag_started() {
+                        app.session.join_next_undo();
+                    }
+                    let _ = app.run("picture.size", json!({"height": h}));
+                }
+            });
+            ui.add_space(2.0);
+            crate::widgets::row(ui, |ui| {
+                for (i, side) in ["L", "T", "R", "B"].iter().enumerate() {
+                    ui.label(egui::RichText::new(tl!(side)).small());
+                    let mut v = crop0[i] * 100.0;
+                    let r = ui.add(egui::DragValue::new(&mut v).speed(0.5).range(0.0..=45.0).suffix("%"));
+                    if r.changed() {
+                        if r.dragged() && !r.drag_started() {
+                            app.session.join_next_undo();
+                        }
+                        let mut c = crop0;
+                        c[i] = (v / 100.0).clamp(0.0, 0.45);
+                        let _ = app.run("picture.crop", json!({"left": c[0], "top": c[1], "right": c[2], "bottom": c[3]}));
+                    }
+                }
+                if ui.button(egui::RichText::new(tl!("Reset")).small()).on_hover_text(tl!("Reset Crop")).clicked() {
+                    let _ = app.run("picture.crop", json!({"left": 0.0, "top": 0.0, "right": 0.0, "bottom": 0.0}));
+                }
+            });
+            ui.add_space(2.0);
+            crate::widgets::row(ui, |ui| {
+                ui.label(egui::RichText::new(tl!("Alt:")).small());
+                // Frame-local buffers lose keystrokes; keep the draft in egui temp memory keyed
+                // by picture (same pattern as the comment editor in panes.rs).
+                let key = egui::Id::new(("picture_alt", media.clone(), off));
+                let mut alt = ui.data(|d| d.get_temp::<String>(key)).unwrap_or_else(|| alt0.clone());
+                let r = ui.add(egui::TextEdit::singleline(&mut alt).desired_width(120.0).hint_text(tl!("Alt text")));
+                if r.changed() {
+                    ui.data_mut(|d| d.insert_temp(key, alt.clone()));
+                }
+                if r.lost_focus() {
+                    ui.data_mut(|d| d.remove::<String>(key));
+                    // The click that took focus may have selected another picture; never commit
+                    // one picture's draft onto another.
+                    if alt != alt0 && app.selected_picture_media().as_deref() == Some(media.as_str()) {
+                        let _ = app.run("picture.altText", json!({"text": alt}));
+                    }
+                }
+            });
+        });
+    });
+}
+
 fn table_design(app: &mut WordApp, ui: &mut Ui) {
     let look = app.session.sel.focus.path.cell().and_then(|(tp, _, _)| app.session.doc.table(app.session.sel.focus.story, &tp).map(|t| t.props.look));
     group(ui, "Table Style Options", None, app, |ui, app| {
@@ -1107,4 +1262,41 @@ fn table_layout(app: &mut WordApp, ui: &mut Ui) {
             small(ui, app, "formula", Some("Formula"), "Formula", "table.formula", json!({}), false);
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wordcraft_engine::Session;
+
+    fn png_data() -> String {
+        let img = image::RgbaImage::from_fn(20, 10, |x, y| {
+            if x > 2 && x < 17 && y > 2 && y < 7 { image::Rgba([200, 30, 30, 255]) } else { image::Rgba([255, 255, 255, 255]) }
+        });
+        let mut b = Vec::new();
+        image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png).unwrap();
+        wordcraft_engine::cmd::insert::base64_encode(&b)
+    }
+
+    #[test]
+    fn picture_format_tab_appears_when_picture_selected() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        assert!(!has_picture_selected(&s));
+        assert!(!contextual_tabs(&s).contains(&"Picture Format"));
+        s.run("insert.picture", &json!({"data": png_data()})).unwrap();
+        assert!(has_picture_selected(&s));
+        assert!(contextual_tabs(&s).contains(&"Picture Format"));
+        s.run("select.collapse", &json!({"end": true})).unwrap();
+        s.run("text.insert", &json!({"text": "x"})).unwrap();
+        assert!(!has_picture_selected(&s));
+    }
+
+    #[test]
+    fn resolve_tab_falls_back_when_contextual_tab_expires() {
+        let all = ["Home", "Table Design", "Picture Format"];
+        assert_eq!(resolve_tab("Picture Format", &all), "Picture Format");
+        assert_eq!(resolve_tab("Picture Format", &["Home"]), "Home");
+        assert_eq!(resolve_tab("Table Design", &["Home"]), "Home");
+        assert_eq!(resolve_tab("Home", &["Home"]), "Home");
+    }
 }

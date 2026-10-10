@@ -673,6 +673,29 @@ mod tests {
     }
 
     #[test]
+    fn every_keytip_command_is_registered() {
+        // The keytip tables name commands by id; a renamed or removed command must fail here,
+        // not silently do nothing when its badge is pressed. Features not built yet are fine
+        // when the Word feature catalog lists them (the ribbon shows them too); `ui.*` commands are
+        // the app's own (`WordApp::run`).
+        let a = app();
+        let catalog: Vec<&str> = wordcraft_engine::catalog::entries().into_iter().map(|e| e.3).collect();
+        let mut missing = Vec::new();
+        for (tab, _) in TAB_LETTERS {
+            for ctrl in controls(tab) {
+                if let Target::Cmd { id, .. } = ctrl.target
+                    && a.session.registry.get(id).is_none()
+                    && !catalog.contains(&id)
+                    && !id.starts_with("ui.")
+                {
+                    missing.push(format!("{tab}: {id}"));
+                }
+            }
+        }
+        assert!(missing.is_empty(), "unregistered: {missing:#?}");
+    }
+
+    #[test]
     fn letters_are_unique_inside_every_tab() {
         let a = app();
         let (tabs, cmds) = letters(&a);
