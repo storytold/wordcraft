@@ -1066,3 +1066,21 @@
 	Show in the Styles gallery	スタイル ギャラリーに表示
 	Hide from style lists	スタイルの一覧に表示しない
 	Built-in styles can't be deleted.	組み込みスタイルは削除できません。
+	Shape Effects	図形の効果
+	Glow	光彩
+	Soft Edges	輪郭のぼかし
+	No Shadow	影なし
+	No Glow	光彩なし
+	No Soft Edges	ぼかしなし
+	Glow Colors	光彩の色
+	Weight	太さ
+	Shadow, glow and soft edges	影、光彩、輪郭のぼかし
+	Offset: Bottom Right	オフセット: 右下
+	Offset: Bottom	オフセット: 下
+	Offset: Bottom Left	オフセット: 左下
+	Offset: Right	オフセット: 右
+	Offset: Center	オフセット: 中央
+	Offset: Left	オフセット: 左
+	Offset: Top Right	オフセット: 右上
+	Offset: Top	オフセット: 上
+	Offset: Top Left	オフセット: 左上

@@ -66,6 +66,8 @@ pub enum Draw {
         fill: Option<Rgb>,
         stroke: Option<Rgb>,
         stroke_width: f32,
+        /// Shadow, glow and soft edges (drawn with [`wordcraft_doc::effects::bands`]).
+        effects: wordcraft_doc::effects::ShapeEffects,
     },
     /// A vector path (a chart's or diagram's polygons, slices, lines): filled, then stroked.
     Path {
@@ -211,8 +213,8 @@ fn item(doc: &Document, it: &Placed, opts: &DisplayOptions, alpha: f32, out: &mu
         Placed::Fill { rect, color } => out.push(Draw::Fill { rect: *rect, color: *color, alpha }),
         Placed::Rule { x0, y0, x1, y1, border } => out.push(rule(*x0, *y0, *x1, *y1, border, alpha)),
         Placed::Image { rect, media, crop, .. } => out.push(Draw::Image { rect: *rect, media: media.clone(), crop: *crop, alpha }),
-        Placed::Shape { rect, kind, fill, stroke, stroke_width } => {
-            out.push(Draw::Shape { rect: *rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width })
+        Placed::Shape { rect, kind, fill, stroke, stroke_width, effects } => {
+            out.push(Draw::Shape { rect: *rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width, effects: *effects })
         }
         Placed::Graphic { rect, graphic, .. } => out.extend(graphic_draws(doc, graphic, *rect, alpha)),
         Placed::Cell { .. } | Placed::Object { .. } => {}
@@ -546,8 +548,8 @@ fn lines(
             let rect = inline_rect(obj, cx, base, c.adv, c.obj_h);
             match obj {
                 Some(InlineObject::Image { media, crop, .. }) => out.push(Draw::Image { rect, media: media.clone(), crop: *crop, alpha }),
-                Some(InlineObject::Shape { kind, fill, stroke, stroke_width, .. }) => {
-                    out.push(Draw::Shape { rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width })
+                Some(InlineObject::Shape { kind, fill, stroke, stroke_width, effects, .. }) => {
+                    out.push(Draw::Shape { rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width, effects: *effects })
                 }
                 Some(InlineObject::Graphic { graphic, alt, .. }) => {
                     out.push(Draw::Figure { alt: alt.clone(), kind: graphic.kind, draws: graphic_draws(doc, graphic, rect, alpha) })
@@ -557,9 +559,14 @@ fn lines(
                         let rect = Rect::new(x, y, w, h);
                         match c {
                             InlineObject::Image { media, crop, .. } => out.push(Draw::Image { rect, media: media.clone(), crop: *crop, alpha }),
-                            InlineObject::Shape { kind, fill, stroke, stroke_width, .. } => {
-                                out.push(Draw::Shape { rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width })
-                            }
+                            InlineObject::Shape { kind, fill, stroke, stroke_width, effects, .. } => out.push(Draw::Shape {
+                                rect,
+                                kind: *kind,
+                                fill: *fill,
+                                stroke: *stroke,
+                                stroke_width: *stroke_width,
+                                effects: *effects,
+                            }),
                             _ => {}
                         }
                     }
@@ -734,9 +741,14 @@ fn graphic_draws(doc: &Document, g: &Graphic, rect: Rect, alpha: f32) -> Vec<Dra
     let mut out = Vec::with_capacity(g.items.len());
     for it in &g.items {
         match it {
-            GraphicItem::Shape { rect: r, kind, fill, stroke, stroke_width } => {
-                out.push(Draw::Shape { rect: inside(r), kind: *kind, fill: *fill, stroke: *stroke, stroke_width: stroke_width * k })
-            }
+            GraphicItem::Shape { rect: r, kind, fill, stroke, stroke_width } => out.push(Draw::Shape {
+                rect: inside(r),
+                kind: *kind,
+                fill: *fill,
+                stroke: *stroke,
+                stroke_width: stroke_width * k,
+                effects: Default::default(),
+            }),
             GraphicItem::Path { segs, fill, stroke, stroke_width } => {
                 let segs = page_segs(segs, |x, y| (rect.x + x * sx, rect.y + y * sy));
                 out.push(Draw::Path { segs, fill: *fill, stroke: *stroke, stroke_width: stroke_width * k })

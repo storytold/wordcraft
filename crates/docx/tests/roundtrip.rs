@@ -685,6 +685,7 @@ fn toc_field_skips_nested_stories() {
             stroke_width: 0.0,
             float: Float::default(),
             story: Some(story),
+            effects: Default::default(),
         }
     };
     let mut head = Paragraph::with_text("Contents", CharProps::default()).styled("TOCHeading");
@@ -806,6 +807,7 @@ fn shapes_textboxes_equations_dropcaps_round_trip() {
         stroke_width: 1.0,
         float: Float { wrap: Wrap::Square, h_rel: Anchor::Margin, v_rel: Anchor::Paragraph, x: 10.0, y: 20.0, dist: 0.0, ..Default::default() },
         story: Some(story),
+        effects: Default::default(),
     };
     let star = InlineObject::Shape {
         kind: ShapeKind::Star,
@@ -816,6 +818,7 @@ fn shapes_textboxes_equations_dropcaps_round_trip() {
         stroke_width: 0.0,
         float: Float::default(),
         story: None,
+        effects: Default::default(),
     };
     let eq = InlineObject::Equation { linear: "x=(-b±√(b^2-4ac))/2a".into(), display: false, math: Default::default() };
     let mut p = Paragraph::with_text("shapes ", CharProps::default());
@@ -831,7 +834,7 @@ fn shapes_textboxes_equations_dropcaps_round_trip() {
     let got = paras(&r);
     assert_eq!(got[0].objects.len(), 3);
     match &got[0].objects[0] {
-        InlineObject::Shape { kind, w, h, fill, stroke, stroke_width, float, story } => {
+        InlineObject::Shape { kind, w, h, fill, stroke, stroke_width, float, story, .. } => {
             assert_eq!(
                 (*kind, *w, *h, *fill, *stroke, *stroke_width),
                 (ShapeKind::TextBox, 144.0, 72.0, Some(Rgb(255, 255, 200)), Some(Rgb(0, 0, 0)), 1.0)
@@ -873,6 +876,7 @@ fn groups_round_trip() {
         stroke_width: 0.0,
         float: Float::default(),
         story: None,
+        effects: Default::default(),
     };
     let tb = InlineObject::Shape {
         kind: ShapeKind::TextBox,
@@ -883,6 +887,7 @@ fn groups_round_trip() {
         stroke_width: 0.75,
         float: Float::default(),
         story: Some(story),
+        effects: Default::default(),
     };
     let float = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 20.0, y: 10.0, dist: 9.0, ..Default::default() };
     let group = InlineObject::Group {
@@ -1103,6 +1108,7 @@ fn self_showing_text_box_saves_bounded() {
         stroke_width: 0.0,
         float: Float::default(),
         story: Some(id),
+        effects: Default::default(),
     };
     for _ in 0..30 {
         d.insert_object(
@@ -1182,4 +1188,49 @@ fn list_level_overrides_round_trip() {
     let mut c = Counters::default();
     assert_eq!(c.next_label(&back.numbering, restart, 0).unwrap().0, "1.");
     assert_eq!(c.next_label(&back.numbering, restart, 1).unwrap().0, "1.01");
+}
+
+/// Shape effects (#275): `a:effectLst` with an outer shadow, a glow and soft edges round-trips,
+/// and the effect extent leaves room for them.
+#[test]
+fn shape_effects_round_trip() {
+    use wordcraft_doc::effects::{Glow, Shadow, ShapeEffects};
+    let effects = ShapeEffects {
+        shadow: Some(Shadow { color: Rgb(0x20, 0x30, 0x40), transparency: 60.0, blur: 4.0, distance: 3.0, angle: 135.0 }),
+        glow: Some(Glow { color: Rgb(0xC0, 0x50, 0x10), size: 8.0, transparency: 40.0 }),
+        soft_edge: Some(2.5),
+    };
+    let shape = InlineObject::Shape {
+        kind: ShapeKind::RoundedRectangle,
+        w: 100.0,
+        h: 50.0,
+        fill: Some(Rgb(0x15, 0x60, 0x82)),
+        stroke: None,
+        stroke_width: 0.0,
+        float: Float::default(),
+        story: None,
+        effects,
+    };
+    let mut p = Paragraph::with_text("x", CharProps::default());
+    p.insert_object(1, shape, &CharProps::default()).unwrap();
+    let bytes = wordcraft_docx::write(&doc_with(vec![p])).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(
+        xml.contains(
+            r#"<a:outerShdw blurRad="50800" dist="38100" dir="8100000" algn="tr" rotWithShape="0"><a:srgbClr val="203040"><a:alpha val="40000"/>"#
+        ),
+        "{xml}"
+    );
+    assert!(xml.contains(r#"<a:glow rad="101600"><a:srgbClr val="C05010"><a:alpha val="60000"/>"#), "{xml}");
+    assert!(xml.contains(r#"<a:softEdge rad="31750"/>"#), "{xml}");
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    match paras(&r)[0].objects.first() {
+        Some(InlineObject::Shape { effects: got, float, .. }) => {
+            assert_eq!(*got, effects);
+            assert_eq!(float.effect_extent(), effects.extent());
+        }
+        o => panic!("{o:?}"),
+    }
 }

@@ -321,6 +321,11 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"color": "RRGGBB" | null, "width"?: pt}"#)
         .when(has_shape),
+        CommandSpec::new("shape.effects", "Shape Effects", "Shape Format › Shape Styles", shape_effects)
+            .params(
+                r#"{"shadow"?: preset|{"preset"?, "color"?: "RRGGBB", "transparency"?: %, "blur"?: pt, "distance"?: pt, "angle"?: deg}|null, "glow"?: pt|{"color"?: "RRGGBB", "size"?: pt, "transparency"?: %}|null, "softEdge"?: pt|null}  (shadow presets: offsetBottomRight, offsetBottom, offsetBottomLeft, offsetRight, offsetCenter, offsetLeft, offsetTopRight, offsetTop, offsetTopLeft; an omitted key is left as it is; applies to every shape in the selection)"#,
+            )
+            .when(has_shape),
         CommandSpec::new("shape.change", "Change Shape", "Shape Format › Insert Shapes", |s, v| {
             let kind: wordcraft_doc::para::ShapeKind = serde_json::from_value(v.get("kind").cloned().unwrap_or(json!("rectangle"))).map_err(|e| CmdError::Params(e.to_string()))?;
             with_obj(s, |o| {
@@ -347,7 +352,15 @@ pub fn object_selection(s: &Session) -> Option<(Pos, &InlineObject)> {
 
 /// The first picture/shape in the selection, or just before a collapsed caret.
 pub fn selected(s: &Session) -> Option<(Pos, InlineObject)> {
+    selected_all(s, 1).into_iter().next()
+}
+
+/// The pictures and shapes in the selection (at most `max`), or the one just before a collapsed
+/// caret.
+pub fn selected_all(s: &Session, max: usize) -> Vec<(Pos, InlineObject)> {
+    let mut out = Vec::new();
     let (a, b) = s.sel.ordered();
+    let max = if a == b { 1 } else { max };
     let story = a.story;
     let paths = if a == b { vec![a.path.clone()] } else { s.doc.paths_between(&a, &b) };
     for path in paths {
@@ -362,11 +375,103 @@ pub fn selected(s: &Session) -> Option<(Pos, InlineObject)> {
                 continue;
             }
             if let Some(o) = p.object_at(off).filter(|o| o.is_drawing()) {
-                return Some((Pos { story, path: path.clone(), off }, o.clone()));
+                out.push((Pos { story, path: path.clone(), off }, o.clone()));
+                if out.len() >= max {
+                    return out;
+                }
             }
         }
     }
-    None
+    out
+}
+
+/// Most shapes one `shape.effects` changes.
+const MAX_EFFECT_SHAPES: usize = 10_000;
+
+/// `shape.effects`: set or clear the shadow, glow and soft edges of the selected shapes.
+fn shape_effects(s: &mut Session, v: &Value) -> CmdResult {
+    use wordcraft_doc::effects::{Glow, Shadow, ShapeEffects};
+    let color = |o: &Value| p::str(o, "color").and_then(Rgb::parse);
+    // Each change is `None` (leave as it is) or `Some(new value)`.
+    let shadow: Option<Option<Shadow>> = match v.get("shadow") {
+        None => None,
+        Some(Value::Null) => Some(None),
+        Some(Value::Bool(b)) => Some(b.then(Shadow::default)),
+        Some(Value::String(id)) if id == "none" => Some(None),
+        Some(Value::String(id)) => Some(Some(Shadow::preset(id).ok_or_else(|| CmdError::Params(format!("unknown shadow preset `{id}`")))?)),
+        Some(o @ Value::Object(_)) => {
+            let mut sh = match p::str(o, "preset") {
+                Some(id) => Shadow::preset(id).ok_or_else(|| CmdError::Params(format!("unknown shadow preset `{id}`")))?,
+                None => Shadow::default(),
+            };
+            sh.color = color(o).unwrap_or(sh.color);
+            sh.transparency = p::f32(o, "transparency").unwrap_or(sh.transparency);
+            sh.blur = p::f32(o, "blur").unwrap_or(sh.blur);
+            sh.distance = p::f32(o, "distance").unwrap_or(sh.distance);
+            sh.angle = p::f32(o, "angle").unwrap_or(sh.angle);
+            Some(Some(sh.sanitized()))
+        }
+        Some(_) => return Err(CmdError::Params("`shadow`: a preset name, an object or null".into())),
+    };
+    let glow: Option<Option<Glow>> = match v.get("glow") {
+        None => None,
+        Some(Value::Null) => Some(None),
+        Some(Value::String(id)) if id == "none" => Some(None),
+        Some(n @ Value::Number(_)) => Some(Some(Glow { size: n.as_f64().unwrap_or(0.0) as f32, ..Glow::default() }.sanitized())),
+        Some(o @ Value::Object(_)) => {
+            let d = Glow::default();
+            Some(Some(
+                Glow {
+                    color: color(o).unwrap_or(d.color),
+                    size: p::f32(o, "size").unwrap_or(d.size),
+                    transparency: p::f32(o, "transparency").unwrap_or(d.transparency),
+                }
+                .sanitized(),
+            ))
+        }
+        Some(_) => return Err(CmdError::Params("`glow`: a size in points, an object or null".into())),
+    };
+    let soft: Option<Option<f32>> = match v.get("softEdge") {
+        None => None,
+        Some(Value::Null) => Some(None),
+        Some(n @ Value::Number(_)) => Some(n.as_f64().map(|x| x as f32)),
+        Some(_) => return Err(CmdError::Params("`softEdge`: a radius in points or null".into())),
+    };
+    let mut targets: Vec<Pos> =
+        selected_all(s, MAX_EFFECT_SHAPES).into_iter().filter(|(_, o)| matches!(o, InlineObject::Shape { .. })).map(|(pos, _)| pos).collect();
+    // Shapes added to the selection with Shift+click, too.
+    for pos in picked_objects(s) {
+        if !targets.contains(&pos) && matches!(s.doc.para_at(&pos).and_then(|p| p.object_at(pos.off)), Some(InlineObject::Shape { .. })) {
+            targets.push(pos);
+        }
+    }
+    if targets.is_empty() {
+        return Err(CmdError::Disabled("no shape selected".into()));
+    }
+    let mut last = ShapeEffects::default();
+    for pos in &targets {
+        let o = edit_obj(s, pos, |o| {
+            if let InlineObject::Shape { effects, float, .. } = o {
+                let mut e = *effects;
+                if let Some(x) = shadow {
+                    e.shadow = x;
+                }
+                if let Some(x) = glow {
+                    e.glow = x;
+                }
+                if let Some(x) = soft {
+                    e.soft_edge = x;
+                }
+                *effects = e.sanitized();
+                // Room around the shape for its shadow and glow, as Word's effect extent.
+                float.effect = effects.extent();
+            }
+        })?;
+        if let InlineObject::Shape { effects, .. } = o {
+            last = effects;
+        }
+    }
+    Ok(json!({"shapes": targets.len(), "effects": serde_json::to_value(last).unwrap_or(Value::Null)}))
 }
 
 /// Smallest width/height an object can be resized to, points (a text box keeps room for a line).

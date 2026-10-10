@@ -1077,3 +1077,21 @@
 	Built-in styles can't be deleted.	Ugrađeni stilovi ne mogu da se obrišu.
 	Add Object to Selection	Dodaj objekat u izbor
 	Ungroup	Razgrupiši
+	Shape Effects	Efekti oblika
+	Glow	Sjaj
+	Soft Edges	Meke ivice
+	No Shadow	Bez senke
+	No Glow	Bez sjaja
+	No Soft Edges	Bez mekih ivica
+	Glow Colors	Boje sjaja
+	Weight	Debljina
+	Shadow, glow and soft edges	Senka, sjaj i meke ivice
+	Offset: Bottom Right	Pomeraj: dole desno
+	Offset: Bottom	Pomeraj: dole
+	Offset: Bottom Left	Pomeraj: dole levo
+	Offset: Right	Pomeraj: desno
+	Offset: Center	Pomeraj: centar
+	Offset: Left	Pomeraj: levo
+	Offset: Top Right	Pomeraj: gore desno
+	Offset: Top	Pomeraj: gore
+	Offset: Top Left	Pomeraj: gore levo

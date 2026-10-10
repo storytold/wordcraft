@@ -1067,3 +1067,21 @@
 	Show in the Styles gallery	在樣式庫中顯示
 	Hide from style lists	從樣式清單中隱藏
 	Built-in styles can't be deleted.	無法刪除內建樣式。
+	Shape Effects	圖案效果
+	Glow	光暈
+	Soft Edges	柔化邊緣
+	No Shadow	無陰影
+	No Glow	無光暈
+	No Soft Edges	無柔化邊緣
+	Glow Colors	光暈色彩
+	Weight	粗細
+	Shadow, glow and soft edges	陰影、光暈和柔化邊緣
+	Offset: Bottom Right	位移：右下
+	Offset: Bottom	位移：下
+	Offset: Bottom Left	位移：左下
+	Offset: Right	位移：右
+	Offset: Center	位移：置中
+	Offset: Left	位移：左
+	Offset: Top Right	位移：右上
+	Offset: Top	位移：上
+	Offset: Top Left	位移：左上

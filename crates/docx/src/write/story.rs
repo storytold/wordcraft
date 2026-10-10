@@ -1,7 +1,8 @@
 //! Blocks, paragraphs, runs, objects and tables → WordprocessingML.
 
+use wordcraft_doc::effects::ShapeEffects;
 use wordcraft_doc::para::{Anchor, Float, NoteKind, ShapeKind, Wrap};
-use wordcraft_doc::props::CharProps;
+use wordcraft_doc::props::{CharProps, Rgb};
 use wordcraft_doc::section::{LineNumberRestart, SectionProps, SectionStart};
 use wordcraft_doc::table::Table;
 use wordcraft_doc::{Block, Blocks, InlineObject, Paragraph, RevisionKind};
@@ -391,13 +392,19 @@ impl Writer<'_> {
                 w.close("w:r");
                 self.rev_close(w, props);
             }
-            InlineObject::Shape { w: sw, h: sh, float, .. } => {
+            InlineObject::Shape { w: sw, h: sh, float, effects, .. } => {
                 self.rev_open(w, props);
                 w.open("w:r", &[]);
                 rpr(w, props);
                 w.open("w:drawing", &[]);
                 let docpr = self.next_docpr();
                 let name = format!("Shape {docpr}");
+                // The effect extent leaves room for the shadow and glow.
+                let mut float = *float;
+                for (e, fx) in float.effect.iter_mut().zip(effects.extent()) {
+                    *e = wordcraft_geom::finite(*e).max(fx);
+                }
+                let float = &float;
                 self.drawing_open(w, float, *sw, *sh, &docpr, &name, "");
                 w.empty("wp:cNvGraphicFramePr", &[]);
                 w.open("a:graphic", &[]);
@@ -572,7 +579,7 @@ impl Writer<'_> {
     /// A shape's or text box's `wps:wsp`, at `off` in its group (or 0, 0). In a group it carries
     /// its own `wps:cNvPr` with drawing id `id`.
     fn wsp(&mut self, w: &mut W, o: &InlineObject, id: Option<&str>, off: (f32, f32), rels: &mut PartRels, depth: usize) {
-        let InlineObject::Shape { kind, w: sw, h: sh, fill, stroke, stroke_width, story, .. } = o else { return };
+        let InlineObject::Shape { kind, w: sw, h: sh, fill, stroke, stroke_width, story, effects, .. } = o else { return };
         w.open("wps:wsp", &[]);
         if let Some(id) = id {
             let name = format!("Shape {id}");
@@ -621,6 +628,7 @@ impl Writer<'_> {
                 w.close("a:ln");
             }
         }
+        effect_list(w, effects);
         w.close("wps:spPr");
         // Its text, within the same bounds layout shows boxes inside boxes with.
         if let Some(id) = *story
@@ -837,6 +845,50 @@ impl Writer<'_> {
         }
         w.close("w:sectPr");
     }
+}
+
+/// A shape's `a:effectLst` (ECMA-376 Part 1 §20.1.8.26), children in schema order.
+fn effect_list(w: &mut W, effects: &ShapeEffects) {
+    let fx = effects.sanitized();
+    if fx.is_empty() {
+        return;
+    }
+    let color = |w: &mut W, c: Rgb, transparency: f32| {
+        let alpha = n(((100.0 - transparency.clamp(0.0, 100.0)) * 1000.0).round() as i64);
+        w.open("a:srgbClr", &[("val", &c.hex())]);
+        w.empty("a:alpha", &[("val", &alpha)]);
+        w.close("a:srgbClr");
+    };
+    w.open("a:effectLst", &[]);
+    if let Some(g) = fx.glow {
+        w.open("a:glow", &[("rad", &emu(g.size))]);
+        color(w, g.color, g.transparency);
+        w.close("a:glow");
+    }
+    if let Some(s) = fx.shadow {
+        let dir = n((s.angle * 60_000.0).round() as i64);
+        // Anchor scaling at the corner the shadow falls away from (no scaling is written, so
+        // this only matters to editors that resize it).
+        let (dx, dy) = s.offset();
+        let algn = match (dy > 0.01, dy < -0.01, dx > 0.01, dx < -0.01) {
+            (true, _, true, _) => "tl",
+            (true, _, _, true) => "tr",
+            (true, _, _, _) => "t",
+            (_, true, true, _) => "bl",
+            (_, true, _, true) => "br",
+            (_, true, _, _) => "b",
+            (_, _, true, _) => "l",
+            (_, _, _, true) => "r",
+            _ => "ctr",
+        };
+        w.open("a:outerShdw", &[("blurRad", &emu(s.blur)), ("dist", &emu(s.distance)), ("dir", &dir), ("algn", algn), ("rotWithShape", "0")]);
+        color(w, s.color, s.transparency);
+        w.close("a:outerShdw");
+    }
+    if let Some(r) = fx.soft_edge {
+        w.empty("a:softEdge", &[("rad", &emu(r))]);
+    }
+    w.close("a:effectLst");
 }
 
 fn xfrm(w: &mut W, (x, y): (f32, f32), cw: f32, ch: f32) {

@@ -223,6 +223,9 @@ pub enum InlineObject {
         /// Text box content: `Document::parts` id.
         #[serde(default)]
         story: Option<u32>,
+        /// Shadow, glow and soft edges.
+        #[serde(default, skip_serializing_if = "crate::effects::ShapeEffects::is_empty")]
+        effects: crate::effects::ShapeEffects,
     },
     /// Pictures, shapes and text boxes grouped into one object (Layout › Arrange › Group): it
     /// moves, wraps and resizes as one. Its members are laid out in the group's own coordinate

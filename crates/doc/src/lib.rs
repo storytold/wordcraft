@@ -12,6 +12,7 @@
 
 pub mod bidi;
 pub mod edit;
+pub mod effects;
 pub mod encoding;
 pub mod fields;
 pub mod graphic;

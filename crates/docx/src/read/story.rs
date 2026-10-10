@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use wordcraft_doc::effects::{Glow, Shadow, ShapeEffects};
 use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind};
 use wordcraft_doc::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{CharProps, Rgb};
@@ -826,11 +827,12 @@ impl Reader<'_> {
         let ln = sppr.and_then(|s| s.child("a:ln"));
         let stroke = solid(ln);
         let stroke_width = ln.and_then(|l| l.attr("w")).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0).clamp(0.0, 100.0);
+        let effects = sppr.and_then(|s| s.child("a:effectLst")).map(effect_list).unwrap_or_default();
         let story = match txbx {
             Some(t) if sc.story_depth < MAX_STORY_DEPTH => Some(self.read_textbox(sc, t, rels)),
             _ => None,
         };
-        InlineObject::Shape { kind, w, h, fill, stroke, stroke_width, float, story }
+        InlineObject::Shape { kind, w, h, fill, stroke, stroke_width, float, story, effects }
     }
 
     fn read_textbox(&mut self, sc: &StoryCtx, content: &El, rels: &Rels) -> u32 {
@@ -860,7 +862,17 @@ impl Reader<'_> {
             let story = Some(self.read_textbox(sc, t, rels));
             let fill = shape.attr("fillcolor").and_then(Rgb::parse);
             let stroke = shape.attr("strokecolor").and_then(Rgb::parse);
-            return Some(InlineObject::Shape { kind: ShapeKind::TextBox, w, h, fill, stroke, stroke_width: 0.75, float, story });
+            return Some(InlineObject::Shape {
+                kind: ShapeKind::TextBox,
+                w,
+                h,
+                fill,
+                stroke,
+                stroke_width: 0.75,
+                float,
+                story,
+                effects: Default::default(),
+            });
         }
         None
     }
@@ -1076,4 +1088,45 @@ fn group_xfrm(sppr: Option<&El>) -> Xfrm {
         ch_off: pair("a:chOff", "x", "y", max),
         ch_ext: pos(pair("a:chExt", "cx", "cy", max)),
     }
+}
+
+/// A shape's `a:effectLst` (ECMA-376 Part 1 §20.1.8.26): its outer shadow, glow and soft edges.
+/// Other effects are dropped.
+fn effect_list(l: &El) -> ShapeEffects {
+    let pt = |e: &El, n: &str| e.attr(n).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0);
+    let shadow = l.child("a:outerShdw").map(|e| {
+        let (color, transparency) = effect_color(e);
+        // `dir`: 60000ths of a degree, clockwise.
+        let angle = e.attr("dir").and_then(int).map(|v| (v.rem_euclid(21_600_000) as f32) / 60_000.0).unwrap_or(0.0);
+        Shadow { color: color.unwrap_or(Rgb::BLACK), transparency, blur: pt(e, "blurRad"), distance: pt(e, "dist"), angle }
+    });
+    let glow = l.child("a:glow").map(|e| {
+        let (color, transparency) = effect_color(e);
+        Glow { color: color.unwrap_or(Glow::default().color), size: pt(e, "rad"), transparency }
+    });
+    let soft_edge = l.child("a:softEdge").map(|e| pt(e, "rad"));
+    ShapeEffects { shadow, glow, soft_edge }.sanitized()
+}
+
+/// The colour inside an effect (`a:srgbClr`, `a:prstClr`, `a:sysClr`; theme colours aren't
+/// resolved here) and its transparency, percent (from `a:alpha`, opaque when absent).
+fn effect_color(e: &El) -> (Option<Rgb>, f32) {
+    let Some(c) = e.els().find(|c| matches!(c.name.as_str(), "a:srgbClr" | "a:prstClr" | "a:sysClr" | "a:schemeClr" | "a:scrgbClr" | "a:hslClr"))
+    else {
+        return (None, 0.0);
+    };
+    let rgb = match c.name.as_str() {
+        "a:srgbClr" => c.attr("val").and_then(Rgb::parse),
+        "a:sysClr" => c.attr("lastClr").and_then(Rgb::parse),
+        "a:prstClr" => match c.attr("val").unwrap_or("") {
+            "black" => Some(Rgb::BLACK),
+            "white" => Some(Rgb::WHITE),
+            "gray" | "grey" => Some(Rgb(0x80, 0x80, 0x80)),
+            _ => None,
+        },
+        _ => None,
+    };
+    // `a:alpha`: opacity in 1000ths of a percent.
+    let opacity = c.child("a:alpha").and_then(|a| a.attr("val")).and_then(int).map(|v| v.clamp(0, 100_000) as f32 / 1000.0).unwrap_or(100.0);
+    (rgb, 100.0 - opacity)
 }

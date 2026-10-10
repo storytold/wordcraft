@@ -1077,3 +1077,21 @@
 	Show in the Styles gallery	在样式库中显示
 	Hide from style lists	在样式列表中隐藏
 	Built-in styles can't be deleted.	内置样式不能删除。
+	Shape Effects	形状效果
+	Glow	发光
+	Soft Edges	柔化边缘
+	No Shadow	无阴影
+	No Glow	无发光
+	No Soft Edges	无柔化边缘
+	Glow Colors	发光颜色
+	Weight	粗细
+	Shadow, glow and soft edges	阴影、发光和柔化边缘
+	Offset: Bottom Right	偏移：右下
+	Offset: Bottom	偏移：下
+	Offset: Bottom Left	偏移：左下
+	Offset: Right	偏移：右
+	Offset: Center	偏移：居中
+	Offset: Left	偏移：左
+	Offset: Top Right	偏移：右上
+	Offset: Top	偏移：上
+	Offset: Top Left	偏移：左上
