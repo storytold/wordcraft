@@ -40,6 +40,7 @@ use krilla::paint::{Fill, FillRule, LineCap, Stroke, StrokeDash};
 use krilla::surface::Surface;
 use krilla::tagging::{Artifact, ArtifactType, ContentTag, Identifier, Node, SpanTag, Tag, TagGroup, TagKind, TagTree};
 use krilla::text::{Font, GlyphId, KrillaGlyph};
+use wordcraft_doc::graphic::GraphicKind;
 use wordcraft_doc::para::{InlineObject, ShapeKind};
 use wordcraft_doc::{Document, Path as DocPath, Rgb, StoryRef};
 use wordcraft_fonts::FaceRef;
@@ -192,6 +193,11 @@ fn glyph_outlines(face: &FaceRef, size: f32, glyphs: &[(u32, f32, f32)]) -> Opti
         append_path(&mut pb, &outline);
     }
     pb.finish()
+}
+
+/// A chart's or diagram's alt text: its own, else what it is ("chart", "diagram").
+fn graphic_alt(alt: &str, kind: GraphicKind) -> &str {
+    if alt.trim().is_empty() { kind.noun() } else { alt }
 }
 
 /// Add the segments of a kurbo path to a krilla path.
@@ -546,6 +552,12 @@ impl Exporter<'_> {
                         match d {
                             Draw::Glyphs { .. } | Draw::Turned { .. } => self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d)),
                             Draw::Image { .. } => self.tagged(s, Role::Figure, None, |me, s| me.draw(s, d)),
+                            // An inline chart or diagram: its text is part of the figure, not the paragraph.
+                            Draw::Figure { alt, kind, draws: inner } => self.tagged(s, Role::Figure, Some(graphic_alt(alt, *kind)), |me, s| {
+                                for d in inner {
+                                    me.draw(s, d);
+                                }
+                            }),
                             _ => self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.draw(s, d)),
                         }
                     }
@@ -554,6 +566,17 @@ impl Exporter<'_> {
                     let alt = match self.doc.para(*story, path).and_then(|p| p.object_at(*off)) {
                         Some(InlineObject::Image { alt, .. }) => alt.clone(),
                         _ => String::new(),
+                    };
+                    self.tagged(s, Role::Figure, Some(&alt), |me, s| {
+                        for d in &draws {
+                            me.draw(s, d);
+                        }
+                    });
+                }
+                Placed::Graphic { story, path, off, graphic, .. } => {
+                    let alt = match self.doc.para(*story, path).and_then(|p| p.object_at(*off)) {
+                        Some(InlineObject::Graphic { alt, .. }) => graphic_alt(alt, graphic.kind).to_string(),
+                        _ => graphic.kind.noun().to_string(),
                     };
                     self.tagged(s, Role::Figure, Some(&alt), |me, s| {
                         for d in &draws {
@@ -619,6 +642,11 @@ impl Exporter<'_> {
 
     fn draw(&mut self, s: &mut Surface, d: &Draw) {
         match d {
+            Draw::Figure { draws, .. } => {
+                for d in draws {
+                    self.draw(s, d);
+                }
+            }
             Draw::Glyphs { face, size, glyphs, color, alpha, synth_bold, synth_italic, text, link, ranges } => {
                 self.glyphs(s, face, *size, glyphs, *color, *alpha, *synth_bold, *synth_italic, text, ranges);
                 if let Some(l) = link {
@@ -635,6 +663,23 @@ impl Exporter<'_> {
             }
             Draw::Line { x0, y0, x1, y1, width, color, stroke, alpha } => self.line(s, (*x0, *y0, *x1, *y1), *width, *color, *stroke, *alpha),
             Draw::Image { rect, media, crop, alpha } => self.picture(s, rect, media, crop, *alpha),
+            Draw::Path { segs, fill: f, stroke, stroke_width } => {
+                let mut pb = PathBuilder::new();
+                append_path(&mut pb, &wordcraft_layout::display::seg_path(segs));
+                let Some(p) = pb.finish() else { return };
+                s.set_fill(f.map(|c| fill(c, 1.0)));
+                s.set_stroke(stroke.map(|c| Stroke {
+                    paint: rgb::Color::new(c.0, c.1, c.2).into(),
+                    // Width 0 (or none) is a hairline.
+                    width: if stroke_width.is_finite() && *stroke_width > 0.0 { stroke_width.clamp(0.25, 200.0) } else { 0.75 },
+                    ..Default::default()
+                }));
+                if f.is_some() || stroke.is_some() {
+                    s.draw_path(&p);
+                }
+                s.set_fill(None);
+                s.set_stroke(None);
+            }
             Draw::Shape { rect, kind, fill: f, stroke, stroke_width } => {
                 let Some(p) = shape_path(*kind, rect) else { return };
                 let can_fill = *kind != ShapeKind::Line;

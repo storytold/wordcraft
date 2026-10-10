@@ -279,6 +279,11 @@ pub fn stem_darkening(ppem: f64) -> f64 {
 
 fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visible: &kurbo::Rect, opts: &RenderOptions) {
     match it {
+        Draw::Figure { draws, .. } => {
+            for d in draws {
+                draw(ctx, doc, d, view, visible, opts);
+            }
+        }
         Draw::Fill { rect, color: c, alpha } => {
             let r = kurbo::Rect::new(rect.x as f64, rect.y as f64, rect.right() as f64, rect.bottom() as f64);
             if !r.overlaps(*visible) {
@@ -350,7 +355,9 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             }
             for (gid, x, y) in glyphs {
                 let (gx, gy) = (*x as f64, *y as f64);
-                if gx < visible.x0 - 100.0 || gx > visible.x1 || gy < visible.y0 || gy > visible.y1 + 200.0 {
+                // Written so a NaN position is skipped too.
+                let near = gx >= visible.x0 - 100.0 && gx <= visible.x1 && gy >= visible.y0 && gy <= visible.y1 + 200.0;
+                if !near {
                     continue;
                 }
                 let o = db.outline(face, *gid);
@@ -434,6 +441,24 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             ctx.reset_paint_transform();
             if faded {
                 ctx.pop_layer();
+            }
+        }
+        Draw::Path { segs, fill, stroke, stroke_width } => {
+            let path = wordcraft_layout::display::seg_path(segs);
+            if path.elements().is_empty() {
+                return;
+            }
+            ctx.set_transform(view);
+            if let Some(f) = fill {
+                ctx.set_paint(color(opts.ink(*f), 1.0));
+                ctx.fill_path(&path);
+            }
+            if let Some(s) = stroke {
+                // Width 0 (or none) is a hairline.
+                let w = if stroke_width.is_finite() && *stroke_width > 0.0 { stroke_width.clamp(0.25, 200.0) } else { 0.75 };
+                ctx.set_paint(color(opts.ink(*s), 1.0));
+                ctx.set_stroke(kurbo::Stroke::new(w as f64));
+                ctx.stroke_path(&path);
             }
         }
         Draw::Shape { rect, kind, fill, stroke, stroke_width } => {

@@ -96,6 +96,15 @@ pub enum Placed {
         stroke: Option<Rgb>,
         stroke_width: f32,
     },
+    /// A floating chart or diagram, drawn from its items inside `rect`. The object is the U+FFFC at
+    /// byte `off` of paragraph `path` (its alt text).
+    Graphic {
+        rect: Rect,
+        graphic: Arc<wordcraft_doc::graphic::Graphic>,
+        story: StoryRef,
+        path: Path,
+        off: usize,
+    },
     /// A table cell's area (for hit testing and cell selection).
     Cell {
         rect: Rect,
@@ -128,7 +137,11 @@ impl Placed {
                 *x += dx;
                 *y += dy;
             }
-            Placed::Fill { rect, .. } | Placed::Image { rect, .. } | Placed::Shape { rect, .. } | Placed::Cell { rect, .. } => {
+            Placed::Fill { rect, .. }
+            | Placed::Image { rect, .. }
+            | Placed::Shape { rect, .. }
+            | Placed::Graphic { rect, .. }
+            | Placed::Cell { rect, .. } => {
                 rect.x += dx;
                 rect.y += dy;
             }
@@ -174,7 +187,11 @@ impl Placed {
                     *t = turn;
                 }
             }
-            Placed::Fill { rect, .. } | Placed::Image { rect, .. } | Placed::Shape { rect, .. } | Placed::Cell { rect, .. } => {
+            Placed::Fill { rect, .. }
+            | Placed::Image { rect, .. }
+            | Placed::Shape { rect, .. }
+            | Placed::Graphic { rect, .. }
+            | Placed::Cell { rect, .. } => {
                 *rect = turn_rect(turn, x, y, *rect);
             }
             Placed::Object { rect, origin, .. } => {
@@ -619,7 +636,13 @@ fn fit_box(items: Vec<Placed>, height: f32) -> Vec<Placed> {
             Placed::Rule { x0, y0, x1, y1, border } if y0.min(y1) < limit => {
                 out.push(Placed::Rule { x0, y0: y0.min(limit), x1, y1: y1.min(limit), border });
             }
-            Placed::Image { rect, .. } | Placed::Shape { rect, .. } | Placed::Cell { rect, .. } | Placed::Object { rect, .. } if rect.y < limit => {
+            Placed::Image { rect, .. }
+            | Placed::Shape { rect, .. }
+            | Placed::Graphic { rect, .. }
+            | Placed::Cell { rect, .. }
+            | Placed::Object { rect, .. }
+                if rect.y < limit =>
+            {
                 out.push(it);
             }
             _ => {}
@@ -1034,10 +1057,14 @@ struct PageFrame<'a> {
     origin: (f32, f32),
 }
 
-/// A floating (not inline) picture or shape: its size and placement.
+/// A floating (not inline) picture, chart or shape: its size and placement.
 fn floating(o: &InlineObject) -> Option<(f32, f32, &Float)> {
     match o {
-        InlineObject::Image { w, h, float, .. } | InlineObject::Shape { w, h, float, .. } if float.wrap != Wrap::Inline => Some((*w, *h, float)),
+        InlineObject::Image { w, h, float, .. } | InlineObject::Graphic { w, h, float, .. } | InlineObject::Shape { w, h, float, .. }
+            if float.wrap != Wrap::Inline =>
+        {
+            Some((*w, *h, float))
+        }
         _ => None,
     }
 }
@@ -1111,6 +1138,7 @@ fn float_item(o: &InlineObject, rect: Rect, story: StoryRef, path: &[u32], off: 
         InlineObject::Shape { kind, fill, stroke, stroke_width, .. } => {
             Some(Placed::Shape { rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width })
         }
+        InlineObject::Graphic { graphic, .. } => Some(Placed::Graphic { rect, graphic: graphic.clone(), story, path: Path(path.to_vec()), off }),
         _ => None,
     }
 }
@@ -1192,7 +1220,12 @@ fn place_objects(
             if left_out(oi) {
                 continue;
             }
-            let Some(obj @ (InlineObject::Image { w, h, float, .. } | InlineObject::Shape { w, h, float, .. })) = p.objects.get(oi) else { continue };
+            let Some(
+                obj @ (InlineObject::Image { w, h, float, .. } | InlineObject::Graphic { w, h, float, .. } | InlineObject::Shape { w, h, float, .. }),
+            ) = p.objects.get(oi)
+            else {
+                continue;
+            };
             let floating = float.wrap != Wrap::Inline;
             let rect = if floating {
                 floats.get(&oi).copied().unwrap_or_else(|| float_rect(at.page, at.col, at.para_y, *w, *h, float))
@@ -1692,7 +1725,7 @@ fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &Secti
 /// Is an object floating (not laid out inline)?
 pub fn is_floating(o: &InlineObject) -> bool {
     match o {
-        InlineObject::Image { float, .. } | InlineObject::Shape { float, .. } => float.wrap != Wrap::Inline,
+        InlineObject::Image { float, .. } | InlineObject::Graphic { float, .. } | InlineObject::Shape { float, .. } => float.wrap != Wrap::Inline,
         _ => false,
     }
 }

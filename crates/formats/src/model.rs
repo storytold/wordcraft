@@ -57,6 +57,9 @@ pub enum Inline {
     Image(Img),
     /// A bookmark (link target).
     Anchor(String),
+    /// A chart or diagram known here only by its alt text: written where alt text has a place
+    /// (an HTML or Markdown image), left out of editable formats so it never turns into body text.
+    Figure(String),
     /// An equation in the linear format WordCraft keeps them in (`x=(-b±√(b^2-4ac))/2a`). Formats
     /// without equations write `linear` as text.
     Equation {
@@ -118,7 +121,7 @@ impl Para {
         for i in &self.inlines {
             match i {
                 Inline::Text(t, _) | Inline::Equation { linear: t, .. } => s.push_str(t),
-                Inline::Image(_) | Inline::Anchor(_) => {}
+                Inline::Image(_) | Inline::Anchor(_) | Inline::Figure(_) => {}
             }
         }
         s
@@ -368,6 +371,7 @@ impl Builder<'_> {
                     let e2 = out.len();
                     let _ = out.insert_object(e2, InlineObject::BookmarkEnd { name: name.clone() }, &CharProps::default());
                 }
+                Inline::Figure(_) => {}
                 Inline::Equation { linear, display } => {
                     let linear = clean_text(linear);
                     if !linear.is_empty() {
@@ -686,6 +690,14 @@ pub fn flow_paras(doc: &Document, p: &Paragraph) -> Vec<Para> {
                         }
                         None if !alt.is_empty() => buf.push_str(alt),
                         None => {}
+                    }
+                }
+                Some(InlineObject::Graphic { alt, .. }) => {
+                    if !buf.is_empty() {
+                        out.push_text(&std::mem::take(&mut buf), &f);
+                    }
+                    if !alt.trim().is_empty() {
+                        out.inlines.push(Inline::Figure(alt.clone()));
                     }
                 }
                 Some(InlineObject::Equation { linear, display, math }) => {

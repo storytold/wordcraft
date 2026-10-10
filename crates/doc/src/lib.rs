@@ -14,6 +14,7 @@ pub mod bidi;
 pub mod edit;
 pub mod encoding;
 pub mod fields;
+pub mod graphic;
 pub mod math;
 pub mod math_edit;
 pub mod math_latex;

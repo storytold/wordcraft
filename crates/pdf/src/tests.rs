@@ -581,3 +581,39 @@ fn turned_cell_text_exports_as_text() {
         assert!(text.contains("Turned") && text.contains("Below"), "{dir:?}: {text:?}");
     }
 }
+
+#[test]
+fn inline_chart_is_a_figure_with_its_text_inside_it() {
+    use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, TextAlign};
+    use wordcraft_doc::props::Rgb;
+    let items = vec![GraphicItem::Text {
+        rect: [0.0, 0.0, 216.0, 20.0],
+        text: "Q1".into(),
+        size: 10.0,
+        color: Rgb::BLACK,
+        bold: false,
+        align: TextAlign::Center,
+        font: None,
+    }];
+    let graphic = Graphic { kind: GraphicKind::Chart, items, ..Default::default() };
+    let obj = InlineObject::Graphic { w: 216.0, h: 144.0, alt: "Sales by quarter".into(), float: Default::default(), graphic: Arc::new(graphic) };
+    let mut d = Document::from_text("Chart");
+    d.insert_object(&wordcraft_doc::Pos::body(0, 0), obj, &Default::default()).unwrap();
+    let raw = |tagged| String::from_utf8_lossy(&export(&d, &PdfOptions { tagged, compress: false, ..Default::default() }).unwrap()).into_owned();
+    assert!(raw(true).contains("/Figure"), "tagged chart is a figure");
+    assert!(!raw(false).contains("/Figure"));
+}
+
+#[test]
+fn chart_without_alt_text_is_a_figure_called_chart() {
+    use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, PathSeg};
+    let segs = vec![PathSeg::Move(1.0, 1.0), PathSeg::Line(50.0, 50.0)];
+    let items = vec![GraphicItem::Path { segs, fill: None, stroke: Some(wordcraft_doc::props::Rgb::BLACK), stroke_width: 1.0 }];
+    let graphic = Graphic { kind: GraphicKind::Chart, items, ..Default::default() };
+    let obj = InlineObject::Graphic { w: 216.0, h: 144.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) };
+    let mut d = Document::from_text("Chart");
+    d.insert_object(&wordcraft_doc::Pos::body(0, 0), obj, &Default::default()).unwrap();
+    let raw = String::from_utf8_lossy(&export(&d, &PdfOptions { tagged: true, compress: false, ..Default::default() }).unwrap()).into_owned();
+    assert!(raw.contains("/Alt(chart)"), "no chart alt text");
+    assert!(!raw.contains("/Alt(picture)"));
+}
