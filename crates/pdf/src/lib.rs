@@ -819,6 +819,14 @@ impl Exporter<'_> {
                 s.set_stroke(None);
             }
             Draw::Mark { .. } | Draw::MarkText { .. } => {}
+            Draw::Clip { rect, items } => {
+                let Some(clip) = rect_path(rect) else { return };
+                s.push_clip_path(&clip, &FillRule::NonZero);
+                for it in items {
+                    self.draw(s, it);
+                }
+                s.pop();
+            }
             Draw::Turned { x, y, turn, items } => {
                 if !ok(*x) || !ok(*y) {
                     return;

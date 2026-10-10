@@ -2860,6 +2860,7 @@ fn rotated_group_turns_its_members_and_their_shadows() {
         ch_w: 120.0,
         ch_h: 40.0,
         children: vec![GroupChild { x: 0.0, y: 0.0, obj: member(false, 0.0) }, GroupChild { x: 60.0, y: 0.0, obj: member(true, 10.0) }],
+        canvas: None,
     };
     let mut d = Document::from_text("Text under the group.");
     d.insert_object(&Pos::body(0, 0), group, &Default::default()).unwrap();
@@ -2984,4 +2985,95 @@ fn footnote_longer_than_pages_ends() {
     let pieces = note_pieces(&l, id);
     assert!(pieces.len() >= 3 && l.pages.len() == pieces.len(), "{} pages, {pieces:?}", l.pages.len());
     assert!(pieces.windows(2).all(|w| w[0].2 == w[1].1 && w[1].0 == w[0].0 + 1), "{pieces:?}");
+}
+
+/// #344 with #332: a Drawing Canvas turns as a whole, like a group: its background and outline,
+/// then its members clipped to its frame, all drawn inside its turn (the clip in the unturned
+/// frame, so the clip turns too); floating or inline. Hit testing follows the turned canvas.
+#[test]
+fn rotated_canvas_draws_its_clipped_members_inside_the_turn() {
+    use crate::display::Draw;
+    use wordcraft_doc::para::{Anchor, CanvasStyle, Float, GroupChild, ShapeKind, Wrap};
+    let member = InlineObject::Shape {
+        kind: ShapeKind::Rectangle,
+        w: 60.0,
+        h: 40.0,
+        fill: Some(wordcraft_doc::props::Rgb(1, 2, 3)),
+        stroke: None,
+        stroke_width: 0.0,
+        float: Float { rot: 10.0, ..Default::default() },
+        story: None,
+        effects: Default::default(),
+        freeform: None,
+    };
+    let canvas = |float: Float| InlineObject::Group {
+        w: 200.0,
+        h: 100.0,
+        float,
+        ch_w: 200.0,
+        ch_h: 100.0,
+        children: vec![GroupChild { x: 20.0, y: 30.0, obj: member.clone() }],
+        canvas: Some(CanvasStyle { fill: Some(wordcraft_doc::props::Rgb(0xF0, 0xF4, 0xFF)), stroke: None, stroke_width: 0.0 }),
+    };
+    // Turned draws: (turn, background rect, clip rect, member rect and its own turn).
+    let turned = |draws: &[Draw]| -> (Vec<f32>, Vec<Rect>, Vec<(Rect, Vec<(Rect, f32)>)>) {
+        let (mut turns, mut bgs, mut clips) = (Vec::new(), Vec::new(), Vec::new());
+        for d in draws {
+            let Draw::Rotated { spin, items, .. } = d else { continue };
+            turns.push(spin.deg);
+            for i in items {
+                match i {
+                    Draw::Shape { rect, fill: Some(c), .. } if c.0 == 0xF0 => bgs.push(*rect),
+                    Draw::Clip { rect, items } => {
+                        let members = items
+                            .iter()
+                            .map(|m| match m {
+                                Draw::Rotated { spin, items, .. } => match items.first() {
+                                    Some(Draw::Shape { rect, .. }) => (*rect, spin.deg),
+                                    o => panic!("{o:?}"),
+                                },
+                                o => panic!("{o:?}"),
+                            })
+                            .collect();
+                        clips.push((*rect, members));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        (turns, bgs, clips)
+    };
+    for floating in [true, false] {
+        let float = if floating {
+            Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 100.0, y: 100.0, rot: 90.0, ..Default::default() }
+        } else {
+            Float { rot: 90.0, ..Default::default() }
+        };
+        let mut d = Document::from_text("Text by the canvas.");
+        d.insert_object(&Pos::body(0, 0), canvas(float), &Default::default()).unwrap();
+        let l = lay(&d);
+        let p = &l.pages[0];
+        let hit = l.object(&Pos::body(0, 0), 0).unwrap();
+        assert_eq!(hit.spin.deg, 90.0);
+        let f = hit.rect;
+        let (turns, bgs, clips) = turned(&crate::display::page_display(&d, p, &Default::default()));
+        assert!(turns.contains(&90.0), "floating {floating}: {turns:?}");
+        // Background and clip are the canvas's unturned frame; the member sits in it, unturned
+        // but for its own 10°.
+        assert_eq!(bgs.len(), 1, "floating {floating}");
+        assert!((bgs[0].x - f.x).abs() < 0.01 && (bgs[0].w - 200.0).abs() < 0.01, "{bgs:?} vs {f:?}");
+        assert_eq!(clips.len(), 1, "floating {floating}");
+        let (clip, members) = &clips[0];
+        assert!((clip.x - bgs[0].x).abs() < 0.01 && (clip.y - bgs[0].y).abs() < 0.01 && (clip.h - 100.0).abs() < 0.01, "{clip:?}");
+        assert_eq!(members.len(), 1, "{members:?}");
+        let (m, own) = members[0];
+        assert!((m.x - (clip.x + 20.0)).abs() < 0.01 && (m.y - (clip.y + 30.0)).abs() < 0.01, "{m:?} in {clip:?}");
+        assert_eq!(own, 10.0);
+        if floating {
+            // Turned a quarter, the canvas's frame's left end is empty; above its centre isn't.
+            let (cx, cy) = (f.x + f.w / 2.0, f.y + f.h / 2.0);
+            assert!(l.object_at(0, f.x + 5.0, cy, 0.0).is_none());
+            assert!(l.object_at(0, cx, cy - 80.0, 0.0).is_some());
+        }
+    }
 }

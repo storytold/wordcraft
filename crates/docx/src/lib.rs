@@ -24,6 +24,11 @@ pub const PASSWORD_REQUIRED: &str = "this document is protected with a password"
 /// What [`DocxError::WrongPassword`] says.
 pub const WRONG_PASSWORD: &str = "the password is incorrect";
 
+/// The `a:ext` URI under a Drawing Canvas's `wpc:extLst` that holds its turn and flips as an
+/// `a:xfrm` (`rot`, `flipH`, `flipV`). Neither the canvas schema nor `wp:anchor` carries a
+/// transform, so this rides in the extension list Word and other readers skip.
+pub(crate) const CANVAS_SPIN_EXT: &str = "urn:wordcraft:canvas-xfrm";
+
 /// Read a package that may be password-protected ([`is_encrypted`]): it is decrypted with
 /// `password` first. An encrypted package without a password gives
 /// [`DocxError::PasswordRequired`]; a wrong one, [`DocxError::WrongPassword`].

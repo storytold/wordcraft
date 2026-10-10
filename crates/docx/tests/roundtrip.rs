@@ -925,6 +925,7 @@ fn groups_round_trip() {
             GroupChild { x: 150.0, y: 10.0, obj: oval.clone() },
             GroupChild { x: 50.0, y: 60.0, obj: tb },
         ],
+        canvas: None,
     };
     let mut p = Paragraph::with_text("grouped ", CharProps::default());
     let end = p.len();
@@ -932,7 +933,7 @@ fn groups_round_trip() {
     d.body = vec![para_block(p)];
     let r = rt(&d);
     let got = paras(&r);
-    let InlineObject::Group { w, h, float: f, ch_w, ch_h, children } = &got[0].objects[0] else { panic!("{:?}", got[0].objects) };
+    let InlineObject::Group { w, h, float: f, ch_w, ch_h, children, .. } = &got[0].objects[0] else { panic!("{:?}", got[0].objects) };
     assert_eq!((*w, *h, *ch_w, *ch_h), (240.0, 120.0, 200.0, 100.0));
     assert_eq!(*f, float);
     assert_eq!(children.iter().map(|c| (c.x, c.y)).collect::<Vec<_>>(), [(0.0, 0.0), (150.0, 10.0), (50.0, 60.0)]);
@@ -951,6 +952,106 @@ fn groups_round_trip() {
         }
         o => panic!("{o:?}"),
     }
+}
+
+/// A Drawing Canvas (`wpc:wpc`, #344) with a picture and a shape comes back as a canvas: its
+/// frame, background and outline, and each member at its offset in the canvas, unscaled.
+#[test]
+fn drawing_canvas_round_trips() {
+    use wordcraft_doc::para::{CanvasStyle, GroupChild};
+    let mut d = Document::new();
+    let key = d.add_media(tiny_png(), "png");
+    let pic = InlineObject::Image { media: key, w: 60.0, h: 40.0, alt: "In the canvas".into(), float: Float::default(), crop: [0.0; 4], ole: None };
+    let star = InlineObject::Shape {
+        kind: ShapeKind::Star,
+        w: 72.0,
+        h: 72.0,
+        fill: Some(Rgb(0xE0, 0xA0, 0x20)),
+        stroke: Some(Rgb(0x40, 0x40, 0x40)),
+        stroke_width: 1.0,
+        float: Float::default(),
+        story: None,
+        effects: Default::default(),
+        freeform: None,
+    };
+    let style = CanvasStyle { fill: Some(Rgb(0xF0, 0xF4, 0xFF)), stroke: Some(Rgb(0x20, 0x40, 0x80)), stroke_width: 1.5 };
+    let canvas = InlineObject::Group {
+        w: 432.0,
+        h: 216.0,
+        float: Float::default(),
+        ch_w: 432.0,
+        ch_h: 216.0,
+        children: vec![GroupChild { x: 12.0, y: 18.0, obj: pic }, GroupChild { x: 300.0, y: 100.0, obj: star.clone() }],
+        canvas: Some(style),
+    };
+    let mut p = Paragraph::with_text("drawn ", CharProps::default());
+    let end = p.len();
+    p.insert_object(end, canvas, &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains("wordprocessingCanvas") && xml.contains("<wpc:wpc>") && xml.contains("<wpc:bg>") && xml.contains("<wpc:whole>"), "{xml}");
+    let r = wordcraft_docx::read(&bytes).unwrap();
+    let got = paras(&r);
+    let InlineObject::Group { w, h, ch_w, ch_h, children, canvas, .. } = &got[0].objects[0] else { panic!("{:?}", got[0].objects) };
+    assert_eq!((*w, *h, *ch_w, *ch_h), (432.0, 216.0, 432.0, 216.0));
+    assert_eq!(*canvas, Some(style));
+    assert_eq!(children.iter().map(|c| (c.x, c.y)).collect::<Vec<_>>(), [(12.0, 18.0), (300.0, 100.0)]);
+    assert!(matches!(&children[0].obj, InlineObject::Image { w, h, alt, .. } if (*w, *h, alt.as_str()) == (60.0, 40.0, "In the canvas")));
+    assert_eq!(children[1].obj, star);
+}
+
+/// A turned and flipped Drawing Canvas (#344 with #332): the canvas schema has no transform, so
+/// its turn rides in our `wpc:extLst` extension, after its members; members keep their own turn.
+/// An unturned canvas writes no extension.
+#[test]
+fn rotated_drawing_canvas_round_trips() {
+    use wordcraft_doc::para::{CanvasStyle, GroupChild};
+    let member = InlineObject::Shape {
+        kind: ShapeKind::Rectangle,
+        w: 60.0,
+        h: 40.0,
+        fill: Some(Rgb(1, 2, 3)),
+        stroke: None,
+        stroke_width: 0.0,
+        float: Float { rot: 15.0, ..Default::default() },
+        story: None,
+        effects: Default::default(),
+        freeform: None,
+    };
+    let canvas = |float: Float| InlineObject::Group {
+        w: 200.0,
+        h: 100.0,
+        float,
+        ch_w: 200.0,
+        ch_h: 100.0,
+        children: vec![GroupChild { x: 10.0, y: 20.0, obj: member.clone() }],
+        canvas: Some(CanvasStyle { fill: Some(Rgb(0xF0, 0xF4, 0xFF)), stroke: None, stroke_width: 0.0 }),
+    };
+    let square = Float { wrap: Wrap::Square, ..Default::default() };
+    let mut p = Paragraph::with_text("c", CharProps::default());
+    p.insert_object(1, canvas(Float { rot: 30.0, flip_h: true, ..square }), &CharProps::default()).unwrap();
+    let end = p.len();
+    p.insert_object(end, canvas(square), &CharProps::default()).unwrap();
+    let bytes = wordcraft_docx::write(&doc_with(vec![p])).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(
+        xml.contains(r#"<wpc:extLst><a:ext uri="urn:wordcraft:canvas-xfrm"><a:xfrm rot="1800000" flipH="1"/></a:ext></wpc:extLst></wpc:wpc>"#),
+        "{xml}"
+    );
+    assert_eq!(xml.matches("<wpc:extLst>").count(), 1, "{xml}");
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    let got = &paras(&r)[0].objects;
+    let spins: Vec<(f32, bool, bool)> = got.iter().map(|o| o.frame().unwrap().2).map(|f| (f.rot, f.flip_h, f.flip_v)).collect();
+    assert_eq!(spins, [(30.0, true, false), (0.0, false, false)]);
+    let InlineObject::Group { children, canvas, .. } = &got[0] else { panic!("{got:?}") };
+    assert!(canvas.is_some());
+    assert_eq!(children.len(), 1);
+    assert_eq!(children[0].obj.frame().unwrap().2.rot, 15.0);
 }
 
 #[test]
@@ -1384,6 +1485,7 @@ fn rotation_and_flips_round_trip() {
         ch_w: 120.0,
         ch_h: 60.0,
         children: vec![wordcraft_doc::para::GroupChild { x: 0.0, y: 0.0, obj: shape(ShapeKind::Ellipse, Float { rot: 10.0, ..Default::default() }) }],
+        canvas: None,
     };
     let mut p = Paragraph::with_text("turned ", CharProps::default());
     for o in [pic, tri, flipped, group] {
@@ -1439,6 +1541,7 @@ fn rotated_group_and_shadow_rotation_round_trip() {
             wordcraft_doc::para::GroupChild { x: 0.0, y: 0.0, obj: member(true) },
             wordcraft_doc::para::GroupChild { x: 60.0, y: 0.0, obj: member(false) },
         ],
+        canvas: None,
     };
     let mut p = Paragraph::with_text("g", CharProps::default());
     p.insert_object(1, group, &CharProps::default()).unwrap();

@@ -284,6 +284,12 @@ pub enum InlineObject {
         ch_w: f32,
         ch_h: f32,
         children: Vec<GroupChild>,
+        /// A Drawing Canvas (Insert › Shapes › New Drawing Canvas, DrawingML's `wpc:wpc`) rather
+        /// than a group: it has its own background and outline, and its frame is independent of
+        /// its members: resizing it doesn't scale them (`ch_w` × `ch_h` follow `w` × `h`), and
+        /// what lies outside the frame is clipped.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        canvas: Option<CanvasStyle>,
     },
     /// A field: `instr` is the field code (`PAGE`, `NUMPAGES`, `DATE \@ "M/d/yyyy"`, `TOC \o "1-3"`…);
     /// `result` the cached display text.
@@ -357,6 +363,16 @@ pub struct GroupChild {
 /// Most members a group keeps (hostile files).
 pub const MAX_GROUP_CHILDREN: usize = 1000;
 
+/// The background fill and outline of a Drawing Canvas (an [`InlineObject::Group`] with `canvas`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CanvasStyle {
+    pub fill: Option<crate::props::Rgb>,
+    pub stroke: Option<crate::props::Rgb>,
+    /// Outline width, points.
+    pub stroke_width: f32,
+}
+
 impl InlineObject {
     /// A picture, chart or diagram, shape, text box or group: something drawn with a frame, sized and wrapped.
     pub fn is_drawing(&self) -> bool {
@@ -382,7 +398,7 @@ impl InlineObject {
             _ => None,
         }
     }
-    /// Resize a drawing (a group's members scale with it).
+    /// Resize a drawing (a group's members scale with it; a canvas's keep their size and place).
     pub fn set_size(&mut self, nw: f32, nh: f32) {
         if let InlineObject::Image { w, h, .. }
         | InlineObject::Graphic { w, h, .. }
@@ -392,6 +408,21 @@ impl InlineObject {
             *w = nw;
             *h = nh;
         }
+        if let InlineObject::Group { ch_w, ch_h, canvas: Some(_), .. } = self {
+            *ch_w = nw;
+            *ch_h = nh;
+        }
+    }
+    /// A Drawing Canvas's background and outline (`None` for anything else).
+    pub fn canvas_style(&self) -> Option<&CanvasStyle> {
+        match self {
+            InlineObject::Group { canvas, .. } => canvas.as_ref(),
+            _ => None,
+        }
+    }
+    /// Whether this is a Drawing Canvas.
+    pub fn is_canvas(&self) -> bool {
+        self.canvas_style().is_some()
     }
     /// The text box story this object shows, if it is a text box.
     pub fn text_box(&self) -> Option<u32> {

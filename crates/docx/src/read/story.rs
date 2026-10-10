@@ -126,7 +126,7 @@ fn clean_text(s: &str) -> String {
 
 fn children_of_choice(ac: &El) -> Option<&El> {
     // Prefer a Choice whose requirements we understand; else the Fallback; else any Choice.
-    const KNOWN: &[&str] = &["wps", "wpg", "w14", "w15", "wp14", "a14", "w16se", "w16cid", "w16", "w16cex", "w16sdtdh", "v"];
+    const KNOWN: &[&str] = &["wps", "wpg", "wpc", "w14", "w15", "wp14", "a14", "w16se", "w16cid", "w16", "w16cex", "w16sdtdh", "v"];
     let ok = |c: &El| c.attr("Requires").unwrap_or("").split_whitespace().all(|r| KNOWN.contains(&r));
     ac.children("mc:Choice").find(|c| ok(c)).or_else(|| ac.child("mc:Fallback")).or_else(|| ac.child("mc:Choice"))
 }
@@ -705,7 +705,9 @@ impl Reader<'_> {
             float.effect = float.effect.map(|e| e.max(0.0));
             return Some(InlineObject::Graphic { w, h, alt, float, graphic });
         }
-        let mut obj = if let Some(g) = gd.child("wpg:wgp") {
+        let mut obj = if let Some(c) = gd.child("wpc:wpc") {
+            self.read_canvas(sc, c, rels, w, h, float)
+        } else if let Some(g) = gd.child("wpg:wgp") {
             self.read_group(sc, g, rels, w, h, float)?
         } else if gd.find("a:blip").is_some() {
             self.read_pic(gd, rels, w, h, alt, float)?
@@ -801,7 +803,29 @@ impl Reader<'_> {
         if children.is_empty() {
             return None;
         }
-        Some(InlineObject::Group { w, h, float, ch_w, ch_h, children })
+        Some(InlineObject::Group { w, h, float, ch_w, ch_h, children, canvas: None })
+    }
+
+    /// A `wpc:wpc` Drawing Canvas (`w` × `h`, ECMA-376 Part 1 §20.4 and the Word 2010 canvas
+    /// schema): its `wpc:bg` fill, `wpc:whole` outline and members, which sit in the canvas's
+    /// own space (offsets from its top-left corner, unscaled). An empty canvas is kept.
+    /// The canvas schema has no `a:xfrm` of its own (nor does the anchor), so a turned or
+    /// flipped canvas keeps its turn in our `wpc:extLst` extension ([`CANVAS_SPIN_EXT`]).
+    fn read_canvas(&mut self, sc: &mut StoryCtx, c: &El, rels: &Rels, w: f32, h: f32, mut float: Float) -> InlineObject {
+        let spin_ext = c.child("wpc:extLst").and_then(|l| l.els().find(|e| e.name == "a:ext" && e.attr("uri") == Some(crate::CANVAS_SPIN_EXT)));
+        float.set_spin(xfrm_spin(spin_ext));
+        let solid = |e: Option<&El>| {
+            e.and_then(|f| f.child("a:solidFill")).and_then(|f| f.child("a:srgbClr")).and_then(|c| c.attr("val")).and_then(Rgb::parse)
+        };
+        let ln = c.child("wpc:whole").and_then(|e| e.child("a:ln"));
+        let style = wordcraft_doc::para::CanvasStyle {
+            fill: solid(c.child("wpc:bg")),
+            stroke: solid(ln),
+            stroke_width: ln.and_then(|l| l.attr("w")).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0).clamp(0.0, 100.0),
+        };
+        let mut children = Vec::new();
+        self.group_members(sc, c, rels, (0.0, 0.0, 1.0, 1.0), 0, &mut children);
+        InlineObject::Group { w, h, float, ch_w: w.max(1.0), ch_h: h.max(1.0), children, canvas: Some(style) }
     }
 
     /// The members of group `g` into `out`, mapped into the outermost group's space by `t`
@@ -830,12 +854,13 @@ impl Reader<'_> {
             let sppr = match e.name.as_str() {
                 "wps:wsp" => e.child("wps:spPr"),
                 "pic:pic" => e.child("pic:spPr"),
-                "wpg:grpSp" => e.child("wpg:grpSpPr"),
+                // A group inside a canvas is a whole `wpg:wgp`.
+                "wpg:grpSp" | "wpg:wgp" => e.child("wpg:grpSpPr"),
                 _ => continue,
             };
             let x = group_xfrm(sppr);
             let ((ox, oy), (ew, eh)) = (x.off, x.ext);
-            if e.name == "wpg:grpSp" {
+            if e.name == "wpg:grpSp" || e.name == "wpg:wgp" {
                 if depth >= 8 {
                     continue;
                 }

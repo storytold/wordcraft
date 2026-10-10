@@ -951,7 +951,7 @@ fn word_group_with_nested_group() {
 </wpg:grpSp></wpg:wgp></a:graphicData></a:graphic></wp:anchor></w:drawing></mc:Choice><mc:Fallback><w:pict/></mc:Fallback></mc:AlternateContent></w:r></w:p>"#;
     let d = read_body(body);
     let p = paras(&d);
-    let InlineObject::Group { w, h, float, ch_w, ch_h, children } = &p[0].objects[0] else { panic!("{:?}", p[0].objects) };
+    let InlineObject::Group { w, h, float, ch_w, ch_h, children, .. } = &p[0].objects[0] else { panic!("{:?}", p[0].objects) };
     assert_eq!((*w, *h, *ch_w, *ch_h), (200.0, 100.0, 200.0, 100.0));
     assert_eq!(float.wrap, Wrap::Square);
     let got: Vec<(f32, f32, ShapeKind, f32, f32)> = children

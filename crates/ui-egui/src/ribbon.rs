@@ -14,9 +14,12 @@ pub fn has_picture_selected(s: &wordcraft_engine::Session) -> bool {
     matches!(wordcraft_engine::cmd::objects::selected(s), Some((_, wordcraft_doc::para::InlineObject::Image { .. })))
 }
 
-/// Whether the selection is a shape or text box (so Shape Format is shown).
+/// Whether the selection is a shape, text box or Drawing Canvas (so Shape Format is shown).
 pub fn has_shape_selected(s: &wordcraft_engine::Session) -> bool {
-    matches!(wordcraft_engine::cmd::objects::selected(s), Some((_, wordcraft_doc::para::InlineObject::Shape { .. })))
+    match wordcraft_engine::cmd::objects::selected(s) {
+        Some((_, o)) => matches!(o, wordcraft_doc::para::InlineObject::Shape { .. }) || o.is_canvas(),
+        None => false,
+    }
 }
 
 /// Contextual tabs for the current selection (pure, tested).
@@ -549,6 +552,8 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
             ] {
                 mi(ui, app, l, "insert.shape", json!({"kind": k}));
             }
+            ui.separator();
+            mi(ui, app, "New Drawing Canvas", "insert.canvas", json!({}));
         });
         stack(ui, |ui| {
             small(ui, app, "icons", Some("Icons"), "Icons", "insert.icon", json!({}), false);
@@ -1241,6 +1246,19 @@ fn shape_format(app: &mut WordApp, ui: &mut Ui) {
             });
         });
     });
+    if wordcraft_engine::cmd::canvas::selected_canvas(&app.session).is_some() {
+        group(ui, "Drawing Canvas", None, app, |ui, app| {
+            menu_button(ui, app, "canvas", Some("Drawing\nCanvas"), "Drawing Canvas", true, |ui, app| {
+                mi(ui, app, "Fit", "canvas.fit", json!({}));
+                mi(ui, app, "Expand", "canvas.expand", json!({}));
+                ui.menu_button(tl!("Scale Drawing"), |ui| {
+                    for pct in [50, 75, 125, 150, 200] {
+                        mi(ui, app, &format!("{pct}%"), "canvas.scale", json!({"factor": pct as f32 / 100.0}));
+                    }
+                });
+            });
+        });
+    }
     group(ui, "Arrange", None, app, |ui, app| {
         big(ui, app, "position", "Position", "arrange.position", json!({}), false);
         big(ui, app, "wrapText", "Wrap\nText", "arrange.wrap", json!({}), false);
