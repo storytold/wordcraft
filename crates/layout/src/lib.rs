@@ -11,6 +11,7 @@
 pub mod display;
 pub mod fields;
 pub mod hit;
+pub mod kinsoku;
 pub mod math;
 pub mod para;
 mod table;
@@ -96,6 +97,7 @@ pub enum Placed {
         fill: Option<Rgb>,
         stroke: Option<Rgb>,
         stroke_width: f32,
+        effects: wordcraft_doc::effects::ShapeEffects,
     },
     /// A floating chart or diagram, drawn from its items inside `rect`. The object is the U+FFFC at
     /// byte `off` of paragraph `path` (its alt text).
@@ -1143,14 +1145,7 @@ struct PageFrame<'a> {
 
 /// A floating (not inline) picture, chart or shape: its size and placement.
 fn floating(o: &InlineObject) -> Option<(f32, f32, &Float)> {
-    match o {
-        InlineObject::Image { w, h, float, .. } | InlineObject::Graphic { w, h, float, .. } | InlineObject::Shape { w, h, float, .. }
-            if float.wrap != Wrap::Inline =>
-        {
-            Some((*w, *h, float))
-        }
-        _ => None,
-    }
+    o.frame().filter(|(_, _, float)| float.wrap != Wrap::Inline)
 }
 
 /// Where a floating object goes, in the coordinates of the box `frame` places on the page.
@@ -1213,18 +1208,24 @@ fn rel_exclusions(excl: &[(Rect, bool)], x0: f32, y0: f32) -> Vec<para::Exclusio
         .collect()
 }
 
-/// The item drawing floating object `o` at `rect`.
-fn float_item(o: &InlineObject, rect: Rect, story: StoryRef, path: &[u32], off: usize) -> Option<Placed> {
+/// The items drawing floating object `o` at `rect` (a group: its members).
+fn float_items(o: &InlineObject, rect: Rect, story: StoryRef, path: &[u32], off: usize) -> Vec<Placed> {
     match o {
         InlineObject::Image { media, crop, .. } => {
-            Some(Placed::Image { rect, media: media.clone(), crop: *crop, story, path: Path(path.to_vec()), off })
+            vec![Placed::Image { rect, media: media.clone(), crop: *crop, story, path: Path(path.to_vec()), off }]
         }
-        InlineObject::Shape { kind, fill, stroke, stroke_width, .. } => {
-            Some(Placed::Shape { rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width })
+        InlineObject::Shape { kind, fill, stroke, stroke_width, effects, .. } => {
+            vec![Placed::Shape { rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width, effects: *effects }]
         }
-        InlineObject::Graphic { graphic, .. } => Some(Placed::Graphic { rect, graphic: graphic.clone(), story, path: Path(path.to_vec()), off }),
-        _ => None,
+        InlineObject::Graphic { graphic, .. } => vec![Placed::Graphic { rect, graphic: graphic.clone(), story, path: Path(path.to_vec()), off }],
+        InlineObject::Group { .. } => group_members(o, rect).into_iter().flat_map(|(r, c)| float_items(c, r, story, path, off)).collect(),
+        _ => Vec::new(),
     }
+}
+
+/// A group's members, each with its rectangle when the group is at `rect`.
+fn group_members(o: &InlineObject, rect: Rect) -> Vec<(Rect, &InlineObject)> {
+    o.group_rects(rect.x, rect.y, rect.w, rect.h).into_iter().map(|([x, y, w, h], c)| (Rect::new(x, y, w, h), c)).collect()
 }
 
 /// Position the floating objects anchored in `p` for a paragraph whose text starts at `y0` in
@@ -1304,23 +1305,19 @@ fn place_objects(
             if left_out(oi) {
                 continue;
             }
-            let Some(
-                obj @ (InlineObject::Image { w, h, float, .. } | InlineObject::Graphic { w, h, float, .. } | InlineObject::Shape { w, h, float, .. }),
-            ) = p.objects.get(oi)
-            else {
-                continue;
-            };
+            let Some(obj) = p.objects.get(oi) else { continue };
+            let Some((w, h, float)) = obj.frame() else { continue };
             let floating = float.wrap != Wrap::Inline;
             let rect = if floating {
-                floats.get(&oi).copied().unwrap_or_else(|| float_rect(at.page, at.col, at.para_y, *w, *h, float))
+                floats.get(&oi).copied().unwrap_or_else(|| float_rect(at.page, at.col, at.para_y, w, h, float))
             } else {
                 let cx = x + line.cl_left(k).unwrap_or(0.0);
                 display::inline_rect(Some(obj), cx, y + (line.baseline - fl.top), c.adv, c.obj_h)
             };
             let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
             // Floating ones are drawn here; inline ones with their line.
-            if floating && let Some(it) = float_item(obj, rect, story, path, c.start) {
-                layer.push(it);
+            if floating {
+                layer.extend(float_items(obj, rect, story, path, c.start));
             }
             let text_box = match obj {
                 InlineObject::Shape { story: Some(id), .. } if ctx.doc.parts.get(id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox) => {
@@ -1337,16 +1334,30 @@ fn place_objects(
                 wrap: float.wrap,
                 origin: Point::new(at.col.0, at.para_y),
             });
-            // Its text, unless the box budget says no (a box inside itself, too deep, too many).
-            let Some(id) = text_box.filter(|id| ctx.boxes.enter(*id)) else { continue };
-            let blocks = ctx.doc.parts.get(&id).map(|p| p.blocks.clone()).unwrap_or_default();
-            let inner = layout_box(ctx, StoryRef::Part(id), &blocks, &[], (rect.w - 2.0 * BOX_INSET_X).max(12.0), None, depth + 1, None).items;
-            ctx.boxes.leave();
-            let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
-            // Text that doesn't fit inside the margins is hidden, as in Word.
-            for mut it in fit_box(inner, rect.h - 2.0 * BOX_INSET_Y) {
-                it.translate(rect.x + BOX_INSET_X, rect.y + BOX_INSET_Y);
-                layer.push(it);
+            // Its text (a group: its text boxes'), unless the box budget says no (a box inside
+            // itself, too deep, too many).
+            let boxes: Vec<(u32, Rect)> = match obj {
+                InlineObject::Group { .. } => group_members(obj, rect)
+                    .into_iter()
+                    .filter_map(|(r, c)| {
+                        c.text_box().filter(|id| ctx.doc.parts.get(id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox)).map(|id| (id, r))
+                    })
+                    .collect(),
+                _ => text_box.map(|id| (id, rect)).into_iter().collect(),
+            };
+            for (id, rect) in boxes {
+                if !ctx.boxes.enter(id) {
+                    continue;
+                }
+                let blocks = ctx.doc.parts.get(&id).map(|p| p.blocks.clone()).unwrap_or_default();
+                let inner = layout_box(ctx, StoryRef::Part(id), &blocks, &[], (rect.w - 2.0 * BOX_INSET_X).max(12.0), None, depth + 1, None).items;
+                ctx.boxes.leave();
+                let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
+                // Text that doesn't fit inside the margins is hidden, as in Word.
+                for mut it in fit_box(inner, rect.h - 2.0 * BOX_INSET_Y) {
+                    it.translate(rect.x + BOX_INSET_X, rect.y + BOX_INSET_Y);
+                    layer.push(it);
+                }
             }
         }
     }
@@ -1357,12 +1368,14 @@ fn place_objects(
 /// (on the box's cluster), as (cluster, note id).
 fn para_notes(doc: &Document, p: &Paragraph, pl: &ParaLayout) -> Vec<(usize, u32)> {
     let mut notes = pl.notes.clone();
-    if p.objects.iter().any(|o| matches!(o, InlineObject::Shape { story: Some(_), .. })) {
+    if p.objects.iter().any(|o| !o.text_boxes().is_empty()) {
         for (ci, c) in pl.clusters.iter().enumerate() {
             if let para::ClKind::Object(oi) = c.kind
-                && let Some(InlineObject::Shape { story: Some(id), .. }) = p.objects.get(oi)
+                && let Some(o) = p.objects.get(oi)
             {
-                notes.extend(doc.notes_in_text_box(*id).into_iter().map(|n| (ci, n)));
+                for id in o.text_boxes() {
+                    notes.extend(doc.notes_in_text_box(id).into_iter().map(|n| (ci, n)));
+                }
             }
         }
     }
@@ -1803,10 +1816,7 @@ fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &Secti
 
 /// Is an object floating (not laid out inline)?
 pub fn is_floating(o: &InlineObject) -> bool {
-    match o {
-        InlineObject::Image { float, .. } | InlineObject::Graphic { float, .. } | InlineObject::Shape { float, .. } => float.wrap != Wrap::Inline,
-        _ => false,
-    }
+    o.is_floating()
 }
 
 /// Milliseconds since an arbitrary epoch (monotonic on native; the browser's clock on the web).

@@ -400,17 +400,68 @@ pub fn combo_list(ui: &mut Ui, width: f32, current: &str, items: &[String], prev
     out
 }
 
+/// How a drawn button looks this frame. Hover fades in over egui's animation time and the
+/// pressed state blends in while the pointer is down, as on egui's own buttons. Framed buttons
+/// take egui's widget visuals (fill, stroke, text colour, expansion) so they match `ui.button`;
+/// frameless ones take the ribbon's hover/pressed tokens, like [`small`] and [`big`].
+pub struct DrawnState {
+    pub fill: Color32,
+    pub stroke: Stroke,
+    pub text: Color32,
+    pub expansion: f32,
+}
+
+pub fn drawn_state(ui: &Ui, resp: &Response, framed: bool) -> DrawnState {
+    let pressed = resp.is_pointer_button_down_on();
+    let h = ui.ctx().animate_bool_responsive(resp.id.with("hover"), resp.hovered() || pressed);
+    let p = ui.ctx().animate_bool_with_time(resp.id.with("press"), pressed, 0.06);
+    if framed {
+        let w = &ui.visuals().widgets;
+        let mix = |a: Color32, b: Color32, c: Color32| a.lerp_to_gamma(b, h).lerp_to_gamma(c, p);
+        let num = |a: f32, b: f32, c: f32| egui::lerp(egui::lerp(a..=b, h)..=c, p);
+        DrawnState {
+            fill: mix(w.inactive.weak_bg_fill, w.hovered.weak_bg_fill, w.active.weak_bg_fill),
+            stroke: Stroke::new(
+                num(w.inactive.bg_stroke.width, w.hovered.bg_stroke.width, w.active.bg_stroke.width),
+                mix(w.inactive.bg_stroke.color, w.hovered.bg_stroke.color, w.active.bg_stroke.color),
+            ),
+            text: mix(w.inactive.fg_stroke.color, w.hovered.fg_stroke.color, w.active.fg_stroke.color),
+            expansion: num(w.inactive.expansion, w.hovered.expansion, w.active.expansion),
+        }
+    } else {
+        let t = Tokens::get(ui.ctx());
+        DrawnState {
+            fill: Color32::TRANSPARENT.lerp_to_gamma(t.hover, h).lerp_to_gamma(t.pressed, p),
+            stroke: Stroke::NONE,
+            text: t.text,
+            expansion: 0.0,
+        }
+    }
+}
+
+/// A frameless 22 px icon button (pane close buttons): ribbon-style hover and press feedback.
+pub fn icon_button(ui: &mut Ui, icon: &str, tip: &str) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
+    let st = drawn_state(ui, &resp, false);
+    ui.painter().rect_filled(r, CornerRadius::same(4), st.fill);
+    icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), icon, t.icon, t.accent);
+    resp.on_hover_text(tip)
+}
+
 /// A text button with a drawn icon in front. Symbols such as ✎ or 💬 aren't in the interface
 /// fonts and would draw as empty boxes, so icons are painted (`icons.rs`) rather than typed.
+/// It looks and reacts like `ui.button` (see [`drawn_state`]).
 pub fn icon_text_button(ui: &mut Ui, icon: &str, text: &str, font: egui::FontId) -> Response {
     let t = Tokens::get(ui.ctx());
-    let galley = ui.painter().layout_no_wrap(text.to_string(), font, t.text);
+    let galley = ui.painter().layout_no_wrap(text.to_string(), font, Color32::PLACEHOLDER);
     let pad = ui.spacing().button_padding;
     let icon_w = 16.0;
     let size = vec2(pad.x + icon_w + 4.0 + galley.size().x + pad.x, galley.size().y.max(icon_w) + 2.0 * pad.y);
     let (r, resp) = ui.allocate_exact_size(size, Sense::click());
-    let v = ui.style().interact(&resp);
-    ui.painter().rect(r, v.corner_radius, v.weak_bg_fill, v.bg_stroke, egui::StrokeKind::Inside);
+    let st = drawn_state(ui, &resp, true);
+    let r = r.expand(st.expansion);
+    ui.painter().rect(r, ui.visuals().widgets.inactive.corner_radius, st.fill, st.stroke, egui::StrokeKind::Inside);
     icons::paint(
         ui.painter(),
         Rect::from_center_size(pos2(r.min.x + pad.x + icon_w / 2.0, r.center().y), vec2(icon_w, icon_w)),
@@ -418,13 +469,67 @@ pub fn icon_text_button(ui: &mut Ui, icon: &str, text: &str, font: egui::FontId)
         t.icon,
         t.accent,
     );
-    ui.painter().galley(pos2(r.min.x + pad.x + icon_w + 4.0, r.center().y - galley.size().y / 2.0), galley, t.text);
+    ui.painter().galley(pos2(r.min.x + pad.x + icon_w + 4.0, r.center().y - galley.size().y / 2.0), galley, st.text);
     resp
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drawn_buttons_fade_in_on_hover_and_darken_while_pressed() {
+        // #305's drawn replacements for ✕, 💬, ✎ and ➕ must react like egui's buttons.
+        let ctx = egui::Context::default();
+        crate::theme::apply(&ctx, &Tokens::light());
+        let clock = std::cell::Cell::new(0u32);
+        let seen = std::cell::Cell::new((Rect::NOTHING, Rect::NOTHING, Color32::PLACEHOLDER, Color32::PLACEHOLDER));
+        // One 60 fps frame; returns both buttons' rects and fills (framed, frameless).
+        let frame = |events: Vec<egui::Event>| {
+            clock.set(clock.get() + 1);
+            let input = egui::RawInput { time: Some(f64::from(clock.get()) / 60.0), predicted_dt: 1.0 / 60.0, events, ..Default::default() };
+            ctx.run_ui(input, |ui| {
+                let framed = icon_text_button(ui, "comment", "Comments", regular(12.0));
+                let frameless = icon_button(ui, "close", "Close");
+                let (a, b) = (drawn_state(ui, &framed, true).fill, drawn_state(ui, &frameless, false).fill);
+                seen.set((framed.rect, frameless.rect, a, b));
+            })
+            .drop_without_applying_deltas();
+            seen.get()
+        };
+        // Half a second of frames, so animations finish; returns the last one.
+        let settle = || {
+            for _ in 0..29 {
+                frame(vec![]);
+            }
+            frame(vec![])
+        };
+        let press = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        let w = ctx.global_style().visuals.widgets.clone();
+        let t = Tokens::light();
+
+        let (framed, frameless, idle, idle_bare) = settle();
+        assert_eq!(idle, w.inactive.weak_bg_fill);
+        assert_eq!(idle_bare, Color32::TRANSPARENT);
+
+        // Hover fades in over a few frames rather than jumping, then settles on egui's hovered fill.
+        let first = frame(vec![egui::Event::PointerMoved(framed.center())]).2;
+        let between = |c: Color32, a: Color32, b: Color32| a.r().min(b.r()) < c.r() && c.r() < a.r().max(b.r());
+        assert!(between(first, idle, w.hovered.weak_bg_fill), "hover should animate: {idle:?} → {first:?} → {:?}", w.hovered.weak_bg_fill);
+        assert_eq!(settle().2, w.hovered.weak_bg_fill);
+        // Held down: blends to the pressed (active) fill.
+        frame(vec![press(framed.center(), true)]);
+        assert_eq!(settle().2, w.active.weak_bg_fill);
+        frame(vec![press(framed.center(), false)]);
+
+        // The frameless close button uses the ribbon's hover and pressed tokens; the other fades out.
+        frame(vec![egui::Event::PointerMoved(frameless.center())]);
+        let after = settle();
+        assert_eq!(after.3, t.hover);
+        assert_eq!(after.2, w.inactive.weak_bg_fill);
+        frame(vec![press(frameless.center(), true)]);
+        assert_eq!(settle().3, t.pressed);
+    }
 
     #[test]
     fn a_long_combo_list_builds_only_the_rows_in_view() {

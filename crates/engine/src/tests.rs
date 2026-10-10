@@ -602,6 +602,73 @@ fn paste_special_respects_track_changes_and_brings_lists() {
 }
 
 #[test]
+fn clipboard_pane_collects_copies_and_pastes_one_undoably() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "one two three"}));
+    for (a, b) in [(0, 3), (4, 7), (8, 13)] {
+        run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": a}, "focus": {"block": 0, "off": b}}));
+        run(&mut s, "edit.copy", json!({}));
+    }
+    // Copying the same text again adds nothing.
+    run(&mut s, "edit.copy", json!({}));
+    let items = run(&mut s, "edit.clipboardItems", json!({}));
+    let previews: Vec<&str> = items.as_array().unwrap().iter().map(|i| i["preview"].as_str().unwrap()).collect();
+    assert_eq!(previews, ["three", "two", "one"], "newest first");
+    assert_eq!(run(&mut s, "edit.clipboardPane", json!({}))["value"], true);
+    assert!(s.view.clipboard_pane);
+
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "edit.pasteClipboardItem", json!({"index": 1}));
+    assert_eq!(text(&s), "one two threetwo");
+    assert_eq!(s.clipboard_text, "three", "the clipboard itself is unchanged");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(text(&s), "one two three");
+
+    run(&mut s, "edit.pasteAllClipboard", json!({}));
+    assert_eq!(text(&s), "one two threeonetwothree", "Paste All goes in copy order");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(text(&s), "one two three", "Paste All is one undo step");
+
+    let left = run(&mut s, "edit.deleteClipboardItem", json!({"index": 0}));
+    assert_eq!(left[0]["preview"], "two");
+    run(&mut s, "edit.clearClipboard", json!({}));
+    assert!(s.clip_history.is_empty());
+    assert!(s.run("edit.pasteClipboardItem", &json!({"index": 0})).is_err());
+}
+
+#[test]
+fn clipboard_pane_is_capped_and_rejects_bad_indexes() {
+    let mut s = s();
+    let words: Vec<String> = (0..30).map(|i| format!("w{i}")).collect();
+    run(&mut s, "document.setText", json!({"text": words.join(" ")}));
+    // Cutting each word in turn leaves the spaces: word `off` starts at `off`.
+    for (off, w) in words.iter().enumerate() {
+        run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": off}, "focus": {"block": 0, "off": off + w.len()}}));
+        run(&mut s, "edit.cut", json!({}));
+    }
+    let items = run(&mut s, "edit.clipboardItems", json!({}));
+    let items = items.as_array().unwrap();
+    assert_eq!(items.len(), crate::cmd::edit::CLIP_MAX_ITEMS);
+    assert_eq!(items[0]["preview"], "w29");
+    assert_eq!(items[23]["preview"], "w6", "the oldest drop out");
+
+    let before = text(&s);
+    for bad in [json!({"index": 24}), json!({"index": -1}), json!({"index": 1e300}), json!({"index": "x"}), json!({})] {
+        assert!(s.run("edit.pasteClipboardItem", &bad).is_err(), "{bad}");
+        assert!(s.run("edit.deleteClipboardItem", &bad).is_err(), "{bad}");
+    }
+    assert_eq!(text(&s), before);
+    assert_eq!(s.clip_history.len(), 24);
+
+    // A huge copy still reaches the clipboard but is not collected.
+    run(&mut s, "document.setText", json!({"text": "x".repeat(3 << 20)}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "edit.copy", json!({}));
+    assert_eq!(s.clipboard_text.len(), 3 << 20);
+    assert_eq!(s.clip_history.items()[0].text, "w29");
+}
+
+#[test]
 fn tables_commands() {
     let mut s = s();
     run(&mut s, "insert.table", json!({"rows": 2, "cols": 3}));
@@ -2284,4 +2351,241 @@ fn accessibility_reports_a_chart_without_alt_text() {
     let v = run(&mut s, "file.accessibility", json!({}));
     let issues = v["issues"].as_array().expect("issues");
     assert!(issues.iter().any(|i| i["issue"] == "Chart or diagram has no alternative text"), "{issues:?}");
+}
+
+/// Shape Format › Shape Effects (#275): presets and custom values apply to the selected shape,
+/// an omitted key is kept, hostile numbers are clamped and each change is one undo step.
+#[test]
+fn shape_effects_apply_and_undo() {
+    use wordcraft_doc::effects::{MAX_BLUR, MAX_DISTANCE, Shadow};
+    let mut s = s();
+    run(&mut s, "insert.shape", json!({"kind": "ellipse"}));
+    let effects = |s: &Session| match cmd::objects::selected(s) {
+        Some((_, wordcraft_doc::InlineObject::Shape { effects, float, .. })) => (effects, float.effect),
+        o => panic!("{o:?}"),
+    };
+    assert!(effects(&s).0.is_empty());
+    run(&mut s, "shape.effects", json!({"shadow": "offsetBottomRight", "glow": {"color": "FF0000", "size": 8}, "softEdge": 5}));
+    let (e, extent) = effects(&s);
+    assert_eq!(e.shadow, Shadow::preset("offsetBottomRight"));
+    assert_eq!(e.glow.map(|g| (g.color, g.size)), Some((wordcraft_doc::props::Rgb(255, 0, 0), 8.0)));
+    assert_eq!(e.soft_edge, Some(5.0));
+    assert!(extent.iter().all(|v| *v >= 8.0), "room for the glow: {extent:?}");
+    // Clearing the glow leaves the shadow and soft edges.
+    run(&mut s, "shape.effects", json!({"glow": null}));
+    let (e, _) = effects(&s);
+    assert!(e.glow.is_none() && e.shadow.is_some() && e.soft_edge == Some(5.0));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(effects(&s).0.glow.map(|g| g.size), Some(8.0));
+    // Hostile numbers.
+    run(&mut s, "shape.effects", json!({"shadow": {"blur": 1e30, "distance": -5, "angle": 1e20, "transparency": 400}, "softEdge": -3}));
+    let (e, _) = effects(&s);
+    let sh = e.shadow.unwrap();
+    assert!(sh.blur == MAX_BLUR && sh.distance == 0.0 && (0.0..360.0).contains(&sh.angle) && sh.transparency == 100.0, "{sh:?}");
+    assert!(e.soft_edge.is_none());
+    run(&mut s, "shape.effects", json!({"shadow": {"distance": 1e9}}));
+    assert_eq!(effects(&s).0.shadow.map(|s| s.distance), Some(MAX_DISTANCE));
+    assert!(s.run("shape.effects", &json!({"shadow": "perspective"})).is_err());
+    // Off a shape it's disabled.
+    run(&mut s, "select.collapse", json!({"end": true}));
+    run(&mut s, "text.insert", json!({"text": "x"}));
+    assert!(s.run("shape.effects", &json!({"shadow": null})).is_err());
+}
+
+#[test]
+fn asian_typography_sets_flags_on_selected_paragraphs_and_undoes() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "一\n二\n三"}));
+    run(&mut s, "select.all", json!({}));
+    let r = run(&mut s, "para.asianTypography", json!({"kinsoku": false, "wordWrap": false, "topLinePunct": true}));
+    assert_eq!(r["asianTypography"]["kinsoku"], false);
+    assert_eq!(r["asianTypography"]["autoSpaceDE"], true, "a flag left out keeps its default");
+    for p in s.doc.body.iter().filter_map(|b| b.as_para()) {
+        assert_eq!(
+            (p.props.kinsoku, p.props.word_wrap, p.props.top_line_punct, p.props.overflow_punct),
+            (Some(false), Some(false), Some(true), None)
+        );
+    }
+    run(&mut s, "edit.undo", json!({}));
+    assert!(s.doc.body.iter().filter_map(|b| b.as_para()).all(|p| p.props.kinsoku.is_none() && p.props.word_wrap.is_none()));
+    // Without flags it only reports them.
+    let r = run(&mut s, "para.asianTypography", json!({}));
+    assert_eq!(r["asianTypography"]["kinsoku"], true);
+}
+
+#[test]
+fn manage_styles_lists_paragraph_character_linked_and_table_styles() {
+    let mut s = s();
+    let list = run(&mut s, "styles.manage", json!({"sort": "alphabetical"}));
+    let list = list.as_array().unwrap();
+    let find = |name: &str| list.iter().find(|x| x["name"] == name).unwrap_or_else(|| panic!("{name} listed"));
+    assert_eq!(find("Normal")["type"], "paragraph");
+    assert_eq!(find("Normal")["builtIn"], true);
+    assert_eq!(find("Normal")["inGallery"], true);
+    assert_eq!(find("Heading 1")["type"], "linked");
+    assert_eq!(find("Heading 1")["basedOn"], "Normal");
+    assert!(find("Heading 1")["format"]["size"].is_number(), "description formatting");
+    assert_eq!(find("Table Grid")["type"], "table");
+    assert!(list.iter().any(|x| x["type"] == "character"));
+    // The character half of a linked pair is listed once, as the linked style.
+    assert!(!list.iter().any(|x| x["id"] == "Heading1Char"));
+    let names: Vec<String> = list.iter().map(|x| x["name"].as_str().unwrap().to_lowercase()).collect();
+    assert!(names.windows(2).all(|w| w[0] <= w[1]), "alphabetical");
+    // Recommended order starts with Normal (priority 0); listing is not an edit.
+    let rec = run(&mut s, "styles.manage", json!({}));
+    assert_eq!(rec[0]["name"], "Normal");
+    assert!(s.run("styles.manage", &json!({"sort": "sideways"})).is_err());
+    assert!(!s.dirty);
+}
+
+#[test]
+fn deleting_a_style_falls_back_to_its_base_and_undoes() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Styled"}));
+    run(&mut s, "styles.create", json!({"name": "Mine", "basedOn": "Heading 1"}));
+    run(&mut s, "styles.create", json!({"name": "Child", "basedOn": "Mine", "fromSelection": false}));
+    run(&mut s, "styles.apply", json!({"style": "Mine"}));
+    assert_eq!(para_style(&s, 0).as_deref(), Some("Mine"));
+    let r = run(&mut s, "styles.delete", json!({"style": "Mine"}));
+    assert_eq!(r["restyled"], 1);
+    assert!(s.doc.styles.get("Mine").is_none());
+    assert_eq!(para_style(&s, 0).as_deref(), Some("Heading1"), "falls back to its base");
+    assert_eq!(s.doc.styles.get("Child").and_then(|c| c.based_on.clone()).as_deref(), Some("Heading1"), "rebased");
+    run(&mut s, "edit.undo", json!({}));
+    assert!(s.doc.styles.get("Mine").is_some());
+    assert_eq!(para_style(&s, 0).as_deref(), Some("Mine"));
+    // Built-in styles are refused, unknown ones are errors.
+    assert!(s.run("styles.delete", &json!({"style": "Heading 1"})).is_err());
+    assert!(s.run("styles.delete", &json!({"style": "No Such Style"})).is_err());
+    assert!(s.doc.styles.get("Heading1").is_some());
+}
+
+/// Manage Styles' Delete on a table style is Table Design's Delete Table Style: its tables take
+/// Table Grid, styles based on it keep their look, and Word's built-in table styles are refused.
+#[test]
+fn deleting_a_table_style_from_manage_styles_uses_table_style_deletion() {
+    use wordcraft_doc::Rgb;
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    let (tp, _, _) = s.sel.focus.path.cell().unwrap();
+    run(&mut s, "table.newStyle", json!({"name": "Base", "headerRow": {"fill": "C00000"}}));
+    run(&mut s, "table.newStyle", json!({"name": "Child", "basedOn": "Base", "apply": false}));
+    let r = run(&mut s, "styles.delete", json!({"style": "Base"}));
+    assert_eq!((r["deleted"][0].as_str(), r["restyled"].as_u64()), (Some("Base"), Some(1)));
+    assert_eq!(s.doc.table(StoryRef::Body, &tp).unwrap().props.style.as_deref(), Some("TableGrid"));
+    assert_eq!(s.doc.styles.table_style("Child").unwrap().parts.header_fill, Some(Rgb(0xC0, 0, 0)), "the child keeps its look");
+    for st in s.doc.styles.styles.iter_mut() {
+        st.builtin = false;
+    }
+    assert!(s.run("styles.delete", &json!({"style": "Table Grid"})).is_err());
+    let list = run(&mut s, "styles.manage", json!({}));
+    let grid = list.as_array().unwrap().iter().find(|x| x["name"] == "Table Grid").unwrap();
+    assert_eq!(grid["builtIn"], true);
+}
+
+#[test]
+fn style_visibility_round_trips_through_docx() {
+    let mut s = s();
+    run(&mut s, "styles.create", json!({"name": "Mine", "fromSelection": false}));
+    run(&mut s, "styles.setVisibility", json!({"style": "Heading 1", "gallery": false}));
+    run(&mut s, "styles.setVisibility", json!({"style": "Mine", "hidden": true}));
+    run(&mut s, "styles.setVisibility", json!({"style": "Heading 4", "gallery": true}));
+    assert!(s.run("styles.setVisibility", &json!({"style": "Mine"})).is_err());
+    let gallery: Vec<String> = s.doc.styles.gallery().iter().map(|x| x.id.clone()).collect();
+    assert!(!gallery.contains(&"Heading1".to_string()) && !gallery.contains(&"Mine".to_string()) && gallery.contains(&"Heading4".to_string()));
+    let bytes = crate::io::save_bytes("v.docx", &s.doc).unwrap();
+    let doc = crate::io::open_bytes("v.docx", &bytes).unwrap();
+    let st = |id: &str| doc.styles.get(id).cloned().unwrap_or_else(|| panic!("{id} kept"));
+    assert!(!st("Heading1").quick && !st("Heading1").hidden);
+    assert!(st("Mine").hidden && !st("Mine").builtin);
+    assert!(st("Heading4").quick);
+    run(&mut s, "edit.undo", json!({}));
+    assert!(s.doc.styles.get("Heading4").is_some_and(|h| !h.quick), "undoable");
+}
+
+/// #146: the first/last column, total row and banded column regions apply in layout (later
+/// regions win: the total row's fill beats the first column's) and round-trip through .docx.
+#[test]
+fn custom_table_style_column_and_total_regions() {
+    use wordcraft_doc::Rgb;
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 3, "cols": 4}));
+    run(
+        &mut s,
+        "table.look",
+        json!({"headerRow": false, "bandedRows": false, "firstColumn": true, "lastColumn": true, "totalRow": true, "bandedColumns": true}),
+    );
+    let r = run(
+        &mut s,
+        "table.newStyle",
+        json!({"name": "Ledger",
+            "firstColumn": {"fill": "112233", "bold": true},
+            "lastColumn": {"fill": "445566"},
+            "lastRow": {"fill": "778899", "borders": true},
+            "bandedColumns": {"fill": "ABCDEF"}}),
+    );
+    let id = r["id"].as_str().unwrap().to_string();
+    let fills = |s: &mut Session, c: Rgb| {
+        s.layout().pages[0].items.iter().filter(|i| matches!(i, crate::layout::Placed::Fill { color, .. } if *color == c)).count()
+    };
+    // 3 rows x 4 columns: the total row takes all 4 of its cells, the first and last columns the
+    // two cells above it, and the column band (column 2 of the inner columns 2 and 3) one each.
+    assert_eq!(fills(&mut s, Rgb(0x77, 0x88, 0x99)), 4, "total row");
+    assert_eq!(fills(&mut s, Rgb(0x11, 0x22, 0x33)), 2, "first column");
+    assert_eq!(fills(&mut s, Rgb(0x44, 0x55, 0x66)), 2, "last column");
+    assert_eq!(fills(&mut s, Rgb(0xAB, 0xCD, 0xEF)), 2, "first column band");
+
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+    let p = back.styles.get(&id).unwrap().table.clone().unwrap();
+    assert_eq!(
+        (p.first_col_fill, p.first_col_chr.bold, p.last_col_fill, p.total_fill, p.col_band_fill),
+        (Some(Rgb(0x11, 0x22, 0x33)), Some(true), Some(Rgb(0x44, 0x55, 0x66)), Some(Rgb(0x77, 0x88, 0x99)), Some(Rgb(0xAB, 0xCD, 0xEF)))
+    );
+    assert!(p.total_borders.is_some_and(|b| b.any_visible()));
+}
+
+/// #146: deleting a custom table style re-bases the styles based on it (keeping their look),
+/// puts its tables on Table Grid, refuses built-in styles, and undoes.
+#[test]
+fn delete_table_style_falls_back_and_undoes() {
+    use wordcraft_doc::Rgb;
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    let (tp, _, _) = s.sel.focus.path.cell().unwrap();
+    run(&mut s, "table.newStyle", json!({"name": "Base", "headerRow": {"fill": "C00000"}}));
+    run(&mut s, "table.newStyle", json!({"name": "Child", "basedOn": "Base", "apply": false, "wholeTable": {"bold": true}}));
+    let style = |s: &Session| s.doc.table(StoryRef::Body, &tp).unwrap().props.style.clone();
+    assert_eq!(style(&s).as_deref(), Some("Base"));
+    assert!(s.run("table.deleteStyle", &json!({"style": "Table Grid"})).is_err(), "built-in");
+    assert!(s.run("table.deleteStyle", &json!({"style": "Normal Table"})).is_err(), "built-in");
+
+    let r = run(&mut s, "table.deleteStyle", json!({}));
+    assert_eq!((r["deleted"].as_str(), r["tables"].as_u64()), (Some("Base"), Some(1)));
+    assert!(s.doc.styles.get("Base").is_none());
+    assert_eq!(style(&s).as_deref(), Some("TableGrid"), "tables fall back to Table Grid");
+    let child = s.doc.styles.table_style("Child").unwrap();
+    assert_eq!((child.parts.header_fill, child.chr.bold), (Some(Rgb(0xC0, 0, 0)), Some(true)), "the child keeps its look");
+    assert_eq!(s.doc.styles.get("Child").unwrap().based_on.as_deref(), Some("TableGrid"));
+
+    run(&mut s, "edit.undo", json!({}));
+    assert!(s.doc.styles.get("Base").is_some());
+    assert_eq!(style(&s).as_deref(), Some("Base"));
+    assert_eq!(s.doc.styles.get("Child").unwrap().based_on.as_deref(), Some("Base"));
+}
+
+/// #146: a .docx may mark Word's built-in table styles as custom; they still can't be deleted, so
+/// no table is left pointing at a style that's gone.
+#[test]
+fn builtin_table_styles_marked_custom_in_a_docx_cant_be_deleted() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+    for st in s.doc.styles.styles.iter_mut() {
+        st.builtin = false;
+    }
+    for name in ["Table Grid", "Normal Table", "TableGrid"] {
+        assert!(s.run("table.deleteStyle", &json!({"style": name})).is_err(), "{name}");
+    }
+    let (tp, _, _) = s.sel.focus.path.cell().unwrap();
+    let id = s.doc.table(StoryRef::Body, &tp).unwrap().props.style.clone().unwrap();
+    assert!(s.doc.styles.get(&id).is_some(), "the table's style still exists");
 }

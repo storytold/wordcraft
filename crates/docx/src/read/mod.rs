@@ -505,10 +505,28 @@ impl Reader<'_> {
                     t.band_chr = chr;
                     t.band_borders = cell_borders;
                 }
-                Some("firstCol") => t.first_col_chr = chr,
+                Some("firstCol") => {
+                    t.first_col_chr = chr;
+                    t.first_col_fill = fill;
+                    t.first_col_borders = cell_borders;
+                }
+                Some("lastCol") => {
+                    t.last_col_chr = chr;
+                    t.last_col_fill = fill;
+                    t.last_col_borders = cell_borders;
+                }
                 Some("lastRow") => {
                     t.total_chr = chr;
-                    t.total_border_top = c.child("w:tcPr").and_then(|p| p.child("w:tcBorders")).and_then(|b| b.child("w:top")).map(props::border);
+                    t.total_fill = fill;
+                    // The top rule is kept on its own (as built-in styles have it); the other edges
+                    // are the region's borders.
+                    t.total_border_top = cell_borders.and_then(|b| b.top);
+                    t.total_borders = cell_borders.map(|b| wordcraft_doc::props::Borders { top: None, ..b }).filter(|b| *b != Default::default());
+                }
+                Some("band1Vert") => {
+                    t.col_band_fill = fill;
+                    t.col_band_chr = chr;
+                    t.col_band_borders = cell_borders;
                 }
                 _ => {}
             }
