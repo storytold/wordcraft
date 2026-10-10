@@ -104,7 +104,8 @@ Home|Paragraph|Page Break Before|para.pageBreakBefore
 Home|Paragraph|Widow/Orphan Control|para.widowControl
 Home|Paragraph|Outline Level|para.outlineLevel
 Home|Paragraph|Hanging Indent|para.hangingIndent
-Home|Paragraph|Text Direction RTL|para.rtl
+Home|Paragraph|Right-to-Left Text Direction|para.rtl
+Home|Paragraph|Left-to-Right Text Direction|para.ltr
 Home|Paragraph|Asian Typography|para.asianTypography
 Home|Styles|Styles Gallery|para.style
 Home|Styles|Normal|para.normal

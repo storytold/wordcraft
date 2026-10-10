@@ -613,9 +613,15 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
     let col_x = page.body.x;
     if let Some(para) = app.session.doc.para_at(&app.session.sel.focus) {
         let rp = app.session.doc.styles.resolve_para(&para.props);
-        let first = x0 + (col_x + rp.indent_left + rp.indent_first) * scale;
-        let left = x0 + (col_x + rp.indent_left) * scale;
-        let right = x0 + (col_x + page.body.w - rp.indent_right) * scale;
+        // Indents and tabs are measured from the paragraph's start edge: the right margin of a
+        // right-to-left paragraph, where the start-indent markers sit.
+        let rtl = rp.bidi;
+        let w = page.body.w;
+        let sx = |s: f32| if rtl { x0 + (col_x + w - s) * scale } else { x0 + (col_x + s) * scale };
+        let s_at = |x: f32| if rtl { col_x + w - (x - x0) / scale } else { (x - x0) / scale - col_x };
+        let first = sx(rp.indent_left + rp.indent_first);
+        let left = sx(rp.indent_left);
+        let right = sx(w - rp.indent_right);
         let c = t.text_dim;
         hp.add(egui::Shape::convex_polygon(
             vec![pos2(first - 4.5, bar.min.y), pos2(first + 4.5, bar.min.y), pos2(first, bar.min.y + 5.0)],
@@ -640,9 +646,10 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
             Stroke::new(1.0, c),
         ));
         for tab in &rp.tabs {
-            let tx = x0 + (col_x + tab.pos) * scale;
+            let tx = sx(tab.pos);
+            let foot = if rtl { -4.0 } else { 4.0 };
             hp.line_segment([pos2(tx, bar.max.y - 6.0), pos2(tx, bar.max.y - 1.0)], Stroke::new(1.5, t.text));
-            hp.line_segment([pos2(tx, bar.max.y - 1.0), pos2(tx + 4.0, bar.max.y - 1.0)], Stroke::new(1.5, t.text));
+            hp.line_segment([pos2(tx, bar.max.y - 1.0), pos2(tx + foot, bar.max.y - 1.0)], Stroke::new(1.5, t.text));
         }
         // Dragging the left-indent marker.
         let id = ui.id().with("ruler_left");
@@ -651,7 +658,7 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
         if r.dragged()
             && let Some(pp) = r.interact_pointer_pos()
         {
-            let pt = ((pp.x - x0) / scale - col_x).clamp(-col_x, page.body.w - 18.0);
+            let pt = s_at(pp.x).clamp(-col_x, page.body.w - 18.0);
             let snapped = (pt / 4.5).round() * 4.5;
             if !r.drag_started() {
                 app.session.join_next_undo();
@@ -663,7 +670,7 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
         if r.dragged()
             && let Some(pp) = r.interact_pointer_pos()
         {
-            let pt = (pp.x - x0) / scale - col_x - rp.indent_left;
+            let pt = s_at(pp.x) - rp.indent_left;
             if !r.drag_started() {
                 app.session.join_next_undo();
             }
@@ -674,7 +681,7 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
         if r.dragged()
             && let Some(pp) = r.interact_pointer_pos()
         {
-            let pt = page.body.w - ((pp.x - x0) / scale - col_x);
+            let pt = page.body.w - s_at(pp.x);
             if !r.drag_started() {
                 app.session.join_next_undo();
             }

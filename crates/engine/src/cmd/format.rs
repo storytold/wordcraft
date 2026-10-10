@@ -13,12 +13,34 @@ pub const SIZES: [f32; 17] = [8.0, 9.0, 10.0, 10.5, 11.0, 12.0, 14.0, 16.0, 18.0
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("format.bold", "Bold", "Home › Font", |s, v| toggle(s, v, |r| r.bold, |c, on| c.bold = Some(on)))
-            .key("Mod+B")
-            .params(r#"{"value"?: bool}"#),
-        CommandSpec::new("format.italic", "Italic", "Home › Font", |s, v| toggle(s, v, |r| r.italic, |c, on| c.italic = Some(on)))
-            .key("Mod+I")
-            .params(r#"{"value"?: bool}"#),
+        CommandSpec::new("format.bold", "Bold", "Home › Font", |s, v| {
+            // Like Word's button, for complex-script (Persian, Arabic) text too: an unset `bold_cs`
+            // follows `bold`.
+            toggle(
+                s,
+                v,
+                |r| r.bold,
+                |c, on| {
+                    c.bold = Some(on);
+                    c.bold_cs = None;
+                },
+            )
+        })
+        .key("Mod+B")
+        .params(r#"{"value"?: bool}"#),
+        CommandSpec::new("format.italic", "Italic", "Home › Font", |s, v| {
+            toggle(
+                s,
+                v,
+                |r| r.italic,
+                |c, on| {
+                    c.italic = Some(on);
+                    c.italic_cs = None;
+                },
+            )
+        })
+        .key("Mod+I")
+        .params(r#"{"value"?: bool}"#),
         CommandSpec::new("format.underline", "Underline", "Home › Font", underline)
             .key("Mod+U")
             .params(r#"{"value"?: bool, "style"?: "single|double|thick|dotted|dash|dotDash|dotDotDash|wave|words"}"#),
@@ -209,7 +231,11 @@ fn font(s: &mut Session, v: &Value) -> CmdResult {
     if name.is_empty() || name.len() > 128 {
         return Err(CmdError::Params("bad font name".into()));
     }
-    apply(s, &|c| c.font = Some(name.clone()))
+    // The font applies to Persian/Arabic text in the selection too (its complex-script font).
+    apply(s, &|c| {
+        c.font = Some(name.clone());
+        c.font_cs = Some(name.clone());
+    })
 }
 
 fn size(s: &mut Session, v: &Value) -> CmdResult {
@@ -219,7 +245,10 @@ fn size(s: &mut Session, v: &Value) -> CmdResult {
     }
     // Word rounds to half points.
     let sz = (sz * 2.0).round() / 2.0;
-    apply(s, &|c| c.size = Some(sz))
+    apply(s, &|c| {
+        c.size = Some(sz);
+        c.size_cs = None;
+    })
 }
 
 fn current_size(s: &Session) -> f32 {
@@ -235,12 +264,18 @@ fn step_size(s: &mut Session, dir: i32) -> CmdResult {
     };
     let next = next.clamp(1.0, 1638.0);
     // Each run steps from its own size when the selection mixes sizes.
-    apply(s, &|c| c.size = Some(next))
+    apply(s, &|c| {
+        c.size = Some(next);
+        c.size_cs = None;
+    })
 }
 
 fn nudge_size(s: &mut Session, d: f32) -> CmdResult {
     let next = (current_size(s) + d).clamp(1.0, 1638.0);
-    apply(s, &|c| c.size = Some(next))
+    apply(s, &|c| {
+        c.size = Some(next);
+        c.size_cs = None;
+    })
 }
 
 fn color(s: &mut Session, v: &Value) -> CmdResult {

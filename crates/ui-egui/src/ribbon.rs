@@ -254,7 +254,9 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Paragraph", Some("para.dialog"), app, |ui, app| {
         let rp = app.session.doc.para_at(&app.session.sel.focus).map(|p| app.session.doc.styles.resolve_para(&p.props));
-        let align = rp.as_ref().map(|r| r.align).unwrap_or_default();
+        // The buttons show alignment as seen on the page (Align Right is a right-to-left paragraph's start).
+        let align = rp.as_ref().map(|r| r.align.visual(r.bidi)).unwrap_or_default();
+        let rtl = rp.as_ref().is_some_and(|r| r.bidi);
         stack(ui, |ui| {
             crate::widgets::row(ui, |ui| {
                 split(ui, app, "bullets", "Bullets", "para.bullets", json!({}), false, None, |ui, app| {
@@ -307,6 +309,9 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                 small(ui, app, "alignCenter", None, "Center", "para.alignCenter", json!({}), align == A::Center);
                 small(ui, app, "alignRight", None, "Align Right", "para.alignRight", json!({}), align == A::Right);
                 small(ui, app, "justify", None, "Justify", "para.justify", json!({}), align == A::Justify);
+                ui.add_space(4.0);
+                small(ui, app, "textLtr", None, "Left-to-Right Text Direction", "para.ltr", json!({}), !rtl);
+                small(ui, app, "textRtl", None, "Right-to-Left Text Direction", "para.rtl", json!({}), rtl);
                 ui.add_space(4.0);
                 menu_button(ui, app, "lineSpacing", None, "Line and Paragraph Spacing", false, |ui, app| {
                     for v in [1.0, 1.15, 1.5, 2.0, 2.5, 3.0] {

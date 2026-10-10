@@ -8,12 +8,12 @@ and agent control. This file tracks where we are honestly. Generated numbers com
 
 | Measure | Value |
 |---|---|
-| Commands (every action, scriptable by CLI/MCP/control channel) | **389** |
-| Feature catalog coverage (Word ribbon/menu features with a command) | **354 / 405 (87%)** |
+| Commands (every action, scriptable by CLI/MCP/control channel) | **390** |
+| Feature catalog coverage (Word ribbon/menu features with a command) | **355 / 406 (87%)** |
 | **Estimated real feature parity** (depth and fidelity, not just a command) | **~62%** |
 | **Distance to alpha** | **~85% of the way; ≈20–25 h of Claude wall-clock work** |
 | **Distance to 100% parity** | **≈120–150 h of Claude Opus 5.5 wall-clock work** (with parallel agents) |
-| Tests | ~225 test functions (unit, round-trip, fuzz/proptest, MCP acceptance) |
+| Tests | ~325 tests (unit, round-trip, fuzz/proptest, MCP acceptance) |
 | Layout speed (188-page document) | 61 ms cold, **1.4 ms** relayout after an edit |
 | Code | ~44k lines of Rust in 12 crates and 3 apps |
 
@@ -64,6 +64,7 @@ the icon art).
 | File formats: PDF, ODT, RTF, HTML, Markdown, TXT | Working | 70% |
 | View modes (print, web, draft, read, focus, zoom, navigation pane) | Working | 70% |
 | Backstage (new from templates, open, info, export, options) | Working; printing goes through PDF | 55% |
+| Right-to-left and complex scripts (Persian, Arabic, Hebrew) | Unicode Bidirectional Algorithm, Arabic shaping (joining, ZWNJ, lam-alef, mirrored brackets), mixed Persian/Latin/number lines, mirrored paragraphs (indents, tabs, list labels, ruler), visual caret movement and hit testing, complex-script fonts/sizes in DOCX; no kashida justification, RTL sections/tables or right-to-left UI yet | 55% |
 | Agent control (CLI, MCP, control channel, macros) | Beyond Word | 100%+ |
 
 ## Estimate to 100%
@@ -79,7 +80,9 @@ the icon art).
 5. **Equation editor (OMML read/write, 2D layout)** (≈15 h).
 6. **Dialog depth**: every Word dialog with all its options (Font, Paragraph, Tabs, Borders and
    Shading, Page Setup, Styles, Columns, Index/TOC options, Mail Merge wizard, Options panes) (≈20 h).
-7. **Accessibility (screen readers), localisation, RTL and complex scripts** (≈15 h).
+7. **Accessibility (screen readers), localisation, and the rest of right-to-left** (≈12 h): right-to-left
+   sections and tables (`w:bidi` in `w:sectPr`, `w:bidiVisual`), kashida justification, a Persian UI
+   translation and a mirrored interface, RTL in the HTML/ODT/RTF converters, Indic shaping checks.
 8. **Long tail**: kerning/ligature options, drawn tables, nested-table polish, more templates,
    Word's less-used commands still missing from the catalog (≈10 h).
 
@@ -104,6 +107,9 @@ the icon art).
 | M14 | 1.0 polish, packaging, signing | pipeline written; waiting on remote and secrets |
 
 ## Recently landed
+- Right-to-left and Persian text: bidi reordering (UAX #9), Arabic-script shaping, right-to-left
+  paragraphs (Left-to-Right / Right-to-Left Text Direction), visual arrow keys, `w:rtl`/`w:cs`/`w:szCs`
+  /`w:bCs`/`w:iCs`/`w:rFonts w:cs`/`w:lang w:bidi` round-trip, Persian font substitutes.
 - Text wraps around floating pictures and shapes; text boxes lay out their own text.
 - Table rows split across pages between lines (Can't Split honoured, header rows repeat).
 - Drop caps; automatic hyphenation with Word's 0.25" hyphenation zone; soft hyphens.
