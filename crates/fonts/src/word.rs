@@ -31,7 +31,18 @@ fn substitutes(family: &str) -> &'static [&'static str] {
     const ARIAL: &[&str] = &["Liberation Sans", "Helvetica", "Helvetica Neue", "Arimo", "Source Sans 3"];
     const TIMES: &[&str] = &["Liberation Serif", "Times", "Tinos", "Source Serif 4"];
     const SYMBOL: &[&str] = &["Apple Symbols", "Segoe UI Symbol", "DejaVu Sans", "Noto Sans Symbols", "Source Sans 3"];
+    // Persian / Arabic document fonts. Naskh (book) faces such as B Nazanin, B Lotus, B Zar and
+    // Traditional Arabic, then the sans faces (B Yekan, B Titr, IRANSans) people use for
+    // headings and screens. Open fonts with full Persian coverage first.
+    const NASKH: &[&str] = &["Noto Naskh Arabic", "XB Zar", "XB Niloofar", "Amiri", "Vazirmatn", "Noto Sans Arabic", "DejaVu Sans", "Source Serif 4"];
+    const ARABIC_SANS: &[&str] = &["Vazirmatn", "Sahel", "Shabnam", "Samim", "Noto Sans Arabic", "Noto Naskh Arabic", "DejaVu Sans", "Source Sans 3"];
     let f = family.to_ascii_lowercase();
+    if is_persian_naskh(&f) {
+        return NASKH;
+    }
+    if is_persian_sans(&f) {
+        return ARABIC_SANS;
+    }
     match f.as_str() {
         "arial" | "helvetica" | "arial nova" => ARIAL,
         "times new roman" | "times" => TIMES,
@@ -55,6 +66,86 @@ fn substitutes(family: &str) -> &'static [&'static str] {
         _ if f.contains("serif") && !f.contains("sans") => SERIF,
         _ => SANS,
     }
+}
+
+/// Naskh-style Persian/Arabic document fonts (the "B …" family names come from the common
+/// Persian font packs; matched by name only).
+fn is_persian_naskh(f: &str) -> bool {
+    const NAMES: &[&str] = &[
+        "b nazanin",
+        "b lotus",
+        "b zar",
+        "b mitra",
+        "b badr",
+        "b yagut",
+        "b roya",
+        "b compset",
+        "b nazanin bold",
+        "b lotus bold",
+        "nazanin",
+        "lotus",
+        "zar",
+        "mitra",
+        "badr",
+        "yagut",
+        "roya",
+        "ir nazanin",
+        "ir lotus",
+        "ir zar",
+        "ir mitra",
+        "ir badr",
+        "irnazanin",
+        "irlotus",
+        "irzar",
+        "irmitra",
+        "irbadr",
+        "traditional arabic",
+        "simplified arabic",
+        "arabic typesetting",
+        "sakkal majalla",
+        "adobe arabic",
+        "andalus",
+        "times new roman (arabic)",
+    ];
+    NAMES.contains(&f)
+}
+
+/// Sans Persian/Arabic fonts for headings and screens.
+fn is_persian_sans(f: &str) -> bool {
+    const NAMES: &[&str] = &[
+        "b yekan",
+        "b titr",
+        "b homa",
+        "b koodak",
+        "b traffic",
+        "b jadid",
+        "b elham",
+        "b kamran",
+        "b davat",
+        "b ferdosi",
+        "yekan",
+        "titr",
+        "homa",
+        "koodak",
+        "traffic",
+        "ir titr",
+        "ir homa",
+        "irtitr",
+        "irhoma",
+        "iransans",
+        "iransansweb",
+        "iran sans",
+        "iranyekan",
+        "iran yekan",
+        "iranyekanweb",
+        "dana",
+        "estedad",
+        "dubai",
+        "aldhabi",
+        "urdu typesetting",
+        "arabic transparent",
+    ];
+    NAMES.contains(&f) || f.starts_with("iransans") || f.starts_with("iranyekan")
 }
 
 fn style_name(bold: bool, italic: bool) -> &'static str {
