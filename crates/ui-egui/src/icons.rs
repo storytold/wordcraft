@@ -929,6 +929,12 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.rect(3.0, 3.0, 17.0, 17.0, c);
             pen.fill(&[(8.0, 6.5), (8.0, 13.5), (14.0, 10.0)], a);
         }
+        // A page with a filled band at the top and a style mark: the document's template.
+        "documentTemplate" => {
+            pen.page(4.0, 2.0, 16.0, 18.0);
+            pen.frect(6.0, 5.0, 11.5, 7.0, a);
+            pen.text(10.0, 13.0, 8.0, "A", a, false);
+        }
         "properties" | "info" => {
             pen.circle(10.0, 10.0, 7.0, c);
             pen.line_c(&[(10.0, 9.0), (10.0, 14.5)], a);

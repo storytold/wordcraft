@@ -1194,6 +1194,9 @@ fn view(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Macros", None, app, |ui, app| {
         big(ui, app, "macros", "Macros", "tools.macros", json!({}), false);
     });
+    group(ui, "Templates", None, app, |ui, app| {
+        big(ui, app, "documentTemplate", "Templates", "tools.templates", json!({}), false);
+    });
 }
 
 fn help(app: &mut WordApp, ui: &mut Ui) {

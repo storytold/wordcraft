@@ -335,6 +335,12 @@ pub struct Settings {
     /// Equation options (`m:mathPr`), when the document has them.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub math: Option<math::MathProps>,
+    /// The template the document is attached to (Tools › Templates and Add-ins): the target of
+    /// `w:attachedTemplate`'s relationship, a path or `file:` URL as the file gives it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attached_template: Option<String>,
+    /// Update the document's styles from the attached template when it is opened (`w:linkStyles`).
+    pub link_styles: bool,
 }
 
 /// Word's compatibility mode for documents that don't state one.
@@ -399,6 +405,8 @@ impl Default for Settings {
             grid_h: DEFAULT_GRID,
             grid_v: DEFAULT_GRID,
             math: None,
+            attached_template: None,
+            link_styles: false,
         }
     }
 }
