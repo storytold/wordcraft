@@ -83,7 +83,10 @@ impl PieceTable {
             let Some(b) = plc.get(at..at + 4) else {
                 return Err(DocbinError::Malformed("truncated aCp".into()));
             };
-            cps.push(u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+            // Keep the CPs non-decreasing so binary search over them is sound: an inverted
+            // piece in a corrupt file becomes an empty one.
+            let c = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+            cps.push(c.max(cps.last().copied().unwrap_or(0)));
         }
         let mut pieces = Vec::with_capacity(n);
         for j in 0..n {
@@ -123,45 +126,51 @@ impl PieceTable {
         let p = self.piece_of(cp)?;
         let i = self.cps.partition_point(|&c| c <= cp).checked_sub(1)?;
         let cp0 = *self.cps.get(i)?;
-        let step = (cp - cp0).checked_mul(2)?;
+        let step = cp.checked_sub(cp0)?.checked_mul(2)?;
         if p.compressed { p.fc.checked_add(step)?.checked_div(2) } else { p.fc.checked_add(step) }
     }
 
-    /// Text of the CP range `[start, end)` as it is stored (control characters included);
-    /// pieces with inverted or out-of-range CPs are skipped, truncated pieces read short.
-    pub(crate) fn text(&self, word: &[u8], start: u32, end: u32) -> String {
-        if end <= start {
-            return String::new();
+    /// The CP just past the last piece: no text exists at or beyond it.
+    pub(crate) fn cp_end(&self) -> u32 {
+        self.cps.last().copied().unwrap_or(0)
+    }
+
+    /// The character stored at `cp` (control characters included) and how many CPs it
+    /// covers (2 for a surrogate pair), found by binary search over the pieces.
+    /// `Err(next)` when there is no readable character at `cp` (a gap between pieces, an
+    /// inverted piece, or piece bytes past the end of the stream): `next` is the CP to
+    /// resume at, always greater than `cp` (`u32::MAX` past the last piece), so callers
+    /// skip an unreadable range in one step instead of one CP at a time.
+    pub(crate) fn char_at(&self, word: &[u8], cp: u32) -> Result<(char, u32), u32> {
+        let i = self.cps.partition_point(|&c| c <= cp);
+        // The next piece boundary above `cp`, or the end of the CP space.
+        let next = self.cps.get(i).copied().filter(|&n| n > cp).unwrap_or(u32::MAX);
+        let Some(i) = i.checked_sub(1) else { return Err(next) };
+        let (Some(p), Some(&cp0)) = (self.pieces.get(i), self.cps.get(i)) else { return Err(u32::MAX) };
+        let Some(off) = cp.checked_sub(cp0) else { return Err(next) };
+        let off = off as usize;
+        if p.compressed {
+            // 8-bit, Windows-1252, one byte per character, stored at fc/2.
+            let at = ((p.fc / 2) as usize).checked_add(off);
+            return match at.and_then(|a| word.get(a)) {
+                Some(&b) => Ok((cp1252(b), 1)),
+                None => Err(next),
+            };
         }
-        let mut out = String::new();
-        for (i, p) in self.pieces.iter().enumerate() {
-            let (Some(&cp0), Some(&cp1)) = (self.cps.get(i), self.cps.get(i + 1)) else { break };
-            if cp1 <= cp0 || cp1 <= start || cp0 >= end {
-                continue;
-            }
-            let from = start.max(cp0) - cp0;
-            let to = end.min(cp1) - cp0;
-            if p.compressed {
-                // 8-bit, Windows-1252, one byte per character, stored at fc/2.
-                let base = (p.fc / 2) as usize;
-                let bytes = base.checked_add(from as usize).and_then(|s| word.get(s..base + to as usize));
-                if let Some(bytes) = bytes {
-                    out.extend(bytes.iter().map(|&b| cp1252(b)));
-                }
-            } else {
-                // UTF-16LE, one 16-bit unit per character, stored at fc.
-                let base = p.fc as usize;
-                let unit = base.checked_add(from as usize * 2).and_then(|s| word.get(s..base + to as usize * 2));
-                if let Some(unit) = unit {
-                    let units: Vec<u16> = unit.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
-                    out.push_str(&String::from_utf16_lossy(&units));
-                }
-            }
-            if cp1 >= end {
-                break;
-            }
+        // UTF-16LE, one 16-bit unit per character, stored at fc.
+        let unit = |k: usize| -> Option<u16> {
+            let at = (p.fc as usize).checked_add(k.checked_mul(2)?)?;
+            word.get(at..at.checked_add(2)?).map(|b| u16::from_le_bytes([b[0], b[1]]))
+        };
+        let Some(u) = unit(off) else { return Err(next) };
+        if (0xD800..0xDC00).contains(&u)
+            && cp.saturating_add(1) < next
+            && let Some(lo) = unit(off.saturating_add(1)).filter(|lo| (0xDC00..0xE000).contains(lo))
+            && let Some(Ok(c)) = char::decode_utf16([u, lo]).next()
+        {
+            return Ok((c, 2));
         }
-        out
+        Ok((char::from_u32(u as u32).unwrap_or('\u{FFFD}'), 1))
     }
 }
 

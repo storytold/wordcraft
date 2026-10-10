@@ -29,13 +29,14 @@ pub(crate) struct FibSpec {
     pub(crate) ccp_text: u32,
     pub(crate) ccp_ftn: u32,
     pub(crate) ccp_hdd: u32,
+    pub(crate) ccp_edn: u32,
     /// (pair index, fc, lcb) entries to poke into the RgFcLcb blob.
     pub(crate) pairs: Vec<(usize, u32, u32)>,
 }
 
 impl Default for FibSpec {
     fn default() -> Self {
-        FibSpec { nfib: 0x00C1, flags: 0x1000, ccp_text: 0, ccp_ftn: 0, ccp_hdd: 0, pairs: Vec::new() }
+        FibSpec { nfib: 0x00C1, flags: 0x1000, ccp_text: 0, ccp_ftn: 0, ccp_hdd: 0, ccp_edn: 0, pairs: Vec::new() }
     }
 }
 
@@ -58,6 +59,7 @@ pub(crate) fn fib_bytes(spec: &FibSpec) -> Vec<u8> {
     put32(&mut v, 0x4C, spec.ccp_text); // rglw[3] = ccpText
     put32(&mut v, 0x50, spec.ccp_ftn); // rglw[4] = ccpFtn
     put32(&mut v, 0x54, spec.ccp_hdd); // rglw[5] = ccpHdd
+    put32(&mut v, 0x60, spec.ccp_edn); // rglw[8] = ccpEdn
     put16(&mut v, 0x98, 0x005D);
     for (i, fc, lcb) in &spec.pairs {
         put32(&mut v, 0x9A + i * 8, *fc);
@@ -694,8 +696,10 @@ fn struct_doc(spec: &StructSpec) -> Vec<u8> {
         story_ends.push(hdd_len);
         all.push(Piece { compressed: false, text: t });
     }
+    let mut edn_len = 0u32;
     for s in &spec.endnote_stories {
         let t: String = (*s).into();
+        edn_len += t.chars().count() as u32;
         all.push(Piece { compressed: false, text: t });
     }
     let plc = plcpcd(&all, TEXT_FC);
@@ -802,7 +806,7 @@ fn struct_doc(spec: &StructSpec) -> Vec<u8> {
         pairs.push((74, lfo_at as u32, spec.plf_lfo.len() as u32));
     }
     pairs.extend(extra_at);
-    let spec_fib = FibSpec { ccp_text: ccp, ccp_ftn: ftn_len, ccp_hdd: hdd_len, pairs, ..Default::default() };
+    let spec_fib = FibSpec { ccp_text: ccp, ccp_ftn: ftn_len, ccp_hdd: hdd_len, ccp_edn: edn_len, pairs, ..Default::default() };
     let fib = fib_bytes(&spec_fib);
     word[..fib.len()].copy_from_slice(&fib);
     word.extend(std::iter::repeat_n(0, first_sepx - word.len()));
@@ -1363,4 +1367,193 @@ fn structured_spec(text: &'static str, ccp: u32) -> StructSpec {
         extra_pairs: Vec::new(),
         data_stream: Vec::new(),
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Hardening regressions: hostile CP ranges, piece lookups, picture fan-out, overflows.
+
+/// All the paragraph text of a document: body plus every part.
+fn all_text(doc: &wordcraft_doc::Document) -> String {
+    let mut s: String = body_texts(doc).join("\n");
+    for part in doc.parts.values() {
+        for b in &part.blocks {
+            if let Some(p) = b.as_para() {
+                s.push('\n');
+                s.push_str(&p.text);
+            }
+        }
+    }
+    s
+}
+
+#[test]
+fn huge_story_ranges_are_clamped_to_their_subdocument() {
+    // Footnote, header and endnote stories whose Table-stream CPs claim [0, 4e9) (and
+    // ranges near u32::MAX that overflowed `base + cp`): before the clamp, each pushed
+    // billions of U+FFFD (or panicked on the addition).
+    let text = "A\u{2}\u{2}\r";
+    let ccp = text.chars().count() as u32;
+    let big = 4_000_000_000u32;
+    let hdd = plc(&[0, 0, 0, 0, 0, 0, 0, 0, big, 0xFFFF_FFF0, 0xFFFF_FFFF, 0xFFFF_FFFF, 0xFFFF_FFFF], &[]);
+    let spec = StructSpec {
+        text,
+        note_stories: vec!["Note body\r"],
+        header_stories: vec!["Head\r"],
+        endnote_stories: vec!["End\r"],
+        extra_pairs: vec![
+            (2, plc(&[1, ccp], &1u16.to_le_bytes())),
+            (3, plc(&[0, big], &[])),
+            (11, hdd),
+            (46, plc(&[2, ccp], &1u16.to_le_bytes())),
+            (47, plc(&[0xFFFF_FFF0, 0xFFFF_FFFF], &[])),
+        ],
+        ..structured_spec(text, ccp)
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let all = all_text(&doc);
+    assert!(!all.contains('\u{FFFD}'), "replacement characters: {} bytes of text", all.len());
+    assert!(all.len() < 200, "text grew to {} bytes", all.len());
+    let header = doc.last_section.headers.default.and_then(|id| doc.parts.get(&id)).expect("header part");
+    assert!(header.blocks.iter().any(|b| b.as_para().is_some_and(|p| p.text == "Head")), "header: {:?}", header.blocks);
+    let footnote = doc.parts.values().find(|p| p.kind == wordcraft_doc::PartKind::Footnote).expect("footnote part");
+    assert!(footnote.blocks.iter().any(|b| b.as_para().is_some_and(|p| p.text == "Note body")));
+    // The endnote story starts past the endnote subdocument: nothing to read.
+    assert!(!doc.parts.values().any(|p| p.kind == wordcraft_doc::PartKind::Endnote));
+}
+
+/// A document whose piece table is given raw (cps + one Pcd per piece), with `text` bytes
+/// at TEXT_FC and the FIB claiming `ccp_text` main-document characters.
+fn raw_piece_doc(cps: &[u32], fcs: &[u32], text: &[u8], ccp_text: u32) -> Vec<u8> {
+    raw_piece_doc_with(cps, fcs, text, ccp_text, &[])
+}
+
+/// [`raw_piece_doc`] with extra raw FIB (pair, fc, lcb) entries.
+fn raw_piece_doc_with(cps: &[u32], fcs: &[u32], text: &[u8], ccp_text: u32, extra: &[(usize, u32, u32)]) -> Vec<u8> {
+    let mut plc = Vec::new();
+    for c in cps {
+        plc.extend_from_slice(&c.to_le_bytes());
+    }
+    for fc in fcs {
+        plc.extend_from_slice(&[0, 0]);
+        plc.extend_from_slice(&fc.to_le_bytes());
+        plc.extend_from_slice(&0u16.to_le_bytes());
+    }
+    let mut clx = vec![0x02u8];
+    clx.extend_from_slice(&(plc.len() as u32).to_le_bytes());
+    clx.extend_from_slice(&plc);
+    let mut table = vec![0u8; CLX_AT as usize];
+    table.extend_from_slice(&clx);
+    let mut word = vec![0u8; TEXT_FC as usize];
+    word.extend_from_slice(text);
+    let mut pairs = vec![(33, CLX_AT, clx.len() as u32)];
+    pairs.extend_from_slice(extra);
+    let spec = FibSpec { ccp_text, pairs, ..Default::default() };
+    let fib = fib_bytes(&spec);
+    word[..fib.len()].copy_from_slice(&fib);
+    cfb_file(&[("WordDocument", &word), ("0Table", &table)])
+}
+
+#[test]
+fn piece_claiming_far_more_text_than_stored_is_skipped() {
+    // One compressed piece claims CPs [0, 100M) but only "Hi\r" is stored: the walk used to
+    // emit a U+FFFD per missing CP (100M of them).
+    let fc = (2 * TEXT_FC) | 0x4000_0000;
+    let f = raw_piece_doc(&[0, 100_000_000], &[fc], b"Hi\r", 100_000_000);
+    let doc = read(&f).expect("opens");
+    assert_eq!(body_texts(&doc), vec!["Hi".to_string()]);
+}
+
+#[test]
+fn walk_stops_at_the_last_piece() {
+    // The FIB claims 100M characters but the piece table ends at CP 3.
+    let fc = (2 * TEXT_FC) | 0x4000_0000;
+    let f = raw_piece_doc(&[0, 3], &[fc], b"Hi\r", 100_000_000);
+    let doc = read(&f).expect("opens");
+    assert_eq!(body_texts(&doc), vec!["Hi".to_string()]);
+}
+
+#[test]
+fn inverted_and_gapped_pieces_are_skipped() {
+    // Piece 0 is inverted (CPs 5 → 2), piece 1 reads "ok\r", piece 2 points past the stream.
+    let base = (2 * TEXT_FC) | 0x4000_0000;
+    let f = raw_piece_doc(&[5, 2, 5, 50_000_000], &[base, base, 0x3FFF_0000], b"ok\r", 50_000_000);
+    let doc = read(&f).expect("opens");
+    let all = all_text(&doc);
+    assert!(!all.contains('\u{FFFD}'));
+    assert!(all.len() < 20, "{all:?}");
+}
+
+#[test]
+fn many_pieces_walk_in_n_log_n() {
+    // 200k one-character pieces: the old per-character scan over every piece was
+    // O(chars × pieces) = 4e10 steps; with binary search this opens instantly.
+    let n = 200_000usize;
+    let mut text = vec![b'x'; n - 1];
+    text.push(b'\r');
+    let cps: Vec<u32> = (0..=n as u32).collect();
+    let fcs: Vec<u32> = (0..n as u32).map(|i| (2 * (TEXT_FC + i)) | 0x4000_0000).collect();
+    let started = std::time::Instant::now();
+    let doc = read(&raw_piece_doc(&cps, &fcs, &text, n as u32)).expect("opens");
+    let body = body_texts(&doc);
+    assert_eq!(body.len(), 1);
+    assert_eq!(body[0].len(), n - 1);
+    assert!(started.elapsed() < std::time::Duration::from_secs(30), "took {:?}", started.elapsed());
+}
+
+#[test]
+fn surrogate_pairs_decode_across_one_cp_each() {
+    // `Piece` stores one u16 per char, so write the pair by hand.
+    let units: Vec<u16> = "a\u{1F600}b\r".encode_utf16().collect();
+    let bytes: Vec<u8> = units.iter().flat_map(|u| u.to_le_bytes()).collect();
+    let n = units.len() as u32;
+    let doc = read(&raw_piece_doc(&[0, n], &[TEXT_FC], &bytes, n)).expect("opens");
+    assert_eq!(body_texts(&doc), vec!["a\u{1F600}b".to_string()]);
+}
+
+/// A PICF header (68 bytes) for an `n`-byte PNG-looking payload.
+fn picf_with_png(n: usize) -> Vec<u8> {
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    png.resize(n.max(8), 0xAB);
+    let mut picf = vec![0u8; 0x44];
+    picf[0..4].copy_from_slice(&((0x44 + png.len()) as u32).to_le_bytes());
+    picf[4..6].copy_from_slice(&0x44u16.to_le_bytes());
+    picf[28..30].copy_from_slice(&1440i16.to_le_bytes());
+    picf[30..32].copy_from_slice(&1440i16.to_le_bytes());
+    picf.extend_from_slice(&png);
+    picf
+}
+
+#[test]
+fn anchors_sharing_one_picture_share_one_media_entry() {
+    // 5000 anchors on the same 16 MB picture used to copy it once per anchor (80 GB)
+    // before the copies were deduplicated.
+    let text: &'static str = Box::leak(format!("{}\r", "\u{1}".repeat(5000)).into_boxed_str());
+    let ccp = text.chars().count() as u32;
+    let spec = StructSpec {
+        text,
+        data_stream: picf_with_png(16 << 20),
+        chpx_runs: vec![(0, grpprl(&[(0x6A03, &0u32.to_le_bytes())]))],
+        ..structured_spec(text, ccp)
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    assert_eq!(doc.media.len(), 1);
+    let p0 = doc.body.first().and_then(|b| b.as_para()).expect("para");
+    assert_eq!(p0.objects.len(), 5000);
+    assert!(p0.objects.iter().all(|o| matches!(o, wordcraft_doc::para::InlineObject::Image { media, .. } if media == "image1.png")));
+}
+
+#[test]
+fn picture_bytes_are_capped_per_document() {
+    let a = picf_with_png(600);
+    let b = picf_with_png(600);
+    let data: Vec<u8> = [a.clone(), b].concat();
+    let mut pics = crate::media::Pictures::default();
+    pics.limit = 1000;
+    let first = pics.get(&data, 0).expect("first fits");
+    // Same location again: no new bytes.
+    assert_eq!(pics.get(&data, 0).map(|p| p.0), Some(first.0.clone()));
+    // A second distinct picture would exceed the cap.
+    assert!(pics.get(&data, a.len() as u32).is_none());
+    assert_eq!(pics.media.len(), 1);
+    const { assert!(crate::media::MAX_MEDIA_BYTES <= 256 << 20) };
 }

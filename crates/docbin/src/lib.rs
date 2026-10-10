@@ -41,8 +41,6 @@ use table::ParaOut;
 const MAX_STREAM: u64 = 1 << 30;
 /// Most header/footer parts we create (matches the docx reader's cap).
 const MAX_PARTS: usize = 50_000;
-/// Most inline pictures we materialise from the Data stream.
-const MAX_PICTURES: usize = 5_000;
 /// `sprmCPicLocation`: the fc of a picture in the Data stream.
 const C_PIC_LOCATION: u16 = 0x6A03;
 /// `sprmPIlvl` / `sprmPIlfo`: the paragraph's list level and list.
@@ -123,9 +121,12 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocbinError> {
     let stories = sections::header_stories(&table, &fib);
     // Subdocument layout in the CP space: main document, footnotes, headers, comments,
     // endnotes, text boxes, header text boxes.
+    // Story ranges from the Table stream are hostile: each is clamped to its subdocument's
+    // length here and to the last piece's CP inside `walk`.
     let ftn_base = fib.ccp.text;
-    let hdd_base = fib.ccp.text + fib.ccp.ftn;
-    let edn_base = hdd_base + fib.ccp.hdd + fib.ccp.atn;
+    let hdd_base = fib.ccp.text.saturating_add(fib.ccp.ftn);
+    let edn_base = hdd_base.saturating_add(fib.ccp.hdd).saturating_add(fib.ccp.atn);
+    let mut pics = media::Pictures::default();
 
     let ctx = WalkCtx {
         word: &word,
@@ -146,18 +147,16 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocbinError> {
     let mut hf_ids: Vec<(usize, usize, u32)> = Vec::new();
     for si in 0..sects.len() {
         for k in 0..6usize {
-            let Some((a, b)) = stories.get(6 + si * 6 + k) else { break };
-            if b <= a || doc.parts.len() >= MAX_PARTS {
+            let Some(&ab) = stories.get(6 + si * 6 + k) else { break };
+            let Some((a, b)) = story(hdd_base, fib.ccp.hdd, ab) else { continue };
+            if doc.parts.len() >= MAX_PARTS {
                 continue;
             }
             let kind = match k {
                 0 | 1 | 4 => PartKind::Header,
                 _ => PartKind::Footer,
             };
-            let mut pending = Vec::new();
-            let mut out = walk(&ctx, hdd_base + a, hdd_base + b, &mut pending);
-            bind_media(&mut doc, &mut out, &mut pending);
-            let blocks = table::assemble(out);
+            let blocks = table::assemble(walk(&ctx, a, b, &mut pics));
             if !blocks.is_empty() {
                 let id = doc.add_part(kind, blocks);
                 hf_ids.push((si, k, id));
@@ -168,33 +167,30 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocbinError> {
     // Footnote and endnote stories: each text range becomes a part; the reference CPs then
     // link to the part ids during the main walk.
     let mut note_links: Vec<(u32, NoteKind, u32)> = Vec::new();
-    for (cp, (a, b)) in notes::parse_notes(&table, &fib, fib::pair::PLCF_FND_REF, fib::pair::PLCF_FND_TXT) {
-        let mut pending = Vec::new();
-        let mut out = walk(&ctx, ftn_base + a, ftn_base + b, &mut pending);
-        bind_media(&mut doc, &mut out, &mut pending);
-        let blocks = table::assemble(out);
+    for (cp, ab) in notes::parse_notes(&table, &fib, fib::pair::PLCF_FND_REF, fib::pair::PLCF_FND_TXT) {
+        let Some((a, b)) = story(ftn_base, fib.ccp.ftn, ab) else { continue };
+        let blocks = table::assemble(walk(&ctx, a, b, &mut pics));
         if !blocks.is_empty() && doc.parts.len() < MAX_PARTS {
             let id = doc.add_part(PartKind::Footnote, blocks);
             note_links.push((cp, NoteKind::Footnote, id));
         }
     }
-    for (cp, (a, b)) in notes::parse_notes(&table, &fib, fib::pair::PLCF_END_REF, fib::pair::PLCF_END_TXT) {
-        let mut pending = Vec::new();
-        let mut out = walk(&ctx, edn_base + a, edn_base + b, &mut pending);
-        bind_media(&mut doc, &mut out, &mut pending);
-        let blocks = table::assemble(out);
+    for (cp, ab) in notes::parse_notes(&table, &fib, fib::pair::PLCF_END_REF, fib::pair::PLCF_END_TXT) {
+        let Some((a, b)) = story(edn_base, fib.ccp.edn, ab) else { continue };
+        let blocks = table::assemble(walk(&ctx, a, b, &mut pics));
         if !blocks.is_empty() && doc.parts.len() < MAX_PARTS {
             let id = doc.add_part(PartKind::Endnote, blocks);
             note_links.push((cp, NoteKind::Endnote, id));
         }
     }
+    // Sorted so the main walk finds each reference by binary search.
+    note_links.sort_by_key(|(cp, _, _)| *cp);
     let marks = notes::parse_bookmarks(&table, &fib);
     let ctx = WalkCtx { notes: &note_links, marks: &marks, ..ctx };
 
     // Sections: each section's properties attach to the paragraph that ends it (its story of
     // header/footer parts included); the section reaching the end of the text is the final one.
-    let mut pending_media = Vec::new();
-    let mut paras = walk(&ctx, 0, fib.ccp.text, &mut pending_media);
+    let mut paras = walk(&ctx, 0, fib.ccp.text, &mut pics);
     let last = sects.last().map(|s| s.props.clone());
     for (si, sec) in sects.iter().enumerate() {
         let mut props = sec.props.clone();
@@ -220,26 +216,20 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocbinError> {
         doc.last_section = l;
     }
 
-    bind_media(&mut doc, &mut paras, &mut pending_media);
-
+    doc.media.extend(pics.media);
     doc.body = table::assemble(paras);
     doc.ensure_nonempty();
     Ok(doc)
 }
 
-/// Bind the pictures a walk collected to media entries, in encounter order.
-fn bind_media(doc: &mut Document, paras: &mut [table::ParaOut], pending: &mut Vec<media::Picture>) {
-    let mut it = pending.drain(..);
-    for p in paras.iter_mut() {
-        for o in p.para.objects.iter_mut() {
-            if let InlineObject::Image { media: key, .. } = o
-                && key.is_empty()
-                && let Some(pic) = it.next()
-            {
-                *key = doc.add_media(pic.bytes, pic.ext);
-            }
-        }
+/// A story's CP range `[a, b)`, relative to a subdocument starting at `base` with `len`
+/// CPs, as absolute CPs clamped to that subdocument; `None` when empty.
+fn story(base: u32, len: u32, (a, b): (u32, u32)) -> Option<(u32, u32)> {
+    let (a, b) = (a.min(len), b.min(len));
+    if b <= a {
+        return None;
     }
+    Some((base.checked_add(a)?, base.checked_add(b)?))
 }
 
 /// Everything the walker needs besides its CP range.
@@ -292,9 +282,14 @@ impl ParaBuild {
 /// Walk a CP range, splitting paragraphs at 0x0D/0x07 marks, applying the direct character
 /// formatting of each CP and the paragraph formatting of each mark. Works for the main
 /// document and for any subdocument range (headers, footers, notes…). Field characters,
-/// note references, bookmarks and inline pictures become inline objects; collected
-/// pictures are appended to `pending` for the caller to bind to media entries.
-fn walk(ctx: &WalkCtx, cp_start: u32, cp_end: u32, pending: &mut Vec<media::Picture>) -> Vec<ParaOut> {
+/// note references, bookmarks and inline pictures become inline objects; pictures go into
+/// `pics`, which shares one media entry per Data-stream location.
+///
+/// The range is clamped to the last piece's CP, and unreadable stretches (gaps, truncated
+/// pieces) are skipped a whole piece at a time, so the work is bounded by the text that
+/// really exists, not by the CP numbers a file claims.
+fn walk(ctx: &WalkCtx, cp_start: u32, cp_end: u32, pics: &mut media::Pictures) -> Vec<ParaOut> {
+    let cp_end = cp_end.min(ctx.pieces.cp_end());
     let mut out = Vec::new();
     let mut pb = ParaBuild::default();
     let mut cp = cp_start;
@@ -305,7 +300,9 @@ fn walk(ctx: &WalkCtx, cp_start: u32, cp_end: u32, pending: &mut Vec<media::Pict
     while cp < cp_end {
         // Bookmark boundaries at this CP (main-document walks only; subdocument walks get
         // an empty table and `cp` never matches the main-document CPs).
-        while marks.peek().is_some_and(|&(mcp, _)| *mcp == cp) {
+        // `<=` so a boundary inside a skipped stretch is still emitted (late) rather than
+        // blocking every later one.
+        while marks.peek().is_some_and(|&(mcp, _)| *mcp <= cp) {
             if let Some((_, m)) = marks.next() {
                 let obj = match m {
                     notes::Mark::Start(name) => InlineObject::BookmarkStart { name: name.clone() },
@@ -315,7 +312,13 @@ fn walk(ctx: &WalkCtx, cp_start: u32, cp_end: u32, pending: &mut Vec<media::Pict
                 pb.objects.push(obj);
             }
         }
-        let c = ctx.pieces.text(ctx.word, cp, cp + 1).chars().next().unwrap_or('\u{FFFD}');
+        let (c, units) = match ctx.pieces.char_at(ctx.word, cp) {
+            Ok(found) => found,
+            Err(next) => {
+                cp = next;
+                continue;
+            }
+        };
         match c {
             '\r' | '\u{7}' => {
                 // Paragraph mark: its PAPX covers the FC range of the paragraph it ends, so
@@ -360,7 +363,7 @@ fn walk(ctx: &WalkCtx, cp_start: u32, cp_end: u32, pending: &mut Vec<media::Pict
                         objects: done.objects,
                         ..Default::default()
                     },
-                    end_cp: cp + 1,
+                    end_cp: cp.saturating_add(1),
                     row,
                 });
             }
@@ -372,7 +375,7 @@ fn walk(ctx: &WalkCtx, cp_start: u32, cp_end: u32, pending: &mut Vec<media::Pict
                     }
                     None => field = Some(FieldBuild { depth: 1, instr: String::new(), sep: None }),
                 }
-                cp += 1;
+                cp = cp.saturating_add(1);
                 continue;
             }
             '\u{14}' => {
@@ -382,7 +385,7 @@ fn walk(ctx: &WalkCtx, cp_start: u32, cp_end: u32, pending: &mut Vec<media::Pict
                 {
                     f.sep = Some(Vec::new());
                 }
-                cp += 1;
+                cp = cp.saturating_add(1);
                 continue;
             }
             '\u{15}' => {
@@ -394,33 +397,25 @@ fn walk(ctx: &WalkCtx, cp_start: u32, cp_end: u32, pending: &mut Vec<media::Pict
                         finish_field(&mut pb, f);
                     }
                 }
-                cp += 1;
+                cp = cp.saturating_add(1);
                 continue;
             }
             '\u{1}' => {
                 // Inline picture: the CHPX of the anchor carries sprmCPicLocation.
                 let fc = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
                 let fc_pic = pic_location(ctx.chpx_bins.chpx(ctx.word, fc));
-                let pic = fc_pic.and_then(|at| media::read(ctx.data, at));
-                match pic.filter(|_| pending.len() < MAX_PICTURES) {
-                    Some(pic) => {
+                match fc_pic.and_then(|at| pics.get(ctx.data, at)) {
+                    Some((key, w, h)) => {
                         pb.push('\u{FFFC}', CharProps::default());
-                        pb.objects.push(InlineObject::Image {
-                            media: String::new(),
-                            w: pic.w,
-                            h: pic.h,
-                            alt: String::new(),
-                            float: Default::default(),
-                            crop: [0.0; 4],
-                        });
-                        pending.push(pic);
+                        pb.objects.push(InlineObject::Image { media: key, w, h, alt: String::new(), float: Default::default(), crop: [0.0; 4] });
                     }
-                    None => log::warn!("docbin: picture at CP {cp} could not be read and was dropped"),
+                    None => pics.dropped(cp),
                 }
             }
             '\u{2}' => {
                 // Footnote or endnote reference; custom symbols share the same character.
-                if let Some((_, kind, id)) = ctx.notes.iter().find(|(c, _, _)| *c == cp) {
+                let at = ctx.notes.partition_point(|(c, _, _)| *c < cp);
+                if let Some((_, kind, id)) = ctx.notes.get(at).filter(|(c, _, _)| *c == cp) {
                     pb.push('\u{FFFC}', CharProps::default());
                     pb.objects.push(InlineObject::NoteRef { kind: *kind, id: *id, custom: String::new() });
                 }
@@ -436,7 +431,7 @@ fn walk(ctx: &WalkCtx, cp_start: u32, cp_end: u32, pending: &mut Vec<media::Pict
             c if (c as u32) < 0x20 => {}
             c => push_formatted(&mut pb, cp, c, ctx, field.as_mut()),
         }
-        cp += c.len_utf16().max(1) as u32;
+        cp = cp.saturating_add(units);
     }
     if !pb.text.is_empty() {
         let done = pb;
@@ -534,9 +529,16 @@ fn num_of(ilfo: i32) -> Option<u32> {
 fn push_formatted(pb: &mut ParaBuild, cp: u32, c: char, ctx: &WalkCtx, field: Option<&mut FieldBuild>) {
     let fc = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
     let grpprl = ctx.chpx_bins.chpx(ctx.word, fc);
-    let base = pb.props.style.as_deref().and_then(|id| ctx.sheet.get(id)).map(|s| s.chr.clone()).unwrap_or_default();
-    let mut props = char_props(grpprl, ctx.fonts, &base);
-    apply_prm(&mut props, ctx.pieces.piece_prm(cp), ctx.fonts, &base);
+    let default;
+    let base = match pb.props.style.as_deref().and_then(|id| ctx.sheet.get(id)) {
+        Some(st) => &st.chr,
+        None => {
+            default = CharProps::default();
+            &default
+        }
+    };
+    let mut props = char_props(grpprl, ctx.fonts, base);
+    apply_prm(&mut props, ctx.pieces.piece_prm(cp), ctx.fonts, base);
     match field {
         Some(f) => match f.sep.as_mut() {
             // Inside a field, characters are recorded for the field object instead of shown;
