@@ -48,7 +48,9 @@ pub struct LineHit<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ObjectHit {
     pub page: usize,
+    /// Its unrotated frame; `spin` turns it about the centre.
     pub rect: Rect,
+    pub spin: wordcraft_geom::Spin,
     pub story: StoryRef,
     pub path: Path,
     pub off: usize,
@@ -69,6 +71,16 @@ impl ObjectHit {
     pub fn behind(&self) -> bool {
         self.wrap == Wrap::BehindText
     }
+    /// Page point (`x`, `y`) in the object's own unrotated frame (the point itself unrotated).
+    pub fn unspin(&self, x: f32, y: f32) -> Point {
+        let (cx, cy) = (self.rect.x + self.rect.w / 2.0, self.rect.y + self.rect.h / 2.0);
+        let (u, v) = self.spin.unapply(cx, cy, x, y);
+        Point::new(u, v)
+    }
+    /// The page area it covers: its frame's rotated bounds.
+    pub fn bounds(&self) -> Rect {
+        self.spin.bounds(self.rect)
+    }
 }
 
 /// A page's objects (not its header's or footer's), topmost first.
@@ -83,9 +95,10 @@ fn all_objects(page: &Page, index: usize) -> impl Iterator<Item = ObjectHit> + '
 
 fn objects_in(items: &[Placed], index: usize) -> impl Iterator<Item = ObjectHit> + '_ {
     items.iter().rev().filter_map(move |it| match it {
-        Placed::Object { rect, story, path, off, text_box, wrap, origin } => Some(ObjectHit {
+        Placed::Object { rect, spin, story, path, off, text_box, wrap, origin } => Some(ObjectHit {
             page: index,
             rect: *rect,
+            spin: *spin,
             story: *story,
             path: path.clone(),
             off: *off,
@@ -203,8 +216,9 @@ impl DocLayout {
     /// behind the text only where there's no text.
     pub fn object_at(&self, page: usize, x: f32, y: f32, edge: f32) -> Option<ObjectHit> {
         let p = self.pages.get(page)?;
-        let pt = Point::new(x, y);
+        // A rotated object is grabbed on its rotated shape: the point is taken into its frame.
         let grabs = |o: &ObjectHit| {
+            let pt = o.unspin(x, y);
             o.rect.expand(edge).contains(pt) && (o.text_box.is_none() || !o.rect.expand(-edge).contains(pt) || o.rect.w.min(o.rect.h) <= edge * 3.0)
         };
         objects(p, page)

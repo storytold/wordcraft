@@ -704,6 +704,13 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 draw(ctx, doc, it, view * m, &local, opts);
             }
         }
+        Draw::Rotated { cx, cy, spin, items } => {
+            let m = Affine::new(spin.matrix(*cx, *cy).map(f64::from));
+            let local = m.inverse().transform_rect_bbox(*visible);
+            for it in items {
+                draw(ctx, doc, it, view * m, &local, opts);
+            }
+        }
     }
 }
 
@@ -863,7 +870,7 @@ mod tests {
         let right = |img: &Rendered| grey(img, x1 + 2..x1 + 6, y0 + 10..y1);
         let left = |img: &Rendered| grey(img, x0.saturating_sub(6)..x0.saturating_sub(2), y0 + 10..y1);
         assert_eq!((right(&plain), left(&plain)), (0, 0));
-        let shadow = Shadow { color: Rgb::BLACK, transparency: 30.0, blur: 2.0, distance: 8.0, angle: 0.0 };
+        let shadow = Shadow { color: Rgb::BLACK, transparency: 30.0, blur: 2.0, distance: 8.0, angle: 0.0, rot_with_shape: false };
         let img = draw(ShapeEffects { shadow: Some(shadow), ..Default::default() });
         assert_eq!(blue(&img), (x0, y0, x1, y1), "the shape itself is unchanged");
         assert!(right(&img) > 100, "shadow to the right: {}", right(&img));

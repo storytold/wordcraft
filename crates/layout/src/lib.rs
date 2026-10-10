@@ -25,7 +25,7 @@ use wordcraft_doc::para::{Anchor, Float, FloatAlign, InlineObject, Wrap};
 use wordcraft_doc::props::{Border, CharProps, Rgb, TableFloat, TextDirection};
 use wordcraft_doc::section::{SectionProps, SectionStart};
 use wordcraft_doc::{Block, Blocks, Document, Paragraph, Path, StoryRef};
-use wordcraft_geom::{Point, Rect};
+use wordcraft_geom::{Point, Rect, Spin};
 
 pub use fields::FieldCtx;
 pub use hit::VisualStep;
@@ -83,6 +83,7 @@ pub enum Placed {
         y1: f32,
         border: Border,
     },
+    /// A picture in `rect`, turned about the rect's centre by `spin` (as are shapes and charts).
     Image {
         rect: Rect,
         media: String,
@@ -90,6 +91,7 @@ pub enum Placed {
         story: StoryRef,
         path: Path,
         off: usize,
+        spin: Spin,
     },
     Shape {
         rect: Rect,
@@ -98,6 +100,7 @@ pub enum Placed {
         stroke: Option<Rgb>,
         stroke_width: f32,
         effects: wordcraft_doc::effects::ShapeEffects,
+        spin: Spin,
     },
     /// A floating chart or diagram, drawn from its items inside `rect`. The object is the U+FFFC at
     /// byte `off` of paragraph `path` (its alt text).
@@ -107,6 +110,7 @@ pub enum Placed {
         story: StoryRef,
         path: Path,
         off: usize,
+        spin: Spin,
     },
     /// A table cell's area (for hit testing and cell selection).
     Cell {
@@ -118,9 +122,10 @@ pub enum Placed {
     },
     /// The area of a picture, shape or text box, for hit testing, selection handles and dragging
     /// (drawn by `Image`/`Shape`/`Lines`). The object is the U+FFFC at byte `off` of paragraph
-    /// `path` in `story`.
+    /// `path` in `story`. `rect` is its unrotated frame; `spin` turns it about the centre.
     Object {
         rect: Rect,
+        spin: Spin,
         story: StoryRef,
         path: Path,
         off: usize,
@@ -1197,6 +1202,8 @@ fn wrap_area(r: Rect, float: &Float) -> Option<(Rect, bool)> {
     }
     let d = |v: f32| if v.is_finite() { v.clamp(0.0, 1584.0) } else { 0.0 };
     let (side, top, bottom) = (d(float.dist), d(float.dist_top), d(float.dist_bottom));
+    // A rotated object keeps text clear of its rotated bounds.
+    let r = float.spin().bounds(r);
     Some((Rect::new(r.x - side, r.y - top, r.w + side * 2.0, r.h + top + bottom), float.wrap == Wrap::TopAndBottom))
 }
 
@@ -1208,22 +1215,40 @@ fn rel_exclusions(excl: &[(Rect, bool)], x0: f32, y0: f32) -> Vec<para::Exclusio
         .collect()
 }
 
-/// The items drawing floating object `o` at `rect` (a group: its members).
-fn float_items(o: &InlineObject, rect: Rect, story: StoryRef, path: &[u32], off: usize) -> Vec<Placed> {
+/// The items drawing floating object `o` at `rect` (a group: its members), turned by its own
+/// spin inside `outer` (its group's, about `outer`'s centre point).
+fn float_items(o: &InlineObject, rect: Rect, outer: (Spin, Point), story: StoryRef, path: &[u32], off: usize) -> Vec<Placed> {
+    let own = o.frame().map(|(_, _, f)| f.spin()).unwrap_or_default();
+    let (ospin, oc) = outer;
+    let rect = carried(rect, ospin, oc);
+    let spin = own.within(ospin);
     match o {
         InlineObject::Image { media, crop, .. } => {
-            vec![Placed::Image { rect, media: media.clone(), crop: *crop, story, path: Path(path.to_vec()), off }]
+            vec![Placed::Image { rect, media: media.clone(), crop: *crop, story, path: Path(path.to_vec()), off, spin }]
         }
         InlineObject::Shape { kind, fill, stroke, stroke_width, effects, .. } => {
-            vec![Placed::Shape { rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width, effects: *effects }]
+            vec![Placed::Shape { rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width, effects: *effects, spin }]
         }
-        InlineObject::Graphic { graphic, .. } => vec![Placed::Graphic { rect, graphic: graphic.clone(), story, path: Path(path.to_vec()), off }],
-        InlineObject::Group { .. } => group_members(o, rect).into_iter().flat_map(|(r, c)| float_items(c, r, story, path, off)).collect(),
+        InlineObject::Graphic { graphic, .. } => {
+            vec![Placed::Graphic { rect, graphic: graphic.clone(), story, path: Path(path.to_vec()), off, spin }]
+        }
+        InlineObject::Group { .. } => {
+            let centre = Point::new(rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
+            group_members(o, rect).into_iter().flat_map(|(r, c)| float_items(c, r, (spin, centre), story, path, off)).collect()
+        }
         _ => Vec::new(),
     }
 }
 
 /// A group's members, each with its rectangle when the group is at `rect`.
+/// `rect` moved (not turned) to where `spin` about `centre` takes its centre: a group member's
+/// frame inside its turned group.
+fn carried(rect: Rect, spin: Spin, centre: Point) -> Rect {
+    let (cx, cy) = (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
+    let (nx, ny) = spin.apply(centre.x, centre.y, cx, cy);
+    Rect::new(rect.x + nx - cx, rect.y + ny - cy, rect.w, rect.h)
+}
+
 fn group_members(o: &InlineObject, rect: Rect) -> Vec<(Rect, &InlineObject)> {
     o.group_rects(rect.x, rect.y, rect.w, rect.h).into_iter().map(|([x, y, w, h], c)| (Rect::new(x, y, w, h), c)).collect()
 }
@@ -1317,7 +1342,7 @@ fn place_objects(
             let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
             // Floating ones are drawn here; inline ones with their line.
             if floating {
-                layer.extend(float_items(obj, rect, story, path, c.start));
+                layer.extend(float_items(obj, rect, (Spin::default(), Point::default()), story, path, c.start));
             }
             let text_box = match obj {
                 InlineObject::Shape { story: Some(id), .. } if ctx.doc.parts.get(id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox) => {
@@ -1327,6 +1352,7 @@ fn place_objects(
             };
             front.push(Placed::Object {
                 rect,
+                spin: float.spin(),
                 story,
                 path: Path(path.to_vec()),
                 off: c.start,
@@ -1334,13 +1360,17 @@ fn place_objects(
                 wrap: float.wrap,
                 origin: Point::new(at.col.0, at.para_y),
             });
-            // Its text (a group: its text boxes'), unless the box budget says no (a box inside
-            // itself, too deep, too many).
+            // Its text (a group: its text boxes', each where the group's turn carries it; the
+            // text itself stays upright), unless the box budget says no (a box inside itself,
+            // too deep, too many).
+            let centre = Point::new(rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
             let boxes: Vec<(u32, Rect)> = match obj {
                 InlineObject::Group { .. } => group_members(obj, rect)
                     .into_iter()
                     .filter_map(|(r, c)| {
-                        c.text_box().filter(|id| ctx.doc.parts.get(id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox)).map(|id| (id, r))
+                        c.text_box()
+                            .filter(|id| ctx.doc.parts.get(id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox))
+                            .map(|id| (id, carried(r, float.spin(), centre)))
                     })
                     .collect(),
                 _ => text_box.map(|id| (id, rect)).into_iter().collect(),

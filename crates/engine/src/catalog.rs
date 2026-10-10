@@ -398,6 +398,7 @@ Picture Format|Picture Styles|Picture Border|picture.border
 Picture Format|Accessibility|Alt Text|picture.altText
 Picture Format|Size|Crop|picture.crop
 Picture Format|Size|Size|picture.size
+Picture Format|Size|Rotation|arrange.rotation
 Shape Format|Shape Styles|Shape Fill|shape.fill
 Shape Format|Shape Styles|Shape Outline|shape.outline
 Shape Format|Shape Styles|Shape Effects|shape.effects

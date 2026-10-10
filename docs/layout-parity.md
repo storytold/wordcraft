@@ -40,7 +40,7 @@ font can't match Word's metrics.
 | Text wrap: square, top-and-bottom, behind, in front | ✅ | 2026-10-06 | — |
 | Text wrap: tight, through (contour, wrap polygon) | ❌ | laid out as square | 6–10 |
 | Text boxes, overflow, linked text boxes | 🟡 | #46; linked text boxes missing | 3–5 |
-| Rotated objects and text | ❌ | no rotation in layout | 4–6 |
+| Rotated objects and text | 🟡 | #332: pictures, shapes, charts and groups drawn turned and flipped about their centre (screen and PDF); square wrap and inline lines keep clear of the rotated bounds; hit testing on the turned shape. Text in a rotated text box stays upright | 2–3 |
 | Page borders (from page edge or text), page colour, watermark | ✅ | | — |
 | Line numbers (restart per page/section, count by) | ✅ | | — |
 | Vertical page alignment | ✅ | | — |
@@ -68,6 +68,7 @@ font can't match Word's metrics.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | trivial | Rotated and flipped objects laid out and drawn (#332) |
 | 2026-10-10 | trivial | Long display equations wrap across lines (#326) |
 | 2026-10-10 | trivial | AutoFit Contents measures the text (#44) |
 | 2026-10-10 | major | First version: layout and pagination checklist with evidence from `crates/layout`, PRs and issues |

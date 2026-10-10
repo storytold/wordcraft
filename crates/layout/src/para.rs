@@ -740,9 +740,11 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                                 let maxw = (env.width - rp.indent_left.max(0.0) - rp.indent_right.max(0.0)).max(18.0);
                                 let (w, h) = (w.clamp(1.0, 4000.0), h.clamp(1.0, 4000.0));
                                 let s = if w > maxw { maxw / w } else { 1.0 };
-                                // The line makes room for effects (shadows) around the picture too.
+                                // The line makes room for effects (shadows) around the picture too, and
+                                // for a rotated one's bounds, as Word does.
                                 let [el, et, er, eb] = float.effect_extent();
-                                push(&mut b, ClKind::Object(k), w * s + el + er, h * s + et + eb);
+                                let (px, py) = float.spin_pad(w * s, h * s);
+                                push(&mut b, ClKind::Object(k), w * s + el + er + 2.0 * px, h * s + et + eb + 2.0 * py);
                             } else {
                                 push(&mut b, ClKind::Object(k), 0.0, 0.0);
                             }

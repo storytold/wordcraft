@@ -6,7 +6,7 @@ use wordcraft_doc::props::{Border, BorderStyle, Rgb, TextColor, TextDirection, U
 use wordcraft_doc::section::SectionStart;
 use wordcraft_doc::{Block, Document, Path, StoryRef};
 use wordcraft_fonts::{BezPath, FaceRef};
-use wordcraft_geom::Rect;
+use wordcraft_geom::{Rect, Spin};
 
 use crate::math::MItem;
 use crate::para::{ClKind, LineEnd, ParaLayout};
@@ -97,6 +97,14 @@ pub enum Draw {
         x: f32,
         y: f32,
         turn: TextDirection,
+        items: Vec<Draw>,
+    },
+    /// A rotated or flipped picture, shape or chart: `items` drawn turned by `spin` about page
+    /// point (`cx`, `cy`) (see [`Spin::matrix`]).
+    Rotated {
+        cx: f32,
+        cy: f32,
+        spin: Spin,
         items: Vec<Draw>,
     },
     /// A formatting-mark label (a section break's name) in the UI's mark colour, left edge at
@@ -212,11 +220,23 @@ fn item(doc: &Document, it: &Placed, opts: &DisplayOptions, alpha: f32, out: &mu
     match it {
         Placed::Fill { rect, color } => out.push(Draw::Fill { rect: *rect, color: *color, alpha }),
         Placed::Rule { x0, y0, x1, y1, border } => out.push(rule(*x0, *y0, *x1, *y1, border, alpha)),
-        Placed::Image { rect, media, crop, .. } => out.push(Draw::Image { rect: *rect, media: media.clone(), crop: *crop, alpha }),
-        Placed::Shape { rect, kind, fill, stroke, stroke_width, effects } => {
-            out.push(Draw::Shape { rect: *rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width, effects: *effects })
+        Placed::Image { rect, media, crop, spin, .. } => {
+            spun(*spin, *rect, vec![Draw::Image { rect: *rect, media: media.clone(), crop: *crop, alpha }], out)
         }
-        Placed::Graphic { rect, graphic, .. } => out.extend(graphic_draws(doc, graphic, *rect, alpha)),
+        Placed::Shape { rect, kind, fill, stroke, stroke_width, effects, spin } => spun(
+            *spin,
+            *rect,
+            vec![Draw::Shape {
+                rect: *rect,
+                kind: *kind,
+                fill: *fill,
+                stroke: *stroke,
+                stroke_width: *stroke_width,
+                effects: effects_in(*effects, *spin),
+            }],
+            out,
+        ),
+        Placed::Graphic { rect, graphic, spin, .. } => spun(*spin, *rect, graphic_draws(doc, graphic, *rect, alpha), out),
         Placed::Cell { .. } | Placed::Object { .. } => {}
         Placed::Lines { story, path, para, l0, l1, x, y, turn } if turn.is_turned() => {
             let mut items = Vec::new();
@@ -546,30 +566,15 @@ fn lines(
             let cx = x + line.cl_left(k).unwrap_or(0.0);
             let obj = para.and_then(|p| p.objects.get(oi));
             let rect = inline_rect(obj, cx, base, c.adv, c.obj_h);
+            let spin = obj.and_then(InlineObject::frame).map(|(_, _, f)| f.spin()).unwrap_or_default();
             match obj {
-                Some(InlineObject::Image { media, crop, .. }) => out.push(Draw::Image { rect, media: media.clone(), crop: *crop, alpha }),
-                Some(InlineObject::Shape { kind, fill, stroke, stroke_width, effects, .. }) => {
-                    out.push(Draw::Shape { rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width, effects: *effects })
-                }
-                Some(g @ InlineObject::Group { .. }) => {
-                    for ([x, y, w, h], c) in g.group_rects(rect.x, rect.y, rect.w, rect.h) {
-                        let rect = Rect::new(x, y, w, h);
-                        match c {
-                            InlineObject::Image { media, crop, .. } => out.push(Draw::Image { rect, media: media.clone(), crop: *crop, alpha }),
-                            InlineObject::Shape { kind, fill, stroke, stroke_width, effects, .. } => out.push(Draw::Shape {
-                                rect,
-                                kind: *kind,
-                                fill: *fill,
-                                stroke: *stroke,
-                                stroke_width: *stroke_width,
-                                effects: *effects,
-                            }),
-                            _ => {}
-                        }
-                    }
+                Some(o @ (InlineObject::Image { .. } | InlineObject::Shape { .. } | InlineObject::Group { .. })) => {
+                    object_draws(o, rect, Spin::default(), alpha, out)
                 }
                 Some(InlineObject::Graphic { graphic, alt, .. }) => {
-                    out.push(Draw::Figure { alt: alt.clone(), kind: graphic.kind, draws: graphic_draws(doc, graphic, rect, alpha) })
+                    let mut draws = Vec::new();
+                    spun(spin, rect, graphic_draws(doc, graphic, rect, alpha), &mut draws);
+                    out.push(Draw::Figure { alt: alt.clone(), kind: graphic.kind, draws })
                 }
                 Some(InlineObject::Equation { .. }) => {
                     if let Some((_, ml)) = pl.maths.iter().find(|(k, _)| *k == oi) {
@@ -888,9 +893,62 @@ pub fn text_color(c: &TextColor, background: Option<Rgb>) -> Rgb {
     }
 }
 
+/// `items` turned by `spin` about the centre of `rect` (as they are, unturned).
+fn spun(spin: Spin, rect: Rect, items: Vec<Draw>, out: &mut Vec<Draw>) {
+    if spin.is_identity() {
+        out.extend(items);
+    } else {
+        out.push(Draw::Rotated { cx: rect.x + rect.w / 2.0, cy: rect.y + rect.h / 2.0, spin, items });
+    }
+}
+
+/// A picture, shape or group drawn in `rect` (its unturned frame), turned by its own spin about
+/// the rect's centre; a group's members are turned inside it. `outer` is the spin it is already
+/// drawn inside (its group's). Nothing for anything else.
+fn object_draws(o: &InlineObject, rect: Rect, outer: Spin, alpha: f32, out: &mut Vec<Draw>) {
+    let own = o.frame().map(|(_, _, f)| f.spin()).unwrap_or_default();
+    match o {
+        InlineObject::Image { media, crop, .. } => spun(own, rect, vec![Draw::Image { rect, media: media.clone(), crop: *crop, alpha }], out),
+        InlineObject::Shape { kind, fill, stroke, stroke_width, effects, .. } => {
+            let effects = effects_in(*effects, own.within(outer));
+            spun(own, rect, vec![Draw::Shape { rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width, effects }], out)
+        }
+        InlineObject::Group { .. } => {
+            let mut members = Vec::new();
+            for ([x, y, w, h], c) in o.group_rects(rect.x, rect.y, rect.w, rect.h) {
+                object_draws(c, Rect::new(x, y, w, h), own.within(outer), alpha, &mut members);
+            }
+            spun(own, rect, members, out)
+        }
+        _ => {}
+    }
+}
+
+/// A shape's `effects` as drawn turned by `spin` (all the turns it is drawn inside): glows and
+/// soft edges turn with the shape, and so does a shadow's offset when it rotates with the shape
+/// (`rotWithShape`); one that doesn't keeps its direction on the page, so its angle is turned back.
+pub(crate) fn effects_in(effects: wordcraft_doc::effects::ShapeEffects, spin: Spin) -> wordcraft_doc::effects::ShapeEffects {
+    let mut e = effects;
+    if let Some(s) = e.shadow.as_mut().filter(|s| !s.rot_with_shape && !spin.is_identity()) {
+        let a = s.angle.to_radians();
+        let (dx, dy) = spin.unapply(0.0, 0.0, a.cos(), a.sin());
+        s.angle = wordcraft_geom::normalize_degrees(dy.atan2(dx).to_degrees());
+    }
+    e
+}
+
 /// Where inline object `obj` is drawn, given its cluster's box (`adv` × `obj_h` standing on the
 /// baseline at `cx`): inside the room kept for its effects.
+/// A rotated one's unrotated frame, centred in that room.
 pub(crate) fn inline_rect(obj: Option<&InlineObject>, cx: f32, base: f32, adv: f32, obj_h: f32) -> Rect {
-    let [l, t, r, b] = obj.and_then(InlineObject::frame).map_or([0.0; 4], |(_, _, float)| float.effect_extent());
-    Rect::new(cx + l, base - obj_h + t, (adv - l - r).max(0.0), (obj_h - t - b).max(0.0))
+    let frame = obj.and_then(InlineObject::frame);
+    let [l, t, r, b] = frame.map_or([0.0; 4], |(_, _, float)| float.effect_extent());
+    let room = Rect::new(cx + l, base - obj_h + t, (adv - l - r).max(0.0), (obj_h - t - b).max(0.0));
+    let Some((w, h, float)) = frame.filter(|(_, _, f)| f.rot != 0.0) else { return room };
+    // The room is the rotated bounds of the (possibly scaled-down) frame: undo the rotation.
+    let (w, h) = (wordcraft_geom::finite(w).clamp(1.0, 4000.0), wordcraft_geom::finite(h).clamp(1.0, 4000.0));
+    let (bw, _) = float.spin().extent(w, h);
+    let k = if bw > 0.0 { room.w / bw } else { 1.0 };
+    let (fw, fh) = (w * k, h * k);
+    Rect::new(room.x + (room.w - fw) / 2.0, room.y + (room.h - fh) / 2.0, fw, fh)
 }

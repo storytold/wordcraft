@@ -813,9 +813,33 @@ fn layout(app: &mut WordApp, ui: &mut Ui) {
         stack(ui, |ui| {
             small(ui, app, "align", None, "Align", "arrange.align", json!({}), false);
             group_menu(ui, app, None);
-            small(ui, app, "rotate", None, "Rotate", "arrange.rotate", json!({}), false);
+            rotate_menu(ui, app, None);
         });
     });
+}
+
+/// Arrange › Rotate: turn 90° either way or flip (the angle and mirroring, not the pixels).
+fn rotate_menu(ui: &mut Ui, app: &mut WordApp, label: Option<&str>) {
+    menu_button(ui, app, "rotate", label, "Rotate", false, |ui, app| {
+        mi(ui, app, "Rotate Right 90°", "arrange.rotate", json!({"direction": "right"}));
+        mi(ui, app, "Rotate Left 90°", "arrange.rotate", json!({"direction": "left"}));
+        mi(ui, app, "Flip Vertical", "arrange.rotate", json!({"direction": "flipVertical"}));
+        mi(ui, app, "Flip Horizontal", "arrange.rotate", json!({"direction": "flipHorizontal"}));
+    });
+}
+
+/// Size › Rotation: the selected object's exact angle (a drag of the field is one undo step).
+fn rotation_field(ui: &mut Ui, app: &mut WordApp) {
+    let deg0 = wordcraft_engine::cmd::objects::selected(&app.session).and_then(|(_, o)| o.frame().map(|(_, _, f)| f.spin().deg)).unwrap_or(0.0);
+    ui.label(egui::RichText::new(tl!("Rotation:")).small());
+    let mut deg = deg0;
+    let r = ui.add(egui::DragValue::new(&mut deg).speed(1.0).range(-360.0..=360.0).max_decimals(1).suffix("°"));
+    if r.changed() {
+        if r.dragged() && !r.drag_started() {
+            app.session.join_next_undo();
+        }
+        let _ = app.run("arrange.rotation", json!({"degrees": deg}));
+    }
 }
 
 /// Arrange › Group: Group (Shift+click objects to select several) and Ungroup.
@@ -1159,8 +1183,29 @@ fn shape_format(app: &mut WordApp, ui: &mut Ui) {
         big(ui, app, "position", "Position", "arrange.position", json!({}), false);
         big(ui, app, "wrapText", "Wrap\nText", "arrange.wrap", json!({}), false);
         stack(ui, |ui| {
-            small(ui, app, "rotate", Some("Rotate"), "Rotate", "arrange.rotate", json!({}), false);
+            rotate_menu(ui, app, Some("Rotate"));
             small(ui, app, "align", Some("Align"), "Align", "arrange.align", json!({}), false);
+        });
+    });
+    group(ui, "Size", None, app, |ui, app| {
+        let (w0, h0) =
+            wordcraft_engine::cmd::objects::selected(&app.session).and_then(|(_, o)| o.frame().map(|(w, h, _)| (w, h))).unwrap_or((0.0, 0.0));
+        stack(ui, |ui| {
+            crate::widgets::row(ui, |ui| {
+                for (label, key, v0) in [("W:", "width", w0), ("H:", "height", h0)] {
+                    ui.label(egui::RichText::new(tl!(label)).small());
+                    let mut v = v0;
+                    let r = ui.add(egui::DragValue::new(&mut v).speed(1.0).range(4.0..=2000.0).suffix(" pt"));
+                    if r.changed() {
+                        if r.dragged() && !r.drag_started() {
+                            app.session.join_next_undo();
+                        }
+                        let _ = app.run("picture.size", json!({key: v, "lockAspect": false}));
+                    }
+                }
+            });
+            ui.add_space(2.0);
+            crate::widgets::row(ui, |ui| rotation_field(ui, app));
         });
     });
 }
@@ -1250,7 +1295,7 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
         big(ui, app, "position", "Position", "arrange.position", json!({}), false);
         big(ui, app, "wrapText", "Wrap\nText", "arrange.wrap", json!({}), false);
         stack(ui, |ui| {
-            small(ui, app, "rotate", Some("Rotate"), "Rotate", "arrange.rotate", json!({}), false);
+            rotate_menu(ui, app, Some("Rotate"));
             small(ui, app, "align", Some("Align"), "Align", "arrange.align", json!({}), false);
             group_menu(ui, app, Some("Group"));
         });
@@ -1281,6 +1326,7 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
                     }
                     let _ = app.run("picture.size", json!({"height": h}));
                 }
+                rotation_field(ui, app);
             });
             ui.add_space(2.0);
             crate::widgets::row(ui, |ui| {

@@ -1114,3 +1114,9 @@
 	The password is removed. Save the document to keep the change.	A senha foi removida. Salve o documento para manter a alteração.
 	The passwords don't match.	As senhas não coincidem.
 	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	Guarde a senha em um lugar seguro: sem ela, ninguém, nem o WordCraft, consegue abrir o documento. Deixe as duas caixas vazias para remover a senha.
+	Rotation	Rotação
+	Rotation:	Rotação:
+	Rotate Right 90°	Girar 90° para a direita
+	Rotate Left 90°	Girar 90° para a esquerda
+	Flip Vertical	Inverter verticalmente
+	Flip Horizontal	Inverter horizontalmente

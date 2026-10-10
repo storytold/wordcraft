@@ -56,7 +56,7 @@ Measured by grepping `crates/docx/src/read` and `src/write` for the OOXML elemen
 | Content controls (`w:sdt`) | 🟡 | ❌ | Content kept, the control (type, binding, placeholder, lock) dropped |
 | Legacy form fields (`w:ffData`), check boxes, drop-downs | ❌ | ❌ | |
 | DrawingML pictures inline and anchored (`wp:anchor`), wrap square/tight/through/top-bottom | ✅ | ✅ | Tight/through read and written, laid out as square |
-| DrawingML shapes and text boxes (`wps:`) | ✅ | ✅ | Preset geometries subset |
+| DrawingML shapes and text boxes (`wps:`) | ✅ | ✅ | Preset geometries subset; rotation and flips (`a:xfrm` `rot`/`flipH`/`flipV`, pictures and groups too, #332), the effect extent covering the rotated bounds |
 | Group shapes (`wpg:`), drawing canvas | ❌ | ❌ | Dropped |
 | VML (`w:pict`, `v:shape`, `v:textbox`) | 🟡 | ❌ | Pictures and text boxes, best effort (#242) |
 | Charts (`c:chart`), SmartArt (`dgm`), ink, 3D models, OLE objects (`w:object`) | ❌ | ❌ | Dropped on read, not preserved on save. A document with a chart loses it silently |
@@ -80,6 +80,7 @@ Measured by grepping `crates/docx/src/read` and `src/write` for the OOXML elemen
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | trivial | DrawingML rotation and flips read and written (#332) |
 | 2026-10-10 | trivial | Equation breaks and `m:mathPr` wrapping options round-trip (#326) |
 | 2026-10-10 | trivial | Custom table styles round-trip (#256 merged) |
 | 2026-10-10 | major | First version: Word's full format list, read/write status, DOCX element coverage from the source, fidelity and hours |

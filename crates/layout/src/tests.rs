@@ -2731,3 +2731,120 @@ fn kinsoku_keeps_a_manual_line_break_before_a_closing_bracket() {
     assert_eq!(lines[0].1, LineEnd::LineBreak, "{lines:?}");
     assert_eq!(lines[1].0, bracket, "the second line starts at the bracket: {lines:?}");
 }
+
+/// #332: a rotated floating shape keeps text clear of its rotated bounds (it reaches further at
+/// the side), its frame stays put (rotation is about the centre) and it is drawn turned; hit
+/// testing follows the turned shape, not its frame.
+#[test]
+fn rotated_float_wraps_around_its_rotated_bounds() {
+    let text = "Words flow around the turned shape here. ".repeat(30);
+    let place = |rot: f32| {
+        let mut d = Document::from_text(&text);
+        let float = wordcraft_doc::para::Float {
+            wrap: wordcraft_doc::para::Wrap::Square,
+            h_rel: wordcraft_doc::para::Anchor::Column,
+            v_rel: wordcraft_doc::para::Anchor::Paragraph,
+            x: 0.0,
+            y: 40.0,
+            rot,
+            ..Default::default()
+        };
+        let shape = InlineObject::Shape {
+            kind: wordcraft_doc::para::ShapeKind::Rectangle,
+            w: 144.0,
+            h: 40.0,
+            fill: None,
+            stroke: None,
+            stroke_width: 1.0,
+            float,
+            story: None,
+            effects: Default::default(),
+        };
+        d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+        let p = &l.pages[0];
+        let Some(Placed::Lines { para, .. }) = p.items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        // The widest indent of a line beside the shape.
+        let left = para.lines.iter().map(|l| l.left).fold(0.0f32, f32::max);
+        let hit = l.object(&Pos::body(0, 0), 0).unwrap();
+        let drawn = crate::display::page_display(&d, p, &Default::default()).iter().any(|d| matches!(d, crate::display::Draw::Rotated { .. }));
+        (left, hit, drawn, l)
+    };
+    let (flat, frame, flat_drawn, _) = place(0.0);
+    let (turned, hit, drawn, l) = place(30.0);
+    // 144 × 40 turned 30° is 144.7 wide: 0.36 pt further out on each side, the centre kept.
+    let bounds = hit.bounds();
+    assert!((bounds.w - (144.0 * 30f32.to_radians().cos() + 40.0 * 0.5)).abs() < 0.01, "{bounds:?}");
+    assert_eq!(hit.rect, frame.rect);
+    assert!(turned > flat && turned >= bounds.right() - hit.origin.x, "{flat} → {turned} ({bounds:?})");
+    assert!(drawn && !flat_drawn);
+    // Its frame's top-right corner turns away from where it was: no longer on the shape.
+    let r = hit.rect;
+    assert!(l.object_at(0, r.right() - 2.0, r.y + 2.0, 0.0).is_none());
+    assert!(l.object_at(0, r.x + r.w / 2.0, r.y + r.h / 2.0, 0.0).is_some());
+}
+
+/// #332: a group turns as a whole: each member's centre is carried round the group's centre and
+/// the member drawn with the group's turn on top of its own; hit testing follows the turned
+/// group. A shadow that doesn't rotate with its shape (`rotWithShape="0"`, Word's presets) keeps
+/// its page direction inside the turn; one that does turns with the shape.
+#[test]
+fn rotated_group_turns_its_members_and_their_shadows() {
+    use wordcraft_doc::effects::{Shadow, ShapeEffects};
+    use wordcraft_doc::para::{Anchor, Float, GroupChild, ShapeKind, Wrap};
+    let member = |rot_with_shape: bool, rot: f32| InlineObject::Shape {
+        kind: ShapeKind::Rectangle,
+        w: 60.0,
+        h: 40.0,
+        fill: Some(wordcraft_doc::props::Rgb(1, 2, 3)),
+        stroke: None,
+        stroke_width: 0.0,
+        float: Float { rot, ..Default::default() },
+        story: None,
+        effects: ShapeEffects { shadow: Some(Shadow { angle: 0.0, rot_with_shape, ..Default::default() }), ..Default::default() },
+    };
+    let float =
+        Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 100.0, y: 100.0, rot: 90.0, ..Default::default() };
+    let group = InlineObject::Group {
+        w: 120.0,
+        h: 40.0,
+        float,
+        ch_w: 120.0,
+        ch_h: 40.0,
+        children: vec![GroupChild { x: 0.0, y: 0.0, obj: member(false, 0.0) }, GroupChild { x: 60.0, y: 0.0, obj: member(true, 10.0) }],
+    };
+    let mut d = Document::from_text("Text under the group.");
+    d.insert_object(&Pos::body(0, 0), group, &Default::default()).unwrap();
+    let l = lay(&d);
+    let p = &l.pages[0];
+    let hit = l.object(&Pos::body(0, 0), 0).unwrap();
+    let g = hit.rect;
+    let (cx, cy) = (g.x + g.w / 2.0, g.y + g.h / 2.0);
+    assert_eq!(hit.spin.deg, 90.0);
+    // Turned a quarter clockwise, the left member is now above the centre, the right one below.
+    let shapes: Vec<(Rect, Spin)> =
+        p.items.iter().filter_map(|i| if let Placed::Shape { rect, spin, .. } = i { Some((*rect, *spin)) } else { None }).collect();
+    assert_eq!(shapes.len(), 2, "{shapes:?}");
+    let centre = |r: Rect| (r.x + r.w / 2.0, r.y + r.h / 2.0);
+    let near = |a: (f32, f32), b: (f32, f32)| (a.0 - b.0).abs() < 0.01 && (a.1 - b.1).abs() < 0.01;
+    assert!(near(centre(shapes[0].0), (cx, cy - 30.0)), "{shapes:?} about ({cx}, {cy})");
+    assert!(near(centre(shapes[1].0), (cx, cy + 30.0)), "{shapes:?}");
+    assert_eq!((shapes[0].1.deg, shapes[1].1.deg), (90.0, 100.0));
+    // Drawn turned: the page-fixed shadow still falls to the right on the page (270° in the
+    // quarter-turned frame); the other turns with its shape (still 0° in its own frame).
+    let shadows: Vec<f32> = crate::display::page_display(&d, p, &Default::default())
+        .iter()
+        .filter_map(|d| match d {
+            crate::display::Draw::Rotated { items, .. } => items.iter().find_map(|i| match i {
+                crate::display::Draw::Shape { effects, .. } => effects.shadow.map(|s| s.angle),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(shadows.len(), 2, "{shadows:?}");
+    assert!((shadows[0] - 270.0).abs() < 0.01 && shadows[1].abs() < 0.01, "{shadows:?}");
+    // Grabbed on the turned group: its frame's left end is empty now, above the centre isn't.
+    assert!(l.object_at(0, g.x + 5.0, cy, 0.0).is_none());
+    assert!(l.object_at(0, cx, cy - 50.0, 0.0).is_some());
+}
