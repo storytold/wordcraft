@@ -328,6 +328,26 @@ fn buttons(ui: &mut Ui, ok: &str) -> (bool, bool) {
 fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     match d {
         Dialog::Font { font, size, bold, italic, underline, strike, sup, sub, small_caps, caps, hidden, color, spacing } => {
+            // Build the sample text format for the preview pane below.
+            let preview_size = size.trim().parse::<f32>().unwrap_or(12.0).clamp(6.0, 72.0);
+            let preview_color = wordcraft_doc::Rgb::parse(color).map(crate::theme::c32).unwrap_or_else(|| ui.visuals().text_color());
+            let mut fmt = egui::TextFormat {
+                font_id: egui::FontId::new(preview_size, egui::FontFamily::Proportional),
+                color: preview_color,
+                ..Default::default()
+            };
+            if *bold {
+                fmt.font_id = crate::theme::semibold(preview_size);
+            }
+            if *italic {
+                fmt.italics = true;
+            }
+            if *underline {
+                fmt.underline = egui::Stroke::new(1.0, preview_color);
+            }
+            if *strike {
+                fmt.strikethrough = egui::Stroke::new(1.0, preview_color);
+            }
             egui::Grid::new("fontdlg").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
                 ui.label(tl!("Font:"));
                 ui.text_edit_singleline(font);
@@ -360,6 +380,13 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 ui.checkbox(hidden, tl!("Hidden"));
                 ui.end_row();
             });
+            // Live preview of the chosen font/size/colour/effects.
+            ui.separator();
+            ui.label(egui::RichText::new(tl!("Preview")).small().weak());
+            let sample = if *caps { "AaBbYyZz".to_uppercase() } else { "AaBbYyZz".to_string() };
+            let mut job = egui::text::LayoutJob::single_section(sample, fmt);
+            job.wrap.max_width = ui.available_width().min(400.0);
+            ui.label(job);
             let (ok, cancel) = buttons(ui, tl!("OK"));
             if ok {
                 let mut props = json!({

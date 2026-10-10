@@ -227,6 +227,9 @@ pub struct FontDb {
     /// scan, so what they find doesn't depend on what ran before them.
     #[cfg(not(target_arch = "wasm32"))]
     cataloged: std::sync::OnceLock<()>,
+    /// Held while an installed family's files load, so two lookups don't load it twice.
+    #[cfg(not(target_arch = "wasm32"))]
+    loading: Mutex<()>,
     /// System fallback state: enabled, and characters no system font covers.
     #[cfg(not(target_arch = "wasm32"))]
     sys: Mutex<SysFallback>,
@@ -520,6 +523,8 @@ impl FontDb {
             #[cfg(not(target_arch = "wasm32"))]
             cataloged: std::sync::OnceLock::new(),
             #[cfg(not(target_arch = "wasm32"))]
+            loading: Mutex::new(()),
+            #[cfg(not(target_arch = "wasm32"))]
             sys: Mutex::new(SysFallback { enabled: true, ..Default::default() }),
         }
     }
@@ -586,14 +591,28 @@ impl FontDb {
     /// Add a user font (TTF/OTF/TTC bytes). Returns the number of faces added (0 if unparseable or
     /// every face was already present).
     pub fn add_font(&self, bytes: Vec<u8>) -> usize {
-        let data = Arc::new(bytes);
-        let mut added = 0;
-        for (i, family, style, coords) in enumerate_faces(&data) {
-            if self.read_faces().iter().any(|f| f.family.eq_ignore_ascii_case(&family) && f.style.eq_ignore_ascii_case(&style)) {
-                continue;
+        self.add_fonts(vec![bytes])
+    }
+
+    /// Add the faces of several font files at once: lookups see all of them or none, never a
+    /// family with only some of its styles (which would resolve, and be cached as, the wrong
+    /// face). Faces already present (same family and style) are skipped. Returns how many were
+    /// added.
+    fn add_fonts(&self, files: Vec<Vec<u8>>) -> usize {
+        let mut new = Vec::new();
+        for bytes in files {
+            let data = Arc::new(bytes);
+            for (i, family, style, coords) in enumerate_faces(&data) {
+                if let Some(f) = make_face(FontBytes::Owned(data.clone()), i, family, style, coords) {
+                    new.push(Arc::new(f));
+                }
             }
-            if let Some(f) = make_face(FontBytes::Owned(data.clone()), i, family, style, coords) {
-                self.faces.write().unwrap_or_else(|e| e.into_inner()).push(Arc::new(f));
+        }
+        let mut faces = self.faces.write().unwrap_or_else(|e| e.into_inner());
+        let mut added = 0;
+        for f in new {
+            if !faces.iter().any(|g| g.family.eq_ignore_ascii_case(&f.family) && g.style.eq_ignore_ascii_case(&f.style)) {
+                faces.push(f);
                 added += 1;
             }
         }
@@ -666,6 +685,11 @@ impl FontDb {
     /// Load the files of the installed `family`. Returns whether any face was added.
     #[cfg(not(target_arch = "wasm32"))]
     fn load_cataloged(&self, family: &str) -> bool {
+        let _loading = self.loading.lock().unwrap_or_else(|e| e.into_inner());
+        // Another lookup may have loaded it while this one waited.
+        if self.is_loaded(family) {
+            return true;
+        }
         let paths: Vec<std::path::PathBuf> = {
             let cat = self.read_catalog();
             let mut p: Vec<_> = cat.iter().filter(|c| c.family.eq_ignore_ascii_case(family)).map(|c| c.path.clone()).collect();
@@ -673,13 +697,8 @@ impl FontDb {
             p.dedup();
             p
         };
-        let mut any = false;
-        for p in paths {
-            if let Ok(data) = std::fs::read(&p) {
-                any |= self.add_font(data) > 0;
-            }
-        }
-        any
+        let files = paths.iter().filter_map(|p| std::fs::read(p).ok()).collect();
+        self.add_fonts(files) > 0
     }
 
     /// Resolve a family + style to a face, falling back to the closest style of the family, then to
