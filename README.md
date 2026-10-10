@@ -199,7 +199,7 @@ check and the wasm build. Contributor and agent instructions: [AGENTS.md](AGENTS
 ## Roadmap
 
 WordCraft is in **alpha**. It covers 88% of Word's ribbon features with commands today; counting
-depth, file fidelity, stability and the rest, we estimate it is about 47% of the way to replacing
+depth, file fidelity, stability and the rest, we estimate it is about 60% of the way to replacing
 all of Word for real work, about 54% for a typical professional's weekly work and about 63% for
 everyday essentials. Beta needs testing against real-world .docx files, keeping charts and SmartArt
 through a round trip, pagination closer to Word's, a stability sweep and native printing. Details
