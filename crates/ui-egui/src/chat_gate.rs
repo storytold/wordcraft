@@ -92,7 +92,7 @@ pub const AGENT_COMMANDS: &[(&str, &[&str])] = &[
     ),
     // Only on the member's own paragraphs (the guard refuses them on the owner's).
     ("lists", &["para.bullets", "para.numbering"]),
-    // Edit or delete only its own; never the text of someone else's comment.
+    // Delete only its own; never the text of someone else's comment.
     ("comments", &["review.deleteComment", "review.newComment", "review.reply", "review.resolveComment"]),
     // Announced with characters and authors. A member never accepts its own changes (someone
     // else reviews them); rejecting new paragraphs is the owner's.

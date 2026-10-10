@@ -35,7 +35,11 @@ pub fn file_name(canonical_doc: &Path) -> String {
     let safe: String = raw.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' }).take(48).collect();
     let safe = safe.trim_start_matches('.');
     let prefix = if safe.trim_matches(|c| c == '.' || c == '_').is_empty() { "document" } else { safe };
-    let hash = canonical_doc.as_os_str().as_encoded_bytes().iter().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3));
+    let hash = canonical_doc
+        .as_os_str()
+        .as_encoded_bytes()
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3));
     format!("{prefix}-{hash:016x}.jsonl")
 }
 

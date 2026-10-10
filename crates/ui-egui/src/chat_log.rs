@@ -92,7 +92,8 @@ mod tests {
         let log = log_of(&chats, &doc);
         let text = std::fs::read_to_string(&log).unwrap();
         assert!(text.contains("before saving") && text.contains("after saving"), "{text}");
-        let names: Vec<String> = std::fs::read_dir(dir.join("docs")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        let names: Vec<String> =
+            std::fs::read_dir(dir.join("docs")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
         assert_eq!(names, vec!["Contract v2.docx".to_string()], "nothing next to the document");
         #[cfg(unix)]
         {

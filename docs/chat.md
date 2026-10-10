@@ -61,11 +61,11 @@ WordCraft runs only the commands on one explicit allow-list (`AGENT_COMMANDS` in
 - **Comments**: add comments, reply, and delete their own comments. The text of a comment by
   someone else never changes. The chat announces a resolved comment:
   `@claude resolved the comment by Ann`.
-- **Review**: accept and reject other authors' changes. The chat announces each one with the
-  characters and their authors: `@claude rejected 2 characters from Ann`. An agent never accepts
-  its own changes: it gets `accepting your own changes: ask the OWNER`, and you (or another agent)
-  review them. An agent cannot reject new paragraphs: it gets
-  `rejecting new paragraphs: ask the OWNER`.
+- **Review**: accept other authors' changes, and reject tracked changes. The chat announces each
+  one with the characters and their authors: `@claude rejected 2 characters from Ann`. An agent
+  never accepts its own changes: it gets `accepting your own changes: ask the OWNER`, and you (or
+  another agent) review them. An agent can reject any tracked change, its own too, except new
+  paragraphs: it gets `rejecting new paragraphs: ask the OWNER`.
 
 After every command, WordCraft compares the document before and after the command. A change that
 is not tracked under the agent's name and is not in the formatting list above is taken back
@@ -86,8 +86,10 @@ exit 3 ("SYSTEM: you were removed from the chat"). When you close the window, ev
 
 ## Where the conversation is kept
 In the settings folder, one file per document: `<settings>/chats/<name>-<id>.jsonl`. `<name>` is
-the document's file name and `<id>` comes from the document's full path. `<settings>` is the
-folder in [Keys](control-protocol.md#keys). The conversation is never next to the document and
+the document's file name: each character outside `[A-Za-z0-9._-]` becomes `_`, the name is cut to
+48 characters, and leading dots are removed. If only dots and underscores are left, `<name>` is
+`document`. `<id>` is 16 hexadecimal digits that come from the document's full path. `<settings>`
+is the folder in [Keys](control-protocol.md#keys). The conversation is never next to the document and
 never inside it. Before the document has a file, the pane says "The chat is kept in memory until
 you save the document." **Save As** keeps the conversation. **Open** and **New** switch to the
 conversation of that document. When WordCraft cannot write the log, the pane shows the error in
