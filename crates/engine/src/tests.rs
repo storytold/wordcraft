@@ -2248,3 +2248,40 @@ fn timestamps_come_from_the_clock() {
     // Fixed-width ISO strings sort by time.
     assert!(date >= cmd::iso_from_unix_secs(before) && date <= cmd::iso_from_unix_secs(cmd::now_unix()), "{date}");
 }
+
+#[test]
+fn charts_and_diagrams_can_be_selected_and_deleted_but_not_moved() {
+    use std::sync::Arc;
+    use wordcraft_doc::para::InlineObject;
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Before "}));
+    let chart = InlineObject::Graphic { w: 200.0, h: 100.0, alt: String::new(), float: Default::default(), graphic: Arc::new(Default::default()) };
+    s.doc.insert_object(&Pos::body(0, 7), chart, &Default::default()).unwrap();
+    let end = 7 + wordcraft_doc::para::OBJ.len_utf8();
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 7), "focus": Pos::body(0, end)}));
+    assert!(crate::cmd::objects::object_selection(&s).is_some(), "the chart is selected");
+    for (id, v) in [
+        ("arrange.bounds", json!({"width": 50})),
+        ("picture.size", json!({"width": 50})),
+        ("arrange.wrap", json!({"wrap": "square"})),
+        ("arrange.position", json!({"preset": "topLeft"})),
+        ("arrange.align", json!({"value": "left"})),
+        ("arrange.bringForward", json!({})),
+    ] {
+        assert!(s.run(id, &v).is_err(), "{id} must not change a chart");
+    }
+    run(&mut s, "text.delete", json!({}));
+    assert!(s.doc.para_at(&Pos::body(0, 0)).is_some_and(|p| p.objects.is_empty()), "the chart is deleted");
+}
+
+#[test]
+fn accessibility_reports_a_chart_without_alt_text() {
+    use std::sync::Arc;
+    use wordcraft_doc::para::InlineObject;
+    let mut s = s();
+    let chart = InlineObject::Graphic { w: 200.0, h: 100.0, alt: " ".into(), float: Default::default(), graphic: Arc::new(Default::default()) };
+    s.doc.insert_object(&Pos::body(0, 0), chart, &Default::default()).unwrap();
+    let v = run(&mut s, "file.accessibility", json!({}));
+    let issues = v["issues"].as_array().expect("issues");
+    assert!(issues.iter().any(|i| i["issue"] == "Chart or diagram has no alternative text"), "{issues:?}");
+}

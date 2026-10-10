@@ -252,6 +252,9 @@ fn page_key(app: &WordApp, page: &Page, scale_px: f32, dim_body: bool) -> u64 {
                 Placed::Rule { x0, y0, x1, y1, border } => format!("{x0}{y0}{x1}{y1}{border:?}").hash(&mut h),
                 Placed::Image { rect, media, .. } => format!("{rect:?}{media}").hash(&mut h),
                 Placed::Shape { rect, kind, fill, stroke, .. } => format!("{rect:?}{kind:?}{fill:?}{stroke:?}").hash(&mut h),
+                Placed::Graphic { rect, graphic, .. } => {
+                    (std::sync::Arc::as_ptr(graphic) as usize, rect.x.to_bits(), rect.y.to_bits(), rect.w.to_bits(), rect.h.to_bits()).hash(&mut h)
+                }
                 Placed::Cell { .. } | Placed::Object { .. } => {}
             }
         }

@@ -2376,6 +2376,158 @@ fn hidden_float_in_a_text_box_is_not_placed() {
     assert_eq!((shown - hidden_n, shown_areas - hidden_areas), (1, 1), "shown {shown}/{shown_areas}, hidden {hidden_n}/{hidden_areas}");
 }
 
+#[test]
+fn inline_graphic_reserves_its_height() {
+    let mut d = Document::from_text("Chart\nAfter");
+    let obj = InlineObject::Graphic { w: 216.0, h: 144.0, alt: String::new(), float: Default::default(), graphic: Arc::new(Default::default()) };
+    d.insert_object(&Pos::body(0, 0), obj, &Default::default()).unwrap();
+    let l = lay(&d);
+    let tops: Vec<f32> = l.pages[0].items.iter().filter_map(|i| if let Placed::Lines { y, .. } = i { Some(*y) } else { None }).collect();
+    assert_eq!(tops.len(), 2);
+    assert!(tops[1] - tops[0] >= 144.0, "the next paragraph starts below the chart: {tops:?}");
+}
+
+#[test]
+fn graphic_items_draw_inside_the_object() {
+    use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, PathSeg, TextAlign};
+    use wordcraft_doc::props::Rgb;
+    let items = vec![
+        GraphicItem::Shape {
+            rect: [10.0, 5.0, 20.0, 20.0],
+            kind: wordcraft_doc::para::ShapeKind::Rectangle,
+            fill: Some(Rgb::BLACK),
+            stroke: None,
+            stroke_width: 0.0,
+        },
+        GraphicItem::Path {
+            segs: vec![PathSeg::Move(1.0, 2.0), PathSeg::Line(30.0, 40.0), PathSeg::Close],
+            fill: None,
+            stroke: Some(Rgb::BLACK),
+            stroke_width: 0.0,
+        },
+        GraphicItem::Text {
+            rect: [0.0, 100.0, 216.0, 20.0],
+            text: "Q1".into(),
+            size: 10.0,
+            color: Rgb::BLACK,
+            bold: false,
+            align: TextAlign::Center,
+            font: None,
+        },
+    ];
+    let mut d = Document::from_text("Chart");
+    let graphic = Graphic { kind: GraphicKind::Chart, items, ..Default::default() };
+    let obj = InlineObject::Graphic { w: 216.0, h: 144.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) };
+    d.insert_object(&Pos::body(0, 0), obj, &Default::default()).unwrap();
+    let l = lay(&d);
+    // The chart's draws sit inside its figure.
+    let draws = flat(display::page_display(&d, &l.pages[0], &Default::default()));
+    let shape = draws.iter().find_map(|x| if let display::Draw::Shape { rect, .. } = x { Some(*rect) } else { None }).expect("a shape");
+    let first = draws.iter().find_map(|x| if let display::Draw::Path { segs, .. } = x { segs.first().copied() } else { None }).expect("a path");
+    let PathSeg::Move(mx, my) = first else { panic!("{first:?}") };
+    // Path points are page coordinates, moved with the object like the shape's rectangle.
+    assert_eq!((mx - shape.x, my - shape.y), (1.0 - 10.0, 2.0 - 5.0));
+    assert!(draws.iter().any(|x| matches!(x, display::Draw::Glyphs { text, .. } if text == "Q1")));
+}
+
+#[test]
+fn graphic_text_in_a_degenerate_rectangle_is_not_drawn() {
+    use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, TextAlign};
+    use wordcraft_doc::props::Rgb;
+    let text = |rect: [f32; 4], size: f32| GraphicItem::Text {
+        rect,
+        text: "Q1".into(),
+        size,
+        color: Rgb::BLACK,
+        bold: false,
+        align: TextAlign::Center,
+        font: None,
+    };
+    let items = vec![text([f32::NAN, 0.0, 10.0, 10.0], 10.0), text([0.0, 0.0, f32::INFINITY, 10.0], 10.0), text([0.0, 0.0, 10.0, 10.0], f32::NAN)];
+    let graphic = Graphic { kind: GraphicKind::Diagram, items, ..Default::default() };
+    let obj = InlineObject::Graphic { w: 216.0, h: 144.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) };
+    let mut d = Document::from_text("Chart");
+    d.insert_object(&Pos::body(0, 0), obj, &Default::default()).unwrap();
+    let draws = flat(display::page_display(&d, &lay(&d).pages[0], &Default::default()));
+    assert!(!draws.iter().any(|x| matches!(x, display::Draw::Glyphs { text, .. } if text == "Q1")));
+}
+
+/// The draws with figures opened up.
+fn flat(draws: Vec<display::Draw>) -> Vec<display::Draw> {
+    draws.into_iter().flat_map(|x| if let display::Draw::Figure { draws, .. } = x { draws } else { vec![x] }).collect()
+}
+
+#[test]
+fn inline_chart_is_a_figure_with_its_alt_text() {
+    use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, PathSeg};
+    use wordcraft_doc::props::Rgb;
+    let items = vec![GraphicItem::Path {
+        segs: vec![PathSeg::Move(1.0, 1.0), PathSeg::Line(2.0, 2.0)],
+        fill: None,
+        stroke: Some(Rgb::BLACK),
+        stroke_width: 1.0,
+    }];
+    let graphic = Graphic { kind: GraphicKind::Chart, items, ..Default::default() };
+    let obj = InlineObject::Graphic { w: 216.0, h: 144.0, alt: "Sales by quarter".into(), float: Default::default(), graphic: Arc::new(graphic) };
+    let mut d = Document::from_text("Chart");
+    d.insert_object(&Pos::body(0, 0), obj, &Default::default()).unwrap();
+    let draws = display::page_display(&d, &lay(&d).pages[0], &Default::default());
+    let figure = draws.iter().find_map(|x| if let display::Draw::Figure { alt, draws, .. } = x { Some((alt.clone(), draws.len())) } else { None });
+    assert_eq!(figure, Some(("Sales by quarter".to_string(), 1)));
+}
+
+#[test]
+fn graphic_paths_drop_segments_that_cannot_be_drawn() {
+    use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, PathSeg};
+    use wordcraft_doc::props::Rgb;
+    // The line before the first move, the move with a NaN, the infinite line and the line after the
+    // close are all dropped.
+    let segs = vec![
+        PathSeg::Line(5.0, 5.0),
+        PathSeg::Move(f32::NAN, 1.0),
+        PathSeg::Move(1.0, 2.0),
+        PathSeg::Line(3.0, 4.0),
+        PathSeg::Line(f32::INFINITY, 0.0),
+        PathSeg::Close,
+        PathSeg::Line(9.0, 9.0),
+    ];
+    let items = vec![GraphicItem::Path { segs, fill: None, stroke: Some(Rgb::BLACK), stroke_width: 1.0 }];
+    let graphic = Graphic { kind: GraphicKind::Chart, items, ..Default::default() };
+    let obj = InlineObject::Graphic { w: 216.0, h: 144.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) };
+    let mut d = Document::from_text("Chart");
+    d.insert_object(&Pos::body(0, 0), obj, &Default::default()).unwrap();
+    let draws = flat(display::page_display(&d, &lay(&d).pages[0], &Default::default()));
+    let segs: Vec<PathSeg> =
+        draws.iter().find_map(|x| if let display::Draw::Path { segs, .. } = x { Some(segs.clone()) } else { None }).expect("a path");
+    assert!(matches!(segs.as_slice(), [PathSeg::Move(x, y), PathSeg::Line(..), PathSeg::Close] if x.is_finite() && y.is_finite()), "{segs:?}");
+}
+
+#[test]
+fn oversized_graphic_draws_shrunk_with_its_items() {
+    use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind};
+    use wordcraft_doc::props::Rgb;
+    // A 1000 x 500 pt chart is wider than the text: layout shrinks it, and its items with it.
+    let items = vec![GraphicItem::Shape {
+        rect: [0.0, 0.0, 1000.0, 500.0],
+        kind: wordcraft_doc::para::ShapeKind::Rectangle,
+        fill: None,
+        stroke: Some(Rgb::BLACK),
+        stroke_width: 4.0,
+    }];
+    let graphic = Graphic { kind: GraphicKind::Chart, items, w: 1000.0, h: 500.0 };
+    let obj = InlineObject::Graphic { w: 1000.0, h: 500.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) };
+    let mut d = Document::from_text("Chart");
+    d.insert_object(&Pos::body(0, 0), obj, &Default::default()).unwrap();
+    let draws = flat(display::page_display(&d, &lay(&d).pages[0], &Default::default()));
+    let (r, stroke) = draws
+        .iter()
+        .find_map(|x| if let display::Draw::Shape { rect, stroke_width, .. } = x { Some((*rect, *stroke_width)) } else { None })
+        .expect("a shape");
+    assert!(r.w < 1000.0, "{r:?}");
+    assert!((r.h / r.w - 0.5).abs() < 1e-3, "{r:?}");
+    assert!((stroke / r.w - 4.0 / 1000.0).abs() < 1e-5, "stroke {stroke} at width {}", r.w);
+}
+
 /// The paragraph at `path` on page 0: its first line's x, its y and its line count.
 fn para_at(l: &DocLayout, path: &[u32]) -> Vec<(f32, f32, usize)> {
     l.pages[0]
