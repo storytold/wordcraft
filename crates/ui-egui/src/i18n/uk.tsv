@@ -24,6 +24,8 @@
 	Add a comment	Додати коментар
 	Add a Table	Додати таблицю
 	Add Space Before Paragraph	Додати інтервал перед абзацом
+	Add space between Asian and Latin text	Додавати інтервал між азійським і латинським текстом
+	Add space between Asian text and numbers	Додавати інтервал між азійським текстом і числами
 	Add Text	Додати текст
 	Add to Dictionary	Додати до словника
 	Add to Style Gallery	Додати до колекції стилів
@@ -42,13 +44,17 @@
 	All Caps	Усі великі літери
 	All caps	Усі великі літери
 	All Markup	Усі позначки
+	Allow hanging punctuation	Дозволити висячу пунктуацію
+	Allow Latin text to wrap in the middle of a word	Дозволити розрив латинського тексту посеред слова
 	Alt Text	Альтернативний текст
+	Apply Asian line-breaking rules (kinsoku)	Застосовувати азійські правила розриву рядків (кінсоку)
 	Apply Character Style	Застосувати стиль символів
 	Apply Style	Застосувати стиль
 	Arrange	Упорядкувати
 	Arrange\nAll	Упорядкувати\nвсі
 	Arrow	Стрілка
 	Artistic Effects	Художні ефекти
+	Asian Typography	Азійська типографіка
 	Author	Автор
 	AutoCorrect Options	Параметри автовиправлення
 	AutoFit	Добір розміру
@@ -137,6 +143,7 @@
 	Compact	Компактний
 	Compare	Порівняти
 	Compress Pictures	Стиснути зображення
+	Compress punctuation at the start of a line	Стискати розділові знаки на початку рядка
 	Continuous	Безперервний
 	Convert	Перетворити
 	Convert Text to Table	Перетворити текст на таблицю
@@ -179,6 +186,8 @@
 	Delete Style	Видалити стиль
 	Delete Table	Видалити таблицю
 	Design	Дизайн
+	Indents and Spacing	Відступи й інтервали
+	Line breaking	Розрив рядків
 	More templates →	Більше шаблонів →
 	No templates match your search.	Немає шаблонів, що відповідають пошуку.
 	Search for templates	Пошук шаблонів

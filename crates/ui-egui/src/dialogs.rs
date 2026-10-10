@@ -43,6 +43,15 @@ pub enum Dialog {
         keep_lines: bool,
         page_break: bool,
         widow: bool,
+        /// Page: 0 Indents and Spacing, 1 Line and Page Breaks, 2 Asian Typography.
+        tab: u8,
+        /// Asian Typography as the model has it (`para.asianTypography`): kinsoku, word wrap,
+        /// hanging punctuation, compress punctuation at line start, space between Asian and
+        /// Latin text, space between Asian text and numbers.
+        asian: [bool; 6],
+        /// `asian` when the dialog opened: OK sets only the flags that changed.
+        #[serde(skip)]
+        asian_was: [bool; 6],
     },
     Find {
         query: String,
@@ -163,7 +172,7 @@ impl Dialog {
                 color: s("color"),
                 spacing: 0.0,
             },
-            "paragraph" => {
+            "paragraph" | "asianTypography" => {
                 let rp = app.session.doc.para_at(&app.session.sel.focus).map(|p| app.session.doc.styles.resolve_para(&p.props));
                 let rp = rp?;
                 let line = match rp.line_spacing {
@@ -184,6 +193,9 @@ impl Dialog {
                     keep_lines: rp.keep_lines,
                     page_break: rp.page_break_before,
                     widow: rp.widow_control,
+                    tab: if name == "asianTypography" { 2 } else { 0 },
+                    asian: [rp.kinsoku, rp.word_wrap, rp.overflow_punct, rp.top_line_punct, rp.auto_space_de, rp.auto_space_dn],
+                    asian_was: [rp.kinsoku, rp.word_wrap, rp.overflow_punct, rp.top_line_punct, rp.auto_space_de, rp.auto_space_dn],
                 }
             }
             "find" | "replace" => Dialog::Find {
@@ -426,48 +438,94 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             ok || cancel
         }
-        Dialog::Paragraph { rtl, align, left, right, first, before, after, line, keep_next, keep_lines, page_break, widow } => {
-            ui.label(egui::RichText::new(tl!("General")).font(semibold(12.5)));
+        Dialog::Paragraph {
+            rtl,
+            align,
+            left,
+            right,
+            first,
+            before,
+            after,
+            line,
+            keep_next,
+            keep_lines,
+            page_break,
+            widow,
+            tab,
+            asian,
+            asian_was,
+        } => {
             ui.horizontal(|ui| {
-                ui.label(tl!("Direction:"));
-                ui.radio_value(rtl, true, tl!("Right-to-left"));
-                ui.radio_value(rtl, false, tl!("Left-to-right"));
-            });
-            egui::ComboBox::from_label(tl!("Alignment")).selected_text(align.clone()).show_ui(ui, |ui| {
-                for a in ["left", "center", "right", "justify"] {
-                    ui.selectable_value(align, a.to_string(), a);
+                for (k, name) in ["Indents and Spacing", "Line and Page Breaks", "Asian Typography"].into_iter().enumerate() {
+                    if ui.selectable_label(*tab as usize == k, tl!(name)).clicked() {
+                        *tab = k as u8;
+                    }
                 }
             });
-            ui.label(egui::RichText::new(tl!("Indentation")).font(semibold(12.5)));
-            egui::Grid::new("ind").num_columns(4).show(ui, |ui| {
-                ui.label(tl!("Left:"));
-                ui.add(egui::DragValue::new(left).speed(0.05).suffix("\"").max_decimals(2));
-                ui.label(tl!("Right:"));
-                ui.add(egui::DragValue::new(right).speed(0.05).suffix("\"").max_decimals(2));
-                ui.end_row();
-                ui.label(tl!("First line:"));
-                ui.add(egui::DragValue::new(first).speed(0.05).suffix("\"").max_decimals(2));
-                ui.end_row();
-            });
-            ui.label(egui::RichText::new(tl!("Spacing")).font(semibold(12.5)));
-            egui::Grid::new("sp").num_columns(4).show(ui, |ui| {
-                ui.label(tl!("Before:"));
-                ui.add(egui::DragValue::new(before).speed(1.0).range(0.0..=1584.0).suffix(" pt"));
-                ui.label(tl!("Line spacing:"));
-                ui.add(egui::DragValue::new(line).speed(0.05).range(0.5..=5.0));
-                ui.end_row();
-                ui.label(tl!("After:"));
-                ui.add(egui::DragValue::new(after).speed(1.0).range(0.0..=1584.0).suffix(" pt"));
-                ui.end_row();
-            });
-            ui.label(egui::RichText::new(tl!("Line and Page Breaks")).font(semibold(12.5)));
-            ui.checkbox(widow, tl!("Widow/Orphan control"));
-            ui.checkbox(keep_next, tl!("Keep with next"));
-            ui.checkbox(keep_lines, tl!("Keep lines together"));
-            ui.checkbox(page_break, tl!("Page break before"));
+            ui.separator();
+            match *tab {
+                0 => {
+                    ui.label(egui::RichText::new(tl!("General")).font(semibold(12.5)));
+                    ui.horizontal(|ui| {
+                        ui.label(tl!("Direction:"));
+                        ui.radio_value(rtl, true, tl!("Right-to-left"));
+                        ui.radio_value(rtl, false, tl!("Left-to-right"));
+                    });
+                    egui::ComboBox::from_label(tl!("Alignment")).selected_text(align.clone()).show_ui(ui, |ui| {
+                        for a in ["left", "center", "right", "justify"] {
+                            ui.selectable_value(align, a.to_string(), a);
+                        }
+                    });
+                    ui.label(egui::RichText::new(tl!("Indentation")).font(semibold(12.5)));
+                    egui::Grid::new("ind").num_columns(4).show(ui, |ui| {
+                        ui.label(tl!("Left:"));
+                        ui.add(egui::DragValue::new(left).speed(0.05).suffix("\"").max_decimals(2));
+                        ui.label(tl!("Right:"));
+                        ui.add(egui::DragValue::new(right).speed(0.05).suffix("\"").max_decimals(2));
+                        ui.end_row();
+                        ui.label(tl!("First line:"));
+                        ui.add(egui::DragValue::new(first).speed(0.05).suffix("\"").max_decimals(2));
+                        ui.end_row();
+                    });
+                    ui.label(egui::RichText::new(tl!("Spacing")).font(semibold(12.5)));
+                    egui::Grid::new("sp").num_columns(4).show(ui, |ui| {
+                        ui.label(tl!("Before:"));
+                        ui.add(egui::DragValue::new(before).speed(1.0).range(0.0..=1584.0).suffix(" pt"));
+                        ui.label(tl!("Line spacing:"));
+                        ui.add(egui::DragValue::new(line).speed(0.05).range(0.5..=5.0));
+                        ui.end_row();
+                        ui.label(tl!("After:"));
+                        ui.add(egui::DragValue::new(after).speed(1.0).range(0.0..=1584.0).suffix(" pt"));
+                        ui.end_row();
+                    });
+                }
+                1 => {
+                    ui.label(egui::RichText::new(tl!("Line and Page Breaks")).font(semibold(12.5)));
+                    ui.checkbox(widow, tl!("Widow/Orphan control"));
+                    ui.checkbox(keep_next, tl!("Keep with next"));
+                    ui.checkbox(keep_lines, tl!("Keep lines together"));
+                    ui.checkbox(page_break, tl!("Page break before"));
+                }
+                _ => {
+                    let [kinsoku, word_wrap, overflow, top_line, de, dn] = asian;
+                    ui.label(egui::RichText::new(tl!("Line breaking")).font(semibold(12.5)));
+                    ui.checkbox(kinsoku, tl!("Apply Asian line-breaking rules (kinsoku)"));
+                    // The model's flag is "wrap whole words"; the box offers the opposite.
+                    let mut mid_word = !*word_wrap;
+                    if ui.checkbox(&mut mid_word, tl!("Allow Latin text to wrap in the middle of a word")).changed() {
+                        *word_wrap = !mid_word;
+                    }
+                    ui.checkbox(overflow, tl!("Allow hanging punctuation"));
+                    ui.label(egui::RichText::new(tl!("Character Spacing")).font(semibold(12.5)));
+                    ui.checkbox(top_line, tl!("Compress punctuation at the start of a line"));
+                    ui.checkbox(de, tl!("Add space between Asian and Latin text"));
+                    ui.checkbox(dn, tl!("Add space between Asian text and numbers"));
+                }
+            }
             let (ok, cancel) = buttons(ui, tl!("OK"));
             if ok {
                 apply_paragraph(app, *rtl, align, *left, *right, *first, *before, *after, *line, [*keep_next, *keep_lines, *page_break, *widow]);
+                apply_asian(app, *asian, *asian_was);
             }
             ok || cancel
         }
@@ -858,6 +916,17 @@ fn apply_paragraph(
     );
 }
 
+/// The Paragraph dialog's Asian Typography: sets the flags that changed since it opened, so an
+/// untouched tab adds no direct formatting.
+fn apply_asian(app: &mut WordApp, asian: [bool; 6], was: [bool; 6]) {
+    let keys = ["kinsoku", "wordWrap", "overflowPunct", "topLinePunct", "autoSpaceDE", "autoSpaceDN"];
+    let changed: serde_json::Map<String, Value> =
+        keys.iter().zip(asian.iter().zip(was)).filter(|(_, (now, was))| **now != *was).map(|(k, (now, _))| (k.to_string(), json!(now))).collect();
+    if !changed.is_empty() {
+        let _ = app.run("para.asianTypography", Value::Object(changed));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -876,7 +945,7 @@ mod tests {
 
     /// Open the Paragraph dialog and press OK without changing anything.
     fn ok_unchanged(app: &mut WordApp) {
-        let Some(Dialog::Paragraph { rtl, align, left, right, first, before, after, line, keep_next, keep_lines, page_break, widow }) =
+        let Some(Dialog::Paragraph { rtl, align, left, right, first, before, after, line, keep_next, keep_lines, page_break, widow, .. }) =
             Dialog::open("paragraph", app)
         else {
             panic!("no paragraph dialog")
