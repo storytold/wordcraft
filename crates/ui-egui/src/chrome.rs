@@ -63,26 +63,34 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
             let mut right_start = full.max.x;
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
-                // AutoSave toggle (on once the document has been saved in this session).
-                let saved_here = app.saved_here();
-                ui.label(egui::RichText::new(tl!("AutoSave")).font(regular(11.5)).color(t.text_dim));
-                let (r, resp) = ui.allocate_exact_size(vec2(30.0, 16.0), Sense::click());
+                // AutoSave switch: greyed out, with the reason as its tooltip, when AutoSave can't
+                // cover the document (#196, #176); clicking it then offers Save As where that helps.
+                let block = app.autosave_block();
                 let on = app.autosaves();
-                ui.painter().rect(
-                    r,
-                    8.0,
-                    if on { t.accent } else { t.input },
-                    Stroke::new(1.0, if on { t.accent } else { t.border_strong }),
-                    egui::StrokeKind::Inside,
-                );
+                let label = if block.is_some() { t.text_dim.gamma_multiply(0.6) } else { t.text_dim };
+                ui.label(egui::RichText::new(tl!("AutoSave")).font(regular(11.5)).color(label));
+                let (r, resp) = ui.allocate_exact_size(vec2(30.0, 16.0), Sense::click());
+                let (fill, stroke, knob_fill) = match (&block, on) {
+                    (Some(_), _) => (t.input.gamma_multiply(0.5), t.border.gamma_multiply(0.7), t.text_dim.gamma_multiply(0.45)),
+                    (None, true) => (t.accent, t.accent, egui::Color32::WHITE),
+                    (None, false) => (t.input, t.border_strong, t.text_dim),
+                };
+                ui.painter().rect(r, 8.0, fill, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
                 let knob = if on { r.max.x - 8.0 } else { r.min.x + 8.0 };
-                ui.painter().circle_filled(pos2(knob, r.center().y), 5.0, if on { egui::Color32::WHITE } else { t.text_dim });
-                if resp.on_hover_text(tl!("AutoSave saves every change to the file (needs a saved document)")).clicked() {
-                    if saved_here {
-                        app.toggle_autosave();
-                    } else {
+                ui.painter().circle_filled(pos2(knob, r.center().y), 5.0, knob_fill);
+                let tip = block
+                    .as_ref()
+                    .map_or_else(|| tl!("AutoSave saves every change to the file (needs a saved document)").to_string(), |b| b.reason());
+                if resp.on_hover_text(tip).clicked() {
+                    match block {
+                        None => {
+                            let _ = app.run("file.autosave", json!({}));
+                        }
                         // AutoSave comes on once Save As has saved (maybe on a later frame, #94).
-                        let _ = app.save_as(crate::file_dialogs::AfterSave::AutoSave);
+                        Some(b) if b.save_as_helps() => {
+                            let _ = app.save_as(crate::file_dialogs::AfterSave::AutoSave);
+                        }
+                        Some(b) => app.status(b.reason()),
                     }
                 }
                 ui.add_space(8.0);
@@ -322,9 +330,6 @@ fn small_icon(ui: &mut Ui, icon: &str, tip: &str) -> bool {
 }
 
 impl WordApp {
-    pub fn toggle_autosave(&mut self) {
-        self.autosave = !self.autosave;
-    }
     /// Word count, recomputed only when the document changes.
     pub fn cached_word_count(&mut self) -> usize {
         // The count option changes the count without a document change.

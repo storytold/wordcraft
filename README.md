@@ -234,6 +234,12 @@ Remove-Item Env:WGPU_BACKEND                     # restore the default for later
 An explicit `gl` override can bring the driver crash back on affected systems. The macOS, Linux
 and web backend defaults are unchanged.
 
+**If the app is slow on an older Windows PC:** when DirectX 12 finds no graphics card with a
+driver for it (for example Intel 4th-generation graphics on Windows 11), it only offers Microsoft's
+software renderer, which draws every frame on the processor. In that case WordCraft uses OpenGL
+instead, without setting anything. The log file records the choice (lines starting with
+`graphics:`). `WGPU_BACKEND` still overrides it, e.g. `$env:WGPU_BACKEND = "gl"` or `"dx12"`.
+
 ### macOS
 
 | Build | File | Notes |

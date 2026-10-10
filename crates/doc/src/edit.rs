@@ -74,12 +74,83 @@ fn each_para_mut(b: &mut Block, depth: usize, f: &mut dyn FnMut(&mut Paragraph))
     }
 }
 
+/// Whether a paragraph anywhere in `b` (also inside tables) uses paragraph or character style
+/// `id` (depth-limited like `each_para`). Table styles are the engine's `table.deleteStyle`'s job.
+fn uses_style(b: &Block, id: &str, depth: usize) -> bool {
+    let is = |s: &Option<String>| s.as_deref() == Some(id);
+    match b {
+        Block::Para(p) => is(&p.props.style) || is(&p.mark.style) || p.runs.iter().any(|r| is(&r.props.style)),
+        Block::Table(t) if depth < 16 => {
+            t.rows.iter().flat_map(|r| r.cells.iter()).flat_map(|c| c.blocks.iter()).any(|cb| uses_style(cb, id, depth + 1))
+        }
+        Block::Table(_) => false,
+    }
+}
+
+/// Point every paragraph and run in `b` that uses style `from` at `to`; returns how many
+/// paragraphs changed.
+fn restyle_block(b: &mut Block, from: &str, to: &Option<String>, depth: usize) -> usize {
+    let fix = |s: &mut Option<String>| {
+        if s.as_deref() == Some(from) {
+            s.clone_from(to);
+            true
+        } else {
+            false
+        }
+    };
+    match b {
+        Block::Para(p) => {
+            let mut changed = fix(&mut p.props.style);
+            changed |= fix(&mut p.mark.style);
+            for r in &mut p.runs {
+                changed |= fix(&mut r.props.style);
+            }
+            if changed {
+                p.normalize();
+                p.touch();
+            }
+            usize::from(changed)
+        }
+        Block::Table(t) => {
+            let mut n = 0;
+            if depth < 16 {
+                for cell in t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
+                    for cb in &mut cell.blocks {
+                        if uses_style(cb, from, depth + 1) {
+                            n += restyle_block(Arc::make_mut(cb), from, to, depth + 1);
+                        }
+                    }
+                }
+            }
+            n
+        }
+    }
+}
+
 /// Text box story ids of a paragraph's shapes.
 fn box_ids(p: &Paragraph) -> impl Iterator<Item = u32> + '_ {
-    p.objects.iter().filter_map(|o| if let InlineObject::Shape { story: Some(id), .. } = o { Some(*id) } else { None })
+    p.objects.iter().flat_map(InlineObject::text_boxes)
 }
 
 impl Document {
+    /// Point every paragraph and run that uses paragraph or character style `from` at `to`
+    /// (`None`: the default style), in every story, tables included. Returns how many paragraphs
+    /// changed. (Tables' own table styles are retargeted by the engine's table style deletion.)
+    pub fn restyle(&mut self, from: &str, to: Option<String>) -> usize {
+        let stories: Vec<crate::StoryRef> =
+            std::iter::once(crate::StoryRef::Body).chain(self.parts.keys().map(|k| crate::StoryRef::Part(*k))).collect();
+        let mut n = 0;
+        for s in stories {
+            let Ok(bl) = self.story_mut(s) else { continue };
+            for b in bl.iter_mut() {
+                if uses_style(b, from, 0) {
+                    n += restyle_block(Arc::make_mut(b), from, &to, 0);
+                }
+            }
+        }
+        n
+    }
+
     /// Insert plain text at `pos` (`\n` inside `s` is a manual line break; use
     /// [`Document::split_paragraph`] for paragraph breaks). Returns the position after it.
     pub fn insert_text(&mut self, pos: &Pos, s: &str, props: &CharProps) -> Result<Pos> {
@@ -320,11 +391,11 @@ impl Document {
             each_para_mut(b, 0, &mut |p| {
                 let mut changed = false;
                 for o in p.objects.iter_mut() {
-                    if let InlineObject::Shape { story, .. } = o
-                        && let Some(old) = *story
-                    {
-                        *story = self.adopt_text_box(old, parts, depth, budget);
-                        changed = true;
+                    for story in o.text_box_slots() {
+                        if let Some(old) = *story {
+                            *story = self.adopt_text_box(old, parts, depth, budget);
+                            changed = true;
+                        }
                     }
                 }
                 if changed {
@@ -501,6 +572,8 @@ mod tests {
             stroke_width: 0.75,
             float: Default::default(),
             story,
+            freeform: None,
+            effects: Default::default(),
         }
     }
 

@@ -229,6 +229,10 @@ pub fn t(s: &str) -> &str {
 
 /// `s` in `lang`; strings without a translation come back unchanged.
 pub fn tr(lang: Lang, s: &str) -> &str {
+    #[cfg(test)]
+    if pseudo::on() {
+        return pseudo::mark(s);
+    }
     lang.catalog().plain(s).unwrap_or(s)
 }
 
@@ -272,5 +276,9 @@ pub fn fmt(template: &str, args: &[(&str, &str)]) -> String {
     out
 }
 
+#[cfg(test)]
+mod audit;
+#[cfg(test)]
+pub(crate) mod pseudo;
 #[cfg(test)]
 mod tests;

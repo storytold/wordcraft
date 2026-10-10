@@ -808,8 +808,6 @@
 	{key}+Click to follow link	Lingi avamiseks {key}+klõps
 	{selected} of {words} words	Sõnu: {words}; valitud: {selected}
 	{words} words	Sõnu: {words}
-	➕ New comment	➕ Uus kommentaar
-	📂  Browse…	📂  Sirvi…
 	Equation	Võrrand
 	Review	Läbivaatus
 	Track\nChanges	Jälita\nmuudatusi
@@ -1035,3 +1033,142 @@
 	Cell	Lahter
 	Specify height:	Määra kõrgus:
 	Reset Crop	Lähtesta kärpimine
+
+# Labels added on main and in this stack after the first Estonian catalog (#294 integration)
+	Add Object to Selection	Lisa objekt valikusse
+	Add space between Asian and Latin text	Lisa vahe Aasia ja ladina teksti vahele
+	Add space between Asian text and numbers	Lisa vahe Aasia teksti ja numbrite vahele
+	Allow hanging punctuation	Luba rippuvad kirjavahemärgid
+	Allow Latin text to wrap in the middle of a word	Luba ladina tekstil murduda keset sõna
+	Apply Asian line-breaking rules (kinsoku)	Rakenda Aasia reamurdmisreegleid (kinsoku)
+	Asian Typography	Aasia tüpograafia
+	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	Automaatsalvestus pole brauseris saadaval: see ei saa sinu faile kirjutada. Salvestamine laadib alla koopia.
+	AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave.	Automaatsalvestus hoiab ainult .docx-, .odt- ja .rtf-faile; {name} ei säilita kogu vormingut. Automaatsalvestuse sisselülitamiseks salvesta .docx-failina.
+	Save the document to turn on AutoSave	Automaatsalvestuse sisselülitamiseks salvesta dokument
+	Save the document to turn on AutoSave (a file you have only opened isn't rewritten until you save it)	Automaatsalvestuse sisselülitamiseks salvesta dokument (ainult avatud faili ei kirjutata üle enne, kui selle salvestad)
+	Click a border between two cells to merge them. Esc stops.	Klõpsa kahe lahtri vahelist äärist, et need ühendada. Esc lõpetab.
+	Clipboard Pane	Lõikelaua paan
+	Clipboard Items	Lõikelaua üksused
+	Paste Clipboard Item	Kleebi lõikelaua üksus
+	Paste All	Kleebi kõik
+	Delete Clipboard Item	Kustuta lõikelaua üksus
+	Click an item to paste it.	Kleepimiseks klõpsa üksust.
+	Nothing collected yet. Items you copy or cut appear here.	Siin pole veel midagi. Kopeeritud või lõigatud üksused ilmuvad siia.
+	(picture or object)	(pilt või objekt)
+	Compress punctuation at the start of a line	Tihenda kirjavahemärke rea alguses
+	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	Lohista ristkülik, et joonistada tabel, või joon üle lahtrite, et need tükeldada. Esc lõpetab.
+	Draw Table	Joonista tabel
+	Indents and Spacing	Taanded ja vahed
+	Line breaking	Reamurdmine
+	Ungroup	Tühista rühmitus
+	Browse…	Sirvi…
+	Draw Ink	Joonista tindiga
+	Erase Ink	Kustuta tint
+	Hide Ink	Peida tint
+	Hide\nInk	Peida\ntint
+	Pens	Pliiatsid
+	Ink	Tint
+	Thickness	Paksus
+	Shape Effects	Kujundi efektid
+	Glow	Kuma
+	Soft Edges	Pehmed servad
+	No Shadow	Varjuta
+	No Glow	Kumata
+	No Soft Edges	Pehmete servadeta
+	Glow Colors	Kuma värvid
+	Weight	Jämedus
+	Shadow, glow and soft edges	Vari, kuma ja pehmed servad
+	Offset: Bottom Right	Nihe: alla paremale
+	Offset: Bottom	Nihe: alla
+	Offset: Bottom Left	Nihe: alla vasakule
+	Offset: Right	Nihe: paremale
+	Offset: Center	Nihe: keskele
+	Offset: Left	Nihe: vasakule
+	Offset: Top Right	Nihe: üles paremale
+	Offset: Top	Nihe: üles
+	Offset: Top Left	Nihe: üles vasakule
+	Manage Styles	Halda stiile
+	Show or Hide Style	Kuva või peida stiil
+	Manage Styles…	Halda stiile…
+	Sort order:	Sortimisjärjestus:
+	As Recommended	Soovitatud järjestuses
+	Alphabetical	Tähestikuline
+	Font: {font}	Font: {font}
+	{size} pt	{size} pt
+	Color: {color}	Värv: {color}
+	Space before: {pt} pt	Vahe enne: {pt} pt
+	Space after: {pt} pt	Vahe pärast: {pt} pt
+	Based on: {style}	Põhineb stiilil: {style}
+	Paragraph style	Lõigustiil
+	Character style	Märgistiil
+	Linked style (paragraph and character)	Lingitud stiil (lõik ja märgid)
+	Table style	Tabelistiil
+	Built-in style	Sisseehitatud stiil
+	Show in the Styles gallery	Kuva stiilivalikus
+	Hide from style lists	Peida stiililoenditest
+	Built-in styles can't be deleted.	Sisseehitatud stiile ei saa kustutada.
+	Delete Table Style	Kustuta tabelistiil
+	Password	Parool
+	Password:	Parool:
+	Confirm password:	Kinnita parool:
+	Encrypt with Password…	Krüpti parooliga…
+	Change Password…	Muuda parooli…
+	Remove Password	Eemalda parool
+	A password is required to open this document.	Selle dokumendi avamiseks on vaja parooli.
+	Anyone can open this document. Encrypt it with a password to keep it private.	Seda dokumenti saab avada igaüks. Privaatsena hoidmiseks krüpti see parooliga.
+	Anyone who opens the document will need this password.	Igaüks, kes dokumendi avab, vajab seda parooli.
+	{name} is protected with a password.	{name} on kaitstud parooliga.
+	That password isn't right. Check it (passwords are case-sensitive) and try again.	See parool pole õige. Kontrolli seda (paroolides on suur- ja väiketähed erinevad) ja proovi uuesti.
+	The document will be saved with a password. Save it to protect it.	Dokument salvestatakse parooliga. Kaitsmiseks salvesta see.
+	The password is removed. Save the document to keep the change.	Parool on eemaldatud. Muudatuse säilitamiseks salvesta dokument.
+	The passwords don't match.	Paroolid ei ühti.
+	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	Hoia parooli kindlas kohas: ilma selleta ei saa keegi, ka WordCraft, dokumenti avada. Parooli eemaldamiseks jäta mõlemad väljad tühjaks.
+	Align Top Left	Joonda üles vasakule
+	Align Top Center	Joonda üles keskele
+	Align Top Right	Joonda üles paremale
+	Align Center Left	Joonda keskele vasakule
+	Align Center	Joonda keskele
+	Align Center Right	Joonda keskele paremale
+	Align Bottom Left	Joonda alla vasakule
+	Align Bottom Center	Joonda alla keskele
+	Align Bottom Right	Joonda alla paremale
+	{contributors} contributors · {commits} commits	Kaastöötajaid: {contributors} · commite: {commits}
+	{cols}×{rows} Table	Tabel {cols}×{rows}
+	AaBbYyZz	AaBbYyZz ÕõÄäÖöÜü
+	pt	pt
+	Document1	Dokument1
+	Username	Kasutajanimi
+	Display name	Kuvatav nimi
+	Real name	Pärisnimi
+	Name	Nimi
+	PRs	PR-id
+	Commits	Commitid
+	First	Esimene
+	Last	Viimane
+	Model	Mudel
+	Version	Versioon
+	% of all commits	% kõigist commitidest
+	Lines +/−	Read +/−
+	Craft	Käsitöö
+	Studio	Stuudio
+	Atelier	Ateljee
+	Darkroom	Pimik
+	Gallery	Galerii
+	Sketchbook	Visandivihik
+	Change Picture…	Muuda pilti…
+	Font…	Font…
+	Paragraph…	Lõik…
+	Link…	Link…
+	Size and Crop…	Suurus ja kärpimine…
+	Insert Columns to the Left	Lisa veerud vasakule
+	Insert Columns to the Right	Lisa veerud paremale
+	Insert Rows Above	Lisa read üles
+	Insert Rows Below	Lisa read alla
+	Mon	E
+	Tue	T
+	Wed	K
+	Sum	Summa
+	North	Põhi
+	South	Lõuna
+	West	Lääs
+	Total	Kokku

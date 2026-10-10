@@ -231,6 +231,8 @@ fn many_hidden_float_anchors_lay_out_in_linear_time() {
             stroke_width: 1.0,
             float,
             story: None,
+            freeform: None,
+            effects: Default::default(),
         };
         let obj = wordcraft_doc::para::OBJ.to_string();
         let mut p = wordcraft_doc::Paragraph::with_text("Text ", Default::default());
@@ -1046,6 +1048,8 @@ fn text_wraps_around_square_float() {
         stroke_width: 1.0,
         float,
         story: None,
+        freeform: None,
+        effects: Default::default(),
     };
     d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
     let l = lay(&d);
@@ -1083,6 +1087,8 @@ fn deleted_float_leaves_no_wrap_area_without_markup() {
         stroke_width: 1.0,
         float,
         story: None,
+        freeform: None,
+        effects: Default::default(),
     };
     d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
     let obj = wordcraft_doc::para::OBJ.len_utf8();
@@ -1134,6 +1140,8 @@ fn hidden_float_leaves_no_wrap_area_when_hidden_text_is_not_shown() {
         stroke_width: 1.0,
         float,
         story: None,
+        freeform: None,
+        effects: Default::default(),
     };
     d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
     let obj = wordcraft_doc::para::OBJ.len_utf8();
@@ -1170,6 +1178,8 @@ fn line_numbers_borders_text_boxes() {
         stroke_width: 1.0,
         float: Default::default(),
         story: Some(id),
+        freeform: None,
+        effects: Default::default(),
     };
     d.insert_object(&Pos::body(2, 5), tb, &Default::default()).unwrap();
     let l = lay(&d);
@@ -1463,6 +1473,8 @@ fn text_box_at(d: &mut Document, pos: &Pos, text: &str, w: f32, h: f32, float: w
         stroke_width: 0.75,
         float,
         story: Some(id),
+        freeform: None,
+        effects: Default::default(),
     };
     d.insert_object(pos, shape, &Default::default()).unwrap();
     id
@@ -1533,6 +1545,8 @@ fn presses_grab_pictures_anywhere_and_text_boxes_by_their_border() {
         stroke_width: 1.0,
         float: Default::default(),
         story: None,
+        freeform: None,
+        effects: Default::default(),
     };
     d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
     let l = lay(&d);
@@ -1752,6 +1766,8 @@ fn box_fan_out(levels: usize, fan: usize) -> Document {
         stroke_width: 0.0,
         float: Default::default(),
         story: Some(story),
+        freeform: None,
+        effects: Default::default(),
     };
     for (k, id) in ids.iter().enumerate() {
         let next = *ids.get(k + 1).unwrap_or(id);
@@ -1815,7 +1831,18 @@ fn a_text_box_inside_a_text_box_still_shows_its_text() {
 }
 
 fn picture(w: f32, h: f32, float: wordcraft_doc::para::Float) -> InlineObject {
-    InlineObject::Shape { kind: wordcraft_doc::para::ShapeKind::Rectangle, w, h, fill: None, stroke: None, stroke_width: 1.0, float, story: None }
+    InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::Rectangle,
+        w,
+        h,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float,
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+    }
 }
 
 #[test]
@@ -1953,7 +1980,18 @@ fn lines_with_tabs_never_shrink() {
 }
 
 fn rect_shape(w: f32, h: f32, float: wordcraft_doc::para::Float) -> InlineObject {
-    InlineObject::Shape { kind: wordcraft_doc::para::ShapeKind::Rectangle, w, h, fill: None, stroke: None, stroke_width: 1.0, float, story: None }
+    InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::Rectangle,
+        w,
+        h,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float,
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+    }
 }
 
 fn shapes(items: &[Placed]) -> Vec<Rect> {
@@ -2121,6 +2159,8 @@ fn floating_header_text_box_leaves_the_body_at_the_top_margin() {
                 stroke_width: 0.75,
                 float,
                 story: Some(story),
+                freeform: None,
+                effects: Default::default(),
             };
             anchor.insert_object(0, tb, &Default::default()).unwrap();
         }
@@ -2679,4 +2719,26 @@ fn a_split_row_moves_shading_below_the_cut_with_it() {
     assert_eq!(moved.first().map(|f| f.0), Some(0.0), "the row's shading starts the continuation: {moved:?}");
     let nested = moved.get(1).copied().unwrap_or_default();
     assert!(nested.0 > 0.0 && (nested.1 - 50.0).abs() < 0.01, "the nested shading keeps its place and size: {moved:?}");
+}
+
+#[test]
+fn kinsoku_keeps_a_manual_line_break_before_a_closing_bracket() {
+    // #269: kinsoku forbids a line starting with 」, but a manual line break (Shift+Enter) right
+    // before one still ends the line there.
+    let text = "日本語\n」テスト";
+    let mut d = Document::from_text("");
+    d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))];
+    let l = lay(&d);
+    let mut lines = Vec::new();
+    for p in &l.pages {
+        for it in &p.items {
+            if let Placed::Lines { para, l0, l1, .. } = it {
+                lines.extend(para.lines[*l0..*l1].iter().map(|line| (line.start, line.end)));
+            }
+        }
+    }
+    let bracket = text.find('」').unwrap();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(lines[0].1, LineEnd::LineBreak, "{lines:?}");
+    assert_eq!(lines[1].0, bracket, "the second line starts at the bracket: {lines:?}");
 }

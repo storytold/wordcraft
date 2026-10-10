@@ -257,7 +257,7 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
 
 fn open_page(app: &mut WordApp, ui: &mut Ui) {
     heading(ui, "Open");
-    if ui.button(egui::RichText::new(tl!("📂  Browse…")).font(medium(14.0))).clicked() {
+    if ui.button(egui::RichText::new(tl!("Browse…")).font(medium(14.0))).clicked() {
         let _ = app.run("ui.openFileDialog", json!({}));
     }
     ui.add_space(18.0);
@@ -300,6 +300,24 @@ fn info_page(app: &mut WordApp, ui: &mut Ui) {
         if focused != app.info_editing.map(|(f, _)| f) {
             app.info_editing = None;
         }
+        // Protect Document › Encrypt with Password (#55).
+        ui.add_space(18.0);
+        ui.label(egui::RichText::new(tl!("Protect Document")).font(semibold(15.0)));
+        let encrypted = info.get("encrypted").and_then(|v| v.as_bool()).unwrap_or(false);
+        ui.label(if encrypted {
+            tl!("A password is required to open this document.")
+        } else {
+            tl!("Anyone can open this document. Encrypt it with a password to keep it private.")
+        });
+        ui.horizontal(|ui| {
+            let label = if encrypted { tl!("Change Password…") } else { tl!("Encrypt with Password…") };
+            if ui.button(egui::RichText::new(label).font(medium(13.5))).clicked() {
+                let _ = app.run("file.encrypt", json!({}));
+            }
+            if encrypted && ui.button(egui::RichText::new(tl!("Remove Password")).font(medium(13.5))).clicked() {
+                let _ = app.run("file.encrypt", json!({"password": null}));
+            }
+        });
         let ui = &mut cols[1];
         ui.label(egui::RichText::new(tl!("Statistics")).font(semibold(15.0)));
         for (l, k) in [("Pages", "pages"), ("Words", "words"), ("Paragraphs", "paragraphs"), ("Sections", "sections"), ("Comments", "comments")] {
@@ -357,7 +375,16 @@ fn options_page(app: &mut WordApp, ui: &mut Ui) {
         }
     });
     theme_picker(app, ui);
-    ui.checkbox(&mut app.autosave, tl!("AutoSave documents you have saved in WordCraft"));
+    // The browser can't write to the user's files, so AutoSave can't be turned on there (#176).
+    let browser = app.autosave_block() == Some(crate::AutoSaveBlock::Browser);
+    let mut autosave = app.autosave && !browser;
+    let r = ui.add_enabled(!browser, egui::Checkbox::new(&mut autosave, tl!("AutoSave documents you have saved in WordCraft")));
+    if browser {
+        r.on_disabled_hover_text(crate::AutoSaveBlock::Browser.reason());
+    } else if r.changed() {
+        app.autosave = autosave;
+        app.session.autosave = autosave;
+    }
     let mut dark_page = app.session.view.dark_mode;
     if ui
         .checkbox(&mut dark_page, tl!("Dark page (white text on black)"))
