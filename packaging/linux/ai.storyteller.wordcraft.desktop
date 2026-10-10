@@ -3,8 +3,6 @@ Type=Application
 Name=WordCraft
 GenericName=Word Processor
 Comment=Write and design documents; open and save Word files
-# XRandR reports the panel's physical DPI while XFCE renders at 96, so winit scales
-# every window up and the app looks zoomed. Pin the X11 scale to 1 to match the desktop.
 Exec=env WINIT_X11_SCALE_FACTOR=1 wordcraft %F
 TryExec=wordcraft
 Icon=ai.storyteller.wordcraft
