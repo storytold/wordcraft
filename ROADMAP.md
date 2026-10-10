@@ -59,7 +59,7 @@ the icon art).
 | Review (spelling, grammar, thesaurus, comments, track changes, compare, protect) | Good; comment balloons in the margin; no track-changes balloons | 75% |
 | Mailings (mail merge, rules, preview, envelopes, labels) | Working | 70% |
 | Pictures & shapes (insert, size, crop, recolour, effects, styles, float position) | Text wraps around floats (rectangular); text boxes render their text; no tight/contour wrap, no rotation handles | 55% |
-| Draw tab (ink), SmartArt, charts, 3D models, equations editor | Equations: full OMML read/write and 2D layout (OpenType MATH); no visual equation editor yet. Ink, SmartArt, charts, 3D not started | 15% |
+| Draw tab (ink), SmartArt, charts, 3D models, equations editor | Equations: full OMML read/write, 2D layout (OpenType MATH) and in-place editing with an Equation tab; long display equations don't break across lines yet. Ink, SmartArt, charts, 3D not started | 20% |
 | File formats: DOCX read/write | Good (Word opens our files); charts/SmartArt/OLE dropped; untested on a real-world corpus | 75% |
 | File formats: PDF, ODT, RTF, HTML, Markdown, LaTeX, TXT | Working | 70% |
 | View modes (print, web, draft, read, focus, zoom, navigation pane) | Working | 70% |
