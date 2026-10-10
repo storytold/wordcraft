@@ -118,6 +118,11 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
                 log::error!("download of {name} failed: {e}");
             }
         })),
+        print: Some(Box::new(|bytes: &[u8]| {
+            if let Err(e) = print_pdf(bytes) {
+                log::error!("print failed: {e}");
+            }
+        })),
         inbox: Some(inbox),
         ..Default::default()
     }
@@ -147,6 +152,44 @@ fn download(path: &str, bytes: &[u8]) -> Result<(), String> {
         web_sys::Url::revoke_object_url(&url).ok();
     });
     window.set_timeout_with_callback_and_timeout_and_arguments_0(revoke.unchecked_ref(), 10_000).map_err(js)?;
+    Ok(())
+}
+
+/// Opens `bytes` (a PDF) as an object URL in a hidden iframe and calls the
+/// iframe's own `print()` once it has finished loading — this is the
+/// standard way to drive the browser's native print dialog on a PDF without
+/// a download or a popup window the browser might block. The object URL is
+/// deliberately never revoked: the iframe (and its only reference to the
+/// blob) lives for the rest of the page session, same lifetime as the app.
+fn print_pdf(bytes: &[u8]) -> Result<(), String> {
+    let js = |e: wasm_bindgen::JsValue| format!("{e:?}");
+    let window = web_sys::window().ok_or("no window")?;
+    let document = window.document().ok_or("no document")?;
+
+    let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(bytes));
+    let opts = web_sys::BlobPropertyBag::new();
+    opts.set_type("application/pdf");
+    let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &opts).map_err(js)?;
+    let url = web_sys::Url::create_object_url_with_blob(&blob).map_err(js)?;
+
+    let iframe: web_sys::HtmlIFrameElement = document.create_element("iframe").map_err(js)?.dyn_into().map_err(|_| "not an iframe")?;
+    iframe.style().set_property("display", "none").map_err(js)?;
+    document.body().ok_or("no body")?.append_child(&iframe).map_err(js)?;
+
+    // `onload` fires once the PDF has actually rendered inside the iframe;
+    // printing before that would show a blank page. Set the handler BEFORE
+    // `src` so a fast/cached load can't fire before we're listening.
+    let iframe_for_load = iframe.clone();
+    let on_load = wasm_bindgen::closure::Closure::once_into_js(move || {
+        if let Some(w) = iframe_for_load.content_window() {
+            // Ignore errors: some browsers (notably Firefox with a built-in
+            // PDF viewer) print fine but report a benign cross-origin-style
+            // error back on this call.
+            let _ = w.print();
+        }
+    });
+    iframe.set_onload(Some(on_load.unchecked_ref()));
+    iframe.set_src(&url);
     Ok(())
 }
 

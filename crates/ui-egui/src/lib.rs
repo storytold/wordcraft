@@ -48,6 +48,9 @@ pub struct Services {
     pub inbox: Option<Inbox>,
     /// Web: hand bytes to the browser as a download.
     pub download: Option<Box<dyn Fn(&str, &[u8])>>,
+    /// Web: hand PDF bytes to the browser's print flow directly (no download,
+    /// no intermediate file) — opens the system print dialog on that PDF.
+    pub print: Option<Box<dyn Fn(&[u8])>>,
 }
 
 /// Files delivered asynchronously.

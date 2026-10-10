@@ -225,8 +225,29 @@ fn info_page(app: &mut WordApp, ui: &mut Ui) {
 }
 
 fn export_page(app: &mut WordApp, ui: &mut Ui) {
-    heading(ui, if app.ui.backstage_page == "print" { "Print" } else { "Export" });
-    ui.label(tl!("Save a copy in another format. Printing goes through a PDF you can print from any viewer."));
+    let is_print = app.ui.backstage_page == "print";
+    heading(ui, if is_print { "Print" } else { "Export" });
+    if is_print && app.services.print.is_some() {
+        ui.label(tl!("Send the document straight to the system print dialog, or save a copy in another format below."));
+        ui.add_space(12.0);
+        if ui.add(egui::Button::new(egui::RichText::new(tl!("Print")).font(medium(13.5))).min_size(vec2(320.0, 34.0))).clicked() {
+            match wordcraft_engine::io::save_bytes("x.pdf", &app.session.doc) {
+                Ok(bytes) => {
+                    if let Some(print) = &app.services.print {
+                        print(&bytes);
+                    }
+                    app.status(tl!("Opening print dialog…"));
+                }
+                Err(e) => app.status(format!("{}: {e}", tl!("Print failed"))),
+            }
+        }
+        ui.add_space(12.0);
+        ui.separator();
+        ui.add_space(12.0);
+        ui.label(tl!("Or save a copy in another format:"));
+    } else {
+        ui.label(tl!("Save a copy in another format. Printing goes through a PDF you can print from any viewer."));
+    }
     ui.add_space(12.0);
     for (label, ext) in [
         ("PDF document (*.pdf)", "pdf"),
