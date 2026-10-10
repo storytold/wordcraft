@@ -159,10 +159,14 @@ fn styles(app: &mut WordApp, ui: &mut Ui) {
     }
     let st = app.session.run("format.state", &json!({})).unwrap_or_default();
     let cur = st.get("style").and_then(Value::as_str).unwrap_or("Normal").to_string();
-    ui.label(
-        egui::RichText::new(crate::i18n::fmt(tl!("Current style: {style}"), &[("style", st.get("styleName").and_then(Value::as_str).unwrap_or(""))]))
-            .small(),
-    );
+    let current_name = app
+        .session
+        .doc
+        .styles
+        .get(&cur)
+        .map(crate::i18n::style_name)
+        .unwrap_or_else(|| st.get("styleName").and_then(Value::as_str).unwrap_or("").to_string());
+    ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Current style: {style}"), &[("style", &current_name)])).small());
     ui.horizontal(|ui| {
         if ui.button(tl!("New Style…")).clicked() {
             app.dialog = crate::dialogs::Dialog::open("newStyle", app);
@@ -185,7 +189,7 @@ fn styles(app: &mut WordApp, ui: &mut Ui) {
         .styles
         .iter()
         .filter(|s| !s.hidden && s.kind != wordcraft_doc::StyleKind::Table)
-        .map(|s| (s.id.clone(), s.name.clone(), s.kind == wordcraft_doc::StyleKind::Character))
+        .map(|s| (s.id.clone(), crate::i18n::style_name(s), s.kind == wordcraft_doc::StyleKind::Character))
         .collect();
     list.sort_by_key(|s| s.1.to_lowercase());
     egui::ScrollArea::vertical().show(ui, |ui| {
@@ -376,12 +380,18 @@ fn inspector(app: &mut WordApp, ui: &mut Ui) {
     let chr = &r["character"];
     let pstyle = para["styleName"].as_str().unwrap_or("Normal").to_string();
     let cstyle = chr["styleName"].as_str().map(str::to_string);
+    // Built-in style names show in the interface language; the document keeps the English ones.
+    let shown = |id: &Value, name: &str| {
+        id.as_str().and_then(|id| app.session.doc.styles.get(id)).map(crate::i18n::style_name).unwrap_or_else(|| name.to_string())
+    };
+    let pstyle_shown = shown(&para["style"], &pstyle);
+    let cstyle_shown = cstyle.as_deref().map(|n| shown(&chr["style"], n));
     let pdirect = direct_list(&para["direct"]);
     let cdirect = direct_list(&chr["direct"]);
     let mut clear: Option<&str> = None;
     egui::ScrollArea::vertical().show(ui, |ui| {
         section(ui, &t, "Paragraph", |ui| {
-            if level_row(ui, &t, "Style", &pstyle, false, "Reset to Normal", pstyle == "Normal" && para["style"] == "Normal") {
+            if level_row(ui, &t, "Style", &pstyle_shown, false, "Reset to Normal", pstyle == "Normal" && para["style"] == "Normal") {
                 clear = Some("paragraphStyle");
             }
             let (txt, empty) = if pdirect.is_empty() { (none.clone(), true) } else { (pdirect.join(", "), false) };
@@ -391,7 +401,7 @@ fn inspector(app: &mut WordApp, ui: &mut Ui) {
         });
         ui.add_space(8.0);
         section(ui, &t, "Characters", |ui| {
-            let (txt, empty) = match &cstyle {
+            let (txt, empty) = match &cstyle_shown {
                 Some(n) => (n.clone(), false),
                 None => (none.clone(), true),
             };

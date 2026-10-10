@@ -222,7 +222,7 @@ fn snippet_blocks(
 pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
     let t = Tokens::get(ui.ctx());
     let current = state.get("style").and_then(Value::as_str).unwrap_or("Normal").to_string();
-    let styles: Vec<(String, String)> = app.session.doc.styles.gallery().iter().map(|s| (s.id.clone(), s.name.clone())).collect();
+    let styles: Vec<(String, String)> = app.session.doc.styles.gallery().iter().map(|s| (s.id.clone(), crate::i18n::style_name(s))).collect();
     let rev = app.session.rev();
     let skey = app.previews.styles_key(&app.session.doc, rev);
     let ppp = ui.ctx().pixels_per_point();
@@ -239,10 +239,12 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
         } else if resp.hovered() {
             ui.painter().rect_filled(r, 3.0, t.hover);
         }
-        let key = format!("style:{id}:{skey}:{ppp}");
+        let lang = crate::i18n::current().code();
+        let key = format!("style:{id}:{skey}:{ppp}:{lang}");
         let doc = &app.session.doc;
         let tex = app.previews.get_or(ui.ctx(), &key, || {
-            let mut p = Paragraph::with_text("AaBbCcDd", CharProps::default()).styled(id);
+            // Sample letters in the interface's script (`АаБбВвГг` in Russian).
+            let mut p = Paragraph::with_text(tl!("AaBbCcDd"), CharProps::default()).styled(id);
             p.props.space_before = Some(0.0);
             p.props.align = Some(wordcraft_doc::Align::Left);
             // Keep hanging indents (bullets) but start the first line at the tile's left edge.
@@ -297,14 +299,14 @@ pub fn style_set_gallery(app: &mut WordApp, ui: &mut Ui) {
         if resp.hovered() {
             ui.painter().rect_filled(r, 3.0, t.hover);
         }
-        let key = format!("set:{name}:{ppp}");
+        let key = format!("set:{name}:{ppp}:{}", crate::i18n::current().code());
         let tex = app.previews.get_or(ui.ctx(), &key, || {
             let mut s = wordcraft_engine::Session::new(Document::new());
             let _ = s.run("design.styleSet", &json!({"name": name}));
             let blocks = vec![
-                Block::Para(Paragraph::with_text("Title", CharProps::default()).styled("Title")),
-                Block::Para(Paragraph::with_text("Heading 1", CharProps::default()).styled("Heading1")),
-                Block::Para(Paragraph::with_text("Body text in a short paragraph to show spacing.", CharProps::default())),
+                Block::Para(Paragraph::with_text(crate::i18n::tc("preview", "Title"), CharProps::default()).styled("Title")),
+                Block::Para(Paragraph::with_text(tl!("Heading 1"), CharProps::default()).styled("Heading1")),
+                Block::Para(Paragraph::with_text(tl!("Body text in a short paragraph to show spacing."), CharProps::default())),
             ];
             snippet_blocks(&s.doc, blocks, 120.0, 110.0, ppp * 0.42, 6.0, None)
         });
