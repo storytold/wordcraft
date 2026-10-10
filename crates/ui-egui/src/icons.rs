@@ -1150,3 +1150,26 @@ impl ThenLines for () {
         pen.lines(x0, x1, ys);
     }
 }
+
+/// Draw an Insert › Icons library icon into `r` in `c`, from the same path data the inserted
+/// picture is rendered from (`wordcraft_render::icon_lib`).
+pub fn library(p: &Painter, r: Rect, icon: &wordcraft_render::icon_lib::Icon, c: Color32) {
+    use wordcraft_render::icon_lib::{GRID, STROKE};
+    let s = r.width().min(r.height()) / GRID;
+    let o = r.center() - vec2(GRID / 2.0 * s, GRID / 2.0 * s);
+    let stroke = Stroke::new(STROKE * s, c);
+    for piece in icon.pieces() {
+        let pts: Vec<Pos2> = piece.points.iter().map(|q| pos2(o.x + q[0] * s, o.y + q[1] * s)).collect();
+        if piece.fill {
+            p.add(Shape::convex_polygon(pts, c, Stroke::NONE));
+        } else if piece.closed {
+            p.add(Shape::closed_line(pts, stroke));
+        } else {
+            // Round caps, as on the inserted picture.
+            for end in [pts.first(), pts.last()].into_iter().flatten() {
+                p.circle_filled(*end, stroke.width / 2.0, c);
+            }
+            p.add(Shape::line(pts, stroke));
+        }
+    }
+}

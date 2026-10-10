@@ -106,6 +106,20 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"mode": "grayscale|sepia|washout|blackAndWhite|saturation|tint", "saturation"?: 0..400}"#)
         .when(has_picture),
+        CommandSpec::new("picture.iconColor", "Icon Color", "Picture Format › Adjust", |s, v| {
+            let c = p::str(v, "color").and_then(Rgb::parse).ok_or_else(|| CmdError::Params("`color` (RRGGBB) is required".into()))?;
+            // One colour everywhere, transparency kept: recolours an inserted icon or other
+            // one-colour line art without redrawing it.
+            adjust(s, move |img| {
+                let mut rgba = img.to_rgba8();
+                for px in rgba.pixels_mut() {
+                    px.0 = [c.0, c.1, c.2, px.0[3]];
+                }
+                image::DynamicImage::ImageRgba8(rgba)
+            })
+        })
+        .params(r#"{"color": "RRGGBB"}"#)
+        .when(has_picture),
         CommandSpec::new("picture.effects", "Artistic Effects", "Picture Format › Adjust", |s, v| {
             let e = p::str(v, "effect").unwrap_or("blur").to_string();
             adjust(s, move |img| match e.as_str() {

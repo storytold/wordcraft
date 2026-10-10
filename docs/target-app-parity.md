@@ -13,7 +13,7 @@ The generated ribbon checklist is [`parity-checklist.md`](parity-checklist.md).
 
 | Number | Value | Kind |
 |---|---|---|
-| Ribbon/menu catalog coverage | **402 / 434 (92.6%)** | **measured**: `cargo xtask parity` (re-derived this pass from `crates/engine/src/catalog.rs` against every `CommandSpec::new` id in the source; identical to the checked-in `parity-checklist.md`) |
+| Ribbon/menu catalog coverage | **403 / 434 (92.9%)** | **measured**: `cargo xtask parity` (re-derived this pass from `crates/engine/src/catalog.rs` against every `CommandSpec::new` id in the source; identical to the checked-in `parity-checklist.md`) |
 | Feature breadth (weighted, beyond the ribbon: dialog options, citation styles, proofing languages, chart types, UI languages) | **~80%** | estimated |
 | Feature depth (weighted by use, table below) | **~68%** | estimated |
 | **Ready for real work** (full target) | **~60%** (range 55–63%) | estimated: weighted sum over the dimension table ([By dimension](#by-dimension)) |
@@ -68,9 +68,9 @@ full parity for the area.
 | Review (proofing UI, comments, track changes, compare, protect) | 8 | 72% | 75% | 15–25 | Comment balloons, tracked insert/delete incl. paragraph marks (#244, #125), compare, restrict editing. Formatting revisions (#41): kept in DOCX, recorded while tracking, accepted/rejected, "Formatted: …" balloons and change bars. Missing: move tracking, insert/delete balloons, Translate, Block Authors, modern comment threads/mentions. Lowered: these gaps are confirmed by source (no `rPrChange` anywhere). |
 | Proofing (spelling, grammar, thesaurus, languages) | 5 | 35% | (in Review) | 25–45 | English only: one dictionary, a rule-based grammar checker. Word ships 120 proofing tools for ~50 languages plus Editor (style refinements, similarity). Issues #25, #40, #100. |
 | Mailings | 2 | 70% | 70% | 6–10 | Mail merge from CSV, fields, rules, preview, envelopes, labels. Select Recipients takes a typed list or CSV (#247); no Excel/Outlook/Contacts data sources, no email merge. |
-| Pictures, shapes, text boxes, WordArt | 6 | 60% | 60% | 20–30 | Insert, crop, recolour, styles, floating placement like Word (#136), wrap (square/top-bottom/behind/front), text boxes edit and overflow (#46), VML text boxes (#242), free rotation and flips with a rotation handle (#332). Missing: tight/through contour wrap, rotated text-box text, group (#267 open), shape effects, WordArt, connectors, Drawing Canvas, Icons, online pictures, screenshot. |
+| Pictures, shapes, text boxes, WordArt | 6 | 60% | 60% | 20–30 | Insert, crop, recolour, styles, floating placement like Word (#136), wrap (square/top-bottom/behind/front), text boxes edit and overflow (#46), VML text boxes (#242), free rotation and flips with a rotation handle (#332), Icons: an original icon library drawn in code with a searchable picker, inserted as pictures and recoloured with Icon Color (#309). Missing: tight/through contour wrap, rotated text-box text, group (#267 open), shape effects, WordArt, connectors, Drawing Canvas, online pictures, screenshot. |
 | Equations | 1 | 75% | 20% (with Draw) | 4–8 | OMML read/write, OpenType MATH layout, in-place editor with an Equation tab (#191). Missing: line breaking of long display equations, ink equations. |
-| Charts, SmartArt, Draw/ink, 3D models, icons | 4 | 3% | (20% with equations) | 70–110 | Draw: pens, pencil, highlighter, stroke eraser and Hide Ink (#307), ink saved as DrawingML freeforms; lasso, ink to shape/math and replay missing; charts and SmartArt are dropped on DOCX read (no `c:chart`/`dgm` handling in `crates/docx`). |
+| Charts, SmartArt, Draw/ink, 3D models, icons | 4 | 3% | (20% with equations) | 70–110 | Icons landed (#309; an original library drawn in code). Draw: pens, pencil, highlighter, stroke eraser and Hide Ink (#307), ink saved as DrawingML freeforms; lasso, ink to shape/math and replay missing; charts and SmartArt are dropped on DOCX read (no `c:chart`/`dgm` handling in `crates/docx`). |
 | View (modes, zoom, panes, windows) | 3 | 72% | 70% | 6–10 | Print/web/draft/read/focus, dark page (#194), pages side by side when zoomed out (#251), navigation pane. Missing: View Side by Side, Synchronous Scrolling, Arrange All, Switch Windows, Outline view depth, Immersive Reader depth. |
 | Backstage, printing, options | 3 | 58% | 55% | 12–20 | New/Home pages (#254), save prompts (#151), web printing via the browser (#209). Desktop printing still goes through PDF; Options has a fraction of Word's panes. |
 | Right-to-left and complex scripts | 1 | 50% | 55% | 15–25 | UAX #9, Arabic shaping, RTL paragraphs (#207). No RTL sections/tables, kashida justification or mirrored UI; open bug reports (#215, #211, #199, #66, #63, #48, #19) need re-testing against #207. |
@@ -249,6 +249,7 @@ can be used without committing Word output.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | trivial | Insert › Icons (#309): catalog 402/434 → 403/434 (92.9%); moved from missing to done under pictures and shapes |
 | 2026-10-11 | trivial | Formatting revisions (#41): Review row updated; no percentage change |
 | 2026-10-10 | trivial | #307: Draw tab pens, eraser and Hide Ink; catalog 384/430 → 390/430 (90.7%) |
 | 2026-10-10 | trivial | Draw Table and Eraser (#303): catalog 384/430 → 387/430 (90.0%) |
