@@ -39,6 +39,8 @@
 	Advanced	Avançado
 	After:	Depois:
 	Agents	Agentes
+	Agents join at {address}	Os agentes entram em {address}
+	Agents wait for you (8 messages in a row).	Os agentes aguardam você (8 mensagens seguidas).
 	Align	Alinhar
 	Align Left	Alinhar à esquerda
 	Align Right	Alinhar à direita
@@ -174,6 +176,9 @@
 	Characters (no spaces)	Caracteres (sem espaços)
 	Characters (with spaces)	Caracteres (com espaços)
 	Chart	Gráfico
+	Chat	Chat
+	Chat log not saved: {error}	Registro do chat não salvo: {error}
+	Chat Members	Membros do chat
 	Check Accessibility	Verificar acessibilidade
 	Check Compatibility	Verificar compatibilidade
 	Check for Errors	Verificar erros
@@ -322,6 +327,7 @@
 	Export PDF	Exportar PDF
 	Exported {path}	Exportado {path}
 	Extend Selection	Expandir seleção
+	Failed: {error}	Falhou: {error}
 	Field	Campo
 	File	Arquivo
 	Find	Localizar
@@ -355,6 +361,7 @@
 	Formatting at Selection	Formatação na seleção
 	Formula	Fórmula
 	General	Geral
+	Give this line to the agent. It works once, for 10 minutes.	Passe esta linha ao agente. Ela funciona uma vez, durante 10 minutos.
 	Go To	Ir para
 	Go to	Ir para
 	Go To (⌘⌥G)	Ir para (⌘⌥G)
@@ -424,6 +431,7 @@
 	Inside Borders	Bordas internas
 	Inspect Document	Inspecionar documento
 	Interface language:	Idioma da interface:
+	Invite Agent	Convidar agente
 	Italic	Itálico
 	Join the ArtCraft community on Discord	Junte-se à comunidade ArtCraft no Discord
 	Join us on Discord: discord.gg/artcraft	Junte-se a nós no Discord: discord.gg/artcraft
@@ -477,10 +485,12 @@
 	Match case	Diferenciar maiúsculas de minúsculas
 	Match Fields	Corresponder campos
 	Matrix	Matriz
+	Members	Membros
 	Merge	Mesclar
 	Merge Cells	Mesclar células
 	Merge Formatting	Mesclar formatação
 	Merged PRs	PRs mesclados
+	Message (@name …), Enter to send	Mensagem (@nome …), Enter para enviar
 	Mirrored	Espelhada
 	MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.	MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team e os colaboradores do WordCraft.
 	Moderate	Moderada
@@ -509,7 +519,9 @@
 	Next Page	Próxima página
 	Next Record	Próximo registro
 	Next Section	Próxima seção
+	No agents in the chat yet.	Ainda não há agentes no chat.
 	No Border	Sem borda
+	No chat in this window.	Não há chat nesta janela.
 	No Color	Sem cor
 	No contributor data was built into this copy.	Nenhum dado de colaboradores foi compilado nesta cópia.
 	No Markup	Sem marcação
@@ -523,6 +535,7 @@
 	Not available right now	Indisponível no momento
 	Not saved	Não salvo
 	Not saved yet	Ainda não salvo
+	Not sent: {error}	Não enviado: {error}
 	Nudge	Deslocar ligeiramente
 	Number of columns:	Número de colunas:
 	Number of rows:	Número de linhas:
@@ -620,6 +633,8 @@
 	Reject All Changes	Rejeitar todas as alterações
 	Reject Change	Rejeitar alteração
 	Relaxed	Relaxado
+	Remove	Remover
+	Remove Agent	Remover agente
 	Remove Background	Remover plano de fundo
 	Remove Footer	Remover rodapé
 	Remove Header	Remover cabeçalho
@@ -693,6 +708,7 @@
 	Selection	Seleção
 	Selection Pane	Painel de seleção
 	Send Backward	Enviar para trás
+	Send Chat Message	Enviar mensagem no chat
 	Sentence case.	Primeira letra maiúscula.
 	Set as Default	Definir como padrão
 	Set Caret	Definir ponto de inserção
@@ -747,11 +763,13 @@
 	Spreadsheet Table	Tabela de planilha
 	Standard Colors	Cores padrão
 	Star	Estrela
+	Start Chat	Iniciar chat
 	Start at:	Iniciar em:
 	Start Mail Merge	Iniciar mala direta
 	Start Mail\nMerge	Iniciar mala\ndireta
 	Statistics	Estatísticas
 	Status Bar	Barra de status
+	Stop Chat	Parar chat
 	Strikethrough	Tachado
 	Studio cover	Capa do Studio
 	Studio handbook (sample)	Manual do Studio (exemplo)
@@ -784,6 +802,7 @@
 	Tables	Tabelas
 	Tabs	Tabulações
 	Tabular List	Lista tabular
+	Talk with AI agents about this document. Start Chat opens a port on this computer for them.	Converse com agentes de IA sobre este documento. "Iniciar chat" abre uma porta neste computador para eles.
 	Text	Texto
 	Text Box	Caixa de texto
 	Text Direction	Direção do texto
@@ -797,7 +816,9 @@
 	Text:	Texto:
 	Text\nBox	Caixa de\ntexto
 	Text\nDirection	Direção do\ntexto
+	The chat is kept in memory until you save the document.	O chat fica só na memória até você salvar o documento.
 	The new style takes the formatting of the current paragraph.	O novo estilo assume a formatação do parágrafo atual.
+	The user name cannot start with @.	O nome de usuário não pode começar com @.
 	Theme Colors	Cores do tema
 	Theme Fonts	Fontes do tema
 	Theme List	Lista do tema
@@ -821,6 +842,7 @@
 	Triangle	Triângulo
 	Two	Duas
 	Type a command, e.g. "insert table"	Digite um comando, por exemplo "insert table"
+	Type an agent name	Digite o nome de um agente
 	Type Text	Digitar texto
 	Underline	Sublinhado
 	Underline Words Only	Sublinhar somente palavras

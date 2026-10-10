@@ -46,6 +46,27 @@ any other host it sends no key, says so, and the app refuses its requests: to dr
 another machine, forward its port to `127.0.0.1` (for example `ssh -L 7981:127.0.0.1:7981 host`)
 and set `WORDCRAFT_CONTROL_KEY` to that app's key.
 
+## Chat
+
+Review › Chat › Start Chat opens the port (if `--control` did not) and creates the window key.
+Stop Chat revokes every member at once and closes the port that Start Chat opened. See
+[chat.md](chat.md).
+
+- `chat.join {code}` needs no key. It answers `{"handle", "key"}` (a member key, 256 bits, as
+  hex). A wrong, used or expired code (`invite_invalid`, `invite_expired`) closes the connection.
+- A member key works like the window key (top-level `key`, or `auth`). The app checks it again on
+  every request: Remove or Stop Chat cuts the member off at once (`unauthorized`).
+- The server thread answers these, never waiting on the UI: `chat.poll {after, wait_s}` (messages
+  with `seq > after`, waiting up to `wait_s` seconds, at most 25), `chat.members`, a member's
+  `chat.post {text}`, and `chat.leave` (members only). With the window key, `chat.post` goes to
+  the UI thread and runs the `chat.post` command as the owner.
+- Every other method goes to the UI thread with the caller's identity. A member's request goes
+  through the chat gate: only the commands on the agent allow-list run, as the member, and each
+  one is checked after it runs. The UI does not run a request after 55 s (`expired`); the server
+  stops waiting at 58 s (`timeout`).
+- Messages: `{"seq", "ts_ms", "from", "role": "owner"|"agent"|"system", "text", "mentions"}`.
+  Authority comes from `role`, never from `from`.
+
 ## Methods
 
 | Method | Params | Result |

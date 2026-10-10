@@ -15,6 +15,11 @@ macro_rules! tl {
 
 pub mod backstage;
 pub mod canvas;
+pub mod chat_gate;
+pub mod chat_guard;
+mod chat_log;
+pub mod chat_pane;
+pub mod chat_shift;
 pub mod chrome;
 pub mod control;
 pub mod credits;
@@ -122,6 +127,8 @@ pub struct UiState {
     /// View › Switch Modes: show pages dark (white text on black), kept between runs. Only the
     /// pages: the interface follows [`UiState::theme`] (#312).
     pub dark_page: bool,
+    /// The chat pane (Review › Chat) is open.
+    pub chat_pane: bool,
 }
 
 impl Default for UiState {
@@ -146,8 +153,18 @@ impl Default for UiState {
             keytips: crate::keytips::Phase::Off,
             alt_chord_used: false,
             dark_page: false,
+            chat_pane: false,
         }
     }
+}
+
+/// A chat member's own selection, kept between its commands, with the text it selected then.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct MemberSel {
+    pub sel: wordcraft_engine::Selection,
+    /// Text under `sel` when it was stored: an edit by someone else that changes it makes the
+    /// member select again before it writes.
+    pub text: String,
 }
 
 /// The application.
@@ -167,6 +184,11 @@ pub struct WordApp {
     /// macOS: the window has no title bar; leave room for the traffic lights.
     pub integrated_titlebar: bool,
     control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
+    /// Each chat member's own selection (see `chat_gate`).
+    pub member_sel: std::collections::HashMap<String, MemberSel>,
+    /// `Session::doc_replaced` the `member_sel` entries belong to; a new document or a version
+    /// restore clears them.
+    pub member_sel_gen: u64,
     shot_token: u64,
     queued_shots: Vec<(u64, f64, u32)>,
     pending_shots: Vec<(u64, Option<String>, std::sync::mpsc::Sender<Value>, f64)>,
@@ -191,6 +213,9 @@ pub struct WordApp {
     pub autosave: bool,
     pub word_count: (u64, usize),
     last_autosave: f64,
+    /// The document whose chat log is attached (see `chat_log::sync`).
+    pub(crate) chat_log_for: Option<std::path::PathBuf>,
+    pub(crate) chat_log_gen: u64,
     /// The tab shown before the Equation tab came up (restored when editing ends).
     pub(crate) equation_prev_tab: Option<String>,
     /// Zotero commands in flight (`ui.zotero.*`).
@@ -243,6 +268,8 @@ impl WordApp {
             previews: previews::Previews::default(),
             integrated_titlebar: false,
             control_rx: None,
+            member_sel: std::collections::HashMap::new(),
+            member_sel_gen: 0,
             shot_token: 0,
             queued_shots: Vec::new(),
             pending_shots: Vec::new(),
@@ -267,6 +294,8 @@ impl WordApp {
             read_aloud_error: None,
             autosave_path: None,
             change_picture_target: None,
+            chat_log_for: None,
+            chat_log_gen: 0,
             recipient_list_pending: false,
             file_dialog: None,
             info_editing: None,
@@ -506,7 +535,7 @@ impl WordApp {
 
     fn after_command(&mut self, id: &str) {
         self.canvas.caret_visible_since = now_ms();
-        if !id.starts_with("view.") && !id.starts_with("document.") && !id.starts_with("format.state") {
+        if !id.starts_with("view.") && !id.starts_with("document.") && !id.starts_with("format.state") && !id.starts_with("chat.") {
             self.canvas.scroll_to_caret = true;
         }
         for req in std::mem::take(&mut self.session.ui_requests) {
@@ -523,6 +552,7 @@ impl WordApp {
             let s = std::mem::take(&mut self.session.status);
             self.status(s);
         }
+        chat_log::sync(self);
     }
 
     /// Requests commands make of the UI (open a dialog…).
@@ -548,6 +578,9 @@ impl WordApp {
         }
         if req.get("close").is_some() {
             self.quit_requested = true;
+        }
+        if let Some(open) = req.get("chatPane").and_then(Value::as_bool) {
+            self.ui.chat_pane = open;
         }
     }
 
@@ -907,6 +940,7 @@ impl WordApp {
             chrome::title_bar(self, ui);
             ribbon::show(self, ui);
             chrome::status_bar(self, ui);
+            chat_pane::show(self, ui);
             panes::show(self, ui);
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
                 canvas::show(self, ui);
@@ -956,20 +990,29 @@ impl WordApp {
     fn drain_control(&mut self, ctx: &egui::Context) {
         let Some(rx) = self.control_rx.take() else { return };
         while let Ok(req) = rx.try_recv() {
-            let reply = req.reply.clone();
-            match control::handle(self, ctx, &req) {
-                control::Outcome::Done(v) => {
-                    let _ = reply.send(v);
-                }
-                control::Outcome::Screenshot { path } => {
-                    self.shot_token += 1;
-                    let token = self.shot_token;
-                    self.queued_shots.push((token, now_ms() + 120.0, 0));
-                    self.pending_shots.push((token, path, reply, now_ms() + 8000.0));
-                }
-            }
+            self.answer_control(ctx, req);
         }
         self.control_rx = Some(rx);
+    }
+
+    /// Run one control request and answer it; a request past its deadline is not run.
+    pub fn answer_control(&mut self, ctx: &egui::Context, req: ControlRequest) {
+        let reply = req.reply.clone();
+        if req.expired() {
+            let _ = reply.send(json!({"ok": false, "error": "expired"}));
+            return;
+        }
+        match control::handle(self, ctx, &req) {
+            control::Outcome::Done(v) => {
+                let _ = reply.send(v);
+            }
+            control::Outcome::Screenshot { path } => {
+                self.shot_token = self.shot_token.wrapping_add(1);
+                let token = self.shot_token;
+                self.queued_shots.push((token, now_ms() + 120.0, 0));
+                self.pending_shots.push((token, path, reply, now_ms() + 8000.0));
+            }
+        }
     }
 
     fn issue_screenshots(&mut self, ctx: &egui::Context) {

@@ -1,6 +1,7 @@
 //! Command implementations, one module per area. Each module exposes `specs()`.
 
 pub mod caret;
+pub mod chat;
 pub mod citations;
 pub mod column;
 pub mod design;
@@ -50,6 +51,7 @@ pub fn registry() -> Registry {
     v.extend(table::specs());
     v.extend(table_style::specs());
     v.extend(review::specs());
+    v.extend(chat::specs());
     v.extend(file::specs());
     v.extend(design::specs());
     v.extend(references::specs());

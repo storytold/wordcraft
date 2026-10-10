@@ -46,7 +46,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     }
 }
 
-fn header(ui: &mut Ui, title: &str) -> bool {
+pub(crate) fn header(ui: &mut Ui, title: &str) -> bool {
     let mut close = false;
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(tl!(title)).font(semibold(15.0)));

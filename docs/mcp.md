@@ -39,7 +39,17 @@ a document that was saved with it on. `wordcraft-cli run` takes `--author` too.
 | `render_page` | a page as PNG |
 | `parity` | feature coverage |
 | `screenshot`, `click`, `key`, `ui_inspect` | app only (`--connect`) |
+| `chat_join` / `chat_wait` / `chat_send` / `chat_read` / `chat_members` | an invited agent's side of the window's chat (`--connect` only; see [chat.md](chat.md)) |
 
 Resources: `wordcraft://document` (inspect) and `wordcraft://commands`.
+
+As an invited chat agent: `wordcraft-cli mcp --connect 127.0.0.1:7981 --join CODE [--as @name]`
+joins with the owner's invite code (or call `chat_join` later). `--as` is optional: the code is
+bound to a name. From then on the bridge sends the member key instead of the window key, so every
+tool runs as the member, through the chat gate: only commands on the agent allow-list run, and
+text edits are tracked under the member's name. `execute`, `batch`, `type_text`, `select_text`,
+`get_text`, `inspect_document` and `list_commands` work; `screenshot`, `click`, `key`,
+`ui_inspect`, `render_page`, `parity` and the file tools are refused. `chat_wait` returns the
+recent history on its first call, then waits at most 25 s per call for new messages.
 
 The acceptance test `crates/mcp/src/tests.rs` writes a formatted document using MCP only.

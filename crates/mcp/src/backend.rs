@@ -16,6 +16,18 @@ pub trait Backend {
     fn has_ui(&self) -> bool;
     /// Short human description ("headless", "connected to 127.0.0.1:7981").
     fn describe(&self) -> String;
+    /// The app's address (`127.0.0.1:7981`) when there is one.
+    fn address(&self) -> Option<String> {
+        None
+    }
+    /// The chat member this backend acts as (after a join), if any.
+    fn member(&self) -> Option<String> {
+        None
+    }
+    /// Act as chat member `handle` from now on: requests carry `key` instead of the window's key.
+    fn set_member(&mut self, _handle: String, _key: String) -> Result<(), String> {
+        Err(format!("the chat {}", crate::NEEDS_APP))
+    }
 }
 
 /// Looks up the control key for an address (`HOST:PORT`).
@@ -31,6 +43,8 @@ pub struct Remote {
     /// The control key, looked up once per connection (the app picks a new one at every start).
     key: Option<String>,
     find_key: KeyFinder,
+    /// The chat member whose key the requests carry (after [`Backend::set_member`]).
+    member: Option<String>,
 }
 
 /// The control key: `env` (`WORDCRAFT_CONTROL_KEY`) when set, else the app's key file for
@@ -57,7 +71,7 @@ fn find_key(addr: &str) -> Result<String, String> {
 
 /// Whether `addr` (`HOST:PORT`, as given to `--connect`) names a loopback address: 127.0.0.0/8,
 /// ::1 or `localhost`. Other host names are not resolved: they never count.
-fn is_loopback_addr(addr: &str) -> bool {
+pub(crate) fn is_loopback_addr(addr: &str) -> bool {
     let loopback = |ip: IpAddr| ip.to_canonical().is_loopback();
     if let Ok(sa) = addr.parse::<SocketAddr>() {
         return loopback(sa.ip());
@@ -83,7 +97,7 @@ impl Remote {
     }
 
     fn connect_with(addr: &str, find_key: KeyFinder) -> std::io::Result<Self> {
-        let mut r = Self { addr: addr.to_string(), conn: None, next_id: 1, send_key: false, key: None, find_key };
+        let mut r = Self { addr: addr.to_string(), conn: None, next_id: 1, send_key: false, key: None, find_key, member: None };
         r.reconnect()?;
         if let Some(w) = r.key_warning() {
             log::warn!("{w}");
@@ -200,15 +214,19 @@ impl Backend for Remote {
             Ok(v.get("result").cloned().unwrap_or(Value::Null))
         } else if unauthorized(&v) {
             self.conn = None;
-            Err(self.key_warning().map_or_else(
-                || {
+            Err(match (self.key_warning(), &self.member) {
+                (Some(w), _) => format!("unauthorized: {w}"),
+                (None, Some(h)) => {
                     format!(
-                        "unauthorized: the WordCraft app at {} refused the control key (from WORDCRAFT_CONTROL_KEY or the app's key file)",
+                        "unauthorized: the WordCraft app at {} refused the member key of {h} (removed from the chat, or the chat stopped)",
                         self.addr
                     )
-                },
-                |w| format!("unauthorized: {w}"),
-            ))
+                }
+                (None, None) => format!(
+                    "unauthorized: the WordCraft app at {} refused the control key (from WORDCRAFT_CONTROL_KEY or the app's key file)",
+                    self.addr
+                ),
+            })
         } else {
             Err(v.get("error").and_then(Value::as_str).unwrap_or("unknown error").to_string())
         }
@@ -220,6 +238,22 @@ impl Backend for Remote {
 
     fn describe(&self) -> String {
         format!("connected to the WordCraft app at {}", self.addr)
+    }
+
+    fn address(&self) -> Option<String> {
+        Some(self.addr.clone())
+    }
+
+    fn member(&self) -> Option<String> {
+        self.member.clone()
+    }
+
+    fn set_member(&mut self, handle: String, key: String) -> Result<(), String> {
+        self.find_key = Box::new(move |_| Ok(key.clone()));
+        self.key = None;
+        self.conn = None;
+        self.member = Some(handle);
+        Ok(())
     }
 }
 
@@ -381,5 +415,26 @@ mod tests {
         let e = r.call("document.inspect", json!({})).unwrap_err();
         assert!(e.contains("not a loopback address") && e.contains("not sent"), "{e}");
         assert!(seen.recv_timeout(WAIT).unwrap().get("key").is_none());
+    }
+
+    #[test]
+    fn a_member_key_replaces_the_window_key() {
+        let (port, seen) = fake_app(|_| Some((json!({"ok": true, "result": {}}), false)));
+        let mut r = Remote::connect_with(&format!("127.0.0.1:{port}"), Box::new(|_| Err("no window key here".into()))).unwrap();
+        assert_eq!(r.member(), None);
+        assert_eq!(r.address().as_deref(), Some(format!("127.0.0.1:{port}").as_str()));
+        r.set_member("@claude".into(), "ee".repeat(32)).unwrap();
+        assert_eq!(r.member().as_deref(), Some("@claude"));
+        r.call("chat.members", json!({})).unwrap();
+        assert_eq!(seen.recv_timeout(WAIT).unwrap()["key"], "ee".repeat(32));
+    }
+
+    #[test]
+    fn a_removed_member_is_told_so() {
+        let (port, _seen) = fake_app(|_| Some((json!({"ok": false, "error": "unauthorized"}), true)));
+        let mut r = Remote::connect_with(&format!("127.0.0.1:{port}"), fixed_key("k1")).unwrap();
+        r.set_member("@claude".into(), "ee".repeat(32)).unwrap();
+        let e = r.call("chat.members", json!({})).unwrap_err();
+        assert!(e.starts_with("unauthorized: ") && e.contains("@claude") && !e.contains("WORDCRAFT_CONTROL_KEY"), "{e}");
     }
 }

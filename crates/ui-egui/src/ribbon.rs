@@ -1043,6 +1043,8 @@ fn review(app: &mut WordApp, ui: &mut Ui) {
         });
         let shown = app.session.view.comments_pane;
         big(ui, app, "showComments", "Show\nComments", "view.commentsPane", json!({"value": !shown}), false);
+        let chat_shown = app.ui.chat_pane;
+        big(ui, app, "chat", "Chat", "chat.open", json!({"value": !chat_shown}), false);
     });
     group(ui, "Tracking", Some("review.trackingOptions"), app, |ui, app| {
         let on = app.session.doc.settings.track_changes;

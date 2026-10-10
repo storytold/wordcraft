@@ -5011,10 +5011,19 @@ dependencies = [
  "rfd",
  "serde_json",
  "winresource",
+ "wordcraft-chat",
  "wordcraft-control-key",
  "wordcraft-doc",
  "wordcraft-engine",
  "wordcraft-ui-egui",
+]
+
+[[package]]
+name = "wordcraft-chat"
+version = "0.4.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -5092,6 +5101,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "wordcraft-chat",
  "wordcraft-doc",
  "wordcraft-docbin",
  "wordcraft-docx",
@@ -5160,6 +5170,7 @@ version = "0.4.0"
 dependencies = [
  "log",
  "serde_json",
+ "wordcraft-chat",
  "wordcraft-control-key",
  "wordcraft-doc",
  "wordcraft-engine",
@@ -5230,6 +5241,7 @@ dependencies = [
  "serde_json",
  "sys-locale",
  "toml",
+ "wordcraft-chat",
  "wordcraft-doc",
  "wordcraft-engine",
  "wordcraft-fonts",

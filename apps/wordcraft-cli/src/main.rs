@@ -20,8 +20,11 @@ USAGE:
                                               who tracked changes and comments are by)
   wordcraft-cli commands [--json]             list every command
   wordcraft-cli parity [--markdown]           feature-catalog parity
-  wordcraft-cli mcp [--connect HOST:PORT | --author NAME]
-                                              MCP server on stdio (headless, or bridged to the app)
+  wordcraft-cli mcp [--connect HOST:PORT [--join CODE [--as @name]] | --author NAME]
+                                              MCP server on stdio (headless, bridged to the app, or
+                                              as an invited chat agent)
+  wordcraft-cli chat <join|listen|send|read|view|do|commands|help> …
+                                              an invited agent's side of a window's chat (docs/chat.md)
   wordcraft-cli zotero <command> <file> [--cmd 'id={json}' …] [--save OUT] [--trace] [--port P]
                                               run a Zotero command on a document (Zotero must be
                                               running): addEditCitation, addEditBibliography,
@@ -85,7 +88,12 @@ const RUN_OPTIONS: &[OptionSpec] = &[
 ];
 const COMMANDS_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--json", takes_value: false }];
 const PARITY_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--markdown", takes_value: false }];
-const MCP_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--connect", takes_value: true }, OptionSpec { name: "--author", takes_value: true }];
+const MCP_OPTIONS: &[OptionSpec] = &[
+    OptionSpec { name: "--connect", takes_value: true },
+    OptionSpec { name: "--author", takes_value: true },
+    OptionSpec { name: "--join", takes_value: true },
+    OptionSpec { name: "--as", takes_value: true },
+];
 const ZOTERO_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--cmd", takes_value: true },
     OptionSpec { name: "--save", takes_value: true },
@@ -212,6 +220,7 @@ fn run(args: &[String]) -> Result<(), String> {
             Ok(())
         }
         "mcp" => {
+            use wordcraft_mcp::Backend as _;
             validate_options("mcp", &rest, MCP_OPTIONS)?;
             let author = arg_value(&rest, "--author");
             let backend: Box<dyn wordcraft_mcp::Backend> = match arg_value(&rest, "--connect") {
@@ -220,12 +229,20 @@ fn run(args: &[String]) -> Result<(), String> {
                     return Err("mcp: --author applies to the headless server; with --connect, run file.setAuthor".into());
                 }
                 Some(addr) => {
-                    let remote = wordcraft_mcp::Remote::connect(&addr).map_err(|e| format!("can't reach the WordCraft app at {addr}: {e}"))?;
+                    let mut remote = wordcraft_mcp::Remote::connect(&addr).map_err(|e| format!("can't reach the WordCraft app at {addr}: {e}"))?;
                     if let Some(w) = remote.key_warning() {
                         eprintln!("wordcraft-cli: {w}");
                     }
+                    if let Some(code) = arg_value(&rest, "--join") {
+                        let m = wordcraft_mcp::chat::join(&addr, &code, arg_value(&rest, "--as").as_deref()).map_err(|f| f.message)?;
+                        let h = m.handle.clone();
+                        remote.set_member(m.handle, m.key)?;
+                        // stdout is the protocol stream.
+                        eprintln!("{}", wordcraft_mcp::chat::tools::mcp_briefing(&h));
+                    }
                     Box::new(remote)
                 }
+                None if arg_value(&rest, "--join").is_some() => return Err("--join needs --connect HOST:PORT".into()),
                 None => {
                     let mut headless = wordcraft_mcp::Headless::default();
                     if let Some(name) = author {
@@ -325,6 +342,11 @@ fn parity_markdown(p: &Value) -> String {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("chat") {
+        let rest = args.get(1..).unwrap_or_default();
+        let exit = wordcraft_mcp::chat::cli::run(rest, &mut std::io::stdout(), &mut std::io::stderr());
+        return ExitCode::from(exit.code());
+    }
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -372,6 +394,7 @@ mod tests {
     fn author_flag_names_the_headless_session() {
         assert!(validate_options("run", &args(&["--author", "Claude (copyedit)", "--cmd", "edit.undo"]), RUN_OPTIONS).is_ok());
         assert!(validate_options("mcp", &args(&["--author", "Claude"]), MCP_OPTIONS).is_ok());
+        assert!(validate_options("mcp", &args(&["--connect", "127.0.0.1:9000", "--join", "ABCD-EFGH-JKLM", "--as", "@agent"]), MCP_OPTIONS).is_ok());
         let mut s = Session::new(wordcraft_doc::Document::new());
         assert!(set_author(&mut s, " Claude (copyedit) ").is_ok());
         assert_eq!(s.author, "Claude (copyedit)");

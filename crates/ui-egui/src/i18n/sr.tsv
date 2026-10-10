@@ -45,6 +45,8 @@
 	Advanced	Напредно
 	After:	После:
 	Agents	Агенти
+	Agents join at {address}	Агенти се придружују на адреси {address}
+	Agents wait for you (8 messages in a row).	Агенти чекају ваш одговор (8 порука заредом).
 	Align	Поравнање
 	Align Left	Лево поравнање
 	Align Right	Десно поравнање
@@ -93,6 +95,9 @@
 	Change Password…	Промени лозинку…
 	Changed lines:	Измењени редови:
 	Character style	Стил знакова
+	Chat	Ћаскање
+	Chat log not saved: {error}	Запис ћаскања није сачуван: {error}
+	Chat Members	Чланови ћаскања
 	Click an item to paste it.	Кликните на ставку да бисте је налепили.
 	Click level to modify:	Кликните ниво који мењате:
 	Clipboard Items	Ставке оставе
@@ -107,22 +112,32 @@
 	Deletions:	Брисања:
 	Edit Comment	Уреди коментар
 	Enter formatting for number:	Облик броја:
+	Failed: {error}	Неуспело: {error}
 	Follow number with:	После броја:
 	Formatting	Обликовање
+	Give this line to the agent. It works once, for 10 minutes.	Дајте овај ред агенту. Важи једном, 10 минута.
 	Include level number from:	Укључи број нивоа:
 	Ink	Мастило
 	Insertions and Deletions	Уметања и брисања
 	Insertions:	Уметања:
-	Left border	Лева ивица
+	Invite Agent	Позови агента
 	Left Margin	Лева маргина
+	Left border	Лева ивица
 	Legal style numbering	Правно нумерисање
 	Link level to style:	Повежи ниво са стилом:
 	List Definition	Дефиниција листе
+	Members	Чланови
+	Message (@name …), Enter to send	Порука (@име …), Enter за слање
+	No agents in the chat yet.	У ћаскању још нема агената.
+	No chat in this window.	У овом прозору нема ћаскања.
+	Not sent: {error}	Није послато: {error}
 	Nothing	Ништа
 	Number alignment:	Поравнање броја:
 	Number format	Формат броја
 	Number style for this level:	Стил броја за овај ниво:
 	Outside border	Спољна ивица
+	Remove	Уклони
+	Remove Agent	Уклони агента
 	Reopen	Поново отвори
 	Restart list after:	Поново почни листу после:
 	Right border	Десна ивица
@@ -160,6 +175,7 @@
 	Paste Clipboard Item	Налепи ставку из оставе
 	Preview	Преглед
 	Remove Password	Уклони лозинку
+	Send Chat Message	Пошаљи поруку у ћаскање
 	Shadow, glow and soft edges	Сенка, сјај и меке ивице
 	Shape Effects	Ефекти облика
 	Show all revisions inline	Прикажи све измене у тексту
@@ -804,11 +820,13 @@
 	Spreadsheet Table	Табела прорачунске табле
 	Standard Colors	Стандардне боје
 	Star	Звезда
+	Start Chat	Започни ћаскање
 	Start at:	Почни од:
 	Start Mail Merge	Покрени спајање докумената
 	Start Mail\nMerge	Покрени\nспајање докумената
 	Statistics	Статистика
 	Status Bar	Статусна трака
+	Stop Chat	Заустави ћаскање
 	Strikethrough	Прецртано
 	Studio cover	Насловна страна студија
 	Studio handbook (sample)	Приручник студија (пример)
@@ -842,6 +860,7 @@
 	Tables	Табеле
 	Tabs	Табулатори
 	Tabular List	Табеларна листа
+	Talk with AI agents about this document. Start Chat opens a port on this computer for them.	Разговарајте са AI агентима о овом документу. „Започни ћаскање“ отвара за њих порт на овом рачунару.
 	Text	Текст
 	Text Box	Оквир за текст
 	Text Direction	Смер текста
@@ -857,10 +876,12 @@
 	Text\nDirection	Смер\nтекста
 	That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.	Тај формат не чува све, па је документ и даље отворен. Сачувајте га као Word документ (.docx) да бисте наставили.
 	That password isn't right. Check it (passwords are case-sensitive) and try again.	Лозинка није исправна. Проверите је (лозинке разликују велика и мала слова) и покушајте поново.
+	The chat is kept in memory until you save the document.	Ћаскање се чува само у меморији док не сачувате документ.
 	The document will be saved with a password. Save it to protect it.	Документ ће бити сачуван са лозинком. Сачувајте га да бисте га заштитили.
 	The new style takes the formatting of the current paragraph.	Нови стил преузима форматирање тренутног пасуса.
 	The password is removed. Save the document to keep the change.	Лозинка је уклоњена. Сачувајте документ да бисте задржали измену.
 	The passwords don't match.	Лозинке се не подударају.
+	The user name cannot start with @.	Корисничко име не може да почиње са @.
 	Theme Colors	Боје теме
 	Theme Fonts	Фонтови теме
 	Theme List	Листа тема
@@ -884,6 +905,7 @@
 	Triangle	Троугао
 	Two	Два
 	Type a command, e.g. "insert table"	Унесите наредбу, нпр. "уметни табелу"
+	Type an agent name	Унесите име агента
 	Type Text	Унеси текст
 	Underline	Подвучено
 	Underline Words Only	Подвуци само речи

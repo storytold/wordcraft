@@ -39,6 +39,8 @@
 	Advanced	高级
 	After:	段后：
 	Agents	智能体
+	Agents join at {address}	智能体通过 {address} 加入
+	Agents wait for you (8 messages in a row).	智能体正在等你（已连续 8 条消息）。
 	Align	对齐
 	Align Left	左对齐
 	Align Right	右对齐
@@ -191,6 +193,9 @@
 	Characters (no spaces)	字符数（不计空格）
 	Characters (with spaces)	字符数（计空格）
 	Chart	图表
+	Chat	聊天
+	Chat log not saved: {error}	聊天记录未保存：{error}
+	Chat Members	聊天成员
 	Check Accessibility	检查辅助功能
 	Check Compatibility	检查兼容性
 	Check for Errors	检查错误
@@ -332,6 +337,7 @@
 	Export PDF	导出 PDF
 	Exported {path}	已导出 {path}
 	Extend Selection	扩展选定范围
+	Failed: {error}	失败：{error}
 	Field	域
 	File	文件
 	Find	查找
@@ -365,6 +371,7 @@
 	Formatting at Selection	选定内容的格式
 	Formula	公式
 	General	常规
+	Give this line to the agent. It works once, for 10 minutes.	把这一行交给智能体。它只能使用一次，10 分钟内有效。
 	Go To	定位
 	Go to	转到
 	Go To (⌘⌥G)	定位 (⌘⌥G)
@@ -434,6 +441,7 @@
 	Inside Borders	内部框线
 	Inspect Document	检查文档
 	Interface language:	界面语言：
+	Invite Agent	邀请智能体
 	Italic	倾斜
 	Join the ArtCraft community on Discord	加入 Discord 上的 ArtCraft 社区
 	Join us on Discord: discord.gg/artcraft	在 Discord 上加入我们：discord.gg/artcraft
@@ -487,10 +495,12 @@
 	Match case	区分大小写
 	Match Fields	匹配域
 	Matrix	矩阵
+	Members	成员
 	Merge	合并
 	Merge Cells	合并单元格
 	Merge Formatting	合并格式
 	Merged PRs	已合并的 PR
+	Message (@name …), Enter to send	消息（@名称 …），按 Enter 发送
 	Mirrored	对称
 	MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.	MIT OR Apache-2.0。版权所有 (c) 2026 ArtCraft 团队及 WordCraft 贡献者。
 	Moderate	适中
@@ -519,7 +529,9 @@
 	Next Page	下一页
 	Next Record	下一记录
 	Next Section	下一节
+	No agents in the chat yet.	聊天中还没有智能体。
 	No Border	无框线
+	No chat in this window.	此窗口没有聊天。
 	No Color	无颜色
 	No contributor data was built into this copy.	此版本未内置贡献者数据。
 	No Markup	无标记
@@ -533,6 +545,7 @@
 	Not available right now	当前不可用
 	Not saved	未保存
 	Not saved yet	尚未保存
+	Not sent: {error}	未发送：{error}
 	Nudge	微移
 	Number of columns:	列数：
 	Number of rows:	行数：
@@ -631,6 +644,8 @@
 	Reject All Changes	拒绝所有修订
 	Reject Change	拒绝修订
 	Relaxed	宽松
+	Remove	移除
+	Remove Agent	移除智能体
 	Remove Background	删除背景
 	Remove Footer	删除页脚
 	Remove Header	删除页眉
@@ -704,6 +719,7 @@
 	Selection	选择
 	Selection Pane	选择窗格
 	Send Backward	下移一层
+	Send Chat Message	发送聊天消息
 	Sentence case.	句首字母大写。
 	Set as Default	设为默认值
 	Set Caret	设置光标
@@ -757,11 +773,13 @@
 	Spreadsheet Table	电子表格
 	Standard Colors	标准色
 	Star	星形
+	Start Chat	开始聊天
 	Start at:	起始编号：
 	Start Mail Merge	开始邮件合并
 	Start Mail\nMerge	开始邮件合并
 	Statistics	统计信息
 	Status Bar	状态栏
+	Stop Chat	停止聊天
 	Strikethrough	删除线
 	Studio cover	工作室封面
 	Studio handbook (sample)	工作室手册（示例）
@@ -794,6 +812,7 @@
 	Tables	表格
 	Tabs	制表位
 	Tabular List	表格列表
+	Talk with AI agents about this document. Start Chat opens a port on this computer for them.	与 AI 智能体讨论此文档。“开始聊天”会在本机为它们打开一个端口。
 	Text	文本
 	Text Box	文本框
 	Text Direction	文字方向
@@ -808,7 +827,9 @@
 	Text\nBox	文本框
 	Text\nDirection	文字方向
 	That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.	该格式无法保留全部内容，因此文档仍保持打开。请将其保存为 Word 文档 (.docx) 后再继续。
+	The chat is kept in memory until you save the document.	在保存文档之前，聊天内容只保存在内存中。
 	The new style takes the formatting of the current paragraph.	新样式将采用当前段落的格式。
+	The user name cannot start with @.	用户名不能以 @ 开头。
 	Theme Colors	主题颜色
 	Theme Fonts	主题字体
 	Theme List	主题列表
@@ -832,6 +853,7 @@
 	Triangle	三角形
 	Two	两栏
 	Type a command, e.g. "insert table"	键入命令，例如 "insert table"
+	Type an agent name	输入智能体名称
 	Type Text	键入文本
 	Underline	下划线
 	Underline Words Only	仅给字词加下划线

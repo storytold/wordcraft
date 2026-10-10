@@ -41,6 +41,8 @@
 	Advanced Find…	Розширений пошук…
 	After:	Після:
 	Agents	Агенти
+	Agents join at {address}	Агенти приєднуються за адресою {address}
+	Agents wait for you (8 messages in a row).	Агенти чекають на вашу відповідь (8 повідомлень поспіль).
 	Align	Вирівняти
 	Align Left	Вирівняти ліворуч
 	Align Right	Вирівняти праворуч
@@ -177,6 +179,9 @@
 	Characters (no spaces)	Символи (без пробілів)
 	Characters (with spaces)	Символи (з пробілами)
 	Chart	Діаграма
+	Chat	Чат
+	Chat log not saved: {error}	Журнал чату не збережено: {error}
+	Chat Members	Учасники чату
 	Check Accessibility	Перевірити доступність
 	Check Compatibility	Перевірити сумісність
 	Check for Errors	Перевірити наявність помилок
@@ -331,6 +336,7 @@
 	Export PDF	Експортувати PDF
 	Exported {path}	Експортовано {path}
 	Extend Selection	Розширити виділення
+	Failed: {error}	Помилка: {error}
 	Field	Поле
 	File	Файл
 	Find	Знайти
@@ -365,6 +371,7 @@
 	Formatting at Selection	Форматування виділення
 	Formula	Формула
 	General	Загальні
+	Give this line to the agent. It works once, for 10 minutes.	Передайте цей рядок агентові. Він діє один раз, протягом 10 хвилин.
 	Go To	Перейти
 	Go to	Перейти
 	Go To (⌘⌥G)	Перейти (⌘⌥G)
@@ -437,6 +444,7 @@
 	Inspect Document	Перевірити документ
 	Inspect Styles at Selection	Переглянути стилі у виділенні
 	Interface language:	Мова інтерфейсу:
+	Invite Agent	Запросити агента
 	Italic	Курсив
 	Join the ArtCraft community on Discord	Приєднатися до спільноти ArtCraft у Discord
 	Join us on Discord: discord.gg/artcraft	Приєднуйтеся до нас у Discord: discord.gg/artcraft
@@ -491,10 +499,12 @@
 	Match case	Враховувати регістр
 	Match Fields	Зіставити поля
 	Matrix	Матриця
+	Members	Учасники
 	Merge	Об'єднати
 	Merge Cells	Об'єднати клітинки
 	Merge Formatting	Об'єднати форматування
 	Merged PRs	Об'єднані PR
+	Message (@name …), Enter to send	Повідомлення (@ім'я …), Enter, щоб надіслати
 	Mirrored	Дзеркальні
 	MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.	MIT OR Apache-2.0. Авторські права (c) 2026 команди ArtCraft і учасників WordCraft.
 	Moderate	Помірні
@@ -523,7 +533,9 @@
 	Next Page	Наступна сторінка
 	Next Record	Наступний запис
 	Next Section	Наступний розділ
+	No agents in the chat yet.	У чаті ще немає агентів.
 	No Border	Без меж
+	No chat in this window.	У цьому вікні немає чату.
 	No Color	Без кольору
 	No contributor data was built into this copy.	Ця збірка не містить даних про учасників.
 	No Markup	Без позначок
@@ -537,6 +549,7 @@
 	Not available right now	Зараз недоступно
 	Not saved	Не збережено
 	Not saved yet	Ще не збережено
+	Not sent: {error}	Не надіслано: {error}
 	Nudge	Злегка зсунути
 	Number of columns:	Кількість стовпців:
 	Number of rows:	Кількість рядків:
@@ -640,6 +653,8 @@
 	Reject All Changes	Відхилити всі зміни
 	Reject Change	Відхилити зміну
 	Relaxed	Вільний
+	Remove	Видалити
+	Remove Agent	Видалити агента
 	Remove Background	Видалити тло
 	Remove Footer	Видалити нижній колонтитул
 	Remove Header	Видалити верхній колонтитул
@@ -716,6 +731,7 @@
 	Selection	Виділення
 	Selection Pane	Панель виділення
 	Send Backward	Перемістити назад
+	Send Chat Message	Надіслати повідомлення в чат
 	Sentence case.	Як у реченні.
 	Set as Default	Установити як типове
 	Set Caret	Установити каретку
@@ -770,11 +786,13 @@
 	Spreadsheet Table	Таблиця електронної таблиці
 	Standard Colors	Стандартні кольори
 	Star	Зірка
+	Start Chat	Почати чат
 	Start at:	Почати з:
 	Start Mail Merge	Почати злиття пошти
 	Start Mail\nMerge	Почати злиття\nпошти
 	Statistics	Статистика
 	Status Bar	Рядок стану
+	Stop Chat	Зупинити чат
 	Strikethrough	Закреслення
 	Studio cover	Обкладинка студії
 	Studio handbook (sample)	Посібник студії (приклад)
@@ -808,6 +826,7 @@
 	Tables	Таблиці
 	Tabs	Табуляція
 	Tabular List	Табличний список
+	Talk with AI agents about this document. Start Chat opens a port on this computer for them.	Обговорюйте цей документ з агентами ШІ. «Почати чат» відкриває для них порт на цьому комп'ютері.
 	Text	Текст
 	Text Box	Текстове поле
 	Text Direction	Напрямок тексту
@@ -821,8 +840,10 @@
 	Text:	Текст:
 	Text\nBox	Текстове\nполе
 	Text\nDirection	Напрямок\nтексту
+	The chat is kept in memory until you save the document.	Чат зберігається лише в пам'яті, доки ви не збережете документ.
 	The clipboard is empty.	Буфер обміну порожній.
 	The new style takes the formatting of the current paragraph.	Новий стиль використовує форматування поточного абзацу.
+	The user name cannot start with @.	Ім'я користувача не може починатися з @.
 	Theme Colors	Кольори теми
 	Theme Fonts	Шрифти теми
 	Theme List	Список тем
@@ -846,6 +867,7 @@
 	Triangle	Трикутник
 	Two	Два
 	Type a command, e.g. "insert table"	Введіть команду, наприклад «вставити таблицю»
+	Type an agent name	Введіть ім'я агента
 	Type Text	Ввести текст
 	Underline	Підкреслення
 	Underline Words Only	Підкреслити лише слова

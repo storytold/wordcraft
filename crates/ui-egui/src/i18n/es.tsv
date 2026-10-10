@@ -43,6 +43,8 @@
 	Advanced Find…	Búsqueda avanzada…
 	After:	Después:
 	Agents	Agentes
+	Agents join at {address}	Los agentes se unen en {address}
+	Agents wait for you (8 messages in a row).	Los agentes esperan tu respuesta (8 mensajes seguidos).
 	Align	Alinear
 	Align Left	Alinear a la izquierda
 	Align Right	Alinear a la derecha
@@ -179,6 +181,9 @@
 	Characters (no spaces)	Caracteres (sin espacios)
 	Characters (with spaces)	Caracteres (con espacios)
 	Chart	Gráfico
+	Chat	Chat
+	Chat log not saved: {error}	No se guardó el registro del chat: {error}
+	Chat Members	Miembros del chat
 	Check Accessibility	Comprobar accesibilidad
 	Check Compatibility	Comprobar compatibilidad
 	Check Spelling as You Type	Revisar la ortografía mientras escribes
@@ -323,6 +328,7 @@
 	Export a copy to share (PDF, Word document)	Exporta una copia para compartir (PDF, documento de Word)
 	Exported {path}	Exportado: {path}
 	Extend Selection	Ampliar selección
+	Failed: {error}	Error: {error}
 	Field	Campo
 	File	Archivo
 	Find	Buscar
@@ -357,6 +363,7 @@
 	Formatting at Selection	Formato en la selección
 	Formula	Fórmula
 	General	General
+	Give this line to the agent. It works once, for 10 minutes.	Pasa esta línea al agente. Funciona una sola vez, durante 10 minutos.
 	Go To	Ir a
 	Go To (⌘⌥G)	Ir a (⌘⌥G)
 	Go To…	Ir a…
@@ -430,6 +437,7 @@
 	Inspect Document	Inspeccionar documento
 	Inspect Styles at Selection	Inspeccionar estilos de la selección
 	Interface language:	Idioma de la interfaz:
+	Invite Agent	Invitar agente
 	Italic	Cursiva
 	Join the ArtCraft community on Discord	Únete a la comunidad de ArtCraft en Discord
 	Join us on Discord: discord.gg/artcraft	Únete a nosotros en Discord: discord.gg/artcraft
@@ -472,6 +480,8 @@
 	Link to Previous	Vincular con el anterior
 	Links	Vínculos
 	Location: {path}	Ubicación: {path}
+	Members	Miembros
+	Message (@name …), Enter to send	Mensaje (@nombre …), Intro para enviar
 	MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.	MIT o Apache-2.0. Copyright (c) 2026 ArtCraft Team y los colaboradores de WordCraft.
 	Macros	Macros
 	Mailings	Correspondencia
@@ -518,7 +528,9 @@
 	Next Page	Página siguiente
 	Next Record	Registro siguiente
 	Next Section	Sección siguiente
+	No agents in the chat yet.	Todavía no hay agentes en el chat.
 	No Border	Sin bordes
+	No chat in this window.	No hay chat en esta ventana.
 	No Color	Sin color
 	No Markup	Sin marcas
 	No Paragraph Space	Sin espacio entre párrafos
@@ -533,6 +545,7 @@
 	Not available right now	No disponible por ahora
 	Not saved	Sin guardar
 	Not saved yet	Aún sin guardar
+	Not sent: {error}	No enviado: {error}
 	Nudge	Desplazar ligeramente
 	Number of columns:	Número de columnas:
 	Number of rows:	Número de filas:
@@ -636,6 +649,8 @@
 	Reject All Changes	Rechazar todos los cambios
 	Reject Change	Rechazar cambio
 	Relaxed	Relajado
+	Remove	Quitar
+	Remove Agent	Quitar agente
 	Remove Background	Quitar fondo
 	Remove Footer	Quitar pie de página
 	Remove Header	Quitar encabezado
@@ -714,6 +729,7 @@
 	Selection	Selección
 	Selection Pane	Panel de selección
 	Send Backward	Enviar hacia atrás
+	Send Chat Message	Enviar mensaje al chat
 	Sentence case.	Mayúscula inicial de oración.
 	Set Caret	Establecer cursor
 	Set Character Formatting	Establecer formato de carácter
@@ -768,11 +784,13 @@
 	Spreadsheet Table	Tabla de hoja de cálculo
 	Standard Colors	Colores estándar
 	Star	Estrella
+	Start Chat	Iniciar chat
 	Start at:	Iniciar en:
 	Start Mail Merge	Iniciar combinación de correspondencia
 	Start Mail\nMerge	Iniciar combinación\nde correspondencia
 	Statistics	Estadísticas
 	Status Bar	Barra de estado
+	Stop Chat	Detener chat
 	Strikethrough	Tachado
 	Studio cover	Portada de Studio
 	Studio handbook (sample)	Manual de Studio (ejemplo)
@@ -806,6 +824,7 @@
 	Tables	Tablas
 	Tabs	Tabulaciones
 	Tabular List	Lista tabular
+	Talk with AI agents about this document. Start Chat opens a port on this computer for them.	Habla con agentes de IA sobre este documento. «Iniciar chat» abre un puerto en este equipo para ellos.
 	Text	Texto
 	Text Box	Cuadro de texto
 	Text Direction	Dirección del texto
@@ -819,8 +838,10 @@
 	Text:	Texto:
 	Text\nBox	Cuadro de\ntexto
 	Text\nDirection	Dirección del\ntexto
+	The chat is kept in memory until you save the document.	El chat solo se guarda en memoria hasta que guardes el documento.
 	The clipboard is empty.	El portapapeles está vacío.
 	The new style takes the formatting of the current paragraph.	El nuevo estilo toma el formato del párrafo actual.
+	The user name cannot start with @.	El nombre de usuario no puede empezar por @.
 	Theme Colors	Colores del tema
 	Theme Fonts	Fuentes del tema
 	Theme List	Lista de temas
@@ -843,6 +864,7 @@
 	Transparency	Transparencia
 	Triangle	Triángulo
 	Two	Dos
+	Type an agent name	Escribe el nombre de un agente
 	Type Text	Escribir texto
 	Type a command, e.g. "insert table"	Escribe un comando, p. ej. "insertar tabla"
 	Ungroup	Desagrupar

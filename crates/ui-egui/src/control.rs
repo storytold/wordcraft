@@ -17,16 +17,36 @@ use serde_json::{Value, json};
 
 use crate::WordApp;
 
+pub use wordcraft_chat::Principal;
+
 pub struct ControlRequest {
     pub method: String,
     pub params: Value,
     pub reply: Sender<Value>,
+    /// Who sent it: the window's key (`Host`) or a chat member's key. Members go through the
+    /// chat gate (`handle_member`).
+    pub principal: Principal,
+    /// Wall-clock ms ([`crate::now_ms`]) after which the sender stopped waiting: the UI answers
+    /// `expired` and does not run it (a window that did not draw must not apply old steps late).
+    pub deadline_ms: Option<f64>,
 }
 
 impl ControlRequest {
     pub fn new(method: impl Into<String>, params: Value) -> (Self, std::sync::mpsc::Receiver<Value>) {
         let (tx, rx) = std::sync::mpsc::channel();
-        (Self { method: method.into(), params, reply: tx }, rx)
+        (Self { method: method.into(), params, reply: tx, principal: Principal::Host, deadline_ms: None }, rx)
+    }
+    pub fn with_principal(mut self, p: Principal) -> Self {
+        self.principal = p;
+        self
+    }
+    pub fn with_deadline_ms(mut self, at: f64) -> Self {
+        self.deadline_ms = Some(at);
+        self
+    }
+    /// The sender gave up on it already.
+    pub fn expired(&self) -> bool {
+        self.deadline_ms.is_some_and(|d| crate::now_ms() > d)
     }
 }
 
@@ -103,7 +123,37 @@ fn click_events(app: &mut WordApp, pos: egui::Pos2, button: egui::PointerButton,
     }
 }
 
+/// A chat member's request: membership checked again on the UI thread, then the allow-list,
+/// then the command runs as the member (see `chat_gate`).
+pub(crate) fn handle_member(app: &mut WordApp, handle: &str, req: &ControlRequest) -> Outcome {
+    if !app.session.chat.as_ref().is_some_and(|c| c.hub().is_member(handle)) {
+        return err(format!("{handle} is not a member of this chat (removed)"));
+    }
+    let Some((id, params)) = crate::chat_gate::member_command(&req.method, &req.params) else { return err("missing `command`") };
+    if !crate::chat_gate::agent_allowed(&id) {
+        return err(format!("{id}: {}", crate::chat_gate::NOT_ALLOWED));
+    }
+    match id.as_str() {
+        "engine.commands" => ok(crate::chat_gate::agent_commands(app)),
+        "view.page" => {
+            let page = params.get("page").and_then(Value::as_u64).unwrap_or(1);
+            let scale = params.get("scale").and_then(Value::as_f64).unwrap_or(1.0) as f32;
+            match crate::chat_gate::view_page(app, page, scale) {
+                Ok(v) => ok(v),
+                Err(e) => err(e),
+            }
+        }
+        _ => match crate::chat_gate::run_as_member(app, handle, &id, params) {
+            Ok(v) => ok(v),
+            Err(e) => err(e),
+        },
+    }
+}
+
 pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
+    if let Principal::Member(handle) = &req.principal {
+        return handle_member(app, handle, req);
+    }
     let p = &req.params;
     let s = |k: &str| p.get(k).and_then(Value::as_str);
     let f = |k: &str| p.get(k).and_then(Value::as_f64).map(|v| v as f32);

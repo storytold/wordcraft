@@ -4,8 +4,14 @@
 //!
 //! `--control <port>` (or `WORDCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server:
 //! `{"id":1,"key":"…","method":"engine.execute","params":{"command":"text.insert","params":{"text":"Hi"}}}`.
-//! Every request needs the key the app writes to `<settings>/control-key.<instance>` (mode 0600,
-//! removed on exit). See `docs/control-protocol.md`.
+//! Every request needs a key: the window's key, which the app writes to
+//! `<settings>/control-key.<instance>` (mode 0600), or a chat member's key from `chat.join` (the
+//! chat gate checks what a member may run). See `docs/control-protocol.md` and `docs/chat.md`.
+//!
+//! No port is open until `--control` or Review › Chat › Start Chat. Stop Chat closes the port
+//! that Start Chat opened and removes its key file. On exit the app closes its port and removes
+//! the key file, also for `--control`. `WORDCRAFT_CHAT_CLIENT` sets the command at the start of
+//! chat invite lines (default `wordcraft-cli chat`), for packagers.
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -25,13 +31,13 @@ use wordcraft_ui_egui::{
     window_geometry::{WindowGeometry, take_rescue},
 };
 
-/// The app, the restored window geometry until the first frame has checked it, the control
-/// server's key file (removed on exit), the file dialogs the app asked for and, on macOS, the
-/// documents opened from Finder.
+/// The app, the restored window geometry until the first frame has checked it, the window's
+/// control port (closed on exit, with its key file), the file dialogs the app asked for and, on
+/// macOS, the documents opened from Finder.
 struct App(
     WordApp,
     Option<WindowGeometry>,
-    Option<control_server::KeyFile>,
+    std::sync::Arc<control_server::ControlPort>,
     file_dialogs::Launcher,
     #[cfg(target_os = "macos")] fmv_macos_events::Inbox,
 );
@@ -64,9 +70,15 @@ impl eframe::App for App {
     }
     fn on_exit(&mut self) {
         save_prefs(&self.0);
-        if let Some(key_file) = &self.2 {
-            key_file.remove();
-        }
+        self.2.shutdown();
+    }
+}
+
+/// Apply the value of [`wordcraft_chat::CLIENT_ENV`] (the command at the start of chat invite
+/// lines; unset, empty or blank keeps the default) to the window's chat.
+fn set_chat_client(chat: &wordcraft_chat::Chat, value: Option<&str>) {
+    if let Some(cmd) = value.map(str::trim).filter(|c| !c.is_empty()) {
+        chat.set_client_command(cmd.to_string());
     }
 }
 
@@ -230,13 +242,24 @@ fn main() -> eframe::Result {
             load_prefs(&mut app);
             app.ui.window = restored;
             app.integrated_titlebar = cfg!(target_os = "macos");
-            let mut key_file = None;
-            if let Some(port) = control_port
-                && let Some((rx, file)) = control_server::start(port, cc.egui_ctx.clone(), wordcraft_control_key::settings_dir().as_deref())
+            let hub = wordcraft_chat::Hub::new(std::sync::Arc::new(control_server::SystemEnv));
+            let repaint = cc.egui_ctx.clone();
+            hub.set_notify(Box::new(move || repaint.request_repaint()));
+            let (port, rx) = control_server::ControlPort::new(cc.egui_ctx.clone(), hub.clone(), wordcraft_control_key::settings_dir());
+            if let Some(p) = control_port
+                && let Err(e) = port.open_flag(p)
             {
-                app = app.with_control(rx);
-                key_file = file;
+                log::error!("{e}");
             }
+            app = app.with_control(rx);
+            let chat = wordcraft_chat::Chat::new(hub, port.clone());
+            let chat = match wordcraft_control_key::settings_dir() {
+                Some(d) => chat.with_logs(d.join("chats")),
+                None => chat,
+            };
+            let chat = std::sync::Arc::new(chat);
+            set_chat_client(&chat, std::env::var(wordcraft_chat::CLIENT_ENV).ok().as_deref());
+            app.session.chat = Some(chat);
             for f in files {
                 if let Err(e) = app.run("file.open", serde_json::json!({"path": f})) {
                     log::warn!("{f}: {e}");
@@ -245,11 +268,32 @@ fn main() -> eframe::Result {
             Ok(Box::new(App(
                 app,
                 restored,
-                key_file,
+                port,
                 dialogs,
                 #[cfg(target_os = "macos")]
                 apple_events.connect(&cc.egui_ctx),
             )))
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wordcraft_chat::testing::{FakePort, TestEnv};
+    use wordcraft_chat::{Chat, Hub};
+
+    #[test]
+    fn the_chat_client_command_comes_from_the_environment() {
+        let line = |value: Option<&str>| {
+            let chat = Chat::new(Hub::new(TestEnv::at(1_000)), FakePort::closed());
+            set_chat_client(&chat, value);
+            chat.start().unwrap();
+            chat.invite("@pi").unwrap().line
+        };
+        for unset in [None, Some(""), Some(" \t ")] {
+            assert!(line(unset).starts_with("wordcraft-cli chat join 127.0.0.1:7981 "), "{unset:?}");
+        }
+        assert!(line(Some("  packaged-client chat ")).starts_with("packaged-client chat join 127.0.0.1:7981 "));
+    }
 }
