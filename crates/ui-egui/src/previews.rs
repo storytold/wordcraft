@@ -43,7 +43,7 @@ impl Previews {
         Box::new(|ui: &mut Ui, name: &str| {
             let key = format!("font:{name}");
             let tex: Option<TextureHandle> = ui.ctx().data(|d| d.get_temp::<TextureHandle>(egui::Id::new(&key)));
-            let (r, resp) = ui.allocate_exact_size(vec2(260.0, 24.0), Sense::click());
+            let (r, resp) = ui.allocate_exact_size(vec2(260.0, crate::widgets::COMBO_PREVIEW_ROW_H), Sense::click());
             let t = Tokens::get(ui.ctx());
             if resp.hovered() {
                 ui.painter().rect_filled(r, 3.0, t.hover);
@@ -329,7 +329,9 @@ pub fn table_style_tile(ui: &mut Ui, app: &mut WordApp, style: &str) -> Response
     if resp.hovered() {
         ui.painter().rect_filled(r, 3.0, t.hover);
     }
-    let key = format!("tstyle:{style}:{ppp}");
+    // Keyed by the style sheet too, so a modified table style redraws.
+    let skey = app.previews.styles_key(&app.session.doc, app.session.rev());
+    let key = format!("tstyle:{style}:{skey}:{ppp}");
     let doc = &app.session.doc;
     let tex = app.previews.get_or(ui.ctx(), &key, || {
         let mut tb = Table::new(5, 4, 100.0);

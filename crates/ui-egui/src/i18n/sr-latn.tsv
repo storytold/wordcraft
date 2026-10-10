@@ -168,7 +168,6 @@
 	Customize Quick Access Toolbar	Prilagodi traku za brzi pristup
 	Cut	Iseci
 	Dark Mode	Tamni režim
-	Dark mode	Tamni režim
 	Dashed	Isprekidano
 	Data	Podaci
 	Date & Time	Datum i vreme
@@ -459,7 +458,7 @@
 	OK	U redu
 	One	Jedna
 	One Page	Jedna strana
-	Only web (http, https) and email (mailto) links can be followed	Mogu se otvoriti samo veb (http, https) i e-mail (mailto) veze
+	Only web (http, https) and email (mailto) links can be followed	Mogu se otvoriti samo veb (http, https) i veze za e-poštu (mailto)
 	Open	Otvori
 	OpenDocument Text (*.odt)	OpenDocument tekst (*.odt)
 	Optional Hyphen	Opcionalna crtica
@@ -738,7 +737,7 @@
 	Transparency	Transparentnost
 	Triangle	Trougao
 	Two	Dva
-	Type a command, e.g. "insert table"	Unesite naredbu, npr. "insert table"
+	Type a command, e.g. "insert table"	Unesite naredbu, npr. "umetni tabelu"
 	Type Text	Unesi tekst
 	Underline	Podvučeno
 	Underline Words Only	Podvuci samo reči
@@ -887,3 +886,122 @@
 	Opening print dialog…	Otvara se dijalog za štampu…
 	Print failed: {error}	Štampanje neuspelo: {error}
 	Couldn't open {path}: {error}	Nije moguće otvoriti {path}: {error}
+	More templates →	Još šablona →
+	No templates match your search.	Nijedan šablon ne odgovara pretrazi.
+	Search for templates	Pretraži šablone
+	Column Selection	Izbor kolone
+	Style Inspector	Inspektor stilova
+	Inspect Styles at Selection	Pregledaj stilove izbora
+	Clear Formatting Level	Obriši nivo formatiranja
+	Characters	Znakovi
+	Direct formatting	Direktno formatiranje
+	Reset to Normal	Vrati na normalan stil
+	Clear Paragraph Formatting	Obriši formatiranje pasusa
+	Clear Character Style	Obriši stil znakova
+	Clear Character Formatting	Obriši formatiranje znakova
+	Clear All	Obriši sve
+	Paste Special	Specijalno lepljenje
+	Paste Special…	Specijalno lepljenje…
+	Paste as:	Nalepi kao:
+	The clipboard is empty.	Ostava je prazna.
+	Formatted Text	Formatirani tekst
+	Rich Text Format (RTF)	Obogaćeni tekst (RTF)
+	HTML Format	HTML format
+	Unformatted Text	Neformatirani tekst
+	Result	Rezultat
+	Keeps the fonts and formatting of the copied text.	Zadržava fontove i formatiranje kopiranog teksta.
+	Reads the clipboard's rich text and keeps its formatting.	Čita obogaćeni tekst (RTF) iz ostave i zadržava njegovo formatiranje.
+	Reads the clipboard's web content and keeps its formatting.	Čita veb sadržaj iz ostave i zadržava njegovo formatiranje.
+	Drops all formatting and pastes plain text.	Uklanja sve formatiranje i lepi običan tekst.
+	Advanced Find	Napredna pretraga
+	Advanced Find…	Napredna pretraga…
+	Go To…	Idi na…
+	Reading Highlight	Isticanje rezultata
+	New Table Style	Novi stil tabele
+	Modify Table Style	Izmeni stil tabele
+	New Table Style…	Novi stil tabele…
+	Modify Table Style…	Izmeni stil tabele…
+	Apply formatting to:	Primeni formatiranje na:
+	Whole Table	Cela tabela
+	Fill color:	Boja popune:
+	{count} items highlighted	Istaknuto stavki: {count}
+	{n} pt	{n} pt
+	Not {name}	Bez: {name}
+	Level {n}	Nivo {n}
+	Body Text	Osnovni tekst
+	{n} lines	Redova: {n}
+	At least {n}	Najmanje {n}
+	Exactly {n}	Tačno {n}
+	Centered	Centrirano
+	Character spacing	Razmak između znakova
+	Don't add space between paragraphs of the same style	Bez razmaka između pasusa istog stila
+	Don't hyphenate	Bez deljenja reči
+	Double strikethrough	Duplo precrtano
+	Drop cap	Ukrasno veliko slovo
+	First line	Prvi red
+	Font color	Boja fonta
+	Highlight	Isticanje
+	Justified	Obostrano poravnato
+	Left indent	Uvlačenje sleva
+	Line spacing	Proređenost
+	Outline level	Nivo konture
+	Raised/lowered	Podignuto/spušteno
+	Right indent	Uvlačenje zdesna
+	Scale	Razmera
+	Space after	Razmak posle
+	Space before	Razmak pre
+	Suppress line numbers	Bez brojeva redova
+	Underline color	Boja podvlačenja
+	Interface theme:	Tema interfejsa:
+	Interface\nTheme	Tema\ninterfejsa
+	Interface Theme	Tema interfejsa
+	Light	Svetla
+	Dark	Tamna
+	Use system setting	Prema podešavanju sistema
+	Letters	Pisma
+	E-mail Messages	Poruke e-pošte
+	Directory	Imenik
+	Normal Word Document	Običan Word dokument
+	If…Then…Else…	Ako…Onda…Inače…
+	If…Then…Else	Ako…Onda…Inače
+	Merge Record #	Broj zapisa spajanja
+	Skip Record If…	Preskoči zapis ako…
+	Skip Record If	Preskoči zapis ako
+	Equals:	Jednako:
+	Then insert:	Onda umetni:
+	Otherwise insert:	Inače umetni:
+	Courtesy Title	Oslovljavanje
+	First Name	Ime
+	Last Name	Prezime
+	Company	Preduzeće
+	Address	Adresa
+	City	Grad
+	State	Država/pokrajina
+	Postal Code	Poštanski broj
+	Country	Zemlja
+	(not matched)	(nije upareno)
+	Leave a recipient out of the merge when a field has this value.	Izostavi primaoca iz spajanja kada polje ima ovu vrednost.
+	Insert one text or another, depending on a field's value.	Umetni jedan ili drugi tekst, zavisno od vrednosti polja.
+	Select recipients first to match their fields.	Prvo izaberite primaoce da biste uparili njihova polja.
+	The recipient-list field that fills each part of an address block and greeting line.	Polje liste primalaca koje popunjava svaki deo bloka adrese i reda pozdrava.
+	No errors found: every merge field is in the recipient list.	Nema grešaka: svako polje za spajanje postoji u listi primalaca.
+	These merge fields aren't in the recipient list:	Ova polja za spajanje nisu u listi primalaca:
+	Add at least one field.	Dodajte bar jedno polje.
+	Add Field	Dodaj polje
+	Every field needs a name.	Svako polje mora imati naziv.
+	Field name	Naziv polja
+	Field names must be different.	Nazivi polja moraju biti različiti.
+	Fields:	Polja:
+	Field:	Polje:
+	Find:	Pronađi:
+	New Entry	Nova stavka
+	Recipient List	Lista primalaca
+	Recipients: {count}	Primalaca: {count}
+	Remove field	Ukloni polje
+	Remove recipient	Ukloni primaoca
+	Select recipients first to choose from their fields.	Prvo izaberite primaoce da biste birali među njihovim poljima.
+	Type a New List…	Unesi novu listu…
+	Type at least one recipient.	Unesite bar jednog primaoca.
+	Type the recipients, or load them from a file.	Unesite primaoce ili ih učitajte iz fajla.
+	Use an Existing List…	Koristi postojeću listu…
+	A file dialog is already open.	Dijalog za fajlove je već otvoren.

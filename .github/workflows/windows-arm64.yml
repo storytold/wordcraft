@@ -45,7 +45,12 @@ jobs:
           key: windows-arm64-package
       - name: Install WiX
         shell: pwsh
-        run: dotnet tool install --global wix --version 5.0.2
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true  # stop at the first failing command
+          dotnet tool install --global wix --version 5.0.2
+          # Installer dialogs and the finish page's "Launch WordCraft" (packaging/windows/wordcraft.wxs).
+          wix extension add -g WixToolset.UI.wixext/5.0.2
+          wix extension add -g WixToolset.Util.wixext/5.0.2
       - name: Build and package (unsigned)
         shell: pwsh
         env:

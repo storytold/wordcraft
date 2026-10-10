@@ -22,11 +22,31 @@ fn qat_button(ui: &mut Ui, app: &mut WordApp, icon: &str, tip: &str, id: &str, e
     }
 }
 
+/// Height of the macOS integrated title bar (#225). AppKit draws the traffic lights itself, centred
+/// in the standard 28 pt title-bar band at the top of the window; moving them would take AppKit
+/// calls (`unsafe`, which the workspace forbids). So the title bar is that band: the lights sit
+/// vertically centred in it, with the controls beside them.
+pub const MAC_TITLE_BAR: f32 = 28.0;
+/// The traffic lights as AppKit lays them out: button diameter, centre-to-centre pitch and the
+/// first button's left edge (8–10 pt depending on the macOS version; the larger value keeps the
+/// gap after them from shrinking).
+const MAC_LIGHT: f32 = 12.0;
+const MAC_LIGHT_PITCH: f32 = 20.0;
+const MAC_LIGHTS_LEFT: f32 = 10.0;
+/// Where title-bar content starts to the right of the traffic lights (the title bar here, the
+/// Backstage back button, #222): the end of the three lights plus the same gap the lights keep
+/// from the top of the window.
+pub const MAC_CONTENT_LEFT: f32 = MAC_LIGHTS_LEFT + 2.0 * MAC_LIGHT_PITCH + MAC_LIGHT + (MAC_TITLE_BAR - MAC_LIGHT) / 2.0;
+
 pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    let left = if app.integrated_titlebar { 78 } else { 8 };
+    // macOS: shorter, so the system's traffic lights are centred in it; the tallest controls
+    // shrink to keep a margin above and below them.
+    let mac = app.integrated_titlebar;
+    let left = if mac { MAC_CONTENT_LEFT as i8 } else { 8 };
+    let control_h = if mac { 22.0 } else { 26.0 };
     egui::Panel::top("title_bar")
-        .exact_size(38.0)
+        .exact_size(if mac { MAC_TITLE_BAR } else { 38.0 })
         .frame(egui::Frame::NONE.fill(t.title_bar).inner_margin(egui::Margin { left, right: 10, top: 0, bottom: 0 }))
         .show(ui, |ui| {
             let full = ui.max_rect();
@@ -60,8 +80,9 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                 if resp.on_hover_text(tl!("AutoSave saves every change to the file (needs a saved document)")).clicked() {
                     if saved_here {
                         app.toggle_autosave();
-                    } else if app.save_as_dialog() {
-                        app.autosave = true;
+                    } else {
+                        // AutoSave comes on once Save As has saved (maybe on a later frame, #94).
+                        let _ = app.save_as(crate::file_dialogs::AfterSave::AutoSave);
                     }
                 }
                 ui.add_space(8.0);
@@ -74,8 +95,8 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                 qat_end = ui.min_rect().max.x;
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // Account / community.
-                    let (r, resp) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
-                    ui.painter().circle_filled(r.center(), 12.0, t.accent);
+                    let (r, resp) = ui.allocate_exact_size(vec2(control_h, control_h), Sense::click());
+                    ui.painter().circle_filled(r.center(), control_h / 2.0 - 1.0, t.accent);
                     let initials: String = app.session.author.split_whitespace().filter_map(|w| w.chars().next()).take(2).collect();
                     ui.painter().text(r.center(), Align2::CENTER_CENTER, initials, semibold(10.5), egui::Color32::WHITE);
                     resp.on_hover_text(format!("{} — set your name in File › Options", app.session.author));
@@ -107,9 +128,15 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                         ui.add_space(8.0);
                     }
                     // Search ("Tell me").
-                    let (r, resp) = ui.allocate_exact_size(vec2(260.0, 26.0), Sense::click());
+                    let (r, resp) = ui.allocate_exact_size(vec2(260.0, control_h), Sense::click());
                     ui.painter().rect(r, 6.0, if resp.hovered() { t.input } else { t.ribbon }, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
-                    icons::paint(ui.painter(), Rect::from_min_size(r.min + vec2(8.0, 5.0), vec2(16.0, 16.0)), "search", t.text_dim, t.accent);
+                    icons::paint(
+                        ui.painter(),
+                        Rect::from_center_size(pos2(r.min.x + 16.0, r.center().y), vec2(16.0, 16.0)),
+                        "search",
+                        t.text_dim,
+                        t.accent,
+                    );
                     let ph = tl!("Search commands and help");
                     let pfont = TypeRung::Control.regular();
                     let ptrack = TypeRung::Control.tracking();
@@ -306,5 +333,20 @@ impl WordApp {
             self.word_count = (key, self.session.word_count());
         }
         self.word_count.1
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mac_title_bar_centres_and_clears_the_traffic_lights() {
+        // The lights are centred in the bar, and content keeps the same gap after them.
+        let margin = (MAC_TITLE_BAR - MAC_LIGHT) / 2.0;
+        let lights_end = MAC_LIGHTS_LEFT + 2.0 * MAC_LIGHT_PITCH + MAC_LIGHT;
+        assert_eq!(MAC_CONTENT_LEFT - lights_end, margin);
+        // `egui::Margin` is in `i8`.
+        assert!(MAC_CONTENT_LEFT <= f32::from(i8::MAX));
     }
 }

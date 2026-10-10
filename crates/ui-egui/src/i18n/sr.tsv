@@ -1,6 +1,7 @@
-# Serbian, Cyrillic script (sr) interface catalog. Mechanically transliterated from sr-latn.tsv
-# (see that file for the clean-room translation itself); edit sr-latn.tsv and re-run the
-# transliteration, don't hand-edit this file, or the two will drift apart.
+# Serbian, Cyrillic script (sr) interface catalog. Transliterated from sr-latn.tsv (see that file
+# for the clean-room translation itself); change both files together so they don't drift apart.
+# Product names, key names, shortcuts, code, URLs, schemes and file extensions stay in Latin
+# letters here too (`wordcraft-cli mcp`, Backspace, ⌘V, .docx, http, Markdown).
 #
 # Columns, separated by a TAB:
 #   context <TAB> English source <TAB> translation
@@ -71,7 +72,7 @@
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Прикажи документе са инвертованим бојама, као код Приказ › Промени режим. Чување, штампање и PDF нису погођени.
 	AutoSave saves every change to the file (needs a saved document)	Аутоматско чување уписује сваку измену у фајл (документ мора бити већ сачуван)
 	AutoText	Аутоматски текст
-	Backspace	Бацкспаце
+	Backspace	Backspace
 	Banded Columns	Тракасте колоне
 	Banded Rows	Тракасти редови
 	Before:	Пре:
@@ -172,7 +173,6 @@
 	Customize Quick Access Toolbar	Прилагоди траку за брзи приступ
 	Cut	Исеци
 	Dark Mode	Тамни режим
-	Dark mode	Тамни режим
 	Dashed	Испрекидано
 	Data	Подаци
 	Date & Time	Датум и време
@@ -245,10 +245,10 @@
 	Equation	Једначина
 	Eraser	Гумица
 	Even Page	Парна страна
-	Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel.	Свака наредба је доступна скриптама и AI агентима: покрените `wordcraft-cli мцп` за MCP сервер, или покрените апликацију са `--control <port>` за JSON контролни канал.
+	Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel.	Свака наредба је доступна скриптама и AI агентима: покрените `wordcraft-cli mcp` за MCP сервер, или покрените апликацију са `--control <port>` за JSON контролни канал.
 	Export	Извоз
 	Export a copy to share (PDF, Word document)	Извези копију за дељење (PDF, Word документ)
-	Export Page as PNG	Извези страну као ПНГ
+	Export Page as PNG	Извези страну као PNG
 	Export PDF	Извези PDF
 	Exported {path}	Извезено: {path}
 	Extend Selection	Прошири избор
@@ -264,7 +264,7 @@
 	Finish & Merge	Заврши и споји
 	Finish &\nMerge	Заврши\nи споји
 	First Column	Прва колона
-	First commit	Први цоммит
+	First commit	Први commit
 	First line:	Први ред:
 	Fixed Column Width	Фиксна ширина колоне
 	Focus	Фокус
@@ -287,7 +287,7 @@
 	General	Опште
 	Go To	Иди на
 	Go to	Иди на
-	Go To (⌘⌥G)	Иди на (⌘⌥Г)
+	Go To (⌘⌥G)	Иди на (⌘⌥G)
 	Grab bag	Разно
 	Greeting Line	Ред поздрава
 	Greeting\nLine	Ред\nпоздрава
@@ -368,7 +368,7 @@
 	Language	Језик
 	Lasso	Ласо
 	Last Column	Задња колона
-	Last commit	Задњи цоммит
+	Last commit	Задњи commit
 	Layout	Распоред
 	Layout Summary	Преглед распореда
 	Left	Лево
@@ -403,16 +403,16 @@
 	Mark Entry	Означи ставку
 	Mark\nCitation	Означи\nцитат
 	Mark\nEntry	Означи\nставку
-	Markdown (*.md)	Маркдоwн (*.md)
+	Markdown (*.md)	Markdown (*.md)
 	Match case	Осетљиво на велика/мала слова
 	Match Fields	Упореди поља
 	Matrix	Матрица
 	Merge	Споји
 	Merge Cells	Споји ћелије
 	Merge Formatting	Споји форматирање
-	Merged PRs	Спојени ПР-ови
+	Merged PRs	Спојени PR-ови
 	Mirrored	Зрцаљено
-	MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.	MIT ОР Apache-2.0. Ауторска права (ц) 2026 ArtCraft Team и сарадници на WordCraft-у.
+	MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.	MIT OR Apache-2.0. Ауторска права (c) 2026 ArtCraft Team и сарадници на WordCraft-у.
 	Moderate	Умерено
 	Modify Style	Измени стил
 	Modify…	Измени…
@@ -459,13 +459,13 @@
 	Numbering	Нумерација
 	Object	Објекат
 	Odd Page	Непарна страна
-	Office 2003 Default	Оффице 2003 подразумевано
+	Office 2003 Default	Office 2003 подразумевано
 	OK	У реду
 	One	Једна
 	One Page	Једна страна
-	Only web (http, https) and email (mailto) links can be followed	Могу се отворити само веб (хттп, хттпс) и е-маил (маилто) везе
+	Only web (http, https) and email (mailto) links can be followed	Могу се отворити само веб (http, https) и везе за е-пошту (mailto)
 	Open	Отвори
-	OpenDocument Text (*.odt)	ОпенДоцумент текст (*.odt)
+	OpenDocument Text (*.odt)	OpenDocument текст (*.odt)
 	Optional Hyphen	Опционална цртица
 	Options	Опције
 	Orientation	Оријентација
@@ -504,7 +504,7 @@
 	Paragraph Up	Пасус нагоре
 	Paragraphs	Пасуси
 	Paste	Налепи
-	Paste (⌘V)	Налепи (⌘В)
+	Paste (⌘V)	Налепи (⌘V)
 	Paste Formatting	Налепи форматирање
 	Paste: Keep Text Only	Налепи: само текст
 	Paste: Merge Formatting	Налепи: споји форматирање
@@ -694,7 +694,7 @@
 	Symbol	Симбол
 	Symbols	Симболи
 	Synonyms	Синоними
-	Tab	Таб
+	Tab	Tab
 	Table	Табела
 	Table Column Width	Ширина колоне табеле
 	Table Design	Дизајн табеле
@@ -721,7 +721,7 @@
 	Text:	Текст:
 	Text\nBox	Оквир\nза текст
 	Text\nDirection	Смер\nтекста
-	That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.	Тај формат не чува све, па је документ и даље отворен. Сачувајте га као Word документ (.доцx) да бисте наставили.
+	That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.	Тај формат не чува све, па је документ и даље отворен. Сачувајте га као Word документ (.docx) да бисте наставили.
 	The new style takes the formatting of the current paragraph.	Нови стил преузима форматирање тренутног пасуса.
 	Theme Colors	Боје теме
 	Theme Fonts	Фонтови теме
@@ -742,7 +742,7 @@
 	Transparency	Транспарентност
 	Triangle	Троугао
 	Two	Два
-	Type a command, e.g. "insert table"	Унесите наредбу, нпр. "инсерт табле"
+	Type a command, e.g. "insert table"	Унесите наредбу, нпр. "уметни табелу"
 	Type Text	Унеси текст
 	Underline	Подвучено
 	Underline Words Only	Подвуци само речи
@@ -778,7 +778,7 @@
 	Wide	Широко
 	Widow/Orphan Control	Контрола усамљених редова
 	Widow/Orphan control	Контрола усамљених редова
-	Wildcards (regex)	Џокер знаци (регеx)
+	Wildcards (regex)	Џокер знаци (regex)
 	Window	Прозор
 	Word Count	Број речи
 	Word document (*.docx)	Word документ (*.docx)
@@ -851,7 +851,7 @@
 	Delete Back in Equation	Обриши уназад у формули
 	Delete in Equation	Обриши у формули
 	Edit Equation	Уреди формулу
-	Enter in Equation	Ентер у формули
+	Enter in Equation	Enter у формули
 	Equation Gallery	Галерија формула
 	Equation Info	Информације о формули
 	Equation Number	Број формуле
@@ -891,3 +891,122 @@
 	Opening print dialog…	Отвара се дијалог за штампу…
 	Print failed: {error}	Штампање неуспело: {error}
 	Couldn't open {path}: {error}	Није могуће отворити {path}: {error}
+	More templates →	Још шаблона →
+	No templates match your search.	Ниједан шаблон не одговара претрази.
+	Search for templates	Претражи шаблоне
+	Column Selection	Избор колоне
+	Style Inspector	Инспектор стилова
+	Inspect Styles at Selection	Прегледај стилове избора
+	Clear Formatting Level	Обриши ниво форматирања
+	Characters	Знакови
+	Direct formatting	Директно форматирање
+	Reset to Normal	Врати на нормалан стил
+	Clear Paragraph Formatting	Обриши форматирање пасуса
+	Clear Character Style	Обриши стил знакова
+	Clear Character Formatting	Обриши форматирање знакова
+	Clear All	Обриши све
+	Paste Special	Специјално лепљење
+	Paste Special…	Специјално лепљење…
+	Paste as:	Налепи као:
+	The clipboard is empty.	Остава је празна.
+	Formatted Text	Форматирани текст
+	Rich Text Format (RTF)	Обогаћени текст (RTF)
+	HTML Format	HTML формат
+	Unformatted Text	Неформатирани текст
+	Result	Резултат
+	Keeps the fonts and formatting of the copied text.	Задржава фонтове и форматирање копираног текста.
+	Reads the clipboard's rich text and keeps its formatting.	Чита обогаћени текст (RTF) из оставе и задржава његово форматирање.
+	Reads the clipboard's web content and keeps its formatting.	Чита веб садржај из оставе и задржава његово форматирање.
+	Drops all formatting and pastes plain text.	Уклања све форматирање и лепи обичан текст.
+	Advanced Find	Напредна претрага
+	Advanced Find…	Напредна претрага…
+	Go To…	Иди на…
+	Reading Highlight	Истицање резултата
+	New Table Style	Нови стил табеле
+	Modify Table Style	Измени стил табеле
+	New Table Style…	Нови стил табеле…
+	Modify Table Style…	Измени стил табеле…
+	Apply formatting to:	Примени форматирање на:
+	Whole Table	Цела табела
+	Fill color:	Боја попуне:
+	{count} items highlighted	Истакнуто ставки: {count}
+	{n} pt	{n} пт
+	Not {name}	Без: {name}
+	Level {n}	Ниво {n}
+	Body Text	Основни текст
+	{n} lines	Редова: {n}
+	At least {n}	Најмање {n}
+	Exactly {n}	Тачно {n}
+	Centered	Центрирано
+	Character spacing	Размак између знакова
+	Don't add space between paragraphs of the same style	Без размака између пасуса истог стила
+	Don't hyphenate	Без дељења речи
+	Double strikethrough	Дупло прецртано
+	Drop cap	Украсно велико слово
+	First line	Први ред
+	Font color	Боја фонта
+	Highlight	Истицање
+	Justified	Обострано поравнато
+	Left indent	Увлачење слева
+	Line spacing	Проређеност
+	Outline level	Ниво контуре
+	Raised/lowered	Подигнуто/спуштено
+	Right indent	Увлачење здесна
+	Scale	Размера
+	Space after	Размак после
+	Space before	Размак пре
+	Suppress line numbers	Без бројева редова
+	Underline color	Боја подвлачења
+	Interface theme:	Тема интерфејса:
+	Interface\nTheme	Тема\nинтерфејса
+	Interface Theme	Тема интерфејса
+	Light	Светла
+	Dark	Тамна
+	Use system setting	Према подешавању система
+	Letters	Писма
+	E-mail Messages	Поруке е-поште
+	Directory	Именик
+	Normal Word Document	Обичан Word документ
+	If…Then…Else…	Ако…Онда…Иначе…
+	If…Then…Else	Ако…Онда…Иначе
+	Merge Record #	Број записа спајања
+	Skip Record If…	Прескочи запис ако…
+	Skip Record If	Прескочи запис ако
+	Equals:	Једнако:
+	Then insert:	Онда уметни:
+	Otherwise insert:	Иначе уметни:
+	Courtesy Title	Ословљавање
+	First Name	Име
+	Last Name	Презиме
+	Company	Предузеће
+	Address	Адреса
+	City	Град
+	State	Држава/покрајина
+	Postal Code	Поштански број
+	Country	Земља
+	(not matched)	(није упарено)
+	Leave a recipient out of the merge when a field has this value.	Изостави примаоца из спајања када поље има ову вредност.
+	Insert one text or another, depending on a field's value.	Уметни један или други текст, зависно од вредности поља.
+	Select recipients first to match their fields.	Прво изаберите примаоце да бисте упарили њихова поља.
+	The recipient-list field that fills each part of an address block and greeting line.	Поље листе прималаца које попуњава сваки део блока адресе и реда поздрава.
+	No errors found: every merge field is in the recipient list.	Нема грешака: свако поље за спајање постоји у листи прималаца.
+	These merge fields aren't in the recipient list:	Ова поља за спајање нису у листи прималаца:
+	Add at least one field.	Додајте бар једно поље.
+	Add Field	Додај поље
+	Every field needs a name.	Свако поље мора имати назив.
+	Field name	Назив поља
+	Field names must be different.	Називи поља морају бити различити.
+	Fields:	Поља:
+	Field:	Поље:
+	Find:	Пронађи:
+	New Entry	Нова ставка
+	Recipient List	Листа прималаца
+	Recipients: {count}	Прималаца: {count}
+	Remove field	Уклони поље
+	Remove recipient	Уклони примаоца
+	Select recipients first to choose from their fields.	Прво изаберите примаоце да бисте бирали међу њиховим пољима.
+	Type a New List…	Унеси нову листу…
+	Type at least one recipient.	Унесите бар једног примаоца.
+	Type the recipients, or load them from a file.	Унесите примаоце или их учитајте из фајла.
+	Use an Existing List…	Користи постојећу листу…
+	A file dialog is already open.	Дијалог за фајлове је већ отворен.

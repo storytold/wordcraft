@@ -364,7 +364,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 }
             }
         }
-        Draw::Mark { x, baseline, size, ch } => {
+        Draw::Mark { x, baseline, size, ch, color: mark } => {
             let face = wordcraft_fonts::word::resolve("Source Sans 3", false, false).face;
             let gid = face.glyph_for(*ch);
             let face = if gid == 0 {
@@ -378,7 +378,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             let gid = face.glyph_for(*ch);
             let o = FontDb::global().outline(&face, gid);
             let k = *size as f64 / face.upem.max(1.0);
-            ctx.set_paint(color(opts.ink(opts.mark_color), 0.9));
+            ctx.set_paint(color(opts.ink(mark.unwrap_or(opts.mark_color)), 0.9));
             ctx.set_transform(view * Affine::translate((*x as f64, *baseline as f64)) * Affine::scale(k));
             ctx.fill_path(&o);
         }
@@ -429,6 +429,13 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 ctx.set_paint(color(opts.ink(*s), 1.0));
                 ctx.set_stroke(kurbo::Stroke::new(stroke_width.max(0.25) as f64));
                 ctx.stroke_path(&path);
+            }
+        }
+        Draw::Turned { x, y, turn, items } => {
+            let m = Affine::new(Draw::turn_matrix(*turn, *x, *y).map(f64::from));
+            let local = m.inverse().transform_rect_bbox(*visible);
+            for it in items {
+                draw(ctx, doc, it, view * m, &local, opts);
             }
         }
     }
@@ -521,6 +528,28 @@ mod tests {
         assert!(dark > 30, "dark {dark}");
         assert_eq!(img.pixel(5, 5), [255, 255, 255, 255]);
         assert!(!img.to_png().is_empty());
+    }
+
+    /// Table Layout › Text Direction (#226): a turned cell's text is painted running down the
+    /// cell, not across it.
+    #[test]
+    fn turned_cell_text_is_painted_turned() {
+        use wordcraft_doc::props::TextDirection;
+        let ink = |dir: TextDirection| {
+            let mut d = Document::from_text("before\nafter");
+            let mut t = wordcraft_doc::Table::new(1, 2, 400.0);
+            t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("WWWWWWWWWWWW", Default::default()))];
+            t.rows[0].cells[0].props.text_direction = dir;
+            d.insert_block(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+            let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+            let img = render_page(&d, &l.pages[0], 1.0, &RenderOptions::default());
+            // Dark pixels inside the first cell (x 72..272, clear of its borders), well below
+            // the first text line.
+            (80..264).flat_map(|x| (140..190).map(move |y| (x, y))).filter(|(x, y)| img.pixel(*x, *y)[0] < 128).count()
+        };
+        assert_eq!(ink(TextDirection::Horizontal), 0, "horizontal text stays in its line");
+        assert!(ink(TextDirection::Down) > 30, "down");
+        assert!(ink(TextDirection::Up) > 30, "up");
     }
 
     #[test]

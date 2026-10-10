@@ -860,6 +860,14 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.line(&[(6.0, 8.5), (11.0, 8.5)]);
             pen.line(&[(8.5, 6.0), (8.5, 11.0)]);
         }
+        "zoomIn" | "zoomOut" => {
+            pen.circle(8.5, 8.5, 5.5, c);
+            pen.line_c(&[(12.5, 12.5), (17.5, 17.5)], a);
+            pen.line(&[(6.0, 8.5), (11.0, 8.5)]);
+            if name == "zoomIn" {
+                pen.line(&[(8.5, 6.0), (8.5, 11.0)]);
+            }
+        }
         "zoom100" => pen.text(10.0, 10.0, 7.5, "100", a, true),
         "onePage" => pen.page(5.0, 2.0, 15.0, 18.0),
         "multiplePages" => {
@@ -873,6 +881,12 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
         "darkMode" => {
             pen.fcircle(10.0, 10.0, 7.0, c);
             pen.fcircle(13.0, 8.0, 6.0, Color32::from_rgba_unmultiplied(255, 255, 255, 230));
+        }
+        "interfaceTheme" => {
+            // A window, its right half dark: light, dark or both (follow the system).
+            pen.frect(10.0, 3.5, 17.5, 16.5, c);
+            pen.rect(2.5, 3.5, 17.5, 16.5, c);
+            pen.line_c(&[(2.5, 6.5), (10.0, 6.5)], a);
         }
         "newWindow" => {
             pen.rect(2.5, 5.0, 13.0, 15.0, c);

@@ -4870,6 +4870,7 @@ dependencies = [
  "fmv-macos-events",
  "getrandom 0.3.4",
  "log",
+ "pollster 0.4.0",
  "rfd",
  "serde_json",
  "winresource",
@@ -4994,6 +4995,7 @@ dependencies = [
 name = "wordcraft-layout"
 version = "0.4.0"
 dependencies = [
+ "js-sys",
  "log",
  "serde",
  "serde_json",
@@ -5026,6 +5028,7 @@ dependencies = [
  "hayro-interpret",
  "hayro-syntax",
  "image",
+ "js-sys",
  "krilla",
  "kurbo",
  "log",
@@ -5065,6 +5068,7 @@ dependencies = [
  "egui",
  "egui_kittest",
  "image",
+ "js-sys",
  "log",
  "serde",
  "serde_json",
