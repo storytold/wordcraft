@@ -138,6 +138,9 @@ pub struct ParaLayout {
     pub drop_cap: Option<(usize, u8, f32)>,
     /// Clusters after which the line may break with a hyphen (soft hyphens, auto hyphenation), sorted.
     pub hyph_after: Vec<u32>,
+    /// The text drawn by clusters that stand for an object (field results, note numbers,
+    /// equations) rather than for the paragraph's own text, by cluster index, sorted.
+    pub shown: Vec<(usize, String)>,
 }
 
 /// Inputs that change a paragraph's layout beyond its own content.
@@ -177,6 +180,8 @@ struct Builder<'a> {
     style_index: std::collections::HashMap<(String, u32, bool), u16>,
     glyphs: Vec<Glyph>,
     clusters: Vec<Cluster>,
+    /// Text drawn by clusters that stand for an object, by cluster index (see `ParaLayout::shown`).
+    shown: Vec<(usize, String)>,
 }
 
 impl<'a> Builder<'a> {
@@ -189,7 +194,7 @@ impl<'a> Builder<'a> {
             face.id(),
             rc.strike || rc.double_strike || rc.link.is_some(),
         );
-        let key = (format!("{}|{:?}|{:?}|{:?}|{:?}|{}", key.0, rc.highlight, rc.shading, rc.ins, rc.del, rc.hidden), key.1, key.2);
+        let key = (format!("{}|{:?}|{:?}|{:?}|{:?}|{}|{:?}", key.0, rc.highlight, rc.shading, rc.ins, rc.del, rc.hidden, rc.border), key.1, key.2);
         if let Some(i) = self.style_index.get(&key) {
             return *i;
         }
@@ -326,6 +331,7 @@ impl<'a> Builder<'a> {
         let g0 = first.g0;
         let style = first.style;
         let g1 = added.last().map(|c| c.g1).unwrap_or(g0);
+        self.shown.push((self.clusters.len(), text.to_string()));
         self.clusters.push(Cluster { start, end, adv: x, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, dot: false });
     }
 }
@@ -353,7 +359,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
             None => Arc::new(doc.styles.resolve_char(para_style, c)),
         }
     };
-    let mut b = Builder { env, styles: Vec::new(), style_index: Default::default(), glyphs: Vec::new(), clusters: Vec::new() };
+    let mut b = Builder { env, styles: Vec::new(), style_index: Default::default(), glyphs: Vec::new(), clusters: Vec::new(), shown: Vec::new() };
     let mark_rc = resolve(&p.mark);
     let mark_style = b.style(&mark_rc, None, false);
     let mut has_page_fields = false;
@@ -443,7 +449,9 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                                 let maxw = (env.width - rp.indent_left.max(0.0) - rp.indent_right.max(0.0)).max(18.0);
                                 let (w, h) = (w.clamp(1.0, 4000.0), h.clamp(1.0, 4000.0));
                                 let s = if w > maxw { maxw / w } else { 1.0 };
-                                push(&mut b, ClKind::Object(k), w * s, h * s);
+                                // The line makes room for effects (shadows) around the picture too.
+                                let [el, et, er, eb] = float.effect_extent();
+                                push(&mut b, ClKind::Object(k), w * s + el + er, h * s + et + eb);
                             } else {
                                 push(&mut b, ClKind::Object(k), 0.0, 0.0);
                             }
@@ -537,6 +545,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         styles: b.styles,
         glyphs: b.glyphs,
         clusters: b.clusters,
+        shown: b.shown,
         lines: Vec::new(),
         label,
         height: 0.0,
@@ -584,6 +593,9 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
     let base_right = (width - rp.indent_right).max(1.0);
     let default_tab = env.doc.settings.default_tab;
     let first_left = rp.indent_left + rp.indent_first;
+    // Word 2013+ (compatibility mode 15) fits more text on a justified line by shrinking its
+    // spaces, up to MAX_SPACE_SHRINK of their width; never on lines with tabs.
+    let shrink_spaces = rp.align == Align::Justify && env.doc.settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT;
     let hanging_at = if rp.indent_first < 0.0 { Some(rp.indent_left) } else { None };
     let n = pl.clusters.len();
     let mut hcache: Vec<(u16, u32, f32)> = Vec::new();
@@ -667,6 +679,8 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
         let mut end = LineEnd::Para;
         let mut j = i;
         let mut pending_tab: Option<(usize, TabStop, f32)> = None; // tab cluster, stop, x where tab started
+        let mut space_w = 0.0f32; // width of the spaces so far on this line
+        let mut has_tab = false;
         while j < n {
             let Some(c) = pl.clusters.get(j).cloned() else { break };
             match c.kind {
@@ -682,6 +696,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
                     break;
                 }
                 ClKind::Tab => {
+                    has_tab = true;
                     resolve_tab(pl, &mut pending_tab, &mut xs, c0, x, &mut x);
                     let stop = next_tab(x, &rp.tabs, default_tab, hanging_at);
                     xs.push(x);
@@ -728,7 +743,8 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
                     _ => false,
                 }
             });
-            let fits = absorbs || x + c.adv <= right_edge + 0.01 || c.kind == ClKind::Space || c.kind == ClKind::Marker;
+            let shrink = if shrink_spaces && !has_tab { space_w * MAX_SPACE_SHRINK } else { 0.0 };
+            let fits = absorbs || x + c.adv <= right_edge + shrink + 0.01 || c.kind == ClKind::Space || c.kind == ClKind::Marker;
             if !fits && j > c0 {
                 // Wrap: back up to the last break opportunity on this line.
                 end = LineEnd::Wrap;
@@ -753,6 +769,9 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
             }
             xs.push(x);
             x += c.adv;
+            if c.kind == ClKind::Space {
+                space_w += c.adv;
+            }
             // Decimal/center/right tab: shift pending text as it grows.
             if let Some((tj, stop, tx)) = pending_tab {
                 let seg_w = x - tx;
@@ -798,7 +817,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
                 if !hyph {
                     last_break = Some(j);
                     last_plain = Some((j, x));
-                } else if x + hyphen_glyph(pl, c.style, &mut hcache).2 <= right_edge + 0.01 {
+                } else if x + hyphen_glyph(pl, c.style, &mut hcache).2 <= right_edge + shrink + 0.01 {
                     last_break = Some(j);
                 }
             }
@@ -834,6 +853,8 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
 
         // Vertical metrics.
         let (mut asc, mut desc) = (0.0f32, 0.0f32);
+        // The tallest picture on the line (it sits on the baseline).
+        let mut obj_asc = 0.0f32;
         let mut any = false;
         let dropped = pl.drop_cap.map_or(0, |d| d.0);
         for (k, c) in pl.clusters.get(c0..c1).into_iter().flatten().enumerate() {
@@ -841,8 +862,11 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
                 continue;
             }
             if let Some(st) = pl.styles.get(c.style as usize) {
+                // A picture sits on the baseline of its run: the line keeps that font's ascent
+                // and descent, and grows above the baseline to fit a taller picture.
                 let (a, d) = if matches!(c.kind, ClKind::Object(_)) && c.obj_h > 0.0 {
-                    (c.obj_h, 0.0)
+                    obj_asc = obj_asc.max(c.obj_h);
+                    (st.ascent, st.descent)
                 } else {
                     (st.ascent + st.shift.max(0.0), st.descent + (-st.shift).max(0.0))
                 };
@@ -864,10 +888,16 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
             asc = asc.max(st.ascent);
             desc = desc.max(st.descent);
         }
+        // Line spacing scales the text's height, never a picture's: a line is at least as tall
+        // as its tallest picture plus the descent below the baseline.
+        // shortcut: Word leaves less than a full descent below a line of only pictures (0.5pt to
+        // 1.9pt in docxide-pdf's header fixtures case121/case123, where the descent is 3.3pt), and
+        // no rule tried so far (none, only the text's descent) matched both; it needs Word probes.
         let natural = asc + desc;
+        let pictures = if obj_asc > asc { obj_asc + desc } else { 0.0 };
         let height = match rp.line_spacing {
-            LineSpacing::Multiple(m) => natural * m,
-            LineSpacing::AtLeast(v) => natural.max(v),
+            LineSpacing::Multiple(m) => (natural * m).max(pictures),
+            LineSpacing::AtLeast(v) => natural.max(pictures).max(v),
             LineSpacing::Exactly(v) => v,
         };
         let baseline = top + height - desc;
@@ -896,7 +926,11 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
             }
         }
         let justify = (rp.align == Align::Justify && end == LineEnd::Wrap) || rp.align == Align::Distribute;
-        if justify && slack > 0.0 {
+        // A line that only fits with shrunk spaces is shrunk, the last line of the paragraph too.
+        let shrink = shrink_spaces && slack < 0.0 && last_tab.is_none();
+        if shrink {
+            shrink_line_spaces(pl, &mut xs, c0, c1, content_end, slack);
+        } else if justify && slack > 0.0 {
             // Spaces inside the content (after the last tab).
             let spaces: Vec<usize> = (align_from..c1)
                 .filter(|k| {
@@ -993,6 +1027,39 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
 
 /// Word's default hyphenation zone (0.25"), points.
 const HYPHENATION_ZONE: f32 = 18.0;
+
+/// How much of their width the spaces of a justified line may give up to fit more text (Word
+/// 2013+, compatibility mode 15).
+const MAX_SPACE_SHRINK: f32 = 0.2;
+
+/// Take `-slack` (an overflow) out of the line's inner spaces, in proportion to their widths and
+/// never more than [`MAX_SPACE_SHRINK`] of them. Trailing spaces hang and are left alone.
+fn shrink_line_spaces(pl: &ParaLayout, xs: &mut [f32], c0: usize, c1: usize, content_end: f32, slack: f32) {
+    let spaces: Vec<(usize, f32)> = (c0..c1)
+        .filter_map(|k| {
+            let c = pl.clusters.get(k).filter(|c| c.kind == ClKind::Space)?;
+            (xs.get(k - c0).copied().unwrap_or(f32::MAX) < content_end - 0.01).then_some((k, c.adv))
+        })
+        .collect();
+    let total: f32 = spaces.iter().map(|s| s.1).sum();
+    if total <= 0.0 || !slack.is_finite() {
+        return;
+    }
+    let ratio = (-slack / total).clamp(0.0, MAX_SPACE_SHRINK);
+    let mut take = 0.0;
+    let mut next = spaces.iter().peekable();
+    for k in c0..c1 {
+        if let Some(v) = xs.get_mut(k - c0) {
+            *v -= take;
+        }
+        if let Some((_, adv)) = next.next_if(|s| s.0 == k) {
+            take += adv * ratio;
+        }
+    }
+    if let Some(v) = xs.last_mut() {
+        *v -= take;
+    }
+}
 
 /// The hyphen glyph and advance in a style (cached per paragraph).
 fn hyphen_glyph(pl: &ParaLayout, style: u16, cache: &mut Vec<(u16, u32, f32)>) -> (u16, u32, f32) {

@@ -73,6 +73,10 @@ pub struct Num {
     pub abstract_id: u32,
     /// Per-level start overrides (level, start).
     pub start_overrides: Vec<(u8, u32)>,
+    /// Levels this list defines itself instead of taking them from its abstract list (level,
+    /// definition): Word's `w:lvlOverride/w:lvl`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub level_overrides: Vec<(u8, Level)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
@@ -194,6 +198,9 @@ impl Numbering {
         self.abstracts.iter().find(|a| a.id == n.abstract_id)
     }
     pub fn level(&self, num: u32, level: u8) -> Option<&Level> {
+        if let Some((_, l)) = self.num(num)?.level_overrides.iter().find(|(i, _)| *i == level) {
+            return Some(l);
+        }
         self.abstract_of(num)?.levels.get(level as usize)
     }
     /// Create a new list of `kind`; returns the `num` id.
@@ -201,7 +208,7 @@ impl Numbering {
         let aid = self.abstracts.iter().map(|a| a.id + 1).max().unwrap_or(0);
         self.abstracts.push(AbstractNum { id: aid, name: None, levels: levels_for(kind) });
         let nid = self.nums.iter().map(|n| n.id + 1).max().unwrap_or(1).max(1);
-        self.nums.push(Num { id: nid, abstract_id: aid, start_overrides: Vec::new() });
+        self.nums.push(Num { id: nid, abstract_id: aid, ..Default::default() });
         nid
     }
     /// A new `num` that restarts numbering of an existing list.
@@ -209,7 +216,7 @@ impl Numbering {
         let a = self.num(num)?.abstract_id;
         let nid = self.nums.iter().map(|n| n.id + 1).max().unwrap_or(1).max(1);
         let starts = self.abstracts.iter().find(|x| x.id == a).map(|x| x.levels.iter().enumerate().map(|(i, l)| (i as u8, l.start)).collect());
-        self.nums.push(Num { id: nid, abstract_id: a, start_overrides: starts.unwrap_or_default() });
+        self.nums.push(Num { id: nid, abstract_id: a, start_overrides: starts.unwrap_or_default(), ..Default::default() });
         Some(nid)
     }
     /// Find an existing list whose first level matches `kind`, so consecutive bullet clicks reuse it.
@@ -238,7 +245,9 @@ impl Counters {
         let n = numbering.num(num)?;
         let abs = numbering.abstract_of(num)?;
         let lv = (level as usize).min(8);
-        let def = abs.levels.get(lv)?.clone();
+        // This list's own definition of a level wins over its abstract list's.
+        let level_def = |k: usize| numbering.level(num, k as u8);
+        let def = level_def(lv)?.clone();
         let st = self.state.entry(abs.id).or_insert([0; 9]);
         if let std::collections::hash_map::Entry::Vacant(e) = self.seen.entry(num) {
             e.insert(true);
@@ -270,8 +279,8 @@ impl Counters {
                 chars.next();
                 let k = (d as usize).saturating_sub(1).min(8);
                 let val = vals.get(k).copied().unwrap_or(0);
-                let val = if val == 0 { abs.levels.get(k).map(|l| l.start).unwrap_or(1) } else { val };
-                let fmt = if def.legal && k != lv { NumFormat::Decimal } else { abs.levels.get(k).map(|l| l.format).unwrap_or(NumFormat::Decimal) };
+                let val = if val == 0 { level_def(k).map(|l| l.start).unwrap_or(1) } else { val };
+                let fmt = if def.legal && k != lv { NumFormat::Decimal } else { level_def(k).map(|l| l.format).unwrap_or(NumFormat::Decimal) };
                 label.push_str(&fmt.format(val));
             } else {
                 label.push(c);
@@ -284,6 +293,27 @@ impl Counters {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_list_s_own_level_definitions_win() {
+        // A specification's article numbers: level 1 counts parts with no label of its own, level 2
+        // shows "part.article" with a zero-padded article (Word's lvlOverride/lvl).
+        let mut n = Numbering::default();
+        let id = n.add_list(ListKind::Numbered);
+        let lvl = |format, text: &str| Level { format, text: text.into(), ..Level::default() };
+        if let Some(num) = n.nums.iter_mut().find(|x| x.id == id) {
+            num.level_overrides = vec![(1, lvl(NumFormat::Decimal, "")), (2, lvl(NumFormat::DecimalZero, "%2.%3"))];
+        }
+        let mut c = Counters::default();
+        assert_eq!(c.next_label(&n, id, 1).unwrap().0, "");
+        assert_eq!(c.next_label(&n, id, 2).unwrap().0, "1.01");
+        assert_eq!(c.next_label(&n, id, 2).unwrap().0, "1.02");
+        assert_eq!(c.next_label(&n, id, 1).unwrap().0, "");
+        assert_eq!(c.next_label(&n, id, 2).unwrap().0, "2.01");
+        // Levels it doesn't define still come from the abstract list.
+        assert_eq!(c.next_label(&n, id, 0).unwrap().0, "1.");
+        assert_eq!(n.level(id, 2).map(|l| l.format), Some(NumFormat::DecimalZero));
+    }
 
     #[test]
     fn numbered_labels() {

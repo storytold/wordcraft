@@ -84,7 +84,11 @@ fn extract_text(bytes: &[u8]) -> Vec<String> {
         fn draw_path(&mut self, _: &kurbo::BezPath, _: kurbo::Affine, _: &Paint<'_>, _: &PathDrawMode) {}
         fn push_clip_path(&mut self, _: &ClipPath) {}
         fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
-        fn draw_glyph(&mut self, g: &Glyph<'_>, _: kurbo::Affine, _: kurbo::Affine, _: &Paint<'_>, _: &GlyphDrawMode) {
+        fn draw_glyph(&mut self, g: &Glyph<'_>, _: kurbo::Affine, _: kurbo::Affine, _: &Paint<'_>, mode: &GlyphDrawMode) {
+            // Synthetic bold fills and then strokes each glyph: one character, two draws.
+            if matches!(mode, GlyphDrawMode::Stroke(_)) {
+                return;
+            }
             match g.as_unicode() {
                 Some(hayro_cmap::BfString::Char(c)) => self.0.push(c),
                 Some(hayro_cmap::BfString::String(s)) => self.0.push_str(&s),
@@ -232,4 +236,155 @@ fn shapes_have_paths() {
     assert_eq!(parse_iso("2024-02-03T04:05:06Z"), Some((2024, 2, 3, 4, 5, 6)));
     assert_eq!(parse_iso("garbage"), None);
     assert_eq!(civil(0), (1970, 1, 1, 0, 0, 0));
+}
+
+#[test]
+fn fields_put_their_shown_text_in_the_text_layer() {
+    // "Page 1 of 2" in the footer: the page fields' numbers, not the objects' placeholder
+    // characters, are what copying, search and screen readers get.
+    let mut d = Document::new();
+    let mut f = Paragraph::with_text("Page  of ", CharProps::default());
+    let field = |instr: &str| InlineObject::Field { instr: instr.into(), result: String::new(), locked: false };
+    f.insert_object(5, field("PAGE"), &CharProps::default()).unwrap();
+    let n = f.len();
+    f.insert_object(n, field("NUMPAGES"), &CharProps::default()).unwrap();
+    let id = d.add_part(wordcraft_doc::PartKind::Footer, vec![para_block(f)]);
+    d.last_section.footers.default = Some(id);
+    let mut body = Paragraph::with_text("Body", CharProps::default());
+    body.props.page_break_before = None;
+    let mut second = Paragraph::with_text("More", CharProps::default());
+    second.props.page_break_before = Some(true);
+    d.body = vec![para_block(body), para_block(second)];
+    let text = extract_text(&export(&d, &PdfOptions::default()).unwrap());
+    assert_eq!(text.len(), 2);
+    assert!(text.iter().all(|t| !t.contains('\u{FFFC}')), "{text:?}");
+    assert!(squash(&text[0]).contains("Page 1 of 2") && squash(&text[1]).contains("Page 2 of 2"), "{text:?}");
+}
+
+/// Bundled Source Sans 3 renamed to `family`, with glyph `gid` turned into a composite glyph whose
+/// component list is cut off: fonts still parse and shape, but krilla's subsetter rejects it.
+fn unsubsettable_font(family: &str, gid: u16) -> Vec<u8> {
+    let mut f = wordcraft_fonts::bundled()[0].to_vec();
+    let rename = |f: &mut Vec<u8>, from: &[u8], to: &[u8]| {
+        let mut i = 0;
+        while i + from.len() <= f.len() {
+            if &f[i..i + from.len()] == from {
+                f[i..i + from.len()].copy_from_slice(to);
+            }
+            i += 1;
+        }
+    };
+    let wide = |s: &str| s.encode_utf16().flat_map(|u| u.to_be_bytes()).collect::<Vec<u8>>();
+    assert_eq!(family.len(), "Source Sans 3".len());
+    rename(&mut f, &wide("Source Sans 3"), &wide(family));
+    rename(&mut f, b"Source Sans 3", family.as_bytes());
+    let u16_at = |f: &[u8], o: usize| u16::from_be_bytes([f[o], f[o + 1]]);
+    let u32_at = |f: &[u8], o: usize| u32::from_be_bytes([f[o], f[o + 1], f[o + 2], f[o + 3]]);
+    let table = |f: &[u8], tag: &[u8]| {
+        (0..u16_at(f, 4) as usize).map(|t| 12 + t * 16).find(|r| &f[*r..*r + 4] == tag).map(|r| u32_at(f, r + 8) as usize).unwrap()
+    };
+    let (head, loca, glyf) = (table(&f, b"head"), table(&f, b"loca"), table(&f, b"glyf"));
+    let g = gid as usize;
+    let off = if u16_at(&f, head + 50) == 0 {
+        // Short offsets (halved): the glyph keeps only its 10-byte header.
+        let start = u16_at(&f, loca + g * 2);
+        f[loca + g * 2 + 2..loca + g * 2 + 4].copy_from_slice(&(start + 5).to_be_bytes());
+        start as usize * 2
+    } else {
+        let start = u32_at(&f, loca + g * 4);
+        f[loca + g * 4 + 4..loca + g * 4 + 8].copy_from_slice(&(start + 10).to_be_bytes());
+        start as usize
+    };
+    // numberOfContours = -1: a composite glyph, with no room left for its components.
+    f[glyf + off..glyf + off + 2].copy_from_slice(&(-1i16).to_be_bytes());
+    f
+}
+
+/// Glyphs drawn as text and paths drawn, over every page.
+fn count_glyphs_and_paths(bytes: &[u8]) -> (usize, usize) {
+    use hayro_interpret::font::Glyph;
+    use hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        interpret_page,
+    };
+    use hayro_syntax::Pdf;
+    struct Count(usize, usize);
+    impl Device<'_> for Count {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, _: &kurbo::BezPath, _: kurbo::Affine, _: &Paint<'_>, _: &PathDrawMode) {
+            self.1 += 1;
+        }
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, _: &Glyph<'_>, _: kurbo::Affine, _: kurbo::Affine, _: &Paint<'_>, _: &GlyphDrawMode) {
+            self.0 += 1;
+        }
+        fn draw_image(&mut self, _: Image<'_, '_>, _: kurbo::Affine) {}
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+    let pdf = Pdf::new(bytes.to_vec()).expect("parse");
+    let cache = InterpreterCache::new();
+    let mut n = Count(0, 0);
+    for page in pdf.pages().iter() {
+        let mut ctx = Context::new(kurbo::Affine::IDENTITY, kurbo::Rect::new(0.0, 0.0, 1.0, 1.0), &cache, pdf.xref(), InterpreterSettings::default());
+        interpret_page(page, &mut ctx, &mut n);
+    }
+    (n.0, n.1)
+}
+
+#[test]
+fn unsubsettable_font_is_drawn_as_outlines() {
+    let db = wordcraft_fonts::FontDb::global();
+    let o = db.face("Source Sans 3", "Regular").glyph_for('o');
+    let family = "Broken Sans 3";
+    db.add_font(unsubsettable_font(family, u16::try_from(o).unwrap()));
+    assert!(db.has_family(family));
+    // Leave out the glyph after the broken one: its start moved into the broken glyph's data.
+    let text: String = "Broken font, good export".chars().filter(|c| db.face(family, "Regular").glyph_for(*c) != o + 1).collect();
+    let doc = |font: &str| {
+        let mut d = Document::new();
+        d.body = vec![para_block(Paragraph::with_text(&text, CharProps { font: Some(font.into()), ..Default::default() }))];
+        d
+    };
+    let opts = PdfOptions { tagged: false, ..Default::default() };
+    // The intact font is embedded as text.
+    let (glyphs, _) = count_glyphs_and_paths(&export(&doc("Source Sans 3"), &opts).unwrap());
+    assert!(glyphs > 0);
+    // The broken one used to fail the whole export ("failed to subset font: malformed font");
+    // now its text is drawn as outlines.
+    let bytes = export(&doc(family), &opts).unwrap();
+    let (glyphs, paths) = count_glyphs_and_paths(&bytes);
+    assert_eq!(glyphs, 0, "no text in the font krilla can't subset");
+    assert!(paths > 0, "its glyphs are drawn as outlines");
+}
+
+#[test]
+fn field_results_are_extractable_text() {
+    // Issue #97 (test from #112 by @LloydNicholson): a REF field's result, not the U+FFFC
+    // placeholder, is what the text layer gets.
+    let mut d = Document::new();
+    let mut p = Paragraph::with_text("See  for details.", CharProps::default());
+    p.insert_object(
+        4,
+        InlineObject::Field { instr: " REF _RefTarget \\h ".into(), result: "Section 3.01".into(), locked: false },
+        &CharProps::default(),
+    )
+    .unwrap();
+    d.body = vec![para_block(p)];
+    let text = extract_text(&export(&d, &PdfOptions::default()).unwrap()).concat();
+    assert!(!text.contains('\u{FFFC}'), "{text:?}");
+    assert!(squash(&text).contains("See Section 3.01 for details."), "{text:?}");
+}
+
+#[test]
+fn synthetic_bold_text_is_extracted_once() {
+    // JetBrains Mono ships without a bold face, so its bold is filled and stroked: the text
+    // layer still holds each character once.
+    let mut d = Document::new();
+    let bold = CharProps { font: Some("JetBrains Mono".into()), bold: Some(true), ..Default::default() };
+    d.body = vec![para_block(Paragraph::with_text("Mono bold", bold))];
+    let text = squash(&extract_text(&export(&d, &PdfOptions::default()).unwrap()).concat());
+    assert!(text.contains("Mono bold"), "{text:?}");
 }
