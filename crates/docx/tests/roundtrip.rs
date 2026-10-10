@@ -505,13 +505,66 @@ fn toc_field_wraps_its_entries() {
     let last_entry = xml.find("Detail").unwrap();
     assert!(sdt < xml.find("Contents").unwrap() && xml.find("</w:sdt>").unwrap() < xml.find(">Body<").unwrap(), "{xml}");
     assert!(begin < xml.find("Intro").unwrap() && fend > last_entry && fend < xml.find("</w:sdt>").unwrap(), "field must span the entries: {xml}");
+    // Word starts the field in the first entry; started in the heading, LibreOffice splits the heading.
+    let heading_end = xml[..xml.find("Intro").unwrap()].rfind("</w:p>").unwrap();
+    assert!(begin > heading_end, "field must start in the first entry, not the heading: {xml}");
 
     // WordCraft reads its own TOC back unchanged.
     let r = wordcraft_docx::read(&bytes).expect("read");
     let ps = paras(&r);
     assert_eq!(ps.iter().map(|p| p.plain_text()).collect::<Vec<_>>(), ["Contents", "Intro\t1", "Detail\t2", "Body"]);
     assert!(matches!(ps[0].objects.first(), Some(InlineObject::Field { instr, .. }) if instr.starts_with("TOC")), "{:?}", ps[0].objects);
+    assert!(ps[1].objects.is_empty(), "the field goes back on the heading: {:?}", ps[1].objects);
     assert_eq!(ps[1].props.style.as_deref(), Some("TOC1"));
+}
+
+/// The TOC field's begin and end belong to the entries' own paragraphs, even when the heading or
+/// an entry holds a text box: the box's paragraphs are written inside them and must not take either.
+#[test]
+fn toc_field_skips_nested_stories() {
+    let mut d = Document::new();
+    let text_box = |d: &mut Document, text: &str| {
+        let story = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text(text, CharProps::default()))]);
+        InlineObject::Shape {
+            kind: ShapeKind::TextBox,
+            w: 72.0,
+            h: 36.0,
+            fill: None,
+            stroke: None,
+            stroke_width: 0.0,
+            float: Float::default(),
+            story: Some(story),
+        }
+    };
+    let mut head = Paragraph::with_text("Contents", CharProps::default()).styled("TOCHeading");
+    let end = head.len();
+    head.insert_object(
+        end,
+        InlineObject::Field { instr: "TOC \\o \"1-1\" \\h \\z \\u".into(), result: String::new(), locked: false },
+        &CharProps::default(),
+    )
+    .unwrap();
+    let end = head.len();
+    head.insert_object(end, text_box(&mut d, "Heading box"), &CharProps::default()).unwrap();
+    let mut last = Paragraph::with_text("Detail\t2", CharProps::default()).styled("TOC1");
+    let end = last.len();
+    last.insert_object(end, text_box(&mut d, "Boxed"), &CharProps::default()).unwrap();
+    d.body = vec![para_block(head), para_block(last), para_block(Paragraph::with_text("Body", CharProps::default()))];
+
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let boxes: Vec<(usize, usize)> = xml.match_indices("<w:txbxContent>").map(|(a, _)| (a, a + xml[a..].find("</w:txbxContent>").unwrap())).collect();
+    assert_eq!(boxes.len(), 2, "{xml}");
+    let in_box = |i: usize| boxes.iter().any(|(a, b)| (*a..*b).contains(&i));
+    for kind in ["begin", "separate", "end"] {
+        let at: Vec<usize> = xml.match_indices(&format!(r#"fldCharType="{kind}""#)).map(|(i, _)| i).collect();
+        assert_eq!(at.len(), 1, "{kind}: {xml}");
+        assert!(!in_box(at[0]), "field {kind} written inside a text box: {xml}");
+    }
+    let (begin, end) = (xml.find(r#"fldCharType="begin""#).unwrap(), xml.find(r#"fldCharType="end""#).unwrap());
+    assert!(begin > boxes[0].1 && end > boxes[1].1 && end < xml.find("</w:sdt>").unwrap(), "{xml}");
 }
 
 #[test]
@@ -775,4 +828,27 @@ fn char_border_written_between_u_and_shd() {
     assert_eq!(xml.matches(bdr).count(), 1, "{xml}");
     let at = xml.find(bdr).unwrap();
     assert!(xml.find("<w:u ").unwrap() < at && at < xml.find("<w:shd ").unwrap(), "{xml}");
+}
+
+#[test]
+fn list_level_overrides_round_trip() {
+    use wordcraft_doc::numbering::{Counters, Level};
+    use wordcraft_doc::section::NumFormat;
+    let mut d = Document::new();
+    let num = d.numbering.add_list(ListKind::Numbered);
+    let restart = d.numbering.restart(num).unwrap();
+    let own = Level { format: NumFormat::DecimalZero, text: "%1.%2".into(), indent: 26.5, hanging: 26.5, ..Level::default() };
+    if let Some(n) = d.numbering.nums.iter_mut().find(|n| n.id == restart) {
+        n.level_overrides = vec![(1, own.clone())];
+    }
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    let n = back.numbering.num(restart).unwrap();
+    assert_eq!(n.level_overrides.len(), 1);
+    let (lvl, got) = &n.level_overrides[0];
+    assert_eq!((*lvl, got.format, got.text.as_str(), got.indent, got.hanging), (1, NumFormat::DecimalZero, "%1.%2", 26.5, 26.5));
+    // The start overrides that `restart` wrote survive beside it.
+    assert_eq!(n.start_overrides, d.numbering.num(restart).unwrap().start_overrides);
+    let mut c = Counters::default();
+    assert_eq!(c.next_label(&back.numbering, restart, 0).unwrap().0, "1.");
+    assert_eq!(c.next_label(&back.numbering, restart, 1).unwrap().0, "1.01");
 }
