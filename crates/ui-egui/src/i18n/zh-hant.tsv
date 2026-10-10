@@ -51,7 +51,8 @@
 	Automatic Table 1 (3 levels)	自動目錄 1（3 階層）
 	Automatic Table 2 (2 levels)	自動目錄 2（2 階層）
 	AutoSave	自動儲存
-	AutoSave documents that have been saved	自動儲存已儲存過的文件
+	AutoSave documents you have saved in WordCraft	自動儲存在 WordCraft 中儲存過的文件
+	AutoSave failed: {error}. Save the document to turn AutoSave back on.	自動儲存失敗：{error}。重新儲存文件後將恢復自動儲存。
 	Dark page (white text on black)	深色頁面（黑底白字）
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	像「檢視 › 切換模式」一樣以反轉的色彩顯示文件。儲存、列印和 PDF 不受影響。
 	AutoSave saves every change to the file (needs a saved document)	自動儲存會將每次變更寫入檔案（文件需已儲存）
@@ -140,6 +141,7 @@
 	Copy	複製
 	Copy Formatting	複製格式
 	Corrections	校正
+	Couldn't download {name}: {error}	無法下載 {name}：{error}
 	Cover Page	封面頁
 	Create	建立
 	Create a Style	建立樣式
@@ -188,6 +190,8 @@
 	Distribute Rows	平均分配列高
 	Distributed	分散對齊
 	Do Not Show in TOC	不在目錄中顯示
+	Do you want to save changes to {name}?	是否儲存對 {name} 的變更？
+	Don't Save	不儲存
 	Document End	文件結尾
 	Document Formatting	文件格式設定
 	Document Property	文件摘要資訊
@@ -699,6 +703,7 @@
 	Text:	文字：
 	Text\nBox	文字方塊
 	Text\nDirection	文字方向
+	That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.	該格式無法保留全部內容，因此文件仍保持開啟。請將其儲存為 Word 文件 (.docx) 後再繼續。
 	The new style takes the formatting of the current paragraph.	新樣式會採用目前段落的格式。
 	Theme Colors	佈景主題色彩
 	Theme Fonts	佈景主題字型
@@ -792,5 +797,6 @@
 	Zotero: cancelled	Zotero：已取消
 	Yes	是
 	No	否
+	Your changes will be lost if you don't save them.	如果不儲存，您的變更將會遺失。
 	Scroll ribbon left	向左捲動功能區
 	Scroll ribbon right	向右捲動功能區

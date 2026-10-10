@@ -60,7 +60,6 @@
 	Automatic Table 1 (3 levels)	Автоматичний зміст 1 (3 рівні)
 	Automatic Table 2 (2 levels)	Автоматичний зміст 2 (2 рівні)
 	AutoSave	Автозбереження
-	AutoSave documents that have been saved	Автоматично зберігати раніше збережені документи
 	AutoSave saves every change to the file (needs a saved document)	Автозбереження записує кожну зміну у файл (документ потрібно спочатку зберегти)
 	AutoText	Автоматичний текст
 	Backspace	Видалити попередній символ
@@ -804,3 +803,10 @@
 	Zotero: cancelled	Zotero: скасовано
 	Yes	Так
 	No	Ні
+	AutoSave documents you have saved in WordCraft	Автоматично зберігати документи, збережені у WordCraft
+	AutoSave failed: {error}. Save the document to turn AutoSave back on.	Не вдалося виконати автозбереження: {error}. Збережіть документ, щоб знову ввімкнути автозбереження.
+	Couldn't download {name}: {error}	Не вдалося завантажити {name}: {error}
+	Do you want to save changes to {name}?	Зберегти зміни в {name}?
+	Don't Save	Не зберігати
+	That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.	Цей формат зберігає не все, тому документ залишається відкритим. Щоб продовжити, збережіть його як документ Word (.docx).
+	Your changes will be lost if you don't save them.	Якщо не зберегти зміни, їх буде втрачено.

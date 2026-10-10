@@ -649,6 +649,67 @@ fn custom_properties_set_read_remove_and_undo() {
     assert_eq!(s.doc.custom_prop("Status"), Some("draft"));
 }
 
+/// `document_id` tells an edit from a replacement (the UI drops a "Save changes?" prompt
+/// about a document that has been replaced).
+#[test]
+fn document_id_changes_only_when_the_document_is_replaced() {
+    let mut s = s();
+    let first = s.document_id();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    run(&mut s, "format.bold", json!({}));
+    assert_eq!(s.document_id(), first);
+    run(&mut s, "file.new", json!({"template": "letter"}));
+    let second = s.document_id();
+    assert_ne!(second, first);
+    run(&mut s, "file.new", json!({}));
+    assert_ne!(s.document_id(), second);
+}
+
+/// Envelopes, Labels and Finish & Merge make a new, untitled document, as Word does, and like New
+/// its undo history starts afresh. Undo/Redo across the swap put the wrong document under a file
+/// (Undo, Save As, Redo, Save wrote the envelope over the saved file), so it isn't offered; the UI
+/// asks to save the replaced document first.
+#[test]
+fn mailings_results_are_new_untitled_documents() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-mailings-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let original = dir.join("letter.docx");
+    let saved_as = dir.join("saved-as.docx");
+    let on_file = |p: &std::path::Path| crate::io::open_path(p).unwrap().plain_text(StoryRef::Body);
+    for id in ["mailings.envelopes", "mailings.labels", "mailings.finish"] {
+        let mut s = s();
+        run(&mut s, "mailings.recipients", json!({"csv": "First Name\nAda\nAlan"}));
+        run(&mut s, "text.insert", json!({"text": "Dear "}));
+        run(&mut s, "mailings.insertField", json!({"field": "First Name"}));
+        run(&mut s, "file.save", json!({"path": original.to_string_lossy()}));
+        let on_disk = std::fs::read(&original).unwrap();
+        run(&mut s, "text.insert", json!({"text": ", unsaved"}));
+        let before = text(&s);
+        let document = s.document_id();
+
+        run(&mut s, id, json!({}));
+        let result = text(&s);
+        assert_ne!(result, before, "{id}: the result replaced the document");
+        assert_ne!(s.document_id(), document, "{id}: a different document");
+        assert_eq!(s.path, None, "{id}: the result is untitled");
+        assert_eq!(run(&mut s, "file.save", json!({}))["saved"], false, "{id}: Save asks where (Save As)");
+        assert_eq!(std::fs::read(&original).unwrap(), on_disk, "{id}: the original file is untouched");
+
+        // Undo doesn't bring the old document back under the new one's identity; Redo can't
+        // put the result back under a file saved in between.
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(text(&s), result, "{id}: history starts afresh, like New");
+        run(&mut s, "file.saveAs", json!({"path": saved_as.to_string_lossy()}));
+        let written = on_file(&saved_as);
+        run(&mut s, "edit.redo", json!({}));
+        assert_eq!(text(&s), result, "{id}: nothing to redo");
+        run(&mut s, "file.save", json!({}));
+        assert_eq!(on_file(&saved_as), written, "{id}: the saved file still holds what was saved");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn html_pictures_load_relative_to_the_file() {
