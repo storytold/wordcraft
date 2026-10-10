@@ -1,8 +1,9 @@
 //! Optional craft-fonts build input (https://github.com/storytold/craft-fonts, recipe from its
 //! `docs/integration.md`). With `CRAFT_FONTS_DIR=<checkout>` the fonts in its
 //! `fonts/manifest.txt` are embedded as `CRAFT_FONTS`; unset, `CRAFT_FONTS` is empty. Web
-//! (wasm32) builds embed only the UI face, BIZ UDPGothic Regular, to stay within the web size
-//! budget. It only reads the local checkout: no network.
+//! (wasm32) builds embed the UI face (BIZ UDPGothic Regular) plus Arabic Regular faces, so the
+//! Arabic interface renders there; other scripts stay desktop-only to hold the web size budget.
+//! It only reads the local checkout: no network.
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
@@ -38,7 +39,10 @@ fn craft_fonts(dir: &std::path::Path) -> Result<String, String> {
         let [family, style, file, scripts, ..] = f.as_slice() else {
             return Err(format!("malformed manifest line: {line}"));
         };
-        if wasm && !(*family == "BIZ UDPGothic" && *style == "Regular") {
+        // Web builds embed the UI face plus Arabic Regular faces (Arabic UI needs a face, and
+        // the web size budget covers one script more; CJK stays desktop-only).
+        let arab = *style == "Regular" && scripts.split(',').map(str::trim).any(|s| s == "Arab");
+        if wasm && !(*family == "BIZ UDPGothic" && *style == "Regular") && !arab {
             continue;
         }
         let path = dir.join(file).canonicalize().map_err(|e| format!("{file}: {e}"))?;

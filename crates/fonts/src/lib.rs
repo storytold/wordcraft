@@ -176,8 +176,7 @@ fn load_arabic_face(path: &std::path::Path) -> Option<&'static [u8]> {
         return None;
     }
     let data = std::fs::read(path).ok()?;
-    let covered = skrifa::FontRef::from_index(&data, 0)
-        .is_ok_and(|f| ['\u{628}', '\u{67E}'].into_iter().all(|c| f.charmap().map(c).is_some()));
+    let covered = skrifa::FontRef::from_index(&data, 0).is_ok_and(|f| ['\u{628}', '\u{67E}'].into_iter().all(|c| f.charmap().map(c).is_some()));
     covered.then(|| Box::leak(data.into_boxed_slice()) as &'static [u8])
 }
 
@@ -360,6 +359,19 @@ mod tests {
     }
 
     #[test]
+    fn arabic_shaping_keeps_mappings_without_arabic_fonts() {
+        // Deterministic on any machine: even when the face lacks Arabic entirely, shaping
+        // covers every byte in logical order with finite advances instead of panicking.
+        let face = FontDb::global().face(DEFAULT_FAMILY, "Regular");
+        assert_eq!(face.glyph_for('ب'), 0, "precondition: no Arabic in this face");
+        let text = "بِسْمِ";
+        let g = shape(&face, text, &[], |c| c);
+        assert!(!g.is_empty());
+        assert!(g.windows(2).all(|w| w[0].cluster <= w[1].cluster), "logical cluster order");
+        assert!(g.iter().all(|x| text.get(x.cluster..).is_some_and(|r| !r.is_empty())), "clusters sit on char boundaries");
+    }
+
+    #[test]
     fn ligatures_can_be_disabled() {
         let face = FontDb::global().face(DEFAULT_FAMILY, "Regular");
         let on = shape(&face, "office", &[], |c| c);
@@ -475,11 +487,24 @@ mod tests {
     }
 
     #[test]
-    fn arabic_craft_fonts_are_empty_without_the_build_input() {
-        // No CRAFT_FONTS_DIR here: the iterators are empty but well-formed.
-        assert_eq!(arabic_fonts().count(), 0);
-        assert!(arabic_ui_fonts().is_empty());
-        assert_eq!(arabic_document_fonts().len(), 0);
+    fn arabic_craft_fonts_match_the_build_input() {
+        // With an `Arab` manifest entry the faces parse and cover Arabic; without the build
+        // input the iterators are empty but well-formed. The test adapts to the compiled input
+        // instead of assuming its absence.
+        let embedded: Vec<_> = arabic_fonts().collect();
+        for f in &embedded {
+            assert!(!f.family.is_empty() && !f.bytes.is_empty());
+            let font = skrifa::FontRef::new(f.bytes).expect("embedded faces parse");
+            assert!(font.charmap().map('ب').is_some() && font.charmap().map('پ').is_some(), "{} covers Arabic", f.family);
+        }
+        if embedded.is_empty() {
+            assert!(arabic_ui_fonts().is_empty());
+            assert_eq!(arabic_document_fonts().len(), 0);
+        } else {
+            assert!(!arabic_ui_fonts().is_empty(), "UI order exists when faces do");
+            assert!(!arabic_document_fonts().is_empty());
+            assert!(arabic_ui_fonts().iter().all(|f| f.style == "Regular"), "UI fakes no bold");
+        }
     }
 
     #[test]
