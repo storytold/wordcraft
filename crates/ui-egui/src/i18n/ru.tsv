@@ -1443,14 +1443,14 @@ preview	Title	Пример
 
 # Labels added on main and in this stack after the first Russian catalog (#300 integration)
 	Add Object to Selection	Добавить объект к выделению
-	Add space between Asian and Latin text	Добавлять интервал между азиатским и латинским текстом
-	Add space between Asian text and numbers	Добавлять интервал между азиатским текстом и цифрами
+	Add space between Asian and Latin text	Добавлять пробел между азиатским и латинским текстом
+	Add space between Asian text and numbers	Добавлять пробел между азиатским текстом и числами
 	Allow hanging punctuation	Разрешить висячую пунктуацию
 	Allow Latin text to wrap in the middle of a word	Разрешить перенос латинского текста посреди слова
 	Apply Asian line-breaking rules (kinsoku)	Применять азиатские правила переноса строк (кинсоку)
 	Asian Typography	Азиатская типографика
 	Click a border between two cells to merge them. Esc stops.	Щёлкните границу между двумя ячейками, чтобы объединить их. Esc — завершить.
-	Compress punctuation at the start of a line	Сжимать знаки препинания в начале строки
+	Compress punctuation at the start of a line	Сжимать пунктуацию в начале строки
 	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	Нарисуйте прямоугольник, чтобы создать таблицу, или линию поперёк ячеек, чтобы разделить их. Esc — завершить.
 	Draw Table	Нарисовать таблицу
 	Indents and Spacing	Отступы и интервалы
@@ -1458,10 +1458,10 @@ preview	Title	Пример
 	Clipboard Pane	Область буфера обмена
 	Clipboard Items	Элементы буфера обмена
 	Paste Clipboard Item	Вставить элемент буфера обмена
-	Paste All	Вставить все
+	Paste All	Вставить всё
 	Delete Clipboard Item	Удалить элемент буфера обмена
 	Click an item to paste it.	Щёлкните элемент, чтобы вставить его.
-	Nothing collected yet. Items you copy or cut appear here.	Здесь пока пусто. Скопированное или вырезанное появится здесь.
+	Nothing collected yet. Items you copy or cut appear here.	Пока пусто. Здесь появятся элементы, которые вы копируете или вырезаете.
 	(picture or object)	(рисунок или объект)
 	Ungroup	Разгруппировать
 	Draw Ink	Рисовать от руки
@@ -1473,22 +1473,22 @@ preview	Title	Пример
 	Thickness	Толщина
 	Shape Effects	Эффекты фигуры
 	Glow	Свечение
-	Soft Edges	Сглаживание краёв
+	Soft Edges	Сглаживание
 	No Shadow	Без тени
 	No Glow	Без свечения
-	No Soft Edges	Без сглаживания краёв
+	No Soft Edges	Без сглаживания
 	Glow Colors	Цвета свечения
-	Weight	Толщина линии
-	Shadow, glow and soft edges	Тень, свечение и сглаживание краёв
-	Offset: Bottom Right	Смещение: вниз и вправо
+	Weight	Толщина
+	Shadow, glow and soft edges	Тень, свечение и сглаживание
+	Offset: Bottom Right	Смещение: вниз вправо
 	Offset: Bottom	Смещение: вниз
-	Offset: Bottom Left	Смещение: вниз и влево
+	Offset: Bottom Left	Смещение: вниз влево
 	Offset: Right	Смещение: вправо
 	Offset: Center	Смещение: по центру
 	Offset: Left	Смещение: влево
-	Offset: Top Right	Смещение: вверх и вправо
+	Offset: Top Right	Смещение: вверх вправо
 	Offset: Top	Смещение: вверх
-	Offset: Top Left	Смещение: вверх и влево
+	Offset: Top Left	Смещение: вверх влево
 	Manage Styles	Управление стилями
 	Show or Hide Style	Показать или скрыть стиль
 	Manage Styles…	Управление стилями…
@@ -1500,31 +1500,31 @@ preview	Title	Пример
 	Color: {color}	Цвет: {color}
 	Space before: {pt} pt	Интервал перед: {pt} пт
 	Space after: {pt} pt	Интервал после: {pt} пт
-	Based on: {style}	Основан на стиле: {style}
+	Based on: {style}	Основан на: {style}
 	Paragraph style	Стиль абзаца
 	Character style	Стиль знаков
-	Linked style (paragraph and character)	Связанный стиль (абзац и знаки)
+	Linked style (paragraph and character)	Связанный стиль (абзаца и знаков)
 	Table style	Стиль таблицы
 	Built-in style	Встроенный стиль
 	Show in the Styles gallery	Показывать в коллекции стилей
-	Hide from style lists	Скрыть из списков стилей
+	Hide from style lists	Скрывать в списках стилей
 	Built-in styles can't be deleted.	Встроенные стили нельзя удалить.
 	Delete Table Style	Удалить стиль таблицы
 	Password	Пароль
 	Password:	Пароль:
-	Confirm password:	Подтверждение пароля:
+	Confirm password:	Подтвердите пароль:
 	Encrypt with Password…	Зашифровать паролем…
 	Change Password…	Изменить пароль…
-	Remove Password	Удалить пароль
+	Remove Password	Убрать пароль
 	A password is required to open this document.	Для открытия этого документа нужен пароль.
 	Anyone can open this document. Encrypt it with a password to keep it private.	Этот документ может открыть любой. Зашифруйте его паролем, чтобы защитить.
-	Anyone who opens the document will need this password.	Этот пароль понадобится каждому, кто открывает документ.
+	Anyone who opens the document will need this password.	Для открытия документа понадобится этот пароль.
 	{name} is protected with a password.	{name} защищён паролем.
-	That password isn't right. Check it (passwords are case-sensitive) and try again.	Неверный пароль. Проверьте его (регистр букв учитывается) и попробуйте ещё раз.
+	That password isn't right. Check it (passwords are case-sensitive) and try again.	Неверный пароль. Проверьте его (регистр букв важен) и попробуйте снова.
 	The document will be saved with a password. Save it to protect it.	Документ будет сохранён с паролем. Сохраните его, чтобы защитить.
-	The password is removed. Save the document to keep the change.	Пароль удалён. Сохраните документ, чтобы изменение вступило в силу.
+	The password is removed. Save the document to keep the change.	Пароль убран. Сохраните документ, чтобы изменение осталось.
 	The passwords don't match.	Пароли не совпадают.
-	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	Храните пароль в надёжном месте: без него никто, включая WordCraft, не сможет открыть документ. Оставьте оба поля пустыми, чтобы удалить пароль.
+	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	Храните пароль в надёжном месте: без него никто, включая WordCraft, не сможет открыть документ. Оставьте оба поля пустыми, чтобы убрать пароль.
 	{cols}×{rows} Table	Таблица {cols}×{rows}
 	Name	Имя
 	PRs	PR
@@ -1539,11 +1539,11 @@ preview	Title	Пример
 	Mon	Пн
 	Tue	Вт
 	Wed	Ср
-	Sum	Сумма
+	Sum	Итог
 	North	Север
 	South	Юг
 	West	Запад
-	Total	Итого
+	Total	Всего
 
 # Table Layout › Draw (#308)
 	Draw\nTable	Нарисовать\nтаблицу
