@@ -213,6 +213,9 @@ pub enum InlineObject {
         /// Text box content: `Document::parts` id.
         #[serde(default)]
         story: Option<u32>,
+        /// Shadow, glow and soft edges.
+        #[serde(default, skip_serializing_if = "crate::effects::ShapeEffects::is_empty")]
+        effects: crate::effects::ShapeEffects,
     },
     /// A field: `instr` is the field code (`PAGE`, `NUMPAGES`, `DATE \@ "M/d/yyyy"`, `TOC \o "1-3"`…);
     /// `result` the cached display text.

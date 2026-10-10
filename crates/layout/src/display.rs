@@ -65,6 +65,8 @@ pub enum Draw {
         fill: Option<Rgb>,
         stroke: Option<Rgb>,
         stroke_width: f32,
+        /// Shadow, glow and soft edges (drawn with [`wordcraft_doc::effects::bands`]).
+        effects: wordcraft_doc::effects::ShapeEffects,
     },
     /// A formatting mark (¶ · → ↵) in the UI's mark colour, or in `color` (a tracked
     /// paragraph mark in its reviser's colour).
@@ -197,8 +199,8 @@ fn item(doc: &Document, it: &Placed, opts: &DisplayOptions, alpha: f32, out: &mu
         Placed::Fill { rect, color } => out.push(Draw::Fill { rect: *rect, color: *color, alpha }),
         Placed::Rule { x0, y0, x1, y1, border } => out.push(rule(*x0, *y0, *x1, *y1, border, alpha)),
         Placed::Image { rect, media, crop, .. } => out.push(Draw::Image { rect: *rect, media: media.clone(), crop: *crop, alpha }),
-        Placed::Shape { rect, kind, fill, stroke, stroke_width } => {
-            out.push(Draw::Shape { rect: *rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width })
+        Placed::Shape { rect, kind, fill, stroke, stroke_width, effects } => {
+            out.push(Draw::Shape { rect: *rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width, effects: *effects })
         }
         Placed::Cell { .. } | Placed::Object { .. } => {}
         Placed::Lines { story, path, para, l0, l1, x, y, turn } if turn.is_turned() => {
@@ -531,8 +533,8 @@ fn lines(
             let rect = inline_rect(obj, cx, base, c.adv, c.obj_h);
             match obj {
                 Some(InlineObject::Image { media, crop, .. }) => out.push(Draw::Image { rect, media: media.clone(), crop: *crop, alpha }),
-                Some(InlineObject::Shape { kind, fill, stroke, stroke_width, .. }) => {
-                    out.push(Draw::Shape { rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width })
+                Some(InlineObject::Shape { kind, fill, stroke, stroke_width, effects, .. }) => {
+                    out.push(Draw::Shape { rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width, effects: *effects })
                 }
                 Some(InlineObject::Equation { .. }) => {
                     if let Some((_, ml)) = pl.maths.iter().find(|(k, _)| *k == oi) {

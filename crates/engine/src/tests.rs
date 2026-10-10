@@ -2129,3 +2129,42 @@ fn timestamps_come_from_the_clock() {
     // Fixed-width ISO strings sort by time.
     assert!(date >= cmd::iso_from_unix_secs(before) && date <= cmd::iso_from_unix_secs(cmd::now_unix()), "{date}");
 }
+
+/// Shape Format › Shape Effects (#275): presets and custom values apply to the selected shape,
+/// an omitted key is kept, hostile numbers are clamped and each change is one undo step.
+#[test]
+fn shape_effects_apply_and_undo() {
+    use wordcraft_doc::effects::{MAX_BLUR, MAX_DISTANCE, Shadow};
+    let mut s = s();
+    run(&mut s, "insert.shape", json!({"kind": "ellipse"}));
+    let effects = |s: &Session| match cmd::objects::selected(s) {
+        Some((_, wordcraft_doc::InlineObject::Shape { effects, float, .. })) => (effects, float.effect),
+        o => panic!("{o:?}"),
+    };
+    assert!(effects(&s).0.is_empty());
+    run(&mut s, "shape.effects", json!({"shadow": "offsetBottomRight", "glow": {"color": "FF0000", "size": 8}, "softEdge": 5}));
+    let (e, extent) = effects(&s);
+    assert_eq!(e.shadow, Shadow::preset("offsetBottomRight"));
+    assert_eq!(e.glow.map(|g| (g.color, g.size)), Some((wordcraft_doc::props::Rgb(255, 0, 0), 8.0)));
+    assert_eq!(e.soft_edge, Some(5.0));
+    assert!(extent.iter().all(|v| *v >= 8.0), "room for the glow: {extent:?}");
+    // Clearing the glow leaves the shadow and soft edges.
+    run(&mut s, "shape.effects", json!({"glow": null}));
+    let (e, _) = effects(&s);
+    assert!(e.glow.is_none() && e.shadow.is_some() && e.soft_edge == Some(5.0));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(effects(&s).0.glow.map(|g| g.size), Some(8.0));
+    // Hostile numbers.
+    run(&mut s, "shape.effects", json!({"shadow": {"blur": 1e30, "distance": -5, "angle": 1e20, "transparency": 400}, "softEdge": -3}));
+    let (e, _) = effects(&s);
+    let sh = e.shadow.unwrap();
+    assert!(sh.blur == MAX_BLUR && sh.distance == 0.0 && (0.0..360.0).contains(&sh.angle) && sh.transparency == 100.0, "{sh:?}");
+    assert!(e.soft_edge.is_none());
+    run(&mut s, "shape.effects", json!({"shadow": {"distance": 1e9}}));
+    assert_eq!(effects(&s).0.shadow.map(|s| s.distance), Some(MAX_DISTANCE));
+    assert!(s.run("shape.effects", &json!({"shadow": "perspective"})).is_err());
+    // Off a shape it's disabled.
+    run(&mut s, "select.collapse", json!({"end": true}));
+    run(&mut s, "text.insert", json!({"text": "x"}));
+    assert!(s.run("shape.effects", &json!({"shadow": null})).is_err());
+}

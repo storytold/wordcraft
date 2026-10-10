@@ -14,6 +14,11 @@ pub fn has_picture_selected(s: &wordcraft_engine::Session) -> bool {
     matches!(wordcraft_engine::cmd::objects::selected(s), Some((_, wordcraft_doc::para::InlineObject::Image { .. })))
 }
 
+/// Whether the selection is a shape or text box (so Shape Format is shown).
+pub fn has_shape_selected(s: &wordcraft_engine::Session) -> bool {
+    matches!(wordcraft_engine::cmd::objects::selected(s), Some((_, wordcraft_doc::para::InlineObject::Shape { .. })))
+}
+
 /// Contextual tabs for the current selection (pure, tested).
 pub fn contextual_tabs(s: &wordcraft_engine::Session) -> Vec<&'static str> {
     let mut tabs = Vec::new();
@@ -23,6 +28,9 @@ pub fn contextual_tabs(s: &wordcraft_engine::Session) -> Vec<&'static str> {
     }
     if has_picture_selected(s) {
         tabs.push("Picture Format");
+    }
+    if has_shape_selected(s) {
+        tabs.push("Shape Format");
     }
     // Editing an equation.
     if s.math.is_some() {
@@ -77,7 +85,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     }
                 }
                 for tab in tabs {
-                    let contextual = tab.starts_with("Table ") || tab == "Picture Format" || tab == "Equation";
+                    let contextual = tab.starts_with("Table ") || tab.ends_with(" Format") || tab == "Equation";
                     let shown = tl!(tab);
                     let w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(shown.to_string(), medium(12.5), t.text).size().x) + 18.0;
                     let (r, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
@@ -168,6 +176,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         "Table Layout" => table_layout(app, ui),
                         "Equation" if app.session.math.is_some() => crate::equation_tab::show(app, ui),
                         "Picture Format" => picture_format(app, ui),
+                        "Shape Format" => shape_format(app, ui),
                         _ => home(app, ui),
                     }
                 });
@@ -1091,6 +1100,83 @@ fn help(app: &mut WordApp, ui: &mut Ui) {
     });
 }
 
+/// Shape Format: fill, outline and effects of the selected shape, and its arrangement.
+fn shape_format(app: &mut WordApp, ui: &mut Ui) {
+    let (stroke, glow_size) = match wordcraft_engine::cmd::objects::selected(&app.session) {
+        Some((_, wordcraft_doc::para::InlineObject::Shape { stroke, effects, .. })) => (stroke, effects.glow.map(|g| g.size)),
+        _ => (None, None),
+    };
+    let theme = app.session.doc.settings.theme_colors.clone();
+    group(ui, "Shape Styles", None, app, |ui, app| {
+        stack(ui, |ui| {
+            menu_button(ui, app, "shading", Some("Shape Fill"), "Shape Fill", false, |ui, app| {
+                mi(ui, app, "No Color", "shape.fill", json!({"color": null}));
+                if let Some(hex) = color_grid(ui, &theme) {
+                    let _ = app.run("shape.fill", json!({"color": hex}));
+                    ui.close();
+                }
+            });
+            menu_button(ui, app, "pen", Some("Shape Outline"), "Shape Outline", false, |ui, app| {
+                mi(ui, app, "No Color", "shape.outline", json!({"color": null}));
+                if let Some(hex) = color_grid(ui, &theme) {
+                    let _ = app.run("shape.outline", json!({"color": hex}));
+                    ui.close();
+                }
+                ui.separator();
+                ui.menu_button(tl!("Weight"), |ui| {
+                    let color = stroke.unwrap_or(wordcraft_doc::Rgb::BLACK).hex();
+                    for w in [0.25, 0.5, 0.75, 1.0, 1.5, 2.25, 3.0, 4.5, 6.0] {
+                        mi(ui, app, &format!("{w} pt"), "shape.outline", json!({"color": color, "width": w}));
+                    }
+                });
+            });
+            menu_button(ui, app, "shapeEffects", Some("Shape Effects"), "Shadow, glow and soft edges", false, |ui, app| {
+                shape_effects_menu(ui, app, &theme, glow_size)
+            });
+        });
+    });
+    group(ui, "Arrange", None, app, |ui, app| {
+        big(ui, app, "position", "Position", "arrange.position", json!({}), false);
+        big(ui, app, "wrapText", "Wrap\nText", "arrange.wrap", json!({}), false);
+        stack(ui, |ui| {
+            small(ui, app, "rotate", Some("Rotate"), "Rotate", "arrange.rotate", json!({}), false);
+            small(ui, app, "align", Some("Align"), "Align", "arrange.align", json!({}), false);
+        });
+    });
+}
+
+/// Shape Format › Shape Effects: Shadow, Glow and Soft Edges, each with presets and a "No …" entry.
+fn shape_effects_menu(ui: &mut Ui, app: &mut WordApp, theme: &[wordcraft_doc::Rgb], glow_size: Option<f32>) {
+    ui.menu_button(tl!("Shadow"), |ui| {
+        mi(ui, app, "No Shadow", "shape.effects", json!({"shadow": null}));
+        ui.separator();
+        for (id, label) in wordcraft_doc::effects::SHADOW_PRESETS {
+            mi(ui, app, label, "shape.effects", json!({"shadow": id}));
+        }
+    });
+    ui.menu_button(tl!("Glow"), |ui| {
+        mi(ui, app, "No Glow", "shape.effects", json!({"glow": null}));
+        ui.separator();
+        for size in [5.0, 8.0, 11.0, 18.0] {
+            mi(ui, app, &format!("{size} pt"), "shape.effects", json!({"glow": size}));
+        }
+        ui.separator();
+        ui.menu_button(tl!("Glow Colors"), |ui| {
+            if let Some(hex) = color_grid(ui, theme) {
+                let _ = app.run("shape.effects", json!({"glow": {"color": hex, "size": glow_size.unwrap_or(8.0)}}));
+                ui.close();
+            }
+        });
+    });
+    ui.menu_button(tl!("Soft Edges"), |ui| {
+        mi(ui, app, "No Soft Edges", "shape.effects", json!({"softEdge": null}));
+        ui.separator();
+        for r in [1.0, 2.5, 5.0, 10.0, 25.0, 50.0] {
+            mi(ui, app, &format!("{r} pt"), "shape.effects", json!({"softEdge": r}));
+        }
+    });
+}
+
 fn picture_format(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Adjust", None, app, |ui, app| {
         menu_button(ui, app, "picture", Some("Corrections"), "Brightness, contrast and sharpness", true, |ui, app| {
@@ -1399,6 +1485,17 @@ mod tests {
         s.run("select.collapse", &json!({"end": true})).unwrap();
         s.run("text.insert", &json!({"text": "x"})).unwrap();
         assert!(!has_picture_selected(&s));
+    }
+
+    #[test]
+    fn shape_format_tab_appears_when_shape_selected() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+        assert!(contextual_tabs(&s).contains(&"Shape Format"));
+        assert!(!contextual_tabs(&s).contains(&"Picture Format"));
+        s.run("select.collapse", &json!({"end": true})).unwrap();
+        s.run("text.insert", &json!({"text": "x"})).unwrap();
+        assert!(!contextual_tabs(&s).contains(&"Shape Format"));
     }
 
     #[test]
