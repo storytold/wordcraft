@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use wordcraft_doc::para::cap_alt;
 use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CellProps, CharProps, HeightRule, Highlight, LineSpacing, NumRef, ParaProps, Rgb, RowProps, TabAlign,
     TabLeader, TabStop, TableFloat, TableLook, TableProps, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
@@ -312,8 +313,8 @@ impl PropCtx {
                         f.overlap = k.attr("w:val") != Some("never");
                     }
                 }
-                "w:tblCaption" => t.caption = k.attr("w:val").map(str::to_string),
-                "w:tblDescription" if t.caption.is_none() => t.caption = k.attr("w:val").map(str::to_string),
+                "w:tblCaption" => t.caption = k.attr("w:val").map(cap_alt),
+                "w:tblDescription" => t.description = k.attr("w:val").map(cap_alt),
                 _ => {}
             }
         }

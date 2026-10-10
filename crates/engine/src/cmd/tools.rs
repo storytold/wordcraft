@@ -740,49 +740,8 @@ fn word_diff(a: &Paragraph, b: &Paragraph, ins: u32, del: u32) -> Paragraph {
 }
 
 fn accessibility(s: &mut Session, _: &Value) -> CmdResult {
-    let mut issues = Vec::new();
-    let mut last_level: Option<u8> = None;
-    for path in s.doc.para_paths(StoryRef::Body) {
-        let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
-        for o in &p.objects {
-            if let InlineObject::Image { alt, .. } = o
-                && alt.trim().is_empty()
-            {
-                issues.push(json!({"kind": "error", "issue": "Missing alternative text", "where": path.0, "fix": "Select the picture and run picture.altText"}));
-            }
-            // Charts and diagrams can't be given alt text yet (see objects.rs), so only report them.
-            if let InlineObject::Graphic { alt, .. } = o
-                && alt.trim().is_empty()
-            {
-                issues.push(json!({"kind": "error", "issue": "Chart or diagram has no alternative text", "where": path.0}));
-            }
-        }
-        if let Some(l) = s.doc.styles.resolve_para(&p.props).outline_level {
-            if let Some(prev) = last_level
-                && l > prev + 1
-            {
-                issues.push(json!({"kind": "warning", "issue": format!("Heading level skipped (Heading {} after Heading {})", l + 1, prev + 1), "where": path.0}));
-            }
-            last_level = Some(l);
-        }
-        if p.runs.iter().any(|r| r.props.link.is_some()) {
-            let txt = p.plain_text().to_lowercase();
-            if txt.contains("click here") {
-                issues.push(json!({"kind": "tip", "issue": "Link text \"click here\" isn't descriptive", "where": path.0}));
-            }
-        }
-    }
-    for (i, b) in s.doc.body.iter().enumerate() {
-        if let Block::Table(t) = &**b
-            && !t.rows.first().is_some_and(|r| r.props.header)
-        {
-            issues.push(json!({"kind": "warning", "issue": "Table has no header row", "where": [i], "fix": "table.repeatHeader on the first row"}));
-        }
-    }
-    if s.doc.core.title.is_empty() {
-        issues.push(json!({"kind": "tip", "issue": "Document has no title", "fix": "file.properties {title}"}));
-    }
-    Ok(json!({"issues": issues, "ok": issues.is_empty()}))
+    let issues = super::accessibility::check(&s.doc);
+    Ok(json!({"ok": issues.is_empty(), "issues": issues}))
 }
 
 fn inspect_doc(s: &mut Session, v: &Value) -> CmdResult {

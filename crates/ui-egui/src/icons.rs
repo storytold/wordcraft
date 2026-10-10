@@ -752,6 +752,14 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.line(&[(10.0, 7.0), (10.0, 12.0), (7.0, 17.5)]);
             pen.line(&[(10.0, 12.0), (13.0, 17.5)]);
         }
+        "altText" => {
+            // A small picture with lines of text beside and below it.
+            pen.rect(2.5, 3.5, 11.5, 11.0, c);
+            pen.line_c(&[(3.5, 10.0), (6.0, 6.5), (8.0, 8.5), (9.0, 7.5), (10.5, 10.0)], a);
+            for (x0, x1, y) in [(13.5, 17.5, 5.0), (13.5, 17.5, 8.0), (2.5, 17.5, 14.0), (2.5, 13.0, 17.0)] {
+                pen.line_c(&[(x0, y), (x1, y)], c);
+            }
+        }
         "translate" | "language" => {
             pen.text(6.5, 7.0, 9.0, "A", c, true);
             pen.text(13.5, 13.5, 9.0, "あ", a, false);

@@ -1327,3 +1327,18 @@
 	Flip Vertical	Voltear verticalmente
 	Flip Horizontal	Voltear horizontalmente
 	Formatted	Con formato
+	Accessibility Pane	Panel de accesibilidad
+	Alt Text Pane	Panel de texto alternativo
+	Alt\nText	Texto\nalternativo
+	View Alt Text…	Ver texto alternativo…
+	Mark as decorative	Marcar como decorativo
+	Title:	Título:
+	Errors ({n})	Errores ({n})
+	Warnings ({n})	Advertencias ({n})
+	Tips ({n})	Sugerencias ({n})
+	No accessibility issues found.	No se encontraron problemas de accesibilidad.
+	Describe what this object shows, for people who can't see it.	Describa lo que muestra este objeto para quienes no pueden verlo.
+	Decorative objects only add visual interest: screen readers skip them.	Los objetos decorativos solo aportan interés visual: los lectores de pantalla los omiten.
+	Describe what this table shows, for people who can't see it.	Describa lo que muestra esta tabla para quienes no pueden verla.
+	Select a picture, shape, chart or table to describe it.	Seleccione una imagen, forma, gráfico o tabla para describirlo.
+	In Line with Text	En línea con el texto

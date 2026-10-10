@@ -67,16 +67,16 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"left"?, "top"?, "right"?, "bottom"? (fractions 0–0.45)}"#)
         .when(has_picture),
+        // Kept for scripts written before every object had alt text: `object.altText` on a picture.
         CommandSpec::new("picture.altText", "Alt Text", "Picture Format › Accessibility", |s, v| {
-            let t = p::req_str(v, "text")?.to_string();
-            with_obj(s, |o| {
-                if let InlineObject::Image { alt, .. } = o {
-                    *alt = t.clone();
-                }
-            })
+            p::req_str(v, "text")?;
+            alt_text(s, v)
         })
-        .params(r#"{"text": string}"#)
+        .params(r#"{"text": string, "title"?: string, "decorative"?: bool}"#)
         .when(has_picture),
+        CommandSpec::new("object.altText", "Alt Text", "Shape Format › Accessibility", alt_text)
+            .params(r#"{"text"?: string, "title"?: string, "decorative"?: bool} (the selected picture, shape, text box, group or chart)"#)
+            .when(has_object),
         CommandSpec::new("picture.corrections", "Corrections", "Picture Format › Adjust", |s, v| {
             let b = p::f32(v, "brightness").unwrap_or(0.0).clamp(-100.0, 100.0);
             let c = p::f32(v, "contrast").unwrap_or(0.0).clamp(-100.0, 100.0);
@@ -633,6 +633,27 @@ fn obj_size(o: &InlineObject) -> (f32, f32) {
     o.frame().map_or((0.0, 0.0), |(w, h, _)| (w, h))
 }
 
+/// Alt Text: the selected object's description, title and decorative mark, in one undo step.
+fn alt_text(s: &mut Session, v: &Value) -> CmdResult {
+    let (text, title, decorative) = (p::str(v, "text"), p::str(v, "title"), p::bool(v, "decorative"));
+    if text.is_none() && title.is_none() && decorative.is_none() {
+        return Err(CmdError::Params("`text`, `title` or `decorative` is required".into()));
+    }
+    with_obj(s, |o| {
+        if let Some(t) = text {
+            o.set_alt_text(t);
+        }
+        if let Some(f) = o.float_mut() {
+            if let Some(t) = title {
+                f.alt.title = wordcraft_doc::para::cap_alt(t);
+            }
+            if let Some(d) = decorative {
+                f.alt.decorative = d;
+            }
+        }
+    })
+}
+
 fn with_obj(s: &mut Session, f: impl Fn(&mut InlineObject)) -> CmdResult {
     let (pos, _) = selected(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
     let o = edit_obj(s, &pos, f)?;
@@ -977,7 +998,8 @@ fn group(s: &mut Session, _: &Value) -> CmdResult {
             _ => children.push(member(obj, [r.x, r.y, r.w, r.h])),
         }
     }
-    let float = found.first().and_then(|(o, _)| o.frame()).map(|(_, _, f)| *f).unwrap_or_default();
+    // The group takes the first member's placement; its members keep their own alt text.
+    let float = found.first().and_then(|(o, _)| o.frame()).map(|(_, _, f)| Float { alt: Default::default(), ..f.clone() }).unwrap_or_default();
     let grouped = InlineObject::Group { w, h, float, ch_w: w, ch_h: h, children };
     // Take the members out, last first so the earlier positions hold, and put the group where
     // the first one was.
@@ -1015,7 +1037,7 @@ fn ungroup(s: &mut Session, _: &Value) -> CmdResult {
     };
     let obj = s.doc.para_at(&pos).and_then(|p| p.object_at(pos.off)).cloned().ok_or_else(|| CmdError::Failed("object vanished".into()))?;
     let Some((w, h, float)) = obj.frame() else { return Err(CmdError::Failed("object vanished".into())) };
-    let float = *float;
+    let float = float.clone();
     let members: Vec<InlineObject> = obj
         .group_rects(0.0, 0.0, w, h)
         .into_iter()
@@ -1023,7 +1045,9 @@ fn ungroup(s: &mut Session, _: &Value) -> CmdResult {
             let mut c = c.clone();
             c.set_size(cw.max(min_size(&c)), ch.max(min_size(&c)));
             if let Some(f) = c.float_mut() {
-                *f = Float { x: (float.x + x).clamp(-MAX_OFFSET, MAX_OFFSET), y: (float.y + y).clamp(-MAX_OFFSET, MAX_OFFSET), ..float };
+                // Each member keeps its own alt text; the group's placement is shared out.
+                let alt = std::mem::take(&mut f.alt);
+                *f = Float { x: (float.x + x).clamp(-MAX_OFFSET, MAX_OFFSET), y: (float.y + y).clamp(-MAX_OFFSET, MAX_OFFSET), alt, ..float.clone() };
             }
             c
         })
@@ -1283,5 +1307,39 @@ mod tests {
         let InlineObject::Image { alt, crop, .. } = o else { panic!("expected image") };
         assert_eq!(alt, "A red box");
         assert_eq!(crop, [0.1, 0.2, 0.05, 0.0]);
+    }
+
+    #[test]
+    fn shape_alt_text_and_decorative_are_one_undo_step_each() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("insert.shape", &json!({"kind": "ellipse"})).unwrap();
+        s.run("object.altText", &json!({"text": "A green circle", "title": "Logo"})).unwrap();
+        let (_, o) = selected(&s).unwrap();
+        assert_eq!((o.alt_text(), o.frame().map(|f| f.2.alt.title.as_str()), o.is_decorative()), ("A green circle", Some("Logo"), false));
+        s.run("object.altText", &json!({"decorative": true})).unwrap();
+        assert!(selected(&s).unwrap().1.is_decorative());
+        s.run("edit.undo", &json!({})).unwrap();
+        let (_, o) = selected(&s).unwrap();
+        assert!(!o.is_decorative() && o.alt_text() == "A green circle");
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(selected(&s).unwrap().1.alt_text(), "");
+        // Hostile input is capped, and nothing to set is an error.
+        s.run("object.altText", &json!({"text": "x".repeat(50_000)})).unwrap();
+        assert_eq!(selected(&s).unwrap().1.alt_text().len(), wordcraft_doc::para::MAX_ALT_TEXT);
+        assert!(s.run("object.altText", &json!({})).is_err());
+        // A picture-only alias stays a picture-only alias.
+        assert!(s.run("picture.altText", &json!({"text": "no"})).is_err());
+    }
+
+    #[test]
+    fn table_alt_text_sets_title_and_description() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("insert.table", &json!({"rows": 2, "cols": 2})).unwrap();
+        s.run("table.altText", &json!({"title": "Prices", "text": "Prices by year"})).unwrap();
+        let t = s.doc.body.iter().find_map(|b| if let wordcraft_doc::Block::Table(t) = &**b { Some(t.clone()) } else { None }).unwrap();
+        assert_eq!((t.props.caption.as_deref(), t.props.description.as_deref()), (Some("Prices"), Some("Prices by year")));
+        s.run("table.altText", &json!({"text": ""})).unwrap();
+        let t = s.doc.body.iter().find_map(|b| if let wordcraft_doc::Block::Table(t) = &**b { Some(t.clone()) } else { None }).unwrap();
+        assert_eq!((t.props.caption.as_deref(), t.props.description.as_deref()), (Some("Prices"), None));
     }
 }

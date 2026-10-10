@@ -779,8 +779,11 @@ pub struct TableProps {
     /// column, banded columns.
     pub look: TableLook,
     pub shading: Option<Rgb>,
-    /// Alternative text.
+    /// Alternative text: the title (`w:tblCaption`).
     pub caption: Option<String>,
+    /// Alternative text: the description (`w:tblDescription`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// Floating placement (`w:tblpPr`); `None` for a table in the text flow.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub float: Option<TableFloat>,
