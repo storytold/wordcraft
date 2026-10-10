@@ -165,8 +165,8 @@ pub fn update_toc(s: &mut Session) -> Result<(), CmdError> {
     let leads: Vec<usize> =
         entries.iter().map(|(path, ..)| s.doc.para(StoryRef::Body, path).map_or(0, |p| p.text.bytes().take_while(|b| *b == 0x0C).count())).collect();
     for pass in 0..2 {
-        // Pass 1 lays out with the entries in place, so headings sit `entries.len()` blocks
-        // further down and their pages account for the TOC's own length.
+        // Pass 1 lays out with the entries in place, so headings below the TOC sit `entries.len()`
+        // blocks further down and their pages account for the TOC's own length.
         s.touch();
         let l = s.layout();
         if pass == 1 {
@@ -177,7 +177,7 @@ pub fn update_toc(s: &mut Session) -> Result<(), CmdError> {
         }
         let shift = if pass == 0 { 0 } else { entries.len() };
         for (k, (path, level, text)) in entries.iter().enumerate() {
-            let target = Path::top(path.last() + shift);
+            let target = Path::top(path.last() + if path.last() > start { shift } else { 0 });
             let off = leads.get(k).copied().unwrap_or(0);
             let page = l.caret(&Pos { story: StoryRef::Body, path: target, off }).and_then(|c| l.pages.get(c.page)).map(|pg| pg.number).unwrap_or(1);
             let mut para = Paragraph::with_text(&format!("{text}\t{page}"), CharProps::default()).styled(&format!("TOC{}", level + 1));
@@ -265,9 +265,15 @@ fn caption(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
-/// Update fields in the body: dates, SEQ numbering, TOC.
+/// Update fields in the body: dates, SEQ numbering, cross-references, TOC.
 pub fn update_fields(s: &mut Session) -> Result<(), CmdError> {
     let mut seq: std::collections::HashMap<String, u32> = Default::default();
+    let mut pages: std::collections::HashMap<String, u32> = Default::default();
+    for (name, pos) in s.doc.bookmarks() {
+        let l = s.layout();
+        let page = l.caret(&pos).and_then(|c| l.pages.get(c.page)).map(|p| p.number).unwrap_or(1);
+        pages.entry(name).or_insert(page);
+    }
     for path in s.doc.para_paths(StoryRef::Body) {
         let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
         if !p.objects.iter().any(|o| matches!(o, InlineObject::Field { .. })) {
@@ -292,6 +298,13 @@ pub fn update_fields(s: &mut Session) -> Result<(), CmdError> {
                     *n += 1;
                     updates.push((k, n.to_string()));
                 }
+                "REF" | "PAGEREF" => {
+                    let target = instr.split_whitespace().nth(1).unwrap_or("");
+                    let r = if name == "REF" { bookmark_text(&s.doc, target) } else { pages.get(target).map(u32::to_string) };
+                    if let Some(r) = r {
+                        updates.push((k, r));
+                    }
+                }
                 "TITLE" => updates.push((k, s.doc.core.title.clone())),
                 "AUTHOR" => updates.push((k, s.doc.core.creator.clone())),
                 "NUMWORDS" => updates.push((k, s.doc.word_count().to_string())),
@@ -311,4 +324,17 @@ pub fn update_fields(s: &mut Session) -> Result<(), CmdError> {
     }
     super::citations::update_citations(s)?;
     update_toc(s)
+}
+
+/// The text a bookmark marks (field results included), up to its end in the same paragraph or
+/// the paragraph's end. `None` when there is no such bookmark.
+pub fn bookmark_text(doc: &wordcraft_doc::Document, name: &str) -> Option<String> {
+    let (_, start) = doc.bookmarks().into_iter().find(|(n, _)| n == name)?;
+    let para = doc.para(start.story, &start.path)?;
+    let end = para
+        .object_offsets()
+        .into_iter()
+        .find(|o| *o > start.off && matches!(para.object_at(*o), Some(InlineObject::BookmarkEnd { name: n }) if n == name))
+        .unwrap_or(para.len());
+    Some(doc.copy_range(&start, &Pos { off: end, ..start.clone() }).plain_text().trim().to_string())
 }

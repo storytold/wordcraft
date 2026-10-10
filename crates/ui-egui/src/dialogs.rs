@@ -1,6 +1,6 @@
 //! Dialogs: Font, Paragraph, Find & Replace, Go To, Insert Table, Page Setup, Link, Bookmark,
-//! Word Count, Zoom, Watermark, New/Modify Style, Command search, About. Every dialog ends by
-//! running a command, so agents get the same result without the dialog.
+//! Word Count, Zoom, Watermark, New/Modify Style, Command search, About, Save Changes. Every
+//! dialog ends by running a command, so agents get the same result without the dialog.
 
 use egui::{Sense, Ui, vec2};
 use serde::Serialize;
@@ -28,6 +28,10 @@ pub enum Dialog {
         spacing: f32,
     },
     Paragraph {
+        /// Right-to-left reading order (Direction in Word's Paragraph dialog).
+        rtl: bool,
+        /// Alignment and indents as seen on the page: `left` is the left side whatever the
+        /// direction (the model stores them from the paragraph's start edge).
         align: String,
         left: f32,
         right: f32,
@@ -102,6 +106,18 @@ pub enum Dialog {
     About {
         tab: u8,
     },
+    /// "Do you want to save changes?" before a user's New, Open, Close, Envelopes, Labels or
+    /// Finish & Merge replaces the document (see [`WordApp::run`]); `then` runs once it is
+    /// answered (`ui.saveChanges`), and only while the document it asked about
+    /// (`Session::document_id`) is still the one open.
+    SaveChanges {
+        name: String,
+        then: String,
+        #[serde(skip)]
+        params: Value,
+        #[serde(skip)]
+        document: u64,
+    },
 }
 
 impl Dialog {
@@ -123,6 +139,7 @@ impl Dialog {
             Dialog::ModifyStyle { .. } => "modifyStyle",
             Dialog::Commands { .. } => "commands",
             Dialog::About { .. } => "about",
+            Dialog::SaveChanges { .. } => "saveChanges",
         }
     }
 
@@ -153,10 +170,12 @@ impl Dialog {
                     wordcraft_doc::props::LineSpacing::Multiple(m) => m,
                     _ => 1.0,
                 };
+                let (vl, vr) = rp.visual_indents();
                 Dialog::Paragraph {
-                    align: format!("{:?}", rp.align).to_lowercase(),
-                    left: rp.indent_left / 72.0,
-                    right: rp.indent_right / 72.0,
+                    rtl: rp.bidi,
+                    align: format!("{:?}", rp.align.visual(rp.bidi)).to_lowercase(),
+                    left: vl / 72.0,
+                    right: vr / 72.0,
                     first: rp.indent_first / 72.0,
                     before: rp.space_before,
                     after: rp.space_after,
@@ -287,6 +306,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::ModifyStyle { .. } => "Modify Style",
         Dialog::Commands { .. } => "Search Commands",
         Dialog::About { .. } => "About WordCraft",
+        Dialog::SaveChanges { .. } => "WordCraft",
     };
     egui::Window::new(tl!(title))
         .id(egui::Id::new(("dialog", title)))
@@ -326,6 +346,26 @@ fn buttons(ui: &mut Ui, ok: &str) -> (bool, bool) {
 fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     match d {
         Dialog::Font { font, size, bold, italic, underline, strike, sup, sub, small_caps, caps, hidden, color, spacing } => {
+            // Build the sample text format for the preview pane below.
+            let preview_size = size.trim().parse::<f32>().unwrap_or(12.0).clamp(6.0, 72.0);
+            let preview_color = wordcraft_doc::Rgb::parse(color).map(crate::theme::c32).unwrap_or_else(|| ui.visuals().text_color());
+            let mut fmt = egui::TextFormat {
+                font_id: egui::FontId::new(preview_size, egui::FontFamily::Proportional),
+                color: preview_color,
+                ..Default::default()
+            };
+            if *bold {
+                fmt.font_id = crate::theme::semibold(preview_size);
+            }
+            if *italic {
+                fmt.italics = true;
+            }
+            if *underline {
+                fmt.underline = egui::Stroke::new(1.0, preview_color);
+            }
+            if *strike {
+                fmt.strikethrough = egui::Stroke::new(1.0, preview_color);
+            }
             egui::Grid::new("fontdlg").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
                 ui.label(tl!("Font:"));
                 ui.text_edit_singleline(font);
@@ -358,6 +398,13 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 ui.checkbox(hidden, tl!("Hidden"));
                 ui.end_row();
             });
+            // Live preview of the chosen font/size/colour/effects.
+            ui.separator();
+            ui.label(egui::RichText::new(tl!("Preview")).small().weak());
+            let sample = if *caps { "AaBbYyZz".to_uppercase() } else { "AaBbYyZz".to_string() };
+            let mut job = egui::text::LayoutJob::single_section(sample, fmt);
+            job.wrap.max_width = ui.available_width().min(400.0);
+            ui.label(job);
             let (ok, cancel) = buttons(ui, tl!("OK"));
             if ok {
                 let mut props = json!({
@@ -379,8 +426,13 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             ok || cancel
         }
-        Dialog::Paragraph { align, left, right, first, before, after, line, keep_next, keep_lines, page_break, widow } => {
+        Dialog::Paragraph { rtl, align, left, right, first, before, after, line, keep_next, keep_lines, page_break, widow } => {
             ui.label(egui::RichText::new(tl!("General")).font(semibold(12.5)));
+            ui.horizontal(|ui| {
+                ui.label(tl!("Direction:"));
+                ui.radio_value(rtl, true, tl!("Right-to-left"));
+                ui.radio_value(rtl, false, tl!("Left-to-right"));
+            });
             egui::ComboBox::from_label(tl!("Alignment")).selected_text(align.clone()).show_ui(ui, |ui| {
                 for a in ["left", "center", "right", "justify"] {
                     ui.selectable_value(align, a.to_string(), a);
@@ -415,15 +467,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             ui.checkbox(page_break, tl!("Page break before"));
             let (ok, cancel) = buttons(ui, tl!("OK"));
             if ok {
-                let _ = app.run("para.align", json!({"value": align}));
-                let _ = app.run(
-                    "para.set",
-                    json!({"props": {
-                        "indentLeft": *left * 72.0, "indentRight": *right * 72.0, "indentFirst": *first * 72.0,
-                        "spaceBefore": *before, "spaceAfter": *after, "lineSpacing": {"rule": "multiple", "value": *line},
-                        "keepNext": *keep_next, "keepLines": *keep_lines, "pageBreakBefore": *page_break, "widowControl": *widow,
-                    }}),
-                );
+                apply_paragraph(app, *rtl, align, *left, *right, *first, *before, *after, *line, [*keep_next, *keep_lines, *page_break, *widow]);
             }
             ok || cancel
         }
@@ -579,6 +623,12 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                     ui.end_row();
                 }
             });
+            let mut include = stats.get("includeTextBoxes").and_then(Value::as_bool).unwrap_or(true);
+            if ui.checkbox(&mut include, tl!("Count words in text boxes and notes")).changed()
+                && let Ok(v) = app.run("review.wordCount", json!({"includeTextBoxes": include}))
+            {
+                *stats = v;
+            }
             let (ok, cancel) = buttons(ui, tl!("Close"));
             ok || cancel
         }
@@ -743,5 +793,137 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             let (ok, cancel) = buttons(ui, tl!("Close"));
             ok || cancel
         }
+        Dialog::SaveChanges { name, .. } => {
+            ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Do you want to save changes to {name}?"), &[("name", name)])).font(semibold(15.0)));
+            ui.label(tl!("Your changes will be lost if you don't save them."));
+            ui.add_space(8.0);
+            let buttons = ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let cancel = ui.button(tl!("Cancel"));
+                    let dont_save = ui.button(tl!("Don't Save"));
+                    let save = ui.add(egui::Button::new(egui::RichText::new(tl!("Save")).color(egui::Color32::WHITE)).fill(crate::theme::APP_COLOR));
+                    [(cancel, "cancel"), (dont_save, "dontSave"), (save, "save")]
+                })
+                .inner
+            });
+            let buttons = buttons.inner;
+            // Enter clicks the focused button; it means Save only when none of them has focus.
+            let focused = buttons.iter().any(|(b, _)| b.has_focus());
+            let answer = if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                Some("cancel")
+            } else if let Some((_, a)) = buttons.iter().find(|(b, _)| b.clicked()) {
+                Some(*a)
+            } else if !focused && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                Some("save")
+            } else {
+                None
+            };
+            let Some(answer) = answer else { return false };
+            // `ui.saveChanges` reads the prompt from `app.dialog`, which `show` has taken out.
+            app.dialog = Some(d.clone());
+            let _ = app.run("ui.saveChanges", json!({"answer": answer}));
+            true
+        }
+    }
+}
+
+/// The Paragraph dialog's OK. `align`, `left` and `right` are as seen on the page; `flags` are
+/// keep with next, keep lines together, page break before, widow/orphan control.
+#[allow(clippy::too_many_arguments)]
+fn apply_paragraph(
+    app: &mut WordApp,
+    rtl: bool,
+    align: &str,
+    left: f32,
+    right: f32,
+    first: f32,
+    before: f32,
+    after: f32,
+    line: f32,
+    flags: [bool; 4],
+) {
+    let [keep_next, keep_lines, page_break, widow] = flags;
+    // Direction first: the alignment and indents are as seen on the page, and their logical
+    // values depend on it.
+    let _ = app.run(if rtl { "para.rtl" } else { "para.ltr" }, json!({}));
+    let _ = app.run("para.align", json!({"value": align}));
+    let (start, end) = if rtl { (right, left) } else { (left, right) };
+    let _ = app.run(
+        "para.set",
+        json!({"props": {
+            "indentLeft": start * 72.0, "indentRight": end * 72.0, "indentFirst": first * 72.0,
+            "spaceBefore": before, "spaceAfter": after, "lineSpacing": {"rule": "multiple", "value": line},
+            "keepNext": keep_next, "keepLines": keep_lines, "pageBreakBefore": page_break, "widowControl": widow,
+        }}),
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wordcraft_doc::props::Align;
+    use wordcraft_engine::Session;
+
+    fn app_with(text: &str) -> WordApp {
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        let _ = app.run("document.setText", json!({"text": text}));
+        app
+    }
+
+    fn props(app: &WordApp) -> wordcraft_doc::props::ParaProps {
+        app.session.doc.para_at(&app.session.sel.focus).map(|p| p.props.clone()).unwrap_or_default()
+    }
+
+    /// Open the Paragraph dialog and press OK without changing anything.
+    fn ok_unchanged(app: &mut WordApp) {
+        let Some(Dialog::Paragraph { rtl, align, left, right, first, before, after, line, keep_next, keep_lines, page_break, widow }) =
+            Dialog::open("paragraph", app)
+        else {
+            panic!("no paragraph dialog")
+        };
+        apply_paragraph(app, rtl, &align, left, right, first, before, after, line, [keep_next, keep_lines, page_break, widow]);
+    }
+
+    #[test]
+    fn paragraph_dialog_shows_direction_and_visual_alignment() {
+        let mut app = app_with("سلام دنیا");
+        let _ = app.run("para.rtl", json!({}));
+        let _ = app.run("para.set", json!({"props": {"indentLeft": 36.0}}));
+        let Some(Dialog::Paragraph { rtl, align, left, right, .. }) = Dialog::open("paragraph", &mut app) else { panic!() };
+        assert!(rtl);
+        assert_eq!(align, "right", "a start-aligned right-to-left paragraph shows as right aligned");
+        assert_eq!((left, right), (0.0, 0.5), "the start indent is the right one");
+    }
+
+    #[test]
+    fn paragraph_dialog_ok_keeps_what_it_shows() {
+        for (rtl, align) in [(false, "para.alignCenter"), (false, "para.alignRight"), (true, "para.alignLeft"), (true, "para.alignRight")] {
+            let mut app = app_with("متن");
+            let _ = app.run(if rtl { "para.rtl" } else { "para.ltr" }, json!({}));
+            let _ = app.run(align, json!({}));
+            let _ = app.run("para.set", json!({"props": {"indentLeft": 18.0, "indentRight": 9.0}}));
+            let before = props(&app);
+            ok_unchanged(&mut app);
+            let after = props(&app);
+            assert_eq!((after.bidi, after.align), (before.bidi, before.align), "{align} in rtl={rtl}");
+            assert_eq!((after.indent_left, after.indent_right), (Some(18.0), Some(9.0)), "{align} in rtl={rtl}");
+        }
+    }
+
+    #[test]
+    fn paragraph_dialog_changes_direction() {
+        let mut app = app_with("Hello");
+        let Some(Dialog::Paragraph { align, left, right, first, before, after, line, keep_next, keep_lines, page_break, widow, .. }) =
+            Dialog::open("paragraph", &mut app)
+        else {
+            panic!()
+        };
+        // Right to left, aligned right on the page, 1" from the right edge.
+        apply_paragraph(&mut app, true, "right", left, right + 1.0, first, before, after, line, [keep_next, keep_lines, page_break, widow]);
+        let _ = align;
+        let p = props(&app);
+        assert_eq!(p.bidi, Some(true));
+        assert_eq!(p.align, Some(Align::Left), "right on the page is the start edge");
+        assert_eq!(p.indent_left, Some(72.0), "the right indent is the start indent");
     }
 }

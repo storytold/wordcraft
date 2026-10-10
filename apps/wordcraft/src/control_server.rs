@@ -346,11 +346,12 @@ fn serve(stream: TcpStream, sh: Shared) {
         }
         let msg = match serde_json::from_str::<Value>(&line) {
             Ok(m) => m,
+            // Close on a line that isn't JSON: an HTTP request (say, a web page's `fetch` to this
+            // port) starts with a request line that never parses, so it can't carry a command in
+            // its body, even before the key is checked.
             Err(e) => {
-                if writeln!(out, "{}", json!({"ok": false, "error": format!("bad JSON: {e}")})).is_err() {
-                    break;
-                }
-                continue;
+                let _ = writeln!(out, "{}", json!({"ok": false, "error": format!("bad JSON: {e}; closing the connection")}));
+                break;
             }
         };
         let id = msg.get("id").cloned().unwrap_or(Value::Null);
@@ -642,6 +643,29 @@ mod tests {
         }
         let _ = feeder.join();
         assert!(t0.elapsed() < Duration::from_millis(1500), "{:?}", t0.elapsed());
+    }
+
+    #[test]
+    fn bad_json_closes_the_connection() {
+        let (port, rx) = boot();
+        let mut c = Conn::open(port);
+        assert_eq!(c.call("not json")["ok"], false);
+        assert!(c.closed());
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn http_request_cannot_smuggle_a_command() {
+        // What a web page's `fetch("http://127.0.0.1:<port>/", {method: "POST", body})` sends,
+        // even with the key in the body.
+        let (port, rx) = boot();
+        let body = format!("\n{{\"key\":\"{KEY}\",\"method\":\"file.saveAs\",\"params\":{{\"path\":\"/tmp/x.docx\"}}}}\n");
+        let req = format!("POST / HTTP/1.1\r\nHost: 127.0.0.1:7981\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+        let mut c = Conn::open(port);
+        c.1.write_all(req.as_bytes()).unwrap();
+        let _ = c.recv();
+        assert!(c.closed());
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err());
     }
 
     #[test]

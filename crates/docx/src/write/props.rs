@@ -2,7 +2,7 @@
 
 use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CellProps, CharProps, HeightRule, Highlight, LineSpacing, ParaProps, RowProps, TabAlign, TabLeader,
-    TableLook, TableProps, TextColor, VAlign, VMerge, VertAlign,
+    TableFloat, TableLook, TableProps, TextColor, VAlign, VMerge, VertAlign,
 };
 
 use crate::units::{n, twips};
@@ -26,11 +26,19 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     if let Some(s) = &c.style {
         w.val("w:rStyle", s);
     }
-    if let Some(f) = &c.font {
-        w.empty("w:rFonts", &[("w:ascii", f), ("w:hAnsi", f), ("w:cs", f)]);
+    // The complex-script font is written only when set: without it, Persian/Arabic text keeps
+    // the style's. Complex-script bold, italic and size default to the plain ones (they come in
+    // pairs, see `CharProps::overlay`), so text formatted here looks the same in Word.
+    match (&c.font, &c.font_cs) {
+        (Some(f), Some(cs)) => w.empty("w:rFonts", &[("w:ascii", f), ("w:hAnsi", f), ("w:cs", cs)]),
+        (Some(f), None) => w.empty("w:rFonts", &[("w:ascii", f), ("w:hAnsi", f)]),
+        (None, Some(cs)) => w.empty("w:rFonts", &[("w:cs", cs)]),
+        (None, None) => {}
     }
     toggle(w, "w:b", c.bold);
+    toggle(w, "w:bCs", c.bold_cs.or(c.bold));
     toggle(w, "w:i", c.italic);
+    toggle(w, "w:iCs", c.italic_cs.or(c.italic));
     toggle(w, "w:caps", c.caps);
     toggle(w, "w:smallCaps", c.small_caps);
     toggle(w, "w:strike", c.strike);
@@ -58,10 +66,12 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     if let Some(p) = c.position {
         w.val("w:position", &n(wordcraft_geom::to_half_points(p.clamp(-1584.0, 1584.0))));
     }
+    let half = |s: f32| n(wordcraft_geom::to_half_points(s.clamp(1.0, 1638.0)).max(2));
     if let Some(s) = c.size {
-        let hp = n(wordcraft_geom::to_half_points(s.clamp(1.0, 1638.0)).max(2));
-        w.val("w:sz", &hp);
-        w.val("w:szCs", &hp);
+        w.val("w:sz", &half(s));
+    }
+    if let Some(s) = c.size_cs.or(c.size) {
+        w.val("w:szCs", &half(s));
     }
     if let Some(h) = c.highlight {
         w.val("w:highlight", if h == Highlight::None { "none" } else { h.ooxml() });
@@ -71,6 +81,9 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
             Some(col) => w.empty("w:u", &[("w:val", u.ooxml()), ("w:color", &col.hex())]),
             None => w.val("w:u", u.ooxml()),
         }
+    }
+    if let Some(b) = &c.border {
+        border_el(w, "w:bdr", b);
     }
     if let Some(s) = c.shading {
         w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &s.hex())]);
@@ -86,8 +99,12 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
         );
     }
     toggle(w, "w:rtl", c.rtl);
-    if let Some(l) = &c.lang {
-        w.val("w:lang", l);
+    toggle(w, "w:cs", c.cs);
+    match (&c.lang, &c.lang_bidi) {
+        (Some(l), Some(b)) => w.empty("w:lang", &[("w:val", l), ("w:bidi", b)]),
+        (Some(l), None) => w.val("w:lang", l),
+        (None, Some(b)) => w.empty("w:lang", &[("w:bidi", b)]),
+        (None, None) => {}
     }
 }
 
@@ -260,7 +277,7 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool) {
     }
 }
 
-fn margins(w: &mut W, tag: &str, m: &[f32; 4]) {
+pub fn margins(w: &mut W, tag: &str, m: &[f32; 4]) {
     w.open(tag, &[]);
     for (name, v) in ["w:top", "w:left", "w:bottom", "w:right"].iter().zip(m.iter()) {
         w.empty(name, &[("w:w", &twips(v.clamp(0.0, 1584.0))), ("w:type", "dxa")]);
@@ -304,6 +321,9 @@ pub fn tblpr(w: &mut W, t: &TableProps) {
     w.open("w:tblPr", &[]);
     if let Some(s) = &t.style {
         w.val("w:tblStyle", s);
+    }
+    if let Some(f) = &t.float {
+        table_float(w, f);
     }
     if let Some(p) = t.width_pct {
         w.empty("w:tblW", &[("w:w", &n(round(p.clamp(0.0, 1000.0) * 50.0))), ("w:type", "pct")]);
@@ -396,4 +416,37 @@ pub fn tcpr(w: &mut W, c: &CellProps) {
         VAlign::Bottom => w.val("w:vAlign", "bottom"),
     }
     w.close("w:tcPr");
+}
+
+/// `w:tblpPr` and `w:tblOverlap` for a floating table.
+fn table_float(w: &mut W, f: &TableFloat) {
+    use wordcraft_doc::para::Anchor;
+    let rel = |a: Anchor, text: &'static str| match a {
+        Anchor::Page => "page",
+        Anchor::Margin => "margin",
+        _ => text,
+    };
+    let [left, top, right, bottom] = f.dist_from_text().map(twips);
+    let fin = |v: f32| twips(if v.is_finite() { v.clamp(-31_680.0, 31_680.0) } else { 0.0 });
+    let (x, y) = (fin(f.x), fin(f.y));
+    let mut a: Vec<(&str, &str)> = vec![
+        ("w:leftFromText", &left),
+        ("w:rightFromText", &right),
+        ("w:topFromText", &top),
+        ("w:bottomFromText", &bottom),
+        ("w:vertAnchor", rel(f.v_rel, "text")),
+        ("w:horzAnchor", rel(f.h_rel, "text")),
+    ];
+    match f.h_align {
+        Some(h) => a.push(("w:tblpXSpec", h.ooxml(true))),
+        None => a.push(("w:tblpX", &x)),
+    }
+    match f.v_align {
+        Some(v) => a.push(("w:tblpYSpec", v.ooxml(false))),
+        None => a.push(("w:tblpY", &y)),
+    }
+    w.empty("w:tblpPr", &a);
+    if !f.overlap {
+        w.val("w:tblOverlap", "never");
+    }
 }

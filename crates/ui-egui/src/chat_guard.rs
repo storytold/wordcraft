@@ -182,7 +182,7 @@ fn lists_kept(before: &Numbering, after: &Numbering) -> bool {
         abstracts_after.iter().find(|y| y.id == *id) == Some(x)
     });
     let nums_kept = nums.iter().all(|x| {
-        let Num { id, abstract_id: _, start_overrides: _ } = x;
+        let Num { id, abstract_id: _, start_overrides: _, level_overrides: _ } = x;
         nums_after.iter().find(|y| y.id == *id) == Some(x)
     });
     abs_kept && nums_kept
@@ -208,8 +208,21 @@ pub fn check_judging(before: &Document, after: &Document, accept: bool, handle: 
 /// the gate sets it). The stories and comments are compared by the views, the revisions through
 /// the marks that use them, the lists by [`lists_kept`].
 fn same_settings(a: &Document, b: &Document) -> bool {
-    let Document { body: _, last_section, parts: _, styles, numbering: _, comments: _, revisions: _, settings, core, sources, media, passthrough } =
-        a;
+    let Document {
+        body: _,
+        last_section,
+        parts: _,
+        styles,
+        numbering: _,
+        comments: _,
+        revisions: _,
+        settings,
+        core,
+        custom_props,
+        sources,
+        media,
+        passthrough,
+    } = a;
     let Document {
         body: _,
         last_section: last_section_b,
@@ -220,6 +233,7 @@ fn same_settings(a: &Document, b: &Document) -> bool {
         revisions: _,
         settings: settings_b,
         core: core_b,
+        custom_props: custom_props_b,
         sources: sources_b,
         media: media_b,
         passthrough: passthrough_b,
@@ -232,6 +246,7 @@ fn same_settings(a: &Document, b: &Document) -> bool {
         && last_section == last_section_b
         && styles == styles_b
         && core == core_b
+        && custom_props == custom_props_b
         && sources == sources_b
         && media.keys().eq(media_b.keys())
         && passthrough.keys().eq(passthrough_b.keys())
@@ -702,6 +717,13 @@ fn mask_key(k: &Key, m: Mask) -> Key {
                 link,
                 ins,
                 del,
+                border,
+                cs,
+                font_cs: _,
+                size_cs: _,
+                bold_cs: _,
+                italic_cs: _,
+                lang_bidi,
             } = &k.props;
             let props = CharProps {
                 style: style.clone(),
@@ -734,6 +756,14 @@ fn mask_key(k: &Key, m: Mask) -> Key {
                 link: link.clone(),
                 ins: *ins,
                 del: *del,
+                border: *border,
+                cs: *cs,
+                // Bold, Italic, Font and Size set these with their Latin twins (Persian, Arabic text).
+                font_cs: None,
+                size_cs: None,
+                bold_cs: None,
+                italic_cs: None,
+                lang_bidi: lang_bidi.clone(),
             };
             Key { props, ..k.clone() }
         }
@@ -818,6 +848,21 @@ mod tests {
         let mut caps = before.clone();
         fmt(&mut caps, 0, 5, &|c| c.caps = Some(true));
         assert_eq!(check_member(&before, &caps, "@claude"), Verdict::Refuse(FORMAT));
+        // Bold on Persian or Arabic text sets the complex-script twin too: still allowed formatting.
+        let mut bold_cs = before.clone();
+        fmt(&mut bold_cs, 0, 5, &|c| {
+            c.bold = Some(true);
+            c.bold_cs = Some(true);
+            c.font_cs = Some("Vazirmatn".into());
+        });
+        assert_eq!(check_member(&before, &bold_cs, "@claude"), Verdict::Format);
+        // A character border or the complex-script switch is other formatting.
+        let mut border = before.clone();
+        fmt(&mut border, 0, 5, &|c| c.border = Some(wordcraft_doc::props::Border::default()));
+        assert_eq!(check_member(&before, &border, "@claude"), Verdict::Refuse(FORMAT));
+        let mut cs = before.clone();
+        fmt(&mut cs, 0, 5, &|c| c.cs = Some(true));
+        assert_eq!(check_member(&before, &cs, "@claude"), Verdict::Refuse(FORMAT));
     }
 
     #[test]
@@ -958,6 +1003,14 @@ mod tests {
         let before = doc();
         let mut after = before.clone();
         after.last_section.margin_left += 10.0;
+        assert_eq!(check_member(&before, &after, "@claude"), Verdict::Refuse(DOC));
+    }
+
+    #[test]
+    fn custom_document_properties_are_refused() {
+        let before = doc();
+        let mut after = before.clone();
+        after.custom_props.push(wordcraft_doc::CustomProp { name: "Client".into(), kind: "lpwstr".into(), value: "x".into() });
         assert_eq!(check_member(&before, &after, "@claude"), Verdict::Refuse(DOC));
     }
 }

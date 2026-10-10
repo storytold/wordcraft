@@ -10,7 +10,8 @@ It listens on `127.0.0.1` only. Send one JSON object per line, with the window's
 ```
 
 Errors come back as `{"id": …, "ok": false, "error": "message"}`. A failed command leaves the
-document unchanged.
+document unchanged. A line that isn't valid JSON gets one error reply, then the server closes the
+connection (so an HTTP request sent to the port can't run a command); reconnect to continue.
 
 ## Keys
 
@@ -70,13 +71,14 @@ Stop Chat revokes every member at once and closes the port that Start Chat opene
 
 | Method | Params | Result |
 |---|---|---|
-| `engine.execute` | `command`, `params` | the command's result (any id from `engine.commands`, including UI commands `ui.tab`, `ui.dialog`, `ui.backstage`, `ui.language` (`{"value": "auto"|"en"|"zh-hans"|"zh-hant"|"ja"}`)…) |
+| `engine.execute` | `command`, `params` | the command's result (any id from `engine.commands`, including UI commands `ui.tab`, `ui.dialog`, `ui.backstage`, `ui.zotero.*` (see `docs/zotero.md`), `ui.language` (`{"value": "auto"|"en"|"zh-hans"|"zh-hant"|"ja"|"pt-br"|"es"|"uk"}`)…) |
 | `engine.commands` | — | every command: id, label, location, shortcut, params, enabled |
 | `document.inspect` | `text?` | blocks (text, style, runs, lists, tables), parts, sections, selection, pages |
 | `ui.inspect` | — | UI state, view, dialog, window size, page rects on screen, caret, perf |
 | `ui.click` | `x`, `y`, `button?`, `count?`, `shift?`, `cmd?`, `alt?` | real pointer input at window coordinates |
 | `ui.clickText` | `page` (0-based), `x`, `y` (points from the page's top-left), `count?` | click inside a page |
 | `ui.move` / `ui.drag` | `x`,`y` / `x`,`y`,`toX`,`toY`,`steps?` | pointer move / drag |
+| `ui.press` / `ui.release` | `x`,`y`, modifiers | primary button down / up there (with `ui.move` between: a drag you can screenshot halfway) |
 | `ui.key` | `key` (`B`, `Enter`, `Left`…), `shift?`, `alt?`, `cmd?` | key press through egui (shortcuts apply) |
 | `ui.text` | `text` | typed text through egui |
 | `ui.screenshot` | `path?` | PNG of the window |

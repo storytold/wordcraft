@@ -161,6 +161,10 @@ impl Rect {
     pub fn inset(&self, l: f32, t: f32, r: f32, b: f32) -> Rect {
         Rect::new(self.x + l, self.y + t, self.w - l - r, self.h - t - b)
     }
+    /// Grown by `d` on every side (shrunk for negative `d`, down to zero size).
+    pub fn expand(&self, d: f32) -> Rect {
+        self.inset(-d, -d, -d, -d)
+    }
 }
 
 /// Standard paper sizes (Word's Layout › Size gallery), in points (portrait).

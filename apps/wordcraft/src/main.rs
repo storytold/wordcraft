@@ -15,25 +15,36 @@
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+#[cfg(target_os = "macos")]
+mod apple_events;
 mod control_server;
 #[cfg(any(target_os = "windows", test))]
 mod graphics;
 mod logging;
 
 use wordcraft_engine::Session;
-use wordcraft_ui_egui::{Services, UiState, WordApp, window_geometry::WindowGeometry};
+use wordcraft_ui_egui::{
+    Services, UiState, WordApp,
+    window_geometry::{WindowGeometry, take_rescue},
+};
 
-/// The app, the restored window geometry until the first frame has checked it, and the window's
-/// control port (closed on exit, with its key file).
-struct App(WordApp, Option<WindowGeometry>, std::sync::Arc<control_server::ControlPort>);
+/// The app, the restored window geometry until the first frame has checked it, the window's
+/// control port (closed on exit, with its key file) and, on macOS, the documents opened from Finder.
+struct App(WordApp, Option<WindowGeometry>, std::sync::Arc<control_server::ControlPort>, #[cfg(target_os = "macos")] fmv_macos_events::Inbox);
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(target_os = "macos")]
+        apple_events::poll(&self.3, &mut self.0, ctx);
         self.0.logic(ctx);
         let prev = self.0.ui.window;
         self.0.ui.window = ctx.input(|i| WindowGeometry::track(prev, i.viewport(), i.viewport_rect().size()));
-        if let Some(pos) = self.1.take().and_then(|g| ctx.input(|i| g.rescue_position(i.viewport()))) {
+        if let Some(pos) = ctx.input(|i| take_rescue(&mut self.1, i.viewport())) {
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
+        }
+        // The window's close button: with unsaved changes, ask first (`WordApp::close_requested`).
+        if ctx.input(|i| i.viewport().close_requested()) && !self.0.close_requested() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
         if self.0.quit_requested {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -116,7 +127,7 @@ fn services() -> Services {
             let d = if purpose == "picture" {
                 d.add_filter("Pictures", &["png", "jpg", "jpeg", "gif", "webp", "bmp"])
             } else {
-                d.add_filter("Documents", &["docx", "docm", "dotx", "odt", "rtf", "txt", "md", "html", "htm", "json"])
+                d.add_filter("Documents", &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "rtf", "txt", "md", "html", "htm", "tex", "json"])
                     .add_filter("Word document", &["docx"])
                     .add_filter("All files", &["*"])
             };
@@ -196,6 +207,12 @@ fn main() -> eframe::Result {
     if let Some(window) = restored {
         options.viewport = window.apply(options.viewport);
     }
+    // Registered before the event loop starts, so it catches the Finder event that launched us as
+    // well as later ones. Lives until the event loop returns; the app creator only borrows it.
+    #[cfg(target_os = "macos")]
+    let apple_events = apple_events::AppleEvents::install();
+    #[cfg(target_os = "macos")]
+    let apple_events = &apple_events;
     eframe::run_native(
         "WordCraft",
         options,
@@ -228,7 +245,13 @@ fn main() -> eframe::Result {
                     log::warn!("{f}: {e}");
                 }
             }
-            Ok(Box::new(App(app, restored, port)))
+            Ok(Box::new(App(
+                app,
+                restored,
+                port,
+                #[cfg(target_os = "macos")]
+                apple_events.connect(&cc.egui_ctx),
+            )))
         }),
     )
 }

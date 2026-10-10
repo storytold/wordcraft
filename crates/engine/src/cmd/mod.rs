@@ -5,6 +5,7 @@ pub mod chat;
 pub mod citations;
 pub mod design;
 pub mod edit;
+pub mod equation;
 pub mod file;
 pub mod format;
 pub mod insert;
@@ -14,6 +15,7 @@ pub mod page;
 pub mod para;
 pub mod references;
 pub mod review;
+pub mod speech;
 pub mod table;
 pub mod text;
 pub mod tools;
@@ -35,6 +37,7 @@ pub fn registry() -> Registry {
     v.extend(para::specs());
     v.extend(view::specs());
     v.extend(insert::specs());
+    v.extend(equation::specs());
     v.extend(page::specs());
     v.extend(table::specs());
     v.extend(review::specs());
@@ -46,6 +49,7 @@ pub fn registry() -> Registry {
     v.extend(citations::specs());
     v.extend(objects::specs());
     v.extend(tools::specs());
+    v.extend(speech::specs());
     Registry::new(v)
 }
 
@@ -148,20 +152,39 @@ pub fn type_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// Take a paragraph out of its list like Word does when Enter or Backspace ends a list: a
+/// "List Paragraph" goes back to Normal; any other style keeps itself with numbering switched off.
+pub fn leave_list(para: &mut wordcraft_doc::Paragraph) {
+    if para.props.style.as_deref() == Some("ListParagraph") {
+        para.props.style = None;
+        para.props.numbering = None;
+    } else {
+        // `num: 0` overrides numbering a style may carry.
+        para.props.numbering = Some(wordcraft_doc::props::NumRef { num: 0, level: 0 });
+    }
+    para.props.indent_left = None;
+    para.props.indent_first = None;
+    para.touch();
+}
+
 /// Split the paragraph at `at` like Enter does: an empty list paragraph leaves the list, the
 /// next paragraph gets the style's "next" style when Enter is at the end.
 pub fn split_para(s: &mut Session, at: &Pos) -> Result<Pos, CmdError> {
+    // `num: 0` means "explicitly not in a list", so it isn't a list item.
     let (at_end, style, empty_list) = match s.doc.para_at(at) {
-        Some(p) => (at.off >= p.len(), p.props.style.clone(), p.is_empty() && p.props.numbering.is_some()),
+        Some(p) => (at.off >= p.len(), p.props.style.clone(), p.props.numbering.filter(|n| n.num != 0 && p.is_empty())),
         None => return Err(CmdError::Failed("no paragraph at caret".into())),
     };
-    if empty_list {
-        // Enter on an empty list item ends the list (Word behaviour).
+    if let Some(n) = empty_list {
+        // Enter on an empty list item: a nested item moves up a level, a top-level one ends
+        // the list (Word behaviour).
         let para = s.doc.para_mut(at.story, &at.path)?;
-        para.props.numbering = Some(wordcraft_doc::props::NumRef { num: 0, level: 0 });
-        para.props.indent_left = None;
-        para.props.indent_first = None;
-        para.touch();
+        if n.level > 0 {
+            para.props.numbering = Some(wordcraft_doc::props::NumRef { num: n.num, level: n.level - 1 });
+            para.touch();
+        } else {
+            leave_list(para);
+        }
         return Ok(at.clone());
     }
     let mark_revs = s.doc.para_at(at).map(|p| (p.mark.ins, p.mark.del)).unwrap_or_default();
@@ -191,19 +214,26 @@ pub fn split_para(s: &mut Session, at: &Pos) -> Result<Pos, CmdError> {
     Ok(new)
 }
 
+/// ISO-8601 timestamp (UTC, seconds) for `secs` since the Unix epoch.
+fn iso_from_unix_secs(secs: u64) -> String {
+    let (y, m, d) = civil_from_days((secs / 86_400) as i64);
+    let t = secs % 86_400;
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", t / 3600, t / 60 % 60, t % 60)
+}
+
 /// ISO-8601 timestamp (UTC, seconds).
 pub fn now_iso() -> String {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-        let days = (secs / 86_400) as i64;
-        let (y, m, d) = civil_from_days(days);
-        let t = secs % 86_400;
-        format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", t / 3600, t / 60 % 60, t % 60)
+        iso_from_unix_secs(secs)
     }
+    // `SystemTime::now()` panics on wasm32-unknown-unknown, so ask the browser's clock.
     #[cfg(target_arch = "wasm32")]
     {
-        "2026-01-01T00:00:00Z".to_string()
+        let ms = js_sys::Date::now();
+        // Clamp a NaN or pre-epoch clock to 0 rather than fail.
+        iso_from_unix_secs(if ms.is_finite() && ms > 0.0 { (ms / 1000.0) as u64 } else { 0 })
     }
 }
 
@@ -224,4 +254,22 @@ pub fn civil_from_days(z: i64) -> (i64, u32, u32) {
 /// Story given in params (`"story": "body"` / `{"part": 3}`), else the caret's.
 pub fn story_param(s: &Session, v: &Value) -> StoryRef {
     v.get("story").and_then(|x| serde_json::from_value(x.clone()).ok()).unwrap_or(s.sel.focus.story)
+}
+
+#[cfg(test)]
+mod iso_tests {
+    use super::iso_from_unix_secs;
+
+    #[test]
+    fn formats_epoch_and_known_timestamps() {
+        assert_eq!(iso_from_unix_secs(0), "1970-01-01T00:00:00Z");
+        assert_eq!(iso_from_unix_secs(1_760_082_785), "2025-10-10T07:53:05Z");
+    }
+
+    #[test]
+    fn formats_leap_day_and_year_end() {
+        assert_eq!(iso_from_unix_secs(1_709_164_800), "2024-02-29T00:00:00Z");
+        assert_eq!(iso_from_unix_secs(951_782_400), "2000-02-29T00:00:00Z");
+        assert_eq!(iso_from_unix_secs(1_735_689_599), "2024-12-31T23:59:59Z");
+    }
 }

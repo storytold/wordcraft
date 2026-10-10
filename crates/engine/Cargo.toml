@@ -16,6 +16,7 @@ wordcraft-layout = { workspace = true }
 wordcraft-render = { workspace = true }
 wordcraft-proof = { workspace = true }
 wordcraft-docx = { workspace = true }
+wordcraft-docbin = { workspace = true }
 wordcraft-pdf = { workspace = true }
 wordcraft-formats = { workspace = true }
 wordcraft-chat = { workspace = true }
@@ -24,7 +25,13 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
 regex = { workspace = true }
+regex-automata = { workspace = true }
 image = { workspace = true }
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The browser clock for `now_iso` (`SystemTime::now()` panics on wasm32).
+js-sys = "0.3"
+
 [dev-dependencies]
+zip = { workspace = true }
 wordcraft-chat = { workspace = true, features = ["testing"] }

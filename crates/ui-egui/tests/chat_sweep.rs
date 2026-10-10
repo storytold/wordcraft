@@ -111,8 +111,24 @@ fn representative(id: &str) -> Value {
 
 // ---------------------------------------------------------------- independent checker
 
-const CHAR_ALLOWED: [&str; 11] =
-    ["bold", "italic", "underline", "underlineColor", "strike", "doubleStrike", "font", "size", "color", "highlight", "vertAlign"];
+const CHAR_ALLOWED: [&str; 15] = [
+    "bold",
+    "italic",
+    "underline",
+    "underlineColor",
+    "strike",
+    "doubleStrike",
+    "font",
+    "size",
+    "color",
+    "highlight",
+    "vertAlign",
+    // Their complex-script twins (Persian, Arabic text): Bold, Italic, Font and Size set both.
+    "boldCs",
+    "italicCs",
+    "fontCs",
+    "sizeCs",
+];
 /// Paragraph properties a member may change on the owner's paragraphs. Lists (`numbering`, and
 /// the list a style puts the paragraph in) are not among them.
 const PARA_ALLOWED: [&str; 9] =

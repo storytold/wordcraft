@@ -250,6 +250,9 @@ pub struct CharProps {
     /// Character shading (background fill).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shading: Option<Rgb>,
+    /// Character border (`w:bdr`); `style: None` = explicitly no border.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border: Option<Border>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vert_align: Option<VertAlign>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -283,8 +286,26 @@ pub struct CharProps {
     pub lang: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub no_proof: Option<bool>,
+    /// Right-to-left run (OOXML `w:rtl`): its characters are complex script and read right to left.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rtl: Option<bool>,
+    /// Format the whole run with the complex-script properties below (OOXML `w:cs`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cs: Option<bool>,
+    /// Complex-script font (Arabic, Persian, Hebrew…; OOXML `w:rFonts/@w:cs`). `None` = `font`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_cs: Option<String>,
+    /// Complex-script size, points (`w:szCs`). `None` = the same as `size` (see [`CharProps::overlay`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_cs: Option<f32>,
+    /// Complex-script bold / italic (`w:bCs`, `w:iCs`). `None` = the same as `bold` / `italic`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bold_cs: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub italic_cs: Option<bool>,
+    /// BCP 47 language of complex-script text (`w:lang/@w:bidi`, e.g. `fa-IR`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lang_bidi: Option<String>,
     /// Hyperlink target: a URL, or `#bookmark` for an internal link.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
@@ -304,10 +325,25 @@ macro_rules! overlay_fields {
 
 impl CharProps {
     /// Apply every `Some` field of `patch` on top of `self`.
+    ///
+    /// Size, bold and italic come in pairs with their complex-script values (Word's own buttons
+    /// set both): a patch that sets the plain value and leaves the complex-script one `None` sets
+    /// both, so a run's size or bold isn't overridden for its Persian/Arabic characters by an
+    /// inherited `w:szCs` / `w:bCs`. The complex-script font inherits on its own (Word often
+    /// sets only the Latin font and lets complex-script text keep the style's).
     pub fn overlay(&mut self, patch: &CharProps) {
         overlay_fields!(self, patch; style, font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
-            shading, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl,
-            link, ins, del);
+            shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl,
+            cs, font_cs, size_cs, bold_cs, italic_cs, lang_bidi, link, ins, del);
+        if patch.size.is_some() && patch.size_cs.is_none() {
+            self.size_cs = None;
+        }
+        if patch.bold.is_some() && patch.bold_cs.is_none() {
+            self.bold_cs = None;
+        }
+        if patch.italic.is_some() && patch.italic_cs.is_none() {
+            self.italic_cs = None;
+        }
     }
     pub fn overlaid(mut self, patch: &CharProps) -> CharProps {
         self.overlay(patch);
@@ -332,6 +368,19 @@ pub enum Align {
     Right,
     Justify,
     Distribute,
+}
+
+impl Align {
+    /// Alignment is logical (`Left` is the start edge, ISO 29500 `start`): the alignment as seen
+    /// on the page, or the logical one for a visual choice, in a paragraph that reads right to
+    /// left when `rtl` (Left and Right swap; the swap is its own inverse).
+    pub fn visual(self, rtl: bool) -> Align {
+        match self {
+            Align::Left if rtl => Align::Right,
+            Align::Right if rtl => Align::Left,
+            a => a,
+        }
+    }
 }
 
 /// Line spacing rule.
@@ -487,6 +536,27 @@ impl Borders {
     pub fn any_visible(&self) -> bool {
         [self.top, self.left, self.bottom, self.right, self.between, self.inside_v].iter().flatten().any(Border::is_visible)
     }
+    /// Apply every `Some` side of `patch` on top of `self`.
+    pub fn overlay(&mut self, patch: &Borders) {
+        if patch.top.is_some() {
+            self.top = patch.top;
+        }
+        if patch.left.is_some() {
+            self.left = patch.left;
+        }
+        if patch.bottom.is_some() {
+            self.bottom = patch.bottom;
+        }
+        if patch.right.is_some() {
+            self.right = patch.right;
+        }
+        if patch.between.is_some() {
+            self.between = patch.between;
+        }
+        if patch.inside_v.is_some() {
+            self.inside_v = patch.inside_v;
+        }
+    }
 }
 
 /// A reference to a numbering definition and level.
@@ -601,6 +671,36 @@ pub struct TableProps {
     pub shading: Option<Rgb>,
     /// Alternative text.
     pub caption: Option<String>,
+    /// Floating placement (`w:tblpPr`); `None` for a table in the text flow.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub float: Option<TableFloat>,
+}
+
+/// Where a floating table sits; the text after it wraps around it.
+#[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TableFloat {
+    /// What `x` is measured from: the column (`Column`), the margin or the page.
+    pub h_rel: crate::para::Anchor,
+    /// What `y` is measured from: the text where the table stands (`Paragraph`), the margin or
+    /// the page.
+    pub v_rel: crate::para::Anchor,
+    /// Offsets, points (used when the matching alignment is `None`).
+    pub x: f32,
+    pub y: f32,
+    pub h_align: Option<crate::para::FloatAlign>,
+    pub v_align: Option<crate::para::FloatAlign>,
+    /// Distance from surrounding text: left, top, right, bottom (points).
+    pub dist: [f32; 4],
+    /// Whether it may overlap other floating tables (`w:tblOverlap`); Word's default is yes.
+    pub overlap: bool,
+}
+
+impl TableFloat {
+    /// The distances from text, finite and clamped (left, top, right, bottom).
+    pub fn dist_from_text(&self) -> [f32; 4] {
+        self.dist.map(|v| if v.is_finite() { v.clamp(0.0, 1584.0) } else { 0.0 })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -690,6 +790,22 @@ mod tests {
         assert_eq!(r.bold, Some(true));
         assert_eq!(r.size, Some(14.0));
         assert_eq!(r.italic, Some(true));
+    }
+
+    #[test]
+    fn borders_overlay_per_side() {
+        let thin = Border::single(0.5);
+        let thick = Border::single(2.0);
+        let nil = Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 };
+        let mut b = Borders::all(thin);
+        b.overlay(&Borders { top: Some(thick), ..Default::default() });
+        assert_eq!(b.top, Some(thick));
+        assert_eq!(b.bottom, Some(thin));
+        b.overlay(&Borders::box_(nil));
+        assert_eq!(b.left, Some(nil)); // explicit nil overrides that side
+        assert_eq!(b.between, Some(thin)); // untouched sides survive
+        b.overlay(&Borders::default());
+        assert_eq!(b.left, Some(nil)); // empty patch changes nothing
     }
 
     #[test]

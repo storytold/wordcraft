@@ -4,12 +4,14 @@
 //! HTML's implicit closes for `p`, `li`, `tr`, `td`/`th` and headings. It understands `p`, `div`,
 //! `h1`–`h6`, `b`/`strong`, `i`/`em`, `u`, `s`/`strike`/`del`, `sup`/`sub`, `code`/`kbd`, `a`
 //! (links and `id`/`name` anchors), `br`, `hr`, `ul`/`ol`/`li` (nested), `table`/`tr`/`td`/`th`
-//! (colspan/rowspan), `img` with `data:` URIs, `blockquote`, `pre`, `font`, and the CSS
+//! (colspan/rowspan), `img` (`data:` URIs, other sources through a caller's [`ImageLoader`]), `blockquote`, `pre`, `font`, and the CSS
 //! properties `color`, `background-color`, `font-weight`, `font-style`, `font-size`,
 //! `font-family`, `text-decoration`, `vertical-align`, `text-align`, `white-space` and page
 //! breaks. Scripts and styles are skipped; nesting is capped.
 //!
 //! Export writes clean semantic HTML with inline CSS and pictures as `data:` URIs.
+
+use std::sync::Arc;
 
 use wordcraft_doc::{Align, Document};
 
@@ -341,9 +343,34 @@ struct El {
 struct TableB {
     rows: Vec<Vec<Cell>>,
     row: Option<Vec<Cell>>,
+    /// The table or one of its cells asks for borders.
+    bordered: bool,
 }
 
-struct Builder {
+/// Whether an element's `border` attribute or `style` declares a visible border.
+fn declares_border(attrs: &[(String, String)], is_table: bool) -> bool {
+    if is_table && attr(attrs, "border").is_some_and(|b| b.trim().parse::<u32>().map(|n| n > 0).unwrap_or(b.trim().is_empty())) {
+        return true;
+    }
+    let Some(style) = attr(attrs, "style") else { return false };
+    style.split(';').any(|decl| {
+        let Some((name, value)) = decl.split_once(':') else { return false };
+        let name = name.trim().to_ascii_lowercase();
+        if !matches!(name.as_str(), "border" | "border-top" | "border-right" | "border-bottom" | "border-left") {
+            return false;
+        }
+        let value = value.trim().to_ascii_lowercase();
+        !value.is_empty() && !value.split_whitespace().any(|tok| matches!(tok, "none" | "hidden" | "0" | "0px" | "0pt"))
+    })
+}
+
+/// Loads the bytes of an image an `img` names by a source other than a `data:` URI (a path
+/// relative to the HTML file). `None` when it can't be found. A picture used more than once can
+/// share one buffer.
+pub type ImageLoader<'a> = &'a dyn Fn(&str) -> Option<Arc<Vec<u8>>>;
+
+struct Builder<'r> {
+    images: ImageLoader<'r>,
     containers: Vec<Vec<FBlock>>,
     cells: Vec<Cell>,
     tables: Vec<TableB>,
@@ -533,9 +560,10 @@ fn attr<'a>(attrs: &'a [(String, String)], name: &str) -> Option<&'a str> {
     attrs.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
 }
 
-impl Builder {
-    fn new() -> Builder {
+impl<'r> Builder<'r> {
+    fn new(images: ImageLoader<'r>) -> Builder<'r> {
         Builder {
+            images,
             containers: vec![Vec::new()],
             cells: Vec::new(),
             tables: Vec::new(),
@@ -750,7 +778,8 @@ impl Builder {
                     if let Some(r) = t.row.take() {
                         t.rows.push(r);
                     }
-                    let mut ft = FTable { rows: t.rows.into_iter().filter(|r| !r.is_empty()).collect(), widths: Vec::new() };
+                    let borderless = !t.bordered;
+                    let mut ft = FTable { rows: t.rows.into_iter().filter(|r| !r.is_empty()).collect(), widths: Vec::new(), borderless };
                     if !ft.rows.is_empty() {
                         ft.insert_covered();
                         self.container().push(FBlock::Table(ft));
@@ -774,6 +803,17 @@ impl Builder {
             }
         }
         None
+    }
+
+    fn close_head_for_start(&mut self, name: &str) {
+        // A body-content start tag implicitly ends an omitted </head>.
+        if !matches!(
+            name,
+            "html" | "head" | "base" | "basefont" | "bgsound" | "link" | "meta" | "noframes" | "noscript" | "script" | "style" | "template" | "title"
+        ) && let Some(k) = self.find_open(|e| e.kind == ElKind::Head, |_| false)
+        {
+            self.pop_to(k);
+        }
     }
 
     fn start(&mut self, name: &str, attrs: &[(String, String)], self_close: bool) {
@@ -875,7 +915,9 @@ impl Builder {
                         }
                     }
                 }
-                let img = attr(attrs, "src").and_then(data_uri).and_then(|d| make_img(d, w, h, &alt));
+                let img = attr(attrs, "src")
+                    .and_then(|src| if src.trim_start().starts_with("data:") { data_uri(src).map(Arc::new) } else { (self.images)(src.trim()) })
+                    .and_then(|d| make_img(d, w, h, &alt));
                 let f = self.fmt();
                 match img {
                     Some(im) => self.start_para().inlines.push(Inline::Image(im)),
@@ -959,7 +1001,7 @@ impl Builder {
             preserve = true;
         }
         match kind {
-            ElKind::Table => self.tables.push(TableB { rows: Vec::new(), row: None }),
+            ElKind::Table => self.tables.push(TableB { rows: Vec::new(), row: None, bordered: declares_border(attrs, true) }),
             ElKind::Tr => {
                 if let Some(t) = self.tables.last_mut()
                     && let Some(r) = t.row.take()
@@ -969,6 +1011,11 @@ impl Builder {
             }
             ElKind::Cell => {
                 let tb = self.find_open(|e| e.kind == ElKind::Tr, |e| e.kind == ElKind::Table).is_none();
+                if let Some(t) = self.tables.last_mut()
+                    && declares_border(attrs, false)
+                {
+                    t.bordered = true;
+                }
                 if tb && let Some(t) = self.tables.last_mut() {
                     // A cell without a row: start one.
                     if let Some(r) = t.row.take() {
@@ -1032,8 +1079,13 @@ impl Builder {
 
 /// Parse HTML text into the flow model.
 pub fn parse(s: &str) -> Flow {
+    parse_with(s, &|_| None)
+}
+
+/// [`parse`], loading pictures that aren't `data:` URIs through `images`.
+pub fn parse_with(s: &str, images: ImageLoader) -> Flow {
     let mut lx = Lexer { s, pos: 0 };
-    let mut b = Builder::new();
+    let mut b = Builder::new(images);
     let mut guard = 0usize;
     while let Some(t) = lx.next() {
         guard += 1;
@@ -1043,6 +1095,7 @@ pub fn parse(s: &str) -> Flow {
         match t {
             Tok::Text(t) => b.text(&t),
             Tok::Start { name, attrs, self_close } => {
+                b.close_head_for_start(&name);
                 if matches!(name.as_str(), "script" | "style" | "noscript" | "template" | "textarea") && !self_close {
                     lx.skip_past(&format!("</{name}"));
                     lx.skip_past(">");
@@ -1059,6 +1112,11 @@ pub fn parse(s: &str) -> Flow {
 /// Parse HTML into a document.
 pub fn import(s: &str) -> Document {
     model::to_doc(&parse(s))
+}
+
+/// [`import`], loading pictures that aren't `data:` URIs through `images`.
+pub fn import_with(s: &str, images: ImageLoader) -> Document {
+    model::to_doc(&parse_with(s, images))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1111,7 +1169,8 @@ fn text_html(t: &str) -> String {
 /// Inline spans → HTML.
 pub fn inlines_html(inlines: &[Inline]) -> String {
     let mut o = String::new();
-    for i in inlines {
+    let inlines = crate::model::equations_as_text(inlines);
+    for i in inlines.iter() {
         match i {
             Inline::Text(t, f) => {
                 let mut open = String::new();
@@ -1178,6 +1237,7 @@ pub fn inlines_html(inlines: &[Inline]) -> String {
                 ));
             }
             Inline::Anchor(a) => o.push_str(&format!("<a id=\"{}\"></a>", esc(a))),
+            Inline::Equation { .. } => {}
         }
     }
     o
@@ -1389,6 +1449,24 @@ mod tests {
             .collect()
     }
 
+    fn table_style(html: &str) -> Option<String> {
+        let doc = crate::model::to_doc(&parse(html));
+        doc.body.iter().find_map(|b| match &**b {
+            wordcraft_doc::Block::Table(t) => Some(t.props.style.clone().unwrap_or_default()),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn borderless_tables_get_no_grid_style() {
+        assert_eq!(table_style("<table><tr><td>a<td>b</table>").as_deref(), Some(""));
+        assert_eq!(table_style("<table style='border:none'><tr><td style='border:0'>a</table>").as_deref(), Some(""));
+        assert_eq!(table_style("<table border=0><tr><td style='border: 0px none'>a</table>").as_deref(), Some(""));
+        assert_eq!(table_style("<table border=1><tr><td>a</table>").as_deref(), Some("TableGrid"));
+        assert_eq!(table_style("<table style='border:1px solid #000'><tr><td>a</table>").as_deref(), Some("TableGrid"));
+        assert_eq!(table_style("<table><tr><td style='border:1px solid #999'>a</table>").as_deref(), Some("TableGrid"));
+    }
+
     #[test]
     fn tag_soup() {
         let f = parse(
@@ -1412,6 +1490,29 @@ mod tests {
         );
         let FBlock::Para(p) = &f.blocks[1] else { panic!() };
         assert!(matches!(&p.inlines[1], Inline::Text(t, f) if t == "bold" && f.bold));
+    }
+
+    #[test]
+    fn omitted_head_keeps_body_text() {
+        let f = parse("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>T</title>\n<body><p>Hello world</p><p>Second</p></body></html>");
+        assert_eq!(f.meta.title, "T");
+        assert_eq!(texts(&f), vec!["NormalNone:Hello world", "NormalNone:Second"]);
+
+        for body in [
+            "<p>Hello world</p>",
+            "<div>Hello world</div>",
+            "<span>Hello world</span>",
+            "<a href='https://example.test'>Hello world</a>",
+            "<custom>Hello world</custom>",
+            "<textarea>ignored</textarea>Hello world",
+        ] {
+            let f = parse(&format!(
+                "<html><head><title>T &amp; U</title><meta name='author' content='Ann'><style>p{{}}</style><script>ignored</script>{body}",
+            ));
+            assert_eq!(f.meta.title, "T & U");
+            assert_eq!(f.meta.author, "Ann");
+            assert_eq!(texts(&f), vec!["NormalNone:Hello world"], "{body}");
+        }
     }
 
     #[test]

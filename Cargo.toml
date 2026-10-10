@@ -4,7 +4,7 @@ members = ["crates/*", "apps/*", "xtask"]
 default-members = ["crates/*", "apps/wordcraft", "apps/wordcraft-cli", "xtask"]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.90"
@@ -17,12 +17,14 @@ wordcraft-doc = { path = "crates/doc" }
 wordcraft-fonts = { path = "crates/fonts" }
 wordcraft-layout = { path = "crates/layout" }
 wordcraft-docx = { path = "crates/docx" }
+wordcraft-docbin = { path = "crates/docbin" }
 wordcraft-formats = { path = "crates/formats" }
 wordcraft-render = { path = "crates/render" }
 wordcraft-pdf = { path = "crates/pdf" }
 wordcraft-proof = { path = "crates/proof" }
 wordcraft-engine = { path = "crates/engine" }
 wordcraft-mcp = { path = "crates/mcp" }
+wordcraft-zotero = { path = "crates/zotero" }
 wordcraft-control-key = { path = "crates/control-key" }
 wordcraft-chat = { path = "crates/chat" }
 wordcraft-ui-egui = { path = "crates/ui-egui" }
@@ -39,6 +41,7 @@ unicode-bidi = "0.3"
 unicode-segmentation = "1"
 unicode-linebreak = "0.1"
 regex = { version = "1", default-features = false, features = ["std", "unicode", "perf"] }
+regex-automata = { version = "0.4", default-features = false, features = ["std", "syntax", "meta", "nfa-pikevm", "unicode"] }
 
 # text / rendering / formats
 skrifa = "0.47"
@@ -48,6 +51,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 krilla = { version = "0.8", features = ["pdf"] }
 quick-xml = "0.38"
 zip = { version = "3", default-features = false, features = ["deflate"] }
+cfb = "0.15"
 
 # ui
 egui = "0.36"

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CellProps, CharProps, HeightRule, Highlight, LineSpacing, NumRef, ParaProps, Rgb, RowProps, TabAlign,
-    TabLeader, TabStop, TableLook, TableProps, TextColor, Underline, VAlign, VMerge, VertAlign,
+    TabLeader, TabStop, TableFloat, TableLook, TableProps, TextColor, Underline, VAlign, VMerge, VertAlign,
 };
 use wordcraft_doc::section::{Columns, LineNumberRestart, LineNumbering, NumFormat, SectionProps, SectionStart};
 
@@ -42,10 +42,28 @@ impl PropCtx {
                         .filter(|f| !f.is_empty())
                         .map(str::to_string)
                         .or_else(|| k.attr("w:asciiTheme").or_else(|| k.attr("w:hAnsiTheme")).and_then(|t| self.theme_font(t)))
-                        .or_else(|| k.attr("w:cs").or_else(|| k.attr("w:eastAsia")).filter(|f| !f.is_empty()).map(str::to_string));
+                        .or_else(|| {
+                            // `w:eastAsia` and `w:cs` name fonts for other scripts; they stand in for the
+                            // Latin font only when the run is hinted as that script. Otherwise the Latin
+                            // font is inherited (a Normal style with only `w:eastAsia`/`w:cs` keeps the
+                            // `docDefaults` font, as in Word).
+                            match k.attr("w:hint") {
+                                Some("eastAsia") => k.attr("w:eastAsia"),
+                                Some("cs") => k.attr("w:cs"),
+                                _ => None,
+                            }
+                            .filter(|f| !f.is_empty())
+                            .map(str::to_string)
+                        });
+                    // The complex-script font (Persian, Arabic, Hebrew text). A `w:cstheme` font is
+                    // left to inherit: the theme's per-script fonts aren't read.
+                    c.font_cs = k.attr("w:cs").filter(|f| !f.is_empty() && f.len() < 256).map(str::to_string);
                 }
                 "w:b" => c.bold = Some(on_off(k)),
+                "w:bCs" => c.bold_cs = Some(on_off(k)),
                 "w:i" => c.italic = Some(on_off(k)),
+                "w:iCs" => c.italic_cs = Some(on_off(k)),
+                "w:cs" => c.cs = Some(on_off(k)),
                 "w:caps" => c.caps = Some(on_off(k)),
                 "w:smallCaps" => c.small_caps = Some(on_off(k)),
                 "w:strike" => c.strike = Some(on_off(k)),
@@ -69,6 +87,7 @@ impl PropCtx {
                 "w:kern" => c.kern = k.attr("w:val").and_then(|v| measure(v, 2.0)).map(|v| v.clamp(0.0, 1638.0)),
                 "w:position" => c.position = k.attr("w:val").and_then(|v| measure(v, 2.0)).map(|v| v.clamp(-1584.0, 1584.0)),
                 "w:sz" => c.size = k.attr("w:val").and_then(|v| measure(v, 2.0)).filter(|v| *v > 0.0).map(|v| v.clamp(1.0, 1638.0)),
+                "w:szCs" => c.size_cs = k.attr("w:val").and_then(|v| measure(v, 2.0)).filter(|v| *v > 0.0).map(|v| v.clamp(1.0, 1638.0)),
                 "w:highlight" => c.highlight = k.attr("w:val").map(Highlight::from_ooxml),
                 "w:u" => {
                     if let Some(v) = k.attr("w:val") {
@@ -78,6 +97,7 @@ impl PropCtx {
                     }
                     c.underline_color = k.attr("w:color").and_then(Rgb::parse);
                 }
+                "w:bdr" => c.border = Some(border(k)),
                 "w:shd" => c.shading = shd_fill(k),
                 "w:vertAlign" => {
                     c.vert_align = k.attr("w:val").map(|v| match v {
@@ -86,9 +106,23 @@ impl PropCtx {
                         _ => VertAlign::Baseline,
                     })
                 }
-                "w:lang" => c.lang = k.attr("w:val").filter(|v| !v.is_empty() && v.len() < 64).map(str::to_string),
+                "w:lang" => {
+                    c.lang = k.attr("w:val").filter(|v| !v.is_empty() && v.len() < 64).map(str::to_string);
+                    c.lang_bidi = k.attr("w:bidi").filter(|v| !v.is_empty() && v.len() < 64).map(str::to_string);
+                }
                 _ => {}
             }
+        }
+        // A complex-script value equal to its plain one is the same as none (see
+        // `CharProps::overlay`), which keeps documents round-tripping exactly.
+        if c.size_cs.is_some() && c.size_cs == c.size {
+            c.size_cs = None;
+        }
+        if c.bold_cs.is_some() && c.bold_cs == c.bold {
+            c.bold_cs = None;
+        }
+        if c.italic_cs.is_some() && c.italic_cs == c.italic {
+            c.italic_cs = None;
         }
         c
     }
@@ -134,10 +168,11 @@ impl PropCtx {
                         p.space_after = Some(v.max(0.0));
                     }
                     if let Some(line) = k.attr("w:line") {
-                        let rule = k.attr("w:lineRule").unwrap_or("auto");
-                        p.line_spacing = match rule {
+                        // Word reads the rule case-insensitively (`atleast` is seen in the wild).
+                        let rule = k.attr("w:lineRule").unwrap_or("auto").to_ascii_lowercase();
+                        p.line_spacing = match rule.as_str() {
                             "exact" => measure(line, 20.0).map(|v| LineSpacing::Exactly(v.abs())),
-                            "atLeast" => measure(line, 20.0).map(|v| LineSpacing::AtLeast(v.abs())),
+                            "atleast" => measure(line, 20.0).map(|v| LineSpacing::AtLeast(v.abs())),
                             _ => measure(line, 240.0).map(|v| LineSpacing::Multiple(v.abs().clamp(0.06, 132.0))),
                         };
                     }
@@ -234,7 +269,7 @@ pub fn borders(e: &El) -> Borders {
 }
 
 /// Margins element (`w:tblCellMar`, `w:tcMar`) → [top, left, bottom, right].
-fn margins(e: &El) -> [f32; 4] {
+pub fn margins(e: &El) -> [f32; 4] {
     let get = |names: &[&str]| names.iter().find_map(|n| e.child(n)).and_then(|c| tw(c, "w:w")).unwrap_or(0.0).clamp(0.0, 1584.0);
     [get(&["w:top"]), get(&["w:left", "w:start"]), get(&["w:bottom"]), get(&["w:right", "w:end"])]
 }
@@ -265,6 +300,12 @@ impl PropCtx {
                 "w:tblLayout" => t.fixed = k.attr("w:type") == Some("fixed"),
                 "w:tblCellMar" => t.cell_margins = Some(margins(k)),
                 "w:tblLook" => t.look = look(k),
+                "w:tblpPr" => t.float = Some(table_float(k)),
+                "w:tblOverlap" => {
+                    if let Some(f) = t.float.as_mut() {
+                        f.overlap = k.attr("w:val") != Some("never");
+                    }
+                }
                 "w:tblCaption" => t.caption = k.attr("w:val").map(str::to_string),
                 "w:tblDescription" if t.caption.is_none() => t.caption = k.attr("w:val").map(str::to_string),
                 _ => {}
@@ -314,7 +355,7 @@ pub fn trpr(e: &El) -> RowProps {
         match k.name.as_str() {
             "w:trHeight" => {
                 r.height = tw(k, "w:val").map(|v| v.abs());
-                r.height_rule = match k.attr("w:hRule") {
+                r.height_rule = match k.attr("w:hRule").map(str::to_ascii_lowercase).as_deref() {
                     Some("exact") => HeightRule::Exact,
                     Some("auto") => HeightRule::Auto,
                     _ => HeightRule::AtLeast,
@@ -469,4 +510,27 @@ pub fn sectpr(e: &El) -> (SectionProps, Vec<HfRef>) {
         }
     }
     (s, refs)
+}
+
+/// `w:tblpPr`: a floating table's anchors, offsets or alignments and distances from text.
+fn table_float(e: &El) -> TableFloat {
+    use wordcraft_doc::para::{Anchor, FloatAlign};
+    let pt = |n: &str| e.attr(n).and_then(|v| measure(v, 20.0)).map(|v| v.clamp(-31_680.0, 31_680.0)).unwrap_or(0.0);
+    let dist = |n: &str| pt(n).clamp(0.0, 1584.0);
+    let rel = |n: &str, text: Anchor| match e.attr(n) {
+        Some("page") => Anchor::Page,
+        Some("margin") => Anchor::Margin,
+        _ => text,
+    };
+    let align = |n: &str| e.attr(n).and_then(FloatAlign::from_ooxml);
+    TableFloat {
+        h_rel: rel("w:horzAnchor", Anchor::Column),
+        v_rel: rel("w:vertAnchor", Anchor::Paragraph),
+        x: pt("w:tblpX"),
+        y: pt("w:tblpY"),
+        h_align: align("w:tblpXSpec"),
+        v_align: align("w:tblpYSpec"),
+        dist: [dist("w:leftFromText"), dist("w:topFromText"), dist("w:rightFromText"), dist("w:bottomFromText")],
+        overlap: true,
+    }
 }

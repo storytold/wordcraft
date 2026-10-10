@@ -93,6 +93,8 @@ fn key_from(name: &str) -> Option<egui::Key> {
         "down" => Some(egui::Key::ArrowDown),
         "space" => Some(egui::Key::Space),
         "tab" => Some(egui::Key::Tab),
+        "alt" | "altleft" | "altgr" => Some(egui::Key::AltLeft),
+        "altright" => Some(egui::Key::AltRight),
         "home" => Some(egui::Key::Home),
         "end" => Some(egui::Key::End),
         _ => None,
@@ -157,7 +159,7 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
         "engine.execute" | "command" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
             let params = p.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));
-            match app.run(id, params) {
+            match app.execute(id, params) {
                 Ok(v) => ok(v),
                 Err(e) => err(e),
             }
@@ -198,6 +200,18 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
         "ui.move" => {
             let (Some(x), Some(y)) = (f("x"), f("y")) else { return err("missing x/y") };
             app.synthetic.push(egui::Event::PointerMoved(egui::pos2(x, y)));
+            ok(json!({"queued": true}))
+        }
+        "ui.press" | "ui.release" => {
+            let (Some(x), Some(y)) = (f("x"), f("y")) else { return err("missing x/y") };
+            let pos = egui::pos2(x, y);
+            app.synthetic.push(egui::Event::PointerMoved(pos));
+            app.synthetic.push(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: req.method == "ui.press",
+                modifiers: mods(p),
+            });
             ok(json!({"queued": true}))
         }
         "ui.drag" => {
@@ -260,7 +274,7 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
         }
         other => {
             // Anything else: a command id.
-            match app.run(other, p.clone()) {
+            match app.execute(other, p.clone()) {
                 Ok(v) => ok(v),
                 Err(e) => err(e),
             }

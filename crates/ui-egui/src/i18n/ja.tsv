@@ -36,6 +36,7 @@
 	Alt Text	代替テキスト
 	Apply Character Style	文字スタイルを適用
 	Apply Style	スタイルを適用
+	Apply Styles	スタイルを選んで適用
 	Arrange	配置
 	Arrange\nAll	整列
 	Arrow	矢印
@@ -51,7 +52,10 @@
 	Automatic Table 1 (3 levels)	自動目次 1（3 レベル）
 	Automatic Table 2 (2 levels)	自動目次 2（2 レベル）
 	AutoSave	自動保存
-	AutoSave documents that have been saved	保存済みの文書を自動保存する
+	AutoSave documents you have saved in WordCraft	WordCraft で保存した文書を自動保存する
+	AutoSave failed: {error}. Save the document to turn AutoSave back on.	自動保存できませんでした: {error}。文書を保存し直すと、自動保存が再開します。
+	Dark page (white text on black)	ダーク ページ (黒地に白い文字)
+	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	表示 › モードの切り替えと同様に、文書の色を反転して表示します。保存、印刷、PDF は変わりません。
 	AutoSave saves every change to the file (needs a saved document)	自動保存は変更のたびにファイルへ保存します（保存済みの文書が必要です）
 	AutoText	定型句
 	Backspace	Backspace
@@ -98,6 +102,7 @@
 	Character Scale	文字の拡大/縮小
 	Character Shading	文字の網かけ
 	Character Spacing	文字間隔
+	Character Border	文字の罫線
 	Characters (no spaces)	文字数（スペースを含めない）
 	Characters (with spaces)	文字数（スペースを含める）
 	Chart	グラフ
@@ -140,6 +145,8 @@
 	Copy	コピー
 	Copy Formatting	書式のコピー
 	Corrections	修整
+	Count words in text boxes and notes	テキスト ボックス、脚注、文末脚注の単語も数える
+	Couldn't download {name}: {error}	{name} をダウンロードできませんでした: {error}
 	Cover Page	表紙
 	Create	作成
 	Create a Style	スタイルの作成
@@ -188,6 +195,8 @@
 	Distribute Rows	行の高さを揃える
 	Distributed	均等割り付け
 	Do Not Show in TOC	目次に表示しない
+	Do you want to save changes to {name}?	{name} への変更を保存しますか?
+	Don't Save	保存しない
 	Document End	文書の末尾
 	Document Formatting	ドキュメントの書式設定
 	Document Property	文書のプロパティ
@@ -402,6 +411,7 @@
 	Moderate	やや狭い
 	Modify Style	スタイルの変更
 	Modify…	変更…
+	Move or Resize	移動またはサイズ変更
 	Multilevel List	アウトライン
 	Multiple Pages	複数ページ
 	Name (A–Z)	名前（A–Z）
@@ -441,6 +451,7 @@
 	Not saved	未保存
 	Not saved yet	まだ保存されていません
 	Not sent: {error}	送信されませんでした: {error}
+	Nudge	少しずつ移動
 	Number of columns:	列数:
 	Number of rows:	行数:
 	Numbering	段落番号
@@ -450,6 +461,7 @@
 	OK	OK
 	One	1 段
 	One Page	1 ページ
+	Only web (http, https) and email (mailto) links can be followed	開けるのは Web（http、https）とメール（mailto）のリンクだけです
 	Open	開く
 	OpenDocument Text (*.odt)	OpenDocument テキスト (*.odt)
 	Optional Hyphen	任意指定のハイフン
@@ -575,6 +587,7 @@
 	Right	右
 	Right Border	右罫線
 	Right-to-Left Text Direction	右から左への文字方向
+	Left-to-Right Text Direction	左から右への文字方向
 	Right:	右:
 	Rotate	回転
 	Rounded Rectangle	角丸四角形
@@ -712,6 +725,7 @@
 	Text:	テキスト:
 	Text\nBox	テキスト ボックス
 	Text\nDirection	文字列の方向
+	That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.	その形式ではすべてを保存できないため、文書は開いたままです。続けるには Word 文書 (.docx) として保存してください。
 	The chat is kept in memory until you save the document.	文書を保存するまで、チャットはメモリー上にだけ保持されます。
 	The new style takes the formatting of the current paragraph.	新しいスタイルには現在の段落の書式が使われます。
 	The user name cannot start with @.	ユーザー名を @ で始めることはできません。
@@ -793,3 +807,94 @@
 	📂  Browse…	📂  参照…
 	{words} words	{words} 語
 	{selected} of {words} words	{selected}/{words} 語
+	Direction:	方向:
+	Right-to-left	右から左
+	Left-to-right	左から右
+# Zotero integration
+	Zotero	Zotero
+	Citations	引用文献
+	Document	文書
+	Add/Edit\nCitation	引用文献の\n追加/編集
+	Add\nNote	メモの\n追加
+	Add/Edit\nBibliography	参考文献の\n追加/編集
+	Refresh	更新
+	Document\nPreferences	文書の\n設定
+	Unlink\nCitations	引用文献の\nリンク解除
+	Waiting for Zotero…	Zotero を待っています…
+	Zotero: done	Zotero: 完了
+	Zotero: cancelled	Zotero: キャンセルしました
+	Yes	はい
+	No	いいえ
+	Move Past Citation	引用の後ろへ移動
+	Move Past\nCitation	引用の後ろ\nへ移動
+	Next Sentence	次の文
+	Previous Sentence	前の文
+	Next sentence	次の文
+	Previous sentence	前の文
+	Play/Pause	再生/一時停止
+	Read Aloud Status	読み上げの状態
+	Reading Speed	読み上げ速度
+	Skip Citations and Bibliography	引用と参考文献をスキップ
+	Skip citations & bibliography	引用と参考文献をスキップ
+	Stop Reading	読み上げを停止
+	Don't read Zotero, Mendeley or EndNote citations and bibliographies	Zotero、Mendeley、EndNote の引用と参考文献は読み上げません
+	Play	再生
+	Pause	一時停止
+	Stop	停止
+	Sentence	文
+	Paused	一時停止中
+	Finished	完了
+	Stopped	停止中
+	Speed	速度
+	Normal speed	標準の速度
+	Your changes will be lost if you don't save them.	保存しないと、変更内容は失われます。
+	Scroll ribbon left	リボンを左にスクロール
+	Scroll ribbon right	リボンを右にスクロール
+# Equations.
+	Change Structure	構造の変更
+	Change to Display	別行表示に変更
+	Change to Inline	行内表示に変更
+	Conversions	変換
+	Delete Back in Equation	数式内で前を削除
+	Delete in Equation	数式内で削除
+	Edit Equation	数式の編集
+	Enter in Equation	数式内で Enter
+	Equation Gallery	数式ギャラリー
+	Equation Info	数式の情報
+	Equation Number	数式番号
+	Input Format	入力形式
+	Insert Structure	構造の挿入
+	Insert Symbol	記号の挿入
+	Justification	配置
+	Leave Equation	数式を終了
+	Move in Equation	数式内で移動
+	Normal Text	標準テキスト
+	Set Equation	数式の設定
+	Structure Actions	構造の操作
+	Structures	構造
+	Tools	ツール
+	Type in Equation	数式に入力
+	Inline	行内
+	Number	番号
+	Close Equation	数式を閉じる
+	Insert New Equation	新しい数式の挿入
+	Built-In	組み込み
+	Professional	2 次元形式
+	Linear	線形形式
+	Fraction	分数
+	Script	上付き/下付き
+	Radical	べき乗根
+	Integral	積分
+	Large\nOperator	大型\n演算子
+	Bracket	かっこ
+	Function	関数
+	Accent	アクセント
+	Limit and\nLog	極限と\n対数
+	Operator	演算子
+	Equation Options	数式のオプション
+	All symbol sets	すべての記号セット
+	Send the document straight to the system print dialog, or save a copy in another format below.	文書をシステムの印刷ダイアログに直接送るか、下で別の形式のコピーを保存します。
+	Or save a copy in another format:	または、別の形式でコピーを保存:
+	Opening print dialog…	印刷ダイアログを開いています…
+	Print failed: {error}	印刷できませんでした: {error}
+	Couldn't open {path}: {error}	{path} を開けませんでした: {error}

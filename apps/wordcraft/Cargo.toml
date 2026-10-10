@@ -30,6 +30,13 @@ wordcraft-chat = { workspace = true, features = ["testing"] }
 # Icon + VERSIONINFO for wordcraft.exe; build.rs only uses it when the target is Windows.
 winresource = "0.1"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# Finder double-click, Open With, Dock drops and `open -a WordCraft letter.docx` arrive as a
+# kAEOpenDocuments Apple event, which winit 0.30 doesn't handle (#27). This audited crate (also used
+# by PdfCraft and PhotoCraft) registers the handler (Objective-C interop needs unsafe, which our
+# workspace forbids) behind a safe API. Pinned exactly: review the diff before bumping.
+fmv-macos-events = "=0.1.0"
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rfd = { workspace = true }
 # The control server's random key.
