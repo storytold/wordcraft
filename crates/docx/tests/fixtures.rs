@@ -588,3 +588,61 @@ fn bare_break_directly_in_paragraph() {
     let d2 = wordcraft_docx::read(&out).unwrap();
     assert_eq!(paras(&d2)[0].text, "First\nSecond\n\u{C}Third");
 }
+
+/// Issue #149: an absolutely positioned VML text box in a header floats where its style puts it
+/// (relative to the page here, behind the text at a negative z-index, no wrapping) instead of
+/// sitting inline in the header's flow, and it keeps that placement when saved and read back.
+#[test]
+fn absolute_vml_text_box_in_header_floats() {
+    let w10 = r#"xmlns:w10="urn:schemas-microsoft-com:office:word""#;
+    let boxes = r##"<w:p><w:r><w:pict><v:shape id="Box" type="#_x0000_t202" style="position:absolute;left:0;margin-left:0pt;margin-top:80pt;width:405pt;height:491.4pt;z-index:-1;mso-position-horizontal-relative:page;mso-position-vertical-relative:page"><v:textbox><w:txbxContent><w:p><w:r><w:t>WATERMARK</w:t></w:r></w:p></w:txbxContent></v:textbox><w10:wrap type="none"/></v:shape></w:pict></w:r></w:p>
+<w:p><w:r><w:pict><v:rect style="position:absolute;margin-left:12pt;margin-top:-6pt;width:1in;height:36pt;z-index:3;mso-position-horizontal:center;mso-position-horizontal-relative:margin;mso-position-vertical-relative:top-margin-area;mso-wrap-distance-left:9pt;mso-wrap-distance-bottom:4pt"><v:textbox><w:txbxContent><w:p><w:r><w:t>square</w:t></w:r></w:p></w:txbxContent></v:textbox><w10:wrap type="square"/></v:rect></w:pict></w:r>
+<w:r><w:pict><v:shape style="position:absolute;margin-left:1in;margin-top:2pt;width:72pt;height:20pt;z-index:5"><v:textbox><w:txbxContent><w:p><w:r><w:t>front</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r>
+<w:r><w:pict><v:shape style="width:72pt;height:20pt"><v:textbox><w:txbxContent><w:p><w:r><w:t>inline</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>""##;
+    let header = format!(r#"<w:hdr {W_NS} {w10}><w:p><w:r><w:t>Header label</w:t></w:r></w:p>{boxes}</w:hdr>"#);
+    let body = r#"<w:p><w:r><w:t>Body</w:t></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="rIdH"/></w:sectPr>"#;
+    let bytes = docx(body, &[("rIdH", "header", "header1.xml")], &[("word/header1.xml", &header)]);
+    let check = |d: &Document| {
+        let hid = d.last_section.headers.default.unwrap();
+        let blocks = &d.parts.get(&hid).unwrap().blocks;
+        let shapes: Vec<_> = blocks
+            .iter()
+            .filter_map(|b| b.as_para())
+            .flat_map(|p| &p.objects)
+            .filter_map(|o| if let InlineObject::Shape { kind, w, h, float, story, .. } = o { Some((*kind, *w, *h, *float, *story)) } else { None })
+            .collect();
+        let [(k0, w0, h0, f0, s0), (_, w1, h1, f1, _), (_, _, _, f2, _), (_, _, _, f3, _)] = shapes.as_slice() else { panic!("{shapes:?}") };
+        assert_eq!(*k0, ShapeKind::TextBox);
+        assert!((w0 - 405.0).abs() < 0.01 && (h0 - 491.4).abs() < 0.01, "{w0} x {h0}");
+        assert_eq!((f0.wrap, f0.h_rel, f0.v_rel, f0.h_align, f0.v_align), (Wrap::BehindText, Anchor::Page, Anchor::Page, None, None));
+        assert!(f0.x.abs() < 0.01 && (f0.y - 80.0).abs() < 0.01, "offset {} {}", f0.x, f0.y);
+        let text = d.parts.get(&s0.unwrap()).unwrap().blocks[0].as_para().unwrap().text.clone();
+        assert_eq!(text, "WATERMARK");
+        assert_eq!((*w1, *h1), (72.0, 36.0));
+        assert_eq!(
+            (f1.wrap, f1.h_rel, f1.h_align, f1.v_rel, f1.v_align),
+            (Wrap::Square, Anchor::Margin, Some(FloatAlign::Center), Anchor::TopMargin, None)
+        );
+        assert!((f1.y + 6.0).abs() < 0.01 && (f1.dist - 9.0).abs() < 0.01 && (f1.dist_bottom - 4.0).abs() < 0.01, "{f1:?}");
+        // No wrap element: in front of the text, relative to the column and paragraph.
+        assert_eq!((f2.wrap, f2.h_rel, f2.v_rel), (Wrap::InFrontOfText, Anchor::Column, Anchor::Paragraph));
+        assert!((f2.x - 72.0).abs() < 0.01 && (f2.y - 2.0).abs() < 0.01, "{f2:?}");
+        // Not absolutely positioned: still inline.
+        assert_eq!(f3.wrap, Wrap::Inline);
+    };
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    check(&d);
+    // Saved (as DrawingML anchors) and read back, the boxes keep their placement.
+    check(&wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap());
+}
+
+#[test]
+fn hostile_vml_style_values_stay_finite() {
+    let body = r#"<w:p><w:r><w:pict><v:shape style="position:ABSOLUTE;margin-left:1e39pt;left:-1e39pt;margin-top:NaNpt;top:;width:-5pt;height:1e30in;z-index:99999999999999999999999;mso-position-horizontal:bogus;mso-wrap-distance-left:-3pt;mso-wrap-distance-top:1e9pt;;:;position"><v:textbox><w:txbxContent><w:p/></w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>"#;
+    let d = read_body(body);
+    let p = paras(&d);
+    let Some(InlineObject::Shape { w, h, float, .. }) = p[0].objects.first() else { panic!("{:?}", p[0].objects) };
+    assert_eq!(float.wrap, Wrap::InFrontOfText);
+    assert!([*w, *h, float.x, float.y, float.dist, float.dist_top].iter().all(|v| v.is_finite()), "{w} {h} {float:?}");
+    assert_eq!((float.h_align, float.dist, float.dist_top), (None, 0.0, 1584.0));
+}

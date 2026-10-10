@@ -218,6 +218,11 @@ struct CatalogEntry {
 pub struct FontDb {
     faces: RwLock<Vec<Arc<FontFace>>>,
     outlines: Mutex<HashMap<(u32, u32), Arc<BezPath>>>,
+    /// Fallback faces found per (character, excluded face), valid while the face count is the
+    /// one stored (faces are only ever added). Layout asks once per uncovered character, and the
+    /// search sorts every loaded face, so without this text in a script the requested font lacks
+    /// (Thai, #59) got slower with every font loaded.
+    fallbacks: RwLock<FallbackCache>,
     #[cfg(not(target_arch = "wasm32"))]
     catalog: RwLock<Vec<CatalogEntry>>,
     /// The folders the system font scan reads (the platform's font folders for [`FontDb::global`]).
@@ -297,6 +302,14 @@ const SYSTEM_FALLBACKS: &[&str] = &[
 fn arabic_block(c: char) -> bool {
     matches!(u32::from(c), 0x0600..=0x06FF | 0x0750..=0x077F | 0x08A0..=0x08FF | 0xFB50..=0xFDFF | 0xFE70..=0xFEFF)
 }
+
+#[derive(Default)]
+struct FallbackCache {
+    faces: usize,
+    map: HashMap<(char, u32), Option<Arc<FontFace>>>,
+}
+
+const FALLBACK_CACHE_MAX: usize = 20_000;
 
 static NEXT_ID: AtomicU32 = AtomicU32::new(1);
 const OUTLINE_CACHE_MAX: usize = 50_000;
@@ -543,6 +556,7 @@ impl FontDb {
         Self {
             faces: RwLock::new(faces),
             outlines: Mutex::new(HashMap::new()),
+            fallbacks: RwLock::new(FallbackCache::default()),
             #[cfg(not(target_arch = "wasm32"))]
             catalog: RwLock::new(Vec::new()),
             font_dirs,
@@ -562,6 +576,8 @@ impl FontDb {
         {
             self.sys.lock().unwrap_or_else(|e| e.into_inner()).enabled = on;
         }
+        // Misses remembered while it was off may be found now.
+        self.fallbacks.write().unwrap_or_else(|e| e.into_inner()).map.clear();
         #[cfg(target_arch = "wasm32")]
         let _ = on;
     }
@@ -843,13 +859,7 @@ impl FontDb {
     /// [`Self::fallback_for`], preferring a bold and/or italic face of the chosen family (so
     /// bold Persian text in a font without Persian letters stays bold).
     pub fn fallback_styled(&self, c: char, exclude: u32, bold: bool, italic: bool) -> Option<Arc<FontFace>> {
-        let base = self.loaded_fallback(c, exclude).or_else(|| {
-            #[cfg(not(target_arch = "wasm32"))]
-            if self.system_fallback(c) {
-                return self.loaded_fallback(c, exclude);
-            }
-            None
-        })?;
+        let base = self.cached_fallback(c, exclude)?;
         if !bold && !italic {
             return Some(base);
         }
@@ -860,6 +870,39 @@ impl FontDb {
         };
         let styled = self.face(&base.family, style);
         Some(if styled.family.eq_ignore_ascii_case(&base.family) && styled.covers(c) && styled.id != exclude { styled } else { base })
+    }
+
+    /// The fallback search, cached per (character, excluded face) until more faces load.
+    fn cached_fallback(&self, c: char, exclude: u32) -> Option<Arc<FontFace>> {
+        let n = self.read_faces().len();
+        {
+            let cache = self.fallbacks.read().unwrap_or_else(|e| e.into_inner());
+            if cache.faces == n
+                && let Some(hit) = cache.map.get(&(c, exclude))
+            {
+                return hit.clone();
+            }
+        }
+        let found = self.search_fallback(c, exclude);
+        // Keyed by the face count after the search (a system fallback may have loaded fonts).
+        let n = self.read_faces().len();
+        let mut cache = self.fallbacks.write().unwrap_or_else(|e| e.into_inner());
+        if cache.faces != n || cache.map.len() >= FALLBACK_CACHE_MAX {
+            cache.map.clear();
+            cache.faces = n;
+        }
+        cache.map.insert((c, exclude), found.clone());
+        found
+    }
+
+    fn search_fallback(&self, c: char, exclude: u32) -> Option<Arc<FontFace>> {
+        self.loaded_fallback(c, exclude).or_else(|| {
+            #[cfg(not(target_arch = "wasm32"))]
+            if self.system_fallback(c) {
+                return self.loaded_fallback(c, exclude);
+            }
+            None
+        })
     }
 
     fn loaded_fallback(&self, c: char, exclude: u32) -> Option<Arc<FontFace>> {

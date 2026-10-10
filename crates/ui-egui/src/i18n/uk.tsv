@@ -166,7 +166,6 @@
 	Customize Quick Access Toolbar	Налаштувати панель швидкого доступу
 	Cut	Вирізати
 	Dark Mode	Темний режим
-	Dark mode	Темний режим
 	Dashed	Штрихова
 	Data	Дані
 	Date & Time	Дата й час
@@ -185,6 +184,9 @@
 	Delete Style	Видалити стиль
 	Delete Table	Видалити таблицю
 	Design	Дизайн
+	More templates →	Більше шаблонів →
+	No templates match your search.	Немає шаблонів, що відповідають пошуку.
+	Search for templates	Пошук шаблонів
 	development build	Збірка для розробки
 	Diagonal	Діагональ
 	Diamond	Ромб
@@ -910,3 +912,9 @@
 	Opening print dialog…	Відкриття діалогу друку…
 	Print failed: {error}	Не вдалося надрукувати: {error}
 	Couldn't open {path}: {error}	Не вдалося відкрити {path}: {error}
+	Interface theme:	Тема інтерфейсу:
+	Interface\nTheme	Тема\nінтерфейсу
+	Interface Theme	Тема інтерфейсу
+	Light	Світла
+	Dark	Темна
+	Use system setting	Як у системі

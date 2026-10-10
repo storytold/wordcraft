@@ -169,7 +169,6 @@
 	Customize Quick Access Toolbar	Personalizar la barra de herramientas de acceso rápido
 	Cut	Cortar
 	Dark Mode	Modo oscuro
-	Dark mode	Modo oscuro
 	Dashed	Discontinua
 	Data	Datos
 	Date & Time	Fecha y hora
@@ -413,6 +412,7 @@
 	Moderate	Moderado
 	Modify Style	Modificar estilo
 	Modify…	Modificar…
+	More templates →	Más plantillas →
 	Move or Resize	Mover o cambiar tamaño
 	Multilevel List	Lista multinivel
 	Multiple Pages	Varias páginas
@@ -444,6 +444,7 @@
 	No Paragraph Space	Sin espacio entre párrafos
 	No contributor data was built into this copy.	Esta copia no incluye datos de colaboradores.
 	No model credits were built into this copy.	Esta copia no incluye créditos de modelos.
+	No templates match your search.	Ninguna plantilla coincide con la búsqueda.
 	Nonbreaking Hyphen	Guion no separable
 	Nonbreaking Space	Espacio de no separación
 	None	Ninguno
@@ -603,6 +604,7 @@
 	Search Commands	Buscar comandos
 	Search commands and help	Buscar comandos y ayuda
 	Search document	Buscar en el documento
+	Search for templates	Buscar plantillas
 	Section Breaks	Saltos de sección
 	Section Properties	Propiedades de sección
 	Sections	Secciones
@@ -915,3 +917,9 @@
 	Opening print dialog…	Abriendo el cuadro de diálogo de impresión…
 	Print failed: {error}	Error al imprimir: {error}
 	Couldn't open {path}: {error}	No se pudo abrir {path}: {error}
+	Interface theme:	Tema de la interfaz:
+	Interface\nTheme	Tema de la\ninterfaz
+	Interface Theme	Tema de la interfaz
+	Light	Claro
+	Dark	Oscuro
+	Use system setting	Usar la configuración del sistema

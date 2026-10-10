@@ -558,6 +558,22 @@ fn display_has_glyphs_and_marks() {
     assert!(items.iter().any(|i| matches!(i, display::Draw::Mark { ch: '→', .. })));
 }
 
+#[test]
+fn a_tracked_paragraph_mark_shows_in_its_authors_colour() {
+    let mut d = Document::from_text("Split\nhere");
+    d.revisions.push(wordcraft_doc::Revision { kind: wordcraft_doc::RevisionKind::Insert, author: "Ana".into(), date: String::new() });
+    d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().mark.ins = Some(0);
+    let l = lay(&d);
+    let marks = |markup: bool| -> Vec<Option<wordcraft_doc::props::Rgb>> {
+        display::page_display(&d, &l.pages[0], &display::DisplayOptions { marks: true, markup, ..Default::default() })
+            .into_iter()
+            .filter_map(|i| if let display::Draw::Mark { ch: '¶', color, .. } = i { Some(color) } else { None })
+            .collect()
+    };
+    assert_eq!(marks(true), [Some(display::revision_color(0)), None]);
+    assert_eq!(marks(false), [None, None]);
+}
+
 fn border_lines(d: &Document) -> Vec<(f32, f32, f32, f32)> {
     border_lines_in(d, &lay(d))
 }
@@ -1887,6 +1903,53 @@ fn page_relative_header_float_wraps_where_it_is_drawn() {
     // it must not make the header taller (and push the body down) compared with no wrapping.
     let (wrapped, in_front) = (body_top(Wrap::TopAndBottom), body_top(Wrap::InFrontOfText));
     assert!((wrapped - in_front).abs() < 0.5, "body starts at {wrapped} with wrapping, {in_front} without");
+}
+
+/// Issue #149: a tall text box floating behind the text in the header (placed relative to the
+/// page, no wrapping) neither makes the header taller nor pushes the body down: the body starts
+/// at the top margin and paginates exactly as without the box.
+#[test]
+fn floating_header_text_box_leaves_the_body_at_the_top_margin() {
+    use wordcraft_doc::para::{Anchor, Float, ShapeKind, Wrap};
+    let body: Vec<String> = (1..=40).map(|i| format!("Body paragraph {i}: synthetic public test content.")).collect();
+    let make = |float: Option<Float>| {
+        let mut d = Document::from_text(&body.join("\n"));
+        d.last_section.header = 36.0;
+        // A label, then the paragraph the box is anchored to (empty in the control).
+        let tight = ParaProps { space_before: Some(0.0), space_after: Some(0.0), ..Default::default() };
+        let mut label = wordcraft_doc::Paragraph::with_text("Header label", Default::default());
+        label.props = tight.clone();
+        let mut anchor = wordcraft_doc::Paragraph { props: tight, ..Default::default() };
+        if let Some(float) = float {
+            let text = wordcraft_doc::Paragraph::with_text("WATERMARK", Default::default());
+            let story = d.add_part(wordcraft_doc::PartKind::TextBox, vec![wordcraft_doc::para_block(text)]);
+            let tb = InlineObject::Shape {
+                kind: ShapeKind::TextBox,
+                w: 405.0,
+                h: 491.4,
+                fill: None,
+                stroke: None,
+                stroke_width: 0.75,
+                float,
+                story: Some(story),
+            };
+            anchor.insert_object(0, tb, &Default::default()).unwrap();
+        }
+        let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(label), wordcraft_doc::para_block(anchor)]);
+        d.last_section.headers.default = Some(id);
+        let l = lay(&d);
+        (l.pages.len(), first_line_top(&l.pages[0].items))
+    };
+    let (control_pages, control_top) = make(None);
+    let behind = Float { wrap: Wrap::BehindText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 0.0, y: 80.0, ..Default::default() };
+    let (pages, top) = make(Some(behind));
+    assert!(control_pages > 1, "the control needs more than one page: {control_pages}");
+    assert!((control_top - 72.0).abs() < 0.5, "control body starts at the top margin: {control_top}");
+    assert!((top - control_top).abs() < 0.5, "body starts at {top} with the floating box, {control_top} without");
+    assert_eq!(pages, control_pages);
+    // The same box inline does take room in the header, which is what the reader used to make of it.
+    let (inline_pages, inline_top) = make(Some(Float::default()));
+    assert!(inline_top > 400.0 && inline_pages > control_pages, "inline box: body at {inline_top}, {inline_pages} pages");
 }
 
 /// List labels drawn, in page order (each paragraph's first line).

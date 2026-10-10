@@ -166,7 +166,6 @@
 	Customize Quick Access Toolbar	Personalizar barra de acesso rápido
 	Cut	Recortar
 	Dark Mode	Modo escuro
-	Dark mode	Modo escuro
 	Dashed	Tracejada
 	Data	Dados
 	Date & Time	Data e hora
@@ -185,6 +184,9 @@
 	Delete Style	Excluir estilo
 	Delete Table	Excluir tabela
 	Design	Design
+	More templates →	Mais modelos →
+	No templates match your search.	Nenhum modelo corresponde à pesquisa.
+	Search for templates	Pesquisar modelos
 	development build	versão de desenvolvimento
 	Diagonal	Diagonal
 	Diamond	Losango
@@ -910,3 +912,9 @@
 	Opening print dialog…	Abrindo a caixa de diálogo de impressão…
 	Print failed: {error}	Falha na impressão: {error}
 	Couldn't open {path}: {error}	Não foi possível abrir {path}: {error}
+	Interface theme:	Tema da interface:
+	Interface\nTheme	Tema da\ninterface
+	Interface Theme	Tema da interface
+	Light	Claro
+	Dark	Escuro
+	Use system setting	Usar a configuração do sistema
