@@ -12,7 +12,10 @@
   warning when no signing secrets are set).
 
   Needs: Rust (MSVC toolchain + the target), the Windows SDK (rc.exe, signtool.exe),
-  and WiX v5: dotnet tool install --global wix --version 5.0.2
+  and WiX v5 with its UI and Util extensions (installer dialogs, "Launch WordCraft" on finish):
+    dotnet tool install --global wix --version 5.0.2
+    wix extension add -g WixToolset.UI.wixext/5.0.2
+    wix extension add -g WixToolset.Util.wixext/5.0.2
 
 .EXAMPLE
   pwsh packaging/windows/package.ps1 -Arch x64
@@ -91,10 +94,42 @@ Copy-Item (Join-Path $Bin 'wordcraft.exe'), (Join-Path $Bin 'wordcraft-cli.exe')
 & (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'wordcraft.exe') (Join-Path $Stage 'wordcraft-cli.exe')
 
 # ---- MSI ---------------------------------------------------------------------------------------
+# The installer's welcome page shows the license: build its RTF from LICENSE-MIT and LICENSE-APACHE
+# so it never drifts from them. Hard-wrapped lines are rejoined into paragraphs so the text wraps
+# to the dialog's width.
+function ConvertTo-RtfText([string] $Text) {
+  $sb = [System.Text.StringBuilder]::new()
+  foreach ($ch in $Text.ToCharArray()) {
+    $c = [int] $ch
+    if ($c -eq 0x5C -or $c -eq 0x7B -or $c -eq 0x7D) { [void] $sb.Append('\').Append($ch) }
+    elseif ($c -gt 127) { [void] $sb.Append("\u$(if ($c -gt 32767) { $c - 65536 } else { $c })?") }
+    else { [void] $sb.Append($ch) }
+  }
+  return $sb.ToString()
+}
+$paragraphs = [System.Collections.Generic.List[string]]::new()
+$paragraphs.Add('\b WordCraft\b0')
+$paragraphs.Add((ConvertTo-RtfText 'WordCraft is dual-licensed under the MIT License or the Apache License, Version 2.0, at your option. Both license texts follow. Bundled fonts and other third-party material keep their own open licenses, listed in NOTICE and ATTRIBUTION.md at https://github.com/storytold/wordcraft.'))
+foreach ($file in 'LICENSE-MIT', 'LICENSE-APACHE') {
+  $title = $true  # each file opens with its license's name: show it bold
+  foreach ($para in ((Get-Content -Raw (Join-Path $Root $file)) -split '\r?\n\s*\r?\n')) {
+    $joined = (($para -split '\r?\n') | ForEach-Object { $_.Trim() } | Where-Object { $_ }) -join ' '
+    if (-not $joined) { continue }
+    $paragraphs.Add($(if ($title) { "\b $(ConvertTo-RtfText $joined)\b0" } else { ConvertTo-RtfText $joined }))
+    $title = $false
+  }
+}
+$LicenseRtf = Join-Path $Stage 'license.rtf'
+$rtf = '{\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0\fswiss\fcharset0 Tahoma;}}\viewkind4\uc1\pard\sa120\f0\fs16 ' +
+  ($paragraphs -join "\par`r`n") + "\par`r`n}`r`n"
+[System.IO.File]::WriteAllText($LicenseRtf, $rtf, [System.Text.Encoding]::ASCII)
+
 $Msi = Join-Path $Dist "wordcraft-$Version-windows-$Arch.msi"
 Invoke-Native 'wix build' {
   wix build (Join-Path $PSScriptRoot 'wordcraft.wxs') -arch $Arch `
+    -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext `
     -d "Version=$MsiVersion" -d "BinDir=$Stage" -d "IconPath=$(Join-Path $Root 'assets\app-icon\wordcraft.ico')" `
+    -d "LicenseRtf=$LicenseRtf" `
     -o $Msi
 }
 # wix writes its debug symbols (.wixpdb) next to the MSI; keep them out of the release assets.

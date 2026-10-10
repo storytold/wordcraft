@@ -19,3 +19,7 @@ unicode-segmentation = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The browser clock (`SystemTime::now()`/`Instant::now()` panic on wasm32).
+js-sys = "0.3"

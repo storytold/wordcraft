@@ -54,6 +54,9 @@
 	AutoSave documents you have saved in WordCraft	自動儲存在 WordCraft 中儲存過的文件
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	自動儲存失敗：{error}。重新儲存文件後將恢復自動儲存。
 	Dark page (white text on black)	深色頁面（黑底白字）
+	More templates →	更多範本 →
+	No templates match your search.	沒有符合搜尋的範本。
+	Search for templates	搜尋範本
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	像「檢視 › 切換模式」一樣以反轉的色彩顯示文件。儲存、列印和 PDF 不受影響。
 	AutoSave saves every change to the file (needs a saved document)	自動儲存會將每次變更寫入檔案（文件需已儲存）
 	AutoText	自動圖文集

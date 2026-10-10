@@ -254,26 +254,30 @@ pub fn split_para(s: &mut Session, at: &Pos) -> Result<Pos, CmdError> {
 }
 
 /// ISO-8601 timestamp (UTC, seconds) for `secs` since the Unix epoch.
-fn iso_from_unix_secs(secs: u64) -> String {
+pub fn iso_from_unix_secs(secs: u64) -> String {
     let (y, m, d) = civil_from_days((secs / 86_400) as i64);
     let t = secs % 86_400;
     format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", t / 3600, t / 60 % 60, t % 60)
 }
 
-/// ISO-8601 timestamp (UTC, seconds).
-pub fn now_iso() -> String {
+/// Seconds since the Unix epoch (UTC): the system clock, or the browser's on the web.
+pub fn now_unix() -> u64 {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-        iso_from_unix_secs(secs)
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
     }
     // `SystemTime::now()` panics on wasm32-unknown-unknown, so ask the browser's clock.
     #[cfg(target_arch = "wasm32")]
     {
         let ms = js_sys::Date::now();
         // Clamp a NaN or pre-epoch clock to 0 rather than fail.
-        iso_from_unix_secs(if ms.is_finite() && ms > 0.0 { (ms / 1000.0) as u64 } else { 0 })
+        if ms.is_finite() && ms > 0.0 { (ms / 1000.0) as u64 } else { 0 }
     }
+}
+
+/// ISO-8601 timestamp (UTC, seconds).
+pub fn now_iso() -> String {
+    iso_from_unix_secs(now_unix())
 }
 
 /// Days since 1970-01-01 → (year, month, day) (Howard Hinnant's algorithm).

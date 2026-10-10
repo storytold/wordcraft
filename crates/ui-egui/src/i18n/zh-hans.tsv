@@ -64,6 +64,9 @@
 	AutoSave documents you have saved in WordCraft	自动保存在 WordCraft 中保存过的文档
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	自动保存失败：{error}。重新保存文档后将恢复自动保存。
 	Dark page (white text on black)	深色页面（黑底白字）
+	More templates →	更多模板 →
+	No templates match your search.	没有与搜索匹配的模板。
+	Search for templates	搜索模板
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	像“视图 › 切换模式”一样以反转的颜色显示文档。保存、打印和 PDF 不受影响。
 	AutoSave saves every change to the file (needs a saved document)	自动保存会把每次更改写入文件（文档需已保存）
 	AutoText	自动图文集
