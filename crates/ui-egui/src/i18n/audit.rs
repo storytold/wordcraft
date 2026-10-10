@@ -133,6 +133,7 @@ impl Exempt {
             || plain.starts_with("Style") || plain.starts_with("Table Style ") // a new style's default name
             || plain.contains('┬') || plain.contains('\u{2061}') // equation input (UnicodeMath), drawn as math
             || matches!(plain, "WordCraft" | "WordCraft User" | "Discord" | "https://" | "auto" | "I. II. III." | "i. ii. iii.")
+            || plain == "CONFIDENTIAL" // the watermark dialog's text: document content, kept as typed
     }
 }
 

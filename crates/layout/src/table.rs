@@ -4,7 +4,7 @@
 
 use wordcraft_doc::numbering::Counters;
 use wordcraft_doc::props::{Align, Border, Borders, HeightRule, Rgb, TextDirection, VAlign, VMerge};
-use wordcraft_doc::styles::TableStyleProps;
+use wordcraft_doc::styles::{TableStyleParts, TableStyleProps};
 use wordcraft_doc::{Block, Blocks, Paragraph, StoryRef, Table};
 use wordcraft_geom::Rect;
 
@@ -40,8 +40,9 @@ struct Turned {
     across: f32,
     /// List counters and equation count before the cell, to lay it out again the same way.
     snap: (Counters, u32),
-    /// Its formatting region (header row, total row, first column, row band) and cell index in the row.
-    region: (bool, bool, bool, bool),
+    /// Its formatting region (header row, total row, first column, last column, row band, column
+    /// band) and cell index in the row.
+    region: Region,
     ci: usize,
     /// Top margin plus top border band.
     top: f32,
@@ -143,27 +144,20 @@ fn measure_para(p: &wordcraft_doc::Paragraph, env: &crate::para::ParaEnv) -> (f3
 pub fn measure_table_columns(doc: &wordcraft_doc::Document, t: &Table) -> Vec<(f32, f32)> {
     use wordcraft_doc::Block;
     let style = t.props.style.as_deref().and_then(|id| doc.styles.table_style(id));
-    let parts = style.as_ref().map(|s| &s.parts);
     let margins_def = default_margins(t, style.as_ref());
     let ncols = t.cols().clamp(1, wordcraft_doc::table::MAX_COLS);
     let fields = crate::FieldCtx::default();
-    let header_rows = t.props.look.header_row;
-    let band_size = parts.and_then(|p| p.band_size).unwrap_or(1).clamp(1, 1000) as usize;
-    let nrows = t.rows.len();
     let mut cols = vec![(0.0f32, 0.0f32); ncols];
     // Cells spanning several columns: (first column, span, min, max), applied after the others.
     let mut spanned: Vec<(usize, usize, f32, f32)> = Vec::new();
     let mut budget = MEASURE_BUDGET;
     'rows: for (ri, row) in t.rows.iter().enumerate() {
-        let is_header = header_rows && ri == 0;
-        let is_total = t.props.look.total_row && ri + 1 == nrows && nrows > 1;
-        let band = t.props.look.banded_rows && !is_header && (ri.saturating_sub(usize::from(header_rows)) / band_size).is_multiple_of(2);
         let mut g = 0usize;
         for cell in &row.cells {
             let span = cell.span();
             let margins = cell.props.margins.unwrap_or(margins_def);
             let side = margins[1].max(0.0) + margins[3].max(0.0);
-            let text = style.as_ref().map(|st| region_text(st, (is_header, is_total, t.props.look.first_column && g == 0, band)));
+            let text = style.as_ref().map(|st| region_text(st, region_of(t, style.as_ref(), ri, g, span, ncols)));
             let env = crate::para::ParaEnv {
                 doc,
                 width: MEASURE_WIDE,
@@ -259,6 +253,48 @@ pub(crate) fn first_cell_left_margin(ctx: &Ctx, t: &Table) -> f32 {
 
 fn first_cell_left_margin_in(t: &Table, def: [f32; 4]) -> f32 {
     t.rows.first().and_then(|r| r.cells.first()).and_then(|c| c.props.margins).unwrap_or(def)[1]
+}
+
+/// A cell's borders from the table style's conditional regions it is in (`regions`: header row,
+/// total row, first column, last column, row band, column band), later regions winning. Row
+/// regions give their left/right edges at the table's sides and `inside_v` between cells; column
+/// regions their top/bottom edges at the table's top and bottom and `between` between rows.
+fn region_borders(p: &TableStyleParts, (ri, nrows): (usize, usize), (first_g, last_g): (bool, bool), regions: [bool; 6]) -> Borders {
+    let [header, total, first_col, last_col, band, col_band] = regions;
+    let row = |b: Option<Borders>| {
+        b.map(|b| Borders {
+            top: b.top,
+            bottom: b.bottom,
+            left: if first_g { b.left } else { b.inside_v },
+            right: if last_g { b.right } else { b.inside_v },
+            between: None,
+            inside_v: None,
+        })
+    };
+    let col = |b: Option<Borders>| {
+        b.map(|b| Borders {
+            top: if ri == 0 { b.top } else { b.between },
+            bottom: if ri + 1 >= nrows { b.bottom } else { b.between },
+            left: b.left,
+            right: b.right,
+            between: None,
+            inside_v: None,
+        })
+    };
+    let mut out = Borders::default();
+    for (on, b) in [
+        (col_band, col(p.col_band_borders)),
+        (band, row(p.band_borders)),
+        (first_col, col(p.first_col_borders)),
+        (last_col, col(p.last_col_borders)),
+        (header, row(p.header_borders)),
+        (total, row(p.total_borders)),
+    ] {
+        if on && let Some(b) = b {
+            out.overlay(&b);
+        }
+    }
+    out
 }
 
 pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], avail: f32, depth: usize) -> TableLayout {
@@ -362,15 +398,6 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
         let is_header = header_rows && ri == 0;
         let is_total = t.props.look.total_row && ri + 1 == nrows && nrows > 1;
         let band = banded(t, style.as_ref(), ri);
-        // The header row's or the odd band's own cell borders (conditional formatting).
-        let region_borders = if is_header {
-            parts.and_then(|p| p.header_borders)
-        } else if band {
-            parts.and_then(|p| p.band_borders)
-        } else {
-            None
-        }
-        .unwrap_or_default();
         for (ci, cell) in row.cells.iter().enumerate() {
             let span = cell.span();
             let x0 = colx.get(g).copied().unwrap_or(acc);
@@ -378,15 +405,31 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             let margins = cell.props.margins.unwrap_or(margins_def);
             let cw = (x1 - x0 - margins[1] - margins[3]).max(4.0);
             let mut fill = cell.props.shading;
-            let region = region_of(t, style.as_ref(), ri, g);
+            let region = region_of(t, style.as_ref(), ri, g, span, ncols);
+            let (_, _, first_col, last_col, _, col_band) = region;
+            // Conditional formatting, later regions winning (ECMA-376 §17.7.6): whole table,
+            // column bands, row bands, first/last column, header/total row.
             if let Some(p) = parts {
-                if is_header {
-                    fill = fill.or(p.header_fill);
-                }
-                if band && fill.is_none() {
-                    fill = p.band_fill;
-                }
-                fill = fill.or(p.fill);
+                let row_fill = if is_header {
+                    p.header_fill
+                } else if is_total {
+                    p.total_fill
+                } else {
+                    None
+                };
+                let col_fill = if first_col {
+                    p.first_col_fill
+                } else if last_col {
+                    p.last_col_fill
+                } else {
+                    None
+                };
+                fill = fill
+                    .or(row_fill)
+                    .or(col_fill)
+                    .or(if band { p.band_fill } else { None })
+                    .or(if col_band { p.col_band_fill } else { None })
+                    .or(p.fill);
             }
             if let Some(st) = &style
                 && !cell_text.iter().any(|(r, _)| *r == region)
@@ -402,8 +445,10 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             let edge =
                 |own: Option<Border>, outer: bool, outer_b: Option<Border>, inner_b: Option<Border>| own.or(if outer { outer_b } else { inner_b });
             let cb = cell.props.borders.unwrap_or_default();
-            let rb = region_borders;
             let (first_g, last_g) = (g == 0, g + span >= ncols);
+            let rb = parts
+                .map(|p| region_borders(p, (ri, nrows), (first_g, last_g), [is_header, is_total, first_col, last_col, band, col_band]))
+                .unwrap_or_default();
             let mut borders = Borders {
                 top: edge(cb.top.or(rb.top), ri == 0, tb.top, tb.between),
                 bottom: edge(cb.bottom.or(rb.bottom), ri + 1 == nrows, tb.bottom, tb.between),
@@ -412,7 +457,10 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                 between: None,
                 inside_v: None,
             };
-            if is_total && let Some(b) = parts.and_then(|p| p.total_border_top) {
+            if is_total
+                && parts.is_none_or(|p| p.total_borders.is_none_or(|b| b.top.is_none()))
+                && let Some(b) = parts.and_then(|p| p.total_border_top)
+            {
                 borders.top = Some(b);
             }
             // Word keeps the cell's text clear of its top border (and the last row's of its bottom
@@ -763,12 +811,16 @@ fn split_rect(r: Rect, cut: f32, shift: f32) -> (Option<Rect>, Option<Rect>) {
 }
 
 /// A cell's region for table-style conditional formatting: (header row, total row, first column,
-/// banded row).
-type Region = (bool, bool, bool, bool);
+/// last column, banded row, banded column).
+type Region = (bool, bool, bool, bool, bool, bool);
 
-fn region_of(t: &Table, style: Option<&TableStyleProps>, ri: usize, g: usize) -> Region {
+/// The region of the cell at grid column `g` spanning `span` of `ncols` columns in row `ri`.
+fn region_of(t: &Table, style: Option<&TableStyleProps>, ri: usize, g: usize, span: usize, ncols: usize) -> Region {
     let (look, nrows) = (&t.props.look, t.rows.len());
-    (look.header_row && ri == 0, look.total_row && ri + 1 == nrows && nrows > 1, look.first_column && g == 0, banded(t, style, ri))
+    let first_col = look.first_column && g == 0;
+    let last_col = look.last_column && g.saturating_add(span) >= ncols && ncols > 1;
+    let col_band = look.banded_columns && !first_col && g.saturating_sub(usize::from(look.first_column)).is_multiple_of(2);
+    (look.header_row && ri == 0, look.total_row && ri + 1 == nrows && nrows > 1, first_col, last_col, banded(t, style, ri), col_band)
 }
 
 /// Whether row `ri` is in an odd band of the table style's banded rows (bands of the style's
@@ -779,15 +831,22 @@ fn banded(t: &Table, style: Option<&TableStyleProps>, ri: usize) -> bool {
     look.banded_rows && !(look.header_row && ri == 0) && (ri.saturating_sub(usize::from(look.header_row)) / size).is_multiple_of(2)
 }
 
-/// The table style's text formatting in `region`: the whole table's, then the band's, the
-/// column's and the row's (later regions win, ECMA-376 §17.7.6).
-fn region_text(st: &TableStyleProps, (header, total, first_col, band): Region) -> CellText {
+/// The table style's text formatting in `region`: the whole table's, then the column band's, the
+/// row band's, the first/last column's and the header/total row's (later regions win,
+/// ECMA-376 §17.7.6).
+fn region_text(st: &TableStyleProps, (header, total, first_col, last_col, band, col_band): Region) -> CellText {
     let mut chr = st.chr.clone();
+    if col_band {
+        chr.overlay(&st.parts.col_band_chr);
+    }
     if band {
         chr.overlay(&st.parts.band_chr);
     }
     if first_col {
         chr.overlay(&st.parts.first_col_chr);
+    }
+    if last_col {
+        chr.overlay(&st.parts.last_col_chr);
     }
     if header {
         chr.overlay(&st.parts.header_chr);
@@ -810,7 +869,7 @@ fn column_content(ctx: &mut Ctx, t: &Table, style: Option<&TableStyleProps>, dep
         for cell in &row.cells {
             let span = cell.span();
             if cell.props.vmerge != VMerge::Continue {
-                let text = style.map(|st| region_text(st, region_of(t, style, ri, g)));
+                let text = style.map(|st| region_text(st, region_of(t, style, ri, g, cell.span(), cols.len())));
                 let (lo, hi) = blocks_content(ctx, &cell.blocks, text.as_ref(), depth);
                 any |= hi > 0.0;
                 let m = cell.props.margins.unwrap_or(margins_def);

@@ -290,6 +290,13 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.line(&[(4.0, 18.0), (4.0, 13.0), (16.0, 13.0), (16.0, 18.0)]);
             pen.line_c(&[(2.0, 10.0), (18.0, 10.0)], a);
         }
+        "drawTable" => {
+            pen.rect(2.5, 3.0, 14.0, 14.5, c);
+            pen.line(&[(2.5, 8.5), (14.0, 8.5)]);
+            pen.line(&[(8.0, 3.0), (8.0, 14.5)]);
+            pen.line(&[(9.5, 18.0), (17.0, 10.5), (18.5, 12.0), (11.0, 19.5), (9.0, 19.8), (9.5, 18.0)]);
+            pen.fill(&[(17.0, 10.5), (18.0, 9.5), (19.5, 11.0), (18.5, 12.0)], a);
+        }
         "table" => {
             pen.frect(3.0, 3.0, 17.0, 7.0, a);
             pen.rect(3.0, 3.0, 17.0, 17.0, c);
@@ -311,6 +318,14 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
         "shapes" => {
             pen.rect(3.0, 3.0, 11.0, 11.0, c);
             pen.fcircle(13.0, 13.0, 4.5, a);
+        }
+        // Shape Effects: a square casting a soft shadow down and to the right.
+        "shapeEffects" => {
+            for (k, alpha) in [(2.0, 30), (1.0, 50), (0.0, 80)] {
+                pen.frect(7.0 - k, 7.0 - k, 18.0 + k, 18.0 + k, Color32::from_rgba_unmultiplied(0, 0, 0, alpha));
+            }
+            pen.frect(3.0, 3.0, 14.0, 14.0, a);
+            pen.rect(3.0, 3.0, 14.0, 14.0, c);
         }
         "icons" => {
             pen.circle(10.0, 10.0, 7.5, c);
@@ -447,6 +462,12 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
         "eraser" => {
             pen.closed(&[(3.0, 13.0), (11.0, 5.0), (17.0, 11.0), (11.0, 17.0), (7.0, 17.0)], c);
             pen.fill(&[(3.0, 13.0), (7.0, 9.0), (13.0, 15.0), (11.0, 17.0), (7.0, 17.0)], Color32::from_rgb(0xE8, 0x6F, 0xA0));
+        }
+        // Ink thickness: three strokes, thin to thick.
+        "thickness" => {
+            pen.frect(3.0, 4.5, 17.0, 5.5, c);
+            pen.frect(3.0, 9.0, 17.0, 11.0, c);
+            pen.frect(3.0, 14.0, 17.0, 17.0, a);
         }
         "lasso" => {
             pen.closed(&[(4.0, 7.0), (9.0, 3.0), (16.0, 5.0), (16.0, 11.0), (10.0, 13.0), (4.0, 11.0)], c);

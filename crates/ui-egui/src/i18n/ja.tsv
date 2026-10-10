@@ -12,7 +12,10 @@
 	Add	追加
 	Add a comment	コメントを追加
 	Add a Table	表を追加
+	Add Object to Selection	オブジェクトを選択範囲に追加
 	Add Space Before Paragraph	段落前に間隔を追加
+	Add space between Asian and Latin text	アジア文字と欧文の間隔を空ける
+	Add space between Asian text and numbers	アジア文字と数字の間隔を空ける
 	Add Text	テキストの追加
 	Add to Dictionary	辞書に追加
 	Add to Style Gallery	スタイル ギャラリーに追加
@@ -31,7 +34,10 @@
 	All Caps	すべて大文字
 	All caps	すべて大文字
 	All Markup	すべての変更履歴
+	Allow hanging punctuation	句読点のぶら下げを行う
+	Allow Latin text to wrap in the middle of a word	欧文を単語の途中で折り返す
 	Alt Text	代替テキスト
+	Apply Asian line-breaking rules (kinsoku)	アジア文字の禁則処理を行う
 	Apply Character Style	文字スタイルを適用
 	Apply Style	スタイルを適用
 	Apply Styles	スタイルを選んで適用
@@ -39,6 +45,7 @@
 	Arrange\nAll	整列
 	Arrow	矢印
 	Artistic Effects	アート効果
+	Asian Typography	アジア文字の組版
 	Author	作成者
 	AutoCorrect Options	オートコレクトのオプション
 	AutoFit	自動調整
@@ -53,9 +60,15 @@
 	AutoSave documents you have saved in WordCraft	WordCraft で保存した文書を自動保存する
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	自動保存できませんでした: {error}。文書を保存し直すと、自動保存が再開します。
 	Bottom Margin	下余白
+	Click a border between two cells to merge them. Esc stops.	2 つのセルの間の境界線をクリックすると結合します。Esc で終了します。
+	Compress punctuation at the start of a line	行頭の約物を詰める
 	Dark page (white text on black)	ダーク ページ (黒地に白い文字)
+	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	四角形をドラッグして表を描くか、セルを横切る線を引いて分割します。Esc で終了します。
+	Draw Table	表を描画
 	Edit Comment	コメントを編集
 	Left Margin	左余白
+	Indents and Spacing	インデントと間隔
+	Line breaking	行の分割
 	More templates →	その他のテンプレート →
 	No templates match your search.	検索に一致するテンプレートはありません。
 	Reopen	再度開く
@@ -126,6 +139,15 @@
 	Clear	クリア
 	Clear All Formatting	すべての書式をクリア
 	Clipboard	クリップボード
+	Clipboard Pane	クリップボード ウィンドウ
+	Clipboard Items	クリップボードの項目
+	Paste Clipboard Item	クリップボードの項目を貼り付け
+	Paste All	すべて貼り付け
+	Delete Clipboard Item	クリップボードの項目を削除
+	Clear All	すべてクリア
+	Click an item to paste it.	項目をクリックすると貼り付けます。
+	Nothing collected yet. Items you copy or cut appear here.	まだ何もありません。コピーまたは切り取った項目がここに表示されます。
+	(picture or object)	（画像またはオブジェクト）
 	Close	閉じる
 	Close Header and Footer	ヘッダーとフッターを閉じる
 	Collapse Selection	選択範囲を縮小
@@ -745,6 +767,7 @@
 	Underline Words Only	単語のみ下線
 	Undo	元に戻す
 	Undo {action}	元に戻す: {action}
+	Ungroup	グループ解除
 	Up	上
 	Update Field	フィールドの更新
 	Update Index	索引の更新
@@ -898,7 +921,6 @@
 	Clear Paragraph Formatting	段落の書式をクリア
 	Clear Character Style	文字スタイルをクリア
 	Clear Character Formatting	文字の書式をクリア
-	Clear All	すべてクリア
 	Paste Special	形式を選択して貼り付け
 	Paste Special…	形式を選択して貼り付け…
 	Paste as:	貼り付ける形式:
@@ -1029,3 +1051,115 @@
 	Leave the equation (Esc)	数式を終了 (Esc)
 	Preview	プレビュー
 	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft
+	Draw Ink	インクで描く
+	Erase Ink	インクを消す
+	Hide Ink	インクを隠す
+	Hide\nInk	インクを\n隠す
+	Pens	ペン
+	Ink	インク
+	Thickness	太さ
+	Shape Effects	図形の効果
+	Glow	光彩
+	Soft Edges	輪郭のぼかし
+	No Shadow	影なし
+	No Glow	光彩なし
+	No Soft Edges	ぼかしなし
+	Glow Colors	光彩の色
+	Weight	太さ
+	Shadow, glow and soft edges	影、光彩、輪郭のぼかし
+	Offset: Bottom Right	オフセット: 右下
+	Offset: Bottom	オフセット: 下
+	Offset: Bottom Left	オフセット: 左下
+	Offset: Right	オフセット: 右
+	Offset: Center	オフセット: 中央
+	Offset: Left	オフセット: 左
+	Offset: Top Right	オフセット: 右上
+	Offset: Top	オフセット: 上
+	Offset: Top Left	オフセット: 左上
+	Manage Styles	スタイルの管理
+	Show or Hide Style	スタイルの表示/非表示
+	Manage Styles…	スタイルの管理…
+	Sort order:	並べ替え順:
+	As Recommended	推奨順
+	Alphabetical	アルファベット順
+	Font: {font}	フォント: {font}
+	{size} pt	{size} pt
+	Color: {color}	色: {color}
+	Space before: {pt} pt	前の間隔: {pt} pt
+	Space after: {pt} pt	後の間隔: {pt} pt
+	Based on: {style}	基準: {style}
+	Paragraph style	段落スタイル
+	Character style	文字スタイル
+	Linked style (paragraph and character)	リンク スタイル (段落と文字)
+	Table style	表スタイル
+	Built-in style	組み込みスタイル
+	Show in the Styles gallery	スタイル ギャラリーに表示
+	Hide from style lists	スタイルの一覧に表示しない
+	Built-in styles can't be deleted.	組み込みスタイルは削除できません。
+	Delete Table Style	表スタイルの削除
+	Password	パスワード
+	Password:	パスワード:
+	Confirm password:	パスワードの確認:
+	Encrypt with Password…	パスワードを使用して暗号化…
+	Change Password…	パスワードの変更…
+	Remove Password	パスワードの削除
+	A password is required to open this document.	この文書を開くにはパスワードが必要です。
+	Anyone can open this document. Encrypt it with a password to keep it private.	この文書は誰でも開けます。パスワードで暗号化すると内容を保護できます。
+	Anyone who opens the document will need this password.	この文書を開くすべての人にこのパスワードが必要になります。
+	{name} is protected with a password.	{name} はパスワードで保護されています。
+	That password isn't right. Check it (passwords are case-sensitive) and try again.	パスワードが正しくありません。確認して（大文字と小文字は区別されます）もう一度お試しください。
+	The document will be saved with a password. Save it to protect it.	文書はパスワード付きで保存されます。保護するには文書を保存してください。
+	The password is removed. Save the document to keep the change.	パスワードを削除しました。変更を保持するには文書を保存してください。
+	The passwords don't match.	パスワードが一致しません。
+	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	パスワードは安全な場所に保管してください。パスワードがないと、WordCraft を含め誰も文書を開けません。パスワードを削除するには両方のボックスを空にします。
+
+# Interface text routed through translation (#313)
+	Align Top Left	上揃え (左)
+	Align Top Center	上揃え (中央)
+	Align Top Right	上揃え (右)
+	Align Center Left	中央揃え (左)
+	Align Center	中央揃え
+	Align Center Right	中央揃え (右)
+	Align Bottom Left	下揃え (左)
+	Align Bottom Center	下揃え (中央)
+	Align Bottom Right	下揃え (右)
+	{contributors} contributors · {commits} commits	貢献者 {contributors} 人 · コミット {commits} 件
+	{cols}×{rows} Table	{cols}×{rows} の表
+	AaBbYyZz	AaBbYyZz あア亜
+	pt	pt
+	Document1	文書 1
+	Username	ユーザー名
+	Display name	表示名
+	Real name	本名
+	Name	名前
+	PRs	PR
+	Commits	コミット
+	First	最初
+	Last	最後
+	Model	モデル
+	Version	バージョン
+	% of all commits	全コミットに占める割合
+	Lines +/−	行数 +/−
+	Craft	クラフト
+	Studio	スタジオ
+	Atelier	アトリエ
+	Darkroom	暗室
+	Gallery	ギャラリー
+	Sketchbook	スケッチブック
+	Change Picture…	図の変更…
+	Font…	フォント…
+	Paragraph…	段落…
+	Link…	リンク…
+	Size and Crop…	サイズとトリミング…
+	Insert Columns to the Left	左に列を挿入
+	Insert Columns to the Right	右に列を挿入
+	Insert Rows Above	上に行を挿入
+	Insert Rows Below	下に行を挿入
+	Mon	月
+	Tue	火
+	Wed	水
+	Sum	計
+	North	北
+	South	南
+	West	西
+	Total	合計

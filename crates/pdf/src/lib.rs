@@ -321,6 +321,46 @@ fn rect_path(r: &Rect) -> Option<Path> {
     pb.finish()
 }
 
+/// `r` grown by `g` points on every side and moved by (`dx`, `dy`).
+fn grown(r: &Rect, g: f32, dx: f32, dy: f32) -> Rect {
+    Rect { x: r.x - g + dx, y: r.y - g + dy, w: r.w + 2.0 * g, h: r.h + 2.0 * g }
+}
+
+/// A shape's shadow and glow, behind it: bands of its silhouette (the same approximation of a
+/// blur as the raster renderer, see [`wordcraft_doc::effects::bands`]).
+fn shape_effects(s: &mut Surface, kind: ShapeKind, rect: &Rect, fx: &wordcraft_doc::effects::ShapeEffects, filled: bool, stroked: bool, sw: f32) {
+    let sw = if sw.is_finite() { sw.clamp(0.25, 200.0) } else { 0.75 };
+    let silhouette = |s: &mut Surface, c: Rgb, a: f32, g: f32, dx: f32, dy: f32| {
+        if filled {
+            let grow = g + if stroked { sw / 2.0 } else { 0.0 };
+            if let Some(p) = shape_path(kind, &grown(rect, grow, dx, dy)) {
+                s.set_stroke(None);
+                s.set_fill(Some(fill(c, a)));
+                s.draw_path(&p);
+            }
+        } else if sw + 2.0 * g > 0.05
+            && let Some(p) = shape_path(kind, &grown(rect, 0.0, dx, dy))
+        {
+            s.set_fill(None);
+            s.set_stroke(Some(Stroke { paint: rgb::Color::new(c.0, c.1, c.2).into(), width: sw + 2.0 * g, opacity: norm(a), ..Default::default() }));
+            s.draw_path(&p);
+        }
+    };
+    if let Some(sh) = fx.shadow {
+        let (dx, dy) = sh.offset();
+        for (g, a) in wordcraft_doc::effects::bands(-sh.blur / 2.0, sh.blur / 2.0, sh.opacity()) {
+            silhouette(s, sh.color, a, g, dx, dy);
+        }
+    }
+    if let Some(gl) = fx.glow {
+        for (g, a) in wordcraft_doc::effects::bands(0.0, gl.size, gl.opacity()) {
+            silhouette(s, gl.color, a, g, 0.0, 0.0);
+        }
+    }
+    s.set_fill(None);
+    s.set_stroke(None);
+}
+
 /// Outline of a basic shape in a rectangle (same geometry as the raster renderer).
 fn shape_path(kind: ShapeKind, r: &Rect) -> Option<Path> {
     if !(ok(r.x) && ok(r.y) && ok(r.w) && ok(r.h)) || r.w <= 0.0 || r.h <= 0.0 {
@@ -349,7 +389,8 @@ fn shape_path(kind: ShapeKind, r: &Rect) -> Option<Path> {
         pb.close();
     };
     match kind {
-        ShapeKind::Rectangle | ShapeKind::TextBox => poly(&mut pb, &[(x0, y0), (x1, y0), (x1, y1), (x0, y1)]),
+        // A freeform is drawn from its own paths; without them, its frame.
+        ShapeKind::Rectangle | ShapeKind::TextBox | ShapeKind::Freeform => poly(&mut pb, &[(x0, y0), (x1, y0), (x1, y1), (x0, y1)]),
         ShapeKind::RoundedRectangle => {
             let rad = r.w.min(r.h) * 0.16;
             let k = rad * (1.0 - K);
@@ -558,7 +599,14 @@ impl Exporter<'_> {
         {
             self.tagged(s, Role::Artifact(ArtifactType::Watermark), None, |me, s| me.watermark(s, &wm, w, h));
         }
-        let dopts = DisplayOptions { marks: false, dim_header: false, dim_body: false, markup: self.opts.include_markup, placeholders: false };
+        let dopts = DisplayOptions {
+            marks: false,
+            dim_header: false,
+            dim_body: false,
+            markup: self.opts.include_markup,
+            placeholders: false,
+            hide_ink: false,
+        };
         for it in page.header.iter().chain(page.footer.iter()) {
             let draws = self.draws(page, it, &dopts);
             self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| {
@@ -704,9 +752,56 @@ impl Exporter<'_> {
                 s.set_fill(None);
                 s.set_stroke(None);
             }
-            Draw::Shape { rect, kind, fill: f, stroke, stroke_width } => {
+            Draw::Ink { pts, color, width, alpha } => {
+                let mut pb = PathBuilder::new();
+                let mut used = 0usize;
+                let mut last = (0.0, 0.0);
+                for &(x, y) in pts.iter().filter(|(x, y)| ok(*x) && ok(*y)) {
+                    if used > 0 {
+                        pb.line_to(x, y);
+                    } else {
+                        pb.move_to(x, y);
+                    }
+                    used += 1;
+                    last = (x, y);
+                }
+                // A tap (one usable point): a zero-length line, which round caps draw as a dot.
+                if used == 1 {
+                    pb.line_to(last.0, last.1);
+                }
+                let Some(p) = pb.finish() else { return };
+                s.set_fill(None);
+                s.set_stroke(Some(Stroke {
+                    paint: rgb::Color::new(color.0, color.1, color.2).into(),
+                    width: if width.is_finite() { width.clamp(0.25, 200.0) } else { 1.0 },
+                    opacity: norm(*alpha),
+                    line_cap: LineCap::Round,
+                    line_join: LineJoin::Round,
+                    ..Default::default()
+                }));
+                s.draw_path(&p);
+                s.set_stroke(None);
+            }
+            Draw::Shape { rect, kind, fill: f, stroke, stroke_width, effects } => {
                 let Some(p) = shape_path(*kind, rect) else { return };
                 let can_fill = *kind != ShapeKind::Line;
+                let fx = effects.sanitized();
+                if !fx.is_empty() && (f.is_some() && can_fill || stroke.is_some()) {
+                    shape_effects(s, *kind, rect, &fx, f.is_some() && can_fill, stroke.is_some(), *stroke_width);
+                }
+                // Soft edges: the fill fades out toward the outline (which fades with it).
+                if let (Some(rad), Some(c), true) = (fx.soft_edge, f, can_fill) {
+                    let rad = rad.min(rect.w.min(rect.h) / 2.0).max(0.0);
+                    s.set_stroke(None);
+                    for (g, a) in wordcraft_doc::effects::bands(-rad, 0.0, 1.0) {
+                        if let Some(p) = shape_path(*kind, &grown(rect, g, 0.0, 0.0)) {
+                            s.set_fill(Some(fill(*c, a)));
+                            s.draw_path(&p);
+                        }
+                    }
+                    s.set_fill(None);
+                    return;
+                }
                 s.set_fill(f.filter(|_| can_fill).map(|c| fill(c, 1.0)));
                 s.set_stroke(stroke.map(|c| Stroke {
                     paint: rgb::Color::new(c.0, c.1, c.2).into(),

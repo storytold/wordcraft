@@ -48,7 +48,7 @@ pub struct LangInfo {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 10] = [
+pub static LANGUAGES: [LangInfo; 11] = [
     LangInfo { code: "en", name: "English", source: "", prefer_hans: false, catalog: OnceLock::new() },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` resolve here (see `candidates`).
     LangInfo { code: "zh-hans", name: "简体中文", source: include_str!("zh-hans.tsv"), prefer_hans: true, catalog: OnceLock::new() },
@@ -67,6 +67,7 @@ pub static LANGUAGES: [LangInfo; 10] = [
     // Serbian, Latin script; `sr-Latn-*` resolves here (see `candidates`'s generic prefix
     // matching — no special-casing needed, unlike Chinese's script-by-region fallback).
     LangInfo { code: "sr-latn", name: "Srpski (latinica)", source: include_str!("sr-latn.tsv"), prefer_hans: false, catalog: OnceLock::new() },
+    LangInfo { code: "et", name: "Eesti", source: include_str!("et.tsv"), prefer_hans: false, catalog: OnceLock::new() },
     // Russian; `ru`, `ru-RU`, `ru_RU.UTF-8` and other regions resolve here.
     LangInfo { code: "ru", name: "Русский", source: include_str!("ru.tsv"), prefer_hans: false, catalog: OnceLock::new() },
 ];

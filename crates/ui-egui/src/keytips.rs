@@ -305,6 +305,7 @@ fn controls(tab: &str) -> Vec<Control> {
             c("Compare", "review.compare"),
             c("Block Authors", "review.blockAuthors"),
             c("Restrict Editing", "review.restrict"),
+            c("Hide Ink", "review.hideInk"),
         ],
         "View" => vec![
             c("Read Mode", "view.readMode"),
@@ -335,6 +336,8 @@ fn controls(tab: &str) -> Vec<Control> {
             m("Select", "table.selectCell"),
             c("View Gridlines", "table.viewGridlines"),
             c("Properties", "table.properties"),
+            c("Draw Table", "table.draw"),
+            c("Eraser", "table.eraser"),
             m("Delete", "table.deleteCells"),
             c("Insert Above", "table.insertRowAbove"),
             c("Insert Below", "table.insertRowBelow"),

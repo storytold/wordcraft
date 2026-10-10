@@ -480,3 +480,54 @@ fn context_entries_override_only_their_context_and_unknown_contexts_are_rejected
     assert_eq!(trc(Lang::EN, "preview", "Title"), "Title");
     assert_eq!(trc(lang("ja"), "preview", "Unknown"), "Unknown");
 }
+
+#[test]
+fn estonian_locales_and_saved_preference_keep_document_content() {
+    let et = lang("et");
+    for tag in ["et", "et-EE", "ET_ee.UTF-8", "et-Latn-EE", "et_EE.UTF-8@euro"] {
+        assert_eq!(lang_from_tag(tag), Some(et), "{tag}");
+    }
+    assert_eq!(first_supported(["fr-FR", "et-EE", "en-US"]), Some(et));
+    assert_eq!(normalize_pref("ET"), Some("et"));
+    assert_eq!(et.name(), "Eesti");
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), Default::default());
+    let before = serde_json::to_value(&app.session.doc).unwrap();
+    let result = app.run("ui.language", serde_json::json!({"value": "ET"})).unwrap();
+    assert_eq!(result["effective"], "et");
+    assert_eq!(app.ui.language, "et");
+    assert_eq!(serde_json::to_value(&app.session.doc).unwrap(), before);
+    let saved = serde_json::to_string(&app.ui).unwrap();
+    let restored: crate::UiState = serde_json::from_str(&saved).unwrap();
+    assert_eq!(Lang::from_pref(&restored.language), et);
+}
+
+#[test]
+fn estonian_covers_the_interface_catalog_and_keeps_count_labels_neutral() {
+    use std::collections::HashSet;
+    let keys = |source| parse_entries(source).0.into_iter().map(|e| e.source).collect::<HashSet<_>>();
+    let et = lang("et");
+    assert_eq!(keys(et.0.source), keys(lang("es").0.source));
+    assert!(keys(lang("zh-hans").0.source).is_subset(&keys(et.0.source)));
+    assert_eq!(tr(et, "Home"), "Avaleht");
+    assert_eq!(tr(et, "Save"), "Salvesta");
+    assert_eq!(tr(et, "Spelling & Grammar"), "Õigekiri ja grammatika");
+    assert_eq!(tr(et, "unknown future label"), "unknown future label");
+    assert_eq!(fmt(tr(et, "Exported {path}"), &[("path", "draft-{words}.docx")]), "Eksporditud: draft-{words}.docx");
+    for count in [0, 1, 2, 11, 21, 101] {
+        let words = count.to_string();
+        assert_eq!(fmt(tr(et, "{words} words"), &[("words", &words)]), format!("Sõnu: {count}"));
+        assert_eq!(fmt(tr(et, "{selected} of {words} words"), &[("selected", "1"), ("words", &words)]), format!("Sõnu: {count}; valitud: 1"));
+    }
+}
+
+#[test]
+fn bundled_interface_fonts_cover_estonian_letters() {
+    let db = wordcraft_fonts::FontDb::with_font_dirs(Vec::new());
+    for (family, style) in [("Inter", "Regular"), ("Inter", "Medium"), ("Inter", "SemiBold"), ("JetBrains Mono", "Regular")] {
+        let face = db.face(family, style);
+        assert_eq!(face.family, family, "must use the bundled interface face");
+        for ch in "ÕõÄäÖöÜüŠšŽž".chars() {
+            assert_ne!(face.glyph_for(ch), 0, "{family} {style} lacks {ch}");
+        }
+    }
+}

@@ -1440,3 +1440,107 @@ preview	Title	Пример
 	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	В браузере автосохранение недоступно: оно не может записывать ваши файлы. «Сохранить» скачивает копию.
 	AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave.	Автосохранение работает только с файлами .docx, .odt и .rtf; {name} не сохраняет всё форматирование. Сохраните файл как .docx, чтобы включить автосохранение.
 	Save the document to turn on AutoSave (a file you have only opened isn't rewritten until you save it)	Сохраните документ, чтобы включить автосохранение (открытый файл не перезаписывается, пока вы его не сохраните)
+
+# Labels added on main and in this stack after the first Russian catalog (#300 integration)
+	Add Object to Selection	Добавить объект к выделению
+	Add space between Asian and Latin text	Добавлять интервал между азиатским и латинским текстом
+	Add space between Asian text and numbers	Добавлять интервал между азиатским текстом и цифрами
+	Allow hanging punctuation	Разрешить висячую пунктуацию
+	Allow Latin text to wrap in the middle of a word	Разрешить перенос латинского текста посреди слова
+	Apply Asian line-breaking rules (kinsoku)	Применять азиатские правила переноса строк (кинсоку)
+	Asian Typography	Азиатская типографика
+	Click a border between two cells to merge them. Esc stops.	Щёлкните границу между двумя ячейками, чтобы объединить их. Esc — завершить.
+	Compress punctuation at the start of a line	Сжимать знаки препинания в начале строки
+	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	Нарисуйте прямоугольник, чтобы создать таблицу, или линию поперёк ячеек, чтобы разделить их. Esc — завершить.
+	Draw Table	Нарисовать таблицу
+	Indents and Spacing	Отступы и интервалы
+	Line breaking	Перенос строк
+	Clipboard Pane	Область буфера обмена
+	Clipboard Items	Элементы буфера обмена
+	Paste Clipboard Item	Вставить элемент буфера обмена
+	Paste All	Вставить все
+	Delete Clipboard Item	Удалить элемент буфера обмена
+	Click an item to paste it.	Щёлкните элемент, чтобы вставить его.
+	Nothing collected yet. Items you copy or cut appear here.	Здесь пока пусто. Скопированное или вырезанное появится здесь.
+	(picture or object)	(рисунок или объект)
+	Ungroup	Разгруппировать
+	Draw Ink	Рисовать от руки
+	Erase Ink	Стереть рукописный ввод
+	Hide Ink	Скрыть рукописный ввод
+	Hide\nInk	Скрыть\nрукописный ввод
+	Pens	Перья
+	Ink	Рукописный ввод
+	Thickness	Толщина
+	Shape Effects	Эффекты фигуры
+	Glow	Свечение
+	Soft Edges	Сглаживание краёв
+	No Shadow	Без тени
+	No Glow	Без свечения
+	No Soft Edges	Без сглаживания краёв
+	Glow Colors	Цвета свечения
+	Weight	Толщина линии
+	Shadow, glow and soft edges	Тень, свечение и сглаживание краёв
+	Offset: Bottom Right	Смещение: вниз и вправо
+	Offset: Bottom	Смещение: вниз
+	Offset: Bottom Left	Смещение: вниз и влево
+	Offset: Right	Смещение: вправо
+	Offset: Center	Смещение: по центру
+	Offset: Left	Смещение: влево
+	Offset: Top Right	Смещение: вверх и вправо
+	Offset: Top	Смещение: вверх
+	Offset: Top Left	Смещение: вверх и влево
+	Manage Styles	Управление стилями
+	Show or Hide Style	Показать или скрыть стиль
+	Manage Styles…	Управление стилями…
+	Sort order:	Порядок сортировки:
+	As Recommended	По рекомендации
+	Alphabetical	По алфавиту
+	Font: {font}	Шрифт: {font}
+	{size} pt	{size} пт
+	Color: {color}	Цвет: {color}
+	Space before: {pt} pt	Интервал перед: {pt} пт
+	Space after: {pt} pt	Интервал после: {pt} пт
+	Based on: {style}	Основан на стиле: {style}
+	Paragraph style	Стиль абзаца
+	Character style	Стиль знаков
+	Linked style (paragraph and character)	Связанный стиль (абзац и знаки)
+	Table style	Стиль таблицы
+	Built-in style	Встроенный стиль
+	Show in the Styles gallery	Показывать в коллекции стилей
+	Hide from style lists	Скрыть из списков стилей
+	Built-in styles can't be deleted.	Встроенные стили нельзя удалить.
+	Delete Table Style	Удалить стиль таблицы
+	Password	Пароль
+	Password:	Пароль:
+	Confirm password:	Подтверждение пароля:
+	Encrypt with Password…	Зашифровать паролем…
+	Change Password…	Изменить пароль…
+	Remove Password	Удалить пароль
+	A password is required to open this document.	Для открытия этого документа нужен пароль.
+	Anyone can open this document. Encrypt it with a password to keep it private.	Этот документ может открыть любой. Зашифруйте его паролем, чтобы защитить.
+	Anyone who opens the document will need this password.	Этот пароль понадобится каждому, кто открывает документ.
+	{name} is protected with a password.	{name} защищён паролем.
+	That password isn't right. Check it (passwords are case-sensitive) and try again.	Неверный пароль. Проверьте его (регистр букв учитывается) и попробуйте ещё раз.
+	The document will be saved with a password. Save it to protect it.	Документ будет сохранён с паролем. Сохраните его, чтобы защитить.
+	The password is removed. Save the document to keep the change.	Пароль удалён. Сохраните документ, чтобы изменение вступило в силу.
+	The passwords don't match.	Пароли не совпадают.
+	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	Храните пароль в надёжном месте: без него никто, включая WordCraft, не сможет открыть документ. Оставьте оба поля пустыми, чтобы удалить пароль.
+	{cols}×{rows} Table	Таблица {cols}×{rows}
+	Name	Имя
+	PRs	PR
+	First	Первый
+	Last	Последний
+	Change Picture…	Заменить рисунок…
+	Size and Crop…	Размер и обрезка…
+	Insert Columns to the Left	Вставить столбцы слева
+	Insert Columns to the Right	Вставить столбцы справа
+	Insert Rows Above	Вставить строки сверху
+	Insert Rows Below	Вставить строки снизу
+	Mon	Пн
+	Tue	Вт
+	Wed	Ср
+	Sum	Сумма
+	North	Север
+	South	Юг
+	West	Запад
+	Total	Итого

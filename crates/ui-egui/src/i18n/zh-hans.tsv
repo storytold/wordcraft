@@ -24,7 +24,10 @@
 	Add	添加
 	Add a comment	添加批注
 	Add a Table	添加表格
+	Add Object to Selection	将对象添加到所选内容
 	Add Space Before Paragraph	在段前添加间距
+	Add space between Asian and Latin text	在亚洲文字与西文之间添加间距
+	Add space between Asian text and numbers	在亚洲文字与数字之间添加间距
 	Add Text	添加文字
 	Add to Dictionary	添加到词典
 	Add to Style Gallery	添加到样式库
@@ -43,7 +46,10 @@
 	All Caps	全部大写
 	All caps	全部大写
 	All Markup	所有标记
+	Allow hanging punctuation	允许标点溢出边界
+	Allow Latin text to wrap in the middle of a word	允许西文在单词中间换行
 	Alt Text	替代文字
+	Apply Asian line-breaking rules (kinsoku)	应用亚洲文字的断行规则（禁则）
 	Apply Character Style	应用字符样式
 	Apply Style	应用样式
 	Apply Styles	选择并应用样式
@@ -51,6 +57,7 @@
 	Arrange\nAll	全部重排
 	Arrow	箭头
 	Artistic Effects	艺术效果
+	Asian Typography	亚洲版式
 	Author	作者
 	AutoCorrect Options	自动更正选项
 	AutoFit	自动调整
@@ -65,9 +72,15 @@
 	AutoSave documents you have saved in WordCraft	自动保存在 WordCraft 中保存过的文档
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	自动保存失败：{error}。重新保存文档后将恢复自动保存。
 	Bottom Margin	下边距
+	Click a border between two cells to merge them. Esc stops.	单击两个单元格之间的边框以合并它们。按 Esc 结束。
+	Compress punctuation at the start of a line	压缩行首标点
 	Dark page (white text on black)	深色页面（黑底白字）
+	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	拖出矩形以绘制表格，或拖出穿过单元格的线条以拆分单元格。按 Esc 结束。
+	Draw Table	绘制表格
 	Edit Comment	编辑批注
 	Left Margin	左边距
+	Indents and Spacing	缩进和间距
+	Line breaking	断行
 	More templates →	更多模板 →
 	No templates match your search.	没有与搜索匹配的模板。
 	Reopen	重新打开
@@ -138,6 +151,15 @@
 	Clear	清除
 	Clear All Formatting	清除所有格式
 	Clipboard	剪贴板
+	Clipboard Pane	剪贴板窗格
+	Clipboard Items	剪贴板项目
+	Paste Clipboard Item	粘贴剪贴板项目
+	Paste All	全部粘贴
+	Delete Clipboard Item	删除剪贴板项目
+	Clear All	全部清除
+	Click an item to paste it.	单击项目即可粘贴。
+	Nothing collected yet. Items you copy or cut appear here.	尚无内容。复制或剪切的项目会显示在这里。
+	(picture or object)	（图片或对象）
 	Close	关闭
 	Close Header and Footer	关闭页眉和页脚
 	Collapse Selection	折叠选定内容
@@ -757,6 +779,7 @@
 	Underline Words Only	仅给字词加下划线
 	Undo	撤消
 	Undo {action}	撤消{action}
+	Ungroup	取消组合
 	Up	上
 	Update Field	更新域
 	Update Index	更新索引
@@ -910,7 +933,6 @@
 	Clear Paragraph Formatting	清除段落格式
 	Clear Character Style	清除字符样式
 	Clear Character Formatting	清除字符格式
-	Clear All	全部清除
 	Paste Special	选择性粘贴
 	Paste Special…	选择性粘贴…
 	Paste as:	粘贴为：
@@ -1041,3 +1063,115 @@
 	Leave the equation (Esc)	退出公式 (Esc)
 	Preview	预览
 	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft
+	Draw Ink	绘制墨迹
+	Erase Ink	擦除墨迹
+	Hide Ink	隐藏墨迹
+	Hide\nInk	隐藏\n墨迹
+	Pens	笔
+	Ink	墨迹
+	Thickness	粗细
+	Shape Effects	形状效果
+	Glow	发光
+	Soft Edges	柔化边缘
+	No Shadow	无阴影
+	No Glow	无发光
+	No Soft Edges	无柔化边缘
+	Glow Colors	发光颜色
+	Weight	粗细
+	Shadow, glow and soft edges	阴影、发光和柔化边缘
+	Offset: Bottom Right	偏移：右下
+	Offset: Bottom	偏移：下
+	Offset: Bottom Left	偏移：左下
+	Offset: Right	偏移：右
+	Offset: Center	偏移：居中
+	Offset: Left	偏移：左
+	Offset: Top Right	偏移：右上
+	Offset: Top	偏移：上
+	Offset: Top Left	偏移：左上
+	Manage Styles	管理样式
+	Show or Hide Style	显示或隐藏样式
+	Manage Styles…	管理样式…
+	Sort order:	排序方式：
+	As Recommended	按推荐
+	Alphabetical	按字母顺序
+	Font: {font}	字体：{font}
+	{size} pt	{size} 磅
+	Color: {color}	颜色：{color}
+	Space before: {pt} pt	段前间距：{pt} 磅
+	Space after: {pt} pt	段后间距：{pt} 磅
+	Based on: {style}	基于：{style}
+	Paragraph style	段落样式
+	Character style	字符样式
+	Linked style (paragraph and character)	链接样式（段落和字符）
+	Table style	表格样式
+	Built-in style	内置样式
+	Show in the Styles gallery	在样式库中显示
+	Hide from style lists	在样式列表中隐藏
+	Built-in styles can't be deleted.	内置样式不能删除。
+	Delete Table Style	删除表格样式
+	Password	密码
+	Password:	密码：
+	Confirm password:	确认密码：
+	Encrypt with Password…	用密码进行加密…
+	Change Password…	更改密码…
+	Remove Password	删除密码
+	A password is required to open this document.	打开此文档需要密码。
+	Anyone can open this document. Encrypt it with a password to keep it private.	任何人都可以打开此文档。用密码加密可保护其隐私。
+	Anyone who opens the document will need this password.	打开文档的任何人都需要此密码。
+	{name} is protected with a password.	{name} 受密码保护。
+	That password isn't right. Check it (passwords are case-sensitive) and try again.	密码不正确。请检查密码（区分大小写）后重试。
+	The document will be saved with a password. Save it to protect it.	文档将使用密码保存。保存文档以保护它。
+	The password is removed. Save the document to keep the change.	密码已删除。保存文档以保留此更改。
+	The passwords don't match.	两次输入的密码不一致。
+	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	请妥善保管密码：没有密码，任何人（包括 WordCraft）都无法打开文档。两个框都留空可删除密码。
+
+# Interface text routed through translation (#313)
+	Align Top Left	靠上左对齐
+	Align Top Center	靠上居中对齐
+	Align Top Right	靠上右对齐
+	Align Center Left	中部左对齐
+	Align Center	水平居中
+	Align Center Right	中部右对齐
+	Align Bottom Left	靠下左对齐
+	Align Bottom Center	靠下居中对齐
+	Align Bottom Right	靠下右对齐
+	{contributors} contributors · {commits} commits	{contributors} 位贡献者 · {commits} 次提交
+	{cols}×{rows} Table	{cols}×{rows} 表格
+	AaBbYyZz	AaBbYyZz 中文
+	pt	磅
+	Document1	文档1
+	Username	用户名
+	Display name	显示名称
+	Real name	真实姓名
+	Name	名称
+	PRs	PR
+	Commits	提交
+	First	首次
+	Last	最近
+	Model	模型
+	Version	版本
+	% of all commits	占全部提交的百分比
+	Lines +/−	行数 +/−
+	Craft	工艺
+	Studio	工作室
+	Atelier	画室
+	Darkroom	暗房
+	Gallery	画廊
+	Sketchbook	速写本
+	Change Picture…	更改图片…
+	Font…	字体…
+	Paragraph…	段落…
+	Link…	链接…
+	Size and Crop…	大小和裁剪…
+	Insert Columns to the Left	在左侧插入列
+	Insert Columns to the Right	在右侧插入列
+	Insert Rows Above	在上方插入行
+	Insert Rows Below	在下方插入行
+	Mon	周一
+	Tue	周二
+	Wed	周三
+	Sum	合计
+	North	北区
+	South	南区
+	West	西区
+	Total	总计
