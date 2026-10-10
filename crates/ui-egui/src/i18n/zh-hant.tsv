@@ -13,7 +13,10 @@
 	Add	新增
 	Add a comment	新增註解
 	Add a Table	新增表格
+	Add Object to Selection	將物件加入選取範圍
 	Add Space Before Paragraph	在段落前新增間距
+	Add space between Asian and Latin text	在亞洲文字與西文之間加入間距
+	Add space between Asian text and numbers	在亞洲文字與數字之間加入間距
 	Add Text	新增文字
 	Add to Dictionary	新增至字典
 	Add to Style Gallery	新增至樣式庫
@@ -32,7 +35,10 @@
 	All Caps	全部大寫
 	All caps	全部大寫
 	All Markup	所有標記
+	Allow hanging punctuation	允許標點溢出邊界
+	Allow Latin text to wrap in the middle of a word	允許西文在單字中間換行
 	Alt Text	替代文字
+	Apply Asian line-breaking rules (kinsoku)	套用亞洲文字的斷行規則（禁則）
 	Apply Character Style	套用字元樣式
 	Apply Style	套用樣式
 	Apply Styles	選擇並套用樣式
@@ -40,6 +46,7 @@
 	Arrange\nAll	全部排列
 	Arrow	箭號
 	Artistic Effects	美術效果
+	Asian Typography	亞洲版式
 	Author	作者
 	AutoCorrect Options	自動校正選項
 	AutoFit	自動調整
@@ -53,7 +60,10 @@
 	AutoSave	自動儲存
 	AutoSave documents you have saved in WordCraft	自動儲存在 WordCraft 中儲存過的文件
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	自動儲存失敗：{error}。重新儲存文件後將恢復自動儲存。
+	Compress punctuation at the start of a line	壓縮行首標點
 	Dark page (white text on black)	深色頁面（黑底白字）
+	Indents and Spacing	縮排和間距
+	Line breaking	斷行
 	More templates →	更多範本 →
 	No templates match your search.	沒有符合搜尋的範本。
 	Search for templates	搜尋範本
@@ -118,6 +128,15 @@
 	Clear	清除
 	Clear All Formatting	清除所有格式設定
 	Clipboard	剪貼簿
+	Clipboard Pane	剪貼簿窗格
+	Clipboard Items	剪貼簿項目
+	Paste Clipboard Item	貼上剪貼簿項目
+	Paste All	全部貼上
+	Delete Clipboard Item	刪除剪貼簿項目
+	Clear All	全部清除
+	Click an item to paste it.	按一下項目即可貼上。
+	Nothing collected yet. Items you copy or cut appear here.	尚無內容。複製或剪下的項目會顯示在這裡。
+	(picture or object)	（圖片或物件）
 	Close	關閉
 	Close Header and Footer	關閉頁首及頁尾
 	Collapse Selection	摺疊選取範圍
@@ -736,6 +755,7 @@
 	Underline Words Only	只在文字下加底線
 	Undo	復原
 	Undo {action}	復原{action}
+	Ungroup	取消群組
 	Up	上
 	Update Field	更新功能變數
 	Update Index	更新索引
@@ -879,6 +899,68 @@
 	Opening print dialog…	正在開啟列印對話方塊…
 	Print failed: {error}	列印失敗：{error}
 	Couldn't open {path}: {error}	無法開啟 {path}：{error}
+	Column Selection	矩形選取
+	Style Inspector	樣式檢查器
+	Inspect Styles at Selection	檢查選取範圍的樣式
+	Clear Formatting Level	清除格式層級
+	Characters	字元
+	Direct formatting	直接格式設定
+	Reset to Normal	重設為內文
+	Clear Paragraph Formatting	清除段落格式設定
+	Clear Character Style	清除字元樣式
+	Clear Character Formatting	清除字元格式設定
+	Paste Special	選擇性貼上
+	Paste Special…	選擇性貼上…
+	Paste as:	貼上為：
+	The clipboard is empty.	剪貼簿是空的。
+	Formatted Text	格式化文字
+	Rich Text Format (RTF)	RTF 格式
+	HTML Format	HTML 格式
+	Unformatted Text	純文字
+	Result	結果
+	Keeps the fonts and formatting of the copied text.	保留所複製文字的字型和格式。
+	Reads the clipboard's rich text and keeps its formatting.	讀取剪貼簿中的 RTF 內容並保留其格式。
+	Reads the clipboard's web content and keeps its formatting.	讀取剪貼簿中的網頁內容並保留其格式。
+	Drops all formatting and pastes plain text.	移除所有格式，貼上純文字。
+	Advanced Find	進階尋找
+	Advanced Find…	進階尋找…
+	Go To…	移至…
+	Reading Highlight	醒目提示尋找結果
+	New Table Style	新增表格樣式
+	Modify Table Style	修改表格樣式
+	New Table Style…	新增表格樣式…
+	Modify Table Style…	修改表格樣式…
+	Apply formatting to:	將格式套用至：
+	Whole Table	整個表格
+	Fill color:	填滿色彩：
+	{count} items highlighted	已醒目提示 {count} 個項目
+	{n} pt	{n} 點
+	Not {name}	非{name}
+	Level {n}	第 {n} 階
+	Body Text	本文
+	{n} lines	{n} 行
+	At least {n}	最小行高 {n}
+	Exactly {n}	固定行高 {n}
+	Centered	置中
+	Character spacing	字元間距
+	Don't add space between paragraphs of the same style	相同樣式的段落之間不新增間距
+	Don't hyphenate	不斷字
+	Double strikethrough	雙刪除線
+	Drop cap	首字放大
+	First line	第一行
+	Font color	字型色彩
+	Highlight	醒目提示
+	Justified	左右對齊
+	Left indent	左縮排
+	Line spacing	行距
+	Outline level	大綱階層
+	Raised/lowered	上移/下移
+	Right indent	右縮排
+	Scale	縮放
+	Space after	段落後間距
+	Space before	段落前間距
+	Suppress line numbers	隱藏行號
+	Underline color	底線色彩
 	Letters	信函
 	E-mail Messages	電子郵件
 	Directory	目錄
@@ -932,3 +1014,43 @@
 	Dark	深色
 	Use system setting	使用系統設定
 	A file dialog is already open.	已有一個檔案對話方塊開啟中。
+	Shape Effects	圖案效果
+	Glow	光暈
+	Soft Edges	柔化邊緣
+	No Shadow	無陰影
+	No Glow	無光暈
+	No Soft Edges	無柔化邊緣
+	Glow Colors	光暈色彩
+	Weight	粗細
+	Shadow, glow and soft edges	陰影、光暈和柔化邊緣
+	Offset: Bottom Right	位移：右下
+	Offset: Bottom	位移：下
+	Offset: Bottom Left	位移：左下
+	Offset: Right	位移：右
+	Offset: Center	位移：置中
+	Offset: Left	位移：左
+	Offset: Top Right	位移：右上
+	Offset: Top	位移：上
+	Offset: Top Left	位移：左上
+	Manage Styles	管理樣式
+	Show or Hide Style	顯示或隱藏樣式
+	Manage Styles…	管理樣式…
+	Sort order:	排序方式：
+	As Recommended	依建議
+	Alphabetical	依字母順序
+	Font: {font}	字型：{font}
+	{size} pt	{size} 點
+	Color: {color}	色彩：{color}
+	Space before: {pt} pt	段落前間距：{pt} 點
+	Space after: {pt} pt	段落後間距：{pt} 點
+	Based on: {style}	根據：{style}
+	Paragraph style	段落樣式
+	Character style	字元樣式
+	Linked style (paragraph and character)	連結樣式（段落和字元）
+	Table style	表格樣式
+	Built-in style	內建樣式
+	Show in the Styles gallery	在樣式庫中顯示
+	Hide from style lists	從樣式清單中隱藏
+	Built-in styles can't be deleted.	無法刪除內建樣式。
+	Delete Table Style	刪除表格樣式
+	Preview	預覽

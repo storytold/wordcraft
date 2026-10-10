@@ -8,8 +8,8 @@ and agent control. This file tracks where we are honestly. Generated numbers com
 
 | Measure | Value |
 |---|---|
-| Commands (every action, scriptable by CLI/MCP/control channel) | **422** |
-| Feature catalog coverage (Word ribbon/menu features with a command) | **378 / 428 (88%)** |
+| Commands (every action, scriptable by CLI/MCP/control channel) | **431** |
+| Feature catalog coverage (Word ribbon/menu features with a command) | **390 / 431 (90%)** |
 | **Estimated real feature parity** (depth and fidelity, not just a command) | **~62%** |
 | **Distance to alpha** | **~85% of the way; ≈20–25 h of Claude wall-clock work** |
 | **Distance to 100% parity** | **≈120–150 h of Claude Opus 5.5 wall-clock work** (with parallel agents) |
@@ -47,7 +47,7 @@ the icon art).
 
 | Area | Status | Parity |
 |---|---|---|
-| Typing, selection, clipboard, undo, find/replace | Solid; IME, autocorrect, smart quotes, list autoformat | 85% |
+| Typing, selection, clipboard, undo, find/replace | Solid; IME, autocorrect, smart quotes, list autoformat, column (block) selection | 85% |
 | Character & paragraph formatting | Nearly all properties; Font/Paragraph dialogs | 85% |
 | Styles (gallery, pane, create/modify, style sets, themes) | Good | 75% |
 | Lists (bullets, numbering, multilevel, restart, set value) | Good | 75% |
@@ -74,8 +74,8 @@ the icon art).
 
 1. **Alpha blockers** (≈20–25 h): DOCX fidelity corpus, footnote continuation, column balancing,
    native printing, autosave soak test, first signed release.
-2. **Objects** (≈12 h): tight/through (contour) wrap, rotation handles on the canvas,
-   grouping, z-order polish, track-changes balloons and formatting revisions.
+2. **Objects** (≈10 h): tight/through (contour) wrap, rotation handles on the canvas,
+   moving a multi-selection together, z-order polish, track-changes balloons and formatting revisions.
 3. **Draw tab / ink** (≈15 h).
 4. **Charts (own renderer) and SmartArt-style diagrams** (≈20 h).
 5. **Equation editor** — done: OMML read/write, 2D layout, in-place editing with Word's Equation tab (structures, symbols, built-ins, Unicode/LaTeX input, build-up, Math AutoCorrect, `#` numbers, structure commands). Remaining: line breaking of long display equations, ink equations (≈4 h).
@@ -102,7 +102,7 @@ the icon art).
 | M8 | View | mostly done |
 | M9 | Mailings | done (first version) |
 | M10 | File/Backstage | mostly done; native printing missing |
-| M11 | Draw + objects | text wrap and text boxes done; ink, rotation, grouping missing |
+| M11 | Draw + objects | text wrap, text boxes and grouping done; ink, rotation missing |
 | M12 | Formats breadth (PDF, ODT, RTF, HTML, MD, TXT) | **done** (first versions) |
 | M13 | Performance budgets | on track (1.4 ms relayout) |
 | M14 | 1.0 polish, packaging, signing | pipeline written; waiting on remote and secrets |

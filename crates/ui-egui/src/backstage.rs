@@ -270,17 +270,35 @@ fn info_page(app: &mut WordApp, ui: &mut Ui) {
     ui.columns(2, |cols| {
         let ui = &mut cols[0];
         ui.label(egui::RichText::new(tl!("Properties")).font(semibold(15.0)));
+        // The fields edit a copy of the document's properties that is read afresh every frame,
+        // so each change goes into the document as it is typed (#260): waiting for the field to
+        // lose focus dropped the keystrokes, and leaving File with Escape never loses it at all.
+        // The keystrokes of one visit to a field are a single undo step.
         let mut props = app.session.doc.core.clone();
-        let mut changed = false;
+        let mut edited = None;
+        let mut focused = None;
         egui::Grid::new("props").num_columns(2).spacing(vec2(12.0, 6.0)).show(ui, |ui| {
             for (l, v) in [("Title", &mut props.title), ("Subject", &mut props.subject), ("Author", &mut props.creator), ("Keywords", &mut props.keywords), ("Category", &mut props.category)] {
-                ui.label(tl!(l));
-                changed |= ui.text_edit_singleline(v).lost_focus();
+                let label = ui.label(tl!(l));
+                let r = ui.add(egui::TextEdit::singleline(v).id_salt(("info-prop", l))).labelled_by(label.id);
+                if r.changed() {
+                    edited = Some(l);
+                }
+                if r.has_focus() {
+                    focused = Some(l);
+                }
                 ui.end_row();
             }
         });
-        if changed {
-            let _ = app.run("file.properties", json!({"title": props.title, "subject": props.subject, "author": props.creator, "keywords": props.keywords, "category": props.category}));
+        if let Some(field) = edited {
+            if app.info_editing == Some((field, app.session.rev())) {
+                app.session.join_next_undo();
+            }
+            let ok = app.run("file.properties", json!({"title": props.title, "subject": props.subject, "author": props.creator, "keywords": props.keywords, "category": props.category})).is_ok();
+            app.info_editing = ok.then(|| (field, app.session.rev()));
+        }
+        if focused != app.info_editing.map(|(f, _)| f) {
+            app.info_editing = None;
         }
         // Protect Document › Encrypt with Password (#55).
         ui.add_space(18.0);
@@ -462,5 +480,67 @@ mod tests {
         assert_eq!(h.state().ui.backstage_page, "new", "the link opens New");
         assert!(h.query_by_label("Report").is_some(), "New shows every template");
         assert!(h.query_by_label("Recent").is_none(), "New has no Recent list");
+    }
+
+    /// #260: File › Info's Title and Author fields dropped every keystroke (they edited a copy
+    /// re-read each frame and only wrote it back when the field lost focus), so a save had no
+    /// title or author. Typing now lands in the document as it happens, one undo step per field,
+    /// and the browser's Save downloads it with the save stamps advanced (#262).
+    #[test]
+    fn info_fields_keep_typed_properties_through_a_web_save() {
+        use egui::accesskit::Role;
+        let got: std::rc::Rc<std::cell::RefCell<Vec<(String, Vec<u8>)>>> = Default::default();
+        let sink = got.clone();
+        let services = Services {
+            download: Some(Box::new(move |n: &str, b: &[u8]| {
+                sink.borrow_mut().push((n.to_string(), b.to_vec()));
+                Ok(())
+            })),
+            ..Default::default()
+        };
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("XYZ")), services);
+        a.session.author = "GAMMA".into();
+        a.run("ui.backstage", json!({"value": true, "page": "info"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        for (field, text) in [("Title", "ALPHA"), ("Author", "BETA")] {
+            h.get_by_role_and_label(Role::TextInput, field).click();
+            h.run_steps(2);
+            for c in text.chars() {
+                h.get_by_role_and_label(Role::TextInput, field).type_text(&c.to_string());
+                h.run_steps(2);
+            }
+            assert_eq!(h.get_by_role_and_label(Role::TextInput, field).value().as_deref(), Some(text), "{field} shows what was typed");
+        }
+        let core = h.state().session.doc.core.clone();
+        assert_eq!((core.title.as_str(), core.creator.as_str()), ("ALPHA", "BETA"));
+        assert!(h.state().session.dirty, "the property edits are unsaved changes");
+
+        // Save (web: a download) writes them into docProps/core.xml, with fresh save stamps.
+        let a = h.state_mut();
+        let created = a.session.doc.core.created.clone();
+        a.run("file.save", json!({})).unwrap();
+        a.run("file.save", json!({})).unwrap();
+        let (name, bytes) = got.borrow_mut().pop().unwrap();
+        let back = wordcraft_engine::io::open_bytes(&name, &bytes).unwrap();
+        assert_eq!((back.core.title.as_str(), back.core.creator.as_str()), ("ALPHA", "BETA"));
+        assert_eq!(back.core.last_modified_by, "GAMMA");
+        assert_eq!(back.core.revision, core.revision + 2, "each save advances the revision");
+        assert!(created.is_empty() && !back.core.created.is_empty(), "the first save sets the creation time");
+        assert!(!back.core.modified.is_empty());
+        assert!(!a.session.dirty);
+
+        // Each field's typing is one undo step.
+        a.session.run("edit.undo", &json!({})).unwrap();
+        assert_eq!((a.session.doc.core.title.as_str(), a.session.doc.core.creator.as_str()), ("ALPHA", ""));
+        a.session.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(a.session.doc.core.title, "");
     }
 }

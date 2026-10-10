@@ -176,12 +176,7 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
         wordcraft_docx::check_password(pw).map_err(|e| CmdError::Params(e.to_string()))?;
         s.password = Some(crate::io::Password::new(pw));
     }
-    s.doc.core.modified = super::now_iso();
-    if s.doc.core.created.is_empty() {
-        s.doc.core.created = s.doc.core.modified.clone();
-    }
-    s.doc.core.last_modified_by = s.author.clone();
-    s.doc.core.revision = s.doc.core.revision.saturating_add(1);
+    s.stamp_save();
     let password = s.password.as_ref().map(crate::io::Password::as_str);
     crate::io::save_path_with(&path, &s.doc, password).map_err(CmdError::Failed)?;
     let encrypted = password.is_some() && crate::io::can_encrypt(&path.to_string_lossy());

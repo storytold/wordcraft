@@ -1,0 +1,1066 @@
+# Serbian, Latin script (sr-latn) interface catalog. Columns, separated by a TAB:
+#   context <TAB> English source <TAB> translation
+#   context    empty (WordCraft uses no contexts yet)
+#   source     the English text exactly as in the code (tl!(...), ribbon labels, command labels)
+#   escapes    \n  \t  \\  inside a column. `{name}` placeholders must appear in both columns, and a
+#              trailing "…" in one needs one in the other.
+#   Lines starting with # and blank lines are ignored. A missing entry shows in English.
+#
+# Clean room: every entry was written from the plain meaning of the English label in ordinary
+# computing vocabulary. No Microsoft Word (or other product) localisation, string table or
+# translated UI was consulted or copied; add entries the same way.
+# Product, format and technology names (WordCraft, PDF, Markdown, MCP …) stay in Latin letters.
+
+	(no suggestions)	(nema predloga)
+	(picture or object)	(slika ili objekat)
+	1.5 Line Spacing	Proređenost 1,5
+	A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.	Besplatan, otvoreni obrađivač teksta napisan od nule u Rust-u.\nDeo Crafting Apps paketa tima ArtCraft.
+	About	O programu
+	About WordCraft	O WordCraft-u
+	Accept	Prihvati
+	Accept All Changes	Prihvati sve izmene
+	Accept This Change	Prihvati ovu izmenu
+	Accessibility	Pristupačnost
+	Add	Dodaj
+	Add a comment	Dodaj komentar
+	Add a Table	Dodaj tabelu
+	Add Object to Selection	Dodaj objekat u izbor
+	Add Space Before Paragraph	Dodaj razmak pre pasusa
+	Add space between Asian and Latin text	Dodaj razmak između azijskog i latiničnog teksta
+	Add space between Asian text and numbers	Dodaj razmak između azijskog teksta i brojeva
+	Add Text	Dodaj tekst
+	Add to Dictionary	Dodaj u rečnik
+	Add to Style Gallery	Dodaj u galeriju stilova
+	Address Block	Blok adrese
+	Address:	Adresa:
+	Address\nBlock	Blok\nadrese
+	Adjust	Podesi
+	Advanced	Napredno
+	After:	Posle:
+	Agents	Agenti
+	Align	Poravnanje
+	Align Left	Levo poravnanje
+	Align Right	Desno poravnanje
+	Alignment	Poravnanje
+	All Borders	Sve ivice
+	All Caps	Sva velika slova
+	All caps	Sva velika slova
+	All Markup	Sve izmene
+	Allow hanging punctuation	Dozvoli viseću interpunkciju
+	Allow Latin text to wrap in the middle of a word	Dozvoli prelom latiničnog teksta usred reči
+	Alphabetical	Abecedno
+	Alt Text	Alternativni tekst
+	Apply Asian line-breaking rules (kinsoku)	Primeni azijska pravila preloma redova (kinsoku)
+	Apply Character Style	Primeni stil znakova
+	Apply Style	Primeni stil
+	Apply Styles	Izaberi i primeni stilove
+	Arrange	Ređanje
+	Arrange\nAll	Rasporedi\nsve
+	Arrow	Strelica
+	Artistic Effects	Umetnički efekti
+	As Recommended	Kao što je preporučeno
+	Asian Typography	Azijska tipografija
+	Author	Autor
+	AutoCorrect Options	Opcije automatske ispravke
+	AutoFit	Automatsko uklapanje
+	AutoFit Contents	Automatski uklopi prema sadržaju
+	AutoFit Window	Automatski uklopi prema prozoru
+	Automatic	Automatski
+	Automatic ({language})	Automatski ({language})
+	Automatic follows your system's language. Menus and commands change; your documents don't.	Automatski prati jezik sistema. Meniji i naredbe se menjaju; dokumenti ne.
+	Automatic Table 1 (3 levels)	Automatska tabela 1 (3 nivoa)
+	Automatic Table 2 (2 levels)	Automatska tabela 2 (2 nivoa)
+	AutoSave	Automatsko čuvanje
+	AutoSave documents you have saved in WordCraft	Automatski čuvaj dokumente koje ste već sačuvali u WordCraft-u
+	AutoSave failed: {error}. Save the document to turn AutoSave back on.	Automatsko čuvanje neuspelo: {error}. Sačuvajte dokument da biste ga ponovo uključili.
+	Based on: {style}	Zasnovan na: {style}
+	Built-in style	Ugrađeni stil
+	Built-in styles can't be deleted.	Ugrađeni stilovi ne mogu da se obrišu.
+	Character style	Stil znakova
+	Click an item to paste it.	Kliknite na stavku da biste je nalepili.
+	Clipboard Items	Stavke ostave
+	Clipboard Pane	Okno ostave
+	Color: {color}	Boja: {color}
+	Compress punctuation at the start of a line	Sažmi interpunkciju na početku reda
+	Dark page (white text on black)	Tamna stranica (beo tekst na crnom)
+	Delete Clipboard Item	Obriši stavku iz ostave
+	Delete Table Style	Obriši stil tabele
+	Font: {font}	Font: {font}
+	Glow	Sjaj
+	Glow Colors	Boje sjaja
+	Hide from style lists	Sakrij sa lista stilova
+	Indents and Spacing	Uvlačenja i razmaci
+	Line breaking	Prelom redova
+	Linked style (paragraph and character)	Povezani stil (pasus i znakovi)
+	Manage Styles	Upravljanje stilovima
+	Manage Styles…	Upravljanje stilovima…
+	No Glow	Bez sjaja
+	No Shadow	Bez senke
+	No Soft Edges	Bez mekih ivica
+	Nothing collected yet. Items you copy or cut appear here.	Još ništa nije prikupljeno. Ovde se pojavljuje ono što kopirate ili isečete.
+	Offset: Bottom	Pomak: dole
+	Offset: Bottom Left	Pomak: dole levo
+	Offset: Bottom Right	Pomak: dole desno
+	Offset: Center	Pomak: centar
+	Offset: Left	Pomak: levo
+	Offset: Right	Pomak: desno
+	Offset: Top	Pomak: gore
+	Offset: Top Left	Pomak: gore levo
+	Offset: Top Right	Pomak: gore desno
+	Paragraph style	Stil pasusa
+	Paste All	Nalepi sve
+	Paste Clipboard Item	Nalepi stavku iz ostave
+	Preview	Pregled
+	Shadow, glow and soft edges	Senka, sjaj i meke ivice
+	Shape Effects	Efekti oblika
+	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Prikaži dokumente sa invertovanim bojama, kao kod Prikaz › Promeni režim. Čuvanje, štampanje i PDF nisu pogođeni.
+	AutoSave saves every change to the file (needs a saved document)	Automatsko čuvanje upisuje svaku izmenu u fajl (dokument mora biti već sačuvan)
+	AutoText	Automatski tekst
+	Backspace	Backspace
+	Banded Columns	Trakaste kolone
+	Banded Rows	Trakasti redovi
+	Before:	Pre:
+	Bibliography	Bibliografija
+	Binary assets added	Dodati binarni resursi
+	Binary assets removed	Uklonjeni binarni resursi
+	Blank	Prazno
+	Blank (Three Columns)	Prazno (tri kolone)
+	Blank document	Prazan dokument
+	Blank Page	Prazna strana
+	Block\nAuthors	Blokiraj\nautore
+	Bold	Podebljano
+	Bookmark	Obeleživač
+	Bookmark name:	Naziv obeleživača:
+	Border Painter	Kopiranje ivica
+	Border\nPainter	Kopiranje\nivica
+	Borders	Ivice
+	Bottom Border	Donja ivica
+	Bottom of Page	Dno strane
+	Bottom:	Dole:
+	Box	Okvir
+	Breaks	Prekidi
+	Bring Forward	Pomeri napred
+	Bullet Library	Biblioteka oznaka
+	Bullets	Oznake
+	Calendar	Kalendar
+	Cancel	Otkaži
+	Capitalize Each Word	Veliko početno slovo svake reči
+	Captions	Natpisi
+	Cell Margins	Margine ćelije
+	Cell Size	Veličina ćelije
+	Cell\nMargins	Margine\nćelije
+	Center	Centriraj
+	Change	Izmeni
+	Change Case	Promeni veličinu slova
+	Change List Level	Promeni nivo liste
+	Change Picture	Promeni sliku
+	Change Shape	Promeni oblik
+	Changes	Izmene
+	Character Position	Položaj znaka
+	Character Scale	Razmera znaka
+	Character Shading	Senčenje znakova
+	Character Spacing	Razmak između znakova
+	Character Border	Ivica znaka
+	Characters (no spaces)	Znakovi (bez razmaka)
+	Characters (with spaces)	Znakovi (sa razmacima)
+	Chart	Grafikon
+	Check Accessibility	Provera pristupačnosti
+	Check Compatibility	Provera kompatibilnosti
+	Check for Errors	Provera grešaka
+	Check Spelling as You Type	Provera pravopisa dok pišete
+	Check\nAccessibility	Provera\npristupačnosti
+	Citation Style	Stil citiranja
+	Citations & Bibliography	Citati i bibliografija
+	Clear	Obriši
+	Clear All Formatting	Obriši sve formatiranje
+	Clipboard	Ostava
+	Close	Zatvori
+	Close Header and Footer	Zatvori zaglavlje i podnožje
+	Collapse Selection	Skupi izbor
+	Color	Boja
+	Color:	Boja:
+	Colors	Boje
+	Column	Kolona
+	Column Break	Prekid kolone
+	Columns	Kolone
+	Combine	Spoji
+	Commands	Naredbe
+	Comment	Komentar
+	Comments	Komentari
+	Comments Pane	Okno komentara
+	Community\nDiscord	Zajednica\nna Discord-u
+	Compact	Sažeto
+	Compare	Upoređivanje
+	Compress Pictures	Kompresuj slike
+	Continuous	Neprekidno
+	Convert	Pretvori
+	Convert Text to Table	Pretvori tekst u tabelu
+	Convert Text to Table…	Pretvori tekst u tabelu…
+	Convert to Text	Pretvori u tekst
+	Copy	Kopiraj
+	Copy Formatting	Kopiraj formatiranje
+	Corrections	Ispravke
+	Count words in text boxes and notes	Broji reči u okvirima za tekst i fusnotama
+	Couldn't download {name}: {error}	Preuzimanje {name} nije uspelo: {error}
+	Cover Page	Naslovna strana
+	Create	Napravi
+	Create a Style	Napravi stil
+	Create an interactive outline of your document.\n\nIt's a great way to keep track of where you are or quickly move your content around.\n\nTo get started, go to the Home tab and apply Heading styles to the headings in your document.	Napravite interaktivni pregled dokumenta.\n\nOdličan je način da pratite gde se nalazite ili brzo premeštate sadržaj.\n\nZa početak, idite na karticu Početak i primenite stilove naslova na naslove u dokumentu.
+	Create New Style	Napravi novi stil
+	Crop	Iseci
+	Cross-reference	Unakrsna referenca
+	Current Position	Trenutni položaj
+	Current style: {style}	Trenutni stil: {style}
+	Custom Margins…	Prilagođene margine…
+	Custom Watermark	Prilagođen vodeni žig
+	Custom Watermark…	Prilagođen vodeni žig…
+	Customize Quick Access Toolbar	Prilagodi traku za brzi pristup
+	Cut	Iseci
+	Dark Mode	Tamni režim
+	Dashed	Isprekidano
+	Data	Podaci
+	Date & Time	Datum i vreme
+	Decrease Font Size	Smanji veličinu fonta
+	Decrease Indent	Smanji uvlačenje
+	Default	Podrazumevano
+	Define New Bullet	Definiši novu oznaku
+	Define New Number Format	Definiši novi format broja
+	Delete	Obriši
+	Delete Cells	Obriši ćelije
+	Delete Columns	Obriši kolone
+	Delete Comment	Obriši komentar
+	Delete Next Word	Obriši sledeću reč
+	Delete Previous Word	Obriši prethodnu reč
+	Delete Rows	Obriši redove
+	Delete Style	Obriši stil
+	Delete Table	Obriši tabelu
+	Design	Dizajn
+	development build	razvojna verzija
+	Diagonal	Dijagonalno
+	Diamond	Dijamant
+	Dictate	Diktiranje
+	Different First Page	Drugačija prva strana
+	Different Odd & Even Pages	Drugačije neparne i parne strane
+	Discord	Discord
+	Discord community	Zajednica na Discord-u
+	Display	Prikaz
+	Display for Review	Prikaz za pregled
+	Distribute Columns	Ravnomerno razmesti kolone
+	Distribute Rows	Ravnomerno razmesti redove
+	Distributed	Rasprostrto
+	Do Not Show in TOC	Ne prikazuj u sadržaju
+	Do you want to save changes to {name}?	Želite li da sačuvate izmene u {name}?
+	Don't Save	Ne čuvaj
+	Document End	Kraj dokumenta
+	Document Formatting	Formatiranje dokumenta
+	Document Property	Svojstvo dokumenta
+	Document Start	Početak dokumenta
+	Document Text	Tekst dokumenta
+	Document Title	Naslov dokumenta
+	Documents you open will show up here.	Dokumenti koje otvorite pojaviće se ovde.
+	Dot-dash	Tačka-crta
+	Dotted	Tačkasto
+	Double	Duplo
+	Double Spacing	Duplo proređenje
+	Double Strikethrough	Duplo precrtano
+	Double Underline	Duplo podvučeno
+	Down	Dole
+	Draft	Nacrt
+	Draw	Crtanje
+	Drawing Tools	Alati za crtanje
+	Drawing\nCanvas	Platno\nza crtanje
+	Drop Cap	Ukrasno veliko slovo
+	Edit Footer	Uredi podnožje
+	Edit Header	Uredi zaglavlje
+	Edit Recipient List	Uredi listu primalaca
+	Edit\nRecipient List	Uredi\nlistu primalaca
+	Edited	Izmenjeno
+	Editing	Uređivanje
+	Editing header/footer	Uređivanje zaglavlja/podnožja
+	Editing — edit the document directly	Uređivanje — menjajte dokument direktno
+	Editor	Urednik
+	Effects	Efekti
+	Emboss	Reljef
+	Encrypt with Password	Šifruj lozinkom
+	English (United States)	Engleski (SAD)
+	Engrave	Urezano
+	Enter page number:	Unesite broj strane:
+	Envelopes	Koverte
+	Equation	Jednačina
+	Eraser	Gumica
+	Even Page	Parna strana
+	Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel.	Svaka naredba je dostupna skriptama i AI agentima: pokrenite `wordcraft-cli mcp` za MCP server, ili pokrenite aplikaciju sa `--control <port>` za JSON kontrolni kanal.
+	Export	Izvoz
+	Export a copy to share (PDF, Word document)	Izvezi kopiju za deljenje (PDF, Word dokument)
+	Export Page as PNG	Izvezi stranu kao PNG
+	Export PDF	Izvezi PDF
+	Exported {path}	Izvezeno: {path}
+	Extend Selection	Proširi izbor
+	Field	Polje
+	File	Fajl
+	Find	Pronađi
+	Find and Replace	Pronađi i zameni
+	Find Next	Pronađi sledeće
+	Find Previous	Pronađi prethodno
+	Find Recipient	Pronađi primaoca
+	Find what:	Pronađi:
+	Finish	Završi
+	Finish & Merge	Završi i spoji
+	Finish &\nMerge	Završi\ni spoji
+	First Column	Prva kolona
+	First commit	Prvi commit
+	First line:	Prvi red:
+	Fixed Column Width	Fiksna širina kolone
+	Focus	Fokus
+	Font	Font
+	Font Color	Boja fonta
+	Font color:	Boja fonta:
+	Font Dialog	Dijalog fonta
+	Font Size	Veličina fonta
+	Font:	Font:
+	Fonts	Fontovi
+	Footer	Podnožje
+	Footnote and Endnote	Fusnota i endnota
+	Footnotes	Fusnote
+	Format	Format
+	Format Page Numbers	Format brojeva strana
+	Format Page Numbers…	Format brojeva strana…
+	Format Painter	Kopiranje formata
+	Formatting at Selection	Formatiranje na izboru
+	Formula	Formula
+	General	Opšte
+	Go To	Idi na
+	Go to	Idi na
+	Go To (⌘⌥G)	Idi na (⌘⌥G)
+	Grab bag	Razno
+	Greeting Line	Red pozdrava
+	Greeting\nLine	Red\npozdrava
+	Gridlines	Linije mreže
+	Group	Grupisanje
+	Grow Font 1 Point	Uvećaj font za 1 tačku
+	Hanging Indent	Uvlačenje viseće linije
+	Header	Zaglavlje
+	Header & Footer	Zaglavlje i podnožje
+	Header Row	Red zaglavlja
+	Header/Footer Position	Položaj zaglavlja/podnožja
+	Heading 1	Naslov 1
+	Heading 2	Naslov 2
+	Heading 3	Naslov 3
+	Headings	Naslovi
+	Heart	Srce
+	Help	Pomoć
+	Hidden	Skriveno
+	Highlight Merge Fields	Istakni polja za spajanje
+	Highlight\nMerge Fields	Istakni\npolja za spajanje
+	Highlighter	Marker
+	Home	Početak
+	Horizontal	Horizontalno
+	Horizontal Line	Horizontalna linija
+	Hyphenation	Deljenje reči
+	Icons	Ikonice
+	Ignore All	Zanemari sve
+	Illustrations	Ilustracije
+	Immersive	Imerzivno
+	Immersive Reader	Imerzivni čitač
+	Immersive\nReader	Imerzivni\nčitač
+	Increase Font Size	Povećaj veličinu fonta
+	Increase Indent	Povećaj uvlačenje
+	Indent	Uvlačenje
+	Indentation	Uvlačenje
+	Indents	Uvlačenja
+	Index	Indeks
+	Info	Informacije
+	Ink to\nMath	Rukopis u\nformulu
+	Ink to\nShape	Rukopis u\noblik
+	Ink\nReplay	Rukopis\nrepriza
+	Insert	Umetanje
+	Insert Above	Umetni iznad
+	Insert Below	Umetni ispod
+	Insert Caption	Umetni natpis
+	Insert Citation	Umetni citat
+	Insert Endnote	Umetni endnotu
+	Insert Footnote	Umetni fusnotu
+	Insert Hyperlink	Umetni hiperveze
+	Insert Index	Umetni indeks
+	Insert Left	Umetni levo
+	Insert Merge Field	Umetni polje za spajanje
+	Insert Merge\nField	Umetni polje\nza spajanje
+	Insert Right	Umetni desno
+	Insert Shapes	Umetni oblike
+	Insert Table	Umetni tabelu
+	Insert Table of Authorities	Umetni spisak izvora
+	Insert Table of Figures	Umetni spisak slika
+	Insert Table…	Umetni tabelu…
+	Insert\nAbove	Umetni\niznad
+	Insert\nCaption	Umetni\nnatpis
+	Insert\nCitation	Umetni\ncitat
+	Insert\nFootnote	Umetni\nfusnotu
+	Inside Borders	Unutrašnje ivice
+	Inspect Document	Pregledaj dokument
+	Interface language:	Jezik interfejsa:
+	Italic	Kurziv
+	Join the ArtCraft community on Discord	Pridružite se ArtCraft zajednici na Discord-u
+	Join us on Discord: discord.gg/artcraft	Pridružite nam se na Discord-u: discord.gg/artcraft
+	Justify	Obostrano poravnanje
+	Keep Lines Together	Zadrži redove zajedno
+	Keep lines together	Zadrži redove zajedno
+	Keep Text Only	Zadrži samo tekst
+	Keep with Next	Zadrži sa sledećim
+	Keep with next	Zadrži sa sledećim
+	Labels	Nalepnice
+	Landscape	Položeno
+	Language	Jezik
+	Lasso	Laso
+	Last Column	Zadnja kolona
+	Last commit	Zadnji commit
+	Layout	Raspored
+	Layout Summary	Pregled rasporeda
+	Left	Levo
+	Left Border	Leva ivica
+	Left:	Levo:
+	Letter	Pismo
+	Line	Linija
+	Line and Page Breaks	Prekidi redova i strana
+	Line and Paragraph Spacing	Razmak između redova i pasusa
+	Line Break	Prekid reda
+	Line delta	Promena broja redova
+	Line End	Kraj reda
+	Line Numbers	Brojevi redova
+	Line Spacing	Proređenost
+	Line Spacing Options…	Opcije proređenosti…
+	Line spacing:	Proređenost:
+	Line Start	Početak reda
+	Lines	Redovi
+	Lines added	Dodati redovi
+	Lines deleted	Obrisani redovi
+	Link	Veza
+	Link to Previous	Veza sa prethodnim
+	Links	Veze
+	Location: {path}	Lokacija: {path}
+	lowercase	malim slovima
+	Macros	Makroi
+	Mailings	Pisma
+	Manage Sources	Upravljaj izvorima
+	Many pages	Više strana
+	Margins	Margine
+	Mark Citation	Označi citat
+	Mark Entry	Označi stavku
+	Mark\nCitation	Označi\ncitat
+	Mark\nEntry	Označi\nstavku
+	Markdown (*.md)	Markdown (*.md)
+	Match case	Osetljivo na velika/mala slova
+	Match Fields	Uporedi polja
+	Matrix	Matrica
+	Merge	Spoji
+	Merge Cells	Spoji ćelije
+	Merge Formatting	Spoji formatiranje
+	Merged PRs	Spojeni PR-ovi
+	Mirrored	Zrcaljeno
+	MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.	MIT OR Apache-2.0. Autorska prava (c) 2026 ArtCraft Team i saradnici na WordCraft-u.
+	Moderate	Umereno
+	Modify Style	Izmeni stil
+	Modify…	Izmeni…
+	Move or Resize	Pomeri ili promeni veličinu
+	Multilevel List	Višenivoska lista
+	Multiple Pages	Više strana
+	Name (A–Z)	Naziv (A–Š)
+	Name:	Naziv:
+	Narrow  0.5" all	Uske  0,5" svuda
+	Navigation	Navigacija
+	Navigation Pane	Okno za navigaciju
+	New	Novo
+	New Comment	Novi komentar
+	New from Template	Novo iz šablona
+	New Paragraph	Novi pasus
+	New Style…	Novi stil…
+	New Window	Novi prozor
+	New\nComment	Novi\nkomentar
+	New\nWindow	Novi\nprozor
+	Next	Sledeće
+	Next Change	Sledeća izmena
+	Next Comment	Sledeći komentar
+	Next Footnote	Sledeća fusnota
+	Next Page	Sledeća strana
+	Next Record	Sledeći zapis
+	Next Section	Sledeći odeljak
+	No Border	Bez ivice
+	No Color	Bez boje
+	No contributor data was built into this copy.	Ova verzija ne sadrži podatke o saradnicima.
+	No Markup	Bez izmena
+	No model credits were built into this copy.	Ova verzija ne sadrži zasluge za AI modele.
+	No Paragraph Space	Bez razmaka pasusa
+	Nonbreaking Hyphen	Nedeljiva crtica
+	Nonbreaking Space	Nedeljivi razmak
+	None	Nijedno
+	Normal  1" all	Normalne  1" svuda
+	Normal Style	Normalan stil
+	Not available right now	Trenutno nedostupno
+	Not saved	Nije sačuvano
+	Not saved yet	Još nije sačuvano
+	Nudge	Mikro-pomeranje
+	Number of columns:	Broj kolona:
+	Number of rows:	Broj redova:
+	Numbering	Numeracija
+	Object	Objekat
+	Odd Page	Neparna strana
+	Office 2003 Default	Office 2003 podrazumevano
+	OK	U redu
+	One	Jedna
+	One Page	Jedna strana
+	Only web (http, https) and email (mailto) links can be followed	Mogu se otvoriti samo veb (http, https) i veze za e-poštu (mailto)
+	Open	Otvori
+	OpenDocument Text (*.odt)	OpenDocument tekst (*.odt)
+	Optional Hyphen	Opcionalna crtica
+	Options	Opcije
+	Orientation	Orijentacija
+	Outline	Kontura
+	Outline Level	Nivo konture
+	Outside Borders	Spoljašnje ivice
+	Oval	Ovalno
+	Page	Strana
+	Page Background	Pozadina strane
+	Page Borders	Ivice strane
+	Page Break	Prekid strane
+	Page Break Before	Prekid strane pre
+	Page break before	Prekid strane pre
+	Page Breaks	Prekidi strana
+	Page Color	Boja strane
+	Page Down	Strana nadole
+	Page image (*.png)	Slika strane (*.png)
+	Page Movement	Kretanje stranama
+	Page Number	Broj strane
+	Page Setup	Podešavanje strane
+	Page Up	Strana nagore
+	Page Width	Širina strane
+	Page width	Širina strane
+	Page X of Y	Strana X od Y
+	Page {page}	Strana {page}
+	Page {page} of {pages}	Strana {page} od {pages}
+	Page\nBorders	Ivice\nstrane
+	Page\nColor	Boja\nstrane
+	Page\nNumber	Broj\nstrane
+	Pages	Strane
+	Paragraph	Pasus
+	Paragraph Details	Detalji pasusa
+	Paragraph Down	Pasus nadole
+	Paragraph Settings	Podešavanja pasusa
+	Paragraph Spacing	Razmak pasusa
+	Paragraph Up	Pasus nagore
+	Paragraphs	Pasusi
+	Paste	Nalepi
+	Paste (⌘V)	Nalepi (⌘V)
+	Paste Formatting	Nalepi formatiranje
+	Paste: Keep Text Only	Nalepi: samo tekst
+	Paste: Merge Formatting	Nalepi: spoji formatiranje
+	PDF document (*.pdf)	PDF dokument (*.pdf)
+	Pen	Pero
+	Pencil	Olovka
+	Picture Border	Ivica slike
+	Picture Format	Format slike
+	Picture Styles	Stilovi slike
+	Pictures	Slike
+	Plain text (*.txt)	Običan tekst (*.txt)
+	Portrait	Uspravno
+	Position	Položaj
+	Preview Results	Pregled rezultata
+	Preview\nResults	Pregled\nrezultata
+	Previous	Prethodno
+	Previous Change	Prethodna izmena
+	Previous Comment	Prethodni komentar
+	Previous Record	Prethodni zapis
+	Previous Section	Prethodni odeljak
+	Print	Štampaj
+	Print Layout	Prikaz za štampu
+	Print\nLayout	Prikaz\nza štampu
+	Proofing	Provera pisanja
+	Proofing Issues	Problemi u pisanju
+	Properties	Svojstva
+	Protect	Zaštiti
+	Protect Document	Zaštiti dokument
+	Quick Access Toolbar	Traka za brzi pristup
+	Quick Parts	Brzi delovi
+	Quick Tables	Brze tabele
+	Read Aloud	Čitanje naglas
+	Read Mode	Režim čitanja
+	Read\nAloud	Čitanje\nnaglas
+	Read\nMode	Režim\nčitanja
+	Recent	Nedavno
+	Record Macro	Snimi makro
+	Recover Unsaved Documents	Vrati nesačuvane dokumente
+	Rectangle	Pravougaonik
+	Redo	Ponovi
+	Reduce Hanging Indent	Smanji uvlačenje viseće linije
+	References	Referentni materijal
+	Reject	Odbij
+	Reject All Changes	Odbij sve izmene
+	Reject Change	Odbij izmenu
+	Relaxed	Opušteno
+	Remove Background	Ukloni pozadinu
+	Remove Footer	Ukloni podnožje
+	Remove Header	Ukloni zaglavlje
+	Remove Hyperlink	Ukloni hipervezu
+	Remove Space After Paragraph	Ukloni razmak posle pasusa
+	Remove Table of Contents	Ukloni sadržaj
+	Remove Watermark	Ukloni vodeni žig
+	Repeat	Ponovi
+	Repeat Header Rows	Ponovi redove zaglavlja
+	Replace	Zameni
+	Replace All	Zameni sve
+	Replace Document Text	Zameni tekst dokumenta
+	Replace with:	Zameni sa:
+	Replay	Repriza
+	Reply	Odgovori
+	Report	Izveštaj
+	Research	Istraživanje
+	Researcher	Istraživač
+	Reset Picture	Resetuj sliku
+	Resolve	Reši
+	Resolved	Rešeno
+	Restart at 1	Ponovo počni od 1
+	Restart Each Page	Ponovo počni na svakoj strani
+	Restart Each Section	Ponovo počni u svakom odeljku
+	Restrict Editing	Ograniči uređivanje
+	Restrict\nEditing	Ograniči\nuređivanje
+	Results	Rezultati
+	Reverse the order	Obrni redosled
+	Review	Pregled
+	Reviewing	Pregledanje
+	Reviewing Pane	Okno za pregled
+	Reviewing — edits become suggestions	Pregledanje — izmene postaju predlozi
+	Rich Text Format (*.rtf)	Rich Text format (*.rtf)
+	Right	Desno
+	Right Border	Desna ivica
+	Right-to-Left Text Direction	Smer teksta sa desna na levo
+	Left-to-Right Text Direction	Smer teksta sa leva na desno
+	Right:	Desno:
+	Rotate	Rotiraj
+	Rounded Rectangle	Zaokružen pravougaonik
+	Rows & Columns	Redovi i kolone
+	Ruler	Lenjir
+	Rules	Pravila
+	Résumé	Radna biografija
+	Save	Sačuvaj
+	Save a copy in another format. Printing goes through a PDF you can print from any viewer.	Sačuvaj kopiju u drugom formatu. Štampanje ide preko PDF-a koji možete odštampati iz bilo kog pregledača.
+	Save As	Sačuvaj kao
+	Save as Template	Sačuvaj kao šablon
+	Saved	Sačuvano
+	Search Commands	Pretraga naredbi
+	Search commands and help	Pretraži naredbe i pomoć
+	Search document	Pretraži dokument
+	Section Breaks	Prekidi odeljaka
+	Section Properties	Svojstva odeljka
+	Sections	Odeljci
+	Select	Izaberi
+	Select All	Izaberi sve
+	Select Cell	Izaberi ćeliju
+	Select Line	Izaberi red
+	Select Objects	Izaberi objekte
+	Select Paragraph	Izaberi pasus
+	Select Range	Izaberi opseg
+	Select Recipients	Izaberi primaoce
+	Select Row	Izaberi red
+	Select Sentence	Izaberi rečenicu
+	Select Table	Izaberi tabelu
+	Select Text	Izaberi tekst
+	Select Text with Similar Formatting	Izaberi tekst sa sličnim formatiranjem
+	Select Word	Izaberi reč
+	Select\nRecipients	Izaberi\nprimaoce
+	Selection	Izbor
+	Selection Pane	Okno izbora
+	Send Backward	Pomeri nazad
+	Sentence case.	Veliko slovo na početku rečenice.
+	Set as Default	Postavi kao podrazumevano
+	Set Caret	Postavi kursor
+	Set Character Formatting	Postavi formatiranje znakova
+	Set Numbering Value	Postavi vrednost numeracije
+	Set Paragraph Formatting	Postavi formatiranje pasusa
+	Shading	Senčenje
+	Shadow	Senka
+	Shape Fill	Popuna oblika
+	Shape Format	Format oblika
+	Shape Outline	Kontura oblika
+	Shape Styles	Stilovi oblika
+	Shapes	Oblici
+	Share	Deli
+	Shift+Tab	Shift+Tab
+	Show	Prikaži
+	Show all formatting marks	Prikaži sve znake formatiranja
+	Show Comments	Prikaži komentare
+	Show in the Styles gallery	Prikaži u galeriji stilova
+	Show Markup	Prikaži izmene
+	Show Notes	Prikaži napomene
+	Show or Hide Style	Prikaži ili sakrij stil
+	Show rulers	Prikaži lenjire
+	Show the community button in the title bar	Prikaži dugme zajednice u traci naslova
+	Show/Hide ¶	Prikaži/sakrij ¶
+	Show\nComments	Prikaži\nkomentare
+	Shrink Font 1 Point	Smanji font za 1 tačku
+	Side to Side	Jedno pored drugog
+	Side\nto Side	Jedno\npored drugog
+	Signature Line	Red za potpis
+	Single	Jednostruko
+	Single Spacing	Jednostruko proređenje
+	Size	Veličina papira
+	Size:	Veličina:
+	Small Caps	Kapitelke
+	Small caps	kapitelke
+	SmartArt	SmartArt
+	Soft Edges	Meke ivice
+	Sort	Sortiraj
+	Sort order:	Redosled sortiranja:
+	Source code: github.com/storytold/wordcraft	Izvorni kod: github.com/storytold/wordcraft
+	Space after: {pt} pt	Razmak posle: {pt} pt
+	Space before/after:	Razmak pre/posle:
+	Space before: {pt} pt	Razmak pre: {pt} pt
+	Spacing	Razmak
+	Spacing (pt):	Razmak (pt):
+	Speech	Govor
+	Spelling & Grammar	Pravopis i gramatika
+	Spelling &\nGrammar	Pravopis\ni gramatika
+	Spelling Suggestions	Predlozi pravopisa
+	Split	Podeli
+	Split Cells	Podeli ćelije
+	Split Table	Podeli tabelu
+	Spreadsheet Table	Tabela proračunske table
+	Standard Colors	Standardne boje
+	Star	Zvezda
+	Start Mail Merge	Pokreni spajanje dokumenata
+	Start Mail\nMerge	Pokreni\nspajanje dokumenata
+	Statistics	Statistika
+	Status Bar	Statusna traka
+	Strikethrough	Precrtano
+	Studio cover	Naslovna strana studija
+	Studio handbook (sample)	Priručnik studija (primer)
+	Style	Stil
+	Style based on:	Stil zasnovan na:
+	Style Set	Skup stilova
+	Style: APA	Stil: APA
+	Styles	Stilovi
+	Styles Pane	Okno stilova
+	Subscript	Indeks dole
+	Superscript	Indeks gore
+	Switch Modes	Promeni režim
+	Switch\nModes	Promeni\nrežim
+	Symbol	Simbol
+	Symbols	Simboli
+	Synonyms	Sinonimi
+	Tab	Tab
+	Table	Tabela
+	Table Column Width	Širina kolone tabele
+	Table Design	Dizajn tabele
+	Table Layout	Raspored tabele
+	Table of Authorities	Spisak izvora
+	Table of Contents	Sadržaj
+	Table of\nContents	Sadržaj
+	Table Properties	Svojstva tabele
+	Table Row Height	Visina reda tabele
+	Table style	Stil tabele
+	Table Style Options	Opcije stila tabele
+	Table Styles	Stilovi tabele
+	Tables	Tabele
+	Tabs	Tabulatori
+	Tabular List	Tabelarna lista
+	Text	Tekst
+	Text Box	Okvir za tekst
+	Text Direction	Smer teksta
+	Text Effects	Efekti teksta
+	Text Effects and Typography	Efekti teksta i tipografija
+	Text from File	Tekst iz fajla
+	Text Highlight Color	Boja isticanja teksta
+	Text to display:	Tekst za prikaz:
+	Text Wrapping	Prelamanje teksta
+	Text:	Tekst:
+	Text\nBox	Okvir\nza tekst
+	Text\nDirection	Smer\nteksta
+	That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.	Taj format ne čuva sve, pa je dokument i dalje otvoren. Sačuvajte ga kao Word dokument (.docx) da biste nastavili.
+	The new style takes the formatting of the current paragraph.	Novi stil preuzima formatiranje trenutnog pasusa.
+	Theme Colors	Boje teme
+	Theme Fonts	Fontovi teme
+	Theme List	Lista tema
+	Themes	Teme
+	Thesaurus	Rečnik sinonima
+	Thick	Debelo
+	Three	Tri
+	Tight	Tesno
+	Top Border	Gornja ivica
+	Top of Page	Vrh strane
+	Top:	Gore:
+	Total Row	Red ukupno
+	Track Changes	Praćenje izmena
+	Track Changes: On	Praćenje izmena: uključeno
+	Tracking	Praćenje
+	Translate	Prevedi
+	Transparency	Transparentnost
+	Triangle	Trougao
+	Two	Dva
+	Type a command, e.g. "insert table"	Unesite naredbu, npr. "umetni tabelu"
+	Type Text	Unesi tekst
+	Underline	Podvučeno
+	Underline Words Only	Podvuci samo reči
+	Undo	Opozovi
+	Undo {action}	Opozovi {action}
+	Ungroup	Razgrupisanje
+	Up	Gore
+	Update Field	Ažuriraj polje
+	Update Index	Ažuriraj indeks
+	Update Style to Match Selection	Ažuriraj stil prema izboru
+	Update Table	Ažuriraj sadržaj
+	Update Table of Figures	Ažuriraj spisak slika
+	Update to Match	Ažuriraj da odgovara
+	Update to Match Selection	Ažuriraj prema izboru
+	UPPERCASE	VELIKA SLOVA
+	User Name	Korisničko ime
+	User name:	Korisničko ime:
+	Version History	Istorija verzija
+	Version {version} ({build})	Verzija {version} ({build})
+	Vertical	Uspravno
+	Vertical Alignment	Uspravno poravnanje
+	View	Prikaz
+	View Gridlines	Prikaži linije mreže
+	View State	Stanje prikaza
+	Views	Prikazi
+	Voice	Glas
+	Watermark	Vodeni žig
+	Wave	Talasasto
+	Web Layout	Veb raspored
+	Web page (*.html)	Veb strana (*.html)
+	Web\nLayout	Veb\nraspored
+	Weight	Debljina
+	Whole page	Cela strana
+	Whole words	Samo cele reči
+	Wide	Široko
+	Widow/Orphan Control	Kontrola usamljenih redova
+	Widow/Orphan control	Kontrola usamljenih redova
+	Wildcards (regex)	Džoker znaci (regex)
+	Window	Prozor
+	Word Count	Broj reči
+	Word document (*.docx)	Word dokument (*.docx)
+	Word Left	Reč levo
+	Word Right	Reč desno
+	WordArt	WordArt
+	WordCraft	WordCraft
+	Words	Reči
+	Words only	Samo reči
+	Wrap Text	Prelomi tekst
+	Wrap\nText	Prelomi\ntekst
+	Write & Insert Fields	Pisanje i umetanje polja
+	Zoom	Zumiranje
+	Zoom In	Uvećaj
+	Zoom Out	Umanji
+	{group} settings	Podešavanja za {group}
+	{key}+Click to follow link	{key}+klik za otvaranje veze
+	{size} pt	{size} pt
+	➕ New comment	➕ Novi komentar
+	📂  Browse…	📂  Potraži…
+	{words} words	{words} reči
+	{selected} of {words} words	{selected} od {words} reči
+	Direction:	Smer:
+	Right-to-left	Sa desna na levo
+	Left-to-right	Sa leva na desno
+# Zotero integration
+	Zotero	Zotero
+	Citations	Citati
+	Document	Dokument
+	Add/Edit\nCitation	Dodaj/izmeni\ncitat
+	Add\nNote	Dodaj\nbelešku
+	Add/Edit\nBibliography	Dodaj/izmeni\nbibliografiju
+	Refresh	Osveži
+	Document\nPreferences	Postavke\ndokumenta
+	Unlink\nCitations	Ukloni vezu\nsa citatima
+	Waiting for Zotero…	Čeka se Zotero…
+	Zotero: done	Zotero: završeno
+	Zotero: cancelled	Zotero: otkazano
+	Yes	Da
+	No	Ne
+	Move Past Citation	Pomeri iza citata
+	Move Past\nCitation	Pomeri iza\ncitata
+	Next Sentence	Sledeća rečenica
+	Previous Sentence	Prethodna rečenica
+	Next sentence	Sledeća rečenica
+	Previous sentence	Prethodna rečenica
+	Play/Pause	Pusti/pauziraj
+	Read Aloud Status	Status čitanja naglas
+	Reading Speed	Brzina čitanja
+	Skip Citations and Bibliography	Preskoči citate i bibliografiju
+	Skip citations & bibliography	Preskoči citate i bibliografiju
+	Stop Reading	Zaustavi čitanje
+	Don't read Zotero, Mendeley or EndNote citations and bibliographies	Ne čitaj citate i bibliografiju iz Zotero, Mendeley ili EndNote
+	Play	Pusti
+	Pause	Pauziraj
+	Stop	Zaustavi
+	Sentence	Rečenica
+	Paused	Pauzirano
+	Finished	Završeno
+	Stopped	Zaustavljeno
+	Speed	Brzina
+	Normal speed	Normalna brzina
+	Your changes will be lost if you don't save them.	Vaše izmene će biti izgubljene ako ih ne sačuvate.
+	Scroll ribbon left	Pomeri traku levo
+	Scroll ribbon right	Pomeri traku desno
+# Equations.
+	Change Structure	Promeni strukturu
+	Change to Display	Promeni u prikaznu formulu
+	Change to Inline	Promeni u tekstualnu formulu
+	Conversions	Konverzije
+	Delete Back in Equation	Obriši unazad u formuli
+	Delete in Equation	Obriši u formuli
+	Edit Equation	Uredi formulu
+	Enter in Equation	Enter u formuli
+	Equation Gallery	Galerija formula
+	Equation Info	Informacije o formuli
+	Equation Number	Broj formule
+	Input Format	Format unosa
+	Insert Structure	Umetni strukturu
+	Insert Symbol	Umetni simbol
+	Justification	Poravnanje
+	Leave Equation	Izađi iz formule
+	Move in Equation	Kretanje u formuli
+	Normal Text	Običan tekst
+	Set Equation	Postavi formulu
+	Structure Actions	Radnje sa strukturom
+	Structures	Strukture
+	Tools	Alati
+	Type in Equation	Unos u formuli
+	Inline	Tekstualna
+	Number	Broj
+	Close Equation	Zatvori formulu
+	Insert New Equation	Umetni novu formulu
+	Built-In	Ugrađeno
+	Professional	Profesionalni prikaz
+	Linear	Linearni prikaz
+	Fraction	Razlomak
+	Script	Indeks
+	Radical	Korenovanje
+	Integral	Integral
+	Large\nOperator	Veliki\noperator
+	Bracket	Zagrada
+	Function	Funkcija
+	Accent	Znak akcenta
+	Limit and\nLog	Limes i\nlogaritam
+	Operator	Operator
+	Equation Options	Opcije formule
+	All symbol sets	Svi skupovi simbola
+	Send the document straight to the system print dialog, or save a copy in another format below.	Šalje dokument direktno na sistemski dijalog za štampu, ili sačuvajte kopiju u drugom formatu ispod.
+	Or save a copy in another format:	Ili sačuvaj kopiju u drugom formatu:
+	Opening print dialog…	Otvara se dijalog za štampu…
+	Print failed: {error}	Štampanje neuspelo: {error}
+	Couldn't open {path}: {error}	Nije moguće otvoriti {path}: {error}
+	More templates →	Još šablona →
+	No templates match your search.	Nijedan šablon ne odgovara pretrazi.
+	Search for templates	Pretraži šablone
+	Column Selection	Izbor kolone
+	Style Inspector	Inspektor stilova
+	Inspect Styles at Selection	Pregledaj stilove izbora
+	Clear Formatting Level	Obriši nivo formatiranja
+	Characters	Znakovi
+	Direct formatting	Direktno formatiranje
+	Reset to Normal	Vrati na normalan stil
+	Clear Paragraph Formatting	Obriši formatiranje pasusa
+	Clear Character Style	Obriši stil znakova
+	Clear Character Formatting	Obriši formatiranje znakova
+	Clear All	Obriši sve
+	Paste Special	Specijalno lepljenje
+	Paste Special…	Specijalno lepljenje…
+	Paste as:	Nalepi kao:
+	The clipboard is empty.	Ostava je prazna.
+	Formatted Text	Formatirani tekst
+	Rich Text Format (RTF)	Obogaćeni tekst (RTF)
+	HTML Format	HTML format
+	Unformatted Text	Neformatirani tekst
+	Result	Rezultat
+	Keeps the fonts and formatting of the copied text.	Zadržava fontove i formatiranje kopiranog teksta.
+	Reads the clipboard's rich text and keeps its formatting.	Čita obogaćeni tekst (RTF) iz ostave i zadržava njegovo formatiranje.
+	Reads the clipboard's web content and keeps its formatting.	Čita veb sadržaj iz ostave i zadržava njegovo formatiranje.
+	Drops all formatting and pastes plain text.	Uklanja sve formatiranje i lepi običan tekst.
+	Advanced Find	Napredna pretraga
+	Advanced Find…	Napredna pretraga…
+	Go To…	Idi na…
+	Reading Highlight	Isticanje rezultata
+	New Table Style	Novi stil tabele
+	Modify Table Style	Izmeni stil tabele
+	New Table Style…	Novi stil tabele…
+	Modify Table Style…	Izmeni stil tabele…
+	Apply formatting to:	Primeni formatiranje na:
+	Whole Table	Cela tabela
+	Fill color:	Boja popune:
+	{count} items highlighted	Istaknuto stavki: {count}
+	{n} pt	{n} pt
+	Not {name}	Bez: {name}
+	Level {n}	Nivo {n}
+	Body Text	Osnovni tekst
+	{n} lines	Redova: {n}
+	At least {n}	Najmanje {n}
+	Exactly {n}	Tačno {n}
+	Centered	Centrirano
+	Character spacing	Razmak između znakova
+	Don't add space between paragraphs of the same style	Bez razmaka između pasusa istog stila
+	Don't hyphenate	Bez deljenja reči
+	Double strikethrough	Duplo precrtano
+	Drop cap	Ukrasno veliko slovo
+	First line	Prvi red
+	Font color	Boja fonta
+	Highlight	Isticanje
+	Justified	Obostrano poravnato
+	Left indent	Uvlačenje sleva
+	Line spacing	Proređenost
+	Outline level	Nivo konture
+	Raised/lowered	Podignuto/spušteno
+	Right indent	Uvlačenje zdesna
+	Scale	Razmera
+	Space after	Razmak posle
+	Space before	Razmak pre
+	Suppress line numbers	Bez brojeva redova
+	Underline color	Boja podvlačenja
+	Interface theme:	Tema interfejsa:
+	Interface\nTheme	Tema\ninterfejsa
+	Interface Theme	Tema interfejsa
+	Light	Svetla
+	Dark	Tamna
+	Use system setting	Prema podešavanju sistema
+	Letters	Pisma
+	E-mail Messages	Poruke e-pošte
+	Directory	Imenik
+	Normal Word Document	Običan Word dokument
+	If…Then…Else…	Ako…Onda…Inače…
+	If…Then…Else	Ako…Onda…Inače
+	Merge Record #	Broj zapisa spajanja
+	Skip Record If…	Preskoči zapis ako…
+	Skip Record If	Preskoči zapis ako
+	Equals:	Jednako:
+	Then insert:	Onda umetni:
+	Otherwise insert:	Inače umetni:
+	Courtesy Title	Oslovljavanje
+	First Name	Ime
+	Last Name	Prezime
+	Company	Preduzeće
+	Address	Adresa
+	City	Grad
+	State	Država/pokrajina
+	Postal Code	Poštanski broj
+	Country	Zemlja
+	(not matched)	(nije upareno)
+	Leave a recipient out of the merge when a field has this value.	Izostavi primaoca iz spajanja kada polje ima ovu vrednost.
+	Insert one text or another, depending on a field's value.	Umetni jedan ili drugi tekst, zavisno od vrednosti polja.
+	Select recipients first to match their fields.	Prvo izaberite primaoce da biste uparili njihova polja.
+	The recipient-list field that fills each part of an address block and greeting line.	Polje liste primalaca koje popunjava svaki deo bloka adrese i reda pozdrava.
+	No errors found: every merge field is in the recipient list.	Nema grešaka: svako polje za spajanje postoji u listi primalaca.
+	These merge fields aren't in the recipient list:	Ova polja za spajanje nisu u listi primalaca:
+	Add at least one field.	Dodajte bar jedno polje.
+	Add Field	Dodaj polje
+	Every field needs a name.	Svako polje mora imati naziv.
+	Field name	Naziv polja
+	Field names must be different.	Nazivi polja moraju biti različiti.
+	Fields:	Polja:
+	Field:	Polje:
+	Find:	Pronađi:
+	New Entry	Nova stavka
+	Recipient List	Lista primalaca
+	Recipients: {count}	Primalaca: {count}
+	Remove field	Ukloni polje
+	Remove recipient	Ukloni primaoca
+	Select recipients first to choose from their fields.	Prvo izaberite primaoce da biste birali među njihovim poljima.
+	Type a New List…	Unesi novu listu…
+	Type at least one recipient.	Unesite bar jednog primaoca.
+	Type the recipients, or load them from a file.	Unesite primaoce ili ih učitajte iz fajla.
+	Use an Existing List…	Koristi postojeću listu…
+	A file dialog is already open.	Dijalog za fajlove je već otvoren.

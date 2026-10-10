@@ -6,7 +6,7 @@ use wordcraft_doc::para::{Anchor, FloatAlign, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{Align, Border, BorderStyle, Rgb, TextColor, VMerge};
 use wordcraft_doc::{Block, Document, InlineObject, Paragraph};
 
-const W_NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office""#;
+const W_NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office""#;
 
 const ROOT_RELS: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
 
@@ -645,4 +645,29 @@ fn hostile_vml_style_values_stay_finite() {
     assert_eq!(float.wrap, Wrap::InFrontOfText);
     assert!([*w, *h, float.x, float.y, float.dist, float.dist_top].iter().all(|v| v.is_finite()), "{w} {h} {float:?}");
     assert_eq!((float.h_align, float.dist, float.dist_top), (None, 0.0, 1584.0));
+}
+
+/// A group as Word saves one (in `mc:AlternateContent`, needing `wpg`): its members' space
+/// starts at `a:chOff`, and a nested group is flattened into it through its own transform.
+#[test]
+fn word_group_with_nested_group() {
+    let body = r#"<w:p><w:r><mc:AlternateContent><mc:Choice Requires="wpg"><w:drawing><wp:anchor behindDoc="0" distT="0" distB="0" distL="114300" distR="114300" simplePos="0" relativeHeight="1" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="2540000" cy="1270000"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:wrapSquare wrapText="bothSides"/><wp:docPr id="1" name="Group 1"/><wp:cNvGraphicFramePr/>
+<a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"><wpg:wgp><wpg:cNvGrpSpPr/><wpg:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2540000" cy="1270000"/><a:chOff x="127000" y="127000"/><a:chExt cx="2540000" cy="1270000"/></a:xfrm></wpg:grpSpPr>
+<wps:wsp><wps:cNvPr id="2" name="Rectangle 2"/><wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="127000" y="127000"/><a:ext cx="1270000" cy="635000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></wps:spPr><wps:bodyPr/></wps:wsp>
+<wpg:grpSp><wpg:cNvGrpSpPr/><wpg:grpSpPr><a:xfrm><a:off x="1397000" y="762000"/><a:ext cx="1270000" cy="635000"/><a:chOff x="0" y="0"/><a:chExt cx="2540000" cy="1270000"/></a:xfrm></wpg:grpSpPr>
+<wps:wsp><wps:cNvPr id="3" name="Oval 3"/><wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="254000" y="254000"/><a:ext cx="508000" cy="254000"/></a:xfrm><a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom></wps:spPr><wps:bodyPr/></wps:wsp>
+</wpg:grpSp></wpg:wgp></a:graphicData></a:graphic></wp:anchor></w:drawing></mc:Choice><mc:Fallback><w:pict/></mc:Fallback></mc:AlternateContent></w:r></w:p>"#;
+    let d = read_body(body);
+    let p = paras(&d);
+    let InlineObject::Group { w, h, float, ch_w, ch_h, children } = &p[0].objects[0] else { panic!("{:?}", p[0].objects) };
+    assert_eq!((*w, *h, *ch_w, *ch_h), (200.0, 100.0, 200.0, 100.0));
+    assert_eq!(float.wrap, Wrap::Square);
+    let got: Vec<(f32, f32, ShapeKind, f32, f32)> = children
+        .iter()
+        .map(|c| match &c.obj {
+            InlineObject::Shape { kind, w, h, .. } => (c.x, c.y, *kind, *w, *h),
+            o => panic!("{o:?}"),
+        })
+        .collect();
+    assert_eq!(got, [(0.0, 0.0, ShapeKind::Rectangle, 100.0, 50.0), (110.0, 60.0, ShapeKind::Ellipse, 20.0, 10.0)]);
 }

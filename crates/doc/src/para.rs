@@ -213,6 +213,23 @@ pub enum InlineObject {
         /// Text box content: `Document::parts` id.
         #[serde(default)]
         story: Option<u32>,
+        /// Shadow, glow and soft edges.
+        #[serde(default, skip_serializing_if = "crate::effects::ShapeEffects::is_empty")]
+        effects: crate::effects::ShapeEffects,
+    },
+    /// Pictures, shapes and text boxes grouped into one object (Layout › Arrange › Group): it
+    /// moves, wraps and resizes as one. Its members are laid out in the group's own coordinate
+    /// space, `ch_w` × `ch_h`, which is stretched over the group's `w` × `h` (DrawingML's
+    /// `a:chExt` and `a:ext`), so resizing the group scales them.
+    Group {
+        w: f32,
+        h: f32,
+        #[serde(default)]
+        float: Float,
+        /// Size of the members' coordinate space (their offsets and sizes are in it).
+        ch_w: f32,
+        ch_h: f32,
+        children: Vec<GroupChild>,
     },
     /// A field: `instr` is the field code (`PAGE`, `NUMPAGES`, `DATE \@ "M/d/yyyy"`, `TOC \o "1-3"`…);
     /// `result` the cached display text.
@@ -273,7 +290,93 @@ pub enum InlineObject {
     },
 }
 
+/// One member of an [`InlineObject::Group`]: a picture or shape (its own `w`, `h` and story), at
+/// `x`, `y` in the group's coordinate space. Its `float` is unused.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupChild {
+    pub x: f32,
+    pub y: f32,
+    pub obj: InlineObject,
+}
+
+/// Most members a group keeps (hostile files).
+pub const MAX_GROUP_CHILDREN: usize = 1000;
+
 impl InlineObject {
+    /// A picture, shape, text box or group: something drawn with a frame, sized and wrapped.
+    pub fn is_drawing(&self) -> bool {
+        matches!(self, InlineObject::Image { .. } | InlineObject::Shape { .. } | InlineObject::Group { .. })
+    }
+    /// A drawing's size and placement.
+    pub fn frame(&self) -> Option<(f32, f32, &Float)> {
+        match self {
+            InlineObject::Image { w, h, float, .. } | InlineObject::Shape { w, h, float, .. } | InlineObject::Group { w, h, float, .. } => {
+                Some((*w, *h, float))
+            }
+            _ => None,
+        }
+    }
+    /// A drawing's placement, to change.
+    pub fn float_mut(&mut self) -> Option<&mut Float> {
+        match self {
+            InlineObject::Image { float, .. } | InlineObject::Shape { float, .. } | InlineObject::Group { float, .. } => Some(float),
+            _ => None,
+        }
+    }
+    /// Resize a drawing (a group's members scale with it).
+    pub fn set_size(&mut self, nw: f32, nh: f32) {
+        if let InlineObject::Image { w, h, .. } | InlineObject::Shape { w, h, .. } | InlineObject::Group { w, h, .. } = self {
+            *w = nw;
+            *h = nh;
+        }
+    }
+    /// The text box story this object shows, if it is a text box.
+    pub fn text_box(&self) -> Option<u32> {
+        match self {
+            InlineObject::Shape { story, .. } => *story,
+            _ => None,
+        }
+    }
+    /// The text box stories this object shows: a text box's, or its group members'.
+    pub fn text_boxes(&self) -> Vec<u32> {
+        match self {
+            InlineObject::Shape { story: Some(id), .. } => vec![*id],
+            InlineObject::Group { children, .. } => children.iter().filter_map(|c| c.obj.text_box()).collect(),
+            _ => Vec::new(),
+        }
+    }
+    /// The text box story slots of this object and its group members, to repoint.
+    pub fn text_box_slots(&mut self) -> Vec<&mut Option<u32>> {
+        match self {
+            InlineObject::Shape { story, .. } => vec![story],
+            InlineObject::Group { children, .. } => children
+                .iter_mut()
+                .filter_map(|c| match &mut c.obj {
+                    InlineObject::Shape { story, .. } => Some(story),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+    /// A group's members placed in a `w` × `h` box at (`x`, `y`): each member's rectangle
+    /// (x, y, w, h) and the member. Empty for anything else.
+    pub fn group_rects(&self, x: f32, y: f32, w: f32, h: f32) -> Vec<([f32; 4], &InlineObject)> {
+        let InlineObject::Group { ch_w, ch_h, children, .. } = self else { return Vec::new() };
+        let fin = |v: f32| if v.is_finite() { v } else { 0.0 };
+        let sx = if fin(*ch_w) > 0.0 { fin(w) / ch_w } else { 1.0 };
+        let sy = if fin(*ch_h) > 0.0 { fin(h) / ch_h } else { 1.0 };
+        children
+            .iter()
+            .take(MAX_GROUP_CHILDREN)
+            .filter_map(|c| {
+                let (cw, chh, _) = c.obj.frame()?;
+                let r = [x + fin(c.x) * sx, y + fin(c.y) * sy, (fin(cw) * sx).clamp(0.0, 4000.0), (fin(chh) * sy).clamp(0.0, 4000.0)];
+                (!matches!(c.obj, InlineObject::Group { .. })).then_some((r, &c.obj))
+            })
+            .collect()
+    }
     /// Zero-width markers don't take part in layout.
     pub fn is_marker(&self) -> bool {
         matches!(
@@ -288,7 +391,7 @@ impl InlineObject {
     }
     pub fn is_floating(&self) -> bool {
         match self {
-            InlineObject::Image { float, .. } | InlineObject::Shape { float, .. } => float.wrap != Wrap::Inline,
+            InlineObject::Image { float, .. } | InlineObject::Shape { float, .. } | InlineObject::Group { float, .. } => float.wrap != Wrap::Inline,
             _ => false,
         }
     }
