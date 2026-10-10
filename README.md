@@ -251,6 +251,10 @@ and web backend defaults are unchanged.
 | Fedora/RHEL/openSUSE | `wordcraft-<ver>-linux-x86_64.rpm` | `wordcraft-<ver>-linux-aarch64.rpm` | |
 | Tarball | `wordcraft-<ver>-linux-x86_64.tar.gz` | `wordcraft-<ver>-linux-aarch64.tar.gz` | Unpack anywhere |
 
+On Linux and FreeBSD, WordCraft's own title bar carries minimize, maximize and close, as in Word,
+and the window manager draws no second title bar above it. Set `WORDCRAFT_SYSTEM_TITLEBAR=1` to
+keep the window manager's title bar instead.
+
 ### FreeBSD
 
 | Build | File |

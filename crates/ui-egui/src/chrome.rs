@@ -1,6 +1,6 @@
 //! Title bar (Quick Access Toolbar, title, search, account) and status bar.
 
-use egui::{Align2, Rect, Sense, Stroke, Ui, pos2, vec2};
+use egui::{Align2, CursorIcon, Rect, ResizeDirection, Sense, Stroke, Ui, ViewportCommand, pos2, vec2};
 use serde_json::json;
 use wordcraft_doc::StoryRef;
 
@@ -102,6 +102,9 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                 qat_button(ui, app, "more", tl!("Customize Quick Access Toolbar"), "ui.dialog", true);
                 qat_end = ui.min_rect().max.x;
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if app.window_controls {
+                        ui.add_space(3.0 * CONTROL_W);
+                    }
                     // Account / community.
                     let (r, resp) = ui.allocate_exact_size(vec2(control_h, control_h), Sense::click());
                     ui.painter().circle_filled(r.center(), control_h / 2.0 - 1.0, t.accent);
@@ -191,6 +194,124 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                 );
             }
         });
+}
+
+/// Width of one window-control button on the title bar.
+const CONTROL_W: f32 = 46.0;
+/// Height of the title bar, and of the window-control buttons.
+const TITLE_H: f32 = 38.0;
+/// How far in from a frameless window's edge the pointer resizes it.
+const RESIZE_BAND: f32 = 5.0;
+/// How far along an edge from a corner the pointer resizes diagonally.
+const RESIZE_CORNER: f32 = 14.0;
+
+/// A frameless window (`WordApp::window_controls`): minimize, maximize/restore and close at the
+/// top right, resizing from the edges and corners, and a hairline border. Drawn above everything,
+/// so the controls stay reachable from Backstage too.
+pub fn window_frame(app: &WordApp, ctx: &egui::Context) {
+    if !app.window_controls {
+        return;
+    }
+    let (maximized, fullscreen) = ctx.input(|i| (i.viewport().maximized.unwrap_or(false), i.viewport().fullscreen.unwrap_or(false)));
+    if fullscreen {
+        return;
+    }
+    let t = Tokens::get(ctx);
+    let screen = ctx.content_rect();
+    let controls = Rect::from_min_size(pos2(screen.max.x - 3.0 * CONTROL_W, screen.min.y), vec2(3.0 * CONTROL_W, TITLE_H));
+    egui::Area::new(egui::Id::new("wc_window_controls")).order(egui::Order::Foreground).fixed_pos(controls.min).show(ctx, |ui| {
+        ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+        ui.horizontal(|ui| {
+            for kind in ["minimize", "maximize", "close"] {
+                let (r, resp) = ui.allocate_exact_size(vec2(CONTROL_W, TITLE_H), Sense::click());
+                let close = kind == "close";
+                let hot = resp.hovered() || resp.is_pointer_button_down_on();
+                let c = if close && hot {
+                    ui.painter().rect_filled(r, 0.0, egui::Color32::from_rgb(0xC4, 0x2B, 0x1C));
+                    egui::Color32::WHITE
+                } else {
+                    if hot {
+                        ui.painter().rect_filled(r, 0.0, if resp.is_pointer_button_down_on() { t.pressed } else { t.hover });
+                    }
+                    t.icon
+                };
+                let stroke = Stroke::new(1.0, c);
+                let m = r.center();
+                let p = ui.painter();
+                let tip = match kind {
+                    "minimize" => {
+                        p.line_segment([pos2(m.x - 5.0, m.y), pos2(m.x + 5.0, m.y)], stroke);
+                        tl!("Minimize")
+                    }
+                    "maximize" if maximized => {
+                        let front = Rect::from_min_size(pos2(m.x - 5.0, m.y - 3.0), vec2(8.0, 8.0));
+                        p.rect_stroke(front, 0.0, stroke, egui::StrokeKind::Inside);
+                        p.line_segment([pos2(m.x - 3.0, m.y - 5.0), pos2(m.x + 5.0, m.y - 5.0)], stroke);
+                        p.line_segment([pos2(m.x + 5.0, m.y - 5.0), pos2(m.x + 5.0, m.y + 3.0)], stroke);
+                        tl!("Restore Down")
+                    }
+                    "maximize" => {
+                        p.rect_stroke(Rect::from_center_size(m, vec2(10.0, 10.0)), 0.0, stroke, egui::StrokeKind::Inside);
+                        tl!("Maximize")
+                    }
+                    _ => {
+                        p.line_segment([pos2(m.x - 5.0, m.y - 5.0), pos2(m.x + 5.0, m.y + 5.0)], stroke);
+                        p.line_segment([pos2(m.x - 5.0, m.y + 5.0), pos2(m.x + 5.0, m.y - 5.0)], stroke);
+                        tl!("Close")
+                    }
+                };
+                if resp.on_hover_text(tip).clicked() {
+                    ctx.send_viewport_cmd(match kind {
+                        "minimize" => ViewportCommand::Minimized(true),
+                        "maximize" => ViewportCommand::Maximized(!maximized),
+                        _ => ViewportCommand::Close,
+                    });
+                }
+            }
+        });
+    });
+    if maximized {
+        return;
+    }
+    ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("wc_window_border"))).rect_stroke(
+        screen,
+        0.0,
+        Stroke::new(1.0, t.border_strong),
+        egui::StrokeKind::Inside,
+    );
+    let Some(pos) = ctx.input(|i| i.pointer.latest_pos()) else { return };
+    if !screen.contains(pos) {
+        return;
+    }
+    let near = |d: f32, band: f32| d < band;
+    let (dl, dr, dt, db) = (pos.x - screen.min.x, screen.max.x - pos.x, pos.y - screen.min.y, screen.max.y - pos.y);
+    let (w, e, n, s) = (near(dl, RESIZE_BAND), near(dr, RESIZE_BAND), near(dt, RESIZE_BAND), near(db, RESIZE_BAND));
+    let (cw, ce, cn, cs) = (near(dl, RESIZE_CORNER), near(dr, RESIZE_CORNER), near(dt, RESIZE_CORNER), near(db, RESIZE_CORNER));
+    let hit = if (n && cw) || (w && cn) {
+        Some((ResizeDirection::NorthWest, CursorIcon::ResizeNorthWest))
+    } else if (n && ce) || (e && cn) {
+        Some((ResizeDirection::NorthEast, CursorIcon::ResizeNorthEast))
+    } else if (s && cw) || (w && cs) {
+        Some((ResizeDirection::SouthWest, CursorIcon::ResizeSouthWest))
+    } else if (s && ce) || (e && cs) {
+        Some((ResizeDirection::SouthEast, CursorIcon::ResizeSouthEast))
+    } else if n {
+        Some((ResizeDirection::North, CursorIcon::ResizeNorth))
+    } else if s {
+        Some((ResizeDirection::South, CursorIcon::ResizeSouth))
+    } else if w {
+        Some((ResizeDirection::West, CursorIcon::ResizeWest))
+    } else if e {
+        Some((ResizeDirection::East, CursorIcon::ResizeEast))
+    } else {
+        None
+    };
+    if let Some((dir, icon)) = hit {
+        ctx.set_cursor_icon(icon);
+        if ctx.input(|i| i.pointer.primary_pressed()) {
+            ctx.send_viewport_cmd(ViewportCommand::BeginResize(dir));
+        }
+    }
 }
 
 pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
