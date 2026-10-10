@@ -23,6 +23,7 @@ wordcraft-pdf = { path = "crates/pdf" }
 wordcraft-proof = { path = "crates/proof" }
 wordcraft-engine = { path = "crates/engine" }
 wordcraft-mcp = { path = "crates/mcp" }
+wordcraft-control-key = { path = "crates/control-key" }
 wordcraft-ui-egui = { path = "crates/ui-egui" }
 
 # foundation
@@ -37,6 +38,7 @@ unicode-bidi = "0.3"
 unicode-segmentation = "1"
 unicode-linebreak = "0.1"
 regex = { version = "1", default-features = false, features = ["std", "unicode", "perf"] }
+regex-automata = { version = "0.4", default-features = false, features = ["std", "syntax", "meta", "nfa-pikevm", "unicode"] }
 
 # text / rendering / formats
 skrifa = "0.47"

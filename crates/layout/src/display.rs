@@ -1,7 +1,7 @@
 //! Page → draw items, shared by the raster renderer, the PDF exporter and thumbnails.
 
 use wordcraft_doc::para::{InlineObject, ShapeKind};
-use wordcraft_doc::props::{BorderStyle, Rgb, TextColor, Underline};
+use wordcraft_doc::props::{Border, BorderStyle, Rgb, TextColor, Underline};
 use wordcraft_doc::{Document, Path, StoryRef};
 use wordcraft_fonts::FaceRef;
 use wordcraft_geom::Rect;
@@ -134,19 +134,34 @@ fn border_stroke(s: BorderStyle) -> Stroke {
     }
 }
 
+/// A border line from `(x0, y0)` to `(x1, y1)` (paragraph rules and character borders).
+fn rule(x0: f32, y0: f32, x1: f32, y1: f32, b: &Border, alpha: f32) -> Draw {
+    Draw::Line {
+        x0,
+        y0,
+        x1,
+        y1,
+        width: if b.style == BorderStyle::Thick { b.width.max(1.5) } else { b.width.max(0.25) },
+        color: b.color.unwrap_or(Rgb::BLACK),
+        stroke: border_stroke(b.style),
+        alpha,
+    }
+}
+
+/// Closed box around one line segment of a character-border group, widened by `space`.
+// Note: border drawn outside text advance, reserve width in line breaking if overlap shows.
+fn char_box(b: &Border, x0: f32, x1: f32, top: f32, bottom: f32, alpha: f32, out: &mut Vec<Draw>) {
+    let (l, r) = (x0 - b.space, x1 + b.space);
+    out.push(rule(l, top, r, top, b, alpha));
+    out.push(rule(l, bottom, r, bottom, b, alpha));
+    out.push(rule(l, top, l, bottom, b, alpha));
+    out.push(rule(r, top, r, bottom, b, alpha));
+}
+
 fn item(doc: &Document, it: &Placed, opts: &DisplayOptions, alpha: f32, out: &mut Vec<Draw>) {
     match it {
         Placed::Fill { rect, color } => out.push(Draw::Fill { rect: *rect, color: *color, alpha }),
-        Placed::Rule { x0, y0, x1, y1, border } => out.push(Draw::Line {
-            x0: *x0,
-            y0: *y0,
-            x1: *x1,
-            y1: *y1,
-            width: if border.style == BorderStyle::Thick { border.width.max(1.5) } else { border.width.max(0.25) },
-            color: border.color.unwrap_or(Rgb::BLACK),
-            stroke: border_stroke(border.style),
-            alpha,
-        }),
+        Placed::Rule { x0, y0, x1, y1, border } => out.push(rule(*x0, *y0, *x1, *y1, border, alpha)),
         Placed::Image { rect, media, crop, .. } => out.push(Draw::Image { rect: *rect, media: media.clone(), crop: *crop, alpha }),
         Placed::Shape { rect, kind, fill, stroke, stroke_width } => {
             out.push(Draw::Shape { rect: *rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width })
@@ -205,7 +220,8 @@ fn lines(
                 }
             }
         }
-        // Backgrounds first: highlight and character shading.
+        // Backgrounds first: highlight and character shading; character borders group equal adjacent borders.
+        let mut open: Option<(Border, f32, f32)> = None;
         for k in line.c0..line.c1 {
             let (Some(c), Some(cx), Some(nx)) = (pl.clusters.get(k), line.xs.get(k - line.c0), line.xs.get(k + 1 - line.c0)) else { continue };
             let Some(st) = pl.styles.get(c.style as usize) else { continue };
@@ -215,6 +231,20 @@ fn lines(
             if let Some(h) = st.rc.highlight.or(st.rc.shading) {
                 out.push(Draw::Fill { rect: Rect::new(x + cx, top, (nx - cx).max(0.0), line.height), color: h, alpha });
             }
+            let b = st.rc.border;
+            if let Some((ob, _, x1)) = open.as_mut()
+                && Some(*ob) == b
+            {
+                *x1 = x + nx;
+                continue;
+            }
+            if let Some((ob, x0, x1)) = open.take() {
+                char_box(&ob, x0, x1, top, bottom, alpha, out);
+            }
+            open = b.map(|b| (b, x + cx, x + nx));
+        }
+        if let Some((ob, x0, x1)) = open {
+            char_box(&ob, x0, x1, top, bottom, alpha, out);
         }
         // Label.
         if li == 0
@@ -273,7 +303,12 @@ fn lines(
                     for g in pl.glyphs.get(c.g0 as usize..c.g1 as usize).into_iter().flatten() {
                         glyphs.push((g.gid, cx + g.dx, base - st.shift - g.dy));
                     }
-                    if let Some(p) = para {
+                    // An object's cluster (a field, a note number) stands for the text it shows.
+                    if let Ok(i) = pl.shown.binary_search_by_key(&k, |(i, _)| *i)
+                        && let Some((_, s)) = pl.shown.get(i)
+                    {
+                        text.push_str(s);
+                    } else if let Some(p) = para {
                         text.push_str(p.text.get(c.start..c.end).unwrap_or(""));
                     }
                 }
@@ -392,8 +427,9 @@ fn lines(
                 continue;
             }
             let cx = x + line.xs.get(k - line.c0).copied().unwrap_or(0.0);
-            let rect = Rect::new(cx, base - c.obj_h, c.adv, c.obj_h);
-            match para.and_then(|p| p.objects.get(oi)) {
+            let obj = para.and_then(|p| p.objects.get(oi));
+            let rect = inline_rect(obj, cx, base, c.adv, c.obj_h);
+            match obj {
                 Some(InlineObject::Image { media, crop, .. }) => out.push(Draw::Image { rect, media: media.clone(), crop: *crop, alpha }),
                 Some(InlineObject::Shape { kind, fill, stroke, stroke_width, .. }) => {
                     out.push(Draw::Shape { rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width })
@@ -502,4 +538,14 @@ pub fn text_color(c: &TextColor, background: Option<Rgb>) -> Rgb {
             }
         }
     }
+}
+
+/// Where inline object `obj` is drawn, given its cluster's box (`adv` × `obj_h` standing on the
+/// baseline at `cx`): inside the room kept for its effects.
+pub(crate) fn inline_rect(obj: Option<&InlineObject>, cx: f32, base: f32, adv: f32, obj_h: f32) -> Rect {
+    let [l, t, r, b] = match obj {
+        Some(InlineObject::Image { float, .. } | InlineObject::Shape { float, .. }) => float.effect_extent(),
+        _ => [0.0; 4],
+    };
+    Rect::new(cx + l, base - obj_h + t, (adv - l - r).max(0.0), (obj_h - t - b).max(0.0))
 }

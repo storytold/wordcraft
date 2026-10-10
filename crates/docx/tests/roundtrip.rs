@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use wordcraft_doc::numbering::ListKind;
-use wordcraft_doc::para::{Anchor, Float, NoteKind, ShapeKind, Wrap};
+use wordcraft_doc::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CharProps, HeightRule, Highlight, LineSpacing, NumRef, ParaProps, Rgb, RowProps, TabAlign, TabLeader,
     TabStop, TableLook, TextColor, Underline, VAlign, VMerge, VertAlign,
@@ -66,6 +66,7 @@ fn every_char_prop_round_trips() {
         color: Some(TextColor::Rgb(Rgb(0xAA, 0x10, 0x20))),
         highlight: Some(Highlight::Turquoise),
         shading: Some(Rgb(0xEE, 0xEE, 0x00)),
+        border: Some(Border { style: BorderStyle::Double, width: 1.5, color: Some(Rgb(0xC0, 0, 0)), space: 2.0 }),
         vert_align: Some(VertAlign::Superscript),
         caps: Some(true),
         small_caps: Some(false),
@@ -318,7 +319,8 @@ fn images_round_trip() {
         w: 72.0,
         h: 48.0,
         alt: "A tiny picture".into(),
-        float: Float::default(),
+        // Room for a shadow: kept through save and load.
+        float: Float { effect: [12.0, 12.0, 27.0, 27.0], ..Default::default() },
         crop: [0.1, 0.0, 0.25, 0.05],
     };
     let floating = InlineObject::Image {
@@ -326,17 +328,35 @@ fn images_round_trip() {
         w: 100.0,
         h: 50.0,
         alt: String::new(),
-        float: Float { wrap: Wrap::Square, h_rel: Anchor::Page, v_rel: Anchor::Margin, x: 36.0, y: 12.5, dist: 9.0 },
+        float: Float { wrap: Wrap::Square, h_rel: Anchor::Page, v_rel: Anchor::Margin, x: 36.0, y: 12.5, dist: 9.0, ..Default::default() },
         crop: [0.0; 4],
     };
-    let mut floats = vec![floating.clone()];
+    let aligned = InlineObject::Image {
+        media: key.clone(),
+        w: 20.0,
+        h: 20.0,
+        alt: String::new(),
+        float: Float {
+            wrap: Wrap::Square,
+            h_rel: Anchor::RightMargin,
+            h_align: Some(FloatAlign::Center),
+            v_rel: Anchor::TopMargin,
+            v_align: Some(FloatAlign::End),
+            dist: 9.0,
+            dist_top: 2.5,
+            dist_bottom: 4.0,
+            ..Default::default()
+        },
+        crop: [0.0; 4],
+    };
+    let mut floats = vec![floating.clone(), aligned];
     for wrap in [Wrap::Tight, Wrap::Through, Wrap::TopAndBottom, Wrap::BehindText, Wrap::InFrontOfText] {
         floats.push(InlineObject::Image {
             media: key.clone(),
             w: 10.0,
             h: 10.0,
             alt: String::new(),
-            float: Float { wrap, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 0.0, y: 0.0, dist: 0.0 },
+            float: Float { wrap, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 0.0, y: 0.0, dist: 0.0, ..Default::default() },
             crop: [0.0; 4],
         });
     }
@@ -475,6 +495,62 @@ fn note_never_references_itself() {
     assert_eq!(part_text(&r, Some(*id)).trim(), "The note.");
 }
 
+/// A note read from a Word file starts with its own number (a reference to itself, from the
+/// `w:footnoteRef` mark). Saving writes that mark back exactly once, with its character style, and
+/// never as a `w:footnoteReference`; reading the saved file gives the same note again.
+#[test]
+fn word_note_mark_round_trips_once() {
+    let mut d = Document::new();
+    let f = d.add_part(PartKind::Footnote, Vec::new());
+    let e = d.add_part(PartKind::Endnote, Vec::new());
+    for (id, kind, style) in [(f, NoteKind::Footnote, "FootnoteReference"), (e, NoteKind::Endnote, "EndnoteReference")] {
+        let mut note =
+            Paragraph::with_text(" The note.", CharProps::default()).styled(if kind == NoteKind::Footnote { "FootnoteText" } else { "EndnoteText" });
+        note.insert_object(
+            0,
+            InlineObject::NoteRef { kind, id, custom: String::new() },
+            &CharProps { style: Some(style.into()), ..Default::default() },
+        )
+        .unwrap();
+        // A second paragraph: the mark is not repeated there.
+        d.parts.get_mut(&id).unwrap().blocks = vec![para_block(note), para_block(Paragraph::with_text("More.", CharProps::default()))];
+    }
+    let mut p = Paragraph::with_text("Text", CharProps::default());
+    p.insert_object(4, InlineObject::NoteRef { kind: NoteKind::Footnote, id: f, custom: String::new() }, &CharProps::default()).unwrap();
+    let end = p.len();
+    p.insert_object(end, InlineObject::NoteRef { kind: NoteKind::Endnote, id: e, custom: String::new() }, &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+
+    let mut doc = d;
+    for pass in 0..2 {
+        let bytes = wordcraft_docx::write(&doc).expect("write");
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+        for (file, mark, reference, style) in [
+            ("word/footnotes.xml", "<w:footnoteRef/>", "<w:footnoteReference", "FootnoteReference"),
+            ("word/endnotes.xml", "<w:endnoteRef/>", "<w:endnoteReference", "EndnoteReference"),
+        ] {
+            let mut xml = String::new();
+            std::io::Read::read_to_string(&mut zip.by_name(file).unwrap(), &mut xml).unwrap();
+            assert_eq!(xml.matches(mark).count(), 1, "pass {pass}: {xml}");
+            assert!(!xml.contains(reference), "pass {pass}: a note cites itself: {xml}");
+            assert!(xml.contains(&format!(r#"<w:rStyle w:val="{style}"/></w:rPr>{mark}"#)), "pass {pass}: {xml}");
+        }
+        let r = wordcraft_docx::read(&bytes).expect("read");
+        let body = paras(&r)[0];
+        assert_eq!(body.objects.len(), 2, "pass {pass}");
+        for o in &body.objects {
+            let InlineObject::NoteRef { kind, id, .. } = o else { panic!("{o:?}") };
+            let blocks = &r.parts.get(id).unwrap().blocks;
+            assert_eq!(blocks.len(), 2, "pass {pass}");
+            let first = blocks[0].as_para().unwrap();
+            assert_eq!(first.objects, vec![InlineObject::NoteRef { kind: *kind, id: *id, custom: String::new() }], "pass {pass}");
+            assert_eq!(first.plain_text(), " The note.");
+            assert!(blocks[1].as_para().unwrap().objects.is_empty(), "pass {pass}");
+        }
+        doc = r;
+    }
+}
+
 /// The TOC is a `Contents` paragraph ending in an empty `TOC` field, followed by TOC-styled entries.
 /// In the file the field must contain the entries, inside Word's Table of Contents content control,
 /// or Word shows them as plain text with no Update Table.
@@ -504,13 +580,66 @@ fn toc_field_wraps_its_entries() {
     let last_entry = xml.find("Detail").unwrap();
     assert!(sdt < xml.find("Contents").unwrap() && xml.find("</w:sdt>").unwrap() < xml.find(">Body<").unwrap(), "{xml}");
     assert!(begin < xml.find("Intro").unwrap() && fend > last_entry && fend < xml.find("</w:sdt>").unwrap(), "field must span the entries: {xml}");
+    // Word starts the field in the first entry; started in the heading, LibreOffice splits the heading.
+    let heading_end = xml[..xml.find("Intro").unwrap()].rfind("</w:p>").unwrap();
+    assert!(begin > heading_end, "field must start in the first entry, not the heading: {xml}");
 
     // WordCraft reads its own TOC back unchanged.
     let r = wordcraft_docx::read(&bytes).expect("read");
     let ps = paras(&r);
     assert_eq!(ps.iter().map(|p| p.plain_text()).collect::<Vec<_>>(), ["Contents", "Intro\t1", "Detail\t2", "Body"]);
     assert!(matches!(ps[0].objects.first(), Some(InlineObject::Field { instr, .. }) if instr.starts_with("TOC")), "{:?}", ps[0].objects);
+    assert!(ps[1].objects.is_empty(), "the field goes back on the heading: {:?}", ps[1].objects);
     assert_eq!(ps[1].props.style.as_deref(), Some("TOC1"));
+}
+
+/// The TOC field's begin and end belong to the entries' own paragraphs, even when the heading or
+/// an entry holds a text box: the box's paragraphs are written inside them and must not take either.
+#[test]
+fn toc_field_skips_nested_stories() {
+    let mut d = Document::new();
+    let text_box = |d: &mut Document, text: &str| {
+        let story = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text(text, CharProps::default()))]);
+        InlineObject::Shape {
+            kind: ShapeKind::TextBox,
+            w: 72.0,
+            h: 36.0,
+            fill: None,
+            stroke: None,
+            stroke_width: 0.0,
+            float: Float::default(),
+            story: Some(story),
+        }
+    };
+    let mut head = Paragraph::with_text("Contents", CharProps::default()).styled("TOCHeading");
+    let end = head.len();
+    head.insert_object(
+        end,
+        InlineObject::Field { instr: "TOC \\o \"1-1\" \\h \\z \\u".into(), result: String::new(), locked: false },
+        &CharProps::default(),
+    )
+    .unwrap();
+    let end = head.len();
+    head.insert_object(end, text_box(&mut d, "Heading box"), &CharProps::default()).unwrap();
+    let mut last = Paragraph::with_text("Detail\t2", CharProps::default()).styled("TOC1");
+    let end = last.len();
+    last.insert_object(end, text_box(&mut d, "Boxed"), &CharProps::default()).unwrap();
+    d.body = vec![para_block(head), para_block(last), para_block(Paragraph::with_text("Body", CharProps::default()))];
+
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let boxes: Vec<(usize, usize)> = xml.match_indices("<w:txbxContent>").map(|(a, _)| (a, a + xml[a..].find("</w:txbxContent>").unwrap())).collect();
+    assert_eq!(boxes.len(), 2, "{xml}");
+    let in_box = |i: usize| boxes.iter().any(|(a, b)| (*a..*b).contains(&i));
+    for kind in ["begin", "separate", "end"] {
+        let at: Vec<usize> = xml.match_indices(&format!(r#"fldCharType="{kind}""#)).map(|(i, _)| i).collect();
+        assert_eq!(at.len(), 1, "{kind}: {xml}");
+        assert!(!in_box(at[0]), "field {kind} written inside a text box: {xml}");
+    }
+    let (begin, end) = (xml.find(r#"fldCharType="begin""#).unwrap(), xml.find(r#"fldCharType="end""#).unwrap());
+    assert!(begin > boxes[0].1 && end > boxes[1].1 && end < xml.find("</w:sdt>").unwrap(), "{xml}");
 }
 
 #[test]
@@ -567,7 +696,7 @@ fn shapes_textboxes_equations_dropcaps_round_trip() {
         fill: Some(Rgb(255, 255, 200)),
         stroke: Some(Rgb(0, 0, 0)),
         stroke_width: 1.0,
-        float: Float { wrap: Wrap::Square, h_rel: Anchor::Margin, v_rel: Anchor::Paragraph, x: 10.0, y: 20.0, dist: 0.0 },
+        float: Float { wrap: Wrap::Square, h_rel: Anchor::Margin, v_rel: Anchor::Paragraph, x: 10.0, y: 20.0, dist: 0.0, ..Default::default() },
         story: Some(story),
     };
     let star = InlineObject::Shape {
@@ -616,6 +745,18 @@ fn shapes_textboxes_equations_dropcaps_round_trip() {
     assert_eq!(got.len(), 2, "drop cap paragraph merges back");
     assert_eq!(got[1].text, dc.text);
     assert_eq!(got[1].props, dc.props);
+}
+
+#[test]
+fn compatibility_mode_round_trips() {
+    // New documents are Word 2013+ documents; an older file keeps its mode, so saving it doesn't
+    // change how Word lays it out.
+    assert_eq!(rt(&Document::new()).settings.compat_mode, wordcraft_doc::COMPAT_MODE_CURRENT);
+    for mode in [11, 12, 14, 15] {
+        let mut d = Document::new();
+        d.settings.compat_mode = mode;
+        assert_eq!(rt(&d).settings.compat_mode, mode);
+    }
 }
 
 #[test]
@@ -767,4 +908,68 @@ fn ensure_empty_and_table_end_document_is_valid() {
     e.body.clear();
     let r = rt(&e);
     assert_eq!(r.body.len(), 1);
+}
+
+#[test]
+fn char_border_written_between_u_and_shd() {
+    let c =
+        CharProps { border: Some(Border::single(0.5)), underline: Some(Underline::Single), shading: Some(Rgb(0xFF, 0xFF, 0)), ..Default::default() };
+    let bytes = wordcraft_docx::write(&doc_with(vec![para_runs(&[("x", c)])])).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    let bdr = r#"<w:bdr w:val="single" w:sz="4" w:space="0" w:color="auto"/>"#;
+    assert_eq!(xml.matches(bdr).count(), 1, "{xml}");
+    let at = xml.find(bdr).unwrap();
+    assert!(xml.find("<w:u ").unwrap() < at && at < xml.find("<w:shd ").unwrap(), "{xml}");
+}
+
+#[test]
+fn floating_tables_round_trip() {
+    use wordcraft_doc::para::{Anchor, FloatAlign};
+    use wordcraft_doc::props::TableFloat;
+    let mut d = Document::new();
+    let mut t = Table::new(1, 2, 200.0);
+    let f = TableFloat {
+        h_rel: Anchor::Margin,
+        v_rel: Anchor::Paragraph,
+        x: 0.0,
+        y: -1.65,
+        h_align: None,
+        v_align: None,
+        dist: [9.0, 0.0, 12.0, 3.0],
+        overlap: false,
+    };
+    t.props.float = Some(f);
+    let mut page = Table::new(1, 1, 100.0);
+    let centred =
+        TableFloat { h_rel: Anchor::Page, v_rel: Anchor::Margin, h_align: Some(FloatAlign::Center), y: 36.0, overlap: true, ..Default::default() };
+    page.props.float = Some(centred);
+    d.body = vec![Arc::new(Block::Table(t)), Arc::new(Block::Table(page)), para_block(Paragraph::with_text("after", CharProps::default()))];
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    let floats: Vec<_> = back.body.iter().filter_map(|b| if let Block::Table(t) = &**b { t.props.float } else { None }).collect();
+    assert_eq!(floats, [f, centred]);
+}
+
+#[test]
+fn list_level_overrides_round_trip() {
+    use wordcraft_doc::numbering::{Counters, Level};
+    use wordcraft_doc::section::NumFormat;
+    let mut d = Document::new();
+    let num = d.numbering.add_list(ListKind::Numbered);
+    let restart = d.numbering.restart(num).unwrap();
+    let own = Level { format: NumFormat::DecimalZero, text: "%1.%2".into(), indent: 26.5, hanging: 26.5, ..Level::default() };
+    if let Some(n) = d.numbering.nums.iter_mut().find(|n| n.id == restart) {
+        n.level_overrides = vec![(1, own.clone())];
+    }
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    let n = back.numbering.num(restart).unwrap();
+    assert_eq!(n.level_overrides.len(), 1);
+    let (lvl, got) = &n.level_overrides[0];
+    assert_eq!((*lvl, got.format, got.text.as_str(), got.indent, got.hanging), (1, NumFormat::DecimalZero, "%1.%2", 26.5, 26.5));
+    // The start overrides that `restart` wrote survive beside it.
+    assert_eq!(n.start_overrides, d.numbering.num(restart).unwrap().start_overrides);
+    let mut c = Counters::default();
+    assert_eq!(c.next_label(&back.numbering, restart, 0).unwrap().0, "1.");
+    assert_eq!(c.next_label(&back.numbering, restart, 1).unwrap().0, "1.01");
 }

@@ -95,6 +95,7 @@ pub struct FindState {
     pub current: usize,
 }
 
+#[derive(Clone)]
 struct Undo {
     label: String,
     doc: Document,
@@ -125,8 +126,10 @@ pub struct Session {
     pub painter: Option<(CharProps, wordcraft_doc::props::ParaProps, bool)>,
     /// Last message for the status bar / agents.
     pub status: String,
-    history: Vec<Undo>,
-    redo: Vec<Undo>,
+    /// Undo and redo steps. Shared so `run` can snapshot both stacks cheaply (a pointer per
+    /// step) and put them back exactly when a command fails.
+    history: Vec<Arc<Undo>>,
+    redo: Vec<Arc<Undo>>,
     /// Typing is coalesced into one undo step until something else happens.
     typing_open: bool,
     /// The next mutating command joins the previous undo step (later frames of a drag).
@@ -261,11 +264,20 @@ impl Session {
             return;
         }
         self.typing_open = label == "Typing";
-        self.history.push(Undo { label: label.to_string(), doc: self.doc.clone(), sel: self.sel.clone() });
+        self.history.push(Arc::new(Undo { label: label.to_string(), doc: self.doc.clone(), sel: self.sel.clone() }));
         if self.history.len() > MAX_UNDO {
             self.history.remove(0);
         }
         self.redo.clear();
+    }
+    /// Record `doc`/`sel` as their own undo step after the fact and close the typing group, so
+    /// Undo right after an automatic change (AutoFormat, AutoCorrect) reverts only that change.
+    pub fn push_undo(&mut self, label: &str, doc: Document, sel: Selection) {
+        self.history.push(Arc::new(Undo { label: label.to_string(), doc, sel }));
+        if self.history.len() > MAX_UNDO {
+            self.history.remove(0);
+        }
+        self.typing_open = false;
     }
     /// Make the next mutating command part of the previous undo step instead of a new one, so a
     /// drag that runs a command every frame is a single Undo. Call it on every frame of the drag
@@ -294,17 +306,17 @@ impl Session {
     }
     pub fn undo(&mut self) -> bool {
         self.typing_open = false;
-        let Some(u) = self.history.pop() else { return false };
+        let Some(u) = self.history.pop().map(Arc::unwrap_or_clone) else { return false };
         let cur = Undo { label: u.label.clone(), doc: std::mem::replace(&mut self.doc, u.doc), sel: std::mem::replace(&mut self.sel, u.sel) };
-        self.redo.push(cur);
+        self.redo.push(Arc::new(cur));
         self.touch();
         true
     }
     pub fn redo(&mut self) -> bool {
         self.typing_open = false;
-        let Some(u) = self.redo.pop() else { return false };
+        let Some(u) = self.redo.pop().map(Arc::unwrap_or_clone) else { return false };
         let cur = Undo { label: u.label.clone(), doc: std::mem::replace(&mut self.doc, u.doc), sel: std::mem::replace(&mut self.sel, u.sel) };
-        self.history.push(cur);
+        self.history.push(Arc::new(cur));
         self.touch();
         true
     }
@@ -388,7 +400,10 @@ impl Session {
             let off = m.at.off + wordcraft_doc::para::OBJ.len_utf8();
             self.sel = Selection::caret(Pos { off, ..m.at });
         }
-        let before_doc = if spec.mutates { Some((self.doc.clone(), self.sel.clone(), self.history.len(), self.typing_open)) } else { None };
+        // The undo stacks are snapshotted whole, not as a length: commands run nested commands,
+        // whose checkpoints, undos and redos (and evictions at the limit) must be put back too.
+        let before_doc =
+            if spec.mutates { Some((self.doc.clone(), self.sel.clone(), self.history.clone(), self.redo.clone(), self.typing_open)) } else { None };
         let typing = spec.id == "text.insert" || spec.id == "equation.type";
         if spec.mutates && !typing {
             self.typing_open = false;
@@ -421,10 +436,11 @@ impl Session {
                 self.clamp_selection();
             }
             Err(e) => {
-                if let Some((d, s, h, t)) = before_doc {
+                if let Some((d, s, h, r, t)) = before_doc {
                     self.doc = d;
                     self.sel = s;
-                    self.history.truncate(h);
+                    self.history = h;
+                    self.redo = r;
                     self.typing_open = t;
                 }
                 self.status = e.to_string();
