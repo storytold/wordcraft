@@ -88,6 +88,8 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocxError> {
     if let Some(p) = part(rt::NUMBERING) {
         lenient("numbering", r.read_numbering(&p));
     }
+    // Without a stated mode (or settings at all) Word lays a document out as Word 2007 did.
+    r.doc.settings.compat_mode = wordcraft_doc::LEGACY_COMPAT_MODE;
     if let Some(p) = part(rt::SETTINGS) {
         lenient("settings", r.read_settings(&p));
     }
@@ -547,6 +549,12 @@ impl Reader<'_> {
         let s = &mut self.doc.settings;
         for k in root.els() {
             match k.name.as_str() {
+                "w:compat" => {
+                    let mode = k.children("w:compatSetting").find(|c| c.attr("w:name") == Some("compatibilityMode")).and_then(|c| c.attr("w:val"));
+                    if let Some(m) = mode.and_then(u32_of) {
+                        s.compat_mode = m.clamp(11, 99);
+                    }
+                }
                 "w:trackRevisions" => s.track_changes = on_off(k),
                 "w:defaultTabStop" => {
                     if let Some(v) = tw(k, "w:val").filter(|v| *v > 0.0) {

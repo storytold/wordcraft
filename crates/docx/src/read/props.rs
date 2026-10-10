@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CellProps, CharProps, HeightRule, Highlight, LineSpacing, NumRef, ParaProps, Rgb, RowProps, TabAlign,
-    TabLeader, TabStop, TableLook, TableProps, TextColor, Underline, VAlign, VMerge, VertAlign,
+    TabLeader, TabStop, TableFloat, TableLook, TableProps, TextColor, Underline, VAlign, VMerge, VertAlign,
 };
 use wordcraft_doc::section::{Columns, LineNumberRestart, LineNumbering, NumFormat, SectionProps, SectionStart};
 
@@ -277,6 +277,12 @@ impl PropCtx {
                 "w:tblLayout" => t.fixed = k.attr("w:type") == Some("fixed"),
                 "w:tblCellMar" => t.cell_margins = Some(margins(k)),
                 "w:tblLook" => t.look = look(k),
+                "w:tblpPr" => t.float = Some(table_float(k)),
+                "w:tblOverlap" => {
+                    if let Some(f) = t.float.as_mut() {
+                        f.overlap = k.attr("w:val") != Some("never");
+                    }
+                }
                 "w:tblCaption" => t.caption = k.attr("w:val").map(str::to_string),
                 "w:tblDescription" if t.caption.is_none() => t.caption = k.attr("w:val").map(str::to_string),
                 _ => {}
@@ -481,4 +487,27 @@ pub fn sectpr(e: &El) -> (SectionProps, Vec<HfRef>) {
         }
     }
     (s, refs)
+}
+
+/// `w:tblpPr`: a floating table's anchors, offsets or alignments and distances from text.
+fn table_float(e: &El) -> TableFloat {
+    use wordcraft_doc::para::{Anchor, FloatAlign};
+    let pt = |n: &str| e.attr(n).and_then(|v| measure(v, 20.0)).map(|v| v.clamp(-31_680.0, 31_680.0)).unwrap_or(0.0);
+    let dist = |n: &str| pt(n).clamp(0.0, 1584.0);
+    let rel = |n: &str, text: Anchor| match e.attr(n) {
+        Some("page") => Anchor::Page,
+        Some("margin") => Anchor::Margin,
+        _ => text,
+    };
+    let align = |n: &str| e.attr(n).and_then(FloatAlign::from_ooxml);
+    TableFloat {
+        h_rel: rel("w:horzAnchor", Anchor::Column),
+        v_rel: rel("w:vertAnchor", Anchor::Paragraph),
+        x: pt("w:tblpX"),
+        y: pt("w:tblpY"),
+        h_align: align("w:tblpXSpec"),
+        v_align: align("w:tblpYSpec"),
+        dist: [dist("w:leftFromText"), dist("w:topFromText"), dist("w:rightFromText"), dist("w:bottomFromText")],
+        overlap: true,
+    }
 }

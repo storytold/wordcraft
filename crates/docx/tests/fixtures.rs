@@ -2,7 +2,7 @@
 
 use std::io::Write;
 
-use wordcraft_doc::para::{NoteKind, ShapeKind, Wrap};
+use wordcraft_doc::para::{Anchor, FloatAlign, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{Align, TextColor, VMerge};
 use wordcraft_doc::{Block, Document, InlineObject, Paragraph};
 
@@ -443,6 +443,39 @@ fn header_self_reference_and_escaping_targets() {
     assert!(d.media.is_empty());
     let out = wordcraft_docx::write(&d).unwrap();
     wordcraft_docx::read(&out).unwrap();
+}
+
+#[test]
+fn anchor_alignment_reference_areas_and_distances() {
+    let shape = |pos: &str, dist: &str| {
+        format!(
+            r#"<w:r><w:drawing><wp:anchor behindDoc="0" {dist}>{pos}<wp:extent cx="127000" cy="127000"/><wp:wrapTopAndBottom/><wp:docPr id="1" name="S"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:spPr><a:prstGeom prst="ellipse"/></wps:spPr></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>"#
+        )
+    };
+    let body = format!(
+        "<w:p>{}{}</w:p>",
+        shape(
+            r#"<wp:positionH relativeFrom="margin"><wp:align>center</wp:align></wp:positionH><wp:positionV relativeFrom="topMargin"><wp:posOffset>-12700</wp:posOffset></wp:positionV>"#,
+            r#"distT="25400" distB="50800" distL="0" distR="114300""#
+        ),
+        shape(
+            r#"<wp:positionH relativeFrom="leftMargin"><wp:posOffset>63500</wp:posOffset></wp:positionH><wp:positionV relativeFrom="line"><wp:align>bottom</wp:align></wp:positionV>"#,
+            ""
+        ),
+    );
+    let d = read_body(&body);
+    let p = paras(&d);
+    let floats: Vec<_> = p[0].objects.iter().filter_map(|o| if let InlineObject::Shape { float, .. } = o { Some(*float) } else { None }).collect();
+    let [a, b] = floats.as_slice() else { panic!("{floats:?}") };
+    assert_eq!((a.h_rel, a.h_align, a.v_rel, a.v_align, a.y), (Anchor::Margin, Some(FloatAlign::Center), Anchor::TopMargin, None, -1.0));
+    assert_eq!((a.dist, a.dist_top, a.dist_bottom), (9.0, 2.0, 4.0));
+    assert_eq!((b.h_rel, b.h_align, b.x, b.v_rel, b.v_align), (Anchor::LeftMargin, None, 5.0, Anchor::Line, Some(FloatAlign::End)));
+    assert_eq!((b.dist, b.dist_top, b.dist_bottom), (0.0, 0.0, 0.0));
+}
+
+#[test]
+fn documents_without_a_compatibility_mode_are_laid_out_as_word_2007() {
+    assert_eq!(read_body("<w:p/>").settings.compat_mode, wordcraft_doc::LEGACY_COMPAT_MODE);
 }
 
 #[test]
