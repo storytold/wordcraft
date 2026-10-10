@@ -584,7 +584,16 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Text", None, app, |ui, app| {
         big(ui, app, "textBox", "Text\nBox", "insert.textBox", json!({}), false);
         stack(ui, |ui| {
-            small(ui, app, "quickParts", Some("Quick Parts"), "Quick Parts", "insert.quickParts", json!({}), false);
+            menu_button(ui, app, "quickParts", Some("Quick Parts"), "Quick Parts", false, |ui, app| {
+                let parts: Vec<String> = app.session.building_blocks.keys().cloned().collect();
+                for name in parts {
+                    if ui.button(&name).clicked() {
+                        let _ = app.run("insert.quickParts", json!({"insert": name}));
+                        ui.close();
+                    }
+                }
+                mi(ui, app, "Field…", "ui.dialog", json!({"name": "field"}));
+            });
             small(ui, app, "wordArt", Some("WordArt"), "WordArt", "insert.wordArt", json!({}), false);
             small(ui, app, "dropCap", Some("Drop Cap"), "Drop Cap", "insert.dropCap", json!({}), false);
         });
@@ -597,16 +606,26 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Symbols", None, app, |ui, app| {
         crate::equation_tab::insert_button(ui, app);
         menu_button(ui, app, "symbol", Some("Symbol"), "Symbol", true, |ui, app| {
+            // Recently used symbols first (their font on hover), then common ones.
+            let mut items: Vec<(String, String)> = app.ui.recent_symbols.iter().map(|r| (r.ch.clone(), r.font.clone())).collect();
+            for c in [
+                "©", "®", "™", "§", "¶", "€", "£", "¥", "°", "±", "≠", "≤", "≥", "÷", "×", "∞", "µ", "α", "β", "π", "Ω", "∑", "√", "→", "←", "✓",
+                "★", "♥", "—", "…",
+            ] {
+                if !items.iter().any(|(ch, f)| ch == c && f.is_empty()) {
+                    items.push((c.to_string(), String::new()));
+                }
+            }
+            items.truncate(30);
             egui::Grid::new("syms").show(ui, |ui| {
-                for (i, c) in [
-                    "©", "®", "™", "§", "¶", "€", "£", "¥", "°", "±", "≠", "≤", "≥", "÷", "×", "∞", "µ", "α", "β", "π", "Ω", "∑", "√", "→", "←", "✓",
-                    "★", "♥", "—", "…",
-                ]
-                .iter()
-                .enumerate()
-                {
-                    if ui.button(egui::RichText::new(*c).size(16.0)).clicked() {
-                        let _ = app.run("insert.symbol", json!({"char": c}));
+                for (i, (c, font)) in items.iter().enumerate() {
+                    let b = ui.button(egui::RichText::new(c).size(16.0));
+                    let b = if font.is_empty() { b } else { b.on_hover_text(font) };
+                    if b.clicked() {
+                        let params = if font.is_empty() { json!({"char": c}) } else { json!({"char": c, "font": font}) };
+                        if app.run("insert.symbol", params).is_ok() {
+                            crate::dialogs_insert::remember_symbol(app, c, font);
+                        }
                         ui.close();
                     }
                     if i % 6 == 5 {
@@ -614,6 +633,8 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
                     }
                 }
             });
+            ui.separator();
+            mi(ui, app, "More Symbols…", "ui.dialog", json!({"name": "symbol"}));
         });
     });
 }
@@ -733,6 +754,8 @@ fn layout(app: &mut WordApp, ui: &mut Ui) {
             mi(ui, app, "Three", "layout.columns", json!({"count": 3}));
             mi(ui, app, "Left", "layout.columns", json!({"preset": "left"}));
             mi(ui, app, "Right", "layout.columns", json!({"preset": "right"}));
+            ui.separator();
+            mi(ui, app, "More Columns…", "ui.dialog", json!({"name": "columns"}));
         });
         stack(ui, |ui| {
             menu_button(ui, app, "breaks", Some("Breaks"), "Breaks", false, |ui, app| {

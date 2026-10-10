@@ -142,6 +142,8 @@ pub enum Dialog {
     Commands {
         query: String,
     },
+    /// Columns, Symbol and Field ([`crate::dialogs_insert`], #321).
+    Insert(Box<crate::dialogs_insert::InsertDialog>),
     /// Paste Special: the clipboard's formats and the chosen one. The clipboard payload stays out
     /// of the serialized dialog state (it can be megabytes).
     PasteSpecial {
@@ -614,6 +616,7 @@ impl Dialog {
             Dialog::TableStyle { id: None, .. } => "newTableStyle",
             Dialog::TableStyle { .. } => "modifyTableStyle",
             Dialog::Commands { .. } => "commands",
+            Dialog::Insert(d) => d.name(),
             Dialog::PasteSpecial { .. } => "pasteSpecial",
             Dialog::About { .. } => "about",
             Dialog::SaveChanges { .. } => "saveChanges",
@@ -647,6 +650,9 @@ impl Dialog {
     }
 
     pub fn open(name: &str, app: &mut WordApp) -> Option<Dialog> {
+        if let Some(d) = crate::dialogs_insert::open(name, app) {
+            return Some(Dialog::Insert(Box::new(d)));
+        }
         let st = app.session.run("format.state", &json!({})).unwrap_or_default();
         let s = |k: &str| st.get(k).and_then(Value::as_str).unwrap_or("").to_string();
         let b = |k: &str| st.get(k).and_then(Value::as_bool).unwrap_or(false);
@@ -879,6 +885,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::TableStyle { id: None, .. } => "New Table Style",
         Dialog::TableStyle { .. } => "Modify Table Style",
         Dialog::Commands { .. } => "Search Commands",
+        Dialog::Insert(d) => d.title(),
         Dialog::PasteSpecial { .. } => "Paste Special",
         Dialog::About { .. } => "About WordCraft",
         Dialog::SaveChanges { .. } => "WordCraft",
@@ -1487,6 +1494,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             ok || cancel
         }
+        Dialog::Insert(f) => crate::dialogs_insert::body(app, ui, f),
         Dialog::Commands { query } => {
             let r = ui.add(egui::TextEdit::singleline(query).hint_text(tl!("Type a command, e.g. \"insert table\"")).desired_width(380.0));
             r.request_focus();

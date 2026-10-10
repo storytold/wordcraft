@@ -1119,3 +1119,86 @@
 	Rotate Left 90°	向左旋转 90°
 	Flip Vertical	垂直翻转
 	Flip Horizontal	水平翻转
+
+# Columns, Symbol and Field dialogs (#321).
+	(All)	(全部)
+	(none)	(无)
+	(normal text)	(普通文本)
+	1/4 Em Space	1/4 全角空格
+	A mail merge field	邮件合并域
+	A numbered sequence (figures, tables…)	编号序列（图、表…）
+	A table of contents	目录
+	Apply to:	应用于：
+	Categories:	类别：
+	Character	字符
+	Character code:	字符代码：
+	Col #:	栏号：
+	Copyright	版权
+	Date and Time	日期和时间
+	Date formats:	日期格式：
+	Description:	说明：
+	Document Information	文档信息
+	Double Closing Quote	右双引号
+	Double Opening Quote	左双引号
+	Ellipsis	省略号
+	Em Dash	长破折号
+	En Dash	短破折号
+	Em Space	全角空格
+	En Space	半角空格
+	Equal column width	栏宽相等
+	Field Codes	域代码
+	Field code:	域代码：
+	Field codes:	域代码：
+	Field name:	域名：
+	Field names:	域名列表：
+	Field properties	域属性
+	Field…	域…
+	Format:	格式：
+	Hide Codes	隐藏代码
+	Index and Tables	索引和目录
+	Line between	分隔线
+	Links and References	链接和引用
+	Mail Merge	邮件合并
+	More Columns…	更多栏…
+	More Symbols…	其他符号…
+	No-Width Non Break	无宽非分隔符
+	No-Width Optional Break	无宽可选分隔符
+	Paragraph Mark	段落标记
+	Please choose a field	请选择域
+	Preserve formatting during updates	更新时保留格式
+	Presets	预设
+	Recently used symbols:	近期使用过的符号：
+	Registered	注册商标
+	Section Mark	章节符号
+	Sequence name:	序列名称：
+	Shortcut key:	快捷键：
+	Single Closing Quote	右单引号
+	Single Opening Quote	左单引号
+	Spacing:	间距：
+	Special Characters	特殊字符
+	Subset:	子集：
+	The current time	当前时间
+	The date the document was created	文档的创建日期
+	The date the document was last printed	文档的上次打印日期
+	The date the document was last saved	文档的上次保存日期
+	The document has no bookmarks yet.	文档中还没有书签。
+	The document's author	文档作者
+	The document's file name	文档的文件名
+	The document's title	文档标题
+	The number of pages in the document	文档的页数
+	The number of pages in the section	本节的页数
+	The number of the current page	当前页码
+	The number of the current section	当前节号
+	The number of words in the document	文档的字数
+	The page number of a bookmark	书签所在的页码
+	The text of a bookmark	书签的文本
+	This field has no options.	此域没有选项。
+	This font has no characters to show.	此字体没有可显示的字符。
+	This point forward	插入点之后
+	This section	本节
+	Today's date	今天的日期
+	Trademark	商标
+	Type the field's name and its switches, for example PAGE \\* roman.	键入域名及其开关，例如 PAGE \\* roman。
+	Whole document	整篇文档
+	Width and spacing	宽度和间距
+	from Unicode (hex)	来自 Unicode（十六进制）

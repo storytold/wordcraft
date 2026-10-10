@@ -1120,3 +1120,86 @@
 	Rotate Left 90°	Повернути ліворуч на 90°
 	Flip Vertical	Віддзеркалити по вертикалі
 	Flip Horizontal	Віддзеркалити по горизонталі
+
+# Columns, Symbol and Field dialogs (#321).
+	(All)	(Усі)
+	(none)	(немає)
+	(normal text)	(звичайний текст)
+	1/4 Em Space	Пробіл 1/4 кегля
+	A mail merge field	Поле злиття
+	A numbered sequence (figures, tables…)	Нумерована послідовність (рисунки, таблиці…)
+	A table of contents	Зміст
+	Apply to:	Застосувати до:
+	Categories:	Категорії:
+	Character	Символ
+	Character code:	Код символу:
+	Col #:	Стовпець:
+	Copyright	Знак авторського права
+	Date and Time	Дата й час
+	Date formats:	Формати дати:
+	Description:	Опис:
+	Document Information	Відомості про документ
+	Double Closing Quote	Закривні подвійні лапки
+	Double Opening Quote	Відкривні подвійні лапки
+	Ellipsis	Три крапки
+	Em Dash	Довге тире
+	En Dash	Коротке тире
+	Em Space	Широкий пробіл
+	En Space	Пробіл середньої ширини
+	Equal column width	Однакова ширина стовпців
+	Field Codes	Коди полів
+	Field code:	Код поля:
+	Field codes:	Коди полів:
+	Field name:	Назва поля:
+	Field names:	Назви полів:
+	Field properties	Властивості поля
+	Field…	Поле…
+	Format:	Формат:
+	Hide Codes	Сховати коди
+	Index and Tables	Покажчики й таблиці
+	Line between	Лінія між стовпцями
+	Links and References	Зв'язки й посилання
+	Mail Merge	Злиття
+	More Columns…	Інші стовпці…
+	More Symbols…	Інші символи…
+	No-Width Non Break	Нерозривний символ нульової ширини
+	No-Width Optional Break	Необов'язковий розрив нульової ширини
+	Paragraph Mark	Знак абзацу
+	Please choose a field	Виберіть поле
+	Preserve formatting during updates	Зберігати форматування під час оновлення
+	Presets	Шаблони
+	Recently used symbols:	Нещодавно використані символи:
+	Registered	Зареєстрована торговельна марка
+	Section Mark	Знак параграфа
+	Sequence name:	Назва послідовності:
+	Shortcut key:	Сполучення клавіш:
+	Single Closing Quote	Закривна одинарна лапка
+	Single Opening Quote	Відкривна одинарна лапка
+	Spacing:	Інтервал:
+	Special Characters	Спеціальні символи
+	Subset:	Набір:
+	The current time	Поточний час
+	The date the document was created	Дата створення документа
+	The date the document was last printed	Дата останнього друку документа
+	The date the document was last saved	Дата останнього збереження документа
+	The document has no bookmarks yet.	У документі ще немає закладок.
+	The document's author	Автор документа
+	The document's file name	Ім'я файлу документа
+	The document's title	Назва документа
+	The number of pages in the document	Кількість сторінок у документі
+	The number of pages in the section	Кількість сторінок у розділі
+	The number of the current page	Номер поточної сторінки
+	The number of the current section	Номер поточного розділу
+	The number of words in the document	Кількість слів у документі
+	The page number of a bookmark	Номер сторінки закладки
+	The text of a bookmark	Текст закладки
+	This field has no options.	Це поле не має параметрів.
+	This font has no characters to show.	Цей шрифт не має символів для показу.
+	This point forward	Від цього місця
+	This section	Цей розділ
+	Today's date	Сьогоднішня дата
+	Trademark	Торговельна марка
+	Type the field's name and its switches, for example PAGE \\* roman.	Введіть назву поля та його ключі, наприклад PAGE \\* roman.
+	Whole document	Увесь документ
+	Width and spacing	Ширина й інтервал
+	from Unicode (hex)	з Unicode (шістн.)

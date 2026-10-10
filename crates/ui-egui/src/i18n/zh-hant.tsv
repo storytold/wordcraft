@@ -1109,3 +1109,86 @@
 	Rotate Left 90°	向左旋轉 90°
 	Flip Vertical	垂直翻轉
 	Flip Horizontal	水平翻轉
+
+# Columns, Symbol and Field dialogs (#321).
+	(All)	(全部)
+	(none)	(無)
+	(normal text)	(一般文字)
+	1/4 Em Space	1/4 全形空格
+	A mail merge field	合併列印欄位
+	A numbered sequence (figures, tables…)	編號序列（圖、表…）
+	A table of contents	目錄
+	Apply to:	套用至：
+	Categories:	類別：
+	Character	字元
+	Character code:	字元代碼：
+	Col #:	欄號：
+	Copyright	著作權
+	Date and Time	日期和時間
+	Date formats:	日期格式：
+	Description:	描述：
+	Document Information	文件資訊
+	Double Closing Quote	右雙引號
+	Double Opening Quote	左雙引號
+	Ellipsis	刪節號
+	Em Dash	長破折號
+	En Dash	短破折號
+	Em Space	全形空格
+	En Space	半形空格
+	Equal column width	欄寬相等
+	Field Codes	功能變數代碼
+	Field code:	功能變數代碼：
+	Field codes:	功能變數代碼：
+	Field name:	功能變數名稱：
+	Field names:	功能變數名稱清單：
+	Field properties	功能變數屬性
+	Field…	功能變數…
+	Format:	格式：
+	Hide Codes	隱藏代碼
+	Index and Tables	索引和目錄
+	Line between	分隔線
+	Links and References	連結和參照
+	Mail Merge	合併列印
+	More Columns…	其他欄…
+	More Symbols…	其他符號…
+	No-Width Non Break	無寬度不分行
+	No-Width Optional Break	無寬度選擇性分行
+	Paragraph Mark	段落標記
+	Please choose a field	請選擇功能變數
+	Preserve formatting during updates	更新時保留格式設定
+	Presets	預設集
+	Recently used symbols:	最近使用的符號：
+	Registered	註冊商標
+	Section Mark	章節符號
+	Sequence name:	序列名稱：
+	Shortcut key:	快速鍵：
+	Single Closing Quote	右單引號
+	Single Opening Quote	左單引號
+	Spacing:	間距：
+	Special Characters	特殊字元
+	Subset:	子集：
+	The current time	目前的時間
+	The date the document was created	文件的建立日期
+	The date the document was last printed	文件的上次列印日期
+	The date the document was last saved	文件的上次儲存日期
+	The document has no bookmarks yet.	文件中還沒有書籤。
+	The document's author	文件的作者
+	The document's file name	文件的檔案名稱
+	The document's title	文件的標題
+	The number of pages in the document	文件的頁數
+	The number of pages in the section	本節的頁數
+	The number of the current page	目前的頁碼
+	The number of the current section	目前的節號
+	The number of words in the document	文件的字數
+	The page number of a bookmark	書籤所在的頁碼
+	The text of a bookmark	書籤的文字
+	This field has no options.	此功能變數沒有選項。
+	This font has no characters to show.	此字型沒有可顯示的字元。
+	This point forward	從這裡開始
+	This section	本節
+	Today's date	今天的日期
+	Trademark	商標
+	Type the field's name and its switches, for example PAGE \\* roman.	輸入功能變數名稱及其參數，例如 PAGE \\* roman。
+	Whole document	整份文件
+	Width and spacing	寬度和間距
+	from Unicode (hex)	來自 Unicode（十六進位）

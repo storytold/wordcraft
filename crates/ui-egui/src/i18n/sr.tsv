@@ -1123,3 +1123,86 @@
 	Rotate Left 90°	Ротирај улево за 90°
 	Flip Vertical	Окрени вертикално
 	Flip Horizontal	Окрени хоризонтално
+
+# Columns, Symbol and Field dialogs (#321).
+	(All)	(Све)
+	(none)	(нема)
+	(normal text)	(обичан текст)
+	1/4 Em Space	Размак од 1/4 em
+	A mail merge field	Поље за спајање поште
+	A numbered sequence (figures, tables…)	Нумерисани низ (слике, табеле…)
+	A table of contents	Садржај
+	Apply to:	Примени на:
+	Categories:	Категорије:
+	Character	Знак
+	Character code:	Код знака:
+	Col #:	Колона бр.:
+	Copyright	Знак ауторског права
+	Date and Time	Датум и време
+	Date formats:	Формати датума:
+	Description:	Опис:
+	Document Information	Информације о документу
+	Double Closing Quote	Затворени двоструки наводник
+	Double Opening Quote	Отворени двоструки наводник
+	Ellipsis	Три тачке
+	Em Dash	Дуга црта
+	En Dash	Средња црта
+	Em Space	Em размак
+	En Space	En размак
+	Equal column width	Једнака ширина колона
+	Field Codes	Кодови поља
+	Field code:	Код поља:
+	Field codes:	Кодови поља:
+	Field name:	Назив поља:
+	Field names:	Називи поља:
+	Field properties	Својства поља
+	Field…	Поље…
+	Format:	Формат:
+	Hide Codes	Сакриј кодове
+	Index and Tables	Индекси и табеле
+	Line between	Линија између колона
+	Links and References	Везе и референце
+	Mail Merge	Спајање поште
+	More Columns…	Још колона…
+	More Symbols…	Још симбола…
+	No-Width Non Break	Недељиви знак нулте ширине
+	No-Width Optional Break	Опциони прелом нулте ширине
+	Paragraph Mark	Знак пасуса
+	Please choose a field	Изаберите поље
+	Preserve formatting during updates	Сачувај обликовање при ажурирању
+	Presets	Унапред задато
+	Recently used symbols:	Недавно коришћени симболи:
+	Registered	Регистровани жиг
+	Section Mark	Знак параграфа
+	Sequence name:	Назив низа:
+	Shortcut key:	Пречица на тастатури:
+	Single Closing Quote	Затворени једноструки наводник
+	Single Opening Quote	Отворени једноструки наводник
+	Spacing:	Размак:
+	Special Characters	Специјални знакови
+	Subset:	Подскуп:
+	The current time	Тренутно време
+	The date the document was created	Датум када је документ направљен
+	The date the document was last printed	Датум када је документ последњи пут одштампан
+	The date the document was last saved	Датум када је документ последњи пут сачуван
+	The document has no bookmarks yet.	Документ још нема обележиваче.
+	The document's author	Аутор документа
+	The document's file name	Име датотеке документа
+	The document's title	Наслов документа
+	The number of pages in the document	Број страница у документу
+	The number of pages in the section	Број страница у одељку
+	The number of the current page	Број тренутне странице
+	The number of the current section	Број тренутног одељка
+	The number of words in the document	Број речи у документу
+	The page number of a bookmark	Број странице обележивача
+	The text of a bookmark	Текст обележивача
+	This field has no options.	Ово поље нема опција.
+	This font has no characters to show.	Овај фонт нема знакове за приказ.
+	This point forward	Од овог места надаље
+	This section	Овај одељак
+	Today's date	Данашњи датум
+	Trademark	Жиг
+	Type the field's name and its switches, for example PAGE \\* roman.	Унесите назив поља и његове прекидаче, на пример PAGE \\* roman.
+	Whole document	Цео документ
+	Width and spacing	Ширина и размак
+	from Unicode (hex)	из Unicode (хекс.)

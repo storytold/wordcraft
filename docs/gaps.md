@@ -17,7 +17,7 @@ first (`gh pr list`), and update this file and the parity doc when a gap closes.
 | 4 | **Pagination differs from Word**: Aptos has no metric-matched substitute; columns don't balance; long footnotes don't continue; legacy compatibility options ignored; no page-by-page comparison harness | B | [layout-parity.md](layout-parity.md); [typing-parity.md](typing-parity.md) Known gaps | Page counts and line breaks differ, which matters for forms, legal and academic work | 30–50 + owner (font) | [layout-parity.md](layout-parity.md) |
 | 5 | **Formatting revisions, move tracking and content controls** are lost (`w:rPrChange`/`w:pPrChange` absent; `w:sdt` unwrapped) | B | Issue #41; source grep | Legal and editorial review workflows; templates with form controls | 12–18 | [file-format-parity.md](file-format-parity.md) |
 | 6 | **No native printing** on desktop: File › Print opens the PDF in the system viewer, which prints (#286); no print dialog of our own (printer, copies, ranges); web prints through the browser (#209) | B | `ui.print` → `apps/wordcraft/src/print.rs`; issue #15 | Everyone who prints | 5–8 | [hardware-parity.md](hardware-parity.md) |
-| 7 | **Dialog depth**: 16 modal dialogs vs Word's ~100 (Tabs, Borders and Shading, Columns, Symbol, Field, Define Multilevel List, Track Changes Options, Options panes…) | B | `Dialog` enum in `crates/ui-egui/src/dialogs.rs` | Power users reach for dialogs the ribbon alone doesn't cover | 20–30 | [ui-parity.md](ui-parity.md) |
+| 7 | **Dialog depth**: 19 modal dialogs vs Word's ~100 (Tabs, Borders and Shading, Define Multilevel List, Track Changes Options, Options panes…) | B | `Dialog` enum in `crates/ui-egui/src/dialogs.rs` | Power users reach for dialogs the ribbon alone doesn't cover | 20–30 | [ui-parity.md](ui-parity.md) |
 | 8 | **Proofing is English only**; no language per run, no dictionaries for other languages | | `crates/proof` has one dictionary; Word ships 120 proofing tools; issues #25, #40, #100 | Every non-English writer | 25–45 | [localization-parity.md](localization-parity.md) |
 | 9 | **Password-protected files** can't be opened or saved | | #55; `docbin` detects and refuses RC4/XOR | Corporate and legal users | 6–10 | [file-format-parity.md](file-format-parity.md) |
 | 10 | **Objects**: no group (#267 open), rotated text-box text (free rotation and flips landed, #332), contour (tight/through) wrap, shape effects, WordArt, connectors, Drawing Canvas, Icons | | [parity-checklist.md](parity-checklist.md) (Shape Format 2/6, Layout › Group) | Newsletters, flyers, reports with diagrams | 20–30 | [target-app-parity.md](target-app-parity.md) |
@@ -64,6 +64,7 @@ The same gaps grouped the way the parity documents are, for agents working in on
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | trivial | Columns, Symbol and Field dialogs landed (#321); removed from the dialog-depth list |
 | 2026-10-10 | trivial | #10: free rotation and flips for pictures, shapes and text boxes, with a rotation handle (#332); text boxes rotate their frame; their text stays upright |
 | 2026-10-10 | trivial | #29: long display equations wrap across lines (#326) |
 | 2026-10-10 | trivial | #3: Windows lag on GPUs without a DirectX 12 driver fixed with an OpenGL fallback (#316) |
