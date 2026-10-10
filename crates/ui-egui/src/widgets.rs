@@ -45,6 +45,34 @@ fn tooltip(app: &WordApp, resp: Response, label: &str, id: &str) -> Response {
     })
 }
 
+/// Record a keytip badge over a control's rect when keytips are showing commands. `ui` reaches
+/// the phase and badge list through egui memory, so widgets without `&mut WordApp` can record too.
+fn keytip_badge(ui: &Ui, rect: Rect, id: &str, name: &str) {
+    if ui.data(|d| d.get_temp::<crate::keytips::Phase>(crate::keytips::phase_id())) != Some(crate::keytips::Phase::Commands) {
+        return;
+    }
+    let tab = ui.data(|d| d.get_temp::<String>(crate::keytips::tab_id())).unwrap_or_default();
+    let controls = crate::keytips::controls_public(&tab);
+    // Match by command id first; fall back to tooltip prefix, since widget tooltips carry
+    // extra text ("Paste (⌘V)") the canonical control name does not.
+    let Some(i) = controls
+        .iter()
+        .position(|c| c.id == id && id != "ui.dialog")
+        .or_else(|| controls.iter().position(|c| c.tip == name))
+        .or_else(|| controls.iter().position(|c| name.starts_with(c.tip)))
+    else {
+        return;
+    };
+    let letter = ui.data(|d| d.get_temp::<Vec<String>>(crate::keytips::letters_id().with(&tab))).and_then(|l| l.get(i).cloned());
+    if let Some(l) = letter {
+        ui.data_mut(|d| {
+            let mut v: Vec<(Rect, String)> = d.get_temp::<Vec<(Rect, String)>>(crate::keytips::rects_id()).unwrap_or_default();
+            v.push((rect, l));
+            d.insert_temp(crate::keytips::rects_id(), v);
+        });
+    }
+}
+
 /// Whether a command exists and is enabled.
 pub fn enabled(app: &WordApp, id: &str) -> bool {
     match app.session.registry.get(id) {
@@ -77,6 +105,7 @@ pub fn big(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, pa
         label.split('\n').map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x)).fold(0.0, f32::max);
     let w = (galley_w + 12.0).max(44.0);
     let (r, resp) = ui.allocate_exact_size(vec2(w, CONTENT_H), Sense::click());
+    keytip_badge(ui, r, id, &label.replace('\n', " "));
     let on = enabled(app, id);
     bg(ui, r, &resp, false, &t);
     let ic = Rect::from_center_size(pos2(r.center().x, r.min.y + 20.0), vec2(32.0, 32.0));
@@ -102,6 +131,7 @@ pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, ti
     let t = Tokens::get(ui.ctx());
     let text_w = label.map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x) + 6.0).unwrap_or(0.0);
     let (r, resp) = ui.allocate_exact_size(vec2(24.0 + text_w, 22.0), Sense::click());
+    keytip_badge(ui, r, id, tip);
     let on = enabled(app, id);
     bg(ui, r, &resp, checked, &t);
     let ic = Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(17.0, 17.0));
@@ -132,6 +162,7 @@ pub fn split(
     let tip = tl!(tip);
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(vec2(24.0, 22.0), Sense::click());
+    keytip_badge(ui, r, id, tip);
     let (ar, aresp) = ui.allocate_exact_size(vec2(11.0, 22.0), Sense::click());
     bg(ui, r, &resp, checked, &t);
     bg(ui, ar, &aresp, false, &t);
@@ -171,6 +202,7 @@ pub fn menu_button(
             .fold(0.0, f32::max);
         let w = (galley_w + 22.0).max(44.0);
         let (r, resp) = ui.allocate_exact_size(vec2(w, CONTENT_H), Sense::click());
+        keytip_badge(ui, r, "menu", tip);
         bg(ui, r, &resp, false, &t);
         icons::paint(ui.painter(), Rect::from_center_size(pos2(r.center().x, r.min.y + 20.0), vec2(32.0, 32.0)), icon, t.icon, t.accent);
         let lines: Vec<&str> = label.unwrap_or("").split('\n').collect();
@@ -184,6 +216,7 @@ pub fn menu_button(
     } else {
         let text_w = label.map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x) + 6.0).unwrap_or(0.0);
         let (r, resp) = ui.allocate_exact_size(vec2(24.0 + text_w + 10.0, 22.0), Sense::click());
+        keytip_badge(ui, r, "menu", tip);
         bg(ui, r, &resp, false, &t);
         icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(17.0, 17.0)), icon, t.icon, t.accent);
         if let Some(l) = label {
@@ -309,6 +342,7 @@ pub fn combo(
         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
         let te = egui::TextEdit::singleline(&mut text).desired_width(width - 16.0).font(regular(12.0)).margin(vec2(4.0, 3.0));
         let resp = ui.add(te);
+        keytip_badge(ui, resp.rect, "combo", id);
         if resp.has_focus() {
             ui.data_mut(|d| d.insert_temp(edit_id, text.clone()));
         } else {

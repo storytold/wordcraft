@@ -520,3 +520,21 @@ proptest::proptest! {
         proptest::prop_assert_eq!(got.trim(), text.trim(), "md: {}", String::from_utf8_lossy(&md));
     }
 }
+
+#[test]
+fn html_img_sources_go_through_the_loader() {
+    // Issue #98: an `img` named by a relative path was dropped, leaving only its alt text.
+    let html = r#"<p><img src="logo.png" alt="Sample Logo" width="120" height="40"></p><p><img src="gone.png" alt="Missing"></p><p>Text after.</p>"#;
+    let pic = png();
+    let seen = std::cell::RefCell::new(Vec::new());
+    let d = crate::html::import_with(html, &|src| {
+        seen.borrow_mut().push(src.to_string());
+        (src == "logo.png").then(|| std::sync::Arc::new(pic.clone()))
+    });
+    assert_eq!(*seen.borrow(), ["logo.png", "gone.png"]);
+    assert_eq!(d.media.len(), 1);
+    let text = d.plain_text(wordcraft_doc::StoryRef::Body);
+    assert!(text.contains("Missing") && !text.contains("Sample Logo"), "{text:?}");
+    // Without a loader only data: URIs load.
+    assert!(import("html", html.as_bytes()).unwrap().unwrap().media.is_empty());
+}
