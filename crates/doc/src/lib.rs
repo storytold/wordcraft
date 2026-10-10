@@ -253,17 +253,17 @@ pub struct Settings {
     pub footnote_format: section::NumFormat,
     pub endnote_format: section::NumFormat,
     pub protection: Option<String>,
-    /// Word layout compatibility mode (`w:compatSetting compatibilityMode`): 15 for Word 2013 and
-    /// later (what we write for new documents), 14 for Word 2010, 12 or 11 for older files. Mode
-    /// 15 changes layout: justified lines may shrink their spaces to fit more text.
-    pub compat_mode: u8,
+    /// Word compatibility mode the document is laid out in (`compatibilityMode`): 15 for Word
+    /// 2013 and later, which places a table's border at the margin rather than its text and lets
+    /// justified lines shrink their spaces to fit more text.
+    pub compat_mode: u32,
 }
 
-/// The compatibility mode of documents created by Word 2013 and later, and by WordCraft.
-pub const COMPAT_MODE_CURRENT: u8 = 15;
+/// Word's compatibility mode for documents that don't state one.
+pub const LEGACY_COMPAT_MODE: u32 = 12;
 
-/// The compatibility mode assumed for a .docx whose settings don't say (Word 2007).
-pub const COMPAT_MODE_UNSPECIFIED: u8 = 12;
+/// The compatibility mode of documents created by Word 2013 and later, and by WordCraft.
+pub const COMPAT_MODE_CURRENT: u32 = 15;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]

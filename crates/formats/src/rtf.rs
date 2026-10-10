@@ -178,7 +178,8 @@ impl Writer {
     }
 
     fn inlines(&mut self, inl: &[Inline], out: &mut String) {
-        for i in inl {
+        let inl = model::equations_as_text(inl);
+        for i in inl.iter() {
             match i {
                 Inline::Text(t, f) => self.run(t, f, out),
                 Inline::Image(img) => self.picture(img, out),
@@ -186,6 +187,7 @@ impl Writer {
                     let a = esc(a);
                     out.push_str(&format!("{{\\*\\bkmkstart {a}}}{{\\*\\bkmkend {a}}}"));
                 }
+                Inline::Equation { .. } => {}
             }
         }
     }
@@ -238,6 +240,7 @@ impl Writer {
     fn blocks(&mut self, blocks: &[FBlock], intbl: bool, last_end: &str, out: &mut String, depth: usize) {
         let mut counter = model::ListCounter::default();
         let mut cur_list: Option<usize> = None;
+        let mut top_ordered = false;
         let n = blocks.len();
         for (i, b) in blocks.iter().enumerate() {
             let end = if i + 1 == n { last_end } else { "\\par" };
@@ -245,6 +248,13 @@ impl Writer {
                 FBlock::Para(p) => {
                     let ls = match p.list {
                         Some(li) => {
+                            // A top-level item of the other kind starts a new list.
+                            if li.level == 0 && cur_list.is_some() && top_ordered != li.ordered {
+                                cur_list = None;
+                            }
+                            if li.level == 0 {
+                                top_ordered = li.ordered;
+                            }
                             let id = match cur_list {
                                 Some(id) => id,
                                 None => {
@@ -255,6 +265,9 @@ impl Writer {
                                         let FBlock::Para(q) = q else { break };
                                         let Some(ql) = q.list else { break };
                                         let l = ql.level.min(8) as usize;
+                                        if l == 0 && seen[0] && kinds[0] != ql.ordered {
+                                            break;
+                                        }
                                         if let (Some(s), Some(k)) = (seen.get_mut(l), kinds.get_mut(l))
                                             && !*s
                                         {
@@ -850,7 +863,7 @@ impl Reader {
         }
         if !self.table.is_empty() {
             let rows = std::mem::take(&mut self.table);
-            self.body.push(FBlock::Table(FTable { rows, widths: Vec::new() }));
+            self.body.push(FBlock::Table(FTable { rows, widths: Vec::new(), borderless: false }));
         }
     }
 
@@ -886,6 +899,8 @@ impl Reader {
             "listtable" => Some(Dest::ListTable),
             "listoverridetable" => Some(Dest::ListOverride),
             "fldinst" => Some(Dest::FldInst),
+            // Transparent wrapper: read the nested pict without changing the destination.
+            "shppict" => return,
             "pict" => Some(Dest::Pict),
             "bkmkstart" => Some(Dest::Bookmark),
             "header" | "footer" | "headerl" | "headerr" | "headerf" | "footerl" | "footerr" | "footerf" | "footnote" | "annotation" | "pntext"
@@ -1400,6 +1415,50 @@ mod tests {
         assert!(p.inlines.iter().any(|i| matches!(i, Inline::Text(t, f) if t == "red" && f.color == Some(Rgb(255, 0, 0)))));
         let FBlock::Para(l) = &f.blocks[2] else { panic!() };
         assert!(matches!(&l.inlines[0], Inline::Text(_, f) if f.link.as_deref() == Some("http://a.b")));
+    }
+
+    #[test]
+    fn shppict_imports_one_image_and_skips_legacy_duplicate() -> Result<(), String> {
+        let pixels = image::RgbaImage::from_pixel(1, 1, image::Rgba([40, 80, 160, 255]));
+        let mut png = Vec::new();
+        pixels.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).map_err(|e| e.to_string())?;
+        let hex: String = png.iter().map(|b| format!("{b:02x}")).collect();
+        let pict = format!("{{\\pict\\pngblip\\picwgoal1440\\pichgoal720 {hex}}}");
+        // Also use a supported PNG as the legacy duplicate: it must still be skipped.
+        for legacy in [format!("{{\\pict\\wmetafile8 {hex}}}"), pict.clone()] {
+            for picture in [format!("{{\\*\\shppict{pict}}}"), pict.clone()] {
+                let f = parse(format!("{{\\rtf1\\ansi Before{picture}{{\\nonshppict{legacy}}}After\\par}}").as_bytes())?;
+                let images: Vec<_> = f
+                    .blocks
+                    .iter()
+                    .filter_map(|b| match b {
+                        FBlock::Para(p) => Some(&p.inlines),
+                        FBlock::Table(_) => None,
+                    })
+                    .flatten()
+                    .filter_map(|i| match i {
+                        Inline::Image(img) => Some(img),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(images.len(), 1, "{picture}");
+                let img = images.first().ok_or("missing picture")?;
+                assert_eq!(img.data.as_ref(), &png);
+                assert_eq!(img.ext, "png");
+                assert_eq!((img.w, img.h), (72.0, 36.0));
+                assert_eq!(texts(&f), vec!["Normal:BeforeAfter"]);
+            }
+        }
+        // Recognizing shppict must not resurrect pictures inside skipped destinations.
+        for dest in ["nonshppict", "unknown"] {
+            let f = parse(format!("{{\\rtf1{{\\*\\{dest}{{\\*\\shppict{pict}}}}}Before\\par}}").as_bytes())?;
+            assert_eq!(texts(&f), vec!["Normal:Before"]);
+            assert!(f.blocks.iter().all(|b| match b {
+                FBlock::Para(p) => p.inlines.iter().all(|i| !matches!(i, Inline::Image(_))),
+                FBlock::Table(_) => false,
+            }));
+        }
+        Ok(())
     }
 
     #[test]

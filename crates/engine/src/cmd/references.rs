@@ -165,8 +165,8 @@ pub fn update_toc(s: &mut Session) -> Result<(), CmdError> {
     let leads: Vec<usize> =
         entries.iter().map(|(path, ..)| s.doc.para(StoryRef::Body, path).map_or(0, |p| p.text.bytes().take_while(|b| *b == 0x0C).count())).collect();
     for pass in 0..2 {
-        // Pass 1 lays out with the entries in place, so headings sit `entries.len()` blocks
-        // further down and their pages account for the TOC's own length.
+        // Pass 1 lays out with the entries in place, so headings below the TOC sit `entries.len()`
+        // blocks further down and their pages account for the TOC's own length.
         s.touch();
         let l = s.layout();
         if pass == 1 {
@@ -177,7 +177,7 @@ pub fn update_toc(s: &mut Session) -> Result<(), CmdError> {
         }
         let shift = if pass == 0 { 0 } else { entries.len() };
         for (k, (path, level, text)) in entries.iter().enumerate() {
-            let target = Path::top(path.last() + shift);
+            let target = Path::top(path.last() + if path.last() > start { shift } else { 0 });
             let off = leads.get(k).copied().unwrap_or(0);
             let page = l.caret(&Pos { story: StoryRef::Body, path: target, off }).and_then(|c| l.pages.get(c.page)).map(|pg| pg.number).unwrap_or(1);
             let mut para = Paragraph::with_text(&format!("{text}\t{page}"), CharProps::default()).styled(&format!("TOC{}", level + 1));
