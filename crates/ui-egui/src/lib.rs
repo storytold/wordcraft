@@ -83,7 +83,11 @@ pub struct UiState {
     pub backstage_page: String,
     pub ribbon_collapsed: bool,
     pub recent: Vec<String>,
-    pub dark: bool,
+    /// Interface theme: light, dark, or follow the OS appearance (#115).
+    pub theme: theme::Appearance,
+    /// The dark-mode switch `ui.json` held before `theme` (#115): read once to migrate, never written.
+    #[serde(rename = "dark", skip_serializing)]
+    pub(crate) legacy_dark: Option<bool>,
     pub nav_tab: String,
     pub show_discord: bool,
     /// User name (File › Options) for comments and tracked changes; empty keeps the default.
@@ -112,7 +116,8 @@ impl Default for UiState {
             backstage_page: "home".into(),
             ribbon_collapsed: false,
             recent: Vec::new(),
-            dark: false,
+            theme: theme::Appearance::default(),
+            legacy_dark: None,
             nav_tab: "headings".into(),
             show_discord: true,
             author: String::new(),
@@ -150,6 +155,11 @@ pub struct WordApp {
     styled: bool,
     /// The CJK face order the installed UI fonts use (Chinese first, or Japanese first).
     fonts_hans: bool,
+    /// Whether the installed UI fonts include an installed CJK fallback font (#241).
+    fonts_system_cjk: bool,
+    /// CJK text is (about to be) on screen in a non-CJK interface, e.g. the language names in
+    /// File ▸ Options: load the installed CJK fallback font if no embedded face covers it.
+    pub(crate) want_system_cjk: bool,
     fonts_frames: u32,
     applied_dark: Option<bool>,
     pub frame_ms: f64,
@@ -214,6 +224,8 @@ impl WordApp {
             keytip_rects: Vec::new(),
             styled: false,
             fonts_hans: false,
+            fonts_system_cjk: false,
+            want_system_cjk: false,
             fonts_frames: 0,
             applied_dark: None,
             frame_ms: 0.0,
@@ -254,6 +266,10 @@ impl WordApp {
     pub fn apply_prefs(&mut self, ui: UiState) {
         self.ui = ui;
         self.ui.backstage = false;
+        // A `ui.json` from before the theme setting: its dark-mode switch picks Dark or Light.
+        if let Some(dark) = self.ui.legacy_dark.take() {
+            self.ui.theme = if dark { theme::Appearance::Dark } else { theme::Appearance::Light };
+        }
         // The session owns the name from here on; `prefs` copies it back when saving.
         let author = std::mem::take(&mut self.ui.author);
         if !author.trim().is_empty() {
@@ -446,6 +462,11 @@ impl WordApp {
         }
     }
 
+    /// Whether the interface theme setting currently resolves to dark (`System` asks the OS).
+    pub fn ui_is_dark(&self) -> bool {
+        self.ui.theme.is_dark(self.ctx.as_ref().and_then(egui::Context::system_theme))
+    }
+
     /// Commands that live in the UI layer.
     fn ui_command(&mut self, id: &str, p: &Value) -> Option<Result<Value, String>> {
         let s = |k: &str| p.get(k).and_then(Value::as_str);
@@ -488,8 +509,20 @@ impl WordApp {
                 json!({"collapsed": self.ui.ribbon_collapsed})
             }
             "ui.dark" => {
-                self.ui.dark = p.get("value").and_then(Value::as_bool).unwrap_or(!self.ui.dark);
-                json!({"dark": self.ui.dark})
+                // A manual Light/Dark switch (toggles what is shown when no value is given).
+                let dark = p.get("value").and_then(Value::as_bool).unwrap_or(!self.ui_is_dark());
+                self.ui.theme = if dark { theme::Appearance::Dark } else { theme::Appearance::Light };
+                json!({"dark": dark, "theme": self.ui.theme.code()})
+            }
+            "ui.theme" => {
+                // `light`, `dark` or `system` (follow the OS appearance); no value reads it.
+                if let Some(v) = s("value") {
+                    match theme::Appearance::from_code(v) {
+                        Some(a) => self.ui.theme = a,
+                        None => return Some(Err(format!("unknown theme {v:?}; use light, dark or system"))),
+                    }
+                }
+                json!({"theme": self.ui.theme.code(), "dark": self.ui_is_dark()})
             }
             "ui.language" => {
                 // `auto` (follow the system) or a language code; anything else is an error.
@@ -611,15 +644,21 @@ impl WordApp {
         let lang = i18n::Lang::from_pref(&self.ui.language);
         i18n::set_current(lang);
         // Chinese text wants the Chinese face before the Japanese one (one glyph style per line).
-        if !self.styled || lang.prefers_hans() != self.fonts_hans {
-            theme::install_fonts_for(ctx, lang.prefers_hans());
+        // An installed CJK font is read only once CJK text is shown (#241): never for an English
+        // interface that doesn't open the language list.
+        let system_cjk = self.fonts_system_cjk || self.want_system_cjk || lang.uses_cjk();
+        if !self.styled || lang.prefers_hans() != self.fonts_hans || system_cjk != self.fonts_system_cjk {
+            theme::install_fonts_with(ctx, lang.prefers_hans(), system_cjk);
             self.fonts_hans = lang.prefers_hans();
+            self.fonts_system_cjk = system_cjk;
             // Mod with -, = and 0 are Word shortcuts (optional hyphen, subscript, paragraph spacing);
             // egui's keyboard zoom would also scale the whole window on them. Zoom is View › Zoom.
             ctx.options_mut(|o| o.zoom_with_keyboard = false);
             self.styled = true;
         }
-        let dark = self.ui.dark || self.session.view.dark_mode;
+        // Re-checked every frame, so `System` follows an OS appearance change live (egui reports it
+        // and repaints).
+        let dark = self.ui.theme.is_dark(ctx.system_theme()) || self.session.view.dark_mode;
         if self.applied_dark != Some(dark) {
             theme::apply(ctx, &if dark { theme::Tokens::dark() } else { theme::Tokens::light() });
             self.applied_dark = Some(dark);
@@ -1699,8 +1738,46 @@ mod tests {
         let default = a.session.author.clone();
         a.apply_prefs(serde_json::from_str(r#"{"dark": true, "backstage": true}"#).unwrap());
         assert_eq!(a.session.author, default);
-        assert!(a.ui.dark);
+        assert_eq!(a.ui.theme, theme::Appearance::Dark);
         assert!(!a.ui.backstage);
+    }
+
+    /// #115: the old dark-mode switch migrates to Light/Dark; a saved System stays System, and the
+    /// old key is never written back.
+    #[test]
+    fn interface_theme_migrates_and_survives_a_restart() {
+        use theme::Appearance;
+        for (saved, want) in [(r#"{"dark": false}"#, Appearance::Light), (r#"{"dark": true}"#, Appearance::Dark), ("{}", Appearance::Light)] {
+            let mut a = app();
+            a.apply_prefs(serde_json::from_str(saved).unwrap());
+            assert_eq!(a.ui.theme, want, "{saved}");
+        }
+        let mut a = app();
+        a.run("ui.theme", json!({"value": "System"})).unwrap();
+        let saved = serde_json::to_string(&a.prefs()).unwrap();
+        assert!(saved.contains(r#""theme":"system""#) && !saved.contains(r#""dark":"#), "{saved}");
+        let mut b = app();
+        b.apply_prefs(serde_json::from_str(&saved).unwrap());
+        assert_eq!(b.ui.theme, Appearance::System);
+        // An unknown saved value keeps the rest of the preferences.
+        let odd: UiState = serde_json::from_str(r#"{"theme": "sepia", "tab": "Insert"}"#).unwrap();
+        assert_eq!((odd.theme, odd.tab.as_str()), (Appearance::Light, "Insert"));
+    }
+
+    /// #115: System follows the OS appearance (light when unknown); the manual choices ignore it.
+    #[test]
+    fn interface_theme_resolves_against_the_os_appearance() {
+        use egui::Theme::{Dark, Light};
+        use theme::Appearance;
+        let cases = [(Appearance::System, None, false), (Appearance::System, Some(Light), false), (Appearance::System, Some(Dark), true)];
+        for (setting, os, dark) in cases.into_iter().chain([(Appearance::Light, Some(Dark), false), (Appearance::Dark, Some(Light), true)]) {
+            assert_eq!(setting.is_dark(os), dark, "{setting:?} with the OS at {os:?}");
+        }
+        let mut a = app();
+        assert!(a.run("ui.theme", json!({"value": "purple"})).is_err());
+        assert_eq!(a.run("ui.theme", json!({"value": "dark"})).unwrap()["theme"], "dark");
+        assert_eq!(a.run("ui.dark", json!({})).unwrap()["theme"], "light", "ui.dark toggles the manual choice");
+        assert_eq!(a.run("ui.theme", json!({})).unwrap()["theme"], "light");
     }
 
     #[test]
@@ -1718,7 +1795,7 @@ mod tests {
     fn prefs_without_editing_keep_its_defaults() {
         let mut a = app();
         a.apply_prefs(serde_json::from_str(r#"{"tab": "Insert", "dark": true}"#).unwrap());
-        assert_eq!((a.ui.tab.as_str(), a.ui.dark), ("Insert", true));
+        assert_eq!((a.ui.tab.as_str(), a.ui.theme), ("Insert", theme::Appearance::Dark));
         assert!(a.session.prefs.count_notes, "text boxes and notes count by default");
     }
 

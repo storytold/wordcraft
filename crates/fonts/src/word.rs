@@ -264,6 +264,18 @@ mod tests {
     }
 
     #[test]
+    fn resolves_weights_named_as_their_own_family() {
+        // Word stores a Medium face as the family "Inter Medium" (#219).
+        let r = resolve("Inter Medium", false, false);
+        assert!(!r.substituted && !r.synth_bold && !r.synth_italic);
+        assert_eq!((r.face.family.as_str(), r.face.style.as_str()), ("Inter", "Medium"));
+        // Bold and italic within it are drawn from the Medium face.
+        let b = resolve("Inter Medium", true, true);
+        assert_eq!(b.face.style, "Medium");
+        assert!(!b.substituted && b.synth_bold && b.synth_italic);
+    }
+
+    #[test]
     fn synthesizes_missing_styles() {
         // JetBrains Mono ships only Regular here.
         let r = resolve("JetBrains Mono", true, true);

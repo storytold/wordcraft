@@ -107,6 +107,11 @@ impl Lang {
         self.0.prefer_hans
     }
 
+    /// Is the interface written in CJK script (its own name is), so it needs a CJK face?
+    pub fn uses_cjk(self) -> bool {
+        self.0.name.chars().any(|c| ('\u{2E80}'..='\u{9FFF}').contains(&c) || ('\u{AC00}'..='\u{D7AF}').contains(&c))
+    }
+
     /// A language by its exact code (any case).
     pub fn from_code(code: &str) -> Option<Lang> {
         LANGUAGES.iter().find(|l| l.code.eq_ignore_ascii_case(code)).map(Lang)

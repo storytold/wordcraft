@@ -648,6 +648,50 @@ pub enum VAlign {
     Bottom,
 }
 
+/// Which way a table cell's text runs (`w:textDirection`, ECMA-376 §17.4.72).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum TextDirection {
+    /// Left to right, lines stacking downwards.
+    #[default]
+    Horizontal,
+    /// Turned 90° clockwise: lines read top to bottom and stack from right to left (`tbRl`).
+    Down,
+    /// Turned 90° counter-clockwise: lines read bottom to top and stack from left to right (`btLr`).
+    Up,
+}
+
+impl TextDirection {
+    /// The direction an OOXML `ST_TextDirection` value names (transitional and strict names).
+    /// The East Asian vertical layouts turn like `Down`; unknown values are horizontal.
+    pub fn from_ooxml(v: &str) -> TextDirection {
+        match v {
+            "tbRl" | "tbRlV" | "tbLrV" | "rl" | "rlV" | "lrV" => TextDirection::Down,
+            "btLr" | "lr" => TextDirection::Up,
+            _ => TextDirection::Horizontal,
+        }
+    }
+    /// The transitional OOXML name.
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            TextDirection::Horizontal => "lrTb",
+            TextDirection::Down => "tbRl",
+            TextDirection::Up => "btLr",
+        }
+    }
+    /// Word's Text Direction button: horizontal → down → up → horizontal.
+    pub fn next(self) -> TextDirection {
+        match self {
+            TextDirection::Horizontal => TextDirection::Down,
+            TextDirection::Down => TextDirection::Up,
+            TextDirection::Up => TextDirection::Horizontal,
+        }
+    }
+    pub fn is_turned(self) -> bool {
+        self != TextDirection::Horizontal
+    }
+}
+
 /// Table-wide properties.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -765,8 +809,8 @@ pub struct CellProps {
     pub valign: VAlign,
     /// Cell margins override (top, left, bottom, right), points.
     pub margins: Option<[f32; 4]>,
-    /// Text direction: false = horizontal, true = rotated (top-to-bottom).
-    pub vertical_text: bool,
+    /// Which way the cell's text runs.
+    pub text_direction: TextDirection,
     pub no_wrap: bool,
 }
 
@@ -816,6 +860,23 @@ mod tests {
         for h in Highlight::ALL {
             assert_eq!(Highlight::from_ooxml(h.ooxml()), h);
         }
+    }
+
+    #[test]
+    fn text_direction_names() {
+        let mut d = TextDirection::Horizontal;
+        for _ in 0..3 {
+            assert_eq!(TextDirection::from_ooxml(d.ooxml()), d);
+            d = d.next();
+        }
+        assert_eq!(d, TextDirection::Horizontal, "the button cycles through three directions");
+        // Strict names, East Asian vertical layouts and junk.
+        assert_eq!(TextDirection::from_ooxml("rl"), TextDirection::Down);
+        assert_eq!(TextDirection::from_ooxml("lr"), TextDirection::Up);
+        assert_eq!(TextDirection::from_ooxml("tbRlV"), TextDirection::Down);
+        assert_eq!(TextDirection::from_ooxml("tb"), TextDirection::Horizontal);
+        assert_eq!(TextDirection::from_ooxml("lrTbV"), TextDirection::Horizontal);
+        assert_eq!(TextDirection::from_ooxml("é?"), TextDirection::Horizontal);
     }
 
     #[test]
