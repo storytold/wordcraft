@@ -179,7 +179,8 @@ impl Writer {
 
     fn inlines(&mut self, inl: &[Inline], out: &mut String) {
         let mut prev_space = true;
-        for i in inl {
+        let inl = model::equations_as_text(inl);
+        for i in inl.iter() {
             match i {
                 Inline::Text(t, f) => {
                     let mut body = String::new();
@@ -246,6 +247,7 @@ impl Writer {
                     prev_space = false;
                 }
                 Inline::Anchor(a) => out.push_str(&format!("<text:bookmark text:name=\"{}\"/>", x(a))),
+                Inline::Equation { .. } => {}
             }
         }
     }

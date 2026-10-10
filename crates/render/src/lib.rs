@@ -154,6 +154,9 @@ pub struct RenderOptions {
     pub paper: Rgb,
     /// Colour for formatting marks.
     pub mark_color: Rgb,
+    /// Thicken glyphs slightly the way macOS draws text on screen ("font smoothing"), so pages
+    /// look like they do in other Mac apps. For on-screen rasters only: exports stay exact.
+    pub text_darkening: bool,
     /// Dark page (View › Switch Modes): every colour but pictures has its lightness inverted, so
     /// white paper turns black and black text white while hues stay the same. Screen only.
     pub dark: bool,
@@ -193,6 +196,7 @@ impl Default for RenderOptions {
             display: DisplayOptions::default(),
             paper: Rgb::WHITE,
             mark_color: Rgb(0x2B, 0x57, 0x9A),
+            text_darkening: false,
             dark: false,
             dark_paper: DARK_PAPER,
         }
@@ -258,6 +262,21 @@ fn draw_watermark(ctx: &mut RenderContext, view: Affine, page: &Page, wm: &wordc
     }
 }
 
+/// How far, in device pixels, macOS-style font smoothing pushes each side of a glyph outline out
+/// at `ppem` device pixels per em. Values from Pathfinder (MIT/Apache-2.0), which measured them
+/// against macOS: 1.21% of the pixel size horizontally and 1.25 times that vertically, each
+/// capped at 0.3 px, and no darkening past 72 px per em. We stroke the outline, which grows it
+/// evenly, so this is the mean of the two.
+pub fn stem_darkening(ppem: f64) -> f64 {
+    const FACTOR: [f64; 2] = [0.0121, 0.0121 * 1.25];
+    const MAX_PX: f64 = 0.3;
+    const MAX_PPEM: f64 = 72.0;
+    if !ppem.is_finite() || ppem <= 0.0 || ppem > MAX_PPEM {
+        return 0.0;
+    }
+    FACTOR.iter().map(|f| (ppem * f).min(MAX_PX)).sum::<f64>() / 2.0
+}
+
 fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visible: &kurbo::Rect, opts: &RenderOptions) {
     match it {
         Draw::Fill { rect, color: c, alpha } => {
@@ -318,8 +337,16 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             let k = *size as f64 / face.upem.max(1.0);
             ctx.set_paint(color(opts.ink(*c), *alpha));
             let skew = if *synth_italic { Affine::new([1.0, 0.0, -0.21, 1.0, 0.0, 0.0]) } else { Affine::IDENTITY };
-            if *synth_bold {
-                ctx.set_stroke(kurbo::Stroke::new(face.upem * 0.03));
+            // Outline strokes, in font units: synthetic bold, then on-screen stem darkening (a
+            // stroke grows the outline by half its width on each side). Darkening is skipped for
+            // translucent text, where the stroke overlapping the fill would show as a darker rim.
+            let px_per_pt = view.determinant().abs().sqrt();
+            let darken_px = if opts.text_darkening && *alpha >= 1.0 { stem_darkening(*size as f64 * px_per_pt) } else { 0.0 };
+            let darken = if darken_px > 0.0 && k * px_per_pt > 0.0 { 2.0 * darken_px / (k * px_per_pt) } else { 0.0 };
+            let outline_stroke = if *synth_bold { face.upem * 0.03 } else { 0.0 } + darken;
+            if outline_stroke > 0.0 {
+                let join = if darken > 0.0 { kurbo::Join::Round } else { kurbo::Join::Miter };
+                ctx.set_stroke(kurbo::Stroke::new(outline_stroke).with_join(join));
             }
             for (gid, x, y) in glyphs {
                 let (gx, gy) = (*x as f64, *y as f64);
@@ -332,7 +359,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 }
                 ctx.set_transform(view * Affine::translate((gx, gy)) * skew * Affine::scale(k));
                 ctx.fill_path(&o);
-                if *synth_bold {
+                if outline_stroke > 0.0 {
                     ctx.stroke_path(&o);
                 }
             }
@@ -494,6 +521,38 @@ mod tests {
         assert!(dark > 30, "dark {dark}");
         assert_eq!(img.pixel(5, 5), [255, 255, 255, 255]);
         assert!(!img.to_png().is_empty());
+    }
+
+    #[test]
+    fn stem_darkening_follows_the_macos_curve() {
+        assert_eq!(stem_darkening(0.0), 0.0);
+        assert_eq!(stem_darkening(f64::NAN), 0.0);
+        assert_eq!(stem_darkening(-5.0), 0.0);
+        // Small text grows in proportion to its pixel size...
+        assert!((stem_darkening(10.0) - 10.0 * 0.0121 * 2.25 / 2.0).abs() < 1e-9);
+        // ...body text on a Retina screen hits the 0.3 px cap...
+        assert_eq!(stem_darkening(30.0), 0.3);
+        assert_eq!(stem_darkening(72.0), 0.3);
+        // ...and display sizes aren't darkened at all.
+        assert_eq!(stem_darkening(72.5), 0.0);
+    }
+
+    /// Ink in a raster: the sum of how far each pixel is from white.
+    fn ink(img: &Rendered) -> u64 {
+        img.pixels.as_chunks::<4>().0.iter().map(|p| 255 - p[0] as u64).sum()
+    }
+
+    #[test]
+    fn text_darkening_adds_ink_on_screen_only() {
+        let d = Document::from_text("Marketing analytics lead with twelve years of measurement work.");
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+        let plain = render_page(&d, &l.pages[0], 2.0, &RenderOptions::default());
+        let dark = render_page(&d, &l.pages[0], 2.0, &RenderOptions { text_darkening: true, ..Default::default() });
+        let (a, b) = (ink(&plain), ink(&dark));
+        // About 0.3 px more on every edge of an 11 pt line at 2x: clearly more ink, not bold.
+        assert!(b as f64 > a as f64 * 1.08 && (b as f64) < a as f64 * 1.6, "plain {a}, darkened {b}");
+        // Off by default: exports and thumbnails are untouched.
+        assert!(!RenderOptions::default().text_darkening);
     }
 
     #[test]
