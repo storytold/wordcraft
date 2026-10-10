@@ -90,6 +90,48 @@ fn font_commands_reach_persian_text() {
 }
 
 #[test]
+fn font_commands_override_inherited_complex_script_properties_explicitly() {
+    use wordcraft_doc::props::CharProps;
+
+    let mut s = session("שלום ABC", true);
+    s.doc.styles.default_chr.size_cs = Some(30.0);
+    s.doc.styles.default_chr.bold_cs = Some(true);
+    s.doc.styles.default_chr.italic_cs = Some(true);
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.bold", json!({"value": false}));
+    run(&mut s, "format.italic", json!({"value": false}));
+    run(&mut s, "format.size", json!({"size": 18}));
+    for (command, expected_size) in [
+        (None, 18.0),
+        (Some("format.growFont"), 20.0),
+        (Some("format.shrinkFont"), 18.0),
+        (Some("format.growFont1"), 19.0),
+        (Some("format.shrinkFont1"), 18.0),
+    ] {
+        if let Some(command) = command {
+            run(&mut s, command, json!({}));
+        }
+        let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+        let c = p.props_of_char(0);
+        assert_eq!((c.size_cs, c.bold_cs, c.italic_cs), (Some(expected_size), Some(false), Some(false)));
+        let d = crate::io::open_bytes("x.docx", &crate::io::save_bytes("x.docx", &s.doc).unwrap()).unwrap();
+        let c = d.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props_of_char(0);
+        let cs = d.styles.resolve_char(None, c).complex();
+        assert_eq!((cs.size, cs.bold, cs.italic), (expected_size, false, false));
+    }
+    // The font dialog's command keeps formatting both scripts when given one value.
+    run(&mut s, "format.set", json!({"props": {"size": 10, "bold": true, "italic": true}}));
+    let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    let c: &CharProps = p.props_of_char(0);
+    assert_eq!((c.size_cs, c.bold_cs, c.italic_cs), (Some(10.0), Some(true), Some(true)));
+    // Callers can still supply distinct values explicitly, including false.
+    run(&mut s, "format.set", json!({"props": {"size": 12, "sizeCs": 18, "bold": true, "boldCs": false, "italic": true, "italicCs": false}}));
+    let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    let c = p.props_of_char(0);
+    assert_eq!((c.size, c.size_cs, c.bold_cs, c.italic_cs), (Some(12.0), Some(18.0), Some(false), Some(false)));
+}
+
+#[test]
 fn arrow_keys_move_visually_in_rtl_text() {
     let fa = "سلام دنیا";
     let mut s = session(fa, true);

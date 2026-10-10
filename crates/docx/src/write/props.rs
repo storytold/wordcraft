@@ -26,9 +26,7 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     if let Some(s) = &c.style {
         w.val("w:rStyle", s);
     }
-    // The complex-script font is written only when set: without it, Persian/Arabic text keeps
-    // the style's. Complex-script bold, italic and size default to the plain ones (they come in
-    // pairs, see `CharProps::overlay`), so text formatted here looks the same in Word.
+    // Emit only explicit properties so absent values keep inheriting from the style chain.
     match (&c.font, &c.font_cs) {
         (Some(f), Some(cs)) => w.empty("w:rFonts", &[("w:ascii", f), ("w:hAnsi", f), ("w:cs", cs)]),
         (Some(f), None) => w.empty("w:rFonts", &[("w:ascii", f), ("w:hAnsi", f)]),
@@ -36,9 +34,9 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
         (None, None) => {}
     }
     toggle(w, "w:b", c.bold);
-    toggle(w, "w:bCs", c.bold_cs.or(c.bold));
+    toggle(w, "w:bCs", c.bold_cs);
     toggle(w, "w:i", c.italic);
-    toggle(w, "w:iCs", c.italic_cs.or(c.italic));
+    toggle(w, "w:iCs", c.italic_cs);
     toggle(w, "w:caps", c.caps);
     toggle(w, "w:smallCaps", c.small_caps);
     toggle(w, "w:strike", c.strike);
@@ -70,7 +68,7 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     if let Some(s) = c.size {
         w.val("w:sz", &half(s));
     }
-    if let Some(s) = c.size_cs.or(c.size) {
+    if let Some(s) = c.size_cs {
         w.val("w:szCs", &half(s));
     }
     if let Some(h) = c.highlight {

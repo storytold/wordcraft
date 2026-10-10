@@ -113,17 +113,6 @@ impl PropCtx {
                 _ => {}
             }
         }
-        // A complex-script value equal to its plain one is the same as none (see
-        // `CharProps::overlay`), which keeps documents round-tripping exactly.
-        if c.size_cs.is_some() && c.size_cs == c.size {
-            c.size_cs = None;
-        }
-        if c.bold_cs.is_some() && c.bold_cs == c.bold {
-            c.bold_cs = None;
-        }
-        if c.italic_cs.is_some() && c.italic_cs == c.italic {
-            c.italic_cs = None;
-        }
         c
     }
 

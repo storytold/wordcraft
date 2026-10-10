@@ -14,15 +14,14 @@ pub const SIZES: [f32; 17] = [8.0, 9.0, 10.0, 10.5, 11.0, 12.0, 14.0, 16.0, 18.0
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("format.bold", "Bold", "Home › Font", |s, v| {
-            // Like Word's button, for complex-script (Persian, Arabic) text too: an unset `bold_cs`
-            // follows `bold`.
+            // The button formats both plain and complex-script text explicitly.
             toggle(
                 s,
                 v,
                 |r| r.bold,
                 |c, on| {
                     c.bold = Some(on);
-                    c.bold_cs = None;
+                    c.bold_cs = Some(on);
                 },
             )
         })
@@ -35,7 +34,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 |r| r.italic,
                 |c, on| {
                     c.italic = Some(on);
-                    c.italic_cs = None;
+                    c.italic_cs = Some(on);
                 },
             )
         })
@@ -288,7 +287,7 @@ fn size(s: &mut Session, v: &Value) -> CmdResult {
     let sz = (sz * 2.0).round() / 2.0;
     apply(s, &|c| {
         c.size = Some(sz);
-        c.size_cs = None;
+        c.size_cs = Some(sz);
     })
 }
 
@@ -307,7 +306,7 @@ fn step_size(s: &mut Session, dir: i32) -> CmdResult {
     // Each run steps from its own size when the selection mixes sizes.
     apply(s, &|c| {
         c.size = Some(next);
-        c.size_cs = None;
+        c.size_cs = Some(next);
     })
 }
 
@@ -315,7 +314,7 @@ fn nudge_size(s: &mut Session, d: f32) -> CmdResult {
     let next = (current_size(s) + d).clamp(1.0, 1638.0);
     apply(s, &|c| {
         c.size = Some(next);
-        c.size_cs = None;
+        c.size_cs = Some(next);
     })
 }
 
@@ -461,7 +460,12 @@ fn char_style(s: &mut Session, v: &Value) -> CmdResult {
 }
 
 fn set(s: &mut Session, v: &Value) -> CmdResult {
-    let props: CharProps = serde_json::from_value(v.get("props").cloned().unwrap_or(Value::Null)).map_err(|e| CmdError::Params(e.to_string()))?;
+    let mut props: CharProps = serde_json::from_value(v.get("props").cloned().unwrap_or(Value::Null)).map_err(|e| CmdError::Params(e.to_string()))?;
+    // The font dialog and callers supplying one value format both scripts. Explicit
+    // complex-script values still take precedence; importing a DOCX never uses this command.
+    props.size_cs = props.size_cs.or(props.size);
+    props.bold_cs = props.bold_cs.or(props.bold);
+    props.italic_cs = props.italic_cs.or(props.italic);
     apply(s, &|c| c.overlay(&props))
 }
 

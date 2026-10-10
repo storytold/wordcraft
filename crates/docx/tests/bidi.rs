@@ -114,8 +114,8 @@ fn reads_word_style_bidi_markup() {
     assert_eq!(fa.font.as_deref(), Some("Times New Roman"));
     assert_eq!(fa.font_cs.as_deref(), Some("B Lotus"));
     assert_eq!((fa.size, fa.size_cs), (Some(12.0), Some(16.0)));
-    // b + bCs alike is stored once: an unset complex-script bold is the same as `bold`.
-    assert_eq!((fa.bold, fa.bold_cs, fa.rtl), (Some(true), None, Some(true)));
+    // Both explicit values survive, even when they happen to be equal.
+    assert_eq!((fa.bold, fa.bold_cs, fa.rtl), (Some(true), Some(true), Some(true)));
     assert_eq!((fa.lang.as_deref(), fa.lang_bidi.as_deref()), (Some("en-US"), Some("fa-IR")));
     assert_eq!(ps[1].props.bidi, Some(false));
     let x = &ps[1].runs[0].props;
