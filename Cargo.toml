@@ -49,7 +49,7 @@ harfrust = "0.13"
 vello_cpu = "0.2"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "tiff"] }
 krilla = { version = "0.8", features = ["pdf"] }
-quick-xml = "0.38"
+quick-xml = "0.41"
 zip = { version = "3", default-features = false, features = ["deflate"] }
 cfb = "0.15"
 # Password-protected (agile-encrypted) Word documents: pure-Rust RustCrypto primitives.

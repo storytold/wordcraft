@@ -65,7 +65,7 @@ fn sample() -> Document {
     let n = ip.len();
     ip.insert_object(
         n,
-        InlineObject::Image { media: key, w: 60.0, h: 30.0, alt: "tiny".into(), float: Default::default(), crop: [0.0; 4] },
+        InlineObject::Image { media: key, w: 60.0, h: 30.0, alt: "tiny".into(), float: Default::default(), crop: [0.0; 4], ole: None },
         &CharProps::default(),
     )
     .unwrap();
@@ -553,4 +553,40 @@ fn chart_alt_text_is_an_image_alt_never_body_text() {
         assert!(!text(ext).contains("Sales"), "{ext}: {}", text(ext));
     }
     assert_eq!(para_texts(&d), ["See below"]);
+}
+
+/// Hostile Markdown and HTML that rescanned the rest of the text from every `[`, `![`, `<` or `&`
+/// took quadratic time: a few hundred KB froze the importer for tens of seconds.
+#[test]
+fn hostile_importer_input_takes_linear_time() {
+    use std::time::{Duration, Instant};
+    let cases: [(&str, String); 5] = [
+        ("md", "*[".repeat(50_000)),
+        ("md", "![a](b".repeat(100_000)),
+        ("md", "[a](".repeat(100_000)),
+        ("md", "<a".repeat(200_000)),
+        ("html", "&#".repeat(500_000)),
+    ];
+    for (ext, text) in cases {
+        let t = Instant::now();
+        let d = import(ext, text.as_bytes()).unwrap().unwrap();
+        let _ = d.plain_text(Default::default());
+        assert!(t.elapsed() < Duration::from_secs(5), "{ext} {:?}... took {:?}", &text[..8], t.elapsed());
+    }
+}
+
+/// The bounded scans must not change how ordinary links, images, tags and entities read.
+#[test]
+fn bounded_scans_keep_ordinary_markdown_and_entities() {
+    let md =
+        import("md", b"See [the *docs*](https://example.com/a(b) and ![alt](x.png) & &amp; <b>bold</b> <https://example.com>.\n").unwrap().unwrap();
+    let text = md.plain_text(Default::default());
+    assert!(text.contains("the docs"), "{text}");
+    assert!(text.contains("& &"), "{text}");
+    let html = import("html", "<p>&lt;&amp;&#65;&eacute; &nosuchentity; &#x41;</p>".as_bytes()).unwrap().unwrap();
+    assert_eq!(html.plain_text(Default::default()).trim(), "<&Aé &nosuchentity; A");
+    // An entity name longer than the scan window is left alone, as before.
+    let long = format!("<p>&{};</p>", "a".repeat(40));
+    let t = import("html", long.as_bytes()).unwrap().unwrap().plain_text(Default::default());
+    assert!(t.contains(&"a".repeat(40)), "{t}");
 }
