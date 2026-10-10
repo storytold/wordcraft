@@ -46,6 +46,11 @@ pub struct CanvasState {
     pub(crate) obj_drag: Option<crate::objects::ObjectDrag>,
     /// Pages per row last frame; when it changes the caret's page is scrolled back into view.
     pub cols: usize,
+    /// Wheel/touchpad scrolling (smooth notches, touchpad momentum).
+    pub(crate) wheel: crate::scroll::CanvasScroll,
+    /// The scroll offset and its maximum at the end of last frame.
+    pub(crate) scroll_offset: egui::Vec2,
+    scroll_max: egui::Vec2,
 }
 
 impl CanvasState {
@@ -79,6 +84,9 @@ impl Default for CanvasState {
             context_menu_open: false,
             mini_anchor: None,
             cols: 1,
+            wheel: Default::default(),
+            scroll_offset: egui::Vec2::ZERO,
+            scroll_max: egui::Vec2::ZERO,
         }
     }
 }
@@ -285,7 +293,28 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     app.canvas.scroll_to_caret = false;
     let mut origin = area.min;
     let mut ui_area = ui.new_child(egui::UiBuilder::new().max_rect(area));
-    let out = egui::ScrollArea::both().id_salt("canvas_scroll").auto_shrink([false, false]).show_viewport(&mut ui_area, |ui, viewport| {
+    // The canvas scrolls itself on wheel/touchpad input (crate::scroll): touchpads 1:1 with
+    // momentum, wheel notches eased in. Applied before drawing, so it shows this frame.
+    let hovered = ui.rect_contains_pointer(area) && ui.ctx().dragged_id().is_none();
+    let notch = crate::scroll::notch_px(app.canvas.scale / PX_PER_PT);
+    let opts = ui.ctx().options(|o| o.input_options);
+    let delta = ui.input(|i| app.canvas.wheel.frame(i, &opts, hovered, notch, area.height()));
+    let mut scroll_area = egui::ScrollArea::both()
+        .id_salt("canvas_scroll")
+        .auto_shrink([false, false])
+        .scroll_source(egui::scroll_area::ScrollSource { mouse_wheel: false, ..Default::default() });
+    if delta != egui::Vec2::ZERO {
+        let before = app.canvas.scroll_offset;
+        let after = (before - delta).clamp(egui::Vec2::ZERO, app.canvas.scroll_max);
+        if after == before {
+            app.canvas.wheel.hit_edge();
+        }
+        scroll_area = scroll_area.scroll_offset(after);
+    }
+    if app.canvas.wheel.is_animating() {
+        ui.ctx().request_repaint();
+    }
+    let out = scroll_area.show_viewport(&mut ui_area, |ui, viewport| {
         origin = ui.min_rect().min - viewport.min.to_vec2();
         let content = Rect::from_min_size(ui.min_rect().min, geo.size);
         let resp = ui.allocate_rect(content, Sense::click_and_drag());
@@ -482,6 +511,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         crate::objects::paint(app, &painter, &t, &layout, &rects, geo.scale);
         (resp, rects)
     });
+    app.canvas.scroll_offset = out.state.offset;
+    app.canvas.scroll_max = (out.content_size - out.inner_rect.size()).max(egui::Vec2::ZERO);
     let (resp, rects) = out.inner;
     // Focus: the canvas takes keyboard focus on click and keeps Tab/arrows.
     if resp.clicked() || resp.drag_started() || app.canvas.want_focus {

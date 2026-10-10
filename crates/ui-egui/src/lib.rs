@@ -31,6 +31,7 @@ pub mod panes;
 pub mod previews;
 pub mod read_aloud;
 pub mod ribbon;
+pub mod scroll;
 pub mod theme;
 pub mod widgets;
 pub mod window_geometry;
@@ -1039,6 +1040,46 @@ mod tests {
         let pos = canvas::pos_from_screen(&mut a, p).unwrap();
         let caret = a.session.layout().caret_on(&pos, 3).unwrap();
         assert_eq!(caret.page, 3);
+    }
+
+    /// Issue #122: touchpad deltas scroll the page 1:1 at once; a wheel notch eases in to about
+    /// three lines.
+    #[test]
+    fn touchpad_scrolls_one_to_one_and_wheel_notches_ease_in() {
+        let ctx = egui::Context::default();
+        let mut a = app();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 600.0));
+        let mut t = 0.0;
+        let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+            t += 1.0 / 60.0;
+            let input = egui::RawInput { events, time: Some(t), screen_rect: Some(screen), ..Default::default() };
+            ctx.run_ui(input, |ui| {
+                a.logic(ui.ctx());
+                a.ui(ui);
+            })
+            .drop_without_applying_deltas();
+        };
+        for _ in 0..3 {
+            frame(&mut a, Vec::new());
+        }
+        let over_page = a.canvas.canvas_rect.unwrap().center();
+        frame(&mut a, vec![egui::Event::PointerMoved(over_page)]);
+        let wheel = |unit, y: f32, phase| egui::Event::MouseWheel { unit, delta: egui::vec2(0.0, y), phase, modifiers: egui::Modifiers::NONE };
+        let start = a.canvas.scroll_offset.y;
+        frame(&mut a, vec![wheel(egui::MouseWheelUnit::Point, -40.0, egui::TouchPhase::Start)]);
+        assert_eq!(a.canvas.scroll_offset.y, start + 40.0, "the first touchpad delta lands in the same frame");
+        // Fingers lift; the coast after it is left to the unit tests (crate::scroll).
+        frame(&mut a, vec![wheel(egui::MouseWheelUnit::Point, 0.0, egui::TouchPhase::End)]);
+        a.canvas.wheel = Default::default();
+        let at = a.canvas.scroll_offset.y;
+        frame(&mut a, vec![wheel(egui::MouseWheelUnit::Line, -1.0, egui::TouchPhase::Move)]);
+        let first = a.canvas.scroll_offset.y - at;
+        for _ in 0..30 {
+            frame(&mut a, Vec::new());
+        }
+        let notch = crate::scroll::notch_px(a.canvas.scale / crate::canvas::PX_PER_PT);
+        assert!(first > 0.0 && first < notch, "a notch eases in: {first}");
+        assert!((a.canvas.scroll_offset.y - at - notch).abs() < 0.5, "a notch scrolls {notch}: {}", a.canvas.scroll_offset.y - at);
     }
 
     #[test]
