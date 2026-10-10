@@ -38,18 +38,12 @@ fn default_margins(t: &Table, style: Option<&TableStyleProps>) -> [f32; 4] {
 }
 
 /// The leading cell's outer margin: how far its text sits inside the table's leading edge —
-/// the first cell's left margin, or, for a right-to-left table, the last cell's right margin.
+/// the first cell's left margin, or, for a right-to-left table, the first cell's right margin
+/// (the first logical column shows on the right).
 pub(crate) fn leading_cell_margin(ctx: &Ctx, t: &Table) -> f32 {
     let def = default_margins(t, table_style(ctx, t).as_ref());
-    if t.props.rtl {
-        t.rows.first().and_then(|r| r.cells.last()).and_then(|c| c.props.margins).unwrap_or(def)[3]
-    } else {
-        first_cell_left_margin_in(t, def)
-    }
-}
-
-fn first_cell_left_margin_in(t: &Table, def: [f32; 4]) -> f32 {
-    t.rows.first().and_then(|r| r.cells.first()).and_then(|c| c.props.margins).unwrap_or(def)[1]
+    let side = if t.props.rtl { 3 } else { 1 };
+    t.rows.first().and_then(|r| r.cells.first()).and_then(|c| c.props.margins).unwrap_or(def)[side]
 }
 
 pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], avail: f32, depth: usize) -> TableLayout {
@@ -100,17 +94,17 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
     }
     let first_cell = t.rows.first().and_then(|r| r.cells.first());
     // The indent side follows the table's direction: a right-to-left table's indent is measured
-    // from the text's right edge (`w:tblInd` off the leading margin), with the border half and
-    // the leading cell margin taken from the visual-right (logical-last) cell.
-    let edge_cell = if rtl { t.rows.first().and_then(|r| r.cells.last()) } else { first_cell };
-    let edge_margin = edge_cell.and_then(|c| c.props.margins).unwrap_or(margins_def)[if rtl { 3 } else { 1 }];
+    // from the text's right edge (`w:tblInd` off the leading margin). The cell on that edge is
+    // the first logical cell (mirrored to the right), so its physical right margin and border
+    // set the inset.
+    let edge_margin = first_cell.and_then(|c| c.props.margins).unwrap_or(margins_def)[if rtl { 3 } else { 1 }];
     let x = match t.props.align {
         Some(Align::Center) => (avail - total) / 2.0,
         Some(Align::Right) => avail - total,
         _ if ctx.doc.settings.compat_mode >= 15 => {
             // The border is centred on the edge, so half of it sits outside: Word moves the
             // table in by that half.
-            let border = edge_cell.and_then(|c| c.props.borders.and_then(|b| if rtl { b.right } else { b.left })).or(if rtl {
+            let border = first_cell.and_then(|c| c.props.borders.and_then(|b| if rtl { b.right } else { b.left })).or(if rtl {
                 tborders.right
             } else {
                 tborders.left
@@ -197,11 +191,15 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             let edge =
                 |own: Option<Border>, outer: bool, outer_b: Option<Border>, inner_b: Option<Border>| own.or(if outer { outer_b } else { inner_b });
             let cb = cell.props.borders.unwrap_or_default();
+            // Effective borders: cell > table (outer vs inside). Outer-ness follows the visual
+            // edge: in a right-to-left table the first logical column is on the right.
+            let outer_left = if rtl { g + span >= ncols } else { g == 0 };
+            let outer_right = if rtl { g == 0 } else { g + span >= ncols };
             let mut borders = Borders {
                 top: edge(cb.top, ri == 0, tb.top, tb.between),
                 bottom: edge(cb.bottom, ri + 1 == nrows, tb.bottom, tb.between),
-                left: edge(cb.left, g == 0, tb.left, tb.inside_v),
-                right: edge(cb.right, g + span >= ncols, tb.right, tb.inside_v),
+                left: edge(cb.left, outer_left, tb.left, tb.inside_v),
+                right: edge(cb.right, outer_right, tb.right, tb.inside_v),
                 between: None,
                 inside_v: None,
             };

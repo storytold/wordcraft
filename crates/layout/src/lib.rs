@@ -648,20 +648,23 @@ impl PageBuilder<'_> {
         }
         let total = self.notes_h();
         let w = self.sect.text_width();
-        let x = if self.sect.rtl { body_x(self.sect) + w - 144.0 } else { body_x(self.sect) };
+        let bx = body_x(self.sect);
+        // The separator hugs the section's leading edge; footnote content always fills the text
+        // area from its left (its paragraphs align themselves).
+        let sx = if self.sect.rtl { bx + w - 144.0 } else { bx };
         let mut y = self.orig_bottom - total + NOTE_SEP;
         let notes = std::mem::take(&mut self.notes);
         if let Some(pg) = self.pages.last_mut() {
             pg.items.push(Placed::Rule {
-                x0: x,
+                x0: sx,
                 y0: y - NOTE_SEP / 2.0,
-                x1: x + 144.0,
+                x1: sx + 144.0,
                 y1: y - NOTE_SEP / 2.0,
                 border: Border { style: wordcraft_doc::props::BorderStyle::Single, width: 0.5, color: None, space: 0.0 },
             });
             for (_, items, h) in notes {
                 for mut it in items {
-                    it.translate(x, y);
+                    it.translate(bx, y);
                     pg.items.push(it);
                 }
                 y += h;
@@ -713,12 +716,13 @@ impl PageBuilder<'_> {
                     }
                 }
             }
-            // Lines between columns.
+            // Lines between columns: the midpoint of each gap, from physical edges so column
+            // order (mirrored for right-to-left sections) doesn't matter.
             if s.columns.separator && s.columns.count > 1 {
                 let cols = ordered_columns(s);
                 for w in cols.windows(2) {
-                    if let [(ax, aw), (bx, _)] = w {
-                        let x = body_x(s) + (ax + aw + bx) / 2.0;
+                    if let [(ax, aw), (bx, bw)] = w {
+                        let x = body_x(s) + (ax.max(*bx) + (*ax + *aw).min(*bx + *bw)) / 2.0;
                         decor.push(Placed::Rule { x0: x, y0: body_top, x1: x, y1: s.page_h - s.margin_bottom, border: Border::single(0.5) });
                     }
                 }

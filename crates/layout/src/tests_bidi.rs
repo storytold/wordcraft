@@ -571,7 +571,7 @@ fn body_line_xs_on(l: &DocLayout, page: usize) -> Vec<f32> {
 fn issue_215_report_strings_lay_out_right_to_left() {
     // Exact strings from #215 (filed against 0.4.0, before bidi layout): Hebrew, Arabic and a
     // mixed line must start at the right margin in visual order.
-    let mut d = doc_of(&[("שלום עולם", true), ("مرحبا بالعالم", true), ("שלום WordCraft 2026", true)]);
+    let d = doc_of(&[("שלום עולם", true), ("مرحبا بالعالم", true), ("שלום WordCraft 2026", true)]);
     // The mixed line: Hebrew, Latin and digits each keep their direction (UAX #9).
     let l = lay(&d);
     assert!((caret_x(&l, 0, 0) - 540.0).abs() < 1.0, "Hebrew starts at the right margin");
@@ -655,7 +655,7 @@ fn rtl_shapes_floats_headers_and_notes() {
     assert!(hg > 0, "the Arabic header shapes into glyphs");
     // An Arabic footnote is numbered and placed at the page bottom.
     let mut n = Document::from_text(&"Body text line.\n".repeat(10));
-    let note = wordcraft_doc::Paragraph::with_text("ملاحظة عربية.", Default::default());
+    let note = wordcraft_doc::Paragraph::with_text("ملاحظة عربية طويلة بما يكفي لاختبار موضع المحتوى داخل الصفحة.", Default::default());
     let id = n.add_part(wordcraft_doc::PartKind::Footnote, vec![wordcraft_doc::para_block(note)]);
     n.insert_object(
         &Pos::body(3, 4),
@@ -663,9 +663,26 @@ fn rtl_shapes_floats_headers_and_notes() {
         &Default::default(),
     )
     .unwrap();
+    n.last_section.rtl = true;
     let l = lay(&n);
     let c = l.caret_on(&Pos { story: StoryRef::Part(id), path: wordcraft_doc::Path::top(0), off: 0 }, 0).unwrap();
     assert!(c.top > 500.0, "note at the bottom: {c:?}");
+    // The content stays inside the text area (the separator alone hugs the right edge).
+    assert!(c.x >= 72.0 && c.x <= 540.0, "note content on the page: {c:?}");
+    let mut checked = 0;
+    for it in &l.pages[0].items {
+        if let Placed::Lines { story: StoryRef::Part(nid), para, l0, l1, x, .. } = it
+            && *nid == id
+        {
+            for li in *l0..*l1 {
+                checked += 1;
+                let line = &para.lines[li];
+                let (a, b) = (x + line.cl_left(line.c0).unwrap_or(0.0), x + line.cl_right(line.c1.saturating_sub(1)).unwrap_or(0.0));
+                assert!(a.min(b) >= 72.0 - 0.5 && a.max(b) <= 540.0 + 0.5, "note line on the page: {a}..{b}");
+            }
+        }
+    }
+    assert!(checked > 0, "footnote lines found on the page");
 }
 
 #[test]
@@ -837,6 +854,117 @@ fn rtl_footnote_separator_starts_from_the_right() {
     let rtl_sep = horizontal_rules(&rtl.pages[0]);
     assert_eq!(rtl_sep.len(), 1);
     assert!((rtl_sep[0].1 - (72.0 + 468.0)).abs() < 0.5, "RTL separator to the right edge: {rtl_sep:?}");
+}
+
+/// Vertical rules on the first page: (x, width), left to right.
+fn vertical_rules(l: &DocLayout) -> Vec<(f32, f32)> {
+    let mut v: Vec<(f32, f32)> = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| {
+            if let Placed::Rule { x0, y0, x1, y1, border } = it
+                && (x0 - x1).abs() < 0.01
+                && (y1 - y0).abs() > 3.0
+            {
+                Some((*x0, border.width))
+            } else {
+                None
+            }
+        })
+        .collect();
+    v.sort_by(|a, b| a.0.total_cmp(&b.0));
+    v
+}
+
+#[test]
+fn rtl_table_borders_stay_on_physical_edges() {
+    use wordcraft_doc::props::{Border, Borders};
+    // Asymmetric table borders: outer 8 left / 4 right, hairline inside. The outer widths must
+    // draw at the table's physical edges even though storage order is mirrored.
+    let mut t = Table::new(2, 2, 200.0);
+    t.props.rtl = true;
+    t.props.style = None;
+    t.props.borders = Some(Borders {
+        top: None,
+        bottom: None,
+        left: Some(Border::single(8.0)),
+        right: Some(Border::single(4.0)),
+        between: None,
+        inside_v: Some(Border::single(1.0)),
+    });
+    // Second row merged across both columns: its sides are outer edges too.
+    t.merge(1, 1, 0, 1);
+    let mut d = Document::from_text("before");
+    d.insert_block(StoryRef::Body, &wordcraft_doc::Path::top(1), Block::Table(t)).unwrap();
+    let l = lay(&d);
+    // The table ends at the text's right edge minus half the indent-side (right, 4pt) border:
+    // x = 468 − 200 − 2, so edges at 338/438/538. Both cells draw their shared join.
+    let rules = vertical_rules(&l);
+    assert_eq!(rules.len(), 6, "outer edges plus joins: {rules:?}");
+    let at = |x: f32| rules.iter().filter(|(rx, _)| (*rx - x).abs() < 0.5).map(|(_, w)| *w).collect::<Vec<_>>();
+    assert_eq!(at(338.0), vec![8.0, 8.0], "visual-left edge keeps the outer left border: {rules:?}");
+    assert_eq!(at(438.0), vec![1.0, 1.0], "the middle join keeps the inside border: {rules:?}");
+    assert_eq!(at(538.0), vec![4.0, 4.0], "visual-right edge keeps the outer right border: {rules:?}");
+}
+
+#[test]
+fn rtl_table_indent_uses_the_first_logical_cell() {
+    use wordcraft_doc::props::{Border, Borders};
+    // Compatibility mode 14: the leading (right) edge lines the first cell's text up with the
+    // margin, using the FIRST logical cell's right margin — not the last cell's.
+    let mut t = Table::new(1, 2, 200.0);
+    t.props.rtl = true;
+    t.rows[0].cells[0].props.margins = Some([0.0, 5.4, 0.0, 30.0]);
+    t.rows[0].cells[1].props.margins = Some([0.0, 5.4, 0.0, 1.0]);
+    let mut d = Document::from_text("before");
+    d.settings.compat_mode = 14;
+    d.insert_block(StoryRef::Body, &wordcraft_doc::Path::top(1), Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let right =
+        l.pages[0].items.iter().filter_map(|it| if let Placed::Cell { rect, .. } = it { Some(rect.x + rect.w) } else { None }).fold(0.0f32, f32::max);
+    assert!((right - 570.0).abs() < 1.0, "leading edge clears the first cell's margin: {right}");
+    // Word 2013+ mode: the border half comes from the first cell's right border.
+    let mut t = Table::new(1, 2, 200.0);
+    t.props.rtl = true;
+    t.props.style = None;
+    t.rows[0].cells[0].props.borders = Some(Borders { right: Some(Border::single(4.0)), ..Default::default() });
+    let mut d = Document::from_text("before");
+    d.insert_block(StoryRef::Body, &wordcraft_doc::Path::top(1), Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let right =
+        l.pages[0].items.iter().filter_map(|it| if let Placed::Cell { rect, .. } = it { Some(rect.x + rect.w) } else { None }).fold(0.0f32, f32::max);
+    assert!((right - 538.0).abs() < 1.0, "leading edge clears half the border: {right}");
+}
+
+#[test]
+fn rtl_column_separators_split_unequal_gaps() {
+    use wordcraft_doc::section::Columns;
+    // Unequal columns 120 + 36 + 312: the gap midpoint is direction-independent.
+    let mut ltr = Document::from_text("body");
+    ltr.last_section.columns = Columns { count: 2, space: 36.0, separator: true, widths: vec![(120.0, 36.0), (312.0, 0.0)] };
+    let ltr = lay(&ltr);
+    let mut rtl = Document::from_text("body");
+    rtl.last_section.columns = Columns { count: 2, space: 36.0, separator: true, widths: vec![(120.0, 36.0), (312.0, 0.0)] };
+    rtl.last_section.rtl = true;
+    let rtl = lay(&rtl);
+    let sep = |l: &DocLayout| {
+        l.pages[0]
+            .items
+            .iter()
+            .filter_map(|it| {
+                if let Placed::Rule { x0, y0, x1, y1, .. } = it
+                    && (x0 - x1).abs() < 0.01
+                    && y1 - y0 > 400.0
+                {
+                    Some(*x0)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(sep(&ltr), vec![210.0], "LTR gap midpoint");
+    assert_eq!(sep(&rtl), vec![402.0], "RTL gap midpoint mirrors exactly");
 }
 
 /// Long horizontal rules on a page: (x0, x1).
