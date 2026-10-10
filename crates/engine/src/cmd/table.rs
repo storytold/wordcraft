@@ -210,7 +210,7 @@ fn sync_cell_widths(t: &mut Table) {
         let mut g = 0usize;
         for c in &mut row.cells {
             let span = c.span();
-            let w: f32 = grid.get(g..(g + span).min(grid.len())).unwrap_or(&[]).iter().sum();
+            let w: f32 = grid.get(g..g.saturating_add(span).min(grid.len())).unwrap_or(&[]).iter().sum();
             if w > 0.0 {
                 c.props.width = Some(w);
             }
