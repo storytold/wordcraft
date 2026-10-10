@@ -21,7 +21,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU16;
 use std::sync::Arc;
 
@@ -29,6 +29,7 @@ use krilla::action::{Action, LinkAction};
 use krilla::annotation::{Annotation, LinkAnnotation, Target};
 use krilla::color::rgb;
 use krilla::destination::XyzDestination;
+use krilla::error::KrillaError;
 use krilla::geom::{Path, PathBuilder, Point, Size, Transform};
 use krilla::image::Image;
 use krilla::metadata::{DateTime, Metadata};
@@ -103,6 +104,31 @@ pub fn export_layout(doc: &Document, lay: &DocLayout, opts: &PdfOptions) -> Resu
     if pages.is_empty() {
         return Err(PdfError::NoPages);
     }
+    // krilla subsets fonts only when the document is finished, so one font it can't subset fails
+    // the whole export. Draw that font's glyphs as outlines instead and write the document again.
+    let mut outlined = HashSet::new();
+    loop {
+        match write(doc, lay, opts, &pages, &outlined)? {
+            Attempt::Done(bytes) => return Ok(bytes),
+            Attempt::BadFont(id, msg) if outlined.len() < MAX_OUTLINED_FONTS && outlined.insert(id) => {
+                log::warn!("PDF: {msg}; its text is drawn as outlines");
+            }
+            Attempt::BadFont(_, msg) => return Err(PdfError::Write(msg)),
+        }
+    }
+}
+
+/// How many unsubsettable fonts we fall back to outlines for before giving up.
+const MAX_OUTLINED_FONTS: usize = 32;
+
+/// One try at writing the PDF.
+enum Attempt {
+    Done(Vec<u8>),
+    /// The face with this id could not be embedded (and why).
+    BadFont(u32, String),
+}
+
+fn write(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[usize], outlined: &HashSet<u32>) -> Result<Attempt, PdfError> {
     let settings = krilla::SerializeSettings { compress_content_streams: opts.compress, enable_tagging: opts.tagged, ..Default::default() };
     let mut pdf = krilla::Document::new_with(settings);
     pdf.set_metadata(metadata(doc, opts));
@@ -113,13 +139,14 @@ pub fn export_layout(doc: &Document, lay: &DocLayout, opts: &PdfOptions) -> Resu
         opts,
         out_index: pages.iter().enumerate().map(|(o, p)| (*p, o)).collect(),
         fonts: HashMap::new(),
+        outlined,
         cmaps: HashMap::new(),
         images: HashMap::new(),
         tags: Vec::new(),
         tag_index: HashMap::new(),
         links: Vec::new(),
     };
-    if let Some(o) = ex.outline(&pages) {
+    if let Some(o) = ex.outline(pages) {
         pdf.set_outline(o);
     }
     for (out, &pi) in pages.iter().enumerate() {
@@ -139,7 +166,45 @@ pub fn export_layout(doc: &Document, lay: &DocLayout, opts: &PdfOptions) -> Resu
     if opts.tagged {
         pdf.set_tag_tree(ex.tag_tree());
     }
-    pdf.finish().map_err(|e| PdfError::Write(format!("{e:?}")))
+    match pdf.finish() {
+        Ok(bytes) => Ok(Attempt::Done(bytes)),
+        Err(KrillaError::Font(font, msg)) => {
+            let bad = ex.fonts.iter().find(|(_, (_, f))| f.as_ref() == Some(&font));
+            match bad {
+                Some((id, (face, _))) => Ok(Attempt::BadFont(*id, format!("font {} {} could not be embedded ({msg})", face.family, face.style))),
+                None => Err(PdfError::Write(format!("a font could not be embedded ({msg})"))),
+            }
+        }
+        Err(e) => Err(PdfError::Write(format!("{e:?}"))),
+    }
+}
+
+/// The outlines of `glyphs` (glyph id, pen position) at `size`, as one path in page coordinates.
+fn glyph_outlines(face: &FaceRef, size: f32, glyphs: &[(u32, f32, f32)]) -> Option<Path> {
+    let db = wordcraft_fonts::FontDb::global();
+    let scale = f64::from(size) / face.upem.max(1.0);
+    let mut pb = PathBuilder::new();
+    for &(g, x, y) in glyphs {
+        // Outlines are in font units, y-down: scale to the size, move to the pen position.
+        let mut outline = (*db.outline(face, g)).clone();
+        outline.apply_affine(kurbo::Affine::translate((f64::from(x), f64::from(y))) * kurbo::Affine::scale(scale));
+        append_path(&mut pb, &outline);
+    }
+    pb.finish()
+}
+
+/// Add the segments of a kurbo path to a krilla path.
+fn append_path(pb: &mut PathBuilder, path: &kurbo::BezPath) {
+    let f = |v: f64| v as f32;
+    for el in path.elements() {
+        match *el {
+            kurbo::PathEl::MoveTo(p) => pb.move_to(f(p.x), f(p.y)),
+            kurbo::PathEl::LineTo(p) => pb.line_to(f(p.x), f(p.y)),
+            kurbo::PathEl::QuadTo(a, p) => pb.quad_to(f(a.x), f(a.y), f(p.x), f(p.y)),
+            kurbo::PathEl::CurveTo(a, b, p) => pb.cubic_to(f(a.x), f(a.y), f(b.x), f(b.y), f(p.x), f(p.y)),
+            kurbo::PathEl::ClosePath => pb.close(),
+        }
+    }
 }
 
 fn clamp_side(v: f32) -> f32 {
@@ -341,7 +406,10 @@ struct Exporter<'a> {
     opts: &'a PdfOptions,
     /// Layout page index → output page index.
     out_index: HashMap<usize, usize>,
-    fonts: HashMap<u32, Option<Font>>,
+    /// Embedded fonts by face id (`None`: krilla can't read it).
+    fonts: HashMap<u32, (FaceRef, Option<Font>)>,
+    /// Faces whose glyphs are drawn as outlines because krilla can't subset them.
+    outlined: &'a HashSet<u32>,
     cmaps: HashMap<u32, Arc<HashMap<u32, char>>>,
     images: HashMap<String, Option<Image>>,
     tags: Vec<TagEntry>,
@@ -363,17 +431,22 @@ enum Role {
 
 impl Exporter<'_> {
     fn font(&mut self, face: &FaceRef) -> Option<Font> {
+        if self.outlined.contains(&face.id()) {
+            return None;
+        }
         self.fonts
             .entry(face.id())
             .or_insert_with(|| {
                 let data: krilla::Data = face.data().to_vec().into();
-                if face.is_variable() {
+                let font = if face.is_variable() {
                     let coords: Vec<(krilla::text::Tag, f32)> = face.coords.iter().map(|(t, v)| (krilla::text::Tag::new(t), *v)).collect();
                     Font::new_variable(data, face.index(), &coords)
                 } else {
                     Font::new(data, face.index())
-                }
+                };
+                (*face, font)
             })
+            .1
             .clone()
     }
 
@@ -746,10 +819,11 @@ impl Exporter<'_> {
         if !glyphs.iter().all(|(_, x, y)| ok(*x) && ok(*y)) {
             return;
         }
-        let Some(font) = self.font(face) else {
+        let font = self.font(face);
+        if font.is_none() && !self.outlined.contains(&face.id()) {
             log::warn!("PDF: font {} {} could not be embedded", face.family, face.style);
             return;
-        };
+        }
         // Layout's glyph → text mapping when it has one (right-to-left text, contextual forms and
         // ligatures can't be guessed back from the font's cmap), else a guess.
         let valid = known.len() == glyphs.len() && known.iter().all(|r| r.start < r.end && text.get(r.clone()).is_some());
@@ -777,7 +851,16 @@ impl Exporter<'_> {
         } else {
             None
         });
-        s.draw_glyphs(Point::from_xy(x0, y0), &kg, font, &txt, size, false);
+        match font {
+            Some(font) => {
+                s.draw_glyphs(Point::from_xy(x0, y0), &kg, font, &txt, size, false);
+            }
+            None => {
+                if let Some(path) = glyph_outlines(face, size, glyphs) {
+                    s.draw_path(&path);
+                }
+            }
+        }
         s.set_fill(None);
         s.set_stroke(None);
         if pushed {
@@ -916,7 +999,10 @@ impl Exporter<'_> {
         let (c, sn) = (angle.cos(), angle.sin());
         let (dx, dy) = (-raw_w * size / 2.0, size * 0.35);
         let (cx, cy) = (w / 2.0, hh / 2.0);
-        let Some(font) = self.font(&face) else { return };
+        let font = self.font(&face);
+        if font.is_none() && !self.outlined.contains(&face.id()) {
+            return;
+        }
         let glyphs: Vec<KrillaGlyph> = shaped
             .iter()
             .enumerate()
@@ -937,7 +1023,23 @@ impl Exporter<'_> {
         s.push_transform(&Transform::from_row(c, sn, -sn, c, c * dx - sn * dy + cx, sn * dx + c * dy + cy));
         s.set_stroke(None);
         s.set_fill(Some(fill(wm.color, if wm.semitransparent { 0.5 } else { 1.0 })));
-        s.draw_glyphs(Point::from_xy(0.0, 0.0), &glyphs, font, &text, size, false);
+        match font {
+            Some(font) => {
+                s.draw_glyphs(Point::from_xy(0.0, 0.0), &glyphs, font, &text, size, false);
+            }
+            None => {
+                let k = size / upem;
+                let mut x = 0.0;
+                let mut pen = Vec::with_capacity(shaped.len());
+                for g in &shaped {
+                    pen.push((g.gid, x + g.x_offset as f32 * k, -(g.y_offset as f32) * k));
+                    x += g.x_advance as f32 * k;
+                }
+                if let Some(path) = glyph_outlines(&face, size, &pen) {
+                    s.draw_path(&path);
+                }
+            }
+        }
         s.set_fill(None);
         s.pop();
     }

@@ -61,6 +61,8 @@
 	Automatic Table 2 (2 levels)	自动目录 2（2 级）
 	AutoSave	自动保存
 	AutoSave documents that have been saved	自动保存已保存过的文档
+	Dark page (white text on black)	深色页面（黑底白字）
+	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	像“视图 › 切换模式”一样以反转的颜色显示文档。保存、打印和 PDF 不受影响。
 	AutoSave saves every change to the file (needs a saved document)	自动保存会把每次更改写入文件（文档需已保存）
 	AutoText	自动图文集
 	Backspace	退格
@@ -448,6 +450,7 @@
 	OK	确定
 	One	一栏
 	One Page	单页
+	Only web (http, https) and email (mailto) links can be followed	只能打开网页（http、https）和电子邮件（mailto）链接
 	Open	打开
 	OpenDocument Text (*.odt)	OpenDocument 文本 (*.odt)
 	Optional Hyphen	可选连字符

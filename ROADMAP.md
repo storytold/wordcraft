@@ -110,6 +110,7 @@ the icon art).
 - Right-to-left and Persian text: bidi reordering (UAX #9), Arabic-script shaping, right-to-left
   paragraphs (Left-to-Right / Right-to-Left Text Direction), visual arrow keys, `w:rtl`/`w:cs`/`w:szCs`
   /`w:bCs`/`w:iCs`/`w:rFonts w:cs`/`w:lang w:bidi` round-trip, Persian font substitutes.
+- Brazilian Portuguese interface catalog: all existing 771 labels, `pt-BR` locale detection and a persisted language choice (#127).
 - Text wraps around floating pictures and shapes; text boxes lay out their own text.
 - Table rows split across pages between lines (Can't Split honoured, header rows repeat).
 - Drop caps; automatic hyphenation with Word's 0.25" hyphenation zone; soft hyphens.

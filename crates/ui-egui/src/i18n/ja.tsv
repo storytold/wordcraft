@@ -50,6 +50,8 @@
 	Automatic Table 2 (2 levels)	自動目次 2（2 レベル）
 	AutoSave	自動保存
 	AutoSave documents that have been saved	保存済みの文書を自動保存する
+	Dark page (white text on black)	ダーク ページ (黒地に白い文字)
+	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	表示 › モードの切り替えと同様に、文書の色を反転して表示します。保存、印刷、PDF は変わりません。
 	AutoSave saves every change to the file (needs a saved document)	自動保存は変更のたびにファイルへ保存します（保存済みの文書が必要です）
 	AutoText	定型句
 	Backspace	Backspace
@@ -437,6 +439,7 @@
 	OK	OK
 	One	1 段
 	One Page	1 ページ
+	Only web (http, https) and email (mailto) links can be followed	開けるのは Web（http、https）とメール（mailto）のリンクだけです
 	Open	開く
 	OpenDocument Text (*.odt)	OpenDocument テキスト (*.odt)
 	Optional Hyphen	任意指定のハイフン

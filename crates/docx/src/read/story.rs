@@ -323,6 +323,11 @@ impl Reader<'_> {
                     self.read_inline_children(sc, pb, c, rels, ctx, depth + 1);
                 }
             }
+            // Some generators write a break directly under the paragraph instead of inside a run.
+            "w:br" | "w:cr" => {
+                let props = self.run_props_none(ctx);
+                self.read_run_child(sc, pb, k, &props, rels, &mut None, depth + 1);
+            }
             _ => {}
         }
     }
