@@ -3,7 +3,7 @@ Type=Application
 Name=WordCraft
 GenericName=Word Processor
 Comment=Write and design documents; open and save Word files
-Exec=wordcraft %F
+Exec=env WINIT_X11_SCALE_FACTOR=1 wordcraft %F
 TryExec=wordcraft
 Icon=ai.storyteller.wordcraft
 Terminal=false
