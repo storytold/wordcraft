@@ -85,26 +85,6 @@ fn default_margins(t: &Table, style: Option<&TableStyleProps>) -> [f32; 4] {
     t.props.cell_margins.or(style.and_then(|s| s.parts.cell_margins)).unwrap_or(DEFAULT_MARGINS)
 }
 
-/// A cell region's text formatting from the table style: the whole table's, then column, then
-/// row conditional formatting (later regions win, ECMA-376 §17.7.6). `region` is (header row,
-/// total row, first column, row band).
-fn region_text(st: &TableStyleProps, region: (bool, bool, bool, bool)) -> CellText {
-    let (is_header, is_total, first_col, band) = region;
-    let mut chr = st.chr.clone();
-    if band {
-        chr.overlay(&st.parts.band_chr);
-    }
-    if first_col {
-        chr.overlay(&st.parts.first_col_chr);
-    }
-    if is_header {
-        chr.overlay(&st.parts.header_chr);
-    } else if is_total {
-        chr.overlay(&st.parts.total_chr);
-    }
-    CellText { para: st.para.clone(), chr }
-}
-
 /// The most paragraphs [`measure_table_columns`] lays out: a huge table is measured by its first
 /// rows only, so AutoFit stays quick.
 const MEASURE_BUDGET: usize = 4000;
