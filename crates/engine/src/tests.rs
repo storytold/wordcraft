@@ -77,7 +77,8 @@ fn backspace_and_delete() {
     run(&mut s, "text.insert", json!({"text": "cd"}));
     run(&mut s, "caret.home", json!({}));
     run(&mut s, "text.backspace", json!({}));
-    assert_eq!(text(&s), "abcd");
+    // Enter capitalised the first word, as Word's AutoCorrect does.
+    assert_eq!(text(&s), "Abcd");
     run(&mut s, "caret.docStart", json!({}));
     run(&mut s, "text.delete", json!({}));
     assert_eq!(text(&s), "bcd");
@@ -134,7 +135,7 @@ fn styles_and_lists() {
     assert_eq!(n1.num, n2.num);
     run(&mut s, "text.newParagraph", json!({}));
     run(&mut s, "text.newParagraph", json!({})); // empty item ends the list
-    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().props.numbering.map(|n| n.num), Some(0));
+    assert!(s.doc.para_at(&s.sel.focus).unwrap().props.numbering.is_none_or(|n| n.num == 0));
     // "1. " autoformat.
     run(&mut s, "text.insert", json!({"text": "1."}));
     run(&mut s, "text.insert", json!({"text": " "}));

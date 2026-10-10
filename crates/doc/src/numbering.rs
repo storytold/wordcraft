@@ -100,6 +100,8 @@ pub enum ListKind {
     UpperLetter,
     /// a) b) c)
     LowerLetter,
+    /// a. b. c.
+    LowerLetterDot,
     /// i. ii. iii.
     LowerRoman,
     /// 1. 1.1. 1.1.1.
@@ -115,6 +117,7 @@ impl ListKind {
             "outline" => ListKind::Outline,
             "upperLetter" => ListKind::UpperLetter,
             "lowerLetter" => ListKind::LowerLetter,
+            "lowerLetterDot" => ListKind::LowerLetterDot,
             "lowerRoman" => ListKind::LowerRoman,
             "legal" | "multilevel" => ListKind::Legal,
             s if s.chars().count() == 1 => ListKind::BulletChar(s.chars().next()?),
@@ -133,7 +136,12 @@ fn bullet_level(i: usize, c: char) -> Level {
         indent: 36.0 * (i as f32 + 1.0),
         hanging: 18.0,
         chr: CharProps {
-            font: Some(if c == '•' || c == '▪' || c == '○' { "Arial".into() } else { "Segoe UI Symbol".into() }),
+            font: match c {
+                '•' | '▪' | '○' => Some("Arial".into()),
+                // Plain text characters (a dash bullet) use the paragraph's font.
+                c if c.is_ascii() || c == '–' => None,
+                _ => Some("Segoe UI Symbol".into()),
+            },
             ..CharProps::default()
         },
         ..Level::default()
@@ -159,6 +167,7 @@ pub fn levels_for(kind: ListKind) -> Vec<Level> {
                 ListKind::NumberedParen => lvl(cyc(NumFormat::Decimal, NumFormat::LowerLetter, NumFormat::LowerRoman), format!("%{n})")),
                 ListKind::UpperLetter => lvl(cyc(NumFormat::UpperLetter, NumFormat::LowerLetter, NumFormat::LowerRoman), format!("%{n}.")),
                 ListKind::LowerLetter => lvl(cyc(NumFormat::LowerLetter, NumFormat::LowerRoman, NumFormat::Decimal), format!("%{n})")),
+                ListKind::LowerLetterDot => lvl(cyc(NumFormat::LowerLetter, NumFormat::LowerRoman, NumFormat::Decimal), format!("%{n}.")),
                 ListKind::LowerRoman => lvl(cyc(NumFormat::LowerRoman, NumFormat::LowerLetter, NumFormat::Decimal), format!("%{n}.")),
                 ListKind::Outline => {
                     let f = [NumFormat::UpperRoman, NumFormat::UpperLetter, NumFormat::Decimal, NumFormat::LowerLetter, NumFormat::LowerRoman]
