@@ -1323,3 +1323,101 @@
 	Flip Vertical	Віддзеркалити по вертикалі
 	Flip Horizontal	Віддзеркалити по горизонталі
 	Formatted	Відформатовано
+	A, B, C, …	A, B, C, …
+	Above the item	Над елементом
+	Accessed on	Дата звернення
+	Add New Source…	Додати нове джерело…
+	Add the chapter number	Додати номер розділу
+	Atmosphere	Атмосфера
+	Below the item	Під елементом
+	Book	Книга
+	Book title	Назва книги
+	Caption	Підпис
+	Caption Numbering	Нумерація підписів
+	Caption text	Текст підпису
+	Caption:	Підпис:
+	Chapter in a book	Розділ книги
+	Chapters begin at:	Розділи починаються з:
+	Collect entries from:	Брати елементи з:
+	Columns:	Стовпці:
+	Conference	Конференція
+	Conference paper	Доповідь конференції
+	Container Title	Назва видання
+	Create Source	Створити джерело
+	Cross-reference:	Перехресне посилання:
+	Custom Table of Contents…	Настроюваний зміст…
+	DOI	DOI
+	Day	День
+	Delete Label	Видалити мітку
+	Edit Source	Редагувати джерело
+	Edition	Видання
+	Edit…	Редагувати…
+	Entry marked.	Елемент позначено.
+	Example: {sample}	Приклад: {sample}
+	Figure	Рисунок
+	Film	Фільм
+	Heading styles (levels 1–{n})	Стилі заголовків (рівні 1–{n})
+	Heading {n}	Заголовок {n}
+	I, II, III, …	I, II, III, …
+	Include page numbers	Додавати номери сторінок
+	Indented	З відступом
+	Institution	Установа
+	Ionosphere	Іоносфера
+	Issue	Випуск
+	Journal	Журнал
+	Label:	Мітка:
+	Last, First; Last, First	Прізвище, Ім’я; Прізвище, Ім’я
+	Leave the label out of the caption	Не включати мітку в підпис
+	Letter headings	Літерні заголовки
+	Levels:	Рівні:
+	Link entries to their headings	Пов’язати елементи із заголовками
+	Made from the author and year when empty	Якщо порожньо, утворюється з автора й року
+	Magazine or newspaper article	Стаття в журналі чи газеті
+	Main entry:	Основний елемент:
+	Mark	Позначити
+	Mark All	Позначити всі
+	Mark Entry…	Позначити елемент…
+	Mark Index Entry	Позначити елемент покажчика
+	Mesosphere	Мезосфера
+	Month	Місяць
+	New Label	Нова мітка
+	New Label…	Нова мітка…
+	New…	Створити…
+	No sources yet.	Джерел ще немає.
+	Numbering…	Нумерація…
+	Options…	Параметри…
+	Other	Інше
+	Other styles and their TOC level:	Інші стилі та їхній рівень у змісті:
+	Outline levels	Рівні структури
+	Page number style	Стиль номера сторінки
+	Page numbers at the right margin	Номери сторінок біля правого поля
+	Page title	Назва сторінки
+	Pages of bookmark:	Сторінки закладки:
+	Periodical	Періодичне видання
+	Position:	Розташування:
+	Publisher	Видавець
+	Run-in	Суцільний
+	See	Див.
+	Separator:	Роздільник:
+	Show every bibliography field	Показати всі поля бібліографії
+	Site name	Назва сайту
+	Source Manager	Диспетчер джерел
+	Source type:	Тип джерела:
+	Sources in this document:	Джерела в цьому документі:
+	Styles:	Стилі:
+	Subentry:	Піделемент:
+	TC entry fields	Поля елементів TC
+	Tab leader:	Заповнювач табуляції:
+	Table of Contents Options	Параметри змісту
+	Table of Contents Styles	Стилі змісту
+	Tag	Тег
+	This page	Ця сторінка
+	Title	Назва
+	Type:	Тип:
+	URL	URL
+	Volume	Том
+	Website	Вебсайт
+	Year	Рік
+	a, b, c, …	a, b, c, …
+	i, ii, iii, …	i, ii, iii, …
+	{n} entries marked.	Позначено елементів: {n}.

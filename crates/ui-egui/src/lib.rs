@@ -22,6 +22,7 @@ pub mod dialogs;
 pub mod dialogs_insert;
 pub mod dialogs_lists;
 pub mod dialogs_para;
+pub mod dialogs_refs;
 pub mod equation_tab;
 pub mod file_dialogs;
 pub mod frame;
@@ -124,6 +125,9 @@ pub struct UiState {
     /// View › Switch Modes: show pages dark (white text on black), kept between runs. Only the
     /// pages: the interface follows [`UiState::theme`] (#312).
     pub dark_page: bool,
+    /// Caption labels the user added (References › Insert Caption › New Label), kept between
+    /// runs like Word keeps them in its Normal template (#402).
+    pub caption_labels: Vec<String>,
 }
 
 impl Default for UiState {
@@ -148,6 +152,7 @@ impl Default for UiState {
             keytips: crate::keytips::Phase::Off,
             alt_chord_used: false,
             dark_page: false,
+            caption_labels: Vec::new(),
         }
     }
 }
@@ -1106,6 +1111,14 @@ fn input_dialog(id: &str, params: &Value) -> Option<&'static str> {
         // Define New Multilevel List and Track Changes Options without settings show their dialogs.
         "list.define" if params.get("levels").is_none() => Some("defineList"),
         "review.trackingOptions" if params.as_object().is_none_or(|m| m.is_empty()) => Some("trackChangesOptions"),
+        // References dialogs (#402): Insert Caption, Insert Index, Mark Entry, Manage Sources and
+        // Insert Citation without a source.
+        "references.caption" | "references.index" if params.as_object().is_none_or(|m| m.is_empty()) => {
+            Some(if id == "references.caption" { "caption" } else { "index" })
+        }
+        "references.markEntry" if !has("entry") => Some("markEntry"),
+        "references.sources" if params.as_object().is_none_or(|m| m.is_empty()) => Some("sourceManager"),
+        "references.citation" if !has("tag") && !has("source") => Some("createSource"),
         _ => None,
     }
 }

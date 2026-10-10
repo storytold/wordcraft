@@ -40,7 +40,7 @@ pub fn field_name(instr: &str) -> String {
 }
 
 /// `\* FORMAT` switch value (Arabic, roman, ROMAN, alphabetic, ALPHABETIC, CardText, Ordinal…).
-fn format_switch(instr: &str) -> Option<NumFormat> {
+pub fn format_switch(instr: &str) -> Option<NumFormat> {
     let mut it = instr.split_whitespace();
     while let Some(w) = it.next() {
         if w == "\\*" {

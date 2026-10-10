@@ -1,6 +1,6 @@
 # WordCraft parity with Microsoft Word
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** trivial (formatting revisions landed, #41; previously trivial: Draw Table and Eraser landed, #303; previously minor: readiness table with hours per audience; full number back to the additive weighted sum, 60%; mainstream and essentials numbers added; alpha gate checked; previously major: full re-measure against Word for Mac 16.113.4; replaces the parity tables that lived in ROADMAP.md) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** trivial (References dialogs, #402; previously trivial: formatting revisions landed, #41; previously trivial: Draw Table and Eraser landed, #303; previously minor: readiness table with hours per audience; full number back to the additive weighted sum, 60%; mainstream and essentials numbers added; alpha gate checked; previously major: full re-measure against Word for Mac 16.113.4; replaces the parity tables that lived in ROADMAP.md) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 The authoritative assessment of how close WordCraft is to Microsoft Word. [`ROADMAP.md`](../ROADMAP.md)
 summarizes it; [`gaps.md`](gaps.md) itemizes every shortfall; the deep checklists are
@@ -64,7 +64,7 @@ full parity for the area.
 | Page layout and sections | 7 | 70% | 72% | 12–20 | Margins, size, columns, breaks, page borders, line numbers, vertical alignment, drop caps, hyphenation. Columns don't balance; no document grid; no vertical text; RTL sections missing. Detail: [layout-parity.md](layout-parity.md). |
 | Headers, footers, page numbers, fields | 5 | 70% | 70% | 8–12 | First/even/odd, link to previous, TOC as an updatable field (#52), cross-references to real bookmarks (#227). Field coverage is a subset of Word's ~90 field codes; Field dialog missing. |
 | Footnotes and endnotes | 3 | 60% | 60% | 5–8 | Placed and editable, numbers from Word files (#103). Long notes don't continue onto the next page; no continuation separator; no note options per section. |
-| References (TOC, citations, bibliography, captions, index, TOA) | 5 | 65% | 60% | 12–20 | Working first versions, Zotero integration (#189), Zotero/Mendeley `ADDIN` fields round-trip. 4 of Word's 12 bibliography styles (APA, MLA, Chicago, IEEE); source manager depth; bibliography sources not yet in DOCX (#169 open). |
+| References (TOC, citations, bibliography, captions, index, TOA) | 5 | 65% | 60% | 12–20 | Working first versions, Zotero integration (#189), Zotero/Mendeley `ADDIN` fields round-trip. Caption, Index, Mark Entry, Custom TOC and Create/Edit Source dialogs; updates honour the TOC (`\o \u \t \f \n \p \h`), INDEX (`\c \e \h \r`), XE (`\b \i \t \r`) and SEQ/STYLEREF chapter switches (#402). 4 of Word's 12 bibliography styles (APA, MLA, Chicago, IEEE); bibliography sources not yet in DOCX (#169 open). |
 | Review (proofing UI, comments, track changes, compare, protect) | 8 | 72% | 75% | 15–25 | Comment balloons, tracked insert/delete incl. paragraph marks (#244, #125), compare, restrict editing. Formatting revisions (#41): kept in DOCX, recorded while tracking, accepted/rejected, "Formatted: …" balloons and change bars. Missing: move tracking, insert/delete balloons, Translate, Block Authors, modern comment threads/mentions. Lowered: these gaps are confirmed by source (no `rPrChange` anywhere). |
 | Proofing (spelling, grammar, thesaurus, languages) | 5 | 35% | (in Review) | 25–45 | English only: one dictionary, a rule-based grammar checker. Word ships 120 proofing tools for ~50 languages plus Editor (style refinements, similarity). Issues #25, #40, #100. |
 | Mailings | 2 | 70% | 70% | 6–10 | Mail merge from CSV, fields, rules, preview, envelopes, labels. Select Recipients takes a typed list or CSV (#247); no Excel/Outlook/Contacts data sources, no email merge. |
@@ -249,6 +249,7 @@ can be used without committing Word output.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | trivial | References: Caption, Index, Mark Entry, Custom Table of Contents and Create/Edit Source dialogs, with the field switches they write honoured on update (#402); no percentage change |
 | 2026-10-11 | trivial | Formatting revisions (#41): Review row updated; no percentage change |
 | 2026-10-10 | trivial | #307: Draw tab pens, eraser and Hide Ink; catalog 384/430 → 390/430 (90.7%) |
 | 2026-10-10 | trivial | Draw Table and Eraser (#303): catalog 384/430 → 387/430 (90.0%) |

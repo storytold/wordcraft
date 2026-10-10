@@ -1323,3 +1323,101 @@
 	Flip Vertical	Inverter verticalmente
 	Flip Horizontal	Inverter horizontalmente
 	Formatted	Formatado
+	A, B, C, …	A, B, C, …
+	Above the item	Acima do item
+	Accessed on	Acessado em
+	Add New Source…	Adicionar nova fonte…
+	Add the chapter number	Adicionar o número do capítulo
+	Atmosphere	Atmosfera
+	Below the item	Abaixo do item
+	Book	Livro
+	Book title	Título do livro
+	Caption	Legenda
+	Caption Numbering	Numeração de legendas
+	Caption text	Texto da legenda
+	Caption:	Legenda:
+	Chapter in a book	Capítulo de livro
+	Chapters begin at:	Os capítulos começam em:
+	Collect entries from:	Coletar entradas de:
+	Columns:	Colunas:
+	Conference	Conferência
+	Conference paper	Artigo de conferência
+	Container Title	Título do contêiner
+	Create Source	Criar fonte
+	Cross-reference:	Referência cruzada:
+	Custom Table of Contents…	Sumário personalizado…
+	DOI	DOI
+	Day	Dia
+	Delete Label	Excluir rótulo
+	Edit Source	Editar fonte
+	Edition	Edição
+	Edit…	Editar…
+	Entry marked.	Entrada marcada.
+	Example: {sample}	Exemplo: {sample}
+	Figure	Figura
+	Film	Filme
+	Heading styles (levels 1–{n})	Estilos de título (níveis 1–{n})
+	Heading {n}	Título {n}
+	I, II, III, …	I, II, III, …
+	Include page numbers	Incluir números de página
+	Indented	Recuado
+	Institution	Instituição
+	Ionosphere	Ionosfera
+	Issue	Número
+	Journal	Periódico científico
+	Label:	Rótulo:
+	Last, First; Last, First	Sobrenome, Nome; Sobrenome, Nome
+	Leave the label out of the caption	Omitir o rótulo na legenda
+	Letter headings	Cabeçalhos de letra
+	Levels:	Níveis:
+	Link entries to their headings	Vincular as entradas aos títulos
+	Made from the author and year when empty	Se vazio, é formado pelo autor e ano
+	Magazine or newspaper article	Artigo de revista ou jornal
+	Main entry:	Entrada principal:
+	Mark	Marcar
+	Mark All	Marcar todas
+	Mark Entry…	Marcar entrada…
+	Mark Index Entry	Marcar entrada de índice
+	Mesosphere	Mesosfera
+	Month	Mês
+	New Label	Novo rótulo
+	New Label…	Novo rótulo…
+	New…	Nova…
+	No sources yet.	Ainda não há fontes.
+	Numbering…	Numeração…
+	Options…	Opções…
+	Other	Outro
+	Other styles and their TOC level:	Outros estilos e seu nível no sumário:
+	Outline levels	Níveis de estrutura de tópicos
+	Page number style	Estilo do número de página
+	Page numbers at the right margin	Números de página na margem direita
+	Page title	Título da página
+	Pages of bookmark:	Páginas do indicador:
+	Periodical	Periódico
+	Position:	Posição:
+	Publisher	Editora
+	Run-in	Contínuo
+	See	Ver
+	Separator:	Separador:
+	Show every bibliography field	Mostrar todos os campos bibliográficos
+	Site name	Nome do site
+	Source Manager	Gerenciador de fontes
+	Source type:	Tipo de fonte:
+	Sources in this document:	Fontes deste documento:
+	Styles:	Estilos:
+	Subentry:	Subentrada:
+	TC entry fields	Campos de entrada TC
+	Tab leader:	Preenchimento de tabulação:
+	Table of Contents Options	Opções do sumário
+	Table of Contents Styles	Estilos do sumário
+	Tag	Marca
+	This page	Esta página
+	Title	Título
+	Type:	Tipo:
+	URL	URL
+	Volume	Volume
+	Website	Site
+	Year	Ano
+	a, b, c, …	a, b, c, …
+	i, ii, iii, …	i, ii, iii, …
+	{n} entries marked.	Entradas marcadas: {n}.

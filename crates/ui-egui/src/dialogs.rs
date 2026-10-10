@@ -116,6 +116,9 @@ pub enum Dialog {
     ModifyStyle {
         #[serde(skip)]
         back: bool,
+        /// The dialog that comes back when this closes (Table of Contents › Modify…).
+        #[serde(skip)]
+        resume: Option<Box<Dialog>>,
         id: String,
         name: String,
         font: String,
@@ -152,6 +155,9 @@ pub enum Dialog {
     },
     /// Columns, Symbol and Field ([`crate::dialogs_insert`], #321).
     Insert(Box<crate::dialogs_insert::InsertDialog>),
+    /// Caption, Index, Mark Index Entry, Table of Contents, Source Manager and Create / Edit
+    /// Source ([`crate::dialogs_refs`], #402).
+    Refs(Box<crate::dialogs_refs::RefsDialog>),
     /// Paste Special: the clipboard's formats and the chosen one. The clipboard payload stays out
     /// of the serialized dialog state (it can be megabytes).
     PasteSpecial {
@@ -635,6 +641,7 @@ impl Dialog {
             Dialog::TableStyle { .. } => "modifyTableStyle",
             Dialog::Commands { .. } => "commands",
             Dialog::Insert(d) => d.name(),
+            Dialog::Refs(d) => d.name(),
             Dialog::PasteSpecial { .. } => "pasteSpecial",
             Dialog::About { .. } => "about",
             Dialog::SaveChanges { .. } => "saveChanges",
@@ -672,6 +679,9 @@ impl Dialog {
     pub fn open(name: &str, app: &mut WordApp) -> Option<Dialog> {
         if let Some(d) = crate::dialogs_insert::open(name, app) {
             return Some(Dialog::Insert(Box::new(d)));
+        }
+        if let Some(d) = crate::dialogs_refs::open(name, app) {
+            return Some(Dialog::Refs(Box::new(d)));
         }
         let st = app.session.run("format.state", &json!({})).unwrap_or_default();
         let s = |k: &str| st.get(k).and_then(Value::as_str).unwrap_or("").to_string();
@@ -840,6 +850,7 @@ impl Dialog {
         let rp = app.session.doc.styles.resolve_para(&wordcraft_doc::ParaProps { style: Some(id.into()), ..Default::default() });
         Some(Dialog::ModifyStyle {
             back: false,
+            resume: None,
             id: id.into(),
             name: st.name.clone(),
             font: rc.font,
@@ -923,6 +934,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::TableStyle { .. } => "Modify Table Style",
         Dialog::Commands { .. } => "Search Commands",
         Dialog::Insert(d) => d.title(),
+        Dialog::Refs(d) => d.title(),
         Dialog::PasteSpecial { .. } => "Paste Special",
         Dialog::About { .. } => "About WordCraft",
         Dialog::SaveChanges { .. } => "WordCraft",
@@ -1415,7 +1427,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             ok || cancel
         }
-        Dialog::ModifyStyle { back, id, name, font, size, bold, italic, color, before, after } => {
+        Dialog::ModifyStyle { back, resume, id, name, font, size, bold, italic, color, before, after } => {
             egui::Grid::new("ms").num_columns(2).show(ui, |ui| {
                 ui.label(tl!("Name:"));
                 ui.text_edit_singleline(name);
@@ -1451,6 +1463,11 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             if (ok || cancel) && *back {
                 app.dialog = Some(Dialog::ManageStyles { alphabetical: false, selected: id.clone() });
+            }
+            if (ok || cancel)
+                && let Some(r) = resume.take()
+            {
+                app.dialog = Some(*r);
             }
             ok || cancel
         }
@@ -1547,6 +1564,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             ok || cancel
         }
         Dialog::Insert(f) => crate::dialogs_insert::body(app, ui, f),
+        Dialog::Refs(f) => crate::dialogs_refs::body(app, ui, f),
         Dialog::Commands { query } => {
             let r = ui.add(egui::TextEdit::singleline(query).hint_text(tl!("Type a command, e.g. \"insert table\"")).desired_width(380.0));
             r.request_focus();
@@ -2119,7 +2137,7 @@ fn manage_styles(app: &mut WordApp, ui: &mut Ui, alphabetical: &mut bool, select
                     if let Some(Dialog::ModifyStyle { id, name, font, size, bold, italic, color, before, after, .. }) =
                         Dialog::modify_style(app, selected)
                     {
-                        app.dialog = Some(Dialog::ModifyStyle { back: true, id, name, font, size, bold, italic, color, before, after });
+                        app.dialog = Some(Dialog::ModifyStyle { back: true, resume: None, id, name, font, size, bold, italic, color, before, after });
                     }
                 }
             }
@@ -2156,7 +2174,7 @@ fn manage_styles(app: &mut WordApp, ui: &mut Ui, alphabetical: &mut bool, select
         if ui.add_enabled(ty != "table", egui::Button::new(tl!("Modify…"))).clicked()
             && let Some(Dialog::ModifyStyle { id, name, font, size, bold, italic, color, before, after, .. }) = Dialog::modify_style(app, selected)
         {
-            app.dialog = Some(Dialog::ModifyStyle { back: true, id, name, font, size, bold, italic, color, before, after });
+            app.dialog = Some(Dialog::ModifyStyle { back: true, resume: None, id, name, font, size, bold, italic, color, before, after });
         }
         if ui.button(tl!("New Style…")).clicked() {
             app.dialog = Some(Dialog::NewStyle { name: "Style1".into(), based_on: str_of(&cur, "name"), back: true });

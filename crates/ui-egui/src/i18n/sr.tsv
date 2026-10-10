@@ -1325,3 +1325,101 @@
 	Flip Vertical	Окрени вертикално
 	Flip Horizontal	Окрени хоризонтално
 	Formatted	Форматирано
+	A, B, C, …	A, B, C, …
+	Above the item	Изнад ставке
+	Accessed on	Приступљено
+	Add New Source…	Додај нови извор…
+	Add the chapter number	Додај број поглавља
+	Atmosphere	Атмосфера
+	Below the item	Испод ставке
+	Book	Књига
+	Book title	Наслов књиге
+	Caption	Натпис
+	Caption Numbering	Нумерисање натписа
+	Caption text	Текст натписа
+	Caption:	Натпис:
+	Chapter in a book	Поглавље у књизи
+	Chapters begin at:	Поглавља почињу на:
+	Collect entries from:	Ставке узети из:
+	Columns:	Колоне:
+	Conference	Конференција
+	Conference paper	Рад са конференције
+	Container Title	Наслов збирке
+	Create Source	Направи извор
+	Cross-reference:	Унакрсна референца:
+	Custom Table of Contents…	Прилагођени садржај…
+	DOI	DOI
+	Day	Дан
+	Delete Label	Обриши ознаку
+	Edit Source	Уреди извор
+	Edition	Издање
+	Edit…	Уреди…
+	Entry marked.	Ставка је означена.
+	Example: {sample}	Пример: {sample}
+	Figure	Слика
+	Film	Филм
+	Heading styles (levels 1–{n})	Стилови наслова (нивои 1–{n})
+	Heading {n}	Наслов {n}
+	I, II, III, …	I, II, III, …
+	Include page numbers	Укључи бројеве страница
+	Indented	Увучено
+	Institution	Институција
+	Ionosphere	Јоносфера
+	Issue	Број
+	Journal	Часопис
+	Label:	Ознака:
+	Last, First; Last, First	Презиме, Име; Презиме, Име
+	Leave the label out of the caption	Изостави ознаку из натписа
+	Letter headings	Наслови по словима
+	Levels:	Нивои:
+	Link entries to their headings	Повежи ставке са насловима
+	Made from the author and year when empty	Ако је празно, прави се од аутора и године
+	Magazine or newspaper article	Чланак у магазину или новинама
+	Main entry:	Главна ставка:
+	Mark	Означи
+	Mark All	Означи све
+	Mark Entry…	Означи ставку…
+	Mark Index Entry	Означи ставку индекса
+	Mesosphere	Мезосфера
+	Month	Месец
+	New Label	Нова ознака
+	New Label…	Нова ознака…
+	New…	Ново…
+	No sources yet.	Још нема извора.
+	Numbering…	Нумерисање…
+	Options…	Опције…
+	Other	Друго
+	Other styles and their TOC level:	Остали стилови и њихов ниво у садржају:
+	Outline levels	Нивои структуре
+	Page number style	Стил броја странице
+	Page numbers at the right margin	Бројеви страница уз десну маргину
+	Page title	Наслов странице
+	Pages of bookmark:	Странице обележивача:
+	Periodical	Периодика
+	Position:	Положај:
+	Publisher	Издавач
+	Run-in	У низу
+	See	Види
+	Separator:	Раздвајач:
+	Show every bibliography field	Прикажи сва поља библиографије
+	Site name	Назив сајта
+	Source Manager	Управљач изворима
+	Source type:	Врста извора:
+	Sources in this document:	Извори у овом документу:
+	Styles:	Стилови:
+	Subentry:	Подставка:
+	TC entry fields	Поља ставки TC
+	Tab leader:	Попуна табулатора:
+	Table of Contents Options	Опције садржаја
+	Table of Contents Styles	Стилови садржаја
+	Tag	Ознака
+	This page	Ова страница
+	Title	Наслов
+	Type:	Врста:
+	URL	URL
+	Volume	Том
+	Website	Веб-сајт
+	Year	Година
+	a, b, c, …	a, b, c, …
+	i, ii, iii, …	i, ii, iii, …
+	{n} entries marked.	Означено ставки: {n}.
