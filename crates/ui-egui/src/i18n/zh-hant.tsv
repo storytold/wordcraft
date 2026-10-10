@@ -1305,6 +1305,9 @@
 	South	南區
 	West	西區
 	Total	總計
+
+# Table Layout › Draw (#308)
+	Draw\nTable	繪製\n表格
 	Rotation	旋轉角度
 	Rotation:	旋轉：
 	Rotate Right 90°	向右旋轉 90°

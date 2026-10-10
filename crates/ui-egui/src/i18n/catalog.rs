@@ -1,5 +1,6 @@
 //! Parser and lookup table for translation catalogs (`*.tsv`, format documented in `zh-hans.tsv`).
-//! The format is PdfCraft's; WordCraft uses its plain (context-free) entries.
+//! The format is PdfCraft's. Most entries are plain (empty context); a few use one of
+//! [`CONTEXTS`] where the same English needs different wording in one place.
 //!
 //! Validation is strict (unknown escapes, unknown `@` contexts, placeholder, ellipsis and plural
 //! form mismatches, duplicates), but a bad line is only skipped and reported: the rest of the
@@ -16,11 +17,18 @@ pub struct Entry {
     pub translation: String,
 }
 
+/// The contexts a catalog entry may name, and where each applies.
+/// - `preview`: sample text inside a rendered preview (the Design tab's style-set tiles), which
+///   has to fit a small tile; it falls back to the plain entry.
+pub const CONTEXTS: &[&str] = &["preview"];
+
 /// A parsed catalog. Values are owned for the life of the process (catalogs are built once).
 #[derive(Debug, Default)]
 pub struct Catalog {
     /// English source → translation (the hot path, looked up every frame).
     plain: HashMap<String, String>,
+    /// (context, English source) → translation, for the few entries that need one.
+    contextual: HashMap<(String, String), String>,
 }
 
 fn unescape(text: &str) -> Result<String, String> {
@@ -58,8 +66,8 @@ pub fn placeholders(text: &str) -> Vec<&str> {
 /// Check one entry against its English source.
 fn validate(entry: &Entry) -> Result<(), String> {
     let Entry { context, source, translation } = entry;
-    if !context.is_empty() {
-        return Err(format!("contexts aren't used in WordCraft catalogs (found {context:?}); leave the first column empty"));
+    if !context.is_empty() && !CONTEXTS.contains(&context.as_str()) {
+        return Err(format!("unknown context {context:?}; use one of {CONTEXTS:?} or leave the first column empty"));
     }
     if placeholders(source) != placeholders(translation) {
         return Err("placeholders differ from the English source".into());
@@ -109,11 +117,23 @@ impl Catalog {
     /// Build a catalog from its valid entries; the errors of the skipped lines come back too.
     pub fn parse(text: &str) -> (Catalog, Vec<String>) {
         let (entries, errors) = parse_entries(text);
-        let plain = entries.into_iter().map(|e| (e.source, e.translation)).collect();
-        (Catalog { plain }, errors)
+        let mut catalog = Catalog::default();
+        for e in entries {
+            if e.context.is_empty() {
+                catalog.plain.insert(e.source, e.translation);
+            } else {
+                catalog.contextual.insert((e.context, e.source), e.translation);
+            }
+        }
+        (catalog, errors)
     }
 
     pub fn plain(&self, s: &str) -> Option<&str> {
         self.plain.get(s).map(String::as_str)
+    }
+
+    /// The entry for `s` in `context`, else the plain one.
+    pub fn in_context(&self, context: &str, s: &str) -> Option<&str> {
+        self.contextual.get(&(context.to_string(), s.to_string())).map(String::as_str).or_else(|| self.plain(s))
     }
 }

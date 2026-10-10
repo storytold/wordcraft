@@ -1235,6 +1235,9 @@
 	South	Jug
 	West	Zapad
 	Total	Ukupno
+
+# Table Layout › Draw (#308)
+	Draw\nTable	Nacrtaj\ntabelu
 # Columns, Symbol and Field dialogs (#321).
 	(All)	(Sve)
 	(none)	(nema)

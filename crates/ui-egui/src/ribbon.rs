@@ -1466,7 +1466,7 @@ fn table_design(app: &mut WordApp, ui: &mut Ui) {
             .styles
             .iter()
             .filter(|s| s.kind == wordcraft_doc::StyleKind::Table && !s.hidden)
-            .map(|s| (s.builtin, s.id.clone(), s.name.clone()))
+            .map(|s| (s.builtin, s.id.clone(), crate::i18n::style_name(s)))
             .collect();
         styles.sort_by_key(|(builtin, _, _)| *builtin);
         egui::ScrollArea::horizontal().max_width(420.0).show(ui, |ui| {

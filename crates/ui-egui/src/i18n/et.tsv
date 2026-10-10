@@ -1173,6 +1173,8 @@
 	West	Lääs
 	Total	Kokku
 
+# Table Layout › Draw (#308)
+	Draw\nTable	Joonista\ntabel
 # Define New Multilevel List and Track Changes Options (#342)
 	(no style)	(stiil puudub)
 	Add tab stop at:	Lisa tabelduskoht kohal:
@@ -1212,7 +1214,6 @@
 	Text indent at:	Teksti taane:
 	Track Changes Options	Muudatuste jälitamise suvandid
 	Track formatting	Jälita vormingut
-
 # Rotation and flips (#332)
 	Flip Horizontal	Peegelda horisontaalselt
 	Flip Vertical	Peegelda vertikaalselt
@@ -1220,7 +1221,6 @@
 	Rotate Right 90°	Pööra paremale 90°
 	Rotation	Pööramine
 	Rotation:	Pööre:
-
 # Tabs, Borders and Shading (#327); Columns, Symbol and Field (#335)
 	Tab stop position:	Tabelduskoha asukoht:
 	Default tab stops:	Vaikimisi tabelduskohad:

@@ -1304,6 +1304,9 @@
 	South	南
 	West	西
 	Total	合計
+
+# Table Layout › Draw (#308)
+	Draw\nTable	表の\n描画
 	Rotation	回転角度
 	Rotation:	回転:
 	Rotate Right 90°	右へ 90 度回転
