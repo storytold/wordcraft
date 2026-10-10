@@ -18,6 +18,7 @@ pub mod objects;
 pub mod page;
 pub mod para;
 pub mod paste;
+pub mod phonetic;
 pub mod references;
 pub mod review;
 pub mod speech;
@@ -43,6 +44,7 @@ pub fn registry() -> Registry {
     v.extend(edit::specs());
     v.extend(paste::specs());
     v.extend(format::specs());
+    v.extend(phonetic::specs());
     v.extend(para::specs());
     v.extend(lists::specs());
     v.extend(inspector::specs());

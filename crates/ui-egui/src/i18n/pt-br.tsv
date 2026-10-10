@@ -106,6 +106,7 @@
 	Backspace	Backspace
 	Banded Columns	Colunas listradas
 	Banded Rows	Linhas listradas
+	Base text:	Texto base:
 	Before:	Antes:
 	Bibliography	Bibliografia
 	Binary assets added	Recursos binários adicionados
@@ -265,6 +266,13 @@
 	No templates match your search.	Nenhum modelo corresponde à pesquisa.
 	Reopen	Reabrir
 	Right Margin	Margem direita
+	Distribute letters	Distribuir letras
+	Distribute spacing	Distribuir espaçamento
+	Offset (pt):	Deslocamento (pt):
+	Phonetic Guide	Guia fonético
+	Remove	Remover
+	Right (vertical)	Direita (vertical)
+	Ruby text:	Texto ruby:
 	Search for templates	Pesquisar modelos
 	development build	versão de desenvolvimento
 	Diagonal	Diagonal
@@ -730,6 +738,7 @@
 	Single	Simples
 	Single Spacing	Espaçamento simples
 	Size	Tamanho
+	Size (pt):	Tamanho (pt):
 	Size:	Tamanho:
 	Small Caps	Versaletes
 	Small caps	Versaletes

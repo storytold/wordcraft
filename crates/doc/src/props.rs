@@ -354,7 +354,22 @@ macro_rules! overlay_fields {
     };
 }
 
+macro_rules! drop_same_fields {
+    ($dst:ident, $base:ident; $($f:ident),*) => {
+        $( if $dst.$f == $base.$f { $dst.$f = None; } )*
+    };
+}
+
 impl CharProps {
+    /// The fields of `self` that differ from `base` (equal ones unset): what `self` adds when
+    /// overlaid on `base`.
+    pub fn minus(mut self, base: &CharProps) -> CharProps {
+        drop_same_fields!(self, base; style, font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
+            shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl,
+            cs, font_cs, size_cs, bold_cs, italic_cs, lang_bidi, link, ins, del);
+        self
+    }
+
     /// Apply every `Some` field of `patch` on top of `self`.
     ///
     /// Size, bold and italic come in pairs with their complex-script values (Word's own buttons

@@ -541,6 +541,38 @@ impl Writer<'_> {
                 w.close("w:r");
                 self.rev_close(w, props);
             }
+            InlineObject::Ruby { base, ruby, align, size, raise, base_size, lang, props: ruby_props } => {
+                // ECMA-376 §17.3.3.25: a run holding w:ruby (properties, ruby text, base text).
+                let t = if self.is_del(props) { "w:delText" } else { "w:t" };
+                let fin = |v: f32, d: f32| if v.is_finite() { v } else { d };
+                let hps = |v: f32, min: f32| n(wordcraft_geom::to_half_points(v.clamp(min, 1584.0)));
+                let size = fin(*size, 5.0).clamp(1.0, 1584.0);
+                let base_size = if base_size.is_finite() && *base_size > 0.0 { *base_size } else { props.size.unwrap_or(10.5) };
+                self.rev_open(w, props);
+                w.open("w:r", &[]);
+                rpr(w, props);
+                w.open("w:ruby", &[]);
+                w.open("w:rubyPr", &[]);
+                w.val("w:rubyAlign", align.ooxml());
+                w.val("w:hps", &hps(size, 1.0));
+                w.val("w:hpsRaise", &hps(fin(*raise, 0.0), 0.0));
+                w.val("w:hpsBaseText", &hps(fin(base_size, 10.5), 1.0));
+                w.val("w:lid", if lang.is_empty() { "ja-JP" } else { lang });
+                w.close("w:rubyPr");
+                let mut rt_props = props.clone().overlaid(ruby_props);
+                rt_props.size = Some(size);
+                for (tag, p, text) in [("w:rt", &rt_props, ruby), ("w:rubyBase", props, base)] {
+                    w.open(tag, &[]);
+                    w.open("w:r", &[]);
+                    rpr(w, p);
+                    w.leaf(t, &[("xml:space", "preserve")], text);
+                    w.close("w:r");
+                    w.close(tag);
+                }
+                w.close("w:ruby");
+                w.close("w:r");
+                self.rev_close(w, props);
+            }
             InlineObject::Opaque { format, xml, text } => {
                 if format == "docx" && crate::xml::parse(xml.as_bytes()).is_ok() {
                     w.raw(xml);

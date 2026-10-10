@@ -103,6 +103,14 @@
 	Restart list after:	リストを振り直すレベル:
 	Right border	右罫線
 	Right Margin	右余白
+	Base text:	親文字:
+	Distribute letters	文字を均等に配置
+	Distribute spacing	間隔を均等に配置
+	Offset (pt):	オフセット (pt):
+	Phonetic Guide	ルビ
+	Remove	削除
+	Right (vertical)	右 (縦書き)
+	Ruby text:	ルビ文字:
 	Search for templates	テンプレートを検索
 	Show all revisions inline	すべての変更履歴を本文中に表示
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	表示 › モードの切り替えと同様に、文書の色を反転して表示します。保存、印刷、PDF は変わりません。
@@ -729,6 +737,7 @@
 	Single	一重線
 	Single Spacing	1 行
 	Size	サイズ
+	Size (pt):	サイズ (pt):
 	Size:	サイズ:
 	Small Caps	小型英大文字
 	Small caps	小型英大文字
