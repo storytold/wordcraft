@@ -2714,3 +2714,21 @@ fn builtin_table_styles_marked_custom_in_a_docx_cant_be_deleted() {
     let id = s.doc.table(StoryRef::Body, &tp).unwrap().props.style.clone().unwrap();
     assert!(s.doc.styles.get(&id).is_some(), "the table's style still exists");
 }
+
+/// Delete Cells can leave a row shorter than the table grid; Delete Columns then removed that row's
+/// only cell and every row with it, leaving a table block with no rows.
+#[test]
+fn deleting_the_last_cell_column_never_leaves_a_table_without_rows() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 2}));
+    run(&mut s, "table.deleteCells", json!({}));
+    run(&mut s, "table.deleteColumn", json!({}));
+    for b in s.doc.body.iter() {
+        if let Some(t) = b.as_table() {
+            assert!(!t.rows.is_empty(), "table without rows");
+        }
+    }
+    assert!(s.doc.body.iter().all(|b| b.as_table().is_none()), "an emptied table is removed");
+    run(&mut s, "edit.undo", json!({}));
+    assert!(s.doc.body.iter().any(|b| b.as_table().is_some_and(|t| !t.rows.is_empty())));
+}
