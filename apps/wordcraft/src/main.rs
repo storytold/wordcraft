@@ -32,6 +32,10 @@ impl eframe::App for App {
         if let Some(pos) = ctx.input(|i| take_rescue(&mut self.1, i.viewport())) {
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
         }
+        // The window's close button: with unsaved changes, ask first (`WordApp::close_requested`).
+        if ctx.input(|i| i.viewport().close_requested()) && !self.0.close_requested() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        }
         if self.0.quit_requested {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }

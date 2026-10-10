@@ -408,7 +408,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     if resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
     }
-    if app.canvas.focused {
+    // While "Save changes?" is up, keys answer it rather than edit the document behind it.
+    if app.canvas.focused && !matches!(app.dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })) {
         crate::keys::canvas_events(app, ui.ctx());
     }
     let _ = origin;
