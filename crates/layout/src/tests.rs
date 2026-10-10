@@ -73,9 +73,10 @@ fn deletions_leave_the_final_text_layout() {
         let text = items.iter().filter_map(|i| if let display::Draw::Glyphs { text, .. } = i { Some(text.as_str()) } else { None }).collect();
         (text, items.iter().filter(|i| matches!(i, display::Draw::Line { .. })).count())
     };
-    // Markup: the deletion is laid out and struck through, the insertion underlined.
+    // Markup: the deletion is laid out and struck through, the insertion underlined, and the
+    // changed line has a bar in the margin.
     let full = lay(&d);
-    assert_eq!(texts(&full, true), ("Keep DELETEDTEXT INSERTED".into(), 2));
+    assert_eq!(texts(&full, true), ("Keep DELETEDTEXT INSERTED".into(), 3));
     // Without markup a full layout still never prints the deletion as plain text.
     assert!(!texts(&full, false).0.contains("DELETED"));
     // The final layout gives the deletion no width.

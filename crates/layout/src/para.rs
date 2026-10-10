@@ -909,7 +909,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
             c.break_after = true;
         }
     }
-    break_lines(&mut pl, env, mark_style, env.label.as_ref().map(|(_, l)| l.suffix));
+    break_lines(&mut pl, env, mark_style, env.label.as_ref().map(|(_, l)| l));
     pl
 }
 
@@ -930,7 +930,8 @@ fn next_tab(x: f32, tabs: &[TabStop], default_tab: f32, hanging_at: Option<f32>)
     })
 }
 
-fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Option<LevelSuffix>) {
+fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, level: Option<&Level>) {
+    let suffix = level.map(|l| l.suffix);
     let rp = pl.rp.clone();
     let width = env.width.max(12.0);
     let base_right = (width - rp.indent_right).max(1.0);
@@ -1002,12 +1003,21 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
         let mut x = left;
         // Label on the first line.
         if first && let Some(lab) = pl.label.as_mut() {
-            lab.x = left;
-            let end = left + lab.width;
+            // The number is aligned at the first-line indent: its left edge, centre or right edge.
+            lab.x = match level.map(|l| l.align) {
+                Some(Align::Center) => left - lab.width / 2.0,
+                Some(Align::Right) => left - lab.width,
+                _ => left,
+            };
+            let end = lab.x + lab.width;
             x = match suffix.unwrap_or(LevelSuffix::Tab) {
                 LevelSuffix::Tab => {
-                    let t = next_tab(end, &rp.tabs, default_tab, hanging_at);
-                    t.pos
+                    let t = next_tab(end, &rp.tabs, default_tab, hanging_at).pos;
+                    // The level's own tab stop after the number, when it comes first.
+                    match level.and_then(|l| l.tab).filter(|p| p.is_finite() && *p > end + 0.01) {
+                        Some(p) if p < t => p,
+                        _ => t,
+                    }
                 }
                 LevelSuffix::Space => end + pl.styles.get(lab.style as usize).map(|s| s.size * 0.25).unwrap_or(3.0),
                 LevelSuffix::Nothing => end,

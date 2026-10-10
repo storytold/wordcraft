@@ -11,6 +11,7 @@
 # translated UI was consulted or copied; add entries the same way.
 # Product, format and technology names (WordCraft, PDF, Markdown, MCP …) stay in Latin letters.
 
+	(no style)	(sem estilo)
 	(no suggestions)	(sem sugestões)
 	1.5 Line Spacing	Espaçamento de 1,5 linha
 	A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.	Um processador de texto gratuito e de código aberto, escrito do zero em Rust.\nFaz parte dos Crafting Apps da equipe ArtCraft.
@@ -27,6 +28,7 @@
 	Add Space Before Paragraph	Adicionar espaço antes do parágrafo
 	Add space between Asian and Latin text	Adicionar espaço entre texto asiático e latino
 	Add space between Asian text and numbers	Adicionar espaço entre texto asiático e números
+	Add tab stop at:	Adicionar tabulação em:
 	Add Text	Adicionar texto
 	Add to Dictionary	Adicionar ao dicionário
 	Add to Style Gallery	Adicionar à galeria de estilos
@@ -40,6 +42,7 @@
 	Align	Alinhar
 	Align Left	Alinhar à esquerda
 	Align Right	Alinhar à direita
+	Aligned at:	Alinhado em:
 	Alignment	Alinhamento
 	All Borders	Todas as bordas
 	All Caps	Tudo em maiúsculas
@@ -70,6 +73,33 @@
 	AutoSave saves every change to the file (needs a saved document)	O salvamento automático grava cada alteração no arquivo (requer um documento já salvo)
 	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	O salvamento automático não está disponível no navegador: ele não pode gravar nos seus arquivos. Salvar baixa uma cópia.
 	AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave.	O salvamento automático só mantém arquivos .docx, .odt e .rtf; {name} não guarda toda a formatação. Salve como .docx para ativar o salvamento automático.
+	Balloons	Balões
+	Bullet	Marcador
+	By author	Por autor
+	Changed lines:	Linhas alteradas:
+	Click level to modify:	Clique no nível a modificar:
+	Color only	Somente cor
+	Define New Multilevel List	Definir nova lista de vários níveis
+	Define New Multilevel List…	Definir nova lista de vários níveis…
+	Deletions:	Exclusões:
+	Enter formatting for number:	Formatação do número:
+	Follow number with:	Após o número:
+	Formatting	Formatação
+	Include level number from:	Incluir número do nível:
+	Ink	Tinta
+	Insertions and Deletions	Inserções e exclusões
+	Insertions:	Inserções:
+	Left border	Borda esquerda
+	Legal style numbering	Numeração no estilo legal
+	Link level to style:	Vincular nível ao estilo:
+	List Definition	Definição da lista
+	Nothing	Nada
+	Number alignment:	Alinhamento do número:
+	Number format	Formato do número
+	Number style for this level:	Estilo de número deste nível:
+	Outside border	Borda externa
+	Restart list after:	Reiniciar lista após:
+	Right border	Borda direita
 	Save the document to turn on AutoSave	Salve o documento para ativar o salvamento automático
 	Save the document to turn on AutoSave (a file you have only opened isn't rewritten until you save it)	Salve o documento para ativar o salvamento automático (um arquivo que você apenas abriu não é regravado até você salvá-lo)
 	AutoText	Autotexto
@@ -657,9 +687,12 @@
 	Shift+Tab	Shift+Tab
 	Show	Mostrar
 	Show all formatting marks	Mostrar todas as marcas de formatação
+	Show all revisions inline	Mostrar todas as revisões no texto
 	Show Comments	Mostrar comentários
 	Show Markup	Mostrar marcação
 	Show Notes	Mostrar notas
+	Show only comments and formatting in balloons	Mostrar apenas comentários e formatação em balões
+	Show revisions in balloons	Mostrar revisões em balões
 	Show rulers	Mostrar réguas
 	Show the community button in the title bar	Mostrar o botão da comunidade na barra de título
 	Show/Hide ¶	Mostrar/ocultar ¶
@@ -677,6 +710,7 @@
 	SmartArt	SmartArt
 	Sort	Classificar
 	Source code: github.com/storytold/wordcraft	Código-fonte: github.com/storytold/wordcraft
+	Space	Espaço
 	Space before/after:	Espaço antes/depois:
 	Spacing	Espaçamento
 	Spacing (pt):	Espaçamento (pt):
@@ -690,6 +724,7 @@
 	Spreadsheet Table	Tabela de planilha
 	Standard Colors	Cores padrão
 	Star	Estrela
+	Start at:	Iniciar em:
 	Start Mail Merge	Iniciar mala direta
 	Start Mail\nMerge	Iniciar mala\ndireta
 	Statistics	Estatísticas
@@ -711,6 +746,7 @@
 	Symbols	Símbolos
 	Synonyms	Sinônimos
 	Tab	Tab
+	Tab character	Caractere de tabulação
 	Table	Tabela
 	Table Column Width	Largura da coluna da tabela
 	Table Design	Design da tabela
@@ -732,6 +768,7 @@
 	Text Effects and Typography	Efeitos de texto e tipografia
 	Text from File	Texto de arquivo
 	Text Highlight Color	Cor de realce do texto
+	Text indent at:	Recuo do texto em:
 	Text to display:	Texto a ser exibido:
 	Text Wrapping	Quebra de texto
 	Text:	Texto:
@@ -752,7 +789,9 @@
 	Top:	Superior:
 	Total Row	Linha de totais
 	Track Changes	Controlar alterações
+	Track Changes Options	Opções de controle de alterações
 	Track Changes: On	Controlar alterações: ativado
+	Track formatting	Controlar formatação
 	Tracking	Controle
 	Translate	Traduzir
 	Transparency	Transparência
