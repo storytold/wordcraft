@@ -1172,3 +1172,154 @@
 	South	Lõuna
 	West	Lääs
 	Total	Kokku
+
+# Define New Multilevel List and Track Changes Options (#342)
+	(no style)	(stiil puudub)
+	Add tab stop at:	Lisa tabelduskoht kohal:
+	Aligned at:	Joondatud kohal:
+	Balloons	Mullid
+	Bullet	Täpp
+	By author	Autori järgi
+	Changed lines:	Muudetud read:
+	Click level to modify:	Klõpsa muudetavat taset:
+	Color only	Ainult värv
+	Define New Multilevel List	Uue mitmetasemelise loendi määratlemine
+	Define New Multilevel List…	Määratle uus mitmetasemeline loend…
+	Deletions:	Kustutused:
+	Enter formatting for number:	Sisesta numbri vorming:
+	Follow number with:	Numbrile järgneb:
+	Formatting	Vorming
+	Include level number from:	Kaasa taseme number tasemelt:
+	Insertions and Deletions	Lisamised ja kustutused
+	Insertions:	Lisamised:
+	Left border	Vasak ääris
+	Legal style numbering	Juriidiline nummerdus
+	Link level to style:	Seo tase stiiliga:
+	List Definition	Loendi määratlus
+	Nothing	Mitte midagi
+	Number alignment:	Numbri joondus:
+	Number format	Numbri vorming
+	Number style for this level:	Selle taseme numbristiil:
+	Outside border	Väliääris
+	Restart list after:	Alusta loendit uuesti pärast:
+	Right border	Parem ääris
+	Show all revisions inline	Kuva kõik redaktsioonid tekstis
+	Show only comments and formatting in balloons	Kuva mullides ainult kommentaarid ja vorming
+	Show revisions in balloons	Kuva redaktsioonid mullides
+	Space	Tühik
+	Start at:	Alusta kohalt:
+	Tab character	Tabeldusmärk
+	Text indent at:	Teksti taane:
+	Track Changes Options	Muudatuste jälitamise suvandid
+	Track formatting	Jälita vormingut
+
+# Rotation and flips (#332)
+	Flip Horizontal	Peegelda horisontaalselt
+	Flip Vertical	Peegelda vertikaalselt
+	Rotate Left 90°	Pööra vasakule 90°
+	Rotate Right 90°	Pööra paremale 90°
+	Rotation	Pööramine
+	Rotation:	Pööre:
+
+# Tabs, Borders and Shading (#327); Columns, Symbol and Field (#335)
+	Tab stop position:	Tabelduskoha asukoht:
+	Default tab stops:	Vaikimisi tabelduskohad:
+	Tab stops to be cleared:	Eemaldatavad tabelduskohad:
+	All	Kõik
+	Decimal	Kümnendkoht
+	Bar	Joon
+	Leader	Juhtmärgid
+	Set	Määra
+	Page Border	Lehe ääris
+	Apply to:	Rakenda:
+	Whole document	Kogu dokument
+	This section	See jaotis
+	Fill	Täide
+	Setting:	Säte:
+	3-D	Ruumiline
+	Custom	Kohandatud
+	Style:	Laad:
+	Dot dash	Punktkriips
+	Triple	Kolmekordne
+	Between	Vahel
+	Borders and Shading	Äärised ja varjustus
+	Tabs…	Tabelduskohad…
+	Borders and Shading…	Äärised ja varjustus…
+	(All)	(Kõik)
+	(none)	(puudub)
+	(normal text)	(tavatekst)
+	1/4 Em Space	1/4 Em-tühik
+	A mail merge field	Kirjakoostevälja
+	A numbered sequence (figures, tables…)	Nummerdatud jada (joonised, tabelid…)
+	A table of contents	Sisukord
+	Categories:	Kategooriad:
+	Character	Märk
+	Character code:	Märgikood:
+	Col #:	Veerg nr:
+	Copyright	Autoriõigus
+	Date and Time	Kuupäev ja kellaaeg
+	Date formats:	Kuupäevavormingud:
+	Description:	Kirjeldus:
+	Document Information	Dokumendi teave
+	Double Closing Quote	Kahekordne lõpujutumärk
+	Double Opening Quote	Kahekordne algusjutumärk
+	Ellipsis	Kolmikpunkt
+	Em Dash	Mõttekriips (em)
+	En Dash	Lühike mõttekriips (en)
+	Em Space	Em-tühik
+	En Space	En-tühik
+	Equal column width	Võrdne veerulaius
+	Field Codes	Väljakoodid
+	Field code:	Väljakood:
+	Field codes:	Väljakoodid:
+	Field name:	Välja nimi:
+	Field names:	Väljade nimed:
+	Field properties	Välja atribuudid
+	Field…	Väli…
+	Format:	Vorming:
+	Hide Codes	Peida koodid
+	Index and Tables	Register ja tabelid
+	Line between	Joon vahel
+	Links and References	Lingid ja viited
+	Mail Merge	Kirjakooste
+	More Columns…	Rohkem veerge…
+	More Symbols…	Rohkem sümboleid…
+	No-Width Non Break	Nullaiusega mittemurduv
+	No-Width Optional Break	Nullaiusega valikuline murdekoht
+	Paragraph Mark	Lõigumärk
+	Pick a field from the list	Vali loendist väli
+	Preserve formatting during updates	Säilita värskendamisel vorming
+	Presets	Eelseadistused
+	Recently used symbols:	Hiljuti kasutatud sümbolid:
+	Registered	Registreeritud
+	Section Mark	Jaotise märk
+	Sequence name:	Jada nimi:
+	Shortcut key:	Kiirklahv:
+	Single Closing Quote	Ühekordne lõpujutumärk
+	Single Opening Quote	Ühekordne algusjutumärk
+	Spacing:	Vahe:
+	Special Characters	Erimärgid
+	Subset:	Alamhulk:
+	The time right now	Praegune kellaaeg
+	When this document was first created	Millal dokument loodi
+	When this document was most recently printed	Millal dokument viimati prinditi
+	When this document was most recently saved	Millal dokument viimati salvestati
+	The document has no bookmarks yet.	Dokumendis pole veel järjehoidjaid.
+	Who the document properties name as author	Dokumendi atribuutides märgitud autor
+	Name of the file this document is saved as	Faili nimi, millena dokument on salvestatud
+	Title from the document properties	Pealkiri dokumendi atribuutidest
+	How many pages the whole document has	Kogu dokumendi lehekülgede arv
+	How many pages this section has	Selle jaotise lehekülgede arv
+	Number of the page the field sits on	Välja lehekülje number
+	Number of the section the field sits in	Välja jaotise number
+	How many words the document holds	Dokumendi sõnade arv
+	Page on which a bookmarked passage falls	Lehekülg, kus järjehoidjaga lõik asub
+	Copy of the text a bookmark marks	Järjehoidjaga märgitud teksti koopia
+	This field has no options.	Sellel väljal pole suvandeid.
+	This font has no characters to show.	Selles fondis pole kuvatavaid märke.
+	This point forward	Siitpeale
+	The date it is today	Tänane kuupäev
+	Trademark	Kaubamärk
+	Type the field's name and its switches, for example PAGE \\* roman.	Sisesta välja nimi ja lülitid, näiteks PAGE \\* roman.
+	Width and spacing	Laius ja vahe
+	from Unicode (hex)	Unicode (kuueteistkümnend)
