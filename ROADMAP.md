@@ -104,6 +104,7 @@ the icon art).
 | M14 | 1.0 polish, packaging, signing | pipeline written; waiting on remote and secrets |
 
 ## Recently landed
+- Ukrainian interface catalog: all existing 771 labels, Ukrainian locale detection and a persisted language choice (#85).
 - Brazilian Portuguese interface catalog: all existing 771 labels, `pt-BR` locale detection and a persisted language choice (#127).
 - Text wraps around floating pictures and shapes; text boxes lay out their own text.
 - Table rows split across pages between lines (Can't Split honoured, header rows repeat).

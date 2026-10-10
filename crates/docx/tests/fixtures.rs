@@ -3,7 +3,7 @@
 use std::io::Write;
 
 use wordcraft_doc::para::{Anchor, FloatAlign, NoteKind, ShapeKind, Wrap};
-use wordcraft_doc::props::{Align, TextColor, VMerge};
+use wordcraft_doc::props::{Align, Border, BorderStyle, Rgb, TextColor, VMerge};
 use wordcraft_doc::{Block, Document, InlineObject, Paragraph};
 
 const W_NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office""#;
@@ -473,6 +473,18 @@ fn compatibility_mode_is_read_and_defaults_to_word_2007() {
     // Another vendor's setting of the same name is ignored.
     let other = r#"<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="urn:example" w:val="15"/></w:compat>"#;
     assert_eq!(with_settings(Some(other)).settings.compat_mode, wordcraft_doc::LEGACY_COMPAT_MODE);
+}
+
+#[test]
+fn char_border_reads_and_nil_resolves_off() {
+    let d = read_body(
+        r#"<w:p><w:r><w:rPr><w:bdr w:val="single" w:sz="8" w:space="1" w:color="FF0000"/></w:rPr><w:t>a</w:t></w:r><w:r><w:rPr><w:bdr w:val="nil"/></w:rPr><w:t>b</w:t></w:r></w:p>"#,
+    );
+    let p = paras(&d)[0];
+    assert_eq!(p.props_of_char(0).border, Some(Border { style: BorderStyle::Single, width: 1.0, color: Some(Rgb(0xFF, 0, 0)), space: 1.0 }));
+    let nil = p.props_of_char(1);
+    assert_eq!(nil.border.map(|b| b.style), Some(BorderStyle::None));
+    assert_eq!(d.styles.resolve_char(None, nil).border, None);
 }
 
 #[test]

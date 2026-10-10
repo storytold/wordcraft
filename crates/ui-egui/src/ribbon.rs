@@ -273,6 +273,7 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                 small(ui, app, "strike", None, "Strikethrough", "format.strikethrough", json!({}), flag("strike"));
                 small(ui, app, "subscript", None, "Subscript", "format.subscript", json!({}), flag("subscript"));
                 small(ui, app, "superscript", None, "Superscript", "format.superscript", json!({}), flag("superscript"));
+                small(ui, app, "charborder", None, "Character Border", "format.border", json!({}), flag("border"));
                 ui.add_space(4.0);
                 menu_button(ui, app, "effects", None, "Text Effects and Typography", false, |ui, app| {
                     mi(ui, app, "Outline", "format.outline", json!({}));

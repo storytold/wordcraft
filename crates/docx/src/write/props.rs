@@ -72,6 +72,9 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
             None => w.val("w:u", u.ooxml()),
         }
     }
+    if let Some(b) = &c.border {
+        border_el(w, "w:bdr", b);
+    }
     if let Some(s) = c.shading {
         w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &s.hex())]);
     }

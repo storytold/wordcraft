@@ -90,6 +90,7 @@ impl PropCtx {
                     }
                     c.underline_color = k.attr("w:color").and_then(Rgb::parse);
                 }
+                "w:bdr" => c.border = Some(border(k)),
                 "w:shd" => c.shading = shd_fill(k),
                 "w:vertAlign" => {
                     c.vert_align = k.attr("w:val").map(|v| match v {
