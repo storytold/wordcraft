@@ -94,7 +94,8 @@ pub const AGENT_COMMANDS: &[(&str, &[&str])] = &[
     ("lists", &["para.bullets", "para.numbering"]),
     // Edit or delete only its own; never the text of someone else's comment.
     ("comments", &["review.deleteComment", "review.newComment", "review.reply", "review.resolveComment"]),
-    // Announced with characters and authors; rejecting new paragraphs is the owner's.
+    // Announced with characters and authors. A member never accepts its own changes (someone
+    // else reviews them); rejecting new paragraphs is the owner's.
     ("review", &["review.accept", "review.acceptAll", "review.reject", "review.rejectAll"]),
 ];
 
@@ -146,6 +147,10 @@ const LIST_KINDS: [&str; 10] =
 /// does not join paragraphs on reject).
 pub const REJECT_PARAGRAPHS: &str = "rejecting new paragraphs: ask the OWNER";
 
+/// Reason for a member's accept that would take in changes it made itself: only someone else
+/// (the owner, or another member) may accept them.
+pub const ACCEPT_OWN: &str = "accepting your own changes: ask the OWNER";
+
 /// `select.owner`'s note when the owner has only a caret.
 const OWNER_NO_SELECTION: &str = "the OWNER has no text selected: this is the paragraph at the OWNER's caret";
 
@@ -179,6 +184,10 @@ fn resolved_line(who: &str, reopened: bool, author: &str) -> String {
 /// <command>"); accept/reject may only resolve tracked changes and are announced whenever they
 /// changed the document, with the characters accepted/rejected and their authors; resolving a
 /// comment is announced. The text of comments by others never changes.
+///
+/// A member never accepts its own changes ([`ACCEPT_OWN`]: the owner or another member reviews
+/// them); it may reject them. A mutating command that changes nothing leaves no undo step, and
+/// the owner's redo and "unsaved" state stay as they were.
 ///
 /// The allow-list is checked by the caller (`control::handle_member`); this runs any id.
 pub fn run_as_member(app: &mut WordApp, handle: &str, id: &str, params: Value) -> Result<Value, String> {
@@ -234,9 +243,14 @@ pub fn run_as_member(app: &mut WordApp, handle: &str, id: &str, params: Value) -
     let rejected_paragraphs = judging && !id.starts_with("review.accept") && r.is_ok() && {
         crate::chat_guard::inserted_paragraphs(&app.session.doc) < crate::chat_guard::inserted_paragraphs(snap.doc())
     };
+    // Accepting a change is reviewing it: a member never accepts what it wrote itself.
+    let accepted_own = judging && id.starts_with("review.accept") && r.is_ok() && {
+        crate::chat_guard::judged(snap.doc(), &app.session.doc).1.iter().any(|author| author == handle)
+    };
     let verdict = match &r {
         Err(_) => Verdict::Clean,
         Ok(_) if rejected_paragraphs => Verdict::Refuse(REJECT_PARAGRAPHS),
+        Ok(_) if accepted_own => Verdict::Refuse(ACCEPT_OWN),
         Ok(_) if judging => crate::chat_guard::check_judging(snap.doc(), &app.session.doc, id.starts_with("review.accept")),
         Ok(_) if mutates => crate::chat_guard::check_member(snap.doc(), &app.session.doc, handle),
         Ok(_) if app.session.undo_depth() != snap.undo_depth() => Verdict::Refuse(crate::chat_guard::PURE),
@@ -248,10 +262,17 @@ pub fn run_as_member(app: &mut WordApp, handle: &str, id: &str, params: Value) -
     if r.is_err() || matches!(verdict, Verdict::Refuse(_)) {
         // Also after a plain failure: the engine's own rollback does not give the owner's redo back.
         app.session.restore(snap);
+    } else if mutates && verdict == Verdict::Clean && snap.doc() == &app.session.doc {
+        // A mutating command that changed nothing (accept with nothing to accept, bold at a caret
+        // that only set the member's pending format): the engine's undo step, the owner's lost
+        // redo and the "unsaved" mark go. The member keeps the selection the command left.
+        let sel = app.session.sel.clone();
+        app.session.restore(snap);
+        app.session.sel = sel;
     } else if mutates {
         if judging {
             // Announced whenever the document changed (also a partial accept/reject).
-            judged = (snap.doc() != &app.session.doc).then(|| crate::chat_guard::judged(snap.doc(), &app.session.doc));
+            judged = Some(crate::chat_guard::judged(snap.doc(), &app.session.doc));
         }
         if id == "review.resolveComment" {
             resolved = crate::chat_guard::resolved_comments(snap.doc(), &app.session.doc);
@@ -263,7 +284,7 @@ pub fn run_as_member(app: &mut WordApp, handle: &str, id: &str, params: Value) -
         app.session.dirty = snap.dirty();
     }
     if let Verdict::Refuse(why) = verdict {
-        r = Err(if why == REJECT_PARAGRAPHS { REJECT_PARAGRAPHS.to_string() } else { format!("{}: {why}", crate::chat_guard::REFUSED) });
+        r = Err(if why == REJECT_PARAGRAPHS || why == ACCEPT_OWN { why.to_string() } else { format!("{}: {why}", crate::chat_guard::REFUSED) });
     }
     app.session.ui_requests = owner_ui;
     app.session.status = owner_status;
@@ -1626,5 +1647,124 @@ mod tests {
         let st = run_as_member(&mut a, "@claude", "format.state", json!({})).unwrap_or_default();
         assert_ne!(st["bold"], true, "{st}");
         assert_eq!(a.session.pending, pending);
+    }
+
+    /// The owner's undo, redo and unsaved state, and the document.
+    fn owner_history(a: &WordApp) -> (Vec<String>, bool, bool, wordcraft_doc::Document) {
+        (a.session.undo_labels(), a.session.can_redo(), a.session.dirty, a.session.doc.clone())
+    }
+
+    #[test]
+    fn a_member_command_that_changes_nothing_leaves_the_owner_undo_redo_and_dirty() {
+        let at_a_caret: Vec<(&str, Value)> =
+            vec![("select.text", json!({"text": "12 months"})), ("select.collapse", json!({"end": true})), ("format.bold", json!({}))];
+        for steps in [vec![("review.acceptAll", json!({}))], at_a_caret] {
+            let mut a = app();
+            // The owner: one undo step, one redo step, saved.
+            let _ = a.run("text.insert", json!({"text": "x"}));
+            let _ = a.run("para.alignCenter", json!({}));
+            let _ = a.run("edit.undo", json!({}));
+            a.session.dirty = false;
+            let before = owner_history(&a);
+            assert!(before.1, "the owner can redo");
+            let lines = system_lines(&a);
+            for (id, p) in &steps {
+                let r = run_as_member(&mut a, "@claude", id, p.clone());
+                assert!(r.is_ok(), "{id}: {r:?}");
+            }
+            assert_eq!(owner_history(&a), before, "{steps:?}");
+            assert_eq!(system_lines(&a), lines, "{steps:?}: nothing announced");
+        }
+    }
+
+    #[test]
+    fn a_member_cannot_accept_its_own_changes() {
+        type Setup = fn(&mut WordApp);
+        let deletion: Setup = |a| {
+            let _ = run_as_member(a, "@claude", "select.text", json!({"text": "Price"}));
+            assert!(run_as_member(a, "@claude", "text.delete", json!({})).is_ok());
+        };
+        let insertion: Setup = |a| {
+            let _ = run_as_member(a, "@claude", "select.text", json!({"text": "Term"}));
+            let _ = run_as_member(a, "@claude", "select.collapse", json!({}));
+            assert!(run_as_member(a, "@claude", "text.insert", json!({"text": "Fixed "})).is_ok());
+            let _ = run_as_member(a, "@claude", "select.text", json!({"text": "Fixed "}));
+        };
+        for (what, setup) in [("deletion", deletion), ("insertion", insertion)] {
+            for id in ["review.accept", "review.acceptAll"] {
+                let mut a = app();
+                setup(&mut a);
+                let before = owner_history(&a);
+                let lines = system_lines(&a);
+                let r = run_as_member(&mut a, "@claude", id, json!({}));
+                assert_eq!(r, Err(ACCEPT_OWN.to_string()), "{what} {id}");
+                assert_eq!(owner_history(&a), before, "{what} {id}: rolled back exactly");
+                assert_eq!(system_lines(&a), lines, "{what} {id}: nothing posted");
+                // Another member may accept it (its caret starts at the document start, where
+                // the deletion is; the insertion it selects).
+                if what == "insertion" {
+                    let _ = run_as_member(&mut a, "@pi", "select.text", json!({"text": "Fixed "}));
+                }
+                assert!(run_as_member(&mut a, "@pi", id, json!({})).is_ok(), "{what} {id}");
+                assert_ne!(a.session.doc, before.3, "{what} {id}");
+                assert!(
+                    system_lines(&a).iter().any(|l| l.starts_with("@pi accepted") && l.ends_with("from @claude")),
+                    "{what} {id}: {:?}",
+                    system_lines(&a)
+                );
+            }
+        }
+        assert_eq!(ACCEPT_OWN, "accepting your own changes: ask the OWNER");
+    }
+
+    #[test]
+    fn a_member_may_accept_the_owners_changes_and_reject_its_own() {
+        let mut a = owner_insertion();
+        let _ = run_as_member(&mut a, "@claude", "select.text", json!({"text": "24"}));
+        assert!(run_as_member(&mut a, "@claude", "review.accept", json!({})).is_ok());
+        assert!(system_lines(&a).contains(&"@claude accepted 2 characters from Owner".to_string()), "{:?}", system_lines(&a));
+        let mut a = app();
+        let _ = run_as_member(&mut a, "@claude", "select.text", json!({"text": "Term"}));
+        let _ = run_as_member(&mut a, "@claude", "select.collapse", json!({}));
+        assert!(run_as_member(&mut a, "@claude", "text.insert", json!({"text": "Fixed "})).is_ok());
+        let _ = run_as_member(&mut a, "@claude", "select.text", json!({"text": "Fixed "}));
+        let r = run_as_member(&mut a, "@claude", "review.reject", json!({}));
+        assert!(r.is_ok(), "{r:?}");
+        assert!(!text_of(&mut a).contains("Fixed"));
+        assert!(system_lines(&a).contains(&"@claude rejected 6 characters from @claude".to_string()), "{:?}", system_lines(&a));
+    }
+
+    #[test]
+    fn member_requests_through_the_control_entry_point_go_to_the_gate() {
+        let mut a = app();
+        let ctx = egui::Context::default();
+        let doc = a.session.doc.clone();
+        let owner_sel = a.session.sel.clone();
+        let said = a.session.chat.as_ref().map(|c| c.hub().messages().len()).unwrap_or(0);
+        let send = |a: &mut WordApp, method: &str, params: Value| -> Value {
+            let (req, rx) = crate::control::ControlRequest::new(method, params);
+            a.answer_control(&ctx, req.with_principal(crate::control::Principal::Member("@claude".into())));
+            rx.try_recv().unwrap_or(Value::Null)
+        };
+        let v = send(&mut a, "file.save", json!({}));
+        assert_eq!(v, json!({"ok": false, "error": "file.save: not on the agent allow-list"}));
+        let v = send(&mut a, "chat.post", json!({"text": "I am the owner"}));
+        assert_eq!(v, json!({"ok": false, "error": "chat.post: not on the agent allow-list"}));
+        let v = send(&mut a, "engine.execute", json!({"command": "chat.post", "params": {"text": "I am the owner"}}));
+        assert_eq!(v, json!({"ok": false, "error": "chat.post: not on the agent allow-list"}));
+        // An allowed read runs as the member: its own selection, not the owner's.
+        let v = send(&mut a, "engine.execute", json!({"command": "select.text", "params": {"text": "12 months"}}));
+        assert_eq!(v["ok"], true, "{v}");
+        assert_eq!(a.member_sel.get("@claude").map(|m| m.text.as_str()), Some("12 months"));
+        let v = send(&mut a, "document.text", json!({}));
+        assert!(v["ok"] == true && v.to_string().contains("Price"), "{v}");
+        assert_eq!(a.session.sel, owner_sel, "the owner's selection is untouched");
+        assert_eq!(a.session.doc, doc);
+        assert_eq!(a.session.chat.as_ref().map(|c| c.hub().messages().len()).unwrap_or(0), said, "nothing posted");
+        // The same request from the window's key is not gated.
+        let (req, rx) = crate::control::ControlRequest::new("engine.execute", json!({"command": "select.text", "params": {"text": "Price"}}));
+        a.answer_control(&ctx, req);
+        assert_eq!(rx.try_recv().ok().map(|v| v["ok"].clone()), Some(json!(true)));
+        assert_eq!(a.session.selected_text(), "Price");
     }
 }
