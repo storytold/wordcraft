@@ -14,6 +14,7 @@ pub mod rules;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 pub use hub::{ChatError, Hub, Member, Message, Principal, Role};
@@ -62,11 +63,21 @@ pub struct Chat {
     hub: Arc<Hub>,
     port: Arc<dyn Port>,
     client: Mutex<String>,
+    logs: Option<PathBuf>,
 }
 
 impl Chat {
     pub fn new(hub: Arc<Hub>, port: Arc<dyn Port>) -> Chat {
-        Chat { hub, port, client: Mutex::new(DEFAULT_CLIENT_COMMAND.to_string()) }
+        Chat { hub, port, client: Mutex::new(DEFAULT_CLIENT_COMMAND.to_string()), logs: None }
+    }
+    /// Keep logs in `dir` (`<settings>/chats`); without it the chat stays in memory.
+    pub fn with_logs(mut self, dir: PathBuf) -> Chat {
+        self.logs = Some(dir);
+        self
+    }
+    /// The log of the document at `canonical_doc`.
+    pub fn log_for(&self, canonical_doc: &Path) -> Option<PathBuf> {
+        self.logs.as_ref().map(|d| d.join(log::file_name(canonical_doc)))
     }
     pub fn hub(&self) -> &Arc<Hub> {
         &self.hub

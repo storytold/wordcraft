@@ -216,7 +216,12 @@ fn main() -> eframe::Result {
                 log::error!("{e}");
             }
             app = app.with_control(rx);
-            let chat = std::sync::Arc::new(wordcraft_chat::Chat::new(hub, port.clone()));
+            let chat = wordcraft_chat::Chat::new(hub, port.clone());
+            let chat = match wordcraft_control_key::settings_dir() {
+                Some(d) => chat.with_logs(d.join("chats")),
+                None => chat,
+            };
+            let chat = std::sync::Arc::new(chat);
             set_chat_client(&chat, std::env::var(CHAT_CLIENT_ENV).ok().as_deref());
             app.session.chat = Some(chat);
             for f in files {

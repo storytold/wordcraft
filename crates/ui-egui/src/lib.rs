@@ -16,6 +16,7 @@ macro_rules! tl {
 pub mod backstage;
 pub mod canvas;
 pub mod chat_gate;
+mod chat_log;
 pub mod chat_guard;
 pub mod chat_shift;
 pub mod chrome;
@@ -134,6 +135,9 @@ pub struct WordApp {
     pub autosave: bool,
     pub word_count: (u64, usize),
     last_autosave: f64,
+    /// The document whose chat log is attached (see `chat_log::sync`).
+    pub(crate) chat_log_for: Option<std::path::PathBuf>,
+    pub(crate) chat_log_gen: u64,
 }
 
 impl WordApp {
@@ -163,6 +167,8 @@ impl WordApp {
             autosave: true,
             word_count: (0, 0),
             last_autosave: 0.0,
+            chat_log_for: None,
+            chat_log_gen: 0,
         }
     }
 
@@ -232,6 +238,7 @@ impl WordApp {
             let s = std::mem::take(&mut self.session.status);
             self.status(s);
         }
+        chat_log::sync(self);
     }
 
     /// Requests commands make of the UI (open a dialog…).

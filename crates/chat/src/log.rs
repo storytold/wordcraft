@@ -27,6 +27,18 @@ pub fn private_dir(dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// A document's log file name: a readable prefix from its file name and a stable id, the
+/// FNV-1a hash of its canonical path (`Contract v2.docx` -> `Contract_v2.docx-1f0c..e9.jsonl`).
+pub fn file_name(canonical_doc: &Path) -> String {
+    let raw = canonical_doc.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    // `take` counts chars, so the cut is always at a char boundary.
+    let safe: String = raw.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' }).take(48).collect();
+    let safe = safe.trim_start_matches('.');
+    let prefix = if safe.trim_matches(|c| c == '.' || c == '_').is_empty() { "document" } else { safe };
+    let hash = canonical_doc.as_os_str().as_encoded_bytes().iter().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3));
+    format!("{prefix}-{hash:016x}.jsonl")
+}
+
 /// Every message in the log; unreadable lines are skipped.
 pub fn load(path: &Path) -> std::io::Result<Vec<Message>> {
     let text = match std::fs::read_to_string(path) {
@@ -41,6 +53,36 @@ pub fn load(path: &Path) -> std::io::Result<Vec<Message>> {
 mod tests {
     use super::*;
     use crate::hub::{Message, Role};
+
+    #[test]
+    fn file_name_is_stable_readable_and_safe() {
+        let a = file_name(Path::new("/docs/Contract v2.docx"));
+        assert!(a.starts_with("Contract_v2.docx-") && a.ends_with(".jsonl"), "{a}");
+        assert_eq!(a.len(), "Contract_v2.docx-".len() + 16 + ".jsonl".len());
+        assert_eq!(a, file_name(Path::new("/docs/Contract v2.docx")), "stable");
+        assert_ne!(a, file_name(Path::new("/other/Contract v2.docx")), "the folder counts");
+        assert!(file_name(Path::new("/x/R\u{e9}sum\u{e9}.docx")).starts_with("R_sum_.docx-"));
+        assert!(file_name(Path::new("/")).starts_with("document-"));
+        assert!(!file_name(Path::new("/x/.hidden")).starts_with('.'));
+        assert!(file_name(Path::new(&format!("/x/{}.docx", "a".repeat(300)))).len() <= 48 + 1 + 16 + 6);
+        let wide = format!("/x/{}.docx", "\u{e9}".repeat(100));
+        assert!(file_name(Path::new(&wide)).starts_with("document-"), "multi-byte names are cut at a char boundary");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_log_file_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("wc-chat-mode-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        private_dir(&dir).unwrap();
+        let p = dir.join("t.jsonl");
+        let m = Message { seq: 1, ts_ms: 5, from: "OWNER".into(), role: crate::Role::Owner, text: "x".into(), mentions: vec![] };
+        append(&p, &m).unwrap();
+        assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+        assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn append_and_load_roundtrip() {
