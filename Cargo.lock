@@ -4860,6 +4860,7 @@ dependencies = [
  "log",
  "rfd",
  "serde_json",
+ "winit",
  "winresource",
  "wordcraft-control-key",
  "wordcraft-doc",
