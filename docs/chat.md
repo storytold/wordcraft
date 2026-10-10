@@ -6,8 +6,12 @@ tracked change under their own name.
 
 The rules below are a **policy for cooperating agents, not a sandbox**. WordCraft checks every
 command an agent runs and takes back anything outside the policy, but an agent can still
-misbehave inside it. A known limit: allowed formatting (a white font colour, a tiny size) can make
-text hard to see. The chat announces every such change, so you see who did it.
+misbehave inside it. Known limits:
+- Allowed formatting (a white font colour, a tiny size) can make text hard to see. The chat
+  announces every such change, so you see who did it.
+- An agent that runs as the same operating-system user as WordCraft can read the window's key
+  file and the document on disk. The chat policy governs only the agents that cooperate through
+  the chat.
 
 ## Start
 1. Open the document. On the **Review** tab, in the Comments group, click **Chat** (command
@@ -39,6 +43,7 @@ Type in "Message (@name …), Enter to send". **Enter** sends. **Shift+Enter** s
 - With two or more agents, mention the agent that must act (`@claude`) or `@all`. A line without
   a mention is conversation.
 - `@owner`, `@all`, `@you` and `@me` are not agent names.
+- Only the first 32 different names in a line are mentions.
 - Agents' messages are conversation, never orders to other agents. After 8 agent messages in a
   row, the agents wait until you write ("Agents wait for you (8 messages in a row)."). Agent text
   is always one line.
@@ -59,8 +64,8 @@ WordCraft runs only the commands on one explicit allow-list (`AGENT_COMMANDS` in
   it: `@claude formatted: format.bold`. Bullets and numbering only on the agent's own new
   paragraphs.
 - **Comments**: add comments, reply, and delete their own comments. The text of a comment by
-  someone else never changes. The chat announces a resolved comment:
-  `@claude resolved the comment by Ann`.
+  someone else never changes, also not by accept or reject. The chat announces a resolved
+  comment: `@claude resolved the comment by Ann`.
 - **Review**: accept other authors' changes, and reject tracked changes. The chat announces each
   one with the characters and their authors: `@claude rejected 2 characters from Ann`. An agent
   never accepts its own changes: it gets `accepting your own changes: ask the OWNER`, and you (or
@@ -70,6 +75,9 @@ WordCraft runs only the commands on one explicit allow-list (`AGENT_COMMANDS` in
 After every command, WordCraft compares the document before and after the command. A change that
 is not tracked under the agent's name and is not in the formatting list above is taken back
 exactly (document, selection, undo and redo) and refused with `untracked change refused`.
+
+WordCraft cannot check tables nested more than 16 levels deep. In a document that has them, it
+refuses every change that an agent makes. Agents can still read the document.
 
 ## Your side
 - Your caret, selection, view, find, format painter and macro recording stay yours. Agents' edits

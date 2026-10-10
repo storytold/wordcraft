@@ -4,11 +4,14 @@
 //!
 //! `--control <port>` (or `WORDCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server:
 //! `{"id":1,"key":"…","method":"engine.execute","params":{"command":"text.insert","params":{"text":"Hi"}}}`.
-//! Every request needs the key the app writes to `<settings>/control-key.<instance>` (mode 0600,
-//! removed on exit). See `docs/control-protocol.md`.
+//! Every request needs a key: the window's key, which the app writes to
+//! `<settings>/control-key.<instance>` (mode 0600), or a chat member's key from `chat.join` (the
+//! chat gate checks what a member may run). See `docs/control-protocol.md` and `docs/chat.md`.
 //!
-//! No port is open until `--control` or Review › Chat › Start Chat. `WORDCRAFT_CHAT_CLIENT` sets
-//! the command at the start of chat invite lines (default `wordcraft-cli chat`), for packagers.
+//! No port is open until `--control` or Review › Chat › Start Chat. Stop Chat closes the port
+//! that Start Chat opened and removes its key file. On exit the app closes its port and removes
+//! the key file, also for `--control`. `WORDCRAFT_CHAT_CLIENT` sets the command at the start of
+//! chat invite lines (default `wordcraft-cli chat`), for packagers.
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
