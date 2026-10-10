@@ -63,6 +63,8 @@ pub struct CanvasState {
     balloon_h: f32,
     /// Screen rects of the comment balloons last frame (for the control channel and tests).
     pub balloon_rects: Vec<(u32, Rect)>,
+    /// A paste event arrived since the last Mod+V release (see `keys::canvas_events`).
+    pub(crate) pasted: bool,
 }
 
 impl CanvasState {
@@ -96,6 +98,7 @@ impl Default for CanvasState {
             obj_drag: None,
             context_menu_open: false,
             mini_anchor: None,
+            pasted: false,
             wheel: Default::default(),
             scroll_offset: egui::Vec2::ZERO,
             scroll_max: egui::Vec2::ZERO,

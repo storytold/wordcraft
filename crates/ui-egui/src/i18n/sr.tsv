@@ -10,7 +10,6 @@
 #   escapes    \n  \t  \\  inside a column. `{name}` placeholders must appear in both columns, and a
 #              trailing "…" in one needs one in the other.
 #   Lines starting with # and blank lines are ignored. A missing entry shows in English.
-#
 # Clean room: every entry was written from the plain meaning of the English label in ordinary
 # computing vocabulary. No Microsoft Word (or other product) localisation, string table or
 # translated UI was consulted or copied; add entries the same way.
@@ -29,8 +28,6 @@
 	Add a comment	Додај коментар
 	Add a Table	Додај табелу
 	Add Space Before Paragraph	Додај размак пре пасуса
-	Add space between Asian and Latin text	Додај размак између азијског и латиничног текста
-	Add space between Asian text and numbers	Додај размак између азијског текста и бројева
 	Add Text	Додај текст
 	Add to Dictionary	Додај у речник
 	Add to Style Gallery	Додај у галерију стилова
@@ -49,10 +46,7 @@
 	All Caps	Сва велика слова
 	All caps	Сва велика слова
 	All Markup	Све измене
-	Allow hanging punctuation	Дозволи висећу интерпункцију
-	Allow Latin text to wrap in the middle of a word	Дозволи преламање латиничног текста усред речи
 	Alt Text	Алтернативни текст
-	Apply Asian line-breaking rules (kinsoku)	Примени азијска правила преламања редова (кинсоку)
 	Apply Character Style	Примени стил знакова
 	Apply Style	Примени стил
 	Apply Styles	Изабери и примени стилове
@@ -60,7 +54,6 @@
 	Arrange\nAll	Распореди\nсве
 	Arrow	Стрелица
 	Artistic Effects	Уметнички ефекти
-	Asian Typography	Азијска типографија
 	Author	Аутор
 	AutoCorrect Options	Опције аутоматске исправке
 	AutoFit	Аутоматско уклапање
@@ -80,9 +73,6 @@
 	Left Margin	Лева маргина
 	Reopen	Поново отвори
 	Right Margin	Десна маргина
-	Compress punctuation at the start of a line	Сажми интерпункцију на почетку реда
-	Indents and Spacing	Увлачења и размак
-	Line breaking	Преламање редова
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Прикажи документе са инвертованим бојама, као код Приказ › Промени режим. Чување, штампање и PDF нису погођени.
 	AutoSave saves every change to the file (needs a saved document)	Аутоматско чување уписује сваку измену у фајл (документ мора бити већ сачуван)
 	AutoText	Аутоматски текст
@@ -1026,6 +1016,21 @@
 	Type the recipients, or load them from a file.	Унесите примаоце или их учитајте из фајла.
 	Use an Existing List…	Користи постојећу листу…
 	A file dialog is already open.	Дијалог за фајлове је већ отворен.
+	Height:	Висина:
+	Width:	Ширина:
+	Row	Ред
+	Cell	Ћелија
+	Preferred width:	Жељена ширина:
+	Alignment:	Поравнање:
+	Indent from left:	Увлачење слева:
+	Specify height:	Задај висину:
+	Exactly	Тачно
+	At least	Најмање
+	Allow row to break across pages	Дозволи прелом реда између страница
+	Repeat as header row on each page	Понови као ред заглавља на свакој страници
+	Vertical alignment:	Вертикално поравнање:
+	Top	Горе
+	Bottom	Доле
 	Alt text	Алтернативни текст
 	Alt:	Алт. текст:
 	W:	Ш:

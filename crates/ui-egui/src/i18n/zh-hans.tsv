@@ -24,8 +24,6 @@
 	Add a comment	添加批注
 	Add a Table	添加表格
 	Add Space Before Paragraph	在段前添加间距
-	Add space between Asian and Latin text	在亚洲文字与西文之间添加间距
-	Add space between Asian text and numbers	在亚洲文字与数字之间添加间距
 	Add Text	添加文字
 	Add to Dictionary	添加到词典
 	Add to Style Gallery	添加到样式库
@@ -44,10 +42,7 @@
 	All Caps	全部大写
 	All caps	全部大写
 	All Markup	所有标记
-	Allow hanging punctuation	允许标点溢出边界
-	Allow Latin text to wrap in the middle of a word	允许西文在单词中间换行
 	Alt Text	替代文字
-	Apply Asian line-breaking rules (kinsoku)	应用亚洲文字的断行规则（禁则）
 	Apply Character Style	应用字符样式
 	Apply Style	应用样式
 	Apply Styles	选择并应用样式
@@ -55,7 +50,6 @@
 	Arrange\nAll	全部重排
 	Arrow	箭头
 	Artistic Effects	艺术效果
-	Asian Typography	亚洲版式
 	Author	作者
 	AutoCorrect Options	自动更正选项
 	AutoFit	自动调整
@@ -73,9 +67,6 @@
 	Dark page (white text on black)	深色页面（黑底白字）
 	Edit Comment	编辑批注
 	Left Margin	左边距
-	Compress punctuation at the start of a line	压缩行首标点
-	Indents and Spacing	缩进和间距
-	Line breaking	断行
 	More templates →	更多模板 →
 	No templates match your search.	没有与搜索匹配的模板。
 	Reopen	重新打开
@@ -1021,6 +1012,21 @@
 	Dark	深色
 	Use system setting	使用系统设置
 	A file dialog is already open.	已有一个文件对话框处于打开状态。
+	Height:	高度：
+	Width:	宽度：
+	Row	行
+	Cell	单元格
+	Preferred width:	首选宽度：
+	Alignment:	对齐方式：
+	Indent from left:	左缩进：
+	Specify height:	指定高度：
+	Exactly	固定值
+	At least	最小值
+	Allow row to break across pages	允许跨页断行
+	Repeat as header row on each page	在各页重复作为标题行
+	Vertical alignment:	垂直对齐方式：
+	Top	顶端
+	Bottom	底端
 	Alt text	替代文字
 	Alt:	替代文字：
 	W:	宽：

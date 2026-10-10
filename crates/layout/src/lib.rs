@@ -11,7 +11,6 @@
 pub mod display;
 pub mod fields;
 pub mod hit;
-pub mod kinsoku;
 pub mod math;
 pub mod para;
 mod table;
@@ -30,6 +29,7 @@ use wordcraft_geom::{Point, Rect};
 pub use fields::FieldCtx;
 pub use hit::VisualStep;
 pub use para::{LineEnd, ParaLayout};
+pub use table::{autofit_widths, measure_table_columns};
 
 /// How the document is viewed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]

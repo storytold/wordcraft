@@ -1306,6 +1306,56 @@ fn table_design(app: &mut WordApp, ui: &mut Ui) {
     });
 }
 
+/// Table Layout › Cell Size: the caret cell's row height and column width, in inches. They show
+/// the size on the page (a row without a set height shows the height its text gives it) and
+/// editing runs `table.rowHeight` / `table.columnWidth`; dragging one is a single Undo.
+fn cell_size_boxes(ui: &mut Ui, app: &mut WordApp) {
+    let story = app.session.sel.focus.story;
+    let Some((tp, r, c)) = app.session.sel.focus.path.cell() else { return };
+    let Some(t) = app.session.doc.table(story, &tp) else { return };
+    let row = t.rows.get(r).map(|x| x.props.clone()).unwrap_or_default();
+    let stored_w = t.grid.get(t.grid_col(r, c)).copied();
+    let laid = app.session.layout().pages.iter().flat_map(|pg| pg.items.iter()).find_map(|it| match it {
+        wordcraft_layout::Placed::Cell { rect, table, row, cell, story: st } if *table == tp && *row == r && *cell == c && *st == story => {
+            Some(*rect)
+        }
+        _ => None,
+    });
+    let unit = wordcraft_geom::Unit::default();
+    let k = unit.pt_per_unit();
+    let h0 = row.height.or(laid.map(|x| x.h)).unwrap_or(0.0);
+    let w0 = laid.map(|x| x.w).or(stored_w).unwrap_or(0.0);
+    let exact = row.height_rule == wordcraft_doc::props::HeightRule::Exact;
+    // The edited value in points, and whether it continues a drag (joins the previous Undo step).
+    let boxed = |ui: &mut Ui, label: &str, pt: f32| -> Option<(f32, bool)> {
+        let mut out = None;
+        crate::widgets::row(ui, |ui| {
+            ui.add_sized(vec2(48.0, 18.0), egui::Label::new(egui::RichText::new(tl!(label)).small()));
+            let mut v = pt / k;
+            let r = ui.add_sized(vec2(72.0, 18.0), egui::DragValue::new(&mut v).speed(0.01).range(0.02..=22.0).suffix(unit.suffix()).max_decimals(2));
+            if r.changed() {
+                out = Some((v * k, r.dragged() && !r.drag_started()));
+            }
+        });
+        ui.add_space(2.0);
+        out
+    };
+    stack(ui, |ui| {
+        if let Some((h, join)) = boxed(ui, "Height:", h0) {
+            if join {
+                app.session.join_next_undo();
+            }
+            let _ = app.run("table.rowHeight", json!({"height": h, "rule": if exact { "exact" } else { "atLeast" }}));
+        }
+        if let Some((w, join)) = boxed(ui, "Width:", w0) {
+            if join {
+                app.session.join_next_undo();
+            }
+            let _ = app.run("table.columnWidth", json!({"width": w}));
+        }
+    });
+}
+
 fn table_layout(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Table", None, app, |ui, app| {
         stack(ui, |ui| {
@@ -1346,6 +1396,7 @@ fn table_layout(app: &mut WordApp, ui: &mut Ui) {
             mi(ui, app, "AutoFit Window", "table.autofit", json!({"mode": "window"}));
             mi(ui, app, "Fixed Column Width", "table.autofit", json!({"mode": "fixed"}));
         });
+        cell_size_boxes(ui, app);
         stack(ui, |ui| {
             small(ui, app, "distributeRows", Some("Distribute Rows"), "Distribute Rows", "table.distributeRows", json!({}), false);
             small(ui, app, "distributeCols", Some("Distribute Columns"), "Distribute Columns", "table.distributeColumns", json!({}), false);

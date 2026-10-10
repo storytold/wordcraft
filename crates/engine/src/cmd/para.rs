@@ -129,9 +129,6 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("para.widowControl", "Widow/Orphan Control", "Home › Paragraph › Line and Page Breaks", |s, v| {
             tog(s, v, |p| p.widow_control, |p, b| p.widow_control = Some(b))
         }),
-        CommandSpec::new("para.asianTypography", "Asian Typography", "Home › Paragraph › Asian Typography", asian_typography).params(
-            r#"{"kinsoku"?: bool (East Asian line-breaking rules), "wordWrap"?: bool (false: Latin words may break at any character), "overflowPunct"?: bool (hanging punctuation), "topLinePunct"?: bool (compress punctuation at the start of a line), "autoSpaceDE"?: bool (space between Asian and Latin text), "autoSpaceDN"?: bool (space between Asian text and numbers)} — flags left out stay as they are; returns the flags at the caret"#,
-        ),
         CommandSpec::new("para.tabs", "Tabs", "Home › Paragraph › Paragraph", |s, v| {
             let tabs: Vec<TabStop> = serde_json::from_value(v.get("tabs").cloned().unwrap_or(Value::Null)).map_err(|e| CmdError::Params(e.to_string()))?;
             if tabs.len() > 64 {
@@ -241,42 +238,6 @@ fn tog(s: &mut Session, v: &Value, get: fn(&ParaProps) -> Option<bool>, set: fn(
         !get(&props).unwrap_or(false)
     });
     fmt(s, &|p| set(p, on))
-}
-
-/// Asian Typography (the Paragraph dialog's tab): sets the given flags on every selected
-/// paragraph and returns the resolved flags at the caret.
-fn asian_typography(s: &mut Session, v: &Value) -> CmdResult {
-    let flag = |k: &str| p::bool(v, k);
-    let (kinsoku, word_wrap, overflow, top_line, de, dn) =
-        (flag("kinsoku"), flag("wordWrap"), flag("overflowPunct"), flag("topLinePunct"), flag("autoSpaceDE"), flag("autoSpaceDN"));
-    let mut out = if [kinsoku, word_wrap, overflow, top_line, de, dn].iter().any(Option::is_some) {
-        fmt(s, &|p| {
-            let set = |field: &mut Option<bool>, val: Option<bool>| {
-                if val.is_some() {
-                    *field = val;
-                }
-            };
-            set(&mut p.kinsoku, kinsoku);
-            set(&mut p.word_wrap, word_wrap);
-            set(&mut p.overflow_punct, overflow);
-            set(&mut p.top_line_punct, top_line);
-            set(&mut p.auto_space_de, de);
-            set(&mut p.auto_space_dn, dn);
-        })?
-    } else {
-        sel_result(s)?
-    };
-    let r = cur(s);
-    if let Some(o) = out.as_object_mut() {
-        o.insert(
-            "asianTypography".into(),
-            json!({
-                "kinsoku": r.kinsoku, "wordWrap": r.word_wrap, "overflowPunct": r.overflow_punct,
-                "topLinePunct": r.top_line_punct, "autoSpaceDE": r.auto_space_de, "autoSpaceDN": r.auto_space_dn,
-            }),
-        );
-    }
-    Ok(out)
 }
 
 pub fn indent(s: &mut Session, _: &Value) -> CmdResult {

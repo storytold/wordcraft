@@ -142,12 +142,6 @@ impl PropCtx {
                 "w:suppressAutoHyphens" => p.suppress_hyphens = Some(on_off(k)),
                 "w:suppressLineNumbers" => p.suppress_line_numbers = Some(on_off(k)),
                 "w:bidi" => p.bidi = Some(on_off(k)),
-                "w:kinsoku" => p.kinsoku = Some(on_off(k)),
-                "w:wordWrap" => p.word_wrap = Some(on_off(k)),
-                "w:overflowPunct" => p.overflow_punct = Some(on_off(k)),
-                "w:topLinePunct" => p.top_line_punct = Some(on_off(k)),
-                "w:autoSpaceDE" => p.auto_space_de = Some(on_off(k)),
-                "w:autoSpaceDN" => p.auto_space_dn = Some(on_off(k)),
                 "w:framePr" => {
                     if matches!(k.attr("w:dropCap"), Some("drop") | Some("margin")) {
                         p.drop_cap = Some(k.attr("w:lines").and_then(u32_of).unwrap_or(3).clamp(1, 10) as u8);

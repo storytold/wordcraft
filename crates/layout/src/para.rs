@@ -824,19 +824,19 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let to_para = |i: usize| -> Option<usize> {
         if left.is_empty() { Some(i) } else { ends.binary_search_by_key(&i, |e| e.0).ok().and_then(|k| ends.get(k)).map(|e| e.1) }
     };
-    let mut found = Vec::new();
+    let mut opps = std::collections::HashSet::new();
     for (i, o) in unicode_linebreak::linebreaks(&text) {
         // Word keeps "and/or" and web addresses whole: no break right after a slash (a word
         // too long for the line still breaks anywhere).
         let after_slash =
             text.get(..i).is_some_and(|t| t.ends_with('/')) && text.get(i..).and_then(|t| t.chars().next()).is_some_and(char::is_alphanumeric);
-        if (o == unicode_linebreak::BreakOpportunity::Allowed || i < text.len()) && !after_slash {
-            found.push(i);
+        if (o == unicode_linebreak::BreakOpportunity::Allowed || i < text.len())
+            && !after_slash
+            && let Some(end) = to_para(i)
+        {
+            opps.insert(end);
         }
     }
-    // Asian typography: kinsoku and breaking Latin words anywhere.
-    crate::kinsoku::apply(&text, &mut found, rp.kinsoku, rp.word_wrap);
-    let opps: std::collections::HashSet<usize> = found.into_iter().filter_map(to_para).collect();
     for c in &mut b.clusters {
         c.break_after = opps.contains(&c.end) || matches!(c.kind, ClKind::Object(_) | ClKind::Tab);
     }
