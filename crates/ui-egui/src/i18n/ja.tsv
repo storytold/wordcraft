@@ -735,6 +735,7 @@
 	Triangle	三角形
 	Two	2 段
 	Type a command, e.g. "insert table"	コマンドを入力（例: "insert table"）
+	Type an agent name	エージェント名を入力
 	Type Text	テキストを入力
 	Underline	下線
 	Underline Words Only	単語のみ下線

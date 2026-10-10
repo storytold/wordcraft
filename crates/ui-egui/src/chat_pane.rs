@@ -17,6 +17,7 @@ const RUNNING: &str = "Agents join at {address}";
 const USER_NAME: &str = "User name:";
 const NAME_NO_AT: &str = "The user name cannot start with @.";
 const INVITE: &str = "Invite Agent";
+const NEED_NAME: &str = "Type an agent name";
 const INVITE_HINT: &str = "Give this line to the agent. It works once, for 10 minutes.";
 const COPY: &str = "Copy";
 const MEMBERS: &str = "Members";
@@ -31,7 +32,7 @@ const FAILED: &str = "Failed: {error}";
 const NO_CHAT: &str = "No chat in this window.";
 
 /// Every string the pane shows (each catalog must have them all).
-pub const PANE_STRINGS: [&str; 20] = [
+pub const PANE_STRINGS: [&str; 21] = [
     TITLE,
     IDLE,
     START,
@@ -41,6 +42,7 @@ pub const PANE_STRINGS: [&str; 20] = [
     NAME_NO_AT,
     INVITE,
     INVITE_HINT,
+    NEED_NAME,
     COPY,
     MEMBERS,
     REMOVE,
@@ -79,6 +81,19 @@ fn owner_field(kept: Option<String>, author: &str) -> String {
 /// The message box.
 fn input_id() -> egui::Id {
     egui::Id::new("chat_input_box")
+}
+
+/// The name the invite field starts with.
+const DEFAULT_HANDLE: &str = "@claude";
+
+/// The field's text now: what the user left there, else the default (real text, not a hint).
+fn invite_field(ui: &Ui) -> String {
+    ui.data(|d| d.get_temp::<String>(egui::Id::new("chat_invite_handle"))).unwrap_or_else(|| DEFAULT_HANDLE.to_string())
+}
+
+/// An invite needs a name that is not empty or only spaces.
+fn can_invite(handle: &str) -> bool {
+    !handle.trim().is_empty()
 }
 
 /// An invite waiting for its agent (what `chat.invite` returned).
@@ -191,10 +206,11 @@ fn pane(app: &mut WordApp, ui: &mut Ui) {
     // Invite: the line shows the name bound to the code (never the field's live text) and goes
     // away once the agent joined or the code expired.
     let (hid, lid) = (egui::Id::new("chat_invite_handle"), egui::Id::new("chat_invite_pending"));
-    let mut handle = ui.data(|d| d.get_temp::<String>(hid)).unwrap_or_default();
+    let mut handle = invite_field(ui);
     ui.horizontal(|ui| {
-        ui.add(egui::TextEdit::singleline(&mut handle).hint_text("@claude").desired_width(140.0));
-        if ui.button(tl!(INVITE)).clicked() {
+        ui.add(egui::TextEdit::singleline(&mut handle).desired_width(140.0));
+        let ready = can_invite(&handle);
+        if ui.add_enabled(ready, egui::Button::new(tl!(INVITE))).on_disabled_hover_text(tl!(NEED_NAME)).clicked() {
             match app.run("chat.invite", json!({"name": handle})) {
                 Ok(v) => {
                     let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
@@ -203,7 +219,6 @@ fn pane(app: &mut WordApp, ui: &mut Ui) {
                         d.insert_temp(lid, inv);
                         d.remove::<String>(err_id);
                     });
-                    handle.clear();
                 }
                 Err(e) => ui.data_mut(|d| {
                     d.insert_temp(err_id, failed(&e));
@@ -311,7 +326,7 @@ mod tests {
 
     #[test]
     fn pane_strings_are_translated() {
-        assert_eq!(PANE_STRINGS.len(), 20);
+        assert_eq!(PANE_STRINGS.len(), 21);
         for l in crate::i18n::Lang::all().filter(|l| *l != crate::i18n::Lang::EN) {
             for s in PANE_STRINGS {
                 assert!(crate::i18n::has(l, s), "{}: {s:?}", l.code());
@@ -355,6 +370,40 @@ mod tests {
         frame(&mut a);
         a.run("chat.stop", json!({})).unwrap();
         frame(&mut a);
+    }
+
+    fn run_frames(ctx: &egui::Context, a: &mut WordApp) {
+        for _ in 0..2 {
+            ctx.run_ui(egui::RawInput::default(), |ui| show(a, ui)).drop_without_applying_deltas();
+        }
+    }
+
+    #[test]
+    fn a_fresh_invite_field_holds_the_default_name() {
+        let ctx = ctx_with_fonts();
+        let mut a = app_with_chat();
+        a.ui.chat_pane = true;
+        a.run("chat.start", json!({})).unwrap();
+        run_frames(&ctx, &mut a);
+        let got = ctx.data(|d| d.get_temp::<String>(egui::Id::new("chat_invite_handle")));
+        assert_eq!(got.as_deref(), Some("@claude"));
+    }
+
+    #[test]
+    fn an_empty_invite_field_cannot_invite() {
+        assert!(can_invite("@claude"));
+        assert!(!can_invite(""));
+        assert!(!can_invite("   "));
+        let ctx = ctx_with_fonts();
+        let mut a = app_with_chat();
+        a.ui.chat_pane = true;
+        a.run("chat.start", json!({})).unwrap();
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new("chat_invite_handle"), String::new()));
+        run_frames(&ctx, &mut a);
+        let hub = a.session.chat.as_ref().unwrap().hub().clone();
+        assert!(ctx.data(|d| d.get_temp::<PendingInvite>(egui::Id::new("chat_invite_pending"))).is_none());
+        assert!(hub.invite("  ").is_err(), "the hub itself still refuses a blank name");
+        assert_eq!(ctx.data(|d| d.get_temp::<String>(egui::Id::new("chat_invite_handle"))).as_deref(), Some(""), "stays empty, not refilled");
     }
 
     #[test]
