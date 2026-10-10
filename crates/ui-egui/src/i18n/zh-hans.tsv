@@ -133,6 +133,15 @@
 	Clear	清除
 	Clear All Formatting	清除所有格式
 	Clipboard	剪贴板
+	Clipboard Pane	剪贴板窗格
+	Clipboard Items	剪贴板项目
+	Paste Clipboard Item	粘贴剪贴板项目
+	Paste All	全部粘贴
+	Delete Clipboard Item	删除剪贴板项目
+	Clear All	全部清除
+	Click an item to paste it.	单击项目即可粘贴。
+	Nothing collected yet. Items you copy or cut appear here.	尚无内容。复制或剪切的项目会显示在这里。
+	(picture or object)	（图片或对象）
 	Close	关闭
 	Close Header and Footer	关闭页眉和页脚
 	Collapse Selection	折叠选定内容
@@ -906,7 +915,6 @@
 	Clear Paragraph Formatting	清除段落格式
 	Clear Character Style	清除字符样式
 	Clear Character Formatting	清除字符格式
-	Clear All	全部清除
 	Paste Special	选择性粘贴
 	Paste Special…	选择性粘贴…
 	Paste as:	粘贴为：

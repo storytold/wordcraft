@@ -1,4 +1,4 @@
-//! Side panes: Navigation (headings, pages, search results), Styles, Style Inspector, Comments.
+//! Side panes: Navigation (headings, pages, search results), Clipboard, Styles, Style Inspector, Comments.
 
 use egui::{Stroke, Ui, vec2};
 use serde_json::{Value, json};
@@ -15,6 +15,13 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             .resizable(true)
             .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
             .show(ui, |ui| nav(app, ui));
+    }
+    if app.session.view.clipboard_pane {
+        egui::Panel::left("clipboard_pane")
+            .default_size(250.0)
+            .resizable(true)
+            .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
+            .show(ui, |ui| clipboard(app, ui));
     }
     if app.session.view.styles_pane {
         egui::Panel::right("styles_pane")
@@ -141,6 +148,51 @@ fn nav(app: &mut WordApp, ui: &mut Ui) {
                     }
                 });
             }
+        }
+    });
+}
+
+/// Items collected by Copy and Cut, newest first; clicking one pastes it at the caret.
+fn clipboard(app: &mut WordApp, ui: &mut Ui) {
+    if header(ui, "Clipboard") {
+        let _ = app.run("edit.clipboardPane", json!({"value": false}));
+        return;
+    }
+    let items: Vec<String> = app.session.clip_history.items().iter().map(|i| i.preview()).collect();
+    ui.horizontal(|ui| {
+        if ui.add_enabled(!items.is_empty(), egui::Button::new(tl!("Paste All"))).clicked() {
+            let _ = app.run("edit.pasteAllClipboard", json!({}));
+            app.canvas.want_focus = true;
+        }
+        if ui.add_enabled(!items.is_empty(), egui::Button::new(tl!("Clear All"))).clicked() {
+            let _ = app.run("edit.clearClipboard", json!({}));
+        }
+    });
+    ui.add_space(4.0);
+    let hint = if items.is_empty() { "Nothing collected yet. Items you copy or cut appear here." } else { "Click an item to paste it." };
+    ui.label(egui::RichText::new(tl!(hint)).small().weak());
+    ui.separator();
+    let t = Tokens::get(ui.ctx());
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        for (i, preview) in items.iter().enumerate() {
+            egui::Frame::NONE.fill(t.input).stroke(Stroke::new(1.0, t.border)).corner_radius(6).inner_margin(8).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                let text = if preview.is_empty() { tl!("(picture or object)").to_string() } else { preview.clone() };
+                let mut job =
+                    egui::text::LayoutJob::single_section(text, egui::TextFormat { font_id: regular(12.5), color: t.text, ..Default::default() });
+                job.wrap.max_width = ui.available_width();
+                job.wrap.max_rows = 3;
+                if ui.add(egui::Button::new(job).frame(false)).on_hover_text(tl!("Paste")).clicked() {
+                    let _ = app.run("edit.pasteClipboardItem", json!({"index": i}));
+                    app.canvas.want_focus = true;
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                    if ui.small_button(tl!("Delete")).clicked() {
+                        let _ = app.run("edit.deleteClipboardItem", json!({"index": i}));
+                    }
+                });
+            });
+            ui.add_space(6.0);
         }
     });
 }

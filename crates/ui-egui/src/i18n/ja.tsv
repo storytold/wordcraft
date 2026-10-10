@@ -122,6 +122,15 @@
 	Clear	クリア
 	Clear All Formatting	すべての書式をクリア
 	Clipboard	クリップボード
+	Clipboard Pane	クリップボード ウィンドウ
+	Clipboard Items	クリップボードの項目
+	Paste Clipboard Item	クリップボードの項目を貼り付け
+	Paste All	すべて貼り付け
+	Delete Clipboard Item	クリップボードの項目を削除
+	Clear All	すべてクリア
+	Click an item to paste it.	項目をクリックすると貼り付けます。
+	Nothing collected yet. Items you copy or cut appear here.	まだ何もありません。コピーまたは切り取った項目がここに表示されます。
+	(picture or object)	（画像またはオブジェクト）
 	Close	閉じる
 	Close Header and Footer	ヘッダーとフッターを閉じる
 	Collapse Selection	選択範囲を縮小
@@ -895,7 +904,6 @@
 	Clear Paragraph Formatting	段落の書式をクリア
 	Clear Character Style	文字スタイルをクリア
 	Clear Character Formatting	文字の書式をクリア
-	Clear All	すべてクリア
 	Paste Special	形式を選択して貼り付け
 	Paste Special…	形式を選択して貼り付け…
 	Paste as:	貼り付ける形式:
