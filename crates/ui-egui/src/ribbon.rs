@@ -773,9 +773,17 @@ fn layout(app: &mut WordApp, ui: &mut Ui) {
         });
         stack(ui, |ui| {
             small(ui, app, "align", None, "Align", "arrange.align", json!({}), false);
-            small(ui, app, "group", None, "Group", "arrange.group", json!({}), false);
+            group_menu(ui, app, None);
             small(ui, app, "rotate", None, "Rotate", "arrange.rotate", json!({}), false);
         });
+    });
+}
+
+/// Arrange › Group: Group (Shift+click objects to select several) and Ungroup.
+fn group_menu(ui: &mut Ui, app: &mut WordApp, label: Option<&str>) {
+    menu_button(ui, app, "group", label, "Group", false, |ui, app| {
+        mi(ui, app, "Group", "arrange.group", json!({}));
+        mi(ui, app, "Ungroup", "arrange.ungroup", json!({}));
     });
 }
 
@@ -1099,6 +1107,7 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
         stack(ui, |ui| {
             small(ui, app, "rotate", Some("Rotate"), "Rotate", "arrange.rotate", json!({}), false);
             small(ui, app, "align", Some("Align"), "Align", "arrange.align", json!({}), false);
+            group_menu(ui, app, Some("Group"));
         });
     });
     group(ui, "Size", None, app, |ui, app| {

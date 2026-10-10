@@ -500,6 +500,6 @@ mod tests {
         let p = parity(&reg);
         let pct = p["percent"].as_f64().unwrap();
         // The floor only ever rises.
-        assert!(pct >= 60.0, "parity {pct}%");
+        assert!(pct >= 88.5, "parity {pct}%");
     }
 }

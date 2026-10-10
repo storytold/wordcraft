@@ -74,8 +74,8 @@ the icon art).
 
 1. **Alpha blockers** (≈20–25 h): DOCX fidelity corpus, footnote continuation, column balancing,
    native printing, autosave soak test, first signed release.
-2. **Objects** (≈12 h): tight/through (contour) wrap, rotation handles on the canvas,
-   grouping, z-order polish, track-changes balloons and formatting revisions.
+2. **Objects** (≈10 h): tight/through (contour) wrap, rotation handles on the canvas,
+   moving a multi-selection together, z-order polish, track-changes balloons and formatting revisions.
 3. **Draw tab / ink** (≈15 h).
 4. **Charts (own renderer) and SmartArt-style diagrams** (≈20 h).
 5. **Equation editor** — done: OMML read/write, 2D layout, in-place editing with Word's Equation tab (structures, symbols, built-ins, Unicode/LaTeX input, build-up, Math AutoCorrect, `#` numbers, structure commands). Remaining: line breaking of long display equations, ink equations (≈4 h).
@@ -102,7 +102,7 @@ the icon art).
 | M8 | View | mostly done |
 | M9 | Mailings | done (first version) |
 | M10 | File/Backstage | mostly done; native printing missing |
-| M11 | Draw + objects | text wrap and text boxes done; ink, rotation, grouping missing |
+| M11 | Draw + objects | text wrap, text boxes and grouping done; ink, rotation missing |
 | M12 | Formats breadth (PDF, ODT, RTF, HTML, MD, TXT) | **done** (first versions) |
 | M13 | Performance budgets | on track (1.4 ms relayout) |
 | M14 | 1.0 polish, packaging, signing | pipeline written; waiting on remote and secrets |

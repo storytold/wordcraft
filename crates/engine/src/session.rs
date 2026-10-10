@@ -210,6 +210,9 @@ pub struct Session {
     pub math_latex: bool,
     /// Text typed into equations is normal (non-math) text.
     pub math_normal_text: bool,
+    /// More pictures and shapes selected along with the one the selection holds (Shift+click),
+    /// for Group. Cleared by any edit or selection change other than adding to it.
+    pub also_selected: Vec<Pos>,
 }
 
 /// The equation being edited.
@@ -281,6 +284,7 @@ impl Session {
             math: None,
             math_latex: false,
             math_normal_text: false,
+            also_selected: Vec::new(),
             prefs: Prefs::default(),
             read_aloud: Default::default(),
         }
@@ -415,6 +419,7 @@ impl Session {
         self.doc.ensure_nonempty();
         self.sel = Selection::caret(self.doc.start_of(StoryRef::Body));
         self.pending = None;
+        self.also_selected.clear();
         self.reset_history();
         self.touch();
         self.dirty = false;
@@ -481,6 +486,7 @@ impl Session {
             math: _,
             math_latex: _,
             math_normal_text: _,
+            also_selected: _,
         } = self;
         let head = if history.len() + SNAPSHOT_HEAD > MAX_UNDO { history.iter().take(SNAPSHOT_HEAD).cloned().collect() } else { Vec::new() };
         EditSnapshot {
@@ -509,6 +515,7 @@ impl Session {
         self.undo_evicted = evicted;
         self.doc = doc;
         self.sel = sel;
+        self.also_selected.clear();
         self.history.truncate(history_len);
         self.redo = redo;
         self.typing_open = typing_open;
@@ -599,6 +606,7 @@ impl Session {
         } else if spec.id.starts_with("caret.") {
             self.typing_open = false;
         }
+        let sel_before = self.sel.clone();
         let run = spec.run;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(self, params)));
         let result = match result {
@@ -616,6 +624,10 @@ impl Session {
                     self.doc.prune_text_boxes();
                 }
                 self.clamp_selection();
+                // Extra selected objects last until something else is edited or selected.
+                if !matches!(id, "select.addObject" | "arrange.ungroup") && (spec.mutates || self.sel != sel_before) {
+                    self.also_selected.clear();
+                }
             }
             Err(e) => {
                 if let Some((d, s, h, r, t, ev)) = before_doc {

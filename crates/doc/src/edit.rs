@@ -76,7 +76,7 @@ fn each_para_mut(b: &mut Block, depth: usize, f: &mut dyn FnMut(&mut Paragraph))
 
 /// Text box story ids of a paragraph's shapes.
 fn box_ids(p: &Paragraph) -> impl Iterator<Item = u32> + '_ {
-    p.objects.iter().filter_map(|o| if let InlineObject::Shape { story: Some(id), .. } = o { Some(*id) } else { None })
+    p.objects.iter().flat_map(InlineObject::text_boxes)
 }
 
 impl Document {
@@ -320,11 +320,11 @@ impl Document {
             each_para_mut(b, 0, &mut |p| {
                 let mut changed = false;
                 for o in p.objects.iter_mut() {
-                    if let InlineObject::Shape { story, .. } = o
-                        && let Some(old) = *story
-                    {
-                        *story = self.adopt_text_box(old, parts, depth, budget);
-                        changed = true;
+                    for story in o.text_box_slots() {
+                        if let Some(old) = *story {
+                            *story = self.adopt_text_box(old, parts, depth, budget);
+                            changed = true;
+                        }
                     }
                 }
                 if changed {
