@@ -270,6 +270,14 @@ fn options_page(app: &mut WordApp, ui: &mut Ui) {
         let _ = app.run("ui.dark", json!({"value": dark}));
     }
     ui.checkbox(&mut app.autosave, tl!("AutoSave documents that have been saved"));
+    let mut dark_page = app.session.view.dark_mode;
+    if ui
+        .checkbox(&mut dark_page, tl!("Dark page (white text on black)"))
+        .on_hover_text(tl!("Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged."))
+        .changed()
+    {
+        let _ = app.run("view.darkMode", json!({"value": dark_page}));
+    }
     ui.checkbox(&mut app.ui.show_discord, tl!("Show the community button in the title bar"));
     ui.add_space(10.0);
     ui.label(egui::RichText::new(tl!("Display")).font(semibold(15.0)));

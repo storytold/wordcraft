@@ -1221,6 +1221,7 @@ fn write_blocks(blocks: &[FBlock], out: &mut Vec<String>) {
     let mut i = 0;
     let mut counters = [0u32; 9];
     let mut prev_list = false;
+    let mut prev_top_ordered = false;
     while let Some(b) = blocks.get(i) {
         match b {
             FBlock::Table(t) => {
@@ -1251,8 +1252,11 @@ fn write_blocks(blocks: &[FBlock], out: &mut Vec<String>) {
                 match p.list {
                     Some(li) => {
                         let lv = li.level.min(8) as usize;
-                        if !prev_list {
+                        if !prev_list || (lv == 0 && prev_top_ordered != li.ordered) {
                             counters = [0; 9];
+                        }
+                        if lv == 0 {
+                            prev_top_ordered = li.ordered;
                         }
                         let n = counters.get_mut(lv).map(|c| {
                             *c += 1;

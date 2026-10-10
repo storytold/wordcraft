@@ -91,6 +91,14 @@ impl WindowGeometry {
     }
 }
 
+/// Checks the restored geometry in `pending` once, and only once the monitor size is known: while
+/// `info` doesn't report a usable one, `pending` is left in place for a later frame. Then it is taken
+/// and [`WindowGeometry::rescue_position`] decides where to move the window, if anywhere.
+pub fn take_rescue(pending: &mut Option<WindowGeometry>, info: &egui::ViewportInfo) -> Option<egui::Pos2> {
+    info.monitor_size.filter(|s| s.is_finite() && s.x > 0.0 && s.y > 0.0)?;
+    pending.take()?.rescue_position(info)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,6 +180,23 @@ mod tests {
         assert_eq!(WindowGeometry { position: None, ..saved() }.rescue_position(&info(on, egui::vec2(1600.0, 900.0))), None);
         assert_eq!(WindowGeometry { maximized: true, ..saved() }.rescue_position(&info(on, egui::vec2(1600.0, 900.0))), None);
         assert_eq!(saved().rescue_position(&egui::ViewportInfo::default()), None);
+    }
+
+    #[test]
+    fn the_rescue_waits_for_the_monitor_size() {
+        let on = egui::Rect::from_min_size(egui::pos2(2000.0, 50.0), egui::vec2(1200.0, 800.0));
+        // The first frame doesn't know the monitor yet: nothing happens and the geometry is kept.
+        let mut pending = Some(saved());
+        assert_eq!(take_rescue(&mut pending, &egui::ViewportInfo::default()), None);
+        assert_eq!(pending, Some(saved()));
+        // A later frame reports a different monitor: centred on it, and the check is done.
+        assert_eq!(take_rescue(&mut pending, &info(on, egui::vec2(1600.0, 900.0))), Some(egui::pos2(200.0, 50.0)));
+        assert_eq!(pending, None);
+        assert_eq!(take_rescue(&mut pending, &info(on, egui::vec2(1024.0, 768.0))), None);
+        // The same monitor: no move, and the check is done as well.
+        let mut pending = Some(saved());
+        assert_eq!(take_rescue(&mut pending, &info(on, egui::vec2(1920.0, 1080.0))), None);
+        assert_eq!(pending, None);
     }
 
     #[test]

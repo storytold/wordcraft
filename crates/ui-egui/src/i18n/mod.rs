@@ -54,7 +54,7 @@ pub struct LangInfo {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 5] = [
+pub static LANGUAGES: [LangInfo; 6] = [
     LangInfo { code: "en", name: "English", source: "", prefer_hans: false, centimetres: false, catalog: OnceLock::new() },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` resolve here (see `candidates`).
     LangInfo {
@@ -75,6 +75,16 @@ pub static LANGUAGES: [LangInfo; 5] = [
         catalog: OnceLock::new(),
     },
     LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), prefer_hans: false, centimetres: false, catalog: OnceLock::new() },
+    // Brazilian Portuguese; `pt-BR` and `pt-BR-*` resolve here. Plain `pt` and `pt-PT` have no
+    // catalog yet (the European vocabulary differs), so they stay in English.
+    LangInfo {
+        code: "pt-br",
+        name: "Português (Brasil)",
+        source: include_str!("pt-br.tsv"),
+        prefer_hans: false,
+        centimetres: false,
+        catalog: OnceLock::new(),
+    },
     // German; `de-DE`, `de-AT`, `de-CH` and the other regions resolve here.
     LangInfo { code: "de", name: "Deutsch", source: include_str!("de.tsv"), prefer_hans: false, centimetres: true, catalog: OnceLock::new() },
 ];

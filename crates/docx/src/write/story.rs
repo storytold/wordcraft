@@ -39,6 +39,7 @@ impl Writer<'_> {
                     w.raw(TOC_SDT_OPEN);
                     self.toc_hold_end = true;
                 }
+                self.toc_begin_here = toc_field_open && i == start + 1;
                 self.toc_end_here = toc_field_open && i == end;
             }
             match &**b {
@@ -47,8 +48,9 @@ impl Writer<'_> {
             }
             if let Some((start, end)) = toc {
                 if i == start {
-                    // `field` clears the flag when it leaves the TOC field open.
-                    toc_field_open = !std::mem::take(&mut self.toc_hold_end);
+                    // `field` holds the heading's TOC field back for the first entry.
+                    self.toc_hold_end = false;
+                    toc_field_open = self.toc_field.is_some();
                 }
                 if i == end {
                     w.raw("</w:sdtContent></w:sdt>");
@@ -111,8 +113,17 @@ impl Writer<'_> {
             w.empty(mark, &[]);
             w.raw("</w:r>");
         }
+        // Taken before the content so a nested story (a text box in an entry) can't claim them.
+        if std::mem::take(&mut self.toc_begin_here)
+            && let Some((instr, locked, props)) = self.toc_field.take()
+        {
+            self.rev_open(w, &props);
+            self.field_start(w, &instr, locked, &props);
+            self.rev_close(w, &props);
+        }
+        let toc_end = std::mem::take(&mut self.toc_end_here);
         self.para_content(w, p, rels, depth);
-        if std::mem::take(&mut self.toc_end_here) {
+        if toc_end {
             w.raw(r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#);
         }
         w.close("w:p");
@@ -459,6 +470,12 @@ impl Writer<'_> {
     }
 
     fn field(&mut self, w: &mut W, instr: &str, result: &str, locked: bool, props: &CharProps) {
+        if self.toc_hold_end && is_toc(instr) {
+            // A TOC heading's field opens in the first entry and closes after the last (see `toc_span`).
+            self.toc_hold_end = false;
+            self.toc_field = Some((instr.to_string(), locked, props.clone()));
+            return;
+        }
         let del = self.is_del(props);
         let run = |w: &mut W, f: &dyn Fn(&mut W)| {
             w.open("w:r", &[]);
@@ -467,16 +484,7 @@ impl Writer<'_> {
             w.close("w:r");
         };
         self.rev_open(w, props);
-        run(w, &|w| {
-            if locked {
-                w.empty("w:fldChar", &[("w:fldCharType", "begin"), ("w:fldLock", "1")])
-            } else {
-                w.empty("w:fldChar", &[("w:fldCharType", "begin")])
-            }
-        });
-        let instr_text = format!(" {} ", instr.trim());
-        run(w, &|w| w.leaf(if del { "w:delInstrText" } else { "w:instrText" }, &[("xml:space", "preserve")], &instr_text));
-        run(w, &|w| w.empty("w:fldChar", &[("w:fldCharType", "separate")]));
+        self.field_start(w, instr, locked, props);
         if !result.is_empty() {
             run(w, &|w| {
                 let mut buf = String::new();
@@ -503,14 +511,29 @@ impl Writer<'_> {
                 flush(w, &mut buf);
             });
         }
-        // A TOC heading's field is closed after its last entry (see `toc_span`).
-        let toc_open = self.toc_hold_end && is_toc(instr);
-        if toc_open {
-            self.toc_hold_end = false;
-        } else {
-            run(w, &|w| w.empty("w:fldChar", &[("w:fldCharType", "end")]));
-        }
+        run(w, &|w| w.empty("w:fldChar", &[("w:fldCharType", "end")]));
         self.rev_close(w, props);
+    }
+
+    /// A field's begin, instruction and separate runs.
+    fn field_start(&self, w: &mut W, instr: &str, locked: bool, props: &CharProps) {
+        let del = self.is_del(props);
+        let run = |w: &mut W, f: &dyn Fn(&mut W)| {
+            w.open("w:r", &[]);
+            rpr(w, props);
+            f(w);
+            w.close("w:r");
+        };
+        run(w, &|w| {
+            if locked {
+                w.empty("w:fldChar", &[("w:fldCharType", "begin"), ("w:fldLock", "1")])
+            } else {
+                w.empty("w:fldChar", &[("w:fldCharType", "begin")])
+            }
+        });
+        let instr_text = format!(" {} ", instr.trim());
+        run(w, &|w| w.leaf(if del { "w:delInstrText" } else { "w:instrText" }, &[("xml:space", "preserve")], &instr_text));
+        run(w, &|w| w.empty("w:fldChar", &[("w:fldCharType", "separate")]));
     }
 
     #[allow(clippy::too_many_arguments)]

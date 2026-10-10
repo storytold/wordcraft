@@ -9,13 +9,14 @@ It listens on `127.0.0.1` only. Send one JSON object per line; each gets one rep
 ```
 
 Errors come back as `{"id": …, "ok": false, "error": "message"}`. A failed command leaves the
-document unchanged.
+document unchanged. A line that isn't valid JSON gets one error reply, then the server closes the
+connection (so an HTTP request sent to the port can't run a command); reconnect to continue.
 
 ## Methods
 
 | Method | Params | Result |
 |---|---|---|
-| `engine.execute` | `command`, `params` | the command's result (any id from `engine.commands`, including UI commands `ui.tab`, `ui.dialog`, `ui.backstage`, `ui.language` (`{"value": "auto"|"en"|"zh-hans"|"zh-hant"|"ja"|"de"}`)…) |
+| `engine.execute` | `command`, `params` | the command's result (any id from `engine.commands`, including UI commands `ui.tab`, `ui.dialog`, `ui.backstage`, `ui.language` (`{"value": "auto"|"en"|"zh-hans"|"zh-hant"|"ja"|"pt-br"|"de"}`)…) |
 | `engine.commands` | — | every command: id, label, location, shortcut, params, enabled |
 | `document.inspect` | `text?` | blocks (text, style, runs, lists, tables), parts, sections, selection, pages |
 | `ui.inspect` | — | UI state, view, dialog, window size, page rects on screen, caret, perf |

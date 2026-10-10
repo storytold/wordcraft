@@ -119,7 +119,7 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
     s.doc.core.revision = s.doc.core.revision.saturating_add(1);
     crate::io::save_path(&path, &s.doc).map_err(CmdError::Failed)?;
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-    if ["docx", "odt", "rtf", "json"].contains(&ext.as_str()) {
+    if ["docx", "docm", "dotx", "dotm", "odt", "rtf", "json"].contains(&ext.as_str()) {
         s.path = Some(path.clone());
         s.dirty = false;
     }
