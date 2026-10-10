@@ -1302,6 +1302,7 @@ fn rotation_and_flips_round_trip() {
         alt: String::new(),
         float: Float { rot: 30.0, effect: [6.0; 4], ..Default::default() },
         crop: [0.0; 4],
+        ole: None,
     };
     let shape = |kind, float| InlineObject::Shape {
         kind,
