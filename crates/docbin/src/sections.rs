@@ -7,6 +7,9 @@ use wordcraft_doc::section::{Columns, SectionProps, SectionStart};
 use crate::fib::{Fib, pair};
 use crate::sprm::{self, Prl};
 
+/// Most sections we read.
+const MAX_SECTIONS: usize = 1024;
+
 // Section sprms ([MS-DOC] §2.6.4).
 const S_BKC: u16 = 0x3009;
 const S_TITLE_PAGE: u16 = 0x300A; // sprmSFTitlePage
@@ -39,18 +42,19 @@ pub(crate) fn parse(word: &[u8], table: &[u8], fib: &Fib) -> Vec<Section> {
     }
     let n = (plc.len() - 4) / 16;
     let cp_at = |i: usize| -> Option<u32> { plc.get(i * 4..i * 4 + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])) };
-    let mut out = Vec::with_capacity(n.min(1024));
-    for i in 0..n.min(1024) {
+    let mut out = Vec::with_capacity(n.min(MAX_SECTIONS));
+    for i in 0..n.min(MAX_SECTIONS) {
         let Some(end_cp) = cp_at(i + 1) else { break };
         let sed_at = (n + 1) * 4 + i * 12;
         let fc_sepx = plc.get(sed_at + 2..sed_at + 6).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])).unwrap_or(0xFFFF_FFFF);
         let mut props = SectionProps::default();
         // Sepx: cb u16, then a grpprl of section sprms.
         let mut explicit_orient = false;
-        if let Some(grpprl) = word
-            .get(fc_sepx as usize..)
-            .and_then(|sepx| sepx.get(..2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize))
-            .and_then(|cb| word.get(fc_sepx as usize + 2..fc_sepx as usize + 2 + cb))
+        if let Some(grpprl) =
+            word.get(fc_sepx as usize..).and_then(|sepx| sepx.get(..2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize)).and_then(|cb| {
+                let at = (fc_sepx as usize).checked_add(2)?;
+                word.get(at..at.checked_add(cb)?)
+            })
         {
             for prl in sprm::iter(grpprl) {
                 if prl.op == S_ORIENTATION {
@@ -160,7 +164,8 @@ fn apply_section(s: &mut SectionProps, prl: &Prl) {
 pub(crate) fn header_stories(table: &[u8], fib: &Fib) -> Vec<(u32, u32)> {
     let Some((fc, lcb)) = fib.pair(pair::PLCF_HDD) else { return Vec::new() };
     let Some(plc) = table.get(fc as usize..(fc as usize).saturating_add(lcb as usize)) else { return Vec::new() };
-    let n = lcb as usize / 4;
+    // Only the six separator stories and six per section (at most 1024) are ever used.
+    let n = (lcb as usize / 4).min(6 + 6 * MAX_SECTIONS + 1);
     let cp_at = |i: usize| -> Option<u32> { plc.get(i * 4..i * 4 + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])) };
     let mut stories = Vec::with_capacity(n);
     for i in 0..n.saturating_sub(1) {

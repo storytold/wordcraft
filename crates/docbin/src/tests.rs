@@ -1557,3 +1557,22 @@ fn picture_bytes_are_capped_per_document() {
     assert_eq!(pics.media.len(), 1);
     const { assert!(crate::media::MAX_MEDIA_BYTES <= 256 << 20) };
 }
+
+#[test]
+fn row_height_of_i16_min_does_not_overflow() {
+    // sprmTDyaRowHeight = -32768: negating the i16 overflowed (a debug-build panic).
+    let papx = grpprl(&[(0x9407, &i16::MIN.to_le_bytes())]);
+    let row = crate::table::decode(&papx);
+    assert_eq!(row.height(), Some(1584.0));
+}
+
+#[test]
+fn list_and_lfo_offsets_near_u32_max_are_safe() {
+    // PlfLst / PlfLfo at fc = u32::MAX: offset sums like `at + 2 + cLst * 28` must saturate
+    // (they overflow on 32-bit targets such as wasm32).
+    let fc = (2 * TEXT_FC) | 0x4000_0000;
+    let far = u32::MAX - 1;
+    let f = raw_piece_doc_with(&[0, 2], &[fc], b"a\r", 2, &[(73, far, 2), (74, far, 4)]);
+    let doc = read(&f).expect("opens");
+    assert!(doc.numbering.nums.is_empty());
+}

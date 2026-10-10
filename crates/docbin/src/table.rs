@@ -68,6 +68,14 @@ pub(crate) struct RowInfo {
 }
 
 /// Read the table context out of a paragraph mark's PAPX grpprl.
+impl RowInfo {
+    /// The row height from `sprmTDyaRowHeight`, for tests.
+    #[cfg(test)]
+    pub(crate) fn height(&self) -> Option<f32> {
+        self.height
+    }
+}
+
 pub(crate) fn decode(papx: &[u8]) -> RowInfo {
     let mut r = RowInfo::default();
     let mut gap_half: Option<i16> = None;
@@ -86,7 +94,7 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
                 if let Some(v) = s16(&prl) {
                     if v < 0 {
                         r.height_rule = HeightRule::Exact;
-                        r.height = Some((-v as f32 / 20.0).clamp(0.0, 1584.0));
+                        r.height = Some((-(v as f32) / 20.0).clamp(0.0, 1584.0));
                     } else {
                         r.height_rule = HeightRule::AtLeast;
                         r.height = Some((v as f32 / 20.0).clamp(0.0, 1584.0));

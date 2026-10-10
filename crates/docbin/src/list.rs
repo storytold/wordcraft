@@ -94,7 +94,7 @@ pub(crate) fn parse(table: &[u8], fib: &Fib, fonts: &[String]) -> Numbering {
 /// the LSTFs, so the LVLs are read past it, bounded by the stream.
 fn parse_plf_lst(table: &[u8], fc: u32) -> Vec<ListDef> {
     let at = fc as usize;
-    let Some(c_lst) = table.get(at..at + 2).map(|b| u16::from_le_bytes([b[0], b[1]])) else { return Vec::new() };
+    let Some(c_lst) = table.get(at..at.saturating_add(2)).map(|b| u16::from_le_bytes([b[0], b[1]])) else { return Vec::new() };
     let c_lst = c_lst as usize;
     if c_lst == 0 || c_lst > MAX_LISTS {
         return Vec::new();
@@ -103,19 +103,19 @@ fn parse_plf_lst(table: &[u8], fc: u32) -> Vec<ListDef> {
     // LSTF: lsid i32, tplc, rgistdPara[9], flags byte (bit 0 = fSimpleList), grfhic.
     let mut counts = Vec::with_capacity(c_lst);
     for i in 0..c_lst {
-        let f = at + 2 + i * 28;
-        let lsid = table.get(f..f + 4).map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]])).unwrap_or(-1);
-        let simple = table.get(f + 26).copied().unwrap_or(0) & 1 != 0;
+        let f = at.saturating_add(2).saturating_add(i.saturating_mul(28));
+        let lsid = table.get(f..f.saturating_add(4)).map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]])).unwrap_or(-1);
+        let simple = table.get(f.saturating_add(26)).copied().unwrap_or(0) & 1 != 0;
         defs.push(ListDef { lsid, levels: Vec::new() });
         counts.push(if simple { 1 } else { 9 });
     }
-    let mut off = at + 2 + c_lst * 28;
+    let mut off = at.saturating_add(2).saturating_add(c_lst.saturating_mul(28));
     for (def, n) in defs.iter_mut().zip(counts) {
         for _ in 0..n {
             match parse_lvl(table, off) {
                 Some((lvl, len)) => {
                     def.levels.push(lvl);
-                    off += len;
+                    off = off.saturating_add(len);
                 }
                 None => return defs,
             }
@@ -127,7 +127,7 @@ fn parse_plf_lst(table: &[u8], fc: u32) -> Vec<ListDef> {
 /// One LVL ([MS-DOC] §2.9.182): LVLF (28 bytes) + grpprlPapx + grpprlChpx + Xst.
 /// Returns the level and its total length in bytes.
 fn parse_lvl(table: &[u8], at: usize) -> Option<(RawLvl, usize)> {
-    let lvlf = table.get(at..at + 28)?;
+    let lvlf = table.get(at..at.saturating_add(28))?;
     let start = u32::from_le_bytes([lvlf[0], lvlf[1], lvlf[2], lvlf[3]]);
     let nfc = lvlf[4];
     // Byte 5 packs jc (bits 0-1), fLegal (bit 2), fNoRestart (bit 3), …
@@ -143,9 +143,9 @@ fn parse_lvl(table: &[u8], at: usize) -> Option<(RawLvl, usize)> {
     at = at.saturating_add(cb_papx);
     let chpx = table.get(at..at.saturating_add(cb_chpx)).unwrap_or(&[]).to_vec();
     at = at.saturating_add(cb_chpx);
-    let cch = table.get(at..at + 2).map(|b| u16::from_le_bytes([b[0], b[1]])).unwrap_or(0);
+    let cch = table.get(at..at.saturating_add(2)).map(|b| u16::from_le_bytes([b[0], b[1]])).unwrap_or(0);
     let cch = cch.min(64) as usize;
-    let chars = table.get(at + 2..at + 2 + cch * 2)?;
+    let chars = table.get(at.saturating_add(2)..at.saturating_add(2).saturating_add(cch * 2))?;
     let xst: Vec<u16> = chars.as_chunks::<2>().0.iter().map(|b| u16::from_le_bytes([b[0], b[1]])).collect();
     let len = 28 + cb_chpx + cb_papx + 2 + cch * 2;
     Some((RawLvl { start: start.min(0x7FFF), nfc, jc: jc_flags & 3, flags: jc_flags, ixch_follow, rgbxch_nums, papx, chpx, xst }, len))
@@ -155,18 +155,18 @@ fn parse_lvl(table: &[u8], at: usize) -> Option<(RawLvl, usize)> {
 /// Each LFOData is a CP (skipped) followed by clfolvl × LFOLVL (8 bytes + optional LVL).
 fn parse_plf_lfo(table: &[u8], fc: u32, defs: &[ListDef], numbering: &mut Numbering, fonts: &[String]) {
     let at = fc as usize;
-    let Some(lfo_mac) = table.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])) else { return };
+    let Some(lfo_mac) = table.get(at..at.saturating_add(4)).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])) else { return };
     let lfo_mac = lfo_mac.min(MAX_LISTS as u32) as usize;
     let mut lsids = Vec::with_capacity(lfo_mac);
     let mut clfolvls = Vec::with_capacity(lfo_mac);
     for i in 0..lfo_mac {
-        let f = at + 4 + i * 16;
-        let lsid = table.get(f..f + 4).map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]])).unwrap_or(-1);
-        let clfolvl = table.get(f + 12).copied().unwrap_or(0);
+        let f = at.saturating_add(4).saturating_add(i.saturating_mul(16));
+        let lsid = table.get(f..f.saturating_add(4)).map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]])).unwrap_or(-1);
+        let clfolvl = table.get(f.saturating_add(12)).copied().unwrap_or(0);
         lsids.push(lsid);
         clfolvls.push(clfolvl);
     }
-    let mut off = at + 4 + lfo_mac * 16;
+    let mut off = at.saturating_add(4).saturating_add(lfo_mac.saturating_mul(16));
     for (i, (&lsid, &clfolvl)) in lsids.iter().zip(&clfolvls).enumerate() {
         let Some(def) = defs.iter().position(|d| d.lsid == lsid) else {
             // Keep the LFOData walk in step even for unknown lists.
@@ -176,21 +176,21 @@ fn parse_plf_lfo(table: &[u8], fc: u32, defs: &[ListDef], numbering: &mut Number
         // LFOData: cp u32, then clfolvl × LFOLVL.
         let mut start_overrides = Vec::new();
         let mut overrides = Vec::new();
-        off += 4;
+        off = off.saturating_add(4);
         for _ in 0..(clfolvl as usize).min(MAX_LFO_LVL) {
-            let Some(hdr) = table.get(off..off + 8) else { break };
+            let Some(hdr) = table.get(off..off.saturating_add(8)) else { break };
             let i_start = u32::from_le_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]);
             let flags = hdr[4];
             let lvl = (flags & 0x0F) as usize;
             let f_start = flags & 0x10 != 0;
             let f_fmt = flags & 0x20 != 0;
-            off += 8;
+            off = off.saturating_add(8);
             let mut fmt_lvl = None;
             if f_fmt {
                 match parse_lvl(table, off) {
                     Some((l, len)) => {
                         fmt_lvl = Some(l);
-                        off += len;
+                        off = off.saturating_add(len);
                     }
                     None => break,
                 }
@@ -211,7 +211,7 @@ fn parse_plf_lfo(table: &[u8], fc: u32, defs: &[ListDef], numbering: &mut Number
         } else {
             // A formatting override replaces whole levels: give the LFO its own abstract
             // built from the base levels with the overrides applied.
-            let mut levels = numbering.abstracts[def].levels.clone();
+            let mut levels = numbering.abstracts.get(def).map(|a| a.levels.clone()).unwrap_or_default();
             for (lvl, raw) in overrides {
                 if let Some(slot) = levels.get_mut(lvl) {
                     *slot = level_of(&raw, lvl, fonts);
@@ -228,11 +228,11 @@ fn parse_plf_lfo(table: &[u8], fc: u32, defs: &[ListDef], numbering: &mut Number
 /// Advance past `n` LFOLVLs whose bodies we do not need; bounded and best-effort.
 fn skip_lfodatas(table: &[u8], mut off: usize, n: u8) -> usize {
     for _ in 0..n {
-        let Some(hdr) = table.get(off..off + 8) else { return off };
+        let Some(hdr) = table.get(off..off.saturating_add(8)) else { return off };
         let f_fmt = hdr[4] & 0x20 != 0;
-        off += 8;
+        off = off.saturating_add(8);
         if f_fmt && let Some((_, len)) = parse_lvl(table, off) {
-            off += len;
+            off = off.saturating_add(len);
         }
     }
     off
