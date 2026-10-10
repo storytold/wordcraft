@@ -1325,6 +1325,13 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
             mi(ui, app, "Sepia", "picture.color", json!({"mode": "sepia"}));
             mi(ui, app, "Washout", "picture.color", json!({"mode": "washout"}));
         });
+        menu_button(ui, app, "icons", Some("Icon Color"), "Recolor a one-color picture, such as an icon", true, |ui, app| {
+            let theme = app.session.doc.settings.theme_colors.clone();
+            if let Some(hex) = color_grid(ui, &theme) {
+                let _ = app.run("picture.iconColor", json!({"color": hex}));
+                ui.close();
+            }
+        });
         menu_button(ui, app, "picture", Some("Transparency"), "Picture transparency", true, |ui, app| {
             for v in [0.0, 15.0, 30.0, 50.0, 65.0, 80.0, 95.0] {
                 mi(ui, app, &format!("{v:.0}%"), "picture.transparency", json!({"percent": v}));

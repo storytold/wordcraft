@@ -15,6 +15,8 @@ use wordcraft_layout::Page;
 use wordcraft_layout::display::{DisplayOptions, Draw, Stroke, page_display};
 use wordcraft_metafile::{Item, Picture, PlacedItem, Seg};
 
+pub mod icon_lib;
+
 /// Worker threads for rasterising (0 on the web, where there are no threads).
 pub fn default_threads() -> u16 {
     #[cfg(target_arch = "wasm32")]

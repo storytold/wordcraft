@@ -1190,6 +1190,19 @@ mod tests {
         WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default())
     }
 
+    /// Insert › Icons (#309) opens the icon picker from the ribbon; an id inserts without it.
+    #[test]
+    fn icons_button_opens_the_picker_and_ids_insert_directly() {
+        let mut a = app();
+        a.run("insert.icon", json!({})).unwrap();
+        assert_eq!(a.dialog.as_ref().map(dialogs::Dialog::name), Some("icons"));
+        a.dialog = None;
+        let r = a.run("insert.icon", json!({"id": "sun", "size": 36})).unwrap();
+        assert_eq!(r["icon"], "sun");
+        assert!(a.dialog.is_none(), "an id inserts without the dialog");
+        assert!(a.selected_picture_media().is_some());
+    }
+
     /// Table Layout › Properties (#44) opens the dialog from the ribbon; OK sends only what
     /// changed, as one `table.properties` step. Scripts with settings never see the dialog.
     #[test]

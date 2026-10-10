@@ -1,6 +1,6 @@
 //! Dialogs: Font, Paragraph, Find & Replace, Go To, Insert Table, Page Setup, Link, Bookmark,
 //! Word Count, Zoom, Watermark, New/Modify Style, Manage Styles, New/Modify Table Style, Table
-//! Properties, Command search, Paste Special, About, Save Changes, the password to open a
+//! Properties, Command search, Icons, Paste Special, About, Save Changes, the password to open a
 //! document and Encrypt with Password, and the mail-merge Recipient List, Insert Merge Field, Find
 //! Recipient, merge rules, Match Fields and Check for Errors. Every dialog ends by running a
 //! command (or shows one's result), so agents get the same result without the dialog.
@@ -152,6 +152,12 @@ pub enum Dialog {
     },
     /// Columns, Symbol and Field ([`crate::dialogs_insert`], #321).
     Insert(Box<crate::dialogs_insert::InsertDialog>),
+    /// Insert › Icons: the icon library, searchable and filtered by category (empty for all).
+    Icons {
+        query: String,
+        category: String,
+        selected: String,
+    },
     /// Paste Special: the clipboard's formats and the chosen one. The clipboard payload stays out
     /// of the serialized dialog state (it can be megabytes).
     PasteSpecial {
@@ -635,6 +641,7 @@ impl Dialog {
             Dialog::TableStyle { .. } => "modifyTableStyle",
             Dialog::Commands { .. } => "commands",
             Dialog::Insert(d) => d.name(),
+            Dialog::Icons { .. } => "icons",
             Dialog::PasteSpecial { .. } => "pasteSpecial",
             Dialog::About { .. } => "about",
             Dialog::SaveChanges { .. } => "saveChanges",
@@ -770,6 +777,7 @@ impl Dialog {
                 Dialog::TableStyle { id: Some(id), name, based_on, region: 0, basis: regions.clone(), regions }
             }
             "commands" => Dialog::Commands { query: String::new() },
+            "icons" => Dialog::Icons { query: String::new(), category: String::new(), selected: String::new() },
             "tableProperties" => {
                 let form = Box::new(TableForm::read(app)?);
                 Dialog::TableProperties { basis: form.clone(), form }
@@ -923,6 +931,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::TableStyle { .. } => "Modify Table Style",
         Dialog::Commands { .. } => "Search Commands",
         Dialog::Insert(d) => d.title(),
+        Dialog::Icons { .. } => "Icons",
         Dialog::PasteSpecial { .. } => "Paste Special",
         Dialog::About { .. } => "About WordCraft",
         Dialog::SaveChanges { .. } => "WordCraft",
@@ -1576,6 +1585,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             close || ui.input(|i| i.key_pressed(egui::Key::Escape))
         }
+        Dialog::Icons { query, category, selected } => icons_body(app, ui, query, category, selected),
         Dialog::PasteSpecial { formats, choice, payload } => {
             ui.label(egui::RichText::new(tl!("Paste as:")).font(semibold(12.5)));
             if formats.is_empty() {
@@ -2224,6 +2234,69 @@ fn describe(st: &Value) -> String {
         parts.push(crate::i18n::fmt(tl!("Based on: {style}"), &[("style", b)]));
     }
     parts.join(", ")
+}
+
+/// path data; Insert (or a double click) runs `insert.icon`. Returns true to close.
+fn icons_body(app: &mut WordApp, ui: &mut Ui, query: &mut String, category: &mut String, selected: &mut String) -> bool {
+    use wordcraft_render::icon_lib::{self, Category};
+    let t = Tokens::get(ui.ctx());
+    ui.set_width(560.0);
+    // Typing goes to the search box (never to the document behind the dialog).
+    ui.add(egui::TextEdit::singleline(query).hint_text(tl!("Search icons")).desired_width(560.0)).request_focus();
+    ui.add_space(4.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+        if ui.selectable_label(category.is_empty(), tl!("All")).clicked() {
+            category.clear();
+        }
+        for c in Category::ALL {
+            if ui.selectable_label(*category == c.name(), tl!(c.name())).clicked() {
+                *category = c.name().to_string();
+            }
+        }
+    });
+    ui.add_space(4.0);
+    let hits = icon_lib::search(query, Category::parse(category));
+    let mut insert = false;
+    egui::ScrollArea::vertical().max_height(300.0).min_scrolled_height(300.0).auto_shrink([true, false]).show(ui, |ui| {
+        if hits.is_empty() {
+            ui.label(egui::RichText::new(tl!("No icons match your search.")).color(t.text_dim));
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+            for icon in &hits {
+                let (rect, resp) = ui.allocate_exact_size(vec2(56.0, 56.0), Sense::click());
+                let on = *selected == icon.id;
+                let fill = if on {
+                    t.checked
+                } else if resp.hovered() {
+                    t.hover
+                } else {
+                    egui::Color32::TRANSPARENT
+                };
+                let edge = if on { egui::Stroke::new(1.5, t.accent) } else { egui::Stroke::new(1.0, t.border) };
+                ui.painter().rect(rect, 4.0, fill, edge, egui::StrokeKind::Inside);
+                crate::icons::library(ui.painter(), rect.shrink(12.0), icon, t.text);
+                let resp = resp.on_hover_text(icon.name);
+                if resp.clicked() {
+                    *selected = icon.id.to_string();
+                }
+                if resp.double_clicked() {
+                    *selected = icon.id.to_string();
+                    insert = true;
+                }
+            }
+        });
+    });
+    let name = icon_lib::find(selected).map(|i| i.name).unwrap_or("");
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new(name).color(t.text_dim));
+    let (ok, cancel) = buttons(ui, tl!("Insert"));
+    if (ok || insert) && !selected.is_empty() {
+        let _ = app.run("insert.icon", json!({"id": selected.as_str()}));
+        return true;
+    }
+    cancel
 }
 
 #[cfg(test)]
