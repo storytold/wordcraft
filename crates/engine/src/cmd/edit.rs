@@ -34,13 +34,15 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("edit.pasteMerge", "Paste: Merge Formatting", "Home › Clipboard › Paste", paste_text).params(r#"{"text"?: string}"#),
         CommandSpec::new("edit.find", "Find", "Home › Editing", find)
             .key("Mod+F")
-            .params(r#"{"text": string, "matchCase"?: bool, "wholeWord"?: bool, "regex"?: bool}"#)
+            .params(
+                r#"{"text": string, "matchCase"?: bool, "wholeWord"?: bool, "regex"?: bool, "matchDiacritics"?: bool (Arabic: exact harakat match)}"#,
+            )
             .pure(),
         CommandSpec::new("edit.findNext", "Find Next", "Home › Editing › Find", |s, _| step(s, 1)).key("Mod+G / F3").pure(),
         CommandSpec::new("edit.findPrevious", "Find Previous", "Home › Editing › Find", |s, _| step(s, -1)).key("Mod+Shift+G").pure(),
         CommandSpec::new("edit.replace", "Replace", "Home › Editing", replace).key("Mod+H").params(r#"{"text": string, "with": string}"#),
         CommandSpec::new("edit.replaceAll", "Replace All", "Home › Editing › Replace", replace_all)
-            .params(r#"{"text": string, "with": string, "matchCase"?: bool, "wholeWord"?: bool, "regex"?: bool}"#),
+            .params(r#"{"text": string, "with": string, "matchCase"?: bool, "wholeWord"?: bool, "regex"?: bool, "matchDiacritics"?: bool}"#),
         CommandSpec::new("edit.goto", "Go To", "Home › Editing › Find", goto)
             .key("Mod+Alt+G / F5")
             .params(r#"{"page"?: n, "bookmark"?: string, "paragraph"?: n}"#)
@@ -122,6 +124,9 @@ fn search(s: &Session, story: StoryRef) -> Result<Vec<(Pos, Pos)>, CmdError> {
         return Ok(Vec::new());
     }
     let pat = if f.regex { f.query.clone() } else { regex::escape(&f.query) };
+    // A literal Arabic query matches diacritics optionally unless asked for exactness; an
+    // explicit regex is always the user's own.
+    let pat = if !f.regex && !f.match_diacritics { wordcraft_proof::arabic_search_pattern(&f.query).unwrap_or(pat) } else { pat };
     let pat = if f.whole_word { format!(r"\b{pat}\b") } else { pat };
     let re = meta::Regex::builder()
         .syntax(syntax::Config::new().case_insensitive(!f.match_case))
@@ -171,6 +176,9 @@ fn read_opts(s: &mut Session, v: &Value) {
     }
     if let Some(b) = p::bool(v, "regex") {
         s.find.regex = b;
+    }
+    if let Some(b) = p::bool(v, "matchDiacritics") {
+        s.find.match_diacritics = b;
     }
     if let Some(t) = p::str(v, "with") {
         s.find.replace = t.to_string();

@@ -89,6 +89,9 @@ pub struct FindState {
     pub match_case: bool,
     pub whole_word: bool,
     pub regex: bool,
+    /// Match Arabic diacritics exactly. Off by default: a literal query matches harakat and
+    /// Quranic marks optionally (see `wordcraft_proof::arabic_search_pattern`).
+    pub match_diacritics: bool,
     /// Matches from the last search: (start, end).
     #[serde(skip)]
     pub results: Vec<(Pos, Pos)>,

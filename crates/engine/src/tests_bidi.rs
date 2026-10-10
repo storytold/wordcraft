@@ -311,3 +311,37 @@ fn arabic_numbering_commands_reach_lists_and_page_fields() {
     labels.dedup();
     assert_eq!(labels, ["ا.", "ب.", "ا."], "abjad counting survives restart: {labels:?}");
 }
+
+#[test]
+fn arabic_find_ignores_diacritics_unless_exact() {
+    let mut s = session("بِسْمِ اللَّهِ", false);
+    // Insensitive by default: a bare and a marked query both hit, spanning the marks, and the
+    // stored text is never rewritten.
+    for q in ["بسم", "بِسْمِ"] {
+        let r = run(&mut s, "edit.find", json!({"text": q}));
+        assert_eq!(r["count"], 1, "query {q:?}");
+        assert_eq!(s.selected_text(), "بِسْمِ");
+    }
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "بِسْمِ اللَّهِ");
+    // Exact on request: the bare query no longer hits.
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "بسم", "matchDiacritics": true}))["count"], 0);
+    let r = run(&mut s, "edit.find", json!({"text": "بِسْمِ", "matchDiacritics": true}));
+    assert_eq!(r["count"], 1);
+    // Replace works through insensitive matches: the whole marked span is replaced, with undo.
+    // (Find options persist, like a dialog: exactness carries over unless reset here.)
+    run(&mut s, "edit.replace", json!({"text": "بسم", "with": "X", "matchDiacritics": false}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "X اللَّهِ");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "بِسْمِ اللَّهِ");
+}
+
+#[test]
+fn arabic_word_counts_and_proofing_policy() {
+    let s = session("سلام دنیا Word", false);
+    assert_eq!(s.word_count(), 3);
+    let mut s = session("می‌خواهم رفت", false);
+    assert_eq!(s.word_count(), 2, "a half-space joins, not splits");
+    // No spelling issues in Arabic (no bundled dictionary); suggestions stay empty.
+    let r = run(&mut s, "review.issues", json!({}));
+    assert_eq!(r.as_array().map(Vec::len), Some(0), "proofing issues: {r:?}");
+}
