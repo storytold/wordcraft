@@ -176,6 +176,19 @@ pub fn font_definitions(prefer_hans: bool) -> FontDefinitions {
             }
         }
     }
+    // Without an embedded Arabic face, an installed one keeps the Arabic interface readable
+    // (desktop only; the web build needs the embedded face).
+    #[cfg(not(target_arch = "wasm32"))]
+    if wordcraft_fonts::arabic_ui_fonts().is_empty()
+        && let Some(bytes) = wordcraft_fonts::system_arabic_ui_font()
+    {
+        fonts.font_data.insert("ArabicUI".into(), Arc::new(FontData::from_static(bytes)));
+        for fam in [FontFamily::Proportional, FontFamily::Name("medium".into()), FontFamily::Name("semibold".into())] {
+            if let Some(v) = fonts.families.get_mut(&fam) {
+                v.push("ArabicUI".into());
+            }
+        }
+    }
     // Symbols and emoji fall back to egui's defaults (kept in the families).
     fonts
 }

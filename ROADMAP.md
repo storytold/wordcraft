@@ -65,7 +65,7 @@ the icon art).
 | File formats: Word 97-2003 `.doc`/`.dot` import | Text, formatting, styles, sections, headers/footers, tables, lists, notes, fields, bookmarks, pictures (spec-based reader; metafile images and Word 6/95 rejected) | 60% |
 | View modes (print, web, draft, read, focus, zoom, navigation pane) | Working | 70% |
 | Backstage (new from templates, open, info, export, options) | Working; printing goes through PDF | 55% |
-| Right-to-left and complex scripts (Persian, Arabic, Hebrew) | Unicode Bidirectional Algorithm, Arabic shaping (joining, ZWNJ, lam-alef, mirrored brackets), mixed Persian/Latin/number lines, mirrored paragraphs (indents, tabs, list labels, ruler), visual caret movement and hit testing, complex-script fonts/sizes in DOCX; no kashida justification, RTL sections/tables or right-to-left UI yet | 55% |
+| Right-to-left and complex scripts (Persian, Arabic, Hebrew) | Unicode Bidirectional Algorithm, Arabic shaping (joining, ZWNJ, lam-alef, mirrored brackets), mixed Persian/Latin/number lines, mirrored paragraphs (indents, tabs, list labels, ruler), visual caret movement and hit testing, complex-script fonts/sizes in DOCX; RTL tables (`w:bidiVisual`, mirrored columns, indent from the leading edge), RTL sections (column order, gutter side, headers/footers, line numbers, footnote separators), Arabic numbering (`arabicAlpha`, `arabicAbjad`, `hindiNumbers`, unknown formats preserved), direction-preserving HTML/RTF conversion and ODT paragraphs (ODT tables excepted), kashida modes preserved (space-distribution fallback), Arabic interface catalog with Arabic UI fonts, diacritic-tolerant search, Arabic PDF text mapping (marks extract); no kashida glyph elongation, mirrored interface chrome or Arabic dictionary/grammar yet | 75% |
 | Agent control (CLI, MCP, control channel, macros) | Beyond Word | 100%+ |
 
 ## Estimate to 100%
@@ -108,6 +108,18 @@ the icon art).
 | M14 | 1.0 polish, packaging, signing | pipeline written; waiting on remote and secrets |
 
 ## Recently landed
+- Right-to-left tables and sections (#66): `w:bidiVisual` table direction with mirrored columns,
+  `table.direction` command and Table Layout button; section column order, gutter side, headers,
+  footers, line numbers and footnote separators; `layout.sectionDirection` command.
+- Arabic numbering (#66): `arabicAlpha`, `arabicAbjad` and `hindiNumbers` counters for lists and
+  page/note fields; unknown OOXML identifiers preserved; direction-preserving HTML/RTF conversion
+  and ODT paragraphs (ODT has no table-direction property); kashida modes preserved; Arabic PDF
+  text mapping (marks extract as their letters).
+- Arabic interface catalog (#56): all 876 labels in Modern Standard Arabic, `ar` locale matching
+  and a persisted language choice, craft-fonts Arab plumbing with an installed-font fallback.
+- Arabic proofing policy (#66): ZWNJ-aware tokenization, an explicit diacritic set,
+  diacritic-tolerant find with exact matching on request, custom-dictionary support in every
+  script. A bundled Arabic dictionary is still missing.
 - Right-to-left and Persian text: bidi reordering (UAX #9), Arabic-script shaping, right-to-left
   paragraphs (Left-to-Right / Right-to-Left Text Direction), visual arrow keys, `w:rtl`/`w:cs`/`w:szCs`
   /`w:bCs`/`w:iCs`/`w:rFonts w:cs`/`w:lang w:bidi` round-trip, Persian font substitutes.
