@@ -1,7 +1,8 @@
 //! Dialogs: Font, Paragraph, Find & Replace, Go To, Insert Table, Page Setup, Link, Bookmark,
 //! Word Count, Zoom, Watermark, New/Modify Style, Command search, About, Save Changes, and the
-//! mail-merge Recipient List, Insert Merge Field and Find Recipient. Every dialog ends by running a
-//! command, so agents get the same result without the dialog.
+//! mail-merge Recipient List, Insert Merge Field, Find Recipient, merge rules, Match Fields and
+//! Check for Errors. Every dialog ends by running a command (or shows one's result), so agents get
+//! the same result without the dialog.
 
 use egui::{Sense, Ui, vec2};
 use serde::Serialize;
@@ -136,6 +137,53 @@ pub enum Dialog {
         text: String,
         message: String,
     },
+    /// Mailings › Rules › If…Then…Else… (`IF`) or Skip Record If… (`SKIPIF`): the condition, and
+    /// for If the text to insert either way.
+    MergeRule {
+        rule: String,
+        fields: Vec<String>,
+        field: String,
+        value: String,
+        then: String,
+        els: String,
+    },
+    /// Mailings › Match Fields: which recipient-list field fills each address part.
+    MatchFields {
+        fields: Vec<String>,
+        address: Value,
+    },
+    /// Mailings › Check for Errors: merge fields the recipient list doesn't have.
+    CheckErrors {
+        unknown: Vec<String>,
+        records: u64,
+    },
+}
+
+/// The address parts Match Fields lists, with their keys in `mailings.matchFields`' `address`.
+pub const ADDRESS_PARTS: [(&str, &str); 9] = [
+    ("Courtesy Title", "title"),
+    ("First Name", "firstName"),
+    ("Last Name", "lastName"),
+    ("Company", "company"),
+    ("Address", "address"),
+    ("City", "city"),
+    ("State", "state"),
+    ("Postal Code", "postal"),
+    ("Country", "country"),
+];
+
+/// The `mailings.rules` parameters a Merge Rule dialog stands for, once it names a field.
+pub fn rule_params(d: &Dialog) -> Option<Value> {
+    let Dialog::MergeRule { rule, field, value, then, els, .. } = d else { return None };
+    let field = field.trim();
+    if field.is_empty() {
+        return None;
+    }
+    Some(if rule == "SKIPIF" {
+        json!({"rule": "SKIPIF", "field": field, "value": value})
+    } else {
+        json!({"rule": "IF", "field": field, "value": value, "then": then, "else": els})
+    })
 }
 
 /// The fields a new recipient list starts with.
@@ -186,6 +234,26 @@ impl Dialog {
             Dialog::RecipientList { .. } => "recipientList",
             Dialog::InsertMergeField { .. } => "insertMergeField",
             Dialog::FindRecipient { .. } => "findRecipient",
+            Dialog::MergeRule { rule, .. } if rule == "SKIPIF" => "ruleSkipIf",
+            Dialog::MergeRule { .. } => "ruleIf",
+            Dialog::MatchFields { .. } => "matchFields",
+            Dialog::CheckErrors { .. } => "checkErrors",
+        }
+    }
+
+    /// The dialog that shows a report command's result: Match Fields, Check for Errors.
+    pub fn report(id: &str, v: &Value) -> Option<Dialog> {
+        let strings = |k: &str| -> Vec<String> {
+            v.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
+        };
+        match id {
+            "mailings.matchFields" => {
+                Some(Dialog::MatchFields { fields: strings("fields"), address: v.get("address").cloned().unwrap_or(Value::Null) })
+            }
+            "mailings.checkErrors" => {
+                Some(Dialog::CheckErrors { unknown: strings("unknownFields"), records: v.get("records").and_then(Value::as_u64).unwrap_or(0) })
+            }
+            _ => None,
         }
     }
 
@@ -279,6 +347,21 @@ impl Dialog {
                 Dialog::InsertMergeField { field: fields.first().cloned().unwrap_or_default(), fields }
             }
             "findRecipient" => Dialog::FindRecipient { text: String::new(), message: String::new() },
+            "ruleIf" | "ruleSkipIf" => {
+                let fields = app.session.merge.headers.clone();
+                Dialog::MergeRule {
+                    rule: if name == "ruleSkipIf" { "SKIPIF" } else { "IF" }.into(),
+                    field: fields.first().cloned().unwrap_or_default(),
+                    fields,
+                    value: String::new(),
+                    then: String::new(),
+                    els: String::new(),
+                }
+            }
+            "matchFields" | "checkErrors" => {
+                let id = if name == "matchFields" { "mailings.matchFields" } else { "mailings.checkErrors" };
+                return Self::report(id, &app.session.run(id, &json!({})).unwrap_or_default());
+            }
             _ => return None,
         })
     }
@@ -372,6 +455,10 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::RecipientList { .. } => "Recipient List",
         Dialog::InsertMergeField { .. } => "Insert Merge Field",
         Dialog::FindRecipient { .. } => "Find Recipient",
+        Dialog::MergeRule { rule, .. } if rule == "SKIPIF" => "Skip Record If",
+        Dialog::MergeRule { .. } => "If…Then…Else",
+        Dialog::MatchFields { .. } => "Match Fields",
+        Dialog::CheckErrors { .. } => "Check for Errors",
     };
     egui::Window::new(tl!(title))
         .id(egui::Id::new(("dialog", title)))
@@ -931,6 +1018,82 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 }
             }
             cancel
+        }
+        Dialog::MergeRule { rule, fields, field, value, then, els } => {
+            let skip = rule == "SKIPIF";
+            ui.label(tl!(if skip {
+                "Leave a recipient out of the merge when a field has this value."
+            } else {
+                "Insert one text or another, depending on a field's value."
+            }));
+            ui.add_space(4.0);
+            egui::Grid::new("merge_rule").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+                ui.label(tl!("Field:"));
+                if fields.is_empty() {
+                    ui.text_edit_singleline(field);
+                } else {
+                    egui::ComboBox::from_id_salt("merge_rule_field").selected_text(field.as_str()).width(200.0).show_ui(ui, |ui| {
+                        for f in fields.iter() {
+                            ui.selectable_value(field, f.clone(), f);
+                        }
+                    });
+                }
+                ui.end_row();
+                ui.label(tl!("Equals:"));
+                ui.text_edit_singleline(value);
+                ui.end_row();
+                if !skip {
+                    ui.label(tl!("Then insert:"));
+                    ui.text_edit_singleline(then);
+                    ui.end_row();
+                    ui.label(tl!("Otherwise insert:"));
+                    ui.text_edit_singleline(els);
+                    ui.end_row();
+                }
+            });
+            let (ok, cancel) = buttons(ui, tl!("OK"));
+            let params = rule_params(d);
+            if ok && let Some(params) = params {
+                let _ = app.run("mailings.rules", params);
+                return true;
+            }
+            cancel
+        }
+        Dialog::MatchFields { fields, address } => {
+            if fields.is_empty() {
+                ui.label(egui::RichText::new(tl!("Select recipients first to match their fields.")).small().weak());
+            } else {
+                ui.label(tl!("The recipient-list field that fills each part of an address block and greeting line."));
+                ui.add_space(4.0);
+                egui::Grid::new("match_fields").num_columns(2).spacing(vec2(24.0, 6.0)).striped(true).show(ui, |ui| {
+                    for (part, key) in ADDRESS_PARTS {
+                        ui.label(tl!(part));
+                        match address.get(key).and_then(Value::as_str) {
+                            Some(f) => ui.label(egui::RichText::new(f).strong()),
+                            None => ui.label(egui::RichText::new(tl!("(not matched)")).weak()),
+                        };
+                        ui.end_row();
+                    }
+                });
+            }
+            let (ok, cancel) = buttons(ui, tl!("Close"));
+            ok || cancel
+        }
+        Dialog::CheckErrors { unknown, records } => {
+            if unknown.is_empty() {
+                ui.label(tl!("No errors found: every merge field is in the recipient list."));
+            } else {
+                ui.label(tl!("These merge fields aren't in the recipient list:"));
+                egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+                    for f in unknown.iter() {
+                        ui.label(egui::RichText::new(format!("• {f}")).color(Tokens::get(ui.ctx()).red));
+                    }
+                });
+            }
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Recipients: {count}"), &[("count", &records.to_string())])).weak());
+            let (ok, cancel) = buttons(ui, tl!("Close"));
+            ok || cancel
         }
     }
 }

@@ -888,3 +888,49 @@
 	Opening print dialog…	Відкриття діалогу друку…
 	Print failed: {error}	Не вдалося надрукувати: {error}
 	Couldn't open {path}: {error}	Не вдалося відкрити {path}: {error}
+	Letters	Листи
+	E-mail Messages	Повідомлення електронної пошти
+	Directory	Каталог
+	Normal Word Document	Звичайний документ
+	If…Then…Else…	Якщо…То…Інакше…
+	If…Then…Else	Якщо…То…Інакше
+	Merge Record #	Номер запису злиття
+	Skip Record If…	Пропустити запис, якщо…
+	Skip Record If	Пропустити запис, якщо
+	Equals:	Дорівнює:
+	Then insert:	Тоді вставити:
+	Otherwise insert:	Інакше вставити:
+	Courtesy Title	Звертання
+	First Name	Ім'я
+	Last Name	Прізвище
+	Company	Компанія
+	Address	Адреса
+	City	Місто
+	State	Область
+	Postal Code	Поштовий індекс
+	Country	Країна
+	(not matched)	(не зіставлено)
+	Leave a recipient out of the merge when a field has this value.	Пропускати одержувача під час злиття, коли поле має це значення.
+	Insert one text or another, depending on a field's value.	Вставити той чи інший текст залежно від значення поля.
+	Select recipients first to match their fields.	Спершу виберіть одержувачів, щоб зіставити їхні поля.
+	The recipient-list field that fills each part of an address block and greeting line.	Поле списку одержувачів, яке заповнює кожну частину блоку адреси та рядка привітання.
+	No errors found: every merge field is in the recipient list.	Помилок не знайдено: усі поля злиття є в списку одержувачів.
+	These merge fields aren't in the recipient list:	Цих полів злиття немає в списку одержувачів:
+	Add at least one field.	Додайте принаймні одне поле.
+	Add Field	Додати поле
+	Every field needs a name.	Кожне поле потребує назви.
+	Field name	Назва поля
+	Field names must be different.	Назви полів мають відрізнятися.
+	Fields:	Поля:
+	Field:	Поле:
+	Find:	Знайти:
+	New Entry	Новий запис
+	Recipient List	Список одержувачів
+	Recipients: {count}	Одержувачів: {count}
+	Remove field	Видалити поле
+	Remove recipient	Видалити одержувача
+	Select recipients first to choose from their fields.	Спершу виберіть одержувачів, щоб вибрати з їхніх полів.
+	Type a New List…	Ввести новий список…
+	Type at least one recipient.	Введіть принаймні одного одержувача.
+	Type the recipients, or load them from a file.	Введіть одержувачів або завантажте їх із файлу.
+	Use an Existing List…	Використати наявний список…

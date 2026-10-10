@@ -877,3 +877,49 @@
 	Opening print dialog…	正在開啟列印對話方塊…
 	Print failed: {error}	列印失敗：{error}
 	Couldn't open {path}: {error}	無法開啟 {path}：{error}
+	Letters	信函
+	E-mail Messages	電子郵件
+	Directory	目錄
+	Normal Word Document	一般文件
+	If…Then…Else…	如果…則…否則…
+	If…Then…Else	如果…則…否則
+	Merge Record #	合併記錄編號
+	Skip Record If…	略過記錄條件…
+	Skip Record If	略過記錄條件
+	Equals:	等於：
+	Then insert:	則插入：
+	Otherwise insert:	否則插入：
+	Courtesy Title	稱謂
+	First Name	名字
+	Last Name	姓氏
+	Company	公司
+	Address	地址
+	City	城市
+	State	省/州
+	Postal Code	郵遞區號
+	Country	國家/地區
+	(not matched)	（未對應）
+	Leave a recipient out of the merge when a field has this value.	當某個欄位為此值時，在合併中略過該收件者。
+	Insert one text or another, depending on a field's value.	依據欄位的值插入不同的文字。
+	Select recipients first to match their fields.	請先選取收件者，才能對應其欄位。
+	The recipient-list field that fills each part of an address block and greeting line.	地址區塊和問候語的每個部分所使用的收件者清單欄位。
+	No errors found: every merge field is in the recipient list.	未發現錯誤：所有合併欄位都在收件者清單中。
+	These merge fields aren't in the recipient list:	以下合併欄位不在收件者清單中：
+	Add at least one field.	請至少新增一個欄位。
+	Add Field	新增欄位
+	Every field needs a name.	每個欄位都需要名稱。
+	Field name	欄位名稱
+	Field names must be different.	欄位名稱不可重複。
+	Fields:	欄位：
+	Field:	欄位：
+	Find:	尋找：
+	New Entry	新增項目
+	Recipient List	收件者清單
+	Recipients: {count}	收件者：{count}
+	Remove field	移除欄位
+	Remove recipient	移除收件者
+	Select recipients first to choose from their fields.	請先選取收件者，才能從其欄位中選擇。
+	Type a New List…	輸入新清單…
+	Type at least one recipient.	請至少輸入一位收件者。
+	Type the recipients, or load them from a file.	輸入收件者，或從檔案載入。
+	Use an Existing List…	使用現有清單…

@@ -25,13 +25,26 @@ fn has_recipients(s: &Session) -> Option<&'static str> {
     if s.merge.rows.is_empty() { Some("select recipients first") } else { None }
 }
 
+/// Edit Recipient List needs a list to edit (fields, even with no entries yet).
+fn has_list(s: &Session) -> Option<&'static str> {
+    if s.merge.headers.is_empty() && s.merge.rows.is_empty() { Some("select recipients first") } else { None }
+}
+
+/// The kinds of document Start Mail Merge makes. `normal` is an ordinary document again; only
+/// `directory` changes how Finish & Merge joins the records (no page break between them).
+pub const MERGE_KINDS: [&str; 6] = ["letters", "emails", "envelopes", "labels", "directory", "normal"];
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("mailings.start", "Start Mail Merge", "Mailings › Start Mail Merge", |s, v| {
-            s.merge.kind = p::str(v, "kind").unwrap_or("letters").to_string();
+            let kind = p::str(v, "kind").unwrap_or("letters").trim().to_ascii_lowercase();
+            if !MERGE_KINDS.contains(&kind.as_str()) {
+                return Err(CmdError::Params(format!("`kind` must be one of {}", MERGE_KINDS.join(", "))));
+            }
+            s.merge.kind = kind;
             Ok(json!({"kind": s.merge.kind}))
         })
-        .params(r#"{"kind": "letters|emails|envelopes|labels|directory"}"#)
+        .params(r#"{"kind": "letters|emails|envelopes|labels|directory|normal"}"#)
         .pure(),
         CommandSpec::new("mailings.recipients", "Select Recipients", "Mailings › Start Mail Merge", recipients)
             .params(r#"{"csv"?: string, "path"?: string, "rows"?: [{field: value}] | [[value]], "fields"?: [string] (column order; required with array rows)}"#)
@@ -43,6 +56,7 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({"headers": s.merge.headers, "rows": s.merge.rows}))
         })
         .params(r#"{"rows"?: [{field: value}] | [[value]], "fields"?: [string]}"#)
+        .when(has_list)
         .pure(),
         CommandSpec::new("mailings.insertField", "Insert Merge Field", "Mailings › Write & Insert Fields", |s, v| {
             let f = p::req_str(v, "field")?.to_string();
@@ -608,6 +622,21 @@ mod tests {
         let err = s.run("mailings.recipients", &json!({"rows": [["Ada"]]})).unwrap_err();
         assert!(matches!(err, CmdError::Params(_)), "{err}");
         assert!(s.ui_requests.is_empty(), "programmatic calls never open dialogs");
+    }
+
+    /// Start Mail Merge takes only the kinds it knows; Edit Recipient List needs a list.
+    #[test]
+    fn merge_kinds_and_edit_list_needs_recipients() {
+        let mut s = Session::new(Document::new());
+        for k in MERGE_KINDS {
+            assert_eq!(s.run("mailings.start", &json!({"kind": k})).unwrap(), json!({"kind": k}));
+        }
+        assert_eq!(s.run("mailings.start", &json!({"kind": " Directory "})).unwrap(), json!({"kind": "directory"}));
+        assert!(matches!(s.run("mailings.start", &json!({"kind": "fax"})), Err(CmdError::Params(_))));
+        assert_eq!(s.merge.kind, "directory", "a rejected kind leaves the current one");
+        assert!(matches!(s.run("mailings.editRecipients", &json!({})), Err(CmdError::Disabled(_))));
+        s.run("mailings.recipients", &json!({"csv": "Name\nAda"})).unwrap();
+        assert_eq!(s.run("mailings.editRecipients", &json!({})).unwrap(), json!({"headers": ["Name"], "rows": [["Ada"]]}));
     }
 
     #[test]

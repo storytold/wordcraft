@@ -893,3 +893,49 @@
 	Opening print dialog…	Abriendo el cuadro de diálogo de impresión…
 	Print failed: {error}	Error al imprimir: {error}
 	Couldn't open {path}: {error}	No se pudo abrir {path}: {error}
+	Letters	Cartas
+	E-mail Messages	Mensajes de correo electrónico
+	Directory	Directorio
+	Normal Word Document	Documento normal
+	If…Then…Else…	Si…Entonces…Si no…
+	If…Then…Else	Si…Entonces…Si no
+	Merge Record #	N.º de registro de combinación
+	Skip Record If…	Omitir registro si…
+	Skip Record If	Omitir registro si
+	Equals:	Es igual a:
+	Then insert:	Entonces insertar:
+	Otherwise insert:	Si no, insertar:
+	Courtesy Title	Tratamiento
+	First Name	Nombre
+	Last Name	Apellido
+	Company	Empresa
+	Address	Dirección
+	City	Ciudad
+	State	Estado o provincia
+	Postal Code	Código postal
+	Country	País
+	(not matched)	(sin asignar)
+	Leave a recipient out of the merge when a field has this value.	Excluir un destinatario de la combinación cuando un campo tenga este valor.
+	Insert one text or another, depending on a field's value.	Insertar un texto u otro según el valor de un campo.
+	Select recipients first to match their fields.	Primero seleccione los destinatarios para asignar sus campos.
+	The recipient-list field that fills each part of an address block and greeting line.	El campo de la lista de destinatarios que rellena cada parte del bloque de dirección y la línea de saludo.
+	No errors found: every merge field is in the recipient list.	No se encontraron errores: todos los campos de combinación están en la lista de destinatarios.
+	These merge fields aren't in the recipient list:	Estos campos de combinación no están en la lista de destinatarios:
+	Add at least one field.	Agregue al menos un campo.
+	Add Field	Agregar campo
+	Every field needs a name.	Cada campo necesita un nombre.
+	Field name	Nombre del campo
+	Field names must be different.	Los nombres de los campos deben ser distintos.
+	Fields:	Campos:
+	Field:	Campo:
+	Find:	Buscar:
+	New Entry	Nueva entrada
+	Recipient List	Lista de destinatarios
+	Recipients: {count}	Destinatarios: {count}
+	Remove field	Quitar campo
+	Remove recipient	Quitar destinatario
+	Select recipients first to choose from their fields.	Primero seleccione los destinatarios para elegir entre sus campos.
+	Type a New List…	Escribir una lista nueva…
+	Type at least one recipient.	Escriba al menos un destinatario.
+	Type the recipients, or load them from a file.	Escriba los destinatarios o cárguelos desde un archivo.
+	Use an Existing List…	Usar una lista existente…

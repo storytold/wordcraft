@@ -276,7 +276,14 @@ impl WordApp {
             self.dialog = Some(dialogs::Dialog::SaveChanges { name, then: id.to_string(), params, document: self.session.document_id() });
             return Ok(json!({"pending": "saveChanges"}));
         }
-        self.execute(id, params)
+        let r = self.execute(id, params);
+        // Match Fields and Check for Errors show what they found.
+        if let Ok(v) = &r
+            && let Some(d) = dialogs::Dialog::report(id, v)
+        {
+            self.dialog = Some(d);
+        }
+        r
     }
 
     /// Run a command for a script or an agent (control channel, MCP bridge): never asks first.
@@ -901,11 +908,18 @@ fn keeps_everything(name: &str) -> bool {
 }
 
 /// The dialog a user-run command opens when it lacks the input it needs (scripts and agents get
-/// the command's own error instead): Select Recipients and Edit Recipient List without data,
-/// Insert Merge Field without a field, Find Recipient without text.
+/// the command's own error or default instead): Select Recipients and Edit Recipient List without
+/// data, Insert Merge Field without a field, Find Recipient without text, and the If and Skip
+/// Record If rules (or Rules with no rule at all) without a field.
 fn input_dialog(id: &str, params: &Value) -> Option<&'static str> {
     let has = |k: &str| params.get(k).is_some_and(|v| !v.is_null());
+    let rule = params.get("rule").and_then(Value::as_str).map(str::to_ascii_uppercase);
     match id {
+        "mailings.rules" if !has("field") => match rule.as_deref() {
+            None | Some("IF") => Some("ruleIf"),
+            Some("SKIPIF") => Some("ruleSkipIf"),
+            _ => None,
+        },
         "mailings.recipients" if !["csv", "path", "rows"].into_iter().any(has) => Some("recipientList"),
         "mailings.editRecipients" if !has("rows") => Some("recipientList"),
         "mailings.insertField" if !has("field") => Some("insertMergeField"),
@@ -1899,6 +1913,47 @@ mod tests {
         // Programmatic calls never open dialogs.
         let mut b = app();
         assert!(b.execute("mailings.recipients", json!({})).is_err());
+        assert!(b.dialog.is_none());
+    }
+
+    /// Rules › If…Then…Else… asks for its condition and inserts the IF field it describes; Next
+    /// Record has nothing to ask. Match Fields and Check for Errors show what they found.
+    #[test]
+    fn merge_rules_and_reports_open_dialogs() {
+        let mut a = app();
+        a.run("mailings.recipients", json!({"csv": "First Name,City\nAda,London"})).unwrap();
+        assert_eq!(a.run("mailings.rules", json!({"rule": "IF"})).unwrap(), json!({"pending": "ruleIf"}));
+        let Some(mut d) = a.dialog.take() else { panic!("no dialog") };
+        let dialogs::Dialog::MergeRule { field, value, then, els, .. } = &mut d else { panic!("{d:?}") };
+        assert_eq!(field, "First Name", "the list's first field is picked");
+        (*field, *value, *then, *els) = ("City".into(), "London".into(), "Local".into(), "Away".into());
+        let params = dialogs::rule_params(&d).unwrap();
+        a.run("mailings.rules", params).unwrap();
+        assert!(a.dialog.is_none());
+        let fields = |a: &WordApp| -> Vec<String> {
+            let (doc, body) = (&a.session.doc, wordcraft_doc::StoryRef::Body);
+            let paras = doc.para_paths(body).into_iter().filter_map(|p| doc.para(body, &p).cloned());
+            paras
+                .flat_map(|p| p.objects)
+                .filter_map(|o| if let wordcraft_doc::para::InlineObject::Field { instr, .. } = o { Some(instr) } else { None })
+                .collect()
+        };
+        assert_eq!(fields(&a), vec![r#"IF { MERGEFIELD City } = "London" "Local" "Away""#]);
+        // Next Record inserts directly; Skip Record If asks.
+        assert!(a.run("mailings.rules", json!({"rule": "NEXT"})).unwrap().get("pending").is_none());
+        assert_eq!(fields(&a).last().map(String::as_str), Some("NEXT"));
+        assert_eq!(a.run("mailings.rules", json!({"rule": "skipif"})).unwrap(), json!({"pending": "ruleSkipIf"}));
+        a.dialog = None;
+        a.run("mailings.matchFields", json!({})).unwrap();
+        let Some(dialogs::Dialog::MatchFields { address, .. }) = &a.dialog else { panic!() };
+        assert_eq!(address["firstName"], "First Name");
+        a.run("mailings.checkErrors", json!({})).unwrap();
+        let Some(dialogs::Dialog::CheckErrors { unknown, records }) = &a.dialog else { panic!() };
+        assert_eq!((unknown.len(), *records), (0, 1));
+        // Scripts and agents get the data or the default rule, never a dialog.
+        let mut b = app();
+        b.execute("mailings.checkErrors", json!({})).unwrap();
+        b.execute("mailings.rules", json!({})).unwrap();
         assert!(b.dialog.is_none());
     }
 
