@@ -1561,7 +1561,7 @@ unsafe fn public_window_callback_inner(
                 // Next, receive preedit range for next composing if exist.
                 if (lparam as u32 & GCS_COMPSTR) != 0 {
                     if let Some((text, first, last)) =
-                        unsafe { ime_context.get_composing_text_and_cursor() }
+                        unsafe { ime_context.get_composing_text_and_cursor(lparam as u32) }
                     {
                         userdata.window_state_lock().ime_state = ImeState::Preedit;
                         let cursor_range = first.map(|f| (f, last.unwrap_or(f)));
@@ -2306,7 +2306,7 @@ unsafe fn public_window_callback_inner(
             }
 
             let new_outer_rect: RECT;
-            // PdfCraft patch: from Windows 11 (build 22000) on, apply the rect Windows suggests, as
+            // WordCraft patch: from Windows 11 (build 22000) on, apply the rect Windows suggests, as
             // winit master does since 488c036a (rust-windowing/winit#4341). The adjustment below
             // asks `MonitorFromWindow`, which during a drag still answers with the monitor being
             // left: it nudges the window back onto that monitor, which sends another WM_DPICHANGED,
