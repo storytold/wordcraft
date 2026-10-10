@@ -541,6 +541,54 @@ fn tables_commands() {
     assert!(s.run("table.merge", &json!({})).is_err());
 }
 
+/// Table Layout › Text Direction (#226) cycles the selected cells' text through horizontal,
+/// top-to-bottom and bottom-to-top, and the layout turns the text.
+#[test]
+fn table_text_direction_cycles_and_turns_the_text() {
+    use wordcraft_doc::props::TextDirection;
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 3}));
+    run(&mut s, "text.insert", json!({"text": "Turned"}));
+    let dirs = |s: &Session| -> Vec<TextDirection> {
+        s.doc.body.iter().find_map(|b| b.as_table()).unwrap().rows[0].cells.iter().map(|c| c.props.text_direction).collect()
+    };
+    let turned = |s: &mut Session| {
+        s.layout().pages[0].items.iter().find_map(|it| match it {
+            wordcraft_layout::Placed::Lines { para, turn, .. } if para.lines.first().is_some_and(|l| l.stop > 0) => Some(*turn),
+            _ => None,
+        })
+    };
+    assert_eq!(turned(&mut s), Some(TextDirection::Horizontal));
+    run(&mut s, "table.textDirection", json!({}));
+    assert_eq!(dirs(&s), [TextDirection::Down, TextDirection::Horizontal, TextDirection::Horizontal]);
+    assert_eq!(turned(&mut s), Some(TextDirection::Down), "the text is drawn turned");
+    run(&mut s, "table.textDirection", json!({}));
+    assert_eq!(dirs(&s)[0], TextDirection::Up);
+    assert_eq!(turned(&mut s), Some(TextDirection::Up));
+    run(&mut s, "table.textDirection", json!({}));
+    assert_eq!(dirs(&s)[0], TextDirection::Horizontal);
+    // Every selected cell gets the caret cell's next direction (the issue's selection spans cells).
+    let a = s.sel.focus.clone();
+    let mut b = a.clone();
+    if let Some(last) = b.path.0.get_mut(2) {
+        *last = 1;
+    }
+    b.off = 0;
+    s.sel = crate::Selection { anchor: a, focus: b };
+    run(&mut s, "table.textDirection", json!({}));
+    assert_eq!(dirs(&s), [TextDirection::Down, TextDirection::Down, TextDirection::Horizontal]);
+    run(&mut s, "table.textDirection", json!({"value": "up"}));
+    assert_eq!(dirs(&s), [TextDirection::Up, TextDirection::Up, TextDirection::Horizontal]);
+    assert!(s.run("table.textDirection", &json!({"value": "sideways"})).is_err());
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(dirs(&s), [TextDirection::Down, TextDirection::Down, TextDirection::Horizontal]);
+    // Outside a table it is disabled.
+    s.sel = crate::Selection::caret(Pos::body(0, 0));
+    if s.sel.focus.path.cell().is_none() {
+        assert!(s.run("table.textDirection", &json!({})).is_err());
+    }
+}
+
 #[test]
 fn table_border_presets_mask_the_sides_they_clear() {
     // On a default (TableGrid) table the "outside"/"inside" presets must write nil over the
@@ -660,6 +708,142 @@ fn tracked_split_gives_the_new_paragraph_mark_to_its_author() {
         assert_eq!(tail.mark.ins, None, "split at {off:?}");
         assert_eq!(tail.mark.del, None, "split at {off:?}");
     }
+}
+
+fn body_texts(s: &Session) -> Vec<String> {
+    s.doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.text.clone()).collect()
+}
+
+/// Issue #229's steps: a paragraph split while tracking changes.
+fn tracked_split(text: &str) -> Session {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": text}));
+    run(&mut s, "file.setAuthor", json!({"name": "Owned Bob"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 12}}));
+    run(&mut s, "text.newParagraph", json!({}));
+    s
+}
+
+#[test]
+fn reject_all_removes_a_tracked_paragraph_break() {
+    // Issue #229: Reject All left the paragraph break typed with Track Changes on.
+    for (text, head) in [("Owned ALPHA Owned BETA", "Owned ALPHA "), ("Owned GAMMA Owned DELTA", "Owned GAMMA ")] {
+        let mut s = tracked_split(text);
+        assert_eq!(body_texts(&s), [head, &text[12..]]);
+        // The break is listed as a change, by its author.
+        let ch = run(&mut s, "review.changes", json!({}));
+        assert_eq!(ch.as_array().map(Vec::len), Some(1), "{ch}");
+        assert_eq!((ch[0]["kind"].as_str(), ch[0]["author"].as_str()), (Some("insert"), Some("Owned Bob")));
+        run(&mut s, "review.rejectAll", json!({}));
+        assert_eq!(body_texts(&s), [text]);
+        assert!(s.doc.revisions.is_empty());
+        let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+        assert_eq!((p.mark.ins, p.mark.del), (None, None));
+        // Undo brings the tracked split back; redo rejects it again.
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(body_texts(&s), [head, &text[12..]]);
+        assert!(s.doc.para_at(&Pos::body(0, 0)).unwrap().mark.ins.is_some());
+        run(&mut s, "edit.redo", json!({}));
+        assert_eq!(body_texts(&s), [text]);
+    }
+    // Split → Undo → Redo → Reject All (the issue's other variant).
+    let mut s = tracked_split("Owned ALPHA Owned BETA");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(body_texts(&s), ["Owned ALPHA Owned BETA"]);
+    run(&mut s, "edit.redo", json!({}));
+    run(&mut s, "review.rejectAll", json!({}));
+    assert_eq!(body_texts(&s), ["Owned ALPHA Owned BETA"]);
+}
+
+#[test]
+fn accept_all_keeps_a_tracked_paragraph_break() {
+    let mut s = tracked_split("Owned ALPHA Owned BETA");
+    run(&mut s, "review.acceptAll", json!({}));
+    assert_eq!(body_texts(&s), ["Owned ALPHA ", "Owned BETA"]);
+    assert!(s.doc.revisions.is_empty());
+    assert!(s.doc.body.iter().filter_map(|b| b.as_para()).all(|p| p.mark.ins.is_none() && p.mark.del.is_none()));
+    assert_eq!(run(&mut s, "review.changes", json!({})), json!([]));
+}
+
+#[test]
+fn reject_one_paragraph_break_and_rejecting_a_typed_paragraph() {
+    // Reject with the caret on the break (Next Change selects it), or at the end of its paragraph.
+    let mut s = tracked_split("Owned ALPHA Owned BETA");
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 0}}));
+    run(&mut s, "review.nextChange", json!({}));
+    run(&mut s, "review.reject", json!({}));
+    assert_eq!(body_texts(&s), ["Owned ALPHA Owned BETA"]);
+    let mut s = tracked_split("Owned ALPHA Owned BETA");
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 12}}));
+    run(&mut s, "review.accept", json!({}));
+    assert_eq!(body_texts(&s), ["Owned ALPHA ", "Owned BETA"]);
+    assert_eq!(run(&mut s, "review.changes", json!({})), json!([]));
+
+    // Enter at the end of a heading, then a typed paragraph: rejecting everything restores
+    // the heading alone, with its style.
+    let mut s = self::s();
+    run(&mut s, "text.insert", json!({"text": "Title"}));
+    run(&mut s, "para.style", json!({"style": "Heading1"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Body"}));
+    run(&mut s, "text.newParagraph", json!({}));
+    assert_eq!(body_texts(&s), ["Title", "Body", ""]);
+    run(&mut s, "review.rejectAll", json!({}));
+    assert_eq!(body_texts(&s), ["Title"]);
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().props.style.as_deref(), Some("Heading1"));
+}
+
+#[test]
+fn tracked_backspace_and_delete_mark_a_paragraph_break_deleted() {
+    let two = || {
+        let mut s = s();
+        run(&mut s, "text.insert", json!({"text": "One"}));
+        run(&mut s, "text.newParagraph", json!({}));
+        run(&mut s, "text.insert", json!({"text": "Two"}));
+        run(&mut s, "review.trackChanges", json!({"value": true}));
+        s.author = "Ana".into();
+        s
+    };
+    // Backspace at the start of "Two": the mark above is deleted, the caret moves before it.
+    for accept in [false, true] {
+        let mut s = two();
+        run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 0}}));
+        run(&mut s, "text.backspace", json!({}));
+        assert_eq!(body_texts(&s), ["One", "Two"], "a tracked deletion stays in the text");
+        assert_eq!(s.sel.focus, Pos::body(0, 3));
+        assert_eq!(author_of(&s, s.doc.para_at(&Pos::body(0, 0)).unwrap().mark.del).as_deref(), Some("Ana"));
+        let ch = run(&mut s, "review.changes", json!({}));
+        assert_eq!(ch[0]["kind"], "delete", "{ch}");
+        if accept {
+            run(&mut s, "review.acceptAll", json!({}));
+            assert_eq!(body_texts(&s), ["OneTwo"]);
+        } else {
+            run(&mut s, "review.rejectAll", json!({}));
+            assert_eq!(body_texts(&s), ["One", "Two"]);
+            assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().mark.del, None);
+        }
+    }
+
+    // Delete at the end of "One": the same, and the caret steps over the deleted mark.
+    let mut s = two();
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 3}}));
+    run(&mut s, "text.delete", json!({}));
+    assert_eq!(body_texts(&s), ["One", "Two"]);
+    assert_eq!(s.sel.focus, Pos::body(1, 0));
+    assert!(s.doc.para_at(&Pos::body(0, 0)).unwrap().mark.del.is_some());
+    run(&mut s, "review.acceptAll", json!({}));
+    assert_eq!(body_texts(&s), ["OneTwo"]);
+
+    // A break the same author inserted is simply removed again.
+    let mut s = two();
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 3}}));
+    run(&mut s, "text.newParagraph", json!({}));
+    assert_eq!(body_texts(&s), ["One", "Two", ""]);
+    run(&mut s, "text.backspace", json!({}));
+    assert_eq!(body_texts(&s), ["One", "Two"]);
+    assert!(s.doc.body.iter().filter_map(|b| b.as_para()).all(|p| p.mark.ins.is_none() && p.mark.del.is_none()));
 }
 
 #[test]

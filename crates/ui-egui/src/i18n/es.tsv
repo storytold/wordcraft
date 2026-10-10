@@ -164,7 +164,6 @@
 	Customize Quick Access Toolbar	Personalizar la barra de herramientas de acceso rápido
 	Cut	Cortar
 	Dark Mode	Modo oscuro
-	Dark mode	Modo oscuro
 	Dashed	Discontinua
 	Data	Datos
 	Date & Time	Fecha y hora
@@ -939,3 +938,10 @@
 	Type at least one recipient.	Escriba al menos un destinatario.
 	Type the recipients, or load them from a file.	Escriba los destinatarios o cárguelos desde un archivo.
 	Use an Existing List…	Usar una lista existente…
+	Interface theme:	Tema de la interfaz:
+	Interface\nTheme	Tema de la\ninterfaz
+	Interface Theme	Tema de la interfaz
+	Light	Claro
+	Dark	Oscuro
+	Use system setting	Usar la configuración del sistema
+	A file dialog is already open.	Ya hay un cuadro de diálogo de archivo abierto.

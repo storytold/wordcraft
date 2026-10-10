@@ -161,7 +161,6 @@
 	Customize Quick Access Toolbar	Налаштувати панель швидкого доступу
 	Cut	Вирізати
 	Dark Mode	Темний режим
-	Dark mode	Темний режим
 	Dashed	Штрихова
 	Data	Дані
 	Date & Time	Дата й час
@@ -934,3 +933,10 @@
 	Type at least one recipient.	Введіть принаймні одного одержувача.
 	Type the recipients, or load them from a file.	Введіть одержувачів або завантажте їх із файлу.
 	Use an Existing List…	Використати наявний список…
+	Interface theme:	Тема інтерфейсу:
+	Interface\nTheme	Тема\nінтерфейсу
+	Interface Theme	Тема інтерфейсу
+	Light	Світла
+	Dark	Темна
+	Use system setting	Як у системі
+	A file dialog is already open.	Діалогове вікно файлу вже відкрито.

@@ -77,7 +77,7 @@ jobs:
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           repository: storytold/craft-fonts
-          ref: abb83316d96aa59c1cf64784289e378fe9fa5695
+          ref: 8dcdacd5153e64560d109541a47d806f26f048c0
           path: craft-fonts
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -136,7 +136,7 @@ jobs:
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           repository: storytold/craft-fonts
-          ref: abb83316d96aa59c1cf64784289e378fe9fa5695
+          ref: 8dcdacd5153e64560d109541a47d806f26f048c0
           path: craft-fonts
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -195,7 +195,7 @@ jobs:
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           repository: storytold/craft-fonts
-          ref: abb83316d96aa59c1cf64784289e378fe9fa5695
+          ref: 8dcdacd5153e64560d109541a47d806f26f048c0
           path: craft-fonts
       - name: Install build and packaging tools
         run: |
@@ -291,7 +291,7 @@ jobs:
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           repository: storytold/craft-fonts
-          ref: abb83316d96aa59c1cf64784289e378fe9fa5695
+          ref: 8dcdacd5153e64560d109541a47d806f26f048c0
           path: craft-fonts
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -335,7 +335,7 @@ jobs:
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           repository: storytold/craft-fonts
-          ref: abb83316d96aa59c1cf64784289e378fe9fa5695
+          ref: 8dcdacd5153e64560d109541a47d806f26f048c0
           path: craft-fonts
       - name: Build in a FreeBSD VM
         uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1

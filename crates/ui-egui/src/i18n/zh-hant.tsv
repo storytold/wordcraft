@@ -158,7 +158,6 @@
 	Customize Quick Access Toolbar	自訂快速存取工具列
 	Cut	剪下
 	Dark Mode	深色模式
-	Dark mode	深色模式
 	Dashed	虛線
 	Data	資料
 	Date & Time	日期及時間
@@ -923,3 +922,10 @@
 	Type at least one recipient.	請至少輸入一位收件者。
 	Type the recipients, or load them from a file.	輸入收件者，或從檔案載入。
 	Use an Existing List…	使用現有清單…
+	Interface theme:	介面主題：
+	Interface\nTheme	介面主題
+	Interface Theme	介面主題
+	Light	淺色
+	Dark	深色
+	Use system setting	使用系統設定
+	A file dialog is already open.	已有一個檔案對話方塊開啟中。

@@ -60,8 +60,9 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                 if resp.on_hover_text(tl!("AutoSave saves every change to the file (needs a saved document)")).clicked() {
                     if saved_here {
                         app.toggle_autosave();
-                    } else if app.save_as_dialog() {
-                        app.autosave = true;
+                    } else {
+                        // AutoSave comes on once Save As has saved (maybe on a later frame, #94).
+                        let _ = app.save_as(crate::file_dialogs::AfterSave::AutoSave);
                     }
                 }
                 ui.add_space(8.0);

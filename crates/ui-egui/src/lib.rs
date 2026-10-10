@@ -20,6 +20,7 @@ pub mod control;
 pub mod credits;
 pub mod dialogs;
 pub mod equation_tab;
+pub mod file_dialogs;
 pub mod frame;
 pub mod i18n;
 pub mod icons;
@@ -41,6 +42,7 @@ use serde_json::{Value, json};
 use wordcraft_engine::Session;
 
 pub use control::ControlRequest;
+pub use file_dialogs::FileDialogRequest;
 
 /// Platform services injected by the host (file dialogs, file I/O).
 #[derive(Default)]
@@ -49,6 +51,11 @@ pub struct Services {
     pub pick_open: Option<Box<dyn Fn(&str) -> Option<String>>>,
     /// Pick a path to save to, given a suggested name.
     pub pick_save: Option<Box<dyn Fn(&str) -> Option<String>>>,
+    /// Desktop: show a native file dialog without blocking the UI thread (#94); used instead of
+    /// `pick_open` / `pick_save` when set. The host sends the picked path (`None` when cancelled)
+    /// through the returned channel once the user answers, and wakes the UI; a dropped sender
+    /// counts as cancelled. The app shows one dialog at a time ([`file_dialogs`]).
+    pub file_dialog: Option<Box<dyn Fn(FileDialogRequest) -> std::sync::mpsc::Receiver<Option<String>>>>,
     /// Web: open a file picker; the file arrives later through `inbox`.
     pub open_async: Option<Box<dyn Fn(&str)>>,
     /// Web: files (name, bytes) delivered asynchronously (picker, drag and drop).
@@ -76,7 +83,11 @@ pub struct UiState {
     pub backstage_page: String,
     pub ribbon_collapsed: bool,
     pub recent: Vec<String>,
-    pub dark: bool,
+    /// Interface theme: light, dark, or follow the OS appearance (#115).
+    pub theme: theme::Appearance,
+    /// The dark-mode switch `ui.json` held before `theme` (#115): read once to migrate, never written.
+    #[serde(rename = "dark", skip_serializing)]
+    pub(crate) legacy_dark: Option<bool>,
     pub nav_tab: String,
     pub show_discord: bool,
     /// User name (File › Options) for comments and tracked changes; empty keeps the default.
@@ -105,7 +116,8 @@ impl Default for UiState {
             backstage_page: "home".into(),
             ribbon_collapsed: false,
             recent: Vec::new(),
-            dark: false,
+            theme: theme::Appearance::default(),
+            legacy_dark: None,
             nav_tab: "headings".into(),
             show_discord: true,
             author: String::new(),
@@ -146,6 +158,11 @@ pub struct WordApp {
     styled: bool,
     /// The CJK face order the installed UI fonts use (Chinese first, or Japanese first).
     fonts_hans: bool,
+    /// Whether the installed UI fonts include an installed CJK fallback font (#241).
+    fonts_system_cjk: bool,
+    /// CJK text is (about to be) on screen in a non-CJK interface, e.g. the language names in
+    /// File ▸ Options: load the installed CJK fallback font if no embedded face covers it.
+    pub(crate) want_system_cjk: bool,
     fonts_frames: u32,
     applied_dark: Option<bool>,
     pub frame_ms: f64,
@@ -168,6 +185,8 @@ pub struct WordApp {
     /// there. A file that was merely opened isn't rewritten until the user saves it: saving drops
     /// whatever WordCraft can't represent (content controls, charts, macros…).
     autosave_path: Option<std::path::PathBuf>,
+    /// The file dialog the host is showing, and what its answer is for ([`file_dialogs`]).
+    file_dialog: Option<file_dialogs::PendingDialog>,
 }
 
 /// The answer to "Do you want to save changes?" (`ui.saveChanges`).
@@ -208,6 +227,8 @@ impl WordApp {
             keytip_rects: Vec::new(),
             styled: false,
             fonts_hans: false,
+            fonts_system_cjk: false,
+            want_system_cjk: false,
             fonts_frames: 0,
             applied_dark: None,
             frame_ms: 0.0,
@@ -224,6 +245,7 @@ impl WordApp {
             autosave_path: None,
             change_picture_target: None,
             recipient_list_pending: false,
+            file_dialog: None,
         }
     }
 
@@ -248,6 +270,10 @@ impl WordApp {
     pub fn apply_prefs(&mut self, ui: UiState) {
         self.ui = ui;
         self.ui.backstage = false;
+        // A `ui.json` from before the theme setting: its dark-mode switch picks Dark or Light.
+        if let Some(dark) = self.ui.legacy_dark.take() {
+            self.ui.theme = if dark { theme::Appearance::Dark } else { theme::Appearance::Light };
+        }
         // The session owns the name from here on; `prefs` copies it back when saving.
         let author = std::mem::take(&mut self.ui.author);
         if !author.trim().is_empty() {
@@ -363,6 +389,15 @@ impl WordApp {
         let go = match choice {
             SaveChoice::Cancel => false,
             SaveChoice::DontSave => true,
+            // A new document: ask where through Save As; the command runs once that has saved,
+            // which with the desktop's non-blocking dialog is on a later frame (#94).
+            SaveChoice::Save if self.session.path.is_none() && self.services.download.is_none() => {
+                return match self.save_as(file_dialogs::AfterSave::Continue { then, params, document }) {
+                    file_dialogs::Asked::Done(r) => r,
+                    file_dialogs::Asked::Pending => Ok(json!({"pending": "saveAs"})),
+                    file_dialogs::Asked::Busy => Ok(json!({"done": false})),
+                };
+            }
             SaveChoice::Save => self.save_for_prompt(),
         };
         if !go {
@@ -376,14 +411,15 @@ impl WordApp {
     /// image, plain text) writes a copy and leaves the document unsaved, so it doesn't count:
     /// the command is cancelled and the document stays.
     fn save_for_prompt(&mut self) -> bool {
-        let saved = if self.session.path.is_none() && self.services.download.is_none() {
-            self.save_as_dialog()
-        } else {
-            match self.execute("file.save", json!({})) {
-                Ok(v) => v.get("saved").and_then(Value::as_bool) == Some(true) || v.get("downloaded").is_some(),
-                Err(_) => false,
-            }
+        let saved = match self.execute("file.save", json!({})) {
+            Ok(v) => v.get("saved").and_then(Value::as_bool) == Some(true) || v.get("downloaded").is_some(),
+            Err(_) => false,
         };
+        self.safely_saved(saved)
+    }
+
+    /// Whether a save before New/Open/Close counts: it happened, and kept everything.
+    fn safely_saved(&mut self, saved: bool) -> bool {
         if saved && self.session.dirty {
             self.status(tl!("That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on."));
             return false;
@@ -447,6 +483,11 @@ impl WordApp {
         }
     }
 
+    /// Whether the interface theme setting currently resolves to dark (`System` asks the OS).
+    pub fn ui_is_dark(&self) -> bool {
+        self.ui.theme.is_dark(self.ctx.as_ref().and_then(egui::Context::system_theme))
+    }
+
     /// Commands that live in the UI layer.
     fn ui_command(&mut self, id: &str, p: &Value) -> Option<Result<Value, String>> {
         let s = |k: &str| p.get(k).and_then(Value::as_str);
@@ -489,8 +530,20 @@ impl WordApp {
                 json!({"collapsed": self.ui.ribbon_collapsed})
             }
             "ui.dark" => {
-                self.ui.dark = p.get("value").and_then(Value::as_bool).unwrap_or(!self.ui.dark);
-                json!({"dark": self.ui.dark})
+                // A manual Light/Dark switch (toggles what is shown when no value is given).
+                let dark = p.get("value").and_then(Value::as_bool).unwrap_or(!self.ui_is_dark());
+                self.ui.theme = if dark { theme::Appearance::Dark } else { theme::Appearance::Light };
+                json!({"dark": dark, "theme": self.ui.theme.code()})
+            }
+            "ui.theme" => {
+                // `light`, `dark` or `system` (follow the OS appearance); no value reads it.
+                if let Some(v) = s("value") {
+                    match theme::Appearance::from_code(v) {
+                        Some(a) => self.ui.theme = a,
+                        None => return Some(Err(format!("unknown theme {v:?}; use light, dark or system"))),
+                    }
+                }
+                json!({"theme": self.ui.theme.code(), "dark": self.ui_is_dark()})
             }
             "ui.language" => {
                 // `auto` (follow the system) or a language code; anything else is an error.
@@ -560,25 +613,6 @@ impl WordApp {
         self.status_msg = Some((s.into(), now_ms()));
     }
 
-    fn open_dialog(&mut self) {
-        if let Some(f) = &self.services.open_async {
-            f("document");
-            return;
-        }
-        let picked = self.services.pick_open.as_ref().and_then(|f| f("document"));
-        if let Some(path) = picked {
-            let _ = self.run("file.open", json!({"path": path}));
-            self.ui.backstage = false;
-        }
-    }
-
-    /// Ask where to save, then save there. True once the document is written.
-    pub fn save_as_dialog(&mut self) -> bool {
-        let name = self.default_save_name();
-        let picked = self.services.pick_save.as_ref().and_then(|f| f(&name));
-        picked.is_some_and(|path| self.run("file.save", json!({"path": path})).is_ok_and(|v| v.get("saved").and_then(Value::as_bool) == Some(true)))
-    }
-
     /// Media key of the selected picture, if any.
     pub(crate) fn selected_picture_media(&self) -> Option<String> {
         match wordcraft_engine::cmd::objects::selected(&self.session) {
@@ -608,30 +642,15 @@ impl WordApp {
         }
     }
 
-    fn pick_picture(&mut self) {
-        if let Some(f) = &self.services.open_async {
-            f("picture");
-            return;
-        }
-        let picked = self.services.pick_open.as_ref().and_then(|f| f("picture"));
-        if let Some(path) = picked {
-            let _ = self.insert_or_change_picture(json!({"path": path}));
-        } else {
-            self.change_picture_target = None;
-        }
-    }
-
-    /// Pick a recipient list (desktop: now; web: it arrives through the inbox).
+    /// Pick a recipient list (desktop: through the file dialog hook; web: it arrives through the
+    /// inbox).
     fn pick_recipient_list(&mut self) {
         if let Some(f) = &self.services.open_async {
             f("recipients");
             self.recipient_list_pending = true;
             return;
         }
-        let picked = self.services.pick_open.as_ref().and_then(|f| f("recipients"));
-        if let Some(path) = picked {
-            let _ = self.load_recipients(json!({"path": path}));
-        }
+        let _ = self.ask_file(file_dialogs::FileDialogRequest::Open { purpose: "recipients".into() }, file_dialogs::AfterPick::Recipients);
     }
 
     /// Load mail-merge recipients and say how many there are.
@@ -673,15 +692,21 @@ impl WordApp {
         let lang = i18n::Lang::from_pref(&self.ui.language);
         i18n::set_current(lang);
         // Chinese text wants the Chinese face before the Japanese one (one glyph style per line).
-        if !self.styled || lang.prefers_hans() != self.fonts_hans {
-            theme::install_fonts_for(ctx, lang.prefers_hans());
+        // An installed CJK font is read only once CJK text is shown (#241): never for an English
+        // interface that doesn't open the language list.
+        let system_cjk = self.fonts_system_cjk || self.want_system_cjk || lang.uses_cjk();
+        if !self.styled || lang.prefers_hans() != self.fonts_hans || system_cjk != self.fonts_system_cjk {
+            theme::install_fonts_with(ctx, lang.prefers_hans(), system_cjk);
             self.fonts_hans = lang.prefers_hans();
+            self.fonts_system_cjk = system_cjk;
             // Mod with -, = and 0 are Word shortcuts (optional hyphen, subscript, paragraph spacing);
             // egui's keyboard zoom would also scale the whole window on them. Zoom is View › Zoom.
             ctx.options_mut(|o| o.zoom_with_keyboard = false);
             self.styled = true;
         }
-        let dark = self.ui.dark || self.session.view.dark_mode;
+        // Re-checked every frame, so `System` follows an OS appearance change live (egui reports it
+        // and repaints).
+        let dark = self.ui.theme.is_dark(ctx.system_theme()) || self.session.view.dark_mode;
         if self.applied_dark != Some(dark) {
             theme::apply(ctx, &if dark { theme::Tokens::dark() } else { theme::Tokens::light() });
             self.applied_dark = Some(dark);
@@ -693,6 +718,7 @@ impl WordApp {
         zotero::poll(self, ctx);
         read_aloud::poll(self, ctx);
         self.clear_stale_change_picture();
+        let _ = self.poll_file_dialog();
         self.drain_inbox();
         self.autosave_tick(now_ms());
         if self.autosaves() && self.session.dirty {
@@ -1788,8 +1814,46 @@ mod tests {
         let default = a.session.author.clone();
         a.apply_prefs(serde_json::from_str(r#"{"dark": true, "backstage": true}"#).unwrap());
         assert_eq!(a.session.author, default);
-        assert!(a.ui.dark);
+        assert_eq!(a.ui.theme, theme::Appearance::Dark);
         assert!(!a.ui.backstage);
+    }
+
+    /// #115: the old dark-mode switch migrates to Light/Dark; a saved System stays System, and the
+    /// old key is never written back.
+    #[test]
+    fn interface_theme_migrates_and_survives_a_restart() {
+        use theme::Appearance;
+        for (saved, want) in [(r#"{"dark": false}"#, Appearance::Light), (r#"{"dark": true}"#, Appearance::Dark), ("{}", Appearance::Light)] {
+            let mut a = app();
+            a.apply_prefs(serde_json::from_str(saved).unwrap());
+            assert_eq!(a.ui.theme, want, "{saved}");
+        }
+        let mut a = app();
+        a.run("ui.theme", json!({"value": "System"})).unwrap();
+        let saved = serde_json::to_string(&a.prefs()).unwrap();
+        assert!(saved.contains(r#""theme":"system""#) && !saved.contains(r#""dark":"#), "{saved}");
+        let mut b = app();
+        b.apply_prefs(serde_json::from_str(&saved).unwrap());
+        assert_eq!(b.ui.theme, Appearance::System);
+        // An unknown saved value keeps the rest of the preferences.
+        let odd: UiState = serde_json::from_str(r#"{"theme": "sepia", "tab": "Insert"}"#).unwrap();
+        assert_eq!((odd.theme, odd.tab.as_str()), (Appearance::Light, "Insert"));
+    }
+
+    /// #115: System follows the OS appearance (light when unknown); the manual choices ignore it.
+    #[test]
+    fn interface_theme_resolves_against_the_os_appearance() {
+        use egui::Theme::{Dark, Light};
+        use theme::Appearance;
+        let cases = [(Appearance::System, None, false), (Appearance::System, Some(Light), false), (Appearance::System, Some(Dark), true)];
+        for (setting, os, dark) in cases.into_iter().chain([(Appearance::Light, Some(Dark), false), (Appearance::Dark, Some(Light), true)]) {
+            assert_eq!(setting.is_dark(os), dark, "{setting:?} with the OS at {os:?}");
+        }
+        let mut a = app();
+        assert!(a.run("ui.theme", json!({"value": "purple"})).is_err());
+        assert_eq!(a.run("ui.theme", json!({"value": "dark"})).unwrap()["theme"], "dark");
+        assert_eq!(a.run("ui.dark", json!({})).unwrap()["theme"], "light", "ui.dark toggles the manual choice");
+        assert_eq!(a.run("ui.theme", json!({})).unwrap()["theme"], "light");
     }
 
     #[test]
@@ -1807,7 +1871,7 @@ mod tests {
     fn prefs_without_editing_keep_its_defaults() {
         let mut a = app();
         a.apply_prefs(serde_json::from_str(r#"{"tab": "Insert", "dark": true}"#).unwrap());
-        assert_eq!((a.ui.tab.as_str(), a.ui.dark), ("Insert", true));
+        assert_eq!((a.ui.tab.as_str(), a.ui.theme), ("Insert", theme::Appearance::Dark));
         assert!(a.session.prefs.count_notes, "text boxes and notes count by default");
     }
 

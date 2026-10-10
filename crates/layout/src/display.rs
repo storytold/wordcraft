@@ -1,7 +1,7 @@
 //! Page → draw items, shared by the raster renderer, the PDF exporter and thumbnails.
 
 use wordcraft_doc::para::{InlineObject, ShapeKind};
-use wordcraft_doc::props::{Border, BorderStyle, Rgb, TextColor, Underline};
+use wordcraft_doc::props::{Border, BorderStyle, Rgb, TextColor, TextDirection, Underline};
 use wordcraft_doc::{Document, Path, StoryRef};
 use wordcraft_fonts::FaceRef;
 use wordcraft_geom::Rect;
@@ -65,13 +65,35 @@ pub enum Draw {
         stroke: Option<Rgb>,
         stroke_width: f32,
     },
-    /// A formatting mark (¶ · → ↵) in the UI's mark colour.
+    /// A formatting mark (¶ · → ↵) in the UI's mark colour, or in `color` (a tracked
+    /// paragraph mark in its reviser's colour).
     Mark {
         x: f32,
         baseline: f32,
         size: f32,
         ch: char,
+        color: Option<Rgb>,
     },
+    /// Turned text (a table cell's text direction): `items` are drawn in a frame turned `turn`
+    /// whose origin is page point (`x`, `y`) (see [`crate::turn_point`]).
+    Turned {
+        x: f32,
+        y: f32,
+        turn: TextDirection,
+        items: Vec<Draw>,
+    },
+}
+
+impl Draw {
+    /// The affine map (a, b, c, d, e, f: x' = a·x + c·y + e, y' = b·x + d·y + f) from a frame
+    /// turned `turn` with its origin at page point (`x`, `y`) to the page.
+    pub fn turn_matrix(turn: TextDirection, x: f32, y: f32) -> [f32; 6] {
+        match turn {
+            TextDirection::Horizontal => [1.0, 0.0, 0.0, 1.0, x, y],
+            TextDirection::Down => [0.0, 1.0, -1.0, 0.0, x, y],
+            TextDirection::Up => [0.0, -1.0, 1.0, 0.0, x, y],
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -170,7 +192,18 @@ fn item(doc: &Document, it: &Placed, opts: &DisplayOptions, alpha: f32, out: &mu
             out.push(Draw::Shape { rect: *rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width })
         }
         Placed::Cell { .. } | Placed::Object { .. } => {}
-        Placed::Lines { story, path, para, l0, l1, x, y } => lines(doc, *story, path, para, *l0, *l1, *x, *y, opts, alpha, out),
+        Placed::Lines { story, path, para, l0, l1, x, y, turn } if turn.is_turned() => {
+            let mut items = Vec::new();
+            lines(doc, *story, path, para, *l0, *l1, 0.0, 0.0, opts, alpha, &mut items);
+            // Link areas are axis-aligned page rectangles: turned text gets none.
+            for d in &mut items {
+                if let Draw::Glyphs { link, .. } = d {
+                    *link = None;
+                }
+            }
+            out.push(Draw::Turned { x: *x, y: *y, turn: *turn, items });
+        }
+        Placed::Lines { story, path, para, l0, l1, x, y, .. } => lines(doc, *story, path, para, *l0, *l1, *x, *y, opts, alpha, out),
     }
 }
 
@@ -500,9 +533,13 @@ fn lines(
                 let size = pl.styles.get(c.style as usize).map(|s| s.size).unwrap_or(msize);
                 let arrow = if line.rtl { '←' } else { '→' };
                 match c.kind {
-                    ClKind::Space => out.push(Draw::Mark { x: (cx + nx) / 2.0 - size * 0.12, baseline: base - size * 0.08, size, ch: '·' }),
-                    ClKind::Tab => out.push(Draw::Mark { x: cx + ((nx - cx) / 2.0 - size * 0.3).max(0.0), baseline: base, size, ch: arrow }),
-                    ClKind::LineBreak => out.push(Draw::Mark { x: cx + 1.0, baseline: base, size, ch: '↵' }),
+                    ClKind::Space => {
+                        out.push(Draw::Mark { x: (cx + nx) / 2.0 - size * 0.12, baseline: base - size * 0.08, size, ch: '·', color: None })
+                    }
+                    ClKind::Tab => {
+                        out.push(Draw::Mark { x: cx + ((nx - cx) / 2.0 - size * 0.3).max(0.0), baseline: base, size, ch: arrow, color: None })
+                    }
+                    ClKind::LineBreak => out.push(Draw::Mark { x: cx + 1.0, baseline: base, size, ch: '↵', color: None }),
                     ClKind::PageBreak | ClKind::ColumnBreak => {
                         let label = if c.kind == ClKind::PageBreak { '⤓' } else { '⇥' };
                         out.push(Draw::Line {
@@ -515,7 +552,7 @@ fn lines(
                             stroke: Stroke::Dotted,
                             alpha,
                         });
-                        out.push(Draw::Mark { x: cx + 1.0, baseline: base, size, ch: label });
+                        out.push(Draw::Mark { x: cx + 1.0, baseline: base, size, ch: label, color: None });
                     }
                     _ => {}
                 }
@@ -525,7 +562,12 @@ fn lines(
                 let size = pl.lines.first().map(|_| msize).unwrap_or(msize);
                 // A right-to-left paragraph's mark sits at its end, on the left.
                 let mx = if line.rtl { ex - 1.0 - size * 0.6 } else { ex + 1.0 };
-                out.push(Draw::Mark { x: mx, baseline: base, size, ch: '¶' });
+                // A tracked (inserted or deleted) paragraph mark is drawn in its author's colour.
+                let color = para
+                    .and_then(|p| p.mark.ins.or(p.mark.del))
+                    .filter(|_| opts.markup)
+                    .map(|r| revision_color(doc.revisions.get(r as usize).map(|v| author_index(doc, &v.author)).unwrap_or(0)));
+                out.push(Draw::Mark { x: mx, baseline: base, size, ch: '¶', color });
             }
         }
         let _ = bottom;

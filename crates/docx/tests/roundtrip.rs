@@ -6,7 +6,7 @@ use wordcraft_doc::numbering::ListKind;
 use wordcraft_doc::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CharProps, HeightRule, Highlight, LineSpacing, NumRef, ParaProps, Rgb, RowProps, TabAlign, TabLeader,
-    TabStop, TableLook, TextColor, Underline, VAlign, VMerge, VertAlign,
+    TabStop, TableLook, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
 };
 use wordcraft_doc::section::{Columns, LineNumberRestart, LineNumbering, NumFormat, SectionProps, SectionStart};
 use wordcraft_doc::styles::{Style, StyleKind};
@@ -232,7 +232,7 @@ fn tables_with_merges_round_trip() {
         let c = &mut t.rows[1].cells[0];
         c.props.shading = Some(Rgb(0xFF, 0, 0));
         c.props.valign = VAlign::Bottom;
-        c.props.vertical_text = true;
+        c.props.text_direction = TextDirection::Up;
         c.props.no_wrap = true;
         c.props.margins = Some([2.0, 3.0, 4.0, 5.0]);
         c.props.borders = Some(Borders::box_(Border { style: BorderStyle::Dashed, width: 1.0, color: Some(Rgb(0, 0, 255)), space: 0.0 }));
@@ -631,6 +631,29 @@ fn toc_field_wraps_its_entries() {
     assert_eq!(ps[1].props.style.as_deref(), Some("TOC1"));
 }
 
+/// Table Layout › Text Direction (#226): each direction is written as Word's `w:textDirection`
+/// value and read back.
+#[test]
+fn cell_text_direction_round_trips() {
+    let mut t = Table::new(1, 3, 300.0);
+    let dirs = [TextDirection::Horizontal, TextDirection::Down, TextDirection::Up];
+    for (c, dir) in t.rows[0].cells.iter_mut().zip(dirs) {
+        c.props.text_direction = dir;
+    }
+    let mut d = Document::new();
+    d.body = vec![Arc::new(Block::Table(t)), para_block(Paragraph::new())];
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<w:textDirection w:val="tbRl"/>"#), "{xml}");
+    assert!(xml.contains(r#"<w:textDirection w:val="btLr"/>"#), "{xml}");
+    assert_eq!(xml.matches("w:textDirection").count(), 2, "horizontal cells write nothing: {xml}");
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    let got: Vec<TextDirection> = r.body[0].as_table().expect("table").rows[0].cells.iter().map(|c| c.props.text_direction).collect();
+    assert_eq!(got, dirs);
+}
+
 /// The TOC field's begin and end belong to the entries' own paragraphs, even when the heading or
 /// an entry holds a text box: the box's paragraphs are written inside them and must not take either.
 #[test]
@@ -701,6 +724,38 @@ fn tracked_changes_round_trip() {
     assert_eq!(got.runs, p.runs);
     assert_eq!(got.objects, p.objects);
     assert!(r.settings.track_changes);
+}
+
+#[test]
+fn tracked_paragraph_marks_round_trip() {
+    // Issue #229: an inserted / deleted paragraph mark is `w:ins` / `w:del` in the mark's
+    // `w:rPr` (ECMA-376 §17.13.5.16, §17.13.5.15), alone or with mark formatting.
+    let mut d = Document::new();
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Alice".into(), date: "2026-05-01T10:00:00Z".into() });
+    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Bob".into(), date: "2026-05-02T10:00:00Z".into() });
+    let mut split = Paragraph::with_text("Owned ALPHA ", CharProps::default());
+    split.mark.ins = Some(0);
+    let mut joined = Paragraph::with_text("Owned BETA", CharProps::default());
+    joined.mark = CharProps { bold: Some(true), del: Some(1), ..Default::default() };
+    let last = Paragraph::with_text("plain", CharProps::default());
+    d.body = vec![para_block(split), para_block(joined), para_block(last)];
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<w:rPr><w:ins w:id="#), "{xml}");
+    assert!(xml.contains(r#"<w:rPr><w:del w:id="#), "{xml}");
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    let got = paras(&r);
+    assert_eq!(got.len(), 3);
+    let rev = |i: Option<u32>| i.and_then(|i| r.revisions.get(i as usize)).map(|v| (v.kind, v.author.as_str(), v.date.as_str()));
+    assert_eq!(rev(got[0].mark.ins), Some((RevisionKind::Insert, "Alice", "2026-05-01T10:00:00Z")));
+    assert_eq!(got[0].mark.del, None);
+    assert_eq!(rev(got[1].mark.del), Some((RevisionKind::Delete, "Bob", "2026-05-02T10:00:00Z")));
+    assert_eq!(got[1].mark.bold, Some(true));
+    assert_eq!(got[1].mark.ins, None);
+    assert_eq!((got[2].mark.ins, got[2].mark.del), (None, None));
+    assert_eq!(got.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), ["Owned ALPHA ", "Owned BETA", "plain"]);
 }
 
 #[test]
