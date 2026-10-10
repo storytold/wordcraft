@@ -890,9 +890,56 @@
 	Opening print dialog…	Abrindo a caixa de diálogo de impressão…
 	Print failed: {error}	Falha na impressão: {error}
 	Couldn't open {path}: {error}	Não foi possível abrir {path}: {error}
+	Letters	Cartas
+	E-mail Messages	Mensagens de email
+	Directory	Diretório
+	Normal Word Document	Documento normal
+	If…Then…Else…	Se…Então…Senão…
+	If…Then…Else	Se…Então…Senão
+	Merge Record #	Nº do registro de mesclagem
+	Skip Record If…	Ignorar registro se…
+	Skip Record If	Ignorar registro se
+	Equals:	É igual a:
+	Then insert:	Então inserir:
+	Otherwise insert:	Senão, inserir:
+	Courtesy Title	Pronome de tratamento
+	First Name	Nome
+	Last Name	Sobrenome
+	Company	Empresa
+	Address	Endereço
+	City	Cidade
+	State	Estado
+	Postal Code	CEP
+	Country	País
+	(not matched)	(sem correspondência)
+	Leave a recipient out of the merge when a field has this value.	Deixar um destinatário fora da mesclagem quando um campo tiver este valor.
+	Insert one text or another, depending on a field's value.	Inserir um texto ou outro, conforme o valor de um campo.
+	Select recipients first to match their fields.	Selecione os destinatários primeiro para corresponder os campos.
+	The recipient-list field that fills each part of an address block and greeting line.	O campo da lista de destinatários que preenche cada parte do bloco de endereço e da linha de saudação.
+	No errors found: every merge field is in the recipient list.	Nenhum erro encontrado: todos os campos de mesclagem estão na lista de destinatários.
+	These merge fields aren't in the recipient list:	Estes campos de mesclagem não estão na lista de destinatários:
+	Add at least one field.	Adicione pelo menos um campo.
+	Add Field	Adicionar campo
+	Every field needs a name.	Todo campo precisa de um nome.
+	Field name	Nome do campo
+	Field names must be different.	Os nomes dos campos devem ser diferentes.
+	Fields:	Campos:
+	Field:	Campo:
+	Find:	Localizar:
+	New Entry	Nova entrada
+	Recipient List	Lista de destinatários
+	Recipients: {count}	Destinatários: {count}
+	Remove field	Remover campo
+	Remove recipient	Remover destinatário
+	Select recipients first to choose from their fields.	Selecione os destinatários primeiro para escolher entre os campos.
+	Type a New List…	Digitar uma nova lista…
+	Type at least one recipient.	Digite pelo menos um destinatário.
+	Type the recipients, or load them from a file.	Digite os destinatários ou carregue-os de um arquivo.
+	Use an Existing List…	Usar uma lista existente…
 	Interface theme:	Tema da interface:
 	Interface\nTheme	Tema da\ninterface
 	Interface Theme	Tema da interface
 	Light	Claro
 	Dark	Escuro
 	Use system setting	Usar a configuração do sistema
+	A file dialog is already open.	Já há uma caixa de diálogo de arquivo aberta.

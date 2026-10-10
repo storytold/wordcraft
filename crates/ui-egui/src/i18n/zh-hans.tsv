@@ -889,9 +889,56 @@
 	Opening print dialog…	正在打开打印对话框…
 	Print failed: {error}	打印失败：{error}
 	Couldn't open {path}: {error}	无法打开 {path}：{error}
+	Letters	信函
+	E-mail Messages	电子邮件
+	Directory	目录
+	Normal Word Document	普通文档
+	If…Then…Else…	如果…则…否则…
+	If…Then…Else	如果…则…否则
+	Merge Record #	合并记录编号
+	Skip Record If…	跳过记录条件…
+	Skip Record If	跳过记录条件
+	Equals:	等于：
+	Then insert:	则插入：
+	Otherwise insert:	否则插入：
+	Courtesy Title	称谓
+	First Name	名
+	Last Name	姓
+	Company	公司
+	Address	地址
+	City	城市
+	State	省/州
+	Postal Code	邮政编码
+	Country	国家/地区
+	(not matched)	（未匹配）
+	Leave a recipient out of the merge when a field has this value.	当某个域为此值时，在合并中跳过该收件人。
+	Insert one text or another, depending on a field's value.	根据域的值插入不同的文本。
+	Select recipients first to match their fields.	请先选择收件人，才能匹配其域。
+	The recipient-list field that fills each part of an address block and greeting line.	地址块和问候语的每一部分所使用的收件人列表域。
+	No errors found: every merge field is in the recipient list.	未发现错误：所有合并域都在收件人列表中。
+	These merge fields aren't in the recipient list:	以下合并域不在收件人列表中：
+	Add at least one field.	请至少添加一个域。
+	Add Field	添加域
+	Every field needs a name.	每个域都需要名称。
+	Field name	域名称
+	Field names must be different.	域名称不能重复。
+	Fields:	域：
+	Field:	域：
+	Find:	查找：
+	New Entry	新建条目
+	Recipient List	收件人列表
+	Recipients: {count}	收件人：{count}
+	Remove field	删除域
+	Remove recipient	删除收件人
+	Select recipients first to choose from their fields.	请先选择收件人，才能从其域中选择。
+	Type a New List…	键入新列表…
+	Type at least one recipient.	请至少键入一个收件人。
+	Type the recipients, or load them from a file.	键入收件人，或从文件加载。
+	Use an Existing List…	使用现有列表…
 	Interface theme:	界面主题：
 	Interface\nTheme	界面主题
 	Interface Theme	界面主题
 	Light	浅色
 	Dark	深色
 	Use system setting	使用系统设置
+	A file dialog is already open.	已有一个文件对话框处于打开状态。

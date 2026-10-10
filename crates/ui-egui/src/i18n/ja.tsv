@@ -878,9 +878,56 @@
 	Opening print dialog…	印刷ダイアログを開いています…
 	Print failed: {error}	印刷できませんでした: {error}
 	Couldn't open {path}: {error}	{path} を開けませんでした: {error}
+	Letters	レター
+	E-mail Messages	電子メール
+	Directory	ディレクトリ
+	Normal Word Document	通常の文書
+	If…Then…Else…	条件 (If…Then…Else)…
+	If…Then…Else	条件 (If…Then…Else)
+	Merge Record #	差し込みレコード番号
+	Skip Record If…	レコードをスキップする条件…
+	Skip Record If	レコードをスキップする条件
+	Equals:	等しい値:
+	Then insert:	一致したら挿入:
+	Otherwise insert:	一致しなければ挿入:
+	Courtesy Title	敬称
+	First Name	名
+	Last Name	姓
+	Company	会社
+	Address	住所
+	City	市区町村
+	State	都道府県
+	Postal Code	郵便番号
+	Country	国
+	(not matched)	（未対応）
+	Leave a recipient out of the merge when a field has this value.	フィールドがこの値のとき、その宛先を差し込みから除外します。
+	Insert one text or another, depending on a field's value.	フィールドの値に応じて、どちらかのテキストを挿入します。
+	Select recipients first to match their fields.	フィールドを対応付けるには、まず宛先を選択してください。
+	The recipient-list field that fills each part of an address block and greeting line.	住所ブロックとあいさつ文の各部分に使われる宛先リストのフィールドです。
+	No errors found: every merge field is in the recipient list.	エラーは見つかりませんでした。すべての差し込みフィールドが宛先リストにあります。
+	These merge fields aren't in the recipient list:	次の差し込みフィールドは宛先リストにありません:
+	Add at least one field.	フィールドを1つ以上追加してください。
+	Add Field	フィールドの追加
+	Every field needs a name.	すべてのフィールドに名前が必要です。
+	Field name	フィールド名
+	Field names must be different.	フィールド名は重複できません。
+	Fields:	フィールド:
+	Field:	フィールド:
+	Find:	検索:
+	New Entry	新しいエントリ
+	Recipient List	宛先リスト
+	Recipients: {count}	宛先: {count}
+	Remove field	フィールドを削除
+	Remove recipient	宛先を削除
+	Select recipients first to choose from their fields.	フィールドから選ぶには、まず宛先を選択してください。
+	Type a New List…	新しいリストを入力…
+	Type at least one recipient.	宛先を1件以上入力してください。
+	Type the recipients, or load them from a file.	宛先を入力するか、ファイルから読み込みます。
+	Use an Existing List…	既存のリストを使用…
 	Interface theme:	表示テーマ:
 	Interface\nTheme	表示テーマ
 	Interface Theme	表示テーマ
 	Light	ライト
 	Dark	ダーク
 	Use system setting	システム設定を使用
+	A file dialog is already open.	ファイル ダイアログが既に開いています。

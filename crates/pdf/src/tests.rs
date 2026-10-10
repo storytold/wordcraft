@@ -549,3 +549,18 @@ fn synthetic_bold_text_is_extracted_once() {
     let text = squash(&extract_text(&export(&d, &PdfOptions::default()).unwrap()).concat());
     assert!(text.contains("Mono bold"), "{text:?}");
 }
+
+#[test]
+fn turned_cell_text_exports_as_text() {
+    // Table Layout › Text Direction (#226): turned cell text is drawn in a turned frame and
+    // stays real text in the PDF.
+    for dir in [wordcraft_doc::props::TextDirection::Down, wordcraft_doc::props::TextDirection::Up] {
+        let mut t = Table::new(1, 2, 300.0);
+        t.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("Turned", CharProps::default()))];
+        t.rows[0].cells[0].props.text_direction = dir;
+        let mut d = Document::new();
+        d.body = vec![Arc::new(Block::Table(t)), para_block(Paragraph::with_text("Below", CharProps::default()))];
+        let text = squash(&extract_text(&export(&d, &PdfOptions::default()).unwrap()).concat());
+        assert!(text.contains("Turned") && text.contains("Below"), "{dir:?}: {text:?}");
+    }
+}

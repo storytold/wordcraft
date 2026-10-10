@@ -20,6 +20,7 @@ pub mod control;
 pub mod credits;
 pub mod dialogs;
 pub mod equation_tab;
+pub mod file_dialogs;
 pub mod frame;
 pub mod i18n;
 pub mod icons;
@@ -31,6 +32,7 @@ pub mod panes;
 pub mod previews;
 pub mod read_aloud;
 pub mod ribbon;
+pub mod scroll;
 pub mod theme;
 pub mod widgets;
 pub mod window_geometry;
@@ -41,6 +43,7 @@ use serde_json::{Value, json};
 use wordcraft_engine::Session;
 
 pub use control::ControlRequest;
+pub use file_dialogs::FileDialogRequest;
 
 /// Platform services injected by the host (file dialogs, file I/O).
 #[derive(Default)]
@@ -49,6 +52,11 @@ pub struct Services {
     pub pick_open: Option<Box<dyn Fn(&str) -> Option<String>>>,
     /// Pick a path to save to, given a suggested name.
     pub pick_save: Option<Box<dyn Fn(&str) -> Option<String>>>,
+    /// Desktop: show a native file dialog without blocking the UI thread (#94); used instead of
+    /// `pick_open` / `pick_save` when set. The host sends the picked path (`None` when cancelled)
+    /// through the returned channel once the user answers, and wakes the UI; a dropped sender
+    /// counts as cancelled. The app shows one dialog at a time ([`file_dialogs`]).
+    pub file_dialog: Option<Box<dyn Fn(FileDialogRequest) -> std::sync::mpsc::Receiver<Option<String>>>>,
     /// Web: open a file picker; the file arrives later through `inbox`.
     pub open_async: Option<Box<dyn Fn(&str)>>,
     /// Web: files (name, bytes) delivered asynchronously (picker, drag and drop).
@@ -136,6 +144,9 @@ pub struct WordApp {
     pub previews: previews::Previews,
     /// Media key of the picture a pending Change Picture replaces (#147).
     pub change_picture_target: Option<String>,
+    /// Web: a recipient list was asked for (Select Recipients › Use an Existing List…), so the
+    /// next text file from the picker loads as recipients instead of opening (#240).
+    pub recipient_list_pending: bool,
     /// macOS: the window has no title bar; leave room for the traffic lights.
     pub integrated_titlebar: bool,
     control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
@@ -148,6 +159,11 @@ pub struct WordApp {
     styled: bool,
     /// The CJK face order the installed UI fonts use (Chinese first, or Japanese first).
     fonts_hans: bool,
+    /// Whether the installed UI fonts include an installed CJK fallback font (#241).
+    fonts_system_cjk: bool,
+    /// CJK text is (about to be) on screen in a non-CJK interface, e.g. the language names in
+    /// File ▸ Options: load the installed CJK fallback font if no embedded face covers it.
+    pub(crate) want_system_cjk: bool,
     fonts_frames: u32,
     applied_dark: Option<bool>,
     pub frame_ms: f64,
@@ -170,6 +186,8 @@ pub struct WordApp {
     /// there. A file that was merely opened isn't rewritten until the user saves it: saving drops
     /// whatever WordCraft can't represent (content controls, charts, macros…).
     autosave_path: Option<std::path::PathBuf>,
+    /// The file dialog the host is showing, and what its answer is for ([`file_dialogs`]).
+    file_dialog: Option<file_dialogs::PendingDialog>,
 }
 
 /// The answer to "Do you want to save changes?" (`ui.saveChanges`).
@@ -210,6 +228,8 @@ impl WordApp {
             keytip_rects: Vec::new(),
             styled: false,
             fonts_hans: false,
+            fonts_system_cjk: false,
+            want_system_cjk: false,
             fonts_frames: 0,
             applied_dark: None,
             frame_ms: 0.0,
@@ -225,6 +245,8 @@ impl WordApp {
             read_aloud_error: None,
             autosave_path: None,
             change_picture_target: None,
+            recipient_list_pending: false,
+            file_dialog: None,
         }
     }
 
@@ -268,13 +290,27 @@ impl WordApp {
     /// Close, Envelopes, Labels and Finish & Merge on a document with unsaved changes first ask
     /// Save / Don't Save / Cancel, and the command runs once that is answered (`ui.saveChanges`).
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        // A button whose command needs input the user hasn't given yet opens its dialog (#240).
+        if let Some(name) = input_dialog(id, &params)
+            && widgets::enabled(self, id)
+        {
+            self.dialog = dialogs::Dialog::open(name, self);
+            return Ok(json!({"pending": name}));
+        }
         if self.session.dirty && discards_document(id, &params) {
             let name =
                 self.session.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| self.title_stem());
             self.dialog = Some(dialogs::Dialog::SaveChanges { name, then: id.to_string(), params, document: self.session.document_id() });
             return Ok(json!({"pending": "saveChanges"}));
         }
-        self.execute(id, params)
+        let r = self.execute(id, params);
+        // Match Fields and Check for Errors show what they found.
+        if let Ok(v) = &r
+            && let Some(d) = dialogs::Dialog::report(id, v)
+        {
+            self.dialog = Some(d);
+        }
+        r
     }
 
     /// Run a command for a script or an agent (control channel, MCP bridge): never asks first.
@@ -283,6 +319,9 @@ impl WordApp {
         // A pending Change Picture only survives until the next action (#147).
         if !matches!(id, "ui.changePicture" | "picture.change" | "insert.picture") {
             self.change_picture_target = None;
+        }
+        if !matches!(id, "ui.openRecipientList" | "mailings.recipients") {
+            self.recipient_list_pending = false;
         }
         if let Some(r) = self.ui_command(id, &params) {
             return r;
@@ -351,6 +390,15 @@ impl WordApp {
         let go = match choice {
             SaveChoice::Cancel => false,
             SaveChoice::DontSave => true,
+            // A new document: ask where through Save As; the command runs once that has saved,
+            // which with the desktop's non-blocking dialog is on a later frame (#94).
+            SaveChoice::Save if self.session.path.is_none() && self.services.download.is_none() => {
+                return match self.save_as(file_dialogs::AfterSave::Continue { then, params, document }) {
+                    file_dialogs::Asked::Done(r) => r,
+                    file_dialogs::Asked::Pending => Ok(json!({"pending": "saveAs"})),
+                    file_dialogs::Asked::Busy => Ok(json!({"done": false})),
+                };
+            }
             SaveChoice::Save => self.save_for_prompt(),
         };
         if !go {
@@ -364,14 +412,15 @@ impl WordApp {
     /// image, plain text) writes a copy and leaves the document unsaved, so it doesn't count:
     /// the command is cancelled and the document stays.
     fn save_for_prompt(&mut self) -> bool {
-        let saved = if self.session.path.is_none() && self.services.download.is_none() {
-            self.save_as_dialog()
-        } else {
-            match self.execute("file.save", json!({})) {
-                Ok(v) => v.get("saved").and_then(Value::as_bool) == Some(true) || v.get("downloaded").is_some(),
-                Err(_) => false,
-            }
+        let saved = match self.execute("file.save", json!({})) {
+            Ok(v) => v.get("saved").and_then(Value::as_bool) == Some(true) || v.get("downloaded").is_some(),
+            Err(_) => false,
         };
+        self.safely_saved(saved)
+    }
+
+    /// Whether a save before New/Open/Close counts: it happened, and kept everything.
+    fn safely_saved(&mut self, saved: bool) -> bool {
         if saved && self.session.dirty {
             self.status(tl!("That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on."));
             return false;
@@ -521,6 +570,12 @@ impl WordApp {
                 self.open_dialog();
                 json!({})
             }
+            // Mailings › Select Recipients › Use an Existing List…: pick a CSV/TSV/text file and
+            // load it as the mail-merge recipients. Opens system UI, like `ui.openFileDialog`.
+            "ui.openRecipientList" => {
+                self.pick_recipient_list();
+                json!({"pending": self.recipient_list_pending})
+            }
             // Send the document to the system print dialog (web). `file.print` opens the Print
             // page; this is the button on it, and the one programmatic call that opens system UI
             // here, like `ui.openFileDialog` — only when the host can print.
@@ -559,25 +614,6 @@ impl WordApp {
         self.status_msg = Some((s.into(), now_ms()));
     }
 
-    fn open_dialog(&mut self) {
-        if let Some(f) = &self.services.open_async {
-            f("document");
-            return;
-        }
-        let picked = self.services.pick_open.as_ref().and_then(|f| f("document"));
-        if let Some(path) = picked {
-            let _ = self.run("file.open", json!({"path": path}));
-            self.ui.backstage = false;
-        }
-    }
-
-    /// Ask where to save, then save there. True once the document is written.
-    pub fn save_as_dialog(&mut self) -> bool {
-        let name = self.default_save_name();
-        let picked = self.services.pick_save.as_ref().and_then(|f| f(&name));
-        picked.is_some_and(|path| self.run("file.save", json!({"path": path})).is_ok_and(|v| v.get("saved").and_then(Value::as_bool) == Some(true)))
-    }
-
     /// Media key of the selected picture, if any.
     pub(crate) fn selected_picture_media(&self) -> Option<String> {
         match wordcraft_engine::cmd::objects::selected(&self.session) {
@@ -607,17 +643,25 @@ impl WordApp {
         }
     }
 
-    fn pick_picture(&mut self) {
+    /// Pick a recipient list (desktop: through the file dialog hook; web: it arrives through the
+    /// inbox).
+    fn pick_recipient_list(&mut self) {
         if let Some(f) = &self.services.open_async {
-            f("picture");
+            f("recipients");
+            self.recipient_list_pending = true;
             return;
         }
-        let picked = self.services.pick_open.as_ref().and_then(|f| f("picture"));
-        if let Some(path) = picked {
-            let _ = self.insert_or_change_picture(json!({"path": path}));
-        } else {
-            self.change_picture_target = None;
+        let _ = self.ask_file(file_dialogs::FileDialogRequest::Open { purpose: "recipients".into() }, file_dialogs::AfterPick::Recipients);
+    }
+
+    /// Load mail-merge recipients and say how many there are.
+    pub(crate) fn load_recipients(&mut self, params: Value) -> Result<Value, String> {
+        let r = self.run("mailings.recipients", params);
+        if let Ok(v) = &r {
+            let records = v.get("records").and_then(Value::as_u64).unwrap_or(0).to_string();
+            self.status(i18n::fmt(tl!("Recipients: {count}"), &[("count", &records)]));
         }
+        r
     }
 
     /// The name Save suggests: the open file's own Word format (so a .docm keeps its macros),
@@ -649,9 +693,13 @@ impl WordApp {
         let lang = i18n::Lang::from_pref(&self.ui.language);
         i18n::set_current(lang);
         // Chinese text wants the Chinese face before the Japanese one (one glyph style per line).
-        if !self.styled || lang.prefers_hans() != self.fonts_hans {
-            theme::install_fonts_for(ctx, lang.prefers_hans());
+        // An installed CJK font is read only once CJK text is shown (#241): never for an English
+        // interface that doesn't open the language list.
+        let system_cjk = self.fonts_system_cjk || self.want_system_cjk || lang.uses_cjk();
+        if !self.styled || lang.prefers_hans() != self.fonts_hans || system_cjk != self.fonts_system_cjk {
+            theme::install_fonts_with(ctx, lang.prefers_hans(), system_cjk);
             self.fonts_hans = lang.prefers_hans();
+            self.fonts_system_cjk = system_cjk;
             // Mod with -, = and 0 are Word shortcuts (optional hyphen, subscript, paragraph spacing);
             // egui's keyboard zoom would also scale the whole window on them. Zoom is View › Zoom.
             ctx.options_mut(|o| o.zoom_with_keyboard = false);
@@ -671,6 +719,7 @@ impl WordApp {
         zotero::poll(self, ctx);
         read_aloud::poll(self, ctx);
         self.clear_stale_change_picture();
+        let _ = self.poll_file_dialog();
         self.drain_inbox();
         self.autosave_tick(now_ms());
         if self.autosaves() && self.session.dirty {
@@ -785,16 +834,23 @@ impl WordApp {
         self.report_dirty();
     }
 
-    /// Files that arrived asynchronously (web picker, drops): documents open, pictures insert.
+    /// Files that arrived asynchronously (web picker, drops): documents open, pictures insert,
+    /// recipient lists (CSV/TSV, or a text file asked for as one) load as recipients.
     fn drain_inbox(&mut self) {
         let Some(inbox) = self.services.inbox.clone() else { return };
         let files = std::mem::take(&mut *inbox.lock().unwrap_or_else(|e| e.into_inner()));
         for (name, bytes) in files {
             let lower = name.to_ascii_lowercase();
-            let data = wordcraft_engine::cmd::insert::base64_encode(&bytes);
             let img = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"].iter().any(|e| lower.ends_with(e));
-            let r =
-                if img { self.insert_or_change_picture(json!({"data": data})) } else { self.run("file.open", json!({"path": name, "data": data})) };
+            let list =
+                lower.ends_with(".csv") || lower.ends_with(".tsv") || (lower.ends_with(".txt") && std::mem::take(&mut self.recipient_list_pending));
+            let r = if list {
+                self.load_recipients(json!({"csv": wordcraft_engine::io::decode_text(&bytes)}))
+            } else if img {
+                self.insert_or_change_picture(json!({"data": wordcraft_engine::cmd::insert::base64_encode(&bytes)}))
+            } else {
+                self.run("file.open", json!({"path": name, "data": wordcraft_engine::cmd::insert::base64_encode(&bytes)}))
+            };
             if r.is_ok() {
                 self.ui.backstage = false;
             }
@@ -876,6 +932,27 @@ impl WordApp {
 fn keeps_everything(name: &str) -> bool {
     let ext = std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
     matches!(ext.as_str(), "docx" | "docm" | "dotx" | "dotm" | "odt" | "rtf" | "json")
+}
+
+/// The dialog a user-run command opens when it lacks the input it needs (scripts and agents get
+/// the command's own error or default instead): Select Recipients and Edit Recipient List without
+/// data, Insert Merge Field without a field, Find Recipient without text, and the If and Skip
+/// Record If rules (or Rules with no rule at all) without a field.
+fn input_dialog(id: &str, params: &Value) -> Option<&'static str> {
+    let has = |k: &str| params.get(k).is_some_and(|v| !v.is_null());
+    let rule = params.get("rule").and_then(Value::as_str).map(str::to_ascii_uppercase);
+    match id {
+        "mailings.rules" if !has("field") => match rule.as_deref() {
+            None | Some("IF") => Some("ruleIf"),
+            Some("SKIPIF") => Some("ruleSkipIf"),
+            _ => None,
+        },
+        "mailings.recipients" if !["csv", "path", "rows"].into_iter().any(has) => Some("recipientList"),
+        "mailings.editRecipients" if !has("rows") => Some("recipientList"),
+        "mailings.insertField" if !has("field") => Some("insertMergeField"),
+        "mailings.findRecipient" if !has("text") => Some("findRecipient"),
+        _ => None,
+    }
 }
 
 /// User commands that replace or close the document (`file.open` without a path only shows the
@@ -1000,47 +1077,6 @@ mod tests {
         assert!(a.canvas.scale < zoomed, "Ctrl+wheel down zooms out");
     }
 
-    /// Issue #123: zoomed out, pages sit side by side, and clicks map to the page under the pointer.
-    #[test]
-    fn zoomed_out_pages_sit_side_by_side_and_clicks_land_on_them() {
-        let ctx = egui::Context::default();
-        let mut a = app();
-        for _ in 0..3 {
-            a.run("insert.pageBreak", json!({})).unwrap();
-        }
-        a.run("text.insert", json!({"text": "Last page"})).unwrap();
-        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
-        let mut t = 0.0;
-        let mut frame = |a: &mut WordApp| {
-            t += 1.0 / 60.0;
-            let input = egui::RawInput { time: Some(t), screen_rect: Some(screen), ..Default::default() };
-            ctx.run_ui(input, |ui| {
-                a.logic(ui.ctx());
-                a.ui(ui);
-            })
-            .drop_without_applying_deltas();
-        };
-        for _ in 0..3 {
-            frame(&mut a);
-        }
-        let rects = a.canvas.page_rects.clone();
-        assert_eq!(rects.len(), 4);
-        assert!(rects[1].top() > rects[0].bottom(), "100%: one page per row");
-        a.run("view.zoom", json!({"value": 30})).unwrap();
-        for _ in 0..3 {
-            frame(&mut a);
-        }
-        let rects = a.canvas.page_rects.clone();
-        assert_eq!(a.canvas.cols, 4, "30%: all four pages fit across: {rects:?}");
-        assert!((rects[3].top() - rects[0].top()).abs() < 1.0 && rects[3].left() > rects[2].right(), "{rects:?}");
-        // A click inside the last page's text puts the caret on that page.
-        let p = canvas::page_to_screen(&mut a, 3, 100.0, 80.0).unwrap();
-        assert!(rects[3].contains(p), "{p:?} in {:?}", rects[3]);
-        let pos = canvas::pos_from_screen(&mut a, p).unwrap();
-        let caret = a.session.layout().caret_on(&pos, 3).unwrap();
-        assert_eq!(caret.page, 3);
-    }
-
     /// Issue #67: View › Zoom In from a fit mode zoomed *out*: Page Width showed 163% but Zoom In
     /// stepped from the stale manual 100% to 110%.
     #[test]
@@ -1084,6 +1120,87 @@ mod tests {
         }
         a.run("view.zoom100", json!({})).unwrap();
         assert!((frame(&mut a) - 1.0).abs() < 1e-3);
+    }
+
+    /// Issue #122: touchpad deltas scroll the page 1:1 at once; a wheel notch eases in to about
+    /// three lines.
+    #[test]
+    fn touchpad_scrolls_one_to_one_and_wheel_notches_ease_in() {
+        let ctx = egui::Context::default();
+        let mut a = app();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 600.0));
+        let mut t = 0.0;
+        let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+            t += 1.0 / 60.0;
+            let input = egui::RawInput { events, time: Some(t), screen_rect: Some(screen), ..Default::default() };
+            ctx.run_ui(input, |ui| {
+                a.logic(ui.ctx());
+                a.ui(ui);
+            })
+            .drop_without_applying_deltas();
+        };
+        for _ in 0..3 {
+            frame(&mut a, Vec::new());
+        }
+        let over_page = a.canvas.canvas_rect.unwrap().center();
+        frame(&mut a, vec![egui::Event::PointerMoved(over_page)]);
+        let wheel = |unit, y: f32, phase| egui::Event::MouseWheel { unit, delta: egui::vec2(0.0, y), phase, modifiers: egui::Modifiers::NONE };
+        let start = a.canvas.scroll_offset.y;
+        frame(&mut a, vec![wheel(egui::MouseWheelUnit::Point, -40.0, egui::TouchPhase::Start)]);
+        assert_eq!(a.canvas.scroll_offset.y, start + 40.0, "the first touchpad delta lands in the same frame");
+        // Fingers lift; the coast after it is left to the unit tests (crate::scroll).
+        frame(&mut a, vec![wheel(egui::MouseWheelUnit::Point, 0.0, egui::TouchPhase::End)]);
+        a.canvas.wheel = Default::default();
+        let at = a.canvas.scroll_offset.y;
+        frame(&mut a, vec![wheel(egui::MouseWheelUnit::Line, -1.0, egui::TouchPhase::Move)]);
+        let first = a.canvas.scroll_offset.y - at;
+        for _ in 0..30 {
+            frame(&mut a, Vec::new());
+        }
+        let notch = crate::scroll::notch_px(a.canvas.scale / crate::canvas::PX_PER_PT);
+        assert!(first > 0.0 && first < notch, "a notch eases in: {first}");
+        assert!((a.canvas.scroll_offset.y - at - notch).abs() < 0.5, "a notch scrolls {notch}: {}", a.canvas.scroll_offset.y - at);
+    }
+
+    /// Issue #123: zoomed out, pages sit side by side, and clicks map to the page under the pointer.
+    #[test]
+    fn zoomed_out_pages_sit_side_by_side_and_clicks_land_on_them() {
+        let ctx = egui::Context::default();
+        let mut a = app();
+        for _ in 0..3 {
+            a.run("insert.pageBreak", json!({})).unwrap();
+        }
+        a.run("text.insert", json!({"text": "Last page"})).unwrap();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+        let mut t = 0.0;
+        let mut frame = |a: &mut WordApp| {
+            t += 1.0 / 60.0;
+            let input = egui::RawInput { time: Some(t), screen_rect: Some(screen), ..Default::default() };
+            ctx.run_ui(input, |ui| {
+                a.logic(ui.ctx());
+                a.ui(ui);
+            })
+            .drop_without_applying_deltas();
+        };
+        for _ in 0..3 {
+            frame(&mut a);
+        }
+        let rects = a.canvas.page_rects.clone();
+        assert_eq!(rects.len(), 4);
+        assert!(rects[1].top() > rects[0].bottom(), "100%: one page per row");
+        a.run("view.zoom", json!({"value": 30})).unwrap();
+        for _ in 0..3 {
+            frame(&mut a);
+        }
+        let rects = a.canvas.page_rects.clone();
+        assert_eq!(a.canvas.cols, 4, "30%: all four pages fit across: {rects:?}");
+        assert!((rects[3].top() - rects[0].top()).abs() < 1.0 && rects[3].left() > rects[2].right(), "{rects:?}");
+        // A click inside the last page's text puts the caret on that page.
+        let p = canvas::page_to_screen(&mut a, 3, 100.0, 80.0).unwrap();
+        assert!(rects[3].contains(p), "{p:?} in {:?}", rects[3]);
+        let pos = canvas::pos_from_screen(&mut a, p).unwrap();
+        let caret = a.session.layout().caret_on(&pos, 3).unwrap();
+        assert_eq!(caret.page, 3);
     }
 
     #[test]
@@ -1957,5 +2074,127 @@ mod tests {
         assert!(a.change_picture_target.is_some());
         let _ = a.run("format.bold", json!({}));
         assert!(a.change_picture_target.is_none());
+    }
+
+    fn dialog_name(a: &WordApp) -> Option<&'static str> {
+        a.dialog.as_ref().map(dialogs::Dialog::name)
+    }
+
+    /// #240: Select Recipients needs data, so clicking it opens the recipient list instead of
+    /// reporting missing parameters; scripts and agents still get the error.
+    #[test]
+    fn select_recipients_opens_the_recipient_list() {
+        let mut a = app();
+        let r = a.run("mailings.recipients", json!({})).unwrap();
+        assert_eq!(r, json!({"pending": "recipientList"}));
+        assert_eq!(dialog_name(&a), Some("recipientList"));
+        assert!(a.status_msg.is_none(), "no error in the status bar: {:?}", a.status_msg);
+        let Some(dialogs::Dialog::RecipientList { fields, rows, .. }) = &a.dialog else { panic!() };
+        assert_eq!(fields.len(), dialogs::NEW_LIST_FIELDS.len());
+        assert_eq!(rows.len(), 1, "a new list starts with one empty entry");
+        // Edit Recipient List opens the same dialog, showing the current list.
+        a.dialog = None;
+        a.run("mailings.recipients", json!({"csv": "Name,City\nAda,London"})).unwrap();
+        a.run("mailings.editRecipients", json!({})).unwrap();
+        let Some(dialogs::Dialog::RecipientList { fields, rows, .. }) = &a.dialog else { panic!() };
+        assert_eq!((fields.clone(), rows.clone()), (vec!["Name".to_string(), "City".into()], vec![vec!["Ada".to_string(), "London".into()]]));
+        // Type a New List… always starts fresh.
+        a.run("ui.dialog", json!({"name": "newRecipientList"})).unwrap();
+        let Some(dialogs::Dialog::RecipientList { fields, .. }) = &a.dialog else { panic!() };
+        assert_eq!(fields[0], dialogs::NEW_LIST_FIELDS[0]);
+        // Insert Merge Field without a field opens its dialog too.
+        assert_eq!(a.run("mailings.insertField", json!({})).unwrap(), json!({"pending": "insertMergeField"}));
+        // Programmatic calls never open dialogs.
+        let mut b = app();
+        assert!(b.execute("mailings.recipients", json!({})).is_err());
+        assert!(b.dialog.is_none());
+    }
+
+    /// Rules › If…Then…Else… asks for its condition and inserts the IF field it describes; Next
+    /// Record has nothing to ask. Match Fields and Check for Errors show what they found.
+    #[test]
+    fn merge_rules_and_reports_open_dialogs() {
+        let mut a = app();
+        a.run("mailings.recipients", json!({"csv": "First Name,City\nAda,London"})).unwrap();
+        assert_eq!(a.run("mailings.rules", json!({"rule": "IF"})).unwrap(), json!({"pending": "ruleIf"}));
+        let Some(mut d) = a.dialog.take() else { panic!("no dialog") };
+        let dialogs::Dialog::MergeRule { field, value, then, els, .. } = &mut d else { panic!("{d:?}") };
+        assert_eq!(field, "First Name", "the list's first field is picked");
+        (*field, *value, *then, *els) = ("City".into(), "London".into(), "Local".into(), "Away".into());
+        let params = dialogs::rule_params(&d).unwrap();
+        a.run("mailings.rules", params).unwrap();
+        assert!(a.dialog.is_none());
+        let fields = |a: &WordApp| -> Vec<String> {
+            let (doc, body) = (&a.session.doc, wordcraft_doc::StoryRef::Body);
+            let paras = doc.para_paths(body).into_iter().filter_map(|p| doc.para(body, &p).cloned());
+            paras
+                .flat_map(|p| p.objects)
+                .filter_map(|o| if let wordcraft_doc::para::InlineObject::Field { instr, .. } = o { Some(instr) } else { None })
+                .collect()
+        };
+        assert_eq!(fields(&a), vec![r#"IF { MERGEFIELD City } = "London" "Local" "Away""#]);
+        // Next Record inserts directly; Skip Record If asks.
+        assert!(a.run("mailings.rules", json!({"rule": "NEXT"})).unwrap().get("pending").is_none());
+        assert_eq!(fields(&a).last().map(String::as_str), Some("NEXT"));
+        assert_eq!(a.run("mailings.rules", json!({"rule": "skipif"})).unwrap(), json!({"pending": "ruleSkipIf"}));
+        a.dialog = None;
+        a.run("mailings.matchFields", json!({})).unwrap();
+        let Some(dialogs::Dialog::MatchFields { address, .. }) = &a.dialog else { panic!() };
+        assert_eq!(address["firstName"], "First Name");
+        a.run("mailings.checkErrors", json!({})).unwrap();
+        let Some(dialogs::Dialog::CheckErrors { unknown, records }) = &a.dialog else { panic!() };
+        assert_eq!((unknown.len(), *records), (0, 1));
+        // Scripts and agents get the data or the default rule, never a dialog.
+        let mut b = app();
+        b.execute("mailings.checkErrors", json!({})).unwrap();
+        b.execute("mailings.rules", json!({})).unwrap();
+        assert!(b.dialog.is_none());
+    }
+
+    /// Desktop: Use an Existing List… picks a file and loads it as recipients, not as a document.
+    #[test]
+    fn an_existing_list_picked_on_the_desktop_loads_recipients() {
+        let dir = scratch("recipients");
+        let csv = dir.join("people.csv");
+        std::fs::write(&csv, "First Name,City\nAda,London\nAlan,Wilmslow\n").unwrap();
+        let mut a = typed();
+        let asked = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+        let (seen, path) = (asked.clone(), csv.to_string_lossy().to_string());
+        a.services.pick_open = Some(Box::new(move |purpose| {
+            *seen.borrow_mut() = purpose.to_string();
+            Some(path.clone())
+        }));
+        a.run("ui.openRecipientList", json!({})).unwrap();
+        assert_eq!(*asked.borrow(), "recipients", "the host can offer CSV files");
+        assert_eq!(a.session.merge.headers, vec!["First Name", "City"]);
+        assert_eq!(a.session.merge.rows.len(), 2);
+        assert!(body_text(&a).contains(UNSAVED), "the document stays open");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Web: the picked file arrives through the inbox and loads as recipients, even as .txt; a
+    /// CSV dropped on the page does too. Anything else afterwards opens as before.
+    #[test]
+    fn an_existing_list_picked_on_the_web_loads_recipients() {
+        let mut a = typed();
+        let asked = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+        let seen = asked.clone();
+        a.services.open_async = Some(Box::new(move |purpose| *seen.borrow_mut() = purpose.to_string()));
+        let inbox: Inbox = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        a.services.inbox = Some(inbox.clone());
+        assert_eq!(a.run("ui.openRecipientList", json!({})).unwrap(), json!({"pending": true}));
+        assert_eq!(*asked.borrow(), "recipients");
+        inbox.lock().unwrap().push(("people.txt".into(), b"Name\tCity\nAda\tLondon\n".to_vec()));
+        a.drain_inbox();
+        assert_eq!(a.session.merge.headers, vec!["Name", "City"]);
+        assert!(!a.recipient_list_pending);
+        assert!(body_text(&a).contains(UNSAVED), "the document stays open");
+        inbox.lock().unwrap().push(("more.csv".into(), b"Name\nBo\nCy\n".to_vec()));
+        a.drain_inbox();
+        assert_eq!(a.session.merge.rows.len(), 2);
+        // A cancelled picker leaves nothing pending once the user does something else.
+        a.run("ui.openRecipientList", json!({})).unwrap();
+        a.run("format.bold", json!({})).unwrap();
+        assert!(!a.recipient_list_pending);
     }
 }

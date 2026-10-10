@@ -541,6 +541,54 @@ fn tables_commands() {
     assert!(s.run("table.merge", &json!({})).is_err());
 }
 
+/// Table Layout › Text Direction (#226) cycles the selected cells' text through horizontal,
+/// top-to-bottom and bottom-to-top, and the layout turns the text.
+#[test]
+fn table_text_direction_cycles_and_turns_the_text() {
+    use wordcraft_doc::props::TextDirection;
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 3}));
+    run(&mut s, "text.insert", json!({"text": "Turned"}));
+    let dirs = |s: &Session| -> Vec<TextDirection> {
+        s.doc.body.iter().find_map(|b| b.as_table()).unwrap().rows[0].cells.iter().map(|c| c.props.text_direction).collect()
+    };
+    let turned = |s: &mut Session| {
+        s.layout().pages[0].items.iter().find_map(|it| match it {
+            wordcraft_layout::Placed::Lines { para, turn, .. } if para.lines.first().is_some_and(|l| l.stop > 0) => Some(*turn),
+            _ => None,
+        })
+    };
+    assert_eq!(turned(&mut s), Some(TextDirection::Horizontal));
+    run(&mut s, "table.textDirection", json!({}));
+    assert_eq!(dirs(&s), [TextDirection::Down, TextDirection::Horizontal, TextDirection::Horizontal]);
+    assert_eq!(turned(&mut s), Some(TextDirection::Down), "the text is drawn turned");
+    run(&mut s, "table.textDirection", json!({}));
+    assert_eq!(dirs(&s)[0], TextDirection::Up);
+    assert_eq!(turned(&mut s), Some(TextDirection::Up));
+    run(&mut s, "table.textDirection", json!({}));
+    assert_eq!(dirs(&s)[0], TextDirection::Horizontal);
+    // Every selected cell gets the caret cell's next direction (the issue's selection spans cells).
+    let a = s.sel.focus.clone();
+    let mut b = a.clone();
+    if let Some(last) = b.path.0.get_mut(2) {
+        *last = 1;
+    }
+    b.off = 0;
+    s.sel = crate::Selection { anchor: a, focus: b };
+    run(&mut s, "table.textDirection", json!({}));
+    assert_eq!(dirs(&s), [TextDirection::Down, TextDirection::Down, TextDirection::Horizontal]);
+    run(&mut s, "table.textDirection", json!({"value": "up"}));
+    assert_eq!(dirs(&s), [TextDirection::Up, TextDirection::Up, TextDirection::Horizontal]);
+    assert!(s.run("table.textDirection", &json!({"value": "sideways"})).is_err());
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(dirs(&s), [TextDirection::Down, TextDirection::Down, TextDirection::Horizontal]);
+    // Outside a table it is disabled.
+    s.sel = crate::Selection::caret(Pos::body(0, 0));
+    if s.sel.focus.path.cell().is_none() {
+        assert!(s.run("table.textDirection", &json!({})).is_err());
+    }
+}
+
 #[test]
 fn table_border_presets_mask_the_sides_they_clear() {
     // On a default (TableGrid) table the "outside"/"inside" presets must write nil over the

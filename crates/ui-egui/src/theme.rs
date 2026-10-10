@@ -204,11 +204,19 @@ pub fn install_fonts(ctx: &egui::Context) {
 /// [`install_fonts`] with the CJK fallback order for the interface language: the Chinese face
 /// first for Chinese (#8), the Japanese one otherwise. The new fonts apply from the next frame.
 pub fn install_fonts_for(ctx: &egui::Context, prefer_hans: bool) {
-    ctx.set_fonts(font_definitions(prefer_hans));
+    install_fonts_with(ctx, prefer_hans, false);
 }
 
-/// The interface fonts; see [`install_fonts_for`].
-pub fn font_definitions(prefer_hans: bool) -> FontDefinitions {
+/// [`install_fonts_for`], also adding an installed CJK font when `system_cjk` is set and no
+/// embedded face covers the need (#241). Reading that font is a large file read, so callers ask
+/// for it only when CJK text is on screen: a CJK interface language, or the language names in
+/// Options.
+pub fn install_fonts_with(ctx: &egui::Context, prefer_hans: bool, system_cjk: bool) {
+    ctx.set_fonts(font_definitions(prefer_hans, system_cjk));
+}
+
+/// The interface fonts; see [`install_fonts_with`].
+pub fn font_definitions(prefer_hans: bool, system_cjk: bool) -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     let add = |fonts: &mut FontDefinitions, name: &str, bytes: &'static [u8]| {
         fonts.font_data.insert(name.into(), Arc::new(FontData::from_static(bytes)));
@@ -227,18 +235,42 @@ pub fn font_definitions(prefer_hans: bool) -> FontDefinitions {
     }
     fonts.families.insert(FontFamily::Name("medium".into()), vec!["InterMedium".into(), "Inter".into(), "SourceSans".into()]);
     fonts.families.insert(FontFamily::Name("semibold".into()), vec!["InterSemiBold".into(), "Inter".into(), "SourceSans".into()]);
-    for f in wordcraft_fonts::ui_cjk_fonts(prefer_hans) {
-        // The same static bytes the document fonts use: one copy in the binary.
-        let name = format!("{} {}", f.family, f.style);
-        fonts.font_data.insert(name.clone(), Arc::new(FontData::from_static(f.bytes)));
+    let add_cjk = |fonts: &mut FontDefinitions, name: String, data: FontData| {
+        fonts.font_data.insert(name.clone(), Arc::new(data));
         for fam in [FontFamily::Proportional, FontFamily::Name("medium".into()), FontFamily::Name("semibold".into())] {
             if let Some(v) = fonts.families.get_mut(&fam) {
                 v.push(name.clone());
             }
         }
+    };
+    let cjk = wordcraft_fonts::ui_cjk_fonts(prefer_hans);
+    for f in &cjk {
+        // The same static bytes the document fonts use: one copy in the binary.
+        add_cjk(&mut fonts, format!("{} {}", f.family, f.style), FontData::from_static(f.bytes));
     }
+    // No embedded face covers the interface language (a build without craft-fonts, or without
+    // its Chinese face, #241): an installed CJK font, so the menus don't show boxes.
+    #[cfg(not(target_arch = "wasm32"))]
+    if system_cjk
+        && wordcraft_fonts::ui_needs_system_cjk(prefer_hans, &cjk)
+        && let Some(f) = system_cjk_font(prefer_hans)
+    {
+        let mut data = FontData::from_static(&f.bytes);
+        data.index = f.index;
+        add_cjk(&mut fonts, format!("system {}", f.family), data);
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = system_cjk;
     // Symbols and emoji fall back to egui's defaults (kept in the families).
     fonts
+}
+
+/// The installed CJK interface font for a Chinese (`hans`) or other interface, read once.
+#[cfg(not(target_arch = "wasm32"))]
+fn system_cjk_font(hans: bool) -> Option<&'static wordcraft_fonts::SystemUiFont> {
+    static ZH: std::sync::OnceLock<Option<wordcraft_fonts::SystemUiFont>> = std::sync::OnceLock::new();
+    static OTHER: std::sync::OnceLock<Option<wordcraft_fonts::SystemUiFont>> = std::sync::OnceLock::new();
+    (if hans { &ZH } else { &OTHER }).get_or_init(|| wordcraft_fonts::system_cjk_ui_font(hans)).as_ref()
 }
 
 pub fn medium(size: f32) -> FontId {
