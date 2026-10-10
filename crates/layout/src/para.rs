@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use wordcraft_doc::math::MathJc;
 use wordcraft_doc::numbering::{Level, LevelSuffix};
-use wordcraft_doc::para::{COLUMN_BREAK, InlineObject, LINE_BREAK, NoteKind, OBJ, PAGE_BREAK, SOFT_HYPHEN};
+use wordcraft_doc::para::{COLUMN_BREAK, InlineObject, LINE_BREAK, NoteKind, OBJ, PAGE_BREAK, SOFT_HYPHEN, WrapText};
 use wordcraft_doc::props::{Align, CharProps, LineSpacing, ParaProps, TabAlign, TabLeader, TabStop};
 use wordcraft_doc::resolve::{ResolvedChar, ResolvedPara};
 use wordcraft_doc::{Document, Paragraph};
@@ -302,6 +302,8 @@ pub struct Exclusion {
     /// Tight and Through wrapping: the outline text follows inside the area (relative to its
     /// top-left); `None` = the whole area.
     pub contour: Option<Arc<crate::contour::Contour>>,
+    /// The sides of the object text may go on (Square, Tight, Through).
+    pub side: WrapText,
 }
 
 struct Builder<'a> {
@@ -963,6 +965,12 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, level: Optio
                 left: width - e.right,
                 right: width - e.left,
                 contour: e.contour.as_ref().map(|c| Arc::new(c.mirrored(e.right - e.left))),
+                // Mirrored, the object's left side is the line's right.
+                side: match e.side {
+                    WrapText::Left => WrapText::Right,
+                    WrapText::Right => WrapText::Left,
+                    s => s,
+                },
                 ..e.clone()
             })
             .collect();
@@ -1546,10 +1554,23 @@ fn row_spans(exclusions: &[Exclusion], top: f32, h: f32, lo: f32, hi: f32) -> Re
     // outline takes, as (left, right, bottom of the object's area).
     let mut taken: Vec<(f32, f32, f32)> = Vec::new();
     for e in &here {
+        let first = taken.len();
         match &e.contour {
             None => taken.push((e.left, e.right, e.bottom)),
             Some(c) => taken.extend(c.occupied(top - e.top, top + h - e.top).into_iter().map(|(a, b)| (a + e.left, b + e.left, e.bottom))),
         }
+        // Text on one side only: the object's other side of the row is taken too.
+        let Some(mine) = taken.get(first..).filter(|t| !t.is_empty() && !e.side.is_both()) else { continue };
+        let left = mine.iter().map(|t| t.0).fold(f32::INFINITY, f32::min);
+        let right = mine.iter().map(|t| t.1).fold(f32::NEG_INFINITY, f32::max);
+        let text_left = match e.side {
+            WrapText::Left => true,
+            WrapText::Right => false,
+            // The side with more room on this line (left on a tie).
+            _ => left - lo >= hi - right,
+        };
+        taken.truncate(first);
+        taken.push(if text_left { (left, hi.max(right), e.bottom) } else { (lo.min(left), right, e.bottom) });
     }
     taken.retain(|(l, r, _)| *r > lo && *l < hi);
     if taken.is_empty() {

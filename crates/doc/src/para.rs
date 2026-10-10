@@ -58,6 +58,49 @@ pub enum Wrap {
     InFrontOfText,
 }
 
+/// Which sides of a Square, Tight or Through object text may flow on (`@wrapText`, ECMA-376
+/// Part 1, §20.4.3.7 `ST_WrapText`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum WrapText {
+    /// Both sides of the object.
+    #[default]
+    BothSides,
+    /// Only the left side: the band to the object's right stays empty.
+    Left,
+    /// Only the right side.
+    Right,
+    /// Only whichever side has more room, decided per line.
+    Largest,
+}
+
+impl WrapText {
+    /// From the OOXML value (`bothSides`, `left`, `right`, `largest`).
+    pub fn from_ooxml(v: &str) -> Option<WrapText> {
+        match v {
+            "bothSides" => Some(WrapText::BothSides),
+            "left" => Some(WrapText::Left),
+            "right" => Some(WrapText::Right),
+            "largest" => Some(WrapText::Largest),
+            _ => None,
+        }
+    }
+
+    /// The OOXML value.
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            WrapText::BothSides => "bothSides",
+            WrapText::Left => "left",
+            WrapText::Right => "right",
+            WrapText::Largest => "largest",
+        }
+    }
+
+    pub fn is_both(&self) -> bool {
+        *self == WrapText::BothSides
+    }
+}
+
 /// What a floating object's offset is relative to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -130,6 +173,9 @@ impl FloatAlign {
 #[serde(default, rename_all = "camelCase")]
 pub struct Float {
     pub wrap: Wrap,
+    /// The sides text wraps on (Square, Tight and Through).
+    #[serde(skip_serializing_if = "WrapText::is_both")]
+    pub wrap_text: WrapText,
     pub h_rel: Anchor,
     pub v_rel: Anchor,
     /// Offsets, points (used when the matching alignment is `None`).

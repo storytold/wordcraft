@@ -38,7 +38,7 @@ font can't match Word's metrics.
 | Nested tables | 🟡 | render; polish missing | 2–4 |
 | Floating pictures/shapes placement (relative to page/margin/column/paragraph/line/character) | ✅ | #136 | — |
 | Text wrap: square, top-and-bottom, behind, in front | ✅ | 2026-10-06 | — |
-| Text wrap: tight, through (contour, wrap polygon) | 🟡 | #354: lines follow the wrap polygon, or the outline worked out from the object (shape geometry; a picture's opaque pixels as a convex hull; otherwise the rectangle), turned and flipped with it, kept the left/right distance from text; Through also uses gaps inside the outline. Text always wraps on both sides (Word's left/right/largest-side choice isn't modelled); picture outlines are convex; not compared page-for-page with Word | 1–2 |
+| Text wrap: tight, through (contour, wrap polygon) | 🟡 | #354: lines follow the wrap polygon, or the outline worked out from the object (shape geometry; a picture's opaque pixels as a convex hull; otherwise the rectangle), turned and flipped with it, kept the left/right distance from text; Through also uses gaps inside the outline. Wrap side (`wrapText`: both sides, left only, right only, largest side per line) applies to square, tight and through wraps, turned objects included; picture outlines are convex; not compared page-for-page with Word | 1–2 |
 | Text boxes, overflow, linked text boxes | 🟡 | #46; linked text boxes missing | 3–5 |
 | Rotated objects and text | 🟡 | #332: pictures, shapes, charts and groups drawn turned and flipped about their centre (screen and PDF); square wrap and inline lines keep clear of the rotated bounds; hit testing on the turned shape. Text in a rotated text box stays upright | 2–3 |
 | Page borders (from page edge or text), page colour, watermark | ✅ | | — |
@@ -69,6 +69,7 @@ font can't match Word's metrics.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-10 | trivial | Long footnotes continue onto the next page with a continuation separator (#352) |
+| 2026-10-10 | trivial | Wrap side: text on both sides, left only, right only or the largest side of an object (#354) |
 | 2026-10-10 | trivial | Tight and Through wrapping follow the object's outline (#354) |
 | 2026-10-10 | trivial | Rotated and flipped objects laid out and drawn (#332) |
 | 2026-10-10 | trivial | Long display equations wrap across lines (#326) |

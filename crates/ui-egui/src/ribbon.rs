@@ -862,7 +862,7 @@ fn layout(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Arrange", None, app, |ui, app| {
         big(ui, app, "position", "Position", "arrange.position", json!({}), false);
-        big(ui, app, "wrapText", "Wrap\nText", "arrange.wrap", json!({}), false);
+        wrap_menu(ui, app);
         stack(ui, |ui| {
             small(ui, app, "bringForward", Some("Bring Forward"), "Bring Forward", "arrange.bringForward", json!({}), false);
             small(ui, app, "sendBackward", Some("Send Backward"), "Send Backward", "arrange.sendBackward", json!({}), false);
@@ -877,6 +877,39 @@ fn layout(app: &mut WordApp, ui: &mut Ui) {
 }
 
 /// Arrange › Rotate: turn 90° either way or flip (the angle and mirroring, not the pixels).
+/// Arrange › Wrap Text: how the selected object sits in the text, and (Square, Tight, Through)
+/// which of its sides text flows on.
+fn wrap_menu(ui: &mut Ui, app: &mut WordApp) {
+    let (wrap, side) = wordcraft_engine::cmd::objects::selected(&app.session)
+        .and_then(|(_, o)| o.frame().map(|(_, _, f)| (f.wrap, f.wrap_text)))
+        .unwrap_or_default();
+    menu_button(ui, app, "wrapText", Some("Wrap\nText"), "Wrap Text", true, |ui, app| {
+        use wordcraft_doc::para::{Wrap, WrapText};
+        for (l, w, v) in [
+            ("In Line with Text", Wrap::Inline, "inline"),
+            ("Square", Wrap::Square, "square"),
+            ("Tight", Wrap::Tight, "tight"),
+            ("Through", Wrap::Through, "through"),
+            ("Top and Bottom", Wrap::TopAndBottom, "topAndBottom"),
+            ("Behind Text", Wrap::BehindText, "behindText"),
+            ("In Front of Text", Wrap::InFrontOfText, "inFrontOfText"),
+        ] {
+            mi_check(ui, app, l, wrap == w, "arrange.wrap", json!({"wrap": v}));
+        }
+        ui.separator();
+        ui.menu_button(tl!("Wrap Text Sides"), |ui| {
+            for (l, s, v) in [
+                ("Both Sides", WrapText::BothSides, "bothSides"),
+                ("Left Only", WrapText::Left, "left"),
+                ("Right Only", WrapText::Right, "right"),
+                ("Largest Only", WrapText::Largest, "largest"),
+            ] {
+                mi_check(ui, app, l, side == s, "arrange.wrapText", json!({"side": v}));
+            }
+        });
+    });
+}
+
 fn rotate_menu(ui: &mut Ui, app: &mut WordApp, label: Option<&str>) {
     menu_button(ui, app, "rotate", label, "Rotate", false, |ui, app| {
         mi(ui, app, "Rotate Right 90°", "arrange.rotate", json!({"direction": "right"}));
@@ -1243,7 +1276,7 @@ fn shape_format(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Arrange", None, app, |ui, app| {
         big(ui, app, "position", "Position", "arrange.position", json!({}), false);
-        big(ui, app, "wrapText", "Wrap\nText", "arrange.wrap", json!({}), false);
+        wrap_menu(ui, app);
         stack(ui, |ui| {
             rotate_menu(ui, app, Some("Rotate"));
             small(ui, app, "align", Some("Align"), "Align", "arrange.align", json!({}), false);
@@ -1355,7 +1388,7 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Arrange", None, app, |ui, app| {
         big(ui, app, "position", "Position", "arrange.position", json!({}), false);
-        big(ui, app, "wrapText", "Wrap\nText", "arrange.wrap", json!({}), false);
+        wrap_menu(ui, app);
         stack(ui, |ui| {
             rotate_menu(ui, app, Some("Rotate"));
             small(ui, app, "align", Some("Align"), "Align", "arrange.align", json!({}), false);

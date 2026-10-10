@@ -809,10 +809,10 @@ impl Writer<'_> {
         w.empty("wp:effectExtent", &[("l", &el), ("t", &et), ("r", &er), ("b", &eb)]);
         match float.wrap {
             Wrap::Inline => {}
-            Wrap::Square => w.empty("wp:wrapSquare", &[("wrapText", "bothSides")]),
+            Wrap::Square => w.empty("wp:wrapSquare", &[("wrapText", float.wrap_text.ooxml())]),
             Wrap::Tight | Wrap::Through => {
                 let tag = if float.wrap == Wrap::Tight { "wp:wrapTight" } else { "wp:wrapThrough" };
-                w.open(tag, &[("wrapText", "bothSides")]);
+                w.open(tag, &[("wrapText", float.wrap_text.ooxml())]);
                 // The object's own polygon, or its rectangle (the schema requires one).
                 let s = wordcraft_doc::wrap::WRAP_SPACE;
                 let (edited, pts) = match float.wrap_polygon.as_deref() {

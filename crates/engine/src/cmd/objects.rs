@@ -4,7 +4,7 @@
 //! caret). Picture adjustments re-encode the bitmap (originals are kept for Reset Picture).
 
 use serde_json::{Value, json};
-use wordcraft_doc::para::{Float, InlineObject, Wrap};
+use wordcraft_doc::para::{Float, InlineObject, Wrap, WrapText};
 use wordcraft_doc::props::Rgb;
 use wordcraft_doc::{Pos, StoryRef};
 use wordcraft_geom::Spin;
@@ -228,6 +228,13 @@ pub fn specs() -> Vec<CommandSpec> {
             with_float(s, |f| f.wrap = wrap)
         })
         .params(r#"{"wrap": "inline|square|tight|through|topAndBottom|behindText|inFrontOfText"}"#)
+        .when(has_movable),
+        CommandSpec::new("arrange.wrapText", "Wrap Text Sides", "Layout › Arrange", |s, v| {
+            let side = p::str(v, "side").unwrap_or("bothSides");
+            let side = WrapText::from_ooxml(side).ok_or_else(|| CmdError::Params(format!("unknown side {side:?}")))?;
+            with_float(s, |f| f.wrap_text = side)
+        })
+        .params(r#"{"side": "bothSides|left|right|largest"}  (the sides of the selected Square, Tight or Through object text flows on; largest: the wider side, line by line)"#)
         .when(has_movable),
         CommandSpec::new("arrange.position", "Position", "Layout › Arrange", |s, v| {
             let preset = p::str(v, "preset").unwrap_or("middleCenter").to_string();
@@ -1164,6 +1171,13 @@ mod tests {
         assert_eq!(obj_size(&selected(&s).unwrap().1), (100.0, 50.0));
         s.run("picture.reset", &json!({})).unwrap();
         s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+        // Text on one side only (#354), one undo step; an unknown side is refused.
+        let side = |s: &Session| selected(s).unwrap().1.frame().unwrap().2.wrap_text;
+        s.run("arrange.wrapText", &json!({"side": "largest"})).unwrap();
+        assert_eq!(side(&s), WrapText::Largest);
+        assert!(s.run("arrange.wrapText", &json!({"side": "middle"})).is_err());
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(side(&s), WrapText::BothSides);
         s.run("arrange.position", &json!({"preset": "topRight"})).unwrap();
         let l = s.run("arrange.selectionPane", &json!({})).unwrap();
         assert_eq!(l.as_array().unwrap().len(), 1);

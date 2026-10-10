@@ -22,7 +22,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use wordcraft_doc::numbering::{Counters, Level};
-use wordcraft_doc::para::{Anchor, Float, FloatAlign, InlineObject, Wrap};
+use wordcraft_doc::para::{Anchor, Float, FloatAlign, InlineObject, Wrap, WrapText};
 use wordcraft_doc::props::{Border, CharProps, Rgb, TableFloat, TextDirection};
 use wordcraft_doc::section::{SectionProps, SectionStart};
 use wordcraft_doc::{Block, Blocks, Document, Paragraph, Path, StoryRef};
@@ -620,7 +620,7 @@ fn layout_box(
                     Some(f) => {
                         let legacy = if ctx.doc.settings.compat_mode < 15 { table::first_cell_left_margin(ctx, t) } else { 0.0 };
                         let (r, area) = box_float_table_rect(frame, width, y, &tl, &f, legacy, &float_tables);
-                        excl.push((area, false, None));
+                        excl.push((area, false, None, WrapText::BothSides));
                         float_tables.push(area);
                         (r.x, r.y)
                     }
@@ -1405,8 +1405,8 @@ fn align_in((start, extent): (f32, f32), offset: f32, size: f32, align: Option<F
 }
 
 /// An area text keeps clear of: its bounds, whether text may only go above and below it, and
-/// (Tight and Through wrapping) the outline text follows inside it.
-type WrapArea = (Rect, bool, Option<Arc<contour::Contour>>);
+/// (Tight and Through wrapping) the outline text follows inside it, and the sides text may go on.
+type WrapArea = (Rect, bool, Option<Arc<contour::Contour>>, WrapText);
 
 /// The area text keeps clear of around a floating object at `r` (its rectangle grown by the
 /// distances from text; Tight and Through: around `outline`, unit coordinates across `r`, when
@@ -1419,25 +1419,26 @@ fn wrap_area(r: Rect, float: &Float, outline: Option<&[(f32, f32)]>) -> Option<W
     if matches!(float.wrap, Wrap::Tight | Wrap::Through)
         && let Some((area, c)) = outline.and_then(|o| contour::contour_area(r, float, o))
     {
-        return Some((area, false, Some(Arc::new(c))));
+        return Some((area, false, Some(Arc::new(c)), float.wrap_text));
     }
     let d = |v: f32| if v.is_finite() { v.clamp(0.0, 1584.0) } else { 0.0 };
     let (side, top, bottom) = (d(float.dist), d(float.dist_top), d(float.dist_bottom));
     // A rotated object keeps text clear of its rotated bounds.
     let r = float.spin().bounds(r);
-    Some((Rect::new(r.x - side, r.y - top, r.w + side * 2.0, r.h + top + bottom), float.wrap == Wrap::TopAndBottom, None))
+    Some((Rect::new(r.x - side, r.y - top, r.w + side * 2.0, r.h + top + bottom), float.wrap == Wrap::TopAndBottom, None, float.wrap_text))
 }
 
 /// Wrap areas relative to a paragraph whose column starts at `x0` and whose top is `y0`.
 fn rel_exclusions(excl: &[WrapArea], x0: f32, y0: f32) -> Vec<para::Exclusion> {
     excl.iter()
-        .map(|(r, tb, c)| para::Exclusion {
+        .map(|(r, tb, c, side)| para::Exclusion {
             top: r.y - y0,
             bottom: r.bottom() - y0,
             left: r.x - x0,
             right: r.right() - x0,
             top_bottom: *tb,
             contour: c.clone(),
+            side: *side,
         })
         .filter(|e| e.bottom > 0.0)
         .collect()
@@ -1985,7 +1986,7 @@ fn place_floating_table(pb: &mut PageBuilder, tl: &table::TableLayout, f: &Table
             }
         }
         let area = r.inset(-dl, -dt, -dr, -db);
-        pb.excl.push((area, false, None));
+        pb.excl.push((area, false, None, WrapText::BothSides));
         pb.float_tables.push(area);
         return;
     }

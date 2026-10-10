@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use wordcraft_doc::effects::{Glow, Shadow, ShapeEffects};
 use wordcraft_doc::graphic::{Embedded, Graphic, GraphicItem, GraphicKind};
-use wordcraft_doc::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
+use wordcraft_doc::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap, WrapText};
 use wordcraft_doc::props::{CharProps, NumChange, PropChange, Rgb};
 use wordcraft_doc::table::{Cell, MAX_COLS, MAX_ROWS, Row, Table};
 use wordcraft_doc::{Block, Blocks, InlineObject, Paragraph, PartKind, RevisionKind, Run, para_block};
@@ -1042,9 +1042,13 @@ fn anchor_float(c: &El) -> Float {
     let behind = on_off_attr(c, "behindDoc");
     for k in c.els() {
         match k.name.as_str() {
-            "wp:wrapSquare" => f.wrap = Wrap::Square,
+            "wp:wrapSquare" => {
+                f.wrap = Wrap::Square;
+                f.wrap_text = k.attr("wrapText").and_then(WrapText::from_ooxml).unwrap_or_default();
+            }
             "wp:wrapTight" | "wp:wrapThrough" => {
                 f.wrap = if k.name == "wp:wrapTight" { Wrap::Tight } else { Wrap::Through };
+                f.wrap_text = k.attr("wrapText").and_then(WrapText::from_ooxml).unwrap_or_default();
                 f.wrap_polygon = k.child("wp:wrapPolygon").and_then(wrap_polygon).map(Arc::new);
             }
             "wp:wrapTopAndBottom" => f.wrap = Wrap::TopAndBottom,
