@@ -157,7 +157,6 @@
 	Customize Quick Access Toolbar	クイック アクセス ツール バーのユーザー設定
 	Cut	切り取り
 	Dark Mode	ダーク モード
-	Dark mode	ダーク モード
 	Dashed	破線
 	Data	データ
 	Date & Time	日付と時刻
@@ -876,3 +875,9 @@
 	Opening print dialog…	印刷ダイアログを開いています…
 	Print failed: {error}	印刷できませんでした: {error}
 	Couldn't open {path}: {error}	{path} を開けませんでした: {error}
+	Interface theme:	表示テーマ:
+	Interface\nTheme	表示テーマ
+	Interface Theme	表示テーマ
+	Light	ライト
+	Dark	ダーク
+	Use system setting	システム設定を使用

@@ -91,6 +91,30 @@ pub fn new_revision(s: &mut Session, kind: RevisionKind) -> u32 {
     (s.doc.revisions.len() - 1) as u32
 }
 
+/// Whether the paragraph at `path` is followed by another paragraph in the same container (so
+/// its paragraph mark can be removed by joining the two).
+pub fn has_next_para(s: &Session, story: StoryRef, path: &wordcraft_doc::Path) -> bool {
+    matches!(s.doc.block(story, &path.with_last(path.last().saturating_add(1))), Some(wordcraft_doc::Block::Para(_)))
+}
+
+/// Remove the paragraph mark of the paragraph at `path`: the next paragraph in the same container
+/// joins it. The joined paragraph keeps this paragraph's properties and ends with the next one's
+/// mark (and that mark's revisions). Returns `false`, changing nothing, when no paragraph follows
+/// in the container (a story's or cell's last mark can't be removed).
+pub fn join_next_para(s: &mut Session, story: StoryRef, path: &wordcraft_doc::Path) -> Result<bool, CmdError> {
+    if !has_next_para(s, story, path) {
+        return Ok(false);
+    }
+    let next = path.with_last(path.last().saturating_add(1));
+    let len = s.doc.para(story, path).map(|p| p.len()).unwrap_or(0);
+    let revs = s.doc.para(story, &next).map(|p| (p.mark.ins, p.mark.del)).unwrap_or_default();
+    s.doc.delete_range(&Pos { story, path: path.clone(), off: len }, &Pos { story, path: next, off: 0 })?;
+    let p = s.doc.para_mut(story, path)?;
+    (p.mark.ins, p.mark.del) = revs;
+    p.touch();
+    Ok(true)
+}
+
 /// Tracked deletion: own insertions are removed, other text is marked deleted.
 fn track_delete(s: &mut Session, a: &Pos, b: &Pos) -> Result<Pos, CmdError> {
     let rid = new_revision(s, RevisionKind::Delete);
@@ -116,6 +140,23 @@ fn track_delete(s: &mut Session, a: &Pos, b: &Pos) -> Result<Pos, CmdError> {
                 para.delete(x, y)?;
             } else {
                 para.format(x, y, &|c| c.del = Some(rid))?;
+            }
+        }
+        // The paragraph mark is inside the range unless this is its last paragraph. Like text,
+        // a mark this author inserted is removed (the paragraphs join again), any other is
+        // marked deleted; one already deleted keeps its deletion. Done after the text so a join
+        // can't pull the next paragraph's text into this one's range.
+        if *path != b.path && has_next_para(s, a.story, path) {
+            let (ins, del) = s.doc.para(a.story, path).map(|p| (p.mark.ins, p.mark.del)).unwrap_or_default();
+            if del.is_none() {
+                let own = ins.and_then(|i| s.doc.revisions.get(i as usize)).is_some_and(|rv| rv.author == author);
+                if own {
+                    join_next_para(s, a.story, path)?;
+                } else {
+                    let p = s.doc.para_mut(a.story, path)?;
+                    p.mark.del = Some(rid);
+                    p.touch();
+                }
             }
         }
     }

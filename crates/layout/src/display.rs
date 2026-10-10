@@ -65,12 +65,14 @@ pub enum Draw {
         stroke: Option<Rgb>,
         stroke_width: f32,
     },
-    /// A formatting mark (¶ · → ↵) in the UI's mark colour.
+    /// A formatting mark (¶ · → ↵) in the UI's mark colour, or in `color` (a tracked
+    /// paragraph mark in its reviser's colour).
     Mark {
         x: f32,
         baseline: f32,
         size: f32,
         ch: char,
+        color: Option<Rgb>,
     },
     /// Turned text (a table cell's text direction): `items` are drawn in a frame turned `turn`
     /// whose origin is page point (`x`, `y`) (see [`crate::turn_point`]).
@@ -531,9 +533,13 @@ fn lines(
                 let size = pl.styles.get(c.style as usize).map(|s| s.size).unwrap_or(msize);
                 let arrow = if line.rtl { '←' } else { '→' };
                 match c.kind {
-                    ClKind::Space => out.push(Draw::Mark { x: (cx + nx) / 2.0 - size * 0.12, baseline: base - size * 0.08, size, ch: '·' }),
-                    ClKind::Tab => out.push(Draw::Mark { x: cx + ((nx - cx) / 2.0 - size * 0.3).max(0.0), baseline: base, size, ch: arrow }),
-                    ClKind::LineBreak => out.push(Draw::Mark { x: cx + 1.0, baseline: base, size, ch: '↵' }),
+                    ClKind::Space => {
+                        out.push(Draw::Mark { x: (cx + nx) / 2.0 - size * 0.12, baseline: base - size * 0.08, size, ch: '·', color: None })
+                    }
+                    ClKind::Tab => {
+                        out.push(Draw::Mark { x: cx + ((nx - cx) / 2.0 - size * 0.3).max(0.0), baseline: base, size, ch: arrow, color: None })
+                    }
+                    ClKind::LineBreak => out.push(Draw::Mark { x: cx + 1.0, baseline: base, size, ch: '↵', color: None }),
                     ClKind::PageBreak | ClKind::ColumnBreak => {
                         let label = if c.kind == ClKind::PageBreak { '⤓' } else { '⇥' };
                         out.push(Draw::Line {
@@ -546,7 +552,7 @@ fn lines(
                             stroke: Stroke::Dotted,
                             alpha,
                         });
-                        out.push(Draw::Mark { x: cx + 1.0, baseline: base, size, ch: label });
+                        out.push(Draw::Mark { x: cx + 1.0, baseline: base, size, ch: label, color: None });
                     }
                     _ => {}
                 }
@@ -556,7 +562,12 @@ fn lines(
                 let size = pl.lines.first().map(|_| msize).unwrap_or(msize);
                 // A right-to-left paragraph's mark sits at its end, on the left.
                 let mx = if line.rtl { ex - 1.0 - size * 0.6 } else { ex + 1.0 };
-                out.push(Draw::Mark { x: mx, baseline: base, size, ch: '¶' });
+                // A tracked (inserted or deleted) paragraph mark is drawn in its author's colour.
+                let color = para
+                    .and_then(|p| p.mark.ins.or(p.mark.del))
+                    .filter(|_| opts.markup)
+                    .map(|r| revision_color(doc.revisions.get(r as usize).map(|v| author_index(doc, &v.author)).unwrap_or(0)));
+                out.push(Draw::Mark { x: mx, baseline: base, size, ch: '¶', color });
             }
         }
         let _ = bottom;

@@ -238,6 +238,17 @@ impl Reader<'_> {
             let (props, mark) = self.pc.ppr(ppr);
             para.props = props;
             para.mark = mark;
+            // A tracked paragraph mark (ECMA-376 §17.13.5.16 / §17.13.5.15): `w:ins` / `w:del`
+            // in the mark's `w:rPr`.
+            if let Some(rpr) = ppr.child("w:rPr") {
+                for k in rpr.els() {
+                    match k.name.as_str() {
+                        "w:ins" | "w:moveTo" => para.mark.ins = Some(self.revision(RevisionKind::Insert, k)),
+                        "w:del" | "w:moveFrom" => para.mark.del = Some(self.revision(RevisionKind::Delete, k)),
+                        _ => {}
+                    }
+                }
+            }
             if let Some(s) = ppr.child("w:sectPr") {
                 para.section = Some(Box::new(self.read_section(s, rels)));
             }
@@ -703,23 +714,14 @@ impl Reader<'_> {
     fn read_vml(&mut self, sc: &mut StoryCtx, pict: &El, rels: &Rels) -> Option<InlineObject> {
         let shape = pict.els().find(|e| e.name.starts_with("v:") && e.local() != "shapetype")?;
         let style = shape.attr("style").unwrap_or("");
-        let mut w = 0.0;
-        let mut h = 0.0;
-        for decl in style.split(';') {
-            let mut kv = decl.splitn(2, ':');
-            let (Some(k), Some(v)) = (kv.next(), kv.next()) else { continue };
-            let v = measure(v.trim(), 1.0).unwrap_or(0.0).clamp(0.0, crate::units::MAX_LEN_PT);
-            match k.trim() {
-                "width" => w = v,
-                "height" => h = v,
-                _ => {}
-            }
-        }
+        let len = |k: &str| vml_style(style, k).and_then(|v| measure(v, 1.0)).unwrap_or(0.0).clamp(0.0, crate::units::MAX_LEN_PT);
+        let (w, h) = (len("width"), len("height"));
+        let float = vml_float(shape, style);
         if let Some(img) = shape.find("v:imagedata") {
             let id = img.attr("r:id").or_else(|| img.attr("r:pict"))?;
             let media = self.media_for(rels, id)?;
             let alt = shape.attr("alt").or_else(|| img.attr("o:title")).unwrap_or("").to_string();
-            return Some(InlineObject::Image { media, w, h, alt, float: Float::default(), crop: [0.0; 4] });
+            return Some(InlineObject::Image { media, w, h, alt, float, crop: [0.0; 4] });
         }
         if let Some(t) = shape.find("w:txbxContent")
             && sc.story_depth < MAX_STORY_DEPTH
@@ -727,7 +729,7 @@ impl Reader<'_> {
             let story = Some(self.read_textbox(sc, t, rels));
             let fill = shape.attr("fillcolor").and_then(Rgb::parse);
             let stroke = shape.attr("strokecolor").and_then(Rgb::parse);
-            return Some(InlineObject::Shape { kind: ShapeKind::TextBox, w, h, fill, stroke, stroke_width: 0.75, float: Float::default(), story });
+            return Some(InlineObject::Shape { kind: ShapeKind::TextBox, w, h, fill, stroke, stroke_width: 0.75, float, story });
         }
         None
     }
@@ -848,4 +850,67 @@ fn anchor_float(c: &El) -> Float {
     f.dist_top = dist("distT");
     f.dist_bottom = dist("distB");
     f
+}
+
+/// The value of property `key` in a VML `style` attribute (CSS declarations; the last one wins).
+fn vml_style<'a>(style: &'a str, key: &str) -> Option<&'a str> {
+    style.rsplit(';').filter_map(|d| d.split_once(':')).find(|(k, _)| k.trim().eq_ignore_ascii_case(key)).map(|(_, v)| v.trim())
+}
+
+/// Placement of a VML shape (ECMA-376 Part 4, VML): `position:absolute` in its style makes it
+/// float, offset by `left`/`margin-left` and `top`/`margin-top` from the area named by
+/// `mso-position-horizontal-relative` / `mso-position-vertical-relative` (unless aligned with
+/// `mso-position-horizontal` / `mso-position-vertical`), wrapped as its `w10:wrap` says. Without
+/// wrapping (`none`, or no `w10:wrap`) it's in front of the text, or behind it at a negative
+/// `z-index`. Anything else stays inline.
+fn vml_float(shape: &El, style: &str) -> Float {
+    let get = |k: &str| vml_style(style, k);
+    if !get("position").is_some_and(|p| p.eq_ignore_ascii_case("absolute")) {
+        return Float::default();
+    }
+    let off = |k: &str| get(k).and_then(|v| measure(v, 1.0)).unwrap_or(0.0);
+    let max = crate::units::MAX_LEN_PT;
+    let behind = get("z-index").and_then(int).is_some_and(|z| z < 0);
+    let wrap = match shape.child("w10:wrap").and_then(|w| w.attr("type")).unwrap_or("none") {
+        "square" => Wrap::Square,
+        "tight" => Wrap::Tight,
+        "through" => Wrap::Through,
+        "topAndBottom" => Wrap::TopAndBottom,
+        _ if behind => Wrap::BehindText,
+        _ => Wrap::InFrontOfText,
+    };
+    let h_rel = match get("mso-position-horizontal-relative").unwrap_or("text") {
+        "page" => Anchor::Page,
+        "margin" => Anchor::Margin,
+        "char" => Anchor::Character,
+        "left-margin-area" => Anchor::LeftMargin,
+        "right-margin-area" => Anchor::RightMargin,
+        "inner-margin-area" => Anchor::InsideMargin,
+        "outer-margin-area" => Anchor::OutsideMargin,
+        _ => Anchor::Column,
+    };
+    let v_rel = match get("mso-position-vertical-relative").unwrap_or("text") {
+        "page" => Anchor::Page,
+        "margin" => Anchor::Margin,
+        "line" => Anchor::Line,
+        "top-margin-area" => Anchor::TopMargin,
+        "bottom-margin-area" => Anchor::BottomMargin,
+        "inner-margin-area" => Anchor::InsideMargin,
+        "outer-margin-area" => Anchor::OutsideMargin,
+        _ => Anchor::Paragraph,
+    };
+    let dist = |k: &str| get(k).and_then(|v| measure(v, 1.0)).unwrap_or(0.0).clamp(0.0, 1584.0);
+    Float {
+        wrap,
+        h_rel,
+        v_rel,
+        x: (off("left") + off("margin-left")).clamp(-max, max),
+        y: (off("top") + off("margin-top")).clamp(-max, max),
+        h_align: get("mso-position-horizontal").and_then(FloatAlign::from_ooxml),
+        v_align: get("mso-position-vertical").and_then(FloatAlign::from_ooxml),
+        dist: dist("mso-wrap-distance-left").max(dist("mso-wrap-distance-right")),
+        dist_top: dist("mso-wrap-distance-top"),
+        dist_bottom: dist("mso-wrap-distance-bottom"),
+        ..Float::default()
+    }
 }

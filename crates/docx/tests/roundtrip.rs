@@ -727,6 +727,38 @@ fn tracked_changes_round_trip() {
 }
 
 #[test]
+fn tracked_paragraph_marks_round_trip() {
+    // Issue #229: an inserted / deleted paragraph mark is `w:ins` / `w:del` in the mark's
+    // `w:rPr` (ECMA-376 §17.13.5.16, §17.13.5.15), alone or with mark formatting.
+    let mut d = Document::new();
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Alice".into(), date: "2026-05-01T10:00:00Z".into() });
+    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Bob".into(), date: "2026-05-02T10:00:00Z".into() });
+    let mut split = Paragraph::with_text("Owned ALPHA ", CharProps::default());
+    split.mark.ins = Some(0);
+    let mut joined = Paragraph::with_text("Owned BETA", CharProps::default());
+    joined.mark = CharProps { bold: Some(true), del: Some(1), ..Default::default() };
+    let last = Paragraph::with_text("plain", CharProps::default());
+    d.body = vec![para_block(split), para_block(joined), para_block(last)];
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<w:rPr><w:ins w:id="#), "{xml}");
+    assert!(xml.contains(r#"<w:rPr><w:del w:id="#), "{xml}");
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    let got = paras(&r);
+    assert_eq!(got.len(), 3);
+    let rev = |i: Option<u32>| i.and_then(|i| r.revisions.get(i as usize)).map(|v| (v.kind, v.author.as_str(), v.date.as_str()));
+    assert_eq!(rev(got[0].mark.ins), Some((RevisionKind::Insert, "Alice", "2026-05-01T10:00:00Z")));
+    assert_eq!(got[0].mark.del, None);
+    assert_eq!(rev(got[1].mark.del), Some((RevisionKind::Delete, "Bob", "2026-05-02T10:00:00Z")));
+    assert_eq!(got[1].mark.bold, Some(true));
+    assert_eq!(got[1].mark.ins, None);
+    assert_eq!((got[2].mark.ins, got[2].mark.del), (None, None));
+    assert_eq!(got.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), ["Owned ALPHA ", "Owned BETA", "plain"]);
+}
+
+#[test]
 fn fields_and_special_chars_round_trip() {
     let mut p = Paragraph::with_text("a\tb\nc\u{000C}d\u{000E}e\u{2011}f\u{00AD}g  spaced  ", CharProps::default());
     let fields = [
