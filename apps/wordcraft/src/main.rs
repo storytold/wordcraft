@@ -3,8 +3,9 @@
 //! Usage: `wordcraft [--control <port>] [--sample] [files…]`
 //!
 //! `--control <port>` (or `WORDCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server:
-//! `{"id":1,"method":"engine.execute","params":{"command":"text.insert","params":{"text":"Hi"}}}`.
-//! See `docs/control-protocol.md`.
+//! `{"id":1,"key":"…","method":"engine.execute","params":{"command":"text.insert","params":{"text":"Hi"}}}`.
+//! Every request needs the key the app writes to `<settings>/control-key.<instance>` (mode 0600,
+//! removed on exit). See `docs/control-protocol.md`.
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -19,8 +20,9 @@ use wordcraft_ui_egui::{
     window_geometry::{WindowGeometry, take_rescue},
 };
 
-/// The app, and the restored window geometry until the first frame has checked it.
-struct App(WordApp, Option<WindowGeometry>);
+/// The app, the restored window geometry until the first frame has checked it, and the control
+/// server's key file (removed on exit).
+struct App(WordApp, Option<WindowGeometry>, Option<control_server::KeyFile>);
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -42,21 +44,15 @@ impl eframe::App for App {
     }
     fn on_exit(&mut self) {
         save_prefs(&self.0);
+        if let Some(key_file) = &self.2 {
+            key_file.remove();
+        }
     }
 }
 
+/// `ui.json` in the settings folder, which the MCP bridge also uses to find the control key.
 fn prefs_path() -> Option<std::path::PathBuf> {
-    let base = if cfg!(target_os = "macos") {
-        std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join("Library/Application Support/WordCraft"))
-    } else if cfg!(windows) {
-        std::env::var_os("APPDATA").map(|a| std::path::PathBuf::from(a).join("WordCraft"))
-    } else {
-        std::env::var_os("XDG_CONFIG_HOME")
-            .map(std::path::PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))
-            .map(|c| c.join("wordcraft"))
-    };
-    base.map(|b| b.join("ui.json"))
+    wordcraft_control_key::settings_dir().map(|b| b.join("ui.json"))
 }
 
 /// Where the log files live: `logs` in the preferences folder (see `logging`).
@@ -111,7 +107,7 @@ fn services() -> Services {
             let d = if purpose == "picture" {
                 d.add_filter("Pictures", &["png", "jpg", "jpeg", "gif", "webp", "bmp"])
             } else {
-                d.add_filter("Documents", &["docx", "docm", "dotx", "odt", "rtf", "txt", "md", "html", "htm", "json"])
+                d.add_filter("Documents", &["docx", "docm", "dotx", "dotm", "odt", "rtf", "txt", "md", "html", "htm", "tex", "json"])
                     .add_filter("Word document", &["docx"])
                     .add_filter("All files", &["*"])
             };
@@ -200,16 +196,19 @@ fn main() -> eframe::Result {
             load_prefs(&mut app);
             app.ui.window = restored;
             app.integrated_titlebar = cfg!(target_os = "macos");
-            if let Some(port) = control_port {
-                let rx = control_server::start(port, cc.egui_ctx.clone());
+            let mut key_file = None;
+            if let Some(port) = control_port
+                && let Some((rx, file)) = control_server::start(port, cc.egui_ctx.clone(), wordcraft_control_key::settings_dir().as_deref())
+            {
                 app = app.with_control(rx);
+                key_file = file;
             }
             for f in files {
                 if let Err(e) = app.run("file.open", serde_json::json!({"path": f})) {
                     log::warn!("{f}: {e}");
                 }
             }
-            Ok(Box::new(App(app, restored)))
+            Ok(Box::new(App(app, restored, key_file)))
         }),
     )
 }

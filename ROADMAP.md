@@ -4,12 +4,12 @@ WordCraft aims for complete feature parity with Microsoft Word, then goes furthe
 and agent control. This file tracks where we are honestly. Generated numbers come from
 `cargo xtask parity` (`docs/parity.md`).
 
-## Where we are (2026-10-07)
+## Where we are (2026-10-09)
 
 | Measure | Value |
 |---|---|
-| Commands (every action, scriptable by CLI/MCP/control channel) | **390** |
-| Feature catalog coverage (Word ribbon/menu features with a command) | **355 / 406 (87%)** |
+| Commands (every action, scriptable by CLI/MCP/control channel) | **392** |
+| Feature catalog coverage (Word ribbon/menu features with a command) | **357 / 406 (88%)** |
 | **Estimated real feature parity** (depth and fidelity, not just a command) | **~62%** |
 | **Distance to alpha** | **~85% of the way; ≈20–25 h of Claude wall-clock work** |
 | **Distance to 100% parity** | **≈120–150 h of Claude Opus 5.5 wall-clock work** (with parallel agents) |
@@ -61,7 +61,7 @@ the icon art).
 | Pictures & shapes (insert, size, crop, recolour, effects, styles, float position) | Text wraps around floats (rectangular); text boxes render their text; no tight/contour wrap, no rotation handles | 55% |
 | Draw tab (ink), SmartArt, charts, 3D models, equations editor | Not started / linear equations only | 5% |
 | File formats: DOCX read/write | Good (Word opens our files); charts/SmartArt/OLE dropped; untested on a real-world corpus | 75% |
-| File formats: PDF, ODT, RTF, HTML, Markdown, TXT | Working | 70% |
+| File formats: PDF, ODT, RTF, HTML, Markdown, LaTeX, TXT | Working | 70% |
 | View modes (print, web, draft, read, focus, zoom, navigation pane) | Working | 70% |
 | Backstage (new from templates, open, info, export, options) | Working; printing goes through PDF | 55% |
 | Right-to-left and complex scripts (Persian, Arabic, Hebrew) | Unicode Bidirectional Algorithm, Arabic shaping (joining, ZWNJ, lam-alef, mirrored brackets), mixed Persian/Latin/number lines, mirrored paragraphs (indents, tabs, list labels, ruler), visual caret movement and hit testing, complex-script fonts/sizes in DOCX; no kashida justification, RTL sections/tables or right-to-left UI yet | 55% |
@@ -110,6 +110,7 @@ the icon art).
 - Right-to-left and Persian text: bidi reordering (UAX #9), Arabic-script shaping, right-to-left
   paragraphs (Left-to-Right / Right-to-Left Text Direction), visual arrow keys, `w:rtl`/`w:cs`/`w:szCs`
   /`w:bCs`/`w:iCs`/`w:rFonts w:cs`/`w:lang w:bidi` round-trip, Persian font substitutes.
+- Ukrainian interface catalog: all existing 771 labels, Ukrainian locale detection and a persisted language choice (#85).
 - Brazilian Portuguese interface catalog: all existing 771 labels, `pt-BR` locale detection and a persisted language choice (#127).
 - Text wraps around floating pictures and shapes; text boxes lay out their own text.
 - Table rows split across pages between lines (Can't Split honoured, header rows repeat).

@@ -18,12 +18,17 @@ pub struct RowLayout {
 pub struct TableLayout {
     /// Table x offset within the column.
     pub x: f32,
-    #[allow(dead_code)]
     pub width: f32,
     pub rows: Vec<RowLayout>,
 }
 
 const DEFAULT_MARGINS: [f32; 4] = [0.0, 5.4, 0.0, 5.4];
+
+/// The first cell's left margin: how far its text sits inside the table's edge.
+pub(crate) fn first_cell_left_margin(t: &Table) -> f32 {
+    let def = t.props.cell_margins.unwrap_or(DEFAULT_MARGINS);
+    t.rows.first().and_then(|r| r.cells.first()).and_then(|c| c.props.margins).unwrap_or(def)[1]
+}
 
 fn style_parts(ctx: &Ctx, t: &Table) -> Option<TableStyleParts> {
     let id = t.props.style.as_deref()?;
@@ -62,15 +67,27 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
         acc += w;
     }
     colx.push(acc);
-    // Word places the table so cell text lines up with the margin: shift left by the left cell margin.
+    // Word 2013 and later (compatibility mode 15) put the table's border at the margin (plus its
+    // indent); earlier modes line the first cell's text up with it instead.
     let margins_def = t.props.cell_margins.unwrap_or(DEFAULT_MARGINS);
     let indent = t.props.indent.unwrap_or(0.0);
+    // The style's borders, overlaid by the table's own side by side.
+    let mut tborders = parts.as_ref().and_then(|p| p.borders).unwrap_or_default();
+    if let Some(own) = t.props.borders {
+        tborders.overlay(&own);
+    }
+    let first_cell = t.rows.first().and_then(|r| r.cells.first());
     let x = match t.props.align {
         Some(Align::Center) => (avail - total) / 2.0,
         Some(Align::Right) => avail - total,
-        _ => indent - margins_def[1],
+        _ if ctx.doc.settings.compat_mode >= 15 => {
+            // The border is centred on the edge, so half of it sits outside: Word moves the
+            // table in by that half.
+            let border = first_cell.and_then(|c| c.props.borders.and_then(|b| b.left)).or(tborders.left);
+            indent + border.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0) / 2.0)
+        }
+        _ => indent - first_cell_left_margin(t),
     };
-    let tborders = t.props.borders.or_else(|| parts.as_ref().and_then(|p| p.borders));
     let nrows = t.rows.len();
     let header_rows = t.props.look.header_row;
     // First pass: lay out every cell's content.
@@ -93,6 +110,8 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
         let mut g = 0usize;
         let mut cells = Vec::with_capacity(row.cells.len());
         let mut rh = 0.0f32;
+        // The tallest cell margins plus border bands in the row.
+        let mut row_insets = 0.0f32;
         let is_header = header_rows && ri == 0;
         let is_total = t.props.look.total_row && ri + 1 == nrows && nrows > 1;
         let band = t.props.look.banded_rows && !is_header && (ri - usize::from(header_rows)) % 2 == 0;
@@ -120,20 +139,8 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             let mut cpath = path.to_vec();
             cpath.push(ri as u32);
             cpath.push(ci as u32);
-            let (mut items, h) = if cell.props.vmerge == VMerge::Continue {
-                (Vec::new(), 0.0)
-            } else {
-                layout_box(ctx, story, &cell.blocks, &cpath, cw, chr.as_ref(), depth)
-            };
-            for it in &mut items {
-                it.translate(x0 + margins[1], margins[0]);
-            }
-            let h = h + margins[0] + margins[2];
-            if cell.props.vmerge != VMerge::Restart {
-                rh = rh.max(h);
-            }
             // Effective borders: cell > table (outer vs inside).
-            let tb = tborders.unwrap_or_default();
+            let tb = tborders;
             let edge =
                 |own: Option<Border>, outer: bool, outer_b: Option<Border>, inner_b: Option<Border>| own.or(if outer { outer_b } else { inner_b });
             let cb = cell.props.borders.unwrap_or_default();
@@ -148,6 +155,24 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             if is_total && let Some(b) = parts.as_ref().and_then(|p| p.total_border_top) {
                 borders.top = Some(b);
             }
+            // Word keeps the cell's text clear of its top border (and the last row's of its bottom
+            // border): the border's width sits on top of the cell margin.
+            let band = |b: Option<Border>| b.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0));
+            let (band_t, band_b) = (band(borders.top), if ri + 1 == nrows { band(borders.bottom) } else { 0.0 });
+            let (mut items, h) = if cell.props.vmerge == VMerge::Continue {
+                (Vec::new(), 0.0)
+            } else {
+                layout_box(ctx, story, &cell.blocks, &cpath, cw, chr.as_ref(), depth, None)
+            };
+            for it in &mut items {
+                it.translate(x0 + margins[1], margins[0] + band_t);
+            }
+            let insets = margins[0] + margins[2] + band_t + band_b;
+            let h = h + insets;
+            if cell.props.vmerge != VMerge::Restart {
+                rh = rh.max(h);
+            }
+            row_insets = row_insets.max(insets);
             cells.push(CellBox {
                 items,
                 h,
@@ -163,9 +188,11 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             });
             g += span;
         }
+        // Word adds the cells' top and bottom margins and border bands to an at-least row height:
+        // a 30pt row with 5pt margins and 0.5pt borders is 40.5pt tall even when its text needs less.
         let rh = match (row.props.height, row.props.height_rule) {
             (Some(h), HeightRule::Exact) if h > 0.0 => h,
-            (Some(h), _) if h > 0.0 => rh.max(h),
+            (Some(h), _) if h > 0.0 => rh.max(h + row_insets),
             _ => rh,
         };
         heights.push(rh.max(4.0));

@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use wordcraft_doc::numbering::{AbstractNum, Level, LevelSuffix, Num};
+use wordcraft_doc::para::NoteKind;
 use wordcraft_doc::para::OBJ;
 use wordcraft_doc::props::Rgb;
 use wordcraft_doc::section::NumFormat;
@@ -14,7 +15,7 @@ use wordcraft_doc::styles::{Style, StyleKind, StyleSheet, TableStyleParts};
 use wordcraft_doc::{Block, Blocks, Comment, Document, InlineObject, PartKind, Revision, RevisionKind};
 
 use crate::DocxError;
-use crate::package::{Package, Rels, rt};
+use crate::package::{ContentTypes, MAX_VBA_RELATED, Package, Rels, VBA_PROJECT_PART, VBA_RELATED, rt};
 use crate::units::{flag, int, on_off, tw, u32_of};
 use crate::xml::El;
 pub(crate) use props::PropCtx;
@@ -32,6 +33,9 @@ pub(crate) struct Reader<'p> {
     hf_by_path: HashMap<String, u32>,
     pub footnotes: HashMap<i64, u32>,
     pub endnotes: HashMap<i64, u32>,
+    /// The note being read (kind, part id): its `w:footnoteRef` / `w:endnoteRef` mark is a
+    /// reference to itself.
+    current_note: Option<(NoteKind, u32)>,
     pub comment_map: HashMap<String, u32>,
     pub comments_ended: HashSet<u32>,
     pub bookmarks: HashMap<String, String>,
@@ -60,6 +64,7 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocxError> {
         hf_by_path: HashMap::new(),
         footnotes: HashMap::new(),
         endnotes: HashMap::new(),
+        current_note: None,
         comment_map: HashMap::new(),
         comments_ended: HashSet::new(),
         bookmarks: HashMap::new(),
@@ -83,6 +88,8 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocxError> {
     if let Some(p) = part(rt::NUMBERING) {
         lenient("numbering", r.read_numbering(&p));
     }
+    // Without a stated mode (or settings at all) Word lays a document out as Word 2007 did.
+    r.doc.settings.compat_mode = wordcraft_doc::LEGACY_COMPAT_MODE;
     if let Some(p) = part(rt::SETTINGS) {
         lenient("settings", r.read_settings(&p));
     }
@@ -118,6 +125,15 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocxError> {
         && let Some(b) = pkg.get(&c.target)
     {
         r.doc.passthrough.insert("docProps/custom.xml".into(), Arc::new(b.to_vec()));
+    }
+    // A macro project and every part it relates to (VBA data, signatures…) ride along as opaque
+    // bytes, never parsed or run, so a .docm/.dotm saved again carries exactly what the file had.
+    // Only the relationships and content types are read.
+    if let Some(v) = part(rt::VBA_PROJECT)
+        && let Some(b) = pkg.get(&v).filter(|b| !b.is_empty())
+    {
+        r.doc.passthrough.insert(VBA_PROJECT_PART.into(), Arc::new(b.to_vec()));
+        r.read_vba_related(&v);
     }
     let mut doc = r.doc;
     doc.ensure_nonempty();
@@ -193,6 +209,49 @@ pub(crate) fn ui_style_name(n: &str) -> String {
 }
 
 impl Reader<'_> {
+    /// Keep the parts the VBA project at `project` relates to, with their relationship types and
+    /// content types (see [`VBA_RELATED`]). Parts outside `word/`, relationship parts, the project
+    /// itself and missing targets are skipped (logged); at most [`MAX_VBA_RELATED`] are kept.
+    fn read_vba_related(&mut self, project: &str) {
+        let types = ContentTypes::read(self.pkg);
+        let mut manifest = String::new();
+        let mut kept = 0usize;
+        for rel in self.pkg.rels(project).list.iter().filter(|r| !r.external) {
+            // Part names compare case-insensitively (OPC): `/WORD/x` names the part the writer
+            // stores as `word/x`.
+            let target = rel.target.as_str();
+            let path = match (target.get(..5), target.get(5..)) {
+                (Some(dir), Some(rest)) if dir.eq_ignore_ascii_case("word/") => format!("word/{rest}"),
+                _ => target.to_string(),
+            };
+            let path = path.as_str();
+            let ct = types.of(path).unwrap_or("application/octet-stream");
+            let usable = path.strip_prefix("word/").is_some_and(|t| !t.is_empty())
+                && !path.to_ascii_lowercase().ends_with(".rels")
+                && !path.eq_ignore_ascii_case(project)
+                && !path.eq_ignore_ascii_case(VBA_PROJECT_PART)
+                && ![rel.kind.as_str(), path, ct].iter().any(|f| f.is_empty() || f.contains(['\t', '\r', '\n']));
+            if !usable {
+                log::warn!("docx: not carrying VBA-related part {path:?}");
+                continue;
+            }
+            let Some(bytes) = self.pkg.get(path) else {
+                log::warn!("docx: VBA-related part {path} is missing; keeping the project without it");
+                continue;
+            };
+            if kept >= MAX_VBA_RELATED {
+                log::warn!("docx: more than {MAX_VBA_RELATED} VBA-related parts; the rest are dropped");
+                break;
+            }
+            kept += 1;
+            manifest.push_str(&format!("{}\t{path}\t{ct}\n", rel.kind));
+            self.doc.passthrough.entry(path.to_string()).or_insert_with(|| Arc::new(bytes.to_vec()));
+        }
+        if !manifest.is_empty() {
+            self.doc.passthrough.insert(VBA_RELATED.into(), Arc::new(manifest.into_bytes()));
+        }
+    }
+
     fn xml(&self, path: &str) -> Result<Option<El>, DocxError> {
         self.pkg.xml(path)
     }
@@ -490,6 +549,19 @@ impl Reader<'_> {
         let s = &mut self.doc.settings;
         for k in root.els() {
             match k.name.as_str() {
+                "w:compat" => {
+                    // Only Word's own setting: another `w:uri` names a different application's.
+                    let mode = k
+                        .children("w:compatSetting")
+                        .find(|c| {
+                            c.attr("w:name") == Some("compatibilityMode")
+                                && c.attr("w:uri").is_none_or(|u| u == "http://schemas.microsoft.com/office/word")
+                        })
+                        .and_then(|c| c.attr("w:val"));
+                    if let Some(m) = mode.and_then(u32_of) {
+                        s.compat_mode = m.clamp(11, 99);
+                    }
+                }
                 "w:trackRevisions" => s.track_changes = on_off(k),
                 "w:defaultTabStop" => {
                     if let Some(v) = tw(k, "w:val").filter(|v| *v > 0.0) {
@@ -533,11 +605,20 @@ impl Reader<'_> {
             if self.doc.parts.len() >= MAX_PARTS {
                 break;
             }
+            // Reserve the id first: the note's own reference mark points at it.
+            let (pk, kind) = if foot { (PartKind::Footnote, NoteKind::Footnote) } else { (PartKind::Endnote, NoteKind::Endnote) };
+            let id = self.doc.add_part(pk, Blocks::new());
             let mut sc = StoryCtx::default();
             let mut blocks = Blocks::new();
+            self.current_note = Some((kind, id));
             self.read_blocks(&mut sc, n, &rels, &mut blocks, 0);
             self.flush_pending(&mut sc, &mut blocks);
-            let id = self.doc.add_part(if foot { PartKind::Footnote } else { PartKind::Endnote }, blocks);
+            self.current_note = None;
+            if let Some(p) = self.doc.parts.get_mut(&id)
+                && !blocks.is_empty()
+            {
+                p.blocks = blocks;
+            }
             if foot {
                 self.footnotes.insert(fid, id);
             } else {

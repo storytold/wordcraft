@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 use wordcraft_doc::Pos;
-use wordcraft_doc::props::{CharProps, Highlight, Rgb, TextColor, Underline, VertAlign};
+use wordcraft_doc::props::{Border, CharProps, Highlight, Rgb, TextColor, Underline, VertAlign};
 use wordcraft_doc::resolve::ResolvedChar;
 
 use super::sel_result;
@@ -54,6 +54,11 @@ pub fn specs() -> Vec<CommandSpec> {
         .key("Mod+Shift+W"),
         CommandSpec::new("format.strikethrough", "Strikethrough", "Home › Font", |s, v| toggle(s, v, |r| r.strike, |c, on| c.strike = Some(on)))
             .params(r#"{"value"?: bool}"#),
+        // Note: off clears the direct property only; a border inherited from a character style stays on.
+        CommandSpec::new("format.border", "Character Border", "Home › Font", |s, v| {
+            toggle(s, v, |r| r.border.is_some(), |c, on| c.border = on.then(|| Border::single(0.5)))
+        })
+        .params(r#"{"value"?: bool}"#),
         CommandSpec::new("format.doubleStrikethrough", "Double Strikethrough", "Home › Font › Font", |s, v| {
             toggle(s, v, |r| r.double_strike, |c, on| c.double_strike = Some(on))
         }),
@@ -442,6 +447,7 @@ pub fn state(s: &Session) -> Value {
         "italic": all.iter().all(|r| r.italic),
         "underline": all.iter().all(|r| r.underline != Underline::None),
         "strike": all.iter().all(|r| r.strike),
+        "border": all.iter().all(|r| r.border.is_some()),
         "subscript": all.iter().all(|r| r.vert_align == VertAlign::Subscript),
         "superscript": all.iter().all(|r| r.vert_align == VertAlign::Superscript),
         "color": same(&|r| json!(match r.color { TextColor::Auto => "auto".to_string(), TextColor::Rgb(c) => c.hex() })),

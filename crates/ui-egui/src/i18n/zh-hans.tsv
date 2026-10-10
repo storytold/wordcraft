@@ -45,6 +45,7 @@
 	Alt Text	替代文字
 	Apply Character Style	应用字符样式
 	Apply Style	应用样式
+	Apply Styles	选择并应用样式
 	Arrange	排列
 	Arrange\nAll	全部重排
 	Arrow	箭头
@@ -109,6 +110,7 @@
 	Character Scale	字符缩放
 	Character Shading	字符底纹
 	Character Spacing	字符间距
+	Character Border	字符边框
 	Characters (no spaces)	字符数（不计空格）
 	Characters (with spaces)	字符数（计空格）
 	Chart	图表
@@ -789,3 +791,5 @@
 	Direction:	方向：
 	Right-to-left	从右向左
 	Left-to-right	从左向右
+	Scroll ribbon left	向左滚动功能区
+	Scroll ribbon right	向右滚动功能区

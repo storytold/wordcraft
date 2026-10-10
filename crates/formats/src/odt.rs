@@ -179,7 +179,8 @@ impl Writer {
 
     fn inlines(&mut self, inl: &[Inline], out: &mut String) {
         let mut prev_space = true;
-        for i in inl {
+        let inl = model::equations_as_text(inl);
+        for i in inl.iter() {
             match i {
                 Inline::Text(t, f) => {
                     let mut body = String::new();
@@ -246,6 +247,7 @@ impl Writer {
                     prev_space = false;
                 }
                 Inline::Anchor(a) => out.push_str(&format!("<text:bookmark text:name=\"{}\"/>", x(a))),
+                Inline::Equation { .. } => {}
             }
         }
     }
@@ -283,6 +285,10 @@ impl Writer {
                     while let Some(FBlock::Para(q)) = blocks.get(i) {
                         let Some(li) = q.list else { break };
                         let l = li.level.min(8) as usize;
+                        // A top-level item of the other kind starts a new list.
+                        if l == 0 && seen[0] && kinds[0] != li.ordered {
+                            break;
+                        }
                         if let (Some(s), Some(k)) = (seen.get_mut(l), kinds.get_mut(l))
                             && !*s
                         {

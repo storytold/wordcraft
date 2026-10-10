@@ -34,6 +34,7 @@
 	Alt Text	代替テキスト
 	Apply Character Style	文字スタイルを適用
 	Apply Style	スタイルを適用
+	Apply Styles	スタイルを選んで適用
 	Arrange	配置
 	Arrange\nAll	整列
 	Arrow	矢印
@@ -98,6 +99,7 @@
 	Character Scale	文字の拡大/縮小
 	Character Shading	文字の網かけ
 	Character Spacing	文字間隔
+	Character Border	文字の罫線
 	Characters (no spaces)	文字数（スペースを含めない）
 	Characters (with spaces)	文字数（スペースを含める）
 	Chart	グラフ
@@ -778,3 +780,5 @@
 	Direction:	方向:
 	Right-to-left	右から左
 	Left-to-right	左から右
+	Scroll ribbon left	リボンを左にスクロール
+	Scroll ribbon right	リボンを右にスクロール

@@ -57,6 +57,12 @@ pub enum Inline {
     Image(Img),
     /// A bookmark (link target).
     Anchor(String),
+    /// An equation in the linear format WordCraft keeps them in (`x=(-b±√(b^2-4ac))/2a`). Formats
+    /// without equations write `linear` as text.
+    Equation {
+        linear: String,
+        display: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -106,12 +112,13 @@ impl Para {
         }
         self.inlines.push(Inline::Text(s.to_string(), f.clone()));
     }
-    /// The plain text (images and anchors left out).
+    /// The plain text (images and anchors left out; equations as their linear text).
     pub fn text(&self) -> String {
         let mut s = String::new();
         for i in &self.inlines {
-            if let Inline::Text(t, _) = i {
-                s.push_str(t);
+            match i {
+                Inline::Text(t, _) | Inline::Equation { linear: t, .. } => s.push_str(t),
+                Inline::Image(_) | Inline::Anchor(_) => {}
             }
         }
         s
@@ -119,6 +126,7 @@ impl Para {
     pub fn is_empty(&self) -> bool {
         self.inlines.iter().all(|i| matches!(i, Inline::Text(t, _) if t.is_empty()))
     }
+
     /// Remove whitespace at the very start and end of the paragraph's text.
     pub fn trim(&mut self) {
         while let Some(Inline::Text(t, _)) = self.inlines.first_mut() {
@@ -245,6 +253,23 @@ pub struct Flow {
     pub meta: Meta,
 }
 
+/// `inlines` with equations as their linear text (default formatting), for formats that have no
+/// equations.
+pub fn equations_as_text(inlines: &[Inline]) -> std::borrow::Cow<'_, [Inline]> {
+    if !inlines.iter().any(|i| matches!(i, Inline::Equation { .. })) {
+        return std::borrow::Cow::Borrowed(inlines);
+    }
+    let mut p = Para::default();
+    for i in inlines {
+        match i {
+            Inline::Equation { linear, .. } => p.push_text(linear, &Fmt::default()),
+            Inline::Text(t, f) => p.push_text(t, f),
+            other => p.inlines.push(other.clone()),
+        }
+    }
+    std::borrow::Cow::Owned(p.inlines)
+}
+
 // ---------------------------------------------------------------------------------------------
 // Flow → Document
 
@@ -343,6 +368,12 @@ impl Builder<'_> {
                     let e2 = out.len();
                     let _ = out.insert_object(e2, InlineObject::BookmarkEnd { name: name.clone() }, &CharProps::default());
                 }
+                Inline::Equation { linear, display } => {
+                    let linear = clean_text(linear);
+                    if !linear.is_empty() {
+                        let _ = out.insert_object(end, InlineObject::Equation { linear, display: *display }, &CharProps::default());
+                    }
+                }
             }
         }
         out
@@ -383,11 +414,19 @@ impl Builder<'_> {
         while let Some(b) = blocks.get(i) {
             match b {
                 FBlock::Para(p) if p.list.is_some() => {
-                    // A run of consecutive list paragraphs is one list.
+                    // A run of consecutive list paragraphs is one list, until a top-level item of
+                    // the other kind (bulleted or numbered) starts a new one.
                     let mut j = i;
-                    let mut group = Vec::new();
+                    let mut group: Vec<ListInfo> = Vec::new();
+                    let mut top: Option<bool> = None;
                     while let Some(FBlock::Para(q)) = blocks.get(j) {
                         let Some(li) = q.list else { break };
+                        if li.level == 0 {
+                            if top.is_some_and(|o| o != li.ordered) {
+                                break;
+                            }
+                            top = Some(li.ordered);
+                        }
                         group.push(li);
                         j += 1;
                     }
@@ -644,6 +683,12 @@ pub fn flow_paras(doc: &Document, p: &Paragraph) -> Vec<Para> {
                         None if !alt.is_empty() => buf.push_str(alt),
                         None => {}
                     }
+                }
+                Some(InlineObject::Equation { linear, display }) => {
+                    if !buf.is_empty() {
+                        out.push_text(&std::mem::take(&mut buf), &f);
+                    }
+                    out.inlines.push(Inline::Equation { linear: linear.clone(), display: *display });
                 }
                 Some(InlineObject::BookmarkStart { name }) if name != "_GoBack" => {
                     if !buf.is_empty() {

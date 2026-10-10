@@ -372,3 +372,27 @@ fn glyph_runs_carry_their_text_for_pdf_export() {
     }
     assert_eq!(all.replace(' ', ""), s.replace(' ', ""), "every character is accounted for, in logical order");
 }
+
+#[test]
+fn character_border_boxes_a_whole_rtl_word() {
+    let s = "کتاب خوب";
+    let mut d = doc_of(&[(s, true)]);
+    let b = wordcraft_doc::props::Border { space: 0.0, ..wordcraft_doc::props::Border::single(0.5) };
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, at(s, 4)), &|c| c.border = Some(b)).unwrap();
+    let l = lay(&d);
+    let (pl, x) = first_line(&l, 0);
+    let line = &pl.lines[0];
+    let word: Vec<usize> = (line.c0..line.c1).filter(|&k| pl.clusters[k].end <= at(s, 4)).collect();
+    let lo = word.iter().filter_map(|&k| line.cl_left(k)).fold(f32::MAX, f32::min) + x;
+    let hi = word.iter().filter_map(|&k| line.cl_right(k)).fold(f32::MIN, f32::max) + x;
+    // The box's top edge spans the whole word, which reads right to left.
+    let top = display::page_display(&d, &l.pages[0], &Default::default())
+        .into_iter()
+        .filter_map(|it| match it {
+            display::Draw::Line { x0, y0, x1, y1, .. } if (y0 - y1).abs() < 0.01 && (x1 - x0).abs() > 1.0 => Some((x0.min(x1), x0.max(x1))),
+            _ => None,
+        })
+        .next()
+        .expect("a border");
+    assert!((top.0 - lo).abs() < 0.5 && (top.1 - hi).abs() < 0.5, "box {top:?} vs word {lo}..{hi}");
+}

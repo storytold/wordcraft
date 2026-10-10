@@ -240,7 +240,7 @@ impl DocLayout {
                     let Some(l) = para.lines.get(li) else { continue };
                     let from = if path == a.path { a.off.max(l.start) } else { l.start };
                     let to = if path == b.path { b.off.min(l.stop) } else { l.stop };
-                    if path == a.path && a.off > l.stop && !(l.stop == a.off) {
+                    if path == a.path && a.off > l.stop {
                         continue;
                     }
                     if path == b.path && b.off < l.start {

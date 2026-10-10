@@ -3,7 +3,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::props::{Align, Borders, CharProps, Highlight, LineSpacing, NumRef, ParaProps, Rgb, TabAlign, TabStop, TextColor, Underline, VertAlign};
+use crate::props::{
+    Align, Border, Borders, CharProps, Highlight, LineSpacing, NumRef, ParaProps, Rgb, TabAlign, TabStop, TextColor, Underline, VertAlign,
+};
 use crate::styles::{StyleKind, StyleSheet};
 
 /// Concrete character formatting.
@@ -21,6 +23,8 @@ pub struct ResolvedChar {
     pub color: TextColor,
     pub highlight: Option<Rgb>,
     pub shading: Option<Rgb>,
+    /// Visible character border only (`nil`/`none` resolve to `None`).
+    pub border: Option<Border>,
     pub vert_align: VertAlign,
     pub caps: bool,
     pub small_caps: bool,
@@ -62,6 +66,7 @@ impl ResolvedChar {
             color: c.color.unwrap_or_default(),
             highlight: c.highlight.and_then(Highlight::rgb),
             shading: c.shading,
+            border: c.border.filter(Border::is_visible),
             vert_align: c.vert_align.unwrap_or_default(),
             caps: c.caps.unwrap_or(false),
             small_caps: c.small_caps.unwrap_or(false),
