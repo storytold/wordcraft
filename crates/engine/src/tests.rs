@@ -246,7 +246,7 @@ fn applying_a_heading_clears_list_numbering() {
         );
         run(&mut s, style_cmd, json!({}));
         assert!(
-            !s.doc.para_at(&Pos::body(0, 0)).unwrap().props.numbering.is_some_and(|n| n.num != 0),
+            s.doc.para_at(&Pos::body(0, 0)).unwrap().props.numbering.is_none_or(|n| n.num == 0),
             "{style_cmd}: should clear direct list numbering"
         );
     }

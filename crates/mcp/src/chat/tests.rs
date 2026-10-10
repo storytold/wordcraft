@@ -314,7 +314,7 @@ fn the_client_command_is_the_environment_value_when_it_is_not_blank() {
         (None, default),
         (Some(""), default),
         (Some(" \t "), default),
-        (Some(" wordcraft-chat "), "wordcraft-chat"),
+        (Some(" my-wrapper "), "my-wrapper"),
         (Some("flatpak run --command=wordcraft-cli app.id chat"), "flatpak run --command=wordcraft-cli app.id chat"),
     ] {
         assert_eq!(client_command_from(value), want, "{value:?}");
@@ -327,9 +327,9 @@ fn the_briefing_shows_the_name_and_the_client_command() {
     assert!(b.starts_with("You are in the WordCraft chat as @claude.\n"), "{b}");
     assert!(b.contains("Run `wordcraft-cli chat listen` in the background and answer with `wordcraft-cli chat send \"…\"`."), "{b}");
     assert!(b.contains("\nwordcraft-cli chat (--as @claude): listen; send TEXT;"), "{b}");
-    let b = briefing("@pi", "wordcraft-chat");
-    assert!(b.contains("Run `wordcraft-chat listen` in the background and answer with `wordcraft-chat send \"…\"`."), "{b}");
-    assert!(b.contains("\nwordcraft-chat (--as @pi): listen;"), "{b}");
+    let b = briefing("@pi", "my-wrapper");
+    assert!(b.contains("Run `my-wrapper listen` in the background and answer with `my-wrapper send \"…\"`."), "{b}");
+    assert!(b.contains("\nmy-wrapper (--as @pi): listen;"), "{b}");
     assert!(!b.contains("wordcraft-cli") && !b.contains("{h}") && !b.contains("{c}"), "{b}");
     assert!(briefing("@pi", "run {h}").contains("\nrun {h} (--as @pi): listen;"), "the client command is not a template");
 }
