@@ -2391,6 +2391,22 @@ fn para_tabs_set_clear_and_undo() {
     assert!(s.run("para.tabs", &json!({"clear": "x"})).is_err());
 }
 
+/// #320: changing only the default tab interval (a document setting) is its own undo step,
+/// and redo puts it back.
+#[test]
+fn para_tabs_default_only_undoes() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "a\tb"}));
+    let before = s.doc.settings.default_tab;
+    run(&mut s, "para.tabs", json!({"default": 72.0}));
+    assert_eq!(s.doc.settings.default_tab, 72.0);
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.settings.default_tab, before, "undo restores the default interval");
+    assert!(text(&s).contains("a\tb"), "only the setting was undone");
+    run(&mut s, "edit.redo", json!({}));
+    assert_eq!(s.doc.settings.default_tab, 72.0, "redo sets it again");
+}
+
 /// #320: exact border sides with a style, for paragraphs and page borders.
 #[test]
 fn border_sides_apply_exactly() {
