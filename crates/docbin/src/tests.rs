@@ -27,6 +27,7 @@ pub(crate) struct FibSpec {
     pub(crate) nfib: u16,
     pub(crate) flags: u16,
     pub(crate) ccp_text: u32,
+    pub(crate) ccp_ftn: u32,
     pub(crate) ccp_hdd: u32,
     /// (pair index, fc, lcb) entries to poke into the RgFcLcb blob.
     pub(crate) pairs: Vec<(usize, u32, u32)>,
@@ -34,7 +35,7 @@ pub(crate) struct FibSpec {
 
 impl Default for FibSpec {
     fn default() -> Self {
-        FibSpec { nfib: 0x00C1, flags: 0x1000, ccp_text: 0, ccp_hdd: 0, pairs: Vec::new() }
+        FibSpec { nfib: 0x00C1, flags: 0x1000, ccp_text: 0, ccp_ftn: 0, ccp_hdd: 0, pairs: Vec::new() }
     }
 }
 
@@ -55,6 +56,7 @@ pub(crate) fn fib_bytes(spec: &FibSpec) -> Vec<u8> {
     put16(&mut v, 0x3E, 0x0016);
     put32(&mut v, 0x40, 0x1000); // cbMac
     put32(&mut v, 0x4C, spec.ccp_text); // rglw[3] = ccpText
+    put32(&mut v, 0x50, spec.ccp_ftn); // rglw[4] = ccpFtn
     put32(&mut v, 0x54, spec.ccp_hdd); // rglw[5] = ccpHdd
     put16(&mut v, 0x98, 0x005D);
     for (i, fc, lcb) in &spec.pairs {
@@ -221,7 +223,15 @@ fn special_characters_mapped() {
     let raw = "a\tb\u{B}c\u{C}d\u{E}e\u{1E}f\u{1F}g\r\u{13}field\u{14}result\u{15}\r";
     let f = text_doc(&[Piece { compressed: false, text: raw.into() }], &[], 0);
     let doc = read(&f).expect("opens");
-    assert_eq!(body_texts(&doc), ["a\tb\nc\u{C}d\u{E}e\u{2011}f\u{AD}g", "fieldresult"]);
+    // The field collapses to one anchor object; its instruction is hidden and its cached
+    // result kept on the object.
+    assert_eq!(body_texts(&doc), ["a\tb\nc\u{C}d\u{E}e\u{2011}f\u{AD}g", "\u{FFFC}"]);
+    let p1 = doc.body.get(1).and_then(|b| b.as_para()).expect("field para");
+    assert!(
+        matches!(p1.objects.first(), Some(wordcraft_doc::para::InlineObject::Field { instr, result, .. }) if instr == "field" && result == "result"),
+        "objects: {:?}",
+        p1.objects
+    );
 }
 
 #[test]
@@ -308,6 +318,23 @@ proptest! {
     #[test]
     fn structured_flipped_never_panics(pos in 0..8192usize, bit in 0..8usize) {
         let mut f = structured_doc();
+        let at = pos.min(f.len() - 1);
+        if let Some(b) = f.get_mut(at) {
+            *b ^= 1 << (bit & 7);
+        }
+        let _ = read(&f);
+    }
+
+    #[test]
+    fn extras_truncated_never_panics(n in 0..8192usize) {
+        let f = extras_doc();
+        let n = n.min(f.len());
+        let _ = read(&f[..n]);
+    }
+
+    #[test]
+    fn extras_flipped_never_panics(pos in 0..8192usize, bit in 0..8usize) {
+        let mut f = extras_doc();
         let at = pos.min(f.len() - 1);
         if let Some(b) = f.get_mut(at) {
             *b ^= 1 << (bit & 7);
@@ -639,6 +666,14 @@ struct StructSpec {
     plf_lst: Vec<u8>,
     /// Raw `PlfLfo` bytes for FIB pair 74.
     plf_lfo: Vec<u8>,
+    /// Footnote subdocument stories, placed right after the main text.
+    note_stories: Vec<&'static str>,
+    /// Endnote subdocument stories, placed after the header stories.
+    endnote_stories: Vec<&'static str>,
+    /// Extra raw Table-stream blobs with their FIB pair index.
+    extra_pairs: Vec<(usize, Vec<u8>)>,
+    /// The Data stream (pictures), written when non-empty.
+    data_stream: Vec<u8>,
 }
 
 fn struct_doc(spec: &StructSpec) -> Vec<u8> {
@@ -646,11 +681,21 @@ fn struct_doc(spec: &StructSpec) -> Vec<u8> {
     let ccp = text.chars().count() as u32;
     let mut all: Vec<Piece> = vec![Piece { compressed: false, text: text.clone() }];
     let mut story_ends = Vec::new();
+    let mut ftn_len = 0u32;
+    for s in &spec.note_stories {
+        let t: String = (*s).into();
+        ftn_len += t.chars().count() as u32;
+        all.push(Piece { compressed: false, text: t });
+    }
     let mut hdd_len = 0u32;
     for s in &spec.header_stories {
         let t: String = (*s).into();
         hdd_len += t.chars().count() as u32;
         story_ends.push(hdd_len);
+        all.push(Piece { compressed: false, text: t });
+    }
+    for s in &spec.endnote_stories {
+        let t: String = (*s).into();
         all.push(Piece { compressed: false, text: t });
     }
     let plc = plcpcd(&all, TEXT_FC);
@@ -734,6 +779,13 @@ fn struct_doc(spec: &StructSpec) -> Vec<u8> {
     let lfo_at = table.len();
     table.extend_from_slice(&spec.plf_lfo);
 
+    let mut extra_at = Vec::new();
+    for (i, blob) in &spec.extra_pairs {
+        let at = table.len() as u32;
+        table.extend_from_slice(blob);
+        extra_at.push((*i, at, blob.len() as u32));
+    }
+
     let mut pairs = vec![
         (33, clx_at as u32, clx.len() as u32),
         (1, stsh_at as u32, stsh.len() as u32),
@@ -749,14 +801,19 @@ fn struct_doc(spec: &StructSpec) -> Vec<u8> {
     if !spec.plf_lfo.is_empty() {
         pairs.push((74, lfo_at as u32, spec.plf_lfo.len() as u32));
     }
-    let spec_fib = FibSpec { ccp_text: ccp, ccp_hdd: hdd_len, pairs, ..Default::default() };
+    pairs.extend(extra_at);
+    let spec_fib = FibSpec { ccp_text: ccp, ccp_ftn: ftn_len, ccp_hdd: hdd_len, pairs, ..Default::default() };
     let fib = fib_bytes(&spec_fib);
     word[..fib.len()].copy_from_slice(&fib);
     word.extend(std::iter::repeat_n(0, first_sepx - word.len()));
     for sepx in sepxes {
         word.extend_from_slice(&sepx);
     }
-    cfb_file(&[("WordDocument", &word), ("0Table", &table)])
+    if spec.data_stream.is_empty() {
+        cfb_file(&[("WordDocument", &word), ("0Table", &table)])
+    } else {
+        cfb_file(&[("WordDocument", &word), ("0Table", &table), ("Data", &spec.data_stream)])
+    }
 }
 
 #[test]
@@ -769,6 +826,10 @@ fn section_props_parsed() {
         papx_entries: vec![(1, 0, Vec::new()), (3, 0, Vec::new())],
         plf_lst: Vec::new(),
         plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
     };
     let doc = read(&struct_doc(&spec)).expect("opens");
     // The single section ends at the text end: it becomes the document's last section.
@@ -787,6 +848,10 @@ fn two_sections_box_the_first() {
         papx_entries: vec![(5, 0, Vec::new()), (12, 0, Vec::new())],
         plf_lst: Vec::new(),
         plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
     };
     let doc = read(&struct_doc(&spec)).expect("opens");
     let p0 = doc.body.first().and_then(|b| b.as_para()).expect("para");
@@ -805,6 +870,10 @@ fn header_story_becomes_part() {
         papx_entries: vec![(4, 0, Vec::new())],
         plf_lst: Vec::new(),
         plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
     };
     let doc = read(&struct_doc(&spec)).expect("opens");
     let id = doc.last_section.headers.default.expect("odd header part");
@@ -852,6 +921,10 @@ fn table_assembled_from_marks() {
         ],
         plf_lst: Vec::new(),
         plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
     };
     let doc = read(&struct_doc(&spec)).expect("opens");
     let tbl = doc.body.iter().find_map(|b| b.as_table()).expect("table");
@@ -928,6 +1001,10 @@ fn table_merges_borders_shading() {
         ],
         plf_lst: Vec::new(),
         plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
     };
     let doc = read(&struct_doc(&spec)).expect("opens");
     let tbl = doc.body.iter().find_map(|b| b.as_table()).expect("table");
@@ -1015,6 +1092,10 @@ fn list_numbering_parsed() {
         papx_entries: vec![(4, 0, listed(false)), (8, 0, listed(false)), (14, 0, listed(true))],
         plf_lst: plf_lst(0x1000, false, &levels),
         plf_lfo: plf_lfo(0x1000),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
     };
     let doc = read(&struct_doc(&spec)).expect("opens");
     assert_eq!(doc.numbering.abstracts.len(), 1);
@@ -1063,6 +1144,10 @@ fn structured_doc() -> Vec<u8> {
         ],
         plf_lst: plf_lst(0x2000, false, &levels),
         plf_lfo: plf_lfo(0x2000),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
     };
     struct_doc(&spec)
 }
@@ -1090,4 +1175,192 @@ fn combined_structure_document() {
     assert!(json.get("body").is_some_and(|b| b.as_array().is_some_and(|a| !a.is_empty())));
     assert!(json.get("numbering").is_some_and(|n| n.get("nums").is_some_and(|x| x.as_array().is_some_and(|a| !a.is_empty()))));
     assert!(json.get("lastSection").is_some_and(|s| s.get("landscape") == Some(&serde_json::json!(true))));
+}
+
+// ---------------------------------------------------------------------------------------------
+// D4: notes, fields, bookmarks, images.
+
+/// A PLC: aCP[n+1] u32s followed by `data` bytes per element.
+fn plc(cps: &[u32], data: &[u8]) -> Vec<u8> {
+    let mut v = Vec::new();
+    for c in cps {
+        v.extend_from_slice(&c.to_le_bytes());
+    }
+    v.extend_from_slice(data);
+    v
+}
+
+/// A SttbfBkmk with the given names.
+fn sttbf_bkmk(names: &[&str]) -> Vec<u8> {
+    let mut v = 0xFFFFu16.to_le_bytes().to_vec();
+    v.extend_from_slice(&(names.len() as u16).to_le_bytes());
+    v.extend_from_slice(&0u16.to_le_bytes()); // cbExtra
+    for n in names {
+        v.extend_from_slice(&(n.chars().count() as u16).to_le_bytes());
+        for c in n.chars() {
+            v.extend_from_slice(&(c as u16).to_le_bytes());
+        }
+    }
+    v
+}
+
+#[test]
+fn footnote_reference_links_story_part() {
+    let text = "See\u{2} here\r";
+    let ccp = text.chars().count() as u32;
+    let spec = StructSpec {
+        text,
+        note_stories: vec!["Note body\r"],
+        // Pair 2 (PlcffndRef): the 0x02 sits at CP 3, auto-numbered. Pair 3 (PlcffndTxt):
+        // one story spanning the whole footnote subdocument.
+        extra_pairs: vec![(2, plc(&[3, ccp], &1u16.to_le_bytes())), (3, plc(&[0, 10], &[]))],
+        ..structured_spec(text, ccp)
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let p0 = doc.body.first().and_then(|b| b.as_para()).expect("para");
+    let note = p0.objects.first().expect("note ref object");
+    let wordcraft_doc::para::InlineObject::NoteRef { kind, id, .. } = note else { panic!("not a note: {note:?}") };
+    assert_eq!(*kind, wordcraft_doc::para::NoteKind::Footnote);
+    let part = doc.parts.get(id).expect("note part");
+    assert!(part.blocks.iter().any(|b| b.as_para().is_some_and(|p| p.text.contains("Note body"))), "note text: {:?}", part.blocks);
+    assert_eq!(part.kind, wordcraft_doc::PartKind::Footnote);
+}
+
+#[test]
+fn endnote_reference_links_story_part() {
+    let text = "Ref\u{2}\r";
+    let ccp = text.chars().count() as u32;
+    let spec = StructSpec {
+        text,
+        // A footnote story keeps the endnote subdocument at a non-zero offset.
+        note_stories: vec!["Ftn\r"],
+        endnote_stories: vec!["Endnote body\r"],
+        extra_pairs: vec![
+            (46, plc(&[3, ccp], &1u16.to_le_bytes())),
+            (47, plc(&[0, 13], &[])), // "Endnote body\r"
+        ],
+        ..structured_spec(text, ccp)
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let p0 = doc.body.first().and_then(|b| b.as_para()).expect("para");
+    let wordcraft_doc::para::InlineObject::NoteRef { kind, id, .. } = p0.objects.first().expect("note ref object") else { panic!("no note ref") };
+    assert_eq!(*kind, wordcraft_doc::para::NoteKind::Endnote);
+    let part = doc.parts.get(id).expect("endnote part");
+    assert!(part.blocks.iter().any(|b| b.as_para().is_some_and(|p| p.text.contains("Endnote body"))));
+}
+
+#[test]
+fn fields_and_hyperlinks() {
+    // A HYPERLINK field (result kept as linked text) and a PAGE field (inline object).
+    let text = "Go \u{13}HYPERLINK http://x\u{14}site\u{15} n\u{13}PAGE\u{14}3\u{15}.\r";
+    let ccp = text.chars().count() as u32;
+    let spec = structured_spec(text, ccp);
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let p0 = doc.body.first().and_then(|b| b.as_para()).expect("para");
+    assert_eq!(p0.text, "Go site n\u{FFFC}.");
+    // The hyperlink result run carries the target.
+    let linked = p0.runs.iter().find(|r| r.props.link.is_some()).expect("linked run");
+    assert_eq!(linked.props.link.as_deref(), Some("http://x"));
+    // The PAGE field became one object with its cached result.
+    let wordcraft_doc::para::InlineObject::Field { instr, result, .. } = p0.objects.first().expect("field object") else {
+        panic!("no field: {:?}", p0.objects)
+    };
+    assert_eq!(instr, "PAGE");
+    assert_eq!(result, "3");
+}
+
+#[test]
+fn bookmarks_become_objects() {
+    let text = "Hello world\r";
+    let ccp = text.chars().count() as u32;
+    let spec = StructSpec {
+        text,
+        extra_pairs: vec![(21, sttbf_bkmk(&["bm1"])), (22, plc(&[0, ccp], &[0, 0, 0, 0])), (23, plc(&[5, ccp], &[0, 0]))],
+        ..structured_spec(text, ccp)
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let p0 = doc.body.first().and_then(|b| b.as_para()).expect("para");
+    // The start anchor sits before the text, the end after "Hello".
+    assert!(
+        matches!(p0.objects.first(), Some(wordcraft_doc::para::InlineObject::BookmarkStart { name }) if name == "bm1"),
+        "objects: {:?}",
+        p0.objects
+    );
+    assert!(matches!(p0.objects.get(1), Some(wordcraft_doc::para::InlineObject::BookmarkEnd { name }) if name == "bm1"), "objects: {:?}", p0.objects);
+    assert_eq!(p0.text, "\u{FFFC}Hello\u{FFFC} world");
+}
+
+#[test]
+fn inline_png_picture() {
+    let text = "Pic\u{1}!\r";
+    let ccp = text.chars().count() as u32;
+    // A PICF header (68 bytes) with a 1×0.5-inch goal size, then PNG-ish bytes.
+    let png: Vec<u8> = [b"\x89PNG\r\n\x1a\n".as_slice(), &[0u8; 16]].concat();
+    let mut picf = vec![0u8; 0x44];
+    let lcb = (0x44 + png.len()) as u32;
+    picf[0..4].copy_from_slice(&lcb.to_le_bytes());
+    picf[4..6].copy_from_slice(&0x44u16.to_le_bytes());
+    picf[28..30].copy_from_slice(&1440i16.to_le_bytes()); // dxaGoal
+    picf[30..32].copy_from_slice(&720i16.to_le_bytes()); // dyaGoal
+    picf[32..34].copy_from_slice(&1000u16.to_le_bytes()); // mx = 100%
+    picf[34..36].copy_from_slice(&1000u16.to_le_bytes()); // my = 100%
+    let data: Vec<u8> = [picf, png.clone()].concat();
+    let spec = StructSpec { text, data_stream: data, chpx_runs: vec![(0, grpprl(&[(0x6A03, &0u32.to_le_bytes())]))], ..structured_spec(text, ccp) };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let p0 = doc.body.first().and_then(|b| b.as_para()).expect("para");
+    assert_eq!(p0.text, "Pic\u{FFFC}!");
+    let wordcraft_doc::para::InlineObject::Image { media, w, h, .. } = p0.objects.first().expect("image object") else {
+        panic!("no image: {:?}", p0.objects)
+    };
+    assert_eq!((*w, *h), (72.0, 36.0)); // 1440 × 720 twips
+    let bytes = doc.media.get(media).expect("media entry");
+    assert_eq!(bytes.as_slice(), png.as_slice());
+}
+
+/// The D4 hostile-input fixture: notes, a field, a bookmark and a picture in one file.
+fn extras_doc() -> Vec<u8> {
+    let png: Vec<u8> = [b"\x89PNG\r\n\x1a\n".as_slice(), &[0u8; 8]].concat();
+    let mut picf = vec![0u8; 0x44];
+    let lcb = (0x44 + png.len()) as u32;
+    picf[0..4].copy_from_slice(&lcb.to_le_bytes());
+    picf[4..6].copy_from_slice(&0x44u16.to_le_bytes());
+    picf[28..30].copy_from_slice(&720i16.to_le_bytes());
+    picf[30..32].copy_from_slice(&720i16.to_le_bytes());
+    picf[32..34].copy_from_slice(&1000u16.to_le_bytes());
+    picf[34..36].copy_from_slice(&1000u16.to_le_bytes());
+    let text: &'static str = "Box\u{2}\u{1}\u{13}PAGE\u{14}7\u{15}\r";
+    let ccp = text.chars().count() as u32;
+    let spec = StructSpec {
+        text,
+        note_stories: vec!["Note text\r"],
+        extra_pairs: vec![
+            (2, plc(&[3, ccp], &1u16.to_le_bytes())),
+            (3, plc(&[0, 10], &[])),
+            (21, sttbf_bkmk(&["bm"])),
+            (22, plc(&[0, ccp], &[0, 0, 0, 0])),
+            (23, plc(&[4, ccp], &[0, 0])),
+        ],
+        data_stream: [picf, png].concat(),
+        chpx_runs: vec![(0, grpprl(&[(0x6A03, &0u32.to_le_bytes())]))],
+        ..structured_spec(text, ccp)
+    };
+    struct_doc(&spec)
+}
+
+/// The shared base of the D4 fixtures: one Normal style, one mark, no sections extras.
+fn structured_spec(text: &'static str, ccp: u32) -> StructSpec {
+    StructSpec {
+        text,
+        header_stories: vec![],
+        sections: vec![(ccp, Vec::new())],
+        chpx_runs: vec![(0, Vec::new())],
+        // The PAPX entry key is the CP just past the paragraph mark.
+        papx_entries: vec![(ccp, 0, Vec::new())],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    }
 }

@@ -12,6 +12,8 @@ mod fib;
 mod fkp;
 mod fmt;
 mod list;
+mod media;
+mod notes;
 mod piece;
 mod sections;
 mod sprm;
@@ -20,6 +22,8 @@ mod table;
 
 use std::io::{Read, Seek};
 
+use wordcraft_doc::para::InlineObject;
+use wordcraft_doc::para::NoteKind;
 use wordcraft_doc::para::Paragraph;
 use wordcraft_doc::para::Run;
 use wordcraft_doc::props::CharProps;
@@ -37,6 +41,8 @@ use table::ParaOut;
 const MAX_STREAM: u64 = 1 << 30;
 /// Most header/footer parts we create (matches the docx reader's cap).
 const MAX_PARTS: usize = 50_000;
+/// `sprmCPicLocation`: the fc of a picture in the Data stream.
+const C_PIC_LOCATION: u16 = 0x6A03;
 /// `sprmPIlvl` / `sprmPIlfo`: the paragraph's list level and list.
 const P_ILVL: u16 = 0x260A;
 const P_ILFO: u16 = 0x460B;
@@ -101,6 +107,11 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocbinError> {
         None => Bins::parse(&[], 0, 0)?,
     };
 
+    let data = stream(&mut comp, "Data").unwrap_or_default();
+    if data.len() as u64 > MAX_STREAM {
+        return Err(DocbinError::Limit(format!("Data stream is {} bytes", data.len())));
+    }
+
     let mut doc = Document::new();
     doc.body.clear();
     doc.styles = fmt::stylesheet(&raw_styles, &fonts);
@@ -108,9 +119,24 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocbinError> {
     let sheet: StyleSheet = doc.styles.clone();
     let sects = sections::parse(&word, &table, &fib);
     let stories = sections::header_stories(&table, &fib);
-    // The header subdocument begins after the main text and the footnotes; its stories' CPs
-    // are relative to it.
+    // Subdocument layout in the CP space: main document, footnotes, headers, comments,
+    // endnotes, text boxes, header text boxes.
+    let ftn_base = fib.ccp.text;
     let hdd_base = fib.ccp.text + fib.ccp.ftn;
+    let edn_base = hdd_base + fib.ccp.hdd + fib.ccp.atn;
+
+    let ctx = WalkCtx {
+        word: &word,
+        data: &data,
+        pieces: &pieces,
+        chpx_bins: &chpx_bins,
+        papx_bins: &papx_bins,
+        fonts: &fonts,
+        raw_styles: &raw_styles,
+        sheet: &sheet,
+        notes: &[],
+        marks: &[],
+    };
 
     // Header and footer parts: skip the six separator stories, then six stories per section
     // in the order even header, odd (default) header, even footer, odd (default) footer,
@@ -126,7 +152,9 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocbinError> {
                 0 | 1 | 4 => PartKind::Header,
                 _ => PartKind::Footer,
             };
-            let out = walk(&word, &pieces, &chpx_bins, &papx_bins, hdd_base + a, hdd_base + b, &fonts, &raw_styles, &sheet);
+            let mut pending = Vec::new();
+            let mut out = walk(&ctx, hdd_base + a, hdd_base + b, &mut pending);
+            bind_media(&mut doc, &mut out, &mut pending);
             let blocks = table::assemble(out);
             if !blocks.is_empty() {
                 let id = doc.add_part(kind, blocks);
@@ -135,9 +163,36 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocbinError> {
         }
     }
 
+    // Footnote and endnote stories: each text range becomes a part; the reference CPs then
+    // link to the part ids during the main walk.
+    let mut note_links: Vec<(u32, NoteKind, u32)> = Vec::new();
+    for (cp, (a, b)) in notes::parse_notes(&table, &fib, fib::pair::PLCF_FND_REF, fib::pair::PLCF_FND_TXT) {
+        let mut pending = Vec::new();
+        let mut out = walk(&ctx, ftn_base + a, ftn_base + b, &mut pending);
+        bind_media(&mut doc, &mut out, &mut pending);
+        let blocks = table::assemble(out);
+        if !blocks.is_empty() && doc.parts.len() < MAX_PARTS {
+            let id = doc.add_part(PartKind::Footnote, blocks);
+            note_links.push((cp, NoteKind::Footnote, id));
+        }
+    }
+    for (cp, (a, b)) in notes::parse_notes(&table, &fib, fib::pair::PLCF_END_REF, fib::pair::PLCF_END_TXT) {
+        let mut pending = Vec::new();
+        let mut out = walk(&ctx, edn_base + a, edn_base + b, &mut pending);
+        bind_media(&mut doc, &mut out, &mut pending);
+        let blocks = table::assemble(out);
+        if !blocks.is_empty() && doc.parts.len() < MAX_PARTS {
+            let id = doc.add_part(PartKind::Endnote, blocks);
+            note_links.push((cp, NoteKind::Endnote, id));
+        }
+    }
+    let marks = notes::parse_bookmarks(&table, &fib);
+    let ctx = WalkCtx { notes: &note_links, marks: &marks, ..ctx };
+
     // Sections: each section's properties attach to the paragraph that ends it (its story of
     // header/footer parts included); the section reaching the end of the text is the final one.
-    let mut paras = walk(&word, &pieces, &chpx_bins, &papx_bins, 0, fib.ccp.text, &fonts, &raw_styles, &sheet);
+    let mut pending_media = Vec::new();
+    let mut paras = walk(&ctx, 0, fib.ccp.text, &mut pending_media);
     let last = sects.last().map(|s| s.props.clone());
     for (si, sec) in sects.iter().enumerate() {
         let mut props = sec.props.clone();
@@ -163,9 +218,42 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocbinError> {
         doc.last_section = l;
     }
 
+    bind_media(&mut doc, &mut paras, &mut pending_media);
+
     doc.body = table::assemble(paras);
     doc.ensure_nonempty();
     Ok(doc)
+}
+
+/// Bind the pictures a walk collected to media entries, in encounter order.
+fn bind_media(doc: &mut Document, paras: &mut [table::ParaOut], pending: &mut Vec<media::Picture>) {
+    let mut it = pending.drain(..);
+    for p in paras.iter_mut() {
+        for o in p.para.objects.iter_mut() {
+            if let InlineObject::Image { media: key, .. } = o
+                && key.is_empty()
+                && let Some(pic) = it.next()
+            {
+                *key = doc.add_media(pic.bytes, pic.ext);
+            }
+        }
+    }
+}
+
+/// Everything the walker needs besides its CP range.
+struct WalkCtx<'a> {
+    word: &'a [u8],
+    data: &'a [u8],
+    pieces: &'a PieceTable,
+    chpx_bins: &'a Bins,
+    papx_bins: &'a Bins,
+    fonts: &'a [String],
+    raw_styles: &'a [stsh::RawStyle],
+    sheet: &'a StyleSheet,
+    /// (reference CP in the main document, kind, part id) for notes.
+    notes: &'a [(u32, NoteKind, u32)],
+    /// Bookmark boundaries (main-document CPs), sorted for a sequential walk.
+    marks: &'a [(u32, notes::Mark)],
 }
 
 /// State while assembling one paragraph from per-CP formatting.
@@ -177,6 +265,8 @@ struct ParaBuild {
     mark: CharProps,
     /// The current run's properties, so runs only break when formatting changes.
     cur: Option<CharProps>,
+    /// Inline objects, each anchored at a U+FFFC pushed into `text`.
+    objects: Vec<InlineObject>,
 }
 
 impl ParaBuild {
@@ -199,30 +289,38 @@ impl ParaBuild {
 
 /// Walk a CP range, splitting paragraphs at 0x0D/0x07 marks, applying the direct character
 /// formatting of each CP and the paragraph formatting of each mark. Works for the main
-/// document and for any subdocument range (headers, footers, notes…).
-fn walk(
-    word: &[u8],
-    pieces: &PieceTable,
-    chpx_bins: &Bins,
-    papx_bins: &Bins,
-    cp_start: u32,
-    cp_end: u32,
-    fonts: &[String],
-    raw_styles: &[stsh::RawStyle],
-    sheet: &StyleSheet,
-) -> Vec<ParaOut> {
+/// document and for any subdocument range (headers, footers, notes…). Field characters,
+/// note references, bookmarks and inline pictures become inline objects; collected
+/// pictures are appended to `pending` for the caller to bind to media entries.
+fn walk(ctx: &WalkCtx, cp_start: u32, cp_end: u32, pending: &mut Vec<media::Picture>) -> Vec<ParaOut> {
     let mut out = Vec::new();
     let mut pb = ParaBuild::default();
     let mut cp = cp_start;
+    let mut marks = ctx.marks.iter().peekable();
+    // Field assembly state: instruction characters are swallowed, the result is kept until
+    // the end character, then emitted as one object (hyperlinks keep their result text).
+    let mut field: Option<FieldBuild> = None;
     while cp < cp_end {
-        let c = pieces.text(word, cp, cp + 1).chars().next().unwrap_or('\u{FFFD}');
+        // Bookmark boundaries at this CP (main-document walks only; subdocument walks get
+        // an empty table and `cp` never matches the main-document CPs).
+        while marks.peek().is_some_and(|&(mcp, _)| *mcp == cp) {
+            if let Some((_, m)) = marks.next() {
+                let obj = match m {
+                    notes::Mark::Start(name) => InlineObject::BookmarkStart { name: name.clone() },
+                    notes::Mark::End(name) => InlineObject::BookmarkEnd { name: name.clone() },
+                };
+                pb.push('\u{FFFC}', CharProps::default());
+                pb.objects.push(obj);
+            }
+        }
+        let c = ctx.pieces.text(ctx.word, cp, cp + 1).chars().next().unwrap_or('\u{FFFD}');
         match c {
             '\r' | '\u{7}' => {
                 // Paragraph mark: its PAPX (queried at the FC of the *next* character)
                 // carries the paragraph's style and direct formatting; its CHPX the mark's.
-                let fc_next = pieces.fc_of_cp(cp).and_then(|f| f.checked_add(2)).unwrap_or(0);
-                let (istd, papx) = papx_bins.papx(word, fc_next);
-                if let Some(st) = raw_styles.get(istd as usize).filter(|s| !s.name.is_empty()) {
+                let fc_next = ctx.pieces.fc_of_cp(cp).and_then(|f| f.checked_add(2)).unwrap_or(0);
+                let (istd, papx) = ctx.papx_bins.papx(ctx.word, fc_next);
+                if let Some(st) = ctx.raw_styles.get(istd as usize).filter(|s| !s.name.is_empty()) {
                     pb.props.style = Some(fmt::style_id(&st.name));
                 }
                 let mut row = table::decode(papx);
@@ -248,36 +346,172 @@ fn walk(
                 if let Some(num) = num_of(ilfo) {
                     pb.props.numbering = Some(NumRef { num, level: ilvl });
                 }
-                let fc = pieces.fc_of_cp(cp).unwrap_or(0);
-                pb.mark = char_props(chpx_bins.chpx(word, fc), fonts, &CharProps::default());
+                let fc = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
+                pb.mark = char_props(ctx.chpx_bins.chpx(ctx.word, fc), ctx.fonts, &CharProps::default());
                 let done = std::mem::take(&mut pb);
                 out.push(ParaOut {
-                    para: Paragraph { text: done.text, runs: done.runs, props: done.props, mark: done.mark, ..Default::default() },
+                    para: Paragraph {
+                        text: done.text,
+                        runs: done.runs,
+                        props: done.props,
+                        mark: done.mark,
+                        objects: done.objects,
+                        ..Default::default()
+                    },
                     end_cp: cp + 1,
                     row,
                 });
             }
-            '\t' => push_formatted(&mut pb, cp, '\t', word, pieces, chpx_bins, fonts, sheet),
-            '\u{B}' => push_formatted(&mut pb, cp, '\n', word, pieces, chpx_bins, fonts, sheet),
-            '\u{C}' => push_formatted(&mut pb, cp, '\u{C}', word, pieces, chpx_bins, fonts, sheet),
-            '\u{E}' => push_formatted(&mut pb, cp, '\u{E}', word, pieces, chpx_bins, fonts, sheet),
-            '\u{1E}' => push_formatted(&mut pb, cp, '\u{2011}', word, pieces, chpx_bins, fonts, sheet),
-            '\u{1F}' => push_formatted(&mut pb, cp, '\u{AD}', word, pieces, chpx_bins, fonts, sheet),
-            // Field characters (0x13/0x14/0x15), object anchors and note references
-            // (0x01–0x08) are handled by later passes; for now they are dropped.
+            // Field begin/separator/end ([MS-DOC] §2.9.84 Plcfld).
+            '\u{13}' => {
+                match field.as_mut() {
+                    Some(f) => {
+                        f.depth = f.depth.saturating_add(1);
+                    }
+                    None => field = Some(FieldBuild { depth: 1, instr: String::new(), sep: None }),
+                }
+                cp += 1;
+                continue;
+            }
+            '\u{14}' => {
+                if let Some(f) = field.as_mut()
+                    && f.depth == 1
+                    && f.sep.is_none()
+                {
+                    f.sep = Some(Vec::new());
+                }
+                cp += 1;
+                continue;
+            }
+            '\u{15}' => {
+                if let Some(mut f) = field.take() {
+                    if f.depth > 1 {
+                        f.depth -= 1;
+                        field = Some(f);
+                    } else {
+                        finish_field(&mut pb, f);
+                    }
+                }
+                cp += 1;
+                continue;
+            }
+            '\u{1}' => {
+                // Inline picture: the CHPX of the anchor carries sprmCPicLocation.
+                let fc = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
+                let fc_pic = pic_location(ctx.chpx_bins.chpx(ctx.word, fc));
+                let pic = fc_pic.and_then(|at| media::read(ctx.data, at));
+                match pic {
+                    Some(pic) => {
+                        pb.push('\u{FFFC}', CharProps::default());
+                        pb.objects.push(InlineObject::Image {
+                            media: String::new(),
+                            w: pic.w,
+                            h: pic.h,
+                            alt: String::new(),
+                            float: Default::default(),
+                            crop: [0.0; 4],
+                        });
+                        pending.push(pic);
+                    }
+                    None => log::warn!("docbin: picture at CP {cp} could not be read and was dropped"),
+                }
+            }
+            '\u{2}' => {
+                // Footnote or endnote reference; custom symbols share the same character.
+                if let Some((_, kind, id)) = ctx.notes.iter().find(|(c, _, _)| *c == cp) {
+                    pb.push('\u{FFFC}', CharProps::default());
+                    pb.objects.push(InlineObject::NoteRef { kind: *kind, id: *id, custom: String::new() });
+                }
+            }
+            '\t' => push_formatted(&mut pb, cp, '\t', ctx, field.as_mut()),
+            '\u{B}' => push_formatted(&mut pb, cp, '\n', ctx, field.as_mut()),
+            '\u{C}' => push_formatted(&mut pb, cp, '\u{C}', ctx, field.as_mut()),
+            '\u{E}' => push_formatted(&mut pb, cp, '\u{E}', ctx, field.as_mut()),
+            '\u{1E}' => push_formatted(&mut pb, cp, '\u{2011}', ctx, field.as_mut()),
+            '\u{1F}' => push_formatted(&mut pb, cp, '\u{AD}', ctx, field.as_mut()),
+            // Object anchors, comment references and other special characters are dropped
+            // (or handled by later passes).
             c if (c as u32) < 0x20 => {}
-            c => push_formatted(&mut pb, cp, c, word, pieces, chpx_bins, fonts, sheet),
+            c => push_formatted(&mut pb, cp, c, ctx, field.as_mut()),
         }
         cp += c.len_utf16().max(1) as u32;
     }
     if !pb.text.is_empty() {
+        let done = pb;
         out.push(ParaOut {
-            para: Paragraph { text: pb.text, runs: pb.runs, props: pb.props, mark: pb.mark, ..Default::default() },
+            para: Paragraph { text: done.text, runs: done.runs, props: done.props, mark: done.mark, objects: done.objects, ..Default::default() },
             end_cp: cp_end,
             row: table::RowInfo::default(),
         });
     }
     out
+}
+
+/// Field assembly: `instr` collects everything before the separator (nested fields
+/// flattened), `sep` holds the cached result once the separator was seen.
+struct FieldBuild {
+    depth: u32,
+    instr: String,
+    sep: Option<Vec<(char, CharProps)>>,
+}
+
+/// Emit a finished field: HYPERLINK keeps its result text as a linked run; every other
+/// field becomes one inline object with its cached result.
+fn finish_field(pb: &mut ParaBuild, f: FieldBuild) {
+    let instr = f.instr.trim().to_string();
+    let result = f.sep.unwrap_or_default();
+    let result_text: String = result.iter().map(|(c, _)| *c).collect();
+    if let Some(target) = hyperlink_target(&instr) {
+        for (c, mut props) in result {
+            props.link = Some(target.clone());
+            pb.push(c, props);
+        }
+        return;
+    }
+    pb.push('\u{FFFC}', CharProps::default());
+    pb.objects.push(InlineObject::Field { instr, result: result_text, locked: false });
+}
+
+/// `HYPERLINK "url"` / `HYPERLINK url \l "bookmark"` → the model link target
+/// (`#bookmark` for internal links); `None` when not a hyperlink.
+fn hyperlink_target(instr: &str) -> Option<String> {
+    let rest = instr.strip_prefix("HYPERLINK").or_else(|| instr.strip_prefix("hyperlink"))?;
+    let rest = rest.strip_prefix(' ').unwrap_or(rest);
+    if rest.is_empty() {
+        return None;
+    }
+    let mut quoted = None;
+    let mut local = None;
+    let mut tokens = rest.split_whitespace().peekable();
+    while let Some(tok) = tokens.next() {
+        match tok {
+            "\\l" => {
+                local = Some(tokens.next().unwrap_or_default().trim_matches('"').to_string());
+            }
+            "\\o" | "\\m" | "\\n" | "\\t" => {
+                let _ = tokens.next();
+            }
+            _ if quoted.is_none() => quoted = Some(tok.trim_matches('"').to_string()),
+            _ => {}
+        }
+    }
+    Some(match local {
+        Some(name) if !name.is_empty() => format!("#{name}"),
+        _ => quoted.unwrap_or_default(),
+    })
+}
+
+/// `sprmCPicLocation` from a CHPX grpprl: the fc of the picture in the Data stream.
+fn pic_location(chpx: &[u8]) -> Option<u32> {
+    for prl in sprm::iter(chpx) {
+        if prl.op == C_PIC_LOCATION {
+            return match prl.operand {
+                [b0, b1, b2, b3, ..] => Some(u32::from_le_bytes([*b0, *b1, *b2, *b3])),
+                _ => None,
+            };
+        }
+    }
+    None
 }
 
 /// `sprmPIlfo` operand → the num id, if the paragraph is in a list. Values 0xF802-0xFFFF are
@@ -292,14 +526,24 @@ fn num_of(ilfo: i32) -> Option<u32> {
 }
 
 /// Resolve the character properties for the character at `cp`: the CHPX grpprl of its FC,
-/// plus the piece's Prm, over the paragraph style's base character props.
-fn push_formatted(pb: &mut ParaBuild, cp: u32, c: char, word: &[u8], pieces: &PieceTable, chpx_bins: &Bins, fonts: &[String], sheet: &StyleSheet) {
-    let fc = pieces.fc_of_cp(cp).unwrap_or(0);
-    let grpprl = chpx_bins.chpx(word, fc);
-    let base = pb.props.style.as_deref().and_then(|id| sheet.get(id)).map(|s| s.chr.clone()).unwrap_or_default();
-    let mut props = char_props(grpprl, fonts, &base);
-    apply_prm(&mut props, pieces.piece_prm(cp), fonts, &base);
-    pb.push(c, props);
+/// plus the piece's Prm, over the paragraph style's base character props. Inside a field,
+/// the character is recorded into the instruction or the cached result instead of (or as
+/// well as) the visible text.
+fn push_formatted(pb: &mut ParaBuild, cp: u32, c: char, ctx: &WalkCtx, field: Option<&mut FieldBuild>) {
+    let fc = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
+    let grpprl = ctx.chpx_bins.chpx(ctx.word, fc);
+    let base = pb.props.style.as_deref().and_then(|id| ctx.sheet.get(id)).map(|s| s.chr.clone()).unwrap_or_default();
+    let mut props = char_props(grpprl, ctx.fonts, &base);
+    apply_prm(&mut props, ctx.pieces.piece_prm(cp), ctx.fonts, &base);
+    match field {
+        Some(f) => match f.sep.as_mut() {
+            // Inside a field, characters are recorded for the field object instead of shown;
+            // `finish_field` emits the visible text (hyperlink runs or one object anchor).
+            Some(result) => result.push((c, props)),
+            None => f.instr.push(c),
+        },
+        None => pb.push(c, props),
+    }
 }
 
 /// Apply a piece's Prm (Prm0 short sprm or Prm1 grpprl) to character properties.
