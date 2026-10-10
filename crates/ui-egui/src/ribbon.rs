@@ -9,8 +9,22 @@ use crate::{WordApp, icons};
 
 pub const TABS: [&str; 11] = ["File", "Home", "Insert", "Draw", "Design", "Layout", "References", "Mailings", "Review", "View", "Help"];
 
-fn in_table(app: &WordApp) -> bool {
-    app.session.sel.focus.path.cell().is_some()
+/// True when the caret/selection touches a picture (#147).
+pub fn has_picture_selected(s: &wordcraft_engine::Session) -> bool {
+    matches!(wordcraft_engine::cmd::objects::selected(s), Some((_, wordcraft_doc::para::InlineObject::Image { .. })))
+}
+
+/// Contextual tabs for the current selection (pure, tested).
+pub fn contextual_tabs(s: &wordcraft_engine::Session) -> Vec<&'static str> {
+    let mut tabs = Vec::new();
+    if s.sel.focus.path.cell().is_some() {
+        tabs.push("Table Design");
+        tabs.push("Table Layout");
+    }
+    if has_picture_selected(s) {
+        tabs.push("Picture Format");
+    }
+    tabs
 }
 
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
@@ -23,12 +37,13 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
                 let mut tabs: Vec<&str> = TABS.to_vec();
-                if in_table(app) {
-                    tabs.push("Table Design");
-                    tabs.push("Table Layout");
+                for ct in contextual_tabs(&app.session) {
+                    if !tabs.contains(&ct) {
+                        tabs.push(ct);
+                    }
                 }
                 for tab in tabs {
-                    let contextual = tab.starts_with("Table ");
+                    let contextual = tab.starts_with("Table ") || tab == "Picture Format";
                     let shown = tl!(tab);
                     let w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(shown.to_string(), medium(12.5), t.text).size().x) + 18.0;
                     let (r, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
@@ -113,6 +128,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         "Help" => help(app, ui),
                         "Table Design" => table_design(app, ui),
                         "Table Layout" => table_layout(app, ui),
+                        "Picture Format" => picture_format(app, ui),
                         _ => home(app, ui),
                     }
                 });
@@ -925,6 +941,105 @@ fn help(app: &mut WordApp, ui: &mut Ui) {
     });
 }
 
+fn picture_format(app: &mut WordApp, ui: &mut Ui) {
+    group(ui, "Adjust", None, app, |ui, app| {
+        menu_button(ui, app, "picture", Some("Corrections"), "Brightness, contrast and sharpness", true, |ui, app| {
+            for (l, b, c) in
+                [("Brighter +20%", 20.0, 0.0), ("Darker −20%", -20.0, 0.0), ("More Contrast +20%", 0.0, 20.0), ("Less Contrast −20%", 0.0, -20.0)]
+            {
+                mi(ui, app, l, "picture.corrections", json!({"brightness": b, "contrast": c}));
+            }
+            ui.separator();
+            mi(ui, app, "Sharpen", "picture.corrections", json!({"sharpen": 40.0}));
+            mi(ui, app, "Soften", "picture.corrections", json!({"sharpen": -40.0}));
+        });
+        menu_button(ui, app, "picture", Some("Color"), "Saturation and recolor", true, |ui, app| {
+            for (l, v) in [("Full Saturation 100%", 100.0), ("Muted 50%", 50.0), ("Gray 0%", 0.0), ("Vivid 200%", 200.0)] {
+                mi(ui, app, l, "picture.color", json!({"mode": "saturation", "saturation": v}));
+            }
+            ui.separator();
+            mi(ui, app, "Grayscale", "picture.color", json!({"mode": "grayscale"}));
+            mi(ui, app, "Sepia", "picture.color", json!({"mode": "sepia"}));
+            mi(ui, app, "Washout", "picture.color", json!({"mode": "washout"}));
+        });
+        menu_button(ui, app, "picture", Some("Transparency"), "Picture transparency", true, |ui, app| {
+            for v in [0.0, 15.0, 30.0, 50.0, 65.0, 80.0, 95.0] {
+                mi(ui, app, &format!("{v:.0}%"), "picture.transparency", json!({"percent": v}));
+            }
+        });
+        stack(ui, |ui| {
+            small(ui, app, "picture", Some("Change"), "Change Picture", "ui.changePicture", json!({}), false);
+            small(ui, app, "picture", Some("Reset"), "Reset Picture", "picture.reset", json!({}), false);
+        });
+    });
+    group(ui, "Picture Styles", None, app, |ui, app| {
+        menu_button(ui, app, "picture", Some("Styles"), "Frames and effects", true, |ui, app| {
+            for (l, s) in [
+                ("Simple Frame", "simpleFrame"),
+                ("Thick Frame", "thickFrame"),
+                ("Rounded", "rounded"),
+                ("Soft Edge", "softEdge"),
+                ("Shadow", "shadow"),
+            ] {
+                mi(ui, app, l, "picture.style", json!({"style": s}));
+            }
+        });
+        menu_button(ui, app, "picture", Some("Border"), "Picture border", true, |ui, app| {
+            for (l, w) in [("Thin", 2), ("Medium", 4), ("Thick", 8)] {
+                mi(ui, app, l, "picture.border", json!({"width": w}));
+            }
+        });
+    });
+    group(ui, "Arrange", None, app, |ui, app| {
+        big(ui, app, "position", "Position", "arrange.position", json!({}), false);
+        big(ui, app, "wrapText", "Wrap\nText", "arrange.wrap", json!({}), false);
+        stack(ui, |ui| {
+            small(ui, app, "rotate", Some("Rotate"), "Rotate", "arrange.rotate", json!({}), false);
+            small(ui, app, "align", Some("Align"), "Align", "arrange.align", json!({}), false);
+        });
+    });
+    group(ui, "Size", None, app, |ui, app| {
+        let (w0, h0, alt0) = match wordcraft_engine::cmd::objects::selected(&app.session) {
+            Some((_, wordcraft_doc::para::InlineObject::Image { w, h, alt, .. })) => (w, h, alt),
+            _ => (0.0, 0.0, String::new()),
+        };
+        stack(ui, |ui| {
+            crate::widgets::row(ui, |ui| {
+                ui.label(egui::RichText::new(tl!("W:")).small());
+                let mut w = w0;
+                if ui.add(egui::DragValue::new(&mut w).speed(1.0).range(4.0..=2000.0).suffix(" pt")).changed() {
+                    let _ = app.run("picture.size", json!({"width": w}));
+                }
+                ui.label(egui::RichText::new(tl!("H:")).small());
+                let mut h = h0;
+                if ui.add(egui::DragValue::new(&mut h).speed(1.0).range(4.0..=2000.0).suffix(" pt")).changed() {
+                    let _ = app.run("picture.size", json!({"height": h}));
+                }
+            });
+            ui.add_space(2.0);
+            crate::widgets::row(ui, |ui| {
+                ui.label(egui::RichText::new(tl!("Crop %:")).small());
+                let mut c = 0.0;
+                if ui.add(egui::DragValue::new(&mut c).speed(1.0).range(0.0..=45.0).suffix("%")).changed() {
+                    let v = c / 100.0;
+                    let _ = app.run("picture.crop", json!({"left": v, "top": v, "right": v, "bottom": v}));
+                }
+                if ui.button(egui::RichText::new(tl!("Reset Crop")).small()).clicked() {
+                    let _ = app.run("picture.crop", json!({"left": 0.0, "top": 0.0, "right": 0.0, "bottom": 0.0}));
+                }
+            });
+            ui.add_space(2.0);
+            crate::widgets::row(ui, |ui| {
+                ui.label(egui::RichText::new(tl!("Alt:")).small());
+                let mut alt = alt0;
+                if ui.add(egui::TextEdit::singleline(&mut alt).desired_width(120.0)).lost_focus() {
+                    let _ = app.run("picture.altText", json!({"text": alt}));
+                }
+            });
+        });
+    });
+}
+
 fn table_design(app: &mut WordApp, ui: &mut Ui) {
     let look = app.session.sel.focus.path.cell().and_then(|(tp, _, _)| app.session.doc.table(app.session.sel.focus.story, &tp).map(|t| t.props.look));
     group(ui, "Table Style Options", None, app, |ui, app| {
@@ -1063,4 +1178,32 @@ fn table_layout(app: &mut WordApp, ui: &mut Ui) {
             small(ui, app, "formula", Some("Formula"), "Formula", "table.formula", json!({}), false);
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wordcraft_engine::Session;
+
+    fn png_data() -> String {
+        let img = image::RgbaImage::from_fn(20, 10, |x, y| {
+            if x > 2 && x < 17 && y > 2 && y < 7 { image::Rgba([200, 30, 30, 255]) } else { image::Rgba([255, 255, 255, 255]) }
+        });
+        let mut b = Vec::new();
+        image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png).unwrap();
+        wordcraft_engine::cmd::insert::base64_encode(&b)
+    }
+
+    #[test]
+    fn picture_format_tab_appears_when_picture_selected() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        assert!(!has_picture_selected(&s));
+        assert!(!contextual_tabs(&s).contains(&"Picture Format"));
+        s.run("insert.picture", &json!({"data": png_data()})).unwrap();
+        assert!(has_picture_selected(&s));
+        assert!(contextual_tabs(&s).contains(&"Picture Format"));
+        s.run("select.collapse", &json!({"end": true})).unwrap();
+        s.run("text.insert", &json!({"text": "x"})).unwrap();
+        assert!(!has_picture_selected(&s));
+    }
 }

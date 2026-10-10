@@ -100,6 +100,8 @@ pub struct WordApp {
     pub dialog: Option<dialogs::Dialog>,
     pub status_msg: Option<(String, f64)>,
     pub previews: previews::Previews,
+    /// A picture is selected and the next picked image replaces it (#147).
+    pub change_picture_pending: bool,
     /// macOS: the window has no title bar; leave room for the traffic lights.
     pub integrated_titlebar: bool,
     control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
@@ -144,6 +146,7 @@ impl WordApp {
             autosave: true,
             word_count: (0, 0),
             last_autosave: 0.0,
+            change_picture_pending: false,
         }
     }
 
@@ -267,6 +270,11 @@ impl WordApp {
                 self.dialog = None;
                 json!({})
             }
+            "ui.changePicture" => {
+                self.change_picture_pending = crate::ribbon::has_picture_selected(&self.session);
+                self.pick_picture();
+                json!({"pending": self.change_picture_pending})
+            }
             "ui.collapseRibbon" => {
                 self.ui.ribbon_collapsed = !self.ui.ribbon_collapsed;
                 json!({"collapsed": self.ui.ribbon_collapsed})
@@ -332,7 +340,17 @@ impl WordApp {
         }
         let picked = self.services.pick_open.as_ref().and_then(|f| f("picture"));
         if let Some(path) = picked {
-            let _ = self.run("insert.picture", json!({"path": path}));
+            let pending = std::mem::take(&mut self.change_picture_pending);
+            let r = if pending && crate::ribbon::has_picture_selected(&self.session) {
+                self.run("picture.change", json!({"path": path}))
+            } else {
+                self.run("insert.picture", json!({"path": path}))
+            };
+            if r.is_err() {
+                self.change_picture_pending = false;
+            }
+        } else {
+            self.change_picture_pending = false;
         }
     }
 
@@ -460,7 +478,14 @@ impl WordApp {
             let lower = name.to_ascii_lowercase();
             let data = wordcraft_engine::cmd::insert::base64_encode(&bytes);
             let img = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"].iter().any(|e| lower.ends_with(e));
-            let r = if img { self.run("insert.picture", json!({"data": data})) } else { self.run("file.open", json!({"path": name, "data": data})) };
+            let pending = std::mem::take(&mut self.change_picture_pending);
+            let r = if img && pending && crate::ribbon::has_picture_selected(&self.session) {
+                self.run("picture.change", json!({"data": data}))
+            } else if img {
+                self.run("insert.picture", json!({"data": data}))
+            } else {
+                self.run("file.open", json!({"path": name, "data": data}))
+            };
             if r.is_ok() {
                 self.ui.backstage = false;
             }
