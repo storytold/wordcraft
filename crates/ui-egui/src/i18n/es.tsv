@@ -1327,3 +1327,16 @@
 	Flip Vertical	Voltear verticalmente
 	Flip Horizontal	Voltear horizontalmente
 	Formatted	Con formato
+	Lasso Select	Selección con lazo
+	Move Selected Ink	Mover la tinta seleccionada
+	Delete Selected Ink	Eliminar la tinta seleccionada
+	Recolor Selected Ink	Cambiar el color de la tinta seleccionada
+	Add Pen	Agregar pluma
+	Remove Pen	Quitar pluma
+	Ink to Shape	Tinta a forma
+	Convert to Shapes	Convertir en formas
+	Ink Replay	Reproducir tinta
+	Add\nPen	Agregar\npluma
+	Rewind	Rebobinar
+	Forward	Avanzar
+	Stroke {n} of {total}	Trazo {n} de {total}

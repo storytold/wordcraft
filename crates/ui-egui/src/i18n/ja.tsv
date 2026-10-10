@@ -1311,3 +1311,16 @@
 	Flip Vertical	上下反転
 	Flip Horizontal	左右反転
 	Formatted	書式変更
+	Lasso Select	なげなわ選択
+	Move Selected Ink	選択したインクを移動
+	Delete Selected Ink	選択したインクを削除
+	Recolor Selected Ink	選択したインクの色を変更
+	Add Pen	ペンの追加
+	Remove Pen	ペンの削除
+	Ink to Shape	インクを図形に変換
+	Convert to Shapes	図形に変換
+	Ink Replay	インクの再生
+	Add\nPen	ペンの\n追加
+	Rewind	巻き戻し
+	Forward	早送り
+	Stroke {n} of {total}	ストローク {n}/{total}

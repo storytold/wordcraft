@@ -1323,3 +1323,16 @@
 	Flip Vertical	Віддзеркалити по вертикалі
 	Flip Horizontal	Віддзеркалити по горизонталі
 	Formatted	Відформатовано
+	Lasso Select	Виділення ласо
+	Move Selected Ink	Перемістити виділений рукопис
+	Delete Selected Ink	Видалити виділений рукопис
+	Recolor Selected Ink	Змінити колір виділеного рукопису
+	Add Pen	Додати перо
+	Remove Pen	Вилучити перо
+	Ink to Shape	Рукопис у фігуру
+	Convert to Shapes	Перетворити на фігури
+	Ink Replay	Відтворити рукопис
+	Add\nPen	Додати\nперо
+	Rewind	На початок
+	Forward	Вперед
+	Stroke {n} of {total}	Штрих {n} з {total}

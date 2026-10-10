@@ -1230,7 +1230,8 @@ fn list_level_overrides_round_trip() {
 }
 
 /// Ink strokes and freeform shapes are written as DrawingML custom geometry (`a:custGeom`,
-/// `a:moveTo`/`a:lnTo`) in floating drawings and read back with their points, pen and opacity.
+/// `a:moveTo`/`a:lnTo`) in floating drawings and read back with their points, pen, opacity and
+/// drawing order.
 #[test]
 fn ink_and_freeforms_round_trip_as_custom_geometry() {
     use wordcraft_doc::freeform::{FreePath, Freeform, InkTool};
@@ -1246,7 +1247,13 @@ fn ink_and_freeforms_round_trip_as_custom_geometry() {
         freeform: Some(Arc::new(f)),
         effects: Default::default(),
     };
-    let pen = shape(None, 2.0, Wrap::InFrontOfText, Freeform::ink(InkTool::Pen, 60.0, 20.0, vec![[1.0, 1.0], [30.0, 19.0], [59.0, 4.0]]));
+    // The pen stroke was the seventh drawn: Ink Replay's order comes back too.
+    let pen = shape(
+        None,
+        2.0,
+        Wrap::InFrontOfText,
+        Freeform { order: Some(7), ..Freeform::ink(InkTool::Pen, 60.0, 20.0, vec![[1.0, 1.0], [30.0, 19.0], [59.0, 4.0]]) },
+    );
     let marker = shape(None, 12.0, Wrap::BehindText, Freeform::ink(InkTool::Highlighter, 80.0, 12.0, vec![[6.0, 6.0], [74.0, 6.0]]));
     let triangle = Freeform {
         w: 40.0,

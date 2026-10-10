@@ -50,6 +50,8 @@ pub struct CanvasState {
     pub(crate) ink: Option<crate::ink::InkDrag>,
     /// The eraser is down: whether it has erased anything in this drag yet.
     pub(crate) erasing: Option<bool>,
+    /// The lasso being drawn or dragged, and Ink Replay (Draw tab).
+    pub(crate) ink_ui: crate::ink::InkUi,
     /// Wheel/touchpad scrolling (smooth notches, touchpad momentum).
     pub(crate) wheel: crate::scroll::CanvasScroll,
     /// The scroll offset and its maximum at the end of last frame.
@@ -106,6 +108,7 @@ impl Default for CanvasState {
             obj_drag: None,
             ink: None,
             erasing: None,
+            ink_ui: Default::default(),
             context_menu_open: false,
             mini_anchor: None,
             pasted: false,
@@ -257,7 +260,7 @@ fn page_key(app: &WordApp, page: &Page, scale_px: f32, dim_body: bool) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     scale_px.to_bits().hash(&mut h);
     let v = &app.session.view;
-    (v.marks, v.show_markup, v.dark_mode, wordcraft_render::DARK_PAPER, v.hide_ink).hash(&mut h);
+    (v.marks, v.show_markup, v.dark_mode, wordcraft_render::DARK_PAPER, v.hide_ink, v.draw.replay).hash(&mut h);
     app.session.prefs.markup.hash(&mut h);
     dim_body.hash(&mut h);
     format!("{:?}{:?}", app.session.doc.settings.page_color, app.session.doc.settings.watermark).hash(&mut h);
@@ -340,6 +343,7 @@ fn drawing_grid_step(spacing: f32, scale: f32) -> f32 {
 
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
+    crate::ink::replay_tick(app, ui.ctx());
     let layout = app.session.layout();
     // View › Switch Modes: dark paper, inverted document colours, a white caret.
     let dark_page = app.session.view.dark_mode;
@@ -450,7 +454,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 opts.display.marks = app.session.view.marks;
                 opts.display.placeholders = true;
                 opts.display.markup = app.session.view.show_markup;
-                opts.display.hide_ink = app.session.view.hide_ink;
+                // Ink Replay draws the ink itself, stroke by stroke, over pages without it.
+                opts.display.hide_ink = app.session.view.hide_ink || app.session.view.draw.replay;
                 opts.display.revisions = app.session.prefs.markup.clone();
                 opts.dark = dark_page;
                 opts.dark_paper = dark_paper;
@@ -654,6 +659,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         (resp, rects)
     });
     app.canvas.scroll_offset = out.state.offset;
+    crate::ink::replay_bar(app, ui, out.inner_rect);
     app.canvas.scroll_max = (out.content_size - out.inner_rect.size()).max(egui::Vec2::ZERO);
     let (resp, rects) = out.inner;
     // A click on the page leaves the selected comment balloon.
