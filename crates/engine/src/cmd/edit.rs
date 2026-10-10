@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 use wordcraft_doc::edit::Fragment;
-use wordcraft_doc::{Block, Pos, StoryRef};
+use wordcraft_doc::{Pos, StoryRef};
 
 use super::{delete_selection, pos_json, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
@@ -35,6 +35,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("edit.find", "Find", "Home › Editing", find)
             .key("Mod+F")
             .params(r#"{"text": string, "matchCase"?: bool, "wholeWord"?: bool, "regex"?: bool}"#)
+            .pure(),
+        CommandSpec::new("edit.advancedFind", "Advanced Find", "Home › Editing › Find", advanced_find)
+            .params(r#"{"text"?: string, "matchCase"?: bool, "wholeWord"?: bool, "regex"?: bool, "in"?: "main|selection", "highlight"?: bool}"#)
             .pure(),
         CommandSpec::new("edit.findNext", "Find Next", "Home › Editing › Find", |s, _| step(s, 1)).key("Mod+G / F3").pure(),
         CommandSpec::new("edit.findPrevious", "Find Previous", "Home › Editing › Find", |s, _| step(s, -1)).key("Mod+Shift+G").pure(),
@@ -81,23 +84,7 @@ fn paste(s: &mut Session, v: &Value) -> CmdResult {
         (None, Some(f)) => f.clone(),
         (None, None) => return Err(CmdError::Failed("the clipboard is empty".into())),
     };
-    if let Some(images) = v.get("image").and_then(Value::as_str) {
-        let _ = images;
-    }
-    let at = delete_selection(s)?;
-    let mut frag = frag;
-    if s.doc.settings.track_changes {
-        let rid = super::new_revision(s, wordcraft_doc::RevisionKind::Insert);
-        for b in &mut frag.blocks {
-            if let Block::Para(p) = b {
-                for r in &mut p.runs {
-                    r.props.ins = Some(rid);
-                }
-            }
-        }
-    }
-    let end = s.doc.insert_fragment(&at, &frag)?;
-    s.sel = Selection::caret(end);
+    super::paste::insert(s, frag)?;
     sel_result(s)
 }
 
@@ -115,7 +102,7 @@ fn paste_text(s: &mut Session, v: &Value) -> CmdResult {
 /// paragraph without it: a match lies within one stretch of live text, and word
 /// boundaries and anchors see the neighbouring live text, not the deleted text.
 /// Otherwise Replace would find its own deleted text again.
-fn search(s: &Session, story: StoryRef) -> Result<Vec<(Pos, Pos)>, CmdError> {
+pub(crate) fn search(s: &Session, story: StoryRef) -> Result<Vec<(Pos, Pos)>, CmdError> {
     use regex_automata::{Input, meta, util::syntax};
     let f = &s.find;
     if f.query.is_empty() {
@@ -160,6 +147,8 @@ fn search(s: &Session, story: StoryRef) -> Result<Vec<(Pos, Pos)>, CmdError> {
 }
 
 fn read_opts(s: &mut Session, v: &Value) {
+    // A new search changes what Reading Highlight marks.
+    s.find.highlights = None;
     if let Some(t) = p::str(v, "text") {
         s.find.query = t.to_string();
     }
@@ -197,6 +186,35 @@ fn find(s: &mut Session, v: &Value) -> CmdResult {
         "count": s.find.results.len(),
         "matches": s.find.results.iter().take(200).map(|(a, b)| json!({"start": pos_json(a), "end": pos_json(b)})).collect::<Vec<_>>(),
     }))
+}
+
+/// Find in the classic dialog: every match in the body or the selection, optionally highlighted while you read.
+fn advanced_find(s: &mut Session, v: &Value) -> CmdResult {
+    if p::str(v, "text").is_none() && v.get("highlight").is_none() {
+        s.ui_requests.push(json!({"open": "find"}));
+        return Ok(json!({"count": s.find.results.len()}));
+    }
+    read_opts(s, v);
+    let within = match p::str(v, "in").unwrap_or("main") {
+        "main" => None,
+        "selection" if !s.sel.is_collapsed() => Some(s.sel.ordered()),
+        "selection" => return Err(CmdError::Params("`in: selection` needs a selection".into())),
+        other => return Err(CmdError::Params(format!("`in` is main or selection, not `{other}`"))),
+    };
+    let story = within.as_ref().map(|(a, _)| a.story).unwrap_or(StoryRef::Body);
+    let mut found = search(s, story)?;
+    if let Some((a, b)) = &within {
+        found.retain(|(x, y)| x >= a && y <= b);
+    }
+    if let Some(h) = p::bool(v, "highlight") {
+        s.find.highlight = h;
+        s.find.highlights = None;
+    }
+    let n = found.len();
+    let matches: Vec<Value> = found.iter().take(200).map(|(a, b)| json!({"start": pos_json(a), "end": pos_json(b)})).collect();
+    s.find.current = 0;
+    s.find.results = found;
+    Ok(json!({"count": n, "matches": matches, "highlight": s.find.highlight}))
 }
 
 fn step(s: &mut Session, dir: i64) -> CmdResult {

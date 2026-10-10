@@ -444,9 +444,11 @@ impl Reader<'_> {
             }
             t.fill = tp.child("w:shd").and_then(props::shd_fill);
             t.cell_margins = tp.child("w:tblCellMar").map(props::margins);
+            t.band_size = tp.child_val("w:tblStyleRowBandSize").and_then(u32_of).filter(|n| *n > 0).map(|n| n.min(1000));
         }
-        for c in s.children("w:tblStylePr") {
+        for c in s.children("w:tblStylePr").take(64) {
             let fill = c.child("w:tcPr").and_then(|p| p.child("w:shd")).and_then(props::shd_fill);
+            let cell_borders = c.child("w:tcPr").and_then(|p| p.child("w:tcBorders")).map(props::borders);
             let chr = c.child("w:rPr").map(|r| self.pc.rpr(r)).unwrap_or_default();
             match c.attr("w:type") {
                 Some("wholeTable") => {
@@ -464,8 +466,13 @@ impl Reader<'_> {
                 Some("firstRow") => {
                     t.header_fill = fill;
                     t.header_chr = chr;
+                    t.header_borders = cell_borders;
                 }
-                Some("band1Horz") => t.band_fill = fill,
+                Some("band1Horz") => {
+                    t.band_fill = fill;
+                    t.band_chr = chr;
+                    t.band_borders = cell_borders;
+                }
                 Some("firstCol") => t.first_col_chr = chr,
                 Some("lastRow") => {
                     t.total_chr = chr;

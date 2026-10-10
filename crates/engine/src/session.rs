@@ -54,9 +54,16 @@ pub struct ViewState {
     pub focus_mode: bool,
     pub marks: bool,
     pub ruler: bool,
+    /// View › Show › Gridlines: the drawing grid over the page's text area (on screen only).
     pub gridlines: bool,
+    /// Table Layout › View Gridlines: outlines of table cells (on screen only).
+    #[serde(default)]
+    pub table_gridlines: bool,
     pub nav_pane: bool,
     pub styles_pane: bool,
+    /// Style Inspector pane (Home › Styles).
+    #[serde(default)]
+    pub style_inspector: bool,
     pub comments_pane: bool,
     pub multi_page: bool,
     /// Zoom to fit: "pageWidth", "onePage", "multiplePages", or empty.
@@ -79,8 +86,10 @@ impl Default for ViewState {
             marks: false,
             ruler: true,
             gridlines: false,
+            table_gridlines: false,
             nav_pane: false,
             styles_pane: false,
+            style_inspector: false,
             comments_pane: false,
             multi_page: false,
             fit: String::new(),
@@ -106,6 +115,11 @@ pub struct FindState {
     #[serde(skip)]
     pub results: Vec<(Pos, Pos)>,
     pub current: usize,
+    /// Reading Highlight: mark every match of `query` in the body.
+    pub highlight: bool,
+    /// Highlighted matches, for the document revision they were found in.
+    #[serde(skip)]
+    pub highlights: Option<(u64, Vec<(Pos, Pos)>)>,
 }
 
 #[derive(Clone)]
@@ -322,6 +336,18 @@ impl Session {
     pub fn touch(&mut self) {
         self.rev = self.rev.wrapping_add(1);
         self.dirty = true;
+    }
+
+    /// Reading Highlight ranges for the current document (searched again after edits); empty when it's off.
+    pub fn find_highlights(&mut self) -> &[(Pos, Pos)] {
+        if !self.find.highlight {
+            return &[];
+        }
+        if self.find.highlights.as_ref().is_none_or(|(r, _)| *r != self.rev) {
+            let found = crate::cmd::edit::search(self, StoryRef::Body).unwrap_or_default();
+            self.find.highlights = Some((self.rev, found));
+        }
+        self.find.highlights.as_ref().map(|(_, v)| v.as_slice()).unwrap_or(&[])
     }
 
     /// The current layout (recomputed when the document or view changed).

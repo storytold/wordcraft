@@ -8,8 +8,8 @@ and agent control. This file tracks where we are honestly. Generated numbers com
 
 | Measure | Value |
 |---|---|
-| Commands (every action, scriptable by CLI/MCP/control channel) | **423** |
-| Feature catalog coverage (Word ribbon/menu features with a command) | **379 / 428 (89%)** |
+| Commands (every action, scriptable by CLI/MCP/control channel) | **431** |
+| Feature catalog coverage (Word ribbon/menu features with a command) | **384 / 430 (89%)** |
 | **Estimated real feature parity** (depth and fidelity, not just a command) | **~62%** |
 | **Distance to alpha** | **~85% of the way; ≈20–25 h of Claude wall-clock work** |
 | **Distance to 100% parity** | **≈120–150 h of Claude Opus 5.5 wall-clock work** (with parallel agents) |
