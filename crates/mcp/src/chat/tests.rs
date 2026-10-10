@@ -24,11 +24,14 @@ pub(crate) fn fail(e: &str) -> Answer {
     Answer::Reply(json!({"ok": false, "error": e}))
 }
 
+/// One request a [`FakeWindow`] received: (method, params, key).
+pub(crate) type Seen = (String, Value, Option<String>);
+
 /// A window that answers every request line with `answer(method, params)`; it records
 /// (method, params, key) of each request.
 pub(crate) struct FakeWindow {
     pub addr: String,
-    pub seen: Arc<Mutex<Vec<(String, Value, Option<String>)>>>,
+    pub seen: Arc<Mutex<Vec<Seen>>>,
 }
 
 impl FakeWindow {

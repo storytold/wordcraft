@@ -386,7 +386,7 @@ mod tests {
         a.run("chat.start", json!({})).unwrap();
         run_frames(&ctx, &mut a);
         let got = ctx.data(|d| d.get_temp::<String>(egui::Id::new("chat_invite_handle")));
-        assert_eq!(got.as_deref(), Some("@claude"));
+        assert_eq!(got.as_deref(), Some(DEFAULT_HANDLE));
     }
 
     #[test]
