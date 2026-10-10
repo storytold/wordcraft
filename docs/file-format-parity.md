@@ -1,6 +1,6 @@
 # File-format parity with Microsoft Word
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (first version; every format Word reads or writes, measured from the readers and writers on origin/main) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4, plus Word for Windows' extra formats
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** trivial (formatting revisions landed, #41; previously major: first version; every format Word reads or writes, measured from the readers and writers on origin/main) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4, plus Word for Windows' extra formats
 
 Every format Word opens or saves, what WordCraft does with it, and how it's tested. Fidelity is the
 share of a typical real-world file's content and formatting that survives (read: shows correctly;
@@ -50,7 +50,7 @@ Measured by grepping `crates/docx/src/read` and `src/write` for the OOXML elemen
 | Headers/footers (first, even/odd), page borders, line numbers, gutter, mirror margins | ✅ | ✅ | |
 | Footnotes, endnotes, comments | ✅ | ✅ | `commentsExtended` written; `commentsIds`, modern threaded comments (`w16cex`) partly |
 | Tracked insertions and deletions (`w:ins`/`w:del`), paragraph-mark revisions | ✅ | ✅ | #125, #244 |
-| Formatting revisions (`w:rPrChange`, `w:pPrChange`, `w:sectPrChange`, `w:tblPrChange`) | ❌ | ❌ | Lost on open. Issue #41 |
+| Formatting revisions (`w:rPrChange`, `w:pPrChange`, `w:sectPrChange`, `w:tblPrChange`, `w:trPrChange`, `w:tcPrChange`, `w:numberingChange`) | ✅ | ✅ | #41: kept on open and save, schema order (change element last); changes inside `styles.xml` are dropped. RTF/ODT ignore them |
 | Move tracking (`w:moveFrom`/`w:moveTo`) | 🟡 | ❌ | Read as plain insert/delete |
 | Fields (`w:fldChar`, `w:fldSimple`), TOC, cross-references, `ADDIN` citations | ✅ | ✅ | Field codes Word supports but we don't evaluate keep their cached result |
 | Content controls (`w:sdt`) | 🟡 | ❌ | Content kept, the control (type, binding, placeholder, lock) dropped |
@@ -83,6 +83,7 @@ Measured by grepping `crates/docx/src/read` and `src/write` for the OOXML elemen
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | trivial | Formatting revisions (`w:rPrChange`, `w:pPrChange`, table, row, cell, section and numbering changes) read and written (#41) |
 | 2026-10-10 | trivial | OLE objects turned or flipped in WordCraft keep the turn on save (VML `rotation`/`flip`, DrawingML `a:xfrm` with the rotated effect extent); test counts refreshed |
 | 2026-10-10 | trivial | Charts, SmartArt and OLE objects written back on save with their parts (#319); chart/SmartArt reading (#292) recorded |
 | 2026-10-10 | trivial | DrawingML rotation and flips read and written (#332) |

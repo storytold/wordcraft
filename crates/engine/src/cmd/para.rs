@@ -655,6 +655,8 @@ fn create_style(s: &mut Session, v: &Value) -> CmdResult {
         st.chr.link = None;
         st.chr.ins = None;
         st.chr.del = None;
+        st.chr.fmt_change = None;
+        st.para = st.para.formatting();
     }
     s.doc.styles.upsert(st);
     apply_style(s, &json!({"style": id}))?;
@@ -699,7 +701,8 @@ fn update_to_match(s: &mut Session, v: &Value) -> CmdResult {
     chr.link = None;
     chr.ins = None;
     chr.del = None;
-    let mut pp = para.props.clone();
+    chr.fmt_change = None;
+    let mut pp = para.props.formatting();
     pp.style = None;
     pp.numbering = None;
     if let Some(st) = s.doc.styles.get_mut(&id) {
