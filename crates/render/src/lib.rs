@@ -382,6 +382,25 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             ctx.set_transform(view * Affine::translate((*x as f64, *baseline as f64)) * Affine::scale(k));
             ctx.fill_path(&o);
         }
+        Draw::MarkText { x, baseline, size, text } => {
+            let base_face = wordcraft_fonts::word::resolve("Source Sans 3", false, false).face;
+            ctx.set_paint(color(opts.ink(opts.mark_color), 0.9));
+            let mut gx = *x as f64;
+            for ch in text.chars() {
+                let mut face = base_face;
+                if face.glyph_for(ch) == 0
+                    && let Some(f) = FontDb::global().fallback_for(ch, face.id())
+                {
+                    face = wordcraft_fonts::FaceRef::of(&f);
+                }
+                let gid = face.glyph_for(ch);
+                let k = *size as f64 / face.upem.max(1.0);
+                let o = FontDb::global().outline(&face, gid);
+                ctx.set_transform(view * Affine::translate((gx, *baseline as f64)) * Affine::scale(k));
+                ctx.fill_path(&o);
+                gx += face.advance(gid) * k;
+            }
+        }
         Draw::Image { rect, media, crop, alpha } => {
             let r = kurbo::Rect::new(rect.x as f64, rect.y as f64, rect.right() as f64, rect.bottom() as f64);
             if !r.overlaps(*visible) {

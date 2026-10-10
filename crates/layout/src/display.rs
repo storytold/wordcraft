@@ -2,7 +2,8 @@
 
 use wordcraft_doc::para::{InlineObject, ShapeKind};
 use wordcraft_doc::props::{Border, BorderStyle, Rgb, TextColor, TextDirection, Underline};
-use wordcraft_doc::{Document, Path, StoryRef};
+use wordcraft_doc::section::SectionStart;
+use wordcraft_doc::{Block, Document, Path, StoryRef};
 use wordcraft_fonts::FaceRef;
 use wordcraft_geom::Rect;
 
@@ -81,6 +82,14 @@ pub enum Draw {
         y: f32,
         turn: TextDirection,
         items: Vec<Draw>,
+    },
+    /// A formatting-mark label (a section break's name) in the UI's mark colour, left edge at
+    /// `x`, drawn with the same face as [`Draw::Mark`]. Screen only, like every mark.
+    MarkText {
+        x: f32,
+        baseline: f32,
+        size: f32,
+        text: String,
     },
 }
 
@@ -567,11 +576,73 @@ fn lines(
                     .and_then(|p| p.mark.ins.or(p.mark.del))
                     .filter(|_| opts.markup)
                     .map(|r| revision_color(doc.revisions.get(r as usize).map(|v| author_index(doc, &v.author)).unwrap_or(0)));
-                out.push(Draw::Mark { x: mx, baseline: base, size, ch: '¶', color });
+                // The last paragraph of a section ends in a section break instead of a plain ¶.
+                if let Some(start) = section_break_after(doc, story, path) {
+                    let (x0, x1) = if line.rtl { (x + line.left, ex - 2.0) } else { (ex + 2.0, x + line.right) };
+                    section_break_mark(start, x0, x1, base, size, alpha, out);
+                } else {
+                    out.push(Draw::Mark { x: mx, baseline: base, size, ch: '¶', color });
+                }
             }
         }
         let _ = bottom;
     }
+}
+
+/// The kind of section break that ends at body paragraph `path`: the start type of the section
+/// that follows it. `None` for any other paragraph, and for the document's last section.
+fn section_break_after(doc: &Document, story: StoryRef, path: &Path) -> Option<SectionStart> {
+    if story != StoryRef::Body || path.0.len() != 1 {
+        return None;
+    }
+    let i = *path.0.first()? as usize;
+    match doc.body.get(i).map(|b| &**b) {
+        Some(Block::Para(p)) if p.section.is_some() => {}
+        _ => return None,
+    }
+    let secs = doc.sections();
+    let k = secs.iter().position(|(end, _)| *end == i)?;
+    secs.get(k + 1).map(|(_, s)| s.start)
+}
+
+/// On-screen name of a section break.
+pub fn section_break_label(start: SectionStart) -> &'static str {
+    match start {
+        SectionStart::NextPage => "Section Break (Next Page)",
+        SectionStart::Continuous => "Section Break (Continuous)",
+        SectionStart::EvenPage => "Section Break (Even Page)",
+        SectionStart::OddPage => "Section Break (Odd Page)",
+        SectionStart::NextColumn => "Section Break (Next Column)",
+    }
+}
+
+/// Width of a [`Draw::MarkText`] label.
+pub fn mark_text_width(text: &str, size: f32) -> f32 {
+    let face = wordcraft_fonts::word::resolve("Source Sans 3", false, false).face;
+    let k = size / face.upem.max(1.0) as f32;
+    text.chars().map(|c| face.advance(face.glyph_for(c)) as f32 * k).sum()
+}
+
+/// A section break mark between `x0` and `x1`: a dotted double rule with the break's name centred
+/// in it (just the name when there is no room for the rule).
+fn section_break_mark(start: SectionStart, x0: f32, x1: f32, base: f32, size: f32, alpha: f32, out: &mut Vec<Draw>) {
+    let text = section_break_label(start);
+    let lsize = (size * 0.8).clamp(6.0, 11.0);
+    let w = mark_text_width(text, lsize);
+    let gap = lsize * 0.4;
+    let mid = base - size * 0.3;
+    let color = Rgb(0x60, 0x60, 0x60);
+    if x1 - x0 <= w + 4.0 * gap {
+        out.push(Draw::MarkText { x: x0, baseline: base, size: lsize, text: text.into() });
+        return;
+    }
+    let tx = (x0 + x1 - w) / 2.0;
+    for (a, b) in [(x0, tx - gap), (tx + w + gap, x1)] {
+        for y in [mid - 1.2, mid + 1.2] {
+            out.push(Draw::Line { x0: a, y0: y, x1: b, y1: y, width: 0.5, color, stroke: Stroke::Dotted, alpha });
+        }
+    }
+    out.push(Draw::MarkText { x: tx, baseline: mid + lsize * 0.33, size: lsize, text: text.into() });
 }
 
 /// An equation's glyphs and rules with its origin at (`x`, `base`).
