@@ -15,6 +15,7 @@
 	(picture or object)	(slika ili objekat)
 	1.5 Line Spacing	Proređenost 1,5
 	A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.	Besplatan, otvoreni obrađivač teksta napisan od nule u Rust-u.\nDeo Crafting Apps paketa tima ArtCraft.
+	A password is required to open this document.	Za otvaranje ovog dokumenta potrebna je lozinka.
 	About	O programu
 	About WordCraft	O WordCraft-u
 	Accept	Prihvati
@@ -50,6 +51,8 @@
 	Allow Latin text to wrap in the middle of a word	Dozvoli prelom latiničnog teksta usred reči
 	Alphabetical	Abecedno
 	Alt Text	Alternativni tekst
+	Anyone can open this document. Encrypt it with a password to keep it private.	Svako može da otvori ovaj dokument. Šifrujte ga lozinkom da bi ostao privatan.
+	Anyone who opens the document will need this password.	Svakome ko otvori dokument biće potrebna ova lozinka.
 	Apply Asian line-breaking rules (kinsoku)	Primeni azijska pravila preloma redova (kinsoku)
 	Apply Character Style	Primeni stil znakova
 	Apply Style	Primeni stil
@@ -76,20 +79,24 @@
 	Based on: {style}	Zasnovan na: {style}
 	Built-in style	Ugrađeni stil
 	Built-in styles can't be deleted.	Ugrađeni stilovi ne mogu da se obrišu.
+	Change Password…	Promeni lozinku…
 	Character style	Stil znakova
 	Click an item to paste it.	Kliknite na stavku da biste je nalepili.
 	Clipboard Items	Stavke ostave
 	Clipboard Pane	Okno ostave
 	Color: {color}	Boja: {color}
 	Compress punctuation at the start of a line	Sažmi interpunkciju na početku reda
+	Confirm password:	Potvrdite lozinku:
 	Dark page (white text on black)	Tamna stranica (beo tekst na crnom)
 	Delete Clipboard Item	Obriši stavku iz ostave
 	Delete Table Style	Obriši stil tabele
+	Encrypt with Password…	Šifruj lozinkom…
 	Font: {font}	Font: {font}
 	Glow	Sjaj
 	Glow Colors	Boje sjaja
 	Hide from style lists	Sakrij sa lista stilova
 	Indents and Spacing	Uvlačenja i razmaci
+	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	Čuvajte lozinku na sigurnom mestu: bez nje niko, pa ni WordCraft, ne može da otvori dokument. Ostavite oba polja prazna da biste uklonili lozinku.
 	Line breaking	Prelom redova
 	Linked style (paragraph and character)	Povezani stil (pasus i znakovi)
 	Manage Styles	Upravljanje stilovima
@@ -108,9 +115,12 @@
 	Offset: Top Left	Pomak: gore levo
 	Offset: Top Right	Pomak: gore desno
 	Paragraph style	Stil pasusa
+	Password	Lozinka
+	Password:	Lozinka:
 	Paste All	Nalepi sve
 	Paste Clipboard Item	Nalepi stavku iz ostave
 	Preview	Pregled
+	Remove Password	Ukloni lozinku
 	Shadow, glow and soft edges	Senka, sjaj i meke ivice
 	Shape Effects	Efekti oblika
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Prikaži dokumente sa invertovanim bojama, kao kod Prikaz › Promeni režim. Čuvanje, štampanje i PDF nisu pogođeni.
@@ -773,7 +783,11 @@
 	Text\nBox	Okvir\nza tekst
 	Text\nDirection	Smer\nteksta
 	That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.	Taj format ne čuva sve, pa je dokument i dalje otvoren. Sačuvajte ga kao Word dokument (.docx) da biste nastavili.
+	That password isn't right. Check it (passwords are case-sensitive) and try again.	Lozinka nije ispravna. Proverite je (lozinke razlikuju velika i mala slova) i pokušajte ponovo.
+	The document will be saved with a password. Save it to protect it.	Dokument će biti sačuvan sa lozinkom. Sačuvajte ga da biste ga zaštitili.
 	The new style takes the formatting of the current paragraph.	Novi stil preuzima formatiranje trenutnog pasusa.
+	The password is removed. Save the document to keep the change.	Lozinka je uklonjena. Sačuvajte dokument da biste zadržali izmenu.
+	The passwords don't match.	Lozinke se ne podudaraju.
 	Theme Colors	Boje teme
 	Theme Fonts	Fontovi teme
 	Theme List	Lista tema
@@ -849,6 +863,7 @@
 	Zoom Out	Umanji
 	{group} settings	Podešavanja za {group}
 	{key}+Click to follow link	{key}+klik za otvaranje veze
+	{name} is protected with a password.	{name} je zaštićen lozinkom.
 	{size} pt	{size} pt
 	➕ New comment	➕ Novi komentar
 	📂  Browse…	📂  Potraži…

@@ -1054,3 +1054,18 @@
 	Built-in styles can't be deleted.	無法刪除內建樣式。
 	Delete Table Style	刪除表格樣式
 	Preview	預覽
+	Password	密碼
+	Password:	密碼：
+	Confirm password:	確認密碼：
+	Encrypt with Password…	以密碼加密…
+	Change Password…	變更密碼…
+	Remove Password	移除密碼
+	A password is required to open this document.	開啟此文件需要密碼。
+	Anyone can open this document. Encrypt it with a password to keep it private.	任何人都可以開啟此文件。以密碼加密可保護其隱私。
+	Anyone who opens the document will need this password.	開啟文件的任何人都需要此密碼。
+	{name} is protected with a password.	{name} 受密碼保護。
+	That password isn't right. Check it (passwords are case-sensitive) and try again.	密碼不正確。請檢查密碼（區分大小寫）後再試一次。
+	The document will be saved with a password. Save it to protect it.	文件將以密碼儲存。儲存文件以保護它。
+	The password is removed. Save the document to keep the change.	密碼已移除。儲存文件以保留此變更。
+	The passwords don't match.	兩次輸入的密碼不一致。
+	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	請妥善保管密碼：沒有密碼，任何人（包括 WordCraft）都無法開啟文件。兩個方塊都留空可移除密碼。

@@ -1070,3 +1070,18 @@
 	Built-in styles can't be deleted.	Los estilos integrados no se pueden eliminar.
 	Delete Table Style	Eliminar estilo de tabla
 	Preview	Vista previa
+	Password	Contraseña
+	Password:	Contraseña:
+	Confirm password:	Confirmar contraseña:
+	Encrypt with Password…	Cifrar con contraseña…
+	Change Password…	Cambiar contraseña…
+	Remove Password	Quitar contraseña
+	A password is required to open this document.	Se necesita una contraseña para abrir este documento.
+	Anyone can open this document. Encrypt it with a password to keep it private.	Cualquiera puede abrir este documento. Cífralo con una contraseña para mantenerlo privado.
+	Anyone who opens the document will need this password.	Quien abra el documento necesitará esta contraseña.
+	{name} is protected with a password.	{name} está protegido con contraseña.
+	That password isn't right. Check it (passwords are case-sensitive) and try again.	La contraseña no es correcta. Revísala (distingue mayúsculas de minúsculas) e inténtalo de nuevo.
+	The document will be saved with a password. Save it to protect it.	El documento se guardará con contraseña. Guárdalo para protegerlo.
+	The password is removed. Save the document to keep the change.	Se quitó la contraseña. Guarda el documento para conservar el cambio.
+	The passwords don't match.	Las contraseñas no coinciden.
+	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	Guarda la contraseña en un lugar seguro: sin ella nadie, ni siquiera WordCraft, puede abrir el documento. Deja ambos cuadros vacíos para quitar la contraseña.
