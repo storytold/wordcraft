@@ -1161,6 +1161,22 @@ fn hidden_float_leaves_no_wrap_area_when_hidden_text_is_not_shown() {
     assert_eq!(first(false), (0.0, false));
 }
 
+/// A page-number start or a line-number start near `u32::MAX` (accepted from files and commands)
+/// overflowed when the next page or line was counted: a panic with overflow checks on.
+#[test]
+fn extreme_page_and_line_number_starts_do_not_overflow() {
+    let mut d = Document::from_text("one\ntwo\nthree");
+    for b in d.body.iter_mut() {
+        if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
+            p.props.page_break_before = Some(true);
+        }
+    }
+    d.last_section.page_num_start = Some(u32::MAX);
+    d.last_section.line_numbers = Some(wordcraft_doc::section::LineNumbering { start: u32::MAX, ..Default::default() });
+    let l = lay(&d);
+    assert!(l.pages.len() >= 3, "{} pages", l.pages.len());
+}
+
 #[test]
 fn line_numbers_borders_text_boxes() {
     let mut d = Document::from_text("one\ntwo\nthree");
