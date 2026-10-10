@@ -11,6 +11,7 @@
 # Product, format and technology names (WordCraft, PDF, Markdown, MCP …) stay in Latin letters.
 # Author: @dmatviichuk with Codex; licensed MIT OR Apache-2.0, like WordCraft.
 
+	(no style)	(без стилю)
 	(no suggestions)	(немає пропозицій)
 	1.5 Line Spacing	Міжрядковий інтервал 1,5
 	A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.	Безкоштовний текстовий процесор із відкритим кодом, написаний з нуля мовою Rust.\nЧастина Crafting Apps від команди ArtCraft.
@@ -27,6 +28,7 @@
 	Add Space Before Paragraph	Додати інтервал перед абзацом
 	Add space between Asian and Latin text	Додавати інтервал між азійським і латинським текстом
 	Add space between Asian text and numbers	Додавати інтервал між азійським текстом і числами
+	Add tab stop at:	Додати позицію табуляції:
 	Add Text	Додати текст
 	Add to Dictionary	Додати до словника
 	Add to Style Gallery	Додати до колекції стилів
@@ -42,6 +44,7 @@
 	Align	Вирівняти
 	Align Left	Вирівняти ліворуч
 	Align Right	Вирівняти праворуч
+	Aligned at:	Позиція номера:
 	Alignment	Вирівнювання
 	All Borders	Усі межі
 	All Caps	Усі великі літери
@@ -72,6 +75,33 @@
 	AutoSave saves every change to the file (needs a saved document)	Автозбереження записує кожну зміну у файл (документ потрібно спочатку зберегти)
 	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	Автозбереження недоступне в браузері: воно не може записувати у ваші файли. Збереження завантажує копію.
 	AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave.	Автозбереження підтримує лише файли .docx, .odt і .rtf; {name} не може зберегти все форматування. Збережіть як .docx, щоб увімкнути автозбереження.
+	Balloons	Виноски
+	Bullet	Маркер
+	By author	За автором
+	Changed lines:	Змінені рядки:
+	Click level to modify:	Виберіть рівень для змінення:
+	Color only	Лише колір
+	Define New Multilevel List	Визначити новий багаторівневий список
+	Define New Multilevel List…	Визначити новий багаторівневий список…
+	Deletions:	Видалення:
+	Enter formatting for number:	Вигляд номера:
+	Follow number with:	Після номера:
+	Formatting	Форматування
+	Include level number from:	Додати номер рівня:
+	Ink	Рукописні примітки
+	Insertions and Deletions	Вставлення й видалення
+	Insertions:	Вставлення:
+	Left border	Ліва межа
+	Legal style numbering	Юридична нумерація
+	Link level to style:	Зв'язати рівень зі стилем:
+	List Definition	Визначення списку
+	Nothing	Нічого
+	Number alignment:	Вирівнювання номера:
+	Number format	Формат номера
+	Number style for this level:	Стиль номера для цього рівня:
+	Outside border	Зовнішня межа
+	Restart list after:	Почати список знову після:
+	Right border	Права межа
 	Save the document to turn on AutoSave	Збережіть документ, щоб увімкнути автозбереження
 	Save the document to turn on AutoSave (a file you have only opened isn't rewritten until you save it)	Збережіть документ, щоб увімкнути автозбереження (файл, який ви лише відкрили, не перезаписується, доки ви його не збережете)
 	AutoText	Автоматичний текст
@@ -703,9 +733,12 @@
 	Shift+Tab	Shift+Tab
 	Show	Показати
 	Show all formatting marks	Показати всі знаки форматування
+	Show all revisions inline	Показувати всі виправлення в тексті
 	Show Comments	Показати коментарі
 	Show Markup	Показати позначки
 	Show Notes	Показати примітки
+	Show only comments and formatting in balloons	Показувати у виносках лише коментарі й форматування
+	Show revisions in balloons	Показувати виправлення у виносках
 	Show rulers	Показати лінійки
 	Show the community button in the title bar	Показувати кнопку спільноти в заголовку вікна
 	Show/Hide ¶	Показати/приховати ¶
@@ -723,6 +756,7 @@
 	SmartArt	SmartArt
 	Sort	Сортувати
 	Source code: github.com/storytold/wordcraft	Вихідний код: github.com/storytold/wordcraft
+	Space	Пробіл
 	Space before/after:	Інтервал перед/після:
 	Spacing	Інтервал
 	Spacing (pt):	Інтервал (пункти):
@@ -736,6 +770,7 @@
 	Spreadsheet Table	Таблиця електронної таблиці
 	Standard Colors	Стандартні кольори
 	Star	Зірка
+	Start at:	Почати з:
 	Start Mail Merge	Почати злиття пошти
 	Start Mail\nMerge	Почати злиття\nпошти
 	Statistics	Статистика
@@ -758,6 +793,7 @@
 	Symbols	Символи
 	Synonyms	Синоніми
 	Tab	Табуляція
+	Tab character	Символ табуляції
 	Table	Таблиця
 	Table Column Width	Ширина стовпця таблиці
 	Table Design	Дизайн таблиці
@@ -779,6 +815,7 @@
 	Text Effects and Typography	Текстові ефекти й типографіка
 	Text from File	Текст із файлу
 	Text Highlight Color	Колір виділення тексту
+	Text indent at:	Відступ тексту:
 	Text to display:	Текст для відображення:
 	Text Wrapping	Обтікання текстом
 	Text:	Текст:
@@ -800,7 +837,9 @@
 	Top:	Зверху:
 	Total Row	Рядок підсумків
 	Track Changes	Відстежувати зміни
+	Track Changes Options	Параметри відстеження змін
 	Track Changes: On	Відстеження змін: увімкнено
+	Track formatting	Відстежувати форматування
 	Tracking	Відстеження
 	Translate	Перекласти
 	Transparency	Прозорість
@@ -1217,3 +1256,9 @@
 	The password is removed. Save the document to keep the change.	Пароль видалено. Збережіть документ, щоб зберегти зміну.
 	The passwords don't match.	Паролі не збігаються.
 	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	Зберігайте пароль у надійному місці: без нього ніхто, зокрема WordCraft, не зможе відкрити документ. Залиште обидва поля порожніми, щоб видалити пароль.
+	Rotation	Поворот
+	Rotation:	Поворот:
+	Rotate Right 90°	Повернути праворуч на 90°
+	Rotate Left 90°	Повернути ліворуч на 90°
+	Flip Vertical	Віддзеркалити по вертикалі
+	Flip Horizontal	Віддзеркалити по горизонталі

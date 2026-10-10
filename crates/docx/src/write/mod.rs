@@ -747,6 +747,8 @@ fn write_level(w: &mut W, i: usize, l: &Level) {
     w.val("w:numFmt", l.format.ooxml());
     if !l.restart {
         w.val("w:lvlRestart", "0");
+    } else if let Some(k) = l.restart_after.filter(|k| (1..=9).contains(k)) {
+        w.val("w:lvlRestart", &k.to_string());
     }
     if let Some(s) = &l.style {
         w.val("w:pStyle", s);
@@ -762,6 +764,11 @@ fn write_level(w: &mut W, i: usize, l: &Level) {
     w.val("w:lvlText", &l.text);
     w.val("w:lvlJc", props::align_val(l.align));
     w.open("w:pPr", &[]);
+    if let Some(t) = l.tab.filter(|t| t.is_finite()) {
+        w.open("w:tabs", &[]);
+        w.empty("w:tab", &[("w:val", "num"), ("w:pos", &crate::units::twips(t.clamp(-1584.0, 1584.0)))]);
+        w.close("w:tabs");
+    }
     let ind = crate::units::twips(l.indent);
     if l.hanging >= 0.0 {
         w.empty("w:ind", &[("w:left", &ind), ("w:hanging", &crate::units::twips(l.hanging))]);

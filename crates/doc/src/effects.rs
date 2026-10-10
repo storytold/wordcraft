@@ -33,6 +33,10 @@ pub struct ShapeEffects {
 
 /// An outer shadow: a blurred copy of the shape's silhouette cast `distance` points away in
 /// direction `angle` (degrees clockwise from the positive x axis, y pointing down).
+///
+/// `rot_with_shape` (DrawingML `rotWithShape`, true when absent) says whether that direction is
+/// the shape's own, turning with it when it is rotated or flipped, or the page's. Word's shadow
+/// presets write `rotWithShape="0"`: the light stays put as the shape turns.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Shadow {
@@ -41,12 +45,13 @@ pub struct Shadow {
     pub blur: f32,
     pub distance: f32,
     pub angle: f32,
+    pub rot_with_shape: bool,
 }
 
 impl Default for Shadow {
     /// "Offset: Bottom Right".
     fn default() -> Self {
-        Shadow { color: Rgb::BLACK, transparency: 60.0, blur: 4.0, distance: 3.0, angle: 45.0 }
+        Shadow { color: Rgb::BLACK, transparency: 60.0, blur: 4.0, distance: 3.0, angle: 45.0, rot_with_shape: false }
     }
 }
 
@@ -109,6 +114,7 @@ impl Shadow {
             blur: clamp(self.blur, 0.0, MAX_BLUR, 0.0),
             distance: clamp(self.distance, 0.0, MAX_DISTANCE, 0.0),
             angle: if angle.is_finite() && angle < 360.0 { angle } else { 0.0 },
+            rot_with_shape: self.rot_with_shape,
         }
     }
     /// The shadow's offset from the shape, points (x right, y down).
@@ -211,7 +217,7 @@ mod tests {
 
     #[test]
     fn hostile_numbers_are_clamped() {
-        let s = Shadow { color: Rgb::BLACK, transparency: f32::NAN, blur: 1e9, distance: -4.0, angle: -90.0 }.sanitized();
+        let s = Shadow { color: Rgb::BLACK, transparency: f32::NAN, blur: 1e9, distance: -4.0, angle: -90.0, rot_with_shape: false }.sanitized();
         assert_eq!((s.transparency, s.blur, s.distance, s.angle), (60.0, MAX_BLUR, 0.0, 270.0));
         let e = ShapeEffects { shadow: None, glow: Some(Glow { size: 1e9, ..Glow::default() }), soft_edge: Some(-1.0) }.sanitized();
         assert_eq!(e.glow.map(|g| g.size), Some(MAX_GLOW));
