@@ -369,6 +369,8 @@ impl Writer<'_> {
                 w.close("w:r");
                 self.rev_close(w, props);
             }
+            // Charts and diagrams aren't written back yet.
+            InlineObject::Graphic { .. } => {}
             InlineObject::Image { media, w: iw, h: ih, alt, float, crop } => {
                 let Some(file) = self.media_files.get(media).cloned() else { return };
                 let rid = rels.add(rt::IMAGE, &format!("media/{file}"), false);

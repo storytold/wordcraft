@@ -801,6 +801,9 @@ pub enum VMerge {
 pub struct CellProps {
     /// Preferred width, points.
     pub width: Option<f32>,
+    /// Preferred width as a percentage of the table's (`w:tcW w:type="pct"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width_pct: Option<f32>,
     /// Number of grid columns spanned (1 = no horizontal merge).
     pub span: u32,
     pub vmerge: VMerge,

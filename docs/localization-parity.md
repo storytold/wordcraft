@@ -19,7 +19,7 @@ other ~18 languages Word ships, plus native-speaker review (human).
 ## What WordCraft ships (measured)
 
 - **10 interface languages**: English plus `zh-hans`, `zh-hant`, `ja`, `uk`, `es`, `pt-br`,
-  Serbian `sr`/`sr-latn` (#250), and Estonian `et` (994 entries). Catalogs have ~930–1,010 entries
+  Serbian `sr`/`sr-latn` (#250), and Estonian `et` (1,026 entries). Catalogs have ~930–1,010 entries
   each. A test (`every_tab_and_command_is_translated`) enforces that every ribbon tab, command
   label and ribbon location is translated in every language.
 - Of the 675 English strings a scan extracts from `tl!(…)` calls and command labels/locations, each
@@ -55,7 +55,7 @@ shared items below.
 Other shipped languages: **5** — Traditional Chinese (`zh-hant`), Ukrainian (`uk`), Serbian
 Cyrillic and Latin (`sr`, `sr-latn`, #250), and Estonian (`et`), all partial.
 Estonian uses the existing fonts, follows `et-EE` system locales, and is available in Options or
-through `ui.language` with `{"value":"et"}`. Its 994 entries cover the existing interface catalog.
+through `ui.language` with `{"value":"et"}`. Its 1,026 entries cover the existing interface catalog.
 Estonian spelling, grammar, dates and document templates are not added by the interface catalog.
 
 ## Shared work (not in the per-language hours)

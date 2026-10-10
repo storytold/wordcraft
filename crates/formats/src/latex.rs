@@ -265,6 +265,7 @@ impl Writer {
                     o.push_str(&format!("\\textit{{[{}]}}", escape_text(&alt)));
                 }
                 Inline::Anchor(name) => o.push_str(&format!("\\hypertarget{{{}}}{{}}", escape_url(name))),
+                Inline::Figure(_) => {}
                 Inline::Equation { linear, display } => {
                     self.uses.math = true;
                     let src = linear_to_latex(linear);

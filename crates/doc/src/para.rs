@@ -200,6 +200,16 @@ pub enum InlineObject {
         #[serde(default)]
         crop: [f32; 4],
     },
+    /// A chart or SmartArt diagram (see [`crate::graphic`]).
+    Graphic {
+        w: f32,
+        h: f32,
+        #[serde(default)]
+        alt: String,
+        #[serde(default)]
+        float: Float,
+        graphic: std::sync::Arc<crate::graphic::Graphic>,
+    },
     Shape {
         kind: ShapeKind,
         w: f32,
@@ -288,7 +298,7 @@ impl InlineObject {
     }
     pub fn is_floating(&self) -> bool {
         match self {
-            InlineObject::Image { float, .. } | InlineObject::Shape { float, .. } => float.wrap != Wrap::Inline,
+            InlineObject::Image { float, .. } | InlineObject::Graphic { float, .. } | InlineObject::Shape { float, .. } => float.wrap != Wrap::Inline,
             _ => false,
         }
     }

@@ -20,6 +20,8 @@ egui = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+# Pictures pasted from the system clipboard arrive as pixels and are inserted as PNG (#45).
+image = { workspace = true }
 # The system's preferred interface languages (#8). Native: OS APIs; wasm: none (English).
 sys-locale = "0.3"
 
@@ -29,7 +31,6 @@ js-sys = "0.3"
 
 [dev-dependencies]
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
-image = { workspace = true }
 
 [build-dependencies]
 serde_json = { workspace = true }

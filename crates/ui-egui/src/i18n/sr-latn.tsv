@@ -63,7 +63,12 @@
 	AutoSave	Automatsko čuvanje
 	AutoSave documents you have saved in WordCraft	Automatski čuvaj dokumente koje ste već sačuvali u WordCraft-u
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	Automatsko čuvanje neuspelo: {error}. Sačuvajte dokument da biste ga ponovo uključili.
+	Bottom Margin	Donja margina
 	Dark page (white text on black)	Tamna stranica (beo tekst na crnom)
+	Edit Comment	Uredi komentar
+	Left Margin	Leva margina
+	Reopen	Ponovo otvori
+	Right Margin	Desna margina
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Prikaži dokumente sa invertovanim bojama, kao kod Prikaz › Promeni režim. Čuvanje, štampanje i PDF nisu pogođeni.
 	AutoSave saves every change to the file (needs a saved document)	Automatsko čuvanje upisuje svaku izmenu u fajl (dokument mora biti već sačuvan)
 	AutoText	Automatski tekst
@@ -727,6 +732,7 @@
 	Three	Tri
 	Tight	Tesno
 	Top Border	Gornja ivica
+	Top Margin	Gornja margina
 	Top of Page	Vrh strane
 	Top:	Gore:
 	Total Row	Red ukupno
@@ -786,6 +792,7 @@
 	Wrap Text	Prelomi tekst
 	Wrap\nText	Prelomi\ntekst
 	Write & Insert Fields	Pisanje i umetanje polja
+	Write a reply	Napišite odgovor
 	Zoom	Zumiranje
 	Zoom In	Uvećaj
 	Zoom Out	Umanji
@@ -1005,3 +1012,28 @@
 	Type the recipients, or load them from a file.	Unesite primaoce ili ih učitajte iz fajla.
 	Use an Existing List…	Koristi postojeću listu…
 	A file dialog is already open.	Dijalog za fajlove je već otvoren.
+	Height:	Visina:
+	Width:	Širina:
+	Row	Red
+	Cell	Ćelija
+	Preferred width:	Željena širina:
+	Alignment:	Poravnanje:
+	Indent from left:	Uvlačenje sleva:
+	Specify height:	Zadaj visinu:
+	Exactly	Tačno
+	At least	Najmanje
+	Allow row to break across pages	Dozvoli prelom reda između stranica
+	Repeat as header row on each page	Ponovi kao red zaglavlja na svakoj stranici
+	Vertical alignment:	Vertikalno poravnanje:
+	Top	Gore
+	Bottom	Dole
+	Alt text	Alternativni tekst
+	Alt:	Alt. tekst:
+	W:	Š:
+	H:	V:
+	Reset	Vrati
+	Reset Crop	Poništi isecanje
+	Insert a new equation (Alt+=)	Umetni novu jednačinu (Alt+=)
+	Leave the equation (Esc)	Napusti jednačinu (Esc)
+	Preview	Pregled
+	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft
