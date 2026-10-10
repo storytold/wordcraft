@@ -1099,3 +1099,18 @@
 	Hide from style lists	Сховати зі списків стилів
 	Built-in styles can't be deleted.	Вбудовані стилі не можна видалити.
 	Delete Table Style	Видалити стиль таблиці
+	Password	Пароль
+	Password:	Пароль:
+	Confirm password:	Підтвердження пароля:
+	Encrypt with Password…	Зашифрувати паролем…
+	Change Password…	Змінити пароль…
+	Remove Password	Видалити пароль
+	A password is required to open this document.	Щоб відкрити цей документ, потрібен пароль.
+	Anyone can open this document. Encrypt it with a password to keep it private.	Цей документ може відкрити будь-хто. Зашифруйте його паролем, щоб захистити.
+	Anyone who opens the document will need this password.	Кожному, хто відкриватиме документ, знадобиться цей пароль.
+	{name} is protected with a password.	{name} захищено паролем.
+	That password isn't right. Check it (passwords are case-sensitive) and try again.	Пароль неправильний. Перевірте його (паролі враховують регістр) і спробуйте ще раз.
+	The document will be saved with a password. Save it to protect it.	Документ буде збережено з паролем. Збережіть його, щоб захистити.
+	The password is removed. Save the document to keep the change.	Пароль видалено. Збережіть документ, щоб зберегти зміну.
+	The passwords don't match.	Паролі не збігаються.
+	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	Зберігайте пароль у надійному місці: без нього ніхто, зокрема WordCraft, не зможе відкрити документ. Залиште обидва поля порожніми, щоб видалити пароль.
