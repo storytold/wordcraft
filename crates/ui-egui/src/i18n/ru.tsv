@@ -1440,3 +1440,93 @@ preview	Title	Пример
 	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	В браузере автосохранение недоступно: оно не может записывать ваши файлы. «Сохранить» скачивает копию.
 	AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave.	Автосохранение работает только с файлами .docx, .odt и .rtf; {name} не сохраняет всё форматирование. Сохраните файл как .docx, чтобы включить автосохранение.
 	Save the document to turn on AutoSave (a file you have only opened isn't rewritten until you save it)	Сохраните документ, чтобы включить автосохранение (открытый файл не перезаписывается, пока вы его не сохраните)
+
+# Password protection, Manage Styles, the clipboard pane, Shape Effects, Asian typography,
+# equation conversion and justification, and the Table Style dialog's sample table.
+	Add Object to Selection	Добавить объект к выделению
+	Add space between Asian and Latin text	Добавлять пробел между азиатским и латинским текстом
+	Add space between Asian text and numbers	Добавлять пробел между азиатским текстом и числами
+	All - Linear	Все — линейный вид
+	All - Professional	Все — профессиональный вид
+	Current - Linear	Текущее — линейный вид
+	Current - Professional	Текущее — профессиональный вид
+	Allow hanging punctuation	Разрешить висячую пунктуацию
+	Allow Latin text to wrap in the middle of a word	Разрешить перенос латинского текста посреди слова
+	Alphabetical	По алфавиту
+	Anyone can open this document. Encrypt it with a password to keep it private.	Этот документ может открыть любой. Зашифруйте его паролем, чтобы защитить.
+	Anyone who opens the document will need this password.	Для открытия документа понадобится этот пароль.
+	A password is required to open this document.	Для открытия этого документа нужен пароль.
+	Apply Asian line-breaking rules (kinsoku)	Применять азиатские правила переноса строк (кинсоку)
+	Asian Typography	Азиатская типографика
+	As Recommended	По рекомендации
+	Based on: {style}	Основан на: {style}
+	Built-in style	Встроенный стиль
+	Built-in styles can't be deleted.	Встроенные стили нельзя удалить.
+	Centered as Group	По центру как группа
+	Change Password…	Изменить пароль…
+	Character style	Стиль знаков
+	Click an item to paste it.	Щёлкните элемент, чтобы вставить его.
+	Clipboard Items	Элементы буфера обмена
+	Clipboard Pane	Панель буфера обмена
+	Color: {color}	Цвет: {color}
+	Compress punctuation at the start of a line	Сжимать пунктуацию в начале строки
+	Confirm password:	Подтвердите пароль:
+	Delete Clipboard Item	Удалить элемент буфера обмена
+	Delete Table Style	Удалить стиль таблицы
+	Encrypt with Password…	Зашифровать паролем…
+	Font: {font}	Шрифт: {font}
+	Glow	Свечение
+	Glow Colors	Цвета свечения
+	Hide from style lists	Скрывать в списках стилей
+	Indents and Spacing	Отступы и интервалы
+	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	Храните пароль в надёжном месте: без него никто, включая WordCraft, не сможет открыть документ. Оставьте оба поля пустыми, чтобы убрать пароль.
+	Line breaking	Перенос строк
+	Linked style (paragraph and character)	Связанный стиль (абзаца и знаков)
+	Manage Styles	Управление стилями
+	Manage Styles…	Управление стилями…
+	{name} is protected with a password.	{name} защищён паролем.
+	No Glow	Без свечения
+	✓ None	✓ Нет
+	No Shadow	Без тени
+	No Soft Edges	Без сглаживания
+	Nothing collected yet. Items you copy or cut appear here.	Пока пусто. Здесь появятся элементы, которые вы копируете или вырезаете.
+	Offset: Bottom	Смещение: вниз
+	Offset: Bottom Left	Смещение: вниз влево
+	Offset: Bottom Right	Смещение: вниз вправо
+	Offset: Center	Смещение: по центру
+	Offset: Left	Смещение: влево
+	Offset: Right	Смещение: вправо
+	Offset: Top	Смещение: вверх
+	Offset: Top Left	Смещение: вверх влево
+	Offset: Top Right	Смещение: вверх вправо
+	Paragraph style	Стиль абзаца
+	Password	Пароль
+	Password:	Пароль:
+	Paste All	Вставить всё
+	Paste Clipboard Item	Вставить элемент буфера обмена
+	(picture or object)	(рисунок или объект)
+	Remove Password	Убрать пароль
+	Shadow, glow and soft edges	Тень, свечение и сглаживание
+	Shape Effects	Эффекты фигуры
+	Show in the Styles gallery	Показывать в коллекции стилей
+	Show or Hide Style	Показать или скрыть стиль
+	{size} pt	{size} пт
+	Soft Edges	Сглаживание
+	Sort order:	Порядок сортировки:
+	Space after: {pt} pt	Интервал после: {pt} пт
+	Space before: {pt} pt	Интервал перед: {pt} пт
+	Table style	Стиль таблицы
+	That password isn't right. Check it (passwords are case-sensitive) and try again.	Неверный пароль. Проверьте его (регистр букв важен) и попробуйте снова.
+	The document will be saved with a password. Save it to protect it.	Документ будет сохранён с паролем. Сохраните его, чтобы защитить.
+	The password is removed. Save the document to keep the change.	Пароль убран. Сохраните документ, чтобы изменение осталось.
+	The passwords don't match.	Пароли не совпадают.
+	Ungroup	Разгруппировать
+	Weight	Толщина
+	Mon	Пн
+	Tue	Вт
+	Wed	Ср
+	Sum	Итог
+	North	Север
+	South	Юг
+	West	Запад
+	Total	Всего
