@@ -253,12 +253,7 @@ fn rtl_direction_survives_html_odt_rtf() {
         let t = flow_table_of(&b);
         let cells: Vec<String> = t.rows[0].iter().map(|c| c.text()).collect();
         assert_eq!(cells, ["العمود الأول", "second"], "{ext}: logical cell order");
-        if ext == "odt" {
-            // ODT has no table-direction property: the cells stay logical, direction is dropped.
-            assert!(!t.rtl, "{ext}: documented limitation");
-        } else {
-            assert!(t.rtl, "{ext}: table direction");
-        }
+        assert!(t.rtl, "{ext}: table direction");
         // The document model agrees with the flow.
         let dt = back.body.iter().find_map(|x| x.as_table()).expect("doc table");
         assert_eq!(dt.props.rtl, t.rtl, "{ext}");

@@ -9,11 +9,12 @@
 //!
 //! Arabic and other Arabic-script text: tokenization keeps zero-width joiners inside words
 //! (Persian نیم‌فاصله) and diacritics with their letters; spelling has no bundled Arabic
-//! dictionary yet, so Arabic-script words pass (the custom dictionary applies in every script),
-//! English-only rules (`a`/`an`, sentence capitals) structurally can't fire on them, and
-//! script-neutral ones (repetition, spacing) apply. [`strip_arabic_diacritics`] and
-//! [`arabic_search_pattern`] define the diacritic policy for search: diacritics match
-//! optionally by default, exactly on request, without rewriting stored text.
+//! dictionary yet, so Arabic-script words pass (the custom dictionary applies in every script).
+//! The English-only rules route by script: `a`/`an` need a Latin next word and sentence
+//! capitals need cased letters, so neither fires on Arabic; script-neutral ones (repetition,
+//! spacing) apply. [`strip_arabic_diacritics`] and [`arabic_search_pattern`] define the
+//! diacritic policy for search: diacritics match optionally by default, exactly on request,
+//! without rewriting stored text.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod dict;
@@ -424,7 +425,7 @@ pub fn check_grammar(text: &str) -> Vec<Issue> {
         }
         if gap == " "
             && (w0 == "an" || w0 == "An")
-            && w1.chars().next().is_some_and(|c| c.is_alphabetic() && !"aeiouAEIOUhH".contains(c))
+            && w1.chars().next().is_some_and(|c| c.is_ascii_alphabetic() && !"aeiouAEIOUhH".contains(c))
             && !w1.chars().all(|c| c.is_uppercase())
         {
             v.push(Issue {
@@ -555,12 +556,13 @@ mod tests {
 
     #[test]
     fn grammar_policy_for_arabic() {
-        // Script-neutral rules still apply to Arabic; English-only rules structurally can't fire.
+        // Script-neutral rules still apply to Arabic; English-only rules route by script.
         let v = check_grammar("الكتاب الكتاب");
         assert!(v.iter().any(|i| i.message.contains("Repeated")), "{v:?}");
         let v = check_grammar("نص  بمسافة");
         assert!(v.iter().any(|i| i.message.contains("Extra space")), "{v:?}");
         assert!(check_grammar("a الكتاب").iter().all(|i| !i.message.contains("\"an\"")));
+        assert!(check_grammar("an الكتاب").iter().all(|i| !i.message.contains("\"a\" before")), "no Latin rule on Arabic");
         assert!(check_grammar("سلام. دنیا").iter().all(|i| !i.message.contains("Capitalize")));
     }
 

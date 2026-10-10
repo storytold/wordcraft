@@ -193,8 +193,8 @@ pub struct FTable {
     pub widths: Vec<f32>,
     /// The source table had no borders (HTML default); the document table gets no grid style.
     pub borderless: bool,
-    /// Right-to-left table (document `w:bidiVisual`; HTML `dir="rtl"`; RTF `\rtltbl`).
-    /// Cell order stays logical. ODT has no table-direction property: it is dropped there.
+    /// Right-to-left table (document `w:bidiVisual`; HTML `dir="rtl"`; RTF `\rtltbl`; ODT
+    /// `style:writing-mode` on the table style). Cell order stays logical.
     pub rtl: bool,
 }
 

@@ -71,7 +71,7 @@ struct Writer {
     /// List styles: level kinds.
     list_styles: Vec<[bool; 9]>,
     /// Table styles: (name, column widths).
-    tables: Vec<Vec<f32>>,
+    tables: Vec<(Vec<f32>, bool)>,
     /// Cell styles by shading.
     cell_styles: Vec<Option<Rgb>>,
     pictures: Vec<(String, std::sync::Arc<Vec<u8>>, String)>,
@@ -371,7 +371,7 @@ impl Writer {
         } else {
             vec![468.0 / cols as f32; cols]
         };
-        self.tables.push(widths);
+        self.tables.push((widths, t.rtl));
         let tn = self.tables.len();
         out.push_str(&format!("<table:table table:name=\"Table{tn}\" table:style-name=\"Table{tn}\">"));
         for c in 0..cols {
@@ -453,11 +453,13 @@ impl Writer {
             }
             s.push_str("</text:list-style>");
         }
-        for (i, widths) in self.tables.iter().enumerate() {
+        for (i, (widths, rtl)) in self.tables.iter().enumerate() {
             let tn = i + 1;
             let total: f32 = widths.iter().sum();
+            // ODF 1.3 §20.404.7: table direction lives on the table style.
+            let dir = if *rtl { " style:writing-mode=\"rl-tb\"" } else { "" };
             s.push_str(&format!(
-                "<style:style style:name=\"Table{tn}\" style:family=\"table\"><style:table-properties style:width=\"{}\" table:align=\"margins\"/></style:style>",
+                "<style:style style:name=\"Table{tn}\" style:family=\"table\"><style:table-properties style:width=\"{}\" table:align=\"margins\"{dir}/></style:style>",
                 pt(total)
             ));
             for (c, w) in widths.iter().enumerate() {
@@ -630,7 +632,10 @@ struct StyleInfo {
     auto: bool,
     fmt: FmtDelta,
     align: Option<Align>,
-    rtl: bool,
+    /// Explicit paragraph direction (`None` = inherit through the chain).
+    rtl: Option<bool>,
+    /// Explicit table direction from `table-properties` (`None` = inherit).
+    table_rtl: Option<bool>,
     page_break: bool,
     outline: Option<u8>,
     border_bottom: bool,
@@ -800,12 +805,26 @@ impl Styles {
                         if get(&a, "fo:break-before") == Some("page") {
                             s.page_break = true;
                         }
-                        // Right-to-left horizontal paragraph direction (ODF `style:writing-mode`).
-                        if matches!(get(&a, "style:writing-mode"), Some("rl-tb" | "rl")) {
-                            s.rtl = true;
+                        // ODF `style:writing-mode`: an explicit direction overrides through the
+                        // style chain; anything else inherits.
+                        match get(&a, "style:writing-mode") {
+                            Some("rl-tb" | "rl") => s.rtl = Some(true),
+                            Some("lr-tb" | "lr") => s.rtl = Some(false),
+                            _ => {}
                         }
                         if get(&a, "fo:border-bottom").is_some_and(|b| b != "none") {
                             s.border_bottom = true;
+                        }
+                    }
+                }
+                "table-properties" => {
+                    if let Some((_, s)) = &mut cur {
+                        // ODF 1.3 §20.404.7: table direction lives on the table style, with the
+                        // same explicit-override semantics as paragraphs.
+                        match get(&a, "style:writing-mode") {
+                            Some("rl-tb" | "rl") => s.table_rtl = Some(true),
+                            Some("lr-tb" | "lr") => s.table_rtl = Some(false),
+                            _ => {}
                         }
                     }
                 }
@@ -858,6 +877,11 @@ impl Styles {
         out
     }
 
+    /// Table direction for a table style: the nearest explicit value through the chain.
+    fn table_rtl(&self, name: &str) -> bool {
+        self.chain(name).iter().find_map(|(_, s)| s.table_rtl).unwrap_or(false)
+    }
+
     /// Text formatting of a text style (whole chain).
     fn text_fmt(&self, name: &str, base: &Fmt) -> Fmt {
         let mut f = base.clone();
@@ -894,7 +918,7 @@ impl Styles {
             }
         }
         let align = chain.iter().find_map(|(_, s)| s.align);
-        let rtl = chain.iter().any(|(_, s)| s.rtl);
+        let rtl = chain.iter().find_map(|(_, s)| s.rtl).unwrap_or(false);
         let pb = chain.iter().take_while(|(_, s)| s.auto).any(|(_, s)| s.page_break);
         let rule = chain.iter().any(|(_, s)| s.border_bottom);
         let mut f = Fmt::default();
@@ -910,6 +934,8 @@ struct TableB {
     row: Vec<Cell>,
     /// Covered cells still owed to the previous cell's column span.
     hcover: usize,
+    /// `style:writing-mode` on the table's style.
+    rtl: bool,
 }
 
 struct Body<'a> {
@@ -1145,7 +1171,8 @@ impl Body<'_> {
                     self.skip = 1;
                     return;
                 }
-                self.tables.push(TableB { rows: Vec::new(), row: Vec::new(), hcover: 0 });
+                let rtl = get(a, "table:style-name").is_some_and(|s| self.styles.table_rtl(s));
+                self.tables.push(TableB { rows: Vec::new(), row: Vec::new(), hcover: 0, rtl });
             }
             "table-row" => {
                 if let Some(t) = self.tables.last_mut() {
@@ -1179,14 +1206,13 @@ impl Body<'_> {
                 let h = get(a, "svg:height").and_then(length);
                 self.frame = Some((w, h, None, String::new()));
             }
-            "image" => {
+            "image"
                 if let Some(href) = get(a, "xlink:href")
                     && let Some(fr) = &mut self.frame
-                    && fr.2.is_none()
-                {
-                    let path = href.trim_start_matches("./");
-                    fr.2 = (self.zip)(path);
-                }
+                    && fr.2.is_none() =>
+            {
+                let path = href.trim_start_matches("./");
+                fr.2 = (self.zip)(path);
             }
             "desc" | "title" if self.frame.is_some() => self.in_desc = true,
             _ => {}
@@ -1209,10 +1235,8 @@ impl Body<'_> {
         }
         match local(q) {
             "p" | "h" if !self.in_desc => self.end_para(),
-            "span" | "a" => {
-                if self.fmt.len() > usize::from(self.para.is_some()) {
-                    self.fmt.pop();
-                }
+            "span" | "a" if self.fmt.len() > usize::from(self.para.is_some()) => {
+                self.fmt.pop();
             }
             "list" => {
                 self.end_para();
@@ -1259,8 +1283,7 @@ impl Body<'_> {
                 if let Some(t) = self.tables.pop()
                     && !t.rows.is_empty()
                 {
-                    // ODT carries no table direction: cell order stays logical (see `FTable::rtl`).
-                    self.container().push(FBlock::Table(FTable { rows: t.rows, widths: Vec::new(), borderless: false, rtl: false }));
+                    self.container().push(FBlock::Table(FTable { rows: t.rows, widths: Vec::new(), borderless: false, rtl: t.rtl }));
                 }
             }
             "desc" | "title" => self.in_desc = false,
@@ -1383,8 +1406,7 @@ pub fn parse(bytes: &[u8]) -> Result<Flow, String> {
     let mut blocks = body.containers.pop().unwrap_or_default();
     for t in body.tables.drain(..) {
         if !t.rows.is_empty() {
-            // ODT carries no table direction: cell order stays logical (see `FTable::rtl`).
-            blocks.push(FBlock::Table(FTable { rows: t.rows, widths: Vec::new(), borderless: false, rtl: false }));
+            blocks.push(FBlock::Table(FTable { rows: t.rows, widths: Vec::new(), borderless: false, rtl: t.rtl }));
         }
     }
     if blocks.is_empty() {
@@ -1413,5 +1435,35 @@ mod tests {
     #[test]
     fn rejects_garbage() {
         assert!(parse(b"not a zip").is_err());
+    }
+
+    #[test]
+    fn style_direction_overrides_resolve_nearest_explicit() {
+        // A child style's explicit `lr-tb` beats an inherited `rl-tb`, and vice versa; a table
+        // style's `rl-tb` marks the table without touching cell paragraphs.
+        let content = br#"<?xml version="1.0" encoding="UTF-8"?>
+<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0">
+<office:automatic-styles>
+<style:style style:name="P1" style:family="paragraph"><style:paragraph-properties style:writing-mode="rl-tb"/></style:style>
+<style:style style:name="P2" style:family="paragraph" style:parent-style-name="P1"><style:paragraph-properties style:writing-mode="lr-tb"/></style:style>
+<style:style style:name="P3" style:family="paragraph" style:parent-style-name="P1"><style:paragraph-properties fo:text-align="start"/></style:style>
+<style:style style:name="T1" style:family="table"><style:table-properties style:writing-mode="rl-tb"/></style:style>
+</office:automatic-styles>
+<office:body><office:text>
+<text:p text:style-name="P2">ltr child</text:p>
+<text:p text:style-name="P3">inherited rtl</text:p>
+<table:table table:name="T" table:style-name="T1"><table:table-row><table:table-cell><text:p text:style-name="Standard">c</text:p></table:table-cell></table:table-row></table:table>
+</office:text></office:body></office:document-content>"#;
+        let styles = {
+            let mut s = Styles { map: std::collections::HashMap::new(), lists: std::collections::HashMap::new() };
+            s.read(content, true);
+            s
+        };
+        let ltr = styles.para("P2");
+        assert!(!ltr.2, "child lr-tb wins");
+        let rtl = styles.para("P3");
+        assert!(rtl.2, "unspecified child inherits rl-tb");
+        assert!(styles.table_rtl("T1"), "table style direction");
+        assert!(!styles.table_rtl("Missing"), "unknown styles stay LTR");
     }
 }

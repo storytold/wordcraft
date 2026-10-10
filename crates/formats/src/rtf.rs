@@ -1017,10 +1017,8 @@ impl Reader {
                         self.list_cur.clear();
                         self.list_cur_id = 0;
                     }
-                    "listlevel" => {
-                        if self.list_cur.len() < 9 {
-                            self.list_cur.push(true);
-                        }
+                    "listlevel" if self.list_cur.len() < 9 => {
+                        self.list_cur.push(true);
                     }
                     "levelnfc" | "levelnfcn" => {
                         if let Some(l) = self.list_cur.last_mut() {
