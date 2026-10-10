@@ -1,6 +1,6 @@
 # WordCraft parity with Microsoft Word
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (alpha gate checked: six core workflows pass; previously major: full re-measure against Word for Mac 16.113.4; replaces the parity tables that lived in ROADMAP.md) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (mainstream and essentials numbers added, full number recomputed 60% → 47% with the standard's discounts; alpha gate checked; previously major: full re-measure against Word for Mac 16.113.4; replaces the parity tables that lived in ROADMAP.md) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 The authoritative assessment of how close WordCraft is to Microsoft Word. [`ROADMAP.md`](../ROADMAP.md)
 summarizes it; [`gaps.md`](gaps.md) itemizes every shortfall; the deep checklists are
@@ -16,8 +16,10 @@ The generated ribbon checklist is [`parity-checklist.md`](parity-checklist.md).
 | Ribbon/menu catalog coverage | **378 / 428 (88.3%)** | **measured**: `cargo xtask parity` (re-derived this pass from `crates/engine/src/catalog.rs` against every `CommandSpec::new` id in the source; identical to the checked-in `parity-checklist.md`) |
 | Feature breadth (weighted, beyond the ribbon: dialog options, citation styles, proofing languages, chart types, UI languages) | **~80%** | estimated |
 | Feature depth (weighted by use, table below) | **~67%** | estimated |
-| **Ready for real work** | **~60%** (range 55–63%) | estimated, weighted by dimension (below) |
-| Remaining effort to beta | **~150–230 h** of Opus 5.5 agent wall-clock | estimated |
+| **Ready for real work** (full target) | **~47%** (range 43–52%) | estimated: base × discounts ([readiness numbers](#readiness-numbers-full-mainstream-practitioner-essentials-user)) |
+| **Mainstream practitioner** | **~54%** | estimated, same method |
+| **Essentials user** | **~63%** | estimated, same method |
+| Remaining effort to beta | **~450–700 h** of Opus 5.5 agent wall-clock to the 75% bar; the blocking beta list ([gaps.md](gaps.md) #1–#7) is ~150–230 h of it and lifts the full number to ~58% | estimated |
 | Remaining effort to full parity with Word desktop | **~750–1,250 h** | estimated |
 | Commands | 422 engine commands (+ `ui.*` commands in the front end) | measured (source count) |
 | Tests | 821 `#[test]` functions + 10 `proptest!` blocks | measured (source count) |
@@ -78,10 +80,99 @@ full parity for the area.
 
 Weighted feature depth: **~67%** (Σ weight × parity / 100 over the table).
 
+## Readiness numbers: full, mainstream practitioner, essentials user
+
+Three numbers, computed the same way (craftrules `standards/progress-docs.md`, "Numbers"): a
+weighted average of depth over the areas in scope, then multiplied by written-down discounts for
+what still stops real work. The stage follows the full number and the core-workflow gate.
+
+### The discounts (evidence)
+
+| Discount | Full and mainstream | Essentials | Evidence |
+|---|---|---|---|
+| Interaction fidelity | ×0.93 | — | Typing pinned to Word (`tests_typing.rs`), ribbon, keytips, mini-toolbar; but 16 modal dialogs against Word's ~100, 101 of ~250 shortcuts, no table column drag on the canvas (#217, #49), picture/shape handling complaints (#82, #142), lines wrap differently without an Aptos-metric font |
+| Discoverability and UI clarity | — | ×0.95 | Word-style ribbon a Word user already knows, command search, keytips; some newer pane strings and tooltips terse or untranslated |
+| Stability on real machines | ×0.90 | ×0.90 (launch and install) | Never-crash standard, hostile-param fuzzing, panic guard; but open startup crash on Intel UHD (#170), freezes (#77, #59, #31), Windows writes fail without admin (#218), installer conflicts with other Crafting Apps (#64, #73, #106, #51); 5 days of field history |
+| Exchanging files with Word users | ×0.90 | ×0.92 (opening files people send) | Word opens our .docx; `.doc` import; but no real-world corpus test, charts/SmartArt/OLE dropped silently, formatting revisions lost (#41), pagination differs (Aptos, no column balancing or footnote continuation). Simple documents, which are most of what a casual user receives, come through well; double-click open on macOS is fixed on main but not yet released (#223, #279) |
+| Product | **×0.753** | **×0.787** | |
+
+### Full target (ready for real work): ~47%
+
+Base = depth over the whole of Word: feature depth 67% (the area table above, weight 80%),
+localization 25% (6%), performance 75% (4%), ecosystem 15% (4%), hardware 40% (2%), platforms 95%
+(2%), AI 40% (2%) ≈ **62%**. File formats, layout fidelity, UI fidelity and stability are not
+averaged in; they are the discounts. **62% × 0.753 ≈ 47%** (range 43–52%).
+
+### Mainstream practitioner: ~54%
+
+The typical professional Word user (office, legal, academic, writing) in their own language, weekly
+work only. Left out: equations, mail merge, Draw/ink, East Asian and right-to-left typography,
+accessibility tools, proofing in other languages, add-ins/VBA, Copilot, cloud and co-authoring,
+dictation and pens.
+
+| Area | Weight | Depth |
+|---|---|---|
+| Typing, selection, clipboard, undo, find/replace | 17 | 82% |
+| Character and paragraph formatting | 16 | 82% |
+| Styles | 9 | 72% |
+| Tables | 9 | 74% |
+| Review (comments, track changes) | 9 | 72% |
+| Lists | 8 | 78% |
+| Page layout and sections | 6 | 70% |
+| Headers, footers, page numbers, fields | 5 | 70% |
+| Proofing in the user's language (English) | 5 | 55% |
+| Pictures, shapes, text boxes | 5 | 60% |
+| References (TOC, captions, citations) | 4 | 65% |
+| Footnotes | 2 | 60% |
+| Charts and SmartArt (pasted from Excel or received) | 2 | 3% |
+| Print and PDF | 2 | 65% |
+| View | 1 | 72% |
+
+Base ≈ **72%**; **72% × 0.753 ≈ 54%**.
+
+### Essentials user: ~63%
+
+Someone who uses only the core of Word: create or open a document, type and format it, a list, a
+picture, a simple table, spelling, undo, save, PDF or print, default settings. Advanced options,
+professional workflows and file-exchange edge cases are left out, as is everything left out of
+mainstream.
+
+| Feature | Weight | Depth |
+|---|---|---|
+| Typing, selection, copy/paste, undo | 20 | 85% |
+| Font, size, bold/italic/underline, colour, highlight | 15 | 88% |
+| New, open, save, AutoSave, templates | 12 | 80% |
+| Alignment, line spacing, indents | 8 | 85% |
+| Bullets and numbering | 8 | 85% |
+| Spelling (English) | 8 | 65% |
+| Insert, move and resize a picture | 7 | 65% |
+| Simple table | 6 | 75% |
+| Heading styles from the gallery | 5 | 78% |
+| Print and export PDF | 5 | 70% |
+| Find and replace | 3 | 85% |
+| Page numbers and a simple header | 3 | 75% |
+
+Base ≈ **80%**; **80% × 0.787 ≈ 63%**.
+
+### User evidence (GitHub, 2026-10-10; no issue was filed by a storytold org member)
+
+- **120 issues** filed by 80+ outside users in 5 days; about 60 closed, most fixed within a day.
+- **Praise:** 4 issues or comments ("Awesome job guys!" #28, "amazing how much it advanced" #146,
+  "appreciate the repo" #57, thanks in #73/#51). **"Switched from Word" reports: 0.**
+- **Open issues by kind** (hand-classified, ~56 open at classification): **~21 core-path bugs**
+  (install/launch: #64, #73, #106, #51, #47, #170, #218; hangs: #77, #59, #31; editing: #82, #142,
+  #44, #45, #217, #95; files and saving: #187, #195, #279, #18; printing #15; several may already
+  be fixed on main), **~11 right-to-left and language** reports (#19, #48, #63, #66, #199, #211,
+  #215, #25, #40, #56, #100), **~24 feature requests or minor bugs** (catalog parity, macros,
+  passwords, cloud, theming).
+- Reading: people are trying WordCraft as a Word replacement and report core-path problems more
+  than niche ones; the install and stability discount is earned.
+
 ## By dimension
 
-Weights are our estimate of how much each dimension decides whether a professional can switch from
-Word. They produce the **ready for real work** number.
+Diagnostic view of the same assessment: each dimension's parity and remaining hours. Since
+2026-10-10 (minor) these feed the readiness numbers above rather than a weighted sum: file formats,
+layout, UI and stability act as the discounts.
 
 | Dimension | Weight | Parity | Hours to full | Doc | Evidence |
 |---|---|---|---|---|---|
@@ -97,8 +188,11 @@ Word. They produce the **ready for real work** number.
 | Ecosystem and plugins | 2% | 15% | 40–80 | [gaps.md](gaps.md) | Zotero built in, macros record/play commands, `.docm` macros preserved (#172). No VBA execution, no Office add-ins, no EndNote/Mendeley plugins, no cloud storage or co-authoring |
 | AI features | 0% | 40% | 15–30 | [gaps.md](gaps.md) | Beyond Word for external agents (MCP, CLI). No in-app writing assistant like Copilot yet (chat PR #178 open). Weight 0: Copilot is a paid add-on and not what decides a switch |
 
-**Ready for real work ≈ 0.30·67 + 0.20·60 + 0.15·55 + 0.10·65 + 0.10·50 + 0.05·75 + 0.04·25 +
-0.03·95 + 0.01·40 + 0.02·15 ≈ 60%.**
+The weights column is the earlier additive formula, kept for the record: it gave **~60%**
+(0.30·67 + 0.20·60 + 0.15·55 + 0.10·65 + 0.10·50 + 0.05·75 + 0.04·25 + 0.03·95 + 0.01·40 + 0.02·15).
+It was replaced because an additive sum gives partial credit for stability and file exchange
+(50% stability still added 5 points) where in practice those stop real work; the multiplicative
+method above is the one every Crafting App now uses.
 
 ## Methodology
 
@@ -109,7 +203,9 @@ Word. They produce the **ready for real work** number.
 - **Estimated** numbers are judgements from that evidence plus Word's documented feature set. The
   previous estimate (~62% "real feature parity", 2026-10-06) measured feature depth only. This pass
   splits it into feature depth (67%, up: equations, .doc import, RTL, text boxes, Zotero landed) and
-  ready-for-real-work (60%), which adds file fidelity, stability, localization and the rest.
+  ready-for-real-work (first 60% by an additive formula, then ~47% the same day with the
+  multiplicative discounts the standard now prescribes; no new evidence about the product, only the
+  method), which adds file fidelity, stability, localization and the rest.
 - **Why the hours went up** from "120–150 h to 100%" (2026-10-06): that figure left out
   localization, multilingual proofing, ecosystem, hardware, PDF Reflow and `.doc` writing, and
   priced DOCX corpus fidelity at 10 h. The new evidence is the Word bundle inventory (30 UI
@@ -145,6 +241,7 @@ can be used without committing Word output.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Added mainstream practitioner (~54%) and essentials user (~63%) numbers with written weights and discounts; full ready-for-real-work recomputed with the same multiplicative discounts: 60% → ~47% (method change, not new product evidence; stage stays alpha: above 40% and the gate passes); beta now ~450–700 h to the 75% bar; user-evidence counts from GitHub |
 | 2026-10-10 | minor | Stage checked against the core-workflow alpha gate: passes, stays alpha |
 | 2026-10-10 | major | Created from ROADMAP.md's "Parity by area" and "Estimate to 100%" sections; full re-measure against Word for Mac 16.113.4 (bundle listing, catalog diff from source, issue tracker); split into feature depth (67%) and ready for real work (60%); added proofing, East Asian, accessibility areas and the dimension table; hours re-calibrated from PR history |
 | 2026-10-06 | major | First estimate in ROADMAP.md: ~62% real feature parity, 120–150 h to 100% |

@@ -1,8 +1,8 @@
 # WordCraft roadmap
 
-**Stage: alpha** · next: beta, ~15 points (60% → 75% ready for real work) and ~150–230 h away
+**Stage: alpha** · next: beta, ~28 points (47% → 75% ready for real work) and ~450–700 h away (the blocking beta list is ~150–230 h of it)
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (alpha gate checked: six core workflows pass; previously major: full re-measure against Word for Mac 16.113.4; restructured to the craftrules progress-docs standard) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (mainstream and essentials numbers added, full number recomputed 60% → 47% with the standard's discounts; alpha gate checked; previously major: full re-measure against Word for Mac 16.113.4; restructured to the craftrules progress-docs standard) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 WordCraft aims for complete parity with Microsoft Word, then goes further on speed, openness and
 agent control. This page is the summary; the assessment is
@@ -16,8 +16,10 @@ agent control. This page is the summary; the assessment is
 |---|---|---|
 | Ribbon/menu catalog coverage | **378 / 428 (88.3%)** | measured (`cargo xtask parity` → [`docs/parity-checklist.md`](docs/parity-checklist.md)) |
 | **Feature breadth** (weighted, incl. dialog options, styles, languages beyond the ribbon) | **~80%** | estimated |
-| **Ready for real work** | **~60%** (55–63%) | estimated, weighted by dimension |
-| Remaining to **beta** | **~150–230 h** of Opus 5.5 agent wall-clock | estimated |
+| **Ready for real work** (full target) | **~47%** (43–52%) | estimated: depth × discounts for interaction (×0.93), stability (×0.90), file exchange (×0.90) |
+| **Mainstream practitioner** | **~54%** | estimated, same method over a typical professional's weekly work |
+| **Essentials user** | **~63%** | estimated, same method over the core features only |
+| Remaining to **beta** | **~450–700 h** of Opus 5.5 agent wall-clock to the 75% bar; the blocking beta list (gaps #1–#7) is ~150–230 h and lifts the full number to ~58% | estimated |
 | Remaining to **full parity** with Word desktop | **~750–1,250 h** (70–80% parallelizable) | estimated |
 | Commands / tests / code | 422 commands · 821 tests + 10 property blocks · ~85,600 lines of Rust | measured (source) |
 | Releases | v0.4.0 (2026-10-10): signed macOS universal DMG, Windows MSI x64/x86/arm64, Linux AppImage/deb/rpm/Flatpak x86_64 + aarch64, FreeBSD, web | measured |
@@ -26,7 +28,12 @@ Hours are calibrated from this repo's PRs (equations #191: ~9.7k lines in ~5 h; 
 #145: ~4.5k lines in ~10 h; layout fidelity PRs run 5–10× slower per line). The earlier "≈120–150 h
 to 100%" (2026-10-06) left out localization, multilingual proofing, ecosystem, hardware, PDF Reflow
 and `.doc` writing, and priced the DOCX corpus at 10 h; see
-[methodology](docs/target-app-parity.md#methodology).
+[methodology](docs/target-app-parity.md#methodology). The three readiness numbers, their weights,
+discounts and the user evidence (120 issues from outside users, 4 praise, 0 "switched from Word",
+~21 open core-path bugs) are in
+[readiness numbers](docs/target-app-parity.md#readiness-numbers-full-mainstream-practitioner-essentials-user).
+The full number was 60% earlier on 2026-10-10 under an additive formula; it is ~47% under the
+multiplicative discounts every Crafting App now uses (method change, not a regression).
 
 **Why alpha:** the core workflows (write, format, styles, lists, tables, references, review, mail
 merge, open and save .docx) work end to end and ship as signed builds on every desktop platform
@@ -130,6 +137,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Mainstream practitioner (~54%) and essentials user (~63%) numbers added; full number recomputed 60% → ~47% with the standard's discounts; beta distance now ~28 points and ~450–700 h; stage stays alpha |
 | 2026-10-10 | minor | Alpha gate checked (six core workflows pass); stage stays alpha |
 | 2026-10-10 | major | Full re-measure; restructured to the progress-docs standard (stage banner, two numbers, dimensions, languages, upcoming, progress log); parity tables moved to `docs/target-app-parity.md`, milestones to `docs/roadmap.md` |
 | 2026-10-09 | minor | Recently landed: RTL, Ukrainian and Brazilian Portuguese |

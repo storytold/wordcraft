@@ -1,6 +1,6 @@
 # Where WordCraft falls short of Word
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (first version; every known shortfall from the 2026-10-10 re-measure, ranked) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (beta distance restated for the recomputed full number; previously: first version; every known shortfall from the 2026-10-10 re-measure, ranked) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 The work list. One entry per shortfall, ranked by how much it stops a Word user from switching
 (**B** = blocks beta). Each says what's missing, the evidence, who it hurts, an Opus 5.5 agent
@@ -41,8 +41,10 @@ first (`gh pr list`), and update this file and the parity doc when a gap closes.
 | 28 | **Dictate** | | `tools.dictate` missing | Dictation users | 8–15 + owner (speech model) | [hardware-parity.md](hardware-parity.md) |
 | 29 | **Equations**: long display equations don't break across lines; ink equations | | #191 notes | Maths-heavy documents | 3–4 | [layout-parity.md](layout-parity.md) |
 
-**Beta needs #1–#7** (~150–230 h with the stability and layout work they imply). Everything else is
-depth on the way to full parity.
+**Beta needs #1–#7** (~150–230 h with the stability and layout work they imply): they are the
+blocking gaps, and closing them lifts the full number from ~47% to ~58% by removing most of the
+stability and file-exchange discounts. Reaching the 75% beta bar also takes breadth from the rest of
+this list (~300–470 h more).
 
 ## By kind
 
@@ -62,4 +64,5 @@ The same gaps grouped the way the parity documents are, for agents working in on
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Beta note restated for the recomputed full number (~47%) |
 | 2026-10-10 | major | First version, from the full re-measure: 29 ranked gaps with evidence, impact and hours |
