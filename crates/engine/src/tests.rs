@@ -2732,3 +2732,67 @@ fn deleting_the_last_cell_column_never_leaves_a_table_without_rows() {
     run(&mut s, "edit.undo", json!({}));
     assert!(s.doc.body.iter().any(|b| b.as_table().is_some_and(|t| !t.rows.is_empty())));
 }
+
+/// Home › Font › Enclose Characters (#297): the selection becomes an `EQ \o\ac` field, saved the
+/// way Word stores it (the style in the code's run sizes) and read back; null takes the text out
+/// again, and each step undoes.
+#[test]
+fn enclose_characters_make_an_eq_field_and_come_back_out() {
+    use wordcraft_doc::InlineObject;
+    let field = |s: &Session| {
+        let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+        p.objects.iter().find_map(|o| match o {
+            InlineObject::Field { instr, result, .. } => Some((instr.clone(), result.clone())),
+            _ => None,
+        })
+    };
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "No 12 and 字 here"}));
+    run(&mut s, "select.text", json!({"text": "No 12"}));
+    assert!(s.run("format.enclose", &json!({"shape": "circle"})).is_err(), "five characters don't fit");
+    run(&mut s, "select.text", json!({"text": "字"}));
+    assert!(s.run("format.enclose", &json!({})).is_err(), "a script must say which shape");
+    run(&mut s, "format.enclose", json!({"shape": "circle"}));
+    assert_eq!(field(&s), Some(("eq \\o\\ac(○,字)".to_string(), "字".to_string())));
+    assert_eq!(text(&s), "No 12 and 字 here", "the field's text reads as the character");
+    run(&mut s, "select.text", json!({"text": "12"}));
+    run(&mut s, "format.enclose", json!({"shape": "diamond", "style": "enlarge"}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    let codes: Vec<String> =
+        p.objects.iter().filter_map(|o| if let InlineObject::Field { instr, .. } = o { Some(instr.clone()) } else { None }).collect();
+    assert_eq!(codes, ["eq \\o\\ac(◇,12) \\* enlarge", "eq \\o\\ac(○,字)"]);
+
+    // Word's structure in the .docx: no result, the symbol and the text in runs of their own
+    // sizes; reading it back gives the same fields, styles included.
+    let bytes = wordcraft_docx::write(&s.doc).unwrap();
+    let back = wordcraft_docx::read(&bytes).unwrap();
+    let bp = back.para_at(&Pos::body(0, 0)).unwrap();
+    let back_codes: Vec<(String, String)> = bp
+        .objects
+        .iter()
+        .filter_map(|o| if let InlineObject::Field { instr, result, .. } = o { Some((instr.clone(), result.clone())) } else { None })
+        .collect();
+    assert_eq!(back_codes, [("eq \\o\\ac(◇,12) \\* enlarge".to_string(), "12".to_string()), ("eq \\o\\ac(○,字)".to_string(), "字".to_string())]);
+
+    // Change the shape of the enclosed characters at the caret, then remove it.
+    let e = s.doc.para_at(&Pos::body(0, 0)).unwrap().text.find('\u{FFFC}').unwrap();
+    s.sel = crate::Selection::caret(Pos::body(0, e + 3));
+    run(&mut s, "format.enclose", json!({"shape": "square"}));
+    assert!(field(&s).unwrap().0.starts_with("eq \\o\\ac(□,12) \\* enlarge"), "the style stays");
+    run(&mut s, "format.enclose", json!({"shape": null}));
+    assert_eq!(text(&s), "No 12 and 字 here");
+    assert_eq!(s.selected_text(), "12");
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "edit.undo", json!({}));
+    assert!(field(&s).unwrap().0.starts_with("eq \\o\\ac(◇,12)"));
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(field(&s), None, "back to plain text");
+    assert!(s.run("format.enclose", &json!({"shape": null})).is_err(), "nothing to remove");
+    // Text given (the dialog's Text box) goes in at a caret.
+    run(&mut s, "caret.docEnd", json!({}));
+    assert!(s.run("format.enclose", &json!({"shape": "triangle", "text": "ABC"})).is_err());
+    run(&mut s, "format.enclose", json!({"shape": "triangle", "text": "A"}));
+    assert_eq!(text(&s), "No 12 and 字 hereA");
+    assert_eq!(field(&s), Some(("eq \\o\\ac(△,A)".to_string(), "A".to_string())));
+}

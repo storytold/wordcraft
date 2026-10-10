@@ -120,6 +120,10 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.rect(3.0, 3.0, 17.0, 17.0, a);
             pen.text(10.0, 6.0, 9.0, "A", c, false);
         }
+        "enclose" => {
+            pen.circle(10.0, 10.5, 7.5, a);
+            pen.text(10.0, 10.5, 9.0, "A", c, false);
+        }
         "subscript" => {
             pen.text(8.0, 9.0, 13.0, "x", c, false);
             pen.text(15.0, 14.5, 8.0, "2", a, true);

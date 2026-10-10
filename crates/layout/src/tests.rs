@@ -2985,3 +2985,51 @@ fn footnote_longer_than_pages_ends() {
     assert!(pieces.len() >= 3 && l.pages.len() == pieces.len(), "{} pages, {pieces:?}", l.pages.len());
     assert!(pieces.windows(2).all(|w| w[0].2 == w[1].1 && w[1].0 == w[0].0 + 1), "{pieces:?}");
 }
+
+/// Enclosed characters (#297, an `EQ \o\ac` field): the shape is drawn as a vector around the text,
+/// whatever the font has; "shrink text" draws the text smaller inside a one-em shape, "enlarge
+/// symbol" a bigger shape around text at its own size. Plain `\o` overstrikes its arguments.
+#[test]
+fn enclosed_characters_draw_a_shape_around_the_text() {
+    use wordcraft_doc::eq::{EncloseShape, EncloseStyle, Enclosure};
+    let draw = |shape: EncloseShape, style: EncloseStyle| {
+        let mut d = Document::from_text("a  b");
+        let e = Enclosure { shape, style, text: "A".into() };
+        d.insert_object(&Pos::body(0, 2), InlineObject::Field { instr: e.instr(), result: "A".into(), locked: false }, &Default::default()).unwrap();
+        let l = lay(&d);
+        let items = display::page_display(&d, &l.pages[0], &Default::default());
+        let shape = items
+            .iter()
+            .find_map(|i| if let display::Draw::Shape { rect, kind, stroke, .. } = i { Some((*rect, *kind, stroke.is_some())) } else { None });
+        // Each glyph's character, size and x.
+        let mut chars = Vec::new();
+        for i in &items {
+            if let display::Draw::Glyphs { text, size, glyphs, ranges, .. } = i {
+                for (g, r) in glyphs.iter().zip(ranges) {
+                    chars.push((text.get(r.clone()).unwrap_or("").to_string(), *size, g.1));
+                }
+            }
+        }
+        let at = |c: &str| chars.iter().find(|x| x.0 == c).map(|x| (x.1, x.2)).unwrap_or_else(|| panic!("{c}: {items:?}"));
+        (shape.expect("a shape"), at("A"), at("b"))
+    };
+    let ((rect, kind, stroked), (size, gx), (base, bx)) = draw(EncloseShape::Circle, EncloseStyle::Shrink);
+    assert_eq!(kind, wordcraft_doc::para::ShapeKind::Ellipse);
+    assert!(stroked);
+    assert!(size < base * 0.8, "the text shrinks: {size} vs {base}");
+    assert!((rect.h - base * 1.05).abs() < 0.1 && (rect.w - rect.h).abs() < 0.1, "{rect:?}");
+    assert!(gx > rect.x && gx < rect.x + rect.w, "the text is inside: {gx} {rect:?}");
+    assert!(bx >= rect.x + rect.w, "the next text follows the shape: {bx} {rect:?}");
+    let ((rect, kind, _), (size, _), (base, _)) = draw(EncloseShape::Diamond, EncloseStyle::Enlarge);
+    assert_eq!(kind, wordcraft_doc::para::ShapeKind::Diamond);
+    assert!((size - base).abs() < 0.01 && rect.h > base * 1.5, "the shape grows: {rect:?}");
+
+    // A general overstrike: both arguments at the same place, no shape.
+    let mut d = Document::from_text("x");
+    d.insert_object(&Pos::body(0, 1), InlineObject::Field { instr: "eq \\o(=,/)".into(), result: String::new(), locked: false }, &Default::default())
+        .unwrap();
+    let l = lay(&d);
+    let items = display::page_display(&d, &l.pages[0], &Default::default());
+    assert!(!items.iter().any(|i| matches!(i, display::Draw::Shape { .. })));
+    assert!(items.iter().any(|i| matches!(i, display::Draw::Glyphs { text, .. } if text.contains("=/"))), "{items:?}");
+}

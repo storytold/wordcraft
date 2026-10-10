@@ -1,6 +1,6 @@
 //! Dialogs: Font, Paragraph, Find & Replace, Go To, Insert Table, Page Setup, Link, Bookmark,
 //! Word Count, Zoom, Watermark, New/Modify Style, Manage Styles, New/Modify Table Style, Table
-//! Properties, Command search, Paste Special, About, Save Changes, the password to open a
+//! Properties, Enclose Characters, Command search, Paste Special, About, Save Changes, the password to open a
 //! document and Encrypt with Password, and the mail-merge Recipient List, Insert Merge Field, Find
 //! Recipient, merge rules, Match Fields and Check for Errors. Every dialog ends by running a
 //! command (or shows one's result), so agents get the same result without the dialog.
@@ -246,6 +246,13 @@ pub enum Dialog {
     /// Review › Tracking › Track Changes Options (#328).
     TrackOptions {
         form: Box<crate::dialogs_lists::TrackForm>,
+    },
+    /// Home › Font › Enclose Characters: the style (`none` takes the enclosure away, `shrink`,
+    /// `enlarge`), the text and the shape (`circle`, `square`, `triangle`, `diamond`).
+    Enclose {
+        style: String,
+        text: String,
+        shape: String,
     },
 }
 
@@ -650,6 +657,7 @@ impl Dialog {
             Dialog::EncryptPassword { .. } => "encryptPassword",
             Dialog::DefineList { .. } => "defineList",
             Dialog::TrackOptions { .. } => "trackChangesOptions",
+            Dialog::Enclose { .. } => "enclose",
         }
     }
 
@@ -773,6 +781,16 @@ impl Dialog {
             "tableProperties" => {
                 let form = Box::new(TableForm::read(app)?);
                 Dialog::TableProperties { basis: form.clone(), form }
+            }
+            "enclose" => {
+                // The selection's text and its enclosure, if it has one.
+                let t = wordcraft_engine::cmd::format::enclose_target(&app.session).ok();
+                let cur = t.as_ref().and_then(|t| t.current.clone());
+                Dialog::Enclose {
+                    style: cur.as_ref().map_or("shrink", |e| e.style.name()).into(),
+                    shape: cur.as_ref().map_or("circle", |e| e.shape.name()).into(),
+                    text: t.map(|t| t.text).unwrap_or_default(),
+                }
             }
             "pasteSpecial" => Dialog::paste_special(app, &json!({})),
             "about" => Dialog::About { tab: 0 },
@@ -938,6 +956,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::EncryptPassword { .. } => "Encrypt with Password",
         Dialog::DefineList { .. } => "Define New Multilevel List",
         Dialog::TrackOptions { .. } => "Track Changes Options",
+        Dialog::Enclose { .. } => "Enclose Characters",
     };
     egui::Window::new(tl!(title))
         .id(egui::Id::new(("dialog", title)))
@@ -1237,6 +1256,36 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             let (ok, cancel) = buttons(ui, tl!("Go To"));
             if ok && let Ok(n) = page.trim().parse::<u64>() {
                 let _ = app.run("edit.goto", json!({"page": n}));
+            }
+            ok || cancel
+        }
+        Dialog::Enclose { style, text, shape } => {
+            ui.label(egui::RichText::new(tl!("Style")).font(semibold(12.5)));
+            ui.horizontal(|ui| {
+                for (v, l) in [("none", "None"), ("shrink", "Shrink text"), ("enlarge", "Enlarge symbol")] {
+                    ui.radio_value(style, v.to_string(), tl!(l));
+                }
+            });
+            ui.add_space(6.0);
+            ui.horizontal_top(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(tl!("Text:"));
+                    ui.add(egui::TextEdit::singleline(text).desired_width(110.0).char_limit(2));
+                    ui.add_space(6.0);
+                    enclose_preview(ui, style, text, shape);
+                });
+                ui.add_space(12.0);
+                ui.vertical(|ui| {
+                    ui.label(tl!("Enclosure"));
+                    for (v, l) in [("circle", "Circle"), ("square", "Square"), ("triangle", "Triangle"), ("diamond", "Diamond")] {
+                        ui.add_enabled_ui(style != "none", |ui| ui.selectable_value(shape, v.to_string(), tl!(l)));
+                    }
+                });
+            });
+            let (ok, cancel) = buttons(ui, tl!("OK"));
+            if ok {
+                let params = if style == "none" { json!({"shape": null}) } else { json!({"shape": shape, "style": style, "text": text}) };
+                let _ = app.run("format.enclose", params);
             }
             ok || cancel
         }
@@ -2224,6 +2273,48 @@ fn describe(st: &Value) -> String {
         parts.push(crate::i18n::fmt(tl!("Based on: {style}"), &[("style", b)]));
     }
     parts.join(", ")
+}
+
+/// Enclose Characters' preview: the text in the chosen shape, shrunk or with the shape enlarged
+/// (drawn, so it doesn't depend on the interface font having ○ □ △ ◇).
+fn enclose_preview(ui: &mut Ui, style: &str, text: &str, shape: &str) {
+    let t = Tokens::get(ui.ctx());
+    let (r, _) = ui.allocate_exact_size(vec2(110.0, 64.0), Sense::hover());
+    let p = ui.painter_at(r);
+    p.rect_filled(r, 2.0, t.input);
+    p.rect_stroke(r, 2.0, egui::Stroke::new(1.0, t.border_strong), egui::StrokeKind::Inside);
+    let ink = ui.visuals().text_color();
+    let c = r.center();
+    let (box_h, text_px) = match style {
+        "none" => (0.0, 26.0),
+        "enlarge" => (48.0, 26.0),
+        _ => (34.0, 20.0),
+    };
+    let h = box_h / 2.0;
+    let stroke = egui::Stroke::new(1.5, ink);
+    match (shape, box_h > 0.0) {
+        (_, false) => {}
+        ("square", _) => {
+            p.rect_stroke(egui::Rect::from_center_size(c, vec2(box_h, box_h)), 0.0, stroke, egui::StrokeKind::Middle);
+        }
+        ("triangle", _) => {
+            let pts = vec![egui::pos2(c.x, c.y - h), egui::pos2(c.x + h * 1.1, c.y + h), egui::pos2(c.x - h * 1.1, c.y + h)];
+            p.add(egui::Shape::closed_line(pts, stroke));
+        }
+        ("diamond", _) => {
+            let pts = vec![egui::pos2(c.x, c.y - h), egui::pos2(c.x + h, c.y), egui::pos2(c.x, c.y + h), egui::pos2(c.x - h, c.y)];
+            p.add(egui::Shape::closed_line(pts, stroke));
+        }
+        _ => {
+            p.circle_stroke(c, h, stroke);
+        }
+    }
+    let px = match (style, shape) {
+        ("shrink", "triangle" | "diamond") => text_px * 0.75,
+        _ => text_px,
+    };
+    let dy = if shape == "triangle" && box_h > 0.0 { h * 0.3 } else { 0.0 };
+    p.text(c + vec2(0.0, dy), egui::Align2::CENTER_CENTER, text, egui::FontId::proportional(px), ink);
 }
 
 #[cfg(test)]
