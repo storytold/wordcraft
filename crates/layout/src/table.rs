@@ -71,7 +71,11 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
     // indent); earlier modes line the first cell's text up with it instead.
     let margins_def = t.props.cell_margins.unwrap_or(DEFAULT_MARGINS);
     let indent = t.props.indent.unwrap_or(0.0);
-    let tborders = t.props.borders.or_else(|| parts.as_ref().and_then(|p| p.borders));
+    // The style's borders, overlaid by the table's own side by side.
+    let mut tborders = parts.as_ref().and_then(|p| p.borders).unwrap_or_default();
+    if let Some(own) = t.props.borders {
+        tborders.overlay(&own);
+    }
     let first_cell = t.rows.first().and_then(|r| r.cells.first());
     let x = match t.props.align {
         Some(Align::Center) => (avail - total) / 2.0,
@@ -79,7 +83,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
         _ if ctx.doc.settings.compat_mode >= 15 => {
             // The border is centred on the edge, so half of it sits outside: Word moves the
             // table in by that half.
-            let border = first_cell.and_then(|c| c.props.borders.and_then(|b| b.left)).or(tborders.and_then(|b| b.left));
+            let border = first_cell.and_then(|c| c.props.borders.and_then(|b| b.left)).or(tborders.left);
             indent + border.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0) / 2.0)
         }
         _ => indent - first_cell_left_margin(t),
@@ -146,7 +150,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                 rh = rh.max(h);
             }
             // Effective borders: cell > table (outer vs inside).
-            let tb = tborders.unwrap_or_default();
+            let tb = tborders;
             let edge =
                 |own: Option<Border>, outer: bool, outer_b: Option<Border>, inner_b: Option<Border>| own.or(if outer { outer_b } else { inner_b });
             let cb = cell.props.borders.unwrap_or_default();

@@ -1,6 +1,6 @@
 //! OPC package access: bounded zip reading, relationships, part names.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{Cursor, Read, Write};
 
 use crate::DocxError;
@@ -31,7 +31,17 @@ pub mod rt {
     pub const FOOTER: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer";
     pub const IMAGE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
     pub const HYPERLINK: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
+    pub const VBA_PROJECT: &str = "http://schemas.microsoft.com/office/2006/relationships/vbaProject";
 }
+
+/// `Document::passthrough` key for a macro project, kept as opaque bytes (never parsed or run).
+pub const VBA_PROJECT_PART: &str = "word/vbaProject.bin";
+/// `Document::passthrough` key listing the parts the project relates to (VBA data, signatures…),
+/// one `relationship type \t part name \t content type` line each; each part's bytes are kept
+/// under its part name. Not a package part: WordCraft's own bookkeeping.
+pub const VBA_RELATED: &str = "wordcraft:vbaProject.related";
+/// Most parts we carry along with a macro project.
+pub const MAX_VBA_RELATED: usize = 64;
 
 /// Does relationship type `t` end with `suffix` (ignoring the transitional/strict prefix)?
 pub fn rel_is(t: &str, full: &str) -> bool {
@@ -109,7 +119,14 @@ impl Package {
         let (dir, file) = split_dir(part);
         let path = if dir.is_empty() { format!("_rels/{file}.rels") } else { format!("{dir}/_rels/{file}.rels") };
         let mut rels = Rels::default();
-        let Ok(Some(root)) = self.xml(&path) else { return rels };
+        let root = match self.xml(&path) {
+            Ok(Some(root)) => root,
+            Ok(None) => return rels,
+            Err(e) => {
+                log::warn!("docx: ignoring unreadable relationships {path}: {e}");
+                return rels;
+            }
+        };
         for r in root.els().filter(|e| e.local() == "Relationship") {
             let (Some(id), Some(target)) = (r.attr("Id"), r.attr("Target")) else { continue };
             let external = r.attr("TargetMode").is_some_and(|m| m.eq_ignore_ascii_case("External"));
@@ -117,6 +134,43 @@ impl Package {
             rels.list.push(Rel { id: id.to_string(), kind: r.attr("Type").unwrap_or("").to_string(), target: resolved, external });
         }
         rels
+    }
+}
+
+/// `[Content_Types].xml`: Override by part name, then Default by extension (both case-insensitive).
+#[derive(Default)]
+pub struct ContentTypes {
+    overrides: HashMap<String, String>,
+    defaults: HashMap<String, String>,
+}
+
+impl ContentTypes {
+    pub fn read(pkg: &Package) -> ContentTypes {
+        let mut ct = ContentTypes::default();
+        let root = match pkg.xml("[Content_Types].xml") {
+            Ok(Some(root)) => root,
+            Ok(None) => return ct,
+            Err(e) => {
+                log::warn!("docx: ignoring unreadable [Content_Types].xml: {e}");
+                return ct;
+            }
+        };
+        for e in root.els() {
+            let (Some(key), Some(t)) = (e.attr("PartName").or_else(|| e.attr("Extension")), e.attr("ContentType")) else { continue };
+            let map = if e.local() == "Override" { &mut ct.overrides } else { &mut ct.defaults };
+            map.entry(key.trim_start_matches('/').to_ascii_lowercase()).or_insert_with(|| t.to_string());
+        }
+        ct
+    }
+
+    /// Content type of `part` (a package path without the leading `/`).
+    pub fn of(&self, part: &str) -> Option<&str> {
+        let part = part.trim_start_matches('/').to_ascii_lowercase();
+        if let Some(t) = self.overrides.get(&part) {
+            return Some(t);
+        }
+        let ext = part.rsplit_once('.').map(|(_, e)| e)?;
+        self.defaults.get(ext).map(String::as_str)
     }
 }
 

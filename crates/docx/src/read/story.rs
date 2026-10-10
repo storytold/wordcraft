@@ -323,6 +323,11 @@ impl Reader<'_> {
                     self.read_inline_children(sc, pb, c, rels, ctx, depth + 1);
                 }
             }
+            // Some generators write a break directly under the paragraph instead of inside a run.
+            "w:br" | "w:cr" => {
+                let props = self.run_props_none(ctx);
+                self.read_run_child(sc, pb, k, &props, rels, &mut None, depth + 1);
+            }
             _ => {}
         }
     }
@@ -444,6 +449,15 @@ impl Reader<'_> {
                     let kind = if foot { NoteKind::Footnote } else { NoteKind::Endnote };
                     let custom = on_off_attr(k, "w:customMarkFollows").then(String::new);
                     *note = Some((kind, id, custom));
+                }
+            }
+            // The note's own number at the start of its text: a reference to the note being read.
+            "w:footnoteRef" | "w:endnoteRef" => {
+                let kind = if k.name == "w:footnoteRef" { NoteKind::Footnote } else { NoteKind::Endnote };
+                if let Some((nk, id)) = self.current_note
+                    && nk == kind
+                {
+                    *note = Some((kind, id, None));
                 }
             }
             "w:commentReference" => {
