@@ -235,6 +235,8 @@ fn tables_with_merges_round_trip() {
         c.props.text_direction = TextDirection::Up;
         c.props.no_wrap = true;
         c.props.margins = Some([2.0, 3.0, 4.0, 5.0]);
+        c.props.width = None;
+        c.props.width_pct = Some(40.0);
         c.props.borders = Some(Borders::box_(Border { style: BorderStyle::Dashed, width: 1.0, color: Some(Rgb(0, 0, 255)), space: 0.0 }));
         c.blocks = vec![para_block(Paragraph::with_text("red", CharProps::default()))];
     }

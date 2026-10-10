@@ -1502,8 +1502,9 @@ fn reorder_line(pl: &ParaLayout, line: &mut Line, width: f32) {
     line.xs = line.vis.iter().map(|v| v.x).chain(std::iter::once(end)).collect();
 }
 
-/// Narrowest span text flows into beside a floating object, points.
-const MIN_SPAN: f32 = 36.0;
+/// Narrowest span text flows into beside a floating object, points. Word puts an empty
+/// paragraph beside a floating table in a 21.3pt gap but not in an 18.6pt one.
+const MIN_SPAN: f32 = 20.0;
 
 /// The spans of a row at `top` (about `h` tall) between `lo` and `hi` that text can use around
 /// the exclusions, left to right (Square wrapping uses both sides of an object). `Err(y)`: none

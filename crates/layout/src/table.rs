@@ -5,11 +5,11 @@
 use wordcraft_doc::numbering::Counters;
 use wordcraft_doc::props::{Align, Border, Borders, HeightRule, Rgb, TextDirection, VAlign, VMerge};
 use wordcraft_doc::styles::TableStyleProps;
-use wordcraft_doc::{StoryRef, Table};
+use wordcraft_doc::{Block, Blocks, Paragraph, StoryRef, Table};
 use wordcraft_geom::Rect;
 
-use crate::para::CellText;
-use crate::{Ctx, Placed, layout_box};
+use crate::para::{CellText, ClKind, ParaLayout};
+use crate::{BoxLayout, Ctx, Placed, layout_box};
 
 pub struct RowLayout {
     pub height: f32,
@@ -97,9 +97,8 @@ fn first_cell_left_margin_in(t: &Table, def: [f32; 4]) -> f32 {
 pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], avail: f32, depth: usize) -> TableLayout {
     let style = table_style(ctx, t);
     let parts = style.as_ref().map(|s| &s.parts);
-    // Cell text formatting per (header row, total row, first column, row band) region, built once
-    // per table.
-    let mut cell_text: Vec<((bool, bool, bool, bool), CellText)> = Vec::new();
+    // Cell text formatting per region, built once per table.
+    let mut cell_text: Vec<(Region, CellText)> = Vec::new();
     let ncols = t.cols().max(1);
     // Column widths.
     let mut grid: Vec<f32> = if t.grid.len() == ncols {
@@ -122,6 +121,22 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
         let k = avail / total.max(1.0);
         grid.iter_mut().for_each(|w| *w *= k);
         total = avail;
+    }
+    if !t.props.fixed {
+        // Measuring lays paragraphs out once more; it mustn't count their equations twice.
+        let eq_count = ctx.eq_count;
+        let content = column_content(ctx, t, style.as_ref(), depth);
+        ctx.eq_count = eq_count;
+        if let Some(content) = content {
+            autofit(&mut grid, &content, t, avail);
+            // Never wider than the room it had, however long an unbreakable word.
+            let fitted: f32 = grid.iter().sum();
+            let cap = avail.max(total);
+            if fitted > cap {
+                grid.iter_mut().for_each(|w| *w *= cap / fitted);
+            }
+            total = grid.iter().sum();
+        }
     }
     let mut colx = Vec::with_capacity(ncols + 1);
     let mut acc = 0.0;
@@ -153,7 +168,6 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
     };
     let nrows = t.rows.len();
     let header_rows = t.props.look.header_row;
-    let band_size = parts.and_then(|p| p.band_size).unwrap_or(1).clamp(1, 1000) as usize;
     // First pass: lay out every cell's content.
     struct CellBox {
         items: Vec<Placed>,
@@ -180,7 +194,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
         let mut row_insets = 0.0f32;
         let is_header = header_rows && ri == 0;
         let is_total = t.props.look.total_row && ri + 1 == nrows && nrows > 1;
-        let band = t.props.look.banded_rows && !is_header && (ri.saturating_sub(usize::from(header_rows)) / band_size).is_multiple_of(2);
+        let band = banded(t, style.as_ref(), ri);
         // The header row's or the odd band's own cell borders (conditional formatting).
         let region_borders = if is_header {
             parts.and_then(|p| p.header_borders)
@@ -197,7 +211,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             let margins = cell.props.margins.unwrap_or(margins_def);
             let cw = (x1 - x0 - margins[1] - margins[3]).max(4.0);
             let mut fill = cell.props.shading;
-            let region = (is_header, is_total, t.props.look.first_column && g == 0, band);
+            let region = region_of(t, style.as_ref(), ri, g);
             if let Some(p) = parts {
                 if is_header {
                     fill = fill.or(p.header_fill);
@@ -210,21 +224,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             if let Some(st) = &style
                 && !cell_text.iter().any(|(r, _)| *r == region)
             {
-                // The whole table's formatting, then column, then row conditional formatting
-                // (later regions win, ECMA-376 §17.7.6).
-                let mut chr = st.chr.clone();
-                if band {
-                    chr.overlay(&st.parts.band_chr);
-                }
-                if region.2 {
-                    chr.overlay(&st.parts.first_col_chr);
-                }
-                if is_header {
-                    chr.overlay(&st.parts.header_chr);
-                } else if is_total {
-                    chr.overlay(&st.parts.total_chr);
-                }
-                cell_text.push((region, CellText { para: st.para.clone(), chr }));
+                cell_text.push((region, region_text(st, region)));
             }
             let text = cell_text.iter().find(|(r, _)| *r == region).map(|(_, c)| c);
             let mut cpath = path.to_vec();
@@ -265,20 +265,22 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                 let len = match (row.props.height, row.props.height_rule) {
                     (Some(h), HeightRule::Exact) if h > 0.0 => (h - insets).clamp(4.0, TURNED_LIMIT),
                     _ => {
-                        let (probe, _) = layout_box(ctx, story, &cell.blocks, &cpath, TURNED_MAX, text, depth, None);
+                        let probe = layout_box(ctx, story, &cell.blocks, &cpath, TURNED_MAX, text, depth, None).items;
                         (ctx.counters, ctx.eq_count) = (snap.0.clone(), snap.1);
                         natural_length(&probe).clamp(4.0, TURNED_MAX)
                     }
                 };
-                let (items, across) = layout_box(ctx, story, &cell.blocks, &cpath, len, text, depth, None);
+                let BoxLayout { items, height, floats_bottom } = layout_box(ctx, story, &cell.blocks, &cpath, len, text, depth, None);
+                let across = height.max(floats_bottom);
                 turned = Some(Turned { turn, len, across, snap, region, ci, top: margins[0] + band_t });
                 (items, len)
             } else {
-                let (mut items, h) = layout_box(ctx, story, &cell.blocks, &cpath, cw, text, depth, None);
+                let BoxLayout { mut items, height, floats_bottom } = layout_box(ctx, story, &cell.blocks, &cpath, cw, text, depth, None);
                 for it in &mut items {
                     it.translate(x0 + margins[1], margins[0] + band_t);
                 }
-                (items, h)
+                // The cell grows to hold its floating tables.
+                (items, height.max(floats_bottom))
             };
             let h = h + insets;
             if cell.props.vmerge != VMerge::Restart {
@@ -385,7 +387,8 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                     let text = cell_text.iter().find(|(r, _)| *r == tn.region).map(|(_, c)| c);
                     // Same list numbers as the first layout: lay it out from the same counters.
                     let now = (std::mem::replace(&mut ctx.counters, tn.snap.0), std::mem::replace(&mut ctx.eq_count, tn.snap.1));
-                    (cell_items, across) = layout_box(ctx, story, &cell.blocks, &cpath, len, text, depth, None);
+                    let b = layout_box(ctx, story, &cell.blocks, &cpath, len, text, depth, None);
+                    (cell_items, across) = (b.items, b.height.max(b.floats_bottom));
                     (ctx.counters, ctx.eq_count) = now;
                 }
                 // Lines stack across the cell from its start edge (right for top-to-bottom text,
@@ -475,7 +478,19 @@ pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
             _ => {}
         }
     }
-    if !kept_any || first_moved == f32::MAX {
+    if !kept_any {
+        return None;
+    }
+    // Every line fits and only a nested table's cell runs past the cut (a floating table's
+    // fixed-height row, say): split there rather than move the whole row on. A row that is just
+    // taller than its text moves on whole, as in Word.
+    let own_depth = row.items.iter().filter_map(|it| if let Placed::Cell { table, .. } = it { Some(table.0.len()) } else { None }).min();
+    let nested_past_cut =
+        row.items.iter().any(|it| matches!(it, Placed::Cell { rect, table, .. } if Some(table.0.len()) > own_depth && rect.bottom() > cut + 0.01));
+    if first_moved == f32::MAX && nested_past_cut {
+        first_moved = cut;
+    }
+    if first_moved == f32::MAX {
         return None;
     }
     // Keep a little of the cell's top margin on the continuation.
@@ -529,15 +544,18 @@ pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
                     b.push(it);
                 }
             }
+            // Shading and cell areas: the part above the cut stays, the rest moves up with the
+            // continuation (a nested table's cell below the cut moves whole).
             Placed::Fill { rect, color } => {
-                a.push(Placed::Fill { rect: Rect::new(rect.x, rect.y, rect.w, (cut - rect.y).max(0.0)), color: *color });
-                let h = (rect.bottom() - shift - 0.0).max(0.0);
-                b.push(Placed::Fill { rect: Rect::new(rect.x, 0.0, rect.w, h), color: *color });
+                let (above, below) = split_rect(*rect, cut, shift);
+                a.extend(above.map(|rect| Placed::Fill { rect, color: *color }));
+                b.extend(below.map(|rect| Placed::Fill { rect, color: *color }));
             }
             Placed::Cell { rect, table, row: r, cell, story } => {
-                a.push(Placed::Cell { rect: Rect::new(rect.x, rect.y, rect.w, cut), table: table.clone(), row: *r, cell: *cell, story: *story });
-                let h = (rect.bottom() - shift).max(0.0);
-                b.push(Placed::Cell { rect: Rect::new(rect.x, 0.0, rect.w, h), table: table.clone(), row: *r, cell: *cell, story: *story });
+                let (above, below) = split_rect(*rect, cut, shift);
+                let cell_at = |rect| Placed::Cell { rect, table: table.clone(), row: *r, cell: *cell, story: *story };
+                a.extend(above.map(cell_at));
+                b.extend(below.map(cell_at));
             }
             Placed::Rule { x0, y0, x1, y1, border } => {
                 if (y0 - y1).abs() < 0.01 {
@@ -566,4 +584,201 @@ pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
         }
     }
     Some((RowLayout { height: cut, items: a }, RowLayout { height: (row.height - shift).max(4.0), items: b }))
+}
+
+/// The parts of `r` above `cut` and below it, the latter moved up by `shift` (onto the
+/// continuation of a row split at `cut`).
+fn split_rect(r: Rect, cut: f32, shift: f32) -> (Option<Rect>, Option<Rect>) {
+    let above = (r.y < cut).then(|| Rect::new(r.x, r.y, r.w, (r.bottom().min(cut) - r.y).max(0.0)));
+    let top = (r.y - shift).max(0.0);
+    let below = (r.bottom() > cut).then(|| Rect::new(r.x, top, r.w, (r.bottom() - shift - top).max(0.0)));
+    (above, below)
+}
+
+/// A cell's region for table-style conditional formatting: (header row, total row, first column,
+/// banded row).
+type Region = (bool, bool, bool, bool);
+
+fn region_of(t: &Table, style: Option<&TableStyleProps>, ri: usize, g: usize) -> Region {
+    let (look, nrows) = (&t.props.look, t.rows.len());
+    (look.header_row && ri == 0, look.total_row && ri + 1 == nrows && nrows > 1, look.first_column && g == 0, banded(t, style, ri))
+}
+
+/// Whether row `ri` is in an odd band of the table style's banded rows (bands of the style's
+/// band size, counted below the header row).
+fn banded(t: &Table, style: Option<&TableStyleProps>, ri: usize) -> bool {
+    let look = &t.props.look;
+    let size = style.and_then(|s| s.parts.band_size).unwrap_or(1).clamp(1, 1000) as usize;
+    look.banded_rows && !(look.header_row && ri == 0) && (ri.saturating_sub(usize::from(look.header_row)) / size).is_multiple_of(2)
+}
+
+/// The table style's text formatting in `region`: the whole table's, then the band's, the
+/// column's and the row's (later regions win, ECMA-376 §17.7.6).
+fn region_text(st: &TableStyleProps, (header, total, first_col, band): Region) -> CellText {
+    let mut chr = st.chr.clone();
+    if band {
+        chr.overlay(&st.parts.band_chr);
+    }
+    if first_col {
+        chr.overlay(&st.parts.first_col_chr);
+    }
+    if header {
+        chr.overlay(&st.parts.header_chr);
+    } else if total {
+        chr.overlay(&st.parts.total_chr);
+    }
+    CellText { para: st.para.clone(), chr }
+}
+
+/// Each column's narrowest and widest content, cell margins included: its longest word and its
+/// longest line. A cell spanning columns shares what they lack between them; nested tables count
+/// with their own. `None` when every cell is empty.
+fn column_content(ctx: &mut Ctx, t: &Table, style: Option<&TableStyleProps>, depth: usize) -> Option<Vec<(f32, f32)>> {
+    let margins_def = default_margins(t, style);
+    let mut cols = vec![(0.0f32, 0.0f32); t.cols().max(1)];
+    let mut spanning = Vec::new();
+    let mut any = false;
+    for (ri, row) in t.rows.iter().enumerate() {
+        let mut g = 0usize;
+        for cell in &row.cells {
+            let span = cell.span();
+            if cell.props.vmerge != VMerge::Continue {
+                let text = style.map(|st| region_text(st, region_of(t, style, ri, g)));
+                let (lo, hi) = blocks_content(ctx, &cell.blocks, text.as_ref(), depth);
+                any |= hi > 0.0;
+                let m = cell.props.margins.unwrap_or(margins_def);
+                let need = (lo + m[1] + m[3], hi + m[1] + m[3]);
+                match cols.get_mut(g) {
+                    Some(col) if span == 1 => *col = (col.0.max(need.0), col.1.max(need.1)),
+                    _ => spanning.push((g, span, need)),
+                }
+            }
+            g += span;
+        }
+    }
+    for (g, span, need) in spanning {
+        let Some(cs) = cols.get_mut(g..(g + span).min(t.cols())) else { continue };
+        let n = cs.len().max(1) as f32;
+        let (have_lo, have_hi) = cs.iter().fold((0.0, 0.0), |(l, h), c| (l + c.0, h + c.1));
+        for c in cs {
+            c.0 += (need.0 - have_lo).max(0.0) / n;
+            c.1 += (need.1 - have_hi).max(0.0) / n;
+        }
+    }
+    any.then_some(cols)
+}
+
+/// The narrowest and widest a block list can be laid out.
+fn blocks_content(ctx: &mut Ctx, blocks: &Blocks, text: Option<&CellText>, depth: usize) -> (f32, f32) {
+    let (mut lo, mut hi) = (0.0f32, 0.0f32);
+    for b in blocks.iter() {
+        let (l, h) = match &**b {
+            Block::Para(p) => {
+                let label = list_level(ctx, p).map(|l| (String::new(), l));
+                para_content(&ctx.para_labelled(p, UNBOUNDED, text, &[], label))
+            }
+            // A nested table: its fixed width, else its columns' but at least its preferred width
+            // (its own, else its grid's when it has preferred widths at all).
+            Block::Table(nt) if depth < 8 => {
+                let grid = if is_automatic(nt) { 0.0 } else { nt.grid.iter().filter(|w| w.is_finite()).map(|w| w.max(0.0)).sum() };
+                let width = nt.props.width.filter(|w| w.is_finite()).unwrap_or(grid).clamp(0.0, UNBOUNDED);
+                if nt.props.fixed && width > 0.0 {
+                    (width, width)
+                } else {
+                    let style = table_style(ctx, nt);
+                    let cols = column_content(ctx, nt, style.as_ref(), depth + 1).unwrap_or_default();
+                    let (l, h) = cols.iter().fold((0.0, 0.0), |(l, h), c| (l + c.0, h + c.1));
+                    (width.max(l), width.max(h))
+                }
+            }
+            Block::Table(_) => (0.0, 0.0),
+        };
+        lo = lo.max(l);
+        hi = hi.max(h);
+    }
+    (lo, hi)
+}
+
+/// The list level `p` is in, for its indents (without counting it: measuring isn't laying out).
+fn list_level(ctx: &Ctx, p: &Paragraph) -> Option<wordcraft_doc::numbering::Level> {
+    let n = p.props.numbering.or_else(|| ctx.doc.styles.resolve_para(&p.props).numbering).filter(|n| n.num != 0)?;
+    ctx.doc.numbering.level(n.num, n.level).cloned()
+}
+
+/// A width to lay a paragraph out in so that only its own line breaks end lines.
+const UNBOUNDED: f32 = 100_000.0;
+
+/// A paragraph's longest word and longest line (between line breaks), indents included.
+fn para_content(pl: &ParaLayout) -> (f32, f32) {
+    let indents = pl.rp.indent_left.max(0.0) + pl.rp.indent_right.max(0.0) + pl.rp.indent_first.max(0.0);
+    let (mut word, mut line, mut spaces) = (0.0f32, 0.0f32, 0.0f32);
+    let (mut lo, mut hi) = (0.0f32, 0.0f32);
+    for c in &pl.clusters {
+        let adv = if c.adv.is_finite() { c.adv.clamp(0.0, UNBOUNDED) } else { 0.0 };
+        match c.kind {
+            ClKind::Space => {
+                lo = lo.max(word);
+                word = 0.0;
+                spaces += adv;
+            }
+            ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak => {
+                lo = lo.max(word);
+                hi = hi.max(line);
+                (word, line, spaces) = (0.0, 0.0, 0.0);
+            }
+            _ => {
+                word += adv;
+                line += spaces + adv;
+                spaces = 0.0;
+                if c.break_after {
+                    lo = lo.max(word);
+                    word = 0.0;
+                }
+            }
+        }
+    }
+    (lo.max(word) + indents, hi.max(line) + indents)
+}
+
+/// Whether nothing in `t` asks for a width (its own or any cell's): its columns then follow
+/// their content alone.
+fn is_automatic(t: &Table) -> bool {
+    t.props.width.is_none()
+        && t.props.width_pct.is_none()
+        && t.rows.iter().all(|r| r.cells.iter().all(|c| c.props.width.is_none() && c.props.width_pct.is_none()))
+}
+
+/// Word's autofit for a table whose widths may follow its content (`tblLayout` not fixed).
+/// - With no preferred width anywhere (the table's and every cell's automatic) the columns come
+///   from their content alone: each its widest line if they all fit in `avail`, else shared out
+///   between narrowest and widest in proportion to how much each can give.
+/// - Otherwise the grid stands, but no column is narrower than its longest word: the columns with
+///   room to spare give up the difference.
+fn autofit(grid: &mut [f32], content: &[(f32, f32)], t: &Table, avail: f32) {
+    if grid.len() != content.len() || !avail.is_finite() {
+        return;
+    }
+    if is_automatic(t) {
+        let (lo, hi) = content.iter().fold((0.0f32, 0.0f32), |(l, h), c| (l + c.0, h + c.1.max(c.0)));
+        let k = if hi <= avail {
+            1.0
+        } else if lo >= avail || hi - lo < 0.01 {
+            0.0
+        } else {
+            (avail - lo) / (hi - lo)
+        };
+        for (w, c) in grid.iter_mut().zip(content) {
+            *w = (c.0 + (c.1.max(c.0) - c.0) * k).max(4.0);
+        }
+        return;
+    }
+    let short: f32 = grid.iter().zip(content).map(|(w, c)| (c.0 - *w).max(0.0)).sum();
+    if short < 0.01 {
+        return;
+    }
+    let spare: f32 = grid.iter().zip(content).map(|(w, c)| (*w - c.0).max(0.0)).sum();
+    let give = (short / spare.max(0.01)).min(1.0);
+    for (w, c) in grid.iter_mut().zip(content) {
+        *w = if *w < c.0 { c.0 } else { *w - (*w - c.0) * give };
+    }
 }
