@@ -204,11 +204,19 @@ pub fn install_fonts(ctx: &egui::Context) {
 /// [`install_fonts`] with the CJK fallback order for the interface language: the Chinese face
 /// first for Chinese (#8), the Japanese one otherwise. The new fonts apply from the next frame.
 pub fn install_fonts_for(ctx: &egui::Context, prefer_hans: bool) {
-    ctx.set_fonts(font_definitions(prefer_hans));
+    install_fonts_with(ctx, prefer_hans, false);
 }
 
-/// The interface fonts; see [`install_fonts_for`].
-pub fn font_definitions(prefer_hans: bool) -> FontDefinitions {
+/// [`install_fonts_for`], also adding an installed CJK font when `system_cjk` is set and no
+/// embedded face covers the need (#241). Reading that font is a large file read, so callers ask
+/// for it only when CJK text is on screen: a CJK interface language, or the language names in
+/// Options.
+pub fn install_fonts_with(ctx: &egui::Context, prefer_hans: bool, system_cjk: bool) {
+    ctx.set_fonts(font_definitions(prefer_hans, system_cjk));
+}
+
+/// The interface fonts; see [`install_fonts_with`].
+pub fn font_definitions(prefer_hans: bool, system_cjk: bool) -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     let add = |fonts: &mut FontDefinitions, name: &str, bytes: &'static [u8]| {
         fonts.font_data.insert(name.into(), Arc::new(FontData::from_static(bytes)));
@@ -243,13 +251,16 @@ pub fn font_definitions(prefer_hans: bool) -> FontDefinitions {
     // No embedded face covers the interface language (a build without craft-fonts, or without
     // its Chinese face, #241): an installed CJK font, so the menus don't show boxes.
     #[cfg(not(target_arch = "wasm32"))]
-    if wordcraft_fonts::ui_needs_system_cjk(prefer_hans, &cjk)
+    if system_cjk
+        && wordcraft_fonts::ui_needs_system_cjk(prefer_hans, &cjk)
         && let Some(f) = system_cjk_font(prefer_hans)
     {
         let mut data = FontData::from_static(&f.bytes);
         data.index = f.index;
         add_cjk(&mut fonts, format!("system {}", f.family), data);
     }
+    #[cfg(target_arch = "wasm32")]
+    let _ = system_cjk;
     // Symbols and emoji fall back to egui's defaults (kept in the families).
     fonts
 }

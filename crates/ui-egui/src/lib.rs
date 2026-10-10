@@ -148,6 +148,11 @@ pub struct WordApp {
     styled: bool,
     /// The CJK face order the installed UI fonts use (Chinese first, or Japanese first).
     fonts_hans: bool,
+    /// Whether the installed UI fonts include an installed CJK fallback font (#241).
+    fonts_system_cjk: bool,
+    /// CJK text is (about to be) on screen in a non-CJK interface, e.g. the language names in
+    /// File ▸ Options: load the installed CJK fallback font if no embedded face covers it.
+    pub(crate) want_system_cjk: bool,
     fonts_frames: u32,
     applied_dark: Option<bool>,
     pub frame_ms: f64,
@@ -210,6 +215,8 @@ impl WordApp {
             keytip_rects: Vec::new(),
             styled: false,
             fonts_hans: false,
+            fonts_system_cjk: false,
+            want_system_cjk: false,
             fonts_frames: 0,
             applied_dark: None,
             frame_ms: 0.0,
@@ -649,9 +656,13 @@ impl WordApp {
         let lang = i18n::Lang::from_pref(&self.ui.language);
         i18n::set_current(lang);
         // Chinese text wants the Chinese face before the Japanese one (one glyph style per line).
-        if !self.styled || lang.prefers_hans() != self.fonts_hans {
-            theme::install_fonts_for(ctx, lang.prefers_hans());
+        // An installed CJK font is read only once CJK text is shown (#241): never for an English
+        // interface that doesn't open the language list.
+        let system_cjk = self.fonts_system_cjk || self.want_system_cjk || lang.uses_cjk();
+        if !self.styled || lang.prefers_hans() != self.fonts_hans || system_cjk != self.fonts_system_cjk {
+            theme::install_fonts_with(ctx, lang.prefers_hans(), system_cjk);
             self.fonts_hans = lang.prefers_hans();
+            self.fonts_system_cjk = system_cjk;
             // Mod with -, = and 0 are Word shortcuts (optional hyphen, subscript, paragraph spacing);
             // egui's keyboard zoom would also scale the whole window on them. Zoom is View › Zoom.
             ctx.options_mut(|o| o.zoom_with_keyboard = false);

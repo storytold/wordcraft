@@ -278,11 +278,18 @@ fn chinese_interface_fonts_load_and_cover_simplified_hanzi() {
     // #241: without an embedded Chinese face the interface adds an installed CJK font; egui must
     // accept it (it panics on font data it can't parse) and draw simplified-only hanzi with it.
     let ctx = egui::Context::default();
-    ctx.set_fonts(crate::theme::font_definitions(true));
+    ctx.set_fonts(crate::theme::font_definitions(true, true));
     ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
     let covered = ctx.fonts_mut(|f| f.has_glyphs(&egui::FontId::proportional(14.0), "删除页选"));
     let embedded = !wordcraft_fonts::ui_needs_system_cjk(true, &wordcraft_fonts::ui_cjk_fonts(true));
     if embedded || wordcraft_fonts::system_cjk_ui_font(true).is_some() {
         assert!(covered, "a Chinese face is available but the interface lacks simplified hanzi");
     }
+}
+
+#[test]
+fn only_cjk_languages_ask_for_an_installed_cjk_font() {
+    // #241 follow-up: an English interface must not read a large system CJK font on startup.
+    let cjk: Vec<&str> = Lang::all().filter(|l| l.uses_cjk()).map(Lang::code).collect();
+    assert_eq!(cjk, ["zh-hans", "zh-hant", "ja"]);
 }
