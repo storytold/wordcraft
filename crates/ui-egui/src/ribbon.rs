@@ -27,8 +27,22 @@ pub fn contextual_tabs(s: &wordcraft_engine::Session) -> Vec<&'static str> {
     tabs
 }
 
+/// Tab to show when the stored tab is no longer applicable (pure, tested).
+pub fn resolve_tab<'a>(current: &'a str, available: &[&str]) -> &'a str {
+    if available.contains(&current) { current } else { "Home" }
+}
+
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
+    // A contextual tab (Table, Picture Format) may be stored while the selection moved away.
+    {
+        let mut tabs: Vec<&str> = TABS.to_vec();
+        tabs.extend(contextual_tabs(&app.session));
+        let next = resolve_tab(&app.ui.tab, &tabs);
+        if next != app.ui.tab {
+            app.ui.tab = next.to_string();
+        }
+    }
     // Tab strip.
     egui::Panel::top("tabs")
         .exact_size(30.0)
@@ -999,41 +1013,67 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Size", None, app, |ui, app| {
-        let (w0, h0, alt0) = match wordcraft_engine::cmd::objects::selected(&app.session) {
-            Some((_, wordcraft_doc::para::InlineObject::Image { w, h, alt, .. })) => (w, h, alt),
-            _ => (0.0, 0.0, String::new()),
+        let (media, off, w0, h0, crop0, alt0) = match wordcraft_engine::cmd::objects::selected(&app.session) {
+            Some((pos, wordcraft_doc::para::InlineObject::Image { media, w, h, alt, crop, .. })) => (media, pos.off, w, h, crop, alt),
+            _ => (String::new(), 0, 0.0, 0.0, [0.0; 4], String::new()),
         };
+        // `picture.size` locks the aspect ratio unless told otherwise, so one dimension suffices.
         stack(ui, |ui| {
             crate::widgets::row(ui, |ui| {
                 ui.label(egui::RichText::new(tl!("W:")).small());
                 let mut w = w0;
-                if ui.add(egui::DragValue::new(&mut w).speed(1.0).range(4.0..=2000.0).suffix(" pt")).changed() {
+                let r = ui.add(egui::DragValue::new(&mut w).speed(1.0).range(4.0..=2000.0).suffix(" pt"));
+                if r.changed() {
+                    if !r.drag_started() {
+                        app.session.join_next_undo();
+                    }
                     let _ = app.run("picture.size", json!({"width": w}));
                 }
                 ui.label(egui::RichText::new(tl!("H:")).small());
                 let mut h = h0;
-                if ui.add(egui::DragValue::new(&mut h).speed(1.0).range(4.0..=2000.0).suffix(" pt")).changed() {
+                let r = ui.add(egui::DragValue::new(&mut h).speed(1.0).range(4.0..=2000.0).suffix(" pt"));
+                if r.changed() {
+                    if !r.drag_started() {
+                        app.session.join_next_undo();
+                    }
                     let _ = app.run("picture.size", json!({"height": h}));
                 }
             });
             ui.add_space(2.0);
             crate::widgets::row(ui, |ui| {
-                ui.label(egui::RichText::new(tl!("Crop %:")).small());
-                let mut c = 0.0;
-                if ui.add(egui::DragValue::new(&mut c).speed(1.0).range(0.0..=45.0).suffix("%")).changed() {
-                    let v = c / 100.0;
-                    let _ = app.run("picture.crop", json!({"left": v, "top": v, "right": v, "bottom": v}));
+                for (i, side) in ["L", "T", "R", "B"].iter().enumerate() {
+                    ui.label(egui::RichText::new(tl!(side)).small());
+                    let mut v = crop0[i] * 100.0;
+                    let r = ui.add(egui::DragValue::new(&mut v).speed(0.5).range(0.0..=45.0).suffix("%"));
+                    if r.changed() {
+                        if !r.drag_started() {
+                            app.session.join_next_undo();
+                        }
+                        let mut c = crop0;
+                        c[i] = (v / 100.0).clamp(0.0, 0.45);
+                        let _ = app.run("picture.crop", json!({"left": c[0], "top": c[1], "right": c[2], "bottom": c[3]}));
+                    }
                 }
-                if ui.button(egui::RichText::new(tl!("Reset Crop")).small()).clicked() {
+                if ui.button(egui::RichText::new(tl!("Reset")).small()).on_hover_text(tl!("Reset Crop")).clicked() {
                     let _ = app.run("picture.crop", json!({"left": 0.0, "top": 0.0, "right": 0.0, "bottom": 0.0}));
                 }
             });
             ui.add_space(2.0);
             crate::widgets::row(ui, |ui| {
                 ui.label(egui::RichText::new(tl!("Alt:")).small());
-                let mut alt = alt0;
-                if ui.add(egui::TextEdit::singleline(&mut alt).desired_width(120.0)).lost_focus() {
-                    let _ = app.run("picture.altText", json!({"text": alt}));
+                // Frame-local buffers lose keystrokes; keep the draft in egui temp memory keyed
+                // by picture (same pattern as the comment editor in panes.rs).
+                let key = egui::Id::new(("picture_alt", media.clone(), off));
+                let mut alt = ui.data(|d| d.get_temp::<String>(key)).unwrap_or_else(|| alt0.clone());
+                let r = ui.add(egui::TextEdit::singleline(&mut alt).desired_width(120.0).hint_text(tl!("Alt text")));
+                if r.changed() {
+                    ui.data_mut(|d| d.insert_temp(key, alt.clone()));
+                }
+                if r.lost_focus() {
+                    ui.data_mut(|d| d.remove::<String>(key));
+                    if alt != alt0 {
+                        let _ = app.run("picture.altText", json!({"text": alt}));
+                    }
                 }
             });
         });
@@ -1205,5 +1245,14 @@ mod tests {
         s.run("select.collapse", &json!({"end": true})).unwrap();
         s.run("text.insert", &json!({"text": "x"})).unwrap();
         assert!(!has_picture_selected(&s));
+    }
+
+    #[test]
+    fn resolve_tab_falls_back_when_contextual_tab_expires() {
+        let all = ["Home", "Table Design", "Picture Format"];
+        assert_eq!(resolve_tab("Picture Format", &all), "Picture Format");
+        assert_eq!(resolve_tab("Picture Format", &["Home"]), "Home");
+        assert_eq!(resolve_tab("Table Design", &["Home"]), "Home");
+        assert_eq!(resolve_tab("Home", &["Home"]), "Home");
     }
 }
