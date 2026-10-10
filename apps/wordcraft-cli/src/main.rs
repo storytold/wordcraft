@@ -16,10 +16,12 @@ USAGE:
   wordcraft-cli inspect <file>                document structure (JSON)
   wordcraft-cli render <file> <out.png> [--page N] [--scale S]
   wordcraft-cli run [--file F | --template T] --cmd 'id={json}' [--cmd …] [--save OUT] [--print]
-                                              run commands headlessly, then save
+                    [--author NAME]           run commands headlessly, then save (--author names
+                                              who tracked changes and comments are by)
   wordcraft-cli commands [--json]             list every command
   wordcraft-cli parity [--markdown]           feature-catalog parity
-  wordcraft-cli mcp [--connect HOST:PORT]     MCP server on stdio (headless, or bridged to the app)
+  wordcraft-cli mcp [--connect HOST:PORT | --author NAME]
+                                              MCP server on stdio (headless, or bridged to the app)
   wordcraft-cli zotero <command> <file> [--cmd 'id={json}' …] [--save OUT] [--trace] [--port P]
                                               run a Zotero command on a document (Zotero must be
                                               running): addEditCitation, addEditBibliography,
@@ -33,6 +35,11 @@ fn open(path: &str) -> Result<Session, String> {
     let mut s = Session::new(doc);
     s.path = Some(path.into());
     Ok(s)
+}
+
+/// `--author NAME`: the author recorded on tracked changes and comments (`file.setAuthor`).
+fn set_author(s: &mut Session, name: &str) -> Result<(), String> {
+    s.run("file.setAuthor", &json!({"name": name})).map(|_| ()).map_err(|e| format!("--author: {e}"))
 }
 
 fn arg_value(args: &[String], name: &str) -> Option<String> {
@@ -74,10 +81,11 @@ const RUN_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--page", takes_value: true },
     OptionSpec { name: "--scale", takes_value: true },
     OptionSpec { name: "--print", takes_value: false },
+    OptionSpec { name: "--author", takes_value: true },
 ];
 const COMMANDS_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--json", takes_value: false }];
 const PARITY_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--markdown", takes_value: false }];
-const MCP_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--connect", takes_value: true }];
+const MCP_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--connect", takes_value: true }, OptionSpec { name: "--author", takes_value: true }];
 const ZOTERO_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--cmd", takes_value: true },
     OptionSpec { name: "--save", takes_value: true },
@@ -142,6 +150,9 @@ fn run(args: &[String]) -> Result<(), String> {
                 }
                 _ => Session::new(wordcraft_doc::Document::new()),
             };
+            if let Some(name) = arg_value(&rest, "--author") {
+                set_author(&mut s, &name)?;
+            }
             let mut i = 0;
             while i < rest.len() {
                 if rest.get(i).map(String::as_str) == Some("--cmd") {
@@ -202,7 +213,12 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         "mcp" => {
             validate_options("mcp", &rest, MCP_OPTIONS)?;
+            let author = arg_value(&rest, "--author");
             let backend: Box<dyn wordcraft_mcp::Backend> = match arg_value(&rest, "--connect") {
+                // The app's user name is the person's own setting; don't rewrite it from a flag.
+                Some(_) if author.is_some() => {
+                    return Err("mcp: --author applies to the headless server; with --connect, run file.setAuthor".into());
+                }
                 Some(addr) => {
                     let remote = wordcraft_mcp::Remote::connect(&addr).map_err(|e| format!("can't reach the WordCraft app at {addr}: {e}"))?;
                     if let Some(w) = remote.key_warning() {
@@ -210,7 +226,13 @@ fn run(args: &[String]) -> Result<(), String> {
                     }
                     Box::new(remote)
                 }
-                None => Box::new(wordcraft_mcp::Headless::default()),
+                None => {
+                    let mut headless = wordcraft_mcp::Headless::default();
+                    if let Some(name) = author {
+                        set_author(&mut headless.session, &name)?;
+                    }
+                    Box::new(headless)
+                }
             };
             let mut server = wordcraft_mcp::Server::new(backend);
             let stdin = std::io::stdin();
@@ -344,5 +366,18 @@ mod tests {
         assert_eq!(run(&args(&["info", "missing.docx", "--passwrod", "x"])), Err("info: unknown option --passwrod".into()));
         assert_eq!(run(&args(&["render", "missing.docx", "out.png", "--sclae", "2"])), Err("render: unknown option --sclae".into()));
         assert_eq!(run(&args(&["zotero", "refresh", "missing.docx", "--prot", "1"])), Err("zotero: unknown option --prot".into()));
+    }
+
+    #[test]
+    fn author_flag_names_the_headless_session() {
+        assert!(validate_options("run", &args(&["--author", "Claude (copyedit)", "--cmd", "edit.undo"]), RUN_OPTIONS).is_ok());
+        assert!(validate_options("mcp", &args(&["--author", "Claude"]), MCP_OPTIONS).is_ok());
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        assert!(set_author(&mut s, " Claude (copyedit) ").is_ok());
+        assert_eq!(s.author, "Claude (copyedit)");
+        assert!(set_author(&mut s, "   ").is_err_and(|e| e.starts_with("--author:")));
+        assert!(run(&args(&["run", "--author", "Claude", "--cmd", "review.trackChanges={\"value\":true}"])).is_ok());
+        // The app's user name is the person's own; a bridge flag must not rewrite it.
+        assert!(run(&args(&["mcp", "--connect", "127.0.0.1:9", "--author", "Claude"])).is_err_and(|e| e.contains("--author")));
     }
 }

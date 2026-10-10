@@ -663,6 +663,53 @@ fn tracked_split_gives_the_new_paragraph_mark_to_its_author() {
 }
 
 #[test]
+fn set_author_names_tracked_changes_headlessly() {
+    // Issue #90: a script or agent labels its own edits without any dialog.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "original"}));
+    let r = run(&mut s, "file.setAuthor", json!({"name": "  Claude (copyedit)\n"}));
+    assert_eq!(r["name"], "Claude (copyedit)");
+    assert!(s.ui_requests.is_empty(), "programmatic calls never open dialogs");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "text.insert", json!({"text": " added"}));
+    run(&mut s, "select.text", json!({"text": "orig"}));
+    run(&mut s, "text.delete", json!({}));
+    let ch = run(&mut s, "review.changes", json!({}));
+    let ch = ch.as_array().unwrap();
+    assert_eq!(ch.len(), 2);
+    assert!(ch.iter().all(|c| c["author"] == "Claude (copyedit)"), "{ch:?}");
+    // Comments use the same name.
+    run(&mut s, "select.text", json!({"text": "added"}));
+    run(&mut s, "review.newComment", json!({"text": "Tightened."}));
+    assert!(s.doc.comments.values().all(|c| c.author == "Claude (copyedit)" && c.initials == "C("));
+}
+
+#[test]
+fn set_author_refuses_blank_names_and_clamps_long_ones() {
+    let mut s = s();
+    for bad in [json!(null), json!({}), json!({"name": 5}), json!({"name": ""}), json!({"name": " \t\n "}), json!({"name": "\u{0}\u{7}"})] {
+        assert!(s.run("file.setAuthor", &bad).is_err(), "{bad} should be refused");
+        assert_eq!(s.author, "WordCraft User", "a refused name leaves the author alone");
+    }
+    run(&mut s, "file.setAuthor", json!({"name": "Ada\u{0}\u{1b} Lovelace"}));
+    assert_eq!(s.author, "Ada Lovelace", "control characters can't reach the saved XML");
+    run(&mut s, "file.setAuthor", json!({"name": "é".repeat(100_000)}));
+    assert_eq!(s.author.chars().count(), cmd::file::MAX_AUTHOR_CHARS);
+}
+
+#[test]
+fn track_changes_and_set_author_list_their_params() {
+    // Scripts that only read the command list must find the explicit, idempotent form.
+    let reg = cmd::registry();
+    assert!(reg.get("review.trackChanges").unwrap().params.contains(r#""value"?: bool"#));
+    assert!(reg.get("file.setAuthor").unwrap().params.contains(r#""name": string"#));
+    let mut s = s();
+    for _ in 0..2 {
+        assert_eq!(run(&mut s, "review.trackChanges", json!({"value": true}))["value"], true);
+    }
+}
+
+#[test]
 fn no_markup_view_lays_out_the_final_text() {
     let mut s = s();
     run(&mut s, "text.insert", json!({"text": "original"}));

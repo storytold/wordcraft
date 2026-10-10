@@ -466,7 +466,46 @@ fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
 
 fn cross_ref(s: &mut Session, v: &Value) -> CmdResult {
     let to = p::str(v, "to").unwrap_or("heading");
-    // Targets.
+    let targets = ref_targets(s, to);
+    let Some(target) = p::str(v, "target") else {
+        return Ok(Value::Array(targets.iter().map(|(t, _)| json!(t)).collect()));
+    };
+    let find = |ts: Vec<(String, Pos)>| ts.into_iter().find(|(t, _)| t == target || t.starts_with(target));
+    let (text, pos) = find(targets).ok_or_else(|| CmdError::Params(format!("no {to} `{target}`")))?;
+    let show = p::str(v, "show").unwrap_or("text");
+    let page = page_of(s, &pos);
+    let result = match show {
+        "page" => page.to_string(),
+        "number" => text.split(':').next().unwrap_or(&text).trim().to_string(),
+        "aboveBelow" => {
+            if pos < s.sel.focus {
+                "above".into()
+            } else {
+                "below".into()
+            }
+        }
+        _ if to == "bookmark" => super::references::bookmark_text(&s.doc, &text).unwrap_or_default(),
+        _ => text.clone(),
+    };
+    let props = s.typing_props();
+    let at = delete_selection(s)?;
+    // The field points at a bookmark: the named one, or a hidden `_Ref` bookmark on the target
+    // paragraph (as Word does), so Update Field and Word can resolve it.
+    let (name, at) = if to == "bookmark" {
+        (text, at)
+    } else {
+        // Deleting the selection can move paragraphs: look the target up again.
+        let (_, pos) = find(ref_targets(s, to)).ok_or_else(|| CmdError::Params(format!("no {to} `{target}`")))?;
+        ref_bookmark(s, &pos, show == "number", at)?
+    };
+    let instr = format!("{} {name} \\h", if show == "page" { "PAGEREF" } else { "REF" });
+    let end = s.doc.insert_object(&at, InlineObject::Field { instr, result: result.clone(), locked: false }, &props)?;
+    s.sel = Selection::caret(end);
+    Ok(json!({"inserted": result}))
+}
+
+/// Cross-reference targets of a kind: (shown text or bookmark name, position).
+fn ref_targets(s: &Session, to: &str) -> Vec<(String, Pos)> {
     let mut targets: Vec<(String, Pos)> = Vec::new();
     match to {
         "bookmark" => targets = s.doc.bookmarks(),
@@ -496,31 +535,42 @@ fn cross_ref(s: &mut Session, v: &Value) -> CmdResult {
             }
         }
     }
-    let Some(target) = p::str(v, "target") else {
-        return Ok(Value::Array(targets.iter().map(|(t, _)| json!(t)).collect()));
-    };
-    let (text, pos) =
-        targets.into_iter().find(|(t, _)| t == target || t.starts_with(target)).ok_or_else(|| CmdError::Params(format!("no {to} `{target}`")))?;
-    let show = p::str(v, "show").unwrap_or("text");
-    let page = page_of(s, &pos);
-    let result = match show {
-        "page" => page.to_string(),
-        "number" => text.split(':').next().unwrap_or(&text).trim().to_string(),
-        "aboveBelow" => {
-            if pos < s.sel.focus {
-                "above".into()
-            } else {
-                "below".into()
-            }
+    targets
+}
+
+/// The hidden `_Ref` bookmark around the target paragraph at `pos` (its label and number only
+/// when `number_only`), reusing one already there. Returns its name and `at` moved past the
+/// bookmark marks inserted before it.
+fn ref_bookmark(s: &mut Session, pos: &Pos, number_only: bool, mut at: Pos) -> Result<(String, Pos), CmdError> {
+    const MARK: usize = wordcraft_doc::para::OBJ.len_utf8();
+    let para = s.doc.para(pos.story, &pos.path).ok_or_else(|| CmdError::Params("cross-reference target is gone".into()))?;
+    let end = if number_only { para.text.find(':').unwrap_or(para.len()) } else { para.len() };
+    if let Some(InlineObject::BookmarkStart { name }) = para.object_at(0)
+        && name.starts_with("_Ref")
+    {
+        // Reuse it when it covers the same extent: up to the colon, or the whole paragraph.
+        let same = para.object_offsets().into_iter().any(|o| {
+            matches!(para.object_at(o), Some(InlineObject::BookmarkEnd { name: n }) if n == name)
+                && para.text.get(o.saturating_add(MARK)..).is_some_and(|rest| if number_only { rest.starts_with(':') } else { rest.is_empty() })
+        });
+        if same {
+            return Ok((name.clone(), at));
         }
-        _ => text.clone(),
-    };
-    let instr = format!("{} _Ref \\h", if show == "page" { "PAGEREF" } else { "REF" });
-    let props = s.typing_props();
-    let at = delete_selection(s)?;
-    let end = s.doc.insert_object(&at, InlineObject::Field { instr, result: result.clone(), locked: false }, &props)?;
-    s.sel = Selection::caret(end);
-    Ok(json!({"inserted": result}))
+    }
+    let next =
+        s.doc.bookmarks().iter().filter_map(|(n, _)| n.strip_prefix("_Ref").and_then(|d| d.parse::<u64>().ok())).max().unwrap_or(0).saturating_add(1);
+    let name = format!("_Ref{next:09}");
+    let props = CharProps::default();
+    s.doc.insert_object(&Pos { off: end, ..pos.clone() }, InlineObject::BookmarkEnd { name: name.clone() }, &props)?;
+    s.doc.insert_object(&Pos { off: 0, ..pos.clone() }, InlineObject::BookmarkStart { name: name.clone() }, &props)?;
+    if at.story == pos.story && at.path == pos.path {
+        if at.off >= end {
+            at.off = at.off.saturating_add(2 * MARK);
+        } else if at.off > 0 {
+            at.off = at.off.saturating_add(MARK);
+        }
+    }
+    Ok((name, at))
 }
 
 #[cfg(test)]
@@ -566,5 +616,71 @@ mod tests {
         assert_eq!(list.as_array().unwrap().len(), 1);
         s.run("insert.crossReference", &json!({"to": "figure", "target": "Figure 1", "show": "number"})).unwrap();
         assert!(s.doc.plain_text(StoryRef::Body).contains("Figure 1"));
+        // The number-only reference marks just "Figure 1" of the caption.
+        let (name, _) = s.doc.bookmarks().into_iter().find(|(n, _)| n.starts_with("_Ref")).unwrap();
+        assert_eq!(crate::cmd::references::bookmark_text(&s.doc, &name).as_deref(), Some("Figure 1"));
+        assert!(fields(&s).contains(&(format!("REF {name} \\h"), "Figure 1".to_string())), "{:?}", fields(&s));
+    }
+
+    /// Field instructions and results in the body, in order.
+    fn fields(s: &Session) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for path in s.doc.para_paths(StoryRef::Body) {
+            for o in &s.doc.para(StoryRef::Body, &path).unwrap().objects {
+                if let InlineObject::Field { instr, result, .. } = o {
+                    out.push((instr.clone(), result.clone()));
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn cross_references_point_at_real_bookmarks() {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Kilns\nSee here."));
+        s.run("caret.docStart", &json!({})).unwrap();
+        s.run("styles.apply", &json!({"style": "Heading 1"})).unwrap();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("insert.crossReference", &json!({"to": "heading", "target": "Kilns"})).unwrap();
+        // The heading gets a hidden bookmark, and the REF field names it (not a literal `_Ref`).
+        let marks = s.doc.bookmarks();
+        assert_eq!(marks.len(), 1, "{marks:?}");
+        let name = marks[0].0.clone();
+        assert!(name.starts_with("_Ref") && name.len() > 4, "{name}");
+        assert_eq!(marks[0].1.path, s.doc.para_paths(StoryRef::Body)[0]);
+        assert_eq!(fields(&s), vec![(format!("REF {name} \\h"), "Kilns".to_string())]);
+        // A second reference to the same heading reuses the bookmark.
+        s.run("insert.crossReference", &json!({"to": "heading", "target": "Kilns", "show": "page"})).unwrap();
+        assert_eq!(s.doc.bookmarks().len(), 1);
+        assert_eq!(fields(&s)[1], (format!("PAGEREF {name} \\h"), "1".to_string()));
+        // Update Field follows the heading's new text.
+        s.run("select.text", &json!({"text": "ilns"})).unwrap();
+        s.run("text.insert", &json!({"text": "ILNS"})).unwrap();
+        s.run("references.updateFields", &json!({})).unwrap();
+        assert_eq!(fields(&s)[0].1, "KILNS");
+        assert!(s.doc.plain_text(StoryRef::Body).ends_with("See here.KILNS1"), "{}", s.doc.plain_text(StoryRef::Body));
+    }
+
+    #[test]
+    fn cross_reference_to_a_bookmark_shows_its_text() {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Kilns are hot.\nSee "));
+        s.run("select.text", &json!({"text": "Kilns"})).unwrap();
+        s.run("insert.bookmark", &json!({"name": "Spot"})).unwrap();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("insert.crossReference", &json!({"to": "bookmark", "target": "Spot"})).unwrap();
+        assert_eq!(s.doc.bookmarks().len(), 1, "no extra bookmark for a named one");
+        assert_eq!(fields(&s), vec![("REF Spot \\h".to_string(), "Kilns".to_string())]);
+    }
+
+    #[test]
+    fn cross_reference_inside_its_own_target_paragraph() {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Kilns"));
+        s.run("styles.apply", &json!({"style": "Heading 1"})).unwrap();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("insert.crossReference", &json!({"to": "heading", "target": "Kilns"})).unwrap();
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "KilnsKilns");
+        // The field sits after the bookmark, so it doesn't mark itself.
+        let name = s.doc.bookmarks()[0].0.clone();
+        assert_eq!(crate::cmd::references::bookmark_text(&s.doc, &name).as_deref(), Some("Kilns"));
     }
 }
