@@ -568,6 +568,51 @@ fn body_line_xs_on(l: &DocLayout, page: usize) -> Vec<f32> {
 }
 
 #[test]
+fn rtl_shapes_floats_headers_and_notes() {
+    use wordcraft_doc::para::{Anchor, Float, InlineObject, ShapeKind, Wrap};
+    // A square-wrapped shape anchored in an RTL paragraph: text flows around it, joined intact.
+    let mut d = doc_of(&[("كلمات كثيرة تتدفق حول الصورة هنا بشكل طبيعي في الفقرة الطويلة. ".repeat(3).trim_end(), true)]);
+    let float = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 0.0, y: 0.0, dist: 9.0, ..Default::default() };
+    let shape =
+        InlineObject::Shape { kind: ShapeKind::Rectangle, w: 144.0, h: 60.0, fill: None, stroke: None, stroke_width: 1.0, float, story: None };
+    d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
+    let l = lay(&d);
+    assert!(l.pages[0].items.iter().any(|i| matches!(i, Placed::Shape { .. })), "shape placed");
+    let lines: usize = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| if let Placed::Lines { story: StoryRef::Body, l0, l1, .. } = it { Some(l1 - l0) } else { None })
+        .sum();
+    assert!(lines > 2, "wrapped RTL lines laid out");
+    // Arabic header and footer stories attach to the page.
+    let hp = wordcraft_doc::para_block(Paragraph::with_text("رأس الصفحة", Default::default()));
+    let fp = wordcraft_doc::para_block(Paragraph::with_text("تذييل الصفحة", Default::default()));
+    let mut h = Document::from_text("body");
+    let (hid, fid) = (h.add_part(wordcraft_doc::PartKind::Header, vec![hp]), h.add_part(wordcraft_doc::PartKind::Footer, vec![fp]));
+    h.last_section.headers.default = Some(hid);
+    h.last_section.footers.default = Some(fid);
+    let l = lay(&h);
+    assert_eq!(l.pages[0].header_story, Some(hid));
+    assert_eq!(l.pages[0].footer_story, Some(fid));
+    let hg =
+        l.pages[0].header.iter().filter_map(|it| if let Placed::Lines { para, .. } = it { Some(para.glyphs.len()) } else { None }).sum::<usize>();
+    assert!(hg > 0, "the Arabic header shapes into glyphs");
+    // An Arabic footnote is numbered and placed at the page bottom.
+    let mut n = Document::from_text(&"Body text line.\n".repeat(10));
+    let note = wordcraft_doc::Paragraph::with_text("ملاحظة عربية.", Default::default());
+    let id = n.add_part(wordcraft_doc::PartKind::Footnote, vec![wordcraft_doc::para_block(note)]);
+    n.insert_object(
+        &Pos::body(3, 4),
+        InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Footnote, id, custom: String::new() },
+        &Default::default(),
+    )
+    .unwrap();
+    let l = lay(&n);
+    let c = l.caret_on(&Pos { story: StoryRef::Part(id), path: wordcraft_doc::Path::top(0), off: 0 }, 0).unwrap();
+    assert!(c.top > 500.0, "note at the bottom: {c:?}");
+}
+
+#[test]
 fn kashida_justification_keeps_joining_marks_and_mappings() {
     use wordcraft_doc::props::Kashida;
     // Arabic with diacritics and a superscript alef, one paragraph over many lines.

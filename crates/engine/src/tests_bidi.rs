@@ -345,3 +345,84 @@ fn arabic_word_counts_and_proofing_policy() {
     let r = run(&mut s, "review.issues", json!({}));
     assert_eq!(r.as_array().map(Vec::len), Some(0), "proofing issues: {r:?}");
 }
+
+#[test]
+fn rtl_navigation_selection_and_edits() {
+    let mut s = session("سلام دنیا test", true);
+    run(&mut s, "caret.end", json!({}));
+    let len = s.doc.para(StoryRef::Body, &Path::top(0)).unwrap().len();
+    assert_eq!(s.sel.focus.off, len);
+    run(&mut s, "caret.home", json!({}));
+    assert_eq!(s.sel.focus.off, 0);
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "caret.docStart", json!({}));
+    assert_eq!(s.sel.focus.path.0, vec![0]);
+    assert_eq!(s.sel.focus.off, 0);
+    run(&mut s, "select.text", json!({"text": "دنیا"}));
+    run(&mut s, "select.word", json!({}));
+    // Like Word, word selection takes the trailing space.
+    assert_eq!(s.selected_text(), "دنیا ");
+    run(&mut s, "select.line", json!({}));
+    assert_eq!(s.selected_text(), "سلام دنیا test");
+    run(&mut s, "select.paragraph", json!({}));
+    assert_eq!(s.selected_text(), "سلام دنیا test");
+}
+
+#[test]
+fn rtl_backspace_delete_and_enter() {
+    let mut s = session("abc\nسلام", false);
+    // Backspace at the start of the RTL paragraph joins, keeping logical order.
+    s.sel = Selection::caret(Pos { story: StoryRef::Body, path: Path::top(1), off: 0 });
+    run(&mut s, "text.backspace", json!({}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "abcسلام");
+    run(&mut s, "edit.undo", json!({}));
+    // Delete at the end of the LTR paragraph joins the same way.
+    s.sel = Selection::caret(Pos { story: StoryRef::Body, path: Path::top(0), off: 3 });
+    run(&mut s, "text.delete", json!({}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "abcسلام");
+    // Enter in an RTL paragraph keeps its direction.
+    let mut s = session("سلام دنیا", true);
+    s.sel = Selection::caret(Pos { story: StoryRef::Body, path: Path::top(0), off: 4 });
+    run(&mut s, "text.newParagraph", json!({}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "سل\nام دنیا");
+    assert_eq!(props(&s, 0).bidi, Some(true));
+    assert_eq!(props(&s, 1).bidi, Some(true));
+}
+
+#[test]
+fn rtl_track_changes_text_box_caption_toc() {
+    let mut s = session("مقدمة", true);
+    s.doc.settings.track_changes = true;
+    run(&mut s, "caret.end", json!({}));
+    run(&mut s, "text.insert", json!({"text": " جديدة"}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "مقدمة جديدة");
+    assert!(!s.doc.revisions.is_empty(), "the insertion is tracked");
+    // A text box takes Arabic text and lays out.
+    let r = run(&mut s, "insert.textBox", json!({}));
+    let story = r["story"].as_u64().expect("box story") as u32;
+    run(&mut s, "text.insert", json!({"text": "نص داخل الصندوق"}));
+    let box_text: String =
+        s.doc.parts.get(&story).map(|p| p.blocks.iter().filter_map(|b| b.as_para()).map(|p| p.plain_text()).collect()).unwrap_or_default();
+    assert!(box_text.contains("نص داخل الصندوق"), "{box_text:?}");
+    assert!(!s.layout().pages.is_empty());
+    // Captions and tables of contents carry Arabic text (back in the body story: the caret
+    // is still inside the text box).
+    s.sel = Selection::caret(Pos { story: StoryRef::Body, path: Path::top(0), off: 0 });
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "references.caption", json!({"label": "Figure", "text": "شكل تجريبي"}));
+    let plain = s.doc.plain_text(StoryRef::Body);
+    assert!(plain.contains("Figure") && plain.contains("شكل تجريبي"), "{plain:?}");
+}
+
+#[test]
+fn rtl_toc_lists_arabic_headings() {
+    let mut d = wordcraft_doc::Document::new();
+    for h in ["الفصل الأول", "الفصل الثاني"] {
+        d.body.push(wordcraft_doc::para_block(Paragraph::with_text(h, Default::default()).styled("Heading1")));
+    }
+    let mut s = Session::new(d);
+    run(&mut s, "references.toc", json!({}));
+    run(&mut s, "references.updateToc", json!({}));
+    let plain = s.doc.plain_text(StoryRef::Body);
+    assert!(plain.contains("الفصل الأول") && plain.contains("الفصل الثاني"), "{plain:?}");
+}

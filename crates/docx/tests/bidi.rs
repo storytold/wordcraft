@@ -234,3 +234,32 @@ fn bidi_visual_markup_is_read_in_schema_order() {
     let pos = |t: &str| xml.find(t).unwrap_or_else(|| panic!("{t} missing: {xml}"));
     assert!(pos("<w:tblStyle") < pos("<w:bidiVisual/>") && pos("<w:bidiVisual/>") < pos("<w:tblW"));
 }
+
+#[test]
+fn rtl_hyperlinks_and_bookmarks_round_trip() {
+    // Links, bookmarks and their anchors survive in RTL paragraphs with logical text.
+    let body = r#"
+<w:p><w:pPr><w:bidi/></w:pPr>
+<w:r><w:rPr><w:rtl/></w:rPr><w:t>انظر</w:t></w:r>
+<w:bookmarkStart w:id="7" w:name="مقطع"/><w:r><w:rPr><w:rtl/></w:rPr><w:t xml:space="preserve"> </w:t></w:r>
+<w:hyperlink r:id="rId9" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:r><w:rPr><w:rtl/></w:rPr><w:t>الرابط</w:t></w:r></w:hyperlink>
+<w:bookmarkEnd w:id="7"/></w:p>"#;
+    let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+    let doc_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.test/" TargetMode="External"/></Relationships>"#;
+    let doc = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{body}</w:body></w:document>"#
+    );
+    let bytes =
+        zip(&[("_rels/.rels", rels.as_bytes()), ("word/document.xml", doc.as_bytes()), ("word/_rels/document.xml.rels", doc_rels.as_bytes())]);
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    let ps = paras(&d);
+    // Bookmark markers live in the text as placeholders; the words stay logical.
+    assert!(ps[0].text.contains("انظر") && ps[0].text.contains("الرابط"), "{:?}", ps[0].text);
+    let links: Vec<_> = ps[0].runs.iter().filter_map(|r| r.props.link.clone()).collect();
+    assert_eq!(links, ["https://example.test/"]);
+    assert!(d.bookmarks().iter().any(|(n, _)| n == "مقطع"), "bookmark kept");
+    let r = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert!(paras(&r)[0].text.contains("انظر") && paras(&r)[0].text.contains("الرابط"));
+    assert_eq!(paras(&r)[0].props.bidi, Some(true));
+    assert!(r.bookmarks().iter().any(|(n, _)| n == "مقطع"));
+}
