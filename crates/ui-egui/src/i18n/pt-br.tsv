@@ -1323,3 +1323,16 @@
 	Flip Vertical	Inverter verticalmente
 	Flip Horizontal	Inverter horizontalmente
 	Formatted	Formatado
+	Lasso Select	Seleção com laço
+	Move Selected Ink	Mover a tinta selecionada
+	Delete Selected Ink	Excluir a tinta selecionada
+	Recolor Selected Ink	Mudar a cor da tinta selecionada
+	Add Pen	Adicionar caneta
+	Remove Pen	Remover caneta
+	Ink to Shape	Tinta para forma
+	Convert to Shapes	Converter em formas
+	Ink Replay	Reproduzir tinta
+	Add\nPen	Adicionar\ncaneta
+	Rewind	Retroceder
+	Forward	Avançar
+	Stroke {n} of {total}	Traço {n} de {total}

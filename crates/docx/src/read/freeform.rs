@@ -71,7 +71,7 @@ pub fn cust_geom(sppr: &El, w: f32, h: f32) -> Option<Freeform> {
             paths.push(FreePath { pts: pts.into_iter().take(MAX_POINTS).map(scale).collect(), closed: closed && !fill_none });
         }
     }
-    let f = Freeform { w, h, paths, alpha: 1.0, ink: None }.sanitized();
+    let f = Freeform { w, h, paths, alpha: 1.0, ink: None, order: None }.sanitized();
     (!f.paths.is_empty()).then_some(f)
 }
 
@@ -83,6 +83,12 @@ pub fn ink_tool(name: &str) -> Option<InkTool> {
         return None;
     }
     words.next().and_then(InkTool::parse)
+}
+
+/// The drawing order of an ink stroke written by WordCraft, from its drawing's name
+/// (`Ink Pen 3 #12`: the twelfth stroke drawn), for Ink Replay.
+pub fn ink_order(name: &str) -> Option<u32> {
+    name.split_whitespace().skip(3).find_map(|w| w.strip_prefix('#')?.parse().ok())
 }
 
 /// The outline opacity of `ln` (`a:ln`): its colour's `a:alpha`, 0–1.

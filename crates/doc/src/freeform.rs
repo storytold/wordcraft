@@ -88,18 +88,22 @@ pub struct Freeform {
     /// by the eraser.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ink: Option<InkTool>,
+    /// Ink: its place in the order the strokes were drawn (1, 2, 3…), for Draw › Ink Replay.
+    /// `None` for ink from files that don't record it (replayed first, in document order).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order: Option<u32>,
 }
 
 impl Default for Freeform {
     fn default() -> Self {
-        Freeform { w: 0.0, h: 0.0, paths: Vec::new(), alpha: 1.0, ink: None }
+        Freeform { w: 0.0, h: 0.0, paths: Vec::new(), alpha: 1.0, ink: None, order: None }
     }
 }
 
 impl Freeform {
     /// An ink stroke through `pts` (shape-local points, already in the `w` × `h` frame).
     pub fn ink(tool: InkTool, w: f32, h: f32, pts: Vec<[f32; 2]>) -> Freeform {
-        Freeform { w, h, paths: vec![FreePath { pts, closed: false }], alpha: tool.alpha(), ink: Some(tool) }.sanitized()
+        Freeform { w, h, paths: vec![FreePath { pts, closed: false }], alpha: tool.alpha(), ink: Some(tool), order: None }.sanitized()
     }
 
     /// The same geometry with non-finite points dropped, coordinates clamped, the counts capped
@@ -183,7 +187,7 @@ mod tests {
     fn hostile_geometry_is_sanitized() {
         let mut pts = vec![[f32::NAN, 1.0], [2.0, f32::INFINITY], [1.0, 2.0], [1e30, -1e30]];
         pts.extend(std::iter::repeat_n([3.0, 3.0], MAX_POINTS * 2));
-        let f = Freeform { w: f32::NAN, h: -4.0, paths: vec![FreePath { pts, closed: false }], alpha: 7.0, ink: None }.sanitized();
+        let f = Freeform { w: f32::NAN, h: -4.0, paths: vec![FreePath { pts, closed: false }], alpha: 7.0, ink: None, order: None }.sanitized();
         assert_eq!((f.w, f.h, f.alpha), (0.0, 0.0, 1.0));
         let p = &f.paths[0].pts;
         assert_eq!(p.len(), MAX_POINTS);

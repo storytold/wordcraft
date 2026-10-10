@@ -207,6 +207,7 @@ fn controls(tab: &str) -> Vec<Control> {
             c("Pen", "draw.pen"),
             c("Pencil", "draw.pencil"),
             c("Highlighter", "draw.highlighter"),
+            m("Add Pen", "draw.addPen"),
             c("Ink to Shape", "draw.inkToShape"),
             c("Ink to Math", "draw.inkToMath"),
             c("Drawing Canvas", "insert.canvas"),

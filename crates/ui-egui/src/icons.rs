@@ -489,6 +489,27 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.circle(10.0, 10.0, 6.5, c);
             pen.fill(&[(8.5, 7.0), (8.5, 13.0), (13.0, 10.0)], a);
         }
+        // Add Pen: a pen with a plus.
+        "addPen" => {
+            pen.line(&[(3.0, 17.0), (11.0, 9.0), (13.0, 11.0), (5.0, 19.0), (2.5, 19.5), (3.0, 17.0)]);
+            pen.fill(&[(11.0, 9.0), (12.5, 7.5), (14.5, 9.5), (13.0, 11.0)], a);
+            pen.line_c(&[(15.0, 2.0), (15.0, 8.0)], a);
+            pen.line_c(&[(12.0, 5.0), (18.0, 5.0)], a);
+        }
+        // Ink Replay's controls.
+        "replayRewind" => {
+            pen.frect(4.0, 5.0, 5.5, 15.0, c);
+            pen.fill(&[(16.0, 5.0), (16.0, 15.0), (6.5, 10.0)], c);
+        }
+        "replayPlay" => pen.fill(&[(6.0, 4.0), (6.0, 16.0), (16.0, 10.0)], a),
+        "replayPause" => {
+            pen.frect(5.5, 4.5, 8.5, 15.5, a);
+            pen.frect(11.5, 4.5, 14.5, 15.5, a);
+        }
+        "replayForward" => {
+            pen.fill(&[(4.0, 5.0), (4.0, 15.0), (13.5, 10.0)], c);
+            pen.frect(14.5, 5.0, 16.0, 15.0, c);
+        }
         // Design
         "themes" => {
             pen.frect(3.0, 3.0, 10.0, 10.0, a);

@@ -83,7 +83,7 @@ pub fn enabled(app: &WordApp, id: &str) -> bool {
     }
 }
 
-fn bg(ui: &Ui, r: Rect, resp: &Response, checked: bool, t: &Tokens) {
+pub(crate) fn bg(ui: &Ui, r: Rect, resp: &Response, checked: bool, t: &Tokens) {
     let fill = if resp.is_pointer_button_down_on() {
         t.pressed
     } else if checked {

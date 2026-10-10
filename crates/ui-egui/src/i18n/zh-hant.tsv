@@ -1312,3 +1312,16 @@
 	Flip Vertical	垂直翻轉
 	Flip Horizontal	水平翻轉
 	Formatted	已設定格式
+	Lasso Select	套索選取
+	Move Selected Ink	移動選取的筆跡
+	Delete Selected Ink	刪除選取的筆跡
+	Recolor Selected Ink	變更選取筆跡的色彩
+	Add Pen	新增畫筆
+	Remove Pen	移除畫筆
+	Ink to Shape	筆跡轉圖形
+	Convert to Shapes	轉換為圖案
+	Ink Replay	筆跡重播
+	Add\nPen	新增畫筆
+	Rewind	倒轉
+	Forward	快轉
+	Stroke {n} of {total}	第 {n} 筆，共 {total} 筆

@@ -966,11 +966,15 @@ fn sectpr_body(w: &mut W, s: &SectionProps) {
     }
 }
 
-/// A shape's `cNvPr`/`docPr` name: ink is "Ink <pen> <id>", which reading looks for.
+/// A shape's `cNvPr`/`docPr` name: ink is "Ink <pen> <id>" (and "#<order>" when its drawing
+/// order is known), which reading looks for.
 fn shape_name(kind: ShapeKind, freeform: Option<&wordcraft_doc::freeform::Freeform>, id: &str) -> String {
-    match freeform.filter(|_| kind == ShapeKind::Freeform).and_then(|f| f.ink) {
-        Some(tool) => format!("Ink {} {id}", ink_name(tool)),
-        None => format!("Shape {id}"),
+    let f = freeform.filter(|_| kind == ShapeKind::Freeform);
+    match (f.and_then(|f| f.ink), f.and_then(|f| f.order)) {
+        // The drawing order rides along for Ink Replay: `Ink Pen 3 #12`.
+        (Some(tool), Some(n)) => format!("Ink {} {id} #{n}", ink_name(tool)),
+        (Some(tool), None) => format!("Ink {} {id}", ink_name(tool)),
+        (None, _) => format!("Shape {id}"),
     }
 }
 

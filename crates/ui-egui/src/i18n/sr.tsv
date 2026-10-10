@@ -1325,3 +1325,16 @@
 	Flip Vertical	Окрени вертикално
 	Flip Horizontal	Окрени хоризонтално
 	Formatted	Форматирано
+	Lasso Select	Избор ласом
+	Move Selected Ink	Премести изабрани рукопис
+	Delete Selected Ink	Обриши изабрани рукопис
+	Recolor Selected Ink	Промени боју изабраног рукописа
+	Add Pen	Додај перо
+	Remove Pen	Уклони перо
+	Ink to Shape	Рукопис у облик
+	Convert to Shapes	Претвори у облике
+	Ink Replay	Рукопис реприза
+	Add\nPen	Додај\nперо
+	Rewind	На почетак
+	Forward	Напред
+	Stroke {n} of {total}	Потез {n} од {total}

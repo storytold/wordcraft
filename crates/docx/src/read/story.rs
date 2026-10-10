@@ -718,7 +718,9 @@ impl Reader<'_> {
                 && let Some(mut f) = super::freeform::cust_geom(sppr, w, h)
             {
                 f.alpha = super::freeform::line_alpha(sppr.child("a:ln"));
-                f.ink = c.child("wp:docPr").and_then(|p| p.attr("name")).and_then(super::freeform::ink_tool);
+                let name = c.child("wp:docPr").and_then(|p| p.attr("name"));
+                f.ink = name.and_then(super::freeform::ink_tool);
+                f.order = name.filter(|_| f.ink.is_some()).and_then(super::freeform::ink_order);
                 *kind = ShapeKind::Freeform;
                 *freeform = Some(Arc::new(f));
             }
