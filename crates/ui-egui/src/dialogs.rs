@@ -46,6 +46,14 @@ pub enum Dialog {
         page_break: bool,
         widow: bool,
     },
+    /// Tabs (#320).
+    Tabs {
+        form: Box<crate::dialogs_para::TabsForm>,
+    },
+    /// Borders and Shading (#320).
+    Borders {
+        form: Box<crate::dialogs_para::BordersForm>,
+    },
     Find {
         query: String,
         replace: String,
@@ -401,7 +409,7 @@ fn region_changes(r: &TableRegion, basis: &TableRegion) -> Value {
 }
 
 /// A colour menu: a swatch with the colour grid and No Color. `value` is hex, empty for none.
-fn color_menu(ui: &mut Ui, theme: &[wordcraft_doc::Rgb], value: &mut String) {
+pub(crate) fn color_menu(ui: &mut Ui, theme: &[wordcraft_doc::Rgb], value: &mut String) {
     let c = wordcraft_doc::Rgb::parse(value);
     ui.horizontal(|ui| {
         let (r, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
@@ -434,6 +442,8 @@ impl Dialog {
         match self {
             Dialog::Font { .. } => "font",
             Dialog::Paragraph { .. } => "paragraph",
+            Dialog::Tabs { .. } => "tabs",
+            Dialog::Borders { .. } => "borders",
             Dialog::Find { replace_mode: false, .. } => "find",
             Dialog::Find { .. } => "replace",
             Dialog::Goto { .. } => "goto",
@@ -521,6 +531,15 @@ impl Dialog {
                     page_break: rp.page_break_before,
                     widow: rp.widow_control,
                 }
+            }
+            "tabs" => Dialog::Tabs { form: Box::new(crate::dialogs_para::TabsForm::read(app)?) },
+            "borders" | "pageBorders" | "shading" => {
+                let tab = match name {
+                    "pageBorders" => 1,
+                    "shading" => 2,
+                    _ => 0,
+                };
+                Dialog::Borders { form: Box::new(crate::dialogs_para::BordersForm::read(app, tab)?) }
             }
             "find" | "replace" => Dialog::Find {
                 query: if app.session.sel.is_collapsed() { app.session.find.query.clone() } else { app.session.selected_text() },
@@ -690,6 +709,8 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     let title = match &d {
         Dialog::Font { .. } => "Font",
         Dialog::Paragraph { .. } => "Paragraph",
+        Dialog::Tabs { .. } => "Tabs",
+        Dialog::Borders { .. } => "Borders and Shading",
         Dialog::Find { replace_mode: false, .. } => "Find",
         Dialog::Find { .. } => "Find and Replace",
         Dialog::Goto { .. } => "Go To",
@@ -734,7 +755,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     }
 }
 
-fn buttons(ui: &mut Ui, ok: &str) -> (bool, bool) {
+pub(crate) fn buttons(ui: &mut Ui, ok: &str) -> (bool, bool) {
     let mut r = (false, false);
     ui.add_space(8.0);
     ui.horizontal(|ui| {
@@ -874,12 +895,20 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             ui.checkbox(keep_next, tl!("Keep with next"));
             ui.checkbox(keep_lines, tl!("Keep lines together"));
             ui.checkbox(page_break, tl!("Page break before"));
+            ui.add_space(6.0);
+            let tabs = ui.button(tl!("Tabs…")).clicked();
             let (ok, cancel) = buttons(ui, tl!("OK"));
-            if ok {
+            if ok || tabs {
                 apply_paragraph(app, *rtl, align, *left, *right, *first, *before, *after, *line, [*keep_next, *keep_lines, *page_break, *widow]);
             }
-            ok || cancel
+            // Tabs… keeps what was set here and moves on to the Tabs dialog.
+            if tabs {
+                app.dialog = Dialog::open("tabs", app);
+            }
+            ok || cancel || tabs
         }
+        Dialog::Tabs { form } => crate::dialogs_para::tabs(app, ui, form),
+        Dialog::Borders { form } => crate::dialogs_para::borders(app, ui, form),
         Dialog::Find { query, replace, match_case, whole_word, regex, replace_mode, message } => {
             ui.horizontal(|ui| {
                 if ui.selectable_label(!*replace_mode, tl!("Find")).clicked() {

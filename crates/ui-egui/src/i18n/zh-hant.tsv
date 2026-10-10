@@ -87,6 +87,29 @@
 	Border Painter	框線複製
 	Border\nPainter	框線複製
 	Borders	框線
+	Tab stop position:	定位點位置：
+	Default tab stops:	預設定位點間距：
+	Tab stops to be cleared:	要清除的定位點：
+	All	全部
+	Decimal	小數點對齊
+	Bar	豎線
+	Leader	前置字元
+	Set	設定
+	Page Border	頁面框線設定
+	Apply to:	套用至：
+	Whole document	整份文件
+	This section	本節
+	Fill	填滿
+	Setting:	設定：
+	3-D	立體
+	Custom	自訂
+	Style:	樣式：
+	Dot dash	點虛線
+	Triple	三線
+	Between	段落之間
+	Borders and Shading	框線及網底
+	Tabs…	定位點…
+	Borders and Shading…	框線及網底…
 	Bottom Border	下框線
 	Bottom of Page	頁面底端
 	Bottom:	下：

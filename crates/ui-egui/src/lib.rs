@@ -19,6 +19,7 @@ pub mod chrome;
 pub mod control;
 pub mod credits;
 pub mod dialogs;
+pub mod dialogs_para;
 pub mod equation_tab;
 pub mod file_dialogs;
 pub mod frame;
@@ -1052,6 +1053,10 @@ fn input_dialog(id: &str, params: &Value) -> Option<&'static str> {
         "mailings.findRecipient" if !has("text") => Some("findRecipient"),
         // Table Properties without settings shows the dialog (with settings it applies them).
         "table.properties" if params.as_object().is_none_or(|m| m.is_empty()) => Some("tableProperties"),
+        // Tabs, Borders and Shading, and Page Borders without settings show their dialogs (#320).
+        "para.tabs" if params.as_object().is_none_or(|m| m.is_empty()) => Some("tabs"),
+        "para.borders" if params.as_object().is_none_or(|m| m.is_empty()) => Some("borders"),
+        "design.pageBorders" if params.as_object().is_none_or(|m| m.is_empty()) => Some("pageBorders"),
         _ => None,
     }
 }
