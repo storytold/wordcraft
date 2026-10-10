@@ -33,6 +33,8 @@ const MAX_PARTS: usize = 50_000;
 /// Most graphic work (items plus path segments, see `story::graphic_work`) built for one file's
 /// charts and diagrams; later ones are left empty.
 const MAX_GRAPHIC_WORK: usize = 2_000_000;
+/// Longest attached-template path we keep (bytes); a longer one is not a real path.
+const MAX_TEMPLATE_PATH: usize = 32 * 1024;
 
 pub(crate) struct Reader<'p> {
     pkg: &'p Package,
@@ -658,9 +660,19 @@ impl Reader<'_> {
 
     fn read_settings(&mut self, path: &str) -> Result<(), DocxError> {
         let Some(root) = self.xml(path)? else { return Ok(()) };
+        let rels = self.pkg.rels(path);
         let s = &mut self.doc.settings;
         for k in root.els() {
             match k.name.as_str() {
+                // §17.15.1.6: the template, by a relationship (usually external) of the settings part.
+                "w:attachedTemplate" => {
+                    s.attached_template = k
+                        .attr("r:id")
+                        .and_then(|id| rels.by_id(id))
+                        .map(|r| r.target.trim().to_string())
+                        .filter(|t| !t.is_empty() && t.len() <= MAX_TEMPLATE_PATH);
+                }
+                "w:linkStyles" => s.link_styles = on_off(k),
                 "w:compat" => {
                     // Only Word's own setting: another `w:uri` names a different application's.
                     let mode = k

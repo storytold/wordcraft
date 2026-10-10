@@ -297,13 +297,17 @@ pub fn write_as(doc: &Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
         push_part(&mut entries, &mut overrides, "word/numbering.xml", numbering_xml(doc), &format!("{CT_WML}numbering+xml"), PartRels::default());
     }
     rels.add(rt::SETTINGS, "settings.xml", false);
+    // The attached template is an external relationship of the settings part (§17.15.1.6).
+    let mut settings_rels = PartRels::default();
+    let template = doc.settings.attached_template.as_deref().map(str::trim).filter(|t| !t.is_empty());
+    let template_rel = template.map(|t| settings_rels.add(rt::ATTACHED_TEMPLATE, t, true));
     push_part(
         &mut entries,
         &mut overrides,
         "word/settings.xml",
-        settings_xml(doc, !wr.footnotes.is_empty(), !wr.endnotes.is_empty()),
+        settings_xml(doc, !wr.footnotes.is_empty(), !wr.endnotes.is_empty(), template_rel.as_deref()),
         &format!("{CT_WML}settings+xml"),
-        PartRels::default(),
+        settings_rels,
     );
     rels.add(rt::THEME, "theme/theme1.xml", false);
     push_part(
@@ -780,7 +784,9 @@ fn write_level(w: &mut W, i: usize, l: &Level) {
     w.close("w:lvl");
 }
 
-fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool) -> Vec<u8> {
+/// `w:settings`, its children in the schema's order (CT_Settings is a sequence). `template_rel`
+/// is the id of the attached template's relationship, when there is one.
+fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, template_rel: Option<&str>) -> Vec<u8> {
     let s = &doc.settings;
     let mut w = W::new();
     let ns = xml::body_ns();
@@ -792,6 +798,12 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool) -> Vec<u8> {
     }
     if s.mirror_margins {
         w.empty("w:mirrorMargins", &[]);
+    }
+    if let Some(id) = template_rel {
+        w.empty("w:attachedTemplate", &[("r:id", id)]);
+    }
+    if s.link_styles {
+        w.empty("w:linkStyles", &[]);
     }
     if s.track_changes {
         w.empty("w:trackRevisions", &[]);
