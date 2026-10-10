@@ -538,3 +538,19 @@ fn html_img_sources_go_through_the_loader() {
     // Without a loader only data: URIs load.
     assert!(import("html", html.as_bytes()).unwrap().unwrap().media.is_empty());
 }
+
+#[test]
+fn chart_alt_text_is_an_image_alt_never_body_text() {
+    let mut p = Paragraph::with_text("See below", CharProps::default());
+    let chart = InlineObject::Graphic { w: 100.0, h: 50.0, alt: "Sales".into(), float: Default::default(), graphic: Arc::new(Default::default()) };
+    p.insert_object(4, chart, &CharProps::default()).unwrap();
+    let mut d = Document::new();
+    d.body = vec![para_block(p)];
+    let text = |ext: &str| String::from_utf8(export(ext, &d).unwrap().unwrap()).unwrap();
+    assert!(text("html").contains(r#"<img alt="Sales">"#), "{}", text("html"));
+    assert!(text("md").contains("![Sales]()"), "{}", text("md"));
+    for ext in ["txt", "rtf", "tex"] {
+        assert!(!text(ext).contains("Sales"), "{ext}: {}", text(ext));
+    }
+    assert_eq!(para_texts(&d), ["See below"]);
+}

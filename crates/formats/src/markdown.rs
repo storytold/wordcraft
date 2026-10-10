@@ -1087,6 +1087,7 @@ fn inlines_md(inlines: &[Inline]) -> String {
                 let safe: String = a.chars().filter(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | ':')).collect();
                 pieces.push((String::new(), Fmt::default(), Some(format!("<a id=\"{safe}\"></a>"))));
             }
+            Inline::Figure(alt) => pieces.push((String::new(), Fmt::default(), Some(format!("![{}]()", escape(alt))))),
             Inline::Equation { .. } => {}
         }
     }

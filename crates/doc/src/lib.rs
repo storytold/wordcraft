@@ -14,6 +14,7 @@ pub mod bidi;
 pub mod edit;
 pub mod encoding;
 pub mod fields;
+pub mod graphic;
 pub mod math;
 pub mod math_edit;
 pub mod math_latex;
@@ -326,6 +327,9 @@ pub struct Settings {
     /// 2013 and later, which places a table's border at the margin rather than its text and lets
     /// justified lines shrink their spaces to fit more text.
     pub compat_mode: u32,
+    /// Drawing grid spacing in points, across and down (View › Gridlines); ECMA-376's default is 1/8 inch.
+    pub grid_h: f32,
+    pub grid_v: f32,
 }
 
 /// Word's compatibility mode for documents that don't state one.
@@ -333,6 +337,9 @@ pub const LEGACY_COMPAT_MODE: u32 = 12;
 
 /// The compatibility mode of documents created by Word 2013 and later, and by WordCraft.
 pub const COMPAT_MODE_CURRENT: u32 = 15;
+
+/// ECMA-376 §17.15.1.44/45: 180 twentieths of a point when a document doesn't say.
+pub const DEFAULT_GRID: f32 = 9.0;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -384,6 +391,8 @@ impl Default for Settings {
             endnote_format: section::NumFormat::LowerRoman,
             protection: None,
             compat_mode: COMPAT_MODE_CURRENT,
+            grid_h: DEFAULT_GRID,
+            grid_v: DEFAULT_GRID,
         }
     }
 }

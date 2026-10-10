@@ -755,6 +755,12 @@ fn accessibility(s: &mut Session, _: &Value) -> CmdResult {
             {
                 issues.push(json!({"kind": "error", "issue": "Missing alternative text", "where": path.0, "fix": "Select the picture and run picture.altText"}));
             }
+            // Charts and diagrams can't be given alt text yet (see objects.rs), so only report them.
+            if let InlineObject::Graphic { alt, .. } = o
+                && alt.trim().is_empty()
+            {
+                issues.push(json!({"kind": "error", "issue": "Chart or diagram has no alternative text", "where": path.0}));
+            }
         }
         if let Some(l) = s.doc.styles.resolve_para(&p.props).outline_level {
             if let Some(prev) = last_level

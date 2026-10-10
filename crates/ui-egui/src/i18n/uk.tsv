@@ -83,6 +83,7 @@
 	Border\nPainter	Пензель\nмеж
 	Borders	Межі
 	Bottom Border	Нижня межа
+	Bottom Margin	Нижнє поле
 	Bottom of Page	Унизу сторінки
 	Bottom:	Знизу:
 	Box	Рамка
@@ -127,14 +128,6 @@
 	Clear Formatting Level	Очистити рівень форматування
 	Clear Paragraph Formatting	Очистити форматування абзацу
 	Clipboard	Буфер обміну
-	Clipboard Pane	Панель буфера обміну
-	Clipboard Items	Елементи буфера обміну
-	Paste Clipboard Item	Вставити елемент буфера обміну
-	Paste All	Вставити все
-	Delete Clipboard Item	Видалити елемент буфера обміну
-	Click an item to paste it.	Клацніть елемент, щоб вставити його.
-	Nothing collected yet. Items you copy or cut appear here.	Поки що порожньо. Тут з'являться елементи, які ви скопіюєте або виріжете.
-	(picture or object)	(зображення або об'єкт)
 	Close	Закрити
 	Close Header and Footer	Закрити колонтитули
 	Collapse Selection	Зняти виділення
@@ -195,8 +188,12 @@
 	Delete Style	Видалити стиль
 	Delete Table	Видалити таблицю
 	Design	Дизайн
+	Edit Comment	Редагувати коментар
+	Left Margin	Ліве поле
 	More templates →	Більше шаблонів →
 	No templates match your search.	Немає шаблонів, що відповідають пошуку.
+	Reopen	Відкрити знову
+	Right Margin	Праве поле
 	Search for templates	Пошук шаблонів
 	development build	Збірка для розробки
 	Diagonal	Діагональ
@@ -753,6 +750,7 @@
 	Three	Три
 	Tight	Щільний
 	Top Border	Верхня межа
+	Top Margin	Верхнє поле
 	Top of Page	Угорі сторінки
 	Top:	Зверху:
 	Total Row	Рядок підсумків
@@ -813,6 +811,7 @@
 	Wrap Text	Обтікання текстом
 	Wrap\nText	Обтікання\nтекстом
 	Write & Insert Fields	Написання й вставлення полів
+	Write a reply	Напишіть відповідь
 	Zoom	Масштаб
 	Zoom In	Збільшити масштаб
 	Zoom Out	Зменшити масштаб
@@ -1014,3 +1013,28 @@
 	Dark	Темна
 	Use system setting	Як у системі
 	A file dialog is already open.	Діалогове вікно файлу вже відкрито.
+	Height:	Висота:
+	Width:	Ширина:
+	Row	Рядок
+	Cell	Клітинка
+	Preferred width:	Бажана ширина:
+	Alignment:	Вирівнювання:
+	Indent from left:	Відступ ліворуч:
+	Specify height:	Указати висоту:
+	Exactly	Точно
+	At least	Принаймні
+	Allow row to break across pages	Дозволити розрив рядка між сторінками
+	Repeat as header row on each page	Повторювати як рядок заголовка на кожній сторінці
+	Vertical alignment:	Вертикальне вирівнювання:
+	Top	Угорі
+	Bottom	Унизу
+	Alt text	Альтернативний текст
+	Alt:	Альт.:
+	W:	Ш:
+	H:	В:
+	Reset	Скинути
+	Reset Crop	Скинути обітнення
+	Insert a new equation (Alt+=)	Вставити нове рівняння (Alt+=)
+	Leave the equation (Esc)	Вийти з рівняння (Esc)
+	Preview	Попередній перегляд
+	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft

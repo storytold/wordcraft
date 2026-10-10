@@ -1,4 +1,4 @@
-//! Side panes: Navigation (headings, pages, search results), Clipboard, Styles, Style Inspector, Comments.
+//! Side panes: Navigation (headings, pages, search results), Styles, Style Inspector, Comments.
 
 use egui::{Stroke, Ui, vec2};
 use serde_json::{Value, json};
@@ -15,13 +15,6 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             .resizable(true)
             .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
             .show(ui, |ui| nav(app, ui));
-    }
-    if app.session.view.clipboard_pane {
-        egui::Panel::left("clipboard_pane")
-            .default_size(250.0)
-            .resizable(true)
-            .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
-            .show(ui, |ui| clipboard(app, ui));
     }
     if app.session.view.styles_pane {
         egui::Panel::right("styles_pane")
@@ -152,51 +145,6 @@ fn nav(app: &mut WordApp, ui: &mut Ui) {
     });
 }
 
-/// Items collected by Copy and Cut, newest first; clicking one pastes it at the caret.
-fn clipboard(app: &mut WordApp, ui: &mut Ui) {
-    if header(ui, "Clipboard") {
-        let _ = app.run("edit.clipboardPane", json!({"value": false}));
-        return;
-    }
-    let items: Vec<String> = app.session.clip_history.items().iter().map(|i| i.preview()).collect();
-    ui.horizontal(|ui| {
-        if ui.add_enabled(!items.is_empty(), egui::Button::new(tl!("Paste All"))).clicked() {
-            let _ = app.run("edit.pasteAllClipboard", json!({}));
-            app.canvas.want_focus = true;
-        }
-        if ui.add_enabled(!items.is_empty(), egui::Button::new(tl!("Clear All"))).clicked() {
-            let _ = app.run("edit.clearClipboard", json!({}));
-        }
-    });
-    ui.add_space(4.0);
-    let hint = if items.is_empty() { "Nothing collected yet. Items you copy or cut appear here." } else { "Click an item to paste it." };
-    ui.label(egui::RichText::new(tl!(hint)).small().weak());
-    ui.separator();
-    let t = Tokens::get(ui.ctx());
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        for (i, preview) in items.iter().enumerate() {
-            egui::Frame::NONE.fill(t.input).stroke(Stroke::new(1.0, t.border)).corner_radius(6).inner_margin(8).show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                let text = if preview.is_empty() { tl!("(picture or object)").to_string() } else { preview.clone() };
-                let mut job =
-                    egui::text::LayoutJob::single_section(text, egui::TextFormat { font_id: regular(12.5), color: t.text, ..Default::default() });
-                job.wrap.max_width = ui.available_width();
-                job.wrap.max_rows = 3;
-                if ui.add(egui::Button::new(job).frame(false)).on_hover_text(tl!("Paste")).clicked() {
-                    let _ = app.run("edit.pasteClipboardItem", json!({"index": i}));
-                    app.canvas.want_focus = true;
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                    if ui.small_button(tl!("Delete")).clicked() {
-                        let _ = app.run("edit.deleteClipboardItem", json!({"index": i}));
-                    }
-                });
-            });
-            ui.add_space(6.0);
-        }
-    });
-}
-
 fn styles(app: &mut WordApp, ui: &mut Ui) {
     if header(ui, "Styles") {
         let _ = app.run("view.stylesPane", json!({"value": false}));
@@ -290,41 +238,119 @@ fn comments(app: &mut WordApp, ui: &mut Ui) {
                         ui.label(egui::RichText::new(tl!("Resolved")).small().color(t.green));
                     }
                 });
-                // Editable comment text (writes back to the comment's story).
-                let part = app.session.doc.comments.get(&(id as u32)).map(|x| x.part);
-                if let Some(part) = part {
-                    let key = egui::Id::new(("comment_edit", id));
-                    let mut text = ui.data(|d| d.get_temp::<String>(key)).unwrap_or_else(|| app.session.doc.plain_text(StoryRef::Part(part)));
-                    let r = ui.add(egui::TextEdit::multiline(&mut text).desired_rows(1).desired_width(f32::INFINITY).hint_text(tl!("Add a comment")));
-                    if r.changed() {
-                        ui.data_mut(|d| d.insert_temp(key, text.clone()));
-                    }
-                    if r.lost_focus() {
-                        let blocks =
-                            text.split('\n').map(|l| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(l, Default::default()))).collect();
-                        let _ = app.session.doc.set_story(StoryRef::Part(part), blocks);
-                        app.session.touch();
-                        ui.data_mut(|d| d.remove::<String>(key));
-                    }
-                }
+                // Editable comment text (one undo step per edit, like the balloons).
+                comment_editor(app, ui, id as u32, None, false);
+                let open_key = egui::Id::new(("comment_reply_open", id));
+                let mut replying = ui.data(|d| d.get_temp::<bool>(open_key)).unwrap_or(false);
                 ui.horizontal(|ui| {
                     if ui.small_button(tl!("Go to")).clicked()
                         && let Some(a) = c.get("anchor").filter(|a| !a.is_null())
                     {
                         let _ = app.run("caret.set", json!({"pos": a}));
                     }
-                    if ui.small_button(tl!("Resolve")).clicked() {
+                    if ui.small_button(tl!("Reply")).clicked() {
+                        replying = true;
+                        ui.data_mut(|d| d.insert_temp(open_key, true));
+                        ui.data_mut(|d| d.insert_temp(egui::Id::new(("comment_reply_focus", id)), true));
+                    }
+                    let resolved = c.get("resolved").and_then(Value::as_bool).unwrap_or(false);
+                    if ui.small_button(if resolved { tl!("Reopen") } else { tl!("Resolve") }).clicked() {
                         let _ = app.run("review.resolveComment", json!({"id": id}));
                     }
                     if ui.small_button(tl!("Delete")).clicked() {
                         let _ = app.run("review.deleteComment", json!({"id": id}));
                     }
                 });
+                if replying {
+                    let focus = ui.data_mut(|d| d.remove_temp::<bool>(egui::Id::new(("comment_reply_focus", id)))).unwrap_or(false);
+                    if reply_editor(app, ui, id as u32, None, focus) {
+                        ui.data_mut(|d| d.remove::<bool>(open_key));
+                    }
+                }
             });
             ui.add_space(6.0);
         }
     });
-    let _ = vec2(0.0, 0.0);
+}
+
+fn edit_key(id: u32) -> egui::Id {
+    egui::Id::new(("comment_edit", id))
+}
+
+fn reply_key(id: u32) -> egui::Id {
+    egui::Id::new(("comment_reply", id))
+}
+
+/// A comment's text, editable in place (the Comments pane and the balloons). Typing stays in a
+/// draft until the field loses focus; then [`commit_comment`] writes it back with one
+/// `review.editComment`, so each editing session is one undo step.
+pub(crate) fn comment_editor(app: &mut WordApp, ui: &mut Ui, id: u32, font: Option<egui::FontId>, focus: bool) {
+    let Some(part) = app.session.doc.comments.get(&id).map(|c| c.part) else { return };
+    let key = edit_key(id);
+    let mut text = ui.data(|d| d.get_temp::<String>(key)).unwrap_or_else(|| app.session.doc.plain_text(StoryRef::Part(part)));
+    let mut edit = egui::TextEdit::multiline(&mut text).desired_rows(1).desired_width(f32::INFINITY).hint_text(tl!("Add a comment"));
+    if let Some(f) = font {
+        edit = edit.font(f);
+    }
+    let r = ui.add(edit);
+    if focus {
+        r.request_focus();
+    }
+    if r.changed() {
+        ui.data_mut(|d| d.insert_temp(key, text));
+    }
+    if r.lost_focus() {
+        commit_comment(app, ui.ctx(), id);
+    }
+}
+
+/// Write a comment's draft text back, when it has one that differs from the comment.
+pub(crate) fn commit_comment(app: &mut WordApp, ctx: &egui::Context, id: u32) {
+    let Some(text) = ctx.data_mut(|d| d.remove_temp::<String>(edit_key(id))) else { return };
+    let Some(part) = app.session.doc.comments.get(&id).map(|c| c.part) else { return };
+    if text != app.session.doc.plain_text(StoryRef::Part(part)) {
+        let _ = app.run("review.editComment", json!({"id": id, "text": text}));
+    }
+}
+
+/// The comment a reply to `id` answers: replies to a reply join its thread.
+fn thread_root(app: &WordApp, id: u32) -> u32 {
+    match app.session.doc.comments.get(&id).and_then(|c| c.parent) {
+        Some(p) if app.session.doc.comments.contains_key(&p) => p,
+        _ => id,
+    }
+}
+
+/// A field for replying to a comment. When it loses focus a non-empty reply is posted with
+/// `review.reply`; returns true when the field is done (posted or left empty).
+pub(crate) fn reply_editor(app: &mut WordApp, ui: &mut Ui, id: u32, font: Option<egui::FontId>, focus: bool) -> bool {
+    let key = reply_key(id);
+    let mut text = ui.data(|d| d.get_temp::<String>(key)).unwrap_or_default();
+    let mut edit = egui::TextEdit::multiline(&mut text).desired_rows(1).desired_width(f32::INFINITY).hint_text(tl!("Write a reply"));
+    if let Some(f) = font {
+        edit = edit.font(f);
+    }
+    let r = ui.add(edit);
+    if focus {
+        r.request_focus();
+    }
+    if r.changed() {
+        ui.data_mut(|d| d.insert_temp(key, text));
+    }
+    if r.lost_focus() {
+        commit_reply(app, ui.ctx(), id);
+        return true;
+    }
+    false
+}
+
+/// Post a pending reply draft to comment `id` (nothing when there is none or it is blank).
+pub(crate) fn commit_reply(app: &mut WordApp, ctx: &egui::Context, id: u32) {
+    let Some(text) = ctx.data_mut(|d| d.remove_temp::<String>(reply_key(id))) else { return };
+    if !text.trim().is_empty() {
+        let root = thread_root(app, id);
+        let _ = app.run("review.reply", json!({"id": root, "text": text.trim_end()}));
+    }
 }
 
 /// Style Inspector: the paragraph and character levels at the caret, each with its style and the

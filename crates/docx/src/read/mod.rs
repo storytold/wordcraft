@@ -1,5 +1,8 @@
 //! DOCX → [`Document`].
 
+mod chart;
+mod diagram;
+mod drawing_color;
 mod math;
 mod props;
 mod story;
@@ -7,6 +10,7 @@ mod story;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
+use wordcraft_doc::graphic::{Graphic, GraphicKind};
 use wordcraft_doc::numbering::{AbstractNum, Level, LevelSuffix, Num};
 use wordcraft_doc::para::NoteKind;
 use wordcraft_doc::para::OBJ;
@@ -16,7 +20,7 @@ use wordcraft_doc::styles::{Style, StyleKind, StyleSheet, TableStyleParts};
 use wordcraft_doc::{Block, Blocks, Comment, Document, InlineObject, PartKind, Revision, RevisionKind};
 
 use crate::DocxError;
-use crate::package::{ContentTypes, MAX_VBA_RELATED, Package, Rels, VBA_PROJECT_PART, VBA_RELATED, rt};
+use crate::package::{ContentTypes, MAX_VBA_RELATED, Package, Rels, VBA_PROJECT_PART, VBA_RELATED, rel_is, rt};
 use crate::units::{flag, int, on_off, tw, u32_of};
 use crate::xml::El;
 pub(crate) use props::PropCtx;
@@ -24,6 +28,9 @@ use story::StoryCtx;
 
 /// Most parts (headers, notes, comments, text boxes) we create from one file.
 const MAX_PARTS: usize = 50_000;
+/// Most graphic work (items plus path segments, see `story::graphic_work`) built for one file's
+/// charts and diagrams; later ones are left empty.
+const MAX_GRAPHIC_WORK: usize = 2_000_000;
 
 pub(crate) struct Reader<'p> {
     pkg: &'p Package,
@@ -40,6 +47,18 @@ pub(crate) struct Reader<'p> {
     pub comment_map: HashMap<String, u32>,
     pub comments_ended: HashSet<u32>,
     pub bookmarks: HashMap<String, String>,
+    /// Chart and diagram parts by path, parsed once.
+    graphic_parts: HashMap<String, Option<Arc<El>>>,
+    /// Charts and diagrams by (kind, part path, width bits, height bits), built once.
+    graphics: HashMap<(GraphicKind, String, u32, u32), Arc<Graphic>>,
+    /// Graphic work left before charts and diagrams are left empty (see [`MAX_GRAPHIC_WORK`]).
+    graphic_budget: usize,
+}
+
+/// The package path that internal relationship `id` points at, if it has type `kind` (an `rt`
+/// constant): a crafted id can't make a chart of some other, possibly huge, part.
+fn part_of(rels: &Rels, id: &str, kind: &str) -> Option<String> {
+    rels.by_id(id).filter(|r| !r.external && rel_is(&r.kind, kind)).map(|r| r.target.clone())
 }
 
 /// Read a `.docx` package.
@@ -69,6 +88,9 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocxError> {
         comment_map: HashMap::new(),
         comments_ended: HashSet::new(),
         bookmarks: HashMap::new(),
+        graphic_parts: HashMap::new(),
+        graphics: HashMap::new(),
+        graphic_budget: MAX_GRAPHIC_WORK,
     };
     r.pc.major_font = r.doc.settings.major_font.clone();
     r.pc.minor_font = r.doc.settings.minor_font.clone();
@@ -300,6 +322,16 @@ impl Reader<'_> {
         self.doc.media.insert(key.clone(), Arc::new(bytes.to_vec()));
         self.media_by_path.insert(rel.target.clone(), key.clone());
         Some(key)
+    }
+
+    /// A chart or diagram part, parsed once however often it's referenced (`None` when unreadable).
+    fn graphic_part(&mut self, path: &str) -> Option<Arc<El>> {
+        if let Some(p) = self.graphic_parts.get(path) {
+            return p.clone();
+        }
+        let p = self.xml(path).ok().flatten().map(Arc::new);
+        self.graphic_parts.insert(path.to_string(), p.clone());
+        p
     }
 
     pub fn load_header_footer(&mut self, path: &str, footer: bool) -> Option<u32> {
@@ -595,6 +627,12 @@ impl Reader<'_> {
                     }
                 }
                 "w:evenAndOddHeaders" => s.even_odd_headers = on_off(k),
+                "w:drawingGridHorizontalSpacing" | "w:drawingGridVerticalSpacing" => {
+                    if let Some(v) = tw(k, "w:val").filter(|v| *v > 0.0) {
+                        let v = v.clamp(0.5, 1584.0);
+                        if k.name == "w:drawingGridHorizontalSpacing" { s.grid_h = v } else { s.grid_v = v }
+                    }
+                }
                 "w:mirrorMargins" => s.mirror_margins = on_off(k),
                 "w:autoHyphenation" => s.auto_hyphenation = on_off(k),
                 "w:footnotePr" => {

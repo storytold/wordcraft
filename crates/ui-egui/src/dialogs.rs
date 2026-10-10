@@ -1,8 +1,8 @@
 //! Dialogs: Font, Paragraph, Find & Replace, Go To, Insert Table, Page Setup, Link, Bookmark,
-//! Word Count, Zoom, Watermark, New/Modify Style, New/Modify Table Style, Command search, Paste
-//! Special, About, Save Changes, and the mail-merge Recipient List, Insert Merge Field, Find
-//! Recipient, merge rules, Match Fields and Check for Errors. Every dialog ends by running a command
-//! (or shows one's result), so agents get the same result without the dialog.
+//! Word Count, Zoom, Watermark, New/Modify Style, New/Modify Table Style, Table Properties,
+//! Command search, Paste Special, About, Save Changes, and the mail-merge Recipient List, Insert
+//! Merge Field, Find Recipient, merge rules, Match Fields and Check for Errors. Every dialog ends
+//! by running a command (or shows one's result), so agents get the same result without the dialog.
 
 use egui::{Sense, Ui, vec2};
 use serde::Serialize;
@@ -180,6 +180,114 @@ pub enum Dialog {
         unknown: Vec<String>,
         records: u64,
     },
+    /// Table Layout › Properties: the table, the caret's row, column and cell. Only what changed
+    /// from `basis` (the values when it opened) is applied, as one `table.properties` step.
+    TableProperties {
+        form: Box<TableForm>,
+        #[serde(skip)]
+        basis: Box<TableForm>,
+    },
+}
+
+/// The Table Properties dialog's fields. Lengths are in the interface unit
+/// ([`wordcraft_geom::Unit`], inches by default).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableForm {
+    pub width_on: bool,
+    pub width: f32,
+    /// `left`, `center` or `right`.
+    pub align: String,
+    pub indent: f32,
+    pub row_height_on: bool,
+    pub row_height: f32,
+    pub row_exact: bool,
+    pub allow_break: bool,
+    pub header_row: bool,
+    pub column_width: f32,
+    pub cell_width_on: bool,
+    pub cell_width: f32,
+    /// `top`, `center` or `bottom`.
+    pub valign: String,
+}
+
+impl TableForm {
+    /// The caret's table, row, column and cell as the dialog shows them.
+    pub fn read(app: &WordApp) -> Option<TableForm> {
+        use wordcraft_doc::props::{Align, HeightRule, VAlign};
+        let s = &app.session;
+        let (tp, r, c) = s.sel.focus.path.cell()?;
+        let t = s.doc.table(s.sel.focus.story, &tp)?;
+        let k = wordcraft_geom::Unit::default().pt_per_unit();
+        let row = t.rows.get(r).map(|x| x.props.clone()).unwrap_or_default();
+        let cell = t.rows.get(r).and_then(|x| x.cells.get(c)).map(|x| x.props.clone()).unwrap_or_default();
+        let tw = wordcraft_engine::cmd::page::sect(s).text_width();
+        let width = t.props.width_pct.filter(|p| *p > 0.0).map(|p| tw * p.min(100.0) / 100.0).or(t.props.width.filter(|w| *w > 0.0));
+        let fin = |v: f32| if v.is_finite() { v } else { 0.0 };
+        Some(TableForm {
+            width_on: width.is_some(),
+            width: fin(width.unwrap_or(tw)) / k,
+            align: match t.props.align {
+                Some(Align::Center) => "center",
+                Some(Align::Right) => "right",
+                _ => "left",
+            }
+            .into(),
+            indent: fin(t.props.indent.unwrap_or(0.0)) / k,
+            row_height_on: row.height.is_some() && row.height_rule != HeightRule::Auto,
+            row_height: fin(row.height.unwrap_or(18.0)) / k,
+            row_exact: row.height_rule == HeightRule::Exact,
+            allow_break: !row.cant_split,
+            header_row: row.header,
+            column_width: fin(t.grid.get(t.grid_col(r, c)).copied().unwrap_or(72.0)) / k,
+            cell_width_on: cell.width.is_some(),
+            cell_width: fin(cell.width.unwrap_or(72.0)) / k,
+            valign: match cell.valign {
+                VAlign::Center => "center",
+                VAlign::Bottom => "bottom",
+                _ => "top",
+            }
+            .into(),
+        })
+    }
+
+    /// `table.properties` parameters for what differs from `basis` (empty when nothing does).
+    pub fn changes(&self, basis: &TableForm) -> Value {
+        let k = wordcraft_geom::Unit::default().pt_per_unit();
+        let moved = |a: f32, b: f32| (a - b).abs() > 1e-4;
+        let mut v = serde_json::Map::new();
+        if self.width_on != basis.width_on || (self.width_on && moved(self.width, basis.width)) {
+            v.insert("width".into(), if self.width_on { json!(self.width * k) } else { Value::Null });
+        }
+        if self.align != basis.align {
+            v.insert("align".into(), json!(self.align));
+        }
+        if moved(self.indent, basis.indent) {
+            v.insert("indent".into(), json!(self.indent * k));
+        }
+        if self.row_height_on != basis.row_height_on
+            || (self.row_height_on && (moved(self.row_height, basis.row_height) || self.row_exact != basis.row_exact))
+        {
+            v.insert("rowHeight".into(), if self.row_height_on { json!(self.row_height * k) } else { Value::Null });
+            v.insert("rowHeightRule".into(), json!(if self.row_exact { "exact" } else { "atLeast" }));
+        }
+        if self.allow_break != basis.allow_break {
+            v.insert("allowBreak".into(), json!(self.allow_break));
+        }
+        if self.header_row != basis.header_row {
+            v.insert("headerRow".into(), json!(self.header_row));
+        }
+        if moved(self.column_width, basis.column_width) {
+            v.insert("columnWidth".into(), json!(self.column_width * k));
+        }
+        if self.cell_width_on != basis.cell_width_on || (self.cell_width_on && moved(self.cell_width, basis.cell_width)) {
+            v.insert("cellWidth".into(), if self.cell_width_on { json!(self.cell_width * k) } else { Value::Null });
+        }
+        if self.valign != basis.valign {
+            v.insert("valign".into(), json!(self.valign));
+        }
+        Value::Object(v)
+    }
 }
 
 /// The address parts Match Fields lists, with their keys in `mailings.matchFields`' `address`.
@@ -351,6 +459,7 @@ impl Dialog {
             Dialog::MergeRule { .. } => "ruleIf",
             Dialog::MatchFields { .. } => "matchFields",
             Dialog::CheckErrors { .. } => "checkErrors",
+            Dialog::TableProperties { .. } => "tableProperties",
         }
     }
 
@@ -455,6 +564,10 @@ impl Dialog {
                 Dialog::TableStyle { id: Some(id), name, based_on, region: 0, basis: regions.clone(), regions }
             }
             "commands" => Dialog::Commands { query: String::new() },
+            "tableProperties" => {
+                let form = Box::new(TableForm::read(app)?);
+                Dialog::TableProperties { basis: form.clone(), form }
+            }
             "pasteSpecial" => Dialog::paste_special(app, &json!({})),
             "about" => Dialog::About { tab: 0 },
             "contributors" => Dialog::About { tab: 1 },
@@ -602,6 +715,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::MergeRule { .. } => "If…Then…Else",
         Dialog::MatchFields { .. } => "Match Fields",
         Dialog::CheckErrors { .. } => "Check for Errors",
+        Dialog::TableProperties { .. } => "Table Properties",
     };
     egui::Window::new(tl!(title))
         .id(egui::Id::new(("dialog", title)))
@@ -842,6 +956,17 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             let (ok, cancel) = buttons(ui, tl!("Go To"));
             if ok && let Ok(n) = page.trim().parse::<u64>() {
                 let _ = app.run("edit.goto", json!({"page": n}));
+            }
+            ok || cancel
+        }
+        Dialog::TableProperties { form, basis } => {
+            table_properties(ui, form);
+            let (ok, cancel) = buttons(ui, tl!("OK"));
+            if ok {
+                let changes = form.changes(basis);
+                if changes.as_object().is_some_and(|m| !m.is_empty()) {
+                    let _ = app.run("table.properties", changes);
+                }
             }
             ok || cancel
         }
@@ -1461,6 +1586,69 @@ fn recipient_list(app: &mut WordApp, ui: &mut Ui, fields: &mut Vec<String>, rows
 /// The Paragraph dialog's OK. `align`, `left` and `right` are as seen on the page; `flags` are
 /// keep with next, keep lines together, page break before, widow/orphan control.
 #[allow(clippy::too_many_arguments)]
+/// The Table Properties dialog's fields: Table, Row, Column and Cell sections.
+fn table_properties(ui: &mut Ui, f: &mut TableForm) {
+    let unit = wordcraft_geom::Unit::default();
+    fn len(v: &mut f32, lo: f32, unit: wordcraft_geom::Unit) -> egui::DragValue<'_> {
+        egui::DragValue::new(v).speed(0.01).range(lo..=22.0).suffix(unit.suffix()).max_decimals(2)
+    }
+    let heading = |ui: &mut Ui, s: &str| {
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new(tl!(s)).font(semibold(12.5)));
+    };
+    heading(ui, "Table");
+    egui::Grid::new("tp_table").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+        ui.checkbox(&mut f.width_on, tl!("Preferred width:"));
+        ui.add_enabled(f.width_on, len(&mut f.width, 0.1, unit));
+        ui.end_row();
+        ui.label(tl!("Alignment:"));
+        ui.horizontal(|ui| {
+            for (v, l) in [("left", "Left"), ("center", "Center"), ("right", "Right")] {
+                ui.radio_value(&mut f.align, v.to_string(), tl!(l));
+            }
+        });
+        ui.end_row();
+        ui.label(tl!("Indent from left:"));
+        ui.add_enabled(f.align == "left", egui::DragValue::new(&mut f.indent).speed(0.01).range(-11.0..=22.0).suffix(unit.suffix()).max_decimals(2));
+        ui.end_row();
+    });
+    heading(ui, "Row");
+    egui::Grid::new("tp_row").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+        ui.checkbox(&mut f.row_height_on, tl!("Specify height:"));
+        ui.horizontal(|ui| {
+            ui.add_enabled(f.row_height_on, len(&mut f.row_height, 0.02, unit));
+            ui.add_enabled_ui(f.row_height_on, |ui| {
+                egui::ComboBox::from_id_salt("tp_rule").selected_text(tl!(if f.row_exact { "Exactly" } else { "At least" })).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut f.row_exact, false, tl!("At least"));
+                    ui.selectable_value(&mut f.row_exact, true, tl!("Exactly"));
+                });
+            });
+        });
+        ui.end_row();
+    });
+    ui.checkbox(&mut f.allow_break, tl!("Allow row to break across pages"));
+    ui.checkbox(&mut f.header_row, tl!("Repeat as header row on each page"));
+    heading(ui, "Column");
+    egui::Grid::new("tp_col").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+        ui.label(tl!("Preferred width:"));
+        ui.add(len(&mut f.column_width, 0.1, unit));
+        ui.end_row();
+    });
+    heading(ui, "Cell");
+    egui::Grid::new("tp_cell").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+        ui.checkbox(&mut f.cell_width_on, tl!("Preferred width:"));
+        ui.add_enabled(f.cell_width_on, len(&mut f.cell_width, 0.1, unit));
+        ui.end_row();
+        ui.label(tl!("Vertical alignment:"));
+        ui.horizontal(|ui| {
+            for (v, l) in [("top", "Top"), ("center", "Center"), ("bottom", "Bottom")] {
+                ui.radio_value(&mut f.valign, v.to_string(), tl!(l));
+            }
+        });
+        ui.end_row();
+    });
+}
+
 fn apply_paragraph(
     app: &mut WordApp,
     rtl: bool,

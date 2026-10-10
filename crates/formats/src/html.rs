@@ -1237,6 +1237,8 @@ pub fn inlines_html(inlines: &[Inline]) -> String {
                 ));
             }
             Inline::Anchor(a) => o.push_str(&format!("<a id=\"{}\"></a>", esc(a))),
+            // No picture to show: the browser shows the alt text in its place.
+            Inline::Figure(alt) => o.push_str(&format!("<img alt=\"{}\">", esc(alt))),
             Inline::Equation { .. } => {}
         }
     }

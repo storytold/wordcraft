@@ -222,3 +222,25 @@ fn the_scan_lists_a_variable_fonts_named_instances_as_loading_it_does() {
         assert!(loaded.iter().any(|(family, _, legacy)| family != legacy), "{loaded:?}");
     }
 }
+
+#[test]
+fn fallback_cache_is_dropped_when_a_face_loads_by_its_legacy_family_name() {
+    // #121 with #219: a lookup by a legacy family name ("Sysfont Sans3 Semibold") loads faces,
+    // so fallbacks remembered before it are searched again.
+    let dir = font_dir("fallback-legacy");
+    std::fs::write(dir.join("Sysfont-Semibold.ttf"), renamed("SourceSans3-Semibold.ttf")).unwrap();
+    let db = FontDb::with_font_dirs(vec![dir]);
+    db.set_system_fallback(false);
+    let latin = db.face(FALLBACK_FAMILY, "Regular");
+    let thai = 'ก';
+    assert!(db.fallback_for(thai, latin.id()).is_none());
+    let before = db.read_faces().len();
+    let semibold = format!("{FAMILY} Semibold");
+    let f = db.face(&semibold, "Regular");
+    assert_eq!((f.style.as_str(), f.legacy_family.as_str()), ("Semibold", semibold.as_str()));
+    assert!(db.read_faces().len() > before, "the installed family loaded");
+    assert!(db.fallback_for('A', f.id()).is_some_and(|g| g.id() != f.id()));
+    let cache = db.fallbacks.read().unwrap();
+    assert_eq!(cache.faces, db.read_faces().len());
+    assert!(!cache.map.contains_key(&(thai, latin.id())), "answers from before the load are dropped");
+}

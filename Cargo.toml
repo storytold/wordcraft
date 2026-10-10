@@ -27,6 +27,7 @@ wordcraft-mcp = { path = "crates/mcp" }
 wordcraft-zotero = { path = "crates/zotero" }
 wordcraft-control-key = { path = "crates/control-key" }
 wordcraft-ui-egui = { path = "crates/ui-egui" }
+wordcraft-metafile = { path = "crates/metafile" }
 
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }
