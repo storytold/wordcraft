@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use wordcraft_doc::effects::{Glow, Shadow, ShapeEffects};
-use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind};
+use wordcraft_doc::graphic::{Embedded, Graphic, GraphicItem, GraphicKind};
 use wordcraft_doc::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{CharProps, Rgb};
 use wordcraft_doc::table::{Cell, MAX_COLS, MAX_ROWS, Row, Table};
@@ -466,8 +466,13 @@ impl Reader<'_> {
                     self.emit_obj(sc, pb, o, props);
                 }
             }
-            "w:pict" | "w:object" => {
+            "w:pict" => {
                 if let Some(o) = self.read_vml(sc, k, rels) {
+                    self.emit_obj(sc, pb, o, props);
+                }
+            }
+            "w:object" => {
+                if let Some(o) = self.read_object(sc, k, rels) {
                     self.emit_obj(sc, pb, o, props);
                 }
             }
@@ -662,7 +667,14 @@ impl Reader<'_> {
             None
         };
         if let Some(kind) = graphic_kind {
-            let graphic = self.graphic(kind, gd, rels, w, h);
+            // Kept so saving writes the chart or diagram back: the frame around it is written
+            // from the object's (possibly moved or resized) size and position.
+            let extra: Vec<String> = match kind {
+                GraphicKind::Chart => Vec::new(),
+                GraphicKind::Diagram => self.diagram_drawing_rel(gd, rels).into_iter().collect(),
+            };
+            let source = c.child("a:graphic").and_then(|g| self.keep_embedded(g, rels, &extra));
+            let graphic = self.graphic(kind, gd, rels, w, h, source);
             float.effect = float.effect.map(|e| e.max(0.0));
             return Some(InlineObject::Graphic { w, h, alt, float, graphic });
         }
@@ -688,19 +700,19 @@ impl Reader<'_> {
     /// corner. Charts are drawn from their cached data, SmartArt diagrams from the drawing Word
     /// stores beside them. Built once per part and size; once the file's graphic budget is spent,
     /// later ones are empty.
-    fn graphic(&mut self, kind: GraphicKind, gd: &El, rels: &Rels, w: f32, h: f32) -> Arc<Graphic> {
-        let source = match kind {
+    fn graphic(&mut self, kind: GraphicKind, gd: &El, rels: &Rels, w: f32, h: f32, source: Option<Arc<Embedded>>) -> Arc<Graphic> {
+        let part = match kind {
             GraphicKind::Chart => gd.child("c:chart").and_then(|c| c.attr("r:id")).and_then(|id| super::part_of(rels, id, rt::CHART)),
             GraphicKind::Diagram => self.diagram_part(gd, rels),
         };
-        let Some(path) = source else { return Arc::new(Graphic { kind, items: Vec::new(), w, h }) };
+        let Some(path) = part else { return Arc::new(Graphic { kind, items: Vec::new(), w, h, source }) };
         let key = (kind, path, w.to_bits(), h.to_bits());
         if let Some(g) = self.graphics.get(&key) {
             return g.clone();
         }
         let items = if self.graphic_budget == 0 { Vec::new() } else { self.graphic_items(kind, &key.1, w, h) };
         self.graphic_budget = self.graphic_budget.saturating_sub(graphic_work(&items));
-        let g = Arc::new(Graphic { kind, items, w, h });
+        let g = Arc::new(Graphic { kind, items, w, h, source });
         self.graphics.insert(key, g.clone());
         g
     }
@@ -731,7 +743,7 @@ impl Reader<'_> {
                 }
             }
         }
-        Some(InlineObject::Image { media, w, h, alt, float, crop })
+        Some(InlineObject::Image { media, w, h, alt, float, crop, ole: None })
     }
 
     /// A `wpg:wgp` group (`w` × `h`): its pictures, shapes and text boxes, nested groups
@@ -865,7 +877,7 @@ impl Reader<'_> {
             let id = img.attr("r:id").or_else(|| img.attr("r:pict"))?;
             let media = self.media_for(rels, id)?;
             let alt = shape.attr("alt").or_else(|| img.attr("o:title")).unwrap_or("").to_string();
-            return Some(InlineObject::Image { media, w, h, alt, float, crop: [0.0; 4] });
+            return Some(InlineObject::Image { media, w, h, alt, float, crop: [0.0; 4], ole: None });
         }
         if let Some(t) = shape.find("w:txbxContent")
             && sc.story_depth < MAX_STORY_DEPTH
@@ -886,6 +898,22 @@ impl Reader<'_> {
             });
         }
         None
+    }
+
+    /// An OLE object (`w:object`, ECMA-376 §17.3.3.19): shown as its picture (VML, or a DrawingML
+    /// picture in `w:drawing`), and kept whole so saving writes the object back.
+    fn read_object(&mut self, sc: &mut StoryCtx, obj: &El, rels: &Rels) -> Option<InlineObject> {
+        let mut o = match self.read_vml(sc, obj, rels) {
+            Some(o) => o,
+            None => {
+                let d = obj.child("w:drawing")?;
+                self.read_drawing(sc, d, rels)?
+            }
+        };
+        if let InlineObject::Image { ole, .. } = &mut o {
+            *ole = self.keep_embedded(obj, rels, &[]);
+        }
+        Some(o)
     }
 
     // ---- tables ----

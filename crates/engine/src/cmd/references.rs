@@ -285,11 +285,7 @@ pub fn update_fields(s: &mut Session) -> Result<(), CmdError> {
             let name = wordcraft_layout::fields::field_name(instr);
             match name.as_str() {
                 "DATE" | "TIME" | "CREATEDATE" | "SAVEDATE" | "PRINTDATE" => {
-                    let pic = instr
-                        .split("\\@")
-                        .nth(1)
-                        .map(|x| x.trim().trim_matches('"').to_string())
-                        .unwrap_or_else(|| if name == "TIME" { "h:mm am/pm".into() } else { "M/d/yyyy".into() });
+                    let pic = date_picture(instr).unwrap_or_else(|| if name == "TIME" { "h:mm am/pm".into() } else { "M/d/yyyy".into() });
                     updates.push((k, super::insert::format_date(&pic)));
                 }
                 "SEQ" => {
@@ -324,6 +320,16 @@ pub fn update_fields(s: &mut Session) -> Result<(), CmdError> {
     }
     super::citations::update_citations(s)?;
     update_toc(s)
+}
+
+/// A field's `\@` date picture: the quoted text after it (switches may follow), or one word.
+pub fn date_picture(instr: &str) -> Option<String> {
+    let rest = instr.split_once("\\@")?.1.trim_start();
+    let pic = match rest.strip_prefix('"') {
+        Some(q) => q.split('"').next().unwrap_or(""),
+        None => rest.split_whitespace().next().unwrap_or(""),
+    };
+    (!pic.is_empty()).then(|| pic.to_string())
 }
 
 /// The text a bookmark marks (field results included), up to its end in the same paragraph or

@@ -423,8 +423,15 @@ fn inline_picture_in_rtl_text_sits_in_its_place() {
     let s = "متن  بیشتر";
     let mut d = doc_of(&[(s, true)]);
     let off = at(s, 4);
-    let pic =
-        wordcraft_doc::InlineObject::Image { media: "m".into(), w: 30.0, h: 20.0, alt: String::new(), float: Default::default(), crop: [0.0; 4] };
+    let pic = wordcraft_doc::InlineObject::Image {
+        media: "m".into(),
+        w: 30.0,
+        h: 20.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        ole: None,
+    };
     d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().insert_object(off, pic, &Default::default()).unwrap();
     let l = lay(&d);
     let (pl, x) = first_line(&l, 0);

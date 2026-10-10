@@ -370,9 +370,41 @@ impl Writer<'_> {
                 w.close("w:r");
                 self.rev_close(w, props);
             }
-            // Charts and diagrams aren't written back yet.
-            InlineObject::Graphic { .. } => {}
-            InlineObject::Image { media, w: iw, h: ih, alt, float, .. } => {
+            // A chart or diagram read from a file: its frame from the object's size and position,
+            // the graphic inside as read. Ones made some other way have nothing to write.
+            InlineObject::Graphic { w: gw, h: gh, alt, float, graphic } => {
+                let Some(src) = graphic.source.as_deref() else { return };
+                let Some(inner) = self.embedded_xml(src, rels, None) else { return };
+                self.rev_open(w, props);
+                w.open("w:r", &[]);
+                rpr(w, props);
+                w.open("w:drawing", &[]);
+                let docpr = self.next_docpr();
+                let name = match graphic.kind {
+                    wordcraft_doc::graphic::GraphicKind::Chart => format!("Chart {docpr}"),
+                    wordcraft_doc::graphic::GraphicKind::Diagram => format!("Diagram {docpr}"),
+                };
+                self.drawing_open(w, float, *gw, *gh, &docpr, &name, alt);
+                w.empty("wp:cNvGraphicFramePr", &[]);
+                w.raw(&inner);
+                w.close(if float.wrap == Wrap::Inline { "wp:inline" } else { "wp:anchor" });
+                w.close("w:drawing");
+                w.close("w:r");
+                self.rev_close(w, props);
+            }
+            InlineObject::Image { media, w: iw, h: ih, alt, float, ole, .. } => {
+                // An OLE object read from a file: the object itself, at its current size.
+                if let Some(src) = ole.as_deref()
+                    && let Some(obj) = self.embedded_xml(src, rels, Some((*iw, *ih, float)))
+                {
+                    self.rev_open(w, props);
+                    w.open("w:r", &[]);
+                    rpr(w, props);
+                    w.raw(&obj);
+                    w.close("w:r");
+                    self.rev_close(w, props);
+                    return;
+                }
                 let Some(file) = self.media_files.get(media).cloned() else { return };
                 self.rev_open(w, props);
                 w.open("w:r", &[]);

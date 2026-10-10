@@ -133,6 +133,9 @@ pub fn markup_width(app: &WordApp) -> f32 {
     let v = &app.session.view;
     // Word shows comments either in balloons (contextual) or in the Comments pane (list).
     let on = v.show_markup && !v.comments_pane && !v.read_mode && !v.multi_page && v.mode == wordcraft_layout::ViewMode::Print;
+    // Track Changes Options: comments hidden, or every revision inline, leave no markup area.
+    let m = &app.session.prefs.markup;
+    let on = on && m.comments && m.balloons != wordcraft_layout::display::BalloonMode::Inline;
     if on && !app.session.doc.comments.is_empty() { 216.0 } else { 0.0 }
 }
 
@@ -241,6 +244,7 @@ fn page_key(app: &WordApp, page: &Page, scale_px: f32, dim_body: bool) -> u64 {
     scale_px.to_bits().hash(&mut h);
     let v = &app.session.view;
     (v.marks, v.show_markup, v.dark_mode, wordcraft_render::DARK_PAPER).hash(&mut h);
+    app.session.prefs.markup.hash(&mut h);
     dim_body.hash(&mut h);
     format!("{:?}{:?}", app.session.doc.settings.page_color, app.session.doc.settings.watermark).hash(&mut h);
     (page.w.to_bits(), page.h.to_bits()).hash(&mut h);
@@ -431,6 +435,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 opts.display.marks = app.session.view.marks;
                 opts.display.placeholders = true;
                 opts.display.markup = app.session.view.show_markup;
+                opts.display.revisions = app.session.prefs.markup.clone();
                 opts.dark = dark_page;
                 opts.dark_paper = dark_paper;
                 opts.display.dim_header = !dim_body;
@@ -1211,11 +1216,18 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
             t.ruler,
             Stroke::new(1.0, c),
         ));
-        for tab in &rp.tabs {
+        let mut open_tabs = false;
+        for (i, tab) in rp.tabs.iter().enumerate() {
             let tx = sx(tab.pos);
             let foot = if rtl { -4.0 } else { 4.0 };
             hp.line_segment([pos2(tx, bar.max.y - 6.0), pos2(tx, bar.max.y - 1.0)], Stroke::new(1.5, t.text));
             hp.line_segment([pos2(tx, bar.max.y - 1.0), pos2(tx + foot, bar.max.y - 1.0)], Stroke::new(1.5, t.text));
+            // Double-clicking a tab marker opens the Tabs dialog (#320).
+            let zone = Rect::from_center_size(pos2(tx, bar.max.y - 4.0), vec2(8.0, 9.0));
+            open_tabs |= ui.interact(zone, ui.id().with(("ruler_tab", i)), Sense::click()).double_clicked();
+        }
+        if open_tabs {
+            let _ = app.run("para.tabs", json!({}));
         }
         // Dragging the left-indent marker.
         let id = ui.id().with("ruler_left");
