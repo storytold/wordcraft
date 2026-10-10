@@ -932,3 +932,10 @@
 	Dark	深色
 	Use system setting	使用系統設定
 	A file dialog is already open.	已有一個檔案對話方塊開啟中。
+	New Table Style	新增表格樣式
+	Modify Table Style	修改表格樣式
+	New Table Style…	新增表格樣式…
+	Modify Table Style…	修改表格樣式…
+	Apply formatting to:	將格式套用至：
+	Whole Table	整個表格
+	Fill color:	填滿色彩：

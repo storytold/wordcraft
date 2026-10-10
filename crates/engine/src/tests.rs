@@ -1700,3 +1700,66 @@ fn timestamps_come_from_the_clock() {
     // Fixed-width ISO strings sort by time.
     assert!(date >= cmd::iso_from_unix_secs(before) && date <= cmd::iso_from_unix_secs(cmd::now_unix()), "{date}");
 }
+
+/// #146: a table style made by command styles the table at the caret (header row fill and bold
+/// text, banded rows), can be modified, and saves as a table style the table refers to.
+#[test]
+fn custom_table_style_applies_modifies_and_saves() {
+    use wordcraft_doc::{Rgb, StyleKind, TextColor};
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 3, "cols": 2}));
+    run(&mut s, "text.insert", json!({"text": "Head"}));
+    run(&mut s, "table.look", json!({"headerRow": true, "bandedRows": true}));
+    let (tp, _, _) = s.sel.focus.path.cell().unwrap();
+    let r = run(
+        &mut s,
+        "table.newStyle",
+        json!({"name": "Thesis Table", "basedOn": "Table Grid",
+            "wholeTable": {"size": 10},
+            "headerRow": {"fill": "1F3864", "bold": true, "color": "FFFFFF", "borders": true},
+            "bandedRows": {"fill": "EEEEEE", "italic": true}}),
+    );
+    let id = r["id"].as_str().unwrap().to_string();
+    let table_style = |s: &Session| s.doc.table(StoryRef::Body, &tp).unwrap().props.style.clone();
+    assert_eq!(table_style(&s).as_deref(), Some(id.as_str()), "applied to the current table");
+    assert!(s.run("table.newStyle", &json!({"name": "thesis table"})).is_err(), "names are unique");
+    assert!(s.run("table.newStyle", &json!({"name": "X", "basedOn": "Heading 1"})).is_err(), "bases are table styles");
+    assert!(s.run("table.style", &json!({"style": "Normal"})).is_err(), "only table styles apply to tables");
+
+    let fills = |s: &mut Session, c: Rgb| {
+        s.layout().pages[0].items.iter().filter(|i| matches!(i, crate::layout::Placed::Fill { color, .. } if *color == c)).count()
+    };
+    let head = |s: &mut Session| {
+        let mut p = tp.0.clone();
+        p.extend([0, 0, 0]);
+        s.layout().pages[0]
+            .items
+            .iter()
+            .find_map(
+                |i| if let crate::layout::Placed::Lines { path, para, .. } = i { (path.0 == p).then(|| para.styles[0].rc.clone()) } else { None },
+            )
+            .unwrap()
+    };
+    assert_eq!(fills(&mut s, Rgb(0x1F, 0x38, 0x64)), 2, "header cells");
+    assert_eq!(fills(&mut s, Rgb(0xEE, 0xEE, 0xEE)), 2, "first band");
+    let rc = head(&mut s);
+    assert!(rc.bold && rc.size == 10.0, "{rc:?}");
+    assert_eq!(rc.color, TextColor::Rgb(Rgb::WHITE));
+
+    // Modify the current table's style: the table follows.
+    run(&mut s, "table.modifyStyle", json!({"headerRow": {"fill": "C00000", "bold": false}, "bandSize": 2}));
+    assert_eq!(fills(&mut s, Rgb(0x1F, 0x38, 0x64)), 0);
+    assert_eq!(fills(&mut s, Rgb(0xC0, 0, 0)), 2);
+    assert_eq!(fills(&mut s, Rgb(0xEE, 0xEE, 0xEE)), 4, "two rows per band");
+    assert!(!head(&mut s).bold);
+
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+    let st = back.styles.get(&id).unwrap();
+    assert_eq!((st.kind, st.name.as_str(), st.based_on.as_deref()), (StyleKind::Table, "Thesis Table", Some("TableGrid")));
+    let parts = st.table.as_ref().unwrap();
+    assert_eq!((parts.header_fill, parts.band_fill, parts.band_size), (Some(Rgb(0xC0, 0, 0)), Some(Rgb(0xEE, 0xEE, 0xEE)), Some(2)));
+    assert_eq!((parts.header_chr.bold, parts.band_chr.italic), (Some(false), Some(true)));
+    assert!(parts.header_borders.is_some_and(|b| b.any_visible()));
+    let t = back.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.props.style.as_deref(), Some(id.as_str()), "w:tblStyle");
+}

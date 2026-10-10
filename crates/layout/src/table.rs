@@ -40,8 +40,9 @@ struct Turned {
     across: f32,
     /// List counters and equation count before the cell, to lay it out again the same way.
     snap: (Counters, u32),
-    /// Its formatting region (header row, total row, first column) and cell index in the row.
-    region: (bool, bool, bool),
+    /// Its formatting region (header row, total row, first column, row band) and cell index in
+    /// the row.
+    region: (bool, bool, bool, bool),
     ci: usize,
     /// Top margin plus top border band.
     top: f32,
@@ -97,8 +98,9 @@ fn first_cell_left_margin_in(t: &Table, def: [f32; 4]) -> f32 {
 pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], avail: f32, depth: usize) -> TableLayout {
     let style = table_style(ctx, t);
     let parts = style.as_ref().map(|s| &s.parts);
-    // Cell text formatting per (header row, total row, first column) region, built once per table.
-    let mut cell_text: Vec<((bool, bool, bool), CellText)> = Vec::new();
+    // Cell text formatting per (header row, total row, first column, row band) region, built once
+    // per table.
+    let mut cell_text: Vec<((bool, bool, bool, bool), CellText)> = Vec::new();
     let ncols = t.cols().max(1);
     // Column widths.
     let mut grid: Vec<f32> = if t.grid.len() == ncols {
@@ -152,6 +154,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
     };
     let nrows = t.rows.len();
     let header_rows = t.props.look.header_row;
+    let band_size = parts.and_then(|p| p.band_size).unwrap_or(1).clamp(1, 1000) as usize;
     // First pass: lay out every cell's content.
     struct CellBox {
         items: Vec<Placed>,
@@ -178,7 +181,16 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
         let mut row_insets = 0.0f32;
         let is_header = header_rows && ri == 0;
         let is_total = t.props.look.total_row && ri + 1 == nrows && nrows > 1;
-        let band = t.props.look.banded_rows && !is_header && (ri - usize::from(header_rows)) % 2 == 0;
+        let band = t.props.look.banded_rows && !is_header && (ri.saturating_sub(usize::from(header_rows)) / band_size).is_multiple_of(2);
+        // The header row's or the odd band's own cell borders (conditional formatting).
+        let region_borders = if is_header {
+            parts.and_then(|p| p.header_borders)
+        } else if band {
+            parts.and_then(|p| p.band_borders)
+        } else {
+            None
+        }
+        .unwrap_or_default();
         for (ci, cell) in row.cells.iter().enumerate() {
             let span = cell.span();
             let x0 = colx.get(g).copied().unwrap_or(acc);
@@ -186,7 +198,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             let margins = cell.props.margins.unwrap_or(margins_def);
             let cw = (x1 - x0 - margins[1] - margins[3]).max(4.0);
             let mut fill = cell.props.shading;
-            let region = (is_header, is_total, t.props.look.first_column && g == 0);
+            let region = (is_header, is_total, t.props.look.first_column && g == 0, band);
             if let Some(p) = parts {
                 if is_header {
                     fill = fill.or(p.header_fill);
@@ -202,6 +214,9 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                 // The whole table's formatting, then column, then row conditional formatting
                 // (later regions win, ECMA-376 §17.7.6).
                 let mut chr = st.chr.clone();
+                if band {
+                    chr.overlay(&st.parts.band_chr);
+                }
                 if region.2 {
                     chr.overlay(&st.parts.first_col_chr);
                 }
@@ -221,11 +236,13 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             let edge =
                 |own: Option<Border>, outer: bool, outer_b: Option<Border>, inner_b: Option<Border>| own.or(if outer { outer_b } else { inner_b });
             let cb = cell.props.borders.unwrap_or_default();
+            let rb = region_borders;
+            let (first_g, last_g) = (g == 0, g + span >= ncols);
             let mut borders = Borders {
-                top: edge(cb.top, ri == 0, tb.top, tb.between),
-                bottom: edge(cb.bottom, ri + 1 == nrows, tb.bottom, tb.between),
-                left: edge(cb.left, g == 0, tb.left, tb.inside_v),
-                right: edge(cb.right, g + span >= ncols, tb.right, tb.inside_v),
+                top: edge(cb.top.or(rb.top), ri == 0, tb.top, tb.between),
+                bottom: edge(cb.bottom.or(rb.bottom), ri + 1 == nrows, tb.bottom, tb.between),
+                left: edge(cb.left.or(if first_g { rb.left } else { rb.inside_v }), first_g, tb.left, tb.inside_v),
+                right: edge(cb.right.or(if last_g { rb.right } else { rb.inside_v }), last_g, tb.right, tb.inside_v),
                 between: None,
                 inside_v: None,
             };

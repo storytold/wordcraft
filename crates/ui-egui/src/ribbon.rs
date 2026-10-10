@@ -1252,6 +1252,22 @@ fn table_design(app: &mut WordApp, ui: &mut Ui) {
             });
         });
         stack(ui, |ui| {
+            let can_modify = look.is_some()
+                && app
+                    .session
+                    .sel
+                    .focus
+                    .path
+                    .cell()
+                    .and_then(|(tp, _, _)| app.session.doc.table(app.session.sel.focus.story, &tp)?.props.style.clone())
+                    .is_some();
+            menu_button(ui, app, "styles", Some("Styles"), "Table Styles", false, |ui, app| {
+                mi(ui, app, "New Table Style…", "ui.dialog", json!({"name": "newTableStyle"}));
+                if ui.add_enabled(can_modify, egui::Button::new(tl!("Modify Table Style…")).min_size(vec2(200.0, 0.0))).clicked() {
+                    let _ = app.run("ui.dialog", json!({"name": "modifyTableStyle"}));
+                    ui.close();
+                }
+            });
             split(ui, app, "shading", "Shading", "table.shading", json!({"color": app.canvas.last_shading.clone()}), false, None, |ui, app| {
                 mi(ui, app, "No Color", "table.shading", json!({"color": null}));
                 let theme = app.session.doc.settings.theme_colors.clone();

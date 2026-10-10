@@ -931,3 +931,10 @@
 	Dark	ダーク
 	Use system setting	システム設定を使用
 	A file dialog is already open.	ファイル ダイアログが既に開いています。
+	New Table Style	新しい表スタイル
+	Modify Table Style	表スタイルの変更
+	New Table Style…	新しい表スタイル…
+	Modify Table Style…	表スタイルの変更…
+	Apply formatting to:	書式の適用先:
+	Whole Table	表全体
+	Fill color:	塗りつぶしの色:
