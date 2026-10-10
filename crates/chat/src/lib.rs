@@ -45,6 +45,11 @@ pub const NOT_STARTED: &str = "the chat is not started: Review › Chat › Star
 /// set another one with [`Chat::set_client_command`]).
 pub const DEFAULT_CLIENT_COMMAND: &str = "wordcraft-cli chat";
 
+/// The environment variable that sets the command agents run to use the chat, for packagers
+/// whose agents reach the app through another command (for example a Flatpak wrapper). The app
+/// reads it for its invite lines; the client reads it for the briefing and the usage text.
+pub const CLIENT_ENV: &str = "WORDCRAFT_CHAT_CLIENT";
+
 /// The line the owner gives an agent: `{client} join {addr} {code} --as {handle}`.
 pub fn invite_line(client: &str, addr: &str, code: &str, handle: &str) -> String {
     format!("{client} join {addr} {code} --as {handle}")

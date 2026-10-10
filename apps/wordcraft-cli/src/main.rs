@@ -20,6 +20,7 @@ USAGE:
   wordcraft-cli commands [--json]             list every command
   wordcraft-cli parity [--markdown]           feature-catalog parity
   wordcraft-cli mcp [--connect HOST:PORT]     MCP server on stdio (headless, or bridged to the app)
+  wordcraft-cli chat <join|listen|send|read|view|do|commands|help> …  an invited agent's side of a window's chat (docs/chat.md)
   wordcraft-cli --version
 ";
 
@@ -196,6 +197,11 @@ fn parity_markdown(p: &Value) -> String {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("chat") {
+        let rest = args.get(1..).unwrap_or_default();
+        let exit = wordcraft_mcp::chat::cli::run(rest, &mut std::io::stdout(), &mut std::io::stderr());
+        return ExitCode::from(exit.code());
+    }
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

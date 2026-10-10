@@ -48,12 +48,8 @@ impl eframe::App for App {
     }
 }
 
-/// The command at the start of chat invite lines. A knob for packagers whose agents reach the
-/// client another way (a Flatpak, for example, where it runs through `flatpak enter`). Unset,
-/// empty or blank keeps the default (`wordcraft-cli chat`).
-const CHAT_CLIENT_ENV: &str = "WORDCRAFT_CHAT_CLIENT";
-
-/// Apply the value of [`CHAT_CLIENT_ENV`] to the window's chat.
+/// Apply the value of [`wordcraft_chat::CLIENT_ENV`] (the command at the start of chat invite
+/// lines; unset, empty or blank keeps the default) to the window's chat.
 fn set_chat_client(chat: &wordcraft_chat::Chat, value: Option<&str>) {
     if let Some(cmd) = value.map(str::trim).filter(|c| !c.is_empty()) {
         chat.set_client_command(cmd.to_string());
@@ -222,7 +218,7 @@ fn main() -> eframe::Result {
                 None => chat,
             };
             let chat = std::sync::Arc::new(chat);
-            set_chat_client(&chat, std::env::var(CHAT_CLIENT_ENV).ok().as_deref());
+            set_chat_client(&chat, std::env::var(wordcraft_chat::CLIENT_ENV).ok().as_deref());
             app.session.chat = Some(chat);
             for f in files {
                 if let Err(e) = app.run("file.open", serde_json::json!({"path": f})) {

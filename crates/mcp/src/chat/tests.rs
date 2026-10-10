@@ -309,7 +309,7 @@ fn the_briefing_states_the_accept_rule() {
 #[test]
 fn the_client_command_is_the_environment_value_when_it_is_not_blank() {
     let default = wordcraft_chat::DEFAULT_CLIENT_COMMAND;
-    assert_eq!(CLIENT_ENV, "WORDCRAFT_CHAT_CLIENT");
+    assert_eq!(wordcraft_chat::CLIENT_ENV, "WORDCRAFT_CHAT_CLIENT");
     for (value, want) in [
         (None, default),
         (Some(""), default),

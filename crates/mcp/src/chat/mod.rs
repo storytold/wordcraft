@@ -2,6 +2,7 @@
 //! tools use these functions. Direct TCP to 127.0.0.1 (Linux, macOS, Windows, `cargo run`).
 //! Exit codes: 0 ok, 1 error, 2 usage, 3 removed from the chat, 4 window closed.
 
+pub mod cli;
 mod doc;
 mod lines;
 mod link;
@@ -16,7 +17,7 @@ use serde_json::{Value, json};
 use wordcraft_chat::Message;
 use wordcraft_chat::rules::{normalize_handle, valid_handle};
 
-pub use doc::{ReadOpts, Step, commands, owner_selection, parse_steps, pick, read, run_steps, tracked_text, view_page};
+pub use doc::{MAX_CONTEXT, MAX_STEPS_TEXT, ReadOpts, Step, commands, owner_selection, parse_steps, pick, read, run_steps, tracked_text, view_page};
 pub use lines::{Cursor, HISTORY, format_line};
 pub use link::{Caller, Link, LinkError};
 pub use store::{Membership, Store, window_gone};
@@ -94,20 +95,15 @@ pub fn now_ms() -> u64 {
     }
 }
 
-/// The environment variable that sets the command agents run to use the chat, for packagers
-/// whose agents reach the app through another command (for example a Flatpak wrapper). The app
-/// reads it for its invite lines; the client reads it for the briefing and the usage text.
-pub const CLIENT_ENV: &str = "WORDCRAFT_CHAT_CLIENT";
-
-/// The client command for a value of [`CLIENT_ENV`]: the trimmed value when it is not blank,
+/// The client command for a value of [`wordcraft_chat::CLIENT_ENV`]: the trimmed value when it is not blank,
 /// else [`wordcraft_chat::DEFAULT_CLIENT_COMMAND`].
 pub fn client_command_from(value: Option<&str>) -> String {
     value.map(str::trim).filter(|v| !v.is_empty()).unwrap_or(wordcraft_chat::DEFAULT_CLIENT_COMMAND).to_string()
 }
 
-/// The client command on this computer (from [`CLIENT_ENV`], see [`client_command_from`]).
+/// The client command on this computer (from [`wordcraft_chat::CLIENT_ENV`], see [`client_command_from`]).
 pub fn client_command() -> String {
-    client_command_from(std::env::var(CLIENT_ENV).ok().as_deref())
+    client_command_from(std::env::var(wordcraft_chat::CLIENT_ENV).ok().as_deref())
 }
 
 /// The rules, printed once at join (`{h}` is the member's name, `{c}` the client command).
