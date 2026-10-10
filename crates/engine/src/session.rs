@@ -44,6 +44,9 @@ pub struct ViewState {
     pub gridlines: bool,
     pub nav_pane: bool,
     pub styles_pane: bool,
+    /// Style Inspector pane (Home › Styles).
+    #[serde(default)]
+    pub style_inspector: bool,
     pub comments_pane: bool,
     pub multi_page: bool,
     /// Zoom to fit: "pageWidth", "onePage", "multiplePages", or empty.
@@ -68,6 +71,7 @@ impl Default for ViewState {
             gridlines: false,
             nav_pane: false,
             styles_pane: false,
+            style_inspector: false,
             comments_pane: false,
             multi_page: false,
             fit: String::new(),

@@ -8,6 +8,7 @@ pub mod equation;
 pub mod file;
 pub mod format;
 pub mod insert;
+pub mod inspector;
 pub mod mailings;
 pub mod objects;
 pub mod page;
@@ -34,6 +35,7 @@ pub fn registry() -> Registry {
     v.extend(edit::specs());
     v.extend(format::specs());
     v.extend(para::specs());
+    v.extend(inspector::specs());
     v.extend(view::specs());
     v.extend(insert::specs());
     v.extend(equation::specs());

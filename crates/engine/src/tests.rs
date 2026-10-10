@@ -1700,3 +1700,78 @@ fn timestamps_come_from_the_clock() {
     // Fixed-width ISO strings sort by time.
     assert!(date >= cmd::iso_from_unix_secs(before) && date <= cmd::iso_from_unix_secs(cmd::now_unix()), "{date}");
 }
+
+#[test]
+fn style_inspector_reports_and_clears_levels() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Chapter one"}));
+    run(&mut s, "para.heading1", json!({}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    run(&mut s, "para.alignCenter", json!({}));
+
+    let r = run(&mut s, "styles.inspect", json!({}));
+    assert_eq!(r["paragraph"]["style"], "Heading1");
+    assert_eq!(r["paragraph"]["styleName"], "Heading 1");
+    let pdirect = r["paragraph"]["direct"].as_array().unwrap();
+    assert!(pdirect.iter().any(|d| d["prop"] == "align" && d["value"] == "center"), "{pdirect:?}");
+    assert!(r["character"]["style"].is_null());
+    let cdirect = r["character"]["direct"].as_array().unwrap();
+    assert_eq!(cdirect, &vec![json!({"prop": "bold", "value": true})]);
+
+    // Formatting that matches the style isn't a difference (Heading 1 is 20 pt).
+    run(&mut s, "format.size", json!({"size": 20}));
+    let r = run(&mut s, "styles.inspect", json!({}));
+    assert_eq!(r["character"]["direct"].as_array().unwrap().len(), 1, "{r}");
+
+    // Character style level.
+    run(&mut s, "format.charStyle", json!({"style": "Emphasis"}));
+    let r = run(&mut s, "styles.inspect", json!({}));
+    assert_eq!(r["character"]["style"], "Emphasis");
+    assert_eq!(r["character"]["styleName"], "Emphasis");
+    run(&mut s, "styles.inspectorClear", json!({"level": "characterStyle"}));
+    assert!(run(&mut s, "styles.inspect", json!({}))["character"]["style"].is_null());
+
+    // Clearing character formatting removes the bold and keeps the paragraph levels.
+    run(&mut s, "styles.inspectorClear", json!({"level": "characterFormatting"}));
+    let r = run(&mut s, "styles.inspect", json!({}));
+    assert!(r["character"]["direct"].as_array().unwrap().is_empty(), "{r}");
+    assert!(!run(&mut s, "format.state", json!({}))["bold"].as_bool().unwrap());
+    assert_eq!(r["paragraph"]["style"], "Heading1");
+    assert!(!r["paragraph"]["direct"].as_array().unwrap().is_empty());
+
+    run(&mut s, "styles.inspectorClear", json!({"level": "paragraphFormatting"}));
+    let r = run(&mut s, "styles.inspect", json!({}));
+    assert!(r["paragraph"]["direct"].as_array().unwrap().is_empty(), "{r}");
+    assert_eq!(r["paragraph"]["style"], "Heading1");
+
+    run(&mut s, "styles.inspectorClear", json!({"level": "paragraphStyle"}));
+    assert_eq!(run(&mut s, "styles.inspect", json!({}))["paragraph"]["style"], "Normal");
+
+    // Each clear is one undo step.
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(run(&mut s, "styles.inspect", json!({}))["paragraph"]["style"], "Heading1");
+    assert_eq!(text(&s), "Chapter one");
+}
+
+#[test]
+fn style_inspector_pane_and_hostile_params() {
+    let mut s = Session::new(crate::sample::sample_document());
+    let r = run(&mut s, "styles.inspector", json!({}));
+    assert_eq!(r["pane"], true);
+    assert!(s.view.style_inspector);
+    assert_eq!(r["paragraph"]["styleName"], "Title");
+    let r = run(&mut s, "styles.inspector", json!({"value": false}));
+    assert_eq!(r["pane"], false);
+    let before = text(&s);
+    for junk in [json!(null), json!({}), json!({"level": 5}), json!({"level": "everything"}), json!({"level": ""})] {
+        assert!(s.run("styles.inspectorClear", &junk).is_err(), "{junk}");
+    }
+    assert_eq!(text(&s), before);
+    assert!(s.run("styles.inspector", &json!({"value": "yes"})).is_ok());
+    // A selection reaching far outside the document.
+    s.sel.focus = Pos::body(9999, 99999);
+    s.sel.anchor = Pos::body(0, 0);
+    assert!(s.run("styles.inspect", &json!({})).is_ok());
+    assert!(s.run("styles.inspectorClear", &json!({"level": "characterFormatting"})).is_ok());
+}

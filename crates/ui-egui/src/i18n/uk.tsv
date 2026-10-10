@@ -106,6 +106,7 @@
 	Character Scale	Масштаб символів
 	Character Shading	Заливка символів
 	Character Spacing	Інтервал між символами
+	Characters	Символи
 	Characters (no spaces)	Символи (без пробілів)
 	Characters (with spaces)	Символи (з пробілами)
 	Chart	Діаграма
@@ -117,7 +118,12 @@
 	Citation Style	Стиль цитування
 	Citations & Bibliography	Цитати й бібліографія
 	Clear	Очистити
+	Clear All	Очистити все
 	Clear All Formatting	Очистити все форматування
+	Clear Character Formatting	Очистити форматування символів
+	Clear Character Style	Очистити стиль символів
+	Clear Formatting Level	Очистити рівень форматування
+	Clear Paragraph Formatting	Очистити форматування абзацу
 	Clipboard	Буфер обміну
 	Close	Закрити
 	Close Header and Footer	Закрити колонтитули
@@ -188,6 +194,7 @@
 	Dictate	Диктувати
 	Different First Page	Інша перша сторінка
 	Different Odd & Even Pages	Різні парні й непарні сторінки
+	Direct formatting	Пряме форматування
 	Discord	Discord
 	Discord community	Спільнота Discord
 	Display	Відображення
@@ -342,6 +349,7 @@
 	Insert\nFootnote	Вставити\nвиноску
 	Inside Borders	Внутрішні межі
 	Inspect Document	Перевірити документ
+	Inspect Styles at Selection	Переглянути стилі у виділенні
 	Interface language:	Мова інтерфейсу:
 	Italic	Курсив
 	Join the ArtCraft community on Discord	Приєднатися до спільноти ArtCraft у Discord
@@ -558,6 +566,7 @@
 	Research	Дослідження
 	Researcher	Дослідник
 	Reset Picture	Скинути зображення
+	Reset to Normal	Скинути до звичайного
 	Resolve	Вирішити
 	Resolved	Вирішено
 	Restart at 1	Почати з 1
@@ -671,6 +680,7 @@
 	Studio handbook (sample)	Посібник студії (приклад)
 	Style	Стиль
 	Style based on:	Стиль на основі:
+	Style Inspector	Інспектор стилів
 	Style Set	Набір стилів
 	Style: APA	Стиль: APA
 	Styles	Стилі

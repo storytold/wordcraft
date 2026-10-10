@@ -932,3 +932,13 @@
 	Dark	深色
 	Use system setting	使用系統設定
 	A file dialog is already open.	已有一個檔案對話方塊開啟中。
+	Style Inspector	樣式檢查器
+	Inspect Styles at Selection	檢查選取範圍的樣式
+	Clear Formatting Level	清除格式層級
+	Characters	字元
+	Direct formatting	直接格式設定
+	Reset to Normal	重設為內文
+	Clear Paragraph Formatting	清除段落格式設定
+	Clear Character Style	清除字元樣式
+	Clear Character Formatting	清除字元格式設定
+	Clear All	全部清除

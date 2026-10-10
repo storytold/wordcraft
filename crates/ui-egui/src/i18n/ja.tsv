@@ -931,3 +931,13 @@
 	Dark	ダーク
 	Use system setting	システム設定を使用
 	A file dialog is already open.	ファイル ダイアログが既に開いています。
+	Style Inspector	スタイル インスペクター
+	Inspect Styles at Selection	選択箇所のスタイルを調べる
+	Clear Formatting Level	書式のレベルをクリア
+	Characters	文字
+	Direct formatting	直接の書式
+	Reset to Normal	標準に戻す
+	Clear Paragraph Formatting	段落の書式をクリア
+	Clear Character Style	文字スタイルをクリア
+	Clear Character Formatting	文字の書式をクリア
+	Clear All	すべてクリア

@@ -109,6 +109,7 @@
 	Character Scale	Escala del carácter
 	Character Shading	Sombreado de carácter
 	Character Spacing	Espaciado de caracteres
+	Characters	Caracteres
 	Characters (no spaces)	Caracteres (sin espacios)
 	Characters (with spaces)	Caracteres (con espacios)
 	Chart	Gráfico
@@ -120,7 +121,12 @@
 	Citation Style	Estilo de cita
 	Citations & Bibliography	Citas y bibliografía
 	Clear	Borrar
+	Clear All	Borrar todo
 	Clear All Formatting	Borrar todo el formato
+	Clear Character Formatting	Borrar formato de carácter
+	Clear Character Style	Borrar estilo de carácter
+	Clear Formatting Level	Borrar nivel de formato
+	Clear Paragraph Formatting	Borrar formato de párrafo
 	Clipboard	Portapapeles
 	Close	Cerrar
 	Close Header and Footer	Cerrar encabezado y pie de página
@@ -187,6 +193,7 @@
 	Dictate	Dictar
 	Different First Page	Primera página diferente
 	Different Odd & Even Pages	Páginas pares e impares diferentes
+	Direct formatting	Formato directo
 	Discord	Discord
 	Discord community	Comunidad de Discord
 	Display	Mostrar
@@ -340,6 +347,7 @@
 	Insert\nFootnote	Insertar nota\nal pie
 	Inside Borders	Bordes interiores
 	Inspect Document	Inspeccionar documento
+	Inspect Styles at Selection	Inspeccionar estilos de la selección
 	Interface language:	Idioma de la interfaz:
 	Italic	Cursiva
 	Join the ArtCraft community on Discord	Únete a la comunidad de ArtCraft en Discord
@@ -557,6 +565,7 @@
 	Research	Investigación
 	Researcher	Investigador
 	Reset Picture	Restablecer imagen
+	Reset to Normal	Restablecer a Normal
 	Resolve	Resolver
 	Resolved	Resuelto
 	Restart Each Page	Reiniciar en cada página
@@ -669,6 +678,7 @@
 	Studio cover	Portada de Studio
 	Studio handbook (sample)	Manual de Studio (ejemplo)
 	Style	Estilo
+	Style Inspector	Inspector de estilos
 	Style Set	Conjunto de estilos
 	Style based on:	Estilo basado en:
 	Style: APA	Estilo: APA
