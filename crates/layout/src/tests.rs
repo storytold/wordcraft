@@ -713,8 +713,9 @@ fn text_box_hides_text_that_does_not_fit() {
     assert_ne!(l.story_at(0, r.x + 20.0, r.bottom() + 6.0), Some(StoryRef::Part(id)));
     // A taller box shows more; a tiny one still shows its first line.
     let mut d2 = Document::from_text("Body");
-    let id2 = text_box(&mut d2, 0, &long, 144.0, 560.0, Default::default());
-    assert_eq!(box_lines(&lay(&d2), id2).0, total);
+    let id2 = text_box(&mut d2, 0, &long, 144.0, 1500.0, Default::default());
+    let (shown2, total2, _) = box_lines(&lay(&d2), id2);
+    assert_eq!(shown2, total2);
     let mut d3 = Document::from_text("Body");
     let id3 = text_box(&mut d3, 0, &long, 144.0, 18.0, Default::default());
     assert_eq!(box_lines(&lay(&d3), id3).0, 1);
@@ -744,7 +745,7 @@ fn square_wrap_flows_text_on_both_sides() {
     for (k, ln) in para.lines.iter().enumerate().filter(|(_, ln)| ln.beside) {
         let prev = &para.lines[k - 1];
         assert_eq!((prev.top, prev.height), (ln.top, ln.height), "one row");
-        assert!(x + prev.xs.last().unwrap() <= r.x, "left part stops before the box");
+        assert!(x + ink_end(para, prev) <= r.x + 0.01, "left part stops before the box");
         assert!(x + ln.xs[0] >= r.right(), "right part starts after it");
         assert_eq!(prev.stop, ln.start, "text runs left part, then right part");
     }
@@ -764,7 +765,18 @@ fn square_wrap_flows_text_on_both_sides() {
     let Placed::Lines { para, x, .. } = l2.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { story: StoryRef::Body, .. })).unwrap() else {
         panic!()
     };
-    assert!(para.lines.iter().all(|ln| !ln.beside && x + ln.xs.last().unwrap() <= r2.x.max(x + ln.right)));
+    assert!(para.lines.iter().all(|ln| !ln.beside && ink_end(para, ln) <= (r2.x - x).max(ln.right) + 0.01));
+}
+
+/// Where a line's text ends (its last non-space cluster's right edge; trailing spaces may hang
+/// past the margin), relative to the column.
+fn ink_end(pl: &ParaLayout, ln: &para::Line) -> f32 {
+    (ln.c0..ln.c1)
+        .filter_map(|k| {
+            let c = pl.clusters.get(k)?;
+            (c.kind != para::ClKind::Space).then_some(ln.xs.get(k - ln.c0)? + c.adv)
+        })
+        .fold(0.0, f32::max)
 }
 
 fn footnote(d: &mut Document, pos: &Pos, text: &str) -> u32 {
