@@ -136,6 +136,7 @@ pub fn insert(s: &mut Session, mut frag: Fragment) -> Result<(), CmdError> {
                 for r in &mut p.runs {
                     r.props.ins = Some(rid);
                     r.props.del = None;
+                    r.props.fmt_change = None;
                 }
             });
         }

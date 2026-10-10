@@ -39,6 +39,8 @@ pub struct ResolvedChar {
     pub link: Option<String>,
     pub ins: Option<u32>,
     pub del: Option<u32>,
+    /// The revision of a tracked formatting change (`w:rPrChange`) of the run.
+    pub fmt: Option<u32>,
     pub no_proof: bool,
     pub lang: Option<String>,
     /// Right-to-left run (`w:rtl`).
@@ -81,6 +83,7 @@ impl ResolvedChar {
             link: c.link.clone(),
             ins: c.ins,
             del: c.del,
+            fmt: c.fmt_change.as_ref().map(|f| f.rev),
             no_proof: c.no_proof.unwrap_or(false),
             lang: c.lang.clone(),
             rtl: c.rtl.unwrap_or(false),

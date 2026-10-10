@@ -2,12 +2,12 @@
 
 use wordcraft_doc::effects::ShapeEffects;
 use wordcraft_doc::para::{Anchor, Float, NoteKind, ShapeKind, Wrap};
-use wordcraft_doc::props::{CharProps, Rgb};
+use wordcraft_doc::props::{CharProps, PropChange, Rgb};
 use wordcraft_doc::section::{LineNumberRestart, SectionProps, SectionStart};
 use wordcraft_doc::table::Table;
 use wordcraft_doc::{Block, Blocks, InlineObject, Paragraph, RevisionKind};
 
-use super::props::{borders, ppr_inner, rpr, rpr_inner, tblpr, tcpr, trpr};
+use super::props::{ChangeAttrs, borders, open_change, ppr_inner, rpr, rpr_inner, tblpr, tcpr, trpr};
 use super::{PartRels, Writer};
 use crate::package::rt;
 use crate::units::{emu, n, twips};
@@ -100,10 +100,15 @@ impl Writer<'_> {
             .into_iter()
             .filter_map(|(idx, tag)| idx.filter(|i| self.rev_kind(Some(*i)).is_some_and(|k| k != RevisionKind::Format)).map(|i| (i, tag)))
             .collect();
-        let has_mark = super::props::has_rpr(&p.mark) || !mark_revs.is_empty();
+        let has_mark = super::props::has_rpr(&p.mark) || !mark_revs.is_empty() || p.mark.fmt_change.is_some();
         if !pp.is_empty() || has_mark || section.is_some() {
             w.open("w:pPr", &[]);
-            ppr_inner(w, &pp, framed);
+            let num_change = pp.num_change.as_ref().map(|c| {
+                let mut a = self.change_attrs(c.rev);
+                a.push(("w:original", c.original.clone()));
+                a
+            });
+            ppr_inner(w, &pp, framed, num_change.as_ref());
             if has_mark {
                 w.open("w:rPr", &[]);
                 for (idx, tag) in mark_revs {
@@ -115,10 +120,22 @@ impl Writer<'_> {
                     }
                 }
                 rpr_inner(w, &p.mark);
+                if let Some(ch) = p.mark.fmt_change.as_deref() {
+                    self.rpr_change(w, ch);
+                }
                 w.close("w:rPr");
             }
             if let Some(s) = section {
                 self.sectpr(w, s, rels);
+            }
+            // The paragraph properties before a tracked change come last (§17.13.5.29).
+            if let Some(ch) = &pp.fmt_change {
+                let a = self.change_attrs(ch.rev);
+                open_change(w, "w:pPrChange", &a);
+                w.open("w:pPr", &[]);
+                ppr_inner(w, &ch.old, false, None);
+                w.close("w:pPr");
+                w.close("w:pPrChange");
             }
             w.close("w:pPr");
         }
@@ -226,7 +243,7 @@ impl Writer<'_> {
                     let del = self.is_del(props);
                     self.rev_open(w, props);
                     w.open("w:r", &[]);
-                    rpr(w, props);
+                    self.rpr(w, props);
                     for (pc, _) in pieces.get(i..j).unwrap_or(&[]) {
                         match pc {
                             Piece::Text(t) if !t.is_empty() => w.leaf(if del { "w:delText" } else { "w:t" }, &[("xml:space", "preserve")], t),
@@ -263,6 +280,34 @@ impl Writer<'_> {
         let author = r.map(|r| r.author.clone()).filter(|a| !a.is_empty()).unwrap_or_else(|| "Unknown".into());
         let date = r.map(|r| r.date.clone()).unwrap_or_default();
         (self.next_rev_id.to_string(), author, date)
+    }
+
+    /// `w:id`, `w:author` and `w:date` of a tracked change by revision `idx`.
+    fn change_attrs(&mut self, idx: u32) -> ChangeAttrs {
+        let (id, author, date) = self.rev_attrs(idx);
+        let mut a = vec![("w:id", id), ("w:author", author)];
+        if !date.is_empty() {
+            a.push(("w:date", date));
+        }
+        a
+    }
+
+    /// A run's `w:rPr`, with its tracked formatting change last (§17.13.5.31).
+    fn rpr(&mut self, w: &mut W, c: &CharProps) {
+        let Some(ch) = c.fmt_change.as_deref() else { return rpr(w, c) };
+        w.open("w:rPr", &[]);
+        rpr_inner(w, c);
+        self.rpr_change(w, ch);
+        w.close("w:rPr");
+    }
+
+    fn rpr_change(&mut self, w: &mut W, ch: &PropChange<CharProps>) {
+        let a = self.change_attrs(ch.rev);
+        open_change(w, "w:rPrChange", &a);
+        w.open("w:rPr", &[]);
+        rpr_inner(w, &ch.old);
+        w.close("w:rPr");
+        w.close("w:rPrChange");
     }
 
     fn rev_open(&mut self, w: &mut W, props: &CharProps) {
@@ -345,7 +390,7 @@ impl Writer<'_> {
                         }
                         self.rev_open(w, props);
                         w.open("w:r", &[]);
-                        rpr(w, &p);
+                        self.rpr(w, &p);
                         w.empty(mark, &[]);
                         w.close("w:r");
                         self.rev_close(w, props);
@@ -359,7 +404,7 @@ impl Writer<'_> {
                 }
                 self.rev_open(w, props);
                 w.open("w:r", &[]);
-                rpr(w, &p);
+                self.rpr(w, &p);
                 let tag = if foot { "w:footnoteReference" } else { "w:endnoteReference" };
                 if custom.is_empty() {
                     w.empty(tag, &[("w:id", &nid)]);
@@ -377,7 +422,7 @@ impl Writer<'_> {
                 let Some(inner) = self.embedded_xml(src, rels, None) else { return };
                 self.rev_open(w, props);
                 w.open("w:r", &[]);
-                rpr(w, props);
+                self.rpr(w, props);
                 w.open("w:drawing", &[]);
                 let docpr = self.next_docpr();
                 let name = match graphic.kind {
@@ -399,7 +444,7 @@ impl Writer<'_> {
                 {
                     self.rev_open(w, props);
                     w.open("w:r", &[]);
-                    rpr(w, props);
+                    self.rpr(w, props);
                     w.raw(&obj);
                     w.close("w:r");
                     self.rev_close(w, props);
@@ -408,7 +453,7 @@ impl Writer<'_> {
                 let Some(file) = self.media_files.get(media).cloned() else { return };
                 self.rev_open(w, props);
                 w.open("w:r", &[]);
-                rpr(w, props);
+                self.rpr(w, props);
                 w.open("w:drawing", &[]);
                 let docpr = self.next_docpr();
                 let name = format!("Picture {docpr}");
@@ -427,7 +472,7 @@ impl Writer<'_> {
             InlineObject::Shape { kind, w: sw, h: sh, float, effects, freeform, .. } => {
                 self.rev_open(w, props);
                 w.open("w:r", &[]);
-                rpr(w, props);
+                self.rpr(w, props);
                 w.open("w:drawing", &[]);
                 let docpr = self.next_docpr();
                 // Ink is told apart by its name (and its pen), which reading looks for.
@@ -453,7 +498,7 @@ impl Writer<'_> {
             InlineObject::Group { w: gw, h: gh, float, ch_w, ch_h, children } => {
                 self.rev_open(w, props);
                 w.open("w:r", &[]);
-                rpr(w, props);
+                self.rpr(w, props);
                 w.open("w:drawing", &[]);
                 let docpr = self.next_docpr();
                 let name = format!("Group {docpr}");
@@ -502,7 +547,7 @@ impl Writer<'_> {
                 } else if !text.is_empty() {
                     self.rev_open(w, props);
                     w.open("w:r", &[]);
-                    rpr(w, props);
+                    self.rpr(w, props);
                     w.leaf("w:t", &[("xml:space", "preserve")], text);
                     w.close("w:r");
                     self.rev_close(w, props);
@@ -782,7 +827,8 @@ impl Writer<'_> {
             return;
         }
         w.open("w:tbl", &[]);
-        tblpr(w, &t.props);
+        let chg = t.props.fmt_change.as_ref().map(|c| self.change_attrs(c.rev));
+        tblpr(w, &t.props, chg.as_ref());
         w.open("w:tblGrid", &[]);
         let cols = t.cols().clamp(1, 63);
         for g in 0..cols {
@@ -792,10 +838,12 @@ impl Writer<'_> {
         w.close("w:tblGrid");
         for r in rows {
             w.open("w:tr", &[]);
-            trpr(w, &r.props);
+            let chg = r.props.fmt_change.as_ref().map(|c| self.change_attrs(c.rev));
+            trpr(w, &r.props, chg.as_ref());
             for c in &r.cells {
                 w.open("w:tc", &[]);
-                tcpr(w, &c.props);
+                let chg = c.props.fmt_change.as_ref().map(|c| self.change_attrs(c.rev));
+                tcpr(w, &c.props, chg.as_ref());
                 self.blocks(w, &c.blocks, rels, false, depth + 1);
                 w.close("w:tc");
             }
@@ -814,6 +862,23 @@ impl Writer<'_> {
                 }
             }
         }
+        sectpr_body(w, s);
+        // The properties before a tracked change come last (§17.13.5.32).
+        if let Some(ch) = &s.fmt_change {
+            let a = self.change_attrs(ch.rev);
+            open_change(w, "w:sectPrChange", &a);
+            w.open("w:sectPr", &[]);
+            sectpr_body(w, &ch.old);
+            w.close("w:sectPr");
+            w.close("w:sectPrChange");
+        }
+        w.close("w:sectPr");
+    }
+}
+
+/// `w:sectPr` content after the header and footer references.
+fn sectpr_body(w: &mut W, s: &SectionProps) {
+    {
         let start = match s.start {
             SectionStart::NextPage => "nextPage",
             SectionStart::Continuous => "continuous",
@@ -898,7 +963,6 @@ impl Writer<'_> {
         if s.rtl {
             w.empty("w:bidi", &[]);
         }
-        w.close("w:sectPr");
     }
 }
 

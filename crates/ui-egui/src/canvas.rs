@@ -145,10 +145,12 @@ pub fn markup_width(app: &WordApp) -> f32 {
     let v = &app.session.view;
     // Word shows comments either in balloons (contextual) or in the Comments pane (list).
     let on = v.show_markup && !v.comments_pane && !v.read_mode && !v.multi_page && v.mode == wordcraft_layout::ViewMode::Print;
-    // Track Changes Options: comments hidden, or every revision inline, leave no markup area.
+    // Track Changes Options: comments and formatting hidden, or every revision inline, leave
+    // no markup area.
     let m = &app.session.prefs.markup;
-    let on = on && m.comments && m.balloons != wordcraft_layout::display::BalloonMode::Inline;
-    if on && !app.session.doc.comments.is_empty() { 216.0 } else { 0.0 }
+    let on = on && m.balloons != wordcraft_layout::display::BalloonMode::Inline;
+    let comments = m.comments && !app.session.doc.comments.is_empty();
+    if on && (comments || (m.formatting && wordcraft_engine::cmd::review::has_format_changes(&app.session.doc))) { 216.0 } else { 0.0 }
 }
 
 /// A page dimension (points) safe to lay out: finite, at least 1 pt, at most `cap`.
@@ -749,15 +751,25 @@ fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, rects: &[Re
             replies.entry(p).or_default().push(*id);
         }
     }
-    // (page, anchor x, anchor y, id) for each anchored, unresolved-or-not comment.
-    let mut by_page: HashMap<usize, Vec<(f32, f32, u32, Pos)>> = HashMap::new();
-    for (id, pos) in wordcraft_engine::cmd::review::comment_list(&app.session) {
+    // (page, anchor x, anchor y, item) for each anchored, unresolved-or-not comment, and each
+    // tracked formatting change (Word's default shows those in balloons too).
+    let mut by_page: HashMap<usize, Vec<(f32, f32, Balloon, Pos)>> = HashMap::new();
+    let m = &app.session.prefs.markup;
+    let comments = if m.comments { wordcraft_engine::cmd::review::comment_list(&app.session) } else { Vec::new() };
+    for (id, pos) in comments {
         let Some(pos) = pos else { continue };
         if app.session.doc.comments.get(&id).is_some_and(is_reply) {
             continue;
         }
         let Some(c) = layout.caret_on(&pos, app.session.page_hint) else { continue };
-        by_page.entry(c.page).or_default().push((c.x, c.top + c.height, id, pos));
+        by_page.entry(c.page).or_default().push((c.x, c.top + c.height, Balloon::Comment(id), pos));
+    }
+    let formats = if m.formatting { wordcraft_engine::cmd::review::format_changes(&app.session) } else { Vec::new() };
+    for (pos, author, props) in formats.into_iter().take(500) {
+        let Some(c) = layout.caret_on(&pos, app.session.page_hint) else { continue };
+        let what = crate::panes::describe_props(&props).join(", ");
+        let text = if what.is_empty() { tl!("Formatted").to_string() } else { format!("{}: {what}", tl!("Formatted")) };
+        by_page.entry(c.page).or_default().push((c.x, c.top + c.height, Balloon::Format(author, text), pos));
     }
     let palette = [t.blue, Color32::from_rgb(0xB0, 0x3A, 0x2E), Color32::from_rgb(0x2E, 0x7D, 0x32), Color32::from_rgb(0x8E, 0x44, 0xAD), t.orange];
     let mut authors: Vec<String> = Vec::new();
@@ -784,7 +796,38 @@ fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, rects: &[Re
         let x0 = pr.max.x + 10.0;
         let w = (mw * page_scale - 20.0).max(60.0);
         let mut next_y = pr.min.y;
-        for (ax, ay, id, pos) in list.iter() {
+        for (ax, ay, item, pos) in list.iter() {
+            let id = match item {
+                Balloon::Comment(id) => id,
+                Balloon::Format(author, text) => {
+                    // A read-only card: who formatted, and how.
+                    let author = author_name(author);
+                    let ai = authors.iter().position(|a| *a == author).unwrap_or_else(|| {
+                        authors.push(author.clone());
+                        authors.len() - 1
+                    });
+                    let color = palette.get(ai % palette.len()).copied().unwrap_or(t.blue);
+                    let fs = (11.0 * page_scale / PX_PER_PT).clamp(8.0, 16.0);
+                    let anchor = pos2(pr.min.x + ax * page_scale, pr.min.y + ay * page_scale);
+                    let top = (anchor.y - 12.0).max(next_y);
+                    let head = painter.layout(author, semibold(fs), t.text, w - 16.0);
+                    let body = painter.layout(text.clone(), regular(fs), t.text_dim, w - 16.0);
+                    let card = Rect::from_min_size(pos2(x0, top), vec2(w, head.size().y + body.size().y + 16.0));
+                    next_y = card.max.y + 6.0;
+                    if !card.intersects(clip) {
+                        continue;
+                    }
+                    let lead = Stroke::new(1.0, color.linear_multiply(0.7));
+                    dashed(painter, anchor, pos2(pr.max.x, anchor.y), lead);
+                    painter.line_segment([pos2(pr.max.x, anchor.y), pos2(x0, top + 10.0)], lead);
+                    card_shapes(painter, &t, card, color, false, None);
+                    let y = card.min.y + 6.0;
+                    let hh = head.size().y;
+                    painter.galley(pos2(card.min.x + 10.0, y), head, t.text);
+                    painter.galley(pos2(card.min.x + 10.0, y + hh + 4.0), body, t.text_dim);
+                    continue;
+                }
+            };
             let Some(c) = app.session.doc.comments.get(id) else { continue };
             let resolved = c.resolved;
             let author = author_name(&c.author);
@@ -857,6 +900,13 @@ fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, rects: &[Re
         select_balloon(app, ui.ctx(), id);
         app.session.sel = wordcraft_engine::Selection::caret(p);
     }
+}
+
+/// What a balloon in the markup area shows.
+enum Balloon {
+    Comment(u32),
+    /// A tracked formatting change: its author and "Formatted: …".
+    Format(String, String),
 }
 
 fn author_name(a: &str) -> String {
