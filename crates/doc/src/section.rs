@@ -37,9 +37,9 @@ pub enum NumFormat {
     /// letters (MS-OI29500 §17.18.59 (g)) — not additive abjad numerals.
     ArabicAbjad,
     /// Devanagari digits (OOXML `hindiNumbers`, MS-DOCX: U+0967 …): १२३. User-entered numbers
-    /// are never rewritten; only counters render this way. Arabic-Indic (U+0660) and Extended
-    /// Arabic-Indic/Persian (U+06F0) digits come from the run's font and locale, not from any
-    /// numbering format.
+    /// are never rewritten; only counters render this way. There is no automatic numeral
+    /// substitution: typed Arabic-Indic (U+0660…) or Persian (U+06F0…) digits are preserved as
+    /// typed.
     HindiNumbers,
     /// Any other OOXML `ST_NumberFormat` value, kept so save/reopen preserves documents whose
     /// format isn't implemented yet; renders as decimal.

@@ -1375,8 +1375,10 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize, inherited: boo
                 i += 1;
             }
             FBlock::Para(p) if p.list.is_some() => {
-                // Nested lists from consecutive list paragraphs.
+                // Nested lists from consecutive list paragraphs. The open item's direction per
+                // level scopes nested `<li>` marks, like the elements nest.
                 let mut stack: Vec<(bool, bool)> = Vec::new(); // (ordered, li open)
+                let mut item_rtl: Vec<bool> = Vec::new();
                 while let Some(FBlock::Para(q)) = blocks.get(i) {
                     let Some(li) = q.list else { break };
                     let lv = li.level.min(8) as usize;
@@ -1386,6 +1388,7 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize, inherited: boo
                     if stack.len() == lv + 1 && stack.last().is_some_and(|s| s.0 != li.ordered) {
                         close_list(&mut stack, out);
                     }
+                    item_rtl.truncate(stack.len());
                     while stack.len() < lv + 1 {
                         if let Some(top) = stack.last_mut()
                             && !top.1
@@ -1395,6 +1398,8 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize, inherited: boo
                         }
                         out.push_str(if li.ordered { "<ol>" } else { "<ul>" });
                         stack.push((li.ordered, false));
+                        // The new nested list belongs to the currently open item above it.
+                        item_rtl.push(item_rtl.last().copied().unwrap_or(inherited));
                     }
                     if let Some(top) = stack.last_mut() {
                         if top.1 {
@@ -1402,9 +1407,14 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize, inherited: boo
                         }
                         top.1 = true;
                     }
+                    // This item inherits its enclosing item's direction (or the container's).
+                    let ctx = if lv == 0 { inherited } else { item_rtl.get(lv - 1).copied().unwrap_or(inherited) };
                     let body = inlines_html(&q.inlines);
-                    let attrs = para_attrs(q, inherited);
+                    let attrs = para_attrs(q, ctx);
                     out.push_str(&format!("<li{attrs}>{body}"));
+                    if let Some(slot) = item_rtl.get_mut(lv) {
+                        *slot = q.rtl;
+                    }
                     i += 1;
                 }
                 while !stack.is_empty() {
@@ -1579,6 +1589,68 @@ mod tests {
     #[test]
     fn entities() {
         assert_eq!(unescape("a &lt;b&gt; &#65;&#x42; &bogus; &"), "a <b> AB &bogus; &");
+    }
+
+    #[test]
+    fn nested_list_items_keep_their_direction() {
+        // An explicitly LTR item under an RTL parent (and the reverse) must survive export;
+        // so must a sibling after a nested list closes, and a list inside an RTL table.
+        let f = parse(
+            "<ul><li dir=\"rtl\">outer<ul><li dir=\"ltr\">inner</li><li dir=\"ltr\">sibling</li></ul></li><li dir=\"ltr\">top</li></ul><ol><li dir=\"ltr\">a<ol><li dir=\"rtl\">ب</li></ol></li></ol>",
+        );
+        let dirs: Vec<(bool, u8, String)> = f
+            .blocks
+            .iter()
+            .filter_map(|b| if let FBlock::Para(p) = b { Some((p.rtl, p.list.map(|l| l.level).unwrap_or(0), p.text())) } else { None })
+            .collect();
+        assert_eq!(
+            dirs,
+            [
+                (true, 0, "outer".into()),
+                (false, 1, "inner".into()),
+                (false, 1, "sibling".into()),
+                (false, 0, "top".into()),
+                (false, 0, "a".into()),
+                (true, 1, "ب".into())
+            ]
+        );
+        let html = export_flow(&f, "en");
+        assert!(html.contains("<li dir=\"ltr\">inner</li>"), "differing child marked: {html}");
+        assert!(html.contains("<li dir=\"rtl\">ب</li>"), "differing nested child marked: {html}");
+        let back = parse(&html);
+        let dirs: Vec<(bool, String)> = back
+            .blocks
+            .iter()
+            .filter_map(|b| {
+                if let FBlock::Para(p) = b {
+                    assert!(p.list.is_some(), "still a list item");
+                    Some((p.rtl, p.text()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            dirs,
+            [
+                (true, "outer".into()),
+                (false, "inner".into()),
+                (false, "sibling".into()),
+                (false, "top".into()),
+                (false, "a".into()),
+                (true, "ب".into())
+            ]
+        );
+        // A list inside an RTL table inherits the table unless items override it.
+        let f = parse("<table dir=\"rtl\"><tr><td><ul><li>plain</li><li dir=\"ltr\">latin</li></ul></td></tr></table>");
+        let html = export_flow(&f, "en");
+        assert!(html.contains("<li dir=\"ltr\">latin</li>"), "override inside RTL table: {html}");
+        assert!(!html.contains("<li dir=\"rtl\">plain</li>"), "inherited items stay bare: {html}");
+        let back = parse(&html);
+        let t = back.blocks.iter().find_map(|b| if let FBlock::Table(t) = b { Some(t) } else { None }).unwrap();
+        assert!(t.rtl);
+        let items: Vec<bool> = t.rows[0][0].blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p.rtl) } else { None }).collect();
+        assert_eq!(items, [true, false]);
     }
 
     #[test]

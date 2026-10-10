@@ -636,6 +636,10 @@ struct StyleInfo {
     rtl: Option<bool>,
     /// Explicit table direction from `table-properties` (`None` = inherit).
     table_rtl: Option<bool>,
+    /// `writing-mode="page"` on paragraph properties: defer to the enclosing layout object.
+    para_page: bool,
+    /// `writing-mode="page"` on table properties: defer to the enclosing table.
+    table_page: bool,
     page_break: bool,
     outline: Option<u8>,
     border_bottom: bool,
@@ -806,10 +810,12 @@ impl Styles {
                             s.page_break = true;
                         }
                         // ODF `style:writing-mode`: an explicit direction overrides through the
-                        // style chain; anything else inherits.
+                        // style chain; `page` defers to the enclosing layout object (handled by
+                        // the caller, which knows the context).
                         match get(&a, "style:writing-mode") {
                             Some("rl-tb" | "rl") => s.rtl = Some(true),
                             Some("lr-tb" | "lr") => s.rtl = Some(false),
+                            Some("page") => s.para_page = true,
                             _ => {}
                         }
                         if get(&a, "fo:border-bottom").is_some_and(|b| b != "none") {
@@ -824,6 +830,7 @@ impl Styles {
                         match get(&a, "style:writing-mode") {
                             Some("rl-tb" | "rl") => s.table_rtl = Some(true),
                             Some("lr-tb" | "lr") => s.table_rtl = Some(false),
+                            Some("page") => s.table_page = true,
                             _ => {}
                         }
                     }
@@ -877,9 +884,18 @@ impl Styles {
         out
     }
 
-    /// Table direction for a table style: the nearest explicit value through the chain.
-    fn table_rtl(&self, name: &str) -> bool {
-        self.chain(name).iter().find_map(|(_, s)| s.table_rtl).unwrap_or(false)
+    /// Table direction for a table style: the nearest explicit value through the chain, else a
+    /// `page` mode defers to the enclosing table, else LTR.
+    fn table_rtl(&self, name: &str, enclosing_rtl: bool) -> bool {
+        for (_, s) in &self.chain(name) {
+            if let Some(r) = s.table_rtl {
+                return r;
+            }
+            if s.table_page {
+                return enclosing_rtl;
+            }
+        }
+        false
     }
 
     /// Text formatting of a text style (whole chain).
@@ -892,7 +908,10 @@ impl Styles {
     }
 
     /// Paragraph kind, alignment, direction, page break, rule and base formatting (automatic styles only).
-    fn para(&self, name: &str) -> (Kind, Option<Align>, bool, bool, bool, Fmt) {
+    /// `enclosing_rtl` is the innermost open table's direction: a `page` writing mode defers to
+    /// it (ODF 1.3 §20.404), falling back to LTR outside tables. The nearest chain entry with an
+    /// explicit direction or `page` wins, so a child override beats an inherited value.
+    fn para(&self, name: &str, enclosing_rtl: bool) -> (Kind, Option<Align>, bool, bool, bool, Fmt) {
         let chain = self.chain(name);
         let mut kind = Kind::Normal;
         for (n, s) in &chain {
@@ -918,7 +937,17 @@ impl Styles {
             }
         }
         let align = chain.iter().find_map(|(_, s)| s.align);
-        let rtl = chain.iter().find_map(|(_, s)| s.rtl).unwrap_or(false);
+        let mut rtl = false;
+        for (_, s) in &chain {
+            if let Some(r) = s.rtl {
+                rtl = r;
+                break;
+            }
+            if s.para_page {
+                rtl = enclosing_rtl;
+                break;
+            }
+        }
         let pb = chain.iter().take_while(|(_, s)| s.auto).any(|(_, s)| s.page_break);
         let rule = chain.iter().any(|(_, s)| s.border_bottom);
         let mut f = Fmt::default();
@@ -974,8 +1003,10 @@ impl Body<'_> {
 
     fn start_para(&mut self, style: Option<&str>, heading: Option<u8>) {
         self.end_para();
+        // `page` writing modes defer to the innermost open table (ODF 1.3 §20.404).
+        let enclosing = self.tables.last().map(|t| t.rtl).unwrap_or(false);
         let (mut kind, align, rtl, pb, rule, base) =
-            style.map(|s| self.styles.para(s)).unwrap_or((Kind::Normal, None, false, false, false, Fmt::default()));
+            style.map(|s| self.styles.para(s, enclosing)).unwrap_or((Kind::Normal, None, false, false, false, Fmt::default()));
         if let Some(h) = heading {
             kind = Kind::Heading(h.clamp(1, 6));
         }
@@ -1171,7 +1202,10 @@ impl Body<'_> {
                     self.skip = 1;
                     return;
                 }
-                let rtl = get(a, "table:style-name").is_some_and(|s| self.styles.table_rtl(s));
+                let enclosing = self.tables.last().map(|t| t.rtl).unwrap_or(false);
+                // Unstyled tables stay LTR, as before; a styled table resolves through its
+                // chain, with `page` deferring to the enclosing table.
+                let rtl = get(a, "table:style-name").map(|s| self.styles.table_rtl(s, enclosing)).unwrap_or(false);
                 self.tables.push(TableB { rows: Vec::new(), row: Vec::new(), hcover: 0, rtl });
             }
             "table-row" => {
@@ -1459,11 +1493,89 @@ mod tests {
             s.read(content, true);
             s
         };
-        let ltr = styles.para("P2");
+        let ltr = styles.para("P2", false);
         assert!(!ltr.2, "child lr-tb wins");
-        let rtl = styles.para("P3");
+        let rtl = styles.para("P3", false);
         assert!(rtl.2, "unspecified child inherits rl-tb");
-        assert!(styles.table_rtl("T1"), "table style direction");
-        assert!(!styles.table_rtl("Missing"), "unknown styles stay LTR");
+        assert!(styles.table_rtl("T1", false), "table style direction");
+        assert!(!styles.table_rtl("Missing", true), "unknown styles stay LTR");
+    }
+
+    #[test]
+    fn page_writing_mode_defers_to_the_enclosing_table() {
+        // `page` on a paragraph (or table) style inherits the enclosing table's direction;
+        // explicit values beat it in both positions; nested tables chain outward.
+        let content = r#"<?xml version="1.0" encoding="UTF-8"?>
+<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0">
+<office:automatic-styles>
+<style:style style:name="T" style:family="table"><style:table-properties style:writing-mode="rl-tb"/></style:style>
+<style:style style:name="TP" style:family="table"><style:table-properties style:writing-mode="page"/></style:style>
+<style:style style:name="TL" style:family="table"><style:table-properties style:writing-mode="lr-tb"/></style:style>
+<style:style style:name="P" style:family="paragraph"><style:paragraph-properties style:writing-mode="page"/></style:style>
+<style:style style:name="PL" style:family="paragraph"><style:paragraph-properties style:writing-mode="lr-tb"/></style:style>
+<style:style style:name="PR" style:family="paragraph"><style:paragraph-properties style:writing-mode="rl-tb"/></style:style>
+</office:automatic-styles>
+<office:body><office:text>
+<text:p text:style-name="P">top level page</text:p>
+<table:table table:name="T1" table:style-name="T"><table:table-row><table:table-cell>
+<text:p text:style-name="P">in rtl table</text:p>
+<text:p text:style-name="PL">explicit ltr in rtl table</text:p>
+<table:table table:name="T2" table:style-name="TP"><table:table-row><table:table-cell>
+<text:p text:style-name="P">in nested page table</text:p>
+</table:table-cell></table:table-row></table:table>
+<table:table table:name="T3"><table:table-row><table:table-cell>
+<text:p text:style-name="P">in unstyled nested table</text:p>
+</table:table-cell></table:table-row></table:table>
+<table:table table:name="T4" table:style-name="TL"><table:table-row><table:table-cell>
+<text:p text:style-name="P">in explicit ltr nested table</text:p>
+</table:table-cell></table:table-row></table:table>
+</table:table-cell></table:table-row></table:table>
+</office:text></office:body></office:document-content>"#;
+        let bytes = {
+            let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+            let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+            zw.start_file("mimetype", stored).unwrap();
+            zw.write_all(b"application/vnd.oasis.opendocument.text").unwrap();
+            let deflated = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+            zw.start_file("content.xml", deflated).unwrap();
+            zw.write_all(content.as_bytes()).unwrap();
+            zw.finish().unwrap().into_inner()
+        };
+        let flow = parse(&bytes).expect("fixture parses");
+        let texts: Vec<(String, bool)> = {
+            fn walk(blocks: &[crate::model::FBlock], out: &mut Vec<(String, bool)>) {
+                for b in blocks {
+                    match b {
+                        crate::model::FBlock::Para(p) => out.push((p.text(), p.rtl)),
+                        crate::model::FBlock::Table(t) => {
+                            out.push((String::new(), t.rtl));
+                            for r in &t.rows {
+                                for c in r {
+                                    walk(&c.blocks, out);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            let mut v = Vec::new();
+            walk(&flow.blocks, &mut v);
+            v
+        };
+        assert_eq!(
+            texts,
+            [
+                ("top level page".into(), false),
+                (String::new(), true),
+                ("in rtl table".into(), true),
+                ("explicit ltr in rtl table".into(), false),
+                (String::new(), true),
+                ("in nested page table".into(), true),
+                (String::new(), false),
+                ("in unstyled nested table".into(), false),
+                (String::new(), false),
+                ("in explicit ltr nested table".into(), false),
+            ]
+        );
     }
 }

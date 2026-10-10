@@ -360,8 +360,9 @@ mod tests {
 
     #[test]
     fn arabic_shaping_keeps_mappings_without_arabic_fonts() {
-        // Deterministic on any machine: even when the face lacks Arabic entirely, shaping
-        // covers every byte in logical order with finite advances instead of panicking.
+        // Smoke test, deterministic on any machine: even when the face lacks Arabic entirely,
+        // shaping returns output in logical order with clusters on character boundaries instead
+        // of panicking. (Glyph coverage itself needs a real Arabic face; see the tests below.)
         let face = FontDb::global().face(DEFAULT_FAMILY, "Regular");
         assert_eq!(face.glyph_for('ب'), 0, "precondition: no Arabic in this face");
         let text = "بِسْمِ";
