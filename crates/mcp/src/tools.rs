@@ -31,21 +31,21 @@ impl ToolResult {
     }
 }
 
-fn s(desc: &str) -> Value {
+pub(crate) fn s(desc: &str) -> Value {
     json!({"type": "string", "description": desc})
 }
-fn n(desc: &str) -> Value {
+pub(crate) fn n(desc: &str) -> Value {
     json!({"type": "number", "description": desc})
 }
-fn obj(props: Value, req: &[&str]) -> Value {
+pub(crate) fn obj(props: Value, req: &[&str]) -> Value {
     json!({"type": "object", "properties": props, "required": req})
 }
-fn tool(name: &str, title: &str, desc: &str, schema: Value, ro: bool) -> Value {
+pub(crate) fn tool(name: &str, title: &str, desc: &str, schema: Value, ro: bool) -> Value {
     json!({"name": name, "title": title, "description": desc, "inputSchema": schema, "annotations": {"title": title, "readOnlyHint": ro, "openWorldHint": false}})
 }
 
 pub fn tool_definitions() -> Value {
-    json!([
+    let mut v = json!([
         tool(
             "list_commands",
             "List commands",
@@ -143,14 +143,18 @@ pub fn tool_definitions() -> Value {
             obj(json!({}), &[]),
             true
         ),
-    ])
+    ]);
+    if let Some(a) = v.as_array_mut() {
+        a.extend(crate::chat::tools::tool_definitions());
+    }
+    v
 }
 
 fn exec(b: &mut dyn Backend, id: &str, params: Value) -> Result<Value, String> {
     b.call("engine.execute", json!({"command": id, "params": params}))
 }
 
-fn wrap(r: Result<Value, String>) -> ToolResult {
+pub(crate) fn wrap(r: Result<Value, String>) -> ToolResult {
     match r {
         Ok(v) => ToolResult::json(&v),
         Err(e) => ToolResult::error(e),

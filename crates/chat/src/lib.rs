@@ -47,7 +47,8 @@ pub const DEFAULT_CLIENT_COMMAND: &str = "wordcraft-cli chat";
 
 /// The environment variable that sets the command agents run to use the chat, for packagers
 /// whose agents reach the app through another command (for example a Flatpak wrapper). The app
-/// reads it for its invite lines; the client reads it for the briefing and the usage text.
+/// reads it for its invite lines; the client reads it for the briefing. The client's usage text
+/// does not change: it always names `wordcraft-cli chat`.
 pub const CLIENT_ENV: &str = "WORDCRAFT_CHAT_CLIENT";
 
 /// The line the owner gives an agent: `{client} join {addr} {code} --as {handle}`.

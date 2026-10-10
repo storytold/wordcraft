@@ -67,3 +67,18 @@ fn resources() {
     let r = call(&mut s, 2, "resources/read", json!({"uri": "wordcraft://document"}));
     assert!(r["result"]["contents"][0]["text"].as_str().unwrap().contains("blocks"));
 }
+
+#[test]
+fn chat_tools_are_listed_and_need_a_member() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    let tools = call(&mut s, 1, "tools/list", json!({}));
+    let names: Vec<String> = tools["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
+    for t in ["chat_join", "chat_wait", "chat_send", "chat_read", "chat_members"] {
+        assert!(names.contains(&t.to_string()), "{t}");
+    }
+    let r = call(&mut s, 2, "tools/call", json!({"name": "chat_send", "arguments": {"text": "hi"}}));
+    assert_eq!(r["result"]["isError"], true);
+    assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("join the chat first"));
+    let r = call(&mut s, 3, "tools/call", json!({"name": "chat_join", "arguments": {"code": "ABCD-EFGH-JKMN"}}));
+    assert_eq!(r["result"]["isError"], true, "headless has no window to join");
+}

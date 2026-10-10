@@ -626,3 +626,104 @@ fn a_steps_file_has_a_size_cap() {
     let steps = parse_steps(r#"[{"cmd": "format.bold", "params": null}]"#).unwrap();
     assert_eq!(steps, vec![Step { cmd: "format.bold".into(), params: json!({}) }], "null params are no params");
 }
+
+fn mcp_tool(s: &mut crate::Server, name: &str, args: Value) -> (bool, String) {
+    let line = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": args}}).to_string();
+    let r: Value = serde_json::from_str(&s.handle_line(&line).unwrap()).unwrap();
+    (r["result"]["isError"] == true, r["result"]["content"][0]["text"].as_str().unwrap_or("").to_string())
+}
+
+#[test]
+fn chat_tools_through_a_member_remote() {
+    let w = FakeWindow::start(|m, _| match m {
+        "chat.join" => ok(json!({"handle": "@claude", "key": "cd".repeat(32)})),
+        "chat.poll" => ok(json!([{"seq": 1, "ts_ms": 5, "from": "OWNER", "role": "owner", "text": "hello", "mentions": ["@claude"]}])),
+        "chat.post" | "chat.members" => ok(json!([])),
+        _ => fail("unexpected"),
+    });
+    let remote = crate::Remote::connect(&w.addr).unwrap();
+    let mut s = crate::Server::new(Box::new(remote));
+    let (bad, text) = mcp_tool(&mut s, "chat_join", json!({"code": "ABCD-EFGH-JKMN"}));
+    assert!(!bad && text.starts_with("You are in the WordCraft chat as @claude"), "{text}");
+    assert!(text.contains("chat_wait") && text.contains("chat_send"), "the MCP tools are named: {text}");
+    assert_eq!(mcp_tool(&mut s, "chat_wait", json!({})).1, "(history) OWNER #1: hello");
+    assert_eq!(mcp_tool(&mut s, "chat_wait", json!({"wait_s": 999})).1, "(no new messages)");
+    assert!(!mcp_tool(&mut s, "chat_send", json!({"text": "on it"})).0);
+    let seen = w.seen.lock().unwrap().clone();
+    let polls: Vec<&Value> = seen.iter().filter(|x| x.0 == "chat.poll").map(|x| &x.1).collect();
+    assert_eq!(polls.last().map(|p| p["wait_s"].clone()), Some(json!(25)), "capped at 25 s");
+    assert_eq!(seen.iter().find(|x| x.0 == "chat.post").and_then(|x| x.2.clone()), Some("cd".repeat(32)), "the member key, not the window key");
+}
+
+/// An MCP backend that fails every call with `error`.
+struct Failing(&'static str);
+
+impl crate::Backend for Failing {
+    fn call(&mut self, _: &str, _: Value) -> Result<Value, String> {
+        Err(self.0.to_string())
+    }
+    fn has_ui(&self) -> bool {
+        true
+    }
+    fn describe(&self) -> String {
+        "failing".into()
+    }
+}
+
+#[test]
+fn backend_errors_become_link_errors() {
+    for (error, want) in [
+        ("unauthorized", LinkError::Unauthorized),
+        ("unauthorized: the WordCraft app at 127.0.0.1:1 refused the member key of @claude", LinkError::Unauthorized),
+        ("WordCraft app at 127.0.0.1:1 is not reachable: connection refused", LinkError::Closed),
+        ("expired", LinkError::Remote("expired".into())),
+    ] {
+        let mut b = Failing(error);
+        assert_eq!(BackendCaller(&mut b).call("chat.poll", json!({})), Err(want), "{error}");
+    }
+}
+
+#[test]
+fn a_removed_member_hears_it_from_every_chat_tool() {
+    let w = FakeWindow::start(|m, _| match m {
+        "chat.join" => ok(json!({"handle": "@claude", "key": "cd".repeat(32)})),
+        _ => fail("unauthorized"),
+    });
+    let mut s = crate::Server::new(Box::new(crate::Remote::connect(&w.addr).unwrap()));
+    assert!(!mcp_tool(&mut s, "chat_join", json!({"code": "ABCD-EFGH-JKMN"})).0);
+    for (tool, args) in [("chat_wait", json!({})), ("chat_read", json!({})), ("chat_read", json!({"sel": true}))] {
+        assert_eq!(mcp_tool(&mut s, tool, args.clone()), (true, REMOVED.to_string()), "{tool} {args}");
+    }
+    let (bad, text) = mcp_tool(&mut s, "execute", json!({"command": "format.bold"}));
+    assert!(bad && text.starts_with("unauthorized") && text.contains("@claude"), "{text}");
+}
+
+#[test]
+fn guide_and_briefing_say_the_same_rules() {
+    let guide = include_str!("../../../../docs/chat.md");
+    for fact in [
+        "not a sandbox",
+        "Start Chat",
+        "Stop Chat",
+        "wordcraft-cli chat join 127.0.0.1:7981",
+        "select.owner",
+        "read --find",
+        "<settings>/chats/",
+        "Exit 3",
+        "exit 4",
+        "allow-list",
+        "@owner",
+        "@all",
+        "8 agent messages",
+        "accepting your own changes: ask the OWNER",
+        "rejecting new paragraphs: ask the OWNER",
+        wordcraft_chat::CLIENT_ENV,
+    ] {
+        assert!(guide.contains(fact), "docs/chat.md lacks {fact:?}");
+    }
+    let briefing = briefing("@claude", wordcraft_chat::DEFAULT_CLIENT_COMMAND);
+    for fact in ["select.owner", "read --find", "not a sandbox", "listen", "Exit 3", "exit 4", "allow-list", "Never accept your own changes"] {
+        assert!(briefing.contains(fact), "the briefing lacks {fact:?}");
+    }
+    assert!(briefing.lines().count() <= 14, "the briefing stays short");
+}

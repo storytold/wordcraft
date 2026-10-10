@@ -116,6 +116,24 @@ impl Link {
     }
 }
 
+/// An MCP backend as a [`Caller`]. Its errors are strings: any `unauthorized…` means removed
+/// (or the chat stopped), and an unreachable app means the connection is gone.
+pub struct BackendCaller<'a>(pub &'a mut dyn crate::Backend);
+
+impl Caller for BackendCaller<'_> {
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, LinkError> {
+        self.0.call(method, params).map_err(|e| {
+            if e.starts_with("unauthorized") {
+                LinkError::Unauthorized
+            } else if e.contains("is not reachable") {
+                LinkError::Closed
+            } else {
+                LinkError::Remote(e)
+            }
+        })
+    }
+}
+
 impl Caller for Link {
     fn call(&mut self, method: &str, params: Value) -> Result<Value, LinkError> {
         let t = self.timeout;

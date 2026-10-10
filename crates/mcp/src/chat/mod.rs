@@ -9,6 +9,7 @@ mod link;
 mod store;
 #[cfg(test)]
 pub(crate) mod tests;
+pub mod tools;
 
 use std::io::Write;
 use std::time::Duration;
@@ -19,7 +20,7 @@ use wordcraft_chat::rules::{normalize_handle, valid_handle};
 
 pub use doc::{MAX_CONTEXT, MAX_STEPS_TEXT, ReadOpts, Step, commands, owner_selection, parse_steps, pick, read, run_steps, tracked_text, view_page};
 pub use lines::{Cursor, HISTORY, format_line};
-pub use link::{Caller, Link, LinkError};
+pub use link::{BackendCaller, Caller, Link, LinkError};
 pub use store::{Membership, Store, window_gone};
 
 pub const GONE: &str = "SYSTEM: window closed";

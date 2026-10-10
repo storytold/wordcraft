@@ -19,7 +19,8 @@ USAGE:
                                               run commands headlessly, then save
   wordcraft-cli commands [--json]             list every command
   wordcraft-cli parity [--markdown]           feature-catalog parity
-  wordcraft-cli mcp [--connect HOST:PORT]     MCP server on stdio (headless, or bridged to the app)
+  wordcraft-cli mcp [--connect HOST:PORT [--join CODE [--as @name]]]
+                                              MCP server on stdio (headless, bridged to the app, or as an invited chat agent)
   wordcraft-cli chat <join|listen|send|read|view|do|commands|help> …  an invited agent's side of a window's chat (docs/chat.md)
   wordcraft-cli --version
 ";
@@ -143,14 +144,23 @@ fn run(args: &[String]) -> Result<(), String> {
             Ok(())
         }
         "mcp" => {
+            use wordcraft_mcp::Backend as _;
             let backend: Box<dyn wordcraft_mcp::Backend> = match arg_value(&rest, "--connect") {
                 Some(addr) => {
-                    let remote = wordcraft_mcp::Remote::connect(&addr).map_err(|e| format!("can't reach the WordCraft app at {addr}: {e}"))?;
+                    let mut remote = wordcraft_mcp::Remote::connect(&addr).map_err(|e| format!("can't reach the WordCraft app at {addr}: {e}"))?;
                     if let Some(w) = remote.key_warning() {
                         eprintln!("wordcraft-cli: {w}");
                     }
+                    if let Some(code) = arg_value(&rest, "--join") {
+                        let m = wordcraft_mcp::chat::join(&addr, &code, arg_value(&rest, "--as").as_deref()).map_err(|f| f.message)?;
+                        let h = m.handle.clone();
+                        remote.set_member(m.handle, m.key)?;
+                        // stdout is the protocol stream.
+                        eprintln!("{}", wordcraft_mcp::chat::tools::mcp_briefing(&h));
+                    }
                     Box::new(remote)
                 }
+                None if arg_value(&rest, "--join").is_some() => return Err("--join needs --connect HOST:PORT".into()),
                 None => Box::new(wordcraft_mcp::Headless::default()),
             };
             let mut server = wordcraft_mcp::Server::new(backend);

@@ -32,6 +32,8 @@ pub const COMMANDS_URI: &str = "wordcraft://commands";
 pub struct Server {
     backend: Box<dyn Backend>,
     initialized: bool,
+    /// Where `chat_wait` is in the window's chat.
+    chat: crate::chat::tools::McpChat,
 }
 
 fn response(id: Value, result: Value) -> Value {
@@ -44,7 +46,7 @@ fn error(id: Value, code: i64, message: impl Into<String>) -> Value {
 
 impl Server {
     pub fn new(backend: Box<dyn Backend>) -> Self {
-        Self { backend, initialized: false }
+        Self { backend, initialized: false, chat: Default::default() }
     }
 
     pub fn backend(&mut self) -> &mut dyn Backend {
@@ -145,7 +147,9 @@ impl Server {
             "tools/call" => {
                 let name = params.get("name").and_then(Value::as_str).ok_or((INVALID_PARAMS, "missing tool `name`".to_string()))?;
                 let args = params.get("arguments").cloned().unwrap_or(Value::Null);
-                Ok(call_tool(self.backend.as_mut(), name, &args).to_value())
+                let r = crate::chat::tools::call(self.backend.as_mut(), &mut self.chat, name, &args)
+                    .unwrap_or_else(|| call_tool(self.backend.as_mut(), name, &args));
+                Ok(r.to_value())
             }
             "resources/list" => Ok(json!({"resources": [
                 {"uri": DOC_URI, "name": "document", "title": "Active document", "description": "Blocks, text, formatting, sections, parts and selection of the document (document.inspect)", "mimeType": "application/json"},
