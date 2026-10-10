@@ -23,6 +23,7 @@
 	Add	Adicionar
 	Add a comment	Adicionar um comentário
 	Add a Table	Adicionar uma tabela
+	Add Object to Selection	Adicionar objeto à seleção
 	Add Space Before Paragraph	Adicionar espaço antes do parágrafo
 	Add Text	Adicionar texto
 	Add to Dictionary	Adicionar ao dicionário
@@ -735,6 +736,7 @@
 	Underline Words Only	Sublinhar somente palavras
 	Undo	Desfazer
 	Undo {action}	Desfazer {action}
+	Ungroup	Desagrupar
 	Up	Para cima
 	Update Field	Atualizar campo
 	Update Index	Atualizar índice

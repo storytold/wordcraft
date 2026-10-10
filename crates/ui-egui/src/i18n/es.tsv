@@ -24,6 +24,7 @@
 	Accept This Change	Aceptar este cambio
 	Accessibility	Accesibilidad
 	Add	Añadir
+	Add Object to Selection	Añadir objeto a la selección
 	Add Space Before Paragraph	Añadir espacio antes del párrafo
 	Add Text	Añadir texto
 	Add a Table	Añadir una tabla
@@ -756,6 +757,7 @@
 	Two	Dos
 	Type Text	Escribir texto
 	Type a command, e.g. "insert table"	Escribe un comando, p. ej. "insertar tabla"
+	Ungroup	Desagrupar
 	UPPERCASE	MAYÚSCULAS
 	Underline	Subrayado
 	Underline Words Only	Subrayar solo las palabras
