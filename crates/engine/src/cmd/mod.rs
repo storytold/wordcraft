@@ -145,20 +145,39 @@ pub fn type_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// Take a paragraph out of its list like Word does when Enter or Backspace ends a list: a
+/// "List Paragraph" goes back to Normal; any other style keeps itself with numbering switched off.
+pub fn leave_list(para: &mut wordcraft_doc::Paragraph) {
+    if para.props.style.as_deref() == Some("ListParagraph") {
+        para.props.style = None;
+        para.props.numbering = None;
+    } else {
+        // `num: 0` overrides numbering a style may carry.
+        para.props.numbering = Some(wordcraft_doc::props::NumRef { num: 0, level: 0 });
+    }
+    para.props.indent_left = None;
+    para.props.indent_first = None;
+    para.touch();
+}
+
 /// Split the paragraph at `at` like Enter does: an empty list paragraph leaves the list, the
 /// next paragraph gets the style's "next" style when Enter is at the end.
 pub fn split_para(s: &mut Session, at: &Pos) -> Result<Pos, CmdError> {
+    // `num: 0` means "explicitly not in a list", so it isn't a list item.
     let (at_end, style, empty_list) = match s.doc.para_at(at) {
-        Some(p) => (at.off >= p.len(), p.props.style.clone(), p.is_empty() && p.props.numbering.is_some()),
+        Some(p) => (at.off >= p.len(), p.props.style.clone(), p.props.numbering.filter(|n| n.num != 0 && p.is_empty())),
         None => return Err(CmdError::Failed("no paragraph at caret".into())),
     };
-    if empty_list {
-        // Enter on an empty list item ends the list (Word behaviour).
+    if let Some(n) = empty_list {
+        // Enter on an empty list item: a nested item moves up a level, a top-level one ends
+        // the list (Word behaviour).
         let para = s.doc.para_mut(at.story, &at.path)?;
-        para.props.numbering = Some(wordcraft_doc::props::NumRef { num: 0, level: 0 });
-        para.props.indent_left = None;
-        para.props.indent_first = None;
-        para.touch();
+        if n.level > 0 {
+            para.props.numbering = Some(wordcraft_doc::props::NumRef { num: n.num, level: n.level - 1 });
+            para.touch();
+        } else {
+            leave_list(para);
+        }
         return Ok(at.clone());
     }
     let new = s.doc.split_paragraph(at)?;
