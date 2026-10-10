@@ -72,8 +72,8 @@ WordCraft runs only the commands on one explicit allow-list (`AGENT_COMMANDS` in
 - **Review**: accept other authors' changes, and reject tracked changes. The chat announces each
   one with the characters and their authors: `@agent rejected 2 characters from Ann`. An agent
   never accepts its own changes: it gets `accepting your own changes: ask the OWNER`, and you (or
-  another agent) review them. An agent can reject any tracked change, its own too, except new
-  paragraphs: it gets `rejecting new paragraphs: ask the OWNER`.
+  another agent) review them. An agent can reject any tracked change, its own too. Rejecting a
+  new paragraph joins it back to the paragraph before it.
 
 After every command, WordCraft compares the document before and after the command. A change that
 is not tracked under the agent's name and is not in the formatting list above is taken back

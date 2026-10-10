@@ -95,7 +95,7 @@ pub const AGENT_COMMANDS: &[(&str, &[&str])] = &[
     // Delete only its own; never the text of someone else's comment.
     ("comments", &["review.deleteComment", "review.newComment", "review.reply", "review.resolveComment"]),
     // Announced with characters and authors. A member never accepts its own changes (someone
-    // else reviews them); rejecting new paragraphs is the owner's.
+    // else reviews them).
     ("review", &["review.accept", "review.acceptAll", "review.reject", "review.rejectAll"]),
 ];
 
@@ -142,10 +142,6 @@ pub fn agent_commands(app: &WordApp) -> Value {
 /// kind is a custom label (a bullet character), which is list label text.
 const LIST_KINDS: [&str; 10] =
     ["bullet", "numbered", "number", "numberedParen", "outline", "upperLetter", "lowerLetter", "lowerRoman", "legal", "multilevel"];
-
-/// Reason for a member's reject that would leave the paragraphs it inserted split (the engine
-/// does not join paragraphs on reject).
-pub const REJECT_PARAGRAPHS: &str = "rejecting new paragraphs: ask the OWNER";
 
 /// Reason for a member's accept that would take in changes it made itself: only someone else
 /// (the owner, or another member) may accept them.
@@ -244,16 +240,12 @@ pub fn run_as_member(app: &mut WordApp, handle: &str, id: &str, params: Value) -
     let snap = app.session.edit_snapshot();
     let mut r = if id == "select.owner" { Ok(select_owner(app, &owner_sel)) } else { app.session.run(id, &params).map_err(|e| e.to_string()) };
     use crate::chat_guard::Verdict;
-    let rejected_paragraphs = judging && !id.starts_with("review.accept") && r.is_ok() && {
-        crate::chat_guard::inserted_paragraphs(&app.session.doc) < crate::chat_guard::inserted_paragraphs(snap.doc())
-    };
     // Accepting a change is reviewing it: a member never accepts what it wrote itself.
     let accepted_own = judging && id.starts_with("review.accept") && r.is_ok() && {
         crate::chat_guard::judged(snap.doc(), &app.session.doc).1.iter().any(|author| author == handle)
     };
     let verdict = match &r {
         Err(_) => Verdict::Clean,
-        Ok(_) if rejected_paragraphs => Verdict::Refuse(REJECT_PARAGRAPHS),
         Ok(_) if accepted_own => Verdict::Refuse(ACCEPT_OWN),
         Ok(_) if judging => crate::chat_guard::check_judging(snap.doc(), &app.session.doc, id.starts_with("review.accept"), handle),
         Ok(_) if mutates => crate::chat_guard::check_member(snap.doc(), &app.session.doc, handle),
@@ -288,7 +280,7 @@ pub fn run_as_member(app: &mut WordApp, handle: &str, id: &str, params: Value) -
         app.session.dirty = snap.dirty();
     }
     if let Verdict::Refuse(why) = verdict {
-        r = Err(if why == REJECT_PARAGRAPHS || why == ACCEPT_OWN { why.to_string() } else { format!("{}: {why}", crate::chat_guard::REFUSED) });
+        r = Err(if why == ACCEPT_OWN { why.to_string() } else { format!("{}: {why}", crate::chat_guard::REFUSED) });
     }
     app.session.ui_requests = owner_ui;
     app.session.status = owner_status;
@@ -1662,19 +1654,20 @@ mod tests {
     }
 
     #[test]
-    fn member_cannot_reject_new_paragraphs_and_gets_a_clear_error() {
-        // The engine does not join paragraphs on reject.
-        let mut a = app();
-        let _ = run_as_member(&mut a, "@claude", "select.text", json!({"text": "12 months."}));
-        let _ = run_as_member(&mut a, "@claude", "select.collapse", json!({"end": true}));
-        assert!(run_as_member(&mut a, "@claude", "text.newParagraph", json!({})).is_ok());
-        assert!(run_as_member(&mut a, "@claude", "text.insert", json!({"text": "The agent's new café clause."})).is_ok());
-        let doc = a.session.doc.clone();
+    fn member_rejecting_a_new_paragraph_joins_it_back() {
+        // Reject undoes a tracked paragraph split (the engine joins the paragraphs again).
         for id in ["review.rejectAll", "review.reject"] {
+            let mut a = app();
+            let _ = run_as_member(&mut a, "@claude", "select.text", json!({"text": "12 months."}));
+            let _ = run_as_member(&mut a, "@claude", "select.collapse", json!({"end": true}));
+            assert!(run_as_member(&mut a, "@claude", "text.newParagraph", json!({})).is_ok());
+            assert!(run_as_member(&mut a, "@claude", "text.insert", json!({"text": "The agent's new café clause."})).is_ok());
+            assert_eq!(a.session.doc.para_paths(wordcraft_doc::StoryRef::Body).len(), 2);
             let _ = run_as_member(&mut a, "@claude", "select.all", json!({}));
             let r = run_as_member(&mut a, "@claude", id, json!({}));
-            assert_eq!(r, Err(REJECT_PARAGRAPHS.to_string()), "{id}");
-            assert_eq!(a.session.doc, doc, "{id}");
+            assert!(r.is_ok(), "{id}: {r:?}");
+            assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Price: 1,000 euros. Term: 12 months.", "{id}");
+            assert_eq!(a.session.doc.para_paths(wordcraft_doc::StoryRef::Body).len(), 1, "{id}");
         }
         // Rejecting a plain tracked word is fine (in a paragraph whose mark is not new).
         let mut a = app();

@@ -299,11 +299,7 @@ fn a_window_that_does_not_draw_is_no_answer_and_the_link_recovers() {
 
 #[test]
 fn the_briefing_states_the_accept_rule() {
-    for fact in [
-        "other authors' changes only when the OWNER asks",
-        "Never accept your own changes: the OWNER accepts them",
-        "You cannot reject new paragraphs",
-    ] {
+    for fact in ["other authors' changes only when the OWNER asks", "Never accept your own changes: the OWNER accepts them"] {
         assert!(BRIEFING.contains(fact), "the briefing lacks {fact:?}");
     }
     assert!(BRIEFING.lines().count() <= 14, "the briefing stays short");
@@ -719,7 +715,6 @@ fn guide_and_briefing_say_the_same_rules() {
         "@all",
         "8 agent messages",
         "accepting your own changes: ask the OWNER",
-        "rejecting new paragraphs: ask the OWNER",
         wordcraft_chat::CLIENT_ENV,
     ] {
         assert!(guide.contains(fact), "docs/chat.md lacks {fact:?}");

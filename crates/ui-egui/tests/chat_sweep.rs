@@ -27,7 +27,7 @@ const OWNER: &str = "Owner";
 
 /// Allowed mutating commands whose raw effect (without the guard) is an untracked change in at
 /// least one place of the sweep. The guard refuses them there. Review every change to this list.
-const UNTRACKED: &[&str] = &["para.bullets", "para.numbering", "review.deleteComment", "review.rejectAll"];
+const UNTRACKED: &[&str] = &["para.bullets", "para.numbering", "review.deleteComment"];
 
 fn owner(a: &mut WordApp, id: &str, p: Value) {
     if let Err(e) = a.run(id, p) {

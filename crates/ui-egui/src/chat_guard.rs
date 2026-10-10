@@ -155,15 +155,6 @@ pub fn judged(before: &Document, after: &Document) -> (usize, Vec<String>) {
     (n, authors)
 }
 
-/// Paragraph marks inserted as tracked changes, in every story.
-pub fn inserted_paragraphs(doc: &Document) -> usize {
-    std::iter::once(wordcraft_doc::StoryRef::Body)
-        .chain(doc.parts.keys().map(|k| wordcraft_doc::StoryRef::Part(*k)))
-        .flat_map(|story| doc.para_paths(story).into_iter().map(move |p| (story, p)))
-        .filter(|(story, path)| doc.para(*story, path).is_some_and(|p| p.mark.ins.is_some()))
-        .count()
-}
-
 /// Comments whose resolved state changed: (author, resolved now).
 pub fn resolved_comments(before: &Document, after: &Document) -> Vec<(String, bool)> {
     after
