@@ -16,6 +16,15 @@ fn text(s: &Session) -> String {
 }
 
 #[test]
+fn doc_extension_dispatches_to_docbin() {
+    // Garbage bytes with a .doc name must produce an error through the Word 97-2003
+    // reader — never a panic and never a silently empty document.
+    for name in ["x.doc", "x.dot"] {
+        assert!(crate::io::open_bytes(name, &[0u8; 64]).is_err(), "{name} should fail");
+    }
+}
+
+#[test]
 fn every_command_has_unique_id() {
     let reg = cmd::registry();
     let mut ids: Vec<&str> = reg.all().iter().map(|c| c.id).collect();

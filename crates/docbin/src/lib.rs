@@ -41,6 +41,8 @@ use table::ParaOut;
 const MAX_STREAM: u64 = 1 << 30;
 /// Most header/footer parts we create (matches the docx reader's cap).
 const MAX_PARTS: usize = 50_000;
+/// Most inline pictures we materialise from the Data stream.
+const MAX_PICTURES: usize = 5_000;
 /// `sprmCPicLocation`: the fc of a picture in the Data stream.
 const C_PIC_LOCATION: u16 = 0x6A03;
 /// `sprmPIlvl` / `sprmPIlfo`: the paragraph's list level and list.
@@ -400,7 +402,7 @@ fn walk(ctx: &WalkCtx, cp_start: u32, cp_end: u32, pending: &mut Vec<media::Pict
                 let fc = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
                 let fc_pic = pic_location(ctx.chpx_bins.chpx(ctx.word, fc));
                 let pic = fc_pic.and_then(|at| media::read(ctx.data, at));
-                match pic {
+                match pic.filter(|_| pending.len() < MAX_PICTURES) {
                     Some(pic) => {
                         pb.push('\u{FFFC}', CharProps::default());
                         pb.objects.push(InlineObject::Image {
