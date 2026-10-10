@@ -168,12 +168,14 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                 let size = st
                     .get("size")
                     .and_then(Value::as_f64)
-                    .map(|s| if s.fract() == 0.0 { format!("{s:.0}") } else { format!("{s}") })
+                    .map(|s| crate::i18n::current().number(s, if s.fract() == 0.0 { 0 } else { 1 }))
                     .unwrap_or_default();
-                let sizes: Vec<String> =
-                    wordcraft_engine::cmd::format::SIZES.iter().map(|s| if s.fract() == 0.0 { format!("{s:.0}") } else { s.to_string() }).collect();
+                let sizes: Vec<String> = wordcraft_engine::cmd::format::SIZES
+                    .iter()
+                    .map(|s| crate::i18n::current().number(*s as f64, if s.fract() == 0.0 { 0 } else { 1 }))
+                    .collect();
                 if let Some(v) = combo(ui, "size", 52.0, &size, &sizes, None)
-                    && let Ok(x) = v.trim().parse::<f64>()
+                    && let Some(x) = crate::i18n::parse_number(&v)
                 {
                     let _ = app.run("format.size", json!({"size": x}));
                 }
@@ -590,8 +592,19 @@ fn layout(app: &mut WordApp, ui: &mut Ui) {
             mi(ui, app, "Landscape", "layout.orientation", json!({"value": "landscape"}));
         });
         menu_button(ui, app, "size", Some("Size"), "Size", true, |ui, app| {
-            for (n, w, h) in wordcraft_geom::PAPER_SIZES {
-                mi(ui, app, &format!("{n}   {:.2}\" × {:.2}\"", w / 72.0, h / 72.0), "layout.size", json!({"name": n}));
+            let lang = crate::i18n::current();
+            let mut sizes: Vec<_> = wordcraft_geom::PAPER_SIZES.iter().collect();
+            if lang.code() == "nb" {
+                sizes.sort_by_key(|(n, _, _)| match *n {
+                    "A4" => 0,
+                    "A3" => 1,
+                    "A5" => 2,
+                    _ => 3,
+                });
+            }
+            for (n, w, h) in sizes {
+                let label = format!("{n}   {} × {}", lang.measurement(*w), lang.measurement(*h));
+                mi(ui, app, &label, "layout.size", json!({"name": n}));
             }
         });
         menu_button(ui, app, "columns", Some("Columns"), "Columns", true, |ui, app| {
@@ -635,34 +648,82 @@ fn layout(app: &mut WordApp, ui: &mut Ui) {
             ui.label("");
             ui.label(egui::RichText::new(tl!("Spacing")).small().strong());
             ui.end_row();
-            let mut l = rp.indent_left / 72.0;
+            let mut l = rp.indent_left / crate::i18n::current().measurement_unit().pt_per_unit();
             let mut b = rp.space_before;
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(tl!("Left:")).small());
-                if ui.add(egui::DragValue::new(&mut l).speed(0.05).range(-11.0..=22.0).suffix("\"").max_decimals(2)).changed() {
-                    let _ = app.run("para.indents", json!({"left": l * 72.0}));
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut l)
+                            .custom_formatter(crate::i18n::format_number)
+                            .custom_parser(crate::i18n::parse_number)
+                            .speed(0.05)
+                            .range(
+                                -792.0 / crate::i18n::current().measurement_unit().pt_per_unit()
+                                    ..=1584.0 / crate::i18n::current().measurement_unit().pt_per_unit(),
+                            )
+                            .suffix(crate::i18n::current().measurement_unit().suffix())
+                            .max_decimals(2),
+                    )
+                    .changed()
+                {
+                    let _ = app.run("para.indents", json!({"left": l * crate::i18n::current().measurement_unit().pt_per_unit()}));
                 }
             });
             ui.label("");
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(tl!("Before:")).small());
-                if ui.add(egui::DragValue::new(&mut b).speed(1.0).range(0.0..=1584.0).suffix(" pt")).changed() {
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut b)
+                            .custom_formatter(crate::i18n::format_number)
+                            .custom_parser(crate::i18n::parse_number)
+                            .speed(1.0)
+                            .range(0.0..=1584.0)
+                            .suffix(" pt"),
+                    )
+                    .changed()
+                {
                     let _ = app.run("para.spacing", json!({"before": b}));
                 }
             });
             ui.end_row();
-            let mut r = rp.indent_right / 72.0;
+            let mut r = rp.indent_right / crate::i18n::current().measurement_unit().pt_per_unit();
             let mut a = rp.space_after;
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(tl!("Right:")).small());
-                if ui.add(egui::DragValue::new(&mut r).speed(0.05).range(-11.0..=22.0).suffix("\"").max_decimals(2)).changed() {
-                    let _ = app.run("para.indents", json!({"right": r * 72.0}));
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut r)
+                            .custom_formatter(crate::i18n::format_number)
+                            .custom_parser(crate::i18n::parse_number)
+                            .speed(0.05)
+                            .range(
+                                -792.0 / crate::i18n::current().measurement_unit().pt_per_unit()
+                                    ..=1584.0 / crate::i18n::current().measurement_unit().pt_per_unit(),
+                            )
+                            .suffix(crate::i18n::current().measurement_unit().suffix())
+                            .max_decimals(2),
+                    )
+                    .changed()
+                {
+                    let _ = app.run("para.indents", json!({"right": r * crate::i18n::current().measurement_unit().pt_per_unit()}));
                 }
             });
             ui.label("");
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(tl!("After:")).small());
-                if ui.add(egui::DragValue::new(&mut a).speed(1.0).range(0.0..=1584.0).suffix(" pt")).changed() {
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut a)
+                            .custom_formatter(crate::i18n::format_number)
+                            .custom_parser(crate::i18n::parse_number)
+                            .speed(1.0)
+                            .range(0.0..=1584.0)
+                            .suffix(" pt"),
+                    )
+                    .changed()
+                {
                     let _ = app.run("para.spacing", json!({"after": a}));
                 }
             });
@@ -803,7 +864,14 @@ fn review(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Language", None, app, |ui, app| {
         big(ui, app, "translate", "Translate", "review.translate", json!({}), false);
-        big(ui, app, "language", "Language", "review.language", json!({}), false);
+        menu_button(ui, app, "language", Some("Language"), "Language", true, |ui, app| {
+            mi(ui, app, "Norwegian Bokmål", "review.language", json!({"lang": "nb-NO", "noProof": false}));
+            mi(ui, app, "English (United States)", "review.language", json!({"lang": "en-US", "noProof": false}));
+            ui.separator();
+            ui.label(
+                egui::RichText::new(tl!("Applies to selected text or what you type next. Select all to change the whole document.")).small().weak(),
+            );
+        });
     });
     group(ui, "Comments", None, app, |ui, app| {
         big(ui, app, "newComment", "New\nComment", "review.newComment", json!({}), false);
@@ -957,7 +1025,7 @@ fn table_design(app: &mut WordApp, ui: &mut Ui) {
             .styles
             .iter()
             .filter(|s| s.kind == wordcraft_doc::StyleKind::Table && !s.hidden)
-            .map(|s| (s.id.clone(), s.name.clone()))
+            .map(|s| (s.id.clone(), crate::i18n::style_name(s).to_string()))
             .collect();
         egui::ScrollArea::horizontal().max_width(420.0).show(ui, |ui| {
             ui.horizontal(|ui| {

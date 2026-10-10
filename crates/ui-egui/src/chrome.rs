@@ -181,7 +181,15 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                 if app.session.sel.focus.story != StoryRef::Body {
                     st(ui, tl!("Editing header/footer"));
                 }
-                st(ui, tl!("English (United States)"));
+                let language = app.session.typing_props().lang.or_else(|| app.session.doc.styles.default_chr.lang.clone());
+                st(
+                    ui,
+                    match language.as_deref() {
+                        Some("nb-NO" | "nb" | "no-NO") => tl!("Norwegian Bokmål"),
+                        Some("en-US") | None => tl!("English (United States)"),
+                        Some(tag) => tag,
+                    },
+                );
                 if app.session.doc.settings.track_changes {
                     st(ui, tl!("Track Changes: On"));
                 }

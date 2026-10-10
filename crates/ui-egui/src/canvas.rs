@@ -573,19 +573,21 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
     hp.rect_filled(bar, 0.0, t.ruler_margin);
     let text = Rect::from_min_max(pos2(x0 + page.body.x * scale, bar.min.y), pos2(x0 + page.body.right() * scale, bar.max.y));
     hp.rect_filled(text, 0.0, t.ruler);
-    let unit = 72.0;
+    let unit = crate::i18n::current().measurement_unit().pt_per_unit();
+    let subdivisions = if crate::i18n::current().code() == "nb" { 10 } else { 8 };
+    let snap = unit / (subdivisions * 2) as f32;
     let origin = page.body.x;
-    let mut k = -((origin / unit).ceil() as i32) * 8;
+    let mut k = -((origin / unit).ceil() as i32) * subdivisions;
     loop {
-        let xpt = origin + k as f32 * unit / 8.0;
+        let xpt = origin + k as f32 * unit / subdivisions as f32;
         if xpt > page.w {
             break;
         }
         if xpt >= 0.0 {
             let sx = x0 + xpt * scale;
-            let (len, label) = if k % 8 == 0 {
-                (0.0, Some(k / 8))
-            } else if k % 4 == 0 {
+            let (len, label) = if k % subdivisions == 0 {
+                (0.0, Some(k / subdivisions))
+            } else if k % (subdivisions / 2) == 0 {
                 (5.0, None)
             } else if k % 2 == 0 {
                 (3.0, None)
@@ -598,7 +600,7 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
                 }
                 Some(_) => {}
                 None => {
-                    if scale * unit / 8.0 > 4.0 || k % 2 == 0 {
+                    if scale * unit / subdivisions as f32 > 4.0 || k % 2 == 0 {
                         hp.line_segment([pos2(sx, bar.center().y - len / 2.0), pos2(sx, bar.center().y + len / 2.0)], Stroke::new(1.0, t.ruler_tick));
                     }
                 }
@@ -652,7 +654,7 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
             && let Some(pp) = r.interact_pointer_pos()
         {
             let pt = ((pp.x - x0) / scale - col_x).clamp(-col_x, page.body.w - 18.0);
-            let snapped = (pt / 4.5).round() * 4.5;
+            let snapped = (pt / snap).round() * snap;
             if !r.drag_started() {
                 app.session.join_next_undo();
             }
@@ -667,7 +669,7 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
             if !r.drag_started() {
                 app.session.join_next_undo();
             }
-            let _ = app.run("para.indents", json!({"firstLine": (pt / 4.5).round() * 4.5}));
+            let _ = app.run("para.indents", json!({"firstLine": (pt / snap).round() * snap}));
         }
         let rr = Rect::from_center_size(pos2(right, bar.max.y - 3.0), vec2(12.0, 12.0));
         let r = ui.interact(rr, ui.id().with("ruler_right"), Sense::drag());
@@ -678,7 +680,7 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
             if !r.drag_started() {
                 app.session.join_next_undo();
             }
-            let _ = app.run("para.indents", json!({"right": (pt / 4.5).round() * 4.5}));
+            let _ = app.run("para.indents", json!({"right": (pt / snap).round() * snap}));
         }
     }
     // Vertical.
@@ -688,15 +690,21 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
     vp.rect_filled(vbar, 0.0, t.ruler_margin);
     vp.rect_filled(Rect::from_min_max(pos2(vbar.min.x, y0 + page.body.y * scale), pos2(vbar.max.x, y0 + page.body.bottom() * scale)), 0.0, t.ruler);
     let origin = page.body.y;
-    let mut k = -((origin / unit).ceil() as i32) * 8;
+    let mut k = -((origin / unit).ceil() as i32) * subdivisions;
     loop {
-        let ypt = origin + k as f32 * unit / 8.0;
+        let ypt = origin + k as f32 * unit / subdivisions as f32;
         if ypt > page.h.min(20_000.0) {
             break;
         }
-        if ypt >= 0.0 && k % 8 == 0 && k != 0 {
-            vp.text(pos2(vbar.center().x, y0 + ypt * scale), egui::Align2::CENTER_CENTER, (k / 8).abs().to_string(), regular(9.5), t.ruler_tick);
-        } else if ypt >= 0.0 && k % 4 == 0 {
+        if ypt >= 0.0 && k % subdivisions == 0 && k != 0 {
+            vp.text(
+                pos2(vbar.center().x, y0 + ypt * scale),
+                egui::Align2::CENTER_CENTER,
+                (k / subdivisions).abs().to_string(),
+                regular(9.5),
+                t.ruler_tick,
+            );
+        } else if ypt >= 0.0 && k % (subdivisions / 2) == 0 {
             let sy = y0 + ypt * scale;
             vp.line_segment([pos2(vbar.center().x - 2.5, sy), pos2(vbar.center().x + 2.5, sy)], Stroke::new(1.0, t.ruler_tick));
         }

@@ -195,6 +195,9 @@ fn main() -> eframe::Result {
             let doc = if sample { wordcraft_engine::sample::sample_document() } else { wordcraft_doc::Document::new() };
             let mut app = WordApp::new(Session::new(doc), services());
             load_prefs(&mut app);
+            if !sample {
+                let _ = app.run("file.new", serde_json::json!({}));
+            }
             app.ui.window = restored;
             app.integrated_titlebar = cfg!(target_os = "macos");
             if let Some(port) = control_port {

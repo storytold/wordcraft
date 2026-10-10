@@ -543,7 +543,11 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         text_len: p.text.len(),
         has_page_fields,
         notes,
-        issues: if env.proofing { proof_issues(p) } else { Vec::new() },
+        issues: if env.proofing {
+            proof_issues(p, &env.doc.styles).into_iter().map(|i| (i.start, i.end, i.kind == wordcraft_proof::IssueKind::Grammar)).collect()
+        } else {
+            Vec::new()
+        },
         drop_cap,
         hyph_after: Vec::new(),
     };
@@ -1142,19 +1146,69 @@ impl ParaLayout {
     }
 }
 
-/// Spelling and grammar issues in a paragraph (skipping "do not check" and hidden runs).
-fn proof_issues(p: &Paragraph) -> Vec<(usize, usize, bool)> {
+/// Effective proofing language, including document, paragraph and character styles.
+pub fn proof_language(p: &Paragraph, styles: &wordcraft_doc::StyleSheet, off: usize) -> wordcraft_proof::Language {
+    let props = styles.resolve_char(p.props.style.as_deref(), p.props_of_char(off));
+    wordcraft_proof::Language::from_tag(props.lang.as_deref().unwrap_or("en-US"))
+}
+
+/// Shared by layout squiggles and the review commands, so both report the same issues.
+pub fn proof_issues(p: &Paragraph, styles: &wordcraft_doc::StyleSheet) -> Vec<wordcraft_proof::Issue> {
+    use wordcraft_proof::Language;
     if p.text.trim().is_empty() || p.text.len() > 100_000 {
         return Vec::new();
     }
     let text = proof_text(p);
-    let skip = |a: usize, b: usize| {
-        p.run_ranges().any(|(r, c)| r.start < b && a < r.end && (c.no_proof == Some(true) || c.hidden == Some(true) || c.link.is_some()))
-    };
-    let mut v: Vec<(usize, usize, bool)> =
-        wordcraft_proof::check_spelling(&text).into_iter().filter(|i| !skip(i.start, i.end)).map(|i| (i.start, i.end, false)).collect();
-    v.extend(wordcraft_proof::check_grammar(&text).into_iter().filter(|i| !skip(i.start, i.end)).map(|i| (i.start, i.end, true)));
-    v
+    let mut spans: Vec<_> = p
+        .run_ranges()
+        .map(|(range, props)| {
+            let c = styles.resolve_char(p.props.style.as_deref(), props);
+            (range, Language::from_tag(c.lang.as_deref().unwrap_or("en-US")), c.no_proof || c.hidden || c.link.is_some())
+        })
+        .collect();
+    if spans.is_empty() {
+        let c = styles.resolve_char(p.props.style.as_deref(), &p.mark);
+        spans.push((0..text.len(), Language::from_tag(c.lang.as_deref().unwrap_or("en-US")), c.no_proof || c.hidden || c.link.is_some()));
+    }
+    let mut issues = wordcraft_proof::check_spelling_by(&text, |start, end| {
+        if spans.iter().any(|(r, _, skip)| *skip && r.start < end && start < r.end) {
+            return None;
+        }
+        spans.iter().find(|(r, _, _)| r.contains(&start)).map(|(_, lang, _)| *lang)
+    });
+    // Merge formatting runs of the same language before grammar checking: bold/italic must
+    // not turn the middle of a sentence into a new sentence or split a repeated-word pair.
+    let mut groups: Vec<(std::ops::Range<usize>, Language)> = Vec::new();
+    for (range, language, skip) in spans {
+        if skip {
+            continue;
+        }
+        if let Some((previous, lang)) = groups.last_mut()
+            && previous.end == range.start
+            && *lang == language
+        {
+            previous.end = range.end;
+        } else {
+            groups.push((range, language));
+        }
+    }
+    for (range, language) in groups {
+        let Some(part) = text.get(range.clone()) else { continue };
+        let sentence_start = range.start == 0
+            || text.get(..range.start).is_some_and(|before| {
+                matches!(
+                    before.trim_end_matches(|c: char| c.is_whitespace() || matches!(c, '"' | '”' | ')' | '\'')).chars().last(),
+                    Some('.' | '!' | '?')
+                )
+            });
+        for mut issue in wordcraft_proof::check_grammar_with_start(part, language, sentence_start) {
+            issue.start += range.start;
+            issue.end += range.start;
+            issues.push(issue);
+        }
+    }
+    issues.sort_by_key(|i| i.start);
+    issues
 }
 
 /// Text for proofing with the same byte offsets: inline objects and tracked deletions become

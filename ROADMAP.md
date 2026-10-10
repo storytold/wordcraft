@@ -20,6 +20,13 @@ and agent control. This file tracks where we are honestly. Generated numbers com
 Catalog coverage overstates parity: many commands are first versions. The real-parity estimate
 weighs each area by how much of Word's behaviour it reproduces, and by how often people use it.
 
+## Norwegian proofing (2026-10-10)
+
+Bokmål spelling works offline with 613,686 standard full forms from Norsk ordbank
+(Språkbanken, CC BY 4.0). Document and run language select English or Bokmål for
+squiggles, F7 and suggestions; mixed-language DOCX documents retain their language.
+Norwegian grammar checks remain limited to basic punctuation, spacing and repeated words.
+
 ## Alpha
 
 **What we mean by alpha:** someone can write, format and review real documents every day, open

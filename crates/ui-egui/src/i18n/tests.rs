@@ -19,12 +19,68 @@ fn system_locales_map_to_languages() {
     assert_eq!(lang_from_tag("zh-Hant"), Some(lang("zh-hant")));
     assert_eq!(lang_from_tag("ja-JP"), Some(lang("ja")));
     assert_eq!(lang_from_tag("ja_JP.eucJP@euro"), Some(lang("ja")));
+    assert_eq!(lang_from_tag("nb_NO.UTF-8"), Some(lang("nb")));
+    assert_eq!(lang_from_tag("nb-NO"), Some(lang("nb")));
+    assert_eq!(lang_from_tag("no_NO.UTF-8"), Some(lang("nb")));
+    assert_eq!(lang_from_tag("nn-NO"), None);
     assert_eq!(lang_from_tag("en-GB"), Some(Lang::EN));
     assert_eq!(lang_from_tag("C"), Some(Lang::EN));
     assert_eq!(lang_from_tag("POSIX"), Some(Lang::EN));
     assert_eq!(lang_from_tag("fr-FR"), None);
     assert_eq!(lang_from_tag(""), None);
     assert_eq!(lang_from_tag("_"), None);
+}
+
+#[test]
+fn norwegian_numbers_and_measurements_round_trip() {
+    let nb = lang("nb");
+    assert_eq!(nb.measurement(72.0), "2,54 cm");
+    assert_eq!(nb.number(12.5, 1), "12,5");
+    assert_eq!(Lang::EN.measurement(72.0), "1\"");
+    assert_eq!(parse_number(" 12,5 "), Some(12.5));
+    assert_eq!(parse_number("12.5"), Some(12.5));
+    assert_eq!(parse_number("NaN"), None);
+    set_current(nb);
+    assert_eq!(format_number(2.54, 0..=2), "2,54");
+    assert_eq!(format_number(21.0, 0..=2), "21");
+    assert_eq!(format_number(21.0, 2..=2), "21,00");
+    assert_eq!(t("File"), "Fil");
+    assert_eq!(location("Home › Font"), "Hjem › Skrift");
+    set_current(Lang::EN);
+}
+
+#[test]
+fn norwegian_preferences_affect_new_documents_only_and_persist() {
+    use serde_json::json;
+    use wordcraft_doc::Document;
+    use wordcraft_engine::Session;
+    let mut app = crate::WordApp::new(Session::new(Document::new()), Default::default());
+    app.run("ui.language", json!({"value": "NB"})).unwrap();
+    assert_eq!(app.session.doc.last_section.page_w, 612.0, "changing UI language must preserve the existing document");
+    let prefs: crate::UiState = serde_json::from_str(&serde_json::to_string(&app.prefs()).unwrap()).unwrap();
+    assert_eq!(prefs.language, "nb");
+    app.apply_prefs(prefs);
+    for template in ["blank", "letter", "resume", "report", "sample"] {
+        app.run("file.new", json!({"template": template})).unwrap();
+        assert!((app.session.doc.last_section.page_w - 21.0 * wordcraft_geom::PT_PER_CM).abs() < 0.01);
+        assert!((app.session.doc.last_section.page_h - 29.7 * wordcraft_geom::PT_PER_CM).abs() < 0.01);
+        assert_eq!(app.session.doc.styles.default_chr.lang.as_deref(), Some("nb-NO"));
+        let bytes = wordcraft_engine::io::save_bytes("test.docx", &app.session.doc).unwrap();
+        let reopened = wordcraft_engine::io::open_bytes("test.docx", &bytes).unwrap();
+        assert!((reopened.last_section.page_w - app.session.doc.last_section.page_w).abs() < 0.1);
+        assert_eq!(reopened.styles.default_chr.lang.as_deref(), Some("nb-NO"));
+    }
+    if let Some(crate::dialogs::Dialog::PageSetup { left, .. }) = crate::dialogs::Dialog::open("pageSetup", &mut app) {
+        assert!((left - 2.54).abs() < 0.001);
+    } else {
+        panic!("page setup dialog");
+    }
+    app.run("file.new", json!({"locale": "en-US"})).unwrap();
+    assert_eq!(app.session.doc.last_section.page_w, 612.0, "explicit command parameters take precedence");
+    app.run("insert.dateTime", json!({})).unwrap();
+    let date = app.session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert!(date.chars().nth(2) == Some('.') && date.chars().nth(5) == Some('.'), "{date}");
+    set_current(Lang::EN);
 }
 
 #[test]

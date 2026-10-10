@@ -8,7 +8,10 @@ use crate::{CmdError, CmdResult, CommandSpec, Session, p};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("file.new", "New", "File", new).key("Mod+N").params(r#"{"template"?: "blank|sample|letter|resume|report"}"#).pure(),
+        CommandSpec::new("file.new", "New", "File", new)
+            .key("Mod+N")
+            .params(r#"{"template"?: "blank|sample|letter|resume|report", "locale"?: "nb-NO|en-US"}"#)
+            .pure(),
         CommandSpec::new("file.open", "Open", "File", open).key("Mod+O").params(r#"{"path": string}"#).pure(),
         CommandSpec::new("file.save", "Save", "File", save).key("Mod+S").params(r#"{"path"?: string}"#).pure(),
         CommandSpec::new("file.saveAs", "Save As", "File", save_as).key("F12").params(r#"{"path": string}"#).pure(),
@@ -77,13 +80,18 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 fn new(s: &mut Session, v: &Value) -> CmdResult {
-    let doc = match p::str(v, "template").unwrap_or("blank") {
+    let mut doc = match p::str(v, "template").unwrap_or("blank") {
         "sample" => crate::sample::sample_document(),
         "letter" => crate::sample::letter(),
         "resume" => crate::sample::resume(),
         "report" => crate::sample::report(),
         _ => Document::new(),
     };
+    if p::str(v, "locale").is_some_and(|l| l.eq_ignore_ascii_case("nb-NO") || l.eq_ignore_ascii_case("nb")) {
+        doc.last_section.page_w = 21.0 * wordcraft_geom::PT_PER_CM;
+        doc.last_section.page_h = 29.7 * wordcraft_geom::PT_PER_CM;
+        doc.styles.default_chr.lang = Some("nb-NO".into());
+    }
     s.set_document(doc);
     s.path = None;
     sel_result(s)
