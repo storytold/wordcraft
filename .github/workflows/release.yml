@@ -323,6 +323,78 @@ jobs:
           path: dist/release/*
           if-no-files-found: error
 
+  linux-riscv64:
+    name: Linux riscv64
+    needs: version
+    # Cross-compiled on x86_64 (no hosted RISC-V runners) against the runner's own Ubuntu release
+    # from ports.ubuntu.com, so the binaries need that release's glibc (24.04: 2.39). 22.04's
+    # riscv64 ports lag its amd64 updates, which breaks the multiarch install. tar.gz only; the
+    # CLI is smoke-tested under QEMU. Ported from GridCraft's release.yml.
+    runs-on: ubuntu-24.04
+    # No `environment: release`: this job signs nothing, so it gets no release secrets.
+    env:
+      WORDCRAFT_VERSION: ${{ needs.version.outputs.version }}
+      WORDCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+    steps:
+      - uses: actions/checkout@v4
+      # Optional font input (docs: storytold/craft-fonts docs/integration.md); releases always embed it.
+      - name: Check out craft-fonts
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: storytold/craft-fonts
+          ref: 8dcdacd5153e64560d109541a47d806f26f048c0
+          path: craft-fonts
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: riscv64gc-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-linux-riscv64
+      - name: Apply version override
+        if: inputs.version != ''
+        run: cargo xtask version set "$WORDCRAFT_VERSION"
+      - name: Install cross-compilation dependencies
+        run: |
+          . /etc/os-release
+          sudo dpkg --add-architecture riscv64
+          # Pin the existing (archive.ubuntu.com) sources to amd64; riscv64 comes from ports.
+          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+            sudo sed -i '/^Types: deb/a Architectures: amd64' /etc/apt/sources.list.d/ubuntu.sources
+          fi
+          if [ -f /etc/apt/sources.list ]; then
+            sudo sed -i 's/^deb /deb [arch=amd64] /g' /etc/apt/sources.list
+            sudo sed -i 's/^deb-src /deb-src [arch=amd64] /g' /etc/apt/sources.list
+          fi
+          for suite in "$VERSION_CODENAME" "$VERSION_CODENAME-updates" "$VERSION_CODENAME-security"; do
+            echo "deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports $suite main universe restricted multiverse"
+          done | sudo tee /etc/apt/sources.list.d/riscv64.list
+          sudo apt-get update
+          # The Linux job's -dev packages, for riscv64.
+          sudo apt-get install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu libc6-dev-riscv64-cross libc6-dev:riscv64 qemu-user \
+            libxkbcommon-dev:riscv64 libwayland-dev:riscv64 libx11-dev:riscv64 libxrandr-dev:riscv64 \
+            libxi-dev:riscv64 libgl1-mesa-dev:riscv64 \
+            desktop-file-utils appstream
+      - name: Build and package (tar.gz)
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
+          CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER: riscv64-linux-gnu-gcc
+          PKG_CONFIG_SYSROOT_DIR: /
+          PKG_CONFIG_PATH: /usr/lib/riscv64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+          PKG_CONFIG_ALLOW_CROSS: "1"
+          CROSS_ARCH: riscv64
+          CROSS_TARGET: riscv64gc-unknown-linux-gnu
+          CROSS_COMPILE: riscv64-linux-gnu-
+          EMULATOR: qemu-riscv64
+          QEMU_LD_PREFIX: /usr/riscv64-linux-gnu
+        run: packaging/linux/package.sh --formats tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-linux-riscv64
+          path: dist/release/*.tar.gz
+          if-no-files-found: error
+
   freebsd:
     name: FreeBSD x86_64
     needs: version
@@ -377,7 +449,7 @@ jobs:
   release:
     name: Draft GitHub Release
     # Needs the signing jobs, which only run on `release`: a branch dry run never gets here.
-    needs: [version, macos, windows, linux, flatpak, freebsd, web]
+    needs: [version, macos, windows, linux, linux-riscv64, flatpak, freebsd, web]
     runs-on: ubuntu-latest
     environment: release
     permissions:
