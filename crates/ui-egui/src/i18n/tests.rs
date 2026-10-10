@@ -220,3 +220,13 @@ fn german_measures_in_centimetres_with_a_decimal_comma() {
     set_current(Lang::EN);
     assert_eq!(length_unit(), LengthUnit::INCHES);
 }
+
+#[test]
+fn short_dates_follow_the_language() {
+    set_current(lang("de"));
+    assert_eq!(short_date("2026-10-10T09:30:00Z"), "10.10.2026");
+    assert_eq!(short_date("garbage"), "garbage");
+    assert_eq!(short_date(""), "");
+    set_current(Lang::EN);
+    assert_eq!(short_date("2026-10-10T09:30:00Z"), "2026-10-10");
+}

@@ -71,15 +71,7 @@ pub fn template(name: &str, lang: Lang) -> Document {
 fn letter_date(lang: Lang) -> String {
     match lang {
         Lang::English => crate::cmd::insert::format_date("MMMM d, yyyy"),
-        Lang::German => {
-            const MONTHS: [&str; 12] =
-                ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
-            let today = crate::cmd::insert::format_date("d|M|yyyy");
-            let mut parts = today.split('|');
-            let (day, month, year) = (parts.next().unwrap_or("1"), parts.next().unwrap_or("1"), parts.next().unwrap_or("2026"));
-            let month = month.parse::<usize>().ok().and_then(|m| MONTHS.get(m.saturating_sub(1))).copied().unwrap_or("Januar");
-            format!("{day}. {month} {year}")
-        }
+        Lang::German => crate::cmd::insert::format_date_in("d. MMMM yyyy", Lang::German),
     }
 }
 

@@ -370,6 +370,29 @@ fn new_documents_follow_the_template_language() {
 }
 
 #[test]
+fn dates_follow_the_language() {
+    let mut s = s();
+    // English: 10/10/2026.
+    run(&mut s, "insert.dateTime", json!({}));
+    assert!(text(&s).contains('/'), "{}", text(&s));
+    // German, asked for or from the session: 10.10.2026, as German Word writes it.
+    run(&mut s, "file.new", json!({}));
+    run(&mut s, "insert.dateTime", json!({"language": "de"}));
+    let t = text(&s);
+    assert!(!t.contains('/') && t.matches('.').count() == 2, "{t}");
+    run(&mut s, "file.new", json!({}));
+    s.template_language = "de".into();
+    run(&mut s, "insert.dateTime", json!({"update": true}));
+    let t = text(&s);
+    assert!(t.matches('.').count() == 2, "{t}");
+    // A cover page dates itself `10. Oktober 2026`.
+    run(&mut s, "file.new", json!({}));
+    run(&mut s, "insert.coverPage", json!({}));
+    let months = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
+    assert!(months.iter().any(|m| text(&s).contains(&format!(". {m} "))), "{}", text(&s));
+}
+
+#[test]
 fn german_text_is_not_checked_against_the_english_word_list() {
     let mut s = s();
     run(&mut s, "file.new", json!({"template": "letter", "language": "de"}));

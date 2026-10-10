@@ -222,6 +222,17 @@ pub fn current() -> Lang {
     CURRENT.get()
 }
 
+/// The date part of an ISO timestamp (`2026-10-10T09:30:00Z`) as the current language writes a
+/// short date: `10.10.2026` in German; other languages keep `2026-10-10`.
+pub fn short_date(iso: &str) -> String {
+    let date = iso.get(..10).unwrap_or(iso);
+    let mut parts = date.split('-');
+    match (current().code(), parts.next(), parts.next(), parts.next()) {
+        ("de", Some(y), Some(m), Some(d)) if y.len() == 4 && m.len() == 2 && d.len() == 2 => format!("{d}.{m}.{y}"),
+        _ => date.to_string(),
+    }
+}
+
 /// Does `lang` have a catalog entry for this string? (English never does: it is the source.)
 pub fn has(lang: Lang, s: &str) -> bool {
     lang.catalog().plain(s).is_some()
