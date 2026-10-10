@@ -13,7 +13,7 @@ first (`gh pr list`), and update this file and the parity doc when a gap closes.
 |---|---|---|---|---|---|---|
 | 1 | **DOCX never tested on real-world files.** No corpus of files from Word, Google Docs, LibreOffice and Pages has been opened, rendered and round-tripped and compared with Word page by page | B | No corpus in the repo; `crates/docx/tests` are synthetic fixtures; "DOCX fidelity corpus: not started" since 2026-10-06 | Everyone: the files people receive are the files that break | 30–50 | [file-format-parity.md](file-format-parity.md) |
 | 2 | **Charts, SmartArt, OLE objects, ink and group shapes are dropped on open and lost on save, silently** | B | No `c:chart`, `dgm`, `wpg`, `w:object` handling in `crates/docx` | Business and academic documents lose content without warning | 10–15 to preserve and show fallback pictures; 45–70 to render and edit charts and SmartArt | [file-format-parity.md](file-format-parity.md) |
-| 3 | **Crashes and freezes in the field**: startup crash on Intel UHD Graphics (#170), freezes (#77, #59 Thai fonts, #31 font selector), no writes without admin on Windows 11 (#218), broken shape tool (#142), images can't be moved (#82) | B | 62 open issues, ~15 of them crashes, hangs or data-path failures | Anyone hit loses work or trust; the never-crash standard covers panics, not hangs or GPU driver faults | 20–30 | [target-app-parity.md](target-app-parity.md) (Stability) |
+| 3 | **Crashes and freezes in the field**: startup crash on Intel UHD Graphics (#170) (lag on GPUs without a DirectX 12 driver fixed, #316), freezes (#77, #59 Thai fonts, #31 font selector), no writes without admin on Windows 11 (#218), broken shape tool (#142), images can't be moved (#82) | B | 62 open issues, ~15 of them crashes, hangs or data-path failures | Anyone hit loses work or trust; the never-crash standard covers panics, not hangs or GPU driver faults | 20–30 | [target-app-parity.md](target-app-parity.md) (Stability) |
 | 4 | **Pagination differs from Word**: Aptos has no metric-matched substitute; columns don't balance; long footnotes don't continue; legacy compatibility options ignored; no page-by-page comparison harness | B | [layout-parity.md](layout-parity.md); [typing-parity.md](typing-parity.md) Known gaps | Page counts and line breaks differ, which matters for forms, legal and academic work | 30–50 + owner (font) | [layout-parity.md](layout-parity.md) |
 | 5 | **Formatting revisions, move tracking and content controls** are lost (`w:rPrChange`/`w:pPrChange` absent; `w:sdt` unwrapped) | B | Issue #41; source grep | Legal and editorial review workflows; templates with form controls | 12–18 | [file-format-parity.md](file-format-parity.md) |
 | 6 | **No native printing** on desktop: File › Print opens the PDF in the system viewer, which prints (#286); no print dialog of our own (printer, copies, ranges); web prints through the browser (#209) | B | `ui.print` → `apps/wordcraft/src/print.rs`; issue #15 | Everyone who prints | 5–8 | [hardware-parity.md](hardware-parity.md) |
@@ -39,7 +39,7 @@ first (`gh pr list`), and update this file and the parity doc when a gap closes.
 | 26 | **Minor formats**: Flat OPC XML, Word 2003 XML, MHT, Works/WordPerfect | | | Rare | 20–35 | [file-format-parity.md](file-format-parity.md) |
 | 27 | **View windows**: Side by Side, Synchronous Scrolling, Arrange All, Switch Windows | | [parity-checklist.md](parity-checklist.md) (View 25/29) | Comparing documents | 3–5 | [ui-parity.md](ui-parity.md) |
 | 28 | **Dictate** | | `tools.dictate` missing | Dictation users | 8–15 + owner (speech model) | [hardware-parity.md](hardware-parity.md) |
-| 29 | **Equations**: long display equations don't break across lines; ink equations | | #191 notes | Maths-heavy documents | 3–4 | [layout-parity.md](layout-parity.md) |
+| 29 | **Equations**: ink equations | | #191 notes; long display equations wrap at operators (#326) | Maths-heavy documents | 2–3 | [layout-parity.md](layout-parity.md) |
 
 **Beta needs #1–#7** (~150–230 h with the stability and layout work they imply): they are the
 blocking gaps, and closing them lifts file formats, layout, stability and UI enough to take the
@@ -64,6 +64,8 @@ The same gaps grouped the way the parity documents are, for agents working in on
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | trivial | #29: long display equations wrap across lines (#326) |
+| 2026-10-10 | trivial | #3: Windows lag on GPUs without a DirectX 12 driver fixed with an OpenGL fallback (#316) |
 | 2026-10-10 | trivial | #6: desktop File › Print opens the system PDF viewer (#286) |
 | 2026-10-10 | trivial | Table Properties dialog landed (#44); removed from the dialog-depth list |
 | 2026-10-10 | trivial | Merged main: landed features removed from the feature-gap list |

@@ -122,7 +122,8 @@ pub struct UiState {
     /// that follows ends a chord (Alt+click, Alt+drag column selection), not a keytip tap.
     #[serde(skip)]
     pub alt_chord_used: bool,
-    /// View › Switch Modes: show pages dark (white text on black), kept between runs.
+    /// View › Switch Modes: show pages dark (white text on black), kept between runs. Only the
+    /// pages: the interface follows [`UiState::theme`] (#312).
     pub dark_page: bool,
 }
 
@@ -183,7 +184,8 @@ pub struct WordApp {
     /// File ▸ Options: load the installed CJK fallback font if no embedded face covers it.
     pub(crate) want_system_cjk: bool,
     fonts_frames: u32,
-    applied_dark: Option<bool>,
+    /// The effective interface theme last installed in egui ([`theme::apply`]).
+    applied_theme: Option<theme::Appearance>,
     /// The desktop's light/dark choice, watched while the app runs (Linux has no winit answer).
     desktop_theme: desktop_theme::DesktopTheme,
     /// The last answer [`desktop_theme`] gave, so a frame that asks costs nothing.
@@ -257,7 +259,7 @@ impl WordApp {
             fonts_system_cjk: false,
             want_system_cjk: false,
             fonts_frames: 0,
-            applied_dark: None,
+            applied_theme: None,
             desktop_theme: desktop_theme::DesktopTheme::start(),
             desktop_dark: None,
             frame_ms: 0.0,
@@ -340,7 +342,7 @@ impl WordApp {
         {
             return r;
         }
-        let r = self.execute(id, params);
+        let r = self.execute_user(id, params);
         // Match Fields and Check for Errors show what they found.
         if let Ok(v) = &r
             && let Some(d) = dialogs::Dialog::report(id, v)
@@ -377,11 +379,23 @@ impl WordApp {
         if self.services.download.is_some() && matches!(id, "file.save" | "file.saveAs" | "file.exportPdf" | "file.exportPng") {
             let name = params.get("path").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| self.default_save_name());
             let name = if id == "file.exportPdf" && !name.ends_with(".pdf") { format!("{name}.pdf") } else { name };
+            // A save with a password encrypts this and later saves (`file.save`'s `password`).
+            if matches!(id, "file.save" | "file.saveAs")
+                && let Some(pw) = params.get("password").filter(|v| !v.is_null())
+            {
+                if !wordcraft_engine::io::can_encrypt(&name) || pw.as_str().is_none_or(str::is_empty) {
+                    return Err("only Word documents (.docx, .docm, .dotx, .dotm) can be saved with a password, and it can't be empty".into());
+                }
+                self.session.run("file.encrypt", &json!({"password": pw})).map_err(|e| e.to_string())?;
+            }
             // A save is a save, download or not: advance the revision and modified stamp (#262).
             if matches!(id, "file.save" | "file.saveAs") {
                 self.session.stamp_save();
             }
-            let bytes = wordcraft_engine::io::save_bytes(&name, &self.session.doc)?;
+            // Word documents are encrypted with the document's password, if it has one.
+            let password =
+                if matches!(id, "file.save" | "file.saveAs") { self.session.password.as_ref().map(wordcraft_engine::Password::as_str) } else { None };
+            let bytes = wordcraft_engine::io::save_bytes_with(&name, &self.session.doc, password)?;
             if let Some(d) = &self.services.download
                 && let Err(e) = d(&name, &bytes)
             {
@@ -448,7 +462,23 @@ impl WordApp {
         if !go {
             return Ok(json!({"done": false}));
         }
-        self.execute(&then, params).map(|r| json!({"done": true, "result": r}))
+        self.execute_user(&then, params).map(|r| json!({"done": true, "result": r}))
+    }
+
+    /// [`WordApp::execute`] for something the user did: a document that turns out to be
+    /// password-protected asks for the password (and opens with it) instead of failing (#55).
+    pub(crate) fn execute_user(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        let retry = (id == "file.open").then(|| params.clone());
+        let r = self.execute(id, params);
+        if let (Err(e), Some(params)) = (&r, retry)
+            && wordcraft_engine::io::needs_password(e)
+        {
+            let path = params.get("path").and_then(Value::as_str).unwrap_or("");
+            let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
+            self.dialog = Some(dialogs::Dialog::Password { name, params, password: Default::default(), message: String::new() });
+            return Ok(json!({"pending": "password"}));
+        }
+        r
     }
 
     /// Save before New/Open/Close (and the mailings that replace the document): true once the
@@ -753,10 +783,21 @@ impl WordApp {
         if let Some(answer) = self.desktop_theme.take_change() {
             self.desktop_dark = Some(answer);
         }
-        let dark = self.ui.theme.is_dark(system_theme(ctx, self.desktop_dark)) || self.session.view.dark_mode;
-        if self.applied_dark != Some(dark) {
-            theme::apply(ctx, &if dark { theme::Tokens::dark() } else { theme::Tokens::light() });
-            self.applied_dark = Some(dark);
+        // Both palettes are installed and egui picks one: with `System` it follows an OS appearance
+        // change live (winit reports it and repaints, #311). Where winit is silent (Linux) the
+        // desktop portal's answer fills in instead. The interface follows the Interface theme
+        // setting alone; Dark page only changes how pages are drawn (#312).
+        let effective = match self.ui.theme {
+            theme::Appearance::System if ctx.system_theme().is_none() => match self.desktop_dark {
+                Some(true) => theme::Appearance::Dark,
+                Some(false) => theme::Appearance::Light,
+                None => theme::Appearance::System,
+            },
+            other => other,
+        };
+        if self.applied_theme != Some(effective) {
+            theme::apply(ctx, effective);
+            self.applied_theme = Some(effective);
         }
         if self.ctx.is_none() {
             self.ctx = Some(ctx.clone());
@@ -1067,6 +1108,8 @@ fn input_dialog(id: &str, params: &Value) -> Option<&'static str> {
         "mailings.findRecipient" if !has("text") => Some("findRecipient"),
         // Table Properties without settings shows the dialog (with settings it applies them).
         "table.properties" if params.as_object().is_none_or(|m| m.is_empty()) => Some("tableProperties"),
+        // `null` is an answer here: it removes the password.
+        "file.encrypt" if params.get("password").is_none() => Some("encryptPassword"),
         _ => None,
     }
 }
@@ -1424,6 +1467,34 @@ mod tests {
         a.run("file.new", json!({"template": "letter"})).unwrap();
         assert_eq!(prompt(&a), None);
         assert!(!body_text(&a).trim().is_empty());
+    }
+
+    /// #55: a password-protected document asks for its password (after Save Changes) instead of
+    /// opening blank; scripts get the error instead of a dialog; Encrypt with Password asks for one.
+    #[test]
+    fn password_protected_documents_ask_for_the_password() {
+        let dir = scratch("password");
+        let path = dir.join("locked.docx");
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Locked away"));
+        s.run("file.save", &json!({"path": path.to_string_lossy(), "password": "sesame"})).unwrap();
+
+        let mut a = typed();
+        assert!(a.execute("file.open", json!({"path": path.to_string_lossy()})).is_err(), "a script gets the error");
+        assert_eq!(prompt(&a), None);
+        a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
+        a.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
+        assert_eq!(prompt(&a), Some("password"));
+        assert!(body_text(&a).contains(UNSAVED), "nothing is replaced until the password fits");
+        let state = serde_json::to_string(&a.dialog).unwrap();
+        assert!(state.contains("locked.docx") && !state.contains("sesame"));
+
+        let mut b = app();
+        b.run("file.encrypt", json!({})).unwrap();
+        assert_eq!(prompt(&b), Some("encryptPassword"));
+        b.dialog = None;
+        b.run("file.encrypt", json!({"password": null})).unwrap();
+        assert_eq!(prompt(&b), None, "null removes the password without asking");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Open (after the file is picked), recent files and dropped files all go through `file.open`.
@@ -2177,6 +2248,65 @@ mod tests {
         assert_eq!(a.run("ui.theme", json!({"value": "dark"})).unwrap()["theme"], "dark");
         assert_eq!(a.run("ui.dark", json!({})).unwrap()["theme"], "light", "ui.dark toggles the manual choice");
         assert_eq!(a.run("ui.theme", json!({})).unwrap()["theme"], "light");
+    }
+
+    /// One app frame with the OS appearance egui reports; returns the window commands it sent.
+    fn theme_frame(ctx: &egui::Context, a: &mut WordApp, os: Option<egui::Theme>) -> Vec<egui::ViewportCommand> {
+        let input = egui::RawInput { system_theme: os, ..Default::default() };
+        let mut out = ctx.run_ui(input, |ui| a.logic(ui.ctx()));
+        let commands = out.viewport_output.remove(&egui::ViewportId::ROOT).map(|v| v.commands).unwrap_or_default();
+        out.drop_without_applying_deltas();
+        commands
+    }
+
+    /// #311: with System, egui's theme preference stays System, so the native window is never
+    /// pinned to a concrete appearance (macOS would stop reporting OS changes), and our palette
+    /// follows each OS appearance egui reports.
+    #[test]
+    fn system_theme_follows_the_os_without_pinning_the_window() {
+        use egui::{SystemTheme, Theme, ThemePreference, ViewportCommand};
+        let ctx = egui::Context::default();
+        let mut a = app();
+        a.run("ui.theme", json!({"value": "system"})).unwrap();
+        let mut sent = Vec::new();
+        for (os, dark) in [(Some(Theme::Light), false), (Some(Theme::Dark), true), (Some(Theme::Light), false), (None, false)] {
+            sent.extend(theme_frame(&ctx, &mut a, os));
+            assert_eq!(ctx.options(|o| o.theme_preference), ThemePreference::System, "OS at {os:?}");
+            let want = if dark { theme::Tokens::dark() } else { theme::Tokens::light() };
+            assert_eq!(theme::Tokens::get(&ctx).dark, dark, "OS at {os:?}");
+            // Our palette, not egui's default style for that theme.
+            assert_eq!(ctx.global_style().visuals.panel_fill, want.ribbon, "OS at {os:?}");
+            assert_eq!(a.ui_is_dark(), dark, "OS at {os:?}");
+        }
+        assert!(sent.contains(&ViewportCommand::SetTheme(SystemTheme::SystemDefault)), "{sent:?}");
+        assert!(!sent.iter().any(|c| matches!(c, ViewportCommand::SetTheme(SystemTheme::Light | SystemTheme::Dark))), "{sent:?}");
+        // A manual choice pins the window, whatever the OS says.
+        a.run("ui.theme", json!({"value": "dark"})).unwrap();
+        let sent = theme_frame(&ctx, &mut a, Some(Theme::Light));
+        assert!(sent.contains(&ViewportCommand::SetTheme(SystemTheme::Dark)), "{sent:?}");
+        assert!(theme::Tokens::get(&ctx).dark);
+    }
+
+    /// #312: Dark page darkens only the pages; the interface keeps following its own setting.
+    #[test]
+    fn dark_page_leaves_the_interface_theme_alone() {
+        use egui::Theme::{Dark, Light};
+        for (setting, os, dark) in [
+            ("system", Some(Light), false),
+            ("system", None, false),
+            ("light", Some(Dark), false),
+            ("system", Some(Dark), true),
+            ("dark", Some(Light), true),
+        ] {
+            let ctx = egui::Context::default();
+            let mut a = app();
+            a.run("ui.theme", json!({"value": setting})).unwrap();
+            a.run("view.darkMode", json!({"value": true})).unwrap();
+            theme_frame(&ctx, &mut a, os);
+            assert!(a.session.view.dark_mode, "{setting} with the OS at {os:?}");
+            assert_eq!(theme::Tokens::get(&ctx).dark, dark, "{setting} with the OS at {os:?}");
+            assert_eq!(a.run("ui.theme", json!({})).unwrap()["dark"], dark, "{setting} with the OS at {os:?}");
+        }
     }
 
     #[test]

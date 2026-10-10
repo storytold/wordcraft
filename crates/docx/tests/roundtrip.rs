@@ -136,11 +136,18 @@ fn every_para_prop_round_trips() {
         suppress_line_numbers: Some(true),
         bidi: Some(false),
         drop_cap: None,
+        kinsoku: Some(false),
+        word_wrap: Some(false),
+        overflow_punct: Some(false),
+        top_line_punct: Some(true),
+        auto_space_de: Some(false),
+        auto_space_dn: Some(true),
     };
     let variants = [
         ParaProps { line_spacing: Some(LineSpacing::AtLeast(14.0)), indent_first: Some(24.0), align: Some(Align::Center), ..Default::default() },
         ParaProps { line_spacing: Some(LineSpacing::Exactly(20.0)), align: Some(Align::Right), ..Default::default() },
         ParaProps { align: Some(Align::Distribute), ..Default::default() },
+        ParaProps { kinsoku: Some(true), word_wrap: Some(true), auto_space_dn: Some(false), ..Default::default() },
         ParaProps::default(),
     ];
     let mut ps = vec![Paragraph::with_text("main", CharProps::default())];
@@ -678,6 +685,7 @@ fn toc_field_skips_nested_stories() {
             stroke_width: 0.0,
             float: Float::default(),
             story: Some(story),
+            effects: Default::default(),
         }
     };
     let mut head = Paragraph::with_text("Contents", CharProps::default()).styled("TOCHeading");
@@ -799,6 +807,7 @@ fn shapes_textboxes_equations_dropcaps_round_trip() {
         stroke_width: 1.0,
         float: Float { wrap: Wrap::Square, h_rel: Anchor::Margin, v_rel: Anchor::Paragraph, x: 10.0, y: 20.0, dist: 0.0, ..Default::default() },
         story: Some(story),
+        effects: Default::default(),
     };
     let star = InlineObject::Shape {
         kind: ShapeKind::Star,
@@ -809,6 +818,7 @@ fn shapes_textboxes_equations_dropcaps_round_trip() {
         stroke_width: 0.0,
         float: Float::default(),
         story: None,
+        effects: Default::default(),
     };
     let eq = InlineObject::Equation { linear: "x=(-b±√(b^2-4ac))/2a".into(), display: false, math: Default::default() };
     let mut p = Paragraph::with_text("shapes ", CharProps::default());
@@ -824,7 +834,7 @@ fn shapes_textboxes_equations_dropcaps_round_trip() {
     let got = paras(&r);
     assert_eq!(got[0].objects.len(), 3);
     match &got[0].objects[0] {
-        InlineObject::Shape { kind, w, h, fill, stroke, stroke_width, float, story } => {
+        InlineObject::Shape { kind, w, h, fill, stroke, stroke_width, float, story, .. } => {
             assert_eq!(
                 (*kind, *w, *h, *fill, *stroke, *stroke_width),
                 (ShapeKind::TextBox, 144.0, 72.0, Some(Rgb(255, 255, 200)), Some(Rgb(0, 0, 0)), 1.0)
@@ -846,6 +856,82 @@ fn shapes_textboxes_equations_dropcaps_round_trip() {
     assert_eq!(got.len(), 2, "drop cap paragraph merges back");
     assert_eq!(got[1].text, dc.text);
     assert_eq!(got[1].props, dc.props);
+}
+
+/// A group of a picture, a shape and a text box (`wpg:wgp`) comes back as it was saved: its
+/// size, placement and members' space, and each member's offset, size and content.
+#[test]
+fn groups_round_trip() {
+    use wordcraft_doc::para::GroupChild;
+    let mut d = Document::new();
+    let key = d.add_media(tiny_png(), "png");
+    let story = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("In the group", CharProps::default()))]);
+    let pic = InlineObject::Image { media: key, w: 60.0, h: 40.0, alt: "A picture".into(), float: Float::default(), crop: [0.0; 4] };
+    let oval = InlineObject::Shape {
+        kind: ShapeKind::Ellipse,
+        w: 50.0,
+        h: 30.0,
+        fill: Some(Rgb(200, 0, 0)),
+        stroke: None,
+        stroke_width: 0.0,
+        float: Float::default(),
+        story: None,
+        // A member's shape effects (#275) come back too.
+        effects: wordcraft_doc::effects::ShapeEffects {
+            shadow: Some(wordcraft_doc::effects::Shadow { color: Rgb(0x20, 0x30, 0x40), transparency: 60.0, blur: 4.0, distance: 3.0, angle: 135.0 }),
+            glow: None,
+            soft_edge: Some(2.5),
+        },
+    };
+    let tb = InlineObject::Shape {
+        kind: ShapeKind::TextBox,
+        w: 100.0,
+        h: 40.0,
+        fill: Some(Rgb(255, 255, 255)),
+        stroke: Some(Rgb(0, 0, 0)),
+        stroke_width: 0.75,
+        float: Float::default(),
+        story: Some(story),
+        effects: Default::default(),
+    };
+    let float = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 20.0, y: 10.0, dist: 9.0, ..Default::default() };
+    let group = InlineObject::Group {
+        w: 240.0,
+        h: 120.0,
+        float,
+        ch_w: 200.0,
+        ch_h: 100.0,
+        children: vec![
+            GroupChild { x: 0.0, y: 0.0, obj: pic },
+            GroupChild { x: 150.0, y: 10.0, obj: oval.clone() },
+            GroupChild { x: 50.0, y: 60.0, obj: tb },
+        ],
+    };
+    let mut p = Paragraph::with_text("grouped ", CharProps::default());
+    let end = p.len();
+    p.insert_object(end, group, &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+    let r = rt(&d);
+    let got = paras(&r);
+    let InlineObject::Group { w, h, float: f, ch_w, ch_h, children } = &got[0].objects[0] else { panic!("{:?}", got[0].objects) };
+    assert_eq!((*w, *h, *ch_w, *ch_h), (240.0, 120.0, 200.0, 100.0));
+    assert_eq!(*f, float);
+    assert_eq!(children.iter().map(|c| (c.x, c.y)).collect::<Vec<_>>(), [(0.0, 0.0), (150.0, 10.0), (50.0, 60.0)]);
+    match &children[0].obj {
+        InlineObject::Image { media, w, h, alt, .. } => {
+            assert_eq!((*w, *h, alt.as_str()), (60.0, 40.0, "A picture"));
+            assert_eq!(r.media.get(media).map(|m| m.as_slice()), Some(tiny_png().as_slice()));
+        }
+        o => panic!("{o:?}"),
+    }
+    assert_eq!(children[1].obj, oval);
+    match &children[2].obj {
+        InlineObject::Shape { kind, w, h, story, .. } => {
+            assert_eq!((*kind, *w, *h), (ShapeKind::TextBox, 100.0, 40.0));
+            assert_eq!(part_text(&r, *story), "In the group");
+        }
+        o => panic!("{o:?}"),
+    }
 }
 
 #[test]
@@ -876,6 +962,12 @@ fn settings_core_theme_round_trip() {
     d.settings.protection = Some("readOnly".into());
     d.settings.grid_h = 5.5;
     d.settings.grid_v = 18.0;
+    d.settings.math = Some(wordcraft_doc::math::MathProps {
+        brk_bin: wordcraft_doc::math::BrkBin::Repeat,
+        brk_bin_sub: wordcraft_doc::math::BrkBinSub::PlusMinus,
+        wrap_indent: 36.0,
+        wrap_right: false,
+    });
     d.core.title = "Title & <stuff>".into();
     d.core.subject = "Subj".into();
     d.core.creator = "Me".into();
@@ -1027,6 +1119,7 @@ fn self_showing_text_box_saves_bounded() {
         stroke_width: 0.0,
         float: Float::default(),
         story: Some(id),
+        effects: Default::default(),
     };
     for _ in 0..30 {
         d.insert_object(
@@ -1106,4 +1199,72 @@ fn list_level_overrides_round_trip() {
     let mut c = Counters::default();
     assert_eq!(c.next_label(&back.numbering, restart, 0).unwrap().0, "1.");
     assert_eq!(c.next_label(&back.numbering, restart, 1).unwrap().0, "1.01");
+}
+
+/// Shape effects (#275): `a:effectLst` with an outer shadow, a glow and soft edges round-trips,
+/// and the effect extent leaves room for them.
+#[test]
+fn shape_effects_round_trip() {
+    use wordcraft_doc::effects::{Glow, Shadow, ShapeEffects};
+    let effects = ShapeEffects {
+        shadow: Some(Shadow { color: Rgb(0x20, 0x30, 0x40), transparency: 60.0, blur: 4.0, distance: 3.0, angle: 135.0 }),
+        glow: Some(Glow { color: Rgb(0xC0, 0x50, 0x10), size: 8.0, transparency: 40.0 }),
+        soft_edge: Some(2.5),
+    };
+    let shape = InlineObject::Shape {
+        kind: ShapeKind::RoundedRectangle,
+        w: 100.0,
+        h: 50.0,
+        fill: Some(Rgb(0x15, 0x60, 0x82)),
+        stroke: None,
+        stroke_width: 0.0,
+        float: Float::default(),
+        story: None,
+        effects,
+    };
+    let mut p = Paragraph::with_text("x", CharProps::default());
+    p.insert_object(1, shape, &CharProps::default()).unwrap();
+    let bytes = wordcraft_docx::write(&doc_with(vec![p])).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(
+        xml.contains(
+            r#"<a:outerShdw blurRad="50800" dist="38100" dir="8100000" algn="tr" rotWithShape="0"><a:srgbClr val="203040"><a:alpha val="40000"/>"#
+        ),
+        "{xml}"
+    );
+    assert!(xml.contains(r#"<a:glow rad="101600"><a:srgbClr val="C05010"><a:alpha val="60000"/>"#), "{xml}");
+    assert!(xml.contains(r#"<a:softEdge rad="31750"/>"#), "{xml}");
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    match paras(&r)[0].objects.first() {
+        Some(InlineObject::Shape { effects: got, float, .. }) => {
+            assert_eq!(*got, effects);
+            assert_eq!(float.effect_extent(), effects.extent());
+        }
+        o => panic!("{o:?}"),
+    }
+}
+
+#[test]
+fn equation_manual_breaks_round_trip() {
+    use wordcraft_doc::math::{MNode, MRun, Math};
+    let nodes = vec![
+        MNode::Run(MRun::new("a=b")),
+        MNode::Run(MRun { brk: Some(1), ..MRun::new("+c") }),
+        MNode::Run(MRun { brk: Some(0), ..MRun::new("+d") }),
+    ];
+    let mut d = Document::new();
+    let math = Math { nodes: nodes.clone(), ..Default::default() };
+    let mut p = Paragraph::with_text("", CharProps::default());
+    p.insert_object(0, InlineObject::Equation { linear: "a=b+c+d".into(), display: true, math }, &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+    let r = rt(&d);
+    let got = paras(&r).iter().flat_map(|p| p.objects.iter()).find_map(|o| match o {
+        InlineObject::Equation { math, .. } => Some(math.nodes.clone()),
+        _ => None,
+    });
+    assert_eq!(got, Some(nodes));
+    // Word's own settings round-trip; a document without them gets none.
+    assert_eq!(r.settings.math, None);
 }

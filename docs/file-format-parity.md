@@ -60,7 +60,7 @@ Measured by grepping `crates/docx/src/read` and `src/write` for the OOXML elemen
 | Group shapes (`wpg:`), drawing canvas | ❌ | ❌ | Dropped |
 | VML (`w:pict`, `v:shape`, `v:textbox`) | 🟡 | ❌ | Pictures and text boxes, best effort (#242) |
 | Charts (`c:chart`), SmartArt (`dgm`), ink, 3D models, OLE objects (`w:object`) | ❌ | ❌ | Dropped on read, not preserved on save. A document with a chart loses it silently |
-| Equations (OMML `m:oMath`) | ✅ | ✅ | #191 |
+| Equations (OMML `m:oMath`) | ✅ | ✅ | #191; manual breaks (`m:brk`) and the settings' `m:mathPr` wrapping options (#326) |
 | Themes, font table, settings, compatibility mode | ✅ | ✅ | Embedded fonts (`w:embedRegular`) not read |
 | Custom XML parts, document properties, bibliography sources | 🟡 | 🟡 | Custom properties round-trip; bibliography sources pending (#169) |
 | Ruby, `w:eastAsianLayout`, `w:fitText`, document grid (`w:docGrid`) | ❌ | ❌ | East Asian layout |
@@ -80,5 +80,6 @@ Measured by grepping `crates/docx/src/read` and `src/write` for the OOXML elemen
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | trivial | Equation breaks and `m:mathPr` wrapping options round-trip (#326) |
 | 2026-10-10 | trivial | Custom table styles round-trip (#256 merged) |
 | 2026-10-10 | major | First version: Word's full format list, read/write status, DOCX element coverage from the source, fidelity and hours |
