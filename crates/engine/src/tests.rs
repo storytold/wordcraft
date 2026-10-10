@@ -487,6 +487,27 @@ fn track_changes_and_accept() {
 }
 
 #[test]
+fn no_markup_view_lays_out_the_final_text() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "original"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "select.text", json!({"text": "orig"}));
+    run(&mut s, "text.delete", json!({}));
+    let gap = |s: &mut Session| {
+        let l = s.layout();
+        let x = |off| l.caret(&Pos::body(0, off)).map(|c| c.x).unwrap_or(f32::NAN);
+        x(4) - x(0)
+    };
+    assert!(gap(&mut s) > 5.0, "markup shows the deletion");
+    run(&mut s, "review.markup", json!({"value": "noMarkup"}));
+    assert!(gap(&mut s).abs() < 0.01, "No Markup leaves it out");
+    run(&mut s, "review.showMarkup", json!({"value": true}));
+    assert!(gap(&mut s) > 5.0);
+    run(&mut s, "review.showMarkup", json!({"value": false}));
+    assert!(gap(&mut s).abs() < 0.01);
+}
+
+#[test]
 fn replace_all_is_tracked() {
     let mut s = s();
     let original = "We walked towards the light, then towards home.";

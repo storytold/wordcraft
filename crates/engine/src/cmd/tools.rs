@@ -372,6 +372,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"lang": "en-US|en-GB|fr-FR|…", "noProof"?: bool}"#),
         CommandSpec::new("review.showMarkup", "Show Markup", "Review › Tracking", |s, v| {
             s.view.show_markup = p::bool(v, "value").unwrap_or(!s.view.show_markup);
+            s.relayout();
             Ok(json!({"value": s.view.show_markup}))
         })
         .pure(),

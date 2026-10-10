@@ -138,6 +138,9 @@ pub struct ParaLayout {
     pub drop_cap: Option<(usize, u8, f32)>,
     /// Clusters after which the line may break with a hyphen (soft hyphens, auto hyphenation), sorted.
     pub hyph_after: Vec<u32>,
+    /// Byte ranges of the text laid out as nothing ([`left_out`]): hidden text that is not shown,
+    /// tracked deletions in the final text. Resolved as laid out, table formatting included.
+    pub left_out: Vec<std::ops::Range<usize>>,
     /// The text drawn by clusters that stand for an object (field results, note numbers,
     /// equations) rather than for the paragraph's own text, by cluster index, sorted.
     pub shown: Vec<(usize, String)>,
@@ -151,6 +154,8 @@ pub struct ParaEnv<'a> {
     pub label: Option<(String, Level)>,
     pub fields: &'a FieldCtx,
     pub show_hidden: bool,
+    /// Leave tracked deletions out, like hidden text (the final, "No Markup" text).
+    pub hide_deleted: bool,
     /// Extra style applied to every run (table style conditional formatting), under direct formatting.
     pub table_chr: Option<&'a CharProps>,
     pub proofing: bool,
@@ -170,14 +175,11 @@ pub struct Exclusion {
     pub top_bottom: bool,
 }
 
-fn style_key(rc: &ResolvedChar) -> String {
-    format!("{}|{}|{}|{}|{}", rc.font, rc.size, rc.bold, rc.italic, rc.vert_align as u8)
-}
-
 struct Builder<'a> {
     env: &'a ParaEnv<'a>,
     styles: Vec<StyleRun>,
-    style_index: std::collections::HashMap<(String, u32, bool), u16>,
+    /// Hash of a style's format → (index in `styles`, small caps), see `style`.
+    style_index: std::collections::HashMap<u64, Vec<(u16, bool)>>,
     glyphs: Vec<Glyph>,
     clusters: Vec<Cluster>,
     /// Text drawn by clusters that stand for an object, by cluster index (see `ParaLayout::shown`).
@@ -189,14 +191,28 @@ impl<'a> Builder<'a> {
     fn style(&mut self, rc: &Arc<ResolvedChar>, face_override: Option<FaceRef>, small: bool) -> u16 {
         let r = wordcraft_fonts::word::resolve(&rc.font, rc.bold, rc.italic);
         let face = face_override.unwrap_or(r.face);
-        let key = (
-            format!("{}|{:?}|{}|{}", style_key(rc), rc.color, rc.underline as u8, small),
-            face.id(),
-            rc.strike || rc.double_strike || rc.link.is_some(),
-        );
-        let key = (format!("{}|{:?}|{:?}|{:?}|{:?}|{}|{:?}", key.0, rc.highlight, rc.shading, rc.ins, rc.del, rc.hidden, rc.border), key.1, key.2);
-        if let Some(i) = self.style_index.get(&key) {
-            return *i;
+        // The display list reads every run's format (link target, strike kind, underline colour,
+        // baseline shift…) from its StyleRun, so runs share one only when their formats are equal.
+        // Keyed by a hash of the commonly varying fields (no allocation: this runs for every shaped
+        // piece), then confirmed by comparing whole formats within the bucket.
+        let key = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            (face.id(), small, &rc.font, rc.size.to_bits(), rc.bold, rc.italic, rc.color, rc.highlight, rc.shading).hash(&mut h);
+            (rc.underline_color, rc.strike, rc.double_strike, &rc.link, rc.ins, rc.del, rc.hidden).hash(&mut h);
+            h.finish()
+        };
+        let bucket = self.style_index.entry(key).or_default();
+        // Formats that never compare equal (a NaN from a hostile file) get their own styles; a capped
+        // scan keeps such a bucket from turning quadratic.
+        for &(i, s) in bucket.iter().rev().take(64) {
+            if s == small
+                && let Some(st) = self.styles.get(i as usize)
+                && st.face.id() == face.id()
+                && (Arc::ptr_eq(&st.rc, rc) || *st.rc == **rc)
+            {
+                return i;
+            }
         }
         let size = rc.draw_size() * if small { 0.8 } else { 1.0 };
         let (a, d) = wordcraft_fonts::word::line_metrics(&face);
@@ -213,7 +229,7 @@ impl<'a> Builder<'a> {
         };
         let i = self.styles.len().min(u16::MAX as usize) as u16;
         self.styles.push(st);
-        self.style_index.insert(key, i);
+        self.style_index.entry(key).or_default().push((i, small));
         i
     }
 
@@ -336,6 +352,12 @@ impl<'a> Builder<'a> {
     }
 }
 
+/// Whether text with this formatting is left out of the layout: hidden text unless it is shown, and
+/// tracked deletions in the final text. It takes no room, draws nothing and is no place to break.
+pub(crate) fn left_out(rc: &ResolvedChar, show_hidden: bool, hide_deleted: bool) -> bool {
+    (rc.hidden && !show_hidden) || (rc.del.is_some() && hide_deleted)
+}
+
 /// Lay out one paragraph.
 pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let doc = env.doc;
@@ -372,15 +394,33 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         .filter(|c| !matches!(*c, '\t' | LINE_BREAK | PAGE_BREAK | COLUMN_BREAK | OBJ | '\r' | ' '))
         .filter(|c| p.text.len() > c.len_utf8());
     let mut drop_cap = None;
+    // The byte ranges of runs left out of the layout, in order, adjacent runs merged.
+    let mut left: Vec<std::ops::Range<usize>> = Vec::new();
     for (range, props) in p.run_ranges() {
         let rc = resolve(props);
         let Some(text) = p.text.get(range.clone()) else { continue };
-        if rc.hidden && !b.env.show_hidden {
+        if left_out(&rc, b.env.show_hidden, b.env.hide_deleted) {
+            match left.last_mut() {
+                Some(last) if last.end == range.start => last.end = range.end,
+                _ => left.push(range.clone()),
+            }
             let si = b.style(&rc, None, false);
             let g = b.glyphs.len() as u32;
+            // Word still prints the note of a hidden reference mark (and numbers it); a deleted
+            // reference is gone from the final text, note and all.
+            let keeps_notes = !(rc.del.is_some() && b.env.hide_deleted);
             for (i, c) in text.char_indices() {
+                let mut note = None;
                 if c == OBJ {
+                    if let Some(InlineObject::NoteRef { id, .. }) = p.objects.get(obj_index)
+                        && keeps_notes
+                    {
+                        note = Some(*id);
+                    }
                     obj_index += 1;
+                }
+                if let Some(id) = note {
+                    notes.push((b.clusters.len(), id));
                 }
                 b.clusters.push(Cluster {
                     start: range.start + i,
@@ -492,15 +532,41 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
             b.shape(s, range.start + seg, &rc, None);
         }
     }
-    // Break opportunities.
+    // Break opportunities and hyphenation points come from the text as laid out: hidden text that is
+    // not shown and, without markup, tracked deletions are left out, so a space or soft hyphen there
+    // is no place to break, and words are hyphenated as they read.
+    // The text and, for each char of it, its end there and in `p.text`.
+    let (text, ends): (std::borrow::Cow<str>, Vec<(usize, usize)>) = if left.is_empty() {
+        (p.text.as_str().into(), Vec::new())
+    } else {
+        let (mut text, mut ends) = (String::new(), Vec::new());
+        let mut next = left.iter().peekable();
+        for (i, c) in p.text.char_indices() {
+            // `left` is in order: skip the ranges that end here, then is `i` in the next one?
+            while next.next_if(|r| r.end <= i).is_some() {}
+            if next.peek().is_some_and(|r| r.start <= i) {
+                continue;
+            }
+            text.push(c);
+            ends.push((text.len(), i + c.len_utf8()));
+        }
+        (text.into(), ends)
+    };
+    // The end of a char in `text` → the same place in `p.text`.
+    let to_para = |i: usize| -> Option<usize> {
+        if left.is_empty() { Some(i) } else { ends.binary_search_by_key(&i, |e| e.0).ok().and_then(|k| ends.get(k)).map(|e| e.1) }
+    };
     let mut opps = std::collections::HashSet::new();
-    for (i, o) in unicode_linebreak::linebreaks(&p.text) {
+    for (i, o) in unicode_linebreak::linebreaks(&text) {
         // Word keeps "and/or" and web addresses whole: no break right after a slash (a word
         // too long for the line still breaks anywhere).
         let after_slash =
-            p.text.get(..i).is_some_and(|t| t.ends_with('/')) && p.text.get(i..).and_then(|t| t.chars().next()).is_some_and(char::is_alphanumeric);
-        if (o == unicode_linebreak::BreakOpportunity::Allowed || i < p.text.len()) && !after_slash {
-            opps.insert(i);
+            text.get(..i).is_some_and(|t| t.ends_with('/')) && text.get(i..).and_then(|t| t.chars().next()).is_some_and(char::is_alphanumeric);
+        if (o == unicode_linebreak::BreakOpportunity::Allowed || i < text.len())
+            && !after_slash
+            && let Some(end) = to_para(i)
+        {
+            opps.insert(end);
         }
     }
     for c in &mut b.clusters {
@@ -555,8 +621,10 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         issues: if env.proofing { proof_issues(p) } else { Vec::new() },
         drop_cap,
         hyph_after: Vec::new(),
+        left_out: Vec::new(),
     };
-    pl.hyph_after = hyphenation_points(p, &pl, env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens);
+    pl.hyph_after = hyphenation_points(&text, to_para, &pl, env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens);
+    pl.left_out = left;
     for k in pl.hyph_after.clone() {
         if let Some(c) = pl.clusters.get_mut(k as usize) {
             c.break_after = true;
@@ -1076,13 +1144,14 @@ fn hyphen_glyph(pl: &ParaLayout, style: u16, cache: &mut Vec<(u16, u32, f32)>) -
 }
 
 /// Clusters after which a line may end with a hyphen: soft hyphens always, and dictionary or
-/// pattern hyphenation points of each word when automatic hyphenation is on.
-fn hyphenation_points(p: &Paragraph, pl: &ParaLayout, auto: bool) -> Vec<u32> {
-    let mut bytes: Vec<usize> = p.text.char_indices().filter(|(_, c)| *c == SOFT_HYPHEN).map(|(i, c)| i + c.len_utf8()).collect();
+/// pattern hyphenation points of each word when automatic hyphenation is on. Both are found in
+/// `text`, the paragraph as laid out (without what the layout leaves out, [`left_out`]), and
+/// `to_para` maps the end of a char there to the paragraph's text.
+fn hyphenation_points(text: &str, to_para: impl Fn(usize) -> Option<usize>, pl: &ParaLayout, auto: bool) -> Vec<u32> {
+    let mut bytes: Vec<usize> = text.char_indices().filter(|(_, c)| *c == SOFT_HYPHEN).map(|(i, c)| i + c.len_utf8()).collect();
     if auto {
         let lim = wordcraft_proof::hyphen::Limits::default();
         let mut start: Option<usize> = None;
-        let text = &p.text;
         for (i, c) in text.char_indices().chain(std::iter::once((text.len(), ' '))) {
             let word_char = c.is_alphabetic() || c == '\'' || c == '\u{2019}';
             match (start, word_char) {
@@ -1104,6 +1173,7 @@ fn hyphenation_points(p: &Paragraph, pl: &ParaLayout, auto: bool) -> Vec<u32> {
             }
         }
     }
+    let mut bytes: Vec<usize> = bytes.into_iter().filter_map(to_para).collect();
     if bytes.is_empty() {
         return Vec::new();
     }
