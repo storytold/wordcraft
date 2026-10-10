@@ -71,6 +71,8 @@ pub struct UiState {
     pub window: Option<window_geometry::WindowGeometry>,
     /// Interface language: `auto` (follow the system) or a code from [`i18n::LANGUAGES`].
     pub language: String,
+    /// View › Switch Modes: show pages dark (white text on black), kept between runs.
+    pub dark_page: bool,
 }
 
 impl Default for UiState {
@@ -87,6 +89,7 @@ impl Default for UiState {
             author: String::new(),
             window: None,
             language: i18n::AUTO.into(),
+            dark_page: false,
         }
     }
 }
@@ -156,6 +159,7 @@ impl WordApp {
     pub fn prefs(&self) -> UiState {
         let mut ui = self.ui.clone();
         ui.author = self.session.author.clone();
+        ui.dark_page = self.session.view.dark_mode;
         ui
     }
 
@@ -168,6 +172,7 @@ impl WordApp {
         if !author.trim().is_empty() {
             self.session.author = author;
         }
+        self.session.view.dark_mode = self.ui.dark_page;
     }
 
     /// Run a command; UI-level commands (`ui.*`) are handled here, the rest by the engine.
@@ -590,6 +595,18 @@ mod tests {
         // A later rename is what gets saved next, not the name loaded at startup.
         second.run("file.setAuthor", json!({"name": "Grace Hopper"})).unwrap();
         assert_eq!(second.prefs().author, "Grace Hopper");
+    }
+
+    #[test]
+    fn dark_page_survives_restart() {
+        let mut first = app();
+        assert!(!first.session.view.dark_mode);
+        first.run("view.darkMode", json!({"value": true})).unwrap();
+        let saved = serde_json::to_vec(&first.prefs()).unwrap();
+
+        let mut second = app();
+        second.apply_prefs(serde_json::from_slice(&saved).unwrap());
+        assert!(second.session.view.dark_mode);
     }
 
     #[test]

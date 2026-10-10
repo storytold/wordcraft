@@ -123,7 +123,7 @@ fn page_key(app: &WordApp, page: &Page, scale_px: f32) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     scale_px.to_bits().hash(&mut h);
     let v = &app.session.view;
-    (v.marks, v.show_markup).hash(&mut h);
+    (v.marks, v.show_markup, v.dark_mode, wordcraft_render::DARK_PAPER).hash(&mut h);
     let editing_hf = matches!(app.session.sel.focus.story, StoryRef::Part(id) if Some(id) == page.header_story || Some(id) == page.footer_story);
     editing_hf.hash(&mut h);
     format!("{:?}{:?}", app.session.doc.settings.page_color, app.session.doc.settings.watermark).hash(&mut h);
@@ -154,6 +154,10 @@ fn to_screen(origin: Pos2, page_rect: Rect, scale: f32, x: f32, y: f32) -> Pos2 
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let layout = app.session.layout();
+    // View › Switch Modes: dark paper, inverted document colours, a white caret.
+    let dark_page = app.session.view.dark_mode;
+    let caret_color = if dark_page { Color32::WHITE } else { t.caret };
+    let dark_paper = wordcraft_render::DARK_PAPER;
     let full = ui.available_rect_before_wrap();
     let show_ruler = app.session.view.ruler && app.session.view.mode == wordcraft_layout::ViewMode::Print && !app.session.view.read_mode;
     let (hruler, vruler, area) = if show_ruler {
@@ -204,7 +208,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             let Some(page) = layout.pages.get(i) else { continue };
             // Shadow and paper.
             painter.rect_filled(sr.translate(vec2(0.0, 2.0)).expand(1.5), 1.0, t.page_shadow);
-            painter.rect_filled(sr, 0.0, Color32::WHITE);
+            painter.rect_filled(sr, 0.0, if dark_page { Color32::from_gray(dark_paper) } else { Color32::WHITE });
             let scale_px = (geo.scale * ppp).min(max_tex / page.w.max(1.0)).min(max_tex / page.h.clamp(1.0, 1e6)).max(0.05);
             let key = page_key(app, page, scale_px);
             let fresh = app.canvas.textures.get(&i).is_some_and(|(k, _)| *k == key);
@@ -212,6 +216,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 let mut opts = wordcraft_render::RenderOptions::default();
                 opts.display.marks = app.session.view.marks;
                 opts.display.markup = app.session.view.show_markup;
+                opts.dark = dark_page;
+                opts.dark_paper = dark_paper;
                 let editing_hf = matches!(app.session.sel.focus.story, StoryRef::Part(_));
                 opts.display.dim_header = !editing_hf;
                 opts.display.dim_body = editing_hf;
@@ -292,7 +298,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             let since = crate::now_ms() - app.canvas.caret_visible_since;
             let on = ((since / 530.0) as u64).is_multiple_of(2);
             if app.session.sel.is_collapsed() && on && focused {
-                painter.line_segment([pos2(x.round() + 0.5, y0), pos2(x.round() + 0.5, y1)], Stroke::new(1.5, t.caret));
+                painter.line_segment([pos2(x.round() + 0.5, y0), pos2(x.round() + 0.5, y1)], Stroke::new(1.5, caret_color));
             }
             if focused {
                 ui.ctx().request_repaint_after(std::time::Duration::from_millis(530 - (since as u64 % 530)));
@@ -306,8 +312,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 });
             }
             if !app.canvas.ime_preedit.is_empty() {
-                let g = painter.text(pos2(x, y1), egui::Align2::LEFT_BOTTOM, &app.canvas.ime_preedit, regular(c.height * geo.scale * 0.8), t.caret);
-                painter.line_segment([pos2(g.min.x, g.max.y), pos2(g.max.x, g.max.y)], Stroke::new(1.0, t.caret));
+                let g =
+                    painter.text(pos2(x, y1), egui::Align2::LEFT_BOTTOM, &app.canvas.ime_preedit, regular(c.height * geo.scale * 0.8), caret_color);
+                painter.line_segment([pos2(g.min.x, g.max.y), pos2(g.max.x, g.max.y)], Stroke::new(1.0, caret_color));
             }
         }
         (resp, rects)
