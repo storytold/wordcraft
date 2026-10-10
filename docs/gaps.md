@@ -39,7 +39,7 @@ first (`gh pr list`), and update this file and the parity doc when a gap closes.
 | 26 | **Minor formats**: Flat OPC XML, Word 2003 XML, MHT, Works/WordPerfect | | | Rare | 20–35 | [file-format-parity.md](file-format-parity.md) |
 | 27 | **View windows**: Side by Side, Synchronous Scrolling, Arrange All, Switch Windows | | [parity-checklist.md](parity-checklist.md) (View 25/29) | Comparing documents | 3–5 | [ui-parity.md](ui-parity.md) |
 | 28 | **Dictate** | | `tools.dictate` missing | Dictation users | 8–15 + owner (speech model) | [hardware-parity.md](hardware-parity.md) |
-| 29 | **Equations**: long display equations don't break across lines; ink equations | | #191 notes | Maths-heavy documents | 3–4 | [layout-parity.md](layout-parity.md) |
+| 29 | **Equations**: ink equations | | #191 notes; long display equations wrap at operators (#326) | Maths-heavy documents | 2–3 | [layout-parity.md](layout-parity.md) |
 
 **Beta needs #1–#7** (~150–230 h with the stability and layout work they imply): they are the
 blocking gaps, and closing them lifts file formats, layout, stability and UI enough to take the
@@ -64,6 +64,7 @@ The same gaps grouped the way the parity documents are, for agents working in on
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | trivial | #29: long display equations wrap across lines (#326) |
 | 2026-10-10 | trivial | #6: desktop File › Print opens the system PDF viewer (#286) |
 | 2026-10-10 | trivial | Table Properties dialog landed (#44); removed from the dialog-depth list |
 | 2026-10-10 | trivial | Merged main: landed features removed from the feature-gap list |

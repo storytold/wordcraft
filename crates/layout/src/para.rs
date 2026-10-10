@@ -640,6 +640,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let mut maths = Vec::new();
     let mut displays = Vec::new();
     let mut eq_counter = env.eq_number;
+    let math_props = doc.settings.math.clone().unwrap_or_default();
     // The byte ranges of runs left out of the layout, in order, adjacent runs merged.
     let mut left: Vec<std::ops::Range<usize>> = Vec::new();
     for (range, props) in p.run_ranges() {
@@ -768,7 +769,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                         }
                         Some(InlineObject::Equation { linear, display, math }) => {
                             let avail = (env.width - rp.indent_left.max(0.0) - rp.indent_right.max(0.0)).max(12.0);
-                            let ml = crate::math::layout_equation(math, linear, &rc, *display, avail, &mut eq_counter);
+                            let ml = crate::math::layout_equation(math, linear, &rc, *display, avail, &math_props, &mut eq_counter);
                             let st = b.styles.get(si as usize);
                             // The line is at least as tall as the text around it.
                             let (a, d) = st.map(|s| (s.ascent, s.descent)).unwrap_or((0.0, 0.0));

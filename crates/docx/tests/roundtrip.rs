@@ -962,6 +962,12 @@ fn settings_core_theme_round_trip() {
     d.settings.protection = Some("readOnly".into());
     d.settings.grid_h = 5.5;
     d.settings.grid_v = 18.0;
+    d.settings.math = Some(wordcraft_doc::math::MathProps {
+        brk_bin: wordcraft_doc::math::BrkBin::Repeat,
+        brk_bin_sub: wordcraft_doc::math::BrkBinSub::PlusMinus,
+        wrap_indent: 36.0,
+        wrap_right: false,
+    });
     d.core.title = "Title & <stuff>".into();
     d.core.subject = "Subj".into();
     d.core.creator = "Me".into();
@@ -1238,4 +1244,27 @@ fn shape_effects_round_trip() {
         }
         o => panic!("{o:?}"),
     }
+}
+
+#[test]
+fn equation_manual_breaks_round_trip() {
+    use wordcraft_doc::math::{MNode, MRun, Math};
+    let nodes = vec![
+        MNode::Run(MRun::new("a=b")),
+        MNode::Run(MRun { brk: Some(1), ..MRun::new("+c") }),
+        MNode::Run(MRun { brk: Some(0), ..MRun::new("+d") }),
+    ];
+    let mut d = Document::new();
+    let math = Math { nodes: nodes.clone(), ..Default::default() };
+    let mut p = Paragraph::with_text("", CharProps::default());
+    p.insert_object(0, InlineObject::Equation { linear: "a=b+c+d".into(), display: true, math }, &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+    let r = rt(&d);
+    let got = paras(&r).iter().flat_map(|p| p.objects.iter()).find_map(|o| match o {
+        InlineObject::Equation { math, .. } => Some(math.nodes.clone()),
+        _ => None,
+    });
+    assert_eq!(got, Some(nodes));
+    // Word's own settings round-trip; a document without them gets none.
+    assert_eq!(r.settings.math, None);
 }
