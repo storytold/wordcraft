@@ -590,13 +590,14 @@ fn hostile_params_never_panic() {
         json!({"value": -1e308, "rows": 1e9}),
     ];
     for spec in reg.all() {
-        // These reach outside the session: files, and Read Aloud starts the system speech
-        // synthesiser (`say` on macOS), which would read the sample document aloud on every run.
-        if spec.id.starts_with("file.") || spec.id == "insert.picture" || spec.id == "insert.textFromFile" || spec.id == "review.readAloud" {
+        // These reach outside the session (files). Read Aloud (`review.readAloud`, `readAloud.*`)
+        // is fuzzed too: under `cfg(test)` its backend is the silent `Hold`, asserted below.
+        if spec.id.starts_with("file.") || spec.id == "insert.picture" || spec.id == "insert.textFromFile" {
             continue;
         }
         for j in &junk {
             let mut s = Session::new(crate::sample::sample_document());
+            assert_ne!(s.read_aloud.backend, crate::speech::Backend::System, "tests must never start real speech");
             let _ = s.run(spec.id, j);
             s.clamp_selection();
             let _ = s.layout();
