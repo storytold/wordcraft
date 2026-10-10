@@ -349,3 +349,34 @@ fn caret_navigation() {
     run(&mut s, "caret.left", json!({}));
     assert_eq!(s.sel.focus.off, 10);
 }
+
+#[test]
+fn new_documents_follow_the_template_language() {
+    let mut s = s();
+    run(&mut s, "file.new", json!({"template": "letter", "language": "de"}));
+    assert!(text(&s).contains("Mit freundlichen Grüßen"));
+    assert_eq!(s.doc.styles.default_chr.lang.as_deref(), Some("de-DE"));
+    // Without a language, the session's template language decides (English by default).
+    run(&mut s, "file.new", json!({"template": "letter"}));
+    assert!(text(&s).contains("Sincerely,"));
+    assert_eq!(wordcraft_geom::paper_name(s.doc.last_section.page_w, s.doc.last_section.page_h), Some("Letter"));
+    s.template_language = "de".into();
+    run(&mut s, "file.new", json!({}));
+    assert_eq!(wordcraft_geom::paper_name(s.doc.last_section.page_w, s.doc.last_section.page_h), Some("A4"));
+    assert!(!s.dirty && s.path.is_none());
+    // Languages without templates of their own get the English ones.
+    run(&mut s, "file.new", json!({"template": "report", "language": "ja"}));
+    assert!(text(&s).contains("Report Title"));
+}
+
+#[test]
+fn german_text_is_not_checked_against_the_english_word_list() {
+    let mut s = s();
+    run(&mut s, "file.new", json!({"template": "letter", "language": "de"}));
+    let issues = run(&mut s, "review.issues", json!({}));
+    assert_eq!(issues.as_array().map(Vec::len), Some(0), "{issues}");
+    run(&mut s, "file.new", json!({"template": "letter"}));
+    run(&mut s, "text.insert", json!({"text": "Thsi is wrnog. "}));
+    let issues = run(&mut s, "review.issues", json!({}));
+    assert!(issues.as_array().is_some_and(|a| !a.is_empty()), "English text is still checked: {issues}");
+}

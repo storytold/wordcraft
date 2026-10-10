@@ -185,6 +185,16 @@ fn known_core(w: &str) -> bool {
     false
 }
 
+/// Does proofing check text in this language (a BCP 47 tag such as `en-US` or `de-DE`)? The word
+/// list and the grammar rules are English, so text marked as another language is left alone
+/// rather than flagged word by word. Text without a language counts as English.
+pub fn checks_language(lang: Option<&str>) -> bool {
+    match lang {
+        None | Some("") => true,
+        Some(tag) => tag.split(['-', '_']).next().is_some_and(|primary| primary.eq_ignore_ascii_case("en")),
+    }
+}
+
 /// Is `word` spelled correctly? Numbers, single letters, ALL-CAPS acronyms, URLs and words with
 /// digits are accepted.
 pub fn is_correct(word: &str) -> bool {
@@ -425,6 +435,16 @@ fn starts_consonant_sound(w: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_english_text_is_checked() {
+        for lang in [None, Some(""), Some("en"), Some("en-US"), Some("EN-gb"), Some("en_AU")] {
+            assert!(checks_language(lang), "{lang:?}");
+        }
+        for lang in [Some("de-DE"), Some("de"), Some("fr-FR"), Some("eng"), Some("e"), Some("-")] {
+            assert!(!checks_language(lang), "{lang:?}");
+        }
+    }
 
     #[test]
     fn dictionary_loads() {

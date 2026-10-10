@@ -169,7 +169,8 @@ fn snippet_blocks(
 pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
     let t = Tokens::get(ui.ctx());
     let current = state.get("style").and_then(Value::as_str).unwrap_or("Normal").to_string();
-    let styles: Vec<(String, String)> = app.session.doc.styles.gallery().iter().map(|s| (s.id.clone(), s.name.clone())).collect();
+    let styles: Vec<(String, String)> =
+        app.session.doc.styles.gallery().iter().map(|s| (s.id.clone(), crate::i18n::style_name(&s.name).to_string())).collect();
     let rev = app.session.rev();
     let skey = app.previews.styles_key(&app.session.doc, rev);
     let ppp = ui.ctx().pixels_per_point();
@@ -244,14 +245,14 @@ pub fn style_set_gallery(app: &mut WordApp, ui: &mut Ui) {
         if resp.hovered() {
             ui.painter().rect_filled(r, 3.0, t.hover);
         }
-        let key = format!("set:{name}:{ppp}");
+        let key = format!("set:{name}:{}:{ppp}", crate::i18n::current().code());
         let tex = app.previews.get_or(ui.ctx(), &key, || {
             let mut s = wordcraft_engine::Session::new(Document::new());
             let _ = s.run("design.styleSet", &json!({"name": name}));
             let blocks = vec![
-                Block::Para(Paragraph::with_text("Title", CharProps::default()).styled("Title")),
-                Block::Para(Paragraph::with_text("Heading 1", CharProps::default()).styled("Heading1")),
-                Block::Para(Paragraph::with_text("Body text in a short paragraph to show spacing.", CharProps::default())),
+                Block::Para(Paragraph::with_text(tl!("Title"), CharProps::default()).styled("Title")),
+                Block::Para(Paragraph::with_text(tl!("Heading 1"), CharProps::default()).styled("Heading1")),
+                Block::Para(Paragraph::with_text(tl!("Body text in a short paragraph to show spacing."), CharProps::default())),
             ];
             snippet_blocks(&s.doc, blocks, 120.0, 110.0, ppp * 0.42, 6.0, None)
         });
@@ -262,7 +263,7 @@ pub fn style_set_gallery(app: &mut WordApp, ui: &mut Ui) {
             let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2((ir.width() / sz.x).min(1.0), (ir.height() / sz.y).min(1.0)));
             ui.painter().image(h.id(), ir, uv, egui::Color32::WHITE);
         }
-        if resp.on_hover_text(format!("Style set: {name}")).clicked() {
+        if resp.on_hover_text(crate::i18n::fmt(tl!("Style set: {name}"), &[("name", name)])).clicked() {
             let _ = app.run("design.styleSet", json!({"name": name}));
         }
     }

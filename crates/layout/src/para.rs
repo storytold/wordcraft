@@ -539,7 +539,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         text_len: p.text.len(),
         has_page_fields,
         notes,
-        issues: if env.proofing { proof_issues(p) } else { Vec::new() },
+        issues: if env.proofing { proof_issues(p, &resolve) } else { Vec::new() },
         drop_cap,
         hyph_after: Vec::new(),
     };
@@ -1138,15 +1138,24 @@ impl ParaLayout {
     }
 }
 
-/// Spelling and grammar issues in a paragraph (skipping "do not check" and hidden runs).
-fn proof_issues(p: &Paragraph) -> Vec<(usize, usize, bool)> {
+/// Spelling and grammar issues in a paragraph (skipping "do not check" and hidden runs, links,
+/// and text in a language proofing has no dictionary for).
+fn proof_issues(p: &Paragraph, resolve: &dyn Fn(&CharProps) -> Arc<ResolvedChar>) -> Vec<(usize, usize, bool)> {
     if p.text.trim().is_empty() || p.text.len() > 100_000 {
         return Vec::new();
     }
+    let skipped: Vec<std::ops::Range<usize>> = p
+        .run_ranges()
+        .filter(|(_, c)| {
+            c.no_proof == Some(true) || c.hidden == Some(true) || c.link.is_some() || !wordcraft_proof::checks_language(resolve(c).lang.as_deref())
+        })
+        .map(|(r, _)| r)
+        .collect();
+    if skipped.iter().map(|r| r.len()).sum::<usize>() >= p.text.len() {
+        return Vec::new();
+    }
     let text = proof_text(p);
-    let skip = |a: usize, b: usize| {
-        p.run_ranges().any(|(r, c)| r.start < b && a < r.end && (c.no_proof == Some(true) || c.hidden == Some(true) || c.link.is_some()))
-    };
+    let skip = |a: usize, b: usize| skipped.iter().any(|r| r.start < b && a < r.end);
     let mut v: Vec<(usize, usize, bool)> =
         wordcraft_proof::check_spelling(&text).into_iter().filter(|i| !skip(i.start, i.end)).map(|i| (i.start, i.end, false)).collect();
     v.extend(wordcraft_proof::check_grammar(&text).into_iter().filter(|i| !skip(i.start, i.end)).map(|i| (i.start, i.end, true)));

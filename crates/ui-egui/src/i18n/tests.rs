@@ -19,6 +19,9 @@ fn system_locales_map_to_languages() {
     assert_eq!(lang_from_tag("zh-Hant"), Some(lang("zh-hant")));
     assert_eq!(lang_from_tag("ja-JP"), Some(lang("ja")));
     assert_eq!(lang_from_tag("ja_JP.eucJP@euro"), Some(lang("ja")));
+    assert_eq!(lang_from_tag("de-DE"), Some(lang("de")));
+    assert_eq!(lang_from_tag("de_AT.UTF-8"), Some(lang("de")));
+    assert_eq!(lang_from_tag("de-CH"), Some(lang("de")));
     assert_eq!(lang_from_tag("en-GB"), Some(Lang::EN));
     assert_eq!(lang_from_tag("C"), Some(Lang::EN));
     assert_eq!(lang_from_tag("POSIX"), Some(Lang::EN));
@@ -32,7 +35,8 @@ fn the_first_supported_preferred_language_wins() {
     // Windows and macOS list several preferred languages in order.
     assert_eq!(first_supported(["fr-FR", "zh-Hant-TW", "en-US"]), Some(lang("zh-hant")));
     assert_eq!(first_supported(["en-US", "ja-JP"]), Some(Lang::EN));
-    assert_eq!(first_supported(["fr-FR", "de-DE"]), None);
+    assert_eq!(first_supported(["fr-FR", "de-DE"]), Some(lang("de")));
+    assert_eq!(first_supported(["fr-FR", "it-IT"]), None);
     assert_eq!(first_supported([]), None);
 }
 
@@ -56,6 +60,7 @@ fn lookups_fall_back_to_english() {
     assert_eq!(tr(zh, "File"), "文件");
     assert_eq!(tr(lang("zh-hant"), "File"), "檔案");
     assert_eq!(tr(lang("ja"), "File"), "ファイル");
+    assert_eq!(tr(lang("de"), "File"), "Datei");
     assert_eq!(tr(zh, "no such label"), "no such label");
     assert_eq!(tr(Lang::EN, "File"), "File");
     assert!(has(zh, "Save") && !has(Lang::EN, "Save"));
@@ -72,6 +77,50 @@ fn current_language_is_per_thread() {
     set_current(Lang::EN);
     assert_eq!(t("Insert"), "Insert");
     assert_eq!(prefixed("Undo", "Typing"), "Undo Typing");
+}
+
+#[test]
+fn german_follows_word_terms() {
+    let de = lang("de");
+    for (en, want) in [
+        ("Home", "Start"),
+        ("Insert", "Einfügen"),
+        ("Design", "Entwurf"),
+        ("Mailings", "Sendungen"),
+        ("Review", "Überprüfen"),
+        ("View", "Ansicht"),
+        ("Styles", "Formatvorlagen"),
+        ("Margins", "Seitenränder"),
+        ("Table of Contents", "Inhaltsverzeichnis"),
+    ] {
+        assert_eq!(tr(de, en), want);
+    }
+    assert_eq!(fmt(tr(de, "Page {page} of {pages}"), &[("page", "3"), ("pages", "9")]), "Seite 3 von 9");
+}
+
+#[test]
+fn scoped_entries_disambiguate_labels() {
+    set_current(lang("de"));
+    assert_eq!(t_at("File", "Open"), "Öffnen");
+    assert_eq!(t_at("Design › Document Formatting", "Open"), "Offen");
+    assert_eq!(t_at("View › Views", "Outline"), "Gliederung");
+    assert_eq!(t_at("Home › Font › Text Effects", "Outline"), "Kontur");
+    assert_eq!(t_at("Home › Font", "no such label"), "no such label");
+    set_current(Lang::EN);
+    assert_eq!(t_at("Design › Document Formatting", "Open"), "Open");
+}
+
+#[test]
+fn built_in_style_names_are_translated_and_others_are_not() {
+    set_current(lang("de"));
+    assert_eq!(style_name("Normal"), "Standard");
+    assert_eq!(style_name("Heading 1"), "Überschrift 1");
+    assert_eq!(style_name("heading 2"), "Überschrift 2", "Word stores some built-in names in lower case");
+    assert_eq!(style_name("toc 1"), "Verzeichnis 1");
+    assert_eq!(style_name("Copy"), "Copy", "a style someone named after a command keeps its name");
+    assert_eq!(style_name("My Style"), "My Style");
+    set_current(Lang::EN);
+    assert_eq!(style_name("Normal"), "Normal");
 }
 
 #[test]
@@ -152,4 +201,22 @@ fn the_language_setting_is_a_ui_command_and_persists() {
     assert_eq!(app.ui.language, AUTO);
     // Reading without a value reports the current setting.
     assert_eq!(app.run("ui.language", serde_json::json!({})).unwrap()["language"], AUTO);
+}
+
+#[test]
+fn german_measures_in_centimetres_with_a_decimal_comma() {
+    set_current(lang("de"));
+    let cm = length_unit();
+    assert_eq!(cm, LengthUnit::CENTIMETRES);
+    assert_eq!(cm.number(2.5, 2), "2,5");
+    assert_eq!(cm.number(2.0, 2), "2");
+    assert_eq!(cm.number(21.0, 1), "21");
+    assert_eq!(cm.number(29.7, 1), "29,7");
+    assert_eq!(cm.parse("2,5 cm"), Some(2.5));
+    assert_eq!(cm.parse(" 1.25 "), Some(1.25));
+    assert_eq!(cm.parse("abc"), None);
+    set_current(lang("ja"));
+    assert_eq!(length_unit(), LengthUnit::INCHES, "other languages keep inches");
+    set_current(Lang::EN);
+    assert_eq!(length_unit(), LengthUnit::INCHES);
 }

@@ -548,7 +548,7 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
         && let Some(pos) = layout.hit(page, x, y, story)
         && let Some(link) = app.session.doc.para_at(&pos).and_then(|pp| pp.props_of_char(pos.off).link.clone())
     {
-        let key = if cfg!(target_os = "macos") { "⌘" } else { "Ctrl" };
+        let key = if cfg!(target_os = "macos") { "⌘" } else { tl!("Ctrl") };
         let tip = format!("{link}\n{}", crate::i18n::fmt(tl!("{key}+Click to follow link"), &[("key", key)]));
         egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), egui::Id::new("link_tip"), egui::PopupAnchor::Pointer).show(|ui| {
             ui.label(tip);
@@ -573,21 +573,23 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
     hp.rect_filled(bar, 0.0, t.ruler_margin);
     let text = Rect::from_min_max(pos2(x0 + page.body.x * scale, bar.min.y), pos2(x0 + page.body.right() * scale, bar.max.y));
     hp.rect_filled(text, 0.0, t.ruler);
-    let unit = 72.0;
+    // Inches in eighths, or centimetres in quarters (German, as in German Word).
+    let length = crate::i18n::length_unit();
+    let (unit, steps) = (length.points, length.ruler_steps);
     let origin = page.body.x;
-    let mut k = -((origin / unit).ceil() as i32) * 8;
+    let mut k = -((origin / unit).ceil() as i32) * steps;
     loop {
-        let xpt = origin + k as f32 * unit / 8.0;
+        let xpt = origin + k as f32 * unit / steps as f32;
         if xpt > page.w {
             break;
         }
         if xpt >= 0.0 {
             let sx = x0 + xpt * scale;
-            let (len, label) = if k % 8 == 0 {
-                (0.0, Some(k / 8))
-            } else if k % 4 == 0 {
+            let (len, label) = if k % steps == 0 {
+                (0.0, Some(k / steps))
+            } else if k % (steps / 2) == 0 {
                 (5.0, None)
-            } else if k % 2 == 0 {
+            } else if k % (steps / 4) == 0 {
                 (3.0, None)
             } else {
                 (1.5, None)
@@ -598,7 +600,7 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
                 }
                 Some(_) => {}
                 None => {
-                    if scale * unit / 8.0 > 4.0 || k % 2 == 0 {
+                    if scale * unit / steps as f32 > 4.0 || k % 2 == 0 {
                         hp.line_segment([pos2(sx, bar.center().y - len / 2.0), pos2(sx, bar.center().y + len / 2.0)], Stroke::new(1.0, t.ruler_tick));
                     }
                 }
@@ -688,15 +690,15 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
     vp.rect_filled(vbar, 0.0, t.ruler_margin);
     vp.rect_filled(Rect::from_min_max(pos2(vbar.min.x, y0 + page.body.y * scale), pos2(vbar.max.x, y0 + page.body.bottom() * scale)), 0.0, t.ruler);
     let origin = page.body.y;
-    let mut k = -((origin / unit).ceil() as i32) * 8;
+    let mut k = -((origin / unit).ceil() as i32) * steps;
     loop {
-        let ypt = origin + k as f32 * unit / 8.0;
+        let ypt = origin + k as f32 * unit / steps as f32;
         if ypt > page.h.min(20_000.0) {
             break;
         }
-        if ypt >= 0.0 && k % 8 == 0 && k != 0 {
-            vp.text(pos2(vbar.center().x, y0 + ypt * scale), egui::Align2::CENTER_CENTER, (k / 8).abs().to_string(), regular(9.5), t.ruler_tick);
-        } else if ypt >= 0.0 && k % 4 == 0 {
+        if ypt >= 0.0 && k % steps == 0 && k != 0 {
+            vp.text(pos2(vbar.center().x, y0 + ypt * scale), egui::Align2::CENTER_CENTER, (k / steps).abs().to_string(), regular(9.5), t.ruler_tick);
+        } else if ypt >= 0.0 && k % (steps / 2) == 0 {
             let sy = y0 + ypt * scale;
             vp.line_segment([pos2(vbar.center().x - 2.5, sy), pos2(vbar.center().x + 2.5, sy)], Stroke::new(1.0, t.ruler_tick));
         }
@@ -733,7 +735,7 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     let item = |ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: serde_json::Value| {
         let sc = crate::widgets::shortcut_text(app, id);
         let on = crate::widgets::enabled(app, id);
-        if ui.add_enabled(on, egui::Button::new(label).shortcut_text(sc)).clicked() {
+        if ui.add_enabled(on, egui::Button::new(tl!(label)).shortcut_text(sc)).clicked() {
             let _ = app.run(id, params);
             ui.close();
         }
