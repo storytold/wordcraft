@@ -13,6 +13,7 @@
 # computing vocabulary. No Microsoft Word (or other product) localisation, string table or
 # translated UI was consulted or copied; add entries the same way.
 
+	(no style)	(sin estilo)
 	(no suggestions)	(sin sugerencias)
 	1.5 Line Spacing	Interlineado 1,5
 	A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.	Un procesador de textos gratuito y de código abierto, escrito desde cero en Rust.\nForma parte de las Crafting Apps del equipo de ArtCraft.
@@ -27,6 +28,7 @@
 	Add Space Before Paragraph	Añadir espacio antes del párrafo
 	Add space between Asian and Latin text	Añadir espacio entre texto asiático y latino
 	Add space between Asian text and numbers	Añadir espacio entre texto asiático y números
+	Add tab stop at:	Agregar tabulación en:
 	Add Text	Añadir texto
 	Add a Table	Añadir una tabla
 	Add a comment	Añadir un comentario
@@ -46,6 +48,7 @@
 	Align	Alinear
 	Align Left	Alinear a la izquierda
 	Align Right	Alinear a la derecha
+	Aligned at:	Alinear en:
 	Alignment	Alineación
 	All Borders	Todos los bordes
 	All Caps	Mayúsculas
@@ -71,6 +74,33 @@
 	AutoSave saves every change to the file (needs a saved document)	El autoguardado guarda cada cambio en el archivo (requiere un documento guardado)
 	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	El autoguardado no está disponible en el navegador: no puede escribir en sus archivos. Guardar descarga una copia.
 	AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave.	El autoguardado solo mantiene archivos .docx, .odt y .rtf; {name} no puede conservar todo el formato. Guarde como .docx para activar el autoguardado.
+	Balloons	Globos
+	Bullet	Viñeta
+	By author	Por autor
+	Changed lines:	Líneas cambiadas:
+	Click level to modify:	Haga clic en el nivel que desea modificar:
+	Color only	Solo color
+	Define New Multilevel List	Definir nueva lista multinivel
+	Define New Multilevel List…	Definir nueva lista multinivel…
+	Deletions:	Eliminaciones:
+	Enter formatting for number:	Formato del número:
+	Follow number with:	Después del número:
+	Formatting	Formato
+	Include level number from:	Incluir número de nivel de:
+	Ink	Entrada de lápiz
+	Insertions and Deletions	Inserciones y eliminaciones
+	Insertions:	Inserciones:
+	Left border	Borde izquierdo
+	Legal style numbering	Numeración de estilo legal
+	Link level to style:	Vincular nivel con estilo:
+	List Definition	Definición de lista
+	Nothing	Nada
+	Number alignment:	Alineación del número:
+	Number format	Formato de número
+	Number style for this level:	Estilo de número para este nivel:
+	Outside border	Borde exterior
+	Restart list after:	Reiniciar lista después de:
+	Right border	Borde derecho
 	Save the document to turn on AutoSave	Guarde el documento para activar el autoguardado
 	Save the document to turn on AutoSave (a file you have only opened isn't rewritten until you save it)	Guarde el documento para activar el autoguardado (un archivo que solo ha abierto no se reescribe hasta que lo guarde)
 	AutoText	Texto automático
@@ -97,6 +127,29 @@
 	Border Painter	Pincel de bordes
 	Border\nPainter	Pincel de\nbordes
 	Borders	Bordes
+	Tab stop position:	Posición de la tabulación:
+	Default tab stops:	Tabulaciones predeterminadas:
+	Tab stops to be cleared:	Tabulaciones que se borrarán:
+	All	Todas
+	Decimal	Decimal
+	Bar	Barra
+	Leader	Relleno
+	Set	Fijar
+	Page Border	Borde de página
+	Apply to:	Aplicar a:
+	Whole document	Todo el documento
+	This section	Esta sección
+	Fill	Relleno de color
+	Setting:	Valor:
+	3-D	3D
+	Custom	Personalizado
+	Style:	Estilo:
+	Dot dash	Punto y raya
+	Triple	Triple
+	Between	Entre párrafos
+	Borders and Shading	Bordes y sombreado
+	Tabs…	Tabulaciones…
+	Borders and Shading…	Bordes y sombreado…
 	Bottom Border	Borde inferior
 	Bottom Margin	Margen inferior
 	Bottom of Page	Parte inferior de la página
@@ -693,10 +746,13 @@
 	Share	Compartir
 	Shift+Tab	Mayús+Tab
 	Show	Mostrar
+	Show all revisions inline	Mostrar todas las revisiones en línea
 	Show Comments	Mostrar comentarios
 	Show Markup	Mostrar marcas
 	Show Notes	Mostrar notas
 	Show all formatting marks	Mostrar todas las marcas de formato
+	Show only comments and formatting in balloons	Mostrar solo comentarios y formato en globos
+	Show revisions in balloons	Mostrar revisiones en globos
 	Show rulers	Mostrar reglas
 	Show the community button in the title bar	Mostrar el botón de comunidad en la barra de título
 	Show/Hide ¶	Mostrar u ocultar ¶
@@ -714,6 +770,7 @@
 	SmartArt	SmartArt
 	Sort	Ordenar
 	Source code: github.com/storytold/wordcraft	Código fuente: github.com/storytold/wordcraft
+	Space	Espacio
 	Space before/after:	Espacio antes y después:
 	Spacing	Espaciado
 	Spacing (pt):	Espaciado (pt):
@@ -728,6 +785,7 @@
 	Standard Colors	Colores estándar
 	Star	Estrella
 	Start Chat	Iniciar chat
+	Start at:	Iniciar en:
 	Start Mail Merge	Iniciar combinación de correspondencia
 	Start Mail\nMerge	Iniciar combinación\nde correspondencia
 	Statistics	Estadísticas
@@ -751,6 +809,7 @@
 	Symbols	Símbolos
 	Synonyms	Sinónimos
 	Tab	Tabulador
+	Tab character	Carácter de tabulación
 	Table	Tabla
 	Table Column Width	Ancho de columna de tabla
 	Table Design	Diseño de tabla
@@ -772,6 +831,7 @@
 	Text Effects	Efectos de texto
 	Text Effects and Typography	Efectos de texto y tipografía
 	Text Highlight Color	Color de resaltado de texto
+	Text indent at:	Sangría de texto en:
 	Text Wrapping	Ajuste de texto
 	Text from File	Texto desde archivo
 	Text to display:	Texto que mostrar:
@@ -796,7 +856,9 @@
 	Top:	Superior:
 	Total Row	Fila de totales
 	Track Changes	Control de cambios
+	Track Changes Options	Opciones de control de cambios
 	Track Changes: On	Control de cambios: activado
+	Track formatting	Controlar formato
 	Tracking	Seguimiento
 	Translate	Traducir
 	Transparency	Transparencia
@@ -1086,6 +1148,86 @@
 	Leave the equation (Esc)	Salir de la ecuación (Esc)
 	Preview	Vista previa
 	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft
+
+# Columns, Symbol and Field dialogs (#321).
+	(All)	(Todos)
+	(none)	(ninguno)
+	(normal text)	(texto normal)
+	1/4 Em Space	Espacio de 1/4 de eme
+	A mail merge field	Un campo de combinación
+	A numbered sequence (figures, tables…)	Una secuencia numerada (figuras, tablas…)
+	A table of contents	Una tabla de contenido
+	Categories:	Categorías:
+	Character	Carácter
+	Character code:	Código de carácter:
+	Col #:	Col. n.º:
+	Copyright	Copyright
+	Date and Time	Fecha y hora
+	Date formats:	Formatos de fecha:
+	Description:	Descripción:
+	Document Information	Información del documento
+	Double Closing Quote	Comilla doble de cierre
+	Double Opening Quote	Comilla doble de apertura
+	Ellipsis	Puntos suspensivos
+	Em Dash	Raya
+	En Dash	Guion medio
+	Em Space	Espacio eme
+	En Space	Espacio ene
+	Equal column width	Columnas de igual ancho
+	Field Codes	Códigos de campo
+	Field code:	Código de campo:
+	Field codes:	Códigos de campo:
+	Field name:	Nombre del campo:
+	Field names:	Nombres de campo:
+	Field properties	Propiedades del campo
+	Field…	Campo…
+	Format:	Formato:
+	Hide Codes	Ocultar códigos
+	Index and Tables	Índices y tablas
+	Line between	Línea entre columnas
+	Links and References	Vínculos y referencias
+	Mail Merge	Combinar correspondencia
+	More Columns…	Más columnas…
+	More Symbols…	Más símbolos…
+	No-Width Non Break	Unión sin ancho
+	No-Width Optional Break	Salto opcional sin ancho
+	Paragraph Mark	Marca de párrafo
+	Pick a field from the list	Elija un campo
+	Preserve formatting during updates	Conservar el formato al actualizar
+	Presets	Preestablecidos
+	Recently used symbols:	Símbolos usados recientemente:
+	Registered	Registrado
+	Section Mark	Marca de sección
+	Sequence name:	Nombre de la secuencia:
+	Shortcut key:	Atajo de teclado:
+	Single Closing Quote	Comilla simple de cierre
+	Single Opening Quote	Comilla simple de apertura
+	Spacing:	Espaciado:
+	Special Characters	Caracteres especiales
+	Subset:	Subconjunto:
+	The time right now	La hora actual
+	When this document was first created	La fecha en que se creó el documento
+	When this document was most recently printed	La fecha en que se imprimió el documento por última vez
+	When this document was most recently saved	La fecha en que se guardó el documento por última vez
+	The document has no bookmarks yet.	El documento aún no tiene marcadores.
+	Who the document properties name as author	El autor del documento
+	Name of the file this document is saved as	El nombre de archivo del documento
+	Title from the document properties	El título del documento
+	How many pages the whole document has	El número de páginas del documento
+	How many pages this section has	El número de páginas de la sección
+	Number of the page the field sits on	El número de la página actual
+	Number of the section the field sits in	El número de la sección actual
+	How many words the document holds	El número de palabras del documento
+	Page on which a bookmarked passage falls	El número de página de un marcador
+	Copy of the text a bookmark marks	El texto de un marcador
+	This field has no options.	Este campo no tiene opciones.
+	This font has no characters to show.	Esta fuente no tiene caracteres que mostrar.
+	This point forward	De aquí en adelante
+	The date it is today	La fecha de hoy
+	Trademark	Marca comercial
+	Type the field's name and its switches, for example PAGE \\* roman.	Escriba el nombre del campo y sus modificadores, por ejemplo PAGE \\* roman.
+	Width and spacing	Ancho y espaciado
+	from Unicode (hex)	de Unicode (hex)
 	Shape Effects	Efectos de forma
 	Glow	Resplandor
 	Soft Edges	Bordes suaves
@@ -1140,3 +1282,9 @@
 	The password is removed. Save the document to keep the change.	Se quitó la contraseña. Guarda el documento para conservar el cambio.
 	The passwords don't match.	Las contraseñas no coinciden.
 	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	Guarda la contraseña en un lugar seguro: sin ella nadie, ni siquiera WordCraft, puede abrir el documento. Deja ambos cuadros vacíos para quitar la contraseña.
+	Rotation	Giro
+	Rotation:	Giro:
+	Rotate Right 90°	Girar 90° a la derecha
+	Rotate Left 90°	Girar 90° a la izquierda
+	Flip Vertical	Voltear verticalmente
+	Flip Horizontal	Voltear horizontalmente

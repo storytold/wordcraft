@@ -1,5 +1,6 @@
 # Japanese (ja) interface catalog. Same format and clean-room rules as zh-hans.tsv.
 
+	(no style)	(スタイルなし)
 	(no suggestions)	（候補なし）
 	1.5 Line Spacing	1.5 行
 	A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.	Rust でゼロから書かれた、無料のオープンソース ワープロです。\nArtCraft チームの Crafting Apps のひとつです。
@@ -16,6 +17,7 @@
 	Add Space Before Paragraph	段落前に間隔を追加
 	Add space between Asian and Latin text	アジア文字と欧文の間隔を空ける
 	Add space between Asian text and numbers	アジア文字と数字の間隔を空ける
+	Add tab stop at:	タブ位置を追加:
 	Add Text	テキストの追加
 	Add to Dictionary	辞書に追加
 	Add to Style Gallery	スタイル ギャラリーに追加
@@ -31,6 +33,7 @@
 	Align	配置
 	Align Left	左揃え
 	Align Right	右揃え
+	Aligned at:	配置位置:
 	Alignment	配置
 	All Borders	格子
 	All Caps	すべて大文字
@@ -61,18 +64,46 @@
 	AutoSave	自動保存
 	AutoSave documents you have saved in WordCraft	WordCraft で保存した文書を自動保存する
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	自動保存できませんでした: {error}。文書を保存し直すと、自動保存が再開します。
+	Balloons	吹き出し
 	Bottom Margin	下余白
+	Bullet	行頭文字
+	By author	校閲者別
+	Changed lines:	変更された行:
+	Click level to modify:	変更するレベルをクリック:
+	Color only	色のみ
 	Compress punctuation at the start of a line	行頭の約物を詰める
 	Dark page (white text on black)	ダーク ページ (黒地に白い文字)
+	Define New Multilevel List	新しいアウトラインの定義
+	Define New Multilevel List…	新しいアウトラインの定義…
+	Deletions:	削除された箇所:
 	Edit Comment	コメントを編集
+	Enter formatting for number:	番号の書式:
+	Follow number with:	番号に続く文字:
+	Formatting	書式
+	Include level number from:	含めるレベルの番号:
+	Ink	インク
+	Insertions and Deletions	挿入と削除
+	Insertions:	挿入された箇所:
+	Left border	左罫線
 	Left Margin	左余白
 	Indents and Spacing	インデントと間隔
+	Legal style numbering	正規形式で番号付け
 	Line breaking	行の分割
+	Link level to style:	レベルに対応付けるスタイル:
+	List Definition	リストの定義
 	More templates →	その他のテンプレート →
 	No templates match your search.	検索に一致するテンプレートはありません。
+	Nothing	なし
+	Number alignment:	番号の配置:
+	Number format	番号書式
+	Number style for this level:	このレベルの番号の種類:
+	Outside border	外側の罫線
 	Reopen	再度開く
+	Restart list after:	リストを振り直すレベル:
+	Right border	右罫線
 	Right Margin	右余白
 	Search for templates	テンプレートを検索
+	Show all revisions inline	すべての変更履歴を本文中に表示
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	表示 › モードの切り替えと同様に、文書の色を反転して表示します。保存、印刷、PDF は変わりません。
 	AutoSave saves every change to the file (needs a saved document)	自動保存は変更のたびにファイルへ保存します（保存済みの文書が必要です）
 	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	ブラウザーでは自動保存を使えません（ファイルに書き込めないため）。保存するとコピーがダウンロードされます。
@@ -98,6 +129,29 @@
 	Border Painter	罫線の書式設定
 	Border\nPainter	罫線の書式設定
 	Borders	罫線
+	Tab stop position:	タブ位置:
+	Default tab stops:	既定のタブ間隔:
+	Tab stops to be cleared:	削除するタブ:
+	All	すべて
+	Decimal	小数点揃え
+	Bar	縦線
+	Leader	リーダー
+	Set	設定
+	Page Border	ページ罫線の設定
+	Apply to:	適用先:
+	Whole document	文書全体
+	This section	このセクション
+	Fill	塗りつぶし
+	Setting:	種類:
+	3-D	立体
+	Custom	カスタム
+	Style:	線種:
+	Dot dash	一点鎖線
+	Triple	三重線
+	Between	段落の間
+	Borders and Shading	罫線と網かけ
+	Tabs…	タブ…
+	Borders and Shading…	罫線と網かけ…
 	Bottom Border	下罫線
 	Bottom of Page	ページの下部
 	Bottom:	下:
@@ -675,6 +729,8 @@
 	Show Comments	コメントの表示
 	Show Markup	変更履歴とコメントの表示
 	Show Notes	注の表示
+	Show only comments and formatting in balloons	コメントと書式のみを吹き出しに表示
+	Show revisions in balloons	変更履歴を吹き出しに表示
 	Show rulers	ルーラーを表示する
 	Show the community button in the title bar	タイトル バーにコミュニティ ボタンを表示する
 	Show/Hide ¶	編集記号の表示/非表示 ¶
@@ -692,6 +748,7 @@
 	SmartArt	SmartArt
 	Sort	並べ替え
 	Source code: github.com/storytold/wordcraft	ソース コード: github.com/storytold/wordcraft
+	Space	スペース
 	Space before/after:	段落前/後の間隔:
 	Spacing	間隔
 	Spacing (pt):	間隔 (pt):
@@ -706,6 +763,7 @@
 	Standard Colors	標準の色
 	Star	星
 	Start Chat	チャットを開始
+	Start at:	開始番号:
 	Start Mail Merge	差し込み印刷の開始
 	Start Mail\nMerge	差し込み印刷の開始
 	Statistics	統計
@@ -728,6 +786,7 @@
 	Symbols	記号と特殊文字
 	Synonyms	類義語
 	Tab	タブ
+	Tab character	タブ文字
 	Table	表
 	Table Column Width	表の列の幅
 	Table Design	テーブル デザイン
@@ -750,6 +809,7 @@
 	Text Effects and Typography	文字の効果と体裁
 	Text from File	ファイルからテキストを挿入
 	Text Highlight Color	蛍光ペンの色
+	Text indent at:	文字列のインデント位置:
 	Text to display:	表示文字列:
 	Text Wrapping	文字列の折り返し
 	Text:	テキスト:
@@ -773,7 +833,9 @@
 	Top:	上:
 	Total Row	集計行
 	Track Changes	変更履歴の記録
+	Track Changes Options	変更履歴のオプション
 	Track Changes: On	変更履歴の記録: オン
+	Track formatting	書式の変更を記録
 	Tracking	変更履歴
 	Translate	翻訳
 	Transparency	透明度
@@ -1070,6 +1132,86 @@
 	Leave the equation (Esc)	数式を終了 (Esc)
 	Preview	プレビュー
 	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft
+
+# Columns, Symbol and Field dialogs (#321).
+	(All)	(すべて)
+	(none)	(なし)
+	(normal text)	(標準テキスト)
+	1/4 Em Space	1/4 em スペース
+	A mail merge field	差し込み用のフィールド
+	A numbered sequence (figures, tables…)	連番 (図、表…)
+	A table of contents	目次
+	Categories:	分類:
+	Character	文字
+	Character code:	文字コード:
+	Col #:	段:
+	Copyright	著作権記号
+	Date and Time	日付と時刻
+	Date formats:	日付の形式:
+	Description:	説明:
+	Document Information	文書の情報
+	Double Closing Quote	二重引用符 (閉じ)
+	Double Opening Quote	二重引用符 (開き)
+	Ellipsis	省略記号
+	Em Dash	em ダッシュ
+	En Dash	en ダッシュ
+	Em Space	em スペース
+	En Space	en スペース
+	Equal column width	段の幅を均等にする
+	Field Codes	フィールド コード
+	Field code:	フィールド コード:
+	Field codes:	フィールド コード:
+	Field name:	フィールド名:
+	Field names:	フィールドの名前:
+	Field properties	フィールドのプロパティ
+	Field…	フィールド…
+	Format:	書式:
+	Hide Codes	コードを隠す
+	Index and Tables	索引と目次
+	Line between	境界線を引く
+	Links and References	リンクと参照
+	Mail Merge	差し込み印刷
+	More Columns…	段組みの詳細設定…
+	More Symbols…	その他の記号…
+	No-Width Non Break	幅なし改行禁止
+	No-Width Optional Break	幅なし任意改行
+	Paragraph Mark	段落記号
+	Pick a field from the list	フィールドを選んでください
+	Preserve formatting during updates	更新時に書式を保持する
+	Presets	プリセット
+	Recently used symbols:	最近使った記号:
+	Registered	登録商標
+	Section Mark	節記号
+	Sequence name:	連番の名前:
+	Shortcut key:	ショートカット キー:
+	Single Closing Quote	一重引用符 (閉じ)
+	Single Opening Quote	一重引用符 (開き)
+	Spacing:	間隔:
+	Special Characters	特殊文字
+	Subset:	種類:
+	The time right now	現在の時刻
+	When this document was first created	文書の作成日
+	When this document was most recently printed	文書の最終印刷日
+	When this document was most recently saved	文書の最終保存日
+	The document has no bookmarks yet.	この文書にはまだブックマークがありません。
+	Who the document properties name as author	文書の作成者
+	Name of the file this document is saved as	文書のファイル名
+	Title from the document properties	文書のタイトル
+	How many pages the whole document has	文書のページ数
+	How many pages this section has	セクションのページ数
+	Number of the page the field sits on	現在のページ番号
+	Number of the section the field sits in	現在のセクション番号
+	How many words the document holds	文書の単語数
+	Page on which a bookmarked passage falls	ブックマークのページ番号
+	Copy of the text a bookmark marks	ブックマークの文字列
+	This field has no options.	このフィールドにはオプションがありません。
+	This font has no characters to show.	このフォントには表示できる文字がありません。
+	This point forward	これ以降
+	The date it is today	今日の日付
+	Trademark	商標
+	Type the field's name and its switches, for example PAGE \\* roman.	フィールド名とスイッチを入力します (例: PAGE \\* roman)。
+	Width and spacing	幅と間隔
+	from Unicode (hex)	Unicode (16 進)
 	Shape Effects	図形の効果
 	Glow	光彩
 	Soft Edges	輪郭のぼかし
@@ -1124,3 +1266,9 @@
 	The password is removed. Save the document to keep the change.	パスワードを削除しました。変更を保持するには文書を保存してください。
 	The passwords don't match.	パスワードが一致しません。
 	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	パスワードは安全な場所に保管してください。パスワードがないと、WordCraft を含め誰も文書を開けません。パスワードを削除するには両方のボックスを空にします。
+	Rotation	回転角度
+	Rotation:	回転:
+	Rotate Right 90°	右へ 90 度回転
+	Rotate Left 90°	左へ 90 度回転
+	Flip Vertical	上下反転
+	Flip Horizontal	左右反転

@@ -11,6 +11,7 @@
 # translated UI was consulted or copied; add entries the same way.
 # Product, format and technology names (WordCraft, PDF, Markdown, MCP …) stay in Latin letters.
 
+	(no style)	（无样式）
 	(no suggestions)	（无建议）
 	1.5 Line Spacing	1.5 倍行距
 	A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.	一款用 Rust 从零编写的免费开源文字处理软件。\n属于 ArtCraft 团队的 Crafting Apps 系列。
@@ -27,6 +28,7 @@
 	Add Space Before Paragraph	在段前添加间距
 	Add space between Asian and Latin text	在亚洲文字与西文之间添加间距
 	Add space between Asian text and numbers	在亚洲文字与数字之间添加间距
+	Add tab stop at:	制表位添加位置：
 	Add Text	添加文字
 	Add to Dictionary	添加到词典
 	Add to Style Gallery	添加到样式库
@@ -42,6 +44,7 @@
 	Align	对齐
 	Align Left	左对齐
 	Align Right	右对齐
+	Aligned at:	对齐位置：
 	Alignment	对齐方式
 	All Borders	所有框线
 	All Caps	全部大写
@@ -72,18 +75,46 @@
 	AutoSave	自动保存
 	AutoSave documents you have saved in WordCraft	自动保存在 WordCraft 中保存过的文档
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	自动保存失败：{error}。重新保存文档后将恢复自动保存。
+	Balloons	批注框
 	Bottom Margin	下边距
+	Bullet	项目符号
+	By author	按作者
+	Changed lines:	修订行：
+	Click level to modify:	单击要修改的级别：
+	Color only	仅颜色
 	Compress punctuation at the start of a line	压缩行首标点
 	Dark page (white text on black)	深色页面（黑底白字）
+	Define New Multilevel List	定义新的多级列表
+	Define New Multilevel List…	定义新的多级列表…
+	Deletions:	删除内容：
 	Edit Comment	编辑批注
+	Enter formatting for number:	输入编号的格式：
+	Follow number with:	编号之后：
+	Formatting	格式
+	Include level number from:	包含的级别编号来自：
+	Ink	墨迹
+	Insertions and Deletions	插入和删除
+	Insertions:	插入内容：
+	Left border	左框线
 	Left Margin	左边距
 	Indents and Spacing	缩进和间距
+	Legal style numbering	正规形式编号
 	Line breaking	断行
+	Link level to style:	将级别链接到样式：
+	List Definition	列表定义
 	More templates →	更多模板 →
 	No templates match your search.	没有与搜索匹配的模板。
+	Nothing	无
+	Number alignment:	编号对齐方式：
+	Number format	编号格式
+	Number style for this level:	此级别的编号样式：
+	Outside border	外侧框线
 	Reopen	重新打开
+	Restart list after:	重新开始列表的级别：
+	Right border	右框线
 	Right Margin	右边距
 	Search for templates	搜索模板
+	Show all revisions inline	以嵌入方式显示所有修订
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	像“视图 › 切换模式”一样以反转的颜色显示文档。保存、打印和 PDF 不受影响。
 	AutoSave saves every change to the file (needs a saved document)	自动保存会把每次更改写入文件（文档需已保存）
 	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	浏览器中无法使用自动保存：它不能写入你的文件。保存会下载一份副本。
@@ -109,6 +140,29 @@
 	Border Painter	边框刷
 	Border\nPainter	边框刷
 	Borders	边框
+	Tab stop position:	制表位位置：
+	Default tab stops:	默认制表位：
+	Tab stops to be cleared:	要清除的制表位：
+	All	全部
+	Decimal	小数点对齐
+	Bar	竖线对齐
+	Leader	前导符
+	Set	设置
+	Page Border	页面边框线
+	Apply to:	应用于：
+	Whole document	整篇文档
+	This section	本节
+	Fill	填充
+	Setting:	设置：
+	3-D	三维
+	Custom	自定义
+	Style:	样式：
+	Dot dash	点划线
+	Triple	三线
+	Between	段落之间
+	Borders and Shading	边框和底纹
+	Tabs…	制表位…
+	Borders and Shading…	边框和底纹…
 	Bottom Border	下框线
 	Bottom of Page	页面底端
 	Bottom:	下：
@@ -686,6 +740,8 @@
 	Show Comments	显示批注
 	Show Markup	显示标记
 	Show Notes	显示备注
+	Show only comments and formatting in balloons	仅在批注框中显示批注和格式
+	Show revisions in balloons	在批注框中显示修订
 	Show rulers	显示标尺
 	Show the community button in the title bar	在标题栏中显示社区按钮
 	Show/Hide ¶	显示/隐藏 ¶
@@ -703,6 +759,7 @@
 	SmartArt	SmartArt
 	Sort	排序
 	Source code: github.com/storytold/wordcraft	源代码：github.com/storytold/wordcraft
+	Space	空格
 	Space before/after:	段前/段后间距：
 	Spacing	间距
 	Spacing (pt):	间距（磅）：
@@ -717,6 +774,7 @@
 	Standard Colors	标准色
 	Star	星形
 	Start Chat	开始聊天
+	Start at:	起始编号：
 	Start Mail Merge	开始邮件合并
 	Start Mail\nMerge	开始邮件合并
 	Statistics	统计信息
@@ -739,6 +797,7 @@
 	Symbols	符号
 	Synonyms	同义词
 	Tab	制表符
+	Tab character	制表符
 	Table	表格
 	Table Column Width	表格列宽
 	Table Design	表设计
@@ -761,6 +820,7 @@
 	Text Effects and Typography	文本效果和版式
 	Text from File	文件中的文字
 	Text Highlight Color	文本突出显示颜色
+	Text indent at:	文本缩进位置：
 	Text to display:	要显示的文字：
 	Text Wrapping	文字环绕
 	Text:	文字：
@@ -784,7 +844,9 @@
 	Top:	上：
 	Total Row	汇总行
 	Track Changes	修订
+	Track Changes Options	修订选项
 	Track Changes: On	修订：打开
+	Track formatting	跟踪格式设置
 	Tracking	修订
 	Translate	翻译
 	Transparency	透明度
@@ -1081,6 +1143,86 @@
 	Leave the equation (Esc)	退出公式 (Esc)
 	Preview	预览
 	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft
+
+# Columns, Symbol and Field dialogs (#321).
+	(All)	(全部)
+	(none)	(无)
+	(normal text)	(普通文本)
+	1/4 Em Space	1/4 全角空格
+	A mail merge field	邮件合并域
+	A numbered sequence (figures, tables…)	编号序列（图、表…）
+	A table of contents	目录
+	Categories:	类别：
+	Character	字符
+	Character code:	字符代码：
+	Col #:	栏号：
+	Copyright	版权
+	Date and Time	日期和时间
+	Date formats:	日期格式：
+	Description:	说明：
+	Document Information	文档信息
+	Double Closing Quote	右双引号
+	Double Opening Quote	左双引号
+	Ellipsis	省略号
+	Em Dash	长破折号
+	En Dash	短破折号
+	Em Space	全角空格
+	En Space	半角空格
+	Equal column width	栏宽相等
+	Field Codes	域代码
+	Field code:	域代码：
+	Field codes:	域代码：
+	Field name:	域名：
+	Field names:	域名列表：
+	Field properties	域属性
+	Field…	域…
+	Format:	格式：
+	Hide Codes	隐藏代码
+	Index and Tables	索引和目录
+	Line between	分隔线
+	Links and References	链接和引用
+	Mail Merge	邮件合并
+	More Columns…	更多栏…
+	More Symbols…	其他符号…
+	No-Width Non Break	无宽非分隔符
+	No-Width Optional Break	无宽可选分隔符
+	Paragraph Mark	段落标记
+	Pick a field from the list	请选择域
+	Preserve formatting during updates	更新时保留格式
+	Presets	预设
+	Recently used symbols:	近期使用过的符号：
+	Registered	注册商标
+	Section Mark	章节符号
+	Sequence name:	序列名称：
+	Shortcut key:	快捷键：
+	Single Closing Quote	右单引号
+	Single Opening Quote	左单引号
+	Spacing:	间距：
+	Special Characters	特殊字符
+	Subset:	子集：
+	The time right now	当前时间
+	When this document was first created	文档的创建日期
+	When this document was most recently printed	文档的上次打印日期
+	When this document was most recently saved	文档的上次保存日期
+	The document has no bookmarks yet.	文档中还没有书签。
+	Who the document properties name as author	文档作者
+	Name of the file this document is saved as	文档的文件名
+	Title from the document properties	文档标题
+	How many pages the whole document has	文档的页数
+	How many pages this section has	本节的页数
+	Number of the page the field sits on	当前页码
+	Number of the section the field sits in	当前节号
+	How many words the document holds	文档的字数
+	Page on which a bookmarked passage falls	书签所在的页码
+	Copy of the text a bookmark marks	书签的文本
+	This field has no options.	此域没有选项。
+	This font has no characters to show.	此字体没有可显示的字符。
+	This point forward	插入点之后
+	The date it is today	今天的日期
+	Trademark	商标
+	Type the field's name and its switches, for example PAGE \\* roman.	键入域名及其开关，例如 PAGE \\* roman。
+	Width and spacing	宽度和间距
+	from Unicode (hex)	来自 Unicode（十六进制）
 	Shape Effects	形状效果
 	Glow	发光
 	Soft Edges	柔化边缘
@@ -1135,3 +1277,9 @@
 	The password is removed. Save the document to keep the change.	密码已删除。保存文档以保留此更改。
 	The passwords don't match.	两次输入的密码不一致。
 	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	请妥善保管密码：没有密码，任何人（包括 WordCraft）都无法打开文档。两个框都留空可删除密码。
+	Rotation	旋转角度
+	Rotation:	旋转：
+	Rotate Right 90°	向右旋转 90°
+	Rotate Left 90°	向左旋转 90°
+	Flip Vertical	垂直翻转
+	Flip Horizontal	水平翻转

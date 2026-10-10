@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 use wordcraft_doc::numbering::ListKind;
-use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, LineSpacing, NumRef, ParaProps, Rgb, TabStop};
+use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, LineSpacing, NumRef, ParaProps, Rgb, TabAlign, TabLeader, TabStop};
 use wordcraft_doc::styles::{Style, StyleKind};
 use wordcraft_doc::{Block, Pos};
 
@@ -118,8 +118,9 @@ pub fn specs() -> Vec<CommandSpec> {
             fmt(s, &|p| p.shading = c)
         })
         .params(r#"{"color": "RRGGBB" | null}"#),
-        CommandSpec::new("para.borders", "Borders", "Home › Paragraph", borders)
-            .params(r#"{"kind": "bottom|top|left|right|none|all|outside|inside|horizontalLine", "width"?: pt, "color"?: "RRGGBB", "style"?: "single|double|dotted|dashed|thick"}"#),
+        CommandSpec::new("para.borders", "Borders", "Home › Paragraph", borders).params(
+            r#"{"kind": "bottom|top|left|right|none|all|outside|inside|horizontalLine", "width"?: pt, "color"?: "RRGGBB", "style"?: "single|double|dotted|dashed|thick|triple|dotDash|wave", "sides"?: Sides} where Sides = {"top"|"left"|"bottom"|"right"|"between": {"style"?, "width"?: pt, "color"?: "RRGGBB"} | null}: exactly these sides (others off), instead of `kind`"#,
+        ),
         CommandSpec::new("para.sort", "Sort", "Home › Paragraph", sort).params(r#"{"descending"?: bool}"#),
         CommandSpec::new("para.keepNext", "Keep with Next", "Home › Paragraph › Line and Page Breaks", |s, v| tog(s, v, |p| p.keep_next, |p, b| p.keep_next = Some(b))),
         CommandSpec::new("para.keepLines", "Keep Lines Together", "Home › Paragraph › Line and Page Breaks", |s, v| tog(s, v, |p| p.keep_lines, |p, b| p.keep_lines = Some(b))),
@@ -132,14 +133,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("para.asianTypography", "Asian Typography", "Home › Paragraph › Asian Typography", asian_typography).params(
             r#"{"kinsoku"?: bool (East Asian line-breaking rules), "wordWrap"?: bool (false: Latin words may break at any character), "overflowPunct"?: bool (hanging punctuation), "topLinePunct"?: bool (compress punctuation at the start of a line), "autoSpaceDE"?: bool (space between Asian and Latin text), "autoSpaceDN"?: bool (space between Asian text and numbers)} — flags left out stay as they are; returns the flags at the caret"#,
         ),
-        CommandSpec::new("para.tabs", "Tabs", "Home › Paragraph › Paragraph", |s, v| {
-            let tabs: Vec<TabStop> = serde_json::from_value(v.get("tabs").cloned().unwrap_or(Value::Null)).map_err(|e| CmdError::Params(e.to_string()))?;
-            if tabs.len() > 64 {
-                return Err(CmdError::Params("at most 64 tab stops".into()));
-            }
-            fmt(s, &|p| p.tabs = Some(tabs.clone()))
-        })
-        .params(r#"{"tabs": [{"pos": pt, "align": "left|center|right|decimal|bar", "leader": "none|dot|hyphen|underscore"}]}"#),
+        CommandSpec::new("para.tabs", "Tabs", "Home › Paragraph › Paragraph", tabs).params(
+            r#"{"tabs"?: [TabStop] (replace the direct stops), "set"?: [TabStop], "clear"?: [pt], "clearAll"?: bool, "default"?: pt} where TabStop = {"pos": pt, "align"?: "left|center|right|decimal|bar", "leader"?: "none|dot|hyphen|underscore|middleDot"}"#,
+        ),
         CommandSpec::new("para.outlineLevel", "Outline Level", "Home › Paragraph › Paragraph", |s, v| {
             let l = p::u64(v, "level").map(|x| x.min(9) as u8);
             fmt(s, &|p| p.outline_level = l)
@@ -473,7 +469,98 @@ fn restart_numbering(s: &mut Session, _: &Value) -> CmdResult {
     sel_result(s)
 }
 
+/// Most tab stops a paragraph keeps.
+const MAX_TABS: usize = 64;
+
+/// Tab stops: replace the direct list, set and clear stops, and change the default interval, in
+/// one step. Clearing a stop the paragraph style defines records a clear stop over it.
+fn tabs(s: &mut Session, v: &Value) -> CmdResult {
+    let stops = |k: &str| -> Result<Option<Vec<TabStop>>, CmdError> {
+        let Some(x) = v.get(k).filter(|x| !x.is_null()) else { return Ok(None) };
+        let list: Vec<TabStop> = serde_json::from_value(x.clone()).map_err(|e| CmdError::Params(format!("`{k}`: {e}")))?;
+        if list.len() > MAX_TABS {
+            return Err(CmdError::Params(format!("at most {MAX_TABS} tab stops")));
+        }
+        if list.iter().any(|t| !t.pos.is_finite() || t.pos.abs() > 1584.0) {
+            return Err(CmdError::Params("tab positions are points within ±1584".into()));
+        }
+        Ok(Some(list))
+    };
+    let replace = stops("tabs")?;
+    let set = stops("set")?.unwrap_or_default();
+    let clear: Vec<f32> = match v.get("clear").filter(|x| !x.is_null()) {
+        None => Vec::new(),
+        Some(x) => {
+            let list: Vec<f32> = serde_json::from_value(x.clone()).map_err(|e| CmdError::Params(format!("`clear`: {e}")))?;
+            if list.len() > MAX_TABS || list.iter().any(|p| !p.is_finite()) {
+                return Err(CmdError::Params(format!("`clear` is at most {MAX_TABS} positions in points")));
+            }
+            list
+        }
+    };
+    let clear_all = p::bool(v, "clearAll").unwrap_or(false);
+    if let Some(d) = p::f32(v, "default") {
+        s.doc.settings.default_tab = d.clamp(1.0, 1584.0);
+    }
+    if replace.is_none() && set.is_empty() && clear.is_empty() && !clear_all {
+        return sel_result(s);
+    }
+    let styles = s.doc.styles.clone();
+    let near = |a: f32, b: f32| (a - b).abs() < 0.5;
+    fmt(s, &|p| {
+        // The stops the paragraph inherits from its style.
+        let inherited = styles.resolve_para(&ParaProps { tabs: None, ..p.clone() }).tabs;
+        let mut list = replace.clone().unwrap_or_else(|| p.tabs.clone().unwrap_or_default());
+        let clear_at = |list: &mut Vec<TabStop>, pos: f32| {
+            list.retain(|t| !near(t.pos, pos));
+            if inherited.iter().any(|t| near(t.pos, pos)) {
+                list.push(TabStop { pos, align: TabAlign::Clear, leader: TabLeader::None });
+            }
+        };
+        if clear_all {
+            list.clear();
+            for t in &inherited {
+                clear_at(&mut list, t.pos);
+            }
+        }
+        for pos in &clear {
+            clear_at(&mut list, *pos);
+        }
+        for t in &set {
+            list.retain(|x| !near(x.pos, t.pos));
+            list.push(*t);
+        }
+        list.sort_by(|a, b| a.pos.total_cmp(&b.pos));
+        list.truncate(MAX_TABS);
+        p.tabs = Some(list);
+    })
+}
+
+/// A `sides` object: exactly the sides it names, each `{"style", "width", "color"}`.
+pub fn border_sides(v: &Value, space_tb: f32, space_lr: f32) -> Result<Borders, CmdError> {
+    let obj = v.as_object().ok_or_else(|| CmdError::Params("`sides` is an object".into()))?;
+    let side = |k: &str, space: f32| -> Option<Border> {
+        let x = obj.get(k).filter(|x| x.is_object())?;
+        let style = p::str(x, "style").map(BorderStyle::from_ooxml).unwrap_or(BorderStyle::Single);
+        let width = p::f32(x, "width").unwrap_or(0.5).clamp(0.25, 6.0);
+        Some(Border { style, width, color: p::str(x, "color").and_then(Rgb::parse), space })
+    };
+    Ok(Borders {
+        top: side("top", space_tb),
+        left: side("left", space_lr),
+        bottom: side("bottom", space_tb),
+        right: side("right", space_lr),
+        between: side("between", space_tb),
+        inside_v: None,
+    })
+}
+
 fn borders(s: &mut Session, v: &Value) -> CmdResult {
+    if let Some(sides) = v.get("sides") {
+        let b = border_sides(sides, 1.0, 4.0)?;
+        // An explicit empty set keeps a style's borders off.
+        return fmt(s, &|p| p.borders = Some(b));
+    }
     let kind = p::str(v, "kind").unwrap_or("bottom");
     let width = p::f32(v, "width").unwrap_or(0.5).clamp(0.25, 6.0);
     let color = p::str(v, "color").and_then(Rgb::parse);

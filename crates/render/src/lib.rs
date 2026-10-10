@@ -704,6 +704,13 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 draw(ctx, doc, it, view * m, &local, opts);
             }
         }
+        Draw::Rotated { cx, cy, spin, items } => {
+            let m = Affine::new(spin.matrix(*cx, *cy).map(f64::from));
+            let local = m.inverse().transform_rect_bbox(*visible);
+            for it in items {
+                draw(ctx, doc, it, view * m, &local, opts);
+            }
+        }
     }
 }
 
@@ -863,7 +870,7 @@ mod tests {
         let right = |img: &Rendered| grey(img, x1 + 2..x1 + 6, y0 + 10..y1);
         let left = |img: &Rendered| grey(img, x0.saturating_sub(6)..x0.saturating_sub(2), y0 + 10..y1);
         assert_eq!((right(&plain), left(&plain)), (0, 0));
-        let shadow = Shadow { color: Rgb::BLACK, transparency: 30.0, blur: 2.0, distance: 8.0, angle: 0.0 };
+        let shadow = Shadow { color: Rgb::BLACK, transparency: 30.0, blur: 2.0, distance: 8.0, angle: 0.0, rot_with_shape: false };
         let img = draw(ShapeEffects { shadow: Some(shadow), ..Default::default() });
         assert_eq!(blue(&img), (x0, y0, x1, y1), "the shape itself is unchanged");
         assert!(right(&img) > 100, "shadow to the right: {}", right(&img));
@@ -925,7 +932,15 @@ mod tests {
             .unwrap();
         let media = d.add_media(png, "png");
         let mut hp = wordcraft_doc::Paragraph::new();
-        let obj = wordcraft_doc::para::InlineObject::Image { media, w: 40.0, h: 40.0, alt: String::new(), float: Default::default(), crop: [0.0; 4] };
+        let obj = wordcraft_doc::para::InlineObject::Image {
+            media,
+            w: 40.0,
+            h: 40.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+        };
         hp.insert_object(0, obj, &Default::default()).unwrap();
         let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(hp)]);
         d.last_section.headers.default = Some(id);
@@ -988,7 +1003,15 @@ mod tests {
         let mut d = Document::new();
         let media = d.add_media(red_right_half_emf(), "emf");
         let mut p = wordcraft_doc::Paragraph::new();
-        let obj = wordcraft_doc::para::InlineObject::Image { media, w: 70.0, h: 70.0, alt: String::new(), float: Default::default(), crop: [0.0; 4] };
+        let obj = wordcraft_doc::para::InlineObject::Image {
+            media,
+            w: 70.0,
+            h: 70.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+        };
         p.insert_object(0, obj, &Default::default()).unwrap();
         d.body = vec![wordcraft_doc::para_block(p)];
         let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
@@ -1016,7 +1039,15 @@ mod tests {
         let mut d = Document::new();
         let media = d.add_media(emf, "emf");
         let mut p = wordcraft_doc::Paragraph::new();
-        let obj = wordcraft_doc::para::InlineObject::Image { media, w: 70.0, h: 70.0, alt: String::new(), float: Default::default(), crop: [0.0; 4] };
+        let obj = wordcraft_doc::para::InlineObject::Image {
+            media,
+            w: 70.0,
+            h: 70.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+        };
         p.insert_object(0, obj, &Default::default()).unwrap();
         d.body = vec![wordcraft_doc::para_block(p)];
         let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
@@ -1042,7 +1073,15 @@ mod tests {
         // The header alone has no records, so the metafile does not parse.
         let media = d.add_media(red_right_half_emf()[..88].to_vec(), "emf");
         let mut p = wordcraft_doc::Paragraph::new();
-        let obj = wordcraft_doc::para::InlineObject::Image { media, w: 70.0, h: 70.0, alt: String::new(), float: Default::default(), crop: [0.0; 4] };
+        let obj = wordcraft_doc::para::InlineObject::Image {
+            media,
+            w: 70.0,
+            h: 70.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+        };
         p.insert_object(0, obj, &Default::default()).unwrap();
         d.body = vec![wordcraft_doc::para_block(p)];
         let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
