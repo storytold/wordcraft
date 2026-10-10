@@ -34,6 +34,8 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("review.previousChange", "Previous Change", "Review › Changes", |s, _| nav_change(s, -1)).pure(),
         CommandSpec::new("review.markup", "Display for Review", "Review › Tracking", |s, v| {
             s.view.show_markup = p::str(v, "value").map(|m| m != "noMarkup" && m != "original").unwrap_or(!s.view.show_markup);
+            // Without markup, deletions leave the layout.
+            s.relayout();
             Ok(json!({"showMarkup": s.view.show_markup}))
         })
         .pure(),

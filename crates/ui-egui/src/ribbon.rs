@@ -7,7 +7,7 @@ use crate::theme::{Tokens, medium, regular, semibold};
 use crate::widgets::{CONTENT_H, LABEL_H, big, color_grid, combo, group, menu_button, small, split};
 use crate::{WordApp, icons};
 
-pub const TABS: [&str; 11] = ["File", "Home", "Insert", "Draw", "Design", "Layout", "References", "Mailings", "Review", "View", "Help"];
+pub const TABS: [&str; 12] = ["File", "Home", "Insert", "Draw", "Design", "Layout", "References", "Mailings", "Review", "View", "Zotero", "Help"];
 
 /// True when the caret/selection touches a picture (#147).
 pub fn has_picture_selected(s: &wordcraft_engine::Session) -> bool {
@@ -147,6 +147,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         "Mailings" => mailings(app, ui),
                         "Review" => review(app, ui),
                         "View" => view(app, ui),
+                        "Zotero" => zotero(app, ui),
                         "Help" => help(app, ui),
                         "Table Design" => table_design(app, ui),
                         "Table Layout" => table_layout(app, ui),
@@ -861,6 +862,23 @@ fn mailings(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Finish", None, app, |ui, app| {
         big(ui, app, "finish", "Finish &\nMerge", "mailings.finish", json!({}), false);
+    });
+}
+
+/// Zotero (`docs/zotero.md`): the Zotero desktop app does the work in its own window.
+fn zotero(app: &mut WordApp, ui: &mut Ui) {
+    group(ui, "Citations", None, app, |ui, app| {
+        big(ui, app, "citation", "Add/Edit\nCitation", "ui.zotero.addEditCitation", json!({}), false);
+        big(ui, app, "addNote", "Add\nNote", "ui.zotero.addNote", json!({}), false);
+        big(ui, app, "pastCitation", "Move Past\nCitation", "caret.pastCitation", json!({}), false);
+    });
+    group(ui, "Bibliography", None, app, |ui, app| {
+        big(ui, app, "bibliography", "Add/Edit\nBibliography", "ui.zotero.addEditBibliography", json!({}), false);
+    });
+    group(ui, "Document", None, app, |ui, app| {
+        big(ui, app, "update", "Refresh", "ui.zotero.refresh", json!({}), false);
+        big(ui, app, "docPrefs", "Document\nPreferences", "ui.zotero.setDocPrefs", json!({}), false);
+        big(ui, app, "unlinkCitations", "Unlink\nCitations", "ui.zotero.removeCodes", json!({}), false);
     });
 }
 

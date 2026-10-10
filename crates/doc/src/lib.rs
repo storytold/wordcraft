@@ -12,6 +12,8 @@
 
 pub mod bidi;
 pub mod edit;
+pub mod encoding;
+pub mod fields;
 pub mod numbering;
 pub mod para;
 pub mod props;
@@ -25,6 +27,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+pub use fields::FieldRange;
 pub use numbering::{ListKind, Numbering};
 pub use para::{InlineObject, Paragraph, Run};
 pub use props::{Align, CharProps, ParaProps, Rgb, TextColor};
@@ -218,6 +221,18 @@ pub struct Source {
     pub url: String,
 }
 
+/// A custom document property (File › Info › Properties › Custom). Citation managers keep
+/// their per-document preferences here (Zotero: `ZOTERO_PREF_1`, `ZOTERO_PREF_2`…).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CustomProp {
+    pub name: String,
+    /// OOXML variant type: `lpwstr`, `i4`, `r8`, `bool`, `filetime`…, or `raw` when `value` is
+    /// the property's XML content kept verbatim (vectors, blobs).
+    pub kind: String,
+    pub value: String,
+}
+
 /// Document properties (File › Info).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
@@ -336,6 +351,8 @@ pub struct Document {
     pub core: CoreProps,
     /// Bibliography sources (References › Manage Sources).
     pub sources: Vec<Source>,
+    /// Custom document properties, in file order.
+    pub custom_props: Vec<CustomProp>,
     /// Embedded media (images) by key.
     #[serde(skip)]
     pub media: BTreeMap<String, Arc<Vec<u8>>>,
@@ -364,6 +381,7 @@ impl Document {
             settings: Settings::default(),
             core: CoreProps::default(),
             sources: Vec::new(),
+            custom_props: Vec::new(),
             media: BTreeMap::new(),
             passthrough: BTreeMap::new(),
         }
@@ -613,6 +631,29 @@ impl Document {
         }
         self.media.insert(key.clone(), Arc::new(bytes));
         key
+    }
+
+    /// The value of a custom property (names compare case-insensitively, as in Word).
+    pub fn custom_prop(&self, name: &str) -> Option<&str> {
+        self.custom_props.iter().find(|p| p.name.eq_ignore_ascii_case(name)).map(|p| p.value.as_str())
+    }
+
+    /// Set a custom text property, replacing one of the same name in place.
+    pub fn set_custom_prop(&mut self, name: &str, value: &str) {
+        match self.custom_props.iter_mut().find(|p| p.name.eq_ignore_ascii_case(name)) {
+            Some(p) => {
+                p.kind = "lpwstr".into();
+                p.value = value.to_string();
+            }
+            None => self.custom_props.push(CustomProp { name: name.to_string(), kind: "lpwstr".into(), value: value.to_string() }),
+        }
+    }
+
+    /// Remove a custom property. Returns whether it existed.
+    pub fn remove_custom_prop(&mut self, name: &str) -> bool {
+        let n = self.custom_props.len();
+        self.custom_props.retain(|p| !p.name.eq_ignore_ascii_case(name));
+        self.custom_props.len() != n
     }
 
     /// Bookmark names in the body, in order.

@@ -84,9 +84,10 @@ impl Default for PdfOptions {
     }
 }
 
-/// Lay out `doc` and write it as PDF.
+/// Lay out `doc` and write it as PDF. Without markup the layout is the final text: tracked
+/// deletions are left out, as in Word's "No Markup" view.
 pub fn export(doc: &Document, opts: &PdfOptions) -> Result<Vec<u8>, PdfError> {
-    let lay = layout(doc, &mut LayoutCache::new(), &LayoutOptions::default());
+    let lay = layout(doc, &mut LayoutCache::new(), &LayoutOptions { hide_deleted: !opts.include_markup, ..Default::default() });
     export_layout(doc, &lay, opts)
 }
 
@@ -534,8 +535,8 @@ impl Exporter<'_> {
         for it in &page.items {
             let draws = self.draws(page, it, &dopts);
             match it {
-                Placed::Lines { story, path, .. } => {
-                    let idx = self.entry(*story, path);
+                Placed::Lines { story, path, para, .. } => {
+                    let idx = self.entry(*story, path, para);
                     for d in &draws {
                         match d {
                             Draw::Glyphs { .. } => self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d)),
@@ -571,14 +572,25 @@ impl Exporter<'_> {
         page_display(self.doc, &one, dopts)
     }
 
+    /// A heading's text for bookmarks and tags: what the pages show. That leaves out what its
+    /// layout `pl` left out (hidden text, resolved as laid out, so table formatting counts too) and,
+    /// without markup, tracked deletions.
+    fn title_text(&self, p: &wordcraft_doc::Paragraph, pl: &wordcraft_layout::para::ParaLayout) -> String {
+        let mut dropped = pl.left_out.clone();
+        if !self.opts.include_markup {
+            dropped.extend(p.deleted_ranges());
+        }
+        p.text_without(&dropped)
+    }
+
     /// The structure entry for a paragraph (created on first sight, in reading order).
-    fn entry(&mut self, story: StoryRef, path: &DocPath) -> usize {
+    fn entry(&mut self, story: StoryRef, path: &DocPath, pl: &wordcraft_layout::para::ParaLayout) -> usize {
         if let Some(i) = self.tag_index.get(&(story, path.clone())) {
             return *i;
         }
         let kind: TagKind = match self.doc.para(story, path).map(|p| self.doc.styles.resolve_para(&p.props).outline_level) {
             Some(Some(l)) if l < 6 => {
-                let title = self.doc.para(story, path).map(|p| p.plain_text().trim().chars().take(200).collect::<String>());
+                let title = self.doc.para(story, path).map(|p| self.title_text(p, pl).trim().chars().take(200).collect::<String>());
                 Tag::Hn(NonZeroU16::new(u16::from(l) + 1).unwrap_or(NonZeroU16::MIN), title).into()
             }
             _ => Tag::P.into(),
@@ -937,10 +949,10 @@ impl Exporter<'_> {
         for (out, pi) in pages.iter().enumerate() {
             let Some(page) = self.lay.pages.get(*pi) else { continue };
             for it in &page.items {
-                let Placed::Lines { story: StoryRef::Body, path, l0: 0, x, y, .. } = it else { continue };
+                let Placed::Lines { story: StoryRef::Body, path, para, l0: 0, x, y, .. } = it else { continue };
                 let Some(p) = self.doc.para(StoryRef::Body, path) else { continue };
                 let Some(level) = self.doc.styles.resolve_para(&p.props).outline_level else { continue };
-                let title: String = p.plain_text().split_whitespace().collect::<Vec<_>>().join(" ").chars().take(200).collect();
+                let title: String = self.title_text(p, para).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(200).collect();
                 if title.is_empty() {
                     continue;
                 }

@@ -348,6 +348,10 @@ fn lines(
             }
             let run_end = k;
             let rc = &st.rc;
+            // Without markup a deletion is never drawn as ordinary text, even in a layout that kept it.
+            if rc.del.is_some() && !opts.markup {
+                continue;
+            }
             let rev = rc.ins.or(rc.del).filter(|_| opts.markup);
             let color = match rev {
                 Some(r) => revision_color(doc.revisions.get(r as usize).map(|v| author_index(doc, &v.author)).unwrap_or(0)),

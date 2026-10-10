@@ -77,6 +77,8 @@ fn keytip_badge(ui: &Ui, rect: Rect, id: &str, name: &str) {
 pub fn enabled(app: &WordApp, id: &str) -> bool {
     match app.session.registry.get(id) {
         Some(s) => (s.enabled)(&app.session).is_none(),
+        // Zotero: one command at a time, and only in the desktop app.
+        None if id.starts_with("ui.zotero.") => app.zotero.busy.is_none() && !cfg!(target_arch = "wasm32"),
         None => id.starts_with("ui."),
     }
 }

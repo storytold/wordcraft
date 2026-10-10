@@ -61,7 +61,8 @@
 	Automatic Table 1 (3 levels)	自动目录 1（3 级）
 	Automatic Table 2 (2 levels)	自动目录 2（2 级）
 	AutoSave	自动保存
-	AutoSave documents that have been saved	自动保存已保存过的文档
+	AutoSave documents you have saved in WordCraft	自动保存在 WordCraft 中保存过的文档
+	AutoSave failed: {error}. Save the document to turn AutoSave back on.	自动保存失败：{error}。重新保存文档后将恢复自动保存。
 	Dark page (white text on black)	深色页面（黑底白字）
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	像“视图 › 切换模式”一样以反转的颜色显示文档。保存、打印和 PDF 不受影响。
 	AutoSave saves every change to the file (needs a saved document)	自动保存会把每次更改写入文件（文档需已保存）
@@ -150,6 +151,7 @@
 	Copy	复制
 	Copy Formatting	复制格式
 	Corrections	更正
+	Couldn't download {name}: {error}	无法下载 {name}：{error}
 	Cover Page	封面
 	Create	创建
 	Create a Style	创建样式
@@ -198,6 +200,8 @@
 	Distribute Rows	平均分布各行
 	Distributed	分散对齐
 	Do Not Show in TOC	不在目录中显示
+	Do you want to save changes to {name}?	是否保存对 {name} 的更改？
+	Don't Save	不保存
 	Document End	文档结尾
 	Document Formatting	文档格式
 	Document Property	文档属性
@@ -710,6 +714,7 @@
 	Text:	文字：
 	Text\nBox	文本框
 	Text\nDirection	文字方向
+	That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.	该格式无法保留全部内容，因此文档仍保持打开。请将其保存为 Word 文档 (.docx) 后再继续。
 	The new style takes the formatting of the current paragraph.	新样式将采用当前段落的格式。
 	Theme Colors	主题颜色
 	Theme Fonts	主题字体
@@ -791,5 +796,43 @@
 	Direction:	方向：
 	Right-to-left	从右向左
 	Left-to-right	从左向右
+# Zotero integration
+	Zotero	Zotero
+	Citations	引文
+	Document	文档
+	Add/Edit\nCitation	添加/编辑\n引文
+	Add\nNote	添加\n笔记
+	Add/Edit\nBibliography	添加/编辑\n参考文献
+	Refresh	刷新
+	Document\nPreferences	文档\n首选项
+	Unlink\nCitations	取消链接\n引文
+	Waiting for Zotero…	正在等待 Zotero…
+	Zotero: done	Zotero：完成
+	Zotero: cancelled	Zotero：已取消
+	Yes	是
+	No	否
+	Move Past Citation	移到引文之后
+	Move Past\nCitation	移到\n引文之后
+	Next Sentence	下一句
+	Previous Sentence	上一句
+	Next sentence	下一句
+	Previous sentence	上一句
+	Play/Pause	播放/暂停
+	Read Aloud Status	朗读状态
+	Reading Speed	朗读速度
+	Skip Citations and Bibliography	跳过引文和参考文献
+	Skip citations & bibliography	跳过引文和参考文献
+	Stop Reading	停止朗读
+	Don't read Zotero, Mendeley or EndNote citations and bibliographies	不朗读 Zotero、Mendeley 或 EndNote 的引文和参考文献
+	Play	播放
+	Pause	暂停
+	Stop	停止
+	Sentence	句
+	Paused	已暂停
+	Finished	已完成
+	Stopped	已停止
+	Speed	速度
+	Normal speed	正常速度
+	Your changes will be lost if you don't save them.	如果不保存，您的更改将会丢失。
 	Scroll ribbon left	向左滚动功能区
 	Scroll ribbon right	向右滚动功能区

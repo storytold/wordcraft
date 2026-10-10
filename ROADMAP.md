@@ -8,7 +8,7 @@ and agent control. This file tracks where we are honestly. Generated numbers com
 
 | Measure | Value |
 |---|---|
-| Commands (every action, scriptable by CLI/MCP/control channel) | **392** |
+| Commands (every action, scriptable by CLI/MCP/control channel) | **400** |
 | Feature catalog coverage (Word ribbon/menu features with a command) | **357 / 406 (88%)** |
 | **Estimated real feature parity** (depth and fidelity, not just a command) | **~62%** |
 | **Distance to alpha** | **~85% of the way; ≈20–25 h of Claude wall-clock work** |
@@ -55,13 +55,14 @@ the icon art).
 | Page layout (margins, size, orientation, columns, breaks, sections) | Good; page borders, line numbers, vertical alignment, drop caps, hyphenation; columns don't balance | 72% |
 | Headers/footers, page numbers, fields | Good; first/even/odd, link to previous | 70% |
 | Footnotes/endnotes | Placed and editable; long notes don't continue onto the next page | 60% |
-| References (TOC, citations APA/MLA/Chicago/IEEE, bibliography, index, figures, cross-refs, TOA) | Working first versions | 60% |
+| References (TOC, citations APA/MLA/Chicago/IEEE, bibliography, index, figures, cross-refs, TOA) | Working first versions; Zotero/Mendeley `ADDIN` fields and custom properties round-trip; Zotero in the app (`ui.zotero.*`, `wordcraft-cli zotero`): citations, bibliography, refresh, unlink, document preferences, in-text ↔ footnote switching, Zotero ribbon tab, Move Past Citation; Read Aloud player (speed, previous/next sentence, skips citations and bibliography) | 60% |
 | Review (spelling, grammar, thesaurus, comments, track changes, compare, protect) | Good; comment balloons in the margin; no track-changes balloons | 75% |
 | Mailings (mail merge, rules, preview, envelopes, labels) | Working | 70% |
 | Pictures & shapes (insert, size, crop, recolour, effects, styles, float position) | Text wraps around floats (rectangular); text boxes render their text; no tight/contour wrap, no rotation handles | 55% |
 | Draw tab (ink), SmartArt, charts, 3D models, equations editor | Not started / linear equations only | 5% |
 | File formats: DOCX read/write | Good (Word opens our files); charts/SmartArt/OLE dropped; untested on a real-world corpus | 75% |
 | File formats: PDF, ODT, RTF, HTML, Markdown, LaTeX, TXT | Working | 70% |
+| File formats: Word 97-2003 `.doc`/`.dot` import | Text, formatting, styles, sections, headers/footers, tables, lists, notes, fields, bookmarks, pictures (spec-based reader; metafile images and Word 6/95 rejected) | 60% |
 | View modes (print, web, draft, read, focus, zoom, navigation pane) | Working | 70% |
 | Backstage (new from templates, open, info, export, options) | Working; printing goes through PDF | 55% |
 | Right-to-left and complex scripts (Persian, Arabic, Hebrew) | Unicode Bidirectional Algorithm, Arabic shaping (joining, ZWNJ, lam-alef, mirrored brackets), mixed Persian/Latin/number lines, mirrored paragraphs (indents, tabs, list labels, ruler), visual caret movement and hit testing, complex-script fonts/sizes in DOCX; no kashida justification, RTL sections/tables or right-to-left UI yet | 55% |
