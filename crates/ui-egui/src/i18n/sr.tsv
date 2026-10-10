@@ -1325,3 +1325,10 @@
 	Flip Vertical	Окрени вертикално
 	Flip Horizontal	Окрени хоризонтално
 	Formatted	Форматирано
+	WordCraft {version} is available.	Доступна је верзија WordCraft {version}.
+	Download	Преузми
+	Open the release page in your browser	Отвори страницу издања у прегледачу
+	Skip this version	Прескочи ову верзију
+	Dismiss	Затвори
+	Check for updates	Проверавај ажурирања
+	Once a day, ask GitHub whether a newer WordCraft release is out and show a notice. Nothing else is sent.	Једном дневно питај GitHub да ли је изашло новије издање WordCraft-а и прикажи обавештење. Ништа друго се не шаље.

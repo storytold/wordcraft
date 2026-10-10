@@ -1327,3 +1327,10 @@
 	Flip Vertical	Voltear verticalmente
 	Flip Horizontal	Voltear horizontalmente
 	Formatted	Con formato
+	WordCraft {version} is available.	WordCraft {version} está disponible.
+	Download	Descargar
+	Open the release page in your browser	Abrir la página de la versión en el navegador
+	Skip this version	Omitir esta versión
+	Dismiss	Descartar
+	Check for updates	Buscar actualizaciones
+	Once a day, ask GitHub whether a newer WordCraft release is out and show a notice. Nothing else is sent.	Una vez al día, preguntar a GitHub si hay una versión más reciente de WordCraft y mostrar un aviso. No se envía nada más.

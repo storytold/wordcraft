@@ -1323,3 +1323,10 @@
 	Flip Vertical	Віддзеркалити по вертикалі
 	Flip Horizontal	Віддзеркалити по горизонталі
 	Formatted	Відформатовано
+	WordCraft {version} is available.	Доступна версія WordCraft {version}.
+	Download	Завантажити
+	Open the release page in your browser	Відкрити сторінку випуску в браузері
+	Skip this version	Пропустити цю версію
+	Dismiss	Закрити
+	Check for updates	Перевіряти оновлення
+	Once a day, ask GitHub whether a newer WordCraft release is out and show a notice. Nothing else is sent.	Раз на день запитувати в GitHub, чи вийшов новіший випуск WordCraft, і показувати сповіщення. Більше нічого не надсилається.

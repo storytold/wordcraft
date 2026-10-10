@@ -98,7 +98,10 @@ Every screenshot below is WordCraft itself, rendered offscreen by its own UI tes
 - **Built for agents.** Every action is a command with an id. The same 422 commands drive the
   ribbon, keyboard shortcuts, the command search, a command-line tool, a JSON control channel and
   an MCP server.
-- **Private.** Spelling, grammar and everything else work offline.
+- **Private.** Spelling, grammar and everything else work offline. No telemetry: the desktop app's
+  only network request is a once-a-day check of GitHub's latest-release API for the "new version
+  available" notice — no identifiers sent. Turn it off in File › Options › Check for updates, or set
+  `WORDCRAFT_NO_UPDATE_CHECK=1` (at run time, or at build time for packagers). Flatpak builds don't check.
 - **Open.** MIT OR Apache-2.0. Clean-room: built from public specifications and observation, with
   every asset original or openly licensed.
 

@@ -40,6 +40,7 @@ pub mod ribbon;
 pub mod scroll;
 pub mod table_pen;
 pub mod theme;
+pub mod update;
 pub mod widgets;
 pub mod window_geometry;
 pub mod zotero;
@@ -80,6 +81,10 @@ pub struct Services {
     /// Desktop: the picture on the system clipboard, if any — egui's paste only carries text
     /// (#45). Read when Paste finds no text; see [`paste_picture`].
     pub clipboard_picture: Option<Box<dyn Fn() -> Option<paste_picture::ClipboardPicture>>>,
+    /// Desktop: fetch the latest-release JSON for the "new version available" notice (#201),
+    /// called on a background thread at most once a day. `None` (the web, tests, packagers who
+    /// turn it off) means no check and no Options checkbox.
+    pub check_update: Option<update::Fetch>,
 }
 
 /// Files delivered asynchronously.
@@ -124,6 +129,12 @@ pub struct UiState {
     /// View › Switch Modes: show pages dark (white text on black), kept between runs. Only the
     /// pages: the interface follows [`UiState::theme`] (#312).
     pub dark_page: bool,
+    /// File › Options › Check for updates (desktop): look for a newer release once a day (#201).
+    pub check_updates: bool,
+    /// When the last update check started (Unix seconds; 0 = never).
+    pub update_checked_at: u64,
+    /// The release version the user chose to skip (`Skip this version`), e.g. `0.5.0`.
+    pub skipped_update: String,
 }
 
 impl Default for UiState {
@@ -148,6 +159,9 @@ impl Default for UiState {
             keytips: crate::keytips::Phase::Off,
             alt_chord_used: false,
             dark_page: false,
+            check_updates: true,
+            update_checked_at: 0,
+            skipped_update: String::new(),
         }
     }
 }
@@ -212,6 +226,8 @@ pub struct WordApp {
     /// keystroke, so one visit's keystrokes make a single undo step (and anything else in
     /// between, such as an Undo, starts a new one).
     pub(crate) info_editing: Option<(&'static str, u64)>,
+    /// The daily check for a newer release and its notice (#201).
+    pub update: update::UpdateCheck,
 }
 
 /// The answer to "Do you want to save changes?" (`ui.saveChanges`).
@@ -272,6 +288,7 @@ impl WordApp {
             recipient_list_pending: false,
             file_dialog: None,
             info_editing: None,
+            update: update::UpdateCheck::default(),
         }
     }
 
@@ -791,6 +808,7 @@ impl WordApp {
         self.drain_control(ctx);
         zotero::poll(self, ctx);
         read_aloud::poll(self, ctx);
+        update::poll(self, ctx);
         self.clear_stale_change_picture();
         let _ = self.poll_file_dialog();
         self.drain_inbox();
@@ -912,6 +930,7 @@ impl WordApp {
         } else {
             chrome::title_bar(self, ui);
             ribbon::show(self, ui);
+            update::bar(self, ui);
             chrome::status_bar(self, ui);
             panes::show(self, ui);
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
