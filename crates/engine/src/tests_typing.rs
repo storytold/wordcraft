@@ -284,3 +284,17 @@ fn a_large_mixed_document_types_like_word() {
         assert!(l.is_some() || !lp, "{t:?} still a List Paragraph");
     }
 }
+
+#[test]
+fn enter_right_after_starting_a_list_cancels_it() {
+    let s = typed("* \nPlain");
+    assert_eq!(paras(&s), vec![para("Plain", None)]);
+}
+
+#[test]
+fn shift_enter_stays_inside_the_list_item() {
+    let mut s = typed("* line one");
+    run(&mut s, "text.lineBreak", json!({}));
+    typ(&mut s, "cont\ntwo");
+    assert_eq!(paras(&s), vec![para("Line one\ncont", Some(0)), para("two", Some(0))]);
+}
