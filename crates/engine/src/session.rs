@@ -241,6 +241,10 @@ pub struct Session {
     pub read_aloud: crate::speech::ReadAloud,
     /// Preferences the front end saves between runs.
     pub prefs: Prefs,
+    /// The language new blank documents (and opened plain text) are written in, a BCP 47 tag;
+    /// `None` is WordCraft's default, US English. The front end sets it from the interface
+    /// language with [`Session::set_editing_language`] (a Polish interface writes Polish).
+    pub editing_lang: Option<String>,
     /// Editing inside an equation: which one and the caret in it.
     pub math: Option<MathEdit>,
     /// Equations are typed in LaTeX rather than the linear format.
@@ -332,6 +336,7 @@ impl Session {
             math_normal_text: false,
             also_selected: Vec::new(),
             prefs: Prefs::default(),
+            editing_lang: None,
             read_aloud: Default::default(),
             password: None,
             column: None,
@@ -402,6 +407,24 @@ impl Session {
     pub fn relayout(&mut self) {
         self.layout = None;
         self.cache.clear();
+    }
+
+    /// Set the language new documents are written in ([`Session::editing_lang`]; `None` or a
+    /// malformed tag: US English). A document nobody has touched yet — untitled, unchanged, no
+    /// undo steps, no text — switches too, so the blank document a session starts with follows
+    /// the interface language. Nothing else changes and no undo step is added.
+    pub fn set_editing_language(&mut self, tag: Option<&str>) {
+        let tag = tag.and_then(wordcraft_proof::lang::normalize_tag);
+        if self.editing_lang == tag {
+            return;
+        }
+        self.editing_lang = tag;
+        let untouched = self.path.is_none() && !self.dirty && self.history.is_empty() && self.redo.is_empty();
+        if untouched && self.doc.plain_text(StoryRef::Body).trim().is_empty() && self.doc.paragraph_count() <= 1 {
+            self.doc.styles.default_chr.lang = Some(self.editing_lang.clone().unwrap_or_else(|| "en-US".into()));
+            self.rev = self.rev.wrapping_add(1);
+            self.relayout();
+        }
     }
 
     /// Snapshot for undo before a change.
@@ -565,6 +588,8 @@ impl Session {
             document_id: _,
             read_aloud: _,
             prefs: _,
+            // A preference for new documents, like `prefs`: not part of this document.
+            editing_lang: _,
             // Equation editing mode, like `view`: not part of the document or its history.
             math: _,
             math_latex: _,

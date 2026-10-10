@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~15 points (60% → 75% ready for real work) and ~150–230 h away
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (readiness table with hours per audience; full number back to the additive weighted sum, 60%; mainstream and essentials numbers added; alpha gate checked; previously major: full re-measure against Word for Mac 16.113.4; restructured to the craftrules progress-docs standard) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (Polish interface and Polish proofing; previously: readiness table with hours per audience; full number back to the additive weighted sum, 60%; mainstream and essentials numbers added; alpha gate checked; previously major: full re-measure against Word for Mac 16.113.4; restructured to the craftrules progress-docs standard) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 WordCraft aims for complete parity with Microsoft Word, then goes further on speed, openness and
 agent control. This page is the summary; the assessment is
@@ -58,7 +58,7 @@ the two partial ones (real-world .docx, printing) complete, roughly.
 | File formats | 60% | 185–300 | [file-format-parity.md](docs/file-format-parity.md) |
 | Layout and pagination fidelity | 55% | 90–145 | [layout-parity.md](docs/layout-parity.md) |
 | Hardware | 40% | 20–40 | [hardware-parity.md](docs/hardware-parity.md) |
-| Localization | 25% | 80–130 + native review | [localization-parity.md](docs/localization-parity.md) |
+| Localization | 27% | 75–120 + native review | [localization-parity.md](docs/localization-parity.md) |
 | Performance | 75% | 10–20 | [layout-parity.md](docs/layout-parity.md#performance) |
 | Stability | 50% | 25–45 | [gaps.md](docs/gaps.md) (#3) |
 | Platforms | 95% (beyond Word on Linux, BSD, web) | 5–10 | this page |
@@ -85,7 +85,7 @@ the two partial ones (real-world .docx, printing) complete, roughly.
 | Pictures, shapes, text boxes, WordArt | 60% | 20–30 |
 | Backstage, printing, options | 58% | 12–20 |
 | Right-to-left and complex scripts | 50% | 15–25 |
-| Proofing (spelling, grammar, thesaurus, languages) | 35% | 25–45 |
+| Proofing (spelling, grammar, thesaurus, languages) | 40% | 20–40 |
 | Accessibility | 35% | 15–25 |
 | East Asian typography | 15% | 20–30 |
 | Charts, SmartArt, Draw/ink, 3D models, icons | 3% | 70–110 |
@@ -110,7 +110,8 @@ Weights and evidence per area: [docs/target-app-parity.md](docs/target-app-parit
 | Korean | ko | none | 0% |
 | Vietnamese | vi | none | 0% |
 
-Also shipped: Traditional Chinese (`zh-hant`), Ukrainian (`uk`) and Serbian (`sr`, `sr-latn`, #250), all partial (~95%). Word ships
+Also shipped: Traditional Chinese (`zh-hant`), Ukrainian (`uk`), Serbian (`sr`, `sr-latn`, #250) and Polish (`pl`), all partial (~95%).
+Proofing: English and Polish (spelling, grammar, hyphenation), chosen per run from its language. Word ships
 30 interface languages and proofing for ~50. Detail: [docs/localization-parity.md](docs/localization-parity.md).
 
 ## Upcoming
@@ -130,6 +131,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 | Date | What landed |
 |---|---|
+| 2026-10-10 | Polish: interface (`pl`, the tenth language, every catalog key) and proofing — SJP.PL spelling dictionary (Apache-2.0 option, ~4.5 million forms) read by a new Hunspell-style affix engine, suggestions tuned for Polish, Polish grammar rules with Polish messages, TeX Polish hyphenation patterns (MIT option); proofing language per run (`w:lang`) for squiggles, F7, suggestions and hyphenation, languages without tools left unmarked; Review › Language menu and the status bar's language; a Polish interface writes new documents in Polish |
 | 2026-10-10 | Full re-measure against Word for Mac 16.113.4 and progress docs to the craftrules standard (this page, `docs/target-app-parity.md`, `gaps.md`, `roadmap.md`, `architecture.md`, format/layout/UI/hardware/localization parity; `docs/parity.md` → `docs/parity-checklist.md`). Landed the same day (~80 PRs): equations with OMML and an Equation tab (#191); Word 97-2003 `.doc` import (#145); right-to-left and Persian text (#207); Zotero integration (#189); Read Aloud player (#190); text boxes and floating objects editable (#46) and placed like Word (#136); floating tables (#137); track-changes fixes (#125, #244); typing parity with Word (#204); hidden text (#173); save prompts and AutoSave rules (#151); LaTeX import/export (#11); keytips and mini-toolbar (#43); Spanish, Ukrainian and Brazilian Portuguese interfaces; system theme (#249); Linux file dialogs no longer freeze (#246); Chinese UI font on Windows (#248); every installed font weight (#239); cell text direction (#245); Paste Special (#235), Advanced Find (#234), Column Selection (#237), Style Inspector (#236), custom table styles (#256), View gridlines (#243), zoom buttons (#232), inertial touchpad scrolling (#252), File Info fields kept (#268), ¶ in mixed-direction paragraphs (#278), Serbian interface (#250), table Height/Width boxes, AutoFit Contents and Table Properties (#44), AutoSave switch greyed out with the reason where it can't save (.md/.txt/.html, unsaved, browser) (#196, #176); System theme keeps following the OS and Dark page leaves the interface alone (#311, #312); v0.4.0 released |
 | 2026-10-10 | Full re-measure against Word for Mac 16.113.4 and progress docs to the craftrules standard (this page, `docs/target-app-parity.md`, `gaps.md`, `roadmap.md`, `architecture.md`, format/layout/UI/hardware/localization parity; `docs/parity.md` → `docs/parity-checklist.md`). Landed the same day (~80 PRs): equations with OMML and an Equation tab (#191); Word 97-2003 `.doc` import (#145); right-to-left and Persian text (#207); Zotero integration (#189); Read Aloud player (#190); text boxes and floating objects editable (#46) and placed like Word (#136); floating tables (#137); track-changes fixes (#125, #244); typing parity with Word (#204); hidden text (#173); save prompts and AutoSave rules (#151); LaTeX import/export (#11); keytips and mini-toolbar (#43); Spanish, Ukrainian and Brazilian Portuguese interfaces; system theme (#249); Linux file dialogs no longer freeze (#246); Chinese UI font on Windows (#248); every installed font weight (#239); cell text direction (#245); Paste Special (#235), Advanced Find (#234), Column Selection (#237), Style Inspector (#236), custom table styles (#256), View gridlines (#243), zoom buttons (#232), inertial touchpad scrolling (#252), File Info fields kept (#268), ¶ in mixed-direction paragraphs (#278), Serbian interface (#250), table Height/Width boxes, AutoFit Contents and Table Properties (#44), AutoSave switch greyed out with the reason where it can't save (.md/.txt/.html, unsaved, browser) (#196, #176), OpenGL fallback on Windows PCs without a DirectX 12 driver (#316); v0.4.0 released |
 | 2026-10-09 | Interface languages follow the system or Options (#12; zh-hans, zh-hant, ja); TOC page numbers as an updatable field (#52); rotating log file (#17); window geometry remembered (#38) |
@@ -145,6 +147,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 | 2026-10-10 | trivial | Progress log: Windows OpenGL fallback without a DirectX 12 driver (#316) |
 | 2026-10-10 | minor | Password-protected .docx (#281): files encrypted with a password (agile encryption) open and save; File › Info › Encrypt with Password |
 | 2026-10-10 | minor | Relanded clipboard pane, table styles editor, Manage Styles, Asian typography (kinsoku), Group/Ungroup and Shape Effects (#264 #263 #270 #271 #267 #280): catalog 390/431 (90.5%) |
+| 2026-10-10 | minor | Polish interface and proofing landed: Localization 25% → 27%, Proofing 35% → 40% |
 | 2026-10-10 | minor | Merged main: catalog 384/430 (89.3%), 431 commands; Paste Special, Advanced Find, Column Selection, Style Inspector, custom table styles, gridlines, zoom buttons, touchpad scrolling, File Info, Serbian landed; mainstream 54→55% |
 | 2026-10-10 | minor | Readiness table with hours per audience; full number restored to the additive weighted sum (~47% → ~60%): method aligned with the standard, no new evidence; beta distance back to ~15 points and ~150–230 h |
 | 2026-10-10 | minor | Mainstream practitioner (~54%) and essentials user (~63%) numbers added; full number recomputed 60% → ~47% with the standard's discounts; beta distance now ~28 points and ~450–700 h; stage stays alpha |

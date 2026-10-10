@@ -23,6 +23,13 @@ list (author, source, license) is in ATTRIBUTION.md.
 - English word list (assets/hyphenation/en-us.dic) — derived from the Moby Hyphenator II list by
   Grady Ward, public domain (Project Gutenberg eBook #3204). The hyphenation patterns
   (assets/hyphenation/en-us.pat) were trained from it and are released as CC0-1.0.
+- Polish spelling dictionary (assets/proofing/pl.dic) — converted from the SJP.PL Polish
+  dictionary for Hunspell, version 2026-09-01 (https://sjp.pl/sl/en/), by the SJP.PL
+  contributors. The dictionary is offered under GPL 2, LGPL 2.1, MPL 1.1, Apache License 2.0
+  or CC BY 4.0; WordCraft uses it under the Apache License 2.0 (LICENSE-APACHE).
+- Polish hyphenation patterns (assets/hyphenation/pl.pat) — hyph-pl.tex from the hyph-utf8
+  package, Copyright (C) 1987-1995 Hanna Kołodziejska, Bogusław Jackowski, Marek Ryćko, bundled
+  unmodified and used under the MIT License; the copyright and permission notice is in the file.
 - All UI icons are drawn in code (crates/ui-egui/src/icons.rs) and are original work, MIT OR Apache-2.0.
 
 Rust dependencies (egui, eframe, vello_cpu, skrifa, harfrust, krilla, quick-xml, zip, image, …)

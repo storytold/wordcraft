@@ -2731,3 +2731,57 @@ fn kinsoku_keeps_a_manual_line_break_before_a_closing_bracket() {
     assert_eq!(lines[0].1, LineEnd::LineBreak, "{lines:?}");
     assert_eq!(lines[1].0, bracket, "the second line starts at the bracket: {lines:?}");
 }
+
+/// Each run is hyphenated and proofed in its own language (`w:lang`, resolved through the
+/// styles): Polish patterns and dictionary for Polish runs, English ones for English runs.
+#[test]
+fn hyphenation_and_proofing_follow_each_runs_language() {
+    let text = "Konstytucyjnego żeka typography beautifull";
+    let mut d = Document::from_text(text);
+    d.settings.auto_hyphenation = true;
+    let eng = text.find("typography").unwrap();
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, eng), &|c| c.lang = Some("pl-PL".into())).unwrap();
+    d.format_range(&Pos::body(0, eng), &Pos::body(0, text.len()), &|c| c.lang = Some("en-US".into())).unwrap();
+    let mut c = LayoutCache::new();
+    let l = layout(&d, &mut c, &LayoutOptions { proofing: true, ..LayoutOptions::default() });
+    let para = l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }).expect("a paragraph");
+    // Byte offsets after which a hyphen may go.
+    let ends: Vec<usize> = para.hyph_after.iter().filter_map(|&k| para.clusters.get(k as usize).map(|c| c.end)).collect();
+    for prefix in ["Kon", "Konsty", "Konstytu", "Konstytucyj", "Konstytucyjne"] {
+        assert!(ends.contains(&prefix.len()), "Polish kon-sty-tu-cyj-ne-go: no break after {prefix:?} in {ends:?}");
+    }
+    for prefix in ["ty", "typog", "typogra"] {
+        assert!(ends.contains(&(eng + prefix.len())), "English ty-pog-ra-phy: no break after {prefix:?} in {ends:?}");
+    }
+    // Spelling: the Polish misspelling and the English one; Polish words aren't English errors.
+    let flagged: Vec<&str> = para.issues.iter().filter(|i| !i.2).map(|i| &text[i.0..i.1]).collect();
+    assert_eq!(flagged, ["żeka", "beautifull"]);
+    // The layout and the Review commands report the same issues.
+    let p = d.para(StoryRef::Body, &Path::top(0)).unwrap();
+    let issues = para::paragraph_issues(p, &para::proof_runs(&d, p, None));
+    assert_eq!(issues.iter().map(|i| (i.start, i.end, i.kind == wordcraft_proof::IssueKind::Grammar)).collect::<Vec<_>>(), para.issues);
+    assert_eq!(issues[0].lang, wordcraft_proof::ProofLang::Pl);
+    assert_eq!(issues[1].lang, wordcraft_proof::ProofLang::En);
+}
+
+/// Text in a language WordCraft can't proof gets no spelling marks, and "Do not check spelling
+/// or grammar" text none either; the document default language applies to text without its own.
+#[test]
+fn unproofed_languages_and_no_proof_runs_are_not_marked() {
+    let opts = LayoutOptions { proofing: true, ..LayoutOptions::default() };
+    let issues = |d: &Document| -> usize {
+        let l = layout(d, &mut LayoutCache::new(), &opts);
+        l.pages[0].items.iter().map(|i| if let Placed::Lines { para, .. } = i { para.issues.len() } else { 0 }).sum()
+    };
+    let text = "Nous écrivons beaucoup aujourd'hui.";
+    let mut d = Document::from_text(text);
+    assert!(issues(&d) > 0, "French words are English misspellings in an English document");
+    d.styles.default_chr.lang = Some("fr-FR".into());
+    assert_eq!(issues(&d), 0, "no French dictionary: no marks");
+    d.styles.default_chr.lang = Some("pl-PL".into());
+    let mut pl = Document::from_text("Płynie żeka.");
+    pl.styles.default_chr.lang = Some("pl-PL".into());
+    assert_eq!(issues(&pl), 1);
+    pl.format_range(&Pos::body(0, 0), &Pos::body(0, "Płynie żeka.".len()), &|c| c.no_proof = Some(true)).unwrap();
+    assert_eq!(issues(&pl), 0);
+}

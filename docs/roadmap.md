@@ -1,6 +1,6 @@
 # WordCraft roadmap: milestones and what's next
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (beta distance restated: ~15 points, ~150–230 h; previously: alpha gate checked: six core workflows pass; previously major: milestones moved here from ROADMAP.md; Current focus set from the re-measured gaps) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (M15 progress: Polish interface and proofing; previously: beta distance restated: ~15 points, ~150–230 h; previously: alpha gate checked: six core workflows pass; previously major: milestones moved here from ROADMAP.md; Current focus set from the re-measured gaps) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 Forward-looking plan. The summary is [`ROADMAP.md`](../ROADMAP.md); the ranked work list is
 [`gaps.md`](gaps.md); the numbers are in [`target-app-parity.md`](target-app-parity.md). Hours are
@@ -59,7 +59,7 @@ partial rows are fidelity gaps (beta work), not broken workflows. WordCraft stay
 | M12 | Formats breadth (PDF, ODT, RTF, HTML, MD, TXT, LaTeX, `.doc` import) | done (first versions); `.doc` write, encryption, minor formats missing | 60–100 h |
 | M13 | Performance budgets | on track (1.4 ms relayout); large real-world documents unmeasured | 10–20 h |
 | M14 | 1.0 polish, packaging, signing | releases v0.1.0–v0.4.0 published (signed macOS, Windows MSI x64/x86/arm64, Linux, FreeBSD, web) | — |
-| M15 | Localization (12 key languages, RTL interface, proofing languages) | 9 UI languages, English proofing | 80–130 h |
+| M15 | Localization (12 key languages, RTL interface, proofing languages) | 10 UI languages; English and Polish proofing, a proofing language per run | 75–120 h |
 | M16 | Right-to-left and East Asian typography | RTL paragraphs done (#207) | 30–45 h |
 
 ## Next after beta
@@ -71,6 +71,7 @@ languages, screen-reader access, ecosystem decisions (VBA, add-ins, cloud), an i
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | trivial | M15: Polish interface and Polish proofing landed |
 | 2026-10-10 | trivial | Merged main: PRs that landed removed from the Current focus list |
 | 2026-10-10 | minor | Current focus heading back to ~150–230 h to beta: full number restored to the additive weighted sum (~60%), method aligned with the standard, no new evidence |
 | 2026-10-10 | minor | Alpha gate table added (core-workflow gate from the progress-docs standard): all six workflows pass, stage stays alpha |

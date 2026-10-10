@@ -1460,7 +1460,7 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     let item = |ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: serde_json::Value| {
         let sc = crate::widgets::shortcut_text(app, id);
         let on = crate::widgets::enabled(app, id);
-        if ui.add_enabled(on, egui::Button::new(label).shortcut_text(sc)).clicked() {
+        if ui.add_enabled(on, egui::Button::new(tl!(label)).shortcut_text(sc)).clicked() {
             let _ = app.run(id, params);
             ui.close();
         }
@@ -1471,7 +1471,8 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
             .and_then(|v| v.as_array())
             .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
             .unwrap_or_default();
-        ui.label(egui::RichText::new(issue.get("message").and_then(|m| m.as_str()).unwrap_or("")).small().weak());
+        // English rules' messages are catalog keys; Polish rules already explain in Polish.
+        ui.label(egui::RichText::new(tl!(issue.get("message").and_then(|m| m.as_str()).unwrap_or(""))).small().weak());
         if sugg.is_empty() {
             ui.label(egui::RichText::new(tl!("(no suggestions)")).italics());
         }

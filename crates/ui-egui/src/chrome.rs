@@ -236,7 +236,13 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                 if app.session.sel.focus.story != StoryRef::Body && !crate::canvas::in_text_box(app) {
                     st(ui, tl!("Editing header/footer"));
                 }
-                st(ui, tl!("English (United States)"));
+                // The language at the caret; a click sets the proofing language (Review › Language).
+                let lang = crate::ribbon::caret_language(app);
+                let resp = st(ui, &lang).on_hover_text(tl!("Language"));
+                egui::Popup::menu(&resp).show(|ui| {
+                    ui.set_min_width(200.0);
+                    crate::ribbon::language_menu(ui, app);
+                });
                 if app.session.doc.settings.track_changes {
                     st(ui, tl!("Track Changes: On"));
                 }

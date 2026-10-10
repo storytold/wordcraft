@@ -14,7 +14,8 @@
 //! # Adding a language
 //! 1. Add `xx.tsv` next to `zh-hans.tsv` (copy its header; translate from the *meaning* of the
 //!    English text, clean-room: never from Microsoft Word's or another product's localisation).
-//! 2. Add one row to [`LANGUAGES`].
+//! 2. Add one row to [`LANGUAGES`]. Set its `editing_lang` only when `wordcraft-proof` can proof
+//!    the language (Polish: `pl-PL`): new documents are then written in it.
 //!
 //! The Options dropdown, the system-language match and the catalog tests pick it up from there.
 //!
@@ -43,29 +44,72 @@ pub struct LangInfo {
     pub source: &'static str,
     /// Which CJK interface face comes first (Chinese text wants the Chinese face).
     pub prefer_hans: bool,
+    /// The language (BCP 47) new blank documents are written in with this interface, for
+    /// languages WordCraft can proof; `None` keeps WordCraft's default, US English.
+    pub editing_lang: Option<&'static str>,
     catalog: OnceLock<Catalog>,
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 9] = [
-    LangInfo { code: "en", name: "English", source: "", prefer_hans: false, catalog: OnceLock::new() },
+pub static LANGUAGES: [LangInfo; 10] = [
+    LangInfo { code: "en", name: "English", source: "", prefer_hans: false, editing_lang: None, catalog: OnceLock::new() },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` resolve here (see `candidates`).
-    LangInfo { code: "zh-hans", name: "简体中文", source: include_str!("zh-hans.tsv"), prefer_hans: true, catalog: OnceLock::new() },
+    LangInfo {
+        code: "zh-hans",
+        name: "简体中文",
+        source: include_str!("zh-hans.tsv"),
+        prefer_hans: true,
+        editing_lang: None,
+        catalog: OnceLock::new(),
+    },
     // Traditional Chinese (Taiwan vocabulary); `zh-TW`, `zh-HK`, `zh-MO` and `zh-Hant-*` resolve here.
-    LangInfo { code: "zh-hant", name: "繁體中文", source: include_str!("zh-hant.tsv"), prefer_hans: true, catalog: OnceLock::new() },
-    LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), prefer_hans: false, catalog: OnceLock::new() },
-    LangInfo { code: "uk", name: "Українська", source: include_str!("uk.tsv"), prefer_hans: false, catalog: OnceLock::new() },
+    LangInfo {
+        code: "zh-hant",
+        name: "繁體中文",
+        source: include_str!("zh-hant.tsv"),
+        prefer_hans: true,
+        editing_lang: None,
+        catalog: OnceLock::new(),
+    },
+    LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), prefer_hans: false, editing_lang: None, catalog: OnceLock::new() },
+    LangInfo {
+        code: "uk", name: "Українська", source: include_str!("uk.tsv"), prefer_hans: false, editing_lang: None, catalog: OnceLock::new()
+    },
     // Spanish, neutral across Spain and Latin America; `es-ES`, `es-MX`, `es-419` … resolve here.
-    LangInfo { code: "es", name: "Español", source: include_str!("es.tsv"), prefer_hans: false, catalog: OnceLock::new() },
+    LangInfo { code: "es", name: "Español", source: include_str!("es.tsv"), prefer_hans: false, editing_lang: None, catalog: OnceLock::new() },
     // Brazilian Portuguese; `pt-BR` and `pt-BR-*` resolve here. Plain `pt` and `pt-PT` have no
     // catalog yet (the European vocabulary differs), so they stay in English.
-    LangInfo { code: "pt-br", name: "Português (Brasil)", source: include_str!("pt-br.tsv"), prefer_hans: false, catalog: OnceLock::new() },
+    LangInfo {
+        code: "pt-br",
+        name: "Português (Brasil)",
+        source: include_str!("pt-br.tsv"),
+        prefer_hans: false,
+        editing_lang: None,
+        catalog: OnceLock::new(),
+    },
     // Serbian, Cyrillic script (the default per BCP 47 when no script is given); `sr`, `sr-RS`,
     // `sr-Cyrl-*` resolve here.
-    LangInfo { code: "sr", name: "Српски", source: include_str!("sr.tsv"), prefer_hans: false, catalog: OnceLock::new() },
+    LangInfo { code: "sr", name: "Српски", source: include_str!("sr.tsv"), prefer_hans: false, editing_lang: None, catalog: OnceLock::new() },
     // Serbian, Latin script; `sr-Latn-*` resolves here (see `candidates`'s generic prefix
     // matching — no special-casing needed, unlike Chinese's script-by-region fallback).
-    LangInfo { code: "sr-latn", name: "Srpski (latinica)", source: include_str!("sr-latn.tsv"), prefer_hans: false, catalog: OnceLock::new() },
+    LangInfo {
+        code: "sr-latn",
+        name: "Srpski (latinica)",
+        source: include_str!("sr-latn.tsv"),
+        prefer_hans: false,
+        editing_lang: None,
+        catalog: OnceLock::new(),
+    },
+    // Polish; `pl`, `pl-PL` and `pl_PL.UTF-8` resolve here. WordCraft proofs Polish (spelling,
+    // grammar, hyphenation), so new documents are written in Polish with this interface.
+    LangInfo {
+        code: "pl",
+        name: "Polski",
+        source: include_str!("pl.tsv"),
+        prefer_hans: false,
+        editing_lang: Some("pl-PL"),
+        catalog: OnceLock::new(),
+    },
 ];
 
 impl LangInfo {
@@ -111,6 +155,11 @@ impl Lang {
 
     pub fn prefers_hans(self) -> bool {
         self.0.prefer_hans
+    }
+
+    /// The language new blank documents are written in with this interface ([`LangInfo::editing_lang`]).
+    pub fn editing_lang(self) -> Option<&'static str> {
+        self.0.editing_lang
     }
 
     /// Is the interface written in CJK script (its own name is), so it needs a CJK face?
