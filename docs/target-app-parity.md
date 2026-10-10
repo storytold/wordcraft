@@ -9,21 +9,21 @@ summarizes it; [`gaps.md`](gaps.md) itemizes every shortfall; the deep checklist
 [`hardware-parity.md`](hardware-parity.md) and [`localization-parity.md`](localization-parity.md).
 The generated ribbon checklist is [`parity-checklist.md`](parity-checklist.md).
 
-## Headline (2026-10-10, origin/main `40c5d51`, v0.4.0 + ~80 merged PRs)
+## Headline (2026-10-10, origin/main `a99dddc`, v0.4.0 + ~90 merged PRs)
 
 | Number | Value | Kind |
 |---|---|---|
-| Ribbon/menu catalog coverage | **378 / 428 (88.3%)** | **measured**: `cargo xtask parity` (re-derived this pass from `crates/engine/src/catalog.rs` against every `CommandSpec::new` id in the source; identical to the checked-in `parity-checklist.md`) |
+| Ribbon/menu catalog coverage | **384 / 430 (89.3%)** | **measured**: `cargo xtask parity` (re-derived this pass from `crates/engine/src/catalog.rs` against every `CommandSpec::new` id in the source; identical to the checked-in `parity-checklist.md`) |
 | Feature breadth (weighted, beyond the ribbon: dialog options, citation styles, proofing languages, chart types, UI languages) | **~80%** | estimated |
-| Feature depth (weighted by use, table below) | **~67%** | estimated |
+| Feature depth (weighted by use, table below) | **~68%** | estimated |
 | **Ready for real work** (full target) | **~60%** (range 55–63%) | estimated: weighted sum over the dimension table ([By dimension](#by-dimension)) |
-| **Mainstream practitioner** | **~54%** | estimated, same method |
+| **Mainstream practitioner** | **~55%** | estimated, same method |
 | **Essentials user** | **~63%** | estimated, same method |
 | Remaining effort to beta | **~150–230 h** of Opus 5.5 agent wall-clock: the blocking beta list ([gaps.md](gaps.md) #1–#7), which lifts file formats, layout, stability and UI enough to reach ~75% | estimated |
 | Remaining effort to full parity with Word desktop | **~750–1,250 h** | estimated |
-| Commands | 422 engine commands (+ `ui.*` commands in the front end) | measured (source count) |
-| Tests | 821 `#[test]` functions + 10 `proptest!` blocks | measured (source count) |
-| Code | ~85,600 lines of Rust in 15 crates, 3 apps and xtask | measured (`wc -l`) |
+| Commands | 431 engine commands (+ `ui.*` commands in the front end) | measured (source count) |
+| Tests | 852 `#[test]` functions + 10 `proptest!` blocks | measured (source count) |
+| Code | ~88,700 lines of Rust in 15 crates, 3 apps and xtask | measured (`wc -l`) |
 
 **Stage: alpha.** All six core workflows pass the [alpha gate](roadmap.md#alpha-gate-core-workflows); see [`ROADMAP.md`](../ROADMAP.md) for why it isn't beta, and the distance.
 
@@ -56,11 +56,11 @@ full parity for the area.
 
 | Area | Weight | Parity | Was (2026-10-06) | Hours | Evidence and what's missing |
 |---|---|---|---|---|---|
-| Typing, selection, clipboard, undo, find/replace | 12 | 82% | 85% | 10–15 | Typing parity pinned by `tests_typing.rs` ([typing-parity.md](typing-parity.md)). Missing from the catalog: Paste Special, Clipboard pane, Advanced Find, Column Selection (all four have open PRs #235, #264, #234, #237, not merged). |
+| Typing, selection, clipboard, undo, find/replace | 12 | 85% | 85% | 8–12 | Typing parity pinned by `tests_typing.rs` ([typing-parity.md](typing-parity.md)). Paste Special (#235), Advanced Find (#234) and Column Selection (#237) landed; Clipboard pane still missing (PR #264 open). |
 | Character and paragraph formatting | 11 | 82% | 85% | 8–12 | Nearly every property, Font/Paragraph dialogs, character border. Missing: Phonetic Guide, Enclose Characters, Asian Typography, kerning/ligature/stylistic-set options in the Font dialog's Advanced tab. |
-| Styles and themes | 8 | 72% | 75% | 8–12 | Gallery, pane, create/modify, style sets, themes. Missing: Style Inspector (#236 open), Manage Styles (#270 open), style separators, linked-style edge cases; Word ships 11 Quick Style sets plus dozens of themes, we ship our own smaller set. |
+| Styles and themes | 8 | 74% | 75% | 8–12 | Gallery, pane, create/modify, style sets, themes. Style Inspector landed (#236). Missing: Manage Styles (#270 open), style separators, linked-style edge cases; Word ships 11 Quick Style sets plus dozens of themes, we ship our own smaller set. |
 | Lists | 6 | 78% | 75% | 5–8 | Bullets, numbering, multilevel, restart, `w:lvlOverride` levels (#134), Word's list AutoFormat and Enter/Backspace behaviour. Missing: Define New Multilevel List dialog depth, list styles, legal numbering edge cases. |
-| Tables | 8 | 74% | 72% | 12–18 | Merge/split, styles (cell text takes style formatting, #104), Word 2013 edge, floating tables, rows split across pages, sort, formula. Missing: Draw Table/Eraser, custom table styles (#256 open), nested-table polish, interactive column resize (#49 open, #217). Cell text direction landed (#245). |
+| Tables | 8 | 76% | 72% | 10–16 | Merge/split, styles (cell text takes style formatting, #104), custom table styles saved in the .docx (#256), Word 2013 edge, floating tables, rows split across pages, sort, formula, cell gridlines (#243). Missing: Draw Table/Eraser, nested-table polish, interactive column resize (#49 open, #217). Cell text direction landed (#245). |
 | Page layout and sections | 7 | 70% | 72% | 12–20 | Margins, size, columns, breaks, page borders, line numbers, vertical alignment, drop caps, hyphenation. Columns don't balance; no document grid; no vertical text; RTL sections missing. Detail: [layout-parity.md](layout-parity.md). |
 | Headers, footers, page numbers, fields | 5 | 70% | 70% | 8–12 | First/even/odd, link to previous, TOC as an updatable field (#52), cross-references to real bookmarks (#227). Field coverage is a subset of Word's ~90 field codes; Field dialog missing. |
 | Footnotes and endnotes | 3 | 60% | 60% | 5–8 | Placed and editable, numbers from Word files (#103). Long notes don't continue onto the next page; no continuation separator; no note options per section. |
@@ -78,7 +78,7 @@ full parity for the area.
 | Accessibility | 1 | 35% | not rated | 15–25 | AccessKit enabled in eframe; an accessibility checker exists. Screen-reader access to the document canvas is untested; no alt-text workflow polish, no read-order tools. |
 | Agent control (CLI, MCP, control channel, macro record/playback) | 0 | beyond Word | 100%+ | — | Every action is a command id usable from CLI, MCP and a keyed control port. Word has VBA and Office.js instead (see Ecosystem). |
 
-Weighted feature depth: **~67%** (Σ weight × parity / 100 over the table).
+Weighted feature depth: **~68%** (Σ weight × parity / 100 over the table).
 
 ## Readiness numbers: full, mainstream practitioner, essentials user
 
@@ -90,7 +90,7 @@ what still stops real work. The stage follows the full number and the core-workf
 | Audience | Ready | Opus 5.5 agent wall-clock hours to ~95% | Work that dominates |
 |---|---|---|---|
 | Full target (ready for real work) | **~60%** | **~650–1,100 h** (70–80% parallelizes) | Breadth: charts/SmartArt/Draw, localization and proofing languages, East Asian and RTL typography, `.doc` writing, PDF Reflow, ecosystem; plus everything below |
-| Mainstream practitioner | **~54%** | **~300–500 h** (~65% parallelizes) | DOCX real-world fidelity and preserving charts/SmartArt, pagination fidelity, formatting revisions, dialog depth, objects, stability |
+| Mainstream practitioner | **~55%** | **~300–500 h** (~65% parallelizes) | DOCX real-world fidelity and preserving charts/SmartArt, pagination fidelity, formatting revisions, dialog depth, objects, stability |
 | Essentials user | **~63%** | **~90–140 h** (~50% parallelizes) | Install/launch stability, opening files people send (corpus subset, chart fallbacks), native printing, picture handling, English spelling depth |
 
 Hours are calibrated as in [Calibration](#calibration-of-hours-from-this-repos-history) and are
@@ -111,11 +111,11 @@ h), pictures and tables (12–18 h), spelling depth (8–12 h), polish (10–20 
 
 ### Full target (ready for real work): ~60%
 
-The additive weighted sum over the [dimension table](#by-dimension): **0.30·67 + 0.20·60 + 0.15·55 +
+The additive weighted sum over the [dimension table](#by-dimension): **0.30·68 + 0.20·60 + 0.15·55 +
 0.10·65 + 0.10·50 + 0.05·75 + 0.04·25 + 0.03·95 + 0.01·40 + 0.02·15 ≈ 60%** (range 55–63%). No
 multiplicative discounts: stability, file formats, layout and UI are weighted dimensions here.
 
-### Mainstream practitioner: ~54%
+### Mainstream practitioner: ~55%
 
 The typical professional Word user (office, legal, academic, writing) in their own language, weekly
 work only. Left out: equations, mail merge, Draw/ink, East Asian and right-to-left typography,
@@ -124,10 +124,10 @@ dictation and pens.
 
 | Area | Weight | Depth |
 |---|---|---|
-| Typing, selection, clipboard, undo, find/replace | 17 | 82% |
+| Typing, selection, clipboard, undo, find/replace | 17 | 85% |
 | Character and paragraph formatting | 16 | 82% |
-| Styles | 9 | 72% |
-| Tables | 9 | 74% |
+| Styles | 9 | 74% |
+| Tables | 9 | 76% |
 | Review (comments, track changes) | 9 | 72% |
 | Lists | 8 | 78% |
 | Page layout and sections | 6 | 70% |
@@ -140,7 +140,7 @@ dictation and pens.
 | Print and PDF | 2 | 65% |
 | View | 1 | 72% |
 
-Base ≈ **72%**; **72% × 0.753 ≈ 54%**.
+Base ≈ **73%**; **73% × 0.753 ≈ 55%**.
 
 ### Essentials user: ~63%
 
@@ -158,7 +158,7 @@ mainstream.
 | Bullets and numbering | 8 | 85% |
 | Spelling (English) | 8 | 65% |
 | Insert, move and resize a picture | 7 | 65% |
-| Simple table | 6 | 75% |
+| Simple table | 6 | 78% |
 | Heading styles from the gallery | 5 | 78% |
 | Print and export PDF | 5 | 70% |
 | Find and replace | 3 | 85% |
@@ -187,19 +187,19 @@ Word. Their weighted sum is the **full ready for real work** number.
 
 | Dimension | Weight | Parity | Hours to full | Doc | Evidence |
 |---|---|---|---|---|---|
-| Features (depth, table above) | 30% | 67% | 210–335 | this file | Weighted table above. Hours: the area table sums to 290–460 h; the Page layout, Footnotes, RTL and East Asian rows (~50–85 h) are counted under Layout and the Proofing row (25–45 h) under Localization, so they aren't counted twice |
+| Features (depth, table above) | 30% | 68% | 210–335 | this file | Weighted table above. Hours: the area table sums to 290–460 h; the Page layout, Footnotes, RTL and East Asian rows (~50–85 h) are counted under Layout and the Proofing row (25–45 h) under Localization, so they aren't counted twice |
 | File formats (DOCX fidelity first) | 20% | 60% | 185–300 | [file-format-parity.md](file-format-parity.md) | DOCX opens in Word and round-trips our own tests, but no real-world corpus test yet; charts, SmartArt, OLE, content controls (unwrapped), formatting revisions and encrypted files are lost or refused |
 | Layout and pagination fidelity | 15% | 55% | 90–145 | [layout-parity.md](layout-parity.md) | Aptos has no metric-matched substitute so lines break differently from Word; no column balancing, footnote continuation or document grid; compatibility modes beyond 15 partial |
 | UI/UX fidelity | 10% | 65% | 65–100 | [ui-parity.md](ui-parity.md) | Ribbon, keytips, mini-toolbar, Backstage, 101 shortcuts; 16 modal dialogs against Word's ~100; no ribbon/keyboard customization |
 | Stability | 10% | 50% | 25–45 | [gaps.md](gaps.md) | Never-crash standard and hostile-param fuzzing in place, but open reports of a startup crash on Intel UHD (#170), freezes (#77, #59, #31) and Windows write failure without admin (#218); no soak test; 5 days of field history |
 | Performance | 5% | 75% | 10–20 | [layout-parity.md](layout-parity.md) | 61 ms cold layout and 1.4 ms relayout on a 188-page document (measured 2026-10-06, not re-run); font picker freezes fixed in #233; no large real-world documents measured |
-| Localization | 4% | 25% | 80–130 + native review | [localization-parity.md](localization-parity.md) | 7 UI languages (Word 30); 4 of the 12 key languages partly done; English-only proofing |
+| Localization | 4% | 25% | 80–130 + native review | [localization-parity.md](localization-parity.md) | 9 UI languages (Word 30); 4 of the 12 key languages partly done; English-only proofing |
 | Platforms | 3% | 95% | 5–10 | [ROADMAP.md](../ROADMAP.md) | macOS (universal, signed), Windows x64/x86/arm64, Linux (AppImage/deb/rpm/Flatpak), FreeBSD, web. Beyond Word on Linux, BSD and the web; Word's iPad/iPhone/Android apps are out of scope |
 | Hardware | 1% | 40% | 20–40 | [hardware-parity.md](hardware-parity.md) | No native printing on desktop, no pen/ink, no dictation; GPU drawing and HiDPI fine. Ink hours are in the Features row (Draw tab) |
 | Ecosystem and plugins | 2% | 15% | 40–80 | [gaps.md](gaps.md) | Zotero built in, macros record/play commands, `.docm` macros preserved (#172). No VBA execution, no Office add-ins, no EndNote/Mendeley plugins, no cloud storage or co-authoring |
 | AI features | 0% | 40% | 15–30 | [gaps.md](gaps.md) | Beyond Word for external agents (MCP, CLI). No in-app writing assistant like Copilot yet (chat PR #178 open). Weight 0: Copilot is a paid add-on and not what decides a switch |
 
-**Ready for real work ≈ 0.30·67 + 0.20·60 + 0.15·55 + 0.10·65 + 0.10·50 + 0.05·75 + 0.04·25 +
+**Ready for real work ≈ 0.30·68 + 0.20·60 + 0.15·55 + 0.10·65 + 0.10·50 + 0.05·75 + 0.04·25 +
 0.03·95 + 0.01·40 + 0.02·15 ≈ 60%.**
 
 ## Methodology
@@ -249,6 +249,7 @@ can be used without committing Word output.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Merged main (12 PRs): Paste Special, Advanced Find, Column Selection, Style Inspector, custom table styles, gridlines, zoom buttons, touchpad scrolling, File Info fields, Serbian. Catalog 378/428 → 384/430 (89.3%); typing 82→85%, styles 72→74%, tables 74→76%; feature depth 67→68%; mainstream 54→55%; full stays ~60%, essentials ~63% |
 | 2026-10-10 | minor | Readiness table: hours to ~95% per audience (full ~650–1,100 h, mainstream ~300–500 h, essentials ~90–140 h). Full number restored to the additive weighted sum, ~47% → ~60%: method aligned with the standard, no new evidence; beta distance back to ~15 points and ~150–230 h |
 | 2026-10-10 | minor | Added mainstream practitioner (~54%) and essentials user (~63%) numbers with written weights and discounts; full ready-for-real-work recomputed with the same multiplicative discounts: 60% → ~47% (method change, not new product evidence; stage stays alpha: above 40% and the gate passes); beta now ~450–700 h to the 75% bar; user-evidence counts from GitHub |
 | 2026-10-10 | minor | Stage checked against the core-workflow alpha gate: passes, stays alpha |

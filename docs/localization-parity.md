@@ -18,15 +18,14 @@ other ~18 languages Word ships, plus native-speaker review (human).
 
 ## What WordCraft ships (measured)
 
-- **7 interface languages**: English plus `zh-hans`, `zh-hant`, `ja`, `uk`, `es`, `pt-br` (catalogs
-  of 929–931 entries each). A test (`every_tab_and_command_is_translated`) enforces that every ribbon
+- **9 interface languages**: English plus `zh-hans`, `zh-hant`, `ja`, `uk`, `es`, `pt-br`, and
+  Serbian `sr`/`sr-latn` (#250) (catalogs of ~930–1,010 entries each). A test (`every_tab_and_command_is_translated`) enforces that every ribbon
   tab, command label and ribbon location is translated in every language.
 - Of the 675 English strings a scan extracts from `tl!(…)` calls and command labels/locations, each
   catalog covers **661 (98%)**. Some newer dialog and pane strings (Equation tab tooltips, Zotero,
   Read Aloud, Backstage greetings) aren't wrapped in `tl!` yet, so they show in English in every
   language: the true share of visible strings is **~93–95%** (estimated).
-- Pending PRs: German (#203), Norwegian Bokmål (#208) and Nynorsk (#210), Serbian Cyrillic and
-  Latin (#250), Hebrew with RTL (#20).
+- Pending PRs: German (#203), Norwegian Bokmål (#208) and Nynorsk (#210), Hebrew with RTL (#20).
 - **Proofing: English only** (one dictionary, rule-based grammar, English hyphenation patterns).
 - Document scripts: shaping via HarfRust (HarfBuzz port) for every script; bidi (UAX #9) and Arabic
   shaping tested (#207); IME on all desktop platforms (winit fixes pending, #155–#164).
@@ -52,8 +51,8 @@ shared items below.
 | Korean | ko | 0 | ❌ | Hangul ✅; macOS Korean IME fixes pending (#163, #164) | no | none | 3–5 |
 | Vietnamese | vi | 0 | ❌ | Latin with stacked diacritics, untested | no | none | 3–4 |
 
-Other shipped languages: **2** — Traditional Chinese (`zh-hant`, partial, ~95%) and Ukrainian (`uk`,
-partial, ~95%).
+Other shipped languages: **4** — Traditional Chinese (`zh-hant`), Ukrainian (`uk`) and Serbian
+Cyrillic and Latin (`sr`, `sr-latn`, #250), all partial (~95%).
 
 ## Shared work (not in the per-language hours)
 
@@ -69,4 +68,5 @@ partial, ~95%).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Serbian (Cyrillic and Latin) interface merged (#250) |
 | 2026-10-10 | major | First version: twelve-language table, catalog coverage measured, Word's 30 UI languages and 120 proofing tools listed |

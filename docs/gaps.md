@@ -49,9 +49,10 @@ full number from ~60% to ~75%. Everything else is depth on the way to full parit
 
 The same gaps grouped the way the parity documents are, for agents working in one area.
 
-- **Feature gaps:** #2 (preserve), #5, #10, #12, #13, #15, #17, #21, #25, #27, #28, #29; Paste
-  Special, Clipboard pane, Advanced Find, Column Selection, Style Inspector, Manage Styles, custom
-  table styles, Draw Table (open PRs exist for most — review and merge before re-implementing).
+- **Feature gaps:** #2 (preserve), #5, #10, #12, #13, #15, #17, #21, #25, #27, #28, #29; Clipboard
+  pane, Manage Styles, Group, Draw Table (open PRs exist for the first three — review and merge
+  before re-implementing). Paste Special, Advanced Find, Column Selection, Style Inspector and
+  custom table styles landed on 2026-10-10.
 - **UI/UX gaps:** #7, #18, #24; rotation and crop handles on the canvas; table column drag on the
   ruler (#49, #217); context menus for objects and tables; Linux title bar theming (#78).
 - **File-format gaps:** #1, #2, #5, #9, #14, #19, #23, #26; embedded fonts; glossary/building blocks.
@@ -63,5 +64,6 @@ The same gaps grouped the way the parity documents are, for agents working in on
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | trivial | Merged main: landed features removed from the feature-gap list |
 | 2026-10-10 | minor | Beta note restated: full number back to the additive ~60% (method aligned with the standard, no new evidence) |
 | 2026-10-10 | major | First version, from the full re-measure: 29 ranked gaps with evidence, impact and hours |

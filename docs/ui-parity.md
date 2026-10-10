@@ -17,15 +17,15 @@ own (`AGENTS.md`: no Microsoft iconography, ever).
 | Customize Ribbon / Customize Keyboard | ❌ | ✅ | 0% | 6–10 |
 | Keyboard shortcuts | **101** bound in `CommandSpec::key` (measured) | ~250 default shortcuts | ~60% | 4–6 |
 | Modal dialogs | **16** (`Dialog` enum: Font, Paragraph, Find, Go To, Insert Table, Page Setup, Link, Bookmark, Word Count, Zoom, Watermark, New/Modify Style, Commands, About, Save Changes) plus panes and menus for the rest | ~100 (Tabs, Borders and Shading, Columns, Symbol, Field, Caption, Index, TOC options, Citation, Define Multilevel List, Table Properties, Track Changes Options, Compare, Protect, Language, Hyphenation, Line Numbers, Envelopes, Labels, Mail Merge, AutoCorrect, Options panes…) | ~40% | 20–30 |
-| Task panes (Navigation, Styles, Comments, Reviewing, Format Picture/Shape, Thesaurus, Accessibility, Clipboard, Selection) | Navigation, Styles, Comments, Thesaurus, Accessibility, Read Aloud, Zotero; Clipboard (#264) and Style Inspector (#236) open | all | 65% | 4–6 |
+| Task panes (Navigation, Styles, Comments, Reviewing, Format Picture/Shape, Thesaurus, Accessibility, Clipboard, Selection) | Navigation, Styles, Comments, Thesaurus, Accessibility, Read Aloud, Zotero; Style Inspector (#236); Clipboard pane (#264) open | all | 70% | 4–6 |
 | Context menus (right-click) | text, spelling suggestions; objects and tables partial | rich per context | 55% | 3–5 |
-| Backstage (Home, New, Open, Info, Save As, Print, Share, Export, Options) | Home and New separate (#254), Info properties (#268 open) | | 65% | 4–6 |
+| Backstage (Home, New, Open, Info, Save As, Print, Share, Export, Options) | Home and New separate (#254), Info properties kept (#268) | | 68% | 4–6 |
 | Rulers: indents, tabs, margins, table columns | indents draggable (one undo, #62); tabs; table column drag pending (#49) | ✅ | 70% | 2–3 |
 | On-canvas objects: select, drag, resize handles, nudge | ✅ tested (#228) | ✅ | 75% | — |
 | Rotation handle, crop handles on canvas, alignment guides, smart guides | ❌ | ✅ | 0% | 4–6 |
-| Selection: word/sentence/paragraph clicks, Shift extend, F8 extend mode, column (Alt+drag, #237 open) | partial | ✅ | 75% | 1–2 |
-| Zoom: Ctrl+scroll, pinch (#179), zoom buttons (#232 open), pages side by side when zoomed out (#251) | ✅ | ✅ | 85% | — |
-| Touchpad smooth/inertial scroll | #252 open | ✅ | 60% | 1 |
+| Selection: word/sentence/paragraph clicks, Shift extend, F8 extend mode, column (Alt+drag, #237) | ✅ | ✅ | 85% | 1 |
+| Zoom: Ctrl+scroll, pinch (#179), zoom buttons (#232), pages side by side when zoomed out (#251) | ✅ | ✅ | 85% | — |
+| Touchpad smooth/inertial scroll | ✅ (#252) | ✅ | 90% | — |
 | Status bar (page x of y, words, language, view buttons, zoom slider) | ✅ | ✅ | 80% | — |
 | Interface themes (light, dark, system #249), dark page (#194) | ✅ | ✅ | 90% | — |
 | Platform conventions (macOS menus/traffic lights #255, Windows title bar, Linux CSD on Wayland #78) | partial | native | 70% | 3–5 |
@@ -36,4 +36,5 @@ own (`AGENTS.md`: no Microsoft iconography, ever).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Merged main: Style Inspector, Column Selection, zoom buttons, inertial scrolling, File Info landed |
 | 2026-10-10 | major | First version: ribbon, dialog, shortcut and interaction inventory |
