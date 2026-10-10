@@ -932,3 +932,23 @@
 	Dark	深色
 	Use system setting	使用系統設定
 	A file dialog is already open.	已有一個檔案對話方塊開啟中。
+	Manage Styles	管理樣式
+	Show or Hide Style	顯示或隱藏樣式
+	Manage Styles…	管理樣式…
+	Sort order:	排序方式：
+	As Recommended	依建議
+	Alphabetical	依字母順序
+	Font: {font}	字型：{font}
+	{size} pt	{size} 點
+	Color: {color}	色彩：{color}
+	Space before: {pt} pt	段落前間距：{pt} 點
+	Space after: {pt} pt	段落後間距：{pt} 點
+	Based on: {style}	根據：{style}
+	Paragraph style	段落樣式
+	Character style	字元樣式
+	Linked style (paragraph and character)	連結樣式（段落和字元）
+	Table style	表格樣式
+	Built-in style	內建樣式
+	Show in the Styles gallery	在樣式庫中顯示
+	Hide from style lists	從樣式清單中隱藏
+	Built-in styles can't be deleted.	無法刪除內建樣式。

@@ -1700,3 +1700,70 @@ fn timestamps_come_from_the_clock() {
     // Fixed-width ISO strings sort by time.
     assert!(date >= cmd::iso_from_unix_secs(before) && date <= cmd::iso_from_unix_secs(cmd::now_unix()), "{date}");
 }
+
+#[test]
+fn manage_styles_lists_paragraph_character_linked_and_table_styles() {
+    let mut s = s();
+    let list = run(&mut s, "styles.manage", json!({"sort": "alphabetical"}));
+    let list = list.as_array().unwrap();
+    let find = |name: &str| list.iter().find(|x| x["name"] == name).unwrap_or_else(|| panic!("{name} listed"));
+    assert_eq!(find("Normal")["type"], "paragraph");
+    assert_eq!(find("Normal")["builtIn"], true);
+    assert_eq!(find("Normal")["inGallery"], true);
+    assert_eq!(find("Heading 1")["type"], "linked");
+    assert_eq!(find("Heading 1")["basedOn"], "Normal");
+    assert!(find("Heading 1")["format"]["size"].is_number(), "description formatting");
+    assert_eq!(find("Table Grid")["type"], "table");
+    assert!(list.iter().any(|x| x["type"] == "character"));
+    // The character half of a linked pair is listed once, as the linked style.
+    assert!(!list.iter().any(|x| x["id"] == "Heading1Char"));
+    let names: Vec<String> = list.iter().map(|x| x["name"].as_str().unwrap().to_lowercase()).collect();
+    assert!(names.windows(2).all(|w| w[0] <= w[1]), "alphabetical");
+    // Recommended order starts with Normal (priority 0); listing is not an edit.
+    let rec = run(&mut s, "styles.manage", json!({}));
+    assert_eq!(rec[0]["name"], "Normal");
+    assert!(s.run("styles.manage", &json!({"sort": "sideways"})).is_err());
+    assert!(!s.dirty);
+}
+
+#[test]
+fn deleting_a_style_falls_back_to_its_base_and_undoes() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Styled"}));
+    run(&mut s, "styles.create", json!({"name": "Mine", "basedOn": "Heading 1"}));
+    run(&mut s, "styles.create", json!({"name": "Child", "basedOn": "Mine", "fromSelection": false}));
+    run(&mut s, "styles.apply", json!({"style": "Mine"}));
+    assert_eq!(para_style(&s, 0).as_deref(), Some("Mine"));
+    let r = run(&mut s, "styles.delete", json!({"style": "Mine"}));
+    assert_eq!(r["restyled"], 1);
+    assert!(s.doc.styles.get("Mine").is_none());
+    assert_eq!(para_style(&s, 0).as_deref(), Some("Heading1"), "falls back to its base");
+    assert_eq!(s.doc.styles.get("Child").and_then(|c| c.based_on.clone()).as_deref(), Some("Heading1"), "rebased");
+    run(&mut s, "edit.undo", json!({}));
+    assert!(s.doc.styles.get("Mine").is_some());
+    assert_eq!(para_style(&s, 0).as_deref(), Some("Mine"));
+    // Built-in styles are refused, unknown ones are errors.
+    assert!(s.run("styles.delete", &json!({"style": "Heading 1"})).is_err());
+    assert!(s.run("styles.delete", &json!({"style": "No Such Style"})).is_err());
+    assert!(s.doc.styles.get("Heading1").is_some());
+}
+
+#[test]
+fn style_visibility_round_trips_through_docx() {
+    let mut s = s();
+    run(&mut s, "styles.create", json!({"name": "Mine", "fromSelection": false}));
+    run(&mut s, "styles.setVisibility", json!({"style": "Heading 1", "gallery": false}));
+    run(&mut s, "styles.setVisibility", json!({"style": "Mine", "hidden": true}));
+    run(&mut s, "styles.setVisibility", json!({"style": "Heading 4", "gallery": true}));
+    assert!(s.run("styles.setVisibility", &json!({"style": "Mine"})).is_err());
+    let gallery: Vec<String> = s.doc.styles.gallery().iter().map(|x| x.id.clone()).collect();
+    assert!(!gallery.contains(&"Heading1".to_string()) && !gallery.contains(&"Mine".to_string()) && gallery.contains(&"Heading4".to_string()));
+    let bytes = crate::io::save_bytes("v.docx", &s.doc).unwrap();
+    let doc = crate::io::open_bytes("v.docx", &bytes).unwrap();
+    let st = |id: &str| doc.styles.get(id).cloned().unwrap_or_else(|| panic!("{id} kept"));
+    assert!(!st("Heading1").quick && !st("Heading1").hidden);
+    assert!(st("Mine").hidden && !st("Mine").builtin);
+    assert!(st("Heading4").quick);
+    run(&mut s, "edit.undo", json!({}));
+    assert!(s.doc.styles.get("Heading4").is_some_and(|h| !h.quick), "undoable");
+}

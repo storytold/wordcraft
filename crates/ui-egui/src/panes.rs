@@ -160,6 +160,9 @@ fn styles(app: &mut WordApp, ui: &mut Ui) {
             let _ = app.run("format.clear", json!({}));
         }
     });
+    if ui.button(tl!("Manage Styles…")).clicked() {
+        let _ = app.run("styles.manage", json!({}));
+    }
     ui.separator();
     let mut list: Vec<(String, String, bool)> = app
         .session

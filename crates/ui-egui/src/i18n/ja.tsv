@@ -931,3 +931,23 @@
 	Dark	ダーク
 	Use system setting	システム設定を使用
 	A file dialog is already open.	ファイル ダイアログが既に開いています。
+	Manage Styles	スタイルの管理
+	Show or Hide Style	スタイルの表示/非表示
+	Manage Styles…	スタイルの管理…
+	Sort order:	並べ替え順:
+	As Recommended	推奨順
+	Alphabetical	アルファベット順
+	Font: {font}	フォント: {font}
+	{size} pt	{size} pt
+	Color: {color}	色: {color}
+	Space before: {pt} pt	前の間隔: {pt} pt
+	Space after: {pt} pt	後の間隔: {pt} pt
+	Based on: {style}	基準: {style}
+	Paragraph style	段落スタイル
+	Character style	文字スタイル
+	Linked style (paragraph and character)	リンク スタイル (段落と文字)
+	Table style	表スタイル
+	Built-in style	組み込みスタイル
+	Show in the Styles gallery	スタイル ギャラリーに表示
+	Hide from style lists	スタイルの一覧に表示しない
+	Built-in styles can't be deleted.	組み込みスタイルは削除できません。
