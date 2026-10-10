@@ -72,6 +72,7 @@
 	Click level to modify:	按一下要修改的層級：
 	Color only	僅色彩
 	Compress punctuation at the start of a line	壓縮行首標點
+	Couldn't make WordCraft the default: {error}	無法將 WordCraft 設為預設應用程式：{error}
 	Dark page (white text on black)	深色頁面（黑底白字）
 	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	拖出矩形以繪製表格，或拖出穿過儲存格的線條以分割儲存格。按 Esc 結束。
 	Draw Table	繪製表格
@@ -87,6 +88,7 @@
 	Insertions and Deletions	插入和刪除
 	Insertions:	插入內容：
 	Left border	左框線
+	In Default apps, choose WordCraft for the document types you want it to open.	請在「預設應用程式」中，為要以 WordCraft 開啟的文件類型選擇 WordCraft。
 	Left Margin	左邊界
 	Indents and Spacing	縮排和間距
 	Legal style numbering	正規形式編號
@@ -100,6 +102,9 @@
 	Number format	編號格式
 	Number style for this level:	此層級的編號樣式：
 	Outside border	外側框線
+	Make WordCraft the default for Word documents…	將 WordCraft 設為 Word 文件的預設應用程式…
+	Opens .docx, .doc, .rtf and .odt files and Word templates with WordCraft from now on.	今後以 WordCraft 開啟 .docx、.doc、.rtf、.odt 檔案和 Word 範本。
+	Opens Settings › Default apps, where you choose WordCraft for .docx and the other document types.	開啟「設定 › 預設應用程式」，在其中為 .docx 及其他文件類型選擇 WordCraft。
 	Reopen	重新開啟
 	Restart list after:	重新開始清單的層級：
 	Right border	右框線
@@ -264,6 +269,8 @@
 	Delete Style	刪除樣式
 	Delete Table	刪除表格
 	Design	設計
+	To open Word documents with WordCraft by default: select one in Finder, choose File › Get Info, pick WordCraft under Open with, then click Change All.	若要預設以 WordCraft 開啟 Word 文件：在 Finder 中選取一份文件，選擇「檔案 › 取得資訊」，在「打開檔案的應用程式」中選擇 WordCraft，然後按一下「全部更改」。
+	WordCraft is now the default app for Word documents.	WordCraft 現在是 Word 文件的預設應用程式。
 	development build	開發版本
 	Diagonal	斜向
 	Diamond	菱形

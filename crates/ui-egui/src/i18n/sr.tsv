@@ -102,6 +102,7 @@
 	Color: {color}	Боја: {color}
 	Compress punctuation at the start of a line	Сажми интерпункцију на почетку реда
 	Confirm password:	Потврдите лозинку:
+	Couldn't make WordCraft the default: {error}	WordCraft није могао да постане подразумевана апликација: {error}
 	Dark page (white text on black)	Тамна страница (бео текст на црном)
 	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	Превуците правоугаоник да нацртате табелу или линију преко ћелија да их поделите. Esc завршава.
 	Draw Table	Нацртај табелу
@@ -126,6 +127,10 @@
 	Number format	Формат броја
 	Number style for this level:	Стил броја за овај ниво:
 	Outside border	Спољна ивица
+	In Default apps, choose WordCraft for the document types you want it to open.	У подразумеваним апликацијама изаберите WordCraft за врсте докумената које желите да отвара.
+	Make WordCraft the default for Word documents…	Постави WordCraft као подразумевану апликацију за Word документе…
+	Opens .docx, .doc, .rtf and .odt files and Word templates with WordCraft from now on.	Од сада ће се .docx, .doc, .rtf и .odt датотеке и Word шаблони отварати у WordCraft-у.
+	Opens Settings › Default apps, where you choose WordCraft for .docx and the other document types.	Отвара Подешавања › Подразумеване апликације, где бирате WordCraft за .docx и друге врсте докумената.
 	Reopen	Поново отвори
 	Restart list after:	Поново почни листу после:
 	Right border	Десна ивица
@@ -315,6 +320,8 @@
 	Delete Style	Обриши стил
 	Delete Table	Обриши табелу
 	Design	Дизајн
+	To open Word documents with WordCraft by default: select one in Finder, choose File › Get Info, pick WordCraft under Open with, then click Change All.	Да би се Word документи подразумевано отварали у WordCraft-у: изаберите један у Finder-у, изаберите Датотека › Прикажи информације, под „Отвори помоћу” изаберите WordCraft, па кликните „Промени све”.
+	WordCraft is now the default app for Word documents.	WordCraft је сада подразумевана апликација за Word документе.
 	development build	развојна верзија
 	Diagonal	Дијагонално
 	Diamond	Дијамант

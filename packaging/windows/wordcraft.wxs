@@ -76,6 +76,80 @@
         <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\wordcraft.exe" Value="[#WordcraftExe]" Type="string" />
       </Component>
 
+      <!-- File associations (#295). Each document type gets a WordCraft ProgId (name, icon, open
+           command) and is listed under the extension's OpenWithProgids, so WordCraft shows in
+           Explorer's "Open with". The Word, RTF and ODT types are also WordCraft's Capabilities
+           (RegisteredApplications), so it appears in Settings › Default apps, where the user
+           makes it the default (File › Options › General opens that page). Nothing here sets an
+           extension's default: the installer never takes over .docx from another app. Markdown and
+           plain text are only "Open with" candidates. Removed again on uninstall. -->
+      <Component Id="WordcraftFileTypes" Guid="EFF89E6A-F9B8-49F9-B3AE-E243347484B4">
+        <RegistryValue Root="HKLM" Key="Software\RegisteredApplications" Name="WordCraft" Value="Software\WordCraft\Capabilities" Type="string" KeyPath="yes" />
+        <RegistryValue Root="HKLM" Key="Software\WordCraft\Capabilities" Name="ApplicationName" Value="WordCraft" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\WordCraft\Capabilities" Name="ApplicationDescription" Value="Write and design documents; open and save Word files." Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\WordCraft\Capabilities" Name="ApplicationIcon" Value="&quot;[#WordcraftExe]&quot;,0" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\wordcraft.exe" Name="FriendlyAppName" Value="WordCraft" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\wordcraft.exe\shell\open\command" Value="&quot;[#WordcraftExe]&quot; &quot;%1&quot;" Type="string" />
+
+        <ProgId Id="WordCraft.Document" Description="Word Document" Icon="WordcraftExe" IconIndex="0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\WordCraft.Document\shell\open\command" Value="&quot;[#WordcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.docx\OpenWithProgids" Name="WordCraft.Document" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\wordcraft.exe\SupportedTypes" Name=".docx" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\WordCraft\Capabilities\FileAssociations" Name=".docx" Value="WordCraft.Document" Type="string" />
+
+        <ProgId Id="WordCraft.DocumentMacroEnabled" Description="Word Macro-Enabled Document" Icon="WordcraftExe" IconIndex="0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\WordCraft.DocumentMacroEnabled\shell\open\command" Value="&quot;[#WordcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.docm\OpenWithProgids" Name="WordCraft.DocumentMacroEnabled" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\wordcraft.exe\SupportedTypes" Name=".docm" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\WordCraft\Capabilities\FileAssociations" Name=".docm" Value="WordCraft.DocumentMacroEnabled" Type="string" />
+
+        <ProgId Id="WordCraft.Template" Description="Word Template" Icon="WordcraftExe" IconIndex="0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\WordCraft.Template\shell\open\command" Value="&quot;[#WordcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.dotx\OpenWithProgids" Name="WordCraft.Template" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\wordcraft.exe\SupportedTypes" Name=".dotx" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\WordCraft\Capabilities\FileAssociations" Name=".dotx" Value="WordCraft.Template" Type="string" />
+
+        <ProgId Id="WordCraft.TemplateMacroEnabled" Description="Word Macro-Enabled Template" Icon="WordcraftExe" IconIndex="0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\WordCraft.TemplateMacroEnabled\shell\open\command" Value="&quot;[#WordcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.dotm\OpenWithProgids" Name="WordCraft.TemplateMacroEnabled" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\wordcraft.exe\SupportedTypes" Name=".dotm" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\WordCraft\Capabilities\FileAssociations" Name=".dotm" Value="WordCraft.TemplateMacroEnabled" Type="string" />
+
+        <ProgId Id="WordCraft.LegacyDocument" Description="Legacy Word Document" Icon="WordcraftExe" IconIndex="0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\WordCraft.LegacyDocument\shell\open\command" Value="&quot;[#WordcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.doc\OpenWithProgids" Name="WordCraft.LegacyDocument" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\wordcraft.exe\SupportedTypes" Name=".doc" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\WordCraft\Capabilities\FileAssociations" Name=".doc" Value="WordCraft.LegacyDocument" Type="string" />
+
+        <ProgId Id="WordCraft.LegacyTemplate" Description="Legacy Word Template" Icon="WordcraftExe" IconIndex="0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\WordCraft.LegacyTemplate\shell\open\command" Value="&quot;[#WordcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.dot\OpenWithProgids" Name="WordCraft.LegacyTemplate" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\wordcraft.exe\SupportedTypes" Name=".dot" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\WordCraft\Capabilities\FileAssociations" Name=".dot" Value="WordCraft.LegacyTemplate" Type="string" />
+
+        <ProgId Id="WordCraft.RichText" Description="Rich Text Document" Icon="WordcraftExe" IconIndex="0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\WordCraft.RichText\shell\open\command" Value="&quot;[#WordcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.rtf\OpenWithProgids" Name="WordCraft.RichText" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\wordcraft.exe\SupportedTypes" Name=".rtf" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\WordCraft\Capabilities\FileAssociations" Name=".rtf" Value="WordCraft.RichText" Type="string" />
+
+        <ProgId Id="WordCraft.OpenDocumentText" Description="OpenDocument Text" Icon="WordcraftExe" IconIndex="0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\WordCraft.OpenDocumentText\shell\open\command" Value="&quot;[#WordcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.odt\OpenWithProgids" Name="WordCraft.OpenDocumentText" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\wordcraft.exe\SupportedTypes" Name=".odt" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\WordCraft\Capabilities\FileAssociations" Name=".odt" Value="WordCraft.OpenDocumentText" Type="string" />
+
+        <ProgId Id="WordCraft.Markdown" Description="Markdown Document" Icon="WordcraftExe" IconIndex="0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\WordCraft.Markdown\shell\open\command" Value="&quot;[#WordcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.md\OpenWithProgids" Name="WordCraft.Markdown" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\wordcraft.exe\SupportedTypes" Name=".md" Value="" Type="string" />
+
+        <ProgId Id="WordCraft.PlainText" Description="Text Document" Icon="WordcraftExe" IconIndex="0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\WordCraft.PlainText\shell\open\command" Value="&quot;[#WordcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.txt\OpenWithProgids" Name="WordCraft.PlainText" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\wordcraft.exe\SupportedTypes" Name=".txt" Value="" Type="string" />
+      </Component>
+
       <Component Id="WordcraftCli">
         <File Id="WordcraftCliExe" Source="$(var.BinDir)\wordcraft-cli.exe" KeyPath="yes" />
       </Component>

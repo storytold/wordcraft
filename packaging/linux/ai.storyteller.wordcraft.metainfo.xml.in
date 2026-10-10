@@ -50,8 +50,17 @@
     <control>pointing</control>
     <control>tablet</control>
   </supports>
+  <!-- Document types WordCraft opens (#295), as in the desktop entry's MimeType=. -->
   <provides>
     <binary>wordcraft</binary>
+    <mediatype>application/vnd.openxmlformats-officedocument.wordprocessingml.document</mediatype>
+    <mediatype>application/vnd.ms-word.document.macroEnabled.12</mediatype>
+    <mediatype>application/vnd.openxmlformats-officedocument.wordprocessingml.template</mediatype>
+    <mediatype>application/vnd.ms-word.template.macroEnabled.12</mediatype>
+    <mediatype>application/msword</mediatype>
+    <mediatype>application/msword-template</mediatype>
+    <mediatype>application/vnd.oasis.opendocument.text</mediatype>
+    <mediatype>application/rtf</mediatype>
   </provides>
   <content_rating type="oars-1.1"/>
   <releases>
