@@ -34,10 +34,12 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("review.previousChange", "Previous Change", "Review › Changes", |s, _| nav_change(s, -1)).pure(),
         CommandSpec::new("review.markup", "Display for Review", "Review › Tracking", |s, v| {
             s.view.show_markup = p::str(v, "value").map(|m| m != "noMarkup" && m != "original").unwrap_or(!s.view.show_markup);
+            // Without markup, deletions leave the layout.
+            s.relayout();
             Ok(json!({"showMarkup": s.view.show_markup}))
         })
         .pure(),
-        CommandSpec::new("review.wordCount", "Word Count", "Review › Proofing", word_count).pure(),
+        CommandSpec::new("review.wordCount", "Word Count", "Review › Proofing", word_count).params(r#"{"includeTextBoxes"?: bool}"#).pure(),
         CommandSpec::new("review.changes", "Reviewing Pane", "Review › Tracking", list_changes).pure(),
         CommandSpec::new("review.spelling", "Spelling & Grammar", "Review › Proofing", next_issue).key("F7").pure(),
         CommandSpec::new("review.issues", "Proofing Issues", "Review › Proofing", all_issues).pure(),
@@ -350,8 +352,17 @@ fn list_changes(s: &mut Session, _: &Value) -> CmdResult {
     ))
 }
 
-fn word_count(s: &mut Session, _: &Value) -> CmdResult {
-    let text = if s.sel.is_collapsed() { s.doc.plain_text(StoryRef::Body) } else { s.selected_text() };
+fn word_count(s: &mut Session, v: &Value) -> CmdResult {
+    if let Some(b) = p::bool(v, "includeTextBoxes") {
+        s.prefs.count_notes = b;
+    }
+    let stories = if s.prefs.count_notes { s.doc.counted_stories() } else { vec![StoryRef::Body] };
+    // A selected picture, shape or text box isn't a text selection: count the document.
+    let text = if s.sel.is_collapsed() || super::objects::object_selection(s).is_some() {
+        stories.iter().map(|st| s.doc.plain_text(*st)).collect::<Vec<_>>().join("\n")
+    } else {
+        s.selected_text()
+    };
     let words = wordcraft_doc::count_words(&text);
     let chars = text.chars().filter(|c| *c != '\n').count();
     let chars_no_spaces = text.chars().filter(|c| !c.is_whitespace()).count();
@@ -361,13 +372,22 @@ fn word_count(s: &mut Session, _: &Value) -> CmdResult {
         l.pages
             .iter()
             .flat_map(|p| p.items.iter())
-            .map(|it| if let wordcraft_layout::Placed::Lines { l0, l1, story: StoryRef::Body, .. } = it { l1 - l0 } else { 0 })
+            .map(|it| {
+                if let wordcraft_layout::Placed::Lines { l0, l1, story, .. } = it
+                    && stories.contains(story)
+                {
+                    l1 - l0
+                } else {
+                    0
+                }
+            })
             .sum()
     };
     let pages = s.layout().pages.len();
-    Ok(
-        json!({"pages": pages, "words": words, "characters": chars_no_spaces, "charactersWithSpaces": chars, "paragraphs": paragraphs, "lines": lines}),
-    )
+    Ok(json!({
+        "pages": pages, "words": words, "characters": chars_no_spaces, "charactersWithSpaces": chars, "paragraphs": paragraphs, "lines": lines,
+        "includeTextBoxes": s.prefs.count_notes,
+    }))
 }
 
 /// Issues (spelling + grammar) in one paragraph as positions.

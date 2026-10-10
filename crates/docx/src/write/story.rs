@@ -301,20 +301,24 @@ impl Writer<'_> {
                     w.close("w:r");
                 }
             }
-            InlineObject::Equation { linear, display } => {
-                if *display {
-                    w.open("m:oMathPara", &[]);
-                }
-                w.open("m:oMath", &[]);
-                w.open("m:r", &[]);
-                w.leaf("m:t", &[("xml:space", "preserve")], linear);
-                w.close("m:r");
-                w.close("m:oMath");
-                if *display {
-                    w.close("m:oMathPara");
+            InlineObject::Equation { linear, display, math } => {
+                // Automatic equation numbers become text: Word numbers nothing by itself.
+                match super::math::resolve_numbers(math, *display, &mut self.eq_number) {
+                    Some(m) => super::math::write_equation(w, linear, *display, &m),
+                    None => super::math::write_equation(w, linear, *display, math),
                 }
             }
             InlineObject::Field { instr, result, locked } => self.field(w, instr, result, *locked, props),
+            InlineObject::FieldStart { instr, locked } => {
+                self.rev_open(w, props);
+                self.field_start(w, instr, *locked, props);
+                self.rev_close(w, props);
+            }
+            InlineObject::FieldEnd => {
+                self.rev_open(w, props);
+                field_run(w, props, &|w| w.empty("w:fldChar", &[("w:fldCharType", "end")]));
+                self.rev_close(w, props);
+            }
             InlineObject::NoteRef { kind, id, custom } => {
                 let foot = *kind == NoteKind::Footnote;
                 if self.current_note == Some((foot, *id)) {
@@ -453,8 +457,10 @@ impl Writer<'_> {
                     }
                 }
                 w.close("wps:spPr");
-                if let Some(part) = story.and_then(|s| self.doc.parts.get(&s))
-                    && depth < 4
+                // Its text, within the same bounds layout shows boxes inside boxes with.
+                if let Some(id) = *story
+                    && let Some(part) = self.doc.parts.get(&id).filter(|p| p.kind == wordcraft_doc::PartKind::TextBox)
+                    && self.boxes.enter(id)
                 {
                     w.open("wps:txbx", &[]);
                     w.open("w:txbxContent", &[]);
@@ -462,6 +468,7 @@ impl Writer<'_> {
                     self.blocks(w, &blocks, rels, false, depth + 1);
                     w.close("w:txbxContent");
                     w.close("wps:txbx");
+                    self.boxes.leave();
                 }
                 w.empty("wps:bodyPr", &[]);
                 w.close("wps:wsp");
@@ -759,6 +766,14 @@ fn xfrm(w: &mut W, cw: f32, ch: f32) {
     w.empty("a:off", &[("x", "0"), ("y", "0")]);
     w.empty("a:ext", &[("cx", &emu(cw.max(0.0))), ("cy", &emu(ch.max(0.0)))]);
     w.close("a:xfrm");
+}
+
+/// One `w:r` with `props`, holding what `f` writes (a field character or code).
+fn field_run(w: &mut W, props: &CharProps, f: &dyn Fn(&mut W)) {
+    w.open("w:r", &[]);
+    rpr(w, props);
+    f(w);
+    w.close("w:r");
 }
 
 /// Word's Table of Contents content control, which gives the TOC its frame and Update Table.

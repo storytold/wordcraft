@@ -641,6 +641,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cfb"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f13298d9178622b7916ec5d01d470425c04273c8ed07e87b1c38b34c4f4612b"
+dependencies = [
+ "fnv",
+ "uuid",
+ "web-time",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4865,6 +4876,7 @@ dependencies = [
  "wordcraft-engine",
  "wordcraft-mcp",
  "wordcraft-render",
+ "wordcraft-zotero",
 ]
 
 [[package]]
@@ -4880,6 +4892,19 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "unicode-segmentation",
+ "wordcraft-geom",
+]
+
+[[package]]
+name = "wordcraft-docbin"
+version = "0.4.0"
+dependencies = [
+ "cfb",
+ "log",
+ "proptest",
+ "serde_json",
+ "thiserror 2.0.21",
+ "wordcraft-doc",
  "wordcraft-geom",
 ]
 
@@ -4910,6 +4935,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "wordcraft-doc",
+ "wordcraft-docbin",
  "wordcraft-docx",
  "wordcraft-fonts",
  "wordcraft-formats",
@@ -5037,6 +5063,7 @@ dependencies = [
  "wordcraft-geom",
  "wordcraft-layout",
  "wordcraft-render",
+ "wordcraft-zotero",
 ]
 
 [[package]]
@@ -5055,6 +5082,20 @@ dependencies = [
  "wordcraft-doc",
  "wordcraft-engine",
  "wordcraft-ui-egui",
+]
+
+[[package]]
+name = "wordcraft-zotero"
+version = "0.4.0"
+dependencies = [
+ "log",
+ "proptest",
+ "serde_json",
+ "thiserror 2.0.21",
+ "wordcraft-doc",
+ "wordcraft-docx",
+ "wordcraft-engine",
+ "wordcraft-formats",
 ]
 
 [[package]]

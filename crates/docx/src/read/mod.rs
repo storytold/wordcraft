@@ -1,5 +1,6 @@
 //! DOCX → [`Document`].
 
+mod math;
 mod props;
 mod story;
 
@@ -122,9 +123,9 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocxError> {
     let core = root_rels.by_type(rt::CORE).map(|x| x.target.clone()).unwrap_or_else(|| "docProps/core.xml".into());
     r.read_core(&core);
     if let Some(c) = root_rels.by_type(rt::CUSTOM)
-        && let Some(b) = pkg.get(&c.target)
+        && let Ok(Some(x)) = r.xml(&c.target)
     {
-        r.doc.passthrough.insert("docProps/custom.xml".into(), Arc::new(b.to_vec()));
+        r.doc.custom_props = crate::custom::read(&x);
     }
     // A macro project and every part it relates to (VBA data, signatures…) ride along as opaque
     // bytes, never parsed or run, so a .docm/.dotm saved again carries exactly what the file had.
@@ -424,7 +425,7 @@ impl Reader<'_> {
                 st.chr = self.pc.rpr(rp);
             }
             if kind == StyleKind::Table {
-                let parts = self.table_style_parts(s);
+                let parts = self.table_style_parts(s, &mut st);
                 st.table = (parts != TableStyleParts::default()).then_some(parts);
             }
             sheet.styles.push(st);
@@ -433,15 +434,33 @@ impl Reader<'_> {
         Ok(())
     }
 
-    fn table_style_parts(&self, s: &El) -> TableStyleParts {
+    /// A table style's table-level formatting and conditional formats. The `wholeTable` region
+    /// applies to every cell, so its paragraph and run properties go to the style's own (`st`).
+    fn table_style_parts(&self, s: &El, st: &mut Style) -> TableStyleParts {
         let mut t = TableStyleParts::default();
-        if let Some(b) = s.child("w:tblPr").and_then(|p| p.child("w:tblBorders")) {
-            t.borders = Some(props::borders(b));
+        if let Some(tp) = s.child("w:tblPr") {
+            if let Some(b) = tp.child("w:tblBorders") {
+                t.borders = Some(props::borders(b));
+            }
+            t.fill = tp.child("w:shd").and_then(props::shd_fill);
+            t.cell_margins = tp.child("w:tblCellMar").map(props::margins);
         }
         for c in s.children("w:tblStylePr") {
             let fill = c.child("w:tcPr").and_then(|p| p.child("w:shd")).and_then(props::shd_fill);
             let chr = c.child("w:rPr").map(|r| self.pc.rpr(r)).unwrap_or_default();
             match c.attr("w:type") {
+                Some("wholeTable") => {
+                    if let Some(p) = c.child("w:pPr") {
+                        st.para.overlay(&self.pc.ppr(p).0);
+                    }
+                    st.chr.overlay(&chr);
+                    if fill.is_some() {
+                        t.fill = fill;
+                    }
+                    if let Some(b) = c.child("w:tblPr").and_then(|p| p.child("w:tblBorders")) {
+                        t.borders = Some(props::borders(b));
+                    }
+                }
                 Some("firstRow") => {
                     t.header_fill = fill;
                     t.header_chr = chr;

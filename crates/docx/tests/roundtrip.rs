@@ -423,6 +423,38 @@ fn comments_round_trip() {
     }
 }
 
+/// A table style's cell text formatting, whole-table shading and cell margins survive a save.
+#[test]
+fn table_style_formatting_round_trips() {
+    use wordcraft_doc::styles::TableStyleParts;
+    let mut d = doc_with(vec![Paragraph::with_text("x", CharProps::default())]);
+    let parts = TableStyleParts {
+        borders: Some(Borders { top: Some(Border::single(1.0)), ..Default::default() }),
+        fill: Some(Rgb(0xDD, 0xEB, 0xF7)),
+        cell_margins: Some([1.0, 14.4, 0.0, 14.4]),
+        header_chr: CharProps { italic: Some(true), ..Default::default() },
+        header_fill: Some(Rgb(0xFF, 0xFF, 0)),
+        ..Default::default()
+    };
+    d.styles.upsert(Style {
+        id: "Whole".into(),
+        name: "Whole".into(),
+        kind: StyleKind::Table,
+        based_on: Some("TableGrid".into()),
+        para: ParaProps { align: Some(Align::Center), space_after: Some(0.0), ..Default::default() },
+        chr: CharProps { bold: Some(true), color: Some(TextColor::Rgb(Rgb(0xC0, 0, 0))), ..Default::default() },
+        table: Some(parts.clone()),
+        ..Default::default()
+    });
+    let r = rt(&d);
+    let got = r.styles.get("Whole").unwrap();
+    assert_eq!(got.based_on.as_deref(), Some("TableGrid"));
+    assert_eq!(got.para.align, Some(Align::Center));
+    assert_eq!(got.para.space_after, Some(0.0));
+    assert_eq!((got.chr.bold, got.chr.color), (Some(true), Some(TextColor::Rgb(Rgb(0xC0, 0, 0)))));
+    assert_eq!(got.table.as_ref(), Some(&parts));
+}
+
 #[test]
 fn notes_round_trip() {
     let mut d = Document::new();
@@ -709,7 +741,7 @@ fn shapes_textboxes_equations_dropcaps_round_trip() {
         float: Float::default(),
         story: None,
     };
-    let eq = InlineObject::Equation { linear: "x=(-b±√(b^2-4ac))/2a".into(), display: false };
+    let eq = InlineObject::Equation { linear: "x=(-b±√(b^2-4ac))/2a".into(), display: false, math: Default::default() };
     let mut p = Paragraph::with_text("shapes ", CharProps::default());
     for o in [tb, star.clone(), eq.clone()] {
         let end = p.len();
@@ -734,7 +766,14 @@ fn shapes_textboxes_equations_dropcaps_round_trip() {
         o => panic!("{o:?}"),
     }
     assert_eq!(got[0].objects[1], star);
-    assert_eq!(got[0].objects[2], eq);
+    match &got[0].objects[2] {
+        InlineObject::Equation { linear, display, math } => {
+            assert_eq!(linear, "x=(-b±√(b^2-4ac))/2a");
+            assert!(!display);
+            assert_eq!(math.nodes, wordcraft_doc::math::parse_linear(linear), "structure is written as OMML and read back");
+        }
+        o => panic!("{o:?}"),
+    }
     assert_eq!(got.len(), 2, "drop cap paragraph merges back");
     assert_eq!(got[1].text, dc.text);
     assert_eq!(got[1].props, dc.props);
@@ -901,6 +940,37 @@ fn ensure_empty_and_table_end_document_is_valid() {
     e.body.clear();
     let r = rt(&e);
     assert_eq!(r.body.len(), 1);
+}
+
+#[test]
+fn self_showing_text_box_saves_bounded() {
+    // Crafted: a box whose 30 shapes all show that same box. Unbounded, saving would nest it.
+    let mut d = Document::from_text("Body");
+    let id = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("Box", CharProps::default()))]);
+    let shape = || InlineObject::Shape {
+        kind: ShapeKind::TextBox,
+        w: 40.0,
+        h: 20.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Float::default(),
+        story: Some(id),
+    };
+    for _ in 0..30 {
+        d.insert_object(
+            &wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Part(id), path: wordcraft_doc::Path::top(0), off: 0 },
+            shape(),
+            &CharProps::default(),
+        )
+        .unwrap();
+    }
+    d.insert_object(&wordcraft_doc::Pos::body(0, 0), shape(), &CharProps::default()).unwrap();
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    assert!(bytes.len() < 200_000, "{} bytes", bytes.len());
+    // It still opens, with the box's text.
+    let back = wordcraft_docx::read(&bytes).unwrap();
+    assert!(back.parts.values().any(|p| p.kind == PartKind::TextBox));
 }
 
 #[test]

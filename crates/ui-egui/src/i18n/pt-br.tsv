@@ -60,7 +60,6 @@
 	Automatic Table 1 (3 levels)	Tabela automática 1 (3 níveis)
 	Automatic Table 2 (2 levels)	Tabela automática 2 (2 níveis)
 	AutoSave	Salvamento automático
-	AutoSave documents that have been saved	Salvar automaticamente documentos que já foram salvos
 	AutoSave saves every change to the file (needs a saved document)	O salvamento automático grava cada alteração no arquivo (requer um documento já salvo)
 	AutoText	Autotexto
 	Backspace	Backspace
@@ -146,6 +145,7 @@
 	Copy	Copiar
 	Copy Formatting	Copiar formatação
 	Corrections	Correções
+	Count words in text boxes and notes	Contar palavras em caixas de texto e notas
 	Cover Page	Capa
 	Create	Criar
 	Create a Style	Criar um estilo
@@ -403,6 +403,7 @@
 	Moderate	Moderada
 	Modify Style	Modificar estilo
 	Modify…	Modificar…
+	Move or Resize	Mover ou redimensionar
 	Multilevel List	Lista de vários níveis
 	Multiple Pages	Várias páginas
 	Name (A–Z)	Nome (A–Z)
@@ -439,6 +440,7 @@
 	Not available right now	Indisponível no momento
 	Not saved	Não salvo
 	Not saved yet	Ainda não salvo
+	Nudge	Deslocar ligeiramente
 	Number of columns:	Número de colunas:
 	Number of rows:	Número de linhas:
 	Numbering	Numeração
@@ -789,3 +791,91 @@
 	Scroll ribbon left	Rolar a faixa de opções para a esquerda
 	Scroll ribbon right	Rolar a faixa de opções para a direita
 	Character Border	Borda de caractere
+# Zotero integration
+	Zotero	Zotero
+	Citations	Citações
+	Document	Documento
+	Add/Edit\nCitation	Adicionar/editar\ncitação
+	Add\nNote	Adicionar\nnota
+	Add/Edit\nBibliography	Adicionar/editar\nbibliografia
+	Refresh	Atualizar
+	Document\nPreferences	Preferências\ndo documento
+	Unlink\nCitations	Desvincular\ncitações
+	Waiting for Zotero…	Aguardando o Zotero…
+	Zotero: done	Zotero: concluído
+	Zotero: cancelled	Zotero: cancelado
+	Yes	Sim
+	No	Não
+# Read Aloud player
+	Move Past Citation	Mover para depois da citação
+	Move Past\nCitation	Mover para depois\nda citação
+	Next Sentence	Próxima frase
+	Previous Sentence	Frase anterior
+	Next sentence	Próxima frase
+	Previous sentence	Frase anterior
+	Play/Pause	Reproduzir/pausar
+	Read Aloud Status	Status da leitura em voz alta
+	Reading Speed	Velocidade de leitura
+	Skip Citations and Bibliography	Ignorar citações e bibliografia
+	Skip citations & bibliography	Ignorar citações e bibliografia
+	Stop Reading	Parar leitura
+	Don't read Zotero, Mendeley or EndNote citations and bibliographies	Não ler citações e bibliografias do Zotero, Mendeley ou EndNote
+	Play	Reproduzir
+	Pause	Pausar
+	Stop	Parar
+	Sentence	Frase
+	Paused	Pausado
+	Finished	Concluído
+	Stopped	Parado
+	Speed	Velocidade
+	Normal speed	Velocidade normal
+	AutoSave documents you have saved in WordCraft	Salvar automaticamente documentos que você salvou no WordCraft
+	AutoSave failed: {error}. Save the document to turn AutoSave back on.	Falha no salvamento automático: {error}. Salve o documento para reativar o salvamento automático.
+	Couldn't download {name}: {error}	Não foi possível baixar {name}: {error}
+	Do you want to save changes to {name}?	Deseja salvar as alterações em {name}?
+	Don't Save	Não Salvar
+	That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.	Esse formato não preserva tudo, então o documento continua aberto. Salve-o como documento do Word (.docx) para continuar.
+	Your changes will be lost if you don't save them.	Suas alterações serão perdidas se você não salvá-las.
+# Equations.
+	Change Structure	Alterar estrutura
+	Change to Display	Alterar para exibição
+	Change to Inline	Alterar para embutida
+	Conversions	Conversões
+	Delete Back in Equation	Excluir para trás na equação
+	Delete in Equation	Excluir na equação
+	Edit Equation	Editar equação
+	Enter in Equation	Enter na equação
+	Equation Gallery	Galeria de equações
+	Equation Info	Informações da equação
+	Equation Number	Número da equação
+	Input Format	Formato de entrada
+	Insert Structure	Inserir estrutura
+	Insert Symbol	Inserir símbolo
+	Justification	Alinhamento
+	Leave Equation	Sair da equação
+	Move in Equation	Mover na equação
+	Normal Text	Texto normal
+	Set Equation	Definir equação
+	Structure Actions	Ações de estrutura
+	Structures	Estruturas
+	Tools	Ferramentas
+	Type in Equation	Digitar na equação
+	Inline	Embutida
+	Number	Número
+	Close Equation	Fechar equação
+	Insert New Equation	Inserir nova equação
+	Built-In	Internas
+	Professional	Profissional
+	Linear	Linear
+	Fraction	Fração
+	Script	Índice
+	Radical	Radical
+	Integral	Integral
+	Large\nOperator	Operador\ngrande
+	Bracket	Colchete
+	Function	Função
+	Accent	Acento
+	Limit and\nLog	Limite e\nlogaritmo
+	Operator	Operador
+	Equation Options	Opções de equação
+	All symbol sets	Todos os conjuntos de símbolos

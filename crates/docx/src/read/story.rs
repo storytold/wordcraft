@@ -19,6 +19,8 @@ const MAX_TABLE_DEPTH: usize = 24;
 const MAX_FIELD_DEPTH: usize = 32;
 /// Deepest text-box-in-text-box nesting.
 const MAX_STORY_DEPTH: usize = 4;
+/// Longest field code we keep (Zotero's citation codes embed item data as JSON).
+const MAX_INSTR: usize = 2 * 1024 * 1024;
 
 /// Inherited run context (from `w:hyperlink`, `w:ins`, `w:del` wrappers).
 #[derive(Clone, Default)]
@@ -46,6 +48,24 @@ struct FieldState {
     buf: Vec<(Item, CharProps)>,
     props: CharProps,
     locked: bool,
+    /// Kept as a range field: its result flows into the document as ordinary content between
+    /// `FieldStart` and `FieldEnd` markers instead of being buffered.
+    range: bool,
+}
+
+/// Fields kept as ranges: those whose result another program writes, with formatting and often
+/// several paragraphs (citation managers' `ADDIN` fields: Zotero, Mendeley, EndNote).
+fn is_range_instr(instr: &str) -> bool {
+    instr.trim_start().get(..5).is_some_and(|k| k.eq_ignore_ascii_case("ADDIN"))
+}
+
+/// The field that buffers content now: the innermost one that isn't a range field, unless it
+/// has spilled (then content goes straight into the paragraph).
+fn sink(sc: &mut StoryCtx) -> Option<&mut FieldState> {
+    match sc.fields.iter_mut().rev().find(|f| !f.range) {
+        Some(f) if !f.spilled => Some(f),
+        _ => None,
+    }
 }
 
 /// Per-story parsing state (fields may span paragraphs; block-level markers wait for the next
@@ -289,9 +309,7 @@ impl Reader<'_> {
                 let instr = k.attr("w:instr").unwrap_or("").to_string();
                 let props = k.child("w:r").and_then(|r| r.child("w:rPr")).map(|p| self.run_props(p, ctx)).unwrap_or_else(|| self.run_props_none(ctx));
                 self.begin_field(sc, props, instr, on_off_attr(k, "w:fldLock"));
-                if let Some(f) = sc.fields.last_mut() {
-                    f.phase = Phase::Result;
-                }
+                self.separate_field(sc, pb);
                 self.read_inline_children(sc, pb, k, rels, ctx, depth + 1);
                 self.end_field(sc, pb);
             }
@@ -310,12 +328,17 @@ impl Reader<'_> {
             "w:smartTag" | "w:customXml" | "w:dir" | "w:bdo" => self.read_inline_children(sc, pb, k, rels, ctx, depth + 1),
             "m:oMath" => {
                 let props = self.run_props_none(ctx);
-                self.emit_obj(sc, pb, InlineObject::Equation { linear: k.deep_text(), display: false }, &props);
+                let math = super::math::read_omath(k, Default::default());
+                let linear = wordcraft_doc::math::to_linear(&math.nodes);
+                self.emit_obj(sc, pb, InlineObject::Equation { linear, display: false, math }, &props);
             }
             "m:oMathPara" => {
                 let props = self.run_props_none(ctx);
+                let jc = super::math::para_jc(k);
                 for m in k.children("m:oMath") {
-                    self.emit_obj(sc, pb, InlineObject::Equation { linear: m.deep_text(), display: true }, &props);
+                    let math = super::math::read_omath(m, jc);
+                    let linear = wordcraft_doc::math::to_linear(&math.nodes);
+                    self.emit_obj(sc, pb, InlineObject::Equation { linear, display: true, math }, &props);
                 }
             }
             "mc:AlternateContent" => {
@@ -392,7 +415,7 @@ impl Reader<'_> {
                 if let Some(f) = sc.fields.last_mut()
                     && f.phase == Phase::Instr
                     && !f.spilled
-                    && f.instr.len() < 64 * 1024
+                    && f.instr.len() < MAX_INSTR
                 {
                     f.instr.push_str(&k.text());
                 }
@@ -421,13 +444,7 @@ impl Reader<'_> {
             }
             "w:fldChar" => match k.attr("w:fldCharType") {
                 Some("begin") => self.begin_field(sc, props.clone(), String::new(), on_off_attr(k, "w:fldLock")),
-                Some("separate") => {
-                    if sc.ignored_begins == 0
-                        && let Some(f) = sc.fields.last_mut()
-                    {
-                        f.phase = Phase::Result;
-                    }
-                }
+                Some("separate") => self.separate_field(sc, pb),
                 Some("end") => self.end_field(sc, pb),
                 _ => {}
             },
@@ -497,7 +514,32 @@ impl Reader<'_> {
             return;
         }
         // Fields nested deeper than the cap are ignored (their content flows to the enclosing field).
-        sc.fields.push(FieldState { instr, phase: Phase::Instr, spilled: false, buf: Vec::new(), props, locked });
+        sc.fields.push(FieldState { instr, phase: Phase::Instr, spilled: false, buf: Vec::new(), props, locked, range: false });
+    }
+
+    /// Whether the field below the innermost one is still collecting its code (a field nested
+    /// in another's code contributes text to that code, never content).
+    fn parent_in_instr(sc: &StoryCtx) -> bool {
+        let n = sc.fields.len();
+        n >= 2 && sc.fields.get(n - 2).is_some_and(|p| !p.spilled && !p.range && p.phase == Phase::Instr)
+    }
+
+    /// `separate`: the code is complete; a range field starts its result here.
+    fn separate_field(&mut self, sc: &mut StoryCtx, pb: &mut PB) {
+        if sc.ignored_begins > 0 {
+            return;
+        }
+        let nested_in_instr = Self::parent_in_instr(sc);
+        let Some(f) = sc.fields.last_mut() else { return };
+        if f.range {
+            return;
+        }
+        f.phase = Phase::Result;
+        if !f.spilled && !nested_in_instr && is_range_instr(&f.instr) {
+            f.range = true;
+            let (obj, props) = (InlineObject::FieldStart { instr: f.instr.trim().to_string(), locked: f.locked }, f.props.clone());
+            self.emit_obj(sc, pb, obj, &props);
+        }
     }
 
     fn end_field(&mut self, sc: &mut StoryCtx, pb: &mut PB) {
@@ -505,8 +547,19 @@ impl Reader<'_> {
             sc.ignored_begins -= 1;
             return;
         }
+        let nested_in_instr = Self::parent_in_instr(sc);
         let Some(f) = sc.fields.pop() else { return };
+        if f.range {
+            self.emit_obj(sc, pb, InlineObject::FieldEnd, &f.props);
+            return;
+        }
         if f.spilled {
+            return;
+        }
+        if f.phase == Phase::Instr && !nested_in_instr && is_range_instr(&f.instr) {
+            // A range field with no result yet.
+            self.emit_obj(sc, pb, InlineObject::FieldStart { instr: f.instr.trim().to_string(), locked: f.locked }, &f.props);
+            self.emit_obj(sc, pb, InlineObject::FieldEnd, &f.props);
             return;
         }
         let mut result = String::new();
@@ -531,7 +584,7 @@ impl Reader<'_> {
     /// let the rest of their result flow as ordinary text.
     fn spill_fields(&mut self, sc: &mut StoryCtx, pb: &mut PB) {
         for f in sc.fields.iter_mut() {
-            if f.spilled {
+            if f.spilled || f.range {
                 continue;
             }
             f.spilled = true;
@@ -546,8 +599,8 @@ impl Reader<'_> {
     }
 
     fn emit_text(&mut self, sc: &mut StoryCtx, pb: &mut PB, s: &str, props: &CharProps) {
-        match sc.fields.last_mut() {
-            Some(f) if !f.spilled => {
+        match sink(sc) {
+            Some(f) => {
                 if f.phase == Phase::Result && f.buf.len() < 100_000 {
                     f.buf.push((Item::Text(s.to_string()), props.clone()));
                 }
@@ -557,8 +610,8 @@ impl Reader<'_> {
     }
 
     fn emit_obj(&mut self, sc: &mut StoryCtx, pb: &mut PB, o: InlineObject, props: &CharProps) {
-        match sc.fields.last_mut() {
-            Some(f) if !f.spilled => {
+        match sink(sc) {
+            Some(f) => {
                 if f.phase == Phase::Result && f.buf.len() < 100_000 {
                     f.buf.push((Item::Obj(o), props.clone()));
                 }
