@@ -9,6 +9,11 @@ use serde_json::{Value, json};
 /// Longest reply line read (a page PNG in base64 fits).
 const MAX_REPLY: u64 = 64 << 20;
 
+/// Longest wait for a connection to the window. Linux and macOS refuse a closed loopback port
+/// at once, but Windows retries the connection and reports the refusal only after 1 to 2
+/// seconds: a shorter limit would turn "window closed" (exit 4) into a timeout.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LinkError {
     /// Nothing listens: the window is closed.
@@ -51,7 +56,7 @@ impl Link {
             .map_err(|e| LinkError::Bad(format!("{}: {e}", self.addr)))?
             .find(|a| a.ip().is_loopback())
             .ok_or_else(|| LinkError::Bad(format!("{}: not an address on this computer", self.addr)))?;
-        let s = TcpStream::connect_timeout(&sa, Duration::from_secs(2))
+        let s = TcpStream::connect_timeout(&sa, CONNECT_TIMEOUT)
             .map_err(|e| if e.kind() == std::io::ErrorKind::ConnectionRefused { LinkError::Refused } else { LinkError::Closed })?;
         let _ = s.set_nodelay(true);
         let r = s.try_clone().map_err(|_| LinkError::Closed)?;

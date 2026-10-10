@@ -1,4 +1,4 @@
-//! Memberships: `<seleload(&p) m = load(&p).ok_or_elsetings>/chat-members/<instance-or-local-port>-<handle>.json`, mode 0600,
+//! Memberships: `<settings>/chat-members/<instance-or-local-port>-<handle>.json`, mode 0600,
 //! written atomically, pruned when their window is gone.
 
 use std::io::{Read, Write};
@@ -41,11 +41,19 @@ fn load(p: &Path) -> Option<Membership> {
     parse(&text)
 }
 
+/// Longest wait when [`window_gone`] tries a membership's port. Windows reports a refused
+/// loopback connection only after 1 to 2 seconds of retries; with a shorter limit the check
+/// times out, and a timeout never counts as gone, so the membership of a closed window would
+/// stay. Linux and macOS refuse at once.
+const GONE_CHECK_TIMEOUT: Duration = Duration::from_secs(3);
+
 /// Nothing listens on the membership's port any more (only a refused connection counts).
 pub fn window_gone(m: &Membership) -> bool {
-    m.addr.to_socket_addrs().ok().and_then(|mut a| a.next()).is_some_and(
-        |sa| matches!(TcpStream::connect_timeout(&sa, Duration::from_millis(300)), Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused),
-    )
+    m.addr
+        .to_socket_addrs()
+        .ok()
+        .and_then(|mut a| a.next())
+        .is_some_and(|sa| matches!(TcpStream::connect_timeout(&sa, GONE_CHECK_TIMEOUT), Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused))
 }
 
 impl Store {
