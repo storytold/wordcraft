@@ -225,6 +225,19 @@ fn mi(ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: Value) {
     }
 }
 
+/// A menu item with a check mark when `checked` (the current choice of several).
+fn mi_check(ui: &mut Ui, app: &mut WordApp, label: &str, checked: bool, id: &str, params: Value) {
+    // An invisible mark keeps the unchecked labels aligned with the checked one.
+    let mark = egui::RichText::new("✓");
+    let mark = if checked { mark } else { mark.color(egui::Color32::TRANSPARENT) };
+    let enabled = crate::widgets::enabled(app, id);
+    let resp = ui.add_enabled(enabled, egui::Button::new((mark, tl!(label))).selected(checked).min_size(vec2(200.0, 0.0)));
+    if resp.clicked() {
+        let _ = app.run(id, params);
+        ui.close();
+    }
+}
+
 fn home(app: &mut WordApp, ui: &mut Ui) {
     let st = app.session.run("format.state", &json!({})).unwrap_or_default();
     let flag = |k: &str| st.get(k).and_then(Value::as_bool).unwrap_or(false);
@@ -851,8 +864,26 @@ fn mailings(app: &mut WordApp, ui: &mut Ui) {
         big(ui, app, "labels", "Labels", "mailings.labels", json!({}), false);
     });
     group(ui, "Start Mail Merge", None, app, |ui, app| {
-        big(ui, app, "mailMerge", "Start Mail\nMerge", "mailings.start", json!({}), false);
-        big(ui, app, "recipients", "Select\nRecipients", "mailings.recipients", json!({}), false);
+        // The kinds of merge document the engine makes, the current one checked.
+        menu_button(ui, app, "mailMerge", Some("Start Mail\nMerge"), "Start Mail Merge", true, |ui, app| {
+            let kind = app.session.merge.kind.clone();
+            for (label, k) in [
+                ("Letters", "letters"),
+                ("E-mail Messages", "emails"),
+                ("Envelopes", "envelopes"),
+                ("Labels", "labels"),
+                ("Directory", "directory"),
+                ("Normal Word Document", "normal"),
+            ] {
+                let current = kind == k || (k == "normal" && kind.is_empty());
+                mi_check(ui, app, label, current, "mailings.start", json!({"kind": k}));
+            }
+        });
+        // The command needs data, so the button offers the two ways to give it (#240).
+        menu_button(ui, app, "recipients", Some("Select\nRecipients"), "Select Recipients", true, |ui, app| {
+            mi(ui, app, "Type a New List…", "ui.dialog", json!({"name": "newRecipientList"}));
+            mi(ui, app, "Use an Existing List…", "ui.openRecipientList", json!({}));
+        });
         big(ui, app, "editRecipients", "Edit\nRecipient List", "mailings.editRecipients", json!({}), false);
     });
     group(ui, "Write & Insert Fields", None, app, |ui, app| {
@@ -861,7 +892,13 @@ fn mailings(app: &mut WordApp, ui: &mut Ui) {
         big(ui, app, "greetingLine", "Greeting\nLine", "mailings.greetingLine", json!({}), false);
         big(ui, app, "mergeField", "Insert Merge\nField", "mailings.insertField", json!({}), false);
         stack(ui, |ui| {
-            small(ui, app, "rules", Some("Rules"), "Rules", "mailings.rules", json!({}), false);
+            // The merge rules the engine knows; If and Skip Record If ask for their condition.
+            menu_button(ui, app, "rules", Some("Rules"), "Rules", false, |ui, app| {
+                mi(ui, app, "If…Then…Else…", "mailings.rules", json!({"rule": "IF"}));
+                mi(ui, app, "Merge Record #", "mailings.rules", json!({"rule": "MERGEREC"}));
+                mi(ui, app, "Next Record", "mailings.rules", json!({"rule": "NEXT"}));
+                mi(ui, app, "Skip Record If…", "mailings.rules", json!({"rule": "SKIPIF"}));
+            });
             small(ui, app, "matchFields", Some("Match Fields"), "Match Fields", "mailings.matchFields", json!({}), false);
         });
     });

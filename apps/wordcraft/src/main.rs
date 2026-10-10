@@ -12,6 +12,7 @@
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod control_server;
+mod file_dialogs;
 #[cfg(any(target_os = "windows", test))]
 mod graphics;
 mod logging;
@@ -23,14 +24,22 @@ use wordcraft_ui_egui::{
 };
 
 /// The app, the restored window geometry until the first frame has checked it, the control
-/// server's key file (removed on exit) and, on macOS, the documents opened from Finder.
-struct App(WordApp, Option<WindowGeometry>, Option<control_server::KeyFile>, #[cfg(target_os = "macos")] fmv_macos_events::Inbox);
+/// server's key file (removed on exit), the file dialogs the app asked for and, on macOS, the
+/// documents opened from Finder.
+struct App(
+    WordApp,
+    Option<WindowGeometry>,
+    Option<control_server::KeyFile>,
+    file_dialogs::Launcher,
+    #[cfg(target_os = "macos")] fmv_macos_events::Inbox,
+);
 
 impl eframe::App for App {
-    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
-        apple_events::poll(&self.3, &mut self.0, ctx);
+        apple_events::poll(&self.4, &mut self.0, ctx);
         self.0.logic(ctx);
+        self.3.show(frame);
         let prev = self.0.ui.window;
         self.0.ui.window = ctx.input(|i| WindowGeometry::track(prev, i.viewport(), i.viewport_rect().size()));
         if let Some(pos) = ctx.input(|i| take_rescue(&mut self.1, i.viewport())) {
@@ -47,8 +56,9 @@ impl eframe::App for App {
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
         self.0.raw_input_hook(raw);
     }
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.0.ui(ui);
+        self.3.show(frame);
     }
     fn on_exit(&mut self) {
         save_prefs(&self.0);
@@ -108,22 +118,9 @@ fn save_prefs(app: &WordApp) {
     }
 }
 
-fn services() -> Services {
-    Services {
-        pick_open: Some(Box::new(|purpose: &str| {
-            let d = rfd::FileDialog::new();
-            let d = if purpose == "picture" {
-                d.add_filter("Pictures", &["png", "jpg", "jpeg", "gif", "webp", "bmp"])
-            } else {
-                d.add_filter("Documents", &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "rtf", "txt", "md", "html", "htm", "tex", "json"])
-                    .add_filter("Word document", &["docx"])
-                    .add_filter("All files", &["*"])
-            };
-            d.pick_file().map(|p| p.to_string_lossy().to_string())
-        })),
-        pick_save: Some(Box::new(|name: &str| rfd::FileDialog::new().set_file_name(name).save_file().map(|p| p.to_string_lossy().to_string()))),
-        ..Default::default()
-    }
+/// Native file dialogs, shown without blocking the window (`file_dialogs`, #94).
+fn services(file_dialog: file_dialogs::Hook) -> Services {
+    Services { file_dialog: Some(file_dialog), ..Default::default() }
 }
 
 /// Window, Dock and taskbar icon.
@@ -206,7 +203,8 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             let doc = if sample { wordcraft_engine::sample::sample_document() } else { wordcraft_doc::Document::new() };
-            let mut app = WordApp::new(Session::new(doc), services());
+            let (file_dialog, dialogs) = file_dialogs::hook(&cc.egui_ctx);
+            let mut app = WordApp::new(Session::new(doc), services(file_dialog));
             load_prefs(&mut app);
             app.ui.window = restored;
             app.integrated_titlebar = cfg!(target_os = "macos");
@@ -226,6 +224,7 @@ fn main() -> eframe::Result {
                 app,
                 restored,
                 key_file,
+                dialogs,
                 #[cfg(target_os = "macos")]
                 apple_events.connect(&cc.egui_ctx),
             )))

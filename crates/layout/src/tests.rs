@@ -1,6 +1,6 @@
 use super::*;
 use wordcraft_doc::para::InlineObject;
-use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, ParaProps};
+use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, ParaProps, TextDirection};
 use wordcraft_doc::{Pos, Table};
 
 fn lay(doc: &Document) -> DocLayout {
@@ -438,6 +438,116 @@ fn tables_lay_out_cells() {
     let rules = l.pages[0].items.iter().filter(|i| matches!(i, Placed::Rule { .. })).count();
     assert!(rules >= 12, "rules {rules}");
     assert!(l.cell_at(0, c.x, c.top + 2.0).is_some());
+}
+
+/// A 1×3 table after "before" whose middle cell holds `text` running `dir`.
+fn turned_table(dir: TextDirection, text: &str, row: Option<f32>) -> Document {
+    let mut d = Document::from_text("before\nafter");
+    let mut t = Table::new(1, 3, 468.0);
+    t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("plain", Default::default()))];
+    t.rows[0].cells[1].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))];
+    t.rows[0].cells[1].props.text_direction = dir;
+    if let Some(h) = row {
+        t.rows[0].props.height = Some(h);
+        t.rows[0].props.height_rule = wordcraft_doc::props::HeightRule::Exact;
+    }
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+    d
+}
+
+fn turned_lines(l: &DocLayout) -> &Placed {
+    l.pages[0].items.iter().find(|it| matches!(it, Placed::Lines { path, .. } if path.0 == [1, 0, 1, 0])).unwrap()
+}
+
+/// Table Layout › Text Direction (#226): turned cell text runs along the cell's height, the row
+/// grows to fit it, and caret, clicks and drawing follow the turn.
+#[test]
+fn turned_cell_text_runs_down_the_cell() {
+    let text = "Turned cell text";
+    let d = turned_table(TextDirection::Down, text, None);
+    let l = lay(&d);
+    let it = turned_lines(&l);
+    assert!(matches!(it, Placed::Lines { turn: TextDirection::Down, l0: 0, l1: 1, .. }), "one unwrapped line: {it:?}");
+    let b = it.turned_bounds().unwrap();
+    // Tall and narrow, against the cell's right edge (cell 2 spans x 228..384, 5.4pt margins).
+    assert!(b.h > 60.0 && b.w < 20.0, "{b:?}");
+    assert!((b.right() - (72.0 + 312.0 - 5.4)).abs() < 1.0 && b.x > 72.0 + 156.0, "{b:?}");
+    // The row grew to hold the text: the next paragraph starts below it.
+    let after = l.caret(&Pos::body(2, 0)).unwrap();
+    assert!(after.top > b.bottom(), "{after:?} vs {b:?}");
+    let cell = l.pages[0].items.iter().find_map(|i| if let Placed::Cell { rect, cell: 1, .. } = i { Some(*rect) } else { None }).unwrap();
+    assert!(cell.h >= b.h, "{cell:?}");
+    // The caret lies across the page and moves down as the text goes on.
+    let pos = |off| Pos { story: StoryRef::Body, path: Path(vec![1, 0, 1, 0]), off };
+    let c0 = l.caret(&pos(0)).unwrap();
+    let c1 = l.caret(&pos(text.len())).unwrap();
+    assert!(c0.width > 5.0 && c0.height == 0.0, "{c0:?}");
+    assert!((c0.top - b.y).abs() < 1.0 && c1.top > c0.top + 50.0, "{c0:?} {c1:?}");
+    assert!(c0.x >= b.x - 0.5 && c0.x + c0.width <= b.right() + 0.5, "{c0:?} {b:?}");
+    // A click on the turned text lands in it, by how far down the click is.
+    let hit = l.hit(0, b.x + b.w / 2.0, b.y + b.h * 0.6, StoryRef::Body).unwrap();
+    assert_eq!(hit.path, Path(vec![1, 0, 1, 0]));
+    assert!(hit.off > 3 && hit.off < text.len(), "{hit:?}");
+    // Selection highlights are turned too: tall, inside the text's area.
+    let sel = l.selection_rects(&d, &pos(0), &pos(text.len()), 0);
+    assert!(sel.iter().all(|(_, r)| r.h > r.w && r.x >= b.x - 1.0 && r.right() <= b.right() + 1.0), "{sel:?}");
+    // Drawn in a turned frame.
+    let draws = display::page_display(&d, &l.pages[0], &Default::default());
+    let turned = draws.iter().find_map(|x| if let display::Draw::Turned { turn, items, .. } = x { Some((*turn, items)) } else { None });
+    let (turn, items) = turned.expect("turned draw");
+    assert_eq!(turn, TextDirection::Down);
+    assert!(items.iter().any(|x| matches!(x, display::Draw::Glyphs { text, .. } if text.contains("Turned"))), "{items:?}");
+}
+
+#[test]
+fn turned_up_cell_text_reads_bottom_to_top() {
+    let text = "Bottom to top";
+    let d = turned_table(TextDirection::Up, text, None);
+    let l = lay(&d);
+    let b = turned_lines(&l).turned_bounds().unwrap();
+    // Against the cell's left edge; the text starts at the bottom and climbs.
+    assert!((b.x - (72.0 + 156.0 + 5.4)).abs() < 1.0, "{b:?}");
+    let pos = |off| Pos { story: StoryRef::Body, path: Path(vec![1, 0, 1, 0]), off };
+    let (c0, c1) = (l.caret(&pos(0)).unwrap(), l.caret(&pos(text.len())).unwrap());
+    assert!((c0.top - b.bottom()).abs() < 1.0 && c1.top < c0.top - 50.0, "{c0:?} {c1:?} {b:?}");
+    let hit = l.hit(0, b.x + b.w / 2.0, b.bottom() - 2.0, StoryRef::Body).unwrap();
+    assert_eq!((hit.path, hit.off), (Path(vec![1, 0, 1, 0]), 0));
+}
+
+#[test]
+fn turned_text_wraps_in_an_exact_row() {
+    let d = turned_table(TextDirection::Down, &"word ".repeat(30), Some(72.0));
+    let l = lay(&d);
+    let it = turned_lines(&l);
+    let lines = if let Placed::Lines { l0, l1, .. } = it { l1 - l0 } else { 0 };
+    assert!(lines > 2, "the text wraps at the row height");
+    let b = it.turned_bounds().unwrap();
+    assert!(b.h <= 72.0 && b.w > 30.0, "{b:?}");
+    let after = l.caret(&Pos::body(2, 0)).unwrap();
+    assert!(after.top < b.y + 72.0 + 30.0, "the row keeps its exact height: {after:?}");
+}
+
+#[test]
+fn hostile_turned_cells_never_panic() {
+    // Empty, huge and nested turned cells, in exact rows too small for anything.
+    for dir in [TextDirection::Down, TextDirection::Up] {
+        for row in [None, Some(0.5), Some(1e9)] {
+            let mut d = turned_table(dir, "", row);
+            let l = lay(&d);
+            let _ = l.caret(&Pos { story: StoryRef::Body, path: Path(vec![1, 0, 1, 0]), off: 0 });
+            let mut inner = Table::new(1, 1, 20.0);
+            inner.rows[0].cells[0].props.text_direction = dir;
+            if let Some(Block::Table(t)) = d.body.get_mut(1).map(Arc::make_mut) {
+                t.rows[0].cells[1].blocks.insert(0, Arc::new(Block::Table(inner)));
+            }
+            let l = lay(&d);
+            for p in &l.pages {
+                let _ = display::page_display(&d, p, &Default::default());
+            }
+        }
+    }
+    let l = lay(&turned_table(TextDirection::Down, &"long ".repeat(5000), None));
+    assert!(!l.pages.is_empty());
 }
 
 fn rules_on_page0(l: &DocLayout) -> Vec<f32> {

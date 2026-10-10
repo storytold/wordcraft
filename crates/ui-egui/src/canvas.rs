@@ -44,13 +44,13 @@ pub struct CanvasState {
     pub mini_anchor: Option<Rect>,
     /// A picture, shape or text box being dragged by its frame.
     pub(crate) obj_drag: Option<crate::objects::ObjectDrag>,
-    /// Pages per row last frame; when it changes the caret's page is scrolled back into view.
-    pub cols: usize,
     /// Wheel/touchpad scrolling (smooth notches, touchpad momentum).
     pub(crate) wheel: crate::scroll::CanvasScroll,
     /// The scroll offset and its maximum at the end of last frame.
     pub(crate) scroll_offset: egui::Vec2,
     scroll_max: egui::Vec2,
+    /// Pages per row last frame; when it changes the caret's page is scrolled back into view.
+    pub cols: usize,
 }
 
 impl CanvasState {
@@ -83,10 +83,10 @@ impl Default for CanvasState {
             obj_drag: None,
             context_menu_open: false,
             mini_anchor: None,
-            cols: 1,
             wheel: Default::default(),
             scroll_offset: egui::Vec2::ZERO,
             scroll_max: egui::Vec2::ZERO,
+            cols: 1,
         }
     }
 }
@@ -215,8 +215,8 @@ fn page_key(app: &WordApp, page: &Page, scale_px: f32, dim_body: bool) -> u64 {
         list.len().hash(&mut h);
         for it in list.iter() {
             match it {
-                Placed::Lines { para, l0, l1, x, y, .. } => {
-                    (std::sync::Arc::as_ptr(para) as usize, l0, l1, x.to_bits(), y.to_bits()).hash(&mut h);
+                Placed::Lines { para, l0, l1, x, y, turn, .. } => {
+                    (std::sync::Arc::as_ptr(para) as usize, l0, l1, x.to_bits(), y.to_bits(), turn).hash(&mut h);
                 }
                 Placed::Fill { rect, color } => format!("{rect:?}{color:?}").hash(&mut h),
                 Placed::Rule { x0, y0, x1, y1, border } => format!("{x0}{y0}{x1}{y1}{border:?}").hash(&mut h),
@@ -287,7 +287,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         && let Some(c) = caret
         && let Some(pr) = geo.rects.get(c.page)
     {
-        let r = Rect::from_min_size(pos2(pr.min.x + c.x * geo.scale, pr.min.y + c.top * geo.scale), vec2(2.0, c.height * geo.scale));
+        let r = Rect::from_min_size(
+            pos2(pr.min.x + c.x * geo.scale, pr.min.y + c.top * geo.scale),
+            vec2((c.width * geo.scale).max(2.0), c.height * geo.scale),
+        );
         scroll_target = Some(r.expand2(vec2(40.0, 60.0)));
     }
     app.canvas.scroll_to_caret = false;
@@ -490,7 +493,13 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             let since = crate::now_ms() - app.canvas.caret_visible_since;
             let on = ((since / 530.0) as u64).is_multiple_of(2);
             if app.session.sel.is_collapsed() && on && focused {
-                painter.line_segment([pos2(x.round() + 0.5, y0), pos2(x.round() + 0.5, y1)], Stroke::new(1.5, caret_color));
+                let bar = if c.width > 0.0 {
+                    // Turned text (a table cell's text direction): the caret lies across the page.
+                    [pos2(x, y0.round() + 0.5), pos2(x + c.width * scale, y0.round() + 0.5)]
+                } else {
+                    [pos2(x.round() + 0.5, y0), pos2(x.round() + 0.5, y1)]
+                };
+                painter.line_segment(bar, Stroke::new(1.5, caret_color));
             }
             if focused {
                 ui.ctx().request_repaint_after(std::time::Duration::from_millis(530 - (since as u64 % 530)));
@@ -1029,7 +1038,7 @@ pub fn caret_screen(app: &mut WordApp) -> Option<(Pos2, f32)> {
         .get(c.page)
         .and_then(|r| l.pages.get(c.page).map(|page| page_screen_scale(*r, page, app.canvas.scale)))
         .unwrap_or(app.canvas.scale);
-    Some((p, c.height * scale))
+    Some((p, c.height.max(c.width) * scale))
 }
 
 pub fn pos_from_screen(app: &mut WordApp, p: Pos2) -> Option<Pos> {

@@ -199,11 +199,10 @@ impl CanvasScroll {
         // Ease wheel notches in: 90% of the way in 0.1 s (egui's curve).
         if self.pending != Vec2::ZERO {
             let t = if dt.is_finite() { egui::emath::exponential_smooth_factor(0.9, 0.1, dt.clamp(0.0, MAX_DT)) } else { 1.0 };
-            for d in 0..2 {
-                let step = if self.pending[d].abs() < 1.0 { self.pending[d] } else { self.pending[d] * t };
-                now[d] += step;
-                self.pending[d] -= step;
-            }
+            let ease = |pending: f32| if pending.abs() < 1.0 { pending } else { pending * t };
+            let step = Vec2::new(ease(self.pending.x), ease(self.pending.y));
+            now += step;
+            self.pending -= step;
         }
         now
     }

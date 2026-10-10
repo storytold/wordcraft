@@ -274,14 +274,6 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({"header": sect.header, "footer": sect.footer}))
         })
         .params(r#"{"header"?: pt, "footer"?: pt}"#),
-        CommandSpec::new("table.textDirection", "Text Direction", "Table Layout › Alignment", |s, _| {
-            let Some((tp, r, c)) = s.sel.focus.path.cell() else { return Err(CmdError::Disabled("not in a table".into())) };
-            let t = s.doc.table_mut(s.sel.focus.story, &tp)?;
-            if let Some(cell) = t.rows.get_mut(r).and_then(|x| x.cells.get_mut(c)) {
-                cell.props.vertical_text = !cell.props.vertical_text;
-            }
-            sel_result(s)
-        }),
         CommandSpec::new("table.cellMargins", "Cell Margins", "Table Layout › Alignment", |s, v| {
             let Some((tp, _, _)) = s.sel.focus.path.cell() else { return Err(CmdError::Disabled("not in a table".into())) };
             let m = [

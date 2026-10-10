@@ -544,7 +544,7 @@ impl Exporter<'_> {
                     let idx = self.entry(*story, path, para);
                     for d in &draws {
                         match d {
-                            Draw::Glyphs { .. } => self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d)),
+                            Draw::Glyphs { .. } | Draw::Turned { .. } => self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d)),
                             Draw::Image { .. } => self.tagged(s, Role::Figure, None, |me, s| me.draw(s, d)),
                             _ => self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.draw(s, d)),
                         }
@@ -651,6 +651,17 @@ impl Exporter<'_> {
                 s.set_stroke(None);
             }
             Draw::Mark { .. } => {}
+            Draw::Turned { x, y, turn, items } => {
+                if !ok(*x) || !ok(*y) {
+                    return;
+                }
+                let [a, b, c, d, e, f] = Draw::turn_matrix(*turn, *x, *y);
+                s.push_transform(&Transform::from_row(a, b, c, d, e, f));
+                for it in items {
+                    self.draw(s, it);
+                }
+                s.pop();
+            }
         }
     }
 
