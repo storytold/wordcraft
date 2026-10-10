@@ -13,7 +13,10 @@
 	Add	新增
 	Add a comment	新增註解
 	Add a Table	新增表格
+	Add Object to Selection	將物件加入選取範圍
 	Add Space Before Paragraph	在段落前新增間距
+	Add space between Asian and Latin text	在亞洲文字與西文之間加入間距
+	Add space between Asian text and numbers	在亞洲文字與數字之間加入間距
 	Add Text	新增文字
 	Add to Dictionary	新增至字典
 	Add to Style Gallery	新增至樣式庫
@@ -32,7 +35,10 @@
 	All Caps	全部大寫
 	All caps	全部大寫
 	All Markup	所有標記
+	Allow hanging punctuation	允許標點溢出邊界
+	Allow Latin text to wrap in the middle of a word	允許西文在單字中間換行
 	Alt Text	替代文字
+	Apply Asian line-breaking rules (kinsoku)	套用亞洲文字的斷行規則（禁則）
 	Apply Character Style	套用字元樣式
 	Apply Style	套用樣式
 	Apply Styles	選擇並套用樣式
@@ -40,6 +46,7 @@
 	Arrange\nAll	全部排列
 	Arrow	箭號
 	Artistic Effects	美術效果
+	Asian Typography	亞洲版式
 	Author	作者
 	AutoCorrect Options	自動校正選項
 	AutoFit	自動調整
@@ -54,9 +61,12 @@
 	AutoSave documents you have saved in WordCraft	自動儲存在 WordCraft 中儲存過的文件
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	自動儲存失敗：{error}。重新儲存文件後將恢復自動儲存。
 	Bottom Margin	下邊界
+	Compress punctuation at the start of a line	壓縮行首標點
 	Dark page (white text on black)	深色頁面（黑底白字）
 	Edit Comment	編輯註解
 	Left Margin	左邊界
+	Indents and Spacing	縮排和間距
+	Line breaking	斷行
 	More templates →	更多範本 →
 	No templates match your search.	沒有符合搜尋的範本。
 	Reopen	重新開啟
@@ -123,6 +133,15 @@
 	Clear	清除
 	Clear All Formatting	清除所有格式設定
 	Clipboard	剪貼簿
+	Clipboard Pane	剪貼簿窗格
+	Clipboard Items	剪貼簿項目
+	Paste Clipboard Item	貼上剪貼簿項目
+	Paste All	全部貼上
+	Delete Clipboard Item	刪除剪貼簿項目
+	Clear All	全部清除
+	Click an item to paste it.	按一下項目即可貼上。
+	Nothing collected yet. Items you copy or cut appear here.	尚無內容。複製或剪下的項目會顯示在這裡。
+	(picture or object)	（圖片或物件）
 	Close	關閉
 	Close Header and Footer	關閉頁首及頁尾
 	Collapse Selection	摺疊選取範圍
@@ -742,6 +761,7 @@
 	Underline Words Only	只在文字下加底線
 	Undo	復原
 	Undo {action}	復原{action}
+	Ungroup	取消群組
 	Up	上
 	Update Field	更新功能變數
 	Update Index	更新索引
@@ -896,7 +916,6 @@
 	Clear Paragraph Formatting	清除段落格式設定
 	Clear Character Style	清除字元樣式
 	Clear Character Formatting	清除字元格式設定
-	Clear All	全部清除
 	Paste Special	選擇性貼上
 	Paste Special…	選擇性貼上…
 	Paste as:	貼上為：
@@ -1027,3 +1046,42 @@
 	Leave the equation (Esc)	離開方程式 (Esc)
 	Preview	預覽
 	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft
+	Shape Effects	圖案效果
+	Glow	光暈
+	Soft Edges	柔化邊緣
+	No Shadow	無陰影
+	No Glow	無光暈
+	No Soft Edges	無柔化邊緣
+	Glow Colors	光暈色彩
+	Weight	粗細
+	Shadow, glow and soft edges	陰影、光暈和柔化邊緣
+	Offset: Bottom Right	位移：右下
+	Offset: Bottom	位移：下
+	Offset: Bottom Left	位移：左下
+	Offset: Right	位移：右
+	Offset: Center	位移：置中
+	Offset: Left	位移：左
+	Offset: Top Right	位移：右上
+	Offset: Top	位移：上
+	Offset: Top Left	位移：左上
+	Manage Styles	管理樣式
+	Show or Hide Style	顯示或隱藏樣式
+	Manage Styles…	管理樣式…
+	Sort order:	排序方式：
+	As Recommended	依建議
+	Alphabetical	依字母順序
+	Font: {font}	字型：{font}
+	{size} pt	{size} 點
+	Color: {color}	色彩：{color}
+	Space before: {pt} pt	段落前間距：{pt} 點
+	Space after: {pt} pt	段落後間距：{pt} 點
+	Based on: {style}	根據：{style}
+	Paragraph style	段落樣式
+	Character style	字元樣式
+	Linked style (paragraph and character)	連結樣式（段落和字元）
+	Table style	表格樣式
+	Built-in style	內建樣式
+	Show in the Styles gallery	在樣式庫中顯示
+	Hide from style lists	從樣式清單中隱藏
+	Built-in styles can't be deleted.	無法刪除內建樣式。
+	Delete Table Style	刪除表格樣式

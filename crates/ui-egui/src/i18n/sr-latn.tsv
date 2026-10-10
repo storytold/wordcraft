@@ -12,6 +12,7 @@
 # Product, format and technology names (WordCraft, PDF, Markdown, MCP …) stay in Latin letters.
 
 	(no suggestions)	(nema predloga)
+	(picture or object)	(slika ili objekat)
 	1.5 Line Spacing	Proređenost 1,5
 	A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.	Besplatan, otvoreni obrađivač teksta napisan od nule u Rust-u.\nDeo Crafting Apps paketa tima ArtCraft.
 	About	O programu
@@ -23,7 +24,10 @@
 	Add	Dodaj
 	Add a comment	Dodaj komentar
 	Add a Table	Dodaj tabelu
+	Add Object to Selection	Dodaj objekat u izbor
 	Add Space Before Paragraph	Dodaj razmak pre pasusa
+	Add space between Asian and Latin text	Dodaj razmak između azijskog i latiničnog teksta
+	Add space between Asian text and numbers	Dodaj razmak između azijskog teksta i brojeva
 	Add Text	Dodaj tekst
 	Add to Dictionary	Dodaj u rečnik
 	Add to Style Gallery	Dodaj u galeriju stilova
@@ -42,7 +46,11 @@
 	All Caps	Sva velika slova
 	All caps	Sva velika slova
 	All Markup	Sve izmene
+	Allow hanging punctuation	Dozvoli viseću interpunkciju
+	Allow Latin text to wrap in the middle of a word	Dozvoli prelom latiničnog teksta usred reči
+	Alphabetical	Abecedno
 	Alt Text	Alternativni tekst
+	Apply Asian line-breaking rules (kinsoku)	Primeni azijska pravila preloma redova (kinsoku)
 	Apply Character Style	Primeni stil znakova
 	Apply Style	Primeni stil
 	Apply Styles	Izaberi i primeni stilove
@@ -50,6 +58,8 @@
 	Arrange\nAll	Rasporedi\nsve
 	Arrow	Strelica
 	Artistic Effects	Umetnički efekti
+	As Recommended	Kao što je preporučeno
+	Asian Typography	Azijska tipografija
 	Author	Autor
 	AutoCorrect Options	Opcije automatske ispravke
 	AutoFit	Automatsko uklapanje
@@ -64,11 +74,50 @@
 	AutoSave documents you have saved in WordCraft	Automatski čuvaj dokumente koje ste već sačuvali u WordCraft-u
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	Automatsko čuvanje neuspelo: {error}. Sačuvajte dokument da biste ga ponovo uključili.
 	Bottom Margin	Donja margina
+	Based on: {style}	Zasnovan na: {style}
+	Built-in style	Ugrađeni stil
+	Built-in styles can't be deleted.	Ugrađeni stilovi ne mogu da se obrišu.
+	Character style	Stil znakova
+	Click an item to paste it.	Kliknite na stavku da biste je nalepili.
+	Clipboard Items	Stavke ostave
+	Clipboard Pane	Okno ostave
+	Color: {color}	Boja: {color}
+	Compress punctuation at the start of a line	Sažmi interpunkciju na početku reda
 	Dark page (white text on black)	Tamna stranica (beo tekst na crnom)
 	Edit Comment	Uredi komentar
 	Left Margin	Leva margina
 	Reopen	Ponovo otvori
 	Right Margin	Desna margina
+	Delete Clipboard Item	Obriši stavku iz ostave
+	Delete Table Style	Obriši stil tabele
+	Font: {font}	Font: {font}
+	Glow	Sjaj
+	Glow Colors	Boje sjaja
+	Hide from style lists	Sakrij sa lista stilova
+	Indents and Spacing	Uvlačenja i razmaci
+	Line breaking	Prelom redova
+	Linked style (paragraph and character)	Povezani stil (pasus i znakovi)
+	Manage Styles	Upravljanje stilovima
+	Manage Styles…	Upravljanje stilovima…
+	No Glow	Bez sjaja
+	No Shadow	Bez senke
+	No Soft Edges	Bez mekih ivica
+	Nothing collected yet. Items you copy or cut appear here.	Još ništa nije prikupljeno. Ovde se pojavljuje ono što kopirate ili isečete.
+	Offset: Bottom	Pomak: dole
+	Offset: Bottom Left	Pomak: dole levo
+	Offset: Bottom Right	Pomak: dole desno
+	Offset: Center	Pomak: centar
+	Offset: Left	Pomak: levo
+	Offset: Right	Pomak: desno
+	Offset: Top	Pomak: gore
+	Offset: Top Left	Pomak: gore levo
+	Offset: Top Right	Pomak: gore desno
+	Paragraph style	Stil pasusa
+	Paste All	Nalepi sve
+	Paste Clipboard Item	Nalepi stavku iz ostave
+	Preview	Pregled
+	Shadow, glow and soft edges	Senka, sjaj i meke ivice
+	Shape Effects	Efekti oblika
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Prikaži dokumente sa invertovanim bojama, kao kod Prikaz › Promeni režim. Čuvanje, štampanje i PDF nisu pogođeni.
 	AutoSave saves every change to the file (needs a saved document)	Automatsko čuvanje upisuje svaku izmenu u fajl (dokument mora biti već sačuvan)
 	AutoText	Automatski tekst
@@ -642,8 +691,10 @@
 	Show	Prikaži
 	Show all formatting marks	Prikaži sve znake formatiranja
 	Show Comments	Prikaži komentare
+	Show in the Styles gallery	Prikaži u galeriji stilova
 	Show Markup	Prikaži izmene
 	Show Notes	Prikaži napomene
+	Show or Hide Style	Prikaži ili sakrij stil
 	Show rulers	Prikaži lenjire
 	Show the community button in the title bar	Prikaži dugme zajednice u traci naslova
 	Show/Hide ¶	Prikaži/sakrij ¶
@@ -659,9 +710,13 @@
 	Small Caps	Kapitelke
 	Small caps	kapitelke
 	SmartArt	SmartArt
+	Soft Edges	Meke ivice
 	Sort	Sortiraj
+	Sort order:	Redosled sortiranja:
 	Source code: github.com/storytold/wordcraft	Izvorni kod: github.com/storytold/wordcraft
+	Space after: {pt} pt	Razmak posle: {pt} pt
 	Space before/after:	Razmak pre/posle:
+	Space before: {pt} pt	Razmak pre: {pt} pt
 	Spacing	Razmak
 	Spacing (pt):	Razmak (pt):
 	Speech	Govor
@@ -704,6 +759,7 @@
 	Table of\nContents	Sadržaj
 	Table Properties	Svojstva tabele
 	Table Row Height	Visina reda tabele
+	Table style	Stil tabele
 	Table Style Options	Opcije stila tabele
 	Table Styles	Stilovi tabele
 	Tables	Tabele
@@ -749,6 +805,7 @@
 	Underline Words Only	Podvuci samo reči
 	Undo	Opozovi
 	Undo {action}	Opozovi {action}
+	Ungroup	Razgrupisanje
 	Up	Gore
 	Update Field	Ažuriraj polje
 	Update Index	Ažuriraj indeks
@@ -774,6 +831,7 @@
 	Web Layout	Veb raspored
 	Web page (*.html)	Veb strana (*.html)
 	Web\nLayout	Veb\nraspored
+	Weight	Debljina
 	Whole page	Cela strana
 	Whole words	Samo cele reči
 	Wide	Široko
@@ -798,6 +856,7 @@
 	Zoom Out	Umanji
 	{group} settings	Podešavanja za {group}
 	{key}+Click to follow link	{key}+klik za otvaranje veze
+	{size} pt	{size} pt
 	➕ New comment	➕ Novi komentar
 	📂  Browse…	📂  Potraži…
 	{words} words	{words} reči
@@ -1035,5 +1094,4 @@
 	Reset Crop	Poništi isecanje
 	Insert a new equation (Alt+=)	Umetni novu jednačinu (Alt+=)
 	Leave the equation (Esc)	Napusti jednačinu (Esc)
-	Preview	Pregled
 	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft
