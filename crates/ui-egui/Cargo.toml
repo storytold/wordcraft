@@ -25,6 +25,12 @@ image = { workspace = true }
 # The system's preferred interface languages (#8). Native: OS APIs; wasm: none (English).
 sys-locale = "0.3"
 
+# Linux only, where winit reports no system theme: the desktop portal's light/dark answer (see
+# `desktop_theme.rs`). Already in the tree, with these features, through egui's own accessibility
+# bus; pinned to one version so nothing is built twice.
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = "=5.19.0"
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # The browser clock (`SystemTime::now()`/`Instant::now()` panic on wasm32).
 js-sys = "0.3"

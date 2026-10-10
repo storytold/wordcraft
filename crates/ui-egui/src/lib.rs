@@ -5,6 +5,13 @@
 //! the menus, ribbon, shortcuts, control channel and MCP all reach the same behaviour.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+/// What the operating system says about light and dark. macOS and Windows answer through winit;
+/// winit reports nothing on Linux, where the desktop portal does ([`desktop_theme`]). `None` means
+/// nobody answered, not a preference.
+fn system_theme(ctx: &egui::Context, desktop_dark: Option<bool>) -> Option<egui::Theme> {
+    ctx.system_theme().or_else(|| desktop_dark.map(|dark| if dark { egui::Theme::Dark } else { egui::Theme::Light }))
+}
+
 /// An English UI string in the current interface language ([`i18n::t`]).
 #[macro_export]
 macro_rules! tl {
@@ -18,6 +25,7 @@ pub mod canvas;
 pub mod chrome;
 pub mod control;
 pub mod credits;
+pub mod desktop_theme;
 pub mod dialogs;
 pub mod dialogs_insert;
 pub mod dialogs_lists;
@@ -182,8 +190,12 @@ pub struct WordApp {
     /// File ▸ Options: load the installed CJK fallback font if no embedded face covers it.
     pub(crate) want_system_cjk: bool,
     fonts_frames: u32,
-    /// The interface theme setting last installed in egui ([`theme::apply`]).
+    /// The effective interface theme last installed in egui ([`theme::apply`]).
     applied_theme: Option<theme::Appearance>,
+    /// The desktop's light/dark choice, watched while the app runs (Linux has no winit answer).
+    desktop_theme: desktop_theme::DesktopTheme,
+    /// The last answer [`desktop_theme`] gave, so a frame that asks costs nothing.
+    desktop_dark: Option<bool>,
     pub frame_ms: f64,
     /// The window title last sent; a viewport command schedules a repaint, so only send changes.
     sent_title: String,
@@ -254,6 +266,8 @@ impl WordApp {
             want_system_cjk: false,
             fonts_frames: 0,
             applied_theme: None,
+            desktop_theme: desktop_theme::DesktopTheme::start(),
+            desktop_dark: None,
             frame_ms: 0.0,
             sent_title: String::new(),
             quit_requested: false,
@@ -553,7 +567,7 @@ impl WordApp {
 
     /// Whether the interface theme setting currently resolves to dark (`System` asks the OS).
     pub fn ui_is_dark(&self) -> bool {
-        self.ui.theme.is_dark(self.ctx.as_ref().and_then(egui::Context::system_theme))
+        self.ui.theme.is_dark(self.ctx.as_ref().and_then(|ctx| system_theme(ctx, self.desktop_dark)))
     }
 
     /// Commands that live in the UI layer.
@@ -772,12 +786,24 @@ impl WordApp {
             ctx.options_mut(|o| o.zoom_with_keyboard = false);
             self.styled = true;
         }
+        if let Some(answer) = self.desktop_theme.take_change() {
+            self.desktop_dark = Some(answer);
+        }
         // Both palettes are installed and egui picks one: with `System` it follows an OS appearance
-        // change live (it reports it and repaints, #311). The interface follows the Interface theme
+        // change live (winit reports it and repaints, #311). Where winit is silent (Linux) the
+        // desktop portal's answer fills in instead. The interface follows the Interface theme
         // setting alone; Dark page only changes how pages are drawn (#312).
-        if self.applied_theme != Some(self.ui.theme) {
-            theme::apply(ctx, self.ui.theme);
-            self.applied_theme = Some(self.ui.theme);
+        let effective = match self.ui.theme {
+            theme::Appearance::System if ctx.system_theme().is_none() => match self.desktop_dark {
+                Some(true) => theme::Appearance::Dark,
+                Some(false) => theme::Appearance::Light,
+                None => theme::Appearance::System,
+            },
+            other => other,
+        };
+        if self.applied_theme != Some(effective) {
+            theme::apply(ctx, effective);
+            self.applied_theme = Some(effective);
         }
         if self.ctx.is_none() {
             self.ctx = Some(ctx.clone());
