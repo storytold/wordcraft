@@ -1046,3 +1046,23 @@
 	Nothing collected yet. Items you copy or cut appear here.	Još ništa nije sakupljeno. Stavke koje kopirate ili isečete pojavljuju se ovde.
 	(picture or object)	(slika ili objekat)
 	Delete Table Style	Obriši stil tabele
+	Manage Styles	Upravljaj stilovima
+	Show or Hide Style	Prikaži ili sakrij stil
+	Manage Styles…	Upravljaj stilovima…
+	Sort order:	Redosled sortiranja:
+	As Recommended	Prema preporuci
+	Alphabetical	Abecedno
+	Font: {font}	Font: {font}
+	{size} pt	{size} pt
+	Color: {color}	Boja: {color}
+	Space before: {pt} pt	Razmak pre: {pt} pt
+	Space after: {pt} pt	Razmak posle: {pt} pt
+	Based on: {style}	Zasnovan na: {style}
+	Paragraph style	Stil pasusa
+	Character style	Stil znakova
+	Linked style (paragraph and character)	Povezani stil (pasus i znakovi)
+	Table style	Stil tabele
+	Built-in style	Ugrađeni stil
+	Show in the Styles gallery	Prikaži u galeriji stilova
+	Hide from style lists	Sakrij sa lista stilova
+	Built-in styles can't be deleted.	Ugrađeni stilovi ne mogu da se obrišu.
