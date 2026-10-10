@@ -55,6 +55,10 @@ pub struct CanvasState {
     /// The scroll offset and its maximum at the end of last frame.
     pub(crate) scroll_offset: egui::Vec2,
     scroll_max: egui::Vec2,
+    /// Synchronous Scrolling (#322): document points the partner window scrolled, still to apply…
+    pub(crate) sync_in: f32,
+    /// …and this window's own scrolling since the last frame, for the partner.
+    pub(crate) sync_out: f32,
     /// Pages per row last frame; when it changes the caret's page is scrolled back into view.
     pub cols: usize,
     /// The comment whose balloon is selected (its text is editable in place, like Word's).
@@ -112,6 +116,8 @@ impl Default for CanvasState {
             wheel: Default::default(),
             scroll_offset: egui::Vec2::ZERO,
             scroll_max: egui::Vec2::ZERO,
+            sync_in: 0.0,
+            sync_out: 0.0,
             cols: 1,
             balloon: None,
             balloon_focus: false,
@@ -363,6 +369,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         let _ = app.run("view.zoom", json!({"value": pct}));
     }
     let geo = geometry(app, &layout, area.size() - vec2(14.0, 0.0));
+    // A zoom moves the scroll offset without anyone scrolling: not passed on to a partner window.
+    let rescaled = (geo.scale - app.canvas.scale).abs() > 1e-4;
     app.canvas.scale = geo.scale;
     sync_fit_zoom(app, geo.scale);
     // Zooming or resizing reflowed the pages into a different number of columns: the caret's page
@@ -401,12 +409,17 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         .id_salt("canvas_scroll")
         .auto_shrink([false, false])
         .scroll_source(egui::scroll_area::ScrollSource { mouse_wheel: false, ..Default::default() });
-    if delta != egui::Vec2::ZERO {
-        let before = app.canvas.scroll_offset;
-        let after = (before - delta).clamp(egui::Vec2::ZERO, app.canvas.scroll_max);
-        if after == before {
+    // Synchronous Scrolling (#322): the partner window's scrolling, in document points.
+    let synced = std::mem::take(&mut app.canvas.sync_in) * geo.scale;
+    let before = app.canvas.scroll_offset;
+    let mut from_partner = 0.0;
+    if delta != egui::Vec2::ZERO || synced != 0.0 {
+        let own = (before - delta).clamp(egui::Vec2::ZERO, app.canvas.scroll_max);
+        if delta != egui::Vec2::ZERO && own == before {
             app.canvas.wheel.hit_edge();
         }
+        let after = (own + vec2(0.0, synced)).clamp(egui::Vec2::ZERO, app.canvas.scroll_max);
+        from_partner = after.y - own.y;
         scroll_area = scroll_area.scroll_offset(after);
     }
     if app.canvas.wheel.is_animating() {
@@ -654,6 +667,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         (resp, rects)
     });
     app.canvas.scroll_offset = out.state.offset;
+    // This window's own scrolling (wheel, scroll bar, keys, caret), for a partner window.
+    let own = out.state.offset.y - before.y - from_partner;
+    if app.session.windows.sync_scroll && !rescaled && own.abs() > 0.01 && geo.scale > 0.0 {
+        app.canvas.sync_out += own / geo.scale;
+    }
     app.canvas.scroll_max = (out.content_size - out.inner_rect.size()).max(egui::Vec2::ZERO);
     let (resp, rects) = out.inner;
     // A click on the page leaves the selected comment balloon.

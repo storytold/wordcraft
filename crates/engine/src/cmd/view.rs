@@ -1,5 +1,6 @@
 //! View tab and status bar: views, zoom, show/hide, panes.
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use wordcraft_layout::ViewMode;
 
@@ -72,9 +73,113 @@ pub fn specs() -> Vec<CommandSpec> {
             sel_result(s)
         })
         .pure(),
+        // View › Window across WordCraft windows (#322): each window is its own process; the
+        // desktop app performs these (see `Windows`), elsewhere they are disabled.
+        CommandSpec::new("view.switchWindows", "Switch Windows", "View › Window", |s, v| {
+            let id = pick_window(s, v)?;
+            s.ui_requests.push(json!({"windows": "focus", "id": id}));
+            Ok(json!({"window": id}))
+        })
+        .params(r#"{"window"?: id from ui.inspect `windows.others` (optional when one other window is open)}"#)
+        .when(has_other_window)
+        .pure(),
+        CommandSpec::new("view.arrangeAll", "Arrange All", "View › Window", |s, _| {
+            s.ui_requests.push(json!({"windows": "arrange"}));
+            Ok(json!({"windows": s.windows.others.len() + 1}))
+        })
+        .when(windows_available)
+        .pure(),
+        CommandSpec::new("view.sideBySide", "View Side by Side", "View › Window", side_by_side)
+            .params(r#"{"value"?: bool, "window"?: id of the other window (optional when one other window is open)}"#)
+            .when(|s| match windows_available(s) {
+                None if s.windows.side_by_side.is_none() => has_other_window(s),
+                r => r,
+            })
+            .pure(),
+        CommandSpec::new("view.syncScroll", "Synchronous Scrolling", "View › Window", |s, v| {
+            let Some(with) = s.windows.side_by_side else { return Err(CmdError::Disabled("turn on View Side by Side first".into())) };
+            s.windows.sync_scroll = p::bool(v, "value").unwrap_or(!s.windows.sync_scroll);
+            s.ui_requests.push(json!({"windows": "syncScroll", "with": with, "value": s.windows.sync_scroll}));
+            Ok(json!({"value": s.windows.sync_scroll}))
+        })
+        .params(r#"{"value"?: bool}"#)
+        .when(|s| if s.windows.side_by_side.is_some() { None } else { Some("turn on View Side by Side first") })
+        .pure(),
         CommandSpec::new("view.state", "View State", "View", |s, _| serde_json::to_value(&s.view).map_err(|e| CmdError::Failed(e.to_string())))
             .pure(),
     ]
+}
+
+/// View › Window (#322): the other WordCraft windows as the desktop app last saw them, and the
+/// Side by Side pairing. The front end keeps `available` and `others` current; elsewhere (web,
+/// CLI, MCP without the app) they stay empty and the window commands are disabled.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Windows {
+    /// The host can list and move its windows (the desktop app).
+    pub available: bool,
+    /// The other open windows, by id.
+    pub others: Vec<OtherWindow>,
+    /// View Side by Side is on, with this window.
+    pub side_by_side: Option<u64>,
+    /// Synchronous Scrolling (only while Side by Side is on).
+    pub sync_scroll: bool,
+}
+
+/// Another open WordCraft window.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OtherWindow {
+    pub id: u64,
+    pub title: String,
+}
+
+fn windows_available(s: &Session) -> Option<&'static str> {
+    if s.windows.available { None } else { Some("only the desktop app has several windows") }
+}
+
+fn has_other_window(s: &Session) -> Option<&'static str> {
+    windows_available(s).or(if s.windows.others.is_empty() { Some("no other WordCraft window is open") } else { None })
+}
+
+/// The window a command means: `window`, or the only other one.
+fn pick_window(s: &Session, v: &Value) -> Result<u64, CmdError> {
+    let others = &s.windows.others;
+    match p::u64(v, "window") {
+        Some(id) if others.iter().any(|w| w.id == id) => Ok(id),
+        Some(id) => Err(CmdError::Params(format!("no open window {id}"))),
+        None => match others.as_slice() {
+            [only] => Ok(only.id),
+            [] => Err(CmdError::Disabled("no other WordCraft window is open".into())),
+            several => {
+                let list: Vec<String> = several.iter().map(|w| format!("{} ({})", w.id, w.title)).collect();
+                Err(CmdError::Params(format!("pass `window`: one of {}", list.join(", "))))
+            }
+        },
+    }
+}
+
+/// View Side by Side: on with a window (left this one, right that one, scrolling together), or
+/// off.
+fn side_by_side(s: &mut Session, v: &Value) -> CmdResult {
+    let on = p::bool(v, "value").unwrap_or(s.windows.side_by_side.is_none() || v.get("window").is_some());
+    if !on {
+        if let Some(id) = s.windows.side_by_side.take() {
+            s.ui_requests.push(json!({"windows": "sideBySide", "off": id}));
+        }
+        s.windows.sync_scroll = false;
+        return Ok(json!({"value": false}));
+    }
+    let id = match (s.windows.side_by_side, v.get("window")) {
+        (Some(id), None) => id,
+        _ => pick_window(s, v)?,
+    };
+    if let Some(old) = s.windows.side_by_side.filter(|old| *old != id) {
+        s.ui_requests.push(json!({"windows": "sideBySide", "off": old}));
+    }
+    s.windows.side_by_side = Some(id);
+    s.windows.sync_scroll = true;
+    s.ui_requests.push(json!({"windows": "sideBySide", "with": id}));
+    Ok(json!({"value": true, "window": id, "syncScroll": true}))
 }
 
 fn mode(s: &mut Session, m: ViewMode, read: bool) -> CmdResult {

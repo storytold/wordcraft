@@ -46,6 +46,26 @@ any other host it sends no key, says so, and the app refuses its requests: to dr
 another machine, forward its port to `127.0.0.1` (for example `ssh -L 7981:127.0.0.1:7981 host`)
 and set `WORDCRAFT_CONTROL_KEY` to that app's key.
 
+## Window channel (View › Window)
+
+Separately from the control channel (which stays off unless `--control` is given), every desktop
+window joins a small registry so View › Window works across windows (#322): Switch Windows,
+Arrange All, View Side by Side and Synchronous Scrolling. Each window is its own process with one
+document. It binds a free loopback port, writes `<settings>/windows/<id>.json` (mode 0600 on Unix:
+`{"id", "port", "key", "title"}`, a random id and 256-bit key), rewrites it every 30 s and
+removes it on exit. Entries whose port refuses connections, or that don't answer and are over two
+minutes old, are left from a crash and removed; malformed ones are ignored.
+
+That port takes one line per connection, `{"key": "…", "from": id, "msg": {"type": …}}`, where
+`type` is `ping`, `focus`, `place` (`x`, `y`, `width`, `height` in points), `sideBySide` /
+`syncScroll` (`on`) or `scroll` (`dy` in document points), and answers `{"ok": true}` or an
+error. Nothing else: it can't run commands or read the document. Lines over 4 KiB, a wrong key,
+non-finite or out-of-range numbers and connections silent for 2 s are refused; at most 16
+connections are served at once. The commands are `view.switchWindows {window?}`,
+`view.arrangeAll`, `view.sideBySide {value?, window?}` and `view.syncScroll {value?}`; the window
+ids and titles are in `ui.inspect` → `windows.others`. Wayland doesn't let apps move windows, so
+there Arrange All and Side by Side only resize, and Switch Windows may only flash the window.
+
 ## Methods
 
 | Method | Params | Result |
@@ -53,7 +73,7 @@ and set `WORDCRAFT_CONTROL_KEY` to that app's key.
 | `engine.execute` | `command`, `params` | the command's result (any id from `engine.commands`, including UI commands `ui.tab`, `ui.dialog`, `ui.backstage`, `ui.zotero.*` (see `docs/zotero.md`), `ui.language` (`{"value": "auto"|"en"|"zh-hans"|"zh-hant"|"ja"|"pt-br"|"es"|"uk"|"sr"|"sr-latn"|"et"}`), `ui.theme` (`{"value": "system"|"light"|"dark"}`; `system` follows the OS appearance, light when it reports none)…) |
 | `engine.commands` | — | every command: id, label, location, shortcut, params, enabled |
 | `document.inspect` | `text?` | blocks (text, style, runs, lists, tables), parts, sections, selection, pages |
-| `ui.inspect` | — | UI state, view, dialog, window size, page rects on screen, caret, comment balloons (`balloons`: id + screen rect; `balloon`: the selected one), perf |
+| `ui.inspect` | — | UI state, view, other windows (`windows`), dialog, window size, page rects on screen, caret, comment balloons (`balloons`: id + screen rect; `balloon`: the selected one), perf |
 | `ui.click` | `x`, `y`, `button?`, `count?`, `shift?`, `cmd?`, `alt?` | real pointer input at window coordinates |
 | `ui.clickText` | `page` (0-based), `x`, `y` (points from the page's top-left), `count?` | click inside a page |
 | `ui.move` / `ui.drag` | `x`,`y` / `x`,`y`,`toX`,`toY`,`steps?` | pointer move / drag |

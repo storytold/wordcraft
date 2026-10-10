@@ -2732,3 +2732,40 @@ fn deleting_the_last_cell_column_never_leaves_a_table_without_rows() {
     run(&mut s, "edit.undo", json!({}));
     assert!(s.doc.body.iter().any(|b| b.as_table().is_some_and(|t| !t.rows.is_empty())));
 }
+
+#[test]
+fn window_commands_need_the_desktop_and_name_a_window() {
+    use crate::cmd::view::OtherWindow;
+    let mut s = s();
+    // Web, CLI, MCP: one window, so View › Window is disabled.
+    for id in ["view.switchWindows", "view.arrangeAll", "view.sideBySide", "view.syncScroll"] {
+        assert!(s.run(id, &json!({})).is_err(), "{id} without a window host");
+    }
+    s.windows.available = true;
+    run(&mut s, "view.arrangeAll", json!({}));
+    assert_eq!(s.ui_requests.pop(), Some(json!({"windows": "arrange"})));
+    assert!(s.run("view.switchWindows", &json!({})).is_err(), "no other window");
+    s.windows.others = vec![OtherWindow { id: 7, title: "Notes".into() }, OtherWindow { id: 9, title: "Draft".into() }];
+    let e = s.run("view.switchWindows", &json!({})).unwrap_err().to_string();
+    assert!(e.contains("7 (Notes)") && e.contains("9 (Draft)"), "several windows: say which: {e}");
+    assert!(s.run("view.switchWindows", &json!({"window": 8})).is_err(), "an unknown window");
+    assert!(s.run("view.switchWindows", &json!({"window": "9"})).is_err());
+    run(&mut s, "view.switchWindows", json!({"window": 9}));
+    assert_eq!(s.ui_requests.pop(), Some(json!({"windows": "focus", "id": 9})));
+    // Side by Side pairs with one window and scrolls together until turned off.
+    assert!(s.run("view.syncScroll", &json!({})).is_err(), "only while Side by Side is on");
+    assert!(s.run("view.sideBySide", &json!({})).is_err(), "two others: which one?");
+    let r = run(&mut s, "view.sideBySide", json!({"window": 7}));
+    assert_eq!((r["value"].as_bool(), s.windows.side_by_side, s.windows.sync_scroll), (Some(true), Some(7), true));
+    assert_eq!(s.ui_requests.pop(), Some(json!({"windows": "sideBySide", "with": 7})));
+    run(&mut s, "view.syncScroll", json!({}));
+    assert!(!s.windows.sync_scroll);
+    assert_eq!(s.ui_requests.pop(), Some(json!({"windows": "syncScroll", "with": 7, "value": false})));
+    // Another partner replaces the first; the bare button turns it off.
+    run(&mut s, "view.sideBySide", json!({"window": 9}));
+    assert_eq!(std::mem::take(&mut s.ui_requests), [json!({"windows": "sideBySide", "off": 7}), json!({"windows": "sideBySide", "with": 9})]);
+    run(&mut s, "view.sideBySide", json!({}));
+    assert_eq!((s.windows.side_by_side, s.windows.sync_scroll), (None, false));
+    assert_eq!(s.ui_requests.pop(), Some(json!({"windows": "sideBySide", "off": 9})));
+    assert!(!s.dirty, "window commands never touch the document");
+}
