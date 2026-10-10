@@ -1061,7 +1061,10 @@ fn vml_style<'a>(style: &'a str, key: &str) -> Option<&'a str> {
 fn vml_float(shape: &El, style: &str) -> Float {
     let get = |k: &str| vml_style(style, k);
     if !get("position").is_some_and(|p| p.eq_ignore_ascii_case("absolute")) {
-        return Float::default();
+        // Inline: only the turn (an OLE object turned in WordCraft is saved so, #319).
+        let mut f = Float::default();
+        f.set_spin(vml_spin(style));
+        return f;
     }
     let off = |k: &str| get(k).and_then(|v| measure(v, 1.0)).unwrap_or(0.0);
     let max = crate::units::MAX_LEN_PT;
@@ -1095,12 +1098,6 @@ fn vml_float(shape: &El, style: &str) -> Float {
         _ => Anchor::Paragraph,
     };
     let dist = |k: &str| get(k).and_then(|v| measure(v, 1.0)).unwrap_or(0.0).clamp(0.0, 1584.0);
-    // VML `rotation`: degrees, or 65536ths of one with an `fd` suffix; `flip`: `x` and/or `y`.
-    let rot = get("rotation").and_then(|v| match v.strip_suffix("fd") {
-        Some(fd) => fd.trim().parse::<f32>().ok().map(|f| f / 65_536.0),
-        None => v.trim().parse::<f32>().ok(),
-    });
-    let flip = get("flip").unwrap_or("");
     let mut f = Float {
         wrap,
         h_rel,
@@ -1114,8 +1111,20 @@ fn vml_float(shape: &El, style: &str) -> Float {
         dist_bottom: dist("mso-wrap-distance-bottom"),
         ..Float::default()
     };
-    f.set_spin(wordcraft_geom::Spin::new(rot.unwrap_or(0.0), flip.contains('x'), flip.contains('y')));
+    f.set_spin(vml_spin(style));
     f
+}
+
+/// A VML shape's turn: `rotation` in degrees, or 65536ths of one with an `fd` suffix; `flip`: `x`
+/// and/or `y`.
+fn vml_spin(style: &str) -> wordcraft_geom::Spin {
+    let get = |k: &str| vml_style(style, k);
+    let rot = get("rotation").and_then(|v| match v.strip_suffix("fd") {
+        Some(fd) => fd.trim().parse::<f32>().ok().map(|f| f / 65_536.0),
+        None => v.trim().parse::<f32>().ok(),
+    });
+    let flip = get("flip").unwrap_or("");
+    wordcraft_geom::Spin::new(rot.unwrap_or(0.0), flip.contains('x'), flip.contains('y'))
 }
 
 /// What a graphic's items cost to keep and draw: one per item, plus one per path segment.

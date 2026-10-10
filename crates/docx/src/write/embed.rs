@@ -249,8 +249,9 @@ impl super::Writer<'_> {
         Some(root.to_xml())
     }
 
-    /// Write an OLE object's size (and position, when floating) into its VML shape and
-    /// DrawingML extent, and give its drawing a fresh `wp:docPr` id.
+    /// Write an OLE object's size (and position, when floating), rotation and flips into its VML
+    /// shape and DrawingML picture, with the effect extent covering the rotated bounds as for
+    /// other drawings, and give its drawing a fresh `wp:docPr` id.
     fn resize_object(&mut self, e: &mut El, w: f32, h: f32, float: &Float, depth: usize) {
         if depth > MAX_DEPTH {
             return;
@@ -261,14 +262,37 @@ impl super::Writer<'_> {
                     *style = vml_style_with(style, w, h, float);
                 }
             }
-            "wp:extent" => {
-                for (k, v) in e.attrs.iter_mut() {
-                    match k.as_str() {
-                        "cx" => *v = emu(w.max(0.0)),
-                        "cy" => *v = emu(h.max(0.0)),
-                        _ => {}
+            "wp:extent" => set_size_attrs(e, w, h),
+            // A turned object needs an effect extent (filled in below) right after its extent.
+            "wp:inline" | "wp:anchor" if !e.els().any(|c| c.name == "wp:effectExtent") && float.spin().deg != 0.0 => {
+                if let Some(at) = e.kids.iter().position(|k| matches!(k, xml::Node::El(c) if c.name == "wp:extent")) {
+                    e.kids.insert(at + 1, xml::Node::El(El { name: "wp:effectExtent".to_string(), attrs: Vec::new(), kids: Vec::new() }));
+                }
+            }
+            "wp:effectExtent" => {
+                // Word's effect extent also covers a rotated object's overhang (its rotated bounds).
+                let (px, py) = float.spin_pad(w, h);
+                let [el, et, er, eb] = float.effect_extent();
+                let ext = [el + px, et + py, er + px, eb + py].map(emu);
+                e.attrs.retain(|(k, _)| !matches!(k.as_str(), "l" | "t" | "r" | "b"));
+                for (k, v) in ["l", "t", "r", "b"].into_iter().zip(ext) {
+                    e.attrs.push((k.to_string(), v));
+                }
+            }
+            // The picture's own frame (`pic:spPr`): its size and the object's rotation and flips.
+            "a:xfrm" => {
+                e.attrs.retain(|(k, _)| !matches!(k.as_str(), "rot" | "flipH" | "flipV"));
+                for (k, v) in super::story::spin_attrs(float.spin()) {
+                    e.attrs.push((k.to_string(), v));
+                }
+                for k in e.kids.iter_mut() {
+                    if let xml::Node::El(c) = k
+                        && c.name == "a:ext"
+                    {
+                        set_size_attrs(c, w, h);
                     }
                 }
+                return;
             }
             "wp:docPr" => {
                 let id = self.next_docpr();
@@ -282,6 +306,17 @@ impl super::Writer<'_> {
             if let xml::Node::El(c) = k {
                 self.resize_object(c, w, h, float, depth + 1);
             }
+        }
+    }
+}
+
+/// Set an extent's `cx` and `cy` (those it has) to `w` × `h` points.
+fn set_size_attrs(e: &mut El, w: f32, h: f32) {
+    for (k, v) in e.attrs.iter_mut() {
+        match k.as_str() {
+            "cx" => *v = emu(w.max(0.0)),
+            "cy" => *v = emu(h.max(0.0)),
+            _ => {}
         }
     }
 }
@@ -343,7 +378,8 @@ fn patch_rel_ids(bytes: &[u8], ids: &HashMap<String, String>) -> Vec<u8> {
     out
 }
 
-/// A VML `style` with the object's size, and its offset when it floats (`position:absolute`).
+/// A VML `style` with the object's size, rotation and flips, and its offset when it floats
+/// (`position:absolute`).
 fn vml_style_with(style: &str, w: f32, h: f32, float: &Float) -> String {
     let absolute = style
         .split(';')
@@ -354,7 +390,7 @@ fn vml_style_with(style: &str, w: f32, h: f32, float: &Float) -> String {
         .filter(|d| {
             let key = d.split_once(':').map_or("", |(k, _)| k).trim().to_ascii_lowercase();
             !d.trim().is_empty()
-                && !matches!(key.as_str(), "width" | "height")
+                && !matches!(key.as_str(), "width" | "height" | "rotation" | "flip")
                 && !(absolute && matches!(key.as_str(), "left" | "top" | "margin-left" | "margin-top"))
         })
         .map(|d| d.trim().to_string())
@@ -365,6 +401,15 @@ fn vml_style_with(style: &str, w: f32, h: f32, float: &Float) -> String {
     }
     out.push(format!("width:{}pt", pt(w.max(0.0))));
     out.push(format!("height:{}pt", pt(h.max(0.0))));
+    // VML `rotation`: degrees clockwise; `flip`: `x` and/or `y` (as `read::story::vml_float` reads them).
+    let spin = float.spin();
+    if spin.deg != 0.0 {
+        out.push(format!("rotation:{}", pt(spin.deg)));
+    }
+    let flip: Vec<&str> = [(spin.flip_h, "x"), (spin.flip_v, "y")].into_iter().filter(|(on, _)| *on).map(|(_, f)| f).collect();
+    if !flip.is_empty() {
+        out.push(format!("flip:{}", flip.join(" ")));
+    }
     out.join(";")
 }
 
@@ -394,5 +439,15 @@ mod tests {
         let abs = vml_style_with("position:absolute;left:5pt;margin-left:3pt;top:1pt;width:1pt;height:1pt", 2.0, 3.0, &float);
         assert_eq!(abs, "position:absolute;margin-left:10pt;margin-top:20.25pt;width:2pt;height:3pt");
         assert_eq!(pt(f32::NAN), "0");
+    }
+
+    #[test]
+    fn vml_style_takes_the_rotation_and_flips() {
+        let mut float = Float::default();
+        float.set_spin(wordcraft_geom::Spin::new(-30.5, true, true));
+        let s = vml_style_with("width:1pt;rotation:10;flip:x;height:1pt;z-index:3", 2.0, 3.0, &float);
+        assert_eq!(s, "z-index:3;width:2pt;height:3pt;rotation:329.5;flip:x y");
+        // Unturned: no rotation or flip left behind.
+        assert_eq!(vml_style_with("rotation:90;flip:y;width:1pt", 2.0, 3.0, &Float::default()), "width:2pt;height:3pt");
     }
 }

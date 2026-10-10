@@ -19,7 +19,7 @@ Weights are the share of a Word user's file traffic (estimate). Read/write: ✅ 
 
 | Format | Weight | Word | WordCraft read | WordCraft write | Fidelity | Hours | How it's tested | Notes |
 |---|---|---|---|---|---|---|---|---|
-| `.docx` Word Document (ECMA-376 Transitional) | 70% | R/W | ✅ | ✅ | ~65% | 70–110 | `crates/docx/tests` (roundtrip 28, fixtures 27, malformed 8, bidi 4, citations 5); synthetic fixtures only | Word opens our files. Untested on a real-world corpus. Details below |
+| `.docx` Word Document (ECMA-376 Transitional) | 70% | R/W | ✅ | ✅ | ~65% | 70–110 | `crates/docx/tests` (roundtrip 34, fixtures 29, malformed 8, bidi 4, citations 5); synthetic fixtures only | Word opens our files. Untested on a real-world corpus. Details below |
 | `.docx` Strict Open XML | 1% | R/W | ✅ (namespace mapping in `xml.rs`) | ❌ | ~60% | 2–4 | one fixture | Writing Strict is rare |
 | `.docm` / `.dotx` / `.dotm` | 3% | R/W | ✅ | ✅ | ~65% | incl. above | `macro_packages.rs` | Macros and signatures kept on save (#172); macros never run |
 | `.doc` Word 97-2003 (and `.dot`) | 8% | R/W | 🟡 | ❌ | ~55% | 25–40 | `crates/docbin/src/tests.rs` (50) | Spec-based reader ([MS-DOC]): text, formatting, styles, sections, headers/footers, tables, lists, notes, fields, bookmarks, pictures. Metafile (WMF/EMF) pictures, Word 6/95 files and encrypted files are refused or dropped. No writer |
@@ -61,7 +61,7 @@ Measured by grepping `crates/docx/src/read` and `src/write` for the OOXML elemen
 | Freeform shapes (`a:custGeom`: `a:moveTo`, `a:lnTo`, Bézier curves flattened) and WordCraft ink | ✅ | ✅ | Ink is written as a freeform `wps:wsp` in a `wp:anchor` (round caps, alpha for highlighter) and recognised again by its drawing name (#307). It is saved as a custom-geometry shape, not as Word's own ink (InkML in `w14:contentPart`), so Word shows WordCraft ink as a freeform shape it can move and recolour but not erase with its ink eraser; arcs drawn straight |
 | VML (`w:pict`, `v:shape`, `v:textbox`) | 🟡 | ❌ | Pictures and text boxes, best effort (#242) |
 | Charts (`c:chart`), SmartArt (`dgm`) | ✅ | ✅ | Drawn from the chart's cached data and SmartArt's stored drawing (#292); not editable. Saved back as read, with every part they reach (chart, embedded workbook, colours and style; diagram data, layout, quick style, colours and drawing) and their content types; a moved or resized one keeps its new frame, and a pasted copy gets its own parts (#319) |
-| OLE objects (`w:object`: embedded or linked files, ActiveX) | 🟡 | ✅ | Shown as their picture (VML or DrawingML); saved back whole with the embedding and picture parts, at the size set in WordCraft (#319). Can't be opened or edited |
+| OLE objects (`w:object`: embedded or linked files, ActiveX) | 🟡 | ✅ | Shown as their picture (VML or DrawingML); saved back whole with the embedding and picture parts, at the size, rotation and flips set in WordCraft (#319, #332). Can't be opened or edited |
 | Word ink (`w14:contentPart`, InkML), 3D models | ❌ | ❌ | Dropped on read, not preserved on save |
 | Equations (OMML `m:oMath`) | ✅ | ✅ | #191; manual breaks (`m:brk`) and the settings' `m:mathPr` wrapping options (#326) |
 | Themes, font table, settings, compatibility mode | ✅ | ✅ | Embedded fonts (`w:embedRegular`) not read |
@@ -83,6 +83,7 @@ Measured by grepping `crates/docx/src/read` and `src/write` for the OOXML elemen
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | trivial | OLE objects turned or flipped in WordCraft keep the turn on save (VML `rotation`/`flip`, DrawingML `a:xfrm` with the rotated effect extent); test counts refreshed |
 | 2026-10-10 | trivial | Charts, SmartArt and OLE objects written back on save with their parts (#319); chart/SmartArt reading (#292) recorded |
 | 2026-10-10 | trivial | DrawingML rotation and flips read and written (#332) |
 | 2026-10-10 | trivial | Equation breaks and `m:mathPr` wrapping options round-trip (#326) |
