@@ -568,6 +568,62 @@ fn body_line_xs_on(l: &DocLayout, page: usize) -> Vec<f32> {
 }
 
 #[test]
+fn issue_215_report_strings_lay_out_right_to_left() {
+    // Exact strings from #215 (filed against 0.4.0, before bidi layout): Hebrew, Arabic and a
+    // mixed line must start at the right margin in visual order.
+    let mut d = doc_of(&[("שלום עולם", true), ("مرحبا بالعالم", true), ("שלום WordCraft 2026", true)]);
+    // The mixed line: Hebrew, Latin and digits each keep their direction (UAX #9).
+    let l = lay(&d);
+    assert!((caret_x(&l, 0, 0) - 540.0).abs() < 1.0, "Hebrew starts at the right margin");
+    assert!((caret_x(&l, 1, 0) - 540.0).abs() < 1.0, "Arabic starts at the right margin");
+    // Mixed line: visual order is Hebrew, Latin, digits — each run in its own direction.
+    let s = "שלום WordCraft 2026";
+    let levels = bidi_levels(s, true);
+    let chars: Vec<char> = s.chars().collect();
+    let mut off = 0;
+    let mut cl_lv = Vec::new();
+    for c in &chars {
+        cl_lv.push(levels.get(off).copied().unwrap_or(1));
+        off += c.len_utf8();
+    }
+    let visual: String = visual_order(&cl_lv).into_iter().map(|i| chars.get(i).copied().unwrap_or('�')).collect();
+    // Left to right on screen: the Latin run sits left, the Hebrew run right and reversed.
+    assert!(visual.starts_with("WordCraft 2026") && visual.ends_with('ש'), "runs resolve: {visual:?}");
+    let (pl, x) = first_line(&l, 2);
+    let line = &pl.lines[0];
+    let (e0, e1) = (x + line.cl_left(line.c0).unwrap(), x + line.cl_right(line.c1 - 1).unwrap());
+    let (lo, hi) = (e0.min(e1), e0.max(e1));
+    assert!(lo >= 72.0 && hi <= 540.0 + 0.5 && hi > 500.0, "short mixed line hugs the right: {lo}..{hi}");
+}
+
+#[test]
+fn issue_211_kurdish_and_arabic_words_shape() {
+    // Exact strings from #211: Kurdish "چۆنى" (with ۆ U+06C6) and Arabic "مرحبا" must join and
+    // map byte-exactly; glyph coverage is checked when an installed face has the letters.
+    for s in ["چۆنى", "مرحبا"] {
+        let d = doc_of(&[(s, true)]);
+        let l = lay(&d);
+        let (pl, _) = first_line(&l, 0);
+        let mut spans: Vec<(usize, usize)> = pl.clusters.iter().map(|c| (c.start, c.end)).collect();
+        spans.sort();
+        let mut next = 0;
+        for (a, b) in &spans {
+            assert_eq!(*a, next, "exact cluster mapping for {s:?}");
+            next = *b;
+        }
+        assert_eq!(next, s.len());
+    }
+    let db = wordcraft_fonts::FontDb::global();
+    let Some(face) = db.fallback_for('چ', 0).filter(|f| f.covers('ۆ')).map(|f| wordcraft_fonts::FaceRef::of(&f)) else {
+        eprintln!("skipped: no installed face covers Kurdish ۆ");
+        return;
+    };
+    let shaped = wordcraft_fonts::shape_run(&face, "چۆنى", &[], |c| c, true);
+    assert!(shaped.iter().all(|g| g.gid != 0), "no .notdef for Kurdish letters");
+    assert!(shaped.windows(2).all(|w| w[0].cluster <= w[1].cluster), "logical cluster order");
+}
+
+#[test]
 fn rtl_shapes_floats_headers_and_notes() {
     use wordcraft_doc::para::{Anchor, Float, InlineObject, ShapeKind, Wrap};
     // A square-wrapped shape anchored in an RTL paragraph: text flows around it, joined intact.
