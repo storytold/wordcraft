@@ -145,6 +145,16 @@ pub struct Float {
     /// Distance from surrounding text above and below (points).
     pub dist_top: f32,
     pub dist_bottom: f32,
+    /// Room around the object for effects such as shadows (left, top, right, bottom, points),
+    /// inline or floating: lines and surrounding text keep clear of it.
+    pub effect: [f32; 4],
+}
+
+impl Float {
+    /// The effect extents, finite and clamped (left, top, right, bottom).
+    pub fn effect_extent(&self) -> [f32; 4] {
+        self.effect.map(|v| if v.is_finite() { v.clamp(0.0, 1584.0) } else { 0.0 })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]

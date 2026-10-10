@@ -110,6 +110,8 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
         let mut g = 0usize;
         let mut cells = Vec::with_capacity(row.cells.len());
         let mut rh = 0.0f32;
+        // The tallest cell margins plus border bands in the row.
+        let mut row_insets = 0.0f32;
         let is_header = header_rows && ri == 0;
         let is_total = t.props.look.total_row && ri + 1 == nrows && nrows > 1;
         let band = t.props.look.banded_rows && !is_header && (ri - usize::from(header_rows)) % 2 == 0;
@@ -137,18 +139,6 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             let mut cpath = path.to_vec();
             cpath.push(ri as u32);
             cpath.push(ci as u32);
-            let (mut items, h) = if cell.props.vmerge == VMerge::Continue {
-                (Vec::new(), 0.0)
-            } else {
-                layout_box(ctx, story, &cell.blocks, &cpath, cw, chr.as_ref(), depth, None)
-            };
-            for it in &mut items {
-                it.translate(x0 + margins[1], margins[0]);
-            }
-            let h = h + margins[0] + margins[2];
-            if cell.props.vmerge != VMerge::Restart {
-                rh = rh.max(h);
-            }
             // Effective borders: cell > table (outer vs inside).
             let tb = tborders;
             let edge =
@@ -165,6 +155,24 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             if is_total && let Some(b) = parts.as_ref().and_then(|p| p.total_border_top) {
                 borders.top = Some(b);
             }
+            // Word keeps the cell's text clear of its top border (and the last row's of its bottom
+            // border): the border's width sits on top of the cell margin.
+            let band = |b: Option<Border>| b.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0));
+            let (band_t, band_b) = (band(borders.top), if ri + 1 == nrows { band(borders.bottom) } else { 0.0 });
+            let (mut items, h) = if cell.props.vmerge == VMerge::Continue {
+                (Vec::new(), 0.0)
+            } else {
+                layout_box(ctx, story, &cell.blocks, &cpath, cw, chr.as_ref(), depth, None)
+            };
+            for it in &mut items {
+                it.translate(x0 + margins[1], margins[0] + band_t);
+            }
+            let insets = margins[0] + margins[2] + band_t + band_b;
+            let h = h + insets;
+            if cell.props.vmerge != VMerge::Restart {
+                rh = rh.max(h);
+            }
+            row_insets = row_insets.max(insets);
             cells.push(CellBox {
                 items,
                 h,
@@ -180,9 +188,11 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             });
             g += span;
         }
+        // Word adds the cells' top and bottom margins and border bands to an at-least row height:
+        // a 30pt row with 5pt margins and 0.5pt borders is 40.5pt tall even when its text needs less.
         let rh = match (row.props.height, row.props.height_rule) {
             (Some(h), HeightRule::Exact) if h > 0.0 => h,
-            (Some(h), _) if h > 0.0 => rh.max(h),
+            (Some(h), _) if h > 0.0 => rh.max(h + row_insets),
             _ => rh,
         };
         heights.push(rh.max(4.0));

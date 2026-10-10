@@ -236,7 +236,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             painter.rect_filled(visual_sr.translate(vec2(0.0, 2.0)).expand(1.5), 1.0, t.page_shadow);
             painter.rect_filled(visual_sr, 0.0, if dark_page { Color32::from_gray(dark_paper) } else { Color32::WHITE });
             if !fresh && (rendered < 2 || !app.canvas.textures.contains_key(&i) && rendered < 4) {
-                let mut opts = wordcraft_render::RenderOptions::default();
+                let mut opts = screen_render_options();
                 opts.display.marks = app.session.view.marks;
                 opts.display.markup = app.session.view.show_markup;
                 opts.dark = dark_page;
@@ -857,6 +857,12 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
         });
         item(ui, app, "Merge Cells", "table.merge", json!({}));
     }
+}
+
+/// Render options for page rasters shown on screen: on macOS, text is darkened the way the system
+/// draws it, so a page looks as it does in other Mac apps (exports never are).
+pub(crate) fn screen_render_options() -> wordcraft_render::RenderOptions {
+    wordcraft_render::RenderOptions { text_darkening: cfg!(target_os = "macos"), ..Default::default() }
 }
 
 /// Whether Ctrl/⌘+click may hand a document's hyperlink to the system: web and email links only,

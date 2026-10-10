@@ -576,6 +576,87 @@ fn auto_hyphenation_breaks_long_words() {
     let _ = hyphens(&l2);
 }
 
+fn picture(w: f32, h: f32, float: wordcraft_doc::para::Float) -> InlineObject {
+    InlineObject::Shape { kind: wordcraft_doc::para::ShapeKind::Rectangle, w, h, fill: None, stroke: None, stroke_width: 1.0, float, story: None }
+}
+
+#[test]
+fn line_spacing_does_not_scale_pictures() {
+    use wordcraft_doc::props::LineSpacing;
+    let mut d = Document::from_text("");
+    if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+        p.props.line_spacing = Some(LineSpacing::Multiple(1.15));
+        p.insert_object(0, picture(144.0, 144.0, Default::default()), &Default::default()).unwrap();
+    }
+    let l = lay(&d);
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+    let line = &para.lines[0];
+    let desc = para.styles[0].descent;
+    // Word: the picture plus the font's descent, not (picture + descent) x 1.15.
+    assert!((line.height - (144.0 + desc)).abs() < 0.01, "line {} for a 144pt picture (descent {desc})", line.height);
+    assert!((line.baseline - line.top - 144.0).abs() < 0.01, "the picture stands on the baseline");
+}
+
+#[test]
+fn body_starts_right_below_a_tall_header() {
+    let mut d = Document::from_text("Body");
+    let mut hp = wordcraft_doc::Paragraph::with_text("", Default::default());
+    hp.insert_object(0, picture(100.0, 80.0, Default::default()), &Default::default()).unwrap();
+    hp.props.space_after = Some(0.0);
+    let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(hp)]);
+    d.last_section.headers.default = Some(id);
+    let l = lay(&d);
+    let Some(Placed::Lines { para, y, .. }) = l.pages[0].header.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+    let header_bottom = y + para.height;
+    assert!(header_bottom > d.last_section.margin_top, "the header reaches past the top margin");
+    // No gap: the body's first paragraph starts where the header ends (Word).
+    let body = l.pages[0].items.iter().find_map(|i| if let Placed::Lines { y, story: StoryRef::Body, .. } = i { Some(*y) } else { None }).unwrap();
+    assert!((body - header_bottom).abs() < 0.01, "body at {body}, header ends at {header_bottom}");
+}
+
+#[test]
+fn inline_picture_keeps_room_for_its_effects() {
+    let mut d = Document::from_text("");
+    let shadow = wordcraft_doc::para::Float { effect: [6.0, 12.0, 18.0, 27.0], ..Default::default() };
+    if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+        p.insert_object(0, picture(100.0, 50.0, shadow), &Default::default()).unwrap();
+    }
+    let l = lay(&d);
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+    let c = para.clusters.iter().find(|c| matches!(c.kind, para::ClKind::Object(_))).unwrap();
+    assert_eq!((c.adv, c.obj_h), (124.0, 89.0), "picture plus effect extents");
+    // Drawn inside that room.
+    let obj = picture(100.0, 50.0, shadow);
+    let r = display::inline_rect(Some(&obj), 10.0, 200.0, c.adv, c.obj_h);
+    assert_eq!((r.x, r.y, r.w, r.h), (16.0, 123.0, 100.0, 50.0));
+}
+
+/// Tops of the body text lines drawn on page one, in order.
+fn line_tops(l: &DocLayout) -> Vec<f32> {
+    l.pages[0].items.iter().filter_map(|i| if let Placed::Lines { y, story: StoryRef::Body, .. } = i { Some(*y) } else { None }).collect()
+}
+
+#[test]
+fn at_least_rows_add_cell_margins_and_border_bands() {
+    use wordcraft_doc::props::{Border, BorderStyle, Borders, HeightRule};
+    let mut d = Document::from_text("");
+    let line = Some(Border { style: BorderStyle::Single, width: 0.5, color: None, space: 0.0 });
+    let mut t = Table::new(2, 1, 200.0);
+    t.props.borders = Some(Borders { top: line, left: line, bottom: line, right: line, between: line, inside_v: line });
+    t.props.cell_margins = Some([5.0, 5.4, 5.0, 5.4]);
+    for (r, text) in t.rows.iter_mut().zip(["one", "two"]) {
+        r.props.height = Some(30.0);
+        r.props.height_rule = HeightRule::AtLeast;
+        r.cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))];
+    }
+    d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t))];
+    let tops = line_tops(&lay(&d));
+    // Word: a 30pt at-least row with 5pt margins and 0.5pt borders steps 40.5pt, and the text
+    // starts below the top border and the top margin.
+    assert!((tops[1] - tops[0] - 40.5).abs() < 0.01, "row pitch {}", tops[1] - tops[0]);
+    assert!((tops[0] - (72.0 + 0.5 + 5.0)).abs() < 0.01, "first cell text at {}", tops[0]);
+}
+
 /// Line count and, per line, how far the text (trailing spaces excluded) reaches.
 fn justified_lines(text: &str, compat_mode: u32, align: Align) -> (usize, Vec<f32>) {
     let mut d = Document::from_text(text);

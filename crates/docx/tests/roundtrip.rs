@@ -319,7 +319,8 @@ fn images_round_trip() {
         w: 72.0,
         h: 48.0,
         alt: "A tiny picture".into(),
-        float: Float::default(),
+        // Room for a shadow: kept through save and load.
+        float: Float { effect: [12.0, 12.0, 27.0, 27.0], ..Default::default() },
         crop: [0.1, 0.0, 0.25, 0.05],
     };
     let floating = InlineObject::Image {

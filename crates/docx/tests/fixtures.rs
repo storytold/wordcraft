@@ -476,6 +476,17 @@ fn compatibility_mode_is_read_and_defaults_to_word_2007() {
 }
 
 #[test]
+fn line_rule_is_read_case_insensitively() {
+    // Word accepts `atleast` as well as the spec's `atLeast`.
+    let d = read_body(
+        r#"<w:p><w:pPr><w:spacing w:line="280" w:lineRule="atleast"/></w:pPr><w:r><w:t>x</w:t></w:r></w:p><w:p><w:pPr><w:spacing w:line="300" w:lineRule="EXACT"/></w:pPr></w:p>"#,
+    );
+    let p = paras(&d);
+    assert_eq!(p[0].props.line_spacing, Some(wordcraft_doc::props::LineSpacing::AtLeast(14.0)));
+    assert_eq!(p[1].props.line_spacing, Some(wordcraft_doc::props::LineSpacing::Exactly(15.0)));
+}
+
+#[test]
 fn char_border_reads_and_nil_resolves_off() {
     let d = read_body(
         r#"<w:p><w:r><w:rPr><w:bdr w:val="single" w:sz="8" w:space="1" w:color="FF0000"/></w:rPr><w:t>a</w:t></w:r><w:r><w:rPr><w:bdr w:val="nil"/></w:rPr><w:t>b</w:t></w:r></w:p>"#,

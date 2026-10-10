@@ -578,7 +578,12 @@ impl Reader<'_> {
         let dim = |n: &str| ext.and_then(|e| e.attr(n)).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0).clamp(0.0, crate::units::MAX_LEN_PT);
         let (w, h) = (dim("cx"), dim("cy"));
         let alt = c.child("wp:docPr").and_then(|p| p.attr("descr").filter(|s| !s.is_empty()).or_else(|| p.attr("title"))).unwrap_or("").to_string();
-        let float = if anchored { anchor_float(c) } else { Float::default() };
+        let mut float = if anchored { anchor_float(c) } else { Float::default() };
+        if let Some(e) = c.child("wp:effectExtent") {
+            for (slot, n) in float.effect.iter_mut().zip(["l", "t", "r", "b"]) {
+                *slot = e.attr(n).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0).clamp(0.0, 1584.0);
+            }
+        }
         let gd = c.child("a:graphic").and_then(|g| g.child("a:graphicData"))?;
         if let Some(blip) = gd.find("a:blip") {
             let media = blip.attr("r:embed").and_then(|id| self.media_for(rels, id))?;
