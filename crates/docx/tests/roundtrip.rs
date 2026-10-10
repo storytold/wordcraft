@@ -6,7 +6,7 @@ use wordcraft_doc::numbering::ListKind;
 use wordcraft_doc::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CharProps, HeightRule, Highlight, LineSpacing, NumRef, ParaProps, Rgb, RowProps, TabAlign, TabLeader,
-    TabStop, TableLook, TextColor, Underline, VAlign, VMerge, VertAlign,
+    TabStop, TableLook, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
 };
 use wordcraft_doc::section::{Columns, LineNumberRestart, LineNumbering, NumFormat, SectionProps, SectionStart};
 use wordcraft_doc::styles::{Style, StyleKind};
@@ -239,7 +239,7 @@ fn tables_with_merges_round_trip() {
         let c = &mut t.rows[1].cells[0];
         c.props.shading = Some(Rgb(0xFF, 0, 0));
         c.props.valign = VAlign::Bottom;
-        c.props.vertical_text = true;
+        c.props.text_direction = TextDirection::Up;
         c.props.no_wrap = true;
         c.props.margins = Some([2.0, 3.0, 4.0, 5.0]);
         c.props.borders = Some(Borders::box_(Border { style: BorderStyle::Dashed, width: 1.0, color: Some(Rgb(0, 0, 255)), space: 0.0 }));
@@ -436,7 +436,8 @@ fn comments_round_trip() {
     }
 }
 
-/// A table style's cell text formatting, whole-table shading and cell margins survive a save.
+/// A table style's cell text formatting, whole-table shading, cell margins and its header row and
+/// row band conditional formats (#146) survive a save.
 #[test]
 fn table_style_formatting_round_trips() {
     use wordcraft_doc::styles::TableStyleParts;
@@ -447,6 +448,11 @@ fn table_style_formatting_round_trips() {
         cell_margins: Some([1.0, 14.4, 0.0, 14.4]),
         header_chr: CharProps { italic: Some(true), ..Default::default() },
         header_fill: Some(Rgb(0xFF, 0xFF, 0)),
+        header_borders: Some(Borders::all(Border::single(1.5))),
+        band_fill: Some(Rgb(0xF2, 0xF2, 0xF2)),
+        band_chr: CharProps { bold: Some(true), color: Some(TextColor::Rgb(Rgb(0, 0x70, 0xC0))), ..Default::default() },
+        band_borders: Some(Borders::box_(Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 })),
+        band_size: Some(3),
         ..Default::default()
     };
     d.styles.upsert(Style {
@@ -636,6 +642,29 @@ fn toc_field_wraps_its_entries() {
     assert!(matches!(ps[0].objects.first(), Some(InlineObject::Field { instr, .. }) if instr.starts_with("TOC")), "{:?}", ps[0].objects);
     assert!(ps[1].objects.is_empty(), "the field goes back on the heading: {:?}", ps[1].objects);
     assert_eq!(ps[1].props.style.as_deref(), Some("TOC1"));
+}
+
+/// Table Layout › Text Direction (#226): each direction is written as Word's `w:textDirection`
+/// value and read back.
+#[test]
+fn cell_text_direction_round_trips() {
+    let mut t = Table::new(1, 3, 300.0);
+    let dirs = [TextDirection::Horizontal, TextDirection::Down, TextDirection::Up];
+    for (c, dir) in t.rows[0].cells.iter_mut().zip(dirs) {
+        c.props.text_direction = dir;
+    }
+    let mut d = Document::new();
+    d.body = vec![Arc::new(Block::Table(t)), para_block(Paragraph::new())];
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<w:textDirection w:val="tbRl"/>"#), "{xml}");
+    assert!(xml.contains(r#"<w:textDirection w:val="btLr"/>"#), "{xml}");
+    assert_eq!(xml.matches("w:textDirection").count(), 2, "horizontal cells write nothing: {xml}");
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    let got: Vec<TextDirection> = r.body[0].as_table().expect("table").rows[0].cells.iter().map(|c| c.props.text_direction).collect();
+    assert_eq!(got, dirs);
 }
 
 /// The TOC field's begin and end belong to the entries' own paragraphs, even when the heading or

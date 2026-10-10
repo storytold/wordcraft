@@ -4865,11 +4865,13 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 name = "wordcraft"
 version = "0.4.0"
 dependencies = [
+ "arboard",
  "eframe",
  "egui",
  "fmv-macos-events",
  "getrandom 0.3.4",
  "log",
+ "pollster 0.4.0",
  "rfd",
  "serde_json",
  "winresource",

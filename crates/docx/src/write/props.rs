@@ -413,8 +413,8 @@ pub fn tcpr(w: &mut W, c: &CellProps) {
     if let Some(m) = &c.margins {
         margins(w, "w:tcMar", m);
     }
-    if c.vertical_text {
-        w.val("w:textDirection", "btLr");
+    if c.text_direction.is_turned() {
+        w.val("w:textDirection", c.text_direction.ooxml());
     }
     match c.valign {
         VAlign::Top => {}
