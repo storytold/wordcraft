@@ -249,6 +249,15 @@ impl Session {
         }
         self.redo.clear();
     }
+    /// Record `doc`/`sel` as their own undo step after the fact and close the typing group, so
+    /// Undo right after an automatic change (AutoFormat, AutoCorrect) reverts only that change.
+    pub fn push_undo(&mut self, label: &str, doc: Document, sel: Selection) {
+        self.history.push(Undo { label: label.to_string(), doc, sel });
+        if self.history.len() > MAX_UNDO {
+            self.history.remove(0);
+        }
+        self.typing_open = false;
+    }
     /// Make the next mutating command part of the previous undo step instead of a new one, so a
     /// drag that runs a command every frame is a single Undo. Call it on every frame of the drag
     /// except the first; it is consumed by the next `run`.

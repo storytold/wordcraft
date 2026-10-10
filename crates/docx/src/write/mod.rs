@@ -5,7 +5,7 @@ mod story;
 
 use std::collections::{BTreeMap, HashMap};
 
-use wordcraft_doc::numbering::LevelSuffix;
+use wordcraft_doc::numbering::{Level, LevelSuffix};
 use wordcraft_doc::styles::{Style, StyleKind};
 use wordcraft_doc::{Blocks, Document, PartKind};
 
@@ -69,8 +69,12 @@ pub(crate) struct Writer<'d> {
     pending_mark: Option<&'static str>,
     /// The note being written (is footnote, part id): its reference to itself is the mark above.
     current_note: Option<(bool, u32)>,
-    /// Writing a TOC heading: its TOC field stays open so the entries become the field's result.
+    /// Writing a TOC heading: its TOC field is held back so the entries become the field's result.
     toc_hold_end: bool,
+    /// The held TOC field (instruction, locked, props), opened in the first entry as Word does.
+    toc_field: Option<(String, bool, wordcraft_doc::props::CharProps)>,
+    /// Open the held TOC field at the start of the paragraph being written.
+    toc_begin_here: bool,
     /// Close the open TOC field at the end of the paragraph being written.
     toc_end_here: bool,
     /// Media keys actually referenced by a written drawing.
@@ -96,6 +100,8 @@ pub fn write(doc: &Document) -> Result<Vec<u8>, DocxError> {
         pending_mark: None,
         current_note: None,
         toc_hold_end: false,
+        toc_field: None,
+        toc_begin_here: false,
         toc_end_here: false,
         used_media: Default::default(),
     };
@@ -601,50 +607,65 @@ fn numbering_xml(doc: &Document) -> Vec<u8> {
             w.val("w:name", n);
         }
         for (i, l) in a.levels.iter().take(9).enumerate() {
-            w.open("w:lvl", &[("w:ilvl", &i.to_string())]);
-            w.val("w:start", &l.start.to_string());
-            w.val("w:numFmt", l.format.ooxml());
-            if !l.restart {
-                w.val("w:lvlRestart", "0");
-            }
-            if let Some(s) = &l.style {
-                w.val("w:pStyle", s);
-            }
-            if l.legal {
-                w.empty("w:isLgl", &[]);
-            }
-            match l.suffix {
-                LevelSuffix::Tab => {}
-                LevelSuffix::Space => w.val("w:suff", "space"),
-                LevelSuffix::Nothing => w.val("w:suff", "nothing"),
-            }
-            w.val("w:lvlText", &l.text);
-            w.val("w:lvlJc", props::align_val(l.align));
-            w.open("w:pPr", &[]);
-            let ind = crate::units::twips(l.indent);
-            if l.hanging >= 0.0 {
-                w.empty("w:ind", &[("w:left", &ind), ("w:hanging", &crate::units::twips(l.hanging))]);
-            } else {
-                w.empty("w:ind", &[("w:left", &ind), ("w:firstLine", &crate::units::twips(-l.hanging))]);
-            }
-            w.close("w:pPr");
-            props::rpr(&mut w, &l.chr);
-            w.close("w:lvl");
+            write_level(&mut w, i, l);
         }
         w.close("w:abstractNum");
     }
     for n in &doc.numbering.nums {
         w.open("w:num", &[("w:numId", &n.id.to_string())]);
         w.val("w:abstractNumId", &n.abstract_id.to_string());
-        for (lvl, start) in &n.start_overrides {
-            w.open("w:lvlOverride", &[("w:ilvl", &lvl.min(&8).to_string())]);
-            w.val("w:startOverride", &start.to_string());
+        for lvl in 0..9u8 {
+            let start = n.start_overrides.iter().find(|(l, _)| (*l).min(8) == lvl).map(|(_, s)| *s);
+            let level = n.level_overrides.iter().find(|(l, _)| (*l).min(8) == lvl).map(|(_, l)| l);
+            if start.is_none() && level.is_none() {
+                continue;
+            }
+            w.open("w:lvlOverride", &[("w:ilvl", &lvl.to_string())]);
+            if let Some(start) = start {
+                w.val("w:startOverride", &start.to_string());
+            }
+            if let Some(level) = level {
+                write_level(&mut w, lvl as usize, level);
+            }
             w.close("w:lvlOverride");
         }
         w.close("w:num");
     }
     w.close("w:numbering");
     w.into_bytes()
+}
+
+/// One `w:lvl` (list level `i`).
+fn write_level(w: &mut W, i: usize, l: &Level) {
+    w.open("w:lvl", &[("w:ilvl", &i.to_string())]);
+    w.val("w:start", &l.start.to_string());
+    w.val("w:numFmt", l.format.ooxml());
+    if !l.restart {
+        w.val("w:lvlRestart", "0");
+    }
+    if let Some(s) = &l.style {
+        w.val("w:pStyle", s);
+    }
+    if l.legal {
+        w.empty("w:isLgl", &[]);
+    }
+    match l.suffix {
+        LevelSuffix::Tab => {}
+        LevelSuffix::Space => w.val("w:suff", "space"),
+        LevelSuffix::Nothing => w.val("w:suff", "nothing"),
+    }
+    w.val("w:lvlText", &l.text);
+    w.val("w:lvlJc", props::align_val(l.align));
+    w.open("w:pPr", &[]);
+    let ind = crate::units::twips(l.indent);
+    if l.hanging >= 0.0 {
+        w.empty("w:ind", &[("w:left", &ind), ("w:hanging", &crate::units::twips(l.hanging))]);
+    } else {
+        w.empty("w:ind", &[("w:left", &ind), ("w:firstLine", &crate::units::twips(-l.hanging))]);
+    }
+    w.close("w:pPr");
+    props::rpr(w, &l.chr);
+    w.close("w:lvl");
 }
 
 fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool) -> Vec<u8> {

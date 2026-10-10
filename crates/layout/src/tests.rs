@@ -470,3 +470,23 @@ fn auto_hyphenation_breaks_long_words() {
     let l2 = lay(&d2);
     let _ = hyphens(&l2);
 }
+
+#[test]
+fn no_line_break_right_after_a_slash() {
+    // Word keeps "and/or" and web addresses whole on a line when they fit.
+    let text = "word and/or https://example.org/keepers/log/winter ".repeat(40);
+    let d = Document::from_text(&text);
+    let l = lay(&d);
+    let mut lines = 0;
+    for p in &l.pages {
+        for it in &p.items {
+            if let Placed::Lines { para, l0, l1, .. } = it {
+                for line in &para.lines[*l0..*l1] {
+                    lines += 1;
+                    assert!(!text[..line.start].ends_with('/'), "line starts after a slash: {:?}", &text[line.start..line.stop]);
+                }
+            }
+        }
+    }
+    assert!(lines > 10, "{lines} lines");
+}
