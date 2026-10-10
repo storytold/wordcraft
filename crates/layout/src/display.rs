@@ -1,7 +1,7 @@
 //! Page → draw items, shared by the raster renderer, the PDF exporter and thumbnails.
 
 use wordcraft_doc::para::{InlineObject, ShapeKind};
-use wordcraft_doc::props::{Border, BorderStyle, Rgb, TextColor, Underline};
+use wordcraft_doc::props::{Border, BorderStyle, Rgb, TextColor, TextDirection, Underline};
 use wordcraft_doc::{Document, Path, StoryRef};
 use wordcraft_fonts::FaceRef;
 use wordcraft_geom::Rect;
@@ -74,6 +74,26 @@ pub enum Draw {
         ch: char,
         color: Option<Rgb>,
     },
+    /// Turned text (a table cell's text direction): `items` are drawn in a frame turned `turn`
+    /// whose origin is page point (`x`, `y`) (see [`crate::turn_point`]).
+    Turned {
+        x: f32,
+        y: f32,
+        turn: TextDirection,
+        items: Vec<Draw>,
+    },
+}
+
+impl Draw {
+    /// The affine map (a, b, c, d, e, f: x' = a·x + c·y + e, y' = b·x + d·y + f) from a frame
+    /// turned `turn` with its origin at page point (`x`, `y`) to the page.
+    pub fn turn_matrix(turn: TextDirection, x: f32, y: f32) -> [f32; 6] {
+        match turn {
+            TextDirection::Horizontal => [1.0, 0.0, 0.0, 1.0, x, y],
+            TextDirection::Down => [0.0, 1.0, -1.0, 0.0, x, y],
+            TextDirection::Up => [0.0, -1.0, 1.0, 0.0, x, y],
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -172,7 +192,18 @@ fn item(doc: &Document, it: &Placed, opts: &DisplayOptions, alpha: f32, out: &mu
             out.push(Draw::Shape { rect: *rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width })
         }
         Placed::Cell { .. } | Placed::Object { .. } => {}
-        Placed::Lines { story, path, para, l0, l1, x, y } => lines(doc, *story, path, para, *l0, *l1, *x, *y, opts, alpha, out),
+        Placed::Lines { story, path, para, l0, l1, x, y, turn } if turn.is_turned() => {
+            let mut items = Vec::new();
+            lines(doc, *story, path, para, *l0, *l1, 0.0, 0.0, opts, alpha, &mut items);
+            // Link areas are axis-aligned page rectangles: turned text gets none.
+            for d in &mut items {
+                if let Draw::Glyphs { link, .. } = d {
+                    *link = None;
+                }
+            }
+            out.push(Draw::Turned { x: *x, y: *y, turn: *turn, items });
+        }
+        Placed::Lines { story, path, para, l0, l1, x, y, .. } => lines(doc, *story, path, para, *l0, *l1, *x, *y, opts, alpha, out),
     }
 }
 

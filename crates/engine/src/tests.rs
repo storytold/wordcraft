@@ -541,6 +541,54 @@ fn tables_commands() {
     assert!(s.run("table.merge", &json!({})).is_err());
 }
 
+/// Table Layout › Text Direction (#226) cycles the selected cells' text through horizontal,
+/// top-to-bottom and bottom-to-top, and the layout turns the text.
+#[test]
+fn table_text_direction_cycles_and_turns_the_text() {
+    use wordcraft_doc::props::TextDirection;
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 3}));
+    run(&mut s, "text.insert", json!({"text": "Turned"}));
+    let dirs = |s: &Session| -> Vec<TextDirection> {
+        s.doc.body.iter().find_map(|b| b.as_table()).unwrap().rows[0].cells.iter().map(|c| c.props.text_direction).collect()
+    };
+    let turned = |s: &mut Session| {
+        s.layout().pages[0].items.iter().find_map(|it| match it {
+            wordcraft_layout::Placed::Lines { para, turn, .. } if para.lines.first().is_some_and(|l| l.stop > 0) => Some(*turn),
+            _ => None,
+        })
+    };
+    assert_eq!(turned(&mut s), Some(TextDirection::Horizontal));
+    run(&mut s, "table.textDirection", json!({}));
+    assert_eq!(dirs(&s), [TextDirection::Down, TextDirection::Horizontal, TextDirection::Horizontal]);
+    assert_eq!(turned(&mut s), Some(TextDirection::Down), "the text is drawn turned");
+    run(&mut s, "table.textDirection", json!({}));
+    assert_eq!(dirs(&s)[0], TextDirection::Up);
+    assert_eq!(turned(&mut s), Some(TextDirection::Up));
+    run(&mut s, "table.textDirection", json!({}));
+    assert_eq!(dirs(&s)[0], TextDirection::Horizontal);
+    // Every selected cell gets the caret cell's next direction (the issue's selection spans cells).
+    let a = s.sel.focus.clone();
+    let mut b = a.clone();
+    if let Some(last) = b.path.0.get_mut(2) {
+        *last = 1;
+    }
+    b.off = 0;
+    s.sel = crate::Selection { anchor: a, focus: b };
+    run(&mut s, "table.textDirection", json!({}));
+    assert_eq!(dirs(&s), [TextDirection::Down, TextDirection::Down, TextDirection::Horizontal]);
+    run(&mut s, "table.textDirection", json!({"value": "up"}));
+    assert_eq!(dirs(&s), [TextDirection::Up, TextDirection::Up, TextDirection::Horizontal]);
+    assert!(s.run("table.textDirection", &json!({"value": "sideways"})).is_err());
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(dirs(&s), [TextDirection::Down, TextDirection::Down, TextDirection::Horizontal]);
+    // Outside a table it is disabled.
+    s.sel = crate::Selection::caret(Pos::body(0, 0));
+    if s.sel.focus.path.cell().is_none() {
+        assert!(s.run("table.textDirection", &json!({})).is_err());
+    }
+}
+
 #[test]
 fn table_border_presets_mask_the_sides_they_clear() {
     // On a default (TableGrid) table the "outside"/"inside" presets must write nil over the
@@ -1682,4 +1730,45 @@ fn page_and_table_gridlines_toggle_independently() {
     let state = run(&mut s, "view.state", json!({}));
     assert_eq!(state["gridlines"], false);
     assert_eq!(state["tableGridlines"], false);
+}
+
+/// Issue #67: View › Zoom steps. Zoom In/Out leave a fit mode and step 10% from the current zoom
+/// (the UI keeps `view.zoom` equal to the shown zoom while a fit mode is on), and never get stuck
+/// short of the 10%–500% limits.
+#[test]
+fn zoom_in_and_out_step_from_current_zoom_and_leave_fit_modes() {
+    let mut s = s();
+    let pct = |s: &Session| (s.view.zoom * 100.0).round() as i32;
+    run(&mut s, "view.zoomIn", json!({}));
+    assert_eq!(pct(&s), 110);
+    run(&mut s, "view.zoomOut", json!({}));
+    run(&mut s, "view.zoomOut", json!({}));
+    assert_eq!(pct(&s), 90);
+    for fit in ["view.pageWidth", "view.onePage", "view.multiplePages"] {
+        run(&mut s, fit, json!({}));
+        assert!(!s.view.fit.is_empty());
+        // What the canvas reports while a fit mode shows the page at 163%.
+        s.view.zoom = 1.63;
+        run(&mut s, "view.zoomIn", json!({}));
+        assert_eq!((pct(&s), s.view.fit.as_str(), s.view.multi_page), (170, "", false), "{fit}");
+        run(&mut s, fit, json!({}));
+        s.view.zoom = 1.63;
+        run(&mut s, "view.zoomOut", json!({}));
+        assert_eq!((pct(&s), s.view.fit.as_str()), (150, ""), "{fit}");
+    }
+    let mut last = pct(&s);
+    for _ in 0..60 {
+        run(&mut s, "view.zoomIn", json!({}));
+        assert!(pct(&s) > last || pct(&s) == 500);
+        last = pct(&s);
+    }
+    assert_eq!(last, 500);
+    for _ in 0..60 {
+        run(&mut s, "view.zoomOut", json!({}));
+        assert!(pct(&s) < last || pct(&s) == 10);
+        last = pct(&s);
+    }
+    assert_eq!(last, 10);
+    run(&mut s, "view.zoom100", json!({}));
+    assert_eq!(pct(&s), 100);
 }
