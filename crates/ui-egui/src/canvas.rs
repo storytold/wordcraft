@@ -164,6 +164,13 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         (None, None, full)
     };
     app.canvas.canvas_rect = Some(area);
+    // Ctrl/⌘ + wheel (and trackpad pinch) zooms the document, like Word. egui reports both as a
+    // zoom factor and doesn't scroll for them. Start from the shown scale so fit modes zoom too.
+    let zoom_delta = ui.input(|i| i.zoom_delta());
+    if (zoom_delta - 1.0).abs() > 1e-3 && ui.rect_contains_pointer(area) {
+        let pct = (app.canvas.scale / PX_PER_PT * zoom_delta * 100.0).clamp(10.0, 500.0);
+        let _ = app.run("view.zoom", json!({"value": pct}));
+    }
     let geo = geometry(app, &layout, area.size() - vec2(14.0, 0.0));
     app.canvas.scale = geo.scale;
     let caret = layout.caret_on(&app.session.sel.focus, app.session.page_hint);

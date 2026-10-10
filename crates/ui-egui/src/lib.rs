@@ -577,6 +577,48 @@ mod tests {
         WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default())
     }
 
+    /// Issue #139: Ctrl+wheel over the page didn't zoom.
+    #[test]
+    fn ctrl_wheel_over_canvas_zooms() {
+        let ctx = egui::Context::default();
+        let mut a = app();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+        let mut t = 0.0;
+        let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+            t += 1.0 / 60.0;
+            let input = egui::RawInput { events, time: Some(t), screen_rect: Some(screen), ..Default::default() };
+            ctx.run_ui(input, |ui| {
+                a.logic(ui.ctx());
+                a.ui(ui);
+            })
+            .drop_without_applying_deltas();
+        };
+        // The first frames install fonts; the canvas appears after them.
+        for _ in 0..3 {
+            frame(&mut a, Vec::new());
+        }
+        let over_page = a.canvas.canvas_rect.unwrap().center();
+        frame(&mut a, vec![egui::Event::PointerMoved(over_page)]);
+        let before = a.canvas.scale;
+        let wheel = |y: f32| egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, y),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::COMMAND,
+        };
+        frame(&mut a, vec![wheel(1.0)]);
+        for _ in 0..30 {
+            frame(&mut a, Vec::new());
+        }
+        assert!(a.canvas.scale > before * 1.05, "Ctrl+wheel up zooms in: {before} -> {}", a.canvas.scale);
+        let zoomed = a.canvas.scale;
+        frame(&mut a, vec![wheel(-1.0)]);
+        for _ in 0..30 {
+            frame(&mut a, Vec::new());
+        }
+        assert!(a.canvas.scale < zoomed, "Ctrl+wheel down zooms out");
+    }
+
     #[test]
     fn user_name_survives_restart() {
         let mut first = app();
