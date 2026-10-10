@@ -230,6 +230,12 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool) {
         w.close("w:tabs");
     }
     toggle(w, "w:suppressAutoHyphens", p.suppress_hyphens);
+    toggle(w, "w:kinsoku", p.kinsoku);
+    toggle(w, "w:wordWrap", p.word_wrap);
+    toggle(w, "w:overflowPunct", p.overflow_punct);
+    toggle(w, "w:topLinePunct", p.top_line_punct);
+    toggle(w, "w:autoSpaceDE", p.auto_space_de);
+    toggle(w, "w:autoSpaceDN", p.auto_space_dn);
     toggle(w, "w:bidi", p.bidi);
     if p.space_before.is_some() || p.space_after.is_some() || p.line_spacing.is_some() {
         let before = p.space_before.map(|v| twips(v.max(0.0)));
@@ -383,9 +389,10 @@ pub fn trpr(w: &mut W, r: &RowProps) {
 
 pub fn tcpr(w: &mut W, c: &CellProps) {
     w.open("w:tcPr", &[]);
-    match c.width {
-        Some(v) => w.empty("w:tcW", &[("w:w", &twips(v.max(0.0))), ("w:type", "dxa")]),
-        None => w.empty("w:tcW", &[("w:w", "0"), ("w:type", "auto")]),
+    match (c.width, c.width_pct) {
+        (Some(v), _) => w.empty("w:tcW", &[("w:w", &twips(v.max(0.0))), ("w:type", "dxa")]),
+        (None, Some(p)) => w.empty("w:tcW", &[("w:w", &n((p.clamp(0.0, 100.0) * 50.0).round() as i64)), ("w:type", "pct")]),
+        (None, None) => w.empty("w:tcW", &[("w:w", "0"), ("w:type", "auto")]),
     }
     if c.span > 1 {
         w.val("w:gridSpan", &n(c.span.min(63) as i64));
@@ -407,8 +414,8 @@ pub fn tcpr(w: &mut W, c: &CellProps) {
     if let Some(m) = &c.margins {
         margins(w, "w:tcMar", m);
     }
-    if c.vertical_text {
-        w.val("w:textDirection", "btLr");
+    if c.text_direction.is_turned() {
+        w.val("w:textDirection", c.text_direction.ooxml());
     }
     match c.valign {
         VAlign::Top => {}

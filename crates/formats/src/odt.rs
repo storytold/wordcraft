@@ -247,7 +247,7 @@ impl Writer {
                     prev_space = false;
                 }
                 Inline::Anchor(a) => out.push_str(&format!("<text:bookmark text:name=\"{}\"/>", x(a))),
-                Inline::Equation { .. } => {}
+                Inline::Figure(_) | Inline::Equation { .. } => {}
             }
         }
     }

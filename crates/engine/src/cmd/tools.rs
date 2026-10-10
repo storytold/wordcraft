@@ -175,11 +175,6 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({"hint": "Save or export a copy (PDF, Word document) to share it."}))
         })
         .pure(),
-        CommandSpec::new("file.encrypt", "Encrypt with Password", "File › Info › Protect Document", |s, _| {
-            s.status = "Password encryption isn't available yet; use Restrict Editing to prevent changes.".into();
-            Err(CmdError::Failed("password encryption isn't available yet".into()))
-        })
-        .pure(),
         CommandSpec::new("insert.quickParts", "Quick Parts", "Insert › Text", quick_parts)
             .params(r#"{"save"?: name (from the selection), "insert"?: name, "delete"?: name} → list"#),
         CommandSpec::new("insert.autoText", "AutoText", "Insert › Text › Quick Parts", quick_parts).params(r#"{"save"?: name, "insert"?: name}"#),
@@ -276,14 +271,6 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({"header": sect.header, "footer": sect.footer}))
         })
         .params(r#"{"header"?: pt, "footer"?: pt}"#),
-        CommandSpec::new("table.textDirection", "Text Direction", "Table Layout › Alignment", |s, _| {
-            let Some((tp, r, c)) = s.sel.focus.path.cell() else { return Err(CmdError::Disabled("not in a table".into())) };
-            let t = s.doc.table_mut(s.sel.focus.story, &tp)?;
-            if let Some(cell) = t.rows.get_mut(r).and_then(|x| x.cells.get_mut(c)) {
-                cell.props.vertical_text = !cell.props.vertical_text;
-            }
-            sel_result(s)
-        }),
         CommandSpec::new("table.cellMargins", "Cell Margins", "Table Layout › Alignment", |s, v| {
             let Some((tp, _, _)) = s.sel.focus.path.cell() else { return Err(CmdError::Disabled("not in a table".into())) };
             let m = [
@@ -764,6 +751,12 @@ fn accessibility(s: &mut Session, _: &Value) -> CmdResult {
                 && alt.trim().is_empty()
             {
                 issues.push(json!({"kind": "error", "issue": "Missing alternative text", "where": path.0, "fix": "Select the picture and run picture.altText"}));
+            }
+            // Charts and diagrams can't be given alt text yet (see objects.rs), so only report them.
+            if let InlineObject::Graphic { alt, .. } = o
+                && alt.trim().is_empty()
+            {
+                issues.push(json!({"kind": "error", "issue": "Chart or diagram has no alternative text", "where": path.0}));
             }
         }
         if let Some(l) = s.doc.styles.resolve_para(&p.props).outline_level {

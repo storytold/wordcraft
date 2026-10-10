@@ -168,6 +168,14 @@ impl Line {
             None => self.xs.last().copied().unwrap_or(self.left),
         }
     }
+    /// x of the line's visual end for the paragraph's direction, where its paragraph mark goes:
+    /// the right edge of the rightmost cluster in a left-to-right paragraph, the left edge of the
+    /// leftmost in a right-to-left one. Differs from [`Line::end_x`] when the logically last text
+    /// runs the other way (Hebrew ending a left-to-right paragraph, Latin ending a right-to-left one).
+    pub fn visual_end_x(&self) -> f32 {
+        let end = self.end_x();
+        if self.rtl { self.vis.iter().map(|v| v.x).fold(end, f32::min) } else { self.vis.iter().map(|v| v.x + v.w).fold(end, f32::max) }
+    }
     /// x where the hyphen of a hyphenated line (advance `adv`) is drawn.
     pub fn hyphen_x(&self, adv: f32) -> f32 {
         match self.vis.last() {
@@ -248,8 +256,9 @@ pub struct ParaLayout {
     /// tracked deletions in the final text. Resolved as laid out, table formatting included.
     pub left_out: Vec<std::ops::Range<usize>>,
     /// The text drawn by clusters that stand for an object (field results, note numbers,
-    /// equations) rather than for the paragraph's own text, by cluster index, sorted.
-    pub shown: Vec<(usize, String)>,
+    /// equations) rather than for the paragraph's own text, by cluster index, sorted, with each of
+    /// the cluster's glyphs' byte range in that text (a ligature's glyph spans its letters).
+    pub shown: Vec<(usize, String, Vec<std::ops::Range<usize>>)>,
 }
 
 /// What a table style gives the text of a cell: its paragraph and run formatting, with the
@@ -302,7 +311,7 @@ struct Builder<'a> {
     /// Bidi level per byte of the paragraph text (empty: all left to right).
     levels: Vec<u8>,
     /// Text drawn by clusters that stand for an object, by cluster index (see `ParaLayout::shown`).
-    shown: Vec<(usize, String)>,
+    shown: Vec<(usize, String, Vec<std::ops::Range<usize>>)>,
 }
 
 /// What a piece of text is shaped as: one face, case, script formatting and direction.
@@ -564,18 +573,28 @@ impl<'a> Builder<'a> {
             });
             return;
         };
-        // Merge into one cluster: rebase glyph dx onto the first cluster.
+        // Merge into one cluster: rebase glyph dx onto the first cluster, and keep each glyph's
+        // text (a ligature's glyph takes the letters of the clusters after it that have none).
         let mut x = 0.0;
+        let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
         for c in &added {
             for g in self.glyphs.get_mut(c.g0 as usize..c.g1 as usize).into_iter().flatten() {
                 g.dx += x;
             }
             x += c.adv;
+            let (a, b) = (c.start.saturating_sub(start), c.end.saturating_sub(start));
+            if c.g1 <= c.g0 {
+                let from = ranges.last().map(|r| r.start);
+                for r in ranges.iter_mut().rev().take_while(|r| Some(r.start) == from) {
+                    r.end = b;
+                }
+            }
+            ranges.extend((c.g0..c.g1).map(|_| a..b));
         }
         let g0 = first.g0;
         let style = first.style;
         let g1 = added.last().map(|c| c.g1).unwrap_or(g0);
-        self.shown.push((self.clusters.len(), text.to_string()));
+        self.shown.push((self.clusters.len(), text.to_string(), ranges));
         self.clusters.push(Cluster { start, end, adv: x, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, obj_d: 0.0, dot: false });
     }
 }
@@ -621,6 +640,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let mut maths = Vec::new();
     let mut displays = Vec::new();
     let mut eq_counter = env.eq_number;
+    let math_props = doc.settings.math.clone().unwrap_or_default();
     // The byte ranges of runs left out of the layout, in order, adjacent runs merged.
     let mut left: Vec<std::ops::Range<usize>> = Vec::new();
     for (range, props) in p.run_ranges() {
@@ -713,8 +733,10 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                     let k = obj_index;
                     obj_index += 1;
                     match p.objects.get(k) {
-                        Some(InlineObject::Image { w, h, float, .. }) | Some(InlineObject::Shape { w, h, float, .. }) => {
-                            if float.wrap == wordcraft_doc::para::Wrap::Inline {
+                        Some(o) if o.is_drawing() => {
+                            if let Some((w, h, float)) = o.frame()
+                                && float.wrap == wordcraft_doc::para::Wrap::Inline
+                            {
                                 let maxw = (env.width - rp.indent_left.max(0.0) - rp.indent_right.max(0.0)).max(18.0);
                                 let (w, h) = (w.clamp(1.0, 4000.0), h.clamp(1.0, 4000.0));
                                 let s = if w > maxw { maxw / w } else { 1.0 };
@@ -747,7 +769,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                         }
                         Some(InlineObject::Equation { linear, display, math }) => {
                             let avail = (env.width - rp.indent_left.max(0.0) - rp.indent_right.max(0.0)).max(12.0);
-                            let ml = crate::math::layout_equation(math, linear, &rc, *display, avail, &mut eq_counter);
+                            let ml = crate::math::layout_equation(math, linear, &rc, *display, avail, &math_props, &mut eq_counter);
                             let st = b.styles.get(si as usize);
                             // The line is at least as tall as the text around it.
                             let (a, d) = st.map(|s| (s.ascent, s.descent)).unwrap_or((0.0, 0.0));
@@ -803,19 +825,19 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let to_para = |i: usize| -> Option<usize> {
         if left.is_empty() { Some(i) } else { ends.binary_search_by_key(&i, |e| e.0).ok().and_then(|k| ends.get(k)).map(|e| e.1) }
     };
-    let mut opps = std::collections::HashSet::new();
+    let mut found = Vec::new();
     for (i, o) in unicode_linebreak::linebreaks(&text) {
         // Word keeps "and/or" and web addresses whole: no break right after a slash (a word
         // too long for the line still breaks anywhere).
         let after_slash =
             text.get(..i).is_some_and(|t| t.ends_with('/')) && text.get(i..).and_then(|t| t.chars().next()).is_some_and(char::is_alphanumeric);
-        if (o == unicode_linebreak::BreakOpportunity::Allowed || i < text.len())
-            && !after_slash
-            && let Some(end) = to_para(i)
-        {
-            opps.insert(end);
+        if (o == unicode_linebreak::BreakOpportunity::Allowed || i < text.len()) && !after_slash {
+            found.push(i);
         }
     }
+    // Asian typography: kinsoku and breaking Latin words anywhere.
+    crate::kinsoku::apply(&text, &mut found, rp.kinsoku, rp.word_wrap);
+    let opps: std::collections::HashSet<usize> = found.into_iter().filter_map(to_para).collect();
     for c in &mut b.clusters {
         c.break_after = opps.contains(&c.end) || matches!(c.kind, ClKind::Object(_) | ClKind::Tab);
     }
@@ -1483,8 +1505,9 @@ fn reorder_line(pl: &ParaLayout, line: &mut Line, width: f32) {
     line.xs = line.vis.iter().map(|v| v.x).chain(std::iter::once(end)).collect();
 }
 
-/// Narrowest span text flows into beside a floating object, points.
-const MIN_SPAN: f32 = 36.0;
+/// Narrowest span text flows into beside a floating object, points. Word puts an empty
+/// paragraph beside a floating table in a 21.3pt gap but not in an 18.6pt one.
+const MIN_SPAN: f32 = 20.0;
 
 /// The spans of a row at `top` (about `h` tall) between `lo` and `hi` that text can use around
 /// the exclusions, left to right (Square wrapping uses both sides of an object). `Err(y)`: none

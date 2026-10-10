@@ -11,7 +11,8 @@
 use std::sync::Arc;
 
 use wordcraft_doc::math::{
-    Arg, ColJc, FracKind, LimLoc, MAX_DEPTH, MClass, MNode, MRun, MScr, MSty, ScriptKind, is_integral, math_alnum, parse_linear,
+    Arg, BrkBin, BrkBinSub, ColJc, FracKind, LimLoc, MAX_DEPTH, MClass, MNode, MRun, MScr, MSty, MathProps, ScriptKind, is_integral, math_alnum,
+    parse_linear,
 };
 use wordcraft_doc::props::{Rgb, TextColor};
 use wordcraft_doc::resolve::ResolvedChar;
@@ -174,14 +175,16 @@ fn split_number(row: &[MNode]) -> Option<(Arg, Arg, usize)> {
 
 /// Lay out an equation set at the size and colour of `rc`. `display`: an equation on a line of
 /// its own (bigger operators, limits above and below, full-size fractions).
-/// `avail` is the width of the line (numbered display equations fill it); `counter` counts the
-/// document's automatic equation numbers so far and advances past this equation's.
+/// `avail` is the width of the line (numbered display equations fill it, wider display equations
+/// wrap to it as `props` says); `counter` counts the document's automatic equation numbers so far
+/// and advances past this equation's.
 pub fn layout_equation(
     math: &wordcraft_doc::math::Math,
     linear: &str,
     rc: &ResolvedChar,
     display: bool,
     avail: f32,
+    props: &MathProps,
     counter: &mut u32,
 ) -> MathLayout {
     let parsed;
@@ -213,6 +216,7 @@ pub fn layout_equation(
     let b = match nodes.as_slice() {
         [] => cx.hint(st),
         [MNode::EqArr { rows }] if display && rows.iter().any(|r| split_number(r).is_some()) => cx.numbered(rows, st, avail, counter),
+        _ if display => cx.wrapped(nodes, st, avail, props),
         _ => cx.arg(nodes, st, 0),
     };
     let mut slots = b.slots;
@@ -307,6 +311,8 @@ struct Bx {
     slots: Vec<Slot>,
     /// Text atoms: x of each character boundary (one more than the characters).
     cuts: Vec<f32>,
+    /// A manual line break before this atom (`m:brk`; the value is its `m:alnAt`).
+    brk: Option<u8>,
 }
 
 impl Bx {
@@ -547,6 +553,7 @@ impl Ctx {
             let path = self.path.clone();
             match n {
                 MNode::Run(r) => {
+                    let first = out.len();
                     for part in self.run_atoms(r, st, u, &path) {
                         match part {
                             RunPart::Atom(b) => out.push((b, seg)),
@@ -555,6 +562,9 @@ impl Ctx {
                                 out.push((b, seg));
                             }
                         }
+                    }
+                    if let Some((b, _)) = out.get_mut(first) {
+                        b.brk = r.brk;
                     }
                     u += r.text.chars().count();
                 }
@@ -1592,6 +1602,198 @@ impl Ctx {
         out
     }
 
+    /// A display equation, broken into lines where it is wider than `avail` or a run asks for a
+    /// manual break (`m:brk`). Breaks fall only at top-level binary operators and relations (never
+    /// inside a fraction, radical, script or matrix), before or after the operator as `m:brkBin`
+    /// says; lines are filled greedily and a term wider than the line overflows it. The first line
+    /// starts at the left; the rest are indented by `m:wrapIndent`, set flush right with
+    /// `m:wrapRight`, or aligned at an operator of the first line (`m:alnAt`).
+    fn wrapped(&mut self, a: &[MNode], st: St, avail: f32, mp: &MathProps) -> Bx {
+        let em = self.em(st);
+        let atoms: Vec<Bx> = self.row(a, st, 0, 0).into_iter().map(|(b, _)| b).collect();
+        let gaps = gaps_between(&atoms, st, em);
+        let total: f32 = atoms.iter().map(|b| b.w).sum::<f32>() + gaps.iter().sum::<f32>();
+        let manual = atoms.iter().skip(1).any(|b| b.brk.is_some());
+        if atoms.len() < 2 || (!manual && total <= avail + 0.01) {
+            let mut b = compose(atoms, st, em);
+            finalize(&mut b, &self.path, em);
+            return b;
+        }
+        let cls = classes(&atoms);
+        let n = atoms.len();
+        let is_op = |i: usize| -> bool {
+            atoms.get(i).is_some_and(|b| b.glyph.is_some() && !b.transparent)
+                && cls.get(i).is_some_and(|c| matches!(c.0, Cls::Bin | Cls::Rel) && c.0 == c.1)
+        };
+        // Chunk starts (after the first): the atom index → forced (`Some(alnAt)`) and the
+        // operator repeated at the start of the line it begins.
+        let mut starts: std::collections::BTreeMap<usize, (Option<u8>, Option<usize>)> = std::collections::BTreeMap::new();
+        for i in 1..n {
+            let op = is_op(i);
+            let at = if op && mp.brk_bin != BrkBin::Before { i + 1 } else { i };
+            if at == 0 || at >= n {
+                continue;
+            }
+            let repeat = (op && mp.brk_bin == BrkBin::Repeat).then_some(i);
+            let forced = atoms.get(i).and_then(|b| b.brk);
+            if op || forced.is_some() {
+                let e = starts.entry(at).or_insert((None, None));
+                if forced.is_some() {
+                    e.0 = forced;
+                }
+                if repeat.is_some() {
+                    e.1 = repeat;
+                }
+            }
+        }
+        // Chunks: [s, e) with their width inside and the gap before them.
+        let mut bounds: Vec<usize> = vec![0];
+        bounds.extend(starts.keys().copied());
+        bounds.push(n);
+        let width_of = |s: usize, e: usize| -> f32 {
+            (s..e).map(|i| atoms.get(i).map_or(0.0, |b| b.w) + if i > s { gaps.get(i).copied().unwrap_or(0.0) } else { 0.0 }).sum()
+        };
+        // The operator glyphs a repeated operator shows at the end of one line and the start of
+        // the next.
+        let repeats: std::collections::HashMap<usize, (Option<Bx>, Bx)> = starts
+            .values()
+            .filter_map(|v| v.1)
+            .filter_map(|i| {
+                let b = atoms.get(i)?;
+                let (end, start) = match op_char(b) {
+                    Some('−' | '-') => match mp.brk_bin_sub {
+                        BrkBinSub::MinusMinus => ('−', '−'),
+                        BrkBinSub::MinusPlus => ('−', '+'),
+                        BrkBinSub::PlusMinus => ('+', '−'),
+                    },
+                    Some(c) => (c, c),
+                    None => return None,
+                };
+                let end = (Some(end) != op_char(b)).then(|| self.op_glyph(b, end, st)).flatten();
+                Some((i, (end, self.op_glyph(b, start, st)?)))
+            })
+            .collect();
+        let indent = if mp.wrap_indent.is_finite() { mp.wrap_indent.clamp(0.0, 1584.0) } else { 0.0 }.min(avail * 0.5);
+        // Greedy fill: lines as lists of chunks (index into `bounds`).
+        let mut lines: Vec<(usize, usize)> = Vec::new();
+        let mut cur_w = 0.0f32;
+        let mut auto = false;
+        for c in 0..bounds.len().saturating_sub(1) {
+            let (s, e) = (bounds.get(c).copied().unwrap_or(0), bounds.get(c + 1).copied().unwrap_or(n));
+            let w = width_of(s, e);
+            let lead = gaps.get(s).copied().unwrap_or(0.0);
+            let info = starts.get(&s).copied();
+            let copy_w = info.and_then(|v| v.1).and_then(|i| repeats.get(&i)).map_or(0.0, |r| r.1.w + lead);
+            let line_avail = if lines.len() <= 1 || mp.wrap_right { avail } else { avail - indent };
+            match lines.last_mut() {
+                Some(l) if info.is_some_and(|v| v.0.is_none()) && cur_w + lead + w <= line_avail + 0.01 => {
+                    l.1 = c + 1;
+                    cur_w += lead + w;
+                }
+                Some(_) if info.is_some_and(|v| v.0.is_none()) => {
+                    auto = true;
+                    lines.push((c, c + 1));
+                    cur_w = copy_w + w;
+                }
+                _ => {
+                    lines.push((c, c + 1));
+                    cur_w = copy_w + w;
+                }
+            }
+        }
+        // Build each line's box.
+        let ops: Vec<bool> = (0..n).map(is_op).collect();
+        let path = self.path.clone();
+        let mut atoms: Vec<Option<Bx>> = atoms.into_iter().map(Some).collect();
+        let mut boxes: Vec<(Bx, Option<u8>)> = Vec::with_capacity(lines.len());
+        let mut ops_x: Vec<f32> = Vec::new();
+        for (li, &(c0, c1)) in lines.iter().enumerate() {
+            let (s, e) = (bounds.get(c0).copied().unwrap_or(0), bounds.get(c1).copied().unwrap_or(n));
+            let info = starts.get(&s).copied();
+            let next = lines.get(li + 1).and_then(|l| bounds.get(l.0)).and_then(|s| starts.get(s)).and_then(|v| v.1);
+            let mut row = Bx::default();
+            let mut x = 0.0f32;
+            let copy = info.and_then(|v| v.1).and_then(|i| repeats.get(&i)).map(|r| r.1.clone());
+            let has_copy = copy.is_some();
+            if let Some(cb) = copy {
+                let w = cb.w;
+                row.put(cb, 0.0, 0.0);
+                x = w;
+            }
+            for i in s..e {
+                let Some(mut b) = atoms.get_mut(i).and_then(Option::take) else { continue };
+                if i > s || has_copy {
+                    x += gaps.get(i).copied().unwrap_or(0.0);
+                }
+                if next == Some(i)
+                    && let Some((Some(end), _)) = repeats.get(&i)
+                {
+                    let mut r = end.clone();
+                    let k = if b.w > 0.0 { r.w / b.w } else { 1.0 };
+                    r.slots = std::mem::take(&mut b.slots)
+                        .into_iter()
+                        .map(|mut sl| {
+                            sl.x *= k;
+                            sl
+                        })
+                        .collect();
+                    b = r;
+                }
+                if li == 0 && ops.get(i).copied().unwrap_or(false) {
+                    ops_x.push(x);
+                }
+                let w = b.w;
+                row.put(b, x, 0.0);
+                x += w;
+            }
+            row.w = x;
+            finalize(&mut row, &path, em);
+            boxes.push((row, info.and_then(|v| v.0)));
+        }
+        let widest = boxes.iter().map(|(b, _)| b.w).fold(0.0f32, f32::max);
+        let right = if auto { avail.max(widest) } else { widest };
+        let mut placed = Vec::with_capacity(boxes.len());
+        for (li, (b, aln)) in boxes.into_iter().enumerate() {
+            let x = if li == 0 {
+                0.0
+            } else if let Some(ax) = aln.filter(|a| *a > 0).and_then(|a| ops_x.get(a as usize - 1)) {
+                *ax
+            } else if mp.wrap_right {
+                (right - b.w).max(0.0)
+            } else {
+                indent
+            };
+            placed.push((b, x));
+        }
+        // Stack the lines down from the first one's baseline.
+        let (gap, skip) = (em * 0.2, em * 1.25);
+        let mut out = Bx::default();
+        let mut y = 0.0f32;
+        let mut prev_d: Option<f32> = None;
+        for (b, x) in placed {
+            if let Some(pd) = prev_d {
+                y -= (pd + gap + b.a).max(skip);
+            }
+            prev_d = Some(b.d);
+            out.w = out.w.max(x + b.w);
+            out.put(b, x, y);
+        }
+        out.w = out.w.max(right);
+        out
+    }
+
+    /// Operator `c` drawn like the operator atom `like` (its face, size and colour), without
+    /// caret slots.
+    fn op_glyph(&self, like: &Bx, c: char, st: St) -> Option<Bx> {
+        let MItem::Glyphs { face, size, color, synth_bold, synth_italic, .. } = like.items.iter().find(|i| matches!(i, MItem::Glyphs { .. }))? else {
+            return None;
+        };
+        let face = if face.covers(c) { *face } else { self.face };
+        let mut b = self.glyphs(face, &c.to_string(), *size, st.level, *color, (*synth_bold, *synth_italic));
+        b.cuts.clear();
+        Some(b.cls(like.first))
+    }
+
     fn matrix(&mut self, rows: &[Vec<Arg>], col_jc: &[ColJc], st: St, d: usize) -> Bx {
         let em = self.em(st);
         let mut cells: Vec<Vec<Bx>> = Vec::new();
@@ -1640,6 +1842,18 @@ impl Ctx {
     }
 }
 
+/// The character an operator atom draws.
+fn op_char(b: &Bx) -> Option<char> {
+    b.items.iter().find_map(|i| match i {
+        MItem::Glyphs { text, .. } => {
+            let mut cs = text.chars();
+            let c = cs.next()?;
+            cs.next().is_none().then_some(c)
+        }
+        _ => None,
+    })
+}
+
 enum RunPart {
     Atom(Bx),
     /// An `&` alignment mark (a zero-width atom holding its caret slots).
@@ -1661,6 +1875,22 @@ fn finalize(b: &mut Bx, path: &[(usize, usize)], em: f32) {
 /// relation, an opening bracket or punctuation is ordinary, as is one before a relation,
 /// closing bracket or punctuation).
 fn gaps_between(atoms: &[Bx], st: St, em: f32) -> Vec<f32> {
+    let cls = classes(atoms);
+    let solid: Vec<usize> = (0..atoms.len()).filter(|i| atoms.get(*i).is_some_and(|b| !b.transparent)).collect();
+    let mut gaps = vec![0.0f32; atoms.len()];
+    for k in 1..solid.len() {
+        let (Some(&p), Some(&i)) = (solid.get(k - 1), solid.get(k)) else { continue };
+        let (Some(l), Some(r)) = (cls.get(p), cls.get(i)) else { continue };
+        if let Some(g) = gaps.get_mut(i) {
+            *g = spacing_mu(l.1, r.0, st) * em / 18.0;
+        }
+    }
+    gaps
+}
+
+/// Each atom's classes (first, last) in context: a binary operator where TeX makes it ordinary
+/// (a unary minus) becomes ordinary.
+fn classes(atoms: &[Bx]) -> Vec<(Cls, Cls)> {
     let mut cls: Vec<(Cls, Cls)> = atoms.iter().map(|b| (b.first, b.last)).collect();
     let solid: Vec<usize> = (0..atoms.len()).filter(|i| atoms.get(*i).is_some_and(|b| !b.transparent)).collect();
     for (k, &i) in solid.iter().enumerate() {
@@ -1681,15 +1911,7 @@ fn gaps_between(atoms: &[Bx], st: St, em: f32) -> Vec<f32> {
             }
         }
     }
-    let mut gaps = vec![0.0f32; atoms.len()];
-    for k in 1..solid.len() {
-        let (Some(&p), Some(&i)) = (solid.get(k - 1), solid.get(k)) else { continue };
-        let (Some(l), Some(r)) = (cls.get(p), cls.get(i)) else { continue };
-        if let Some(g) = gaps.get_mut(i) {
-            *g = spacing_mu(l.1, r.0, st) * em / 18.0;
-        }
-    }
-    gaps
+    cls
 }
 
 /// Atoms side by side with inter-atom spacing.
@@ -1745,7 +1967,95 @@ mod tests {
     }
 
     fn lay(lin: &str, display: bool) -> MathLayout {
-        layout_equation(&Math::default(), lin, &rc(), display, 400.0, &mut 0)
+        layout_equation(&Math::default(), lin, &rc(), display, 400.0, &MathProps::default(), &mut 0)
+    }
+
+    /// The glyphs of a laid-out equation by line: (baseline, [(x, text)]), top line first.
+    fn lines(m: &MathLayout) -> Vec<(f32, Vec<(f32, String)>)> {
+        let mut out: Vec<(f32, Vec<(f32, String)>)> = Vec::new();
+        for it in &m.items {
+            if let MItem::Glyphs { glyphs, text, .. } = it
+                && let Some(&(_, x, y)) = glyphs.first()
+            {
+                match out.iter_mut().find(|l| (l.0 - y).abs() < 0.5) {
+                    Some(l) => l.1.push((x, text.clone())),
+                    None => out.push((y, vec![(x, text.clone())])),
+                }
+            }
+        }
+        out.sort_by(|a, b| b.0.total_cmp(&a.0));
+        for l in &mut out {
+            l.1.sort_by(|a, b| a.0.total_cmp(&b.0));
+        }
+        out
+    }
+
+    fn lay_in(math: &Math, lin: &str, display: bool, avail: f32, mp: &MathProps) -> MathLayout {
+        layout_equation(math, lin, &rc(), display, avail, mp, &mut 0)
+    }
+
+    #[test]
+    fn long_display_equations_wrap_before_operators_and_indent() {
+        let sum = "y=a+b+c+d+e+f+g+h+i+j+k+l+m+n+o+p+q+r+s+t+u+v+w";
+        let mp = MathProps::default();
+        let full = lay_in(&Math::default(), sum, true, 1e4, &mp);
+        assert_eq!(lines(&full).len(), 1, "fits on one line when there is room");
+        let avail = full.width * 0.45;
+        assert!(avail > 2.0 * mp.wrap_indent, "room for the indent: {avail}");
+        let m = lay_in(&Math::default(), sum, true, avail, &mp);
+        let ls = lines(&m);
+        assert!(ls.len() >= 2, "{ls:?}");
+        assert!((m.width - avail).abs() < 0.01, "the wrapped equation fills the line: {} vs {avail}", m.width);
+        for (k, (_, gs)) in ls.iter().enumerate() {
+            let (x0, first) = gs.first().cloned().unwrap();
+            if k == 0 {
+                assert!(x0.abs() < 0.01 && first == "𝑦", "{gs:?}");
+            } else {
+                // Continuation lines start with the operator, one wrap indent in.
+                assert!((x0 - mp.wrap_indent).abs() < 0.01 && first == "+", "line {k}: {gs:?}");
+            }
+            for (x, t) in gs {
+                assert!(*x < avail, "line {k}: {t} at {x} past {avail}");
+            }
+        }
+        // Breaks after the operator, and the operator repeated, as the settings say.
+        let after = MathProps { brk_bin: BrkBin::After, ..Default::default() };
+        let ls = lines(&lay_in(&Math::default(), sum, true, avail, &after));
+        assert!(ls.len() >= 2 && ls[0].1.last().is_some_and(|g| g.1 == "+") && ls[1].1[0].1 != "+", "{ls:?}");
+        let repeat = MathProps { brk_bin: BrkBin::Repeat, wrap_right: true, ..Default::default() };
+        let m = lay_in(&Math::default(), sum, true, avail, &repeat);
+        let ls = lines(&m);
+        assert!(ls.len() >= 2 && ls[0].1.last().is_some_and(|g| g.1 == "+") && ls[1].1[0].1 == "+", "{ls:?}");
+        // Inline equations never wrap.
+        assert_eq!(lines(&lay_in(&Math::default(), sum, false, avail, &mp)).len(), 1);
+        // A term wider than the line overflows it rather than breaking inside.
+        let frac = lay_in(&Math::default(), "y=(a+b+c+d+e+f+g+h+i+j+k+l+m+n+o+p+q+r+s+t+u+v+w)/2", true, avail, &mp);
+        assert!(frac.width > avail && frac.items.iter().any(|i| matches!(i, MItem::Rect { .. })), "{}", frac.width);
+    }
+
+    #[test]
+    fn manual_breaks_start_new_lines() {
+        let mp = MathProps::default();
+        let nodes = vec![MNode::Run(MRun::new("a=b")), MNode::Run(MRun { brk: Some(0), ..MRun::new("+c") })];
+        let m = lay_in(&Math { nodes, ..Default::default() }, "", true, 400.0, &mp);
+        let ls = lines(&m);
+        assert_eq!(ls.len(), 2, "{ls:?}");
+        assert!((ls[1].1[0].0 - mp.wrap_indent).abs() < 0.01 && ls[1].1[0].1 == "+", "{ls:?}");
+        assert!(m.width < 400.0, "a manually broken equation is as wide as its lines");
+        // `m:alnAt`: the new line's operator sits under the first line's first operator.
+        let nodes = vec![MNode::Run(MRun::new("a=b")), MNode::Run(MRun { brk: Some(1), ..MRun::new("+c") })];
+        let ls = lines(&lay_in(&Math { nodes, ..Default::default() }, "", true, 400.0, &mp));
+        let eq_x = ls[0].1.iter().find(|g| g.1 == "=").unwrap().0;
+        assert!((ls[1].1[0].0 - eq_x).abs() < 0.01, "{ls:?}");
+    }
+
+    #[test]
+    fn short_display_equations_stay_on_one_line() {
+        let mp = MathProps::default();
+        let one = lay_in(&Math::default(), "a+b=c", true, 400.0, &mp);
+        assert_eq!(lines(&one).len(), 1);
+        let plain = lay_in(&Math::default(), "a+b=c", false, 400.0, &mp);
+        assert!(one.width < 400.0 && (one.width - plain.width).abs() < 0.01, "{} vs {}", one.width, plain.width);
     }
 
     #[test]
@@ -1823,7 +2133,7 @@ mod tests {
             MNode::Run(MRun { text: "R".into(), scr: MScr::DoubleStruck, ..Default::default() }),
         ];
         for n in nodes {
-            let m = layout_equation(&Math { nodes: vec![n.clone()], ..Default::default() }, "", &rc(), true, 400.0, &mut 0);
+            let m = layout_equation(&Math { nodes: vec![n.clone()], ..Default::default() }, "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
             assert!(m.width > 0.0 && m.ascent + m.descent > 0.0, "{n:?} → {m:?}");
             for it in &m.items {
                 if let MItem::Glyphs { glyphs, .. } = it {
@@ -1837,7 +2147,7 @@ mod tests {
     fn caret_slots_cover_every_position() {
         use wordcraft_doc::math_edit::{MathPos, move_right, units};
         let math = Math { nodes: wordcraft_doc::math::parse_linear("x=(-b±√(b^2-4ac))/2a+■(a&b@c&d)"), ..Default::default() };
-        let m = layout_equation(&math, "", &rc(), true, 400.0, &mut 0);
+        let m = layout_equation(&math, "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
         // Walking the caret through the equation, every position has a slot.
         let mut p = MathPos::default();
         let mut seen = 0;
@@ -1861,17 +2171,17 @@ mod tests {
     #[test]
     fn empty_slots_show_placeholders_on_screen_only() {
         let math = Math { nodes: wordcraft_doc::math::parse_linear("⬚/⬚"), ..Default::default() };
-        let m = layout_equation(&math, "", &rc(), true, 400.0, &mut 0);
+        let m = layout_equation(&math, "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
         assert!(m.items.iter().all(|i| matches!(i, MItem::ScreenOnly(_) | MItem::Rect { .. })), "{:?}", m.items);
         assert!(m.slots.iter().any(|s| s.path == vec![(0, 0)] && s.off == 0));
-        let empty = layout_equation(&Math::default(), "", &rc(), true, 400.0, &mut 0);
+        let empty = layout_equation(&Math::default(), "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
         assert!(empty.width > 10.0 && empty.items.iter().all(|i| matches!(i, MItem::ScreenOnly(_))));
     }
 
     #[test]
     fn numbered_equations_fill_the_line_with_the_number_at_the_right() {
         let math = Math { nodes: wordcraft_doc::math::parse_linear("E=mc^2#(1)"), ..Default::default() };
-        let m = layout_equation(&math, "", &rc(), true, 400.0, &mut 0);
+        let m = layout_equation(&math, "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
         assert!((m.width - 400.0).abs() < 0.01, "{}", m.width);
         let xs: Vec<f32> =
             m.items.iter().filter_map(|i| if let MItem::Glyphs { glyphs, .. } = i { glyphs.first().map(|g| g.1) } else { None }).collect();
@@ -1882,7 +2192,7 @@ mod tests {
         // Automatic numbers count.
         let auto = Math { nodes: wordcraft_doc::math::parse_linear("a=b#"), ..Default::default() };
         let mut n = 4;
-        let _ = layout_equation(&auto, "", &rc(), true, 400.0, &mut n);
+        let _ = layout_equation(&auto, "", &rc(), true, 400.0, &MathProps::default(), &mut n);
         assert_eq!(n, 5);
         assert_eq!(auto_numbers(&auto, true), 1);
     }
@@ -1905,7 +2215,7 @@ mod tests {
         for _ in 0..500 {
             n = vec![MNode::Frac { kind: FracKind::Bar, num: n.clone(), den: Vec::new() }];
         }
-        let _ = layout_equation(&Math { nodes: n, ..Default::default() }, "", &rc(), true, 400.0, &mut 0);
+        let _ = layout_equation(&Math { nodes: n, ..Default::default() }, "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
         // Empty everything.
         let empty = vec![
             MNode::Nary { chr: '\0', lim_loc: None, grow: true, sub_hide: false, sup_hide: false, sub: vec![], sup: vec![], e: vec![] },
@@ -1914,7 +2224,16 @@ mod tests {
             MNode::EqArr { rows: vec![] },
             MNode::Run(MRun { text: String::new(), size: Some(f32::NAN), ..Default::default() }),
         ];
-        let m = layout_equation(&Math { nodes: empty, ..Default::default() }, "", &rc(), true, 400.0, &mut 0);
+        let m = layout_equation(&Math { nodes: empty, ..Default::default() }, "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
         assert!(m.width.is_finite() && m.ascent.is_finite());
+        // Breaks everywhere, odd wrap settings, no room at all.
+        let runs: Vec<MNode> = (0..2000).map(|i| MNode::Run(MRun { brk: (i % 3 == 0).then_some((i % 256) as u8), ..MRun::new("−+=") })).collect();
+        for avail in [0.0, f32::NAN, 1e9] {
+            for brk_bin in [BrkBin::Before, BrkBin::After, BrkBin::Repeat] {
+                let mp = MathProps { brk_bin, brk_bin_sub: BrkBinSub::PlusMinus, wrap_indent: f32::INFINITY, wrap_right: avail == 0.0 };
+                let m = layout_equation(&Math { nodes: runs.clone(), ..Default::default() }, "", &rc(), true, avail, &mp, &mut 0);
+                assert!(m.width.is_finite() && m.descent.is_finite());
+            }
+        }
     }
 }

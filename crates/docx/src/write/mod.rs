@@ -622,8 +622,11 @@ fn style_xml(w: &mut W, st: &Style) {
         w.close("w:rPr");
     }
     if let Some(t) = &st.table {
-        if t.borders.is_some() || t.cell_margins.is_some() {
+        if t.borders.is_some() || t.cell_margins.is_some() || t.band_size.is_some() {
             w.open("w:tblPr", &[]);
+            if let Some(n) = t.band_size {
+                w.val("w:tblStyleRowBandSize", &n.clamp(1, 1000).to_string());
+            }
             if let Some(b) = &t.borders {
                 props::borders(w, "w:tblBorders", b, Some("w:insideH"), &[]);
             }
@@ -632,35 +635,49 @@ fn style_xml(w: &mut W, st: &Style) {
             }
             w.close("w:tblPr");
         }
-        let cond =
-            |w: &mut W, ty: &str, chr: &wordcraft_doc::CharProps, fill: Option<wordcraft_doc::Rgb>, top: Option<&wordcraft_doc::props::Border>| {
-                if !props::has_rpr(chr) && fill.is_none() && top.is_none() {
-                    return;
+        // One conditional formatting region (ECMA-376 §17.7.6): run properties, then cell borders
+        // and shading.
+        let cond = |w: &mut W,
+                    ty: &str,
+                    chr: &wordcraft_doc::CharProps,
+                    fill: Option<wordcraft_doc::Rgb>,
+                    borders: Option<wordcraft_doc::props::Borders>| {
+            if !props::has_rpr(chr) && fill.is_none() && borders.is_none() {
+                return;
+            }
+            w.open("w:tblStylePr", &[("w:type", ty)]);
+            if props::has_rpr(chr) {
+                w.open("w:rPr", &[]);
+                props::rpr_inner(w, chr);
+                w.close("w:rPr");
+            }
+            if fill.is_some() || borders.is_some() {
+                w.open("w:tcPr", &[]);
+                if let Some(bs) = &borders {
+                    props::borders(w, "w:tcBorders", bs, Some("w:insideH"), &[]);
                 }
-                w.open("w:tblStylePr", &[("w:type", ty)]);
-                if props::has_rpr(chr) {
-                    w.open("w:rPr", &[]);
-                    props::rpr_inner(w, chr);
-                    w.close("w:rPr");
+                if let Some(f) = fill {
+                    w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &f.hex())]);
                 }
-                if fill.is_some() || top.is_some() {
-                    w.open("w:tcPr", &[]);
-                    if let Some(b) = top {
-                        let bs = wordcraft_doc::props::Borders { top: Some(*b), ..Default::default() };
-                        props::borders(w, "w:tcBorders", &bs, None, &[]);
-                    }
-                    if let Some(f) = fill {
-                        w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &f.hex())]);
-                    }
-                    w.close("w:tcPr");
-                }
-                w.close("w:tblStylePr");
-            };
+                w.close("w:tcPr");
+            }
+            w.close("w:tblStylePr");
+        };
         cond(w, "wholeTable", &wordcraft_doc::CharProps::default(), t.fill, None);
-        cond(w, "firstRow", &t.header_chr, t.header_fill, None);
-        cond(w, "lastRow", &t.total_chr, None, t.total_border_top.as_ref());
-        cond(w, "firstCol", &t.first_col_chr, None, None);
-        cond(w, "band1Horz", &wordcraft_doc::CharProps::default(), t.band_fill, None);
+        cond(w, "firstRow", &t.header_chr, t.header_fill, t.header_borders);
+        // The total row's borders, its top edge falling back to the built-in top rule.
+        let total_borders = match (t.total_borders, t.total_border_top) {
+            (Some(mut b), top) => {
+                b.top = b.top.or(top);
+                Some(b)
+            }
+            (None, top) => top.map(|b| wordcraft_doc::props::Borders { top: Some(b), ..Default::default() }),
+        };
+        cond(w, "lastRow", &t.total_chr, t.total_fill, total_borders);
+        cond(w, "firstCol", &t.first_col_chr, t.first_col_fill, t.first_col_borders);
+        cond(w, "lastCol", &t.last_col_chr, t.last_col_fill, t.last_col_borders);
+        cond(w, "band1Vert", &t.col_band_chr, t.col_band_fill, t.col_band_borders);
+        cond(w, "band1Horz", &t.band_chr, t.band_fill, t.band_borders);
     }
     w.close("w:style");
 }
@@ -764,6 +781,11 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool) -> Vec<u8> {
     if s.even_odd_headers {
         w.empty("w:evenAndOddHeaders", &[]);
     }
+    for (tag, v) in [("w:drawingGridHorizontalSpacing", s.grid_h), ("w:drawingGridVerticalSpacing", s.grid_v)] {
+        if v.is_finite() && (v - wordcraft_doc::DEFAULT_GRID).abs() > 0.01 {
+            w.val(tag, &crate::units::twips(v.clamp(0.5, 1584.0)));
+        }
+    }
     w.val("w:characterSpacingControl", "doNotCompress");
     for (tag, fmt, used, el) in
         [("w:footnotePr", s.footnote_format, footnotes, "w:footnote"), ("w:endnotePr", s.endnote_format, endnotes, "w:endnote")]
@@ -780,6 +802,9 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool) -> Vec<u8> {
     let mode = doc.settings.compat_mode.clamp(11, 15).to_string();
     w.empty("w:compatSetting", &[("w:name", "compatibilityMode"), ("w:uri", "http://schemas.microsoft.com/office/word"), ("w:val", &mode)]);
     w.close("w:compat");
+    if let Some(m) = &s.math {
+        math::math_pr(&mut w, m);
+    }
     w.close("w:settings");
     w.into_bytes()
 }

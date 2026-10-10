@@ -129,6 +129,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("para.widowControl", "Widow/Orphan Control", "Home › Paragraph › Line and Page Breaks", |s, v| {
             tog(s, v, |p| p.widow_control, |p, b| p.widow_control = Some(b))
         }),
+        CommandSpec::new("para.asianTypography", "Asian Typography", "Home › Paragraph › Asian Typography", asian_typography).params(
+            r#"{"kinsoku"?: bool (East Asian line-breaking rules), "wordWrap"?: bool (false: Latin words may break at any character), "overflowPunct"?: bool (hanging punctuation), "topLinePunct"?: bool (compress punctuation at the start of a line), "autoSpaceDE"?: bool (space between Asian and Latin text), "autoSpaceDN"?: bool (space between Asian text and numbers)} — flags left out stay as they are; returns the flags at the caret"#,
+        ),
         CommandSpec::new("para.tabs", "Tabs", "Home › Paragraph › Paragraph", |s, v| {
             let tabs: Vec<TabStop> = serde_json::from_value(v.get("tabs").cloned().unwrap_or(Value::Null)).map_err(|e| CmdError::Params(e.to_string()))?;
             if tabs.len() > 64 {
@@ -154,14 +157,20 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("styles.create", "Create a Style", "Home › Styles", create_style).params(r#"{"name": string, "basedOn"?: string, "fromSelection"?: bool}"#),
         CommandSpec::new("styles.modify", "Modify Style", "Home › Styles", modify_style).params(r#"{"style": string, "chr"?: CharProps, "para"?: ParaProps, "name"?: string, "next"?: string}"#),
         CommandSpec::new("styles.updateToMatch", "Update Style to Match Selection", "Home › Styles", update_to_match).params(r#"{"style"?: string}"#),
-        CommandSpec::new("styles.delete", "Delete Style", "Home › Styles", |s, v| {
-            let id = style_id(s, p::req_str(v, "style")?)?;
-            if s.doc.styles.get(&id).is_some_and(|st| st.builtin) {
-                return Err(CmdError::Failed("built-in styles can't be deleted".into()));
+        CommandSpec::new("styles.delete", "Delete Style", "Home › Styles", delete_style).params(r#"{"style": string (name or id; custom styles only)}"#),
+        CommandSpec::new("styles.manage", "Manage Styles", "Home › Styles", |s, v| {
+            let sort = p::str(v, "sort").unwrap_or("recommended");
+            if !matches!(sort, "recommended" | "alphabetical") {
+                return Err(CmdError::Params(format!("unknown sort `{sort}` (recommended|alphabetical)")));
             }
-            s.doc.styles.styles.retain(|st| st.id != id);
-            sel_result(s)
-        }),
+            let list = manage_list(s, sort == "alphabetical");
+            s.ui_requests.push(json!({"open": "manageStyles"}));
+            Ok(list)
+        })
+        .params(r#"{"sort"?: "recommended|alphabetical"} → [{id, name, type: "paragraph|character|linked|table", builtIn, inGallery, hidden, basedOn, priority, format}]"#)
+        .pure(),
+        CommandSpec::new("styles.setVisibility", "Show or Hide Style", "Home › Styles", set_visibility)
+            .params(r#"{"style": string, "gallery"?: bool (Styles gallery, w:qFormat), "hidden"?: bool (hidden from style lists, w:semiHidden)}"#),
         CommandSpec::new("styles.list", "Styles", "Home › Styles", |s, _| {
             Ok(Value::Array(
                 s.doc.styles.styles.iter().map(|st| json!({"id": st.id, "name": st.name, "kind": st.kind, "quick": st.quick, "basedOn": st.based_on})).collect(),
@@ -238,6 +247,42 @@ fn tog(s: &mut Session, v: &Value, get: fn(&ParaProps) -> Option<bool>, set: fn(
         !get(&props).unwrap_or(false)
     });
     fmt(s, &|p| set(p, on))
+}
+
+/// Asian Typography (the Paragraph dialog's tab): sets the given flags on every selected
+/// paragraph and returns the resolved flags at the caret.
+fn asian_typography(s: &mut Session, v: &Value) -> CmdResult {
+    let flag = |k: &str| p::bool(v, k);
+    let (kinsoku, word_wrap, overflow, top_line, de, dn) =
+        (flag("kinsoku"), flag("wordWrap"), flag("overflowPunct"), flag("topLinePunct"), flag("autoSpaceDE"), flag("autoSpaceDN"));
+    let mut out = if [kinsoku, word_wrap, overflow, top_line, de, dn].iter().any(Option::is_some) {
+        fmt(s, &|p| {
+            let set = |field: &mut Option<bool>, val: Option<bool>| {
+                if val.is_some() {
+                    *field = val;
+                }
+            };
+            set(&mut p.kinsoku, kinsoku);
+            set(&mut p.word_wrap, word_wrap);
+            set(&mut p.overflow_punct, overflow);
+            set(&mut p.top_line_punct, top_line);
+            set(&mut p.auto_space_de, de);
+            set(&mut p.auto_space_dn, dn);
+        })?
+    } else {
+        sel_result(s)?
+    };
+    let r = cur(s);
+    if let Some(o) = out.as_object_mut() {
+        o.insert(
+            "asianTypography".into(),
+            json!({
+                "kinsoku": r.kinsoku, "wordWrap": r.word_wrap, "overflowPunct": r.overflow_punct,
+                "topLinePunct": r.top_line_punct, "autoSpaceDE": r.auto_space_de, "autoSpaceDN": r.auto_space_dn,
+            }),
+        );
+    }
+    Ok(out)
 }
 
 pub fn indent(s: &mut Session, _: &Value) -> CmdResult {
@@ -582,6 +627,155 @@ fn update_to_match(s: &mut Session, v: &Value) -> CmdResult {
     p.props = ParaProps { style, numbering: p.props.numbering, ..Default::default() };
     touch_all(s);
     sel_result(s)
+}
+
+/// Delete a custom style. Text that uses it falls back to the style it was based on (or the
+/// default style), styles based on it are rebased, and a custom character style linked to it
+/// goes with it. Built-in styles are refused.
+fn delete_style(s: &mut Session, v: &Value) -> CmdResult {
+    let id = style_id(s, p::req_str(v, "style")?)?;
+    let Some(st) = s.doc.styles.get(&id).cloned() else { return Err(CmdError::Params(format!("no style `{id}`"))) };
+    // Table styles: their tables take Table Grid and styles based on them keep their look.
+    if st.kind == StyleKind::Table {
+        let mut out = super::table_style::delete(s, &id)?;
+        if let Some(o) = out.as_object_mut() {
+            let tables = o.get("tables").cloned().unwrap_or(json!(0));
+            o.insert("deleted".into(), json!([id]));
+            o.insert("restyled".into(), tables);
+        }
+        return Ok(out);
+    }
+    if st.builtin {
+        return Err(CmdError::Failed(format!("`{}` is a built-in style and can't be deleted", st.name)));
+    }
+    let mut gone = vec![st.clone()];
+    if let Some(partner) = st.linked.as_deref().and_then(|l| s.doc.styles.get(l))
+        && !partner.builtin
+        && partner.linked.as_deref() == Some(id.as_str())
+    {
+        gone.push(partner.clone());
+    }
+    let mut changed = 0;
+    for g in &gone {
+        s.doc.styles.remove(&g.id);
+        // Fall back to the base only while it is a style of the same kind that still exists.
+        let base = g.based_on.clone().filter(|b| s.doc.styles.get(b).is_some_and(|x| x.kind == g.kind));
+        changed += s.doc.restyle(&g.id, base);
+    }
+    touch_all(s);
+    Ok(json!({"deleted": gone.iter().map(|g| g.id.clone()).collect::<Vec<_>>(), "restyled": changed}))
+}
+
+/// Styles gallery and style list visibility (`w:qFormat` / `w:semiHidden`).
+fn set_visibility(s: &mut Session, v: &Value) -> CmdResult {
+    let id = style_id(s, p::req_str(v, "style")?)?;
+    let (gallery, hidden) = (p::bool(v, "gallery"), p::bool(v, "hidden"));
+    if gallery.is_none() && hidden.is_none() {
+        return Err(CmdError::Params("give `gallery` and/or `hidden`".into()));
+    }
+    let st = s.doc.styles.get_mut(&id).ok_or_else(|| CmdError::Params(format!("no style `{id}`")))?;
+    if let Some(h) = hidden {
+        st.hidden = h;
+    }
+    if let Some(g) = gallery {
+        st.quick = g;
+        // Showing a style in the gallery unhides it.
+        if g {
+            st.hidden = false;
+        }
+    }
+    let out = json!({"style": st.id, "inGallery": st.quick && !st.hidden && st.kind != StyleKind::Table, "hidden": st.hidden});
+    touch_all(s);
+    Ok(out)
+}
+
+/// Manage Styles' list: paragraph, character, linked and table styles (a linked pair once, as
+/// its paragraph half), sorted as recommended (priority, then name) or alphabetically.
+pub fn manage_list(s: &Session, alphabetical: bool) -> Value {
+    let sheet = &s.doc.styles;
+    let links_back = |a: &Style, b: &str| sheet.get(b).is_some_and(|x| x.linked.as_deref() == Some(a.id.as_str()));
+    let mut list: Vec<&Style> = sheet
+        .styles
+        .iter()
+        .filter(|st| match st.kind {
+            StyleKind::Numbering => false,
+            // The character half of a linked pair is listed as the linked style.
+            StyleKind::Character => {
+                !st.linked.as_deref().is_some_and(|l| sheet.get(l).is_some_and(|x| x.kind == StyleKind::Paragraph) && links_back(st, l))
+            }
+            _ => true,
+        })
+        .collect();
+    if alphabetical {
+        list.sort_by_cached_key(|st| st.name.to_lowercase());
+    } else {
+        list.sort_by_cached_key(|st| (st.priority.unwrap_or(99), st.name.to_lowercase()));
+    }
+    Value::Array(
+        list.into_iter()
+            .map(|st| {
+                let ty = match st.kind {
+                    // Linked: its character half links back (or isn't in the document yet).
+                    StyleKind::Paragraph
+                        if st.linked.as_deref().is_some_and(|l| sheet.get(l).is_none_or(|x| x.kind == StyleKind::Character && links_back(st, l))) =>
+                    {
+                        "linked"
+                    }
+                    StyleKind::Paragraph => "paragraph",
+                    StyleKind::Character => "character",
+                    _ => "table",
+                };
+                json!({
+                    "id": st.id,
+                    "name": st.name,
+                    "type": ty,
+                    "builtIn": st.builtin || (st.kind == StyleKind::Table && super::table_style::is_builtin_table_style(st)),
+                    "inGallery": st.quick && !st.hidden && st.kind != StyleKind::Table,
+                    "hidden": st.hidden,
+                    "basedOn": st.based_on.as_deref().and_then(|b| sheet.get(b)).map(|b| b.name.clone()),
+                    "priority": st.priority,
+                    "format": own_format(st),
+                })
+            })
+            .collect(),
+    )
+}
+
+/// The formatting a style sets itself (not what it inherits), for its description.
+fn own_format(st: &Style) -> Value {
+    let mut f = serde_json::Map::new();
+    let c = &st.chr;
+    if let Some(x) = &c.font {
+        f.insert("font".into(), json!(x));
+    }
+    if let Some(x) = c.size {
+        f.insert("size".into(), json!(x));
+    }
+    for (k, v) in [("bold", c.bold), ("italic", c.italic), ("caps", c.caps), ("smallCaps", c.small_caps)] {
+        if let Some(b) = v {
+            f.insert(k.into(), json!(b));
+        }
+    }
+    if let Some(wordcraft_doc::TextColor::Rgb(rgb)) = c.color {
+        f.insert("color".into(), json!(rgb.hex()));
+    }
+    let pp = &st.para;
+    if let Some(a) = pp.align {
+        f.insert("align".into(), json!(a));
+    }
+    if let Some(x) = pp.space_before {
+        f.insert("spaceBefore".into(), json!(x));
+    }
+    if let Some(x) = pp.space_after {
+        f.insert("spaceAfter".into(), json!(x));
+    }
+    if let Some(x) = pp.indent_left {
+        f.insert("indentLeft".into(), json!(x));
+    }
+    if let Some(LineSpacing::Multiple(m)) = pp.line_spacing {
+        f.insert("lineSpacing".into(), json!(m));
+    }
+    Value::Object(f)
 }
 
 /// Style edits re-lay out every paragraph: the layout cache is keyed on the style sheet, so

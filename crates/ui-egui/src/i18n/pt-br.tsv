@@ -23,7 +23,10 @@
 	Add	Adicionar
 	Add a comment	Adicionar um comentário
 	Add a Table	Adicionar uma tabela
+	Add Object to Selection	Adicionar objeto à seleção
 	Add Space Before Paragraph	Adicionar espaço antes do parágrafo
+	Add space between Asian and Latin text	Adicionar espaço entre texto asiático e latino
+	Add space between Asian text and numbers	Adicionar espaço entre texto asiático e números
 	Add Text	Adicionar texto
 	Add to Dictionary	Adicionar ao dicionário
 	Add to Style Gallery	Adicionar à galeria de estilos
@@ -44,13 +47,17 @@
 	All Caps	Tudo em maiúsculas
 	All caps	Tudo em maiúsculas
 	All Markup	Todas as marcações
+	Allow hanging punctuation	Permitir pontuação pendente
+	Allow Latin text to wrap in the middle of a word	Permitir que o texto latino quebre no meio de uma palavra
 	Alt Text	Texto alternativo
+	Apply Asian line-breaking rules (kinsoku)	Aplicar as regras asiáticas de quebra de linha (kinsoku)
 	Apply Character Style	Aplicar estilo de caractere
 	Apply Style	Aplicar estilo
 	Arrange	Organizar
 	Arrange\nAll	Organizar\ntudo
 	Arrow	Seta
 	Artistic Effects	Efeitos artísticos
+	Asian Typography	Tipografia asiática
 	Author	Autor
 	AutoCorrect Options	Opções de autocorreção
 	AutoFit	Autoajuste
@@ -63,6 +70,10 @@
 	Automatic Table 2 (2 levels)	Tabela automática 2 (2 níveis)
 	AutoSave	Salvamento automático
 	AutoSave saves every change to the file (needs a saved document)	O salvamento automático grava cada alteração no arquivo (requer um documento já salvo)
+	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	O salvamento automático não está disponível no navegador: ele não pode gravar nos seus arquivos. Salvar baixa uma cópia.
+	AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave.	O salvamento automático só mantém arquivos .docx, .odt e .rtf; {name} não guarda toda a formatação. Salve como .docx para ativar o salvamento automático.
+	Save the document to turn on AutoSave	Salve o documento para ativar o salvamento automático
+	Save the document to turn on AutoSave (a file you have only opened isn't rewritten until you save it)	Salve o documento para ativar o salvamento automático (um arquivo que você apenas abriu não é regravado até você salvá-lo)
 	AutoText	Autotexto
 	Backspace	Backspace
 	Banded Columns	Colunas listradas
@@ -83,6 +94,7 @@
 	Border\nPainter	Pincel\nde bordas
 	Borders	Bordas
 	Bottom Border	Borda inferior
+	Bottom Margin	Margem inferior
 	Bottom of Page	Fim da página
 	Bottom:	Inferior:
 	Box	Caixa
@@ -124,6 +136,15 @@
 	Clear	Limpar
 	Clear All Formatting	Limpar toda a formatação
 	Clipboard	Área de transferência
+	Clipboard Pane	Painel da área de transferência
+	Clipboard Items	Itens da área de transferência
+	Paste Clipboard Item	Colar item da área de transferência
+	Paste All	Colar tudo
+	Delete Clipboard Item	Excluir item da área de transferência
+	Clear All	Limpar tudo
+	Click an item to paste it.	Clique em um item para colá-lo.
+	Nothing collected yet. Items you copy or cut appear here.	Nada coletado ainda. Os itens que você copiar ou recortar aparecem aqui.
+	(picture or object)	(imagem ou objeto)
 	Close	Fechar
 	Close Header and Footer	Fechar cabeçalho e rodapé
 	Collapse Selection	Recolher seleção
@@ -142,6 +163,7 @@
 	Compact	Compacto
 	Compare	Comparar
 	Compress Pictures	Compactar imagens
+	Compress punctuation at the start of a line	Comprimir a pontuação no início da linha
 	Continuous	Contínua
 	Convert	Converter
 	Convert Text to Table	Converter texto em tabela
@@ -184,8 +206,14 @@
 	Delete Style	Excluir estilo
 	Delete Table	Excluir tabela
 	Design	Design
+	Edit Comment	Editar comentário
+	Left Margin	Margem esquerda
+	Indents and Spacing	Recuos e espaçamento
+	Line breaking	Quebra de linhas
 	More templates →	Mais modelos →
 	No templates match your search.	Nenhum modelo corresponde à pesquisa.
+	Reopen	Reabrir
+	Right Margin	Margem direita
 	Search for templates	Pesquisar modelos
 	development build	versão de desenvolvimento
 	Diagonal	Diagonal
@@ -740,6 +768,7 @@
 	Three	Três
 	Tight	Estreito
 	Top Border	Borda superior
+	Top Margin	Margem superior
 	Top of Page	Topo da página
 	Top:	Superior:
 	Total Row	Linha de totais
@@ -757,6 +786,7 @@
 	Underline Words Only	Sublinhar somente palavras
 	Undo	Desfazer
 	Undo {action}	Desfazer {action}
+	Ungroup	Desagrupar
 	Up	Para cima
 	Update Field	Atualizar campo
 	Update Index	Atualizar índice
@@ -800,13 +830,13 @@
 	Wrap Text	Quebrar texto
 	Wrap\nText	Quebrar\ntexto
 	Write & Insert Fields	Escrever e inserir campos
+	Write a reply	Escrever uma resposta
 	Zoom	Zoom
 	Zoom In	Ampliar
 	Zoom Out	Reduzir
 	{group} settings	Configurações de {group}
 	{key}+Click to follow link	{key}+clique para seguir o link
-	➕ New comment	➕ Novo comentário
-	📂  Browse…	📂  Procurar…
+	Browse…	Procurar…
 	{words} words	Palavras: {words}
 	{selected} of {words} words	Palavras: {words}; seleção: {selected}
 	Dark page (white text on black)	Página escura (texto branco sobre preto)
@@ -912,9 +942,197 @@
 	Opening print dialog…	Abrindo a caixa de diálogo de impressão…
 	Print failed: {error}	Falha na impressão: {error}
 	Couldn't open {path}: {error}	Não foi possível abrir {path}: {error}
+	Column Selection	Seleção de coluna
+	Style Inspector	Inspetor de estilos
+	Inspect Styles at Selection	Inspecionar estilos na seleção
+	Clear Formatting Level	Limpar nível de formatação
+	Characters	Caracteres
+	Direct formatting	Formatação direta
+	Reset to Normal	Redefinir para Normal
+	Clear Paragraph Formatting	Limpar formatação do parágrafo
+	Clear Character Style	Limpar estilo de caractere
+	Clear Character Formatting	Limpar formatação de caractere
+	Paste Special	Colar especial
+	Paste Special…	Colar especial…
+	Paste as:	Colar como:
+	The clipboard is empty.	A área de transferência está vazia.
+	Formatted Text	Texto formatado
+	Rich Text Format (RTF)	Rich Text Format (RTF)
+	HTML Format	Formato HTML
+	Unformatted Text	Texto sem formatação
+	Result	Resultado
+	Keeps the fonts and formatting of the copied text.	Mantém as fontes e a formatação do texto copiado.
+	Reads the clipboard's rich text and keeps its formatting.	Lê o rich text da área de transferência e mantém a formatação.
+	Reads the clipboard's web content and keeps its formatting.	Lê o conteúdo web da área de transferência e mantém a formatação.
+	Drops all formatting and pastes plain text.	Remove toda a formatação e cola texto simples.
+	Advanced Find	Localização avançada
+	Advanced Find…	Localização avançada…
+	Go To…	Ir para…
+	Reading Highlight	Realçar resultados
+	New Table Style	Novo estilo de tabela
+	Modify Table Style	Modificar estilo de tabela
+	New Table Style…	Novo estilo de tabela…
+	Modify Table Style…	Modificar estilo de tabela…
+	Apply formatting to:	Aplicar formatação a:
+	Whole Table	Tabela inteira
+	Fill color:	Cor de preenchimento:
+	{count} items highlighted	{count} itens realçados
+	{n} pt	{n} pt
+	Not {name}	Sem {name}
+	Level {n}	Nível {n}
+	Body Text	Corpo do texto
+	{n} lines	{n} linhas
+	At least {n}	Pelo menos {n}
+	Exactly {n}	Exatamente {n}
+	Centered	Centralizado
+	Character spacing	Espaçamento entre caracteres
+	Don't add space between paragraphs of the same style	Não adicionar espaço entre parágrafos do mesmo estilo
+	Don't hyphenate	Não hifenizar
+	Double strikethrough	Tachado duplo
+	Drop cap	Capitular
+	First line	Primeira linha
+	Font color	Cor da fonte
+	Highlight	Realce
+	Justified	Justificado
+	Left indent	Recuo à esquerda
+	Line spacing	Espaçamento entre linhas
+	Outline level	Nível de tópicos
+	Raised/lowered	Elevado/rebaixado
+	Right indent	Recuo à direita
+	Scale	Escala
+	Space after	Espaço depois
+	Space before	Espaço antes
+	Suppress line numbers	Suprimir números de linha
+	Underline color	Cor do sublinhado
+	Letters	Cartas
+	E-mail Messages	Mensagens de email
+	Directory	Diretório
+	Normal Word Document	Documento normal
+	If…Then…Else…	Se…Então…Senão…
+	If…Then…Else	Se…Então…Senão
+	Merge Record #	Nº do registro de mesclagem
+	Skip Record If…	Ignorar registro se…
+	Skip Record If	Ignorar registro se
+	Equals:	É igual a:
+	Then insert:	Então inserir:
+	Otherwise insert:	Senão, inserir:
+	Courtesy Title	Pronome de tratamento
+	First Name	Nome
+	Last Name	Sobrenome
+	Company	Empresa
+	Address	Endereço
+	City	Cidade
+	State	Estado
+	Postal Code	CEP
+	Country	País
+	(not matched)	(sem correspondência)
+	Leave a recipient out of the merge when a field has this value.	Deixar um destinatário fora da mesclagem quando um campo tiver este valor.
+	Insert one text or another, depending on a field's value.	Inserir um texto ou outro, conforme o valor de um campo.
+	Select recipients first to match their fields.	Selecione os destinatários primeiro para corresponder os campos.
+	The recipient-list field that fills each part of an address block and greeting line.	O campo da lista de destinatários que preenche cada parte do bloco de endereço e da linha de saudação.
+	No errors found: every merge field is in the recipient list.	Nenhum erro encontrado: todos os campos de mesclagem estão na lista de destinatários.
+	These merge fields aren't in the recipient list:	Estes campos de mesclagem não estão na lista de destinatários:
+	Add at least one field.	Adicione pelo menos um campo.
+	Add Field	Adicionar campo
+	Every field needs a name.	Todo campo precisa de um nome.
+	Field name	Nome do campo
+	Field names must be different.	Os nomes dos campos devem ser diferentes.
+	Fields:	Campos:
+	Field:	Campo:
+	Find:	Localizar:
+	New Entry	Nova entrada
+	Recipient List	Lista de destinatários
+	Recipients: {count}	Destinatários: {count}
+	Remove field	Remover campo
+	Remove recipient	Remover destinatário
+	Select recipients first to choose from their fields.	Selecione os destinatários primeiro para escolher entre os campos.
+	Type a New List…	Digitar uma nova lista…
+	Type at least one recipient.	Digite pelo menos um destinatário.
+	Type the recipients, or load them from a file.	Digite os destinatários ou carregue-os de um arquivo.
+	Use an Existing List…	Usar uma lista existente…
 	Interface theme:	Tema da interface:
 	Interface\nTheme	Tema da\ninterface
 	Interface Theme	Tema da interface
 	Light	Claro
 	Dark	Escuro
 	Use system setting	Usar a configuração do sistema
+	A file dialog is already open.	Já há uma caixa de diálogo de arquivo aberta.
+	Height:	Altura:
+	Width:	Largura:
+	Row	Linha
+	Cell	Célula
+	Preferred width:	Largura preferencial:
+	Alignment:	Alinhamento:
+	Indent from left:	Recuo à esquerda:
+	Specify height:	Especificar altura:
+	Exactly	Exatamente
+	At least	Pelo menos
+	Allow row to break across pages	Permitir quebra de linha entre páginas
+	Repeat as header row on each page	Repetir como linha de cabeçalho em cada página
+	Vertical alignment:	Alinhamento vertical:
+	Top	Superior
+	Bottom	Inferior
+	Alt text	Texto alternativo
+	Alt:	Alt.:
+	W:	L:
+	H:	A:
+	Reset	Redefinir
+	Reset Crop	Redefinir corte
+	Insert a new equation (Alt+=)	Inserir uma nova equação (Alt+=)
+	Leave the equation (Esc)	Sair da equação (Esc)
+	Preview	Visualizar
+	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft
+	Shape Effects	Efeitos de forma
+	Glow	Brilho
+	Soft Edges	Bordas suaves
+	No Shadow	Sem sombra
+	No Glow	Sem brilho
+	No Soft Edges	Sem bordas suaves
+	Glow Colors	Cores do brilho
+	Weight	Espessura
+	Shadow, glow and soft edges	Sombra, brilho e bordas suaves
+	Offset: Bottom Right	Deslocamento: inferior direito
+	Offset: Bottom	Deslocamento: inferior
+	Offset: Bottom Left	Deslocamento: inferior esquerdo
+	Offset: Right	Deslocamento: direita
+	Offset: Center	Deslocamento: centro
+	Offset: Left	Deslocamento: esquerda
+	Offset: Top Right	Deslocamento: superior direito
+	Offset: Top	Deslocamento: superior
+	Offset: Top Left	Deslocamento: superior esquerdo
+	Manage Styles	Gerenciar estilos
+	Show or Hide Style	Mostrar ou ocultar estilo
+	Manage Styles…	Gerenciar estilos…
+	Sort order:	Ordem:
+	As Recommended	Recomendada
+	Alphabetical	Alfabética
+	Font: {font}	Fonte: {font}
+	{size} pt	{size} pt
+	Color: {color}	Cor: {color}
+	Space before: {pt} pt	Espaço antes: {pt} pt
+	Space after: {pt} pt	Espaço depois: {pt} pt
+	Based on: {style}	Baseado em: {style}
+	Paragraph style	Estilo de parágrafo
+	Character style	Estilo de caractere
+	Linked style (paragraph and character)	Estilo vinculado (parágrafo e caractere)
+	Table style	Estilo de tabela
+	Built-in style	Estilo integrado
+	Show in the Styles gallery	Mostrar na galeria de estilos
+	Hide from style lists	Ocultar das listas de estilos
+	Built-in styles can't be deleted.	Estilos integrados não podem ser excluídos.
+	Delete Table Style	Excluir estilo de tabela
+	Password	Senha
+	Password:	Senha:
+	Confirm password:	Confirmar senha:
+	Encrypt with Password…	Criptografar com senha…
+	Change Password…	Alterar senha…
+	Remove Password	Remover senha
+	A password is required to open this document.	É necessária uma senha para abrir este documento.
+	Anyone can open this document. Encrypt it with a password to keep it private.	Qualquer pessoa pode abrir este documento. Criptografe-o com uma senha para mantê-lo privado.
+	Anyone who opens the document will need this password.	Quem abrir o documento precisará desta senha.
+	{name} is protected with a password.	{name} está protegido por senha.
+	That password isn't right. Check it (passwords are case-sensitive) and try again.	A senha está incorreta. Verifique-a (as senhas diferenciam maiúsculas de minúsculas) e tente novamente.
+	The document will be saved with a password. Save it to protect it.	O documento será salvo com senha. Salve-o para protegê-lo.
+	The password is removed. Save the document to keep the change.	A senha foi removida. Salve o documento para manter a alteração.
+	The passwords don't match.	As senhas não coincidem.
+	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	Guarde a senha em um lugar seguro: sem ela, ninguém, nem o WordCraft, consegue abrir o documento. Deixe as duas caixas vazias para remover a senha.

@@ -74,7 +74,7 @@ Stop Chat revokes every member at once and closes the port that Start Chat opene
 | `engine.execute` | `command`, `params` | the command's result (any id from `engine.commands`, including UI commands `ui.tab`, `ui.dialog`, `ui.backstage`, `ui.zotero.*` (see `docs/zotero.md`), `ui.language` (`{"value": "auto"|"en"|"zh-hans"|"zh-hant"|"ja"|"pt-br"|"es"|"uk"}`), `ui.theme` (`{"value": "system"|"light"|"dark"}`; `system` follows the OS appearance, light when it reports none)…) |
 | `engine.commands` | — | every command: id, label, location, shortcut, params, enabled |
 | `document.inspect` | `text?` | blocks (text, style, runs, lists, tables), parts, sections, selection, pages |
-| `ui.inspect` | — | UI state, view, dialog, window size, page rects on screen, caret, perf |
+| `ui.inspect` | — | UI state, view, dialog, window size, page rects on screen, caret, comment balloons (`balloons`: id + screen rect; `balloon`: the selected one), perf |
 | `ui.click` | `x`, `y`, `button?`, `count?`, `shift?`, `cmd?`, `alt?` | real pointer input at window coordinates |
 | `ui.clickText` | `page` (0-based), `x`, `y` (points from the page's top-left), `count?` | click inside a page |
 | `ui.move` / `ui.drag` | `x`,`y` / `x`,`y`,`toX`,`toY`,`steps?` | pointer move / drag |

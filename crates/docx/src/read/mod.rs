@@ -1,5 +1,8 @@
 //! DOCX → [`Document`].
 
+mod chart;
+mod diagram;
+mod drawing_color;
 mod math;
 mod props;
 mod story;
@@ -7,6 +10,7 @@ mod story;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
+use wordcraft_doc::graphic::{Graphic, GraphicKind};
 use wordcraft_doc::numbering::{AbstractNum, Level, LevelSuffix, Num};
 use wordcraft_doc::para::NoteKind;
 use wordcraft_doc::para::OBJ;
@@ -16,7 +20,7 @@ use wordcraft_doc::styles::{Style, StyleKind, StyleSheet, TableStyleParts};
 use wordcraft_doc::{Block, Blocks, Comment, Document, InlineObject, PartKind, Revision, RevisionKind};
 
 use crate::DocxError;
-use crate::package::{ContentTypes, MAX_VBA_RELATED, Package, Rels, VBA_PROJECT_PART, VBA_RELATED, rt};
+use crate::package::{ContentTypes, MAX_VBA_RELATED, Package, Rels, VBA_PROJECT_PART, VBA_RELATED, rel_is, rt};
 use crate::units::{flag, int, on_off, tw, u32_of};
 use crate::xml::El;
 pub(crate) use props::PropCtx;
@@ -24,6 +28,9 @@ use story::StoryCtx;
 
 /// Most parts (headers, notes, comments, text boxes) we create from one file.
 const MAX_PARTS: usize = 50_000;
+/// Most graphic work (items plus path segments, see `story::graphic_work`) built for one file's
+/// charts and diagrams; later ones are left empty.
+const MAX_GRAPHIC_WORK: usize = 2_000_000;
 
 pub(crate) struct Reader<'p> {
     pkg: &'p Package,
@@ -40,10 +47,32 @@ pub(crate) struct Reader<'p> {
     pub comment_map: HashMap<String, u32>,
     pub comments_ended: HashSet<u32>,
     pub bookmarks: HashMap<String, String>,
+    /// Chart and diagram parts by path, parsed once.
+    graphic_parts: HashMap<String, Option<Arc<El>>>,
+    /// Charts and diagrams by (kind, part path, width bits, height bits), built once.
+    graphics: HashMap<(GraphicKind, String, u32, u32), Arc<Graphic>>,
+    /// Graphic work left before charts and diagrams are left empty (see [`MAX_GRAPHIC_WORK`]).
+    graphic_budget: usize,
+}
+
+/// The package path that internal relationship `id` points at, if it has type `kind` (an `rt`
+/// constant): a crafted id can't make a chart of some other, possibly huge, part.
+fn part_of(rels: &Rels, id: &str, kind: &str) -> Option<String> {
+    rels.by_id(id).filter(|r| !r.external && rel_is(&r.kind, kind)).map(|r| r.target.clone())
 }
 
 /// Read a `.docx` package.
 pub fn read(bytes: &[u8]) -> Result<Document, DocxError> {
+    // A password-protected document is a compound file, not a zip: say so rather than failing
+    // as a broken zip (`read_with_password` opens it).
+    if crate::is_encrypted(bytes) {
+        return crate::read_with_password(bytes, None);
+    }
+    read_package(bytes)
+}
+
+/// [`read`] for bytes known not to be an encrypted package.
+pub(crate) fn read_package(bytes: &[u8]) -> Result<Document, DocxError> {
     let pkg = Package::open(bytes)?;
     let root_rels = pkg.rels("");
     let main = root_rels.by_type(rt::OFFICE_DOC).filter(|r| !r.external).map(|r| r.target.clone()).unwrap_or_else(|| "word/document.xml".to_string());
@@ -69,6 +98,9 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocxError> {
         comment_map: HashMap::new(),
         comments_ended: HashSet::new(),
         bookmarks: HashMap::new(),
+        graphic_parts: HashMap::new(),
+        graphics: HashMap::new(),
+        graphic_budget: MAX_GRAPHIC_WORK,
     };
     r.pc.major_font = r.doc.settings.major_font.clone();
     r.pc.minor_font = r.doc.settings.minor_font.clone();
@@ -302,6 +334,16 @@ impl Reader<'_> {
         Some(key)
     }
 
+    /// A chart or diagram part, parsed once however often it's referenced (`None` when unreadable).
+    fn graphic_part(&mut self, path: &str) -> Option<Arc<El>> {
+        if let Some(p) = self.graphic_parts.get(path) {
+            return p.clone();
+        }
+        let p = self.xml(path).ok().flatten().map(Arc::new);
+        self.graphic_parts.insert(path.to_string(), p.clone());
+        p
+    }
+
     pub fn load_header_footer(&mut self, path: &str, footer: bool) -> Option<u32> {
         if let Some(id) = self.hf_by_path.get(path) {
             return Some(*id);
@@ -444,9 +486,11 @@ impl Reader<'_> {
             }
             t.fill = tp.child("w:shd").and_then(props::shd_fill);
             t.cell_margins = tp.child("w:tblCellMar").map(props::margins);
+            t.band_size = tp.child_val("w:tblStyleRowBandSize").and_then(u32_of).filter(|n| *n > 0).map(|n| n.min(1000));
         }
-        for c in s.children("w:tblStylePr") {
+        for c in s.children("w:tblStylePr").take(64) {
             let fill = c.child("w:tcPr").and_then(|p| p.child("w:shd")).and_then(props::shd_fill);
+            let cell_borders = c.child("w:tcPr").and_then(|p| p.child("w:tcBorders")).map(props::borders);
             let chr = c.child("w:rPr").map(|r| self.pc.rpr(r)).unwrap_or_default();
             match c.attr("w:type") {
                 Some("wholeTable") => {
@@ -464,12 +508,35 @@ impl Reader<'_> {
                 Some("firstRow") => {
                     t.header_fill = fill;
                     t.header_chr = chr;
+                    t.header_borders = cell_borders;
                 }
-                Some("band1Horz") => t.band_fill = fill,
-                Some("firstCol") => t.first_col_chr = chr,
+                Some("band1Horz") => {
+                    t.band_fill = fill;
+                    t.band_chr = chr;
+                    t.band_borders = cell_borders;
+                }
+                Some("firstCol") => {
+                    t.first_col_chr = chr;
+                    t.first_col_fill = fill;
+                    t.first_col_borders = cell_borders;
+                }
+                Some("lastCol") => {
+                    t.last_col_chr = chr;
+                    t.last_col_fill = fill;
+                    t.last_col_borders = cell_borders;
+                }
                 Some("lastRow") => {
                     t.total_chr = chr;
-                    t.total_border_top = c.child("w:tcPr").and_then(|p| p.child("w:tcBorders")).and_then(|b| b.child("w:top")).map(props::border);
+                    t.total_fill = fill;
+                    // The top rule is kept on its own (as built-in styles have it); the other edges
+                    // are the region's borders.
+                    t.total_border_top = cell_borders.and_then(|b| b.top);
+                    t.total_borders = cell_borders.map(|b| wordcraft_doc::props::Borders { top: None, ..b }).filter(|b| *b != Default::default());
+                }
+                Some("band1Vert") => {
+                    t.col_band_fill = fill;
+                    t.col_band_chr = chr;
+                    t.col_band_borders = cell_borders;
                 }
                 _ => {}
             }
@@ -588,6 +655,13 @@ impl Reader<'_> {
                     }
                 }
                 "w:evenAndOddHeaders" => s.even_odd_headers = on_off(k),
+                "w:drawingGridHorizontalSpacing" | "w:drawingGridVerticalSpacing" => {
+                    if let Some(v) = tw(k, "w:val").filter(|v| *v > 0.0) {
+                        let v = v.clamp(0.5, 1584.0);
+                        if k.name == "w:drawingGridHorizontalSpacing" { s.grid_h = v } else { s.grid_v = v }
+                    }
+                }
+                "m:mathPr" => s.math = Some(math::read_math_pr(k)),
                 "w:mirrorMargins" => s.mirror_margins = on_off(k),
                 "w:autoHyphenation" => s.auto_hyphenation = on_off(k),
                 "w:footnotePr" => {

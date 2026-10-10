@@ -364,7 +364,9 @@ mod tests {
         let hub = a.session.chat.as_ref().unwrap().hub().clone();
         hub.join(inv["code"].as_str().unwrap()).unwrap();
         for i in 0..600 {
-            let _ = hub.post_agent("@claude", &format!("line {i} \u{202e}rtl ✅ {}", "x".repeat(i)));
+            // Agent text, not interface text: the emoji is escaped so the glyph check in theme.rs
+            // (interface symbols) does not count it.
+            let _ = hub.post_agent("@claude", &format!("line {i} \u{202e}rtl \u{2705} {}", "x".repeat(i)));
             let _ = hub.post_owner("go on");
         }
         frame(&mut a);

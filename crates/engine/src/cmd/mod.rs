@@ -3,20 +3,24 @@
 pub mod caret;
 pub mod chat;
 pub mod citations;
+pub mod column;
 pub mod design;
 pub mod edit;
 pub mod equation;
 pub mod file;
 pub mod format;
 pub mod insert;
+pub mod inspector;
 pub mod mailings;
 pub mod objects;
 pub mod page;
 pub mod para;
+pub mod paste;
 pub mod references;
 pub mod review;
 pub mod speech;
 pub mod table;
+pub mod table_style;
 pub mod text;
 pub mod tools;
 pub mod view;
@@ -32,14 +36,18 @@ pub fn registry() -> Registry {
     let mut v = Vec::new();
     v.extend(text::specs());
     v.extend(caret::specs());
+    v.extend(column::specs());
     v.extend(edit::specs());
+    v.extend(paste::specs());
     v.extend(format::specs());
     v.extend(para::specs());
+    v.extend(inspector::specs());
     v.extend(view::specs());
     v.extend(insert::specs());
     v.extend(equation::specs());
     v.extend(page::specs());
     v.extend(table::specs());
+    v.extend(table_style::specs());
     v.extend(review::specs());
     v.extend(chat::specs());
     v.extend(file::specs());
@@ -118,7 +126,7 @@ pub fn join_next_para(s: &mut Session, story: StoryRef, path: &wordcraft_doc::Pa
 }
 
 /// Tracked deletion: own insertions are removed, other text is marked deleted.
-fn track_delete(s: &mut Session, a: &Pos, b: &Pos) -> Result<Pos, CmdError> {
+pub(crate) fn track_delete(s: &mut Session, a: &Pos, b: &Pos) -> Result<Pos, CmdError> {
     let rid = new_revision(s, RevisionKind::Delete);
     let author = s.author.clone();
     // Remove text this author inserted (it never existed for the reader); mark the rest.

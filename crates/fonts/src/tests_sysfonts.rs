@@ -171,8 +171,76 @@ fn fallback_lookups_are_remembered_until_fonts_load() {
 #[test]
 fn the_scan_reads_names_without_loading_the_font() {
     let dir = font_dir("names");
-    assert_eq!(file_face_names(&dir.join("Sysfont-Regular.ttf")), [(FAMILY.to_string(), "Regular".to_string())]);
+    assert_eq!(file_face_names(&dir.join("Sysfont-Regular.ttf")), [(FAMILY.to_string(), "Regular".to_string(), FAMILY.to_string())]);
     assert!(file_face_names(&dir.join("damaged.ttf")).is_empty());
     assert!(file_face_names(&dir.join("readme.txt")).is_empty());
     assert!(file_face_names(&dir.join("missing.ttf")).is_empty());
+}
+
+#[test]
+fn installed_weights_are_found_by_their_legacy_family_name() {
+    // Semibold is not one of Regular, Bold and Italic: the font names it "Sysfont Sans3 Semibold"
+    // (name ID 1), the way Word lists and stores it (#219).
+    let dir = font_dir("legacy");
+    std::fs::write(dir.join("Sysfont-Semibold.ttf"), renamed("SourceSans3-Semibold.ttf")).unwrap();
+    let semibold = format!("{FAMILY} Semibold");
+    assert_eq!(file_face_names(&dir.join("Sysfont-Semibold.ttf")), [(FAMILY.to_string(), "Semibold".to_string(), semibold.clone())]);
+    let db = || FontDb::with_font_dirs(vec![dir.clone()]);
+    assert!(has(&db().families(), FAMILY) && has(&db().families(), &semibold));
+    assert!(db().has_family(&semibold.to_uppercase()));
+    assert_eq!(db().styles(&semibold), ["Semibold"]);
+    assert_eq!(db().styles(FAMILY), ["Regular", "Semibold", "Bold"]);
+    // The first lookup, by the legacy name, finds the face and loads the whole family with it.
+    let db = db();
+    let f = db.face(&semibold, "Regular");
+    assert_eq!((f.family.as_str(), f.style.as_str(), f.legacy_family.as_str()), (FAMILY, "Semibold", semibold.as_str()));
+    assert_eq!(db.face(FAMILY, "Regular").style, "Regular");
+    assert_eq!(db.face(FAMILY, "Bold").style, "Bold");
+}
+
+#[test]
+fn the_scan_lists_a_variable_fonts_named_instances_as_loading_it_does() {
+    // Uses an installed variable font when there is one.
+    let Some(path) = [
+        "/System/Library/Fonts/Supplemental/Skia.ttf",
+        "/System/Library/Fonts/NewYork.ttf",
+        "/usr/share/fonts/cantarell/Cantarell-VF.otf",
+        "/usr/share/fonts/Adwaita/AdwaitaSans-Regular.ttf",
+        "C:\\Windows\\Fonts\\bahnschrift.ttf",
+    ]
+    .iter()
+    .map(Path::new)
+    .find(|p| p.exists()) else {
+        eprintln!("no variable font installed: nothing to check");
+        return;
+    };
+    let data = std::fs::read(path).unwrap();
+    let loaded: Vec<(String, String, String)> = enumerate_faces(&data).into_iter().map(|f| (f.family, f.style, f.legacy)).collect();
+    assert_eq!(file_face_names(path), loaded);
+    if loaded.len() > 1 {
+        // Instances other than Regular, Bold and Italic have names of their own.
+        assert!(loaded.iter().any(|(family, _, legacy)| family != legacy), "{loaded:?}");
+    }
+}
+
+#[test]
+fn fallback_cache_is_dropped_when_a_face_loads_by_its_legacy_family_name() {
+    // #121 with #219: a lookup by a legacy family name ("Sysfont Sans3 Semibold") loads faces,
+    // so fallbacks remembered before it are searched again.
+    let dir = font_dir("fallback-legacy");
+    std::fs::write(dir.join("Sysfont-Semibold.ttf"), renamed("SourceSans3-Semibold.ttf")).unwrap();
+    let db = FontDb::with_font_dirs(vec![dir]);
+    db.set_system_fallback(false);
+    let latin = db.face(FALLBACK_FAMILY, "Regular");
+    let thai = 'ก';
+    assert!(db.fallback_for(thai, latin.id()).is_none());
+    let before = db.read_faces().len();
+    let semibold = format!("{FAMILY} Semibold");
+    let f = db.face(&semibold, "Regular");
+    assert_eq!((f.style.as_str(), f.legacy_family.as_str()), ("Semibold", semibold.as_str()));
+    assert!(db.read_faces().len() > before, "the installed family loaded");
+    assert!(db.fallback_for('A', f.id()).is_some_and(|g| g.id() != f.id()));
+    let cache = db.fallbacks.read().unwrap();
+    assert_eq!(cache.faces, db.read_faces().len());
+    assert!(!cache.map.contains_key(&(thai, latin.id())), "answers from before the load are dropped");
 }

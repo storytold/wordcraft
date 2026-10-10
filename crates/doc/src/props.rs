@@ -622,13 +622,34 @@ pub struct ParaProps {
     /// Drop cap: lines to drop (0 = none) — applies to the first character(s).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub drop_cap: Option<u8>,
+    /// Asian typography (`w:kinsoku`): East Asian line-breaking rules — no line starts with
+    /// closing punctuation such as 、。」 or ends with opening punctuation such as 「（.
+    /// Unset = on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kinsoku: Option<bool>,
+    /// `w:wordWrap`: Latin words wrap whole; `false` lets them break at any character (Word's
+    /// "Allow Latin text to wrap in the middle of a word"). Unset = on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub word_wrap: Option<bool>,
+    /// `w:overflowPunct`: punctuation may hang past the line end. Unset = on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overflow_punct: Option<bool>,
+    /// `w:topLinePunct`: compress punctuation at the start of a line. Unset = off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_line_punct: Option<bool>,
+    /// `w:autoSpaceDE`: automatic space between Asian and Latin text. Unset = on.
+    #[serde(rename = "autoSpaceDE", skip_serializing_if = "Option::is_none")]
+    pub auto_space_de: Option<bool>,
+    /// `w:autoSpaceDN`: automatic space between Asian text and numbers. Unset = on.
+    #[serde(rename = "autoSpaceDN", skip_serializing_if = "Option::is_none")]
+    pub auto_space_dn: Option<bool>,
 }
 
 impl ParaProps {
     pub fn overlay(&mut self, patch: &ParaProps) {
         overlay_fields!(self, patch; style, align, indent_left, indent_right, indent_first, space_before, space_after, line_spacing,
             contextual_spacing, keep_next, keep_lines, page_break_before, widow_control, outline_level, numbering, tabs, shading, borders,
-            suppress_hyphens, suppress_line_numbers, bidi, drop_cap);
+            suppress_hyphens, suppress_line_numbers, bidi, drop_cap, kinsoku, word_wrap, overflow_punct, top_line_punct, auto_space_de, auto_space_dn);
     }
     pub fn overlaid(mut self, patch: &ParaProps) -> ParaProps {
         self.overlay(patch);
@@ -646,6 +667,50 @@ pub enum VAlign {
     Top,
     Center,
     Bottom,
+}
+
+/// Which way a table cell's text runs (`w:textDirection`, ECMA-376 §17.4.72).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum TextDirection {
+    /// Left to right, lines stacking downwards.
+    #[default]
+    Horizontal,
+    /// Turned 90° clockwise: lines read top to bottom and stack from right to left (`tbRl`).
+    Down,
+    /// Turned 90° counter-clockwise: lines read bottom to top and stack from left to right (`btLr`).
+    Up,
+}
+
+impl TextDirection {
+    /// The direction an OOXML `ST_TextDirection` value names (transitional and strict names).
+    /// The East Asian vertical layouts turn like `Down`; unknown values are horizontal.
+    pub fn from_ooxml(v: &str) -> TextDirection {
+        match v {
+            "tbRl" | "tbRlV" | "tbLrV" | "rl" | "rlV" | "lrV" => TextDirection::Down,
+            "btLr" | "lr" => TextDirection::Up,
+            _ => TextDirection::Horizontal,
+        }
+    }
+    /// The transitional OOXML name.
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            TextDirection::Horizontal => "lrTb",
+            TextDirection::Down => "tbRl",
+            TextDirection::Up => "btLr",
+        }
+    }
+    /// Word's Text Direction button: horizontal → down → up → horizontal.
+    pub fn next(self) -> TextDirection {
+        match self {
+            TextDirection::Horizontal => TextDirection::Down,
+            TextDirection::Down => TextDirection::Up,
+            TextDirection::Up => TextDirection::Horizontal,
+        }
+    }
+    pub fn is_turned(self) -> bool {
+        self != TextDirection::Horizontal
+    }
 }
 
 /// Table-wide properties.
@@ -757,6 +822,9 @@ pub enum VMerge {
 pub struct CellProps {
     /// Preferred width, points.
     pub width: Option<f32>,
+    /// Preferred width as a percentage of the table's (`w:tcW w:type="pct"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width_pct: Option<f32>,
     /// Number of grid columns spanned (1 = no horizontal merge).
     pub span: u32,
     pub vmerge: VMerge,
@@ -765,8 +833,8 @@ pub struct CellProps {
     pub valign: VAlign,
     /// Cell margins override (top, left, bottom, right), points.
     pub margins: Option<[f32; 4]>,
-    /// Text direction: false = horizontal, true = rotated (top-to-bottom).
-    pub vertical_text: bool,
+    /// Which way the cell's text runs.
+    pub text_direction: TextDirection,
     pub no_wrap: bool,
 }
 
@@ -816,6 +884,23 @@ mod tests {
         for h in Highlight::ALL {
             assert_eq!(Highlight::from_ooxml(h.ooxml()), h);
         }
+    }
+
+    #[test]
+    fn text_direction_names() {
+        let mut d = TextDirection::Horizontal;
+        for _ in 0..3 {
+            assert_eq!(TextDirection::from_ooxml(d.ooxml()), d);
+            d = d.next();
+        }
+        assert_eq!(d, TextDirection::Horizontal, "the button cycles through three directions");
+        // Strict names, East Asian vertical layouts and junk.
+        assert_eq!(TextDirection::from_ooxml("rl"), TextDirection::Down);
+        assert_eq!(TextDirection::from_ooxml("lr"), TextDirection::Up);
+        assert_eq!(TextDirection::from_ooxml("tbRlV"), TextDirection::Down);
+        assert_eq!(TextDirection::from_ooxml("tb"), TextDirection::Horizontal);
+        assert_eq!(TextDirection::from_ooxml("lrTbV"), TextDirection::Horizontal);
+        assert_eq!(TextDirection::from_ooxml("é?"), TextDirection::Horizontal);
     }
 
     #[test]

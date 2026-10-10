@@ -39,6 +39,14 @@ pub fn selected(app: &WordApp) -> Option<(Pos, &InlineObject)> {
     wordcraft_engine::cmd::objects::object_selection(&app.session).filter(|(p, _)| p.story == StoryRef::Body)
 }
 
+/// Whether the object under `hit` keeps its place and size: charts and diagrams can be selected
+/// and deleted, not moved or resized (they aren't written back on save yet), so they get no
+/// handles, no move cursor and no drag.
+fn fixed(app: &WordApp, hit: &ObjectHit) -> bool {
+    let pos = hit.pos();
+    matches!(app.session.doc.para_at(&pos).and_then(|p| p.object_at(pos.off)), Some(InlineObject::Graphic { .. }))
+}
+
 /// The story of the selected text box.
 fn selected_text_box(app: &WordApp) -> Option<u32> {
     match selected(app)? {
@@ -86,6 +94,12 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         return false;
     }
     let Some((object, grab)) = grab_at(app, layout, pages, scale, at) else { return false };
+    // Shift/Ctrl+click adds an object to the selected ones (or takes it out), for Group.
+    let adding = ui.input(|i| i.modifiers.shift || i.modifiers.command);
+    if pressed && adding && grab == Grab::Move && selected(app).is_some() {
+        let _ = app.run("select.addObject", json!({"pos": object.pos()}));
+        return true;
+    }
     if pressed {
         let pos = object.pos();
         let end = Pos { off: pos.off + OBJ.len_utf8(), ..pos.clone() };
@@ -94,8 +108,8 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
             Some((_, o)) => (wordcraft_engine::cmd::objects::min_size(o), matches!(o, InlineObject::Image { .. })),
             None => return true,
         };
-        // Objects in table cells can be selected and resized, not moved.
-        if grab != Grab::Move || movable(&object) {
+        // Objects in table cells can be selected and resized, not moved; charts neither.
+        if !fixed(app, &object) && (grab != Grab::Move || movable(&object)) {
             app.canvas.obj_drag = Some(ObjectDrag { drag: Drag::new(grab, object.page, object.rect, at), object, min, picture });
         }
     }
@@ -104,7 +118,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
 
 /// What a press at `at` would grab: a handle of the shown frame, else an object.
 fn grab_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Pos2) -> Option<(ObjectHit, Grab)> {
-    let handle = active(app, layout).filter(|(o, _)| o.story == StoryRef::Body).and_then(|(o, _)| {
+    let handle = active(app, layout).filter(|(o, _)| o.story == StoryRef::Body && !fixed(app, o)).and_then(|(o, _)| {
         let f = screen(pages, scale, o.page, o.rect)?;
         frame::handle_at(f, at).map(|h| (o, Grab::Resize(h)))
     });
@@ -153,11 +167,17 @@ pub fn paint(app: &WordApp, painter: &Painter, t: &Tokens, layout: &DocLayout, p
         frame::paint(painter, t, to, false, false);
         return;
     }
+    // The others selected along with it (Shift+click): their outlines.
+    for p in &app.session.also_selected {
+        if let Some(f) = layout.object(p, app.session.page_hint).and_then(|o| screen(pages, scale, o.page, o.rect)) {
+            frame::paint(painter, t, f, false, false);
+        }
+    }
     if let Some((o, editing)) = active(app, layout)
         && let Some(f) = screen(pages, scale, o.page, o.rect)
     {
-        // Handles where it can be resized (body objects).
-        frame::paint(painter, t, f, editing, o.story == StoryRef::Body);
+        // Handles where it can be resized (body objects, not charts): else a plain frame.
+        frame::paint(painter, t, f, editing, o.story == StoryRef::Body && !fixed(app, &o));
     }
 }
 
@@ -169,7 +189,7 @@ pub fn cursor(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at:
     if crate::canvas::editing_header_footer(app, layout) {
         return None;
     }
-    grab_at(app, layout, pages, scale, at).map(|(_, g)| g.cursor())
+    grab_at(app, layout, pages, scale, at).map(|(o, g)| if fixed(app, &o) { egui::CursorIcon::Default } else { g.cursor() })
 }
 
 /// Keys for a selected object: arrows nudge a floating one; typing or Enter goes into a text box.
@@ -196,4 +216,43 @@ pub fn enter_text_box(app: &mut WordApp) -> bool {
     let Some(id) = selected_text_box(app) else { return false };
     let end = app.session.doc.end_of(StoryRef::Part(id));
     app.run("caret.set", json!({"pos": end})).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use wordcraft_doc::para::{InlineObject, ShapeKind};
+    use wordcraft_doc::{Document, Pos};
+
+    use super::*;
+
+    /// An app whose first paragraph holds `obj`, and where it's laid out.
+    fn app_with(obj: InlineObject) -> (WordApp, ObjectHit) {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(Document::new()), crate::Services::default());
+        app.session.doc.insert_object(&Pos::body(0, 0), obj, &Default::default()).unwrap();
+        let hit = app.session.layout().object(&Pos::body(0, 0), 0).expect("laid out");
+        (app, hit)
+    }
+
+    #[test]
+    fn charts_get_no_handles_or_drag_but_shapes_do() {
+        let chart =
+            InlineObject::Graphic { w: 200.0, h: 100.0, alt: String::new(), float: Default::default(), graphic: Arc::new(Default::default()) };
+        let (app, hit) = app_with(chart);
+        assert!(fixed(&app, &hit));
+        let shape = InlineObject::Shape {
+            kind: ShapeKind::Rectangle,
+            w: 50.0,
+            h: 50.0,
+            fill: None,
+            stroke: None,
+            stroke_width: 1.0,
+            float: Default::default(),
+            story: None,
+            effects: Default::default(),
+        };
+        let (app, hit) = app_with(shape);
+        assert!(!fixed(&app, &hit));
+    }
 }

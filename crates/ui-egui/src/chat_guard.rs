@@ -645,6 +645,12 @@ fn mask_props(x: &NProps, m: Mask) -> NProps {
         suppress_line_numbers,
         bidi,
         drop_cap,
+        kinsoku,
+        word_wrap,
+        overflow_punct,
+        top_line_punct,
+        auto_space_de,
+        auto_space_dn,
     } = &x.props;
     let props = ParaProps {
         style: None,
@@ -669,6 +675,13 @@ fn mask_props(x: &NProps, m: Mask) -> NProps {
         suppress_line_numbers: *suppress_line_numbers,
         bidi: *bidi,
         drop_cap: *drop_cap,
+        // Asian Typography (Paragraph › Asian Typography) is the owner's, like direction.
+        kinsoku: *kinsoku,
+        word_wrap: *word_wrap,
+        overflow_punct: *overflow_punct,
+        top_line_punct: *top_line_punct,
+        auto_space_de: *auto_space_de,
+        auto_space_dn: *auto_space_dn,
     };
     NProps { props, list: x.list }
 }

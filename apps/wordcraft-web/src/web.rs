@@ -10,6 +10,7 @@ use wordcraft_ui_egui::{Inbox, Services, WordApp};
 
 const DOC_EXTS: &[&str] = &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "rtf", "txt", "md", "html", "htm", "tex", "json"];
 const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp"];
+const RECIPIENT_EXTS: &[&str] = &["csv", "tsv", "txt"];
 const CANVAS_ID: &str = "wordcraft_canvas";
 const LOADING_ID: &str = "wordcraft_loading";
 
@@ -43,6 +44,9 @@ pub fn start() {
                         log::info!("wordcraft-web: wgpu backend {:?}", rs.adapter.get_info().backend);
                     }
                     let inbox: Inbox = Inbox::default();
+                    if let Err(e) = listen_for_pasted_pictures(inbox.clone(), cc.egui_ctx.clone()) {
+                        log::error!("pasting pictures is unavailable: {e}");
+                    }
                     let doc = if query().contains("sample") { wordcraft_engine::sample::sample_document() } else { wordcraft_doc::Document::new() };
                     let mut app = WordApp::new(Session::new(doc), services(inbox.clone(), cc.egui_ctx.clone(), dirty));
                     app.autosave = false;
@@ -99,6 +103,52 @@ impl eframe::App for WebShell {
     }
 }
 
+/// Largest picture pasted from the browser's clipboard (as `insert.picture` allows).
+const MAX_PASTED_BYTES: f64 = (200u32 << 20) as f64;
+/// Most pictures one paste inserts.
+const MAX_PASTED_PICTURES: u32 = 20;
+
+/// Pasting a picture (#45): eframe's paste handler only reads text, so a clipboard holding just
+/// pictures (a screenshot, a browser's Copy Image) is read here and the pictures arrive through
+/// the inbox like dropped ones. A clipboard with text is left to eframe.
+fn listen_for_pasted_pictures(inbox: Inbox, ctx: egui::Context) -> Result<(), String> {
+    let document = web_sys::window().and_then(|w| w.document()).ok_or("no document")?;
+    let on_paste = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::ClipboardEvent)>::new(move |e: web_sys::ClipboardEvent| {
+        let Some(data) = e.clipboard_data() else { return };
+        if !data.get_data("text").unwrap_or_default().is_empty() {
+            return;
+        }
+        let Some(files) = data.files() else { return };
+        for i in 0..files.length().min(MAX_PASTED_PICTURES) {
+            let Some(file) = files.get(i) else { continue };
+            if !file.type_().starts_with("image/") {
+                continue;
+            }
+            if file.size() > MAX_PASTED_BYTES {
+                log::warn!("pasted picture is larger than 200 MB; not inserted");
+                continue;
+            }
+            let inbox = inbox.clone();
+            let ctx = ctx.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                match wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await {
+                    Ok(buf) => {
+                        let bytes = js_sys::Uint8Array::new(&buf).to_vec();
+                        // The inbox inserts files named like pictures; the engine reads the format from the bytes.
+                        inbox.lock().unwrap_or_else(|e| e.into_inner()).push(("pasted.png".into(), bytes));
+                        ctx.request_repaint();
+                    }
+                    Err(e) => log::error!("couldn't read the pasted picture: {e:?}"),
+                }
+            });
+        }
+    });
+    document.add_event_listener_with_callback("paste", on_paste.as_ref().unchecked_ref()).map_err(|e| format!("{e:?}"))?;
+    // The listener lives as long as the page.
+    on_paste.forget();
+    Ok(())
+}
+
 /// `dirty` is the flag the `beforeunload` guard reads ([`guard_unload`]).
 fn services(inbox: Inbox, ctx: egui::Context, dirty: Rc<Cell<bool>>) -> Services {
     let open_inbox = inbox.clone();
@@ -108,6 +158,8 @@ fn services(inbox: Inbox, ctx: egui::Context, dirty: Rc<Cell<bool>>) -> Services
             let ctx = ctx.clone();
             let dialog = if purpose == "picture" {
                 rfd::AsyncFileDialog::new().add_filter("Pictures", IMAGE_EXTS)
+            } else if purpose == "recipients" {
+                rfd::AsyncFileDialog::new().add_filter("Recipient lists", RECIPIENT_EXTS)
             } else {
                 rfd::AsyncFileDialog::new().add_filter("Documents", DOC_EXTS)
             };

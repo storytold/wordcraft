@@ -1,6 +1,6 @@
 //! The word-processor feature catalog: the incumbent's ribbon and menu commands (feature names
 //! only) mapped to our command ids. `parity()` compares it with the registry; the gap is the
-//! work list (`cargo xtask parity` → docs/parity.md).
+//! work list (`cargo xtask parity` → docs/parity-checklist.md).
 
 use serde_json::{Value, json};
 
@@ -327,13 +327,16 @@ View|Macros|Record Macro|tools.recordMacro
 View|SharePoint|Properties|file.properties
 Table Design|Table Style Options|Table Style Options|table.look
 Table Design|Table Styles|Table Styles|table.style
+Table Design|Table Styles|New Table Style|table.newStyle
+Table Design|Table Styles|Modify Table Style|table.modifyStyle
+Table Design|Table Styles|Delete Table Style|table.deleteStyle
 Table Design|Table Styles|Shading|table.shading
 Table Design|Borders|Borders|table.borders
 Table Design|Borders|Border Painter|table.borderPainter
 Table Layout|Table|Select Table|table.selectTable
 Table Layout|Table|Select Row|table.selectRow
 Table Layout|Table|Select Cell|table.selectCell
-Table Layout|Table|View Gridlines|view.gridlines
+Table Layout|Table|View Gridlines|table.viewGridlines
 Table Layout|Table|Properties|table.properties
 Table Layout|Draw|Draw Table|table.draw
 Table Layout|Draw|Eraser|table.eraser
@@ -500,6 +503,6 @@ mod tests {
         let p = parity(&reg);
         let pct = p["percent"].as_f64().unwrap();
         // The floor only ever rises.
-        assert!(pct >= 60.0, "parity {pct}%");
+        assert!(pct >= 90.4, "parity {pct}%");
     }
 }
