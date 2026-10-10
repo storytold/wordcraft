@@ -570,7 +570,6 @@ mod tests {
         image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png).unwrap();
         b
     }
-
     #[test]
     fn picture_pipeline() {
         let mut s = Session::new(wordcraft_doc::Document::new());
@@ -595,5 +594,18 @@ mod tests {
         s.run("select.collapse", &json!({"end": true})).unwrap();
         s.run("text.insert", &json!({"text": "x"})).unwrap();
         assert!(s.run("picture.crop", &json!({"left": 0.1})).is_err());
+    }
+
+    #[test]
+    fn picture_alt_and_crop_round_trip() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        let data = super::super::insert::base64_encode(&png(20, 10));
+        s.run("insert.picture", &json!({"data": data})).unwrap();
+        s.run("picture.altText", &json!({"text": "A red box"})).unwrap();
+        s.run("picture.crop", &json!({"left": 0.1, "top": 0.2, "right": 0.05, "bottom": 0.0})).unwrap();
+        let (_, o) = selected(&s).unwrap();
+        let InlineObject::Image { alt, crop, .. } = o else { panic!("expected image") };
+        assert_eq!(alt, "A red box");
+        assert_eq!(crop, [0.1, 0.2, 0.05, 0.0]);
     }
 }
