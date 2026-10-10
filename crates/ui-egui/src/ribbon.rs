@@ -228,9 +228,14 @@ fn stack(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
 }
 
 fn mi(ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: Value) {
+    mi_text(ui, app, tl!(label), id, params);
+}
+
+/// A menu item whose text is already in the interface language.
+fn mi_text(ui: &mut Ui, app: &mut WordApp, text: &str, id: &str, params: Value) {
     let sc = crate::widgets::shortcut_text(app, id);
     let enabled = crate::widgets::enabled(app, id);
-    let resp = ui.add_enabled(enabled, egui::Button::new(tl!(label)).shortcut_text(sc).min_size(vec2(200.0, 0.0)));
+    let resp = ui.add_enabled(enabled, egui::Button::new(text).shortcut_text(sc).min_size(vec2(200.0, 0.0)));
     if resp.clicked() {
         let _ = app.run(id, params);
         ui.close();
@@ -711,7 +716,7 @@ fn design(app: &mut WordApp, ui: &mut Ui) {
             });
             menu_button(ui, app, "fonts", Some("Fonts"), "Theme Fonts", false, |ui, app| {
                 for (name, h, b, _) in wordcraft_engine::cmd::design::THEMES {
-                    mi(ui, app, &format!("{name}: {h} / {b}"), "design.themeFonts", json!({"heading": h, "body": b}));
+                    mi_text(ui, app, &format!("{}: {h} / {b}", tl!(name)), "design.themeFonts", json!({"heading": h, "body": b}));
                 }
             });
         });
@@ -832,7 +837,7 @@ fn layout(app: &mut WordApp, ui: &mut Ui) {
             ui.label("");
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(tl!("Before:")).small());
-                if ui.add(egui::DragValue::new(&mut b).speed(1.0).range(0.0..=1584.0).suffix(" pt")).changed() {
+                if ui.add(egui::DragValue::new(&mut b).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt")))).changed() {
                     let _ = app.run("para.spacing", json!({"before": b}));
                 }
             });
@@ -848,7 +853,7 @@ fn layout(app: &mut WordApp, ui: &mut Ui) {
             ui.label("");
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(tl!("After:")).small());
-                if ui.add(egui::DragValue::new(&mut a).speed(1.0).range(0.0..=1584.0).suffix(" pt")).changed() {
+                if ui.add(egui::DragValue::new(&mut a).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt")))).changed() {
                     let _ = app.run("para.spacing", json!({"after": a}));
                 }
             });
@@ -1367,7 +1372,7 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
             crate::widgets::row(ui, |ui| {
                 ui.label(egui::RichText::new(tl!("W:")).small());
                 let mut w = w0;
-                let r = ui.add(egui::DragValue::new(&mut w).speed(1.0).range(4.0..=2000.0).suffix(" pt"));
+                let r = ui.add(egui::DragValue::new(&mut w).speed(1.0).range(4.0..=2000.0).suffix(format!(" {}", tl!("pt"))));
                 if r.changed() {
                     if r.dragged() && !r.drag_started() {
                         app.session.join_next_undo();
@@ -1376,7 +1381,7 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
                 }
                 ui.label(egui::RichText::new(tl!("H:")).small());
                 let mut h = h0;
-                let r = ui.add(egui::DragValue::new(&mut h).speed(1.0).range(4.0..=2000.0).suffix(" pt"));
+                let r = ui.add(egui::DragValue::new(&mut h).speed(1.0).range(4.0..=2000.0).suffix(format!(" {}", tl!("pt"))));
                 if r.changed() {
                     if r.dragged() && !r.drag_started() {
                         app.session.join_next_undo();
@@ -1444,7 +1449,7 @@ fn table_design(app: &mut WordApp, ui: &mut Ui) {
                 let _ = row;
                 for (label, key, val) in items {
                     let mut v = *val;
-                    if ui.checkbox(&mut v, *label).changed() {
+                    if ui.checkbox(&mut v, tl!(label)).changed() {
                         let _ = app.run("table.look", json!({ *key: v }));
                     }
                 }
@@ -1632,10 +1637,13 @@ fn table_layout(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Alignment", None, app, |ui, app| {
         egui::Grid::new("cellalign").spacing(vec2(1.0, 1.0)).show(ui, |ui| {
-            for row in [["topLeft", "topCenter", "topRight"], ["centerLeft", "center", "centerRight"], ["bottomLeft", "bottomCenter", "bottomRight"]]
-            {
-                for v in row {
-                    small(ui, app, "cellAlign", None, v, "table.cellAlign", json!({"value": v}), false);
+            for row in [
+                [("topLeft", "Align Top Left"), ("topCenter", "Align Top Center"), ("topRight", "Align Top Right")],
+                [("centerLeft", "Align Center Left"), ("center", "Align Center"), ("centerRight", "Align Center Right")],
+                [("bottomLeft", "Align Bottom Left"), ("bottomCenter", "Align Bottom Center"), ("bottomRight", "Align Bottom Right")],
+            ] {
+                for (v, tip) in row {
+                    small(ui, app, "cellAlign", None, tip, "table.cellAlign", json!({"value": v}), false);
                 }
                 ui.end_row();
             }

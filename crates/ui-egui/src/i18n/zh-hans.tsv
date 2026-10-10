@@ -1264,6 +1264,57 @@
 	The password is removed. Save the document to keep the change.	密码已删除。保存文档以保留此更改。
 	The passwords don't match.	两次输入的密码不一致。
 	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	请妥善保管密码：没有密码，任何人（包括 WordCraft）都无法打开文档。两个框都留空可删除密码。
+
+# Interface text routed through translation (#313)
+	Align Top Left	靠上左对齐
+	Align Top Center	靠上居中对齐
+	Align Top Right	靠上右对齐
+	Align Center Left	中部左对齐
+	Align Center	水平居中
+	Align Center Right	中部右对齐
+	Align Bottom Left	靠下左对齐
+	Align Bottom Center	靠下居中对齐
+	Align Bottom Right	靠下右对齐
+	{contributors} contributors · {commits} commits	{contributors} 位贡献者 · {commits} 次提交
+	{cols}×{rows} Table	{cols}×{rows} 表格
+	AaBbYyZz	AaBbYyZz 中文
+	pt	磅
+	Document1	文档1
+	Username	用户名
+	Display name	显示名称
+	Real name	真实姓名
+	Name	名称
+	PRs	PR
+	Commits	提交
+	First	首次
+	Last	最近
+	Model	模型
+	Version	版本
+	% of all commits	占全部提交的百分比
+	Lines +/−	行数 +/−
+	Craft	工艺
+	Studio	工作室
+	Atelier	画室
+	Darkroom	暗房
+	Gallery	画廊
+	Sketchbook	速写本
+	Change Picture…	更改图片…
+	Font…	字体…
+	Paragraph…	段落…
+	Link…	链接…
+	Size and Crop…	大小和裁剪…
+	Insert Columns to the Left	在左侧插入列
+	Insert Columns to the Right	在右侧插入列
+	Insert Rows Above	在上方插入行
+	Insert Rows Below	在下方插入行
+	Mon	周一
+	Tue	周二
+	Wed	周三
+	Sum	合计
+	North	北区
+	South	南区
+	West	西区
+	Total	总计
 	Rotation	旋转角度
 	Rotation:	旋转：
 	Rotate Right 90°	向右旋转 90°

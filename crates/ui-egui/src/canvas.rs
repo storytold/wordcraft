@@ -1501,7 +1501,7 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     let item = |ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: serde_json::Value| {
         let sc = crate::widgets::shortcut_text(app, id);
         let on = crate::widgets::enabled(app, id);
-        if ui.add_enabled(on, egui::Button::new(label).shortcut_text(sc)).clicked() {
+        if ui.add_enabled(on, egui::Button::new(tl!(label)).shortcut_text(sc)).clicked() {
             let _ = app.run(id, params);
             ui.close();
         }

@@ -1265,6 +1265,57 @@
 	The password is removed. Save the document to keep the change.	A senha foi removida. Salve o documento para manter a alteração.
 	The passwords don't match.	As senhas não coincidem.
 	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	Guarde a senha em um lugar seguro: sem ela, ninguém, nem o WordCraft, consegue abrir o documento. Deixe as duas caixas vazias para remover a senha.
+
+# Interface text routed through translation (#313)
+	Align Top Left	Alinhar acima à esquerda
+	Align Top Center	Alinhar acima ao centro
+	Align Top Right	Alinhar acima à direita
+	Align Center Left	Alinhar ao meio à esquerda
+	Align Center	Alinhar ao centro
+	Align Center Right	Alinhar ao meio à direita
+	Align Bottom Left	Alinhar abaixo à esquerda
+	Align Bottom Center	Alinhar abaixo ao centro
+	Align Bottom Right	Alinhar abaixo à direita
+	{contributors} contributors · {commits} commits	{contributors} colaboradores · {commits} commits
+	{cols}×{rows} Table	Tabela {cols}×{rows}
+	AaBbYyZz	AaBbYyZz ÇçÃã
+	pt	pt
+	Document1	Documento1
+	Username	Nome de usuário
+	Display name	Nome de exibição
+	Real name	Nome real
+	Name	Nome
+	PRs	PRs
+	Commits	Commits
+	First	Primeiro
+	Last	Último
+	Model	Modelo
+	Version	Versão
+	% of all commits	% de todos os commits
+	Lines +/−	Linhas +/−
+	Craft	Artesanal
+	Studio	Estúdio
+	Atelier	Ateliê
+	Darkroom	Câmara escura
+	Gallery	Galeria
+	Sketchbook	Caderno de esboços
+	Change Picture…	Alterar imagem…
+	Font…	Fonte…
+	Paragraph…	Parágrafo…
+	Link…	Link…
+	Size and Crop…	Tamanho e corte…
+	Insert Columns to the Left	Inserir colunas à esquerda
+	Insert Columns to the Right	Inserir colunas à direita
+	Insert Rows Above	Inserir linhas acima
+	Insert Rows Below	Inserir linhas abaixo
+	Mon	Seg
+	Tue	Ter
+	Wed	Qua
+	Sum	Soma
+	North	Norte
+	South	Sul
+	West	Oeste
+	Total	Total
 	Rotation	Rotação
 	Rotation:	Rotação:
 	Rotate Right 90°	Girar 90° para a direita
