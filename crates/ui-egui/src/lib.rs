@@ -71,6 +71,8 @@ pub struct UiState {
     pub window: Option<window_geometry::WindowGeometry>,
     /// Interface language: `auto` (follow the system) or a code from [`i18n::LANGUAGES`].
     pub language: String,
+    /// View › Switch Modes: show pages dark (white text on black), kept between runs.
+    pub dark_page: bool,
 }
 
 impl Default for UiState {
@@ -87,6 +89,7 @@ impl Default for UiState {
             author: String::new(),
             window: None,
             language: i18n::AUTO.into(),
+            dark_page: false,
         }
     }
 }
@@ -113,6 +116,8 @@ pub struct WordApp {
     fonts_frames: u32,
     applied_dark: Option<bool>,
     pub frame_ms: f64,
+    /// The window title last sent; a viewport command schedules a repaint, so only send changes.
+    sent_title: String,
     pub quit_requested: bool,
     pub autosave: bool,
     pub word_count: (u64, usize),
@@ -140,6 +145,7 @@ impl WordApp {
             fonts_frames: 0,
             applied_dark: None,
             frame_ms: 0.0,
+            sent_title: String::new(),
             quit_requested: false,
             autosave: true,
             word_count: (0, 0),
@@ -156,6 +162,7 @@ impl WordApp {
     pub fn prefs(&self) -> UiState {
         let mut ui = self.ui.clone();
         ui.author = self.session.author.clone();
+        ui.dark_page = self.session.view.dark_mode;
         ui
     }
 
@@ -168,6 +175,7 @@ impl WordApp {
         if !author.trim().is_empty() {
             self.session.author = author;
         }
+        self.session.view.dark_mode = self.ui.dark_page;
     }
 
     /// Run a command; UI-level commands (`ui.*`) are handled here, the rest by the engine.
@@ -448,7 +456,10 @@ impl WordApp {
             ctx.open_url(egui::OpenUrl::new_tab(url));
         }
         let title = format!("{}{} - WordCraft", self.title_stem(), if self.session.dirty { " •" } else { "" });
-        ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
+        if title != self.sent_title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.sent_title = title;
+        }
         self.frame_ms = now_ms() - t0;
     }
 
@@ -573,8 +584,74 @@ mod tests {
         assert_eq!(ctx.zoom_factor(), 1.0);
     }
 
+    /// Issue #117: a viewport command schedules a repaint, so resending the title every frame kept
+    /// the app redrawing at the monitor's refresh rate while idle.
+    #[test]
+    fn window_title_is_sent_only_when_it_changes() {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        let titles = |app: &mut WordApp| {
+            let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.logic(ui.ctx());
+                app.ui(ui);
+            });
+            let n = out.viewport_output.values().flat_map(|v| v.commands.iter()).filter(|c| matches!(c, egui::ViewportCommand::Title(_))).count();
+            out.drop_without_applying_deltas();
+            n
+        };
+        // The first frames only install fonts; the title goes out once, on the first full frame.
+        let first: usize = (0..4).map(|_| titles(&mut app)).sum();
+        assert_eq!(first, 1);
+        assert_eq!(titles(&mut app), 0);
+        assert_eq!(titles(&mut app), 0);
+        app.session.dirty = true;
+        assert_eq!(titles(&mut app), 1);
+    }
+
     fn app() -> WordApp {
         WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default())
+    }
+
+    /// Issue #139: Ctrl+wheel over the page didn't zoom.
+    #[test]
+    fn ctrl_wheel_over_canvas_zooms() {
+        let ctx = egui::Context::default();
+        let mut a = app();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+        let mut t = 0.0;
+        let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+            t += 1.0 / 60.0;
+            let input = egui::RawInput { events, time: Some(t), screen_rect: Some(screen), ..Default::default() };
+            ctx.run_ui(input, |ui| {
+                a.logic(ui.ctx());
+                a.ui(ui);
+            })
+            .drop_without_applying_deltas();
+        };
+        // The first frames install fonts; the canvas appears after them.
+        for _ in 0..3 {
+            frame(&mut a, Vec::new());
+        }
+        let over_page = a.canvas.canvas_rect.unwrap().center();
+        frame(&mut a, vec![egui::Event::PointerMoved(over_page)]);
+        let before = a.canvas.scale;
+        let wheel = |y: f32| egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, y),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::COMMAND,
+        };
+        frame(&mut a, vec![wheel(1.0)]);
+        for _ in 0..30 {
+            frame(&mut a, Vec::new());
+        }
+        assert!(a.canvas.scale > before * 1.05, "Ctrl+wheel up zooms in: {before} -> {}", a.canvas.scale);
+        let zoomed = a.canvas.scale;
+        frame(&mut a, vec![wheel(-1.0)]);
+        for _ in 0..30 {
+            frame(&mut a, Vec::new());
+        }
+        assert!(a.canvas.scale < zoomed, "Ctrl+wheel down zooms out");
     }
 
     #[test]
@@ -590,6 +667,18 @@ mod tests {
         // A later rename is what gets saved next, not the name loaded at startup.
         second.run("file.setAuthor", json!({"name": "Grace Hopper"})).unwrap();
         assert_eq!(second.prefs().author, "Grace Hopper");
+    }
+
+    #[test]
+    fn dark_page_survives_restart() {
+        let mut first = app();
+        assert!(!first.session.view.dark_mode);
+        first.run("view.darkMode", json!({"value": true})).unwrap();
+        let saved = serde_json::to_vec(&first.prefs()).unwrap();
+
+        let mut second = app();
+        second.apply_prefs(serde_json::from_slice(&saved).unwrap());
+        assert!(second.session.view.dark_mode);
     }
 
     #[test]

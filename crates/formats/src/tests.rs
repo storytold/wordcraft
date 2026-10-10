@@ -200,6 +200,19 @@ fn odt_round_trip() {
 }
 
 #[test]
+fn page_break_char_splits_paragraph() {
+    let mut d = Document::new();
+    d.body = vec![para_block(Paragraph::with_text("num two\u{c}Page two", CharProps::default()))];
+    let b = flat(&d);
+    assert!(matches!(&b[..], [FBlock::Para(a), FBlock::Para(c)] if a.text() == "num two" && !a.page_break && c.text() == "Page two" && c.page_break));
+    let txt = String::from_utf8(export("txt", &d).unwrap().unwrap()).unwrap();
+    assert!(!txt.contains("twoPage"), "{txt:?}");
+    let odt = import("odt", &export("odt", &d).unwrap().unwrap()).unwrap().unwrap();
+    let b = flat(&odt);
+    assert!(b.iter().any(|x| matches!(x, FBlock::Para(p) if p.text().trim() == "Page two" && p.page_break)));
+}
+
+#[test]
 fn txt_round_trip() {
     check_round_trip("txt", false);
     let d = import("txt", "a\r\nb\nc".as_bytes()).unwrap().unwrap();

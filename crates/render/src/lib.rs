@@ -154,11 +154,48 @@ pub struct RenderOptions {
     pub paper: Rgb,
     /// Colour for formatting marks.
     pub mark_color: Rgb,
+    /// Dark page (View › Switch Modes): every colour but pictures has its lightness inverted, so
+    /// white paper turns black and black text white while hues stay the same. Screen only.
+    pub dark: bool,
+    /// The grey that black becomes on a dark page (white paper turns this, not pure black).
+    pub dark_paper: u8,
+}
+
+/// Default grey for a dark page's paper.
+pub const DARK_PAPER: u8 = 0x33;
+
+impl RenderOptions {
+    /// The on-screen colour for a document colour (see [`RenderOptions::dark`]).
+    pub fn ink(&self, c: Rgb) -> Rgb {
+        if !self.dark {
+            return c;
+        }
+        // Invert, then lift the blacks to the paper grey so the page isn't a black hole.
+        let Rgb(r, g, b) = invert_lightness(c);
+        let p = self.dark_paper as u32;
+        let lift = |v: u8| (p + v as u32 * (255 - p) / 255).min(255) as u8;
+        Rgb(lift(r), lift(g), lift(b))
+    }
+}
+
+/// Invert HSL lightness, keeping hue and saturation: shifting every channel by
+/// `255 - max - min` maps the lightest channel to `255 - min` and the darkest to `255 - max`.
+pub fn invert_lightness(c: Rgb) -> Rgb {
+    let (r, g, b) = (c.0 as i32, c.1 as i32, c.2 as i32);
+    let d = 255 - r.max(g).max(b) - r.min(g).min(b);
+    let f = |v: i32| (v + d).clamp(0, 255) as u8;
+    Rgb(f(r), f(g), f(b))
 }
 
 impl Default for RenderOptions {
     fn default() -> Self {
-        RenderOptions { display: DisplayOptions::default(), paper: Rgb::WHITE, mark_color: Rgb(0x2B, 0x57, 0x9A) }
+        RenderOptions {
+            display: DisplayOptions::default(),
+            paper: Rgb::WHITE,
+            mark_color: Rgb(0x2B, 0x57, 0x9A),
+            dark: false,
+            dark_paper: DARK_PAPER,
+        }
     }
 }
 
@@ -175,12 +212,12 @@ pub fn render_region(doc: &Document, page: &Page, w: u32, h: u32, view: Affine, 
     let (w16, h16) = (w.clamp(1, MAX_SIDE) as u16, h.clamp(1, MAX_SIDE) as u16);
     let mut ctx = RenderContext::new_with(w16, h16, vello_cpu::RenderSettings { num_threads: default_threads(), ..Default::default() });
     ctx.set_transform(Affine::IDENTITY);
-    ctx.set_paint(color(doc.settings.page_color.unwrap_or(opts.paper), 1.0));
+    ctx.set_paint(color(opts.ink(doc.settings.page_color.unwrap_or(opts.paper)), 1.0));
     ctx.fill_rect(&kurbo::Rect::new(0.0, 0.0, w16 as f64, h16 as f64));
     let items = page_display(doc, page, &opts.display);
     let visible = view.inverse().transform_rect_bbox(kurbo::Rect::new(0.0, 0.0, w16 as f64, h16 as f64)).inflate(40.0, 40.0);
     if let Some(wm) = &doc.settings.watermark {
-        draw_watermark(&mut ctx, view, page, wm);
+        draw_watermark(&mut ctx, view, page, wm, opts);
     }
     for it in &items {
         draw(&mut ctx, doc, it, view, &visible, opts);
@@ -194,7 +231,7 @@ pub fn render_region(doc: &Document, page: &Page, w: u32, h: u32, view: Affine, 
     Rendered { width: w16 as u32, height: h16 as u32, pixels }
 }
 
-fn draw_watermark(ctx: &mut RenderContext, view: Affine, page: &Page, wm: &wordcraft_doc::Watermark) {
+fn draw_watermark(ctx: &mut RenderContext, view: Affine, page: &Page, wm: &wordcraft_doc::Watermark, opts: &RenderOptions) {
     let r = wordcraft_fonts::word::resolve(&wm.font, false, false);
     let face = r.face;
     let glyphs = wordcraft_fonts::shape(&face, &wm.text, &[], |c| c);
@@ -210,7 +247,7 @@ fn draw_watermark(ctx: &mut RenderContext, view: Affine, page: &Page, wm: &wordc
     let base = Affine::translate((page.w as f64 / 2.0, page.h.min(2000.0) as f64 / 2.0))
         * Affine::rotate(angle)
         * Affine::translate((-raw_w * size / 2.0, size * 0.35));
-    ctx.set_paint(color(wm.color, if wm.semitransparent { 0.35 } else { 0.8 }));
+    ctx.set_paint(color(opts.ink(wm.color), if wm.semitransparent { 0.35 } else { 0.8 }));
     let db = FontDb::global();
     let mut x = 0.0;
     for g in &glyphs {
@@ -229,12 +266,12 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 return;
             }
             ctx.set_transform(view);
-            ctx.set_paint(color(*c, *alpha));
+            ctx.set_paint(color(opts.ink(*c), *alpha));
             ctx.fill_rect(&r);
         }
         Draw::Line { x0, y0, x1, y1, width, color: c, stroke, alpha } => {
             ctx.set_transform(view);
-            ctx.set_paint(color(*c, *alpha));
+            ctx.set_paint(color(opts.ink(*c), *alpha));
             let w = *width as f64;
             let mut st = kurbo::Stroke::new(w);
             match stroke {
@@ -279,7 +316,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
         Draw::Glyphs { face, size, glyphs, color: c, alpha, synth_bold, synth_italic, .. } => {
             let db = FontDb::global();
             let k = *size as f64 / face.upem.max(1.0);
-            ctx.set_paint(color(*c, *alpha));
+            ctx.set_paint(color(opts.ink(*c), *alpha));
             let skew = if *synth_italic { Affine::new([1.0, 0.0, -0.21, 1.0, 0.0, 0.0]) } else { Affine::IDENTITY };
             if *synth_bold {
                 ctx.set_stroke(kurbo::Stroke::new(face.upem * 0.03));
@@ -314,7 +351,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             let gid = face.glyph_for(*ch);
             let o = FontDb::global().outline(&face, gid);
             let k = *size as f64 / face.upem.max(1.0);
-            ctx.set_paint(color(opts.mark_color, 0.9));
+            ctx.set_paint(color(opts.ink(opts.mark_color), 0.9));
             ctx.set_transform(view * Affine::translate((*x as f64, *baseline as f64)) * Affine::scale(k));
             ctx.fill_path(&o);
         }
@@ -325,7 +362,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             }
             let Some(pm) = pixmap_for(doc, media) else {
                 ctx.set_transform(view);
-                ctx.set_paint(color(Rgb(0xD0, 0xD0, 0xD0), 1.0));
+                ctx.set_paint(color(opts.ink(Rgb(0xD0, 0xD0, 0xD0)), 1.0));
                 ctx.fill_rect(&r);
                 return;
             };
@@ -358,11 +395,11 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             let path = shape_path(*kind, r);
             ctx.set_transform(view);
             if let Some(f) = fill {
-                ctx.set_paint(color(*f, 1.0));
+                ctx.set_paint(color(opts.ink(*f), 1.0));
                 ctx.fill_path(&path);
             }
             if let Some(s) = stroke {
-                ctx.set_paint(color(*s, 1.0));
+                ctx.set_paint(color(opts.ink(*s), 1.0));
                 ctx.set_stroke(kurbo::Stroke::new(stroke_width.max(0.25) as f64));
                 ctx.stroke_path(&path);
             }
@@ -488,6 +525,24 @@ mod tests {
         assert!(opts.display.dim_header);
         let img = render_page(&d, &l.pages[0], 1.0, &opts);
         assert!(!img.to_png().is_empty());
+    }
+
+    #[test]
+    fn dark_page_inverts_lightness() {
+        assert_eq!(invert_lightness(Rgb::WHITE), Rgb::BLACK);
+        assert_eq!(invert_lightness(Rgb::BLACK), Rgb::WHITE);
+        // Pure hues keep their colour; dark blue turns light blue.
+        assert_eq!(invert_lightness(Rgb(255, 0, 0)), Rgb(255, 0, 0));
+        assert_eq!(invert_lightness(Rgb(0, 0, 0x80)), Rgb(0x7F, 0x7F, 0xFF));
+        let d = Document::from_text("Hello WordCraft");
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+        let opts = RenderOptions { dark: true, ..Default::default() };
+        assert_eq!(opts.ink(Rgb::WHITE), Rgb(DARK_PAPER, DARK_PAPER, DARK_PAPER));
+        assert_eq!(opts.ink(Rgb::BLACK), Rgb::WHITE);
+        let img = render_page(&d, &l.pages[0], 1.0, &opts);
+        assert_eq!(img.pixel(5, 5), [DARK_PAPER, DARK_PAPER, DARK_PAPER, 255]);
+        let light = (72..300).flat_map(|x| (72..100).map(move |y| (x, y))).filter(|(x, y)| img.pixel(*x, *y)[0] > 128).count();
+        assert!(light > 30, "light {light}");
     }
 
     #[test]
