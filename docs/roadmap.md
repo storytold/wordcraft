@@ -1,6 +1,6 @@
 # WordCraft roadmap: milestones and what's next
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (milestones moved here from ROADMAP.md; Current focus set from the re-measured gaps) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (alpha gate checked: six core workflows pass; previously major: milestones moved here from ROADMAP.md; Current focus set from the re-measured gaps) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 Forward-looking plan. The summary is [`ROADMAP.md`](../ROADMAP.md); the ranked work list is
 [`gaps.md`](gaps.md); the numbers are in [`target-app-parity.md`](target-app-parity.md). Hours are
@@ -23,6 +23,24 @@ Opus 5.5 agent wall-clock.
    options, a local page-by-page comparison harness; an owner decision on an Aptos-metric font.
 6. **Formatting revisions and content controls** (gap #5, 12–18 h), **native printing** (gap #6,
    6–10 h), **dialog depth** (gap #7, 20–30 h).
+
+## Alpha gate (core workflows)
+
+The core-workflow gate from the craftrules progress-docs standard: what a typical Word user does
+every day, checked end to end on the main platform (macOS desktop), including save and reopen.
+"Partial" here means rough but not blocking: the workflow completes.
+
+| Core workflow | Works end to end? | Evidence | Hours to pass |
+|---|---|---|---|
+| Write and format a document: type, fonts, paragraph formatting, styles, lists, undo, find/replace; save as .docx and reopen | yes | 422 commands, typing parity pinned by `tests_typing.rs`, DOCX round-trip tests (`crates/docx/tests/roundtrip.rs`) | 0 |
+| Open a .docx someone sent, edit it, send back a .docx Word opens | partial (not blocking) | Word opens our files; typical text/table/picture documents work; never tested on a real-world corpus; charts, SmartArt and OLE dropped silently, formatting revisions lost (gaps #1, #2, #5) | 0 (beta work: 50–80) |
+| Build a structured document: tables, pictures, headers/footers, page numbers, sections, columns | yes | Tables with row splitting and floating tables (#137), floating pictures (#136), first/odd/even headers; columns don't balance (gap #4) | 0 |
+| Review with others: comments, track changes, accept/reject, compare | yes | Margin balloons, tracked insert/delete incl. paragraph marks (#125, #244), compare; formatting revisions missing (#41) | 0 |
+| References for reports and papers: TOC, footnotes, citations and bibliography, captions | yes | Updatable TOC field (#52), notes, APA/MLA/Chicago/IEEE, Zotero (#189); long footnotes don't continue (gap #4) | 0 |
+| Share or print: export PDF, print | partial (not blocking) | PDF export solid (krilla); desktop printing goes through a PDF, no native print dialog (gap #6) | 0 (beta work: 6–10) |
+
+**Result: passes.** Every core workflow completes on macOS and the work saves and reopens; the
+partial rows are fidelity gaps (beta work), not broken workflows. WordCraft stays **alpha**.
 
 ## Milestones
 
@@ -55,4 +73,5 @@ languages, screen-reader access, ecosystem decisions (VBA, add-ins, cloud), an i
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Alpha gate table added (core-workflow gate from the progress-docs standard): all six workflows pass, stage stays alpha |
 | 2026-10-10 | major | Created: milestones moved from ROADMAP.md with remaining hours; Current focus from gaps.md; M15–M16 added |
