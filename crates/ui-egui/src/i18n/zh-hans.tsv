@@ -71,8 +71,11 @@
 	AutoSave documents you have saved in WordCraft	自动保存在 WordCraft 中保存过的文档
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	自动保存失败：{error}。重新保存文档后将恢复自动保存。
 	Bottom Margin	下边距
+	Click a border between two cells to merge them. Esc stops.	单击两个单元格之间的边框以合并它们。按 Esc 结束。
 	Compress punctuation at the start of a line	压缩行首标点
 	Dark page (white text on black)	深色页面（黑底白字）
+	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	拖出矩形以绘制表格，或拖出穿过单元格的线条以拆分单元格。按 Esc 结束。
+	Draw Table	绘制表格
 	Edit Comment	编辑批注
 	Left Margin	左边距
 	Indents and Spacing	缩进和间距

@@ -101,16 +101,16 @@ fn bg(ui: &Ui, r: Rect, resp: &Response, checked: bool, t: &Tokens) {
 
 /// A large ribbon button: 32 px icon over a (possibly two-line) label.
 pub fn big(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value, menu: bool) -> Response {
-    big_with(ui, app, icon, label, id, params, menu, false)
+    big_button(ui, app, icon, label, id, params, menu, false)
 }
 
-/// [`big`] showing the toggled state when `checked` (the tool in use, a view that's on).
-pub fn big_checked(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value, checked: bool) -> Response {
-    big_with(ui, app, icon, label, id, params, false, checked)
+/// A large ribbon button for a mode that stays on (`checked` draws it pressed), run without params.
+pub fn big_toggle(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, checked: bool) -> Response {
+    big_button(ui, app, icon, label, id, Value::Object(Default::default()), false, checked)
 }
 
 #[allow(clippy::too_many_arguments)]
-fn big_with(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value, menu: bool, checked: bool) -> Response {
+fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value, menu: bool, checked: bool) -> Response {
     let label = tl!(label);
     let t = Tokens::get(ui.ctx());
     let galley_w =
@@ -481,7 +481,7 @@ mod tests {
     fn drawn_buttons_fade_in_on_hover_and_darken_while_pressed() {
         // #305's drawn replacements for ✕, 💬, ✎ and ➕ must react like egui's buttons.
         let ctx = egui::Context::default();
-        crate::theme::apply(&ctx, crate::theme::Appearance::Light);
+        crate::theme::apply(&ctx, &Tokens::light());
         let clock = std::cell::Cell::new(0u32);
         let seen = std::cell::Cell::new((Rect::NOTHING, Rect::NOTHING, Color32::PLACEHOLDER, Color32::PLACEHOLDER));
         // One 60 fps frame; returns both buttons' rects and fills (framed, frameless).

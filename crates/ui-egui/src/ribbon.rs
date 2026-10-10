@@ -4,7 +4,7 @@ use egui::{Align2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use serde_json::{Value, json};
 
 use crate::theme::{Tokens, medium, regular, semibold};
-use crate::widgets::{CONTENT_H, LABEL_H, big, big_checked, color_grid, combo, group, menu_button, small, split};
+use crate::widgets::{CONTENT_H, LABEL_H, big, big_toggle, color_grid, combo, group, menu_button, small, split};
 use crate::{WordApp, icons};
 
 pub const TABS: [&str; 12] = ["File", "Home", "Insert", "Draw", "Design", "Layout", "References", "Mailings", "Review", "View", "Zotero", "Help"];
@@ -515,6 +515,8 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
             crate::dialogs::table_grid_picker(ui, app);
             ui.separator();
             mi(ui, app, "Insert Table…", "ui.dialog", json!({"name": "insertTable"}));
+            let drawing = app.canvas.table_tool == Some(crate::table_pen::TableTool::Draw);
+            mi_check(ui, app, "Draw Table", drawing, "table.draw", json!({}));
             mi(ui, app, "Convert Text to Table…", "table.fromText", json!({}));
             ui.menu_button(tl!("Quick Tables"), |ui| {
                 mi(ui, app, "Tabular List", "table.quick", json!({"kind": "tabular"}));
@@ -630,12 +632,12 @@ fn draw(app: &mut WordApp, ui: &mut Ui) {
         InkTool::Highlighter => "draw.highlighter",
     };
     group(ui, "Drawing Tools", None, app, |ui, app| {
-        big_checked(ui, app, "select", "Select", "draw.select", json!({}), mode == DrawMode::Select);
+        big_toggle(ui, app, "select", "Select", "draw.select", mode == DrawMode::Select);
         big(ui, app, "lasso", "Lasso", "draw.lasso", json!({}), false);
-        big_checked(ui, app, "eraser", "Eraser", "draw.eraser", json!({}), mode == DrawMode::Eraser);
-        big_checked(ui, app, "pen", "Pen", "draw.pen", json!({}), mode == DrawMode::Pen(InkTool::Pen));
-        big_checked(ui, app, "pencil", "Pencil", "draw.pencil", json!({}), mode == DrawMode::Pen(InkTool::Pencil));
-        big_checked(ui, app, "highlight", "Highlighter", "draw.highlighter", json!({}), mode == DrawMode::Pen(InkTool::Highlighter));
+        big_toggle(ui, app, "eraser", "Eraser", "draw.eraser", mode == DrawMode::Eraser);
+        big_toggle(ui, app, "pen", "Pen", "draw.pen", mode == DrawMode::Pen(InkTool::Pen));
+        big_toggle(ui, app, "pencil", "Pencil", "draw.pencil", mode == DrawMode::Pen(InkTool::Pencil));
+        big_toggle(ui, app, "highlight", "Highlighter", "draw.highlighter", mode == DrawMode::Pen(InkTool::Highlighter));
         let set = app.session.view.draw.settings(tool);
         stack(ui, |ui| {
             let sw = Some(crate::theme::c32(set.color));
@@ -1068,7 +1070,7 @@ fn review(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Ink", None, app, |ui, app| {
         let hidden = app.session.view.hide_ink;
-        big_checked(ui, app, "hideInk", "Hide\nInk", "review.hideInk", json!({"value": !hidden}), hidden);
+        big_toggle(ui, app, "hideInk", "Hide\nInk", "review.hideInk", hidden);
     });
 }
 
@@ -1519,6 +1521,12 @@ fn table_layout(app: &mut WordApp, ui: &mut Ui) {
             small(ui, app, "gridlines", Some("View Gridlines"), "View Gridlines", "table.viewGridlines", json!({}), g);
             small(ui, app, "properties", Some("Properties"), "Table Properties", "table.properties", json!({}), false);
         });
+    });
+    group(ui, "Draw", None, app, |ui, app| {
+        use crate::table_pen::TableTool;
+        let tool = app.canvas.table_tool;
+        crate::widgets::big_toggle(ui, app, "drawTable", "Draw\nTable", "table.draw", tool == Some(TableTool::Draw));
+        crate::widgets::big_toggle(ui, app, "eraser", "Eraser", "table.eraser", tool == Some(TableTool::Erase));
     });
     group(ui, "Rows & Columns", None, app, |ui, app| {
         menu_button(ui, app, "deleteTable", Some("Delete"), "Delete", true, |ui, app| {

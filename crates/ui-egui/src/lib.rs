@@ -35,6 +35,7 @@ pub mod previews;
 pub mod read_aloud;
 pub mod ribbon;
 pub mod scroll;
+pub mod table_pen;
 pub mod theme;
 pub mod widgets;
 pub mod window_geometry;
@@ -354,6 +355,9 @@ impl WordApp {
         }
         if id == "file.autosave" {
             return self.set_autosave(&params);
+        }
+        if let Some(r) = table_pen::toggle(self, id, &params) {
+            return r;
         }
         let ctx = self.ctx.clone();
         if let Some(r) = zotero::command(self, id, &params, ctx.as_ref()) {

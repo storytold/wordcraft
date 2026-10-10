@@ -1,6 +1,6 @@
 # WordCraft roadmap: milestones and what's next
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (beta distance restated: ~15 points, ~150–230 h; previously: alpha gate checked: six core workflows pass; previously major: milestones moved here from ROADMAP.md; Current focus set from the re-measured gaps) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** trivial (M5: Draw Table and Eraser landed, #303; previously minor: beta distance restated: ~15 points, ~150–230 h; previously: alpha gate checked: six core workflows pass; previously major: milestones moved here from ROADMAP.md; Current focus set from the re-measured gaps) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 Forward-looking plan. The summary is [`ROADMAP.md`](../ROADMAP.md); the ranked work list is
 [`gaps.md`](gaps.md); the numbers are in [`target-app-parity.md`](target-app-parity.md). Hours are
@@ -49,7 +49,7 @@ partial rows are fidelity gaps (beta work), not broken workflows. WordCraft stay
 | M2 | Home tab | done except Paste Special, Clipboard pane, Style Inspector, Manage Styles, Asian typography (PRs open for four) | 5–10 h |
 | M3 | Insert tab | mostly done; equations done (#191); charts, SmartArt, icons, 3D, screenshot, online media missing | 50–80 h |
 | M4 | Layout and Design tabs | done except column balancing, group | 6–10 h |
-| M5 | Tables | done (row splitting, floating tables, style formatting); custom table styles (#256); Draw Table missing | 6–10 h |
+| M5 | Tables | done (row splitting, floating tables, style formatting); custom table styles (#256); Draw Table and Eraser (#303) | 6–10 h |
 | M6 | References | first version done (TOC fields, cross-references, Zotero); footnote continuation, 8 more bibliography styles missing | 15–25 h |
 | M7 | Review | done (balloons, paragraph-mark revisions); formatting revisions, move tracking, multilingual proofing missing | 35–60 h |
 | M8 | View | mostly done; window commands missing | 3–5 h |
@@ -72,6 +72,7 @@ languages, screen-reader access, ecosystem decisions (VBA, add-ins, cloud), an i
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-10 | trivial | M11: ink pens and eraser landed (#307) |
+| 2026-10-10 | trivial | M5: Draw Table and Eraser landed (#303) |
 | 2026-10-10 | trivial | Merged main: PRs that landed removed from the Current focus list |
 | 2026-10-10 | minor | Current focus heading back to ~150–230 h to beta: full number restored to the additive weighted sum (~60%), method aligned with the standard, no new evidence |
 | 2026-10-10 | minor | Alpha gate table added (core-workflow gate from the progress-docs standard): all six workflows pass, stage stays alpha |
