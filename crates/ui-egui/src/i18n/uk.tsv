@@ -879,3 +879,7 @@
 	Operator	Оператор
 	Equation Options	Параметри рівняння
 	All symbol sets	Усі набори символів
+	Send the document straight to the system print dialog, or save a copy in another format below.	Надішліть документ безпосередньо до системного діалогу друку або збережіть копію в іншому форматі нижче.
+	Or save a copy in another format:	Або збережіть копію в іншому форматі:
+	Opening print dialog…	Відкриття діалогу друку…
+	Print failed: {error}	Не вдалося надрукувати: {error}

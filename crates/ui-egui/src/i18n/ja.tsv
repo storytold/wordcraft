@@ -867,3 +867,7 @@
 	Operator	演算子
 	Equation Options	数式のオプション
 	All symbol sets	すべての記号セット
+	Send the document straight to the system print dialog, or save a copy in another format below.	文書をシステムの印刷ダイアログに直接送るか、下で別の形式のコピーを保存します。
+	Or save a copy in another format:	または、別の形式でコピーを保存:
+	Opening print dialog…	印刷ダイアログを開いています…
+	Print failed: {error}	印刷できませんでした: {error}

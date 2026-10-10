@@ -233,14 +233,7 @@ fn export_page(app: &mut WordApp, ui: &mut Ui) {
         ui.label(tl!("Send the document straight to the system print dialog, or save a copy in another format below."));
         ui.add_space(12.0);
         if ui.add(egui::Button::new(egui::RichText::new(tl!("Print")).font(medium(13.5))).min_size(vec2(320.0, 34.0))).clicked() {
-            match wordcraft_engine::io::save_bytes("x.pdf", &app.session.doc) {
-                Ok(bytes) => match app.services.print.as_ref().map(|print| print(&bytes)) {
-                    Some(Ok(())) => app.status(tl!("Opening print dialog…")),
-                    Some(Err(e)) => app.status(format!("{}: {e}", tl!("Print failed"))),
-                    None => {}
-                },
-                Err(e) => app.status(format!("{}: {e}", tl!("Print failed"))),
-            }
+            let _ = app.run("ui.print", json!({}));
         }
         ui.add_space(12.0);
         ui.separator();

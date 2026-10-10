@@ -884,3 +884,7 @@
 	Operator	Operador
 	Equation Options	Opciones de ecuación
 	All symbol sets	Todos los conjuntos de símbolos
+	Send the document straight to the system print dialog, or save a copy in another format below.	Envía el documento directamente al cuadro de diálogo de impresión del sistema o guarda una copia en otro formato a continuación.
+	Or save a copy in another format:	O guarda una copia en otro formato:
+	Opening print dialog…	Abriendo el cuadro de diálogo de impresión…
+	Print failed: {error}	Error al imprimir: {error}

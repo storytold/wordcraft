@@ -495,12 +495,38 @@ impl WordApp {
                 self.open_dialog();
                 json!({})
             }
+            // Send the document to the system print dialog (web). `file.print` opens the Print
+            // page; this is the button on it, and the one programmatic call that opens system UI
+            // here, like `ui.openFileDialog` — only when the host can print.
+            "ui.print" => return Some(self.print_to_system()),
             "ui.discord" => {
                 self.canvas.open_url = Some("https://discord.gg/artcraft".into());
                 json!({})
             }
             _ => return None,
         }))
+    }
+
+    /// `ui.print`: export the document to PDF in memory and hand it to the host's print hook.
+    /// An error when the host can't print (desktop: File › Print saves a PDF instead).
+    fn print_to_system(&mut self) -> Result<Value, String> {
+        if self.services.print.is_none() {
+            return Err("printing to the system print dialog isn't available here; export a PDF instead".into());
+        }
+        let result = wordcraft_engine::io::save_bytes("document.pdf", &self.session.doc)
+            .and_then(|bytes| self.services.print.as_ref().map_or(Ok(()), |print| print(&bytes)).map(|()| bytes.len()));
+        match result {
+            Ok(len) => {
+                self.status(tl!("Opening print dialog…"));
+                Ok(json!({"printing": true, "bytes": len}))
+            }
+            Err(e) => {
+                log::error!("print failed: {e}");
+                let msg = i18n::fmt(tl!("Print failed: {error}"), &[("error", &e)]);
+                self.status(msg.clone());
+                Err(msg)
+            }
+        }
     }
 
     pub fn status(&mut self, s: impl Into<String>) {

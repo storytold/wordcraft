@@ -879,3 +879,7 @@
 	Operator	Operador
 	Equation Options	Opções de equação
 	All symbol sets	Todos os conjuntos de símbolos
+	Send the document straight to the system print dialog, or save a copy in another format below.	Envie o documento direto para a caixa de diálogo de impressão do sistema ou salve uma cópia em outro formato abaixo.
+	Or save a copy in another format:	Ou salve uma cópia em outro formato:
+	Opening print dialog…	Abrindo a caixa de diálogo de impressão…
+	Print failed: {error}	Falha na impressão: {error}

@@ -878,3 +878,7 @@
 	Operator	运算符
 	Equation Options	公式选项
 	All symbol sets	所有符号集
+	Send the document straight to the system print dialog, or save a copy in another format below.	将文档直接发送到系统打印对话框，或在下方以其他格式保存副本。
+	Or save a copy in another format:	或以其他格式保存副本：
+	Opening print dialog…	正在打开打印对话框…
+	Print failed: {error}	打印失败：{error}
