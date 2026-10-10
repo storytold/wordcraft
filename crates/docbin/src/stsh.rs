@@ -95,7 +95,9 @@ pub(crate) fn parse(table: &[u8], fc: u32, lcb: u32) -> Result<Vec<RawStyle>, Do
             if let Some(u) = upxs.get(1) {
                 chpx = u.clone();
             }
-        } else if stk == 2 && let Some(u) = upxs.first() {
+        } else if stk == 2
+            && let Some(u) = upxs.first()
+        {
             chpx = u.clone();
         }
         out.push(RawStyle { stk, istd_base, name, papx, chpx });

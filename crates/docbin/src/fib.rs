@@ -22,10 +22,16 @@ const CB_RG_FCLCB: &[(u16, u16)] = &[(0x00C1, 0x005D), (0x00D9, 0x006C), (0x0101
 /// Indices of `fc`/`lcb` pairs inside `FibRgFcLcb97` (each pair is 8 bytes: fc then lcb).
 pub(crate) mod pair {
     pub(crate) const STSHF: usize = 1;
+    pub(crate) const PLCF_SED: usize = 6;
+    pub(crate) const PLCF_HDD: usize = 11;
     pub(crate) const PLCF_BTE_CHPX: usize = 12;
     pub(crate) const PLCF_BTE_PAPX: usize = 13;
     pub(crate) const STTBF_FFN: usize = 15;
     pub(crate) const CLX: usize = 33;
+    /// `fcPlfLst`: the list definitions (LSTF array, with the LVLs appended after the blob).
+    pub(crate) const PLF_LST: usize = 73;
+    /// `fcPlfLfo`: the list format overrides (LFO array with LFOData appended).
+    pub(crate) const PLF_LFO: usize = 74;
 }
 
 /// Character-position ranges of the subdocuments, from `FibRgLw97`.

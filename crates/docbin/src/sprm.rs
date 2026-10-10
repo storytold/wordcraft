@@ -30,10 +30,12 @@ pub(crate) fn iter(grpprl: &[u8]) -> impl Iterator<Item = Prl<'_>> {
         }
         let op = u16::from_le_bytes([rest[0], rest[1]]);
         let after = &rest[2..];
-        // Operand size per spra, with the two exceptions whose size byte lies.
+        // Operand size per spra, with the exceptions whose size byte lies.
         let len = match (op >> 13, op) {
             (_, P_CHG_TABS) => after.get(..2).map(|b| 2 + u16::from_le_bytes([b[0], b[1]]) as usize),
-            (_, T_DEF_TABLE) => after.get(..2).map(|b| 2 + u16::from_le_bytes([b[0], b[1]]) as usize),
+            // TDefTableOperand.cb counts the bytes after cb, incremented by 1, so the
+            // operand is one byte longer than cb.
+            (_, T_DEF_TABLE) => after.get(..2).map(|b| 1 + u16::from_le_bytes([b[0], b[1]]) as usize),
             (0, _) | (1, _) => Some(1),
             (2, _) | (4, _) | (5, _) => Some(2),
             (3, _) => Some(4),

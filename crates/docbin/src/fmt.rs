@@ -80,6 +80,14 @@ const HL: [Highlight; 17] = [
     Highlight::None,
 ];
 
+/// The `Ico` palette colour (0 = automatic → `None`).
+pub(crate) fn ico(i: u8) -> Option<Rgb> {
+    if i == 0 {
+        return None;
+    }
+    ICO.get(i as usize).copied()
+}
+
 fn u16_of(p: &Prl) -> Option<u16> {
     match p.operand {
         [b0, b1, ..] => Some(u16::from_le_bytes([*b0, *b1])),

@@ -55,7 +55,7 @@ pub(crate) fn fib_bytes(spec: &FibSpec) -> Vec<u8> {
     put16(&mut v, 0x3E, 0x0016);
     put32(&mut v, 0x40, 0x1000); // cbMac
     put32(&mut v, 0x4C, spec.ccp_text); // rglw[3] = ccpText
-    put32(&mut v, 0x50, spec.ccp_hdd); // rglw[5] = ccpHdd
+    put32(&mut v, 0x54, spec.ccp_hdd); // rglw[5] = ccpHdd
     put16(&mut v, 0x98, 0x005D);
     for (i, fc, lcb) in &spec.pairs {
         put32(&mut v, 0x9A + i * 8, *fc);
@@ -297,6 +297,23 @@ proptest! {
         }
         let _ = read(&f);
     }
+
+    #[test]
+    fn structured_truncated_never_panics(n in 0..8192usize) {
+        let f = structured_doc();
+        let n = n.min(f.len());
+        let _ = read(&f[..n]);
+    }
+
+    #[test]
+    fn structured_flipped_never_panics(pos in 0..8192usize, bit in 0..8usize) {
+        let mut f = structured_doc();
+        let at = pos.min(f.len() - 1);
+        if let Some(b) = f.get_mut(at) {
+            *b ^= 1 << (bit & 7);
+        }
+        let _ = read(&f);
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -431,7 +448,6 @@ fn papx_fkp(entries: &[(u32, u16, Vec<u8>)]) -> Vec<u8> {
         let half = (data_at / 2) as u8;
         page[rgbx_at + i * 13] = half;
         let grp = [e.1.to_le_bytes().as_slice(), e.2.as_slice()].concat();
-        let cb = (grp.len() + 1) as u8 / 2 * 2 / 2; // 2×cb-1 = grp.len()+even
         let cb = ((grp.len() + 2) / 2) as u8;
         page[data_at] = cb;
         page[data_at + 1..data_at + 1 + grp.len()].copy_from_slice(&grp);
@@ -464,7 +480,7 @@ fn rich_doc(spec: &RichSpec) -> Vec<u8> {
     clx.extend_from_slice(&plc);
 
     // WordDocument: FIB | padding | text | FKP pages (512-aligned).
-    let chpx_page_at = ((TEXT_FC as usize + text.len() * 2 + 511) / 512) * 512;
+    let chpx_page_at = (TEXT_FC as usize + text.len() * 2).div_ceil(512) * 512;
     let papx_page_at = chpx_page_at + 512;
     let mut word = vec![0u8; TEXT_FC as usize];
     word.extend_from_slice(&piece_bytes(&Piece { compressed: false, text: text.clone() }));
@@ -488,7 +504,7 @@ fn rich_doc(spec: &RichSpec) -> Vec<u8> {
     table.extend_from_slice(&plcf_chpx);
     let papx_bins_at = table.len();
     table.extend_from_slice(&plcf_papx);
-    table.extend(std::iter::repeat(0).take(stsh.len() + ffn.len()));
+    table.extend(std::iter::repeat_n(0, stsh.len() + ffn.len()));
     let stsh_at = table.len() - stsh.len() - ffn.len();
     let ffn_at = stsh_at + stsh.len();
     table[stsh_at..stsh_at + stsh.len()].copy_from_slice(&stsh);
@@ -512,7 +528,7 @@ fn rich_doc(spec: &RichSpec) -> Vec<u8> {
 }
 
 fn para0(doc: &wordcraft_doc::Document) -> wordcraft_doc::Paragraph {
-    doc.body.first().and_then(|b| b.as_para().map(|p| p.clone())).unwrap_or_default()
+    doc.body.first().and_then(|b| b.as_para().cloned()).unwrap_or_default()
 }
 
 #[test]
@@ -589,7 +605,12 @@ fn corpus_files_open() {
             let p = e.path();
             if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("doc")) {
                 let bytes = std::fs::read(&p).expect("read");
-                let doc = super::read(&bytes).expect("opens");
+                let doc = match super::read(&bytes) {
+                    Ok(d) => d,
+                    // Word 6/95 files are a documented, intentional rejection.
+                    Err(super::DocbinError::NotWord(m)) if m.contains("6.0/95") => continue,
+                    Err(e) => panic!("{}: {e}", p.display()),
+                };
                 assert!(!doc.styles.styles.is_empty(), "{}: no styles", p.display());
                 let text = doc.plain_text(wordcraft_doc::StoryRef::Body);
                 assert!(text.chars().count() > 3, "{}: no text", p.display());
@@ -598,4 +619,475 @@ fn corpus_files_open() {
         }
     }
     assert!(checked > 0, "no .doc files found in {}", dir.display());
+}
+
+// ---------------------------------------------------------------------------------------------
+// D3: sections, headers/footers, tables.
+
+/// RichSpec extended for the D3 fixtures.
+struct StructSpec {
+    text: &'static str,
+    /// Extra pieces after the main text: header subdocument stories.
+    header_stories: Vec<&'static str>,
+    /// (end_cp, sepx grpprl) per section; the last one reaching the text end is the final one.
+    sections: Vec<(u32, Vec<u8>)>,
+    /// Character runs as in RichSpec.
+    chpx_runs: Vec<(u32, Vec<u8>)>,
+    /// Paragraph entries as in RichSpec, with the grpprl also carrying table sprms.
+    papx_entries: Vec<(u32, u16, Vec<u8>)>,
+    /// Raw `PlfLst` bytes (LSTF array + appended LVLs) for FIB pair 73.
+    plf_lst: Vec<u8>,
+    /// Raw `PlfLfo` bytes for FIB pair 74.
+    plf_lfo: Vec<u8>,
+}
+
+fn struct_doc(spec: &StructSpec) -> Vec<u8> {
+    let text: String = spec.text.into();
+    let ccp = text.chars().count() as u32;
+    let mut all: Vec<Piece> = vec![Piece { compressed: false, text: text.clone() }];
+    let mut story_ends = Vec::new();
+    let mut hdd_len = 0u32;
+    for s in &spec.header_stories {
+        let t: String = (*s).into();
+        hdd_len += t.chars().count() as u32;
+        story_ends.push(hdd_len);
+        all.push(Piece { compressed: false, text: t });
+    }
+    let plc = plcpcd(&all, TEXT_FC);
+    let mut clx = vec![0x02u8];
+    clx.extend_from_slice(&(plc.len() as u32).to_le_bytes());
+    clx.extend_from_slice(&plc);
+
+    let chpx_page_at = (TEXT_FC as usize + text.len() * 2).div_ceil(512) * 512;
+    let papx_page_at = chpx_page_at + 512;
+    let mut word = vec![0u8; TEXT_FC as usize];
+    for piece in &all {
+        word.extend_from_slice(&piece_bytes(piece));
+    }
+    word.resize(chpx_page_at, 0);
+    word.extend_from_slice(&chpx_fkp(&spec.chpx_runs, ccp));
+    word.extend_from_slice(&papx_fkp(&spec.papx_entries));
+
+    // PlcfSed: aCP[n+1] + aSed[n] (fn 2, fcSepx 4, fnMpr 2, fcMpr 4), and each Sepx after the
+    // pages. Plcfhdd: separator stories first (6 empties) then one empty + one per story.
+    let mut sepxes = Vec::new();
+    let mut plcf_sed = Vec::new();
+    let mut seds = Vec::new();
+    let first_sepx = papx_page_at + 512;
+    let mut off = first_sepx;
+    plcf_sed.extend_from_slice(&0u32.to_le_bytes());
+    for (end, grpprl) in &spec.sections {
+        plcf_sed.extend_from_slice(&end.to_le_bytes());
+        seds.extend_from_slice(&[0, 0]); // fn
+        seds.extend_from_slice(&(off as u32).to_le_bytes());
+        seds.extend_from_slice(&[0, 0, 0, 0, 0, 0]); // fnMpr + fcMpr
+        let mut sepx = (grpprl.len() as u16).to_le_bytes().to_vec();
+        sepx.extend_from_slice(grpprl);
+        sepxes.push(sepx);
+        off += grpprl.len() + 2;
+    }
+    plcf_sed.extend_from_slice(&seds);
+    // Plcfhdd: six empty separator stories, then the section's six slots: even hdr, odd hdr,
+    // even ftr, odd ftr, first hdr, first ftr — story 0 goes into the odd header slot (1).
+    let mut plcf_hdd: Vec<u8> = Vec::new();
+    let mut cp = 0u32;
+    plcf_hdd.extend_from_slice(&cp.to_le_bytes());
+    for _ in 0..6 {
+        plcf_hdd.extend_from_slice(&cp.to_le_bytes()); // separators: empty
+    }
+    // slot 0 (even header): empty
+    plcf_hdd.extend_from_slice(&cp.to_le_bytes());
+    // slot 1 (odd header): the story, when present
+    let has_story = !spec.header_stories.is_empty();
+    if has_story {
+        cp += spec.header_stories.iter().map(|s| s.chars().count() as u32).sum::<u32>();
+    }
+    plcf_hdd.extend_from_slice(&cp.to_le_bytes());
+    // remaining slots: empty
+    for _ in 0..4 {
+        plcf_hdd.extend_from_slice(&cp.to_le_bytes());
+    }
+
+    let clx_at = 0x40;
+    let mut table = vec![0u8; clx_at];
+    table.extend_from_slice(&clx);
+    let chpx_bins_at = table.len();
+    let plcf_chpx =
+        [0u32.to_le_bytes().as_slice(), fc_of(0x3FF0_0000).to_le_bytes().as_slice(), ((chpx_page_at / 512) as u32).to_le_bytes().as_slice()].concat();
+    table.extend_from_slice(&plcf_chpx);
+    let papx_bins_at = table.len();
+    let plcf_papx =
+        [0u32.to_le_bytes().as_slice(), fc_of(0x3FF0_0000).to_le_bytes().as_slice(), ((papx_page_at / 512) as u32).to_le_bytes().as_slice()].concat();
+    table.extend_from_slice(&plcf_papx);
+    let sed_at = table.len();
+    table.extend_from_slice(&plcf_sed);
+    let hdd_plc_at = table.len();
+    table.extend_from_slice(&plcf_hdd);
+    let stsh = stsh_bytes(&[std_bytes(1, 0, "Normal", &Vec::new(), &Vec::new())]);
+    let stsh_at = table.len();
+    table.extend_from_slice(&stsh);
+    let ffn = ffn_bytes(&["Times New Roman"]);
+    let ffn_at = table.len();
+    table.extend_from_slice(&ffn);
+    let lst_at = table.len();
+    table.extend_from_slice(&spec.plf_lst);
+    let lfo_at = table.len();
+    table.extend_from_slice(&spec.plf_lfo);
+
+    let mut pairs = vec![
+        (33, clx_at as u32, clx.len() as u32),
+        (1, stsh_at as u32, stsh.len() as u32),
+        (15, ffn_at as u32, ffn.len() as u32),
+        (12, chpx_bins_at as u32, plcf_chpx.len() as u32),
+        (13, papx_bins_at as u32, plcf_papx.len() as u32),
+        (6, sed_at as u32, plcf_sed.len() as u32),
+        (11, hdd_plc_at as u32, plcf_hdd.len() as u32),
+    ];
+    if !spec.plf_lst.is_empty() {
+        pairs.push((73, lst_at as u32, spec.plf_lst.len() as u32));
+    }
+    if !spec.plf_lfo.is_empty() {
+        pairs.push((74, lfo_at as u32, spec.plf_lfo.len() as u32));
+    }
+    let spec_fib = FibSpec { ccp_text: ccp, ccp_hdd: hdd_len, pairs, ..Default::default() };
+    let fib = fib_bytes(&spec_fib);
+    word[..fib.len()].copy_from_slice(&fib);
+    word.extend(std::iter::repeat_n(0, first_sepx - word.len()));
+    for sepx in sepxes {
+        word.extend_from_slice(&sepx);
+    }
+    cfb_file(&[("WordDocument", &word), ("0Table", &table)])
+}
+
+#[test]
+fn section_props_parsed() {
+    let spec = StructSpec {
+        text: "a\rb\r",
+        header_stories: vec![],
+        sections: vec![(2, grpprl(&[(0xB01F, &12240u16.to_le_bytes()), (0xB020, &15840u16.to_le_bytes()), (0xB021, &1440u16.to_le_bytes())]))],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(1, 0, Vec::new()), (3, 0, Vec::new())],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    // The single section ends at the text end: it becomes the document's last section.
+    assert_eq!(doc.last_section.page_w, 612.0);
+    assert_eq!(doc.last_section.page_h, 792.0);
+    assert_eq!(doc.last_section.margin_left, 72.0);
+}
+
+#[test]
+fn two_sections_box_the_first() {
+    let spec = StructSpec {
+        text: "first\rsecond\r",
+        header_stories: vec![],
+        sections: vec![(6, grpprl(&[(0x300A, &[0x01])])), (12, Vec::new())],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(5, 0, Vec::new()), (12, 0, Vec::new())],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let p0 = doc.body.first().and_then(|b| b.as_para()).expect("para");
+    let sec = p0.section.as_ref().expect("section on first paragraph");
+    assert!(sec.title_page);
+    assert!(!doc.last_section.title_page);
+}
+
+#[test]
+fn header_story_becomes_part() {
+    let spec = StructSpec {
+        text: "body\r",
+        header_stories: vec!["Header text\r\r"],
+        sections: vec![(5, Vec::new())],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(4, 0, Vec::new())],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let id = doc.last_section.headers.default.expect("odd header part");
+    let part = doc.parts.get(&id).expect("part");
+    assert!(part.blocks.iter().any(|b| b.as_para().is_some_and(|p| p.text.contains("Header text"))));
+}
+
+/// A `sprmTDefTable` Prl for `edges` twip boundaries and TC80s of 20 bytes per column,
+/// built per the spec (cb counts the bytes after it, plus one).
+fn t_def_table(edges: &[i16]) -> Vec<u8> {
+    let itc = edges.len() as u8 - 1;
+    let mut body = vec![itc];
+    for e in edges {
+        body.extend_from_slice(&e.to_le_bytes());
+    }
+    for _ in 0..itc {
+        body.extend_from_slice(&[0u8; 20]); // TC80: default cell
+    }
+    // cb = bytes after cb + 1.
+    let cb = (body.len() + 1) as u16;
+    let mut v = (0xD608u16).to_le_bytes().to_vec();
+    v.extend_from_slice(&cb.to_le_bytes());
+    v.extend_from_slice(&body);
+    v
+}
+
+#[test]
+fn table_assembled_from_marks() {
+    // A 2×2 table: "a\x07 b\x07|ttp  c\x07 d\x07|ttp" then a normal paragraph.
+    let def_table = t_def_table(&[0, 2880, 5760]);
+    let text = "a\u{7}b\u{7}c\u{7}d\u{7}tail\r";
+    let in_tbl = grpprl(&[(0x2416, &[0x01])]);
+    let ttp: Vec<u8> = [grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01])]), def_table].concat();
+    let spec = StructSpec {
+        text,
+        header_stories: vec![],
+        sections: vec![(text.chars().count() as u32, Vec::new())],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![
+            (2, 0, in_tbl.clone()), // "a" cell end
+            (4, 0, ttp.clone()),    // "b" cell end + TTP row 1
+            (6, 0, in_tbl),         // "c" cell end
+            (8, 0, ttp),            // "d" cell end + TTP row 2
+            (13, 0, Vec::new()),    // "tail" paragraph mark
+        ],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let tbl = doc.body.iter().find_map(|b| b.as_table()).expect("table");
+    assert_eq!(tbl.rows.len(), 2);
+    assert_eq!(tbl.rows[0].cells.len(), 2);
+    assert_eq!(tbl.grid.len(), 2);
+    assert_eq!(tbl.grid[0], 144.0); // 2880 twips = 144 pt
+    assert_eq!(tbl.total_width(), 288.0);
+    let cell_text = |r: usize, c: usize| tbl.rows[r].cells[c].blocks.iter().filter_map(|b| b.as_para()).map(|p| p.text.clone()).collect::<String>();
+    assert_eq!(cell_text(0, 0), "a");
+    assert_eq!(cell_text(0, 1), "b");
+    assert_eq!(cell_text(1, 1), "d");
+    let last = doc.body.last().and_then(|b| b.as_para()).expect("tail para");
+    assert_eq!(last.text, "tail");
+}
+
+#[test]
+fn table_merges_borders_shading() {
+    // Two rows: the first "a\x07 b\x07 c\x07" with cells 0-1 horizontally merged; the second
+    // "d\x07 e\x07" with table borders, a shaded first cell and a vertical-merge restart.
+    let def3 = t_def_table(&[0, 1920, 3840, 5760]);
+    let def2 = t_def_table(&[0, 2880, 5760]);
+    let borders = {
+        // sprmTTableBorders80: cb = 0x18, then 6 × Brc80 (width 4/8pt, single, ico 1, space 0).
+        let brc = [4u8, 1, 1, 0];
+        let mut op = vec![0x18u8];
+        for _ in 0..6 {
+            op.extend_from_slice(&brc);
+        }
+        let mut v = (0xD605u16).to_le_bytes().to_vec();
+        v.extend_from_slice(&op);
+        v
+    };
+    let shd = {
+        // sprmTSetShd: cb = 12, itc 0..1, Shd { cvFore = FFFF00 (yellow), ipat = 1 (solid,
+        // which shows the foreground) }.
+        let mut op = vec![12u8, 0, 1];
+        op.extend_from_slice(&[0xFF, 0xFF, 0x00, 0x00]); // cvFore = yellow
+        op.extend_from_slice(&[0, 0, 0, 0]); // cvBack
+        op.extend_from_slice(&1u16.to_le_bytes()); // ipat solid
+        let mut v = (0xD62Du16).to_le_bytes().to_vec();
+        v.extend_from_slice(&op);
+        v
+    };
+    let vert_merge = {
+        // sprmTVertMerge: cb = 2, itc 0, flag 3 (restart).
+        let mut v = (0xD62Bu16).to_le_bytes().to_vec();
+        v.extend_from_slice(&[2, 0, 3]);
+        v
+    };
+    let h_merge = {
+        // sprmTMerge: itcFirstLim 0..2.
+        let mut v = (0x5624u16).to_le_bytes().to_vec();
+        v.extend_from_slice(&[0, 2]);
+        v
+    };
+    let text = "a\u{7}b\u{7}c\u{7}d\u{7}e\u{7}\r";
+    let ttp_base = || grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01])]);
+    let mut row1: Vec<u8> = [ttp_base(), def3.clone(), h_merge].concat();
+    let mut row2: Vec<u8> = [ttp_base(), def2, borders, shd, vert_merge, grpprl(&[(0x9407, &(-400i16).to_le_bytes())])].concat();
+    let in_tbl = grpprl(&[(0x2416, &[0x01])]);
+    let spec = StructSpec {
+        text,
+        header_stories: vec![],
+        sections: vec![(text.chars().count() as u32, Vec::new())],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![
+            (2, 0, in_tbl.clone()),
+            (4, 0, in_tbl.clone()),
+            (6, 0, std::mem::take(&mut row1)), // "c" cell end + TTP row 1 (merge 0..2)
+            (8, 0, in_tbl),
+            (10, 0, std::mem::take(&mut row2)), // "e" cell end + TTP row 2
+            (11, 0, Vec::new()),
+        ],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let tbl = doc.body.iter().find_map(|b| b.as_table()).expect("table");
+    assert_eq!(tbl.rows.len(), 2);
+    // Row 1: three cell marks merged to two cells, the first spanning two columns.
+    assert_eq!(tbl.rows[0].cells.len(), 2);
+    assert_eq!(tbl.rows[0].cells[0].span(), 2);
+    let r0 = tbl.rows[0].cells[0].blocks.iter().filter_map(|b| b.as_para()).map(|p| p.text.clone()).collect::<String>();
+    assert_eq!(r0, "ab");
+    // Row 2: shading, vertical-merge restart, exact height 20pt.
+    assert_eq!(tbl.rows[1].cells[0].props.shading, Some(wordcraft_doc::Rgb(255, 255, 0)));
+    assert_eq!(tbl.rows[1].cells[0].props.vmerge, wordcraft_doc::props::VMerge::Restart);
+    assert_eq!(tbl.rows[1].props.height, Some(20.0));
+    // Table borders from the first row that carries them: single 0.5pt black.
+    let b = tbl.props.borders.expect("borders");
+    let top = b.top.expect("top border");
+    assert_eq!(top.style, wordcraft_doc::props::BorderStyle::Single);
+    assert_eq!(top.width, 0.5);
+}
+
+// ---------------------------------------------------------------------------------------------
+// D3: lists (PlfLst + PlfLfo) and the combined document.
+
+/// One LVL: number text given as chars (a `0`-valued char at placeholder position `ph` is
+/// the level placeholder), with a 720-twip left indent and a 360-twip hanging first line.
+fn lvl(start: u32, nfc: u8, chars: &[u16], ph: bool) -> Vec<u8> {
+    let mut v = vec![0u8; 28];
+    v[0..4].copy_from_slice(&start.to_le_bytes());
+    v[4] = nfc;
+    if ph {
+        v[6] = 1; // rgbxchNums[0]: the placeholder sits at one-based offset 1
+    }
+    v[15] = 1; // a space follows the number text
+    let papx: Vec<u8> = [grpprl(&[(0x840F, &720u16.to_le_bytes())]), grpprl(&[(0x8411, &(-360i16).to_le_bytes())])].concat();
+    v[25] = papx.len() as u8; // cbGrpprlPapx
+    v.extend_from_slice(&papx);
+    v.extend_from_slice(&(chars.len() as u16).to_le_bytes());
+    for c in chars {
+        v.extend_from_slice(&c.to_le_bytes());
+    }
+    v
+}
+
+/// A `PlfLst` with one multi-level list (nine decimal levels) or one simple list.
+fn plf_lst(lsid: i32, simple: bool, levels: &[Vec<u8>]) -> Vec<u8> {
+    let mut v = 1u16.to_le_bytes().to_vec();
+    v.extend_from_slice(&lsid.to_le_bytes());
+    v.extend_from_slice(&0u32.to_le_bytes()); // tplc
+    for _ in 0..9 {
+        v.extend_from_slice(&0x0FFFu16.to_le_bytes()); // no style links
+    }
+    v.push(u8::from(simple)); // flags: fSimpleList
+    v.push(0); // grfhic
+    for l in levels {
+        v.extend_from_slice(l);
+    }
+    v
+}
+
+/// A `PlfLfo` with one LFO bound to `lsid`.
+fn plf_lfo(lsid: i32) -> Vec<u8> {
+    let mut v = 1u32.to_le_bytes().to_vec(); // lfoMac
+    v.extend_from_slice(&lsid.to_le_bytes()); // LFO.lsid
+    v.extend_from_slice(&[0u8; 8]); // unused1/2
+    v.push(0); // clfolvl
+    v.extend_from_slice(&[0u8; 3]); // ibstFltAutoNum, grfhic, unused3
+    v.extend_from_slice(&0u32.to_le_bytes()); // LFOData.cp
+    v
+}
+
+#[test]
+fn list_numbering_parsed() {
+    let levels: Vec<Vec<u8>> = (0..9)
+        .map(|_| lvl(1, 0x00, &[0x0000, 0x002E], true)) // "%1." style, decimal
+        .collect();
+    let text = "one\rtwo\rplain\r";
+    let listed = |off: bool| {
+        if off { grpprl(&[(0x460B, &[0x00, 0x00])]) } else { [grpprl(&[(0x260A, &[0x00])]), grpprl(&[(0x460B, &[0x01, 0x00])])].concat() }
+    };
+    let spec = StructSpec {
+        text,
+        header_stories: vec![],
+        sections: vec![(text.chars().count() as u32, Vec::new())],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(4, 0, listed(false)), (8, 0, listed(false)), (14, 0, listed(true))],
+        plf_lst: plf_lst(0x1000, false, &levels),
+        plf_lfo: plf_lfo(0x1000),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    assert_eq!(doc.numbering.abstracts.len(), 1);
+    assert_eq!(doc.numbering.nums.len(), 1);
+    let l0 = doc.numbering.level(1, 0).expect("level 0");
+    assert_eq!(l0.format, wordcraft_doc::section::NumFormat::Decimal);
+    assert_eq!(l0.text, "%1.");
+    assert_eq!(l0.indent, 36.0);
+    assert_eq!(l0.hanging, 18.0);
+    assert_eq!(l0.suffix, wordcraft_doc::numbering::LevelSuffix::Space);
+    // Paragraphs 1-2 are in the list, paragraph 3 is not.
+    let n = |i: usize| doc.body.get(i).and_then(|b| b.as_para()).and_then(|p| p.props.numbering);
+    assert_eq!(n(0), Some(wordcraft_doc::props::NumRef { num: 1, level: 0 }));
+    assert_eq!(n(1), Some(wordcraft_doc::props::NumRef { num: 1, level: 0 }));
+    assert_eq!(n(2), None);
+    // The numbering produces labels through the shared counter.
+    let mut c = wordcraft_doc::numbering::Counters::default();
+    assert_eq!(c.next_label(&doc.numbering, 1, 0).unwrap().0, "1.");
+    assert_eq!(c.next_label(&doc.numbering, 1, 0).unwrap().0, "2.");
+}
+
+/// The combined D3 fixture: intro paragraph, table, list, two sections, header story.
+fn structured_doc() -> Vec<u8> {
+    let def2 = t_def_table(&[0, 2880, 5760]);
+    let mut row: Vec<u8> = [grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01])]), def2].concat();
+    let listed = [grpprl(&[(0x260A, &[0x00])]), grpprl(&[(0x460B, &[0x01, 0x00])])].concat();
+    let text = "Intro\ra\u{7}b\u{7}first\rsecond\r";
+    let levels: Vec<Vec<u8>> = (0..9).map(|_| lvl(1, 0x00, &[0x0000, 0x002E], true)).collect();
+    let spec = StructSpec {
+        text,
+        header_stories: vec!["Running head\r\r"],
+        sections: vec![
+            (6, Vec::new()), // section 1: the intro paragraph; its header story is the odd header
+            (
+                text.chars().count() as u32,
+                grpprl(&[(0xB01F, &15840u16.to_le_bytes()), (0xB020, &12240u16.to_le_bytes())]), // landscape letter
+            ),
+        ],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![
+            (6, 0, Vec::new()),                   // "Intro" mark, ends section 1
+            (8, 0, grpprl(&[(0x2416, &[0x01])])), // "a" cell end
+            (10, 0, std::mem::take(&mut row)),    // "b" cell end + TTP
+            (16, 0, listed.clone()),              // "first" mark, in the list
+            (23, 0, listed),                      // "second" mark
+        ],
+        plf_lst: plf_lst(0x2000, false, &levels),
+        plf_lfo: plf_lfo(0x2000),
+    };
+    struct_doc(&spec)
+}
+
+#[test]
+fn combined_structure_document() {
+    let doc = read(&structured_doc()).expect("opens");
+    // Body shape: intro paragraph, table, two list paragraphs.
+    assert!(doc.body.first().and_then(|b| b.as_para()).is_some_and(|p| p.text == "Intro"), "intro para");
+    let tbl = doc.body.iter().find_map(|b| b.as_table()).expect("table");
+    assert_eq!(tbl.rows.len(), 1);
+    assert_eq!(tbl.rows[0].cells.len(), 2);
+    let texts: Vec<String> = doc.plain_text(wordcraft_doc::StoryRef::Body).split('\n').map(str::to_string).collect();
+    assert!(texts.contains(&"first".to_string()) && texts.contains(&"second".to_string()), "list text present: {texts:?}");
+    // Section 1 is attached to the intro paragraph and owns the header story; the final
+    // section is landscape.
+    let sec1 = doc.body.first().and_then(|b| b.as_para()).and_then(|p| p.section.clone()).expect("section on intro");
+    let h = sec1.headers.default.expect("header part");
+    assert!(doc.parts.get(&h).is_some_and(|p| p.blocks.iter().any(|b| b.as_para().is_some_and(|p| p.text.contains("Running head")))));
+    assert_eq!(doc.last_section.page_w, 792.0);
+    assert_eq!(doc.last_section.page_h, 612.0);
+    assert!(doc.last_section.landscape);
+    // The whole document round-trips through JSON (the wcraft.json shape).
+    let json = serde_json::to_value(&doc).expect("serialises");
+    assert!(json.get("body").is_some_and(|b| b.as_array().is_some_and(|a| !a.is_empty())));
+    assert!(json.get("numbering").is_some_and(|n| n.get("nums").is_some_and(|x| x.as_array().is_some_and(|a| !a.is_empty()))));
+    assert!(json.get("lastSection").is_some_and(|s| s.get("landscape") == Some(&serde_json::json!(true))));
 }

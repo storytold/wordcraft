@@ -11,24 +11,35 @@
 mod fib;
 mod fkp;
 mod fmt;
+mod list;
 mod piece;
+mod sections;
 mod sprm;
 mod stsh;
+mod table;
 
 use std::io::{Read, Seek};
 
 use wordcraft_doc::para::Paragraph;
 use wordcraft_doc::para::Run;
 use wordcraft_doc::props::CharProps;
+use wordcraft_doc::props::NumRef;
+use wordcraft_doc::section::HeaderSet;
 use wordcraft_doc::styles::StyleSheet;
-use wordcraft_doc::{Document, para_block};
+use wordcraft_doc::{Document, PartKind};
 
 use fkp::Bins;
 use piece::{PieceTable, PrmRef};
 use sprm::Prl;
+use table::ParaOut;
 
 /// Largest stream we materialise (bytes); the engine already caps whole files at 2 GB.
 const MAX_STREAM: u64 = 1 << 30;
+/// Most header/footer parts we create (matches the docx reader's cap).
+const MAX_PARTS: usize = 50_000;
+/// `sprmPIlvl` / `sprmPIlfo`: the paragraph's list level and list.
+const P_ILVL: u16 = 0x260A;
+const P_ILFO: u16 = 0x460B;
 
 /// Errors from reading a Word 97-2003 binary file.
 #[derive(Debug, thiserror::Error, Clone, PartialEq)]
@@ -93,8 +104,66 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocbinError> {
     let mut doc = Document::new();
     doc.body.clear();
     doc.styles = fmt::stylesheet(&raw_styles, &fonts);
-    let sheet: &StyleSheet = &doc.styles;
-    doc.body = walk(&word, &pieces, &chpx_bins, &papx_bins, fib.ccp.text, &fonts, &raw_styles, sheet);
+    doc.numbering = list::parse(&table, &fib, &fonts);
+    let sheet: StyleSheet = doc.styles.clone();
+    let sects = sections::parse(&word, &table, &fib);
+    let stories = sections::header_stories(&table, &fib);
+    // The header subdocument begins after the main text and the footnotes; its stories' CPs
+    // are relative to it.
+    let hdd_base = fib.ccp.text + fib.ccp.ftn;
+
+    // Header and footer parts: skip the six separator stories, then six stories per section
+    // in the order even header, odd (default) header, even footer, odd (default) footer,
+    // first header, first footer. Empty stories inherit from the previous section.
+    let mut hf_ids: Vec<(usize, usize, u32)> = Vec::new();
+    for si in 0..sects.len() {
+        for k in 0..6usize {
+            let Some((a, b)) = stories.get(6 + si * 6 + k) else { break };
+            if b <= a || doc.parts.len() >= MAX_PARTS {
+                continue;
+            }
+            let kind = match k {
+                0 | 1 | 4 => PartKind::Header,
+                _ => PartKind::Footer,
+            };
+            let out = walk(&word, &pieces, &chpx_bins, &papx_bins, hdd_base + a, hdd_base + b, &fonts, &raw_styles, &sheet);
+            let blocks = table::assemble(out);
+            if !blocks.is_empty() {
+                let id = doc.add_part(kind, blocks);
+                hf_ids.push((si, k, id));
+            }
+        }
+    }
+
+    // Sections: each section's properties attach to the paragraph that ends it (its story of
+    // header/footer parts included); the section reaching the end of the text is the final one.
+    let mut paras = walk(&word, &pieces, &chpx_bins, &papx_bins, 0, fib.ccp.text, &fonts, &raw_styles, &sheet);
+    let last = sects.last().map(|s| s.props.clone());
+    for (si, sec) in sects.iter().enumerate() {
+        let mut props = sec.props.clone();
+        let id_of = |k: usize| hf_ids.iter().find(|(s, kk, _)| *s == si && *kk == k).map(|(_, _, id)| *id);
+        props.headers = HeaderSet { even: id_of(0), default: id_of(1), first: id_of(4) };
+        props.footers = HeaderSet { even: id_of(2), default: id_of(3), first: id_of(5) };
+        let is_final = si + 1 == sects.len() || sec.end_cp >= fib.ccp.text;
+        if is_final {
+            continue; // handled below through `last`
+        }
+        for p in paras.iter_mut() {
+            if p.end_cp == sec.end_cp {
+                p.para.section = Some(Box::new(props));
+                break;
+            }
+        }
+    }
+    if let Some(mut l) = last {
+        let si = sects.len().saturating_sub(1);
+        let id_of = |k: usize| hf_ids.iter().find(|(s, kk, _)| *s == si && *kk == k).map(|(_, _, id)| *id);
+        l.headers = HeaderSet { even: id_of(0), default: id_of(1), first: id_of(4) };
+        l.footers = HeaderSet { even: id_of(2), default: id_of(3), first: id_of(5) };
+        doc.last_section = l;
+    }
+
+    doc.body = table::assemble(paras);
     doc.ensure_nonempty();
     Ok(doc)
 }
@@ -128,22 +197,24 @@ impl ParaBuild {
     }
 }
 
-/// Walk the main document's CPs, splitting paragraphs at 0x0D/0x07 marks, applying the
-/// direct character formatting of each CP and the paragraph formatting of each mark.
+/// Walk a CP range, splitting paragraphs at 0x0D/0x07 marks, applying the direct character
+/// formatting of each CP and the paragraph formatting of each mark. Works for the main
+/// document and for any subdocument range (headers, footers, notes…).
 fn walk(
     word: &[u8],
     pieces: &PieceTable,
     chpx_bins: &Bins,
     papx_bins: &Bins,
-    ccp_text: u32,
+    cp_start: u32,
+    cp_end: u32,
     fonts: &[String],
     raw_styles: &[stsh::RawStyle],
     sheet: &StyleSheet,
-) -> wordcraft_doc::Blocks {
-    let mut blocks = Vec::new();
+) -> Vec<ParaOut> {
+    let mut out = Vec::new();
     let mut pb = ParaBuild::default();
-    let mut cp = 0u32;
-    while cp < ccp_text {
+    let mut cp = cp_start;
+    while cp < cp_end {
         let c = pieces.text(word, cp, cp + 1).chars().next().unwrap_or('\u{FFFD}');
         match c {
             '\r' | '\u{7}' => {
@@ -154,15 +225,37 @@ fn walk(
                 if let Some(st) = raw_styles.get(istd as usize).filter(|s| !s.name.is_empty()) {
                     pb.props.style = Some(fmt::style_id(&st.name));
                 }
+                let mut row = table::decode(papx);
+                row.cell_mark = c == '\u{7}';
+                let mut ilvl = 0u8;
+                let mut ilfo = 0i32;
                 for prl in sprm::iter(papx) {
+                    if prl.op == P_ILVL {
+                        ilvl = prl.operand.first().copied().unwrap_or(0).min(8);
+                        continue;
+                    }
+                    if prl.op == P_ILFO {
+                        ilfo = match prl.operand {
+                            [b0, b1, ..] => i16::from_le_bytes([*b0, *b1]) as i32,
+                            _ => 0,
+                        };
+                        continue;
+                    }
                     if prl.sgc() == 1 {
                         fmt::apply_para(&mut pb.props, &prl);
                     }
                 }
+                if let Some(num) = num_of(ilfo) {
+                    pb.props.numbering = Some(NumRef { num, level: ilvl });
+                }
                 let fc = pieces.fc_of_cp(cp).unwrap_or(0);
                 pb.mark = char_props(chpx_bins.chpx(word, fc), fonts, &CharProps::default());
                 let done = std::mem::take(&mut pb);
-                blocks.push(para_block(Paragraph { text: done.text, runs: done.runs, props: done.props, mark: done.mark, ..Default::default() }));
+                out.push(ParaOut {
+                    para: Paragraph { text: done.text, runs: done.runs, props: done.props, mark: done.mark, ..Default::default() },
+                    end_cp: cp + 1,
+                    row,
+                });
             }
             '\t' => push_formatted(&mut pb, cp, '\t', word, pieces, chpx_bins, fonts, sheet),
             '\u{B}' => push_formatted(&mut pb, cp, '\n', word, pieces, chpx_bins, fonts, sheet),
@@ -178,9 +271,24 @@ fn walk(
         cp += c.len_utf16().max(1) as u32;
     }
     if !pb.text.is_empty() {
-        blocks.push(para_block(Paragraph { text: pb.text, runs: pb.runs, props: pb.props, mark: pb.mark, ..Default::default() }));
+        out.push(ParaOut {
+            para: Paragraph { text: pb.text, runs: pb.runs, props: pb.props, mark: pb.mark, ..Default::default() },
+            end_cp: cp_end,
+            row: table::RowInfo::default(),
+        });
     }
-    blocks
+    out
+}
+
+/// `sprmPIlfo` operand → the num id, if the paragraph is in a list. Values 0xF802-0xFFFF are
+/// the negation of a 1-based index and keep the paragraph's own indents, which we do by
+/// leaving the level's indents out of the paragraph (they never enter `ParaProps` anyway).
+fn num_of(ilfo: i32) -> Option<u32> {
+    match ilfo {
+        0x0001..=0x07FE => Some(ilfo as u32),
+        0xF802..=0xFFFF => Some((-(ilfo as i16)) as i32 as u32),
+        _ => None,
+    }
 }
 
 /// Resolve the character properties for the character at `cp`: the CHPX grpprl of its FC,
