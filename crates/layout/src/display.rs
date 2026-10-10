@@ -140,11 +140,134 @@ pub struct DisplayOptions {
     pub markup: bool,
     /// Show on-screen-only marks: equation placeholders and prompts (never in print or PDF).
     pub placeholders: bool,
+    /// How tracked changes and comments are marked when `markup` is on (Track Changes Options).
+    pub revisions: MarkupOptions,
 }
 
 impl Default for DisplayOptions {
     fn default() -> Self {
-        DisplayOptions { marks: false, dim_header: true, dim_body: false, markup: true, placeholders: false }
+        DisplayOptions { marks: false, dim_header: true, dim_body: false, markup: true, placeholders: false, revisions: MarkupOptions::default() }
+    }
+}
+
+/// An option list with stable names for commands and saved preferences.
+macro_rules! named {
+    ($(#[$m:meta])* $name:ident { $($(#[$vm:meta])* $v:ident = $s:literal),+ $(,)? }) => {
+        $(#[$m])*
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        pub enum $name { $($(#[$vm])* $v),+ }
+        impl $name {
+            /// Every choice with its name, in menu order.
+            pub const ALL: &'static [($name, &'static str)] = &[$(($name::$v, $s)),+];
+            pub fn name(self) -> &'static str {
+                Self::ALL.iter().find(|(v, _)| *v == self).map(|(_, s)| *s).unwrap_or("")
+            }
+            pub fn parse(s: &str) -> Option<Self> {
+                Self::ALL.iter().find(|(_, n)| *n == s).map(|(v, _)| *v)
+            }
+        }
+    };
+}
+
+named! {
+    /// How inserted text is marked.
+    InsertMark {
+        #[default]
+        Underline = "underline",
+        DoubleUnderline = "doubleUnderline",
+        Bold = "bold",
+        Italic = "italic",
+        Strikethrough = "strikethrough",
+        ColorOnly = "colorOnly",
+        None = "none",
+    }
+}
+
+named! {
+    /// How deleted text is marked.
+    DeleteMark {
+        #[default]
+        Strikethrough = "strikethrough",
+        DoubleStrikethrough = "doubleStrikethrough",
+        Hidden = "hidden",
+        Caret = "caret",
+        Hash = "hash",
+        Underline = "underline",
+        ColorOnly = "colorOnly",
+    }
+}
+
+named! {
+    /// Where the bar beside changed lines goes.
+    ChangeBar {
+        #[default]
+        Outside = "outside",
+        Left = "left",
+        Right = "right",
+        None = "none",
+    }
+}
+
+named! {
+    /// What the markup area beside the page shows.
+    BalloonMode {
+        /// Deletions, formatting and comments in balloons (drawn like `CommentsAndFormatting`
+        /// for now: revisions stay inline).
+        Revisions = "revisions",
+        /// Everything inline, no markup area.
+        Inline = "inline",
+        #[default]
+        CommentsAndFormatting = "commentsAndFormatting",
+    }
+}
+
+/// Track Changes Options: what markup shows and how revisions are drawn. A per-user preference,
+/// as in Word (saved with the interface settings, not the document).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct MarkupOptions {
+    pub comments: bool,
+    pub ink: bool,
+    pub insertions_deletions: bool,
+    pub formatting: bool,
+    pub balloons: BalloonMode,
+    pub insert_mark: InsertMark,
+    /// `None` = by author.
+    pub insert_color: Option<Rgb>,
+    pub delete_mark: DeleteMark,
+    /// `None` = by author.
+    pub delete_color: Option<Rgb>,
+    pub changed_lines: ChangeBar,
+    /// `None` = automatic (dark grey).
+    pub changed_lines_color: Option<Rgb>,
+    /// Record formatting changes while tracking.
+    pub track_formatting: bool,
+}
+
+impl Default for MarkupOptions {
+    fn default() -> Self {
+        MarkupOptions {
+            comments: true,
+            ink: true,
+            insertions_deletions: true,
+            formatting: true,
+            balloons: BalloonMode::default(),
+            insert_mark: InsertMark::default(),
+            insert_color: None,
+            delete_mark: DeleteMark::default(),
+            delete_color: None,
+            changed_lines: ChangeBar::default(),
+            changed_lines_color: None,
+            track_formatting: true,
+        }
+    }
+}
+
+impl MarkupOptions {
+    /// Tracked deletions take no room: they are hidden, or insertions and deletions aren't shown.
+    pub fn hides_deletions(&self) -> bool {
+        !self.insertions_deletions || self.delete_mark == DeleteMark::Hidden
     }
 }
 
@@ -179,7 +302,44 @@ pub fn page_display(doc: &Document, page: &Page, opts: &DisplayOptions) -> Vec<D
     for it in &page.items {
         item(doc, it, opts, ba, &mut out);
     }
+    if opts.markup && opts.revisions.insertions_deletions && opts.revisions.changed_lines != ChangeBar::None {
+        change_bars(doc, page, &opts.revisions, ba, &mut out);
+    }
     out
+}
+
+/// The automatic colour of the bars beside changed lines.
+pub const CHANGE_BAR: Rgb = Rgb(0x50, 0x50, 0x50);
+
+/// Bars in the margin beside body lines with tracked insertions or deletions.
+fn change_bars(doc: &Document, page: &Page, m: &MarkupOptions, alpha: f32, out: &mut Vec<Draw>) {
+    // Outside: the left margin, or the outer one of a right-hand page with mirrored margins.
+    let right = match m.changed_lines {
+        ChangeBar::Right => true,
+        ChangeBar::Outside => doc.settings.mirror_margins && page.number % 2 == 1,
+        _ => false,
+    };
+    let bx = if right { page.body.right() + 9.0 } else { page.body.x - 9.0 };
+    let color = m.changed_lines_color.unwrap_or(CHANGE_BAR);
+    for it in &page.items {
+        let Placed::Lines { story, path, para: pl, l0, l1, y, turn, .. } = it else { continue };
+        if turn.is_turned() {
+            continue;
+        }
+        let Some(first) = pl.lines.get(*l0) else { continue };
+        let mark_rev = doc.para(*story, path).is_some_and(|p| p.mark.ins.is_some() || p.mark.del.is_some());
+        for li in *l0..*l1 {
+            let Some(line) = pl.lines.get(li) else { continue };
+            let changed = (line.c0..line.c1)
+                .filter_map(|k| pl.clusters.get(k).and_then(|c| pl.styles.get(c.style as usize)))
+                .any(|st| st.rc.ins.is_some() || st.rc.del.is_some())
+                || (mark_rev && line.end == LineEnd::Para);
+            if changed {
+                let top = y + (line.top - first.top);
+                out.push(Draw::Line { x0: bx, y0: top, x1: bx, y1: top + line.height, width: 0.75, color, stroke: Stroke::Solid, alpha });
+            }
+        }
+    }
 }
 
 fn border_stroke(s: BorderStyle) -> Stroke {
@@ -275,6 +435,7 @@ fn lines(
         let bottom = top + line.height;
         // Commented text gets a soft shade (comment anchors are object markers).
         if opts.markup
+            && opts.revisions.comments
             && let Some(p) = para
         {
             let mut open: Option<usize> = None;
@@ -440,15 +601,58 @@ fn lines(
             }
             let run_end = k;
             let rc = &st.rc;
-            // Without markup a deletion is never drawn as ordinary text, even in a layout that kept it.
-            if rc.del.is_some() && !opts.markup {
+            let m = &opts.revisions;
+            // Without markup a deletion is never drawn as ordinary text, even in a layout that
+            // kept it; nor when deletions are hidden.
+            if rc.del.is_some() && (!opts.markup || m.hides_deletions()) {
                 continue;
             }
-            let rev = rc.ins.or(rc.del).filter(|_| opts.markup);
-            let color = match rev {
-                Some(r) => revision_color(doc.revisions.get(r as usize).map(|v| author_index(doc, &v.author)).unwrap_or(0)),
-                None => text_color(&rc.color, rc.shading.or(rc.highlight)),
+            let shown = opts.markup && m.insertions_deletions;
+            let del = rc.del.filter(|_| shown);
+            let ins = rc.ins.filter(|_| shown && del.is_none());
+            let author = |r: u32| revision_color(doc.revisions.get(r as usize).map(|v| author_index(doc, &v.author)).unwrap_or(0));
+            let color = match (ins, del) {
+                (Some(r), _) => m.insert_color.unwrap_or_else(|| author(r)),
+                (None, Some(r)) => m.delete_color.unwrap_or_else(|| author(r)),
+                _ => text_color(&rc.color, rc.shading.or(rc.highlight)),
             };
+            let ins_mark = ins.map(|_| m.insert_mark);
+            let del_mark = del.map(|_| m.delete_mark);
+            if del_mark == Some(DeleteMark::Caret) {
+                // A caret where the text was, instead of the text.
+                if let Some(cx) = line.cl_left(run_start).map(|c| x + c) {
+                    let h = st.size * 0.3;
+                    let w = (st.size / 18.0).max(0.6);
+                    out.push(Draw::Line {
+                        x0: cx - h * 0.6,
+                        y0: base + 1.0,
+                        x1: cx,
+                        y1: base + 1.0 - h,
+                        width: w,
+                        color,
+                        stroke: Stroke::Solid,
+                        alpha,
+                    });
+                    out.push(Draw::Line {
+                        x0: cx,
+                        y0: base + 1.0 - h,
+                        x1: cx + h * 0.6,
+                        y1: base + 1.0,
+                        width: w,
+                        color,
+                        stroke: Stroke::Solid,
+                        alpha,
+                    });
+                }
+                continue;
+            }
+            if del_mark == Some(DeleteMark::Hash) {
+                // Each deleted character shows as #.
+                let gid = st.face.glyph_for('#');
+                for g in &mut glyphs {
+                    g.0 = gid;
+                }
+            }
             if !glyphs.is_empty() {
                 out.push(Draw::Glyphs {
                     face: st.face,
@@ -456,8 +660,8 @@ fn lines(
                     glyphs,
                     color,
                     alpha,
-                    synth_bold: st.synth_bold,
-                    synth_italic: st.synth_italic,
+                    synth_bold: st.synth_bold || ins_mark == Some(InsertMark::Bold),
+                    synth_italic: st.synth_italic || ins_mark == Some(InsertMark::Italic),
                     text,
                     link: rc.link.clone(),
                     ranges,
@@ -473,8 +677,13 @@ fn lines(
                 end_k -= 1;
             }
             let thick = (st.size / 18.0).max(0.5);
-            let underline = if rc.ins.is_some() && opts.markup { Underline::Single } else { rc.underline };
-            let struck = rc.strike || rc.double_strike || (rc.del.is_some() && opts.markup);
+            let underline = match (ins_mark, del_mark) {
+                (Some(InsertMark::Underline), _) | (_, Some(DeleteMark::Underline)) => Underline::Single,
+                (Some(InsertMark::DoubleUnderline), _) => Underline::Double,
+                _ => rc.underline,
+            };
+            let double = rc.double_strike || del_mark == Some(DeleteMark::DoubleStrikethrough);
+            let struck = rc.strike || double || ins_mark == Some(InsertMark::Strikethrough) || del_mark == Some(DeleteMark::Strikethrough);
             let spans = if underline != Underline::None || struck { line.spans(run_start, end_k) } else { Vec::new() };
             for (x0, x1) in spans.into_iter().map(|(a, b)| (x + a, x + b)).filter(|(a, b)| b > a) {
                 if underline != Underline::None {
@@ -500,7 +709,7 @@ fn lines(
                 }
                 if struck {
                     let sy = base - st.shift - st.size * 0.28;
-                    let stroke = if rc.double_strike { Stroke::Double } else { Stroke::Solid };
+                    let stroke = if double { Stroke::Double } else { Stroke::Solid };
                     out.push(Draw::Line { x0, y0: sy, x1, y1: sy, width: thick, color, stroke, alpha });
                 }
             }
@@ -626,10 +835,18 @@ fn lines(
                 // A right-to-left paragraph's mark sits at its end, on the left.
                 let mx = if line.rtl { ex - 1.0 - size * 0.6 } else { ex + 1.0 };
                 // A tracked (inserted or deleted) paragraph mark is drawn in its author's colour.
-                let color = para
-                    .and_then(|p| p.mark.ins.or(p.mark.del))
-                    .filter(|_| opts.markup)
-                    .map(|r| revision_color(doc.revisions.get(r as usize).map(|v| author_index(doc, &v.author)).unwrap_or(0)));
+                let m = &opts.revisions;
+                let color = para.filter(|_| opts.markup && m.insertions_deletions).and_then(|p| match (p.mark.ins, p.mark.del) {
+                    (_, Some(r)) => Some(
+                        m.delete_color
+                            .unwrap_or_else(|| revision_color(doc.revisions.get(r as usize).map(|v| author_index(doc, &v.author)).unwrap_or(0))),
+                    ),
+                    (Some(r), None) => Some(
+                        m.insert_color
+                            .unwrap_or_else(|| revision_color(doc.revisions.get(r as usize).map(|v| author_index(doc, &v.author)).unwrap_or(0))),
+                    ),
+                    _ => None,
+                });
                 // The last paragraph of a section ends in a section break instead of a plain ¶.
                 if let Some(start) = section_break_after(doc, story, path) {
                     let (x0, x1) = if line.rtl { (x + line.left, ex - 2.0) } else { (ex + 2.0, x + line.right) };

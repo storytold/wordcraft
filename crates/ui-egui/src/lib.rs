@@ -19,6 +19,7 @@ pub mod chrome;
 pub mod control;
 pub mod credits;
 pub mod dialogs;
+pub mod dialogs_lists;
 pub mod equation_tab;
 pub mod file_dialogs;
 pub mod frame;
@@ -1084,6 +1085,9 @@ fn input_dialog(id: &str, params: &Value) -> Option<&'static str> {
         "table.properties" if params.as_object().is_none_or(|m| m.is_empty()) => Some("tableProperties"),
         // `null` is an answer here: it removes the password.
         "file.encrypt" if params.get("password").is_none() => Some("encryptPassword"),
+        // Define New Multilevel List and Track Changes Options without settings show their dialogs.
+        "list.define" if params.get("levels").is_none() => Some("defineList"),
+        "review.trackingOptions" if params.as_object().is_none_or(|m| m.is_empty()) => Some("trackChangesOptions"),
         _ => None,
     }
 }
@@ -2288,7 +2292,7 @@ mod tests {
         let mut a = app();
         a.session.run("review.wordCount", &json!({"includeTextBoxes": false})).unwrap();
         let saved = serde_json::to_string(&a.prefs()).unwrap();
-        assert!(saved.contains(r#""editing":{"countNotes":false}"#), "{saved}");
+        assert!(saved.contains(r#""editing":{"countNotes":false,"#), "{saved}");
         let mut b = app();
         b.apply_prefs(serde_json::from_str(&saved).unwrap());
         assert!(!b.session.prefs.count_notes);

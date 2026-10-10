@@ -625,7 +625,17 @@ impl Reader<'_> {
             _ => LevelSuffix::Tab,
         };
         lv.legal = flag(l, "w:isLgl").unwrap_or(false);
-        lv.restart = l.child_val("w:lvlRestart").and_then(int).is_none_or(|v| v != 0);
+        let restart = l.child_val("w:lvlRestart").and_then(int);
+        lv.restart = restart.is_none_or(|v| v != 0);
+        lv.restart_after = restart.filter(|v| (1..=9).contains(v)).map(|v| v as u8);
+        // The tab stop after the number ("num" tab in the level's paragraph properties).
+        lv.tab = l
+            .child("w:pPr")
+            .and_then(|p| p.child("w:tabs"))
+            .and_then(|t| t.children("w:tab").find(|t| t.attr("w:val") == Some("num")))
+            .and_then(|t| tw(t, "w:pos"))
+            .filter(|v| v.is_finite())
+            .map(|v| v.clamp(-1584.0, 1584.0));
         lv.style = l.child_val("w:pStyle").filter(|s| !s.is_empty()).map(|s| self.pc.style_id(s));
         lv
     }

@@ -11,6 +11,7 @@
 # translated UI was consulted or copied; add entries the same way.
 # Product, format and technology names (WordCraft, PDF, Markdown, MCP …) stay in Latin letters.
 
+	(no style)	（无样式）
 	(no suggestions)	（无建议）
 	1.5 Line Spacing	1.5 倍行距
 	A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.	一款用 Rust 从零编写的免费开源文字处理软件。\n属于 ArtCraft 团队的 Crafting Apps 系列。
@@ -27,6 +28,7 @@
 	Add Space Before Paragraph	在段前添加间距
 	Add space between Asian and Latin text	在亚洲文字与西文之间添加间距
 	Add space between Asian text and numbers	在亚洲文字与数字之间添加间距
+	Add tab stop at:	制表位添加位置：
 	Add Text	添加文字
 	Add to Dictionary	添加到词典
 	Add to Style Gallery	添加到样式库
@@ -40,6 +42,7 @@
 	Align	对齐
 	Align Left	左对齐
 	Align Right	右对齐
+	Aligned at:	对齐位置：
 	Alignment	对齐方式
 	All Borders	所有框线
 	All Caps	全部大写
@@ -70,18 +73,46 @@
 	AutoSave	自动保存
 	AutoSave documents you have saved in WordCraft	自动保存在 WordCraft 中保存过的文档
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	自动保存失败：{error}。重新保存文档后将恢复自动保存。
+	Balloons	批注框
 	Bottom Margin	下边距
+	Bullet	项目符号
+	By author	按作者
+	Changed lines:	修订行：
+	Click level to modify:	单击要修改的级别：
+	Color only	仅颜色
 	Compress punctuation at the start of a line	压缩行首标点
 	Dark page (white text on black)	深色页面（黑底白字）
+	Define New Multilevel List	定义新的多级列表
+	Define New Multilevel List…	定义新的多级列表…
+	Deletions:	删除内容：
 	Edit Comment	编辑批注
+	Enter formatting for number:	输入编号的格式：
+	Follow number with:	编号之后：
+	Formatting	格式
+	Include level number from:	包含的级别编号来自：
+	Ink	墨迹
+	Insertions and Deletions	插入和删除
+	Insertions:	插入内容：
+	Left border	左框线
 	Left Margin	左边距
 	Indents and Spacing	缩进和间距
+	Legal style numbering	正规形式编号
 	Line breaking	断行
+	Link level to style:	将级别链接到样式：
+	List Definition	列表定义
 	More templates →	更多模板 →
 	No templates match your search.	没有与搜索匹配的模板。
+	Nothing	无
+	Number alignment:	编号对齐方式：
+	Number format	编号格式
+	Number style for this level:	此级别的编号样式：
+	Outside border	外侧框线
 	Reopen	重新打开
+	Restart list after:	重新开始列表的级别：
+	Right border	右框线
 	Right Margin	右边距
 	Search for templates	搜索模板
+	Show all revisions inline	以嵌入方式显示所有修订
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	像“视图 › 切换模式”一样以反转的颜色显示文档。保存、打印和 PDF 不受影响。
 	AutoSave saves every change to the file (needs a saved document)	自动保存会把每次更改写入文件（文档需已保存）
 	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	浏览器中无法使用自动保存：它不能写入你的文件。保存会下载一份副本。
@@ -670,6 +701,8 @@
 	Show Comments	显示批注
 	Show Markup	显示标记
 	Show Notes	显示备注
+	Show only comments and formatting in balloons	仅在批注框中显示批注和格式
+	Show revisions in balloons	在批注框中显示修订
 	Show rulers	显示标尺
 	Show the community button in the title bar	在标题栏中显示社区按钮
 	Show/Hide ¶	显示/隐藏 ¶
@@ -687,6 +720,7 @@
 	SmartArt	SmartArt
 	Sort	排序
 	Source code: github.com/storytold/wordcraft	源代码：github.com/storytold/wordcraft
+	Space	空格
 	Space before/after:	段前/段后间距：
 	Spacing	间距
 	Spacing (pt):	间距（磅）：
@@ -700,6 +734,7 @@
 	Spreadsheet Table	电子表格
 	Standard Colors	标准色
 	Star	星形
+	Start at:	起始编号：
 	Start Mail Merge	开始邮件合并
 	Start Mail\nMerge	开始邮件合并
 	Statistics	统计信息
@@ -721,6 +756,7 @@
 	Symbols	符号
 	Synonyms	同义词
 	Tab	制表符
+	Tab character	制表符
 	Table	表格
 	Table Column Width	表格列宽
 	Table Design	表设计
@@ -742,6 +778,7 @@
 	Text Effects and Typography	文本效果和版式
 	Text from File	文件中的文字
 	Text Highlight Color	文本突出显示颜色
+	Text indent at:	文本缩进位置：
 	Text to display:	要显示的文字：
 	Text Wrapping	文字环绕
 	Text:	文字：
@@ -763,7 +800,9 @@
 	Top:	上：
 	Total Row	汇总行
 	Track Changes	修订
+	Track Changes Options	修订选项
 	Track Changes: On	修订：打开
+	Track formatting	跟踪格式设置
 	Tracking	修订
 	Translate	翻译
 	Transparency	透明度

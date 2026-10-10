@@ -408,7 +408,7 @@ impl Ctx<'_> {
         let key = Key {
             rev: p.rev,
             width: width.to_bits(),
-            label: label.as_ref().map(|(t, l)| format!("{t}|{}|{}|{:?}", l.indent, l.hanging, l.suffix)),
+            label: label.as_ref().map(|(t, l)| format!("{t}|{}|{}|{:?}|{:?}|{:?}|{:?}", l.indent, l.hanging, l.suffix, l.align, l.tab, l.chr)),
             page,
             table: table.map(|t| hash_of(&format!("{t:?}"))).unwrap_or(0),
             notes: if p.objects.iter().any(|o| matches!(o, InlineObject::NoteRef { .. })) { self.notes_hash } else { 0 },

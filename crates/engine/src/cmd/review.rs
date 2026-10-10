@@ -41,6 +41,11 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({"showMarkup": s.view.show_markup}))
         })
         .pure(),
+        CommandSpec::new("review.trackingOptions", "Track Changes Options", "Review › Tracking", tracking_options)
+            .params(
+                r#"{"comments"?: bool, "ink"?: bool, "insertionsDeletions"?: bool, "formatting"?: bool, "balloons"?: "revisions|inline|commentsAndFormatting", "insertMark"?: "underline|doubleUnderline|bold|italic|strikethrough|colorOnly|none", "insertColor"?: "byAuthor" | "RRGGBB", "deleteMark"?: "strikethrough|doubleStrikethrough|hidden|caret|hash|underline|colorOnly", "deleteColor"?: "byAuthor" | "RRGGBB", "changedLines"?: "outside|left|right|none", "changedLinesColor"?: "auto" | "RRGGBB", "trackFormatting"?: bool} → the options (omit all to read them)"#,
+            )
+            .pure(),
         CommandSpec::new("review.wordCount", "Word Count", "Review › Proofing", word_count).params(r#"{"includeTextBoxes"?: bool}"#).pure(),
         CommandSpec::new("review.changes", "Reviewing Pane", "Review › Tracking", list_changes).pure(),
         CommandSpec::new("review.spelling", "Spelling & Grammar", "Review › Proofing", next_issue).key("F7").pure(),
@@ -556,4 +561,138 @@ fn thesaurus(s: &mut Session, v: &Value) -> CmdResult {
     };
     let syn = T.iter().find(|(w, _)| *w == word).map(|(_, l)| l.to_vec()).unwrap_or_default();
     Ok(json!({"word": word, "synonyms": syn}))
+}
+
+/// Track Changes Options: change the fields given, return them all. A per-user preference.
+fn tracking_options(s: &mut Session, v: &Value) -> CmdResult {
+    use wordcraft_doc::Rgb;
+    use wordcraft_layout::display::{BalloonMode, ChangeBar, DeleteMark, InsertMark};
+    let mut m = s.prefs.markup.clone();
+    let color = |k: &str, auto: &str, cur: Option<Rgb>| -> Result<Option<Rgb>, CmdError> {
+        match p::str(v, k) {
+            None => Ok(cur),
+            Some(c) if c == auto => Ok(None),
+            Some(c) => Rgb::parse(c).map(Some).ok_or_else(|| CmdError::Params(format!("`{k}`: \"{auto}\" or RRGGBB"))),
+        }
+    };
+    let pick = |k: &str| p::str(v, k);
+    for (k, f) in [
+        ("comments", &mut m.comments),
+        ("ink", &mut m.ink),
+        ("insertionsDeletions", &mut m.insertions_deletions),
+        ("formatting", &mut m.formatting),
+        ("trackFormatting", &mut m.track_formatting),
+    ] {
+        if let Some(b) = p::bool(v, k) {
+            *f = b;
+        }
+    }
+    if let Some(x) = pick("balloons") {
+        m.balloons = BalloonMode::parse(x).ok_or_else(|| CmdError::Params("`balloons`: revisions|inline|commentsAndFormatting".into()))?;
+    }
+    if let Some(x) = pick("insertMark") {
+        m.insert_mark = InsertMark::parse(x).ok_or_else(|| CmdError::Params("unknown `insertMark`".into()))?;
+    }
+    if let Some(x) = pick("deleteMark") {
+        m.delete_mark = DeleteMark::parse(x).ok_or_else(|| CmdError::Params("unknown `deleteMark`".into()))?;
+    }
+    if let Some(x) = pick("changedLines") {
+        m.changed_lines = ChangeBar::parse(x).ok_or_else(|| CmdError::Params("unknown `changedLines`".into()))?;
+    }
+    m.insert_color = color("insertColor", "byAuthor", m.insert_color)?;
+    m.delete_color = color("deleteColor", "byAuthor", m.delete_color)?;
+    m.changed_lines_color = color("changedLinesColor", "auto", m.changed_lines_color)?;
+    if m != s.prefs.markup {
+        s.prefs.markup = m;
+        // Hidden deletions leave the layout.
+        s.relayout();
+    }
+    Ok(tracking_json(&s.prefs.markup))
+}
+
+/// The Track Changes Options as `review.trackingOptions` takes them.
+pub fn tracking_json(m: &wordcraft_layout::display::MarkupOptions) -> Value {
+    let hex = |c: Option<wordcraft_doc::Rgb>, auto: &str| c.map(|c| c.hex()).unwrap_or_else(|| auto.to_string());
+    json!({
+        "comments": m.comments,
+        "ink": m.ink,
+        "insertionsDeletions": m.insertions_deletions,
+        "formatting": m.formatting,
+        "balloons": m.balloons.name(),
+        "insertMark": m.insert_mark.name(),
+        "insertColor": hex(m.insert_color, "byAuthor"),
+        "deleteMark": m.delete_mark.name(),
+        "deleteColor": hex(m.delete_color, "byAuthor"),
+        "changedLines": m.changed_lines.name(),
+        "changedLinesColor": hex(m.changed_lines_color, "auto"),
+        "trackFormatting": m.track_formatting,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use wordcraft_doc::Document;
+    use wordcraft_layout::display::{DisplayOptions, Draw, page_display};
+
+    use crate::Session;
+
+    /// What the first page draws with the session's Track Changes Options.
+    fn draws(s: &mut Session) -> (Vec<Draw>, f32) {
+        let l = s.layout();
+        let page = &l.pages[0];
+        let opts = DisplayOptions { revisions: s.prefs.markup.clone(), ..Default::default() };
+        (page_display(&s.doc, page, &opts), page.body.x)
+    }
+
+    fn glyph_colors(d: &[Draw]) -> Vec<(wordcraft_doc::Rgb, bool)> {
+        d.iter().filter_map(|x| if let Draw::Glyphs { color, synth_bold, .. } = x { Some((*color, *synth_bold)) } else { None }).collect()
+    }
+
+    fn lines(d: &[Draw]) -> Vec<(f32, f32, f32, f32)> {
+        d.iter().filter_map(|x| if let Draw::Line { x0, y0, x1, y1, .. } = x { Some((*x0, *y0, *x1, *y1)) } else { None }).collect()
+    }
+
+    /// #328: Track Changes Options change how an insertion and a deletion are drawn, the bar
+    /// beside changed lines, and whether deletions take room.
+    #[test]
+    fn tracking_options_change_how_revisions_are_drawn() {
+        let mut s = Session::new(Document::new());
+        // No proofing squiggles among the lines.
+        s.view.proofing = false;
+        s.run("document.setText", &json!({"text": "keep gone"})).unwrap();
+        s.run("review.trackChanges", &json!({"value": true})).unwrap();
+        s.run("caret.docStart", &json!({})).unwrap();
+        s.run("text.insert", &json!({"text": "new "})).unwrap();
+        s.run("select.range", &json!({"anchor": {"block": 0, "off": 9}, "focus": {"block": 0, "off": 13}})).unwrap();
+        s.run("text.delete", &json!({})).unwrap();
+
+        // Defaults: underlined insertion and struck deletion in the author's colour, a bar left of
+        // the text.
+        let (d, body_x) = draws(&mut s);
+        let bars: Vec<_> = lines(&d).into_iter().filter(|(x0, _, x1, _)| x0 == x1 && *x0 < body_x).collect();
+        assert_eq!(bars.len(), 1, "one changed line, one bar in the left margin");
+        let horizontal = lines(&d).into_iter().filter(|(_, y0, _, y1)| y0 == y1).count();
+        assert_eq!(horizontal, 2, "an underline and a strikethrough: {:?}", lines(&d));
+        let author = glyph_colors(&d).iter().filter(|(c, _)| *c != wordcraft_doc::Rgb::BLACK).count();
+        assert!(author >= 2, "insertion and deletion in the author's colour");
+
+        // Bold, fixed-colour insertions; hidden deletions; no bars.
+        let r = s
+            .run(
+                "review.trackingOptions",
+                &json!({"insertMark": "bold", "insertColor": "00AA00", "deleteMark": "hidden", "changedLines": "none", "balloons": "inline"}),
+            )
+            .unwrap();
+        assert_eq!((r["insertMark"].as_str(), r["deleteColor"].as_str(), r["balloons"].as_str()), (Some("bold"), Some("byAuthor"), Some("inline")));
+        let (d, _) = draws(&mut s);
+        assert!(lines(&d).is_empty(), "no underline, no strikethrough, no bar: {:?}", lines(&d));
+        assert!(glyph_colors(&d).contains(&(wordcraft_doc::Rgb(0, 0xAA, 0), true)), "a bold green insertion");
+        let text: String = d.iter().filter_map(|x| if let Draw::Glyphs { text, .. } = x { Some(text.as_str()) } else { None }).collect();
+        assert!(!text.contains("gone"), "the deletion takes no room: {text:?}");
+
+        // Unknown choices are refused; reading changes nothing.
+        assert!(s.run("review.trackingOptions", &json!({"deleteMark": "sparkles"})).is_err());
+        assert_eq!(s.run("review.trackingOptions", &json!({})).unwrap()["insertColor"], "00AA00");
+    }
 }
