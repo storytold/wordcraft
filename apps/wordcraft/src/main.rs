@@ -191,6 +191,7 @@ fn main() -> eframe::Result {
             None => logger.no_file(),
         }
     }
+    let window_controls = cfg!(not(any(target_os = "macos", target_os = "windows"))) && std::env::var_os("WORDCRAFT_SYSTEM_TITLEBAR").is_none();
     let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("WordCraft")
@@ -200,7 +201,8 @@ fn main() -> eframe::Result {
             .with_drag_and_drop(true)
             .with_fullsize_content_view(true)
             .with_titlebar_shown(false)
-            .with_title_shown(false),
+            .with_title_shown(false)
+            .with_decorations(!window_controls),
         ..Default::default()
     };
     if let Some(icon) = app_icon() {
@@ -229,6 +231,7 @@ fn main() -> eframe::Result {
             load_prefs(&mut app);
             app.ui.window = restored;
             app.integrated_titlebar = cfg!(target_os = "macos");
+            app.window_controls = window_controls;
             let mut key_file = None;
             if let Some(port) = control_port
                 && let Some((rx, file)) = control_server::start(port, cc.egui_ctx.clone(), wordcraft_control_key::settings_dir().as_deref())
