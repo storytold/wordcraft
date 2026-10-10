@@ -355,3 +355,21 @@ fn unsubsettable_font_is_drawn_as_outlines() {
     assert_eq!(glyphs, 0, "no text in the font krilla can't subset");
     assert!(paths > 0, "its glyphs are drawn as outlines");
 }
+
+#[test]
+fn field_results_are_extractable_text() {
+    // Issue #97 (test from #112 by @LloydNicholson): a REF field's result, not the U+FFFC
+    // placeholder, is what the text layer gets.
+    let mut d = Document::new();
+    let mut p = Paragraph::with_text("See  for details.", CharProps::default());
+    p.insert_object(
+        4,
+        InlineObject::Field { instr: " REF _RefTarget \\h ".into(), result: "Section 3.01".into(), locked: false },
+        &CharProps::default(),
+    )
+    .unwrap();
+    d.body = vec![para_block(p)];
+    let text = extract_text(&export(&d, &PdfOptions::default()).unwrap()).concat();
+    assert!(!text.contains('\u{FFFC}'), "{text:?}");
+    assert!(squash(&text).contains("See Section 3.01 for details."), "{text:?}");
+}
