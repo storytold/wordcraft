@@ -2989,7 +2989,12 @@ Caf\'e na\"ive \c{c}a \v{s}\'{e} and {\bfseries grouped bold} after.
         let mut d = Document::new();
         let mut p = wordcraft_doc::Paragraph::with_text("Area ", Default::default());
         let n = p.len();
-        p.insert_object(n, wordcraft_doc::para::InlineObject::Equation { linear: "π r^2".into(), display: false, math: Default::default() }, &Default::default()).unwrap();
+        p.insert_object(
+            n,
+            wordcraft_doc::para::InlineObject::Equation { linear: "π r^2".into(), display: false, math: Default::default() },
+            &Default::default(),
+        )
+        .unwrap();
         d.body = vec![wordcraft_doc::para_block(p)];
         let tex = export(&d);
         assert!(tex.contains("$\\pi r^2$") && tex.contains("\\usepackage{amsmath}"), "{tex}");

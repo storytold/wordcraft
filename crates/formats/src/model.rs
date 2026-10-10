@@ -371,7 +371,11 @@ impl Builder<'_> {
                 Inline::Equation { linear, display } => {
                     let linear = clean_text(linear);
                     if !linear.is_empty() {
-                        let _ = out.insert_object(end, InlineObject::Equation { linear, display: *display, math: Default::default() }, &CharProps::default());
+                        let _ = out.insert_object(
+                            end,
+                            InlineObject::Equation { linear, display: *display, math: Default::default() },
+                            &CharProps::default(),
+                        );
                     }
                 }
             }
