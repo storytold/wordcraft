@@ -138,6 +138,9 @@ pub struct ParaLayout {
     pub drop_cap: Option<(usize, u8, f32)>,
     /// Clusters after which the line may break with a hyphen (soft hyphens, auto hyphenation), sorted.
     pub hyph_after: Vec<u32>,
+    /// The text drawn by clusters that stand for an object (field results, note numbers,
+    /// equations) rather than for the paragraph's own text, by cluster index, sorted.
+    pub shown: Vec<(usize, String)>,
 }
 
 /// Inputs that change a paragraph's layout beyond its own content.
@@ -177,6 +180,8 @@ struct Builder<'a> {
     style_index: std::collections::HashMap<(String, u32, bool), u16>,
     glyphs: Vec<Glyph>,
     clusters: Vec<Cluster>,
+    /// Text drawn by clusters that stand for an object, by cluster index (see `ParaLayout::shown`).
+    shown: Vec<(usize, String)>,
 }
 
 impl<'a> Builder<'a> {
@@ -189,7 +194,7 @@ impl<'a> Builder<'a> {
             face.id(),
             rc.strike || rc.double_strike || rc.link.is_some(),
         );
-        let key = (format!("{}|{:?}|{:?}|{:?}|{:?}|{}", key.0, rc.highlight, rc.shading, rc.ins, rc.del, rc.hidden), key.1, key.2);
+        let key = (format!("{}|{:?}|{:?}|{:?}|{:?}|{}|{:?}", key.0, rc.highlight, rc.shading, rc.ins, rc.del, rc.hidden, rc.border), key.1, key.2);
         if let Some(i) = self.style_index.get(&key) {
             return *i;
         }
@@ -326,6 +331,7 @@ impl<'a> Builder<'a> {
         let g0 = first.g0;
         let style = first.style;
         let g1 = added.last().map(|c| c.g1).unwrap_or(g0);
+        self.shown.push((self.clusters.len(), text.to_string()));
         self.clusters.push(Cluster { start, end, adv: x, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, dot: false });
     }
 }
@@ -353,7 +359,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
             None => Arc::new(doc.styles.resolve_char(para_style, c)),
         }
     };
-    let mut b = Builder { env, styles: Vec::new(), style_index: Default::default(), glyphs: Vec::new(), clusters: Vec::new() };
+    let mut b = Builder { env, styles: Vec::new(), style_index: Default::default(), glyphs: Vec::new(), clusters: Vec::new(), shown: Vec::new() };
     let mark_rc = resolve(&p.mark);
     let mark_style = b.style(&mark_rc, None, false);
     let mut has_page_fields = false;
@@ -487,7 +493,11 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     // Break opportunities.
     let mut opps = std::collections::HashSet::new();
     for (i, o) in unicode_linebreak::linebreaks(&p.text) {
-        if o == unicode_linebreak::BreakOpportunity::Allowed || i < p.text.len() {
+        // Word keeps "and/or" and web addresses whole: no break right after a slash (a word
+        // too long for the line still breaks anywhere).
+        let after_slash =
+            p.text.get(..i).is_some_and(|t| t.ends_with('/')) && p.text.get(i..).and_then(|t| t.chars().next()).is_some_and(char::is_alphanumeric);
+        if (o == unicode_linebreak::BreakOpportunity::Allowed || i < p.text.len()) && !after_slash {
             opps.insert(i);
         }
     }
@@ -533,6 +543,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         styles: b.styles,
         glyphs: b.glyphs,
         clusters: b.clusters,
+        shown: b.shown,
         lines: Vec::new(),
         label,
         height: 0.0,
