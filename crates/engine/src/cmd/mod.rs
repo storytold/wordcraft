@@ -14,6 +14,7 @@ pub mod insert;
 pub mod inspector;
 pub mod lists;
 pub mod mailings;
+pub mod moves;
 pub mod objects;
 pub mod page;
 pub mod para;
@@ -99,10 +100,19 @@ pub fn delete_selection(s: &mut Session) -> Result<Pos, CmdError> {
 /// A revision record for the current author.
 pub fn new_revision(s: &mut Session, kind: RevisionKind) -> u32 {
     let date = now_iso();
-    if let Some((i, _)) = s.doc.revisions.iter().enumerate().rev().find(|(_, r)| r.kind == kind && r.author == s.author && r.date == date) {
+    // Never one end of a move, nor the deletion a cut may still turn into one.
+    let held = s.pending_move.as_ref().map(|m| m.rev);
+    if let Some((i, _)) = s
+        .doc
+        .revisions
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(i, r)| r.kind == kind && r.author == s.author && r.date == date && r.move_name.is_none() && held != Some(*i as u32))
+    {
         return i as u32;
     }
-    s.doc.revisions.push(Revision { kind, author: s.author.clone(), date });
+    s.doc.revisions.push(Revision { kind, author: s.author.clone(), date, move_name: None });
     (s.doc.revisions.len() - 1) as u32
 }
 
@@ -133,6 +143,11 @@ pub fn join_next_para(s: &mut Session, story: StoryRef, path: &wordcraft_doc::Pa
 /// Tracked deletion: own insertions are removed, other text is marked deleted.
 pub(crate) fn track_delete(s: &mut Session, a: &Pos, b: &Pos) -> Result<Pos, CmdError> {
     let rid = new_revision(s, RevisionKind::Delete);
+    track_delete_as(s, a, b, rid)
+}
+
+/// [`track_delete`] marking the deleted text with revision `rid`.
+pub(crate) fn track_delete_as(s: &mut Session, a: &Pos, b: &Pos, rid: u32) -> Result<Pos, CmdError> {
     let author = s.author.clone();
     // Remove text this author inserted (it never existed for the reader); mark the rest.
     let paths = s.doc.paths_between(a, b);

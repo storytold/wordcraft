@@ -68,6 +68,8 @@ pub(crate) struct Writer<'d> {
     media_files: BTreeMap<String, String>,
     bookmarks: HashMap<String, u32>,
     next_rev_id: u32,
+    /// Move ranges open in the output: (revision, range `w:id`, destination?).
+    open_moves: Vec<(u32, String, bool)>,
     docpr: u32,
     z: u32,
     /// Note part id → file note id, in first-reference order.
@@ -122,6 +124,7 @@ pub fn write_as(doc: &Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
         media_files: BTreeMap::new(),
         bookmarks: HashMap::new(),
         next_rev_id: 0,
+        open_moves: Vec::new(),
         docpr: 0,
         z: 251_658_240,
         footnotes: Vec::new(),

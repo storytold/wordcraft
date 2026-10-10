@@ -58,8 +58,49 @@ impl Writer<'_> {
                 }
             }
         }
+        if depth == 0 {
+            self.move_ranges(w, &[]);
+        }
         if bl.last().is_none_or(|b| matches!(**b, Block::Table(_))) {
             w.raw("<w:p/>");
+        }
+    }
+
+    /// The moves (revision, destination?) in `props`.
+    fn moves_of(&self, props: &CharProps) -> Vec<(u32, bool)> {
+        [(props.del, false), (props.ins, true)]
+            .into_iter()
+            .filter_map(|(r, to)| r.filter(|r| self.doc.move_name(Some(*r)).is_some()).map(|r| (r, to)))
+            .collect()
+    }
+
+    /// Bring the open move ranges to `want` (ECMA-376 §17.13.5.22–27): end the ranges of moves
+    /// that stop here, start those that begin. A range is written around each stretch of a
+    /// move's text (and paragraph marks), with the move's name, author and date.
+    fn move_ranges(&mut self, w: &mut W, want: &[(u32, bool)]) {
+        let mut k = 0;
+        while k < self.open_moves.len() {
+            match self.open_moves.get(k) {
+                Some((rev, id, to)) if !want.contains(&(*rev, *to)) => {
+                    w.empty(if *to { "w:moveToRangeEnd" } else { "w:moveFromRangeEnd" }, &[("w:id", id)]);
+                    self.open_moves.remove(k);
+                }
+                _ => k += 1,
+            }
+        }
+        for &(rev, to) in want {
+            if self.open_moves.iter().any(|(r, _, t)| *r == rev && *t == to) {
+                continue;
+            }
+            let name = self.doc.move_name(Some(rev)).unwrap_or("").to_string();
+            let (id, author, date) = self.rev_attrs(rev);
+            let tag = if to { "w:moveToRangeStart" } else { "w:moveFromRangeStart" };
+            if date.is_empty() {
+                w.empty(tag, &[("w:id", &id), ("w:name", &name), ("w:author", &author)]);
+            } else {
+                w.empty(tag, &[("w:id", &id), ("w:name", &name), ("w:author", &author), ("w:date", &date)]);
+            }
+            self.open_moves.push((rev, id, to));
         }
     }
 
@@ -99,6 +140,7 @@ impl Writer<'_> {
         let mark_revs: Vec<(u32, &str)> = [(p.mark.ins, "w:ins"), (p.mark.del, "w:del")]
             .into_iter()
             .filter_map(|(idx, tag)| idx.filter(|i| self.rev_kind(Some(*i)).is_some_and(|k| k != RevisionKind::Format)).map(|i| (i, tag)))
+            .map(|(i, tag)| (i, self.rev_tag(i, tag)))
             .collect();
         let has_mark = super::props::has_rpr(&p.mark) || !mark_revs.is_empty() || p.mark.fmt_change.is_some();
         if !pp.is_empty() || has_mark || section.is_some() {
@@ -162,6 +204,9 @@ impl Writer<'_> {
         if toc_end {
             w.raw(r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#);
         }
+        // Move ranges stay open across a moved paragraph mark; others end with the paragraph.
+        let mark_moves = self.moves_of(&p.mark);
+        self.move_ranges(w, &mark_moves);
         w.close("w:p");
     }
 
@@ -241,6 +286,8 @@ impl Writer<'_> {
                         j += 1;
                     }
                     let del = self.is_del(props);
+                    let moves = self.moves_of(props);
+                    self.move_ranges(w, &moves);
                     self.rev_open(w, props);
                     w.open("w:r", &[]);
                     self.rpr(w, props);
@@ -270,8 +317,18 @@ impl Writer<'_> {
         idx.and_then(|i| self.doc.revisions.get(i as usize)).map(|r| r.kind)
     }
 
+    /// Deleted text goes in `w:delText`; text moved away stays in `w:t` (§17.13.5.22).
     fn is_del(&self, props: &CharProps) -> bool {
-        props.del.is_some() && self.rev_kind(props.del) != Some(RevisionKind::Format)
+        props.del.is_some() && self.rev_kind(props.del) != Some(RevisionKind::Format) && self.doc.move_name(props.del).is_none()
+    }
+
+    /// `w:ins` / `w:del`, or `w:moveTo` / `w:moveFrom` when revision `idx` is one end of a move.
+    fn rev_tag(&self, idx: u32, tag: &'static str) -> &'static str {
+        match (self.doc.move_name(Some(idx)).is_some(), tag) {
+            (true, "w:ins") => "w:moveTo",
+            (true, "w:del") => "w:moveFrom",
+            _ => tag,
+        }
     }
 
     fn rev_attrs(&mut self, idx: u32) -> (String, String, String) {
@@ -316,6 +373,7 @@ impl Writer<'_> {
             if self.rev_kind(Some(idx)) == Some(RevisionKind::Format) {
                 continue;
             }
+            let tag = self.rev_tag(idx, tag);
             let (id, author, date) = self.rev_attrs(idx);
             if date.is_empty() {
                 w.open(tag, &[("w:id", &id), ("w:author", &author)]);
@@ -327,8 +385,10 @@ impl Writer<'_> {
 
     fn rev_close(&mut self, w: &mut W, props: &CharProps) {
         for (idx, tag) in [(props.del, "w:del"), (props.ins, "w:ins")] {
-            if idx.is_some() && self.rev_kind(idx) != Some(RevisionKind::Format) {
-                w.close(tag);
+            if let Some(i) = idx
+                && self.rev_kind(idx) != Some(RevisionKind::Format)
+            {
+                w.close(self.rev_tag(i, tag));
             }
         }
     }

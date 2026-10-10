@@ -4,7 +4,7 @@ use std::io::Write;
 
 use wordcraft_doc::para::{Anchor, FloatAlign, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{Align, Border, BorderStyle, Rgb, TextColor, VMerge};
-use wordcraft_doc::{Block, Document, InlineObject, Paragraph};
+use wordcraft_doc::{Block, Document, InlineObject, Paragraph, RevisionKind};
 
 const W_NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office""#;
 
@@ -1074,4 +1074,47 @@ fn formatting_revisions_round_trip() {
     assert_eq!(again.body, d.body);
     assert_eq!(again.last_section, d.last_section);
     assert_eq!(again.revisions, d.revisions);
+}
+
+/// Issue #400: moved text (ECMA-376 §17.13.5.21–28). `w:moveFrom` / `w:moveTo` inside named
+/// move ranges are the two ends of one move, paragraph marks included; the ranges are written
+/// back around them. A move missing an end, or whose range never ends, is a plain deletion and
+/// insertion.
+#[test]
+fn move_revisions_round_trip() {
+    let body = r#"
+<w:p><w:pPr><w:rPr><w:moveTo w:id="1" w:author="Ana" w:date="2026-10-03T00:00:00Z"/></w:rPr></w:pPr><w:moveToRangeStart w:id="2" w:name="move1" w:author="Ana" w:date="2026-10-03T00:00:00Z"/><w:moveTo w:id="3" w:author="Ana" w:date="2026-10-03T00:00:00Z"><w:r><w:t>Moved here.</w:t></w:r></w:moveTo></w:p>
+<w:moveToRangeEnd w:id="2"/>
+<w:p><w:r><w:t xml:space="preserve">Stays. </w:t></w:r><w:moveFromRangeStart w:id="4" w:name="move1" w:author="Ana" w:date="2026-10-03T00:00:00Z"/><w:moveFrom w:id="5" w:author="Ana" w:date="2026-10-03T00:00:00Z"><w:r><w:t>Moved here.</w:t></w:r></w:moveFrom><w:moveFromRangeEnd w:id="4"/></w:p>
+<w:p><w:moveFromRangeStart w:id="6" w:name="lonely" w:author="Bo"/><w:moveFrom w:id="7" w:author="Bo"><w:r><w:t>No destination</w:t></w:r></w:moveFrom><w:moveFromRangeEnd w:id="6"/><w:moveToRangeStart w:id="8" w:name="open" w:author="Bo"/><w:moveTo w:id="9" w:author="Bo"><w:r><w:t>never ends</w:t></w:r></w:moveTo><w:moveTo w:id="10" w:author="Cy"><w:r><w:t>no range</w:t></w:r></w:moveTo><w:moveFromRangeEnd w:id="404"/></w:p>"#;
+    let check = |d: &Document| {
+        let p = paras(d);
+        let name = |r: Option<u32>| d.move_name(r).map(str::to_string);
+        assert_eq!(name(p[0].mark.ins).as_deref(), Some("move1"), "a moved paragraph mark");
+        let to = p[0].runs[0].props.ins;
+        assert_eq!((name(to).as_deref(), d.revisions[to.unwrap() as usize].kind), (Some("move1"), RevisionKind::Insert));
+        let from = p[1].run_ranges().find(|(_, c)| c.del.is_some()).map(|(_, c)| c.del).unwrap();
+        assert_eq!((name(from).as_deref(), d.revisions[from.unwrap() as usize].kind), (Some("move1"), RevisionKind::Delete));
+        assert_eq!(d.revisions[from.unwrap() as usize].author, "Ana");
+        // Hostile ends: each is a plain revision, still tracked.
+        for (r, c) in p[2].run_ranges() {
+            assert!(c.ins.or(c.del).is_some(), "{r:?} keeps its revision");
+            assert_eq!(name(c.ins.or(c.del)), None, "{r:?} is no move");
+        }
+    };
+    let d = read_body(body);
+    check(&d);
+    let out = wordcraft_docx::write(&d).unwrap();
+    let xml = text(&unzip(&out), "word/document.xml");
+    assert_eq!(attr_values(&xml, "w:moveFromRangeStart", "w:name"), ["move1"]);
+    assert_eq!(attr_values(&xml, "w:moveToRangeStart", "w:name"), ["move1"]);
+    assert_eq!(attr_values(&xml, "w:moveToRangeStart", "w:author"), ["Ana"]);
+    assert_eq!(attr_values(&xml, "w:moveToRangeStart", "w:id"), attr_values(&xml, "w:moveToRangeEnd", "w:id"));
+    assert_eq!(attr_values(&xml, "w:moveFromRangeStart", "w:id"), attr_values(&xml, "w:moveFromRangeEnd", "w:id"));
+    assert!(xml.contains("<w:moveFrom ") && !xml.contains("<w:delText xml:space=\"preserve\">Moved"), "moved-away text stays in w:t");
+    // The range around the moved paragraph includes its mark: it ends in the next paragraph.
+    let to_start = xml.find("<w:moveToRangeStart").unwrap();
+    let to_end = xml.find("<w:moveToRangeEnd").unwrap();
+    assert!(xml[to_start..to_end].contains("</w:p>"), "{xml}");
+    check(&wordcraft_docx::read(&out).unwrap());
 }

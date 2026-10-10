@@ -129,19 +129,41 @@ fn paste_special(s: &mut Session, v: &Value) -> CmdResult {
 /// Replace the selection with `frag`, marking it as an insertion under Track Changes.
 pub fn insert(s: &mut Session, mut frag: Fragment) -> Result<(), CmdError> {
     let at = delete_selection(s)?;
-    if s.doc.settings.track_changes {
-        let rid = super::new_revision(s, wordcraft_doc::RevisionKind::Insert);
+    let track = s.doc.settings.track_changes;
+    let mut rid = None;
+    if track {
+        // What the last command cut, pasted again: the two ends of a move.
+        let r = match super::moves::take_paste(s, &frag) {
+            Some(r) => r,
+            None => super::new_revision(s, wordcraft_doc::RevisionKind::Insert),
+        };
+        rid = Some(r);
         for b in &mut frag.blocks {
             each_para(b, 0, &mut |p| {
-                for r in &mut p.runs {
-                    r.props.ins = Some(rid);
-                    r.props.del = None;
-                    r.props.fmt_change = None;
+                for run in &mut p.runs {
+                    run.props.ins = Some(r);
+                    run.props.del = None;
+                    run.props.fmt_change = None;
                 }
+                p.mark.ins = None;
+                p.mark.del = None;
             });
         }
     }
     let end = s.doc.insert_fragment(&at, &frag)?;
+    // The paragraph marks the paste added are inserted too.
+    if let Some(r) = rid
+        && at.story == end.story
+        && at.path.parent() == end.path.parent()
+    {
+        for i in at.path.last()..end.path.last() {
+            if let Ok(p) = s.doc.para_mut(at.story, &at.path.with_last(i)) {
+                p.mark.ins = Some(r);
+                p.mark.del = None;
+                p.touch();
+            }
+        }
+    }
     s.sel = Selection::caret(end);
     Ok(())
 }

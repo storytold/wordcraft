@@ -182,6 +182,7 @@ impl Reader<'_> {
                         sc.pending.push(o);
                     }
                 }
+                "w:moveFromRangeStart" | "w:moveFromRangeEnd" | "w:moveToRangeStart" | "w:moveToRangeEnd" => self.move_range(e),
                 _ => {}
             }
         }
@@ -233,6 +234,8 @@ impl Reader<'_> {
     fn read_para(&mut self, sc: &mut StoryCtx, e: &El, rels: &Rels, depth: usize) -> Paragraph {
         let mut pb = PB::default();
         let mut para = Paragraph::new();
+        let mut mark_moves: [Option<&El>; 2] = [None, None];
+        self.moves.closed_here = [None, None];
         for o in std::mem::take(&mut sc.pending) {
             pb.push_obj(o, &CharProps::default());
         }
@@ -245,8 +248,12 @@ impl Reader<'_> {
             if let Some(rpr) = ppr.child("w:rPr") {
                 for k in rpr.els() {
                     match k.name.as_str() {
-                        "w:ins" | "w:moveTo" => para.mark.ins = Some(self.revision(RevisionKind::Insert, k)),
-                        "w:del" | "w:moveFrom" => para.mark.del = Some(self.revision(RevisionKind::Delete, k)),
+                        "w:ins" => para.mark.ins = Some(self.revision(RevisionKind::Insert, k)),
+                        "w:del" => para.mark.del = Some(self.revision(RevisionKind::Delete, k)),
+                        // A moved paragraph mark (§17.13.5.21, §17.13.5.24): its move range
+                        // usually starts in the paragraph's content, so it is read after that.
+                        "w:moveTo" => mark_moves[1] = Some(k),
+                        "w:moveFrom" => mark_moves[0] = Some(k),
                         _ => {}
                     }
                 }
@@ -271,6 +278,12 @@ impl Reader<'_> {
         let ctx = RunCtx::default();
         self.read_inline_children(sc, &mut pb, e, rels, &ctx, depth + 1);
         self.spill_fields(sc, &mut pb);
+        if let Some(k) = mark_moves[0] {
+            para.mark.del = Some(self.move_revision(false, k, true));
+        }
+        if let Some(k) = mark_moves[1] {
+            para.mark.ins = Some(self.move_revision(true, k, true));
+        }
         para.text = pb.text;
         para.runs = pb.runs;
         para.objects = pb.objects;
@@ -336,14 +349,15 @@ impl Reader<'_> {
             }
             "w:ins" | "w:moveTo" => {
                 let mut c = ctx.clone();
-                c.ins = Some(self.revision(RevisionKind::Insert, k));
+                c.ins = Some(if k.name == "w:moveTo" { self.move_revision(true, k, false) } else { self.revision(RevisionKind::Insert, k) });
                 self.read_inline_children(sc, pb, k, rels, &c, depth + 1);
             }
             "w:del" | "w:moveFrom" => {
                 let mut c = ctx.clone();
-                c.del = Some(self.revision(RevisionKind::Delete, k));
+                c.del = Some(if k.name == "w:moveFrom" { self.move_revision(false, k, false) } else { self.revision(RevisionKind::Delete, k) });
                 self.read_inline_children(sc, pb, k, rels, &c, depth + 1);
             }
+            "w:moveFromRangeStart" | "w:moveFromRangeEnd" | "w:moveToRangeStart" | "w:moveToRangeEnd" => self.move_range(k),
             "w:fldSimple" => {
                 let instr = k.attr("w:instr").unwrap_or("").to_string();
                 let props = k.child("w:r").and_then(|r| r.child("w:rPr")).map(|p| self.run_props(p, ctx)).unwrap_or_else(|| self.run_props_none(ctx));

@@ -598,9 +598,9 @@ fn compare(s: &mut Session, v: &Value) -> CmdResult {
     let new: Vec<Paragraph> = revised.body.iter().filter_map(|b| b.as_para().cloned()).collect();
     let author = "Compare".to_string();
     let date = super::now_iso();
-    s.doc.revisions.push(wordcraft_doc::Revision { kind: RevisionKind::Insert, author: author.clone(), date: date.clone() });
+    s.doc.revisions.push(wordcraft_doc::Revision { kind: RevisionKind::Insert, author: author.clone(), date: date.clone(), move_name: None });
     let ins = (s.doc.revisions.len() - 1) as u32;
-    s.doc.revisions.push(wordcraft_doc::Revision { kind: RevisionKind::Delete, author, date });
+    s.doc.revisions.push(wordcraft_doc::Revision { kind: RevisionKind::Delete, author, date, move_name: None });
     let del = (s.doc.revisions.len() - 1) as u32;
     let ops = lcs_ops(&old.iter().map(|p| p.plain_text()).collect::<Vec<_>>(), &new.iter().map(|p| p.plain_text()).collect::<Vec<_>>());
     let mut out: Vec<Paragraph> = Vec::new();

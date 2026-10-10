@@ -366,16 +366,46 @@ impl Change {
 /// the paragraph's end to the start of the next paragraph (or the end itself when none follows).
 fn mark_change(s: &Session, story: StoryRef, path: &wordcraft_doc::Path) -> Option<Change> {
     let p = s.doc.para(story, path)?;
-    let kind = if p.mark.ins.is_some() {
-        "insert"
-    } else if p.mark.del.is_some() {
-        "delete"
-    } else {
+    let kind = run_kind(&s.doc, p.mark.ins, p.mark.del);
+    if kind.is_empty() {
         return None;
-    };
+    }
     let a = Pos { story, path: path.clone(), off: p.len() };
     let b = if super::has_next_para(s, story, path) { Pos { story, path: path.with_last(path.last().saturating_add(1)), off: 0 } } else { a.clone() };
     Some(Change { a, b, kind, rev: p.mark.ins.or(p.mark.del), props: Vec::new() })
+}
+
+/// The kind of an insertion / deletion change: `insert`, `delete`, or for one end of a move
+/// `moveTo` / `moveFrom`; empty when neither.
+fn run_kind(doc: &wordcraft_doc::Document, ins: Option<u32>, del: Option<u32>) -> &'static str {
+    match (ins, del) {
+        (Some(_), _) if doc.move_name(ins).is_some() => "moveTo",
+        (Some(_), _) => "insert",
+        (None, Some(_)) if doc.move_name(del).is_some() => "moveFrom",
+        (None, Some(_)) => "delete",
+        _ => "",
+    }
+}
+
+/// The moves in the body, for balloons: where each end starts, its author, and whether it is
+/// the source (`true`) or the destination.
+pub fn move_changes(s: &Session) -> Vec<(Pos, String, bool)> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    for c in changes(s) {
+        let from = match c.kind {
+            "moveFrom" => true,
+            "moveTo" => false,
+            _ => continue,
+        };
+        let rev = c.rev.and_then(|r| s.doc.revisions.get(r as usize));
+        let name = rev.and_then(|r| r.move_name.clone()).unwrap_or_default();
+        // One balloon per end (an end runs on across paragraphs).
+        if seen.insert((name, from)) {
+            out.push((c.a, rev.map(|r| r.author.clone()).unwrap_or_default(), from));
+        }
+    }
+    out
 }
 
 fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
@@ -434,6 +464,8 @@ fn resolve_sel(s: &mut Session, accept: bool) -> CmdResult {
     } else {
         (a, b)
     };
+    // Moves with an end in the range: their other ends go with them.
+    let moves = super::moves::names_in(s, &a, &b, caret_mark.as_ref());
     for path in s.doc.paths_between(&a, &b).into_iter().rev() {
         let len = s.doc.para(a.story, &path).map(|p| p.len()).unwrap_or(0);
         let from = if path == a.path { a.off } else { 0 };
@@ -446,6 +478,7 @@ fn resolve_sel(s: &mut Session, accept: bool) -> CmdResult {
             resolve_cell(s, a.story, &path, accept)?;
         }
     }
+    super::moves::resolve(s, &moves, accept)?;
     s.sel = Selection::caret(a);
     s.clamp_selection();
     sel_result(s)
@@ -476,13 +509,7 @@ fn changes(s: &Session) -> Vec<Change> {
             out.push(Change::format(mk(&path, 0), mk(&path, p.len()), ch.rev, fmt_revisions::para_diff(&p.props)));
         }
         for (r, c) in p.run_ranges() {
-            let kind = if c.ins.is_some() {
-                "insert"
-            } else if c.del.is_some() {
-                "delete"
-            } else {
-                ""
-            };
+            let kind = run_kind(&s.doc, c.ins, c.del);
             if !kind.is_empty() {
                 out.push(Change { a: mk(&path, r.start), b: mk(&path, r.end), kind, rev: c.ins.or(c.del), props: Vec::new() });
             }
@@ -573,6 +600,11 @@ fn list_changes(s: &mut Session, _: &Value) -> CmdResult {
                 if c.kind == "format" {
                     v["description"] = json!(fmt_revisions::describe(&c.props));
                     v["props"] = json!(c.props);
+                }
+                // One end of a move: its name links it with the other end.
+                if let Some(name) = rev.and_then(|r| r.move_name.as_deref()).filter(|_| c.kind.starts_with("move")) {
+                    v["move"] = json!(name);
+                    v["description"] = json!(if c.kind == "moveFrom" { "Moved from" } else { "Moved to" });
                 }
                 v
             })

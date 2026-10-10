@@ -38,7 +38,9 @@ pub(crate) struct Reader<'p> {
     pkg: &'p Package,
     pub doc: Document,
     pub pc: PropCtx,
-    revs: HashMap<(u8, String, String), u32>,
+    revs: HashMap<(u8, String, String, Option<String>), u32>,
+    /// Move ranges (`w:moveFromRangeStart` …) seen so far.
+    pub moves: MoveCtx,
     media_by_path: HashMap<String, String>,
     hf_by_path: HashMap<String, u32>,
     pub footnotes: HashMap<i64, u32>,
@@ -98,6 +100,7 @@ pub(crate) fn read_package(bytes: &[u8]) -> Result<Document, DocxError> {
         doc,
         pc: PropCtx::default(),
         revs: HashMap::new(),
+        moves: MoveCtx::default(),
         media_by_path: HashMap::new(),
         hf_by_path: HashMap::new(),
         footnotes: HashMap::new(),
@@ -183,9 +186,85 @@ pub(crate) fn read_package(bytes: &[u8]) -> Result<Document, DocxError> {
         let manifest = r.embedded.to_bytes();
         r.doc.passthrough.insert(EMBEDDED_PARTS.into(), Arc::new(manifest));
     }
+    r.finish_moves();
     let mut doc = r.doc;
     doc.ensure_nonempty();
     Ok(doc)
+}
+
+/// Most move ranges open at once, and most move names tracked, per file.
+const MAX_OPEN_MOVES: usize = 64;
+const MAX_MOVES: usize = 100_000;
+
+/// The move ranges of a file (ECMA-376 §17.13.5.22–27): a `w:moveFrom` / `w:moveTo` is one end
+/// of a move when it sits inside a range of that kind; the range's name links both ends.
+#[derive(Default)]
+pub(crate) struct MoveCtx {
+    /// Open source and destination ranges: (`w:id`, `w:name`).
+    open: [Vec<(String, String)>; 2],
+    /// Per name: a source range started / ended, a destination range started / ended (bits 0–3).
+    seen: HashMap<String, u8>,
+    /// The range of each kind that ended last in the paragraph being read (for its mark).
+    pub closed_here: [Option<String>; 2],
+}
+
+impl Reader<'_> {
+    /// A `w:moveFromRangeStart/End` or `w:moveToRangeStart/End`.
+    pub fn move_range(&mut self, e: &El) {
+        let (side, start) = match e.name.as_str() {
+            "w:moveFromRangeStart" => (0, true),
+            "w:moveFromRangeEnd" => (0, false),
+            "w:moveToRangeStart" => (1, true),
+            "w:moveToRangeEnd" => (1, false),
+            _ => return,
+        };
+        let id = e.attr("w:id").unwrap_or("").chars().take(64).collect::<String>();
+        let m = &mut self.moves;
+        let Some(open) = m.open.get_mut(side) else { return };
+        if start {
+            let name = e.attr("w:name").unwrap_or("").chars().take(256).collect::<String>();
+            if name.is_empty() || open.len() >= MAX_OPEN_MOVES || (m.seen.len() >= MAX_MOVES && !m.seen.contains_key(&name)) {
+                return;
+            }
+            *m.seen.entry(name.clone()).or_default() |= 1 << (side * 2);
+            open.push((id, name));
+        } else if let Some(i) = open.iter().rposition(|(x, _)| *x == id) {
+            let (_, name) = open.remove(i);
+            *m.seen.entry(name.clone()).or_default() |= 2 << (side * 2);
+            if let Some(c) = m.closed_here.get_mut(side) {
+                *c = Some(name);
+            }
+        }
+    }
+
+    /// The revision of a `w:moveFrom` (`to` false) or `w:moveTo`: one end of the innermost open
+    /// range of its kind, else (no range) a plain deletion or insertion.
+    pub fn move_revision(&mut self, to: bool, e: &El, mark: bool) -> u32 {
+        let side = usize::from(to);
+        let open = self.moves.open.get(side).and_then(|o| o.last()).map(|(_, n)| n.clone());
+        // A paragraph mark comes after its paragraph's text: a range that ended in it counts.
+        let name = if mark { open.or_else(|| self.moves.closed_here.get(side).cloned().flatten()) } else { open };
+        let kind = if to { RevisionKind::Insert } else { RevisionKind::Delete };
+        self.revision_named(kind, e, name)
+    }
+
+    /// Moves missing an end (a source or destination range, or its text) are plain deletions
+    /// and insertions.
+    fn finish_moves(&mut self) {
+        let mut ends: HashMap<&str, u8> = HashMap::new();
+        for r in &self.doc.revisions {
+            if let Some(n) = r.move_name.as_deref() {
+                *ends.entry(n).or_default() |= if r.kind == RevisionKind::Delete { 1 } else { 2 };
+            }
+        }
+        let ok: HashSet<String> =
+            ends.into_iter().filter(|(n, e)| *e == 3 && self.moves.seen.get(*n) == Some(&0b1111)).map(|(n, _)| n.to_string()).collect();
+        for r in &mut self.doc.revisions {
+            if r.move_name.as_ref().is_some_and(|n| !ok.contains(n)) {
+                r.move_name = None;
+            }
+        }
+    }
 }
 
 /// Word starts a TOC field in the first entry; the engine keeps it at the end of the TOC heading
@@ -306,6 +385,10 @@ impl Reader<'_> {
     }
 
     pub fn revision(&mut self, kind: RevisionKind, e: &El) -> u32 {
+        self.revision_named(kind, e, None)
+    }
+
+    fn revision_named(&mut self, kind: RevisionKind, e: &El, move_name: Option<String>) -> u32 {
         let author = e.attr("w:author").unwrap_or("").chars().take(256).collect::<String>();
         let date = e.attr("w:date").unwrap_or("").chars().take(64).collect::<String>();
         let k = match kind {
@@ -313,12 +396,12 @@ impl Reader<'_> {
             RevisionKind::Delete => 1,
             RevisionKind::Format => 2,
         };
-        let key = (k, author.clone(), date.clone());
+        let key = (k, author.clone(), date.clone(), move_name.clone());
         if let Some(i) = self.revs.get(&key) {
             return *i;
         }
         let i = self.doc.revisions.len() as u32;
-        self.doc.revisions.push(Revision { kind, author, date });
+        self.doc.revisions.push(Revision { kind, author, date, move_name });
         self.revs.insert(key, i);
         i
     }
