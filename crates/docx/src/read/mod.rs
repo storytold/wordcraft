@@ -123,9 +123,9 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocxError> {
     let core = root_rels.by_type(rt::CORE).map(|x| x.target.clone()).unwrap_or_else(|| "docProps/core.xml".into());
     r.read_core(&core);
     if let Some(c) = root_rels.by_type(rt::CUSTOM)
-        && let Some(b) = pkg.get(&c.target)
+        && let Ok(Some(x)) = r.xml(&c.target)
     {
-        r.doc.passthrough.insert("docProps/custom.xml".into(), Arc::new(b.to_vec()));
+        r.doc.custom_props = crate::custom::read(&x);
     }
     // A macro project and every part it relates to (VBA data, signatures…) ride along as opaque
     // bytes, never parsed or run, so a .docm/.dotm saved again carries exactly what the file had.

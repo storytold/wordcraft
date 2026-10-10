@@ -82,6 +82,8 @@ pub(crate) struct Writer<'d> {
     toc_end_here: bool,
     /// Media keys actually referenced by a written drawing.
     used_media: std::collections::BTreeSet<String>,
+    /// Bounds writing text boxes inside text boxes (as layout shows them).
+    boxes: wordcraft_doc::BoxBudget,
 }
 
 const CT_WML: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.";
@@ -93,6 +95,16 @@ pub fn write(doc: &Document) -> Result<Vec<u8>, DocxError> {
 
 /// Write a package of the given flavour (`.docx`, `.docm`, `.dotx`, `.dotm`).
 pub fn write_as(doc: &Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
+    // A range field must be whole in the file: drop markers that lost their partner in editing.
+    let balanced;
+    let doc = if doc.has_unbalanced_field_ranges() {
+        let mut d = doc.clone();
+        d.balance_field_ranges();
+        balanced = d;
+        &balanced
+    } else {
+        doc
+    };
     let mut wr = Writer {
         eq_number: 0,
         doc,
@@ -112,6 +124,7 @@ pub fn write_as(doc: &Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
         toc_begin_here: false,
         toc_end_here: false,
         used_media: Default::default(),
+        boxes: wordcraft_doc::BoxBudget::default(),
     };
     wr.assign_media();
     let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
@@ -352,11 +365,9 @@ pub fn write_as(doc: &Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
     overrides.push(("/docProps/core.xml".into(), "application/vnd.openxmlformats-package.core-properties+xml".into()));
     entries.push(("docProps/app.xml".into(), app_xml(doc)));
     overrides.push(("/docProps/app.xml".into(), "application/vnd.openxmlformats-officedocument.extended-properties+xml".into()));
-    if let Some(custom) = doc.passthrough.get("docProps/custom.xml")
-        && xml::parse(custom).is_ok()
-    {
+    if !doc.custom_props.is_empty() {
         root.add(rt::CUSTOM, "docProps/custom.xml", false);
-        entries.push(("docProps/custom.xml".into(), custom.to_vec()));
+        entries.push(("docProps/custom.xml".into(), crate::custom::write(&doc.custom_props)));
         overrides.push(("/docProps/custom.xml".into(), "application/vnd.openxmlformats-officedocument.custom-properties+xml".into()));
     }
     entries.insert(0, ("_rels/.rels".into(), root.xml()));

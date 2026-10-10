@@ -17,6 +17,15 @@ fn text(s: &Session) -> String {
 }
 
 #[test]
+fn doc_extension_dispatches_to_docbin() {
+    // Garbage bytes with a .doc name must produce an error through the Word 97-2003
+    // reader — never a panic and never a silently empty document.
+    for name in ["x.doc", "x.dot"] {
+        assert!(crate::io::open_bytes(name, &[0u8; 64]).is_err(), "{name} should fail");
+    }
+}
+
+#[test]
 fn every_command_has_unique_id() {
     let reg = cmd::registry();
     let mut ids: Vec<&str> = reg.all().iter().map(|c| c.id).collect();
@@ -487,6 +496,27 @@ fn track_changes_and_accept() {
 }
 
 #[test]
+fn no_markup_view_lays_out_the_final_text() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "original"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "select.text", json!({"text": "orig"}));
+    run(&mut s, "text.delete", json!({}));
+    let gap = |s: &mut Session| {
+        let l = s.layout();
+        let x = |off| l.caret(&Pos::body(0, off)).map(|c| c.x).unwrap_or(f32::NAN);
+        x(4) - x(0)
+    };
+    assert!(gap(&mut s) > 5.0, "markup shows the deletion");
+    run(&mut s, "review.markup", json!({"value": "noMarkup"}));
+    assert!(gap(&mut s).abs() < 0.01, "No Markup leaves it out");
+    run(&mut s, "review.showMarkup", json!({"value": true}));
+    assert!(gap(&mut s) > 5.0);
+    run(&mut s, "review.showMarkup", json!({"value": false}));
+    assert!(gap(&mut s).abs() < 0.01);
+}
+
+#[test]
 fn replace_all_is_tracked() {
     let mut s = s();
     let original = "We walked towards the light, then towards home.";
@@ -590,13 +620,14 @@ fn hostile_params_never_panic() {
         json!({"value": -1e308, "rows": 1e9}),
     ];
     for spec in reg.all() {
-        // These reach outside the session: files, and Read Aloud starts the system speech
-        // synthesiser (`say` on macOS), which would read the sample document aloud on every run.
-        if spec.id.starts_with("file.") || spec.id == "insert.picture" || spec.id == "insert.textFromFile" || spec.id == "review.readAloud" {
+        // These reach outside the session (files). Read Aloud (`review.readAloud`, `readAloud.*`)
+        // is fuzzed too: under `cfg(test)` its backend is the silent `Hold`, asserted below.
+        if spec.id.starts_with("file.") || spec.id == "insert.picture" || spec.id == "insert.textFromFile" {
             continue;
         }
         for j in &junk {
             let mut s = Session::new(crate::sample::sample_document());
+            assert_ne!(s.read_aloud.backend, crate::speech::Backend::System, "tests must never start real speech");
             let _ = s.run(spec.id, j);
             s.clamp_selection();
             let _ = s.layout();
@@ -630,6 +661,512 @@ fn caret_navigation() {
     assert_eq!(s.sel.focus, Pos::body(1, 11));
     run(&mut s, "caret.left", json!({}));
     assert_eq!(s.sel.focus.off, 10);
+}
+
+#[test]
+fn text_box_insert_puts_the_caret_inside() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Before "}));
+    let id = run(&mut s, "insert.textBox", json!({}))["story"].as_u64().unwrap() as u32;
+    let boxed = StoryRef::Part(id);
+    assert_eq!(s.sel.focus.story, boxed);
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    assert_eq!(s.doc.plain_text(boxed), "Hello");
+    assert!(!text(&s).contains("Hello"), "{}", text(&s));
+    // Leaving the box lands just after it in the body.
+    let anchor = s.doc.text_box_anchor(id).unwrap();
+    assert_eq!(anchor, Pos::body(0, "Before \u{FFFC}".len()));
+    run(&mut s, "caret.set", json!({"pos": anchor}));
+    run(&mut s, "text.insert", json!({"text": " after"}));
+    assert_eq!(s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).map(|p| p.text.as_str()), Some("Before \u{FFFC} after"));
+    // Undo goes back through the typing to before the box, in the body.
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.sel.focus.story, StoryRef::Body);
+    assert_eq!(text(&s), "Before ");
+    // Given text: the caret ends after it.
+    let id = run(&mut s, "insert.textBox", json!({"text": "Note"}))["story"].as_u64().unwrap() as u32;
+    assert_eq!(s.sel.focus, Pos { story: StoryRef::Part(id), path: wordcraft_doc::Path::top(0), off: 4 });
+}
+
+#[test]
+fn text_box_in_a_table_cell_shows_its_text() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+    assert!(s.sel.focus.path.0.len() > 1);
+    let id = run(&mut s, "insert.textBox", json!({}))["story"].as_u64().unwrap() as u32;
+    // The caret goes into the box, and typing shows there (it has a caret position).
+    assert_eq!(s.sel.focus.story, StoryRef::Part(id));
+    run(&mut s, "text.insert", json!({"text": "In a cell"}));
+    let caret = s.layout().caret(&s.sel.focus).expect("laid out");
+    let cell = s.layout().find_object(0, |o| o.text_box == Some(id)).unwrap();
+    assert!(cell.rect.contains(wordcraft_geom::Point::new(caret.x, caret.top)), "{caret:?} in {:?}", cell.rect);
+    // No text box inside a text box.
+    assert!(s.run("insert.textBox", &json!({})).is_err());
+}
+
+#[test]
+fn copy_paste_text_box_makes_an_independent_copy() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "A"}));
+    let id = run(&mut s, "insert.textBox", json!({"text": "Original"}))["story"].as_u64().unwrap() as u32;
+    // Select "A" and the box in the body, copy, paste at the end.
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 1 + 3)}));
+    run(&mut s, "edit.copy", json!({}));
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 4)}));
+    let parts = s.doc.parts.len();
+    run(&mut s, "edit.paste", json!({}));
+    assert_eq!(s.doc.parts.len(), parts + 1);
+    let stories: Vec<u32> = s
+        .doc
+        .para(StoryRef::Body, &wordcraft_doc::Path::top(0))
+        .unwrap()
+        .objects
+        .iter()
+        .filter_map(|o| if let wordcraft_doc::InlineObject::Shape { story, .. } = o { *story } else { None })
+        .collect();
+    assert_eq!(stories.len(), 2);
+    assert_eq!(stories[0], id);
+    let copy = stories[1];
+    assert_ne!(copy, id);
+    // Typing in the copy leaves the original alone.
+    run(&mut s, "caret.set", json!({"pos": Pos { story: StoryRef::Part(copy), path: wordcraft_doc::Path::top(0), off: 0 }}));
+    run(&mut s, "text.insert", json!({"text": "Copy of "}));
+    assert_eq!(s.doc.plain_text(StoryRef::Part(copy)), "Copy of Original");
+    assert_eq!(s.doc.plain_text(StoryRef::Part(id)), "Original");
+    // Undo the typing and the paste: the copy's story goes too.
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.parts.len(), parts);
+}
+
+#[test]
+fn word_count_includes_text_boxes_by_default() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "one two "}));
+    run(&mut s, "insert.textBox", json!({"text": "three four five"}));
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 0)}));
+    assert_eq!(s.word_count(), 5);
+    let v = run(&mut s, "review.wordCount", json!({}));
+    assert_eq!((v["words"].as_u64(), v["includeTextBoxes"].as_bool()), (Some(5), Some(true)));
+    assert_eq!(v["paragraphs"].as_u64(), Some(2));
+    // Turned off: body only, and it sticks.
+    let v = run(&mut s, "review.wordCount", json!({"includeTextBoxes": false}));
+    assert_eq!(v["words"].as_u64(), Some(2));
+    assert_eq!(s.word_count(), 2);
+    assert_eq!(run(&mut s, "review.wordCount", json!({}))["words"].as_u64(), Some(2));
+    // Deleting the box drops its words (its story stays behind, unused).
+    run(&mut s, "review.wordCount", json!({"includeTextBoxes": true}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 8), "focus": Pos::body(0, 8 + 3)}));
+    run(&mut s, "text.delete", json!({}));
+    assert_eq!(s.word_count(), 2);
+}
+
+/// The laid-out area of the only text box.
+fn box_area(s: &mut Session) -> wordcraft_layout::hit::ObjectHit {
+    let l = s.layout();
+    l.find_object(0, |o| o.text_box.is_some()).unwrap()
+}
+
+fn select_box(s: &mut Session) {
+    let o = box_area(s);
+    let end = Pos { off: o.off + 3, ..o.pos() };
+    run(s, "select.range", json!({"anchor": o.pos(), "focus": end}));
+}
+
+#[test]
+fn arrange_bounds_resizes_and_moves_objects() {
+    use wordcraft_doc::para::{Anchor, Wrap};
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Some text "}));
+    run(&mut s, "insert.textBox", json!({"text": "Box"}));
+    select_box(&mut s);
+    // Resize: stays inline, keeps a text box's minimum.
+    run(&mut s, "arrange.bounds", json!({"width": 200, "height": 5}));
+    let o = box_area(&mut s);
+    assert_eq!((o.rect.w, o.rect.h, o.wrap), (200.0, 18.0, Wrap::Inline));
+    assert!(s.run("arrange.nudge", &json!({"dx": 5})).is_err(), "inline objects don't nudge");
+    // Move: floats exactly where it was dropped, still selected.
+    let r = run(&mut s, "arrange.bounds", json!({"page": 0, "x": 300, "y": 400}));
+    assert_eq!(r["object"]["float"]["wrap"], "square");
+    let o = box_area(&mut s);
+    assert_eq!((o.page, o.rect.x, o.rect.y), (0, 300.0, 400.0));
+    assert_eq!(s.doc.plain_text(StoryRef::Part(o.text_box.unwrap())), "Box");
+    // Moving it again anchors it to the paragraph under its top edge, relative to that
+    // paragraph (it moves with the text), landing exactly where dropped.
+    let before = box_area(&mut s).rect;
+    select_box(&mut s);
+    run(&mut s, "arrange.bounds", json!({"x": before.x + 30.0, "y": before.y - 5.0}));
+    let o = box_area(&mut s);
+    assert!((o.rect.x - before.x - 30.0).abs() < 0.01 && (o.rect.y - before.y + 5.0).abs() < 0.01, "{:?} → {:?}", before, o.rect);
+    let p = s.doc.para(StoryRef::Body, &o.path).unwrap();
+    let Some(wordcraft_doc::InlineObject::Shape { float, .. }) = p.object_at(o.off) else { panic!() };
+    assert_eq!((float.h_rel, float.v_rel), (Anchor::Column, Anchor::Paragraph));
+    assert!((float.x - (o.rect.x - o.origin.x)).abs() < 0.01 && (float.y - (o.rect.y - o.origin.y)).abs() < 0.01);
+    // Nudge.
+    run(&mut s, "arrange.nudge", json!({"dx": 6, "dy": -1}));
+    let n = box_area(&mut s).rect;
+    assert!((n.x - o.rect.x - 6.0).abs() < 0.01 && (n.y - o.rect.y + 1.0).abs() < 0.01);
+    // Hostile values stay on the page.
+    run(&mut s, "arrange.bounds", json!({"x": -1e9, "y": 1e9, "width": 1e9}));
+    let o = box_area(&mut s);
+    assert!(o.rect.right() >= 12.0 && o.rect.y <= 792.0 && o.rect.w <= 4000.0, "{:?}", o.rect);
+    // One undo per change.
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(box_area(&mut s).rect, n);
+}
+
+#[test]
+fn nudging_an_aligned_object_moves_it_from_where_it_is() {
+    use wordcraft_doc::para::{Anchor, FloatAlign};
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Some text "}));
+    run(&mut s, "insert.textBox", json!({"text": "Box"}));
+    select_box(&mut s);
+    run(&mut s, "arrange.position", json!({"preset": "topLeft"}));
+    // As a .docx can place it: centred on the page, at the bottom margin.
+    let o = box_area(&mut s);
+    let p = s.doc.para_mut(StoryRef::Body, &o.path).unwrap();
+    if let Some(wordcraft_doc::InlineObject::Shape { float, .. }) = p.object_at_mut(o.off) {
+        (float.h_rel, float.h_align, float.v_rel, float.v_align) =
+            (Anchor::Page, Some(FloatAlign::Center), Anchor::BottomMargin, Some(FloatAlign::Start));
+    }
+    p.touch();
+    s.touch();
+    let before = box_area(&mut s).rect;
+    select_box(&mut s);
+    run(&mut s, "arrange.nudge", json!({"dx": 6, "dy": -2}));
+    let o = box_area(&mut s);
+    assert!((o.rect.x - before.x - 6.0).abs() < 0.01 && (o.rect.y - before.y + 2.0).abs() < 0.01, "{before:?} → {:?}", o.rect);
+    let p = s.doc.para(StoryRef::Body, &o.path).unwrap();
+    let Some(wordcraft_doc::InlineObject::Shape { float, .. }) = p.object_at(o.off) else { panic!() };
+    assert_eq!((float.h_align, float.v_align), (None, None));
+    // Dragging it clears alignment too, and it lands where dropped.
+    select_box(&mut s);
+    run(&mut s, "arrange.bounds", json!({"x": 100, "y": 150}));
+    let o = box_area(&mut s);
+    assert_eq!((o.rect.x, o.rect.y), (100.0, 150.0));
+}
+
+#[test]
+fn arrange_bounds_moves_an_object_to_another_page() {
+    let mut s = s();
+    for i in 0..60 {
+        run(&mut s, "text.insert", json!({"text": format!("Paragraph {i} of filler text.")}));
+        run(&mut s, "text.newParagraph", json!({}));
+    }
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 0)}));
+    run(&mut s, "insert.textBox", json!({"text": "Traveller"}));
+    select_box(&mut s);
+    assert!(s.layout().pages.len() >= 2);
+    run(&mut s, "arrange.bounds", json!({"page": 1, "x": 100, "y": 200}));
+    let o = box_area(&mut s);
+    assert_eq!((o.page, o.rect.x, o.rect.y), (1, 100.0, 200.0));
+    assert!(o.path.0[0] > 0, "anchored to text on page 2: {:?}", o.path);
+    assert_eq!(s.doc.plain_text(StoryRef::Part(o.text_box.unwrap())), "Traveller");
+    // The selection follows the object.
+    assert_eq!(s.sel.anchor, o.pos());
+    assert!(s.run("arrange.bounds", &json!({"page": 99, "x": 1, "y": 1})).is_err());
+}
+
+#[test]
+fn moved_text_box_makes_the_text_it_lands_on_wrap() {
+    let mut s = s();
+    for i in 0..6 {
+        run(
+            &mut s,
+            "text.insert",
+            json!({"text": format!("Paragraph {i}: the quick brown fox jumps over the lazy dog, again and again, across the page.")}),
+        );
+        run(&mut s, "text.newParagraph", json!({}));
+    }
+    run(&mut s, "caret.set", json!({"pos": Pos::body(4, 0)}));
+    run(&mut s, "insert.textBox", json!({"text": "Box"}));
+    select_box(&mut s);
+    // Drop it over paragraph 1, right half of the page: well above its own paragraph (4).
+    let l = s.layout();
+    let p1_top = wordcraft_layout::hit::page_lines(&l.pages[0], StoryRef::Body).iter().find(|ln| ln.path.0 == [1] && ln.li == 0).unwrap().top;
+    run(&mut s, "arrange.bounds", json!({"x": 300, "y": p1_top + 2.0}));
+    let o = box_area(&mut s);
+    assert_eq!(o.path.0, vec![1], "anchored to the paragraph it was dropped on");
+    assert_eq!((o.rect.x, o.rect.y), (300.0, p1_top + 2.0));
+    // Lines beside the box stop short of it; lines below it use the full width again.
+    let l = s.layout();
+    let lines = wordcraft_layout::hit::page_lines(&l.pages[0], StoryRef::Body);
+    let beside: Vec<_> = lines.iter().filter(|ln| ln.bottom > o.rect.y && ln.top < o.rect.bottom()).collect();
+    assert!(!beside.is_empty());
+    assert!(beside.iter().all(|ln| ln.right <= o.rect.x + 0.5 || ln.left >= o.rect.right() - 0.5), "text overlaps the box");
+    assert!(lines.iter().any(|ln| ln.top > o.rect.bottom() + 10.0 && ln.right > o.rect.right()));
+    // Its old paragraph no longer holds it.
+    assert!(s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(4)).unwrap().objects.is_empty());
+}
+
+#[test]
+fn deleted_text_box_takes_its_text_with_it_until_undo() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "A"}));
+    let id = run(&mut s, "insert.textBox", json!({"text": "Inside"}))["story"].as_u64().unwrap() as u32;
+    let box_sel = json!({"anchor": Pos::body(0, 1), "focus": Pos::body(0, 1 + 3)});
+    run(&mut s, "select.range", box_sel.clone());
+    run(&mut s, "text.delete", json!({}));
+    assert!(!s.doc.parts.contains_key(&id), "the deleted box's text is gone");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.plain_text(StoryRef::Part(id)), "Inside", "undo brings it back");
+    // Cut and paste: one box, one story, same text.
+    run(&mut s, "select.range", box_sel);
+    run(&mut s, "edit.cut", json!({}));
+    assert!(s.doc.parts.is_empty());
+    run(&mut s, "edit.paste", json!({}));
+    assert_eq!(s.doc.parts.len(), 1);
+    let (_, part) = s.doc.parts.iter().next().unwrap();
+    assert_eq!(part.kind, wordcraft_doc::PartKind::TextBox);
+    assert_eq!(s.doc.word_count_including_notes(), 2);
+}
+
+#[test]
+fn word_count_with_an_object_selected_counts_the_document() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "one two "}));
+    run(&mut s, "insert.textBox", json!({"text": "three"}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 8), "focus": Pos::body(0, 8 + 3)}));
+    assert_eq!(run(&mut s, "review.wordCount", json!({}))["words"].as_u64(), Some(3));
+    // A real text selection still counts just itself.
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    assert_eq!(run(&mut s, "review.wordCount", json!({}))["words"].as_u64(), Some(1));
+}
+
+#[test]
+fn custom_properties_set_read_remove_and_undo() {
+    let mut s = s();
+    let r = run(&mut s, "file.properties", json!({"custom": {"ZOTERO_PREF_1": "<data/>", "Status": "draft"}}));
+    let custom = r["custom"].as_array().cloned().unwrap_or_default();
+    assert!(custom.iter().any(|p| p["name"] == "Status" && p["value"] == "draft" && p["kind"] == "lpwstr"));
+    assert_eq!(custom.len(), 2);
+    assert_eq!(s.doc.custom_prop("zotero_pref_1"), Some("<data/>"));
+    let r = run(&mut s, "file.properties", json!({"custom": {"status": null}}));
+    assert_eq!(r["custom"].as_array().map(|a| a.len()), Some(1));
+    assert!(s.run("file.properties", &json!({"custom": "x"})).is_err());
+    assert!(s.run("file.properties", &json!({"custom": {"": "x"}})).is_err());
+    assert!(s.run("file.properties", &json!({"custom": {"n": 3}})).is_err());
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.custom_prop("Status"), Some("draft"));
+}
+
+/// `document_id` tells an edit from a replacement (the UI drops a "Save changes?" prompt
+/// about a document that has been replaced).
+#[test]
+fn document_id_changes_only_when_the_document_is_replaced() {
+    let mut s = s();
+    let first = s.document_id();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    run(&mut s, "format.bold", json!({}));
+    assert_eq!(s.document_id(), first);
+    run(&mut s, "file.new", json!({"template": "letter"}));
+    let second = s.document_id();
+    assert_ne!(second, first);
+    run(&mut s, "file.new", json!({}));
+    assert_ne!(s.document_id(), second);
+}
+
+/// Envelopes, Labels and Finish & Merge make a new, untitled document, as Word does, and like New
+/// its undo history starts afresh. Undo/Redo across the swap put the wrong document under a file
+/// (Undo, Save As, Redo, Save wrote the envelope over the saved file), so it isn't offered; the UI
+/// asks to save the replaced document first.
+#[test]
+fn mailings_results_are_new_untitled_documents() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-mailings-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let original = dir.join("letter.docx");
+    let saved_as = dir.join("saved-as.docx");
+    let on_file = |p: &std::path::Path| crate::io::open_path(p).unwrap().plain_text(StoryRef::Body);
+    for id in ["mailings.envelopes", "mailings.labels", "mailings.finish"] {
+        let mut s = s();
+        run(&mut s, "mailings.recipients", json!({"csv": "First Name\nAda\nAlan"}));
+        run(&mut s, "text.insert", json!({"text": "Dear "}));
+        run(&mut s, "mailings.insertField", json!({"field": "First Name"}));
+        run(&mut s, "file.save", json!({"path": original.to_string_lossy()}));
+        let on_disk = std::fs::read(&original).unwrap();
+        run(&mut s, "text.insert", json!({"text": ", unsaved"}));
+        let before = text(&s);
+        let document = s.document_id();
+
+        run(&mut s, id, json!({}));
+        let result = text(&s);
+        assert_ne!(result, before, "{id}: the result replaced the document");
+        assert_ne!(s.document_id(), document, "{id}: a different document");
+        assert_eq!(s.path, None, "{id}: the result is untitled");
+        assert_eq!(run(&mut s, "file.save", json!({}))["saved"], false, "{id}: Save asks where (Save As)");
+        assert_eq!(std::fs::read(&original).unwrap(), on_disk, "{id}: the original file is untouched");
+
+        // Undo doesn't bring the old document back under the new one's identity; Redo can't
+        // put the result back under a file saved in between.
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(text(&s), result, "{id}: history starts afresh, like New");
+        run(&mut s, "file.saveAs", json!({"path": saved_as.to_string_lossy()}));
+        let written = on_file(&saved_as);
+        run(&mut s, "edit.redo", json!({}));
+        assert_eq!(text(&s), result, "{id}: nothing to redo");
+        run(&mut s, "file.save", json!({}));
+        assert_eq!(on_file(&saved_as), written, "{id}: the saved file still holds what was saved");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn html_pictures_load_relative_to_the_file() {
+    // Issue #98: `<img src="logo.png">` beside an HTML file is embedded when it is opened.
+    let dir = std::env::temp_dir().join(format!("wordcraft-html-img-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("img")).unwrap();
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(4, 2, image::Rgba([10, 20, 30, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    std::fs::write(dir.join("img/my logo.png"), &png).unwrap();
+    std::fs::write(dir.join("secret.txt"), b"not a picture").unwrap();
+    let html = r#"<p><img src="img/my%20logo.png" alt="Logo"></p><p><img src="secret.txt" alt="T"></p><p><img src="http://example.com/x.png" alt="Web"></p>"#;
+    std::fs::write(dir.join("page.html"), html).unwrap();
+    let doc = crate::io::open_path(&dir.join("page.html"));
+    let _ = std::fs::remove_dir_all(&dir);
+    let doc = doc.unwrap();
+    assert_eq!(doc.media.len(), 1);
+    let text = doc.plain_text(StoryRef::Body);
+    assert!(!text.contains("Logo") && text.contains('T') && text.contains("Web"), "{text:?}");
+}
+
+/// A fresh, empty scratch folder for one test.
+#[cfg(not(target_arch = "wasm32"))]
+fn scratch_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("wordcraft-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn tiny_png() -> Vec<u8> {
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(2, 2, image::Rgba([200, 30, 30, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    png
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn html_pictures_outside_the_folder_are_not_loaded() {
+    // #98 review: `..` must not reach files outside the HTML file's folder.
+    let root = scratch_dir("html-img-escape");
+    std::fs::create_dir_all(root.join("site/img")).unwrap();
+    std::fs::write(root.join("outside.png"), tiny_png()).unwrap();
+    std::fs::write(root.join("site/inside.png"), tiny_png()).unwrap();
+    let html = r#"<p><img src="../outside.png" alt="Up"></p><p><img src="img/../../outside.png" alt="Sneak"></p><p><img src="img/../inside.png" alt="In"></p>"#;
+    std::fs::write(root.join("site/page.html"), html).unwrap();
+    let doc = crate::io::open_path(&root.join("site/page.html"));
+    let _ = std::fs::remove_dir_all(&root);
+    let doc = doc.unwrap();
+    assert_eq!(doc.media.len(), 1, "only the picture inside the folder loads");
+    let text = doc.plain_text(StoryRef::Body);
+    assert!(text.contains("Up") && text.contains("Sneak") && !text.contains("In"), "{text:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn html_pictures_through_a_symlink_out_of_the_folder_are_not_loaded() {
+    // #98 review: a symlink inside the folder must not lead outside it.
+    let root = scratch_dir("html-img-symlink");
+    std::fs::create_dir_all(root.join("site")).unwrap();
+    std::fs::write(root.join("outside.png"), tiny_png()).unwrap();
+    std::os::unix::fs::symlink(root.join("outside.png"), root.join("site/link.png")).unwrap();
+    std::fs::write(root.join("site/page.html"), r#"<p><img src="link.png" alt="Link"></p>"#).unwrap();
+    let doc = crate::io::open_path(&root.join("site/page.html"));
+    let _ = std::fs::remove_dir_all(&root);
+    let doc = doc.unwrap();
+    assert!(doc.media.is_empty());
+    assert!(doc.plain_text(StoryRef::Body).contains("Link"));
+}
+
+#[cfg(unix)]
+#[test]
+fn html_picture_that_is_a_named_pipe_is_skipped_without_blocking() {
+    // #98 review: opening a FIFO blocks until a writer appears; it must never be opened.
+    let dir = scratch_dir("html-img-fifo");
+    let fifo = dir.join("pipe.png");
+    let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+    if !made.is_ok_and(|s| s.success()) {
+        let _ = std::fs::remove_dir_all(&dir);
+        eprintln!("mkfifo unavailable; skipping");
+        return;
+    }
+    std::fs::write(dir.join("page.html"), r#"<p><img src="pipe.png" alt="Pipe"></p>"#).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let page = dir.join("page.html");
+    std::thread::spawn(move || {
+        let _ = tx.send(crate::io::open_path(&page));
+    });
+    let got = rx.recv_timeout(std::time::Duration::from_secs(10));
+    if got.is_err() {
+        // Unblock the stuck reader so the thread ends, then fail.
+        let _ = std::fs::OpenOptions::new().write(true).open(&fifo);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    let doc = got.expect("opening the HTML file blocked on a named pipe").unwrap();
+    assert!(doc.media.is_empty());
+    assert!(doc.plain_text(StoryRef::Body).contains("Pipe"));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn html_picture_size_limit_holds_whatever_length_the_file_reports() {
+    use crate::io::LocalImages;
+    let dir = scratch_dir("html-img-limit");
+    std::fs::write(dir.join("ten.bin"), [7u8; 10]).unwrap();
+    std::fs::write(dir.join("eleven.bin"), [7u8; 11]).unwrap();
+    let images = LocalImages::with_limits(&dir, 10, 1000);
+    let ten = images.load("ten.bin").map(|d| d.len());
+    let eleven = images.load("eleven.bin");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(ten, Some(10));
+    assert!(eleven.is_none());
+    #[cfg(unix)]
+    {
+        // A device reports a length of 0 and never ends: it is not a regular file, and the read is
+        // bounded anyway.
+        let dev = LocalImages::with_limits(std::path::Path::new("/dev"), 1 << 20, 1 << 20);
+        assert!(dev.load("zero").is_none());
+        assert!(dev.load("null").is_none());
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn html_pictures_share_one_read_and_a_per_document_budget() {
+    // #98 review: a picture referenced many times is read once, and every reference counts
+    // against the document's budget so a large picture can't be multiplied without bound.
+    use crate::io::LocalImages;
+    let dir = scratch_dir("html-img-budget");
+    let png = tiny_png();
+    let n = png.len() as u64;
+    std::fs::write(dir.join("a.png"), &png).unwrap();
+    let images = LocalImages::with_limits(&dir, 1 << 20, 3 * n);
+    let first = images.load("a.png").unwrap();
+    std::fs::write(dir.join("a.png"), b"changed on disk").unwrap();
+    let second = images.load("./a.png").unwrap();
+    assert!(std::sync::Arc::ptr_eq(&first, &second), "the second reference reuses the first read");
+    assert_eq!(*second, png);
+    assert!(images.load("a.png").is_some());
+    assert!(images.load("a.png").is_none(), "budget spent");
+    // Files over the per-picture limit still cost what was read.
+    std::fs::write(dir.join("big.bin"), vec![1u8; 100]).unwrap();
+    std::fs::write(dir.join("small.bin"), [1u8; 5]).unwrap();
+    let images = LocalImages::with_limits(&dir, 10, 25);
+    assert!(images.load("big.bin").is_none());
+    assert!(images.load("big.bin").is_none());
+    let small = images.load("small.bin");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(small.is_none(), "two oversized reads used up the budget");
 }
 
 fn para_style(s: &Session, i: usize) -> Option<String> {

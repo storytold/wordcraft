@@ -248,6 +248,10 @@ impl Counters {
         // This list's own definition of a level wins over its abstract list's.
         let level_def = |k: usize| numbering.level(num, k as u8);
         let def = level_def(lv)?.clone();
+        // A "none" level shows no label at all (Word's numFmt none) — not even its text.
+        if def.format == NumFormat::None {
+            return None;
+        }
         let st = self.state.entry(abs.id).or_insert([0; 9]);
         if let std::collections::hash_map::Entry::Vacant(e) = self.seen.entry(num) {
             e.insert(true);

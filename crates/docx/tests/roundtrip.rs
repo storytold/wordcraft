@@ -911,6 +911,37 @@ fn ensure_empty_and_table_end_document_is_valid() {
 }
 
 #[test]
+fn self_showing_text_box_saves_bounded() {
+    // Crafted: a box whose 30 shapes all show that same box. Unbounded, saving would nest it.
+    let mut d = Document::from_text("Body");
+    let id = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("Box", CharProps::default()))]);
+    let shape = || InlineObject::Shape {
+        kind: ShapeKind::TextBox,
+        w: 40.0,
+        h: 20.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Float::default(),
+        story: Some(id),
+    };
+    for _ in 0..30 {
+        d.insert_object(
+            &wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Part(id), path: wordcraft_doc::Path::top(0), off: 0 },
+            shape(),
+            &CharProps::default(),
+        )
+        .unwrap();
+    }
+    d.insert_object(&wordcraft_doc::Pos::body(0, 0), shape(), &CharProps::default()).unwrap();
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    assert!(bytes.len() < 200_000, "{} bytes", bytes.len());
+    // It still opens, with the box's text.
+    let back = wordcraft_docx::read(&bytes).unwrap();
+    assert!(back.parts.values().any(|p| p.kind == PartKind::TextBox));
+}
+
+#[test]
 fn char_border_written_between_u_and_shd() {
     let c =
         CharProps { border: Some(Border::single(0.5)), underline: Some(Underline::Single), shading: Some(Rgb(0xFF, 0xFF, 0)), ..Default::default() };

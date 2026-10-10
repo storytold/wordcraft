@@ -346,7 +346,7 @@ pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
                     b.push(Placed::Lines { story: *story, path: path.clone(), para: para.clone(), l0: split, l1: *l1, x: *x, y: top - shift });
                 }
             }
-            Placed::Image { rect, .. } | Placed::Shape { rect, .. } => {
+            Placed::Image { rect, .. } | Placed::Shape { rect, .. } | Placed::Object { rect, .. } => {
                 if rect.bottom() <= cut + 0.01 {
                     a.push(it.clone());
                 } else {

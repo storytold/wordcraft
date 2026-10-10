@@ -63,6 +63,289 @@ fn hit_and_caret_agree() {
 }
 
 #[test]
+fn deletions_leave_the_final_text_layout() {
+    // "Keep " + deleted "DELETEDTEXT " (5..17) + inserted "INSERTED".
+    let mut d = Document::from_text("Keep DELETEDTEXT INSERTED");
+    d.format_range(&Pos::body(0, 5), &Pos::body(0, 17), &|c| c.del = Some(0)).unwrap();
+    d.format_range(&Pos::body(0, 17), &Pos::body(0, 25), &|c| c.ins = Some(0)).unwrap();
+    let texts = |l: &DocLayout, markup: bool| -> (String, usize) {
+        let items = display::page_display(&d, &l.pages[0], &display::DisplayOptions { markup, ..Default::default() });
+        let text = items.iter().filter_map(|i| if let display::Draw::Glyphs { text, .. } = i { Some(text.as_str()) } else { None }).collect();
+        (text, items.iter().filter(|i| matches!(i, display::Draw::Line { .. })).count())
+    };
+    // Markup: the deletion is laid out and struck through, the insertion underlined.
+    let full = lay(&d);
+    assert_eq!(texts(&full, true), ("Keep DELETEDTEXT INSERTED".into(), 2));
+    // Without markup a full layout still never prints the deletion as plain text.
+    assert!(!texts(&full, false).0.contains("DELETED"));
+    // The final layout gives the deletion no width.
+    let fin = layout(&d, &mut LayoutCache::new(), &LayoutOptions { hide_deleted: true, ..Default::default() });
+    assert_eq!(texts(&fin, false), ("Keep INSERTED".into(), 0));
+    let at = |off| fin.caret(&Pos::body(0, off)).unwrap();
+    assert!((at(5).x - at(17).x).abs() < 0.01, "{:?} {:?}", at(5), at(17));
+    // Every offset maps to a caret, and clicks land outside the hidden text.
+    for off in 0..=25 {
+        let c = at(off);
+        let back = fin.hit(c.page, c.x + 0.1, c.top + c.height / 2.0, StoryRef::Body).unwrap();
+        assert!(back.off <= 5 || back.off >= 17, "off {off} hit {back:?}");
+    }
+}
+
+#[test]
+fn deleted_soft_hyphen_is_no_hyphenation_point_without_markup() {
+    // "ab\u{ad}cdef" in a column where "ab-" fits but the whole word does not; only the soft
+    // hyphen is track-deleted.
+    let mut d = Document::from_text("ab\u{ad}cdef");
+    d.format_range(&Pos::body(0, 2), &Pos::body(0, 4), &|c| c.del = Some(0)).unwrap();
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.indent_right = Some(468.0 - 26.0)).unwrap();
+    let hyphens = |hide_deleted: bool| {
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions { hide_deleted, ..Default::default() });
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        para.lines.iter().filter(|l| l.hyphen.is_some()).count()
+    };
+    // With markup the deleted soft hyphen is still there, and the word breaks at it.
+    assert_eq!(hyphens(false), 1);
+    // Final text: the soft hyphen is gone, so is the hyphen.
+    assert_eq!(hyphens(true), 0);
+}
+
+#[test]
+fn deleted_text_adds_no_line_break_opportunity_without_markup() {
+    // "xx ab\u{ad}cdef" in a column where "xx ab-" and "abcdef" fit but "xx abcdef" does not; only
+    // the soft hyphen (5..7) is track-deleted.
+    let mut d = Document::from_text("xx ab\u{ad}cdef");
+    d.format_range(&Pos::body(0, 5), &Pos::body(0, 7), &|c| c.del = Some(0)).unwrap();
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.indent_right = Some(468.0 - 40.0)).unwrap();
+    let line_starts = |hide_deleted: bool| {
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions { hide_deleted, ..Default::default() });
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        para.lines.iter().map(|l| para.clusters.get(l.c0).map_or(usize::MAX, |c| c.start)).collect::<Vec<_>>()
+    };
+    // With markup the word breaks at the (deleted) soft hyphen.
+    assert_eq!(line_starts(false), vec![0, 7]);
+    // Final text: "abcdef" is one word, so the line breaks at the space before it.
+    assert_eq!(line_starts(true), vec![0, 3]);
+}
+
+#[test]
+fn hidden_soft_hyphen_is_no_hyphenation_point_when_hidden_text_is_not_shown() {
+    // As with deletions: "ab\u{ad}cdef" where only the soft hyphen is hidden text.
+    let mut d = Document::from_text("ab\u{ad}cdef");
+    d.format_range(&Pos::body(0, 2), &Pos::body(0, 4), &|c| c.hidden = Some(true)).unwrap();
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.indent_right = Some(468.0 - 26.0)).unwrap();
+    let hyphens = |show_hidden: bool| {
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions { show_hidden, ..Default::default() });
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        para.lines.iter().filter(|l| l.hyphen.is_some()).count()
+    };
+    // Hidden text shown: the soft hyphen is there, and the word breaks at it.
+    assert_eq!(hyphens(true), 1);
+    // Not shown (as printed): no soft hyphen, so no hyphen. Word breaks "abc" / "def" here.
+    assert_eq!(hyphens(false), 0);
+}
+
+#[test]
+fn hidden_text_adds_no_line_break_opportunity_when_not_shown() {
+    // "xx ab" + hidden soft hyphen or space + "cdef", in a column where "xx ab-" and "abcdef" fit
+    // but "xx abcdef" does not. Measured in Word (hidden text not printed): "xx" / "abcdef" both times.
+    for hidden in ["\u{ad}", " "] {
+        let mut d = Document::from_text(&format!("xx ab{hidden}cdef"));
+        let end = 5 + hidden.len();
+        d.format_range(&Pos::body(0, 5), &Pos::body(0, end), &|c| c.hidden = Some(true)).unwrap();
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.indent_right = Some(468.0 - 40.0)).unwrap();
+        let line_starts = |show_hidden: bool| {
+            let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions { show_hidden, ..Default::default() });
+            let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+            para.lines.iter().map(|l| para.clusters.get(l.c0).map_or(usize::MAX, |c| c.start)).collect::<Vec<_>>()
+        };
+        // Shown, the word breaks at the hidden soft hyphen or space.
+        assert_eq!(line_starts(true), vec![0, end], "{hidden:?}");
+        // Not shown, "abcdef" is one word, so the line breaks at the space before it.
+        assert_eq!(line_starts(false), vec![0, 3], "{hidden:?}");
+    }
+}
+
+/// How much longer laying out `doc(4n)` takes than `doc(n)` (fastest of three each, after a
+/// warm-up): ~4 when linear, ~16 when quadratic, whatever the machine.
+/// How much bigger the second document is in the linear-time tests. At 8x a linear layout takes
+/// about 8x as long and a quadratic one about 64x, so a limit of 24x stays far from both, however
+/// busy the machine running the tests is.
+const SCALE: usize = 8;
+
+fn layout_time_ratio(doc: impl Fn(usize) -> Document, n: usize, opts: &LayoutOptions) -> (f64, f64, f64) {
+    let fastest = |d: &Document| {
+        (0..3)
+            .map(|_| {
+                let t = std::time::Instant::now();
+                layout(d, &mut LayoutCache::new(), opts);
+                t.elapsed().as_secs_f64()
+            })
+            .fold(f64::INFINITY, f64::min)
+    };
+    let (small, big) = (doc(n), doc(SCALE * n));
+    layout(&small, &mut LayoutCache::new(), opts);
+    let (t1, tk) = (fastest(&small), fastest(&big));
+    (t1, tk, tk / t1.max(1e-9))
+}
+
+#[test]
+fn hidden_separators_with_automatic_hyphenation_lay_out_in_linear_time() {
+    // "hyphenation " n times with every space hidden: one joined word of 11n letters reaches the
+    // hyphenator, whose limit checks once rescanned the word for every candidate point.
+    let doc = |n: usize| {
+        let mut d = Document::from_text(&"hyphenation ".repeat(n));
+        d.settings.auto_hyphenation = true;
+        for k in 0..n {
+            let at = 12 * k + 11;
+            d.format_range(&Pos::body(0, at), &Pos::body(0, at + 1), &|c| c.hidden = Some(true)).unwrap();
+        }
+        d
+    };
+    let (t1, tk, ratio) = layout_time_ratio(doc, 800, &LayoutOptions::default());
+    eprintln!("t(n) {t1:.4} s, t(8n) {tk:.4} s, ratio {ratio:.1}");
+    assert!(ratio < 24.0, "8x the text took {ratio:.1}x the time ({t1:.4} s → {tk:.4} s): not linear");
+}
+
+#[test]
+fn many_hidden_float_anchors_lay_out_in_linear_time() {
+    // n square-wrapped shapes, each anchored in its own hidden run (bold alternating, so runs do not
+    // merge), markup on: finding each anchor's formatting once rescanned the runs from the start.
+    let doc = |n: usize| {
+        let float = wordcraft_doc::para::Float {
+            wrap: wordcraft_doc::para::Wrap::Square,
+            h_rel: wordcraft_doc::para::Anchor::Column,
+            v_rel: wordcraft_doc::para::Anchor::Paragraph,
+            x: 0.0,
+            y: 0.0,
+            dist: 9.0,
+            dist_top: 9.0,
+            dist_bottom: 9.0,
+            ..Default::default()
+        };
+        let shape = InlineObject::Shape {
+            kind: wordcraft_doc::para::ShapeKind::Rectangle,
+            w: 20.0,
+            h: 20.0,
+            fill: None,
+            stroke: None,
+            stroke_width: 1.0,
+            float,
+            story: None,
+        };
+        let obj = wordcraft_doc::para::OBJ.to_string();
+        let mut p = wordcraft_doc::Paragraph::with_text("Text ", Default::default());
+        p.text.push_str(&obj.repeat(n));
+        p.objects = vec![shape; n];
+        p.runs = std::iter::once(wordcraft_doc::Run { len: 5, props: Default::default() })
+            .chain((0..n).map(|i| wordcraft_doc::Run {
+                len: obj.len(),
+                props: wordcraft_doc::CharProps { hidden: Some(true), bold: Some(i % 2 == 0), ..Default::default() },
+            }))
+            .collect();
+        let mut d = Document::from_text("");
+        d.body = vec![wordcraft_doc::para_block(p)];
+        d
+    };
+    // Correct first: hidden anchors place no shape, shown ones do.
+    let shapes = |show_hidden: bool| {
+        let l = layout(&doc(50), &mut LayoutCache::new(), &LayoutOptions { show_hidden, ..Default::default() });
+        l.pages.iter().flat_map(|p| p.items.iter()).filter(|i| matches!(i, Placed::Shape { .. })).count()
+    };
+    assert_eq!((shapes(false), shapes(true)), (0, 50));
+    let (t1, tk, ratio) = layout_time_ratio(doc, 10_000, &LayoutOptions::default());
+    eprintln!("t(n) {t1:.4} s, t(8n) {tk:.4} s, ratio {ratio:.1}");
+    assert!(ratio < 24.0, "8x the anchors took {ratio:.1}x the time ({t1:.4} s → {tk:.4} s): not linear");
+}
+
+#[test]
+fn fragmented_hidden_text_lays_out_like_the_visible_text() {
+    // Visible words with a hidden multi-byte char after every visible one, formatted in alternating
+    // runs (bold on and off) so no two left-out runs are adjacent or merge.
+    let words = "Hyphenation wraps international words across narrow columns of text ".repeat(6);
+    let mut d = Document::from_text("");
+    d.settings.auto_hyphenation = true;
+    let mut text = String::new();
+    let mut kept = Vec::new();
+    for (i, c) in words.chars().enumerate() {
+        kept.push(text.len());
+        text.push(c);
+        let at = text.len();
+        text.push('é');
+        let n = d.para(StoryRef::Body, &Path::top(0)).unwrap().len();
+        let bold = wordcraft_doc::CharProps { bold: Some(i % 2 == 0), ..Default::default() };
+        d.insert_text(&Pos::body(0, n), &c.to_string(), &bold).unwrap();
+        let hidden = wordcraft_doc::CharProps { hidden: Some(true), bold: Some(i % 2 == 1), ..Default::default() };
+        d.insert_text(&Pos::body(0, at), "é", &hidden).unwrap();
+    }
+    assert_eq!(d.para(StoryRef::Body, &Path::top(0)).unwrap().text, text);
+    let mut plain = Document::from_text(&words);
+    plain.settings.auto_hyphenation = true;
+    for doc in [&mut d, &mut plain] {
+        doc.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.indent_right = Some(468.0 - 90.0)).unwrap();
+    }
+    // Line starts and hyphenation points, as paragraph offsets.
+    let shape = |d: &Document| {
+        let l = layout(d, &mut LayoutCache::new(), &LayoutOptions::default());
+        let paras: Vec<_> = l
+            .pages
+            .iter()
+            .flat_map(|p| p.items.iter())
+            .filter_map(|i| if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None })
+            .collect();
+        let para = &paras[0];
+        let starts: Vec<usize> = para.lines.iter().map(|l| para.clusters.get(l.c0).map_or(usize::MAX, |c| c.start)).collect();
+        let hyph: Vec<usize> = para.hyph_after.iter().map(|k| para.clusters[*k as usize].end).collect();
+        (starts, hyph)
+    };
+    let (starts, hyph) = shape(&plain);
+    assert!(starts.len() > 5 && !hyph.is_empty(), "{starts:?} {hyph:?}");
+    // Mapped to the fragmented paragraph: a line starts after the previous visible char (with the
+    // hidden one that follows it, which takes no room), a hyphen point is after its char.
+    let want_starts: Vec<usize> = starts.iter().map(|s| if *s == 0 { 0 } else { kept[s - 1] + 1 }).collect();
+    let want_hyph: Vec<usize> = hyph.iter().map(|e| kept[e - 1] + 1).collect();
+    assert_eq!(shape(&d), (want_starts, want_hyph));
+}
+
+#[test]
+fn automatic_hyphenation_sees_only_the_text_laid_out() {
+    // Paragraph-text ends of the clusters after which a line may end with a hyphen.
+    let hyph_ends = |d: &Document, opts: &LayoutOptions| {
+        let l = layout(d, &mut LayoutCache::new(), opts);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        para.hyph_after.iter().map(|k| para.clusters[*k as usize].end).collect::<Vec<_>>()
+    };
+    let doc = |text: &str| {
+        let mut d = Document::from_text(text);
+        d.settings.auto_hyphenation = true;
+        d
+    };
+    // (text, hidden bytes, deleted bytes, the text as laid out without them).
+    let cases = [
+        // A hidden prefix: "table" must not break after its first letter as "acceptable" may.
+        ("acceptable", 0..5, 0..0, "table"),
+        // A hidden separator joins two words into one.
+        ("foot ball", 4..5, 0..0, "football"),
+        // Hidden text and a tracked deletion together.
+        ("accXeptYable", 7..8, 3..4, "acceptable"),
+    ];
+    let hidden_opts = LayoutOptions { hide_deleted: true, ..Default::default() };
+    for (text, hidden, deleted, visible) in cases {
+        let mut d = doc(text);
+        d.format_range(&Pos::body(0, hidden.start), &Pos::body(0, hidden.end), &|c| c.hidden = Some(true)).unwrap();
+        if !deleted.is_empty() {
+            d.format_range(&Pos::body(0, deleted.start), &Pos::body(0, deleted.end), &|c| c.del = Some(0)).unwrap();
+        }
+        // The same points as the visible text alone, at the matching paragraph offsets.
+        let kept: Vec<usize> = (0..text.len()).filter(|i| !hidden.contains(i) && !deleted.contains(i)).collect();
+        let want: Vec<usize> = hyph_ends(&doc(visible), &hidden_opts).iter().map(|e| kept[e - 1] + 1).collect();
+        assert_eq!(hyph_ends(&d, &hidden_opts), want, "{text:?} as {visible:?}");
+        // Hidden text shown and markup shown: the whole text is hyphenated as before.
+        let all = LayoutOptions { show_hidden: true, ..Default::default() };
+        assert_eq!(hyph_ends(&d, &all), hyph_ends(&doc(text), &all), "{text:?} shown");
+    }
+}
+
+#[test]
 fn page_break_char_starts_new_page() {
     let mut d = Document::from_text("one");
     d.insert_text(&Pos::body(0, 3), "\u{000C}", &Default::default()).unwrap();
@@ -330,10 +613,46 @@ fn wrapped_border_boxes_each_line() {
 }
 
 #[test]
+fn runs_differing_only_in_link_or_decoration_keep_their_own_style() {
+    let mut d = Document::from_text("Alpha Beta Gamma Delta");
+    let set = |d: &mut Document, a: usize, b: usize, f: &dyn Fn(&mut wordcraft_doc::props::CharProps)| {
+        d.format_range(&Pos::body(0, a), &Pos::body(0, b), f).unwrap();
+    };
+    set(&mut d, 0, 5, &|c| c.link = Some("https://a.example/".into()));
+    set(&mut d, 6, 10, &|c| c.link = Some("https://b.example/".into()));
+    set(&mut d, 11, 16, &|c| c.strike = Some(true));
+    set(&mut d, 17, 22, &|c| c.double_strike = Some(true));
+    let l = lay(&d);
+    let items = display::page_display(&d, &l.pages[0], &display::DisplayOptions::default());
+    let link_of = |word: &str| {
+        items.iter().find_map(|i| if let display::Draw::Glyphs { text, link, .. } = i { text.contains(word).then(|| link.clone()) } else { None })
+    };
+    assert_eq!(link_of("Alpha"), Some(Some("https://a.example/".into())));
+    assert_eq!(link_of("Beta"), Some(Some("https://b.example/".into())));
+    let strokes: Vec<_> = items.iter().filter_map(|i| if let display::Draw::Line { stroke, .. } = i { Some(*stroke) } else { None }).collect();
+    assert!(strokes.contains(&display::Stroke::Solid) && strokes.contains(&display::Stroke::Double), "{strokes:?}");
+    // Underline colour is per run too.
+    let mut d = Document::from_text("Red Blue");
+    let red = wordcraft_doc::props::Rgb(0xFF, 0, 0);
+    let blue = wordcraft_doc::props::Rgb(0, 0, 0xFF);
+    for (a, b, c) in [(0, 3, red), (4, 8, blue)] {
+        d.format_range(&Pos::body(0, a), &Pos::body(0, b), &|p| {
+            p.underline = Some(wordcraft_doc::props::Underline::Single);
+            p.underline_color = Some(c);
+        })
+        .unwrap();
+    }
+    let l = lay(&d);
+    let items = display::page_display(&d, &l.pages[0], &display::DisplayOptions::default());
+    let colors: Vec<_> = items.iter().filter_map(|i| if let display::Draw::Line { color, .. } = i { Some(*color) } else { None }).collect();
+    assert!(colors.contains(&red) && colors.contains(&blue), "{colors:?}");
+}
+
+#[test]
 fn web_view_is_one_page() {
     let d = Document::from_text(&"text ".repeat(3000));
     let mut c = LayoutCache::new();
-    let l = layout(&d, &mut c, &LayoutOptions { view: ViewMode::Web, web_width: 800.0, show_hidden: false, proofing: false });
+    let l = layout(&d, &mut c, &LayoutOptions { view: ViewMode::Web, web_width: 800.0, show_hidden: false, hide_deleted: false, proofing: false });
     assert_eq!(l.pages.len(), 1);
     assert!(l.pages[0].h > 800.0);
 }
@@ -413,6 +732,98 @@ fn footnotes_sit_at_page_bottom() {
 }
 
 #[test]
+fn deleted_note_anchors_take_no_number_and_print_no_note() {
+    use wordcraft_doc::para::NoteKind;
+    let mut d = Document::from_text("Alpha Beta Gamma");
+    let mut ids = Vec::new();
+    // Footnotes after "Alpha" and "Beta", an endnote after "Gamma" (inserted back to front).
+    for (off, kind, part) in [
+        (16, NoteKind::Endnote, wordcraft_doc::PartKind::Endnote),
+        (10, NoteKind::Footnote, wordcraft_doc::PartKind::Footnote),
+        (5, NoteKind::Footnote, wordcraft_doc::PartKind::Footnote),
+    ] {
+        let id = d.add_part(part, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("A note.", Default::default()))]);
+        d.insert_object(&Pos::body(0, off), InlineObject::NoteRef { kind, id, custom: String::new() }, &Default::default()).unwrap();
+        ids.push(id);
+    }
+    let [end_id, second, first] = ids[..] else { panic!() };
+    // Track-delete the first footnote's anchor and the endnote's anchor.
+    let obj = wordcraft_doc::para::OBJ.len_utf8();
+    d.format_range(&Pos::body(0, 5), &Pos::body(0, 5 + obj), &|c| c.del = Some(0)).unwrap();
+    let end = d.para(StoryRef::Body, &Path::top(0)).unwrap().len();
+    d.format_range(&Pos::body(0, end - obj), &Pos::body(0, end), &|c| c.del = Some(0)).unwrap();
+    // The glyphs of each note mark in the body, and whether the endnote's text is placed.
+    let marks = |hide_deleted: bool| {
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions { hide_deleted, ..Default::default() });
+        let items: Vec<&Placed> = l.pages.iter().flat_map(|p| p.items.iter()).collect();
+        let mut marks = HashMap::new();
+        for it in &items {
+            if let Placed::Lines { story: StoryRef::Body, para, .. } = it {
+                for (ci, id) in &para.notes {
+                    let c = &para.clusters[*ci];
+                    marks.insert(*id, para.glyphs[c.g0 as usize..c.g1 as usize].iter().map(|g| g.gid).collect::<Vec<_>>());
+                }
+            }
+        }
+        let endnote = items.iter().any(|i| matches!(i, Placed::Lines { story: StoryRef::Part(p), .. } if *p == end_id));
+        (marks, endnote)
+    };
+    // Markup: footnotes 1 and 2, and the endnote prints.
+    let (full, endnote) = marks(false);
+    assert!(full[&first] != full[&second] && endnote, "{full:?}");
+    // Final text: the surviving footnote is number 1, and the deleted endnote anchor prints no note.
+    let (fin, endnote) = marks(true);
+    assert_eq!(fin.get(&second), full.get(&first), "the surviving footnote keeps number 2");
+    assert!(!endnote, "the endnote of a deleted anchor is printed");
+}
+
+#[test]
+fn hidden_note_anchors_keep_their_number_and_their_note() {
+    // Measured in Word (hidden text not printed): a hidden footnote or endnote reference mark still
+    // takes its number, so the visible footnote after it is 2, and both notes are still printed.
+    use wordcraft_doc::para::NoteKind;
+    let mut d = Document::from_text("Alpha Beta Gamma");
+    let mut ids = Vec::new();
+    for (off, kind, part) in [
+        (16, NoteKind::Endnote, wordcraft_doc::PartKind::Endnote),
+        (10, NoteKind::Footnote, wordcraft_doc::PartKind::Footnote),
+        (5, NoteKind::Footnote, wordcraft_doc::PartKind::Footnote),
+    ] {
+        let id = d.add_part(part, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("A note.", Default::default()))]);
+        d.insert_object(&Pos::body(0, off), InlineObject::NoteRef { kind, id, custom: String::new() }, &Default::default()).unwrap();
+        ids.push(id);
+    }
+    let [end_id, second, first] = ids[..] else { panic!() };
+    // Hide the first footnote's anchor and the endnote's anchor.
+    let obj = wordcraft_doc::para::OBJ.len_utf8();
+    d.format_range(&Pos::body(0, 5), &Pos::body(0, 5 + obj), &|c| c.hidden = Some(true)).unwrap();
+    let end = d.para(StoryRef::Body, &Path::top(0)).unwrap().len();
+    d.format_range(&Pos::body(0, end - obj), &Pos::body(0, end), &|c| c.hidden = Some(true)).unwrap();
+    // The glyphs of each visible note mark in the body, and which notes' text is placed.
+    let marks = |show_hidden: bool| {
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions { show_hidden, ..Default::default() });
+        let items: Vec<&Placed> = l.pages.iter().flat_map(|p| p.items.iter()).collect();
+        let mut marks = HashMap::new();
+        for it in &items {
+            if let Placed::Lines { story: StoryRef::Body, para, .. } = it {
+                for (ci, id) in &para.notes {
+                    let c = &para.clusters[*ci];
+                    marks.insert(*id, para.glyphs[c.g0 as usize..c.g1 as usize].iter().map(|g| g.gid).collect::<Vec<_>>());
+                }
+            }
+        }
+        let printed = |id: u32| items.iter().any(|i| matches!(i, Placed::Lines { story: StoryRef::Part(p), .. } if *p == id));
+        (marks, [first, second, end_id].map(printed))
+    };
+    let (shown, printed) = marks(true);
+    assert!(shown[&first] != shown[&second] && printed == [true; 3], "{shown:?} {printed:?}");
+    // Not shown: the visible footnote is still number 2, and every note is printed.
+    let (fin, printed) = marks(false);
+    assert_eq!(fin.get(&second), shown.get(&second), "the visible footnote is renumbered");
+    assert_eq!(printed, [true; 3], "a note whose reference is hidden is not printed");
+}
+
+#[test]
 fn text_wraps_around_square_float() {
     let mut d = Document::from_text(&"Words flow around the picture here. ".repeat(30));
     let float = wordcraft_doc::para::Float {
@@ -443,6 +854,100 @@ fn text_wraps_around_square_float() {
     assert!(later.left < 1.0, "lines below the float use the full width: {}", later.left);
     assert!(x + first.left > 72.0 + 144.0);
     assert!(l.pages[0].items.iter().any(|i| matches!(i, Placed::Shape { .. })));
+}
+
+#[test]
+fn deleted_float_leaves_no_wrap_area_without_markup() {
+    // A square-wrapped shape anchored at the start of the paragraph, its anchor track-deleted.
+    let text = "Words flow around the picture here. ".repeat(30);
+    let mut d = Document::from_text(&text);
+    let float = wordcraft_doc::para::Float {
+        wrap: wordcraft_doc::para::Wrap::Square,
+        h_rel: wordcraft_doc::para::Anchor::Column,
+        v_rel: wordcraft_doc::para::Anchor::Paragraph,
+        x: 0.0,
+        y: 0.0,
+        dist: 9.0,
+        dist_top: 9.0,
+        dist_bottom: 9.0,
+        ..Default::default()
+    };
+    let shape = InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::Rectangle,
+        w: 144.0,
+        h: 100.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float,
+        story: None,
+    };
+    d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
+    let obj = wordcraft_doc::para::OBJ.len_utf8();
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, obj), &|c| c.del = Some(0)).unwrap();
+    // Where the first line starts, and whether the shape is placed.
+    let first = |hide_deleted: bool| {
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions { hide_deleted, ..Default::default() });
+        let p = &l.pages[0];
+        let Some(Placed::Lines { para, .. }) = p.items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        (para.lines[0].left, p.items.iter().any(|i| matches!(i, Placed::Shape { .. })))
+    };
+    // With markup the deleted shape is shown and the text flows beside it.
+    let (left, shown) = first(false);
+    assert!(left >= 144.0 && shown, "{left} {shown}");
+    // Final text: no shape, and no gap where it was.
+    assert_eq!(first(true), (0.0, false));
+}
+
+#[test]
+fn hidden_float_leaves_no_wrap_area_when_hidden_text_is_not_shown() {
+    // A square-wrapped shape whose anchor is hidden text, through a character style (so only the
+    // resolved formatting says so). Measured in Word: not printed, and the text runs full width.
+    let text = "Words flow around the picture here. ".repeat(30);
+    let mut d = Document::from_text(&text);
+    d.styles.upsert(wordcraft_doc::Style {
+        id: "Secret".into(),
+        name: "Secret".into(),
+        kind: wordcraft_doc::StyleKind::Character,
+        chr: wordcraft_doc::CharProps { hidden: Some(true), ..Default::default() },
+        ..Default::default()
+    });
+    let float = wordcraft_doc::para::Float {
+        wrap: wordcraft_doc::para::Wrap::Square,
+        h_rel: wordcraft_doc::para::Anchor::Column,
+        v_rel: wordcraft_doc::para::Anchor::Paragraph,
+        x: 0.0,
+        y: 0.0,
+        dist: 9.0,
+        dist_top: 9.0,
+        dist_bottom: 9.0,
+        ..Default::default()
+    };
+    let shape = InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::Rectangle,
+        w: 144.0,
+        h: 100.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float,
+        story: None,
+    };
+    d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
+    let obj = wordcraft_doc::para::OBJ.len_utf8();
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, obj), &|c| c.style = Some("Secret".into())).unwrap();
+    // Where the first line starts, and whether the shape is placed.
+    let first = |show_hidden: bool| {
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions { show_hidden, ..Default::default() });
+        let p = &l.pages[0];
+        let Some(Placed::Lines { para, .. }) = p.items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        (para.lines[0].left, p.items.iter().any(|i| matches!(i, Placed::Shape { .. })))
+    };
+    // Hidden text shown: the shape is placed and the text flows beside it.
+    let (left, shown) = first(true);
+    assert!(left >= 144.0 && shown, "{left} {shown}");
+    // Not shown: no shape, and no gap where it was.
+    assert_eq!(first(false), (0.0, false));
 }
 
 #[test]
@@ -518,6 +1023,53 @@ fn tall_rows_split_across_pages() {
 }
 
 #[test]
+fn repeated_header_is_followed_by_the_next_row_even_when_it_overflows() {
+    // A one-column table at the top of a letter page (body 648 pt), then an empty paragraph. Returns
+    // the table rows on each page, in order.
+    let rows_per_page = |t: Table| -> Vec<Vec<usize>> {
+        let mut d = Document::new();
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        l.pages
+            .iter()
+            .map(|p| p.items.iter().filter_map(|i| if let Placed::Cell { row, cell: 0, .. } = i { Some(*row) } else { None }).collect())
+            .collect()
+    };
+    // A header row of `header` points and body rows of `rows` points (at least), one line of text each.
+    let table = |header: f32, rows: &[f32]| {
+        let mut t = Table::new(rows.len() + 1, 1, 468.0);
+        t.rows[0].props.header = true;
+        for (row, h) in t.rows.iter_mut().zip(std::iter::once(&header).chain(rows)) {
+            row.props.height = Some(*h);
+            row.props.height_rule = wordcraft_doc::props::HeightRule::AtLeast;
+        }
+        t
+    };
+    // Header and row fit together: one row per page, under the header.
+    assert_eq!(rows_per_page(table(100.0, &[400.0; 3])), vec![vec![0, 1], vec![0, 2], vec![0, 3]]);
+    // A 300 pt header and 400 pt rows never fit together. As in Word, the first row moves to a new
+    // page, goes under the repeated header and runs into the bottom margin; so does every later row.
+    assert_eq!(rows_per_page(table(300.0, &[400.0; 4])), vec![vec![0], vec![0, 1], vec![0, 2], vec![0, 3], vec![0, 4], vec![]]);
+    // A header that almost fills the page still repeats, with one row under it on each page.
+    assert_eq!(rows_per_page(table(640.0, &[100.0; 3])), vec![vec![0], vec![0, 1], vec![0, 2], vec![0, 3], vec![]]);
+    // A 20-row table under a 640 pt header: one page per row, never a runaway.
+    assert_eq!(rows_per_page(table(640.0, &[12.0; 19])).len(), 21);
+    // A row of text that is taller than the room under the header still splits across pages.
+    let mut t = table(100.0, &[12.0]);
+    let long = "Row text that keeps going and going so the cell grows taller than a page. ".repeat(120);
+    t.rows[1].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&long, Default::default()))];
+    let pages = rows_per_page(t);
+    assert!(pages.len() >= 3, "{pages:?}");
+    assert!(pages.iter().all(|p| p.first() == Some(&0) && p.contains(&1)), "{pages:?}");
+    // An ordinary header still repeats on every page the table reaches.
+    let mut t = Table::new(80, 2, 468.0);
+    t.rows[0].props.header = true;
+    let pages = rows_per_page(t);
+    assert!(pages.len() >= 2, "{pages:?}");
+    assert!(pages.iter().all(|p| p.first() == Some(&0)), "{pages:?}");
+}
+
+#[test]
 fn drop_cap_indents_its_lines() {
     let mut p =
         wordcraft_doc::Paragraph::with_text(&"Every line of this paragraph wraps around a large first letter. ".repeat(6), Default::default());
@@ -574,6 +1126,373 @@ fn auto_hyphenation_breaks_long_words() {
     let d2 = Document::from_text(&soft);
     let l2 = lay(&d2);
     let _ = hyphens(&l2);
+}
+
+fn text_box(d: &mut Document, at: usize, text: &str, w: f32, h: f32, float: wordcraft_doc::para::Float) -> u32 {
+    text_box_at(d, &Pos::body(0, at), text, w, h, float)
+}
+
+fn text_box_at(d: &mut Document, pos: &Pos, text: &str, w: f32, h: f32, float: wordcraft_doc::para::Float) -> u32 {
+    let id =
+        d.add_part(wordcraft_doc::PartKind::TextBox, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))]);
+    let shape = InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::TextBox,
+        w,
+        h,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.75,
+        float,
+        story: Some(id),
+    };
+    d.insert_object(pos, shape, &Default::default()).unwrap();
+    id
+}
+
+fn box_rect(l: &DocLayout, id: u32) -> wordcraft_geom::Rect {
+    l.pages[0]
+        .items
+        .iter()
+        .find_map(|i| if let Placed::Object { rect, text_box, .. } = i { (*text_box == Some(id)).then_some(*rect) } else { None })
+        .unwrap()
+}
+
+#[test]
+fn clicks_inside_a_text_box_hit_its_story() {
+    let mut d = Document::from_text("Before after");
+    let id = text_box(&mut d, 7, "Inside the box", 144.0, 72.0, Default::default());
+    let l = lay(&d);
+    let r = box_rect(&l, id);
+    assert!((r.w - 144.0).abs() < 0.5 && (r.h - 72.0).abs() < 0.5, "{r:?}");
+    let box_story = StoryRef::Part(id);
+    // Anywhere inside the box, even below its text, is the box.
+    for (x, y) in [(r.x + 20.0, r.y + 10.0), (r.x + r.w - 4.0, r.y + r.h - 4.0)] {
+        assert_eq!(l.story_at(0, x, y), Some(box_story), "({x}, {y}) in {r:?}");
+        assert_eq!(l.hit(0, x, y, box_story).map(|p| p.story), Some(box_story));
+    }
+    // The body text beside it is the body; so is the margin just right of the box, although the
+    // box's own lines are within reach there.
+    let c = l.caret(&Pos::body(0, 2)).unwrap();
+    assert_eq!(l.story_at(0, c.x, c.top + c.height / 2.0), Some(StoryRef::Body));
+    assert_ne!(l.story_at(0, r.right() + 8.0, r.y + 10.0), Some(box_story));
+    // The caret in the box sits inside it.
+    let bc = l.caret(&Pos { story: box_story, path: Path::top(0), off: 0 }).unwrap();
+    assert!(r.contains(wordcraft_geom::Point::new(bc.x, bc.top)), "{bc:?} outside {r:?}");
+}
+
+#[test]
+fn body_text_wins_over_a_text_box_behind_it() {
+    let mut d = Document::from_text("Hi");
+    let float = wordcraft_doc::para::Float {
+        wrap: wordcraft_doc::para::Wrap::BehindText,
+        h_rel: wordcraft_doc::para::Anchor::Column,
+        v_rel: wordcraft_doc::para::Anchor::Paragraph,
+        x: 0.0,
+        y: 0.0,
+        dist: 0.0,
+        ..Default::default()
+    };
+    let id = text_box(&mut d, 0, "Behind", 200.0, 150.0, float);
+    let l = lay(&d);
+    let r = box_rect(&l, id);
+    let c = l.caret(&Pos::body(0, 0)).unwrap();
+    assert!(r.contains(wordcraft_geom::Point::new(c.x + 2.0, c.top + 2.0)), "box covers the text: {r:?} {c:?}");
+    assert_eq!(l.story_at(0, c.x + 2.0, c.top + c.height / 2.0), Some(StoryRef::Body));
+    assert_eq!(l.story_at(0, r.right() - 10.0, r.bottom() - 10.0), Some(StoryRef::Part(id)));
+}
+
+#[test]
+fn presses_grab_pictures_anywhere_and_text_boxes_by_their_border() {
+    let mut d = Document::from_text("Words before the objects.");
+    let id = text_box(&mut d, 0, "Inside", 144.0, 72.0, Default::default());
+    let shape = InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::Rectangle,
+        w: 60.0,
+        h: 40.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float: Default::default(),
+        story: None,
+    };
+    d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
+    let l = lay(&d);
+    let b = box_rect(&l, id);
+    // The text box: its border grabs it, inside is its text.
+    let edge = l.object_at(0, b.x + 1.0, b.y + b.h / 2.0, 4.0).unwrap();
+    assert_eq!(edge.text_box, Some(id));
+    assert_eq!(l.object(&edge.pos(), 0).map(|o| o.rect), Some(b));
+    assert_eq!(l.text_box(id, 5).map(|o| o.rect), Some(b), "a bad hint still finds it");
+    assert!(l.object_at(0, b.x + b.w / 2.0, b.y + b.h / 2.0, 4.0).is_none());
+    // The shape: anywhere on it.
+    let s = l.find_object(0, |o| o.text_box.is_none()).unwrap();
+    let hit = l.object_at(0, s.rect.x + s.rect.w / 2.0, s.rect.y + s.rect.h / 2.0, 4.0).unwrap();
+    assert_eq!((hit.off, hit.text_box, hit.floating()), (0, None, false));
+    // Plain text: nothing.
+    let c = l.caret(&Pos::body(0, 10)).unwrap();
+    assert!(l.object_at(0, c.x, c.top + 2.0, 4.0).is_none());
+}
+
+/// (lines placed, lines laid out) of a text box's story, and its area.
+fn box_lines(l: &DocLayout, id: u32) -> (usize, usize, wordcraft_geom::Rect) {
+    let mut shown = 0;
+    let mut total = 0;
+    for it in &l.pages[0].items {
+        if let Placed::Lines { story: StoryRef::Part(p), para, l0, l1, y, .. } = it
+            && *p == id
+        {
+            shown += l1 - l0;
+            total += para.lines.len();
+            let first = &para.lines[*l0];
+            let last = &para.lines[l1 - 1];
+            let bottom = y + last.top + last.height - first.top;
+            let r = box_rect(l, id);
+            assert!(bottom <= r.bottom() + 0.5 || shown == 1, "a placed line overflows: {bottom} > {}", r.bottom());
+        }
+    }
+    (shown, total, box_rect(l, id))
+}
+
+#[test]
+fn text_box_hides_text_that_does_not_fit() {
+    let long = "The quick brown fox jumps over the lazy dog. ".repeat(12);
+    let mut d = Document::from_text("Body");
+    let id = text_box(&mut d, 0, &long, 144.0, 72.0, Default::default());
+    let (shown, total, r) = box_lines(&lay(&d), id);
+    assert!(shown >= 2 && shown < total, "{shown} of {total} lines shown in {r:?}");
+    // Nothing below the box belongs to it.
+    let l = lay(&d);
+    assert_ne!(l.story_at(0, r.x + 20.0, r.bottom() + 6.0), Some(StoryRef::Part(id)));
+    // A taller box shows more; a tiny one still shows its first line.
+    let mut d2 = Document::from_text("Body");
+    let id2 = text_box(&mut d2, 0, &long, 144.0, 1500.0, Default::default());
+    let (shown2, total2, _) = box_lines(&lay(&d2), id2);
+    assert_eq!(shown2, total2);
+    let mut d3 = Document::from_text("Body");
+    let id3 = text_box(&mut d3, 0, &long, 144.0, 18.0, Default::default());
+    assert_eq!(box_lines(&lay(&d3), id3).0, 1);
+}
+
+#[test]
+fn square_wrap_flows_text_on_both_sides() {
+    let float = |x: f32| wordcraft_doc::para::Float {
+        wrap: wordcraft_doc::para::Wrap::Square,
+        h_rel: wordcraft_doc::para::Anchor::Column,
+        v_rel: wordcraft_doc::para::Anchor::Paragraph,
+        x,
+        y: 0.0,
+        dist: 9.0,
+        ..Default::default()
+    };
+    let text = "Words flow on both sides of the box in the middle here. ".repeat(20);
+    let mut d = Document::from_text(&text);
+    let id = text_box(&mut d, 0, "Middle", 144.0, 100.0, float(160.0));
+    let l = lay(&d);
+    let r = box_rect(&l, id);
+    let Placed::Lines { para, x, y, .. } = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { story: StoryRef::Body, .. })).unwrap() else {
+        panic!()
+    };
+    let beside: Vec<&para::Line> = para.lines.iter().filter(|ln| ln.beside).collect();
+    assert!(beside.len() >= 4, "{} rows have text on the far side", beside.len());
+    for (k, ln) in para.lines.iter().enumerate().filter(|(_, ln)| ln.beside) {
+        let prev = &para.lines[k - 1];
+        assert_eq!((prev.top, prev.height), (ln.top, ln.height), "one row");
+        assert!(x + ink_end(para, prev) <= r.x + 0.01, "left part stops before the box");
+        assert!(x + ln.xs[0] >= r.right(), "right part starts after it");
+        assert_eq!(prev.stop, ln.start, "text runs left part, then right part");
+    }
+    // Below the box: full-width rows again.
+    let below = para.lines.iter().find(|ln| y + ln.top > r.bottom() + 10.0).unwrap();
+    assert!(!below.beside && below.right - below.left > 400.0);
+    // The right-hand part is hittable and has a caret.
+    let ln = beside[0];
+    let pos = l.hit(0, x + ln.xs[1], y + ln.top + 2.0, StoryRef::Body).unwrap();
+    assert!(pos.off >= ln.start && pos.off <= ln.stop, "{pos:?}");
+    assert!(l.caret(&pos).unwrap().x >= r.right());
+    // A gap too narrow for text stays empty.
+    let mut d2 = Document::from_text(&text);
+    let id2 = text_box(&mut d2, 0, "Edge", 144.0, 100.0, float(468.0 - 144.0 - 20.0));
+    let l2 = lay(&d2);
+    let r2 = box_rect(&l2, id2);
+    let Placed::Lines { para, x, .. } = l2.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { story: StoryRef::Body, .. })).unwrap() else {
+        panic!()
+    };
+    assert!(para.lines.iter().all(|ln| !ln.beside && ink_end(para, ln) <= (r2.x - x).max(ln.right) + 0.01));
+}
+
+/// Where a line's text ends (its last non-space cluster's right edge; trailing spaces may hang
+/// past the margin), relative to the column.
+fn ink_end(pl: &ParaLayout, ln: &para::Line) -> f32 {
+    (ln.c0..ln.c1)
+        .filter_map(|k| {
+            let c = pl.clusters.get(k)?;
+            (c.kind != para::ClKind::Space).then_some(ln.xs.get(k - ln.c0)? + c.adv)
+        })
+        .fold(0.0, f32::max)
+}
+
+fn footnote(d: &mut Document, pos: &Pos, text: &str) -> u32 {
+    let id =
+        d.add_part(wordcraft_doc::PartKind::Footnote, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))]);
+    d.insert_object(pos, InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Footnote, id, custom: String::new() }, &Default::default())
+        .unwrap();
+    id
+}
+
+fn page_float(x: f32, y: f32) -> wordcraft_doc::para::Float {
+    wordcraft_doc::para::Float {
+        wrap: wordcraft_doc::para::Wrap::InFrontOfText,
+        h_rel: wordcraft_doc::para::Anchor::Page,
+        v_rel: wordcraft_doc::para::Anchor::Page,
+        x,
+        y,
+        dist: 0.0,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn text_boxes_show_in_headers_footers_cells_and_notes() {
+    let mut d = Document::from_text(&"Body paragraph.\n".repeat(4));
+    // Header: an inline box and a box placed on the page.
+    let hid =
+        d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Head", Default::default()))]);
+    d.last_section.headers.default = Some(hid);
+    let e = d.end_of(StoryRef::Part(hid));
+    let inline = text_box_at(&mut d, &e, "Inline in header", 100.0, 30.0, Default::default());
+    let e = d.end_of(StoryRef::Part(hid));
+    let placed = text_box_at(&mut d, &e, "On the page", 100.0, 40.0, page_float(400.0, 20.0));
+    // Footer: a box placed on the page (the footer is laid out twice to find it).
+    let fid =
+        d.add_part(wordcraft_doc::PartKind::Footer, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Foot", Default::default()))]);
+    d.last_section.footers.default = Some(fid);
+    let e = d.end_of(StoryRef::Part(fid));
+    let in_footer = text_box_at(&mut d, &e, "Footer box", 100.0, 30.0, page_float(300.0, 740.0));
+    // A table cell and a footnote.
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(wordcraft_doc::Table::new(1, 1, 300.0))).unwrap();
+    let cell = Pos { story: StoryRef::Body, path: Path(vec![1, 0, 0, 0]), off: 0 };
+    let in_cell = text_box_at(&mut d, &cell, "In a cell", 120.0, 30.0, Default::default());
+    let note = footnote(&mut d, &Pos::body(0, 4), "Note: ");
+    let e = d.end_of(StoryRef::Part(note));
+    let in_note = text_box_at(&mut d, &e, "In a note", 120.0, 30.0, Default::default());
+    let l = lay(&d);
+    let p = &l.pages[0];
+    let shows =
+        |id: u32| p.header.iter().chain(&p.footer).chain(&p.items).any(|i| matches!(i, Placed::Lines { story: StoryRef::Part(s), .. } if *s == id));
+    for (name, id) in
+        [("inline header box", inline), ("page header box", placed), ("footer box", in_footer), ("cell box", in_cell), ("note box", in_note)]
+    {
+        assert!(shows(id), "{name}: no text");
+        assert!(l.caret(&d.start_of(StoryRef::Part(id))).is_some(), "{name}: no caret");
+    }
+    // Page-anchored boxes land where they say, header and footer alike; their shapes are drawn.
+    assert_eq!(l.text_box(placed, 0).map(|o| (o.rect.x, o.rect.y)), Some((400.0, 20.0)));
+    assert_eq!(l.text_box(in_footer, 0).map(|o| (o.rect.x, o.rect.y)), Some((300.0, 740.0)));
+    assert!(p.header.iter().any(|i| matches!(i, Placed::Shape { rect, .. } if rect.x == 400.0)));
+    // Header boxes are found for clicks while editing the header.
+    let r = l.text_box(inline, 0).unwrap().rect;
+    assert_eq!(l.header_footer_text_box_at(0, r.x + 5.0, r.y + 5.0), Some(inline));
+}
+
+#[test]
+fn footnotes_inside_text_boxes_are_numbered_and_placed() {
+    let mut d = Document::from_text(&"Body text line.\n".repeat(30));
+    let id = text_box_at(&mut d, &Pos::body(2, 0), "Box text", 144.0, 40.0, Default::default());
+    let e = d.end_of(StoryRef::Part(id));
+    let in_box = footnote(&mut d, &e, "Note from the box.");
+    let after = footnote(&mut d, &Pos::body(5, 4), "Note from the body.");
+    let l = lay(&d);
+    // Both notes are at the bottom of page 1, the box's first (reading order).
+    let a = l.caret(&d.start_of(StoryRef::Part(in_box))).expect("the box's footnote is placed");
+    let b = l.caret(&d.start_of(StoryRef::Part(after))).unwrap();
+    assert_eq!((a.page, b.page), (0, 0));
+    assert!(a.top > 600.0 && a.top < b.top, "{a:?} {b:?}");
+    let nums = note_numbers(&d, false);
+    assert_eq!((nums.get(&in_box), nums.get(&after)), (Some(&1), Some(&2)));
+}
+
+/// A document whose text box `ids[k]` holds `fan` shapes showing `ids[k + 1]` (the last one shows
+/// itself, `fan` times): crafted, since the app never builds these.
+fn box_fan_out(levels: usize, fan: usize) -> Document {
+    let (w, h) = (40.0, 20.0);
+    let mut d = Document::from_text("Body");
+    let ids: Vec<u32> = (0..levels)
+        .map(|k| {
+            d.add_part(
+                wordcraft_doc::PartKind::TextBox,
+                vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("Level {k}"), Default::default()))],
+            )
+        })
+        .collect();
+    let shape = |story| InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::TextBox,
+        w,
+        h,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Default::default(),
+        story: Some(story),
+    };
+    for (k, id) in ids.iter().enumerate() {
+        let next = *ids.get(k + 1).unwrap_or(id);
+        for _ in 0..fan {
+            d.insert_object(&Pos { story: StoryRef::Part(*id), path: Path::top(0), off: 0 }, shape(next), &Default::default()).unwrap();
+        }
+    }
+    d.insert_object(&Pos::body(0, 0), shape(ids[0]), &Default::default()).unwrap();
+    d
+}
+
+#[test]
+fn self_showing_and_fanned_out_text_boxes_stay_bounded() {
+    // A box whose 30 shapes all show itself: laid out once.
+    assert_eq!(lay(&box_fan_out(1, 30)).text_boxes, 1);
+    // Chains of boxes each showing the next 30 times (30^4 expansions unbounded).
+    let d = box_fan_out(5, 30);
+    let l = lay(&d);
+    assert!(l.text_boxes <= 1 + wordcraft_doc::BoxBudget::MAX_NESTED, "{} boxes laid out", l.text_boxes);
+    // Footnote numbering's walk is bounded the same way.
+    let mut visits = 0usize;
+    d.objects_in_reading_order(&mut |_| visits += 1);
+    assert!(visits < 5_000, "{visits} visits");
+}
+
+#[test]
+fn many_text_boxes_and_a_header_box_all_show() {
+    // Outermost boxes aren't budgeted: a long document's boxes, and its header's on every page,
+    // all get their text.
+    let mut d = Document::from_text("Paragraph with a box.");
+    for _ in 1..400 {
+        let end = d.end_of(StoryRef::Body);
+        d.split_paragraph(&end).unwrap();
+    }
+    let ids: Vec<u32> = (0..400).map(|k| text_box_at(&mut d, &Pos::body(k, 0), &format!("Box {k}"), 100.0, 30.0, Default::default())).collect();
+    let hid =
+        d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Head", Default::default()))]);
+    d.last_section.headers.default = Some(hid);
+    let e = d.end_of(StoryRef::Part(hid));
+    let in_header = text_box_at(&mut d, &e, "Header box", 100.0, 30.0, Default::default());
+    let l = lay(&d);
+    assert!(l.pages.len() >= 10, "{} pages", l.pages.len());
+    for id in ids {
+        assert!(l.caret(&d.start_of(StoryRef::Part(id))).is_some(), "box {id} has no text");
+    }
+    for (i, p) in l.pages.iter().enumerate() {
+        let shown = p.header.iter().any(|it| matches!(it, Placed::Lines { story: StoryRef::Part(s), .. } if *s == in_header));
+        assert!(shown, "page {i}: the header box has no text");
+    }
+}
+
+#[test]
+fn a_text_box_inside_a_text_box_still_shows_its_text() {
+    let mut d = Document::from_text("Body");
+    let outer = text_box(&mut d, 0, "Outer ", 300.0, 200.0, Default::default());
+    let e = d.end_of(StoryRef::Part(outer));
+    let inner = text_box_at(&mut d, &e, "Inner", 120.0, 40.0, Default::default());
+    let l = lay(&d);
+    assert_eq!(l.text_boxes, 2);
+    assert!(l.caret(&d.start_of(StoryRef::Part(inner))).is_some(), "the inner box's text is laid out");
 }
 
 fn picture(w: f32, h: f32, float: wordcraft_doc::para::Float) -> InlineObject {
@@ -1004,4 +1923,86 @@ fn no_line_break_right_after_a_slash() {
         }
     }
     assert!(lines > 10, "{lines} lines");
+}
+
+#[test]
+fn unequal_formats_lay_out_in_linear_time() {
+    // Runs whose formats never compare equal (NaN spacing from a hostile file) each get a style;
+    // finding a run's style must not compare it against every earlier one.
+    let doc = |n: usize| {
+        let mut p = wordcraft_doc::Paragraph::with_text("", Default::default());
+        p.text = "ab ".repeat(n);
+        p.runs = (0..n)
+            .map(|i| wordcraft_doc::Run {
+                len: 3,
+                props: wordcraft_doc::CharProps { spacing: Some(f32::NAN), bold: Some(i % 2 == 0), ..Default::default() },
+            })
+            .collect();
+        let mut d = Document::from_text("");
+        d.body = vec![wordcraft_doc::para_block(p)];
+        d
+    };
+    let (t1, tk, ratio) = layout_time_ratio(doc, 5_000, &LayoutOptions::default());
+    eprintln!("t(n) {t1:.4} s, t(8n) {tk:.4} s, ratio {ratio:.1}");
+    assert!(ratio < 24.0, "8x the runs took {ratio:.1}x the time ({t1:.4} s → {tk:.4} s): not linear");
+}
+
+#[test]
+fn hidden_float_in_a_table_cell_takes_no_room() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    // A square-wrapped shape anchored in hidden text inside a table cell, beside wrapping text.
+    let mut d = Document::from_text("Body text.");
+    let mut t = Table::new(1, 2, 468.0);
+    let mut cp = wordcraft_doc::Paragraph::with_text(&"Cell words wrap around it. ".repeat(8), Default::default());
+    let f = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, dist: 9.0, ..Default::default() };
+    let hidden = wordcraft_doc::CharProps { hidden: Some(true), ..Default::default() };
+    cp.insert_object(0, rect_shape(60.0, 40.0, f), &hidden).unwrap();
+    t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(cp)];
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+    // (shapes placed, the cell text's widest first-line indent)
+    let run = |show_hidden: bool| {
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions { show_hidden, ..Default::default() });
+        let items = &l.pages[0].items;
+        let left = items
+            .iter()
+            .filter_map(|i| if let Placed::Lines { para, .. } = i { para.lines.first().map(|l| l.left) } else { None })
+            .fold(0.0f32, f32::max);
+        (shapes(items).len(), left)
+    };
+    let (n, left) = run(true);
+    assert!(n == 1 && left >= 60.0, "shown: placed and wrapped around ({n}, {left})");
+    assert_eq!(run(false), (0, 0.0), "hidden: not placed, no wrap area");
+}
+
+#[test]
+fn objects_left_out_through_the_table_style_formatting() {
+    // The table style's character formatting sits under the runs' own, as the cell is laid out.
+    let mut p = wordcraft_doc::Paragraph::with_text("ab", Default::default());
+    p.insert_object(1, rect_shape(10.0, 10.0, Default::default()), &Default::default()).unwrap();
+    let d = Document::from_text("");
+    let hidden = wordcraft_doc::CharProps { hidden: Some(true), ..Default::default() };
+    assert!(!left_out_objects(&d, &p, None, false, false)(0));
+    assert!(left_out_objects(&d, &p, Some(&hidden), false, false)(0));
+    assert!(!left_out_objects(&d, &p, Some(&hidden), true, false)(0), "hidden text shown");
+}
+
+#[test]
+fn hidden_float_in_a_text_box_is_not_placed() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    // A shape anchored in hidden text inside a text box: no drawing, no hit area.
+    let mut d = Document::from_text("Body text.");
+    let id = text_box(&mut d, 0, "Box words.", 200.0, 120.0, Default::default());
+    let f = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, ..Default::default() };
+    let hidden = wordcraft_doc::CharProps { hidden: Some(true), ..Default::default() };
+    let at = Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 };
+    d.insert_object(&at, rect_shape(30.0, 20.0, f), &hidden).unwrap();
+    let count = |show_hidden: bool| {
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions { show_hidden, ..Default::default() });
+        let items = &l.pages[0].items;
+        let areas = items.iter().filter(|i| matches!(i, Placed::Object { story: StoryRef::Part(_), .. })).count();
+        (shapes(items).len(), areas)
+    };
+    let (shown, shown_areas) = count(true);
+    let (hidden_n, hidden_areas) = count(false);
+    assert_eq!((shown - hidden_n, shown_areas - hidden_areas), (1, 1), "shown {shown}/{shown_areas}, hidden {hidden_n}/{hidden_areas}");
 }

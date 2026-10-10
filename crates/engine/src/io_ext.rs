@@ -6,6 +6,7 @@ use wordcraft_doc::Document;
 pub fn open(ext: &str, bytes: &[u8]) -> Option<Result<Document, String>> {
     match ext {
         "docx" | "docm" | "dotx" | "dotm" => Some(wordcraft_docx::read(bytes).map_err(|e| e.to_string())),
+        "doc" | "dot" => Some(wordcraft_docbin::read(bytes).map_err(|e| e.to_string())),
         other => wordcraft_formats::import(other, bytes),
     }
 }

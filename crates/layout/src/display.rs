@@ -166,7 +166,7 @@ fn item(doc: &Document, it: &Placed, opts: &DisplayOptions, alpha: f32, out: &mu
         Placed::Shape { rect, kind, fill, stroke, stroke_width } => {
             out.push(Draw::Shape { rect: *rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width })
         }
-        Placed::Cell { .. } => {}
+        Placed::Cell { .. } | Placed::Object { .. } => {}
         Placed::Lines { story, path, para, l0, l1, x, y } => lines(doc, *story, path, para, *l0, *l1, *x, *y, opts, alpha, out),
     }
 }
@@ -316,6 +316,10 @@ fn lines(
             }
             let run_end = k;
             let rc = &st.rc;
+            // Without markup a deletion is never drawn as ordinary text, even in a layout that kept it.
+            if rc.del.is_some() && !opts.markup {
+                continue;
+            }
             let rev = rc.ins.or(rc.del).filter(|_| opts.markup);
             let color = match rev {
                 Some(r) => revision_color(doc.revisions.get(r as usize).map(|v| author_index(doc, &v.author)).unwrap_or(0)),

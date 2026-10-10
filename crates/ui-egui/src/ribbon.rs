@@ -7,7 +7,7 @@ use crate::theme::{Tokens, medium, regular, semibold};
 use crate::widgets::{CONTENT_H, LABEL_H, big, color_grid, combo, group, menu_button, small, split};
 use crate::{WordApp, icons};
 
-pub const TABS: [&str; 11] = ["File", "Home", "Insert", "Draw", "Design", "Layout", "References", "Mailings", "Review", "View", "Help"];
+pub const TABS: [&str; 12] = ["File", "Home", "Insert", "Draw", "Design", "Layout", "References", "Mailings", "Review", "View", "Zotero", "Help"];
 
 /// True when the caret/selection touches a picture (#147).
 pub fn has_picture_selected(s: &wordcraft_engine::Session) -> bool {
@@ -34,6 +34,11 @@ pub fn contextual_tabs(s: &wordcraft_engine::Session) -> Vec<&'static str> {
 /// Tab to show when the stored tab is no longer applicable (pure, tested).
 pub fn resolve_tab<'a>(current: &'a str, available: &[&str]) -> &'a str {
     if available.contains(&current) { current } else { "Home" }
+}
+
+/// Whether the caret is inside a table (so the contextual tabs and their badges are shown).
+pub fn in_table_public(app: &WordApp) -> bool {
+    app.session.sel.focus.path.cell().is_some()
 }
 
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
@@ -76,6 +81,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     let shown = tl!(tab);
                     let w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(shown.to_string(), medium(12.5), t.text).size().x) + 18.0;
                     let (r, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
+                    if app.ui.keytips == crate::keytips::Phase::Tabs {
+                        crate::keytips::record_tab(r, tab, &mut app.keytip_rects);
+                    }
                     let active = app.ui.tab == tab && !app.ui.backstage;
                     if resp.hovered() && !active {
                         ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, t.hover);
@@ -154,6 +162,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         "Mailings" => mailings(app, ui),
                         "Review" => review(app, ui),
                         "View" => view(app, ui),
+                        "Zotero" => zotero(app, ui),
                         "Help" => help(app, ui),
                         "Table Design" => table_design(app, ui),
                         "Table Layout" => table_layout(app, ui),
@@ -864,6 +873,23 @@ fn mailings(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Finish", None, app, |ui, app| {
         big(ui, app, "finish", "Finish &\nMerge", "mailings.finish", json!({}), false);
+    });
+}
+
+/// Zotero (`docs/zotero.md`): the Zotero desktop app does the work in its own window.
+fn zotero(app: &mut WordApp, ui: &mut Ui) {
+    group(ui, "Citations", None, app, |ui, app| {
+        big(ui, app, "citation", "Add/Edit\nCitation", "ui.zotero.addEditCitation", json!({}), false);
+        big(ui, app, "addNote", "Add\nNote", "ui.zotero.addNote", json!({}), false);
+        big(ui, app, "pastCitation", "Move Past\nCitation", "caret.pastCitation", json!({}), false);
+    });
+    group(ui, "Bibliography", None, app, |ui, app| {
+        big(ui, app, "bibliography", "Add/Edit\nBibliography", "ui.zotero.addEditBibliography", json!({}), false);
+    });
+    group(ui, "Document", None, app, |ui, app| {
+        big(ui, app, "update", "Refresh", "ui.zotero.refresh", json!({}), false);
+        big(ui, app, "docPrefs", "Document\nPreferences", "ui.zotero.setDocPrefs", json!({}), false);
+        big(ui, app, "unlinkCitations", "Unlink\nCitations", "ui.zotero.removeCodes", json!({}), false);
     });
 }
 

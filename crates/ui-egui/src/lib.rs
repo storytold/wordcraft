@@ -20,15 +20,21 @@ pub mod control;
 pub mod credits;
 pub mod dialogs;
 pub mod equation_tab;
+pub mod frame;
 pub mod i18n;
 pub mod icons;
 pub mod keys;
+pub mod keytips;
+pub mod mini_toolbar;
+pub mod objects;
 pub mod panes;
 pub mod previews;
+pub mod read_aloud;
 pub mod ribbon;
 pub mod theme;
 pub mod widgets;
 pub mod window_geometry;
+pub mod zotero;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -47,8 +53,12 @@ pub struct Services {
     pub open_async: Option<Box<dyn Fn(&str)>>,
     /// Web: files (name, bytes) delivered asynchronously (picker, drag and drop).
     pub inbox: Option<Inbox>,
-    /// Web: hand bytes to the browser as a download.
-    pub download: Option<Box<dyn Fn(&str, &[u8])>>,
+    /// Web: hand bytes to the browser as a download. An error means no download started (the
+    /// browser can't tell the page whether the user then kept the file).
+    pub download: Option<Box<dyn Fn(&str, &[u8]) -> Result<(), String>>>,
+    /// Web: told whether the document has unsaved changes after each pass, for the browser's
+    /// leave-page guard (`beforeunload` runs between frames and can't ask the app).
+    pub on_dirty: Option<Box<dyn Fn(bool)>>,
 }
 
 /// Files delivered asynchronously.
@@ -72,6 +82,14 @@ pub struct UiState {
     pub window: Option<window_geometry::WindowGeometry>,
     /// Interface language: `auto` (follow the system) or a code from [`i18n::LANGUAGES`].
     pub language: String,
+    /// Editing preferences; the session owns them while running (see [`WordApp::prefs`]).
+    pub editing: wordcraft_engine::Prefs,
+    /// Read Aloud speed (1 = normal) and whether it skips citations and bibliographies.
+    pub read_aloud_rate: f32,
+    pub read_aloud_skip_citations: bool,
+    /// Keytips (Alt) state; not persisted, it resets each session.
+    #[serde(skip)]
+    pub keytips: crate::keytips::Phase,
     /// View › Switch Modes: show pages dark (white text on black), kept between runs.
     pub dark_page: bool,
 }
@@ -90,6 +108,10 @@ impl Default for UiState {
             author: String::new(),
             window: None,
             language: i18n::AUTO.into(),
+            editing: wordcraft_engine::Prefs::default(),
+            read_aloud_rate: 1.0,
+            read_aloud_skip_citations: true,
+            keytips: crate::keytips::Phase::Off,
             dark_page: false,
         }
     }
@@ -113,6 +135,8 @@ pub struct WordApp {
     queued_shots: Vec<(u64, f64, u32)>,
     pending_shots: Vec<(u64, Option<String>, std::sync::mpsc::Sender<Value>, f64)>,
     pub(crate) synthetic: Vec<egui::Event>,
+    /// Badge rects recorded during layout for the current keytip phase (cleared by `logic`, painted by `show`).
+    pub(crate) keytip_rects: Vec<(egui::Rect, String)>,
     styled: bool,
     /// The CJK face order the installed UI fonts use (Chinese first, or Japanese first).
     fonts_hans: bool,
@@ -127,6 +151,36 @@ pub struct WordApp {
     last_autosave: f64,
     /// The tab shown before the Equation tab came up (restored when editing ends).
     pub(crate) equation_prev_tab: Option<String>,
+    /// Zotero commands in flight (`ui.zotero.*`).
+    pub zotero: zotero::ZoteroLink,
+    /// The egui context, once the first frame has run (background work wakes the UI with it).
+    pub(crate) ctx: Option<egui::Context>,
+    /// Read Aloud: the start of the sentence the caret was last moved to, and the last error shown.
+    pub(crate) read_aloud_at: Option<wordcraft_engine::doc::Pos>,
+    pub(crate) read_aloud_error: Option<String>,
+    /// The file the document was last explicitly saved to in this session; AutoSave writes only
+    /// there. A file that was merely opened isn't rewritten until the user saves it: saving drops
+    /// whatever WordCraft can't represent (content controls, charts, macros…).
+    autosave_path: Option<std::path::PathBuf>,
+}
+
+/// The answer to "Do you want to save changes?" (`ui.saveChanges`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SaveChoice {
+    Save,
+    DontSave,
+    Cancel,
+}
+
+impl SaveChoice {
+    pub fn parse(s: &str) -> Option<SaveChoice> {
+        Some(match s {
+            "save" => SaveChoice::Save,
+            "dontSave" => SaveChoice::DontSave,
+            "cancel" => SaveChoice::Cancel,
+            _ => return None,
+        })
+    }
 }
 
 impl WordApp {
@@ -145,6 +199,7 @@ impl WordApp {
             queued_shots: Vec::new(),
             pending_shots: Vec::new(),
             synthetic: Vec::new(),
+            keytip_rects: Vec::new(),
             styled: false,
             fonts_hans: false,
             fonts_frames: 0,
@@ -156,6 +211,11 @@ impl WordApp {
             word_count: (0, 0),
             last_autosave: 0.0,
             equation_prev_tab: None,
+            zotero: zotero::ZoteroLink::default(),
+            ctx: None,
+            read_aloud_at: None,
+            read_aloud_error: None,
+            autosave_path: None,
             change_picture_target: None,
         }
     }
@@ -165,10 +225,14 @@ impl WordApp {
         self
     }
 
-    /// Preferences to save between runs: the UI state plus the current user name.
+    /// Preferences to save between runs: the UI state plus the current user name and editing
+    /// preferences.
     pub fn prefs(&self) -> UiState {
         let mut ui = self.ui.clone();
         ui.author = self.session.author.clone();
+        ui.editing = self.session.prefs.clone();
+        ui.read_aloud_rate = self.session.read_aloud.rate();
+        ui.read_aloud_skip_citations = self.session.read_aloud.skip_citations;
         ui.dark_page = self.session.view.dark_mode;
         ui
     }
@@ -182,11 +246,28 @@ impl WordApp {
         if !author.trim().is_empty() {
             self.session.author = author;
         }
+        self.session.prefs = std::mem::take(&mut self.ui.editing);
+        self.session.read_aloud.set_rate(self.ui.read_aloud_rate);
+        self.session.read_aloud.skip_citations = self.ui.read_aloud_skip_citations;
         self.session.view.dark_mode = self.ui.dark_page;
     }
 
-    /// Run a command; UI-level commands (`ui.*`) are handled here, the rest by the engine.
+    /// Run a command the user asked for (ribbon, shortcut, Backstage, file drop). New, Open,
+    /// Close, Envelopes, Labels and Finish & Merge on a document with unsaved changes first ask
+    /// Save / Don't Save / Cancel, and the command runs once that is answered (`ui.saveChanges`).
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        if self.session.dirty && discards_document(id, &params) {
+            let name =
+                self.session.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| self.title_stem());
+            self.dialog = Some(dialogs::Dialog::SaveChanges { name, then: id.to_string(), params, document: self.session.document_id() });
+            return Ok(json!({"pending": "saveChanges"}));
+        }
+        self.execute(id, params)
+    }
+
+    /// Run a command for a script or an agent (control channel, MCP bridge): never asks first.
+    /// UI-level commands (`ui.*`) are handled here, the rest by the engine.
+    pub fn execute(&mut self, id: &str, params: Value) -> Result<Value, String> {
         // A pending Change Picture only survives until the next action (#147).
         if !matches!(id, "ui.changePicture" | "picture.change" | "insert.picture") {
             self.change_picture_target = None;
@@ -194,23 +275,106 @@ impl WordApp {
         if let Some(r) = self.ui_command(id, &params) {
             return r;
         }
+        let ctx = self.ctx.clone();
+        if let Some(r) = zotero::command(self, id, &params, ctx.as_ref()) {
+            if let Err(e) = &r {
+                self.status(e.clone());
+            }
+            return r;
+        }
         // Web: saving and exporting become downloads.
         if self.services.download.is_some() && matches!(id, "file.save" | "file.saveAs" | "file.exportPdf" | "file.exportPng") {
             let name = params.get("path").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| self.default_save_name());
             let name = if id == "file.exportPdf" && !name.ends_with(".pdf") { format!("{name}.pdf") } else { name };
             let bytes = wordcraft_engine::io::save_bytes(&name, &self.session.doc)?;
-            if let Some(d) = &self.services.download {
-                d(&name, &bytes);
+            if let Some(d) = &self.services.download
+                && let Err(e) = d(&name, &bytes)
+            {
+                let msg = i18n::fmt(tl!("Couldn't download {name}: {error}"), &[("name", &name), ("error", &e)]);
+                log::error!("download of {name} failed: {e}");
+                self.status(msg.clone());
+                return Err(msg);
             }
-            self.session.dirty = false;
+            // An export is a copy, and so is a save in a format that doesn't keep everything (a
+            // page image, plain text): the document itself still has unsaved changes.
+            if matches!(id, "file.save" | "file.saveAs") && keeps_everything(&name) {
+                self.session.dirty = false;
+            }
             return Ok(json!({"downloaded": name, "bytes": bytes.len()}));
         }
+        let document = self.session.document_id();
         let r = self.session.run(id, &params).map_err(|e| e.to_string());
+        // When the document has been replaced (not when Open only showed its picker), a pending
+        // "Save changes?" and AutoSave's go-ahead were both about the old one.
+        if self.session.document_id() != document {
+            self.autosave_path = None;
+            if matches!(self.dialog, Some(dialogs::Dialog::SaveChanges { .. })) {
+                self.dialog = None;
+            }
+        }
+        // An explicit save to the document's own file lets AutoSave keep writing there.
+        if let Ok(v) = &r
+            && matches!(id, "file.save" | "file.saveAs")
+            && v.get("saved").and_then(Value::as_bool) == Some(true)
+            && v.get("path").and_then(Value::as_str).map(std::path::Path::new) == self.session.path.as_deref()
+        {
+            self.autosave_path = self.session.path.clone();
+        }
         self.after_command(id);
         if let Err(e) = &r {
             self.status(e.clone());
         }
         r
+    }
+
+    /// Answer the Save Changes prompt: Save (through Save As for a new document) and carry on,
+    /// carry on without saving, or cancel. A failed or cancelled save cancels too.
+    fn answer_save_changes(&mut self, choice: SaveChoice) -> Result<Value, String> {
+        let Some(dialogs::Dialog::SaveChanges { then, params, document, .. }) = self.dialog.take() else {
+            return Err("no Save Changes prompt is open".into());
+        };
+        if document != self.session.document_id() {
+            return Err("the document the prompt asked about has been replaced".into());
+        }
+        let go = match choice {
+            SaveChoice::Cancel => false,
+            SaveChoice::DontSave => true,
+            SaveChoice::Save => self.save_for_prompt(),
+        };
+        if !go {
+            return Ok(json!({"done": false}));
+        }
+        self.execute(&then, params).map(|r| json!({"done": true, "result": r}))
+    }
+
+    /// Save before New/Open/Close (and the mailings that replace the document): true once the
+    /// document is safely written. A save in a format that doesn't keep everything (a page
+    /// image, plain text) writes a copy and leaves the document unsaved, so it doesn't count:
+    /// the command is cancelled and the document stays.
+    fn save_for_prompt(&mut self) -> bool {
+        let saved = if self.session.path.is_none() && self.services.download.is_none() {
+            self.save_as_dialog()
+        } else {
+            match self.execute("file.save", json!({})) {
+                Ok(v) => v.get("saved").and_then(Value::as_bool) == Some(true) || v.get("downloaded").is_some(),
+                Err(_) => false,
+            }
+        };
+        if saved && self.session.dirty {
+            self.status(tl!("That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on."));
+            return false;
+        }
+        saved
+    }
+
+    /// The window's close button (or the system) asked to quit. Returns true to let the window
+    /// close; with unsaved changes it asks first and returns false.
+    pub fn close_requested(&mut self) -> bool {
+        if self.quit_requested || !self.session.dirty {
+            return true;
+        }
+        let _ = self.run("file.close", json!({}));
+        false
     }
 
     fn after_command(&mut self, id: &str) {
@@ -239,7 +403,9 @@ impl WordApp {
         if let Some(what) = req.get("open").and_then(Value::as_str) {
             match what {
                 "openFile" => self.open_dialog(),
-                "saveAs" => self.save_as_dialog(),
+                "saveAs" => {
+                    self.save_as_dialog();
+                }
                 "insertPicture" => self.pick_picture(),
                 "print" => {
                     self.ui.backstage = true;
@@ -316,6 +482,12 @@ impl WordApp {
                 let lang = i18n::Lang::from_pref(&self.ui.language);
                 json!({"language": self.ui.language, "effective": lang.code(), "available": i18n::Lang::all().map(|l| json!({"code": l.code(), "name": l.name()})).collect::<Vec<_>>()})
             }
+            "ui.saveChanges" => {
+                let Some(choice) = s("answer").and_then(SaveChoice::parse) else {
+                    return Some(Err("`answer` must be save, dontSave or cancel".into()));
+                };
+                return Some(self.answer_save_changes(choice));
+            }
             "ui.openFileDialog" => {
                 self.open_dialog();
                 json!({})
@@ -344,12 +516,11 @@ impl WordApp {
         }
     }
 
-    pub fn save_as_dialog(&mut self) {
+    /// Ask where to save, then save there. True once the document is written.
+    pub fn save_as_dialog(&mut self) -> bool {
         let name = self.default_save_name();
         let picked = self.services.pick_save.as_ref().and_then(|f| f(&name));
-        if let Some(path) = picked {
-            let _ = self.run("file.save", json!({"path": path}));
-        }
+        picked.is_some_and(|path| self.run("file.save", json!({"path": path})).is_ok_and(|v| v.get("saved").and_then(Value::as_bool) == Some(true)))
     }
 
     /// Media key of the selected picture, if any.
@@ -436,24 +607,16 @@ impl WordApp {
             theme::apply(ctx, &if dark { theme::Tokens::dark() } else { theme::Tokens::light() });
             self.applied_dark = Some(dark);
         }
+        if self.ctx.is_none() {
+            self.ctx = Some(ctx.clone());
+        }
         self.drain_control(ctx);
+        zotero::poll(self, ctx);
+        read_aloud::poll(self, ctx);
         self.clear_stale_change_picture();
         self.drain_inbox();
-        // AutoSave: write a saved document a couple of seconds after the last change.
-        let now = now_ms();
-        if self.autosave
-            && self.session.dirty
-            && self.session.path.is_some()
-            && now - self.last_autosave > 2500.0
-            && now - self.canvas.caret_visible_since > 1500.0
-        {
-            self.last_autosave = now;
-            let ext = self.session.path.as_ref().and_then(|p| p.extension()).map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-            if ext == "docx" || ext == "json" || ext == "odt" || ext == "rtf" {
-                let _ = self.session.run("file.save", &json!({}));
-            }
-        }
-        if self.autosave && self.session.dirty && self.session.path.is_some() {
+        self.autosave_tick(now_ms());
+        if self.autosaves() && self.session.dirty {
             ctx.request_repaint_after(std::time::Duration::from_millis(1000));
         }
         self.collect_screenshots(ctx);
@@ -468,6 +631,39 @@ impl WordApp {
                 let lp = path.to_ascii_lowercase();
                 let img = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"].iter().any(|e| lp.ends_with(e));
                 let _ = if img { self.run("insert.picture", json!({"path": path})) } else { self.run("file.open", json!({"path": path})) };
+            }
+        }
+        self.report_dirty();
+    }
+
+    /// Tell the host whether the document has unsaved changes ([`Services::on_dirty`]).
+    fn report_dirty(&self) {
+        if let Some(f) = &self.services.on_dirty {
+            f(self.session.dirty);
+        }
+    }
+
+    /// Whether the document's file is one the user saved to in this session.
+    pub fn saved_here(&self) -> bool {
+        self.session.path.is_some() && self.session.path == self.autosave_path
+    }
+
+    /// Whether AutoSave covers the document (only a file the user saved to in this session).
+    pub fn autosaves(&self) -> bool {
+        self.autosave && self.saved_here()
+    }
+
+    /// AutoSave: write a saved document a couple of seconds after the last change. A failure is
+    /// shown in the status bar and turns AutoSave off for the file until the user saves it again.
+    fn autosave_tick(&mut self, now: f64) {
+        if self.autosaves() && self.session.dirty && now - self.last_autosave > 2500.0 && now - self.canvas.caret_visible_since > 1500.0 {
+            self.last_autosave = now;
+            if self.session.path.as_deref().is_some_and(|p| keeps_everything(&p.to_string_lossy()))
+                && let Err(e) = self.session.run("file.save", &json!({}))
+            {
+                log::warn!("AutoSave failed: {e}");
+                self.autosave_path = None;
+                self.status(i18n::fmt(tl!("AutoSave failed: {error}. Save the document to turn AutoSave back on."), &[("error", &e.to_string())]));
             }
         }
     }
@@ -500,6 +696,9 @@ impl WordApp {
             return;
         }
         let t = theme::Tokens::get(&ctx);
+        // Keytips are read before layout so the frame paints the new state; badges paint after
+        // the ribbon so they sit on top of it.
+        crate::keytips::logic(self, &ctx);
         if self.ui.backstage {
             backstage::show(self, ui);
         } else {
@@ -512,6 +711,9 @@ impl WordApp {
             });
         }
         dialogs::show(self, &ctx);
+        zotero::show_alert(self, &ctx);
+        read_aloud::show(self, &ctx);
+        crate::keytips::show(self, &ctx, ui);
         keys::global_shortcuts(self, &ctx);
         if let Some(url) = self.canvas.open_url.take() {
             ctx.open_url(egui::OpenUrl::new_tab(url));
@@ -522,6 +724,8 @@ impl WordApp {
             self.sent_title = title;
         }
         self.frame_ms = now_ms() - t0;
+        // Typing and formatting land here, after `logic` has reported.
+        self.report_dirty();
     }
 
     /// Files that arrived asynchronously (web picker, drops): documents open, pictures insert.
@@ -606,6 +810,26 @@ impl WordApp {
             let _ = reply.send(json!({"ok": false, "error": "no frame was presented (window hidden?); use ui.render"}));
             false
         });
+    }
+}
+
+/// Whether saving to `name` keeps the whole document (the formats `file.save` treats as the
+/// document's own file, including macro-enabled documents and templates); anything else is a
+/// copy that leaves it unsaved. AutoSave writes only these formats.
+fn keeps_everything(name: &str) -> bool {
+    let ext = std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    matches!(ext.as_str(), "docx" | "docm" | "dotx" | "dotm" | "odt" | "rtf" | "json")
+}
+
+/// User commands that replace or close the document (`file.open` without a path only shows the
+/// file picker; the open that follows is checked). Envelopes, Labels and Finish & Merge make a
+/// new document in its place; a merge written to a file (`path`) leaves it alone.
+fn discards_document(id: &str, params: &Value) -> bool {
+    match id {
+        "file.new" | "file.close" | "mailings.envelopes" | "mailings.labels" => true,
+        "file.open" => params.get("path").is_some(),
+        "mailings.finish" => params.get("path").and_then(Value::as_str).is_none(),
+        _ => false,
     }
 }
 
@@ -731,6 +955,608 @@ mod tests {
         assert_eq!(second.prefs().author, "Grace Hopper");
     }
 
+    const UNSAVED: &str = "My unsaved novel chapter";
+
+    /// An app whose new document has unsaved typing.
+    fn typed() -> WordApp {
+        let mut a = app();
+        a.run("text.insert", json!({"text": UNSAVED})).unwrap();
+        assert!(a.session.dirty);
+        a
+    }
+
+    fn body_text(a: &WordApp) -> String {
+        a.session.doc.plain_text(wordcraft_doc::StoryRef::Body)
+    }
+
+    fn prompt(a: &WordApp) -> Option<&'static str> {
+        a.dialog.as_ref().map(|d| d.name())
+    }
+
+    /// A fresh scratch folder for one test.
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("wordcraft-ui-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A .docx on disk that the app didn't write.
+    fn docx_on_disk(dir: &std::path::Path, text: &str) -> std::path::PathBuf {
+        let path = dir.join("contract.docx");
+        let mut s = Session::new(wordcraft_doc::Document::from_text(text));
+        s.run("file.save", &json!({"path": path.to_string_lossy()})).unwrap();
+        path
+    }
+
+    /// Surfaces finding 1: Mod+N (and the File › New tiles) replaced unsaved work without asking.
+    #[test]
+    fn new_asks_before_discarding_unsaved_work() {
+        let mut a = typed();
+        a.run("file.new", json!({})).unwrap();
+        assert_eq!(prompt(&a), Some("saveChanges"));
+        assert!(body_text(&a).contains(UNSAVED), "the document is untouched while the prompt is up");
+        assert!(a.session.dirty);
+
+        // Cancel: nothing happens.
+        a.run("ui.saveChanges", json!({"answer": "cancel"})).unwrap();
+        assert_eq!(prompt(&a), None);
+        assert!(body_text(&a).contains(UNSAVED));
+
+        // Don't Save: the new document replaces it.
+        a.run("file.new", json!({"template": "letter"})).unwrap();
+        a.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
+        assert_eq!(prompt(&a), None);
+        assert!(!body_text(&a).contains(UNSAVED));
+        assert!(!a.session.dirty);
+        assert!(!body_text(&a).trim().is_empty(), "the template the user picked was used");
+    }
+
+    #[test]
+    fn a_clean_document_is_replaced_without_asking() {
+        let mut a = app();
+        a.run("file.new", json!({"template": "letter"})).unwrap();
+        assert_eq!(prompt(&a), None);
+        assert!(!body_text(&a).trim().is_empty());
+    }
+
+    /// Open (after the file is picked), recent files and dropped files all go through `file.open`.
+    #[test]
+    fn open_asks_before_discarding_unsaved_work() {
+        let dir = scratch("open");
+        let path = docx_on_disk(&dir, "Signed contract");
+        let mut a = typed();
+        a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
+        assert_eq!(prompt(&a), Some("saveChanges"));
+        assert!(body_text(&a).contains(UNSAVED));
+        assert_eq!(a.session.path, None);
+
+        a.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
+        assert!(body_text(&a).contains("Signed contract"));
+        assert_eq!(a.session.path.as_deref(), Some(path.as_path()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Mod+O without a path only shows the file picker, so it doesn't ask yet.
+    #[test]
+    fn open_without_a_path_only_shows_the_picker() {
+        let mut a = typed();
+        a.run("file.open", json!({})).unwrap();
+        assert_eq!(prompt(&a), None);
+        assert!(body_text(&a).contains(UNSAVED));
+    }
+
+    /// Mod+W ran `file.close`, which quit at once.
+    #[test]
+    fn close_asks_before_quitting() {
+        let mut a = typed();
+        a.run("file.close", json!({})).unwrap();
+        assert_eq!(prompt(&a), Some("saveChanges"));
+        assert!(!a.quit_requested);
+        a.run("ui.saveChanges", json!({"answer": "cancel"})).unwrap();
+        assert!(!a.quit_requested);
+
+        a.run("file.close", json!({})).unwrap();
+        a.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
+        assert!(a.quit_requested);
+
+        // A clean document closes straight away.
+        let mut clean = app();
+        clean.run("file.close", json!({})).unwrap();
+        assert_eq!(prompt(&clean), None);
+        assert!(clean.quit_requested);
+    }
+
+    /// The window's close button quit at once; now it asks (the host cancels the close on false).
+    #[test]
+    fn window_close_asks_first() {
+        assert!(app().close_requested(), "a clean document closes");
+
+        let mut a = typed();
+        assert!(!a.close_requested());
+        assert_eq!(prompt(&a), Some("saveChanges"));
+        a.run("ui.saveChanges", json!({"answer": "cancel"})).unwrap();
+        assert!(!a.close_requested(), "asked again on the next click");
+
+        a.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
+        assert!(a.quit_requested);
+        assert!(a.close_requested(), "the close that follows goes ahead");
+        assert!(body_text(&a).contains(UNSAVED), "nothing was replaced on the way out");
+    }
+
+    /// Enter activates the focused prompt button; it means Save only when no button has focus.
+    /// (Enter on a focused Cancel or Don't Save used to be overridden by a blanket Enter → Save.)
+    #[test]
+    fn enter_answers_with_the_focused_button() {
+        use egui_kittest::kittest::Queryable;
+        for (focus, quits, saves) in [(Some("Cancel"), false, false), (Some("Don't Save"), true, false), (None, true, true)] {
+            let dir = scratch(&format!("enter-{}", focus.map_or(0, str::len)));
+            let path = docx_on_disk(&dir, "Draft");
+            let before = std::fs::read(&path).unwrap();
+            let mut a = app();
+            a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
+            a.run("text.insert", json!({"text": "Revised "})).unwrap();
+            a.run("file.close", json!({})).unwrap();
+            assert_eq!(prompt(&a), Some("saveChanges"));
+            // The dialog's theme fonts are installed on the first frame and usable from the next.
+            let mut fonts = false;
+            let mut h = egui_kittest::Harness::builder().build_ui_state(
+                move |ui, app: &mut WordApp| {
+                    let ctx = ui.ctx().clone();
+                    if fonts {
+                        dialogs::show(app, &ctx);
+                    } else {
+                        theme::install_fonts_for(&ctx, false);
+                        fonts = true;
+                    }
+                },
+                a,
+            );
+            for _ in 0..3 {
+                h.step();
+            }
+            if let Some(label) = focus {
+                h.get_by_label(label).focus();
+                h.step();
+                assert!(h.get_by_label(label).is_focused(), "{label} has focus");
+            }
+            h.key_press(egui::Key::Enter);
+            for _ in 0..3 {
+                h.step();
+            }
+            let a = h.state();
+            assert_eq!(prompt(a), None, "{focus:?}: answered");
+            assert_eq!(a.quit_requested, quits, "{focus:?}: quit");
+            assert_eq!(std::fs::read(&path).unwrap() != before, saves, "{focus:?}: file written");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// A prompt about document A outlived an agent replacing A with B, and Don't Save then ran
+    /// the pending New against B, throwing away B's edits under a question naming A.
+    #[test]
+    fn a_prompt_is_dropped_when_its_document_is_replaced() {
+        let dir = scratch("stale");
+        let path = docx_on_disk(&dir, "Agent document");
+        let ctx = egui::Context::default();
+        let mut a = typed();
+        a.run("file.new", json!({})).unwrap();
+        assert_eq!(prompt(&a), Some("saveChanges"));
+        let asked = a.dialog.clone();
+        for command in [
+            json!({"command": "file.open", "params": {"path": path.to_string_lossy()}}),
+            json!({"command": "text.insert", "params": {"text": "Edited "}}),
+        ] {
+            let (req, _reply) = ControlRequest::new("engine.execute", command);
+            control::handle(&mut a, &ctx, &req);
+        }
+        assert_eq!(prompt(&a), None, "the question was about a document that is gone");
+
+        // An answer that arrives anyway (a click in that frame, an agent) doesn't touch B.
+        a.dialog = asked;
+        assert!(a.run("ui.saveChanges", json!({"answer": "dontSave"})).is_err());
+        assert!(body_text(&a).contains("Edited Agent document"));
+        assert_eq!(a.session.path.as_deref(), Some(path.as_path()));
+        assert!(a.session.dirty);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The web shell's leave-page guard learned about unsaved changes only after `logic`, but
+    /// typing lands in `ui`, so a tab closed right after the first keystroke left without asking.
+    #[test]
+    fn the_host_hears_about_edits_made_while_drawing() {
+        let reported = std::rc::Rc::new(std::cell::Cell::new(None));
+        let mut a = app();
+        let seen = reported.clone();
+        a.services.on_dirty = Some(Box::new(move |d| seen.set(Some(d))));
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        for _ in 0..6 {
+            h.step();
+        }
+        assert!(h.state().canvas.focused, "the page has keyboard focus");
+        assert_eq!(reported.get(), Some(false));
+        h.event(egui::Event::Text("x".into()));
+        h.step();
+        assert!(h.state().session.dirty, "the keystroke reached the document");
+        assert_eq!(reported.get(), Some(true), "the host was told before the frame ended");
+    }
+
+    /// Save writes the document first, then carries on with what the user asked for.
+    #[test]
+    fn save_then_continue() {
+        let dir = scratch("save");
+        let path = docx_on_disk(&dir, "Draft");
+        let mut a = app();
+        a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
+        a.run("text.insert", json!({"text": "Revised "})).unwrap();
+        a.run("file.new", json!({})).unwrap();
+        assert_eq!(prompt(&a), Some("saveChanges"));
+        a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
+        assert_eq!(prompt(&a), None);
+        assert_eq!(a.session.path, None, "the new document replaced the saved one");
+        let saved = wordcraft_engine::io::open_path(&path).unwrap();
+        assert!(saved.plain_text(wordcraft_doc::StoryRef::Body).contains("Revised Draft"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Save As to a format that doesn't keep everything (a .png of page 1, plain text) reports
+    /// `saved` but leaves the document unsaved; the prompt took that as saved and replaced it.
+    #[test]
+    fn a_save_that_drops_content_does_not_continue() {
+        for ext in ["png", "txt"] {
+            let dir = scratch(&format!("lossy-{ext}"));
+            let picked = dir.join(format!("novel.{ext}")).to_string_lossy().to_string();
+            let mut a = typed();
+            a.services.pick_save = Some(Box::new(move |_| Some(picked.clone())));
+            a.run("file.new", json!({})).unwrap();
+            a.status_msg = None;
+            let r = a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
+            assert_eq!(r["done"], false, "{ext}: the New was cancelled");
+            assert!(dir.join(format!("novel.{ext}")).exists(), "{ext}: the copy was written");
+            assert_eq!(prompt(&a), None);
+            assert!(body_text(&a).contains(UNSAVED), "{ext}: the document is kept");
+            assert!(a.session.dirty);
+            assert!(a.status_msg.is_some(), "{ext}: the status bar says why");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// Web: a download in a format that doesn't keep everything marked the document saved, so
+    /// the prompt and the leave-page guard let it go.
+    #[test]
+    fn web_downloads_that_drop_content_leave_the_document_unsaved() {
+        for name in ["novel.png", "novel.txt", "novel.md"] {
+            let mut a = typed();
+            a.services.download = Some(Box::new(|_, _| Ok(())));
+            a.execute("file.saveAs", json!({"path": name})).unwrap();
+            assert!(a.session.dirty, "{name}");
+        }
+        for name in ["novel.docx", "novel.docm", "novel.DOTX", "novel.dotm", "novel.odt", "novel.rtf"] {
+            let mut a = typed();
+            a.services.download = Some(Box::new(|_, _| Ok(())));
+            a.execute("file.saveAs", json!({"path": name})).unwrap();
+            assert!(!a.session.dirty, "{name}");
+        }
+    }
+
+    /// Macro-enabled documents and templates keep everything (#172), so once saved in this
+    /// session AutoSave covers them like a .docx.
+    #[test]
+    fn autosave_covers_macro_enabled_documents_and_templates() {
+        for ext in ["docm", "dotx", "dotm"] {
+            let dir = scratch(&format!("autosave-{ext}"));
+            let path = dir.join(format!("novel.{ext}"));
+            let mut a = typed();
+            a.run("file.save", json!({"path": path.to_string_lossy()})).unwrap();
+            assert!(a.autosaves(), "{ext}");
+            a.run("text.insert", json!({"text": "More "})).unwrap();
+            a.autosave_tick(now_ms() + 10_000.0);
+            assert!(!a.session.dirty, "{ext}: AutoSave wrote the file");
+            let saved = wordcraft_engine::io::open_path(&path).unwrap();
+            assert!(saved.plain_text(wordcraft_doc::StoryRef::Body).contains("More "), "{ext}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// Web: the download callback couldn't report a failure, so Save marked the document saved
+    /// and the prompt went ahead even when no download started.
+    #[test]
+    fn a_failed_download_is_not_a_save() {
+        let mut a = typed();
+        a.services.download = Some(Box::new(|_, _| Err("blocked by the browser".into())));
+        assert!(a.execute("file.save", json!({})).is_err());
+        assert!(a.session.dirty);
+
+        a.run("file.new", json!({})).unwrap();
+        a.status_msg = None;
+        let r = a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
+        assert_eq!(r["done"], false, "the New was cancelled");
+        assert!(body_text(&a).contains(UNSAVED));
+        assert!(a.session.dirty);
+        let msg = a.status_msg.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+        assert!(msg.contains("blocked by the browser"), "the status bar says why: {msg:?}");
+    }
+
+    /// A new document has no path: Save goes through Save As, and cancelling that cancels the New.
+    #[test]
+    fn save_as_cancelled_keeps_the_document() {
+        let mut a = typed();
+        a.services.pick_save = Some(Box::new(|_| None));
+        a.run("file.new", json!({})).unwrap();
+        a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
+        assert_eq!(prompt(&a), None);
+        assert!(body_text(&a).contains(UNSAVED));
+        assert!(a.session.dirty);
+    }
+
+    #[test]
+    fn save_as_picked_saves_then_continues() {
+        let dir = scratch("saveas");
+        let path = dir.join("novel.docx");
+        let picked = path.to_string_lossy().to_string();
+        let mut a = typed();
+        a.services.pick_save = Some(Box::new(move |_| Some(picked.clone())));
+        a.run("file.close", json!({})).unwrap();
+        a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
+        assert!(a.quit_requested);
+        let saved = wordcraft_engine::io::open_path(&path).unwrap();
+        assert!(saved.plain_text(wordcraft_doc::StoryRef::Body).contains(UNSAVED));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Scripts and agents (control channel, MCP bridge) are never asked anything.
+    #[test]
+    fn programmatic_commands_never_prompt() {
+        let ctx = egui::Context::default();
+        let mut a = typed();
+        let (req, _reply) = ControlRequest::new("engine.execute", json!({"command": "file.new"}));
+        control::handle(&mut a, &ctx, &req);
+        assert_eq!(prompt(&a), None);
+        assert!(!body_text(&a).contains(UNSAVED));
+    }
+
+    const MAILINGS: [&str; 3] = ["mailings.envelopes", "mailings.labels", "mailings.finish"];
+
+    /// Envelopes, Labels and Finish & Merge replace the document with a new one, like New, but
+    /// the ribbon ran them at once and the unsaved document was gone without a question.
+    #[test]
+    fn mailings_ask_before_replacing_unsaved_work() {
+        for id in MAILINGS {
+            let mut a = typed();
+            a.run("mailings.recipients", json!({"csv": "Name\nAda"})).unwrap();
+            let document = a.session.document_id();
+            a.run(id, json!({})).unwrap();
+            assert_eq!(prompt(&a), Some("saveChanges"), "{id}");
+            assert_eq!(a.session.document_id(), document, "{id}: untouched while the prompt is up");
+
+            a.run("ui.saveChanges", json!({"answer": "cancel"})).unwrap();
+            assert_eq!(prompt(&a), None);
+            assert_eq!(a.session.document_id(), document, "{id}: Cancel keeps the document");
+            assert!(body_text(&a).contains(UNSAVED));
+            assert!(a.session.dirty);
+
+            a.run(id, json!({})).unwrap();
+            a.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
+            assert_eq!(prompt(&a), None);
+            assert_ne!(a.session.document_id(), document, "{id}: Don't Save makes the new document");
+            assert_eq!(a.session.path, None);
+        }
+        // A `path` that isn't text merges into a new document, like no path at all.
+        let mut a = typed();
+        a.run("mailings.recipients", json!({"csv": "Name\nAda"})).unwrap();
+        a.run("mailings.finish", json!({"path": null})).unwrap();
+        assert_eq!(prompt(&a), Some("saveChanges"));
+    }
+
+    /// A clean document is replaced straight away, like New; a merge written to a file
+    /// (`mailings.finish` with `path`) doesn't replace anything, so it never asks.
+    #[test]
+    fn mailings_on_a_clean_document_or_into_a_file_do_not_ask() {
+        let dir = scratch("merge-to-file");
+        for id in MAILINGS {
+            let mut a = app();
+            a.run("mailings.recipients", json!({"csv": "Name\nAda"})).unwrap();
+            a.run("file.save", json!({"path": dir.join("saved.docx").to_string_lossy()})).unwrap();
+            assert!(!a.session.dirty);
+            let document = a.session.document_id();
+            a.run(id, json!({})).unwrap();
+            assert_eq!(prompt(&a), None, "{id}");
+            assert_ne!(a.session.document_id(), document, "{id}");
+        }
+        let out = dir.join("merged.docx");
+        let mut a = typed();
+        a.run("mailings.recipients", json!({"csv": "Name\nAda"})).unwrap();
+        a.run("mailings.finish", json!({"path": out.to_string_lossy()})).unwrap();
+        assert_eq!(prompt(&a), None);
+        assert!(out.exists());
+        assert!(body_text(&a).contains(UNSAVED));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The result is a new, untitled document: Save, AutoSave and the title never point at the
+    /// file the original came from, even after Save in the prompt wrote that file.
+    #[test]
+    fn mailings_results_never_save_over_the_original() {
+        for id in MAILINGS {
+            let dir = scratch(&format!("mailings-{}", id.len()));
+            let path = docx_on_disk(&dir, "Signed contract");
+            let mut a = app();
+            a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
+            a.run("text.insert", json!({"text": "Revised "})).unwrap();
+            a.run("file.save", json!({})).unwrap();
+            assert!(a.autosaves());
+            a.run("mailings.recipients", json!({"csv": "Name\nAda"})).unwrap();
+            a.run("text.insert", json!({"text": "Again "})).unwrap();
+            a.run(id, json!({})).unwrap();
+            a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
+            assert_eq!(prompt(&a), None);
+            let saved = std::fs::read(&path).unwrap();
+            assert!(
+                wordcraft_engine::io::open_path(&path).unwrap().plain_text(wordcraft_doc::StoryRef::Body).contains("Revised Again Signed"),
+                "{id}: Save wrote the document first"
+            );
+
+            assert_eq!(a.session.path, None, "{id}");
+            assert!(!a.saved_here() && !a.autosaves(), "{id}: AutoSave doesn't cover the result");
+            assert_ne!(a.title_stem(), "contract", "{id}: titled as a new document");
+            a.run("text.insert", json!({"text": "Note "})).unwrap();
+            a.autosave_tick(now_ms() + 10_000.0);
+            a.run("file.save", json!({})).unwrap();
+            a.run("edit.undo", json!({})).unwrap();
+            a.run("edit.undo", json!({})).unwrap();
+            a.run("file.save", json!({})).unwrap();
+            a.autosave_tick(now_ms() + 20_000.0);
+            assert_eq!(std::fs::read(&path).unwrap(), saved, "{id}: the original file is never overwritten");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// Scripts and agents (control channel, MCP bridge) replace the document without a question.
+    #[test]
+    fn programmatic_mailings_never_prompt() {
+        let ctx = egui::Context::default();
+        for id in MAILINGS {
+            let mut a = typed();
+            a.execute("mailings.recipients", json!({"csv": "Name\nAda"})).unwrap();
+            let document = a.session.document_id();
+            let (req, _reply) = ControlRequest::new("engine.execute", json!({"command": id}));
+            control::handle(&mut a, &ctx, &req);
+            assert_eq!(prompt(&a), None, "{id}");
+            assert_ne!(a.session.document_id(), document, "{id}");
+            assert_eq!(a.session.path, None, "{id}");
+        }
+    }
+
+    /// Review finding: with undo kept across the swap, an agent's Undo brought document A back
+    /// under the id of the mailing result B while a prompt about B was up, and Don't Save then
+    /// threw away A. The history starts afresh instead, so the prompt only ever discards B.
+    #[test]
+    fn undo_after_a_mailing_cannot_redirect_a_pending_prompt() {
+        for id in MAILINGS {
+            let mut a = typed();
+            a.execute("mailings.recipients", json!({"csv": "Name\nAda"})).unwrap();
+            a.execute(id, json!({})).unwrap();
+            let result = body_text(&a);
+            let b = a.session.document_id();
+            assert!(a.session.dirty, "{id}: the result is unsaved");
+            a.run("file.new", json!({})).unwrap();
+            assert_eq!(prompt(&a), Some("saveChanges"), "{id}");
+
+            a.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(a.session.document_id(), b, "{id}");
+            assert_eq!(body_text(&a), result, "{id}: nothing from before the mailing comes back");
+            a.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
+            assert_ne!(a.session.document_id(), b, "{id}: Don't Save discarded the document it asked about");
+        }
+    }
+
+    /// Review finding: with undo kept across the swap, Undo → Save As → Redo put the mailing result
+    /// under the saved file, and Save or AutoSave then wrote it there.
+    #[test]
+    fn redo_after_a_mailing_cannot_put_the_result_under_a_saved_file() {
+        for id in MAILINGS {
+            let dir = scratch(&format!("mailings-redo-{}", id.len()));
+            let path = docx_on_disk(&dir, "Signed contract");
+            let copy = dir.join("copy.docx");
+            let on_file = |p: &std::path::Path| wordcraft_engine::io::open_path(p).unwrap().plain_text(wordcraft_doc::StoryRef::Body);
+            let mut a = app();
+            a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
+            a.run("mailings.recipients", json!({"csv": "Name\nAda"})).unwrap();
+            a.run("file.save", json!({})).unwrap();
+            a.run(id, json!({})).unwrap();
+            assert_eq!(prompt(&a), None, "{id}: the document was saved");
+            let result = body_text(&a);
+
+            a.run("edit.undo", json!({})).unwrap();
+            assert_eq!(body_text(&a), result, "{id}: history starts afresh, like New");
+            a.run("file.saveAs", json!({"path": copy.to_string_lossy()})).unwrap();
+            let written = on_file(&copy);
+            a.run("edit.redo", json!({})).unwrap();
+            assert_eq!(body_text(&a), result, "{id}: nothing to redo");
+            a.run("file.save", json!({})).unwrap();
+            a.autosave_tick(now_ms() + 10_000.0);
+            assert_eq!(on_file(&copy), written, "{id}");
+            assert!(on_file(&path).contains("Signed contract"), "{id}: the original is untouched");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// Surfaces finding 3: AutoSave rewrote any opened .docx ~2.5 s after the first keystroke,
+    /// deleting whatever the reader doesn't model (content controls, charts, macros…).
+    #[test]
+    fn opened_files_are_not_autosaved_until_the_user_saves() {
+        let dir = scratch("autosave");
+        let path = docx_on_disk(&dir, "Original");
+        let before = std::fs::read(&path).unwrap();
+        let mut a = app();
+        a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
+        a.run("text.insert", json!({"text": "Typed "})).unwrap();
+        a.autosave_tick(now_ms() + 10_000.0);
+        assert!(std::fs::read(&path).unwrap() == before, "an opened file is never rewritten behind the user's back");
+        assert!(a.session.dirty);
+
+        // After an explicit save, later changes are saved automatically.
+        a.run("file.save", json!({})).unwrap();
+        a.run("text.insert", json!({"text": "More "})).unwrap();
+        assert!(a.session.dirty);
+        a.autosave_tick(now_ms() + 10_000.0);
+        assert!(!a.session.dirty);
+        let saved = wordcraft_engine::io::open_path(&path).unwrap();
+        assert!(saved.plain_text(wordcraft_doc::StoryRef::Body).contains("Typed More Original"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Cancelling the Open picker (Mod+O) left the document as it was but turned AutoSave off.
+    #[test]
+    fn cancelling_open_keeps_autosave() {
+        let dir = scratch("autosave-open");
+        let path = dir.join("novel.docx");
+        let mut a = typed();
+        a.services.pick_open = Some(Box::new(|_| None));
+        a.run("file.save", json!({"path": path.to_string_lossy()})).unwrap();
+        assert!(a.autosaves());
+        a.run("file.open", json!({})).unwrap();
+        assert!(a.autosaves(), "the picker was cancelled; nothing was replaced");
+
+        a.run("text.insert", json!({"text": " continues"})).unwrap();
+        a.autosave_tick(now_ms() + 10_000.0);
+        assert!(!a.session.dirty);
+        let saved = wordcraft_engine::io::open_path(&path).unwrap();
+        assert!(saved.plain_text(wordcraft_doc::StoryRef::Body).contains("chapter continues"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A failing AutoSave used to be silent (`let _ =`) and retried every 2.5 s.
+    #[test]
+    fn autosave_failures_are_reported_once() {
+        let dir = scratch("autosave-fail");
+        let path = dir.join("gone").join("novel.docx");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut a = typed();
+        a.run("file.save", json!({"path": path.to_string_lossy()})).unwrap();
+        // The folder disappears (unplugged drive, network share gone).
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        a.run("text.insert", json!({"text": "More "})).unwrap();
+        a.status_msg = None;
+        a.autosave_tick(now_ms() + 10_000.0);
+        let msg = a.status_msg.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+        assert!(msg.contains("AutoSave"), "the failure shows in the status bar: {msg:?}");
+        assert!(a.session.dirty);
+
+        // Not retried until the user saves again.
+        a.status_msg = None;
+        a.autosave_tick(now_ms() + 20_000.0);
+        assert!(a.status_msg.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Web Save of an opened .docm downloads a .docm, so its macros stay (Codex review, docm lane).
     #[test]
     fn web_save_keeps_the_opened_word_format() {
@@ -742,8 +1568,13 @@ mod tests {
         doc.passthrough.insert("wordcraft:vbaProject.related".into(), std::sync::Arc::new(related.as_bytes().to_vec()));
         let got: std::rc::Rc<std::cell::RefCell<Vec<(String, Vec<u8>)>>> = Default::default();
         let sink = got.clone();
-        let services =
-            Services { download: Some(Box::new(move |n: &str, b: &[u8]| sink.borrow_mut().push((n.to_string(), b.to_vec())))), ..Default::default() };
+        let services = Services {
+            download: Some(Box::new(move |n: &str, b: &[u8]| {
+                sink.borrow_mut().push((n.to_string(), b.to_vec()));
+                Ok(())
+            })),
+            ..Default::default()
+        };
         let mut a = WordApp::new(Session::new(doc), services);
         for (opened, expect) in
             [("m.docm", "m.docm"), ("t.DOTM", "t.DOTM"), ("t.dotx", "t.dotx"), ("notes.odt", "notes.docx"), ("readme.txt", "readme.docx")]
@@ -786,6 +1617,25 @@ mod tests {
         assert_eq!(a.session.author, default);
         assert!(a.ui.dark);
         assert!(!a.ui.backstage);
+    }
+
+    #[test]
+    fn word_count_setting_survives_a_restart() {
+        let mut a = app();
+        a.session.run("review.wordCount", &json!({"includeTextBoxes": false})).unwrap();
+        let saved = serde_json::to_string(&a.prefs()).unwrap();
+        assert!(saved.contains(r#""editing":{"countNotes":false}"#), "{saved}");
+        let mut b = app();
+        b.apply_prefs(serde_json::from_str(&saved).unwrap());
+        assert!(!b.session.prefs.count_notes);
+    }
+
+    #[test]
+    fn prefs_without_editing_keep_its_defaults() {
+        let mut a = app();
+        a.apply_prefs(serde_json::from_str(r#"{"tab": "Insert", "dark": true}"#).unwrap());
+        assert_eq!((a.ui.tab.as_str(), a.ui.dark), ("Insert", true));
+        assert!(a.session.prefs.count_notes, "text boxes and notes count by default");
     }
 
     fn png_bytes(c: [u8; 4]) -> Vec<u8> {

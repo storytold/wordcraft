@@ -4,22 +4,9 @@
 
 use wordcraft_doc::Document;
 
+pub use wordcraft_doc::encoding::cp1252;
+
 use crate::model::{FBlock, ListCounter, from_doc};
-
-/// Windows-1252 code points for 0x80..=0x9F.
-const CP1252: [u16; 32] = [
-    0x20AC, 0x0081, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x008D, 0x017D, 0x008F, 0x0090, 0x2018,
-    0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, 0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x009D, 0x017E, 0x0178,
-];
-
-/// One Windows-1252 byte as a char.
-pub fn cp1252(b: u8) -> char {
-    if (0x80..0xA0).contains(&b) {
-        CP1252.get((b - 0x80) as usize).and_then(|u| char::from_u32(u32::from(*u))).unwrap_or('\u{FFFD}')
-    } else {
-        b as char
-    }
-}
 
 fn utf16(b: &[u8], le: bool) -> String {
     let units: Vec<u16> = b.as_chunks::<2>().0.iter().map(|c| if le { u16::from_le_bytes(*c) } else { u16::from_be_bytes(*c) }).collect();
