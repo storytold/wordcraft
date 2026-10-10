@@ -175,6 +175,10 @@ impl WordApp {
 
     /// Run a command; UI-level commands (`ui.*`) are handled here, the rest by the engine.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        // A pending Change Picture only survives until the next action (#147).
+        if !matches!(id, "ui.changePicture" | "picture.change" | "insert.picture") {
+            self.change_picture_target = None;
+        }
         if let Some(r) = self.ui_command(id, &params) {
             return r;
         }
@@ -337,7 +341,7 @@ impl WordApp {
     }
 
     /// Media key of the selected picture, if any.
-    fn selected_picture_media(&self) -> Option<String> {
+    pub(crate) fn selected_picture_media(&self) -> Option<String> {
         match wordcraft_engine::cmd::objects::selected(&self.session) {
             Some((_, wordcraft_doc::para::InlineObject::Image { media, .. })) => Some(media),
             _ => None,
@@ -703,6 +707,17 @@ mod tests {
         insert_picture(&mut a, [200, 30, 30, 255]);
         // No pickers in tests, so the picker "cancels" and the target clears.
         assert!(a.run("ui.changePicture", json!({})).is_ok());
+        assert!(a.change_picture_target.is_none());
+    }
+
+    /// Any unrelated action cancels a pending Change Picture (#147 web-picker cancel case).
+    #[test]
+    fn unrelated_command_clears_change_picture_target() {
+        let mut a = app();
+        insert_picture(&mut a, [200, 30, 30, 255]);
+        a.change_picture_target = a.selected_picture_media();
+        assert!(a.change_picture_target.is_some());
+        let _ = a.run("format.bold", json!({}));
         assert!(a.change_picture_target.is_none());
     }
 }

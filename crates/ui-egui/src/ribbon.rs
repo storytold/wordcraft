@@ -1024,7 +1024,7 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
                 let mut w = w0;
                 let r = ui.add(egui::DragValue::new(&mut w).speed(1.0).range(4.0..=2000.0).suffix(" pt"));
                 if r.changed() {
-                    if !r.drag_started() {
+                    if r.dragged() && !r.drag_started() {
                         app.session.join_next_undo();
                     }
                     let _ = app.run("picture.size", json!({"width": w}));
@@ -1033,7 +1033,7 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
                 let mut h = h0;
                 let r = ui.add(egui::DragValue::new(&mut h).speed(1.0).range(4.0..=2000.0).suffix(" pt"));
                 if r.changed() {
-                    if !r.drag_started() {
+                    if r.dragged() && !r.drag_started() {
                         app.session.join_next_undo();
                     }
                     let _ = app.run("picture.size", json!({"height": h}));
@@ -1046,7 +1046,7 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
                     let mut v = crop0[i] * 100.0;
                     let r = ui.add(egui::DragValue::new(&mut v).speed(0.5).range(0.0..=45.0).suffix("%"));
                     if r.changed() {
-                        if !r.drag_started() {
+                        if r.dragged() && !r.drag_started() {
                             app.session.join_next_undo();
                         }
                         let mut c = crop0;
@@ -1071,7 +1071,9 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
                 }
                 if r.lost_focus() {
                     ui.data_mut(|d| d.remove::<String>(key));
-                    if alt != alt0 {
+                    // The click that took focus may have selected another picture; never commit
+                    // one picture's draft onto another.
+                    if alt != alt0 && app.selected_picture_media().as_deref() == Some(media.as_str()) {
                         let _ = app.run("picture.altText", json!({"text": alt}));
                     }
                 }
