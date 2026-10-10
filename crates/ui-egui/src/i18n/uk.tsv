@@ -191,6 +191,7 @@
 	Clear Character Style	Очистити стиль символів
 	Clear Formatting Level	Очистити рівень форматування
 	Clear Paragraph Formatting	Очистити форматування абзацу
+	Click a border between two cells to merge them. Esc stops.	Клацніть межу між двома клітинками, щоб об'єднати їх. Esc завершує.
 	Clipboard	Буфер обміну
 	Clipboard Pane	Панель буфера обміну
 	Clipboard Items	Елементи буфера обміну
@@ -261,6 +262,8 @@
 	Delete Style	Видалити стиль
 	Delete Table	Видалити таблицю
 	Design	Дизайн
+	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	Перетягніть прямокутник, щоб намалювати таблицю, або лінію через клітинки, щоб їх розділити. Esc завершує.
+	Draw Table	Намалювати таблицю
 	Edit Comment	Редагувати коментар
 	Left Margin	Ліве поле
 	Indents and Spacing	Відступи й інтервали

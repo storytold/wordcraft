@@ -183,6 +183,7 @@
 	Citations & Bibliography	Citações e bibliografia
 	Clear	Limpar
 	Clear All Formatting	Limpar toda a formatação
+	Click a border between two cells to merge them. Esc stops.	Clique em uma borda entre duas células para mesclá-las. Esc encerra.
 	Clipboard	Área de transferência
 	Clipboard Pane	Painel da área de transferência
 	Clipboard Items	Itens da área de transferência
@@ -254,6 +255,8 @@
 	Delete Style	Excluir estilo
 	Delete Table	Excluir tabela
 	Design	Design
+	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	Arraste um retângulo para desenhar uma tabela, ou uma linha sobre as células para dividi-las. Esc encerra.
+	Draw Table	Desenhar tabela
 	Edit Comment	Editar comentário
 	Left Margin	Margem esquerda
 	Indents and Spacing	Recuos e espaçamento

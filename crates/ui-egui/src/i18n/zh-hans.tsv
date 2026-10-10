@@ -81,10 +81,13 @@
 	Click level to modify:	单击要修改的级别：
 	Color only	仅颜色
 	Compress punctuation at the start of a line	压缩行首标点
+	Click a border between two cells to merge them. Esc stops.	单击两个单元格之间的边框以合并它们。按 Esc 结束。
 	Dark page (white text on black)	深色页面（黑底白字）
 	Define New Multilevel List	定义新的多级列表
 	Define New Multilevel List…	定义新的多级列表…
 	Deletions:	删除内容：
+	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	拖出矩形以绘制表格，或拖出穿过单元格的线条以拆分单元格。按 Esc 结束。
+	Draw Table	绘制表格
 	Edit Comment	编辑批注
 	Enter formatting for number:	输入编号的格式：
 	Follow number with:	编号之后：

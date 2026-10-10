@@ -70,10 +70,13 @@
 	Click level to modify:	変更するレベルをクリック:
 	Color only	色のみ
 	Compress punctuation at the start of a line	行頭の約物を詰める
+	Click a border between two cells to merge them. Esc stops.	2 つのセルの間の境界線をクリックすると結合します。Esc で終了します。
 	Dark page (white text on black)	ダーク ページ (黒地に白い文字)
 	Define New Multilevel List	新しいアウトラインの定義
 	Define New Multilevel List…	新しいアウトラインの定義…
 	Deletions:	削除された箇所:
+	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	四角形をドラッグして表を描くか、セルを横切る線を引いて分割します。Esc で終了します。
+	Draw Table	表を描画
 	Edit Comment	コメントを編集
 	Enter formatting for number:	番号の書式:
 	Follow number with:	番号に続く文字:

@@ -71,10 +71,13 @@
 	Click level to modify:	按一下要修改的層級：
 	Color only	僅色彩
 	Compress punctuation at the start of a line	壓縮行首標點
+	Click a border between two cells to merge them. Esc stops.	按一下兩個儲存格之間的框線以合併它們。按 Esc 結束。
 	Dark page (white text on black)	深色頁面（黑底白字）
 	Define New Multilevel List	定義新的多層次清單
 	Define New Multilevel List…	定義新的多層次清單…
 	Deletions:	刪除內容：
+	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	拖出矩形以繪製表格，或拖出穿過儲存格的線條以分割儲存格。按 Esc 結束。
+	Draw Table	繪製表格
 	Edit Comment	編輯註解
 	Enter formatting for number:	輸入編號的格式：
 	Follow number with:	編號之後：

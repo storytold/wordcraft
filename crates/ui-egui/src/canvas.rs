@@ -65,6 +65,10 @@ pub struct CanvasState {
     pub balloon_rects: Vec<(u32, Rect)>,
     /// A paste event arrived since the last Mod+V release (see `keys::canvas_events`).
     pub(crate) pasted: bool,
+    /// Draw Table or Eraser is on (`table_pen`): presses draw instead of moving the caret.
+    pub table_tool: Option<crate::table_pen::TableTool>,
+    /// The Draw Table stroke (or eraser press) in progress.
+    pub(crate) table_stroke: Option<crate::table_pen::PenStroke>,
 }
 
 impl CanvasState {
@@ -108,6 +112,8 @@ impl Default for CanvasState {
             balloon_reply: false,
             balloon_h: 0.0,
             balloon_rects: Vec::new(),
+            table_tool: None,
+            table_stroke: None,
         }
     }
 }
@@ -633,6 +639,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             }
         }
         crate::objects::paint(app, &painter, &t, &layout, &rects, geo.scale);
+        crate::table_pen::paint(app, &painter, &t, &layout, &rects, geo.scale);
         (resp, rects)
     });
     app.canvas.scroll_offset = out.state.offset;
@@ -653,7 +660,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         });
     }
     app.canvas.focused = resp.has_focus();
-    mouse(app, ui, &resp, &rects, &layout, geo.scale);
+    // Draw Table / Eraser own the mouse while on (no caret moves); else the usual editing.
+    if !crate::table_pen::pointer(app, ui, &resp, &rects, &layout, geo.scale) {
+        mouse(app, ui, &resp, &rects, &layout, geo.scale);
+    }
     // Right-click: move the caret there (unless inside the selection), then the context menu.
     // Right-click in an equation puts the caret there and opens the equation menu.
     if resp.secondary_clicked()
@@ -692,6 +702,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         let over_object = ui.input(|i| i.pointer.latest_pos()).and_then(|p| crate::objects::cursor(app, &layout, &rects, geo.scale, p));
         ui.ctx().set_cursor_icon(over_object.unwrap_or(egui::CursorIcon::Text));
     }
+    crate::table_pen::cursor(app, ui, &resp);
     // While "Save changes?" is up, keys answer it rather than edit the document behind it.
     if app.canvas.focused && !matches!(app.dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })) {
         crate::keys::canvas_events(app, ui.ctx());

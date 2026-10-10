@@ -97,10 +97,13 @@
 	Color: {color}	Boja: {color}
 	Compress punctuation at the start of a line	Sažmi interpunkciju na početku reda
 	Confirm password:	Potvrdite lozinku:
+	Click a border between two cells to merge them. Esc stops.	Kliknite ivicu između dve ćelije da ih spojite. Esc završava.
 	Dark page (white text on black)	Tamna stranica (beo tekst na crnom)
 	Define New Multilevel List	Definiši novu višenivosku listu
 	Define New Multilevel List…	Definiši novu višenivosku listu…
 	Deletions:	Brisanja:
+	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	Prevucite pravougaonik da nacrtate tabelu ili liniju preko ćelija da ih podelite. Esc završava.
+	Draw Table	Nacrtaj tabelu
 	Edit Comment	Uredi komentar
 	Enter formatting for number:	Oblik broja:
 	Follow number with:	Posle broja:

@@ -234,6 +234,9 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                     app.session.painter = None;
                     continue;
                 }
+                if key == Key::Escape && crate::table_pen::stop(app) {
+                    continue;
+                }
                 if crate::objects::key(app, key, modifiers) {
                     continue;
                 }

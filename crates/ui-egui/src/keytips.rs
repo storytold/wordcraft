@@ -335,6 +335,8 @@ fn controls(tab: &str) -> Vec<Control> {
             m("Select", "table.selectCell"),
             c("View Gridlines", "table.viewGridlines"),
             c("Properties", "table.properties"),
+            c("Draw Table", "table.draw"),
+            c("Eraser", "table.eraser"),
             m("Delete", "table.deleteCells"),
             c("Insert Above", "table.insertRowAbove"),
             c("Insert Below", "table.insertRowBelow"),

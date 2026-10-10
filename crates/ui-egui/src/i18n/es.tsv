@@ -193,6 +193,7 @@
 	Clear Character Style	Borrar estilo de carácter
 	Clear Formatting Level	Borrar nivel de formato
 	Clear Paragraph Formatting	Borrar formato de párrafo
+	Click a border between two cells to merge them. Esc stops.	Haga clic en un borde entre dos celdas para combinarlas. Esc termina.
 	Clipboard	Portapapeles
 	Clipboard Pane	Panel del portapapeles
 	Clipboard Items	Elementos del portapapeles
@@ -292,7 +293,9 @@
 	Double Underline	Subrayado doble
 	Down	Abajo
 	Draft	Borrador
+	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	Arrastre un rectángulo para dibujar una tabla, o una línea sobre las celdas para dividirlas. Esc termina.
 	Draw	Dibujar
+	Draw Table	Dibujar tabla
 	Drawing Tools	Herramientas de dibujo
 	Drawing\nCanvas	Lienzo de\ndibujo
 	Drop Cap	Letra capital
