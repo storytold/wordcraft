@@ -53,7 +53,10 @@
 	AutoSave documents you have saved in WordCraft	WordCraft で保存した文書を自動保存する
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	自動保存できませんでした: {error}。文書を保存し直すと、自動保存が再開します。
 	Bottom Margin	下余白
+	Click a border between two cells to merge them. Esc stops.	2 つのセルの間の境界線をクリックすると結合します。Esc で終了します。
 	Dark page (white text on black)	ダーク ページ (黒地に白い文字)
+	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	四角形をドラッグして表を描くか、セルを横切る線を引いて分割します。Esc で終了します。
+	Draw Table	表を描画
 	Edit Comment	コメントを編集
 	Left Margin	左余白
 	More templates →	その他のテンプレート →

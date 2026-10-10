@@ -54,7 +54,10 @@
 	AutoSave documents you have saved in WordCraft	自動儲存在 WordCraft 中儲存過的文件
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	自動儲存失敗：{error}。重新儲存文件後將恢復自動儲存。
 	Bottom Margin	下邊界
+	Click a border between two cells to merge them. Esc stops.	按一下兩個儲存格之間的框線以合併它們。按 Esc 結束。
 	Dark page (white text on black)	深色頁面（黑底白字）
+	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	拖出矩形以繪製表格，或拖出穿過儲存格的線條以分割儲存格。按 Esc 結束。
+	Draw Table	繪製表格
 	Edit Comment	編輯註解
 	Left Margin	左邊界
 	More templates →	更多範本 →

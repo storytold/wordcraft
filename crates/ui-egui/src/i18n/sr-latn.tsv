@@ -64,7 +64,10 @@
 	AutoSave documents you have saved in WordCraft	Automatski čuvaj dokumente koje ste već sačuvali u WordCraft-u
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	Automatsko čuvanje neuspelo: {error}. Sačuvajte dokument da biste ga ponovo uključili.
 	Bottom Margin	Donja margina
+	Click a border between two cells to merge them. Esc stops.	Kliknite ivicu između dve ćelije da ih spojite. Esc završava.
 	Dark page (white text on black)	Tamna stranica (beo tekst na crnom)
+	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	Prevucite pravougaonik da nacrtate tabelu ili liniju preko ćelija da ih podelite. Esc završava.
+	Draw Table	Nacrtaj tabelu
 	Edit Comment	Uredi komentar
 	Left Margin	Leva margina
 	Reopen	Ponovo otvori
