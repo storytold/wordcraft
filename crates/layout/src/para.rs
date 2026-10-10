@@ -248,8 +248,9 @@ pub struct ParaLayout {
     /// tracked deletions in the final text. Resolved as laid out, table formatting included.
     pub left_out: Vec<std::ops::Range<usize>>,
     /// The text drawn by clusters that stand for an object (field results, note numbers,
-    /// equations) rather than for the paragraph's own text, by cluster index, sorted.
-    pub shown: Vec<(usize, String)>,
+    /// equations) rather than for the paragraph's own text, by cluster index, sorted, with each of
+    /// the cluster's glyphs' byte range in that text (a ligature's glyph spans its letters).
+    pub shown: Vec<(usize, String, Vec<std::ops::Range<usize>>)>,
 }
 
 /// What a table style gives the text of a cell: its paragraph and run formatting, with the
@@ -302,7 +303,7 @@ struct Builder<'a> {
     /// Bidi level per byte of the paragraph text (empty: all left to right).
     levels: Vec<u8>,
     /// Text drawn by clusters that stand for an object, by cluster index (see `ParaLayout::shown`).
-    shown: Vec<(usize, String)>,
+    shown: Vec<(usize, String, Vec<std::ops::Range<usize>>)>,
 }
 
 /// What a piece of text is shaped as: one face, case, script formatting and direction.
@@ -564,18 +565,28 @@ impl<'a> Builder<'a> {
             });
             return;
         };
-        // Merge into one cluster: rebase glyph dx onto the first cluster.
+        // Merge into one cluster: rebase glyph dx onto the first cluster, and keep each glyph's
+        // text (a ligature's glyph takes the letters of the clusters after it that have none).
         let mut x = 0.0;
+        let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
         for c in &added {
             for g in self.glyphs.get_mut(c.g0 as usize..c.g1 as usize).into_iter().flatten() {
                 g.dx += x;
             }
             x += c.adv;
+            let (a, b) = (c.start.saturating_sub(start), c.end.saturating_sub(start));
+            if c.g1 <= c.g0 {
+                let from = ranges.last().map(|r| r.start);
+                for r in ranges.iter_mut().rev().take_while(|r| Some(r.start) == from) {
+                    r.end = b;
+                }
+            }
+            ranges.extend((c.g0..c.g1).map(|_| a..b));
         }
         let g0 = first.g0;
         let style = first.style;
         let g1 = added.last().map(|c| c.g1).unwrap_or(g0);
-        self.shown.push((self.clusters.len(), text.to_string()));
+        self.shown.push((self.clusters.len(), text.to_string(), ranges));
         self.clusters.push(Cluster { start, end, adv: x, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, obj_d: 0.0, dot: false });
     }
 }

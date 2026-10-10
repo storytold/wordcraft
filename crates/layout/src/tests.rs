@@ -260,10 +260,14 @@ fn many_hidden_float_anchors_lay_out_in_linear_time() {
 #[test]
 fn fragmented_hidden_text_lays_out_like_the_visible_text() {
     // Visible words with a hidden multi-byte char after every visible one, formatted in alternating
-    // runs (bold on and off) so no two left-out runs are adjacent or merge.
+    // runs (bold on and off) so no two left-out runs are adjacent or merge. The plain paragraph has
+    // the same visible runs without the hidden chars, so both lay out the same widths whatever font
+    // the default font resolves to.
     let words = "Hyphenation wraps international words across narrow columns of text ".repeat(6);
     let mut d = Document::from_text("");
     d.settings.auto_hyphenation = true;
+    let mut plain = Document::from_text("");
+    plain.settings.auto_hyphenation = true;
     let mut text = String::new();
     let mut kept = Vec::new();
     for (i, c) in words.chars().enumerate() {
@@ -276,10 +280,11 @@ fn fragmented_hidden_text_lays_out_like_the_visible_text() {
         d.insert_text(&Pos::body(0, n), &c.to_string(), &bold).unwrap();
         let hidden = wordcraft_doc::CharProps { hidden: Some(true), bold: Some(i % 2 == 1), ..Default::default() };
         d.insert_text(&Pos::body(0, at), "é", &hidden).unwrap();
+        let n = plain.para(StoryRef::Body, &Path::top(0)).unwrap().len();
+        plain.insert_text(&Pos::body(0, n), &c.to_string(), &bold).unwrap();
     }
     assert_eq!(d.para(StoryRef::Body, &Path::top(0)).unwrap().text, text);
-    let mut plain = Document::from_text(&words);
-    plain.settings.auto_hyphenation = true;
+    assert_eq!(plain.para(StoryRef::Body, &Path::top(0)).unwrap().text, words);
     for doc in [&mut d, &mut plain] {
         doc.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.indent_right = Some(468.0 - 90.0)).unwrap();
     }

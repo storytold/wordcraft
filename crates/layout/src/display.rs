@@ -310,26 +310,36 @@ fn lines(
                 if matches!(c.kind, ClKind::Text | ClKind::Space) {
                     let a = text.len();
                     // An object's cluster (a field, a note number) stands for the text it shows.
-                    let mut shown = false;
-                    if let Ok(i) = pl.shown.binary_search_by_key(&k, |(i, _)| *i)
-                        && let Some((_, s)) = pl.shown.get(i)
+                    let mut shown = None;
+                    if let Ok(i) = pl.shown.binary_search_by_key(&k, |(i, _, _)| *i)
+                        && let Some((_, s, r)) = pl.shown.get(i)
                     {
                         text.push_str(s);
-                        shown = true;
+                        shown = Some(r);
                     } else if let Some(p) = para {
                         text.push_str(p.text.get(c.start..c.end).unwrap_or(""));
                     }
                     let b = text.len();
                     let cg = pl.glyphs.get(c.g0 as usize..c.g1 as usize).unwrap_or(&[]);
-                    if shown && cg.len() > 1 {
-                        // A whole field result is one cluster of many glyphs: give them a character
-                        // each (the last takes any remainder), not the whole text as one ligature.
+                    if let Some(shown) = shown
+                        && cg.len() > 1
+                    {
+                        // A whole field result is one cluster of many glyphs: each glyph gets the
+                        // text it was shaped from (a ligature its letters), not the whole text as
+                        // one ligature. Without that, a character each (the last takes any remainder).
                         let bounds: Vec<usize> = text.get(a..b).unwrap_or("").char_indices().map(|(i, _)| a + i).collect();
+                        let known = shown.len() == cg.len();
                         for (n, g) in cg.iter().enumerate() {
-                            let from = bounds.get(n).or(bounds.last()).copied().unwrap_or(a);
-                            let to = if n + 1 == cg.len() { b } else { bounds.get(n + 1).copied().unwrap_or(b) };
+                            let r = match shown.get(n).filter(|_| known) {
+                                Some(r) => (a + r.start).min(b)..(a + r.end).min(b),
+                                None => {
+                                    let from = bounds.get(n).or(bounds.last()).copied().unwrap_or(a);
+                                    let to = if n + 1 == cg.len() { b } else { bounds.get(n + 1).copied().unwrap_or(b) };
+                                    from..to
+                                }
+                            };
                             glyphs.push((g.gid, cx + g.dx, base - st.shift - g.dy));
-                            ranges.push(from..to.max(from));
+                            ranges.push(r.start..r.end.max(r.start));
                         }
                         k += 1;
                         continue;
