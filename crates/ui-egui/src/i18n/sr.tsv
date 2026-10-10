@@ -10,7 +10,6 @@
 #   escapes    \n  \t  \\  inside a column. `{name}` placeholders must appear in both columns, and a
 #              trailing "…" in one needs one in the other.
 #   Lines starting with # and blank lines are ignored. A missing entry shows in English.
-#
 # Clean room: every entry was written from the plain meaning of the English label in ordinary
 # computing vocabulary. No Microsoft Word (or other product) localisation, string table or
 # translated UI was consulted or copied; add entries the same way.
@@ -1017,6 +1016,21 @@
 	Type the recipients, or load them from a file.	Унесите примаоце или их учитајте из фајла.
 	Use an Existing List…	Користи постојећу листу…
 	A file dialog is already open.	Дијалог за фајлове је већ отворен.
+	Height:	Висина:
+	Width:	Ширина:
+	Row	Ред
+	Cell	Ћелија
+	Preferred width:	Жељена ширина:
+	Alignment:	Поравнање:
+	Indent from left:	Увлачење слева:
+	Specify height:	Задај висину:
+	Exactly	Тачно
+	At least	Најмање
+	Allow row to break across pages	Дозволи прелом реда између страница
+	Repeat as header row on each page	Понови као ред заглавља на свакој страници
+	Vertical alignment:	Вертикално поравнање:
+	Top	Горе
+	Bottom	Доле
 	Alt text	Алтернативни текст
 	Alt:	Алт. текст:
 	W:	Ш:

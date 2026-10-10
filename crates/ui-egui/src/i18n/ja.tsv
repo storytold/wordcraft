@@ -1001,6 +1001,21 @@
 	Dark	ダーク
 	Use system setting	システム設定を使用
 	A file dialog is already open.	ファイル ダイアログが既に開いています。
+	Height:	高さ:
+	Width:	幅:
+	Row	行
+	Cell	セル
+	Preferred width:	推奨幅:
+	Alignment:	配置:
+	Indent from left:	左インデント:
+	Specify height:	高さを指定:
+	Exactly	固定値
+	At least	最小値
+	Allow row to break across pages	ページ間で行を分割する
+	Repeat as header row on each page	各ページに見出し行として繰り返す
+	Vertical alignment:	垂直方向の配置:
+	Top	上
+	Bottom	下
 	Alt text	代替テキスト
 	Alt:	代替テキスト:
 	W:	幅:

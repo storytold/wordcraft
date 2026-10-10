@@ -9,7 +9,6 @@
 # Neutral Spanish, understood across Spain and Latin America. Commands are infinitives (Guardar,
 # Copiar); second-person text uses tú; labels use sentence case; product and format names stay as
 # they are (WordCraft, PDF, Markdown, MCP …).
-#
 # Clean room: every entry was written from the plain meaning of the English label in ordinary
 # computing vocabulary. No Microsoft Word (or other product) localisation, string table or
 # translated UI was consulted or copied; add entries the same way.
@@ -1018,6 +1017,21 @@
 	Dark	Oscuro
 	Use system setting	Usar la configuración del sistema
 	A file dialog is already open.	Ya hay un cuadro de diálogo de archivo abierto.
+	Height:	Alto:
+	Width:	Ancho:
+	Row	Fila
+	Cell	Celda
+	Preferred width:	Ancho preferido:
+	Alignment:	Alineación:
+	Indent from left:	Sangría desde la izquierda:
+	Specify height:	Especificar alto:
+	Exactly	Exactamente
+	At least	Al menos
+	Allow row to break across pages	Permitir dividir la fila entre páginas
+	Repeat as header row on each page	Repetir como fila de encabezado en cada página
+	Vertical alignment:	Alineación vertical:
+	Top	Arriba
+	Bottom	Abajo
 	Alt text	Texto alternativo
 	Alt:	Alt.:
 	W:	An.:

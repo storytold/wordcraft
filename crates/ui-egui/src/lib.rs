@@ -964,8 +964,9 @@ fn keeps_everything(name: &str) -> bool {
 
 /// The dialog a user-run command opens when it lacks the input it needs (scripts and agents get
 /// the command's own error or default instead): Select Recipients and Edit Recipient List without
-/// data, Insert Merge Field without a field, Find Recipient without text, and the If and Skip
-/// Record If rules (or Rules with no rule at all) without a field.
+/// data, Insert Merge Field without a field, Find Recipient without text, the If and Skip
+/// Record If rules (or Rules with no rule at all) without a field, and Table Properties without
+/// settings.
 fn input_dialog(id: &str, params: &Value) -> Option<&'static str> {
     let has = |k: &str| params.get(k).is_some_and(|v| !v.is_null());
     let rule = params.get("rule").and_then(Value::as_str).map(str::to_ascii_uppercase);
@@ -979,6 +980,8 @@ fn input_dialog(id: &str, params: &Value) -> Option<&'static str> {
         "mailings.editRecipients" if !has("rows") => Some("recipientList"),
         "mailings.insertField" if !has("field") => Some("insertMergeField"),
         "mailings.findRecipient" if !has("text") => Some("findRecipient"),
+        // Table Properties without settings shows the dialog (with settings it applies them).
+        "table.properties" if params.as_object().is_none_or(|m| m.is_empty()) => Some("tableProperties"),
         _ => None,
     }
 }
@@ -1061,6 +1064,33 @@ mod tests {
 
     fn app() -> WordApp {
         WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default())
+    }
+
+    /// Table Layout › Properties (#44) opens the dialog from the ribbon; OK sends only what
+    /// changed, as one `table.properties` step. Scripts with settings never see the dialog.
+    #[test]
+    fn table_properties_button_opens_the_dialog() {
+        let mut a = app();
+        a.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+        a.run("table.properties", json!({})).unwrap();
+        let Some(dialogs::Dialog::TableProperties { form, basis }) = a.dialog.clone() else { panic!("no dialog: {:?}", a.dialog) };
+        assert_eq!(form.changes(&basis), json!({}), "untouched, nothing changes");
+        let mut f = (*form).clone();
+        f.align = "center".into();
+        f.row_height_on = true;
+        f.row_height = 0.5;
+        f.row_exact = true;
+        f.header_row = true;
+        let changes = f.changes(&basis);
+        assert_eq!(changes, json!({"align": "center", "rowHeight": 36.0, "rowHeightRule": "exact", "headerRow": true}));
+        a.dialog = None;
+        a.run("table.properties", changes).unwrap();
+        assert!(a.dialog.is_none(), "settings apply without the dialog");
+        let (tp, _, _) = a.session.sel.focus.path.cell().unwrap();
+        let t = a.session.doc.table(a.session.sel.focus.story, &tp).unwrap();
+        assert_eq!(t.props.align, Some(wordcraft_doc::props::Align::Center));
+        assert_eq!((t.rows[0].props.height, t.rows[0].props.header), (Some(36.0), true));
+        assert_eq!(dialogs::TableForm::read(&a).unwrap().changes(&f), json!({}), "the dialog reopens with the new values");
     }
 
     /// Issue #139: Ctrl+wheel over the page didn't zoom.

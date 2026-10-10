@@ -1013,6 +1013,21 @@
 	Dark	Темна
 	Use system setting	Як у системі
 	A file dialog is already open.	Діалогове вікно файлу вже відкрито.
+	Height:	Висота:
+	Width:	Ширина:
+	Row	Рядок
+	Cell	Клітинка
+	Preferred width:	Бажана ширина:
+	Alignment:	Вирівнювання:
+	Indent from left:	Відступ ліворуч:
+	Specify height:	Указати висоту:
+	Exactly	Точно
+	At least	Принаймні
+	Allow row to break across pages	Дозволити розрив рядка між сторінками
+	Repeat as header row on each page	Повторювати як рядок заголовка на кожній сторінці
+	Vertical alignment:	Вертикальне вирівнювання:
+	Top	Угорі
+	Bottom	Унизу
 	Alt text	Альтернативний текст
 	Alt:	Альт.:
 	W:	Ш:
