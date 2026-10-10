@@ -523,6 +523,151 @@ fn clipboard_round_trip() {
     assert_eq!(text(&s), "plain\ntext");
 }
 
+fn bold_at(s: &Session, block: usize, off: usize) -> bool {
+    let pos = Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(block), off };
+    s.doc.para_at(&pos).and_then(|p| p.props_of_char(off).bold).unwrap_or(false)
+}
+
+#[test]
+fn paste_special_lists_formats_and_pastes_text_without_formatting() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Bold words"}));
+    run(&mut s, "select.text", json!({"text": "Bold"}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "edit.copy", json!({}));
+    // No format: the formats are listed (and a front end is asked to show the dialog).
+    let r = run(&mut s, "edit.pasteSpecial", json!({}));
+    let ids: Vec<&str> = r["formats"].as_array().unwrap().iter().map(|f| f["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["formatted", "text"]);
+    assert_eq!(s.ui_requests.last().unwrap()["open"], "pasteSpecial");
+    run(&mut s, "caret.docEnd", json!({}));
+    let r = run(&mut s, "edit.pasteSpecial", json!({"as": "text"}));
+    assert_eq!(r["pastedAs"], "text");
+    assert_eq!(text(&s), "Bold wordsBold");
+    assert!(bold_at(&s, 0, 0));
+    assert!(!bold_at(&s, 0, 11), "unformatted text drops the bold");
+    // Formatted keeps it.
+    run(&mut s, "edit.pasteSpecial", json!({"as": "formatted"}));
+    assert_eq!(text(&s), "Bold wordsBoldBold");
+    assert!(bold_at(&s, 0, 15));
+    // Text that someone else copied since: our rich copy is no longer offered.
+    let r = run(&mut s, "edit.pasteSpecial", json!({"text": "elsewhere"}));
+    assert_eq!(r["formats"].as_array().unwrap().len(), 1);
+    assert!(s.run("edit.pasteSpecial", &json!({"as": "formatted", "text": "elsewhere"})).is_err());
+}
+
+#[test]
+fn paste_special_html_and_rtf_keep_bold() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "x"}));
+    run(&mut s, "caret.docEnd", json!({}));
+    let html = "<p>plain <b>strong</b></p>";
+    let r = run(&mut s, "edit.pasteSpecial", json!({"html": html, "text": "plain strong"}));
+    let ids: Vec<&str> = r["formats"].as_array().unwrap().iter().map(|f| f["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["html", "text"]);
+    run(&mut s, "edit.pasteSpecial", json!({"as": "html", "html": html}));
+    assert_eq!(text(&s), "xplain strong");
+    assert!(!bold_at(&s, 0, 2));
+    assert!(bold_at(&s, 0, 8), "the <b> run stays bold");
+    // HTML source copied as text can be pasted as HTML too.
+    run(&mut s, "document.setText", json!({"text": ""}));
+    run(&mut s, "edit.pasteSpecial", json!({"as": "html", "text": "<b>hi</b> there</p>"}));
+    assert_eq!(text(&s), "hi there");
+    assert!(bold_at(&s, 0, 0) && !bold_at(&s, 0, 4));
+    // RTF.
+    run(&mut s, "document.setText", json!({"text": ""}));
+    run(&mut s, "edit.pasteSpecial", json!({"as": "rtf", "rtf": r"{\rtf1\ansi {\b bold}\b0  then}"}));
+    assert!(text(&s).starts_with("bold"), "{}", text(&s));
+    assert!(bold_at(&s, 0, 0));
+    // Asking for a format the clipboard lacks is an error, not a panic.
+    assert!(s.run("edit.pasteSpecial", &json!({"as": "rtf", "text": "plain"})).is_err());
+    assert!(s.run("edit.pasteSpecial", &json!({"as": "bogus", "text": "plain"})).is_err());
+    let huge = "a".repeat(crate::cmd::paste::MAX_PASTE_BYTES + 1);
+    assert!(s.run("edit.pasteSpecial", &json!({"as": "text", "text": huge})).is_err());
+}
+
+#[test]
+fn paste_special_respects_track_changes_and_brings_lists() {
+    let mut s = s();
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "edit.pasteSpecial", json!({"as": "html", "html": "<ul><li>one</li><li>two</li></ul>"}));
+    assert!(text(&s).starts_with("one\ntwo"), "{}", text(&s));
+    let ch = run(&mut s, "review.changes", json!({}));
+    assert!(!ch.as_array().unwrap().is_empty(), "the paste is a tracked insertion");
+    let first = s.doc.body.first().and_then(|b| b.as_para()).unwrap();
+    let n = first.props.numbering.expect("list kept");
+    assert!(s.doc.numbering.nums.iter().any(|x| x.id == n.num), "the list definition came along");
+    run(&mut s, "review.acceptAll", json!({}));
+    assert!(text(&s).starts_with("one\ntwo"));
+}
+
+#[test]
+fn clipboard_pane_collects_copies_and_pastes_one_undoably() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "one two three"}));
+    for (a, b) in [(0, 3), (4, 7), (8, 13)] {
+        run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": a}, "focus": {"block": 0, "off": b}}));
+        run(&mut s, "edit.copy", json!({}));
+    }
+    // Copying the same text again adds nothing.
+    run(&mut s, "edit.copy", json!({}));
+    let items = run(&mut s, "edit.clipboardItems", json!({}));
+    let previews: Vec<&str> = items.as_array().unwrap().iter().map(|i| i["preview"].as_str().unwrap()).collect();
+    assert_eq!(previews, ["three", "two", "one"], "newest first");
+    assert_eq!(run(&mut s, "edit.clipboardPane", json!({}))["value"], true);
+    assert!(s.view.clipboard_pane);
+
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "edit.pasteClipboardItem", json!({"index": 1}));
+    assert_eq!(text(&s), "one two threetwo");
+    assert_eq!(s.clipboard_text, "three", "the clipboard itself is unchanged");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(text(&s), "one two three");
+
+    run(&mut s, "edit.pasteAllClipboard", json!({}));
+    assert_eq!(text(&s), "one two threeonetwothree", "Paste All goes in copy order");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(text(&s), "one two three", "Paste All is one undo step");
+
+    let left = run(&mut s, "edit.deleteClipboardItem", json!({"index": 0}));
+    assert_eq!(left[0]["preview"], "two");
+    run(&mut s, "edit.clearClipboard", json!({}));
+    assert!(s.clip_history.is_empty());
+    assert!(s.run("edit.pasteClipboardItem", &json!({"index": 0})).is_err());
+}
+
+#[test]
+fn clipboard_pane_is_capped_and_rejects_bad_indexes() {
+    let mut s = s();
+    let words: Vec<String> = (0..30).map(|i| format!("w{i}")).collect();
+    run(&mut s, "document.setText", json!({"text": words.join(" ")}));
+    // Cutting each word in turn leaves the spaces: word `off` starts at `off`.
+    for (off, w) in words.iter().enumerate() {
+        run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": off}, "focus": {"block": 0, "off": off + w.len()}}));
+        run(&mut s, "edit.cut", json!({}));
+    }
+    let items = run(&mut s, "edit.clipboardItems", json!({}));
+    let items = items.as_array().unwrap();
+    assert_eq!(items.len(), crate::cmd::edit::CLIP_MAX_ITEMS);
+    assert_eq!(items[0]["preview"], "w29");
+    assert_eq!(items[23]["preview"], "w6", "the oldest drop out");
+
+    let before = text(&s);
+    for bad in [json!({"index": 24}), json!({"index": -1}), json!({"index": 1e300}), json!({"index": "x"}), json!({})] {
+        assert!(s.run("edit.pasteClipboardItem", &bad).is_err(), "{bad}");
+        assert!(s.run("edit.deleteClipboardItem", &bad).is_err(), "{bad}");
+    }
+    assert_eq!(text(&s), before);
+    assert_eq!(s.clip_history.len(), 24);
+
+    // A huge copy still reaches the clipboard but is not collected.
+    run(&mut s, "document.setText", json!({"text": "x".repeat(3 << 20)}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "edit.copy", json!({}));
+    assert_eq!(s.clipboard_text.len(), 3 << 20);
+    assert_eq!(s.clip_history.items()[0].text, "w29");
+}
+
 #[test]
 fn tables_commands() {
     let mut s = s();
@@ -1687,18 +1832,220 @@ fn styles_apply_rejected_on_protected_document() {
     assert_eq!(s.undo_labels(), undo);
 }
 
-/// Comments, revisions and dates read the real clock (#188: the web stamped 2026-01-01).
-#[test]
-fn timestamps_come_from_the_clock() {
-    let before = cmd::now_unix();
-    assert!(before > 1_760_000_000, "{before}");
+fn column_doc() -> Session {
     let mut s = s();
-    run(&mut s, "text.insert", json!({"text": "Dated"}));
-    run(&mut s, "select.text", json!({"text": "Dated"}));
-    run(&mut s, "review.newComment", json!({"text": "When?"}));
-    let date = run(&mut s, "review.comments", json!({}))[0]["date"].as_str().unwrap_or_default().to_string();
-    // Fixed-width ISO strings sort by time.
-    assert!(date >= cmd::iso_from_unix_secs(before) && date <= cmd::iso_from_unix_secs(cmd::now_unix()), "{date}");
+    run(&mut s, "document.setText", json!({"text": "abcdef\nabcdef\nabcdef"}));
+    s
+}
+
+fn block(s: &mut Session) {
+    let a = serde_json::to_value(Pos::body(0, 2)).unwrap();
+    let f = serde_json::to_value(Pos::body(2, 4)).unwrap();
+    let r = run(s, "select.column", json!({"anchor": a, "focus": f}));
+    assert_eq!(r["rows"], json!(["cd", "cd", "cd"]));
+}
+
+#[test]
+fn column_selection_copies_the_block() {
+    let mut s = column_doc();
+    block(&mut s);
+    let r = run(&mut s, "edit.copy", json!({}));
+    assert_eq!(r["text"], "cd\ncd\ncd");
+    assert_eq!(s.clipboard.as_ref().map(|f| f.blocks.len()), Some(3));
+    // A caret move drops the block; pasting the copy gives three paragraphs.
+    run(&mut s, "caret.docEnd", json!({}));
+    assert!(s.column_segments().is_none());
+    s.autocorrect_on = false;
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "edit.paste", json!({}));
+    assert_eq!(text(&s), "abcdef\nabcdef\nabcdef\ncd\ncd\ncd");
+}
+
+#[test]
+fn column_selection_deletes_only_the_block() {
+    let mut s = column_doc();
+    block(&mut s);
+    run(&mut s, "text.delete", json!({}));
+    assert_eq!(text(&s), "abef\nabef\nabef");
+    assert_eq!(s.sel, crate::Selection::caret(Pos::body(0, 2)));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(text(&s), "abcdef\nabcdef\nabcdef");
+    // Cut copies and deletes; typing replaces the block.
+    block(&mut s);
+    let r = run(&mut s, "edit.cut", json!({}));
+    assert_eq!(r["text"], "cd\ncd\ncd");
+    assert_eq!(text(&s), "abef\nabef\nabef");
+    run(&mut s, "edit.undo", json!({}));
+    block(&mut s);
+    run(&mut s, "text.insert", json!({"text": "X"}));
+    assert_eq!(text(&s), "abXef\nabef\nabef");
+}
+
+#[test]
+fn column_selection_formats_each_row() {
+    let mut s = column_doc();
+    block(&mut s);
+    run(&mut s, "format.bold", json!({}));
+    for i in 0..3 {
+        let p = s.doc.para_at(&Pos::body(i, 0)).unwrap();
+        assert_ne!(p.props_of_char(1).bold, Some(true));
+        assert_eq!(p.props_of_char(2).bold, Some(true));
+        assert_eq!(p.props_of_char(3).bold, Some(true));
+        assert_ne!(p.props_of_char(4).bold, Some(true));
+    }
+    // The block survives formatting, and a second Bold turns it off again.
+    assert!(s.column_segments().is_some());
+    run(&mut s, "format.bold", json!({}));
+    assert_ne!(s.doc.para_at(&Pos::body(1, 0)).unwrap().props_of_char(2).bold, Some(true));
+    run(&mut s, "format.changeCase", json!({"mode": "upper"}));
+    assert_eq!(text(&s), "abCDef\nabCDef\nabCDef");
+}
+
+#[test]
+fn column_mode_extends_with_the_arrow_keys() {
+    let mut s = column_doc();
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 1}}));
+    let r = run(&mut s, "select.column", json!({}));
+    assert_eq!(r["columnMode"], true);
+    run(&mut s, "caret.right", json!({}));
+    run(&mut s, "caret.right", json!({}));
+    run(&mut s, "caret.down", json!({}));
+    let r = run(&mut s, "caret.down", json!({}));
+    assert_eq!(r["rows"], json!(["bc", "bc", "bc"]));
+    run(&mut s, "text.backspace", json!({}));
+    assert_eq!(text(&s), "adef\nadef\nadef");
+    assert!(!s.column_mode);
+    // Escape leaves the mode.
+    run(&mut s, "select.column", json!({}));
+    run(&mut s, "select.collapse", json!({}));
+    assert!(!s.column_mode);
+}
+
+#[test]
+fn column_selection_from_points() {
+    let mut s = column_doc();
+    let l = s.layout();
+    let a = l.caret(&Pos::body(0, 1)).unwrap();
+    let b = l.caret(&Pos::body(1, 5)).unwrap();
+    let r = run(
+        &mut s,
+        "select.column",
+        json!({"from": {"page": a.page, "x": a.x, "y": a.top + 2.0}, "to": {"page": b.page, "x": b.x, "y": b.top + 2.0}}),
+    );
+    assert_eq!(r["rows"], json!(["bcde", "bcde"]));
+    for bad in [
+        json!({"from": {"page": 99, "x": 1, "y": 1}, "to": {"page": 0, "x": 1, "y": 1}}),
+        json!({"from": 1, "to": "x"}),
+        json!({"anchor": 1, "focus": {}}),
+    ] {
+        assert!(s.run("select.column", &bad).is_err());
+    }
+}
+
+#[test]
+fn style_inspector_reports_and_clears_levels() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Chapter one"}));
+    run(&mut s, "para.heading1", json!({}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    run(&mut s, "para.alignCenter", json!({}));
+
+    let r = run(&mut s, "styles.inspect", json!({}));
+    assert_eq!(r["paragraph"]["style"], "Heading1");
+    assert_eq!(r["paragraph"]["styleName"], "Heading 1");
+    let pdirect = r["paragraph"]["direct"].as_array().unwrap();
+    assert!(pdirect.iter().any(|d| d["prop"] == "align" && d["value"] == "center"), "{pdirect:?}");
+    assert!(r["character"]["style"].is_null());
+    let cdirect = r["character"]["direct"].as_array().unwrap();
+    assert_eq!(cdirect, &vec![json!({"prop": "bold", "value": true})]);
+
+    // Formatting that matches the style isn't a difference (Heading 1 is 20 pt).
+    run(&mut s, "format.size", json!({"size": 20}));
+    let r = run(&mut s, "styles.inspect", json!({}));
+    assert_eq!(r["character"]["direct"].as_array().unwrap().len(), 1, "{r}");
+
+    // Character style level.
+    run(&mut s, "format.charStyle", json!({"style": "Emphasis"}));
+    let r = run(&mut s, "styles.inspect", json!({}));
+    assert_eq!(r["character"]["style"], "Emphasis");
+    assert_eq!(r["character"]["styleName"], "Emphasis");
+    run(&mut s, "styles.inspectorClear", json!({"level": "characterStyle"}));
+    assert!(run(&mut s, "styles.inspect", json!({}))["character"]["style"].is_null());
+
+    // Clearing character formatting removes the bold and keeps the paragraph levels.
+    run(&mut s, "styles.inspectorClear", json!({"level": "characterFormatting"}));
+    let r = run(&mut s, "styles.inspect", json!({}));
+    assert!(r["character"]["direct"].as_array().unwrap().is_empty(), "{r}");
+    assert!(!run(&mut s, "format.state", json!({}))["bold"].as_bool().unwrap());
+    assert_eq!(r["paragraph"]["style"], "Heading1");
+    assert!(!r["paragraph"]["direct"].as_array().unwrap().is_empty());
+
+    run(&mut s, "styles.inspectorClear", json!({"level": "paragraphFormatting"}));
+    let r = run(&mut s, "styles.inspect", json!({}));
+    assert!(r["paragraph"]["direct"].as_array().unwrap().is_empty(), "{r}");
+    assert_eq!(r["paragraph"]["style"], "Heading1");
+
+    run(&mut s, "styles.inspectorClear", json!({"level": "paragraphStyle"}));
+    assert_eq!(run(&mut s, "styles.inspect", json!({}))["paragraph"]["style"], "Normal");
+
+    // Each clear is one undo step.
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(run(&mut s, "styles.inspect", json!({}))["paragraph"]["style"], "Heading1");
+    assert_eq!(text(&s), "Chapter one");
+}
+
+#[test]
+fn style_inspector_pane_and_hostile_params() {
+    let mut s = Session::new(crate::sample::sample_document());
+    let r = run(&mut s, "styles.inspector", json!({}));
+    assert_eq!(r["pane"], true);
+    assert!(s.view.style_inspector);
+    assert_eq!(r["paragraph"]["styleName"], "Title");
+    let r = run(&mut s, "styles.inspector", json!({"value": false}));
+    assert_eq!(r["pane"], false);
+    let before = text(&s);
+    for junk in [json!(null), json!({}), json!({"level": 5}), json!({"level": "everything"}), json!({"level": ""})] {
+        assert!(s.run("styles.inspectorClear", &junk).is_err(), "{junk}");
+    }
+    assert_eq!(text(&s), before);
+    assert!(s.run("styles.inspector", &json!({"value": "yes"})).is_ok());
+    // A selection reaching far outside the document.
+    s.sel.focus = Pos::body(9999, 99999);
+    s.sel.anchor = Pos::body(0, 0);
+    assert!(s.run("styles.inspect", &json!({})).is_ok());
+    assert!(s.run("styles.inspectorClear", &json!({"level": "characterFormatting"})).is_ok());
+}
+
+/// Home › Editing › Find › Advanced Find: every match, in the body or a selection, with Reading Highlight.
+#[test]
+fn advanced_find_lists_and_highlights_matches() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "cat dog cat"}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Cat"}));
+    // From the UI it opens the dialog.
+    run(&mut s, "edit.advancedFind", json!({}));
+    assert_eq!(s.ui_requests.last(), Some(&json!({"open": "find"})));
+    let r = run(&mut s, "edit.advancedFind", json!({"text": "cat", "highlight": true}));
+    assert_eq!(r["count"], 3);
+    assert_eq!(s.find_highlights().len(), 3);
+    assert_eq!(run(&mut s, "edit.advancedFind", json!({"text": "cat", "matchCase": true}))["count"], 2);
+    // Highlights follow edits and the latest search.
+    assert_eq!(s.find_highlights().len(), 2);
+    run(&mut s, "text.insert", json!({"text": " cat"}));
+    assert_eq!(s.find_highlights().len(), 3);
+    // Only inside the selection.
+    run(&mut s, "select.text", json!({"text": "cat dog"}));
+    assert_eq!(run(&mut s, "edit.advancedFind", json!({"text": "cat", "in": "selection"}))["count"], 1);
+    run(&mut s, "edit.advancedFind", json!({"highlight": false}));
+    assert!(s.find_highlights().is_empty());
+    // Hostile params.
+    assert!(s.run("edit.advancedFind", &json!({"text": "x", "in": "elsewhere"})).is_err());
+    assert!(s.run("edit.advancedFind", &json!({"text": "(", "regex": true})).is_err());
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "text.delete", json!({}));
+    assert!(s.run("edit.advancedFind", &json!({"text": "x", "in": "selection"})).is_err());
 }
 
 /// #146: a table style made by command styles the table at the caret (header row fill and bold
@@ -1762,6 +2109,92 @@ fn custom_table_style_applies_modifies_and_saves() {
     assert!(parts.header_borders.is_some_and(|b| b.any_visible()));
     let t = back.body.iter().find_map(|b| b.as_table()).unwrap();
     assert_eq!(t.props.style.as_deref(), Some(id.as_str()), "w:tblStyle");
+}
+
+#[test]
+fn page_and_table_gridlines_toggle_independently() {
+    // #69: View › Gridlines (the page drawing grid) and Table Layout › View Gridlines (table cell
+    // outlines) are separate view switches; neither touches the document or the undo stack.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    let undo = s.undo_labels();
+    assert!(!s.view.gridlines && !s.view.table_gridlines);
+
+    assert_eq!(run(&mut s, "view.gridlines", json!({}))["value"], true);
+    assert!(s.view.gridlines && !s.view.table_gridlines);
+
+    // Works with the caret outside a table.
+    assert_eq!(run(&mut s, "table.viewGridlines", json!({}))["value"], true);
+    assert!(s.view.gridlines && s.view.table_gridlines);
+
+    assert_eq!(run(&mut s, "view.gridlines", json!({"value": false}))["value"], false);
+    assert!(!s.view.gridlines && s.view.table_gridlines);
+    assert_eq!(run(&mut s, "view.gridlines", json!({"value": false}))["value"], false);
+    assert!(!s.view.gridlines);
+
+    assert_eq!(run(&mut s, "table.viewGridlines", json!({}))["value"], false);
+    assert!(!s.view.gridlines && !s.view.table_gridlines);
+
+    assert_eq!(text(&s), "Hello");
+    assert_eq!(s.undo_labels(), undo);
+    let state = run(&mut s, "view.state", json!({}));
+    assert_eq!(state["gridlines"], false);
+    assert_eq!(state["tableGridlines"], false);
+}
+
+/// Issue #67: View › Zoom steps. Zoom In/Out leave a fit mode and step 10% from the current zoom
+/// (the UI keeps `view.zoom` equal to the shown zoom while a fit mode is on), and never get stuck
+/// short of the 10%–500% limits.
+#[test]
+fn zoom_in_and_out_step_from_current_zoom_and_leave_fit_modes() {
+    let mut s = s();
+    let pct = |s: &Session| (s.view.zoom * 100.0).round() as i32;
+    run(&mut s, "view.zoomIn", json!({}));
+    assert_eq!(pct(&s), 110);
+    run(&mut s, "view.zoomOut", json!({}));
+    run(&mut s, "view.zoomOut", json!({}));
+    assert_eq!(pct(&s), 90);
+    for fit in ["view.pageWidth", "view.onePage", "view.multiplePages"] {
+        run(&mut s, fit, json!({}));
+        assert!(!s.view.fit.is_empty());
+        // What the canvas reports while a fit mode shows the page at 163%.
+        s.view.zoom = 1.63;
+        run(&mut s, "view.zoomIn", json!({}));
+        assert_eq!((pct(&s), s.view.fit.as_str(), s.view.multi_page), (170, "", false), "{fit}");
+        run(&mut s, fit, json!({}));
+        s.view.zoom = 1.63;
+        run(&mut s, "view.zoomOut", json!({}));
+        assert_eq!((pct(&s), s.view.fit.as_str()), (150, ""), "{fit}");
+    }
+    let mut last = pct(&s);
+    for _ in 0..60 {
+        run(&mut s, "view.zoomIn", json!({}));
+        assert!(pct(&s) > last || pct(&s) == 500);
+        last = pct(&s);
+    }
+    assert_eq!(last, 500);
+    for _ in 0..60 {
+        run(&mut s, "view.zoomOut", json!({}));
+        assert!(pct(&s) < last || pct(&s) == 10);
+        last = pct(&s);
+    }
+    assert_eq!(last, 10);
+    run(&mut s, "view.zoom100", json!({}));
+    assert_eq!(pct(&s), 100);
+}
+
+/// Comments, revisions and dates read the real clock (#188: the web stamped 2026-01-01).
+#[test]
+fn timestamps_come_from_the_clock() {
+    let before = cmd::now_unix();
+    assert!(before > 1_760_000_000, "{before}");
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Dated"}));
+    run(&mut s, "select.text", json!({"text": "Dated"}));
+    run(&mut s, "review.newComment", json!({"text": "When?"}));
+    let date = run(&mut s, "review.comments", json!({}))[0]["date"].as_str().unwrap_or_default().to_string();
+    // Fixed-width ISO strings sort by time.
+    assert!(date >= cmd::iso_from_unix_secs(before) && date <= cmd::iso_from_unix_secs(cmd::now_unix()), "{date}");
 }
 
 /// #146: the first/last column, total row and banded column regions apply in layout (later

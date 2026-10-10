@@ -119,6 +119,15 @@
 	Clear	Limpar
 	Clear All Formatting	Limpar toda a formatação
 	Clipboard	Área de transferência
+	Clipboard Pane	Painel da área de transferência
+	Clipboard Items	Itens da área de transferência
+	Paste Clipboard Item	Colar item da área de transferência
+	Paste All	Colar tudo
+	Delete Clipboard Item	Excluir item da área de transferência
+	Clear All	Limpar tudo
+	Click an item to paste it.	Clique em um item para colá-lo.
+	Nothing collected yet. Items you copy or cut appear here.	Nada coletado ainda. Os itens que você copiar ou recortar aparecem aqui.
+	(picture or object)	(imagem ou objeto)
 	Close	Fechar
 	Close Header and Footer	Fechar cabeçalho e rodapé
 	Collapse Selection	Recolher seleção
@@ -890,6 +899,68 @@
 	Opening print dialog…	Abrindo a caixa de diálogo de impressão…
 	Print failed: {error}	Falha na impressão: {error}
 	Couldn't open {path}: {error}	Não foi possível abrir {path}: {error}
+	Column Selection	Seleção de coluna
+	Style Inspector	Inspetor de estilos
+	Inspect Styles at Selection	Inspecionar estilos na seleção
+	Clear Formatting Level	Limpar nível de formatação
+	Characters	Caracteres
+	Direct formatting	Formatação direta
+	Reset to Normal	Redefinir para Normal
+	Clear Paragraph Formatting	Limpar formatação do parágrafo
+	Clear Character Style	Limpar estilo de caractere
+	Clear Character Formatting	Limpar formatação de caractere
+	Paste Special	Colar especial
+	Paste Special…	Colar especial…
+	Paste as:	Colar como:
+	The clipboard is empty.	A área de transferência está vazia.
+	Formatted Text	Texto formatado
+	Rich Text Format (RTF)	Rich Text Format (RTF)
+	HTML Format	Formato HTML
+	Unformatted Text	Texto sem formatação
+	Result	Resultado
+	Keeps the fonts and formatting of the copied text.	Mantém as fontes e a formatação do texto copiado.
+	Reads the clipboard's rich text and keeps its formatting.	Lê o rich text da área de transferência e mantém a formatação.
+	Reads the clipboard's web content and keeps its formatting.	Lê o conteúdo web da área de transferência e mantém a formatação.
+	Drops all formatting and pastes plain text.	Remove toda a formatação e cola texto simples.
+	Advanced Find	Localização avançada
+	Advanced Find…	Localização avançada…
+	Go To…	Ir para…
+	Reading Highlight	Realçar resultados
+	New Table Style	Novo estilo de tabela
+	Modify Table Style	Modificar estilo de tabela
+	New Table Style…	Novo estilo de tabela…
+	Modify Table Style…	Modificar estilo de tabela…
+	Apply formatting to:	Aplicar formatação a:
+	Whole Table	Tabela inteira
+	Fill color:	Cor de preenchimento:
+	{count} items highlighted	{count} itens realçados
+	{n} pt	{n} pt
+	Not {name}	Sem {name}
+	Level {n}	Nível {n}
+	Body Text	Corpo do texto
+	{n} lines	{n} linhas
+	At least {n}	Pelo menos {n}
+	Exactly {n}	Exatamente {n}
+	Centered	Centralizado
+	Character spacing	Espaçamento entre caracteres
+	Don't add space between paragraphs of the same style	Não adicionar espaço entre parágrafos do mesmo estilo
+	Don't hyphenate	Não hifenizar
+	Double strikethrough	Tachado duplo
+	Drop cap	Capitular
+	First line	Primeira linha
+	Font color	Cor da fonte
+	Highlight	Realce
+	Justified	Justificado
+	Left indent	Recuo à esquerda
+	Line spacing	Espaçamento entre linhas
+	Outline level	Nível de tópicos
+	Raised/lowered	Elevado/rebaixado
+	Right indent	Recuo à direita
+	Scale	Escala
+	Space after	Espaço depois
+	Space before	Espaço antes
+	Suppress line numbers	Suprimir números de linha
+	Underline color	Cor do sublinhado
 	Letters	Cartas
 	E-mail Messages	Mensagens de email
 	Directory	Diretório
@@ -943,12 +1014,5 @@
 	Dark	Escuro
 	Use system setting	Usar a configuração do sistema
 	A file dialog is already open.	Já há uma caixa de diálogo de arquivo aberta.
-	New Table Style	Novo estilo de tabela
-	Modify Table Style	Modificar estilo de tabela
-	New Table Style…	Novo estilo de tabela…
-	Modify Table Style…	Modificar estilo de tabela…
-	Apply formatting to:	Aplicar formatação a:
-	Whole Table	Tabela inteira
-	Fill color:	Cor de preenchimento:
 	Delete Table Style	Excluir estilo de tabela
 	Preview	Visualização

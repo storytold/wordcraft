@@ -241,11 +241,12 @@ fn mi_check(ui: &mut Ui, app: &mut WordApp, label: &str, checked: bool, id: &str
 fn home(app: &mut WordApp, ui: &mut Ui) {
     let st = app.session.run("format.state", &json!({})).unwrap_or_default();
     let flag = |k: &str| st.get(k).and_then(Value::as_bool).unwrap_or(false);
-    group(ui, "Clipboard", None, app, |ui, app| {
+    group(ui, "Clipboard", Some("edit.clipboardPane"), app, |ui, app| {
         menu_button(ui, app, "paste", Some("Paste"), "Paste (⌘V)", true, |ui, app| {
             mi(ui, app, "Paste", "edit.paste", json!({}));
             mi(ui, app, "Keep Text Only", "edit.pasteText", json!({}));
             mi(ui, app, "Merge Formatting", "edit.pasteMerge", json!({}));
+            mi(ui, app, "Paste Special…", "edit.pasteSpecial", json!({}));
         });
         stack(ui, |ui| {
             small(ui, app, "cut", Some("Cut"), "Cut", "edit.cut", json!({}), false);
@@ -457,7 +458,11 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Editing", None, app, |ui, app| {
         stack(ui, |ui| {
-            small(ui, app, "find", Some("Find"), "Find", "ui.dialog", json!({"name": "find"}), false).clicked();
+            menu_button(ui, app, "find", Some("Find"), "Find", false, |ui, app| {
+                mi(ui, app, "Find", "ui.dialog", json!({"name": "find"}));
+                mi(ui, app, "Advanced Find…", "edit.advancedFind", json!({}));
+                mi(ui, app, "Go To…", "ui.dialog", json!({"name": "goto"}));
+            });
             small(ui, app, "replace", Some("Replace"), "Replace", "ui.dialog", json!({"name": "replace"}), false);
             menu_button(ui, app, "select", Some("Select"), "Select", false, |ui, app| {
                 mi(ui, app, "Select All", "select.all", json!({}));
@@ -1044,6 +1049,11 @@ fn view(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Zoom", None, app, |ui, app| {
         big(ui, app, "zoom", "Zoom", "ui.dialog", json!({"name": "zoom"}), false);
         big(ui, app, "zoom100", "100%", "view.zoom100", json!({}), false);
+        // Step the zoom up and down by 10% (issue #67), from whatever the page shows now.
+        stack(ui, |ui| {
+            small(ui, app, "zoomIn", Some("Zoom In"), "Zoom In", "view.zoomIn", json!({}), false);
+            small(ui, app, "zoomOut", Some("Zoom Out"), "Zoom Out", "view.zoomOut", json!({}), false);
+        });
         stack(ui, |ui| {
             small(ui, app, "onePage", Some("One Page"), "One Page", "view.onePage", json!({}), v.fit == "onePage");
             small(ui, app, "multiplePages", Some("Multiple Pages"), "Multiple Pages", "view.multiplePages", json!({}), v.multi_page);
@@ -1311,8 +1321,8 @@ fn table_layout(app: &mut WordApp, ui: &mut Ui) {
                 mi(ui, app, "Select Row", "table.selectRow", json!({}));
                 mi(ui, app, "Select Table", "table.selectTable", json!({}));
             });
-            let g = app.session.view.gridlines;
-            small(ui, app, "gridlines", Some("View Gridlines"), "View Gridlines", "view.gridlines", json!({}), g);
+            let g = app.session.view.table_gridlines;
+            small(ui, app, "gridlines", Some("View Gridlines"), "View Gridlines", "table.viewGridlines", json!({}), g);
             small(ui, app, "properties", Some("Properties"), "Table Properties", "table.properties", json!({}), false);
         });
     });
