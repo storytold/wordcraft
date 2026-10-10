@@ -45,13 +45,7 @@ fn header(ui: &mut Ui, title: &str) -> bool {
         ui.label(egui::RichText::new(tl!(title)).font(semibold(15.0)));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             // Drawn, not the "✕" character: the interface fonts have no glyph for it.
-            let t = crate::theme::Tokens::get(ui.ctx());
-            let (r, resp) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::click());
-            if resp.hovered() {
-                ui.painter().rect_filled(r, 4.0, t.hover);
-            }
-            crate::icons::paint(ui.painter(), egui::Rect::from_center_size(r.center(), egui::vec2(14.0, 14.0)), "close", t.icon, t.accent);
-            if resp.on_hover_text(tl!("Close")).clicked() {
+            if crate::widgets::icon_button(ui, "close", tl!("Close")).clicked() {
                 close = true;
             }
         });
