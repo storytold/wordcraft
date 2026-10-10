@@ -212,19 +212,26 @@ pub fn split_para(s: &mut Session, at: &Pos) -> Result<Pos, CmdError> {
     Ok(new)
 }
 
+/// ISO-8601 timestamp (UTC, seconds) for `secs` since the Unix epoch.
+fn iso_from_unix_secs(secs: u64) -> String {
+    let (y, m, d) = civil_from_days((secs / 86_400) as i64);
+    let t = secs % 86_400;
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", t / 3600, t / 60 % 60, t % 60)
+}
+
 /// ISO-8601 timestamp (UTC, seconds).
 pub fn now_iso() -> String {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-        let days = (secs / 86_400) as i64;
-        let (y, m, d) = civil_from_days(days);
-        let t = secs % 86_400;
-        format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", t / 3600, t / 60 % 60, t % 60)
+        iso_from_unix_secs(secs)
     }
+    // `SystemTime::now()` panics on wasm32-unknown-unknown, so ask the browser's clock.
     #[cfg(target_arch = "wasm32")]
     {
-        "2026-01-01T00:00:00Z".to_string()
+        let ms = js_sys::Date::now();
+        // Clamp a NaN or pre-epoch clock to 0 rather than fail.
+        iso_from_unix_secs(if ms.is_finite() && ms > 0.0 { (ms / 1000.0) as u64 } else { 0 })
     }
 }
 
@@ -245,4 +252,22 @@ pub fn civil_from_days(z: i64) -> (i64, u32, u32) {
 /// Story given in params (`"story": "body"` / `{"part": 3}`), else the caret's.
 pub fn story_param(s: &Session, v: &Value) -> StoryRef {
     v.get("story").and_then(|x| serde_json::from_value(x.clone()).ok()).unwrap_or(s.sel.focus.story)
+}
+
+#[cfg(test)]
+mod iso_tests {
+    use super::iso_from_unix_secs;
+
+    #[test]
+    fn formats_epoch_and_known_timestamps() {
+        assert_eq!(iso_from_unix_secs(0), "1970-01-01T00:00:00Z");
+        assert_eq!(iso_from_unix_secs(1_760_082_785), "2025-10-10T07:53:05Z");
+    }
+
+    #[test]
+    fn formats_leap_day_and_year_end() {
+        assert_eq!(iso_from_unix_secs(1_709_164_800), "2024-02-29T00:00:00Z");
+        assert_eq!(iso_from_unix_secs(951_782_400), "2000-02-29T00:00:00Z");
+        assert_eq!(iso_from_unix_secs(1_735_689_599), "2024-12-31T23:59:59Z");
+    }
 }
