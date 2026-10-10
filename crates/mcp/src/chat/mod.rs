@@ -2,6 +2,7 @@
 //! tools use these functions. Direct TCP to 127.0.0.1 (Linux, macOS, Windows, `cargo run`).
 //! Exit codes: 0 ok, 1 error, 2 usage, 3 removed from the chat, 4 window closed.
 
+mod doc;
 mod lines;
 mod link;
 mod store;
@@ -15,6 +16,7 @@ use serde_json::{Value, json};
 use wordcraft_chat::Message;
 use wordcraft_chat::rules::{normalize_handle, valid_handle};
 
+pub use doc::{ReadOpts, Step, commands, owner_selection, parse_steps, pick, read, run_steps, tracked_text, view_page};
 pub use lines::{Cursor, HISTORY, format_line};
 pub use link::{Caller, Link, LinkError};
 pub use store::{Membership, Store, window_gone};
