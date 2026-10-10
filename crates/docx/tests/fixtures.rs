@@ -963,3 +963,56 @@ fn word_group_with_nested_group() {
         .collect();
     assert_eq!(got, [(0.0, 0.0, ShapeKind::Rectangle, 100.0, 50.0), (110.0, 60.0, ShapeKind::Ellipse, 20.0, 10.0)]);
 }
+
+/// The first object of the first paragraph, made mutable.
+fn first_object(doc: &mut Document) -> &mut InlineObject {
+    let Some(wordcraft_doc::Block::Para(p)) = doc.body.first_mut().map(std::sync::Arc::make_mut) else { panic!("a paragraph") };
+    p.objects.first_mut().expect("an object")
+}
+
+/// #319 with #332: an OLE object turned or flipped in WordCraft is written back turned, in its VML
+/// shape (`rotation`, `flip`) and in a DrawingML picture (`a:xfrm` rot/flipH/flipV, with the
+/// effect extent covering the rotated bounds like other drawings).
+#[test]
+fn rotated_ole_objects_round_trip() {
+    let picture = "\u{89}PNG stand-in";
+    let ole = "\u{d0}\u{cf} opaque OLE storage";
+    let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="png" ContentType="image/png"/><Default Extension="bin" ContentType="application/vnd.openxmlformats-officedocument.oleObject"/></Types>"#;
+    let parts = [("[Content_Types].xml", types), ("word/media/image1.png", picture), ("word/embeddings/oleObject1.bin", ole)];
+    let doc_rels = [("rId8", "image", "media/image1.png"), ("rId9", "oleObject", "embeddings/oleObject1.bin")];
+    let spin = |o: &InlineObject| o.frame().map(|f| f.2.spin()).unwrap();
+
+    // VML: read turned, written with the new turn.
+    let vml = r##"<w:p><w:r><w:object w:dxaOrig="1440" w:dyaOrig="720"><v:shape id="_x0000_i1025" type="#_x0000_t75" style="width:72pt;height:36pt;rotation:30;flip:x" o:ole=""><v:imagedata r:id="rId8" o:title=""/></v:shape><o:OLEObject Type="Embed" ProgID="Package" ShapeID="_x0000_i1025" DrawAspect="Content" ObjectID="_1000000001" r:id="rId9"/></w:object></w:r></w:p>"##;
+    let mut d = wordcraft_docx::read(&docx(vml, &doc_rels, &parts)).unwrap();
+    assert_eq!(spin(&paras(&d)[0].objects[0]), wordcraft_geom::Spin::new(30.0, true, false));
+    if let Some(f) = first_object(&mut d).float_mut() {
+        f.set_spin(wordcraft_geom::Spin::new(45.0, false, true));
+    }
+    let out = wordcraft_docx::write(&d).unwrap();
+    let body = text(&unzip(&out), "word/document.xml");
+    assert_eq!(attr_values(&body, "v:shape", "style"), ["width:72pt;height:36pt;rotation:45;flip:y"]);
+    let back = wordcraft_docx::read(&out).unwrap();
+    assert!(matches!(&paras(&back)[0].objects[0], InlineObject::Image { ole: Some(_), .. }));
+    assert_eq!(spin(&paras(&back)[0].objects[0]), wordcraft_geom::Spin::new(45.0, false, true));
+
+    // DrawingML: the picture's `a:xfrm` and the drawing's effect extent follow the turn.
+    let dml = r##"<w:p><w:r><w:object w:dxaOrig="1440" w:dyaOrig="720"><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="914400" cy="457200"/><wp:docPr id="7" name="Object 7"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="0" name=""/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rId8"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm flipH="1"><a:off x="0" y="0"/><a:ext cx="914400" cy="457200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing><o:OLEObject Type="Embed" ProgID="Package" DrawAspect="Content" ObjectID="_1000000002" r:id="rId9"/></w:object></w:r></w:p>"##;
+    let mut d = wordcraft_docx::read(&docx(dml, &doc_rels, &parts)).unwrap();
+    assert_eq!(spin(&paras(&d)[0].objects[0]), wordcraft_geom::Spin::new(0.0, true, false));
+    if let Some(f) = first_object(&mut d).float_mut() {
+        f.set_spin(wordcraft_geom::Spin::new(90.0, true, false));
+    }
+    let out = wordcraft_docx::write(&d).unwrap();
+    let body = text(&unzip(&out), "word/document.xml");
+    assert_eq!(attr_values(&body, "a:xfrm", "rot"), ["5400000"]);
+    assert_eq!(attr_values(&body, "a:xfrm", "flipH"), ["1"]);
+    // 72 × 36 pt turned 90°: 18 pt narrower each side, 18 pt taller each side.
+    assert_eq!(attr_values(&body, "wp:effectExtent", "l"), ["-228600"]);
+    assert_eq!(attr_values(&body, "wp:effectExtent", "t"), ["228600"]);
+    let back = wordcraft_docx::read(&out).unwrap();
+    let o = &paras(&back)[0].objects[0];
+    assert!(matches!(o, InlineObject::Image { ole: Some(_), .. }), "{o:?}");
+    assert_eq!(spin(o), wordcraft_geom::Spin::new(90.0, true, false));
+    assert_eq!(o.frame().unwrap().2.effect, [0.0; 4], "the rotated overhang is not kept as effects room");
+}
