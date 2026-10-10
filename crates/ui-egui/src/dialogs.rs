@@ -623,6 +623,12 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                     ui.end_row();
                 }
             });
+            let mut include = stats.get("includeTextBoxes").and_then(Value::as_bool).unwrap_or(true);
+            if ui.checkbox(&mut include, tl!("Count words in text boxes and notes")).changed()
+                && let Ok(v) = app.run("review.wordCount", json!({"includeTextBoxes": include}))
+            {
+                *stats = v;
+            }
             let (ok, cancel) = buttons(ui, tl!("Close"));
             ok || cancel
         }

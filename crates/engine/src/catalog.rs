@@ -360,6 +360,28 @@ Table Layout|Data|Sort|table.sort
 Table Layout|Data|Repeat Header Rows|table.repeatHeader
 Table Layout|Data|Convert to Text|table.toText
 Table Layout|Data|Formula|table.formula
+Equation|Tools|Equation|insert.equation
+Equation|Tools|Ink Equation|insert.inkEquation
+Equation|Conversions|Unicode|equation.inputFormat
+Equation|Conversions|LaTeX|equation.inputFormat
+Equation|Conversions|Convert|equation.convert
+Equation|Conversions|Normal Text|equation.normalText
+Equation|Symbols|Symbols|equation.insertSymbol
+Equation|Structures|Fraction|equation.insertStructure
+Equation|Structures|Script|equation.insertStructure
+Equation|Structures|Radical|equation.insertStructure
+Equation|Structures|Integral|equation.insertStructure
+Equation|Structures|Large Operator|equation.insertStructure
+Equation|Structures|Bracket|equation.insertStructure
+Equation|Structures|Function|equation.insertStructure
+Equation|Structures|Accent|equation.insertStructure
+Equation|Structures|Limit and Log|equation.insertStructure
+Equation|Structures|Operator|equation.insertStructure
+Equation|Structures|Matrix|equation.insertStructure
+Equation|Equation Options|Change to Inline / Display|equation.display
+Equation|Equation Options|Justification|equation.justify
+Equation|Equation Options|Equation Number (#)|equation.number
+Equation|Equation Options|Structure Commands|equation.structure
 Picture Format|Adjust|Remove Background|picture.removeBackground
 Picture Format|Adjust|Corrections|picture.corrections
 Picture Format|Adjust|Color|picture.color

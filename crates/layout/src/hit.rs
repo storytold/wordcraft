@@ -1,7 +1,8 @@
 //! Hit testing and caret geometry.
 
+use wordcraft_doc::para::Wrap;
 use wordcraft_doc::{Document, Path, Pos, StoryRef};
-use wordcraft_geom::Rect;
+use wordcraft_geom::{Point, Rect};
 
 use crate::para::ParaLayout;
 use crate::{DocLayout, Page, Placed};
@@ -39,14 +40,80 @@ pub struct LineHit<'a> {
     pub right: f32,
 }
 
+/// A picture, shape or text box as laid out (see [`Placed::Object`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ObjectHit {
+    pub page: usize,
+    pub rect: Rect,
+    pub story: StoryRef,
+    pub path: Path,
+    pub off: usize,
+    pub text_box: Option<u32>,
+    pub wrap: Wrap,
+    /// Where column- and paragraph-relative offsets start (see [`Placed::Object`]).
+    pub origin: Point,
+}
+
+impl ObjectHit {
+    /// The object's position (its U+FFFC).
+    pub fn pos(&self) -> Pos {
+        Pos { story: self.story, path: self.path.clone(), off: self.off }
+    }
+    pub fn floating(&self) -> bool {
+        self.wrap != Wrap::Inline
+    }
+    pub fn behind(&self) -> bool {
+        self.wrap == Wrap::BehindText
+    }
+}
+
+/// A page's objects (not its header's or footer's), topmost first.
+fn objects(page: &Page, index: usize) -> impl Iterator<Item = ObjectHit> + '_ {
+    objects_in(&page.items, index)
+}
+
+/// A page's objects including its header's and footer's.
+fn all_objects(page: &Page, index: usize) -> impl Iterator<Item = ObjectHit> + '_ {
+    objects_in(&page.items, index).chain(objects_in(&page.header, index)).chain(objects_in(&page.footer, index))
+}
+
+fn objects_in(items: &[Placed], index: usize) -> impl Iterator<Item = ObjectHit> + '_ {
+    items.iter().rev().filter_map(move |it| match it {
+        Placed::Object { rect, story, path, off, text_box, wrap, origin } => Some(ObjectHit {
+            page: index,
+            rect: *rect,
+            story: *story,
+            path: path.clone(),
+            off: *off,
+            text_box: *text_box,
+            wrap: *wrap,
+            origin: *origin,
+        }),
+        _ => None,
+    })
+}
+
+/// The story of the text (not a text box's) near (x, y): body, footnotes, endnotes.
+fn text_at(p: &Page, index: usize, x: f32, y: f32) -> Option<StoryRef> {
+    let boxes: Vec<StoryRef> = objects(p, index).filter_map(|o| o.text_box.map(StoryRef::Part)).collect();
+    p.items.iter().find_map(|it| match it {
+        Placed::Lines { story, .. } if boxes.contains(story) => None,
+        Placed::Lines { story, para, l0, l1, x: lx, y: ly, .. } => {
+            let first = para.lines.get(*l0)?;
+            let last = para.lines.get(l1.checked_sub(1)?)?;
+            let bottom = ly + last.top + last.height - first.top;
+            (y >= *ly - 2.0 && y <= bottom + 2.0 && x >= *lx - 40.0 && x <= lx + last.right + 40.0).then_some(*story)
+        }
+        _ => None,
+    })
+}
+
 fn items_of(page: &Page, story: StoryRef) -> Box<dyn Iterator<Item = &Placed> + '_> {
     match story {
         StoryRef::Body => Box::new(page.items.iter()),
-        StoryRef::Part(id) => {
-            let h = page.header_story == Some(id);
-            let f = page.footer_story == Some(id);
-            Box::new(page.header.iter().filter(move |_| h).chain(page.footer.iter().filter(move |_| f)).chain(page.items.iter()))
-        }
+        // Headers and footers, and the text boxes in them, are drawn with the page's header and
+        // footer; everything else is in its items.
+        StoryRef::Part(_) => Box::new(page.header.iter().chain(page.footer.iter()).chain(page.items.iter())),
     }
 }
 
@@ -79,18 +146,55 @@ impl DocLayout {
         Some(Pos { story: best.story, path: best.path.clone(), off })
     }
 
-    /// The story whose text is under a point (body, footnotes, endnotes; not headers/footers).
+    /// The story whose text is under a point (body, footnotes, endnotes, text boxes; not
+    /// headers/footers). A text box wins inside its area, except one behind the text, which only
+    /// wins where no body text is.
     pub fn story_at(&self, page: usize, x: f32, y: f32) -> Option<StoryRef> {
         let p = self.pages.get(page)?;
-        p.items.iter().find_map(|it| match it {
-            Placed::Lines { story, para, l0, l1, x: lx, y: ly, .. } => {
-                let first = para.lines.get(*l0)?;
-                let last = para.lines.get(l1.checked_sub(1)?)?;
-                let bottom = ly + last.top + last.height - first.top;
-                (y >= *ly - 2.0 && y <= bottom + 2.0 && x >= *lx - 40.0 && x <= lx + last.right + 40.0).then_some(*story)
-            }
-            _ => None,
-        })
+        let text_box = |behind: bool| {
+            objects(p, page).find(|o| o.behind() == behind && o.text_box.is_some() && o.rect.contains(Point::new(x, y))).and_then(|o| o.text_box)
+        };
+        text_box(false).map(StoryRef::Part).or_else(|| text_at(p, page, x, y)).or_else(|| text_box(true).map(StoryRef::Part))
+    }
+
+    /// The object a press at (x, y) grabs: a picture or shape anywhere on it, a text box on its
+    /// border (within `edge` points either side; inside is its text). Topmost first; objects
+    /// behind the text only where there's no text.
+    pub fn object_at(&self, page: usize, x: f32, y: f32, edge: f32) -> Option<ObjectHit> {
+        let p = self.pages.get(page)?;
+        let pt = Point::new(x, y);
+        let grabs = |o: &ObjectHit| {
+            o.rect.expand(edge).contains(pt) && (o.text_box.is_none() || !o.rect.expand(-edge).contains(pt) || o.rect.w.min(o.rect.h) <= edge * 3.0)
+        };
+        objects(p, page)
+            .find(|o| !o.behind() && grabs(o))
+            .or_else(|| if text_at(p, page, x, y).is_some() { None } else { objects(p, page).find(|o| o.behind() && grabs(o)) })
+    }
+
+    /// The text box in the header or footer at (x, y) on `page`.
+    pub fn header_footer_text_box_at(&self, page: usize, x: f32, y: f32) -> Option<u32> {
+        let p = self.pages.get(page)?;
+        objects_in(&p.header, page)
+            .chain(objects_in(&p.footer, page))
+            .find(|o| o.text_box.is_some() && o.rect.contains(Point::new(x, y)))
+            .and_then(|o| o.text_box)
+    }
+
+    /// Where the object at `pos` (its U+FFFC) is laid out.
+    pub fn object(&self, pos: &Pos, page_hint: usize) -> Option<ObjectHit> {
+        self.find_object(page_hint, |o| o.story == pos.story && o.path == pos.path && o.off == pos.off)
+    }
+
+    /// Where the text box showing story `part` is laid out.
+    pub fn text_box(&self, part: u32, page_hint: usize) -> Option<ObjectHit> {
+        self.find_object(page_hint, |o| o.text_box == Some(part))
+    }
+
+    /// The first object matching `f`, looking on `page_hint` first (where the caret is: one page
+    /// to scan, not the whole document).
+    pub fn find_object(&self, page_hint: usize, f: impl Fn(&ObjectHit) -> bool) -> Option<ObjectHit> {
+        let on = |i: usize| self.pages.get(i).and_then(|p| all_objects(p, i).find(|o| f(o)));
+        on(page_hint).or_else(|| (0..self.pages.len()).filter(|i| *i != page_hint).find_map(on))
     }
 
     /// Which header/footer (if any) is at (x, y) on a page — for double-click editing.
@@ -307,6 +411,55 @@ impl DocLayout {
                 Some((off, _)) => VisualStep::Moved(Pos { story: pos.story, path: pos.path.clone(), off }),
                 None => VisualStep::Edge { start: l.start, stop: l.stop, last_line: li + 1 == para.lines.len(), rtl: l.rtl },
             });
+        }
+        None
+    }
+
+    /// Where the equation at `pos` (its U+FFFC) is drawn: page, x of its left edge and its
+    /// baseline (page coordinates), and its layout.
+    pub fn equation_geom(&self, pos: &Pos, page_hint: usize) -> Option<(usize, f32, f32, std::sync::Arc<crate::math::MathLayout>)> {
+        for (pi, it) in self.pieces(pos.story, &pos.path, page_hint) {
+            let Placed::Lines { para, l0, l1, x, y, .. } = it else { continue };
+            let li = para.line_of(pos.off);
+            if li < *l0 || li >= *l1 {
+                continue;
+            }
+            let first = para.lines.get(*l0)?;
+            let l = para.lines.get(li)?;
+            for k in l.c0..l.c1 {
+                let Some(c) = para.clusters.get(k) else { continue };
+                let crate::para::ClKind::Object(oi) = c.kind else { continue };
+                if c.start != pos.off {
+                    continue;
+                }
+                let ml = para.maths.iter().find(|(o, _)| *o == oi)?.1.clone();
+                let cx = l.cl_left(k)?;
+                let base = y + (l.baseline - first.top);
+                return Some((pi, x + cx, base, ml));
+            }
+        }
+        None
+    }
+
+    /// The equation under (x, y) on `page` and the caret position inside it nearest the point.
+    pub fn equation_hit(&self, page: usize, x: f32, y: f32, story: StoryRef) -> Option<(Pos, wordcraft_doc::math_edit::MathPos)> {
+        let p = self.pages.get(page)?;
+        for l in page_lines(p, story) {
+            let Some(line) = l.para.lines.get(l.li) else { continue };
+            let base = l.top + (line.baseline - line.top);
+            for k in line.c0..line.c1 {
+                let Some(c) = l.para.clusters.get(k) else { continue };
+                let crate::para::ClKind::Object(oi) = c.kind else { continue };
+                let Some((_, ml)) = l.para.maths.iter().find(|(o, _)| *o == oi) else { continue };
+                let x0 = l.x + line.cl_left(k).unwrap_or(0.0);
+                let pad = 2.0;
+                if x < x0 - pad || x > x0 + ml.width + pad || y < base - ml.ascent - pad || y > base + ml.descent + pad {
+                    continue;
+                }
+                let slot = ml.hit(x - x0, base - y)?;
+                let pos = Pos { story: l.story, path: l.path.clone(), off: c.start };
+                return Some((pos, wordcraft_doc::math_edit::MathPos { path: slot.path.clone(), off: slot.off }));
+            }
         }
         None
     }

@@ -151,6 +151,7 @@
 	Copy	复制
 	Copy Formatting	复制格式
 	Corrections	更正
+	Count words in text boxes and notes	统计文本框、脚注和尾注中的字数
 	Couldn't download {name}: {error}	无法下载 {name}：{error}
 	Cover Page	封面
 	Create	创建
@@ -411,6 +412,7 @@
 	Moderate	适中
 	Modify Style	修改样式
 	Modify…	修改…
+	Move or Resize	移动或调整大小
 	Multilevel List	多级列表
 	Multiple Pages	多页
 	Name (A–Z)	名称（A–Z）
@@ -447,6 +449,7 @@
 	Not available right now	当前不可用
 	Not saved	未保存
 	Not saved yet	尚未保存
+	Nudge	微移
 	Number of columns:	列数：
 	Number of rows:	行数：
 	Numbering	编号
@@ -836,3 +839,46 @@
 	Your changes will be lost if you don't save them.	如果不保存，您的更改将会丢失。
 	Scroll ribbon left	向左滚动功能区
 	Scroll ribbon right	向右滚动功能区
+# Equations.
+	Change Structure	更改结构
+	Change to Display	更改为显示公式
+	Change to Inline	更改为行内公式
+	Conversions	转换
+	Delete Back in Equation	在公式中向前删除
+	Delete in Equation	在公式中删除
+	Edit Equation	编辑公式
+	Enter in Equation	在公式中按 Enter
+	Equation Gallery	公式库
+	Equation Info	公式信息
+	Equation Number	公式编号
+	Input Format	输入格式
+	Insert Structure	插入结构
+	Insert Symbol	插入符号
+	Justification	对齐方式
+	Leave Equation	退出公式
+	Move in Equation	在公式中移动
+	Normal Text	普通文本
+	Set Equation	设置公式
+	Structure Actions	结构操作
+	Structures	结构
+	Tools	工具
+	Type in Equation	在公式中输入
+	Inline	行内
+	Number	编号
+	Close Equation	关闭公式
+	Insert New Equation	插入新公式
+	Built-In	内置
+	Professional	二维格式
+	Linear	线性格式
+	Fraction	分数
+	Script	上下标
+	Radical	根式
+	Integral	积分
+	Large\nOperator	大型\n运算符
+	Bracket	括号
+	Function	函数
+	Accent	重音符号
+	Limit and\nLog	极限和\n对数
+	Operator	运算符
+	Equation Options	公式选项
+	All symbol sets	所有符号集

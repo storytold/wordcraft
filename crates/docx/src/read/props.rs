@@ -269,7 +269,7 @@ pub fn borders(e: &El) -> Borders {
 }
 
 /// Margins element (`w:tblCellMar`, `w:tcMar`) → [top, left, bottom, right].
-fn margins(e: &El) -> [f32; 4] {
+pub fn margins(e: &El) -> [f32; 4] {
     let get = |names: &[&str]| names.iter().find_map(|n| e.child(n)).and_then(|c| tw(c, "w:w")).unwrap_or(0.0).clamp(0.0, 1584.0);
     [get(&["w:top"]), get(&["w:left", "w:start"]), get(&["w:bottom"]), get(&["w:right", "w:end"])]
 }

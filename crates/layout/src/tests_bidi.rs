@@ -396,3 +396,30 @@ fn character_border_boxes_a_whole_rtl_word() {
         .expect("a border");
     assert!((top.0 - lo).abs() < 0.5 && (top.1 - hi).abs() < 0.5, "box {top:?} vs word {lo}..{hi}");
 }
+
+#[test]
+fn inline_picture_in_rtl_text_sits_in_its_place() {
+    // "متن [picture] بیشتر": in a right-to-left paragraph the picture is drawn where its cluster
+    // is on the line (left of the first word), not at its logical x.
+    let s = "متن  بیشتر";
+    let mut d = doc_of(&[(s, true)]);
+    let off = at(s, 4);
+    let pic =
+        wordcraft_doc::InlineObject::Image { media: "m".into(), w: 30.0, h: 20.0, alt: String::new(), float: Default::default(), crop: [0.0; 4] };
+    d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().insert_object(off, pic, &Default::default()).unwrap();
+    let l = lay(&d);
+    let (pl, x) = first_line(&l, 0);
+    let line = &pl.lines[0];
+    let k = (line.c0..line.c1).find(|&k| matches!(pl.clusters[k].kind, para::ClKind::Object(_))).unwrap();
+    let (a, b) = (x + line.cl_left(k).unwrap(), x + line.cl_right(k).unwrap());
+    let drawn: Vec<Rect> = display::page_display(&d, &l.pages[0], &Default::default())
+        .into_iter()
+        .filter_map(|it| if let display::Draw::Image { rect, .. } = it { Some(rect) } else { None })
+        .collect();
+    assert_eq!(drawn.len(), 1);
+    assert!((drawn[0].x - a).abs() < 0.5 && (drawn[0].x + drawn[0].w - b).abs() < 0.5, "picture {:?} vs its slot {a}..{b}", drawn[0]);
+    // The object placed for selection and dragging is at the same spot.
+    let placed: Vec<Rect> = l.pages[0].items.iter().filter_map(|it| if let Placed::Object { rect, .. } = it { Some(*rect) } else { None }).collect();
+    assert!(placed.iter().any(|r| (r.x - a).abs() < 0.5), "placed {placed:?} vs {a}");
+    assert!(a < 540.0 - 20.0, "after the first word, so left of the right margin");
+}

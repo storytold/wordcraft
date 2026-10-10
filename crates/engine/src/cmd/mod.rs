@@ -4,6 +4,7 @@ pub mod caret;
 pub mod citations;
 pub mod design;
 pub mod edit;
+pub mod equation;
 pub mod file;
 pub mod format;
 pub mod insert;
@@ -35,6 +36,7 @@ pub fn registry() -> Registry {
     v.extend(para::specs());
     v.extend(view::specs());
     v.extend(insert::specs());
+    v.extend(equation::specs());
     v.extend(page::specs());
     v.extend(table::specs());
     v.extend(review::specs());
@@ -99,9 +101,10 @@ fn track_delete(s: &mut Session, a: &Pos, b: &Pos) -> Result<Pos, CmdError> {
         let Some(p) = s.doc.para(a.story, path) else { continue };
         let from = if *path == a.path { a.off } else { 0 };
         let to = if *path == b.path { b.off } else { p.len() };
+        // Text already deleted keeps its deletion (and its author), like Word.
         let ranges: Vec<(usize, usize, bool)> = p
             .run_ranges()
-            .filter(|(r, _)| r.end > from && r.start < to)
+            .filter(|(r, c)| r.end > from && r.start < to && c.del.is_none())
             .map(|(r, c)| {
                 let own = c.ins.and_then(|i| s.doc.revisions.get(i as usize)).is_some_and(|rv| rv.author == author);
                 (r.start.max(from), r.end.min(to), own)
@@ -182,6 +185,7 @@ pub fn split_para(s: &mut Session, at: &Pos) -> Result<Pos, CmdError> {
         }
         return Ok(at.clone());
     }
+    let mark_revs = s.doc.para_at(at).map(|p| (p.mark.ins, p.mark.del)).unwrap_or_default();
     let new = s.doc.split_paragraph(at)?;
     if at_end && let Some(st) = style.as_deref() {
         let next = s.doc.styles.get(st).and_then(|x| x.next.clone());
@@ -199,6 +203,11 @@ pub fn split_para(s: &mut Session, at: &Pos) -> Result<Pos, CmdError> {
         let rid = new_revision(s, RevisionKind::Insert);
         let p = s.doc.para_mut(at.story, &at.path)?;
         p.mark.ins = Some(rid);
+        // The paragraph after the split ends with the original mark: it keeps that mark's
+        // revisions, never those of the text at the split point (which would credit the split
+        // to the author who inserted that text).
+        let t = s.doc.para_mut(new.story, &new.path)?;
+        (t.mark.ins, t.mark.del) = mark_revs;
     }
     Ok(new)
 }

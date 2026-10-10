@@ -8,8 +8,8 @@ and agent control. This file tracks where we are honestly. Generated numbers com
 
 | Measure | Value |
 |---|---|
-| Commands (every action, scriptable by CLI/MCP/control channel) | **400** |
-| Feature catalog coverage (Word ribbon/menu features with a command) | **357 / 406 (88%)** |
+| Commands (every action, scriptable by CLI/MCP/control channel) | **422** |
+| Feature catalog coverage (Word ribbon/menu features with a command) | **378 / 428 (88%)** |
 | **Estimated real feature parity** (depth and fidelity, not just a command) | **~62%** |
 | **Distance to alpha** | **~85% of the way; ≈20–25 h of Claude wall-clock work** |
 | **Distance to 100% parity** | **≈120–150 h of Claude Opus 5.5 wall-clock work** (with parallel agents) |
@@ -58,8 +58,8 @@ the icon art).
 | References (TOC, citations APA/MLA/Chicago/IEEE, bibliography, index, figures, cross-refs, TOA) | Working first versions; Zotero/Mendeley `ADDIN` fields and custom properties round-trip; Zotero in the app (`ui.zotero.*`, `wordcraft-cli zotero`): citations, bibliography, refresh, unlink, document preferences, in-text ↔ footnote switching, Zotero ribbon tab, Move Past Citation; Read Aloud player (speed, previous/next sentence, skips citations and bibliography) | 60% |
 | Review (spelling, grammar, thesaurus, comments, track changes, compare, protect) | Good; comment balloons in the margin; no track-changes balloons | 75% |
 | Mailings (mail merge, rules, preview, envelopes, labels) | Working | 70% |
-| Pictures & shapes (insert, size, crop, recolour, effects, styles, float position) | Text wraps around floats (rectangular); text boxes render their text; no tight/contour wrap, no rotation handles | 55% |
-| Draw tab (ink), SmartArt, charts, 3D models, equations editor | Not started / linear equations only | 5% |
+| Pictures & shapes (insert, size, crop, recolour, effects, styles, float position) | Text wraps around floats (rectangular); text boxes render and edit their text; select, drag to move, resize handles, arrow nudge on the canvas; no tight/contour wrap, no rotation handles | 60% |
+| Draw tab (ink), SmartArt, charts, 3D models, equations editor | Equations: full OMML read/write, 2D layout (OpenType MATH) and in-place editing with an Equation tab; long display equations don't break across lines yet. Ink, SmartArt, charts, 3D not started | 20% |
 | File formats: DOCX read/write | Good (Word opens our files); charts/SmartArt/OLE dropped; untested on a real-world corpus | 75% |
 | File formats: PDF, ODT, RTF, HTML, Markdown, LaTeX, TXT | Working | 70% |
 | File formats: Word 97-2003 `.doc`/`.dot` import | Text, formatting, styles, sections, headers/footers, tables, lists, notes, fields, bookmarks, pictures (spec-based reader; metafile images and Word 6/95 rejected) | 60% |
@@ -74,11 +74,11 @@ the icon art).
 
 1. **Alpha blockers** (≈20–25 h): DOCX fidelity corpus, footnote continuation, column balancing,
    native printing, autosave soak test, first signed release.
-2. **Objects** (≈15 h): tight/through (contour) wrap, rotation and resize handles on the canvas,
+2. **Objects** (≈12 h): tight/through (contour) wrap, rotation handles on the canvas,
    grouping, z-order polish, track-changes balloons and formatting revisions.
 3. **Draw tab / ink** (≈15 h).
 4. **Charts (own renderer) and SmartArt-style diagrams** (≈20 h).
-5. **Equation editor (OMML read/write, 2D layout)** (≈15 h).
+5. **Equation editor** — done: OMML read/write, 2D layout, in-place editing with Word's Equation tab (structures, symbols, built-ins, Unicode/LaTeX input, build-up, Math AutoCorrect, `#` numbers, structure commands). Remaining: line breaking of long display equations, ink equations (≈4 h).
 6. **Dialog depth**: every Word dialog with all its options (Font, Paragraph, Tabs, Borders and
    Shading, Page Setup, Styles, Columns, Index/TOC options, Mail Merge wizard, Options panes) (≈20 h).
 7. **Accessibility (screen readers), localisation, and the rest of right-to-left** (≈12 h): right-to-left

@@ -218,6 +218,7 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             let frag = wordcraft_doc::edit::Fragment {
                 blocks: lines.iter().map(|l| Block::Para(Paragraph::with_text(l, CharProps::default()).styled("NoSpacing"))).collect(),
+                ..Default::default()
             };
             let end = s.doc.insert_fragment(&at, &frag)?;
             s.sel = Selection::caret(end);

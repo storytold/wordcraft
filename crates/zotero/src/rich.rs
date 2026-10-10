@@ -88,5 +88,5 @@ pub fn fragment(text: &str, rich: bool, base: &CharProps) -> Fragment {
     if paras.is_empty() {
         paras.push(Paragraph::new());
     }
-    Fragment { blocks: paras.into_iter().map(Block::Para).collect() }
+    Fragment { blocks: paras.into_iter().map(Block::Para).collect(), ..Default::default() }
 }
