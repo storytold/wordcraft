@@ -437,25 +437,6 @@ impl StyleSheet {
             None => self.styles.push(st),
         }
     }
-    /// Remove style `id` and return it. Styles based on it are rebased onto its own base, and
-    /// `next` / `linked` references to it are dropped. Text that uses it is the document's to
-    /// retarget ([`crate::Document::restyle`]).
-    pub fn remove(&mut self, id: &str) -> Option<Style> {
-        let i = self.styles.iter().position(|s| s.id == id)?;
-        let gone = self.styles.remove(i);
-        for s in &mut self.styles {
-            if s.based_on.as_deref() == Some(id) {
-                s.based_on = gone.based_on.clone().filter(|b| *b != s.id);
-            }
-            if s.next.as_deref() == Some(id) {
-                s.next = None;
-            }
-            if s.linked.as_deref() == Some(id) {
-                s.linked = None;
-            }
-        }
-        Some(gone)
-    }
     /// An id not used yet, derived from a display name.
     pub fn new_id(&self, name: &str) -> String {
         let base: String = name.chars().filter(|c| c.is_alphanumeric()).collect();

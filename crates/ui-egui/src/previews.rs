@@ -218,55 +218,6 @@ fn snippet_blocks(
     Some(egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &px))
 }
 
-/// Manage Styles' preview of one style (`ty`: the `styles.manage` type), `size` points wide and
-/// tall: a line of sample text, or a small table for a table style.
-pub fn style_preview(app: &mut WordApp, ui: &mut Ui, id: &str, ty: &str, size: egui::Vec2) {
-    let t = Tokens::get(ui.ctx());
-    let (r, _) = ui.allocate_exact_size(size, Sense::hover());
-    ui.painter().rect(r, 3.0, egui::Color32::WHITE, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
-    let rev = app.session.rev();
-    let skey = app.previews.styles_key(&app.session.doc, rev);
-    let ppp = ui.ctx().pixels_per_point();
-    let (w, h) = (size.x - 12.0, size.y - 8.0);
-    let key = format!("manage:{id}:{ty}:{skey}:{ppp}:{w}x{h}");
-    let doc = &app.session.doc;
-    let tex = app.previews.get_or(ui.ctx(), &key, || {
-        let block = match ty {
-            "table" => {
-                let mut tb = Table::new(3, 4, w - 4.0);
-                tb.props.style = Some(id.to_string());
-                for (ri, row) in tb.rows.iter_mut().enumerate() {
-                    for (ci, cell) in row.cells.iter_mut().enumerate() {
-                        let txt = match (ri, ci) {
-                            (0, c) => ["", "A", "B", "C"].get(c).copied().unwrap_or(""),
-                            (_, 0) => "Row",
-                            _ => "1",
-                        };
-                        cell.blocks = vec![para_block(Paragraph::with_text(txt, CharProps::default()))];
-                    }
-                }
-                Block::Table(tb)
-            }
-            "character" => Block::Para(Paragraph::with_text("AaBbCcYyZz", CharProps { style: Some(id.to_string()), ..CharProps::default() })),
-            _ => {
-                let mut p = Paragraph::with_text("AaBbCcYyZz", CharProps::default()).styled(id);
-                p.props.space_before = Some(0.0);
-                p.props.indent_left = Some(0.0);
-                p.props.indent_first = Some(0.0);
-                p.props.numbering = None;
-                Block::Para(p)
-            }
-        };
-        snippet_blocks(doc, vec![block], w, h, ppp, 4.0, None)
-    });
-    if let Some(hd) = tex {
-        let sz = hd.size_vec2() / ppp;
-        let ir = Rect::from_min_size(pos2(r.min.x + 2.0, r.min.y + 2.0), sz.min(r.size() - vec2(4.0, 4.0)));
-        let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2((ir.width() / sz.x).min(1.0), (ir.height() / sz.y).min(1.0)));
-        ui.painter().with_clip_rect(r).image(hd.id(), ir, uv, egui::Color32::WHITE);
-    }
-}
-
 /// The Home tab's Styles gallery.
 pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
     let t = Tokens::get(ui.ctx());

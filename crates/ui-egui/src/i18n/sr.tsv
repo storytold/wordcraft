@@ -10,7 +10,6 @@
 #   escapes    \n  \t  \\  inside a column. `{name}` placeholders must appear in both columns, and a
 #              trailing "…" in one needs one in the other.
 #   Lines starting with # and blank lines are ignored. A missing entry shows in English.
-#
 # Clean room: every entry was written from the plain meaning of the English label in ordinary
 # computing vocabulary. No Microsoft Word (or other product) localisation, string table or
 # translated UI was consulted or copied; add entries the same way.
@@ -68,7 +67,12 @@
 	AutoSave	Аутоматско чување
 	AutoSave documents you have saved in WordCraft	Аутоматски чувај документе које сте већ сачували у WordCraft-у
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	Аутоматско чување неуспело: {error}. Сачувајте документ да бисте га поново укључили.
+	Bottom Margin	Доња маргина
 	Dark page (white text on black)	Тамна страница (бео текст на црном)
+	Edit Comment	Уреди коментар
+	Left Margin	Лева маргина
+	Reopen	Поново отвори
+	Right Margin	Десна маргина
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Прикажи документе са инвертованим бојама, као код Приказ › Промени режим. Чување, штампање и PDF нису погођени.
 	AutoSave saves every change to the file (needs a saved document)	Аутоматско чување уписује сваку измену у фајл (документ мора бити већ сачуван)
 	AutoText	Аутоматски текст
@@ -732,6 +736,7 @@
 	Three	Три
 	Tight	Тесно
 	Top Border	Горња ивица
+	Top Margin	Горња маргина
 	Top of Page	Врх стране
 	Top:	Горе:
 	Total Row	Ред укупно
@@ -791,6 +796,7 @@
 	Wrap Text	Преломи текст
 	Wrap\nText	Преломи\nтекст
 	Write & Insert Fields	Писање и уметање поља
+	Write a reply	Напишите одговор
 	Zoom	Зумирање
 	Zoom In	Увећај
 	Zoom Out	Умањи
@@ -1010,23 +1016,28 @@
 	Type the recipients, or load them from a file.	Унесите примаоце или их учитајте из фајла.
 	Use an Existing List…	Користи постојећу листу…
 	A file dialog is already open.	Дијалог за фајлове је већ отворен.
-	Manage Styles	Управљај стиловима
-	Show or Hide Style	Прикажи или сакриј стил
-	Manage Styles…	Управљај стиловима…
-	Sort order:	Редослед сортирања:
-	As Recommended	Према препоруци
-	Alphabetical	Абецедно
-	Font: {font}	Фонт: {font}
-	{size} pt	{size} пт
-	Color: {color}	Боја: {color}
-	Space before: {pt} pt	Размак пре: {pt} пт
-	Space after: {pt} pt	Размак после: {pt} пт
-	Based on: {style}	Заснован на: {style}
-	Paragraph style	Стил пасуса
-	Character style	Стил знакова
-	Linked style (paragraph and character)	Повезани стил (пасус и знакови)
-	Table style	Стил табеле
-	Built-in style	Уграђени стил
-	Show in the Styles gallery	Прикажи у галерији стилова
-	Hide from style lists	Сакриј са листа стилова
-	Built-in styles can't be deleted.	Уграђени стилови не могу да се обришу.
+	Height:	Висина:
+	Width:	Ширина:
+	Row	Ред
+	Cell	Ћелија
+	Preferred width:	Жељена ширина:
+	Alignment:	Поравнање:
+	Indent from left:	Увлачење слева:
+	Specify height:	Задај висину:
+	Exactly	Тачно
+	At least	Најмање
+	Allow row to break across pages	Дозволи прелом реда између страница
+	Repeat as header row on each page	Понови као ред заглавља на свакој страници
+	Vertical alignment:	Вертикално поравнање:
+	Top	Горе
+	Bottom	Доле
+	Alt text	Алтернативни текст
+	Alt:	Алт. текст:
+	W:	Ш:
+	H:	В:
+	Reset	Врати
+	Reset Crop	Поништи исецање
+	Insert a new equation (Alt+=)	Уметни нову једначину (Alt+=)
+	Leave the equation (Esc)	Напусти једначину (Esc)
+	Preview	Преглед
+	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft

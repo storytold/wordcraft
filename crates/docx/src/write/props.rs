@@ -383,9 +383,10 @@ pub fn trpr(w: &mut W, r: &RowProps) {
 
 pub fn tcpr(w: &mut W, c: &CellProps) {
     w.open("w:tcPr", &[]);
-    match c.width {
-        Some(v) => w.empty("w:tcW", &[("w:w", &twips(v.max(0.0))), ("w:type", "dxa")]),
-        None => w.empty("w:tcW", &[("w:w", "0"), ("w:type", "auto")]),
+    match (c.width, c.width_pct) {
+        (Some(v), _) => w.empty("w:tcW", &[("w:w", &twips(v.max(0.0))), ("w:type", "dxa")]),
+        (None, Some(p)) => w.empty("w:tcW", &[("w:w", &n((p.clamp(0.0, 100.0) * 50.0).round() as i64)), ("w:type", "pct")]),
+        (None, None) => w.empty("w:tcW", &[("w:w", "0"), ("w:type", "auto")]),
     }
     if c.span > 1 {
         w.val("w:gridSpan", &n(c.span.min(63) as i64));

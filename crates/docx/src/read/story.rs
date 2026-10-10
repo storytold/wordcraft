@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind};
 use wordcraft_doc::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{CharProps, Rgb};
 use wordcraft_doc::table::{Cell, MAX_COLS, MAX_ROWS, Row, Table};
@@ -9,7 +10,7 @@ use wordcraft_doc::{Block, Blocks, InlineObject, Paragraph, PartKind, RevisionKi
 
 use super::Reader;
 use super::props::{sectpr, tcpr, trpr};
-use crate::package::Rels;
+use crate::package::{Rels, rt};
 use crate::units::{int, measure};
 use crate::xml::El;
 
@@ -649,6 +650,19 @@ impl Reader<'_> {
             }
         }
         let gd = c.child("a:graphic").and_then(|g| g.child("a:graphicData"))?;
+        // Checked by URI before the blip search: a diagram's data can hold a blip further down.
+        let uri = gd.attr("uri").unwrap_or("");
+        let graphic_kind = if uri.ends_with("/chart") {
+            Some(GraphicKind::Chart)
+        } else if uri.ends_with("/diagram") {
+            Some(GraphicKind::Diagram)
+        } else {
+            None
+        };
+        if let Some(kind) = graphic_kind {
+            let graphic = self.graphic(kind, gd, rels, w, h);
+            return Some(InlineObject::Graphic { w, h, alt, float, graphic });
+        }
         if let Some(blip) = gd.find("a:blip") {
             let media = blip.attr("r:embed").and_then(|id| self.media_for(rels, id))?;
             let mut crop = [0.0f32; 4];
@@ -667,6 +681,38 @@ impl Reader<'_> {
             return Some(self.read_wsp(sc, wsp, rels, w, h, float));
         }
         None
+    }
+
+    /// The chart or SmartArt diagram in an `a:graphicData`, as items in points from its top-left
+    /// corner. Charts are drawn from their cached data, SmartArt diagrams from the drawing Word
+    /// stores beside them. Built once per part and size; once the file's graphic budget is spent,
+    /// later ones are empty.
+    fn graphic(&mut self, kind: GraphicKind, gd: &El, rels: &Rels, w: f32, h: f32) -> Arc<Graphic> {
+        let source = match kind {
+            GraphicKind::Chart => gd.child("c:chart").and_then(|c| c.attr("r:id")).and_then(|id| super::part_of(rels, id, rt::CHART)),
+            GraphicKind::Diagram => self.diagram_part(gd, rels),
+        };
+        let Some(path) = source else { return Arc::new(Graphic { kind, items: Vec::new(), w, h }) };
+        let key = (kind, path, w.to_bits(), h.to_bits());
+        if let Some(g) = self.graphics.get(&key) {
+            return g.clone();
+        }
+        let items = if self.graphic_budget == 0 { Vec::new() } else { self.graphic_items(kind, &key.1, w, h) };
+        self.graphic_budget = self.graphic_budget.saturating_sub(graphic_work(&items));
+        let g = Arc::new(Graphic { kind, items, w, h });
+        self.graphics.insert(key, g.clone());
+        g
+    }
+
+    /// The items of the chart part or diagram drawing part at `path`.
+    fn graphic_items(&mut self, kind: GraphicKind, path: &str, w: f32, h: f32) -> Vec<GraphicItem> {
+        match kind {
+            GraphicKind::Chart => match self.graphic_part(path) {
+                Some(space) => super::chart::chart_items(&space, &self.doc.settings.theme_colors, w, h),
+                None => Vec::new(),
+            },
+            GraphicKind::Diagram => self.diagram_drawing(path, w, h),
+        }
     }
 
     fn read_wsp(&mut self, sc: &mut StoryCtx, wsp: &El, rels: &Rels, w: f32, h: f32, float: Float) -> InlineObject {
@@ -913,4 +959,9 @@ fn vml_float(shape: &El, style: &str) -> Float {
         dist_bottom: dist("mso-wrap-distance-bottom"),
         ..Float::default()
     }
+}
+
+/// What a graphic's items cost to keep and draw: one per item, plus one per path segment.
+fn graphic_work(items: &[GraphicItem]) -> usize {
+    items.iter().map(|it| if let GraphicItem::Path { segs, .. } = it { segs.len() + 1 } else { 1 }).sum()
 }

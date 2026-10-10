@@ -619,6 +619,115 @@ fn tables_commands() {
     assert!(s.run("table.merge", &json!({})).is_err());
 }
 
+/// AutoFit Contents (#44) measures the text: a column of short words narrows, a column with a
+/// long sentence widens (wrapping within the page), and the widths are written to the grid.
+#[test]
+fn autofit_contents_sizes_columns_to_their_text() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 3}));
+    let grid = |s: &Session| s.doc.body.iter().find_map(|b| b.as_table()).unwrap().grid.clone();
+    let before = grid(&s);
+    run(&mut s, "text.insert", json!({"text": "A"}));
+    run(&mut s, "text.tab", json!({}));
+    run(
+        &mut s,
+        "text.insert",
+        json!({"text": "This cell holds a long sentence that would wrap many times in a third of the page width, so it should get most of the room."}),
+    );
+    run(&mut s, "text.tab", json!({}));
+    run(&mut s, "text.insert", json!({"text": "B"}));
+    run(&mut s, "table.autofit", json!({"mode": "contents"}));
+    let after = grid(&s);
+    let tw = cmd::page::sect(&s).text_width();
+    assert!(after[0] < before[0] / 2.0, "short column narrows: {before:?} → {after:?}");
+    assert!(after[2] < before[2] / 2.0, "short column narrows: {before:?} → {after:?}");
+    assert!(after[1] > before[1] * 1.5, "long column widens: {before:?} → {after:?}");
+    let total: f32 = after.iter().sum();
+    assert!(total <= tw + 0.5 && total > tw - 1.0, "the long text fills the page width: {total} vs {tw}");
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert!(t.props.width_pct.is_none() && !t.props.fixed);
+    assert_eq!(t.rows[0].cells[1].props.width, Some(after[1]), "cell widths follow the grid");
+    // Short text only: every column gets just what its text needs.
+    s.doc = wordcraft_doc::Document::new();
+    s.sel = crate::Selection::caret(Pos::body(0, 0));
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 2}));
+    run(&mut s, "text.insert", json!({"text": "Name"}));
+    run(&mut s, "text.tab", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Quantity"}));
+    run(&mut s, "table.autofit", json!({"mode": "contents"}));
+    let g = grid(&s);
+    assert!(g[0] < g[1] && g[1] < 100.0, "{g:?}");
+    // The layout uses the new widths.
+    let w = s.layout().pages[0].items.iter().find_map(|it| match it {
+        wordcraft_layout::Placed::Cell { rect, row: 0, cell: 0, .. } => Some(rect.w),
+        _ => None,
+    });
+    assert!(w.is_some_and(|w| (w - g[0]).abs() < 0.5), "{w:?} vs {g:?}");
+}
+
+/// The Height and Width boxes (Table Layout › Cell Size) run `table.rowHeight` and
+/// `table.columnWidth`; each edit is one Undo.
+#[test]
+fn cell_size_boxes_set_row_height_and_column_width() {
+    use wordcraft_doc::props::HeightRule;
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    run(&mut s, "table.autofit", json!({"mode": "window"}));
+    let t0 = s.doc.body.iter().find_map(|b| b.as_table()).unwrap().clone();
+    run(&mut s, "table.columnWidth", json!({"width": 100.0}));
+    run(&mut s, "table.rowHeight", json!({"height": 30.0, "rule": "exact"}));
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.grid[0], 100.0);
+    assert_eq!(t.rows[0].cells[0].props.width, Some(100.0));
+    assert!(t.props.width_pct.is_none(), "the column isn't scaled back to the window");
+    assert_eq!((t.rows[0].props.height, t.rows[0].props.height_rule), (Some(30.0), HeightRule::Exact));
+    let rect = s.layout().pages[0].items.iter().find_map(|it| match it {
+        wordcraft_layout::Placed::Cell { rect, row: 0, cell: 0, .. } => Some(*rect),
+        _ => None,
+    });
+    assert!(rect.is_some_and(|r| (r.w - 100.0).abs() < 0.5 && (r.h - 30.0).abs() < 0.5), "{rect:?}");
+    assert!(s.run("table.rowHeight", &json!({"height": 30.0, "rule": "sideways"})).is_err());
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.body.iter().find_map(|b| b.as_table()).unwrap(), &t0);
+}
+
+/// Table Properties (#44): table, row, column and cell settings land as one undo step, and
+/// without settings the command reports the current ones (the dialog's source).
+#[test]
+fn table_properties_apply_in_one_step() {
+    use wordcraft_doc::props::{Align, HeightRule, VAlign};
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    let t0 = s.doc.body.iter().find_map(|b| b.as_table()).unwrap().clone();
+    run(
+        &mut s,
+        "table.properties",
+        json!({"align": "center", "indent": 18.0, "width": 300.0, "rowHeight": 40.0, "rowHeightRule": "exact", "allowBreak": false,
+               "headerRow": true, "columnWidth": 120.0, "cellWidth": 110.0, "valign": "bottom"}),
+    );
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!((t.props.align, t.props.indent, t.props.width), (Some(Align::Center), Some(18.0), Some(300.0)));
+    let row = &t.rows[0];
+    assert_eq!((row.props.height, row.props.height_rule, row.props.cant_split, row.props.header), (Some(40.0), HeightRule::Exact, true, true));
+    assert_eq!(t.grid[0], 120.0);
+    assert_eq!((row.cells[0].props.width, row.cells[0].props.valign), (Some(110.0), VAlign::Bottom));
+    let applied = t.clone();
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.body.iter().find_map(|b| b.as_table()).unwrap(), &t0, "one undo step per apply");
+    run(&mut s, "edit.redo", json!({}));
+    assert_eq!(s.doc.body.iter().find_map(|b| b.as_table()).unwrap(), &applied);
+    let state = run(&mut s, "table.properties", json!({}));
+    assert_eq!(state["align"], "center");
+    assert_eq!(state["row"]["heightRule"], "exact");
+    assert_eq!(state["columnWidth"], 120.0);
+    assert_eq!(state["cell"]["valign"], "bottom");
+    // Clearing the row height makes it automatic again; bad values are refused.
+    run(&mut s, "table.properties", json!({"rowHeight": null}));
+    assert_eq!(s.doc.body.iter().find_map(|b| b.as_table()).unwrap().rows[0].props.height_rule, HeightRule::Auto);
+    assert!(s.run("table.properties", &json!({"valign": "middle"})).is_err());
+}
+
 /// Table Layout › Text Direction (#226) cycles the selected cells' text through horizontal,
 /// top-to-bottom and bottom-to-top, and the layout turns the text.
 #[test]
@@ -1016,6 +1125,14 @@ fn comments() {
     let l = run(&mut s, "review.comments", json!({}));
     assert_eq!(l[0]["text"], "Nice");
     assert_eq!(text(&s), "Some text here");
+    // Editing the text is one undo step; replies hang off their comment.
+    run(&mut s, "review.editComment", json!({"id": id, "text": "Nicer\nTwo lines"}));
+    assert_eq!(run(&mut s, "review.comments", json!({}))[0]["text"], "Nicer\nTwo lines");
+    assert!(s.undo());
+    assert_eq!(run(&mut s, "review.comments", json!({}))[0]["text"], "Nice");
+    assert!(s.run("review.editComment", &json!({"id": 999, "text": "x"})).is_err());
+    let r = run(&mut s, "review.reply", json!({"id": id, "text": "Agreed"}));
+    assert_eq!(s.doc.comments.get(&(r["id"].as_u64().unwrap() as u32)).unwrap().parent, Some(id as u32));
     run(&mut s, "review.deleteComment", json!({"id": id}));
     assert!(s.doc.comments.is_empty());
     assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().objects.len(), 0);
@@ -2051,7 +2168,9 @@ fn page_and_table_gridlines_toggle_independently() {
     let mut s = s();
     run(&mut s, "text.insert", json!({"text": "Hello"}));
     let undo = s.undo_labels();
-    assert!(!s.view.gridlines && !s.view.table_gridlines);
+    // Table cell outlines are on by default, as in Word; the page grid is off.
+    assert!(!s.view.gridlines && s.view.table_gridlines);
+    assert_eq!(run(&mut s, "table.viewGridlines", json!({"value": false}))["value"], false);
 
     assert_eq!(run(&mut s, "view.gridlines", json!({}))["value"], true);
     assert!(s.view.gridlines && !s.view.table_gridlines);
@@ -2131,68 +2250,38 @@ fn timestamps_come_from_the_clock() {
 }
 
 #[test]
-fn manage_styles_lists_paragraph_character_linked_and_table_styles() {
+fn charts_and_diagrams_can_be_selected_and_deleted_but_not_moved() {
+    use std::sync::Arc;
+    use wordcraft_doc::para::InlineObject;
     let mut s = s();
-    let list = run(&mut s, "styles.manage", json!({"sort": "alphabetical"}));
-    let list = list.as_array().unwrap();
-    let find = |name: &str| list.iter().find(|x| x["name"] == name).unwrap_or_else(|| panic!("{name} listed"));
-    assert_eq!(find("Normal")["type"], "paragraph");
-    assert_eq!(find("Normal")["builtIn"], true);
-    assert_eq!(find("Normal")["inGallery"], true);
-    assert_eq!(find("Heading 1")["type"], "linked");
-    assert_eq!(find("Heading 1")["basedOn"], "Normal");
-    assert!(find("Heading 1")["format"]["size"].is_number(), "description formatting");
-    assert_eq!(find("Table Grid")["type"], "table");
-    assert!(list.iter().any(|x| x["type"] == "character"));
-    // The character half of a linked pair is listed once, as the linked style.
-    assert!(!list.iter().any(|x| x["id"] == "Heading1Char"));
-    let names: Vec<String> = list.iter().map(|x| x["name"].as_str().unwrap().to_lowercase()).collect();
-    assert!(names.windows(2).all(|w| w[0] <= w[1]), "alphabetical");
-    // Recommended order starts with Normal (priority 0); listing is not an edit.
-    let rec = run(&mut s, "styles.manage", json!({}));
-    assert_eq!(rec[0]["name"], "Normal");
-    assert!(s.run("styles.manage", &json!({"sort": "sideways"})).is_err());
-    assert!(!s.dirty);
+    run(&mut s, "text.insert", json!({"text": "Before "}));
+    let chart = InlineObject::Graphic { w: 200.0, h: 100.0, alt: String::new(), float: Default::default(), graphic: Arc::new(Default::default()) };
+    s.doc.insert_object(&Pos::body(0, 7), chart, &Default::default()).unwrap();
+    let end = 7 + wordcraft_doc::para::OBJ.len_utf8();
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 7), "focus": Pos::body(0, end)}));
+    assert!(crate::cmd::objects::object_selection(&s).is_some(), "the chart is selected");
+    for (id, v) in [
+        ("arrange.bounds", json!({"width": 50})),
+        ("picture.size", json!({"width": 50})),
+        ("arrange.wrap", json!({"wrap": "square"})),
+        ("arrange.position", json!({"preset": "topLeft"})),
+        ("arrange.align", json!({"value": "left"})),
+        ("arrange.bringForward", json!({})),
+    ] {
+        assert!(s.run(id, &v).is_err(), "{id} must not change a chart");
+    }
+    run(&mut s, "text.delete", json!({}));
+    assert!(s.doc.para_at(&Pos::body(0, 0)).is_some_and(|p| p.objects.is_empty()), "the chart is deleted");
 }
 
 #[test]
-fn deleting_a_style_falls_back_to_its_base_and_undoes() {
+fn accessibility_reports_a_chart_without_alt_text() {
+    use std::sync::Arc;
+    use wordcraft_doc::para::InlineObject;
     let mut s = s();
-    run(&mut s, "text.insert", json!({"text": "Styled"}));
-    run(&mut s, "styles.create", json!({"name": "Mine", "basedOn": "Heading 1"}));
-    run(&mut s, "styles.create", json!({"name": "Child", "basedOn": "Mine", "fromSelection": false}));
-    run(&mut s, "styles.apply", json!({"style": "Mine"}));
-    assert_eq!(para_style(&s, 0).as_deref(), Some("Mine"));
-    let r = run(&mut s, "styles.delete", json!({"style": "Mine"}));
-    assert_eq!(r["restyled"], 1);
-    assert!(s.doc.styles.get("Mine").is_none());
-    assert_eq!(para_style(&s, 0).as_deref(), Some("Heading1"), "falls back to its base");
-    assert_eq!(s.doc.styles.get("Child").and_then(|c| c.based_on.clone()).as_deref(), Some("Heading1"), "rebased");
-    run(&mut s, "edit.undo", json!({}));
-    assert!(s.doc.styles.get("Mine").is_some());
-    assert_eq!(para_style(&s, 0).as_deref(), Some("Mine"));
-    // Built-in styles are refused, unknown ones are errors.
-    assert!(s.run("styles.delete", &json!({"style": "Heading 1"})).is_err());
-    assert!(s.run("styles.delete", &json!({"style": "No Such Style"})).is_err());
-    assert!(s.doc.styles.get("Heading1").is_some());
-}
-
-#[test]
-fn style_visibility_round_trips_through_docx() {
-    let mut s = s();
-    run(&mut s, "styles.create", json!({"name": "Mine", "fromSelection": false}));
-    run(&mut s, "styles.setVisibility", json!({"style": "Heading 1", "gallery": false}));
-    run(&mut s, "styles.setVisibility", json!({"style": "Mine", "hidden": true}));
-    run(&mut s, "styles.setVisibility", json!({"style": "Heading 4", "gallery": true}));
-    assert!(s.run("styles.setVisibility", &json!({"style": "Mine"})).is_err());
-    let gallery: Vec<String> = s.doc.styles.gallery().iter().map(|x| x.id.clone()).collect();
-    assert!(!gallery.contains(&"Heading1".to_string()) && !gallery.contains(&"Mine".to_string()) && gallery.contains(&"Heading4".to_string()));
-    let bytes = crate::io::save_bytes("v.docx", &s.doc).unwrap();
-    let doc = crate::io::open_bytes("v.docx", &bytes).unwrap();
-    let st = |id: &str| doc.styles.get(id).cloned().unwrap_or_else(|| panic!("{id} kept"));
-    assert!(!st("Heading1").quick && !st("Heading1").hidden);
-    assert!(st("Mine").hidden && !st("Mine").builtin);
-    assert!(st("Heading4").quick);
-    run(&mut s, "edit.undo", json!({}));
-    assert!(s.doc.styles.get("Heading4").is_some_and(|h| !h.quick), "undoable");
+    let chart = InlineObject::Graphic { w: 200.0, h: 100.0, alt: " ".into(), float: Default::default(), graphic: Arc::new(Default::default()) };
+    s.doc.insert_object(&Pos::body(0, 0), chart, &Default::default()).unwrap();
+    let v = run(&mut s, "file.accessibility", json!({}));
+    let issues = v["issues"].as_array().expect("issues");
+    assert!(issues.iter().any(|i| i["issue"] == "Chart or diagram has no alternative text"), "{issues:?}");
 }

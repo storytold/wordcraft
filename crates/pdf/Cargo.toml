@@ -13,6 +13,7 @@ wordcraft-doc = { workspace = true }
 wordcraft-geom = { workspace = true }
 wordcraft-fonts = { workspace = true }
 wordcraft-layout = { workspace = true }
+wordcraft-metafile = { workspace = true }
 krilla = { workspace = true }
 kurbo = { workspace = true }
 image = { workspace = true }

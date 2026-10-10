@@ -134,7 +134,10 @@ fn margins(s: &mut Session, v: &Value) -> CmdResult {
     if l + r + gutter.unwrap_or(cur.gutter) > cur.page_w - 36.0 || t + b > cur.page_h - 36.0 {
         return Err(CmdError::Params("margins leave no room for text".into()));
     }
-    s.doc.settings.mirror_margins = preset == Some("mirrored");
+    // A preset picks mirrored or not; plain numbers (a ruler drag, an agent) keep the setting.
+    if preset.is_some() {
+        s.doc.settings.mirror_margins = preset == Some("mirrored");
+    }
     with_sect(s, |x| {
         x.margin_top = t.max(0.0);
         x.margin_bottom = b.max(0.0);

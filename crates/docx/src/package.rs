@@ -32,6 +32,9 @@ pub mod rt {
     pub const IMAGE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
     pub const HYPERLINK: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
     pub const VBA_PROJECT: &str = "http://schemas.microsoft.com/office/2006/relationships/vbaProject";
+    pub const CHART: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart";
+    pub const DIAGRAM_DATA: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramData";
+    pub const DIAGRAM_DRAWING: &str = "http://schemas.microsoft.com/office/2007/relationships/diagramDrawing";
 }
 
 /// `Document::passthrough` key for a macro project, kept as opaque bytes (never parsed or run).
