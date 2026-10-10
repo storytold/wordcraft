@@ -187,7 +187,7 @@ pub fn levels_for(kind: ListKind) -> Vec<Level> {
                 ListKind::Outline => {
                     let f = [NumFormat::UpperRoman, NumFormat::UpperLetter, NumFormat::Decimal, NumFormat::LowerLetter, NumFormat::LowerRoman]
                         .get(i)
-                        .copied()
+                        .cloned()
                         .unwrap_or(NumFormat::Decimal);
                     lvl(f, format!("%{n}."))
                 }
@@ -300,7 +300,8 @@ impl Counters {
                 let k = (d as usize).saturating_sub(1).min(8);
                 let val = vals.get(k).copied().unwrap_or(0);
                 let val = if val == 0 { level_def(k).map(|l| l.start).unwrap_or(1) } else { val };
-                let fmt = if def.legal && k != lv { NumFormat::Decimal } else { level_def(k).map(|l| l.format).unwrap_or(NumFormat::Decimal) };
+                let fmt =
+                    if def.legal && k != lv { NumFormat::Decimal } else { level_def(k).map(|l| l.format.clone()).unwrap_or(NumFormat::Decimal) };
                 label.push_str(&fmt.format(val));
             } else {
                 label.push(c);
@@ -332,7 +333,20 @@ mod tests {
         assert_eq!(c.next_label(&n, id, 2).unwrap().0, "2.01");
         // Levels it doesn't define still come from the abstract list.
         assert_eq!(c.next_label(&n, id, 0).unwrap().0, "1.");
-        assert_eq!(n.level(id, 2).map(|l| l.format), Some(NumFormat::DecimalZero));
+        assert_eq!(n.level(id, 2).map(|l| l.format.clone()), Some(NumFormat::DecimalZero));
+    }
+
+    #[test]
+    fn arabic_abjad_lists_count_and_restart() {
+        let mut n = Numbering::default();
+        let id = n.add_list(ListKind::Numbered);
+        if let Some(num) = n.nums.iter_mut().find(|x| x.id == id) {
+            num.level_overrides = vec![(0, Level { format: NumFormat::ArabicAbjad, text: "%1.".into(), ..Level::default() })];
+            num.start_overrides = vec![(0, 3)];
+        }
+        let mut c = Counters::default();
+        assert_eq!(c.next_label(&n, id, 0).unwrap().0, "ج.");
+        assert_eq!(c.next_label(&n, id, 0).unwrap().0, "د.");
     }
 
     #[test]

@@ -58,7 +58,6 @@ pub fn japanese_ui_fonts(bold: bool) -> Vec<&'static CraftFont> {
 pub fn chinese_fonts() -> impl Iterator<Item = &'static CraftFont> {
     CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Hans"))
 }
-
 /// The CJK interface faces, Regular styles only (the UI fakes no bold): the Japanese UI face and
 /// the Chinese face, Chinese first when `prefer_hans` (a Chinese interface), Japanese first
 /// otherwise. Mixing the two within a line would mix glyph styles, so the first face should
@@ -68,6 +67,119 @@ pub fn ui_cjk_fonts(prefer_hans: bool) -> Vec<&'static CraftFont> {
     let ja = japanese_ui_fonts(false).into_iter().filter(regular).take(1);
     let zh = chinese_fonts().filter(regular).take(1);
     if prefer_hans { zh.chain(ja).collect() } else { ja.chain(zh).collect() }
+}
+
+/// The craft-fonts faces with Arabic script (`"Arab"`), in manifest order. Empty without
+/// craft-fonts (release builds embed Noto Sans Arabic through the craft-fonts pin).
+pub fn arabic_fonts() -> impl Iterator<Item = &'static CraftFont> {
+    CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Arab"))
+}
+
+/// Arabic faces in document-fallback order: Naskh (serif-style) families first, then the
+/// others; Regular before other styles.
+pub fn arabic_document_fonts() -> Vec<&'static CraftFont> {
+    let mut v: Vec<_> = arabic_fonts().collect();
+    v.sort_by_key(|f| (!f.family.contains("Naskh"), f.style != "Regular"));
+    v
+}
+
+/// Arabic faces in UI order: Sans families first (the UI face), Regular styles only (the UI
+/// fakes no bold). Empty without craft-fonts.
+pub fn arabic_ui_fonts() -> Vec<&'static CraftFont> {
+    let mut v: Vec<_> = arabic_fonts().filter(|f| f.style == "Regular").collect();
+    v.sort_by_key(|f| !f.family.contains("Sans"));
+    v
+}
+
+/// An Arabic-capable face: an embedded craft-fonts Arabic face covering Arabic when built with
+/// one, else an installed system font with full Arabic coverage. `None` when neither exists
+/// (Arabic then has no interface or document face beyond per-character fallback).
+pub fn arabic_ui_face() -> Option<FaceRef> {
+    let db = FontDb::global();
+    for c in arabic_ui_fonts() {
+        let face = db.face(c.family, c.style);
+        if face.family.eq_ignore_ascii_case(c.family) && face.covers('ب') && face.covers('پ') {
+            return Some(FaceRef::of(&face));
+        }
+    }
+    db.fallback_for('ب', u32::MAX).filter(|f| f.covers('پ')).map(|f| FaceRef::of(&f))
+}
+
+/// Installed Arabic faces the interface can use, best first (desktop only; validated before
+/// use, so a partial face like an old DejaVu Sans loses to a full one found later).
+#[cfg(not(target_arch = "wasm32"))]
+const ARABIC_UI_FILES: &[&str] = &[
+    "tahoma.ttf",
+    "tahomabd.ttf",
+    "segoeui.ttf",
+    "arial.ttf",
+    "trado.ttf",
+    "tradbdo.ttf",
+    "notosansarabic-regular.ttf",
+    "notonaskharabic-regular.ttf",
+    "amiri-regular.ttf",
+    "amiri.ttf",
+    "vazirmatn-regular.ttf",
+    "scheherazadenew-regular.ttf",
+    "dejavusans.ttf",
+];
+
+/// An installed Arabic face's bytes for the interface (desktop only): the best file above
+/// that parses and covers Arabic, read once and cached. `None` without one — the Arabic UI
+/// then needs embedded craft-fonts faces (release builds).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn system_arabic_ui_font() -> Option<&'static [u8]> {
+    static CACHE: std::sync::OnceLock<Option<&'static [u8]>> = std::sync::OnceLock::new();
+    *CACHE.get_or_init(find_system_arabic_ui_font)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn find_system_arabic_ui_font() -> Option<&'static [u8]> {
+    use std::collections::HashMap;
+    let mut found: HashMap<&str, std::path::PathBuf> = HashMap::new();
+    // A bounded walk: exact file names only, three levels deep, so a big font folder can't
+    // stall interface startup.
+    let mut stack: Vec<(std::path::PathBuf, u8)> = system_font_dirs().into_iter().map(|d| (d, 0)).collect();
+    let mut visited = 0usize;
+    'walk: while let Some((dir, depth)) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for e in entries.flatten() {
+            visited += 1;
+            if visited > 4000 {
+                break 'walk;
+            }
+            let p = e.path();
+            if p.is_dir() {
+                if depth < 3 {
+                    stack.push((p, depth + 1));
+                }
+                continue;
+            }
+            let name = e.file_name().to_string_lossy().to_ascii_lowercase();
+            if let Some(hit) = ARABIC_UI_FILES.iter().find(|c| **c == name) {
+                found.entry(hit).or_insert(p);
+            }
+        }
+    }
+    for name in ARABIC_UI_FILES {
+        if let Some(path) = found.get(name)
+            && let Some(bytes) = load_arabic_face(path)
+        {
+            return Some(bytes);
+        }
+    }
+    None
+}
+
+/// Read `path` when it parses as a font covering Arabic (ب and the Persian-only پ).
+#[cfg(not(target_arch = "wasm32"))]
+fn load_arabic_face(path: &std::path::Path) -> Option<&'static [u8]> {
+    if std::fs::metadata(path).map(|m| m.len() > 64 << 20).unwrap_or(true) {
+        return None;
+    }
+    let data = std::fs::read(path).ok()?;
+    let covered = skrifa::FontRef::from_index(&data, 0).is_ok_and(|f| ['\u{628}', '\u{67E}'].into_iter().all(|c| f.charmap().map(c).is_some()));
+    covered.then(|| Box::leak(data.into_boxed_slice()) as &'static [u8])
 }
 
 /// The bundled serif used when a document asks for nothing better.
@@ -249,6 +361,20 @@ mod tests {
     }
 
     #[test]
+    fn arabic_shaping_keeps_mappings_without_arabic_fonts() {
+        // Smoke test, deterministic on any machine: even when the face lacks Arabic entirely,
+        // shaping returns output in logical order with clusters on character boundaries instead
+        // of panicking. (Glyph coverage itself needs a real Arabic face; see the tests below.)
+        let face = FontDb::global().face(DEFAULT_FAMILY, "Regular");
+        assert_eq!(face.glyph_for('ب'), 0, "precondition: no Arabic in this face");
+        let text = "بِسْمِ";
+        let g = shape(&face, text, &[], |c| c);
+        assert!(!g.is_empty());
+        assert!(g.windows(2).all(|w| w[0].cluster <= w[1].cluster), "logical cluster order");
+        assert!(g.iter().all(|x| text.get(x.cluster..).is_some_and(|r| !r.is_empty())), "clusters sit on char boundaries");
+    }
+
+    #[test]
     fn ligatures_can_be_disabled() {
         let face = FontDb::global().face(DEFAULT_FAMILY, "Regular");
         let on = shape(&face, "office", &[], |c| c);
@@ -360,6 +486,46 @@ mod tests {
             assert!(japanese_fonts().next().is_none() && japanese_document_fonts().is_empty());
             let latin = db.face(DEFAULT_FAMILY, "Regular");
             assert!(db.fallback_for('語', latin.id()).is_none(), "no bundled Japanese font");
+        }
+    }
+
+    #[test]
+    fn arabic_craft_fonts_match_the_build_input() {
+        // With an `Arab` manifest entry the faces parse and cover Arabic; without the build
+        // input the iterators are empty but well-formed. The test adapts to the compiled input
+        // instead of assuming its absence.
+        let embedded: Vec<_> = arabic_fonts().collect();
+        for f in &embedded {
+            assert!(!f.family.is_empty() && !f.bytes.is_empty());
+            let font = skrifa::FontRef::new(f.bytes).expect("embedded faces parse");
+            assert!(font.charmap().map('ب').is_some() && font.charmap().map('پ').is_some(), "{} covers Arabic", f.family);
+        }
+        if embedded.is_empty() {
+            assert!(arabic_ui_fonts().is_empty());
+            assert_eq!(arabic_document_fonts().len(), 0);
+        } else {
+            assert!(!arabic_ui_fonts().is_empty(), "UI order exists when faces do");
+            assert!(!arabic_document_fonts().is_empty());
+            assert!(arabic_ui_fonts().iter().all(|f| f.style == "Regular"), "UI fakes no bold");
+        }
+    }
+
+    #[test]
+    fn arabic_faces_cover_arabic_when_present() {
+        // Embedded craft-fonts faces or an installed system font (Tahoma, Arial, Geeza…);
+        // skipped where neither exists (CI without system fonts or craft-fonts).
+        let probe = ['ب', 'پ', 'ِ', '٠'];
+        match arabic_ui_face() {
+            Some(face) => assert!(probe.iter().all(|c| face.glyph_for(*c) != 0), "probe coverage"),
+            None => eprintln!("skipped: no Arabic face on this machine"),
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        match system_arabic_ui_font() {
+            Some(bytes) => {
+                let font = skrifa::FontRef::from_index(bytes, 0).expect("installed faces parse");
+                assert!(probe.iter().all(|c| font.charmap().map(*c).is_some()), "installed probe coverage");
+            }
+            None => eprintln!("skipped: no installed Arabic font file on this machine"),
         }
     }
 }

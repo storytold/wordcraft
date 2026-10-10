@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 log = { workspace = true }
 miniz_oxide = "0.8"
+regex = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

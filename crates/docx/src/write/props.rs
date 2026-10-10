@@ -295,7 +295,9 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
         w.empty("w:ind", &a);
     }
     toggle(w, "w:contextualSpacing", p.contextual_spacing);
-    if let Some(a) = p.align {
+    if let Some(k) = p.kashida {
+        w.val("w:jc", k.ooxml());
+    } else if let Some(a) = p.align {
         w.val("w:jc", align_val(a));
     }
     if let Some(l) = p.outline_level {
@@ -359,6 +361,10 @@ fn tblpr_inner(w: &mut W, t: &TableProps) {
     }
     if let Some(f) = &t.float {
         table_float(w, f);
+    }
+    // `w:bidiVisual` sits between the floating placement and the width (ECMA-376 §17.4.1).
+    if t.rtl {
+        w.empty("w:bidiVisual", &[]);
     }
     if let Some(p) = t.width_pct {
         w.empty("w:tblW", &[("w:w", &n(round(p.clamp(0.0, 1000.0) * 50.0))), ("w:type", "pct")]);

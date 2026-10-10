@@ -59,6 +59,9 @@ fn num_format(nfc: u8) -> NumFormat {
         0x07 => NumFormat::OrdinalText,
         0x0A | 0x0B => NumFormat::DecimalZero,
         0x17 => NumFormat::Bullet,
+        0x24 => NumFormat::ArabicAlpha,
+        0x25 => NumFormat::ArabicAbjad,
+        0x27 => NumFormat::HindiNumbers,
         0xFF => NumFormat::None,
         _ => NumFormat::Decimal,
     }

@@ -66,9 +66,10 @@ pub fn field_text(instr: &str, result: &str, ctx: &FieldCtx) -> (String, bool) {
     let name = field_name(instr);
     let fmt = format_switch(instr);
     match name.as_str() {
-        "PAGE" => (fmt.unwrap_or(ctx.page_format).format(ctx.page), true),
-        "NUMPAGES" => (fmt.unwrap_or(NumFormat::Decimal).format(ctx.pages), true),
-        "SECTIONPAGES" => (fmt.unwrap_or(NumFormat::Decimal).format(ctx.section_pages), true),
+        "PAGE" => (fmt.unwrap_or(ctx.page_format.clone()).format(ctx.page), true),
+        // Page counts print in the section's numbering format, as Word does.
+        "NUMPAGES" => (fmt.unwrap_or(ctx.page_format.clone()).format(ctx.pages), true),
+        "SECTIONPAGES" => (fmt.unwrap_or(ctx.page_format.clone()).format(ctx.section_pages), true),
         "SECTION" => (fmt.unwrap_or(NumFormat::Decimal).format(ctx.section), true),
         "TITLE" if result.is_empty() => (ctx.title.to_string(), false),
         "AUTHOR" if result.is_empty() => (ctx.author.to_string(), false),
@@ -89,5 +90,16 @@ mod tests {
         assert_eq!(field_text("NUMPAGES \\* CardText", "", &ctx).0, "Twelve");
         assert_eq!(field_text("DATE \\@ \"M/d/yyyy\"", "1/2/2026", &ctx), ("1/2/2026".into(), false));
         assert_eq!(field_name("=SUM(ABOVE)"), "SUM(ABOVE)");
+    }
+
+    #[test]
+    fn page_fields_use_arabic_formats() {
+        let ctx = FieldCtx { page: 4, pages: 12, page_format: NumFormat::HindiNumbers, ..Default::default() };
+        assert_eq!(field_text("PAGE", "", &ctx).0, "४");
+        assert_eq!(field_text("PAGE \\* ROMAN", "", &ctx).0, "IV", "an explicit switch still wins");
+        let abjad = FieldCtx { page: 11, page_format: NumFormat::ArabicAbjad, ..Default::default() };
+        assert_eq!(field_text("PAGE", "", &abjad).0, "ك");
+        let alpha = FieldCtx { pages: 29, page_format: NumFormat::ArabicAlpha, ..Default::default() };
+        assert_eq!(field_text("NUMPAGES", "", &alpha).0, "أأ");
     }
 }

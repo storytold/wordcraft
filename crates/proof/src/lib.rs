@@ -6,6 +6,15 @@
 //! - **Grammar** checks that are cheap and reliable: repeated words, `a`/`an`, capital letter
 //!   after a sentence end, spaces before punctuation, doubled spaces.
 //! - **Hyphenation** ([`hyphen`]): dictionary, Liang patterns, heuristic.
+//!
+//! Arabic and other Arabic-script text: tokenization keeps zero-width joiners inside words
+//! (Persian نیم‌فاصله) and diacritics with their letters; spelling has no bundled Arabic
+//! dictionary yet, so Arabic-script words pass (the custom dictionary applies in every script).
+//! The English-only rules route by script: `a`/`an` need a Latin next word and sentence
+//! capitals need cased letters, so neither fires on Arabic; script-neutral ones (repetition,
+//! spacing) apply. [`strip_arabic_diacritics`] and [`arabic_search_pattern`] define the
+//! diacritic policy for search: diacritics match optionally by default, exactly on request,
+//! without rewriting stored text.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod dict;
@@ -186,7 +195,9 @@ fn known_core(w: &str) -> bool {
 }
 
 /// Is `word` spelled correctly? Numbers, single letters, ALL-CAPS acronyms, URLs and words with
-/// digits are accepted.
+/// digits are accepted. Arabic-script words have no bundled dictionary yet (see the module
+/// docs): they pass, unless the user dictionary says otherwise — "Add to Dictionary" works in
+/// any script, so custom Arabic words are honoured here first.
 pub fn is_correct(word: &str) -> bool {
     let w = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'');
     let w = w.trim_matches('\'');
@@ -196,10 +207,15 @@ pub fn is_correct(word: &str) -> bool {
     if w.chars().all(|c| !c.is_lowercase()) && w.chars().count() <= 6 {
         return true;
     }
+    let lower = w.to_lowercase().replace('’', "'");
+    // The custom dictionary comes before the script bail-out below, so words the user added
+    // are honoured in every script.
+    if user_words().read().unwrap_or_else(|e| e.into_inner()).contains(&lower) {
+        return true;
+    }
     if !w.is_ascii() && !w.chars().any(|c| c.is_ascii_alphabetic()) {
         return true; // other scripts: no dictionary
     }
-    let lower = w.to_lowercase().replace('’', "'");
     if known_core(&lower) {
         return true;
     }
@@ -289,7 +305,9 @@ fn damerau(a: &[char], b: &str) -> usize {
 pub fn words(text: &str) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     let mut start: Option<usize> = None;
-    let is_w = |c: char| c.is_alphanumeric() || c == '\'' || c == '’' || c == '-';
+    // Zero-width joiners are word-internal: Persian نیم‌فاصله (U+200C) joins half-spaces, and
+    // U+200D joins emoji sequences; neither starts a word on its own (trimmed below).
+    let is_w = |c: char| c.is_alphanumeric() || c == '\'' || c == '’' || c == '-' || c == '\u{200C}' || c == '\u{200D}';
     for (i, c) in text.char_indices() {
         match (start, is_w(c)) {
             (None, true) => start = Some(i),
@@ -303,15 +321,58 @@ pub fn words(text: &str) -> Vec<(usize, usize)> {
     if let Some(s) = start {
         out.push((s, text.len()));
     }
-    // Trim surrounding apostrophes/hyphens.
+    // Trim surrounding apostrophes/hyphens/joiners.
     out.into_iter()
         .filter_map(|(a, b)| {
             let w = text.get(a..b)?;
-            let lead = w.len() - w.trim_start_matches(['\'', '’', '-']).len();
-            let trail = w.len() - w.trim_end_matches(['\'', '’', '-']).len();
+            let lead = w.len() - w.trim_start_matches(['\'', '’', '-', '\u{200C}', '\u{200D}']).len();
+            let trail = w.len() - w.trim_end_matches(['\'', '’', '-', '\u{200C}', '\u{200D}']).len();
             (a + lead < b - trail).then_some((a + lead, b - trail))
         })
         .collect()
+}
+
+/// An Arabic diacritic (haraka): U+064B–U+0655 (fathatan..hamza below), U+0670 (superscript
+/// alef) and the Quranic marks U+06D6–U+06DC, U+06DF–U+06E4, U+06E7–06E8, U+06EA–U+06ED.
+/// Letters, tatweel (U+0640) and the Quranic ayah marks (U+06DD etc.) are NOT diacritics.
+pub fn is_arabic_diacritic(c: char) -> bool {
+    matches!(c,
+        '\u{064B}'..='\u{0655}' | '\u{0670}' | '\u{06D6}'..='\u{06DC}' | '\u{06DF}'..='\u{06E4}' | '\u{06E7}'..='\u{06E8}' | '\u{06EA}'..='\u{06ED}')
+}
+
+/// `text` with Arabic diacritics removed (matching only; stored content is never rewritten).
+/// A fathatan on an alef leaves the alef: "بِسْمِ" → "بسم".
+pub fn strip_arabic_diacritics(text: &str) -> String {
+    text.chars().filter(|c| !is_arabic_diacritic(*c)).collect()
+}
+
+/// An Arabic-script letter (for search expansion): alphanumeric, in an Arabic block, and not
+/// itself a diacritic.
+pub fn is_arabic_letter(c: char) -> bool {
+    c.is_alphanumeric()
+        && !is_arabic_diacritic(c)
+        && matches!(c,
+        '\u{0600}'..='\u{06FF}' | '\u{0750}'..='\u{077F}' | '\u{08A0}'..='\u{08FF}' | '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}')
+}
+
+/// A literal (non-regex) query as a diacritic-insensitive regex, or `None` when the query has
+/// no Arabic letters (the caller uses the query escaped as-is). Diacritics are stripped from
+/// the query and every remaining Arabic letter allows optional diacritics after it, so "بسم"
+/// and "بِسْمِ" both match "بِسْمِ" — including its marks in the match range, without touching
+/// stored text.
+pub fn arabic_search_pattern(query: &str) -> Option<String> {
+    if !query.chars().any(is_arabic_letter) {
+        return None;
+    }
+    const MARKS: &str = r"[\u064b-\u0655\u0670\u06d6-\u06dc\u06df-\u06e4\u06e7-\u06e8\u06ea-\u06ed]*";
+    let mut pat = String::with_capacity(query.len() * 2);
+    for c in strip_arabic_diacritics(query).chars() {
+        pat.push_str(&regex::escape(&c.to_string()));
+        if is_arabic_letter(c) {
+            pat.push_str(MARKS);
+        }
+    }
+    Some(pat)
 }
 
 /// Spelling issues in a paragraph of text (no suggestions; ask [`suggest`] on demand).
@@ -364,7 +425,7 @@ pub fn check_grammar(text: &str) -> Vec<Issue> {
         }
         if gap == " "
             && (w0 == "an" || w0 == "An")
-            && w1.chars().next().is_some_and(|c| c.is_alphabetic() && !"aeiouAEIOUhH".contains(c))
+            && w1.chars().next().is_some_and(|c| c.is_ascii_alphabetic() && !"aeiouAEIOUhH".contains(c))
             && !w1.chars().all(|c| c.is_uppercase())
         {
             v.push(Issue {
@@ -487,6 +548,70 @@ mod tests {
         assert!(!is_correct("zxqwordcrafty"));
         add_word("zxqwordcrafty");
         assert!(is_correct("zxqwordcrafty"));
+        // The custom dictionary works in every script (Arabic has no bundled dictionary).
+        add_word("كتابي");
+        assert!(is_correct("كتابي"));
+        assert!(user_dictionary().contains(&"كتابي".to_string()));
+    }
+
+    #[test]
+    fn grammar_policy_for_arabic() {
+        // Script-neutral rules still apply to Arabic; English-only rules route by script.
+        let v = check_grammar("الكتاب الكتاب");
+        assert!(v.iter().any(|i| i.message.contains("Repeated")), "{v:?}");
+        let v = check_grammar("نص  بمسافة");
+        assert!(v.iter().any(|i| i.message.contains("Extra space")), "{v:?}");
+        assert!(check_grammar("a الكتاب").iter().all(|i| !i.message.contains("\"an\"")));
+        assert!(check_grammar("an الكتاب").iter().all(|i| !i.message.contains("\"a\" before")), "no Latin rule on Arabic");
+        assert!(check_grammar("سلام. دنیا").iter().all(|i| !i.message.contains("Capitalize")));
+    }
+
+    #[test]
+    fn arabic_tokenization_keeps_joiners_and_marks() {
+        // Persian half-spaces join words; diacritics stay with their letters; byte ranges exact.
+        let t = "می‌خواهم بِسْمِ test";
+        let ws = words(t);
+        assert_eq!(ws.len(), 3);
+        assert_eq!(&t[ws[0].0..ws[0].1], "می‌خواهم");
+        assert_eq!(&t[ws[1].0..ws[1].1], "بِسْمِ");
+        assert_eq!(&t[ws[2].0..ws[2].1], "test");
+        // A lone joiner is trimmed, not a word.
+        assert_eq!(words("\u{200C}"), Vec::new());
+        // Arabic-script words pass spelling (no bundled dictionary); suggestions stay empty.
+        assert!(is_correct("می‌خواهم") && is_correct("بِسْمِ") && is_correct("كتاب"));
+        assert!(suggest("كتاب", 3).is_empty());
+        assert!(check_spelling(t).is_empty());
+    }
+
+    #[test]
+    fn arabic_diacritic_policy() {
+        assert!(is_arabic_diacritic('\u{064B}') && is_arabic_diacritic('\u{0652}') && is_arabic_diacritic('\u{0670}'));
+        assert!(is_arabic_diacritic('\u{06D6}') && is_arabic_diacritic('\u{06ED}'));
+        assert!(!is_arabic_diacritic('ب') && !is_arabic_diacritic('\u{0640}') && !is_arabic_diacritic(' '));
+        assert_eq!(strip_arabic_diacritics("بِسْمِ"), "بسم");
+        assert_eq!(strip_arabic_diacritics("طٰه"), "طه");
+        assert_eq!(strip_arabic_diacritics("hello بسم"), "hello بسم");
+        // Letters, tatweel and ayah marks survive stripping.
+        assert_eq!(strip_arabic_diacritics("مـ"), "مـ");
+        assert!(is_arabic_letter('ب') && is_arabic_letter('پ'));
+        assert!(!is_arabic_letter('\u{064B}') && !is_arabic_letter('a'));
+    }
+
+    #[test]
+    fn arabic_search_pattern_expands_marks() {
+        assert_eq!(arabic_search_pattern("hello"), None);
+        assert_eq!(arabic_search_pattern(""), None);
+        let pat = arabic_search_pattern("بسم").expect("arabic");
+        let re = regex::Regex::new(&pat).unwrap();
+        assert!(re.is_match("بسم") && re.is_match("بِسْمِ") && re.is_match("بَسْمَ"));
+        assert!(!re.is_match("بسن"));
+        // A query carrying its own marks matches the same set (marks never anchor).
+        let pat = arabic_search_pattern("بِسْمِ").expect("arabic");
+        assert!(regex::Regex::new(&pat).unwrap().is_match("بسم"));
+        // The match spans the marks: byte ranges stay exact.
+        let re = regex::Regex::new(&arabic_search_pattern("بسم").unwrap()).unwrap();
+        let m = re.find("x بِسْمِ y").unwrap();
+        assert_eq!(&"x بِسْمِ y"[m.start()..m.end()], "بِسْمِ");
     }
 
     #[test]
@@ -502,6 +627,11 @@ mod tests {
             let _ = check_grammar(&s);
             let _ = suggest(&s, 3);
             let _ = hyphen::hyphen_points(&s, &hyphen::Limits::default());
+            let _ = strip_arabic_diacritics(&s);
+            let _ = words(&s);
+            if let Some(p) = arabic_search_pattern(&s) {
+                let _ = regex::Regex::new(&p);
+            }
         }
     }
 }

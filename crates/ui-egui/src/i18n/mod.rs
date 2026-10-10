@@ -47,7 +47,7 @@ pub struct LangInfo {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 10] = [
+pub static LANGUAGES: [LangInfo; 11] = [
     LangInfo { code: "en", name: "English", source: "", prefer_hans: false, catalog: OnceLock::new() },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` resolve here (see `candidates`).
     LangInfo { code: "zh-hans", name: "简体中文", source: include_str!("zh-hans.tsv"), prefer_hans: true, catalog: OnceLock::new() },
@@ -60,6 +60,8 @@ pub static LANGUAGES: [LangInfo; 10] = [
     // Brazilian Portuguese; `pt-BR` and `pt-BR-*` resolve here. Plain `pt` and `pt-PT` have no
     // catalog yet (the European vocabulary differs), so they stay in English.
     LangInfo { code: "pt-br", name: "Português (Brasil)", source: include_str!("pt-br.tsv"), prefer_hans: false, catalog: OnceLock::new() },
+    // Arabic (Modern Standard Arabic); `ar-SA`, `ar-EG`, `ar-*` resolve here.
+    LangInfo { code: "ar", name: "العربية", source: include_str!("ar.tsv"), prefer_hans: false, catalog: OnceLock::new() },
     // Serbian, Cyrillic script (the default per BCP 47 when no script is given); `sr`, `sr-RS`,
     // `sr-Cyrl-*` resolve here.
     LangInfo { code: "sr", name: "Српски", source: include_str!("sr.tsv"), prefer_hans: false, catalog: OnceLock::new() },
@@ -112,6 +114,13 @@ impl Lang {
 
     pub fn prefers_hans(self) -> bool {
         self.0.prefer_hans
+    }
+
+    /// Interface languages read right to left. Document direction stays independent: an
+    /// Arabic UI edits left-to-right documents and vice versa. Full chrome mirroring follows
+    /// the shared interface-direction work (#20); locations already join mirrored.
+    pub fn is_rtl(self) -> bool {
+        self.0.code == "ar"
     }
 
     /// Is the interface written in CJK script (its own name is), so it needs a CJK face?
@@ -236,9 +245,11 @@ pub fn tr(lang: Lang, s: &str) -> &str {
     lang.catalog().plain(s).unwrap_or(s)
 }
 
-/// A ribbon location (`Home › Font`) in the current language, segment by segment.
+/// A ribbon location (`Home › Font`) in the current language, segment by segment. Right-to-left
+/// interfaces join the segments mirrored (`‹`).
 pub fn location(loc: &str) -> String {
-    loc.split(" › ").map(t).collect::<Vec<_>>().join(" › ")
+    let sep = if current().is_rtl() { " ‹ " } else { " › " };
+    loc.split(" › ").map(t).collect::<Vec<_>>().join(sep)
 }
 
 /// A label with an action after a fixed English prefix, e.g. `Undo Typing`: both parts translated

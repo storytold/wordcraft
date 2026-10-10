@@ -21,6 +21,8 @@ pub struct TableLayout {
     /// Table x offset within the column.
     pub x: f32,
     pub width: f32,
+    /// Right-to-left table: columns run from the right; storage stays logical.
+    pub rtl: bool,
     pub rows: Vec<RowLayout>,
 }
 
@@ -84,6 +86,15 @@ fn table_style(ctx: &Ctx, t: &Table) -> Option<TableStyleProps> {
 /// The table's default cell margins: its own, else its style's, else Word's.
 fn default_margins(t: &Table, style: Option<&TableStyleProps>) -> [f32; 4] {
     t.props.cell_margins.or(style.and_then(|s| s.parts.cell_margins)).unwrap_or(DEFAULT_MARGINS)
+}
+
+/// The leading cell's outer margin: how far its text sits inside the table's leading edge —
+/// the first cell's left margin, or, for a right-to-left table, the first cell's right margin
+/// (the first logical column shows on the right).
+pub(crate) fn leading_cell_margin(ctx: &Ctx, t: &Table) -> f32 {
+    let def = default_margins(t, table_style(ctx, t).as_ref());
+    let side = if t.props.rtl { 3 } else { 1 };
+    t.rows.first().and_then(|r| r.cells.first()).and_then(|c| c.props.margins).unwrap_or(def)[side]
 }
 
 /// The most paragraphs [`measure_table_columns`] lays out: a huge table is measured by its first
@@ -246,15 +257,6 @@ pub fn autofit_widths(cols: &[(f32, f32)], avail: f32) -> Vec<f32> {
     cols.iter().map(|c| c.0 + (c.1 - c.0) * k).collect()
 }
 
-/// The first cell's left margin: how far its text sits inside the table's edge.
-pub(crate) fn first_cell_left_margin(ctx: &Ctx, t: &Table) -> f32 {
-    first_cell_left_margin_in(t, default_margins(t, table_style(ctx, t).as_ref()))
-}
-
-fn first_cell_left_margin_in(t: &Table, def: [f32; 4]) -> f32 {
-    t.rows.first().and_then(|r| r.cells.first()).and_then(|c| c.props.margins).unwrap_or(def)[1]
-}
-
 /// A cell's borders from the table style's conditional regions it is in (`regions`: header row,
 /// total row, first column, last column, row band, column band), later regions winning. Row
 /// regions give their left/right edges at the table's sides and `inside_v` between cells; column
@@ -303,6 +305,8 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
     // Cell text formatting per region, built once per table.
     let mut cell_text: Vec<(Region, CellText)> = Vec::new();
     let ncols = t.cols().max(1);
+    // Right-to-left tables show the first logical column on the right; storage stays logical.
+    let rtl = t.props.rtl;
     // Column widths.
     let mut grid: Vec<f32> = if t.grid.len() == ncols {
         t.grid.iter().map(|w| if w.is_finite() { w.max(4.0) } else { 72.0 }).collect()
@@ -358,16 +362,32 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
         tborders.overlay(&own);
     }
     let first_cell = t.rows.first().and_then(|r| r.cells.first());
+    // The indent side follows the table's direction: a right-to-left table's indent is measured
+    // from the text's right edge (`w:tblInd` off the leading margin). The cell on that edge is
+    // the first logical cell (mirrored to the right), so its physical right margin and border
+    // set the inset.
+    let edge_margin = first_cell.and_then(|c| c.props.margins).unwrap_or(margins_def)[if rtl { 3 } else { 1 }];
     let x = match t.props.align {
         Some(Align::Center) => (avail - total) / 2.0,
         Some(Align::Right) => avail - total,
         _ if ctx.doc.settings.compat_mode >= 15 => {
             // The border is centred on the edge, so half of it sits outside: Word moves the
             // table in by that half.
-            let border = first_cell.and_then(|c| c.props.borders.and_then(|b| b.left)).or(tborders.left);
-            indent + border.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0) / 2.0)
+            let border = first_cell.and_then(|c| c.props.borders.and_then(|b| if rtl { b.right } else { b.left })).or(if rtl {
+                tborders.right
+            } else {
+                tborders.left
+            });
+            let inset = indent + border.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0) / 2.0);
+            if rtl { avail - total - inset } else { inset }
         }
-        _ => indent - first_cell_left_margin_in(t, margins_def),
+        _ => {
+            if rtl {
+                avail - total - indent + edge_margin
+            } else {
+                indent - edge_margin
+            }
+        }
     };
     let nrows = t.rows.len();
     let header_rows = t.props.look.header_row;
@@ -400,8 +420,10 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
         let band = banded(t, style.as_ref(), ri);
         for (ci, cell) in row.cells.iter().enumerate() {
             let span = cell.span();
-            let x0 = colx.get(g).copied().unwrap_or(acc);
-            let x1 = colx.get((g + span).min(ncols)).copied().unwrap_or(acc);
+            let lx0 = colx.get(g).copied().unwrap_or(acc);
+            let lx1 = colx.get((g + span).min(ncols)).copied().unwrap_or(acc);
+            // Mirror logical columns into visual positions; margins stay physical.
+            let (x0, x1) = if rtl { (acc - lx1, acc - lx0) } else { (lx0, lx1) };
             let margins = cell.props.margins.unwrap_or(margins_def);
             let cw = (x1 - x0 - margins[1] - margins[3]).max(4.0);
             let mut fill = cell.props.shading;
@@ -445,15 +467,15 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             let edge =
                 |own: Option<Border>, outer: bool, outer_b: Option<Border>, inner_b: Option<Border>| own.or(if outer { outer_b } else { inner_b });
             let cb = cell.props.borders.unwrap_or_default();
-            let (first_g, last_g) = (g == 0, g + span >= ncols);
+            let (outer_left, outer_right) = if rtl { (g + span >= ncols, g == 0) } else { (g == 0, g + span >= ncols) };
             let rb = parts
-                .map(|p| region_borders(p, (ri, nrows), (first_g, last_g), [is_header, is_total, first_col, last_col, band, col_band]))
+                .map(|p| region_borders(p, (ri, nrows), (outer_left, outer_right), [is_header, is_total, first_col, last_col, band, col_band]))
                 .unwrap_or_default();
             let mut borders = Borders {
                 top: edge(cb.top.or(rb.top), ri == 0, tb.top, tb.between),
                 bottom: edge(cb.bottom.or(rb.bottom), ri + 1 == nrows, tb.bottom, tb.between),
-                left: edge(cb.left.or(if first_g { rb.left } else { rb.inside_v }), first_g, tb.left, tb.inside_v),
-                right: edge(cb.right.or(if last_g { rb.right } else { rb.inside_v }), last_g, tb.right, tb.inside_v),
+                left: edge(cb.left.or(if outer_left { rb.left } else { rb.inside_v }), outer_left, tb.left, tb.inside_v),
+                right: edge(cb.right.or(if outer_right { rb.right } else { rb.inside_v }), outer_right, tb.right, tb.inside_v),
                 between: None,
                 inside_v: None,
             };
@@ -646,7 +668,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
         }
         out.push(RowLayout { height: rh, items });
     }
-    TableLayout { x, width: total, rows: out }
+    TableLayout { x, width: total, rtl, rows: out }
 }
 
 /// Split a row at `cut` (points below the row's top) so the part above fits on this page.

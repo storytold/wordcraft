@@ -1,11 +1,12 @@
 //! Right-to-left and complex-script OOXML: `w:bidi` paragraphs, `w:rtl` / `w:cs` runs, the
 //! complex-script font, size, bold and italic, and the bidi language. Fixtures are hand-written
 //! from ECMA-376 Part 1 §17.3.1.6 (bidi), §17.3.2 (run properties).
+//! Table direction (#66) round-trips as `w:bidiVisual` (ECMA-376 §17.4.1) with logical cell order.
 
 use std::io::{Read, Write};
 
 use wordcraft_doc::props::{Align, CharProps, ParaProps};
-use wordcraft_doc::{Document, Paragraph, para_block};
+use wordcraft_doc::{Block, Document, Paragraph, Table, para_block};
 
 fn zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -128,6 +129,29 @@ fn reads_word_style_bidi_markup() {
 }
 
 #[test]
+fn kashida_modes_read_distinctly_and_round_trip() {
+    // Word's three kashida justification modes stay distinct; plain justification is untouched.
+    let body = r#"
+<w:p><w:pPr><w:bidi/><w:jc w:val="lowKashida"/></w:pPr><w:r><w:t>أ</w:t></w:r></w:p>
+<w:p><w:pPr><w:jc w:val="mediumKashida"/></w:pPr><w:r><w:t>b</w:t></w:r></w:p>
+<w:p><w:pPr><w:jc w:val="highKashida"/></w:pPr><w:r><w:t>c</w:t></w:r></w:p>
+<w:p><w:pPr><w:jc w:val="both"/></w:pPr><w:r><w:t>d</w:t></w:r></w:p>"#;
+    let d = wordcraft_docx::read(&docx(body)).unwrap();
+    let ps = paras(&d);
+    assert_eq!(ps.len(), 4);
+    assert_eq!((ps[0].props.align, ps[0].props.kashida), (Some(Align::Justify), Some(wordcraft_doc::props::Kashida::Low)));
+    assert_eq!((ps[1].props.align, ps[1].props.kashida), (Some(Align::Justify), Some(wordcraft_doc::props::Kashida::Medium)));
+    assert_eq!((ps[2].props.align, ps[2].props.kashida), (Some(Align::Justify), Some(wordcraft_doc::props::Kashida::High)));
+    assert_eq!((ps[3].props.align, ps[3].props.kashida), (Some(Align::Justify), None));
+    let xml = document_xml(&wordcraft_docx::write(&d).unwrap());
+    for mode in ["lowKashida", "mediumKashida", "highKashida"] {
+        assert!(xml.contains(&format!(r#"w:val="{mode}""#)), "mode kept: {mode}");
+    }
+    let r = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(paras(&r).iter().map(|p| p.props.kashida).collect::<Vec<_>>(), ps.iter().map(|p| p.props.kashida).collect::<Vec<_>>());
+}
+
+#[test]
 fn hostile_bidi_markup_is_bounded() {
     let long = "x".repeat(10_000);
     let body = format!(
@@ -138,4 +162,104 @@ fn hostile_bidi_markup_is_bounded() {
     assert_eq!(c.font_cs, None, "absurd font names are dropped");
     assert_eq!(c.lang_bidi, None);
     assert!(c.size_cs.is_none_or(|s| (1.0..=1638.0).contains(&s)));
+}
+
+/// A two-column table with Arabic and English cells, right to left or not.
+fn two_col_table(rtl: bool) -> Table {
+    let mut t = Table::new(1, 2, 200.0);
+    t.props.rtl = rtl;
+    let mut ar = Paragraph::with_text("العمود الأول", CharProps { rtl: Some(true), ..Default::default() });
+    ar.props.bidi = Some(true);
+    t.rows[0].cells[0].blocks = vec![para_block(ar)];
+    t.rows[0].cells[1].blocks = vec![para_block(Paragraph::with_text("second column", Default::default()))];
+    t
+}
+
+fn tables(d: &Document) -> Vec<&Table> {
+    d.body.iter().filter_map(|b| b.as_table()).collect()
+}
+
+#[test]
+fn rtl_table_direction_round_trips_with_logical_cell_order() {
+    let mut d = Document::new();
+    d.body = vec![para_block(Paragraph::with_text("before", Default::default())), Block::Table(two_col_table(true)).into()];
+    let xml = document_xml(&wordcraft_docx::write(&d).unwrap());
+    assert!(xml.contains("<w:bidiVisual/>"), "table direction is written: {xml}");
+    let r = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    let ts = tables(&r);
+    assert_eq!(ts.len(), 1);
+    assert!(ts[0].props.rtl, "bidiVisual survives the round trip");
+    let texts: Vec<String> =
+        ts[0].rows[0].cells.iter().map(|c| c.blocks.iter().filter_map(|b| b.as_para()).map(|p| p.text.clone()).collect()).collect();
+    assert_eq!(texts, ["العمود الأول", "second column"], "logical cell order is never reversed");
+    assert_eq!(ts[0].rows[0].cells[0].blocks[0].as_para().unwrap().props.bidi, Some(true), "cell text direction is independent");
+    assert_eq!(ts[0].rows[0].cells[1].blocks[0].as_para().unwrap().props.bidi, None);
+}
+
+#[test]
+fn ltr_tables_write_no_bidi_visual() {
+    let mut d = Document::new();
+    d.body = vec![Block::Table(two_col_table(false)).into()];
+    let xml = document_xml(&wordcraft_docx::write(&d).unwrap());
+    assert!(!xml.contains("bidiVisual"), "no direction element for LTR tables: {xml}");
+    let r = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert!(!tables(&r)[0].props.rtl);
+}
+
+#[test]
+fn bidi_visual_markup_is_read_in_schema_order() {
+    // What a right-to-left table looks like in a Word document: `w:bidiVisual` between the
+    // floating placement and the width (ECMA-376 §17.4.1), as an on/off element.
+    let body = r#"
+<w:tbl>
+  <w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblpPr w:horzAnchor="margin" w:vertAnchor="text" w:tblpX="10" w:tblpY="10"/><w:tblOverlap w:val="never"/><w:bidiVisual/><w:tblW w:w="4000" w:type="dxa"/><w:jc w:val="right"/></w:tblPr>
+  <w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid>
+  <w:tr><w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/></w:tcPr><w:p><w:pPr><w:bidi/></w:pPr><w:r><w:t>أ</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>b</w:t></w:r></w:p></w:tc></w:tr>
+</w:tbl>
+<w:tbl>
+  <w:tblPr><w:tblW w:w="0" w:type="auto"/><w:bidiVisual w:val="0"/></w:tblPr>
+  <w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid>
+  <w:tr><w:tc><w:tcPr><w:tcW w:w="0" w:type="auto"/></w:tcPr><w:p><w:r><w:t>x</w:t></w:r></w:p></w:tc></w:tr>
+</w:tbl>"#;
+    let d = wordcraft_docx::read(&docx(body)).unwrap();
+    let ts = tables(&d);
+    assert_eq!(ts.len(), 2);
+    assert!(ts[0].props.rtl, "bare bidiVisual means right to left");
+    assert_eq!(ts[0].props.align, Some(Align::Right));
+    assert!(ts[0].props.float.is_some() && !ts[0].props.float.unwrap().overlap, "placement around it still parses");
+    assert_eq!(ts[0].rows[0].cells[0].blocks[0].as_para().unwrap().text, "أ");
+    assert!(!ts[1].props.rtl, "val=0 means left to right");
+    // Our writer keeps schema order: style, placement, bidiVisual, width.
+    let xml = document_xml(&wordcraft_docx::write(&d).unwrap());
+    let pos = |t: &str| xml.find(t).unwrap_or_else(|| panic!("{t} missing: {xml}"));
+    assert!(pos("<w:tblStyle") < pos("<w:bidiVisual/>") && pos("<w:bidiVisual/>") < pos("<w:tblW"));
+}
+
+#[test]
+fn rtl_hyperlinks_and_bookmarks_round_trip() {
+    // Links, bookmarks and their anchors survive in RTL paragraphs with logical text.
+    let body = r#"
+<w:p><w:pPr><w:bidi/></w:pPr>
+<w:r><w:rPr><w:rtl/></w:rPr><w:t>انظر</w:t></w:r>
+<w:bookmarkStart w:id="7" w:name="مقطع"/><w:r><w:rPr><w:rtl/></w:rPr><w:t xml:space="preserve"> </w:t></w:r>
+<w:hyperlink r:id="rId9" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:r><w:rPr><w:rtl/></w:rPr><w:t>الرابط</w:t></w:r></w:hyperlink>
+<w:bookmarkEnd w:id="7"/></w:p>"#;
+    let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+    let doc_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.test/" TargetMode="External"/></Relationships>"#;
+    let doc = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{body}</w:body></w:document>"#
+    );
+    let bytes =
+        zip(&[("_rels/.rels", rels.as_bytes()), ("word/document.xml", doc.as_bytes()), ("word/_rels/document.xml.rels", doc_rels.as_bytes())]);
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    let ps = paras(&d);
+    // Bookmark markers live in the text as placeholders; the words stay logical.
+    assert!(ps[0].text.contains("انظر") && ps[0].text.contains("الرابط"), "{:?}", ps[0].text);
+    let links: Vec<_> = ps[0].runs.iter().filter_map(|r| r.props.link.clone()).collect();
+    assert_eq!(links, ["https://example.test/"]);
+    assert!(d.bookmarks().iter().any(|(n, _)| n == "مقطع"), "bookmark kept");
+    let r = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert!(paras(&r)[0].text.contains("انظر") && paras(&r)[0].text.contains("الرابط"));
+    assert_eq!(paras(&r)[0].props.bidi, Some(true));
+    assert!(r.bookmarks().iter().any(|(n, _)| n == "مقطع"));
 }

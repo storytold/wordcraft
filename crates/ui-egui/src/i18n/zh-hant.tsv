@@ -677,6 +677,7 @@
 	Search commands and help	搜尋命令和說明
 	Search document	搜尋文件
 	Section Breaks	分節符號
+	Section Direction	節方向
 	Section Properties	節屬性
 	Sections	節數
 	Select	選取
@@ -776,6 +777,7 @@
 	Table	表格
 	Table Column Width	表格欄寬
 	Table Design	表格設計
+	Table Direction	表格方向
 	Table Layout	表格版面配置
 	Table of Authorities	引文目錄
 	Table of Contents	目錄

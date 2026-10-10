@@ -148,7 +148,7 @@ fn list_autoformat_triggers() {
     assert_eq!(paras(&s), vec![para("Alpha", Some(0)), para("beta", Some(0))]);
     assert_eq!(label_at(&s, 0), "%1.");
     let n = s.doc.para_at(&Pos::body(0, 0)).and_then(|p| p.props.numbering).unwrap();
-    assert_eq!(s.doc.numbering.level(n.num, 0).map(|l| l.format), Some(wordcraft_doc::section::NumFormat::LowerLetter));
+    assert_eq!(s.doc.numbering.level(n.num, 0).map(|l| l.format.clone()), Some(wordcraft_doc::section::NumFormat::LowerLetter));
 }
 
 #[test]

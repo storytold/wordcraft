@@ -699,6 +699,7 @@
 	Search commands and help	Пошук команд і довідки
 	Search document	Пошук у документі
 	Section Breaks	Розриви розділів
+	Section Direction	Напрямок розділу
 	Section Properties	Властивості розділу
 	Sections	Розділи
 	Select	Виділити
@@ -800,6 +801,7 @@
 	Table	Таблиця
 	Table Column Width	Ширина стовпця таблиці
 	Table Design	Дизайн таблиці
+	Table Direction	Напрямок таблиці
 	Table Layout	Макет таблиці
 	Table of Authorities	Покажчик правових джерел
 	Table of Contents	Зміст

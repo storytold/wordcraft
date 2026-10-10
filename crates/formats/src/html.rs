@@ -339,6 +339,8 @@ struct El {
     kind: ElKind,
     fmt: Fmt,
     align: Option<Align>,
+    /// Nearest explicit `dir` (`rtl` = true, `ltr` = false); paragraphs inherit the innermost.
+    dir: Option<bool>,
     preserve: bool,
     page_break: bool,
     /// Li: a paragraph of this item was already emitted.
@@ -350,6 +352,8 @@ struct TableB {
     row: Option<Vec<Cell>>,
     /// The table or one of its cells asks for borders.
     bordered: bool,
+    /// `dir="rtl"` on the table element.
+    rtl: bool,
 }
 
 /// Whether an element's `border` attribute or `style` declares a visible border.
@@ -618,6 +622,8 @@ impl<'r> Builder<'r> {
                     p.align = e.align;
                 }
             }
+            // Direction inherits from the innermost element carrying it, like CSS.
+            p.rtl = self.stack.iter().rev().find_map(|e| e.dir).unwrap_or(false);
             if let (Some((o, _)), Some(li)) = (list_level, li_at) {
                 p.list = Some(ListInfo { ordered: o, level: lists.saturating_sub(1).min(8) as u8 });
                 self.para_cont = self.stack.get(li).is_some_and(|e| e.used);
@@ -784,7 +790,7 @@ impl<'r> Builder<'r> {
                         t.rows.push(r);
                     }
                     let borderless = !t.bordered;
-                    let mut ft = FTable { rows: t.rows.into_iter().filter(|r| !r.is_empty()).collect(), widths: Vec::new(), borderless };
+                    let mut ft = FTable { rows: t.rows.into_iter().filter(|r| !r.is_empty()).collect(), widths: Vec::new(), borderless, rtl: t.rtl };
                     if !ft.rows.is_empty() {
                         ft.insert_covered();
                         self.container().push(FBlock::Table(ft));
@@ -1002,11 +1008,42 @@ impl<'r> Builder<'r> {
         if let Some(st) = attr(attrs, "style") {
             apply_style(st, &mut fmt, &mut align, &mut preserve, &mut page_break);
         }
+        // `dir` beats the stylesheet, as in browsers; `auto` leaves inheritance alone.
+        let mut dir = attr(attrs, "dir").and_then(|d| match d.trim().to_ascii_lowercase().as_str() {
+            "rtl" => Some(true),
+            "ltr" => Some(false),
+            _ => None,
+        });
+        if dir.is_none()
+            && let Some(st) = attr(attrs, "style")
+        {
+            for decl in st.split(';') {
+                if let Some((k, v)) = decl.split_once(':')
+                    && k.trim().eq_ignore_ascii_case("direction")
+                {
+                    dir = match v.trim().to_ascii_lowercase().as_str() {
+                        "rtl" => Some(true),
+                        "ltr" => Some(false),
+                        _ => None,
+                    };
+                    break;
+                }
+            }
+        }
         if kind == ElKind::Pre {
             preserve = true;
         }
         match kind {
-            ElKind::Table => self.tables.push(TableB { rows: Vec::new(), row: None, bordered: declares_border(attrs, true) }),
+            ElKind::Table => {
+                // An explicit `dir` wins; otherwise the table inherits its container's.
+                let inherited = self.stack.iter().rev().find_map(|e| e.dir);
+                self.tables.push(TableB {
+                    rows: Vec::new(),
+                    row: None,
+                    bordered: declares_border(attrs, true),
+                    rtl: dir.or(inherited).unwrap_or(false),
+                })
+            }
             ElKind::Tr => {
                 if let Some(t) = self.tables.last_mut()
                     && let Some(r) = t.row.take()
@@ -1043,7 +1080,7 @@ impl<'r> Builder<'r> {
             }
             _ => {}
         }
-        self.stack.push(El { name: name.to_string(), kind, fmt, align, preserve, page_break, used: false });
+        self.stack.push(El { name: name.to_string(), kind, fmt, align, dir, preserve, page_break, used: false });
     }
 
     fn end(&mut self, name: &str) {
@@ -1255,7 +1292,9 @@ fn trim_num(v: f32) -> String {
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
-fn para_attrs(p: &Para) -> String {
+/// Paragraph attributes: alignment/page-break CSS plus an explicit direction mark only when
+/// it differs from the inherited container direction (tables pass theirs down).
+fn para_attrs(p: &Para, inherited: bool) -> String {
     let mut css: Vec<&str> = Vec::new();
     if let Some(a) = align_css(p.align) {
         css.push(a);
@@ -1263,12 +1302,18 @@ fn para_attrs(p: &Para) -> String {
     if p.page_break {
         css.push("break-before:page;page-break-before:always");
     }
-    if css.is_empty() { String::new() } else { format!(" style=\"{}\"", css.join(";")) }
+    let mut attrs = if css.is_empty() { String::new() } else { format!(" style=\"{}\"", css.join(";")) };
+    if p.rtl && !inherited {
+        attrs.push_str(" dir=\"rtl\"");
+    } else if !p.rtl && inherited {
+        attrs.push_str(" dir=\"ltr\"");
+    }
+    attrs
 }
 
-fn para_html(p: &Para) -> String {
+fn para_html(p: &Para, inherited: bool) -> String {
     let body = inlines_html(&p.inlines);
-    let attrs = para_attrs(p);
+    let attrs = para_attrs(p, inherited);
     match p.kind {
         Kind::Heading(n) => format!("<h{n}{attrs}>{body}</h{n}>", n = n.clamp(1, 6)),
         Kind::Title => format!("<h1{attrs}>{body}</h1>"),
@@ -1278,8 +1323,12 @@ fn para_html(p: &Para) -> String {
     }
 }
 
-fn table_html(t: &FTable, out: &mut String, depth: usize) {
-    out.push_str("<table style=\"border-collapse:collapse\">\n");
+fn table_html(t: &FTable, out: &mut String, depth: usize, inherited: bool) {
+    out.push_str(if t.rtl != inherited {
+        if t.rtl { "<table dir=\"rtl\" style=\"border-collapse:collapse\">\n" } else { "<table dir=\"ltr\" style=\"border-collapse:collapse\">\n" }
+    } else {
+        "<table style=\"border-collapse:collapse\">\n"
+    });
     for row in &t.rows {
         out.push_str("<tr>");
         for c in row {
@@ -1307,10 +1356,12 @@ fn table_html(t: &FTable, out: &mut String, depth: usize) {
             }
             out.push_str(&format!("<{tag}{attrs} style=\"{}\">", css.join(";")));
             match single {
-                Some(p) => out.push_str(&inlines_html(&p.inlines)),
-                None => {
+                // A cell paragraph matching the table's direction inherits it as bare text;
+                // anything else keeps an explicit mark through the block path.
+                Some(p) if p.rtl == t.rtl => out.push_str(&inlines_html(&p.inlines)),
+                _ => {
                     out.push('\n');
-                    blocks_html(&c.blocks, out, depth + 1);
+                    blocks_html(&c.blocks, out, depth + 1, t.rtl);
                 }
             }
             out.push_str(&format!("</{tag}>"));
@@ -1320,19 +1371,21 @@ fn table_html(t: &FTable, out: &mut String, depth: usize) {
     out.push_str("</table>\n");
 }
 
-fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize) {
+fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize, inherited: bool) {
     let mut i = 0;
     while let Some(b) = blocks.get(i) {
         match b {
             FBlock::Table(t) => {
                 if depth < model::MAX_DEPTH {
-                    table_html(t, out, depth);
+                    table_html(t, out, depth, inherited);
                 }
                 i += 1;
             }
             FBlock::Para(p) if p.list.is_some() => {
-                // Nested lists from consecutive list paragraphs.
+                // Nested lists from consecutive list paragraphs. The open item's direction per
+                // level scopes nested `<li>` marks, like the elements nest.
                 let mut stack: Vec<(bool, bool)> = Vec::new(); // (ordered, li open)
+                let mut item_rtl: Vec<bool> = Vec::new();
                 while let Some(FBlock::Para(q)) = blocks.get(i) {
                     let Some(li) = q.list else { break };
                     let lv = li.level.min(8) as usize;
@@ -1342,6 +1395,7 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize) {
                     if stack.len() == lv + 1 && stack.last().is_some_and(|s| s.0 != li.ordered) {
                         close_list(&mut stack, out);
                     }
+                    item_rtl.truncate(stack.len());
                     while stack.len() < lv + 1 {
                         if let Some(top) = stack.last_mut()
                             && !top.1
@@ -1351,6 +1405,8 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize) {
                         }
                         out.push_str(if li.ordered { "<ol>" } else { "<ul>" });
                         stack.push((li.ordered, false));
+                        // The new nested list belongs to the currently open item above it.
+                        item_rtl.push(item_rtl.last().copied().unwrap_or(inherited));
                     }
                     if let Some(top) = stack.last_mut() {
                         if top.1 {
@@ -1358,9 +1414,14 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize) {
                         }
                         top.1 = true;
                     }
+                    // This item inherits its enclosing item's direction (or the container's).
+                    let ctx = if lv == 0 { inherited } else { item_rtl.get(lv - 1).copied().unwrap_or(inherited) };
                     let body = inlines_html(&q.inlines);
-                    let attrs = para_attrs(q);
+                    let attrs = para_attrs(q, ctx);
                     out.push_str(&format!("<li{attrs}>{body}"));
+                    if let Some(slot) = item_rtl.get_mut(lv) {
+                        *slot = q.rtl;
+                    }
                     i += 1;
                 }
                 while !stack.is_empty() {
@@ -1390,14 +1451,14 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize) {
                     if q.kind != Kind::Quote || q.list.is_some() {
                         break;
                     }
-                    out.push_str(&para_html(&Para { kind: Kind::Normal, ..q.clone() }));
+                    out.push_str(&para_html(&Para { kind: Kind::Normal, ..q.clone() }, inherited));
                     out.push('\n');
                     i += 1;
                 }
                 out.push_str("</blockquote>\n");
             }
             FBlock::Para(p) => {
-                out.push_str(&para_html(p));
+                out.push_str(&para_html(p, inherited));
                 out.push('\n');
                 i += 1;
             }
@@ -1437,7 +1498,7 @@ pub fn export_flow(flow: &Flow, lang: &str) -> String {
          table{border-collapse:collapse;margin:0.5em 0}\nblockquote{margin:0.5em 2em;font-style:italic;color:#404040}\n\
          pre{background:#f5f5f5;padding:0.5em;font-family:'Courier New',monospace;font-size:10pt}\n</style>\n</head>\n<body>\n",
     );
-    blocks_html(&flow.blocks, &mut out, 0);
+    blocks_html(&flow.blocks, &mut out, 0, false);
     out.push_str("</body>\n</html>\n");
     out
 }
@@ -1535,5 +1596,128 @@ mod tests {
     #[test]
     fn entities() {
         assert_eq!(unescape("a &lt;b&gt; &#65;&#x42; &bogus; &"), "a <b> AB &bogus; &");
+    }
+
+    #[test]
+    fn nested_list_items_keep_their_direction() {
+        // An explicitly LTR item under an RTL parent (and the reverse) must survive export;
+        // so must a sibling after a nested list closes, and a list inside an RTL table.
+        let f = parse(
+            "<ul><li dir=\"rtl\">outer<ul><li dir=\"ltr\">inner</li><li dir=\"ltr\">sibling</li></ul></li><li dir=\"ltr\">top</li></ul><ol><li dir=\"ltr\">a<ol><li dir=\"rtl\">ب</li></ol></li></ol>",
+        );
+        let dirs: Vec<(bool, u8, bool, String)> = f
+            .blocks
+            .iter()
+            .filter_map(|b| {
+                if let FBlock::Para(p) = b {
+                    Some((p.rtl, p.list.map(|l| l.level).unwrap_or(0), p.list.is_some_and(|l| l.ordered), p.text()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            dirs,
+            [
+                (true, 0, false, "outer".into()),
+                (false, 1, false, "inner".into()),
+                (false, 1, false, "sibling".into()),
+                (false, 0, false, "top".into()),
+                (false, 0, true, "a".into()),
+                (true, 1, true, "ب".into())
+            ]
+        );
+        let html = export_flow(&f, "en");
+        assert!(html.contains("<li dir=\"ltr\">inner</li>"), "differing child marked: {html}");
+        assert!(html.contains("<li dir=\"rtl\">ب</li>"), "differing nested child marked: {html}");
+        let back = parse(&html);
+        let dirs: Vec<(bool, u8, bool, String)> = back
+            .blocks
+            .iter()
+            .filter_map(|b| {
+                if let FBlock::Para(p) = b {
+                    let li = p.list.expect("still a list item");
+                    Some((p.rtl, li.level, li.ordered, p.text()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            dirs,
+            [
+                (true, 0, false, "outer".into()),
+                (false, 1, false, "inner".into()),
+                (false, 1, false, "sibling".into()),
+                (false, 0, false, "top".into()),
+                (false, 0, true, "a".into()),
+                (true, 1, true, "ب".into())
+            ]
+        );
+        // A list inside an RTL table inherits the table unless items override it.
+        let f = parse("<table dir=\"rtl\"><tr><td><ul><li>plain</li><li dir=\"ltr\">latin</li></ul></td></tr></table>");
+        let html = export_flow(&f, "en");
+        assert!(html.contains("<li dir=\"ltr\">latin</li>"), "override inside RTL table: {html}");
+        assert!(!html.contains("<li dir=\"rtl\">plain</li>"), "inherited items stay bare: {html}");
+        let back = parse(&html);
+        let t = back.blocks.iter().find_map(|b| if let FBlock::Table(t) = b { Some(t) } else { None }).unwrap();
+        assert!(t.rtl);
+        let items: Vec<bool> = t.rows[0][0].blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p.rtl) } else { None }).collect();
+        assert_eq!(items, [true, false]);
+    }
+
+    #[test]
+    fn mixed_direction_cells_keep_explicit_marks() {
+        // An LTR paragraph inside an RTL table (and vice versa) must not inherit the table.
+        let f = parse(
+            "<table dir=\"rtl\"><tr><td><p dir=\"ltr\">abc 123</p></td><td><p dir=\"rtl\">سلام</p></td></tr></table><table dir=\"ltr\"><tr><td><p dir=\"rtl\">أ</p></td></tr></table>",
+        );
+        let tables: Vec<&FTable> = f.blocks.iter().filter_map(|b| if let FBlock::Table(t) = b { Some(t) } else { None }).collect();
+        assert_eq!(tables.len(), 2);
+        assert!(tables[0].rtl && !tables[1].rtl);
+        let cells: Vec<bool> =
+            tables[0].rows[0].iter().flat_map(|c| c.blocks.iter()).filter_map(|b| if let FBlock::Para(p) = b { Some(p.rtl) } else { None }).collect();
+        assert_eq!(cells, [false, true], "cell directions stay independent");
+        let html = export_flow(&f, "en");
+        assert!(html.contains("<p dir=\"ltr\">abc 123</p>"), "LTR override marked: {html}");
+        let back = parse(&html);
+        let tables: Vec<&FTable> = back.blocks.iter().filter_map(|b| if let FBlock::Table(t) = b { Some(t) } else { None }).collect();
+        let cells: Vec<(bool, String)> = tables[0].rows[0]
+            .iter()
+            .flat_map(|c| c.blocks.iter())
+            .filter_map(|b| if let FBlock::Para(p) = b { Some((p.rtl, p.text())) } else { None })
+            .collect();
+        assert_eq!(cells, [(false, "abc 123".into()), (true, "سلام".into())], "round trip preserves both");
+        assert!(tables[1].rows[0][0].blocks.iter().any(|b| matches!(b, FBlock::Para(p) if p.rtl && p.text() == "أ")));
+    }
+
+    #[test]
+    fn direction_marks() {
+        // Explicit `dir`, container inheritance, the `direction` style and `ltr` overrides.
+        let f = parse(
+            "<div dir=\"rtl\"><p>one</p><p dir=\"ltr\">two</p></div><p style=\"direction: rtl\">three</p><p dir=\"auto\">four</p><span dir=\"rtl\">five</span>",
+        );
+        let dirs: Vec<bool> = f.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p.rtl) } else { None }).collect();
+        assert_eq!(dirs, [true, false, true, false, true]);
+        // Tables inherit their container's direction unless they override it.
+        let f = parse("<div dir=\"rtl\"><table><tr><td>a</td></tr></table><table dir=\"ltr\"><tr><td>b</td></tr></table></div>");
+        let tables: Vec<bool> = f.blocks.iter().filter_map(|b| if let FBlock::Table(t) = b { Some(t.rtl) } else { None }).collect();
+        assert_eq!(tables, [true, false]);
+        // A nested RTL table keeps its own direction inside an LTR one.
+        let f = parse("<table><tr><td><table dir=\"rtl\"><tr><td>n</td></tr></table></td></tr></table>");
+        let outer = f.blocks.iter().find_map(|b| if let FBlock::Table(t) = b { Some(t) } else { None }).unwrap();
+        assert!(!outer.rtl);
+        let inner = outer.rows[0][0].blocks.iter().find_map(|b| if let FBlock::Table(t) = b { Some(t) } else { None }).unwrap();
+        assert!(inner.rtl);
+        // Export marks paragraphs and tables; logical text is untouched.
+        let html = export_flow(&f, "en");
+        assert!(html.contains("<table dir=\"rtl\""));
+        let back = parse(&html);
+        let inner = back.blocks.iter().find_map(|b| if let FBlock::Table(t) = b { Some(t) } else { None }).unwrap().rows[0][0]
+            .blocks
+            .iter()
+            .find_map(|b| if let FBlock::Table(t) = b { Some(t) } else { None })
+            .unwrap();
+        assert!(inner.rtl && inner.rows[0][0].text() == "n");
     }
 }

@@ -925,6 +925,23 @@ mod tests {
     }
 
     #[test]
+    fn justified_arabic_spreads_ink_edge_to_edge() {
+        // A justified right-to-left line reaches both margins through the raster path too
+        // (boxes if no Arabic face is installed, joined letters otherwise).
+        let mut d = Document::from_text("بِسْمِ اللَّهِ الرَّحْمَنِ ".repeat(10).trim_end());
+        d.format_paragraphs(&wordcraft_doc::Pos::body(0, 0), &wordcraft_doc::Pos::body(0, 0), &|p| {
+            p.bidi = Some(true);
+            p.align = Some(wordcraft_doc::props::Align::Justify);
+        })
+        .unwrap();
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+        let img = render_page(&d, &l.pages[0], 1.0, &RenderOptions::default());
+        let ink = |x0: u32, x1: u32| (x0..x1).flat_map(|x| (72..110).map(move |y| (x, y))).filter(|(x, y)| img.pixel(*x, *y)[0] < 128).count();
+        assert!(ink(72, 120) > 5, "ink at the line's left (end) edge");
+        assert!(ink(492, 540) > 5, "ink at the line's right (start) edge");
+    }
+
+    #[test]
     fn stem_darkening_follows_the_macos_curve() {
         assert_eq!(stem_darkening(0.0), 0.0);
         assert_eq!(stem_darkening(f64::NAN), 0.0);

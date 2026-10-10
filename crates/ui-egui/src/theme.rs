@@ -209,8 +209,8 @@ impl Tokens {
     }
 }
 
-/// Install the UI fonts (Inter, JetBrains Mono) and the craft-fonts CJK interface faces if built
-/// in, Japanese first.
+/// Install the UI fonts (Inter, JetBrains Mono) and the craft-fonts CJK and Arabic interface
+/// faces if built in, Japanese first.
 pub fn install_fonts(ctx: &egui::Context) {
     install_fonts_for(ctx, false);
 }
@@ -249,7 +249,7 @@ pub fn font_definitions(prefer_hans: bool, system_cjk: bool) -> FontDefinitions 
     }
     fonts.families.insert(FontFamily::Name("medium".into()), vec!["InterMedium".into(), "Inter".into(), "SourceSans".into()]);
     fonts.families.insert(FontFamily::Name("semibold".into()), vec!["InterSemiBold".into(), "Inter".into(), "SourceSans".into()]);
-    let add_cjk = |fonts: &mut FontDefinitions, name: String, data: FontData| {
+    let add_ui_font = |fonts: &mut FontDefinitions, name: String, data: FontData| {
         fonts.font_data.insert(name.clone(), Arc::new(data));
         for fam in [FontFamily::Proportional, FontFamily::Name("medium".into()), FontFamily::Name("semibold".into())] {
             if let Some(v) = fonts.families.get_mut(&fam) {
@@ -258,9 +258,9 @@ pub fn font_definitions(prefer_hans: bool, system_cjk: bool) -> FontDefinitions 
         }
     };
     let cjk = wordcraft_fonts::ui_cjk_fonts(prefer_hans);
-    for f in &cjk {
+    for f in cjk.iter().copied().chain(wordcraft_fonts::arabic_ui_fonts()) {
         // The same static bytes the document fonts use: one copy in the binary.
-        add_cjk(&mut fonts, format!("{} {}", f.family, f.style), FontData::from_static(f.bytes));
+        add_ui_font(&mut fonts, format!("{} {}", f.family, f.style), FontData::from_static(f.bytes));
     }
     // No embedded face covers the interface language (a build without craft-fonts, or without
     // its Chinese face, #241): an installed CJK font, so the menus don't show boxes.
@@ -271,10 +271,23 @@ pub fn font_definitions(prefer_hans: bool, system_cjk: bool) -> FontDefinitions 
     {
         let mut data = FontData::from_static(&f.bytes);
         data.index = f.index;
-        add_cjk(&mut fonts, format!("system {}", f.family), data);
+        add_ui_font(&mut fonts, format!("system {}", f.family), data);
     }
     #[cfg(target_arch = "wasm32")]
     let _ = system_cjk;
+    // Without an embedded Arabic face, an installed one keeps the Arabic interface readable
+    // (desktop only; the web build needs the embedded face).
+    #[cfg(not(target_arch = "wasm32"))]
+    if wordcraft_fonts::arabic_ui_fonts().is_empty()
+        && let Some(bytes) = wordcraft_fonts::system_arabic_ui_font()
+    {
+        fonts.font_data.insert("ArabicUI".into(), Arc::new(FontData::from_static(bytes)));
+        for fam in [FontFamily::Proportional, FontFamily::Name("medium".into()), FontFamily::Name("semibold".into())] {
+            if let Some(v) = fonts.families.get_mut(&fam) {
+                v.push("ArabicUI".into());
+            }
+        }
+    }
     // Symbols and emoji fall back to egui's defaults (kept in the families).
     fonts
 }

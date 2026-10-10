@@ -9,7 +9,6 @@ use wordcraft_doc::para::{InlineObject, OBJ, PAGE_BREAK, Run};
 use wordcraft_doc::props::{
     Border, BorderStyle, Borders, CellProps, CharProps, NumRef, ParaProps, RowProps, TextColor, Underline, VMerge, VertAlign,
 };
-use wordcraft_doc::section::NumFormat;
 use wordcraft_doc::styles::{Style, StyleKind};
 use wordcraft_doc::{Align, Block, Blocks, Document, Paragraph, Rgb, Table, para_block};
 
@@ -94,6 +93,10 @@ pub struct Para {
     pub kind: Kind,
     pub list: Option<ListInfo>,
     pub align: Option<Align>,
+    /// Right-to-left paragraph (document `w:bidi`; HTML `dir="rtl"`; RTF `\rtlpar`).
+    /// Storage stays logical; consumers mirror presentation. `false` also means unspecified:
+    /// the flow cannot express an explicit left-to-right override.
+    pub rtl: bool,
     pub page_break: bool,
     pub inlines: Vec<Inline>,
 }
@@ -193,6 +196,9 @@ pub struct FTable {
     pub widths: Vec<f32>,
     /// The source table had no borders (HTML default); the document table gets no grid style.
     pub borderless: bool,
+    /// Right-to-left table (document `w:bidiVisual`; HTML `dir="rtl"`; RTF `\rtltbl`; ODT
+    /// `style:writing-mode` on the table style). Cell order stays logical.
+    pub rtl: bool,
 }
 
 impl FTable {
@@ -366,6 +372,9 @@ impl Builder<'_> {
             out.props.numbering = Some(NumRef { num, level: li.level.min(8) });
         }
         out.props.align = p.align;
+        if p.rtl {
+            out.props.bidi = Some(true);
+        }
         if p.page_break {
             out.props.page_break_before = Some(true);
         }
@@ -494,6 +503,7 @@ impl Builder<'_> {
         let cols = t.cols().clamp(1, wordcraft_doc::table::MAX_COLS);
         let width = self.doc.last_section.text_width().max(72.0);
         let mut tb = Table::new(rows.len(), cols, width);
+        tb.props.rtl = t.rtl;
         if t.borderless {
             tb.props.style = None;
         }
@@ -624,7 +634,7 @@ fn fmt_of(doc: &Document, cp: &CharProps, in_code: bool) -> Fmt {
 }
 
 /// Paragraph kind and list membership of a document paragraph.
-pub fn para_kind(doc: &Document, p: &Paragraph) -> (Kind, Option<ListInfo>) {
+pub fn para_kind(doc: &Document, p: &Paragraph) -> (Kind, Option<ListInfo>, bool) {
     let rp = doc.styles.resolve_para(&p.props);
     let style = p.props.style.as_deref().unwrap_or("Normal");
     let kind = if let Some(l) = rp.outline_level {
@@ -645,9 +655,9 @@ pub fn para_kind(doc: &Document, p: &Paragraph) -> (Kind, Option<ListInfo>) {
     };
     let list = rp.numbering.and_then(|n| {
         let lv = doc.numbering.level(n.num, n.level)?;
-        Some(ListInfo { ordered: !matches!(lv.format, NumFormat::Bullet | NumFormat::None), level: n.level.min(8) })
+        Some(ListInfo { ordered: lv.format.is_ordered(), level: n.level.min(8) })
     });
-    (kind, list)
+    (kind, list, rp.bidi)
 }
 
 fn media_ext(key: &str, data: &[u8]) -> String {
@@ -664,9 +674,9 @@ fn media_ext(key: &str, data: &[u8]) -> String {
 /// A document paragraph as flow paragraphs: a page break character inside the text ends the
 /// paragraph, and the text after it starts a new one that carries `page_break`.
 pub fn flow_paras(doc: &Document, p: &Paragraph) -> Vec<Para> {
-    let (kind, list) = para_kind(doc, p);
+    let (kind, list, rtl) = para_kind(doc, p);
     let mut done: Vec<Para> = Vec::new();
-    let mut out = Para { kind, list, align: p.props.align, page_break: p.props.page_break_before.unwrap_or(false), inlines: Vec::new() };
+    let mut out = Para { kind, list, align: p.props.align, rtl, page_break: p.props.page_break_before.unwrap_or(false), inlines: Vec::new() };
     let in_code = kind == Kind::Code;
     let mut k = 0usize;
     for (range, props) in p.run_ranges() {
@@ -678,7 +688,7 @@ pub fn flow_paras(doc: &Document, p: &Paragraph) -> Vec<Para> {
             if c == PAGE_BREAK {
                 if !hidden {
                     out.push_text(&std::mem::take(&mut buf), &f);
-                    let next = Para { kind, list: None, align: p.props.align, page_break: true, inlines: Vec::new() };
+                    let next = Para { kind, list: None, align: p.props.align, rtl, page_break: true, inlines: Vec::new() };
                     let prev = std::mem::replace(&mut out, next);
                     if prev.inlines.is_empty() {
                         out.page_break |= prev.page_break;
@@ -792,7 +802,7 @@ fn flow_table(doc: &Document, t: &Table, depth: usize) -> FTable {
         }
         rows.push(cells);
     }
-    FTable { rows, widths: t.grid.clone(), borderless: false }
+    FTable { rows, widths: t.grid.clone(), borderless: false, rtl: t.props.rtl }
 }
 
 /// The document body as a flow.
@@ -1073,6 +1083,7 @@ mod tests {
             rows: vec![vec![Cell { rowspan: 2, ..Default::default() }, Cell::default()], vec![Cell::default()]],
             widths: vec![],
             borderless: false,
+            rtl: false,
         };
         t.insert_covered();
         assert_eq!(t.rows[1].len(), 2);
