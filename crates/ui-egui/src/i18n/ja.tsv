@@ -63,6 +63,10 @@
 	Search for templates	テンプレートを検索
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	表示 › モードの切り替えと同様に、文書の色を反転して表示します。保存、印刷、PDF は変わりません。
 	AutoSave saves every change to the file (needs a saved document)	自動保存は変更のたびにファイルへ保存します（保存済みの文書が必要です）
+	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	ブラウザーでは自動保存を使えません（ファイルに書き込めないため）。保存するとコピーがダウンロードされます。
+	AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave.	自動保存の対象は .docx、.odt、.rtf ファイルだけです。{name} ではすべての書式を保持できません。自動保存をオンにするには .docx として保存してください。
+	Save the document to turn on AutoSave	自動保存をオンにするには文書を保存してください
+	Save the document to turn on AutoSave (a file you have only opened isn't rewritten until you save it)	自動保存をオンにするには文書を保存してください（開いただけのファイルは、保存するまで書き換えられません）
 	AutoText	定型句
 	Backspace	Backspace
 	Banded Columns	縞模様（列）
