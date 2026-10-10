@@ -32,6 +32,11 @@ pub fn resolve_tab<'a>(current: &'a str, available: &[&str]) -> &'a str {
     if available.contains(&current) { current } else { "Home" }
 }
 
+/// Whether the caret is inside a table (so the contextual tabs and their badges are shown).
+pub fn in_table_public(app: &WordApp) -> bool {
+    app.session.sel.focus.path.cell().is_some()
+}
+
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     // A contextual tab (Table, Picture Format) may be stored while the selection moved away.
@@ -61,6 +66,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     let shown = tl!(tab);
                     let w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(shown.to_string(), medium(12.5), t.text).size().x) + 18.0;
                     let (r, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
+                    if app.ui.keytips == crate::keytips::Phase::Tabs {
+                        crate::keytips::record_tab(r, tab, &mut app.keytip_rects);
+                    }
                     let active = app.ui.tab == tab && !app.ui.backstage;
                     if resp.hovered() && !active {
                         ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, t.hover);

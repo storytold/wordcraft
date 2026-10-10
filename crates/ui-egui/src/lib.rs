@@ -22,6 +22,8 @@ pub mod dialogs;
 pub mod i18n;
 pub mod icons;
 pub mod keys;
+pub mod keytips;
+pub mod mini_toolbar;
 pub mod panes;
 pub mod previews;
 pub mod ribbon;
@@ -72,6 +74,9 @@ pub struct UiState {
     pub window: Option<window_geometry::WindowGeometry>,
     /// Interface language: `auto` (follow the system) or a code from [`i18n::LANGUAGES`].
     pub language: String,
+    /// Keytips (Alt) state; not persisted, it resets each session.
+    #[serde(skip)]
+    pub keytips: crate::keytips::Phase,
     /// View › Switch Modes: show pages dark (white text on black), kept between runs.
     pub dark_page: bool,
 }
@@ -90,6 +95,7 @@ impl Default for UiState {
             author: String::new(),
             window: None,
             language: i18n::AUTO.into(),
+            keytips: crate::keytips::Phase::Off,
             dark_page: false,
         }
     }
@@ -113,6 +119,8 @@ pub struct WordApp {
     queued_shots: Vec<(u64, f64, u32)>,
     pending_shots: Vec<(u64, Option<String>, std::sync::mpsc::Sender<Value>, f64)>,
     pub(crate) synthetic: Vec<egui::Event>,
+    /// Badge rects recorded during layout for the current keytip phase (cleared by `logic`, painted by `show`).
+    pub(crate) keytip_rects: Vec<(egui::Rect, String)>,
     styled: bool,
     /// The CJK face order the installed UI fonts use (Chinese first, or Japanese first).
     fonts_hans: bool,
@@ -147,6 +155,7 @@ impl WordApp {
             queued_shots: Vec::new(),
             pending_shots: Vec::new(),
             synthetic: Vec::new(),
+            keytip_rects: Vec::new(),
             styled: false,
             fonts_hans: false,
             fonts_frames: 0,
@@ -514,6 +523,9 @@ impl WordApp {
             return;
         }
         let t = theme::Tokens::get(&ctx);
+        // Keytips are read before layout so the frame paints the new state; badges paint after
+        // the ribbon so they sit on top of it.
+        crate::keytips::logic(self, &ctx);
         if self.ui.backstage {
             backstage::show(self, ui);
         } else {
@@ -527,6 +539,7 @@ impl WordApp {
         }
         dialogs::show(self, &ctx);
         zotero::show_alert(self, &ctx);
+        crate::keytips::show(self, &ctx, ui);
         keys::global_shortcuts(self, &ctx);
         if let Some(url) = self.canvas.open_url.take() {
             ctx.open_url(egui::OpenUrl::new_tab(url));
