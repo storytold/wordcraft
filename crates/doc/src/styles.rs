@@ -65,6 +65,21 @@ pub struct TableStyleParts {
     pub first_col_chr: CharProps,
     pub total_chr: CharProps,
     pub total_border_top: Option<Border>,
+    /// Shading and cell borders of the first column (`firstCol` region).
+    pub first_col_fill: Option<Rgb>,
+    pub first_col_borders: Option<Borders>,
+    /// The last column (`lastCol` region).
+    pub last_col_fill: Option<Rgb>,
+    pub last_col_chr: CharProps,
+    pub last_col_borders: Option<Borders>,
+    /// Shading and cell borders of the total (last) row (`lastRow` region); a top edge left
+    /// unset falls back to `total_border_top`.
+    pub total_fill: Option<Rgb>,
+    pub total_borders: Option<Borders>,
+    /// The odd column bands (`band1Vert` region).
+    pub col_band_fill: Option<Rgb>,
+    pub col_band_chr: CharProps,
+    pub col_band_borders: Option<Borders>,
 }
 
 impl TableStyleParts {
@@ -91,6 +106,16 @@ impl TableStyleParts {
         self.first_col_chr.overlay(&patch.first_col_chr);
         self.total_chr.overlay(&patch.total_chr);
         self.total_border_top = patch.total_border_top.or(self.total_border_top);
+        self.first_col_fill = patch.first_col_fill.or(self.first_col_fill);
+        self.first_col_borders = merge(self.first_col_borders, patch.first_col_borders);
+        self.last_col_fill = patch.last_col_fill.or(self.last_col_fill);
+        self.last_col_chr.overlay(&patch.last_col_chr);
+        self.last_col_borders = merge(self.last_col_borders, patch.last_col_borders);
+        self.total_fill = patch.total_fill.or(self.total_fill);
+        self.total_borders = merge(self.total_borders, patch.total_borders);
+        self.col_band_fill = patch.col_band_fill.or(self.col_band_fill);
+        self.col_band_chr.overlay(&patch.col_band_chr);
+        self.col_band_borders = merge(self.col_band_borders, patch.col_band_borders);
     }
 }
 
@@ -436,6 +461,25 @@ impl StyleSheet {
             Some(s) => *s = st,
             None => self.styles.push(st),
         }
+    }
+    /// Remove style `id` and return it. Styles based on it are rebased onto its own base, and
+    /// `next` / `linked` references to it are dropped. Text that uses it is the document's to
+    /// retarget ([`crate::Document::restyle`]).
+    pub fn remove(&mut self, id: &str) -> Option<Style> {
+        let i = self.styles.iter().position(|s| s.id == id)?;
+        let gone = self.styles.remove(i);
+        for s in &mut self.styles {
+            if s.based_on.as_deref() == Some(id) {
+                s.based_on = gone.based_on.clone().filter(|b| *b != s.id);
+            }
+            if s.next.as_deref() == Some(id) {
+                s.next = None;
+            }
+            if s.linked.as_deref() == Some(id) {
+                s.linked = None;
+            }
+        }
+        Some(gone)
     }
     /// An id not used yet, derived from a display name.
     pub fn new_id(&self, name: &str) -> String {

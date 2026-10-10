@@ -12,7 +12,10 @@
 	Add	追加
 	Add a comment	コメントを追加
 	Add a Table	表を追加
+	Add Object to Selection	オブジェクトを選択範囲に追加
 	Add Space Before Paragraph	段落前に間隔を追加
+	Add space between Asian and Latin text	アジア文字と欧文の間隔を空ける
+	Add space between Asian text and numbers	アジア文字と数字の間隔を空ける
 	Add Text	テキストの追加
 	Add to Dictionary	辞書に追加
 	Add to Style Gallery	スタイル ギャラリーに追加
@@ -31,7 +34,10 @@
 	All Caps	すべて大文字
 	All caps	すべて大文字
 	All Markup	すべての変更履歴
+	Allow hanging punctuation	句読点のぶら下げを行う
+	Allow Latin text to wrap in the middle of a word	欧文を単語の途中で折り返す
 	Alt Text	代替テキスト
+	Apply Asian line-breaking rules (kinsoku)	アジア文字の禁則処理を行う
 	Apply Character Style	文字スタイルを適用
 	Apply Style	スタイルを適用
 	Apply Styles	スタイルを選んで適用
@@ -39,6 +45,7 @@
 	Arrange\nAll	整列
 	Arrow	矢印
 	Artistic Effects	アート効果
+	Asian Typography	アジア文字の組版
 	Author	作成者
 	AutoCorrect Options	オートコレクトのオプション
 	AutoFit	自動調整
@@ -53,9 +60,12 @@
 	AutoSave documents you have saved in WordCraft	WordCraft で保存した文書を自動保存する
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	自動保存できませんでした: {error}。文書を保存し直すと、自動保存が再開します。
 	Bottom Margin	下余白
+	Compress punctuation at the start of a line	行頭の約物を詰める
 	Dark page (white text on black)	ダーク ページ (黒地に白い文字)
 	Edit Comment	コメントを編集
 	Left Margin	左余白
+	Indents and Spacing	インデントと間隔
+	Line breaking	行の分割
 	More templates →	その他のテンプレート →
 	No templates match your search.	検索に一致するテンプレートはありません。
 	Reopen	再度開く
@@ -149,6 +159,15 @@
 	Clear	クリア
 	Clear All Formatting	すべての書式をクリア
 	Clipboard	クリップボード
+	Clipboard Pane	クリップボード ウィンドウ
+	Clipboard Items	クリップボードの項目
+	Paste Clipboard Item	クリップボードの項目を貼り付け
+	Paste All	すべて貼り付け
+	Delete Clipboard Item	クリップボードの項目を削除
+	Clear All	すべてクリア
+	Click an item to paste it.	項目をクリックすると貼り付けます。
+	Nothing collected yet. Items you copy or cut appear here.	まだ何もありません。コピーまたは切り取った項目がここに表示されます。
+	(picture or object)	（画像またはオブジェクト）
 	Close	閉じる
 	Close Header and Footer	ヘッダーとフッターを閉じる
 	Collapse Selection	選択範囲を縮小
@@ -768,6 +787,7 @@
 	Underline Words Only	単語のみ下線
 	Undo	元に戻す
 	Undo {action}	元に戻す: {action}
+	Ungroup	グループ解除
 	Up	上
 	Update Field	フィールドの更新
 	Update Index	索引の更新
@@ -921,7 +941,6 @@
 	Clear Paragraph Formatting	段落の書式をクリア
 	Clear Character Style	文字スタイルをクリア
 	Clear Character Formatting	文字の書式をクリア
-	Clear All	すべてクリア
 	Paste Special	形式を選択して貼り付け
 	Paste Special…	形式を選択して貼り付け…
 	Paste as:	貼り付ける形式:
@@ -1052,3 +1071,137 @@
 	Leave the equation (Esc)	数式を終了 (Esc)
 	Preview	プレビュー
 	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft
+
+# Columns, Symbol and Field dialogs (#321).
+	(All)	(すべて)
+	(none)	(なし)
+	(normal text)	(標準テキスト)
+	1/4 Em Space	1/4 em スペース
+	A mail merge field	差し込み用のフィールド
+	A numbered sequence (figures, tables…)	連番 (図、表…)
+	A table of contents	目次
+	Categories:	分類:
+	Character	文字
+	Character code:	文字コード:
+	Col #:	段:
+	Copyright	著作権記号
+	Date and Time	日付と時刻
+	Date formats:	日付の形式:
+	Description:	説明:
+	Document Information	文書の情報
+	Double Closing Quote	二重引用符 (閉じ)
+	Double Opening Quote	二重引用符 (開き)
+	Ellipsis	省略記号
+	Em Dash	em ダッシュ
+	En Dash	en ダッシュ
+	Em Space	em スペース
+	En Space	en スペース
+	Equal column width	段の幅を均等にする
+	Field Codes	フィールド コード
+	Field code:	フィールド コード:
+	Field codes:	フィールド コード:
+	Field name:	フィールド名:
+	Field names:	フィールドの名前:
+	Field properties	フィールドのプロパティ
+	Field…	フィールド…
+	Format:	書式:
+	Hide Codes	コードを隠す
+	Index and Tables	索引と目次
+	Line between	境界線を引く
+	Links and References	リンクと参照
+	Mail Merge	差し込み印刷
+	More Columns…	段組みの詳細設定…
+	More Symbols…	その他の記号…
+	No-Width Non Break	幅なし改行禁止
+	No-Width Optional Break	幅なし任意改行
+	Paragraph Mark	段落記号
+	Pick a field from the list	フィールドを選んでください
+	Preserve formatting during updates	更新時に書式を保持する
+	Presets	プリセット
+	Recently used symbols:	最近使った記号:
+	Registered	登録商標
+	Section Mark	節記号
+	Sequence name:	連番の名前:
+	Shortcut key:	ショートカット キー:
+	Single Closing Quote	一重引用符 (閉じ)
+	Single Opening Quote	一重引用符 (開き)
+	Spacing:	間隔:
+	Special Characters	特殊文字
+	Subset:	種類:
+	The time right now	現在の時刻
+	When this document was first created	文書の作成日
+	When this document was most recently printed	文書の最終印刷日
+	When this document was most recently saved	文書の最終保存日
+	The document has no bookmarks yet.	この文書にはまだブックマークがありません。
+	Who the document properties name as author	文書の作成者
+	Name of the file this document is saved as	文書のファイル名
+	Title from the document properties	文書のタイトル
+	How many pages the whole document has	文書のページ数
+	How many pages this section has	セクションのページ数
+	Number of the page the field sits on	現在のページ番号
+	Number of the section the field sits in	現在のセクション番号
+	How many words the document holds	文書の単語数
+	Page on which a bookmarked passage falls	ブックマークのページ番号
+	Copy of the text a bookmark marks	ブックマークの文字列
+	This field has no options.	このフィールドにはオプションがありません。
+	This font has no characters to show.	このフォントには表示できる文字がありません。
+	This point forward	これ以降
+	The date it is today	今日の日付
+	Trademark	商標
+	Type the field's name and its switches, for example PAGE \\* roman.	フィールド名とスイッチを入力します (例: PAGE \\* roman)。
+	Width and spacing	幅と間隔
+	from Unicode (hex)	Unicode (16 進)
+	Shape Effects	図形の効果
+	Glow	光彩
+	Soft Edges	輪郭のぼかし
+	No Shadow	影なし
+	No Glow	光彩なし
+	No Soft Edges	ぼかしなし
+	Glow Colors	光彩の色
+	Weight	太さ
+	Shadow, glow and soft edges	影、光彩、輪郭のぼかし
+	Offset: Bottom Right	オフセット: 右下
+	Offset: Bottom	オフセット: 下
+	Offset: Bottom Left	オフセット: 左下
+	Offset: Right	オフセット: 右
+	Offset: Center	オフセット: 中央
+	Offset: Left	オフセット: 左
+	Offset: Top Right	オフセット: 右上
+	Offset: Top	オフセット: 上
+	Offset: Top Left	オフセット: 左上
+	Manage Styles	スタイルの管理
+	Show or Hide Style	スタイルの表示/非表示
+	Manage Styles…	スタイルの管理…
+	Sort order:	並べ替え順:
+	As Recommended	推奨順
+	Alphabetical	アルファベット順
+	Font: {font}	フォント: {font}
+	{size} pt	{size} pt
+	Color: {color}	色: {color}
+	Space before: {pt} pt	前の間隔: {pt} pt
+	Space after: {pt} pt	後の間隔: {pt} pt
+	Based on: {style}	基準: {style}
+	Paragraph style	段落スタイル
+	Character style	文字スタイル
+	Linked style (paragraph and character)	リンク スタイル (段落と文字)
+	Table style	表スタイル
+	Built-in style	組み込みスタイル
+	Show in the Styles gallery	スタイル ギャラリーに表示
+	Hide from style lists	スタイルの一覧に表示しない
+	Built-in styles can't be deleted.	組み込みスタイルは削除できません。
+	Delete Table Style	表スタイルの削除
+	Password	パスワード
+	Password:	パスワード:
+	Confirm password:	パスワードの確認:
+	Encrypt with Password…	パスワードを使用して暗号化…
+	Change Password…	パスワードの変更…
+	Remove Password	パスワードの削除
+	A password is required to open this document.	この文書を開くにはパスワードが必要です。
+	Anyone can open this document. Encrypt it with a password to keep it private.	この文書は誰でも開けます。パスワードで暗号化すると内容を保護できます。
+	Anyone who opens the document will need this password.	この文書を開くすべての人にこのパスワードが必要になります。
+	{name} is protected with a password.	{name} はパスワードで保護されています。
+	That password isn't right. Check it (passwords are case-sensitive) and try again.	パスワードが正しくありません。確認して（大文字と小文字は区別されます）もう一度お試しください。
+	The document will be saved with a password. Save it to protect it.	文書はパスワード付きで保存されます。保護するには文書を保存してください。
+	The password is removed. Save the document to keep the change.	パスワードを削除しました。変更を保持するには文書を保存してください。
+	The passwords don't match.	パスワードが一致しません。
+	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	パスワードは安全な場所に保管してください。パスワードがないと、WordCraft を含め誰も文書を開けません。パスワードを削除するには両方のボックスを空にします。

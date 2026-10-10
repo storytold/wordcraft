@@ -12,8 +12,10 @@
 # Product, format and technology names (WordCraft, PDF, Markdown, MCP …) stay in Latin letters.
 
 	(no suggestions)	(nema predloga)
+	(picture or object)	(slika ili objekat)
 	1.5 Line Spacing	Proređenost 1,5
 	A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.	Besplatan, otvoreni obrađivač teksta napisan od nule u Rust-u.\nDeo Crafting Apps paketa tima ArtCraft.
+	A password is required to open this document.	Za otvaranje ovog dokumenta potrebna je lozinka.
 	About	O programu
 	About WordCraft	O WordCraft-u
 	Accept	Prihvati
@@ -23,7 +25,10 @@
 	Add	Dodaj
 	Add a comment	Dodaj komentar
 	Add a Table	Dodaj tabelu
+	Add Object to Selection	Dodaj objekat u izbor
 	Add Space Before Paragraph	Dodaj razmak pre pasusa
+	Add space between Asian and Latin text	Dodaj razmak između azijskog i latiničnog teksta
+	Add space between Asian text and numbers	Dodaj razmak između azijskog teksta i brojeva
 	Add Text	Dodaj tekst
 	Add to Dictionary	Dodaj u rečnik
 	Add to Style Gallery	Dodaj u galeriju stilova
@@ -42,7 +47,13 @@
 	All Caps	Sva velika slova
 	All caps	Sva velika slova
 	All Markup	Sve izmene
+	Allow hanging punctuation	Dozvoli viseću interpunkciju
+	Allow Latin text to wrap in the middle of a word	Dozvoli prelom latiničnog teksta usred reči
+	Alphabetical	Abecedno
 	Alt Text	Alternativni tekst
+	Anyone can open this document. Encrypt it with a password to keep it private.	Svako može da otvori ovaj dokument. Šifrujte ga lozinkom da bi ostao privatan.
+	Anyone who opens the document will need this password.	Svakome ko otvori dokument biće potrebna ova lozinka.
+	Apply Asian line-breaking rules (kinsoku)	Primeni azijska pravila preloma redova (kinsoku)
 	Apply Character Style	Primeni stil znakova
 	Apply Style	Primeni stil
 	Apply Styles	Izaberi i primeni stilove
@@ -50,6 +61,8 @@
 	Arrange\nAll	Rasporedi\nsve
 	Arrow	Strelica
 	Artistic Effects	Umetnički efekti
+	As Recommended	Kao što je preporučeno
+	Asian Typography	Azijska tipografija
 	Author	Autor
 	AutoCorrect Options	Opcije automatske ispravke
 	AutoFit	Automatsko uklapanje
@@ -64,11 +77,57 @@
 	AutoSave documents you have saved in WordCraft	Automatski čuvaj dokumente koje ste već sačuvali u WordCraft-u
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	Automatsko čuvanje neuspelo: {error}. Sačuvajte dokument da biste ga ponovo uključili.
 	Bottom Margin	Donja margina
+	Based on: {style}	Zasnovan na: {style}
+	Built-in style	Ugrađeni stil
+	Built-in styles can't be deleted.	Ugrađeni stilovi ne mogu da se obrišu.
+	Change Password…	Promeni lozinku…
+	Character style	Stil znakova
+	Click an item to paste it.	Kliknite na stavku da biste je nalepili.
+	Clipboard Items	Stavke ostave
+	Clipboard Pane	Okno ostave
+	Color: {color}	Boja: {color}
+	Compress punctuation at the start of a line	Sažmi interpunkciju na početku reda
+	Confirm password:	Potvrdite lozinku:
 	Dark page (white text on black)	Tamna stranica (beo tekst na crnom)
 	Edit Comment	Uredi komentar
 	Left Margin	Leva margina
 	Reopen	Ponovo otvori
 	Right Margin	Desna margina
+	Delete Clipboard Item	Obriši stavku iz ostave
+	Delete Table Style	Obriši stil tabele
+	Encrypt with Password…	Šifruj lozinkom…
+	Font: {font}	Font: {font}
+	Glow	Sjaj
+	Glow Colors	Boje sjaja
+	Hide from style lists	Sakrij sa lista stilova
+	Indents and Spacing	Uvlačenja i razmaci
+	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	Čuvajte lozinku na sigurnom mestu: bez nje niko, pa ni WordCraft, ne može da otvori dokument. Ostavite oba polja prazna da biste uklonili lozinku.
+	Line breaking	Prelom redova
+	Linked style (paragraph and character)	Povezani stil (pasus i znakovi)
+	Manage Styles	Upravljanje stilovima
+	Manage Styles…	Upravljanje stilovima…
+	No Glow	Bez sjaja
+	No Shadow	Bez senke
+	No Soft Edges	Bez mekih ivica
+	Nothing collected yet. Items you copy or cut appear here.	Još ništa nije prikupljeno. Ovde se pojavljuje ono što kopirate ili isečete.
+	Offset: Bottom	Pomak: dole
+	Offset: Bottom Left	Pomak: dole levo
+	Offset: Bottom Right	Pomak: dole desno
+	Offset: Center	Pomak: centar
+	Offset: Left	Pomak: levo
+	Offset: Right	Pomak: desno
+	Offset: Top	Pomak: gore
+	Offset: Top Left	Pomak: gore levo
+	Offset: Top Right	Pomak: gore desno
+	Paragraph style	Stil pasusa
+	Password	Lozinka
+	Password:	Lozinka:
+	Paste All	Nalepi sve
+	Paste Clipboard Item	Nalepi stavku iz ostave
+	Preview	Pregled
+	Remove Password	Ukloni lozinku
+	Shadow, glow and soft edges	Senka, sjaj i meke ivice
+	Shape Effects	Efekti oblika
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Prikaži dokumente sa invertovanim bojama, kao kod Prikaz › Promeni režim. Čuvanje, štampanje i PDF nisu pogođeni.
 	AutoSave saves every change to the file (needs a saved document)	Automatsko čuvanje upisuje svaku izmenu u fajl (dokument mora biti već sačuvan)
 	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	Automatsko čuvanje nije dostupno u pregledaču: ne može da upisuje u vaše fajlove. Čuvanje preuzima kopiju.
@@ -669,8 +728,10 @@
 	Show	Prikaži
 	Show all formatting marks	Prikaži sve znake formatiranja
 	Show Comments	Prikaži komentare
+	Show in the Styles gallery	Prikaži u galeriji stilova
 	Show Markup	Prikaži izmene
 	Show Notes	Prikaži napomene
+	Show or Hide Style	Prikaži ili sakrij stil
 	Show rulers	Prikaži lenjire
 	Show the community button in the title bar	Prikaži dugme zajednice u traci naslova
 	Show/Hide ¶	Prikaži/sakrij ¶
@@ -686,9 +747,13 @@
 	Small Caps	Kapitelke
 	Small caps	kapitelke
 	SmartArt	SmartArt
+	Soft Edges	Meke ivice
 	Sort	Sortiraj
+	Sort order:	Redosled sortiranja:
 	Source code: github.com/storytold/wordcraft	Izvorni kod: github.com/storytold/wordcraft
+	Space after: {pt} pt	Razmak posle: {pt} pt
 	Space before/after:	Razmak pre/posle:
+	Space before: {pt} pt	Razmak pre: {pt} pt
 	Spacing	Razmak
 	Spacing (pt):	Razmak (pt):
 	Speech	Govor
@@ -731,6 +796,7 @@
 	Table of\nContents	Sadržaj
 	Table Properties	Svojstva tabele
 	Table Row Height	Visina reda tabele
+	Table style	Stil tabele
 	Table Style Options	Opcije stila tabele
 	Table Styles	Stilovi tabele
 	Tables	Tabele
@@ -749,7 +815,11 @@
 	Text\nBox	Okvir\nza tekst
 	Text\nDirection	Smer\nteksta
 	That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.	Taj format ne čuva sve, pa je dokument i dalje otvoren. Sačuvajte ga kao Word dokument (.docx) da biste nastavili.
+	That password isn't right. Check it (passwords are case-sensitive) and try again.	Lozinka nije ispravna. Proverite je (lozinke razlikuju velika i mala slova) i pokušajte ponovo.
+	The document will be saved with a password. Save it to protect it.	Dokument će biti sačuvan sa lozinkom. Sačuvajte ga da biste ga zaštitili.
 	The new style takes the formatting of the current paragraph.	Novi stil preuzima formatiranje trenutnog pasusa.
+	The password is removed. Save the document to keep the change.	Lozinka je uklonjena. Sačuvajte dokument da biste zadržali izmenu.
+	The passwords don't match.	Lozinke se ne podudaraju.
 	Theme Colors	Boje teme
 	Theme Fonts	Fontovi teme
 	Theme List	Lista tema
@@ -776,6 +846,7 @@
 	Underline Words Only	Podvuci samo reči
 	Undo	Opozovi
 	Undo {action}	Opozovi {action}
+	Ungroup	Razgrupisanje
 	Up	Gore
 	Update Field	Ažuriraj polje
 	Update Index	Ažuriraj indeks
@@ -801,6 +872,7 @@
 	Web Layout	Veb raspored
 	Web page (*.html)	Veb strana (*.html)
 	Web\nLayout	Veb\nraspored
+	Weight	Debljina
 	Whole page	Cela strana
 	Whole words	Samo cele reči
 	Wide	Široko
@@ -825,6 +897,8 @@
 	Zoom Out	Umanji
 	{group} settings	Podešavanja za {group}
 	{key}+Click to follow link	{key}+klik za otvaranje veze
+	{name} is protected with a password.	{name} je zaštićen lozinkom.
+	{size} pt	{size} pt
 	Browse…	Potraži…
 	{words} words	{words} reči
 	{selected} of {words} words	{selected} od {words} reči
@@ -1061,5 +1135,84 @@
 	Reset Crop	Poništi isecanje
 	Insert a new equation (Alt+=)	Umetni novu jednačinu (Alt+=)
 	Leave the equation (Esc)	Napusti jednačinu (Esc)
-	Preview	Pregled
 	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft
+
+# Columns, Symbol and Field dialogs (#321).
+	(All)	(Sve)
+	(none)	(nema)
+	(normal text)	(običan tekst)
+	1/4 Em Space	Razmak od 1/4 em
+	A mail merge field	Polje za spajanje pošte
+	A numbered sequence (figures, tables…)	Numerisani niz (slike, tabele…)
+	A table of contents	Sadržaj
+	Categories:	Kategorije:
+	Character	Znak
+	Character code:	Kod znaka:
+	Col #:	Kolona br.:
+	Copyright	Znak autorskog prava
+	Date and Time	Datum i vreme
+	Date formats:	Formati datuma:
+	Description:	Opis:
+	Document Information	Informacije o dokumentu
+	Double Closing Quote	Zatvoreni dvostruki navodnik
+	Double Opening Quote	Otvoreni dvostruki navodnik
+	Ellipsis	Tri tačke
+	Em Dash	Duga crta
+	En Dash	Srednja crta
+	Em Space	Em razmak
+	En Space	En razmak
+	Equal column width	Jednaka širina kolona
+	Field Codes	Kodovi polja
+	Field code:	Kod polja:
+	Field codes:	Kodovi polja:
+	Field name:	Naziv polja:
+	Field names:	Nazivi polja:
+	Field properties	Svojstva polja
+	Field…	Polje…
+	Format:	Format:
+	Hide Codes	Sakrij kodove
+	Index and Tables	Indeksi i tabele
+	Line between	Linija između kolona
+	Links and References	Veze i reference
+	Mail Merge	Spajanje pošte
+	More Columns…	Još kolona…
+	More Symbols…	Još simbola…
+	No-Width Non Break	Nedeljivi znak nulte širine
+	No-Width Optional Break	Opcioni prelom nulte širine
+	Paragraph Mark	Znak pasusa
+	Pick a field from the list	Izaberite polje
+	Preserve formatting during updates	Sačuvaj oblikovanje pri ažuriranju
+	Presets	Unapred zadato
+	Recently used symbols:	Nedavno korišćeni simboli:
+	Registered	Registrovani žig
+	Section Mark	Znak paragrafa
+	Sequence name:	Naziv niza:
+	Shortcut key:	Prečica na tastaturi:
+	Single Closing Quote	Zatvoreni jednostruki navodnik
+	Single Opening Quote	Otvoreni jednostruki navodnik
+	Spacing:	Razmak:
+	Special Characters	Specijalni znakovi
+	Subset:	Podskup:
+	The time right now	Trenutno vreme
+	When this document was first created	Datum kada je dokument napravljen
+	When this document was most recently printed	Datum kada je dokument poslednji put odštampan
+	When this document was most recently saved	Datum kada je dokument poslednji put sačuvan
+	The document has no bookmarks yet.	Dokument još nema obeleživače.
+	Who the document properties name as author	Autor dokumenta
+	Name of the file this document is saved as	Ime datoteke dokumenta
+	Title from the document properties	Naslov dokumenta
+	How many pages the whole document has	Broj stranica u dokumentu
+	How many pages this section has	Broj stranica u odeljku
+	Number of the page the field sits on	Broj trenutne stranice
+	Number of the section the field sits in	Broj trenutnog odeljka
+	How many words the document holds	Broj reči u dokumentu
+	Page on which a bookmarked passage falls	Broj stranice obeleživača
+	Copy of the text a bookmark marks	Tekst obeleživača
+	This field has no options.	Ovo polje nema opcija.
+	This font has no characters to show.	Ovaj font nema znakove za prikaz.
+	This point forward	Od ovog mesta nadalje
+	The date it is today	Današnji datum
+	Trademark	Žig
+	Type the field's name and its switches, for example PAGE \\* roman.	Unesite naziv polja i njegove prekidače, na primer PAGE \\* roman.
+	Width and spacing	Širina i razmak
+	from Unicode (hex)	iz Unicode (heks.)

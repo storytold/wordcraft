@@ -3,6 +3,7 @@
 mod chart;
 mod diagram;
 mod drawing_color;
+mod embed;
 mod math;
 mod props;
 mod story;
@@ -20,7 +21,7 @@ use wordcraft_doc::styles::{Style, StyleKind, StyleSheet, TableStyleParts};
 use wordcraft_doc::{Block, Blocks, Comment, Document, InlineObject, PartKind, Revision, RevisionKind};
 
 use crate::DocxError;
-use crate::package::{ContentTypes, MAX_VBA_RELATED, Package, Rels, VBA_PROJECT_PART, VBA_RELATED, rel_is, rt};
+use crate::package::{ContentTypes, EMBEDDED_PARTS, EmbeddedManifest, MAX_VBA_RELATED, Package, Rels, VBA_PROJECT_PART, VBA_RELATED, rel_is, rt};
 use crate::units::{flag, int, on_off, tw, u32_of};
 use crate::xml::El;
 pub(crate) use props::PropCtx;
@@ -53,6 +54,12 @@ pub(crate) struct Reader<'p> {
     graphics: HashMap<(GraphicKind, String, u32, u32), Arc<Graphic>>,
     /// Graphic work left before charts and diagrams are left empty (see [`MAX_GRAPHIC_WORK`]).
     graphic_budget: usize,
+    /// The main document part's name.
+    main: String,
+    /// The package's content types, read when first needed.
+    content_types: Option<ContentTypes>,
+    /// Parts kept for charts, diagrams and OLE objects (see `embed`).
+    embedded: EmbeddedManifest,
 }
 
 /// The package path that internal relationship `id` points at, if it has type `kind` (an `rt`
@@ -63,6 +70,16 @@ fn part_of(rels: &Rels, id: &str, kind: &str) -> Option<String> {
 
 /// Read a `.docx` package.
 pub fn read(bytes: &[u8]) -> Result<Document, DocxError> {
+    // A password-protected document is a compound file, not a zip: say so rather than failing
+    // as a broken zip (`read_with_password` opens it).
+    if crate::is_encrypted(bytes) {
+        return crate::read_with_password(bytes, None);
+    }
+    read_package(bytes)
+}
+
+/// [`read`] for bytes known not to be an encrypted package.
+pub(crate) fn read_package(bytes: &[u8]) -> Result<Document, DocxError> {
     let pkg = Package::open(bytes)?;
     let root_rels = pkg.rels("");
     let main = root_rels.by_type(rt::OFFICE_DOC).filter(|r| !r.external).map(|r| r.target.clone()).unwrap_or_else(|| "word/document.xml".to_string());
@@ -91,6 +108,9 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocxError> {
         graphic_parts: HashMap::new(),
         graphics: HashMap::new(),
         graphic_budget: MAX_GRAPHIC_WORK,
+        main: main.clone(),
+        content_types: None,
+        embedded: EmbeddedManifest::default(),
     };
     r.pc.major_font = r.doc.settings.major_font.clone();
     r.pc.minor_font = r.doc.settings.minor_font.clone();
@@ -157,6 +177,10 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocxError> {
     {
         r.doc.passthrough.insert(VBA_PROJECT_PART.into(), Arc::new(b.to_vec()));
         r.read_vba_related(&v);
+    }
+    if !r.embedded.parts.is_empty() {
+        let manifest = r.embedded.to_bytes();
+        r.doc.passthrough.insert(EMBEDDED_PARTS.into(), Arc::new(manifest));
     }
     let mut doc = r.doc;
     doc.ensure_nonempty();
@@ -236,7 +260,8 @@ impl Reader<'_> {
     /// content types (see [`VBA_RELATED`]). Parts outside `word/`, relationship parts, the project
     /// itself and missing targets are skipped (logged); at most [`MAX_VBA_RELATED`] are kept.
     fn read_vba_related(&mut self, project: &str) {
-        let types = ContentTypes::read(self.pkg);
+        let pkg = self.pkg;
+        let types = self.content_types.get_or_insert_with(|| ContentTypes::read(pkg));
         let mut manifest = String::new();
         let mut kept = 0usize;
         for rel in self.pkg.rels(project).list.iter().filter(|r| !r.external) {
@@ -505,10 +530,28 @@ impl Reader<'_> {
                     t.band_chr = chr;
                     t.band_borders = cell_borders;
                 }
-                Some("firstCol") => t.first_col_chr = chr,
+                Some("firstCol") => {
+                    t.first_col_chr = chr;
+                    t.first_col_fill = fill;
+                    t.first_col_borders = cell_borders;
+                }
+                Some("lastCol") => {
+                    t.last_col_chr = chr;
+                    t.last_col_fill = fill;
+                    t.last_col_borders = cell_borders;
+                }
                 Some("lastRow") => {
                     t.total_chr = chr;
-                    t.total_border_top = c.child("w:tcPr").and_then(|p| p.child("w:tcBorders")).and_then(|b| b.child("w:top")).map(props::border);
+                    t.total_fill = fill;
+                    // The top rule is kept on its own (as built-in styles have it); the other edges
+                    // are the region's borders.
+                    t.total_border_top = cell_borders.and_then(|b| b.top);
+                    t.total_borders = cell_borders.map(|b| wordcraft_doc::props::Borders { top: None, ..b }).filter(|b| *b != Default::default());
+                }
+                Some("band1Vert") => {
+                    t.col_band_fill = fill;
+                    t.col_band_chr = chr;
+                    t.col_band_borders = cell_borders;
                 }
                 _ => {}
             }
@@ -633,6 +676,7 @@ impl Reader<'_> {
                         if k.name == "w:drawingGridHorizontalSpacing" { s.grid_h = v } else { s.grid_v = v }
                     }
                 }
+                "m:mathPr" => s.math = Some(math::read_math_pr(k)),
                 "w:mirrorMargins" => s.mirror_margins = on_off(k),
                 "w:autoHyphenation" => s.auto_hyphenation = on_off(k),
                 "w:footnotePr" => {

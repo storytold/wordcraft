@@ -1,5 +1,6 @@
 //! [`Document`] → DOCX.
 
+mod embed;
 mod math;
 mod props;
 mod story;
@@ -32,6 +33,14 @@ impl PartRels {
         self.list.push((id.clone(), kind.to_string(), target.to_string(), external));
         self.index.insert(key, id.clone());
         id
+    }
+    /// Add a relationship with a given id (the id a kept part's markup uses); a repeated id is
+    /// ignored. Not to be mixed with [`PartRels::add`] in one part.
+    pub fn add_with_id(&mut self, id: &str, kind: &str, target: &str, external: bool) {
+        if self.list.iter().any(|(i, ..)| i == id) {
+            return;
+        }
+        self.list.push((id.to_string(), kind.to_string(), target.to_string(), external));
     }
     fn is_empty(&self) -> bool {
         self.list.is_empty()
@@ -84,6 +93,8 @@ pub(crate) struct Writer<'d> {
     used_media: std::collections::BTreeSet<String>,
     /// Bounds writing text boxes inside text boxes (as layout shows them).
     boxes: wordcraft_doc::BoxBudget,
+    /// Charts, diagrams and OLE objects kept from a file: the parts they need.
+    embeds: embed::EmbedWriter<'d>,
 }
 
 const CT_WML: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.";
@@ -125,8 +136,10 @@ pub fn write_as(doc: &Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
         toc_end_here: false,
         used_media: Default::default(),
         boxes: wordcraft_doc::BoxBudget::default(),
+        embeds: embed::EmbedWriter::new(doc),
     };
     wr.assign_media();
+    wr.embeds.reserve_media(wr.media_files.values());
     let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
     let mut overrides: Vec<(String, String)> = Vec::new();
     let mut rels = PartRels::default();
@@ -313,6 +326,11 @@ pub fn write_as(doc: &Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
             media_types.insert(ext, content_type_for(file));
             entries.push((format!("word/media/{file}"), bytes.to_vec()));
         }
+    }
+
+    // Parts of charts, diagrams and OLE objects kept from a file, as the objects written need them.
+    for (name, bytes, ct, prels) in std::mem::take(&mut wr.embeds.parts) {
+        push_part(&mut entries, &mut overrides, &name, bytes, &ct, prels);
     }
 
     // The macro project and the parts it relates to (VBA data, signatures…), verbatim. A
@@ -665,9 +683,18 @@ fn style_xml(w: &mut W, st: &Style) {
         };
         cond(w, "wholeTable", &wordcraft_doc::CharProps::default(), t.fill, None);
         cond(w, "firstRow", &t.header_chr, t.header_fill, t.header_borders);
-        let total_top = t.total_border_top.map(|b| wordcraft_doc::props::Borders { top: Some(b), ..Default::default() });
-        cond(w, "lastRow", &t.total_chr, None, total_top);
-        cond(w, "firstCol", &t.first_col_chr, None, None);
+        // The total row's borders, its top edge falling back to the built-in top rule.
+        let total_borders = match (t.total_borders, t.total_border_top) {
+            (Some(mut b), top) => {
+                b.top = b.top.or(top);
+                Some(b)
+            }
+            (None, top) => top.map(|b| wordcraft_doc::props::Borders { top: Some(b), ..Default::default() }),
+        };
+        cond(w, "lastRow", &t.total_chr, t.total_fill, total_borders);
+        cond(w, "firstCol", &t.first_col_chr, t.first_col_fill, t.first_col_borders);
+        cond(w, "lastCol", &t.last_col_chr, t.last_col_fill, t.last_col_borders);
+        cond(w, "band1Vert", &t.col_band_chr, t.col_band_fill, t.col_band_borders);
         cond(w, "band1Horz", &t.band_chr, t.band_fill, t.band_borders);
     }
     w.close("w:style");
@@ -793,6 +820,9 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool) -> Vec<u8> {
     let mode = doc.settings.compat_mode.clamp(11, 15).to_string();
     w.empty("w:compatSetting", &[("w:name", "compatibilityMode"), ("w:uri", "http://schemas.microsoft.com/office/word"), ("w:val", &mode)]);
     w.close("w:compat");
+    if let Some(m) = &s.math {
+        math::math_pr(&mut w, m);
+    }
     w.close("w:settings");
     w.into_bytes()
 }

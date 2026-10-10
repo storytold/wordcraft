@@ -300,6 +300,24 @@ fn info_page(app: &mut WordApp, ui: &mut Ui) {
         if focused != app.info_editing.map(|(f, _)| f) {
             app.info_editing = None;
         }
+        // Protect Document › Encrypt with Password (#55).
+        ui.add_space(18.0);
+        ui.label(egui::RichText::new(tl!("Protect Document")).font(semibold(15.0)));
+        let encrypted = info.get("encrypted").and_then(|v| v.as_bool()).unwrap_or(false);
+        ui.label(if encrypted {
+            tl!("A password is required to open this document.")
+        } else {
+            tl!("Anyone can open this document. Encrypt it with a password to keep it private.")
+        });
+        ui.horizontal(|ui| {
+            let label = if encrypted { tl!("Change Password…") } else { tl!("Encrypt with Password…") };
+            if ui.button(egui::RichText::new(label).font(medium(13.5))).clicked() {
+                let _ = app.run("file.encrypt", json!({}));
+            }
+            if encrypted && ui.button(egui::RichText::new(tl!("Remove Password")).font(medium(13.5))).clicked() {
+                let _ = app.run("file.encrypt", json!({"password": null}));
+            }
+        });
         let ui = &mut cols[1];
         ui.label(egui::RichText::new(tl!("Statistics")).font(semibold(15.0)));
         for (l, k) in [("Pages", "pages"), ("Words", "words"), ("Paragraphs", "paragraphs"), ("Sections", "sections"), ("Comments", "comments")] {

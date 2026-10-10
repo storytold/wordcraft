@@ -23,7 +23,10 @@
 	Accept This Change	Aceptar este cambio
 	Accessibility	Accesibilidad
 	Add	Añadir
+	Add Object to Selection	Añadir objeto a la selección
 	Add Space Before Paragraph	Añadir espacio antes del párrafo
+	Add space between Asian and Latin text	Añadir espacio entre texto asiático y latino
+	Add space between Asian text and numbers	Añadir espacio entre texto asiático y números
 	Add Text	Añadir texto
 	Add a Table	Añadir una tabla
 	Add a comment	Añadir un comentario
@@ -46,13 +49,17 @@
 	All Caps	Mayúsculas
 	All Markup	Todas las marcas
 	All caps	Mayúsculas
+	Allow hanging punctuation	Permitir puntuación colgante
+	Allow Latin text to wrap in the middle of a word	Permitir que el texto latino se divida en mitad de una palabra
 	Alt Text	Texto alternativo
+	Apply Asian line-breaking rules (kinsoku)	Aplicar las reglas asiáticas de división de líneas (kinsoku)
 	Apply Character Style	Aplicar estilo de carácter
 	Apply Style	Aplicar estilo
 	Arrange	Organizar
 	Arrange\nAll	Organizar\ntodo
 	Arrow	Flecha
 	Artistic Effects	Efectos artísticos
+	Asian Typography	Tipografía asiática
 	Author	Autor
 	AutoCorrect Options	Opciones de autocorrección
 	AutoFit	Ajustar automáticamente
@@ -157,6 +164,14 @@
 	Clear Formatting Level	Borrar nivel de formato
 	Clear Paragraph Formatting	Borrar formato de párrafo
 	Clipboard	Portapapeles
+	Clipboard Pane	Panel del portapapeles
+	Clipboard Items	Elementos del portapapeles
+	Paste Clipboard Item	Pegar elemento del portapapeles
+	Paste All	Pegar todo
+	Delete Clipboard Item	Eliminar elemento del portapapeles
+	Click an item to paste it.	Haz clic en un elemento para pegarlo.
+	Nothing collected yet. Items you copy or cut appear here.	Aún no hay nada. Lo que copies o cortes aparecerá aquí.
+	(picture or object)	(imagen u objeto)
 	Close	Cerrar
 	Close Header and Footer	Cerrar encabezado y pie de página
 	Collapse Selection	Contraer selección
@@ -175,6 +190,7 @@
 	Compact	Compacto
 	Compare	Comparar
 	Compress Pictures	Comprimir imágenes
+	Compress punctuation at the start of a line	Comprimir la puntuación al inicio de la línea
 	Continuous	Continuo
 	Convert	Convertir
 	Convert Text to Table	Convertir texto en tabla
@@ -352,6 +368,7 @@
 	Indent	Sangría
 	Indentation	Sangría
 	Indents	Sangrías
+	Indents and Spacing	Sangría y espaciado
 	Index	Índice
 	Info	Información
 	Ink to\nMath	Tinta a\nfórmula
@@ -408,6 +425,7 @@
 	Letter	Carta
 	Line	Línea
 	Line Break	Salto de línea
+	Line breaking	División de líneas
 	Line End	Fin de línea
 	Line Numbers	Números de línea
 	Line Spacing	Interlineado
@@ -788,6 +806,7 @@
 	Two	Dos
 	Type Text	Escribir texto
 	Type a command, e.g. "insert table"	Escribe un comando, p. ej. "insertar tabla"
+	Ungroup	Desagrupar
 	UPPERCASE	MAYÚSCULAS
 	Underline	Subrayado
 	Underline Words Only	Subrayar solo las palabras
@@ -1068,3 +1087,137 @@
 	Leave the equation (Esc)	Salir de la ecuación (Esc)
 	Preview	Vista previa
 	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft
+
+# Columns, Symbol and Field dialogs (#321).
+	(All)	(Todos)
+	(none)	(ninguno)
+	(normal text)	(texto normal)
+	1/4 Em Space	Espacio de 1/4 de eme
+	A mail merge field	Un campo de combinación
+	A numbered sequence (figures, tables…)	Una secuencia numerada (figuras, tablas…)
+	A table of contents	Una tabla de contenido
+	Categories:	Categorías:
+	Character	Carácter
+	Character code:	Código de carácter:
+	Col #:	Col. n.º:
+	Copyright	Copyright
+	Date and Time	Fecha y hora
+	Date formats:	Formatos de fecha:
+	Description:	Descripción:
+	Document Information	Información del documento
+	Double Closing Quote	Comilla doble de cierre
+	Double Opening Quote	Comilla doble de apertura
+	Ellipsis	Puntos suspensivos
+	Em Dash	Raya
+	En Dash	Guion medio
+	Em Space	Espacio eme
+	En Space	Espacio ene
+	Equal column width	Columnas de igual ancho
+	Field Codes	Códigos de campo
+	Field code:	Código de campo:
+	Field codes:	Códigos de campo:
+	Field name:	Nombre del campo:
+	Field names:	Nombres de campo:
+	Field properties	Propiedades del campo
+	Field…	Campo…
+	Format:	Formato:
+	Hide Codes	Ocultar códigos
+	Index and Tables	Índices y tablas
+	Line between	Línea entre columnas
+	Links and References	Vínculos y referencias
+	Mail Merge	Combinar correspondencia
+	More Columns…	Más columnas…
+	More Symbols…	Más símbolos…
+	No-Width Non Break	Unión sin ancho
+	No-Width Optional Break	Salto opcional sin ancho
+	Paragraph Mark	Marca de párrafo
+	Pick a field from the list	Elija un campo
+	Preserve formatting during updates	Conservar el formato al actualizar
+	Presets	Preestablecidos
+	Recently used symbols:	Símbolos usados recientemente:
+	Registered	Registrado
+	Section Mark	Marca de sección
+	Sequence name:	Nombre de la secuencia:
+	Shortcut key:	Atajo de teclado:
+	Single Closing Quote	Comilla simple de cierre
+	Single Opening Quote	Comilla simple de apertura
+	Spacing:	Espaciado:
+	Special Characters	Caracteres especiales
+	Subset:	Subconjunto:
+	The time right now	La hora actual
+	When this document was first created	La fecha en que se creó el documento
+	When this document was most recently printed	La fecha en que se imprimió el documento por última vez
+	When this document was most recently saved	La fecha en que se guardó el documento por última vez
+	The document has no bookmarks yet.	El documento aún no tiene marcadores.
+	Who the document properties name as author	El autor del documento
+	Name of the file this document is saved as	El nombre de archivo del documento
+	Title from the document properties	El título del documento
+	How many pages the whole document has	El número de páginas del documento
+	How many pages this section has	El número de páginas de la sección
+	Number of the page the field sits on	El número de la página actual
+	Number of the section the field sits in	El número de la sección actual
+	How many words the document holds	El número de palabras del documento
+	Page on which a bookmarked passage falls	El número de página de un marcador
+	Copy of the text a bookmark marks	El texto de un marcador
+	This field has no options.	Este campo no tiene opciones.
+	This font has no characters to show.	Esta fuente no tiene caracteres que mostrar.
+	This point forward	De aquí en adelante
+	The date it is today	La fecha de hoy
+	Trademark	Marca comercial
+	Type the field's name and its switches, for example PAGE \\* roman.	Escriba el nombre del campo y sus modificadores, por ejemplo PAGE \\* roman.
+	Width and spacing	Ancho y espaciado
+	from Unicode (hex)	de Unicode (hex)
+	Shape Effects	Efectos de forma
+	Glow	Resplandor
+	Soft Edges	Bordes suaves
+	No Shadow	Sin sombra
+	No Glow	Sin resplandor
+	No Soft Edges	Sin bordes suaves
+	Glow Colors	Colores de resplandor
+	Weight	Grosor
+	Shadow, glow and soft edges	Sombra, resplandor y bordes suaves
+	Offset: Bottom Right	Desplazamiento: abajo a la derecha
+	Offset: Bottom	Desplazamiento: abajo
+	Offset: Bottom Left	Desplazamiento: abajo a la izquierda
+	Offset: Right	Desplazamiento: derecha
+	Offset: Center	Desplazamiento: centro
+	Offset: Left	Desplazamiento: izquierda
+	Offset: Top Right	Desplazamiento: arriba a la derecha
+	Offset: Top	Desplazamiento: arriba
+	Offset: Top Left	Desplazamiento: arriba a la izquierda
+	Manage Styles	Administrar estilos
+	Show or Hide Style	Mostrar u ocultar estilo
+	Manage Styles…	Administrar estilos…
+	Sort order:	Orden:
+	As Recommended	Recomendado
+	Alphabetical	Alfabético
+	Font: {font}	Fuente: {font}
+	{size} pt	{size} pt
+	Color: {color}	Color: {color}
+	Space before: {pt} pt	Espacio antes: {pt} pt
+	Space after: {pt} pt	Espacio después: {pt} pt
+	Based on: {style}	Basado en: {style}
+	Paragraph style	Estilo de párrafo
+	Character style	Estilo de carácter
+	Linked style (paragraph and character)	Estilo vinculado (párrafo y carácter)
+	Table style	Estilo de tabla
+	Built-in style	Estilo integrado
+	Show in the Styles gallery	Mostrar en la galería de estilos
+	Hide from style lists	Ocultar de las listas de estilos
+	Built-in styles can't be deleted.	Los estilos integrados no se pueden eliminar.
+	Delete Table Style	Eliminar estilo de tabla
+	Password	Contraseña
+	Password:	Contraseña:
+	Confirm password:	Confirmar contraseña:
+	Encrypt with Password…	Cifrar con contraseña…
+	Change Password…	Cambiar contraseña…
+	Remove Password	Quitar contraseña
+	A password is required to open this document.	Se necesita una contraseña para abrir este documento.
+	Anyone can open this document. Encrypt it with a password to keep it private.	Cualquiera puede abrir este documento. Cífralo con una contraseña para mantenerlo privado.
+	Anyone who opens the document will need this password.	Quien abra el documento necesitará esta contraseña.
+	{name} is protected with a password.	{name} está protegido con contraseña.
+	That password isn't right. Check it (passwords are case-sensitive) and try again.	La contraseña no es correcta. Revísala (distingue mayúsculas de minúsculas) e inténtalo de nuevo.
+	The document will be saved with a password. Save it to protect it.	El documento se guardará con contraseña. Guárdalo para protegerlo.
+	The password is removed. Save the document to keep the change.	Se quitó la contraseña. Guarda el documento para conservar el cambio.
+	The passwords don't match.	Las contraseñas no coinciden.
+	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	Guarda la contraseña en un lugar seguro: sin ella nadie, ni siquiera WordCraft, puede abrir el documento. Deja ambos cuadros vacíos para quitar la contraseña.
