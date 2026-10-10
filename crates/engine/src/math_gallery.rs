@@ -515,22 +515,23 @@ pub const SYMBOL_SETS: &[(&str, &str)] = &[
     ("Geometry", "∟∠∡∢⊾⊿⋕⊥∤∥∦∶∷∴∵∎△▭▱○◊□◇⊡⊙"),
 ];
 
-/// Ready-made equations (Insert › Equation).
+/// Ready-made equations (Insert › Equation), grouped by subject: geometry, algebra, calculus,
+/// trigonometry, probability. The labels are our own descriptions of the formulas.
 pub const BUILT_INS: &[(&str, &str, &str)] = &[
-    ("area", "Area of Circle", "A=πr^2"),
-    ("binomial", "Binomial Theorem", "(x+a)^n=∑_(k=0)^n▒〖(n¦k) x^k a^(n−k)〗"),
-    ("expansion", "Expansion of a Sum", "(1+x)^n=1+nx/1!+(n(n−1)x^2)/2!+⋯"),
-    ("fourier", "Fourier Series", "f(x)=a_0+∑_(n=1)^∞▒〖(a_n cos⁡〖nπx/L〗+b_n sin⁡〖nπx/L〗)〗"),
-    ("pythagoras", "Pythagorean Theorem", "a^2+b^2=c^2"),
-    ("quadratic", "Quadratic Formula", "x=(−b±√(b^2−4ac))/2a"),
-    ("taylor", "Taylor Expansion", "e^x=1+x/1!+x^2/2!+x^3/3!+⋯,  −∞<x<∞"),
-    ("trig1", "Trig Identity 1", "sin⁡α±sin⁡β=2 sin⁡〖1/2(α±β)〗 cos⁡〖1/2(α∓β)〗"),
-    ("trig2", "Trig Identity 2", "cos⁡α+cos⁡β=2 cos⁡〖1/2(α+β)〗 cos⁡〖1/2(α−β)〗"),
-    ("euler", "Euler's Identity", "e^(iπ)+1=0"),
-    ("gaussian", "Gaussian Integral", "∫_(−∞)^∞▒e^(−x^2) dx=√π"),
-    ("normal", "Normal Distribution", "f(x)=1/(σ√(2π)) e^(−(x−μ)^2/(2σ^2))"),
-    ("bayes", "Bayes' Theorem", "P(A|B)=(P(B|A)P(A))/P(B)"),
-    ("derivative", "Derivative Definition", "f'(x)=lim┬(h→0)⁡〖(f(x+h)−f(x))/h〗"),
+    ("pythagoras", "Sides of a right triangle", "a^2+b^2=c^2"),
+    ("area", "Circle area from its radius", "A=πr^2"),
+    ("quadratic", "Roots of ax²+bx+c", "x=(−b±√(b^2−4ac))/2a"),
+    ("binomial", "Binomial expansion of (x+a)ⁿ", "(x+a)^n=∑_(k=0)^n▒〖(n¦k) x^k a^(n−k)〗"),
+    ("expansion", "Power series of (1+x)ⁿ", "(1+x)^n=1+nx/1!+(n(n−1)x^2)/2!+⋯"),
+    ("euler", "Euler's identity", "e^(iπ)+1=0"),
+    ("derivative", "Derivative as a limit", "f'(x)=lim┬(h→0)⁡〖(f(x+h)−f(x))/h〗"),
+    ("taylor", "Exponential series", "e^x=1+x/1!+x^2/2!+x^3/3!+⋯,  −∞<x<∞"),
+    ("gaussian", "Integral of e^(−x²)", "∫_(−∞)^∞▒e^(−x^2) dx=√π"),
+    ("fourier", "Sine and cosine series of f(x)", "f(x)=a_0+∑_(n=1)^∞▒〖(a_n cos⁡〖nπx/L〗+b_n sin⁡〖nπx/L〗)〗"),
+    ("trig1", "Sum or difference of sines", "sin⁡α±sin⁡β=2 sin⁡〖1/2(α±β)〗 cos⁡〖1/2(α∓β)〗"),
+    ("trig2", "Sum of cosines", "cos⁡α+cos⁡β=2 cos⁡〖1/2(α+β)〗 cos⁡〖1/2(α−β)〗"),
+    ("normal", "Normal probability density", "f(x)=1/(σ√(2π)) e^(−(x−μ)^2/(2σ^2))"),
+    ("bayes", "Bayes' rule", "P(A|B)=(P(B|A)P(A))/P(B)"),
 ];
 
 #[cfg(test)]

@@ -24,7 +24,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("insert.equation", "Equation", "Insert › Symbols", insert)
             .key("Alt+=")
-            .params(r#"{"linear"?: string, "latex"?: string, "builtin"?: "quadratic|binomial|fourier|pythagoras|area|expansion|taylor|trig1|trig2|euler|gaussian|normal|bayes|derivative", "display"?: bool, "edit"?: bool (default true)}"#),
+            .params(r#"{"linear"?: string, "latex"?: string, "builtin"?: "pythagoras|area|quadratic|binomial|expansion|euler|derivative|taylor|gaussian|fourier|trig1|trig2|normal|bayes", "display"?: bool, "edit"?: bool (default true)}"#),
         CommandSpec::new("equation.edit", "Edit Equation", "Equation", edit)
             .pure()
             .when(near_equation)
