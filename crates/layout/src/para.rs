@@ -865,6 +865,9 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
         }
         // Line spacing scales the text's height, never a picture's: a line is at least as tall
         // as its tallest picture plus the descent below the baseline.
+        // shortcut: Word leaves less than a full descent below a line of only pictures (0.5pt to
+        // 1.9pt in docxide-pdf's header fixtures case121/case123, where the descent is 3.3pt), and
+        // no rule tried so far (none, only the text's descent) matched both; it needs Word probes.
         let natural = asc + desc;
         let pictures = if obj_asc > asc { obj_asc + desc } else { 0.0 };
         let height = match rp.line_spacing {
