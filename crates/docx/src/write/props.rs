@@ -2,7 +2,7 @@
 
 use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CellProps, CharProps, HeightRule, Highlight, LineSpacing, ParaProps, RowProps, TabAlign, TabLeader,
-    TableLook, TableProps, TextColor, VAlign, VMerge, VertAlign,
+    TableFloat, TableLook, TableProps, TextColor, VAlign, VMerge, VertAlign,
 };
 
 use crate::units::{n, twips};
@@ -71,6 +71,9 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
             Some(col) => w.empty("w:u", &[("w:val", u.ooxml()), ("w:color", &col.hex())]),
             None => w.val("w:u", u.ooxml()),
         }
+    }
+    if let Some(b) = &c.border {
+        border_el(w, "w:bdr", b);
     }
     if let Some(s) = c.shading {
         w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &s.hex())]);
@@ -305,6 +308,9 @@ pub fn tblpr(w: &mut W, t: &TableProps) {
     if let Some(s) = &t.style {
         w.val("w:tblStyle", s);
     }
+    if let Some(f) = &t.float {
+        table_float(w, f);
+    }
     if let Some(p) = t.width_pct {
         w.empty("w:tblW", &[("w:w", &n(round(p.clamp(0.0, 1000.0) * 50.0))), ("w:type", "pct")]);
     } else if let Some(v) = t.width {
@@ -396,4 +402,37 @@ pub fn tcpr(w: &mut W, c: &CellProps) {
         VAlign::Bottom => w.val("w:vAlign", "bottom"),
     }
     w.close("w:tcPr");
+}
+
+/// `w:tblpPr` and `w:tblOverlap` for a floating table.
+fn table_float(w: &mut W, f: &TableFloat) {
+    use wordcraft_doc::para::Anchor;
+    let rel = |a: Anchor, text: &'static str| match a {
+        Anchor::Page => "page",
+        Anchor::Margin => "margin",
+        _ => text,
+    };
+    let [left, top, right, bottom] = f.dist_from_text().map(twips);
+    let fin = |v: f32| twips(if v.is_finite() { v.clamp(-31_680.0, 31_680.0) } else { 0.0 });
+    let (x, y) = (fin(f.x), fin(f.y));
+    let mut a: Vec<(&str, &str)> = vec![
+        ("w:leftFromText", &left),
+        ("w:rightFromText", &right),
+        ("w:topFromText", &top),
+        ("w:bottomFromText", &bottom),
+        ("w:vertAnchor", rel(f.v_rel, "text")),
+        ("w:horzAnchor", rel(f.h_rel, "text")),
+    ];
+    match f.h_align {
+        Some(h) => a.push(("w:tblpXSpec", h.ooxml(true))),
+        None => a.push(("w:tblpX", &x)),
+    }
+    match f.v_align {
+        Some(v) => a.push(("w:tblpYSpec", v.ooxml(false))),
+        None => a.push(("w:tblpY", &y)),
+    }
+    w.empty("w:tblpPr", &a);
+    if !f.overlap {
+        w.val("w:tblOverlap", "never");
+    }
 }

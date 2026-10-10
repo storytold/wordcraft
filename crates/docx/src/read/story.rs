@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use wordcraft_doc::para::{Anchor, Float, NoteKind, ShapeKind, Wrap};
+use wordcraft_doc::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{CharProps, Rgb};
 use wordcraft_doc::table::{Cell, MAX_COLS, MAX_ROWS, Row, Table};
 use wordcraft_doc::{Block, Blocks, InlineObject, Paragraph, PartKind, RevisionKind, Run, para_block};
@@ -341,6 +341,11 @@ impl Reader<'_> {
                     self.read_inline_children(sc, pb, c, rels, ctx, depth + 1);
                 }
             }
+            // Some generators write a break directly under the paragraph instead of inside a run.
+            "w:br" | "w:cr" => {
+                let props = self.run_props_none(ctx);
+                self.read_run_child(sc, pb, k, &props, rels, &mut None, depth + 1);
+            }
             _ => {}
         }
     }
@@ -456,6 +461,15 @@ impl Reader<'_> {
                     let kind = if foot { NoteKind::Footnote } else { NoteKind::Endnote };
                     let custom = on_off_attr(k, "w:customMarkFollows").then(String::new);
                     *note = Some((kind, id, custom));
+                }
+            }
+            // The note's own number at the start of its text: a reference to the note being read.
+            "w:footnoteRef" | "w:endnoteRef" => {
+                let kind = if k.name == "w:footnoteRef" { NoteKind::Footnote } else { NoteKind::Endnote };
+                if let Some((nk, id)) = self.current_note
+                    && nk == kind
+                {
+                    *note = Some((kind, id, None));
                 }
             }
             "w:commentReference" => {
@@ -612,7 +626,12 @@ impl Reader<'_> {
         let dim = |n: &str| ext.and_then(|e| e.attr(n)).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0).clamp(0.0, crate::units::MAX_LEN_PT);
         let (w, h) = (dim("cx"), dim("cy"));
         let alt = c.child("wp:docPr").and_then(|p| p.attr("descr").filter(|s| !s.is_empty()).or_else(|| p.attr("title"))).unwrap_or("").to_string();
-        let float = if anchored { anchor_float(c) } else { Float::default() };
+        let mut float = if anchored { anchor_float(c) } else { Float::default() };
+        if let Some(e) = c.child("wp:effectExtent") {
+            for (slot, n) in float.effect.iter_mut().zip(["l", "t", "r", "b"]) {
+                *slot = e.attr(n).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0).clamp(0.0, 1584.0);
+            }
+        }
         let gd = c.child("a:graphic").and_then(|g| g.child("a:graphicData"))?;
         if let Some(blip) = gd.find("a:blip") {
             let media = blip.attr("r:embed").and_then(|id| self.media_for(rels, id))?;
@@ -789,30 +808,39 @@ fn anchor_float(c: &El) -> Float {
             "wp:wrapNone" => f.wrap = if behind { Wrap::BehindText } else { Wrap::InFrontOfText },
             "wp:positionH" | "wp:positionV" => {
                 let horiz = k.name == "wp:positionH";
-                let rel = match k.attr("relativeFrom").unwrap_or("") {
-                    "page" => Anchor::Page,
-                    "margin" | "leftMargin" | "rightMargin" | "insideMargin" | "outsideMargin" | "topMargin" | "bottomMargin" => Anchor::Margin,
-                    "paragraph" | "line" => Anchor::Paragraph,
-                    _ => {
-                        if horiz {
-                            Anchor::Column
-                        } else {
-                            Anchor::Paragraph
-                        }
-                    }
+                let rel = match (k.attr("relativeFrom").unwrap_or(""), horiz) {
+                    ("page", _) => Anchor::Page,
+                    ("margin", _) => Anchor::Margin,
+                    ("leftMargin", true) => Anchor::LeftMargin,
+                    ("rightMargin", true) => Anchor::RightMargin,
+                    ("insideMargin", _) => Anchor::InsideMargin,
+                    ("outsideMargin", _) => Anchor::OutsideMargin,
+                    ("character", true) => Anchor::Character,
+                    ("topMargin", false) => Anchor::TopMargin,
+                    ("bottomMargin", false) => Anchor::BottomMargin,
+                    ("line", false) => Anchor::Line,
+                    ("paragraph", false) => Anchor::Paragraph,
+                    (_, true) => Anchor::Column,
+                    (_, false) => Anchor::Paragraph,
                 };
+                let align = k.child("wp:align").and_then(|a| FloatAlign::from_ooxml(a.text().trim()));
                 let off = k.child("wp:posOffset").and_then(|o| measure(&o.text(), 12_700.0)).unwrap_or(0.0);
                 if horiz {
                     f.h_rel = rel;
+                    f.h_align = align;
                     f.x = off;
                 } else {
                     f.v_rel = rel;
+                    f.v_align = align;
                     f.y = off;
                 }
             }
             _ => {}
         }
     }
-    f.dist = c.attr("distL").and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0).clamp(0.0, 1584.0);
+    let dist = |n: &str| c.attr(n).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0).clamp(0.0, 1584.0);
+    f.dist = dist("distL").max(dist("distR"));
+    f.dist_top = dist("distT");
+    f.dist_bottom = dist("distB");
     f
 }

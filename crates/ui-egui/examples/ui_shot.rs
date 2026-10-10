@@ -69,7 +69,9 @@ fn main() {
                 step(&mut harness);
                 if let Ok(r) = reply.try_recv() {
                     let s = r.to_string();
-                    println!("{m}: {}", &s[..s.len().min(300)]);
+                    // `UI_SHOT_FULL=1` prints whole replies (e.g. `document.inspect` for scripted checks).
+                    let cut = if std::env::var_os("UI_SHOT_FULL").is_some() { s.len() } else { s.len().min(300) };
+                    println!("{m}: {}", s.get(..cut).unwrap_or(&s));
                     break;
                 }
             }
