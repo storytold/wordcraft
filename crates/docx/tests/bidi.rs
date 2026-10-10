@@ -129,6 +129,29 @@ fn reads_word_style_bidi_markup() {
 }
 
 #[test]
+fn kashida_modes_read_distinctly_and_round_trip() {
+    // Word's three kashida justification modes stay distinct; plain justification is untouched.
+    let body = r#"
+<w:p><w:pPr><w:bidi/><w:jc w:val="lowKashida"/></w:pPr><w:r><w:t>أ</w:t></w:r></w:p>
+<w:p><w:pPr><w:jc w:val="mediumKashida"/></w:pPr><w:r><w:t>b</w:t></w:r></w:p>
+<w:p><w:pPr><w:jc w:val="highKashida"/></w:pPr><w:r><w:t>c</w:t></w:r></w:p>
+<w:p><w:pPr><w:jc w:val="both"/></w:pPr><w:r><w:t>d</w:t></w:r></w:p>"#;
+    let d = wordcraft_docx::read(&docx(body)).unwrap();
+    let ps = paras(&d);
+    assert_eq!(ps.len(), 4);
+    assert_eq!((ps[0].props.align, ps[0].props.kashida), (Some(Align::Justify), Some(wordcraft_doc::props::Kashida::Low)));
+    assert_eq!((ps[1].props.align, ps[1].props.kashida), (Some(Align::Justify), Some(wordcraft_doc::props::Kashida::Medium)));
+    assert_eq!((ps[2].props.align, ps[2].props.kashida), (Some(Align::Justify), Some(wordcraft_doc::props::Kashida::High)));
+    assert_eq!((ps[3].props.align, ps[3].props.kashida), (Some(Align::Justify), None));
+    let xml = document_xml(&wordcraft_docx::write(&d).unwrap());
+    for mode in ["lowKashida", "mediumKashida", "highKashida"] {
+        assert!(xml.contains(&format!(r#"w:val="{mode}""#)), "mode kept: {mode}");
+    }
+    let r = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(paras(&r).iter().map(|p| p.props.kashida).collect::<Vec<_>>(), ps.iter().map(|p| p.props.kashida).collect::<Vec<_>>());
+}
+
+#[test]
 fn hostile_bidi_markup_is_bounded() {
     let long = "x".repeat(10_000);
     let body = format!(

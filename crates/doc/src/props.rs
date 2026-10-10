@@ -383,6 +383,36 @@ impl Align {
     }
 }
 
+/// Arabic justification mode (OOXML `w:jc` `lowKashida` / `mediumKashida` / `highKashida`):
+/// elongation-first justification for connected scripts. Word stretches the connections;
+/// WordCraft distributes the same slack to inter-word spaces (a documented fallback), so the
+/// mode is preserved for round trips and future elongation work, and never alters stored text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Kashida {
+    Low,
+    Medium,
+    High,
+}
+
+impl Kashida {
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            Kashida::Low => "lowKashida",
+            Kashida::Medium => "mediumKashida",
+            Kashida::High => "highKashida",
+        }
+    }
+    pub fn from_ooxml(s: &str) -> Option<Kashida> {
+        match s {
+            "lowKashida" => Some(Kashida::Low),
+            "mediumKashida" => Some(Kashida::Medium),
+            "highKashida" => Some(Kashida::High),
+            _ => None,
+        }
+    }
+}
+
 /// Line spacing rule.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "rule", content = "value")]
@@ -619,6 +649,9 @@ pub struct ParaProps {
     pub suppress_line_numbers: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bidi: Option<bool>,
+    /// Arabic justification mode (only meaningful with justified alignment; see [`Kashida`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kashida: Option<Kashida>,
     /// Drop cap: lines to drop (0 = none) — applies to the first character(s).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub drop_cap: Option<u8>,
@@ -628,7 +661,7 @@ impl ParaProps {
     pub fn overlay(&mut self, patch: &ParaProps) {
         overlay_fields!(self, patch; style, align, indent_left, indent_right, indent_first, space_before, space_after, line_spacing,
             contextual_spacing, keep_next, keep_lines, page_break_before, widow_control, outline_level, numbering, tabs, shading, borders,
-            suppress_hyphens, suppress_line_numbers, bidi, drop_cap);
+            suppress_hyphens, suppress_line_numbers, bidi, kashida, drop_cap);
     }
     pub fn overlaid(mut self, patch: &ParaProps) -> ParaProps {
         self.overlay(patch);

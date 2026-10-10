@@ -1273,6 +1273,9 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
             }
         }
         let justify = display.is_none() && ((rp.align == Align::Justify && end == LineEnd::Wrap) || rp.align == Align::Distribute);
+        // Kashida paragraphs (`ParaProps::kashida`) justify here too: Word would elongate the
+        // connections, but stretching glyphs needs shaper support we don't have, so the same
+        // slack goes to inter-word spaces. Joining, marks and cluster mappings are untouched.
         // A line that only fits with shrunk spaces is shrunk, the last line of the paragraph too.
         let shrink = display.is_none() && shrink_spaces && slack < 0.0 && last_tab.is_none();
         if shrink {

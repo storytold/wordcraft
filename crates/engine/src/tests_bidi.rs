@@ -237,6 +237,24 @@ fn plain_text_paste_keeps_logical_arabic_order() {
 }
 
 #[test]
+fn justify_modes_set_kashida_and_buttons_leave_it() {
+    use wordcraft_doc::props::Kashida;
+    let mut s = session("متن عربی", true);
+    run(&mut s, "para.justify", json!({"mode": "medium"}));
+    assert_eq!(props(&s, 0).align, Some(Align::Justify));
+    assert_eq!(props(&s, 0).kashida, Some(Kashida::Medium));
+    assert!(s.run("para.justify", &json!({"mode": "sideways"})).is_err());
+    // Word's alignment is one value: the buttons leave kashida justification.
+    run(&mut s, "para.alignCenter", json!({}));
+    assert_eq!(props(&s, 0).kashida, None);
+    run(&mut s, "para.justify", json!({"mode": "high"}));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(props(&s, 0).kashida, None);
+    run(&mut s, "edit.redo", json!({}));
+    assert_eq!(props(&s, 0).kashida, Some(Kashida::High));
+}
+
+#[test]
 fn section_direction_sets_toggles_and_undoes() {
     let mut s = session("one\ntwo", false);
     assert!(!s.doc.last_section.rtl);

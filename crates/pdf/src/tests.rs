@@ -564,3 +564,31 @@ fn rtl_table_cells_export_in_logical_order() {
     let (a, b) = (text.find("first cell"), text.find("second cell"));
     assert!(matches!((a, b), (Some(a), Some(b)) if a < b), "logical order in the PDF text layer: {text:?}");
 }
+
+#[test]
+fn arabic_marks_extract_as_their_own_characters() {
+    // Base letters plus combining marks share one layout cluster: every glyph still maps to
+    // exactly one character (no .notdef gaps, no first-cluster reuse), in logical order.
+    for text in ["بَ", "بِسْمِ", "قال لا للسلام"] {
+        let mut d = Document::new();
+        d.body = vec![para_block(Paragraph::with_text(text, CharProps::default()))];
+        let raw = extract_text(&export(&d, &PdfOptions::default()).unwrap()).concat();
+        assert_eq!(raw, text, "marks extract with their bases: {text:?}");
+    }
+    // A justified kashida paragraph extracts logically too.
+    let mut d = Document::new();
+    let mut j = Paragraph::with_text("بِسْمِ اللَّهِ ".repeat(8).trim_end(), CharProps::default());
+    j.props.bidi = Some(true);
+    j.props.align = Some(wordcraft_doc::props::Align::Justify);
+    j.props.kashida = Some(wordcraft_doc::props::Kashida::Medium);
+    d.body = vec![para_block(j)];
+    let text = squash(&extract_text(&export(&d, &PdfOptions::default()).unwrap()).concat());
+    assert!(!text.contains('\u{FFFD}'), "no unmapped glyphs: {text:?}");
+    assert!(
+        !text.chars().any(|c| ('\u{FB50}'..='\u{FDFF}').contains(&c) || ('\u{FE70}'..='\u{FEFF}').contains(&c)),
+        "no presentation forms: {text:?}"
+    );
+    for word in ["بِسْمِ", "اللَّهِ"] {
+        assert!(text.contains(word), "logical word {word:?} in: {text:?}");
+    }
+}

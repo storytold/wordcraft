@@ -568,6 +568,68 @@ fn body_line_xs_on(l: &DocLayout, page: usize) -> Vec<f32> {
 }
 
 #[test]
+fn kashida_justification_keeps_joining_marks_and_mappings() {
+    use wordcraft_doc::props::Kashida;
+    // Arabic with diacritics and a superscript alef, one paragraph over many lines.
+    let text = "بِسْمِ اللَّهِ الرَّحْمَنِ الرَّحِيمِ طٰه ".repeat(30);
+    assert!(!text.contains('\u{640}'), "no tatweel in the stored text");
+    let mut counts = Vec::new();
+    for mode in [None, Some(Kashida::Low), Some(Kashida::Medium), Some(Kashida::High)] {
+        let mut d = Document::from_text(&text);
+        let at = Pos::body(0, 0);
+        d.format_paragraphs(&at, &at, &|p: &mut ParaProps| {
+            p.bidi = Some(true);
+            p.align = Some(Align::Justify);
+            p.kashida = mode;
+        })
+        .unwrap();
+        let l = lay(&d);
+        // Every wrapped line is full width: the slack went to inter-word spaces, never into words.
+        let mut lines = 0;
+        for p in &l.pages {
+            for it in &p.items {
+                if let Placed::Lines { story: StoryRef::Body, path, para, l0, l1, x, .. } = it
+                    && path.0 == vec![0]
+                {
+                    for li in *l0..*l1 {
+                        lines += 1;
+                        let line = &para.lines[li];
+                        if li + 1 == para.lines.len() && *l1 == para.lines.len() {
+                            continue; // the last line is never justified
+                        }
+                        let content = text[line.start..line.stop].trim_end().len();
+                        let (a, b) = (para.x_of(li, line.start).unwrap() + x, para.x_of(li, line.start + content).unwrap() + x);
+                        assert!((a - 540.0).abs() < 1.5 && (b - 72.0).abs() < 1.5, "full line {mode:?}: {a}..{b}");
+                    }
+                }
+            }
+        }
+        assert!(lines > 3, "several wrapped lines");
+        // Clusters cover every byte exactly once: mappings stay logical through justification.
+        let pl = l
+            .pages
+            .iter()
+            .flat_map(|p| p.items.iter())
+            .find_map(|it| if let Placed::Lines { story: StoryRef::Body, para, .. } = it { Some(para.clone()) } else { None });
+        let pl = pl.expect("laid out");
+        let mut spans: Vec<(usize, usize)> = pl.clusters.iter().map(|c| (c.start, c.end)).collect();
+        spans.sort();
+        let mut next = 0;
+        for (a, b) in &spans {
+            assert_eq!(*a, next, "no gap or overlap in cluster mappings ({mode:?})");
+            next = *b;
+        }
+        assert_eq!(next, text.len());
+        counts.push(pl.clusters.len());
+        // Diacritics and the superscript alef are covered by the chosen Arabic face, if any.
+        if arabic_face().is_some() {
+            assert!(pl.glyphs.iter().all(|g| g.gid != 0), "no .notdef marks ({mode:?})");
+        }
+    }
+    assert!(counts.windows(2).all(|w| w[0] == w[1]), "justification never reshapes: {counts:?}");
+}
+
+#[test]
 fn rtl_sections_fill_columns_right_to_left() {
     let text = "line\n".repeat(100);
     let mut d = Document::from_text(&text);

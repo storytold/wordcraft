@@ -810,6 +810,78 @@ impl Exporter<'_> {
         (text.to_string(), ranges)
     }
 
+    /// Advance of glyph `k` toward the next, in font units (the last takes its nominal advance):
+    /// only the magnitude matters, for ordering a cluster's glyphs.
+    fn glyph_advance(glyphs: &[(u32, f32, f32)], face: &FaceRef, k: usize) -> f32 {
+        match glyphs.get(k + 1) {
+            Some((_, nx, _)) => nx - glyphs.get(k).map(|g| g.1).unwrap_or(0.0),
+            None => glyphs.get(k).map(|(g, _, _)| face.advance(*g) as f32).unwrap_or(0.0),
+        }
+    }
+
+    /// One text range divided across a cluster's glyphs: one character each, the last taking
+    /// any remainder. Fewer entries than glyphs when characters run out.
+    fn split_group(slice: &str, start: usize, end: usize) -> Vec<std::ops::Range<usize>> {
+        let bounds: Vec<usize> = slice.char_indices().map(|(k, _)| start + k).collect();
+        let n = bounds.len();
+        (0..n)
+            .map(|i| {
+                let from = bounds.get(i).copied().unwrap_or(start);
+                let to = if i + 1 == n { end } else { bounds.get(i + 1).copied().unwrap_or(end) };
+                from..to.max(from)
+            })
+            .collect()
+    }
+
+    /// Glyphs sharing one text range (a base letter plus its marks) split it so every glyph
+    /// maps to exactly one character: advancing glyphs first (marks overlay at zero advance).
+    /// Otherwise all but the first glyph get no Unicode mapping, and a mark glyph reused across
+    /// clusters keeps its first cluster's mapping. Absolute positions are untouched: advances
+    /// re-derive from them at the call site.
+    fn split_shared_ranges(
+        glyphs: &[(u32, f32, f32)],
+        txt: &str,
+        ranges: &[std::ops::Range<usize>],
+        face: &FaceRef,
+    ) -> (Vec<(u32, f32, f32)>, Vec<std::ops::Range<usize>>) {
+        let mut order: Vec<usize> = (0..glyphs.len()).collect();
+        let mut new_ranges: Vec<std::ops::Range<usize>> = ranges.to_vec();
+        let mut i = 0;
+        while i < order.len() {
+            let mut j = i + 1;
+            while j < order.len() && ranges.get(order[j]) == ranges.get(order[i]) {
+                j += 1;
+            }
+            if j - i > 1 {
+                // Stable: marks keep shaper order among themselves.
+                order[i..j].sort_by(|x, y| Self::glyph_advance(glyphs, face, *y).abs().total_cmp(&Self::glyph_advance(glyphs, face, *x).abs()));
+                if let Some(slice) = ranges.get(order[i]).and_then(|r| txt.get(r.clone())) {
+                    let start = ranges.get(order[i]).map(|r| r.start).unwrap_or(0);
+                    let end = ranges.get(order[i]).map(|r| r.end).unwrap_or(start);
+                    let parts = Self::split_group(slice, start, end);
+                    // Fewer characters than glyphs (a decomposed glyph): leave the cluster as
+                    // it was rather than duplicating a character.
+                    if parts.len() >= j - i {
+                        for (n, pos) in (i..j).enumerate() {
+                            let slot = if n + 1 == j - i {
+                                parts.get(n).map(|r| r.start).unwrap_or(end)..end
+                            } else if let Some(p) = parts.get(n) {
+                                p.clone()
+                            } else {
+                                continue;
+                            };
+                            if let Some(dst) = new_ranges.get_mut(pos) {
+                                *dst = slot;
+                            }
+                        }
+                    }
+                }
+            }
+            i = j;
+        }
+        (order.iter().filter_map(|k| glyphs.get(*k).copied()).collect(), new_ranges)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn glyphs(
         &mut self,
@@ -827,7 +899,6 @@ impl Exporter<'_> {
         if !size.is_finite() || size <= 0.0 || size > 5000.0 {
             return;
         }
-        let Some(&(_, x0, y0)) = glyphs.first() else { return };
         if !glyphs.iter().all(|(_, x, y)| ok(*x) && ok(*y)) {
             return;
         }
@@ -840,6 +911,13 @@ impl Exporter<'_> {
         // ligatures can't be guessed back from the font's cmap), else a guess.
         let valid = known.len() == glyphs.len() && known.iter().all(|r| r.start < r.end && text.get(r.clone()).is_some());
         let (txt, ranges) = if valid { (text.to_string(), known.to_vec()) } else { self.map_text(face, glyphs, text) };
+        // Glyphs sharing one text range (a base letter plus its marks) split it: all but the
+        // first would otherwise get no Unicode mapping, and a mark glyph reused across clusters
+        // would keep its first cluster's mapping. Advancing glyphs come first (marks overlay at
+        // zero advance), so each glyph maps to its own character everywhere. Advances re-derive
+        // from positions below, so the rendering is unchanged.
+        let (glyphs, ranges) = Self::split_shared_ranges(glyphs, &txt, &ranges, face);
+        let Some(&(_, x0, y0)) = glyphs.first() else { return };
         let upem = face.upem.max(1.0) as f32;
         let kg: Vec<KrillaGlyph> = glyphs
             .iter()
@@ -868,7 +946,7 @@ impl Exporter<'_> {
                 s.draw_glyphs(Point::from_xy(x0, y0), &kg, font, &txt, size, false);
             }
             None => {
-                if let Some(path) = glyph_outlines(face, size, glyphs) {
+                if let Some(path) = glyph_outlines(face, size, &glyphs) {
                     s.draw_path(&path);
                 }
             }

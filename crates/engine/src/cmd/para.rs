@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 use wordcraft_doc::numbering::ListKind;
-use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, LineSpacing, NumRef, ParaProps, Rgb, TabStop};
+use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, Kashida, LineSpacing, NumRef, ParaProps, Rgb, TabStop};
 use wordcraft_doc::styles::{Style, StyleKind};
 use wordcraft_doc::{Block, Pos};
 
@@ -14,7 +14,21 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("para.alignLeft", "Align Left", "Home › Paragraph", |s, _| align(s, Align::Left)).key("Mod+L"),
         CommandSpec::new("para.alignCenter", "Center", "Home › Paragraph", |s, _| align(s, Align::Center)).key("Mod+E"),
         CommandSpec::new("para.alignRight", "Align Right", "Home › Paragraph", |s, _| align(s, Align::Right)).key("Mod+R"),
-        CommandSpec::new("para.justify", "Justify", "Home › Paragraph", |s, _| align(s, Align::Justify)).key("Mod+J"),
+        CommandSpec::new("para.justify", "Justify", "Home › Paragraph", |s, v| {
+            let mode = match p::str(v, "mode") {
+                None => return align(s, Align::Justify),
+                Some("low") => Kashida::Low,
+                Some("medium") => Kashida::Medium,
+                Some("high") => Kashida::High,
+                Some(x) => return Err(CmdError::Params(format!("unknown justification mode `{x}`"))),
+            };
+            fmt(s, &|p| {
+                p.align = Some(Align::Justify);
+                p.kashida = Some(mode);
+            })
+        })
+        .key("Mod+J")
+        .params(r#"{"mode"?: "low|medium|high (Arabic kashida justification)"}"#),
         CommandSpec::new("para.distribute", "Distributed", "Home › Paragraph", |s, _| align(s, Align::Distribute)).key("Mod+Shift+J"),
         CommandSpec::new("para.align", "Alignment", "Home › Paragraph", |s, v| {
             let a = match p::req_str(v, "value")? {
@@ -24,8 +38,18 @@ pub fn specs() -> Vec<CommandSpec> {
                 "justify" | "both" => Align::Justify,
                 "distribute" => Align::Distribute,
                 // Logical edges, whatever the paragraph's direction.
-                "start" => return fmt(s, &|p| p.align = Some(Align::Left)),
-                "end" => return fmt(s, &|p| p.align = Some(Align::Right)),
+                "start" => {
+                    return fmt(s, &|p| {
+                        p.align = Some(Align::Left);
+                        p.kashida = None;
+                    });
+                }
+                "end" => {
+                    return fmt(s, &|p| {
+                        p.align = Some(Align::Right);
+                        p.kashida = None;
+                    });
+                }
                 x => return Err(CmdError::Params(format!("unknown alignment `{x}`"))),
             };
             // An explicit value sets it (no toggling back to the start edge like the buttons).
@@ -212,13 +236,18 @@ fn align(s: &mut Session, a: Align) -> CmdResult {
     fmt(s, &|p| {
         let rtl = p.bidi.unwrap_or(focus_rtl);
         p.align = Some(target.map_or(Align::Left, |a| a.visual(rtl)));
+        // Word's alignment is one value: the buttons leave kashida justification.
+        p.kashida = None;
     })
 }
 
 /// Set the alignment as seen on the page in every selected paragraph, in its own direction.
 fn set_align(s: &mut Session, a: Align) -> CmdResult {
     let focus_rtl = cur(s).bidi;
-    fmt(s, &|p| p.align = Some(a.visual(p.bidi.unwrap_or(focus_rtl))))
+    fmt(s, &|p| {
+        p.align = Some(a.visual(p.bidi.unwrap_or(focus_rtl)));
+        p.kashida = None;
+    })
 }
 
 /// Paragraph reading order (Word's Right-to-Left / Left-to-Right Text Direction buttons). Only
