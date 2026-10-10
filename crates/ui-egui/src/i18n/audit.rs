@@ -123,7 +123,10 @@ impl Exempt {
         let status = app.status_msg.iter().map(|(m, _)| m).chain(&app.read_aloud_error).any(|m| text.contains(m.as_str()));
         // A theme's fonts after its (translated) name: `Studio: Georgia / Georgia`.
         let theme_fonts = plain.strip_prefix(": ").is_some_and(|f| f.split(" / ").count() == 2);
-        plain.chars().count() <= 3 // lettering inside icons (`Aa`, `abc`) and initials
+        let icon_lettering = matches!(plain, "Aa" | "ab" | "abc" | "ac" | "cd" | "ab-" | "fx" | "ABC");
+        let initials = plain.chars().count() == 2 && plain.chars().all(|c| c.is_ascii_uppercase());
+        icon_lettering // drawn inside icons
+            || initials // the account button
             || status
             || theme_fonts
             || is_shortcut()
@@ -219,28 +222,31 @@ fn untranslated_interface_text() {
     record(&app, "tab Equation", drawn);
     // Every ribbon control on every tab, and whatever menu or dialog it opens. A fresh app per
     // tab keeps one tab's commands from changing the next.
+    // A fresh app per control, set up the same way, so no click changes what the next one hits
+    // (Escape, for one, leaves an equation and takes the Equation tab with it).
     let contextual = ["Table Design", "Table Layout", "Equation"];
-    for tab in tabs.iter().chain(&contextual) {
+    let open = |tab: &str| {
         let ctx = egui::Context::default();
         let mut app = fresh_app(&ctx);
-        match *tab {
+        match tab {
             "Table Design" | "Table Layout" => drop(app.run("insert.table", json!({"rows": 2, "cols": 2}))),
             "Equation" => drop(app.run("insert.equation", json!({}))),
             _ => {}
         }
         let _ = app.run("ui.tab", json!({"tab": tab}));
         frame(&ctx, &mut app);
-        for at in ribbon_controls(&ctx) {
+        (ctx, app)
+    };
+    for tab in tabs.iter().chain(&contextual) {
+        let (ctx, _) = open(tab);
+        let controls = ribbon_controls(&ctx);
+        for at in controls {
+            let (ctx, mut app) = open(tab);
             // Hover first (tooltips), then click (menus, dialogs).
             let hovered = frames(&ctx, &mut app, vec![vec![egui::Event::PointerMoved(at)]; 3]);
             record(&app, &format!("{tab} › hover"), hovered);
             let drawn = frames(&ctx, &mut app, click(at, egui::PointerButton::Primary));
             record(&app, &format!("{tab} › click"), drawn);
-            frames(&ctx, &mut app, escape());
-            app.dialog = None;
-            let _ = app.run("ui.backstage", json!({"value": false}));
-            let _ = app.run("ui.tab", json!({"tab": tab}));
-            frame(&ctx, &mut app);
         }
     }
     pseudo::set(false);
