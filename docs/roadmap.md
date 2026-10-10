@@ -55,7 +55,7 @@ partial rows are fidelity gaps (beta work), not broken workflows. WordCraft stay
 | M8 | View | mostly done; window commands missing | 3–5 h |
 | M9 | Mailings | done (first version); Excel/Outlook data sources and email merge missing | 6–10 h |
 | M10 | File/Backstage | mostly done; native printing, Options depth missing | 12–20 h |
-| M11 | Draw and objects | text wrap, text boxes, canvas handles, rotation (#332), ink pens and eraser (#307) done; lasso and ink conversion, grouping, contour wrap missing | 35–55 h |
+| M11 | Draw and objects | text wrap, text boxes, canvas handles, rotation (#332), ink pens and eraser (#307), contour wrap (#354) done; lasso and ink conversion, grouping missing | 35–55 h |
 | M12 | Formats breadth (PDF, ODT, RTF, HTML, MD, TXT, LaTeX, `.doc` import) | done (first versions); `.doc` write, encryption, minor formats missing | 60–100 h |
 | M13 | Performance budgets | on track (1.4 ms relayout); large real-world documents unmeasured | 10–20 h |
 | M14 | 1.0 polish, packaging, signing | releases v0.1.0–v0.4.0 published (signed macOS, Windows MSI x64/x86/arm64, Linux, FreeBSD, web) | — |
@@ -71,6 +71,7 @@ languages, screen-reader access, ecosystem decisions (VBA, add-ins, cloud), an i
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | trivial | M11: contour (Tight/Through) wrap done (#354) |
 | 2026-10-11 | trivial | M7: formatting revisions landed (#41) |
 | 2026-10-10 | trivial | M5: Draw Table and Eraser landed (#303) |
 | 2026-10-10 | trivial | Merged main: PRs that landed removed from the Current focus list |

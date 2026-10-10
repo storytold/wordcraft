@@ -126,7 +126,7 @@ impl FloatAlign {
 }
 
 /// Floating placement (ignored when `wrap` is `Inline`).
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Float {
     pub wrap: Wrap,
@@ -158,6 +158,10 @@ pub struct Float {
     pub flip_h: bool,
     #[serde(skip_serializing_if = "is_false")]
     pub flip_v: bool,
+    /// The outline Tight and Through wrapping follow (`wp:wrapPolygon`), in the object's own
+    /// (unrotated) frame; `None` = derived from the object (see [`crate::wrap`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wrap_polygon: Option<std::sync::Arc<crate::wrap::WrapPolygon>>,
 }
 
 fn is_zero(v: &f32) -> bool {

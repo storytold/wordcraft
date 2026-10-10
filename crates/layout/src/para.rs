@@ -291,7 +291,7 @@ pub struct ParaEnv<'a> {
 }
 
 /// An area text wraps around.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Exclusion {
     pub top: f32,
     pub bottom: f32,
@@ -299,6 +299,9 @@ pub struct Exclusion {
     pub right: f32,
     /// Text only above and below (no text beside it).
     pub top_bottom: bool,
+    /// Tight and Through wrapping: the outline text follows inside the area (relative to its
+    /// top-left); `None` = the whole area.
+    pub contour: Option<Arc<crate::contour::Contour>>,
 }
 
 struct Builder<'a> {
@@ -953,7 +956,16 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, level: Optio
     let bidi = rtl_para || !pl.bidi_levels.is_empty();
     let mirrored: Vec<Exclusion>;
     let exclusions: &[Exclusion] = if rtl_para {
-        mirrored = env.exclusions.iter().map(|e| Exclusion { left: width - e.right, right: width - e.left, ..*e }).collect();
+        mirrored = env
+            .exclusions
+            .iter()
+            .map(|e| Exclusion {
+                left: width - e.right,
+                right: width - e.left,
+                contour: e.contour.as_ref().map(|c| Arc::new(c.mirrored(e.right - e.left))),
+                ..e.clone()
+            })
+            .collect();
         &mirrored
     } else {
         env.exclusions
@@ -1527,23 +1539,33 @@ const MIN_SPAN: f32 = 20.0;
 /// here, try again at `y` (below what's in the way).
 fn row_spans(exclusions: &[Exclusion], top: f32, h: f32, lo: f32, hi: f32) -> Result<VecDeque<(f32, f32)>, f32> {
     let here: Vec<&Exclusion> = exclusions.iter().filter(|e| e.bottom > top && e.top < top + h && e.right > lo && e.left < hi).collect();
-    if here.is_empty() {
-        return Ok(VecDeque::from([(lo, hi)]));
-    }
     if let Some(below) = here.iter().filter(|e| e.top_bottom).map(|e| e.bottom).reduce(f32::max) {
         return Err(below);
     }
-    let mut spans = vec![(lo, hi)];
+    // What each object takes of the row: its whole area, or (Tight, Through) the stretches its
+    // outline takes, as (left, right, bottom of the object's area).
+    let mut taken: Vec<(f32, f32, f32)> = Vec::new();
     for e in &here {
+        match &e.contour {
+            None => taken.push((e.left, e.right, e.bottom)),
+            Some(c) => taken.extend(c.occupied(top - e.top, top + h - e.top).into_iter().map(|(a, b)| (a + e.left, b + e.left, e.bottom))),
+        }
+    }
+    taken.retain(|(l, r, _)| *r > lo && *l < hi);
+    if taken.is_empty() {
+        return Ok(VecDeque::from([(lo, hi)]));
+    }
+    let mut spans = vec![(lo, hi)];
+    for &(left, right, _) in &taken {
         spans = spans
             .into_iter()
-            .flat_map(|(a, b)| if e.right <= a || e.left >= b { vec![(a, b)] } else { vec![(a, e.left.min(b)), (e.right.max(a), b)] })
+            .flat_map(|(a, b)| if right <= a || left >= b { vec![(a, b)] } else { vec![(a, left.min(b)), (right.max(a), b)] })
             .collect();
     }
     spans.retain(|(a, b)| b - a >= MIN_SPAN);
     if spans.is_empty() {
         // Nothing wide enough: the line goes below the first object that ends.
-        return Err(here.iter().map(|e| e.bottom).reduce(f32::min).unwrap_or(top));
+        return Err(taken.iter().map(|t| t.2).reduce(f32::min).unwrap_or(top));
     }
     Ok(spans.into())
 }

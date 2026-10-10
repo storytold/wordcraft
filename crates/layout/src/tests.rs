@@ -1919,7 +1919,7 @@ fn inline_picture_keeps_room_for_its_effects() {
     let mut d = Document::from_text("");
     let shadow = wordcraft_doc::para::Float { effect: [6.0, 12.0, 18.0, 27.0], ..Default::default() };
     if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
-        p.insert_object(0, picture(100.0, 50.0, shadow), &Default::default()).unwrap();
+        p.insert_object(0, picture(100.0, 50.0, shadow.clone()), &Default::default()).unwrap();
     }
     let l = lay(&d);
     let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
@@ -2121,12 +2121,12 @@ fn floats_in_headers_and_table_cells_are_drawn() {
 fn wrap_area_uses_each_distance() {
     use wordcraft_doc::para::{Float, Wrap};
     let f = Float { wrap: Wrap::Square, dist: 9.0, dist_top: 0.0, dist_bottom: 4.0, ..Default::default() };
-    let (r, tb) = wrap_area(Rect::new(10.0, 20.0, 100.0, 50.0), &f).unwrap();
+    let (r, tb, _) = wrap_area(Rect::new(10.0, 20.0, 100.0, 50.0), &f, None).unwrap();
     assert_eq!((r.x, r.y, r.w, r.h, tb), (1.0, 20.0, 118.0, 54.0, false));
     let hostile = Float { wrap: Wrap::TopAndBottom, dist: f32::NAN, dist_top: -5.0, dist_bottom: f32::INFINITY, ..Default::default() };
-    let (r, tb) = wrap_area(Rect::new(0.0, 0.0, 10.0, 10.0), &hostile).unwrap();
+    let (r, tb, _) = wrap_area(Rect::new(0.0, 0.0, 10.0, 10.0), &hostile, None).unwrap();
     assert!(r.w.is_finite() && r.h.is_finite() && tb, "{r:?}");
-    assert!(wrap_area(Rect::new(0.0, 0.0, 10.0, 10.0), &Float { wrap: Wrap::BehindText, ..Default::default() }).is_none());
+    assert!(wrap_area(Rect::new(0.0, 0.0, 10.0, 10.0), &Float { wrap: Wrap::BehindText, ..Default::default() }, None).is_none());
 }
 
 #[test]
@@ -2984,4 +2984,92 @@ fn footnote_longer_than_pages_ends() {
     let pieces = note_pieces(&l, id);
     assert!(pieces.len() >= 3 && l.pages.len() == pieces.len(), "{} pages, {pieces:?}", l.pages.len());
     assert!(pieces.windows(2).all(|w| w[0].2 == w[1].1 && w[1].0 == w[0].0 + 1), "{pieces:?}");
+}
+
+/// The first paragraph's lines on page one: (top, bottom, left, right), relative to its column.
+fn line_spans(l: &DocLayout) -> Vec<(f32, f32, f32, f32)> {
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { return Vec::new() };
+    para.lines.iter().map(|ln| (ln.top, ln.top + ln.height, ln.left, ln.right)).collect()
+}
+
+/// A shape floating at the column's top-left with `wrap`, beside a long paragraph.
+fn wrapped_shape_doc(kind: wordcraft_doc::para::ShapeKind, w: f32, h: f32, float: wordcraft_doc::para::Float) -> Document {
+    let mut d = Document::from_text(&"Words flow around the shape here. ".repeat(40));
+    let float =
+        wordcraft_doc::para::Float { h_rel: wordcraft_doc::para::Anchor::Column, v_rel: wordcraft_doc::para::Anchor::Paragraph, dist: 9.0, ..float };
+    let shape = InlineObject::Shape {
+        kind,
+        w,
+        h,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float,
+        story: None,
+        effects: Default::default(),
+        freeform: None,
+    };
+    d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
+    d
+}
+
+#[test]
+fn tight_wrap_follows_an_ellipse() {
+    use wordcraft_doc::para::{Float, ShapeKind, Wrap};
+    let spans = |wrap| line_spans(&lay(&wrapped_shape_doc(ShapeKind::Ellipse, 160.0, 160.0, Float { wrap, ..Default::default() })));
+    let (square, tight, through) = (spans(Wrap::Square), spans(Wrap::Tight), spans(Wrap::Through));
+    // Square: every line beside the shape starts past its frame and distance from text.
+    assert!(square.iter().filter(|l| l.0 < 160.0).all(|l| l.2 >= 169.0 - 0.01), "{square:?}");
+    // Tight: no line runs into the ellipse (a 160pt circle at 80, 80) or its distance from text.
+    // Where a line from `top` to `bottom` meets the circle plus that distance: (left, right) edges.
+    let contour = |top: f32, bottom: f32| {
+        let y = if bottom < 80.0 {
+            80.0 - bottom
+        } else if top > 80.0 {
+            top - 80.0
+        } else {
+            0.0
+        };
+        let half = (80.0f32 * 80.0 - y.min(80.0).powi(2)).sqrt();
+        (80.0 - half - 9.0, 80.0 + half + 9.0)
+    };
+    for &(top, bottom, left, right) in tight.iter().filter(|l| l.0 < 160.0) {
+        let (a, b) = contour(top, bottom);
+        assert!(right <= a + 1.5 || left >= b - 1.5, "line {top}..{bottom} at {left}..{right} runs into {a}..{b}: {tight:?}");
+    }
+    // Lines near the ellipse's top and bottom start at the curve, well inside its frame; beside
+    // the middle they don't. Measured against each line's own contour edge, so the check holds
+    // whatever line height the test machine's fonts give.
+    let line = |pred: &dyn Fn(f32) -> bool| *tight.iter().find(|l| pred(l.0) && l.2 > 60.0).unwrap();
+    for (what, l) in [("first line", line(&|top| top < 1.0)), ("near the bottom", line(&|top| top > 140.0 && top < 160.0))] {
+        let edge = contour(l.0, l.1).1;
+        assert!(l.2 <= edge + 3.0 && l.2 < 169.0 - 10.0, "{what} hugs the curve at {edge}: {l:?} in {tight:?}");
+    }
+    assert!(line(&|top| top > 65.0 && top < 80.0).2 >= 160.0, "beside the widest part: {tight:?}");
+    // A convex shape has no gaps for Through to use: it wraps as Tight.
+    assert_eq!(through, tight);
+}
+
+#[test]
+fn contour_wrap_turns_with_the_object() {
+    use wordcraft_doc::para::{Float, ShapeKind, Wrap};
+    use wordcraft_doc::wrap::WrapPolygon;
+    // A wrap polygon covering the left half of a 200 × 100 frame.
+    let poly = WrapPolygon::new(true, [(0, 0), (10_800, 0), (10_800, 21_600), (0, 21_600)]).map(Arc::new);
+    // Where text goes on the first row: (left, right) of each line there.
+    let first_row = |wrap: Wrap, rot: f32, flip_h: bool| {
+        let f = Float { wrap, rot, flip_h, wrap_polygon: poly.clone(), ..Default::default() };
+        let l = line_spans(&lay(&wrapped_shape_doc(ShapeKind::Rectangle, 200.0, 100.0, f)));
+        l.iter().filter(|s| s.0 < 1.0).map(|s| (s.2.round(), s.3.round())).collect::<Vec<_>>()
+    };
+    // Unturned, text comes up to the polygon (half the frame) plus the distance from text.
+    assert_eq!(first_row(Wrap::Tight, 0.0, false)[0].0, 109.0);
+    // Turned half a turn or mirrored, the polygon covers the frame's right half: text goes to
+    // its left and past the frame.
+    for (rot, flip) in [(180.0, false), (0.0, true)] {
+        let row = first_row(Wrap::Tight, rot, flip);
+        assert_eq!((row[0].0, row[0].1, row[1].0), (0.0, 91.0, 209.0), "{rot} {flip}");
+    }
+    // Square wrapping ignores the polygon.
+    assert_eq!(first_row(Wrap::Square, 0.0, false)[0].0, 209.0);
 }

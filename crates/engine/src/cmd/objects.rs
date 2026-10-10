@@ -977,7 +977,7 @@ fn group(s: &mut Session, _: &Value) -> CmdResult {
             _ => children.push(member(obj, [r.x, r.y, r.w, r.h])),
         }
     }
-    let float = found.first().and_then(|(o, _)| o.frame()).map(|(_, _, f)| *f).unwrap_or_default();
+    let float = found.first().and_then(|(o, _)| o.frame()).map(|(_, _, f)| f.clone()).unwrap_or_default();
     let grouped = InlineObject::Group { w, h, float, ch_w: w, ch_h: h, children };
     // Take the members out, last first so the earlier positions hold, and put the group where
     // the first one was.
@@ -1015,7 +1015,7 @@ fn ungroup(s: &mut Session, _: &Value) -> CmdResult {
     };
     let obj = s.doc.para_at(&pos).and_then(|p| p.object_at(pos.off)).cloned().ok_or_else(|| CmdError::Failed("object vanished".into()))?;
     let Some((w, h, float)) = obj.frame() else { return Err(CmdError::Failed("object vanished".into())) };
-    let float = *float;
+    let float = float.clone();
     let members: Vec<InlineObject> = obj
         .group_rects(0.0, 0.0, w, h)
         .into_iter()
@@ -1023,7 +1023,7 @@ fn ungroup(s: &mut Session, _: &Value) -> CmdResult {
             let mut c = c.clone();
             c.set_size(cw.max(min_size(&c)), ch.max(min_size(&c)));
             if let Some(f) = c.float_mut() {
-                *f = Float { x: (float.x + x).clamp(-MAX_OFFSET, MAX_OFFSET), y: (float.y + y).clamp(-MAX_OFFSET, MAX_OFFSET), ..float };
+                *f = Float { x: (float.x + x).clamp(-MAX_OFFSET, MAX_OFFSET), y: (float.y + y).clamp(-MAX_OFFSET, MAX_OFFSET), ..float.clone() };
             }
             c
         })
