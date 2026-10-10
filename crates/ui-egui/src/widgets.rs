@@ -357,20 +357,67 @@ pub fn combo(
         ui.painter().rect(ar, 0.0, if aresp.hovered() { t.hover } else { t.input }, Stroke::new(1.0, t.input_border), egui::StrokeKind::Inside);
         icons::paint(ui.painter(), Rect::from_center_size(ar.center(), vec2(9.0, 9.0)), "dropdown", t.icon, t.accent);
         egui::Popup::menu(&aresp).show(|ui| {
-            egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
-                ui.set_min_width(width + 60.0);
-                for it in items {
-                    let clicked = match preview {
-                        Some(p) => p(ui, it).clicked(),
-                        None => ui.selectable_label(it == current, it).clicked(),
-                    };
-                    if clicked {
-                        out = Some(it.clone());
-                        ui.close();
-                    }
-                }
-            });
+            if let Some(v) = combo_list(ui, width, current, items, preview) {
+                out = Some(v);
+                ui.close();
+            }
         });
     });
     out
+}
+
+/// Height of a row drawn by a combo's preview closure (`Previews::font_preview_fn`'s entries).
+pub const COMBO_PREVIEW_ROW_H: f32 = 24.0;
+
+/// A combo's scrolling list. Only the rows in view are built: the font menu lists every installed
+/// family and each preview loads that font, so building all rows loaded every font on the system
+/// (gigabytes on large font collections) and froze the app (#121).
+pub fn combo_list(ui: &mut Ui, width: f32, current: &str, items: &[String], preview: Option<&dyn Fn(&mut Ui, &str) -> Response>) -> Option<String> {
+    let mut out = None;
+    let row_h = if preview.is_some() { COMBO_PREVIEW_ROW_H } else { ui.spacing().interact_size.y };
+    egui::ScrollArea::vertical().max_height(420.0).show_rows(ui, row_h, items.len(), |ui, range| {
+        ui.set_min_width(width + 60.0);
+        for it in items.get(range).unwrap_or_default() {
+            let clicked = match preview {
+                Some(p) => p(ui, it).clicked(),
+                None => ui.selectable_label(it == current, it).clicked(),
+            };
+            if clicked {
+                out = Some(it.clone());
+            }
+        }
+    });
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_long_combo_list_builds_only_the_rows_in_view() {
+        // #121: the font menu built (and so loaded the font of) every installed family.
+        let items: Vec<String> = (0..5000).map(|i| format!("Family {i}")).collect();
+        let ctx = egui::Context::default();
+        let built = std::cell::RefCell::new(Vec::new());
+        let row = |ui: &mut Ui, name: &str| {
+            built.borrow_mut().push(name.to_string());
+            ui.allocate_exact_size(vec2(260.0, COMBO_PREVIEW_ROW_H), Sense::click()).1
+        };
+        for _ in 0..3 {
+            built.borrow_mut().clear();
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                assert_eq!(combo_list(ui, 150.0, "", &items, Some(&row)), None);
+            })
+            .drop_without_applying_deltas();
+            let b = built.borrow();
+            assert!(!b.is_empty() && b.len() <= 420 / COMBO_PREVIEW_ROW_H as usize + 2, "built {} rows", b.len());
+            assert_eq!(b[0], "Family 0");
+        }
+        // Without previews too.
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            assert_eq!(combo_list(ui, 52.0, "8", &items, None), None);
+        })
+        .drop_without_applying_deltas();
+    }
 }
