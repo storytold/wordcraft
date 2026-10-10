@@ -333,7 +333,7 @@ Table Design|Borders|Border Painter|table.borderPainter
 Table Layout|Table|Select Table|table.selectTable
 Table Layout|Table|Select Row|table.selectRow
 Table Layout|Table|Select Cell|table.selectCell
-Table Layout|Table|View Gridlines|view.gridlines
+Table Layout|Table|View Gridlines|table.viewGridlines
 Table Layout|Table|Properties|table.properties
 Table Layout|Draw|Draw Table|table.draw
 Table Layout|Draw|Eraser|table.eraser
