@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use wordcraft_doc::numbering::ListKind;
-use wordcraft_doc::para::{Anchor, Float, NoteKind, ShapeKind, Wrap};
+use wordcraft_doc::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CharProps, HeightRule, Highlight, LineSpacing, NumRef, ParaProps, Rgb, RowProps, TabAlign, TabLeader,
     TabStop, TableLook, TextColor, Underline, VAlign, VMerge, VertAlign,
@@ -327,17 +327,35 @@ fn images_round_trip() {
         w: 100.0,
         h: 50.0,
         alt: String::new(),
-        float: Float { wrap: Wrap::Square, h_rel: Anchor::Page, v_rel: Anchor::Margin, x: 36.0, y: 12.5, dist: 9.0 },
+        float: Float { wrap: Wrap::Square, h_rel: Anchor::Page, v_rel: Anchor::Margin, x: 36.0, y: 12.5, dist: 9.0, ..Default::default() },
         crop: [0.0; 4],
     };
-    let mut floats = vec![floating.clone()];
+    let aligned = InlineObject::Image {
+        media: key.clone(),
+        w: 20.0,
+        h: 20.0,
+        alt: String::new(),
+        float: Float {
+            wrap: Wrap::Square,
+            h_rel: Anchor::RightMargin,
+            h_align: Some(FloatAlign::Center),
+            v_rel: Anchor::TopMargin,
+            v_align: Some(FloatAlign::End),
+            dist: 9.0,
+            dist_top: 2.5,
+            dist_bottom: 4.0,
+            ..Default::default()
+        },
+        crop: [0.0; 4],
+    };
+    let mut floats = vec![floating.clone(), aligned];
     for wrap in [Wrap::Tight, Wrap::Through, Wrap::TopAndBottom, Wrap::BehindText, Wrap::InFrontOfText] {
         floats.push(InlineObject::Image {
             media: key.clone(),
             w: 10.0,
             h: 10.0,
             alt: String::new(),
-            float: Float { wrap, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 0.0, y: 0.0, dist: 0.0 },
+            float: Float { wrap, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 0.0, y: 0.0, dist: 0.0, ..Default::default() },
             crop: [0.0; 4],
         });
     }
@@ -677,7 +695,7 @@ fn shapes_textboxes_equations_dropcaps_round_trip() {
         fill: Some(Rgb(255, 255, 200)),
         stroke: Some(Rgb(0, 0, 0)),
         stroke_width: 1.0,
-        float: Float { wrap: Wrap::Square, h_rel: Anchor::Margin, v_rel: Anchor::Paragraph, x: 10.0, y: 20.0, dist: 0.0 },
+        float: Float { wrap: Wrap::Square, h_rel: Anchor::Margin, v_rel: Anchor::Paragraph, x: 10.0, y: 20.0, dist: 0.0, ..Default::default() },
         story: Some(story),
     };
     let star = InlineObject::Shape {
@@ -884,6 +902,44 @@ fn char_border_written_between_u_and_shd() {
     assert_eq!(xml.matches(bdr).count(), 1, "{xml}");
     let at = xml.find(bdr).unwrap();
     assert!(xml.find("<w:u ").unwrap() < at && at < xml.find("<w:shd ").unwrap(), "{xml}");
+}
+
+#[test]
+fn compatibility_mode_round_trips() {
+    let mut d = Document::new();
+    assert_eq!(d.settings.compat_mode, 15, "new documents are Word 2013+ documents");
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(back.settings.compat_mode, 15);
+    d.settings.compat_mode = 14;
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(back.settings.compat_mode, 14);
+}
+
+#[test]
+fn floating_tables_round_trip() {
+    use wordcraft_doc::para::{Anchor, FloatAlign};
+    use wordcraft_doc::props::TableFloat;
+    let mut d = Document::new();
+    let mut t = Table::new(1, 2, 200.0);
+    let f = TableFloat {
+        h_rel: Anchor::Margin,
+        v_rel: Anchor::Paragraph,
+        x: 0.0,
+        y: -1.65,
+        h_align: None,
+        v_align: None,
+        dist: [9.0, 0.0, 12.0, 3.0],
+        overlap: false,
+    };
+    t.props.float = Some(f);
+    let mut page = Table::new(1, 1, 100.0);
+    let centred =
+        TableFloat { h_rel: Anchor::Page, v_rel: Anchor::Margin, h_align: Some(FloatAlign::Center), y: 36.0, overlap: true, ..Default::default() };
+    page.props.float = Some(centred);
+    d.body = vec![Arc::new(Block::Table(t)), Arc::new(Block::Table(page)), para_block(Paragraph::with_text("after", CharProps::default()))];
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    let floats: Vec<_> = back.body.iter().filter_map(|b| if let Block::Table(t) = &**b { t.props.float } else { None }).collect();
+    assert_eq!(floats, [f, centred]);
 }
 
 #[test]
