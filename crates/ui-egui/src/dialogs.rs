@@ -473,6 +473,8 @@ fn table_style_preview(ui: &mut Ui, style: Option<&wordcraft_doc::styles::TableS
             && !header
             && (ri.saturating_sub(usize::from(look.header_row)) / p.band_size.unwrap_or(1).clamp(1, 1000) as usize).is_multiple_of(2);
         for (ci, txt) in row.iter().enumerate() {
+            // Sample words in the interface language; numbers as they are.
+            let txt = &if txt.chars().any(char::is_alphabetic) { tl!(txt) } else { *txt };
             let first = look.first_column && ci == 0;
             let last = look.last_column && ci + 1 == COLS;
             let col_band = look.banded_columns && !first && ci.saturating_sub(usize::from(look.first_column)).is_multiple_of(2);
