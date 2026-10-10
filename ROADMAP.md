@@ -110,7 +110,8 @@ Weights and evidence per area: [docs/target-app-parity.md](docs/target-app-parit
 | Korean | ko | none | 0% |
 | Vietnamese | vi | none | 0% |
 
-Also shipped: Traditional Chinese (`zh-hant`), Ukrainian (`uk`) and Serbian (`sr`, `sr-latn`, #250), all partial (~95%). Word ships
+Also shipped: Traditional Chinese (`zh-hant`), Ukrainian (`uk`) and Serbian (`sr`, `sr-latn`, #250), all partial (~95%). Estonian (`et`) now has a 1,161-entry interface catalog with system-locale
+selection and a saved language choice; Estonian proofing is not included. Word ships
 30 interface languages and proofing for ~50. Detail: [docs/localization-parity.md](docs/localization-parity.md).
 
 ## Upcoming
@@ -130,6 +131,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 | Date | What landed |
 |---|---|
+| 2026-10-10 | Estonian (`et`) interface (#294): 1,161 translated entries, locale and saved-preference tests, bundled-font checks; no Estonian proofing resources |
 | 2026-10-10 | Draw tab: pen, pencil and highlighter ink, stroke eraser, Select, Review › Hide Ink; ink saved to DOCX as DrawingML freeforms (#307); catalog 399/431 (92.6%) |
 | 2026-10-10 | Draw Table and Eraser (#303): a pen draws one-cell tables and splits cells along drawn lines; the eraser merges the cells beside a border. Catalog 393/431 (91.2%) |
 | 2026-10-10 | DOCX charts, SmartArt and OLE objects survive open and save with their parts (#319) |
