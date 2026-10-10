@@ -741,7 +741,7 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     let item = |ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: serde_json::Value| {
         let sc = crate::widgets::shortcut_text(app, id);
         let on = crate::widgets::enabled(app, id);
-        if ui.add_enabled(on, egui::Button::new(label).shortcut_text(sc)).clicked() {
+        if ui.add_enabled(on, egui::Button::new(crate::i18n::t(label)).shortcut_text(sc)).clicked() {
             let _ = app.run(id, params);
             ui.close();
         }
@@ -752,7 +752,13 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
             .and_then(|v| v.as_array())
             .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
             .unwrap_or_default();
-        ui.label(egui::RichText::new(issue.get("message").and_then(|m| m.as_str()).unwrap_or("")).small().weak());
+        let message = issue.get("message").and_then(|m| m.as_str()).unwrap_or("");
+        let message = if let Some(word) = message.strip_prefix("Repeated word: \"").and_then(|s| s.strip_suffix('"')) {
+            crate::i18n::fmt(tl!("Repeated word: \"{word}\""), &[("word", word)])
+        } else {
+            crate::i18n::t(message).to_string()
+        };
+        ui.label(egui::RichText::new(message).small().weak());
         if sugg.is_empty() {
             ui.label(egui::RichText::new(tl!("(no suggestions)")).italics());
         }
@@ -812,5 +818,53 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
             item(ui, app, "Delete Table", "table.deleteTable", json!({}));
         });
         item(ui, app, "Merge Cells", "table.merge", json!({}));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    #[test]
+    fn norwegian_context_menu_renders_translated_actions_but_preserves_suggestions() {
+        for (code, add, link, spelling, repeated) in [
+            ("nb", "Legg til i ordlisten", "Lenke…", "Mulig stavefeil", "Gjentatt ord: «Open»"),
+            ("nn", "Legg til i ordlista", "Lenkje…", "Mogleg stavefeil", "Gjenteke ord: «Open»"),
+        ] {
+            crate::i18n::set_current(crate::i18n::Lang::from_code(code).unwrap());
+            let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+            app.canvas.context_issue = Some(json!({"kind": "spelling", "message": "Possible spelling mistake", "suggestions": ["Open"]}));
+            let mut harness = Harness::new_ui_state(|ui, app| context_menu(app, ui), app);
+            for label in ["Ignorer alle", add, "Klipp ut", "Kopier", "Lim inn", "Skrift…", "Avsnitt…", link, "Ny kommentar"] {
+                harness.get_by_label_contains(label);
+            }
+            harness.get_by_label(spelling);
+            harness.get_by_label("Open"); // Replacement text is document content, not an interface label.
+            harness.state_mut().canvas.context_issue =
+                Some(json!({"kind": "grammar", "message": "Repeated word: \"Open\"", "suggestions": ["Open"]}));
+            harness.run();
+            harness.get_by_label(repeated);
+        }
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+    }
+
+    #[test]
+    fn norwegian_table_context_menu_translates_its_insertion_submenu() {
+        for (code, insert, left, right) in [
+            ("nb", "Sett inn", "Sett inn kolonner til venstre", "Sett inn kolonner til høyre"),
+            ("nn", "Set inn", "Set inn kolonnar til venstre", "Set inn kolonnar til høgre"),
+        ] {
+            crate::i18n::set_current(crate::i18n::Lang::from_code(code).unwrap());
+            let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+            app.session.run("insert.table", &json!({"rows": 2, "cols": 2})).unwrap();
+            let mut harness = Harness::new_ui_state(|ui, app| context_menu(app, ui), app);
+            harness.get_by_label(insert).click();
+            harness.run();
+            for label in [format!("{insert} rader over"), format!("{insert} rader under"), left.to_string(), right.to_string()] {
+                harness.get_by_label_contains(&label);
+            }
+        }
+        crate::i18n::set_current(crate::i18n::Lang::EN);
     }
 }

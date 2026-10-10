@@ -35,6 +35,12 @@ from Norsk ordbank – nynorsk 2012 (Språkbanken, CC BY 4.0). English, Bokmål 
 can coexist in DOCX documents; squiggles and review commands follow each run's language.
 Nynorsk grammar checks remain basic; new compounds may need a personal dictionary entry.
 
+## Context-menu localization (2026-10-10)
+
+Document right-click action buttons use interface translations, including spelling
+ignore/add-to-dictionary actions, clipboard actions and formatting dialogs. Both Norwegian catalogs
+cover the table insertion submenu. Correction words remain document content.
+
 ## Alpha
 
 **What we mean by alpha:** someone can write, format and review real documents every day, open
