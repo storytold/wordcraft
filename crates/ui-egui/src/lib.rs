@@ -1041,6 +1041,51 @@ mod tests {
         assert_eq!(caret.page, 3);
     }
 
+    /// Issue #67: View › Zoom In from a fit mode zoomed *out*: Page Width showed 163% but Zoom In
+    /// stepped from the stale manual 100% to 110%.
+    #[test]
+    fn view_tab_zoom_steps_from_the_shown_zoom_in_fit_modes() {
+        let ctx = egui::Context::default();
+        let mut a = app();
+        a.run("ui.tab", json!({"tab": "View"})).unwrap();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0));
+        let frame = |a: &mut WordApp| {
+            for _ in 0..4 {
+                let input = egui::RawInput { screen_rect: Some(screen), ..Default::default() };
+                ctx.run_ui(input, |ui| {
+                    a.logic(ui.ctx());
+                    a.ui(ui);
+                })
+                .drop_without_applying_deltas();
+            }
+            a.canvas.scale / canvas::PX_PER_PT
+        };
+        let base = frame(&mut a);
+        assert!((base - 1.0).abs() < 1e-3);
+        for fit in ["view.pageWidth", "view.onePage", "view.multiplePages"] {
+            a.run(fit, json!({})).unwrap();
+            let fitted = frame(&mut a);
+            assert!((fitted - base).abs() > 0.05, "{fit} changes the zoom");
+            assert!((a.session.view.zoom - fitted).abs() < 1e-3, "{fit}: session zoom follows the shown zoom");
+            a.run("view.zoomIn", json!({})).unwrap();
+            let zin = frame(&mut a);
+            assert!(zin > fitted, "{fit}: Zoom In zooms in: {fitted} -> {zin}");
+            a.run(fit, json!({})).unwrap();
+            frame(&mut a);
+            a.run("view.zoomOut", json!({})).unwrap();
+            let zout = frame(&mut a);
+            assert!(zout < fitted, "{fit}: Zoom Out zooms out: {fitted} -> {zout}");
+            // The Zoom dialog opens at the shown zoom.
+            a.run(fit, json!({})).unwrap();
+            frame(&mut a);
+            a.run("ui.dialog", json!({"name": "zoom"})).unwrap();
+            assert!(matches!(a.dialog, Some(dialogs::Dialog::Zoom { percent }) if (percent - (fitted * 100.0).round()).abs() < 1.0));
+            a.dialog = None;
+        }
+        a.run("view.zoom100", json!({})).unwrap();
+        assert!((frame(&mut a) - 1.0).abs() < 1e-3);
+    }
+
     #[test]
     fn user_name_survives_restart() {
         let mut first = app();

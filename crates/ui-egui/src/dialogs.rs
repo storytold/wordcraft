@@ -638,7 +638,10 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                     ui.radio_value(percent, p, format!("{p}%"));
                 }
             });
-            ui.add(egui::Slider::new(percent, 10.0..=500.0).suffix("%"));
+            // Logarithmic like the status bar slider, and wide enough to aim: the default 100 pt
+            // linear slider jumped from 100% to 480% within a short drag (issue #67).
+            ui.spacing_mut().slider_width = 220.0;
+            ui.add(egui::Slider::new(percent, 10.0..=500.0).logarithmic(true).step_by(1.0).suffix("%"));
             let mut fit = None;
             ui.horizontal(|ui| {
                 if ui.button(tl!("Page width")).clicked() {
