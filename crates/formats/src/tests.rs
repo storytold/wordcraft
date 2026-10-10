@@ -163,6 +163,37 @@ fn check_round_trip(ext: &str, rich: bool) {
     assert_eq!(table.rows[1].iter().map(|c| c.text()).collect::<Vec<_>>(), vec!["alpha", "42"], "{ext}");
 }
 
+/// Two bullets directly followed by two numbered items.
+fn bullets_then_numbers() -> Document {
+    let mut d = Document::new();
+    let bul = d.numbering.add_list(wordcraft_doc::ListKind::Bullet);
+    let num = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let mut blocks = Vec::new();
+    for (t, nm) in [("dot one", bul), ("dot two", bul), ("num one", num), ("num two", num)] {
+        let mut q = Paragraph::with_text(t, CharProps::default()).styled("ListParagraph");
+        q.props.numbering = Some(wordcraft_doc::props::NumRef { num: nm, level: 0 });
+        blocks.push(para_block(q));
+    }
+    d.body = blocks;
+    d
+}
+
+#[test]
+fn numbered_list_after_bullets_keeps_its_kind() {
+    let d = bullets_then_numbers();
+    for ext in ["odt", "rtf"] {
+        let bytes = export(ext, &d).expect("handled").expect("export");
+        let back = import(ext, &bytes).expect("handled").expect("import");
+        let b = flat(&back);
+        let kind = |t: &str| find_para(&b, t).and_then(|p| p.list).map(|l| l.ordered);
+        assert_eq!(kind("dot two"), Some(false), "{ext}");
+        assert_eq!(kind("num one"), Some(true), "{ext}");
+        assert_eq!(kind("num two"), Some(true), "{ext}");
+    }
+    let md = String::from_utf8(export("md", &d).expect("handled").expect("export")).unwrap();
+    assert!(md.contains("1. num one") && md.contains("2. num two"), "{md}");
+}
+
 #[test]
 fn markdown_round_trip() {
     check_round_trip("md", true);
@@ -197,6 +228,19 @@ fn odt_round_trip() {
     assert_eq!(back.media.len(), 1, "picture survives");
     assert_eq!(back.core.title, "Sample Title");
     assert_eq!(back.core.creator, "Ada Writer");
+}
+
+#[test]
+fn page_break_char_splits_paragraph() {
+    let mut d = Document::new();
+    d.body = vec![para_block(Paragraph::with_text("num two\u{c}Page two", CharProps::default()))];
+    let b = flat(&d);
+    assert!(matches!(&b[..], [FBlock::Para(a), FBlock::Para(c)] if a.text() == "num two" && !a.page_break && c.text() == "Page two" && c.page_break));
+    let txt = String::from_utf8(export("txt", &d).unwrap().unwrap()).unwrap();
+    assert!(!txt.contains("twoPage"), "{txt:?}");
+    let odt = import("odt", &export("odt", &d).unwrap().unwrap()).unwrap().unwrap();
+    let b = flat(&odt);
+    assert!(b.iter().any(|x| matches!(x, FBlock::Para(p) if p.text().trim() == "Page two" && p.page_break)));
 }
 
 #[test]

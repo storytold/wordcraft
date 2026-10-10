@@ -283,6 +283,10 @@ impl Writer {
                     while let Some(FBlock::Para(q)) = blocks.get(i) {
                         let Some(li) = q.list else { break };
                         let l = li.level.min(8) as usize;
+                        // A top-level item of the other kind starts a new list.
+                        if l == 0 && seen[0] && kinds[0] != li.ordered {
+                            break;
+                        }
                         if let (Some(s), Some(k)) = (seen.get_mut(l), kinds.get_mut(l))
                             && !*s
                         {
@@ -1243,7 +1247,7 @@ impl Body<'_> {
                 if let Some(t) = self.tables.pop()
                     && !t.rows.is_empty()
                 {
-                    self.container().push(FBlock::Table(FTable { rows: t.rows, widths: Vec::new() }));
+                    self.container().push(FBlock::Table(FTable { rows: t.rows, widths: Vec::new(), borderless: false }));
                 }
             }
             "desc" | "title" => self.in_desc = false,
@@ -1366,7 +1370,7 @@ pub fn parse(bytes: &[u8]) -> Result<Flow, String> {
     let mut blocks = body.containers.pop().unwrap_or_default();
     for t in body.tables.drain(..) {
         if !t.rows.is_empty() {
-            blocks.push(FBlock::Table(FTable { rows: t.rows, widths: Vec::new() }));
+            blocks.push(FBlock::Table(FTable { rows: t.rows, widths: Vec::new(), borderless: false }));
         }
     }
     if blocks.is_empty() {

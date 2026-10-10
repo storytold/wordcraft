@@ -35,6 +35,7 @@
 	Alt Text	替代文字
 	Apply Character Style	套用字元樣式
 	Apply Style	套用樣式
+	Apply Styles	選擇並套用樣式
 	Arrange	排列
 	Arrange\nAll	全部排列
 	Arrow	箭號
@@ -51,6 +52,8 @@
 	Automatic Table 2 (2 levels)	自動目錄 2（2 階層）
 	AutoSave	自動儲存
 	AutoSave documents that have been saved	自動儲存已儲存過的文件
+	Dark page (white text on black)	深色頁面（黑底白字）
+	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	像「檢視 › 切換模式」一樣以反轉的色彩顯示文件。儲存、列印和 PDF 不受影響。
 	AutoSave saves every change to the file (needs a saved document)	自動儲存會將每次變更寫入檔案（文件需已儲存）
 	AutoText	自動圖文集
 	Backspace	退格
@@ -438,6 +441,7 @@
 	OK	確定
 	One	一欄
 	One Page	單頁
+	Only web (http, https) and email (mailto) links can be followed	只能開啟網頁（http、https）和電子郵件（mailto）連結
 	Open	開啟
 	OpenDocument Text (*.odt)	OpenDocument 文字 (*.odt)
 	Optional Hyphen	選擇性連字號
