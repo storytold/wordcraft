@@ -126,7 +126,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin { left: 8, right: 8, top: 4, bottom: 4 }).stroke(Stroke::new(1.0, t.border)),
         )
         .show(ui, |ui| {
-            egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
+            let scroll = egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
                 ui.horizontal_top(|ui| {
                     ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
                     match app.ui.tab.as_str() {
@@ -147,7 +147,40 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     }
                 });
             });
+            // The bar is hidden, so a row wider than the window would be clipped with no sign. Edge chevrons show
+            // where more is and scroll it on click. Every command also stays reachable through Search Commands.
+            let r = scroll.inner_rect;
+            let overflow = scroll.content_size.x - r.width();
+            let offset = scroll.state.offset.x;
+            let step = 160.0;
+            let mut next = None;
+            if offset > 1.0 {
+                let left = Rect::from_min_max(r.left_top(), pos2(r.left() + 18.0, r.bottom()));
+                if edge_cue(ui, left, "‹", tl!("Scroll ribbon left"), &t) {
+                    next = Some(offset - step);
+                }
+            }
+            if overflow - offset > 1.0 {
+                let right = Rect::from_min_max(pos2(r.right() - 18.0, r.top()), r.right_bottom());
+                if edge_cue(ui, right, "›", tl!("Scroll ribbon right"), &t) {
+                    next = Some(offset + step);
+                }
+            }
+            if let Some(x) = next {
+                let mut state = scroll.state;
+                state.offset.x = x.clamp(0.0, overflow.max(0.0));
+                state.store(ui.ctx(), scroll.id);
+            }
         });
+}
+
+/// A chevron over a ribbon edge that is also a button; `true` on the frame it is clicked.
+fn edge_cue(ui: &mut Ui, rect: Rect, glyph: &str, hint: &str, t: &Tokens) -> bool {
+    let resp = ui.interact(rect, ui.id().with(glyph), Sense::click()).on_hover_text(hint);
+    let ink = if resp.hovered() { t.text } else { t.text_dim };
+    ui.painter().rect_filled(rect, 0.0, t.ribbon);
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, glyph, egui::FontId::proportional(18.0), ink);
+    resp.clicked()
 }
 
 fn stack(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
