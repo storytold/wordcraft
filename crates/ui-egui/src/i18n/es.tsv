@@ -214,6 +214,7 @@
 	Drawing Tools	Herramientas de dibujo
 	Drawing\nCanvas	Lienzo de\ndibujo
 	Drop Cap	Letra capital
+	Drops all formatting and pastes plain text.	Quita todo el formato y pega texto sin formato.
 	Edit Footer	Editar pie de página
 	Edit Header	Editar encabezado
 	Edit Recipient List	Editar lista de destinatarios
@@ -269,6 +270,7 @@
 	Format Page Numbers	Formato de números de página
 	Format Page Numbers…	Formato de números de página…
 	Format Painter	Pincel de formato
+	Formatted Text	Texto con formato
 	Formatting at Selection	Formato en la selección
 	Formula	Fórmula
 	General	General
@@ -281,6 +283,7 @@
 	Gridlines	Líneas de cuadrícula
 	Group	Agrupar
 	Grow Font 1 Point	Aumentar fuente 1 punto
+	HTML Format	Formato HTML
 	Hanging Indent	Sangría francesa
 	Header	Encabezado
 	Header & Footer	Encabezado y pie de página
@@ -350,6 +353,7 @@
 	Keep lines together	Mantener líneas juntas
 	Keep with Next	Mantener con el siguiente
 	Keep with next	Mantener con el siguiente
+	Keeps the fonts and formatting of the copied text.	Conserva las fuentes y el formato del texto copiado.
 	Labels	Etiquetas
 	Landscape	Horizontal
 	Language	Idioma
@@ -494,6 +498,9 @@
 	Paste	Pegar
 	Paste (⌘V)	Pegar (⌘V)
 	Paste Formatting	Pegar formato
+	Paste Special	Pegado especial
+	Paste Special…	Pegado especial…
+	Paste as:	Pegar como:
 	Paste: Keep Text Only	Pegar: mantener solo el texto
 	Paste: Merge Formatting	Pegar: combinar formato
 	Pen	Pluma
@@ -527,6 +534,8 @@
 	Read Mode	Modo lectura
 	Read\nAloud	Leer en\nvoz alta
 	Read\nMode	Modo\nlectura
+	Reads the clipboard's rich text and keeps its formatting.	Lee el texto enriquecido del portapapeles y conserva su formato.
+	Reads the clipboard's web content and keeps its formatting.	Lee el contenido web del portapapeles y conserva su formato.
 	Recent	Recientes
 	Record Macro	Grabar macro
 	Recover Unsaved Documents	Recuperar documentos sin guardar
@@ -564,12 +573,14 @@
 	Restart at 1	Reiniciar en 1
 	Restrict Editing	Restringir edición
 	Restrict\nEditing	Restringir\nedición
+	Result	Resultado
 	Results	Resultados
 	Reverse the order	Invertir el orden
 	Reviewing	Revisión
 	Reviewing Pane	Panel de revisión
 	Reviewing — edits become suggestions	Revisión — las ediciones pasan a ser sugerencias
 	Rich Text Format (*.rtf)	Formato de texto enriquecido (*.rtf)
+	Rich Text Format (RTF)	Formato de texto enriquecido (RTF)
 	Right	Derecha
 	Right Border	Borde derecho
 	Right-to-Left Text Direction	Dirección de texto de derecha a izquierda
@@ -708,6 +719,7 @@
 	Text:	Texto:
 	Text\nBox	Cuadro de\ntexto
 	Text\nDirection	Dirección del\ntexto
+	The clipboard is empty.	El portapapeles está vacío.
 	The new style takes the formatting of the current paragraph.	El nuevo estilo toma el formato del párrafo actual.
 	Theme Colors	Colores del tema
 	Theme Fonts	Fuentes del tema
@@ -735,6 +747,7 @@
 	Underline Words Only	Subrayar solo las palabras
 	Undo	Deshacer
 	Undo {action}	Deshacer {action}
+	Unformatted Text	Texto sin formato
 	Up	Arriba
 	Update Field	Actualizar campo
 	Update Index	Actualizar índice

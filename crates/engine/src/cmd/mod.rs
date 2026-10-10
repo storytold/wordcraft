@@ -12,6 +12,7 @@ pub mod mailings;
 pub mod objects;
 pub mod page;
 pub mod para;
+pub mod paste;
 pub mod references;
 pub mod review;
 pub mod speech;
@@ -32,6 +33,7 @@ pub fn registry() -> Registry {
     v.extend(text::specs());
     v.extend(caret::specs());
     v.extend(edit::specs());
+    v.extend(paste::specs());
     v.extend(format::specs());
     v.extend(para::specs());
     v.extend(view::specs());

@@ -523,6 +523,84 @@ fn clipboard_round_trip() {
     assert_eq!(text(&s), "plain\ntext");
 }
 
+fn bold_at(s: &Session, block: usize, off: usize) -> bool {
+    let pos = Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(block), off };
+    s.doc.para_at(&pos).and_then(|p| p.props_of_char(off).bold).unwrap_or(false)
+}
+
+#[test]
+fn paste_special_lists_formats_and_pastes_text_without_formatting() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Bold words"}));
+    run(&mut s, "select.text", json!({"text": "Bold"}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "edit.copy", json!({}));
+    // No format: the formats are listed (and a front end is asked to show the dialog).
+    let r = run(&mut s, "edit.pasteSpecial", json!({}));
+    let ids: Vec<&str> = r["formats"].as_array().unwrap().iter().map(|f| f["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["formatted", "text"]);
+    assert_eq!(s.ui_requests.last().unwrap()["open"], "pasteSpecial");
+    run(&mut s, "caret.docEnd", json!({}));
+    let r = run(&mut s, "edit.pasteSpecial", json!({"as": "text"}));
+    assert_eq!(r["pastedAs"], "text");
+    assert_eq!(text(&s), "Bold wordsBold");
+    assert!(bold_at(&s, 0, 0));
+    assert!(!bold_at(&s, 0, 11), "unformatted text drops the bold");
+    // Formatted keeps it.
+    run(&mut s, "edit.pasteSpecial", json!({"as": "formatted"}));
+    assert_eq!(text(&s), "Bold wordsBoldBold");
+    assert!(bold_at(&s, 0, 15));
+    // Text that someone else copied since: our rich copy is no longer offered.
+    let r = run(&mut s, "edit.pasteSpecial", json!({"text": "elsewhere"}));
+    assert_eq!(r["formats"].as_array().unwrap().len(), 1);
+    assert!(s.run("edit.pasteSpecial", &json!({"as": "formatted", "text": "elsewhere"})).is_err());
+}
+
+#[test]
+fn paste_special_html_and_rtf_keep_bold() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "x"}));
+    run(&mut s, "caret.docEnd", json!({}));
+    let html = "<p>plain <b>strong</b></p>";
+    let r = run(&mut s, "edit.pasteSpecial", json!({"html": html, "text": "plain strong"}));
+    let ids: Vec<&str> = r["formats"].as_array().unwrap().iter().map(|f| f["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["html", "text"]);
+    run(&mut s, "edit.pasteSpecial", json!({"as": "html", "html": html}));
+    assert_eq!(text(&s), "xplain strong");
+    assert!(!bold_at(&s, 0, 2));
+    assert!(bold_at(&s, 0, 8), "the <b> run stays bold");
+    // HTML source copied as text can be pasted as HTML too.
+    run(&mut s, "document.setText", json!({"text": ""}));
+    run(&mut s, "edit.pasteSpecial", json!({"as": "html", "text": "<b>hi</b> there</p>"}));
+    assert_eq!(text(&s), "hi there");
+    assert!(bold_at(&s, 0, 0) && !bold_at(&s, 0, 4));
+    // RTF.
+    run(&mut s, "document.setText", json!({"text": ""}));
+    run(&mut s, "edit.pasteSpecial", json!({"as": "rtf", "rtf": r"{\rtf1\ansi {\b bold}\b0  then}"}));
+    assert!(text(&s).starts_with("bold"), "{}", text(&s));
+    assert!(bold_at(&s, 0, 0));
+    // Asking for a format the clipboard lacks is an error, not a panic.
+    assert!(s.run("edit.pasteSpecial", &json!({"as": "rtf", "text": "plain"})).is_err());
+    assert!(s.run("edit.pasteSpecial", &json!({"as": "bogus", "text": "plain"})).is_err());
+    let huge = "a".repeat(crate::cmd::paste::MAX_PASTE_BYTES + 1);
+    assert!(s.run("edit.pasteSpecial", &json!({"as": "text", "text": huge})).is_err());
+}
+
+#[test]
+fn paste_special_respects_track_changes_and_brings_lists() {
+    let mut s = s();
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "edit.pasteSpecial", json!({"as": "html", "html": "<ul><li>one</li><li>two</li></ul>"}));
+    assert!(text(&s).starts_with("one\ntwo"), "{}", text(&s));
+    let ch = run(&mut s, "review.changes", json!({}));
+    assert!(!ch.as_array().unwrap().is_empty(), "the paste is a tracked insertion");
+    let first = s.doc.body.first().and_then(|b| b.as_para()).unwrap();
+    let n = first.props.numbering.expect("list kept");
+    assert!(s.doc.numbering.nums.iter().any(|x| x.id == n.num), "the list definition came along");
+    run(&mut s, "review.acceptAll", json!({}));
+    assert!(text(&s).starts_with("one\ntwo"));
+}
+
 #[test]
 fn tables_commands() {
     let mut s = s();

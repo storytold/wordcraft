@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 use wordcraft_doc::edit::Fragment;
-use wordcraft_doc::{Block, Pos, StoryRef};
+use wordcraft_doc::{Pos, StoryRef};
 
 use super::{delete_selection, pos_json, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
@@ -81,23 +81,7 @@ fn paste(s: &mut Session, v: &Value) -> CmdResult {
         (None, Some(f)) => f.clone(),
         (None, None) => return Err(CmdError::Failed("the clipboard is empty".into())),
     };
-    if let Some(images) = v.get("image").and_then(Value::as_str) {
-        let _ = images;
-    }
-    let at = delete_selection(s)?;
-    let mut frag = frag;
-    if s.doc.settings.track_changes {
-        let rid = super::new_revision(s, wordcraft_doc::RevisionKind::Insert);
-        for b in &mut frag.blocks {
-            if let Block::Para(p) = b {
-                for r in &mut p.runs {
-                    r.props.ins = Some(rid);
-                }
-            }
-        }
-    }
-    let end = s.doc.insert_fragment(&at, &frag)?;
-    s.sel = Selection::caret(end);
+    super::paste::insert(s, frag)?;
     sel_result(s)
 }
 

@@ -475,6 +475,7 @@ impl WordApp {
                     self.ui.backstage = true;
                     self.ui.backstage_page = "options".into();
                 }
+                "pasteSpecial" => self.dialog = Some(dialogs::Dialog::paste_special(self, req)),
                 other => self.dialog = dialogs::Dialog::open(other, self),
             }
         }

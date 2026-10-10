@@ -942,3 +942,16 @@
 	Dark	深色
 	Use system setting	使用系统设置
 	A file dialog is already open.	已有一个文件对话框处于打开状态。
+	Paste Special	选择性粘贴
+	Paste Special…	选择性粘贴…
+	Paste as:	粘贴为：
+	The clipboard is empty.	剪贴板为空。
+	Formatted Text	带格式文本
+	Rich Text Format (RTF)	RTF 格式
+	HTML Format	HTML 格式
+	Unformatted Text	无格式文本
+	Result	结果
+	Keeps the fonts and formatting of the copied text.	保留所复制文本的字体和格式。
+	Reads the clipboard's rich text and keeps its formatting.	读取剪贴板中的 RTF 内容并保留其格式。
+	Reads the clipboard's web content and keeps its formatting.	读取剪贴板中的网页内容并保留其格式。
+	Drops all formatting and pastes plain text.	去除所有格式，粘贴纯文本。

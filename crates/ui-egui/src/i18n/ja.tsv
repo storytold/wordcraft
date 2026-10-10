@@ -931,3 +931,16 @@
 	Dark	ダーク
 	Use system setting	システム設定を使用
 	A file dialog is already open.	ファイル ダイアログが既に開いています。
+	Paste Special	形式を選択して貼り付け
+	Paste Special…	形式を選択して貼り付け…
+	Paste as:	貼り付ける形式:
+	The clipboard is empty.	クリップボードは空です。
+	Formatted Text	書式付きテキスト
+	Rich Text Format (RTF)	リッチ テキスト形式 (RTF)
+	HTML Format	HTML 形式
+	Unformatted Text	書式なしテキスト
+	Result	結果
+	Keeps the fonts and formatting of the copied text.	コピーしたテキストのフォントと書式を保持します。
+	Reads the clipboard's rich text and keeps its formatting.	クリップボードの RTF を読み込み、書式を保持します。
+	Reads the clipboard's web content and keeps its formatting.	クリップボードの Web コンテンツを読み込み、書式を保持します。
+	Drops all formatting and pastes plain text.	書式をすべて取り除き、プレーン テキストとして貼り付けます。

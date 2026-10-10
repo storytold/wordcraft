@@ -215,6 +215,7 @@
 	Drawing Tools	Знаряддя малювання
 	Drawing\nCanvas	Полотно\nмалювання
 	Drop Cap	Буквиця
+	Drops all formatting and pastes plain text.	Відкидає все форматування й вставляє звичайний текст.
 	Edit Footer	Редагувати нижній колонтитул
 	Edit Header	Редагувати верхній колонтитул
 	Edit Recipient List	Редагувати список одержувачів
@@ -271,6 +272,7 @@
 	Format Page Numbers	Формат номерів сторінок
 	Format Page Numbers…	Формат номерів сторінок…
 	Format Painter	Пензель форматування
+	Formatted Text	Форматований текст
 	Formatting at Selection	Форматування виділення
 	Formula	Формула
 	General	Загальні
@@ -301,6 +303,7 @@
 	Home	Основне
 	Horizontal	Горизонтальна
 	Horizontal Line	Горизонтальна лінія
+	HTML Format	Формат HTML
 	Hyphenation	Перенесення слів
 	Icons	Піктограми
 	Ignore All	Ігнорувати всі
@@ -352,6 +355,7 @@
 	Keep Text Only	Зберегти лише текст
 	Keep with Next	Не відривати від наступного
 	Keep with next	Не відривати від наступного
+	Keeps the fonts and formatting of the copied text.	Зберігає шрифти й форматування скопійованого тексту.
 	Labels	Етикетки
 	Landscape	Альбомна
 	Language	Мова
@@ -493,7 +497,10 @@
 	Paragraphs	Абзаци
 	Paste	Вставити
 	Paste (⌘V)	Вставити (⌘V)
+	Paste as:	Вставити як:
 	Paste Formatting	Вставити форматування
+	Paste Special	Спеціальна вставка
+	Paste Special…	Спеціальна вставка…
 	Paste: Keep Text Only	Вставлення: зберегти лише текст
 	Paste: Merge Formatting	Вставлення: об'єднати форматування
 	PDF document (*.pdf)	Документ PDF (*.pdf)
@@ -528,6 +535,8 @@
 	Read Mode	Режим читання
 	Read\nAloud	Читати\nвголос
 	Read\nMode	Режим\nчитання
+	Reads the clipboard's rich text and keeps its formatting.	Читає форматований текст (RTF) із буфера обміну та зберігає його форматування.
+	Reads the clipboard's web content and keeps its formatting.	Читає вебвміст із буфера обміну та зберігає його форматування.
 	Recent	Останні
 	Record Macro	Записати макрос
 	Recover Unsaved Documents	Відновити незбережені документи
@@ -565,6 +574,7 @@
 	Restart Each Section	Починати в кожному розділі
 	Restrict Editing	Обмежити редагування
 	Restrict\nEditing	Обмежити\nредагування
+	Result	Результат
 	Results	Результати
 	Reverse the order	Зворотний порядок
 	Review	Рецензування
@@ -572,6 +582,7 @@
 	Reviewing Pane	Панель рецензування
 	Reviewing — edits become suggestions	Рецензування — зміни стають пропозиціями
 	Rich Text Format (*.rtf)	Форматований текст (*.rtf)
+	Rich Text Format (RTF)	Формат RTF (Rich Text Format)
 	Right	Праворуч
 	Right Border	Права межа
 	Right-to-Left Text Direction	Напрямок тексту справа наліво
@@ -709,6 +720,7 @@
 	Text:	Текст:
 	Text\nBox	Текстове\nполе
 	Text\nDirection	Напрямок\nтексту
+	The clipboard is empty.	Буфер обміну порожній.
 	The new style takes the formatting of the current paragraph.	Новий стиль використовує форматування поточного абзацу.
 	Theme Colors	Кольори теми
 	Theme Fonts	Шрифти теми
@@ -735,6 +747,7 @@
 	Underline Words Only	Підкреслити лише слова
 	Undo	Скасувати
 	Undo {action}	Скасувати {action}
+	Unformatted Text	Неформатований текст
 	Up	Угору
 	Update Field	Оновити поле
 	Update Index	Оновити покажчик

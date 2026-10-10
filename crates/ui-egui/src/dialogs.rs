@@ -1,8 +1,8 @@
 //! Dialogs: Font, Paragraph, Find & Replace, Go To, Insert Table, Page Setup, Link, Bookmark,
-//! Word Count, Zoom, Watermark, New/Modify Style, Command search, About, Save Changes, and the
-//! mail-merge Recipient List, Insert Merge Field, Find Recipient, merge rules, Match Fields and
-//! Check for Errors. Every dialog ends by running a command (or shows one's result), so agents get
-//! the same result without the dialog.
+//! Word Count, Zoom, Watermark, New/Modify Style, Command search, Paste Special, About, Save
+//! Changes, and the mail-merge Recipient List, Insert Merge Field, Find Recipient, merge rules,
+//! Match Fields and Check for Errors. Every dialog ends by running a command (or shows one's
+//! result), so agents get the same result without the dialog.
 
 use egui::{Sense, Ui, vec2};
 use serde::Serialize;
@@ -103,6 +103,14 @@ pub enum Dialog {
     },
     Commands {
         query: String,
+    },
+    /// Paste Special: the clipboard's formats and the chosen one. The clipboard payload stays out
+    /// of the serialized dialog state (it can be megabytes).
+    PasteSpecial {
+        formats: Vec<String>,
+        choice: usize,
+        #[serde(skip)]
+        payload: Value,
     },
     /// Tabs: 0 About, 1 Contributors, 2 Models.
     About {
@@ -229,6 +237,7 @@ impl Dialog {
             Dialog::NewStyle { .. } => "newStyle",
             Dialog::ModifyStyle { .. } => "modifyStyle",
             Dialog::Commands { .. } => "commands",
+            Dialog::PasteSpecial { .. } => "pasteSpecial",
             Dialog::About { .. } => "about",
             Dialog::SaveChanges { .. } => "saveChanges",
             Dialog::RecipientList { .. } => "recipientList",
@@ -328,6 +337,7 @@ impl Dialog {
             "watermark" => Dialog::Watermark { text: "CONFIDENTIAL".into(), diagonal: true },
             "newStyle" => Dialog::NewStyle { name: "Style1".into(), based_on: "Normal".into() },
             "commands" => Dialog::Commands { query: String::new() },
+            "pasteSpecial" => Dialog::paste_special(app, &json!({})),
             "about" => Dialog::About { tab: 0 },
             "contributors" => Dialog::About { tab: 1 },
             "models" => Dialog::About { tab: 2 },
@@ -364,6 +374,18 @@ impl Dialog {
             }
             _ => return None,
         })
+    }
+
+    /// Paste Special for a clipboard payload (`text`, `html`, `rtf`; empty = WordCraft's own copy).
+    pub fn paste_special(app: &WordApp, payload: &Value) -> Dialog {
+        let formats: Vec<String> = wordcraft_engine::cmd::paste::available(&app.session, payload).into_iter().map(str::to_string).collect();
+        let mut kept = json!({});
+        for k in ["text", "html", "rtf"] {
+            if let Some(t) = payload.get(k).and_then(Value::as_str) {
+                kept[k] = json!(t);
+            }
+        }
+        Dialog::PasteSpecial { formats, choice: 0, payload: kept }
     }
 
     pub fn modify_style(app: &WordApp, id: &str) -> Option<Dialog> {
@@ -450,6 +472,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::NewStyle { .. } => "Create New Style",
         Dialog::ModifyStyle { .. } => "Modify Style",
         Dialog::Commands { .. } => "Search Commands",
+        Dialog::PasteSpecial { .. } => "Paste Special",
         Dialog::About { .. } => "About WordCraft",
         Dialog::SaveChanges { .. } => "WordCraft",
         Dialog::RecipientList { .. } => "Recipient List",
@@ -908,6 +931,34 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 }
             }
             close || ui.input(|i| i.key_pressed(egui::Key::Escape))
+        }
+        Dialog::PasteSpecial { formats, choice, payload } => {
+            ui.label(egui::RichText::new(tl!("Paste as:")).font(semibold(12.5)));
+            if formats.is_empty() {
+                ui.label(egui::RichText::new(tl!("The clipboard is empty.")).weak());
+            }
+            for (i, f) in formats.iter().enumerate() {
+                let label = wordcraft_engine::cmd::paste::FORMATS.iter().find(|(id, _)| id == f).map(|(_, l)| *l).unwrap_or(f.as_str());
+                ui.radio_value(choice, i, tl!(label));
+            }
+            if let Some(f) = formats.get(*choice) {
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new(tl!("Result")).font(semibold(12.5)));
+                let hint = match f.as_str() {
+                    "formatted" => "Keeps the fonts and formatting of the copied text.",
+                    "rtf" => "Reads the clipboard's rich text and keeps its formatting.",
+                    "html" => "Reads the clipboard's web content and keeps its formatting.",
+                    _ => "Drops all formatting and pastes plain text.",
+                };
+                ui.label(egui::RichText::new(tl!(hint)).weak());
+            }
+            let (ok, cancel) = buttons(ui, tl!("OK"));
+            if ok && let Some(f) = formats.get(*choice) {
+                let mut params = payload.clone();
+                params["as"] = json!(f);
+                let _ = app.run("edit.pasteSpecial", params);
+            }
+            ok || cancel
         }
         Dialog::About { tab } => {
             ui.set_width(660.0);
