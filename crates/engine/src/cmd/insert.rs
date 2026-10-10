@@ -449,20 +449,8 @@ pub fn format_date(fmt: &str) -> String {
     const MONTHS: [&str; 12] =
         ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
     const DAYS: [&str; 7] = ["Thursday", "Friday", "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday"];
-    let days_since = {
-        // Days since epoch for weekday.
-        let secs = {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
-            }
-            #[cfg(target_arch = "wasm32")]
-            {
-                0u64
-            }
-        };
-        (secs / 86_400) as usize
-    };
+    // Days since the epoch, for the weekday.
+    let days_since = (super::now_unix() / 86_400) as usize;
     let month = MONTHS.get(m.saturating_sub(1)).copied().unwrap_or("January");
     let day = DAYS.get(days_since % 7).copied().unwrap_or("Monday");
     let mut out = String::new();

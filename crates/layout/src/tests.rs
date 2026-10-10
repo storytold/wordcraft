@@ -558,6 +558,22 @@ fn display_has_glyphs_and_marks() {
     assert!(items.iter().any(|i| matches!(i, display::Draw::Mark { ch: '→', .. })));
 }
 
+#[test]
+fn a_tracked_paragraph_mark_shows_in_its_authors_colour() {
+    let mut d = Document::from_text("Split\nhere");
+    d.revisions.push(wordcraft_doc::Revision { kind: wordcraft_doc::RevisionKind::Insert, author: "Ana".into(), date: String::new() });
+    d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().mark.ins = Some(0);
+    let l = lay(&d);
+    let marks = |markup: bool| -> Vec<Option<wordcraft_doc::props::Rgb>> {
+        display::page_display(&d, &l.pages[0], &display::DisplayOptions { marks: true, markup, ..Default::default() })
+            .into_iter()
+            .filter_map(|i| if let display::Draw::Mark { ch: '¶', color, .. } = i { Some(color) } else { None })
+            .collect()
+    };
+    assert_eq!(marks(true), [Some(display::revision_color(0)), None]);
+    assert_eq!(marks(false), [None, None]);
+}
+
 fn border_lines(d: &Document) -> Vec<(f32, f32, f32, f32)> {
     border_lines_in(d, &lay(d))
 }
