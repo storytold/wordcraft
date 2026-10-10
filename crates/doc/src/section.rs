@@ -359,14 +359,15 @@ impl SectionProps {
             self.margin_top = r;
         }
     }
-    /// Column (x offset from the text area's left, width) for each column.
+    /// Column (x offset from the text area's left, width) for each column, in reading order:
+    /// in a right-to-left section (`rtl`, `w:bidi`) the first column stands at the right edge
+    /// and the columns (with the space after each) run leftwards.
     pub fn column_boxes(&self) -> Vec<(f32, f32)> {
         let tw = self.text_width();
         let n = self.columns.count.clamp(1, 45) as usize;
-        if !self.columns.widths.is_empty() && self.columns.widths.len() == n {
+        let boxes: Vec<(f32, f32)> = if !self.columns.widths.is_empty() && self.columns.widths.len() == n {
             let mut x = 0.0;
-            return self
-                .columns
+            self.columns
                 .widths
                 .iter()
                 .map(|(w, sp)| {
@@ -374,11 +375,13 @@ impl SectionProps {
                     x += w + sp;
                     b
                 })
-                .collect();
-        }
-        let space = self.columns.space.max(0.0);
-        let w = ((tw - space * (n as f32 - 1.0)) / n as f32).max(18.0);
-        (0..n).map(|i| (i as f32 * (w + space), w)).collect()
+                .collect()
+        } else {
+            let space = self.columns.space.max(0.0);
+            let w = ((tw - space * (n as f32 - 1.0)) / n as f32).max(18.0);
+            (0..n).map(|i| (i as f32 * (w + space), w)).collect()
+        };
+        if self.rtl { boxes.into_iter().map(|(x, w)| (tw - x - w, w)).collect() } else { boxes }
     }
 }
 
@@ -420,5 +423,18 @@ mod tests {
         assert_eq!(b.len(), 2);
         assert_eq!(b[0], (0.0, 216.0));
         assert_eq!(b[1], (252.0, 216.0));
+    }
+
+    #[test]
+    fn rtl_columns_run_right_to_left() {
+        let s = SectionProps { rtl: true, columns: Columns { count: 2, space: 36.0, ..Default::default() }, ..Default::default() };
+        assert_eq!(s.column_boxes(), vec![(252.0, 216.0), (0.0, 216.0)]);
+        let s = SectionProps {
+            rtl: true,
+            columns: Columns { count: 2, widths: vec![(100.0, 20.0), (200.0, 0.0)], ..Default::default() },
+            ..Default::default()
+        };
+        // Text width 468: the first column hugs the right edge, the second sits 20pt to its left.
+        assert_eq!(s.column_boxes(), vec![(368.0, 100.0), (148.0, 200.0)]);
     }
 }

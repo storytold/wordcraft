@@ -28,7 +28,7 @@ first (`gh pr list`), and update this file and the parity doc when a gap closes.
 | 13 | **Charts and SmartArt editing** (own renderer, chart data editing, SmartArt layouts) | | `insert.chart`, `insert.smartArt` missing | Reports and business documents | 45–70 | [target-app-parity.md](target-app-parity.md) |
 | 14 | **`.doc` can't be written; metafile pictures and Word 6/95 files refused** | | `crates/docbin` is read-only | Users exchanging files with old Word or legacy systems | 25–40 | [file-format-parity.md](file-format-parity.md) |
 | 15 | **References depth**: 4 of Word's 12 bibliography styles; sources not saved in DOCX (#169 open); no EndNote/Mendeley desktop integration | | Word's `Resources/Style` lists 12 styles | Students and researchers | 10–15 | [target-app-parity.md](target-app-parity.md) |
-| 16 | **Right-to-left completeness**: RTL sections and tables, kashida, RTL in HTML/ODT/RTF; eight older RTL bug reports to re-verify after #207 (#215, #211, #199, #66, #63, #48, #19) | | [layout-parity.md](layout-parity.md) | Arabic, Persian, Hebrew writers | 10–15 | [layout-parity.md](layout-parity.md) |
+| 16 | **Right-to-left completeness**: kashida, RTL in HTML/ODT/RTF; eight older RTL bug reports to re-verify after #207 (#215, #211, #199, #66, #63, #48, #19). RTL tables and sections landed (#362) | | [layout-parity.md](layout-parity.md) | Arabic, Persian, Hebrew writers | 7–11 | [layout-parity.md](layout-parity.md) |
 | 17 | **East Asian typography**: vertical text, ruby/Phonetic Guide, Enclose Characters, document grid, Asian Typography options | | Catalog misses `format.phonetic`, `format.enclose`, `para.asianTypography` | Chinese, Japanese and Korean documents | 20–30 | [layout-parity.md](layout-parity.md) |
 | 18 | **Screen-reader access** to the document canvas untested | | AccessKit enabled; no tests | Blind and low-vision users; public-sector procurement | 10–15 | [ui-parity.md](ui-parity.md) |
 | 19 | **RTF and ODT depth**: notes, comments, revisions, sections, RTL | | ~1,500 lines each in `crates/formats` | Users exchanging with LibreOffice or older tools | 18–27 | [file-format-parity.md](file-format-parity.md) |
@@ -66,6 +66,7 @@ The same gaps grouped the way the parity documents are, for agents working in on
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | trivial | #16: right-to-left tables (`w:bidiVisual`) and sections (`w:bidi`) laid out mirrored, with `table.rtl` and `layout.sectionRtl` (#362) |
 | 2026-10-11 | trivial | Formatting revisions landed (#41); gap #5 narrowed to move tracking and content controls, 8–12 h |
 | 2026-10-10 | trivial | Draw Table and Eraser landed (#303); removed from the feature-gap list |
 | 2026-10-10 | trivial | Tabs and Borders and Shading dialogs landed (#320); removed from the dialog-depth list |

@@ -843,6 +843,43 @@ fn table_text_direction_cycles_and_turns_the_text() {
     }
 }
 
+/// Right-to-left tables and sections (#362): `table.rtl` and `layout.sectionRtl` set or toggle
+/// the direction, one Undo step each, and the layout mirrors the table.
+#[test]
+fn table_and_section_direction_commands() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 3}));
+    let rtl = |s: &Session| s.doc.body.iter().find_map(|b| b.as_table()).unwrap().props.bidi_visual;
+    let first_cell_x = |s: &mut Session| {
+        s.layout().pages[0].items.iter().find_map(|it| match it {
+            wordcraft_layout::Placed::Cell { rect, cell: 0, .. } => Some(rect.x),
+            _ => None,
+        })
+    };
+    let ltr_x = first_cell_x(&mut s).unwrap();
+    run(&mut s, "table.rtl", json!({}));
+    assert!(rtl(&s));
+    assert!(first_cell_x(&mut s).unwrap() > ltr_x + 100.0, "the first column moves to the right");
+    run(&mut s, "table.rtl", json!({"value": true}));
+    assert!(rtl(&s), "an explicit value sets rather than toggles");
+    run(&mut s, "table.properties", json!({"rtl": false}));
+    assert!(!rtl(&s));
+    run(&mut s, "edit.undo", json!({}));
+    assert!(rtl(&s));
+    assert_eq!(s.run("table.properties", &json!({})).unwrap()["bidiVisual"], json!(true));
+    run(&mut s, "layout.sectionRtl", json!({}));
+    assert!(crate::cmd::page::sect(&s).rtl);
+    run(&mut s, "layout.sectionRtl", json!({"value": false}));
+    assert!(!crate::cmd::page::sect(&s).rtl);
+    run(&mut s, "edit.undo", json!({}));
+    assert!(crate::cmd::page::sect(&s).rtl);
+    // Outside a table `table.rtl` is disabled.
+    s.sel = crate::Selection::caret(Pos::body(0, 0));
+    if s.sel.focus.path.cell().is_none() {
+        assert!(s.run("table.rtl", &json!({})).is_err());
+    }
+}
+
 #[test]
 fn table_border_presets_mask_the_sides_they_clear() {
     // On a default (TableGrid) table the "outside"/"inside" presets must write nil over the

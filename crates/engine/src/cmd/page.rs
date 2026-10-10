@@ -62,6 +62,11 @@ pub fn specs() -> Vec<CommandSpec> {
             };
             with_sect(s, |x| x.valign = va)
         }),
+        CommandSpec::new("layout.sectionRtl", "Right-to-Left Section", "Layout › Page Setup", |s, v| {
+            let on = p::bool(v, "value").unwrap_or(!sect(s).rtl);
+            with_sect(s, |x| x.rtl = on)
+        })
+        .params(r#"{"value"?: bool} (true: the section's columns run right to left; without a value it toggles)"#),
         CommandSpec::new("layout.differentFirstPage", "Different First Page", "Header & Footer › Options", |s, v| {
             let on = p::bool(v, "value").unwrap_or(!sect(s).title_page);
             with_sect(s, |x| x.title_page = on)

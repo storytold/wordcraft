@@ -88,6 +88,8 @@ pub enum Dialog {
         left: f32,
         right: f32,
         landscape: bool,
+        /// Section direction: right to left (`layout.sectionRtl`).
+        rtl: bool,
     },
     Link {
         url: String,
@@ -259,6 +261,8 @@ pub struct TableForm {
     /// `left`, `center` or `right`.
     pub align: String,
     pub indent: f32,
+    /// Table direction: right to left (`w:bidiVisual`).
+    pub rtl: bool,
     pub row_height_on: bool,
     pub row_height: f32,
     pub row_exact: bool,
@@ -294,6 +298,7 @@ impl TableForm {
             }
             .into(),
             indent: fin(t.props.indent.unwrap_or(0.0)) / k,
+            rtl: t.props.bidi_visual,
             row_height_on: row.height.is_some() && row.height_rule != HeightRule::Auto,
             row_height: fin(row.height.unwrap_or(18.0)) / k,
             row_exact: row.height_rule == HeightRule::Exact,
@@ -324,6 +329,9 @@ impl TableForm {
         }
         if moved(self.indent, basis.indent) {
             v.insert("indent".into(), json!(self.indent * k));
+        }
+        if self.rtl != basis.rtl {
+            v.insert("rtl".into(), json!(self.rtl));
         }
         if self.row_height_on != basis.row_height_on
             || (self.row_height_on && (moved(self.row_height, basis.row_height) || self.row_exact != basis.row_exact))
@@ -746,6 +754,7 @@ impl Dialog {
                     left: sp.margin_left / 72.0,
                     right: sp.margin_right / 72.0,
                     landscape: sp.landscape,
+                    rtl: sp.rtl,
                 }
             }
             "link" => Dialog::Link { url: "https://".into(), text: app.session.selected_text() },
@@ -1266,7 +1275,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             ok || cancel
         }
-        Dialog::PageSetup { top, bottom, left, right, landscape } => {
+        Dialog::PageSetup { top, bottom, left, right, landscape, rtl } => {
             ui.label(egui::RichText::new(tl!("Margins")).font(semibold(12.5)));
             egui::Grid::new("ps").num_columns(4).show(ui, |ui| {
                 ui.label(tl!("Top:"));
@@ -1285,11 +1294,19 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 ui.radio_value(landscape, false, tl!("Portrait"));
                 ui.radio_value(landscape, true, tl!("Landscape"));
             });
+            ui.horizontal(|ui| {
+                ui.label(tl!("Section direction:"));
+                ui.radio_value(rtl, false, tl!("Left-to-right"));
+                ui.radio_value(rtl, true, tl!("Right-to-left"));
+            });
             let (ok, cancel) = buttons(ui, tl!("OK"));
             if ok {
                 let _ = app.run("layout.orientation", json!({"value": if *landscape { "landscape" } else { "portrait" }}));
                 let _ =
                     app.run("layout.margins", json!({"top": *top * 72.0, "bottom": *bottom * 72.0, "left": *left * 72.0, "right": *right * 72.0}));
+                if *rtl != wordcraft_engine::cmd::page::sect(&app.session).rtl {
+                    let _ = app.run("layout.sectionRtl", json!({"value": *rtl}));
+                }
             }
             ok || cancel
         }
@@ -1990,6 +2007,12 @@ fn table_properties(ui: &mut Ui, f: &mut TableForm) {
         ui.end_row();
         ui.label(tl!("Indent from left:"));
         ui.add_enabled(f.align == "left", egui::DragValue::new(&mut f.indent).speed(0.01).range(-11.0..=22.0).suffix(unit.suffix()).max_decimals(2));
+        ui.end_row();
+        ui.label(tl!("Table direction:"));
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut f.rtl, false, tl!("Left-to-right"));
+            ui.radio_value(&mut f.rtl, true, tl!("Right-to-left"));
+        });
         ui.end_row();
     });
     heading(ui, "Row");

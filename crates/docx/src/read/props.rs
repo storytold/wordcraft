@@ -304,6 +304,7 @@ impl PropCtx {
                 "w:tblBorders" => t.borders = Some(borders(k)),
                 "w:shd" => t.shading = shd_fill(k),
                 "w:tblLayout" => t.fixed = k.attr("w:type") == Some("fixed"),
+                "w:bidiVisual" => t.bidi_visual = on_off(k),
                 "w:tblCellMar" => t.cell_margins = Some(margins(k)),
                 "w:tblLook" => t.look = look(k),
                 "w:tblpPr" => t.float = Some(table_float(k)),
