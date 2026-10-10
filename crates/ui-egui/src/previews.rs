@@ -43,7 +43,7 @@ impl Previews {
         Box::new(|ui: &mut Ui, name: &str| {
             let key = format!("font:{name}");
             let tex: Option<TextureHandle> = ui.ctx().data(|d| d.get_temp::<TextureHandle>(egui::Id::new(&key)));
-            let (r, resp) = ui.allocate_exact_size(vec2(260.0, 24.0), Sense::click());
+            let (r, resp) = ui.allocate_exact_size(vec2(260.0, crate::widgets::COMBO_PREVIEW_ROW_H), Sense::click());
             let t = Tokens::get(ui.ctx());
             if resp.hovered() {
                 ui.painter().rect_filled(r, 3.0, t.hover);
