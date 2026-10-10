@@ -9,6 +9,8 @@
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+#[cfg(target_os = "macos")]
+mod apple_events;
 mod control_server;
 #[cfg(any(target_os = "windows", test))]
 mod graphics;
@@ -20,12 +22,14 @@ use wordcraft_ui_egui::{
     window_geometry::{WindowGeometry, take_rescue},
 };
 
-/// The app, the restored window geometry until the first frame has checked it, and the control
-/// server's key file (removed on exit).
-struct App(WordApp, Option<WindowGeometry>, Option<control_server::KeyFile>);
+/// The app, the restored window geometry until the first frame has checked it, the control
+/// server's key file (removed on exit) and, on macOS, the documents opened from Finder.
+struct App(WordApp, Option<WindowGeometry>, Option<control_server::KeyFile>, #[cfg(target_os = "macos")] fmv_macos_events::Inbox);
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(target_os = "macos")]
+        apple_events::poll(&self.3, &mut self.0, ctx);
         self.0.logic(ctx);
         let prev = self.0.ui.window;
         self.0.ui.window = ctx.input(|i| WindowGeometry::track(prev, i.viewport(), i.viewport_rect().size()));
@@ -191,6 +195,12 @@ fn main() -> eframe::Result {
     if let Some(window) = restored {
         options.viewport = window.apply(options.viewport);
     }
+    // Registered before the event loop starts, so it catches the Finder event that launched us as
+    // well as later ones. Lives until the event loop returns; the app creator only borrows it.
+    #[cfg(target_os = "macos")]
+    let apple_events = apple_events::AppleEvents::install();
+    #[cfg(target_os = "macos")]
+    let apple_events = &apple_events;
     eframe::run_native(
         "WordCraft",
         options,
@@ -212,7 +222,13 @@ fn main() -> eframe::Result {
                     log::warn!("{f}: {e}");
                 }
             }
-            Ok(Box::new(App(app, restored, key_file)))
+            Ok(Box::new(App(
+                app,
+                restored,
+                key_file,
+                #[cfg(target_os = "macos")]
+                apple_events.connect(&cc.egui_ctx),
+            )))
         }),
     )
 }

@@ -573,6 +573,7 @@
 	Right	Праворуч
 	Right Border	Права межа
 	Right-to-Left Text Direction	Напрямок тексту справа наліво
+	Left-to-Right Text Direction	Напрямок тексту зліва направо
 	Right:	Праворуч:
 	Rotate	Повернути
 	Rounded Rectangle	Заокруглений прямокутник
@@ -791,6 +792,9 @@
 	Scroll ribbon left	Прокрутити стрічку ліворуч
 	Scroll ribbon right	Прокрутити стрічку праворуч
 	Character Border	Межа символу
+	Direction:	Напрямок:
+	Right-to-left	Справа наліво
+	Left-to-right	Зліва направо
 # Zotero integration
 	Zotero	Zotero
 	Citations	Цитати
@@ -883,3 +887,4 @@
 	Or save a copy in another format:	Або збережіть копію в іншому форматі:
 	Opening print dialog…	Відкриття діалогу друку…
 	Print failed: {error}	Не вдалося надрукувати: {error}
+	Couldn't open {path}: {error}	Не вдалося відкрити {path}: {error}

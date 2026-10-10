@@ -573,6 +573,7 @@
 	Right	右
 	Right Border	右框線
 	Right-to-Left Text Direction	從右至左文字方向
+	Left-to-Right Text Direction	從左至右文字方向
 	Right:	右：
 	Rotate	旋轉
 	Rounded Rectangle	圓角矩形
@@ -785,6 +786,9 @@
 	📂  Browse…	📂  瀏覽…
 	{words} words	{words} 個字
 	{selected} of {words} words	{selected}/{words} 個字
+	Direction:	方向：
+	Right-to-left	從右至左
+	Left-to-right	從左至右
 # Zotero integration
 	Zotero	Zotero
 	Citations	引文
@@ -872,3 +876,4 @@
 	Or save a copy in another format:	或以其他格式儲存副本：
 	Opening print dialog…	正在開啟列印對話方塊…
 	Print failed: {error}	列印失敗：{error}
+	Couldn't open {path}: {error}	無法開啟 {path}：{error}

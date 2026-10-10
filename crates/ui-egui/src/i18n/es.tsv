@@ -572,6 +572,7 @@
 	Right	Derecha
 	Right Border	Borde derecho
 	Right-to-Left Text Direction	Dirección de texto de derecha a izquierda
+	Left-to-Right Text Direction	Dirección de texto de izquierda a derecha
 	Right:	Derecha:
 	Rotate	Girar
 	Rounded Rectangle	Rectángulo redondeado
@@ -796,6 +797,9 @@
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Muestra los documentos con los colores invertidos, como en Vista › Cambiar modos. Guardar, imprimir y los PDF no cambian.
 	Only web (http, https) and email (mailto) links can be followed	Solo se pueden seguir vínculos web (http, https) y de correo electrónico (mailto)
 	Character Border	Borde de carácter
+	Direction:	Dirección:
+	Right-to-left	De derecha a izquierda
+	Left-to-right	De izquierda a derecha
 # Zotero integration
 	Zotero	Zotero
 	Citations	Citas
@@ -888,3 +892,4 @@
 	Or save a copy in another format:	O guarda una copia en otro formato:
 	Opening print dialog…	Abriendo el cuadro de diálogo de impresión…
 	Print failed: {error}	Error al imprimir: {error}
+	Couldn't open {path}: {error}	No se pudo abrir {path}: {error}
