@@ -5043,6 +5043,7 @@ dependencies = [
  "log",
  "miniz_oxide 0.8.9",
  "proptest",
+ "regex",
 ]
 
 [[package]]
