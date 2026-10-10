@@ -2266,3 +2266,20 @@ fn delete_table_style_falls_back_and_undoes() {
     assert_eq!(style(&s).as_deref(), Some("Base"));
     assert_eq!(s.doc.styles.get("Child").unwrap().based_on.as_deref(), Some("Base"));
 }
+
+/// #146: a .docx may mark Word's built-in table styles as custom; they still can't be deleted, so
+/// no table is left pointing at a style that's gone.
+#[test]
+fn builtin_table_styles_marked_custom_in_a_docx_cant_be_deleted() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+    for st in s.doc.styles.styles.iter_mut() {
+        st.builtin = false;
+    }
+    for name in ["Table Grid", "Normal Table", "TableGrid"] {
+        assert!(s.run("table.deleteStyle", &json!({"style": name})).is_err(), "{name}");
+    }
+    let (tp, _, _) = s.sel.focus.path.cell().unwrap();
+    let id = s.doc.table(StoryRef::Body, &tp).unwrap().props.style.clone().unwrap();
+    assert!(s.doc.styles.get(&id).is_some(), "the table's style still exists");
+}

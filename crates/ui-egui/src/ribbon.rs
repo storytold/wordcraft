@@ -1267,7 +1267,12 @@ fn table_design(app: &mut WordApp, ui: &mut Ui) {
             let current = look.and_then(|_| {
                 let (tp, _, _) = app.session.sel.focus.path.cell()?;
                 let id = app.session.doc.table(app.session.sel.focus.story, &tp)?.props.style.clone()?;
-                app.session.doc.styles.get(&id).filter(|st| st.kind == wordcraft_doc::StyleKind::Table).map(|st| st.builtin)
+                app.session
+                    .doc
+                    .styles
+                    .get(&id)
+                    .filter(|st| st.kind == wordcraft_doc::StyleKind::Table)
+                    .map(wordcraft_engine::cmd::table_style::is_builtin_table_style)
             });
             let can_modify = current.is_some();
             // Built-in table styles can't be deleted.

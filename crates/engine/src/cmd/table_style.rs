@@ -163,7 +163,7 @@ pub fn preview(s: &Session, v: &Value) -> Option<TableStyleProps> {
 fn delete_style(s: &mut Session, v: &Value) -> CmdResult {
     let id = target(s, v)?;
     let st = s.doc.styles.get(&id).cloned().ok_or_else(|| CmdError::Params("no such style".into()))?;
-    if st.builtin {
+    if is_builtin_table_style(&st) {
         return Err(CmdError::Failed(format!("`{}` is a built-in table style and can't be deleted", st.name)));
     }
     let mut rebased = Vec::new();
@@ -192,6 +192,15 @@ fn delete_style(s: &mut Session, v: &Value) -> CmdResult {
     }
     s.dirty = true;
     Ok(json!({"deleted": id, "tables": tables, "rebased": rebased}))
+}
+
+/// Whether `st` is one of Word's built-in table styles. A .docx can mark any style custom
+/// (`w:customStyle`), so Table Grid and Normal Table are recognised by id and name too: deleting
+/// them would leave new tables (and the fallback for deleted styles) without a style to take.
+pub fn is_builtin_table_style(st: &Style) -> bool {
+    const IDS: [&str; 2] = ["TableGrid", "TableNormal"];
+    const NAMES: [&str; 3] = ["Table Grid", "Normal Table", "Table Normal"];
+    st.builtin || IDS.iter().any(|x| st.id.eq_ignore_ascii_case(x)) || NAMES.iter().any(|x| st.name.eq_ignore_ascii_case(x))
 }
 
 /// Tables nest at most this deep for restyling.
