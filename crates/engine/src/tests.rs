@@ -1763,3 +1763,75 @@ fn custom_table_style_applies_modifies_and_saves() {
     let t = back.body.iter().find_map(|b| b.as_table()).unwrap();
     assert_eq!(t.props.style.as_deref(), Some(id.as_str()), "w:tblStyle");
 }
+
+#[test]
+fn page_and_table_gridlines_toggle_independently() {
+    // #69: View › Gridlines (the page drawing grid) and Table Layout › View Gridlines (table cell
+    // outlines) are separate view switches; neither touches the document or the undo stack.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    let undo = s.undo_labels();
+    assert!(!s.view.gridlines && !s.view.table_gridlines);
+
+    assert_eq!(run(&mut s, "view.gridlines", json!({}))["value"], true);
+    assert!(s.view.gridlines && !s.view.table_gridlines);
+
+    // Works with the caret outside a table.
+    assert_eq!(run(&mut s, "table.viewGridlines", json!({}))["value"], true);
+    assert!(s.view.gridlines && s.view.table_gridlines);
+
+    assert_eq!(run(&mut s, "view.gridlines", json!({"value": false}))["value"], false);
+    assert!(!s.view.gridlines && s.view.table_gridlines);
+    assert_eq!(run(&mut s, "view.gridlines", json!({"value": false}))["value"], false);
+    assert!(!s.view.gridlines);
+
+    assert_eq!(run(&mut s, "table.viewGridlines", json!({}))["value"], false);
+    assert!(!s.view.gridlines && !s.view.table_gridlines);
+
+    assert_eq!(text(&s), "Hello");
+    assert_eq!(s.undo_labels(), undo);
+    let state = run(&mut s, "view.state", json!({}));
+    assert_eq!(state["gridlines"], false);
+    assert_eq!(state["tableGridlines"], false);
+}
+
+/// Issue #67: View › Zoom steps. Zoom In/Out leave a fit mode and step 10% from the current zoom
+/// (the UI keeps `view.zoom` equal to the shown zoom while a fit mode is on), and never get stuck
+/// short of the 10%–500% limits.
+#[test]
+fn zoom_in_and_out_step_from_current_zoom_and_leave_fit_modes() {
+    let mut s = s();
+    let pct = |s: &Session| (s.view.zoom * 100.0).round() as i32;
+    run(&mut s, "view.zoomIn", json!({}));
+    assert_eq!(pct(&s), 110);
+    run(&mut s, "view.zoomOut", json!({}));
+    run(&mut s, "view.zoomOut", json!({}));
+    assert_eq!(pct(&s), 90);
+    for fit in ["view.pageWidth", "view.onePage", "view.multiplePages"] {
+        run(&mut s, fit, json!({}));
+        assert!(!s.view.fit.is_empty());
+        // What the canvas reports while a fit mode shows the page at 163%.
+        s.view.zoom = 1.63;
+        run(&mut s, "view.zoomIn", json!({}));
+        assert_eq!((pct(&s), s.view.fit.as_str(), s.view.multi_page), (170, "", false), "{fit}");
+        run(&mut s, fit, json!({}));
+        s.view.zoom = 1.63;
+        run(&mut s, "view.zoomOut", json!({}));
+        assert_eq!((pct(&s), s.view.fit.as_str()), (150, ""), "{fit}");
+    }
+    let mut last = pct(&s);
+    for _ in 0..60 {
+        run(&mut s, "view.zoomIn", json!({}));
+        assert!(pct(&s) > last || pct(&s) == 500);
+        last = pct(&s);
+    }
+    assert_eq!(last, 500);
+    for _ in 0..60 {
+        run(&mut s, "view.zoomOut", json!({}));
+        assert!(pct(&s) < last || pct(&s) == 10);
+        last = pct(&s);
+    }
+    assert_eq!(last, 10);
+    run(&mut s, "view.zoom100", json!({}));
+    assert_eq!(pct(&s), 100);
+}

@@ -40,8 +40,7 @@ struct Turned {
     across: f32,
     /// List counters and equation count before the cell, to lay it out again the same way.
     snap: (Counters, u32),
-    /// Its formatting region (header row, total row, first column, row band) and cell index in
-    /// the row.
+    /// Its formatting region (header row, total row, first column, row band) and cell index in the row.
     region: (bool, bool, bool, bool),
     ci: usize,
     /// Top margin plus top border band.
