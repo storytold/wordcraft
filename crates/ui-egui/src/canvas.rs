@@ -150,7 +150,9 @@ pub fn markup_width(app: &WordApp) -> f32 {
     let m = &app.session.prefs.markup;
     let on = on && m.balloons != wordcraft_layout::display::BalloonMode::Inline;
     let comments = m.comments && !app.session.doc.comments.is_empty();
-    if on && (comments || (m.formatting && wordcraft_engine::cmd::review::has_format_changes(&app.session.doc))) { 216.0 } else { 0.0 }
+    let formats = m.formatting && wordcraft_engine::cmd::review::has_format_changes(&app.session.doc);
+    let moves = m.insertions_deletions && wordcraft_engine::cmd::moves::has_moves(&app.session.doc);
+    if on && (comments || formats || moves) { 216.0 } else { 0.0 }
 }
 
 /// A page dimension (points) safe to lay out: finite, at least 1 pt, at most `cap`.
@@ -771,6 +773,13 @@ fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, rects: &[Re
         let text = if what.is_empty() { tl!("Formatted").to_string() } else { format!("{}: {what}", tl!("Formatted")) };
         by_page.entry(c.page).or_default().push((c.x, c.top + c.height, Balloon::Format(author, text), pos));
     }
+    // Each end of a tracked move.
+    let moves = if m.insertions_deletions { wordcraft_engine::cmd::review::move_changes(&app.session) } else { Vec::new() };
+    for (pos, author, from) in moves.into_iter().take(500) {
+        let Some(c) = layout.caret_on(&pos, app.session.page_hint) else { continue };
+        let text = if from { tl!("Moved from") } else { tl!("Moved to") }.to_string();
+        by_page.entry(c.page).or_default().push((c.x, c.top + c.height, Balloon::Format(author, text), pos));
+    }
     let palette = [t.blue, Color32::from_rgb(0xB0, 0x3A, 0x2E), Color32::from_rgb(0x2E, 0x7D, 0x32), Color32::from_rgb(0x8E, 0x44, 0xAD), t.orange];
     let mut authors: Vec<String> = Vec::new();
     let mut clicked: Option<(u32, Pos)> = None;
@@ -905,7 +914,7 @@ fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, rects: &[Re
 /// What a balloon in the markup area shows.
 enum Balloon {
     Comment(u32),
-    /// A tracked formatting change: its author and "Formatted: …".
+    /// A tracked formatting change or move: its author and "Formatted: …" / "Moved from".
     Format(String, String),
 }
 

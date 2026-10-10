@@ -255,6 +255,24 @@ pub struct Revision {
     pub kind: RevisionKind,
     pub author: String,
     pub date: String,
+    /// A move (ECMA-376 §17.13.5.21–28): the name linking the source (an `Delete` revision,
+    /// `w:moveFrom`) with the destination (an `Insert` revision, `w:moveTo`). `None` = a plain
+    /// insertion or deletion.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub move_name: Option<String>,
+}
+
+impl Revision {
+    pub fn new(kind: RevisionKind, author: impl Into<String>, date: impl Into<String>) -> Revision {
+        Revision { kind, author: author.into(), date: date.into(), move_name: None }
+    }
+}
+
+impl Document {
+    /// The move name of revision `idx`, when it is one end of a move.
+    pub fn move_name(&self, idx: Option<u32>) -> Option<&str> {
+        idx.and_then(|i| self.revisions.get(i as usize)).and_then(|r| r.move_name.as_deref())
+    }
 }
 
 /// A bibliography source.

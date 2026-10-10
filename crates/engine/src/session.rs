@@ -193,6 +193,8 @@ pub struct Session {
     pub path: Option<std::path::PathBuf>,
     pub dirty: bool,
     pub clipboard: Option<Fragment>,
+    /// A tracked cut the next paste can turn into a move (see `cmd::moves`).
+    pub pending_move: Option<crate::cmd::moves::PendingMove>,
     /// Plain text mirror of the clipboard (for the system clipboard).
     pub clipboard_text: String,
     /// Items collected by Copy and Cut this session, for the Clipboard pane.
@@ -308,6 +310,7 @@ impl Session {
             path: None,
             dirty: false,
             clipboard: None,
+            pending_move: None,
             clipboard_text: String::new(),
             clip_history: Default::default(),
             find: FindState::default(),
@@ -544,6 +547,8 @@ impl Session {
             path: _,
             dirty,
             clipboard: _,
+            // Like the clipboard: what the next paste can make a move of.
+            pending_move: _,
             clipboard_text: _,
             clip_history: _,
             find: _,
@@ -712,6 +717,10 @@ impl Session {
             // Non-mutating commands other than caret movement keep the typing group.
         } else if spec.id.starts_with("caret.") {
             self.typing_open = false;
+        }
+        // Only the paste right after a tracked cut makes it a move.
+        if (spec.mutates || matches!(id, "edit.undo" | "edit.redo")) && !matches!(id, "edit.cut" | "edit.paste" | "edit.pasteSpecial") {
+            self.pending_move = None;
         }
         let sel_before = self.sel.clone();
         let run = spec.run;
