@@ -1,6 +1,6 @@
 //! The word-processor feature catalog: the incumbent's ribbon and menu commands (feature names
 //! only) mapped to our command ids. `parity()` compares it with the registry; the gap is the
-//! work list (`cargo xtask parity` → docs/parity.md).
+//! work list (`cargo xtask parity` → docs/parity-checklist.md).
 
 use serde_json::{Value, json};
 
