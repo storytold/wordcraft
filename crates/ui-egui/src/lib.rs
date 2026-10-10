@@ -969,6 +969,47 @@ mod tests {
         assert!(a.canvas.scale < zoomed, "Ctrl+wheel down zooms out");
     }
 
+    /// Issue #123: zoomed out, pages sit side by side, and clicks map to the page under the pointer.
+    #[test]
+    fn zoomed_out_pages_sit_side_by_side_and_clicks_land_on_them() {
+        let ctx = egui::Context::default();
+        let mut a = app();
+        for _ in 0..3 {
+            a.run("insert.pageBreak", json!({})).unwrap();
+        }
+        a.run("text.insert", json!({"text": "Last page"})).unwrap();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+        let mut t = 0.0;
+        let mut frame = |a: &mut WordApp| {
+            t += 1.0 / 60.0;
+            let input = egui::RawInput { time: Some(t), screen_rect: Some(screen), ..Default::default() };
+            ctx.run_ui(input, |ui| {
+                a.logic(ui.ctx());
+                a.ui(ui);
+            })
+            .drop_without_applying_deltas();
+        };
+        for _ in 0..3 {
+            frame(&mut a);
+        }
+        let rects = a.canvas.page_rects.clone();
+        assert_eq!(rects.len(), 4);
+        assert!(rects[1].top() > rects[0].bottom(), "100%: one page per row");
+        a.run("view.zoom", json!({"value": 30})).unwrap();
+        for _ in 0..3 {
+            frame(&mut a);
+        }
+        let rects = a.canvas.page_rects.clone();
+        assert_eq!(a.canvas.cols, 4, "30%: all four pages fit across: {rects:?}");
+        assert!((rects[3].top() - rects[0].top()).abs() < 1.0 && rects[3].left() > rects[2].right(), "{rects:?}");
+        // A click inside the last page's text puts the caret on that page.
+        let p = canvas::page_to_screen(&mut a, 3, 100.0, 80.0).unwrap();
+        assert!(rects[3].contains(p), "{p:?} in {:?}", rects[3]);
+        let pos = canvas::pos_from_screen(&mut a, p).unwrap();
+        let caret = a.session.layout().caret_on(&pos, 3).unwrap();
+        assert_eq!(caret.page, 3);
+    }
+
     #[test]
     fn user_name_survives_restart() {
         let mut first = app();
