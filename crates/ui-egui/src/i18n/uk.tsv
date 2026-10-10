@@ -1105,7 +1105,7 @@
 	No-Width Non Break	Нерозривний символ нульової ширини
 	No-Width Optional Break	Необов'язковий розрив нульової ширини
 	Paragraph Mark	Знак абзацу
-	Please choose a field	Виберіть поле
+	Pick a field from the list	Виберіть поле
 	Preserve formatting during updates	Зберігати форматування під час оновлення
 	Presets	Шаблони
 	Recently used symbols:	Нещодавно використані символи:
@@ -1118,26 +1118,26 @@
 	Spacing:	Інтервал:
 	Special Characters	Спеціальні символи
 	Subset:	Набір:
-	The current time	Поточний час
-	The date the document was created	Дата створення документа
-	The date the document was last printed	Дата останнього друку документа
-	The date the document was last saved	Дата останнього збереження документа
+	The time right now	Поточний час
+	When this document was first created	Дата створення документа
+	When this document was most recently printed	Дата останнього друку документа
+	When this document was most recently saved	Дата останнього збереження документа
 	The document has no bookmarks yet.	У документі ще немає закладок.
-	The document's author	Автор документа
-	The document's file name	Ім'я файлу документа
-	The document's title	Назва документа
-	The number of pages in the document	Кількість сторінок у документі
-	The number of pages in the section	Кількість сторінок у розділі
-	The number of the current page	Номер поточної сторінки
-	The number of the current section	Номер поточного розділу
-	The number of words in the document	Кількість слів у документі
-	The page number of a bookmark	Номер сторінки закладки
-	The text of a bookmark	Текст закладки
+	Who the document properties name as author	Автор документа
+	Name of the file this document is saved as	Ім'я файлу документа
+	Title from the document properties	Назва документа
+	How many pages the whole document has	Кількість сторінок у документі
+	How many pages this section has	Кількість сторінок у розділі
+	Number of the page the field sits on	Номер поточної сторінки
+	Number of the section the field sits in	Номер поточного розділу
+	How many words the document holds	Кількість слів у документі
+	Page on which a bookmarked passage falls	Номер сторінки закладки
+	Copy of the text a bookmark marks	Текст закладки
 	This field has no options.	Це поле не має параметрів.
 	This font has no characters to show.	Цей шрифт не має символів для показу.
 	This point forward	Від цього місця
 	This section	Цей розділ
-	Today's date	Сьогоднішня дата
+	The date it is today	Сьогоднішня дата
 	Trademark	Торговельна марка
 	Type the field's name and its switches, for example PAGE \\* roman.	Введіть назву поля та його ключі, наприклад PAGE \\* roman.
 	Whole document	Увесь документ

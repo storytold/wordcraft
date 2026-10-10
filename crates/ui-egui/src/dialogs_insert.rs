@@ -908,22 +908,22 @@ pub enum FieldKind {
 
 /// The fields WordCraft computes, by category: (name, category, description).
 pub const FIELDS: &[(&str, &str, &str)] = &[
-    ("CREATEDATE", "Date and Time", "The date the document was created"),
-    ("DATE", "Date and Time", "Today's date"),
-    ("PRINTDATE", "Date and Time", "The date the document was last printed"),
-    ("SAVEDATE", "Date and Time", "The date the document was last saved"),
-    ("TIME", "Date and Time", "The current time"),
-    ("AUTHOR", "Document Information", "The document's author"),
-    ("FILENAME", "Document Information", "The document's file name"),
-    ("NUMPAGES", "Document Information", "The number of pages in the document"),
-    ("NUMWORDS", "Document Information", "The number of words in the document"),
-    ("TITLE", "Document Information", "The document's title"),
-    ("PAGE", "Numbering", "The number of the current page"),
-    ("SECTION", "Numbering", "The number of the current section"),
-    ("SECTIONPAGES", "Numbering", "The number of pages in the section"),
+    ("CREATEDATE", "Date and Time", "When this document was first created"),
+    ("DATE", "Date and Time", "The date it is today"),
+    ("PRINTDATE", "Date and Time", "When this document was most recently printed"),
+    ("SAVEDATE", "Date and Time", "When this document was most recently saved"),
+    ("TIME", "Date and Time", "The time right now"),
+    ("AUTHOR", "Document Information", "Who the document properties name as author"),
+    ("FILENAME", "Document Information", "Name of the file this document is saved as"),
+    ("NUMPAGES", "Document Information", "How many pages the whole document has"),
+    ("NUMWORDS", "Document Information", "How many words the document holds"),
+    ("TITLE", "Document Information", "Title from the document properties"),
+    ("PAGE", "Numbering", "Number of the page the field sits on"),
+    ("SECTION", "Numbering", "Number of the section the field sits in"),
+    ("SECTIONPAGES", "Numbering", "How many pages this section has"),
     ("SEQ", "Numbering", "A numbered sequence (figures, tables…)"),
-    ("PAGEREF", "Links and References", "The page number of a bookmark"),
-    ("REF", "Links and References", "The text of a bookmark"),
+    ("PAGEREF", "Links and References", "Page on which a bookmarked passage falls"),
+    ("REF", "Links and References", "Copy of the text a bookmark marks"),
     ("TOC", "Index and Tables", "A table of contents"),
     ("MERGEFIELD", "Mail Merge", "A mail merge field"),
 ];
@@ -1100,7 +1100,7 @@ fn field_ui(app: &mut WordApp, ui: &mut Ui, f: &mut FieldForm) -> bool {
         // Left: category and field names.
         ui.vertical(|ui| {
             ui.set_width(200.0);
-            ui.label(egui::RichText::new(tl!("Please choose a field")).font(semibold(12.5)));
+            ui.label(egui::RichText::new(tl!("Pick a field from the list")).font(semibold(12.5)));
             ui.label(tl!("Categories:"));
             let shown = tl!(f.category.as_str()).to_string();
             egui::ComboBox::from_id_salt("field_category").selected_text(shown).width(190.0).show_ui(ui, |ui| {

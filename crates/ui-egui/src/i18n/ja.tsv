@@ -1093,7 +1093,7 @@
 	No-Width Non Break	幅なし改行禁止
 	No-Width Optional Break	幅なし任意改行
 	Paragraph Mark	段落記号
-	Please choose a field	フィールドを選んでください
+	Pick a field from the list	フィールドを選んでください
 	Preserve formatting during updates	更新時に書式を保持する
 	Presets	プリセット
 	Recently used symbols:	最近使った記号:
@@ -1106,26 +1106,26 @@
 	Spacing:	間隔:
 	Special Characters	特殊文字
 	Subset:	種類:
-	The current time	現在の時刻
-	The date the document was created	文書の作成日
-	The date the document was last printed	文書の最終印刷日
-	The date the document was last saved	文書の最終保存日
+	The time right now	現在の時刻
+	When this document was first created	文書の作成日
+	When this document was most recently printed	文書の最終印刷日
+	When this document was most recently saved	文書の最終保存日
 	The document has no bookmarks yet.	この文書にはまだブックマークがありません。
-	The document's author	文書の作成者
-	The document's file name	文書のファイル名
-	The document's title	文書のタイトル
-	The number of pages in the document	文書のページ数
-	The number of pages in the section	セクションのページ数
-	The number of the current page	現在のページ番号
-	The number of the current section	現在のセクション番号
-	The number of words in the document	文書の単語数
-	The page number of a bookmark	ブックマークのページ番号
-	The text of a bookmark	ブックマークの文字列
+	Who the document properties name as author	文書の作成者
+	Name of the file this document is saved as	文書のファイル名
+	Title from the document properties	文書のタイトル
+	How many pages the whole document has	文書のページ数
+	How many pages this section has	セクションのページ数
+	Number of the page the field sits on	現在のページ番号
+	Number of the section the field sits in	現在のセクション番号
+	How many words the document holds	文書の単語数
+	Page on which a bookmarked passage falls	ブックマークのページ番号
+	Copy of the text a bookmark marks	ブックマークの文字列
 	This field has no options.	このフィールドにはオプションがありません。
 	This font has no characters to show.	このフォントには表示できる文字がありません。
 	This point forward	これ以降
 	This section	このセクション
-	Today's date	今日の日付
+	The date it is today	今日の日付
 	Trademark	商標
 	Type the field's name and its switches, for example PAGE \\* roman.	フィールド名とスイッチを入力します (例: PAGE \\* roman)。
 	Whole document	文書全体

@@ -1094,7 +1094,7 @@
 	No-Width Non Break	無寬度不分行
 	No-Width Optional Break	無寬度選擇性分行
 	Paragraph Mark	段落標記
-	Please choose a field	請選擇功能變數
+	Pick a field from the list	請選擇功能變數
 	Preserve formatting during updates	更新時保留格式設定
 	Presets	預設集
 	Recently used symbols:	最近使用的符號：
@@ -1107,26 +1107,26 @@
 	Spacing:	間距：
 	Special Characters	特殊字元
 	Subset:	子集：
-	The current time	目前的時間
-	The date the document was created	文件的建立日期
-	The date the document was last printed	文件的上次列印日期
-	The date the document was last saved	文件的上次儲存日期
+	The time right now	目前的時間
+	When this document was first created	文件的建立日期
+	When this document was most recently printed	文件的上次列印日期
+	When this document was most recently saved	文件的上次儲存日期
 	The document has no bookmarks yet.	文件中還沒有書籤。
-	The document's author	文件的作者
-	The document's file name	文件的檔案名稱
-	The document's title	文件的標題
-	The number of pages in the document	文件的頁數
-	The number of pages in the section	本節的頁數
-	The number of the current page	目前的頁碼
-	The number of the current section	目前的節號
-	The number of words in the document	文件的字數
-	The page number of a bookmark	書籤所在的頁碼
-	The text of a bookmark	書籤的文字
+	Who the document properties name as author	文件的作者
+	Name of the file this document is saved as	文件的檔案名稱
+	Title from the document properties	文件的標題
+	How many pages the whole document has	文件的頁數
+	How many pages this section has	本節的頁數
+	Number of the page the field sits on	目前的頁碼
+	Number of the section the field sits in	目前的節號
+	How many words the document holds	文件的字數
+	Page on which a bookmarked passage falls	書籤所在的頁碼
+	Copy of the text a bookmark marks	書籤的文字
 	This field has no options.	此功能變數沒有選項。
 	This font has no characters to show.	此字型沒有可顯示的字元。
 	This point forward	從這裡開始
 	This section	本節
-	Today's date	今天的日期
+	The date it is today	今天的日期
 	Trademark	商標
 	Type the field's name and its switches, for example PAGE \\* roman.	輸入功能變數名稱及其參數，例如 PAGE \\* roman。
 	Whole document	整份文件

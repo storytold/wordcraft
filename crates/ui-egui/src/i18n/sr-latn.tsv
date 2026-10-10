@@ -1158,7 +1158,7 @@
 	No-Width Non Break	Nedeljivi znak nulte širine
 	No-Width Optional Break	Opcioni prelom nulte širine
 	Paragraph Mark	Znak pasusa
-	Please choose a field	Izaberite polje
+	Pick a field from the list	Izaberite polje
 	Preserve formatting during updates	Sačuvaj oblikovanje pri ažuriranju
 	Presets	Unapred zadato
 	Recently used symbols:	Nedavno korišćeni simboli:
@@ -1171,26 +1171,26 @@
 	Spacing:	Razmak:
 	Special Characters	Specijalni znakovi
 	Subset:	Podskup:
-	The current time	Trenutno vreme
-	The date the document was created	Datum kada je dokument napravljen
-	The date the document was last printed	Datum kada je dokument poslednji put odštampan
-	The date the document was last saved	Datum kada je dokument poslednji put sačuvan
+	The time right now	Trenutno vreme
+	When this document was first created	Datum kada je dokument napravljen
+	When this document was most recently printed	Datum kada je dokument poslednji put odštampan
+	When this document was most recently saved	Datum kada je dokument poslednji put sačuvan
 	The document has no bookmarks yet.	Dokument još nema obeleživače.
-	The document's author	Autor dokumenta
-	The document's file name	Ime datoteke dokumenta
-	The document's title	Naslov dokumenta
-	The number of pages in the document	Broj stranica u dokumentu
-	The number of pages in the section	Broj stranica u odeljku
-	The number of the current page	Broj trenutne stranice
-	The number of the current section	Broj trenutnog odeljka
-	The number of words in the document	Broj reči u dokumentu
-	The page number of a bookmark	Broj stranice obeleživača
-	The text of a bookmark	Tekst obeleživača
+	Who the document properties name as author	Autor dokumenta
+	Name of the file this document is saved as	Ime datoteke dokumenta
+	Title from the document properties	Naslov dokumenta
+	How many pages the whole document has	Broj stranica u dokumentu
+	How many pages this section has	Broj stranica u odeljku
+	Number of the page the field sits on	Broj trenutne stranice
+	Number of the section the field sits in	Broj trenutnog odeljka
+	How many words the document holds	Broj reči u dokumentu
+	Page on which a bookmarked passage falls	Broj stranice obeleživača
+	Copy of the text a bookmark marks	Tekst obeleživača
 	This field has no options.	Ovo polje nema opcija.
 	This font has no characters to show.	Ovaj font nema znakove za prikaz.
 	This point forward	Od ovog mesta nadalje
 	This section	Ovaj odeljak
-	Today's date	Današnji datum
+	The date it is today	Današnji datum
 	Trademark	Žig
 	Type the field's name and its switches, for example PAGE \\* roman.	Unesite naziv polja i njegove prekidače, na primer PAGE \\* roman.
 	Whole document	Ceo dokument

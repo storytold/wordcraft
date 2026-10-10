@@ -1105,7 +1105,7 @@
 	No-Width Non Break	Junção sem largura
 	No-Width Optional Break	Quebra opcional sem largura
 	Paragraph Mark	Marca de parágrafo
-	Please choose a field	Escolha um campo
+	Pick a field from the list	Escolha um campo
 	Preserve formatting during updates	Preservar a formatação ao atualizar
 	Presets	Predefinições
 	Recently used symbols:	Símbolos usados recentemente:
@@ -1118,26 +1118,26 @@
 	Spacing:	Espaçamento:
 	Special Characters	Caracteres especiais
 	Subset:	Subconjunto:
-	The current time	A hora atual
-	The date the document was created	A data em que o documento foi criado
-	The date the document was last printed	A data em que o documento foi impresso pela última vez
-	The date the document was last saved	A data em que o documento foi salvo pela última vez
+	The time right now	A hora atual
+	When this document was first created	A data em que o documento foi criado
+	When this document was most recently printed	A data em que o documento foi impresso pela última vez
+	When this document was most recently saved	A data em que o documento foi salvo pela última vez
 	The document has no bookmarks yet.	O documento ainda não tem indicadores.
-	The document's author	O autor do documento
-	The document's file name	O nome do arquivo do documento
-	The document's title	O título do documento
-	The number of pages in the document	O número de páginas do documento
-	The number of pages in the section	O número de páginas da seção
-	The number of the current page	O número da página atual
-	The number of the current section	O número da seção atual
-	The number of words in the document	O número de palavras do documento
-	The page number of a bookmark	O número da página de um indicador
-	The text of a bookmark	O texto de um indicador
+	Who the document properties name as author	O autor do documento
+	Name of the file this document is saved as	O nome do arquivo do documento
+	Title from the document properties	O título do documento
+	How many pages the whole document has	O número de páginas do documento
+	How many pages this section has	O número de páginas da seção
+	Number of the page the field sits on	O número da página atual
+	Number of the section the field sits in	O número da seção atual
+	How many words the document holds	O número de palavras do documento
+	Page on which a bookmarked passage falls	O número da página de um indicador
+	Copy of the text a bookmark marks	O texto de um indicador
 	This field has no options.	Este campo não tem opções.
 	This font has no characters to show.	Esta fonte não tem caracteres para mostrar.
 	This point forward	Deste ponto em diante
 	This section	Esta seção
-	Today's date	A data de hoje
+	The date it is today	A data de hoje
 	Trademark	Marca comercial
 	Type the field's name and its switches, for example PAGE \\* roman.	Digite o nome do campo e suas opções, por exemplo PAGE \\* roman.
 	Whole document	Documento inteiro

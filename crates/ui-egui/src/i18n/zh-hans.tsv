@@ -1104,7 +1104,7 @@
 	No-Width Non Break	无宽非分隔符
 	No-Width Optional Break	无宽可选分隔符
 	Paragraph Mark	段落标记
-	Please choose a field	请选择域
+	Pick a field from the list	请选择域
 	Preserve formatting during updates	更新时保留格式
 	Presets	预设
 	Recently used symbols:	近期使用过的符号：
@@ -1117,26 +1117,26 @@
 	Spacing:	间距：
 	Special Characters	特殊字符
 	Subset:	子集：
-	The current time	当前时间
-	The date the document was created	文档的创建日期
-	The date the document was last printed	文档的上次打印日期
-	The date the document was last saved	文档的上次保存日期
+	The time right now	当前时间
+	When this document was first created	文档的创建日期
+	When this document was most recently printed	文档的上次打印日期
+	When this document was most recently saved	文档的上次保存日期
 	The document has no bookmarks yet.	文档中还没有书签。
-	The document's author	文档作者
-	The document's file name	文档的文件名
-	The document's title	文档标题
-	The number of pages in the document	文档的页数
-	The number of pages in the section	本节的页数
-	The number of the current page	当前页码
-	The number of the current section	当前节号
-	The number of words in the document	文档的字数
-	The page number of a bookmark	书签所在的页码
-	The text of a bookmark	书签的文本
+	Who the document properties name as author	文档作者
+	Name of the file this document is saved as	文档的文件名
+	Title from the document properties	文档标题
+	How many pages the whole document has	文档的页数
+	How many pages this section has	本节的页数
+	Number of the page the field sits on	当前页码
+	Number of the section the field sits in	当前节号
+	How many words the document holds	文档的字数
+	Page on which a bookmarked passage falls	书签所在的页码
+	Copy of the text a bookmark marks	书签的文本
 	This field has no options.	此域没有选项。
 	This font has no characters to show.	此字体没有可显示的字符。
 	This point forward	插入点之后
 	This section	本节
-	Today's date	今天的日期
+	The date it is today	今天的日期
 	Trademark	商标
 	Type the field's name and its switches, for example PAGE \\* roman.	键入域名及其开关，例如 PAGE \\* roman。
 	Whole document	整篇文档

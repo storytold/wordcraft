@@ -1162,7 +1162,7 @@
 	No-Width Non Break	Недељиви знак нулте ширине
 	No-Width Optional Break	Опциони прелом нулте ширине
 	Paragraph Mark	Знак пасуса
-	Please choose a field	Изаберите поље
+	Pick a field from the list	Изаберите поље
 	Preserve formatting during updates	Сачувај обликовање при ажурирању
 	Presets	Унапред задато
 	Recently used symbols:	Недавно коришћени симболи:
@@ -1175,26 +1175,26 @@
 	Spacing:	Размак:
 	Special Characters	Специјални знакови
 	Subset:	Подскуп:
-	The current time	Тренутно време
-	The date the document was created	Датум када је документ направљен
-	The date the document was last printed	Датум када је документ последњи пут одштампан
-	The date the document was last saved	Датум када је документ последњи пут сачуван
+	The time right now	Тренутно време
+	When this document was first created	Датум када је документ направљен
+	When this document was most recently printed	Датум када је документ последњи пут одштампан
+	When this document was most recently saved	Датум када је документ последњи пут сачуван
 	The document has no bookmarks yet.	Документ још нема обележиваче.
-	The document's author	Аутор документа
-	The document's file name	Име датотеке документа
-	The document's title	Наслов документа
-	The number of pages in the document	Број страница у документу
-	The number of pages in the section	Број страница у одељку
-	The number of the current page	Број тренутне странице
-	The number of the current section	Број тренутног одељка
-	The number of words in the document	Број речи у документу
-	The page number of a bookmark	Број странице обележивача
-	The text of a bookmark	Текст обележивача
+	Who the document properties name as author	Аутор документа
+	Name of the file this document is saved as	Име датотеке документа
+	Title from the document properties	Наслов документа
+	How many pages the whole document has	Број страница у документу
+	How many pages this section has	Број страница у одељку
+	Number of the page the field sits on	Број тренутне странице
+	Number of the section the field sits in	Број тренутног одељка
+	How many words the document holds	Број речи у документу
+	Page on which a bookmarked passage falls	Број странице обележивача
+	Copy of the text a bookmark marks	Текст обележивача
 	This field has no options.	Ово поље нема опција.
 	This font has no characters to show.	Овај фонт нема знакове за приказ.
 	This point forward	Од овог места надаље
 	This section	Овај одељак
-	Today's date	Данашњи датум
+	The date it is today	Данашњи датум
 	Trademark	Жиг
 	Type the field's name and its switches, for example PAGE \\* roman.	Унесите назив поља и његове прекидаче, на пример PAGE \\* roman.
 	Whole document	Цео документ
