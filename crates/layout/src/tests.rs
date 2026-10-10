@@ -2100,7 +2100,10 @@ fn floating_header_text_box_leaves_the_body_at_the_top_margin() {
     let body: Vec<String> = (1..=40).map(|i| format!("Body paragraph {i}: synthetic public test content.")).collect();
     let make = |float: Option<Float>| {
         let mut d = Document::from_text(&body.join("\n"));
-        d.last_section.header = 36.0;
+        // The header starts 18pt from the top, so its two lines end well above the 72pt top
+        // margin whatever font the default text gets (the line height differs between the
+        // installed fonts and the bundled fallback: a header at 36pt overflows the margin there).
+        d.last_section.header = 18.0;
         // A label, then the paragraph the box is anchored to (empty in the control).
         let tight = ParaProps { space_before: Some(0.0), space_after: Some(0.0), ..Default::default() };
         let mut label = wordcraft_doc::Paragraph::with_text("Header label", Default::default());
@@ -2523,4 +2526,157 @@ fn oversized_graphic_draws_shrunk_with_its_items() {
     assert!(r.w < 1000.0, "{r:?}");
     assert!((r.h / r.w - 0.5).abs() < 1e-3, "{r:?}");
     assert!((stroke / r.w - 4.0 / 1000.0).abs() < 1e-5, "stroke {stroke} at width {}", r.w);
+}
+
+/// The paragraph at `path` on page 0: its first line's x, its y and its line count.
+fn para_at(l: &DocLayout, path: &[u32]) -> Vec<(f32, f32, usize)> {
+    l.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Lines { x, y, para, path: p, .. } if p.0 == path => Some((*x + para.lines.first().map_or(0.0, |l| l.left), *y, para.lines.len())),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_floating_table_in_a_cell_takes_no_room_and_the_cell_holds_it() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::TableFloat;
+    let text = |s: &str| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(s, Default::default()));
+    let mut inner = Table::new(3, 1, 200.0);
+    for (i, r) in inner.rows.iter_mut().enumerate() {
+        r.cells[0].blocks = vec![text(&format!("Inner {i}"))];
+    }
+    inner.props.float = Some(TableFloat { h_rel: Anchor::Margin, v_rel: Anchor::Paragraph, dist: [9.0, 0.0, 9.0, 0.0], ..Default::default() });
+    let mut outer = Table::new(1, 1, 468.0);
+    outer.rows[0].cells[0].blocks = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(inner)), text("Beside")];
+    let mut d = Document::from_text("Below");
+    d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(outer)).unwrap();
+    let l = lay(&d);
+    let (&[(ix, iy, _)], &[(_, last_y, _)], &[(bx, by, _)], &[(_, below_y, _)]) =
+        (&para_at(&l, &[0, 0, 0, 0, 0, 0, 0])[..], &para_at(&l, &[0, 0, 0, 0, 2, 0, 0])[..], &para_at(&l, &[0, 0, 0, 1])[..], &para_at(&l, &[1])[..])
+    else {
+        panic!("lines missing")
+    };
+    // The paragraph after the floating table runs beside it, level with its top.
+    assert!((by - iy).abs() < 2.0, "beside at {by}, inner table at {iy}");
+    assert!(bx > ix + 200.0, "beside text at {bx}, inner table text at {ix}");
+    // The cell grows to hold the whole floating table.
+    assert!(below_y > last_y + 10.0, "text below the outer table at {below_y}, the inner table's last row at {last_y}");
+}
+
+#[test]
+fn autofit_sizes_columns_by_their_content() {
+    let text = |s: &str| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(s, Default::default()));
+    // No width anywhere: the columns come from their content.
+    let mut t = Table::new(1, 2, 468.0);
+    t.rows[0].cells[0].blocks = vec![text("Short")];
+    t.rows[0].cells[1].blocks = vec![text(&"A long cell that needs most of the width. ".repeat(4))];
+    t.rows[0].cells.iter_mut().for_each(|c| c.props.width = None);
+    let mut d = Document::from_text("After");
+    d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let (&[(sx, _, _)], &[(lx, _, _)]) = (&para_at(&l, &[0, 0, 0, 0])[..], &para_at(&l, &[0, 0, 1, 0])[..]) else { panic!("lines missing") };
+    assert!(lx - sx < 80.0, "the short column is {}pt wide", lx - sx);
+    // A grid column narrower than its longest word grows; the others give up the difference.
+    let mut t = Table::new(1, 3, 468.0);
+    t.grid = vec![400.0, 20.0, 48.0];
+    t.rows[0].cells[1].blocks = vec![text("Unbreakable")];
+    let mut d = Document::from_text("After");
+    d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let [(_, _, n)] = para_at(&l, &[0, 0, 1, 0])[..] else { panic!("line missing") };
+    assert_eq!(n, 1, "the word is broken over {n} lines");
+}
+
+#[test]
+fn autofit_handles_spanning_cells_long_words_and_empty_tables() {
+    let text = |s: &str| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(s, Default::default()));
+    let table_x = |t: Table, path: &[u32]| {
+        let mut d = Document::from_text("After");
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        para_at(&lay(&d), path)
+    };
+    let automatic = |rows: usize, cols: usize| {
+        let mut t = Table::new(rows, cols, 468.0);
+        t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()).for_each(|c| c.props.width = None);
+        t
+    };
+    // A title cell spanning both columns needs its width shared between them: it stays on one line.
+    let mut t = automatic(2, 2);
+    t.rows[0].cells.truncate(1);
+    t.rows[0].cells[0].props.span = 2;
+    t.rows[0].cells[0].blocks = vec![text("A title that spans both columns")];
+    t.rows[1].cells[0].blocks = vec![text("A")];
+    t.rows[1].cells[1].blocks = vec![text("B")];
+    let [(_, _, n)] = table_x(t, &[0, 0, 0, 0])[..] else { panic!("title missing") };
+    assert_eq!(n, 1, "the title wraps over {n} lines");
+    // An unbreakable string longer than the page doesn't widen the table past it.
+    let mut t = automatic(1, 2);
+    t.rows[0].cells[0].blocks = vec![text(&"x".repeat(300))];
+    t.rows[0].cells[1].blocks = vec![text("Second")];
+    let [(x, _, _)] = table_x(t, &[0, 0, 1, 0])[..] else { panic!("second cell missing") };
+    assert!(x < 72.0 + 468.0, "the second column starts at {x}, past the margin");
+    // A table of empty cells keeps its grid.
+    let [(x, _, _)] = table_x(automatic(1, 2), &[0, 0, 1, 0])[..] else { panic!("second cell missing") };
+    assert!(x > 72.0 + 200.0, "the second empty column starts at {x}");
+    // Cells asking for a share of the table's width keep their grid too.
+    let mut t = automatic(1, 2);
+    for (c, s) in t.rows[0].cells.iter_mut().zip(["A", "B"]) {
+        c.props.width_pct = Some(50.0);
+        c.blocks = vec![text(s)];
+    }
+    let [(x, _, _)] = table_x(t, &[0, 0, 1, 0])[..] else { panic!("second cell missing") };
+    assert!(x > 72.0 + 200.0, "the second 50% column starts at {x}");
+}
+
+#[test]
+fn a_floating_table_in_the_footer_leaves_the_footer_where_it_is() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::TableFloat;
+    let footer_y = |float: bool| {
+        let mut d = Document::from_text("Body");
+        let mut t = Table::new(1, 1, 100.0);
+        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Float", Default::default()))];
+        if float {
+            t.props.float = Some(TableFloat { h_rel: Anchor::Page, v_rel: Anchor::Page, y: 720.0, ..Default::default() });
+        }
+        let blocks = vec![
+            wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Footer", Default::default())),
+            std::sync::Arc::new(wordcraft_doc::Block::Table(t)),
+        ];
+        let id = d.add_part(wordcraft_doc::PartKind::Footer, blocks);
+        d.last_section.footers.default = Some(id);
+        let l = lay(&d);
+        l.pages[0].footer.iter().find_map(|it| if let Placed::Lines { y, path, .. } = it { (path.0 == [0]).then_some(*y) } else { None }).unwrap()
+    };
+    // A floating table in the footer doesn't push the footer's text up.
+    assert!(footer_y(true) >= footer_y(false) - 0.01, "footer text at {} with the float, {} without", footer_y(true), footer_y(false));
+}
+
+#[test]
+fn a_split_row_moves_shading_below_the_cut_with_it() {
+    use crate::table::{RowLayout, split_row};
+    let line_row = |y: f32| {
+        let d = Document::from_text("Line");
+        let l = lay(&d);
+        let Some(Placed::Lines { story, path, para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })).cloned() else {
+            panic!("no line")
+        };
+        Placed::Lines { story, path, para, l0: 0, l1: 1, x: 0.0, y, turn: TextDirection::Horizontal }
+    };
+    let fill = |y: f32, h: f32| Placed::Fill { rect: wordcraft_geom::Rect::new(0.0, y, 100.0, h), color: wordcraft_doc::props::Rgb(200, 0, 0) };
+    // The row's own shading (from its top) and a nested cell's shading starting below the cut.
+    let row = RowLayout { height: 200.0, items: vec![line_row(0.0), line_row(150.0), fill(0.0, 200.0), fill(150.0, 50.0)] };
+    let (a, b) = split_row(&row, 100.0).expect("splits");
+    let fills = |r: &RowLayout| {
+        r.items.iter().filter_map(|i| if let Placed::Fill { rect, .. } = i { Some((rect.y, rect.h)) } else { None }).collect::<Vec<_>>()
+    };
+    assert_eq!(fills(&a), vec![(0.0, 100.0)], "only the row's shading above the cut stays");
+    let moved = fills(&b);
+    assert_eq!(moved.first().map(|f| f.0), Some(0.0), "the row's shading starts the continuation: {moved:?}");
+    let nested = moved.get(1).copied().unwrap_or_default();
+    assert!(nested.0 > 0.0 && (nested.1 - 50.0).abs() < 0.01, "the nested shading keeps its place and size: {moved:?}");
 }

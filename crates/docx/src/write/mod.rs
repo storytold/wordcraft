@@ -772,6 +772,11 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool) -> Vec<u8> {
     if s.even_odd_headers {
         w.empty("w:evenAndOddHeaders", &[]);
     }
+    for (tag, v) in [("w:drawingGridHorizontalSpacing", s.grid_h), ("w:drawingGridVerticalSpacing", s.grid_v)] {
+        if v.is_finite() && (v - wordcraft_doc::DEFAULT_GRID).abs() > 0.01 {
+            w.val(tag, &crate::units::twips(v.clamp(0.5, 1584.0)));
+        }
+    }
     w.val("w:characterSpacingControl", "doNotCompress");
     for (tag, fmt, used, el) in
         [("w:footnotePr", s.footnote_format, footnotes, "w:footnote"), ("w:endnotePr", s.endnote_format, endnotes, "w:endnote")]

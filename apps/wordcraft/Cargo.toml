@@ -39,3 +39,6 @@ rfd = { workspace = true }
 pollster = "0.4"
 # The control server's random key.
 getrandom = "0.3"
+# File › Print opens the PDF in the system's default viewer (`xdg-open`/`gio` on Linux and BSD, the
+# file association on Windows, `open` on macOS) without blocking; already in the tree via egui_kittest.
+open = "5.4"
