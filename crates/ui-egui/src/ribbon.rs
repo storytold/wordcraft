@@ -1246,6 +1246,8 @@ fn table_layout(app: &mut WordApp, ui: &mut Ui) {
             let g = app.session.view.gridlines;
             small(ui, app, "gridlines", Some("View Gridlines"), "View Gridlines", "view.gridlines", json!({}), g);
             small(ui, app, "properties", Some("Properties"), "Table Properties", "table.properties", json!({}), false);
+            let rtl = app.session.run("table.properties", &json!({})).ok().and_then(|v| v.get("rtl").and_then(Value::as_bool)).unwrap_or(false);
+            small(ui, app, "textRtl", Some("Table Direction"), "Table Direction", "table.direction", json!({}), rtl);
         });
     });
     group(ui, "Rows & Columns", None, app, |ui, app| {

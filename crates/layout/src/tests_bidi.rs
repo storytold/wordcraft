@@ -1,10 +1,12 @@
 //! Right-to-left and bidirectional layout: Persian paragraphs, mixed Persian/Latin lines,
-//! numbers and punctuation, caret and selection geometry.
+//! numbers and punctuation, caret and selection geometry. Right-to-left tables (#66) show the
+//! first logical column on the right; RTL sections (#66) flow columns right to left with the
+//! gutter on the binding (right) side.
 
 use super::*;
 use crate::para::{bidi_levels, visual_order};
 use wordcraft_doc::props::{Align, ParaProps};
-use wordcraft_doc::{Pos, StoryRef};
+use wordcraft_doc::{Block, Paragraph, Pos, StoryRef, Table, para_block};
 
 fn lay(doc: &Document) -> DocLayout {
     let mut c = LayoutCache::new();
@@ -422,4 +424,271 @@ fn inline_picture_in_rtl_text_sits_in_its_place() {
     let placed: Vec<Rect> = l.pages[0].items.iter().filter_map(|it| if let Placed::Object { rect, .. } = it { Some(*rect) } else { None }).collect();
     assert!(placed.iter().any(|r| (r.x - a).abs() < 0.5), "placed {placed:?} vs {a}");
     assert!(a < 540.0 - 20.0, "after the first word, so left of the right margin");
+}
+
+/// A one-row two-column table, right to left or not, with `left`/`right` cell text.
+fn two_col_table(rtl: bool) -> Document {
+    let mut t = Table::new(1, 2, 200.0);
+    t.props.rtl = rtl;
+    for (c, text) in ["left", "right"].iter().enumerate() {
+        t.rows[0].cells[c].blocks = vec![para_block(Paragraph::with_text(text, Default::default()))];
+    }
+    let mut d = Document::from_text("before");
+    d.insert_block(StoryRef::Body, &wordcraft_doc::Path::top(1), Block::Table(t)).unwrap();
+    d
+}
+
+/// Page x of the caret at the start of cell `(r, c)` of table block 1.
+fn cell_caret_x(l: &DocLayout, r: u32, c: u32) -> f32 {
+    let pos = Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![1, r, c, 0]), off: 0 };
+    l.caret(&pos).unwrap().x
+}
+
+#[test]
+fn rtl_tables_put_the_first_logical_column_on_the_right() {
+    let ltr = lay(&two_col_table(false));
+    assert!(cell_caret_x(&ltr, 0, 0) < cell_caret_x(&ltr, 0, 1), "LTR: logical order runs left to right");
+    let rtl = lay(&two_col_table(true));
+    let (c0, c1) = (cell_caret_x(&rtl, 0, 0), cell_caret_x(&rtl, 0, 1));
+    assert!(c0 > c1, "RTL: the first logical column is right of the second ({c0} vs {c1})");
+    // The mirror is exact within each table, and the default placement follows the direction:
+    // an LTR table starts at the text's left edge, an RTL table ends at its right edge.
+    let (l0, l1) = (cell_caret_x(&ltr, 0, 0), cell_caret_x(&ltr, 0, 1));
+    let (xl, xr) = (l0 - 72.0 - 5.4, c1 - 72.0 - 5.4);
+    assert!(xl.abs() < 1.0, "default LTR table starts at the left edge: {xl}");
+    assert!((xr + 200.0 - 468.0).abs() < 1.0, "default RTL table ends at the right edge: {xr}");
+    assert!(
+        (c0 - (72.0 + xr + 100.0 + 5.4)).abs() < 0.5 && (l1 - (72.0 + xl + 100.0 + 5.4)).abs() < 0.5,
+        "columns are exact mirrors: rtl ({c0}, {c1}) vs ltr ({l0}, {l1})"
+    );
+    // Clicking the visual-right cell selects the logical-first cell, and typing there keeps
+    // logical document order: the stored cell array is never reversed.
+    let top = ltr.caret(&Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![1, 0, 0, 0]), off: 0 }).unwrap().top;
+    assert_eq!(rtl.cell_at(0, c0, top + 2.0).map(|(_, _, r, c)| (r, c)), Some((0, 0)));
+    assert_eq!(rtl.cell_at(0, c1, top + 2.0).map(|(_, _, r, c)| (r, c)), Some((0, 1)));
+    let d = two_col_table(true);
+    let t = d.table(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap();
+    let texts: Vec<String> = t.rows[0].cells.iter().map(|c| c.blocks[0].as_para().unwrap().plain_text()).collect();
+    assert_eq!(texts, ["left", "right"]);
+}
+
+#[test]
+fn rtl_table_indent_is_measured_from_the_right() {
+    let mut d = two_col_table(false);
+    d.table_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap().props.indent = Some(36.0);
+    let ltr = lay(&d);
+    let mut d = two_col_table(true);
+    d.table_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap().props.indent = Some(36.0);
+    let rtl = lay(&d);
+    // The default text column is 468 wide starting at x=72; cells are 100 wide with 5.4 margins.
+    let l0 = cell_caret_x(&ltr, 0, 0);
+    assert!((l0 - (72.0 + 36.0 + 5.4)).abs() < 1.0, "LTR table starts 36pt in: {l0}");
+    let (r0, r1) = (cell_caret_x(&rtl, 0, 0), cell_caret_x(&rtl, 0, 1));
+    assert!((r0 - (72.0 + (468.0 - 200.0 - 36.0) + 100.0 + 5.4)).abs() < 1.5, "RTL first cell starts 36pt from the right: {r0}");
+    assert!(r1 < r0, "columns still mirrored with an indent");
+}
+
+#[test]
+fn rtl_tables_mirror_merged_cells_and_unequal_widths() {
+    let mut t = Table::new(2, 3, 300.0);
+    t.props.rtl = true;
+    t.grid = vec![50.0, 100.0, 150.0];
+    // A horizontal merge in the first row: logical columns 1..3 in one cell.
+    t.merge(0, 0, 1, 2);
+    for r in 0..2 {
+        for (c, text) in ["a", "b", "c"].iter().enumerate() {
+            if let Some(cell) = t.rows[r].cells.get_mut(c) {
+                cell.blocks = vec![para_block(Paragraph::with_text(text, Default::default()))];
+            }
+        }
+    }
+    let mut d = Document::from_text("before");
+    d.insert_block(StoryRef::Body, &wordcraft_doc::Path::top(1), Block::Table(t)).unwrap();
+    let l = lay(&d);
+    // Second row: three unequal cells run right to left in logical order.
+    let xs: Vec<f32> = (0..3).map(|c| cell_caret_x(&l, 1, c as u32)).collect();
+    assert!(xs[0] > xs[1] && xs[1] > xs[2], "unequal columns mirrored: {xs:?}");
+    // The merged cell spans the two visual-left columns (logical 1..3).
+    let merged = cell_caret_x(&l, 0, 1);
+    assert!(merged < xs[0] - 40.0, "merged cell sits left of the first column: {merged} vs {xs:?}");
+    // Splitting across pages keeps the mirror: a tall RTL table lays out without panics.
+    let mut tall = Table::new(80, 2, 300.0);
+    tall.props.rtl = true;
+    let mut d2 = Document::from_text("before");
+    d2.insert_block(StoryRef::Body, &wordcraft_doc::Path::top(1), Block::Table(tall)).unwrap();
+    let l2 = lay(&d2);
+    assert!(l2.pages.len() > 1, "tall table paginates");
+}
+
+#[test]
+fn nested_tables_keep_their_own_direction() {
+    let mut inner = Table::new(1, 2, 100.0);
+    for (c, text) in ["i0", "i1"].iter().enumerate() {
+        inner.rows[0].cells[c].blocks = vec![para_block(Paragraph::with_text(text, Default::default()))];
+    }
+    let mut outer = Table::new(1, 2, 300.0);
+    outer.props.rtl = true;
+    outer.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("o0", Default::default())), Block::Table(inner).into()];
+    outer.rows[0].cells[1].blocks = vec![para_block(Paragraph::with_text("o1", Default::default()))];
+    let mut d = Document::from_text("before");
+    d.insert_block(StoryRef::Body, &wordcraft_doc::Path::top(1), Block::Table(outer)).unwrap();
+    let l = lay(&d);
+    // Outer columns mirrored, inner columns in logical (LTR) order.
+    assert!(cell_caret_x(&l, 0, 0) > cell_caret_x(&l, 0, 1), "outer RTL table mirrored");
+    let inner = |c: u32| {
+        let pos = Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![1, 0, 0, 1, 0, c, 0]), off: 0 };
+        l.caret(&pos).unwrap().x
+    };
+    assert!(inner(0) < inner(1), "inner LTR table keeps logical order");
+}
+
+#[test]
+fn hostile_rtl_tables_never_panic() {
+    // Empty grid, absurd indent and asymmetric margins: layout must finish with finite geometry.
+    let mut t = Table::new(1, 2, 200.0);
+    t.props.rtl = true;
+    t.props.indent = Some(1e20);
+    t.grid.clear();
+    t.rows[0].cells[0].props.margins = Some([0.0, 40.0, 0.0, 1.0]);
+    let mut d = Document::from_text("before");
+    d.insert_block(StoryRef::Body, &wordcraft_doc::Path::top(1), Block::Table(t)).unwrap();
+    let l = lay(&d);
+    for p in &l.pages {
+        for it in &p.items {
+            if let Placed::Cell { rect, .. } = it {
+                assert!(rect.x.is_finite() && rect.w.is_finite(), "{rect:?}");
+            }
+        }
+    }
+}
+
+/// Page x of every body line on a page, in placement order.
+fn body_line_xs_on(l: &DocLayout, page: usize) -> Vec<f32> {
+    l.pages[page].items.iter().filter_map(|it| if let Placed::Lines { story: StoryRef::Body, x, .. } = it { Some(*x) } else { None }).collect()
+}
+
+#[test]
+fn rtl_sections_fill_columns_right_to_left() {
+    let text = "line\n".repeat(100);
+    let mut d = Document::from_text(&text);
+    d.last_section.columns.count = 2;
+    let ltr = lay(&d);
+    let xs = body_line_xs_on(&ltr, 0);
+    assert!((xs[0] - 72.0).abs() < 1.0, "LTR reading starts in the left column: {xs:?}");
+    let right = xs.iter().position(|x| (*x - (72.0 + 252.0)).abs() < 1.0).expect("LTR overflow reaches the right column");
+    assert!(xs[..right].iter().all(|x| (*x - 72.0).abs() < 1.0), "left column first, then right");
+    let mut d = Document::from_text(&text);
+    d.last_section.columns.count = 2;
+    d.last_section.rtl = true;
+    let rtl = lay(&d);
+    let xs = body_line_xs_on(&rtl, 0);
+    // Two equal columns with a 36pt gap in a 468pt text area: the right column starts at 72+252.
+    assert!((xs[0] - (72.0 + 252.0)).abs() < 1.0, "RTL reading starts in the right column: {xs:?}");
+    assert!(xs.iter().any(|x| (*x - 72.0).abs() < 1.0), "overflow continues in the left column: {xs:?}");
+    let right = xs.iter().position(|x| (*x - 72.0).abs() < 1.0).unwrap();
+    assert!(xs[..right].iter().all(|x| (*x - (72.0 + 252.0)).abs() < 1.0), "right column first, then left");
+}
+
+#[test]
+fn rtl_section_gutter_sits_on_the_right() {
+    let mut d = Document::from_text("body");
+    d.last_section.gutter = 36.0;
+    let ltr = lay(&d);
+    assert!((ltr.pages[0].body.x - 108.0).abs() < 0.5, "LTR gutter after the left margin");
+    let mut d = Document::from_text("body");
+    d.last_section.gutter = 36.0;
+    d.last_section.rtl = true;
+    let rtl = lay(&d);
+    // Text width 432 (612 − 72 − 72 − 36); the binding side is the right: 612 − 72 − 36 − 432.
+    assert!((rtl.pages[0].body.x - 72.0).abs() < 0.5, "RTL gutter before the right margin: {}", rtl.pages[0].body.x);
+    assert!((rtl.pages[0].body.w - 432.0).abs() < 0.5);
+    // Headers hang from the same edge as the body.
+    let hp = wordcraft_doc::para_block(Paragraph::with_text("head", Default::default()));
+    let mut h = Document::from_text("body");
+    h.last_section.gutter = 36.0;
+    h.last_section.rtl = true;
+    let hid = h.add_part(wordcraft_doc::PartKind::Header, vec![hp]);
+    h.last_section.headers.default = Some(hid);
+    let l = lay(&h);
+    let hx = l.pages[0].header.iter().find_map(|it| if let Placed::Lines { x, .. } = it { Some(*x) } else { None }).expect("header laid out");
+    assert!((hx - 72.0).abs() < 1.0, "header starts where the RTL body starts: {hx}");
+}
+
+#[test]
+fn mixed_direction_sections_keep_their_geometry_and_headers() {
+    use wordcraft_doc::section::{Columns, SectionProps, SectionStart};
+    let h1 = wordcraft_doc::para_block(Paragraph::with_text("H1", Default::default()));
+    let h2 = wordcraft_doc::para_block(Paragraph::with_text("H2 first", Default::default()));
+    let f1 = wordcraft_doc::para_block(Paragraph::with_text("F1", Default::default()));
+    let mut d = Document::from_text(&("row\n".repeat(120)));
+    let (i1, i2, i3) = (
+        d.add_part(wordcraft_doc::PartKind::Header, vec![h1]),
+        d.add_part(wordcraft_doc::PartKind::Header, vec![h2]),
+        d.add_part(wordcraft_doc::PartKind::Footer, vec![f1]),
+    );
+    let mut s1 = SectionProps::default();
+    s1.headers.default = Some(i1);
+    let mut s2 = SectionProps { start: SectionStart::NextPage, rtl: true, title_page: true, ..Default::default() };
+    s2.columns = Columns { count: 2, space: 24.0, separator: false, widths: Vec::new() };
+    s2.headers.first = Some(i2);
+    s2.footers.default = Some(i3);
+    d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().section = Some(Box::new(s1));
+    d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(60)).unwrap().section = Some(Box::new(s2));
+    let l = lay(&d);
+    let secs: Vec<usize> = l.pages.iter().map(|p| p.section).collect();
+    assert_eq!(secs[0], 0, "starts in section 0: {secs:?}");
+    let s2page = secs.iter().position(|s| *s == 1).expect("section 1 has pages");
+    assert!(secs[s2page..].iter().all(|s| *s == 1 || *s == 2), "sections run in order: {secs:?}");
+    assert!(secs.contains(&2), "the default last section closes the document: {secs:?}");
+    // Section 0 is LTR at the left margin; section 1 is RTL with two columns.
+    assert!((l.pages[0].body.x - 72.0).abs() < 0.5);
+    assert_eq!(l.pages[0].header_story, Some(i1));
+    // A two-column 468pt area with a 24pt gap: columns are 222 wide; RTL starts right.
+    let first = body_line_xs_on(&l, s2page);
+    assert!((first[0] - (l.pages[s2page].body.x + 246.0)).abs() < 1.0, "RTL section starts right: {first:?}");
+    assert_eq!(l.pages[s2page].header_story, Some(i2), "title page uses the first header");
+    if l.pages.len() > s2page + 1 {
+        assert_eq!(l.pages[s2page + 1].header_story, Some(i1), "link to previous inherits section 0's header");
+        assert_eq!(l.pages[s2page + 1].footer_story, Some(i3));
+    }
+}
+
+#[test]
+fn rtl_footnote_separator_starts_from_the_right() {
+    use wordcraft_doc::para::{InlineObject, NoteKind};
+    let doc = || {
+        let mut d = Document::from_text(&"Body text line.\n".repeat(30));
+        let note = wordcraft_doc::Paragraph::with_text("The note text.", Default::default());
+        let id = d.add_part(wordcraft_doc::PartKind::Footnote, vec![wordcraft_doc::para_block(note)]);
+        d.insert_object(&Pos::body(3, 4), InlineObject::NoteRef { kind: NoteKind::Footnote, id, custom: String::new() }, &Default::default())
+            .unwrap();
+        d
+    };
+    let ltr = lay(&doc());
+    let ltr_sep = horizontal_rules(&ltr.pages[0]);
+    assert_eq!(ltr_sep.len(), 1);
+    assert!((ltr_sep[0].0 - 72.0).abs() < 0.5, "LTR separator from the left: {ltr_sep:?}");
+    let mut d = doc();
+    d.last_section.rtl = true;
+    let rtl = lay(&d);
+    let rtl_sep = horizontal_rules(&rtl.pages[0]);
+    assert_eq!(rtl_sep.len(), 1);
+    assert!((rtl_sep[0].1 - (72.0 + 468.0)).abs() < 0.5, "RTL separator to the right edge: {rtl_sep:?}");
+}
+
+/// Long horizontal rules on a page: (x0, x1).
+fn horizontal_rules(p: &crate::Page) -> Vec<(f32, f32)> {
+    p.items
+        .iter()
+        .filter_map(|it| {
+            if let Placed::Rule { x0, y0, x1, y1, .. } = it
+                && (y0 - y1).abs() < 0.01
+                && (x1 - x0).abs() > 100.0
+            {
+                Some((*x0, *x1))
+            } else {
+                None
+            }
+        })
+        .collect()
 }

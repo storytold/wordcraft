@@ -549,3 +549,18 @@ fn synthetic_bold_text_is_extracted_once() {
     let text = squash(&extract_text(&export(&d, &PdfOptions::default()).unwrap()).concat());
     assert!(text.contains("Mono bold"), "{text:?}");
 }
+
+#[test]
+fn rtl_table_cells_export_in_logical_order() {
+    // A right-to-left table mirrors its columns on the page, but the exported text layer keeps
+    // logical (document) order: the first cell's text comes first.
+    let mut d = Document::new();
+    let mut t = Table::new(1, 2, 400.0);
+    t.props.rtl = true;
+    t.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("first cell", CharProps::default()))];
+    t.rows[0].cells[1].blocks = vec![para_block(Paragraph::with_text("second cell", CharProps::default()))];
+    d.body = vec![Arc::new(Block::Table(t))];
+    let text = squash(&extract_text(&export(&d, &PdfOptions::default()).unwrap()).concat());
+    let (a, b) = (text.find("first cell"), text.find("second cell"));
+    assert!(matches!((a, b), (Some(a), Some(b)) if a < b), "logical order in the PDF text layer: {text:?}");
+}

@@ -589,6 +589,7 @@
 	Search commands and help	コマンドとヘルプを検索
 	Search document	文書内を検索
 	Section Breaks	セクション区切り
+	Section Direction	セクションの方向
 	Section Properties	セクションのプロパティ
 	Sections	セクション数
 	Select	選択
@@ -683,6 +684,7 @@
 	Table	表
 	Table Column Width	表の列の幅
 	Table Design	テーブル デザイン
+	Table Direction	表の方向
 	Table Layout	表のレイアウト
 	Table of Authorities	引用文献一覧
 	Table of Contents	目次

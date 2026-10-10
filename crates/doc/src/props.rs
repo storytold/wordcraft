@@ -660,6 +660,9 @@ pub struct TableProps {
     pub align: Option<Align>,
     /// Indent from the left margin, points.
     pub indent: Option<f32>,
+    /// Right-to-left table (`w:bidiVisual`): the first logical column shows on the right.
+    /// Storage stays in logical order; layout mirrors the columns.
+    pub rtl: bool,
     pub borders: Option<Borders>,
     /// Default cell margins (top, left, bottom, right), points.
     pub cell_margins: Option<[f32; 4]>,

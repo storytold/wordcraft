@@ -600,6 +600,7 @@
 	Search commands and help	搜索命令和帮助
 	Search document	搜索文档
 	Section Breaks	分节符
+	Section Direction	节方向
 	Section Properties	节属性
 	Sections	节数
 	Select	选择
@@ -694,6 +695,7 @@
 	Table	表格
 	Table Column Width	表格列宽
 	Table Design	表设计
+	Table Direction	表格方向
 	Table Layout	表布局
 	Table of Authorities	引文目录
 	Table of Contents	目录

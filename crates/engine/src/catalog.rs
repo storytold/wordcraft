@@ -211,6 +211,7 @@ Layout|Page Setup|Margins|layout.margins
 Layout|Page Setup|Orientation|layout.orientation
 Layout|Page Setup|Size|layout.size
 Layout|Page Setup|Columns|layout.columns
+Layout|Page Setup|Section Direction|layout.sectionDirection
 Layout|Page Setup|Breaks|layout.break
 Layout|Page Setup|Line Numbers|layout.lineNumbers
 Layout|Page Setup|Hyphenation|layout.hyphenation
@@ -335,6 +336,7 @@ Table Layout|Table|Select Row|table.selectRow
 Table Layout|Table|Select Cell|table.selectCell
 Table Layout|Table|View Gridlines|view.gridlines
 Table Layout|Table|Properties|table.properties
+Table Layout|Table|Table Direction|table.direction
 Table Layout|Draw|Draw Table|table.draw
 Table Layout|Draw|Eraser|table.eraser
 Table Layout|Rows & Columns|Delete Cells|table.deleteCells

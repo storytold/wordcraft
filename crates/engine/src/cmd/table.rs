@@ -192,6 +192,17 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(serde_json::to_value(&t.props).unwrap_or(Value::Null))
         })
         .params(r#"{"align"?: "left|center|right"}"#)),
+        t(CommandSpec::new("table.direction", "Table Direction", "Table Layout › Table", |s, v| {
+            let want = match p::str(v, "direction") {
+                // Omitted (or null): toggles, like the paragraph direction commands.
+                None => !cell(s).ok().and_then(|(tp, _, _)| s.doc.table(s.sel.focus.story, &tp)).is_some_and(|t| t.props.rtl),
+                Some("ltr") => false,
+                Some("rtl") => true,
+                Some(x) => return Err(CmdError::Params(format!("unknown direction `{x}`"))),
+            };
+            with_table(s, |t| t.props.rtl = want)
+        })
+        .params(r#"{"direction"?: "ltr|rtl"}"#)),
         CommandSpec::new("table.fromText", "Convert Text to Table", "Insert › Tables", from_text).params(r#"{"separator"?: "tab|comma"}"#),
         CommandSpec::new("table.quick", "Quick Tables", "Insert › Tables", quick_table).params(r#"{"kind"?: "calendar|tabular|matrix"}"#),
     ]

@@ -301,6 +301,8 @@ impl PropCtx {
                 "w:tblCellMar" => t.cell_margins = Some(margins(k)),
                 "w:tblLook" => t.look = look(k),
                 "w:tblpPr" => t.float = Some(table_float(k)),
+                // Right-to-left tables (`w:bidiVisual`, ECMA-376 §17.4.1): an on/off element.
+                "w:bidiVisual" => t.rtl = on_off(k),
                 "w:tblOverlap" => {
                     if let Some(f) = t.float.as_mut() {
                         f.overlap = k.attr("w:val") != Some("never");

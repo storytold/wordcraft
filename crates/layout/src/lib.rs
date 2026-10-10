@@ -618,6 +618,24 @@ struct PageBuilder<'a> {
 /// Gap above the footnote separator and its length.
 const NOTE_SEP: f32 = 12.0;
 
+/// The text area's left edge on the page: past the left margin and gutter, or, for a
+/// right-to-left section, with the gutter (binding side) on the right.
+fn body_x(s: &SectionProps) -> f32 {
+    if s.rtl { s.page_w - s.margin_right - s.gutter - s.text_width() } else { s.margin_left + s.gutter }
+}
+
+/// Column boxes in reading order: mirrored for right-to-left sections, so `col + 1` is the
+/// next column visually. The mirrored boxes run right to left (descending x); they are not
+/// re-sorted, so index 0 is where reading starts.
+fn ordered_columns(s: &SectionProps) -> Vec<(f32, f32)> {
+    let boxes = s.column_boxes();
+    if !s.rtl {
+        return boxes;
+    }
+    let tw = s.text_width();
+    boxes.into_iter().map(|(x, w)| (tw - x - w, w)).collect()
+}
+
 impl PageBuilder<'_> {
     /// Space footnotes take at the bottom of the page.
     fn notes_h(&self) -> f32 {
@@ -629,7 +647,8 @@ impl PageBuilder<'_> {
             return;
         }
         let total = self.notes_h();
-        let x = self.sect.margin_left + self.sect.gutter;
+        let w = self.sect.text_width();
+        let x = if self.sect.rtl { body_x(self.sect) + w - 144.0 } else { body_x(self.sect) };
         let mut y = self.orig_bottom - total + NOTE_SEP;
         let notes = std::mem::take(&mut self.notes);
         if let Some(pg) = self.pages.last_mut() {
@@ -678,7 +697,7 @@ impl PageBuilder<'_> {
         let s = self.sect;
         self.number += 1;
         let (w, h) = if self.web { (s.page_w, f32::MAX / 4.0) } else { (s.page_w, s.page_h) };
-        let body = Rect::new(s.margin_left + s.gutter, body_top, s.text_width(), (s.page_h - s.margin_bottom - body_top).max(36.0));
+        let body = Rect::new(body_x(s), body_top, s.text_width(), (s.page_h - s.margin_bottom - body_top).max(36.0));
         let mut decor = Vec::new();
         if !self.web {
             // Page borders, measured from the page edge (Word's default), so they surround the
@@ -696,10 +715,10 @@ impl PageBuilder<'_> {
             }
             // Lines between columns.
             if s.columns.separator && s.columns.count > 1 {
-                let cols = s.column_boxes();
+                let cols = ordered_columns(s);
                 for w in cols.windows(2) {
                     if let [(ax, aw), (bx, _)] = w {
-                        let x = s.margin_left + s.gutter + (ax + aw + bx) / 2.0;
+                        let x = body_x(s) + (ax + aw + bx) / 2.0;
                         decor.push(Placed::Rule { x0: x, y0: body_top, x1: x, y1: s.page_h - s.margin_bottom, border: Border::single(0.5) });
                     }
                 }
@@ -708,14 +727,14 @@ impl PageBuilder<'_> {
         self.page_items_start = decor.len();
         self.pages.push(Page { w, h, section: self.sect_idx, number: self.number, body, first_block, items: decor, ..Default::default() });
         self.col = 0;
-        self.cols = s.column_boxes();
+        self.cols = ordered_columns(s);
         self.top = body_top;
         self.bottom = if self.web { f32::MAX / 8.0 } else { s.page_h - s.margin_bottom };
         self.orig_bottom = self.bottom;
         self.y = self.top;
     }
     fn col_x(&self) -> f32 {
-        self.sect.margin_left + self.sect.gutter + self.cols.get(self.col).map(|c| c.0).unwrap_or(0.0)
+        body_x(self.sect) + self.cols.get(self.col).map(|c| c.0).unwrap_or(0.0)
     }
     fn col_w(&self) -> f32 {
         self.cols.get(self.col).map(|c| c.1).unwrap_or_else(|| self.sect.text_width())
@@ -838,7 +857,7 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
             }
         } else {
             // Continuous: new column layout below the current text.
-            pb.cols = sect.column_boxes();
+            pb.cols = ordered_columns(sect);
             pb.col = 0;
             pb.top = pb.y;
         }
@@ -940,7 +959,7 @@ fn body_top_for(ctx: &mut Ctx, sect: &SectionProps, header: Option<u32>) -> f32 
     let Some(part) = ctx.doc.parts.get(&id) else { return sect.margin_top };
     let blocks = part.blocks.clone();
     // Placed as `headers_footers` draws it, so page-relative floats wrap the same way.
-    let frame = PageFrame { sect, origin: (sect.margin_left + sect.gutter, sect.header) };
+    let frame = PageFrame { sect, origin: (body_x(sect), sect.header) };
     let (_, h) = layout_box(ctx, StoryRef::Part(id), &blocks, &[], sect.text_width(), None, 0, Some(frame));
     // Word starts the body right below a header that reaches past the top margin, no gap.
     sect.margin_top.max(sect.header + h)
@@ -971,7 +990,7 @@ fn float_rect(frame: Option<PageFrame>, col: (f32, f32), y0: f32, w: f32, h: f32
     let (w, h) = (w.clamp(1.0, 4000.0), h.clamp(1.0, 4000.0));
     // Each axis: the reference area's start and extent, in page coordinates.
     let page_x = |s: &SectionProps| {
-        let left = s.margin_left + s.gutter;
+        let left = body_x(s);
         match float.h_rel {
             Anchor::Page => Some((0.0, s.page_w)),
             Anchor::Margin => Some((left, s.text_width())),
@@ -1332,7 +1351,7 @@ fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, 
                     para: num.clone(),
                     l0: 0,
                     l1: 1,
-                    x: pb.sect.margin_left + pb.sect.gutter - dist - w,
+                    x: if pb.sect.rtl { body_x(pb.sect) + pb.sect.text_width() + dist } else { body_x(pb.sect) - dist - w },
                     y: ly,
                 });
             }
@@ -1392,7 +1411,7 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
     if let Some(f) = t.props.float.filter(|_| !pb.web) {
         // Before Word 2013 layout (compatibility mode 15) an offset places the first cell's text,
         // so the edge sits a cell margin further out.
-        let legacy = if ctx.doc.settings.compat_mode < 15 { table::first_cell_left_margin(ctx, t) } else { 0.0 };
+        let legacy = if ctx.doc.settings.compat_mode < 15 { table::leading_cell_margin(ctx, t) } else { 0.0 };
         let h: f32 = tl.rows.iter().map(|r| r.height).sum();
         if h <= pb.bottom - pb.top + 0.01 {
             place_floating_table(pb, &tl, &f, legacy, block, body_top);
@@ -1400,7 +1419,7 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
         }
         // Too tall for a page: Word lets it run across pages like a table in the text, from its
         // own left edge.
-        tl.x = float_table_x(pb, tl.width, &f, legacy) - pb.col_x();
+        tl.x = float_table_x(pb, &tl, &f, legacy) - pb.col_x();
     }
     // A table in the text flow starts below the floating objects in its way.
     below_floats(pb, pb.col_x() + tl.x, pb.col_x() + tl.x + tl.width);
@@ -1468,7 +1487,7 @@ fn place_floating_table(pb: &mut PageBuilder, tl: &table::TableLayout, f: &Table
             Anchor::Margin => (s.margin_top, s.text_height()),
             _ => (pb.y, 0.0),
         };
-        let x = float_table_x(pb, w, f, legacy);
+        let x = float_table_x(pb, tl, f, legacy);
         let mut r = Rect::new(x, align_in(v_area, f.y, h, f.v_align), w, h);
         // Word moves a table that may not overlap below the floating tables in its way; in Word
         // 2013+ layout one placed by an offset keeps its distance from the text's left edge.
@@ -1509,16 +1528,17 @@ fn float_table_h_area(pb: &PageBuilder, f: &TableFloat) -> (f32, f32) {
     let s = pb.sect;
     match f.h_rel {
         Anchor::Page => (0.0, s.page_w),
-        Anchor::Margin => (s.margin_left + s.gutter, s.text_width()),
+        Anchor::Margin => (body_x(s), s.text_width()),
         _ => (pb.col_x(), pb.col_w()),
     }
 }
 
-/// A floating table's left edge on the page (`legacy`: the first cell's left margin before Word
-/// 2013 layout, when an offset places the cell's text).
-fn float_table_x(pb: &PageBuilder, w: f32, f: &TableFloat, legacy: f32) -> f32 {
+/// A floating table's left edge on the page (`legacy`: the leading cell's margin before Word
+/// 2013 layout, when an offset places the cell's text; measured from the right for RTL tables).
+fn float_table_x(pb: &PageBuilder, tl: &table::TableLayout, f: &TableFloat, legacy: f32) -> f32 {
+    let w = tl.width;
     let x = align_in(float_table_h_area(pb, f), f.x, w, f.h_align);
-    if f.h_align.is_none() { x - legacy } else { x }
+    if f.h_align.is_none() { if tl.rtl { x + legacy - w } else { x - legacy } } else { x }
 }
 
 /// Move `pb.y` below the floating objects in the way of something spanning `x0..x1` that
@@ -1579,7 +1599,7 @@ fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &Secti
         ctx.fields.section_pages = per_section.get(&page.section).copied().unwrap_or(1);
         ctx.fields.section = page.section as u32 + 1;
         let w = sect.text_width();
-        let x = sect.margin_left + sect.gutter;
+        let x = body_x(sect);
         if let Some(id) = hid
             && let Some(part) = ctx.doc.parts.get(&id)
         {

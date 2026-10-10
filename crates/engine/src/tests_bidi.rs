@@ -1,11 +1,12 @@
 //! Right-to-left editing commands: paragraph direction, alignment as seen on the page, font
-//! commands on Persian text, arrow keys in bidirectional text, DOCX save and open.
+//! commands on Persian text, arrow keys in bidirectional text, DOCX save and open. Table and
+//! section direction commands (#66) set `bidiVisual` and section `rtl` without touching text.
 
 use serde_json::json;
 use wordcraft_doc::props::Align;
-use wordcraft_doc::{Pos, StoryRef};
+use wordcraft_doc::{Block, Paragraph, Path, Pos, StoryRef, Table, para_block};
 
-use crate::Session;
+use crate::{Selection, Session};
 
 fn run(s: &mut Session, id: &str, v: serde_json::Value) -> serde_json::Value {
     s.run(id, &v).unwrap_or_else(|e| panic!("{id}: {e}"))
@@ -182,4 +183,77 @@ fn explicit_alignment_sets_without_toggling() {
             assert_eq!(shown, want, "{v} twice stays {v} (rtl={rtl})");
         }
     }
+}
+
+/// A session whose caret sits in the first cell of a two-column table.
+fn table_session(rtl: bool) -> Session {
+    let mut t = Table::new(1, 2, 200.0);
+    t.props.rtl = rtl;
+    t.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("العمود الأول", Default::default()))];
+    t.rows[0].cells[1].blocks = vec![para_block(Paragraph::with_text("second", Default::default()))];
+    let mut d = wordcraft_doc::Document::new();
+    d.body = vec![Block::Table(t).into()];
+    let mut s = Session::new(d);
+    s.sel = Selection::caret(Pos { story: StoryRef::Body, path: Path(vec![0, 0, 0, 0]), off: 0 });
+    s
+}
+
+#[test]
+fn table_direction_sets_toggles_and_undoes() {
+    let mut s = table_session(false);
+    assert!(s.run("table.direction", &json!({})).is_ok(), "toggles on");
+    assert!(s.doc.table(StoryRef::Body, &Path::top(0)).unwrap().props.rtl);
+    run(&mut s, "table.direction", json!({"direction": "ltr"}));
+    assert!(!s.doc.table(StoryRef::Body, &Path::top(0)).unwrap().props.rtl);
+    run(&mut s, "table.direction", json!({"direction": "rtl"}));
+    assert!(s.doc.table(StoryRef::Body, &Path::top(0)).unwrap().props.rtl);
+    assert!(s.run("table.direction", &json!({"direction": "sideways"})).is_err(), "unknown values are rejected");
+    // Undo and redo cross the direction change.
+    run(&mut s, "edit.undo", json!({}));
+    assert!(!s.doc.table(StoryRef::Body, &Path::top(0)).unwrap().props.rtl);
+    run(&mut s, "edit.redo", json!({}));
+    assert!(s.doc.table(StoryRef::Body, &Path::top(0)).unwrap().props.rtl);
+    // Cell text is untouched by the table's direction.
+    let text = s.doc.plain_text(StoryRef::Body);
+    assert!(text.contains("العمود الأول") && text.contains("second"), "logical text kept: {text:?}");
+}
+
+#[test]
+fn table_direction_needs_a_table() {
+    let mut s = session("متن", true);
+    let r = s.run("table.direction", &json!({}));
+    assert!(r.is_err(), "disabled outside a table: {r:?}");
+}
+
+#[test]
+fn section_direction_sets_toggles_and_undoes() {
+    let mut s = session("one\ntwo", false);
+    assert!(!s.doc.last_section.rtl);
+    run(&mut s, "layout.sectionDirection", json!({}));
+    assert!(s.doc.last_section.rtl, "toggles on");
+    // Layout follows: the body starts at the right with the gutter on the binding side.
+    let l = s.layout();
+    assert!((l.pages[0].body.x - 72.0).abs() < 0.5, "no gutter: body at the left margin");
+    run(&mut s, "layout.sectionDirection", json!({"direction": "ltr"}));
+    assert!(!s.doc.last_section.rtl);
+    run(&mut s, "layout.sectionDirection", json!({"direction": "rtl"}));
+    assert!(s.doc.last_section.rtl);
+    run(&mut s, "edit.undo", json!({}));
+    assert!(!s.doc.last_section.rtl);
+    run(&mut s, "edit.redo", json!({}));
+    assert!(s.doc.last_section.rtl);
+}
+
+#[test]
+fn rtl_table_layout_mirrors_columns_but_keeps_reading_order() {
+    let mut s = table_session(true);
+    let l = s.layout();
+    let x0 = l.caret(&Pos { story: StoryRef::Body, path: Path(vec![0, 0, 0, 0]), off: 0 }).unwrap().x;
+    let x1 = l.caret(&Pos { story: StoryRef::Body, path: Path(vec![0, 0, 1, 0]), off: 0 }).unwrap().x;
+    assert!(x0 > x1, "first logical column on the right ({x0} vs {x1})");
+    // Tab still walks logical cells; the stored order never reverses.
+    run(&mut s, "text.tab", json!({}));
+    assert_eq!(s.sel.focus.path.0, vec![0, 0, 1, 0]);
+    run(&mut s, "text.backTab", json!({}));
+    assert_eq!(s.sel.focus.path.0, vec![0, 0, 0, 0]);
 }

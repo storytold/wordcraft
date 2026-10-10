@@ -325,6 +325,10 @@ pub fn tblpr(w: &mut W, t: &TableProps) {
     if let Some(f) = &t.float {
         table_float(w, f);
     }
+    // `w:bidiVisual` sits between the floating placement and the width (ECMA-376 §17.4.1).
+    if t.rtl {
+        w.empty("w:bidiVisual", &[]);
+    }
     if let Some(p) = t.width_pct {
         w.empty("w:tblW", &[("w:w", &n(round(p.clamp(0.0, 1000.0) * 50.0))), ("w:type", "pct")]);
     } else if let Some(v) = t.width {

@@ -83,6 +83,17 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(serde_json::to_value(sect(s)).unwrap_or(Value::Null))
         })
         .pure(),
+        CommandSpec::new("layout.sectionDirection", "Section Direction", "Layout › Page Setup", |s, v| {
+            let want = match p::str(v, "direction") {
+                // Omitted (or null): toggles, like the paragraph and table direction commands.
+                None => !sect(s).rtl,
+                Some("ltr") => false,
+                Some("rtl") => true,
+                Some(x) => return Err(CmdError::Params(format!("unknown direction `{x}`"))),
+            };
+            with_sect(s, |x| x.rtl = want)
+        })
+        .params(r#"{"direction"?: "ltr|rtl"}"#),
     ]
 }
 
