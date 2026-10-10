@@ -1282,6 +1282,24 @@ fn repeated_header_is_followed_by_the_next_row_even_when_it_overflows() {
     assert!(pages.iter().all(|p| p.first() == Some(&0)), "{pages:?}");
 }
 
+/// A drop-cap paragraph in a font larger than 1000 pt used to panic in layout (`clamp` with min > max).
+#[test]
+fn drop_cap_with_a_huge_font_lays_out() {
+    for size in [999.0, 1000.0, 1001.0, 1638.0] {
+        let cp = wordcraft_doc::CharProps { size: Some(size), ..Default::default() };
+        let mut p = wordcraft_doc::Paragraph::with_text("Hello drop cap world", cp);
+        p.props.drop_cap = Some(3);
+        let mut d = Document::from_text("x");
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = lay(&d);
+        let Some(pl) = l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }) else {
+            panic!("no lines at size {size}")
+        };
+        let (nc, lines, _) = pl.drop_cap.unwrap_or((0, 0, 0.0));
+        assert_eq!((nc, lines), (1, 3), "size {size}");
+    }
+}
+
 #[test]
 fn drop_cap_indents_its_lines() {
     let mut p =
