@@ -13,6 +13,7 @@
 	Add	新增
 	Add a comment	新增註解
 	Add a Table	新增表格
+	Add Object to Selection	將物件加入選取範圍
 	Add Space Before Paragraph	在段落前新增間距
 	Add space between Asian and Latin text	在亞洲文字與西文之間加入間距
 	Add space between Asian text and numbers	在亞洲文字與數字之間加入間距
@@ -760,6 +761,7 @@
 	Underline Words Only	只在文字下加底線
 	Undo	復原
 	Undo {action}	復原{action}
+	Ungroup	取消群組
 	Up	上
 	Update Field	更新功能變數
 	Update Index	更新索引

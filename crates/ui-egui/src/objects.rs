@@ -94,6 +94,12 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         return false;
     }
     let Some((object, grab)) = grab_at(app, layout, pages, scale, at) else { return false };
+    // Shift/Ctrl+click adds an object to the selected ones (or takes it out), for Group.
+    let adding = ui.input(|i| i.modifiers.shift || i.modifiers.command);
+    if pressed && adding && grab == Grab::Move && selected(app).is_some() {
+        let _ = app.run("select.addObject", json!({"pos": object.pos()}));
+        return true;
+    }
     if pressed {
         let pos = object.pos();
         let end = Pos { off: pos.off + OBJ.len_utf8(), ..pos.clone() };
@@ -160,6 +166,12 @@ pub fn paint(app: &WordApp, painter: &Painter, t: &Tokens, layout: &DocLayout, p
         }
         frame::paint(painter, t, to, false, false);
         return;
+    }
+    // The others selected along with it (Shift+click): their outlines.
+    for p in &app.session.also_selected {
+        if let Some(f) = layout.object(p, app.session.page_hint).and_then(|o| screen(pages, scale, o.page, o.rect)) {
+            frame::paint(painter, t, f, false, false);
+        }
     }
     if let Some((o, editing)) = active(app, layout)
         && let Some(f) = screen(pages, scale, o.page, o.rect)

@@ -23,6 +23,7 @@
 	Add	Додати
 	Add a comment	Додати коментар
 	Add a Table	Додати таблицю
+	Add Object to Selection	Додати об'єкт до виділення
 	Add Space Before Paragraph	Додати інтервал перед абзацом
 	Add space between Asian and Latin text	Додавати інтервал між азійським і латинським текстом
 	Add space between Asian text and numbers	Додавати інтервал між азійським текстом і числами
@@ -785,6 +786,7 @@
 	Undo	Скасувати
 	Undo {action}	Скасувати {action}
 	Unformatted Text	Неформатований текст
+	Ungroup	Розгрупувати
 	Up	Угору
 	Update Field	Оновити поле
 	Update Index	Оновити покажчик

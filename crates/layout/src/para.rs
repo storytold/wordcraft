@@ -732,10 +732,10 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                     let k = obj_index;
                     obj_index += 1;
                     match p.objects.get(k) {
-                        Some(InlineObject::Image { w, h, float, .. })
-                        | Some(InlineObject::Graphic { w, h, float, .. })
-                        | Some(InlineObject::Shape { w, h, float, .. }) => {
-                            if float.wrap == wordcraft_doc::para::Wrap::Inline {
+                        Some(o) if o.is_drawing() => {
+                            if let Some((w, h, float)) = o.frame()
+                                && float.wrap == wordcraft_doc::para::Wrap::Inline
+                            {
                                 let maxw = (env.width - rp.indent_left.max(0.0) - rp.indent_right.max(0.0)).max(18.0);
                                 let (w, h) = (w.clamp(1.0, 4000.0), h.clamp(1.0, 4000.0));
                                 let s = if w > maxw { maxw / w } else { 1.0 };

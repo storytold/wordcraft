@@ -12,6 +12,7 @@
 	Add	追加
 	Add a comment	コメントを追加
 	Add a Table	表を追加
+	Add Object to Selection	オブジェクトを選択範囲に追加
 	Add Space Before Paragraph	段落前に間隔を追加
 	Add space between Asian and Latin text	アジア文字と欧文の間隔を空ける
 	Add space between Asian text and numbers	アジア文字と数字の間隔を空ける
@@ -759,6 +760,7 @@
 	Underline Words Only	単語のみ下線
 	Undo	元に戻す
 	Undo {action}	元に戻す: {action}
+	Ungroup	グループ解除
 	Up	上
 	Update Field	フィールドの更新
 	Update Index	索引の更新

@@ -23,6 +23,7 @@
 	Add	添加
 	Add a comment	添加批注
 	Add a Table	添加表格
+	Add Object to Selection	将对象添加到所选内容
 	Add Space Before Paragraph	在段前添加间距
 	Add space between Asian and Latin text	在亚洲文字与西文之间添加间距
 	Add space between Asian text and numbers	在亚洲文字与数字之间添加间距
@@ -770,6 +771,7 @@
 	Underline Words Only	仅给字词加下划线
 	Undo	撤消
 	Undo {action}	撤消{action}
+	Ungroup	取消组合
 	Up	上
 	Update Field	更新域
 	Update Index	更新索引

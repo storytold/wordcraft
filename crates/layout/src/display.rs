@@ -552,6 +552,18 @@ fn lines(
                 Some(InlineObject::Graphic { graphic, alt, .. }) => {
                     out.push(Draw::Figure { alt: alt.clone(), kind: graphic.kind, draws: graphic_draws(doc, graphic, rect, alpha) })
                 }
+                Some(g @ InlineObject::Group { .. }) => {
+                    for ([x, y, w, h], c) in g.group_rects(rect.x, rect.y, rect.w, rect.h) {
+                        let rect = Rect::new(x, y, w, h);
+                        match c {
+                            InlineObject::Image { media, crop, .. } => out.push(Draw::Image { rect, media: media.clone(), crop: *crop, alpha }),
+                            InlineObject::Shape { kind, fill, stroke, stroke_width, .. } => {
+                                out.push(Draw::Shape { rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width })
+                            }
+                            _ => {}
+                        }
+                    }
+                }
                 Some(InlineObject::Equation { .. }) => {
                     if let Some((_, ml)) = pl.maths.iter().find(|(k, _)| *k == oi) {
                         equation(&ml.items, cx, base, alpha, opts.placeholders, out);
@@ -867,9 +879,6 @@ pub fn text_color(c: &TextColor, background: Option<Rgb>) -> Rgb {
 /// Where inline object `obj` is drawn, given its cluster's box (`adv` × `obj_h` standing on the
 /// baseline at `cx`): inside the room kept for its effects.
 pub(crate) fn inline_rect(obj: Option<&InlineObject>, cx: f32, base: f32, adv: f32, obj_h: f32) -> Rect {
-    let [l, t, r, b] = match obj {
-        Some(InlineObject::Image { float, .. } | InlineObject::Graphic { float, .. } | InlineObject::Shape { float, .. }) => float.effect_extent(),
-        _ => [0.0; 4],
-    };
+    let [l, t, r, b] = obj.and_then(InlineObject::frame).map_or([0.0; 4], |(_, _, float)| float.effect_extent());
     Rect::new(cx + l, base - obj_h + t, (adv - l - r).max(0.0), (obj_h - t - b).max(0.0))
 }

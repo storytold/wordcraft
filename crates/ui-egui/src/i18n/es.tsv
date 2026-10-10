@@ -23,6 +23,7 @@
 	Accept This Change	Aceptar este cambio
 	Accessibility	Accesibilidad
 	Add	Añadir
+	Add Object to Selection	Añadir objeto a la selección
 	Add Space Before Paragraph	Añadir espacio antes del párrafo
 	Add space between Asian and Latin text	Añadir espacio entre texto asiático y latino
 	Add space between Asian text and numbers	Añadir espacio entre texto asiático y números
@@ -778,6 +779,7 @@
 	Two	Dos
 	Type Text	Escribir texto
 	Type a command, e.g. "insert table"	Escribe un comando, p. ej. "insertar tabla"
+	Ungroup	Desagrupar
 	UPPERCASE	MAYÚSCULAS
 	Underline	Subrayado
 	Underline Words Only	Subrayar solo las palabras
