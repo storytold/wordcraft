@@ -788,6 +788,44 @@
 	Scroll ribbon left	Прокрутити стрічку ліворуч
 	Scroll ribbon right	Прокрутити стрічку праворуч
 	Character Border	Межа символу
+# Zotero integration
+	Zotero	Zotero
+	Citations	Цитати
+	Document	Документ
+	Add/Edit\nCitation	Додати/змінити\nцитату
+	Add\nNote	Додати\nпримітку
+	Add/Edit\nBibliography	Додати/змінити\nбібліографію
+	Refresh	Оновити
+	Document\nPreferences	Параметри\nдокумента
+	Unlink\nCitations	Від'єднати\nцитати
+	Waiting for Zotero…	Очікування Zotero…
+	Zotero: done	Zotero: готово
+	Zotero: cancelled	Zotero: скасовано
+	Yes	Так
+	No	Ні
+# Read Aloud player
+	Move Past Citation	Перейти за цитату
+	Move Past\nCitation	Перейти\nза цитату
+	Next Sentence	Наступне речення
+	Previous Sentence	Попереднє речення
+	Next sentence	Наступне речення
+	Previous sentence	Попереднє речення
+	Play/Pause	Відтворити/пауза
+	Read Aloud Status	Стан читання вголос
+	Reading Speed	Швидкість читання
+	Skip Citations and Bibliography	Пропускати цитати й бібліографію
+	Skip citations & bibliography	Пропускати цитати й бібліографію
+	Stop Reading	Зупинити читання
+	Don't read Zotero, Mendeley or EndNote citations and bibliographies	Не читати цитати й бібліографії Zotero, Mendeley чи EndNote
+	Play	Відтворити
+	Pause	Пауза
+	Stop	Зупинити
+	Sentence	Речення
+	Paused	Призупинено
+	Finished	Завершено
+	Stopped	Зупинено
+	Speed	Швидкість
+	Normal speed	Звичайна швидкість
 	AutoSave documents you have saved in WordCraft	Автоматично зберігати документи, збережені у WordCraft
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	Не вдалося виконати автозбереження: {error}. Збережіть документ, щоб знову ввімкнути автозбереження.
 	Couldn't download {name}: {error}	Не вдалося завантажити {name}: {error}

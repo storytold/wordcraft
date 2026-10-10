@@ -13,6 +13,7 @@ pub mod page;
 pub mod para;
 pub mod references;
 pub mod review;
+pub mod speech;
 pub mod table;
 pub mod text;
 pub mod tools;
@@ -44,6 +45,7 @@ pub fn registry() -> Registry {
     v.extend(citations::specs());
     v.extend(objects::specs());
     v.extend(tools::specs());
+    v.extend(speech::specs());
     Registry::new(v)
 }
 

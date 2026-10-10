@@ -332,6 +332,17 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         } else {
             app.canvas.mini_anchor = None;
         }
+        // Read Aloud: the sentence being spoken.
+        if let Some((a, b)) = crate::read_aloud::highlight(app) {
+            for (pi, r) in layout.selection_rects(&app.session.doc, &a, &b, app.session.page_hint) {
+                if let Some(pr) = rects.get(pi) {
+                    let sr =
+                        Rect::from_min_size(pos2(pr.min.x + r.x * geo.scale, pr.min.y + r.y * geo.scale), vec2(r.w * geo.scale, r.h * geo.scale));
+                    painter.rect_filled(sr, 0.0, t.accent.gamma_multiply(0.16));
+                    painter.hline(sr.x_range(), sr.max.y - 0.5, egui::Stroke::new(1.5, t.accent));
+                }
+            }
+        }
         // Caret.
         let focused = resp.has_focus() || app.canvas.focused;
         if let Some(c) = layout.caret_on(&app.session.sel.focus, app.session.page_hint)

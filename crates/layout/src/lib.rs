@@ -46,6 +46,8 @@ pub struct LayoutOptions {
     /// Width of the window in Web/Draft views, points.
     pub web_width: f32,
     pub show_hidden: bool,
+    /// Final text ("No Markup"): tracked deletions take no space and draw nothing.
+    pub hide_deleted: bool,
     /// Check spelling and grammar (squiggles).
     pub proofing: bool,
 }
@@ -195,7 +197,7 @@ fn hash_of<T: Hash>(t: &T) -> u64 {
 
 fn env_hash(doc: &Document, opts: &LayoutOptions) -> u64 {
     let s = serde_json::to_string(&(&doc.styles, &doc.numbering, doc.settings.default_tab, &doc.settings.footnote_format)).unwrap_or_default();
-    hash_of(&(s, opts.show_hidden, opts.proofing, wordcraft_proof::user_dictionary().len(), doc.settings.auto_hyphenation))
+    hash_of(&(s, opts.show_hidden, opts.hide_deleted, opts.proofing, wordcraft_proof::user_dictionary().len(), doc.settings.auto_hyphenation))
 }
 
 fn has_page_fields(p: &Paragraph) -> bool {
@@ -236,6 +238,7 @@ impl Ctx<'_> {
             label: None,
             fields: &self.fields,
             show_hidden: false,
+            hide_deleted: false,
             table_chr: None,
             proofing: false,
             exclusions: &[],
@@ -284,6 +287,7 @@ impl Ctx<'_> {
             label,
             fields: &self.fields,
             show_hidden: self.opts.show_hidden,
+            hide_deleted: self.opts.hide_deleted,
             table_chr,
             proofing: self.opts.proofing,
             exclusions,
@@ -294,13 +298,57 @@ impl Ctx<'_> {
     }
 }
 
-/// Note part ids in document order → numbers (footnotes and endnotes numbered separately).
-fn note_numbers(doc: &Document) -> HashMap<u32, u32> {
+/// Which of `p`'s objects (by index) the layout leaves out ([`para::left_out`]): anchored in hidden
+/// text unless `show_hidden`, or in a tracked deletion with `hide_deleted`. `table_chr` is the
+/// table style's character formatting under the runs' own, as the paragraph is laid out with.
+fn left_out_objects(doc: &Document, p: &Paragraph, table_chr: Option<&CharProps>, show_hidden: bool, hide_deleted: bool) -> impl Fn(usize) -> bool {
+    let mut left = Vec::new();
+    // Nothing can be left out with hidden text shown and markup on.
+    if (hide_deleted || !show_hidden) && !p.objects.is_empty() {
+        let style = p.props.style.as_deref();
+        let is_left = |c: &CharProps| {
+            let rc = match table_chr {
+                Some(t) => doc.styles.resolve_char(style, &t.clone().overlaid(c)),
+                None => doc.styles.resolve_char(style, c),
+            };
+            para::left_out(&rc, show_hidden, hide_deleted)
+        };
+        // Runs and objects are both in order: one walk finds each object's run (past the last run,
+        // the paragraph mark, as `props_of_char` gives), resolving a run's formatting only once.
+        let mut runs = p.run_ranges().peekable();
+        let mut last: Option<(usize, bool)> = None;
+        for off in p.object_offsets() {
+            while runs.next_if(|(r, _)| r.end <= off).is_some() {}
+            let l = match runs.peek() {
+                Some((r, c)) => match last {
+                    Some((end, l)) if end == r.end => l,
+                    _ => {
+                        let l = is_left(c);
+                        last = Some((r.end, l));
+                        l
+                    }
+                },
+                None => is_left(&p.mark),
+            };
+            left.push(l);
+        }
+    }
+    move |k| left.get(k).copied().unwrap_or(false)
+}
+
+/// Note part ids in document order → numbers (footnotes and endnotes numbered separately). With
+/// `hide_deleted`, notes whose reference mark is a tracked deletion are left out, as in the final text.
+fn note_numbers(doc: &Document, hide_deleted: bool) -> HashMap<u32, u32> {
     let mut m = HashMap::new();
     let (mut f, mut e) = (0u32, 0u32);
     for path in doc.para_paths(StoryRef::Body) {
         if let Some(p) = doc.para(StoryRef::Body, &path) {
-            for o in &p.objects {
+            // A hidden reference mark still takes its number, as in Word; a deleted one does not.
+            let deleted = left_out_objects(doc, p, None, true, hide_deleted);
+            for (k, o) in p.objects.iter().enumerate() {
+                if deleted(k) {
+                    continue;
+                }
                 if let InlineObject::NoteRef { kind, id, .. } = o {
                     let n = match kind {
                         wordcraft_doc::para::NoteKind::Footnote => {
@@ -358,9 +406,14 @@ fn layout_box(
                 // Word: space between paragraphs is before + after (no collapsing).
                 y += if i == 0 { before } else { before.max(0.0) };
                 // Floating objects anchored here: place them, then wrap the text around them.
+                // One left out of the layout (hidden, or deleted in the final text) takes no room.
                 let mut floats = Vec::new();
+                let left_out = left_out_objects(ctx.doc, p, table_chr, ctx.opts.show_hidden, ctx.opts.hide_deleted);
                 for (oi, o) in p.objects.iter().enumerate() {
                     let Some((w, h, float)) = floating(o) else { continue };
+                    if left_out(oi) {
+                        continue;
+                    }
                     let r = float_rect(frame, (0.0, width), y, w, h, float);
                     excl.extend(wrap_area(r, float));
                     floats.push((oi, r, float.wrap == Wrap::BehindText));
@@ -602,7 +655,7 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
         cache.env = env;
     }
     cache.used.clear();
-    let notes = note_numbers(doc);
+    let notes = note_numbers(doc, opts.hide_deleted);
     let notes_hash = hash_of(&{
         let mut v: Vec<_> = notes.iter().map(|(a, b)| (*a, *b)).collect();
         v.sort();
@@ -907,8 +960,14 @@ fn anchor_floats(
     let mut rects = HashMap::new();
     if !pb.web {
         let frame = PageFrame { sect: pb.sect, origin: (0.0, 0.0) };
+        // An object left out of the layout (hidden, or deleted in the final text) is not placed, so
+        // it takes no room either.
+        let left_out = left_out_objects(ctx.doc, p, None, ctx.opts.show_hidden, ctx.opts.hide_deleted);
         for (oi, o) in p.objects.iter().enumerate() {
             let Some((w, h, float)) = floating(o) else { continue };
+            if left_out(oi) {
+                continue;
+            }
             let r = float_rect(Some(frame), (col_x, width), y0, w, h, float);
             rects.insert(oi, r);
             if let Some(area) = wrap_area(r, float) {
@@ -1145,6 +1204,7 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32) -> f32 {
                 label: None,
                 fields: &ctx.fields,
                 show_hidden: ctx.opts.show_hidden,
+                hide_deleted: ctx.opts.hide_deleted,
                 table_chr: None,
                 proofing: false,
                 exclusions: &[],
@@ -1192,6 +1252,8 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
     for (ri, row) in tl.rows.iter().enumerate() {
         let splittable = !header_rows.contains(&ri) && !t.rows.get(ri).is_some_and(|r| r.props.cant_split);
         let mut rest: Option<table::RowLayout> = None;
+        // On a new page holding only the repeated header rows.
+        let mut fresh = false;
         // Each pass places the part of the row that fits, then breaks the page.
         for _ in 0..1000 {
             let cur = rest.as_ref().unwrap_or(row);
@@ -1204,7 +1266,9 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
                     place(pb, &a);
                     rest = Some(b);
                 }
-                None if pb.at_top() => break,
+                // Like Word, a row that does not fit on an empty page, or under the header rows
+                // repeated there, is placed anyway and runs into the bottom margin.
+                None if pb.at_top() || fresh => break,
                 None => {}
             }
             pb.advance(block, body_top);
@@ -1216,6 +1280,7 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
                     }
                 }
             }
+            fresh = true;
         }
         place(pb, rest.as_ref().unwrap_or(row));
     }

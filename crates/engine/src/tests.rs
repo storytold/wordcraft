@@ -496,6 +496,27 @@ fn track_changes_and_accept() {
 }
 
 #[test]
+fn no_markup_view_lays_out_the_final_text() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "original"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "select.text", json!({"text": "orig"}));
+    run(&mut s, "text.delete", json!({}));
+    let gap = |s: &mut Session| {
+        let l = s.layout();
+        let x = |off| l.caret(&Pos::body(0, off)).map(|c| c.x).unwrap_or(f32::NAN);
+        x(4) - x(0)
+    };
+    assert!(gap(&mut s) > 5.0, "markup shows the deletion");
+    run(&mut s, "review.markup", json!({"value": "noMarkup"}));
+    assert!(gap(&mut s).abs() < 0.01, "No Markup leaves it out");
+    run(&mut s, "review.showMarkup", json!({"value": true}));
+    assert!(gap(&mut s) > 5.0);
+    run(&mut s, "review.showMarkup", json!({"value": false}));
+    assert!(gap(&mut s).abs() < 0.01);
+}
+
+#[test]
 fn replace_all_is_tracked() {
     let mut s = s();
     let original = "We walked towards the light, then towards home.";
@@ -599,13 +620,14 @@ fn hostile_params_never_panic() {
         json!({"value": -1e308, "rows": 1e9}),
     ];
     for spec in reg.all() {
-        // These reach outside the session: files, and Read Aloud starts the system speech
-        // synthesiser (`say` on macOS), which would read the sample document aloud on every run.
-        if spec.id.starts_with("file.") || spec.id == "insert.picture" || spec.id == "insert.textFromFile" || spec.id == "review.readAloud" {
+        // These reach outside the session (files). Read Aloud (`review.readAloud`, `readAloud.*`)
+        // is fuzzed too: under `cfg(test)` its backend is the silent `Hold`, asserted below.
+        if spec.id.starts_with("file.") || spec.id == "insert.picture" || spec.id == "insert.textFromFile" {
             continue;
         }
         for j in &junk {
             let mut s = Session::new(crate::sample::sample_document());
+            assert_ne!(s.read_aloud.backend, crate::speech::Backend::System, "tests must never start real speech");
             let _ = s.run(spec.id, j);
             s.clamp_selection();
             let _ = s.layout();
@@ -639,6 +661,23 @@ fn caret_navigation() {
     assert_eq!(s.sel.focus, Pos::body(1, 11));
     run(&mut s, "caret.left", json!({}));
     assert_eq!(s.sel.focus.off, 10);
+}
+
+#[test]
+fn custom_properties_set_read_remove_and_undo() {
+    let mut s = s();
+    let r = run(&mut s, "file.properties", json!({"custom": {"ZOTERO_PREF_1": "<data/>", "Status": "draft"}}));
+    let custom = r["custom"].as_array().cloned().unwrap_or_default();
+    assert!(custom.iter().any(|p| p["name"] == "Status" && p["value"] == "draft" && p["kind"] == "lpwstr"));
+    assert_eq!(custom.len(), 2);
+    assert_eq!(s.doc.custom_prop("zotero_pref_1"), Some("<data/>"));
+    let r = run(&mut s, "file.properties", json!({"custom": {"status": null}}));
+    assert_eq!(r["custom"].as_array().map(|a| a.len()), Some(1));
+    assert!(s.run("file.properties", &json!({"custom": "x"})).is_err());
+    assert!(s.run("file.properties", &json!({"custom": {"": "x"}})).is_err());
+    assert!(s.run("file.properties", &json!({"custom": {"n": 3}})).is_err());
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.custom_prop("Status"), Some("draft"));
 }
 
 /// `document_id` tells an edit from a replacement (the UI drops a "Save changes?" prompt

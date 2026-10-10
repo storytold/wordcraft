@@ -792,6 +792,43 @@
 	📂  Browse…	📂  浏览…
 	{words} words	{words} 个字
 	{selected} of {words} words	{selected}/{words} 个字
+# Zotero integration
+	Zotero	Zotero
+	Citations	引文
+	Document	文档
+	Add/Edit\nCitation	添加/编辑\n引文
+	Add\nNote	添加\n笔记
+	Add/Edit\nBibliography	添加/编辑\n参考文献
+	Refresh	刷新
+	Document\nPreferences	文档\n首选项
+	Unlink\nCitations	取消链接\n引文
+	Waiting for Zotero…	正在等待 Zotero…
+	Zotero: done	Zotero：完成
+	Zotero: cancelled	Zotero：已取消
+	Yes	是
+	No	否
+	Move Past Citation	移到引文之后
+	Move Past\nCitation	移到\n引文之后
+	Next Sentence	下一句
+	Previous Sentence	上一句
+	Next sentence	下一句
+	Previous sentence	上一句
+	Play/Pause	播放/暂停
+	Read Aloud Status	朗读状态
+	Reading Speed	朗读速度
+	Skip Citations and Bibliography	跳过引文和参考文献
+	Skip citations & bibliography	跳过引文和参考文献
+	Stop Reading	停止朗读
+	Don't read Zotero, Mendeley or EndNote citations and bibliographies	不朗读 Zotero、Mendeley 或 EndNote 的引文和参考文献
+	Play	播放
+	Pause	暂停
+	Stop	停止
+	Sentence	句
+	Paused	已暂停
+	Finished	已完成
+	Stopped	已停止
+	Speed	速度
+	Normal speed	正常速度
 	Your changes will be lost if you don't save them.	如果不保存，您的更改将会丢失。
 	Scroll ribbon left	向左滚动功能区
 	Scroll ribbon right	向右滚动功能区
