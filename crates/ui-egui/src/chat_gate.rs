@@ -229,6 +229,11 @@ pub fn run_as_member(app: &mut WordApp, handle: &str, id: &str, params: Value) -
     let owner_rec = app.session.recording.take();
     let owner_ui = std::mem::take(&mut app.session.ui_requests);
     let owner_status = std::mem::take(&mut app.session.status);
+    // The owner's column (block) selection and extra selected objects: a member works on its own
+    // plain selection.
+    let owner_column = app.session.column.take();
+    let owner_column_mode = std::mem::take(&mut app.session.column_mode);
+    let owner_also = std::mem::take(&mut app.session.also_selected);
     app.session.close_typing();
     if let Some(ms) = app.member_sel.get(handle) {
         app.session.sel = ms.sel.clone();
@@ -309,6 +314,11 @@ pub fn run_as_member(app: &mut WordApp, handle: &str, id: &str, params: Value) -
     app.session.goal_x = owner_goal;
     app.session.page_hint = owner_page;
     app.session.recording = owner_rec;
+    // A block or object list is positions: after an edit they may point elsewhere, so they go.
+    let unchanged = changed_from.is_none();
+    app.session.column = owner_column.filter(|_| unchanged);
+    app.session.column_mode = owner_column_mode;
+    app.session.also_selected = if unchanged { owner_also } else { Vec::new() };
     if let Some(h) = app.session.chat.as_ref().map(|c| c.hub().clone())
         && r.is_ok()
     {
@@ -1651,6 +1661,22 @@ mod tests {
         let _ = a.run("review.trackChanges", json!({"value": false}));
         let r = run_as_member(&mut a, "@claude", "review.acceptAll", json!({}));
         assert!(r.is_ok(), "{r:?}");
+    }
+
+    #[test]
+    fn member_command_leaves_the_owner_column_selection_alone() {
+        let mut a = three();
+        let (anchor, focus) = (wordcraft_doc::Pos::body(0, 2), wordcraft_doc::Pos::body(2, 4));
+        assert!(a.run("select.column", json!({"anchor": anchor, "focus": focus})).is_ok());
+        let column = a.session.column.clone();
+        assert!(column.is_some());
+        // A pure command keeps the owner's block; the member's own read does not use it.
+        assert!(run_as_member(&mut a, "@claude", "select.text", json!({"text": "Zeta"})).is_ok());
+        assert_eq!(a.session.column, column);
+        // An edit by the member is a plain tracked insert, not a block edit; the stale block goes.
+        assert!(run_as_member(&mut a, "@claude", "text.insert", json!({"text": "Omega"})).is_ok());
+        assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).matches("Omega").count(), 1);
+        assert_eq!(a.session.column, None);
     }
 
     #[test]
