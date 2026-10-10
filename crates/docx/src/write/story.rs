@@ -465,7 +465,7 @@ impl Writer<'_> {
                 w.open("wpg:wgp", &[]);
                 w.empty("wpg:cNvGrpSpPr", &[]);
                 w.open("wpg:grpSpPr", &[]);
-                w.open("a:xfrm", &[]);
+                w.open("a:xfrm", &spin_attrs(float.spin()).iter().map(|(k, v)| (*k, v.as_str())).collect::<Vec<_>>());
                 w.empty("a:off", &[("x", "0"), ("y", "0")]);
                 w.empty("a:ext", &[("cx", &emu(gw.max(0.0))), ("cy", &emu(gh.max(0.0)))]);
                 w.empty("a:chOff", &[("x", "0"), ("y", "0")]);
@@ -579,7 +579,7 @@ impl Writer<'_> {
 
     /// A picture's `pic:pic` (the image in `media/{file}`), at `off` in its group (or 0, 0).
     fn pic(&mut self, w: &mut W, o: &InlineObject, file: &str, off: (f32, f32), rels: &mut PartRels) {
-        let InlineObject::Image { media, w: iw, h: ih, alt, crop, .. } = o else { return };
+        let InlineObject::Image { media, w: iw, h: ih, alt, crop, float, .. } = o else { return };
         let rid = rels.add(rt::IMAGE, &format!("media/{file}"), false);
         self.used_media.insert(media.clone());
         w.open("pic:pic", &[]);
@@ -600,7 +600,7 @@ impl Writer<'_> {
         w.close("a:stretch");
         w.close("pic:blipFill");
         w.open("pic:spPr", &[("bwMode", "auto")]);
-        xfrm(w, off, *iw, *ih);
+        xfrm(w, off, *iw, *ih, float.spin());
         w.open("a:prstGeom", &[("prst", "rect")]);
         w.empty("a:avLst", &[]);
         w.close("a:prstGeom");
@@ -611,7 +611,7 @@ impl Writer<'_> {
     /// A shape's or text box's `wps:wsp`, at `off` in its group (or 0, 0). In a group it carries
     /// its own `wps:cNvPr` with drawing id `id`.
     fn wsp(&mut self, w: &mut W, o: &InlineObject, id: Option<&str>, off: (f32, f32), rels: &mut PartRels, depth: usize) {
-        let InlineObject::Shape { kind, w: sw, h: sh, fill, stroke, stroke_width, story, effects, .. } = o else { return };
+        let InlineObject::Shape { kind, w: sw, h: sh, fill, stroke, stroke_width, story, effects, float } = o else { return };
         w.open("wps:wsp", &[]);
         if let Some(id) = id {
             let name = format!("Shape {id}");
@@ -623,7 +623,7 @@ impl Writer<'_> {
             w.empty("wps:cNvSpPr", &[]);
         }
         w.open("wps:spPr", &[]);
-        xfrm(w, off, *sw, *sh);
+        xfrm(w, off, *sw, *sh, float.spin());
         let prst = match kind {
             ShapeKind::Rectangle | ShapeKind::TextBox => "rect",
             ShapeKind::RoundedRectangle => "roundRect",
@@ -731,7 +731,10 @@ impl Writer<'_> {
             }
         }
         w.empty("wp:extent", &[("cx", &cx), ("cy", &cy)]);
-        let [el, et, er, eb] = float.effect_extent().map(emu);
+        // Word's effect extent also covers a rotated object's overhang (its rotated bounds).
+        let (px, py) = float.spin_pad(iw, ih);
+        let [el, et, er, eb] = float.effect_extent();
+        let [el, et, er, eb] = [el + px, et + py, er + px, eb + py].map(emu);
         w.empty("wp:effectExtent", &[("l", &el), ("t", &et), ("r", &er), ("b", &eb)]);
         match float.wrap {
             Wrap::Inline => {}
@@ -913,7 +916,16 @@ fn effect_list(w: &mut W, effects: &ShapeEffects) {
             (_, _, _, true) => "r",
             _ => "ctr",
         };
-        w.open("a:outerShdw", &[("blurRad", &emu(s.blur)), ("dist", &emu(s.distance)), ("dir", &dir), ("algn", algn), ("rotWithShape", "0")]);
+        w.open(
+            "a:outerShdw",
+            &[
+                ("blurRad", &emu(s.blur)),
+                ("dist", &emu(s.distance)),
+                ("dir", &dir),
+                ("algn", algn),
+                ("rotWithShape", if s.rot_with_shape { "1" } else { "0" }),
+            ],
+        );
         color(w, s.color, s.transparency);
         w.close("a:outerShdw");
     }
@@ -923,11 +935,28 @@ fn effect_list(w: &mut W, effects: &ShapeEffects) {
     w.close("a:effectLst");
 }
 
-fn xfrm(w: &mut W, (x, y): (f32, f32), cw: f32, ch: f32) {
-    w.open("a:xfrm", &[]);
+fn xfrm(w: &mut W, (x, y): (f32, f32), cw: f32, ch: f32, spin: wordcraft_geom::Spin) {
+    w.open("a:xfrm", &spin_attrs(spin).iter().map(|(k, v)| (*k, v.as_str())).collect::<Vec<_>>());
     w.empty("a:off", &[("x", &emu(x)), ("y", &emu(y))]);
     w.empty("a:ext", &[("cx", &emu(cw.max(0.0))), ("cy", &emu(ch.max(0.0)))]);
     w.close("a:xfrm");
+}
+
+/// The `a:xfrm` attributes of a rotation and flips (ECMA-376 §20.1.7.6: `rot` in 60000ths of a
+/// degree, clockwise), none for an unturned object.
+fn spin_attrs(spin: wordcraft_geom::Spin) -> Vec<(&'static str, String)> {
+    let mut a = Vec::new();
+    let rot = (wordcraft_geom::normalize_degrees(spin.deg) as f64 * 60_000.0).round() as i64 % 21_600_000;
+    if rot != 0 {
+        a.push(("rot", rot.to_string()));
+    }
+    if spin.flip_h {
+        a.push(("flipH", "1".to_string()));
+    }
+    if spin.flip_v {
+        a.push(("flipV", "1".to_string()));
+    }
+    a
 }
 
 /// One `w:r` with `props`, holding what `f` writes (a field character or code).

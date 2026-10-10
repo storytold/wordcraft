@@ -1,6 +1,7 @@
 # Traditional Chinese (zh-hant, Taiwan vocabulary) interface catalog. Same format and clean-room
 # rules as zh-hans.tsv.
 
+	(no style)	（無樣式）
 	(no suggestions)	（無建議）
 	1.5 Line Spacing	1.5 倍行距
 	A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.	一款以 Rust 從零開始撰寫的免費開源文書處理軟體。\n屬於 ArtCraft 團隊的 Crafting Apps 系列。
@@ -17,6 +18,7 @@
 	Add Space Before Paragraph	在段落前新增間距
 	Add space between Asian and Latin text	在亞洲文字與西文之間加入間距
 	Add space between Asian text and numbers	在亞洲文字與數字之間加入間距
+	Add tab stop at:	定位停駐點新增位置：
 	Add Text	新增文字
 	Add to Dictionary	新增至字典
 	Add to Style Gallery	新增至樣式庫
@@ -30,6 +32,7 @@
 	Align	對齊
 	Align Left	靠左對齊
 	Align Right	靠右對齊
+	Aligned at:	對齊位置：
 	Alignment	對齊方式
 	All Borders	所有框線
 	All Caps	全部大寫
@@ -60,18 +63,46 @@
 	AutoSave	自動儲存
 	AutoSave documents you have saved in WordCraft	自動儲存在 WordCraft 中儲存過的文件
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	自動儲存失敗：{error}。重新儲存文件後將恢復自動儲存。
+	Balloons	註解方塊
 	Bottom Margin	下邊界
+	Bullet	項目符號
+	By author	依作者
+	Changed lines:	修訂行：
+	Click level to modify:	按一下要修改的層級：
+	Color only	僅色彩
 	Compress punctuation at the start of a line	壓縮行首標點
 	Dark page (white text on black)	深色頁面（黑底白字）
+	Define New Multilevel List	定義新的多層次清單
+	Define New Multilevel List…	定義新的多層次清單…
+	Deletions:	刪除內容：
 	Edit Comment	編輯註解
+	Enter formatting for number:	輸入編號的格式：
+	Follow number with:	編號之後：
+	Formatting	格式設定
+	Include level number from:	包含的層級編號來自：
+	Ink	筆跡
+	Insertions and Deletions	插入和刪除
+	Insertions:	插入內容：
+	Left border	左框線
 	Left Margin	左邊界
 	Indents and Spacing	縮排和間距
+	Legal style numbering	正規形式編號
 	Line breaking	斷行
+	Link level to style:	將層級連結到樣式：
+	List Definition	清單定義
 	More templates →	更多範本 →
 	No templates match your search.	沒有符合搜尋的範本。
+	Nothing	無
+	Number alignment:	編號對齊方式：
+	Number format	編號格式
+	Number style for this level:	此層級的編號樣式：
+	Outside border	外側框線
 	Reopen	重新開啟
+	Restart list after:	重新開始清單的層級：
+	Right border	右框線
 	Right Margin	右邊界
 	Search for templates	搜尋範本
+	Show all revisions inline	以內嵌方式顯示所有修訂
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	像「檢視 › 切換模式」一樣以反轉的色彩顯示文件。儲存、列印和 PDF 不受影響。
 	AutoSave saves every change to the file (needs a saved document)	自動儲存會將每次變更寫入檔案（文件需已儲存）
 	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	瀏覽器中無法使用自動儲存：它不能寫入您的檔案。儲存會下載一份複本。
@@ -660,6 +691,8 @@
 	Show Comments	顯示註解
 	Show Markup	顯示標記
 	Show Notes	顯示附註
+	Show only comments and formatting in balloons	僅在註解方塊中顯示註解和格式設定
+	Show revisions in balloons	在註解方塊中顯示修訂
 	Show rulers	顯示尺規
 	Show the community button in the title bar	在標題列中顯示社群按鈕
 	Show/Hide ¶	顯示/隱藏 ¶
@@ -677,6 +710,7 @@
 	SmartArt	SmartArt
 	Sort	排序
 	Source code: github.com/storytold/wordcraft	原始碼：github.com/storytold/wordcraft
+	Space	空格
 	Space before/after:	段落前/後間距：
 	Spacing	間距
 	Spacing (pt):	間距（點）：
@@ -690,6 +724,7 @@
 	Spreadsheet Table	試算表
 	Standard Colors	標準色彩
 	Star	星形
+	Start at:	起始編號：
 	Start Mail Merge	啟動合併列印
 	Start Mail\nMerge	啟動合併列印
 	Statistics	統計資料
@@ -711,6 +746,7 @@
 	Symbols	符號
 	Synonyms	同義字
 	Tab	定位字元
+	Tab character	定位字元
 	Table	表格
 	Table Column Width	表格欄寬
 	Table Design	表格設計
@@ -732,6 +768,7 @@
 	Text Effects and Typography	文字效果與印刷樣式
 	Text from File	檔案中的文字
 	Text Highlight Color	文字醒目提示色彩
+	Text indent at:	文字縮排位置：
 	Text to display:	要顯示的文字：
 	Text Wrapping	文繞圖
 	Text:	文字：
@@ -753,7 +790,9 @@
 	Top:	上：
 	Total Row	合計列
 	Track Changes	追蹤修訂
+	Track Changes Options	追蹤修訂選項
 	Track Changes: On	追蹤修訂：開啟
+	Track formatting	追蹤格式設定
 	Tracking	追蹤
 	Translate	翻譯
 	Transparency	透明度
@@ -1186,3 +1225,9 @@
 	The password is removed. Save the document to keep the change.	密碼已移除。儲存文件以保留此變更。
 	The passwords don't match.	兩次輸入的密碼不一致。
 	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	請妥善保管密碼：沒有密碼，任何人（包括 WordCraft）都無法開啟文件。兩個方塊都留空可移除密碼。
+	Rotation	旋轉角度
+	Rotation:	旋轉：
+	Rotate Right 90°	向右旋轉 90°
+	Rotate Left 90°	向左旋轉 90°
+	Flip Vertical	垂直翻轉
+	Flip Horizontal	水平翻轉

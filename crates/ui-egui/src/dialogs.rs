@@ -231,6 +231,14 @@ pub enum Dialog {
         confirm: Password,
         message: String,
     },
+    /// Home › Paragraph › Multilevel List › Define New Multilevel List (#328).
+    DefineList {
+        form: Box<crate::dialogs_lists::ListForm>,
+    },
+    /// Review › Tracking › Track Changes Options (#328).
+    TrackOptions {
+        form: Box<crate::dialogs_lists::TrackForm>,
+    },
 }
 
 /// The Table Properties dialog's fields. Lengths are in the interface unit
@@ -630,6 +638,8 @@ impl Dialog {
             Dialog::TableProperties { .. } => "tableProperties",
             Dialog::Password { .. } => "password",
             Dialog::EncryptPassword { .. } => "encryptPassword",
+            Dialog::DefineList { .. } => "defineList",
+            Dialog::TrackOptions { .. } => "trackChangesOptions",
         }
     }
 
@@ -781,6 +791,8 @@ impl Dialog {
                 let id = if name == "matchFields" { "mailings.matchFields" } else { "mailings.checkErrors" };
                 return Self::report(id, &app.session.run(id, &json!({})).unwrap_or_default());
             }
+            "defineList" => Dialog::DefineList { form: Box::new(crate::dialogs_lists::ListForm::read(app)) },
+            "trackChangesOptions" => Dialog::TrackOptions { form: Box::new(crate::dialogs_lists::TrackForm::read(app)) },
             _ => return None,
         })
     }
@@ -899,6 +911,8 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::TableProperties { .. } => "Table Properties",
         Dialog::Password { .. } => "Password",
         Dialog::EncryptPassword { .. } => "Encrypt with Password",
+        Dialog::DefineList { .. } => "Define New Multilevel List",
+        Dialog::TrackOptions { .. } => "Track Changes Options",
     };
     egui::Window::new(tl!(title))
         .id(egui::Id::new(("dialog", title)))
@@ -917,7 +931,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     }
 }
 
-fn buttons(ui: &mut Ui, ok: &str) -> (bool, bool) {
+pub(crate) fn buttons(ui: &mut Ui, ok: &str) -> (bool, bool) {
     let mut r = (false, false);
     ui.add_space(8.0);
     ui.horizontal(|ui| {
@@ -1725,6 +1739,8 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             cancel
         }
+        Dialog::DefineList { form } => crate::dialogs_lists::define_list(app, ui, form),
+        Dialog::TrackOptions { form } => crate::dialogs_lists::track_options(app, ui, form),
         Dialog::FindRecipient { text, message } => {
             ui.horizontal(|ui| {
                 ui.label(tl!("Find:"));

@@ -76,6 +76,7 @@ Home|Font|Enclose Characters|format.enclose
 Home|Paragraph|Bullets|para.bullets
 Home|Paragraph|Numbering|para.numbering
 Home|Paragraph|Multilevel List|para.multilevel
+Home|Paragraph|Define New Multilevel List|list.define
 Home|Paragraph|Change List Level|para.listLevel
 Home|Paragraph|Restart Numbering|para.restartNumbering
 Home|Paragraph|Define New Bullet|para.defineBullet
@@ -285,6 +286,7 @@ Review|Tracking|Track Changes|review.trackChanges
 Review|Tracking|Display for Review|review.markup
 Review|Tracking|Show Markup|review.showMarkup
 Review|Tracking|Reviewing Pane|review.changes
+Review|Tracking|Track Changes Options|review.trackingOptions
 Review|Changes|Accept|review.accept
 Review|Changes|Reject|review.reject
 Review|Changes|Accept All|review.acceptAll
@@ -398,6 +400,7 @@ Picture Format|Picture Styles|Picture Border|picture.border
 Picture Format|Accessibility|Alt Text|picture.altText
 Picture Format|Size|Crop|picture.crop
 Picture Format|Size|Size|picture.size
+Picture Format|Size|Rotation|arrange.rotation
 Shape Format|Shape Styles|Shape Fill|shape.fill
 Shape Format|Shape Styles|Shape Outline|shape.outline
 Shape Format|Shape Styles|Shape Effects|shape.effects

@@ -2009,7 +2009,8 @@ mod tests {
         for (k, (_, gs)) in ls.iter().enumerate() {
             let (x0, first) = gs.first().cloned().unwrap();
             if k == 0 {
-                assert!(x0.abs() < 0.01 && first == "𝑦", "{gs:?}");
+                // Math italic 𝑦 when a font has it; plain y where none does (FreeBSD CI has no fonts).
+                assert!(x0.abs() < 0.01 && (first == "𝑦" || first == "y"), "{gs:?}");
             } else {
                 // Continuation lines start with the operator, one wrap indent in.
                 assert!((x0 - mp.wrap_indent).abs() < 0.01 && first == "+", "line {k}: {gs:?}");

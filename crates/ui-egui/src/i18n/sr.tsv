@@ -15,6 +15,7 @@
 # translated UI was consulted or copied; add entries the same way.
 # Product, format and technology names (WordCraft, PDF, Markdown, MCP …) stay in Latin letters.
 
+	(no style)	(без стила)
 	(no suggestions)	(нема предлога)
 	(picture or object)	(слика или објекат)
 	1.5 Line Spacing	Проређеност 1,5
@@ -33,6 +34,7 @@
 	Add Space Before Paragraph	Додај размак пре пасуса
 	Add space between Asian and Latin text	Додај размак између азијског и латиничног текста
 	Add space between Asian text and numbers	Додај размак између азијског текста и бројева
+	Add tab stop at:	Додај табулатор на:
 	Add Text	Додај текст
 	Add to Dictionary	Додај у речник
 	Add to Style Gallery	Додај у галерију стилова
@@ -46,6 +48,7 @@
 	Align	Поравнање
 	Align Left	Лево поравнање
 	Align Right	Десно поравнање
+	Aligned at:	Поравнато на:
 	Alignment	Поравнање
 	All Borders	Све ивице
 	All Caps	Сва велика слова
@@ -80,22 +83,49 @@
 	AutoSave	Аутоматско чување
 	AutoSave documents you have saved in WordCraft	Аутоматски чувај документе које сте већ сачували у WordCraft-у
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	Аутоматско чување неуспело: {error}. Сачувајте документ да бисте га поново укључили.
+	Balloons	Облачићи
 	Bottom Margin	Доња маргина
 	Based on: {style}	Заснован на: {style}
 	Built-in style	Уграђени стил
 	Built-in styles can't be deleted.	Уграђени стилови не могу да се обришу.
+	Bullet	Ознака
+	By author	По аутору
 	Change Password…	Промени лозинку…
+	Changed lines:	Измењени редови:
 	Character style	Стил знакова
 	Click an item to paste it.	Кликните на ставку да бисте је налепили.
+	Click level to modify:	Кликните ниво који мењате:
 	Clipboard Items	Ставке оставе
 	Clipboard Pane	Окно оставе
+	Color only	Само боја
 	Color: {color}	Боја: {color}
 	Compress punctuation at the start of a line	Сажми интерпункцију на почетку реда
 	Confirm password:	Потврдите лозинку:
 	Dark page (white text on black)	Тамна страница (бео текст на црном)
+	Define New Multilevel List	Дефиниши нову вишенивоску листу
+	Define New Multilevel List…	Дефиниши нову вишенивоску листу…
+	Deletions:	Брисања:
 	Edit Comment	Уреди коментар
+	Enter formatting for number:	Облик броја:
+	Follow number with:	После броја:
+	Formatting	Обликовање
+	Include level number from:	Укључи број нивоа:
+	Ink	Мастило
+	Insertions and Deletions	Уметања и брисања
+	Insertions:	Уметања:
+	Left border	Лева ивица
 	Left Margin	Лева маргина
+	Legal style numbering	Правно нумерисање
+	Link level to style:	Повежи ниво са стилом:
+	List Definition	Дефиниција листе
+	Nothing	Ништа
+	Number alignment:	Поравнање броја:
+	Number format	Формат броја
+	Number style for this level:	Стил броја за овај ниво:
+	Outside border	Спољна ивица
 	Reopen	Поново отвори
+	Restart list after:	Поново почни листу после:
+	Right border	Десна ивица
 	Right Margin	Десна маргина
 	Delete Clipboard Item	Обриши ставку из оставе
 	Delete Table Style	Обриши стил табеле
@@ -132,6 +162,7 @@
 	Remove Password	Уклони лозинку
 	Shadow, glow and soft edges	Сенка, сјај и меке ивице
 	Shape Effects	Ефекти облика
+	Show all revisions inline	Прикажи све измене у тексту
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Прикажи документе са инвертованим бојама, као код Приказ › Промени режим. Чување, штампање и PDF нису погођени.
 	AutoSave saves every change to the file (needs a saved document)	Аутоматско чување уписује сваку измену у фајл (документ мора бити већ сачуван)
 	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	Аутоматско чување није доступно у прегледачу: не може да уписује у ваше фајлове. Чување преузима копију.
@@ -712,7 +743,9 @@
 	Show in the Styles gallery	Прикажи у галерији стилова
 	Show Markup	Прикажи измене
 	Show Notes	Прикажи напомене
+	Show only comments and formatting in balloons	Прикажи само коментаре и обликовање у облачићима
 	Show or Hide Style	Прикажи или сакриј стил
+	Show revisions in balloons	Прикажи измене у облачићима
 	Show rulers	Прикажи лењире
 	Show the community button in the title bar	Прикажи дугме заједнице у траци наслова
 	Show/Hide ¶	Прикажи/сакриј ¶
@@ -732,6 +765,7 @@
 	Sort	Сортирај
 	Sort order:	Редослед сортирања:
 	Source code: github.com/storytold/wordcraft	Изворни код: github.com/storytold/wordcraft
+	Space	Размак
 	Space after: {pt} pt	Размак после: {pt} пт
 	Space before/after:	Размак пре/после:
 	Space before: {pt} pt	Размак пре: {pt} пт
@@ -747,6 +781,7 @@
 	Spreadsheet Table	Табела прорачунске табле
 	Standard Colors	Стандардне боје
 	Star	Звезда
+	Start at:	Почни од:
 	Start Mail Merge	Покрени спајање докумената
 	Start Mail\nMerge	Покрени\nспајање докумената
 	Statistics	Статистика
@@ -768,6 +803,7 @@
 	Symbols	Симболи
 	Synonyms	Синоними
 	Tab	Tab
+	Tab character	Знак табулатора
 	Table	Табела
 	Table Column Width	Ширина колоне табеле
 	Table Design	Дизајн табеле
@@ -790,6 +826,7 @@
 	Text Effects and Typography	Ефекти текста и типографија
 	Text from File	Текст из фајла
 	Text Highlight Color	Боја истицања текста
+	Text indent at:	Увлачење текста на:
 	Text to display:	Текст за приказ:
 	Text Wrapping	Преламање текста
 	Text:	Текст:
@@ -815,7 +852,9 @@
 	Top:	Горе:
 	Total Row	Ред укупно
 	Track Changes	Праћење измена
+	Track Changes Options	Опције праћења измена
 	Track Changes: On	Праћење измена: укључено
+	Track formatting	Прати обликовање
 	Tracking	Праћење
 	Translate	Преведи
 	Transparency	Транспарентност
@@ -1200,3 +1239,9 @@
 	Whole document	Цео документ
 	Width and spacing	Ширина и размак
 	from Unicode (hex)	из Unicode (хекс.)
+	Rotation	Ротација
+	Rotation:	Ротација:
+	Rotate Right 90°	Ротирај удесно за 90°
+	Rotate Left 90°	Ротирај улево за 90°
+	Flip Vertical	Окрени вертикално
+	Flip Horizontal	Окрени хоризонтално

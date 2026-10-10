@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use wordcraft_doc::numbering::{AbstractNum, Level, ListKind, Num, levels_for};
-use wordcraft_doc::para::{InlineObject, OBJ, PAGE_BREAK};
+use wordcraft_doc::para::{InlineObject, OBJ, PAGE_BREAK, Run};
 use wordcraft_doc::props::{
     Border, BorderStyle, Borders, CellProps, CharProps, NumRef, ParaProps, RowProps, TextColor, Underline, VMerge, VertAlign,
 };
@@ -321,6 +321,26 @@ fn rule_borders() -> Borders {
     Borders { bottom: Some(Border { style: BorderStyle::Single, width: 0.75, color: Some(Rgb(0xA0, 0xA0, 0xA0)), space: 1.0 }), ..Default::default() }
 }
 
+/// Append text (without object characters) or one inline object to the end of `p`.
+fn append(p: &mut Paragraph, text: &str, props: &CharProps, obj: Option<InlineObject>) {
+    let text: std::borrow::Cow<str> = if text.contains(OBJ) { text.chars().filter(|c| *c != OBJ).collect::<String>().into() } else { text.into() };
+    let piece = match obj {
+        Some(o) => {
+            p.objects.push(o);
+            OBJ.to_string()
+        }
+        None => text.into_owned(),
+    };
+    if piece.is_empty() {
+        return;
+    }
+    p.text.push_str(&piece);
+    match p.runs.last_mut() {
+        Some(last) if last.props == *props => last.len += piece.len(),
+        _ => p.runs.push(Run { len: piece.len(), props: props.clone() }),
+    }
+}
+
 struct Builder<'a> {
     doc: &'a mut Document,
 }
@@ -349,8 +369,9 @@ impl Builder<'_> {
         if p.page_break {
             out.props.page_break_before = Some(true);
         }
+        // Inlines are appended in order, so build the runs directly: inserting each one through
+        // `Paragraph::insert_text` rescans every earlier run and is quadratic in their number.
         for i in &p.inlines {
-            let end = out.len();
             match i {
                 Inline::Text(t, f) => {
                     let t = clean_text(t);
@@ -358,32 +379,30 @@ impl Builder<'_> {
                     if p.kind == Kind::Code && cp.font.as_deref() == Some(MONO_FONT) {
                         cp.font = None;
                     }
-                    let _ = out.insert_text(end, &t, &cp);
+                    append(&mut out, &t, &cp, None);
                 }
                 Inline::Image(img) => {
                     let key = self.doc.add_media(img.data.to_vec(), &img.ext);
                     let (w, h) = (finite_or(img.w, 72.0).clamp(1.0, 1584.0), finite_or(img.h, 72.0).clamp(1.0, 1584.0));
                     let obj = InlineObject::Image { media: key, w, h, alt: img.alt.clone(), float: Default::default(), crop: [0.0; 4], ole: None };
-                    let _ = out.insert_object(end, obj, &CharProps::default());
+                    append(&mut out, "", &CharProps::default(), Some(obj));
                 }
                 Inline::Anchor(name) => {
-                    let _ = out.insert_object(end, InlineObject::BookmarkStart { name: name.clone() }, &CharProps::default());
-                    let e2 = out.len();
-                    let _ = out.insert_object(e2, InlineObject::BookmarkEnd { name: name.clone() }, &CharProps::default());
+                    append(&mut out, "", &CharProps::default(), Some(InlineObject::BookmarkStart { name: name.clone() }));
+                    append(&mut out, "", &CharProps::default(), Some(InlineObject::BookmarkEnd { name: name.clone() }));
                 }
                 Inline::Figure(_) => {}
                 Inline::Equation { linear, display } => {
                     let linear = clean_text(linear);
                     if !linear.is_empty() {
-                        let _ = out.insert_object(
-                            end,
-                            InlineObject::Equation { linear, display: *display, math: Default::default() },
-                            &CharProps::default(),
-                        );
+                        let obj = InlineObject::Equation { linear, display: *display, math: Default::default() };
+                        append(&mut out, "", &CharProps::default(), Some(obj));
                     }
                 }
             }
         }
+        out.normalize();
+        out.touch();
         out
     }
 

@@ -652,7 +652,8 @@ impl Reader<'_> {
         let mut float = if anchored { anchor_float(c) } else { Float::default() };
         if let Some(e) = c.child("wp:effectExtent") {
             for (slot, n) in float.effect.iter_mut().zip(["l", "t", "r", "b"]) {
-                *slot = e.attr(n).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0).clamp(0.0, 1584.0);
+                // Negative for a rotated object narrower than its frame; settled below.
+                *slot = e.attr(n).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0).clamp(-1584.0, 1584.0);
             }
         }
         let gd = c.child("a:graphic").and_then(|g| g.child("a:graphicData"))?;
@@ -674,18 +675,25 @@ impl Reader<'_> {
             };
             let source = c.child("a:graphic").and_then(|g| self.keep_embedded(g, rels, &extra));
             let graphic = self.graphic(kind, gd, rels, w, h, source);
+            float.effect = float.effect.map(|e| e.max(0.0));
             return Some(InlineObject::Graphic { w, h, alt, float, graphic });
         }
-        if let Some(g) = gd.child("wpg:wgp") {
-            return self.read_group(sc, g, rels, w, h, float);
+        let mut obj = if let Some(g) = gd.child("wpg:wgp") {
+            self.read_group(sc, g, rels, w, h, float)?
+        } else if gd.find("a:blip").is_some() {
+            self.read_pic(gd, rels, w, h, alt, float)?
+        } else {
+            self.read_wsp(sc, gd.find("wps:wsp")?, rels, w, h, float)
+        };
+        // Word's effect extent also covers a rotated object's overhang; the model keeps that
+        // apart (it follows from the angle), so take it back out.
+        if let Some(f) = obj.float_mut() {
+            let (px, py) = f.spin_pad(w, h);
+            for (e, p) in f.effect.iter_mut().zip([px, py, px, py]) {
+                *e = (*e - p).clamp(0.0, 1584.0);
+            }
         }
-        if gd.find("a:blip").is_some() {
-            return self.read_pic(gd, rels, w, h, alt, float);
-        }
-        if let Some(wsp) = gd.find("wps:wsp") {
-            return Some(self.read_wsp(sc, wsp, rels, w, h, float));
-        }
-        None
+        Some(obj)
     }
 
     /// The chart or SmartArt diagram in an `a:graphicData`, as items in points from its top-left
@@ -721,8 +729,9 @@ impl Reader<'_> {
     }
 
     /// A picture: the first `a:blip` in `pic` and its crop.
-    fn read_pic(&mut self, pic: &El, rels: &Rels, w: f32, h: f32, alt: String, float: Float) -> Option<InlineObject> {
+    fn read_pic(&mut self, pic: &El, rels: &Rels, w: f32, h: f32, alt: String, mut float: Float) -> Option<InlineObject> {
         let blip = pic.find("a:blip")?;
+        float.set_spin(xfrm_spin(pic.find("pic:spPr")));
         let media = blip.attr("r:embed").and_then(|id| self.media_for(rels, id))?;
         let mut crop = [0.0f32; 4];
         if let Some(sr) = pic.find("a:srcRect") {
@@ -739,8 +748,9 @@ impl Reader<'_> {
 
     /// A `wpg:wgp` group (`w` × `h`): its pictures, shapes and text boxes, nested groups
     /// flattened into it. `None` when it has no member we can show.
-    fn read_group(&mut self, sc: &mut StoryCtx, g: &El, rels: &Rels, w: f32, h: f32, float: Float) -> Option<InlineObject> {
+    fn read_group(&mut self, sc: &mut StoryCtx, g: &El, rels: &Rels, w: f32, h: f32, mut float: Float) -> Option<InlineObject> {
         let x = group_xfrm(g.child("wpg:grpSpPr"));
+        float.set_spin(xfrm_spin(g.child("wpg:grpSpPr")));
         // The members' space; without `a:chExt` it is the group's own size.
         let (ch_w, ch_h) = match x.ch_ext {
             Some((cw, ch)) if cw > 0.0 && ch > 0.0 => (cw, ch),
@@ -813,8 +823,9 @@ impl Reader<'_> {
         }
     }
 
-    fn read_wsp(&mut self, sc: &mut StoryCtx, wsp: &El, rels: &Rels, w: f32, h: f32, float: Float) -> InlineObject {
+    fn read_wsp(&mut self, sc: &mut StoryCtx, wsp: &El, rels: &Rels, w: f32, h: f32, mut float: Float) -> InlineObject {
         let sppr = wsp.child("wps:spPr");
+        float.set_spin(xfrm_spin(sppr));
         let prst = sppr.and_then(|s| s.child("a:prstGeom")).and_then(|g| g.attr("prst")).unwrap_or("rect");
         let txbx = wsp.child("wps:txbx").and_then(|t| t.child("w:txbxContent"));
         let mut kind = match prst {
@@ -1071,7 +1082,13 @@ fn vml_float(shape: &El, style: &str) -> Float {
         _ => Anchor::Paragraph,
     };
     let dist = |k: &str| get(k).and_then(|v| measure(v, 1.0)).unwrap_or(0.0).clamp(0.0, 1584.0);
-    Float {
+    // VML `rotation`: degrees, or 65536ths of one with an `fd` suffix; `flip`: `x` and/or `y`.
+    let rot = get("rotation").and_then(|v| match v.strip_suffix("fd") {
+        Some(fd) => fd.trim().parse::<f32>().ok().map(|f| f / 65_536.0),
+        None => v.trim().parse::<f32>().ok(),
+    });
+    let flip = get("flip").unwrap_or("");
+    let mut f = Float {
         wrap,
         h_rel,
         v_rel,
@@ -1083,7 +1100,9 @@ fn vml_float(shape: &El, style: &str) -> Float {
         dist_top: dist("mso-wrap-distance-top"),
         dist_bottom: dist("mso-wrap-distance-bottom"),
         ..Float::default()
-    }
+    };
+    f.set_spin(wordcraft_geom::Spin::new(rot.unwrap_or(0.0), flip.contains('x'), flip.contains('y')));
+    f
 }
 
 /// What a graphic's items cost to keep and draw: one per item, plus one per path segment.
@@ -1099,7 +1118,9 @@ fn effect_list(l: &El) -> ShapeEffects {
         let (color, transparency) = effect_color(e);
         // `dir`: 60000ths of a degree, clockwise.
         let angle = e.attr("dir").and_then(int).map(|v| (v.rem_euclid(21_600_000) as f32) / 60_000.0).unwrap_or(0.0);
-        Shadow { color: color.unwrap_or(Rgb::BLACK), transparency, blur: pt(e, "blurRad"), distance: pt(e, "dist"), angle }
+        // `rotWithShape` is true unless it says otherwise (ECMA-376 §20.1.8.49).
+        let rot_with_shape = e.attr("rotWithShape").is_none_or(|v| !matches!(v, "0" | "false" | "off"));
+        Shadow { color: color.unwrap_or(Rgb::BLACK), transparency, blur: pt(e, "blurRad"), distance: pt(e, "dist"), angle, rot_with_shape }
     });
     let glow = l.child("a:glow").map(|e| {
         let (color, transparency) = effect_color(e);
@@ -1139,6 +1160,14 @@ struct Xfrm {
     ext: (f32, f32),
     ch_off: Option<(f32, f32)>,
     ch_ext: Option<(f32, f32)>,
+}
+
+/// The rotation and flips of the `a:xfrm` in shape properties `sppr` (ECMA-376 §20.1.7.6:
+/// `rot` in 60000ths of a degree, clockwise; `flipH`, `flipV`). None when missing or junk.
+fn xfrm_spin(sppr: Option<&El>) -> wordcraft_geom::Spin {
+    let Some(x) = sppr.and_then(|s| s.child("a:xfrm")) else { return wordcraft_geom::Spin::default() };
+    let rot = x.attr("rot").and_then(int).map(|v| v.rem_euclid(21_600_000) as f32 / 60_000.0).unwrap_or(0.0);
+    wordcraft_geom::Spin::new(rot, on_off_attr(x, "flipH"), on_off_attr(x, "flipV"))
 }
 
 /// The `a:xfrm` in shape properties `sppr` (zeros when missing).
