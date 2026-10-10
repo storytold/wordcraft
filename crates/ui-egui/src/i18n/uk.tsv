@@ -145,6 +145,7 @@
 	Copy	Копіювати
 	Copy Formatting	Копіювати форматування
 	Corrections	Виправлення
+	Count words in text boxes and notes	Рахувати слова в текстових полях і виносках
 	Cover Page	Титульна сторінка
 	Create	Створити
 	Create a Style	Створити стиль
@@ -402,6 +403,7 @@
 	Moderate	Помірні
 	Modify Style	Змінити стиль
 	Modify…	Змінити…
+	Move or Resize	Перемістити або змінити розмір
 	Multilevel List	Багаторівневий список
 	Multiple Pages	Кілька сторінок
 	Name (A–Z)	Назва (А–Я)
@@ -438,6 +440,7 @@
 	Not available right now	Зараз недоступно
 	Not saved	Не збережено
 	Not saved yet	Ще не збережено
+	Nudge	Злегка зсунути
 	Number of columns:	Кількість стовпців:
 	Number of rows:	Кількість рядків:
 	Numbering	Нумерація
@@ -833,3 +836,46 @@
 	Don't Save	Не зберігати
 	That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.	Цей формат зберігає не все, тому документ залишається відкритим. Щоб продовжити, збережіть його як документ Word (.docx).
 	Your changes will be lost if you don't save them.	Якщо не зберегти зміни, їх буде втрачено.
+# Equations.
+	Change Structure	Змінити структуру
+	Change to Display	Змінити на окремий рядок
+	Change to Inline	Змінити на вбудований
+	Conversions	Перетворення
+	Delete Back in Equation	Видалити назад у рівнянні
+	Delete in Equation	Видалити в рівнянні
+	Edit Equation	Редагувати рівняння
+	Enter in Equation	Enter у рівнянні
+	Equation Gallery	Колекція рівнянь
+	Equation Info	Відомості про рівняння
+	Equation Number	Номер рівняння
+	Input Format	Формат введення
+	Insert Structure	Вставити структуру
+	Insert Symbol	Вставити символ
+	Justification	Вирівнювання
+	Leave Equation	Вийти з рівняння
+	Move in Equation	Переміщення в рівнянні
+	Normal Text	Звичайний текст
+	Set Equation	Задати рівняння
+	Structure Actions	Дії зі структурою
+	Structures	Структури
+	Tools	Знаряддя
+	Type in Equation	Введення в рівнянні
+	Inline	Вбудований
+	Number	Номер
+	Close Equation	Закрити рівняння
+	Insert New Equation	Вставити нове рівняння
+	Built-In	Вбудовані
+	Professional	Професійний
+	Linear	Лінійний
+	Fraction	Дріб
+	Script	Індекс
+	Radical	Радикал
+	Integral	Інтеграл
+	Large\nOperator	Великий\nоператор
+	Bracket	Дужки
+	Function	Функція
+	Accent	Діакритичний знак
+	Limit and\nLog	Границя та\nлогарифм
+	Operator	Оператор
+	Equation Options	Параметри рівняння
+	All symbol sets	Усі набори символів

@@ -1128,6 +1128,490 @@ fn auto_hyphenation_breaks_long_words() {
     let _ = hyphens(&l2);
 }
 
+/// A table of `rows` x 2 with text in every cell, after a "before" paragraph.
+fn styled_table_doc(style: Option<&str>, rows: usize) -> Document {
+    let mut d = Document::from_text("before\nafter");
+    let mut t = Table::new(rows, 2, 468.0);
+    t.props.style = style.map(str::to_string);
+    for (r, row) in t.rows.iter_mut().enumerate() {
+        for (c, cell) in row.cells.iter_mut().enumerate() {
+            cell.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("R{r} C{c}"), Default::default()))];
+        }
+    }
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+    d
+}
+
+fn row_height(l: &DocLayout, row: usize) -> f32 {
+    l.pages[0].items.iter().find_map(|i| if let Placed::Cell { rect, row: r, .. } = i { (*r == row).then_some(rect.h) } else { None }).unwrap()
+}
+
+/// The laid-out paragraph in cell (row, col) of the table at body index 1.
+fn cell_para(l: &DocLayout, row: u32, col: u32) -> Arc<ParaLayout> {
+    l.pages[0]
+        .items
+        .iter()
+        .find_map(|i| if let Placed::Lines { path, para, .. } = i { (path.0 == vec![1, row, col, 0]).then(|| para.clone()) } else { None })
+        .unwrap()
+}
+
+/// Text in a table cell takes its table style's paragraph and run formatting over the document
+/// defaults (ECMA-376 §17.7.2): Table Grid's single spacing and no space after, not the defaults'
+/// 8 pt after and 1.15 lines.
+#[test]
+fn table_style_paragraph_props_beat_document_defaults() {
+    let d = styled_table_doc(Some("TableGrid"), 3);
+    let plain = styled_table_doc(None, 3);
+    let (lg, lp) = (lay(&d), lay(&plain));
+    let p = cell_para(&lg, 1, 0);
+    assert_eq!((p.rp.space_after, p.rp.line_spacing), (0.0, wordcraft_doc::props::LineSpacing::Multiple(1.0)));
+    let q = cell_para(&lp, 1, 0);
+    assert_eq!((q.rp.space_after, q.rp.line_spacing), (8.0, wordcraft_doc::props::LineSpacing::Multiple(1.15)));
+    let (g, n) = (row_height(&lg, 1), row_height(&lp, 1));
+    assert!(g + 8.0 < n, "Table Grid row {g}, unstyled row {n}");
+    assert!(g < 18.0, "one 12 pt line, single spaced: {g}");
+}
+
+/// The paragraph's own style (Normal included) and direct formatting beat the table style; the
+/// table style only fills in what they leave unset.
+#[test]
+fn paragraph_style_and_direct_formatting_beat_table_style() {
+    let mut d = styled_table_doc(Some("TableGrid"), 3);
+    d.styles.upsert(wordcraft_doc::Style {
+        id: "Spaced".into(),
+        name: "Spaced".into(),
+        based_on: Some("Normal".into()),
+        para: ParaProps { space_after: Some(12.0), ..Default::default() },
+        ..Default::default()
+    });
+    d.format_paragraphs(
+        &Pos { story: StoryRef::Body, path: Path(vec![1, 0, 0, 0]), off: 0 },
+        &Pos { story: StoryRef::Body, path: Path(vec![1, 0, 0, 0]), off: 0 },
+        &|p| p.style = Some("Spaced".into()),
+    )
+    .unwrap();
+    d.format_paragraphs(
+        &Pos { story: StoryRef::Body, path: Path(vec![1, 1, 0, 0]), off: 0 },
+        &Pos { story: StoryRef::Body, path: Path(vec![1, 1, 0, 0]), off: 0 },
+        &|p| p.space_after = Some(3.0),
+    )
+    .unwrap();
+    let l = lay(&d);
+    let styled = cell_para(&l, 0, 0);
+    assert_eq!(styled.rp.space_after, 12.0, "paragraph style");
+    assert_eq!(styled.rp.line_spacing, wordcraft_doc::props::LineSpacing::Multiple(1.0), "unset by the style: from the table style");
+    assert_eq!(cell_para(&l, 1, 0).rp.space_after, 3.0, "direct formatting");
+    assert_eq!(cell_para(&l, 2, 0).rp.space_after, 0.0, "table style");
+    // Normal setting its own spacing wins too, even where it equals nothing in the defaults.
+    if let Some(n) = d.styles.get_mut("Normal") {
+        n.para.space_after = Some(10.0);
+    }
+    assert_eq!(cell_para(&lay(&d), 2, 0).rp.space_after, 10.0, "Normal");
+}
+
+/// A table style based on another keeps the base style's borders and cell text formatting, and
+/// adds its own run formatting and conditional formats.
+#[test]
+fn derived_table_style_merges_its_base() {
+    use wordcraft_doc::styles::TableStyleParts;
+    let red = wordcraft_doc::Rgb(0xC0, 0, 0);
+    let mut d = styled_table_doc(Some("RedGrid"), 3);
+    d.styles.upsert(wordcraft_doc::Style {
+        id: "RedGrid".into(),
+        name: "Red Grid".into(),
+        kind: wordcraft_doc::StyleKind::Table,
+        based_on: Some("TableGrid".into()),
+        chr: CharProps { bold: Some(true), color: Some(wordcraft_doc::TextColor::Rgb(red)), ..Default::default() },
+        table: Some(TableStyleParts { header_chr: CharProps { italic: Some(true), ..Default::default() }, ..Default::default() }),
+        ..Default::default()
+    });
+    let l = lay(&d);
+    let rules = l.pages[0].items.iter().filter(|i| matches!(i, Placed::Rule { .. })).count();
+    assert!(rules >= 18, "Table Grid's borders: {rules}");
+    let body = cell_para(&l, 1, 1);
+    let rc = &body.styles[0].rc;
+    assert!(rc.bold && !rc.italic, "{rc:?}");
+    assert_eq!(rc.color, wordcraft_doc::TextColor::Rgb(red));
+    assert_eq!(body.rp.space_after, 0.0, "Table Grid's paragraph formatting");
+    let head = &cell_para(&l, 0, 0).styles[0].rc;
+    assert!(head.bold && head.italic, "{head:?}");
+    // Direct formatting still wins over the table style.
+    let mut d2 = d.clone();
+    let path = Path(vec![1, 2, 0, 0]);
+    d2.format_range(&Pos { story: StoryRef::Body, path: path.clone(), off: 0 }, &Pos { story: StoryRef::Body, path, off: 5 }, &|c| {
+        c.bold = Some(false)
+    })
+    .unwrap();
+    assert!(!cell_para(&lay(&d2), 2, 0).styles[0].rc.bold);
+}
+
+fn text_box(d: &mut Document, at: usize, text: &str, w: f32, h: f32, float: wordcraft_doc::para::Float) -> u32 {
+    text_box_at(d, &Pos::body(0, at), text, w, h, float)
+}
+
+fn text_box_at(d: &mut Document, pos: &Pos, text: &str, w: f32, h: f32, float: wordcraft_doc::para::Float) -> u32 {
+    let id =
+        d.add_part(wordcraft_doc::PartKind::TextBox, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))]);
+    let shape = InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::TextBox,
+        w,
+        h,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.75,
+        float,
+        story: Some(id),
+    };
+    d.insert_object(pos, shape, &Default::default()).unwrap();
+    id
+}
+
+fn box_rect(l: &DocLayout, id: u32) -> wordcraft_geom::Rect {
+    l.pages[0]
+        .items
+        .iter()
+        .find_map(|i| if let Placed::Object { rect, text_box, .. } = i { (*text_box == Some(id)).then_some(*rect) } else { None })
+        .unwrap()
+}
+
+#[test]
+fn clicks_inside_a_text_box_hit_its_story() {
+    let mut d = Document::from_text("Before after");
+    let id = text_box(&mut d, 7, "Inside the box", 144.0, 72.0, Default::default());
+    let l = lay(&d);
+    let r = box_rect(&l, id);
+    assert!((r.w - 144.0).abs() < 0.5 && (r.h - 72.0).abs() < 0.5, "{r:?}");
+    let box_story = StoryRef::Part(id);
+    // Anywhere inside the box, even below its text, is the box.
+    for (x, y) in [(r.x + 20.0, r.y + 10.0), (r.x + r.w - 4.0, r.y + r.h - 4.0)] {
+        assert_eq!(l.story_at(0, x, y), Some(box_story), "({x}, {y}) in {r:?}");
+        assert_eq!(l.hit(0, x, y, box_story).map(|p| p.story), Some(box_story));
+    }
+    // The body text beside it is the body; so is the margin just right of the box, although the
+    // box's own lines are within reach there.
+    let c = l.caret(&Pos::body(0, 2)).unwrap();
+    assert_eq!(l.story_at(0, c.x, c.top + c.height / 2.0), Some(StoryRef::Body));
+    assert_ne!(l.story_at(0, r.right() + 8.0, r.y + 10.0), Some(box_story));
+    // The caret in the box sits inside it.
+    let bc = l.caret(&Pos { story: box_story, path: Path::top(0), off: 0 }).unwrap();
+    assert!(r.contains(wordcraft_geom::Point::new(bc.x, bc.top)), "{bc:?} outside {r:?}");
+}
+
+#[test]
+fn body_text_wins_over_a_text_box_behind_it() {
+    let mut d = Document::from_text("Hi");
+    let float = wordcraft_doc::para::Float {
+        wrap: wordcraft_doc::para::Wrap::BehindText,
+        h_rel: wordcraft_doc::para::Anchor::Column,
+        v_rel: wordcraft_doc::para::Anchor::Paragraph,
+        x: 0.0,
+        y: 0.0,
+        dist: 0.0,
+        ..Default::default()
+    };
+    let id = text_box(&mut d, 0, "Behind", 200.0, 150.0, float);
+    let l = lay(&d);
+    let r = box_rect(&l, id);
+    let c = l.caret(&Pos::body(0, 0)).unwrap();
+    assert!(r.contains(wordcraft_geom::Point::new(c.x + 2.0, c.top + 2.0)), "box covers the text: {r:?} {c:?}");
+    assert_eq!(l.story_at(0, c.x + 2.0, c.top + c.height / 2.0), Some(StoryRef::Body));
+    assert_eq!(l.story_at(0, r.right() - 10.0, r.bottom() - 10.0), Some(StoryRef::Part(id)));
+}
+
+#[test]
+fn presses_grab_pictures_anywhere_and_text_boxes_by_their_border() {
+    let mut d = Document::from_text("Words before the objects.");
+    let id = text_box(&mut d, 0, "Inside", 144.0, 72.0, Default::default());
+    let shape = InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::Rectangle,
+        w: 60.0,
+        h: 40.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float: Default::default(),
+        story: None,
+    };
+    d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
+    let l = lay(&d);
+    let b = box_rect(&l, id);
+    // The text box: its border grabs it, inside is its text.
+    let edge = l.object_at(0, b.x + 1.0, b.y + b.h / 2.0, 4.0).unwrap();
+    assert_eq!(edge.text_box, Some(id));
+    assert_eq!(l.object(&edge.pos(), 0).map(|o| o.rect), Some(b));
+    assert_eq!(l.text_box(id, 5).map(|o| o.rect), Some(b), "a bad hint still finds it");
+    assert!(l.object_at(0, b.x + b.w / 2.0, b.y + b.h / 2.0, 4.0).is_none());
+    // The shape: anywhere on it.
+    let s = l.find_object(0, |o| o.text_box.is_none()).unwrap();
+    let hit = l.object_at(0, s.rect.x + s.rect.w / 2.0, s.rect.y + s.rect.h / 2.0, 4.0).unwrap();
+    assert_eq!((hit.off, hit.text_box, hit.floating()), (0, None, false));
+    // Plain text: nothing.
+    let c = l.caret(&Pos::body(0, 10)).unwrap();
+    assert!(l.object_at(0, c.x, c.top + 2.0, 4.0).is_none());
+}
+
+/// (lines placed, lines laid out) of a text box's story, and its area.
+fn box_lines(l: &DocLayout, id: u32) -> (usize, usize, wordcraft_geom::Rect) {
+    let mut shown = 0;
+    let mut total = 0;
+    for it in &l.pages[0].items {
+        if let Placed::Lines { story: StoryRef::Part(p), para, l0, l1, y, .. } = it
+            && *p == id
+        {
+            shown += l1 - l0;
+            total += para.lines.len();
+            let first = &para.lines[*l0];
+            let last = &para.lines[l1 - 1];
+            let bottom = y + last.top + last.height - first.top;
+            let r = box_rect(l, id);
+            assert!(bottom <= r.bottom() + 0.5 || shown == 1, "a placed line overflows: {bottom} > {}", r.bottom());
+        }
+    }
+    (shown, total, box_rect(l, id))
+}
+
+#[test]
+fn text_box_hides_text_that_does_not_fit() {
+    let long = "The quick brown fox jumps over the lazy dog. ".repeat(12);
+    let mut d = Document::from_text("Body");
+    let id = text_box(&mut d, 0, &long, 144.0, 72.0, Default::default());
+    let (shown, total, r) = box_lines(&lay(&d), id);
+    assert!(shown >= 2 && shown < total, "{shown} of {total} lines shown in {r:?}");
+    // Nothing below the box belongs to it.
+    let l = lay(&d);
+    assert_ne!(l.story_at(0, r.x + 20.0, r.bottom() + 6.0), Some(StoryRef::Part(id)));
+    // A taller box shows more; a tiny one still shows its first line.
+    let mut d2 = Document::from_text("Body");
+    let id2 = text_box(&mut d2, 0, &long, 144.0, 1500.0, Default::default());
+    let (shown2, total2, _) = box_lines(&lay(&d2), id2);
+    assert_eq!(shown2, total2);
+    let mut d3 = Document::from_text("Body");
+    let id3 = text_box(&mut d3, 0, &long, 144.0, 18.0, Default::default());
+    assert_eq!(box_lines(&lay(&d3), id3).0, 1);
+}
+
+#[test]
+fn square_wrap_flows_text_on_both_sides() {
+    let float = |x: f32| wordcraft_doc::para::Float {
+        wrap: wordcraft_doc::para::Wrap::Square,
+        h_rel: wordcraft_doc::para::Anchor::Column,
+        v_rel: wordcraft_doc::para::Anchor::Paragraph,
+        x,
+        y: 0.0,
+        dist: 9.0,
+        ..Default::default()
+    };
+    let text = "Words flow on both sides of the box in the middle here. ".repeat(20);
+    let mut d = Document::from_text(&text);
+    let id = text_box(&mut d, 0, "Middle", 144.0, 100.0, float(160.0));
+    let l = lay(&d);
+    let r = box_rect(&l, id);
+    let Placed::Lines { para, x, y, .. } = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { story: StoryRef::Body, .. })).unwrap() else {
+        panic!()
+    };
+    let beside: Vec<&para::Line> = para.lines.iter().filter(|ln| ln.beside).collect();
+    assert!(beside.len() >= 4, "{} rows have text on the far side", beside.len());
+    for (k, ln) in para.lines.iter().enumerate().filter(|(_, ln)| ln.beside) {
+        let prev = &para.lines[k - 1];
+        assert_eq!((prev.top, prev.height), (ln.top, ln.height), "one row");
+        assert!(x + ink_end(para, prev) <= r.x + 0.01, "left part stops before the box");
+        assert!(x + ln.xs[0] >= r.right(), "right part starts after it");
+        assert_eq!(prev.stop, ln.start, "text runs left part, then right part");
+    }
+    // Below the box: full-width rows again.
+    let below = para.lines.iter().find(|ln| y + ln.top > r.bottom() + 10.0).unwrap();
+    assert!(!below.beside && below.right - below.left > 400.0);
+    // The right-hand part is hittable and has a caret.
+    let ln = beside[0];
+    let pos = l.hit(0, x + ln.xs[1], y + ln.top + 2.0, StoryRef::Body).unwrap();
+    assert!(pos.off >= ln.start && pos.off <= ln.stop, "{pos:?}");
+    assert!(l.caret(&pos).unwrap().x >= r.right());
+    // A gap too narrow for text stays empty.
+    let mut d2 = Document::from_text(&text);
+    let id2 = text_box(&mut d2, 0, "Edge", 144.0, 100.0, float(468.0 - 144.0 - 20.0));
+    let l2 = lay(&d2);
+    let r2 = box_rect(&l2, id2);
+    let Placed::Lines { para, x, .. } = l2.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { story: StoryRef::Body, .. })).unwrap() else {
+        panic!()
+    };
+    assert!(para.lines.iter().all(|ln| !ln.beside && ink_end(para, ln) <= (r2.x - x).max(ln.right) + 0.01));
+}
+
+/// Where a line's text ends (its last non-space cluster's right edge; trailing spaces may hang
+/// past the margin), relative to the column.
+fn ink_end(pl: &ParaLayout, ln: &para::Line) -> f32 {
+    (ln.c0..ln.c1)
+        .filter_map(|k| {
+            let c = pl.clusters.get(k)?;
+            (c.kind != para::ClKind::Space).then_some(ln.xs.get(k - ln.c0)? + c.adv)
+        })
+        .fold(0.0, f32::max)
+}
+
+fn footnote(d: &mut Document, pos: &Pos, text: &str) -> u32 {
+    let id =
+        d.add_part(wordcraft_doc::PartKind::Footnote, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))]);
+    d.insert_object(pos, InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Footnote, id, custom: String::new() }, &Default::default())
+        .unwrap();
+    id
+}
+
+fn page_float(x: f32, y: f32) -> wordcraft_doc::para::Float {
+    wordcraft_doc::para::Float {
+        wrap: wordcraft_doc::para::Wrap::InFrontOfText,
+        h_rel: wordcraft_doc::para::Anchor::Page,
+        v_rel: wordcraft_doc::para::Anchor::Page,
+        x,
+        y,
+        dist: 0.0,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn text_boxes_show_in_headers_footers_cells_and_notes() {
+    let mut d = Document::from_text(&"Body paragraph.\n".repeat(4));
+    // Header: an inline box and a box placed on the page.
+    let hid =
+        d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Head", Default::default()))]);
+    d.last_section.headers.default = Some(hid);
+    let e = d.end_of(StoryRef::Part(hid));
+    let inline = text_box_at(&mut d, &e, "Inline in header", 100.0, 30.0, Default::default());
+    let e = d.end_of(StoryRef::Part(hid));
+    let placed = text_box_at(&mut d, &e, "On the page", 100.0, 40.0, page_float(400.0, 20.0));
+    // Footer: a box placed on the page (the footer is laid out twice to find it).
+    let fid =
+        d.add_part(wordcraft_doc::PartKind::Footer, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Foot", Default::default()))]);
+    d.last_section.footers.default = Some(fid);
+    let e = d.end_of(StoryRef::Part(fid));
+    let in_footer = text_box_at(&mut d, &e, "Footer box", 100.0, 30.0, page_float(300.0, 740.0));
+    // A table cell and a footnote.
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(wordcraft_doc::Table::new(1, 1, 300.0))).unwrap();
+    let cell = Pos { story: StoryRef::Body, path: Path(vec![1, 0, 0, 0]), off: 0 };
+    let in_cell = text_box_at(&mut d, &cell, "In a cell", 120.0, 30.0, Default::default());
+    let note = footnote(&mut d, &Pos::body(0, 4), "Note: ");
+    let e = d.end_of(StoryRef::Part(note));
+    let in_note = text_box_at(&mut d, &e, "In a note", 120.0, 30.0, Default::default());
+    let l = lay(&d);
+    let p = &l.pages[0];
+    let shows =
+        |id: u32| p.header.iter().chain(&p.footer).chain(&p.items).any(|i| matches!(i, Placed::Lines { story: StoryRef::Part(s), .. } if *s == id));
+    for (name, id) in
+        [("inline header box", inline), ("page header box", placed), ("footer box", in_footer), ("cell box", in_cell), ("note box", in_note)]
+    {
+        assert!(shows(id), "{name}: no text");
+        assert!(l.caret(&d.start_of(StoryRef::Part(id))).is_some(), "{name}: no caret");
+    }
+    // Page-anchored boxes land where they say, header and footer alike; their shapes are drawn.
+    assert_eq!(l.text_box(placed, 0).map(|o| (o.rect.x, o.rect.y)), Some((400.0, 20.0)));
+    assert_eq!(l.text_box(in_footer, 0).map(|o| (o.rect.x, o.rect.y)), Some((300.0, 740.0)));
+    assert!(p.header.iter().any(|i| matches!(i, Placed::Shape { rect, .. } if rect.x == 400.0)));
+    // Header boxes are found for clicks while editing the header.
+    let r = l.text_box(inline, 0).unwrap().rect;
+    assert_eq!(l.header_footer_text_box_at(0, r.x + 5.0, r.y + 5.0), Some(inline));
+}
+
+#[test]
+fn footnotes_inside_text_boxes_are_numbered_and_placed() {
+    let mut d = Document::from_text(&"Body text line.\n".repeat(30));
+    let id = text_box_at(&mut d, &Pos::body(2, 0), "Box text", 144.0, 40.0, Default::default());
+    let e = d.end_of(StoryRef::Part(id));
+    let in_box = footnote(&mut d, &e, "Note from the box.");
+    let after = footnote(&mut d, &Pos::body(5, 4), "Note from the body.");
+    let l = lay(&d);
+    // Both notes are at the bottom of page 1, the box's first (reading order).
+    let a = l.caret(&d.start_of(StoryRef::Part(in_box))).expect("the box's footnote is placed");
+    let b = l.caret(&d.start_of(StoryRef::Part(after))).unwrap();
+    assert_eq!((a.page, b.page), (0, 0));
+    assert!(a.top > 600.0 && a.top < b.top, "{a:?} {b:?}");
+    let nums = note_numbers(&d, false);
+    assert_eq!((nums.get(&in_box), nums.get(&after)), (Some(&1), Some(&2)));
+}
+
+/// A document whose text box `ids[k]` holds `fan` shapes showing `ids[k + 1]` (the last one shows
+/// itself, `fan` times): crafted, since the app never builds these.
+fn box_fan_out(levels: usize, fan: usize) -> Document {
+    let (w, h) = (40.0, 20.0);
+    let mut d = Document::from_text("Body");
+    let ids: Vec<u32> = (0..levels)
+        .map(|k| {
+            d.add_part(
+                wordcraft_doc::PartKind::TextBox,
+                vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("Level {k}"), Default::default()))],
+            )
+        })
+        .collect();
+    let shape = |story| InlineObject::Shape {
+        kind: wordcraft_doc::para::ShapeKind::TextBox,
+        w,
+        h,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Default::default(),
+        story: Some(story),
+    };
+    for (k, id) in ids.iter().enumerate() {
+        let next = *ids.get(k + 1).unwrap_or(id);
+        for _ in 0..fan {
+            d.insert_object(&Pos { story: StoryRef::Part(*id), path: Path::top(0), off: 0 }, shape(next), &Default::default()).unwrap();
+        }
+    }
+    d.insert_object(&Pos::body(0, 0), shape(ids[0]), &Default::default()).unwrap();
+    d
+}
+
+#[test]
+fn self_showing_and_fanned_out_text_boxes_stay_bounded() {
+    // A box whose 30 shapes all show itself: laid out once.
+    assert_eq!(lay(&box_fan_out(1, 30)).text_boxes, 1);
+    // Chains of boxes each showing the next 30 times (30^4 expansions unbounded).
+    let d = box_fan_out(5, 30);
+    let l = lay(&d);
+    assert!(l.text_boxes <= 1 + wordcraft_doc::BoxBudget::MAX_NESTED, "{} boxes laid out", l.text_boxes);
+    // Footnote numbering's walk is bounded the same way.
+    let mut visits = 0usize;
+    d.objects_in_reading_order(&mut |_| visits += 1);
+    assert!(visits < 5_000, "{visits} visits");
+}
+
+#[test]
+fn many_text_boxes_and_a_header_box_all_show() {
+    // Outermost boxes aren't budgeted: a long document's boxes, and its header's on every page,
+    // all get their text.
+    let mut d = Document::from_text("Paragraph with a box.");
+    for _ in 1..400 {
+        let end = d.end_of(StoryRef::Body);
+        d.split_paragraph(&end).unwrap();
+    }
+    let ids: Vec<u32> = (0..400).map(|k| text_box_at(&mut d, &Pos::body(k, 0), &format!("Box {k}"), 100.0, 30.0, Default::default())).collect();
+    let hid =
+        d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Head", Default::default()))]);
+    d.last_section.headers.default = Some(hid);
+    let e = d.end_of(StoryRef::Part(hid));
+    let in_header = text_box_at(&mut d, &e, "Header box", 100.0, 30.0, Default::default());
+    let l = lay(&d);
+    assert!(l.pages.len() >= 10, "{} pages", l.pages.len());
+    for id in ids {
+        assert!(l.caret(&d.start_of(StoryRef::Part(id))).is_some(), "box {id} has no text");
+    }
+    for (i, p) in l.pages.iter().enumerate() {
+        let shown = p.header.iter().any(|it| matches!(it, Placed::Lines { story: StoryRef::Part(s), .. } if *s == in_header));
+        assert!(shown, "page {i}: the header box has no text");
+    }
+}
+
+#[test]
+fn a_text_box_inside_a_text_box_still_shows_its_text() {
+    let mut d = Document::from_text("Body");
+    let outer = text_box(&mut d, 0, "Outer ", 300.0, 200.0, Default::default());
+    let e = d.end_of(StoryRef::Part(outer));
+    let inner = text_box_at(&mut d, &e, "Inner", 120.0, 40.0, Default::default());
+    let l = lay(&d);
+    assert_eq!(l.text_boxes, 2);
+    assert!(l.caret(&d.start_of(StoryRef::Part(inner))).is_some(), "the inner box's text is laid out");
+}
+
 fn picture(w: f32, h: f32, float: wordcraft_doc::para::Float) -> InlineObject {
     InlineObject::Shape { kind: wordcraft_doc::para::ShapeKind::Rectangle, w, h, fill: None, stroke: None, stroke_width: 1.0, float, story: None }
 }
@@ -1617,4 +2101,25 @@ fn objects_left_out_through_the_table_style_formatting() {
     assert!(!left_out_objects(&d, &p, None, false, false)(0));
     assert!(left_out_objects(&d, &p, Some(&hidden), false, false)(0));
     assert!(!left_out_objects(&d, &p, Some(&hidden), true, false)(0), "hidden text shown");
+}
+
+#[test]
+fn hidden_float_in_a_text_box_is_not_placed() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    // A shape anchored in hidden text inside a text box: no drawing, no hit area.
+    let mut d = Document::from_text("Body text.");
+    let id = text_box(&mut d, 0, "Box words.", 200.0, 120.0, Default::default());
+    let f = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, ..Default::default() };
+    let hidden = wordcraft_doc::CharProps { hidden: Some(true), ..Default::default() };
+    let at = Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 };
+    d.insert_object(&at, rect_shape(30.0, 20.0, f), &hidden).unwrap();
+    let count = |show_hidden: bool| {
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions { show_hidden, ..Default::default() });
+        let items = &l.pages[0].items;
+        let areas = items.iter().filter(|i| matches!(i, Placed::Object { story: StoryRef::Part(_), .. })).count();
+        (shapes(items).len(), areas)
+    };
+    let (shown, shown_areas) = count(true);
+    let (hidden_n, hidden_areas) = count(false);
+    assert_eq!((shown - hidden_n, shown_areas - hidden_areas), (1, 1), "shown {shown}/{shown_areas}, hidden {hidden_n}/{hidden_areas}");
 }

@@ -6,6 +6,7 @@ use wordcraft_doc::{Document, Path, StoryRef};
 use wordcraft_fonts::FaceRef;
 use wordcraft_geom::Rect;
 
+use crate::math::MItem;
 use crate::para::{ClKind, LineEnd, ParaLayout};
 use crate::{Page, Placed};
 
@@ -79,11 +80,13 @@ pub struct DisplayOptions {
     pub dim_body: bool,
     /// Show tracked changes as markup (coloured, underlined/struck).
     pub markup: bool,
+    /// Show on-screen-only marks: equation placeholders and prompts (never in print or PDF).
+    pub placeholders: bool,
 }
 
 impl Default for DisplayOptions {
     fn default() -> Self {
-        DisplayOptions { marks: false, dim_header: true, dim_body: false, markup: true }
+        DisplayOptions { marks: false, dim_header: true, dim_body: false, markup: true, placeholders: false }
     }
 }
 
@@ -163,7 +166,7 @@ fn item(doc: &Document, it: &Placed, opts: &DisplayOptions, alpha: f32, out: &mu
         Placed::Shape { rect, kind, fill, stroke, stroke_width } => {
             out.push(Draw::Shape { rect: *rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width })
         }
-        Placed::Cell { .. } => {}
+        Placed::Cell { .. } | Placed::Object { .. } => {}
         Placed::Lines { story, path, para, l0, l1, x, y } => lines(doc, *story, path, para, *l0, *l1, *x, *y, opts, alpha, out),
     }
 }
@@ -435,6 +438,11 @@ fn lines(
                 Some(InlineObject::Shape { kind, fill, stroke, stroke_width, .. }) => {
                     out.push(Draw::Shape { rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width })
                 }
+                Some(InlineObject::Equation { .. }) => {
+                    if let Some((_, ml)) = pl.maths.iter().find(|(k, _)| *k == oi) {
+                        equation(&ml.items, cx, base, alpha, opts.placeholders, out);
+                    }
+                }
                 _ => {}
             }
         }
@@ -474,6 +482,41 @@ fn lines(
             }
         }
         let _ = bottom;
+    }
+}
+
+/// An equation's glyphs and rules with its origin at (`x`, `base`).
+fn equation(items: &[MItem], x: f32, base: f32, alpha: f32, screen: bool, out: &mut Vec<Draw>) {
+    for it in items {
+        match it {
+            MItem::Glyphs { face, size, color, synth_bold, synth_italic, glyphs, text } => out.push(Draw::Glyphs {
+                face: *face,
+                size: *size,
+                glyphs: glyphs.iter().map(|(g, gx, gy)| (*g, x + gx, base - gy)).collect(),
+                color: *color,
+                alpha,
+                synth_bold: *synth_bold,
+                synth_italic: *synth_italic,
+                text: text.clone(),
+                link: None,
+            }),
+            MItem::Rect { x: rx, y, w, h, color } => out.push(Draw::Fill { rect: Rect::new(x + rx, base - y - h, *w, *h), color: *color, alpha }),
+            MItem::Line { x0, y0, x1, y1, width, color, dotted } => out.push(Draw::Line {
+                x0: x + x0,
+                y0: base - y0,
+                x1: x + x1,
+                y1: base - y1,
+                width: *width,
+                color: *color,
+                stroke: if *dotted { Stroke::Dotted } else { Stroke::Solid },
+                alpha,
+            }),
+            MItem::ScreenOnly(inner) => {
+                if screen {
+                    equation(std::slice::from_ref(inner), x, base, alpha, screen, out);
+                }
+            }
+        }
     }
 }
 

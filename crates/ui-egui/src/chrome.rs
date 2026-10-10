@@ -188,7 +188,8 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     let _ = app.run("ui.dialog", json!({"name": "goto"}));
                 }
                 let words = app.cached_word_count();
-                let wtxt = if app.session.sel.is_collapsed() {
+                // A selected picture/shape/text box isn't a text selection: show the total.
+                let wtxt = if app.session.sel.is_collapsed() || crate::objects::selected(app).is_some() {
                     crate::i18n::fmt(tl!("{words} words"), &[("words", &words.to_string())])
                 } else {
                     let sw = wordcraft_doc::count_words(&app.session.selected_text());
@@ -197,7 +198,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                 if st(ui, &wtxt).clicked() {
                     let _ = app.run("ui.dialog", json!({"name": "wordCount"}));
                 }
-                if app.session.sel.focus.story != StoryRef::Body {
+                if app.session.sel.focus.story != StoryRef::Body && !crate::canvas::in_text_box(app) {
                     st(ui, tl!("Editing header/footer"));
                 }
                 st(ui, tl!("English (United States)"));
@@ -299,9 +300,10 @@ impl WordApp {
     }
     /// Word count, recomputed only when the document changes.
     pub fn cached_word_count(&mut self) -> usize {
-        let rev = self.session.rev();
-        if self.word_count.0 != rev {
-            self.word_count = (rev, self.session.doc.word_count());
+        // The count option changes the count without a document change.
+        let key = self.session.rev().wrapping_mul(2) | u64::from(self.session.prefs.count_notes);
+        if self.word_count.0 != key {
+            self.word_count = (key, self.session.word_count());
         }
         self.word_count.1
     }

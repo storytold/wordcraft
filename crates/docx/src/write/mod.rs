@@ -1,5 +1,6 @@
 //! [`Document`] → DOCX.
 
+mod math;
 mod props;
 mod story;
 
@@ -52,6 +53,8 @@ impl PartRels {
 
 pub(crate) struct Writer<'d> {
     doc: &'d Document,
+    /// Numbered display equations written so far (automatic numbers are written as text).
+    pub(crate) eq_number: u32,
     /// Media key → file name under `word/media/`.
     media_files: BTreeMap<String, String>,
     bookmarks: HashMap<String, u32>,
@@ -79,6 +82,8 @@ pub(crate) struct Writer<'d> {
     toc_end_here: bool,
     /// Media keys actually referenced by a written drawing.
     used_media: std::collections::BTreeSet<String>,
+    /// Bounds writing text boxes inside text boxes (as layout shows them).
+    boxes: wordcraft_doc::BoxBudget,
 }
 
 const CT_WML: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.";
@@ -101,6 +106,7 @@ pub fn write_as(doc: &Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
         doc
     };
     let mut wr = Writer {
+        eq_number: 0,
         doc,
         media_files: BTreeMap::new(),
         bookmarks: HashMap::new(),
@@ -118,6 +124,7 @@ pub fn write_as(doc: &Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
         toc_begin_here: false,
         toc_end_here: false,
         used_media: Default::default(),
+        boxes: wordcraft_doc::BoxBudget::default(),
     };
     wr.assign_media();
     let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
@@ -615,9 +622,14 @@ fn style_xml(w: &mut W, st: &Style) {
         w.close("w:rPr");
     }
     if let Some(t) = &st.table {
-        if let Some(b) = &t.borders {
+        if t.borders.is_some() || t.cell_margins.is_some() {
             w.open("w:tblPr", &[]);
-            props::borders(w, "w:tblBorders", b, Some("w:insideH"), &[]);
+            if let Some(b) = &t.borders {
+                props::borders(w, "w:tblBorders", b, Some("w:insideH"), &[]);
+            }
+            if let Some(m) = &t.cell_margins {
+                props::margins(w, "w:tblCellMar", m);
+            }
             w.close("w:tblPr");
         }
         let cond =
@@ -644,6 +656,7 @@ fn style_xml(w: &mut W, st: &Style) {
                 }
                 w.close("w:tblStylePr");
             };
+        cond(w, "wholeTable", &wordcraft_doc::CharProps::default(), t.fill, None);
         cond(w, "firstRow", &t.header_chr, t.header_fill, None);
         cond(w, "lastRow", &t.total_chr, None, t.total_border_top.as_ref());
         cond(w, "firstCol", &t.first_col_chr, None, None);

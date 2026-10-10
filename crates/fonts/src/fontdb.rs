@@ -707,11 +707,13 @@ impl FontDb {
         if let Some(f) = self.find(family, style) {
             return f;
         }
+        // Look again even when this load added nothing: another thread may have just loaded it.
         #[cfg(not(target_arch = "wasm32"))]
-        if self.load_cataloged(family)
-            && let Some(f) = self.find(family, style)
         {
-            return f;
+            self.load_cataloged(family);
+            if let Some(f) = self.find(family, style) {
+                return f;
+            }
         }
         self.find(FALLBACK_FAMILY, style)
             .or_else(|| self.find(FALLBACK_FAMILY, "Regular"))

@@ -93,6 +93,111 @@ fn joined_commands_are_one_undo_step() {
 }
 
 #[test]
+fn restore_takes_a_command_back_exactly() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "alpha beta"}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.insert", json!({"text": "gamma"}));
+    run(&mut s, "edit.undo", json!({}));
+    assert!(s.can_redo());
+    let (doc, sel, labels, depth, rev) = (s.doc.clone(), s.sel.clone(), s.undo_labels(), s.undo_depth(), s.rev());
+    s.dirty = false;
+    let snap = s.edit_snapshot();
+    assert_eq!(snap.doc(), &doc);
+    assert_eq!(snap.undo_depth(), depth);
+    assert!(!snap.dirty());
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.bold", json!({}));
+    assert_ne!(s.doc, doc);
+    assert_eq!(s.undo_depth(), depth + 1);
+    assert!(!s.can_redo(), "a new command clears redo");
+    s.restore(snap);
+    assert_eq!(s.doc, doc);
+    assert_eq!(s.sel, sel);
+    assert_eq!(s.undo_labels(), labels, "the command's undo step is gone");
+    assert!(s.can_redo(), "redo is back");
+    assert!(!s.dirty);
+    assert!(s.rev() > rev, "the layout is recomputed");
+    run(&mut s, "edit.redo", json!({}));
+    assert_eq!(text(&s), "alpha beta\ngamma");
+}
+
+#[test]
+fn restore_is_exact_at_the_undo_limit() {
+    // 510 steps, each with its own indent: the stack holds the newest 500.
+    let build = || {
+        let mut s = s();
+        run(&mut s, "text.insert", json!({"text": "alpha"}));
+        for i in 0..510 {
+            run(&mut s, "para.indents", json!({"left": f64::from(i)}));
+        }
+        s
+    };
+    // What undo walks through: (label, indent) for every step, newest first.
+    let walk = |s: &mut Session| {
+        let mut steps = Vec::new();
+        while let Some(label) = s.undo_label().map(str::to_string) {
+            s.undo();
+            steps.push((label, s.doc.para_at(&Pos::body(0, 0)).and_then(|p| p.props.indent_left)));
+        }
+        steps
+    };
+    let expected = walk(&mut build());
+    assert_eq!(expected.len(), 500);
+    // One command, and several (each pushes the oldest step out of the full stack).
+    for n in [1, 2, 4] {
+        let mut s = build();
+        let snap = s.edit_snapshot();
+        for _ in 0..n {
+            run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+        }
+        assert_eq!(s.undo_label(), Some("Table"));
+        assert_eq!(s.undo_depth(), 500);
+        s.restore(snap);
+        assert_eq!(walk(&mut s), expected, "{n} command(s): the oldest steps are back, the commands' steps are gone");
+    }
+    // A command that fails at the limit puts its eviction back with the stacks, so a later
+    // restore doesn't bring back a step that never left.
+    let mut s = build();
+    let snap = s.edit_snapshot();
+    assert!(s.run("para.align", &json!({"value": "bogus"})).is_err());
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+    s.restore(snap);
+    assert_eq!(walk(&mut s), expected, "a failed command between snapshot and restore");
+    // An automatic change recorded after the fact (`push_undo`) at the limit counts its eviction.
+    let mut s = build();
+    let snap = s.edit_snapshot();
+    let (doc, sel) = (s.doc.clone(), s.sel.clone());
+    s.push_undo("AutoCorrect", doc, sel);
+    s.restore(snap);
+    assert_eq!(walk(&mut s), expected, "push_undo between snapshot and restore");
+}
+
+#[test]
+fn restore_keeps_the_open_undo_step() {
+    // Typing in progress: text typed after the restore joins the same undo step.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "alpha"}));
+    let depth = s.undo_depth();
+    let snap = s.edit_snapshot();
+    run(&mut s, "para.alignCenter", json!({}));
+    s.restore(snap);
+    run(&mut s, "text.insert", json!({"text": " beta"}));
+    assert_eq!(s.undo_depth(), depth, "still one typing step");
+    // A drag in progress (`join_next_undo`): its next frame joins the same undo step.
+    run(&mut s, "para.indents", json!({"left": 9.0}));
+    s.join_next_undo();
+    let depth = s.undo_depth();
+    let snap = s.edit_snapshot();
+    run(&mut s, "para.indents", json!({"left": 18.0}));
+    s.restore(snap);
+    run(&mut s, "para.indents", json!({"left": 27.0}));
+    assert_eq!(s.undo_depth(), depth, "still one drag step");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).and_then(|p| p.props.indent_left), None);
+}
+
+#[test]
 fn failed_command_keeps_undo_and_redo() {
     // A command that fails after its undo checkpoint leaves the history exactly as it was:
     // the redo stack survives, and no empty undo step is added.
@@ -510,6 +615,53 @@ fn track_changes_and_accept() {
     assert_eq!(text(&s), "inal added");
 }
 
+/// The author of the revision `rid` points to.
+fn author_of(s: &Session, rid: Option<u32>) -> Option<String> {
+    rid.and_then(|r| s.doc.revisions.get(r as usize)).map(|r| r.author.clone())
+}
+
+#[test]
+fn tracked_delete_keeps_another_authors_deletion() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "alpha beta gamma"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Ana".into();
+    run(&mut s, "select.text", json!({"text": "beta"}));
+    run(&mut s, "text.delete", json!({}));
+    // A second author deletes the whole line, including the text Ana already deleted.
+    s.author = "Ben".into();
+    run(&mut s, "select.text", json!({"text": "alpha beta gamma"}));
+    run(&mut s, "text.delete", json!({}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    let by: Vec<(String, Option<String>)> = p.run_ranges().map(|(r, c)| (p.text[r].to_string(), author_of(&s, c.del))).collect();
+    assert!(by.iter().any(|(t, a)| t == "beta" && a.as_deref() == Some("Ana")), "{by:?}");
+    assert!(by.iter().any(|(t, a)| t.contains("alpha") && a.as_deref() == Some("Ben")), "{by:?}");
+    assert!(by.iter().any(|(t, a)| t.contains("gamma") && a.as_deref() == Some("Ben")), "{by:?}");
+}
+
+#[test]
+fn tracked_split_gives_the_new_paragraph_mark_to_its_author() {
+    // Ben presses Enter at the end of Ana's insertion, and in the middle of it.
+    for off in [None, Some(8)] {
+        let mut s = s();
+        run(&mut s, "text.insert", json!({"text": "alpha"}));
+        run(&mut s, "review.trackChanges", json!({"value": true}));
+        s.author = "Ana".into();
+        run(&mut s, "text.insert", json!({"text": " beta"}));
+        s.author = "Ben".into();
+        if let Some(off) = off {
+            run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [0], "off": off}}));
+        }
+        run(&mut s, "text.newParagraph", json!({}));
+        let head = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+        let tail = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap();
+        assert_eq!(author_of(&s, head.mark.ins).as_deref(), Some("Ben"), "split at {off:?}: the new paragraph mark is Ben's");
+        // The second paragraph ends with the original mark, which nobody inserted (not Ana).
+        assert_eq!(tail.mark.ins, None, "split at {off:?}");
+        assert_eq!(tail.mark.del, None, "split at {off:?}");
+    }
+}
+
 #[test]
 fn no_markup_view_lays_out_the_final_text() {
     let mut s = s();
@@ -676,6 +828,279 @@ fn caret_navigation() {
     assert_eq!(s.sel.focus, Pos::body(1, 11));
     run(&mut s, "caret.left", json!({}));
     assert_eq!(s.sel.focus.off, 10);
+}
+
+#[test]
+fn text_box_insert_puts_the_caret_inside() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Before "}));
+    let id = run(&mut s, "insert.textBox", json!({}))["story"].as_u64().unwrap() as u32;
+    let boxed = StoryRef::Part(id);
+    assert_eq!(s.sel.focus.story, boxed);
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    assert_eq!(s.doc.plain_text(boxed), "Hello");
+    assert!(!text(&s).contains("Hello"), "{}", text(&s));
+    // Leaving the box lands just after it in the body.
+    let anchor = s.doc.text_box_anchor(id).unwrap();
+    assert_eq!(anchor, Pos::body(0, "Before \u{FFFC}".len()));
+    run(&mut s, "caret.set", json!({"pos": anchor}));
+    run(&mut s, "text.insert", json!({"text": " after"}));
+    assert_eq!(s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).map(|p| p.text.as_str()), Some("Before \u{FFFC} after"));
+    // Undo goes back through the typing to before the box, in the body.
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.sel.focus.story, StoryRef::Body);
+    assert_eq!(text(&s), "Before ");
+    // Given text: the caret ends after it.
+    let id = run(&mut s, "insert.textBox", json!({"text": "Note"}))["story"].as_u64().unwrap() as u32;
+    assert_eq!(s.sel.focus, Pos { story: StoryRef::Part(id), path: wordcraft_doc::Path::top(0), off: 4 });
+}
+
+#[test]
+fn text_box_in_a_table_cell_shows_its_text() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+    assert!(s.sel.focus.path.0.len() > 1);
+    let id = run(&mut s, "insert.textBox", json!({}))["story"].as_u64().unwrap() as u32;
+    // The caret goes into the box, and typing shows there (it has a caret position).
+    assert_eq!(s.sel.focus.story, StoryRef::Part(id));
+    run(&mut s, "text.insert", json!({"text": "In a cell"}));
+    let caret = s.layout().caret(&s.sel.focus).expect("laid out");
+    let cell = s.layout().find_object(0, |o| o.text_box == Some(id)).unwrap();
+    assert!(cell.rect.contains(wordcraft_geom::Point::new(caret.x, caret.top)), "{caret:?} in {:?}", cell.rect);
+    // No text box inside a text box.
+    assert!(s.run("insert.textBox", &json!({})).is_err());
+}
+
+#[test]
+fn copy_paste_text_box_makes_an_independent_copy() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "A"}));
+    let id = run(&mut s, "insert.textBox", json!({"text": "Original"}))["story"].as_u64().unwrap() as u32;
+    // Select "A" and the box in the body, copy, paste at the end.
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 1 + 3)}));
+    run(&mut s, "edit.copy", json!({}));
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 4)}));
+    let parts = s.doc.parts.len();
+    run(&mut s, "edit.paste", json!({}));
+    assert_eq!(s.doc.parts.len(), parts + 1);
+    let stories: Vec<u32> = s
+        .doc
+        .para(StoryRef::Body, &wordcraft_doc::Path::top(0))
+        .unwrap()
+        .objects
+        .iter()
+        .filter_map(|o| if let wordcraft_doc::InlineObject::Shape { story, .. } = o { *story } else { None })
+        .collect();
+    assert_eq!(stories.len(), 2);
+    assert_eq!(stories[0], id);
+    let copy = stories[1];
+    assert_ne!(copy, id);
+    // Typing in the copy leaves the original alone.
+    run(&mut s, "caret.set", json!({"pos": Pos { story: StoryRef::Part(copy), path: wordcraft_doc::Path::top(0), off: 0 }}));
+    run(&mut s, "text.insert", json!({"text": "Copy of "}));
+    assert_eq!(s.doc.plain_text(StoryRef::Part(copy)), "Copy of Original");
+    assert_eq!(s.doc.plain_text(StoryRef::Part(id)), "Original");
+    // Undo the typing and the paste: the copy's story goes too.
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.parts.len(), parts);
+}
+
+#[test]
+fn word_count_includes_text_boxes_by_default() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "one two "}));
+    run(&mut s, "insert.textBox", json!({"text": "three four five"}));
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 0)}));
+    assert_eq!(s.word_count(), 5);
+    let v = run(&mut s, "review.wordCount", json!({}));
+    assert_eq!((v["words"].as_u64(), v["includeTextBoxes"].as_bool()), (Some(5), Some(true)));
+    assert_eq!(v["paragraphs"].as_u64(), Some(2));
+    // Turned off: body only, and it sticks.
+    let v = run(&mut s, "review.wordCount", json!({"includeTextBoxes": false}));
+    assert_eq!(v["words"].as_u64(), Some(2));
+    assert_eq!(s.word_count(), 2);
+    assert_eq!(run(&mut s, "review.wordCount", json!({}))["words"].as_u64(), Some(2));
+    // Deleting the box drops its words (its story stays behind, unused).
+    run(&mut s, "review.wordCount", json!({"includeTextBoxes": true}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 8), "focus": Pos::body(0, 8 + 3)}));
+    run(&mut s, "text.delete", json!({}));
+    assert_eq!(s.word_count(), 2);
+}
+
+/// The laid-out area of the only text box.
+fn box_area(s: &mut Session) -> wordcraft_layout::hit::ObjectHit {
+    let l = s.layout();
+    l.find_object(0, |o| o.text_box.is_some()).unwrap()
+}
+
+fn select_box(s: &mut Session) {
+    let o = box_area(s);
+    let end = Pos { off: o.off + 3, ..o.pos() };
+    run(s, "select.range", json!({"anchor": o.pos(), "focus": end}));
+}
+
+#[test]
+fn arrange_bounds_resizes_and_moves_objects() {
+    use wordcraft_doc::para::{Anchor, Wrap};
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Some text "}));
+    run(&mut s, "insert.textBox", json!({"text": "Box"}));
+    select_box(&mut s);
+    // Resize: stays inline, keeps a text box's minimum.
+    run(&mut s, "arrange.bounds", json!({"width": 200, "height": 5}));
+    let o = box_area(&mut s);
+    assert_eq!((o.rect.w, o.rect.h, o.wrap), (200.0, 18.0, Wrap::Inline));
+    assert!(s.run("arrange.nudge", &json!({"dx": 5})).is_err(), "inline objects don't nudge");
+    // Move: floats exactly where it was dropped, still selected.
+    let r = run(&mut s, "arrange.bounds", json!({"page": 0, "x": 300, "y": 400}));
+    assert_eq!(r["object"]["float"]["wrap"], "square");
+    let o = box_area(&mut s);
+    assert_eq!((o.page, o.rect.x, o.rect.y), (0, 300.0, 400.0));
+    assert_eq!(s.doc.plain_text(StoryRef::Part(o.text_box.unwrap())), "Box");
+    // Moving it again anchors it to the paragraph under its top edge, relative to that
+    // paragraph (it moves with the text), landing exactly where dropped.
+    let before = box_area(&mut s).rect;
+    select_box(&mut s);
+    run(&mut s, "arrange.bounds", json!({"x": before.x + 30.0, "y": before.y - 5.0}));
+    let o = box_area(&mut s);
+    assert!((o.rect.x - before.x - 30.0).abs() < 0.01 && (o.rect.y - before.y + 5.0).abs() < 0.01, "{:?} → {:?}", before, o.rect);
+    let p = s.doc.para(StoryRef::Body, &o.path).unwrap();
+    let Some(wordcraft_doc::InlineObject::Shape { float, .. }) = p.object_at(o.off) else { panic!() };
+    assert_eq!((float.h_rel, float.v_rel), (Anchor::Column, Anchor::Paragraph));
+    assert!((float.x - (o.rect.x - o.origin.x)).abs() < 0.01 && (float.y - (o.rect.y - o.origin.y)).abs() < 0.01);
+    // Nudge.
+    run(&mut s, "arrange.nudge", json!({"dx": 6, "dy": -1}));
+    let n = box_area(&mut s).rect;
+    assert!((n.x - o.rect.x - 6.0).abs() < 0.01 && (n.y - o.rect.y + 1.0).abs() < 0.01);
+    // Hostile values stay on the page.
+    run(&mut s, "arrange.bounds", json!({"x": -1e9, "y": 1e9, "width": 1e9}));
+    let o = box_area(&mut s);
+    assert!(o.rect.right() >= 12.0 && o.rect.y <= 792.0 && o.rect.w <= 4000.0, "{:?}", o.rect);
+    // One undo per change.
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(box_area(&mut s).rect, n);
+}
+
+#[test]
+fn nudging_an_aligned_object_moves_it_from_where_it_is() {
+    use wordcraft_doc::para::{Anchor, FloatAlign};
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Some text "}));
+    run(&mut s, "insert.textBox", json!({"text": "Box"}));
+    select_box(&mut s);
+    run(&mut s, "arrange.position", json!({"preset": "topLeft"}));
+    // As a .docx can place it: centred on the page, at the bottom margin.
+    let o = box_area(&mut s);
+    let p = s.doc.para_mut(StoryRef::Body, &o.path).unwrap();
+    if let Some(wordcraft_doc::InlineObject::Shape { float, .. }) = p.object_at_mut(o.off) {
+        (float.h_rel, float.h_align, float.v_rel, float.v_align) =
+            (Anchor::Page, Some(FloatAlign::Center), Anchor::BottomMargin, Some(FloatAlign::Start));
+    }
+    p.touch();
+    s.touch();
+    let before = box_area(&mut s).rect;
+    select_box(&mut s);
+    run(&mut s, "arrange.nudge", json!({"dx": 6, "dy": -2}));
+    let o = box_area(&mut s);
+    assert!((o.rect.x - before.x - 6.0).abs() < 0.01 && (o.rect.y - before.y + 2.0).abs() < 0.01, "{before:?} → {:?}", o.rect);
+    let p = s.doc.para(StoryRef::Body, &o.path).unwrap();
+    let Some(wordcraft_doc::InlineObject::Shape { float, .. }) = p.object_at(o.off) else { panic!() };
+    assert_eq!((float.h_align, float.v_align), (None, None));
+    // Dragging it clears alignment too, and it lands where dropped.
+    select_box(&mut s);
+    run(&mut s, "arrange.bounds", json!({"x": 100, "y": 150}));
+    let o = box_area(&mut s);
+    assert_eq!((o.rect.x, o.rect.y), (100.0, 150.0));
+}
+
+#[test]
+fn arrange_bounds_moves_an_object_to_another_page() {
+    let mut s = s();
+    for i in 0..60 {
+        run(&mut s, "text.insert", json!({"text": format!("Paragraph {i} of filler text.")}));
+        run(&mut s, "text.newParagraph", json!({}));
+    }
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 0)}));
+    run(&mut s, "insert.textBox", json!({"text": "Traveller"}));
+    select_box(&mut s);
+    assert!(s.layout().pages.len() >= 2);
+    run(&mut s, "arrange.bounds", json!({"page": 1, "x": 100, "y": 200}));
+    let o = box_area(&mut s);
+    assert_eq!((o.page, o.rect.x, o.rect.y), (1, 100.0, 200.0));
+    assert!(o.path.0[0] > 0, "anchored to text on page 2: {:?}", o.path);
+    assert_eq!(s.doc.plain_text(StoryRef::Part(o.text_box.unwrap())), "Traveller");
+    // The selection follows the object.
+    assert_eq!(s.sel.anchor, o.pos());
+    assert!(s.run("arrange.bounds", &json!({"page": 99, "x": 1, "y": 1})).is_err());
+}
+
+#[test]
+fn moved_text_box_makes_the_text_it_lands_on_wrap() {
+    let mut s = s();
+    for i in 0..6 {
+        run(
+            &mut s,
+            "text.insert",
+            json!({"text": format!("Paragraph {i}: the quick brown fox jumps over the lazy dog, again and again, across the page.")}),
+        );
+        run(&mut s, "text.newParagraph", json!({}));
+    }
+    run(&mut s, "caret.set", json!({"pos": Pos::body(4, 0)}));
+    run(&mut s, "insert.textBox", json!({"text": "Box"}));
+    select_box(&mut s);
+    // Drop it over paragraph 1, right half of the page: well above its own paragraph (4).
+    let l = s.layout();
+    let p1_top = wordcraft_layout::hit::page_lines(&l.pages[0], StoryRef::Body).iter().find(|ln| ln.path.0 == [1] && ln.li == 0).unwrap().top;
+    run(&mut s, "arrange.bounds", json!({"x": 300, "y": p1_top + 2.0}));
+    let o = box_area(&mut s);
+    assert_eq!(o.path.0, vec![1], "anchored to the paragraph it was dropped on");
+    assert_eq!((o.rect.x, o.rect.y), (300.0, p1_top + 2.0));
+    // Lines beside the box stop short of it; lines below it use the full width again.
+    let l = s.layout();
+    let lines = wordcraft_layout::hit::page_lines(&l.pages[0], StoryRef::Body);
+    let beside: Vec<_> = lines.iter().filter(|ln| ln.bottom > o.rect.y && ln.top < o.rect.bottom()).collect();
+    assert!(!beside.is_empty());
+    assert!(beside.iter().all(|ln| ln.right <= o.rect.x + 0.5 || ln.left >= o.rect.right() - 0.5), "text overlaps the box");
+    assert!(lines.iter().any(|ln| ln.top > o.rect.bottom() + 10.0 && ln.right > o.rect.right()));
+    // Its old paragraph no longer holds it.
+    assert!(s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(4)).unwrap().objects.is_empty());
+}
+
+#[test]
+fn deleted_text_box_takes_its_text_with_it_until_undo() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "A"}));
+    let id = run(&mut s, "insert.textBox", json!({"text": "Inside"}))["story"].as_u64().unwrap() as u32;
+    let box_sel = json!({"anchor": Pos::body(0, 1), "focus": Pos::body(0, 1 + 3)});
+    run(&mut s, "select.range", box_sel.clone());
+    run(&mut s, "text.delete", json!({}));
+    assert!(!s.doc.parts.contains_key(&id), "the deleted box's text is gone");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.plain_text(StoryRef::Part(id)), "Inside", "undo brings it back");
+    // Cut and paste: one box, one story, same text.
+    run(&mut s, "select.range", box_sel);
+    run(&mut s, "edit.cut", json!({}));
+    assert!(s.doc.parts.is_empty());
+    run(&mut s, "edit.paste", json!({}));
+    assert_eq!(s.doc.parts.len(), 1);
+    let (_, part) = s.doc.parts.iter().next().unwrap();
+    assert_eq!(part.kind, wordcraft_doc::PartKind::TextBox);
+    assert_eq!(s.doc.word_count_including_notes(), 2);
+}
+
+#[test]
+fn word_count_with_an_object_selected_counts_the_document() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "one two "}));
+    run(&mut s, "insert.textBox", json!({"text": "three"}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 8), "focus": Pos::body(0, 8 + 3)}));
+    assert_eq!(run(&mut s, "review.wordCount", json!({}))["words"].as_u64(), Some(3));
+    // A real text selection still counts just itself.
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    assert_eq!(run(&mut s, "review.wordCount", json!({}))["words"].as_u64(), Some(1));
 }
 
 #[test]

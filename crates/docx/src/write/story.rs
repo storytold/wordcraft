@@ -301,17 +301,11 @@ impl Writer<'_> {
                     w.close("w:r");
                 }
             }
-            InlineObject::Equation { linear, display } => {
-                if *display {
-                    w.open("m:oMathPara", &[]);
-                }
-                w.open("m:oMath", &[]);
-                w.open("m:r", &[]);
-                w.leaf("m:t", &[("xml:space", "preserve")], linear);
-                w.close("m:r");
-                w.close("m:oMath");
-                if *display {
-                    w.close("m:oMathPara");
+            InlineObject::Equation { linear, display, math } => {
+                // Automatic equation numbers become text: Word numbers nothing by itself.
+                match super::math::resolve_numbers(math, *display, &mut self.eq_number) {
+                    Some(m) => super::math::write_equation(w, linear, *display, &m),
+                    None => super::math::write_equation(w, linear, *display, math),
                 }
             }
             InlineObject::Field { instr, result, locked } => self.field(w, instr, result, *locked, props),
@@ -463,8 +457,10 @@ impl Writer<'_> {
                     }
                 }
                 w.close("wps:spPr");
-                if let Some(part) = story.and_then(|s| self.doc.parts.get(&s))
-                    && depth < 4
+                // Its text, within the same bounds layout shows boxes inside boxes with.
+                if let Some(id) = *story
+                    && let Some(part) = self.doc.parts.get(&id).filter(|p| p.kind == wordcraft_doc::PartKind::TextBox)
+                    && self.boxes.enter(id)
                 {
                     w.open("wps:txbx", &[]);
                     w.open("w:txbxContent", &[]);
@@ -472,6 +468,7 @@ impl Writer<'_> {
                     self.blocks(w, &blocks, rels, false, depth + 1);
                     w.close("w:txbxContent");
                     w.close("wps:txbx");
+                    self.boxes.leave();
                 }
                 w.empty("wps:bodyPr", &[]);
                 w.close("wps:wsp");
