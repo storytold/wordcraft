@@ -134,8 +134,8 @@ impl Tokens {
     }
 }
 
-/// Install the UI fonts (Inter, JetBrains Mono) and the craft-fonts CJK interface faces if built
-/// in, Japanese first.
+/// Install the UI fonts (Inter, JetBrains Mono) and the craft-fonts CJK and Arabic interface
+/// faces if built in, Japanese first.
 pub fn install_fonts(ctx: &egui::Context) {
     install_fonts_for(ctx, false);
 }
@@ -166,7 +166,7 @@ pub fn font_definitions(prefer_hans: bool) -> FontDefinitions {
     }
     fonts.families.insert(FontFamily::Name("medium".into()), vec!["InterMedium".into(), "Inter".into(), "SourceSans".into()]);
     fonts.families.insert(FontFamily::Name("semibold".into()), vec!["InterSemiBold".into(), "Inter".into(), "SourceSans".into()]);
-    for f in wordcraft_fonts::ui_cjk_fonts(prefer_hans) {
+    for f in wordcraft_fonts::ui_cjk_fonts(prefer_hans).into_iter().chain(wordcraft_fonts::arabic_ui_fonts()) {
         // The same static bytes the document fonts use: one copy in the binary.
         let name = format!("{} {}", f.family, f.style);
         fonts.font_data.insert(name.clone(), Arc::new(FontData::from_static(f.bytes)));

@@ -272,3 +272,74 @@ fn bundled_interface_fonts_cover_brazilian_portuguese_without_system_fallbacks()
         }
     }
 }
+
+#[test]
+fn arabic_locales_and_saved_preference_work_without_changing_the_document() {
+    let ar = lang("ar");
+    for tag in ["ar", "ar-SA", "ar_EG.UTF-8", "AR-eg", "ar-SA-arab", "ar_EG.UTF-8@euro"] {
+        assert_eq!(lang_from_tag(tag), Some(ar), "{tag}");
+    }
+    assert_eq!(first_supported(["fr-FR", "ar-EG", "en-US"]), Some(ar));
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    let before = serde_json::to_value(&app.session.doc).unwrap();
+    let result = app.run("ui.language", serde_json::json!({"value": "AR"})).unwrap();
+    assert_eq!(result["effective"], "ar");
+    assert_eq!(app.ui.language, "ar");
+    assert_eq!(serde_json::to_value(&app.session.doc).unwrap(), before);
+    let saved = serde_json::to_string(&app.ui).unwrap();
+    let restored: crate::UiState = serde_json::from_str(&saved).unwrap();
+    assert_eq!(Lang::from_pref(&restored.language), ar);
+    assert_eq!(ar.name(), "العربية");
+}
+
+#[test]
+fn arabic_covers_the_entire_existing_interface_catalog() {
+    use std::collections::HashSet;
+    let keys = |source| parse_entries(source).0.into_iter().map(|e| e.source).collect::<HashSet<_>>();
+    assert_eq!(keys(lang("ar").0.source), keys(lang("zh-hans").0.source));
+    let ar = lang("ar");
+    assert_eq!(tr(ar, "Home"), "الصفحة الرئيسية");
+    assert_eq!(tr(ar, "Font"), "خط");
+    assert_eq!(tr(ar, "Review"), "مراجعة");
+    assert_eq!(tr(ar, "Save"), "حفظ");
+    assert_eq!(tr(ar, "Table Direction"), "اتجاه الجدول");
+    assert_eq!(tr(ar, "Section Direction"), "اتجاه المقطع");
+    assert_eq!(tr(ar, "Right-to-Left Text Direction"), "اتجاه النص من اليمين لليسار");
+    assert_eq!(tr(ar, "unknown future label"), "unknown future label");
+    set_current(ar);
+    assert_eq!(location("Home › Font"), "الصفحة الرئيسية ‹ خط");
+    set_current(Lang::EN);
+    assert_eq!(fmt(tr(ar, "Exported {path}"), &[("path", "draft-{words}.docx")]), "تم تصدير draft-{words}.docx");
+    // Count-neutral wording is grammatical for every Arabic integer category.
+    for count in [0, 1, 2, 3, 11, 12, 21, 99, 100] {
+        let words = count.to_string();
+        assert_eq!(fmt(tr(ar, "{words} words"), &[("words", &words)]), format!("كلمات: {count}"));
+        assert_eq!(fmt(tr(ar, "{selected} of {words} words"), &[("selected", "1"), ("words", &words)]), format!("كلمات: {count}؛ المحدد: 1"));
+    }
+}
+
+/// The Arabic interface needs an Arabic face: bundled Latin faces don't cover it. The face
+/// comes from craft-fonts (`Arab` script) or an installed system font; the test asserts full
+/// coverage whenever either is present, and records their absence otherwise.
+#[test]
+fn arabic_interface_text_is_covered_when_an_arabic_face_exists() {
+    let probe = ['ب', 'پ', 'ِ', '٠'];
+    let Some(face) = wordcraft_fonts::arabic_ui_face() else {
+        eprintln!("skipped: no Arabic face (craft-fonts without Arab script, no system Arabic font)");
+        return;
+    };
+    let (entries, errors) = parse_entries(lang("ar").0.source);
+    assert!(errors.is_empty());
+    assert!(probe.iter().all(|c| face.glyph_for(*c) != 0), "probe coverage");
+    // Only Arabic-script characters must come from the Arabic face; symbols (¶, ⌘, …) and
+    // Latin text render through the other interface faces, as for every language.
+    let arabic = |c: char| matches!(c, '\u{0600}'..='\u{06FF}' | '\u{0750}'..='\u{077F}' | '\u{08A0}'..='\u{08FF}' | '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}');
+    let missing: Vec<char> = entries
+        .iter()
+        .flat_map(|e| e.translation.chars())
+        .filter(|c| arabic(*c) && face.glyph_for(*c) == 0)
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    assert!(missing.is_empty(), "uncovered Arabic characters: {missing:?}");
+}

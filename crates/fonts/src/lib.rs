@@ -56,7 +56,6 @@ pub fn japanese_ui_fonts(bold: bool) -> Vec<&'static CraftFont> {
 pub fn chinese_fonts() -> impl Iterator<Item = &'static CraftFont> {
     CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Hans"))
 }
-
 /// The CJK interface faces, Regular styles only (the UI fakes no bold): the Japanese UI face and
 /// the Chinese face, Chinese first when `prefer_hans` (a Chinese interface), Japanese first
 /// otherwise. Mixing the two within a line would mix glyph styles, so the first face should
@@ -66,6 +65,42 @@ pub fn ui_cjk_fonts(prefer_hans: bool) -> Vec<&'static CraftFont> {
     let ja = japanese_ui_fonts(false).into_iter().filter(regular).take(1);
     let zh = chinese_fonts().filter(regular).take(1);
     if prefer_hans { zh.chain(ja).collect() } else { ja.chain(zh).collect() }
+}
+
+/// The craft-fonts faces with Arabic script (`"Arab"`), in manifest order. Empty without
+/// craft-fonts (release builds embed Noto Sans Arabic through the craft-fonts pin).
+pub fn arabic_fonts() -> impl Iterator<Item = &'static CraftFont> {
+    CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Arab"))
+}
+
+/// Arabic faces in document-fallback order: Naskh (serif-style) families first, then the
+/// others; Regular before other styles.
+pub fn arabic_document_fonts() -> Vec<&'static CraftFont> {
+    let mut v: Vec<_> = arabic_fonts().collect();
+    v.sort_by_key(|f| (!f.family.contains("Naskh"), f.style != "Regular"));
+    v
+}
+
+/// Arabic faces in UI order: Sans families first (the UI face), Regular styles only (the UI
+/// fakes no bold). Empty without craft-fonts.
+pub fn arabic_ui_fonts() -> Vec<&'static CraftFont> {
+    let mut v: Vec<_> = arabic_fonts().filter(|f| f.style == "Regular").collect();
+    v.sort_by_key(|f| !f.family.contains("Sans"));
+    v
+}
+
+/// An Arabic-capable face: an embedded craft-fonts Arabic face covering Arabic when built with
+/// one, else an installed system font with full Arabic coverage. `None` when neither exists
+/// (Arabic then has no interface or document face beyond per-character fallback).
+pub fn arabic_ui_face() -> Option<FaceRef> {
+    let db = FontDb::global();
+    for c in arabic_ui_fonts() {
+        let face = db.face(c.family, c.style);
+        if face.family.eq_ignore_ascii_case(c.family) && face.covers('ب') && face.covers('پ') {
+            return Some(FaceRef::of(&face));
+        }
+    }
+    db.fallback_for('ب', u32::MAX).filter(|f| f.covers('پ')).map(|f| FaceRef::of(&f))
 }
 
 /// The bundled serif used when a document asks for nothing better.
