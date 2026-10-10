@@ -512,6 +512,15 @@ impl Reader<'_> {
         drawing.map(|r| r.target.clone())
     }
 
+    /// The id of the relationship to a SmartArt diagram's drawing part, as its data part names it
+    /// (`dsp:dataModelExt relId`): the id the parts use, not the markup, so it's kept with them.
+    pub(super) fn diagram_drawing_rel(&mut self, gd: &El, rels: &Rels) -> Option<String> {
+        let dm = gd.child("dgm:relIds")?.attr("r:dm")?;
+        let data = super::part_of(rels, dm, rt::DIAGRAM_DATA)?;
+        let id = self.graphic_part(&data)?.find("dsp:dataModelExt")?.attr("relId")?.to_string();
+        rels.by_id(&id).is_some_and(|r| !r.external && rel_is(&r.kind, rt::DIAGRAM_DRAWING)).then_some(id)
+    }
+
     /// The items of the SmartArt drawing part at `path`, fitted to `w` × `h` points.
     pub(super) fn diagram_drawing(&mut self, path: &str, w: f32, h: f32) -> Vec<GraphicItem> {
         let Some(root) = self.graphic_part(path) else { return Vec::new() };

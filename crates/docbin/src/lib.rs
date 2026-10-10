@@ -407,7 +407,15 @@ fn walk(ctx: &WalkCtx, cp_start: u32, cp_end: u32, pics: &mut media::Pictures) -
                 match fc_pic.and_then(|at| pics.get(ctx.data, at)) {
                     Some((key, w, h)) => {
                         pb.push('\u{FFFC}', CharProps::default());
-                        pb.objects.push(InlineObject::Image { media: key, w, h, alt: String::new(), float: Default::default(), crop: [0.0; 4] });
+                        pb.objects.push(InlineObject::Image {
+                            media: key,
+                            w,
+                            h,
+                            alt: String::new(),
+                            float: Default::default(),
+                            crop: [0.0; 4],
+                            ole: None,
+                        });
                     }
                     None => pics.dropped(cp),
                 }

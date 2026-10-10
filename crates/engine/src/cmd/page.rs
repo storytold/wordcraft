@@ -23,7 +23,9 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"value": "portrait|landscape"}"#),
         CommandSpec::new("layout.size", "Size", "Layout › Page Setup", size).params(r#"{"name"?: "Letter|Legal|A4|…", "width"?: pt, "height"?: pt}"#),
         CommandSpec::new("layout.columns", "Columns", "Layout › Page Setup", columns)
-            .params(r#"{"count": 1-12, "space"?: pt, "separator"?: bool, "preset"?: "left|right"}"#),
+            .params(
+                r#"{"count": 1-12, "space"?: pt, "separator"?: bool, "preset"?: "left|right", "widths"?: [[width pt, space after pt], …] (unequal columns; sets the count), "apply"?: "section|document|forward"}"#,
+            ),
         CommandSpec::new("layout.break", "Breaks", "Layout › Page Setup", breaks)
             .params(r#"{"kind": "page|column|textWrapping|nextPage|continuous|evenPage|oddPage"}"#),
         CommandSpec::new("layout.lineNumbers", "Line Numbers", "Layout › Page Setup", |s, v| {
@@ -171,22 +173,75 @@ fn size(s: &mut Session, v: &Value) -> CmdResult {
 
 fn columns(s: &mut Session, v: &Value) -> CmdResult {
     let preset = p::str(v, "preset");
-    let count = p::u64(v, "count").unwrap_or(match preset {
-        Some("left") | Some("right") => 2,
-        _ => 1,
-    });
-    if !(1..=12).contains(&count) {
-        return Err(CmdError::Params("columns must be 1–12".into()));
-    }
     let space = p::f32(v, "space").unwrap_or(36.0).clamp(0.0, 300.0);
     let sep = p::bool(v, "separator").unwrap_or(false);
     let tw = sect(s).text_width();
-    let widths = match preset {
-        Some("left") => vec![((tw - space) / 3.0, space), ((tw - space) * 2.0 / 3.0, 0.0)],
-        Some("right") => vec![((tw - space) * 2.0 / 3.0, space), ((tw - space) / 3.0, 0.0)],
+    // Unequal columns: (width, space after) each, as the Columns dialog sends them.
+    let custom = match v.get("widths").filter(|w| !w.is_null()) {
+        Some(w) => Some(column_widths(w, tw)?),
+        None => None,
+    };
+    let count = match &custom {
+        Some(c) => c.len() as u64,
+        None => p::u64(v, "count").unwrap_or(match preset {
+            Some("left") | Some("right") => 2,
+            _ => 1,
+        }),
+    };
+    if !(1..=12).contains(&count) {
+        return Err(CmdError::Params("columns must be 1–12".into()));
+    }
+    let widths = match (custom, preset) {
+        (Some(c), _) if c.len() > 1 => c,
+        (Some(_), _) => Vec::new(),
+        (None, Some("left")) => vec![((tw - space) / 3.0, space), ((tw - space) * 2.0 / 3.0, 0.0)],
+        (None, Some("right")) => vec![((tw - space) * 2.0 / 3.0, space), ((tw - space) / 3.0, 0.0)],
         _ => Vec::new(),
     };
-    with_sect(s, |x| x.columns = Columns { count: count as u32, space, separator: sep, widths: widths.clone() })
+    // Equal columns keep one spacing; unequal ones remember the first gap for a later switch back.
+    let space = widths.first().map(|w| w.1).unwrap_or(space);
+    let cols = Columns { count: count as u32, space, separator: sep, widths };
+    match p::str(v, "apply").unwrap_or("section") {
+        "section" => with_sect(s, |x| x.columns = cols.clone()),
+        "document" => {
+            let ends: Vec<usize> = s.doc.sections().iter().map(|(e, _)| *e).collect();
+            for e in ends {
+                s.doc.section_mut(e).columns = cols.clone();
+            }
+            Ok(serde_json::to_value(sect(s)).unwrap_or(Value::Null))
+        }
+        // From the caret on: a continuous section break first, then the new section's columns.
+        "forward" => {
+            let start = s.sel.ordered().0;
+            s.sel = Selection::caret(start);
+            breaks(s, &json!({"kind": "continuous"}))?;
+            with_sect(s, |x| x.columns = cols.clone())
+        }
+        x => Err(CmdError::Params(format!("unknown apply `{x}` (section, document or forward)"))),
+    }
+}
+
+/// `[[width, space after], …]` in points: 1–12 columns, each at least 0.25", that fit the text
+/// width (`tw`).
+fn column_widths(v: &Value, tw: f32) -> Result<Vec<(f32, f32)>, CmdError> {
+    let bad = || CmdError::Params("widths: [[width, space after], …] in points, 1–12 columns".into());
+    let a = v.as_array().filter(|a| (1..=12).contains(&a.len())).ok_or_else(bad)?;
+    let mut out = Vec::with_capacity(a.len());
+    for (i, c) in a.iter().enumerate() {
+        let num = |k: usize| c.get(k).and_then(Value::as_f64).map(|x| x as f32).filter(|x| x.is_finite());
+        let w = num(0).ok_or_else(bad)?;
+        // The last column has no space after it.
+        let sp = if i + 1 == a.len() { 0.0 } else { num(1).unwrap_or(0.0) };
+        if w < 18.0 || !(0.0..=300.0).contains(&sp) {
+            return Err(CmdError::Params("each column must be at least 0.25\" wide, with 0–300 pt after it".into()));
+        }
+        out.push((w, sp));
+    }
+    let total: f32 = out.iter().map(|(w, sp)| w + sp).sum();
+    if total > tw + 1.0 {
+        return Err(CmdError::Params(format!("the columns ({total:.0} pt) are wider than the text ({tw:.0} pt)")));
+    }
+    Ok(out)
 }
 
 fn breaks(s: &mut Session, v: &Value) -> CmdResult {
@@ -222,4 +277,46 @@ fn breaks(s: &mut Session, v: &Value) -> CmdResult {
     s.sel = Selection::caret(Pos { off: 0, ..new });
     let _ = Block::Para;
     sel_result(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn doc() -> Session {
+        Session::new(wordcraft_doc::Document::from_text("one\ntwo\nthree"))
+    }
+
+    /// More Columns: unequal widths with a line between, as one undo step.
+    #[test]
+    fn unequal_columns_with_a_line_between() {
+        let mut s = doc();
+        let tw = sect(&s).text_width();
+        s.run("layout.columns", &json!({"widths": [[150.0, 24.0], [tw - 174.0, 0.0]], "separator": true})).unwrap();
+        let c = sect(&s).columns;
+        assert_eq!((c.count, c.separator, c.widths.len()), (2, true, 2));
+        assert_eq!(c.widths.first(), Some(&(150.0, 24.0)));
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(sect(&s).columns, Columns::default());
+        // Too wide, too narrow, too many, or nonsense: refused.
+        for bad in [json!([[tw, 36.0], [100.0, 0.0]]), json!([[5.0, 0.0], [100.0, 0.0]]), json!(vec![[40.0, 0.0]; 13]), json!("x")] {
+            assert!(s.run("layout.columns", &json!({"widths": bad})).is_err(), "{bad}");
+        }
+    }
+
+    /// Apply to: the whole document, or from the caret on (a continuous section break first).
+    #[test]
+    fn columns_apply_to_the_document_or_from_the_caret_on() {
+        let mut s = doc();
+        s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+        s.run("layout.columns", &json!({"count": 3, "apply": "document"})).unwrap();
+        assert!(s.doc.sections().iter().all(|(_, x)| x.columns.count == 3));
+        let mut s = doc();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("layout.columns", &json!({"count": 2, "apply": "forward"})).unwrap();
+        let counts: Vec<u32> = s.doc.sections().iter().map(|(_, x)| x.columns.count).collect();
+        assert_eq!(counts, vec![1, 2]);
+        assert_eq!(s.doc.last_section.start, SectionStart::Continuous);
+        assert!(s.run("layout.columns", &json!({"count": 2, "apply": "elsewhere"})).is_err());
+    }
 }
