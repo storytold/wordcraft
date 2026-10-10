@@ -81,3 +81,17 @@ Progress docs follow [`craftrules/standards/progress-docs.md`](https://github.co
   GitHub profiles). Never hand-edit `contributors.json`.
 - Maintainers refresh the stats with `python3 ../../craftrules/scripts/contributors.py .` (it also
   re-verifies who wrote each `people.toml` entry; `--check` only verifies).
+
+## Local build and fork checks
+
+- On macOS, if Homebrew Cargo reports a missing Clippy component, use the Rustup tools in
+  `~/.cargo/bin`. Install the components with `"$HOME/.cargo/bin/rustup" component add clippy`
+  and `"$HOME/.cargo/bin/rustup" target add wasm32-unknown-unknown`. Then run
+  `PATH="$HOME/.cargo/bin:$PATH" cargo xtask ci`. Check the exit status and all six CI steps.
+- Before pushing a PR branch, check access with
+  `gh api repos/storytold/wordcraft --jq '.permissions.push'`. If it is false, create a fork with
+  `gh repo fork storytold/wordcraft --clone=false`. Do not add `--remote=false` when the command
+  has a repository argument; that flag combination fails. Keep the current upstream remote.
+  Push the branch to the returned fork URL. Create the PR against `storytold/wordcraft`, with
+  `main` as its base and the fork owner's branch as its head. Check the returned PR URL and
+  confirm its base, head and changed files.

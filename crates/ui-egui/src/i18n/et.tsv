@@ -1,0 +1,1005 @@
+# Estonian (et) interface catalog. Columns separated by a TAB:
+#   context <TAB> English source <TAB> translation
+# Escapes: \n, \t and \\. Keep named placeholders and trailing ellipses.
+# Missing entries fall back to English.
+#
+# Original translation from the meaning of this repository's English labels.
+# No Microsoft Word or other product localisation was consulted or copied.
+# Use short commands and plain Estonian. Keep product and format names.
+# Use count-neutral labels. This catalog does not add Estonian spell checking.
+# Author: @henno with Codex; MIT OR Apache-2.0, like WordCraft.
+
+	(no suggestions)	(soovitused puuduvad)
+	1.5 Line Spacing	Reavahe 1,5
+	A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.	Tasuta avatud lähtekoodiga tekstitöötlusprogramm, mis on kirjutatud Rustis.\nArtCrafti meeskonna Crafting Appsi osa.
+	About	Teave
+	About WordCraft	WordCrafti teave
+	Accept	Nõustu
+	Accept All Changes	Nõustu kõigi muudatustega
+	Accept This Change	Nõustu selle muudatusega
+	Accessibility	Ligipääsetavus
+	Add	Lisa
+	Add Space Before Paragraph	Lisa lõigu ette vahe
+	Add Text	Lisa tekst
+	Add a Table	Lisa tabel
+	Add a comment	Lisa kommentaar
+	Add to Dictionary	Lisa sõnastikku
+	Add to Style Gallery	Lisa stiilivalikusse
+	Address Block	Aadressiplokk
+	Address:	Aadress:
+	Address\nBlock	Aadressi\nplokk
+	Adjust	Kohanda
+	Advanced	Täpsem
+	Advanced Find	Täpsem otsing
+	Advanced Find…	Täpsem otsing…
+	After:	Pärast:
+	Agents	Agendid
+	Align	Joonda
+	Align Left	Joonda vasakule
+	Align Right	Joonda paremale
+	Alignment	Joondus
+	All Borders	Kõik äärised
+	All Caps	Suurtähed
+	All Markup	Kõik märgistused
+	All caps	Suurtähed
+	Alt Text	Asendustekst
+	Apply Character Style	Rakenda märgistiil
+	Apply Style	Rakenda stiil
+	Arrange	Paiguta
+	Arrange\nAll	Paiguta\nkõik
+	Arrow	Nool
+	Artistic Effects	Kunstilised efektid
+	Author	Autor
+	AutoCorrect Options	Automaatparanduse valikud
+	AutoFit	Automaatne sobitus
+	AutoFit Contents	Sobita sisuga
+	AutoFit Window	Sobita aknaga
+	AutoSave	Automaatsalvestus
+	AutoSave saves every change to the file (needs a saved document)	Automaatsalvestus salvestab iga muudatuse faili (dokument peab olema salvestatud)
+	AutoText	Automaattekst
+	Automatic	Automaatne
+	Automatic ({language})	Automaatne ({language})
+	Automatic Table 1 (3 levels)	Automaatne sisukord 1 (3 taset)
+	Automatic Table 2 (2 levels)	Automaatne sisukord 2 (2 taset)
+	Automatic follows your system's language. Menus and commands change; your documents don't.	Automaatne valik kasutab süsteemi keelt. Menüüde ja käskude keel muutub. Dokumentide keel ei muutu.
+	Backspace	Tagasilüke
+	Banded Columns	Vahelduvad veerud
+	Banded Rows	Vahelduvad read
+	Before:	Enne:
+	Bibliography	Allikaloend
+	Binary assets added	Lisatud binaarvarad
+	Binary assets removed	Eemaldatud binaarvarad
+	Blank	Tühi
+	Blank (Three Columns)	Tühi (kolm veergu)
+	Blank Page	Tühi leht
+	Blank document	Tühi dokument
+	Block\nAuthors	Blokeeri\nautorid
+	Bold	Paks
+	Bookmark	Järjehoidja
+	Bookmark name:	Järjehoidja nimi:
+	Border Painter	Äärisepintsel
+	Border\nPainter	Äärise-\npintsel
+	Borders	Äärised
+	Bottom Border	Alumine ääris
+	Bottom of Page	Lehe allserv
+	Bottom:	All:
+	Box	Kast
+	Breaks	Piirid
+	Bring Forward	Too ettepoole
+	Bullet Library	Täpitähiste kogu
+	Bullets	Täpploend
+	Calendar	Kalender
+	Cancel	Loobu
+	Capitalize Each Word	Iga sõna suure algustähega
+	Captions	Pealdised
+	Cell Margins	Lahtri veerised
+	Cell Size	Lahtri suurus
+	Cell\nMargins	Lahtri\nveerised
+	Center	Keskele
+	Change	Muuda
+	Change Case	Muuda tähesuurust
+	Change List Level	Muuda loendi taset
+	Change Picture	Muuda pilti
+	Change Shape	Muuda kujundit
+	Changes	Muudatused
+	Character Position	Märgi asend
+	Character Scale	Märgi mõõtkava
+	Character Shading	Märgi taust
+	Character Spacing	Märkide vahe
+	Characters	Märgid
+	Characters (no spaces)	Märgid (tühikuteta)
+	Characters (with spaces)	Märgid (tühikutega)
+	Chart	Diagramm
+	Check Accessibility	Kontrolli ligipääsetavust
+	Check Compatibility	Kontrolli ühilduvust
+	Check Spelling as You Type	Kontrolli õigekirja kirjutamise ajal
+	Check for Errors	Kontrolli vigu
+	Check\nAccessibility	Kontrolli\nligipääsetavust
+	Citation Style	Viitamisstiil
+	Citations & Bibliography	Viited ja allikaloend
+	Clear	Tühjenda
+	Clear All	Tühjenda kõik
+	Clear All Formatting	Eemalda kogu vormindus
+	Clear Character Formatting	Eemalda märgivormindus
+	Clear Character Style	Eemalda märgistiil
+	Clear Formatting Level	Eemalda vormindustase
+	Clear Paragraph Formatting	Eemalda lõiguvormindus
+	Clipboard	Lõikelaud
+	Close	Sulge
+	Close Header and Footer	Sulge päis ja jalus
+	Collapse Selection	Ahenda valik
+	Color	Värv
+	Color:	Värv:
+	Colors	Värvid
+	Column	Veerg
+	Column Break	Veerupiir
+	Columns	Veerud
+	Combine	Ühenda
+	Commands	Käsud
+	Comment	Kommentaar
+	Comments	Kommentaarid
+	Comments Pane	Kommentaaripaan
+	Community\nDiscord	Discordi\nkogukond
+	Compact	Tihe
+	Compare	Võrdle
+	Compress Pictures	Tihenda pildid
+	Continuous	Pidev
+	Convert	Teisenda
+	Convert Text to Table	Teisenda tekst tabeliks
+	Convert Text to Table…	Teisenda tekst tabeliks…
+	Convert to Text	Teisenda tekstiks
+	Copy	Kopeeri
+	Copy Formatting	Kopeeri vormindus
+	Corrections	Parandused
+	Count words in text boxes and notes	Loenda sõnad ka tekstiväljadel ja märkustes
+	Cover Page	Esileht
+	Create	Loo
+	Create New Style	Loo uus stiil
+	Create a Style	Loo stiil
+	Create an interactive outline of your document.\n\nIt's a great way to keep track of where you are or quickly move your content around.\n\nTo get started, go to the Home tab and apply Heading styles to the headings in your document.	Loo dokumendi interaktiivne liigendus.\n\nSee aitab leida oma asukohta ja sisu kiiresti ümber paigutada.\n\nAlustamiseks ava vahekaart Avaleht ja rakenda dokumendi pealkirjadele pealkirjastiilid.
+	Crop	Kärbi
+	Cross-reference	Ristviide
+	Current Position	Praegune asukoht
+	Current style: {style}	Praegune stiil: {style}
+	Custom Margins…	Kohandatud veerised…
+	Custom Watermark	Kohandatud vesimärk
+	Custom Watermark…	Kohandatud vesimärk…
+	Customize Quick Access Toolbar	Kohanda kiirpääsuriba
+	Cut	Lõika
+	Dark Mode	Tume režiim
+	Dashed	Katkendjoon
+	Data	Andmed
+	Date & Time	Kuupäev ja kellaaeg
+	Decrease Font Size	Vähenda fondi suurust
+	Decrease Indent	Vähenda taanet
+	Default	Vaikimisi
+	Define New Bullet	Määra uus täpitähis
+	Define New Number Format	Määra uus numbrivorming
+	Delete	Kustuta
+	Delete Cells	Kustuta lahtrid
+	Delete Columns	Kustuta veerud
+	Delete Comment	Kustuta kommentaar
+	Delete Next Word	Kustuta järgmine sõna
+	Delete Previous Word	Kustuta eelmine sõna
+	Delete Rows	Kustuta read
+	Delete Style	Kustuta stiil
+	Delete Table	Kustuta tabel
+	Design	Kujundus
+	Diagonal	Diagonaal
+	Diamond	Romb
+	Dictate	Dikteeri
+	Different First Page	Erinev esileht
+	Different Odd & Even Pages	Erinevad paaris- ja paaritud lehed
+	Direct formatting	Otsevormindus
+	Discord	Discord
+	Discord community	Discordi kogukond
+	Display	Kuva
+	Display for Review	Kuva läbivaatuseks
+	Distribute Columns	Jaota veerud ühtlaselt
+	Distribute Rows	Jaota read ühtlaselt
+	Distributed	Hajutatud
+	Do Not Show in TOC	Ära kuva sisukorras
+	Document End	Dokumendi lõpp
+	Document Formatting	Dokumendi vormindus
+	Document Property	Dokumendi atribuut
+	Document Start	Dokumendi algus
+	Document Text	Dokumendi tekst
+	Document Title	Dokumendi pealkiri
+	Documents you open will show up here.	Avatud dokumendid kuvatakse siin.
+	Dot-dash	Punkt-kriipsjoon
+	Dotted	Punktiir
+	Double	Kahekordne
+	Double Spacing	Kahekordne reavahe
+	Double Strikethrough	Kahekordne läbikriipsutus
+	Double Underline	Kahekordne allajoon
+	Down	Alla
+	Draft	Mustand
+	Draw	Joonista
+	Drawing Tools	Joonistusriistad
+	Drawing\nCanvas	Joonistus-\nlõuend
+	Drop Cap	Süvisinitsiaal
+	Drops all formatting and pastes plain text.	Eemaldab kogu vorminduse ja kleebib lihtteksti.
+	Edit Footer	Muuda jalust
+	Edit Header	Muuda päist
+	Edit Recipient List	Muuda adressaatide loendit
+	Edit\nRecipient List	Muuda\nadressaatide loendit
+	Edited	Muudetud
+	Editing	Redigeerimine
+	Editing header/footer	Päise või jaluse redigeerimine
+	Editing — edit the document directly	Redigeerimine — muuda dokumenti otse
+	Editor	Toimetaja
+	Effects	Efektid
+	Emboss	Reljeef
+	Encrypt with Password	Krüpti parooliga
+	English (United States)	Inglise (Ameerika Ühendriigid)
+	Engrave	Süvend
+	Enter page number:	Sisesta leheküljenumber:
+	Envelopes	Ümbrikud
+	Eraser	Kustutuskumm
+	Even Page	Paarisleht
+	Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel.	Kõik käsud on saadaval skriptidele ja tehisintellekti agentidele. MCP-serveri jaoks käivita `wordcraft-cli mcp`. JSON-juhtkanali jaoks käivita rakendus valikuga `--control <port>`.
+	Export	Ekspordi
+	Export PDF	Ekspordi PDF
+	Export Page as PNG	Ekspordi leht PNG-na
+	Export a copy to share (PDF, Word document)	Ekspordi koopia jagamiseks (PDF, Wordi dokument)
+	Exported {path}	Eksporditud: {path}
+	Extend Selection	Laienda valikut
+	Field	Väli
+	File	Fail
+	Find	Otsi
+	Find Next	Otsi järgmine
+	Find Previous	Otsi eelmine
+	Find Recipient	Otsi adressaat
+	Find and Replace	Otsi ja asenda
+	Find what:	Otsitav tekst:
+	Finish	Lõpeta
+	Finish & Merge	Lõpeta ja ühenda
+	Finish &\nMerge	Lõpeta ja\nühenda
+	First Column	Esimene veerg
+	First commit	Esimene commit
+	First line:	Esimene rida:
+	Fixed Column Width	Fikseeritud veerulaius
+	Focus	Keskendu
+	Font	Font
+	Font Color	Fondi värv
+	Font Dialog	Fondi dialoog
+	Font Size	Fondi suurus
+	Font color:	Fondi värv:
+	Font:	Font:
+	Fonts	Fondid
+	Footer	Jalus
+	Footnote and Endnote	Allmärkus ja lõpumärkus
+	Footnotes	Allmärkused
+	Format	Vorming
+	Format Page Numbers	Vorminda leheküljenumbrid
+	Format Page Numbers…	Vorminda leheküljenumbrid…
+	Format Painter	Vormingupintsel
+	Formatted Text	Vormindatud tekst
+	Formatting at Selection	Valiku vormindus
+	Formula	Valem
+	General	Üldine
+	Go To	Mine
+	Go To (⌘⌥G)	Mine (⌘⌥G)
+	Go To…	Mine…
+	Go to	Mine
+	Grab bag	Koondvaade
+	Greeting Line	Tervitusrida
+	Greeting\nLine	Tervitus-\nrida
+	Gridlines	Ruudujooned
+	Group	Rühmita
+	Grow Font 1 Point	Suurenda fonti 1 punkti võrra
+	HTML Format	HTML-vorming
+	Hanging Indent	Eenduv taane
+	Header	Päis
+	Header & Footer	Päis ja jalus
+	Header Row	Päiserida
+	Header/Footer Position	Päise ja jaluse asukoht
+	Heading 1	Pealkiri 1
+	Heading 2	Pealkiri 2
+	Heading 3	Pealkiri 3
+	Headings	Pealkirjad
+	Heart	Süda
+	Help	Abi
+	Hidden	Peidetud
+	Highlight Merge Fields	Tõsta ühendamisväljad esile
+	Highlight\nMerge Fields	Tõsta ühendamis-\nväljad esile
+	Highlighter	Marker
+	Home	Avaleht
+	Horizontal	Rõhtne
+	Horizontal Line	Rõhtjoon
+	Hyphenation	Poolitus
+	Icons	Ikoonid
+	Ignore All	Eira kõiki
+	Illustrations	Illustratsioonid
+	Immersive	Süvenemine
+	Immersive Reader	Süvaluger
+	Immersive\nReader	Süva-\nluger
+	Increase Font Size	Suurenda fondi suurust
+	Increase Indent	Suurenda taanet
+	Indent	Taane
+	Indentation	Taandus
+	Indents	Taanded
+	Index	Register
+	Info	Teave
+	Ink to\nMath	Käsikiri\nvalemiks
+	Ink to\nShape	Käsikiri\nkujundiks
+	Ink\nReplay	Esita\nkäsikiri
+	Insert	Lisa
+	Insert Above	Lisa üles
+	Insert Below	Lisa alla
+	Insert Caption	Lisa pealdis
+	Insert Citation	Lisa viide
+	Insert Endnote	Lisa lõpumärkus
+	Insert Footnote	Lisa allmärkus
+	Insert Hyperlink	Lisa hüperlink
+	Insert Index	Lisa register
+	Insert Left	Lisa vasakule
+	Insert Merge Field	Lisa ühendamisväli
+	Insert Merge\nField	Lisa ühendamis-\nväli
+	Insert Right	Lisa paremale
+	Insert Shapes	Lisa kujundid
+	Insert Table	Lisa tabel
+	Insert Table of Authorities	Lisa õigusallikate loend
+	Insert Table of Figures	Lisa illustratsioonide loend
+	Insert Table…	Lisa tabel…
+	Insert\nAbove	Lisa\nüles
+	Insert\nCaption	Lisa\npealdis
+	Insert\nCitation	Lisa\nviide
+	Insert\nFootnote	Lisa\nallmärkus
+	Inside Borders	Siseäärised
+	Inspect Document	Kontrolli dokumenti
+	Inspect Styles at Selection	Kontrolli valiku stiile
+	Interface language:	Kasutajaliidese keel:
+	Italic	Kaldkiri
+	Join the ArtCraft community on Discord	Liitu ArtCrafti kogukonnaga Discordis
+	Join us on Discord: discord.gg/artcraft	Liitu meiega Discordis: discord.gg/artcraft
+	Justify	Rööpjoonda
+	Keep Lines Together	Hoia read koos
+	Keep Text Only	Säilita ainult tekst
+	Keep lines together	Hoia read koos
+	Keep with Next	Hoia järgmisega koos
+	Keep with next	Hoia järgmisega koos
+	Keeps the fonts and formatting of the copied text.	Säilitab kopeeritud teksti fondid ja vorminduse.
+	Labels	Sildid
+	Landscape	Rõhtpaigutus
+	Language	Keel
+	Lasso	Lasso
+	Last Column	Viimane veerg
+	Last commit	Viimane commit
+	Layout	Paigutus
+	Layout Summary	Paigutuse kokkuvõte
+	Left	Vasak
+	Left Border	Vasak ääris
+	Left:	Vasakul:
+	Letter	Kiri
+	Line	Joon
+	Line Break	Reapiir
+	Line End	Rea lõpp
+	Line Numbers	Reanumbrid
+	Line Spacing	Reavahe
+	Line Spacing Options…	Reavahe valikud…
+	Line Start	Rea algus
+	Line and Page Breaks	Rea- ja lehepiirid
+	Line and Paragraph Spacing	Rea- ja lõiguvahe
+	Line delta	Ridade muutus
+	Line spacing:	Reavahe:
+	Lines	Read
+	Lines added	Lisatud read
+	Lines deleted	Kustutatud read
+	Link	Link
+	Link to Previous	Seo eelmisega
+	Links	Lingid
+	Location: {path}	Asukoht: {path}
+	MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.	MIT OR Apache-2.0. Autoriõigus (c) 2026 ArtCrafti meeskond ja WordCrafti kaasautorid.
+	Macros	Makrod
+	Mailings	Postitused
+	Manage Sources	Halda allikaid
+	Many pages	Mitu lehte
+	Margins	Veerised
+	Mark Citation	Märgi õigusallikas
+	Mark Entry	Märgi registrikirje
+	Mark\nCitation	Märgi\nõigusallikas
+	Mark\nEntry	Märgi\nregistrikirje
+	Markdown (*.md)	Markdown (*.md)
+	Match Fields	Vastenda väljad
+	Match case	Erista suur- ja väiketähti
+	Matrix	Maatriks
+	Merge	Ühenda
+	Merge Cells	Ühenda lahtrid
+	Merge Formatting	Ühenda vormindus
+	Merged PRs	Ühendatud PR-id
+	Mirrored	Peegeldatud
+	Moderate	Mõõdukas
+	Modify Style	Muuda stiili
+	Modify…	Muuda…
+	More templates →	Veel malle →
+	Move or Resize	Teisalda või muuda suurust
+	Multilevel List	Mitmetasemeline loend
+	Multiple Pages	Mitu lehte
+	Name (A–Z)	Nimi (A–Z)
+	Name:	Nimi:
+	Narrow  0.5" all	Kitsas  0,5" kõigil külgedel
+	Navigation	Navigeerimine
+	Navigation Pane	Navigeerimispaan
+	New	Uus
+	New Comment	Uus kommentaar
+	New Paragraph	Uus lõik
+	New Style…	Uus stiil…
+	New Window	Uus aken
+	New from Template	Uus mallist
+	New\nComment	Uus\nkommentaar
+	New\nWindow	Uus\naken
+	Next	Järgmine
+	Next Change	Järgmine muudatus
+	Next Comment	Järgmine kommentaar
+	Next Footnote	Järgmine allmärkus
+	Next Page	Järgmine leht
+	Next Record	Järgmine kirje
+	Next Section	Järgmine jaotis
+	No Border	Ääriseta
+	No Color	Värvita
+	No Markup	Märgistuseta
+	No Paragraph Space	Lõiguvaheta
+	No contributor data was built into this copy.	Selles versioonis pole kaasautorite andmeid.
+	No model credits were built into this copy.	Selles versioonis pole mudelite autoriteavet.
+	No templates match your search.	Otsingule vastavaid malle pole.
+	Nonbreaking Hyphen	Poolitamatu sidekriips
+	Nonbreaking Space	Poolitamatu tühik
+	None	Puudub
+	Normal  1" all	Tavaline  1" kõigil külgedel
+	Normal Style	Tavaline stiil
+	Not available right now	Praegu pole saadaval
+	Not saved	Salvestamata
+	Not saved yet	Veel salvestamata
+	Nudge	Nihuta
+	Number of columns:	Veergude arv:
+	Number of rows:	Ridade arv:
+	Numbering	Nummerdus
+	OK	OK
+	Object	Objekt
+	Odd Page	Paaritu leht
+	Office 2003 Default	Office 2003 vaikevalik
+	One	Üks
+	One Page	Üks leht
+	Open	Ava
+	OpenDocument Text (*.odt)	OpenDocumenti tekst (*.odt)
+	Optional Hyphen	Valikuline poolitusmärk
+	Options	Valikud
+	Orientation	Suund
+	Outline	Liigendus
+	Outline Level	Liigendustase
+	Outside Borders	Välisäärised
+	Oval	Ovaal
+	PDF document (*.pdf)	PDF-dokument (*.pdf)
+	Page	Leht
+	Page Background	Lehe taust
+	Page Borders	Lehe äärised
+	Page Break	Lehepiir
+	Page Break Before	Lehepiir enne
+	Page Breaks	Lehepiirid
+	Page Color	Lehe värv
+	Page Down	Lehe võrra alla
+	Page Movement	Lehtede liikumine
+	Page Number	Leheküljenumber
+	Page Setup	Lehe seadistus
+	Page Up	Lehe võrra üles
+	Page Width	Lehe laius
+	Page X of Y	Leht X / Y
+	Page break before	Lehepiir enne
+	Page image (*.png)	Lehe pilt (*.png)
+	Page width	Lehe laius
+	Page {page}	Leht {page}
+	Page {page} of {pages}	Leht {page} / {pages}
+	Page\nBorders	Lehe\näärised
+	Page\nColor	Lehe\nvärv
+	Page\nNumber	Lehekülje-\nnumber
+	Pages	Lehed
+	Paragraph	Lõik
+	Paragraph Details	Lõigu üksikasjad
+	Paragraph Down	Lõigu võrra alla
+	Paragraph Settings	Lõigu sätted
+	Paragraph Spacing	Lõiguvahe
+	Paragraph Up	Lõigu võrra üles
+	Paragraphs	Lõigud
+	Paste	Kleebi
+	Paste (⌘V)	Kleebi (⌘V)
+	Paste Formatting	Kleebi vormindus
+	Paste Special	Erikleepimine
+	Paste Special…	Erikleepimine…
+	Paste as:	Kleebi kujul:
+	Paste: Keep Text Only	Kleebi: säilita ainult tekst
+	Paste: Merge Formatting	Kleebi: ühenda vormindus
+	Pen	Pliiats
+	Pencil	Grafiitpliiats
+	Picture Border	Pildi ääris
+	Picture Format	Pildi vorming
+	Picture Styles	Pildistiilid
+	Pictures	Pildid
+	Plain text (*.txt)	Lihttekst (*.txt)
+	Portrait	Püstpaigutus
+	Position	Asukoht
+	Preview Results	Tulemuste eelvaade
+	Preview\nResults	Tulemuste\neelvaade
+	Previous	Eelmine
+	Previous Change	Eelmine muudatus
+	Previous Comment	Eelmine kommentaar
+	Previous Record	Eelmine kirje
+	Previous Section	Eelmine jaotis
+	Print	Prindi
+	Print Layout	Prindipaigutus
+	Print\nLayout	Prindi-\npaigutus
+	Proofing	Keelekontroll
+	Proofing Issues	Keelekontrolli probleemid
+	Properties	Atribuudid
+	Protect	Kaitse
+	Protect Document	Kaitse dokumenti
+	Quick Access Toolbar	Kiirpääsuriba
+	Quick Parts	Kiirplokid
+	Quick Tables	Kiirtabelid
+	Read Aloud	Loe ette
+	Read Mode	Lugemisrežiim
+	Read\nAloud	Loe\nette
+	Read\nMode	Lugemis-\nrežiim
+	Reads the clipboard's rich text and keeps its formatting.	Loeb lõikelaualt vormindatud teksti ja säilitab vorminduse.
+	Reads the clipboard's web content and keeps its formatting.	Loeb lõikelaualt veebisisu ja säilitab vorminduse.
+	Reading Highlight	Otsingutulemuste esiletõst
+	Recent	Hiljutised
+	Record Macro	Salvesta makro
+	Recover Unsaved Documents	Taasta salvestamata dokumendid
+	Rectangle	Ristkülik
+	Redo	Tee uuesti
+	Reduce Hanging Indent	Vähenda eenduvat taanet
+	References	Viited
+	Reject	Lükka tagasi
+	Reject All Changes	Lükka kõik muudatused tagasi
+	Reject Change	Lükka muudatus tagasi
+	Relaxed	Hõre
+	Remove Background	Eemalda taust
+	Remove Footer	Eemalda jalus
+	Remove Header	Eemalda päis
+	Remove Hyperlink	Eemalda hüperlink
+	Remove Space After Paragraph	Eemalda lõigu järel olev vahe
+	Remove Table of Contents	Eemalda sisukord
+	Remove Watermark	Eemalda vesimärk
+	Repeat	Korda
+	Repeat Header Rows	Korda päiseridu
+	Replace	Asenda
+	Replace All	Asenda kõik
+	Replace Document Text	Asenda dokumendi tekst
+	Replace with:	Asendav tekst:
+	Replay	Esita uuesti
+	Reply	Vasta
+	Report	Aruanne
+	Research	Uurimine
+	Researcher	Uurija
+	Reset Picture	Lähtesta pilt
+	Reset to Normal	Lähtesta tavaliseks
+	Resolve	Lahenda
+	Resolved	Lahendatud
+	Restart Each Page	Alusta igal lehel uuesti
+	Restart Each Section	Alusta igas jaotises uuesti
+	Restart at 1	Alusta numbrist 1
+	Restrict Editing	Piira muutmist
+	Restrict\nEditing	Piira\nmuutmist
+	Result	Tulemus
+	Results	Tulemused
+	Reverse the order	Pööra järjestus ümber
+	Reviewing	Läbivaatus
+	Reviewing Pane	Läbivaatuspaan
+	Reviewing — edits become suggestions	Läbivaatus — muudatused muutuvad soovitusteks
+	Rich Text Format (*.rtf)	Vormindatud tekst (*.rtf)
+	Rich Text Format (RTF)	Vormindatud tekst (RTF)
+	Right	Parem
+	Right Border	Parem ääris
+	Right-to-Left Text Direction	Teksti suund paremalt vasakule
+	Left-to-Right Text Direction	Teksti suund vasakult paremale
+	Right:	Paremal:
+	Rotate	Pööra
+	Rounded Rectangle	Ümarnurkadega ristkülik
+	Rows & Columns	Read ja veerud
+	Ruler	Joonlaud
+	Rules	Reeglid
+	Résumé	Elulookirjeldus
+	Save	Salvesta
+	Save As	Salvesta nimega
+	Save a copy in another format. Printing goes through a PDF you can print from any viewer.	Salvesta koopia teises vormingus. Printimiseks luuakse PDF, mille saad printida PDF-vaaturist.
+	Save as Template	Salvesta mallina
+	Saved	Salvestatud
+	Search Commands	Otsi käske
+	Search commands and help	Otsi käske ja abi
+	Search document	Otsi dokumendist
+	Search for templates	Otsi malle
+	Section Breaks	Jaotisepiirid
+	Section Properties	Jaotise atribuudid
+	Sections	Jaotised
+	Select	Vali
+	Select All	Vali kõik
+	Select Cell	Vali lahter
+	Select Line	Vali rida
+	Select Objects	Vali objektid
+	Select Paragraph	Vali lõik
+	Select Range	Vali vahemik
+	Select Recipients	Vali adressaadid
+	Select Row	Vali tabelirida
+	Select Sentence	Vali lause
+	Select Table	Vali tabel
+	Select Text	Vali tekst
+	Select Text with Similar Formatting	Vali sarnase vormindusega tekst
+	Select Word	Vali sõna
+	Select\nRecipients	Vali\nadressaadid
+	Selection	Valik
+	Selection Pane	Valikupaan
+	Send Backward	Saada tahapoole
+	Sentence case.	Lause alguses suurtäht.
+	Set Caret	Määra tekstikursor
+	Set Character Formatting	Määra märgivormindus
+	Set Numbering Value	Määra nummerduse väärtus
+	Set Paragraph Formatting	Määra lõiguvormindus
+	Set as Default	Määra vaikevalikuks
+	Shading	Taustavärv
+	Shadow	Vari
+	Shape Fill	Kujundi täide
+	Shape Format	Kujundi vorming
+	Shape Outline	Kujundi kontuur
+	Shape Styles	Kujundistiilid
+	Shapes	Kujundid
+	Share	Jaga
+	Shift+Tab	Shift+Tab
+	Show	Kuva
+	Show Comments	Kuva kommentaarid
+	Show Markup	Kuva märgistus
+	Show Notes	Kuva märkused
+	Show all formatting marks	Kuva kõik vormindusmärgid
+	Show rulers	Kuva joonlauad
+	Show the community button in the title bar	Kuva tiitliribal kogukonna nupp
+	Show/Hide ¶	Kuva/peida ¶
+	Show\nComments	Kuva\nkommentaarid
+	Shrink Font 1 Point	Vähenda fonti 1 punkti võrra
+	Side to Side	Kõrvuti
+	Side\nto Side	Kõr-\nvuti
+	Signature Line	Allkirjarida
+	Single	Ühekordne
+	Single Spacing	Ühekordne reavahe
+	Size	Suurus
+	Size:	Suurus:
+	Small Caps	Kapiteelkiri
+	Small caps	Kapiteelkiri
+	SmartArt	SmartArt
+	Sort	Sordi
+	Source code: github.com/storytold/wordcraft	Lähtekood: github.com/storytold/wordcraft
+	Space before/after:	Vahe enne/pärast:
+	Spacing	Vahe
+	Spacing (pt):	Vahe (pt):
+	Speech	Kõne
+	Spelling & Grammar	Õigekiri ja grammatika
+	Spelling &\nGrammar	Õigekiri ja\ngrammatika
+	Spelling Suggestions	Õigekirjasoovitused
+	Split	Tükelda
+	Split Cells	Tükelda lahtrid
+	Split Table	Tükelda tabel
+	Spreadsheet Table	Arvutustabel
+	Standard Colors	Standardvärvid
+	Star	Täht
+	Start Mail Merge	Alusta kirjakoostet
+	Start Mail\nMerge	Alusta\nkirjakoostet
+	Statistics	Statistika
+	Status Bar	Olekuriba
+	Strikethrough	Läbikriipsutus
+	Studio cover	Stuudio esileht
+	Studio handbook (sample)	Stuudio käsiraamat (näidis)
+	Style	Stiil
+	Style Inspector	Stiilikontroll
+	Style Set	Stiilikomplekt
+	Style based on:	Stiili alus:
+	Style: APA	Stiil: APA
+	Styles	Stiilid
+	Styles Pane	Stiilipaan
+	Subscript	Allindeks
+	Superscript	Ülaindeks
+	Switch Modes	Vaheta režiimi
+	Switch\nModes	Vaheta\nrežiimi
+	Symbol	Sümbol
+	Symbols	Sümbolid
+	Synonyms	Sünonüümid
+	Tab	Tabeldus
+	Table	Tabel
+	Table Column Width	Tabeli veerulaius
+	Table Design	Tabeli kujundus
+	Table Layout	Tabeli paigutus
+	Table Properties	Tabeli atribuudid
+	Table Row Height	Tabeli reakõrgus
+	Table Style Options	Tabelistiili valikud
+	Table Styles	Tabelistiilid
+	Table of Authorities	Õigusallikate loend
+	Table of Contents	Sisukord
+	Table of\nContents	Sisu-\nkord
+	Tables	Tabelid
+	Tabs	Tabelduskohad
+	Tabular List	Tabeliloend
+	Text	Tekst
+	Text Box	Tekstiväli
+	Text Direction	Teksti suund
+	Text Effects	Tekstiefektid
+	Text Effects and Typography	Tekstiefektid ja tüpograafia
+	Text Highlight Color	Teksti esiletõstuvärv
+	Text Wrapping	Tekstimähkimine
+	Text from File	Tekst failist
+	Text to display:	Kuvatav tekst:
+	Text:	Tekst:
+	Text\nBox	Teksti-\nväli
+	Text\nDirection	Teksti\nsuund
+	The clipboard is empty.	Lõikelaud on tühi.
+	The new style takes the formatting of the current paragraph.	Uus stiil kasutab praeguse lõigu vormindust.
+	Theme Colors	Kujunduse värvid
+	Theme Fonts	Kujunduse fondid
+	Theme List	Kujunduste loend
+	Themes	Kujundused
+	Thesaurus	Sünonüümisõnastik
+	Thick	Paks
+	Three	Kolm
+	Tight	Tihe
+	Top Border	Ülemine ääris
+	Top of Page	Lehe ülaserv
+	Top:	Ülal:
+	Total Row	Kokkuvõtterida
+	Track Changes	Jälita muudatusi
+	Track Changes: On	Muudatuste jälitus: sees
+	Tracking	Jälitus
+	Translate	Tõlgi
+	Transparency	Läbipaistvus
+	Triangle	Kolmnurk
+	Two	Kaks
+	Type Text	Sisesta tekst
+	Type a command, e.g. "insert table"	Sisesta käsk, nt "lisa tabel"
+	UPPERCASE	SUURTÄHED
+	Underline	Allajoon
+	Underline Words Only	Jooni alla ainult sõnad
+	Undo	Võta tagasi
+	Undo {action}	Võta tagasi: {action}
+	Unformatted Text	Vormindamata tekst
+	Up	Üles
+	Update Field	Uuenda välja
+	Update Index	Uuenda registrit
+	Update Style to Match Selection	Uuenda stiil valiku järgi
+	Update Table	Uuenda tabelit
+	Update Table of Figures	Uuenda illustratsioonide loendit
+	Update to Match	Uuenda vastavaks
+	Update to Match Selection	Uuenda valiku järgi
+	User Name	Kasutajanimi
+	User name:	Kasutajanimi:
+	Version History	Versiooniajalugu
+	Version {version} ({build})	Versioon {version} ({build})
+	Vertical	Püstine
+	Vertical Alignment	Püstjoondus
+	View	Vaade
+	View Gridlines	Kuva ruudujooned
+	View State	Vaate olek
+	Views	Vaated
+	Voice	Hääl
+	Watermark	Vesimärk
+	Wave	Laineline
+	Web Layout	Veebipaigutus
+	Web\nLayout	Veebi-\npaigutus
+	Web page (*.html)	Veebileht (*.html)
+	Whole page	Terve leht
+	Whole words	Terved sõnad
+	Wide	Lai
+	Widow/Orphan Control	Üksikridade vältimine
+	Widow/Orphan control	Üksikridade vältimine
+	Wildcards (regex)	Metamärgid (regulaaravaldis)
+	Window	Aken
+	Word Count	Sõnade arv
+	Word Left	Sõna vasakule
+	Word Right	Sõna paremale
+	Word document (*.docx)	Wordi dokument (*.docx)
+	WordArt	WordArt
+	WordCraft	WordCraft
+	Words	Sõnad
+	Words only	Ainult sõnad
+	Wrap Text	Mähi tekst
+	Wrap\nText	Mähi\ntekst
+	Write & Insert Fields	Kirjuta ja lisa väljad
+	Zoom	Suum
+	Zoom In	Suurenda
+	Zoom Out	Vähenda
+	development build	Arendusversioon
+	lowercase	väiketähed
+	{group} settings	{group}: sätted
+	{key}+Click to follow link	Lingi avamiseks {key}+klõps
+	{selected} of {words} words	Sõnu: {words}; valitud: {selected}
+	{words} words	Sõnu: {words}
+	➕ New comment	➕ Uus kommentaar
+	📂  Browse…	📂  Sirvi…
+	Equation	Võrrand
+	Review	Läbivaatus
+	Track\nChanges	Jälita\nmuudatusi
+	Track\nChanges ✓	Jälita\nmuudatusi ✓
+	Scroll ribbon left	Keri linti vasakule
+	Scroll ribbon right	Keri linti paremale
+	Apply Styles	Rakenda stiilid
+	Dark page (white text on black)	Tume leht (valge tekst mustal taustal)
+	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Kuva dokumendid pööratud värvidega, nagu valik Vaade › Vaheta režiimi. Salvestamine, printimine ja PDF-id ei muutu.
+	Only web (http, https) and email (mailto) links can be followed	Avada saab ainult veebi- (http, https) ja e-posti (mailto) linke
+	Character Border	Märgi ääris
+	Direction:	Suund:
+	Right-to-left	Paremalt vasakule
+	Left-to-right	Vasakult paremale
+	Zotero	Zotero
+	Citations	Viited
+	Document	Dokument
+	Add/Edit\nCitation	Lisa/muuda\nviidet
+	Add\nNote	Lisa\nmärkus
+	Add/Edit\nBibliography	Lisa/muuda\nallikaloendit
+	Refresh	Värskenda
+	Document\nPreferences	Dokumendi\neelistused
+	Unlink\nCitations	Eemalda\nviidete seosed
+	Waiting for Zotero…	Zotero ootel…
+	Zotero: done	Zotero: valmis
+	Zotero: cancelled	Zotero: tühistatud
+	Yes	Jah
+	No	Ei
+	Move Past Citation	Liigu viite järele
+	Move Past\nCitation	Liigu viite\njärele
+	Next Sentence	Järgmine lause
+	Previous Sentence	Eelmine lause
+	Next sentence	Järgmine lause
+	Previous sentence	Eelmine lause
+	Play/Pause	Esita/peata
+	Read Aloud Status	Ettelugemise olek
+	Reading Speed	Lugemiskiirus
+	Skip Citations and Bibliography	Jäta viited ja allikaloend vahele
+	Skip citations & bibliography	Jäta viited ja allikaloend vahele
+	Stop Reading	Lõpeta ettelugemine
+	Don't read Zotero, Mendeley or EndNote citations and bibliographies	Ära loe ette Zotero, Mendeley ega EndNote'i viiteid ja allikaloendeid
+	Play	Esita
+	Pause	Peata
+	Stop	Lõpeta
+	Sentence	Lause
+	Paused	Peatatud
+	Finished	Valmis
+	Stopped	Lõpetatud
+	Speed	Kiirus
+	Normal speed	Tavaline kiirus
+	AutoSave documents you have saved in WordCraft	Salvesta WordCraftis salvestatud dokumendid automaatselt
+	AutoSave failed: {error}. Save the document to turn AutoSave back on.	Automaatsalvestus ebaõnnestus: {error}. Selle uuesti sisse lülitamiseks salvesta dokument.
+	Couldn't download {name}: {error}	Faili {name} allalaadimine ebaõnnestus: {error}
+	Do you want to save changes to {name}?	Kas soovid faili {name} muudatused salvestada?
+	Don't Save	Ära salvesta
+	That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.	See vorming ei säilita kõike. Dokument on endiselt avatud. Jätkamiseks salvesta see Wordi dokumendina (.docx).
+	Your changes will be lost if you don't save them.	Salvestamata muudatused lähevad kaotsi.
+	Change Structure	Muuda struktuuri
+	Change to Display	Muuda eraldi reaks
+	Change to Inline	Muuda tekstisiseseks
+	Conversions	Teisendused
+	Delete Back in Equation	Kustuta võrrandis tagasi
+	Delete in Equation	Kustuta võrrandis
+	Edit Equation	Muuda võrrandit
+	Enter in Equation	Reavahetus võrrandis
+	Equation Gallery	Võrrandite kogu
+	Equation Info	Võrrandi teave
+	Equation Number	Võrrandi number
+	Input Format	Sisendvorming
+	Insert Structure	Lisa struktuur
+	Insert Symbol	Lisa sümbol
+	Justification	Joondus
+	Leave Equation	Välju võrrandist
+	Move in Equation	Liigu võrrandis
+	Normal Text	Tavaline tekst
+	Set Equation	Määra võrrand
+	Structure Actions	Struktuuritoimingud
+	Structures	Struktuurid
+	Tools	Tööriistad
+	Type in Equation	Kirjuta võrrandisse
+	Inline	Tekstisisene
+	Number	Number
+	Close Equation	Sulge võrrand
+	Insert New Equation	Lisa uus võrrand
+	Built-In	Sisseehitatud
+	Professional	Professionaalne
+	Linear	Lineaarne
+	Fraction	Murd
+	Script	Indeks
+	Radical	Juur
+	Integral	Integraal
+	Large\nOperator	Suur\noperaator
+	Bracket	Sulg
+	Function	Funktsioon
+	Accent	Rõhumärk
+	Limit and\nLog	Piirväärtus ja\nlogaritm
+	Operator	Operaator
+	Equation Options	Võrrandi valikud
+	All symbol sets	Kõik sümbolikogud
+	Send the document straight to the system print dialog, or save a copy in another format below.	Ava süsteemi prindidialoog või salvesta koopia mõnes allolevas vormingus.
+	Or save a copy in another format:	Või salvesta koopia teises vormingus:
+	Opening print dialog…	Prindidialoogi avamine…
+	Print failed: {error}	Printimine ebaõnnestus: {error}
+	Couldn't open {path}: {error}	Faili {path} avamine ebaõnnestus: {error}
+	Column Selection	Veeruvalik
+	New Table Style	Uus tabelistiil
+	Modify Table Style	Muuda tabelistiili
+	New Table Style…	Uus tabelistiil…
+	Modify Table Style…	Muuda tabelistiili…
+	Apply formatting to:	Rakenda vormindus:
+	Whole Table	Kogu tabel
+	Fill color:	Täitevärv:
+	{count} items highlighted	Esile tõstetud: {count}
+	{n} pt	{n} pt
+	Not {name}	Pole {name}
+	Level {n}	Tase {n}
+	Body Text	Põhitekst
+	{n} lines	Ridu: {n}
+	At least {n}	Vähemalt {n}
+	Exactly {n}	Täpselt {n}
+	Centered	Keskele joondatud
+	Character spacing	Märkide vahe
+	Don't add space between paragraphs of the same style	Ära lisa sama stiiliga lõikude vahele vahet
+	Don't hyphenate	Ära poolita
+	Double strikethrough	Kahekordne läbikriipsutus
+	Drop cap	Süvisinitsiaal
+	First line	Esimene rida
+	Font color	Fondi värv
+	Highlight	Esiletõst
+	Justified	Rööpjoondatud
+	Left indent	Vasak taane
+	Line spacing	Reavahe
+	Outline level	Liigendustase
+	Raised/lowered	Tõstetud/langetatud
+	Right indent	Parem taane
+	Scale	Mõõtkava
+	Space after	Vahe pärast
+	Space before	Vahe enne
+	Suppress line numbers	Peida reanumbrid
+	Underline color	Allajoone värv
+	Letters	Kirjad
+	E-mail Messages	E-kirjad
+	Directory	Kataloog
+	Normal Word Document	Tavaline Wordi dokument
+	If…Then…Else…	Kui…Siis…Muidu…
+	If…Then…Else	Kui…Siis…Muidu
+	Merge Record #	Ühendatava kirje nr
+	Skip Record If…	Jäta kirje vahele, kui…
+	Skip Record If	Jäta kirje vahele, kui
+	Equals:	Võrdub:
+	Then insert:	Siis lisa:
+	Otherwise insert:	Muidu lisa:
+	Courtesy Title	Pöördumisvorm
+	First Name	Eesnimi
+	Last Name	Perekonnanimi
+	Company	Ettevõte
+	Address	Aadress
+	City	Linn
+	State	Maakond või osariik
+	Postal Code	Sihtnumber
+	Country	Riik
+	(not matched)	(vastendamata)
+	Leave a recipient out of the merge when a field has this value.	Jäta adressaat ühendamisest välja, kui väljal on see väärtus.
+	Insert one text or another, depending on a field's value.	Lisa üks või teine tekst välja väärtuse järgi.
+	Select recipients first to match their fields.	Väljade vastendamiseks vali esmalt adressaadid.
+	The recipient-list field that fills each part of an address block and greeting line.	Adressaatide loendi väli, mis täidab aadressiploki ja tervitusrea iga osa.
+	No errors found: every merge field is in the recipient list.	Vigu ei leitud: kõik ühendamisväljad on adressaatide loendis.
+	These merge fields aren't in the recipient list:	Neid ühendamisvälju pole adressaatide loendis:
+	Add at least one field.	Lisa vähemalt üks väli.
+	Add Field	Lisa väli
+	Every field needs a name.	Igal väljal peab olema nimi.
+	Field name	Välja nimi
+	Field names must be different.	Väljade nimed peavad olema erinevad.
+	Fields:	Väljad:
+	Field:	Väli:
+	Find:	Otsi:
+	New Entry	Uus kirje
+	Recipient List	Adressaatide loend
+	Recipients: {count}	Adressaate: {count}
+	Remove field	Eemalda väli
+	Remove recipient	Eemalda adressaat
+	Select recipients first to choose from their fields.	Väljade valimiseks vali esmalt adressaadid.
+	Type a New List…	Sisesta uus loend…
+	Type at least one recipient.	Sisesta vähemalt üks adressaat.
+	Type the recipients, or load them from a file.	Sisesta adressaadid või laadi need failist.
+	Use an Existing List…	Kasuta olemasolevat loendit…
+	Interface theme:	Kasutajaliidese kujundus:
+	Interface\nTheme	Kasutajaliidese\nkujundus
+	Interface Theme	Kasutajaliidese kujundus
+	Light	Hele
+	Dark	Tume
+	Use system setting	Kasuta süsteemi seadistust
+	A file dialog is already open.	Failidialoog on juba avatud.
