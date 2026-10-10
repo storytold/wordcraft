@@ -20,6 +20,7 @@ mod logging;
 use wordcraft_engine::Session;
 use wordcraft_ui_egui::{
     Services, UiState, WordApp,
+    paste_picture::ClipboardPicture,
     window_geometry::{WindowGeometry, take_rescue},
 };
 
@@ -118,9 +119,23 @@ fn save_prefs(app: &WordApp) {
     }
 }
 
-/// Native file dialogs, shown without blocking the window (`file_dialogs`, #94).
+/// Native file dialogs, shown without blocking the window (`file_dialogs`, #94), and pictures on
+/// the system clipboard (#45).
 fn services(file_dialog: file_dialogs::Hook) -> Services {
-    Services { file_dialog: Some(file_dialog), ..Default::default() }
+    Services { file_dialog: Some(file_dialog), clipboard_picture: Some(Box::new(clipboard_picture)), ..Default::default() }
+}
+
+/// The picture on the system clipboard (#45): copied files, else image pixels. The UI checks the
+/// sizes before inserting anything.
+fn clipboard_picture() -> Option<ClipboardPicture> {
+    let mut clipboard = arboard::Clipboard::new().map_err(|e| log::warn!("clipboard: {e}")).ok()?;
+    if let Ok(files) = clipboard.get().file_list()
+        && !files.is_empty()
+    {
+        return Some(ClipboardPicture::Files(files));
+    }
+    let image = clipboard.get_image().ok()?;
+    Some(ClipboardPicture::Pixels { width: image.width, height: image.height, rgba: image.bytes.into_owned() })
 }
 
 /// Window, Dock and taskbar icon.

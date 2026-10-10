@@ -29,6 +29,7 @@ pub mod keytips;
 pub mod mini_toolbar;
 pub mod objects;
 pub mod panes;
+pub mod paste_picture;
 pub mod previews;
 pub mod read_aloud;
 pub mod ribbon;
@@ -69,6 +70,9 @@ pub struct Services {
     /// Web: hand PDF bytes to the browser's print flow directly (no download, no intermediate
     /// file) — opens the system print dialog on that PDF. An error means no dialog was opened.
     pub print: Option<Box<dyn Fn(&[u8]) -> Result<(), String>>>,
+    /// Desktop: the picture on the system clipboard, if any — egui's paste only carries text
+    /// (#45). Read when Paste finds no text; see [`paste_picture`].
+    pub clipboard_picture: Option<Box<dyn Fn() -> Option<paste_picture::ClipboardPicture>>>,
 }
 
 /// Files delivered asynchronously.
@@ -301,6 +305,14 @@ impl WordApp {
                 self.session.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| self.title_stem());
             self.dialog = Some(dialogs::Dialog::SaveChanges { name, then: id.to_string(), params, document: self.session.document_id() });
             return Ok(json!({"pending": "saveChanges"}));
+        }
+        // Paste without system clipboard text: a picture there is newer than our own copy (copying
+        // here replaces it with text), so it wins (#45).
+        if id == "edit.paste"
+            && params.get("text").is_none()
+            && let Some(r) = paste_picture::paste(self)
+        {
+            return r;
         }
         let r = self.execute(id, params);
         // Match Fields and Check for Errors show what they found.

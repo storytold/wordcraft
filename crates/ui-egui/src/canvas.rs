@@ -46,6 +46,8 @@ pub struct CanvasState {
     pub(crate) obj_drag: Option<crate::objects::ObjectDrag>,
     /// Pages per row last frame; when it changes the caret's page is scrolled back into view.
     pub cols: usize,
+    /// A paste event arrived since the last Mod+V release (see `keys::canvas_events`).
+    pub(crate) pasted: bool,
 }
 
 impl CanvasState {
@@ -78,6 +80,7 @@ impl Default for CanvasState {
             obj_drag: None,
             context_menu_open: false,
             mini_anchor: None,
+            pasted: false,
             cols: 1,
         }
     }
