@@ -501,6 +501,7 @@ mod tests {
             stroke_width: 0.75,
             float: Default::default(),
             story,
+            effects: Default::default(),
         }
     }
 

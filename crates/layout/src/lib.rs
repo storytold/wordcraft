@@ -95,6 +95,7 @@ pub enum Placed {
         fill: Option<Rgb>,
         stroke: Option<Rgb>,
         stroke_width: f32,
+        effects: wordcraft_doc::effects::ShapeEffects,
     },
     /// A table cell's area (for hit testing and cell selection).
     Cell {
@@ -1108,8 +1109,8 @@ fn float_item(o: &InlineObject, rect: Rect, story: StoryRef, path: &[u32], off: 
         InlineObject::Image { media, crop, .. } => {
             Some(Placed::Image { rect, media: media.clone(), crop: *crop, story, path: Path(path.to_vec()), off })
         }
-        InlineObject::Shape { kind, fill, stroke, stroke_width, .. } => {
-            Some(Placed::Shape { rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width })
+        InlineObject::Shape { kind, fill, stroke, stroke_width, effects, .. } => {
+            Some(Placed::Shape { rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width, effects: *effects })
         }
         _ => None,
     }

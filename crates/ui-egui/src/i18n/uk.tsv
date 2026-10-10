@@ -943,3 +943,21 @@
 	Dark	Темна
 	Use system setting	Як у системі
 	A file dialog is already open.	Діалогове вікно файлу вже відкрито.
+	Shape Effects	Ефекти фігури
+	Glow	Світіння
+	Soft Edges	М'які краї
+	No Shadow	Без тіні
+	No Glow	Без світіння
+	No Soft Edges	Без м'яких країв
+	Glow Colors	Кольори світіння
+	Weight	Товщина
+	Shadow, glow and soft edges	Тінь, світіння та м'які краї
+	Offset: Bottom Right	Зміщення: вниз праворуч
+	Offset: Bottom	Зміщення: вниз
+	Offset: Bottom Left	Зміщення: вниз ліворуч
+	Offset: Right	Зміщення: праворуч
+	Offset: Center	Зміщення: по центру
+	Offset: Left	Зміщення: ліворуч
+	Offset: Top Right	Зміщення: вгору праворуч
+	Offset: Top	Зміщення: вгору
+	Offset: Top Left	Зміщення: вгору ліворуч

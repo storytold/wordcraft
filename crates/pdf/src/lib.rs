@@ -312,6 +312,46 @@ fn rect_path(r: &Rect) -> Option<Path> {
     pb.finish()
 }
 
+/// `r` grown by `g` points on every side and moved by (`dx`, `dy`).
+fn grown(r: &Rect, g: f32, dx: f32, dy: f32) -> Rect {
+    Rect { x: r.x - g + dx, y: r.y - g + dy, w: r.w + 2.0 * g, h: r.h + 2.0 * g }
+}
+
+/// A shape's shadow and glow, behind it: bands of its silhouette (the same approximation of a
+/// blur as the raster renderer, see [`wordcraft_doc::effects::bands`]).
+fn shape_effects(s: &mut Surface, kind: ShapeKind, rect: &Rect, fx: &wordcraft_doc::effects::ShapeEffects, filled: bool, stroked: bool, sw: f32) {
+    let sw = if sw.is_finite() { sw.clamp(0.25, 200.0) } else { 0.75 };
+    let silhouette = |s: &mut Surface, c: Rgb, a: f32, g: f32, dx: f32, dy: f32| {
+        if filled {
+            let grow = g + if stroked { sw / 2.0 } else { 0.0 };
+            if let Some(p) = shape_path(kind, &grown(rect, grow, dx, dy)) {
+                s.set_stroke(None);
+                s.set_fill(Some(fill(c, a)));
+                s.draw_path(&p);
+            }
+        } else if sw + 2.0 * g > 0.05
+            && let Some(p) = shape_path(kind, &grown(rect, 0.0, dx, dy))
+        {
+            s.set_fill(None);
+            s.set_stroke(Some(Stroke { paint: rgb::Color::new(c.0, c.1, c.2).into(), width: sw + 2.0 * g, opacity: norm(a), ..Default::default() }));
+            s.draw_path(&p);
+        }
+    };
+    if let Some(sh) = fx.shadow {
+        let (dx, dy) = sh.offset();
+        for (g, a) in wordcraft_doc::effects::bands(-sh.blur / 2.0, sh.blur / 2.0, sh.opacity()) {
+            silhouette(s, sh.color, a, g, dx, dy);
+        }
+    }
+    if let Some(gl) = fx.glow {
+        for (g, a) in wordcraft_doc::effects::bands(0.0, gl.size, gl.opacity()) {
+            silhouette(s, gl.color, a, g, 0.0, 0.0);
+        }
+    }
+    s.set_fill(None);
+    s.set_stroke(None);
+}
+
 /// Outline of a basic shape in a rectangle (same geometry as the raster renderer).
 fn shape_path(kind: ShapeKind, r: &Rect) -> Option<Path> {
     if !(ok(r.x) && ok(r.y) && ok(r.w) && ok(r.h)) || r.w <= 0.0 || r.h <= 0.0 {
@@ -635,9 +675,26 @@ impl Exporter<'_> {
             }
             Draw::Line { x0, y0, x1, y1, width, color, stroke, alpha } => self.line(s, (*x0, *y0, *x1, *y1), *width, *color, *stroke, *alpha),
             Draw::Image { rect, media, crop, alpha } => self.picture(s, rect, media, crop, *alpha),
-            Draw::Shape { rect, kind, fill: f, stroke, stroke_width } => {
+            Draw::Shape { rect, kind, fill: f, stroke, stroke_width, effects } => {
                 let Some(p) = shape_path(*kind, rect) else { return };
                 let can_fill = *kind != ShapeKind::Line;
+                let fx = effects.sanitized();
+                if !fx.is_empty() && (f.is_some() && can_fill || stroke.is_some()) {
+                    shape_effects(s, *kind, rect, &fx, f.is_some() && can_fill, stroke.is_some(), *stroke_width);
+                }
+                // Soft edges: the fill fades out toward the outline (which fades with it).
+                if let (Some(rad), Some(c), true) = (fx.soft_edge, f, can_fill) {
+                    let rad = rad.min(rect.w.min(rect.h) / 2.0).max(0.0);
+                    s.set_stroke(None);
+                    for (g, a) in wordcraft_doc::effects::bands(-rad, 0.0, 1.0) {
+                        if let Some(p) = shape_path(*kind, &grown(rect, g, 0.0, 0.0)) {
+                            s.set_fill(Some(fill(*c, a)));
+                            s.draw_path(&p);
+                        }
+                    }
+                    s.set_fill(None);
+                    return;
+                }
                 s.set_fill(f.filter(|_| can_fill).map(|c| fill(c, 1.0)));
                 s.set_stroke(stroke.map(|c| Stroke {
                     paint: rgb::Color::new(c.0, c.1, c.2).into(),

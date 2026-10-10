@@ -252,8 +252,17 @@ fn shape(s: &mut Session, v: &Value) -> CmdResult {
     let stroke = p::str(v, "stroke").and_then(Rgb::parse).or(Some(Rgb(0x0E, 0x40, 0x5A)));
     let props = s.typing_props();
     let at = delete_selection(s)?;
-    let obj =
-        InlineObject::Shape { kind, w, h, fill, stroke, stroke_width: 1.0, float: Float { wrap: Wrap::Inline, ..Default::default() }, story: None };
+    let obj = InlineObject::Shape {
+        kind,
+        w,
+        h,
+        fill,
+        stroke,
+        stroke_width: 1.0,
+        float: Float { wrap: Wrap::Inline, ..Default::default() },
+        story: None,
+        effects: Default::default(),
+    };
     let end = s.doc.insert_object(&at, obj, &props)?;
     s.sel = Selection { anchor: at, focus: end };
     sel_result(s)
@@ -275,6 +284,7 @@ fn text_box(s: &mut Session, v: &Value) -> CmdResult {
         stroke_width: 0.75,
         float: Float::default(),
         story: Some(id),
+        effects: Default::default(),
     };
     s.doc.insert_object(&at, obj, &props)?;
     // Like Word, type straight into the new box.

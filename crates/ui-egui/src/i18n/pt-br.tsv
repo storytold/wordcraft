@@ -943,3 +943,21 @@
 	Dark	Escuro
 	Use system setting	Usar a configuração do sistema
 	A file dialog is already open.	Já há uma caixa de diálogo de arquivo aberta.
+	Shape Effects	Efeitos de forma
+	Glow	Brilho
+	Soft Edges	Bordas suaves
+	No Shadow	Sem sombra
+	No Glow	Sem brilho
+	No Soft Edges	Sem bordas suaves
+	Glow Colors	Cores do brilho
+	Weight	Espessura
+	Shadow, glow and soft edges	Sombra, brilho e bordas suaves
+	Offset: Bottom Right	Deslocamento: inferior direito
+	Offset: Bottom	Deslocamento: inferior
+	Offset: Bottom Left	Deslocamento: inferior esquerdo
+	Offset: Right	Deslocamento: direita
+	Offset: Center	Deslocamento: centro
+	Offset: Left	Deslocamento: esquerda
+	Offset: Top Right	Deslocamento: superior direito
+	Offset: Top	Deslocamento: superior
+	Offset: Top Left	Deslocamento: superior esquerdo
