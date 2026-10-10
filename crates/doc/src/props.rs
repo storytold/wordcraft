@@ -283,8 +283,26 @@ pub struct CharProps {
     pub lang: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub no_proof: Option<bool>,
+    /// Right-to-left run (OOXML `w:rtl`): its characters are complex script and read right to left.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rtl: Option<bool>,
+    /// Format the whole run with the complex-script properties below (OOXML `w:cs`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cs: Option<bool>,
+    /// Complex-script font (Arabic, Persian, Hebrew…; OOXML `w:rFonts/@w:cs`). `None` = `font`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_cs: Option<String>,
+    /// Complex-script size, points (`w:szCs`). `None` = the same as `size` (see [`CharProps::overlay`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_cs: Option<f32>,
+    /// Complex-script bold / italic (`w:bCs`, `w:iCs`). `None` = the same as `bold` / `italic`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bold_cs: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub italic_cs: Option<bool>,
+    /// BCP 47 language of complex-script text (`w:lang/@w:bidi`, e.g. `fa-IR`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lang_bidi: Option<String>,
     /// Hyperlink target: a URL, or `#bookmark` for an internal link.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
@@ -304,10 +322,25 @@ macro_rules! overlay_fields {
 
 impl CharProps {
     /// Apply every `Some` field of `patch` on top of `self`.
+    ///
+    /// Size, bold and italic come in pairs with their complex-script values (Word's own buttons
+    /// set both): a patch that sets the plain value and leaves the complex-script one `None` sets
+    /// both, so a run's size or bold isn't overridden for its Persian/Arabic characters by an
+    /// inherited `w:szCs` / `w:bCs`. The complex-script font inherits on its own (Word often
+    /// sets only the Latin font and lets complex-script text keep the style's).
     pub fn overlay(&mut self, patch: &CharProps) {
         overlay_fields!(self, patch; style, font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
             shading, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl,
-            link, ins, del);
+            cs, font_cs, size_cs, bold_cs, italic_cs, lang_bidi, link, ins, del);
+        if patch.size.is_some() && patch.size_cs.is_none() {
+            self.size_cs = None;
+        }
+        if patch.bold.is_some() && patch.bold_cs.is_none() {
+            self.bold_cs = None;
+        }
+        if patch.italic.is_some() && patch.italic_cs.is_none() {
+            self.italic_cs = None;
+        }
     }
     pub fn overlaid(mut self, patch: &CharProps) -> CharProps {
         self.overlay(patch);
@@ -332,6 +365,19 @@ pub enum Align {
     Right,
     Justify,
     Distribute,
+}
+
+impl Align {
+    /// Alignment is logical (`Left` is the start edge, ISO 29500 `start`): the alignment as seen
+    /// on the page, or the logical one for a visual choice, in a paragraph that reads right to
+    /// left when `rtl` (Left and Right swap; the swap is its own inverse).
+    pub fn visual(self, rtl: bool) -> Align {
+        match self {
+            Align::Left if rtl => Align::Right,
+            Align::Right if rtl => Align::Left,
+            a => a,
+        }
+    }
 }
 
 /// Line spacing rule.
