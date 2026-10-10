@@ -857,7 +857,7 @@ preview	Title	Пример
 	Citations	Ссылки на источники
 	Document	Документ
 	Add/Edit\nCitation	Добавить/изменить\nссылку
-	Add\nNote	Добавить\nсноску
+	Add\nNote	Добавить\nзаметку
 	Add/Edit\nBibliography	Добавить/изменить\nсписок литературы
 	Refresh	Обновить
 	Document\nPreferences	Параметры\nдокумента
@@ -867,8 +867,8 @@ preview	Title	Пример
 	Zotero: cancelled	Zotero: отменено
 	Yes	Да
 	No	Нет
-	Move Past Citation	Перейти за ссылку
-	Move Past\nCitation	Перейти\nза ссылку
+	Move Past Citation	Перейти к концу ссылки
+	Move Past\nCitation	Перейти к концу\nссылки
 	Next Sentence	Следующее предложение
 	Previous Sentence	Предыдущее предложение
 	Next sentence	Следующее предложение
@@ -893,8 +893,8 @@ preview	Title	Пример
 	Scroll ribbon left	Прокрутить ленту влево
 	Scroll ribbon right	Прокрутить ленту вправо
 	Change Structure	Изменить структуру
-	Change to Display	Сделать отдельным
-	Change to Inline	Сделать встроенным
+	Change to Display	Показать на отдельной строке
+	Change to Inline	Показать в строке
 	Conversions	Преобразования
 	Delete Back in Equation	Удалить назад в уравнении
 	Delete in Equation	Удалить в уравнении
@@ -913,9 +913,9 @@ preview	Title	Пример
 	Set Equation	Задать уравнение
 	Structure Actions	Действия со структурой
 	Structures	Структуры
-	Tools	Сервис
+	Tools	Инструменты
 	Type in Equation	Ввод в уравнение
-	Inline	Встроенное
+	Inline	В строке
 	Number	Номер
 	Close Equation	Закрыть уравнение
 	Insert New Equation	Вставить новое уравнение
@@ -929,7 +929,7 @@ preview	Title	Пример
 	Large\nOperator	Крупный\nоператор
 	Bracket	Скобка
 	Function	Функция
-	Accent	Диакритика
+	Accent	Диакритические\nзнаки
 	Limit and\nLog	Предел\nи логарифм
 	Operator	Оператор
 	Equation Options	Параметры уравнений
@@ -939,7 +939,7 @@ preview	Title	Пример
 	Opening print dialog…	Открытие окна печати…
 	Print failed: {error}	Ошибка печати: {error}
 	Couldn't open {path}: {error}	Не удалось открыть {path}: {error}
-	Column Selection	Выделение столбца текста
+	Column Selection	Выделить столбец
 	Style Inspector	Инспектор стилей
 	Inspect Styles at Selection	Стили выделенного фрагмента
 	Clear Formatting Level	Очистить уровень форматирования
@@ -966,7 +966,7 @@ preview	Title	Пример
 	Advanced Find	Расширенный поиск
 	Advanced Find…	Расширенный поиск…
 	Go To…	Перейти…
-	Reading Highlight	Выделение найденного
+	Reading Highlight	Выделить совпадения
 	New Table Style	Новый стиль таблицы
 	Modify Table Style	Изменить стиль таблицы
 	New Table Style…	Новый стиль таблицы…
@@ -1125,7 +1125,7 @@ preview	Title	Пример
 	Level 1	Уровень 1
 	Level 2	Уровень 2
 	Level 3	Уровень 3
-	ASAP	СРОЧНО
+	ASAP	КАК МОЖНО СКОРЕЕ
 	CONFIDENTIAL	КОНФИДЕНЦИАЛЬНО
 	DO NOT COPY	НЕ КОПИРОВАТЬ
 	DRAFT	ЧЕРНОВИК
@@ -1239,8 +1239,8 @@ preview	Title	Пример
 	n×n Identity Matrix	Единичная матрица n×n
 	n×n Matrix	Матрица n×n
 	A xor B	A исключающее ИЛИ B
-	Absolute value cases	Модуль по случаям
-	Acute	Акут
+	Absolute value cases	Уравнение со случаями
+	Acute	Ударение
 	Angle Brackets	Угловые скобки
 	Angle Brackets with Separator	Угловые скобки с разделителем
 	Angle Brackets with Two Separators	Угловые скобки с двумя разделителями
@@ -1260,7 +1260,7 @@ preview	Title	Пример
 	Cases (Two Conditions)	Система (два условия)
 	Ceiling	Округление вверх
 	Change in y over change in x	Приращение y к приращению x
-	Check	Гачек
+	Check	Галка
 	Circled Dot	Точка в круге
 	Circled Plus	Плюс в круге
 	Circled Times	Умножение в круге
@@ -1277,7 +1277,7 @@ preview	Title	Пример
 	Cosine Function	Косинус
 	Cotangent Function	Котангенс
 	Cube Root	Кубический корень
-	Delta Equal To	Равно по приращению
+	Delta Equal To	Дельта равна
 	Delta over arrow	Дельта над стрелкой
 	Diagonal Dots	Диагональное многоточие
 	Differential	Дифференциал
@@ -1303,7 +1303,7 @@ preview	Title	Пример
 	Equal by Definition	Равно по определению
 	Exponential	Экспонента
 	Floor	Округление вниз
-	Grave	Гравис
+	Grave	Обратное ударение
 	Grouping Character Above	Группирующий знак сверху
 	Grouping Character Below	Группирующий знак снизу
 	Hat	Крышка
@@ -1352,7 +1352,7 @@ preview	Title	Пример
 	Logical OR with Limits	Логическое ИЛИ с пределами
 	Maximum	Максимум
 	Maximum Example	Пример максимума
-	Measured By	Измеряется
+	Measured By	Единица измерения
 	Midline Dots	Многоточие по средней линии
 	Minimum	Минимум
 	Minus Equal	Минус-равно
@@ -1395,8 +1395,8 @@ preview	Title	Пример
 	Square Root	Квадратный корень
 	Square Root with Degree	Квадратный корень со степенью
 	Square Union	Квадратное объединение
-	Stack Object	Столбец
-	Stack Object (Three)	Столбец (три элемента)
+	Stack Object	Стопка
+	Stack Object (Three)	Стопка (три элемента)
 	Stacked Fraction	Вертикальная дробь
 	Stacked, no bar	Друг над другом, без черты
 	Subscript-Superscript	Нижний и верхний индексы
@@ -1435,7 +1435,7 @@ preview	Title	Пример
 	Volume Integral	Объёмный интеграл
 	Volume Integral with Limits	Объёмный интеграл с пределами
 	Volume Integral with Stacked Limits	Объёмный интеграл с пределами сверху и снизу
-	Yields	Следует
+	Yields	Выход
 	x bar	x с чертой
 	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	В браузере автосохранение недоступно: оно не может записывать ваши файлы. «Сохранить» скачивает копию.
 	AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave.	Автосохранение работает только с файлами .docx, .odt и .rtf; {name} не сохраняет всё форматирование. Сохраните файл как .docx, чтобы включить автосохранение.
@@ -1467,7 +1467,7 @@ preview	Title	Пример
 	Draw Ink	Рисовать от руки
 	Erase Ink	Стереть рукописный ввод
 	Hide Ink	Скрыть рукописный ввод
-	Hide\nInk	Скрыть\nрукописный ввод
+	Hide\nInk	Скрыть
 	Pens	Перья
 	Ink	Рукописный ввод
 	Thickness	Толщина
@@ -1622,7 +1622,7 @@ preview	Title	Пример
 	(All)	(Все)
 	(none)	(нет)
 	(normal text)	(обычный текст)
-	1/4 Em Space	Пробел 1/4 em
+	1/4 Em Space	Узкий пробел
 	A mail merge field	Поле слияния
 	A numbered sequence (figures, tables…)	Нумерованная последовательность (рисунки, таблицы…)
 	A table of contents	Оглавление
@@ -1697,3 +1697,11 @@ preview	Title	Пример
 	Type the field's name and its switches, for example PAGE \\* roman.	Введите имя поля и его ключи, например PAGE \\* roman.
 	Width and spacing	Ширина и промежуток
 	from Unicode (hex)	Юникод (шестн.)
+
+# Equation › Convert and Justification, and the hyphenation menu's checked None.
+	All - Linear	Все — линейный вид
+	All - Professional	Все — профессиональный вид
+	Current - Linear	Текущее — линейный вид
+	Current - Professional	Текущее — профессиональный вид
+	Centered as Group	По центру как группа
+	✓ None	✓ Нет
