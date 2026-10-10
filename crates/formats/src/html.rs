@@ -1598,33 +1598,12 @@ mod tests {
         let f = parse(
             "<ul><li dir=\"rtl\">outer<ul><li dir=\"ltr\">inner</li><li dir=\"ltr\">sibling</li></ul></li><li dir=\"ltr\">top</li></ul><ol><li dir=\"ltr\">a<ol><li dir=\"rtl\">ب</li></ol></li></ol>",
         );
-        let dirs: Vec<(bool, u8, String)> = f
-            .blocks
-            .iter()
-            .filter_map(|b| if let FBlock::Para(p) = b { Some((p.rtl, p.list.map(|l| l.level).unwrap_or(0), p.text())) } else { None })
-            .collect();
-        assert_eq!(
-            dirs,
-            [
-                (true, 0, "outer".into()),
-                (false, 1, "inner".into()),
-                (false, 1, "sibling".into()),
-                (false, 0, "top".into()),
-                (false, 0, "a".into()),
-                (true, 1, "ب".into())
-            ]
-        );
-        let html = export_flow(&f, "en");
-        assert!(html.contains("<li dir=\"ltr\">inner</li>"), "differing child marked: {html}");
-        assert!(html.contains("<li dir=\"rtl\">ب</li>"), "differing nested child marked: {html}");
-        let back = parse(&html);
-        let dirs: Vec<(bool, String)> = back
+        let dirs: Vec<(bool, u8, bool, String)> = f
             .blocks
             .iter()
             .filter_map(|b| {
                 if let FBlock::Para(p) = b {
-                    assert!(p.list.is_some(), "still a list item");
-                    Some((p.rtl, p.text()))
+                    Some((p.rtl, p.list.map(|l| l.level).unwrap_or(0), p.list.is_some_and(|l| l.ordered), p.text()))
                 } else {
                     None
                 }
@@ -1633,12 +1612,39 @@ mod tests {
         assert_eq!(
             dirs,
             [
-                (true, "outer".into()),
-                (false, "inner".into()),
-                (false, "sibling".into()),
-                (false, "top".into()),
-                (false, "a".into()),
-                (true, "ب".into())
+                (true, 0, false, "outer".into()),
+                (false, 1, false, "inner".into()),
+                (false, 1, false, "sibling".into()),
+                (false, 0, false, "top".into()),
+                (false, 0, true, "a".into()),
+                (true, 1, true, "ب".into())
+            ]
+        );
+        let html = export_flow(&f, "en");
+        assert!(html.contains("<li dir=\"ltr\">inner</li>"), "differing child marked: {html}");
+        assert!(html.contains("<li dir=\"rtl\">ب</li>"), "differing nested child marked: {html}");
+        let back = parse(&html);
+        let dirs: Vec<(bool, u8, bool, String)> = back
+            .blocks
+            .iter()
+            .filter_map(|b| {
+                if let FBlock::Para(p) = b {
+                    let li = p.list.expect("still a list item");
+                    Some((p.rtl, li.level, li.ordered, p.text()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            dirs,
+            [
+                (true, 0, false, "outer".into()),
+                (false, 1, false, "inner".into()),
+                (false, 1, false, "sibling".into()),
+                (false, 0, false, "top".into()),
+                (false, 0, true, "a".into()),
+                (true, 1, true, "ب".into())
             ]
         );
         // A list inside an RTL table inherits the table unless items override it.

@@ -911,6 +911,8 @@ impl Styles {
     /// `enclosing_rtl` is the innermost open table's direction: a `page` writing mode defers to
     /// it (ODF 1.3 §20.404), falling back to LTR outside tables. The nearest chain entry with an
     /// explicit direction or `page` wins, so a child override beats an inherited value.
+    /// Section and page-layout contexts are not resolved; table-cell writing modes are not
+    /// tracked (only table styles).
     fn para(&self, name: &str, enclosing_rtl: bool) -> (Kind, Option<Align>, bool, bool, bool, Fmt) {
         let chain = self.chain(name);
         let mut kind = Kind::Normal;
@@ -1514,6 +1516,8 @@ mod tests {
 <style:style style:name="P" style:family="paragraph"><style:paragraph-properties style:writing-mode="page"/></style:style>
 <style:style style:name="PL" style:family="paragraph"><style:paragraph-properties style:writing-mode="lr-tb"/></style:style>
 <style:style style:name="PR" style:family="paragraph"><style:paragraph-properties style:writing-mode="rl-tb"/></style:style>
+<style:style style:name="CP" style:family="paragraph" style:parent-style-name="PR"><style:paragraph-properties style:writing-mode="page"/></style:style>
+<style:style style:name="CE" style:family="paragraph" style:parent-style-name="P"><style:paragraph-properties style:writing-mode="rl-tb"/></style:style>
 </office:automatic-styles>
 <office:body><office:text>
 <text:p text:style-name="P">top level page</text:p>
@@ -1530,6 +1534,8 @@ mod tests {
 <text:p text:style-name="P">in explicit ltr nested table</text:p>
 </table:table-cell></table:table-row></table:table>
 </table:table-cell></table:table-row></table:table>
+<text:p text:style-name="CP">child page over explicit parent</text:p>
+<text:p text:style-name="CE">explicit child over page parent</text:p>
 </office:text></office:body></office:document-content>"#;
         let bytes = {
             let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -1575,6 +1581,10 @@ mod tests {
                 ("in unstyled nested table".into(), false),
                 (String::new(), false),
                 ("in explicit ltr nested table".into(), false),
+                // Top level is LTR: a child `page` defers to layout even when its parent is
+                // explicit RTL, and an explicit child beats a `page` parent.
+                ("child page over explicit parent".into(), false),
+                ("explicit child over page parent".into(), true),
             ]
         );
     }
