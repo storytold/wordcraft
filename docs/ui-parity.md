@@ -1,6 +1,6 @@
 # UI parity with Microsoft Word
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (first version; ribbon, dialogs, shortcuts and on-canvas interaction measured from `crates/ui-egui` and the command registry) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** trivial (shortcuts: Move Paragraph Up/Down, Promote/Demote, Go Back, Alt+X, #343) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 How WordCraft looks and feels next to Word: ribbon, dialogs, panes, keyboard, mouse and touch.
 Typing behaviour has its own checklist ([`typing-parity.md`](typing-parity.md)). All assets are our
@@ -15,7 +15,7 @@ own (`AGENTS.md`: no Microsoft iconography, ever).
 | Mini-toolbar on selection | ✅ (#43) | ✅ | 80% | 1–2 |
 | Quick Access Toolbar | Undo, Redo, Repeat, AutoSave | customizable | 50% | 2–3 |
 | Customize Ribbon / Customize Keyboard | ❌ | ✅ | 0% | 6–10 |
-| Keyboard shortcuts | **101** bound in `CommandSpec::key` (measured) | ~250 default shortcuts | ~60% | 4–6 |
+| Keyboard shortcuts | **109** bound in `CommandSpec::key` (measured), including Alt+Shift+arrows (move paragraphs, promote/demote), Shift+F5 Go Back and Alt+X (#343) | ~250 default shortcuts | ~60% | 4–6 |
 | Modal dialogs | **22** (`Dialog` enum: Font, Paragraph, Tabs, Borders and Shading, Find, Go To, Insert Table, Table Properties, Page Setup, Link, Bookmark, Word Count, Zoom, Watermark, New/Modify Style, Commands, About, Save Changes; Columns, Symbol with Special Characters, Field (#321)) plus panes and menus for the rest | ~100 (Caption, Index, TOC options, Citation, Define Multilevel List, Track Changes Options, Compare, Protect, Language, Hyphenation, Line Numbers, Envelopes, Labels, Mail Merge, AutoCorrect, Options panes…) | ~40% | 20–30 |
 | Modal dialogs | **20** (`Dialog` enum: Font, Paragraph, Find, Go To, Insert Table, Table Properties, Page Setup, Link, Bookmark, Word Count, Zoom, Watermark, New/Modify Style, Commands, About, Save Changes; Columns, Symbol with Special Characters, Field (#321)) plus panes and menus for the rest | ~100 (Tabs, Borders and Shading, Caption, Index, TOC options, Citation, Define Multilevel List, Track Changes Options, Compare, Protect, Language, Hyphenation, Line Numbers, Envelopes, Labels, Mail Merge, AutoCorrect, Options panes…) | ~40% | 20–30 |
 | Modal dialogs | **19** (`Dialog` enum: Font, Paragraph, Find, Go To, Insert Table, Table Properties, Page Setup, Link, Bookmark, Word Count, Zoom, Watermark, New/Modify Style, Commands, About, Save Changes, Define New Multilevel List, Track Changes Options) plus panes and menus for the rest | ~100 (Tabs, Borders and Shading, Columns, Symbol, Field, Caption, Index, TOC options, Citation, Compare, Protect, Language, Hyphenation, Line Numbers, Envelopes, Labels, Mail Merge, AutoCorrect, Options panes…) | ~40% | 20–30 |
@@ -42,6 +42,7 @@ own (`AGENTS.md`: no Microsoft iconography, ever).
 | 2026-10-10 | trivial | Tabs dialog (Paragraph › Tabs…, double-click a ruler tab) and Borders and Shading with Borders, Page Border and Shading tabs (#320) |
 | 2026-10-10 | trivial | Columns (presets, unequal widths, line between, apply to), Symbol (font coverage grid by Unicode subset, recently used, character code, Special Characters) and Field (categories, options, field codes) dialogs (#321) |
 | 2026-10-10 | trivial | Define New Multilevel List (all nine levels, live preview, `list.define`) and Track Changes Options (show, balloons, insertion/deletion marks and colours, changed-line bars; `review.trackingOptions`, saved per user) (#328) |
+| 2026-10-10 | trivial | Shortcuts: Alt+Shift+Up/Down move paragraphs, Alt+Shift+Left/Right promote/demote (⌃⇧ arrows on macOS), Shift+F5 Go Back, Alt+X Toggle Unicode (#343) |
 | 2026-10-10 | trivial | Rotation handle on pictures, shapes and text boxes; Rotate menu (90° and flips) and a Rotation box in Picture/Shape Format › Size (#332) |
 | 2026-10-10 | trivial | System interface theme keeps following OS appearance changes (no longer pins the macOS window); Dark page no longer darkens the interface (#311, #312) |
 | 2026-10-10 | trivial | AutoSave switch greyed out with a tooltip saying why where AutoSave can't save; Save As from it (#196, #176) |

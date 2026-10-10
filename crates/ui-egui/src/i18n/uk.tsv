@@ -1322,4 +1322,10 @@
 	Rotate Left 90°	Повернути ліворуч на 90°
 	Flip Vertical	Віддзеркалити по вертикалі
 	Flip Horizontal	Віддзеркалити по горизонталі
+	Move Paragraph Up	Перемістити абзац угору
+	Move Paragraph Down	Перемістити абзац униз
+	Promote	Підвищити рівень
+	Demote	Понизити рівень
+	Go Back	Повернутися назад
+	Toggle Unicode Character	Перемкнути символ Unicode
 	Formatted	Відформатовано
