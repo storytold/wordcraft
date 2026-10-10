@@ -27,6 +27,12 @@ Bokmål spelling works offline with 613,686 standard full forms from Norsk ordba
 squiggles, F7 and suggestions; mixed-language DOCX documents retain their language.
 Norwegian grammar checks remain limited to basic punctuation, spacing and repeated words.
 
+## Context-menu localization (2026-10-10)
+
+Document right-click action buttons use interface translations, including spelling
+ignore/add-to-dictionary actions, clipboard actions and formatting dialogs. Bokmål
+also covers the table insertion submenu. Correction words remain document content.
+
 ## Alpha
 
 **What we mean by alpha:** someone can write, format and review real documents every day, open
