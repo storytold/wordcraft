@@ -127,6 +127,14 @@
 	Clear Formatting Level	Очистити рівень форматування
 	Clear Paragraph Formatting	Очистити форматування абзацу
 	Clipboard	Буфер обміну
+	Clipboard Pane	Панель буфера обміну
+	Clipboard Items	Елементи буфера обміну
+	Paste Clipboard Item	Вставити елемент буфера обміну
+	Paste All	Вставити все
+	Delete Clipboard Item	Видалити елемент буфера обміну
+	Click an item to paste it.	Клацніть елемент, щоб вставити його.
+	Nothing collected yet. Items you copy or cut appear here.	Поки що порожньо. Тут з'являться елементи, які ви скопіюєте або виріжете.
+	(picture or object)	(зображення або об'єкт)
 	Close	Закрити
 	Close Header and Footer	Закрити колонтитули
 	Collapse Selection	Зняти виділення

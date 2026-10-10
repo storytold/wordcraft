@@ -118,6 +118,15 @@
 	Clear	清除
 	Clear All Formatting	清除所有格式設定
 	Clipboard	剪貼簿
+	Clipboard Pane	剪貼簿窗格
+	Clipboard Items	剪貼簿項目
+	Paste Clipboard Item	貼上剪貼簿項目
+	Paste All	全部貼上
+	Delete Clipboard Item	刪除剪貼簿項目
+	Clear All	全部清除
+	Click an item to paste it.	按一下項目即可貼上。
+	Nothing collected yet. Items you copy or cut appear here.	尚無內容。複製或剪下的項目會顯示在這裡。
+	(picture or object)	（圖片或物件）
 	Close	關閉
 	Close Header and Footer	關閉頁首及頁尾
 	Collapse Selection	摺疊選取範圍
@@ -889,7 +898,6 @@
 	Clear Paragraph Formatting	清除段落格式設定
 	Clear Character Style	清除字元樣式
 	Clear Character Formatting	清除字元格式設定
-	Clear All	全部清除
 	Paste Special	選擇性貼上
 	Paste Special…	選擇性貼上…
 	Paste as:	貼上為：
