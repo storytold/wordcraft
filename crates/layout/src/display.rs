@@ -809,6 +809,35 @@ fn lines(
                 _ => {}
             }
         }
+        // Ruby (Phonetic Guide) text over its base text, in runs of one style.
+        for r in pl.rubies.iter().filter(|r| (line.c0..line.c1).contains(&r.cluster)) {
+            let Some(bst) = pl.clusters.get(r.cluster).and_then(|c| pl.styles.get(c.style as usize)) else { continue };
+            if bst.rc.del.is_some() && !opts.markup {
+                continue;
+            }
+            let cx = x + line.cl_left(r.cluster).unwrap_or(0.0);
+            let y = base - bst.shift - r.raise;
+            let mut i = 0;
+            while let Some(&(style, _)) = r.glyphs.get(i) {
+                let n = r.glyphs.get(i..).map_or(0, |g| g.iter().take_while(|(s, _)| *s == style).count()).max(1);
+                let run = r.glyphs.get(i..i + n).unwrap_or(&[]);
+                let ranges = r.ranges.get(i..i + n).map(<[_]>::to_vec).unwrap_or_default();
+                i += n;
+                let Some(st) = pl.styles.get(style as usize) else { continue };
+                out.push(Draw::Glyphs {
+                    face: st.face,
+                    size: st.size,
+                    glyphs: run.iter().map(|(_, g)| (g.gid, cx + g.dx, y - g.dy)).collect(),
+                    color: text_color(&st.rc.color, st.rc.shading.or(st.rc.highlight)),
+                    alpha,
+                    synth_bold: st.synth_bold,
+                    synth_italic: st.synth_italic,
+                    text: r.text.clone(),
+                    link: None,
+                    ranges,
+                });
+            }
+        }
         // Formatting marks.
         if opts.marks {
             let msize = pl.styles.first().map(|s| s.size).unwrap_or(11.0);

@@ -106,6 +106,17 @@ pub enum Dialog {
         text: String,
         diagonal: bool,
     },
+    /// Home › Font › Phonetic Guide: ruby text over the selected text (`format.phonetic`).
+    Phonetic {
+        base: String,
+        ruby: String,
+        /// OOXML alignment name (`center`, `distributeLetter`…).
+        align: String,
+        size: f32,
+        offset: f32,
+        /// The selection already has a phonetic guide (Remove is offered).
+        existing: bool,
+    },
     NewStyle {
         name: String,
         based_on: String,
@@ -628,6 +639,7 @@ impl Dialog {
             Dialog::WordCount { .. } => "wordCount",
             Dialog::Zoom { .. } => "zoom",
             Dialog::Watermark { .. } => "watermark",
+            Dialog::Phonetic { .. } => "phonetic",
             Dialog::NewStyle { .. } => "newStyle",
             Dialog::ModifyStyle { .. } => "modifyStyle",
             Dialog::ManageStyles { .. } => "manageStyles",
@@ -753,6 +765,19 @@ impl Dialog {
             "wordCount" => Dialog::WordCount { stats: app.session.run("review.wordCount", &json!({})).unwrap_or_default() },
             "zoom" => Dialog::Zoom { percent: (app.session.view.zoom * 100.0).round() },
             "watermark" => Dialog::Watermark { text: "CONFIDENTIAL".into(), diagonal: true },
+            "phonetic" => {
+                let v = wordcraft_engine::cmd::phonetic::state(&app.session);
+                let f = |k: &str| v.get(k).and_then(Value::as_f64).unwrap_or(0.0) as f32;
+                let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+                Dialog::Phonetic {
+                    base: s("base"),
+                    ruby: s("ruby"),
+                    align: s("align"),
+                    size: f("size"),
+                    offset: f("offset"),
+                    existing: v.get("existing").and_then(Value::as_bool).unwrap_or(false),
+                }
+            }
             "newStyle" => Dialog::NewStyle { name: "Style1".into(), based_on: "Normal".into(), back: false },
             "manageStyles" => Dialog::ManageStyles { alphabetical: false, selected: s("style") },
             "newTableStyle" => {
@@ -916,6 +941,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::WordCount { .. } => "Word Count",
         Dialog::Zoom { .. } => "Zoom",
         Dialog::Watermark { .. } => "Custom Watermark",
+        Dialog::Phonetic { .. } => "Phonetic Guide",
         Dialog::NewStyle { .. } => "Create New Style",
         Dialog::ModifyStyle { .. } => "Modify Style",
         Dialog::ManageStyles { .. } => "Manage Styles",
@@ -1393,6 +1419,52 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 let _ = app.run("design.watermark", json!({"text": text, "diagonal": *diagonal}));
             }
             ok || cancel
+        }
+        Dialog::Phonetic { base, ruby, align, size, offset, existing } => {
+            // Base and ruby text are usually Chinese or Japanese: fonts for them load from the next frame.
+            app.want_system_cjk = true;
+            const ALIGNS: [(&str, &str); 6] = [
+                ("center", "Center"),
+                ("distributeLetter", "Distribute letters"),
+                ("distributeSpace", "Distribute spacing"),
+                ("left", "Left"),
+                ("right", "Right"),
+                ("rightVertical", "Right (vertical)"),
+            ];
+            egui::Grid::new("phonetic").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+                ui.label(tl!("Base text:"));
+                ui.label(egui::RichText::new(base.as_str()).strong());
+                ui.end_row();
+                ui.label(tl!("Ruby text:"));
+                ui.text_edit_singleline(ruby);
+                ui.end_row();
+                ui.label(tl!("Alignment:"));
+                let shown = ALIGNS.iter().find(|(k, _)| k == align).map_or("Center", |(_, l)| l);
+                egui::ComboBox::from_id_salt("phonetic_align").selected_text(tl!(shown)).show_ui(ui, |ui| {
+                    for (k, l) in ALIGNS {
+                        ui.selectable_value(align, k.to_string(), tl!(l));
+                    }
+                });
+                ui.end_row();
+                ui.label(tl!("Offset (pt):"));
+                ui.add(egui::DragValue::new(offset).speed(0.5).range(-100.0..=100.0));
+                ui.end_row();
+                ui.label(tl!("Size (pt):"));
+                ui.add(egui::DragValue::new(size).speed(0.5).range(1.0..=200.0));
+                ui.end_row();
+            });
+            let mut remove = false;
+            if *existing {
+                ui.add_space(4.0);
+                remove = ui.button(tl!("Remove")).clicked();
+            }
+            let (ok, cancel) = buttons(ui, tl!("OK"));
+            if remove {
+                let _ = app.run("format.phonetic", json!({"ruby": null}));
+            } else if ok {
+                let _ = app.run("format.phonetic", json!({"ruby": ruby, "align": align, "size": *size, "offset": *offset}));
+            }
+            ok || cancel || remove
         }
         Dialog::NewStyle { name, based_on, back } => {
             egui::Grid::new("ns").num_columns(2).show(ui, |ui| {

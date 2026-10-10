@@ -104,6 +104,14 @@
 	Restart list after:	重新開始清單的層級：
 	Right border	右框線
 	Right Margin	右邊界
+	Base text:	基準文字：
+	Distribute letters	字母平均分散
+	Distribute spacing	間距平均分散
+	Offset (pt):	位移（點）：
+	Phonetic Guide	注音標示
+	Remove	移除
+	Right (vertical)	靠右（直書）
+	Ruby text:	注音文字：
 	Search for templates	搜尋範本
 	Show all revisions inline	以內嵌方式顯示所有修訂
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	像「檢視 › 切換模式」一樣以反轉的色彩顯示文件。儲存、列印和 PDF 不受影響。
@@ -730,6 +738,7 @@
 	Single	單線
 	Single Spacing	單行間距
 	Size	大小
+	Size (pt):	大小（點）：
 	Size:	大小：
 	Small Caps	小型大寫字
 	Small caps	小型大寫字

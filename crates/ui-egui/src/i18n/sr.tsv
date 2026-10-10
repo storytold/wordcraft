@@ -166,6 +166,14 @@
 	Shadow, glow and soft edges	Сенка, сјај и меке ивице
 	Shape Effects	Ефекти облика
 	Show all revisions inline	Прикажи све измене у тексту
+	Base text:	Основни текст:
+	Distribute letters	Распореди слова
+	Distribute spacing	Распореди размак
+	Offset (pt):	Помак (пт):
+	Phonetic Guide	Фонетски водич
+	Remove	Уклони
+	Right (vertical)	Десно (вертикално)
+	Ruby text:	Руби текст:
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Прикажи документе са инвертованим бојама, као код Приказ › Промени режим. Чување, штампање и PDF нису погођени.
 	AutoSave saves every change to the file (needs a saved document)	Аутоматско чување уписује сваку измену у фајл (документ мора бити већ сачуван)
 	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	Аутоматско чување није доступно у прегледачу: не може да уписује у ваше фајлове. Чување преузима копију.
@@ -783,6 +791,7 @@
 	Single	Једноструко
 	Single Spacing	Једноструко проређење
 	Size	Величина папира
+	Size (pt):	Величина (пт):
 	Size:	Величина:
 	Small Caps	Капителке
 	Small caps	капителке

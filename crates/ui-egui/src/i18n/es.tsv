@@ -110,6 +110,7 @@
 	Backspace	Retroceso
 	Banded Columns	Columnas con bandas
 	Banded Rows	Filas con bandas
+	Base text:	Texto base:
 	Before:	Antes:
 	Bibliography	Bibliografía
 	Binary assets added	Recursos binarios añadidos
@@ -275,7 +276,9 @@
 	Display	Mostrar
 	Display for Review	Mostrar para revisión
 	Distribute Columns	Distribuir columnas
+	Distribute letters	Distribuir letras
 	Distribute Rows	Distribuir filas
+	Distribute spacing	Distribuir espacio
 	Distributed	Distribuido
 	Do Not Show in TOC	No mostrar en el índice
 	Document End	Fin del documento
@@ -540,6 +543,7 @@
 	Number of columns:	Número de columnas:
 	Number of rows:	Número de filas:
 	Numbering	Numeración
+	Offset (pt):	Desplazamiento (pt):
 	OK	Aceptar
 	Object	Objeto
 	Odd Page	Página impar
@@ -596,6 +600,7 @@
 	Paste: Merge Formatting	Pegar: combinar formato
 	Pen	Pluma
 	Pencil	Lápiz
+	Phonetic Guide	Guía fonética
 	Picture Border	Borde de imagen
 	Picture Format	Formato de imagen
 	Picture Styles	Estilos de imagen
@@ -639,6 +644,7 @@
 	Reject All Changes	Rechazar todos los cambios
 	Reject Change	Rechazar cambio
 	Relaxed	Relajado
+	Remove	Quitar
 	Remove Background	Quitar fondo
 	Remove Footer	Quitar pie de página
 	Remove Header	Quitar encabezado
@@ -676,6 +682,7 @@
 	Rich Text Format (*.rtf)	Formato de texto enriquecido (*.rtf)
 	Rich Text Format (RTF)	Formato de texto enriquecido (RTF)
 	Right	Derecha
+	Right (vertical)	Derecha (vertical)
 	Right Border	Borde derecho
 	Right Margin	Margen derecho
 	Right-to-Left Text Direction	Dirección de texto de derecha a izquierda
@@ -684,6 +691,7 @@
 	Rotate	Girar
 	Rounded Rectangle	Rectángulo redondeado
 	Rows & Columns	Filas y columnas
+	Ruby text:	Texto ruby:
 	Ruler	Regla
 	Rules	Reglas
 	Résumé	Currículum
@@ -751,6 +759,7 @@
 	Single	Sencillo
 	Single Spacing	Interlineado sencillo
 	Size	Tamaño
+	Size (pt):	Tamaño (pt):
 	Size:	Tamaño:
 	Small Caps	Versalitas
 	Small caps	Versalitas

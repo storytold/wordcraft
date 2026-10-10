@@ -307,6 +307,7 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                     mi(ui, app, "tOGGLE cASE", "format.changeCase", json!({"mode": "toggle"}));
                 });
                 small(ui, app, "clear", None, "Clear All Formatting", "format.clear", json!({}), false);
+                small(ui, app, "phonetic", None, "Phonetic Guide", "format.phonetic", json!({}), false);
             });
             ui.add_space(3.0);
             crate::widgets::row(ui, |ui| {

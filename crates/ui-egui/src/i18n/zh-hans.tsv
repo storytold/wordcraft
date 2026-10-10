@@ -114,6 +114,14 @@
 	Restart list after:	重新开始列表的级别：
 	Right border	右框线
 	Right Margin	右边距
+	Base text:	基准文字：
+	Distribute letters	字母均匀分布
+	Distribute spacing	间距均匀分布
+	Offset (pt):	偏移量（磅）：
+	Phonetic Guide	拼音指南
+	Remove	删除
+	Right (vertical)	右对齐（竖排）
+	Ruby text:	拼音文字：
 	Search for templates	搜索模板
 	Show all revisions inline	以嵌入方式显示所有修订
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	像“视图 › 切换模式”一样以反转的颜色显示文档。保存、打印和 PDF 不受影响。
@@ -740,6 +748,7 @@
 	Single	单线
 	Single Spacing	单倍行距
 	Size	纸张大小
+	Size (pt):	字号（磅）：
 	Size:	字号：
 	Small Caps	小型大写字母
 	Small caps	小型大写字母

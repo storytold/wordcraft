@@ -108,6 +108,7 @@
 	Backspace	Видалити попередній символ
 	Banded Columns	Смугасті стовпці
 	Banded Rows	Смугасті рядки
+	Base text:	Основний текст:
 	Before:	Перед:
 	Bibliography	Бібліографія
 	Binary assets added	Додано двійкових ресурсів
@@ -272,6 +273,13 @@
 	No templates match your search.	Немає шаблонів, що відповідають пошуку.
 	Reopen	Відкрити знову
 	Right Margin	Праве поле
+	Distribute letters	Розподілити літери
+	Distribute spacing	Розподілити інтервали
+	Offset (pt):	Зсув (пункти):
+	Phonetic Guide	Фонетична підказка
+	Remove	Прибрати
+	Right (vertical)	Праворуч (вертикально)
+	Ruby text:	Текст рубі:
 	Search for templates	Пошук шаблонів
 	development build	Збірка для розробки
 	Diagonal	Діагональ
@@ -753,6 +761,7 @@
 	Single	Одинарний
 	Single Spacing	Одинарний інтервал
 	Size	Розмір
+	Size (pt):	Розмір (пункти):
 	Size:	Розмір:
 	Small Caps	Малі великі літери
 	Small caps	Малі великі літери

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use wordcraft_doc::math::MathJc;
 use wordcraft_doc::numbering::{Level, LevelSuffix};
-use wordcraft_doc::para::{COLUMN_BREAK, InlineObject, LINE_BREAK, NoteKind, OBJ, PAGE_BREAK, SOFT_HYPHEN};
+use wordcraft_doc::para::{COLUMN_BREAK, InlineObject, LINE_BREAK, NoteKind, OBJ, PAGE_BREAK, RubyAlign, SOFT_HYPHEN};
 use wordcraft_doc::props::{Align, CharProps, LineSpacing, ParaProps, TabAlign, TabLeader, TabStop};
 use wordcraft_doc::resolve::{ResolvedChar, ResolvedPara};
 use wordcraft_doc::{Document, Paragraph};
@@ -221,6 +221,21 @@ pub struct Label {
     pub width: f32,
 }
 
+/// Ruby text laid out over its base text's cluster.
+#[derive(Clone, Debug)]
+pub struct RubyLayout {
+    /// The base text's cluster (the one cluster standing for an [`InlineObject::Ruby`]).
+    pub cluster: usize,
+    /// Glyphs with their style (index into `ParaLayout::styles`); `dx` is from the cluster's left
+    /// edge.
+    pub glyphs: Vec<(u16, Glyph)>,
+    /// The ruby text and each glyph's byte range in it.
+    pub text: String,
+    pub ranges: Vec<std::ops::Range<usize>>,
+    /// The ruby's baseline above the base text's, points.
+    pub raise: f32,
+}
+
 /// A laid-out paragraph.
 #[derive(Clone, Debug)]
 pub struct ParaLayout {
@@ -250,6 +265,8 @@ pub struct ParaLayout {
     pub drop_cap_w: f32,
     /// Laid-out equations by object index.
     pub maths: Vec<(usize, Arc<crate::math::MathLayout>)>,
+    /// Ruby (Phonetic Guide) text over base-text clusters, in cluster order.
+    pub rubies: Vec<RubyLayout>,
     /// Display equations (on lines of their own): cluster index and justification.
     pub displays: Vec<(usize, wordcraft_doc::math::MathJc)>,
     /// Byte ranges of the text laid out as nothing ([`left_out`]): hidden text that is not shown,
@@ -599,6 +616,66 @@ impl<'a> Builder<'a> {
     }
 }
 
+impl Builder<'_> {
+    /// One cluster for ruby `base` text (an [`InlineObject::Ruby`] at `start..end`), as wide as the
+    /// wider of the base and the ruby, with the ruby text laid out over it by `align`. The line
+    /// grows to fit the ruby through the cluster's `obj_h`.
+    #[allow(clippy::too_many_arguments)]
+    fn ruby(
+        &mut self,
+        base: &str,
+        ruby: &str,
+        align: RubyAlign,
+        raise: f32,
+        start: usize,
+        end: usize,
+        rc: &Arc<ResolvedChar>,
+        ruby_rc: &Arc<ResolvedChar>,
+    ) -> Option<RubyLayout> {
+        self.shape_atomic(base, start, end, rc);
+        let ci = self.clusters.len().checked_sub(1)?;
+        let (bc, bg) = (self.clusters.len(), self.glyphs.len());
+        self.shape_with(ruby, 0, ruby_rc, None, false);
+        let cl: Vec<Cluster> = self.clusters.drain(bc..).collect();
+        let ruby_w: f32 = cl.iter().map(|c| c.adv).sum();
+        let base_w = self.clusters.get(ci).map_or(0.0, |c| c.adv);
+        let w = base_w.max(ruby_w);
+        let n = cl.len().max(1) as f32;
+        // Where the narrower text starts, and the extra gap between its letters (ruby only).
+        let lead = |room: f32| match align {
+            RubyAlign::Left => 0.0,
+            RubyAlign::Right | RubyAlign::RightVertical => room,
+            _ => room / 2.0,
+        };
+        let (x0, gap) = match align {
+            RubyAlign::DistributeLetter if cl.len() > 1 => (0.0, (w - ruby_w) / (n - 1.0)),
+            RubyAlign::DistributeSpace => ((w - ruby_w) / n / 2.0, (w - ruby_w) / n),
+            _ => (lead(w - ruby_w), 0.0),
+        };
+        let mut glyphs = Vec::new();
+        let mut ranges = Vec::new();
+        let mut x = x0;
+        for c in &cl {
+            for g in self.glyphs.get(c.g0 as usize..c.g1 as usize).into_iter().flatten() {
+                glyphs.push((c.style, Glyph { dx: g.dx + x, ..*g }));
+                ranges.push(c.start..c.end);
+            }
+            x += c.adv + gap;
+        }
+        self.glyphs.truncate(bg);
+        // The base text centres (or aligns) under a wider ruby.
+        let shift = lead(w - base_w);
+        let ascent = cl.iter().filter_map(|c| self.styles.get(c.style as usize)).map(|s| s.ascent).fold(0.0f32, f32::max);
+        let c = self.clusters.get_mut(ci)?;
+        for g in self.glyphs.get_mut(c.g0 as usize..c.g1 as usize).into_iter().flatten() {
+            g.dx += shift;
+        }
+        c.adv = w;
+        c.obj_h = raise + ascent;
+        Some(RubyLayout { cluster: ci, glyphs, text: ruby.to_string(), ranges, raise })
+    }
+}
+
 /// Whether text with this formatting is left out of the layout: hidden text unless it is shown, and
 /// tracked deletions in the final text. It takes no room, draws nothing and is no place to break.
 pub(crate) fn left_out(rc: &ResolvedChar, show_hidden: bool, hide_deleted: bool) -> bool {
@@ -638,6 +715,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let mut drop_cap = None;
     let mut drop_cap_w = 0.0;
     let mut maths = Vec::new();
+    let mut rubies = Vec::new();
     let mut displays = Vec::new();
     let mut eq_counter = env.eq_number;
     let math_props = doc.settings.math.clone().unwrap_or_default();
@@ -794,6 +872,16 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                             }
                             maths.push((k, Arc::new(ml)));
                         }
+                        Some(InlineObject::Ruby { base, ruby, align, size, raise, props: ruby_props, .. }) => {
+                            let mut rr = (*resolve(&props.clone().overlaid(ruby_props))).clone();
+                            let size = if size.is_finite() { size.clamp(1.0, 1584.0) } else { rc.size * 0.5 };
+                            (rr.size, rr.size_cs, rr.position) = (size, size, 0.0);
+                            rr.vert_align = wordcraft_doc::props::VertAlign::Baseline;
+                            let raise = if raise.is_finite() { raise.clamp(0.0, 1584.0) } else { rc.size };
+                            if let Some(r) = b.ruby(base, ruby, *align, raise, start, end, &rc, &Arc::new(rr)) {
+                                rubies.push(r);
+                            }
+                        }
                         Some(InlineObject::Opaque { text, .. }) => b.shape_atomic(text, start, end, &rc),
                         _ => push(&mut b, ClKind::Marker, 0.0, 0.0),
                     }
@@ -903,6 +991,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         bidi_levels: b.levels,
         drop_cap_w,
         maths,
+        rubies,
         displays,
         left_out: Vec::new(),
     };
@@ -1246,7 +1335,8 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, level: Optio
                         (st.ascent, st.descent)
                     }
                 } else {
-                    (st.ascent + st.shift.max(0.0), st.descent + (-st.shift).max(0.0))
+                    // `obj_h` is set on text clusters only under ruby text, which the line grows to fit.
+                    ((st.ascent + st.shift.max(0.0)).max(c.obj_h + st.shift), st.descent + (-st.shift).max(0.0))
                 };
                 asc = asc.max(a);
                 desc = desc.max(d);
