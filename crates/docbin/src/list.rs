@@ -221,7 +221,7 @@ fn parse_plf_lfo(table: &[u8], fc: u32, defs: &[ListDef], numbering: &mut Number
             numbering.abstracts.push(AbstractNum { id, name: None, levels });
             id
         };
-        numbering.nums.push(Num { id: (i + 1) as u32, abstract_id, start_overrides });
+        numbering.nums.push(Num { id: (i + 1) as u32, abstract_id, start_overrides, ..Default::default() });
     }
 }
 
