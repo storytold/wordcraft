@@ -5,7 +5,7 @@ use wordcraft_doc::para::{COLUMN_BREAK, NB_HYPHEN, NBSP, PAGE_BREAK, SOFT_HYPHEN
 use wordcraft_doc::props::{Border, BorderStyle, NumRef};
 use wordcraft_doc::{Block, ListKind, Pos};
 
-use super::{delete_selection, sel_result, split_para, type_text};
+use super::{delete_selection, non_mac, sel_result, split_para, type_text};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -24,6 +24,12 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("text.nbsp", "Nonbreaking Space", "Insert › Symbols", |s, _| ins_char(s, NBSP)).key("Mod+Shift+Space"),
         CommandSpec::new("text.nbHyphen", "Nonbreaking Hyphen", "Insert › Symbols", |s, _| ins_char(s, NB_HYPHEN)).key("Mod+Shift+-"),
         CommandSpec::new("text.optionalHyphen", "Optional Hyphen", "Insert › Symbols", |s, _| ins_char(s, SOFT_HYPHEN)).key("Mod+-"),
+        CommandSpec::new("text.emDash", "Em Dash", "Insert › Symbols", |s, _| ins_char(s, '—')).key("Mod+Alt+-"),
+        // On macOS Option+G / R / 2 / ; type these directly, so Word for Mac has no Cmd shortcut.
+        CommandSpec::new("text.copyright", "Copyright Sign", "Insert › Symbols", |s, _| ins_char(s, '©')).key(non_mac("Mod+Alt+C")),
+        CommandSpec::new("text.registered", "Registered Sign", "Insert › Symbols", |s, _| ins_char(s, '®')).key(non_mac("Mod+Alt+R")),
+        CommandSpec::new("text.trademark", "Trademark Sign", "Insert › Symbols", |s, _| ins_char(s, '™')).key(non_mac("Mod+Alt+T")),
+        CommandSpec::new("text.ellipsis", "Ellipsis", "Insert › Symbols", |s, _| ins_char(s, '…')).key(non_mac("Mod+Alt+.")),
     ]
 }
 

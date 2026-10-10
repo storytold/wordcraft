@@ -539,6 +539,16 @@
 	Open	Abrir
 	OpenDocument Text (*.odt)	Texto OpenDocument (*.odt)
 	Optional Hyphen	Hífen opcional
+	Copyright Sign	Sinal de copyright
+	Ellipsis	Reticências
+	Em Dash	Travessão
+	Insert Date Field	Inserir campo de data
+	Insert Page Field	Inserir campo de página
+	Insert Time Field	Inserir campo de hora
+	Registered Sign	Sinal de marca registrada
+	Reset Character Formatting	Redefinir formatação de caracteres
+	Reset Paragraph Formatting	Redefinir formatação de parágrafo
+	Trademark Sign	Sinal de marca comercial
 	Options	Opções
 	Orientation	Orientação
 	Outline	Estrutura de tópicos
@@ -1151,8 +1161,6 @@
 	Document Information	Informações do documento
 	Double Closing Quote	Aspas duplas de fechamento
 	Double Opening Quote	Aspas duplas de abertura
-	Ellipsis	Reticências
-	Em Dash	Travessão
 	En Dash	Meia-risca
 	Em Space	Espaço eme
 	En Space	Espaço ene

@@ -553,6 +553,16 @@
 	Open	Відкрити
 	OpenDocument Text (*.odt)	Текст OpenDocument (*.odt)
 	Optional Hyphen	М'який перенос
+	Copyright Sign	Знак авторського права
+	Ellipsis	Три крапки
+	Em Dash	Довге тире
+	Insert Date Field	Вставити поле дати
+	Insert Page Field	Вставити поле сторінки
+	Insert Time Field	Вставити поле часу
+	Registered Sign	Знак зареєстрованої торгової марки
+	Reset Character Formatting	Скинути форматування символів
+	Reset Paragraph Formatting	Скинути форматування абзацу
+	Trademark Sign	Знак торгової марки
 	Options	Параметри
 	Orientation	Орієнтація
 	Outline	План
@@ -1151,8 +1161,6 @@
 	Document Information	Відомості про документ
 	Double Closing Quote	Закривні подвійні лапки
 	Double Opening Quote	Відкривні подвійні лапки
-	Ellipsis	Три крапки
-	Em Dash	Довге тире
 	En Dash	Коротке тире
 	Em Space	Широкий пробіл
 	En Space	Пробіл середньої ширини

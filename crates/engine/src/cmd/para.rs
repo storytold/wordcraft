@@ -94,6 +94,14 @@ pub fn specs() -> Vec<CommandSpec> {
             let has = cur(s).space_after > 0.0;
             fmt(s, &|p| p.space_after = Some(if has { 0.0 } else { 8.0 }))
         }),
+        // Back to the paragraph style: direct indents, spacing, alignment… go; the style, list
+        // membership and drop cap stay. ⌘Q quits on macOS, so Word for Mac uses ⌃Q.
+        CommandSpec::new("para.reset", "Reset Paragraph Formatting", "Home › Paragraph", |s, _| {
+            fmt(s, &|p| {
+                *p = ParaProps { style: p.style.take(), numbering: p.numbering.take(), drop_cap: p.drop_cap.take(), ..Default::default() }
+            })
+        })
+        .key(super::mac_or("Ctrl+Q", "Mod+Q")),
         CommandSpec::new("para.style", "Apply Style", "Home › Styles", apply_style).params(r#"{"style": string (name or id)}"#),
         CommandSpec::new("para.normal", "Normal Style", "Home › Styles", |s, _| apply_style(s, &json!({"style": "Normal"}))).key("Mod+Shift+N"),
         CommandSpec::new("para.heading1", "Heading 1", "Home › Styles", |s, _| apply_style(s, &json!({"style": "Heading1"}))).key("Mod+Alt+1"),

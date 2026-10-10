@@ -540,6 +540,16 @@
 	Open	開啟
 	OpenDocument Text (*.odt)	OpenDocument 文字 (*.odt)
 	Optional Hyphen	選擇性連字號
+	Copyright Sign	著作權符號
+	Ellipsis	刪節號
+	Em Dash	長破折號
+	Insert Date Field	插入日期欄位
+	Insert Page Field	插入頁碼欄位
+	Insert Time Field	插入時間欄位
+	Registered Sign	註冊商標符號
+	Reset Character Formatting	重設字元格式
+	Reset Paragraph Formatting	重設段落格式
+	Trademark Sign	商標符號
 	Options	選項
 	Orientation	方向
 	Outline	大綱
@@ -1140,8 +1150,6 @@
 	Document Information	文件資訊
 	Double Closing Quote	右雙引號
 	Double Opening Quote	左雙引號
-	Ellipsis	刪節號
-	Em Dash	長破折號
 	En Dash	短破折號
 	Em Space	全形空格
 	En Space	半形空格

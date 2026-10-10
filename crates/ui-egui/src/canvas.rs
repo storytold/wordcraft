@@ -73,6 +73,9 @@ pub struct CanvasState {
     pub table_tool: Option<crate::table_pen::TableTool>,
     /// The Draw Table stroke (or eraser press) in progress.
     pub(crate) table_stroke: Option<crate::table_pen::PenStroke>,
+    /// The last key ran an Alt shortcut: the text its key sends (it may arrive a frame later)
+    /// isn't typed. The next key press clears it.
+    pub(crate) swallow_text: bool,
 }
 
 impl CanvasState {
@@ -109,6 +112,7 @@ impl Default for CanvasState {
             context_menu_open: false,
             mini_anchor: None,
             pasted: false,
+            swallow_text: false,
             wheel: Default::default(),
             scroll_offset: egui::Vec2::ZERO,
             scroll_max: egui::Vec2::ZERO,

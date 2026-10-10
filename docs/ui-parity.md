@@ -1,6 +1,6 @@
 # UI parity with Microsoft Word
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (first version; ribbon, dialogs, shortcuts and on-canvas interaction measured from `crates/ui-egui` and the command registry) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (Word's common default keyboard shortcuts bound, #330: 101 → 125 commands; previously major: first version; ribbon, dialogs, shortcuts and on-canvas interaction measured from `crates/ui-egui` and the command registry) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 How WordCraft looks and feels next to Word: ribbon, dialogs, panes, keyboard, mouse and touch.
 Typing behaviour has its own checklist ([`typing-parity.md`](typing-parity.md)). All assets are our
@@ -15,7 +15,7 @@ own (`AGENTS.md`: no Microsoft iconography, ever).
 | Mini-toolbar on selection | ✅ (#43) | ✅ | 80% | 1–2 |
 | Quick Access Toolbar | Undo, Redo, Repeat, AutoSave | customizable | 50% | 2–3 |
 | Customize Ribbon / Customize Keyboard | ❌ | ✅ | 0% | 6–10 |
-| Keyboard shortcuts | **101** bound in `CommandSpec::key` (measured) | ~250 default shortcuts | ~60% | 4–6 |
+| Keyboard shortcuts | **125** commands bound in `CommandSpec::key`, 144 key combinations (measured on Linux/Windows); styles, spacing, symbols, fields, views, mail merge (#330). Missing: field-code toggles (Shift+F9, Alt+F9), unlink/lock fields, en dash on the numeric keypad, move/promote paragraph, Go Back | ~250 default shortcuts | ~70% | 2–4 |
 | Modal dialogs | **22** (`Dialog` enum: Font, Paragraph, Tabs, Borders and Shading, Find, Go To, Insert Table, Table Properties, Page Setup, Link, Bookmark, Word Count, Zoom, Watermark, New/Modify Style, Commands, About, Save Changes; Columns, Symbol with Special Characters, Field (#321)) plus panes and menus for the rest | ~100 (Caption, Index, TOC options, Citation, Define Multilevel List, Track Changes Options, Compare, Protect, Language, Hyphenation, Line Numbers, Envelopes, Labels, Mail Merge, AutoCorrect, Options panes…) | ~40% | 20–30 |
 | Modal dialogs | **20** (`Dialog` enum: Font, Paragraph, Find, Go To, Insert Table, Table Properties, Page Setup, Link, Bookmark, Word Count, Zoom, Watermark, New/Modify Style, Commands, About, Save Changes; Columns, Symbol with Special Characters, Field (#321)) plus panes and menus for the rest | ~100 (Tabs, Borders and Shading, Caption, Index, TOC options, Citation, Define Multilevel List, Track Changes Options, Compare, Protect, Language, Hyphenation, Line Numbers, Envelopes, Labels, Mail Merge, AutoCorrect, Options panes…) | ~40% | 20–30 |
 | Modal dialogs | **19** (`Dialog` enum: Font, Paragraph, Find, Go To, Insert Table, Table Properties, Page Setup, Link, Bookmark, Word Count, Zoom, Watermark, New/Modify Style, Commands, About, Save Changes, Define New Multilevel List, Track Changes Options) plus panes and menus for the rest | ~100 (Tabs, Borders and Shading, Columns, Symbol, Field, Caption, Index, TOC options, Citation, Compare, Protect, Language, Hyphenation, Line Numbers, Envelopes, Labels, Mail Merge, AutoCorrect, Options panes…) | ~40% | 20–30 |
@@ -38,6 +38,7 @@ own (`AGENTS.md`: no Microsoft iconography, ever).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | Keyboard shortcuts 101 → 125 commands (#330): Reset Paragraph/Character Formatting, symbols, DATE/TIME/PAGE fields, view switches, Word Count, mail merge, F4 Repeat now reachable |
 | 2026-10-11 | trivial | Font box (ribbon and mini toolbar): typing lists the matching fonts (prefix first, then any part of the name); Up/Down, Enter or a click picks one, Escape cancels (#359) |
 | 2026-10-10 | trivial | Tabs dialog (Paragraph › Tabs…, double-click a ruler tab) and Borders and Shading with Borders, Page Border and Shading tabs (#320) |
 | 2026-10-10 | trivial | Columns (presets, unequal widths, line between, apply to), Symbol (font coverage grid by Unicode subset, recently used, character code, Special Characters) and Field (categories, options, field codes) dialogs (#321) |

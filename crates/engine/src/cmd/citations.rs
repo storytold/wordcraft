@@ -52,7 +52,8 @@ pub fn specs() -> Vec<CommandSpec> {
             s.doc.insert_object(&b, InlineObject::Field { instr: format!("XE \"{}\"", entry.replace('"', "")), result: String::new(), locked: false }, &CharProps { hidden: Some(true), ..Default::default() })?;
             Ok(json!({"entry": entry}))
         })
-        .params(r#"{"entry"?: string}"#),
+        .params(r#"{"entry"?: string}"#)
+        .key(super::non_mac("Alt+Shift+X")),
         CommandSpec::new("references.index", "Insert Index", "References › Index", |s, _| {
             generated_list(s, "INDEX", "Index")?;
             sel_result(s)
@@ -70,7 +71,8 @@ pub fn specs() -> Vec<CommandSpec> {
             s.doc.insert_object(&b, InlineObject::Field { instr: format!("TA \\l \"{}\"", entry.replace('"', "")), result: String::new(), locked: false }, &CharProps { hidden: Some(true), ..Default::default() })?;
             Ok(json!({"entry": entry}))
         })
-        .params(r#"{"entry"?: string}"#),
+        .params(r#"{"entry"?: string}"#)
+        .key(super::non_mac("Alt+Shift+I")),
         CommandSpec::new("references.tableOfAuthorities", "Insert Table of Authorities", "References › Table of Authorities", |s, _| {
             generated_list(s, "TOA", "Table of Authorities")?;
             sel_result(s)
