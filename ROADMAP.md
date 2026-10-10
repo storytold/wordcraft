@@ -61,7 +61,7 @@ the icon art).
 | Pictures & shapes (insert, size, crop, recolour, effects, styles, float position) | Text wraps around floats (rectangular); text boxes render their text; no tight/contour wrap, no rotation handles | 55% |
 | Draw tab (ink), SmartArt, charts, 3D models, equations editor | Not started / linear equations only | 5% |
 | File formats: DOCX read/write | Good (Word opens our files); charts/SmartArt/OLE dropped; untested on a real-world corpus | 75% |
-| File formats: PDF, ODT, RTF, HTML, Markdown, TXT | Working | 70% |
+| File formats: PDF, ODT, RTF, HTML, Markdown, LaTeX, TXT | Working | 70% |
 | View modes (print, web, draft, read, focus, zoom, navigation pane) | Working | 70% |
 | Backstage (new from templates, open, info, export, options) | Working; printing goes through PDF | 55% |
 | Agent control (CLI, MCP, control channel, macros) | Beyond Word | 100%+ |

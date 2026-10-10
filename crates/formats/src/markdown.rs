@@ -1056,7 +1056,8 @@ enum Mark {
 fn inlines_md(inlines: &[Inline]) -> String {
     // Split into (text, fmt) pieces with whitespace moved outside emphasis.
     let mut pieces: Vec<(String, Fmt, Option<String>)> = Vec::new();
-    for i in inlines {
+    let inlines = crate::model::equations_as_text(inlines);
+    for i in inlines.iter() {
         match i {
             Inline::Text(t, f) => {
                 let has_emph = f.bold || f.italic || f.strike;
@@ -1086,6 +1087,7 @@ fn inlines_md(inlines: &[Inline]) -> String {
                 let safe: String = a.chars().filter(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | ':')).collect();
                 pieces.push((String::new(), Fmt::default(), Some(format!("<a id=\"{safe}\"></a>"))));
             }
+            Inline::Equation { .. } => {}
         }
     }
     let mut out = String::new();

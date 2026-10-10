@@ -42,7 +42,19 @@ impl PropCtx {
                         .filter(|f| !f.is_empty())
                         .map(str::to_string)
                         .or_else(|| k.attr("w:asciiTheme").or_else(|| k.attr("w:hAnsiTheme")).and_then(|t| self.theme_font(t)))
-                        .or_else(|| k.attr("w:cs").or_else(|| k.attr("w:eastAsia")).filter(|f| !f.is_empty()).map(str::to_string));
+                        .or_else(|| {
+                            // `w:eastAsia` and `w:cs` name fonts for other scripts; they stand in for the
+                            // Latin font only when the run is hinted as that script. Otherwise the Latin
+                            // font is inherited (a Normal style with only `w:eastAsia`/`w:cs` keeps the
+                            // `docDefaults` font, as in Word).
+                            match k.attr("w:hint") {
+                                Some("eastAsia") => k.attr("w:eastAsia"),
+                                Some("cs") => k.attr("w:cs"),
+                                _ => None,
+                            }
+                            .filter(|f| !f.is_empty())
+                            .map(str::to_string)
+                        });
                 }
                 "w:b" => c.bold = Some(on_off(k)),
                 "w:i" => c.italic = Some(on_off(k)),

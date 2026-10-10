@@ -178,7 +178,8 @@ impl Writer {
     }
 
     fn inlines(&mut self, inl: &[Inline], out: &mut String) {
-        for i in inl {
+        let inl = model::equations_as_text(inl);
+        for i in inl.iter() {
             match i {
                 Inline::Text(t, f) => self.run(t, f, out),
                 Inline::Image(img) => self.picture(img, out),
@@ -186,6 +187,7 @@ impl Writer {
                     let a = esc(a);
                     out.push_str(&format!("{{\\*\\bkmkstart {a}}}{{\\*\\bkmkend {a}}}"));
                 }
+                Inline::Equation { .. } => {}
             }
         }
     }

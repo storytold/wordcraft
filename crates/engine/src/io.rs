@@ -3,9 +3,10 @@
 use wordcraft_doc::Document;
 
 /// Formats WordCraft opens.
-pub const OPEN_EXTS: &[&str] = &["docx", "docm", "dotx", "dotm", "txt", "md", "markdown", "html", "htm", "rtf", "odt", "wcraft.json", "json"];
+pub const OPEN_EXTS: &[&str] =
+    &["docx", "docm", "dotx", "dotm", "txt", "md", "markdown", "html", "htm", "rtf", "odt", "tex", "latex", "ltx", "wcraft.json", "json"];
 /// Formats WordCraft saves (Save As).
-pub const SAVE_EXTS: &[&str] = &["docx", "docm", "dotx", "dotm", "pdf", "txt", "md", "html", "rtf", "odt", "png", "json"];
+pub const SAVE_EXTS: &[&str] = &["docx", "docm", "dotx", "dotm", "pdf", "txt", "md", "html", "rtf", "odt", "tex", "png", "json"];
 
 fn ext_of(name: &str) -> String {
     let lower = name.to_ascii_lowercase();

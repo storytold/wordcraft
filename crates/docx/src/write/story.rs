@@ -108,7 +108,12 @@ impl Writer<'_> {
             }
             w.close("w:pPr");
         }
-        if let Some(mark) = self.pending_mark.take() {
+        // A note's first paragraph starts with its reference mark. When the paragraph holds the
+        // note's reference to itself (notes read from a file, or made by references.footnote),
+        // the mark is written there instead, with that reference's formatting.
+        if !self.holds_own_ref(p)
+            && let Some(mark) = self.pending_mark.take()
+        {
             w.raw("<w:r><w:rPr><w:vertAlign w:val=\"superscript\"/></w:rPr>");
             w.empty(mark, &[]);
             w.raw("</w:r>");
@@ -313,7 +318,20 @@ impl Writer<'_> {
             InlineObject::NoteRef { kind, id, custom } => {
                 let foot = *kind == NoteKind::Footnote;
                 if self.current_note == Some((foot, *id)) {
-                    // The note's own number: already written as the w:footnoteRef / w:endnoteRef mark.
+                    // The note's own number is the w:footnoteRef / w:endnoteRef mark, written once
+                    // per note: here for its first reference to itself, never as a reference.
+                    if let Some(mark) = self.pending_mark.take() {
+                        let mut p = props.clone();
+                        if p.style.is_none() && p.vert_align.is_none() {
+                            p.vert_align = Some(wordcraft_doc::props::VertAlign::Superscript);
+                        }
+                        self.rev_open(w, props);
+                        w.open("w:r", &[]);
+                        rpr(w, &p);
+                        w.empty(mark, &[]);
+                        w.close("w:r");
+                        self.rev_close(w, props);
+                    }
                     return;
                 }
                 let nid = self.note_id(*id, foot);

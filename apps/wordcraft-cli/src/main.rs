@@ -10,7 +10,7 @@ const USAGE: &str = "\
 wordcraft-cli — WordCraft from the command line
 
 USAGE:
-  wordcraft-cli convert <in> <out>            convert between formats (docx, pdf, odt, rtf, html, md, txt, json, png)
+  wordcraft-cli convert <in> <out>            convert between formats (docx, pdf, odt, rtf, html, md, tex, txt, json, png)
   wordcraft-cli info <file>                   pages, words, paragraphs, properties (JSON)
   wordcraft-cli text <file>                   plain text
   wordcraft-cli inspect <file>                document structure (JSON)
@@ -192,7 +192,13 @@ fn run(args: &[String]) -> Result<(), String> {
         "mcp" => {
             validate_options("mcp", &rest, MCP_OPTIONS)?;
             let backend: Box<dyn wordcraft_mcp::Backend> = match arg_value(&rest, "--connect") {
-                Some(addr) => Box::new(wordcraft_mcp::Remote::connect(&addr).map_err(|e| format!("can't reach the WordCraft app at {addr}: {e}"))?),
+                Some(addr) => {
+                    let remote = wordcraft_mcp::Remote::connect(&addr).map_err(|e| format!("can't reach the WordCraft app at {addr}: {e}"))?;
+                    if let Some(w) = remote.key_warning() {
+                        eprintln!("wordcraft-cli: {w}");
+                    }
+                    Box::new(remote)
+                }
                 None => Box::new(wordcraft_mcp::Headless::default()),
             };
             let mut server = wordcraft_mcp::Server::new(backend);

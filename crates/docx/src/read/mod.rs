@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use wordcraft_doc::numbering::{AbstractNum, Level, LevelSuffix, Num};
+use wordcraft_doc::para::NoteKind;
 use wordcraft_doc::para::OBJ;
 use wordcraft_doc::props::Rgb;
 use wordcraft_doc::section::NumFormat;
@@ -32,6 +33,9 @@ pub(crate) struct Reader<'p> {
     hf_by_path: HashMap<String, u32>,
     pub footnotes: HashMap<i64, u32>,
     pub endnotes: HashMap<i64, u32>,
+    /// The note being read (kind, part id): its `w:footnoteRef` / `w:endnoteRef` mark is a
+    /// reference to itself.
+    current_note: Option<(NoteKind, u32)>,
     pub comment_map: HashMap<String, u32>,
     pub comments_ended: HashSet<u32>,
     pub bookmarks: HashMap<String, String>,
@@ -60,6 +64,7 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocxError> {
         hf_by_path: HashMap::new(),
         footnotes: HashMap::new(),
         endnotes: HashMap::new(),
+        current_note: None,
         comment_map: HashMap::new(),
         comments_ended: HashSet::new(),
         bookmarks: HashMap::new(),
@@ -585,11 +590,20 @@ impl Reader<'_> {
             if self.doc.parts.len() >= MAX_PARTS {
                 break;
             }
+            // Reserve the id first: the note's own reference mark points at it.
+            let (pk, kind) = if foot { (PartKind::Footnote, NoteKind::Footnote) } else { (PartKind::Endnote, NoteKind::Endnote) };
+            let id = self.doc.add_part(pk, Blocks::new());
             let mut sc = StoryCtx::default();
             let mut blocks = Blocks::new();
+            self.current_note = Some((kind, id));
             self.read_blocks(&mut sc, n, &rels, &mut blocks, 0);
             self.flush_pending(&mut sc, &mut blocks);
-            let id = self.doc.add_part(if foot { PartKind::Footnote } else { PartKind::Endnote }, blocks);
+            self.current_note = None;
+            if let Some(p) = self.doc.parts.get_mut(&id)
+                && !blocks.is_empty()
+            {
+                p.blocks = blocks;
+            }
             if foot {
                 self.footnotes.insert(fid, id);
             } else {
