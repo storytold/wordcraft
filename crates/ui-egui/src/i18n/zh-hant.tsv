@@ -158,7 +158,6 @@
 	Customize Quick Access Toolbar	自訂快速存取工具列
 	Cut	剪下
 	Dark Mode	深色模式
-	Dark mode	深色模式
 	Dashed	虛線
 	Data	資料
 	Date & Time	日期及時間
@@ -877,3 +876,9 @@
 	Opening print dialog…	正在開啟列印對話方塊…
 	Print failed: {error}	列印失敗：{error}
 	Couldn't open {path}: {error}	無法開啟 {path}：{error}
+	Interface theme:	介面主題：
+	Interface\nTheme	介面主題
+	Interface Theme	介面主題
+	Light	淺色
+	Dark	深色
+	Use system setting	使用系統設定
