@@ -14,7 +14,7 @@ use wordcraft_doc::styles::{Style, StyleKind, StyleSheet, TableStyleParts};
 use wordcraft_doc::{Block, Blocks, Comment, Document, InlineObject, PartKind, Revision, RevisionKind};
 
 use crate::DocxError;
-use crate::package::{Package, Rels, rt};
+use crate::package::{ContentTypes, MAX_VBA_RELATED, Package, Rels, VBA_PROJECT_PART, VBA_RELATED, rt};
 use crate::units::{flag, int, on_off, tw, u32_of};
 use crate::xml::El;
 pub(crate) use props::PropCtx;
@@ -119,6 +119,15 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocxError> {
     {
         r.doc.passthrough.insert("docProps/custom.xml".into(), Arc::new(b.to_vec()));
     }
+    // A macro project and every part it relates to (VBA data, signatures…) ride along as opaque
+    // bytes, never parsed or run, so a .docm/.dotm saved again carries exactly what the file had.
+    // Only the relationships and content types are read.
+    if let Some(v) = part(rt::VBA_PROJECT)
+        && let Some(b) = pkg.get(&v).filter(|b| !b.is_empty())
+    {
+        r.doc.passthrough.insert(VBA_PROJECT_PART.into(), Arc::new(b.to_vec()));
+        r.read_vba_related(&v);
+    }
     let mut doc = r.doc;
     doc.ensure_nonempty();
     Ok(doc)
@@ -193,6 +202,49 @@ pub(crate) fn ui_style_name(n: &str) -> String {
 }
 
 impl Reader<'_> {
+    /// Keep the parts the VBA project at `project` relates to, with their relationship types and
+    /// content types (see [`VBA_RELATED`]). Parts outside `word/`, relationship parts, the project
+    /// itself and missing targets are skipped (logged); at most [`MAX_VBA_RELATED`] are kept.
+    fn read_vba_related(&mut self, project: &str) {
+        let types = ContentTypes::read(self.pkg);
+        let mut manifest = String::new();
+        let mut kept = 0usize;
+        for rel in self.pkg.rels(project).list.iter().filter(|r| !r.external) {
+            // Part names compare case-insensitively (OPC): `/WORD/x` names the part the writer
+            // stores as `word/x`.
+            let target = rel.target.as_str();
+            let path = match (target.get(..5), target.get(5..)) {
+                (Some(dir), Some(rest)) if dir.eq_ignore_ascii_case("word/") => format!("word/{rest}"),
+                _ => target.to_string(),
+            };
+            let path = path.as_str();
+            let ct = types.of(path).unwrap_or("application/octet-stream");
+            let usable = path.strip_prefix("word/").is_some_and(|t| !t.is_empty())
+                && !path.to_ascii_lowercase().ends_with(".rels")
+                && !path.eq_ignore_ascii_case(project)
+                && !path.eq_ignore_ascii_case(VBA_PROJECT_PART)
+                && ![rel.kind.as_str(), path, ct].iter().any(|f| f.is_empty() || f.contains(['\t', '\r', '\n']));
+            if !usable {
+                log::warn!("docx: not carrying VBA-related part {path:?}");
+                continue;
+            }
+            let Some(bytes) = self.pkg.get(path) else {
+                log::warn!("docx: VBA-related part {path} is missing; keeping the project without it");
+                continue;
+            };
+            if kept >= MAX_VBA_RELATED {
+                log::warn!("docx: more than {MAX_VBA_RELATED} VBA-related parts; the rest are dropped");
+                break;
+            }
+            kept += 1;
+            manifest.push_str(&format!("{}\t{path}\t{ct}\n", rel.kind));
+            self.doc.passthrough.entry(path.to_string()).or_insert_with(|| Arc::new(bytes.to_vec()));
+        }
+        if !manifest.is_empty() {
+            self.doc.passthrough.insert(VBA_RELATED.into(), Arc::new(manifest.into_bytes()));
+        }
+    }
+
     fn xml(&self, path: &str) -> Result<Option<El>, DocxError> {
         self.pkg.xml(path)
     }

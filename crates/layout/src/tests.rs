@@ -1,6 +1,6 @@
 use super::*;
 use wordcraft_doc::para::InlineObject;
-use wordcraft_doc::props::{Align, ParaProps};
+use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, ParaProps};
 use wordcraft_doc::{Pos, Table};
 
 fn lay(doc: &Document) -> DocLayout {
@@ -155,6 +155,56 @@ fn tables_lay_out_cells() {
     let rules = l.pages[0].items.iter().filter(|i| matches!(i, Placed::Rule { .. })).count();
     assert!(rules >= 12, "rules {rules}");
     assert!(l.cell_at(0, c.x, c.top + 2.0).is_some());
+}
+
+fn rules_on_page0(l: &DocLayout) -> Vec<f32> {
+    l.pages[0].items.iter().filter_map(|i| if let Placed::Rule { border, .. } = i { Some(border.width) } else { None }).collect()
+}
+
+#[test]
+fn table_style_borders_survive_empty_tbl_borders() {
+    let mut d = Document::from_text("before\nafter");
+    let mut t = Table::new(2, 2, 468.0); // defaults to the TableGrid style
+    t.props.borders = Some(Borders::default()); // what an empty <w:tblBorders/> parses to
+    for r in &mut t.rows {
+        for c in &mut r.cells {
+            c.props.borders = Some(Borders::default());
+        }
+    }
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    assert!(rules_on_page0(&l).len() >= 8, "rules {:?}", rules_on_page0(&l));
+}
+
+#[test]
+fn table_own_border_overrides_only_that_side() {
+    let mut d = Document::from_text("before\nafter");
+    let mut t = Table::new(2, 2, 468.0);
+    t.props.borders = Some(Borders { top: Some(Border::single(2.0)), ..Default::default() });
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let w = rules_on_page0(&l);
+    assert!(w.contains(&2.0), "own top missing: {w:?}");
+    assert!(w.iter().filter(|x| (**x - 0.5).abs() < 1e-6).count() >= 6, "style sides missing: {w:?}");
+}
+
+#[test]
+fn table_nil_border_hides_style_side() {
+    let mut d = Document::from_text("before\nafter");
+    let mut t = Table::new(1, 1, 468.0); // 1×1: no inside edges
+    t.props.borders = Some(Borders::all(Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 }));
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+    assert!(rules_on_page0(&lay(&d)).is_empty());
+}
+
+#[test]
+fn table_without_style_stays_borderless() {
+    let mut d = Document::from_text("before\nafter");
+    let mut t = Table::new(2, 2, 468.0);
+    t.props.style = None;
+    t.props.borders = Some(Borders::default());
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+    assert!(rules_on_page0(&lay(&d)).is_empty());
 }
 
 #[test]

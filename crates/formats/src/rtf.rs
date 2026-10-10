@@ -238,6 +238,7 @@ impl Writer {
     fn blocks(&mut self, blocks: &[FBlock], intbl: bool, last_end: &str, out: &mut String, depth: usize) {
         let mut counter = model::ListCounter::default();
         let mut cur_list: Option<usize> = None;
+        let mut top_ordered = false;
         let n = blocks.len();
         for (i, b) in blocks.iter().enumerate() {
             let end = if i + 1 == n { last_end } else { "\\par" };
@@ -245,6 +246,13 @@ impl Writer {
                 FBlock::Para(p) => {
                     let ls = match p.list {
                         Some(li) => {
+                            // A top-level item of the other kind starts a new list.
+                            if li.level == 0 && cur_list.is_some() && top_ordered != li.ordered {
+                                cur_list = None;
+                            }
+                            if li.level == 0 {
+                                top_ordered = li.ordered;
+                            }
                             let id = match cur_list {
                                 Some(id) => id,
                                 None => {
@@ -255,6 +263,9 @@ impl Writer {
                                         let FBlock::Para(q) = q else { break };
                                         let Some(ql) = q.list else { break };
                                         let l = ql.level.min(8) as usize;
+                                        if l == 0 && seen[0] && kinds[0] != ql.ordered {
+                                            break;
+                                        }
                                         if let (Some(s), Some(k)) = (seen.get_mut(l), kinds.get_mut(l))
                                             && !*s
                                         {

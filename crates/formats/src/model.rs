@@ -383,11 +383,19 @@ impl Builder<'_> {
         while let Some(b) = blocks.get(i) {
             match b {
                 FBlock::Para(p) if p.list.is_some() => {
-                    // A run of consecutive list paragraphs is one list.
+                    // A run of consecutive list paragraphs is one list, until a top-level item of
+                    // the other kind (bulleted or numbered) starts a new one.
                     let mut j = i;
-                    let mut group = Vec::new();
+                    let mut group: Vec<ListInfo> = Vec::new();
+                    let mut top: Option<bool> = None;
                     while let Some(FBlock::Para(q)) = blocks.get(j) {
                         let Some(li) = q.list else { break };
+                        if li.level == 0 {
+                            if top.is_some_and(|o| o != li.ordered) {
+                                break;
+                            }
+                            top = Some(li.ordered);
+                        }
                         group.push(li);
                         j += 1;
                     }

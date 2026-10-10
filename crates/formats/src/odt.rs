@@ -283,6 +283,10 @@ impl Writer {
                     while let Some(FBlock::Para(q)) = blocks.get(i) {
                         let Some(li) = q.list else { break };
                         let l = li.level.min(8) as usize;
+                        // A top-level item of the other kind starts a new list.
+                        if l == 0 && seen[0] && kinds[0] != li.ordered {
+                            break;
+                        }
                         if let (Some(s), Some(k)) = (seen.get_mut(l), kinds.get_mut(l))
                             && !*s
                         {

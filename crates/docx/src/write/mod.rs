@@ -9,9 +9,9 @@ use wordcraft_doc::numbering::{Level, LevelSuffix};
 use wordcraft_doc::styles::{Style, StyleKind};
 use wordcraft_doc::{Blocks, Document, PartKind};
 
-use crate::DocxError;
-use crate::package::{rt, zip_entries};
+use crate::package::{MAX_VBA_RELATED, VBA_PROJECT_PART, VBA_RELATED, rt, zip_entries};
 use crate::xml::{self, W};
+use crate::{DocxError, Flavor};
 
 /// Relationships of one part.
 #[derive(Default)]
@@ -81,11 +81,15 @@ pub(crate) struct Writer<'d> {
     used_media: std::collections::BTreeSet<String>,
 }
 
-const CT_MAIN: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml";
 const CT_WML: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.";
 
 /// Write a `.docx` package.
 pub fn write(doc: &Document) -> Result<Vec<u8>, DocxError> {
+    write_as(doc, Flavor::Document)
+}
+
+/// Write a package of the given flavour (`.docx`, `.docm`, `.dotx`, `.dotm`).
+pub fn write_as(doc: &Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
     let mut wr = Writer {
         doc,
         media_files: BTreeMap::new(),
@@ -294,9 +298,45 @@ pub fn write(doc: &Document) -> Result<Vec<u8>, DocxError> {
         }
     }
 
+    // The macro project and the parts it relates to (VBA data, signatures…), verbatim. A
+    // macro-free package can't hold them (Word drops them too).
+    if let Some(vba) = doc.passthrough.get(VBA_PROJECT_PART).filter(|b| !b.is_empty()) {
+        if flavor.macros() {
+            let mut vba_rels = PartRels::default();
+            let manifest = doc.passthrough.get(VBA_RELATED).map(|m| String::from_utf8_lossy(m).into_owned()).unwrap_or_default();
+            let mut written: Vec<String> = Vec::new();
+            for line in manifest.lines().take(MAX_VBA_RELATED) {
+                let mut f = line.split('\t');
+                let (Some(kind), Some(path), Some(ct), None) = (f.next(), f.next(), f.next(), f.next()) else { continue };
+                let Some(target) = path.strip_prefix("word/").filter(|t| !t.is_empty()) else { continue };
+                let Some(bytes) = doc.passthrough.get(path) else { continue };
+                let ours = written.iter().any(|w| w.eq_ignore_ascii_case(path));
+                // Never shadow a part this writer produces (a hostile relationship may point at one).
+                let clash = path.eq_ignore_ascii_case("word/document.xml")
+                    || path.eq_ignore_ascii_case(VBA_PROJECT_PART)
+                    || path.to_ascii_lowercase().ends_with(".rels")
+                    || entries.iter().any(|(n, _)| n.eq_ignore_ascii_case(path));
+                if clash && !ours {
+                    continue;
+                }
+                // A relative reference whose first segment has a colon would read as a URI scheme.
+                let target = if target.split('/').next().is_some_and(|seg| seg.contains(':')) { format!("./{target}") } else { target.to_string() };
+                vba_rels.add(kind, &target, false);
+                if !ours {
+                    push_part(&mut entries, &mut overrides, path, bytes.to_vec(), ct, PartRels::default());
+                    written.push(path.to_string());
+                }
+            }
+            rels.add(rt::VBA_PROJECT, "vbaProject.bin", false);
+            push_part(&mut entries, &mut overrides, VBA_PROJECT_PART, vba.to_vec(), "application/vnd.ms-office.vbaProject", vba_rels);
+        } else {
+            log::warn!("docx: {flavor:?} can't hold macros; the VBA project is left out");
+        }
+    }
+
     // Main part goes first in the zip after content types.
     entries.insert(0, ("word/document.xml".into(), body));
-    overrides.insert(0, ("/word/document.xml".into(), CT_MAIN.into()));
+    overrides.insert(0, ("/word/document.xml".into(), flavor.main_content_type().into()));
     entries.insert(1, ("word/_rels/document.xml.rels".into(), rels.xml()));
 
     // Package-level parts.

@@ -84,7 +84,11 @@ fn extract_text(bytes: &[u8]) -> Vec<String> {
         fn draw_path(&mut self, _: &kurbo::BezPath, _: kurbo::Affine, _: &Paint<'_>, _: &PathDrawMode) {}
         fn push_clip_path(&mut self, _: &ClipPath) {}
         fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
-        fn draw_glyph(&mut self, g: &Glyph<'_>, _: kurbo::Affine, _: kurbo::Affine, _: &Paint<'_>, _: &GlyphDrawMode) {
+        fn draw_glyph(&mut self, g: &Glyph<'_>, _: kurbo::Affine, _: kurbo::Affine, _: &Paint<'_>, mode: &GlyphDrawMode) {
+            // Synthetic bold fills and then strokes each glyph: one character, two draws.
+            if matches!(mode, GlyphDrawMode::Stroke(_)) {
+                return;
+            }
             match g.as_unicode() {
                 Some(hayro_cmap::BfString::Char(c)) => self.0.push(c),
                 Some(hayro_cmap::BfString::String(s)) => self.0.push_str(&s),
@@ -372,4 +376,15 @@ fn field_results_are_extractable_text() {
     let text = extract_text(&export(&d, &PdfOptions::default()).unwrap()).concat();
     assert!(!text.contains('\u{FFFC}'), "{text:?}");
     assert!(squash(&text).contains("See Section 3.01 for details."), "{text:?}");
+}
+
+#[test]
+fn synthetic_bold_text_is_extracted_once() {
+    // JetBrains Mono ships without a bold face, so its bold is filled and stroked: the text
+    // layer still holds each character once.
+    let mut d = Document::new();
+    let bold = CharProps { font: Some("JetBrains Mono".into()), bold: Some(true), ..Default::default() };
+    d.body = vec![para_block(Paragraph::with_text("Mono bold", bold))];
+    let text = squash(&extract_text(&export(&d, &PdfOptions::default()).unwrap()).concat());
+    assert!(text.contains("Mono bold"), "{text:?}");
 }

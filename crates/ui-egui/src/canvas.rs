@@ -806,6 +806,12 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     item(ui, app, "Paragraph…", "ui.dialog", json!({"name": "paragraph"}));
     item(ui, app, "Link…", "ui.dialog", json!({"name": "link"}));
     item(ui, app, "New Comment", "review.newComment", json!({}));
+    if crate::ribbon::has_picture_selected(&app.session) {
+        ui.separator();
+        item(ui, app, "Change Picture…", "ui.changePicture", json!({}));
+        item(ui, app, "Reset Picture", "picture.reset", json!({}));
+        item(ui, app, "Size and Crop…", "ui.tab", json!({"tab": "Picture Format"}));
+    }
     if app.session.sel.focus.path.cell().is_some() {
         ui.separator();
         ui.menu_button(tl!("Insert"), |ui| {
