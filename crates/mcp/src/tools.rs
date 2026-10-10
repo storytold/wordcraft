@@ -80,14 +80,14 @@ pub fn tool_definitions() -> Value {
         tool(
             "open_document",
             "Open",
-            "Open a .docx, .odt, .rtf, .md, .html, .txt or .json file.",
+            "Open a .docx, .odt, .rtf, .md, .tex, .html, .txt or .json file.",
             obj(json!({"path": s("File path")}), &["path"]),
             false
         ),
         tool(
             "save_document",
             "Save",
-            "Save (format from the extension: docx, pdf, odt, rtf, html, md, txt, png).",
+            "Save (format from the extension: docx, pdf, odt, rtf, html, md, tex, txt, png).",
             obj(json!({"path": s("File path; omit to save in place")}), &[]),
             false
         ),

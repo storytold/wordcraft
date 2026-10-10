@@ -270,7 +270,12 @@ fn lines(
                     for g in pl.glyphs.get(c.g0 as usize..c.g1 as usize).into_iter().flatten() {
                         glyphs.push((g.gid, cx + g.dx, base - st.shift - g.dy));
                     }
-                    if let Some(p) = para {
+                    // An object's cluster (a field, a note number) stands for the text it shows.
+                    if let Ok(i) = pl.shown.binary_search_by_key(&k, |(i, _)| *i)
+                        && let Some((_, s)) = pl.shown.get(i)
+                    {
+                        text.push_str(s);
+                    } else if let Some(p) = para {
                         text.push_str(p.text.get(c.start..c.end).unwrap_or(""));
                     }
                 }

@@ -208,3 +208,67 @@ fn bundled_interface_fonts_cover_ukrainian_without_system_fallbacks() {
         }
     }
 }
+
+#[test]
+fn brazilian_portuguese_locales_and_saved_preference_work_without_changing_the_document() {
+    let pt = lang("pt-br");
+    for tag in ["pt-BR", "pt_BR.UTF-8", "PT-BR", "pt-BR-latn", "pt_BR.UTF-8@euro"] {
+        assert_eq!(lang_from_tag(tag), Some(pt), "{tag}");
+    }
+    // European Portuguese and a bare `pt` have no catalog yet, so they follow the fallback.
+    assert_eq!(lang_from_tag("pt-PT"), None);
+    assert_eq!(lang_from_tag("pt"), None);
+    assert_eq!(first_supported(["fr-FR", "pt-BR", "en-US"]), Some(pt));
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    let before = serde_json::to_value(&app.session.doc).unwrap();
+    let result = app.run("ui.language", serde_json::json!({"value": "PT-BR"})).unwrap();
+    assert_eq!(result["effective"], "pt-br");
+    assert_eq!(app.ui.language, "pt-br");
+    assert_eq!(serde_json::to_value(&app.session.doc).unwrap(), before);
+    let saved = serde_json::to_string(&app.ui).unwrap();
+    let restored: crate::UiState = serde_json::from_str(&saved).unwrap();
+    assert_eq!(Lang::from_pref(&restored.language), pt);
+    assert_eq!(pt.name(), "Português (Brasil)");
+}
+
+#[test]
+fn brazilian_portuguese_covers_the_entire_existing_interface_catalog() {
+    use std::collections::HashSet;
+    let keys = |source| parse_entries(source).0.into_iter().map(|e| e.source).collect::<HashSet<_>>();
+    assert_eq!(keys(lang("pt-br").0.source), keys(lang("zh-hans").0.source));
+    let pt = lang("pt-br");
+    assert_eq!(tr(pt, "Home"), "Início");
+    assert_eq!(tr(pt, "Font"), "Fonte");
+    assert_eq!(tr(pt, "Review"), "Revisão");
+    assert_eq!(tr(pt, "Save"), "Salvar");
+    assert_eq!(tr(pt, "unknown future label"), "unknown future label");
+    assert_eq!(fmt(tr(pt, "Exported {path}"), &[("path", "draft-{words}.docx")]), "Exportado draft-{words}.docx");
+    // Count-neutral wording is grammatical for every count: `Palavras: 21`, `Palavras: 21; seleção: 1`.
+    for count in [0, 1, 2, 5, 21, 100, 1000] {
+        let words = count.to_string();
+        assert_eq!(fmt(tr(pt, "{words} words"), &[("words", &words)]), format!("Palavras: {count}"));
+        assert_eq!(fmt(tr(pt, "{selected} of {words} words"), &[("selected", "1"), ("words", &words)]), format!("Palavras: {count}; seleção: 1"));
+    }
+}
+
+#[test]
+fn bundled_interface_fonts_cover_brazilian_portuguese_without_system_fallbacks() {
+    let db = wordcraft_fonts::FontDb::with_font_dirs(Vec::new());
+    let (entries, errors) = parse_entries(lang("pt-br").0.source);
+    assert!(errors.is_empty());
+    let chars: std::collections::HashSet<char> = entries
+        .iter()
+        .flat_map(|e| e.translation.chars())
+        // The accented Latin letters Portuguese adds on top of ASCII; symbols such as ¶, ⌘ or 📂
+        // come from the English sources and render as they already do.
+        .filter(|c| ('\u{00C0}'..='\u{017F}').contains(c))
+        .chain("ÀàÁáÂâÃãÇçÉéÊêÍíÓóÔôÕõÚúÜü".chars())
+        .collect();
+    for (family, style) in [("Inter", "Regular"), ("Inter", "Medium"), ("Inter", "SemiBold"), ("JetBrains Mono", "Regular")] {
+        let face = db.face(family, style);
+        assert_eq!(face.family, family, "must use the bundled interface face");
+        for ch in &chars {
+            assert_ne!(face.glyph_for(*ch), 0, "{family} {style} lacks {ch}");
+        }
+    }
+}

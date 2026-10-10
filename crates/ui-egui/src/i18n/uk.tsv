@@ -782,3 +782,9 @@
 	📂  Browse…	📂  Огляд…
 	{words} words	Слів: {words}
 	{selected} of {words} words	Слів: {words}; виділено: {selected}
+	Apply Styles	Застосувати стилі
+	Dark page (white text on black)	Темна сторінка (білий текст на чорному)
+	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Показує документи з інвертованими кольорами, як Вигляд › Перемкнути режими. Збереження, друк і PDF не змінюються.
+	Only web (http, https) and email (mailto) links can be followed	Можна переходити лише за вебпосиланнями (http, https) і посиланнями на електронну пошту (mailto)
+	Scroll ribbon left	Прокрутити стрічку ліворуч
+	Scroll ribbon right	Прокрутити стрічку праворуч
