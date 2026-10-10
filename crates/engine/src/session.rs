@@ -275,11 +275,14 @@ pub struct MathEdit {
 pub struct Prefs {
     /// Word Count includes text boxes, footnotes and endnotes (Word's default).
     pub count_notes: bool,
+    /// Track Changes Options: what markup shows and how revisions are drawn (per user, as in
+    /// Word).
+    pub markup: wordcraft_layout::display::MarkupOptions,
 }
 
 impl Default for Prefs {
     fn default() -> Self {
-        Prefs { count_notes: true }
+        Prefs { count_notes: true, markup: Default::default() }
     }
 }
 
@@ -385,7 +388,7 @@ impl Session {
             view: self.view.mode,
             web_width: ww,
             show_hidden: self.view.marks,
-            hide_deleted: !self.view.show_markup,
+            hide_deleted: !self.view.show_markup || self.prefs.markup.hides_deletions(),
             proofing: self.view.proofing,
         };
         let l = Arc::new(wordcraft_layout::layout(&self.doc, &mut self.cache, &opts));

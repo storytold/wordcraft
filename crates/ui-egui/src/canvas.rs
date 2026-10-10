@@ -133,6 +133,9 @@ pub fn markup_width(app: &WordApp) -> f32 {
     let v = &app.session.view;
     // Word shows comments either in balloons (contextual) or in the Comments pane (list).
     let on = v.show_markup && !v.comments_pane && !v.read_mode && !v.multi_page && v.mode == wordcraft_layout::ViewMode::Print;
+    // Track Changes Options: comments hidden, or every revision inline, leave no markup area.
+    let m = &app.session.prefs.markup;
+    let on = on && m.comments && m.balloons != wordcraft_layout::display::BalloonMode::Inline;
     if on && !app.session.doc.comments.is_empty() { 216.0 } else { 0.0 }
 }
 
@@ -241,6 +244,7 @@ fn page_key(app: &WordApp, page: &Page, scale_px: f32, dim_body: bool) -> u64 {
     scale_px.to_bits().hash(&mut h);
     let v = &app.session.view;
     (v.marks, v.show_markup, v.dark_mode, wordcraft_render::DARK_PAPER).hash(&mut h);
+    app.session.prefs.markup.hash(&mut h);
     dim_body.hash(&mut h);
     format!("{:?}{:?}", app.session.doc.settings.page_color, app.session.doc.settings.watermark).hash(&mut h);
     (page.w.to_bits(), page.h.to_bits()).hash(&mut h);
@@ -253,10 +257,13 @@ fn page_key(app: &WordApp, page: &Page, scale_px: f32, dim_body: bool) -> u64 {
                 }
                 Placed::Fill { rect, color } => format!("{rect:?}{color:?}").hash(&mut h),
                 Placed::Rule { x0, y0, x1, y1, border } => format!("{x0}{y0}{x1}{y1}{border:?}").hash(&mut h),
-                Placed::Image { rect, media, .. } => format!("{rect:?}{media}").hash(&mut h),
-                Placed::Shape { rect, kind, fill, stroke, .. } => format!("{rect:?}{kind:?}{fill:?}{stroke:?}").hash(&mut h),
-                Placed::Graphic { rect, graphic, .. } => {
-                    (std::sync::Arc::as_ptr(graphic) as usize, rect.x.to_bits(), rect.y.to_bits(), rect.w.to_bits(), rect.h.to_bits()).hash(&mut h)
+                Placed::Image { rect, media, spin, .. } => format!("{rect:?}{media}{spin:?}").hash(&mut h),
+                Placed::Shape { rect, kind, fill, stroke, stroke_width, effects, spin } => {
+                    format!("{rect:?}{kind:?}{fill:?}{stroke:?}{stroke_width}{effects:?}{spin:?}").hash(&mut h)
+                }
+                Placed::Graphic { rect, graphic, spin, .. } => {
+                    (std::sync::Arc::as_ptr(graphic) as usize, rect.x.to_bits(), rect.y.to_bits(), rect.w.to_bits(), rect.h.to_bits()).hash(&mut h);
+                    format!("{spin:?}").hash(&mut h)
                 }
                 Placed::Cell { .. } | Placed::Object { .. } => {}
             }
@@ -428,6 +435,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 opts.display.marks = app.session.view.marks;
                 opts.display.placeholders = true;
                 opts.display.markup = app.session.view.show_markup;
+                opts.display.revisions = app.session.prefs.markup.clone();
                 opts.dark = dark_page;
                 opts.dark_paper = dark_paper;
                 opts.display.dim_header = !dim_body;

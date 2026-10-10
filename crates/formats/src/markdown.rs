@@ -542,12 +542,16 @@ fn push_text(nodes: &mut Vec<Node>, s: &str, f: &Fmt) {
     nodes.push(Node::Text(s.to_string(), f.clone()));
 }
 
-/// The closing `]` matching the `[` at byte `open` (escapes and code spans respected).
-fn matching_bracket(s: &str, open: usize) -> Option<usize> {
+/// The closing `]` matching the `[` at byte `open` (escapes and code spans respected). Gives up
+/// after looking `max` bytes ahead.
+fn matching_bracket(s: &str, open: usize, max: usize) -> Option<usize> {
     let b = s.as_bytes();
     let mut depth = 0usize;
     let mut i = open;
     while let Some(&c) = b.get(i) {
+        if i - open > max {
+            return None;
+        }
         match c {
             b'\\' => i += 1,
             b'`' => {
@@ -687,6 +691,10 @@ fn tag_attr(tag: &str, name: &str) -> Option<String> {
 
 fn tokenize(s: &str, base: &Fmt, depth: usize) -> Vec<Node> {
     let mut nodes: Vec<Node> = Vec::new();
+    // Bytes the link and image scans below may look ahead in total. Each unmatched `[` or `![(`
+    // would otherwise rescan the rest of the text, which is quadratic on hostile input; once the
+    // budget is gone, further brackets are plain text.
+    let mut scan_budget = s.len().saturating_mul(8).saturating_add(8192);
     let b = s.as_bytes();
     let mut i = 0usize;
     let mut text_start = 0usize;
@@ -758,8 +766,12 @@ fn tokenize(s: &str, base: &Fmt, depth: usize) -> Vec<Node> {
             b'!' | b'[' if depth < MAX_NEST => {
                 let img = c == b'!';
                 let open = if img { i + 1 } else { i };
-                let parsed = if b.get(open) == Some(&b'[') {
-                    matching_bracket(s, open).and_then(|close| {
+                let parsed = if b.get(open) == Some(&b'[') && scan_budget > 0 {
+                    let found = matching_bracket(s, open, scan_budget);
+                    scan_budget = scan_budget.saturating_sub(found.map_or(scan_budget, |close| close - open));
+                    found.and_then(|close| {
+                        // A destination that does not parse may have been read to the end of the text.
+                        scan_budget = scan_budget.saturating_sub(s.len().saturating_sub(close));
                         let (dest, end) = link_dest(s, close + 1)?;
                         Some((s.get(open + 1..close)?.to_string(), dest, end))
                     })
@@ -795,7 +807,7 @@ fn tokenize(s: &str, base: &Fmt, depth: usize) -> Vec<Node> {
             }
             b'<' => {
                 let rest = s.get(i + 1..).unwrap_or("");
-                let end = rest.find('>');
+                let end = within(rest, MAX_TAG).find('>');
                 let inner = end.and_then(|e| rest.get(..e)).unwrap_or("");
                 let lower = inner.to_ascii_lowercase();
                 let is_auto = !inner.is_empty()
@@ -826,7 +838,7 @@ fn tokenize(s: &str, base: &Fmt, depth: usize) -> Vec<Node> {
             }
             b'&' => {
                 let rest = s.get(i..).unwrap_or("");
-                match rest.find(';').filter(|k| *k <= 32).and_then(|k| decode_entity(rest.get(1..k)?).map(|ch| (ch, k))) {
+                match within(rest, 33).find(';').and_then(|k| decode_entity(rest.get(1..k)?).map(|ch| (ch, k))) {
                     Some((ch, k)) => {
                         flush!();
                         push_text(&mut nodes, &ch, base);
@@ -841,6 +853,19 @@ fn tokenize(s: &str, base: &Fmt, depth: usize) -> Vec<Node> {
     }
     flush!();
     nodes
+}
+
+/// Longest `<...>` tag or autolink taken as inline HTML.
+const MAX_TAG: usize = 4096;
+
+/// The first `n` bytes of `s` (fewer if that would cut a character), so a search for a closing
+/// character stays short however long the text is.
+fn within(s: &str, n: usize) -> &str {
+    let mut end = n.min(s.len());
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s.get(..end).unwrap_or("")
 }
 
 fn emph_index(ch: char) -> usize {
