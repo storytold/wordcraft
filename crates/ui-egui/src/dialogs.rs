@@ -547,7 +547,7 @@ impl Dialog {
             "bookmark" => Dialog::Bookmark { name: String::new() },
             "wordCount" => Dialog::WordCount { stats: app.session.run("review.wordCount", &json!({})).unwrap_or_default() },
             "zoom" => Dialog::Zoom { percent: (app.session.view.zoom * 100.0).round() },
-            "watermark" => Dialog::Watermark { text: "CONFIDENTIAL".into(), diagonal: true },
+            "watermark" => Dialog::Watermark { text: tl!("CONFIDENTIAL").into(), diagonal: true },
             "newStyle" => Dialog::NewStyle { name: "Style1".into(), based_on: "Normal".into() },
             "newTableStyle" => {
                 let based_on = current_table_style(app).unwrap_or_else(|| "TableGrid".into());
@@ -651,7 +651,11 @@ pub fn table_grid_picker(ui: &mut Ui, app: &mut WordApp) {
     let t = Tokens::get(ui.ctx());
     let id = egui::Id::new("table_picker_hover");
     let hover: (usize, usize) = ui.data(|d| d.get_temp(id)).unwrap_or((0, 0));
-    ui.label(if hover.0 > 0 { format!("{}x{} Table", hover.1, hover.0) } else { "Insert Table".to_string() });
+    ui.label(if hover.0 > 0 {
+        crate::i18n::fmt(tl!("{cols}×{rows} Table"), &[("cols", &hover.1.to_string()), ("rows", &hover.0.to_string())])
+    } else {
+        tl!("Insert Table").to_string()
+    });
     let mut new_hover = (0, 0);
     let mut clicked = None;
     egui::Grid::new("tgp").spacing(vec2(2.0, 2.0)).show(ui, |ui| {
@@ -810,7 +814,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             // Live preview of the chosen font/size/colour/effects.
             ui.separator();
             ui.label(egui::RichText::new(tl!("Preview")).small().weak());
-            let sample = if *caps { "AaBbYyZz".to_uppercase() } else { "AaBbYyZz".to_string() };
+            let sample = if *caps { tl!("AaBbYyZz").to_uppercase() } else { tl!("AaBbYyZz").to_string() };
             let mut job = egui::text::LayoutJob::single_section(sample, fmt);
             job.wrap.max_width = ui.available_width().min(400.0);
             ui.label(job);
@@ -842,10 +846,15 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 ui.radio_value(rtl, true, tl!("Right-to-left"));
                 ui.radio_value(rtl, false, tl!("Left-to-right"));
             });
-            egui::ComboBox::from_label(tl!("Alignment")).selected_text(align.clone()).show_ui(ui, |ui| {
-                for a in ["left", "center", "right", "justify"] {
-                    ui.selectable_value(align, a.to_string(), a);
-                }
+            const ALIGNS: [(&str, &str); 4] = [("left", "Left"), ("center", "Center"), ("right", "Right"), ("justify", "Justify")];
+            ui.horizontal(|ui| {
+                ui.label(tl!("Alignment:"));
+                let shown = ALIGNS.iter().find(|(v, _)| v == align).map_or(align.as_str(), |(_, l)| tl!(l));
+                egui::ComboBox::from_id_salt("para_align").selected_text(shown).show_ui(ui, |ui| {
+                    for (v, l) in ALIGNS {
+                        ui.selectable_value(align, v.to_string(), tl!(l));
+                    }
+                });
             });
             ui.label(egui::RichText::new(tl!("Indentation")).font(semibold(12.5)));
             egui::Grid::new("ind").num_columns(4).show(ui, |ui| {
@@ -861,12 +870,12 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             ui.label(egui::RichText::new(tl!("Spacing")).font(semibold(12.5)));
             egui::Grid::new("sp").num_columns(4).show(ui, |ui| {
                 ui.label(tl!("Before:"));
-                ui.add(egui::DragValue::new(before).speed(1.0).range(0.0..=1584.0).suffix(" pt"));
+                ui.add(egui::DragValue::new(before).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt"))));
                 ui.label(tl!("Line spacing:"));
                 ui.add(egui::DragValue::new(line).speed(0.05).range(0.5..=5.0));
                 ui.end_row();
                 ui.label(tl!("After:"));
-                ui.add(egui::DragValue::new(after).speed(1.0).range(0.0..=1584.0).suffix(" pt"));
+                ui.add(egui::DragValue::new(after).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt"))));
                 ui.end_row();
             });
             ui.label(egui::RichText::new(tl!("Line and Page Breaks")).font(semibold(12.5)));
