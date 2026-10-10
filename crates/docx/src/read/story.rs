@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use wordcraft_doc::effects::{Glow, Shadow, ShapeEffects};
+use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind};
 use wordcraft_doc::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{CharProps, Rgb};
 use wordcraft_doc::table::{Cell, MAX_COLS, MAX_ROWS, Row, Table};
@@ -10,7 +10,7 @@ use wordcraft_doc::{Block, Blocks, InlineObject, Paragraph, PartKind, RevisionKi
 
 use super::Reader;
 use super::props::{sectpr, tcpr, trpr};
-use crate::package::Rels;
+use crate::package::{Rels, rt};
 use crate::units::{int, measure};
 use crate::xml::El;
 
@@ -650,6 +650,19 @@ impl Reader<'_> {
             }
         }
         let gd = c.child("a:graphic").and_then(|g| g.child("a:graphicData"))?;
+        // Checked by URI before the blip search: a diagram's data can hold a blip further down.
+        let uri = gd.attr("uri").unwrap_or("");
+        let graphic_kind = if uri.ends_with("/chart") {
+            Some(GraphicKind::Chart)
+        } else if uri.ends_with("/diagram") {
+            Some(GraphicKind::Diagram)
+        } else {
+            None
+        };
+        if let Some(kind) = graphic_kind {
+            let graphic = self.graphic(kind, gd, rels, w, h);
+            return Some(InlineObject::Graphic { w, h, alt, float, graphic });
+        }
         if let Some(blip) = gd.find("a:blip") {
             let media = blip.attr("r:embed").and_then(|id| self.media_for(rels, id))?;
             let mut crop = [0.0f32; 4];
@@ -668,6 +681,38 @@ impl Reader<'_> {
             return Some(self.read_wsp(sc, wsp, rels, w, h, float));
         }
         None
+    }
+
+    /// The chart or SmartArt diagram in an `a:graphicData`, as items in points from its top-left
+    /// corner. Charts are drawn from their cached data, SmartArt diagrams from the drawing Word
+    /// stores beside them. Built once per part and size; once the file's graphic budget is spent,
+    /// later ones are empty.
+    fn graphic(&mut self, kind: GraphicKind, gd: &El, rels: &Rels, w: f32, h: f32) -> Arc<Graphic> {
+        let source = match kind {
+            GraphicKind::Chart => gd.child("c:chart").and_then(|c| c.attr("r:id")).and_then(|id| super::part_of(rels, id, rt::CHART)),
+            GraphicKind::Diagram => self.diagram_part(gd, rels),
+        };
+        let Some(path) = source else { return Arc::new(Graphic { kind, items: Vec::new(), w, h }) };
+        let key = (kind, path, w.to_bits(), h.to_bits());
+        if let Some(g) = self.graphics.get(&key) {
+            return g.clone();
+        }
+        let items = if self.graphic_budget == 0 { Vec::new() } else { self.graphic_items(kind, &key.1, w, h) };
+        self.graphic_budget = self.graphic_budget.saturating_sub(graphic_work(&items));
+        let g = Arc::new(Graphic { kind, items, w, h });
+        self.graphics.insert(key, g.clone());
+        g
+    }
+
+    /// The items of the chart part or diagram drawing part at `path`.
+    fn graphic_items(&mut self, kind: GraphicKind, path: &str, w: f32, h: f32) -> Vec<GraphicItem> {
+        match kind {
+            GraphicKind::Chart => match self.graphic_part(path) {
+                Some(space) => super::chart::chart_items(&space, &self.doc.settings.theme_colors, w, h),
+                None => Vec::new(),
+            },
+            GraphicKind::Diagram => self.diagram_drawing(path, w, h),
+        }
     }
 
     fn read_wsp(&mut self, sc: &mut StoryCtx, wsp: &El, rels: &Rels, w: f32, h: f32, float: Float) -> InlineObject {
@@ -696,12 +741,11 @@ impl Reader<'_> {
         let ln = sppr.and_then(|s| s.child("a:ln"));
         let stroke = solid(ln);
         let stroke_width = ln.and_then(|l| l.attr("w")).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0).clamp(0.0, 100.0);
-        let effects = sppr.and_then(|s| s.child("a:effectLst")).map(effect_list).unwrap_or_default();
         let story = match txbx {
             Some(t) if sc.story_depth < MAX_STORY_DEPTH => Some(self.read_textbox(sc, t, rels)),
             _ => None,
         };
-        InlineObject::Shape { kind, w, h, fill, stroke, stroke_width, float, story, effects }
+        InlineObject::Shape { kind, w, h, fill, stroke, stroke_width, float, story }
     }
 
     fn read_textbox(&mut self, sc: &StoryCtx, content: &El, rels: &Rels) -> u32 {
@@ -731,17 +775,7 @@ impl Reader<'_> {
             let story = Some(self.read_textbox(sc, t, rels));
             let fill = shape.attr("fillcolor").and_then(Rgb::parse);
             let stroke = shape.attr("strokecolor").and_then(Rgb::parse);
-            return Some(InlineObject::Shape {
-                kind: ShapeKind::TextBox,
-                w,
-                h,
-                fill,
-                stroke,
-                stroke_width: 0.75,
-                float,
-                story,
-                effects: Default::default(),
-            });
+            return Some(InlineObject::Shape { kind: ShapeKind::TextBox, w, h, fill, stroke, stroke_width: 0.75, float, story });
         }
         None
     }
@@ -927,43 +961,7 @@ fn vml_float(shape: &El, style: &str) -> Float {
     }
 }
 
-/// A shape's `a:effectLst` (ECMA-376 Part 1 §20.1.8.26): its outer shadow, glow and soft edges.
-/// Other effects are dropped.
-fn effect_list(l: &El) -> ShapeEffects {
-    let pt = |e: &El, n: &str| e.attr(n).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0);
-    let shadow = l.child("a:outerShdw").map(|e| {
-        let (color, transparency) = effect_color(e);
-        // `dir`: 60000ths of a degree, clockwise.
-        let angle = e.attr("dir").and_then(int).map(|v| (v.rem_euclid(21_600_000) as f32) / 60_000.0).unwrap_or(0.0);
-        Shadow { color: color.unwrap_or(Rgb::BLACK), transparency, blur: pt(e, "blurRad"), distance: pt(e, "dist"), angle }
-    });
-    let glow = l.child("a:glow").map(|e| {
-        let (color, transparency) = effect_color(e);
-        Glow { color: color.unwrap_or(Glow::default().color), size: pt(e, "rad"), transparency }
-    });
-    let soft_edge = l.child("a:softEdge").map(|e| pt(e, "rad"));
-    ShapeEffects { shadow, glow, soft_edge }.sanitized()
-}
-
-/// The colour inside an effect (`a:srgbClr`, `a:prstClr`, `a:sysClr`; theme colours aren't
-/// resolved here) and its transparency, percent (from `a:alpha`, opaque when absent).
-fn effect_color(e: &El) -> (Option<Rgb>, f32) {
-    let Some(c) = e.els().find(|c| matches!(c.name.as_str(), "a:srgbClr" | "a:prstClr" | "a:sysClr" | "a:schemeClr" | "a:scrgbClr" | "a:hslClr"))
-    else {
-        return (None, 0.0);
-    };
-    let rgb = match c.name.as_str() {
-        "a:srgbClr" => c.attr("val").and_then(Rgb::parse),
-        "a:sysClr" => c.attr("lastClr").and_then(Rgb::parse),
-        "a:prstClr" => match c.attr("val").unwrap_or("") {
-            "black" => Some(Rgb::BLACK),
-            "white" => Some(Rgb::WHITE),
-            "gray" | "grey" => Some(Rgb(0x80, 0x80, 0x80)),
-            _ => None,
-        },
-        _ => None,
-    };
-    // `a:alpha`: opacity in 1000ths of a percent.
-    let opacity = c.child("a:alpha").and_then(|a| a.attr("val")).and_then(int).map(|v| v.clamp(0, 100_000) as f32 / 1000.0).unwrap_or(100.0);
-    (rgb, 100.0 - opacity)
+/// What a graphic's items cost to keep and draw: one per item, plus one per path segment.
+fn graphic_work(items: &[GraphicItem]) -> usize {
+    items.iter().map(|it| if let GraphicItem::Path { segs, .. } = it { segs.len() + 1 } else { 1 }).sum()
 }

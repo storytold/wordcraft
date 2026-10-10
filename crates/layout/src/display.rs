@@ -1,10 +1,11 @@
 //! Page → draw items, shared by the raster renderer, the PDF exporter and thumbnails.
 
+use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, PathSeg, TextAlign};
 use wordcraft_doc::para::{InlineObject, ShapeKind};
 use wordcraft_doc::props::{Border, BorderStyle, Rgb, TextColor, TextDirection, Underline};
 use wordcraft_doc::section::SectionStart;
 use wordcraft_doc::{Block, Document, Path, StoryRef};
-use wordcraft_fonts::FaceRef;
+use wordcraft_fonts::{BezPath, FaceRef};
 use wordcraft_geom::Rect;
 
 use crate::math::MItem;
@@ -65,8 +66,19 @@ pub enum Draw {
         fill: Option<Rgb>,
         stroke: Option<Rgb>,
         stroke_width: f32,
-        /// Shadow, glow and soft edges (drawn with [`wordcraft_doc::effects::bands`]).
-        effects: wordcraft_doc::effects::ShapeEffects,
+    },
+    /// A vector path (a chart's or diagram's polygons, slices, lines): filled, then stroked.
+    Path {
+        segs: Vec<PathSeg>,
+        fill: Option<Rgb>,
+        stroke: Option<Rgb>,
+        stroke_width: f32,
+    },
+    /// An inline chart or diagram's draws, as one figure with its alt text (for tagged PDF).
+    Figure {
+        alt: String,
+        kind: GraphicKind,
+        draws: Vec<Draw>,
     },
     /// A formatting mark (¶ · → ↵) in the UI's mark colour, or in `color` (a tracked
     /// paragraph mark in its reviser's colour).
@@ -199,9 +211,10 @@ fn item(doc: &Document, it: &Placed, opts: &DisplayOptions, alpha: f32, out: &mu
         Placed::Fill { rect, color } => out.push(Draw::Fill { rect: *rect, color: *color, alpha }),
         Placed::Rule { x0, y0, x1, y1, border } => out.push(rule(*x0, *y0, *x1, *y1, border, alpha)),
         Placed::Image { rect, media, crop, .. } => out.push(Draw::Image { rect: *rect, media: media.clone(), crop: *crop, alpha }),
-        Placed::Shape { rect, kind, fill, stroke, stroke_width, effects } => {
-            out.push(Draw::Shape { rect: *rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width, effects: *effects })
+        Placed::Shape { rect, kind, fill, stroke, stroke_width } => {
+            out.push(Draw::Shape { rect: *rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width })
         }
+        Placed::Graphic { rect, graphic, .. } => out.extend(graphic_draws(doc, graphic, *rect, alpha)),
         Placed::Cell { .. } | Placed::Object { .. } => {}
         Placed::Lines { story, path, para, l0, l1, x, y, turn } if turn.is_turned() => {
             let mut items = Vec::new();
@@ -533,8 +546,11 @@ fn lines(
             let rect = inline_rect(obj, cx, base, c.adv, c.obj_h);
             match obj {
                 Some(InlineObject::Image { media, crop, .. }) => out.push(Draw::Image { rect, media: media.clone(), crop: *crop, alpha }),
-                Some(InlineObject::Shape { kind, fill, stroke, stroke_width, effects, .. }) => {
-                    out.push(Draw::Shape { rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width, effects: *effects })
+                Some(InlineObject::Shape { kind, fill, stroke, stroke_width, .. }) => {
+                    out.push(Draw::Shape { rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width })
+                }
+                Some(InlineObject::Graphic { graphic, alt, .. }) => {
+                    out.push(Draw::Figure { alt: alt.clone(), kind: graphic.kind, draws: graphic_draws(doc, graphic, rect, alpha) })
                 }
                 Some(InlineObject::Equation { .. }) => {
                     if let Some((_, ml)) = pl.maths.iter().find(|(k, _)| *k == oi) {
@@ -696,6 +712,134 @@ fn equation(items: &[MItem], x: f32, base: f32, alpha: f32, screen: bool, out: &
     }
 }
 
+/// The draws of a chart or diagram's items inside `rect` (page coordinates). The items were built
+/// for the size `g.w` × `g.h` (0: `rect`'s own size), so they are scaled to `rect`; strokes and text
+/// by the mean of the two scales.
+fn graphic_draws(doc: &Document, g: &Graphic, rect: Rect, alpha: f32) -> Vec<Draw> {
+    let (sx, sy) = (scale_of(rect.w, g.w), scale_of(rect.h, g.h));
+    let k = (sx + sy) / 2.0;
+    let inside = |r: &[f32; 4]| Rect::new(rect.x + r[0] * sx, rect.y + r[1] * sy, r[2] * sx, r[3] * sy);
+    let mut out = Vec::with_capacity(g.items.len());
+    for it in &g.items {
+        match it {
+            GraphicItem::Shape { rect: r, kind, fill, stroke, stroke_width } => {
+                out.push(Draw::Shape { rect: inside(r), kind: *kind, fill: *fill, stroke: *stroke, stroke_width: stroke_width * k })
+            }
+            GraphicItem::Path { segs, fill, stroke, stroke_width } => {
+                let segs = page_segs(segs, |x, y| (rect.x + x * sx, rect.y + y * sy));
+                out.push(Draw::Path { segs, fill: *fill, stroke: *stroke, stroke_width: stroke_width * k })
+            }
+            GraphicItem::Text { rect: r, .. } => out.extend(text_glyphs(doc, inside(r), it, alpha, k)),
+            GraphicItem::Image { rect: r, media } => out.push(Draw::Image { rect: inside(r), media: media.clone(), crop: [0.0; 4], alpha }),
+        }
+    }
+    out
+}
+
+/// Scale from the size `built` points a graphic's items were made for to `len` points; 1 when
+/// the built size is unknown (0).
+fn scale_of(len: f32, built: f32) -> f32 {
+    if built.is_finite() && built > 0.0 && len.is_finite() { (len / built).max(0.0) } else { 1.0 }
+}
+
+/// Path segments mapped to page coordinates by `map`, cleaned for the rasterizer and PDF: a segment
+/// with a non-finite number is dropped, and so is anything before a move (or after a broken one).
+fn page_segs(segs: &[PathSeg], map: impl Fn(f32, f32) -> (f32, f32)) -> Vec<PathSeg> {
+    let fin = |p: (f32, f32)| p.0.is_finite() && p.1.is_finite();
+    let mut out = Vec::with_capacity(segs.len());
+    let mut open = false;
+    for s in segs {
+        match *s {
+            PathSeg::Move(x, y) => {
+                let p = map(x, y);
+                open = fin(p);
+                if open {
+                    out.push(PathSeg::Move(p.0, p.1));
+                }
+            }
+            PathSeg::Line(x, y) => {
+                let p = map(x, y);
+                if open && fin(p) {
+                    out.push(PathSeg::Line(p.0, p.1));
+                }
+            }
+            PathSeg::Cubic(a, b, c, d, e, f) => {
+                let (p1, p2, p3) = (map(a, b), map(c, d), map(e, f));
+                if open && fin(p1) && fin(p2) && fin(p3) {
+                    out.push(PathSeg::Cubic(p1.0, p1.1, p2.0, p2.1, p3.0, p3.1));
+                }
+            }
+            PathSeg::Close => {
+                if open {
+                    out.push(PathSeg::Close);
+                }
+                open = false;
+            }
+        }
+    }
+    out
+}
+
+/// A path of clean segments (see [`page_segs`]) as a kurbo path, for the rasteriser and PDF.
+pub fn seg_path(segs: &[PathSeg]) -> BezPath {
+    let mut p = BezPath::new();
+    for s in segs {
+        match *s {
+            PathSeg::Move(x, y) => p.move_to((x as f64, y as f64)),
+            PathSeg::Line(x, y) => p.line_to((x as f64, y as f64)),
+            PathSeg::Cubic(a, b, c, d, e, f) => p.curve_to((a as f64, b as f64), (c as f64, d as f64), (e as f64, f as f64)),
+            PathSeg::Close => p.close_path(),
+        }
+    }
+    p
+}
+
+/// One line of a `GraphicItem::Text` in `r`, shaped in its font (the document's body font when
+/// unset) and aligned horizontally, centred vertically, at its size times `k`. `None` when there is
+/// nothing to draw, or the item's rectangle or size isn't a finite number (a degenerate scale:
+/// `r` itself is always finite, as [`Rect::new`] makes it).
+fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) -> Option<Draw> {
+    let GraphicItem::Text { rect, text, size, color, bold, align, font } = it else { return None };
+    let size = *size * k;
+    if !rect.iter().chain([&size]).all(|v| v.is_finite()) {
+        return None;
+    }
+    let family = font.as_deref().filter(|f| !f.is_empty()).unwrap_or(&doc.settings.minor_font);
+    let size = size.clamp(1.0, 400.0);
+    let resolved = wordcraft_fonts::word::resolve(family, *bold, false);
+    let face = resolved.face.get();
+    let shaped = wordcraft_fonts::shape(face, text, &[], |c| c);
+    if shaped.is_empty() {
+        return None;
+    }
+    let k = size / face.upem.max(1.0) as f32;
+    let width: f32 = shaped.iter().map(|g| g.x_advance as f32 * k).sum();
+    let (ascent, descent) = wordcraft_fonts::word::line_metrics(face);
+    let baseline = r.y + r.h / 2.0 + (ascent - descent) as f32 * k / 2.0;
+    let mut pen = match align {
+        TextAlign::Left => r.x,
+        TextAlign::Center => r.x + (r.w - width) / 2.0,
+        TextAlign::Right => r.x + r.w - width,
+    };
+    let mut glyphs = Vec::with_capacity(shaped.len());
+    for g in &shaped {
+        glyphs.push((g.gid, pen + g.x_offset as f32 * k, baseline - g.y_offset as f32 * k));
+        pen += g.x_advance as f32 * k;
+    }
+    Some(Draw::Glyphs {
+        face: resolved.face,
+        size,
+        glyphs,
+        color: *color,
+        alpha,
+        synth_bold: resolved.synth_bold,
+        synth_italic: false,
+        text: text.clone(),
+        link: None,
+        ranges: Vec::new(),
+    })
+}
+
 fn author_index(doc: &Document, author: &str) -> u32 {
     let mut seen: Vec<&str> = Vec::new();
     for r in &doc.revisions {
@@ -724,7 +868,7 @@ pub fn text_color(c: &TextColor, background: Option<Rgb>) -> Rgb {
 /// baseline at `cx`): inside the room kept for its effects.
 pub(crate) fn inline_rect(obj: Option<&InlineObject>, cx: f32, base: f32, adv: f32, obj_h: f32) -> Rect {
     let [l, t, r, b] = match obj {
-        Some(InlineObject::Image { float, .. } | InlineObject::Shape { float, .. }) => float.effect_extent(),
+        Some(InlineObject::Image { float, .. } | InlineObject::Graphic { float, .. } | InlineObject::Shape { float, .. }) => float.effect_extent(),
         _ => [0.0; 4],
     };
     Rect::new(cx + l, base - obj_h + t, (adv - l - r).max(0.0), (obj_h - t - b).max(0.0))

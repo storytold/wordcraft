@@ -53,6 +53,18 @@ pub struct CanvasState {
     scroll_max: egui::Vec2,
     /// Pages per row last frame; when it changes the caret's page is scrolled back into view.
     pub cols: usize,
+    /// The comment whose balloon is selected (its text is editable in place, like Word's).
+    pub balloon: Option<u32>,
+    /// Give the selected balloon's text field keyboard focus on its next frame.
+    pub(crate) balloon_focus: bool,
+    /// The selected balloon shows a reply field.
+    pub(crate) balloon_reply: bool,
+    /// The selected balloon's height last frame (screen points), for its click area.
+    balloon_h: f32,
+    /// Screen rects of the comment balloons last frame (for the control channel and tests).
+    pub balloon_rects: Vec<(u32, Rect)>,
+    /// A paste event arrived since the last Mod+V release (see `keys::canvas_events`).
+    pub(crate) pasted: bool,
 }
 
 impl CanvasState {
@@ -86,10 +98,16 @@ impl Default for CanvasState {
             obj_drag: None,
             context_menu_open: false,
             mini_anchor: None,
+            pasted: false,
             wheel: Default::default(),
             scroll_offset: egui::Vec2::ZERO,
             scroll_max: egui::Vec2::ZERO,
             cols: 1,
+            balloon: None,
+            balloon_focus: false,
+            balloon_reply: false,
+            balloon_h: 0.0,
+            balloon_rects: Vec::new(),
         }
     }
 }
@@ -237,6 +255,9 @@ fn page_key(app: &WordApp, page: &Page, scale_px: f32, dim_body: bool) -> u64 {
                 Placed::Rule { x0, y0, x1, y1, border } => format!("{x0}{y0}{x1}{y1}{border:?}").hash(&mut h),
                 Placed::Image { rect, media, .. } => format!("{rect:?}{media}").hash(&mut h),
                 Placed::Shape { rect, kind, fill, stroke, .. } => format!("{rect:?}{kind:?}{fill:?}{stroke:?}").hash(&mut h),
+                Placed::Graphic { rect, graphic, .. } => {
+                    (std::sync::Arc::as_ptr(graphic) as usize, rect.x.to_bits(), rect.y.to_bits(), rect.w.to_bits(), rect.h.to_bits()).hash(&mut h)
+                }
                 Placed::Cell { .. } | Placed::Object { .. } => {}
             }
         }
@@ -259,31 +280,30 @@ fn page_screen_scale(rect: Rect, page: &Page, fallback: f32) -> f32 {
     if page.w > 0.0 { rect.width() / page.w } else { fallback }
 }
 
-/// Spacing of the View › Gridlines drawing grid: 0.5 cm, in points.
-const DRAWING_GRID_PT: f32 = 72.0 * 0.5 / 2.54;
 /// Closest the drawing grid's lines get on screen; zoomed far out, every other line is skipped.
 const DRAWING_GRID_MIN_PX: f32 = 4.0;
 /// Most grid lines drawn each way on one page (page sizes come from files).
 const DRAWING_GRID_MAX_LINES: usize = 2000;
 
 /// The View › Gridlines drawing grid over a page's text area, in document points: the x of each
-/// vertical line and the y of each horizontal line, starting at the margins and `step` apart,
-/// never outside the margins. Drawn on screen only — never printed or exported.
-fn drawing_grid(body: wordcraft_geom::Rect, step: f32) -> (Vec<f32>, Vec<f32>) {
-    let axis = |start: f32, len: f32| -> Vec<f32> {
+/// vertical line and the y of each horizontal line, starting at the margins and `step` (across,
+/// down) apart, never outside the margins. Drawn on screen only — never printed or exported.
+fn drawing_grid(body: wordcraft_geom::Rect, step: (f32, f32)) -> (Vec<f32>, Vec<f32>) {
+    let axis = |start: f32, len: f32, step: f32| -> Vec<f32> {
         if !(step.is_finite() && step > 0.0 && start.is_finite() && len.is_finite() && len >= 0.0) {
             return Vec::new();
         }
         let end = start + len + 0.01;
         (0..DRAWING_GRID_MAX_LINES).map(|k| start + k as f32 * step).take_while(|p| *p <= end).collect()
     };
-    (axis(body.x, body.w), axis(body.y, body.h))
+    (axis(body.x, body.w, step.0), axis(body.y, body.h, step.1))
 }
 
-/// The drawing grid's spacing in points at a screen scale: the default 0.5 cm, doubled until the
-/// lines are at least [`DRAWING_GRID_MIN_PX`] apart on screen.
-fn drawing_grid_step(scale: f32) -> f32 {
-    let mut step = DRAWING_GRID_PT;
+/// The drawing grid's spacing in points at a screen scale: the document's spacing (`w:drawingGrid*Spacing`;
+/// ECMA-376's 1/8 inch when it doesn't say), doubled until the lines are at least
+/// [`DRAWING_GRID_MIN_PX`] apart on screen.
+fn drawing_grid_step(spacing: f32, scale: f32) -> f32 {
+    let mut step = if spacing.is_finite() && spacing > 0.0 { spacing } else { wordcraft_doc::DEFAULT_GRID };
     if !(scale.is_finite() && scale > 0.0) {
         return step;
     }
@@ -449,7 +469,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             }
             // View › Gridlines: the drawing grid over the text area (Print Layout, on screen only).
             if app.session.view.gridlines && app.session.view.mode == wordcraft_layout::ViewMode::Print && !app.session.view.read_mode {
-                let (xs, ys) = drawing_grid(page.body, drawing_grid_step(page_scale));
+                let settings = &app.session.doc.settings;
+                let step = (drawing_grid_step(settings.grid_h, page_scale), drawing_grid_step(settings.grid_v, page_scale));
+                let (xs, ys) = drawing_grid(page.body, step);
                 let stroke = Stroke::new(1.0, t.blue.linear_multiply(0.22));
                 let (x0, x1) = (visual_sr.min.x + page.body.x * page_scale, visual_sr.min.x + page.body.right() * page_scale);
                 let (y0, y1) = (visual_sr.min.y + page.body.y * page_scale, visual_sr.min.y + page.body.bottom() * page_scale);
@@ -608,6 +630,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     app.canvas.scroll_offset = out.state.offset;
     app.canvas.scroll_max = (out.content_size - out.inner_rect.size()).max(egui::Vec2::ZERO);
     let (resp, rects) = out.inner;
+    // A click on the page leaves the selected comment balloon.
+    if app.canvas.balloon.is_some() && ui.input(|i| i.pointer.any_pressed()) && resp.contains_pointer() {
+        deselect_balloon(app, ui.ctx());
+    }
     // Focus: the canvas takes keyboard focus on click and keeps Tab/arrows.
     if resp.clicked() || resp.drag_started() || app.canvas.want_focus {
         resp.request_focus();
@@ -671,24 +697,41 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     }
 }
 
-/// Comment balloons in the markup area right of each page, joined to their anchors.
+/// Comment balloons in the markup area right of each page, joined to their anchors, with each
+/// comment's replies under it. Clicking a balloon selects it, like Word: its text becomes editable
+/// in place, with Reply, Resolve and Delete (the same commands as the Comments pane).
 fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, rects: &[Rect], layout: &DocLayout, scale: f32) {
+    app.canvas.balloon_rects.clear();
     let mw = markup_width(app);
+    if app.canvas.balloon.is_some_and(|id| mw <= 0.0 || !app.session.doc.comments.contains_key(&id)) {
+        deselect_balloon(app, ui.ctx());
+    }
     if mw <= 0.0 {
         return;
     }
     let t = Tokens::get(ui.ctx());
     let clip = ui.clip_rect();
+    // Replies hang under the comment they answer rather than getting balloons of their own.
+    let is_reply = |c: &wordcraft_doc::Comment| c.parent.is_some_and(|p| app.session.doc.comments.contains_key(&p));
+    let mut replies: HashMap<u32, Vec<u32>> = HashMap::new();
+    for (id, c) in &app.session.doc.comments {
+        if let Some(p) = c.parent.filter(|_| is_reply(c)) {
+            replies.entry(p).or_default().push(*id);
+        }
+    }
     // (page, anchor x, anchor y, id) for each anchored, unresolved-or-not comment.
     let mut by_page: HashMap<usize, Vec<(f32, f32, u32, Pos)>> = HashMap::new();
     for (id, pos) in wordcraft_engine::cmd::review::comment_list(&app.session) {
         let Some(pos) = pos else { continue };
+        if app.session.doc.comments.get(&id).is_some_and(is_reply) {
+            continue;
+        }
         let Some(c) = layout.caret_on(&pos, app.session.page_hint) else { continue };
         by_page.entry(c.page).or_default().push((c.x, c.top + c.height, id, pos));
     }
     let palette = [t.blue, Color32::from_rgb(0xB0, 0x3A, 0x2E), Color32::from_rgb(0x2E, 0x7D, 0x32), Color32::from_rgb(0x8E, 0x44, 0xAD), t.orange];
     let mut authors: Vec<String> = Vec::new();
-    let mut clicked: Option<Pos> = None;
+    let mut clicked: Option<(u32, Pos)> = None;
     // The markup area extends each page.
     for (pi, pr) in rects.iter().enumerate() {
         let page_scale = layout.pages.get(pi).map_or(scale, |page| page_screen_scale(*pr, page, scale));
@@ -698,60 +741,195 @@ fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, rects: &[Re
             painter.line_segment([area.left_top(), area.left_bottom()], Stroke::new(1.0, Color32::from_rgb(0xE0, 0xE0, 0xE0)));
         }
     }
-    for (pi, list) in by_page.iter_mut() {
-        let Some(pr) = rects.get(*pi) else { continue };
+    let mut pages: Vec<usize> = by_page.keys().copied().collect();
+    pages.sort_unstable();
+    for pi in pages {
+        let Some(list) = by_page.get_mut(&pi) else { continue };
+        let Some(pr) = rects.get(pi) else { continue };
         if !pr.expand(400.0).intersects(clip) {
             continue;
         }
         list.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.total_cmp(&b.0)));
-        let page_scale = layout.pages.get(*pi).map_or(scale, |page| page_screen_scale(*pr, page, scale));
+        let page_scale = layout.pages.get(pi).map_or(scale, |page| page_screen_scale(*pr, page, scale));
         let x0 = pr.max.x + 10.0;
         let w = (mw * page_scale - 20.0).max(60.0);
         let mut next_y = pr.min.y;
         for (ax, ay, id, pos) in list.iter() {
             let Some(c) = app.session.doc.comments.get(id) else { continue };
-            let text = app.session.doc.plain_text(StoryRef::Part(c.part));
-            let author = if c.author.is_empty() { tl!("Author").to_string() } else { c.author.clone() };
+            let resolved = c.resolved;
+            let author = author_name(&c.author);
             let ai = authors.iter().position(|a| *a == author).unwrap_or_else(|| {
                 authors.push(author.clone());
                 authors.len() - 1
             });
             let color = palette.get(ai % palette.len()).copied().unwrap_or(t.blue);
             let fs = (11.0 * page_scale / PX_PER_PT).clamp(8.0, 16.0);
-            let head = painter.layout(author.clone(), semibold(fs), t.text, w - 16.0);
-            let body = painter.layout(text.trim().to_string(), regular(fs), if c.resolved { t.text_dim } else { t.text }, w - 16.0);
-            let h = head.size().y + body.size().y + 16.0;
+            let thread: Vec<u32> = replies.get(id).cloned().unwrap_or_default();
             let anchor = pos2(pr.min.x + ax * page_scale, pr.min.y + ay * page_scale);
             let top = (anchor.y - 12.0).max(next_y);
-            let card = Rect::from_min_size(pos2(x0, top), vec2(w, h));
-            next_y = card.max.y + 6.0;
+            let active = app.canvas.balloon == Some(*id);
+            // Lay out a read-only balloon's text: the comment, then each reply under a rule.
+            let mut lines: Vec<(std::sync::Arc<egui::Galley>, f32)> = Vec::new();
+            let card = if active {
+                Rect::from_min_size(pos2(x0, top), vec2(w, app.canvas.balloon_h.max(24.0)))
+            } else {
+                let dim = |r: bool| if r { t.text_dim } else { t.text };
+                lines.push((painter.layout(author, semibold(fs), t.text, w - 16.0), 0.0));
+                let body = app.session.doc.plain_text(StoryRef::Part(c.part));
+                lines.push((painter.layout(body.trim().to_string(), regular(fs), dim(resolved), w - 16.0), 4.0));
+                for rid in &thread {
+                    let Some(r) = app.session.doc.comments.get(rid) else { continue };
+                    lines.push((painter.layout(author_name(&r.author), semibold(fs), t.text, w - 16.0), 9.0));
+                    let text = app.session.doc.plain_text(StoryRef::Part(r.part));
+                    lines.push((painter.layout(text.trim().to_string(), regular(fs), dim(resolved), w - 16.0), 4.0));
+                }
+                let h = lines.iter().map(|(g, gap)| g.size().y + gap).sum::<f32>() + 12.0;
+                Rect::from_min_size(pos2(x0, top), vec2(w, h))
+            };
             if !card.intersects(clip) {
+                next_y = card.max.y + 6.0;
                 continue;
             }
-            let selected = app.session.sel.focus.path == pos.path && app.session.sel.focus.story == pos.story;
+            let selected = active || (app.session.sel.focus.path == pos.path && app.session.sel.focus.story == pos.story);
             // Leader: from the anchor along the text to the page edge, then to the card.
             let lead = Stroke::new(if selected { 1.5 } else { 1.0 }, color.linear_multiply(if selected { 1.0 } else { 0.7 }));
             dashed(painter, anchor, pos2(pr.max.x, anchor.y), lead);
             painter.line_segment([pos2(pr.max.x, anchor.y), pos2(x0, top + 10.0)], lead);
-            painter.rect_filled(card.translate(vec2(0.0, 1.0)), 4.0, t.page_shadow);
-            painter.rect_filled(card, 4.0, if selected { t.checked } else { Color32::WHITE });
-            painter.rect_stroke(card, 4.0, Stroke::new(if selected { 1.5 } else { 1.0 }, color), egui::StrokeKind::Inside);
-            painter.rect_filled(Rect::from_min_size(card.min, vec2(4.0, h)), egui::CornerRadius { nw: 4, sw: 4, ne: 0, se: 0 }, color);
-            painter.galley(pos2(card.min.x + 10.0, card.min.y + 6.0), head.clone(), t.text);
-            painter.galley(pos2(card.min.x + 10.0, card.min.y + 10.0 + head.size().y), body, t.text);
-            let r = ui.interact(card, ui.id().with(("balloon", *id)), Sense::click());
-            if r.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            }
-            if r.clicked() {
-                clicked = Some(pos.clone());
-            }
+            let card = if active {
+                active_balloon(app, ui, painter, *id, &thread, card, fs, color)
+            } else {
+                card_shapes(painter, &t, card, color, selected, None);
+                let mut y = card.min.y + 6.0;
+                for (i, (g, gap)) in lines.into_iter().enumerate() {
+                    y += gap;
+                    if i >= 2 && i % 2 == 0 {
+                        // A reply starts: a hairline between it and what it answers.
+                        painter.hline(card.min.x + 10.0..=card.max.x - 8.0, y - gap / 2.0, Stroke::new(1.0, t.border));
+                    }
+                    let h = g.size().y;
+                    painter.galley(pos2(card.min.x + 10.0, y), g, t.text);
+                    y += h;
+                }
+                let r = ui.interact(card, ui.id().with(("balloon", *id)), Sense::click());
+                if r.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                if r.clicked() {
+                    clicked = Some((*id, pos.clone()));
+                }
+                card
+            };
+            next_y = card.max.y + 6.0;
+            app.canvas.balloon_rects.push((*id, card));
         }
     }
-    if let Some(p) = clicked {
+    if let Some((id, p)) = clicked {
+        select_balloon(app, ui.ctx(), id);
         app.session.sel = wordcraft_engine::Selection::caret(p);
-        app.canvas.want_focus = true;
     }
+}
+
+fn author_name(a: &str) -> String {
+    if a.is_empty() { tl!("Author").to_string() } else { a.to_string() }
+}
+
+/// A balloon card's background, border and author-colour stripe; `slot` paints them under
+/// widgets added before the card's size was known.
+fn card_shapes(painter: &egui::Painter, t: &Tokens, card: Rect, color: Color32, selected: bool, slot: Option<egui::layers::ShapeIdx>) {
+    let shapes = vec![
+        egui::Shape::rect_filled(card.translate(vec2(0.0, 1.0)), 4.0, t.page_shadow),
+        egui::Shape::rect_filled(card, 4.0, if selected { t.checked } else { Color32::WHITE }),
+        egui::Shape::rect_stroke(card, 4.0, Stroke::new(if selected { 1.5 } else { 1.0 }, color), egui::StrokeKind::Inside),
+        egui::Shape::rect_filled(Rect::from_min_size(card.min, vec2(4.0, card.height())), egui::CornerRadius { nw: 4, sw: 4, ne: 0, se: 0 }, color),
+    ];
+    match slot {
+        Some(i) => painter.set(i, egui::Shape::Vec(shapes)),
+        None => {
+            painter.extend(shapes);
+        }
+    }
+}
+
+/// The selected balloon: the comment and its replies as editable fields (each edit is one undo
+/// step via `review.editComment`), an optional reply field, and Reply / Resolve / Delete.
+/// `card` carries last frame's size; returns this frame's.
+#[allow(clippy::too_many_arguments)]
+fn active_balloon(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, id: u32, thread: &[u32], card: Rect, fs: f32, color: Color32) -> Rect {
+    let t = Tokens::get(ui.ctx());
+    let slot = painter.add(egui::Shape::Noop);
+    // The card's own click area sits under its fields, so a click on its padding stays here.
+    let _ = ui.interact(card, ui.id().with(("balloon", id)), Sense::click());
+    let inner = Rect::from_min_max(pos2(card.min.x + 10.0, card.min.y + 6.0), pos2(card.max.x - 6.0, card.min.y + 20_000.0));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::top_down(egui::Align::Min)));
+    child.spacing_mut().item_spacing.y = 3.0;
+    let (font, bold, small) = (regular(fs), semibold(fs), regular((fs * 0.9).max(8.0)));
+    let focus = std::mem::take(&mut app.canvas.balloon_focus);
+    let name = |app: &WordApp, cid: u32| app.session.doc.comments.get(&cid).map(|c| author_name(&c.author)).unwrap_or_default();
+    let resolved = app.session.doc.comments.get(&id).is_some_and(|c| c.resolved);
+    child.horizontal(|ui| {
+        ui.label(egui::RichText::new(name(app, id)).font(bold.clone()).color(t.text));
+        if resolved {
+            ui.label(egui::RichText::new(tl!("Resolved")).font(small.clone()).color(t.green));
+        }
+    });
+    crate::panes::comment_editor(app, &mut child, id, Some(font.clone()), focus && !app.canvas.balloon_reply);
+    for rid in thread {
+        child.add_space(4.0);
+        child.label(egui::RichText::new(name(app, *rid)).font(bold.clone()).color(t.text));
+        crate::panes::comment_editor(app, &mut child, *rid, Some(font.clone()), false);
+    }
+    if app.canvas.balloon_reply && crate::panes::reply_editor(app, &mut child, id, Some(font.clone()), focus) {
+        app.canvas.balloon_reply = false;
+    }
+    let (mut reply, mut resolve, mut delete) = (false, false, false);
+    child.add_space(2.0);
+    child.horizontal(|ui| {
+        let button = |ui: &mut Ui, s: &str| ui.add(egui::Button::new(egui::RichText::new(s).font(small.clone())).small()).clicked();
+        reply = button(ui, tl!("Reply"));
+        resolve = button(ui, if resolved { tl!("Reopen") } else { tl!("Resolve") });
+        delete = button(ui, tl!("Delete"));
+    });
+    let card = Rect::from_min_max(card.min, pos2(card.max.x, child.min_rect().max.y + 6.0));
+    app.canvas.balloon_h = card.height();
+    card_shapes(painter, &t, card, color, true, Some(slot));
+    if reply {
+        app.canvas.balloon_reply = true;
+        app.canvas.balloon_focus = true;
+    }
+    if resolve {
+        let _ = app.run("review.resolveComment", json!({"id": id}));
+    }
+    if delete {
+        deselect_balloon(app, ui.ctx());
+        let _ = app.run("review.deleteComment", json!({"id": id}));
+    }
+    card
+}
+
+/// Select a comment's balloon (its text gets the keyboard), writing back any edit in the one
+/// selected before.
+pub fn select_balloon(app: &mut WordApp, ctx: &egui::Context, id: u32) {
+    if app.canvas.balloon == Some(id) {
+        return;
+    }
+    deselect_balloon(app, ctx);
+    app.canvas.balloon = Some(id);
+    app.canvas.balloon_focus = true;
+    app.canvas.balloon_h = 0.0;
+}
+
+/// Leave the selected balloon, writing back what was typed in it (its fields may not be drawn
+/// again to notice they lost focus).
+pub fn deselect_balloon(app: &mut WordApp, ctx: &egui::Context) {
+    let Some(id) = app.canvas.balloon.take() else { return };
+    app.canvas.balloon_reply = false;
+    app.canvas.balloon_focus = false;
+    let thread: Vec<u32> =
+        std::iter::once(id).chain(app.session.doc.comments.iter().filter(|(_, c)| c.parent == Some(id)).map(|(k, _)| *k)).collect();
+    for c in thread {
+        crate::panes::commit_comment(app, ctx, c);
+    }
+    crate::panes::commit_reply(app, ctx, id);
 }
 
 fn dashed(p: &egui::Painter, a: Pos2, b: Pos2, s: Stroke) {
@@ -985,6 +1163,15 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
             break;
         }
     }
+    // Margins: the edges of the white text area drag the section's margins. Registered before
+    // the indent markers, so a marker sitting on an edge keeps the pointer where they overlap.
+    let (le, re) = (x0 + page.body.x * scale, x0 + page.body.right() * scale);
+    for (edge, zone) in [
+        (MarginEdge::Left, Rect::from_min_max(pos2(le - 10.0, bar.min.y), pos2(le + 3.0, bar.max.y))),
+        (MarginEdge::Right, Rect::from_min_max(pos2(re - 3.0, bar.min.y), pos2(re + 10.0, bar.max.y))),
+    ] {
+        margin_handle(app, ui, edge, zone, |p| (p.x - x0) / scale, &sect);
+    }
     // Indent markers for the caret's paragraph (relative to its column).
     let col_x = page.body.x;
     if let Some(para) = app.session.doc.para_at(&app.session.sel.focus) {
@@ -1069,7 +1256,12 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
     let y0 = pr.min.y;
     let vbar = Rect::from_min_max(pos2(v.min.x + 4.0, y0), pos2(v.max.x - 3.0, y0 + page.h.min(20_000.0) * scale));
     vp.rect_filled(vbar, 0.0, t.ruler_margin);
-    vp.rect_filled(Rect::from_min_max(pos2(vbar.min.x, y0 + page.body.y * scale), pos2(vbar.max.x, y0 + page.body.bottom() * scale)), 0.0, t.ruler);
+    let (te, be) = (y0 + page.body.y * scale, y0 + page.body.bottom() * scale);
+    vp.rect_filled(Rect::from_min_max(pos2(vbar.min.x, te), pos2(vbar.max.x, be)), 0.0, t.ruler);
+    for (edge, ey) in [(MarginEdge::Top, te), (MarginEdge::Bottom, be)] {
+        let zone = Rect::from_min_max(pos2(vbar.min.x, ey - 4.0), pos2(vbar.max.x, ey + 4.0));
+        margin_handle(app, ui, edge, zone, |p| (p.y - y0) / scale, &sect);
+    }
     let origin = page.body.y;
     let mut k = -((origin / unit).ceil() as i32) * 8;
     loop {
@@ -1088,7 +1280,71 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
             break;
         }
     }
-    let _ = sect;
+}
+
+/// One edge of a page's text area on a ruler.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum MarginEdge {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+impl MarginEdge {
+    fn param(self) -> &'static str {
+        match self {
+            MarginEdge::Left => "left",
+            MarginEdge::Right => "right",
+            MarginEdge::Top => "top",
+            MarginEdge::Bottom => "bottom",
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            MarginEdge::Left => "Left Margin",
+            MarginEdge::Right => "Right Margin",
+            MarginEdge::Top => "Top Margin",
+            MarginEdge::Bottom => "Bottom Margin",
+        }
+    }
+}
+
+/// The least text width (or height) a margin drag leaves: one inch, in points.
+const MIN_TEXT: f32 = 72.0;
+
+/// The margin (points) after dragging `edge` of the text area on a ruler to `at` points from the
+/// page's left (or top) edge: snapped to 1/16 inch, never negative, and leaving at least an inch
+/// of text between it and the opposite margin.
+pub(crate) fn dragged_margin(edge: MarginEdge, at: f32, s: &wordcraft_doc::section::SectionProps) -> f32 {
+    let (raw, room, cur) = match edge {
+        MarginEdge::Left => (at - s.gutter, s.page_w - s.margin_right - s.gutter - MIN_TEXT, s.margin_left),
+        MarginEdge::Right => (s.page_w - at, s.page_w - s.margin_left - s.gutter - MIN_TEXT, s.margin_right),
+        MarginEdge::Top => (at, s.page_h - s.margin_bottom - MIN_TEXT, s.margin_top),
+        MarginEdge::Bottom => (s.page_h - at, s.page_h - s.margin_top - MIN_TEXT, s.margin_bottom),
+    };
+    if !raw.is_finite() || !room.is_finite() {
+        return cur;
+    }
+    ((raw / 4.5).round() * 4.5).clamp(0.0, room.max(0.0))
+}
+
+/// A draggable margin edge on a ruler: `to_pt` turns the pointer into points from the page's
+/// left (or top) edge. A whole drag is one undo step, through `layout.margins`.
+fn margin_handle(app: &mut WordApp, ui: &Ui, edge: MarginEdge, zone: Rect, to_pt: impl Fn(Pos2) -> f32, sect: &wordcraft_doc::section::SectionProps) {
+    let cursor =
+        if matches!(edge, MarginEdge::Left | MarginEdge::Right) { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::ResizeVertical };
+    let r = ui.interact(zone, ui.id().with(("ruler_margin", edge)), Sense::drag()).on_hover_cursor(cursor);
+    let r = if r.dragged() { r } else { r.on_hover_text(tl!(edge.label())) };
+    if r.dragged()
+        && let Some(pp) = r.interact_pointer_pos()
+    {
+        let v = dragged_margin(edge, to_pt(pp), sect);
+        if !r.drag_started() {
+            app.session.join_next_undo();
+        }
+        let _ = app.run("layout.margins", json!({ edge.param(): v }));
+    }
 }
 
 /// Convert a page position (points) to screen coordinates (for agents and tests).
@@ -1301,6 +1557,90 @@ fn is_followable_link(url: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// #167: dragging a ruler's margin edge sets that margin, snapped, never negative, and
+    /// always leaving an inch of text.
+    #[test]
+    fn margin_drags_are_clamped() {
+        let s = wordcraft_doc::section::SectionProps {
+            page_w: 612.0,
+            page_h: 792.0,
+            margin_left: 72.0,
+            margin_right: 72.0,
+            margin_top: 72.0,
+            margin_bottom: 72.0,
+            gutter: 0.0,
+            ..Default::default()
+        };
+        assert_eq!(dragged_margin(MarginEdge::Left, 100.0, &s), 99.0, "snapped to 1/16 inch");
+        assert_eq!(dragged_margin(MarginEdge::Right, 612.0 - 36.0, &s), 36.0);
+        assert_eq!(dragged_margin(MarginEdge::Left, -50.0, &s), 0.0, "never negative");
+        assert_eq!(dragged_margin(MarginEdge::Left, 600.0, &s), 612.0 - 72.0 - 72.0, "an inch of text is left");
+        assert_eq!(dragged_margin(MarginEdge::Right, 0.0, &s), 612.0 - 72.0 - 72.0);
+        assert_eq!(dragged_margin(MarginEdge::Top, 9.0, &s), 9.0);
+        assert_eq!(dragged_margin(MarginEdge::Bottom, 100.0, &s), 792.0 - 72.0 - 72.0);
+        let g = wordcraft_doc::section::SectionProps { gutter: 36.0, ..s.clone() };
+        assert_eq!(dragged_margin(MarginEdge::Left, 144.0, &g), 108.0, "the gutter isn't margin");
+        assert_eq!(dragged_margin(MarginEdge::Left, f32::NAN, &s), 72.0, "junk keeps the margin");
+
+        // Through the command: the result is applied and is one undo step.
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        let sect = wordcraft_engine::cmd::page::sect(&app.session);
+        let v = dragged_margin(MarginEdge::Left, sect.page_w, &sect);
+        app.run("layout.margins", json!({"left": v})).unwrap();
+        let after = wordcraft_engine::cmd::page::sect(&app.session);
+        assert!(after.page_w - after.margin_left - after.margin_right - after.gutter >= MIN_TEXT - 0.01);
+        assert!(app.session.undo());
+        assert_eq!(wordcraft_engine::cmd::page::sect(&app.session).margin_left, sect.margin_left);
+    }
+
+    /// #167: a comment balloon edits in place like Word's: click it, type, leave it, and the
+    /// comment has the new text as one undo step.
+    #[test]
+    fn a_balloon_edits_its_comment() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("text.insert", json!({"text": "Some text here"})).unwrap();
+        a.run("select.text", json!({"text": "text"})).unwrap();
+        let id = a.run("review.newComment", json!({"text": "Original"})).unwrap()["id"].as_u64().unwrap() as u32;
+        a.run("view.commentsPane", json!({"value": false})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        for _ in 0..6 {
+            h.step();
+        }
+        let card = h.state().canvas.balloon_rects.iter().find(|(i, _)| *i == id).map(|(_, r)| *r).expect("the comment has a balloon");
+        let at = card.left_top() + vec2(30.0, 8.0);
+        h.event(egui::Event::PointerMoved(at));
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+        h.step();
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+        for _ in 0..3 {
+            h.step();
+        }
+        assert_eq!(h.state().canvas.balloon, Some(id), "the click selected the balloon");
+        let depth = h.state().session.undo_depth();
+        for piece in ["Edited", " twice"] {
+            h.event(egui::Event::Text(piece.into()));
+            h.step();
+        }
+        assert_eq!(h.state().session.undo_depth(), depth, "nothing is written while typing");
+        h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
+        for _ in 0..3 {
+            h.step();
+        }
+        let part = h.state().session.doc.comments[&id].part;
+        let text = h.state().session.doc.plain_text(StoryRef::Part(part));
+        assert!(text.contains("Edited twice") && text.contains("Original"), "{text:?}");
+        assert_eq!(h.state().session.undo_depth(), depth + 1, "one undo step for the edit");
+        assert!(h.state_mut().session.undo());
+        assert_eq!(h.state().session.doc.plain_text(StoryRef::Part(part)), "Original");
+    }
+
     #[test]
     fn only_web_and_email_links_are_followed() {
         for ok in ["https://example.com/a?b#c", "http://example.com", "HTTPS://EXAMPLE.COM", "mailto:someone@example.com"] {
@@ -1378,11 +1718,14 @@ mod tests {
         assert_eq!(visual.size(), vec2(80.5, 120.5));
     }
 
+    /// 0.5 cm in points.
+    const HALF_CM: f32 = 72.0 * 0.5 / 2.54;
+
     #[test]
     fn drawing_grid_starts_at_the_margins_and_stays_inside_them() {
         // Letter page with 1" margins: the text area is 468 x 648 pt from (72, 72).
         let body = wordcraft_geom::Rect::new(72.0, 72.0, 468.0, 648.0);
-        let (xs, ys) = drawing_grid(body, DRAWING_GRID_PT);
+        let (xs, ys) = drawing_grid(body, (HALF_CM, HALF_CM));
         assert_eq!(xs.first().copied(), Some(72.0));
         assert_eq!(ys.first().copied(), Some(72.0));
         assert!(xs.iter().all(|x| (72.0..=540.0).contains(x)), "{xs:?}");
@@ -1391,10 +1734,13 @@ mod tests {
         assert_eq!(xs.len(), 34);
         assert_eq!(ys.len(), 46);
         for w in xs.windows(2).chain(ys.windows(2)) {
-            assert!((w[1] - w[0] - DRAWING_GRID_PT).abs() < 0.01, "{w:?}");
+            assert!((w[1] - w[0] - HALF_CM).abs() < 0.01, "{w:?}");
         }
+        // The document's own spacing, different across and down: 1/8 inch across, 1/4 inch down.
+        let (xs, ys) = drawing_grid(body, (9.0, 18.0));
+        assert_eq!((xs.len(), ys.len()), (53, 37));
         // A grid line that lands on the margin is kept.
-        let (xs, _) = drawing_grid(wordcraft_geom::Rect::new(0.0, 0.0, 100.0, 10.0), 25.0);
+        let (xs, _) = drawing_grid(wordcraft_geom::Rect::new(0.0, 0.0, 100.0, 10.0), (25.0, 25.0));
         assert_eq!(xs, vec![0.0, 25.0, 50.0, 75.0, 100.0]);
     }
 
@@ -1405,18 +1751,24 @@ mod tests {
             (r(72.0, 72.0, 468.0, 648.0), 0.0),
             (r(72.0, 72.0, 468.0, 648.0), -5.0),
             (r(72.0, 72.0, 468.0, 648.0), f32::NAN),
-            (wordcraft_geom::Rect { x: f32::NAN, y: 0.0, w: f32::INFINITY, h: -10.0 }, DRAWING_GRID_PT),
+            (wordcraft_geom::Rect { x: f32::NAN, y: 0.0, w: f32::INFINITY, h: -10.0 }, HALF_CM),
         ] {
-            let (xs, ys) = drawing_grid(body, step);
+            let (xs, ys) = drawing_grid(body, (step, step));
             assert!(xs.is_empty() && ys.is_empty(), "{body:?} {step}");
         }
-        let (xs, ys) = drawing_grid(r(0.0, 0.0, 1.0e9, 1.0e9), DRAWING_GRID_PT);
+        let (xs, ys) = drawing_grid(r(0.0, 0.0, 1.0e9, 1.0e9), (HALF_CM, HALF_CM));
         assert_eq!((xs.len(), ys.len()), (DRAWING_GRID_MAX_LINES, DRAWING_GRID_MAX_LINES));
         // Zoomed far out, lines thin out instead of filling the page.
-        assert_eq!(drawing_grid_step(PX_PER_PT), DRAWING_GRID_PT);
-        assert!(drawing_grid_step(0.1) * 0.1 >= DRAWING_GRID_MIN_PX);
-        assert_eq!(drawing_grid_step(0.0), DRAWING_GRID_PT);
-        assert_eq!(drawing_grid_step(f32::NAN), DRAWING_GRID_PT);
+        let grid = wordcraft_doc::DEFAULT_GRID;
+        assert_eq!(drawing_grid_step(grid, PX_PER_PT), grid);
+        assert_eq!(drawing_grid_step(HALF_CM, PX_PER_PT), HALF_CM);
+        assert!(drawing_grid_step(grid, 0.1) * 0.1 >= DRAWING_GRID_MIN_PX);
+        assert_eq!(drawing_grid_step(grid, 0.0), grid);
+        assert_eq!(drawing_grid_step(grid, f32::NAN), grid);
+        // A missing or broken spacing falls back to the spec's 1/8 inch.
+        for bad in [0.0, -3.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(drawing_grid_step(bad, PX_PER_PT), grid);
+        }
     }
 
     #[test]

@@ -312,14 +312,6 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.rect(3.0, 3.0, 11.0, 11.0, c);
             pen.fcircle(13.0, 13.0, 4.5, a);
         }
-        // Shape Effects: a square casting a soft shadow down and to the right.
-        "shapeEffects" => {
-            for (k, alpha) in [(2.0, 30), (1.0, 50), (0.0, 80)] {
-                pen.frect(7.0 - k, 7.0 - k, 18.0 + k, 18.0 + k, Color32::from_rgba_unmultiplied(0, 0, 0, alpha));
-            }
-            pen.frect(3.0, 3.0, 14.0, 14.0, a);
-            pen.rect(3.0, 3.0, 14.0, 14.0, c);
-        }
         "icons" => {
             pen.circle(10.0, 10.0, 7.5, c);
             pen.fcircle(7.5, 8.0, 1.0, c);

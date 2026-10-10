@@ -22,8 +22,19 @@ fn has_object(s: &Session) -> Option<&'static str> {
 }
 fn has_floating(s: &Session) -> Option<&'static str> {
     match selected(s) {
+        Some((_, InlineObject::Graphic { .. })) => Some(FROZEN),
         Some((_, InlineObject::Image { float, .. } | InlineObject::Shape { float, .. })) if float.wrap != Wrap::Inline => None,
         _ => Some("select a floating picture or shape first"),
+    }
+}
+/// Charts and diagrams are not written back on save yet, so their size, position and wrapping stay
+/// as imported: they can be selected and deleted, not moved, resized or arranged.
+const FROZEN: &str = "charts and diagrams can't be moved or resized yet";
+/// `has_object` for the geometry commands: a chart or diagram is frozen.
+fn has_movable(s: &Session) -> Option<&'static str> {
+    match selected(s) {
+        Some((_, InlineObject::Graphic { .. })) => Some(FROZEN),
+        _ => has_object(s),
     }
 }
 fn has_shape(s: &Session) -> Option<&'static str> {
@@ -35,7 +46,7 @@ fn has_shape(s: &Session) -> Option<&'static str> {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("picture.size", "Size", "Picture Format › Size", size).params(r#"{"width"?: pt, "height"?: pt, "lockAspect"?: bool, "scale"?: percent}"#).when(has_object),
+        CommandSpec::new("picture.size", "Size", "Picture Format › Size", size).params(r#"{"width"?: pt, "height"?: pt, "lockAspect"?: bool, "scale"?: percent}"#).when(has_movable),
         CommandSpec::new("picture.crop", "Crop", "Picture Format › Size", |s, v| {
             let c = [p::f32(v, "left"), p::f32(v, "top"), p::f32(v, "right"), p::f32(v, "bottom")].map(|x| x.unwrap_or(0.0).clamp(0.0, 0.45));
             with_obj(s, |o| {
@@ -202,7 +213,7 @@ pub fn specs() -> Vec<CommandSpec> {
             with_float(s, |f| f.wrap = wrap)
         })
         .params(r#"{"wrap": "inline|square|tight|through|topAndBottom|behindText|inFrontOfText"}"#)
-        .when(has_object),
+        .when(has_movable),
         CommandSpec::new("arrange.position", "Position", "Layout › Arrange", |s, v| {
             let preset = p::str(v, "preset").unwrap_or("middleCenter").to_string();
             let (x, y) = (p::f32(v, "x"), p::f32(v, "y"));
@@ -223,9 +234,9 @@ pub fn specs() -> Vec<CommandSpec> {
             })
         })
         .params(r#"{"preset"?: "topLeft|topCenter|topRight|middleLeft|middleCenter|middleRight|bottomLeft|bottomCenter|bottomRight", "x"?: pt, "y"?: pt}"#)
-        .when(has_object),
-        CommandSpec::new("arrange.bringForward", "Bring Forward", "Layout › Arrange", |s, _| with_float(s, |f| f.wrap = Wrap::InFrontOfText)).when(has_object),
-        CommandSpec::new("arrange.sendBackward", "Send Backward", "Layout › Arrange", |s, _| with_float(s, |f| f.wrap = Wrap::BehindText)).when(has_object),
+        .when(has_movable),
+        CommandSpec::new("arrange.bringForward", "Bring Forward", "Layout › Arrange", |s, _| with_float(s, |f| f.wrap = Wrap::InFrontOfText)).when(has_movable),
+        CommandSpec::new("arrange.sendBackward", "Send Backward", "Layout › Arrange", |s, _| with_float(s, |f| f.wrap = Wrap::BehindText)).when(has_movable),
         CommandSpec::new("arrange.align", "Align", "Layout › Arrange", |s, v| {
             let h = p::str(v, "value").unwrap_or("center").to_string();
             let tw = super::page::sect(s).text_width();
@@ -244,11 +255,11 @@ pub fn specs() -> Vec<CommandSpec> {
             })
         })
         .params(r#"{"value": "left|center|right"}"#)
-        .when(has_object),
+        .when(has_movable),
         CommandSpec::new("arrange.selectionPane", "Selection Pane", "Layout › Arrange", objects_list).pure(),
         CommandSpec::new("arrange.bounds", "Move or Resize", "Layout › Arrange", bounds)
             .params(r#"{"width"?: pt, "height"?: pt, "x"?: pt, "y"?: pt, "page"?: n}  (x/y: the top-left on page `page` (0-based, default its page); moving an inline object floats it)"#)
-            .when(has_object),
+            .when(has_movable),
         CommandSpec::new("arrange.nudge", "Nudge", "Layout › Arrange", |s, v| {
             let d = |k| p::f32(v, k).unwrap_or(0.0).clamp(-MAX_OFFSET, MAX_OFFSET);
             let (dx, dy) = (d("dx"), d("dy"));
@@ -294,11 +305,6 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"color": "RRGGBB" | null, "width"?: pt}"#)
         .when(has_shape),
-        CommandSpec::new("shape.effects", "Shape Effects", "Shape Format › Shape Styles", shape_effects)
-            .params(
-                r#"{"shadow"?: preset|{"preset"?, "color"?: "RRGGBB", "transparency"?: %, "blur"?: pt, "distance"?: pt, "angle"?: deg}|null, "glow"?: pt|{"color"?: "RRGGBB", "size"?: pt, "transparency"?: %}|null, "softEdge"?: pt|null}  (shadow presets: offsetBottomRight, offsetBottom, offsetBottomLeft, offsetRight, offsetCenter, offsetLeft, offsetTopRight, offsetTop, offsetTopLeft; an omitted key is left as it is; applies to every shape in the selection)"#,
-            )
-            .when(has_shape),
         CommandSpec::new("shape.change", "Change Shape", "Shape Format › Insert Shapes", |s, v| {
             let kind: wordcraft_doc::para::ShapeKind = serde_json::from_value(v.get("kind").cloned().unwrap_or(json!("rectangle"))).map_err(|e| CmdError::Params(e.to_string()))?;
             with_obj(s, |o| {
@@ -320,20 +326,12 @@ pub fn object_selection(s: &Session) -> Option<(Pos, &InlineObject)> {
         return None;
     }
     let o = s.doc.para_at(&a)?.object_at(a.off)?;
-    matches!(o, InlineObject::Image { .. } | InlineObject::Shape { .. }).then_some((a, o))
+    matches!(o, InlineObject::Image { .. } | InlineObject::Graphic { .. } | InlineObject::Shape { .. }).then_some((a, o))
 }
 
 /// The first picture/shape in the selection, or just before a collapsed caret.
 pub fn selected(s: &Session) -> Option<(Pos, InlineObject)> {
-    selected_all(s, 1).into_iter().next()
-}
-
-/// The pictures and shapes in the selection (at most `max`), or the one just before a collapsed
-/// caret.
-pub fn selected_all(s: &Session, max: usize) -> Vec<(Pos, InlineObject)> {
-    let mut out = Vec::new();
     let (a, b) = s.sel.ordered();
-    let max = if a == b { 1 } else { max };
     let story = a.story;
     let paths = if a == b { vec![a.path.clone()] } else { s.doc.paths_between(&a, &b) };
     for path in paths {
@@ -347,98 +345,12 @@ pub fn selected_all(s: &Session, max: usize) -> Vec<(Pos, InlineObject)> {
             if !inside {
                 continue;
             }
-            if let Some(o @ (InlineObject::Image { .. } | InlineObject::Shape { .. })) = p.object_at(off) {
-                out.push((Pos { story, path: path.clone(), off }, o.clone()));
-                if out.len() >= max {
-                    return out;
-                }
+            if let Some(o @ (InlineObject::Image { .. } | InlineObject::Graphic { .. } | InlineObject::Shape { .. })) = p.object_at(off) {
+                return Some((Pos { story, path: path.clone(), off }, o.clone()));
             }
         }
     }
-    out
-}
-
-/// Most shapes one `shape.effects` changes.
-const MAX_EFFECT_SHAPES: usize = 10_000;
-
-/// `shape.effects`: set or clear the shadow, glow and soft edges of the selected shapes.
-fn shape_effects(s: &mut Session, v: &Value) -> CmdResult {
-    use wordcraft_doc::effects::{Glow, Shadow, ShapeEffects};
-    let color = |o: &Value| p::str(o, "color").and_then(Rgb::parse);
-    // Each change is `None` (leave as it is) or `Some(new value)`.
-    let shadow: Option<Option<Shadow>> = match v.get("shadow") {
-        None => None,
-        Some(Value::Null) => Some(None),
-        Some(Value::Bool(b)) => Some(b.then(Shadow::default)),
-        Some(Value::String(id)) if id == "none" => Some(None),
-        Some(Value::String(id)) => Some(Some(Shadow::preset(id).ok_or_else(|| CmdError::Params(format!("unknown shadow preset `{id}`")))?)),
-        Some(o @ Value::Object(_)) => {
-            let mut sh = match p::str(o, "preset") {
-                Some(id) => Shadow::preset(id).ok_or_else(|| CmdError::Params(format!("unknown shadow preset `{id}`")))?,
-                None => Shadow::default(),
-            };
-            sh.color = color(o).unwrap_or(sh.color);
-            sh.transparency = p::f32(o, "transparency").unwrap_or(sh.transparency);
-            sh.blur = p::f32(o, "blur").unwrap_or(sh.blur);
-            sh.distance = p::f32(o, "distance").unwrap_or(sh.distance);
-            sh.angle = p::f32(o, "angle").unwrap_or(sh.angle);
-            Some(Some(sh.sanitized()))
-        }
-        Some(_) => return Err(CmdError::Params("`shadow`: a preset name, an object or null".into())),
-    };
-    let glow: Option<Option<Glow>> = match v.get("glow") {
-        None => None,
-        Some(Value::Null) => Some(None),
-        Some(Value::String(id)) if id == "none" => Some(None),
-        Some(n @ Value::Number(_)) => Some(Some(Glow { size: n.as_f64().unwrap_or(0.0) as f32, ..Glow::default() }.sanitized())),
-        Some(o @ Value::Object(_)) => {
-            let d = Glow::default();
-            Some(Some(
-                Glow {
-                    color: color(o).unwrap_or(d.color),
-                    size: p::f32(o, "size").unwrap_or(d.size),
-                    transparency: p::f32(o, "transparency").unwrap_or(d.transparency),
-                }
-                .sanitized(),
-            ))
-        }
-        Some(_) => return Err(CmdError::Params("`glow`: a size in points, an object or null".into())),
-    };
-    let soft: Option<Option<f32>> = match v.get("softEdge") {
-        None => None,
-        Some(Value::Null) => Some(None),
-        Some(n @ Value::Number(_)) => Some(n.as_f64().map(|x| x as f32)),
-        Some(_) => return Err(CmdError::Params("`softEdge`: a radius in points or null".into())),
-    };
-    let targets: Vec<Pos> =
-        selected_all(s, MAX_EFFECT_SHAPES).into_iter().filter(|(_, o)| matches!(o, InlineObject::Shape { .. })).map(|(pos, _)| pos).collect();
-    if targets.is_empty() {
-        return Err(CmdError::Disabled("no shape selected".into()));
-    }
-    let mut last = ShapeEffects::default();
-    for pos in &targets {
-        let o = edit_obj(s, pos, |o| {
-            if let InlineObject::Shape { effects, float, .. } = o {
-                let mut e = *effects;
-                if let Some(x) = shadow {
-                    e.shadow = x;
-                }
-                if let Some(x) = glow {
-                    e.glow = x;
-                }
-                if let Some(x) = soft {
-                    e.soft_edge = x;
-                }
-                *effects = e.sanitized();
-                // Room around the shape for its shadow and glow, as Word's effect extent.
-                float.effect = effects.extent();
-            }
-        })?;
-        if let InlineObject::Shape { effects, .. } = o {
-            last = effects;
-        }
-    }
-    Ok(json!({"shapes": targets.len(), "effects": serde_json::to_value(last).unwrap_or(Value::Null)}))
+    None
 }
 
 /// Smallest width/height an object can be resized to, points (a text box keeps room for a line).
@@ -463,7 +375,9 @@ fn bounds(s: &mut Session, v: &Value) -> CmdResult {
     let h = p::f32(v, "height").unwrap_or(h0).clamp(min, MAX_OFFSET);
     if (w, h) != (w0, h0) {
         with_obj(s, |o| {
-            if let InlineObject::Image { w: ow, h: oh, .. } | InlineObject::Shape { w: ow, h: oh, .. } = o {
+            if let InlineObject::Image { w: ow, h: oh, .. } | InlineObject::Graphic { w: ow, h: oh, .. } | InlineObject::Shape { w: ow, h: oh, .. } =
+                o
+            {
                 *ow = w;
                 *oh = h;
             }
@@ -547,7 +461,7 @@ fn move_object(s: &mut Session, pos: Pos, page: Option<u64>, x: f32, y: f32, (w,
 fn unalign(s: &mut Session) -> Result<(), CmdError> {
     use wordcraft_doc::para::Anchor;
     let (pos, obj) = selected(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
-    let (InlineObject::Image { float, .. } | InlineObject::Shape { float, .. }) = &obj else { return Ok(()) };
+    let (InlineObject::Image { float, .. } | InlineObject::Graphic { float, .. } | InlineObject::Shape { float, .. }) = &obj else { return Ok(()) };
     if float.h_align.is_none() && float.v_align.is_none() {
         return Ok(());
     }
@@ -597,7 +511,7 @@ fn nearest_line(layout: &wordcraft_layout::DocLayout, page: usize, y: f32) -> Op
 
 fn obj_size(o: &InlineObject) -> (f32, f32) {
     match o {
-        InlineObject::Image { w, h, .. } | InlineObject::Shape { w, h, .. } => (*w, *h),
+        InlineObject::Image { w, h, .. } | InlineObject::Graphic { w, h, .. } | InlineObject::Shape { w, h, .. } => (*w, *h),
         _ => (0.0, 0.0),
     }
 }
@@ -620,7 +534,7 @@ fn edit_obj(s: &mut Session, pos: &Pos, f: impl Fn(&mut InlineObject)) -> Result
 
 fn edit_float(s: &mut Session, pos: &Pos, f: impl Fn(&mut Float)) -> Result<InlineObject, CmdError> {
     edit_obj(s, pos, |o| {
-        if let InlineObject::Image { float, .. } | InlineObject::Shape { float, .. } = o {
+        if let InlineObject::Image { float, .. } | InlineObject::Graphic { float, .. } | InlineObject::Shape { float, .. } = o {
             f(float);
         }
     })
@@ -628,7 +542,7 @@ fn edit_float(s: &mut Session, pos: &Pos, f: impl Fn(&mut Float)) -> Result<Inli
 
 fn with_float(s: &mut Session, f: impl Fn(&mut Float)) -> CmdResult {
     with_obj(s, |o| match o {
-        InlineObject::Image { float, .. } | InlineObject::Shape { float, .. } => {
+        InlineObject::Image { float, .. } | InlineObject::Graphic { float, .. } | InlineObject::Shape { float, .. } => {
             let was_inline = float.wrap == Wrap::Inline;
             f(float);
             // Word's distance from text for a newly wrapped object: 0.125" at the sides.
@@ -670,7 +584,7 @@ fn size(s: &mut Session, v: &Value) -> CmdResult {
     }
     let (w, h) = (w.clamp(1.0, 4000.0), h.clamp(1.0, 4000.0));
     with_obj(s, |o| match o {
-        InlineObject::Image { w: ow, h: oh, .. } | InlineObject::Shape { w: ow, h: oh, .. } => {
+        InlineObject::Image { w: ow, h: oh, .. } | InlineObject::Graphic { w: ow, h: oh, .. } | InlineObject::Shape { w: ow, h: oh, .. } => {
             *ow = w;
             *oh = h;
         }
@@ -841,7 +755,7 @@ fn all_objects(s: &Session) -> Vec<(Pos, InlineObject)> {
     for path in s.doc.para_paths(StoryRef::Body) {
         let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
         for off in p.object_offsets() {
-            if let Some(o @ (InlineObject::Image { .. } | InlineObject::Shape { .. })) = p.object_at(off) {
+            if let Some(o @ (InlineObject::Image { .. } | InlineObject::Graphic { .. } | InlineObject::Shape { .. })) = p.object_at(off) {
                 v.push((Pos { story: StoryRef::Body, path: path.clone(), off }, o.clone()));
             }
         }
@@ -858,6 +772,7 @@ fn objects_list(s: &mut Session, _: &Value) -> CmdResult {
                 let (kind, name) = match &o {
                     InlineObject::Image { alt, .. } => ("picture", if alt.is_empty() { format!("Picture {}", i + 1) } else { alt.clone() }),
                     InlineObject::Shape { kind, .. } => ("shape", format!("{kind:?} {}", i + 1)),
+                    InlineObject::Graphic { graphic, .. } => ("graphic", format!("{:?} {}", graphic.kind, i + 1)),
                     _ => ("object", format!("Object {}", i + 1)),
                 };
                 json!({"index": i, "kind": kind, "name": name, "pos": super::pos_json(&pos), "size": obj_size(&o)})

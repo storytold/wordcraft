@@ -8,7 +8,8 @@
 //!   Synthetic bold (fill + stroke) and italic (skew) follow the renderer.
 //! - **Graphics:** fills (highlight, shading, cell fills), rules and underlines (solid, dotted,
 //!   dashed, double, wave), shapes, pictures (decoded with `image`; JPEG passed through, the rest
-//!   embedded losslessly) with cropping and opacity, the page colour and the watermark.
+//!   embedded losslessly; WMF and EMF drawn as vector paths and embedded bitmaps) with cropping and
+//!   opacity, the page colour and the watermark.
 //! - **Interactive:** link annotations for hyperlinked runs (URLs and internal `#bookmark`
 //!   links) and a document outline built from the headings (outline levels).
 //! - **Metadata:** title, author, subject, keywords, language, creation date.
@@ -36,16 +37,18 @@ use krilla::metadata::{DateTime, Metadata};
 use krilla::num::NormalizedF32;
 use krilla::outline::{Outline, OutlineNode};
 use krilla::page::PageSettings;
-use krilla::paint::{Fill, FillRule, LineCap, Stroke, StrokeDash};
+use krilla::paint::{Fill, FillRule, LineCap, LineJoin, Stroke, StrokeDash};
 use krilla::surface::Surface;
 use krilla::tagging::{Artifact, ArtifactType, ContentTag, Identifier, Node, SpanTag, Tag, TagGroup, TagKind, TagTree};
 use krilla::text::{Font, GlyphId, KrillaGlyph};
+use wordcraft_doc::graphic::GraphicKind;
 use wordcraft_doc::para::{InlineObject, ShapeKind};
 use wordcraft_doc::{Document, Path as DocPath, Rgb, StoryRef};
 use wordcraft_fonts::FaceRef;
 use wordcraft_geom::Rect;
 use wordcraft_layout::display::{DisplayOptions, Draw, Stroke as LineStyle, page_display};
 use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, Page, Placed, layout};
+use wordcraft_metafile::{Picture, PlacedItem};
 
 /// Largest page side we write (200", the PDF limit).
 const MAX_SIDE: f32 = 14_400.0;
@@ -143,6 +146,7 @@ fn write(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[usize], ou
         outlined,
         cmaps: HashMap::new(),
         images: HashMap::new(),
+        vectors: HashMap::new(),
         tags: Vec::new(),
         tag_index: HashMap::new(),
         links: Vec::new(),
@@ -192,6 +196,11 @@ fn glyph_outlines(face: &FaceRef, size: f32, glyphs: &[(u32, f32, f32)]) -> Opti
         append_path(&mut pb, &outline);
     }
     pb.finish()
+}
+
+/// A chart's or diagram's alt text: its own, else what it is ("chart", "diagram").
+fn graphic_alt(alt: &str, kind: GraphicKind) -> &str {
+    if alt.trim().is_empty() { kind.noun() } else { alt }
 }
 
 /// Add the segments of a kurbo path to a krilla path.
@@ -312,46 +321,6 @@ fn rect_path(r: &Rect) -> Option<Path> {
     pb.finish()
 }
 
-/// `r` grown by `g` points on every side and moved by (`dx`, `dy`).
-fn grown(r: &Rect, g: f32, dx: f32, dy: f32) -> Rect {
-    Rect { x: r.x - g + dx, y: r.y - g + dy, w: r.w + 2.0 * g, h: r.h + 2.0 * g }
-}
-
-/// A shape's shadow and glow, behind it: bands of its silhouette (the same approximation of a
-/// blur as the raster renderer, see [`wordcraft_doc::effects::bands`]).
-fn shape_effects(s: &mut Surface, kind: ShapeKind, rect: &Rect, fx: &wordcraft_doc::effects::ShapeEffects, filled: bool, stroked: bool, sw: f32) {
-    let sw = if sw.is_finite() { sw.clamp(0.25, 200.0) } else { 0.75 };
-    let silhouette = |s: &mut Surface, c: Rgb, a: f32, g: f32, dx: f32, dy: f32| {
-        if filled {
-            let grow = g + if stroked { sw / 2.0 } else { 0.0 };
-            if let Some(p) = shape_path(kind, &grown(rect, grow, dx, dy)) {
-                s.set_stroke(None);
-                s.set_fill(Some(fill(c, a)));
-                s.draw_path(&p);
-            }
-        } else if sw + 2.0 * g > 0.05
-            && let Some(p) = shape_path(kind, &grown(rect, 0.0, dx, dy))
-        {
-            s.set_fill(None);
-            s.set_stroke(Some(Stroke { paint: rgb::Color::new(c.0, c.1, c.2).into(), width: sw + 2.0 * g, opacity: norm(a), ..Default::default() }));
-            s.draw_path(&p);
-        }
-    };
-    if let Some(sh) = fx.shadow {
-        let (dx, dy) = sh.offset();
-        for (g, a) in wordcraft_doc::effects::bands(-sh.blur / 2.0, sh.blur / 2.0, sh.opacity()) {
-            silhouette(s, sh.color, a, g, dx, dy);
-        }
-    }
-    if let Some(gl) = fx.glow {
-        for (g, a) in wordcraft_doc::effects::bands(0.0, gl.size, gl.opacity()) {
-            silhouette(s, gl.color, a, g, 0.0, 0.0);
-        }
-    }
-    s.set_fill(None);
-    s.set_stroke(None);
-}
-
 /// Outline of a basic shape in a rectangle (same geometry as the raster renderer).
 fn shape_path(kind: ShapeKind, r: &Rect) -> Option<Path> {
     if !(ok(r.x) && ok(r.y) && ok(r.w) && ok(r.h)) || r.w <= 0.0 || r.h <= 0.0 {
@@ -458,6 +427,8 @@ struct Exporter<'a> {
     outlined: &'a HashSet<u32>,
     cmaps: HashMap<u32, Arc<HashMap<u32, char>>>,
     images: HashMap<String, Option<Image>>,
+    /// Parsed metafiles by media key (`None`: not readable).
+    vectors: HashMap<String, Option<Arc<Vector>>>,
     tags: Vec<TagEntry>,
     tag_index: HashMap<(StoryRef, DocPath), usize>,
     /// Link rectangles on the current page: (x0, y0, x1, y1, target).
@@ -507,6 +478,25 @@ impl Exporter<'_> {
                 Arc::new(m)
             })
             .clone()
+    }
+
+    /// The metafile picture for a media key, parsed once. None when the bytes are not a metafile
+    /// (the raster path takes them) or do not parse (the raster path then draws the grey box).
+    fn vector(&mut self, key: &str) -> Option<Arc<Vector>> {
+        let doc = self.doc;
+        let bytes = doc.media.get(key)?;
+        if !wordcraft_metafile::is_metafile(bytes) {
+            return None;
+        }
+        if let Some(v) = self.vectors.get(key) {
+            return v.clone();
+        }
+        let v = build_vector(bytes).map(Arc::new);
+        if v.is_none() {
+            log::warn!("PDF: metafile `{key}` could not be read");
+        }
+        self.vectors.insert(key.to_string(), v.clone());
+        v
     }
 
     fn image(&mut self, key: &str) -> Option<Image> {
@@ -586,6 +576,12 @@ impl Exporter<'_> {
                         match d {
                             Draw::Glyphs { .. } | Draw::Turned { .. } => self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d)),
                             Draw::Image { .. } => self.tagged(s, Role::Figure, None, |me, s| me.draw(s, d)),
+                            // An inline chart or diagram: its text is part of the figure, not the paragraph.
+                            Draw::Figure { alt, kind, draws: inner } => self.tagged(s, Role::Figure, Some(graphic_alt(alt, *kind)), |me, s| {
+                                for d in inner {
+                                    me.draw(s, d);
+                                }
+                            }),
                             _ => self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.draw(s, d)),
                         }
                     }
@@ -594,6 +590,17 @@ impl Exporter<'_> {
                     let alt = match self.doc.para(*story, path).and_then(|p| p.object_at(*off)) {
                         Some(InlineObject::Image { alt, .. }) => alt.clone(),
                         _ => String::new(),
+                    };
+                    self.tagged(s, Role::Figure, Some(&alt), |me, s| {
+                        for d in &draws {
+                            me.draw(s, d);
+                        }
+                    });
+                }
+                Placed::Graphic { story, path, off, graphic, .. } => {
+                    let alt = match self.doc.para(*story, path).and_then(|p| p.object_at(*off)) {
+                        Some(InlineObject::Graphic { alt, .. }) => graphic_alt(alt, graphic.kind).to_string(),
+                        _ => graphic.kind.noun().to_string(),
                     };
                     self.tagged(s, Role::Figure, Some(&alt), |me, s| {
                         for d in &draws {
@@ -659,6 +666,11 @@ impl Exporter<'_> {
 
     fn draw(&mut self, s: &mut Surface, d: &Draw) {
         match d {
+            Draw::Figure { draws, .. } => {
+                for d in draws {
+                    self.draw(s, d);
+                }
+            }
             Draw::Glyphs { face, size, glyphs, color, alpha, synth_bold, synth_italic, text, link, ranges } => {
                 self.glyphs(s, face, *size, glyphs, *color, *alpha, *synth_bold, *synth_italic, text, ranges);
                 if let Some(l) = link {
@@ -675,26 +687,26 @@ impl Exporter<'_> {
             }
             Draw::Line { x0, y0, x1, y1, width, color, stroke, alpha } => self.line(s, (*x0, *y0, *x1, *y1), *width, *color, *stroke, *alpha),
             Draw::Image { rect, media, crop, alpha } => self.picture(s, rect, media, crop, *alpha),
-            Draw::Shape { rect, kind, fill: f, stroke, stroke_width, effects } => {
+            Draw::Path { segs, fill: f, stroke, stroke_width } => {
+                let mut pb = PathBuilder::new();
+                append_path(&mut pb, &wordcraft_layout::display::seg_path(segs));
+                let Some(p) = pb.finish() else { return };
+                s.set_fill(f.map(|c| fill(c, 1.0)));
+                s.set_stroke(stroke.map(|c| Stroke {
+                    paint: rgb::Color::new(c.0, c.1, c.2).into(),
+                    // Width 0 (or none) is a hairline.
+                    width: if stroke_width.is_finite() && *stroke_width > 0.0 { stroke_width.clamp(0.25, 200.0) } else { 0.75 },
+                    ..Default::default()
+                }));
+                if f.is_some() || stroke.is_some() {
+                    s.draw_path(&p);
+                }
+                s.set_fill(None);
+                s.set_stroke(None);
+            }
+            Draw::Shape { rect, kind, fill: f, stroke, stroke_width } => {
                 let Some(p) = shape_path(*kind, rect) else { return };
                 let can_fill = *kind != ShapeKind::Line;
-                let fx = effects.sanitized();
-                if !fx.is_empty() && (f.is_some() && can_fill || stroke.is_some()) {
-                    shape_effects(s, *kind, rect, &fx, f.is_some() && can_fill, stroke.is_some(), *stroke_width);
-                }
-                // Soft edges: the fill fades out toward the outline (which fades with it).
-                if let (Some(rad), Some(c), true) = (fx.soft_edge, f, can_fill) {
-                    let rad = rad.min(rect.w.min(rect.h) / 2.0).max(0.0);
-                    s.set_stroke(None);
-                    for (g, a) in wordcraft_doc::effects::bands(-rad, 0.0, 1.0) {
-                        if let Some(p) = shape_path(*kind, &grown(rect, g, 0.0, 0.0)) {
-                            s.set_fill(Some(fill(*c, a)));
-                            s.draw_path(&p);
-                        }
-                    }
-                    s.set_fill(None);
-                    return;
-                }
                 s.set_fill(f.filter(|_| can_fill).map(|c| fill(c, 1.0)));
                 s.set_stroke(stroke.map(|c| Stroke {
                     paint: rgb::Color::new(c.0, c.1, c.2).into(),
@@ -792,6 +804,10 @@ impl Exporter<'_> {
 
     fn picture(&mut self, s: &mut Surface, rect: &Rect, media: &str, crop: &[f32; 4], alpha: f32) {
         let Some(clip) = rect_path(rect) else { return };
+        if let Some(v) = self.vector(media) {
+            vector_picture(s, &v, rect, crop, &clip, alpha);
+            return;
+        }
         let Some(img) = self.image(media) else {
             s.set_stroke(None);
             s.set_fill(Some(fill(Rgb(0xD0, 0xD0, 0xD0), 1.0)));
@@ -1128,6 +1144,91 @@ impl Exporter<'_> {
         s.set_fill(None);
         s.pop();
     }
+}
+
+/// A metafile picture, parsed once. The geometry comes placed by the metafile crate; the bitmaps are
+/// embedded images, one per picture item (None for paths and undecodable bitmaps).
+struct Vector {
+    pic: Picture,
+    images: Vec<Option<Image>>,
+}
+
+/// Parses a metafile and embeds its bitmaps. None when the picture has no usable size.
+fn build_vector(bytes: &[u8]) -> Option<Vector> {
+    let mut pic = wordcraft_metafile::parse(bytes).ok()?;
+    if !pic.has_size() {
+        return None;
+    }
+    let images = pic.items.iter_mut().map(|it| it.take_pixels().map(|(w, h, px)| Image::from_rgba8(px, w, h))).collect();
+    Some(Vector { pic, images })
+}
+
+/// A straight RGBA colour as a krilla colour and opacity.
+fn paint_of(c: [u8; 4]) -> (rgb::Color, NormalizedF32) {
+    (rgb::Color::new(c[0], c[1], c[2]), norm(f32::from(c[3]) / 255.0))
+}
+
+/// Narrowest metafile stroke in points. Cosmetic (width 0) pens get it rather than PDF's 0-width
+/// "thinnest line": krilla bounds a 0-width stroke by the bare path, which is empty for a horizontal
+/// line, so a faded (grouped) picture would clip it away.
+const HAIRLINE: f64 = 0.25;
+
+/// Draws a metafile picture into the clip (the picture frame): paths are filled and stroked in page
+/// space (strokes keep their width under non-uniform scaling), bitmaps stretched, all faded by `alpha`.
+/// Every path sets its fill and stroke, so none carries over; strokes have round caps and joins.
+fn vector_picture(s: &mut Surface, v: &Vector, r: &Rect, crop: &[f32; 4], clip: &Path, alpha: f32) {
+    let target = kurbo::Rect::new(f64::from(r.x), f64::from(r.y), f64::from(r.x + r.w), f64::from(r.y + r.h));
+    let fade = alpha < 0.999;
+    if fade {
+        s.push_opacity(norm(alpha));
+    }
+    s.push_clip_path(clip, &FillRule::NonZero);
+    for it in v.pic.place(target, *crop) {
+        match it {
+            PlacedItem::Path { path, fill, stroke, even_odd } => {
+                let Some(p) = path_from(&path) else { continue };
+                let fill = fill.map(|c| {
+                    let (paint, opacity) = paint_of(c);
+                    let rule = if even_odd { FillRule::EvenOdd } else { FillRule::NonZero };
+                    Fill { paint: paint.into(), opacity, rule }
+                });
+                let stroke = stroke.map(|(c, w)| {
+                    let (paint, opacity) = paint_of(c);
+                    Stroke {
+                        paint: paint.into(),
+                        width: w.max(HAIRLINE) as f32,
+                        opacity,
+                        line_cap: LineCap::Round,
+                        line_join: LineJoin::Round,
+                        ..Default::default()
+                    }
+                });
+                s.set_fill(fill);
+                s.set_stroke(stroke);
+                s.draw_path(&p);
+            }
+            PlacedItem::Bitmap { index, rect } => {
+                let Some(Some(img)) = v.images.get(index) else { continue };
+                let Some(size) = Size::from_wh(rect.width() as f32, rect.height() as f32) else { continue };
+                s.push_transform(&Transform::from_translate(rect.x0 as f32, rect.y0 as f32));
+                s.draw_image(img.clone(), size);
+                s.pop();
+            }
+        }
+    }
+    s.set_fill(None);
+    s.set_stroke(None);
+    s.pop();
+    if fade {
+        s.pop();
+    }
+}
+
+/// A kurbo path as a krilla path (None when empty).
+fn path_from(b: &kurbo::BezPath) -> Option<Path> {
+    let mut pb = PathBuilder::new();
+    append_path(&mut pb, b);
+    pb.finish()
 }
 
 /// Decode a picture for embedding (validated with the `image` crate first, so a broken file
