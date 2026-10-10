@@ -1,7 +1,7 @@
 //! Table Design and Table Layout tabs.
 
 use serde_json::{Value, json};
-use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, Rgb, VAlign};
+use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, Rgb, TextDirection, VAlign};
 use wordcraft_doc::{Block, Paragraph, Path, Pos, StoryRef, Table, para_block};
 
 use super::sel_result;
@@ -94,6 +94,8 @@ pub fn specs() -> Vec<CommandSpec> {
             })
         })
         .params(r#"{"value": "topLeft|topCenter|…|bottomRight"}"#)),
+        t(CommandSpec::new("table.textDirection", "Text Direction", "Table Layout › Alignment", text_direction)
+            .params(r#"{"value"?: "horizontal|down|up"} (default: the next direction after the caret cell's, like Word's button)"#)),
         t(CommandSpec::new("table.autofit", "AutoFit", "Table Layout › Cell Size", |s, v| {
             let mode = p::str(v, "mode").unwrap_or("window");
             let tw = super::page::sect(s).text_width();
@@ -241,6 +243,23 @@ fn with_cells(s: &mut Session, f: impl Fn(&mut wordcraft_doc::Cell)) -> CmdResul
 }
 
 /// Bump the revision of every paragraph in a table (table style changes alter their layout).
+/// Table Layout › Text Direction: turn the selected cells' text. Without a value it cycles the
+/// caret cell's direction (horizontal → down → up) and gives every selected cell the result.
+fn text_direction(s: &mut Session, v: &Value) -> CmdResult {
+    let (tp, r, c) = cell(s)?;
+    let dir = match p::str(v, "value") {
+        Some("horizontal" | "lrTb") => TextDirection::Horizontal,
+        Some("down" | "tbRl") => TextDirection::Down,
+        Some("up" | "btLr") => TextDirection::Up,
+        Some(x) => return Err(CmdError::Params(format!("unknown text direction `{x}`"))),
+        None => {
+            let t = s.doc.table(s.sel.focus.story, &tp).ok_or_else(|| CmdError::Disabled("the cursor isn't in a table".into()))?;
+            t.rows.get(r).and_then(|row| row.cells.get(c)).map(|cl| cl.props.text_direction).unwrap_or_default().next()
+        }
+    };
+    with_cells(s, |cl| cl.props.text_direction = dir)
+}
+
 fn touch_cells(s: &mut Session, tp: &Path) -> Result<(), CmdError> {
     let story = s.sel.focus.story;
     let paths: Vec<Path> = s.doc.para_paths(story).into_iter().filter(|p| p.0.len() > tp.0.len() && p.0.starts_with(&tp.0)).collect();

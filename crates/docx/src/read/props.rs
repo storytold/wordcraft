@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CellProps, CharProps, HeightRule, Highlight, LineSpacing, NumRef, ParaProps, Rgb, RowProps, TabAlign,
-    TabLeader, TabStop, TableFloat, TableLook, TableProps, TextColor, Underline, VAlign, VMerge, VertAlign,
+    TabLeader, TabStop, TableFloat, TableLook, TableProps, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
 };
 use wordcraft_doc::section::{Columns, LineNumberRestart, LineNumbering, NumFormat, SectionProps, SectionStart};
 
@@ -387,7 +387,7 @@ pub fn tcpr(e: &El) -> (CellProps, bool) {
             "w:shd" => c.shading = shd_fill(k),
             "w:noWrap" => c.no_wrap = on_off(k),
             "w:tcMar" => c.margins = Some(margins(k)),
-            "w:textDirection" => c.vertical_text = !matches!(k.attr("w:val"), None | Some("lrTb") | Some("lrTbV") | Some("tb")),
+            "w:textDirection" => c.text_direction = TextDirection::from_ooxml(k.attr("w:val").unwrap_or("")),
             "w:vAlign" => {
                 c.valign = match k.attr("w:val") {
                     Some("center") => VAlign::Center,

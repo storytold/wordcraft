@@ -8,6 +8,67 @@ use egui::{Align2, Color32, CornerRadius, FontData, FontDefinitions, FontFamily,
 pub const APP_COLOR: Color32 = Color32::from_rgb(0x3B, 0x5B, 0xDB);
 pub const APP_INK: Color32 = Color32::from_rgb(0x2B, 0x47, 0xB5);
 
+/// The interface theme setting (File › Options › General, View › Dark Mode): a fixed light or
+/// dark palette, or `System`, which follows the OS light/dark appearance live (#115).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(from = "String", into = "String")]
+pub enum Appearance {
+    #[default]
+    Light,
+    Dark,
+    System,
+}
+
+impl Appearance {
+    /// In menu order.
+    pub const ALL: [Appearance; 3] = [Appearance::System, Appearance::Light, Appearance::Dark];
+
+    /// The value used in `ui.json` and by the `ui.theme` command.
+    pub fn code(self) -> &'static str {
+        match self {
+            Appearance::Light => "light",
+            Appearance::Dark => "dark",
+            Appearance::System => "system",
+        }
+    }
+
+    pub fn from_code(code: &str) -> Option<Appearance> {
+        Appearance::ALL.into_iter().find(|a| a.code().eq_ignore_ascii_case(code.trim()))
+    }
+
+    /// The English label (translated with `tl!` where shown).
+    pub fn label(self) -> &'static str {
+        match self {
+            Appearance::Light => "Light",
+            Appearance::Dark => "Dark",
+            Appearance::System => "Use system setting",
+        }
+    }
+
+    /// Whether the interface is dark, given the OS appearance egui reports (`Context::system_theme`).
+    /// `System` falls back to light when the OS reports none.
+    pub fn is_dark(self, system: Option<egui::Theme>) -> bool {
+        match self {
+            Appearance::Light => false,
+            Appearance::Dark => true,
+            Appearance::System => system == Some(egui::Theme::Dark),
+        }
+    }
+}
+
+/// An unknown saved value reads as the default rather than discarding the whole `ui.json`.
+impl From<String> for Appearance {
+    fn from(s: String) -> Self {
+        Appearance::from_code(&s).unwrap_or_default()
+    }
+}
+
+impl From<Appearance> for String {
+    fn from(a: Appearance) -> Self {
+        a.code().to_string()
+    }
+}
+
 /// Every colour the UI uses; widgets never hard-code colours.
 #[derive(Clone, Copy, Debug)]
 pub struct Tokens {
@@ -143,11 +204,19 @@ pub fn install_fonts(ctx: &egui::Context) {
 /// [`install_fonts`] with the CJK fallback order for the interface language: the Chinese face
 /// first for Chinese (#8), the Japanese one otherwise. The new fonts apply from the next frame.
 pub fn install_fonts_for(ctx: &egui::Context, prefer_hans: bool) {
-    ctx.set_fonts(font_definitions(prefer_hans));
+    install_fonts_with(ctx, prefer_hans, false);
 }
 
-/// The interface fonts; see [`install_fonts_for`].
-pub fn font_definitions(prefer_hans: bool) -> FontDefinitions {
+/// [`install_fonts_for`], also adding an installed CJK font when `system_cjk` is set and no
+/// embedded face covers the need (#241). Reading that font is a large file read, so callers ask
+/// for it only when CJK text is on screen: a CJK interface language, or the language names in
+/// Options.
+pub fn install_fonts_with(ctx: &egui::Context, prefer_hans: bool, system_cjk: bool) {
+    ctx.set_fonts(font_definitions(prefer_hans, system_cjk));
+}
+
+/// The interface fonts; see [`install_fonts_with`].
+pub fn font_definitions(prefer_hans: bool, system_cjk: bool) -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     let add = |fonts: &mut FontDefinitions, name: &str, bytes: &'static [u8]| {
         fonts.font_data.insert(name.into(), Arc::new(FontData::from_static(bytes)));
@@ -166,18 +235,42 @@ pub fn font_definitions(prefer_hans: bool) -> FontDefinitions {
     }
     fonts.families.insert(FontFamily::Name("medium".into()), vec!["InterMedium".into(), "Inter".into(), "SourceSans".into()]);
     fonts.families.insert(FontFamily::Name("semibold".into()), vec!["InterSemiBold".into(), "Inter".into(), "SourceSans".into()]);
-    for f in wordcraft_fonts::ui_cjk_fonts(prefer_hans) {
-        // The same static bytes the document fonts use: one copy in the binary.
-        let name = format!("{} {}", f.family, f.style);
-        fonts.font_data.insert(name.clone(), Arc::new(FontData::from_static(f.bytes)));
+    let add_cjk = |fonts: &mut FontDefinitions, name: String, data: FontData| {
+        fonts.font_data.insert(name.clone(), Arc::new(data));
         for fam in [FontFamily::Proportional, FontFamily::Name("medium".into()), FontFamily::Name("semibold".into())] {
             if let Some(v) = fonts.families.get_mut(&fam) {
                 v.push(name.clone());
             }
         }
+    };
+    let cjk = wordcraft_fonts::ui_cjk_fonts(prefer_hans);
+    for f in &cjk {
+        // The same static bytes the document fonts use: one copy in the binary.
+        add_cjk(&mut fonts, format!("{} {}", f.family, f.style), FontData::from_static(f.bytes));
     }
+    // No embedded face covers the interface language (a build without craft-fonts, or without
+    // its Chinese face, #241): an installed CJK font, so the menus don't show boxes.
+    #[cfg(not(target_arch = "wasm32"))]
+    if system_cjk
+        && wordcraft_fonts::ui_needs_system_cjk(prefer_hans, &cjk)
+        && let Some(f) = system_cjk_font(prefer_hans)
+    {
+        let mut data = FontData::from_static(&f.bytes);
+        data.index = f.index;
+        add_cjk(&mut fonts, format!("system {}", f.family), data);
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = system_cjk;
     // Symbols and emoji fall back to egui's defaults (kept in the families).
     fonts
+}
+
+/// The installed CJK interface font for a Chinese (`hans`) or other interface, read once.
+#[cfg(not(target_arch = "wasm32"))]
+fn system_cjk_font(hans: bool) -> Option<&'static wordcraft_fonts::SystemUiFont> {
+    static ZH: std::sync::OnceLock<Option<wordcraft_fonts::SystemUiFont>> = std::sync::OnceLock::new();
+    static OTHER: std::sync::OnceLock<Option<wordcraft_fonts::SystemUiFont>> = std::sync::OnceLock::new();
+    (if hans { &ZH } else { &OTHER }).get_or_init(|| wordcraft_fonts::system_cjk_ui_font(hans)).as_ref()
 }
 
 pub fn medium(size: f32) -> FontId {
@@ -301,6 +394,9 @@ pub fn apply(ctx: &egui::Context, t: &Tokens) {
     v.widgets.open.weak_bg_fill = t.pressed;
     v.popup_shadow = egui::Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(if t.dark { 120 } else { 40 }) };
     v.window_shadow = egui::Shadow { offset: [0, 8], blur: 28, spread: 0, color: Color32::from_black_alpha(if t.dark { 140 } else { 50 }) };
+    // Pin egui's own theme to ours: left on its default (follow the OS), egui would swap to its
+    // other, unstyled light/dark style the moment the OS appearance changed.
+    ctx.set_theme(if t.dark { egui::Theme::Dark } else { egui::Theme::Light });
     ctx.set_visuals(v);
     ctx.global_style_mut(|s| {
         s.spacing.item_spacing = egui::vec2(6.0, 4.0);

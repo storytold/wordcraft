@@ -255,14 +255,7 @@ fn export_page(app: &mut WordApp, ui: &mut Ui) {
         ("Page image (*.png)", "png"),
     ] {
         if ui.add(egui::Button::new(egui::RichText::new(tl!(label)).font(medium(13.5))).min_size(vec2(320.0, 34.0))).clicked() {
-            let name = format!("{}.{ext}", app.title_stem());
-            let picked = app.services.pick_save.as_ref().and_then(|f| f(&name));
-            if let Some(path) = picked {
-                let r = if ext == "png" { app.run("file.exportPng", json!({"path": path})) } else { app.run("file.saveAs", json!({"path": path})) };
-                if r.is_ok() {
-                    app.status(crate::i18n::fmt(tl!("Exported {path}"), &[("path", &path)]));
-                }
-            }
+            app.export_dialog(ext);
         }
         ui.add_space(4.0);
     }
@@ -279,10 +272,7 @@ fn options_page(app: &mut WordApp, ui: &mut Ui) {
             app.session.author = n;
         }
     });
-    let mut dark = app.ui.dark;
-    if ui.checkbox(&mut dark, tl!("Dark mode")).changed() {
-        let _ = app.run("ui.dark", json!({"value": dark}));
-    }
+    theme_picker(app, ui);
     ui.checkbox(&mut app.autosave, tl!("AutoSave documents you have saved in WordCraft"));
     let mut dark_page = app.session.view.dark_mode;
     if ui
@@ -308,9 +298,26 @@ fn options_page(app: &mut WordApp, ui: &mut Ui) {
     ui.label(tl!("Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel."));
 }
 
+/// File ▸ Options ▸ Interface theme: Light, Dark, or follow the system's appearance (#115).
+fn theme_picker(app: &mut WordApp, ui: &mut Ui) {
+    use crate::theme::Appearance;
+    ui.horizontal(|ui| {
+        ui.label(tl!("Interface theme:"));
+        egui::ComboBox::from_id_salt("interface_theme").selected_text(tl!(app.ui.theme.label())).width(220.0).show_ui(ui, |ui| {
+            for a in Appearance::ALL {
+                if ui.selectable_label(app.ui.theme == a, tl!(a.label())).clicked() {
+                    let _ = app.run("ui.theme", json!({"value": a.code()}));
+                }
+            }
+        });
+    });
+}
+
 /// File ▸ Options ▸ Interface language: follow the system (the default) or pick one (#8).
 fn language_picker(app: &mut WordApp, ui: &mut Ui) {
     use crate::i18n::{AUTO, Lang};
+    // The language names are in their own scripts: fonts for them load from the next frame.
+    app.want_system_cjk = true;
     let system = crate::i18n::system_lang();
     let auto_label = crate::i18n::fmt(tl!("Automatic ({language})"), &[("language", system.name())]);
     let current = if app.ui.language == AUTO { auto_label.clone() } else { Lang::from_pref(&app.ui.language).name().to_string() };

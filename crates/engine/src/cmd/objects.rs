@@ -779,6 +779,63 @@ mod tests {
         image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png).unwrap();
         b
     }
+    /// The laid-out area of the only picture or shape (not a text box).
+    fn object_area(s: &mut Session) -> wordcraft_layout::hit::ObjectHit {
+        s.layout().find_object(0, |o| o.text_box.is_none()).unwrap()
+    }
+
+    /// What a click and a handle or body drag do in the editor (#142, #82): hit-test the object,
+    /// select it, then resize and move it with `arrange.bounds`.
+    fn click_resize_and_drag(insert: &str, params: Value) {
+        use wordcraft_doc::para::Wrap;
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("text.insert", &json!({"text": "Some text "})).unwrap();
+        s.run(insert, &params).unwrap();
+        assert!(selected(&s).is_some(), "{insert}: a new object is selected");
+        s.run("select.collapse", &json!({"end": true})).unwrap();
+        s.run("text.insert", &json!({"text": " more text"})).unwrap();
+        assert!(selected(&s).is_none(), "{insert}: typing moved off the object");
+        // Click: the hit test finds it, and selecting its character selects the object.
+        let o = object_area(&mut s);
+        let (cx, cy) = (o.rect.x + o.rect.w / 2.0, o.rect.y + o.rect.h / 2.0);
+        let hit = s.layout().object_at(o.page, cx, cy, 4.0).unwrap_or_else(|| panic!("{insert}: click misses it"));
+        assert_eq!(hit.pos(), o.pos());
+        let end = Pos { off: o.off + wordcraft_doc::para::OBJ.len_utf8(), ..o.pos() };
+        s.run("select.range", &json!({"anchor": o.pos(), "focus": end})).unwrap();
+        assert!(selected(&s).is_some(), "{insert}: not selected");
+        // Resize by a handle: stays inline.
+        s.run("arrange.bounds", &json!({"width": 160, "height": 90})).unwrap();
+        let o = object_area(&mut s);
+        assert_eq!((o.rect.w, o.rect.h, o.wrap), (160.0, 90.0, Wrap::Inline), "{insert}");
+        // Drag the body: it floats with Square wrap where it was dropped, still selected.
+        let r = s.run("arrange.bounds", &json!({"page": 0, "x": 250, "y": 300})).unwrap();
+        assert_eq!(r["object"]["float"]["wrap"], "square", "{insert}");
+        let o = object_area(&mut s);
+        assert_eq!((o.page, o.rect.x, o.rect.y, o.rect.w, o.rect.h), (0, 250.0, 300.0, 160.0, 90.0), "{insert}");
+        assert!(selected(&s).is_some());
+        // Arrow keys nudge it once it floats.
+        s.run("arrange.nudge", &json!({"dx": 6, "dy": -2})).unwrap();
+        let n = object_area(&mut s).rect;
+        assert!((n.x - 256.0).abs() < 0.01 && (n.y - 298.0).abs() < 0.01, "{insert}: {n:?}");
+        // The text around it is untouched, and each change is one undo step.
+        assert_eq!(s.doc.plain_text(StoryRef::Body).replace(wordcraft_doc::para::OBJ, ""), "Some text  more text");
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!((object_area(&mut s).rect.x, object_area(&mut s).rect.y), (250.0, 300.0), "{insert}");
+    }
+
+    #[test]
+    fn shapes_can_be_clicked_resized_and_dragged() {
+        for kind in ["rectangle", "ellipse", "star", "arrow"] {
+            click_resize_and_drag("insert.shape", json!({"kind": kind}));
+        }
+    }
+
+    #[test]
+    fn pictures_can_be_clicked_resized_and_dragged() {
+        let data = super::super::insert::base64_encode(&png(20, 10));
+        click_resize_and_drag("insert.picture", json!({"data": data, "width": 100}));
+    }
+
     #[test]
     fn picture_pipeline() {
         let mut s = Session::new(wordcraft_doc::Document::new());
