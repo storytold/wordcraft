@@ -44,6 +44,8 @@ pub struct CanvasState {
     pub mini_anchor: Option<Rect>,
     /// A picture, shape or text box being dragged by its frame.
     pub(crate) obj_drag: Option<crate::objects::ObjectDrag>,
+    /// Pages per row last frame; when it changes the caret's page is scrolled back into view.
+    pub cols: usize,
 }
 
 impl CanvasState {
@@ -76,6 +78,7 @@ impl Default for CanvasState {
             obj_drag: None,
             context_menu_open: false,
             mini_anchor: None,
+            cols: 1,
         }
     }
 }
@@ -92,6 +95,8 @@ pub struct Geometry {
     pub rects: Vec<Rect>,
     pub size: egui::Vec2,
     pub scale: f32,
+    /// Pages per row.
+    pub cols: usize,
 }
 
 /// Width of the markup area beside each page for comment balloons (points), or 0.
@@ -102,14 +107,61 @@ pub fn markup_width(app: &WordApp) -> f32 {
     if on && !app.session.doc.comments.is_empty() { 216.0 } else { 0.0 }
 }
 
+/// A page dimension (points) safe to lay out: finite, at least 1 pt, at most `cap`.
+fn sane_dim(v: f32, cap: f32) -> f32 {
+    if v.is_finite() { v.clamp(1.0, cap) } else { 72.0 }
+}
+
+/// How many pages fit side by side: as many slots of `slot_px` (a page plus its markup area, on
+/// screen) as the width holds with a gap around each, like Word's Print Layout when zoomed out.
+/// At least `min_cols`, never more than `pages` (or 1 when `auto` is off and `min_cols` is 1).
+fn columns_for(avail_w: f32, slot_px: f32, pages: usize, min_cols: usize, auto: bool) -> usize {
+    let fit = if auto && avail_w.is_finite() && slot_px.is_finite() && slot_px > 0.0 {
+        // Saturating float → int cast; bounded by the page count below.
+        ((avail_w - GAP) / (slot_px + GAP)).floor().max(1.0) as usize
+    } else {
+        1
+    };
+    fit.max(min_cols).min(pages.max(1)).max(1)
+}
+
+/// Place pages (sizes in points) in rows of `cols`, left to right then top to bottom, each in a slot
+/// as wide as the widest page plus `markup` and centred in `avail_w`. Returns the screen-space rects
+/// (relative to the content's top-left) and the content size.
+fn place_pages(sizes: &[(f32, f32)], markup: f32, scale: f32, cols: usize, avail: egui::Vec2) -> (Vec<Rect>, egui::Vec2) {
+    let cols = cols.max(1);
+    let scale = if scale.is_finite() { scale.clamp(0.01, 10.0) } else { PX_PER_PT };
+    let markup = if markup.is_finite() { markup.clamp(0.0, 10_000.0) } else { 0.0 };
+    let avail = vec2(if avail.x.is_finite() { avail.x.max(0.0) } else { 0.0 }, if avail.y.is_finite() { avail.y.max(0.0) } else { 0.0 });
+    let maxw = sizes.iter().map(|&(w, _)| sane_dim(w, 1e5)).fold(0.0f32, f32::max).max(72.0) + markup;
+    let slot = maxw * scale;
+    let row_w = cols as f32 * slot + (cols as f32 - 1.0) * GAP;
+    let content_w = (row_w + 2.0 * GAP).max(avail.x);
+    let mut rects = Vec::with_capacity(sizes.len());
+    let mut y = GAP;
+    for row in sizes.chunks(cols) {
+        let mut x = (content_w - row_w) / 2.0;
+        let mut h = 0.0f32;
+        for &(w, ph) in row {
+            let (w, ph) = (sane_dim(w, 1e5), sane_dim(ph, 1e6));
+            // Pages narrower than the widest keep their markup area beside them.
+            let px = x + (maxw - markup - w).max(0.0) * scale / 2.0;
+            rects.push(Rect::from_min_size(pos2(px, y), vec2(w * scale, ph * scale)));
+            h = h.max(ph * scale);
+            x += slot + GAP;
+        }
+        y += h + GAP;
+    }
+    (rects, vec2(content_w, y.max(avail.y)))
+}
+
 pub fn geometry(app: &WordApp, l: &DocLayout, avail: egui::Vec2) -> Geometry {
     let v = &app.session.view;
     let markup = markup_width(app);
-    let maxw = l.pages.iter().map(|p| p.w).fold(0.0f32, f32::max).max(72.0) + markup;
-    let maxh = l.pages.iter().map(|p| p.h.min(20_000.0)).fold(0.0f32, f32::max).max(72.0);
+    let maxw = l.pages.iter().map(|p| sane_dim(p.w, 1e5)).fold(0.0f32, f32::max).max(72.0) + markup;
+    let maxh = l.pages.iter().map(|p| sane_dim(p.h, 20_000.0)).fold(0.0f32, f32::max).max(72.0);
     let web = v.mode != wordcraft_layout::ViewMode::Print;
     let mut scale = v.zoom.clamp(0.1, 5.0) * PX_PER_PT;
-    let cols = if v.multi_page || v.read_mode { 2 } else { 1 };
     match v.fit.as_str() {
         "pageWidth" => scale = ((avail.x - 2.0 * GAP - 20.0) / maxw).clamp(0.1, 6.0),
         "onePage" => scale = ((avail.y - 2.0 * GAP) / maxh).min((avail.x - 2.0 * GAP) / maxw).clamp(0.05, 6.0),
@@ -122,23 +174,24 @@ pub fn geometry(app: &WordApp, l: &DocLayout, avail: egui::Vec2) -> Geometry {
     if web {
         scale = PX_PER_PT * v.zoom.clamp(0.1, 5.0);
     }
-    let mut rects = Vec::with_capacity(l.pages.len());
-    let row_w = cols as f32 * maxw * scale + (cols as f32 - 1.0) * GAP;
-    let content_w = (row_w + 2.0 * GAP).max(avail.x);
-    let mut y = GAP;
-    for (i, chunk) in l.pages.chunks(cols).enumerate() {
-        let _ = i;
-        let h = chunk.iter().map(|p| p.h.min(1e6) * scale).fold(0.0f32, f32::max);
-        let mut x = (content_w - row_w) / 2.0;
-        for p in chunk {
-            // Pages narrower than the widest keep their markup area beside them.
-            let px = x + (maxw - markup - p.w).max(0.0) * scale / 2.0;
-            rects.push(Rect::from_min_size(pos2(px, y), vec2(p.w * scale, p.h.min(1e6) * scale)));
-            x += maxw * scale + GAP;
-        }
-        y += h + GAP;
+    if !scale.is_finite() {
+        scale = PX_PER_PT;
     }
-    Geometry { rects, size: vec2(content_w, y.max(avail.y)), scale }
+    // Pages flow side by side in Print Layout whenever more than one fits across (Read Mode is a
+    // two-page spread; One Page and Page Width show one page per row; Web Layout has no pages).
+    let (min_cols, auto) = if v.read_mode {
+        (2, false)
+    } else if web || v.fit == "onePage" || v.fit == "pageWidth" {
+        (1, false)
+    } else if v.multi_page {
+        (2, true)
+    } else {
+        (1, true)
+    };
+    let cols = if v.read_mode { 2 } else { columns_for(avail.x, maxw * scale, l.pages.len(), min_cols, auto) };
+    let sizes: Vec<(f32, f32)> = l.pages.iter().map(|p| (p.w, p.h)).collect();
+    let (rects, size) = place_pages(&sizes, markup, scale, cols, avail);
+    Geometry { rects, size, scale, cols }
 }
 
 /// Fingerprint of a page's content for the texture cache.
@@ -209,6 +262,12 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     }
     let geo = geometry(app, &layout, area.size() - vec2(14.0, 0.0));
     app.canvas.scale = geo.scale;
+    // Zooming or resizing reflowed the pages into a different number of columns: the caret's page
+    // moved, so bring it back into view rather than leave the reader somewhere else.
+    if geo.cols != app.canvas.cols {
+        app.canvas.cols = geo.cols;
+        app.canvas.scroll_to_caret = true;
+    }
     let caret = layout.caret_on(&app.session.sel.focus, app.session.page_hint);
     // Editing a header/footer (or a note) dims the body; once per frame, for every page.
     let dim_body = dims_body(app, &layout);
@@ -1124,6 +1183,51 @@ mod tests {
             "example.com",
         ] {
             assert!(!is_followable_link(bad), "{bad:?}");
+        }
+    }
+
+    /// Issue #123: zoomed out, pages sit side by side in rows when the width allows; at 100% a
+    /// letter page in an ordinary window stays one per row.
+    #[test]
+    fn pages_flow_into_rows_when_they_fit() {
+        let letter = 612.0 * PX_PER_PT;
+        assert_eq!(columns_for(1200.0, letter, 10, 1, true), 1, "100%: one page per row");
+        assert_eq!(columns_for(1200.0, letter * 0.6, 10, 1, true), 2, "60%: two per row");
+        assert_eq!(columns_for(1200.0, letter * 0.25, 10, 1, true), 5, "25%: five per row");
+        assert_eq!(columns_for(1200.0, letter * 0.25, 3, 1, true), 3, "never more columns than pages");
+        assert_eq!(columns_for(1200.0, letter * 0.25, 10, 1, false), 1, "fit modes that show one page");
+        assert_eq!(columns_for(300.0, letter, 10, 2, true), 2, "Multiple Pages keeps two");
+        // Hostile numbers never panic and give at least one column.
+        for (w, slot, n) in
+            [(f32::NAN, letter, 5), (1200.0, f32::NAN, 5), (f32::INFINITY, 1.0, 5), (1200.0, 0.0, 5), (-5.0, -1.0, 5), (1e30, 1e-30, 0)]
+        {
+            let c = columns_for(w, slot, n, 1, true);
+            assert!((1..=n.max(1)).contains(&c), "{w} {slot} {n}: {c}");
+        }
+
+        // Mixed sizes: a landscape page among portrait ones, three per row.
+        let sizes = [(612.0, 792.0), (792.0, 612.0), (612.0, 792.0), (612.0, 792.0)];
+        let scale = 0.25;
+        let (rects, size) = place_pages(&sizes, 0.0, scale, 3, vec2(1000.0, 600.0));
+        assert_eq!(rects.len(), 4);
+        assert_eq!(rects[0].top(), rects[1].top());
+        assert_eq!(rects[1].top(), rects[2].top());
+        assert!(rects[0].right() < rects[1].left() && rects[1].right() < rects[2].left(), "left to right: {rects:?}");
+        assert!(rects[3].top() > rects[0].bottom(), "next row below the tallest page");
+        assert_eq!(rects[3].left(), rects[0].left(), "rows share columns");
+        assert!((rects[1].width() - 792.0 * scale).abs() < 1e-3);
+        assert!(size.x >= 1000.0 && size.y >= rects[3].bottom());
+        // Each page's centre maps back to that page.
+        for (i, r) in rects.iter().enumerate() {
+            assert_eq!(nearest_page(&rects, r.center()), Some(i));
+        }
+        // Hostile page sizes and scales stay finite.
+        let bad = [(f32::NAN, f32::INFINITY), (-1.0, 0.0), (1e30, 1e30)];
+        for scale in [f32::NAN, 0.0, -1.0, 1e9] {
+            let (rects, size) = place_pages(&bad, f32::NAN, scale, 0, vec2(f32::NAN, -1.0));
+            assert_eq!(rects.len(), 3);
+            assert!(size.x.is_finite() && size.y.is_finite());
+            assert!(rects.iter().all(|r| r.min.x.is_finite() && r.max.y.is_finite()), "{rects:?}");
         }
     }
 

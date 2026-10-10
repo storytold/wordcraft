@@ -32,3 +32,8 @@ real_name = "Saeed Azarehgar"
 
 [people.vangel76]
 sync_github_name = true
+
+[people.dkhlapov]
+real_name = "Dmitrii Khlapov"
+display_name = "Dima Khlapov"
+sync_github_name = false
