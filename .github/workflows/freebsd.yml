@@ -27,16 +27,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
-      - uses: actions/checkout@v4
-      # The Japanese font tests run against craft-fonts (an optional build input; they skip without it).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check out craft-fonts
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: storytold/craft-fonts
           ref: 8dcdacd5153e64560d109541a47d806f26f048c0
           path: craft-fonts
       - name: Build and test in a FreeBSD VM
-        uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1
+        uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1.5.9
         with:
           release: "14.3"
           usesh: true

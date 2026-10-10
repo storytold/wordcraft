@@ -43,7 +43,7 @@ jobs:
       date: ${{ steps.v.outputs.date }}
       prerelease: ${{ steps.v.outputs.prerelease }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: v
         name: Resolve version
         run: |
@@ -71,18 +71,17 @@ jobs:
       WORDCRAFT_VERSION: ${{ needs.version.outputs.version }}
       WORDCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
     steps:
-      - uses: actions/checkout@v4
-      # Optional font input (docs: storytold/craft-fonts docs/integration.md); releases always embed it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check out craft-fonts
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: storytold/craft-fonts
           ref: 8dcdacd5153e64560d109541a47d806f26f048c0
           path: craft-fonts
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           targets: aarch64-apple-darwin, x86_64-apple-darwin
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: release-macos-universal
       - name: Apply version override
@@ -102,7 +101,7 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: packaging/macos/package.sh --arch universal
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-macos
           path: dist/release/*
@@ -130,18 +129,17 @@ jobs:
       WORDCRAFT_VERSION: ${{ needs.version.outputs.version }}
       WORDCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
     steps:
-      - uses: actions/checkout@v4
-      # Optional font input (docs: storytold/craft-fonts docs/integration.md); releases always embed it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check out craft-fonts
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: storytold/craft-fonts
           ref: 8dcdacd5153e64560d109541a47d806f26f048c0
           path: craft-fonts
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: release-windows-${{ matrix.arch }}
       - name: Apply version override
@@ -170,7 +168,7 @@ jobs:
           AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
           AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
         run: ./packaging/windows/package.ps1 -Arch ${{ matrix.arch }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-windows-${{ matrix.arch }}
           path: dist/release/*
@@ -194,10 +192,9 @@ jobs:
       WORDCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
       NFPM_VERSION: 2.47.0
     steps:
-      - uses: actions/checkout@v4
-      # Optional font input (docs: storytold/craft-fonts docs/integration.md); releases always embed it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check out craft-fonts
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: storytold/craft-fonts
           ref: 8dcdacd5153e64560d109541a47d806f26f048c0
@@ -211,8 +208,8 @@ jobs:
           curl -fsSL -o "$RUNNER_TEMP/nfpm.deb" \
             "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_${{ matrix.deb }}.deb"
           sudo dpkg -i "$RUNNER_TEMP/nfpm.deb"
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: release-linux-${{ matrix.arch }}
       - name: Apply version override
@@ -236,7 +233,7 @@ jobs:
             "$appimage" --appimage-updateinformation | grep -F 'gh-releases-zsync|'
             test -s "$appimage.zsync"
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-linux-${{ matrix.arch }}
           path: dist/release/*
@@ -259,8 +256,8 @@ jobs:
       WORDCRAFT_VERSION: ${{ needs.version.outputs.version }}
       WORDCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-linux-${{ matrix.arch }}
           path: dist/linux
@@ -274,7 +271,7 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Build the Flatpak bundle
         run: packaging/linux/flatpak-bundle.sh "dist/linux/wordcraft-$WORDCRAFT_VERSION-linux-${{ matrix.arch }}.tar.gz"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-flatpak-${{ matrix.arch }}
           path: dist/release/*.flatpak
@@ -290,18 +287,17 @@ jobs:
       WORDCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
       TRUNK_VERSION: 0.21.14
     steps:
-      - uses: actions/checkout@v4
-      # Optional font input (docs: storytold/craft-fonts docs/integration.md); releases always embed it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check out craft-fonts
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: storytold/craft-fonts
           ref: 8dcdacd5153e64560d109541a47d806f26f048c0
           path: craft-fonts
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: release-web
       - name: Install trunk
@@ -317,7 +313,7 @@ jobs:
           CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
           CRAFT_FONTS_REQUIRED: "1"
         run: packaging/web/package.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-web
           path: dist/release/*
@@ -333,17 +329,16 @@ jobs:
       WORDCRAFT_VERSION: ${{ needs.version.outputs.version }}
       WORDCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
     steps:
-      - uses: actions/checkout@v4
-      # Optional font input (docs: storytold/craft-fonts docs/integration.md); releases always embed it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Synced into the VM with the sources.
       - name: Check out craft-fonts
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: storytold/craft-fonts
           ref: 8dcdacd5153e64560d109541a47d806f26f048c0
           path: craft-fonts
       - name: Build in a FreeBSD VM
-        uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1
+        uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc # v1.5.9
         with:
           release: "14.3"
           usesh: true
@@ -368,7 +363,7 @@ jobs:
             for f in craft-fonts/fonts/*/OFL.txt; do cp "$f" "dist/release/$name/OFL-$(basename "$(dirname "$f")").txt"; done
             tar -C dist/release -czf "dist/release/$name.tar.gz" "$name"
             rm -rf "dist/release/$name" target
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-freebsd
           path: dist/release/*.tar.gz
@@ -388,7 +383,7 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: release-*
           path: artifacts
