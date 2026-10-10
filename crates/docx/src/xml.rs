@@ -4,6 +4,7 @@
 //! `r:id`, `a:blip`…), so the reader doesn't care which prefixes a producer chose. Names in
 //! unknown namespaces keep their local name behind a `?:` prefix.
 
+use quick_xml::XmlVersion;
 use quick_xml::events::Event;
 use quick_xml::name::ResolveResult;
 use quick_xml::reader::NsReader;
@@ -21,6 +22,7 @@ pub const NAMESPACES: &[(&str, &str)] = &[
     ("r", "http://schemas.openxmlformats.org/officeDocument/2006/relationships"),
     ("wp", "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"),
     ("a", "http://schemas.openxmlformats.org/drawingml/2006/main"),
+    ("c", "http://schemas.openxmlformats.org/drawingml/2006/chart"),
     ("pic", "http://schemas.openxmlformats.org/drawingml/2006/picture"),
     ("mc", "http://schemas.openxmlformats.org/markup-compatibility/2006"),
     ("w14", "http://schemas.microsoft.com/office/word/2010/wordml"),
@@ -28,6 +30,8 @@ pub const NAMESPACES: &[(&str, &str)] = &[
     ("wp14", "http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing"),
     ("wps", "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"),
     ("wpg", "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"),
+    ("dgm", "http://schemas.openxmlformats.org/drawingml/2006/diagram"),
+    ("dsp", "http://schemas.microsoft.com/office/drawing/2008/diagram"),
     ("m", "http://schemas.openxmlformats.org/officeDocument/2006/math"),
     ("v", "urn:schemas-microsoft-com:vml"),
     ("o", "urn:schemas-microsoft-com:office:office"),
@@ -258,13 +262,13 @@ pub fn parse(bytes: &[u8]) -> Result<El, DocxError> {
                     if raw_key == b"xmlns" || raw_key.starts_with(b"xmlns:") {
                         continue;
                     }
-                    let (ares, alocal) = r.resolve_attribute(key);
+                    let (ares, alocal) = r.resolver_mut().resolve_attribute(key);
                     let alocal = String::from_utf8_lossy(alocal.as_ref()).into_owned();
                     let aname = match ares {
                         ResolveResult::Bound(ns) => format!("{}:{alocal}", prefix_for(ns.as_ref())),
                         _ => alocal,
                     };
-                    let val = match a.unescape_value() {
+                    let val = match a.normalized_value(XmlVersion::Explicit1_0) {
                         Ok(v) => v.into_owned(),
                         Err(_) => String::from_utf8_lossy(&a.value).into_owned(),
                     };
@@ -475,6 +479,18 @@ mod tests {
         for _ in 0..1000 {
             s.push_str("<a>");
         }
+        assert!(parse(s.as_bytes()).is_err());
+    }
+
+    /// A start tag with thousands of `xmlns:` declarations is refused instead of allocated
+    /// (RUSTSEC-2026-0195: unbounded namespace bindings in the resolver).
+    #[test]
+    fn too_many_namespace_declarations_is_error() {
+        let mut s = String::from("<a xmlns:a0=\"urn:a0\"");
+        for i in 1..10_000 {
+            s.push_str(&format!(" xmlns:a{i}=\"urn:a{i}\""));
+        }
+        s.push_str("><b/></a>");
         assert!(parse(s.as_bytes()).is_err());
     }
 

@@ -95,7 +95,7 @@ Every screenshot below is WordCraft itself, rendered offscreen by its own UI tes
   1.4 ms; pages render on demand.
 - **Everywhere.** One Rust codebase for macOS, Windows, Linux, BSD and the web. No Electron, no
   Tauri: native [egui](https://github.com/emilk/egui) on the GPU.
-- **Built for agents.** Every action is a command with an id. The same 389 commands drive the
+- **Built for agents.** Every action is a command with an id. The same 422 commands drive the
   ribbon, keyboard shortcuts, the command search, a command-line tool, a JSON control channel and
   an MCP server.
 - **Private.** Spelling, grammar and everything else work offline.
@@ -117,11 +117,12 @@ Every screenshot below is WordCraft itself, rendered offscreen by its own UI tes
 | **References** | Table of contents, footnotes and endnotes, citations and bibliography (APA, MLA, Chicago, IEEE), captions, table of figures, cross-references, index, table of authorities |
 | **Review** | Spelling and grammar with suggestions, thesaurus, word count, comments in margin balloons or a pane, track changes, accept/reject, compare documents, restrict editing, accessibility checker, document inspector |
 | **Mailings** | Mail merge from CSV, merge fields, address block, greeting line, rules, preview, finish to a document; envelopes and labels |
-| **View** | Print layout, web layout, draft, read mode, focus, zoom, one/multiple pages, page width, Navigation pane, rulers, gridlines, dark mode; interface in English, 简体中文, 繁體中文, 日本語, Português (Brasil), Español or Українська (follows the system language by default) |
+| **View** | Print layout, web layout, draft, read mode, focus, zoom, one/multiple pages, page width, Navigation pane, rulers, gridlines, dark mode; interface in English, 简体中文, 繁體中文, 日本語, Português (Brasil), Español, Українська, Српски / Srpski or Eesti (follows the system language by default) |
 | **Files** | .docx read/write (opens in Word), Word 97-2003 .doc import, PDF export, .odt, .rtf, .html, .md, .tex, .txt import/export, page images |
 
-The honest picture, area by area, is in [ROADMAP.md](ROADMAP.md) and the generated
-[feature parity report](docs/parity.md).
+The honest picture, area by area, is in [ROADMAP.md](ROADMAP.md), the
+[parity assessment](docs/target-app-parity.md) and the generated
+[feature checklist](docs/parity-checklist.md).
 
 ## Quick start
 
@@ -187,21 +188,22 @@ covers every target starting with it (`wordcraft*=debug`). The logger is
 | L1 | `wordcraft-doc`, `wordcraft-fonts`, `wordcraft-proof` | document model and editing; fonts and shaping; spelling, grammar, hyphenation |
 | L2 | `wordcraft-layout`, `wordcraft-docx`, `wordcraft-formats` | line breaking, pagination, tables, notes, hit testing; OOXML; ODT/RTF/HTML/Markdown/TXT |
 | L3 | `wordcraft-render`, `wordcraft-pdf` | rasteriser (vello_cpu); PDF (krilla) |
-| L4 | `wordcraft-engine` | session, undo, 389 commands, Word feature catalog |
+| L4 | `wordcraft-engine` | session, undo, 422 commands, Word feature catalog |
 | L5 | `wordcraft-mcp` | MCP server |
 | L6 | `wordcraft-ui-egui` | the Word-style front end (swappable) |
 | apps | `wordcraft`, `wordcraft-cli`, `wordcraft-web` | desktop, command line, browser |
 
-`cargo xtask ci` runs formatting, clippy, ~250 tests, the asset-attribution check, the layering
+`cargo xtask ci` runs formatting, clippy, ~800 tests, the asset-attribution check, the layering
 check and the wasm build. Contributor and agent instructions: [AGENTS.md](AGENTS.md).
 
 ## Roadmap
 
-WordCraft covers 87% of Word's ribbon features with commands today; counting depth and
-fidelity, we estimate about 62% of real feature parity. An alpha for everyday writing is close:
-the remaining work is mostly testing against real-world .docx files, native printing and the
-first signed builds. Charts, SmartArt, the equation editor and the Draw tab come after.
-Details and estimates: [ROADMAP.md](ROADMAP.md).
+WordCraft is in **alpha**. It covers 88% of Word's ribbon features with commands today; counting
+depth, file fidelity, stability and the rest, we estimate it is about 60% of the way to replacing
+all of Word for real work, about 55% for a typical professional's weekly work and about 63% for
+everyday essentials. Beta needs testing against real-world .docx files, keeping charts and SmartArt
+through a round trip, pagination closer to Word's, a stability sweep and native printing. Details
+and estimates: [ROADMAP.md](ROADMAP.md) and [where we fall short](docs/gaps.md).
 
 ## Downloads
 
@@ -231,6 +233,12 @@ Remove-Item Env:WGPU_BACKEND                     # restore the default for later
 
 An explicit `gl` override can bring the driver crash back on affected systems. The macOS, Linux
 and web backend defaults are unchanged.
+
+**If the app is slow on an older Windows PC:** when DirectX 12 finds no graphics card with a
+driver for it (for example Intel 4th-generation graphics on Windows 11), it only offers Microsoft's
+software renderer, which draws every frame on the processor. In that case WordCraft uses OpenGL
+instead, without setting anything. The log file records the choice (lines starting with
+`graphics:`). `WGPU_BACKEND` still overrides it, e.g. `$env:WGPU_BACKEND = "gl"` or `"dx12"`.
 
 ### macOS
 

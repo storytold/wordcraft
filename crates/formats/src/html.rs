@@ -143,7 +143,12 @@ pub fn unescape(s: &str) -> String {
     while let Some(k) = rest.find('&') {
         out.push_str(&rest[..k]);
         let after = &rest[k + 1..];
-        let end = after.find(';').filter(|e| *e <= 32);
+        // An entity name is short; looking further would rescan the whole text for every stray `&`.
+        let mut cut = after.len().min(33);
+        while !after.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let end = after.get(..cut).and_then(|w| w.find(';'));
         match end.and_then(|e| decode_entity(&after[..e]).map(|t| (t, e))) {
             Some((t, e)) => {
                 out.push_str(&t);
@@ -1274,6 +1279,8 @@ pub fn inlines_html(inlines: &[Inline]) -> String {
                 ));
             }
             Inline::Anchor(a) => o.push_str(&format!("<a id=\"{}\"></a>", esc(a))),
+            // No picture to show: the browser shows the alt text in its place.
+            Inline::Figure(alt) => o.push_str(&format!("<img alt=\"{}\">", esc(alt))),
             Inline::Equation { .. } => {}
         }
     }

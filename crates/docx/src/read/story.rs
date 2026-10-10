@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use wordcraft_doc::effects::{Glow, Shadow, ShapeEffects};
+use wordcraft_doc::graphic::{Embedded, Graphic, GraphicItem, GraphicKind};
 use wordcraft_doc::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{CharProps, Rgb};
 use wordcraft_doc::table::{Cell, MAX_COLS, MAX_ROWS, Row, Table};
@@ -9,7 +11,7 @@ use wordcraft_doc::{Block, Blocks, InlineObject, Paragraph, PartKind, RevisionKi
 
 use super::Reader;
 use super::props::{sectpr, tcpr, trpr};
-use crate::package::Rels;
+use crate::package::{Rels, rt};
 use crate::units::{int, measure};
 use crate::xml::El;
 
@@ -124,7 +126,7 @@ fn clean_text(s: &str) -> String {
 
 fn children_of_choice(ac: &El) -> Option<&El> {
     // Prefer a Choice whose requirements we understand; else the Fallback; else any Choice.
-    const KNOWN: &[&str] = &["wps", "w14", "w15", "wp14", "a14", "w16se", "w16cid", "w16", "w16cex", "w16sdtdh", "v"];
+    const KNOWN: &[&str] = &["wps", "wpg", "w14", "w15", "wp14", "a14", "w16se", "w16cid", "w16", "w16cex", "w16sdtdh", "v"];
     let ok = |c: &El| c.attr("Requires").unwrap_or("").split_whitespace().all(|r| KNOWN.contains(&r));
     ac.children("mc:Choice").find(|c| ok(c)).or_else(|| ac.child("mc:Fallback")).or_else(|| ac.child("mc:Choice"))
 }
@@ -238,6 +240,17 @@ impl Reader<'_> {
             let (props, mark) = self.pc.ppr(ppr);
             para.props = props;
             para.mark = mark;
+            // A tracked paragraph mark (ECMA-376 §17.13.5.16 / §17.13.5.15): `w:ins` / `w:del`
+            // in the mark's `w:rPr`.
+            if let Some(rpr) = ppr.child("w:rPr") {
+                for k in rpr.els() {
+                    match k.name.as_str() {
+                        "w:ins" | "w:moveTo" => para.mark.ins = Some(self.revision(RevisionKind::Insert, k)),
+                        "w:del" | "w:moveFrom" => para.mark.del = Some(self.revision(RevisionKind::Delete, k)),
+                        _ => {}
+                    }
+                }
+            }
             if let Some(s) = ppr.child("w:sectPr") {
                 para.section = Some(Box::new(self.read_section(s, rels)));
             }
@@ -453,8 +466,13 @@ impl Reader<'_> {
                     self.emit_obj(sc, pb, o, props);
                 }
             }
-            "w:pict" | "w:object" => {
+            "w:pict" => {
                 if let Some(o) = self.read_vml(sc, k, rels) {
+                    self.emit_obj(sc, pb, o, props);
+                }
+            }
+            "w:object" => {
+                if let Some(o) = self.read_object(sc, k, rels) {
                     self.emit_obj(sc, pb, o, props);
                 }
             }
@@ -634,32 +652,192 @@ impl Reader<'_> {
         let mut float = if anchored { anchor_float(c) } else { Float::default() };
         if let Some(e) = c.child("wp:effectExtent") {
             for (slot, n) in float.effect.iter_mut().zip(["l", "t", "r", "b"]) {
-                *slot = e.attr(n).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0).clamp(0.0, 1584.0);
+                // Negative for a rotated object narrower than its frame; settled below.
+                *slot = e.attr(n).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0).clamp(-1584.0, 1584.0);
             }
         }
         let gd = c.child("a:graphic").and_then(|g| g.child("a:graphicData"))?;
-        if let Some(blip) = gd.find("a:blip") {
-            let media = blip.attr("r:embed").and_then(|id| self.media_for(rels, id))?;
-            let mut crop = [0.0f32; 4];
-            if let Some(sr) = gd.find("a:srcRect") {
-                for (i, n) in ["l", "t", "r", "b"].iter().enumerate() {
-                    if let Some(v) = sr.attr(n).and_then(int)
-                        && let Some(slot) = crop.get_mut(i)
-                    {
-                        *slot = (v.clamp(0, 100_000) as f32 / 100_000.0).clamp(0.0, 1.0);
-                    }
-                }
+        // Checked by URI before the blip search: a diagram's data can hold a blip further down.
+        let uri = gd.attr("uri").unwrap_or("");
+        let graphic_kind = if uri.ends_with("/chart") {
+            Some(GraphicKind::Chart)
+        } else if uri.ends_with("/diagram") {
+            Some(GraphicKind::Diagram)
+        } else {
+            None
+        };
+        if let Some(kind) = graphic_kind {
+            // Kept so saving writes the chart or diagram back: the frame around it is written
+            // from the object's (possibly moved or resized) size and position.
+            let extra: Vec<String> = match kind {
+                GraphicKind::Chart => Vec::new(),
+                GraphicKind::Diagram => self.diagram_drawing_rel(gd, rels).into_iter().collect(),
+            };
+            let source = c.child("a:graphic").and_then(|g| self.keep_embedded(g, rels, &extra));
+            let graphic = self.graphic(kind, gd, rels, w, h, source);
+            float.effect = float.effect.map(|e| e.max(0.0));
+            return Some(InlineObject::Graphic { w, h, alt, float, graphic });
+        }
+        let mut obj = if let Some(g) = gd.child("wpg:wgp") {
+            self.read_group(sc, g, rels, w, h, float)?
+        } else if gd.find("a:blip").is_some() {
+            self.read_pic(gd, rels, w, h, alt, float)?
+        } else {
+            let wsp = gd.find("wps:wsp")?;
+            let mut obj = self.read_wsp(sc, wsp, rels, w, h, float);
+            // A freeform: its custom geometry, and whether it's ink WordCraft wrote.
+            if let InlineObject::Shape { kind, freeform, .. } = &mut obj
+                && let Some(sppr) = wsp.child("wps:spPr")
+                && let Some(mut f) = super::freeform::cust_geom(sppr, w, h)
+            {
+                f.alpha = super::freeform::line_alpha(sppr.child("a:ln"));
+                f.ink = c.child("wp:docPr").and_then(|p| p.attr("name")).and_then(super::freeform::ink_tool);
+                *kind = ShapeKind::Freeform;
+                *freeform = Some(Arc::new(f));
             }
-            return Some(InlineObject::Image { media, w, h, alt, float, crop });
+            obj
+        };
+        // Word's effect extent also covers a rotated object's overhang; the model keeps that
+        // apart (it follows from the angle), so take it back out.
+        if let Some(f) = obj.float_mut() {
+            let (px, py) = f.spin_pad(w, h);
+            for (e, p) in f.effect.iter_mut().zip([px, py, px, py]) {
+                *e = (*e - p).clamp(0.0, 1584.0);
+            }
         }
-        if let Some(wsp) = gd.find("wps:wsp") {
-            return Some(self.read_wsp(sc, wsp, rels, w, h, float));
-        }
-        None
+        Some(obj)
     }
 
-    fn read_wsp(&mut self, sc: &mut StoryCtx, wsp: &El, rels: &Rels, w: f32, h: f32, float: Float) -> InlineObject {
+    /// The chart or SmartArt diagram in an `a:graphicData`, as items in points from its top-left
+    /// corner. Charts are drawn from their cached data, SmartArt diagrams from the drawing Word
+    /// stores beside them. Built once per part and size; once the file's graphic budget is spent,
+    /// later ones are empty.
+    fn graphic(&mut self, kind: GraphicKind, gd: &El, rels: &Rels, w: f32, h: f32, source: Option<Arc<Embedded>>) -> Arc<Graphic> {
+        let part = match kind {
+            GraphicKind::Chart => gd.child("c:chart").and_then(|c| c.attr("r:id")).and_then(|id| super::part_of(rels, id, rt::CHART)),
+            GraphicKind::Diagram => self.diagram_part(gd, rels),
+        };
+        let Some(path) = part else { return Arc::new(Graphic { kind, items: Vec::new(), w, h, source }) };
+        let key = (kind, path, w.to_bits(), h.to_bits());
+        if let Some(g) = self.graphics.get(&key) {
+            return g.clone();
+        }
+        let items = if self.graphic_budget == 0 { Vec::new() } else { self.graphic_items(kind, &key.1, w, h) };
+        self.graphic_budget = self.graphic_budget.saturating_sub(graphic_work(&items));
+        let g = Arc::new(Graphic { kind, items, w, h, source });
+        self.graphics.insert(key, g.clone());
+        g
+    }
+
+    /// The items of the chart part or diagram drawing part at `path`.
+    fn graphic_items(&mut self, kind: GraphicKind, path: &str, w: f32, h: f32) -> Vec<GraphicItem> {
+        match kind {
+            GraphicKind::Chart => match self.graphic_part(path) {
+                Some(space) => super::chart::chart_items(&space, &self.doc.settings.theme_colors, w, h),
+                None => Vec::new(),
+            },
+            GraphicKind::Diagram => self.diagram_drawing(path, w, h),
+        }
+    }
+
+    /// A picture: the first `a:blip` in `pic` and its crop.
+    fn read_pic(&mut self, pic: &El, rels: &Rels, w: f32, h: f32, alt: String, mut float: Float) -> Option<InlineObject> {
+        let blip = pic.find("a:blip")?;
+        float.set_spin(xfrm_spin(pic.find("pic:spPr")));
+        let media = blip.attr("r:embed").and_then(|id| self.media_for(rels, id))?;
+        let mut crop = [0.0f32; 4];
+        if let Some(sr) = pic.find("a:srcRect") {
+            for (i, n) in ["l", "t", "r", "b"].iter().enumerate() {
+                if let Some(v) = sr.attr(n).and_then(int)
+                    && let Some(slot) = crop.get_mut(i)
+                {
+                    *slot = (v.clamp(0, 100_000) as f32 / 100_000.0).clamp(0.0, 1.0);
+                }
+            }
+        }
+        Some(InlineObject::Image { media, w, h, alt, float, crop, ole: None })
+    }
+
+    /// A `wpg:wgp` group (`w` × `h`): its pictures, shapes and text boxes, nested groups
+    /// flattened into it. `None` when it has no member we can show.
+    fn read_group(&mut self, sc: &mut StoryCtx, g: &El, rels: &Rels, w: f32, h: f32, mut float: Float) -> Option<InlineObject> {
+        let x = group_xfrm(g.child("wpg:grpSpPr"));
+        float.set_spin(xfrm_spin(g.child("wpg:grpSpPr")));
+        // The members' space; without `a:chExt` it is the group's own size.
+        let (ch_w, ch_h) = match x.ch_ext {
+            Some((cw, ch)) if cw > 0.0 && ch > 0.0 => (cw, ch),
+            _ => (w.max(1.0), h.max(1.0)),
+        };
+        let (cx, cy) = x.ch_off.unwrap_or((0.0, 0.0));
+        let mut children = Vec::new();
+        self.group_members(sc, g, rels, (-cx, -cy, 1.0, 1.0), 0, &mut children);
+        if children.is_empty() {
+            return None;
+        }
+        Some(InlineObject::Group { w, h, float, ch_w, ch_h, children })
+    }
+
+    /// The members of group `g` into `out`, mapped into the outermost group's space by `t`
+    /// (x0, y0, sx, sy: outer = x0 + inner × sx).
+    fn group_members(
+        &mut self,
+        sc: &mut StoryCtx,
+        g: &El,
+        rels: &Rels,
+        t: (f32, f32, f32, f32),
+        depth: usize,
+        out: &mut Vec<wordcraft_doc::para::GroupChild>,
+    ) {
+        let (x0, y0, sx, sy) = t;
+        for e in g.els() {
+            if out.len() >= wordcraft_doc::para::MAX_GROUP_CHILDREN {
+                return;
+            }
+            let e = match e.name.as_str() {
+                "mc:AlternateContent" => match children_of_choice(e).and_then(|c| c.els().next()) {
+                    Some(c) => c,
+                    None => continue,
+                },
+                _ => e,
+            };
+            let sppr = match e.name.as_str() {
+                "wps:wsp" => e.child("wps:spPr"),
+                "pic:pic" => e.child("pic:spPr"),
+                "wpg:grpSp" => e.child("wpg:grpSpPr"),
+                _ => continue,
+            };
+            let x = group_xfrm(sppr);
+            let ((ox, oy), (ew, eh)) = (x.off, x.ext);
+            if e.name == "wpg:grpSp" {
+                if depth >= 8 {
+                    continue;
+                }
+                // Its members' space maps onto its own box.
+                let (cox, coy) = x.ch_off.unwrap_or((0.0, 0.0));
+                let (cw, ch) = x.ch_ext.filter(|(cw, ch)| *cw > 0.0 && *ch > 0.0).unwrap_or((ew.max(1.0), eh.max(1.0)));
+                let (kx, ky) = (ew / cw, eh / ch);
+                let nt = (x0 + (ox - cox * kx) * sx, y0 + (oy - coy * ky) * sy, sx * kx, sy * ky);
+                self.group_members(sc, e, rels, nt, depth + 1, out);
+                continue;
+            }
+            let max = crate::units::MAX_LEN_PT;
+            let fit = |v: f32, lo: f32| wordcraft_geom::finite(v).clamp(lo, max);
+            let (w, h) = (fit(ew * sx, 0.0), fit(eh * sy, 0.0));
+            let obj = if e.name == "pic:pic" {
+                let alt = e.find("pic:cNvPr").and_then(|p| p.attr("descr")).unwrap_or("").to_string();
+                self.read_pic(e, rels, w, h, alt, Float::default())
+            } else {
+                Some(self.read_wsp(sc, e, rels, w, h, Float::default()))
+            };
+            if let Some(obj) = obj {
+                out.push(wordcraft_doc::para::GroupChild { x: fit(x0 + ox * sx, -max), y: fit(y0 + oy * sy, -max), obj });
+            }
+        }
+    }
+
+    fn read_wsp(&mut self, sc: &mut StoryCtx, wsp: &El, rels: &Rels, w: f32, h: f32, mut float: Float) -> InlineObject {
         let sppr = wsp.child("wps:spPr");
+        float.set_spin(xfrm_spin(sppr));
         let prst = sppr.and_then(|s| s.child("a:prstGeom")).and_then(|g| g.attr("prst")).unwrap_or("rect");
         let txbx = wsp.child("wps:txbx").and_then(|t| t.child("w:txbxContent"));
         let mut kind = match prst {
@@ -684,11 +862,12 @@ impl Reader<'_> {
         let ln = sppr.and_then(|s| s.child("a:ln"));
         let stroke = solid(ln);
         let stroke_width = ln.and_then(|l| l.attr("w")).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0).clamp(0.0, 100.0);
+        let effects = sppr.and_then(|s| s.child("a:effectLst")).map(effect_list).unwrap_or_default();
         let story = match txbx {
             Some(t) if sc.story_depth < MAX_STORY_DEPTH => Some(self.read_textbox(sc, t, rels)),
             _ => None,
         };
-        InlineObject::Shape { kind, w, h, fill, stroke, stroke_width, float, story }
+        InlineObject::Shape { kind, w, h, fill, stroke, stroke_width, float, story, freeform: None, effects }
     }
 
     fn read_textbox(&mut self, sc: &StoryCtx, content: &El, rels: &Rels) -> u32 {
@@ -703,23 +882,14 @@ impl Reader<'_> {
     fn read_vml(&mut self, sc: &mut StoryCtx, pict: &El, rels: &Rels) -> Option<InlineObject> {
         let shape = pict.els().find(|e| e.name.starts_with("v:") && e.local() != "shapetype")?;
         let style = shape.attr("style").unwrap_or("");
-        let mut w = 0.0;
-        let mut h = 0.0;
-        for decl in style.split(';') {
-            let mut kv = decl.splitn(2, ':');
-            let (Some(k), Some(v)) = (kv.next(), kv.next()) else { continue };
-            let v = measure(v.trim(), 1.0).unwrap_or(0.0).clamp(0.0, crate::units::MAX_LEN_PT);
-            match k.trim() {
-                "width" => w = v,
-                "height" => h = v,
-                _ => {}
-            }
-        }
+        let len = |k: &str| vml_style(style, k).and_then(|v| measure(v, 1.0)).unwrap_or(0.0).clamp(0.0, crate::units::MAX_LEN_PT);
+        let (w, h) = (len("width"), len("height"));
+        let float = vml_float(shape, style);
         if let Some(img) = shape.find("v:imagedata") {
             let id = img.attr("r:id").or_else(|| img.attr("r:pict"))?;
             let media = self.media_for(rels, id)?;
             let alt = shape.attr("alt").or_else(|| img.attr("o:title")).unwrap_or("").to_string();
-            return Some(InlineObject::Image { media, w, h, alt, float: Float::default(), crop: [0.0; 4] });
+            return Some(InlineObject::Image { media, w, h, alt, float, crop: [0.0; 4], ole: None });
         }
         if let Some(t) = shape.find("w:txbxContent")
             && sc.story_depth < MAX_STORY_DEPTH
@@ -727,9 +897,36 @@ impl Reader<'_> {
             let story = Some(self.read_textbox(sc, t, rels));
             let fill = shape.attr("fillcolor").and_then(Rgb::parse);
             let stroke = shape.attr("strokecolor").and_then(Rgb::parse);
-            return Some(InlineObject::Shape { kind: ShapeKind::TextBox, w, h, fill, stroke, stroke_width: 0.75, float: Float::default(), story });
+            return Some(InlineObject::Shape {
+                kind: ShapeKind::TextBox,
+                w,
+                h,
+                fill,
+                stroke,
+                stroke_width: 0.75,
+                float,
+                story,
+                freeform: None,
+                effects: Default::default(),
+            });
         }
         None
+    }
+
+    /// An OLE object (`w:object`, ECMA-376 §17.3.3.19): shown as its picture (VML, or a DrawingML
+    /// picture in `w:drawing`), and kept whole so saving writes the object back.
+    fn read_object(&mut self, sc: &mut StoryCtx, obj: &El, rels: &Rels) -> Option<InlineObject> {
+        let mut o = match self.read_vml(sc, obj, rels) {
+            Some(o) => o,
+            None => {
+                let d = obj.child("w:drawing")?;
+                self.read_drawing(sc, d, rels)?
+            }
+        };
+        if let InlineObject::Image { ole, .. } = &mut o {
+            *ole = self.keep_embedded(obj, rels, &[]);
+        }
+        Some(o)
     }
 
     // ---- tables ----
@@ -848,4 +1045,167 @@ fn anchor_float(c: &El) -> Float {
     f.dist_top = dist("distT");
     f.dist_bottom = dist("distB");
     f
+}
+
+/// The value of property `key` in a VML `style` attribute (CSS declarations; the last one wins).
+fn vml_style<'a>(style: &'a str, key: &str) -> Option<&'a str> {
+    style.rsplit(';').filter_map(|d| d.split_once(':')).find(|(k, _)| k.trim().eq_ignore_ascii_case(key)).map(|(_, v)| v.trim())
+}
+
+/// Placement of a VML shape (ECMA-376 Part 4, VML): `position:absolute` in its style makes it
+/// float, offset by `left`/`margin-left` and `top`/`margin-top` from the area named by
+/// `mso-position-horizontal-relative` / `mso-position-vertical-relative` (unless aligned with
+/// `mso-position-horizontal` / `mso-position-vertical`), wrapped as its `w10:wrap` says. Without
+/// wrapping (`none`, or no `w10:wrap`) it's in front of the text, or behind it at a negative
+/// `z-index`. Anything else stays inline.
+fn vml_float(shape: &El, style: &str) -> Float {
+    let get = |k: &str| vml_style(style, k);
+    if !get("position").is_some_and(|p| p.eq_ignore_ascii_case("absolute")) {
+        // Inline: only the turn (an OLE object turned in WordCraft is saved so, #319).
+        let mut f = Float::default();
+        f.set_spin(vml_spin(style));
+        return f;
+    }
+    let off = |k: &str| get(k).and_then(|v| measure(v, 1.0)).unwrap_or(0.0);
+    let max = crate::units::MAX_LEN_PT;
+    let behind = get("z-index").and_then(int).is_some_and(|z| z < 0);
+    let wrap = match shape.child("w10:wrap").and_then(|w| w.attr("type")).unwrap_or("none") {
+        "square" => Wrap::Square,
+        "tight" => Wrap::Tight,
+        "through" => Wrap::Through,
+        "topAndBottom" => Wrap::TopAndBottom,
+        _ if behind => Wrap::BehindText,
+        _ => Wrap::InFrontOfText,
+    };
+    let h_rel = match get("mso-position-horizontal-relative").unwrap_or("text") {
+        "page" => Anchor::Page,
+        "margin" => Anchor::Margin,
+        "char" => Anchor::Character,
+        "left-margin-area" => Anchor::LeftMargin,
+        "right-margin-area" => Anchor::RightMargin,
+        "inner-margin-area" => Anchor::InsideMargin,
+        "outer-margin-area" => Anchor::OutsideMargin,
+        _ => Anchor::Column,
+    };
+    let v_rel = match get("mso-position-vertical-relative").unwrap_or("text") {
+        "page" => Anchor::Page,
+        "margin" => Anchor::Margin,
+        "line" => Anchor::Line,
+        "top-margin-area" => Anchor::TopMargin,
+        "bottom-margin-area" => Anchor::BottomMargin,
+        "inner-margin-area" => Anchor::InsideMargin,
+        "outer-margin-area" => Anchor::OutsideMargin,
+        _ => Anchor::Paragraph,
+    };
+    let dist = |k: &str| get(k).and_then(|v| measure(v, 1.0)).unwrap_or(0.0).clamp(0.0, 1584.0);
+    let mut f = Float {
+        wrap,
+        h_rel,
+        v_rel,
+        x: (off("left") + off("margin-left")).clamp(-max, max),
+        y: (off("top") + off("margin-top")).clamp(-max, max),
+        h_align: get("mso-position-horizontal").and_then(FloatAlign::from_ooxml),
+        v_align: get("mso-position-vertical").and_then(FloatAlign::from_ooxml),
+        dist: dist("mso-wrap-distance-left").max(dist("mso-wrap-distance-right")),
+        dist_top: dist("mso-wrap-distance-top"),
+        dist_bottom: dist("mso-wrap-distance-bottom"),
+        ..Float::default()
+    };
+    f.set_spin(vml_spin(style));
+    f
+}
+
+/// A VML shape's turn: `rotation` in degrees, or 65536ths of one with an `fd` suffix; `flip`: `x`
+/// and/or `y`.
+fn vml_spin(style: &str) -> wordcraft_geom::Spin {
+    let get = |k: &str| vml_style(style, k);
+    let rot = get("rotation").and_then(|v| match v.strip_suffix("fd") {
+        Some(fd) => fd.trim().parse::<f32>().ok().map(|f| f / 65_536.0),
+        None => v.trim().parse::<f32>().ok(),
+    });
+    let flip = get("flip").unwrap_or("");
+    wordcraft_geom::Spin::new(rot.unwrap_or(0.0), flip.contains('x'), flip.contains('y'))
+}
+
+/// What a graphic's items cost to keep and draw: one per item, plus one per path segment.
+fn graphic_work(items: &[GraphicItem]) -> usize {
+    items.iter().map(|it| if let GraphicItem::Path { segs, .. } = it { segs.len() + 1 } else { 1 }).sum()
+}
+
+/// A shape's `a:effectLst` (ECMA-376 Part 1 §20.1.8.26): its outer shadow, glow and soft edges.
+/// Other effects are dropped.
+fn effect_list(l: &El) -> ShapeEffects {
+    let pt = |e: &El, n: &str| e.attr(n).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0);
+    let shadow = l.child("a:outerShdw").map(|e| {
+        let (color, transparency) = effect_color(e);
+        // `dir`: 60000ths of a degree, clockwise.
+        let angle = e.attr("dir").and_then(int).map(|v| (v.rem_euclid(21_600_000) as f32) / 60_000.0).unwrap_or(0.0);
+        // `rotWithShape` is true unless it says otherwise (ECMA-376 §20.1.8.49).
+        let rot_with_shape = e.attr("rotWithShape").is_none_or(|v| !matches!(v, "0" | "false" | "off"));
+        Shadow { color: color.unwrap_or(Rgb::BLACK), transparency, blur: pt(e, "blurRad"), distance: pt(e, "dist"), angle, rot_with_shape }
+    });
+    let glow = l.child("a:glow").map(|e| {
+        let (color, transparency) = effect_color(e);
+        Glow { color: color.unwrap_or(Glow::default().color), size: pt(e, "rad"), transparency }
+    });
+    let soft_edge = l.child("a:softEdge").map(|e| pt(e, "rad"));
+    ShapeEffects { shadow, glow, soft_edge }.sanitized()
+}
+
+/// The colour inside an effect (`a:srgbClr`, `a:prstClr`, `a:sysClr`; theme colours aren't
+/// resolved here) and its transparency, percent (from `a:alpha`, opaque when absent).
+fn effect_color(e: &El) -> (Option<Rgb>, f32) {
+    let Some(c) = e.els().find(|c| matches!(c.name.as_str(), "a:srgbClr" | "a:prstClr" | "a:sysClr" | "a:schemeClr" | "a:scrgbClr" | "a:hslClr"))
+    else {
+        return (None, 0.0);
+    };
+    let rgb = match c.name.as_str() {
+        "a:srgbClr" => c.attr("val").and_then(Rgb::parse),
+        "a:sysClr" => c.attr("lastClr").and_then(Rgb::parse),
+        "a:prstClr" => match c.attr("val").unwrap_or("") {
+            "black" => Some(Rgb::BLACK),
+            "white" => Some(Rgb::WHITE),
+            "gray" | "grey" => Some(Rgb(0x80, 0x80, 0x80)),
+            _ => None,
+        },
+        _ => None,
+    };
+    // `a:alpha`: opacity in 1000ths of a percent.
+    let opacity = c.child("a:alpha").and_then(|a| a.attr("val")).and_then(int).map(|v| v.clamp(0, 100_000) as f32 / 1000.0).unwrap_or(100.0);
+    (rgb, 100.0 - opacity)
+}
+
+/// A DrawingML `a:xfrm` (ECMA-376 §20.1.7.5/6) in points: offset, extent and, for a group, its
+/// members' offset and extent.
+struct Xfrm {
+    off: (f32, f32),
+    ext: (f32, f32),
+    ch_off: Option<(f32, f32)>,
+    ch_ext: Option<(f32, f32)>,
+}
+
+/// The rotation and flips of the `a:xfrm` in shape properties `sppr` (ECMA-376 §20.1.7.6:
+/// `rot` in 60000ths of a degree, clockwise; `flipH`, `flipV`). None when missing or junk.
+fn xfrm_spin(sppr: Option<&El>) -> wordcraft_geom::Spin {
+    let Some(x) = sppr.and_then(|s| s.child("a:xfrm")) else { return wordcraft_geom::Spin::default() };
+    let rot = x.attr("rot").and_then(int).map(|v| v.rem_euclid(21_600_000) as f32 / 60_000.0).unwrap_or(0.0);
+    wordcraft_geom::Spin::new(rot, on_off_attr(x, "flipH"), on_off_attr(x, "flipV"))
+}
+
+/// The `a:xfrm` in shape properties `sppr` (zeros when missing).
+fn group_xfrm(sppr: Option<&El>) -> Xfrm {
+    let x = sppr.and_then(|s| s.child("a:xfrm"));
+    let pair = |name: &str, a: &str, b: &str, lim: f32| {
+        let e = x.and_then(|x| x.child(name))?;
+        let v = |n: &str| e.attr(n).and_then(|v| measure(v, 12_700.0)).map(|v| v.clamp(-lim, lim)).unwrap_or(0.0);
+        Some((v(a), v(b)))
+    };
+    let max = crate::units::MAX_LEN_PT;
+    let pos = |p: Option<(f32, f32)>| p.map(|(a, b)| (a.max(0.0), b.max(0.0)));
+    Xfrm {
+        off: pair("a:off", "x", "y", max).unwrap_or((0.0, 0.0)),
+        ext: pos(pair("a:ext", "cx", "cy", max)).unwrap_or((0.0, 0.0)),
+        ch_off: pair("a:chOff", "x", "y", max),
+        ch_ext: pos(pair("a:chExt", "cx", "cy", max)),
+    }
 }

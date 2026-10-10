@@ -34,6 +34,15 @@ pub struct Level {
     pub chr: CharProps,
     /// Restart after a higher level (true = after any higher level, the default).
     pub restart: bool,
+    /// Restart only after this level (1-based, Word's `w:lvlRestart`): a level 3 that restarts
+    /// after level 1 keeps counting across level 2 items. `None` restarts after the level just
+    /// above. Ignored when `restart` is false.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub restart_after: Option<u8>,
+    /// The tab stop that follows the number (Word's "Add tab stop at"), points from the
+    /// paragraph's left edge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tab: Option<f32>,
     /// Show all levels as decimal (legal numbering).
     pub legal: bool,
     /// Paragraph style linked to this level (e.g. Heading 1 for outline numbering).
@@ -52,6 +61,8 @@ impl Default for Level {
             suffix: LevelSuffix::Tab,
             chr: CharProps::default(),
             restart: true,
+            restart_after: None,
+            tab: None,
             legal: false,
             style: None,
         }
@@ -267,8 +278,13 @@ impl Counters {
                 *v = def.start;
             }
         }
-        for deeper in st.iter_mut().skip(lv + 1) {
-            *deeper = 0;
+        // Deeper levels restart, unless they never restart or only restart after a level above
+        // this one (Word's lvlRestart).
+        for (d, deeper) in st.iter_mut().enumerate().skip(lv + 1) {
+            let restarts = level_def(d).is_none_or(|l| l.restart && l.restart_after.is_none_or(|k| lv < k as usize));
+            if restarts {
+                *deeper = 0;
+            }
         }
         let vals = *st;
         if def.format == NumFormat::Bullet {
@@ -331,6 +347,28 @@ mod tests {
         let mut c = Counters::default();
         assert_eq!(c.next_label(&n, id, 0).unwrap().0, "ج.");
         assert_eq!(c.next_label(&n, id, 0).unwrap().0, "د.");
+    }
+
+    #[test]
+    fn levels_restart_only_after_their_restart_level() {
+        let mut n = Numbering::default();
+        let id = n.add_list(ListKind::Legal);
+        if let Some(a) = n.abstracts.first_mut() {
+            // Level 3 restarts only after level 1; level 2 never restarts.
+            a.levels[2].restart_after = Some(1);
+            a.levels[2].text = "(%3)".into();
+            a.levels[1].restart = false;
+        }
+        let mut c = Counters::default();
+        let mut l = |lv| c.next_label(&n, id, lv).unwrap().0;
+        assert_eq!(l(0), "1.");
+        assert_eq!(l(1), "1.1.");
+        assert_eq!(l(2), "(1)");
+        assert_eq!(l(1), "1.2.");
+        assert_eq!(l(2), "(2)", "level 2 doesn't restart level 3");
+        assert_eq!(l(0), "2.");
+        assert_eq!(l(1), "2.3.", "level 2 never restarts");
+        assert_eq!(l(2), "(1)", "level 1 restarts level 3");
     }
 
     #[test]

@@ -293,5 +293,6 @@ fn level_of(l: &RawLvl, lvl_index: usize, fonts: &[String]) -> Level {
         restart: l.flags & 0x08 == 0,
         legal: l.flags & 0x04 != 0,
         style: None,
+        ..Level::default()
     }
 }

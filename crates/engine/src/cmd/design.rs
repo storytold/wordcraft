@@ -74,16 +74,9 @@ pub fn specs() -> Vec<CommandSpec> {
             sel_result(s)
         })
         .params(r#"{"color": "RRGGBB" | null}"#),
-        CommandSpec::new("design.pageBorders", "Page Borders", "Design › Page Background", |s, v| {
-            let kind = p::str(v, "kind").unwrap_or("box");
-            let w = p::f32(v, "width").unwrap_or(1.0).clamp(0.25, 6.0);
-            let color = p::str(v, "color").and_then(Rgb::parse);
-            let b = Border { style: BorderStyle::Single, width: w, color, space: 24.0 };
-            let block = s.sel.focus.path.0.first().copied().unwrap_or(0) as usize;
-            s.doc.section_mut(block).page_borders = if kind == "none" { None } else { Some(Borders::box_(b)) };
-            sel_result(s)
-        })
-        .params(r#"{"kind": "box|none", "width"?: pt, "color"?: "RRGGBB"}"#),
+        CommandSpec::new("design.pageBorders", "Page Borders", "Design › Page Background", page_borders).params(
+            r#"{"kind"?: "box|none", "width"?: pt, "color"?: "RRGGBB", "style"?: "single|double|dotted|dashed|thick|triple|dotDash|wave", "sides"?: {"top"|"left"|"bottom"|"right": {"style"?, "width"?: pt, "color"?: "RRGGBB"} | null} (exactly these sides, instead of `kind`), "applyTo"?: "section|document"}"#,
+        ),
         CommandSpec::new("design.setDefault", "Set as Default", "Design › Document Formatting", |s, _| {
             s.status = "These settings will be used for new documents.".into();
             sel_result(s)
@@ -218,5 +211,28 @@ fn watermark(s: &mut Session, v: &Value) -> CmdResult {
         wm.color = c;
     }
     s.doc.settings.watermark = Some(Watermark { ..wm });
+    sel_result(s)
+}
+
+/// Page borders of the caret's section (or every section with `applyTo: "document"`).
+fn page_borders(s: &mut Session, v: &Value) -> CmdResult {
+    let borders = match v.get("sides") {
+        Some(sides) => Some(super::para::border_sides(sides, 24.0, 24.0)?).filter(Borders::any_visible),
+        None => {
+            let kind = p::str(v, "kind").unwrap_or("box");
+            let width = p::f32(v, "width").unwrap_or(1.0).clamp(0.25, 6.0);
+            let color = p::str(v, "color").and_then(Rgb::parse);
+            let style = p::str(v, "style").map(BorderStyle::from_ooxml).unwrap_or(BorderStyle::Single);
+            (kind != "none").then(|| Borders::box_(Border { style, width, color, space: 24.0 }))
+        }
+    };
+    let blocks: Vec<usize> = match p::str(v, "applyTo") {
+        Some("document") => s.doc.sections().iter().map(|(end, _)| *end).collect(),
+        Some("section") | None => vec![s.sel.focus.path.0.first().copied().unwrap_or(0) as usize],
+        Some(x) => return Err(CmdError::Params(format!("unknown `applyTo` `{x}`"))),
+    };
+    for block in blocks {
+        s.doc.section_mut(block).page_borders = borders;
+    }
     sel_result(s)
 }

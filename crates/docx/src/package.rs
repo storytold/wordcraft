@@ -32,6 +32,9 @@ pub mod rt {
     pub const IMAGE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
     pub const HYPERLINK: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink";
     pub const VBA_PROJECT: &str = "http://schemas.microsoft.com/office/2006/relationships/vbaProject";
+    pub const CHART: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart";
+    pub const DIAGRAM_DATA: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramData";
+    pub const DIAGRAM_DRAWING: &str = "http://schemas.microsoft.com/office/2007/relationships/diagramDrawing";
 }
 
 /// `Document::passthrough` key for a macro project, kept as opaque bytes (never parsed or run).
@@ -42,6 +45,79 @@ pub const VBA_PROJECT_PART: &str = "word/vbaProject.bin";
 pub const VBA_RELATED: &str = "wordcraft:vbaProject.related";
 /// Most parts we carry along with a macro project.
 pub const MAX_VBA_RELATED: usize = 64;
+
+/// `Document::passthrough` key listing the parts that objects read from a file refer to (charts,
+/// SmartArt diagrams, OLE objects: see `wordcraft_doc::graphic::Embedded`), with their content
+/// types and own relationships, as [`EmbeddedManifest`] lines. Each part's bytes are kept under its
+/// part name. Not a package part: WordCraft's own bookkeeping.
+pub const EMBEDDED_PARTS: &str = "wordcraft:embedded.parts";
+/// Most parts we carry along for a file's embedded objects.
+pub const MAX_EMBEDDED_PARTS: usize = 4096;
+/// Most relationships we keep for one such part.
+pub const MAX_EMBEDDED_RELS: usize = 1024;
+/// Longest markup we keep for one embedded object.
+pub const MAX_EMBEDDED_XML: usize = 1024 * 1024;
+
+/// One part an embedded object needs: its content type and its own relationships (internal
+/// targets are part names).
+#[derive(Clone, Debug, Default)]
+pub struct EmbeddedPart {
+    pub content_type: String,
+    pub rels: Vec<Rel>,
+}
+
+/// The parts kept for embedded objects, by part name (see [`EMBEDDED_PARTS`]). Stored as text:
+/// `P\tpart\tcontent type` per part, then `R\tpart\tid\ttype\ttarget\tI|E` per relationship of
+/// that part (`E`: `target` is an external URL).
+#[derive(Clone, Debug, Default)]
+pub struct EmbeddedManifest {
+    pub parts: BTreeMap<String, EmbeddedPart>,
+}
+
+/// Can `s` be a field of a manifest line?
+pub fn manifest_field_ok(s: &str) -> bool {
+    !s.is_empty() && !s.contains(['\t', '\r', '\n'])
+}
+
+impl EmbeddedManifest {
+    pub fn parse(bytes: &[u8]) -> EmbeddedManifest {
+        let mut m = EmbeddedManifest::default();
+        for line in String::from_utf8_lossy(bytes).lines() {
+            let f: Vec<&str> = line.split('\t').collect();
+            match f.as_slice() {
+                ["P", part, ct] if m.parts.len() < MAX_EMBEDDED_PARTS => {
+                    m.parts.entry((*part).to_string()).or_insert_with(|| EmbeddedPart { content_type: (*ct).to_string(), rels: Vec::new() });
+                }
+                ["R", part, id, kind, target, mode] => {
+                    if let Some(p) = m.parts.get_mut(*part)
+                        && p.rels.len() < MAX_EMBEDDED_RELS
+                        && !p.rels.iter().any(|r| r.id == *id)
+                    {
+                        p.rels.push(Rel { id: (*id).to_string(), kind: (*kind).to_string(), target: (*target).to_string(), external: *mode == "E" });
+                    }
+                }
+                _ => {}
+            }
+        }
+        m
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut s = String::new();
+        for (part, p) in &self.parts {
+            if !manifest_field_ok(part) || !manifest_field_ok(&p.content_type) {
+                continue;
+            }
+            s.push_str(&format!("P\t{part}\t{}\n", p.content_type));
+        }
+        for (part, p) in &self.parts {
+            for r in p.rels.iter().filter(|r| [&r.id, &r.kind, &r.target].iter().all(|f| manifest_field_ok(f))) {
+                s.push_str(&format!("R\t{part}\t{}\t{}\t{}\t{}\n", r.id, r.kind, r.target, if r.external { "E" } else { "I" }));
+            }
+        }
+        s.into_bytes()
+    }
+}
 
 /// Does relationship type `t` end with `suffix` (ignoring the transitional/strict prefix)?
 pub fn rel_is(t: &str, full: &str) -> bool {
@@ -221,6 +297,21 @@ pub fn resolve(dir: &str, target: &str) -> String {
     parts.join("/")
 }
 
+/// The relative reference from part `from` to part `to` (both package paths), as a
+/// relationship target: `word/document.xml` → `word/charts/chart1.xml` is `charts/chart1.xml`.
+pub fn relative(from: &str, to: &str) -> String {
+    let from_dir: Vec<&str> = from.split('/').filter(|s| !s.is_empty()).collect();
+    let from_dir = from_dir.get(..from_dir.len().saturating_sub(1)).unwrap_or(&[]);
+    let to: Vec<&str> = to.split('/').filter(|s| !s.is_empty()).collect();
+    let to_dir = to.get(..to.len().saturating_sub(1)).unwrap_or(&[]);
+    let common = from_dir.iter().zip(to_dir).take_while(|(a, b)| a == b).count();
+    let mut out: Vec<&str> = vec![".."; from_dir.len() - common];
+    out.extend(to.get(common..).unwrap_or(&[]));
+    let s = out.join("/");
+    // A relative reference whose first segment has a colon would read as a URI scheme.
+    if s.split('/').next().is_some_and(|seg| seg.contains(':')) { format!("./{s}") } else { s }
+}
+
 /// Build a zip from (name, bytes) entries.
 pub fn zip_entries(entries: &[(String, Vec<u8>)]) -> Result<Vec<u8>, DocxError> {
     let mut zw = zip::ZipWriter::new(Cursor::new(Vec::new()));
@@ -281,5 +372,33 @@ mod tests {
         assert_eq!(resolve("word", "/word/styles.xml"), "word/styles.xml");
         assert_eq!(resolve("", "word/document.xml"), "word/document.xml");
         assert_eq!(resolve("word", "../../../x"), "x");
+    }
+
+    #[test]
+    fn relative_targets_resolve_back() {
+        for (from, to, want) in [
+            ("word/document.xml", "word/charts/chart1.xml", "charts/chart1.xml"),
+            ("word/charts/chart1.xml", "word/embeddings/book.xlsx", "../embeddings/book.xlsx"),
+            ("word/charts/chart1.xml", "word/charts/colors1.xml", "colors1.xml"),
+            ("word/document.xml", "customXml/item1.xml", "../customXml/item1.xml"),
+            ("word/document.xml", "word/a:b.bin", "./a:b.bin"),
+        ] {
+            let r = relative(from, to);
+            assert_eq!(r, want);
+            assert_eq!(resolve(from.rsplit_once('/').map_or("", |(d, _)| d), &r), to);
+        }
+    }
+
+    #[test]
+    fn embedded_manifest_round_trips_and_ignores_junk() {
+        let mut m = EmbeddedManifest::default();
+        let rel = Rel { id: "rId1".into(), kind: "k".into(), target: "word/embeddings/x.xlsx".into(), external: false };
+        let url = Rel { id: "rId2".into(), kind: "k".into(), target: "https://example.com/x".into(), external: true };
+        m.parts.insert("word/charts/chart1.xml".into(), EmbeddedPart { content_type: "ct".into(), rels: vec![rel, url] });
+        let back = EmbeddedManifest::parse(&m.to_bytes());
+        let p = &back.parts["word/charts/chart1.xml"];
+        assert_eq!((p.content_type.as_str(), p.rels.len(), p.rels[1].external), ("ct", 2, true));
+        let junk = EmbeddedManifest::parse(b"R\tnope\trId1\tk\tt\tI\nP\tonly-two\n\t\t\n\xff\xfe");
+        assert!(junk.parts.is_empty());
     }
 }

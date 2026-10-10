@@ -11,6 +11,7 @@
 # translated UI was consulted or copied; add entries the same way.
 # Product, format and technology names (WordCraft, PDF, Markdown, MCP …) stay in Latin letters.
 
+	(no style)	（无样式）
 	(no suggestions)	（无建议）
 	1.5 Line Spacing	1.5 倍行距
 	A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.	一款用 Rust 从零编写的免费开源文字处理软件。\n属于 ArtCraft 团队的 Crafting Apps 系列。
@@ -23,7 +24,11 @@
 	Add	添加
 	Add a comment	添加批注
 	Add a Table	添加表格
+	Add Object to Selection	将对象添加到所选内容
 	Add Space Before Paragraph	在段前添加间距
+	Add space between Asian and Latin text	在亚洲文字与西文之间添加间距
+	Add space between Asian text and numbers	在亚洲文字与数字之间添加间距
+	Add tab stop at:	制表位添加位置：
 	Add Text	添加文字
 	Add to Dictionary	添加到词典
 	Add to Style Gallery	添加到样式库
@@ -37,12 +42,16 @@
 	Align	对齐
 	Align Left	左对齐
 	Align Right	右对齐
+	Aligned at:	对齐位置：
 	Alignment	对齐方式
 	All Borders	所有框线
 	All Caps	全部大写
 	All caps	全部大写
 	All Markup	所有标记
+	Allow hanging punctuation	允许标点溢出边界
+	Allow Latin text to wrap in the middle of a word	允许西文在单词中间换行
 	Alt Text	替代文字
+	Apply Asian line-breaking rules (kinsoku)	应用亚洲文字的断行规则（禁则）
 	Apply Character Style	应用字符样式
 	Apply Style	应用样式
 	Apply Styles	选择并应用样式
@@ -50,6 +59,7 @@
 	Arrange\nAll	全部重排
 	Arrow	箭头
 	Artistic Effects	艺术效果
+	Asian Typography	亚洲版式
 	Author	作者
 	AutoCorrect Options	自动更正选项
 	AutoFit	自动调整
@@ -63,9 +73,55 @@
 	AutoSave	自动保存
 	AutoSave documents you have saved in WordCraft	自动保存在 WordCraft 中保存过的文档
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	自动保存失败：{error}。重新保存文档后将恢复自动保存。
+	Balloons	批注框
+	Bottom Margin	下边距
+	Click a border between two cells to merge them. Esc stops.	单击两个单元格之间的边框以合并它们。按 Esc 结束。
+	Bullet	项目符号
+	By author	按作者
+	Changed lines:	修订行：
+	Click level to modify:	单击要修改的级别：
+	Color only	仅颜色
+	Compress punctuation at the start of a line	压缩行首标点
 	Dark page (white text on black)	深色页面（黑底白字）
+	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	拖出矩形以绘制表格，或拖出穿过单元格的线条以拆分单元格。按 Esc 结束。
+	Draw Table	绘制表格
+	Define New Multilevel List	定义新的多级列表
+	Define New Multilevel List…	定义新的多级列表…
+	Deletions:	删除内容：
+	Edit Comment	编辑批注
+	Enter formatting for number:	输入编号的格式：
+	Follow number with:	编号之后：
+	Formatting	格式
+	Include level number from:	包含的级别编号来自：
+	Ink	墨迹
+	Insertions and Deletions	插入和删除
+	Insertions:	插入内容：
+	Left border	左框线
+	Left Margin	左边距
+	Indents and Spacing	缩进和间距
+	Legal style numbering	正规形式编号
+	Line breaking	断行
+	Link level to style:	将级别链接到样式：
+	List Definition	列表定义
+	More templates →	更多模板 →
+	No templates match your search.	没有与搜索匹配的模板。
+	Nothing	无
+	Number alignment:	编号对齐方式：
+	Number format	编号格式
+	Number style for this level:	此级别的编号样式：
+	Outside border	外侧框线
+	Reopen	重新打开
+	Restart list after:	重新开始列表的级别：
+	Right border	右框线
+	Right Margin	右边距
+	Search for templates	搜索模板
+	Show all revisions inline	以嵌入方式显示所有修订
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	像“视图 › 切换模式”一样以反转的颜色显示文档。保存、打印和 PDF 不受影响。
 	AutoSave saves every change to the file (needs a saved document)	自动保存会把每次更改写入文件（文档需已保存）
+	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	浏览器中无法使用自动保存：它不能写入你的文件。保存会下载一份副本。
+	AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave.	自动保存仅适用于 .docx、.odt 和 .rtf 文件；{name} 无法保留全部格式。另存为 .docx 即可开启自动保存。
+	Save the document to turn on AutoSave	保存文档后即可开启自动保存
+	Save the document to turn on AutoSave (a file you have only opened isn't rewritten until you save it)	保存文档后即可开启自动保存（仅打开过的文件在你保存之前不会被改写）
 	AutoText	自动图文集
 	Backspace	退格
 	Banded Columns	镶边列
@@ -85,6 +141,29 @@
 	Border Painter	边框刷
 	Border\nPainter	边框刷
 	Borders	边框
+	Tab stop position:	制表位位置：
+	Default tab stops:	默认制表位：
+	Tab stops to be cleared:	要清除的制表位：
+	All	全部
+	Decimal	小数点对齐
+	Bar	竖线对齐
+	Leader	前导符
+	Set	设置
+	Page Border	页面边框线
+	Apply to:	应用于：
+	Whole document	整篇文档
+	This section	本节
+	Fill	填充
+	Setting:	设置：
+	3-D	三维
+	Custom	自定义
+	Style:	样式：
+	Dot dash	点划线
+	Triple	三线
+	Between	段落之间
+	Borders and Shading	边框和底纹
+	Tabs…	制表位…
+	Borders and Shading…	边框和底纹…
 	Bottom Border	下框线
 	Bottom of Page	页面底端
 	Bottom:	下：
@@ -125,6 +204,15 @@
 	Clear	清除
 	Clear All Formatting	清除所有格式
 	Clipboard	剪贴板
+	Clipboard Pane	剪贴板窗格
+	Clipboard Items	剪贴板项目
+	Paste Clipboard Item	粘贴剪贴板项目
+	Paste All	全部粘贴
+	Delete Clipboard Item	删除剪贴板项目
+	Clear All	全部清除
+	Click an item to paste it.	单击项目即可粘贴。
+	Nothing collected yet. Items you copy or cut appear here.	尚无内容。复制或剪切的项目会显示在这里。
+	(picture or object)	（图片或对象）
 	Close	关闭
 	Close Header and Footer	关闭页眉和页脚
 	Collapse Selection	折叠选定内容
@@ -168,7 +256,6 @@
 	Customize Quick Access Toolbar	自定义快速访问工具栏
 	Cut	剪切
 	Dark Mode	深色模式
-	Dark mode	深色模式
 	Dashed	虚线
 	Data	数据
 	Date & Time	日期和时间
@@ -641,6 +728,8 @@
 	Show Comments	显示批注
 	Show Markup	显示标记
 	Show Notes	显示备注
+	Show only comments and formatting in balloons	仅在批注框中显示批注和格式
+	Show revisions in balloons	在批注框中显示修订
 	Show rulers	显示标尺
 	Show the community button in the title bar	在标题栏中显示社区按钮
 	Show/Hide ¶	显示/隐藏 ¶
@@ -658,6 +747,7 @@
 	SmartArt	SmartArt
 	Sort	排序
 	Source code: github.com/storytold/wordcraft	源代码：github.com/storytold/wordcraft
+	Space	空格
 	Space before/after:	段前/段后间距：
 	Spacing	间距
 	Spacing (pt):	间距（磅）：
@@ -671,6 +761,7 @@
 	Spreadsheet Table	电子表格
 	Standard Colors	标准色
 	Star	星形
+	Start at:	起始编号：
 	Start Mail Merge	开始邮件合并
 	Start Mail\nMerge	开始邮件合并
 	Statistics	统计信息
@@ -692,6 +783,7 @@
 	Symbols	符号
 	Synonyms	同义词
 	Tab	制表符
+	Tab character	制表符
 	Table	表格
 	Table Column Width	表格列宽
 	Table Design	表设计
@@ -714,6 +806,7 @@
 	Text Effects and Typography	文本效果和版式
 	Text from File	文件中的文字
 	Text Highlight Color	文本突出显示颜色
+	Text indent at:	文本缩进位置：
 	Text to display:	要显示的文字：
 	Text Wrapping	文字环绕
 	Text:	文字：
@@ -730,11 +823,14 @@
 	Three	三栏
 	Tight	紧密
 	Top Border	上框线
+	Top Margin	上边距
 	Top of Page	页面顶端
 	Top:	上：
 	Total Row	汇总行
 	Track Changes	修订
+	Track Changes Options	修订选项
 	Track Changes: On	修订：打开
+	Track formatting	跟踪格式设置
 	Tracking	修订
 	Translate	翻译
 	Transparency	透明度
@@ -746,6 +842,7 @@
 	Underline Words Only	仅给字词加下划线
 	Undo	撤消
 	Undo {action}	撤消{action}
+	Ungroup	取消组合
 	Up	上
 	Update Field	更新域
 	Update Index	更新索引
@@ -789,13 +886,13 @@
 	Wrap Text	环绕文字
 	Wrap\nText	环绕文字
 	Write & Insert Fields	编写和插入域
+	Write a reply	写回复
 	Zoom	缩放
 	Zoom In	放大
 	Zoom Out	缩小
 	{group} settings	{group}设置
 	{key}+Click to follow link	按住 {key} 并单击可访问链接
-	➕ New comment	➕ 新建批注
-	📂  Browse…	📂  浏览…
+	Browse…	浏览…
 	{words} words	{words} 个字
 	{selected} of {words} words	{selected}/{words} 个字
 	Direction:	方向：
@@ -889,3 +986,340 @@
 	Opening print dialog…	正在打开打印对话框…
 	Print failed: {error}	打印失败：{error}
 	Couldn't open {path}: {error}	无法打开 {path}：{error}
+	Column Selection	矩形选择
+	Style Inspector	样式检查器
+	Inspect Styles at Selection	检查所选内容的样式
+	Clear Formatting Level	清除格式级别
+	Characters	字符
+	Direct formatting	直接格式
+	Reset to Normal	重置为正文
+	Clear Paragraph Formatting	清除段落格式
+	Clear Character Style	清除字符样式
+	Clear Character Formatting	清除字符格式
+	Paste Special	选择性粘贴
+	Paste Special…	选择性粘贴…
+	Paste as:	粘贴为：
+	The clipboard is empty.	剪贴板为空。
+	Formatted Text	带格式文本
+	Rich Text Format (RTF)	RTF 格式
+	HTML Format	HTML 格式
+	Unformatted Text	无格式文本
+	Result	结果
+	Keeps the fonts and formatting of the copied text.	保留所复制文本的字体和格式。
+	Reads the clipboard's rich text and keeps its formatting.	读取剪贴板中的 RTF 内容并保留其格式。
+	Reads the clipboard's web content and keeps its formatting.	读取剪贴板中的网页内容并保留其格式。
+	Drops all formatting and pastes plain text.	去除所有格式，粘贴纯文本。
+	Advanced Find	高级查找
+	Advanced Find…	高级查找…
+	Go To…	定位…
+	Reading Highlight	突出显示查找结果
+	New Table Style	新建表格样式
+	Modify Table Style	修改表格样式
+	New Table Style…	新建表格样式…
+	Modify Table Style…	修改表格样式…
+	Apply formatting to:	将格式应用于：
+	Whole Table	整个表格
+	Fill color:	填充颜色：
+	{count} items highlighted	已突出显示 {count} 项
+	{n} pt	{n} 磅
+	Not {name}	非{name}
+	Level {n}	{n} 级
+	Body Text	正文文本
+	{n} lines	{n} 行
+	At least {n}	最小值 {n}
+	Exactly {n}	固定值 {n}
+	Centered	居中
+	Character spacing	字符间距
+	Don't add space between paragraphs of the same style	相同样式的段落间不添加间距
+	Don't hyphenate	不断字
+	Double strikethrough	双删除线
+	Drop cap	首字下沉
+	First line	首行
+	Font color	字体颜色
+	Highlight	突出显示
+	Justified	两端对齐
+	Left indent	左缩进
+	Line spacing	行距
+	Outline level	大纲级别
+	Raised/lowered	提升/降低
+	Right indent	右缩进
+	Scale	缩放
+	Space after	段后间距
+	Space before	段前间距
+	Suppress line numbers	取消行号
+	Underline color	下划线颜色
+	Letters	信函
+	E-mail Messages	电子邮件
+	Directory	目录
+	Normal Word Document	普通文档
+	If…Then…Else…	如果…则…否则…
+	If…Then…Else	如果…则…否则
+	Merge Record #	合并记录编号
+	Skip Record If…	跳过记录条件…
+	Skip Record If	跳过记录条件
+	Equals:	等于：
+	Then insert:	则插入：
+	Otherwise insert:	否则插入：
+	Courtesy Title	称谓
+	First Name	名
+	Last Name	姓
+	Company	公司
+	Address	地址
+	City	城市
+	State	省/州
+	Postal Code	邮政编码
+	Country	国家/地区
+	(not matched)	（未匹配）
+	Leave a recipient out of the merge when a field has this value.	当某个域为此值时，在合并中跳过该收件人。
+	Insert one text or another, depending on a field's value.	根据域的值插入不同的文本。
+	Select recipients first to match their fields.	请先选择收件人，才能匹配其域。
+	The recipient-list field that fills each part of an address block and greeting line.	地址块和问候语的每一部分所使用的收件人列表域。
+	No errors found: every merge field is in the recipient list.	未发现错误：所有合并域都在收件人列表中。
+	These merge fields aren't in the recipient list:	以下合并域不在收件人列表中：
+	Add at least one field.	请至少添加一个域。
+	Add Field	添加域
+	Every field needs a name.	每个域都需要名称。
+	Field name	域名称
+	Field names must be different.	域名称不能重复。
+	Fields:	域：
+	Field:	域：
+	Find:	查找：
+	New Entry	新建条目
+	Recipient List	收件人列表
+	Recipients: {count}	收件人：{count}
+	Remove field	删除域
+	Remove recipient	删除收件人
+	Select recipients first to choose from their fields.	请先选择收件人，才能从其域中选择。
+	Type a New List…	键入新列表…
+	Type at least one recipient.	请至少键入一个收件人。
+	Type the recipients, or load them from a file.	键入收件人，或从文件加载。
+	Use an Existing List…	使用现有列表…
+	Interface theme:	界面主题：
+	Interface\nTheme	界面主题
+	Interface Theme	界面主题
+	Light	浅色
+	Dark	深色
+	Use system setting	使用系统设置
+	A file dialog is already open.	已有一个文件对话框处于打开状态。
+	Height:	高度：
+	Width:	宽度：
+	Row	行
+	Cell	单元格
+	Preferred width:	首选宽度：
+	Alignment:	对齐方式：
+	Indent from left:	左缩进：
+	Specify height:	指定高度：
+	Exactly	固定值
+	At least	最小值
+	Allow row to break across pages	允许跨页断行
+	Repeat as header row on each page	在各页重复作为标题行
+	Vertical alignment:	垂直对齐方式：
+	Top	顶端
+	Bottom	底端
+	Alt text	替代文字
+	Alt:	替代文字：
+	W:	宽：
+	H:	高：
+	Reset	重设
+	Reset Crop	重设裁剪
+	Insert a new equation (Alt+=)	插入新公式 (Alt+=)
+	Leave the equation (Esc)	退出公式 (Esc)
+	Preview	预览
+	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft
+	Draw Ink	绘制墨迹
+	Erase Ink	擦除墨迹
+	Hide Ink	隐藏墨迹
+	Hide\nInk	隐藏\n墨迹
+	Pens	笔
+	Thickness	粗细
+
+# Columns, Symbol and Field dialogs (#321).
+	(All)	(全部)
+	(none)	(无)
+	(normal text)	(普通文本)
+	1/4 Em Space	1/4 全角空格
+	A mail merge field	邮件合并域
+	A numbered sequence (figures, tables…)	编号序列（图、表…）
+	A table of contents	目录
+	Categories:	类别：
+	Character	字符
+	Character code:	字符代码：
+	Col #:	栏号：
+	Copyright	版权
+	Date and Time	日期和时间
+	Date formats:	日期格式：
+	Description:	说明：
+	Document Information	文档信息
+	Double Closing Quote	右双引号
+	Double Opening Quote	左双引号
+	Ellipsis	省略号
+	Em Dash	长破折号
+	En Dash	短破折号
+	Em Space	全角空格
+	En Space	半角空格
+	Equal column width	栏宽相等
+	Field Codes	域代码
+	Field code:	域代码：
+	Field codes:	域代码：
+	Field name:	域名：
+	Field names:	域名列表：
+	Field properties	域属性
+	Field…	域…
+	Format:	格式：
+	Hide Codes	隐藏代码
+	Index and Tables	索引和目录
+	Line between	分隔线
+	Links and References	链接和引用
+	Mail Merge	邮件合并
+	More Columns…	更多栏…
+	More Symbols…	其他符号…
+	No-Width Non Break	无宽非分隔符
+	No-Width Optional Break	无宽可选分隔符
+	Paragraph Mark	段落标记
+	Pick a field from the list	请选择域
+	Preserve formatting during updates	更新时保留格式
+	Presets	预设
+	Recently used symbols:	近期使用过的符号：
+	Registered	注册商标
+	Section Mark	章节符号
+	Sequence name:	序列名称：
+	Shortcut key:	快捷键：
+	Single Closing Quote	右单引号
+	Single Opening Quote	左单引号
+	Spacing:	间距：
+	Special Characters	特殊字符
+	Subset:	子集：
+	The time right now	当前时间
+	When this document was first created	文档的创建日期
+	When this document was most recently printed	文档的上次打印日期
+	When this document was most recently saved	文档的上次保存日期
+	The document has no bookmarks yet.	文档中还没有书签。
+	Who the document properties name as author	文档作者
+	Name of the file this document is saved as	文档的文件名
+	Title from the document properties	文档标题
+	How many pages the whole document has	文档的页数
+	How many pages this section has	本节的页数
+	Number of the page the field sits on	当前页码
+	Number of the section the field sits in	当前节号
+	How many words the document holds	文档的字数
+	Page on which a bookmarked passage falls	书签所在的页码
+	Copy of the text a bookmark marks	书签的文本
+	This field has no options.	此域没有选项。
+	This font has no characters to show.	此字体没有可显示的字符。
+	This point forward	插入点之后
+	The date it is today	今天的日期
+	Trademark	商标
+	Type the field's name and its switches, for example PAGE \\* roman.	键入域名及其开关，例如 PAGE \\* roman。
+	Width and spacing	宽度和间距
+	from Unicode (hex)	来自 Unicode（十六进制）
+	Shape Effects	形状效果
+	Glow	发光
+	Soft Edges	柔化边缘
+	No Shadow	无阴影
+	No Glow	无发光
+	No Soft Edges	无柔化边缘
+	Glow Colors	发光颜色
+	Weight	粗细
+	Shadow, glow and soft edges	阴影、发光和柔化边缘
+	Offset: Bottom Right	偏移：右下
+	Offset: Bottom	偏移：下
+	Offset: Bottom Left	偏移：左下
+	Offset: Right	偏移：右
+	Offset: Center	偏移：居中
+	Offset: Left	偏移：左
+	Offset: Top Right	偏移：右上
+	Offset: Top	偏移：上
+	Offset: Top Left	偏移：左上
+	Manage Styles	管理样式
+	Show or Hide Style	显示或隐藏样式
+	Manage Styles…	管理样式…
+	Sort order:	排序方式：
+	As Recommended	按推荐
+	Alphabetical	按字母顺序
+	Font: {font}	字体：{font}
+	{size} pt	{size} 磅
+	Color: {color}	颜色：{color}
+	Space before: {pt} pt	段前间距：{pt} 磅
+	Space after: {pt} pt	段后间距：{pt} 磅
+	Based on: {style}	基于：{style}
+	Paragraph style	段落样式
+	Character style	字符样式
+	Linked style (paragraph and character)	链接样式（段落和字符）
+	Table style	表格样式
+	Built-in style	内置样式
+	Show in the Styles gallery	在样式库中显示
+	Hide from style lists	在样式列表中隐藏
+	Built-in styles can't be deleted.	内置样式不能删除。
+	Delete Table Style	删除表格样式
+	Password	密码
+	Password:	密码：
+	Confirm password:	确认密码：
+	Encrypt with Password…	用密码进行加密…
+	Change Password…	更改密码…
+	Remove Password	删除密码
+	A password is required to open this document.	打开此文档需要密码。
+	Anyone can open this document. Encrypt it with a password to keep it private.	任何人都可以打开此文档。用密码加密可保护其隐私。
+	Anyone who opens the document will need this password.	打开文档的任何人都需要此密码。
+	{name} is protected with a password.	{name} 受密码保护。
+	That password isn't right. Check it (passwords are case-sensitive) and try again.	密码不正确。请检查密码（区分大小写）后重试。
+	The document will be saved with a password. Save it to protect it.	文档将使用密码保存。保存文档以保护它。
+	The password is removed. Save the document to keep the change.	密码已删除。保存文档以保留此更改。
+	The passwords don't match.	两次输入的密码不一致。
+	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	请妥善保管密码：没有密码，任何人（包括 WordCraft）都无法打开文档。两个框都留空可删除密码。
+
+# Interface text routed through translation (#313)
+	Align Top Left	靠上左对齐
+	Align Top Center	靠上居中对齐
+	Align Top Right	靠上右对齐
+	Align Center Left	中部左对齐
+	Align Center	水平居中
+	Align Center Right	中部右对齐
+	Align Bottom Left	靠下左对齐
+	Align Bottom Center	靠下居中对齐
+	Align Bottom Right	靠下右对齐
+	{contributors} contributors · {commits} commits	{contributors} 位贡献者 · {commits} 次提交
+	{cols}×{rows} Table	{cols}×{rows} 表格
+	AaBbYyZz	AaBbYyZz 中文
+	pt	磅
+	Document1	文档1
+	Username	用户名
+	Display name	显示名称
+	Real name	真实姓名
+	Name	名称
+	PRs	PR
+	Commits	提交
+	First	首次
+	Last	最近
+	Model	模型
+	Version	版本
+	% of all commits	占全部提交的百分比
+	Lines +/−	行数 +/−
+	Craft	工艺
+	Studio	工作室
+	Atelier	画室
+	Darkroom	暗房
+	Gallery	画廊
+	Sketchbook	速写本
+	Change Picture…	更改图片…
+	Font…	字体…
+	Paragraph…	段落…
+	Link…	链接…
+	Size and Crop…	大小和裁剪…
+	Insert Columns to the Left	在左侧插入列
+	Insert Columns to the Right	在右侧插入列
+	Insert Rows Above	在上方插入行
+	Insert Rows Below	在下方插入行
+	Mon	周一
+	Tue	周二
+	Wed	周三
+	Sum	合计
+	North	北区
+	South	南区
+	West	西区
+	Total	总计
+	Rotation	旋转角度
+	Rotation:	旋转：
+	Rotate Right 90°	向右旋转 90°
+	Rotate Left 90°	向左旋转 90°
+	Flip Vertical	垂直翻转
+	Flip Horizontal	水平翻转

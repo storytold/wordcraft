@@ -1,9 +1,12 @@
 # Typing parity with Word
 
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** trivial (status line, revision history and links to the other parity docs added; behaviour unchanged) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+
 What Word does when you type, observed black-box (same keystrokes typed into Word and
 WordCraft, results read back paragraph by paragraph) and pinned by tests in
 `crates/engine/src/tests_typing.rs`. When typing behaviour changes, change it here and in the
-tests together.
+tests together. Line breaking and pagination are in [`layout-parity.md`](layout-parity.md); the
+overall picture is in [`target-app-parity.md`](target-app-parity.md).
 
 ## Lists
 
@@ -20,6 +23,13 @@ tests together.
 | `* ` `- ` `1. ` `1) ` `a. ` `a) ` `A. ` `i. ` `I. ` + text | bullet, dash bullet, 1. 1) a. a) A. i. I. lists | `list_autoformat_triggers` |
 | `1. ` after other text | a new list restarting at 1 (never continues an earlier list) | `typing_1_dot_starts_numbering_again` |
 | ⌘Z right after an AutoFormat | undoes only the AutoFormat (`* ` comes back as text) | `undo_right_after_autoformat_undoes_only_the_autoformat` |
+
+## Track Changes
+
+| Keys | Word's result | Test |
+|---|---|---|
+| Enter (tracking on) | the new paragraph mark is a tracked insertion; Reject All joins the paragraphs again, Accept All keeps them | `tracked_enter_and_backspace_track_the_paragraph_mark`, `tests::reject_all_removes_a_tracked_paragraph_break` |
+| Backspace at a paragraph start / Delete at a paragraph end (tracking on) | the paragraph mark is marked deleted (still shown); the caret moves before it (Backspace) or past it (Delete). Accept joins the paragraphs, Reject keeps them. A mark you inserted yourself is just removed | `tracked_enter_and_backspace_track_the_paragraph_mark`, `tests::tracked_backspace_and_delete_mark_a_paragraph_break_deleted` |
 
 ## AutoCorrect and AutoFormat as you type
 
@@ -57,3 +67,11 @@ Applied when a word is finished by a space, punctuation **or Enter** (`enter_fin
   paragraphs, export PDF). Keystroke runs steal focus and race the person at the keyboard: keep
   them short, read the document back to verify, and ask first. Screenshots of Word's window only,
   under `plan/word/screenshots/`.
+
+## Revision history
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-10-10 | trivial | Status line, revision history and cross-links added (progress-docs standard) |
+| 2026-10-10 | minor | Track Changes rows: tracked Enter, Backspace and Delete on paragraph marks (#244) |
+| 2026-10-10 | major | First version: lists, AutoCorrect and AutoFormat as you type, observed against Word (#204) |

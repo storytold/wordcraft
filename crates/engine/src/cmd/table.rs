@@ -1,7 +1,7 @@
 //! Table Design and Table Layout tabs.
 
 use serde_json::{Value, json};
-use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, Rgb, VAlign};
+use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, HeightRule, Rgb, TextDirection, VAlign};
 use wordcraft_doc::{Block, Paragraph, Path, Pos, StoryRef, Table, para_block};
 
 use super::sel_result;
@@ -44,7 +44,7 @@ pub fn specs() -> Vec<CommandSpec> {
         t(CommandSpec::new("table.splitTable", "Split Table", "Table Layout › Merge", split_table)),
         t(CommandSpec::new("table.style", "Table Styles", "Table Design › Table Styles", |s, v| {
             let st = p::req_str(v, "style")?;
-            let id = s.doc.styles.find(st).map(|x| x.id.clone()).ok_or_else(|| CmdError::Params(format!("no table style `{st}`")))?;
+            let id = super::table_style::table_style_id(s, st).ok_or_else(|| CmdError::Params(format!("no table style `{st}`")))?;
             with_table(s, |t| t.props.style = Some(id.clone()))
         })
         .params(r#"{"style": string}"#)),
@@ -94,30 +94,15 @@ pub fn specs() -> Vec<CommandSpec> {
             })
         })
         .params(r#"{"value": "topLeft|topCenter|…|bottomRight"}"#)),
-        t(CommandSpec::new("table.autofit", "AutoFit", "Table Layout › Cell Size", |s, v| {
-            let mode = p::str(v, "mode").unwrap_or("window");
-            let tw = super::page::sect(s).text_width();
-            with_table(s, |t| match mode {
-                "fixed" => t.props.fixed = true,
-                "contents" => {
-                    t.props.fixed = false;
-                    t.props.width = None;
-                    t.props.width_pct = None;
-                }
-                _ => {
-                    t.props.fixed = false;
-                    t.props.width_pct = Some(100.0);
-                    let n = t.grid.len().max(1) as f32;
-                    t.grid.iter_mut().for_each(|g| *g = tw / n);
-                }
-            })
-        })
-        .params(r#"{"mode": "contents|window|fixed"}"#)),
+        t(CommandSpec::new("table.textDirection", "Text Direction", "Table Layout › Alignment", text_direction)
+            .params(r#"{"value"?: "horizontal|down|up"} (default: the next direction after the caret cell's, like Word's button)"#)),
+        t(CommandSpec::new("table.autofit", "AutoFit", "Table Layout › Cell Size", autofit).params(r#"{"mode": "contents|window|fixed"}"#)),
         t(CommandSpec::new("table.distributeColumns", "Distribute Columns", "Table Layout › Cell Size", |s, _| {
             with_table(s, |t| {
                 let total: f32 = t.grid.iter().sum();
                 let n = t.grid.len().max(1) as f32;
                 t.grid.iter_mut().for_each(|g| *g = total / n);
+                sync_cell_widths(t);
             })
         })),
         t(CommandSpec::new("table.distributeRows", "Distribute Rows", "Table Layout › Cell Size", |s, _| {
@@ -131,25 +116,25 @@ pub fn specs() -> Vec<CommandSpec> {
         t(CommandSpec::new("table.columnWidth", "Table Column Width", "Table Layout › Cell Size", |s, v| {
             let w = p::req_f32(v, "width")?.clamp(6.0, 1584.0);
             let (_, r, c) = cell(s)?;
-            with_table(s, |t| {
-                let g = t.grid_col(r, c);
-                if let Some(x) = t.grid.get_mut(g) {
-                    *x = w;
-                }
-            })
+            with_table(s, |t| set_column_width(t, r, c, w))
         })
-        .params(r#"{"width": pt}"#)),
+        .params(r#"{"width": pt} (the caret cell's column; the table's preferred width is cleared so the column gets exactly this)"#)),
         t(CommandSpec::new("table.rowHeight", "Table Row Height", "Table Layout › Cell Size", |s, v| {
             let h = p::req_f32(v, "height")?.clamp(1.0, 1584.0);
+            let rule = match p::str(v, "rule") {
+                None | Some("atLeast") => HeightRule::AtLeast,
+                Some("exact") => HeightRule::Exact,
+                Some(x) => return Err(CmdError::Params(format!("unknown height rule `{x}`"))),
+            };
             let (_, r, _) = cell(s)?;
             with_table(s, |t| {
                 if let Some(row) = t.rows.get_mut(r) {
                     row.props.height = Some(h);
-                    row.props.height_rule = wordcraft_doc::props::HeightRule::AtLeast;
+                    row.props.height_rule = rule;
                 }
             })
         })
-        .params(r#"{"height": pt}"#)),
+        .params(r#"{"height": pt, "rule"?: "atLeast|exact"}"#)),
         t(CommandSpec::new("table.repeatHeader", "Repeat Header Rows", "Table Layout › Data", |s, v| {
             let (_, r, _) = cell(s)?;
             let on = p::bool(v, "value");
@@ -178,20 +163,9 @@ pub fn specs() -> Vec<CommandSpec> {
             select_cells(s, &tp, Some((r, Some(c))))
         })
         .pure()),
-        t(CommandSpec::new("table.properties", "Properties", "Table Layout › Table", |s, v| {
-            if let Some(a) = p::str(v, "align") {
-                let al = match a {
-                    "center" => Align::Center,
-                    "right" => Align::Right,
-                    _ => Align::Left,
-                };
-                return with_table(s, |t| t.props.align = Some(al));
-            }
-            let (tp, _, _) = cell(s)?;
-            let t = s.doc.table(s.sel.focus.story, &tp).cloned().unwrap_or_default();
-            Ok(serde_json::to_value(&t.props).unwrap_or(Value::Null))
-        })
-        .params(r#"{"align"?: "left|center|right"}"#)),
+        t(CommandSpec::new("table.properties", "Properties", "Table Layout › Table", properties).params(
+            r#"{"align"?: "left|center|right", "width"?: pt|null, "widthPct"?: percent, "indent"?: pt, "rowHeight"?: pt|null, "rowHeightRule"?: "atLeast|exact", "allowBreak"?: bool, "headerRow"?: bool, "columnWidth"?: pt, "cellWidth"?: pt|null, "valign"?: "top|center|bottom"} (row, column and cell settings apply to the caret's; without settings it returns the current ones)"#,
+        )),
         t(CommandSpec::new("table.direction", "Table Direction", "Table Layout › Table", |s, v| {
             let want = match p::str(v, "direction") {
                 // Omitted (or null): toggles, like the paragraph direction commands.
@@ -206,6 +180,163 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("table.fromText", "Convert Text to Table", "Insert › Tables", from_text).params(r#"{"separator"?: "tab|comma"}"#),
         CommandSpec::new("table.quick", "Quick Tables", "Insert › Tables", quick_table).params(r#"{"kind"?: "calendar|tabular|matrix"}"#),
     ]
+}
+
+/// Table Layout › AutoFit: Contents sizes the columns to their text, Window spreads them across
+/// the text column, Fixed keeps the widths as they are.
+fn autofit(s: &mut Session, v: &Value) -> CmdResult {
+    let mode = p::str(v, "mode").unwrap_or("window");
+    let (tp, _, _) = cell(s)?;
+    let story = s.sel.focus.story;
+    let tw = super::page::sect(s).text_width();
+    match mode {
+        "fixed" => with_table(s, |t| t.props.fixed = true),
+        "contents" => {
+            let t = s.doc.table(story, &tp).ok_or_else(|| CmdError::Disabled("the cursor isn't in a table".into()))?;
+            let avail = (tw - t.props.indent.filter(|i| i.is_finite()).unwrap_or(0.0).max(0.0)).max(72.0);
+            let widths = wordcraft_layout::autofit_widths(&wordcraft_layout::measure_table_columns(&s.doc, t), avail);
+            with_table(s, |t| {
+                t.props.fixed = false;
+                t.props.width = None;
+                t.props.width_pct = None;
+                t.grid = widths.iter().map(|w| w.max(6.0)).collect();
+                sync_cell_widths(t);
+            })
+        }
+        _ => with_table(s, |t| {
+            t.props.fixed = false;
+            t.props.width_pct = Some(100.0);
+            let n = t.grid.len().max(1) as f32;
+            t.grid.iter_mut().for_each(|g| *g = tw / n);
+            sync_cell_widths(t);
+        }),
+    }
+}
+
+/// Give every cell the width of the grid columns it spans, so the cells' preferred widths
+/// (saved to .docx) agree with the grid.
+pub(crate) fn sync_cell_widths(t: &mut Table) {
+    let grid = t.grid.clone();
+    for row in &mut t.rows {
+        let mut g = 0usize;
+        for c in &mut row.cells {
+            let span = c.span();
+            let w: f32 = grid.get(g..g.saturating_add(span).min(grid.len())).unwrap_or(&[]).iter().sum();
+            if w > 0.0 {
+                c.props.width = Some(w);
+            }
+            g += span;
+        }
+    }
+}
+
+/// Set the width of the grid column cell `c` of row `r` starts in. The table's preferred width
+/// goes, so the layout doesn't scale the column back.
+fn set_column_width(t: &mut Table, r: usize, c: usize, w: f32) {
+    let g = t.grid_col(r, c);
+    if let Some(x) = t.grid.get_mut(g) {
+        *x = w;
+        t.props.width = None;
+        t.props.width_pct = None;
+        sync_cell_widths(t);
+    }
+}
+
+/// Table Properties: table, row, column and cell settings in one undoable step. Row, column and
+/// cell settings apply to the caret's. Without any setting it returns the current values.
+fn properties(s: &mut Session, v: &Value) -> CmdResult {
+    let (tp, r, c) = cell(s)?;
+    let keys =
+        ["align", "width", "widthPct", "indent", "rowHeight", "rowHeightRule", "allowBreak", "headerRow", "columnWidth", "cellWidth", "valign"];
+    if !keys.iter().any(|k| v.get(*k).is_some()) {
+        let t = s.doc.table(s.sel.focus.story, &tp).cloned().unwrap_or_default();
+        let mut out = serde_json::to_value(&t.props).unwrap_or(Value::Null);
+        let row = t.rows.get(r);
+        let cl = row.and_then(|x| x.cells.get(c));
+        if let Some(o) = out.as_object_mut() {
+            o.insert("row".into(), row.map(|x| serde_json::to_value(&x.props).unwrap_or(Value::Null)).unwrap_or(Value::Null));
+            o.insert("columnWidth".into(), t.grid.get(t.grid_col(r, c)).map_or(Value::Null, |w| json!(w)));
+            o.insert("cell".into(), cl.map(|x| serde_json::to_value(&x.props).unwrap_or(Value::Null)).unwrap_or(Value::Null));
+        }
+        return Ok(out);
+    }
+    let align = match p::str(v, "align") {
+        None => None,
+        Some("left") => Some(Align::Left),
+        Some("center") => Some(Align::Center),
+        Some("right") => Some(Align::Right),
+        Some(x) => return Err(CmdError::Params(format!("unknown table alignment `{x}`"))),
+    };
+    let rule = match p::str(v, "rowHeightRule") {
+        None => None,
+        Some("atLeast") => Some(HeightRule::AtLeast),
+        Some("exact") => Some(HeightRule::Exact),
+        Some(x) => return Err(CmdError::Params(format!("unknown height rule `{x}`"))),
+    };
+    let valign = match p::str(v, "valign") {
+        None => None,
+        Some("top") => Some(VAlign::Top),
+        Some("center") => Some(VAlign::Center),
+        Some("bottom") => Some(VAlign::Bottom),
+        Some(x) => return Err(CmdError::Params(format!("unknown vertical alignment `{x}`"))),
+    };
+    // `null` clears a preferred size (automatic); a number sets it.
+    let size = |k: &str, lo: f32, hi: f32| -> Option<Option<f32>> {
+        match v.get(k)? {
+            Value::Null => Some(None),
+            x => x.as_f64().map(|f| f as f32).filter(|f| f.is_finite()).map(|f| Some(f.clamp(lo, hi))),
+        }
+    };
+    let width = size("width", 6.0, 1584.0);
+    let width_pct = p::f32(v, "widthPct").map(|x| x.clamp(1.0, 100.0));
+    let indent = p::f32(v, "indent").map(|x| x.clamp(-1584.0, 1584.0));
+    let row_height = size("rowHeight", 1.0, 1584.0);
+    let allow_break = p::bool(v, "allowBreak");
+    let header = p::bool(v, "headerRow");
+    let column_width = p::f32(v, "columnWidth").map(|x| x.clamp(6.0, 1584.0));
+    let cell_width = size("cellWidth", 6.0, 1584.0);
+    with_table(s, |t| {
+        if let Some(a) = align {
+            t.props.align = Some(a);
+        }
+        if let Some(i) = indent {
+            t.props.indent = Some(i);
+        }
+        if let Some(cw) = column_width {
+            set_column_width(t, r, c, cw);
+        }
+        if let Some(w) = width {
+            t.props.width = w;
+            t.props.width_pct = None;
+        }
+        if let Some(pct) = width_pct {
+            t.props.width_pct = Some(pct);
+        }
+        if let Some(row) = t.rows.get_mut(r) {
+            if let Some(h) = row_height {
+                row.props.height = h;
+                row.props.height_rule = if h.is_some() { rule.unwrap_or(HeightRule::AtLeast) } else { HeightRule::Auto };
+            } else if let Some(rule) = rule
+                && row.props.height.is_some()
+            {
+                row.props.height_rule = rule;
+            }
+            if let Some(b) = allow_break {
+                row.props.cant_split = !b;
+            }
+            if let Some(h) = header {
+                row.props.header = h;
+            }
+            if let Some(cl) = row.cells.get_mut(c) {
+                if let Some(w) = cell_width {
+                    cl.props.width = w;
+                }
+                if let Some(va) = valign {
+                    cl.props.valign = va;
+                }
+            }
+        }
+    })
 }
 
 fn cell(s: &Session) -> Result<(Path, usize, usize), CmdError> {
@@ -251,8 +382,25 @@ fn with_cells(s: &mut Session, f: impl Fn(&mut wordcraft_doc::Cell)) -> CmdResul
     sel_result(s)
 }
 
+/// Table Layout › Text Direction: turn the selected cells' text. Without a value it cycles the
+/// caret cell's direction (horizontal → down → up) and gives every selected cell the result.
+fn text_direction(s: &mut Session, v: &Value) -> CmdResult {
+    let (tp, r, c) = cell(s)?;
+    let dir = match p::str(v, "value") {
+        Some("horizontal" | "lrTb") => TextDirection::Horizontal,
+        Some("down" | "tbRl") => TextDirection::Down,
+        Some("up" | "btLr") => TextDirection::Up,
+        Some(x) => return Err(CmdError::Params(format!("unknown text direction `{x}`"))),
+        None => {
+            let t = s.doc.table(s.sel.focus.story, &tp).ok_or_else(|| CmdError::Disabled("the cursor isn't in a table".into()))?;
+            t.rows.get(r).and_then(|row| row.cells.get(c)).map(|cl| cl.props.text_direction).unwrap_or_default().next()
+        }
+    };
+    with_cells(s, |cl| cl.props.text_direction = dir)
+}
+
 /// Bump the revision of every paragraph in a table (table style changes alter their layout).
-fn touch_cells(s: &mut Session, tp: &Path) -> Result<(), CmdError> {
+pub(crate) fn touch_cells(s: &mut Session, tp: &Path) -> Result<(), CmdError> {
     let story = s.sel.focus.story;
     let paths: Vec<Path> = s.doc.para_paths(story).into_iter().filter(|p| p.0.len() > tp.0.len() && p.0.starts_with(&tp.0)).collect();
     for p in paths {

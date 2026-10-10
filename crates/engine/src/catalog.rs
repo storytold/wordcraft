@@ -1,6 +1,6 @@
 //! The word-processor feature catalog: the incumbent's ribbon and menu commands (feature names
 //! only) mapped to our command ids. `parity()` compares it with the registry; the gap is the
-//! work list (`cargo xtask parity` → docs/parity.md).
+//! work list (`cargo xtask parity` → docs/parity-checklist.md).
 
 use serde_json::{Value, json};
 
@@ -76,6 +76,7 @@ Home|Font|Enclose Characters|format.enclose
 Home|Paragraph|Bullets|para.bullets
 Home|Paragraph|Numbering|para.numbering
 Home|Paragraph|Multilevel List|para.multilevel
+Home|Paragraph|Define New Multilevel List|list.define
 Home|Paragraph|Change List Level|para.listLevel
 Home|Paragraph|Restart Numbering|para.restartNumbering
 Home|Paragraph|Define New Bullet|para.defineBullet
@@ -286,6 +287,7 @@ Review|Tracking|Track Changes|review.trackChanges
 Review|Tracking|Display for Review|review.markup
 Review|Tracking|Show Markup|review.showMarkup
 Review|Tracking|Reviewing Pane|review.changes
+Review|Tracking|Track Changes Options|review.trackingOptions
 Review|Changes|Accept|review.accept
 Review|Changes|Reject|review.reject
 Review|Changes|Accept All|review.acceptAll
@@ -328,13 +330,16 @@ View|Macros|Record Macro|tools.recordMacro
 View|SharePoint|Properties|file.properties
 Table Design|Table Style Options|Table Style Options|table.look
 Table Design|Table Styles|Table Styles|table.style
+Table Design|Table Styles|New Table Style|table.newStyle
+Table Design|Table Styles|Modify Table Style|table.modifyStyle
+Table Design|Table Styles|Delete Table Style|table.deleteStyle
 Table Design|Table Styles|Shading|table.shading
 Table Design|Borders|Borders|table.borders
 Table Design|Borders|Border Painter|table.borderPainter
 Table Layout|Table|Select Table|table.selectTable
 Table Layout|Table|Select Row|table.selectRow
 Table Layout|Table|Select Cell|table.selectCell
-Table Layout|Table|View Gridlines|view.gridlines
+Table Layout|Table|View Gridlines|table.viewGridlines
 Table Layout|Table|Properties|table.properties
 Table Layout|Table|Table Direction|table.direction
 Table Layout|Draw|Draw Table|table.draw
@@ -397,6 +402,7 @@ Picture Format|Picture Styles|Picture Border|picture.border
 Picture Format|Accessibility|Alt Text|picture.altText
 Picture Format|Size|Crop|picture.crop
 Picture Format|Size|Size|picture.size
+Picture Format|Size|Rotation|arrange.rotation
 Shape Format|Shape Styles|Shape Fill|shape.fill
 Shape Format|Shape Styles|Shape Outline|shape.outline
 Shape Format|Shape Styles|Shape Effects|shape.effects
@@ -502,6 +508,6 @@ mod tests {
         let p = parity(&reg);
         let pct = p["percent"].as_f64().unwrap();
         // The floor only ever rises.
-        assert!(pct >= 60.0, "parity {pct}%");
+        assert!(pct >= 90.4, "parity {pct}%");
     }
 }

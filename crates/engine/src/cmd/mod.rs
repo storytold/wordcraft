@@ -2,20 +2,27 @@
 
 pub mod caret;
 pub mod citations;
+pub mod column;
 pub mod design;
+pub mod draw;
 pub mod edit;
 pub mod equation;
 pub mod file;
 pub mod format;
 pub mod insert;
+pub mod inspector;
+pub mod lists;
 pub mod mailings;
 pub mod objects;
 pub mod page;
 pub mod para;
+pub mod paste;
 pub mod references;
 pub mod review;
 pub mod speech;
 pub mod table;
+pub mod table_draw;
+pub mod table_style;
 pub mod text;
 pub mod tools;
 pub mod view;
@@ -31,14 +38,20 @@ pub fn registry() -> Registry {
     let mut v = Vec::new();
     v.extend(text::specs());
     v.extend(caret::specs());
+    v.extend(column::specs());
     v.extend(edit::specs());
+    v.extend(paste::specs());
     v.extend(format::specs());
     v.extend(para::specs());
+    v.extend(lists::specs());
+    v.extend(inspector::specs());
     v.extend(view::specs());
     v.extend(insert::specs());
     v.extend(equation::specs());
     v.extend(page::specs());
     v.extend(table::specs());
+    v.extend(table_style::specs());
+    v.extend(table_draw::specs());
     v.extend(review::specs());
     v.extend(file::specs());
     v.extend(design::specs());
@@ -46,6 +59,7 @@ pub fn registry() -> Registry {
     v.extend(mailings::specs());
     v.extend(citations::specs());
     v.extend(objects::specs());
+    v.extend(draw::specs());
     v.extend(tools::specs());
     v.extend(speech::specs());
     Registry::new(v)
@@ -91,8 +105,32 @@ pub fn new_revision(s: &mut Session, kind: RevisionKind) -> u32 {
     (s.doc.revisions.len() - 1) as u32
 }
 
+/// Whether the paragraph at `path` is followed by another paragraph in the same container (so
+/// its paragraph mark can be removed by joining the two).
+pub fn has_next_para(s: &Session, story: StoryRef, path: &wordcraft_doc::Path) -> bool {
+    matches!(s.doc.block(story, &path.with_last(path.last().saturating_add(1))), Some(wordcraft_doc::Block::Para(_)))
+}
+
+/// Remove the paragraph mark of the paragraph at `path`: the next paragraph in the same container
+/// joins it. The joined paragraph keeps this paragraph's properties and ends with the next one's
+/// mark (and that mark's revisions). Returns `false`, changing nothing, when no paragraph follows
+/// in the container (a story's or cell's last mark can't be removed).
+pub fn join_next_para(s: &mut Session, story: StoryRef, path: &wordcraft_doc::Path) -> Result<bool, CmdError> {
+    if !has_next_para(s, story, path) {
+        return Ok(false);
+    }
+    let next = path.with_last(path.last().saturating_add(1));
+    let len = s.doc.para(story, path).map(|p| p.len()).unwrap_or(0);
+    let revs = s.doc.para(story, &next).map(|p| (p.mark.ins, p.mark.del)).unwrap_or_default();
+    s.doc.delete_range(&Pos { story, path: path.clone(), off: len }, &Pos { story, path: next, off: 0 })?;
+    let p = s.doc.para_mut(story, path)?;
+    (p.mark.ins, p.mark.del) = revs;
+    p.touch();
+    Ok(true)
+}
+
 /// Tracked deletion: own insertions are removed, other text is marked deleted.
-fn track_delete(s: &mut Session, a: &Pos, b: &Pos) -> Result<Pos, CmdError> {
+pub(crate) fn track_delete(s: &mut Session, a: &Pos, b: &Pos) -> Result<Pos, CmdError> {
     let rid = new_revision(s, RevisionKind::Delete);
     let author = s.author.clone();
     // Remove text this author inserted (it never existed for the reader); mark the rest.
@@ -116,6 +154,23 @@ fn track_delete(s: &mut Session, a: &Pos, b: &Pos) -> Result<Pos, CmdError> {
                 para.delete(x, y)?;
             } else {
                 para.format(x, y, &|c| c.del = Some(rid))?;
+            }
+        }
+        // The paragraph mark is inside the range unless this is its last paragraph. Like text,
+        // a mark this author inserted is removed (the paragraphs join again), any other is
+        // marked deleted; one already deleted keeps its deletion. Done after the text so a join
+        // can't pull the next paragraph's text into this one's range.
+        if *path != b.path && has_next_para(s, a.story, path) {
+            let (ins, del) = s.doc.para(a.story, path).map(|p| (p.mark.ins, p.mark.del)).unwrap_or_default();
+            if del.is_none() {
+                let own = ins.and_then(|i| s.doc.revisions.get(i as usize)).is_some_and(|rv| rv.author == author);
+                if own {
+                    join_next_para(s, a.story, path)?;
+                } else {
+                    let p = s.doc.para_mut(a.story, path)?;
+                    p.mark.del = Some(rid);
+                    p.touch();
+                }
             }
         }
     }
@@ -213,26 +268,30 @@ pub fn split_para(s: &mut Session, at: &Pos) -> Result<Pos, CmdError> {
 }
 
 /// ISO-8601 timestamp (UTC, seconds) for `secs` since the Unix epoch.
-fn iso_from_unix_secs(secs: u64) -> String {
+pub fn iso_from_unix_secs(secs: u64) -> String {
     let (y, m, d) = civil_from_days((secs / 86_400) as i64);
     let t = secs % 86_400;
     format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", t / 3600, t / 60 % 60, t % 60)
 }
 
-/// ISO-8601 timestamp (UTC, seconds).
-pub fn now_iso() -> String {
+/// Seconds since the Unix epoch (UTC): the system clock, or the browser's on the web.
+pub fn now_unix() -> u64 {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-        iso_from_unix_secs(secs)
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
     }
     // `SystemTime::now()` panics on wasm32-unknown-unknown, so ask the browser's clock.
     #[cfg(target_arch = "wasm32")]
     {
         let ms = js_sys::Date::now();
         // Clamp a NaN or pre-epoch clock to 0 rather than fail.
-        iso_from_unix_secs(if ms.is_finite() && ms > 0.0 { (ms / 1000.0) as u64 } else { 0 })
+        if ms.is_finite() && ms > 0.0 { (ms / 1000.0) as u64 } else { 0 }
     }
+}
+
+/// ISO-8601 timestamp (UTC, seconds).
+pub fn now_iso() -> String {
+    iso_from_unix_secs(now_unix())
 }
 
 /// Days since 1970-01-01 → (year, month, day) (Howard Hinnant's algorithm).

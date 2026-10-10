@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CellProps, CharProps, HeightRule, Highlight, Kashida, LineSpacing, NumRef, ParaProps, Rgb, RowProps,
-    TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextColor, Underline, VAlign, VMerge, VertAlign,
+    TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
 };
 use wordcraft_doc::section::{Columns, LineNumberRestart, LineNumbering, NumFormat, SectionProps, SectionStart};
 
@@ -142,6 +142,12 @@ impl PropCtx {
                 "w:suppressAutoHyphens" => p.suppress_hyphens = Some(on_off(k)),
                 "w:suppressLineNumbers" => p.suppress_line_numbers = Some(on_off(k)),
                 "w:bidi" => p.bidi = Some(on_off(k)),
+                "w:kinsoku" => p.kinsoku = Some(on_off(k)),
+                "w:wordWrap" => p.word_wrap = Some(on_off(k)),
+                "w:overflowPunct" => p.overflow_punct = Some(on_off(k)),
+                "w:topLinePunct" => p.top_line_punct = Some(on_off(k)),
+                "w:autoSpaceDE" => p.auto_space_de = Some(on_off(k)),
+                "w:autoSpaceDN" => p.auto_space_dn = Some(on_off(k)),
                 "w:framePr" => {
                     if matches!(k.attr("w:dropCap"), Some("drop") | Some("margin")) {
                         p.drop_cap = Some(k.attr("w:lines").and_then(u32_of).unwrap_or(3).clamp(1, 10) as u8);
@@ -385,11 +391,16 @@ pub fn tcpr(e: &El) -> (CellProps, bool) {
     let mut hcont = false;
     for k in e.els() {
         match k.name.as_str() {
-            "w:tcW" => {
-                if matches!(k.attr("w:type"), None | Some("dxa")) {
-                    c.width = tw(k, "w:w").filter(|v| *v > 0.0);
+            "w:tcW" => match k.attr("w:type") {
+                None | Some("dxa") => c.width = tw(k, "w:w").filter(|v| *v > 0.0),
+                Some("pct") => {
+                    let w = k.attr("w:w").unwrap_or("0");
+                    c.width_pct = if let Some(p) = w.strip_suffix('%') { measure(p, 1.0) } else { measure(w, 50.0) }
+                        .map(|v| v.clamp(0.0, 100.0))
+                        .filter(|v| *v > 0.0);
                 }
-            }
+                _ => {}
+            },
             "w:gridSpan" => c.span = k.attr("w:val").and_then(u32_of).unwrap_or(1).clamp(1, 63),
             "w:hMerge" => hcont = k.attr("w:val") != Some("restart"),
             "w:vMerge" => c.vmerge = if k.attr("w:val") == Some("restart") { VMerge::Restart } else { VMerge::Continue },
@@ -397,7 +408,7 @@ pub fn tcpr(e: &El) -> (CellProps, bool) {
             "w:shd" => c.shading = shd_fill(k),
             "w:noWrap" => c.no_wrap = on_off(k),
             "w:tcMar" => c.margins = Some(margins(k)),
-            "w:textDirection" => c.vertical_text = !matches!(k.attr("w:val"), None | Some("lrTb") | Some("lrTbV") | Some("tb")),
+            "w:textDirection" => c.text_direction = TextDirection::from_ooxml(k.attr("w:val").unwrap_or("")),
             "w:vAlign" => {
                 c.valign = match k.attr("w:val") {
                     Some("center") => VAlign::Center,

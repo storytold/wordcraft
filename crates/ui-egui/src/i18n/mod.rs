@@ -47,7 +47,7 @@ pub struct LangInfo {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 8] = [
+pub static LANGUAGES: [LangInfo; 11] = [
     LangInfo { code: "en", name: "English", source: "", prefer_hans: false, catalog: OnceLock::new() },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` resolve here (see `candidates`).
     LangInfo { code: "zh-hans", name: "简体中文", source: include_str!("zh-hans.tsv"), prefer_hans: true, catalog: OnceLock::new() },
@@ -62,6 +62,13 @@ pub static LANGUAGES: [LangInfo; 8] = [
     LangInfo { code: "pt-br", name: "Português (Brasil)", source: include_str!("pt-br.tsv"), prefer_hans: false, catalog: OnceLock::new() },
     // Arabic (Modern Standard Arabic); `ar-SA`, `ar-EG`, `ar-*` resolve here.
     LangInfo { code: "ar", name: "العربية", source: include_str!("ar.tsv"), prefer_hans: false, catalog: OnceLock::new() },
+    // Serbian, Cyrillic script (the default per BCP 47 when no script is given); `sr`, `sr-RS`,
+    // `sr-Cyrl-*` resolve here.
+    LangInfo { code: "sr", name: "Српски", source: include_str!("sr.tsv"), prefer_hans: false, catalog: OnceLock::new() },
+    // Serbian, Latin script; `sr-Latn-*` resolves here (see `candidates`'s generic prefix
+    // matching — no special-casing needed, unlike Chinese's script-by-region fallback).
+    LangInfo { code: "sr-latn", name: "Srpski (latinica)", source: include_str!("sr-latn.tsv"), prefer_hans: false, catalog: OnceLock::new() },
+    LangInfo { code: "et", name: "Eesti", source: include_str!("et.tsv"), prefer_hans: false, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
@@ -114,6 +121,11 @@ impl Lang {
     /// the shared interface-direction work (#20); locations already join mirrored.
     pub fn is_rtl(self) -> bool {
         self.0.code == "ar"
+    }
+
+    /// Is the interface written in CJK script (its own name is), so it needs a CJK face?
+    pub fn uses_cjk(self) -> bool {
+        self.0.name.chars().any(|c| ('\u{2E80}'..='\u{9FFF}').contains(&c) || ('\u{AC00}'..='\u{D7AF}').contains(&c))
     }
 
     /// A language by its exact code (any case).
@@ -226,6 +238,10 @@ pub fn t(s: &str) -> &str {
 
 /// `s` in `lang`; strings without a translation come back unchanged.
 pub fn tr(lang: Lang, s: &str) -> &str {
+    #[cfg(test)]
+    if pseudo::on() {
+        return pseudo::mark(s);
+    }
     lang.catalog().plain(s).unwrap_or(s)
 }
 
@@ -271,5 +287,9 @@ pub fn fmt(template: &str, args: &[(&str, &str)]) -> String {
     out
 }
 
+#[cfg(test)]
+mod audit;
+#[cfg(test)]
+pub(crate) mod pseudo;
 #[cfg(test)]
 mod tests;

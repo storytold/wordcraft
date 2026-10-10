@@ -146,11 +146,46 @@ pub struct Float {
     pub dist_top: f32,
     pub dist_bottom: f32,
     /// Room around the object for effects such as shadows (left, top, right, bottom, points),
-    /// inline or floating: lines and surrounding text keep clear of it.
+    /// inline or floating: lines and surrounding text keep clear of it. Rotation's own overhang
+    /// is not in here: it follows from [`Float::rot`] (see [`Float::spin_pad`]).
     pub effect: [f32; 4],
+    /// Rotation clockwise about the object's centre, degrees (DrawingML `a:xfrm/@rot`). Offsets
+    /// and the size stay those of the unrotated frame, as in Word; see [`Float::spin`].
+    #[serde(skip_serializing_if = "is_zero")]
+    pub rot: f32,
+    /// Mirrored left to right / top to bottom (`a:xfrm/@flipH`, `@flipV`).
+    #[serde(skip_serializing_if = "is_false")]
+    pub flip_h: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    pub flip_v: bool,
+}
+
+fn is_zero(v: &f32) -> bool {
+    *v == 0.0
+}
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 impl Float {
+    /// The rotation and flips, the angle normalised to `0..360` (a NaN angle is no rotation).
+    pub fn spin(&self) -> wordcraft_geom::Spin {
+        wordcraft_geom::Spin::new(self.rot, self.flip_h, self.flip_v)
+    }
+    /// Set the rotation and flips (the angle normalised).
+    pub fn set_spin(&mut self, s: wordcraft_geom::Spin) {
+        self.rot = wordcraft_geom::normalize_degrees(s.deg);
+        self.flip_h = s.flip_h;
+        self.flip_v = s.flip_v;
+    }
+    /// How far a `w` × `h` frame's rotated bounds reach past it on each side (x, y): the room a
+    /// rotated object takes beyond its frame (zero unrotated; negative where the turned object
+    /// is narrower than its frame, as a wide picture turned 90° is).
+    pub fn spin_pad(&self, w: f32, h: f32) -> (f32, f32) {
+        let (w, h) = (wordcraft_geom::finite(w).clamp(0.0, 4000.0), wordcraft_geom::finite(h).clamp(0.0, 4000.0));
+        let (bw, bh) = self.spin().extent(w, h);
+        ((bw - w) / 2.0, (bh - h) / 2.0)
+    }
     /// The effect extents, finite and clamped (left, top, right, bottom).
     pub fn effect_extent(&self) -> [f32; 4] {
         self.effect.map(|v| if v.is_finite() { v.clamp(0.0, 1584.0) } else { 0.0 })
@@ -172,6 +207,8 @@ pub enum ShapeKind {
     Heart,
     /// A text box (rectangle with a text story).
     TextBox,
+    /// A shape drawn point by point, such as ink (its geometry is the shape's `freeform`).
+    Freeform,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -199,6 +236,20 @@ pub enum InlineObject {
         /// Crop (left, top, right, bottom) fractions 0..1.
         #[serde(default)]
         crop: [f32; 4],
+        /// The OLE object (embedded or linked file) this picture shows, as read from a file:
+        /// saving writes the object back, not only its picture. See [`crate::graphic::Embedded`].
+        #[serde(skip)]
+        ole: Option<std::sync::Arc<crate::graphic::Embedded>>,
+    },
+    /// A chart or SmartArt diagram (see [`crate::graphic`]).
+    Graphic {
+        w: f32,
+        h: f32,
+        #[serde(default)]
+        alt: String,
+        #[serde(default)]
+        float: Float,
+        graphic: std::sync::Arc<crate::graphic::Graphic>,
     },
     Shape {
         kind: ShapeKind,
@@ -213,6 +264,26 @@ pub enum InlineObject {
         /// Text box content: `Document::parts` id.
         #[serde(default)]
         story: Option<u32>,
+        /// A freeform's geometry (`ShapeKind::Freeform`): its paths, or an ink stroke.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        freeform: Option<std::sync::Arc<crate::freeform::Freeform>>,
+        /// Shadow, glow and soft edges.
+        #[serde(default, skip_serializing_if = "crate::effects::ShapeEffects::is_empty")]
+        effects: crate::effects::ShapeEffects,
+    },
+    /// Pictures, shapes and text boxes grouped into one object (Layout › Arrange › Group): it
+    /// moves, wraps and resizes as one. Its members are laid out in the group's own coordinate
+    /// space, `ch_w` × `ch_h`, which is stretched over the group's `w` × `h` (DrawingML's
+    /// `a:chExt` and `a:ext`), so resizing the group scales them.
+    Group {
+        w: f32,
+        h: f32,
+        #[serde(default)]
+        float: Float,
+        /// Size of the members' coordinate space (their offsets and sizes are in it).
+        ch_w: f32,
+        ch_h: f32,
+        children: Vec<GroupChild>,
     },
     /// A field: `instr` is the field code (`PAGE`, `NUMPAGES`, `DATE \@ "M/d/yyyy"`, `TOC \o "1-3"`…);
     /// `result` the cached display text.
@@ -273,7 +344,101 @@ pub enum InlineObject {
     },
 }
 
+/// One member of an [`InlineObject::Group`]: a picture or shape (its own `w`, `h` and story), at
+/// `x`, `y` in the group's coordinate space. Its `float` is unused.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupChild {
+    pub x: f32,
+    pub y: f32,
+    pub obj: InlineObject,
+}
+
+/// Most members a group keeps (hostile files).
+pub const MAX_GROUP_CHILDREN: usize = 1000;
+
 impl InlineObject {
+    /// A picture, chart or diagram, shape, text box or group: something drawn with a frame, sized and wrapped.
+    pub fn is_drawing(&self) -> bool {
+        matches!(self, InlineObject::Image { .. } | InlineObject::Graphic { .. } | InlineObject::Shape { .. } | InlineObject::Group { .. })
+    }
+    /// A drawing's size and placement.
+    pub fn frame(&self) -> Option<(f32, f32, &Float)> {
+        match self {
+            InlineObject::Image { w, h, float, .. }
+            | InlineObject::Graphic { w, h, float, .. }
+            | InlineObject::Shape { w, h, float, .. }
+            | InlineObject::Group { w, h, float, .. } => Some((*w, *h, float)),
+            _ => None,
+        }
+    }
+    /// A drawing's placement, to change.
+    pub fn float_mut(&mut self) -> Option<&mut Float> {
+        match self {
+            InlineObject::Image { float, .. }
+            | InlineObject::Graphic { float, .. }
+            | InlineObject::Shape { float, .. }
+            | InlineObject::Group { float, .. } => Some(float),
+            _ => None,
+        }
+    }
+    /// Resize a drawing (a group's members scale with it).
+    pub fn set_size(&mut self, nw: f32, nh: f32) {
+        if let InlineObject::Image { w, h, .. }
+        | InlineObject::Graphic { w, h, .. }
+        | InlineObject::Shape { w, h, .. }
+        | InlineObject::Group { w, h, .. } = self
+        {
+            *w = nw;
+            *h = nh;
+        }
+    }
+    /// The text box story this object shows, if it is a text box.
+    pub fn text_box(&self) -> Option<u32> {
+        match self {
+            InlineObject::Shape { story, .. } => *story,
+            _ => None,
+        }
+    }
+    /// The text box stories this object shows: a text box's, or its group members'.
+    pub fn text_boxes(&self) -> Vec<u32> {
+        match self {
+            InlineObject::Shape { story: Some(id), .. } => vec![*id],
+            InlineObject::Group { children, .. } => children.iter().filter_map(|c| c.obj.text_box()).collect(),
+            _ => Vec::new(),
+        }
+    }
+    /// The text box story slots of this object and its group members, to repoint.
+    pub fn text_box_slots(&mut self) -> Vec<&mut Option<u32>> {
+        match self {
+            InlineObject::Shape { story, .. } => vec![story],
+            InlineObject::Group { children, .. } => children
+                .iter_mut()
+                .filter_map(|c| match &mut c.obj {
+                    InlineObject::Shape { story, .. } => Some(story),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+    /// A group's members placed in a `w` × `h` box at (`x`, `y`): each member's rectangle
+    /// (x, y, w, h) and the member. Empty for anything else.
+    pub fn group_rects(&self, x: f32, y: f32, w: f32, h: f32) -> Vec<([f32; 4], &InlineObject)> {
+        let InlineObject::Group { ch_w, ch_h, children, .. } = self else { return Vec::new() };
+        let fin = |v: f32| if v.is_finite() { v } else { 0.0 };
+        let sx = if fin(*ch_w) > 0.0 { fin(w) / ch_w } else { 1.0 };
+        let sy = if fin(*ch_h) > 0.0 { fin(h) / ch_h } else { 1.0 };
+        children
+            .iter()
+            .take(MAX_GROUP_CHILDREN)
+            .filter_map(|c| {
+                let (cw, chh, _) = c.obj.frame()?;
+                let r = [x + fin(c.x) * sx, y + fin(c.y) * sy, (fin(cw) * sx).clamp(0.0, 4000.0), (fin(chh) * sy).clamp(0.0, 4000.0)];
+                (!matches!(c.obj, InlineObject::Group { .. })).then_some((r, &c.obj))
+            })
+            .collect()
+    }
     /// Zero-width markers don't take part in layout.
     pub fn is_marker(&self) -> bool {
         matches!(
@@ -288,8 +453,18 @@ impl InlineObject {
     }
     pub fn is_floating(&self) -> bool {
         match self {
-            InlineObject::Image { float, .. } | InlineObject::Shape { float, .. } => float.wrap != Wrap::Inline,
+            InlineObject::Image { float, .. }
+            | InlineObject::Graphic { float, .. }
+            | InlineObject::Shape { float, .. }
+            | InlineObject::Group { float, .. } => float.wrap != Wrap::Inline,
             _ => false,
+        }
+    }
+    /// The geometry of an ink stroke (a freeform shape drawn with a pen), if this is one.
+    pub fn ink(&self) -> Option<&crate::freeform::Freeform> {
+        match self {
+            InlineObject::Shape { freeform: Some(f), .. } if f.is_ink() => Some(f),
+            _ => None,
         }
     }
     /// The text this object contributes to plain-text extraction.

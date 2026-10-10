@@ -298,3 +298,32 @@ fn shift_enter_stays_inside_the_list_item() {
     typ(&mut s, "cont\ntwo");
     assert_eq!(paras(&s), vec![para("Line one\ncont", Some(0)), para("two", Some(0))]);
 }
+
+/// Body paragraph texts, lower-cased (AutoCorrect may capitalise a sentence start).
+fn texts(s: &Session) -> Vec<String> {
+    paras(s).into_iter().map(|p| p.0.to_lowercase()).collect()
+}
+
+#[test]
+fn tracked_enter_and_backspace_track_the_paragraph_mark() {
+    // Issue #229: with Track Changes on, Enter inserts a tracked paragraph mark that Reject All
+    // takes out again; Backspace over your own Enter removes it outright.
+    let mut s = typed("one");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    typ(&mut s, "\ntwo");
+    assert_eq!(texts(&s), ["one", "two"]);
+    typ(&mut s, "\u{8}\u{8}\u{8}\u{8}");
+    assert_eq!(texts(&s), ["one"]);
+    typ(&mut s, "\n");
+    assert_eq!(texts(&s), ["one", ""]);
+    run(&mut s, "review.rejectAll", json!({}));
+    assert_eq!(texts(&s), ["one"]);
+    // A break that was already there isn't removed: Backspace marks it deleted and moves before it.
+    let mut s = typed("one\ntwo");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 0}}));
+    typ(&mut s, "\u{8}");
+    assert_eq!(texts(&s), ["one", "two"]);
+    assert_eq!(s.sel.focus, Pos::body(0, 3));
+    assert!(s.doc.para_at(&Pos::body(0, 0)).is_some_and(|p| p.mark.del.is_some()));
+}

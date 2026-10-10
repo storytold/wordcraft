@@ -305,24 +305,38 @@ fn arabic_face() -> Option<wordcraft_fonts::FaceRef> {
     wordcraft_fonts::FontDb::global().fallback_for('ب', 0).map(|f| wordcraft_fonts::FaceRef::of(&f)).filter(|f| f.covers('پ'))
 }
 
+/// The glyph ids of each cluster, in order. A font may draw a letter as several glyphs (Noto
+/// Naskh Arabic draws ب as its dotless form plus the dot), so letters are compared by cluster.
+fn cluster_glyphs(glyphs: &[wordcraft_fonts::ShapedGlyph]) -> Vec<Vec<u32>> {
+    let mut out: Vec<(usize, Vec<u32>)> = Vec::new();
+    for g in glyphs {
+        match out.last_mut() {
+            Some((c, ids)) if *c == g.cluster => ids.push(g.gid),
+            _ => out.push((g.cluster, vec![g.gid])),
+        }
+    }
+    out.into_iter().map(|(_, ids)| ids).collect()
+}
+
 #[test]
 fn persian_letters_join_and_brackets_mirror() {
     let Some(face) = arabic_face() else {
         eprintln!("skipped: no font with Persian letters installed");
         return;
     };
-    let isolated = wordcraft_fonts::shape_run(&face, "ب", &[], |c| c, true);
-    let joined = wordcraft_fonts::shape_run(&face, "ببب", &[], |c| c, true);
-    assert_eq!(joined.len(), 3);
-    assert!(joined.iter().all(|g| g.gid != 0), "the font has the letters");
+    let isolated = cluster_glyphs(&wordcraft_fonts::shape_run(&face, "ب", &[], |c| c, true));
+    assert_eq!(isolated.len(), 1, "{isolated:?}");
+    let shaped = wordcraft_fonts::shape_run(&face, "ببب", &[], |c| c, true);
+    let joined = cluster_glyphs(&shaped);
+    assert_eq!(joined.len(), 3, "one cluster per letter: {joined:?}");
+    assert!(shaped.iter().all(|g| g.gid != 0), "the font has the letters");
     // Initial, medial and final forms differ from the isolated letter.
-    assert!(joined.iter().any(|g| g.gid != isolated[0].gid), "cursive joining picks contextual forms");
+    assert!(joined.iter().any(|g| *g != isolated[0]), "cursive joining picks contextual forms: {joined:?} {isolated:?}");
     // Clusters come back in logical order.
-    assert!(joined.windows(2).all(|w| w[0].cluster <= w[1].cluster));
+    assert!(shaped.windows(2).all(|w| w[0].cluster <= w[1].cluster));
     // ZWNJ (نیم‌فاصله) breaks the join: "می‌خواهم" keeps می separate.
-    let with_zwnj = wordcraft_fonts::shape_run(&face, "ب\u{200C}ب", &[], |c| c, true);
-    let first = with_zwnj.first().map(|g| g.gid);
-    assert_eq!(first, Some(isolated[0].gid), "a letter before ZWNJ takes its isolated form");
+    let with_zwnj = cluster_glyphs(&wordcraft_fonts::shape_run(&face, "ب\u{200C}ب", &[], |c| c, true));
+    assert_eq!(with_zwnj.first(), isolated.first(), "a letter before ZWNJ takes its isolated form");
     // In right-to-left text, "(" is drawn with the mirrored glyph.
     let open = wordcraft_fonts::shape_run(&face, "(", &[], |c| c, true);
     let close = wordcraft_fonts::shape_run(&face, ")", &[], |c| c, false);
@@ -356,6 +370,10 @@ fn glyph_runs_carry_their_text_for_pdf_export() {
     let s = "سلام WordCraft می‌خواهم";
     let d = doc_of(&[(s, true)]);
     let l = lay(&d);
+    let lam_alef_ligature = arabic_face().is_some_and(|f| {
+        let g = wordcraft_fonts::shape_run(&f, "لا", &[], |c| c, true);
+        !g.is_empty() && g.iter().all(|g| g.cluster == 0)
+    });
     let mut all = String::new();
     for it in display::page_display(&d, &l.pages[0], &Default::default()) {
         if let display::Draw::Glyphs { glyphs, text, ranges, .. } = it {
@@ -363,8 +381,9 @@ fn glyph_runs_carry_their_text_for_pdf_export() {
             for r in &ranges {
                 assert!(text.get(r.clone()).is_some_and(|t| !t.is_empty()), "{r:?} in {text:?}");
             }
-            // A ligature glyph (لا) shows both its letters (when a Persian font draws it).
-            for r in ranges.iter().filter(|_| arabic_face().is_some()) {
+            // A ligature glyph (لا) shows both its letters (when the Persian font draws one: some,
+            // such as Noto Naskh Arabic, draw the lam and the alef as glyphs of their own).
+            for r in ranges.iter().filter(|_| lam_alef_ligature) {
                 if text.get(r.clone()) == Some("ل") {
                     panic!("the lam of لا is drawn as one glyph with the alef: {text:?} {ranges:?}");
                 }
@@ -406,8 +425,15 @@ fn inline_picture_in_rtl_text_sits_in_its_place() {
     let s = "متن  بیشتر";
     let mut d = doc_of(&[(s, true)]);
     let off = at(s, 4);
-    let pic =
-        wordcraft_doc::InlineObject::Image { media: "m".into(), w: 30.0, h: 20.0, alt: String::new(), float: Default::default(), crop: [0.0; 4] };
+    let pic = wordcraft_doc::InlineObject::Image {
+        media: "m".into(),
+        w: 30.0,
+        h: 20.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        ole: None,
+    };
     d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().insert_object(off, pic, &Default::default()).unwrap();
     let l = lay(&d);
     let (pl, x) = first_line(&l, 0);
@@ -629,8 +655,18 @@ fn rtl_shapes_floats_headers_and_notes() {
     // A square-wrapped shape anchored in an RTL paragraph: text flows around it, joined intact.
     let mut d = doc_of(&[("كلمات كثيرة تتدفق حول الصورة هنا بشكل طبيعي في الفقرة الطويلة. ".repeat(3).trim_end(), true)]);
     let float = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 0.0, y: 0.0, dist: 9.0, ..Default::default() };
-    let shape =
-        InlineObject::Shape { kind: ShapeKind::Rectangle, w: 144.0, h: 60.0, fill: None, stroke: None, stroke_width: 1.0, float, story: None };
+    let shape = InlineObject::Shape {
+        kind: ShapeKind::Rectangle,
+        w: 144.0,
+        h: 60.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        effects: Default::default(),
+        freeform: None,
+        float,
+        story: None,
+    };
     d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
     let l = lay(&d);
     assert!(l.pages[0].items.iter().any(|i| matches!(i, Placed::Shape { .. })), "shape placed");
@@ -982,4 +1018,41 @@ fn horizontal_rules(p: &crate::Page) -> Vec<(f32, f32)> {
             }
         })
         .collect()
+}
+
+#[test]
+fn floating_rtl_tables_in_headers_and_footers_use_the_leading_margin() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::TableFloat;
+    for rtl in [false, true] {
+        for compat in [14, 15] {
+            for footer in [false, true] {
+                let mut d = Document::from_text("Body");
+                d.settings.compat_mode = compat;
+                d.last_section.rtl = rtl;
+                d.last_section.gutter = 36.0;
+                let mut t = Table::new(1, 1, 80.0);
+                t.props.rtl = rtl;
+                t.props.fixed = true;
+                t.props.float = Some(TableFloat { x: 180.0, h_rel: Anchor::Margin, ..Default::default() });
+                t.rows[0].cells[0].props.margins = Some([0.0, 3.0, 0.0, 29.0]);
+                t.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("cell", Default::default()))];
+                let kind = if footer { wordcraft_doc::PartKind::Footer } else { wordcraft_doc::PartKind::Header };
+                let id = d.add_part(kind, vec![std::sync::Arc::new(Block::Table(t))]);
+                if footer {
+                    d.last_section.footers.default = Some(id);
+                } else {
+                    d.last_section.headers.default = Some(id);
+                }
+                let l = lay(&d);
+                let items = if footer { &l.pages[0].footer } else { &l.pages[0].header };
+                let xs: Vec<f32> = items.iter().filter_map(|it| if let Placed::Cell { rect, .. } = it { Some(rect.x) } else { None }).collect();
+                assert_eq!(xs.len(), 1, "one floating cell");
+                let margin = if compat < 15 { if rtl { 29.0 } else { 3.0 } } else { 0.0 };
+                let origin = body_x(&d.last_section);
+                let expected = origin + 180.0 + if rtl { margin - 80.0 } else { -margin };
+                assert!((xs[0] - expected).abs() < 0.01, "rtl={rtl}, compat={compat}, footer={footer}: {} vs {expected}", xs[0]);
+            }
+        }
+    }
 }
