@@ -1,6 +1,6 @@
 //! Dialogs: Font, Paragraph, Find & Replace, Go To, Insert Table, Page Setup, Link, Bookmark,
-//! Word Count, Zoom, Watermark, New/Modify Style, Command search, About. Every dialog ends by
-//! running a command, so agents get the same result without the dialog.
+//! Word Count, Zoom, Watermark, New/Modify Style, Command search, About, Save Changes. Every
+//! dialog ends by running a command, so agents get the same result without the dialog.
 
 use egui::{Sense, Ui, vec2};
 use serde::Serialize;
@@ -102,6 +102,18 @@ pub enum Dialog {
     About {
         tab: u8,
     },
+    /// "Do you want to save changes?" before a user's New, Open, Close, Envelopes, Labels or
+    /// Finish & Merge replaces the document (see [`WordApp::run`]); `then` runs once it is
+    /// answered (`ui.saveChanges`), and only while the document it asked about
+    /// (`Session::document_id`) is still the one open.
+    SaveChanges {
+        name: String,
+        then: String,
+        #[serde(skip)]
+        params: Value,
+        #[serde(skip)]
+        document: u64,
+    },
 }
 
 impl Dialog {
@@ -123,6 +135,7 @@ impl Dialog {
             Dialog::ModifyStyle { .. } => "modifyStyle",
             Dialog::Commands { .. } => "commands",
             Dialog::About { .. } => "about",
+            Dialog::SaveChanges { .. } => "saveChanges",
         }
     }
 
@@ -287,6 +300,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::ModifyStyle { .. } => "Modify Style",
         Dialog::Commands { .. } => "Search Commands",
         Dialog::About { .. } => "About WordCraft",
+        Dialog::SaveChanges { .. } => "WordCraft",
     };
     egui::Window::new(tl!(title))
         .id(egui::Id::new(("dialog", title)))
@@ -326,6 +340,26 @@ fn buttons(ui: &mut Ui, ok: &str) -> (bool, bool) {
 fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     match d {
         Dialog::Font { font, size, bold, italic, underline, strike, sup, sub, small_caps, caps, hidden, color, spacing } => {
+            // Build the sample text format for the preview pane below.
+            let preview_size = size.trim().parse::<f32>().unwrap_or(12.0).clamp(6.0, 72.0);
+            let preview_color = wordcraft_doc::Rgb::parse(color).map(crate::theme::c32).unwrap_or_else(|| ui.visuals().text_color());
+            let mut fmt = egui::TextFormat {
+                font_id: egui::FontId::new(preview_size, egui::FontFamily::Proportional),
+                color: preview_color,
+                ..Default::default()
+            };
+            if *bold {
+                fmt.font_id = crate::theme::semibold(preview_size);
+            }
+            if *italic {
+                fmt.italics = true;
+            }
+            if *underline {
+                fmt.underline = egui::Stroke::new(1.0, preview_color);
+            }
+            if *strike {
+                fmt.strikethrough = egui::Stroke::new(1.0, preview_color);
+            }
             egui::Grid::new("fontdlg").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
                 ui.label(tl!("Font:"));
                 ui.text_edit_singleline(font);
@@ -358,6 +392,13 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 ui.checkbox(hidden, tl!("Hidden"));
                 ui.end_row();
             });
+            // Live preview of the chosen font/size/colour/effects.
+            ui.separator();
+            ui.label(egui::RichText::new(tl!("Preview")).small().weak());
+            let sample = if *caps { "AaBbYyZz".to_uppercase() } else { "AaBbYyZz".to_string() };
+            let mut job = egui::text::LayoutJob::single_section(sample, fmt);
+            job.wrap.max_width = ui.available_width().min(400.0);
+            ui.label(job);
             let (ok, cancel) = buttons(ui, tl!("OK"));
             if ok {
                 let mut props = json!({
@@ -742,6 +783,37 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             let (ok, cancel) = buttons(ui, tl!("Close"));
             ok || cancel
+        }
+        Dialog::SaveChanges { name, .. } => {
+            ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Do you want to save changes to {name}?"), &[("name", name)])).font(semibold(15.0)));
+            ui.label(tl!("Your changes will be lost if you don't save them."));
+            ui.add_space(8.0);
+            let buttons = ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let cancel = ui.button(tl!("Cancel"));
+                    let dont_save = ui.button(tl!("Don't Save"));
+                    let save = ui.add(egui::Button::new(egui::RichText::new(tl!("Save")).color(egui::Color32::WHITE)).fill(crate::theme::APP_COLOR));
+                    [(cancel, "cancel"), (dont_save, "dontSave"), (save, "save")]
+                })
+                .inner
+            });
+            let buttons = buttons.inner;
+            // Enter clicks the focused button; it means Save only when none of them has focus.
+            let focused = buttons.iter().any(|(b, _)| b.has_focus());
+            let answer = if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                Some("cancel")
+            } else if let Some((_, a)) = buttons.iter().find(|(b, _)| b.clicked()) {
+                Some(*a)
+            } else if !focused && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                Some("save")
+            } else {
+                None
+            };
+            let Some(answer) = answer else { return false };
+            // `ui.saveChanges` reads the prompt from `app.dialog`, which `show` has taken out.
+            app.dialog = Some(d.clone());
+            let _ = app.run("ui.saveChanges", json!({"answer": answer}));
+            true
         }
     }
 }

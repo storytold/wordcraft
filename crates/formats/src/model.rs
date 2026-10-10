@@ -795,7 +795,8 @@ pub fn image_px(data: &[u8]) -> Option<(u32, u32)> {
 
 /// A picture from bytes with an optional display size (points); the natural size (96 dpi) is
 /// used otherwise, shrunk to fit a 6.5" column.
-pub fn make_img(data: Vec<u8>, w: Option<f32>, h: Option<f32>, alt: &str) -> Option<Img> {
+pub fn make_img(data: impl Into<Arc<Vec<u8>>>, w: Option<f32>, h: Option<f32>, alt: &str) -> Option<Img> {
+    let data = data.into();
     let ext = sniff_image(&data)?;
     let (pw, ph) = image_px(&data).map(|(a, b)| (a as f32 * 0.75, b as f32 * 0.75)).unwrap_or((72.0, 72.0));
     let (pw, ph) = (pw.max(1.0), ph.max(1.0));
@@ -809,7 +810,7 @@ pub fn make_img(data: Vec<u8>, w: Option<f32>, h: Option<f32>, alt: &str) -> Opt
         h *= 468.0 / w;
         w = 468.0;
     }
-    Some(Img { data: Arc::new(data), ext: ext.to_string(), w: w.clamp(1.0, 1584.0), h: h.clamp(1.0, 1584.0), alt: alt.to_string() })
+    Some(Img { data, ext: ext.to_string(), w: w.clamp(1.0, 1584.0), h: h.clamp(1.0, 1584.0), alt: alt.to_string() })
 }
 
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

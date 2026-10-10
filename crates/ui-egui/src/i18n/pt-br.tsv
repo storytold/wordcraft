@@ -60,7 +60,6 @@
 	Automatic Table 1 (3 levels)	Tabela automática 1 (3 níveis)
 	Automatic Table 2 (2 levels)	Tabela automática 2 (2 níveis)
 	AutoSave	Salvamento automático
-	AutoSave documents that have been saved	Salvar automaticamente documentos que já foram salvos
 	AutoSave saves every change to the file (needs a saved document)	O salvamento automático grava cada alteração no arquivo (requer um documento já salvo)
 	AutoText	Autotexto
 	Backspace	Backspace
@@ -789,3 +788,10 @@
 	Scroll ribbon left	Rolar a faixa de opções para a esquerda
 	Scroll ribbon right	Rolar a faixa de opções para a direita
 	Character Border	Borda de caractere
+	AutoSave documents you have saved in WordCraft	Salvar automaticamente documentos que você salvou no WordCraft
+	AutoSave failed: {error}. Save the document to turn AutoSave back on.	Falha no salvamento automático: {error}. Salve o documento para reativar o salvamento automático.
+	Couldn't download {name}: {error}	Não foi possível baixar {name}: {error}
+	Do you want to save changes to {name}?	Deseja salvar as alterações em {name}?
+	Don't Save	Não Salvar
+	That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.	Esse formato não preserva tudo, então o documento continua aberto. Salve-o como documento do Word (.docx) para continuar.
+	Your changes will be lost if you don't save them.	Suas alterações serão perdidas se você não salvá-las.
