@@ -92,6 +92,9 @@ Progress docs follow [`craftrules/standards/progress-docs.md`](https://github.co
   `gh api repos/storytold/wordcraft --jq '.permissions.push'`. If it is false, create a fork with
   `gh repo fork storytold/wordcraft --clone=false`. Do not add `--remote=false` when the command
   has a repository argument; that flag combination fails. Keep the current upstream remote.
-  Push the branch to the returned fork URL. Create the PR against `storytold/wordcraft`, with
+  Push the branch to the returned fork URL. If HTTPS Git cannot read a username in a headless
+  shell, use the current GitHub CLI login for that command:
+  `git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push <fork-url> HEAD:<branch>`.
+  This does not change the saved Git credential settings. Create the PR against `storytold/wordcraft`, with
   `main` as its base and the fork owner's branch as its head. Check the returned PR URL and
   confirm its base, head and changed files.
