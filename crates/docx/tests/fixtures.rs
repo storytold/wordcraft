@@ -2,8 +2,8 @@
 
 use std::io::Write;
 
-use wordcraft_doc::para::{NoteKind, ShapeKind, Wrap};
-use wordcraft_doc::props::{Align, TextColor, VMerge};
+use wordcraft_doc::para::{Anchor, FloatAlign, NoteKind, ShapeKind, Wrap};
+use wordcraft_doc::props::{Align, Border, BorderStyle, Rgb, TextColor, VMerge};
 use wordcraft_doc::{Block, Document, InlineObject, Paragraph};
 
 const W_NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office""#;
@@ -252,7 +252,8 @@ fn styles_numbering_settings_notes_comments_from_parts() {
     match &p[0].objects[..] {
         [InlineObject::CommentStart { id: 5 }, InlineObject::NoteRef { kind: NoteKind::Footnote, id, .. }, InlineObject::CommentEnd { id: 5 }] => {
             let note = d.parts.get(id).unwrap().blocks[0].as_para().unwrap();
-            assert_eq!(note.text, " Note text");
+            assert_eq!(note.text, format!("{} Note text", wordcraft_doc::para::OBJ));
+            assert_eq!(note.objects, vec![InlineObject::NoteRef { kind: NoteKind::Footnote, id: *id, custom: String::new() }]);
         }
         o => panic!("{o:?}"),
     }
@@ -273,6 +274,79 @@ fn styles_numbering_settings_notes_comments_from_parts() {
     assert_eq!(d.parts.get(&hid).unwrap().blocks[0].as_para().unwrap().text, "H");
     assert_eq!(d.core.title, "Doc Title");
     assert_eq!(d.core.revision, 3);
+}
+
+/// Word starts every note with a `w:footnoteRef` / `w:endnoteRef` mark: the note's own number.
+/// It reads as a reference to the note itself, so the note text shows its number.
+#[test]
+fn note_marks_reference_their_own_note() {
+    let note = |tag: &str, mark: &str, style: &str, id: u32, text: &str| {
+        format!(
+            r#"<w:{tag} w:id="{id}"><w:p><w:pPr><w:pStyle w:val="{style}Text"/></w:pPr><w:r><w:rPr><w:rStyle w:val="{style}Reference"/></w:rPr><w:{mark}/></w:r><w:r><w:t xml:space="preserve"> {text}</w:t></w:r></w:p></w:{tag}>"#
+        )
+    };
+    let sep = |tag: &str| {
+        format!(
+            r#"<w:{tag} w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:{tag}><w:{tag} w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:{tag}>"#
+        )
+    };
+    // The second footnote has a stray endnote mark, which is not its number.
+    let footnotes = format!(
+        r#"<w:footnotes {W_NS}>{}{}<w:footnote w:id="2"><w:p><w:r><w:endnoteRef/><w:t>Stray</w:t></w:r></w:p></w:footnote>{}</w:footnotes>"#,
+        sep("footnote"),
+        note("footnote", "footnoteRef", "Footnote", 1, "First."),
+        note("footnote", "footnoteRef", "Footnote", 3, "Third."),
+    );
+    let endnotes = format!(r#"<w:endnotes {W_NS}>{}{}</w:endnotes>"#, sep("endnote"), note("endnote", "endnoteRef", "Endnote", 1, "End."));
+    // A mark outside a note (here in the body) refers to nothing.
+    let body = r#"<w:p><w:r><w:footnoteRef/><w:t>A</w:t></w:r><w:r><w:footnoteReference w:id="1"/></w:r><w:r><w:footnoteReference w:id="2"/></w:r><w:r><w:footnoteReference w:id="3"/></w:r><w:r><w:endnoteReference w:id="1"/></w:r></w:p>"#;
+    let bytes = docx(
+        body,
+        &[("rId1", "footnotes", "footnotes.xml"), ("rId2", "endnotes", "endnotes.xml")],
+        &[("word/footnotes.xml", &footnotes), ("word/endnotes.xml", &endnotes)],
+    );
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    let p = paras(&d)[0];
+    assert_eq!(p.text.chars().filter(|c| *c == wordcraft_doc::para::OBJ).count(), 4, "{:?}", p.objects);
+    let refs: Vec<(NoteKind, u32)> = p
+        .objects
+        .iter()
+        .map(|o| match o {
+            InlineObject::NoteRef { kind, id, .. } => (*kind, *id),
+            o => panic!("{o:?}"),
+        })
+        .collect();
+    let first_para = |id: u32| d.parts.get(&id).unwrap().blocks[0].as_para().unwrap();
+    for (kind, id) in [refs[0], refs[2], refs[3]] {
+        let n = first_para(id);
+        assert_eq!(n.objects, vec![InlineObject::NoteRef { kind, id, custom: String::new() }], "note {id}");
+        assert!(n.text.starts_with(wordcraft_doc::para::OBJ), "{:?}", n.text);
+        let style = if kind == NoteKind::Footnote { "FootnoteReference" } else { "EndnoteReference" };
+        assert_eq!(n.props_of_char(0).style.as_deref(), Some(style));
+    }
+    assert_eq!(first_para(refs[0].1).plain_text(), " First.");
+    assert_eq!(first_para(refs[3].1).plain_text(), " End.");
+    let stray = first_para(refs[1].1);
+    assert!(stray.objects.is_empty(), "{:?}", stray.objects);
+    assert_eq!(stray.text, "Stray");
+}
+
+#[test]
+fn empty_tbl_borders_elements_leave_sides_unset() {
+    // Style TS: single borders on all six sides. Document: table styled TS with an empty
+    // paired <w:tblBorders></w:tblBorders> and empty <w:tcBorders></w:tcBorders> per cell.
+    // (Hand-written from ECMA-376 §17.4.39/§17.4.43; do not use files produced by Word.)
+    let styles = format!(
+        r#"<w:styles {W_NS}><w:style w:type="table" w:styleId="TS"><w:name w:val="TS"/><w:tblPr><w:tblBorders><w:top w:val="single" w:sz="2" w:color="000000"/><w:left w:val="single" w:sz="2" w:color="000000"/><w:bottom w:val="single" w:sz="2" w:color="000000"/><w:right w:val="single" w:sz="2" w:color="000000"/><w:insideH w:val="single" w:sz="2" w:color="000000"/><w:insideV w:val="single" w:sz="2" w:color="000000"/></w:tblBorders></w:tblPr></w:style></w:styles>"#
+    );
+    let body = r#"<w:tbl><w:tblPr><w:tblStyle w:val="TS"/><w:tblBorders></w:tblBorders></w:tblPr><w:tblGrid><w:gridCol w:w="4000"/><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcBorders></w:tcBorders></w:tcPr><w:p/></w:tc><w:tc><w:tcPr><w:tcBorders></w:tcBorders></w:tcPr><w:p/></w:tc></w:tr></w:tbl>"#;
+    let d = wordcraft_docx::read(&docx(body, &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)])).unwrap();
+    let t = d.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.props.borders, Some(wordcraft_doc::props::Borders::default()));
+    assert_eq!(t.rows[0].cells[0].props.borders, Some(wordcraft_doc::props::Borders::default()));
+    let parts = d.styles.get("TS").unwrap().table.clone().unwrap();
+    let b = parts.borders.unwrap();
+    assert!(b.top.is_some() && b.between.is_some() && b.inside_v.is_some());
 }
 
 #[test]
@@ -369,4 +443,119 @@ fn header_self_reference_and_escaping_targets() {
     assert!(d.media.is_empty());
     let out = wordcraft_docx::write(&d).unwrap();
     wordcraft_docx::read(&out).unwrap();
+}
+
+/// A document whose settings part is `settings` (None: no settings part at all).
+fn with_settings(settings: Option<&str>) -> Document {
+    let body = "<w:p><w:r><w:t>x</w:t></w:r></w:p>";
+    match settings {
+        None => read_body(body),
+        Some(inner) => {
+            let s = format!(r#"<w:settings {W_NS}>{inner}</w:settings>"#);
+            wordcraft_docx::read(&docx(body, &[("rId1", "settings", "settings.xml")], &[("word/settings.xml", &s)])).unwrap()
+        }
+    }
+}
+
+#[test]
+fn compatibility_mode_is_read_and_defaults_to_word_2007() {
+    let compat = |v: &str| {
+        format!(r#"<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="{v}"/></w:compat>"#)
+    };
+    assert_eq!(with_settings(Some(&compat("15"))).settings.compat_mode, 15);
+    assert_eq!(with_settings(Some(&compat("14"))).settings.compat_mode, 14);
+    // Unnamed, out of range or junk values.
+    assert_eq!(with_settings(Some("<w:compat/>")).settings.compat_mode, wordcraft_doc::LEGACY_COMPAT_MODE);
+    assert_eq!(with_settings(None).settings.compat_mode, wordcraft_doc::LEGACY_COMPAT_MODE);
+    assert_eq!(with_settings(Some(&compat("-3"))).settings.compat_mode, 11);
+    assert_eq!(with_settings(Some(&compat("99999"))).settings.compat_mode, 99);
+    assert_eq!(with_settings(Some(&compat("abc"))).settings.compat_mode, wordcraft_doc::LEGACY_COMPAT_MODE);
+    // Another vendor's setting of the same name is ignored.
+    let other = r#"<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="urn:example" w:val="15"/></w:compat>"#;
+    assert_eq!(with_settings(Some(other)).settings.compat_mode, wordcraft_doc::LEGACY_COMPAT_MODE);
+}
+
+#[test]
+fn line_rule_is_read_case_insensitively() {
+    // Word accepts `atleast` as well as the spec's `atLeast`.
+    let d = read_body(
+        r#"<w:p><w:pPr><w:spacing w:line="280" w:lineRule="atleast"/></w:pPr><w:r><w:t>x</w:t></w:r></w:p><w:p><w:pPr><w:spacing w:line="300" w:lineRule="EXACT"/></w:pPr></w:p>"#,
+    );
+    let p = paras(&d);
+    assert_eq!(p[0].props.line_spacing, Some(wordcraft_doc::props::LineSpacing::AtLeast(14.0)));
+    assert_eq!(p[1].props.line_spacing, Some(wordcraft_doc::props::LineSpacing::Exactly(15.0)));
+}
+
+#[test]
+fn char_border_reads_and_nil_resolves_off() {
+    let d = read_body(
+        r#"<w:p><w:r><w:rPr><w:bdr w:val="single" w:sz="8" w:space="1" w:color="FF0000"/></w:rPr><w:t>a</w:t></w:r><w:r><w:rPr><w:bdr w:val="nil"/></w:rPr><w:t>b</w:t></w:r></w:p>"#,
+    );
+    let p = paras(&d)[0];
+    assert_eq!(p.props_of_char(0).border, Some(Border { style: BorderStyle::Single, width: 1.0, color: Some(Rgb(0xFF, 0, 0)), space: 1.0 }));
+    let nil = p.props_of_char(1);
+    assert_eq!(nil.border.map(|b| b.style), Some(BorderStyle::None));
+    assert_eq!(d.styles.resolve_char(None, nil).border, None);
+}
+
+#[test]
+fn anchor_alignment_reference_areas_and_distances() {
+    let shape = |pos: &str, dist: &str| {
+        format!(
+            r#"<w:r><w:drawing><wp:anchor behindDoc="0" {dist}>{pos}<wp:extent cx="127000" cy="127000"/><wp:wrapTopAndBottom/><wp:docPr id="1" name="S"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:spPr><a:prstGeom prst="ellipse"/></wps:spPr></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>"#
+        )
+    };
+    let body = format!(
+        "<w:p>{}{}</w:p>",
+        shape(
+            r#"<wp:positionH relativeFrom="margin"><wp:align>center</wp:align></wp:positionH><wp:positionV relativeFrom="topMargin"><wp:posOffset>-12700</wp:posOffset></wp:positionV>"#,
+            r#"distT="25400" distB="50800" distL="0" distR="114300""#
+        ),
+        shape(
+            r#"<wp:positionH relativeFrom="leftMargin"><wp:posOffset>63500</wp:posOffset></wp:positionH><wp:positionV relativeFrom="line"><wp:align>bottom</wp:align></wp:positionV>"#,
+            ""
+        ),
+    );
+    let d = read_body(&body);
+    let p = paras(&d);
+    let floats: Vec<_> = p[0].objects.iter().filter_map(|o| if let InlineObject::Shape { float, .. } = o { Some(*float) } else { None }).collect();
+    let [a, b] = floats.as_slice() else { panic!("{floats:?}") };
+    assert_eq!((a.h_rel, a.h_align, a.v_rel, a.v_align, a.y), (Anchor::Margin, Some(FloatAlign::Center), Anchor::TopMargin, None, -1.0));
+    assert_eq!((a.dist, a.dist_top, a.dist_bottom), (9.0, 2.0, 4.0));
+    assert_eq!((b.h_rel, b.h_align, b.x, b.v_rel, b.v_align), (Anchor::LeftMargin, None, 5.0, Anchor::Line, Some(FloatAlign::End)));
+    assert_eq!((b.dist, b.dist_top, b.dist_bottom), (0.0, 0.0, 0.0));
+}
+
+#[test]
+fn documents_without_a_compatibility_mode_are_laid_out_as_word_2007() {
+    assert_eq!(read_body("<w:p/>").settings.compat_mode, wordcraft_doc::LEGACY_COMPAT_MODE);
+}
+
+#[test]
+fn style_rfonts_without_ascii_inherits_doc_defaults_font() {
+    // Issue #93: Normal names only East Asian / complex-script fonts, so Latin text keeps the
+    // docDefaults font. A run hinted as East Asian still uses its East Asian font.
+    let styles = format!(
+        r#"<w:styles {W_NS}>
+ <w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:eastAsia="Calibri" w:hAnsi="Calibri" w:cs="Calibri"/></w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults>
+ <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/><w:rPr><w:rFonts w:eastAsia="Times New Roman" w:cs="Times New Roman"/></w:rPr></w:style>
+</w:styles>"#
+    );
+    let body = r#"<w:p><w:r><w:t>Plain</w:t></w:r></w:p><w:p><w:r><w:rPr><w:rFonts w:hint="eastAsia" w:eastAsia="SimSun"/></w:rPr><w:t>漢字</w:t></w:r></w:p>"#;
+    let d = wordcraft_docx::read(&docx(body, &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)])).unwrap();
+    assert_eq!(d.styles.get("Normal").unwrap().chr.font, None);
+    let ps = paras(&d);
+    let font = |p: &Paragraph| d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props).font;
+    assert_eq!(font(ps[0]), "Calibri");
+    assert_eq!(font(ps[1]), "SimSun");
+}
+
+#[test]
+fn bare_break_directly_in_paragraph() {
+    let body = r#"<w:p><w:r><w:t>First</w:t></w:r><w:br/><w:r><w:t>Second</w:t></w:r><w:cr/><w:br w:type="page"/><w:r><w:t>Third</w:t></w:r></w:p>"#;
+    let d = read_body(body);
+    assert_eq!(paras(&d)[0].text, "First\nSecond\n\u{C}Third");
+    let out = wordcraft_docx::write(&d).unwrap();
+    let d2 = wordcraft_docx::read(&out).unwrap();
+    assert_eq!(paras(&d2)[0].text, "First\nSecond\n\u{C}Third");
 }
