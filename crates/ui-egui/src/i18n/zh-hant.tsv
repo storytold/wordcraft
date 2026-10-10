@@ -995,3 +995,18 @@
 	Dark	深色
 	Use system setting	使用系統設定
 	A file dialog is already open.	已有一個檔案對話方塊開啟中。
+	Height:	高度：
+	Width:	寬度：
+	Row	列
+	Cell	儲存格
+	Preferred width:	慣用寬度：
+	Alignment:	對齊方式：
+	Indent from left:	左側縮排：
+	Specify height:	指定高度：
+	Exactly	固定
+	At least	最小
+	Allow row to break across pages	允許列跨頁中斷
+	Repeat as header row on each page	在每頁重複作為標題列
+	Vertical alignment:	垂直對齊方式：
+	Top	上
+	Bottom	下

@@ -1005,3 +1005,18 @@
 	Dark	深色
 	Use system setting	使用系统设置
 	A file dialog is already open.	已有一个文件对话框处于打开状态。
+	Height:	高度：
+	Width:	宽度：
+	Row	行
+	Cell	单元格
+	Preferred width:	首选宽度：
+	Alignment:	对齐方式：
+	Indent from left:	左缩进：
+	Specify height:	指定高度：
+	Exactly	固定值
+	At least	最小值
+	Allow row to break across pages	允许跨页断行
+	Repeat as header row on each page	在各页重复作为标题行
+	Vertical alignment:	垂直对齐方式：
+	Top	顶端
+	Bottom	底端

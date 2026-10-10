@@ -1006,3 +1006,18 @@
 	Dark	Escuro
 	Use system setting	Usar a configuração do sistema
 	A file dialog is already open.	Já há uma caixa de diálogo de arquivo aberta.
+	Height:	Altura:
+	Width:	Largura:
+	Row	Linha
+	Cell	Célula
+	Preferred width:	Largura preferencial:
+	Alignment:	Alinhamento:
+	Indent from left:	Recuo à esquerda:
+	Specify height:	Especificar altura:
+	Exactly	Exatamente
+	At least	Pelo menos
+	Allow row to break across pages	Permitir quebra de linha entre páginas
+	Repeat as header row on each page	Repetir como linha de cabeçalho em cada página
+	Vertical alignment:	Alinhamento vertical:
+	Top	Superior
+	Bottom	Inferior

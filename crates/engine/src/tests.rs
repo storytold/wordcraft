@@ -619,6 +619,115 @@ fn tables_commands() {
     assert!(s.run("table.merge", &json!({})).is_err());
 }
 
+/// AutoFit Contents (#44) measures the text: a column of short words narrows, a column with a
+/// long sentence widens (wrapping within the page), and the widths are written to the grid.
+#[test]
+fn autofit_contents_sizes_columns_to_their_text() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 3}));
+    let grid = |s: &Session| s.doc.body.iter().find_map(|b| b.as_table()).unwrap().grid.clone();
+    let before = grid(&s);
+    run(&mut s, "text.insert", json!({"text": "A"}));
+    run(&mut s, "text.tab", json!({}));
+    run(
+        &mut s,
+        "text.insert",
+        json!({"text": "This cell holds a long sentence that would wrap many times in a third of the page width, so it should get most of the room."}),
+    );
+    run(&mut s, "text.tab", json!({}));
+    run(&mut s, "text.insert", json!({"text": "B"}));
+    run(&mut s, "table.autofit", json!({"mode": "contents"}));
+    let after = grid(&s);
+    let tw = cmd::page::sect(&s).text_width();
+    assert!(after[0] < before[0] / 2.0, "short column narrows: {before:?} → {after:?}");
+    assert!(after[2] < before[2] / 2.0, "short column narrows: {before:?} → {after:?}");
+    assert!(after[1] > before[1] * 1.5, "long column widens: {before:?} → {after:?}");
+    let total: f32 = after.iter().sum();
+    assert!(total <= tw + 0.5 && total > tw - 1.0, "the long text fills the page width: {total} vs {tw}");
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert!(t.props.width_pct.is_none() && !t.props.fixed);
+    assert_eq!(t.rows[0].cells[1].props.width, Some(after[1]), "cell widths follow the grid");
+    // Short text only: every column gets just what its text needs.
+    s.doc = wordcraft_doc::Document::new();
+    s.sel = crate::Selection::caret(Pos::body(0, 0));
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 2}));
+    run(&mut s, "text.insert", json!({"text": "Name"}));
+    run(&mut s, "text.tab", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Quantity"}));
+    run(&mut s, "table.autofit", json!({"mode": "contents"}));
+    let g = grid(&s);
+    assert!(g[0] < g[1] && g[1] < 100.0, "{g:?}");
+    // The layout uses the new widths.
+    let w = s.layout().pages[0].items.iter().find_map(|it| match it {
+        wordcraft_layout::Placed::Cell { rect, row: 0, cell: 0, .. } => Some(rect.w),
+        _ => None,
+    });
+    assert!(w.is_some_and(|w| (w - g[0]).abs() < 0.5), "{w:?} vs {g:?}");
+}
+
+/// The Height and Width boxes (Table Layout › Cell Size) run `table.rowHeight` and
+/// `table.columnWidth`; each edit is one Undo.
+#[test]
+fn cell_size_boxes_set_row_height_and_column_width() {
+    use wordcraft_doc::props::HeightRule;
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    run(&mut s, "table.autofit", json!({"mode": "window"}));
+    let t0 = s.doc.body.iter().find_map(|b| b.as_table()).unwrap().clone();
+    run(&mut s, "table.columnWidth", json!({"width": 100.0}));
+    run(&mut s, "table.rowHeight", json!({"height": 30.0, "rule": "exact"}));
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.grid[0], 100.0);
+    assert_eq!(t.rows[0].cells[0].props.width, Some(100.0));
+    assert!(t.props.width_pct.is_none(), "the column isn't scaled back to the window");
+    assert_eq!((t.rows[0].props.height, t.rows[0].props.height_rule), (Some(30.0), HeightRule::Exact));
+    let rect = s.layout().pages[0].items.iter().find_map(|it| match it {
+        wordcraft_layout::Placed::Cell { rect, row: 0, cell: 0, .. } => Some(*rect),
+        _ => None,
+    });
+    assert!(rect.is_some_and(|r| (r.w - 100.0).abs() < 0.5 && (r.h - 30.0).abs() < 0.5), "{rect:?}");
+    assert!(s.run("table.rowHeight", &json!({"height": 30.0, "rule": "sideways"})).is_err());
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.body.iter().find_map(|b| b.as_table()).unwrap(), &t0);
+}
+
+/// Table Properties (#44): table, row, column and cell settings land as one undo step, and
+/// without settings the command reports the current ones (the dialog's source).
+#[test]
+fn table_properties_apply_in_one_step() {
+    use wordcraft_doc::props::{Align, HeightRule, VAlign};
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    let t0 = s.doc.body.iter().find_map(|b| b.as_table()).unwrap().clone();
+    run(
+        &mut s,
+        "table.properties",
+        json!({"align": "center", "indent": 18.0, "width": 300.0, "rowHeight": 40.0, "rowHeightRule": "exact", "allowBreak": false,
+               "headerRow": true, "columnWidth": 120.0, "cellWidth": 110.0, "valign": "bottom"}),
+    );
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!((t.props.align, t.props.indent, t.props.width), (Some(Align::Center), Some(18.0), Some(300.0)));
+    let row = &t.rows[0];
+    assert_eq!((row.props.height, row.props.height_rule, row.props.cant_split, row.props.header), (Some(40.0), HeightRule::Exact, true, true));
+    assert_eq!(t.grid[0], 120.0);
+    assert_eq!((row.cells[0].props.width, row.cells[0].props.valign), (Some(110.0), VAlign::Bottom));
+    let applied = t.clone();
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.body.iter().find_map(|b| b.as_table()).unwrap(), &t0, "one undo step per apply");
+    run(&mut s, "edit.redo", json!({}));
+    assert_eq!(s.doc.body.iter().find_map(|b| b.as_table()).unwrap(), &applied);
+    let state = run(&mut s, "table.properties", json!({}));
+    assert_eq!(state["align"], "center");
+    assert_eq!(state["row"]["heightRule"], "exact");
+    assert_eq!(state["columnWidth"], 120.0);
+    assert_eq!(state["cell"]["valign"], "bottom");
+    // Clearing the row height makes it automatic again; bad values are refused.
+    run(&mut s, "table.properties", json!({"rowHeight": null}));
+    assert_eq!(s.doc.body.iter().find_map(|b| b.as_table()).unwrap().rows[0].props.height_rule, HeightRule::Auto);
+    assert!(s.run("table.properties", &json!({"valign": "middle"})).is_err());
+}
+
 /// Table Layout › Text Direction (#226) cycles the selected cells' text through horizontal,
 /// top-to-bottom and bottom-to-top, and the layout turns the text.
 #[test]

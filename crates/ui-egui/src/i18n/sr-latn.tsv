@@ -1005,3 +1005,18 @@
 	Type the recipients, or load them from a file.	Unesite primaoce ili ih učitajte iz fajla.
 	Use an Existing List…	Koristi postojeću listu…
 	A file dialog is already open.	Dijalog za fajlove je već otvoren.
+	Height:	Visina:
+	Width:	Širina:
+	Row	Red
+	Cell	Ćelija
+	Preferred width:	Željena širina:
+	Alignment:	Poravnanje:
+	Indent from left:	Uvlačenje sleva:
+	Specify height:	Zadaj visinu:
+	Exactly	Tačno
+	At least	Najmanje
+	Allow row to break across pages	Dozvoli prelom reda između stranica
+	Repeat as header row on each page	Ponovi kao red zaglavlja na svakoj stranici
+	Vertical alignment:	Vertikalno poravnanje:
+	Top	Gore
+	Bottom	Dole

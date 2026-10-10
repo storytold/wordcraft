@@ -85,6 +85,193 @@ fn default_margins(t: &Table, style: Option<&TableStyleProps>) -> [f32; 4] {
     t.props.cell_margins.or(style.and_then(|s| s.parts.cell_margins)).unwrap_or(DEFAULT_MARGINS)
 }
 
+/// A cell region's text formatting from the table style: the whole table's, then column, then
+/// row conditional formatting (later regions win, ECMA-376 §17.7.6). `region` is (header row,
+/// total row, first column, row band).
+fn region_text(st: &TableStyleProps, region: (bool, bool, bool, bool)) -> CellText {
+    let (is_header, is_total, first_col, band) = region;
+    let mut chr = st.chr.clone();
+    if band {
+        chr.overlay(&st.parts.band_chr);
+    }
+    if first_col {
+        chr.overlay(&st.parts.first_col_chr);
+    }
+    if is_header {
+        chr.overlay(&st.parts.header_chr);
+    } else if is_total {
+        chr.overlay(&st.parts.total_chr);
+    }
+    CellText { para: st.para.clone(), chr }
+}
+
+/// The most paragraphs [`measure_table_columns`] lays out: a huge table is measured by its first
+/// rows only, so AutoFit stays quick.
+const MEASURE_BUDGET: usize = 4000;
+/// The line length paragraphs are measured at: wide enough that nothing real wraps.
+const MEASURE_WIDE: f32 = 15_840.0;
+/// What an empty cell's text needs (about a paragraph mark), points.
+const EMPTY_TEXT: f32 = 12.0;
+
+/// What one paragraph needs: the longest run of text without a break opportunity (`min`) and
+/// its longest line when nothing wraps (`max`), indents included.
+fn measure_para(p: &wordcraft_doc::Paragraph, env: &crate::para::ParaEnv) -> (f32, f32) {
+    use crate::para::ClKind;
+    let pl = crate::para::layout_para(p, env);
+    let rp = &pl.rp;
+    let indents = rp.indent_left.max(0.0) + rp.indent_right.max(0.0) + rp.indent_first.max(0.0);
+    let (mut word, mut min) = (0.0f32, 0.0f32);
+    for c in &pl.clusters {
+        match c.kind {
+            ClKind::Text | ClKind::Object(_) => word += c.adv.max(0.0),
+            ClKind::Marker => {}
+            _ => {
+                min = min.max(word);
+                word = 0.0;
+            }
+        }
+        if c.break_after {
+            min = min.max(word);
+            word = 0.0;
+        }
+    }
+    min = min.max(word);
+    let mut max = 0.0f32;
+    for l in &pl.lines {
+        let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+        for k in l.c0..l.c1 {
+            let (Some(c), Some(a), Some(b)) = (pl.clusters.get(k), l.cl_left(k), l.cl_right(k)) else { continue };
+            lo = lo.min(a.min(b));
+            if !matches!(c.kind, ClKind::Space | ClKind::Marker | ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak) {
+                hi = hi.max(a.max(b));
+            }
+        }
+        if hi > lo {
+            max = max.max(hi - lo + l.hyphen.map_or(0.0, |h| h.2));
+        }
+    }
+    let min = if min.is_finite() { min } else { 0.0 };
+    let max = if max.is_finite() { max.max(min) } else { min };
+    (min + indents, max + indents)
+}
+
+/// What each grid column of `t` needs for AutoFit to Contents, as (narrowest, widest) in points
+/// with cell margins included: the narrowest fits each cell's longest word (text that can't
+/// wrap), the widest fits every paragraph on one line. A cell spanning several columns spreads
+/// what its columns lack over them. Paragraphs are laid out with the table style's formatting;
+/// after [`MEASURE_BUDGET`] paragraphs the remaining rows are skipped.
+pub fn measure_table_columns(doc: &wordcraft_doc::Document, t: &Table) -> Vec<(f32, f32)> {
+    use wordcraft_doc::Block;
+    let style = t.props.style.as_deref().and_then(|id| doc.styles.table_style(id));
+    let parts = style.as_ref().map(|s| &s.parts);
+    let margins_def = default_margins(t, style.as_ref());
+    let ncols = t.cols().clamp(1, wordcraft_doc::table::MAX_COLS);
+    let fields = crate::FieldCtx::default();
+    let header_rows = t.props.look.header_row;
+    let band_size = parts.and_then(|p| p.band_size).unwrap_or(1).clamp(1, 1000) as usize;
+    let nrows = t.rows.len();
+    let mut cols = vec![(0.0f32, 0.0f32); ncols];
+    // Cells spanning several columns: (first column, span, min, max), applied after the others.
+    let mut spanned: Vec<(usize, usize, f32, f32)> = Vec::new();
+    let mut budget = MEASURE_BUDGET;
+    'rows: for (ri, row) in t.rows.iter().enumerate() {
+        let is_header = header_rows && ri == 0;
+        let is_total = t.props.look.total_row && ri + 1 == nrows && nrows > 1;
+        let band = t.props.look.banded_rows && !is_header && (ri.saturating_sub(usize::from(header_rows)) / band_size).is_multiple_of(2);
+        let mut g = 0usize;
+        for cell in &row.cells {
+            let span = cell.span();
+            let margins = cell.props.margins.unwrap_or(margins_def);
+            let side = margins[1].max(0.0) + margins[3].max(0.0);
+            let text = style.as_ref().map(|st| region_text(st, (is_header, is_total, t.props.look.first_column && g == 0, band)));
+            let env = crate::para::ParaEnv {
+                doc,
+                width: MEASURE_WIDE,
+                label: None,
+                fields: &fields,
+                show_hidden: false,
+                hide_deleted: false,
+                table: text.as_ref(),
+                proofing: false,
+                exclusions: &[],
+                eq_number: 0,
+            };
+            let (mut min, mut max) = (EMPTY_TEXT, EMPTY_TEXT);
+            if cell.props.vmerge != VMerge::Continue && !cell.props.text_direction.is_turned() {
+                for b in &cell.blocks {
+                    match &**b {
+                        Block::Para(p) => {
+                            if budget == 0 {
+                                break 'rows;
+                            }
+                            budget -= 1;
+                            let (a, b) = measure_para(p, &env);
+                            min = min.max(a);
+                            max = max.max(b);
+                        }
+                        // A nested table keeps its own column widths.
+                        Block::Table(inner) => {
+                            let w: f32 = inner.grid.iter().filter(|w| w.is_finite()).map(|w| w.clamp(0.0, 1584.0)).sum();
+                            min = min.max(w);
+                            max = max.max(w);
+                        }
+                    }
+                }
+            }
+            let (min, max) = ((min + side).min(1584.0), (max + side).min(1584.0));
+            if span == 1 {
+                if let Some(c) = cols.get_mut(g) {
+                    c.0 = c.0.max(min);
+                    c.1 = c.1.max(max);
+                }
+            } else {
+                spanned.push((g, span, min, max));
+            }
+            g += span;
+        }
+    }
+    for (g, span, min, max) in spanned {
+        let Some(cs) = cols.get_mut(g..(g + span).min(ncols)) else { continue };
+        if cs.is_empty() {
+            continue;
+        }
+        let n = cs.len() as f32;
+        let (have_min, have_max) = cs.iter().fold((0.0, 0.0), |(a, b), c| (a + c.0, b + c.1));
+        for c in cs.iter_mut() {
+            c.0 += ((min - have_min) / n).max(0.0);
+            c.1 += ((max - have_max) / n).max(0.0);
+            c.1 = c.1.max(c.0);
+        }
+    }
+    // A column no cell starts in still needs room for its margins.
+    let floor = margins_def[1].max(0.0) + margins_def[3].max(0.0) + EMPTY_TEXT;
+    cols.iter_mut().for_each(|c| {
+        c.0 = c.0.max(floor);
+        c.1 = c.1.max(c.0);
+    });
+    cols
+}
+
+/// Column widths for AutoFit to Contents, the way Word shares the room: every column gets its
+/// widest content when that all fits in `avail`; otherwise each gets its narrowest plus a share
+/// of the remaining room in proportion to how much wider its content would like to be. When
+/// even the narrowest widths don't fit, the columns keep them (the table runs past the margin,
+/// as in Word).
+pub fn autofit_widths(cols: &[(f32, f32)], avail: f32) -> Vec<f32> {
+    let clean = |v: f32| if v.is_finite() { v.clamp(0.0, 1584.0) } else { 0.0 };
+    let cols: Vec<(f32, f32)> = cols.iter().map(|&(a, b)| (clean(a), clean(b).max(clean(a)))).collect();
+    let avail = clean(avail);
+    let (sum_min, sum_max) = cols.iter().fold((0.0f32, 0.0f32), |(a, b), c| (a + c.0, b + c.1));
+    if sum_max <= avail {
+        return cols.iter().map(|c| c.1).collect();
+    }
+    if sum_min >= avail || sum_max <= sum_min {
+        return cols.iter().map(|c| c.0).collect();
+    }
+    let k = (avail - sum_min) / (sum_max - sum_min);
+    cols.iter().map(|c| c.0 + (c.1 - c.0) * k).collect()
+}
+
 /// The first cell's left margin: how far its text sits inside the table's edge.
 pub(crate) fn first_cell_left_margin(ctx: &Ctx, t: &Table) -> f32 {
     first_cell_left_margin_in(t, default_margins(t, table_style(ctx, t).as_ref()))
@@ -210,21 +397,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             if let Some(st) = &style
                 && !cell_text.iter().any(|(r, _)| *r == region)
             {
-                // The whole table's formatting, then column, then row conditional formatting
-                // (later regions win, ECMA-376 §17.7.6).
-                let mut chr = st.chr.clone();
-                if band {
-                    chr.overlay(&st.parts.band_chr);
-                }
-                if region.2 {
-                    chr.overlay(&st.parts.first_col_chr);
-                }
-                if is_header {
-                    chr.overlay(&st.parts.header_chr);
-                } else if is_total {
-                    chr.overlay(&st.parts.total_chr);
-                }
-                cell_text.push((region, CellText { para: st.para.clone(), chr }));
+                cell_text.push((region, region_text(st, region)));
             }
             let text = cell_text.iter().find(|(r, _)| *r == region).map(|(_, c)| c);
             let mut cpath = path.to_vec();
