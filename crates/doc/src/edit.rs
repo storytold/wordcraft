@@ -412,9 +412,15 @@ impl Document {
         }
         let src = parts.get(&old).or_else(|| self.parts.get(&old).filter(|p| p.kind == PartKind::TextBox))?;
         let mut blocks: Vec<Block> = src.blocks.iter().map(|b| (**b).clone()).collect();
+        // The copy keeps its text direction and alignment, not its link (a copy stands alone).
+        let body = crate::TextBody { next: None, ..src.body };
         *budget -= 1;
         self.adopt_text_boxes(&mut blocks, parts, depth + 1, budget);
-        Some(self.add_part(PartKind::TextBox, blocks.into_iter().map(Arc::new).collect()))
+        let id = self.add_part(PartKind::TextBox, blocks.into_iter().map(Arc::new).collect());
+        if let Some(p) = self.parts.get_mut(&id) {
+            p.body = body;
+        }
+        Some(id)
     }
 
     /// Insert a fragment at `pos`; returns the position after the pasted content.

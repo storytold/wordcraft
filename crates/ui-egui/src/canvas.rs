@@ -73,6 +73,8 @@ pub struct CanvasState {
     pub table_tool: Option<crate::table_pen::TableTool>,
     /// The Draw Table stroke (or eraser press) in progress.
     pub(crate) table_stroke: Option<crate::table_pen::PenStroke>,
+    /// Create Link is waiting for a click on the text box to link to: the linking box's object.
+    pub(crate) link_from: Option<wordcraft_doc::Pos>,
 }
 
 impl CanvasState {
@@ -120,6 +122,7 @@ impl Default for CanvasState {
             balloon_rects: Vec::new(),
             table_tool: None,
             table_stroke: None,
+            link_from: None,
         }
     }
 }
