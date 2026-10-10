@@ -1006,3 +1006,23 @@
 	Dark	Темна
 	Use system setting	Як у системі
 	A file dialog is already open.	Діалогове вікно файлу вже відкрито.
+	Manage Styles	Керування стилями
+	Show or Hide Style	Показати або сховати стиль
+	Manage Styles…	Керування стилями…
+	Sort order:	Порядок сортування:
+	As Recommended	Як рекомендовано
+	Alphabetical	За абеткою
+	Font: {font}	Шрифт: {font}
+	{size} pt	{size} пт
+	Color: {color}	Колір: {color}
+	Space before: {pt} pt	Інтервал перед: {pt} пт
+	Space after: {pt} pt	Інтервал після: {pt} пт
+	Based on: {style}	На основі: {style}
+	Paragraph style	Стиль абзацу
+	Character style	Стиль символів
+	Linked style (paragraph and character)	Зв’язаний стиль (абзац і символи)
+	Table style	Стиль таблиці
+	Built-in style	Вбудований стиль
+	Show in the Styles gallery	Показувати в колекції стилів
+	Hide from style lists	Сховати зі списків стилів
+	Built-in styles can't be deleted.	Вбудовані стилі не можна видалити.

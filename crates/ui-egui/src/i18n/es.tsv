@@ -1011,3 +1011,23 @@
 	Dark	Oscuro
 	Use system setting	Usar la configuración del sistema
 	A file dialog is already open.	Ya hay un cuadro de diálogo de archivo abierto.
+	Manage Styles	Administrar estilos
+	Show or Hide Style	Mostrar u ocultar estilo
+	Manage Styles…	Administrar estilos…
+	Sort order:	Orden:
+	As Recommended	Recomendado
+	Alphabetical	Alfabético
+	Font: {font}	Fuente: {font}
+	{size} pt	{size} pt
+	Color: {color}	Color: {color}
+	Space before: {pt} pt	Espacio antes: {pt} pt
+	Space after: {pt} pt	Espacio después: {pt} pt
+	Based on: {style}	Basado en: {style}
+	Paragraph style	Estilo de párrafo
+	Character style	Estilo de carácter
+	Linked style (paragraph and character)	Estilo vinculado (párrafo y carácter)
+	Table style	Estilo de tabla
+	Built-in style	Estilo integrado
+	Show in the Styles gallery	Mostrar en la galería de estilos
+	Hide from style lists	Ocultar de las listas de estilos
+	Built-in styles can't be deleted.	Los estilos integrados no se pueden eliminar.

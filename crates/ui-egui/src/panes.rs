@@ -170,6 +170,9 @@ fn styles(app: &mut WordApp, ui: &mut Ui) {
     if ui.selectable_label(app.session.view.style_inspector, tl!("Style Inspector")).clicked() {
         let _ = app.run("styles.inspector", json!({}));
     }
+    if ui.button(tl!("Manage Styles…")).clicked() {
+        let _ = app.run("styles.manage", json!({}));
+    }
     ui.separator();
     let mut list: Vec<(String, String, bool)> = app
         .session

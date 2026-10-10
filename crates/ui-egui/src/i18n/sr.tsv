@@ -1010,3 +1010,23 @@
 	Type the recipients, or load them from a file.	Унесите примаоце или их учитајте из фајла.
 	Use an Existing List…	Користи постојећу листу…
 	A file dialog is already open.	Дијалог за фајлове је већ отворен.
+	Manage Styles	Управљај стиловима
+	Show or Hide Style	Прикажи или сакриј стил
+	Manage Styles…	Управљај стиловима…
+	Sort order:	Редослед сортирања:
+	As Recommended	Према препоруци
+	Alphabetical	Абецедно
+	Font: {font}	Фонт: {font}
+	{size} pt	{size} пт
+	Color: {color}	Боја: {color}
+	Space before: {pt} pt	Размак пре: {pt} пт
+	Space after: {pt} pt	Размак после: {pt} пт
+	Based on: {style}	Заснован на: {style}
+	Paragraph style	Стил пасуса
+	Character style	Стил знакова
+	Linked style (paragraph and character)	Повезани стил (пасус и знакови)
+	Table style	Стил табеле
+	Built-in style	Уграђени стил
+	Show in the Styles gallery	Прикажи у галерији стилова
+	Hide from style lists	Сакриј са листа стилова
+	Built-in styles can't be deleted.	Уграђени стилови не могу да се обришу.
