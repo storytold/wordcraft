@@ -199,6 +199,85 @@ fn markdown_round_trip() {
     check_round_trip("md", true);
 }
 
+/// A right-to-left paragraph, a right-to-left table and left-to-right controls.
+fn rtl_sample() -> Document {
+    let mut d = Document::new();
+    let mut rtl = Paragraph::with_text("سلام World 123", CharProps::default());
+    rtl.props.bidi = Some(true);
+    let mut blocks = vec![para_block(rtl), para_block(Paragraph::with_text("plain control", CharProps::default()))];
+    let mut t = Table::new(1, 2, 400.0);
+    t.props.rtl = true;
+    let mut ar = Paragraph::with_text("العمود الأول", CharProps::default());
+    ar.props.bidi = Some(true);
+    t.rows[0].cells[0].blocks = vec![para_block(ar)];
+    t.rows[0].cells[1].blocks = vec![para_block(Paragraph::with_text("second", CharProps::default()))];
+    blocks.push(Arc::new(Block::Table(t)));
+    d.body = blocks;
+    d
+}
+
+fn flow_table_of(blocks: &[FBlock]) -> &model::FTable {
+    blocks.iter().find_map(|x| if let FBlock::Table(t) = x { Some(t) } else { None }).expect("a table")
+}
+
+#[test]
+fn rtl_direction_survives_html_odt_rtf() {
+    let d = rtl_sample();
+    for ext in ["html", "odt", "rtf"] {
+        let bytes = export(ext, &d).expect("handled").expect("export");
+        match ext {
+            "html" => {
+                let html = String::from_utf8(bytes).unwrap();
+                assert!(html.contains("<p dir=\"rtl\">سلام"), "{ext}: paragraph mark: {html}");
+                assert!(html.contains("<table dir=\"rtl\""), "{ext}: table mark: {html}");
+            }
+            "odt" => {
+                let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+                let mut xml = String::new();
+                std::io::Read::read_to_string(&mut z.by_name("content.xml").unwrap(), &mut xml).unwrap();
+                assert!(xml.contains("style:writing-mode=\"rl-tb\""), "{ext}: paragraph mark");
+            }
+            "rtf" => {
+                let rtf = String::from_utf8(bytes).unwrap();
+                assert!(rtf.contains("\\rtlpar"), "{ext}: paragraph mark");
+                assert!(rtf.contains("\\rtltbl"), "{ext}: table mark");
+            }
+            _ => {}
+        }
+        let back = import(ext, &export(ext, &d).expect("handled").expect("export")).expect("handled").unwrap_or_else(|e| panic!("{ext}: {e}"));
+        let b = flat(&back);
+        let rtl = find_para(&b, "سلام World 123").expect("rtl para");
+        assert!(rtl.rtl, "{ext}: paragraph direction");
+        let ltr = find_para(&b, "plain control").expect("ltr para");
+        assert!(!ltr.rtl, "{ext}: control stays left to right");
+        let t = flow_table_of(&b);
+        let cells: Vec<String> = t.rows[0].iter().map(|c| c.text()).collect();
+        assert_eq!(cells, ["العمود الأول", "second"], "{ext}: logical cell order");
+        if ext == "odt" {
+            // ODT has no table-direction property: the cells stay logical, direction is dropped.
+            assert!(!t.rtl, "{ext}: documented limitation");
+        } else {
+            assert!(t.rtl, "{ext}: table direction");
+        }
+        // The document model agrees with the flow.
+        let dt = back.body.iter().find_map(|x| x.as_table()).expect("doc table");
+        assert_eq!(dt.props.rtl, t.rtl, "{ext}");
+    }
+}
+
+#[test]
+fn plain_text_paste_keeps_logical_arabic_order() {
+    // Markdown and text carry no direction metadata; the words must still come back logically.
+    for ext in ["md", "txt"] {
+        let bytes = export(ext, &rtl_sample()).expect("handled").expect("export");
+        let back = import(ext, &bytes).expect("handled").unwrap_or_else(|e| panic!("{ext}: {e}"));
+        let texts = para_texts(&back).join("\n");
+        let (a, b) = (texts.find("سلام World 123"), texts.find("العمود الأول"));
+        assert!(matches!((a, b), (Some(a), Some(b)) if a < b), "{ext}: logical order: {texts:?}");
+        assert!(!texts.chars().any(|c| matches!(c, '\u{202B}' | '\u{202C}' | '\u{202D}' | '\u{202E}')), "{ext}: no explicit embeddings leak");
+    }
+}
+
 #[test]
 fn html_round_trip() {
     check_round_trip("html", true);

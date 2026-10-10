@@ -152,6 +152,9 @@ impl Writer {
             Some(Align::Left) => props.push_str(" fo:text-align=\"start\""),
             None => {}
         }
+        if p.rtl {
+            props.push_str(" style:writing-mode=\"rl-tb\"");
+        }
         if p.page_break {
             props.push_str(" fo:break-before=\"page\"");
         }
@@ -627,6 +630,7 @@ struct StyleInfo {
     auto: bool,
     fmt: FmtDelta,
     align: Option<Align>,
+    rtl: bool,
     page_break: bool,
     outline: Option<u8>,
     border_bottom: bool,
@@ -796,6 +800,10 @@ impl Styles {
                         if get(&a, "fo:break-before") == Some("page") {
                             s.page_break = true;
                         }
+                        // Right-to-left horizontal paragraph direction (ODF `style:writing-mode`).
+                        if matches!(get(&a, "style:writing-mode"), Some("rl-tb" | "rl")) {
+                            s.rtl = true;
+                        }
                         if get(&a, "fo:border-bottom").is_some_and(|b| b != "none") {
                             s.border_bottom = true;
                         }
@@ -859,8 +867,8 @@ impl Styles {
         f
     }
 
-    /// Paragraph kind, alignment, page break, rule and base formatting (automatic styles only).
-    fn para(&self, name: &str) -> (Kind, Option<Align>, bool, bool, Fmt) {
+    /// Paragraph kind, alignment, direction, page break, rule and base formatting (automatic styles only).
+    fn para(&self, name: &str) -> (Kind, Option<Align>, bool, bool, bool, Fmt) {
         let chain = self.chain(name);
         let mut kind = Kind::Normal;
         for (n, s) in &chain {
@@ -886,13 +894,14 @@ impl Styles {
             }
         }
         let align = chain.iter().find_map(|(_, s)| s.align);
+        let rtl = chain.iter().any(|(_, s)| s.rtl);
         let pb = chain.iter().take_while(|(_, s)| s.auto).any(|(_, s)| s.page_break);
         let rule = chain.iter().any(|(_, s)| s.border_bottom);
         let mut f = Fmt::default();
         for (_, s) in chain.iter().rev().filter(|(_, s)| s.auto) {
             s.fmt.apply(&mut f);
         }
-        (kind, align, pb, rule, f)
+        (kind, align, rtl, pb, rule, f)
     }
 }
 
@@ -939,11 +948,12 @@ impl Body<'_> {
 
     fn start_para(&mut self, style: Option<&str>, heading: Option<u8>) {
         self.end_para();
-        let (mut kind, align, pb, rule, base) = style.map(|s| self.styles.para(s)).unwrap_or((Kind::Normal, None, false, false, Fmt::default()));
+        let (mut kind, align, rtl, pb, rule, base) =
+            style.map(|s| self.styles.para(s)).unwrap_or((Kind::Normal, None, false, false, false, Fmt::default()));
         if let Some(h) = heading {
             kind = Kind::Heading(h.clamp(1, 6));
         }
-        let mut p = Para { kind, align, page_break: pb, ..Default::default() };
+        let mut p = Para { kind, align, rtl, page_break: pb, ..Default::default() };
         if rule && kind == Kind::Normal {
             p.kind = Kind::Rule;
         }
@@ -1249,7 +1259,8 @@ impl Body<'_> {
                 if let Some(t) = self.tables.pop()
                     && !t.rows.is_empty()
                 {
-                    self.container().push(FBlock::Table(FTable { rows: t.rows, widths: Vec::new(), borderless: false }));
+                    // ODT carries no table direction: cell order stays logical (see `FTable::rtl`).
+                    self.container().push(FBlock::Table(FTable { rows: t.rows, widths: Vec::new(), borderless: false, rtl: false }));
                 }
             }
             "desc" | "title" => self.in_desc = false,
@@ -1372,7 +1383,8 @@ pub fn parse(bytes: &[u8]) -> Result<Flow, String> {
     let mut blocks = body.containers.pop().unwrap_or_default();
     for t in body.tables.drain(..) {
         if !t.rows.is_empty() {
-            blocks.push(FBlock::Table(FTable { rows: t.rows, widths: Vec::new(), borderless: false }));
+            // ODT carries no table direction: cell order stays logical (see `FTable::rtl`).
+            blocks.push(FBlock::Table(FTable { rows: t.rows, widths: Vec::new(), borderless: false, rtl: false }));
         }
     }
     if blocks.is_empty() {

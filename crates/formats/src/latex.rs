@@ -2601,7 +2601,7 @@ fn table(toks: &[Tok], spec: &str, depth: usize) -> FTable {
     if !row.is_empty() {
         rows.push(row);
     }
-    let mut out = FTable { rows: Vec::new(), widths: Vec::new(), borderless: false };
+    let mut out = FTable { rows: Vec::new(), widths: Vec::new(), borderless: false, rtl: false };
     // Rows still covered by a `\multirow` above, per grid column.
     let mut covering: Vec<u32> = Vec::new();
     for r in rows {
@@ -3021,7 +3021,7 @@ Caf\'e na\"ive \c{c}a \v{s}\'{e} and {\bfseries grouped bold} after.
 
     #[test]
     fn exported_tables_size_their_columns() {
-        let mut t = FTable { rows: Vec::new(), widths: vec![100.0, 200.0], borderless: false };
+        let mut t = FTable { rows: Vec::new(), widths: vec![100.0, 200.0], borderless: false, rtl: false };
         let cell = |s: &str| Cell {
             blocks: vec![FBlock::Para({
                 let mut p = Para::default();

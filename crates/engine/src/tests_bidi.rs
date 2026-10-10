@@ -226,6 +226,17 @@ fn table_direction_needs_a_table() {
 }
 
 #[test]
+fn plain_text_paste_keeps_logical_arabic_order() {
+    // Pasted text is inserted logically; the destination paragraph keeps its direction.
+    for rtl in [false, true] {
+        let mut s = session("", rtl);
+        run(&mut s, "edit.pasteText", json!({"text": "سلام World 123"}));
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "سلام World 123");
+        assert_eq!(props(&s, 0).bidi, if rtl { Some(true) } else { None });
+    }
+}
+
+#[test]
 fn section_direction_sets_toggles_and_undoes() {
     let mut s = session("one\ntwo", false);
     assert!(!s.doc.last_section.rtl);

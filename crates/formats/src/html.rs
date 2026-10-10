@@ -334,6 +334,8 @@ struct El {
     kind: ElKind,
     fmt: Fmt,
     align: Option<Align>,
+    /// Nearest explicit `dir` (`rtl` = true, `ltr` = false); paragraphs inherit the innermost.
+    dir: Option<bool>,
     preserve: bool,
     page_break: bool,
     /// Li: a paragraph of this item was already emitted.
@@ -345,6 +347,8 @@ struct TableB {
     row: Option<Vec<Cell>>,
     /// The table or one of its cells asks for borders.
     bordered: bool,
+    /// `dir="rtl"` on the table element.
+    rtl: bool,
 }
 
 /// Whether an element's `border` attribute or `style` declares a visible border.
@@ -613,6 +617,8 @@ impl<'r> Builder<'r> {
                     p.align = e.align;
                 }
             }
+            // Direction inherits from the innermost element carrying it, like CSS.
+            p.rtl = self.stack.iter().rev().find_map(|e| e.dir).unwrap_or(false);
             if let (Some((o, _)), Some(li)) = (list_level, li_at) {
                 p.list = Some(ListInfo { ordered: o, level: lists.saturating_sub(1).min(8) as u8 });
                 self.para_cont = self.stack.get(li).is_some_and(|e| e.used);
@@ -779,7 +785,7 @@ impl<'r> Builder<'r> {
                         t.rows.push(r);
                     }
                     let borderless = !t.bordered;
-                    let mut ft = FTable { rows: t.rows.into_iter().filter(|r| !r.is_empty()).collect(), widths: Vec::new(), borderless };
+                    let mut ft = FTable { rows: t.rows.into_iter().filter(|r| !r.is_empty()).collect(), widths: Vec::new(), borderless, rtl: t.rtl };
                     if !ft.rows.is_empty() {
                         ft.insert_covered();
                         self.container().push(FBlock::Table(ft));
@@ -997,11 +1003,42 @@ impl<'r> Builder<'r> {
         if let Some(st) = attr(attrs, "style") {
             apply_style(st, &mut fmt, &mut align, &mut preserve, &mut page_break);
         }
+        // `dir` beats the stylesheet, as in browsers; `auto` leaves inheritance alone.
+        let mut dir = attr(attrs, "dir").and_then(|d| match d.trim().to_ascii_lowercase().as_str() {
+            "rtl" => Some(true),
+            "ltr" => Some(false),
+            _ => None,
+        });
+        if dir.is_none()
+            && let Some(st) = attr(attrs, "style")
+        {
+            for decl in st.split(';') {
+                if let Some((k, v)) = decl.split_once(':')
+                    && k.trim().eq_ignore_ascii_case("direction")
+                {
+                    dir = match v.trim().to_ascii_lowercase().as_str() {
+                        "rtl" => Some(true),
+                        "ltr" => Some(false),
+                        _ => None,
+                    };
+                    break;
+                }
+            }
+        }
         if kind == ElKind::Pre {
             preserve = true;
         }
         match kind {
-            ElKind::Table => self.tables.push(TableB { rows: Vec::new(), row: None, bordered: declares_border(attrs, true) }),
+            ElKind::Table => {
+                // An explicit `dir` wins; otherwise the table inherits its container's.
+                let inherited = self.stack.iter().rev().find_map(|e| e.dir);
+                self.tables.push(TableB {
+                    rows: Vec::new(),
+                    row: None,
+                    bordered: declares_border(attrs, true),
+                    rtl: dir.or(inherited).unwrap_or(false),
+                })
+            }
             ElKind::Tr => {
                 if let Some(t) = self.tables.last_mut()
                     && let Some(r) = t.row.take()
@@ -1038,7 +1075,7 @@ impl<'r> Builder<'r> {
             }
             _ => {}
         }
-        self.stack.push(El { name: name.to_string(), kind, fmt, align, preserve, page_break, used: false });
+        self.stack.push(El { name: name.to_string(), kind, fmt, align, dir, preserve, page_break, used: false });
     }
 
     fn end(&mut self, name: &str) {
@@ -1256,7 +1293,11 @@ fn para_attrs(p: &Para) -> String {
     if p.page_break {
         css.push("break-before:page;page-break-before:always");
     }
-    if css.is_empty() { String::new() } else { format!(" style=\"{}\"", css.join(";")) }
+    let mut attrs = if css.is_empty() { String::new() } else { format!(" style=\"{}\"", css.join(";")) };
+    if p.rtl {
+        attrs.push_str(" dir=\"rtl\"");
+    }
+    attrs
 }
 
 fn para_html(p: &Para) -> String {
@@ -1272,7 +1313,7 @@ fn para_html(p: &Para) -> String {
 }
 
 fn table_html(t: &FTable, out: &mut String, depth: usize) {
-    out.push_str("<table style=\"border-collapse:collapse\">\n");
+    out.push_str(if t.rtl { "<table dir=\"rtl\" style=\"border-collapse:collapse\">\n" } else { "<table style=\"border-collapse:collapse\">\n" });
     for row in &t.rows {
         out.push_str("<tr>");
         for c in row {
@@ -1300,8 +1341,10 @@ fn table_html(t: &FTable, out: &mut String, depth: usize) {
             }
             out.push_str(&format!("<{tag}{attrs} style=\"{}\">", css.join(";")));
             match single {
-                Some(p) => out.push_str(&inlines_html(&p.inlines)),
-                None => {
+                // A right-to-left cell paragraph keeps its direction mark; anything else with
+                // structure goes through the block path.
+                Some(p) if !p.rtl => out.push_str(&inlines_html(&p.inlines)),
+                _ => {
                     out.push('\n');
                     blocks_html(&c.blocks, out, depth + 1);
                 }
@@ -1528,5 +1571,35 @@ mod tests {
     #[test]
     fn entities() {
         assert_eq!(unescape("a &lt;b&gt; &#65;&#x42; &bogus; &"), "a <b> AB &bogus; &");
+    }
+
+    #[test]
+    fn direction_marks() {
+        // Explicit `dir`, container inheritance, the `direction` style and `ltr` overrides.
+        let f = parse(
+            "<div dir=\"rtl\"><p>one</p><p dir=\"ltr\">two</p></div><p style=\"direction: rtl\">three</p><p dir=\"auto\">four</p><span dir=\"rtl\">five</span>",
+        );
+        let dirs: Vec<bool> = f.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p.rtl) } else { None }).collect();
+        assert_eq!(dirs, [true, false, true, false, true]);
+        // Tables inherit their container's direction unless they override it.
+        let f = parse("<div dir=\"rtl\"><table><tr><td>a</td></tr></table><table dir=\"ltr\"><tr><td>b</td></tr></table></div>");
+        let tables: Vec<bool> = f.blocks.iter().filter_map(|b| if let FBlock::Table(t) = b { Some(t.rtl) } else { None }).collect();
+        assert_eq!(tables, [true, false]);
+        // A nested RTL table keeps its own direction inside an LTR one.
+        let f = parse("<table><tr><td><table dir=\"rtl\"><tr><td>n</td></tr></table></td></tr></table>");
+        let outer = f.blocks.iter().find_map(|b| if let FBlock::Table(t) = b { Some(t) } else { None }).unwrap();
+        assert!(!outer.rtl);
+        let inner = outer.rows[0][0].blocks.iter().find_map(|b| if let FBlock::Table(t) = b { Some(t) } else { None }).unwrap();
+        assert!(inner.rtl);
+        // Export marks paragraphs and tables; logical text is untouched.
+        let html = export_flow(&f, "en");
+        assert!(html.contains("<table dir=\"rtl\""));
+        let back = parse(&html);
+        let inner = back.blocks.iter().find_map(|b| if let FBlock::Table(t) = b { Some(t) } else { None }).unwrap().rows[0][0]
+            .blocks
+            .iter()
+            .find_map(|b| if let FBlock::Table(t) = b { Some(t) } else { None })
+            .unwrap();
+        assert!(inner.rtl && inner.rows[0][0].text() == "n");
     }
 }
