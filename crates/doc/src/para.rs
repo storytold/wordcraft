@@ -199,6 +199,10 @@ pub enum InlineObject {
         /// Crop (left, top, right, bottom) fractions 0..1.
         #[serde(default)]
         crop: [f32; 4],
+        /// The OLE object (embedded or linked file) this picture shows, as read from a file:
+        /// saving writes the object back, not only its picture. See [`crate::graphic::Embedded`].
+        #[serde(skip)]
+        ole: Option<std::sync::Arc<crate::graphic::Embedded>>,
     },
     /// A chart or SmartArt diagram (see [`crate::graphic`]).
     Graphic {

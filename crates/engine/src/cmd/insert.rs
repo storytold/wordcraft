@@ -232,8 +232,15 @@ fn picture(s: &mut Session, v: &Value) -> CmdResult {
     }
     let props = s.typing_props();
     let at = delete_selection(s)?;
-    let obj =
-        InlineObject::Image { media: key.clone(), w, h, alt: p::str(v, "alt").unwrap_or("").to_string(), float: Float::default(), crop: [0.0; 4] };
+    let obj = InlineObject::Image {
+        media: key.clone(),
+        w,
+        h,
+        alt: p::str(v, "alt").unwrap_or("").to_string(),
+        float: Float::default(),
+        crop: [0.0; 4],
+        ole: None,
+    };
     let end = s.doc.insert_object(&at, obj, &props)?;
     s.sel = Selection { anchor: at, focus: end };
     Ok(json!({"media": key, "width": w, "height": h}))
