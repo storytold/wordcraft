@@ -96,6 +96,8 @@ pub enum Placed {
         fill: Option<Rgb>,
         stroke: Option<Rgb>,
         stroke_width: f32,
+        /// A freeform's paths (ink strokes among them).
+        freeform: Option<Arc<wordcraft_doc::freeform::Freeform>>,
     },
     /// A floating chart or diagram, drawn from its items inside `rect`. The object is the U+FFFC at
     /// byte `off` of paragraph `path` (its alt text).
@@ -1219,8 +1221,8 @@ fn float_item(o: &InlineObject, rect: Rect, story: StoryRef, path: &[u32], off: 
         InlineObject::Image { media, crop, .. } => {
             Some(Placed::Image { rect, media: media.clone(), crop: *crop, story, path: Path(path.to_vec()), off })
         }
-        InlineObject::Shape { kind, fill, stroke, stroke_width, .. } => {
-            Some(Placed::Shape { rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width })
+        InlineObject::Shape { kind, fill, stroke, stroke_width, freeform, .. } => {
+            Some(Placed::Shape { rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width, freeform: freeform.clone() })
         }
         InlineObject::Graphic { graphic, .. } => Some(Placed::Graphic { rect, graphic: graphic.clone(), story, path: Path(path.to_vec()), off }),
         _ => None,

@@ -678,6 +678,7 @@ fn toc_field_skips_nested_stories() {
             stroke_width: 0.0,
             float: Float::default(),
             story: Some(story),
+            freeform: None,
         }
     };
     let mut head = Paragraph::with_text("Contents", CharProps::default()).styled("TOCHeading");
@@ -799,6 +800,7 @@ fn shapes_textboxes_equations_dropcaps_round_trip() {
         stroke_width: 1.0,
         float: Float { wrap: Wrap::Square, h_rel: Anchor::Margin, v_rel: Anchor::Paragraph, x: 10.0, y: 20.0, dist: 0.0, ..Default::default() },
         story: Some(story),
+        freeform: None,
     };
     let star = InlineObject::Shape {
         kind: ShapeKind::Star,
@@ -809,6 +811,7 @@ fn shapes_textboxes_equations_dropcaps_round_trip() {
         stroke_width: 0.0,
         float: Float::default(),
         story: None,
+        freeform: None,
     };
     let eq = InlineObject::Equation { linear: "x=(-b±√(b^2-4ac))/2a".into(), display: false, math: Default::default() };
     let mut p = Paragraph::with_text("shapes ", CharProps::default());
@@ -824,7 +827,7 @@ fn shapes_textboxes_equations_dropcaps_round_trip() {
     let got = paras(&r);
     assert_eq!(got[0].objects.len(), 3);
     match &got[0].objects[0] {
-        InlineObject::Shape { kind, w, h, fill, stroke, stroke_width, float, story } => {
+        InlineObject::Shape { kind, w, h, fill, stroke, stroke_width, float, story, .. } => {
             assert_eq!(
                 (*kind, *w, *h, *fill, *stroke, *stroke_width),
                 (ShapeKind::TextBox, 144.0, 72.0, Some(Rgb(255, 255, 200)), Some(Rgb(0, 0, 0)), 1.0)
@@ -1027,6 +1030,7 @@ fn self_showing_text_box_saves_bounded() {
         stroke_width: 0.0,
         float: Float::default(),
         story: Some(id),
+        freeform: None,
     };
     for _ in 0..30 {
         d.insert_object(
@@ -1106,4 +1110,51 @@ fn list_level_overrides_round_trip() {
     let mut c = Counters::default();
     assert_eq!(c.next_label(&back.numbering, restart, 0).unwrap().0, "1.");
     assert_eq!(c.next_label(&back.numbering, restart, 1).unwrap().0, "1.01");
+}
+
+/// Ink strokes and freeform shapes are written as DrawingML custom geometry (`a:custGeom`,
+/// `a:moveTo`/`a:lnTo`) in floating drawings and read back with their points, pen and opacity.
+#[test]
+fn ink_and_freeforms_round_trip_as_custom_geometry() {
+    use wordcraft_doc::freeform::{FreePath, Freeform, InkTool};
+    let shape = |fill, stroke_width, wrap, f: Freeform| InlineObject::Shape {
+        kind: ShapeKind::Freeform,
+        w: f.w,
+        h: f.h,
+        fill,
+        stroke: Some(Rgb(0xC0, 0, 0)),
+        stroke_width,
+        float: Float { wrap, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 30.0, y: 12.0, ..Default::default() },
+        story: None,
+        freeform: Some(Arc::new(f)),
+    };
+    let pen = shape(None, 2.0, Wrap::InFrontOfText, Freeform::ink(InkTool::Pen, 60.0, 20.0, vec![[1.0, 1.0], [30.0, 19.0], [59.0, 4.0]]));
+    let marker = shape(None, 12.0, Wrap::BehindText, Freeform::ink(InkTool::Highlighter, 80.0, 12.0, vec![[6.0, 6.0], [74.0, 6.0]]));
+    let triangle = Freeform {
+        w: 40.0,
+        h: 40.0,
+        paths: vec![FreePath { pts: vec![[0.0, 40.0], [20.0, 0.0], [40.0, 40.0]], closed: true }],
+        ..Default::default()
+    };
+    let tri = shape(Some(Rgb(0, 0x80, 0)), 1.0, Wrap::Square, triangle);
+    let mut p = Paragraph::with_text("Inked", CharProps::default());
+    for o in [pen.clone(), marker, tri.clone()] {
+        p.insert_object(0, o, &CharProps::default()).unwrap();
+    }
+    let d = doc_with(vec![p]);
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert_eq!(xml.matches("<a:custGeom>").count(), 3, "{xml}");
+    assert!(xml.contains(r#"<a:path w="762000" h="254000" fill="none"><a:moveTo><a:pt x="12700" y="12700"/></a:moveTo><a:lnTo>"#), "{xml}");
+    assert!(xml.contains(r#"<a:alpha val="50000"/>"#) && xml.contains(r#"cap="rnd""#), "{xml}");
+    let r = rt(&d);
+    let objs = &paras(&r)[0].objects;
+    assert_eq!(objs.len(), 3);
+    // Written in reverse (each inserted at the start): the triangle, the highlighter, the pen.
+    assert_eq!(objs[0], tri, "a filled closed freeform comes back as it was");
+    let InlineObject::Shape { freeform: Some(m), float, stroke_width, .. } = &objs[1] else { panic!("{:?}", objs[1]) };
+    assert_eq!((m.ink, m.alpha, float.wrap, *stroke_width), (Some(InkTool::Highlighter), 0.5, Wrap::BehindText, 12.0));
+    assert_eq!(objs[2], pen, "the pen stroke comes back point for point");
 }

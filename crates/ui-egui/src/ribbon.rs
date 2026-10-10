@@ -4,7 +4,7 @@ use egui::{Align2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use serde_json::{Value, json};
 
 use crate::theme::{Tokens, medium, regular, semibold};
-use crate::widgets::{CONTENT_H, LABEL_H, big, color_grid, combo, group, menu_button, small, split};
+use crate::widgets::{CONTENT_H, LABEL_H, big, big_checked, color_grid, combo, group, menu_button, small, split};
 use crate::{WordApp, icons};
 
 pub const TABS: [&str; 12] = ["File", "Home", "Insert", "Draw", "Design", "Layout", "References", "Mailings", "Review", "View", "Zotero", "Help"];
@@ -610,13 +610,41 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
 }
 
 fn draw(app: &mut WordApp, ui: &mut Ui) {
+    use wordcraft_doc::freeform::InkTool;
+    use wordcraft_engine::cmd::draw::DrawMode;
+    let mode = app.session.view.draw.mode;
+    // The pen the colour and thickness menus change: the one in use, else the pen.
+    let tool = mode.pen().unwrap_or(InkTool::Pen);
+    let pen_id = |t: InkTool| match t {
+        InkTool::Pen => "draw.pen",
+        InkTool::Pencil => "draw.pencil",
+        InkTool::Highlighter => "draw.highlighter",
+    };
     group(ui, "Drawing Tools", None, app, |ui, app| {
-        big(ui, app, "select", "Select", "draw.select", json!({}), false);
+        big_checked(ui, app, "select", "Select", "draw.select", json!({}), mode == DrawMode::Select);
         big(ui, app, "lasso", "Lasso", "draw.lasso", json!({}), false);
-        big(ui, app, "eraser", "Eraser", "draw.eraser", json!({}), false);
-        big(ui, app, "pen", "Pen", "draw.pen", json!({}), false);
-        big(ui, app, "pencil", "Pencil", "draw.pencil", json!({}), false);
-        big(ui, app, "highlight", "Highlighter", "draw.highlighter", json!({}), false);
+        big_checked(ui, app, "eraser", "Eraser", "draw.eraser", json!({}), mode == DrawMode::Eraser);
+        big_checked(ui, app, "pen", "Pen", "draw.pen", json!({}), mode == DrawMode::Pen(InkTool::Pen));
+        big_checked(ui, app, "pencil", "Pencil", "draw.pencil", json!({}), mode == DrawMode::Pen(InkTool::Pencil));
+        big_checked(ui, app, "highlight", "Highlighter", "draw.highlighter", json!({}), mode == DrawMode::Pen(InkTool::Highlighter));
+        let set = app.session.view.draw.settings(tool);
+        stack(ui, |ui| {
+            let sw = Some(crate::theme::c32(set.color));
+            split(ui, app, "fontcolor", "Color", pen_id(tool), json!({}), false, sw, |ui, app| {
+                let theme = app.session.doc.settings.theme_colors.clone();
+                if let Some(hex) = color_grid(ui, &theme) {
+                    let _ = app.run(pen_id(tool), json!({"color": hex}));
+                    ui.close();
+                }
+            });
+            menu_button(ui, app, "thickness", None, "Thickness", false, |ui, app| {
+                let widths: &[f32] = if tool == InkTool::Highlighter { &[4.0, 8.0, 12.0, 18.0, 24.0] } else { &[0.5, 1.0, 1.5, 2.5, 3.5, 5.0] };
+                for w in widths {
+                    let label = crate::i18n::fmt(tl!("{n} pt"), &[("n", &w.to_string())]);
+                    mi_check(ui, app, &label, (set.width - w).abs() < 0.01, pen_id(tool), json!({"width": w}));
+                }
+            });
+        });
     });
     group(ui, "Convert", None, app, |ui, app| {
         big(ui, app, "inkToShape", "Ink to\nShape", "draw.inkToShape", json!({}), false);
@@ -1020,6 +1048,10 @@ fn review(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Protect", None, app, |ui, app| {
         big(ui, app, "blockAuthors", "Block\nAuthors", "review.blockAuthors", json!({}), false);
         big(ui, app, "restrict", "Restrict\nEditing", "review.restrict", json!({}), false);
+    });
+    group(ui, "Ink", None, app, |ui, app| {
+        let hidden = app.session.view.hide_ink;
+        big_checked(ui, app, "hideInk", "Hide\nInk", "review.hideInk", json!({"value": !hidden}), hidden);
     });
 }
 

@@ -24,6 +24,7 @@ pub mod file_dialogs;
 pub mod frame;
 pub mod i18n;
 pub mod icons;
+pub mod ink;
 pub mod keys;
 pub mod keytips;
 pub mod mini_toolbar;

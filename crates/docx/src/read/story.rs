@@ -678,7 +678,18 @@ impl Reader<'_> {
             return Some(InlineObject::Image { media, w, h, alt, float, crop });
         }
         if let Some(wsp) = gd.find("wps:wsp") {
-            return Some(self.read_wsp(sc, wsp, rels, w, h, float));
+            let mut obj = self.read_wsp(sc, wsp, rels, w, h, float);
+            // A freeform: its custom geometry, and whether it's ink WordCraft wrote.
+            if let InlineObject::Shape { kind, freeform, .. } = &mut obj
+                && let Some(sppr) = wsp.child("wps:spPr")
+                && let Some(mut f) = super::freeform::cust_geom(sppr, w, h)
+            {
+                f.alpha = super::freeform::line_alpha(sppr.child("a:ln"));
+                f.ink = c.child("wp:docPr").and_then(|p| p.attr("name")).and_then(super::freeform::ink_tool);
+                *kind = ShapeKind::Freeform;
+                *freeform = Some(Arc::new(f));
+            }
+            return Some(obj);
         }
         None
     }
@@ -745,7 +756,7 @@ impl Reader<'_> {
             Some(t) if sc.story_depth < MAX_STORY_DEPTH => Some(self.read_textbox(sc, t, rels)),
             _ => None,
         };
-        InlineObject::Shape { kind, w, h, fill, stroke, stroke_width, float, story }
+        InlineObject::Shape { kind, w, h, fill, stroke, stroke_width, float, story, freeform: None }
     }
 
     fn read_textbox(&mut self, sc: &StoryCtx, content: &El, rels: &Rels) -> u32 {
@@ -775,7 +786,7 @@ impl Reader<'_> {
             let story = Some(self.read_textbox(sc, t, rels));
             let fill = shape.attr("fillcolor").and_then(Rgb::parse);
             let stroke = shape.attr("strokecolor").and_then(Rgb::parse);
-            return Some(InlineObject::Shape { kind: ShapeKind::TextBox, w, h, fill, stroke, stroke_width: 0.75, float, story });
+            return Some(InlineObject::Shape { kind: ShapeKind::TextBox, w, h, fill, stroke, stroke_width: 0.75, float, story, freeform: None });
         }
         None
     }

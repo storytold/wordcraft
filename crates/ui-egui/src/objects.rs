@@ -238,6 +238,7 @@ mod tests {
             stroke_width: 1.0,
             float: Default::default(),
             story: None,
+            freeform: None,
         };
         let (app, hit) = app_with(shape);
         assert!(!fixed(&app, &hit));

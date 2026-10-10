@@ -74,6 +74,12 @@ pub struct ViewState {
     pub track_changes_pane: bool,
     /// Check spelling and grammar as you type.
     pub proofing: bool,
+    /// Review › Hide Ink: ink strokes aren't shown on screen (they stay in the document).
+    #[serde(default)]
+    pub hide_ink: bool,
+    /// Draw tab: the tool dragging on the page uses, and each pen's colour and thickness.
+    #[serde(default)]
+    pub draw: crate::cmd::draw::DrawState,
 }
 
 fn on() -> bool {
@@ -102,6 +108,8 @@ impl Default for ViewState {
             show_markup: true,
             track_changes_pane: false,
             proofing: true,
+            hide_ink: false,
+            draw: Default::default(),
         }
     }
 }

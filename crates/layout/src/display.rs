@@ -67,6 +67,14 @@ pub enum Draw {
         stroke: Option<Rgb>,
         stroke_width: f32,
     },
+    /// An ink stroke: a line through `pts` (page points) with round ends and joins, `width`
+    /// wide, in `color` at opacity `alpha`.
+    Ink {
+        pts: Vec<(f32, f32)>,
+        color: Rgb,
+        width: f32,
+        alpha: f32,
+    },
     /// A vector path (a chart's or diagram's polygons, slices, lines): filled, then stroked.
     Path {
         segs: Vec<PathSeg>,
@@ -130,11 +138,13 @@ pub struct DisplayOptions {
     pub markup: bool,
     /// Show on-screen-only marks: equation placeholders and prompts (never in print or PDF).
     pub placeholders: bool,
+    /// Review › Hide Ink: leave ink strokes out (they stay in the document).
+    pub hide_ink: bool,
 }
 
 impl Default for DisplayOptions {
     fn default() -> Self {
-        DisplayOptions { marks: false, dim_header: true, dim_body: false, markup: true, placeholders: false }
+        DisplayOptions { marks: false, dim_header: true, dim_body: false, markup: true, placeholders: false, hide_ink: false }
     }
 }
 
@@ -211,8 +221,8 @@ fn item(doc: &Document, it: &Placed, opts: &DisplayOptions, alpha: f32, out: &mu
         Placed::Fill { rect, color } => out.push(Draw::Fill { rect: *rect, color: *color, alpha }),
         Placed::Rule { x0, y0, x1, y1, border } => out.push(rule(*x0, *y0, *x1, *y1, border, alpha)),
         Placed::Image { rect, media, crop, .. } => out.push(Draw::Image { rect: *rect, media: media.clone(), crop: *crop, alpha }),
-        Placed::Shape { rect, kind, fill, stroke, stroke_width } => {
-            out.push(Draw::Shape { rect: *rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width })
+        Placed::Shape { rect, kind, fill, stroke, stroke_width, freeform } => {
+            shape_draws(*rect, *kind, *fill, *stroke, *stroke_width, freeform.as_deref(), opts, out)
         }
         Placed::Graphic { rect, graphic, .. } => out.extend(graphic_draws(doc, graphic, *rect, alpha)),
         Placed::Cell { .. } | Placed::Object { .. } => {}
@@ -546,8 +556,8 @@ fn lines(
             let rect = inline_rect(obj, cx, base, c.adv, c.obj_h);
             match obj {
                 Some(InlineObject::Image { media, crop, .. }) => out.push(Draw::Image { rect, media: media.clone(), crop: *crop, alpha }),
-                Some(InlineObject::Shape { kind, fill, stroke, stroke_width, .. }) => {
-                    out.push(Draw::Shape { rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width })
+                Some(InlineObject::Shape { kind, fill, stroke, stroke_width, freeform, .. }) => {
+                    shape_draws(rect, *kind, *fill, *stroke, *stroke_width, freeform.as_deref(), opts, out)
                 }
                 Some(InlineObject::Graphic { graphic, alt, .. }) => {
                     out.push(Draw::Figure { alt: alt.clone(), kind: graphic.kind, draws: graphic_draws(doc, graphic, rect, alpha) })
@@ -781,6 +791,49 @@ fn page_segs(segs: &[PathSeg], map: impl Fn(f32, f32) -> (f32, f32)) -> Vec<Path
 }
 
 /// A path of clean segments (see [`page_segs`]) as a kurbo path, for the rasteriser and PDF.
+/// The draws of a shape at `rect`: a preset outline, or a freeform's paths (an ink stroke left out
+/// under Review › Hide Ink).
+#[allow(clippy::too_many_arguments)]
+fn shape_draws(
+    rect: Rect,
+    kind: ShapeKind,
+    fill: Option<Rgb>,
+    stroke: Option<Rgb>,
+    stroke_width: f32,
+    freeform: Option<&wordcraft_doc::freeform::Freeform>,
+    opts: &DisplayOptions,
+    out: &mut Vec<Draw>,
+) {
+    let Some(f) = freeform.filter(|_| kind == ShapeKind::Freeform) else {
+        out.push(Draw::Shape { rect, kind, fill, stroke, stroke_width });
+        return;
+    };
+    if f.is_ink() && opts.hide_ink {
+        return;
+    }
+    let width = if stroke_width.is_finite() { stroke_width.clamp(0.0, 200.0) } else { 0.75 };
+    for (pts, closed) in f.placed(rect.x, rect.y, rect.w, rect.h) {
+        if f.is_ink() || (!closed && fill.is_none()) {
+            if let Some(color) = stroke {
+                let mut pts: Vec<(f32, f32)> = pts.iter().map(|[x, y]| (*x, *y)).collect();
+                if closed && let Some(first) = pts.first().copied() {
+                    pts.push(first);
+                }
+                out.push(Draw::Ink { pts, color, width: width.max(0.25), alpha: f.alpha });
+            }
+            continue;
+        }
+        let mut segs: Vec<PathSeg> = Vec::with_capacity(pts.len() + 1);
+        for (i, [x, y]) in pts.iter().enumerate() {
+            segs.push(if i == 0 { PathSeg::Move(*x, *y) } else { PathSeg::Line(*x, *y) });
+        }
+        if closed {
+            segs.push(PathSeg::Close);
+        }
+        out.push(Draw::Path { segs, fill: if closed { fill } else { None }, stroke, stroke_width: width });
+    }
+}
+
 pub fn seg_path(segs: &[PathSeg]) -> BezPath {
     let mut p = BezPath::new();
     for s in segs {
