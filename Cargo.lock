@@ -5237,6 +5237,7 @@ dependencies = [
  "wordcraft-layout",
  "wordcraft-render",
  "wordcraft-zotero",
+ "zip",
 ]
 
 [[package]]

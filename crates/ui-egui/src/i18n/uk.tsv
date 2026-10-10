@@ -1093,6 +1093,8 @@
 	Type at least one recipient.	Введіть принаймні одного одержувача.
 	Type the recipients, or load them from a file.	Введіть одержувачів або завантажте їх із файлу.
 	Use an Existing List…	Використати наявний список…
+	Choose the sheet that holds the recipients.	Виберіть аркуш з одержувачами.
+	First row of data contains column headers	Перший рядок даних містить заголовки стовпців
 	Interface theme:	Тема інтерфейсу:
 	Interface\nTheme	Тема\nінтерфейсу
 	Interface Theme	Тема інтерфейсу

@@ -726,10 +726,20 @@ impl WordApp {
         let _ = self.ask_file(file_dialogs::FileDialogRequest::Open { purpose: "recipients".into() }, file_dialogs::AfterPick::Recipients);
     }
 
-    /// Load mail-merge recipients and say how many there are.
+    /// Load mail-merge recipients and say how many there are. A workbook with several sheets
+    /// shows Select Table to choose one first (#334).
     pub(crate) fn load_recipients(&mut self, params: Value) -> Result<Value, String> {
-        let r = self.run("mailings.recipients", params);
-        if let Ok(v) = &r {
+        let r = self.run("mailings.recipients", params.clone());
+        if let Ok(v) = &r
+            && v.get("chooseSheet").and_then(Value::as_bool) == Some(true)
+        {
+            let sheets = v
+                .get("sheets")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                .unwrap_or_default();
+            self.dialog = Some(dialogs::Dialog::SelectTable { sheets, selected: 0, headers: true, message: String::new(), params });
+        } else if let Ok(v) = &r {
             let records = v.get("records").and_then(Value::as_u64).unwrap_or(0).to_string();
             self.status(i18n::fmt(tl!("Recipients: {count}"), &[("count", &records)]));
         }
@@ -809,7 +819,15 @@ impl WordApp {
                 let path = f.path().to_string_lossy().to_string();
                 let lp = path.to_ascii_lowercase();
                 let img = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"].iter().any(|e| lp.ends_with(e));
-                let _ = if img { self.run("insert.picture", json!({"path": path})) } else { self.run("file.open", json!({"path": path})) };
+                let sheet = [".xlsx", ".xlsm", ".ods"].iter().any(|e| lp.ends_with(e));
+                let _ = if img {
+                    self.run("insert.picture", json!({"path": path}))
+                } else if sheet {
+                    // A spreadsheet isn't a document: it's a recipient list (#334).
+                    self.load_recipients(json!({"path": path}))
+                } else {
+                    self.run("file.open", json!({"path": path}))
+                };
             }
         }
         self.report_dirty();
@@ -937,7 +955,7 @@ impl WordApp {
     }
 
     /// Files that arrived asynchronously (web picker, drops): documents open, pictures insert,
-    /// recipient lists (CSV/TSV, or a text file asked for as one) load as recipients.
+    /// recipient lists (CSV/TSV, spreadsheets, or a text file asked for as one) load as recipients.
     fn drain_inbox(&mut self) {
         let Some(inbox) = self.services.inbox.clone() else { return };
         let files = std::mem::take(&mut *inbox.lock().unwrap_or_else(|e| e.into_inner()));
@@ -946,7 +964,11 @@ impl WordApp {
             let img = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"].iter().any(|e| lower.ends_with(e));
             let list =
                 lower.ends_with(".csv") || lower.ends_with(".tsv") || (lower.ends_with(".txt") && std::mem::take(&mut self.recipient_list_pending));
-            let r = if list {
+            let sheet = [".xlsx", ".xlsm", ".ods"].iter().any(|e| lower.ends_with(e));
+            let r = if sheet {
+                self.recipient_list_pending = false;
+                self.load_recipients(json!({"path": name, "data": wordcraft_engine::cmd::insert::base64_encode(&bytes)}))
+            } else if list {
                 self.load_recipients(json!({"csv": wordcraft_engine::io::decode_text(&bytes)}))
             } else if img {
                 self.insert_or_change_picture(json!({"data": wordcraft_engine::cmd::insert::base64_encode(&bytes)}))
@@ -1088,7 +1110,7 @@ fn input_dialog(id: &str, params: &Value) -> Option<&'static str> {
             Some("SKIPIF") => Some("ruleSkipIf"),
             _ => None,
         },
-        "mailings.recipients" if !["csv", "path", "rows"].into_iter().any(has) => Some("recipientList"),
+        "mailings.recipients" if !["csv", "path", "data", "rows"].into_iter().any(has) => Some("recipientList"),
         "mailings.editRecipients" if !has("rows") => Some("recipientList"),
         "mailings.insertField" if !has("field") => Some("insertMergeField"),
         "mailings.findRecipient" if !has("text") => Some("findRecipient"),
