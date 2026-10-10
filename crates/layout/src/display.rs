@@ -163,7 +163,7 @@ fn item(doc: &Document, it: &Placed, opts: &DisplayOptions, alpha: f32, out: &mu
         Placed::Shape { rect, kind, fill, stroke, stroke_width } => {
             out.push(Draw::Shape { rect: *rect, kind: *kind, fill: *fill, stroke: *stroke, stroke_width: *stroke_width })
         }
-        Placed::Cell { .. } => {}
+        Placed::Cell { .. } | Placed::Object { .. } => {}
         Placed::Lines { story, path, para, l0, l1, x, y } => lines(doc, *story, path, para, *l0, *l1, *x, *y, opts, alpha, out),
     }
 }

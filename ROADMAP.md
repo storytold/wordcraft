@@ -58,7 +58,7 @@ the icon art).
 | References (TOC, citations APA/MLA/Chicago/IEEE, bibliography, index, figures, cross-refs, TOA) | Working first versions; Zotero/Mendeley `ADDIN` fields and custom properties round-trip; Zotero in the app (`ui.zotero.*`, `wordcraft-cli zotero`): citations, bibliography, refresh, unlink, document preferences, in-text ↔ footnote switching, Zotero ribbon tab, Move Past Citation; Read Aloud player (speed, previous/next sentence, skips citations and bibliography) | 60% |
 | Review (spelling, grammar, thesaurus, comments, track changes, compare, protect) | Good; comment balloons in the margin; no track-changes balloons | 75% |
 | Mailings (mail merge, rules, preview, envelopes, labels) | Working | 70% |
-| Pictures & shapes (insert, size, crop, recolour, effects, styles, float position) | Text wraps around floats (rectangular); text boxes render their text; no tight/contour wrap, no rotation handles | 55% |
+| Pictures & shapes (insert, size, crop, recolour, effects, styles, float position) | Text wraps around floats (rectangular); text boxes render and edit their text; select, drag to move, resize handles, arrow nudge on the canvas; no tight/contour wrap, no rotation handles | 60% |
 | Draw tab (ink), SmartArt, charts, 3D models, equations editor | Not started / linear equations only | 5% |
 | File formats: DOCX read/write | Good (Word opens our files); charts/SmartArt/OLE dropped; untested on a real-world corpus | 75% |
 | File formats: PDF, ODT, RTF, HTML, Markdown, LaTeX, TXT | Working | 70% |
@@ -73,7 +73,7 @@ the icon art).
 
 1. **Alpha blockers** (≈20–25 h): DOCX fidelity corpus, footnote continuation, column balancing,
    native printing, autosave soak test, first signed release.
-2. **Objects** (≈15 h): tight/through (contour) wrap, rotation and resize handles on the canvas,
+2. **Objects** (≈12 h): tight/through (contour) wrap, rotation handles on the canvas,
    grouping, z-order polish, track-changes balloons and formatting revisions.
 3. **Draw tab / ink** (≈15 h).
 4. **Charts (own renderer) and SmartArt-style diagrams** (≈20 h).

@@ -27,7 +27,13 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("insert.picture", "Pictures", "Insert › Illustrations", picture).params(r#"{"path"?: string, "data"?: base64, "width"?: pt, "alt"?: string}"#),
         CommandSpec::new("insert.shape", "Shapes", "Insert › Illustrations", shape)
             .params(r#"{"kind": "rectangle|roundedRectangle|ellipse|triangle|diamond|line|arrow|star|heart", "width"?: pt, "height"?: pt, "fill"?: "RRGGBB", "stroke"?: "RRGGBB"}"#),
-        CommandSpec::new("insert.textBox", "Text Box", "Insert › Text", text_box).params(r#"{"text"?: string, "width"?: pt, "height"?: pt}"#),
+        CommandSpec::new("insert.textBox", "Text Box", "Insert › Text", text_box)
+            .params(r#"{"text"?: string, "width"?: pt, "height"?: pt}"#)
+            .when(|s| {
+                // As in Word: no text box inside a text box.
+                matches!(s.sel.focus.story, StoryRef::Part(id) if s.doc.parts.get(&id).is_some_and(|p| p.kind == PartKind::TextBox))
+                    .then_some("text boxes can't go inside a text box")
+            }),
         CommandSpec::new("insert.link", "Link", "Insert › Links", link).key("Mod+K").params(r#"{"url": string, "text"?: string}"#),
         CommandSpec::new("insert.removeLink", "Remove Hyperlink", "Insert › Links", |s, _| super::format::apply(s, &|c| {
             c.link = None;
@@ -101,7 +107,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("insert.textFromFile", "Text from File", "Insert › Text › Object", |s, v| {
             let path = p::req_str(v, "path")?;
             let doc = crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?;
-            let frag = wordcraft_doc::edit::Fragment { blocks: doc.body.iter().map(|b| (**b).clone()).collect() };
+            let frag = doc.body_fragment();
             let at = delete_selection(s)?;
             let end = s.doc.insert_fragment(&at, &frag)?;
             s.sel = Selection::caret(end);
@@ -280,8 +286,9 @@ fn text_box(s: &mut Session, v: &Value) -> CmdResult {
         float: Float::default(),
         story: Some(id),
     };
-    let end = s.doc.insert_object(&at, obj, &props)?;
-    s.sel = Selection::caret(end);
+    s.doc.insert_object(&at, obj, &props)?;
+    // Like Word, type straight into the new box.
+    s.sel = Selection::caret(s.doc.end_of(StoryRef::Part(id)));
     Ok(json!({"story": id}))
 }
 
@@ -544,7 +551,7 @@ fn cover_page(s: &mut Session, v: &Value) -> CmdResult {
     let mut date = Paragraph::with_text(&format_date("MMMM d, yyyy"), CharProps::default());
     date.insert_text(date.len(), "\u{000C}", &CharProps::default())?;
     blocks.push(Block::Para(date));
-    let frag = wordcraft_doc::edit::Fragment { blocks };
+    let frag = wordcraft_doc::edit::Fragment { blocks, ..Default::default() };
     let start = s.doc.start_of(StoryRef::Body);
     let at = s.doc.split_paragraph(&start)?;
     let _ = at;

@@ -141,6 +141,7 @@
 	Copy	複製
 	Copy Formatting	複製格式
 	Corrections	校正
+	Count words in text boxes and notes	統計文字方塊、註腳和章節附註中的字數
 	Couldn't download {name}: {error}	無法下載 {name}：{error}
 	Cover Page	封面頁
 	Create	建立
@@ -401,6 +402,7 @@
 	Moderate	中等
 	Modify Style	修改樣式
 	Modify…	修改…
+	Move or Resize	移動或調整大小
 	Multilevel List	多層次清單
 	Multiple Pages	多頁
 	Name (A–Z)	名稱（A–Z）
@@ -437,6 +439,7 @@
 	Not available right now	目前無法使用
 	Not saved	未儲存
 	Not saved yet	尚未儲存
+	Nudge	微移
 	Number of columns:	欄數：
 	Number of rows:	列數：
 	Numbering	編號

@@ -124,6 +124,8 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                     continue;
                 }
                 if t.chars().all(|c| !c.is_control()) && !t.is_empty() {
+                    // Typing with a text box selected types into it.
+                    crate::objects::enter_text_box(app);
                     let _ = app.run("text.insert", json!({"text": t}));
                 }
             }
@@ -150,6 +152,19 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
             egui::Event::Key { key, pressed: true, modifiers, .. } => {
                 if key == Key::Escape && app.session.painter.is_some() {
                     app.session.painter = None;
+                    continue;
+                }
+                if crate::objects::key(app, key, modifiers) {
+                    continue;
+                }
+                // Escape leaves a text box to just after it in the body.
+                if key == Key::Escape
+                    && crate::canvas::in_text_box(app)
+                    && app.session.sel.is_collapsed()
+                    && let wordcraft_doc::StoryRef::Part(id) = app.session.sel.focus.story
+                    && let Some(pos) = app.session.doc.text_box_anchor(id)
+                {
+                    let _ = app.run("caret.set", json!({"pos": pos}));
                     continue;
                 }
                 if key == Key::Escape && matches!(app.session.sel.focus.story, wordcraft_doc::StoryRef::Part(_)) && app.session.sel.is_collapsed() {

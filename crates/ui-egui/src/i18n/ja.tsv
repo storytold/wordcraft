@@ -140,6 +140,7 @@
 	Copy	コピー
 	Copy Formatting	書式のコピー
 	Corrections	修整
+	Count words in text boxes and notes	テキスト ボックス、脚注、文末脚注の単語も数える
 	Couldn't download {name}: {error}	{name} をダウンロードできませんでした: {error}
 	Cover Page	表紙
 	Create	作成
@@ -400,6 +401,7 @@
 	Moderate	やや狭い
 	Modify Style	スタイルの変更
 	Modify…	変更…
+	Move or Resize	移動またはサイズ変更
 	Multilevel List	アウトライン
 	Multiple Pages	複数ページ
 	Name (A–Z)	名前（A–Z）
@@ -436,6 +438,7 @@
 	Not available right now	現在は使用できません
 	Not saved	未保存
 	Not saved yet	まだ保存されていません
+	Nudge	少しずつ移動
 	Number of columns:	列数:
 	Number of rows:	行数:
 	Numbering	段落番号

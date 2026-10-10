@@ -19,11 +19,13 @@ pub mod chrome;
 pub mod control;
 pub mod credits;
 pub mod dialogs;
+pub mod frame;
 pub mod i18n;
 pub mod icons;
 pub mod keys;
 pub mod keytips;
 pub mod mini_toolbar;
+pub mod objects;
 pub mod panes;
 pub mod previews;
 pub mod read_aloud;
@@ -79,6 +81,8 @@ pub struct UiState {
     pub window: Option<window_geometry::WindowGeometry>,
     /// Interface language: `auto` (follow the system) or a code from [`i18n::LANGUAGES`].
     pub language: String,
+    /// Editing preferences; the session owns them while running (see [`WordApp::prefs`]).
+    pub editing: wordcraft_engine::Prefs,
     /// Read Aloud speed (1 = normal) and whether it skips citations and bibliographies.
     pub read_aloud_rate: f32,
     pub read_aloud_skip_citations: bool,
@@ -103,6 +107,7 @@ impl Default for UiState {
             author: String::new(),
             window: None,
             language: i18n::AUTO.into(),
+            editing: wordcraft_engine::Prefs::default(),
             read_aloud_rate: 1.0,
             read_aloud_skip_citations: true,
             keytips: crate::keytips::Phase::Off,
@@ -216,10 +221,12 @@ impl WordApp {
         self
     }
 
-    /// Preferences to save between runs: the UI state plus the current user name.
+    /// Preferences to save between runs: the UI state plus the current user name and editing
+    /// preferences.
     pub fn prefs(&self) -> UiState {
         let mut ui = self.ui.clone();
         ui.author = self.session.author.clone();
+        ui.editing = self.session.prefs.clone();
         ui.read_aloud_rate = self.session.read_aloud.rate();
         ui.read_aloud_skip_citations = self.session.read_aloud.skip_citations;
         ui.dark_page = self.session.view.dark_mode;
@@ -235,6 +242,7 @@ impl WordApp {
         if !author.trim().is_empty() {
             self.session.author = author;
         }
+        self.session.prefs = std::mem::take(&mut self.ui.editing);
         self.session.read_aloud.set_rate(self.ui.read_aloud_rate);
         self.session.read_aloud.skip_citations = self.ui.read_aloud_skip_citations;
         self.session.view.dark_mode = self.ui.dark_page;
@@ -1605,6 +1613,25 @@ mod tests {
         assert_eq!(a.session.author, default);
         assert!(a.ui.dark);
         assert!(!a.ui.backstage);
+    }
+
+    #[test]
+    fn word_count_setting_survives_a_restart() {
+        let mut a = app();
+        a.session.run("review.wordCount", &json!({"includeTextBoxes": false})).unwrap();
+        let saved = serde_json::to_string(&a.prefs()).unwrap();
+        assert!(saved.contains(r#""editing":{"countNotes":false}"#), "{saved}");
+        let mut b = app();
+        b.apply_prefs(serde_json::from_str(&saved).unwrap());
+        assert!(!b.session.prefs.count_notes);
+    }
+
+    #[test]
+    fn prefs_without_editing_keep_its_defaults() {
+        let mut a = app();
+        a.apply_prefs(serde_json::from_str(r#"{"tab": "Insert", "dark": true}"#).unwrap());
+        assert_eq!((a.ui.tab.as_str(), a.ui.dark), ("Insert", true));
+        assert!(a.session.prefs.count_notes, "text boxes and notes count by default");
     }
 
     fn png_bytes(c: [u8; 4]) -> Vec<u8> {

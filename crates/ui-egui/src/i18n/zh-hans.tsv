@@ -151,6 +151,7 @@
 	Copy	复制
 	Copy Formatting	复制格式
 	Corrections	更正
+	Count words in text boxes and notes	统计文本框、脚注和尾注中的字数
 	Couldn't download {name}: {error}	无法下载 {name}：{error}
 	Cover Page	封面
 	Create	创建
@@ -411,6 +412,7 @@
 	Moderate	适中
 	Modify Style	修改样式
 	Modify…	修改…
+	Move or Resize	移动或调整大小
 	Multilevel List	多级列表
 	Multiple Pages	多页
 	Name (A–Z)	名称（A–Z）
@@ -447,6 +449,7 @@
 	Not available right now	当前不可用
 	Not saved	未保存
 	Not saved yet	尚未保存
+	Nudge	微移
 	Number of columns:	列数：
 	Number of rows:	行数：
 	Numbering	编号
