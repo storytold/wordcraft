@@ -18,8 +18,8 @@ other ~18 languages Word ships, plus native-speaker review (human).
 
 ## What WordCraft ships (measured)
 
-- **9 interface languages**: English plus `zh-hans`, `zh-hant`, `ja`, `uk`, `es`, `pt-br`, and
-  Serbian `sr`/`sr-latn` (#250) (catalogs of ~930–1,010 entries each). A test (`every_tab_and_command_is_translated`) enforces that every ribbon
+- **10 interface languages**: English plus `zh-hans`, `zh-hant`, `ja`, `uk`, `es`, `pt-br`,
+  Serbian `sr`/`sr-latn` (#250) and Czech `cs` (catalogs of ~930–1,254 entries each). A test (`every_tab_and_command_is_translated`) enforces that every ribbon
   tab, command label and ribbon location is translated in every language.
 - Of the 675 English strings a scan extracts from `tl!(…)` calls and command labels/locations, each
   catalog covers **661 (98%)**. Some newer dialog and pane strings (Equation tab tooltips, Zotero,
@@ -51,8 +51,8 @@ shared items below.
 | Korean | ko | 0 | ❌ | Hangul ✅; macOS Korean IME fixes pending (#163, #164) | no | none | 3–5 |
 | Vietnamese | vi | 0 | ❌ | Latin with stacked diacritics, untested | no | none | 3–4 |
 
-Other shipped languages: **4** — Traditional Chinese (`zh-hant`), Ukrainian (`uk`) and Serbian
-Cyrillic and Latin (`sr`, `sr-latn`, #250), all partial (~95%).
+Other shipped languages: **5** — Traditional Chinese (`zh-hant`), Ukrainian (`uk`), Serbian
+Cyrillic and Latin (`sr`, `sr-latn`, #250) and Czech (`cs`), all partial (~95%).
 
 ## Shared work (not in the per-language hours)
 
@@ -68,5 +68,6 @@ Cyrillic and Latin (`sr`, `sr-latn`, #250), all partial (~95%).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-10 | minor | Czech (`cs`) interface catalog added |
 | 2026-10-10 | minor | Serbian (Cyrillic and Latin) interface merged (#250) |
 | 2026-10-10 | major | First version: twelve-language table, catalog coverage measured, Word's 30 UI languages and 120 proofing tools listed |
