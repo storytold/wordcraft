@@ -131,6 +131,9 @@ pub struct WordApp {
     pub previews: previews::Previews,
     /// Media key of the picture a pending Change Picture replaces (#147).
     pub change_picture_target: Option<String>,
+    /// Web: a recipient list was asked for (Select Recipients › Use an Existing List…), so the
+    /// next text file from the picker loads as recipients instead of opening (#240).
+    pub recipient_list_pending: bool,
     /// macOS: the window has no title bar; leave room for the traffic lights.
     pub integrated_titlebar: bool,
     control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
@@ -220,6 +223,7 @@ impl WordApp {
             read_aloud_error: None,
             autosave_path: None,
             change_picture_target: None,
+            recipient_list_pending: false,
         }
     }
 
@@ -259,6 +263,13 @@ impl WordApp {
     /// Close, Envelopes, Labels and Finish & Merge on a document with unsaved changes first ask
     /// Save / Don't Save / Cancel, and the command runs once that is answered (`ui.saveChanges`).
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        // A button whose command needs input the user hasn't given yet opens its dialog (#240).
+        if let Some(name) = input_dialog(id, &params)
+            && widgets::enabled(self, id)
+        {
+            self.dialog = dialogs::Dialog::open(name, self);
+            return Ok(json!({"pending": name}));
+        }
         if self.session.dirty && discards_document(id, &params) {
             let name =
                 self.session.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| self.title_stem());
@@ -274,6 +285,9 @@ impl WordApp {
         // A pending Change Picture only survives until the next action (#147).
         if !matches!(id, "ui.changePicture" | "picture.change" | "insert.picture") {
             self.change_picture_target = None;
+        }
+        if !matches!(id, "ui.openRecipientList" | "mailings.recipients") {
+            self.recipient_list_pending = false;
         }
         if let Some(r) = self.ui_command(id, &params) {
             return r;
@@ -495,6 +509,12 @@ impl WordApp {
                 self.open_dialog();
                 json!({})
             }
+            // Mailings › Select Recipients › Use an Existing List…: pick a CSV/TSV/text file and
+            // load it as the mail-merge recipients. Opens system UI, like `ui.openFileDialog`.
+            "ui.openRecipientList" => {
+                self.pick_recipient_list();
+                json!({"pending": self.recipient_list_pending})
+            }
             // Send the document to the system print dialog (web). `file.print` opens the Print
             // page; this is the button on it, and the one programmatic call that opens system UI
             // here, like `ui.openFileDialog` — only when the host can print.
@@ -592,6 +612,29 @@ impl WordApp {
         } else {
             self.change_picture_target = None;
         }
+    }
+
+    /// Pick a recipient list (desktop: now; web: it arrives through the inbox).
+    fn pick_recipient_list(&mut self) {
+        if let Some(f) = &self.services.open_async {
+            f("recipients");
+            self.recipient_list_pending = true;
+            return;
+        }
+        let picked = self.services.pick_open.as_ref().and_then(|f| f("recipients"));
+        if let Some(path) = picked {
+            let _ = self.load_recipients(json!({"path": path}));
+        }
+    }
+
+    /// Load mail-merge recipients and say how many there are.
+    pub(crate) fn load_recipients(&mut self, params: Value) -> Result<Value, String> {
+        let r = self.run("mailings.recipients", params);
+        if let Ok(v) = &r {
+            let records = v.get("records").and_then(Value::as_u64).unwrap_or(0).to_string();
+            self.status(i18n::fmt(tl!("Recipients: {count}"), &[("count", &records)]));
+        }
+        r
     }
 
     /// The name Save suggests: the open file's own Word format (so a .docm keeps its macros),
@@ -757,16 +800,23 @@ impl WordApp {
         self.report_dirty();
     }
 
-    /// Files that arrived asynchronously (web picker, drops): documents open, pictures insert.
+    /// Files that arrived asynchronously (web picker, drops): documents open, pictures insert,
+    /// recipient lists (CSV/TSV, or a text file asked for as one) load as recipients.
     fn drain_inbox(&mut self) {
         let Some(inbox) = self.services.inbox.clone() else { return };
         let files = std::mem::take(&mut *inbox.lock().unwrap_or_else(|e| e.into_inner()));
         for (name, bytes) in files {
             let lower = name.to_ascii_lowercase();
-            let data = wordcraft_engine::cmd::insert::base64_encode(&bytes);
             let img = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"].iter().any(|e| lower.ends_with(e));
-            let r =
-                if img { self.insert_or_change_picture(json!({"data": data})) } else { self.run("file.open", json!({"path": name, "data": data})) };
+            let list =
+                lower.ends_with(".csv") || lower.ends_with(".tsv") || (lower.ends_with(".txt") && std::mem::take(&mut self.recipient_list_pending));
+            let r = if list {
+                self.load_recipients(json!({"csv": wordcraft_engine::io::decode_text(&bytes)}))
+            } else if img {
+                self.insert_or_change_picture(json!({"data": wordcraft_engine::cmd::insert::base64_encode(&bytes)}))
+            } else {
+                self.run("file.open", json!({"path": name, "data": wordcraft_engine::cmd::insert::base64_encode(&bytes)}))
+            };
             if r.is_ok() {
                 self.ui.backstage = false;
             }
@@ -848,6 +898,20 @@ impl WordApp {
 fn keeps_everything(name: &str) -> bool {
     let ext = std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
     matches!(ext.as_str(), "docx" | "docm" | "dotx" | "dotm" | "odt" | "rtf" | "json")
+}
+
+/// The dialog a user-run command opens when it lacks the input it needs (scripts and agents get
+/// the command's own error instead): Select Recipients and Edit Recipient List without data,
+/// Insert Merge Field without a field, Find Recipient without text.
+fn input_dialog(id: &str, params: &Value) -> Option<&'static str> {
+    let has = |k: &str| params.get(k).is_some_and(|v| !v.is_null());
+    match id {
+        "mailings.recipients" if !["csv", "path", "rows"].into_iter().any(has) => Some("recipientList"),
+        "mailings.editRecipients" if !has("rows") => Some("recipientList"),
+        "mailings.insertField" if !has("field") => Some("insertMergeField"),
+        "mailings.findRecipient" if !has("text") => Some("findRecipient"),
+        _ => None,
+    }
 }
 
 /// User commands that replace or close the document (`file.open` without a path only shows the
@@ -1802,5 +1866,86 @@ mod tests {
         assert!(a.change_picture_target.is_some());
         let _ = a.run("format.bold", json!({}));
         assert!(a.change_picture_target.is_none());
+    }
+
+    fn dialog_name(a: &WordApp) -> Option<&'static str> {
+        a.dialog.as_ref().map(dialogs::Dialog::name)
+    }
+
+    /// #240: Select Recipients needs data, so clicking it opens the recipient list instead of
+    /// reporting missing parameters; scripts and agents still get the error.
+    #[test]
+    fn select_recipients_opens_the_recipient_list() {
+        let mut a = app();
+        let r = a.run("mailings.recipients", json!({})).unwrap();
+        assert_eq!(r, json!({"pending": "recipientList"}));
+        assert_eq!(dialog_name(&a), Some("recipientList"));
+        assert!(a.status_msg.is_none(), "no error in the status bar: {:?}", a.status_msg);
+        let Some(dialogs::Dialog::RecipientList { fields, rows, .. }) = &a.dialog else { panic!() };
+        assert_eq!(fields.len(), dialogs::NEW_LIST_FIELDS.len());
+        assert_eq!(rows.len(), 1, "a new list starts with one empty entry");
+        // Edit Recipient List opens the same dialog, showing the current list.
+        a.dialog = None;
+        a.run("mailings.recipients", json!({"csv": "Name,City\nAda,London"})).unwrap();
+        a.run("mailings.editRecipients", json!({})).unwrap();
+        let Some(dialogs::Dialog::RecipientList { fields, rows, .. }) = &a.dialog else { panic!() };
+        assert_eq!((fields.clone(), rows.clone()), (vec!["Name".to_string(), "City".into()], vec![vec!["Ada".to_string(), "London".into()]]));
+        // Type a New List… always starts fresh.
+        a.run("ui.dialog", json!({"name": "newRecipientList"})).unwrap();
+        let Some(dialogs::Dialog::RecipientList { fields, .. }) = &a.dialog else { panic!() };
+        assert_eq!(fields[0], dialogs::NEW_LIST_FIELDS[0]);
+        // Insert Merge Field without a field opens its dialog too.
+        assert_eq!(a.run("mailings.insertField", json!({})).unwrap(), json!({"pending": "insertMergeField"}));
+        // Programmatic calls never open dialogs.
+        let mut b = app();
+        assert!(b.execute("mailings.recipients", json!({})).is_err());
+        assert!(b.dialog.is_none());
+    }
+
+    /// Desktop: Use an Existing List… picks a file and loads it as recipients, not as a document.
+    #[test]
+    fn an_existing_list_picked_on_the_desktop_loads_recipients() {
+        let dir = scratch("recipients");
+        let csv = dir.join("people.csv");
+        std::fs::write(&csv, "First Name,City\nAda,London\nAlan,Wilmslow\n").unwrap();
+        let mut a = typed();
+        let asked = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+        let (seen, path) = (asked.clone(), csv.to_string_lossy().to_string());
+        a.services.pick_open = Some(Box::new(move |purpose| {
+            *seen.borrow_mut() = purpose.to_string();
+            Some(path.clone())
+        }));
+        a.run("ui.openRecipientList", json!({})).unwrap();
+        assert_eq!(*asked.borrow(), "recipients", "the host can offer CSV files");
+        assert_eq!(a.session.merge.headers, vec!["First Name", "City"]);
+        assert_eq!(a.session.merge.rows.len(), 2);
+        assert!(body_text(&a).contains(UNSAVED), "the document stays open");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Web: the picked file arrives through the inbox and loads as recipients, even as .txt; a
+    /// CSV dropped on the page does too. Anything else afterwards opens as before.
+    #[test]
+    fn an_existing_list_picked_on_the_web_loads_recipients() {
+        let mut a = typed();
+        let asked = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+        let seen = asked.clone();
+        a.services.open_async = Some(Box::new(move |purpose| *seen.borrow_mut() = purpose.to_string()));
+        let inbox: Inbox = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        a.services.inbox = Some(inbox.clone());
+        assert_eq!(a.run("ui.openRecipientList", json!({})).unwrap(), json!({"pending": true}));
+        assert_eq!(*asked.borrow(), "recipients");
+        inbox.lock().unwrap().push(("people.txt".into(), b"Name\tCity\nAda\tLondon\n".to_vec()));
+        a.drain_inbox();
+        assert_eq!(a.session.merge.headers, vec!["Name", "City"]);
+        assert!(!a.recipient_list_pending);
+        assert!(body_text(&a).contains(UNSAVED), "the document stays open");
+        inbox.lock().unwrap().push(("more.csv".into(), b"Name\nBo\nCy\n".to_vec()));
+        a.drain_inbox();
+        assert_eq!(a.session.merge.rows.len(), 2);
+        // A cancelled picker leaves nothing pending once the user does something else.
+        a.run("ui.openRecipientList", json!({})).unwrap();
+        a.run("format.bold", json!({})).unwrap();
+        assert!(!a.recipient_list_pending);
     }
 }

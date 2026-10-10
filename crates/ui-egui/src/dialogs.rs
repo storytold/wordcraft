@@ -1,6 +1,7 @@
 //! Dialogs: Font, Paragraph, Find & Replace, Go To, Insert Table, Page Setup, Link, Bookmark,
-//! Word Count, Zoom, Watermark, New/Modify Style, Command search, About, Save Changes. Every
-//! dialog ends by running a command, so agents get the same result without the dialog.
+//! Word Count, Zoom, Watermark, New/Modify Style, Command search, About, Save Changes, and the
+//! mail-merge Recipient List, Insert Merge Field and Find Recipient. Every dialog ends by running a
+//! command, so agents get the same result without the dialog.
 
 use egui::{Sense, Ui, vec2};
 use serde::Serialize;
@@ -118,6 +119,48 @@ pub enum Dialog {
         #[serde(skip)]
         document: u64,
     },
+    /// Mailings › Select Recipients / Edit Recipient List: a table of recipients to type or
+    /// edit (field names on top), or a file to load instead (#240).
+    RecipientList {
+        fields: Vec<String>,
+        rows: Vec<Vec<String>>,
+        message: String,
+    },
+    /// Mailings › Insert Merge Field: one of the recipient list's fields (or a typed name).
+    InsertMergeField {
+        fields: Vec<String>,
+        field: String,
+    },
+    /// Mailings › Find Recipient.
+    FindRecipient {
+        text: String,
+        message: String,
+    },
+}
+
+/// The fields a new recipient list starts with.
+pub const NEW_LIST_FIELDS: [&str; 5] = ["First Name", "Last Name", "Address", "City", "Postal Code"];
+
+/// A typed recipient list ready for `mailings.recipients`: field names trimmed, blank rows
+/// dropped. An error says what to fix.
+pub fn recipient_table(fields: &[String], rows: &[Vec<String>]) -> Result<Value, &'static str> {
+    let fields: Vec<&str> = fields.iter().map(|f| f.trim()).collect();
+    if fields.is_empty() {
+        return Err("Add at least one field.");
+    }
+    if fields.iter().any(|f| f.is_empty()) {
+        return Err("Every field needs a name.");
+    }
+    for (i, f) in fields.iter().enumerate() {
+        if fields.iter().skip(i + 1).any(|g| g.eq_ignore_ascii_case(f)) {
+            return Err("Field names must be different.");
+        }
+    }
+    let rows: Vec<&Vec<String>> = rows.iter().filter(|r| r.iter().any(|c| !c.trim().is_empty())).collect();
+    if rows.is_empty() {
+        return Err("Type at least one recipient.");
+    }
+    Ok(json!({"fields": fields, "rows": rows}))
 }
 
 impl Dialog {
@@ -140,6 +183,9 @@ impl Dialog {
             Dialog::Commands { .. } => "commands",
             Dialog::About { .. } => "about",
             Dialog::SaveChanges { .. } => "saveChanges",
+            Dialog::RecipientList { .. } => "recipientList",
+            Dialog::InsertMergeField { .. } => "insertMergeField",
+            Dialog::FindRecipient { .. } => "findRecipient",
         }
     }
 
@@ -217,6 +263,22 @@ impl Dialog {
             "about" => Dialog::About { tab: 0 },
             "contributors" => Dialog::About { tab: 1 },
             "models" => Dialog::About { tab: 2 },
+            // The current list to edit, or a new one to type.
+            "recipientList" | "newRecipientList" => {
+                let m = &app.session.merge;
+                if name == "recipientList" && !m.headers.is_empty() {
+                    Dialog::RecipientList { fields: m.headers.clone(), rows: m.rows.clone(), message: String::new() }
+                } else {
+                    let fields: Vec<String> = NEW_LIST_FIELDS.iter().map(|f| f.to_string()).collect();
+                    let rows = vec![vec![String::new(); fields.len()]];
+                    Dialog::RecipientList { fields, rows, message: String::new() }
+                }
+            }
+            "insertMergeField" => {
+                let fields = app.session.merge.headers.clone();
+                Dialog::InsertMergeField { field: fields.first().cloned().unwrap_or_default(), fields }
+            }
+            "findRecipient" => Dialog::FindRecipient { text: String::new(), message: String::new() },
             _ => return None,
         })
     }
@@ -307,6 +369,9 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::Commands { .. } => "Search Commands",
         Dialog::About { .. } => "About WordCraft",
         Dialog::SaveChanges { .. } => "WordCraft",
+        Dialog::RecipientList { .. } => "Recipient List",
+        Dialog::InsertMergeField { .. } => "Insert Merge Field",
+        Dialog::FindRecipient { .. } => "Find Recipient",
     };
     egui::Window::new(tl!(title))
         .id(egui::Id::new(("dialog", title)))
@@ -823,6 +888,137 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             app.dialog = Some(d.clone());
             let _ = app.run("ui.saveChanges", json!({"answer": answer}));
             true
+        }
+        Dialog::RecipientList { fields, rows, message } => recipient_list(app, ui, fields, rows, message),
+        Dialog::InsertMergeField { fields, field } => {
+            if fields.is_empty() {
+                ui.label(egui::RichText::new(tl!("Select recipients first to choose from their fields.")).small().weak());
+            } else {
+                ui.label(tl!("Fields:"));
+                egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+                    for f in fields.iter() {
+                        let resp = ui.selectable_label(field == f, f);
+                        if resp.clicked() {
+                            field.clone_from(f);
+                        }
+                    }
+                });
+            }
+            ui.horizontal(|ui| {
+                ui.label(tl!("Field:"));
+                ui.text_edit_singleline(field);
+            });
+            let (ok, cancel) = buttons(ui, tl!("Insert"));
+            if ok && !field.trim().is_empty() {
+                let _ = app.run("mailings.insertField", json!({"field": field.trim()}));
+                return true;
+            }
+            cancel
+        }
+        Dialog::FindRecipient { text, message } => {
+            ui.horizontal(|ui| {
+                ui.label(tl!("Find:"));
+                ui.text_edit_singleline(text);
+            });
+            if !message.is_empty() {
+                ui.label(egui::RichText::new(message.as_str()).small().weak());
+            }
+            let (ok, cancel) = buttons(ui, tl!("Find"));
+            if ok && !text.trim().is_empty() {
+                match app.run("mailings.findRecipient", json!({"text": text.trim()})) {
+                    Ok(_) => return true,
+                    Err(e) => *message = e,
+                }
+            }
+            cancel
+        }
+    }
+}
+
+/// The Recipient List dialog's body: a file button, the editable table, OK/Cancel. True to close.
+fn recipient_list(app: &mut WordApp, ui: &mut Ui, fields: &mut Vec<String>, rows: &mut Vec<Vec<String>>, message: &mut String) -> bool {
+    const CELL_W: f32 = 120.0;
+    const X_W: f32 = 18.0;
+    const ROW_H: f32 = 24.0;
+    // Wide enough for every field (up to a limit; more scroll sideways).
+    let gap = ui.spacing().item_spacing.x;
+    let table_w = fields.len() as f32 * (CELL_W + X_W + 2.0 * gap) + X_W + 2.0 * gap;
+    ui.set_min_width(table_w.clamp(340.0, 720.0));
+    ui.label(tl!("Type the recipients, or load them from a file."));
+    if ui.button(tl!("Use an Existing List…")).clicked() {
+        // The picker takes over; the list it loads replaces this one.
+        let _ = app.run("ui.openRecipientList", json!({}));
+        return true;
+    }
+    ui.add_space(6.0);
+    let mut remove_field = None;
+    let can_remove = fields.len() > 1;
+    let mut remove_row = None;
+    let mut x_w = X_W;
+    egui::ScrollArea::horizontal().id_salt("recipients_h").max_width(720.0).show(ui, |ui| {
+        ui.vertical(|ui| {
+            ui.horizontal(|ui| {
+                for (i, f) in fields.iter_mut().enumerate() {
+                    ui.add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(f).font(egui::TextStyle::Button).hint_text(tl!("Field name")));
+                    let x = ui.add_enabled(can_remove, egui::Button::new("×").small().min_size(vec2(X_W, X_W))).on_hover_text(tl!("Remove field"));
+                    x_w = x.rect.width();
+                    if x.clicked() {
+                        remove_field = Some(i);
+                    }
+                }
+            });
+            ui.separator();
+            egui::ScrollArea::vertical().id_salt("recipients_v").max_height(260.0).show_rows(ui, ROW_H, rows.len(), |ui, range| {
+                for r in range {
+                    let Some(row) = rows.get_mut(r) else { continue };
+                    ui.horizontal(|ui| {
+                        for c in row.iter_mut() {
+                            ui.add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(c));
+                            // Under the field's remove button.
+                            ui.allocate_exact_size(vec2(x_w, X_W), Sense::hover());
+                        }
+                        if ui.add(egui::Button::new("×").small().min_size(vec2(X_W, X_W))).on_hover_text(tl!("Remove recipient")).clicked() {
+                            remove_row = Some(r);
+                        }
+                    });
+                }
+            });
+        });
+    });
+    if let Some(i) = remove_field.filter(|_| fields.len() > 1) {
+        fields.remove(i);
+        for r in rows.iter_mut() {
+            if i < r.len() {
+                r.remove(i);
+            }
+        }
+    }
+    if let Some(r) = remove_row.filter(|r| *r < rows.len()) {
+        rows.remove(r);
+    }
+    ui.horizontal(|ui| {
+        if ui.button(tl!("New Entry")).clicked() {
+            rows.push(vec![String::new(); fields.len()]);
+        }
+        if ui.button(tl!("Add Field")).clicked() {
+            fields.push(String::new());
+            for r in rows.iter_mut() {
+                r.push(String::new());
+            }
+        }
+    });
+    if !message.is_empty() {
+        ui.label(egui::RichText::new(message.as_str()).color(Tokens::get(ui.ctx()).red));
+    }
+    let (ok, cancel) = buttons(ui, tl!("OK"));
+    if !ok {
+        return cancel;
+    }
+    match recipient_table(fields, rows).map_err(|e| tl!(e).to_string()).and_then(|params| app.load_recipients(params)) {
+        Ok(_) => true,
+        Err(e) => {
+            *message = e;
+            false
         }
     }
 }

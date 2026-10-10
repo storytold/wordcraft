@@ -114,6 +114,8 @@ fn services() -> Services {
             let d = rfd::FileDialog::new();
             let d = if purpose == "picture" {
                 d.add_filter("Pictures", &["png", "jpg", "jpeg", "gif", "webp", "bmp"])
+            } else if purpose == "recipients" {
+                d.add_filter("Recipient lists", &["csv", "tsv", "txt"]).add_filter("All files", &["*"])
             } else {
                 d.add_filter("Documents", &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "rtf", "txt", "md", "html", "htm", "tex", "json"])
                     .add_filter("Word document", &["docx"])

@@ -852,7 +852,11 @@ fn mailings(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Start Mail Merge", None, app, |ui, app| {
         big(ui, app, "mailMerge", "Start Mail\nMerge", "mailings.start", json!({}), false);
-        big(ui, app, "recipients", "Select\nRecipients", "mailings.recipients", json!({}), false);
+        // The command needs data, so the button offers the two ways to give it (#240).
+        menu_button(ui, app, "recipients", Some("Select\nRecipients"), "Select Recipients", true, |ui, app| {
+            mi(ui, app, "Type a New List…", "ui.dialog", json!({"name": "newRecipientList"}));
+            mi(ui, app, "Use an Existing List…", "ui.openRecipientList", json!({}));
+        });
         big(ui, app, "editRecipients", "Edit\nRecipient List", "mailings.editRecipients", json!({}), false);
     });
     group(ui, "Write & Insert Fields", None, app, |ui, app| {
