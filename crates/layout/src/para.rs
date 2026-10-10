@@ -1264,7 +1264,13 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u16, suffix: Opti
             LineSpacing::AtLeast(v) => natural.max(pictures).max(v),
             LineSpacing::Exactly(v) => v,
         };
-        let baseline = top + height - desc;
+        // Word puts the extra space of multiple line spacing below the text, so the baseline sits
+        // one ascent (or picture height) below the line's top; less than single spacing takes the
+        // space off the top.
+        let baseline = match rp.line_spacing {
+            LineSpacing::Multiple(m) if m >= 1.0 => top + asc.max(obj_asc),
+            _ => top + height - desc,
+        };
 
         // Alignment / justification (trailing spaces hang).
         let mut content_end = xs.last().copied().unwrap_or(line_start_x);
