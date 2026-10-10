@@ -16,6 +16,7 @@ mod file_dialogs;
 #[cfg(any(target_os = "windows", test))]
 mod graphics;
 mod logging;
+mod print;
 
 use wordcraft_engine::Session;
 use wordcraft_ui_egui::{
@@ -118,9 +119,10 @@ fn save_prefs(app: &WordApp) {
     }
 }
 
-/// Native file dialogs, shown without blocking the window (`file_dialogs`, #94).
+/// Native file dialogs, shown without blocking the window (`file_dialogs`, #94), and File › Print
+/// through the system's PDF viewer (`print`, #15).
 fn services(file_dialog: file_dialogs::Hook) -> Services {
-    Services { file_dialog: Some(file_dialog), ..Default::default() }
+    Services { file_dialog: Some(file_dialog), print: Some(print::hook()), ..Default::default() }
 }
 
 /// Window, Dock and taskbar icon.
