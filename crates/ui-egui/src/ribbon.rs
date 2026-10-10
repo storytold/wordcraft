@@ -594,7 +594,7 @@ fn layout(app: &mut WordApp, ui: &mut Ui) {
         menu_button(ui, app, "size", Some("Size"), "Size", true, |ui, app| {
             let lang = crate::i18n::current();
             let mut sizes: Vec<_> = wordcraft_geom::PAPER_SIZES.iter().collect();
-            if lang.code() == "nb" {
+            if lang.is_norwegian() {
                 sizes.sort_by_key(|(n, _, _)| match *n {
                     "A4" => 0,
                     "A3" => 1,
@@ -865,6 +865,7 @@ fn review(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Language", None, app, |ui, app| {
         big(ui, app, "translate", "Translate", "review.translate", json!({}), false);
         menu_button(ui, app, "language", Some("Language"), "Language", true, |ui, app| {
+            mi(ui, app, "Norwegian Nynorsk", "review.language", json!({"lang": "nn-NO", "noProof": false}));
             mi(ui, app, "Norwegian Bokmål", "review.language", json!({"lang": "nb-NO", "noProof": false}));
             mi(ui, app, "English (United States)", "review.language", json!({"lang": "en-US", "noProof": false}));
             ui.separator();

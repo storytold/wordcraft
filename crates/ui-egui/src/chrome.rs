@@ -186,6 +186,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     ui,
                     match language.as_deref() {
                         Some("nb-NO" | "nb" | "no-NO") => tl!("Norwegian Bokmål"),
+                        Some("nn-NO" | "nn" | "nno" | "no-nn") => tl!("Norwegian Nynorsk"),
                         Some("en-US") | None => tl!("English (United States)"),
                         Some(tag) => tag,
                     },

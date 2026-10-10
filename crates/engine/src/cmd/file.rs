@@ -10,7 +10,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("file.new", "New", "File", new)
             .key("Mod+N")
-            .params(r#"{"template"?: "blank|sample|letter|resume|report", "locale"?: "nb-NO|en-US"}"#)
+            .params(r#"{"template"?: "blank|sample|letter|resume|report", "locale"?: "nb-NO|nn-NO|en-US"}"#)
             .pure(),
         CommandSpec::new("file.open", "Open", "File", open).key("Mod+O").params(r#"{"path": string}"#).pure(),
         CommandSpec::new("file.save", "Save", "File", save).key("Mod+S").params(r#"{"path"?: string}"#).pure(),
@@ -87,10 +87,16 @@ fn new(s: &mut Session, v: &Value) -> CmdResult {
         "report" => crate::sample::report(),
         _ => Document::new(),
     };
-    if p::str(v, "locale").is_some_and(|l| l.eq_ignore_ascii_case("nb-NO") || l.eq_ignore_ascii_case("nb")) {
+    let locale = p::str(v, "locale").unwrap_or("").to_ascii_lowercase().replace('_', "-");
+    let norwegian = match locale.as_str() {
+        "nb" | "nb-no" => Some("nb-NO"),
+        "nn" | "nn-no" => Some("nn-NO"),
+        _ => None,
+    };
+    if let Some(language) = norwegian {
         doc.last_section.page_w = 21.0 * wordcraft_geom::PT_PER_CM;
         doc.last_section.page_h = 29.7 * wordcraft_geom::PT_PER_CM;
-        doc.styles.default_chr.lang = Some("nb-NO".into());
+        doc.styles.default_chr.lang = Some(language.into());
     }
     s.set_document(doc);
     s.path = None;

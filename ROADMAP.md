@@ -27,6 +27,14 @@ Bokmål spelling works offline with 613,686 standard full forms from Norsk ordba
 squiggles, F7 and suggestions; mixed-language DOCX documents retain their language.
 Norwegian grammar checks remain limited to basic punctuation, spacing and repeated words.
 
+## Nynorsk interface and proofing (2026-10-10)
+
+Nynorsk has its own interface catalog, `nn-NO` documents, Norwegian A4/centimeter/
+decimal-comma/date defaults and offline spelling with 409,690 standard full forms
+from Norsk ordbank – nynorsk 2012 (Språkbanken, CC BY 4.0). English, Bokmål and Nynorsk
+can coexist in DOCX documents; squiggles and review commands follow each run's language.
+Nynorsk grammar checks remain basic; new compounds may need a personal dictionary entry.
+
 ## Alpha
 
 **What we mean by alpha:** someone can write, format and review real documents every day, open

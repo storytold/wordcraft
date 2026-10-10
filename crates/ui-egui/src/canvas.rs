@@ -574,7 +574,7 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
     let text = Rect::from_min_max(pos2(x0 + page.body.x * scale, bar.min.y), pos2(x0 + page.body.right() * scale, bar.max.y));
     hp.rect_filled(text, 0.0, t.ruler);
     let unit = crate::i18n::current().measurement_unit().pt_per_unit();
-    let subdivisions = if crate::i18n::current().code() == "nb" { 10 } else { 8 };
+    let subdivisions = if crate::i18n::current().is_norwegian() { 10 } else { 8 };
     let snap = unit / (subdivisions * 2) as f32;
     let origin = page.body.x;
     let mut k = -((origin / unit).ceil() as i32) * subdivisions;

@@ -47,7 +47,7 @@ pub struct LangInfo {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 5] = [
+pub static LANGUAGES: [LangInfo; 6] = [
     LangInfo { code: "en", name: "English", source: "", prefer_hans: false, catalog: OnceLock::new() },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` resolve here (see `candidates`).
     LangInfo { code: "zh-hans", name: "简体中文", source: include_str!("zh-hans.tsv"), prefer_hans: true, catalog: OnceLock::new() },
@@ -55,6 +55,7 @@ pub static LANGUAGES: [LangInfo; 5] = [
     LangInfo { code: "zh-hant", name: "繁體中文", source: include_str!("zh-hant.tsv"), prefer_hans: true, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv"), prefer_hans: false, catalog: OnceLock::new() },
     LangInfo { code: "nb", name: "Norsk bokmål", source: include_str!("nb.tsv"), prefer_hans: false, catalog: OnceLock::new() },
+    LangInfo { code: "nn", name: "Norsk nynorsk", source: include_str!("nn.tsv"), prefer_hans: false, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
@@ -102,23 +103,31 @@ impl Lang {
         self.0.prefer_hans
     }
 
-    /// Display measurements in centimeters for the Norwegian interface.
+    pub fn is_norwegian(self) -> bool {
+        matches!(self.code(), "nb" | "nn")
+    }
+
+    /// Display measurements in centimeters for the Norwegian interfaces.
     pub fn measurement_unit(self) -> wordcraft_geom::Unit {
-        if self.code() == "nb" { wordcraft_geom::Unit::Centimeters } else { wordcraft_geom::Unit::Inches }
+        if self.is_norwegian() { wordcraft_geom::Unit::Centimeters } else { wordcraft_geom::Unit::Inches }
     }
 
     pub fn document_locale(self) -> &'static str {
-        if self.code() == "nb" { "nb-NO" } else { "en-US" }
+        match self.code() {
+            "nb" => "nb-NO",
+            "nn" => "nn-NO",
+            _ => "en-US",
+        }
     }
 
     pub fn number(self, value: f64, decimals: usize) -> String {
         let text = format!("{value:.decimals$}");
-        if self.code() == "nb" { text.replace('.', ",") } else { text }
+        if self.is_norwegian() { text.replace('.', ",") } else { text }
     }
 
     pub fn measurement(self, points: f32) -> String {
         let text = self.measurement_unit().format(points);
-        if self.code() == "nb" { text.replace('.', ",") } else { text }
+        if self.is_norwegian() { text.replace('.', ",") } else { text }
     }
 
     /// A language by its exact code (any case).
@@ -167,7 +176,7 @@ fn candidates(tag: &str) -> Vec<String> {
     }
     // `no` is the legacy Norwegian tag; Nynorsk (`nn`) remains distinct.
     if primary == "no" {
-        out.push("nb".to_string());
+        out.insert(0, if parts.contains(&"nn") { "nn" } else { "nb" }.to_string());
     }
     out
 }
@@ -241,7 +250,7 @@ pub fn format_number(value: f64, decimals: std::ops::RangeInclusive<usize>) -> S
             text.pop();
         }
     }
-    if current().code() == "nb" { text.replace('.', ",") } else { text }
+    if current().is_norwegian() { text.replace('.', ",") } else { text }
 }
 
 /// Does `lang` have a catalog entry for this string? (English never does: it is the source.)

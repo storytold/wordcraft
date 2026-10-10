@@ -852,6 +852,10 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                         tl!("Bokmål spelling: Norsk ordbank / Nasjonalbiblioteket (CC BY 4.0)"),
                         "https://www.nb.no/sprakbanken/ressurskatalog/oai-nb-no-sbr-5/",
                     );
+                    ui.hyperlink_to(
+                        tl!("Nynorsk spelling: Norsk ordbank / Nasjonalbiblioteket (CC BY 4.0)"),
+                        "https://www.nb.no/sprakbanken/ressurskatalog/oai-nb-no-sbr-41/",
+                    );
                     ui.hyperlink_to("CC BY 4.0", "https://creativecommons.org/licenses/by/4.0/");
                     ui.add_space(6.0);
                     ui.label(

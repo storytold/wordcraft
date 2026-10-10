@@ -37,6 +37,7 @@ pub enum IssueKind {
 pub enum Language {
     English,
     Bokmal,
+    Nynorsk,
     Unsupported,
 }
 
@@ -46,7 +47,9 @@ impl Language {
         match tag.split('-').next().unwrap_or("") {
             "en" => Self::English,
             "nb" | "nob" => Self::Bokmal,
-            "no" if tag != "no-nn" => Self::Bokmal,
+            "nn" | "nno" => Self::Nynorsk,
+            "no" if tag.split('-').any(|part| part == "nn") => Self::Nynorsk,
+            "no" => Self::Bokmal,
             _ => Self::Unsupported,
         }
     }
@@ -235,7 +238,7 @@ pub fn is_correct_for(word: &str, language: Language) -> bool {
     match language {
         Language::English => is_correct(word),
         Language::Unsupported => true,
-        Language::Bokmal => {
+        Language::Bokmal | Language::Nynorsk => {
             let w = word.trim_matches(|c: char| !c.is_alphanumeric());
             if w.chars().count() <= 1
                 || w.chars().any(char::is_numeric)
@@ -250,7 +253,7 @@ pub fn is_correct_for(word: &str, language: Language) -> bool {
             {
                 return true;
             }
-            let Some(d) = norwegian::Dictionary::get() else { return true };
+            let Some(d) = norwegian::Dictionary::get(language) else { return true };
             d.contains(&lower) || (lower.contains('-') && lower.split('-').all(|part| d.contains(part)))
         }
     }
@@ -260,8 +263,8 @@ pub fn suggest_for(word: &str, max: usize, language: Language) -> Vec<String> {
     match language {
         Language::English => suggest(word, max),
         Language::Unsupported => Vec::new(),
-        Language::Bokmal => {
-            let Some(dict) = norwegian::Dictionary::get() else { return Vec::new() };
+        Language::Bokmal | Language::Nynorsk => {
+            let Some(dict) = norwegian::Dictionary::get(language) else { return Vec::new() };
             let suggestions = dict.suggest(&word.to_lowercase(), max);
             let capital = word.chars().next().is_some_and(char::is_uppercase);
             let upper = word.chars().count() > 1 && word.chars().all(|c| !c.is_lowercase());
@@ -409,7 +412,11 @@ pub fn check_spelling_by(text: &str, language: impl Fn(usize, usize) -> Option<L
         }
         let Some(lang) = language(a, b) else { continue };
         if !is_correct_for(w, lang) {
-            let message = if lang == Language::Bokmal { "Mulig stavefeil" } else { "Possible spelling mistake" };
+            let message = match lang {
+                Language::Bokmal => "Mulig stavefeil",
+                Language::Nynorsk => "Mogleg stavefeil",
+                _ => "Possible spelling mistake",
+            };
             v.push(Issue { start: a, end: b, kind: IssueKind::Spelling, message: message.into(), suggestions: Vec::new() });
         }
     }
@@ -421,7 +428,7 @@ pub fn check_grammar(text: &str) -> Vec<Issue> {
     check_grammar_for(text, Language::English)
 }
 
-/// Common punctuation/spacing checks for Bokmål; English article rules only for English.
+/// Common punctuation/spacing checks for Norwegian; English article rules only for English.
 pub fn check_grammar_for(text: &str, language: Language) -> Vec<Issue> {
     check_grammar_with_start(text, language, true)
 }
@@ -515,12 +522,16 @@ pub fn check_grammar_with_start(text: &str, language: Language, sentence_start: 
         let next_non_space = tail.trim_start_matches(['"', '”', ')', '\'']).chars().next();
         after_end = matches!(next_non_space, Some('.' | '!' | '?')) && tail.trim_start_matches(['.', '!', '?', '"', '”', ')']).starts_with(' ');
     }
-    if language == Language::Bokmal {
+    if matches!(language, Language::Bokmal | Language::Nynorsk) {
         for issue in &mut v {
-            issue.message = match issue.message.as_str() {
-                "Remove the space before the punctuation" => "Fjern mellomrommet før skilletegnet",
-                "Extra space" => "Ekstra mellomrom",
-                "Capitalize the first word of a sentence" => "Bruk stor forbokstav i starten av setningen",
+            issue.message = match (language, issue.message.as_str()) {
+                (Language::Nynorsk, "Remove the space before the punctuation") => "Fjern mellomrommet før skiljeteiknet",
+                (Language::Nynorsk, "Extra space") => "Ekstra mellomrom",
+                (Language::Nynorsk, "Capitalize the first word of a sentence") => "Bruk stor forbokstav i starten av setninga",
+                (Language::Nynorsk, _) => "Gjenteke ord",
+                (_, "Remove the space before the punctuation") => "Fjern mellomrommet før skilletegnet",
+                (_, "Extra space") => "Ekstra mellomrom",
+                (_, "Capitalize the first word of a sentence") => "Bruk stor forbokstav i starten av setningen",
                 _ => "Gjentatt ord",
             }
             .into();
@@ -643,12 +654,38 @@ mod norwegian_tests {
     }
 
     #[test]
+    fn nynorsk_spelling_suggestions_and_grammar_are_language_specific() {
+        let nn = Language::Nynorsk;
+        for word in ["Eg", "ikkje", "nynorsk", "bøkene", "opne", "Ærleg", "øving", "skreiv", "skrive"] {
+            assert!(is_correct_for(word, nn), "{word}");
+        }
+        for word in ["jeg", "skriver", "åpen", "stavekontrol", "bøøkene"] {
+            assert!(!is_correct_for(word, nn), "{word}");
+        }
+        assert!(!is_correct_for("ikkje", Language::Bokmal));
+        for (wrong, right) in [("stavekontrol", "stavekontroll"), ("Bøøkene", "Bøkene"), ("Ærlge", "Ærleg")] {
+            let suggestions = suggest_for(wrong, 6, nn);
+            assert!(suggestions.contains(&right.into()), "{wrong}: {suggestions:?}");
+        }
+        let text = "Eg skriv nynorsk. Bøøkene er opne. Sjå https://example.com/xyzq og test@example.com.";
+        let issues = check_spelling_for(text, nn);
+        assert_eq!(issues.iter().map(|i| &text[i.start..i.end]).collect::<Vec<_>>(), ["Bøøkene"]);
+        assert_eq!(issues[0].message, "Mogleg stavefeil");
+        assert!(check_grammar_for("A apple", nn).is_empty());
+        assert_eq!(check_grammar_for("Dette dette er fint.", nn)[0].message, "Gjenteke ord");
+        assert!(suggest_for(&"æ".repeat(1000), 6, nn).is_empty());
+        assert!(suggest_for("stavekontrol", 0, nn).is_empty());
+    }
+
+    #[test]
     fn proofing_languages_do_not_fall_back_to_english() {
         for tag in ["nb", "nb-NO", "NB_no", "no-NO", "nob"] {
             assert_eq!(Language::from_tag(tag), Language::Bokmal);
         }
         assert_eq!(Language::from_tag("en-GB"), Language::English);
-        assert_eq!(Language::from_tag("nn-NO"), Language::Unsupported);
+        for tag in ["nn", "nn-NO", "NN_no", "nno", "no-nn", "no-nn-NO"] {
+            assert_eq!(Language::from_tag(tag), Language::Nynorsk);
+        }
         assert_eq!(Language::from_tag("fr-FR"), Language::Unsupported);
         assert!(check_spelling_for("Bonjour øøø", Language::Unsupported).is_empty());
         assert!(check_grammar_for("A apple", Language::Bokmal).is_empty());

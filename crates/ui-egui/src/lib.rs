@@ -179,17 +179,17 @@ impl WordApp {
             }
             params["locale"] = json!(i18n::Lang::from_pref(&self.ui.language).document_locale());
         }
-        if id == "insert.dateTime" && params.get("format").is_none() && i18n::Lang::from_pref(&self.ui.language).code() == "nb" {
+        if id == "insert.dateTime" && params.get("format").is_none() && i18n::Lang::from_pref(&self.ui.language).is_norwegian() {
             if !params.is_object() {
                 params = json!({});
             }
             params["format"] = json!("dd.MM.yyyy");
         }
-        if id == "review.language" && params.get("lang").is_none() && i18n::Lang::from_pref(&self.ui.language).code() == "nb" {
+        if id == "review.language" && params.get("lang").is_none() && i18n::Lang::from_pref(&self.ui.language).is_norwegian() {
             if !params.is_object() {
                 params = json!({});
             }
-            params["lang"] = json!("nb-NO");
+            params["lang"] = json!(i18n::Lang::from_pref(&self.ui.language).document_locale());
         }
         if let Some(r) = self.ui_command(id, &params) {
             return r;

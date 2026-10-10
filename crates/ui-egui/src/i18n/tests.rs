@@ -22,7 +22,9 @@ fn system_locales_map_to_languages() {
     assert_eq!(lang_from_tag("nb_NO.UTF-8"), Some(lang("nb")));
     assert_eq!(lang_from_tag("nb-NO"), Some(lang("nb")));
     assert_eq!(lang_from_tag("no_NO.UTF-8"), Some(lang("nb")));
-    assert_eq!(lang_from_tag("nn-NO"), None);
+    assert_eq!(lang_from_tag("nn-NO"), Some(lang("nn")));
+    assert_eq!(lang_from_tag("nn_NO.UTF-8"), Some(lang("nn")));
+    assert_eq!(lang_from_tag("no-nn-NO"), Some(lang("nn")));
     assert_eq!(lang_from_tag("en-GB"), Some(Lang::EN));
     assert_eq!(lang_from_tag("C"), Some(Lang::EN));
     assert_eq!(lang_from_tag("POSIX"), Some(Lang::EN));
@@ -80,6 +82,43 @@ fn norwegian_preferences_affect_new_documents_only_and_persist() {
     app.run("insert.dateTime", json!({})).unwrap();
     let date = app.session.doc.plain_text(wordcraft_doc::StoryRef::Body);
     assert!(date.chars().nth(2) == Some('.') && date.chars().nth(5) == Some('.'), "{date}");
+    set_current(Lang::EN);
+}
+
+#[test]
+fn nynorsk_ui_formats_and_document_language_are_distinct() {
+    use serde_json::json;
+    let nn = lang("nn");
+    assert_eq!(tr(nn, "Home"), "Heim");
+    assert_eq!(tr(nn, "Insert"), "Set inn");
+    assert_eq!(tr(nn, "Save"), "Lagre");
+    assert_eq!(tr(nn, "Columns"), "Kolonnar");
+    assert_eq!(tr(nn, "Open"), "Opne");
+    assert_eq!(tr(nn, "Font Size"), "Skriftstorleik");
+    assert_eq!(tr(nn, "Norwegian Nynorsk"), "Norsk nynorsk");
+    assert_eq!(nn.measurement(72.0), "2,54 cm");
+    assert_eq!(nn.number(12.5, 1), "12,5");
+    assert_eq!(nn.document_locale(), "nn-NO");
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    app.run("ui.language", json!({"value": "NN"})).unwrap();
+    assert_eq!(app.session.doc.last_section.page_w, 612.0);
+    let prefs: crate::UiState = serde_json::from_str(&serde_json::to_string(&app.prefs()).unwrap()).unwrap();
+    assert_eq!(prefs.language, "nn");
+    app.apply_prefs(prefs);
+    for template in ["blank", "letter", "resume", "report", "sample"] {
+        app.run("file.new", json!({"template": template})).unwrap();
+        assert!((app.session.doc.last_section.page_w - 21.0 * wordcraft_geom::PT_PER_CM).abs() < 0.01);
+        assert!((app.session.doc.last_section.page_h - 29.7 * wordcraft_geom::PT_PER_CM).abs() < 0.01);
+        assert_eq!(app.session.doc.styles.default_chr.lang.as_deref(), Some("nn-NO"));
+    }
+    app.run("file.new", json!({})).unwrap();
+    app.run("insert.dateTime", json!({})).unwrap();
+    let date = app.session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert!(date.chars().nth(2) == Some('.') && date.chars().nth(5) == Some('.'), "{date}");
+    app.run("review.language", json!({})).unwrap();
+    assert_eq!(app.session.typing_props().lang.as_deref(), Some("nn-NO"));
+    app.run("file.new", json!({"locale": "nb-NO"})).unwrap();
+    assert_eq!(app.session.doc.styles.default_chr.lang.as_deref(), Some("nb-NO"));
     set_current(Lang::EN);
 }
 
