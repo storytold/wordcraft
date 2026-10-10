@@ -24,6 +24,8 @@
 	Accessibility	Accesibilidad
 	Add	Añadir
 	Add Space Before Paragraph	Añadir espacio antes del párrafo
+	Add space between Asian and Latin text	Añadir espacio entre texto asiático y latino
+	Add space between Asian text and numbers	Añadir espacio entre texto asiático y números
 	Add Text	Añadir texto
 	Add a Table	Añadir una tabla
 	Add a comment	Añadir un comentario
@@ -46,13 +48,17 @@
 	All Caps	Mayúsculas
 	All Markup	Todas las marcas
 	All caps	Mayúsculas
+	Allow hanging punctuation	Permitir puntuación colgante
+	Allow Latin text to wrap in the middle of a word	Permitir que el texto latino se divida en mitad de una palabra
 	Alt Text	Texto alternativo
+	Apply Asian line-breaking rules (kinsoku)	Aplicar las reglas asiáticas de división de líneas (kinsoku)
 	Apply Character Style	Aplicar estilo de carácter
 	Apply Style	Aplicar estilo
 	Arrange	Organizar
 	Arrange\nAll	Organizar\ntodo
 	Arrow	Flecha
 	Artistic Effects	Efectos artísticos
+	Asian Typography	Tipografía asiática
 	Author	Autor
 	AutoCorrect Options	Opciones de autocorrección
 	AutoFit	Ajustar automáticamente
@@ -156,6 +162,7 @@
 	Compact	Compacto
 	Compare	Comparar
 	Compress Pictures	Comprimir imágenes
+	Compress punctuation at the start of a line	Comprimir la puntuación al inicio de la línea
 	Continuous	Continuo
 	Convert	Convertir
 	Convert Text to Table	Convertir texto en tabla
@@ -333,6 +340,7 @@
 	Indent	Sangría
 	Indentation	Sangría
 	Indents	Sangrías
+	Indents and Spacing	Sangría y espaciado
 	Index	Índice
 	Info	Información
 	Ink to\nMath	Tinta a\nfórmula
@@ -389,6 +397,7 @@
 	Letter	Carta
 	Line	Línea
 	Line Break	Salto de línea
+	Line breaking	División de líneas
 	Line End	Fin de línea
 	Line Numbers	Números de línea
 	Line Spacing	Interlineado

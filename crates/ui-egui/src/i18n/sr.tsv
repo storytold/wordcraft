@@ -28,6 +28,8 @@
 	Add a comment	Додај коментар
 	Add a Table	Додај табелу
 	Add Space Before Paragraph	Додај размак пре пасуса
+	Add space between Asian and Latin text	Додај размак између азијског и латиничног текста
+	Add space between Asian text and numbers	Додај размак између азијског текста и бројева
 	Add Text	Додај текст
 	Add to Dictionary	Додај у речник
 	Add to Style Gallery	Додај у галерију стилова
@@ -46,7 +48,10 @@
 	All Caps	Сва велика слова
 	All caps	Сва велика слова
 	All Markup	Све измене
+	Allow hanging punctuation	Дозволи висећу интерпункцију
+	Allow Latin text to wrap in the middle of a word	Дозволи преламање латиничног текста усред речи
 	Alt Text	Алтернативни текст
+	Apply Asian line-breaking rules (kinsoku)	Примени азијска правила преламања редова (кинсоку)
 	Apply Character Style	Примени стил знакова
 	Apply Style	Примени стил
 	Apply Styles	Изабери и примени стилове
@@ -54,6 +59,7 @@
 	Arrange\nAll	Распореди\nсве
 	Arrow	Стрелица
 	Artistic Effects	Уметнички ефекти
+	Asian Typography	Азијска типографија
 	Author	Аутор
 	AutoCorrect Options	Опције аутоматске исправке
 	AutoFit	Аутоматско уклапање
@@ -73,6 +79,9 @@
 	Left Margin	Лева маргина
 	Reopen	Поново отвори
 	Right Margin	Десна маргина
+	Compress punctuation at the start of a line	Сажми интерпункцију на почетку реда
+	Indents and Spacing	Увлачења и размак
+	Line breaking	Преламање редова
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Прикажи документе са инвертованим бојама, као код Приказ › Промени режим. Чување, штампање и PDF нису погођени.
 	AutoSave saves every change to the file (needs a saved document)	Аутоматско чување уписује сваку измену у фајл (документ мора бити већ сачуван)
 	AutoText	Аутоматски текст
