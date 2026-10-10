@@ -67,6 +67,10 @@
 	AutoFit Window	Ajustar a la ventana
 	AutoSave	Autoguardado
 	AutoSave saves every change to the file (needs a saved document)	El autoguardado guarda cada cambio en el archivo (requiere un documento guardado)
+	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	El autoguardado no está disponible en el navegador: no puede escribir en sus archivos. Guardar descarga una copia.
+	AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave.	El autoguardado solo mantiene archivos .docx, .odt y .rtf; {name} no puede conservar todo el formato. Guarde como .docx para activar el autoguardado.
+	Save the document to turn on AutoSave	Guarde el documento para activar el autoguardado
+	Save the document to turn on AutoSave (a file you have only opened isn't rewritten until you save it)	Guarde el documento para activar el autoguardado (un archivo que solo ha abierto no se reescribe hasta que lo guarde)
 	AutoText	Texto automático
 	Automatic	Automático
 	Automatic ({language})	Automático ({language})
@@ -838,8 +842,7 @@
 	{key}+Click to follow link	{key}+clic para seguir el vínculo
 	{selected} of {words} words	{selected} de {words} palabras
 	{words} words	{words} palabras
-	➕ New comment	➕ Nuevo comentario
-	📂  Browse…	📂  Examinar…
+	Browse…	Examinar…
 	Equation	Ecuación
 	Review	Revisar
 	Track\nChanges	Control de\ncambios

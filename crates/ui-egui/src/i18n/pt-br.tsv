@@ -68,6 +68,10 @@
 	Automatic Table 2 (2 levels)	Tabela automática 2 (2 níveis)
 	AutoSave	Salvamento automático
 	AutoSave saves every change to the file (needs a saved document)	O salvamento automático grava cada alteração no arquivo (requer um documento já salvo)
+	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	O salvamento automático não está disponível no navegador: ele não pode gravar nos seus arquivos. Salvar baixa uma cópia.
+	AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave.	O salvamento automático só mantém arquivos .docx, .odt e .rtf; {name} não guarda toda a formatação. Salve como .docx para ativar o salvamento automático.
+	Save the document to turn on AutoSave	Salve o documento para ativar o salvamento automático
+	Save the document to turn on AutoSave (a file you have only opened isn't rewritten until you save it)	Salve o documento para ativar o salvamento automático (um arquivo que você apenas abriu não é regravado até você salvá-lo)
 	AutoText	Autotexto
 	Backspace	Backspace
 	Banded Columns	Colunas listradas
@@ -810,8 +814,7 @@
 	Zoom Out	Reduzir
 	{group} settings	Configurações de {group}
 	{key}+Click to follow link	{key}+clique para seguir o link
-	➕ New comment	➕ Novo comentário
-	📂  Browse…	📂  Procurar…
+	Browse…	Procurar…
 	{words} words	Palavras: {words}
 	{selected} of {words} words	Palavras: {words}; seleção: {selected}
 	Dark page (white text on black)	Página escura (texto branco sobre preto)

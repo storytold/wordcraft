@@ -74,6 +74,10 @@
 	Search for templates	搜尋範本
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	像「檢視 › 切換模式」一樣以反轉的色彩顯示文件。儲存、列印和 PDF 不受影響。
 	AutoSave saves every change to the file (needs a saved document)	自動儲存會將每次變更寫入檔案（文件需已儲存）
+	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	瀏覽器中無法使用自動儲存：它不能寫入您的檔案。儲存會下載一份複本。
+	AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave.	自動儲存僅適用於 .docx、.odt 和 .rtf 檔案；{name} 無法保留所有格式。另存為 .docx 即可開啟自動儲存。
+	Save the document to turn on AutoSave	儲存文件後即可開啟自動儲存
+	Save the document to turn on AutoSave (a file you have only opened isn't rewritten until you save it)	儲存文件後即可開啟自動儲存（僅開啟過的檔案在您儲存之前不會被改寫）
 	AutoText	自動圖文集
 	Backspace	退格
 	Banded Columns	帶狀欄
@@ -811,8 +815,7 @@
 	Zoom Out	縮小
 	{group} settings	{group}設定
 	{key}+Click to follow link	按住 {key} 並按一下以追蹤連結
-	➕ New comment	➕ 新增註解
-	📂  Browse…	📂  瀏覽…
+	Browse…	瀏覽…
 	{words} words	{words} 個字
 	{selected} of {words} words	{selected}/{words} 個字
 	Direction:	方向：

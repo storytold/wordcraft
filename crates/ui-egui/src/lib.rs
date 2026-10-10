@@ -349,6 +349,9 @@ impl WordApp {
         if let Some(r) = self.ui_command(id, &params) {
             return r;
         }
+        if id == "file.autosave" {
+            return self.set_autosave(&params);
+        }
         let ctx = self.ctx.clone();
         if let Some(r) = zotero::command(self, id, &params, ctx.as_ref()) {
             if let Err(e) = &r {
@@ -782,9 +785,40 @@ impl WordApp {
         self.session.path.is_some() && self.session.path == self.autosave_path
     }
 
-    /// Whether AutoSave covers the document (only a file the user saved to in this session).
+    /// Why AutoSave can't cover the document, or `None` when it can: it writes only a file the
+    /// user saved to in this session, in a format that keeps everything, and never in the browser
+    /// (a page can't write to the user's files; saving there is a download, #176).
+    pub fn autosave_block(&self) -> Option<AutoSaveBlock> {
+        if self.services.download.is_some() {
+            return Some(AutoSaveBlock::Browser);
+        }
+        let Some(path) = &self.session.path else { return Some(AutoSaveBlock::Unsaved) };
+        if !keeps_everything(&path.to_string_lossy()) {
+            let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            return Some(AutoSaveBlock::Format { name });
+        }
+        if !self.saved_here() {
+            return Some(AutoSaveBlock::NotSavedHere);
+        }
+        None
+    }
+
+    /// Whether AutoSave covers the document: it is on and nothing blocks it ([`Self::autosave_block`]).
     pub fn autosaves(&self) -> bool {
-        self.autosave && self.saved_here()
+        self.autosave && self.autosave_block().is_none()
+    }
+
+    /// `file.autosave` (the AutoSave switch, and scripts): `value` turns AutoSave on or off;
+    /// without it, it toggles what the switch shows. Turning it on for a document AutoSave can't
+    /// cover is an error that says why, instead of a switch that is on but saves nothing (#196).
+    fn set_autosave(&mut self, params: &Value) -> Result<Value, String> {
+        let on = params.get("value").and_then(Value::as_bool).unwrap_or(!self.autosaves());
+        if on && let Some(block) = self.autosave_block() {
+            return Err(block.reason());
+        }
+        self.autosave = on;
+        self.session.autosave = on;
+        Ok(json!({"value": on}))
     }
 
     /// AutoSave: write a saved document a couple of seconds after the last change. A failure is
@@ -792,9 +826,7 @@ impl WordApp {
     fn autosave_tick(&mut self, now: f64) {
         if self.autosaves() && self.session.dirty && now - self.last_autosave > 2500.0 && now - self.canvas.caret_visible_since > 1500.0 {
             self.last_autosave = now;
-            if self.session.path.as_deref().is_some_and(|p| keeps_everything(&p.to_string_lossy()))
-                && let Err(e) = self.session.run("file.save", &json!({}))
-            {
+            if let Err(e) = self.session.run("file.save", &json!({})) {
                 log::warn!("AutoSave failed: {e}");
                 self.autosave_path = None;
                 self.status(i18n::fmt(tl!("AutoSave failed: {error}. Save the document to turn AutoSave back on."), &[("error", &e.to_string())]));
@@ -951,6 +983,44 @@ impl WordApp {
             let _ = reply.send(json!({"ok": false, "error": "no frame was presented (window hidden?); use ui.render"}));
             false
         });
+    }
+}
+
+/// Why AutoSave can't cover the document ([`WordApp::autosave_block`]); the switch is greyed out
+/// and its tooltip gives [`AutoSaveBlock::reason`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AutoSaveBlock {
+    /// The web app: saving is a download, there is no file to keep writing to.
+    Browser,
+    /// A new document that has never been saved.
+    Unsaved,
+    /// A file in a format that can't keep everything (Markdown, plain text, HTML…), by file name.
+    Format { name: String },
+    /// A file that was opened but not yet saved in this session.
+    NotSavedHere,
+}
+
+impl AutoSaveBlock {
+    /// What the user (or a script) is told, in the interface language.
+    pub fn reason(&self) -> String {
+        match self {
+            AutoSaveBlock::Browser => {
+                tl!("AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.").to_string()
+            }
+            AutoSaveBlock::Unsaved => tl!("Save the document to turn on AutoSave").to_string(),
+            AutoSaveBlock::Format { name } => i18n::fmt(
+                tl!("AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave."),
+                &[("name", name)],
+            ),
+            AutoSaveBlock::NotSavedHere => {
+                tl!("Save the document to turn on AutoSave (a file you have only opened isn't rewritten until you save it)").to_string()
+            }
+        }
+    }
+
+    /// Whether Save As can lift the block (everywhere but the browser).
+    pub fn save_as_helps(&self) -> bool {
+        !matches!(self, AutoSaveBlock::Browser)
     }
 }
 
@@ -1898,6 +1968,56 @@ mod tests {
         let saved = wordcraft_engine::io::open_path(&path).unwrap();
         assert!(saved.plain_text(wordcraft_doc::StoryRef::Body).contains("Typed More Original"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #196: a saved .md file showed AutoSave on, but AutoSave writes only formats that keep
+    /// everything, so edits stayed unsaved. The switch is now off and blocked with a reason, and
+    /// scripts turning it on get that reason as an error; a .docx saved here is covered.
+    #[test]
+    fn autosave_is_blocked_with_a_reason_for_files_it_cannot_keep() {
+        let dir = scratch("autosave-md");
+        let md = dir.join("notes.md");
+        std::fs::write(&md, "# Notes\n\nSome text\n").unwrap();
+        let mut a = app();
+        assert_eq!(a.autosave_block(), Some(AutoSaveBlock::Unsaved), "a new document has no file yet");
+        a.run("file.open", json!({"path": md.to_string_lossy()})).unwrap();
+        a.run("text.insert", json!({"text": "Typed "})).unwrap();
+        a.run("file.save", json!({})).unwrap();
+        assert!(a.autosave, "the preference stays on");
+        assert_eq!(a.autosave_block(), Some(AutoSaveBlock::Format { name: "notes.md".into() }));
+        assert!(!a.autosaves(), "the switch shows off");
+        let why = a.autosave_block().map(|b| b.reason()).unwrap_or_default();
+        assert!(why.contains("notes.md") && why.contains(".docx"), "{why}");
+        let err = a.run("file.autosave", json!({"value": true})).unwrap_err();
+        assert_eq!(err, why, "scripts are told why");
+        assert!(a.run("file.autosave", json!({"value": false})).is_ok(), "turning it off always works");
+        a.autosave = true;
+
+        // Save As .docx (what the greyed switch offers) lifts the block.
+        let docx = dir.join("notes.docx");
+        a.run("file.saveAs", json!({"path": docx.to_string_lossy()})).unwrap();
+        assert_eq!(a.autosave_block(), None);
+        assert!(a.autosaves());
+        a.run("text.insert", json!({"text": "More "})).unwrap();
+        a.autosave_tick(now_ms() + 10_000.0);
+        assert!(!a.session.dirty, "AutoSave wrote the .docx");
+        assert_eq!(a.run("file.autosave", json!({})).unwrap(), json!({"value": false}), "toggling turns it off");
+        assert!(!a.autosaves());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #176: in the browser saving is a download, so AutoSave can't keep a file up to date; the
+    /// switch is blocked with a reason instead of being on while nothing is saved.
+    #[test]
+    fn autosave_is_unavailable_in_the_browser() {
+        let services = Services { download: Some(Box::new(|_: &str, _: &[u8]| Ok(()))), ..Default::default() };
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), services);
+        a.run("text.insert", json!({"text": "Hello"})).unwrap();
+        a.run("file.save", json!({"path": "draft.docx"})).unwrap();
+        assert_eq!(a.autosave_block(), Some(AutoSaveBlock::Browser));
+        assert!(!a.autosaves());
+        let err = a.run("file.autosave", json!({"value": true})).unwrap_err();
+        assert!(err.contains("browser"), "{err}");
     }
 
     /// Cancelling the Open picker (Mod+O) left the document as it was but turned AutoSave off.

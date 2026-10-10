@@ -418,3 +418,53 @@ pub fn apply(ctx: &egui::Context, t: &Tokens) {
 pub fn c32(c: wordcraft_doc::Rgb) -> Color32 {
     Color32::from_rgb(c.0, c.1, c.2)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    /// Symbols written as text in the interface code must exist in the interface fonts (Inter and
+    /// egui's emoji fallbacks); a missing glyph draws as an empty box, as the panes' "✕" close
+    /// button once did. Letters are the catalogs' business (see the i18n font tests).
+    #[test]
+    fn interface_symbols_have_glyphs() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(super::font_definitions(false, false));
+        ctx.run_ui(egui::RawInput::default(), |_| {}).drop_without_applying_deltas();
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut symbols = BTreeSet::new();
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let code = std::fs::read_to_string(&path).unwrap();
+            // Characters inside string literals, line by line (good enough for this code base).
+            for line in code.lines().filter(|l| !l.trim_start().starts_with("//")) {
+                for (i, part) in line.split('"').enumerate() {
+                    if i % 2 == 1 {
+                        symbols.extend(
+                            part.chars()
+                                .filter(|c| !c.is_ascii() && !c.is_alphabetic() && !c.is_whitespace())
+                                .map(|c| (c, path.file_name().unwrap().to_string_lossy().to_string())),
+                        );
+                    }
+                }
+            }
+        }
+        // Equation gallery templates are UnicodeMath input (`lim┬(n→∞)`, `≜`) that the math
+        // renderer draws with document fonts, not interface text.
+        // The ➢ bullet is a value for `para.bullets`; its menu tile draws the shape instead.
+        let exempt = |c: char, file: &str| match file {
+            "equation_tab.rs" => matches!(c, '≜' | '┬'),
+            "ribbon.rs" => c == '➢',
+            _ => false,
+        };
+        symbols.retain(|(c, file)| !exempt(*c, file));
+        let font = super::regular(12.5);
+        let missing: Vec<String> = ctx.fonts_mut(|f| {
+            symbols.iter().filter(|(c, _)| !f.has_glyph(&font, *c)).map(|(c, file)| format!("{c} U+{:04X} in {file}", *c as u32)).collect()
+        });
+        assert!(missing.is_empty(), "symbols without a glyph: {missing:#?}");
+    }
+}

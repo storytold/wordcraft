@@ -51,7 +51,14 @@ fn header(ui: &mut Ui, title: &str) -> bool {
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(tl!(title)).font(semibold(15.0)));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.small_button("✕").clicked() {
+            // Drawn, not the "✕" character: the interface fonts have no glyph for it.
+            let t = crate::theme::Tokens::get(ui.ctx());
+            let (r, resp) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::click());
+            if resp.hovered() {
+                ui.painter().rect_filled(r, 4.0, t.hover);
+            }
+            crate::icons::paint(ui.painter(), egui::Rect::from_center_size(r.center(), egui::vec2(14.0, 14.0)), "close", t.icon, t.accent);
+            if resp.on_hover_text(tl!("Close")).clicked() {
                 close = true;
             }
         });
@@ -271,7 +278,7 @@ fn comments(app: &mut WordApp, ui: &mut Ui) {
         let _ = app.run("view.commentsPane", json!({"value": false}));
         return;
     }
-    if ui.button(tl!("➕ New comment")).clicked() {
+    if crate::widgets::icon_text_button(ui, "newComment", tl!("New Comment"), regular(12.5)).clicked() {
         let _ = app.run("review.newComment", json!({"text": ""}));
     }
     ui.separator();

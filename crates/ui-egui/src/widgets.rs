@@ -390,6 +390,28 @@ pub fn combo_list(ui: &mut Ui, width: f32, current: &str, items: &[String], prev
     out
 }
 
+/// A text button with a drawn icon in front. Symbols such as ✎ or 💬 aren't in the interface
+/// fonts and would draw as empty boxes, so icons are painted (`icons.rs`) rather than typed.
+pub fn icon_text_button(ui: &mut Ui, icon: &str, text: &str, font: egui::FontId) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let galley = ui.painter().layout_no_wrap(text.to_string(), font, t.text);
+    let pad = ui.spacing().button_padding;
+    let icon_w = 16.0;
+    let size = vec2(pad.x + icon_w + 4.0 + galley.size().x + pad.x, galley.size().y.max(icon_w) + 2.0 * pad.y);
+    let (r, resp) = ui.allocate_exact_size(size, Sense::click());
+    let v = ui.style().interact(&resp);
+    ui.painter().rect(r, v.corner_radius, v.weak_bg_fill, v.bg_stroke, egui::StrokeKind::Inside);
+    icons::paint(
+        ui.painter(),
+        Rect::from_center_size(pos2(r.min.x + pad.x + icon_w / 2.0, r.center().y), vec2(icon_w, icon_w)),
+        icon,
+        t.icon,
+        t.accent,
+    );
+    ui.painter().galley(pos2(r.min.x + pad.x + icon_w + 4.0, r.center().y - galley.size().y / 2.0), galley, t.text);
+    resp
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

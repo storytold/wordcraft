@@ -257,7 +257,7 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
 
 fn open_page(app: &mut WordApp, ui: &mut Ui) {
     heading(ui, "Open");
-    if ui.button(egui::RichText::new(tl!("📂  Browse…")).font(medium(14.0))).clicked() {
+    if ui.button(egui::RichText::new(tl!("Browse…")).font(medium(14.0))).clicked() {
         let _ = app.run("ui.openFileDialog", json!({}));
     }
     ui.add_space(18.0);
@@ -357,7 +357,16 @@ fn options_page(app: &mut WordApp, ui: &mut Ui) {
         }
     });
     theme_picker(app, ui);
-    ui.checkbox(&mut app.autosave, tl!("AutoSave documents you have saved in WordCraft"));
+    // The browser can't write to the user's files, so AutoSave can't be turned on there (#176).
+    let browser = app.autosave_block() == Some(crate::AutoSaveBlock::Browser);
+    let mut autosave = app.autosave && !browser;
+    let r = ui.add_enabled(!browser, egui::Checkbox::new(&mut autosave, tl!("AutoSave documents you have saved in WordCraft")));
+    if browser {
+        r.on_disabled_hover_text(crate::AutoSaveBlock::Browser.reason());
+    } else if r.changed() {
+        app.autosave = autosave;
+        app.session.autosave = autosave;
+    }
     let mut dark_page = app.session.view.dark_mode;
     if ui
         .checkbox(&mut dark_page, tl!("Dark page (white text on black)"))

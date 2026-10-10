@@ -124,6 +124,10 @@
 	Shape Effects	Ефекти облика
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Прикажи документе са инвертованим бојама, као код Приказ › Промени режим. Чување, штампање и PDF нису погођени.
 	AutoSave saves every change to the file (needs a saved document)	Аутоматско чување уписује сваку измену у фајл (документ мора бити већ сачуван)
+	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	Аутоматско чување није доступно у прегледачу: не може да уписује у ваше фајлове. Чување преузима копију.
+	AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave.	Аутоматско чување чува само .docx, .odt и .rtf фајлове; {name} не може да задржи сво форматирање. Сачувајте као .docx да бисте укључили аутоматско чување.
+	Save the document to turn on AutoSave	Сачувајте документ да бисте укључили аутоматско чување
+	Save the document to turn on AutoSave (a file you have only opened isn't rewritten until you save it)	Сачувајте документ да бисте укључили аутоматско чување (фајл који сте само отворили не преписује се док га не сачувате)
 	AutoText	Аутоматски текст
 	Backspace	Backspace
 	Banded Columns	Тракасте колоне
@@ -861,8 +865,7 @@
 	{group} settings	Подешавања за {group}
 	{key}+Click to follow link	{key}+клик за отварање везе
 	{size} pt	{size} пт
-	➕ New comment	➕ Нови коментар
-	📂  Browse…	📂  Потражи…
+	Browse…	Потражи…
 	{words} words	{words} речи
 	{selected} of {words} words	{selected} од {words} речи
 	Direction:	Смер:
