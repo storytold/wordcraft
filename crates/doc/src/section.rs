@@ -365,6 +365,9 @@ pub struct SectionProps {
     pub page_borders: Option<Borders>,
     /// Text direction / bidi section.
     pub rtl: bool,
+    /// Tracked change of the section's properties (`w:sectPrChange`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fmt_change: Option<Box<crate::props::PropChange<SectionProps>>>,
 }
 
 impl Default for SectionProps {
@@ -392,6 +395,7 @@ impl Default for SectionProps {
             valign: VAlign::Top,
             page_borders: None,
             rtl: false,
+            fmt_change: None,
         }
     }
 }

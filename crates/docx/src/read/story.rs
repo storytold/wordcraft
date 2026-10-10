@@ -5,7 +5,7 @@ use std::sync::Arc;
 use wordcraft_doc::effects::{Glow, Shadow, ShapeEffects};
 use wordcraft_doc::graphic::{Embedded, Graphic, GraphicItem, GraphicKind};
 use wordcraft_doc::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
-use wordcraft_doc::props::{CharProps, Rgb};
+use wordcraft_doc::props::{CharProps, NumChange, PropChange, Rgb};
 use wordcraft_doc::table::{Cell, MAX_COLS, MAX_ROWS, Row, Table};
 use wordcraft_doc::{Block, Blocks, InlineObject, Paragraph, PartKind, RevisionKind, Run, para_block};
 
@@ -250,6 +250,19 @@ impl Reader<'_> {
                         _ => {}
                     }
                 }
+                para.mark.fmt_change = self.rpr_change(rpr);
+            }
+            // Tracked formatting changes (§17.13.5.29, §17.13.5.19): the paragraph properties
+            // before the change, and a change of the list numbering.
+            if let Some(ch) = ppr.child("w:pPrChange") {
+                let old = ch.child("w:pPr").map(|o| self.pc.ppr(o).0.formatting()).unwrap_or_default();
+                para.props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
+            }
+            if para.props.numbering.is_some()
+                && let Some(ch) = ppr.child("w:numPr").and_then(|n| n.child("w:numberingChange"))
+            {
+                let original = ch.attr("w:original").unwrap_or("").chars().take(256).collect();
+                para.props.num_change = Some(Box::new(NumChange { rev: self.revision(RevisionKind::Format, ch), original }));
             }
             if let Some(s) = ppr.child("w:sectPr") {
                 para.section = Some(Box::new(self.read_section(s, rels)));
@@ -265,8 +278,21 @@ impl Reader<'_> {
         para
     }
 
+    /// A tracked run formatting change in `rpr` (`w:rPrChange`, §17.13.5.31): the formatting
+    /// before it. A change nested inside it is ignored.
+    fn rpr_change(&mut self, rpr: &El) -> Option<Box<PropChange<CharProps>>> {
+        let ch = rpr.child("w:rPrChange")?;
+        let old = ch.child("w:rPr").map(|o| self.pc.rpr(o).formatting()).unwrap_or_default();
+        PropChange::boxed(self.revision(RevisionKind::Format, ch), old)
+    }
+
     pub fn read_section(&mut self, s: &El, rels: &Rels) -> wordcraft_doc::SectionProps {
         let (mut sp, refs) = sectpr(s);
+        // §17.13.5.32: the section's properties before a tracked change (no header references).
+        if let Some(ch) = s.child("w:sectPrChange") {
+            let old = ch.child("w:sectPr").map(|o| sectpr(o).0).unwrap_or_default();
+            sp.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
+        }
         for r in refs {
             let Some(rel) = rels.by_id(&r.rid) else { continue };
             if rel.external {
@@ -368,11 +394,12 @@ impl Reader<'_> {
         }
     }
 
-    fn run_props(&self, rpr: &El, ctx: &RunCtx) -> CharProps {
+    fn run_props(&mut self, rpr: &El, ctx: &RunCtx) -> CharProps {
         let mut p = self.pc.rpr(rpr);
         p.link = ctx.link.clone();
         p.ins = ctx.ins;
         p.del = ctx.del;
+        p.fmt_change = self.rpr_change(rpr);
         p
     }
     fn run_props_none(&self, ctx: &RunCtx) -> CharProps {
@@ -935,6 +962,10 @@ impl Reader<'_> {
         let mut table = Table::default();
         if let Some(p) = t.child("w:tblPr") {
             table.props = self.pc.tblpr(p);
+            if let Some(ch) = p.child("w:tblPrChange") {
+                let old = ch.child("w:tblPr").map(|o| self.pc.tblpr(o)).unwrap_or_default();
+                table.props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
+            }
         }
         if let Some(g) = t.child("w:tblGrid") {
             table.grid = g
@@ -947,11 +978,19 @@ impl Reader<'_> {
         collect(t, "w:tr", &mut rows, 0);
         for tr in rows.into_iter().take(MAX_ROWS) {
             let mut row = Row { props: tr.child("w:trPr").map(trpr).unwrap_or_default(), cells: Vec::new() };
+            if let Some(ch) = tr.child("w:trPr").and_then(|p| p.child("w:trPrChange")) {
+                let old = ch.child("w:trPr").map(trpr).unwrap_or_default();
+                row.props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
+            }
             let mut tcs = Vec::new();
             collect(tr, "w:tc", &mut tcs, 0);
             for tc in tcs.into_iter().take(MAX_COLS) {
-                let (props, hcont) =
+                let (mut props, hcont) =
                     tc.child("w:tcPr").map(tcpr).unwrap_or_else(|| (wordcraft_doc::props::CellProps { span: 1, ..Default::default() }, false));
+                if let Some(ch) = tc.child("w:tcPr").and_then(|p| p.child("w:tcPrChange")) {
+                    let old = ch.child("w:tcPr").map(|o| tcpr(o).0).unwrap_or_default();
+                    props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
+                }
                 if hcont && let Some(prev) = row.cells.last_mut() {
                     prev.props.span = (prev.props.span + props.span.max(1)).min(63);
                     continue;

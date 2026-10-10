@@ -730,6 +730,10 @@ impl Session {
         match &result {
             Ok(_) => {
                 if spec.mutates {
+                    // Formatting changed while tracking becomes a formatting revision.
+                    if let Some((before, ..)) = &before_doc {
+                        crate::cmd::fmt_revisions::record(self, id, before);
+                    }
                     self.touch();
                     self.doc.ensure_nonempty();
                     self.doc.prune_text_boxes();

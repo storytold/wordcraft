@@ -576,7 +576,7 @@ fn styles_xml(doc: &Document) -> Vec<u8> {
     w.close("w:rPrDefault");
     w.open("w:pPrDefault", &[]);
     w.open("w:pPr", &[]);
-    props::ppr_inner(&mut w, &s.default_para, false);
+    props::ppr_inner(&mut w, &s.default_para, false, None);
     w.close("w:pPr");
     w.close("w:pPrDefault");
     w.close("w:docDefaults");
@@ -631,7 +631,7 @@ fn style_xml(w: &mut W, st: &Style) {
     }
     if !st.para.is_empty() && st.kind != StyleKind::Character {
         w.open("w:pPr", &[]);
-        props::ppr_inner(w, &st.para, false);
+        props::ppr_inner(w, &st.para, false, None);
         w.close("w:pPr");
     }
     if props::has_rpr(&st.chr) && st.kind != StyleKind::Numbering {

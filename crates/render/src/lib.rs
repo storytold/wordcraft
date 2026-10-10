@@ -451,6 +451,26 @@ pub fn stem_darkening(ppem: f64) -> f64 {
     FACTOR.iter().map(|f| (ppem * f).min(MAX_PX)).sum::<f64>() / 2.0
 }
 
+/// A wavy line from `a` to `b` at height `y`; at most 20 000 units long, so a huge extent can't make it endless.
+fn wave_path(a: f64, b: f64, y: f64, amp: f64) -> BezPath {
+    let step = amp * 2.0;
+    let mut p = BezPath::new();
+    p.move_to((a, y));
+    let mut x = a;
+    let mut up = true;
+    while x < b && x - a < 20_000.0 {
+        let nx = (x + step).min(b);
+        // Past about 1e16 a step no longer changes `x`: stop instead of pushing curves forever.
+        if nx <= x {
+            break;
+        }
+        p.quad_to(((x + nx) / 2.0, if up { y - amp } else { y + amp }), (nx, y));
+        x = nx;
+        up = !up;
+    }
+    p
+}
+
 fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visible: &kurbo::Rect, opts: &RenderOptions) {
     match it {
         Draw::Figure { draws, .. } => {
@@ -484,20 +504,9 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 ctx.stroke_path(&p);
             };
             if *stroke == Stroke::Wave {
-                let mut p = BezPath::new();
                 let (a, b) = ((*x0).min(*x1) as f64, (*x0).max(*x1) as f64);
-                let y = *y0 as f64;
                 let amp = (w * 1.2).max(0.8);
-                let step = amp * 2.0;
-                p.move_to((a, y));
-                let mut x = a;
-                let mut up = true;
-                while x < b && x - a < 20_000.0 {
-                    let nx = (x + step).min(b);
-                    p.quad_to(((x + nx) / 2.0, if up { y - amp } else { y + amp }), (nx, y));
-                    x = nx;
-                    up = !up;
-                }
+                let p = wave_path(a, b, *y0 as f64, amp);
                 ctx.set_stroke(kurbo::Stroke::new(w * 0.8));
                 ctx.stroke_path(&p);
                 return;

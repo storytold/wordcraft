@@ -694,7 +694,8 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
             let lines = rp.drop_cap as f32;
             // Capital height is ~0.7 em: the letter's cap spans from line 1's caps to line N's baseline.
             let mut big = (*rc).clone();
-            big.size = (((lines - 1.0) * line_h + rc.size * 0.7) / 0.7).clamp(rc.size, 1000.0);
+            // `clamp` would panic here when the text itself is larger than 1000 pt.
+            big.size = (((lines - 1.0) * line_h + rc.size * 0.7) / 0.7).min(1000.0).max(rc.size);
             let before = b.clusters.len();
             b.shape(first, 0, &Arc::new(big), None);
             let w: f32 = b.clusters.get(before..).map(|c| c.iter().map(|c| c.adv).sum()).unwrap_or(0.0);

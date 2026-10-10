@@ -473,6 +473,10 @@ fn del_col(s: &mut Session, _: &Value) -> CmdResult {
     }
     let g = t.grid_col(r, c);
     t.delete_col(g);
+    // Rows left without cells are dropped; if that was every row, no table is left.
+    if t.rows.is_empty() {
+        return del_table(s, &Value::Null);
+    }
     fix_caret(s, &tp, r, c.saturating_sub(1))
 }
 

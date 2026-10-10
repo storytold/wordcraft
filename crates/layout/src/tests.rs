@@ -1161,6 +1161,22 @@ fn hidden_float_leaves_no_wrap_area_when_hidden_text_is_not_shown() {
     assert_eq!(first(false), (0.0, false));
 }
 
+/// A page-number start or a line-number start near `u32::MAX` (accepted from files and commands)
+/// overflowed when the next page or line was counted: a panic with overflow checks on.
+#[test]
+fn extreme_page_and_line_number_starts_do_not_overflow() {
+    let mut d = Document::from_text("one\ntwo\nthree");
+    for b in d.body.iter_mut() {
+        if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
+            p.props.page_break_before = Some(true);
+        }
+    }
+    d.last_section.page_num_start = Some(u32::MAX);
+    d.last_section.line_numbers = Some(wordcraft_doc::section::LineNumbering { start: u32::MAX, ..Default::default() });
+    let l = lay(&d);
+    assert!(l.pages.len() >= 3, "{} pages", l.pages.len());
+}
+
 #[test]
 fn line_numbers_borders_text_boxes() {
     let mut d = Document::from_text("one\ntwo\nthree");
@@ -1280,6 +1296,24 @@ fn repeated_header_is_followed_by_the_next_row_even_when_it_overflows() {
     let pages = rows_per_page(t);
     assert!(pages.len() >= 2, "{pages:?}");
     assert!(pages.iter().all(|p| p.first() == Some(&0)), "{pages:?}");
+}
+
+/// A drop-cap paragraph in a font larger than 1000 pt used to panic in layout (`clamp` with min > max).
+#[test]
+fn drop_cap_with_a_huge_font_lays_out() {
+    for size in [999.0, 1000.0, 1001.0, 1638.0] {
+        let cp = wordcraft_doc::CharProps { size: Some(size), ..Default::default() };
+        let mut p = wordcraft_doc::Paragraph::with_text("Hello drop cap world", cp);
+        p.props.drop_cap = Some(3);
+        let mut d = Document::from_text("x");
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = lay(&d);
+        let Some(pl) = l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }) else {
+            panic!("no lines at size {size}")
+        };
+        let (nc, lines, _) = pl.drop_cap.unwrap_or((0, 0, 0.0));
+        assert_eq!((nc, lines), (1, 3), "size {size}");
+    }
 }
 
 #[test]

@@ -1016,3 +1016,62 @@ fn rotated_ole_objects_round_trip() {
     assert_eq!(spin(o), wordcraft_geom::Spin::new(90.0, true, false));
     assert_eq!(o.frame().unwrap().2.effect, [0.0; 4], "the rotated overhang is not kept as effects room");
 }
+
+/// Issue #41: tracked formatting changes (ECMA-376 §17.13.5) survive open and save — run,
+/// paragraph mark, paragraph, numbering, table, row, cell and section — each written last in
+/// its parent, holding the properties before the change.
+#[test]
+fn formatting_revisions_round_trip() {
+    let body = r#"
+<w:p><w:r><w:t xml:space="preserve">Plain, </w:t></w:r><w:r><w:rPr><w:b/><w:rPrChange w:id="5" w:author="Alice" w:date="2026-10-01T00:00:00Z"><w:rPr/></w:rPrChange></w:rPr><w:t>bold by Alice</w:t></w:r><w:r><w:rPr><w:sz w:val="28"/><w:rPrChange w:id="99999999999" w:author="Bob"><w:rPr><w:i/><w:sz w:val="24"/><w:rPrChange w:id="1" w:author="Nested"><w:rPr/></w:rPrChange></w:rPr></w:rPrChange></w:rPr><w:t xml:space="preserve"> end.</w:t></w:r></w:p>
+<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/><w:numberingChange w:id="6" w:author="Alice" w:date="2026-10-01T00:00:00Z" w:original="1."/></w:numPr><w:jc w:val="center"/><w:rPr><w:i/><w:rPrChange w:id="7" w:author="Alice" w:date="2026-10-01T00:00:00Z"><w:rPr/></w:rPrChange></w:rPr><w:pPrChange w:id="8" w:author="Alice" w:date="2026-10-01T00:00:00Z"><w:pPr><w:ind w:left="720"/></w:pPr></w:pPrChange></w:pPr><w:r><w:t>Centred</w:t></w:r></w:p>
+<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/><w:jc w:val="center"/><w:tblPrChange w:id="9" w:author="Bob"><w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr></w:tblPrChange></w:tblPr><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid>
+<w:tr><w:trPr><w:cantSplit/><w:trPrChange w:id="10" w:author="Bob"><w:trPr/></w:trPrChange></w:trPr><w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/><w:shd w:val="clear" w:color="auto" w:fill="FFFF00"/><w:tcPrChange w:id="11" w:author="Bob"><w:tcPr><w:tcW w:w="2000" w:type="dxa"/></w:tcPr></w:tcPrChange></w:tcPr><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+<w:p/>
+<w:sectPr><w:pgSz w:w="15840" w:h="12240" w:orient="landscape"/><w:sectPrChange w:id="12" w:author="Carol" w:date="2026-10-02T00:00:00Z"><w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr></w:sectPrChange></w:sectPr>"#;
+    let d = read_body(body);
+    let rev = |i: u32| d.revisions.get(i as usize).map(|r| (r.kind, r.author.as_str(), r.date.as_str()));
+    let p = paras(&d);
+    let runs: Vec<_> = p[0].run_ranges().map(|(r, c)| (r, c.clone())).collect();
+    assert_eq!(runs.len(), 3);
+    let alice = runs[1].1.fmt_change.as_deref().expect("Alice's rPrChange");
+    assert_eq!(rev(alice.rev), Some((wordcraft_doc::RevisionKind::Format, "Alice", "2026-10-01T00:00:00Z")));
+    assert_eq!((runs[1].1.bold, alice.old.bold), (Some(true), None));
+    let bob = runs[2].1.fmt_change.as_deref().expect("Bob's rPrChange");
+    assert_eq!((bob.old.italic, bob.old.size, bob.old.fmt_change.is_none()), (Some(true), Some(12.0), true), "a nested change is dropped");
+    assert!(runs[0].1.fmt_change.is_none());
+    let pc = p[1].props.fmt_change.as_deref().expect("pPrChange");
+    assert_eq!((p[1].props.align, pc.old.align, pc.old.indent_left), (Some(Align::Center), None, Some(36.0)));
+    assert_eq!(p[1].props.num_change.as_deref().map(|n| n.original.as_str()), Some("1."));
+    assert!(p[1].mark.fmt_change.is_some());
+    let Some(Block::Table(t)) = d.body.get(2).map(|b| &**b) else { panic!("table") };
+    assert_eq!(t.props.fmt_change.as_deref().map(|c| c.old.align), Some(None));
+    assert_eq!(t.rows[0].props.fmt_change.as_deref().map(|c| c.old.cant_split), Some(false));
+    assert_eq!(t.rows[0].cells[0].props.fmt_change.as_deref().map(|c| c.old.shading), Some(None));
+    let sc = d.last_section.fmt_change.as_deref().expect("sectPrChange");
+    assert_eq!((d.last_section.landscape, sc.old.landscape), (true, false));
+    assert_eq!(rev(sc.rev).map(|r| r.1), Some("Carol"));
+
+    // Written back: each change is the last child of its parent, and reads back the same.
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    for (tag, parent) in [
+        ("w:rPrChange", "</w:rPr></w:rPrChange></w:rPr>"),
+        ("w:pPrChange", "</w:pPr></w:pPrChange></w:pPr>"),
+        ("w:tblPrChange", "</w:tblPr></w:tblPrChange></w:tblPr>"),
+        ("w:trPrChange", "</w:trPrChange></w:trPr>"),
+        ("w:tcPrChange", "</w:tcPr></w:tcPrChange></w:tcPr>"),
+        ("w:sectPrChange", "</w:sectPr></w:sectPrChange></w:sectPr>"),
+    ] {
+        assert!(xml.contains(&format!("<{tag} w:id=")), "{tag}: {xml}");
+        assert!(xml.contains(parent), "{tag} last: {xml}");
+    }
+    assert!(xml.contains(r#"<w:numberingChange w:id="#) && xml.contains(r#"w:original="1."/></w:numPr>"#), "{xml}");
+    assert!(xml.contains(r#"<w:b/><w:bCs/><w:rPrChange w:id="#), "{xml}");
+    let again = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(again.body, d.body);
+    assert_eq!(again.last_section, d.last_section);
+    assert_eq!(again.revisions, d.revisions);
+}

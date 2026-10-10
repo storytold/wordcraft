@@ -315,6 +315,37 @@ pub struct CharProps {
     /// Tracked deletion: index into `Document::revisions`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub del: Option<u32>,
+    /// Tracked formatting change (`w:rPrChange`): the formatting before it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fmt_change: Option<Box<PropChange<CharProps>>>,
+}
+
+/// A tracked formatting change (ECMA-376 §17.13.5: `w:rPrChange`, `w:pPrChange`,
+/// `w:tblPrChange`, `w:trPrChange`, `w:tcPrChange`, `w:sectPrChange`): the properties as they
+/// were before the change, and the revision (author, date) that made it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PropChange<T> {
+    /// Index into `Document::revisions`.
+    pub rev: u32,
+    /// The properties before the change (formatting only: no revision or link marks).
+    pub old: T,
+}
+
+impl<T> PropChange<T> {
+    pub fn boxed(rev: u32, old: T) -> Option<Box<PropChange<T>>> {
+        Some(Box::new(PropChange { rev, old }))
+    }
+}
+
+/// A tracked change of a paragraph's list numbering (`w:numberingChange`, kept for round trip):
+/// `original` is the number as it was shown before the change.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct NumChange {
+    /// Index into `Document::revisions`.
+    pub rev: u32,
+    pub original: String,
 }
 
 macro_rules! overlay_fields {
@@ -334,7 +365,7 @@ impl CharProps {
     pub fn overlay(&mut self, patch: &CharProps) {
         overlay_fields!(self, patch; style, font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
             shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl,
-            cs, font_cs, size_cs, bold_cs, italic_cs, lang_bidi, link, ins, del);
+            cs, font_cs, size_cs, bold_cs, italic_cs, lang_bidi, link, ins, del, fmt_change);
         if patch.size.is_some() && patch.size_cs.is_none() {
             self.size_cs = None;
         }
@@ -355,7 +386,11 @@ impl CharProps {
     /// Clear direct formatting but keep what isn't "formatting" (links, revisions, character style
     /// is cleared too, as Word's Clear Formatting does).
     pub fn cleared(&self) -> CharProps {
-        CharProps { link: self.link.clone(), ins: self.ins, del: self.del, ..Default::default() }
+        CharProps { link: self.link.clone(), ins: self.ins, del: self.del, fmt_change: self.fmt_change.clone(), ..Default::default() }
+    }
+    /// Just the formatting: without the link, revision marks and tracked formatting change.
+    pub fn formatting(&self) -> CharProps {
+        CharProps { link: None, ins: None, del: None, fmt_change: None, ..self.clone() }
     }
 }
 
@@ -676,6 +711,12 @@ pub struct ParaProps {
     /// `w:autoSpaceDN`: automatic space between Asian text and numbers. Unset = on.
     #[serde(rename = "autoSpaceDN", skip_serializing_if = "Option::is_none")]
     pub auto_space_dn: Option<bool>,
+    /// Tracked change of the list numbering (`w:numberingChange`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub num_change: Option<Box<NumChange>>,
+    /// Tracked formatting change (`w:pPrChange`): the paragraph properties before it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fmt_change: Option<Box<PropChange<ParaProps>>>,
 }
 
 impl ParaProps {
@@ -690,6 +731,10 @@ impl ParaProps {
     }
     pub fn is_empty(&self) -> bool {
         *self == ParaProps::default()
+    }
+    /// Just the formatting: without the tracked changes.
+    pub fn formatting(&self) -> ParaProps {
+        ParaProps { num_change: None, fmt_change: None, ..self.clone() }
     }
 }
 
@@ -775,6 +820,9 @@ pub struct TableProps {
     /// Floating placement (`w:tblpPr`); `None` for a table in the text flow.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub float: Option<TableFloat>,
+    /// Tracked formatting change (`w:tblPrChange`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fmt_change: Option<Box<PropChange<TableProps>>>,
 }
 
 /// Where a floating table sits; the text after it wraps around it.
@@ -840,6 +888,9 @@ pub struct RowProps {
     pub header: bool,
     /// Don't let the row break across pages.
     pub cant_split: bool,
+    /// Tracked formatting change (`w:trPrChange`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fmt_change: Option<Box<PropChange<RowProps>>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -872,6 +923,9 @@ pub struct CellProps {
     /// Which way the cell's text runs.
     pub text_direction: TextDirection,
     pub no_wrap: bool,
+    /// Tracked formatting change (`w:tcPrChange`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fmt_change: Option<Box<PropChange<CellProps>>>,
 }
 
 #[cfg(test)]

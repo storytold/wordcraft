@@ -8,6 +8,7 @@ pub mod draw;
 pub mod edit;
 pub mod equation;
 pub mod file;
+pub mod fmt_revisions;
 pub mod format;
 pub mod insert;
 pub mod inspector;
@@ -181,6 +182,8 @@ pub(crate) fn track_delete(s: &mut Session, a: &Pos, b: &Pos) -> Result<Pos, Cmd
 pub fn type_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
     let mut props = s.typing_props();
     delete_selection(s)?;
+    // Typed text is new: never deleted, and not a formatting change of the text around it.
+    props.fmt_change = None;
     if s.doc.settings.track_changes {
         props.ins = Some(new_revision(s, RevisionKind::Insert));
         props.del = None;
