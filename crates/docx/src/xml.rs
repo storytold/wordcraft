@@ -44,6 +44,8 @@ const OTHER_NAMESPACES: &[(&str, &str)] = &[
     ("xsi", "http://www.w3.org/2001/XMLSchema-instance"),
     ("xml", "http://www.w3.org/XML/1998/namespace"),
     ("ep", "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"),
+    ("op", "http://schemas.openxmlformats.org/officeDocument/2006/custom-properties"),
+    ("vt", "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"),
 ];
 
 /// ISO/IEC 29500 Strict namespaces map onto the transitional prefixes.
@@ -161,12 +163,25 @@ impl El {
 }
 
 /// Parse XML bytes into the root element.
+/// UTF-16 LE/BE text with a byte-order mark as UTF-8 (`None` without one). Lossy: an unpaired
+/// surrogate becomes U+FFFD and a trailing odd byte is dropped. The result is at most 1.5× the input.
+fn utf16_to_utf8(bytes: &[u8]) -> Option<String> {
+    let (rest, le) = match bytes.get(..2) {
+        Some([0xFF, 0xFE]) => (bytes.get(2..)?, true),
+        Some([0xFE, 0xFF]) => (bytes.get(2..)?, false),
+        _ => return None,
+    };
+    let units = rest.as_chunks::<2>().0.iter().map(|c| if le { u16::from_le_bytes(*c) } else { u16::from_be_bytes(*c) });
+    Some(char::decode_utf16(units).map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER)).collect())
+}
+
 pub fn parse(bytes: &[u8]) -> Result<El, DocxError> {
-    // Strip a UTF-8 BOM; UTF-16 parts are rare in OOXML and rejected.
-    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF][..]).unwrap_or(bytes);
-    if bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]) {
-        return Err(DocxError::Xml("UTF-16 XML parts are not supported".into()));
-    }
+    // UTF-16 (with a BOM) is transcoded to UTF-8; a UTF-8 BOM is stripped.
+    let transcoded = utf16_to_utf8(bytes);
+    let bytes = match &transcoded {
+        Some(s) => s.as_bytes(),
+        None => bytes.strip_prefix(&[0xEF, 0xBB, 0xBF][..]).unwrap_or(bytes),
+    };
     let mut r = NsReader::from_reader(bytes);
     {
         let c = r.config_mut();
@@ -383,6 +398,25 @@ pub fn body_ns() -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn utf16_parts_parse_and_odd_ones_never_panic() {
+        let src = r#"<?xml version="1.0" encoding="UTF-16"?><r:Relationships xmlns:r="urn:x"><r:Relationship Id="rId1" Target="café😀.xml"/></r:Relationships>"#;
+        for le in [true, false] {
+            let mut b = if le { vec![0xFF, 0xFE] } else { vec![0xFE, 0xFF] };
+            b.extend(src.encode_utf16().flat_map(|u| if le { u.to_le_bytes() } else { u.to_be_bytes() }));
+            let root = parse(&b).unwrap();
+            assert_eq!(root.els().next().and_then(|e| e.attr("Target")), Some("café😀.xml"), "le {le}");
+        }
+        // Odd length, unpaired surrogates, a bare BOM: an error or a tree, never a panic.
+        for b in
+            [&[0xFF, 0xFE][..], &[0xFE, 0xFF, 0x00], &[0xFF, 0xFE, b'<', 0, 0x00, 0xD8, b'a', 0, b'/', 0, b'>', 0], &[0xFF, 0xFE, 0x00, 0xDC, 0x00]]
+        {
+            let _ = parse(b);
+        }
+        assert_eq!(utf16_to_utf8(&[0xFF, 0xFE, b'a', 0, 0x00, 0xD8, b'b']).as_deref(), Some("a\u{FFFD}"));
+        assert_eq!(utf16_to_utf8(b"<a/>"), None);
+    }
 
     #[test]
     fn parses_with_namespaces() {

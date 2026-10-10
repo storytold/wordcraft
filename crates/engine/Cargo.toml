@@ -16,6 +16,7 @@ wordcraft-layout = { workspace = true }
 wordcraft-render = { workspace = true }
 wordcraft-proof = { workspace = true }
 wordcraft-docx = { workspace = true }
+wordcraft-docbin = { workspace = true }
 wordcraft-pdf = { workspace = true }
 wordcraft-formats = { workspace = true }
 serde = { workspace = true }
@@ -23,4 +24,8 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
 regex = { workspace = true }
+regex-automata = { workspace = true }
 image = { workspace = true }
+
+[dev-dependencies]
+zip = { workspace = true }

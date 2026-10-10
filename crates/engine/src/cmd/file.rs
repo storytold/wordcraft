@@ -36,7 +36,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .key("Mod+W")
         .pure(),
         CommandSpec::new("file.properties", "Properties", "File › Info", properties)
-            .params(r#"{"title"?, "subject"?, "author"?, "keywords"?, "comments"?, "category"?}"#),
+            .params(r#"{"title"?, "subject"?, "author"?, "keywords"?, "comments"?, "category"?, "custom"?: {name: string | null (removes)}}"#),
         CommandSpec::new("file.info", "Info", "File", info).pure(),
         CommandSpec::new("file.options", "Options", "File", |s, _| {
             s.ui_requests.push(json!({"open": "options"}));
@@ -121,7 +121,7 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
     s.doc.core.revision = s.doc.core.revision.saturating_add(1);
     crate::io::save_path(&path, &s.doc).map_err(CmdError::Failed)?;
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-    if ["docx", "odt", "rtf", "json"].contains(&ext.as_str()) {
+    if ["docx", "docm", "dotx", "dotm", "odt", "rtf", "json"].contains(&ext.as_str()) {
         s.path = Some(path.clone());
         s.dirty = false;
     }
@@ -162,8 +162,34 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
     set(&mut c.keywords, "keywords");
     set(&mut c.description, "comments");
     set(&mut c.category, "category");
-    Ok(serde_json::to_value(&s.doc.core).unwrap_or(Value::Null))
+    if let Some(custom) = v.get("custom") {
+        let Some(m) = custom.as_object() else {
+            return Err(CmdError::Params("`custom` must be an object of name → string or null".into()));
+        };
+        for (name, val) in m {
+            if name.trim().is_empty() || name.chars().count() > MAX_CUSTOM_NAME {
+                return Err(CmdError::Params(format!("custom property names are 1–{MAX_CUSTOM_NAME} characters")));
+            }
+            match val {
+                Value::Null => {
+                    s.doc.remove_custom_prop(name);
+                }
+                Value::String(x) if x.len() <= MAX_CUSTOM_VALUE => s.doc.set_custom_prop(name, x),
+                _ => return Err(CmdError::Params(format!("custom property `{name}` must be a string (≤ {MAX_CUSTOM_VALUE} bytes) or null"))),
+            }
+        }
+    }
+    let mut out = serde_json::to_value(&s.doc.core).unwrap_or(Value::Null);
+    if let Some(o) = out.as_object_mut() {
+        o.insert("custom".into(), serde_json::to_value(&s.doc.custom_props).unwrap_or(Value::Null));
+    }
+    Ok(out)
 }
+
+/// Longest custom property name (Word's limit).
+const MAX_CUSTOM_NAME: usize = 255;
+/// Largest custom property value we accept from a command.
+const MAX_CUSTOM_VALUE: usize = 1024 * 1024;
 
 fn info(s: &mut Session, _: &Value) -> CmdResult {
     let l = s.layout();

@@ -67,6 +67,62 @@ pub enum Anchor {
     Margin,
     Page,
     Paragraph,
+    /// The page's left margin area (from the page's left edge to the text).
+    LeftMargin,
+    /// The page's right margin area (from the text to the page's right edge).
+    RightMargin,
+    /// The page's top margin area (from the page's top edge to the text).
+    TopMargin,
+    /// The page's bottom margin area (from the text to the page's bottom edge).
+    BottomMargin,
+    /// The inside margin (left on odd pages, right on even pages when mirrored).
+    InsideMargin,
+    /// The outside margin.
+    OutsideMargin,
+    /// The anchor character (horizontal only).
+    Character,
+    /// The anchor line (vertical only).
+    Line,
+}
+
+/// Alignment of a floating object within its [`Anchor`] area, instead of an offset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FloatAlign {
+    /// Left or top.
+    Start,
+    Center,
+    /// Right or bottom.
+    End,
+    Inside,
+    Outside,
+}
+
+impl FloatAlign {
+    /// From an OOXML alignment (`wp:align`, `w:tblpXSpec`, `w:tblpYSpec`).
+    pub fn from_ooxml(v: &str) -> Option<FloatAlign> {
+        match v {
+            "left" | "top" => Some(FloatAlign::Start),
+            "center" => Some(FloatAlign::Center),
+            "right" | "bottom" => Some(FloatAlign::End),
+            "inside" => Some(FloatAlign::Inside),
+            "outside" => Some(FloatAlign::Outside),
+            _ => None,
+        }
+    }
+
+    /// The OOXML name on the horizontal (`left`, `right`) or vertical (`top`, `bottom`) axis.
+    pub fn ooxml(self, horizontal: bool) -> &'static str {
+        match (self, horizontal) {
+            (FloatAlign::Start, true) => "left",
+            (FloatAlign::Start, false) => "top",
+            (FloatAlign::Center, _) => "center",
+            (FloatAlign::End, true) => "right",
+            (FloatAlign::End, false) => "bottom",
+            (FloatAlign::Inside, _) => "inside",
+            (FloatAlign::Outside, _) => "outside",
+        }
+    }
 }
 
 /// Floating placement (ignored when `wrap` is `Inline`).
@@ -76,11 +132,29 @@ pub struct Float {
     pub wrap: Wrap,
     pub h_rel: Anchor,
     pub v_rel: Anchor,
-    /// Offsets, points.
+    /// Offsets, points (used when the matching alignment is `None`).
     pub x: f32,
     pub y: f32,
-    /// Distance from surrounding text (points).
+    /// Alignments within the anchor area; they take precedence over the offsets.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub h_align: Option<FloatAlign>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub v_align: Option<FloatAlign>,
+    /// Distance from surrounding text at the left and right (points).
     pub dist: f32,
+    /// Distance from surrounding text above and below (points).
+    pub dist_top: f32,
+    pub dist_bottom: f32,
+    /// Room around the object for effects such as shadows (left, top, right, bottom, points),
+    /// inline or floating: lines and surrounding text keep clear of it.
+    pub effect: [f32; 4],
+}
+
+impl Float {
+    /// The effect extents, finite and clamped (left, top, right, bottom).
+    pub fn effect_extent(&self) -> [f32; 4] {
+        self.effect.map(|v| if v.is_finite() { v.clamp(0.0, 1584.0) } else { 0.0 })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -149,6 +223,17 @@ pub enum InlineObject {
         #[serde(default)]
         locked: bool,
     },
+    /// The start of a field whose result is ordinary content — formatted, possibly spanning
+    /// paragraphs — up to the matching [`InlineObject::FieldEnd`]. Citation managers' `ADDIN`
+    /// fields (Zotero, Mendeley, EndNote) are kept this way; `instr` is the field code. See
+    /// [`crate::fields`].
+    FieldStart {
+        instr: String,
+        #[serde(default)]
+        locked: bool,
+    },
+    /// The end of the innermost open [`InlineObject::FieldStart`].
+    FieldEnd,
     NoteRef {
         kind: NoteKind,
         /// `Document::parts` id of the note's story.
@@ -193,6 +278,8 @@ impl InlineObject {
                 | InlineObject::BookmarkEnd { .. }
                 | InlineObject::CommentStart { .. }
                 | InlineObject::CommentEnd { .. }
+                | InlineObject::FieldStart { .. }
+                | InlineObject::FieldEnd
         )
     }
     pub fn is_floating(&self) -> bool {
@@ -296,6 +383,37 @@ impl Paragraph {
                 }
                 k += 1;
             } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+    /// [`Self::plain_text`] without tracked deletions: the text as it reads with every change accepted.
+    pub fn final_text(&self) -> String {
+        self.text_without(&self.deleted_ranges())
+    }
+    /// The byte ranges of the tracked deletions.
+    pub fn deleted_ranges(&self) -> Vec<std::ops::Range<usize>> {
+        self.run_ranges().filter(|(_, c)| c.del.is_some()).map(|(r, _)| r).collect()
+    }
+    /// [`Self::plain_text`] without the text in the byte ranges `dropped` (in any order, overlapping
+    /// or not).
+    pub fn text_without(&self, dropped: &[std::ops::Range<usize>]) -> String {
+        let mut sorted = dropped.to_vec();
+        sorted.sort_unstable_by_key(|r| r.start);
+        let mut next = sorted.iter().peekable();
+        let mut out = String::with_capacity(self.text.len());
+        let mut k = 0;
+        for (i, c) in self.text.char_indices() {
+            // By start: once the ranges that end by `i` are skipped, `i` is dropped if the next has begun.
+            while next.next_if(|r| r.end <= i).is_some() {}
+            let keep = !next.peek().is_some_and(|r| r.start <= i);
+            if c == OBJ {
+                if keep && let Some(o) = self.objects.get(k) {
+                    out.push_str(o.plain_text());
+                }
+                k += 1;
+            } else if keep {
                 out.push(c);
             }
         }
@@ -712,6 +830,37 @@ mod tests {
 
     fn bold() -> CharProps {
         CharProps { bold: Some(true), ..Default::default() }
+    }
+
+    #[test]
+    fn text_without_takes_ranges_in_any_order() {
+        // Multi-byte chars at range edges, an object, and ranges unsorted, overlapping, nested and empty.
+        let mut p = Paragraph::with_text("añb€c", CharProps::default());
+        p.insert_object(3, InlineObject::Field { instr: "PAGE".into(), result: "7".into(), locked: false }, &CharProps::default()).unwrap();
+        let text = p.text.clone();
+        let naive = |dropped: &[std::ops::Range<usize>]| {
+            let mut out = String::new();
+            let mut k = 0;
+            for (i, c) in text.char_indices() {
+                let keep = !dropped.iter().any(|r| r.contains(&i));
+                if c == OBJ {
+                    if keep && let Some(o) = p.objects.get(k) {
+                        out.push_str(o.plain_text());
+                    }
+                    k += 1;
+                } else if keep {
+                    out.push(c);
+                }
+            }
+            out
+        };
+        let n = text.len();
+        let cases: Vec<Vec<std::ops::Range<usize>>> =
+            vec![vec![], vec![1..3], vec![5..n, 0..1], vec![0..4, 2..3, 3..6], vec![2..9, 1..2, 4..4, 0..n], vec![6..6, 9..n, 0..0], vec![3..n + 10]];
+        for dropped in cases {
+            assert_eq!(p.text_without(&dropped), naive(&dropped), "{dropped:?} of {text:?}");
+        }
+        assert_eq!(p.text_without(std::slice::from_ref(&(1..3))), "a7b€c");
     }
 
     #[test]

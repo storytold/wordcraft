@@ -95,6 +95,23 @@ fn the_scan_reads_collections_and_loads_fonts_only_when_used() {
 }
 
 #[test]
+fn concurrent_first_lookups_all_find_the_installed_font() {
+    // Threads racing to load the same installed family used to lose: the one whose load added
+    // nothing (another thread had just added it) fell back to the default font.
+    let dir = font_dir("race");
+    for _ in 0..20 {
+        let db = FontDb::with_font_dirs(vec![dir.clone()]);
+        assert!(db.has_family(FAMILY));
+        std::thread::scope(|s| {
+            let found: Vec<_> = (0..8).map(|_| s.spawn(|| db.face(FAMILY, "Regular").family.clone())).collect();
+            for f in found {
+                assert_eq!(f.join().unwrap(), FAMILY);
+            }
+        });
+    }
+}
+
+#[test]
 fn rescanning_finds_fonts_installed_since() {
     let dir = font_dir("rescan");
     let later = dir.join("Later");

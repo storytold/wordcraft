@@ -114,8 +114,8 @@ pub struct EditSnapshot {
     evicted: u64,
     /// The oldest undo steps, kept only when the stack is near its limit (the commands that
     /// follow may push them out); at most [`SNAPSHOT_HEAD`].
-    head: Vec<Undo>,
-    redo: Vec<Undo>,
+    head: Vec<Arc<Undo>>,
+    redo: Vec<Arc<Undo>>,
     typing_open: bool,
     join_next: bool,
     dirty: bool,
@@ -164,15 +164,20 @@ pub struct Session {
     pub painter: Option<(CharProps, wordcraft_doc::props::ParaProps, bool)>,
     /// Last message for the status bar / agents.
     pub status: String,
-    history: Vec<Undo>,
+    /// Undo and redo steps. Shared so `run` can snapshot both stacks cheaply (a pointer per
+    /// step) and put them back exactly when a command fails.
+    history: Vec<Arc<Undo>>,
     /// Undo steps dropped so far because of the undo limit.
     undo_evicted: u64,
-    redo: Vec<Undo>,
+    redo: Vec<Arc<Undo>>,
     /// Typing is coalesced into one undo step until something else happens.
     typing_open: bool,
     /// The next mutating command joins the previous undo step (later frames of a drag).
     join_next: bool,
     rev: u64,
+    /// Which document this is: changes when [`Session::set_document`] replaces it (open, new,
+    /// mail merge, recover), never on an edit.
+    document_id: u64,
     cache: LayoutCache,
     layout: Option<(u64, f32, ViewMode, Arc<DocLayout>, bool)>,
     /// Picture edits: edited media key → original media key (Reset Picture).
@@ -195,6 +200,24 @@ pub struct Session {
     pub merge: crate::cmd::mailings::MergeState,
     /// Requests from commands to the UI (open a dialog, scroll…), drained by the front end.
     pub ui_requests: Vec<Value>,
+    /// Read Aloud player (Review › Speech).
+    pub read_aloud: crate::speech::ReadAloud,
+    /// Preferences the front end saves between runs.
+    pub prefs: Prefs,
+}
+
+/// Editing preferences that persist between runs (the front end saves and restores them).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Prefs {
+    /// Word Count includes text boxes, footnotes and endnotes (Word's default).
+    pub count_notes: bool,
+}
+
+impl Default for Prefs {
+    fn default() -> Self {
+        Prefs { count_notes: true }
+    }
 }
 
 /// Maximum undo depth.
@@ -225,6 +248,7 @@ impl Session {
             typing_open: false,
             join_next: false,
             rev: 1,
+            document_id: 1,
             cache: LayoutCache::new(),
             layout: None,
             originals: Default::default(),
@@ -239,12 +263,18 @@ impl Session {
             bib_style: "APA".into(),
             merge: Default::default(),
             ui_requests: Vec::new(),
+            prefs: Prefs::default(),
+            read_aloud: Default::default(),
         }
     }
 
     /// Document revision (bumped by every change).
     pub fn rev(&self) -> u64 {
         self.rev
+    }
+    /// Which document is open (see `document_id`): lets a caller tell an edit from a replacement.
+    pub fn document_id(&self) -> u64 {
+        self.document_id
     }
     pub fn touch(&mut self) {
         self.rev = self.rev.wrapping_add(1);
@@ -262,14 +292,20 @@ impl Session {
         {
             return l.clone();
         }
-        let opts = LayoutOptions { view: self.view.mode, web_width: ww, show_hidden: self.view.marks, proofing: self.view.proofing };
+        let opts = LayoutOptions {
+            view: self.view.mode,
+            web_width: ww,
+            show_hidden: self.view.marks,
+            hide_deleted: !self.view.show_markup,
+            proofing: self.view.proofing,
+        };
         let l = Arc::new(wordcraft_layout::layout(&self.doc, &mut self.cache, &opts));
         self.layout = Some((self.rev, ww, self.view.mode, l.clone(), self.view.proofing));
         l
     }
     /// A layout for output (PDF, images, print): no proofing marks, print view.
     pub fn export_layout(&self) -> Arc<DocLayout> {
-        let opts = LayoutOptions { view: ViewMode::Print, web_width: 0.0, show_hidden: false, proofing: false };
+        let opts = LayoutOptions { view: ViewMode::Print, web_width: 0.0, show_hidden: false, hide_deleted: false, proofing: false };
         Arc::new(wordcraft_layout::layout(&self.doc, &mut LayoutCache::new(), &opts))
     }
 
@@ -285,12 +321,22 @@ impl Session {
             return;
         }
         self.typing_open = label == "Typing";
-        self.history.push(Undo { label: label.to_string(), doc: self.doc.clone(), sel: self.sel.clone() });
+        self.history.push(Arc::new(Undo { label: label.to_string(), doc: self.doc.clone(), sel: self.sel.clone() }));
         if self.history.len() > MAX_UNDO {
             self.history.remove(0);
             self.undo_evicted += 1;
         }
         self.redo.clear();
+    }
+    /// Record `doc`/`sel` as their own undo step after the fact and close the typing group, so
+    /// Undo right after an automatic change (AutoFormat, AutoCorrect) reverts only that change.
+    pub fn push_undo(&mut self, label: &str, doc: Document, sel: Selection) {
+        self.history.push(Arc::new(Undo { label: label.to_string(), doc, sel }));
+        if self.history.len() > MAX_UNDO {
+            self.history.remove(0);
+            self.undo_evicted += 1;
+        }
+        self.typing_open = false;
     }
     /// Make the next mutating command part of the previous undo step instead of a new one, so a
     /// drag that runs a command every frame is a single Undo. Call it on every frame of the drag
@@ -323,17 +369,17 @@ impl Session {
     }
     pub fn undo(&mut self) -> bool {
         self.typing_open = false;
-        let Some(u) = self.history.pop() else { return false };
+        let Some(u) = self.history.pop().map(Arc::unwrap_or_clone) else { return false };
         let cur = Undo { label: u.label.clone(), doc: std::mem::replace(&mut self.doc, u.doc), sel: std::mem::replace(&mut self.sel, u.sel) };
-        self.redo.push(cur);
+        self.redo.push(Arc::new(cur));
         self.touch();
         true
     }
     pub fn redo(&mut self) -> bool {
         self.typing_open = false;
-        let Some(u) = self.redo.pop() else { return false };
+        let Some(u) = self.redo.pop().map(Arc::unwrap_or_clone) else { return false };
         let cur = Undo { label: u.label.clone(), doc: std::mem::replace(&mut self.doc, u.doc), sel: std::mem::replace(&mut self.sel, u.sel) };
-        self.history.push(cur);
+        self.history.push(Arc::new(cur));
         self.touch();
         true
     }
@@ -346,6 +392,7 @@ impl Session {
 
     /// Replace the document (open/new).
     pub fn set_document(&mut self, doc: Document) {
+        self.document_id = self.document_id.wrapping_add(1);
         self.doc = doc;
         self.doc.ensure_nonempty();
         self.sel = Selection::caret(self.doc.start_of(StoryRef::Body));
@@ -409,6 +456,9 @@ impl Session {
             bib_style: _,
             merge: _,
             ui_requests: _,
+            document_id: _,
+            read_aloud: _,
+            prefs: _,
         } = self;
         let head = if history.len() + SNAPSHOT_HEAD > MAX_UNDO { history.iter().take(SNAPSHOT_HEAD).cloned().collect() } else { Vec::new() };
         EditSnapshot {
@@ -483,7 +533,13 @@ impl Session {
         if spec.mutates && !matches!(id, "edit.undo" | "edit.redo" | "edit.repeat") {
             self.last_command = Some((id.to_string(), params.clone()));
         }
-        let before_doc = if spec.mutates { Some((self.doc.clone(), self.sel.clone(), self.history.len(), self.typing_open)) } else { None };
+        // The undo stacks are snapshotted whole, not as a length: commands run nested commands,
+        // whose checkpoints, undos and redos (and evictions at the limit) must be put back too.
+        let before_doc = if spec.mutates {
+            Some((self.doc.clone(), self.sel.clone(), self.history.clone(), self.redo.clone(), self.typing_open, self.undo_evicted))
+        } else {
+            None
+        };
         if spec.mutates && spec.id != "text.insert" {
             self.typing_open = false;
         }
@@ -511,15 +567,19 @@ impl Session {
                 if spec.mutates {
                     self.touch();
                     self.doc.ensure_nonempty();
+                    self.doc.prune_text_boxes();
                 }
                 self.clamp_selection();
             }
             Err(e) => {
-                if let Some((d, s, h, t)) = before_doc {
+                if let Some((d, s, h, r, t, ev)) = before_doc {
                     self.doc = d;
                     self.sel = s;
-                    self.history.truncate(h);
+                    self.history = h;
+                    self.redo = r;
                     self.typing_open = t;
+                    // The steps the command pushed out are back, so they no longer count as gone.
+                    self.undo_evicted = ev;
                 }
                 self.status = e.to_string();
             }
@@ -542,6 +602,11 @@ impl Session {
         }
         let f = &self.sel.focus;
         self.doc.para_at(f).map(|p| p.props_at(f.off).clone()).unwrap_or_default()
+    }
+
+    /// Words in the document, as the status bar shows them (see [`Prefs::count_notes`]).
+    pub fn word_count(&self) -> usize {
+        if self.prefs.count_notes { self.doc.word_count_including_notes() } else { self.doc.word_count() }
     }
 
     /// Selected plain text.

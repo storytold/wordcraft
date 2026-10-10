@@ -35,6 +35,7 @@
 	Alt Text	替代文字
 	Apply Character Style	套用字元樣式
 	Apply Style	套用樣式
+	Apply Styles	選擇並套用樣式
 	Arrange	排列
 	Arrange\nAll	全部排列
 	Arrow	箭號
@@ -50,7 +51,10 @@
 	Automatic Table 1 (3 levels)	自動目錄 1（3 階層）
 	Automatic Table 2 (2 levels)	自動目錄 2（2 階層）
 	AutoSave	自動儲存
-	AutoSave documents that have been saved	自動儲存已儲存過的文件
+	AutoSave documents you have saved in WordCraft	自動儲存在 WordCraft 中儲存過的文件
+	AutoSave failed: {error}. Save the document to turn AutoSave back on.	自動儲存失敗：{error}。重新儲存文件後將恢復自動儲存。
+	Dark page (white text on black)	深色頁面（黑底白字）
+	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	像「檢視 › 切換模式」一樣以反轉的色彩顯示文件。儲存、列印和 PDF 不受影響。
 	AutoSave saves every change to the file (needs a saved document)	自動儲存會將每次變更寫入檔案（文件需已儲存）
 	AutoText	自動圖文集
 	Backspace	退格
@@ -97,6 +101,7 @@
 	Character Scale	字元縮放
 	Character Shading	字元網底
 	Character Spacing	字元間距
+	Character Border	字元邊框
 	Characters (no spaces)	字元數（不含空格）
 	Characters (with spaces)	字元數（含空格）
 	Chart	圖表
@@ -136,6 +141,8 @@
 	Copy	複製
 	Copy Formatting	複製格式
 	Corrections	校正
+	Count words in text boxes and notes	統計文字方塊、註腳和章節附註中的字數
+	Couldn't download {name}: {error}	無法下載 {name}：{error}
 	Cover Page	封面頁
 	Create	建立
 	Create a Style	建立樣式
@@ -184,6 +191,8 @@
 	Distribute Rows	平均分配列高
 	Distributed	分散對齊
 	Do Not Show in TOC	不在目錄中顯示
+	Do you want to save changes to {name}?	是否儲存對 {name} 的變更？
+	Don't Save	不儲存
 	Document End	文件結尾
 	Document Formatting	文件格式設定
 	Document Property	文件摘要資訊
@@ -393,6 +402,7 @@
 	Moderate	中等
 	Modify Style	修改樣式
 	Modify…	修改…
+	Move or Resize	移動或調整大小
 	Multilevel List	多層次清單
 	Multiple Pages	多頁
 	Name (A–Z)	名稱（A–Z）
@@ -429,6 +439,7 @@
 	Not available right now	目前無法使用
 	Not saved	未儲存
 	Not saved yet	尚未儲存
+	Nudge	微移
 	Number of columns:	欄數：
 	Number of rows:	列數：
 	Numbering	編號
@@ -438,6 +449,7 @@
 	OK	確定
 	One	一欄
 	One Page	單頁
+	Only web (http, https) and email (mailto) links can be followed	只能開啟網頁（http、https）和電子郵件（mailto）連結
 	Open	開啟
 	OpenDocument Text (*.odt)	OpenDocument 文字 (*.odt)
 	Optional Hyphen	選擇性連字號
@@ -694,6 +706,7 @@
 	Text:	文字：
 	Text\nBox	文字方塊
 	Text\nDirection	文字方向
+	That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.	該格式無法保留全部內容，因此文件仍保持開啟。請將其儲存為 Word 文件 (.docx) 後再繼續。
 	The new style takes the formatting of the current paragraph.	新樣式會採用目前段落的格式。
 	Theme Colors	佈景主題色彩
 	Theme Fonts	佈景主題字型
@@ -772,3 +785,43 @@
 	📂  Browse…	📂  瀏覽…
 	{words} words	{words} 個字
 	{selected} of {words} words	{selected}/{words} 個字
+# Zotero integration
+	Zotero	Zotero
+	Citations	引文
+	Document	文件
+	Add/Edit\nCitation	新增/編輯\n引文
+	Add\nNote	新增\n筆記
+	Add/Edit\nBibliography	新增/編輯\n參考書目
+	Refresh	重新整理
+	Document\nPreferences	文件\n偏好設定
+	Unlink\nCitations	取消連結\n引文
+	Waiting for Zotero…	正在等候 Zotero…
+	Zotero: done	Zotero：完成
+	Zotero: cancelled	Zotero：已取消
+	Yes	是
+	No	否
+	Move Past Citation	移到引文之後
+	Move Past\nCitation	移到\n引文之後
+	Next Sentence	下一句
+	Previous Sentence	上一句
+	Next sentence	下一句
+	Previous sentence	上一句
+	Play/Pause	播放/暫停
+	Read Aloud Status	朗讀狀態
+	Reading Speed	朗讀速度
+	Skip Citations and Bibliography	略過引文和參考文獻
+	Skip citations & bibliography	略過引文和參考文獻
+	Stop Reading	停止朗讀
+	Don't read Zotero, Mendeley or EndNote citations and bibliographies	不朗讀 Zotero、Mendeley 或 EndNote 的引文和參考文獻
+	Play	播放
+	Pause	暫停
+	Stop	停止
+	Sentence	句
+	Paused	已暫停
+	Finished	已完成
+	Stopped	已停止
+	Speed	速度
+	Normal speed	正常速度
+	Your changes will be lost if you don't save them.	如果不儲存，您的變更將會遺失。
+	Scroll ribbon left	向左捲動功能區
+	Scroll ribbon right	向右捲動功能區

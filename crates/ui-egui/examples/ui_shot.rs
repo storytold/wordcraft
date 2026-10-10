@@ -5,7 +5,8 @@
 //!
 //! The script is JSON lines: control-channel requests (`{"method": …, "params": …}`, see
 //! `docs/control-protocol.md`), `{"shot": "/abs/out.png"}` to save the window as PNG, or
-//! `{"steps": n}` to run extra frames. The window is 1440×900 pt at 2× and opens the sample
+//! `{"steps": n}` to run extra frames, or `{"wait": ms}` to keep running frames for a while (for
+//! background work such as a Zotero session). The window is 1440×900 pt at 2× and opens the sample
 //! document unless the first line is `{"empty": true}`.
 
 use wordcraft_engine::Session;
@@ -55,6 +56,12 @@ fn main() {
             }
         } else if let Some(n) = l.get("steps").and_then(|v| v.as_u64()) {
             step_n(&mut harness, n as usize);
+        } else if let Some(ms) = l.get("wait").and_then(|v| v.as_u64()) {
+            let end = std::time::Instant::now() + std::time::Duration::from_millis(ms);
+            while std::time::Instant::now() < end {
+                step(&mut harness);
+                std::thread::sleep(std::time::Duration::from_millis(16));
+            }
         } else if let Some(m) = l.get("method").and_then(|v| v.as_str()) {
             let (req, reply) = ControlRequest::new(m, l.get("params").cloned().unwrap_or_default());
             tx.send(req).expect("send");
@@ -62,7 +69,9 @@ fn main() {
                 step(&mut harness);
                 if let Ok(r) = reply.try_recv() {
                     let s = r.to_string();
-                    println!("{m}: {}", &s[..s.len().min(300)]);
+                    // `UI_SHOT_FULL=1` prints whole replies (e.g. `document.inspect` for scripted checks).
+                    let cut = if std::env::var_os("UI_SHOT_FULL").is_some() { s.len() } else { s.len().min(300) };
+                    println!("{m}: {}", s.get(..cut).unwrap_or(&s));
                     break;
                 }
             }

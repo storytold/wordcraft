@@ -12,12 +12,13 @@ pub mod io;
 mod io_ext;
 pub mod sample;
 mod session;
+pub mod speech;
 
 use std::collections::HashMap;
 
 use serde_json::Value;
 
-pub use session::{EditSnapshot, FindState, Selection, Session, ViewState};
+pub use session::{EditSnapshot, FindState, Prefs, Selection, Session, ViewState};
 pub use wordcraft_doc as doc;
 pub use wordcraft_layout as layout;
 pub use wordcraft_render as render;
@@ -153,3 +154,5 @@ pub mod p {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_typing;
