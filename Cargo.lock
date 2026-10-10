@@ -4950,6 +4950,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "unicode-bidi",
  "unicode-linebreak",
  "unicode-segmentation",
  "wordcraft-doc",

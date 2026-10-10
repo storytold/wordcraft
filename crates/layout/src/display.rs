@@ -32,6 +32,9 @@ pub enum Draw {
         /// The text these glyphs show (for PDF text extraction), and the hyperlink.
         text: String,
         link: Option<String>,
+        /// Byte range of `text` each glyph shows (one per glyph; a ligature's range covers all
+        /// its characters). Empty when unknown: the PDF writer then guesses from the font.
+        ranges: Vec<std::ops::Range<usize>>,
     },
     Fill {
         rect: Rect,
@@ -195,16 +198,16 @@ fn lines(
                 if b <= line.start || a >= line.stop {
                     continue;
                 }
-                if let (Some(x0), Some(x1)) = (pl.x_of(li, a.max(line.start)), pl.x_of(li, b.min(line.stop)))
-                    && x1 > x0
-                {
-                    out.push(Draw::Fill { rect: Rect::new(x + x0, top, x1 - x0, line.height), color: Rgb(0xEF, 0xE3, 0xF7), alpha });
+                for (x0, x1) in pl.x_spans(li, a.max(line.start), b.min(line.stop)) {
+                    if x1 > x0 {
+                        out.push(Draw::Fill { rect: Rect::new(x + x0, top, x1 - x0, line.height), color: Rgb(0xEF, 0xE3, 0xF7), alpha });
+                    }
                 }
             }
         }
         // Backgrounds first: highlight and character shading.
         for k in line.c0..line.c1 {
-            let (Some(c), Some(cx), Some(nx)) = (pl.clusters.get(k), line.xs.get(k - line.c0), line.xs.get(k + 1 - line.c0)) else { continue };
+            let (Some(c), Some(cx), Some(nx)) = (pl.clusters.get(k), line.cl_left(k), line.cl_right(k)) else { continue };
             let Some(st) = pl.styles.get(c.style as usize) else { continue };
             if c.kind == ClKind::Marker {
                 continue;
@@ -229,13 +232,14 @@ fn lines(
                 synth_italic: st.synth_italic,
                 text: lab.text.clone(),
                 link: None,
+                ranges: Vec::new(),
             });
         }
         // Hyphen at a hyphenated line end.
         if let Some((si, gid, adv)) = line.hyphen
             && let Some(st) = pl.styles.get(si as usize)
         {
-            let hx = x + line.xs.last().copied().unwrap_or(0.0) - adv;
+            let hx = x + line.hyphen_x(adv);
             out.push(Draw::Glyphs {
                 face: st.face,
                 size: st.size,
@@ -246,6 +250,7 @@ fn lines(
                 synth_italic: st.synth_italic,
                 text: "-".into(),
                 link: None,
+                ranges: Vec::new(),
             });
         }
         // Glyph runs grouped by style.
@@ -259,19 +264,32 @@ fn lines(
             };
             let mut glyphs = Vec::new();
             let mut text = String::new();
+            let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
             let run_start = k;
             while k < line.c1 {
                 let Some(c) = pl.clusters.get(k) else { break };
                 if c.style != si {
                     break;
                 }
-                let cx = x + line.xs.get(k - line.c0).copied().unwrap_or(0.0);
+                let cx = x + line.cl_left(k).unwrap_or(0.0);
                 if matches!(c.kind, ClKind::Text | ClKind::Space) {
-                    for g in pl.glyphs.get(c.g0 as usize..c.g1 as usize).into_iter().flatten() {
-                        glyphs.push((g.gid, cx + g.dx, base - st.shift - g.dy));
-                    }
+                    let a = text.len();
                     if let Some(p) = para {
                         text.push_str(p.text.get(c.start..c.end).unwrap_or(""));
+                    }
+                    let b = text.len();
+                    let cg = pl.glyphs.get(c.g0 as usize..c.g1 as usize).unwrap_or(&[]);
+                    if cg.is_empty() {
+                        // No glyph of its own (the second letter of a ligature such as لا): its
+                        // text belongs to the glyphs before it.
+                        let from = ranges.last().map(|r| r.start);
+                        for r in ranges.iter_mut().rev().take_while(|r| Some(r.start) == from) {
+                            r.end = b;
+                        }
+                    }
+                    for g in cg {
+                        glyphs.push((g.gid, cx + g.dx, base - st.shift - g.dy));
+                        ranges.push(a..b);
                     }
                 }
                 k += 1;
@@ -294,10 +312,11 @@ fn lines(
                     synth_italic: st.synth_italic,
                     text,
                     link: rc.link.clone(),
+                    ranges,
                 });
             }
-            // Decorations across the run (underline skips trailing spaces of the line).
-            let x0 = x + line.xs.get(run_start - line.c0).copied().unwrap_or(0.0);
+            // Decorations across the run (underline skips trailing spaces of the line). Right-to-left
+            // text inside a run can split it into several visual spans.
             let mut end_k = run_end;
             while end_k > run_start
                 && pl.clusters.get(end_k - 1).is_some_and(|c| matches!(c.kind, ClKind::Space | ClKind::Marker | ClKind::LineBreak))
@@ -305,31 +324,37 @@ fn lines(
             {
                 end_k -= 1;
             }
-            let x1 = x + line.xs.get(end_k - line.c0).copied().unwrap_or(0.0);
             let thick = (st.size / 18.0).max(0.5);
             let underline = if rc.ins.is_some() && opts.markup { Underline::Single } else { rc.underline };
-            if underline != Underline::None && x1 > x0 {
-                let uy = base - st.shift + st.size * 0.12;
-                let ucolor = rc.underline_color.unwrap_or(color);
-                if underline == Underline::Words {
-                    for kk in run_start..end_k {
-                        let Some(c) = pl.clusters.get(kk) else { continue };
-                        if c.kind != ClKind::Text {
-                            continue;
+            let struck = rc.strike || rc.double_strike || (rc.del.is_some() && opts.markup);
+            let spans = if underline != Underline::None || struck { line.spans(run_start, end_k) } else { Vec::new() };
+            for (x0, x1) in spans.into_iter().map(|(a, b)| (x + a, x + b)).filter(|(a, b)| b > a) {
+                if underline != Underline::None {
+                    let uy = base - st.shift + st.size * 0.12;
+                    let ucolor = rc.underline_color.unwrap_or(color);
+                    if underline == Underline::Words {
+                        for kk in run_start..end_k {
+                            let Some(c) = pl.clusters.get(kk) else { continue };
+                            if c.kind != ClKind::Text {
+                                continue;
+                            }
+                            let a = x + line.cl_left(kk).unwrap_or(0.0);
+                            let b = x + line.cl_right(kk).unwrap_or(a - x);
+                            if a < x0 - 0.01 || b > x1 + 0.01 {
+                                continue; // drawn with its own span
+                            }
+                            out.push(Draw::Line { x0: a, y0: uy, x1: b, y1: uy, width: thick, color: ucolor, stroke: Stroke::Solid, alpha });
                         }
-                        let a = x + line.xs.get(kk - line.c0).copied().unwrap_or(0.0);
-                        let b = x + line.xs.get(kk + 1 - line.c0).copied().unwrap_or(a);
-                        out.push(Draw::Line { x0: a, y0: uy, x1: b, y1: uy, width: thick, color: ucolor, stroke: Stroke::Solid, alpha });
+                    } else {
+                        let w = if underline == Underline::Thick { thick * 2.0 } else { thick };
+                        out.push(Draw::Line { x0, y0: uy, x1, y1: uy, width: w, color: ucolor, stroke: stroke_of(underline), alpha });
                     }
-                } else {
-                    let w = if underline == Underline::Thick { thick * 2.0 } else { thick };
-                    out.push(Draw::Line { x0, y0: uy, x1, y1: uy, width: w, color: ucolor, stroke: stroke_of(underline), alpha });
                 }
-            }
-            if (rc.strike || rc.double_strike || (rc.del.is_some() && opts.markup)) && x1 > x0 {
-                let sy = base - st.shift - st.size * 0.28;
-                let stroke = if rc.double_strike { Stroke::Double } else { Stroke::Solid };
-                out.push(Draw::Line { x0, y0: sy, x1, y1: sy, width: thick, color, stroke, alpha });
+                if struck {
+                    let sy = base - st.shift - st.size * 0.28;
+                    let stroke = if rc.double_strike { Stroke::Double } else { Stroke::Solid };
+                    out.push(Draw::Line { x0, y0: sy, x1, y1: sy, width: thick, color, stroke, alpha });
+                }
             }
         }
         // Proofing squiggles.
@@ -337,26 +362,27 @@ fn lines(
             if *b <= line.start || *a >= line.stop {
                 continue;
             }
-            let (Some(x0), Some(x1)) = (pl.x_of(li, (*a).max(line.start)), pl.x_of(li, (*b).min(line.stop))) else { continue };
-            if x1 - x0 < 1.0 {
-                continue;
+            for (x0, x1) in pl.x_spans(li, (*a).max(line.start), (*b).min(line.stop)) {
+                if x1 - x0 < 1.0 {
+                    continue;
+                }
+                let y = base + 2.5;
+                let color = if *grammar { Rgb(0x2B, 0x57, 0xC0) } else { Rgb(0xE0, 0x24, 0x24) };
+                out.push(Draw::Line {
+                    x0: x + x0,
+                    y0: y,
+                    x1: x + x1,
+                    y1: y,
+                    width: 0.8,
+                    color,
+                    stroke: if *grammar { Stroke::Double } else { Stroke::Wave },
+                    alpha,
+                });
             }
-            let y = base + 2.5;
-            let color = if *grammar { Rgb(0x2B, 0x57, 0xC0) } else { Rgb(0xE0, 0x24, 0x24) };
-            out.push(Draw::Line {
-                x0: x + x0,
-                y0: y,
-                x1: x + x1,
-                y1: y,
-                width: 0.8,
-                color,
-                stroke: if *grammar { Stroke::Double } else { Stroke::Wave },
-                alpha,
-            });
         }
         // Tab leaders.
         for (k, leader) in &line.leaders {
-            let (Some(c), Some(a), Some(b)) = (pl.clusters.get(*k), line.xs.get(k - line.c0), line.xs.get(k + 1 - line.c0)) else { continue };
+            let (Some(c), Some(a), Some(b)) = (pl.clusters.get(*k), line.cl_left(*k), line.cl_right(*k)) else { continue };
             let Some(st) = pl.styles.get(c.style as usize) else { continue };
             let Some(ch) = leader.char() else { continue };
             let gid = st.face.glyph_for(ch);
@@ -379,6 +405,7 @@ fn lines(
                 synth_italic: false,
                 text: String::new(),
                 link: None,
+                ranges: Vec::new(),
             });
         }
         // Inline objects.
@@ -388,7 +415,7 @@ fn lines(
             if c.obj_h <= 0.0 {
                 continue;
             }
-            let cx = x + line.xs.get(k - line.c0).copied().unwrap_or(0.0);
+            let cx = x + line.cl_left(k).unwrap_or(0.0);
             let rect = Rect::new(cx, base - c.obj_h, c.adv, c.obj_h);
             match para.and_then(|p| p.objects.get(oi)) {
                 Some(InlineObject::Image { media, crop, .. }) => out.push(Draw::Image { rect, media: media.clone(), crop: *crop, alpha }),
@@ -403,12 +430,13 @@ fn lines(
             let msize = pl.styles.first().map(|s| s.size).unwrap_or(11.0);
             for k in line.c0..line.c1 {
                 let Some(c) = pl.clusters.get(k) else { continue };
-                let cx = x + line.xs.get(k - line.c0).copied().unwrap_or(0.0);
-                let nx = x + line.xs.get(k + 1 - line.c0).copied().unwrap_or(cx);
+                let cx = x + line.cl_left(k).unwrap_or(0.0);
+                let nx = x + line.cl_right(k).unwrap_or(cx - x);
                 let size = pl.styles.get(c.style as usize).map(|s| s.size).unwrap_or(msize);
+                let arrow = if line.rtl { '←' } else { '→' };
                 match c.kind {
                     ClKind::Space => out.push(Draw::Mark { x: (cx + nx) / 2.0 - size * 0.12, baseline: base - size * 0.08, size, ch: '·' }),
-                    ClKind::Tab => out.push(Draw::Mark { x: cx + ((nx - cx) / 2.0 - size * 0.3).max(0.0), baseline: base, size, ch: '→' }),
+                    ClKind::Tab => out.push(Draw::Mark { x: cx + ((nx - cx) / 2.0 - size * 0.3).max(0.0), baseline: base, size, ch: arrow }),
                     ClKind::LineBreak => out.push(Draw::Mark { x: cx + 1.0, baseline: base, size, ch: '↵' }),
                     ClKind::PageBreak | ClKind::ColumnBreak => {
                         let label = if c.kind == ClKind::PageBreak { '⤓' } else { '⇥' };
@@ -428,9 +456,11 @@ fn lines(
                 }
             }
             if line.end == LineEnd::Para {
-                let ex = x + line.xs.last().copied().unwrap_or(line.left);
+                let ex = x + line.end_x();
                 let size = pl.lines.first().map(|_| msize).unwrap_or(msize);
-                out.push(Draw::Mark { x: ex + 1.0, baseline: base, size, ch: '¶' });
+                // A right-to-left paragraph's mark sits at its end, on the left.
+                let mx = if line.rtl { ex - 1.0 - size * 0.6 } else { ex + 1.0 };
+                out.push(Draw::Mark { x: mx, baseline: base, size, ch: '¶' });
             }
         }
         let _ = bottom;

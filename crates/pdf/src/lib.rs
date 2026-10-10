@@ -529,8 +529,8 @@ impl Exporter<'_> {
 
     fn draw(&mut self, s: &mut Surface, d: &Draw) {
         match d {
-            Draw::Glyphs { face, size, glyphs, color, alpha, synth_bold, synth_italic, text, link } => {
-                self.glyphs(s, face, *size, glyphs, *color, *alpha, *synth_bold, *synth_italic, text);
+            Draw::Glyphs { face, size, glyphs, color, alpha, synth_bold, synth_italic, text, link, ranges } => {
+                self.glyphs(s, face, *size, glyphs, *color, *alpha, *synth_bold, *synth_italic, text, ranges);
                 if let Some(l) = link {
                     self.link_rect(face, *size, glyphs, l);
                 }
@@ -737,6 +737,7 @@ impl Exporter<'_> {
         bold: bool,
         italic: bool,
         text: &str,
+        known: &[std::ops::Range<usize>],
     ) {
         if !size.is_finite() || size <= 0.0 || size > 5000.0 {
             return;
@@ -749,7 +750,10 @@ impl Exporter<'_> {
             log::warn!("PDF: font {} {} could not be embedded", face.family, face.style);
             return;
         };
-        let (txt, ranges) = self.map_text(face, glyphs, text);
+        // Layout's glyph → text mapping when it has one (right-to-left text, contextual forms and
+        // ligatures can't be guessed back from the font's cmap), else a guess.
+        let valid = known.len() == glyphs.len() && known.iter().all(|r| r.start < r.end && text.get(r.clone()).is_some());
+        let (txt, ranges) = if valid { (text.to_string(), known.to_vec()) } else { self.map_text(face, glyphs, text) };
         let upem = face.upem.max(1.0) as f32;
         let kg: Vec<KrillaGlyph> = glyphs
             .iter()
