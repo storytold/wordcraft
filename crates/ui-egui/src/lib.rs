@@ -19,6 +19,9 @@ pub mod chrome;
 pub mod control;
 pub mod credits;
 pub mod dialogs;
+pub mod dialogs_insert;
+pub mod dialogs_lists;
+pub mod dialogs_para;
 pub mod equation_tab;
 pub mod file_dialogs;
 pub mod frame;
@@ -91,6 +94,8 @@ pub struct UiState {
     pub backstage_page: String,
     pub ribbon_collapsed: bool,
     pub recent: Vec<String>,
+    /// Symbols inserted from the Symbol dialog, most recent first (#321).
+    pub recent_symbols: Vec<dialogs_insert::RecentSymbol>,
     /// Interface theme: light, dark, or follow the OS appearance (#115).
     pub theme: theme::Appearance,
     /// The dark-mode switch `ui.json` held before `theme` (#115): read once to migrate, never written.
@@ -129,6 +134,7 @@ impl Default for UiState {
             backstage_page: "home".into(),
             ribbon_collapsed: false,
             recent: Vec::new(),
+            recent_symbols: Vec::new(),
             theme: theme::Appearance::default(),
             legacy_dark: None,
             nav_tab: "headings".into(),
@@ -1070,8 +1076,8 @@ fn keeps_everything(name: &str) -> bool {
 /// The dialog a user-run command opens when it lacks the input it needs (scripts and agents get
 /// the command's own error or default instead): Select Recipients and Edit Recipient List without
 /// data, Insert Merge Field without a field, Find Recipient without text, the If and Skip
-/// Record If rules (or Rules with no rule at all) without a field, and Table Properties without
-/// settings.
+/// Record If rules (or Rules with no rule at all) without a field, Table Properties without
+/// settings, and Symbol and Field without a character or code.
 fn input_dialog(id: &str, params: &Value) -> Option<&'static str> {
     let has = |k: &str| params.get(k).is_some_and(|v| !v.is_null());
     let rule = params.get("rule").and_then(Value::as_str).map(str::to_ascii_uppercase);
@@ -1085,10 +1091,20 @@ fn input_dialog(id: &str, params: &Value) -> Option<&'static str> {
         "mailings.editRecipients" if !has("rows") => Some("recipientList"),
         "mailings.insertField" if !has("field") => Some("insertMergeField"),
         "mailings.findRecipient" if !has("text") => Some("findRecipient"),
+        // Symbol without a character and Field without a code show their dialogs (#321).
+        "insert.symbol" if !has("char") => Some("symbol"),
+        "insert.field" if !has("instr") => Some("field"),
         // Table Properties without settings shows the dialog (with settings it applies them).
         "table.properties" if params.as_object().is_none_or(|m| m.is_empty()) => Some("tableProperties"),
+        // Tabs, Borders and Shading, and Page Borders without settings show their dialogs (#320).
+        "para.tabs" if params.as_object().is_none_or(|m| m.is_empty()) => Some("tabs"),
+        "para.borders" if params.as_object().is_none_or(|m| m.is_empty()) => Some("borders"),
+        "design.pageBorders" if params.as_object().is_none_or(|m| m.is_empty()) => Some("pageBorders"),
         // `null` is an answer here: it removes the password.
         "file.encrypt" if params.get("password").is_none() => Some("encryptPassword"),
+        // Define New Multilevel List and Track Changes Options without settings show their dialogs.
+        "list.define" if params.get("levels").is_none() => Some("defineList"),
+        "review.trackingOptions" if params.as_object().is_none_or(|m| m.is_empty()) => Some("trackChangesOptions"),
         _ => None,
     }
 }
@@ -2293,7 +2309,7 @@ mod tests {
         let mut a = app();
         a.session.run("review.wordCount", &json!({"includeTextBoxes": false})).unwrap();
         let saved = serde_json::to_string(&a.prefs()).unwrap();
-        assert!(saved.contains(r#""editing":{"countNotes":false}"#), "{saved}");
+        assert!(saved.contains(r#""editing":{"countNotes":false,"#), "{saved}");
         let mut b = app();
         b.apply_prefs(serde_json::from_str(&saved).unwrap());
         assert!(!b.session.prefs.count_notes);
