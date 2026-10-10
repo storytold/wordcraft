@@ -1153,3 +1153,9 @@
 	The password is removed. Save the document to keep the change.	Пароль видалено. Збережіть документ, щоб зберегти зміну.
 	The passwords don't match.	Паролі не збігаються.
 	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	Зберігайте пароль у надійному місці: без нього ніхто, зокрема WordCraft, не зможе відкрити документ. Залиште обидва поля порожніми, щоб видалити пароль.
+	Rotation	Поворот
+	Rotation:	Поворот:
+	Rotate Right 90°	Повернути праворуч на 90°
+	Rotate Left 90°	Повернути ліворуч на 90°
+	Flip Vertical	Віддзеркалити по вертикалі
+	Flip Horizontal	Віддзеркалити по горизонталі

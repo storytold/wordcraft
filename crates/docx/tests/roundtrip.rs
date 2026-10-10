@@ -878,7 +878,14 @@ fn groups_round_trip() {
         story: None,
         // A member's shape effects (#275) come back too.
         effects: wordcraft_doc::effects::ShapeEffects {
-            shadow: Some(wordcraft_doc::effects::Shadow { color: Rgb(0x20, 0x30, 0x40), transparency: 60.0, blur: 4.0, distance: 3.0, angle: 135.0 }),
+            shadow: Some(wordcraft_doc::effects::Shadow {
+                color: Rgb(0x20, 0x30, 0x40),
+                transparency: 60.0,
+                blur: 4.0,
+                distance: 3.0,
+                angle: 135.0,
+                rot_with_shape: false,
+            }),
             glow: None,
             soft_edge: Some(2.5),
         },
@@ -962,6 +969,12 @@ fn settings_core_theme_round_trip() {
     d.settings.protection = Some("readOnly".into());
     d.settings.grid_h = 5.5;
     d.settings.grid_v = 18.0;
+    d.settings.math = Some(wordcraft_doc::math::MathProps {
+        brk_bin: wordcraft_doc::math::BrkBin::Repeat,
+        brk_bin_sub: wordcraft_doc::math::BrkBinSub::PlusMinus,
+        wrap_indent: 36.0,
+        wrap_right: false,
+    });
     d.core.title = "Title & <stuff>".into();
     d.core.subject = "Subj".into();
     d.core.creator = "Me".into();
@@ -1201,7 +1214,7 @@ fn list_level_overrides_round_trip() {
 fn shape_effects_round_trip() {
     use wordcraft_doc::effects::{Glow, Shadow, ShapeEffects};
     let effects = ShapeEffects {
-        shadow: Some(Shadow { color: Rgb(0x20, 0x30, 0x40), transparency: 60.0, blur: 4.0, distance: 3.0, angle: 135.0 }),
+        shadow: Some(Shadow { color: Rgb(0x20, 0x30, 0x40), transparency: 60.0, blur: 4.0, distance: 3.0, angle: 135.0, rot_with_shape: false }),
         glow: Some(Glow { color: Rgb(0xC0, 0x50, 0x10), size: 8.0, transparency: 40.0 }),
         soft_edge: Some(2.5),
     };
@@ -1238,4 +1251,139 @@ fn shape_effects_round_trip() {
         }
         o => panic!("{o:?}"),
     }
+}
+
+#[test]
+fn equation_manual_breaks_round_trip() {
+    use wordcraft_doc::math::{MNode, MRun, Math};
+    let nodes = vec![
+        MNode::Run(MRun::new("a=b")),
+        MNode::Run(MRun { brk: Some(1), ..MRun::new("+c") }),
+        MNode::Run(MRun { brk: Some(0), ..MRun::new("+d") }),
+    ];
+    let mut d = Document::new();
+    let math = Math { nodes: nodes.clone(), ..Default::default() };
+    let mut p = Paragraph::with_text("", CharProps::default());
+    p.insert_object(0, InlineObject::Equation { linear: "a=b+c+d".into(), display: true, math }, &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+    let r = rt(&d);
+    let got = paras(&r).iter().flat_map(|p| p.objects.iter()).find_map(|o| match o {
+        InlineObject::Equation { math, .. } => Some(math.nodes.clone()),
+        _ => None,
+    });
+    assert_eq!(got, Some(nodes));
+    // Word's own settings round-trip; a document without them gets none.
+    assert_eq!(r.settings.math, None);
+}
+
+/// #332: rotation (`a:xfrm/@rot`, 60000ths of a degree) and flips of pictures, shapes, text boxes
+/// and groups survive save and load; the effect extent written covers the rotated bounds, and
+/// reading takes that overhang back out of the effects room.
+#[test]
+fn rotation_and_flips_round_trip() {
+    let mut d = Document::new();
+    let key = d.add_media(tiny_png(), "png");
+    let pic = InlineObject::Image {
+        media: key,
+        w: 100.0,
+        h: 50.0,
+        alt: String::new(),
+        float: Float { rot: 30.0, effect: [6.0; 4], ..Default::default() },
+        crop: [0.0; 4],
+    };
+    let shape = |kind, float| InlineObject::Shape {
+        kind,
+        w: 80.0,
+        h: 40.0,
+        fill: Some(Rgb(1, 2, 3)),
+        stroke: None,
+        stroke_width: 0.0,
+        float,
+        story: None,
+        effects: Default::default(),
+    };
+    let square = Float { wrap: Wrap::Square, ..Default::default() };
+    let tri = shape(ShapeKind::Triangle, Float { rot: 90.0, flip_h: true, ..square });
+    let flipped = shape(ShapeKind::Rectangle, Float { rot: 315.5, flip_v: true, ..square });
+    let group = InlineObject::Group {
+        w: 120.0,
+        h: 60.0,
+        float: Float { rot: 45.0, ..square },
+        ch_w: 120.0,
+        ch_h: 60.0,
+        children: vec![wordcraft_doc::para::GroupChild { x: 0.0, y: 0.0, obj: shape(ShapeKind::Ellipse, Float { rot: 10.0, ..Default::default() }) }],
+    };
+    let mut p = Paragraph::with_text("turned ", CharProps::default());
+    for o in [pic, tri, flipped, group] {
+        let end = p.len();
+        p.insert_object(end, o, &CharProps::default()).unwrap();
+    }
+    d.body = vec![para_block(p)];
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<a:xfrm rot="1800000">"#), "{xml}");
+    assert!(xml.contains(r#"<a:xfrm rot="5400000" flipH="1">"#), "{xml}");
+    assert!(xml.contains(r#"<a:xfrm rot="18930000" flipV="1">"#), "{xml}");
+    // The 100 × 50 picture turned 30° covers 111.6 × 93.3: 5.8 and 21.7 pt more on each side,
+    // plus its 6 pt of effects room.
+    assert!(xml.contains(r#"<wp:effectExtent l="149876" t="351163" r="149876" b="351163"/>"#), "{xml}");
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    let got = &paras(&r)[0].objects;
+    let spins: Vec<(f32, bool, bool)> = got.iter().map(|o| o.frame().unwrap().2).map(|f| (f.rot, f.flip_h, f.flip_v)).collect();
+    assert_eq!(spins, [(30.0, false, false), (90.0, true, false), (315.5, false, true), (45.0, false, false)]);
+    let effect = got[0].frame().unwrap().2.effect;
+    assert!(effect.iter().all(|e| (e - 6.0).abs() < 0.01), "{effect:?}");
+    assert!(got[1].frame().unwrap().2.effect.iter().all(|e| e.abs() < 0.01), "no effects room appears");
+    let InlineObject::Group { children, .. } = &got[3] else { panic!("{got:?}") };
+    assert_eq!(children[0].obj.frame().unwrap().2.rot, 10.0);
+}
+
+/// #332: a group's own turn and flips are on its `wpg:grpSpPr/a:xfrm` and its members keep
+/// theirs inside it; whether a member's shadow turns with it (`rotWithShape`) survives too.
+#[test]
+fn rotated_group_and_shadow_rotation_round_trip() {
+    use wordcraft_doc::effects::{Shadow, ShapeEffects};
+    let member = |rot_with_shape: bool| InlineObject::Shape {
+        kind: ShapeKind::Rectangle,
+        w: 60.0,
+        h: 40.0,
+        fill: Some(Rgb(1, 2, 3)),
+        stroke: None,
+        stroke_width: 0.0,
+        float: Float { rot: 20.0, ..Default::default() },
+        story: None,
+        effects: ShapeEffects { shadow: Some(Shadow { rot_with_shape, ..Default::default() }), ..Default::default() },
+    };
+    let group = InlineObject::Group {
+        w: 120.0,
+        h: 40.0,
+        float: Float { wrap: Wrap::Square, rot: 135.0, flip_h: true, ..Default::default() },
+        ch_w: 120.0,
+        ch_h: 40.0,
+        children: vec![
+            wordcraft_doc::para::GroupChild { x: 0.0, y: 0.0, obj: member(true) },
+            wordcraft_doc::para::GroupChild { x: 60.0, y: 0.0, obj: member(false) },
+        ],
+    };
+    let mut p = Paragraph::with_text("g", CharProps::default());
+    p.insert_object(1, group, &CharProps::default()).unwrap();
+    let bytes = wordcraft_docx::write(&doc_with(vec![p])).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<wpg:grpSpPr><a:xfrm rot="8100000" flipH="1">"#), "{xml}");
+    assert!(xml.contains(r#"rotWithShape="1""#) && xml.contains(r#"rotWithShape="0""#), "{xml}");
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    let Some(InlineObject::Group { float, children, .. }) = paras(&r)[0].objects.first() else { panic!("{:?}", paras(&r)[0].objects) };
+    assert_eq!((float.rot, float.flip_h, float.flip_v), (135.0, true, false));
+    let got: Vec<(f32, Option<bool>)> = children
+        .iter()
+        .map(|c| match &c.obj {
+            InlineObject::Shape { float, effects, .. } => (float.rot, effects.shadow.map(|s| s.rot_with_shape)),
+            o => panic!("{o:?}"),
+        })
+        .collect();
+    assert_eq!(got, [(20.0, Some(true)), (20.0, Some(false))]);
 }

@@ -146,11 +146,46 @@ pub struct Float {
     pub dist_top: f32,
     pub dist_bottom: f32,
     /// Room around the object for effects such as shadows (left, top, right, bottom, points),
-    /// inline or floating: lines and surrounding text keep clear of it.
+    /// inline or floating: lines and surrounding text keep clear of it. Rotation's own overhang
+    /// is not in here: it follows from [`Float::rot`] (see [`Float::spin_pad`]).
     pub effect: [f32; 4],
+    /// Rotation clockwise about the object's centre, degrees (DrawingML `a:xfrm/@rot`). Offsets
+    /// and the size stay those of the unrotated frame, as in Word; see [`Float::spin`].
+    #[serde(skip_serializing_if = "is_zero")]
+    pub rot: f32,
+    /// Mirrored left to right / top to bottom (`a:xfrm/@flipH`, `@flipV`).
+    #[serde(skip_serializing_if = "is_false")]
+    pub flip_h: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    pub flip_v: bool,
+}
+
+fn is_zero(v: &f32) -> bool {
+    *v == 0.0
+}
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 impl Float {
+    /// The rotation and flips, the angle normalised to `0..360` (a NaN angle is no rotation).
+    pub fn spin(&self) -> wordcraft_geom::Spin {
+        wordcraft_geom::Spin::new(self.rot, self.flip_h, self.flip_v)
+    }
+    /// Set the rotation and flips (the angle normalised).
+    pub fn set_spin(&mut self, s: wordcraft_geom::Spin) {
+        self.rot = wordcraft_geom::normalize_degrees(s.deg);
+        self.flip_h = s.flip_h;
+        self.flip_v = s.flip_v;
+    }
+    /// How far a `w` × `h` frame's rotated bounds reach past it on each side (x, y): the room a
+    /// rotated object takes beyond its frame (zero unrotated; negative where the turned object
+    /// is narrower than its frame, as a wide picture turned 90° is).
+    pub fn spin_pad(&self, w: f32, h: f32) -> (f32, f32) {
+        let (w, h) = (wordcraft_geom::finite(w).clamp(0.0, 4000.0), wordcraft_geom::finite(h).clamp(0.0, 4000.0));
+        let (bw, bh) = self.spin().extent(w, h);
+        ((bw - w) / 2.0, (bh - h) / 2.0)
+    }
     /// The effect extents, finite and clamped (left, top, right, bottom).
     pub fn effect_extent(&self) -> [f32; 4] {
         self.effect.map(|v| if v.is_finite() { v.clamp(0.0, 1584.0) } else { 0.0 })

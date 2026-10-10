@@ -1152,3 +1152,9 @@
 	The password is removed. Save the document to keep the change.	密码已删除。保存文档以保留此更改。
 	The passwords don't match.	两次输入的密码不一致。
 	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	请妥善保管密码：没有密码，任何人（包括 WordCraft）都无法打开文档。两个框都留空可删除密码。
+	Rotation	旋转角度
+	Rotation:	旋转：
+	Rotate Right 90°	向右旋转 90°
+	Rotate Left 90°	向左旋转 90°
+	Flip Vertical	垂直翻转
+	Flip Horizontal	水平翻转

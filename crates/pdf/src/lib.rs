@@ -623,6 +623,10 @@ impl Exporter<'_> {
                         match d {
                             Draw::Glyphs { .. } | Draw::Turned { .. } => self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d)),
                             Draw::Image { .. } => self.tagged(s, Role::Figure, None, |me, s| me.draw(s, d)),
+                            // A rotated inline picture.
+                            Draw::Rotated { items, .. } if items.iter().any(|i| matches!(i, Draw::Image { .. })) => {
+                                self.tagged(s, Role::Figure, None, |me, s| me.draw(s, d))
+                            }
                             // An inline chart or diagram: its text is part of the figure, not the paragraph.
                             Draw::Figure { alt, kind, draws: inner } => self.tagged(s, Role::Figure, Some(graphic_alt(alt, *kind)), |me, s| {
                                 for d in inner {
@@ -789,6 +793,17 @@ impl Exporter<'_> {
                     return;
                 }
                 let [a, b, c, d, e, f] = Draw::turn_matrix(*turn, *x, *y);
+                s.push_transform(&Transform::from_row(a, b, c, d, e, f));
+                for it in items {
+                    self.draw(s, it);
+                }
+                s.pop();
+            }
+            Draw::Rotated { cx, cy, spin, items } => {
+                if !ok(*cx) || !ok(*cy) {
+                    return;
+                }
+                let [a, b, c, d, e, f] = spin.matrix(*cx, *cy);
                 s.push_transform(&Transform::from_row(a, b, c, d, e, f));
                 for it in items {
                     self.draw(s, it);

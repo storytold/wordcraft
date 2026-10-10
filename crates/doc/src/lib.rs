@@ -331,6 +331,9 @@ pub struct Settings {
     /// Drawing grid spacing in points, across and down (View › Gridlines); ECMA-376's default is 1/8 inch.
     pub grid_h: f32,
     pub grid_v: f32,
+    /// Equation options (`m:mathPr`), when the document has them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub math: Option<math::MathProps>,
 }
 
 /// Word's compatibility mode for documents that don't state one.
@@ -394,6 +397,7 @@ impl Default for Settings {
             compat_mode: COMPAT_MODE_CURRENT,
             grid_h: DEFAULT_GRID,
             grid_v: DEFAULT_GRID,
+            math: None,
         }
     }
 }

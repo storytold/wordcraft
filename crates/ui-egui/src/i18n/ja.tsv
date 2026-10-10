@@ -1141,3 +1141,9 @@
 	The password is removed. Save the document to keep the change.	パスワードを削除しました。変更を保持するには文書を保存してください。
 	The passwords don't match.	パスワードが一致しません。
 	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	パスワードは安全な場所に保管してください。パスワードがないと、WordCraft を含め誰も文書を開けません。パスワードを削除するには両方のボックスを空にします。
+	Rotation	回転角度
+	Rotation:	回転:
+	Rotate Right 90°	右へ 90 度回転
+	Rotate Left 90°	左へ 90 度回転
+	Flip Vertical	上下反転
+	Flip Horizontal	左右反転
