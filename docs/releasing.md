@@ -12,7 +12,7 @@ this file has the WordCraft specifics.
 |---|---|---|
 | macOS | universal `WordCraft.app` in a `.dmg`, universal CLI zip | Developer ID + notarization (`APPLE_*` secrets) |
 | Windows | x64, x86 and arm64 `.msi` + portable `.zip` | Azure Trusted Signing (`AZURE_*` secrets) |
-| Linux | x86_64 and aarch64 `.AppImage` (+ `.zsync` for AppImageUpdate), `.flatpak` bundle, `.deb`, `.rpm`, `.tar.gz`; riscv64 `.tar.gz`; Flathub manifest | checksums |
+| Linux | x86_64 and aarch64 `.AppImage` (+ `.zsync` for AppImageUpdate), `.flatpak` bundle, `.deb`, `.rpm`, `.tar.gz`; riscv64 `.deb`, `.rpm`, `.tar.gz`; Flathub manifest | checksums |
 | FreeBSD | x86_64 `.tar.gz` | checksums |
 | Web | `wordcraft-web-<version>.zip` (static site: `index.html`, wasm, glue) | none |
 
