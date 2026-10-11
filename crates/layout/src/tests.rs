@@ -2951,3 +2951,77 @@ fn footnote_longer_than_pages_ends() {
     assert!(pieces.len() >= 3 && l.pages.len() == pieces.len(), "{} pages, {pieces:?}", l.pages.len());
     assert!(pieces.windows(2).all(|w| w[0].2 == w[1].1 && w[1].0 == w[0].0 + 1), "{pieces:?}");
 }
+
+/// Distance from the top of the first paragraph's line to the top of the second's.
+fn second_para_offset(after: f32, before: f32, add: bool, borders: Option<wordcraft_doc::props::Borders>) -> f32 {
+    let mut d = Document::from_text("First\nSecond");
+    d.settings.add_paragraph_spacing = add;
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+        p.space_after = Some(after);
+        p.borders = borders;
+    })
+    .unwrap();
+    d.format_paragraphs(&Pos::body(1, 0), &Pos::body(1, 0), &|p| p.space_before = Some(before)).unwrap();
+    let l = lay(&d);
+    l.caret(&Pos::body(1, 0)).unwrap().top - l.caret(&Pos::body(0, 0)).unwrap().top
+}
+
+#[test]
+fn space_after_and_before_overlap_like_word() {
+    let line = second_para_offset(0.0, 0.0, false, None);
+    // The larger of the two spacings, whichever side it is on.
+    assert!((second_para_offset(4.0, 10.0, false, None) - line - 10.0).abs() < 0.01);
+    assert!((second_para_offset(10.0, 4.0, false, None) - line - 10.0).abs() < 0.01);
+    assert!((second_para_offset(5.0, 5.0, false, None) - line - 5.0).abs() < 0.01);
+    assert!((second_para_offset(0.0, 12.0, false, None) - line - 12.0).abs() < 0.01);
+    // w:doNotUseHTMLParagraphAutoSpacing: they add up.
+    assert!((second_para_offset(4.0, 10.0, true, None) - line - 14.0).abs() < 0.01);
+}
+
+#[test]
+fn bottom_border_takes_its_distance_and_width() {
+    use wordcraft_doc::props::{Border, BorderStyle, Borders};
+    let rule = Border { style: BorderStyle::Single, width: 0.5, color: None, space: 3.0 };
+    let plain = second_para_offset(3.0, 0.0, false, None);
+    let ruled = second_para_offset(3.0, 0.0, false, Some(Borders { bottom: Some(rule), ..Default::default() }));
+    assert!((ruled - plain - 3.5).abs() < 0.01, "{plain} {ruled}");
+    // An invisible border takes no room.
+    let none = Border { style: BorderStyle::None, ..rule };
+    assert!((second_para_offset(3.0, 0.0, false, Some(Borders { bottom: Some(none), ..Default::default() })) - plain).abs() < 0.01);
+}
+
+#[test]
+fn a_run_of_identically_bordered_paragraphs_is_one_box() {
+    use wordcraft_doc::props::{Border, BorderStyle, Borders};
+    let side = Border { style: BorderStyle::Single, width: 1.0, color: None, space: 4.0 };
+    let boxed = Borders { top: Some(side), bottom: Some(side), left: Some(side), right: Some(side), ..Default::default() };
+    let mut d = Document::from_text("One\nTwo\nThree");
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(2, 0), &|p| p.borders = Some(boxed)).unwrap();
+    let l = lay(&d);
+    let tops: Vec<f32> = (0..3).map(|i| l.caret(&Pos::body(i, 0)).unwrap().top).collect();
+    let plain = lay(&Document::from_text("One\nTwo\nThree"));
+    let plain_tops: Vec<f32> = (0..3).map(|i| plain.caret(&Pos::body(i, 0)).unwrap().top).collect();
+    // Room above the first and below the last only: the inner lines keep their spacing.
+    assert!((tops[0] - plain_tops[0] - 5.0).abs() < 0.01, "{tops:?} {plain_tops:?}");
+    assert!(((tops[2] - tops[1]) - (plain_tops[2] - plain_tops[1])).abs() < 0.01);
+}
+
+#[test]
+fn extra_line_spacing_goes_below_the_text() {
+    use wordcraft_doc::props::LineSpacing;
+    let lines_of_para = |spacing: LineSpacing| {
+        let mut d = Document::from_text("Double spaced text that wraps onto a second line. ".repeat(4).trim_end());
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.line_spacing = Some(spacing)).unwrap();
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no lines") };
+        para.lines.iter().map(|l| (l.top, l.height, l.baseline)).collect::<Vec<_>>()
+    };
+    let single = lines_of_para(LineSpacing::Multiple(1.0));
+    let double = lines_of_para(LineSpacing::Multiple(2.0));
+    assert!(single.len() >= 2 && double.len() == single.len());
+    for ((st, sh, sb), (dt, dh, db)) in single.iter().zip(&double) {
+        assert!((dh - 2.0 * sh).abs() < 0.01, "line height doubles");
+        // Same distance from the line top to the baseline: the extra room is underneath.
+        assert!(((db - dt) - (sb - st)).abs() < 0.01, "single {sb}-{st}, double {db}-{dt}");
+    }
+}
