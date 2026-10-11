@@ -691,7 +691,7 @@
 	Style Inspector	Stiilikontroll
 	Style Set	Stiilikomplekt
 	Style based on:	Stiili alus:
-	Style: APA	Stiil: APA
+	Style: {style}	Stiil: {style}
 	Styles	Stiilid
 	Styles Pane	Stiilipaan
 	Subscript	Allindeks

@@ -785,7 +785,7 @@
 	Style based on:	Стиль на основі:
 	Style Inspector	Інспектор стилів
 	Style Set	Набір стилів
-	Style: APA	Стиль: APA
+	Style: {style}	Стиль: {style}
 	Styles	Стилі
 	Styles Pane	Панель стилів
 	Subscript	Нижній індекс

@@ -760,7 +760,7 @@
 	Style	スタイル
 	Style based on:	基準にするスタイル:
 	Style Set	スタイル セット
-	Style: APA	スタイル: APA
+	Style: {style}	スタイル: {style}
 	Styles	スタイル
 	Styles Pane	スタイル ウィンドウ
 	Subscript	下付き

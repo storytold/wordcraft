@@ -814,7 +814,7 @@
 	Style	Stil
 	Style based on:	Stil zasnovan na:
 	Style Set	Skup stilova
-	Style: APA	Stil: APA
+	Style: {style}	Stil: {style}
 	Styles	Stilovi
 	Styles Pane	Okno stilova
 	Subscript	Indeks dole

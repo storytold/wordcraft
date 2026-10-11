@@ -761,7 +761,7 @@
 	Style	樣式
 	Style based on:	樣式依據：
 	Style Set	樣式集
-	Style: APA	樣式：APA
+	Style: {style}	樣式：{style}
 	Styles	樣式
 	Styles Pane	樣式窗格
 	Subscript	下標

@@ -818,7 +818,7 @@
 	Style	Стил
 	Style based on:	Стил заснован на:
 	Style Set	Скуп стилова
-	Style: APA	Стил: APA
+	Style: {style}	Стил: {style}
 	Styles	Стилови
 	Styles Pane	Окно стилова
 	Subscript	Индекс доле

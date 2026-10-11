@@ -1,15 +1,290 @@
-//! References: citations and bibliography (APA, MLA, Chicago, IEEE), source manager, index,
-//! table of figures, cross-references, table of authorities, footnote options.
+//! References: citations and bibliography (APA, MLA, Chicago, IEEE, Harvard, ISO 690, Turabian,
+//! GB/T 7714, GOST, SIST02), source manager, index, table of figures, cross-references, table
+//! of authorities, footnote options.
 
 use serde_json::{Value, json};
 use wordcraft_doc::para::InlineObject;
 use wordcraft_doc::props::{CharProps, TabAlign, TabLeader, TabStop};
-use wordcraft_doc::{Block, Paragraph, Path, Pos, Source, StoryRef};
+use wordcraft_doc::{Block, Document, Paragraph, Path, Pos, Source, StoryRef};
 
 use super::{delete_selection, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
-pub const STYLES: [&str; 4] = ["APA", "MLA", "Chicago", "IEEE"];
+/// How a style orders its bibliography (and, for numbered styles, numbers its citations).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Order {
+    /// Alphabetical by the first author's surname (the title when there is no author).
+    Author,
+    /// Alphabetical by title.
+    Title,
+    /// In order of first citation in the document.
+    Cited,
+}
+
+/// How one author's name is written in a bibliography entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Name {
+    /// Rivera, Alex
+    LastFirst,
+    /// Alex Rivera
+    FirstLast,
+    /// Rivera, A.
+    LastInitials,
+    /// A. Rivera
+    InitialsLast,
+    /// Rivera A.
+    LastSpaceInitials,
+    /// RIVERA, Alex
+    UpperLastFirst,
+    /// RIVERA A
+    UpperLastBareInitials,
+}
+
+/// The author list of a bibliography entry.
+#[derive(Clone, Copy, Debug)]
+pub struct Names {
+    /// The first author's form, and every later author's.
+    pub first: Name,
+    pub rest: Name,
+    /// Between names; between exactly two; before the last of three or more.
+    pub sep: &'static str,
+    pub two: &'static str,
+    pub last: &'static str,
+    /// List at most this many authors, then `et_al` (0: list them all).
+    pub max: usize,
+    pub et_al: &'static str,
+}
+
+/// The in-text citation.
+#[derive(Clone, Copy, Debug)]
+pub enum Cite {
+    /// `(Who<year_sep>Year<pages_sep>Pages)`.
+    AuthorDate { year_sep: &'static str, pages_sep: &'static str },
+    /// `(Who Pages)`.
+    AuthorPage,
+    /// `<open>n<close>`; pages follow `pages_sep` inside the brackets (left out when `None`).
+    Number { open: &'static str, close: &'static str, pages_sep: Option<&'static str> },
+}
+
+/// A citation and bibliography style, as data. Entry templates fill `{n}`, `{names}`, `{year}`,
+/// `{title}`, `{city}`, `{publisher}`, `{pub}` (city: publisher), `{journal}`, `{volume}`,
+/// `{pages}`, `{url}` and `{type}` (GB/T 7714 document type code); text between `⟦` and `⟧` is
+/// left out when a field in it is empty, and a full stop never doubles up.
+#[derive(Debug)]
+pub struct CiteStyle {
+    /// The name shown in the style picker and stored in the session.
+    pub name: &'static str,
+    /// Lowercase letter/digit prefixes of Word's style names and style-sheet file names that mean
+    /// this style (`gostname` matches "GOST - Name Sort"); the longest match wins.
+    pub aliases: &'static [&'static str],
+    pub cite: Cite,
+    /// Joins two authors in a citation ("&" or "and").
+    pub and: &'static str,
+    /// Cite this many authors or more as "First et al.".
+    pub et_al_from: usize,
+    pub order: Order,
+    pub names: Names,
+    /// Entry template for a book (or anything without a journal), and for a journal article.
+    pub book: &'static str,
+    pub article: &'static str,
+    /// Default title of the bibliography.
+    pub bib_title: &'static str,
+}
+
+impl CiteStyle {
+    /// Numbered styles cite `[1]`/`(1)` and list entries without a hanging indent.
+    pub fn numbered(&self) -> bool {
+        matches!(self.cite, Cite::Number { .. })
+    }
+}
+
+const fn names(first: Name, rest: Name, sep: &'static str, two: &'static str, last: &'static str) -> Names {
+    Names { first, rest, sep, two, last, max: 0, et_al: "" }
+}
+
+const AUTHOR_DATE: Cite = Cite::AuthorDate { year_sep: " ", pages_sep: ", p. " };
+
+/// Every style, in picker order (alphabetical). Formats follow the published style guides'
+/// rules for the source types WordCraft records, written in our own words.
+pub static STYLES: [CiteStyle; 12] = [
+    CiteStyle {
+        name: "APA",
+        aliases: &["apa"],
+        cite: Cite::AuthorDate { year_sep: ", ", pages_sep: ", p. " },
+        and: "&",
+        et_al_from: 3,
+        order: Order::Author,
+        names: names(Name::LastInitials, Name::LastInitials, ", ", ", & ", ", & "),
+        book: "⟦{names} ⟧({year}). {title}.⟦ {publisher}.⟧⟦ {url}⟧",
+        article: "⟦{names} ⟧({year}). {title}. {journal}⟦, {volume}⟧⟦, {pages}⟧.⟦ {url}⟧",
+        bib_title: "References",
+    },
+    CiteStyle {
+        name: "Chicago",
+        aliases: &["chicago"],
+        cite: Cite::AuthorDate { year_sep: " ", pages_sep: ", " },
+        and: "and",
+        et_al_from: 3,
+        order: Order::Author,
+        names: names(Name::LastFirst, Name::FirstLast, ", ", ", and ", ", and "),
+        book: "⟦{names}. ⟧{year}. {title}.⟦ {pub}.⟧⟦ {url}⟧",
+        article: "⟦{names}. ⟧{year}. {title}. {journal}⟦, {volume}⟧⟦, {pages}⟧.⟦ {url}⟧",
+        bib_title: "References",
+    },
+    // GB/T 7714 sequence-coding: numbered by first citation, surnames in capitals with bare
+    // initials, at most three authors, a document type code after the title.
+    CiteStyle {
+        name: "GB/T 7714",
+        aliases: &["gb"],
+        cite: Cite::Number { open: "[", close: "]", pages_sep: Some(", ") },
+        and: "and",
+        et_al_from: 3,
+        order: Order::Cited,
+        names: Names { max: 3, et_al: ", et al.", ..names(Name::UpperLastBareInitials, Name::UpperLastBareInitials, ", ", ", ", ", ") },
+        book: "[{n}] ⟦{names}. ⟧{title}[{type}].⟦ {pub},⟧ {year}.⟦ {url}.⟧",
+        article: "[{n}] ⟦{names}. ⟧{title}[{type}]. {journal}, {year}⟦, {volume}⟧⟦: {pages}⟧.⟦ {url}.⟧",
+        bib_title: "References",
+    },
+    // GOST 7.1: a numbered list in alphabetical order (by author or by title); areas separated
+    // by " – ", the container after "//".
+    CiteStyle {
+        name: "GOST (name sort)",
+        aliases: &["gost", "gostname"],
+        cite: Cite::Number { open: "[", close: "]", pages_sep: Some(", p. ") },
+        and: "and",
+        et_al_from: 3,
+        order: Order::Author,
+        names: names(Name::LastSpaceInitials, Name::LastSpaceInitials, ", ", ", ", ", "),
+        book: GOST_BOOK,
+        article: GOST_ARTICLE,
+        bib_title: "References",
+    },
+    CiteStyle {
+        name: "GOST (title sort)",
+        aliases: &["gosttitle"],
+        cite: Cite::Number { open: "[", close: "]", pages_sep: Some(", p. ") },
+        and: "and",
+        et_al_from: 3,
+        order: Order::Title,
+        names: names(Name::LastSpaceInitials, Name::LastSpaceInitials, ", ", ", ", ", "),
+        book: GOST_BOOK,
+        article: GOST_ARTICLE,
+        bib_title: "References",
+    },
+    // Harvard as taught by Anglia Ruskin: "Surname, I., Year. Title. Place: Publisher."
+    CiteStyle {
+        name: "Harvard (Anglia)",
+        aliases: &["harvard"],
+        cite: Cite::AuthorDate { year_sep: ", ", pages_sep: ", p. " },
+        and: "and",
+        et_al_from: 4,
+        order: Order::Author,
+        names: names(Name::LastInitials, Name::LastInitials, ", ", " and ", " and "),
+        book: "⟦{names}, ⟧{year}. {title}.⟦ {pub}.⟧⟦ Available at: <{url}>.⟧",
+        article: "⟦{names}, ⟧{year}. {title}. {journal}⟦, {volume}⟧⟦, pp. {pages}⟧.⟦ Available at: <{url}>.⟧",
+        bib_title: "References",
+    },
+    CiteStyle {
+        name: "IEEE",
+        aliases: &["ieee"],
+        cite: Cite::Number { open: "[", close: "]", pages_sep: None },
+        and: "and",
+        et_al_from: 3,
+        order: Order::Cited,
+        names: names(Name::InitialsLast, Name::InitialsLast, ", ", ", ", ", "),
+        book: "[{n}] ⟦{names}, ⟧“{title},”⟦ {pub},⟧ {year}.⟦ {url}⟧",
+        article: "[{n}] ⟦{names}, ⟧“{title},” {journal}⟦, {volume}⟧⟦, {pages}⟧, {year}.⟦ {url}⟧",
+        bib_title: "References",
+    },
+    // ISO 690 first element and date: surnames in capitals, the year after the names.
+    CiteStyle {
+        name: "ISO 690 (author-date)",
+        aliases: &["iso690"],
+        cite: AUTHOR_DATE,
+        and: "and",
+        et_al_from: 4,
+        order: Order::Author,
+        names: names(Name::UpperLastFirst, Name::UpperLastFirst, ", ", " and ", " and "),
+        book: "⟦{names}, ⟧{year}. {title}.⟦ {pub}.⟧⟦ Available from: {url}⟧",
+        article: "⟦{names}, ⟧{year}. {title}. {journal}⟦, {volume}⟧⟦, {pages}⟧.⟦ Available from: {url}⟧",
+        bib_title: "References",
+    },
+    // ISO 690 numeric reference: numbered by first citation, the year with the imprint.
+    CiteStyle {
+        name: "ISO 690 (numerical)",
+        aliases: &["iso690num", "iso690nmerical"],
+        cite: Cite::Number { open: "(", close: ")", pages_sep: Some(", p. ") },
+        and: "and",
+        et_al_from: 4,
+        order: Order::Cited,
+        names: names(Name::UpperLastFirst, Name::UpperLastFirst, ", ", " and ", " and "),
+        book: "{n}. ⟦{names}. ⟧{title}.⟦ {pub},⟧ {year}.⟦ Available from: {url}⟧",
+        article: "{n}. ⟦{names}. ⟧{title}. {journal}. {year}⟦, {volume}⟧⟦, {pages}⟧.⟦ Available from: {url}⟧",
+        bib_title: "References",
+    },
+    CiteStyle {
+        name: "MLA",
+        aliases: &["mla"],
+        cite: Cite::AuthorPage,
+        and: "and",
+        et_al_from: 3,
+        order: Order::Author,
+        names: Names { max: 1, et_al: ", et al.", ..names(Name::LastFirst, Name::LastFirst, ", ", ", ", ", ") },
+        book: "⟦{names}. ⟧“{title}.”⟦ {publisher},⟧ {year}.⟦ {url}⟧",
+        article: "⟦{names}. ⟧“{title}.” {journal}⟦, {volume}⟧⟦, {pages}⟧, {year}.⟦ {url}⟧",
+        bib_title: "Works Cited",
+    },
+    // SIST 02: numbered by first citation, full names separated by semicolons.
+    CiteStyle {
+        name: "SIST02",
+        aliases: &["sist"],
+        cite: Cite::Number { open: "(", close: ")", pages_sep: Some(", p. ") },
+        and: "and",
+        et_al_from: 3,
+        order: Order::Cited,
+        names: names(Name::LastFirst, Name::LastFirst, "; ", "; ", "; "),
+        book: "{n}) ⟦{names}. ⟧{title}.⟦ {city},⟧⟦ {publisher},⟧ {year}.⟦ {url}⟧",
+        article: "{n}) ⟦{names}. ⟧{title}. {journal}. {year}⟦, vol. {volume}⟧⟦, p. {pages}⟧.⟦ {url}⟧",
+        bib_title: "References",
+    },
+    // Turabian: author-date citations, a bibliography with the year in the imprint.
+    CiteStyle {
+        name: "Turabian",
+        aliases: &["turabian"],
+        cite: Cite::AuthorDate { year_sep: " ", pages_sep: ", " },
+        and: "and",
+        et_al_from: 4,
+        order: Order::Author,
+        names: names(Name::LastFirst, Name::FirstLast, ", ", ", and ", ", and "),
+        book: "⟦{names}. ⟧{title}.⟦ {pub},⟧ {year}.⟦ {url}.⟧",
+        article: "⟦{names}. ⟧“{title}.” {journal}⟦ {volume}⟧ ({year})⟦: {pages}⟧.⟦ {url}.⟧",
+        bib_title: "Bibliography",
+    },
+];
+
+const GOST_BOOK: &str = "{n}. ⟦{names} ⟧{title}. –⟦ {city} :⟧⟦ {publisher},⟧ {year}.⟦ – URL: {url}.⟧";
+const GOST_ARTICLE: &str = "{n}. ⟦{names} ⟧{title} // {journal}. – {year}.⟦ – Vol. {volume}.⟧⟦ – P. {pages}.⟧⟦ – URL: {url}.⟧";
+
+/// The style called `name`: one of ours (any case), or Word's style name or style-sheet file
+/// name (`Harvard - Anglia`, `\GostTitle.XSL`).
+pub fn find_style(name: &str) -> Option<&'static CiteStyle> {
+    if let Some(st) = STYLES.iter().find(|x| x.name.eq_ignore_ascii_case(name.trim())) {
+        return Some(st);
+    }
+    let key: String = name.chars().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_lowercase()).collect();
+    let key = key.strip_suffix("xsl").unwrap_or(&key);
+    STYLES
+        .iter()
+        .flat_map(|st| st.aliases.iter().map(move |a| (st, *a)))
+        .filter(|(_, a)| key.starts_with(a))
+        .max_by_key(|(_, a)| a.len())
+        .map(|(st, _)| st)
+}
+
+/// The session's style; APA when the name is unknown.
+pub fn style(name: &str) -> &'static CiteStyle {
+    find_style(name).unwrap_or(&STYLES[0])
+}
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -18,14 +293,18 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("references.citation", "Insert Citation", "References › Citations & Bibliography", citation).params(r#"{"tag"?: string, "source"?: Source (added if new), "pages"?: string}"#),
         CommandSpec::new("references.citationStyle", "Style", "References › Citations & Bibliography", |s, v| {
             let st = p::str(v, "style").unwrap_or("APA");
-            let st = STYLES.iter().find(|x| x.eq_ignore_ascii_case(st)).ok_or_else(|| CmdError::Params(format!("style must be one of {STYLES:?}")))?;
-            s.bib_style = st.to_string();
+            let st = find_style(st).ok_or_else(|| {
+                CmdError::Params(format!("style must be one of {:?}", STYLES.iter().map(|x| x.name).collect::<Vec<_>>()))
+            })?;
+            s.bib_style = st.name.to_string();
             update_citations(s)?;
             Ok(json!({"style": s.bib_style}))
         })
-        .params(r#"{"style": "APA|MLA|Chicago|IEEE"}"#),
+        .params(
+            r#"{"style": "APA|Chicago|GB/T 7714|GOST (name sort)|GOST (title sort)|Harvard (Anglia)|IEEE|ISO 690 (author-date)|ISO 690 (numerical)|MLA|SIST02|Turabian" (Word's style names work too)}"#,
+        ),
         CommandSpec::new("references.bibliography", "Bibliography", "References › Citations & Bibliography", |s, v| {
-            let title = p::str(v, "title").unwrap_or(if s.bib_style == "MLA" { "Works Cited" } else { "References" }).to_string();
+            let title = p::str(v, "title").unwrap_or(style(&s.bib_style).bib_title).to_string();
             generated_list(s, "BIBLIOGRAPHY", &title)?;
             sel_result(s)
         })
@@ -109,102 +388,155 @@ fn authors(a: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-fn initials(first: &str) -> String {
-    first.split_whitespace().filter_map(|w| w.chars().next()).map(|c| format!("{c}.")).collect::<Vec<_>>().join(" ")
+/// "Alex Mei" → "A. M." (`dots`), or "A M" without them.
+fn initials(first: &str, dots: bool) -> String {
+    let sep = if dots { ". " } else { " " };
+    let mut out = first.split_whitespace().filter_map(|w| w.chars().next()).map(String::from).collect::<Vec<_>>().join(sep);
+    if dots && !out.is_empty() {
+        out.push('.');
+    }
+    out
 }
 
-/// In-text citation for a style.
-pub fn cite(src: &Source, style: &str, n: usize, pages: &str) -> String {
+fn name(form: Name, last: &str, first: &str) -> String {
+    let join = |a: String, sep: &str, b: String| if a.is_empty() || b.is_empty() { format!("{a}{b}") } else { format!("{a}{sep}{b}") };
+    match form {
+        Name::LastFirst => join(last.to_string(), ", ", first.to_string()),
+        Name::FirstLast => join(first.to_string(), " ", last.to_string()),
+        Name::LastInitials => join(last.to_string(), ", ", initials(first, true)),
+        Name::InitialsLast => join(initials(first, true), " ", last.to_string()),
+        Name::LastSpaceInitials => join(last.to_string(), " ", initials(first, true)),
+        Name::UpperLastFirst => join(last.to_uppercase(), ", ", first.to_string()),
+        Name::UpperLastBareInitials => join(last.to_uppercase(), " ", initials(first, false)),
+    }
+}
+
+fn name_list(au: &[(String, String)], form: &Names) -> String {
+    let shown = if form.max > 0 { au.get(..form.max).unwrap_or(au) } else { au };
+    let parts: Vec<String> = shown.iter().enumerate().map(|(i, (l, f))| name(if i == 0 { form.first } else { form.rest }, l, f)).collect();
+    let mut out = match parts.as_slice() {
+        [] => String::new(),
+        [one] => one.clone(),
+        [a, b] => format!("{a}{}{b}", form.two),
+        [init @ .., z] => format!("{}{}{z}", init.join(form.sep), form.last),
+    };
+    if shown.len() < au.len() {
+        out.push_str(form.et_al);
+    }
+    out
+}
+
+/// Append `s`, dropping its leading full stop when `out` already ends with one ("M." + ". ").
+fn push_text(out: &mut String, s: &str) {
+    match s.strip_prefix('.') {
+        Some(rest) if out.ends_with('.') => out.push_str(rest),
+        _ => out.push_str(s),
+    }
+}
+
+/// Fill one template segment; `None` when `optional` and a field in it is empty.
+fn fill_segment(seg: &str, field: &dyn Fn(&str) -> String, optional: bool) -> Option<String> {
+    let mut out = String::new();
+    let mut rest = seg;
+    while let Some((before, after)) = rest.split_once('{') {
+        push_text(&mut out, before);
+        let Some((key, after)) = after.split_once('}') else {
+            push_text(&mut out, after);
+            return Some(out);
+        };
+        let value = field(key);
+        if value.is_empty() && optional {
+            return None;
+        }
+        push_text(&mut out, &value);
+        rest = after;
+    }
+    push_text(&mut out, rest);
+    Some(out)
+}
+
+/// Fill an entry template (see [`CiteStyle`]).
+fn render(template: &str, field: &dyn Fn(&str) -> String) -> String {
+    let mut out = String::new();
+    let mut rest = template;
+    while !rest.is_empty() {
+        let (seg, optional, after) = match rest.strip_prefix('⟦') {
+            Some(group) => match group.split_once('⟧') {
+                Some((g, after)) => (g, true, after),
+                None => (group, true, ""),
+            },
+            None => match rest.split_once('⟦') {
+                Some((plain, _)) => (plain, false, rest.get(plain.len()..).unwrap_or("")),
+                None => (rest, false, ""),
+            },
+        };
+        if let Some(text) = fill_segment(seg, field, optional) {
+            push_text(&mut out, &text);
+        }
+        rest = after;
+    }
+    out
+}
+
+/// In-text citation for a style; `n` is the source's number in numbered styles.
+pub fn cite(src: &Source, style_name: &str, n: usize, pages: &str) -> String {
+    let st = style(style_name);
     let au = authors(&src.author);
     let lasts: Vec<&str> = au.iter().map(|a| a.0.as_str()).collect();
-    let who = match lasts.len() {
-        0 => src.title.clone(),
-        1 => lasts.first().copied().unwrap_or("").to_string(),
-        2 => format!("{} {} {}", lasts.first().copied().unwrap_or(""), if style == "APA" { "&" } else { "and" }, lasts.get(1).copied().unwrap_or("")),
-        _ => format!("{} et al.", lasts.first().copied().unwrap_or("")),
+    let who = match lasts.as_slice() {
+        [] => src.title.clone(),
+        [one] => one.to_string(),
+        [first, ..] if lasts.len() >= st.et_al_from.max(2) => format!("{first} et al."),
+        [a, b] => format!("{a} {} {b}", st.and),
+        [init @ .., z] => format!("{} {} {z}", init.join(", "), st.and),
     };
-    match style {
-        "MLA" => {
-            if pages.is_empty() {
-                format!("({who})")
-            } else {
-                format!("({who} {pages})")
-            }
-        }
-        "Chicago" => {
-            if pages.is_empty() {
-                format!("({who} {})", src.year)
-            } else {
-                format!("({who} {}, {pages})", src.year)
-            }
-        }
-        "IEEE" => format!("[{n}]"),
-        _ => {
-            if pages.is_empty() {
-                format!("({who}, {})", src.year)
-            } else {
-                format!("({who}, {}, p. {pages})", src.year)
-            }
-        }
+    match st.cite {
+        Cite::AuthorPage if pages.is_empty() => format!("({who})"),
+        Cite::AuthorPage => format!("({who} {pages})"),
+        Cite::AuthorDate { year_sep, .. } if pages.is_empty() => format!("({who}{year_sep}{})", src.year),
+        Cite::AuthorDate { year_sep, pages_sep } => format!("({who}{year_sep}{}{pages_sep}{pages})", src.year),
+        Cite::Number { open, close, pages_sep: Some(sep) } if !pages.is_empty() => format!("{open}{n}{sep}{pages}{close}"),
+        Cite::Number { open, close, .. } => format!("{open}{n}{close}"),
     }
 }
 
-/// Bibliography entry for a style.
-pub fn entry(src: &Source, style: &str, n: usize) -> String {
-    let au = authors(&src.author);
-    let year = if src.year.is_empty() { "n.d.".to_string() } else { src.year.clone() };
-    let pubinfo = [src.city.as_str(), src.publisher.as_str()].iter().filter(|x| !x.is_empty()).copied().collect::<Vec<_>>().join(": ");
-    let journal = if src.journal.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "{}{}{}",
-            src.journal,
-            if src.volume.is_empty() { String::new() } else { format!(", {}", src.volume) },
-            if src.pages.is_empty() { String::new() } else { format!(", {}", src.pages) }
-        )
+/// GB/T 7714 document type code: M book, J journal article, R report, EB/OL web page, Z other;
+/// "/OL" marks a source read online.
+fn gb_type(src: &Source) -> String {
+    let code = match src.kind.to_ascii_lowercase().as_str() {
+        "website" | "web" => return "EB/OL".into(),
+        _ if !src.journal.is_empty() => "J",
+        "book" | "" => "M",
+        "article" => "J",
+        "report" => "R",
+        _ => "Z",
     };
-    let url = if src.url.is_empty() { String::new() } else { format!(" {}", src.url) };
-    match style {
-        "MLA" => {
-            let names = match au.len() {
-                0 => String::new(),
-                1 => au.first().map(|(l, f)| format!("{l}, {f}. ")).unwrap_or_default(),
-                _ => au.first().map(|(l, f)| format!("{l}, {f}, et al. ")).unwrap_or_default(),
-            };
-            let container = if journal.is_empty() { src.publisher.clone() } else { journal };
-            format!("{names}\u{201C}{}.\u{201D} {container}, {year}.{url}", src.title)
+    if src.url.is_empty() { code.into() } else { format!("{code}/OL") }
+}
+
+/// Bibliography entry for a style; `n` is the source's number in numbered styles.
+pub fn entry(src: &Source, style_name: &str, n: usize) -> String {
+    let st = style(style_name);
+    let au = authors(&src.author);
+    let field = |key: &str| -> String {
+        match key {
+            "n" => n.to_string(),
+            "names" => name_list(&au, &st.names),
+            "year" if src.year.is_empty() => "n.d.".into(),
+            "year" => src.year.clone(),
+            "title" => src.title.clone(),
+            "city" => src.city.clone(),
+            "publisher" => src.publisher.clone(),
+            "pub" => [src.city.as_str(), src.publisher.as_str()].into_iter().filter(|x| !x.is_empty()).collect::<Vec<_>>().join(": "),
+            "journal" => src.journal.clone(),
+            "volume" => src.volume.clone(),
+            "pages" => src.pages.clone(),
+            "url" => src.url.clone(),
+            "type" => gb_type(src),
+            _ => String::new(),
         }
-        "Chicago" => {
-            let names = au
-                .iter()
-                .enumerate()
-                .map(|(i, (l, f))| if i == 0 { format!("{l}, {f}") } else { format!("{f} {l}") })
-                .collect::<Vec<_>>()
-                .join(", and ");
-            let rest = if journal.is_empty() { pubinfo } else { journal };
-            format!("{names}. {year}. {}. {rest}.{url}", src.title)
-        }
-        "IEEE" => {
-            let names = au.iter().map(|(l, f)| format!("{} {l}", initials(f))).collect::<Vec<_>>().join(", ");
-            let rest = if journal.is_empty() { pubinfo } else { journal };
-            format!("[{n}] {names}, \u{201C}{},\u{201D} {rest}, {year}.{url}", src.title)
-        }
-        _ => {
-            let names = au.iter().map(|(l, f)| format!("{l}, {}", initials(f))).collect::<Vec<_>>();
-            let names = match names.len() {
-                0 => String::new(),
-                1 => names.first().cloned().unwrap_or_default(),
-                _ => format!(
-                    "{}, & {}",
-                    names.get(..names.len() - 1).map(|x| x.join(", ")).unwrap_or_default(),
-                    names.last().cloned().unwrap_or_default()
-                ),
-            };
-            let rest = if journal.is_empty() { src.publisher.clone() } else { journal };
-            format!("{names} ({year}). {}. {rest}.{url}", src.title)
-        }
-    }
+    };
+    render(if src.journal.is_empty() { st.book } else { st.article }, &field)
 }
 
 fn sources(s: &mut Session, v: &Value) -> CmdResult {
@@ -243,18 +575,90 @@ fn citation(s: &mut Session, v: &Value) -> CmdResult {
     };
     let src = s.doc.sources.iter().find(|x| x.tag == tag).cloned().ok_or_else(|| CmdError::Params(format!("no source `{tag}`")))?;
     let pages = p::str(v, "pages").unwrap_or("").to_string();
-    let n = s.doc.sources.iter().position(|x| x.tag == tag).unwrap_or(0) + 1;
+    let st = style(&s.bib_style);
+    let n = number_of(&s.doc, &bib_order(&s.doc, st), &tag);
     let props = s.typing_props();
     let at = delete_selection(s)?;
     let instr = if pages.is_empty() { format!("CITATION {tag}") } else { format!("CITATION {tag} \\p {pages}") };
-    let end = s.doc.insert_object(&at, InlineObject::Field { instr, result: cite(&src, &s.bib_style, n, &pages), locked: false }, &props)?;
+    let end = s.doc.insert_object(&at, InlineObject::Field { instr, result: cite(&src, st.name, n, &pages), locked: false }, &props)?;
     s.sel = Selection::caret(end);
+    // A new citation can renumber the others (numbered styles count in order of first citation).
+    if st.numbered() {
+        refresh_citations(s)?;
+    }
     Ok(json!({"tag": tag}))
+}
+
+/// The tag and `\p` pages of a CITATION field instruction.
+fn citation_field(instr: &str) -> Option<(&str, &str)> {
+    let mut words = instr.split_whitespace();
+    if words.next()? != "CITATION" {
+        return None;
+    }
+    let tag = words.next()?;
+    let pages = instr.split("\\p").nth(1).map(str::trim).unwrap_or("");
+    Some((tag, pages))
+}
+
+/// Tags cited in the body, in order of first citation.
+fn cited_tags(doc: &Document) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for path in doc.para_paths(StoryRef::Body) {
+        let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
+        for o in &p.objects {
+            if let InlineObject::Field { instr, .. } = o
+                && let Some((tag, _)) = citation_field(instr)
+                && seen.insert(tag.to_string())
+            {
+                out.push(tag.to_string());
+            }
+        }
+    }
+    out
+}
+
+fn author_key(src: &Source) -> String {
+    authors(&src.author).first().map(|a| a.0.to_lowercase()).unwrap_or_else(|| src.title.to_lowercase())
+}
+
+/// Indices into `doc.sources` in bibliography order: the cited sources (every source while
+/// nothing is cited), sorted or in order of first citation as the style asks.
+fn bib_order(doc: &Document, st: &CiteStyle) -> Vec<usize> {
+    let cited = cited_tags(doc);
+    let mut idx: Vec<usize> = if cited.is_empty() {
+        (0..doc.sources.len()).collect()
+    } else if st.order == Order::Cited {
+        cited.iter().filter_map(|t| doc.sources.iter().position(|x| &x.tag == t)).collect()
+    } else {
+        let cited: std::collections::HashSet<&str> = cited.iter().map(String::as_str).collect();
+        doc.sources.iter().enumerate().filter(|(_, x)| cited.contains(x.tag.as_str())).map(|(i, _)| i).collect()
+    };
+    let key =
+        |i: &usize, by_title: bool| doc.sources.get(*i).map(|x| if by_title { x.title.to_lowercase() } else { author_key(x) }).unwrap_or_default();
+    match st.order {
+        Order::Author => idx.sort_by_cached_key(|i| key(i, false)),
+        Order::Title => idx.sort_by_cached_key(|i| key(i, true)),
+        Order::Cited => {}
+    }
+    idx
+}
+
+/// A source's number in a numbered style: its place in the bibliography order.
+fn number_of(doc: &Document, order: &[usize], tag: &str) -> usize {
+    order.iter().position(|&i| doc.sources.get(i).is_some_and(|x| x.tag == tag)).unwrap_or(order.len()).saturating_add(1)
 }
 
 /// Refresh CITATION results and generated lists.
 pub fn update_citations(s: &mut Session) -> Result<(), CmdError> {
-    let style = s.bib_style.clone();
+    refresh_citations(s)?;
+    update_generated(s)
+}
+
+/// Refresh the results of the CITATION fields in the body.
+fn refresh_citations(s: &mut Session) -> Result<(), CmdError> {
+    let st = style(&s.bib_style);
+    let order = bib_order(&s.doc, st);
     for path in s.doc.para_paths(StoryRef::Body) {
         let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
         let updates: Vec<(usize, String)> = p
@@ -262,13 +666,10 @@ pub fn update_citations(s: &mut Session) -> Result<(), CmdError> {
             .iter()
             .enumerate()
             .filter_map(|(k, o)| match o {
-                InlineObject::Field { instr, .. } if instr.trim_start().starts_with("CITATION") => {
-                    let mut it = instr.split_whitespace().skip(1);
-                    let tag = it.next()?.to_string();
-                    let pages = instr.split("\\p").nth(1).map(|x| x.trim().to_string()).unwrap_or_default();
-                    let n = s.doc.sources.iter().position(|x| x.tag == tag)? + 1;
-                    let src = s.doc.sources.get(n - 1)?;
-                    Some((k, cite(src, &style, n, &pages)))
+                InlineObject::Field { instr, .. } => {
+                    let (tag, pages) = citation_field(instr)?;
+                    let src = s.doc.sources.iter().find(|x| x.tag == tag)?;
+                    Some((k, cite(src, st.name, number_of(&s.doc, &order, tag), pages)))
                 }
                 _ => None,
             })
@@ -284,7 +685,7 @@ pub fn update_citations(s: &mut Session) -> Result<(), CmdError> {
         }
         para.touch();
     }
-    update_generated(s)
+    Ok(())
 }
 
 /// Generated lists (BIBLIOGRAPHY, INDEX, table of figures, TOA): a heading paragraph holding
@@ -365,26 +766,12 @@ fn page_of(s: &mut Session, pos: &Pos) -> u32 {
 /// Entry lines (text, hanging indent) for a generated list.
 fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
     if kind.starts_with("BIBLIOGRAPHY") {
-        let style = s.bib_style.clone();
-        let cited: Vec<String> = s
-            .doc
-            .para_paths(StoryRef::Body)
-            .iter()
-            .filter_map(|p| s.doc.para(StoryRef::Body, p))
-            .flat_map(|p| p.objects.iter())
-            .filter_map(|o| match o {
-                InlineObject::Field { instr, .. } if instr.trim_start().starts_with("CITATION") => {
-                    instr.split_whitespace().nth(1).map(str::to_string)
-                }
-                _ => None,
-            })
+        let st = style(&s.bib_style);
+        return bib_order(&s.doc, st)
+            .into_iter()
+            .enumerate()
+            .filter_map(|(k, i)| s.doc.sources.get(i).map(|x| (entry(x, st.name, k.saturating_add(1)), !st.numbered())))
             .collect();
-        let mut srcs: Vec<(usize, Source)> =
-            s.doc.sources.iter().cloned().enumerate().filter(|(_, x)| cited.is_empty() || cited.contains(&x.tag)).collect();
-        if style != "IEEE" {
-            srcs.sort_by_key(|(_, x)| authors(&x.author).first().map(|a| a.0.to_lowercase()).unwrap_or_else(|| x.title.to_lowercase()));
-        }
-        return srcs.into_iter().map(|(i, x)| (entry(&x, &style, i + 1), style != "IEEE")).collect();
     }
     // Collect marks with positions.
     let mut marks: Vec<(String, Pos)> = Vec::new();
@@ -682,5 +1069,112 @@ mod tests {
         // The field sits after the bookmark, so it doesn't mark itself.
         let name = s.doc.bookmarks()[0].0.clone();
         assert_eq!(crate::cmd::references::bookmark_text(&s.doc, &name).as_deref(), Some("Kilns"));
+    }
+
+    fn two_sources(s: &mut Session, a_title: &str) {
+        let a = json!({"tag": "A", "author": "Rivera, Alex; Chen, Mei", "title": a_title, "year": "2021", "publisher": "Harbor Books", "city": "Portland"});
+        let b = json!({"tag": "B", "author": "Okafor, Ngozi", "title": "Kilns and Clay", "year": "2019", "journal": "Studio Quarterly", "volume": "4", "pages": "10-20"});
+        s.run("references.sources", &json!({"add": a})).unwrap();
+        s.run("references.sources", &json!({"add": b})).unwrap();
+    }
+
+    #[test]
+    fn author_date_styles_cite_and_list() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        two_sources(&mut s, "Shared Spaces");
+        s.run("references.citation", &json!({"tag": "A", "pages": "12"})).unwrap();
+        s.run("references.citation", &json!({"tag": "B"})).unwrap();
+        s.run("text.newParagraph", &json!({})).unwrap();
+        s.run("references.bibliography", &json!({})).unwrap();
+        let cases = [
+            (
+                "Harvard (Anglia)",
+                "(Rivera and Chen, 2021, p. 12)(Okafor, 2019)",
+                "Okafor, N., 2019. Kilns and Clay. Studio Quarterly, 4, pp. 10-20.\nRivera, A. and Chen, M., 2021. Shared Spaces. Portland: Harbor Books.",
+            ),
+            (
+                "ISO 690 - First Element and Date",
+                "(Rivera and Chen 2021, p. 12)(Okafor 2019)",
+                "OKAFOR, Ngozi, 2019. Kilns and Clay. Studio Quarterly, 4, 10-20.\nRIVERA, Alex and CHEN, Mei, 2021. Shared Spaces. Portland: Harbor Books.",
+            ),
+            (
+                "turabian",
+                "(Rivera and Chen 2021, 12)(Okafor 2019)",
+                "Okafor, Ngozi. “Kilns and Clay.” Studio Quarterly 4 (2019): 10-20.\nRivera, Alex, and Mei Chen. Shared Spaces. Portland: Harbor Books, 2021.",
+            ),
+        ];
+        for (style, cites, list) in cases {
+            s.run("references.citationStyle", &json!({"style": style})).unwrap();
+            let t = s.doc.plain_text(StoryRef::Body);
+            assert!(t.starts_with(cites) && t.contains(list), "{style}: {t}");
+        }
+        assert!(s.run("references.citationStyle", &json!({"style": "Vancouver"})).unwrap_err().to_string().contains("Turabian"));
+        assert_eq!(s.bib_style, "Turabian", "an unknown style keeps the current one");
+    }
+
+    #[test]
+    fn numbered_styles_count_in_order_of_first_citation() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        two_sources(&mut s, "Shared Spaces");
+        s.run("references.citationStyle", &json!({"style": "ISO 690 (numerical)"})).unwrap();
+        s.run("text.insert", &json!({"text": "Later "})).unwrap();
+        s.run("references.citation", &json!({"tag": "A", "pages": "12"})).unwrap();
+        assert_eq!(fields(&s)[0].1, "(1, p. 12)");
+        // Citing B earlier in the text makes it number 1 and renumbers A.
+        s.run("caret.docStart", &json!({})).unwrap();
+        s.run("references.citation", &json!({"tag": "B"})).unwrap();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("text.newParagraph", &json!({})).unwrap();
+        s.run("references.bibliography", &json!({})).unwrap();
+        let cases = [
+            (
+                "ISO 690 (numerical)",
+                "(1)Later (2, p. 12)",
+                "1. OKAFOR, Ngozi. Kilns and Clay. Studio Quarterly. 2019, 4, 10-20.\n2. RIVERA, Alex and CHEN, Mei. Shared Spaces. Portland: Harbor Books, 2021.",
+            ),
+            (
+                "GB/T 7714",
+                "[1]Later [2, 12]",
+                "[1] OKAFOR N. Kilns and Clay[J]. Studio Quarterly, 2019, 4: 10-20.\n[2] RIVERA A, CHEN M. Shared Spaces[M]. Portland: Harbor Books, 2021.",
+            ),
+            (
+                "SIST02",
+                "(1)Later (2, p. 12)",
+                "1) Okafor, Ngozi. Kilns and Clay. Studio Quarterly. 2019, vol. 4, p. 10-20.\n2) Rivera, Alex; Chen, Mei. Shared Spaces. Portland, Harbor Books, 2021.",
+            ),
+            (
+                "IEEE",
+                "[1]Later [2]",
+                "[1] N. Okafor, “Kilns and Clay,” Studio Quarterly, 4, 10-20, 2019.\n[2] A. Rivera, M. Chen, “Shared Spaces,” Portland: Harbor Books, 2021.",
+            ),
+        ];
+        for (style, cites, list) in cases {
+            s.run("references.citationStyle", &json!({"style": style})).unwrap();
+            let t = s.doc.plain_text(StoryRef::Body);
+            assert!(t.starts_with(cites) && t.contains(list), "{style}: {t}");
+        }
+    }
+
+    #[test]
+    fn gost_numbers_follow_its_name_or_title_sort() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        two_sources(&mut s, "Atlas of Studios");
+        s.run("references.citation", &json!({"tag": "A"})).unwrap();
+        s.run("references.citation", &json!({"tag": "B", "pages": "15"})).unwrap();
+        s.run("text.newParagraph", &json!({})).unwrap();
+        s.run("references.bibliography", &json!({})).unwrap();
+        let okafor = "Okafor N. Kilns and Clay // Studio Quarterly. – 2019. – Vol. 4. – P. 10-20.";
+        let rivera = "Rivera A., Chen M. Atlas of Studios. – Portland : Harbor Books, 2021.";
+        // Word's style and style-sheet names pick the same styles.
+        s.run("references.citationStyle", &json!({"style": "\\GostName.XSL"})).unwrap();
+        assert_eq!(s.bib_style, "GOST (name sort)");
+        let t = s.doc.plain_text(StoryRef::Body);
+        assert!(t.starts_with("[2][1, p. 15]") && t.contains(&format!("1. {okafor}\n2. {rivera}")), "{t}");
+        s.run("references.citationStyle", &json!({"style": "GOST - Title Sort"})).unwrap();
+        let t = s.doc.plain_text(StoryRef::Body);
+        assert!(t.starts_with("[1][2, p. 15]") && t.contains(&format!("1. {rivera}\n2. {okafor}")), "{t}");
+        assert_eq!(find_style("ISO 690 - Numerical Reference").map(|x| x.name), Some("ISO 690 (numerical)"));
+        assert_eq!(find_style("Harvard - Anglia 2008").map(|x| x.name), Some("Harvard (Anglia)"));
+        assert!(find_style("").is_none() && find_style("Vancouver").is_none());
     }
 }

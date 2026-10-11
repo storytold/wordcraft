@@ -251,7 +251,7 @@ fn controls(tab: &str) -> Vec<Control> {
             c("Researcher", "references.researcher"),
             c("Insert Citation", "references.citation"),
             c("Manage Sources", "references.sources"),
-            c("Style: APA", "references.citationStyle"),
+            m("Citation Style", "references.citationStyle"),
             c("Bibliography", "references.bibliography"),
             c("Insert Caption", "references.caption"),
             c("Insert Table of Figures", "references.tableOfFigures"),
