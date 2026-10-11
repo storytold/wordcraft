@@ -61,6 +61,16 @@ fn is_range_instr(instr: &str) -> bool {
     instr.trim_start().get(..5).is_some_and(|k| k.eq_ignore_ascii_case("ADDIN"))
 }
 
+/// The last paragraph of a block list: its last block, or inside a final table the last
+/// paragraph of its last cell (nested tables to [`MAX_TABLE_DEPTH`]).
+fn last_para_mut(out: &mut Blocks, depth: usize) -> Option<&mut Paragraph> {
+    match Arc::make_mut(out.last_mut()?) {
+        Block::Para(p) => Some(p),
+        Block::Table(t) if depth < MAX_TABLE_DEPTH => last_para_mut(&mut t.rows.last_mut()?.cells.last_mut()?.blocks, depth + 1),
+        Block::Table(_) => None,
+    }
+}
+
 /// The field that buffers content now: the innermost one that isn't a range field, unless it
 /// has spilled (then content goes straight into the paragraph).
 fn sink(sc: &mut StoryCtx) -> Option<&mut FieldState> {
@@ -187,12 +197,13 @@ impl Reader<'_> {
         }
     }
 
-    /// Markers left over at the end of a story go to its last paragraph.
+    /// Markers left over at the end of a story go to its last paragraph (after a final table:
+    /// the last paragraph of its last cell, so a bookmark around the table keeps its end).
     pub fn flush_pending(&mut self, sc: &mut StoryCtx, out: &mut Blocks) {
         if sc.pending.is_empty() {
             return;
         }
-        if let Some(Block::Para(p)) = out.last_mut().map(Arc::make_mut) {
+        if let Some(p) = last_para_mut(out, 0) {
             for o in sc.pending.drain(..) {
                 let props = p.runs.last().map(|r| r.props.clone()).unwrap_or_default();
                 p.text.push(wordcraft_doc::para::OBJ);
@@ -604,6 +615,20 @@ impl Reader<'_> {
         if f.phase == Phase::Instr && !nested_in_instr && is_range_instr(&f.instr) {
             // A range field with no result yet.
             self.emit_obj(sc, pb, InlineObject::FieldStart { instr: f.instr.trim().to_string(), locked: f.locked }, &f.props);
+            self.emit_obj(sc, pb, InlineObject::FieldEnd, &f.props);
+            return;
+        }
+        // A cached result holding a picture, chart or shape (`INCLUDEPICTURE`'s embedded
+        // picture) can't be a text result: keep the field as a range around it so the picture
+        // stays in the document and is saved again. The linked source is never read.
+        if !nested_in_instr && f.buf.iter().any(|(it, _)| matches!(it, Item::Obj(o) if o.frame().is_some())) {
+            self.emit_obj(sc, pb, InlineObject::FieldStart { instr: f.instr.trim().to_string(), locked: f.locked }, &f.props);
+            for (it, p) in f.buf {
+                match it {
+                    Item::Text(t) => self.emit_text(sc, pb, &t, &p),
+                    Item::Obj(o) => self.emit_obj(sc, pb, o, &p),
+                }
+            }
             self.emit_obj(sc, pb, InlineObject::FieldEnd, &f.props);
             return;
         }
