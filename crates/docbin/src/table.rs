@@ -244,7 +244,16 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
                 }
             }
         }
-        Row { props: RowProps { height: info.height, height_rule: info.height_rule, header: info.header, cant_split: info.cant_split }, cells }
+        Row {
+            props: RowProps {
+                height: info.height,
+                height_rule: info.height_rule,
+                header: info.header,
+                cant_split: info.cant_split,
+                fmt_change: None,
+            },
+            cells,
+        }
     }
     fn flush_table(out: &mut Blocks, rows: &mut Vec<Row>, cells: &mut Vec<Cell>, cell: &mut Blocks, grid: &[f32], props: &TableProps, nested: bool) {
         if !cells.is_empty() || !cell.is_empty() {

@@ -3098,15 +3098,6 @@ checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
 
 [[package]]
 name = "quick-xml"
-version = "0.38.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b66c2058c55a409d601666cffe35f04333cf1013010882cec174a7467cd4e21c"
-dependencies = [
- "memchr",
-]
-
-[[package]]
-name = "quick-xml"
 version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
@@ -4404,7 +4395,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "338e30461b3a2b67d70eb30a6d89f8e0c93a833e07d2ae89085cd070c4a00ac0"
 dependencies = [
  "proc-macro2",
- "quick-xml 0.41.0",
+ "quick-xml",
  "quote",
 ]
 
@@ -5007,7 +4998,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "wordcraft"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "arboard",
  "eframe",
@@ -5028,7 +5019,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-cli"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "serde_json",
  "wordcraft-doc",
@@ -5040,11 +5031,11 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-control-key"
-version = "0.4.0"
+version = "0.5.0"
 
 [[package]]
 name = "wordcraft-doc"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "proptest",
  "serde",
@@ -5056,7 +5047,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-docbin"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "cfb",
  "log",
@@ -5069,7 +5060,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-docx"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "aes",
  "base64",
@@ -5079,7 +5070,7 @@ dependencies = [
  "image",
  "log",
  "proptest",
- "quick-xml 0.38.4",
+ "quick-xml",
  "sha1",
  "sha2",
  "thiserror 2.0.21",
@@ -5091,7 +5082,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-engine"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "image",
  "js-sys",
@@ -5117,7 +5108,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-fonts"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "harfrust 0.13.3",
  "kurbo",
@@ -5128,12 +5119,12 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-formats"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "image",
  "log",
  "proptest",
- "quick-xml 0.38.4",
+ "quick-xml",
  "wordcraft-doc",
  "wordcraft-geom",
  "zip",
@@ -5141,14 +5132,14 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-geom"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "wordcraft-layout"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "js-sys",
  "log",
@@ -5165,7 +5156,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-mcp"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "log",
  "serde_json",
@@ -5177,7 +5168,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-metafile"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "kurbo",
  "thiserror 2.0.21",
@@ -5185,7 +5176,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-pdf"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "hayro-cmap",
  "hayro-interpret",
@@ -5205,7 +5196,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-proof"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "log",
  "miniz_oxide 0.8.9",
@@ -5214,7 +5205,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-render"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "image",
  "log",
@@ -5228,7 +5219,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-ui-egui"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "egui",
  "egui_kittest",
@@ -5250,7 +5241,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-web"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "eframe",
  "egui",
@@ -5268,7 +5259,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-zotero"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "log",
  "proptest",
@@ -5370,7 +5361,7 @@ checksum = "9440ea3e5aeabb0ac63af70daf835274065238cdd0cec83418f417eae38bacee"
 
 [[package]]
 name = "xtask"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "serde_json",
 ]

@@ -451,6 +451,26 @@ pub fn stem_darkening(ppem: f64) -> f64 {
     FACTOR.iter().map(|f| (ppem * f).min(MAX_PX)).sum::<f64>() / 2.0
 }
 
+/// A wavy line from `a` to `b` at height `y`; at most 20 000 units long, so a huge extent can't make it endless.
+fn wave_path(a: f64, b: f64, y: f64, amp: f64) -> BezPath {
+    let step = amp * 2.0;
+    let mut p = BezPath::new();
+    p.move_to((a, y));
+    let mut x = a;
+    let mut up = true;
+    while x < b && x - a < 20_000.0 {
+        let nx = (x + step).min(b);
+        // Past about 1e16 a step no longer changes `x`: stop instead of pushing curves forever.
+        if nx <= x {
+            break;
+        }
+        p.quad_to(((x + nx) / 2.0, if up { y - amp } else { y + amp }), (nx, y));
+        x = nx;
+        up = !up;
+    }
+    p
+}
+
 fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visible: &kurbo::Rect, opts: &RenderOptions) {
     match it {
         Draw::Figure { draws, .. } => {
@@ -484,20 +504,9 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 ctx.stroke_path(&p);
             };
             if *stroke == Stroke::Wave {
-                let mut p = BezPath::new();
                 let (a, b) = ((*x0).min(*x1) as f64, (*x0).max(*x1) as f64);
-                let y = *y0 as f64;
                 let amp = (w * 1.2).max(0.8);
-                let step = amp * 2.0;
-                p.move_to((a, y));
-                let mut x = a;
-                let mut up = true;
-                while x < b && x - a < 20_000.0 {
-                    let nx = (x + step).min(b);
-                    p.quad_to(((x + nx) / 2.0, if up { y - amp } else { y + amp }), (nx, y));
-                    x = nx;
-                    up = !up;
-                }
+                let p = wave_path(a, b, *y0 as f64, amp);
                 ctx.set_stroke(kurbo::Stroke::new(w * 0.8));
                 ctx.stroke_path(&p);
                 return;
@@ -639,6 +648,17 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 ctx.stroke_path(&path);
             }
         }
+        Draw::Ink { pts, color: c, width, alpha } => {
+            let Some(path) = ink_path(pts) else { return };
+            if !path.bounding_box().inflate(*width as f64, *width as f64).overlaps(*visible) {
+                return;
+            }
+            ctx.set_transform(view);
+            ctx.set_paint(color(opts.ink(*c), *alpha));
+            let w = if width.is_finite() { width.clamp(0.25, 200.0) } else { 1.0 };
+            ctx.set_stroke(kurbo::Stroke::new(w as f64).with_caps(kurbo::Cap::Round).with_join(kurbo::Join::Round));
+            ctx.stroke_path(&path);
+        }
         Draw::Shape { rect, kind, fill, stroke, stroke_width, effects } => {
             let r = kurbo::Rect::new(rect.x as f64, rect.y as f64, rect.right() as f64, rect.bottom() as f64);
             let path = shape_path(*kind, r);
@@ -714,6 +734,28 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
     }
 }
 
+/// The line through an ink stroke's points (finite ones only); a single point is a dot.
+fn ink_path(pts: &[(f32, f32)]) -> Option<BezPath> {
+    let mut p = BezPath::new();
+    let mut last = None;
+    for &(x, y) in pts.iter().filter(|(x, y)| x.is_finite() && y.is_finite() && x.abs() < 1e6 && y.abs() < 1e6) {
+        let pt = (x as f64, y as f64);
+        if last.is_none() {
+            p.move_to(pt);
+        } else {
+            p.line_to(pt);
+        }
+        last = Some(pt);
+    }
+    // Only sanitized points reach the path: a tap is drawn at the one usable point.
+    let only = last?;
+    if p.elements().len() == 1 {
+        // A tap: a zero-length line, which round caps draw as a dot.
+        p.line_to(only);
+    }
+    Some(p)
+}
+
 /// Outline of a basic shape in a rectangle.
 pub fn shape_path(kind: ShapeKind, r: kurbo::Rect) -> BezPath {
     let (cx, cy) = (r.center().x, r.center().y);
@@ -730,7 +772,8 @@ pub fn shape_path(kind: ShapeKind, r: kurbo::Rect) -> BezPath {
         p
     };
     match kind {
-        ShapeKind::Rectangle | ShapeKind::TextBox => r.to_path(0.1),
+        // A freeform is drawn from its own paths; without them, its frame.
+        ShapeKind::Rectangle | ShapeKind::TextBox | ShapeKind::Freeform => r.to_path(0.1),
         ShapeKind::RoundedRectangle => kurbo::RoundedRect::from_rect(r, r.width().min(r.height()) * 0.16).to_path(0.1),
         ShapeKind::Ellipse => kurbo::Ellipse::from_rect(r).to_path(0.1),
         ShapeKind::Triangle => poly(&[(cx, r.y0), (r.x1, r.y1), (r.x0, r.y1)]),
@@ -842,6 +885,7 @@ mod tests {
                 stroke_width: 0.0,
                 float: Default::default(),
                 story: None,
+                freeform: None,
                 effects,
             };
             let at = wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 0 };
@@ -932,7 +976,15 @@ mod tests {
             .unwrap();
         let media = d.add_media(png, "png");
         let mut hp = wordcraft_doc::Paragraph::new();
-        let obj = wordcraft_doc::para::InlineObject::Image { media, w: 40.0, h: 40.0, alt: String::new(), float: Default::default(), crop: [0.0; 4] };
+        let obj = wordcraft_doc::para::InlineObject::Image {
+            media,
+            w: 40.0,
+            h: 40.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+        };
         hp.insert_object(0, obj, &Default::default()).unwrap();
         let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(hp)]);
         d.last_section.headers.default = Some(id);
@@ -995,7 +1047,15 @@ mod tests {
         let mut d = Document::new();
         let media = d.add_media(red_right_half_emf(), "emf");
         let mut p = wordcraft_doc::Paragraph::new();
-        let obj = wordcraft_doc::para::InlineObject::Image { media, w: 70.0, h: 70.0, alt: String::new(), float: Default::default(), crop: [0.0; 4] };
+        let obj = wordcraft_doc::para::InlineObject::Image {
+            media,
+            w: 70.0,
+            h: 70.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+        };
         p.insert_object(0, obj, &Default::default()).unwrap();
         d.body = vec![wordcraft_doc::para_block(p)];
         let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
@@ -1023,7 +1083,15 @@ mod tests {
         let mut d = Document::new();
         let media = d.add_media(emf, "emf");
         let mut p = wordcraft_doc::Paragraph::new();
-        let obj = wordcraft_doc::para::InlineObject::Image { media, w: 70.0, h: 70.0, alt: String::new(), float: Default::default(), crop: [0.0; 4] };
+        let obj = wordcraft_doc::para::InlineObject::Image {
+            media,
+            w: 70.0,
+            h: 70.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+        };
         p.insert_object(0, obj, &Default::default()).unwrap();
         d.body = vec![wordcraft_doc::para_block(p)];
         let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
@@ -1049,7 +1117,15 @@ mod tests {
         // The header alone has no records, so the metafile does not parse.
         let media = d.add_media(red_right_half_emf()[..88].to_vec(), "emf");
         let mut p = wordcraft_doc::Paragraph::new();
-        let obj = wordcraft_doc::para::InlineObject::Image { media, w: 70.0, h: 70.0, alt: String::new(), float: Default::default(), crop: [0.0; 4] };
+        let obj = wordcraft_doc::para::InlineObject::Image {
+            media,
+            w: 70.0,
+            h: 70.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+        };
         p.insert_object(0, obj, &Default::default()).unwrap();
         d.body = vec![wordcraft_doc::para_block(p)];
         let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());

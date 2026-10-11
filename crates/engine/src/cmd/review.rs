@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use wordcraft_doc::para::InlineObject;
 use wordcraft_doc::{Comment, Paragraph, PartKind, Pos, StoryRef, para_block};
 
-use super::{now_iso, pos_json, sel_result};
+use super::{fmt_revisions, now_iso, pos_json, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -41,6 +41,11 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({"showMarkup": s.view.show_markup}))
         })
         .pure(),
+        CommandSpec::new("review.trackingOptions", "Track Changes Options", "Review › Tracking", tracking_options)
+            .params(
+                r#"{"comments"?: bool, "ink"?: bool, "insertionsDeletions"?: bool, "formatting"?: bool, "balloons"?: "revisions|inline|commentsAndFormatting", "insertMark"?: "underline|doubleUnderline|bold|italic|strikethrough|colorOnly|none", "insertColor"?: "byAuthor" | "RRGGBB", "deleteMark"?: "strikethrough|doubleStrikethrough|hidden|caret|hash|underline|colorOnly", "deleteColor"?: "byAuthor" | "RRGGBB", "changedLines"?: "outside|left|right|none", "changedLinesColor"?: "auto" | "RRGGBB", "trackFormatting"?: bool} → the options (omit all to read them)"#,
+            )
+            .pure(),
         CommandSpec::new("review.wordCount", "Word Count", "Review › Proofing", word_count).params(r#"{"includeTextBoxes"?: bool}"#).pure(),
         CommandSpec::new("review.changes", "Reviewing Pane", "Review › Tracking", list_changes).pure(),
         CommandSpec::new("review.spelling", "Spelling & Grammar", "Review › Proofing", next_issue).key("F7").pure(),
@@ -256,7 +261,9 @@ fn nav_comment(s: &mut Session, dir: i32) -> CmdResult {
     sel_result(s)
 }
 
-/// Accept or reject a revision range in one paragraph; `mark` includes its paragraph mark.
+/// Accept or reject a revision range in one paragraph; `mark` includes its paragraph mark (and
+/// the section break on it), `props` the paragraph's own formatting change.
+#[allow(clippy::too_many_arguments)]
 fn resolve_para(
     s: &mut Session,
     story: StoryRef,
@@ -264,26 +271,42 @@ fn resolve_para(
     from: usize,
     to: usize,
     mark: bool,
+    props: bool,
     accept: bool,
 ) -> Result<(), CmdError> {
     let para = s.doc.para_mut(story, path)?;
-    let ranges: Vec<(usize, usize, bool, bool)> = para
+    if props && (para.props.fmt_change.is_some() || para.props.num_change.is_some()) {
+        fmt_revisions::resolve_para(&mut para.props, accept);
+        para.touch();
+    }
+    let ranges: Vec<(usize, usize, bool, bool, bool)> = para
         .run_ranges()
         .filter(|(r, _)| r.end > from && r.start < to)
-        .map(|(r, c)| (r.start.max(from), r.end.min(to), c.ins.is_some(), c.del.is_some()))
+        .map(|(r, c)| (r.start.max(from), r.end.min(to), c.ins.is_some(), c.del.is_some(), c.fmt_change.is_some()))
         .collect();
-    for (a, b, ins, del) in ranges.into_iter().rev() {
+    for (a, b, ins, del, fmt) in ranges.into_iter().rev() {
         if (del && accept) || (ins && !accept) {
             para.delete(a, b)?;
-        } else if ins || del {
+        } else if ins || del || fmt {
             para.format(a, b, &|c| {
                 c.ins = None;
                 c.del = None;
+                fmt_revisions::resolve_char(c, accept);
             })?;
         }
     }
+    if !mark {
+        return Ok(());
+    }
+    if para.mark.fmt_change.is_some() || para.section.as_ref().is_some_and(|x| x.fmt_change.is_some()) {
+        fmt_revisions::resolve_char(&mut para.mark, accept);
+        if let Some(sec) = para.section.as_deref_mut() {
+            fmt_revisions::resolve_section(sec, accept);
+        }
+        para.touch();
+    }
     let (ins, del) = (para.mark.ins, para.mark.del);
-    if !mark || (ins.is_none() && del.is_none()) {
+    if ins.is_none() && del.is_none() {
         return Ok(());
     }
     // An inserted paragraph mark that is rejected, or a deleted one that is accepted, goes away:
@@ -299,9 +322,49 @@ fn resolve_para(
     Ok(())
 }
 
+/// Accept or reject the changes of the table cell `path` is in: the table's, its row's and the
+/// cell's own. Returns whether there were any.
+fn resolve_cell(s: &mut Session, story: StoryRef, path: &wordcraft_doc::Path, accept: bool) -> Result<bool, CmdError> {
+    let Some((tp, r, c)) = path.cell() else { return Ok(false) };
+    let has = s.doc.table(story, &tp).is_some_and(|t| {
+        let row = t.rows.get(r);
+        t.props.fmt_change.is_some()
+            || row.is_some_and(|x| x.props.fmt_change.is_some())
+            || row.and_then(|x| x.cells.get(c)).is_some_and(|x| x.props.fmt_change.is_some())
+    });
+    if !has {
+        return Ok(false);
+    }
+    let t = s.doc.table_mut(story, &tp)?;
+    fmt_revisions::resolve_table(t, accept);
+    if let Some(row) = t.rows.get_mut(r) {
+        fmt_revisions::resolve_row(row, accept);
+        if let Some(cell) = row.cells.get_mut(c) {
+            fmt_revisions::resolve_cell(cell, accept);
+        }
+    }
+    Ok(true)
+}
+
+/// A tracked change, for navigation and the Reviewing Pane: its range, kind (`insert`,
+/// `delete`, `format`), revision, and for a formatting change the properties it set.
+struct Change {
+    a: Pos,
+    b: Pos,
+    kind: &'static str,
+    rev: Option<u32>,
+    props: Vec<Value>,
+}
+
+impl Change {
+    fn format(a: Pos, b: Pos, rev: u32, props: Vec<Value>) -> Change {
+        Change { a, b, kind: "format", rev: Some(rev), props }
+    }
+}
+
 /// The tracked paragraph mark at the end of the paragraph at `path`, as a change range: from
 /// the paragraph's end to the start of the next paragraph (or the end itself when none follows).
-fn mark_change(s: &Session, story: StoryRef, path: &wordcraft_doc::Path) -> Option<(Pos, Pos, &'static str, Option<u32>)> {
+fn mark_change(s: &Session, story: StoryRef, path: &wordcraft_doc::Path) -> Option<Change> {
     let p = s.doc.para(story, path)?;
     let kind = if p.mark.ins.is_some() {
         "insert"
@@ -312,7 +375,7 @@ fn mark_change(s: &Session, story: StoryRef, path: &wordcraft_doc::Path) -> Opti
     };
     let a = Pos { story, path: path.clone(), off: p.len() };
     let b = if super::has_next_para(s, story, path) { Pos { story, path: path.with_last(path.last().saturating_add(1)), off: 0 } } else { a.clone() };
-    Some((a, b, kind, p.mark.ins.or(p.mark.del)))
+    Some(Change { a, b, kind, rev: p.mark.ins.or(p.mark.del), props: Vec::new() })
 }
 
 fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
@@ -320,9 +383,15 @@ fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
     for st in stories {
         for path in s.doc.para_paths(st).into_iter().rev() {
             let len = s.doc.para(st, &path).map(|p| p.len()).unwrap_or(0);
-            resolve_para(s, st, &path, 0, len, true, accept)?;
+            resolve_para(s, st, &path, 0, len, true, true, accept)?;
         }
     }
+    // Tables, rows, cells and sections.
+    fmt_revisions::resolve_containers(&mut s.doc.body, accept, 0);
+    for part in s.doc.parts.values_mut() {
+        fmt_revisions::resolve_containers(&mut part.blocks, accept, 0);
+    }
+    fmt_revisions::resolve_section(&mut s.doc.last_section, accept);
     s.doc.revisions.clear();
     s.clamp_selection();
     sel_result(s)
@@ -332,19 +401,35 @@ fn resolve_sel(s: &mut Session, accept: bool) -> CmdResult {
     let (a, b) = s.sel.ordered();
     // A caret right before a tracked paragraph mark (and no tracked text around it): that mark.
     let mut caret_mark = None;
+    // A caret in a paragraph whose own formatting changed (and no tracked text around it).
+    let mut caret_props = None;
+    let ranged = a != b;
     let (a, b) = if a == b {
-        // The change at the caret: the run around it, else the paragraph mark right after it.
-        let found = s
-            .doc
-            .para_at(&a)
-            .and_then(|p| p.run_ranges().find(|(r, c)| r.start <= a.off && a.off <= r.end && (c.ins.is_some() || c.del.is_some())).map(|(r, _)| r));
+        // The change at the caret: the run around it, else the paragraph mark right after it,
+        // else the paragraph's formatting, else the table cell's.
+        let found = s.doc.para_at(&a).and_then(|p| {
+            p.run_ranges()
+                .find(|(r, c)| r.start <= a.off && a.off <= r.end && (c.ins.is_some() || c.del.is_some() || c.fmt_change.is_some()))
+                .map(|(r, _)| r)
+        });
+        let para_fmt = s.doc.para_at(&a).is_some_and(|p| p.props.fmt_change.is_some() || p.props.num_change.is_some());
+        let mark_fmt = s.doc.para_at(&a).is_some_and(|p| a.off == p.len() && p.mark.fmt_change.is_some());
         match found {
             Some(r) => (Pos { off: r.start, ..a.clone() }, Pos { off: r.end, ..a }),
-            None if mark_change(s, a.story, &a.path).is_some_and(|m| m.0 == a) => {
+            None if mark_fmt || mark_change(s, a.story, &a.path).is_some_and(|m| m.a == a) => {
                 caret_mark = Some(a.path.clone());
                 (a.clone(), a)
             }
-            None => return nav_change(s, 1),
+            None if para_fmt => {
+                caret_props = Some(a.path.clone());
+                (a.clone(), a)
+            }
+            None => {
+                if resolve_cell(s, a.story, &a.path, accept)? {
+                    return sel_result(s);
+                }
+                return nav_change(s, 1);
+            }
         }
     } else {
         (a, b)
@@ -355,39 +440,121 @@ fn resolve_sel(s: &mut Session, accept: bool) -> CmdResult {
         let to = if path == b.path { b.off } else { len };
         // A paragraph's mark is in the selection when the selection goes on past it.
         let mark = path != b.path || caret_mark.as_ref() == Some(&path);
-        resolve_para(s, a.story, &path, from, to, mark, accept)?;
+        let props = (ranged && (path != b.path || to > from)) || caret_props.as_ref() == Some(&path);
+        resolve_para(s, a.story, &path, from, to, mark, props, accept)?;
+        if ranged {
+            resolve_cell(s, a.story, &path, accept)?;
+        }
     }
     s.sel = Selection::caret(a);
     s.clamp_selection();
     sel_result(s)
 }
 
-fn changes(s: &Session) -> Vec<(Pos, Pos, &'static str, Option<u32>)> {
-    let mut out = Vec::new();
+fn changes(s: &Session) -> Vec<Change> {
+    let mut out: Vec<Change> = Vec::new();
+    let mk = |path: &wordcraft_doc::Path, off| Pos { story: StoryRef::Body, path: path.clone(), off };
     for path in s.doc.para_paths(StoryRef::Body) {
         let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
+        // A table's, row's and cell's changes sit at the start of the cell's first paragraph.
+        if path.last() == 0
+            && let Some((tp, r, c)) = path.cell()
+            && let Some(t) = s.doc.table(StoryRef::Body, &tp)
+        {
+            let row = t.rows.get(r);
+            let cell = row.and_then(|x| x.cells.get(c));
+            let found = [
+                (r == 0 && c == 0).then(|| t.props.fmt_change.as_ref().map(|ch| (ch.rev, fmt_revisions::table_diff(&t.props)))).flatten(),
+                (c == 0).then(|| row.and_then(|x| x.props.fmt_change.as_ref().map(|ch| (ch.rev, fmt_revisions::row_diff(&x.props))))).flatten(),
+                cell.and_then(|x| x.props.fmt_change.as_ref().map(|ch| (ch.rev, fmt_revisions::cell_diff(&x.props)))),
+            ];
+            for (rev, props) in found.into_iter().flatten() {
+                out.push(Change::format(mk(&path, 0), mk(&path, 0), rev, props));
+            }
+        }
+        if let Some(ch) = &p.props.fmt_change {
+            out.push(Change::format(mk(&path, 0), mk(&path, p.len()), ch.rev, fmt_revisions::para_diff(&p.props)));
+        }
         for (r, c) in p.run_ranges() {
             let kind = if c.ins.is_some() {
                 "insert"
             } else if c.del.is_some() {
                 "delete"
             } else {
-                continue;
+                ""
             };
-            let mk = |off| Pos { story: StoryRef::Body, path: path.clone(), off };
-            out.push((mk(r.start), mk(r.end), kind, c.ins.or(c.del)));
+            if !kind.is_empty() {
+                out.push(Change { a: mk(&path, r.start), b: mk(&path, r.end), kind, rev: c.ins.or(c.del), props: Vec::new() });
+            }
+            let Some(ch) = &c.fmt_change else { continue };
+            let props = fmt_revisions::char_diff(c);
+            // Neighbouring runs changed the same way by the same revision are one change.
+            if let Some(last) =
+                out.last_mut().filter(|l| l.kind == "format" && l.rev == Some(ch.rev) && l.b == mk(&path, r.start) && l.props == props)
+            {
+                last.b = mk(&path, r.end);
+            } else {
+                out.push(Change::format(mk(&path, r.start), mk(&path, r.end), ch.rev, props));
+            }
+        }
+        if let Some(ch) = &p.mark.fmt_change {
+            let end = mk(&path, p.len());
+            out.push(Change::format(end.clone(), end, ch.rev, fmt_revisions::char_diff(&p.mark)));
         }
         out.extend(mark_change(s, StoryRef::Body, &path));
+        if let Some(ch) = p.section.as_ref().and_then(|x| x.fmt_change.as_ref().map(|ch| (ch.rev, x))) {
+            let end = mk(&path, p.len());
+            out.push(Change::format(end.clone(), end, ch.0, fmt_revisions::section_diff(ch.1)));
+        }
+    }
+    if let Some(ch) = &s.doc.last_section.fmt_change {
+        let end = s.doc.end_of(StoryRef::Body);
+        out.push(Change::format(end.clone(), end, ch.rev, fmt_revisions::section_diff(&s.doc.last_section)));
     }
     out
+}
+
+/// The formatting changes in the body, for balloons: (position, author, properties set).
+pub fn format_changes(s: &Session) -> Vec<(Pos, String, Vec<Value>)> {
+    changes(s)
+        .into_iter()
+        .filter(|c| c.kind == "format")
+        .map(|c| {
+            let author = c.rev.and_then(|r| s.doc.revisions.get(r as usize)).map(|r| r.author.clone()).unwrap_or_default();
+            (c.a, author, c.props)
+        })
+        .collect()
+}
+
+/// Whether the document has any tracked formatting change (cheap: stops at the first).
+pub fn has_format_changes(doc: &wordcraft_doc::Document) -> bool {
+    if doc.last_section.fmt_change.is_some() {
+        return true;
+    }
+    doc.para_paths(StoryRef::Body).iter().any(|path| {
+        doc.para(StoryRef::Body, path).is_some_and(|p| {
+            p.props.fmt_change.is_some()
+                || p.mark.fmt_change.is_some()
+                || p.runs.iter().any(|r| r.props.fmt_change.is_some())
+                || p.section.as_ref().is_some_and(|x| x.fmt_change.is_some())
+                || path.cell().and_then(|(tp, r, c)| doc.table(StoryRef::Body, &tp).map(|t| (t, r, c))).is_some_and(|(t, r, c)| {
+                    t.props.fmt_change.is_some()
+                        || t.rows.get(r).is_some_and(|x| x.props.fmt_change.is_some() || x.cells.get(c).is_some_and(|x| x.props.fmt_change.is_some()))
+                })
+        })
+    })
 }
 
 fn nav_change(s: &mut Session, dir: i32) -> CmdResult {
     let list = changes(s);
     let caret = s.sel.ordered();
-    let t = if dir > 0 { list.iter().find(|c| c.0 >= caret.1).or(list.first()) } else { list.iter().rev().find(|c| c.1 <= caret.0).or(list.last()) };
-    if let Some((a, b, _, _)) = t {
-        s.sel = Selection { anchor: a.clone(), focus: b.clone() };
+    let t = if dir > 0 {
+        list.iter().find(|c| c.a >= caret.1 && (c.a > caret.0 || c.b > caret.1)).or(list.first())
+    } else {
+        list.iter().rev().find(|c| c.b <= caret.0 && (c.b < caret.1 || c.a < caret.0)).or(list.last())
+    };
+    if let Some(c) = t {
+        s.sel = Selection { anchor: c.a.clone(), focus: c.b.clone() };
     }
     sel_result(s)
 }
@@ -396,13 +563,18 @@ fn list_changes(s: &mut Session, _: &Value) -> CmdResult {
     let list = changes(s);
     Ok(Value::Array(
         list.iter()
-            .map(|(a, b, kind, rid)| {
-                let rev = rid.and_then(|r| s.doc.revisions.get(r as usize));
-                json!({
-                    "kind": kind, "start": pos_json(a), "end": pos_json(b),
-                    "text": s.doc.copy_range(a, b).plain_text(),
+            .map(|c| {
+                let rev = c.rev.and_then(|r| s.doc.revisions.get(r as usize));
+                let mut v = json!({
+                    "kind": c.kind, "start": pos_json(&c.a), "end": pos_json(&c.b),
+                    "text": s.doc.copy_range(&c.a, &c.b).plain_text(),
                     "author": rev.map(|r| r.author.clone()), "date": rev.map(|r| r.date.clone()),
-                })
+                });
+                if c.kind == "format" {
+                    v["description"] = json!(fmt_revisions::describe(&c.props));
+                    v["props"] = json!(c.props);
+                }
+                v
             })
             .collect(),
     ))
@@ -556,4 +728,214 @@ fn thesaurus(s: &mut Session, v: &Value) -> CmdResult {
     };
     let syn = T.iter().find(|(w, _)| *w == word).map(|(_, l)| l.to_vec()).unwrap_or_default();
     Ok(json!({"word": word, "synonyms": syn}))
+}
+
+/// Track Changes Options: change the fields given, return them all. A per-user preference.
+fn tracking_options(s: &mut Session, v: &Value) -> CmdResult {
+    use wordcraft_doc::Rgb;
+    use wordcraft_layout::display::{BalloonMode, ChangeBar, DeleteMark, InsertMark};
+    let mut m = s.prefs.markup.clone();
+    let color = |k: &str, auto: &str, cur: Option<Rgb>| -> Result<Option<Rgb>, CmdError> {
+        match p::str(v, k) {
+            None => Ok(cur),
+            Some(c) if c == auto => Ok(None),
+            Some(c) => Rgb::parse(c).map(Some).ok_or_else(|| CmdError::Params(format!("`{k}`: \"{auto}\" or RRGGBB"))),
+        }
+    };
+    let pick = |k: &str| p::str(v, k);
+    for (k, f) in [
+        ("comments", &mut m.comments),
+        ("ink", &mut m.ink),
+        ("insertionsDeletions", &mut m.insertions_deletions),
+        ("formatting", &mut m.formatting),
+        ("trackFormatting", &mut m.track_formatting),
+    ] {
+        if let Some(b) = p::bool(v, k) {
+            *f = b;
+        }
+    }
+    if let Some(x) = pick("balloons") {
+        m.balloons = BalloonMode::parse(x).ok_or_else(|| CmdError::Params("`balloons`: revisions|inline|commentsAndFormatting".into()))?;
+    }
+    if let Some(x) = pick("insertMark") {
+        m.insert_mark = InsertMark::parse(x).ok_or_else(|| CmdError::Params("unknown `insertMark`".into()))?;
+    }
+    if let Some(x) = pick("deleteMark") {
+        m.delete_mark = DeleteMark::parse(x).ok_or_else(|| CmdError::Params("unknown `deleteMark`".into()))?;
+    }
+    if let Some(x) = pick("changedLines") {
+        m.changed_lines = ChangeBar::parse(x).ok_or_else(|| CmdError::Params("unknown `changedLines`".into()))?;
+    }
+    m.insert_color = color("insertColor", "byAuthor", m.insert_color)?;
+    m.delete_color = color("deleteColor", "byAuthor", m.delete_color)?;
+    m.changed_lines_color = color("changedLinesColor", "auto", m.changed_lines_color)?;
+    if m != s.prefs.markup {
+        s.prefs.markup = m;
+        // Hidden deletions leave the layout.
+        s.relayout();
+    }
+    Ok(tracking_json(&s.prefs.markup))
+}
+
+/// The Track Changes Options as `review.trackingOptions` takes them.
+pub fn tracking_json(m: &wordcraft_layout::display::MarkupOptions) -> Value {
+    let hex = |c: Option<wordcraft_doc::Rgb>, auto: &str| c.map(|c| c.hex()).unwrap_or_else(|| auto.to_string());
+    json!({
+        "comments": m.comments,
+        "ink": m.ink,
+        "insertionsDeletions": m.insertions_deletions,
+        "formatting": m.formatting,
+        "balloons": m.balloons.name(),
+        "insertMark": m.insert_mark.name(),
+        "insertColor": hex(m.insert_color, "byAuthor"),
+        "deleteMark": m.delete_mark.name(),
+        "deleteColor": hex(m.delete_color, "byAuthor"),
+        "changedLines": m.changed_lines.name(),
+        "changedLinesColor": hex(m.changed_lines_color, "auto"),
+        "trackFormatting": m.track_formatting,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use wordcraft_doc::Document;
+    use wordcraft_layout::display::{DisplayOptions, Draw, page_display};
+
+    use crate::Session;
+
+    /// What the first page draws with the session's Track Changes Options.
+    fn draws(s: &mut Session) -> (Vec<Draw>, f32) {
+        let l = s.layout();
+        let page = &l.pages[0];
+        let opts = DisplayOptions { revisions: s.prefs.markup.clone(), ..Default::default() };
+        (page_display(&s.doc, page, &opts), page.body.x)
+    }
+
+    fn glyph_colors(d: &[Draw]) -> Vec<(wordcraft_doc::Rgb, bool)> {
+        d.iter().filter_map(|x| if let Draw::Glyphs { color, synth_bold, .. } = x { Some((*color, *synth_bold)) } else { None }).collect()
+    }
+
+    fn lines(d: &[Draw]) -> Vec<(f32, f32, f32, f32)> {
+        d.iter().filter_map(|x| if let Draw::Line { x0, y0, x1, y1, .. } = x { Some((*x0, *y0, *x1, *y1)) } else { None }).collect()
+    }
+
+    /// #328: Track Changes Options change how an insertion and a deletion are drawn, the bar
+    /// beside changed lines, and whether deletions take room.
+    #[test]
+    fn tracking_options_change_how_revisions_are_drawn() {
+        let mut s = Session::new(Document::new());
+        // No proofing squiggles among the lines.
+        s.view.proofing = false;
+        s.run("document.setText", &json!({"text": "keep gone"})).unwrap();
+        s.run("review.trackChanges", &json!({"value": true})).unwrap();
+        s.run("caret.docStart", &json!({})).unwrap();
+        s.run("text.insert", &json!({"text": "new "})).unwrap();
+        s.run("select.range", &json!({"anchor": {"block": 0, "off": 9}, "focus": {"block": 0, "off": 13}})).unwrap();
+        s.run("text.delete", &json!({})).unwrap();
+
+        // Defaults: underlined insertion and struck deletion in the author's colour, a bar left of
+        // the text.
+        let (d, body_x) = draws(&mut s);
+        let bars: Vec<_> = lines(&d).into_iter().filter(|(x0, _, x1, _)| x0 == x1 && *x0 < body_x).collect();
+        assert_eq!(bars.len(), 1, "one changed line, one bar in the left margin");
+        let horizontal = lines(&d).into_iter().filter(|(_, y0, _, y1)| y0 == y1).count();
+        assert_eq!(horizontal, 2, "an underline and a strikethrough: {:?}", lines(&d));
+        let author = glyph_colors(&d).iter().filter(|(c, _)| *c != wordcraft_doc::Rgb::BLACK).count();
+        assert!(author >= 2, "insertion and deletion in the author's colour");
+
+        // Bold, fixed-colour insertions; hidden deletions; no bars.
+        let r = s
+            .run(
+                "review.trackingOptions",
+                &json!({"insertMark": "bold", "insertColor": "00AA00", "deleteMark": "hidden", "changedLines": "none", "balloons": "inline"}),
+            )
+            .unwrap();
+        assert_eq!((r["insertMark"].as_str(), r["deleteColor"].as_str(), r["balloons"].as_str()), (Some("bold"), Some("byAuthor"), Some("inline")));
+        let (d, _) = draws(&mut s);
+        assert!(lines(&d).is_empty(), "no underline, no strikethrough, no bar: {:?}", lines(&d));
+        assert!(glyph_colors(&d).contains(&(wordcraft_doc::Rgb(0, 0xAA, 0), true)), "a bold green insertion");
+        let text: String = d.iter().filter_map(|x| if let Draw::Glyphs { text, .. } = x { Some(text.as_str()) } else { None }).collect();
+        assert!(!text.contains("gone"), "the deletion takes no room: {text:?}");
+
+        // Unknown choices are refused; reading changes nothing.
+        assert!(s.run("review.trackingOptions", &json!({"deleteMark": "sparkles"})).is_err());
+        assert_eq!(s.run("review.trackingOptions", &json!({})).unwrap()["insertColor"], "00AA00");
+    }
+
+    fn body_para(s: &Session) -> &wordcraft_doc::Paragraph {
+        s.doc.para(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap()
+    }
+
+    /// "plain words here" with "words" made bold, then 14 pt, and the paragraph centred, under
+    /// Track Changes by Ana.
+    fn formatted_while_tracking() -> Session {
+        let mut s = Session::new(Document::new());
+        s.view.proofing = false;
+        s.author = "Ana".into();
+        s.run("document.setText", &json!({"text": "plain words here"})).unwrap();
+        // Untracked formatting is no revision.
+        s.run("select.range", &json!({"anchor": {"block": 0, "off": 12}, "focus": {"block": 0, "off": 16}})).unwrap();
+        s.run("format.italic", &json!({})).unwrap();
+        assert!(body_para(&s).runs.iter().all(|r| r.props.fmt_change.is_none()));
+        s.run("review.trackChanges", &json!({"value": true})).unwrap();
+        s.run("select.range", &json!({"anchor": {"block": 0, "off": 6}, "focus": {"block": 0, "off": 11}})).unwrap();
+        s.run("format.bold", &json!({})).unwrap();
+        s.run("format.size", &json!({"size": 14})).unwrap();
+        s.run("para.alignCenter", &json!({})).unwrap();
+        s
+    }
+
+    /// #41: formatting with Track Changes on records the formatting before the author's first
+    /// change; it's listed in the Reviewing Pane and marked by a bar beside the line.
+    #[test]
+    fn formatting_is_tracked_while_tracking_changes() {
+        let mut s = formatted_while_tracking();
+        let p = body_para(&s);
+        let ch = p.props_of_char(6).fmt_change.as_deref().expect("a formatting change on \"words\"");
+        assert_eq!((ch.old.bold, ch.old.size), (None, None), "the formatting before the first change is kept");
+        let rev = &s.doc.revisions[ch.rev as usize];
+        assert_eq!((rev.kind, rev.author.as_str()), (wordcraft_doc::RevisionKind::Format, "Ana"));
+        assert!(p.props_of_char(0).fmt_change.is_none() && p.props_of_char(13).fmt_change.is_none());
+        assert_eq!(p.props.fmt_change.as_deref().map(|c| c.old.align), Some(None));
+
+        let list = s.run("review.changes", &json!({})).unwrap();
+        let desc: Vec<&str> = list.as_array().unwrap().iter().filter(|c| c["kind"] == "format").filter_map(|c| c["description"].as_str()).collect();
+        assert_eq!(desc, ["Formatted: Align: center", "Formatted: Bold, Size: 14"], "{list:#}");
+
+        let (d, body_x) = draws(&mut s);
+        let bars = lines(&d).into_iter().filter(|(x0, _, x1, _)| x0 == x1 && *x0 < body_x).count();
+        assert_eq!(bars, 1, "one changed line, one bar");
+
+        // Formatting changed back is no change any more.
+        s.run("select.range", &json!({"anchor": {"block": 0, "off": 6}, "focus": {"block": 0, "off": 11}})).unwrap();
+        s.run("format.set", &json!({"props": {"bold": false}})).unwrap();
+        s.run("format.size", &json!({"size": 11})).unwrap();
+        assert!(body_para(&s).props_of_char(6).fmt_change.is_some(), "explicit Not Bold and 11 pt differ from inherited");
+    }
+
+    /// #41: rejecting restores the formatting before the change; accepting keeps the new
+    /// formatting and drops the record. Both find formatting changes at the caret too.
+    #[test]
+    fn formatting_changes_are_accepted_and_rejected() {
+        let mut s = formatted_while_tracking();
+        s.run("review.rejectAll", &json!({})).unwrap();
+        let p = body_para(&s);
+        let c = p.props_of_char(6);
+        assert_eq!((c.bold, c.size, c.fmt_change.is_none()), (None, None, true));
+        assert_eq!((p.props.align, p.props.fmt_change.is_none()), (None, true));
+        assert_eq!(p.props_of_char(13).italic, Some(true), "untracked formatting stays");
+
+        s.run("edit.undo", &json!({})).unwrap();
+        // Accept at the caret: just the run's change.
+        s.run("select.range", &json!({"anchor": {"block": 0, "off": 8}, "focus": {"block": 0, "off": 8}})).unwrap();
+        s.run("review.accept", &json!({})).unwrap();
+        let p = body_para(&s);
+        assert_eq!((p.props_of_char(6).bold, p.props_of_char(6).fmt_change.is_none()), (Some(true), true));
+        assert!(p.props.fmt_change.is_some(), "the paragraph's change is still there");
+        s.run("review.acceptAll", &json!({})).unwrap();
+        let p = body_para(&s);
+        assert_eq!((p.props.align, p.props.fmt_change.is_none()), (Some(wordcraft_doc::props::Align::Center), true));
+        assert!(s.run("review.changes", &json!({})).unwrap().as_array().unwrap().is_empty());
+    }
 }

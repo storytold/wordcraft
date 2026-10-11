@@ -2,12 +2,12 @@
 
 use wordcraft_doc::effects::ShapeEffects;
 use wordcraft_doc::para::{Anchor, Float, NoteKind, ShapeKind, Wrap};
-use wordcraft_doc::props::{CharProps, Rgb};
+use wordcraft_doc::props::{CharProps, PropChange, Rgb};
 use wordcraft_doc::section::{LineNumberRestart, SectionProps, SectionStart};
 use wordcraft_doc::table::Table;
 use wordcraft_doc::{Block, Blocks, InlineObject, Paragraph, RevisionKind};
 
-use super::props::{borders, ppr_inner, rpr, rpr_inner, tblpr, tcpr, trpr};
+use super::props::{ChangeAttrs, borders, open_change, ppr_inner, rpr, rpr_inner, tblpr, tcpr, trpr};
 use super::{PartRels, Writer};
 use crate::package::rt;
 use crate::units::{emu, n, twips};
@@ -100,10 +100,15 @@ impl Writer<'_> {
             .into_iter()
             .filter_map(|(idx, tag)| idx.filter(|i| self.rev_kind(Some(*i)).is_some_and(|k| k != RevisionKind::Format)).map(|i| (i, tag)))
             .collect();
-        let has_mark = super::props::has_rpr(&p.mark) || !mark_revs.is_empty();
+        let has_mark = super::props::has_rpr(&p.mark) || !mark_revs.is_empty() || p.mark.fmt_change.is_some();
         if !pp.is_empty() || has_mark || section.is_some() {
             w.open("w:pPr", &[]);
-            ppr_inner(w, &pp, framed);
+            let num_change = pp.num_change.as_ref().map(|c| {
+                let mut a = self.change_attrs(c.rev);
+                a.push(("w:original", c.original.clone()));
+                a
+            });
+            ppr_inner(w, &pp, framed, num_change.as_ref());
             if has_mark {
                 w.open("w:rPr", &[]);
                 for (idx, tag) in mark_revs {
@@ -115,10 +120,22 @@ impl Writer<'_> {
                     }
                 }
                 rpr_inner(w, &p.mark);
+                if let Some(ch) = p.mark.fmt_change.as_deref() {
+                    self.rpr_change(w, ch);
+                }
                 w.close("w:rPr");
             }
             if let Some(s) = section {
                 self.sectpr(w, s, rels);
+            }
+            // The paragraph properties before a tracked change come last (§17.13.5.29).
+            if let Some(ch) = &pp.fmt_change {
+                let a = self.change_attrs(ch.rev);
+                open_change(w, "w:pPrChange", &a);
+                w.open("w:pPr", &[]);
+                ppr_inner(w, &ch.old, false, None);
+                w.close("w:pPr");
+                w.close("w:pPrChange");
             }
             w.close("w:pPr");
         }
@@ -226,7 +243,7 @@ impl Writer<'_> {
                     let del = self.is_del(props);
                     self.rev_open(w, props);
                     w.open("w:r", &[]);
-                    rpr(w, props);
+                    self.rpr(w, props);
                     for (pc, _) in pieces.get(i..j).unwrap_or(&[]) {
                         match pc {
                             Piece::Text(t) if !t.is_empty() => w.leaf(if del { "w:delText" } else { "w:t" }, &[("xml:space", "preserve")], t),
@@ -263,6 +280,34 @@ impl Writer<'_> {
         let author = r.map(|r| r.author.clone()).filter(|a| !a.is_empty()).unwrap_or_else(|| "Unknown".into());
         let date = r.map(|r| r.date.clone()).unwrap_or_default();
         (self.next_rev_id.to_string(), author, date)
+    }
+
+    /// `w:id`, `w:author` and `w:date` of a tracked change by revision `idx`.
+    fn change_attrs(&mut self, idx: u32) -> ChangeAttrs {
+        let (id, author, date) = self.rev_attrs(idx);
+        let mut a = vec![("w:id", id), ("w:author", author)];
+        if !date.is_empty() {
+            a.push(("w:date", date));
+        }
+        a
+    }
+
+    /// A run's `w:rPr`, with its tracked formatting change last (§17.13.5.31).
+    fn rpr(&mut self, w: &mut W, c: &CharProps) {
+        let Some(ch) = c.fmt_change.as_deref() else { return rpr(w, c) };
+        w.open("w:rPr", &[]);
+        rpr_inner(w, c);
+        self.rpr_change(w, ch);
+        w.close("w:rPr");
+    }
+
+    fn rpr_change(&mut self, w: &mut W, ch: &PropChange<CharProps>) {
+        let a = self.change_attrs(ch.rev);
+        open_change(w, "w:rPrChange", &a);
+        w.open("w:rPr", &[]);
+        rpr_inner(w, &ch.old);
+        w.close("w:rPr");
+        w.close("w:rPrChange");
     }
 
     fn rev_open(&mut self, w: &mut W, props: &CharProps) {
@@ -345,7 +390,7 @@ impl Writer<'_> {
                         }
                         self.rev_open(w, props);
                         w.open("w:r", &[]);
-                        rpr(w, &p);
+                        self.rpr(w, &p);
                         w.empty(mark, &[]);
                         w.close("w:r");
                         self.rev_close(w, props);
@@ -359,7 +404,7 @@ impl Writer<'_> {
                 }
                 self.rev_open(w, props);
                 w.open("w:r", &[]);
-                rpr(w, &p);
+                self.rpr(w, &p);
                 let tag = if foot { "w:footnoteReference" } else { "w:endnoteReference" };
                 if custom.is_empty() {
                     w.empty(tag, &[("w:id", &nid)]);
@@ -370,13 +415,45 @@ impl Writer<'_> {
                 w.close("w:r");
                 self.rev_close(w, props);
             }
-            // Charts and diagrams aren't written back yet.
-            InlineObject::Graphic { .. } => {}
-            InlineObject::Image { media, w: iw, h: ih, alt, float, .. } => {
+            // A chart or diagram read from a file: its frame from the object's size and position,
+            // the graphic inside as read. Ones made some other way have nothing to write.
+            InlineObject::Graphic { w: gw, h: gh, alt, float, graphic } => {
+                let Some(src) = graphic.source.as_deref() else { return };
+                let Some(inner) = self.embedded_xml(src, rels, None) else { return };
+                self.rev_open(w, props);
+                w.open("w:r", &[]);
+                self.rpr(w, props);
+                w.open("w:drawing", &[]);
+                let docpr = self.next_docpr();
+                let name = match graphic.kind {
+                    wordcraft_doc::graphic::GraphicKind::Chart => format!("Chart {docpr}"),
+                    wordcraft_doc::graphic::GraphicKind::Diagram => format!("Diagram {docpr}"),
+                };
+                self.drawing_open(w, float, *gw, *gh, &docpr, &name, alt);
+                w.empty("wp:cNvGraphicFramePr", &[]);
+                w.raw(&inner);
+                w.close(if float.wrap == Wrap::Inline { "wp:inline" } else { "wp:anchor" });
+                w.close("w:drawing");
+                w.close("w:r");
+                self.rev_close(w, props);
+            }
+            InlineObject::Image { media, w: iw, h: ih, alt, float, ole, .. } => {
+                // An OLE object read from a file: the object itself, at its current size.
+                if let Some(src) = ole.as_deref()
+                    && let Some(obj) = self.embedded_xml(src, rels, Some((*iw, *ih, float)))
+                {
+                    self.rev_open(w, props);
+                    w.open("w:r", &[]);
+                    self.rpr(w, props);
+                    w.raw(&obj);
+                    w.close("w:r");
+                    self.rev_close(w, props);
+                    return;
+                }
                 let Some(file) = self.media_files.get(media).cloned() else { return };
                 self.rev_open(w, props);
                 w.open("w:r", &[]);
-                rpr(w, props);
+                self.rpr(w, props);
                 w.open("w:drawing", &[]);
                 let docpr = self.next_docpr();
                 let name = format!("Picture {docpr}");
@@ -392,13 +469,14 @@ impl Writer<'_> {
                 w.close("w:r");
                 self.rev_close(w, props);
             }
-            InlineObject::Shape { w: sw, h: sh, float, effects, .. } => {
+            InlineObject::Shape { kind, w: sw, h: sh, float, effects, freeform, .. } => {
                 self.rev_open(w, props);
                 w.open("w:r", &[]);
-                rpr(w, props);
+                self.rpr(w, props);
                 w.open("w:drawing", &[]);
                 let docpr = self.next_docpr();
-                let name = format!("Shape {docpr}");
+                // Ink is told apart by its name (and its pen), which reading looks for.
+                let name = shape_name(*kind, freeform.as_deref(), &docpr);
                 // The effect extent leaves room for the shadow and glow.
                 let mut float = *float;
                 for (e, fx) in float.effect.iter_mut().zip(effects.extent()) {
@@ -420,7 +498,7 @@ impl Writer<'_> {
             InlineObject::Group { w: gw, h: gh, float, ch_w, ch_h, children } => {
                 self.rev_open(w, props);
                 w.open("w:r", &[]);
-                rpr(w, props);
+                self.rpr(w, props);
                 w.open("w:drawing", &[]);
                 let docpr = self.next_docpr();
                 let name = format!("Group {docpr}");
@@ -469,7 +547,7 @@ impl Writer<'_> {
                 } else if !text.is_empty() {
                     self.rev_open(w, props);
                     w.open("w:r", &[]);
-                    rpr(w, props);
+                    self.rpr(w, props);
                     w.leaf("w:t", &[("xml:space", "preserve")], text);
                     w.close("w:r");
                     self.rev_close(w, props);
@@ -579,10 +657,11 @@ impl Writer<'_> {
     /// A shape's or text box's `wps:wsp`, at `off` in its group (or 0, 0). In a group it carries
     /// its own `wps:cNvPr` with drawing id `id`.
     fn wsp(&mut self, w: &mut W, o: &InlineObject, id: Option<&str>, off: (f32, f32), rels: &mut PartRels, depth: usize) {
-        let InlineObject::Shape { kind, w: sw, h: sh, fill, stroke, stroke_width, story, effects, float } = o else { return };
+        let InlineObject::Shape { kind, w: sw, h: sh, fill, stroke, stroke_width, story, effects, float, freeform } = o else { return };
+        let geom = freeform.as_deref().filter(|_| *kind == ShapeKind::Freeform);
         w.open("wps:wsp", &[]);
         if let Some(id) = id {
-            let name = format!("Shape {id}");
+            let name = shape_name(*kind, freeform.as_deref(), id);
             w.empty("wps:cNvPr", &[("id", id), ("name", &name)]);
         }
         if *kind == ShapeKind::TextBox {
@@ -593,7 +672,7 @@ impl Writer<'_> {
         w.open("wps:spPr", &[]);
         xfrm(w, off, *sw, *sh, float.spin());
         let prst = match kind {
-            ShapeKind::Rectangle | ShapeKind::TextBox => "rect",
+            ShapeKind::Rectangle | ShapeKind::TextBox | ShapeKind::Freeform => "rect",
             ShapeKind::RoundedRectangle => "roundRect",
             ShapeKind::Ellipse => "ellipse",
             ShapeKind::Triangle => "triangle",
@@ -603,10 +682,17 @@ impl Writer<'_> {
             ShapeKind::Star => "star5",
             ShapeKind::Heart => "heart",
         };
-        w.open("a:prstGeom", &[("prst", prst)]);
-        w.empty("a:avLst", &[]);
-        w.close("a:prstGeom");
-        match fill {
+        match geom {
+            Some(f) => cust_geom(w, f, *sw, *sh),
+            None => {
+                w.open("a:prstGeom", &[("prst", prst)]);
+                w.empty("a:avLst", &[]);
+                w.close("a:prstGeom");
+            }
+        }
+        let alpha = geom.map_or(1.0, |f| f.alpha);
+        let ink = geom.is_some_and(|f| f.is_ink());
+        match fill.filter(|_| !ink) {
             Some(c) => {
                 w.open("a:solidFill", &[]);
                 w.empty("a:srgbClr", &[("val", &c.hex())]);
@@ -616,10 +702,21 @@ impl Writer<'_> {
         }
         match stroke {
             Some(c) => {
-                w.open("a:ln", &[("w", &emu(stroke_width.clamp(0.0, 100.0)))]);
+                let width = emu(stroke_width.clamp(0.0, 100.0));
+                let ln: &[(&str, &str)] = if ink { &[("w", width.as_str()), ("cap", "rnd")] } else { &[("w", width.as_str())] };
+                w.open("a:ln", ln);
                 w.open("a:solidFill", &[]);
-                w.empty("a:srgbClr", &[("val", &c.hex())]);
+                if alpha < 1.0 {
+                    w.open("a:srgbClr", &[("val", &c.hex())]);
+                    w.empty("a:alpha", &[("val", &n((alpha.clamp(0.0, 1.0) * 100_000.0).round() as i64))]);
+                    w.close("a:srgbClr");
+                } else {
+                    w.empty("a:srgbClr", &[("val", &c.hex())]);
+                }
                 w.close("a:solidFill");
+                if ink {
+                    w.empty("a:round", &[]);
+                }
                 w.close("a:ln");
             }
             None => {
@@ -730,7 +827,8 @@ impl Writer<'_> {
             return;
         }
         w.open("w:tbl", &[]);
-        tblpr(w, &t.props);
+        let chg = t.props.fmt_change.as_ref().map(|c| self.change_attrs(c.rev));
+        tblpr(w, &t.props, chg.as_ref());
         w.open("w:tblGrid", &[]);
         let cols = t.cols().clamp(1, 63);
         for g in 0..cols {
@@ -740,10 +838,12 @@ impl Writer<'_> {
         w.close("w:tblGrid");
         for r in rows {
             w.open("w:tr", &[]);
-            trpr(w, &r.props);
+            let chg = r.props.fmt_change.as_ref().map(|c| self.change_attrs(c.rev));
+            trpr(w, &r.props, chg.as_ref());
             for c in &r.cells {
                 w.open("w:tc", &[]);
-                tcpr(w, &c.props);
+                let chg = c.props.fmt_change.as_ref().map(|c| self.change_attrs(c.rev));
+                tcpr(w, &c.props, chg.as_ref());
                 self.blocks(w, &c.blocks, rels, false, depth + 1);
                 w.close("w:tc");
             }
@@ -762,6 +862,23 @@ impl Writer<'_> {
                 }
             }
         }
+        sectpr_body(w, s);
+        // The properties before a tracked change come last (§17.13.5.32).
+        if let Some(ch) = &s.fmt_change {
+            let a = self.change_attrs(ch.rev);
+            open_change(w, "w:sectPrChange", &a);
+            w.open("w:sectPr", &[]);
+            sectpr_body(w, &ch.old);
+            w.close("w:sectPr");
+            w.close("w:sectPrChange");
+        }
+        w.close("w:sectPr");
+    }
+}
+
+/// `w:sectPr` content after the header and footer references.
+fn sectpr_body(w: &mut W, s: &SectionProps) {
+    {
         let start = match s.start {
             SectionStart::NextPage => "nextPage",
             SectionStart::Continuous => "continuous",
@@ -846,8 +963,62 @@ impl Writer<'_> {
         if s.rtl {
             w.empty("w:bidi", &[]);
         }
-        w.close("w:sectPr");
     }
+}
+
+/// A shape's `cNvPr`/`docPr` name: ink is "Ink <pen> <id>", which reading looks for.
+fn shape_name(kind: ShapeKind, freeform: Option<&wordcraft_doc::freeform::Freeform>, id: &str) -> String {
+    match freeform.filter(|_| kind == ShapeKind::Freeform).and_then(|f| f.ink) {
+        Some(tool) => format!("Ink {} {id}", ink_name(tool)),
+        None => format!("Shape {id}"),
+    }
+}
+
+fn ink_name(tool: wordcraft_doc::freeform::InkTool) -> &'static str {
+    match tool {
+        wordcraft_doc::freeform::InkTool::Pen => "Pen",
+        wordcraft_doc::freeform::InkTool::Pencil => "Pencil",
+        wordcraft_doc::freeform::InkTool::Highlighter => "Highlighter",
+    }
+}
+
+/// A freeform's geometry as DrawingML custom geometry (`a:custGeom`): each path in EMUs of its
+/// own coordinate space (the shape's size when it has none), from `a:moveTo` along `a:lnTo`.
+fn cust_geom(w: &mut W, f: &wordcraft_doc::freeform::Freeform, sw: f32, sh: f32) {
+    let (pw, ph) = (if f.w > 0.0 { f.w } else { sw.max(0.0) }, if f.h > 0.0 { f.h } else { sh.max(0.0) });
+    w.open("a:custGeom", &[]);
+    w.empty("a:avLst", &[]);
+    w.empty("a:gdLst", &[]);
+    w.empty("a:ahLst", &[]);
+    w.empty("a:cxnLst", &[]);
+    w.empty("a:rect", &[("l", "0"), ("t", "0"), ("r", "r"), ("b", "b")]);
+    w.open("a:pathLst", &[]);
+    let pt = |w: &mut W, tag: &str, [x, y]: [f32; 2]| {
+        w.open(tag, &[]);
+        w.empty("a:pt", &[("x", &emu(x)), ("y", &emu(y))]);
+        w.close(tag);
+    };
+    for p in f.paths.iter().take(wordcraft_doc::freeform::MAX_PATHS) {
+        let mut attrs = vec![("w", emu(pw)), ("h", emu(ph))];
+        if !p.closed || f.is_ink() {
+            attrs.push(("fill", "none".to_string()));
+        }
+        let attrs: Vec<(&str, &str)> = attrs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        w.open("a:path", &attrs);
+        for (i, xy) in p.pts.iter().take(wordcraft_doc::freeform::MAX_POINTS).enumerate() {
+            pt(w, if i == 0 { "a:moveTo" } else { "a:lnTo" }, *xy);
+        }
+        // A tap: a zero-length line, so it shows as a dot.
+        if let (1, Some(xy)) = (p.pts.len(), p.pts.first()) {
+            pt(w, "a:lnTo", *xy);
+        }
+        if p.closed {
+            w.empty("a:close", &[]);
+        }
+        w.close("a:path");
+    }
+    w.close("a:pathLst");
+    w.close("a:custGeom");
 }
 
 /// A shape's `a:effectLst` (ECMA-376 Part 1 §20.1.8.26), children in schema order.
@@ -912,7 +1083,7 @@ fn xfrm(w: &mut W, (x, y): (f32, f32), cw: f32, ch: f32, spin: wordcraft_geom::S
 
 /// The `a:xfrm` attributes of a rotation and flips (ECMA-376 §20.1.7.6: `rot` in 60000ths of a
 /// degree, clockwise), none for an unturned object.
-fn spin_attrs(spin: wordcraft_geom::Spin) -> Vec<(&'static str, String)> {
+pub(super) fn spin_attrs(spin: wordcraft_geom::Spin) -> Vec<(&'static str, String)> {
     let mut a = Vec::new();
     let rot = (wordcraft_geom::normalize_degrees(spin.deg) as f64 * 60_000.0).round() as i64 % 21_600_000;
     if rot != 0 {

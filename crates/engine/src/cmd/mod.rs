@@ -4,12 +4,15 @@ pub mod caret;
 pub mod citations;
 pub mod column;
 pub mod design;
+pub mod draw;
 pub mod edit;
 pub mod equation;
 pub mod file;
+pub mod fmt_revisions;
 pub mod format;
 pub mod insert;
 pub mod inspector;
+pub mod lists;
 pub mod mailings;
 pub mod objects;
 pub mod page;
@@ -19,6 +22,7 @@ pub mod references;
 pub mod review;
 pub mod speech;
 pub mod table;
+pub mod table_draw;
 pub mod table_style;
 pub mod text;
 pub mod tools;
@@ -40,6 +44,7 @@ pub fn registry() -> Registry {
     v.extend(paste::specs());
     v.extend(format::specs());
     v.extend(para::specs());
+    v.extend(lists::specs());
     v.extend(inspector::specs());
     v.extend(view::specs());
     v.extend(insert::specs());
@@ -47,6 +52,7 @@ pub fn registry() -> Registry {
     v.extend(page::specs());
     v.extend(table::specs());
     v.extend(table_style::specs());
+    v.extend(table_draw::specs());
     v.extend(review::specs());
     v.extend(file::specs());
     v.extend(design::specs());
@@ -54,6 +60,7 @@ pub fn registry() -> Registry {
     v.extend(mailings::specs());
     v.extend(citations::specs());
     v.extend(objects::specs());
+    v.extend(draw::specs());
     v.extend(tools::specs());
     v.extend(speech::specs());
     Registry::new(v)
@@ -175,6 +182,8 @@ pub(crate) fn track_delete(s: &mut Session, a: &Pos, b: &Pos) -> Result<Pos, Cmd
 pub fn type_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
     let mut props = s.typing_props();
     delete_selection(s)?;
+    // Typed text is new: never deleted, and not a formatting change of the text around it.
+    props.fmt_change = None;
     if s.doc.settings.track_changes {
         props.ins = Some(new_revision(s, RevisionKind::Insert));
         props.del = None;

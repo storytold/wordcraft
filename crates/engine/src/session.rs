@@ -77,6 +77,12 @@ pub struct ViewState {
     pub track_changes_pane: bool,
     /// Check spelling and grammar as you type.
     pub proofing: bool,
+    /// Review › Hide Ink: ink strokes aren't shown on screen (they stay in the document).
+    #[serde(default)]
+    pub hide_ink: bool,
+    /// Draw tab: the tool dragging on the page uses, and each pen's colour and thickness.
+    #[serde(default)]
+    pub draw: crate::cmd::draw::DrawState,
 }
 
 fn on() -> bool {
@@ -106,6 +112,8 @@ impl Default for ViewState {
             show_markup: true,
             track_changes_pane: false,
             proofing: true,
+            hide_ink: false,
+            draw: Default::default(),
         }
     }
 }
@@ -275,11 +283,14 @@ pub struct MathEdit {
 pub struct Prefs {
     /// Word Count includes text boxes, footnotes and endnotes (Word's default).
     pub count_notes: bool,
+    /// Track Changes Options: what markup shows and how revisions are drawn (per user, as in
+    /// Word).
+    pub markup: wordcraft_layout::display::MarkupOptions,
 }
 
 impl Default for Prefs {
     fn default() -> Self {
-        Prefs { count_notes: true }
+        Prefs { count_notes: true, markup: Default::default() }
     }
 }
 
@@ -385,7 +396,7 @@ impl Session {
             view: self.view.mode,
             web_width: ww,
             show_hidden: self.view.marks,
-            hide_deleted: !self.view.show_markup,
+            hide_deleted: !self.view.show_markup || self.prefs.markup.hides_deletions(),
             proofing: self.view.proofing,
         };
         let l = Arc::new(wordcraft_layout::layout(&self.doc, &mut self.cache, &opts));
@@ -716,6 +727,10 @@ impl Session {
         match &result {
             Ok(_) => {
                 if spec.mutates {
+                    // Formatting changed while tracking becomes a formatting revision.
+                    if let Some((before, ..)) = &before_doc {
+                        crate::cmd::fmt_revisions::record(self, id, before);
+                    }
                     self.touch();
                     self.doc.ensure_nonempty();
                     self.doc.prune_text_boxes();

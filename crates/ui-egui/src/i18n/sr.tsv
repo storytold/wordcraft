@@ -15,6 +15,7 @@
 # translated UI was consulted or copied; add entries the same way.
 # Product, format and technology names (WordCraft, PDF, Markdown, MCP …) stay in Latin letters.
 
+	(no style)	(без стила)
 	(no suggestions)	(нема предлога)
 	(picture or object)	(слика или објекат)
 	1.5 Line Spacing	Проређеност 1,5
@@ -33,6 +34,7 @@
 	Add Space Before Paragraph	Додај размак пре пасуса
 	Add space between Asian and Latin text	Додај размак између азијског и латиничног текста
 	Add space between Asian text and numbers	Додај размак између азијског текста и бројева
+	Add tab stop at:	Додај табулатор на:
 	Add Text	Додај текст
 	Add to Dictionary	Додај у речник
 	Add to Style Gallery	Додај у галерију стилова
@@ -46,6 +48,7 @@
 	Align	Поравнање
 	Align Left	Лево поравнање
 	Align Right	Десно поравнање
+	Aligned at:	Поравнато на:
 	Alignment	Поравнање
 	All Borders	Све ивице
 	All Caps	Сва велика слова
@@ -80,22 +83,52 @@
 	AutoSave	Аутоматско чување
 	AutoSave documents you have saved in WordCraft	Аутоматски чувај документе које сте већ сачували у WordCraft-у
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	Аутоматско чување неуспело: {error}. Сачувајте документ да бисте га поново укључили.
+	Balloons	Облачићи
 	Bottom Margin	Доња маргина
+	Click a border between two cells to merge them. Esc stops.	Кликните ивицу између две ћелије да их спојите. Esc завршава.
 	Based on: {style}	Заснован на: {style}
 	Built-in style	Уграђени стил
 	Built-in styles can't be deleted.	Уграђени стилови не могу да се обришу.
+	Bullet	Ознака
+	By author	По аутору
 	Change Password…	Промени лозинку…
+	Changed lines:	Измењени редови:
 	Character style	Стил знакова
 	Click an item to paste it.	Кликните на ставку да бисте је налепили.
+	Click level to modify:	Кликните ниво који мењате:
 	Clipboard Items	Ставке оставе
 	Clipboard Pane	Окно оставе
+	Color only	Само боја
 	Color: {color}	Боја: {color}
 	Compress punctuation at the start of a line	Сажми интерпункцију на почетку реда
 	Confirm password:	Потврдите лозинку:
 	Dark page (white text on black)	Тамна страница (бео текст на црном)
+	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	Превуците правоугаоник да нацртате табелу или линију преко ћелија да их поделите. Esc завршава.
+	Draw Table	Нацртај табелу
+	Define New Multilevel List	Дефиниши нову вишенивоску листу
+	Define New Multilevel List…	Дефиниши нову вишенивоску листу…
+	Deletions:	Брисања:
 	Edit Comment	Уреди коментар
+	Enter formatting for number:	Облик броја:
+	Follow number with:	После броја:
+	Formatting	Обликовање
+	Include level number from:	Укључи број нивоа:
+	Ink	Мастило
+	Insertions and Deletions	Уметања и брисања
+	Insertions:	Уметања:
+	Left border	Лева ивица
 	Left Margin	Лева маргина
+	Legal style numbering	Правно нумерисање
+	Link level to style:	Повежи ниво са стилом:
+	List Definition	Дефиниција листе
+	Nothing	Ништа
+	Number alignment:	Поравнање броја:
+	Number format	Формат броја
+	Number style for this level:	Стил броја за овај ниво:
+	Outside border	Спољна ивица
 	Reopen	Поново отвори
+	Restart list after:	Поново почни листу после:
+	Right border	Десна ивица
 	Right Margin	Десна маргина
 	Delete Clipboard Item	Обриши ставку из оставе
 	Delete Table Style	Обриши стил табеле
@@ -132,6 +165,7 @@
 	Remove Password	Уклони лозинку
 	Shadow, glow and soft edges	Сенка, сјај и меке ивице
 	Shape Effects	Ефекти облика
+	Show all revisions inline	Прикажи све измене у тексту
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Прикажи документе са инвертованим бојама, као код Приказ › Промени режим. Чување, штампање и PDF нису погођени.
 	AutoSave saves every change to the file (needs a saved document)	Аутоматско чување уписује сваку измену у фајл (документ мора бити већ сачуван)
 	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	Аутоматско чување није доступно у прегледачу: не може да уписује у ваше фајлове. Чување преузима копију.
@@ -157,6 +191,29 @@
 	Border Painter	Копирање ивица
 	Border\nPainter	Копирање\nивица
 	Borders	Ивице
+	Tab stop position:	Положај табулатора:
+	Default tab stops:	Подразумевани табулатори:
+	Tab stops to be cleared:	Табулатори за брисање:
+	All	Сви
+	Decimal	Децимални
+	Bar	Линија
+	Leader	Попуна
+	Set	Постави
+	Page Border	Ивица стране
+	Apply to:	Примени на:
+	Whole document	Цео документ
+	This section	Овај одељак
+	Fill	Испуна
+	Setting:	Врста:
+	3-D	3D
+	Custom	Прилагођено
+	Style:	Стил:
+	Dot dash	Тачка-црта
+	Triple	Троструко
+	Between	Између пасуса
+	Borders and Shading	Ивице и сенчење
+	Tabs…	Табулатори…
+	Borders and Shading…	Ивице и сенчење…
 	Bottom Border	Доња ивица
 	Bottom of Page	Дно стране
 	Bottom:	Доле:
@@ -712,7 +769,9 @@
 	Show in the Styles gallery	Прикажи у галерији стилова
 	Show Markup	Прикажи измене
 	Show Notes	Прикажи напомене
+	Show only comments and formatting in balloons	Прикажи само коментаре и обликовање у облачићима
 	Show or Hide Style	Прикажи или сакриј стил
+	Show revisions in balloons	Прикажи измене у облачићима
 	Show rulers	Прикажи лењире
 	Show the community button in the title bar	Прикажи дугме заједнице у траци наслова
 	Show/Hide ¶	Прикажи/сакриј ¶
@@ -732,6 +791,7 @@
 	Sort	Сортирај
 	Sort order:	Редослед сортирања:
 	Source code: github.com/storytold/wordcraft	Изворни код: github.com/storytold/wordcraft
+	Space	Размак
 	Space after: {pt} pt	Размак после: {pt} пт
 	Space before/after:	Размак пре/после:
 	Space before: {pt} pt	Размак пре: {pt} пт
@@ -747,6 +807,7 @@
 	Spreadsheet Table	Табела прорачунске табле
 	Standard Colors	Стандардне боје
 	Star	Звезда
+	Start at:	Почни од:
 	Start Mail Merge	Покрени спајање докумената
 	Start Mail\nMerge	Покрени\nспајање докумената
 	Statistics	Статистика
@@ -768,6 +829,7 @@
 	Symbols	Симболи
 	Synonyms	Синоними
 	Tab	Tab
+	Tab character	Знак табулатора
 	Table	Табела
 	Table Column Width	Ширина колоне табеле
 	Table Design	Дизајн табеле
@@ -790,6 +852,7 @@
 	Text Effects and Typography	Ефекти текста и типографија
 	Text from File	Текст из фајла
 	Text Highlight Color	Боја истицања текста
+	Text indent at:	Увлачење текста на:
 	Text to display:	Текст за приказ:
 	Text Wrapping	Преламање текста
 	Text:	Текст:
@@ -815,7 +878,9 @@
 	Top:	Горе:
 	Total Row	Ред укупно
 	Track Changes	Праћење измена
+	Track Changes Options	Опције праћења измена
 	Track Changes: On	Праћење измена: укључено
+	Track formatting	Прати обликовање
 	Tracking	Праћење
 	Translate	Преведи
 	Transparency	Транспарентност
@@ -1117,9 +1182,146 @@
 	Insert a new equation (Alt+=)	Уметни нову једначину (Alt+=)
 	Leave the equation (Esc)	Напусти једначину (Esc)
 	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft
+	Draw Ink	Цртај мастилом
+	Erase Ink	Обриши мастило
+	Hide Ink	Сакриј мастило
+	Hide\nInk	Сакриј\nмастило
+	Pens	Пера
+	Thickness	Дебљина
+
+# Interface text routed through translation (#313)
+	Align Top Left	Поравнај горе лево
+	Align Top Center	Поравнај горе по средини
+	Align Top Right	Поравнај горе десно
+	Align Center Left	Поравнај у средини лево
+	Align Center	Поравнај по средини
+	Align Center Right	Поравнај у средини десно
+	Align Bottom Left	Поравнај доле лево
+	Align Bottom Center	Поравнај доле по средини
+	Align Bottom Right	Поравнај доле десно
+	{contributors} contributors · {commits} commits	Сарадника: {contributors} · commit-ова: {commits}
+	{cols}×{rows} Table	Табела {cols}×{rows}
+	AaBbYyZz	AaBbYyZz ЂђЋћ
+	pt	пт
+	Document1	Документ1
+	Username	Корисничко име
+	Display name	Име за приказ
+	Real name	Право име
+	Name	Име
+	PRs	PR-ови
+	Commits	Commit-ови
+	First	Први
+	Last	Задњи
+	Model	Модел
+	Version	Верзија
+	% of all commits	% свих commit-ова
+	Lines +/−	Редови +/−
+	Craft	Занат
+	Studio	Студио
+	Atelier	Атеље
+	Darkroom	Мрачна комора
+	Gallery	Галерија
+	Sketchbook	Блок за скице
+	Change Picture…	Промени слику…
+	Font…	Фонт…
+	Paragraph…	Пасус…
+	Link…	Веза…
+	Size and Crop…	Величина и исецање…
+	Insert Columns to the Left	Уметни колоне лево
+	Insert Columns to the Right	Уметни колоне десно
+	Insert Rows Above	Уметни редове изнад
+	Insert Rows Below	Уметни редове испод
+	Mon	Пон
+	Tue	Уто
+	Wed	Сре
+	Sum	Збир
+	North	Север
+	South	Југ
+	West	Запад
+	Total	Укупно
+# Columns, Symbol and Field dialogs (#321).
+	(All)	(Све)
+	(none)	(нема)
+	(normal text)	(обичан текст)
+	1/4 Em Space	Размак од 1/4 em
+	A mail merge field	Поље за спајање поште
+	A numbered sequence (figures, tables…)	Нумерисани низ (слике, табеле…)
+	A table of contents	Садржај
+	Categories:	Категорије:
+	Character	Знак
+	Character code:	Код знака:
+	Col #:	Колона бр.:
+	Copyright	Знак ауторског права
+	Date and Time	Датум и време
+	Date formats:	Формати датума:
+	Description:	Опис:
+	Document Information	Информације о документу
+	Double Closing Quote	Затворени двоструки наводник
+	Double Opening Quote	Отворени двоструки наводник
+	Ellipsis	Три тачке
+	Em Dash	Дуга црта
+	En Dash	Средња црта
+	Em Space	Em размак
+	En Space	En размак
+	Equal column width	Једнака ширина колона
+	Field Codes	Кодови поља
+	Field code:	Код поља:
+	Field codes:	Кодови поља:
+	Field name:	Назив поља:
+	Field names:	Називи поља:
+	Field properties	Својства поља
+	Field…	Поље…
+	Format:	Формат:
+	Hide Codes	Сакриј кодове
+	Index and Tables	Индекси и табеле
+	Line between	Линија између колона
+	Links and References	Везе и референце
+	Mail Merge	Спајање поште
+	More Columns…	Још колона…
+	More Symbols…	Још симбола…
+	No-Width Non Break	Недељиви знак нулте ширине
+	No-Width Optional Break	Опциони прелом нулте ширине
+	Paragraph Mark	Знак пасуса
+	Pick a field from the list	Изаберите поље
+	Preserve formatting during updates	Сачувај обликовање при ажурирању
+	Presets	Унапред задато
+	Recently used symbols:	Недавно коришћени симболи:
+	Registered	Регистровани жиг
+	Section Mark	Знак параграфа
+	Sequence name:	Назив низа:
+	Shortcut key:	Пречица на тастатури:
+	Single Closing Quote	Затворени једноструки наводник
+	Single Opening Quote	Отворени једноструки наводник
+	Spacing:	Размак:
+	Special Characters	Специјални знакови
+	Subset:	Подскуп:
+	The time right now	Тренутно време
+	When this document was first created	Датум када је документ направљен
+	When this document was most recently printed	Датум када је документ последњи пут одштампан
+	When this document was most recently saved	Датум када је документ последњи пут сачуван
+	The document has no bookmarks yet.	Документ још нема обележиваче.
+	Who the document properties name as author	Аутор документа
+	Name of the file this document is saved as	Име датотеке документа
+	Title from the document properties	Наслов документа
+	How many pages the whole document has	Број страница у документу
+	How many pages this section has	Број страница у одељку
+	Number of the page the field sits on	Број тренутне странице
+	Number of the section the field sits in	Број тренутног одељка
+	How many words the document holds	Број речи у документу
+	Page on which a bookmarked passage falls	Број странице обележивача
+	Copy of the text a bookmark marks	Текст обележивача
+	This field has no options.	Ово поље нема опција.
+	This font has no characters to show.	Овај фонт нема знакове за приказ.
+	This point forward	Од овог места надаље
+	The date it is today	Данашњи датум
+	Trademark	Жиг
+	Type the field's name and its switches, for example PAGE \\* roman.	Унесите назив поља и његове прекидаче, на пример PAGE \\* roman.
+	Width and spacing	Ширина и размак
+	from Unicode (hex)	из Unicode (хекс.)
 	Rotation	Ротација
 	Rotation:	Ротација:
 	Rotate Right 90°	Ротирај удесно за 90°
 	Rotate Left 90°	Ротирај улево за 90°
 	Flip Vertical	Окрени вертикално
 	Flip Horizontal	Окрени хоризонтално
+	Formatted	Форматирано

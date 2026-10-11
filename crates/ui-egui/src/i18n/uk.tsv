@@ -11,6 +11,7 @@
 # Product, format and technology names (WordCraft, PDF, Markdown, MCP …) stay in Latin letters.
 # Author: @dmatviichuk with Codex; licensed MIT OR Apache-2.0, like WordCraft.
 
+	(no style)	(без стилю)
 	(no suggestions)	(немає пропозицій)
 	1.5 Line Spacing	Міжрядковий інтервал 1,5
 	A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.	Безкоштовний текстовий процесор із відкритим кодом, написаний з нуля мовою Rust.\nЧастина Crafting Apps від команди ArtCraft.
@@ -27,6 +28,7 @@
 	Add Space Before Paragraph	Додати інтервал перед абзацом
 	Add space between Asian and Latin text	Додавати інтервал між азійським і латинським текстом
 	Add space between Asian text and numbers	Додавати інтервал між азійським текстом і числами
+	Add tab stop at:	Додати позицію табуляції:
 	Add Text	Додати текст
 	Add to Dictionary	Додати до словника
 	Add to Style Gallery	Додати до колекції стилів
@@ -42,6 +44,7 @@
 	Align	Вирівняти
 	Align Left	Вирівняти ліворуч
 	Align Right	Вирівняти праворуч
+	Aligned at:	Позиція номера:
 	Alignment	Вирівнювання
 	All Borders	Усі межі
 	All Caps	Усі великі літери
@@ -72,6 +75,33 @@
 	AutoSave saves every change to the file (needs a saved document)	Автозбереження записує кожну зміну у файл (документ потрібно спочатку зберегти)
 	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	Автозбереження недоступне в браузері: воно не може записувати у ваші файли. Збереження завантажує копію.
 	AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave.	Автозбереження підтримує лише файли .docx, .odt і .rtf; {name} не може зберегти все форматування. Збережіть як .docx, щоб увімкнути автозбереження.
+	Balloons	Виноски
+	Bullet	Маркер
+	By author	За автором
+	Changed lines:	Змінені рядки:
+	Click level to modify:	Виберіть рівень для змінення:
+	Color only	Лише колір
+	Define New Multilevel List	Визначити новий багаторівневий список
+	Define New Multilevel List…	Визначити новий багаторівневий список…
+	Deletions:	Видалення:
+	Enter formatting for number:	Вигляд номера:
+	Follow number with:	Після номера:
+	Formatting	Форматування
+	Include level number from:	Додати номер рівня:
+	Ink	Рукописні примітки
+	Insertions and Deletions	Вставлення й видалення
+	Insertions:	Вставлення:
+	Left border	Ліва межа
+	Legal style numbering	Юридична нумерація
+	Link level to style:	Зв'язати рівень зі стилем:
+	List Definition	Визначення списку
+	Nothing	Нічого
+	Number alignment:	Вирівнювання номера:
+	Number format	Формат номера
+	Number style for this level:	Стиль номера для цього рівня:
+	Outside border	Зовнішня межа
+	Restart list after:	Почати список знову після:
+	Right border	Права межа
 	Save the document to turn on AutoSave	Збережіть документ, щоб увімкнути автозбереження
 	Save the document to turn on AutoSave (a file you have only opened isn't rewritten until you save it)	Збережіть документ, щоб увімкнути автозбереження (файл, який ви лише відкрили, не перезаписується, доки ви його не збережете)
 	AutoText	Автоматичний текст
@@ -93,6 +123,29 @@
 	Border Painter	Пензель меж
 	Border\nPainter	Пензель\nмеж
 	Borders	Межі
+	Tab stop position:	Позиція табуляції:
+	Default tab stops:	Типові позиції табуляції:
+	Tab stops to be cleared:	Позиції, які буде видалено:
+	All	Усі
+	Decimal	Десяткова
+	Bar	Риска
+	Leader	Заповнювач
+	Set	Встановити
+	Page Border	Межа сторінки
+	Apply to:	Застосувати до:
+	Whole document	Увесь документ
+	This section	Цей розділ
+	Fill	Колір заливки
+	Setting:	Тип:
+	3-D	Об'ємна
+	Custom	Власна
+	Style:	Стиль:
+	Dot dash	Штрихпунктирна
+	Triple	Потрійна
+	Between	Між абзацами
+	Borders and Shading	Межі й заливка
+	Tabs…	Табуляція…
+	Borders and Shading…	Межі й заливка…
 	Bottom Border	Нижня межа
 	Bottom Margin	Нижнє поле
 	Bottom of Page	Унизу сторінки
@@ -138,6 +191,7 @@
 	Clear Character Style	Очистити стиль символів
 	Clear Formatting Level	Очистити рівень форматування
 	Clear Paragraph Formatting	Очистити форматування абзацу
+	Click a border between two cells to merge them. Esc stops.	Клацніть межу між двома клітинками, щоб об'єднати їх. Esc завершує.
 	Clipboard	Буфер обміну
 	Clipboard Pane	Панель буфера обміну
 	Clipboard Items	Елементи буфера обміну
@@ -208,6 +262,8 @@
 	Delete Style	Видалити стиль
 	Delete Table	Видалити таблицю
 	Design	Дизайн
+	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	Перетягніть прямокутник, щоб намалювати таблицю, або лінію через клітинки, щоб їх розділити. Esc завершує.
+	Draw Table	Намалювати таблицю
 	Edit Comment	Редагувати коментар
 	Left Margin	Ліве поле
 	Indents and Spacing	Відступи й інтервали
@@ -680,9 +736,12 @@
 	Shift+Tab	Shift+Tab
 	Show	Показати
 	Show all formatting marks	Показати всі знаки форматування
+	Show all revisions inline	Показувати всі виправлення в тексті
 	Show Comments	Показати коментарі
 	Show Markup	Показати позначки
 	Show Notes	Показати примітки
+	Show only comments and formatting in balloons	Показувати у виносках лише коментарі й форматування
+	Show revisions in balloons	Показувати виправлення у виносках
 	Show rulers	Показати лінійки
 	Show the community button in the title bar	Показувати кнопку спільноти в заголовку вікна
 	Show/Hide ¶	Показати/приховати ¶
@@ -700,6 +759,7 @@
 	SmartArt	SmartArt
 	Sort	Сортувати
 	Source code: github.com/storytold/wordcraft	Вихідний код: github.com/storytold/wordcraft
+	Space	Пробіл
 	Space before/after:	Інтервал перед/після:
 	Spacing	Інтервал
 	Spacing (pt):	Інтервал (пункти):
@@ -713,6 +773,7 @@
 	Spreadsheet Table	Таблиця електронної таблиці
 	Standard Colors	Стандартні кольори
 	Star	Зірка
+	Start at:	Почати з:
 	Start Mail Merge	Почати злиття пошти
 	Start Mail\nMerge	Почати злиття\nпошти
 	Statistics	Статистика
@@ -735,6 +796,7 @@
 	Symbols	Символи
 	Synonyms	Синоніми
 	Tab	Табуляція
+	Tab character	Символ табуляції
 	Table	Таблиця
 	Table Column Width	Ширина стовпця таблиці
 	Table Design	Дизайн таблиці
@@ -756,6 +818,7 @@
 	Text Effects and Typography	Текстові ефекти й типографіка
 	Text from File	Текст із файлу
 	Text Highlight Color	Колір виділення тексту
+	Text indent at:	Відступ тексту:
 	Text to display:	Текст для відображення:
 	Text Wrapping	Обтікання текстом
 	Text:	Текст:
@@ -777,7 +840,9 @@
 	Top:	Зверху:
 	Total Row	Рядок підсумків
 	Track Changes	Відстежувати зміни
+	Track Changes Options	Параметри відстеження змін
 	Track Changes: On	Відстеження змін: увімкнено
+	Track formatting	Відстежувати форматування
 	Tracking	Відстеження
 	Translate	Перекласти
 	Transparency	Прозорість
@@ -1060,6 +1125,92 @@
 	Leave the equation (Esc)	Вийти з рівняння (Esc)
 	Preview	Попередній перегляд
 	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft
+	Draw Ink	Малювати чорнилом
+	Erase Ink	Стерти чорнило
+	Hide Ink	Сховати чорнило
+	Hide\nInk	Сховати\nчорнило
+	Pens	Пера
+	Thickness	Товщина
+
+# Columns, Symbol and Field dialogs (#321).
+	(All)	(Усі)
+	(none)	(немає)
+	(normal text)	(звичайний текст)
+	1/4 Em Space	Пробіл 1/4 кегля
+	A mail merge field	Поле злиття
+	A numbered sequence (figures, tables…)	Нумерована послідовність (рисунки, таблиці…)
+	A table of contents	Зміст
+	Categories:	Категорії:
+	Character	Символ
+	Character code:	Код символу:
+	Col #:	Стовпець:
+	Copyright	Знак авторського права
+	Date and Time	Дата й час
+	Date formats:	Формати дати:
+	Description:	Опис:
+	Document Information	Відомості про документ
+	Double Closing Quote	Закривні подвійні лапки
+	Double Opening Quote	Відкривні подвійні лапки
+	Ellipsis	Три крапки
+	Em Dash	Довге тире
+	En Dash	Коротке тире
+	Em Space	Широкий пробіл
+	En Space	Пробіл середньої ширини
+	Equal column width	Однакова ширина стовпців
+	Field Codes	Коди полів
+	Field code:	Код поля:
+	Field codes:	Коди полів:
+	Field name:	Назва поля:
+	Field names:	Назви полів:
+	Field properties	Властивості поля
+	Field…	Поле…
+	Format:	Формат:
+	Hide Codes	Сховати коди
+	Index and Tables	Покажчики й таблиці
+	Line between	Лінія між стовпцями
+	Links and References	Зв'язки й посилання
+	Mail Merge	Злиття
+	More Columns…	Інші стовпці…
+	More Symbols…	Інші символи…
+	No-Width Non Break	Нерозривний символ нульової ширини
+	No-Width Optional Break	Необов'язковий розрив нульової ширини
+	Paragraph Mark	Знак абзацу
+	Pick a field from the list	Виберіть поле
+	Preserve formatting during updates	Зберігати форматування під час оновлення
+	Presets	Шаблони
+	Recently used symbols:	Нещодавно використані символи:
+	Registered	Зареєстрована торговельна марка
+	Section Mark	Знак параграфа
+	Sequence name:	Назва послідовності:
+	Shortcut key:	Сполучення клавіш:
+	Single Closing Quote	Закривна одинарна лапка
+	Single Opening Quote	Відкривна одинарна лапка
+	Spacing:	Інтервал:
+	Special Characters	Спеціальні символи
+	Subset:	Набір:
+	The time right now	Поточний час
+	When this document was first created	Дата створення документа
+	When this document was most recently printed	Дата останнього друку документа
+	When this document was most recently saved	Дата останнього збереження документа
+	The document has no bookmarks yet.	У документі ще немає закладок.
+	Who the document properties name as author	Автор документа
+	Name of the file this document is saved as	Ім'я файлу документа
+	Title from the document properties	Назва документа
+	How many pages the whole document has	Кількість сторінок у документі
+	How many pages this section has	Кількість сторінок у розділі
+	Number of the page the field sits on	Номер поточної сторінки
+	Number of the section the field sits in	Номер поточного розділу
+	How many words the document holds	Кількість слів у документі
+	Page on which a bookmarked passage falls	Номер сторінки закладки
+	Copy of the text a bookmark marks	Текст закладки
+	This field has no options.	Це поле не має параметрів.
+	This font has no characters to show.	Цей шрифт не має символів для показу.
+	This point forward	Від цього місця
+	The date it is today	Сьогоднішня дата
+	Trademark	Торговельна марка
+	Type the field's name and its switches, for example PAGE \\* roman.	Введіть назву поля та його ключі, наприклад PAGE \\* roman.
+	Width and spacing	Ширина й інтервал
+	from Unicode (hex)	з Unicode (шістн.)
 	Shape Effects	Ефекти фігури
 	Glow	Світіння
 	Soft Edges	М'які краї
@@ -1114,9 +1265,61 @@
 	The password is removed. Save the document to keep the change.	Пароль видалено. Збережіть документ, щоб зберегти зміну.
 	The passwords don't match.	Паролі не збігаються.
 	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	Зберігайте пароль у надійному місці: без нього ніхто, зокрема WordCraft, не зможе відкрити документ. Залиште обидва поля порожніми, щоб видалити пароль.
+
+# Interface text routed through translation (#313)
+	Align Top Left	Вирівняти вгорі ліворуч
+	Align Top Center	Вирівняти вгорі по центру
+	Align Top Right	Вирівняти вгорі праворуч
+	Align Center Left	Вирівняти посередині ліворуч
+	Align Center	Вирівняти по центру
+	Align Center Right	Вирівняти посередині праворуч
+	Align Bottom Left	Вирівняти внизу ліворуч
+	Align Bottom Center	Вирівняти внизу по центру
+	Align Bottom Right	Вирівняти внизу праворуч
+	{contributors} contributors · {commits} commits	Учасників: {contributors} · комітів: {commits}
+	{cols}×{rows} Table	Таблиця {cols}×{rows}
+	AaBbYyZz	AaBbYyZz ЄєЇї
+	pt	пт
+	Document1	Документ1
+	Username	Ім'я користувача
+	Display name	Відображуване ім'я
+	Real name	Справжнє ім'я
+	Name	Ім'я
+	PRs	PR
+	Commits	Коміти
+	First	Перший
+	Last	Останній
+	Model	Модель
+	Version	Версія
+	% of all commits	% усіх комітів
+	Lines +/−	Рядки +/−
+	Craft	Ремесло
+	Studio	Студія
+	Atelier	Ательє
+	Darkroom	Фотолабораторія
+	Gallery	Галерея
+	Sketchbook	Альбом для ескізів
+	Change Picture…	Змінити зображення…
+	Font…	Шрифт…
+	Paragraph…	Абзац…
+	Link…	Посилання…
+	Size and Crop…	Розмір і обтинання…
+	Insert Columns to the Left	Вставити стовпці ліворуч
+	Insert Columns to the Right	Вставити стовпці праворуч
+	Insert Rows Above	Вставити рядки вище
+	Insert Rows Below	Вставити рядки нижче
+	Mon	Пн
+	Tue	Вт
+	Wed	Ср
+	Sum	Сума
+	North	Північ
+	South	Південь
+	West	Захід
+	Total	Разом
 	Rotation	Поворот
 	Rotation:	Поворот:
 	Rotate Right 90°	Повернути праворуч на 90°
 	Rotate Left 90°	Повернути ліворуч на 90°
 	Flip Vertical	Віддзеркалити по вертикалі
 	Flip Horizontal	Віддзеркалити по горизонталі
+	Formatted	Відформатовано

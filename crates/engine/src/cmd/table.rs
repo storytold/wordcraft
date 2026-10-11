@@ -204,7 +204,7 @@ fn autofit(s: &mut Session, v: &Value) -> CmdResult {
 
 /// Give every cell the width of the grid columns it spans, so the cells' preferred widths
 /// (saved to .docx) agree with the grid.
-fn sync_cell_widths(t: &mut Table) {
+pub(crate) fn sync_cell_widths(t: &mut Table) {
     let grid = t.grid.clone();
     for row in &mut t.rows {
         let mut g = 0usize;
@@ -462,6 +462,10 @@ fn del_col(s: &mut Session, _: &Value) -> CmdResult {
     }
     let g = t.grid_col(r, c);
     t.delete_col(g);
+    // Rows left without cells are dropped; if that was every row, no table is left.
+    if t.rows.is_empty() {
+        return del_table(s, &Value::Null);
+    }
     fix_caret(s, &tp, r, c.saturating_sub(1))
 }
 

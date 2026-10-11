@@ -905,6 +905,12 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.line(&[(4.75, 6.25), (10.75, 12.25)]);
             pen.line(&[(11.5, 14.5), (14.5, 14.5)]);
         }
+        // Ink thickness: three strokes, thin to thick; the thickest in the accent.
+        "thickness" => {
+            pen.line(&[(2.0, 3.5), (14.0, 3.5)]);
+            pen.heavy(&[(2.0, 7.5), (14.0, 7.5)]);
+            pen.block(2.0, 11.0, 14.0, 14.5, 1.0, a);
+        }
         "lasso" => {
             // One rope: a loose loop that runs on into a trailing end.
             let rope = [(8.5, 1.75), (13.25, 2.75), (14.25, 5.5), (12.0, 8.25), (7.5, 9.0), (3.0, 8.0), (1.75, 5.0), (4.25, 2.5)];
@@ -1696,7 +1702,7 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.fill(&[(11.0, 11.0), (12.75, 13.25), (12.25, 15.0)], a);
         }
         // Draw table: a pencil drawing a grid.
-        "draw" => {
+        "draw" | "drawTable" => {
             pen.table(1.5, 9.0, 6.0);
             pen.pencil(7.5, -1.0, 0.55, a);
         }
@@ -1921,6 +1927,7 @@ pub const NAMES: &[&str] = &[
     "pen",
     "pencil",
     "eraser",
+    "thickness",
     "lasso",
     "inkToShape",
     "inkToMath",
@@ -2068,6 +2075,7 @@ pub const NAMES: &[&str] = &[
     "formula",
     "selectTable",
     "draw",
+    "drawTable",
     "borderPainter",
     "save",
     "undo",
@@ -2098,7 +2106,7 @@ pub const NAMES: &[&str] = &[
 ];
 
 /// Names that are deliberately the same drawing as another (aliases of one command or one idea).
-pub const ALIASES: &[(&str, &str)] = &[("search", "find")];
+pub const ALIASES: &[(&str, &str)] = &[("search", "find"), ("drawTable", "draw")];
 
 #[cfg(test)]
 mod tests {

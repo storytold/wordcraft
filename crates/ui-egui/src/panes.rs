@@ -518,6 +518,11 @@ fn direct_list(v: &Value) -> Vec<String> {
     v.as_array().map(|a| a.iter().take(64).map(|d| describe(d["prop"].as_str().unwrap_or(""), &d["value"])).collect()).unwrap_or_default()
 }
 
+/// Each `{"prop", "value"}` of a list (the Style Inspector's, or a formatting change's) as text.
+pub(crate) fn describe_props(list: &[Value]) -> Vec<String> {
+    list.iter().take(64).map(|d| describe(d["prop"].as_str().unwrap_or(""), &d["value"])).collect()
+}
+
 /// "Bold", "Not Italic", "Font: Arial", "Size: 14 pt"…
 fn describe(prop: &str, v: &Value) -> String {
     let label = match prop {
@@ -562,6 +567,9 @@ fn describe(prop: &str, v: &Value) -> String {
         "suppressLineNumbers" => "Suppress line numbers",
         "bidi" => "Right-to-left",
         "dropCap" => "Drop cap",
+        "style" => "Style",
+        "numbering" => "Numbering",
+        "lang" => "Language",
         other => other,
     };
     let label = tl!(label);

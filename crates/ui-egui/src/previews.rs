@@ -94,7 +94,7 @@ impl Previews {
         })
     }
 
-    fn get_or(&mut self, ctx: &egui::Context, key: &str, make: impl FnOnce() -> Option<egui::ColorImage>) -> Option<TextureHandle> {
+    pub(crate) fn get_or(&mut self, ctx: &egui::Context, key: &str, make: impl FnOnce() -> Option<egui::ColorImage>) -> Option<TextureHandle> {
         if let Some(t) = self.tex.get(key) {
             return Some(t.clone());
         }
