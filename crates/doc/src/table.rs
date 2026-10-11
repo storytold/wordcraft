@@ -240,46 +240,111 @@ impl Table {
         }
     }
 
-    /// Split cell `c` of row `r` into `n` cells horizontally.
+    /// Split cell `c` of row `r` into `n` cells horizontally. When the cell spans fewer grid
+    /// columns than that, the grid is refined inside the cell only: the new borders divide it
+    /// into equal parts, and the cells of other rows widen over the new grid columns, so their
+    /// extent and the table's width stay as they were.
     pub fn split_cell(&mut self, r: usize, c: usize, n: usize) {
         let n = n.clamp(1, MAX_COLS);
-        let Some(row) = self.rows.get_mut(r) else { return };
-        let Some(cell) = row.cells.get_mut(c) else { return };
-        let span = cell.span();
+        let Some(span) = self.rows.get(r).and_then(|row| row.cells.get(c)).map(Cell::span) else { return };
         if n <= 1 {
             return;
         }
-        let w = cell.props.width.map(|w| w / n as f32);
-        cell.props.width = w;
         if span >= n {
+            let Some(row) = self.rows.get_mut(r) else { return };
+            let Some(cell) = row.cells.get_mut(c) else { return };
+            let w = cell.props.width.map(|w| w / n as f32);
+            cell.props.width = w;
             cell.props.span = (span - (n - 1)) as u32;
             for k in 1..n {
                 let mut nc = Cell::empty();
                 nc.props.width = w;
                 row.cells.insert(c + k, nc);
             }
-        } else {
-            // Need more grid columns: widen the grid at this column for every other row.
-            let g = self.grid_col(r, c);
-            let extra = n - span;
-            for _ in 0..extra {
-                self.insert_col(g + span);
+            return;
+        }
+        let g = self.grid_col(r, c);
+        let mut end = g.saturating_add(span);
+        // A grid narrower than the row (a damaged file) gets the columns the cell needs.
+        while self.grid.len() < end && self.grid.len() < MAX_COLS {
+            self.grid.push(72.0);
+        }
+        if self.grid.len() < end {
+            return;
+        }
+        for w in self.grid.get_mut(g..end).into_iter().flatten() {
+            if !(w.is_finite() && *w > 0.0) {
+                *w = 72.0;
             }
-            // After insert_col this row got empty cells inserted (or the cell widened): normalise
-            // the target row to n cells spanning one column each.
-            if let Some(row) = self.rows.get_mut(r) {
-                let mut x = 0;
-                for cell in row.cells.iter_mut() {
-                    if x == g {
-                        cell.props.span = 1;
+        }
+        const EPS: f32 = 0.01;
+        let total: f32 = self.grid.get(g..end).map(|x| x.iter().sum()).unwrap_or(0.0);
+        // Grid lines where the cell's parts start (after the first, at `g`).
+        let mut lines = Vec::with_capacity(n);
+        for k in 1..n {
+            let x = total * k as f32 / n as f32;
+            let mut acc = 0.0;
+            let mut hit = None;
+            for j in g..end {
+                let w = self.grid.get(j).copied().unwrap_or(0.0);
+                if j > g && (x - acc).abs() <= EPS {
+                    hit = Some((j, None));
+                    break;
+                }
+                if x < acc + w - EPS {
+                    if x > acc + EPS {
+                        hit = Some((j, Some((x - acc, w - (x - acc)))));
                     }
-                    x += cell.span();
+                    break;
                 }
-                let have: usize = row.cells.iter().map(Cell::span).sum();
-                let want = self.grid.len();
-                for _ in have..want {
-                    row.cells.insert((c + 1).min(row.cells.len()), Cell::empty());
+                acc += w;
+            }
+            match hit {
+                // An existing grid line is where the border goes.
+                Some((j, None)) => lines.push(j),
+                // A new grid line inside column `j`: every cell over `j` widens over both halves.
+                Some((j, Some((left, right)))) if self.grid.len() < MAX_COLS => {
+                    if let Some(w) = self.grid.get_mut(j) {
+                        *w = left;
+                    }
+                    self.grid.insert(j + 1, right);
+                    for rr in 0..self.rows.len() {
+                        if let Some(ci) = self.cell_at_grid(rr, j)
+                            && let Some(cell) = self.rows.get_mut(rr).and_then(|row| row.cells.get_mut(ci))
+                        {
+                            cell.props.span = cell.props.span.max(1).saturating_add(1);
+                        }
+                    }
+                    end += 1;
+                    lines.push(j + 1);
                 }
+                _ => {}
+            }
+        }
+        lines.dedup();
+        // The cell now spans `g..end`: cut it at the new lines.
+        let grid = self.grid.clone();
+        let width = |a: usize, b: usize| grid.get(a..b).map(|x| x.iter().sum::<f32>());
+        let Some(row) = self.rows.get_mut(r) else { return };
+        let mut a = g;
+        let mut parts = Vec::with_capacity(lines.len() + 1);
+        for &b in lines.iter().chain(std::iter::once(&end)) {
+            if b > a {
+                parts.push((a, b));
+                a = b;
+            }
+        }
+        for (k, &(a, b)) in parts.iter().enumerate() {
+            if k == 0 {
+                if let Some(cell) = row.cells.get_mut(c) {
+                    cell.props.span = (b - a) as u32;
+                    cell.props.width = width(a, b);
+                }
+            } else {
+                let mut nc = Cell::empty();
+                nc.props.span = (b - a) as u32;
+                nc.props.width = width(a, b);
+                row.cells.insert((c + k).min(row.cells.len()), nc);
             }
         }
     }

@@ -253,7 +253,7 @@ fn paste_text(s: &mut Session, v: &Value) -> CmdResult {
         Some(t) => t.to_string(),
         None => s.clipboard.as_ref().map(Fragment::plain_text).unwrap_or_default(),
     };
-    super::type_text(s, &text.replace("\r\n", "\r").replace('\n', "\r"))?;
+    super::paste_text(s, &text.replace("\r\n", "\r").replace('\n', "\r"))?;
     sel_result(s)
 }
 
@@ -405,7 +405,7 @@ fn replace(s: &mut Session, v: &Value) -> CmdResult {
     // Replace the current match if selected, then move to the next.
     if results.iter().any(|(x, y)| *x == a && *y == b) {
         let with = s.find.replace.clone();
-        super::type_text(s, &with)?;
+        super::paste_text(s, &with)?;
     }
     let _ = step(s, 1);
     Ok(json!({"remaining": search(s, story)?.len()}))
@@ -422,12 +422,21 @@ fn replace_all(s: &mut Session, v: &Value) -> CmdResult {
         if s.doc.settings.track_changes {
             // Same path as a single replace, so the change is a reviewable revision.
             s.sel = Selection { anchor: a, focus: b };
-            super::type_text(s, &with)?;
+            super::paste_text(s, &with)?;
             continue;
         }
         let props = s.doc.para_at(&a).map(|p| p.props_of_char(a.off).clone()).unwrap_or_default();
         s.doc.delete_range(&a, &b)?;
-        s.doc.insert_text(&a, &with, &props)?;
+        // A paragraph mark in the replacement starts a new paragraph, as in a single replace.
+        let mut at = a;
+        for (i, part) in with.split(['\r', '\u{2029}']).enumerate() {
+            if i > 0 {
+                at = s.doc.split_paragraph(&at)?;
+            }
+            if !part.is_empty() {
+                at = s.doc.insert_text(&at, part, &props)?;
+            }
+        }
     }
     s.status = format!("All done. We made {n} replacements.");
     Ok(json!({"replaced": n}))
