@@ -2985,3 +2985,77 @@ fn footnote_longer_than_pages_ends() {
     assert!(pieces.len() >= 3 && l.pages.len() == pieces.len(), "{} pages, {pieces:?}", l.pages.len());
     assert!(pieces.windows(2).all(|w| w[0].2 == w[1].1 && w[1].0 == w[0].0 + 1), "{pieces:?}");
 }
+
+/// Ten short paragraphs in a two-column section (`widths`: unequal columns), then one paragraph
+/// in a one-column section starting `start`.
+fn two_column_section(start: wordcraft_doc::section::SectionStart, widths: Vec<(f32, f32)>) -> Document {
+    use wordcraft_doc::section::SectionProps;
+    let text: Vec<String> = (0..10).map(|i| format!("Short paragraph {i}")).chain(["After the break".to_string()]).collect();
+    let mut d = Document::from_text(&text.join("\n"));
+    let mut s = SectionProps::default();
+    s.columns.count = 2;
+    s.columns.widths = widths;
+    d.para_mut(StoryRef::Body, &Path::top(9)).unwrap().section = Some(Box::new(s));
+    d.last_section.start = start;
+    d
+}
+
+/// Each top-level paragraph's first piece: (page, x, top, bottom).
+fn para_boxes(l: &DocLayout) -> Vec<(usize, f32, f32, f32)> {
+    let mut v: Vec<(usize, usize, f32, f32, f32)> = Vec::new();
+    for (pi, p) in l.pages.iter().enumerate() {
+        for it in &p.items {
+            if let Placed::Lines { story: StoryRef::Body, path, para, l0, l1, x, y, .. } = it
+                && let [b] = path.0[..]
+                && !v.iter().any(|e| e.0 == b as usize)
+            {
+                v.push((b as usize, pi, *x, *y, item_bottom(*y, para, *l0, *l1).unwrap()));
+            }
+        }
+    }
+    v.sort_by_key(|e| e.0);
+    v.into_iter().map(|(_, pi, x, t, b)| (pi, x, t, b)).collect()
+}
+
+/// Bottoms of the two columns (paragraphs 0–9 by their x) and the top of paragraph 10.
+fn column_bottoms(l: &DocLayout) -> (usize, f32, usize, f32, (usize, f32)) {
+    let b = para_boxes(l);
+    let x0 = b[0].1;
+    let (left, right): (Vec<_>, Vec<_>) = b[..10].iter().partition(|e| (e.1 - x0).abs() < 1.0);
+    let bottom = |v: &[&(usize, f32, f32, f32)]| v.iter().map(|e| e.3).fold(0.0f32, f32::max);
+    (left.len(), bottom(&left), right.len(), bottom(&right), (b[10].0, b[10].2))
+}
+
+#[test]
+fn columns_before_a_continuous_break_are_balanced() {
+    use wordcraft_doc::section::SectionStart;
+    for widths in [vec![], vec![(150.0, 36.0), (282.0, 0.0)]] {
+        let l = lay(&two_column_section(SectionStart::Continuous, widths.clone()));
+        let (nl, bl, nr, br, (page, after)) = column_bottoms(&l);
+        // Filled left to right, level: five paragraphs each (the left one may hold one more).
+        assert!(nl == 5 || nl == 6, "{widths:?}: {nl} left, {nr} right");
+        assert!(bl >= br - 0.5 && bl - br < 20.0, "{widths:?}: columns end at {bl} and {br}");
+        // The next section starts right below, on the same page.
+        assert_eq!(page, 0);
+        assert!(after >= bl - 0.5 && after < bl + 30.0, "{widths:?}: next section at {after}, columns end at {bl}");
+    }
+}
+
+#[test]
+fn columns_before_a_page_break_or_a_column_break_are_not_balanced() {
+    use wordcraft_doc::section::SectionStart;
+    // Next-page break: the ten paragraphs fill the first column; the next section is on page 2.
+    let l = lay(&two_column_section(SectionStart::NextPage, vec![]));
+    let (nl, _, nr, _, (page, _)) = column_bottoms(&l);
+    assert_eq!((nl, nr, page), (10, 0, 1));
+    // An explicit column break after paragraph 1 decides where the first column ends.
+    let mut d = two_column_section(SectionStart::Continuous, vec![]);
+    let p = d.para_mut(StoryRef::Body, &Path::top(1)).unwrap();
+    let end = p.text.len();
+    p.insert_text(end, &wordcraft_doc::para::COLUMN_BREAK.to_string(), &Default::default()).unwrap();
+    let l = lay(&d);
+    let (nl, bl, nr, br, (page, after)) = column_bottoms(&l);
+    assert_eq!((nl, nr, page), (2, 8, 0));
+    // The next section starts below the taller column.
+    assert!(br > bl + 50.0 && after >= br - 0.5, "columns end at {bl} and {br}, next section at {after}");
+}
