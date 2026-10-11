@@ -387,6 +387,19 @@ Equation|Equation Options|Change to Inline / Display|equation.display
 Equation|Equation Options|Justification|equation.justify
 Equation|Equation Options|Equation Number (#)|equation.number
 Equation|Equation Options|Structure Commands|equation.structure
+Outlining|Outline Tools|Promote to Heading 1|outline.promoteToHeading1
+Outlining|Outline Tools|Promote|outline.promote
+Outlining|Outline Tools|Outline Level|outline.level
+Outlining|Outline Tools|Demote|outline.demote
+Outlining|Outline Tools|Demote to Body Text|outline.demoteToBody
+Outlining|Outline Tools|Move Up|outline.moveUp
+Outlining|Outline Tools|Move Down|outline.moveDown
+Outlining|Outline Tools|Expand|outline.expand
+Outlining|Outline Tools|Collapse|outline.collapse
+Outlining|Outline Tools|Show Level|outline.showLevel
+Outlining|Outline Tools|Show Text Formatting|outline.showFormatting
+Outlining|Outline Tools|Show First Line Only|outline.firstLineOnly
+Outlining|Close|Close Outline View|outline.close
 Picture Format|Adjust|Remove Background|picture.removeBackground
 Picture Format|Adjust|Corrections|picture.corrections
 Picture Format|Adjust|Color|picture.color

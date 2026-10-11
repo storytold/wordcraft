@@ -1063,6 +1063,19 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
     if (resp.double_clicked() || resp.triple_clicked()) && layout.equation_hit(page, x, y, story).is_some() {
         return;
     }
+    // Outline view: a paragraph's symbol selects it with what is under it; a double-click
+    // expands or collapses the heading.
+    if app.session.view.mode == wordcraft_layout::ViewMode::Outline
+        && let Some(block) = layout.outline_symbol_at(page, x, y)
+    {
+        if resp.double_clicked() {
+            let _ = app.run("outline.toggle", json!({ "block": block }));
+        } else if ui.input(|i| i.pointer.primary_pressed()) && resp.contains_pointer() {
+            let _ = app.run("outline.selectSubtree", json!({ "block": block }));
+            app.session.page_hint = page;
+        }
+        return;
+    }
     // Double-click in the header/footer area edits it; double-click in the body leaves it.
     if resp.double_clicked() {
         if let Some((s, header)) = layout.header_footer_at(page, y)

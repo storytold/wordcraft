@@ -1128,6 +1128,44 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.fcircle(7.5, 10.5, 1.5, Color32::WHITE);
             pen.fcircle(12.5, 10.5, 1.5, Color32::WHITE);
         }
+        // Outlining tab: arrows moving a paragraph between outline levels and along the outline.
+        "outlinePromote" | "outlineDemote" => {
+            pen.lines(9.0, 17.0, &[6.0, 10.0, 14.0]);
+            if name == "outlinePromote" {
+                pen.line_c(&[(7.0, 10.0), (2.5, 10.0)], a);
+                pen.line_c(&[(5.0, 7.5), (2.5, 10.0), (5.0, 12.5)], a);
+            } else {
+                pen.line_c(&[(2.5, 10.0), (7.0, 10.0)], a);
+                pen.line_c(&[(4.5, 7.5), (7.0, 10.0), (4.5, 12.5)], a);
+            }
+        }
+        "outlineTop" | "outlineBody" => {
+            pen.lines(11.0, 17.0, &[6.0, 10.0, 14.0]);
+            let (x, d) = if name == "outlineTop" { (3.0, 1.0) } else { (9.0, -1.0) };
+            for k in [0.0, 3.5] {
+                pen.line_c(&[(x + d * k + d * 2.5, 7.0), (x + d * k, 10.0), (x + d * k + d * 2.5, 13.0)], a);
+            }
+        }
+        "outlineUp" | "outlineDown" => {
+            pen.lines(3.0, 11.0, &[6.0, 10.0, 14.0]);
+            let up = name == "outlineUp";
+            let (tip, tail) = if up { (3.0, 17.0) } else { (17.0, 3.0) };
+            pen.line_c(&[(15.0, tail), (15.0, tip)], a);
+            let wing = if up { tip + 3.0 } else { tip - 3.0 };
+            pen.line_c(&[(12.0, wing), (15.0, tip), (18.0, wing)], a);
+        }
+        "outlineExpand" | "outlineCollapse" => {
+            pen.fcircle(10.0, 10.0, 6.5, c);
+            pen.line_c(&[(6.5, 10.0), (13.5, 10.0)], Color32::WHITE);
+            if name == "outlineExpand" {
+                pen.line_c(&[(10.0, 6.5), (10.0, 13.5)], Color32::WHITE);
+            }
+        }
+        "closeOutline" => {
+            pen.page(4.0, 2.0, 16.0, 18.0);
+            pen.line_c(&[(7.0, 8.0), (13.0, 14.0)], red);
+            pen.line_c(&[(13.0, 8.0), (7.0, 14.0)], red);
+        }
         "help" => {
             pen.circle(10.0, 10.0, 7.0, c);
             pen.text(10.0, 10.0, 10.0, "?", a, true);

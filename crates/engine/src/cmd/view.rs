@@ -24,12 +24,8 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("view.printLayout", "Print Layout", "View › Views", |s, _| mode(s, ViewMode::Print, false)).pure(),
         CommandSpec::new("view.webLayout", "Web Layout", "View › Views", |s, _| mode(s, ViewMode::Web, false)).pure(),
         CommandSpec::new("view.draft", "Draft", "View › Views", |s, _| mode(s, ViewMode::Draft, false)).pure(),
-        CommandSpec::new("view.outline", "Outline", "View › Views", |s, _| {
-            mode(s, ViewMode::Draft, false)?;
-            s.view.nav_pane = true;
-            sel_result(s)
-        })
-        .pure(),
+        // The body as an outline of its headings, with the Outlining tab (`outline.*`).
+        CommandSpec::new("view.outline", "Outline", "View › Views", |s, _| mode(s, ViewMode::Outline, false)).pure(),
         CommandSpec::new("view.readMode", "Read Mode", "View › Views", |s, _| mode(s, ViewMode::Print, true)).pure(),
         CommandSpec::new("view.focus", "Focus", "View › Immersive", |s, v| toggle(s, v, |x| &mut x.focus_mode)).pure(),
         CommandSpec::new("view.ruler", "Ruler", "View › Show", |s, v| toggle(s, v, |x| &mut x.ruler)).pure(),
