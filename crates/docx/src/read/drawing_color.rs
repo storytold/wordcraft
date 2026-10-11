@@ -77,6 +77,16 @@ fn scheme_slot(name: &str) -> Option<usize> {
     })
 }
 
+/// Theme colour `name` (`accent1`, `tx1`…) of `theme`.
+pub(crate) fn scheme(name: &str, theme: &[Rgb]) -> Option<Rgb> {
+    scheme_slot(name).map(|i| slot(theme, i))
+}
+
+/// `c` with its luminance changed by `f`.
+pub(crate) fn lum(c: Rgb, f: impl Fn(f64) -> f64) -> Rgb {
+    adjust_lum(c, f)
+}
+
 /// `tint` (towards `to` = 255) and `shade` (towards 0): `v` is the share of the original colour kept.
 fn mix(c: Rgb, to: f64, v: f64) -> Rgb {
     let f = |x: u8| (x as f64 * v + to * (1.0 - v)).round().clamp(0.0, 255.0) as u8;

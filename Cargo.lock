@@ -5142,6 +5142,7 @@ name = "wordcraft-layout"
 version = "0.5.0"
 dependencies = [
  "js-sys",
+ "kurbo",
  "log",
  "serde",
  "serde_json",

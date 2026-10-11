@@ -1323,3 +1323,40 @@
 	Flip Vertical	Віддзеркалити по вертикалі
 	Flip Horizontal	Віддзеркалити по горизонталі
 	Formatted	Відформатовано
+
+# WordArt and connectors (#416).
+	WordArt Styles	Стилі WordArt
+	Text Fill	Заливка тексту
+	Text Outline	Контур тексту
+	Transform	Перетворення
+	No Fill	Без заливки
+	No Outline	Без контуру
+	Reflection	Відбиття
+	No Reflection	Без відбиття
+	No Transform	Без перетворення
+	Connect Shapes	З'єднати фігури
+	Straight Connector	Прямий з'єднувач
+	Straight Arrow Connector	Прямий з'єднувач зі стрілкою
+	Elbow Connector	Ламаний з'єднувач
+	Elbow Arrow Connector	Ламаний з'єднувач зі стрілкою
+	Curved Connector	Вигнутий з'єднувач
+	Curved Arrow Connector	Вигнутий з'єднувач зі стрілкою
+	Arch Up	Арка вгору
+	Arch Down	Арка вниз
+	Circle	Коло
+	Slant Up	Нахил угору
+	Slant Down	Нахил униз
+	Inflate	Роздуття
+	Deflate	Стиснення
+	Chevron Up	Шеврон угору
+	Chevron Down	Шеврон униз
+	Triangle Up	Трикутник угору
+	Triangle Down	Трикутник униз
+	Solid Accent	Суцільний акцент
+	Light with Outline	Світлий з контуром
+	Hollow	Порожнистий
+	Accent Gradient	Акцентний градієнт
+	Dark with Shadow	Темний із тінню
+	Soft Glow	М'яке світіння
+	Accent with Reflection	Акцент із відбиттям
+	Warm Gradient with Outline	Теплий градієнт із контуром

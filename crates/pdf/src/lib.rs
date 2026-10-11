@@ -47,6 +47,7 @@ use wordcraft_doc::{Document, Path as DocPath, Rgb, StoryRef};
 use wordcraft_fonts::FaceRef;
 use wordcraft_geom::Rect;
 use wordcraft_layout::display::{DisplayOptions, Draw, Stroke as LineStyle, page_display};
+use wordcraft_layout::wordart::ArtPaint;
 use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, Page, Placed, layout};
 use wordcraft_metafile::{Picture, PlacedItem};
 
@@ -411,6 +412,11 @@ fn shape_path(kind: ShapeKind, r: &Rect) -> Option<Path> {
         ShapeKind::Line => {
             pb.move_to(x0, y1);
             pb.line_to(x1, y0);
+        }
+        // Connectors are drawn as paths (`Draw::Path`); this is their frame's diagonal.
+        ShapeKind::StraightConnector | ShapeKind::ElbowConnector | ShapeKind::CurvedConnector => {
+            pb.move_to(x0, y0);
+            pb.line_to(x1, y1);
         }
         ShapeKind::Arrow => {
             let h = r.h;
@@ -813,6 +819,56 @@ impl Exporter<'_> {
                     ..Default::default()
                 }));
                 if f.is_some() && can_fill || stroke.is_some() {
+                    s.draw_path(&p);
+                }
+                s.set_fill(None);
+                s.set_stroke(None);
+            }
+            Draw::Art { path, fx, color, alpha } => {
+                for l in wordcraft_layout::wordart::art_layers(path, fx, *color, *alpha) {
+                    let mut pb = PathBuilder::new();
+                    append_path(&mut pb, &l.path);
+                    let Some(p) = pb.finish() else { continue };
+                    let (paint, opacity): (krilla::paint::Paint, f32) = match &l.paint {
+                        ArtPaint::Solid(c, a) => (rgb::Color::new(c.0, c.1, c.2).into(), *a),
+                        ArtPaint::Linear { p0, p1, stops } => {
+                            let stops = stops
+                                .iter()
+                                .map(|(o, c, a)| krilla::paint::Stop {
+                                    offset: norm(*o),
+                                    color: rgb::Color::new(c.0, c.1, c.2).into(),
+                                    opacity: norm(*a),
+                                })
+                                .collect();
+                            let g = krilla::paint::LinearGradient {
+                                x1: p0.0,
+                                y1: p0.1,
+                                x2: p1.0,
+                                y2: p1.1,
+                                transform: Transform::default(),
+                                spread_method: krilla::paint::SpreadMethod::Pad,
+                                stops,
+                                anti_alias: true,
+                            };
+                            (g.into(), 1.0)
+                        }
+                    };
+                    match l.stroke {
+                        Some(w) => {
+                            s.set_fill(None);
+                            s.set_stroke(Some(Stroke {
+                                paint,
+                                width: w.clamp(0.1, 400.0),
+                                opacity: norm(opacity),
+                                line_join: LineJoin::Round,
+                                ..Default::default()
+                            }));
+                        }
+                        None => {
+                            s.set_stroke(None);
+                            s.set_fill(Some(Fill { paint, opacity: norm(opacity), rule: FillRule::NonZero }));
+                        }
+                    }
                     s.draw_path(&p);
                 }
                 s.set_fill(None);

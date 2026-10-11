@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use wordcraft_doc::connector::{ConnEnd, ShapeExtra};
 use wordcraft_doc::effects::{Glow, Shadow, ShapeEffects};
 use wordcraft_doc::graphic::{Embedded, Graphic, GraphicItem, GraphicKind};
 use wordcraft_doc::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
@@ -12,8 +13,9 @@ use wordcraft_doc::{Block, Blocks, InlineObject, Paragraph, PartKind, RevisionKi
 use super::Reader;
 use super::props::{sectpr, tcpr, trpr};
 use crate::package::{Rels, rt};
-use crate::units::{int, measure};
+use crate::units::{int, measure, u32_of};
 use crate::xml::El;
+use wordcraft_doc::wordart::TextWarp;
 
 /// Deepest table nesting we build (deeper tables become plain paragraphs).
 const MAX_TABLE_DEPTH: usize = 24;
@@ -724,6 +726,7 @@ impl Reader<'_> {
             }
             obj
         };
+        self.set_shape_id(&mut obj, c.child("wp:docPr").and_then(|p| p.attr("id")));
         // Word's effect extent also covers a rotated object's overhang; the model keeps that
         // apart (it follows from the angle), so take it back out.
         if let Some(f) = obj.float_mut() {
@@ -854,7 +857,9 @@ impl Reader<'_> {
                 let alt = e.find("pic:cNvPr").and_then(|p| p.attr("descr")).unwrap_or("").to_string();
                 self.read_pic(e, rels, w, h, alt, Float::default())
             } else {
-                Some(self.read_wsp(sc, e, rels, w, h, Float::default()))
+                let mut o = self.read_wsp(sc, e, rels, w, h, Float::default());
+                self.set_shape_id(&mut o, e.child("wps:cNvPr").and_then(|p| p.attr("id")));
+                Some(o)
             };
             if let Some(obj) = obj {
                 out.push(wordcraft_doc::para::GroupChild { x: fit(x0 + ox * sx, -max), y: fit(y0 + oy * sy, -max), obj });
@@ -872,7 +877,10 @@ impl Reader<'_> {
             "ellipse" => ShapeKind::Ellipse,
             "triangle" | "rtTriangle" => ShapeKind::Triangle,
             "diamond" => ShapeKind::Diamond,
-            "line" | "straightConnector1" => ShapeKind::Line,
+            "line" => ShapeKind::Line,
+            "straightConnector1" => ShapeKind::StraightConnector,
+            "bentConnector2" | "bentConnector3" | "bentConnector4" | "bentConnector5" => ShapeKind::ElbowConnector,
+            "curvedConnector2" | "curvedConnector3" | "curvedConnector4" | "curvedConnector5" => ShapeKind::CurvedConnector,
             "rightArrow" | "leftArrow" | "upArrow" | "downArrow" => ShapeKind::Arrow,
             "star5" | "star4" | "star6" => ShapeKind::Star,
             "heart" => ShapeKind::Heart,
@@ -894,7 +902,35 @@ impl Reader<'_> {
             Some(t) if sc.story_depth < MAX_STORY_DEPTH => Some(self.read_textbox(sc, t, rels)),
             _ => None,
         };
-        InlineObject::Shape { kind, w, h, fill, stroke, stroke_width, float, story, freeform: None, effects }
+        let mut extra = ShapeExtra::default();
+        // Arrowheads: any end type but `none` (ECMA-376 §20.1.10.33) is drawn as a triangle.
+        let arrow = |tag: &str| ln.and_then(|l| l.child(tag)).and_then(|e| e.attr("type")).is_some_and(|t| t != "none");
+        extra.arrow_start = arrow("a:headEnd");
+        extra.arrow_end = arrow("a:tailEnd");
+        // A connector's glued ends (ECMA-376 §20.1.2.2.36, §20.1.2.2.13).
+        if let Some(cn) = wsp.child("wps:cNvCnPr") {
+            let end = |tag: &str| {
+                let e = cn.child(tag)?;
+                let id = e.attr("id").and_then(u32_of).filter(|v| *v != 0)?;
+                let site = e.attr("idx").and_then(u32_of).unwrap_or(0).min(wordcraft_doc::connector::MAX_SITE);
+                Some(ConnEnd { id, site })
+            };
+            extra.start = end("a:stCxn");
+            extra.end = end("a:endCxn");
+            self.glued.extend(extra.start.iter().chain(extra.end.iter()).map(|e| e.id));
+        }
+        extra.warp = wsp.child("wps:bodyPr").and_then(|b| b.child("a:prstTxWarp")).and_then(text_warp);
+        InlineObject::Shape { kind, w, h, fill, stroke, stroke_width, float, story, freeform: None, effects, extra }
+    }
+
+    /// Keep drawing id `id` on a shape read from a file (see [`Reader::glued`]).
+    fn set_shape_id(&mut self, obj: &mut InlineObject, id: Option<&str>) {
+        if let InlineObject::Shape { extra, .. } = obj
+            && let Some(id) = id.and_then(u32_of).filter(|v| *v != 0)
+        {
+            extra.id = id;
+            self.shape_ids = true;
+        }
     }
 
     fn read_textbox(&mut self, sc: &StoryCtx, content: &El, rels: &Rels) -> u32 {
@@ -935,6 +971,7 @@ impl Reader<'_> {
                 story,
                 freeform: None,
                 effects: Default::default(),
+                extra: Default::default(),
             });
         }
         None
@@ -1173,6 +1210,19 @@ fn graphic_work(items: &[GraphicItem]) -> usize {
 
 /// A shape's `a:effectLst` (ECMA-376 Part 1 §20.1.8.26): its outer shadow, glow and soft edges.
 /// Other effects are dropped.
+/// A preset text warp (`a:prstTxWarp`, ECMA-376 §20.1.9.19) and its adjust values
+/// (`a:avLst/a:gd` with `fmla="val N"`). Unknown presets are dropped.
+fn text_warp(e: &El) -> Option<TextWarp> {
+    let mut w = TextWarp::new(e.attr("prst")?)?;
+    for gd in e.child("a:avLst").into_iter().flat_map(|l| l.children("a:gd")) {
+        let (Some(name), Some(f)) = (gd.attr("name"), gd.attr("fmla")) else { continue };
+        if let Some(v) = f.trim().strip_prefix("val").and_then(|v| v.trim().parse::<i64>().ok()) {
+            w.set_adj(name, v);
+        }
+    }
+    Some(w)
+}
+
 fn effect_list(l: &El) -> ShapeEffects {
     let pt = |e: &El, n: &str| e.attr(n).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0);
     let shadow = l.child("a:outerShdw").map(|e| {

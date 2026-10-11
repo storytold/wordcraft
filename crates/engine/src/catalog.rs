@@ -57,6 +57,7 @@ Home|Font|Subscript|format.subscript
 Home|Font|Superscript|format.superscript
 Home|Font|Text Effects Outline|format.outline
 Home|Font|Text Effects Shadow|format.shadow
+Home|Font|Text Effects and Typography|format.textEffects
 Home|Font|Text Highlight Color|format.highlight
 Home|Font|Font Color|format.color
 Home|Font|Character Shading|format.shading
@@ -404,6 +405,10 @@ Picture Format|Size|Rotation|arrange.rotation
 Shape Format|Shape Styles|Shape Fill|shape.fill
 Shape Format|Shape Styles|Shape Outline|shape.outline
 Shape Format|Shape Styles|Shape Effects|shape.effects
+Shape Format|WordArt Styles|WordArt Quick Styles|wordArt.style
+Shape Format|WordArt Styles|Text Fill|wordArt.textFill
+Shape Format|WordArt Styles|Text Outline|wordArt.textOutline
+Shape Format|WordArt Styles|Text Effects Transform|wordArt.transform
 Shape Format|Text|Text Direction|shape.textDirection
 Shape Format|Text|Align Text|shape.alignText
 Shape Format|Text|Create Link|shape.link

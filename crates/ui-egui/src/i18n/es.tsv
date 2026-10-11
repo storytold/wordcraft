@@ -1327,3 +1327,40 @@
 	Flip Vertical	Voltear verticalmente
 	Flip Horizontal	Voltear horizontalmente
 	Formatted	Con formato
+
+# WordArt and connectors (#416).
+	WordArt Styles	Estilos de WordArt
+	Text Fill	Relleno de texto
+	Text Outline	Contorno de texto
+	Transform	Transformar
+	No Fill	Sin relleno
+	No Outline	Sin contorno
+	Reflection	Reflejo
+	No Reflection	Sin reflejo
+	No Transform	Sin transformación
+	Connect Shapes	Conectar formas
+	Straight Connector	Conector recto
+	Straight Arrow Connector	Conector recto de flecha
+	Elbow Connector	Conector angular
+	Elbow Arrow Connector	Conector angular de flecha
+	Curved Connector	Conector curvo
+	Curved Arrow Connector	Conector curvo de flecha
+	Arch Up	Arco hacia arriba
+	Arch Down	Arco hacia abajo
+	Circle	Círculo
+	Slant Up	Inclinación hacia arriba
+	Slant Down	Inclinación hacia abajo
+	Inflate	Inflar
+	Deflate	Desinflar
+	Chevron Up	Chevrón hacia arriba
+	Chevron Down	Chevrón hacia abajo
+	Triangle Up	Triángulo hacia arriba
+	Triangle Down	Triángulo hacia abajo
+	Solid Accent	Color de énfasis sólido
+	Light with Outline	Claro con contorno
+	Hollow	Hueco
+	Accent Gradient	Degradado de énfasis
+	Dark with Shadow	Oscuro con sombra
+	Soft Glow	Resplandor suave
+	Accent with Reflection	Énfasis con reflejo
+	Warm Gradient with Outline	Degradado cálido con contorno

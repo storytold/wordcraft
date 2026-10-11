@@ -60,7 +60,7 @@ pub(crate) fn each_para<'a>(b: &'a Block, depth: usize, f: &mut dyn FnMut(&'a Pa
     }
 }
 
-fn each_para_mut(b: &mut Block, depth: usize, f: &mut dyn FnMut(&mut Paragraph)) {
+pub(crate) fn each_para_mut(b: &mut Block, depth: usize, f: &mut dyn FnMut(&mut Paragraph)) {
     match b {
         Block::Para(p) => f(p),
         Block::Table(t) if depth < 16 => {
@@ -574,6 +574,7 @@ mod tests {
             story,
             freeform: None,
             effects: Default::default(),
+            extra: Default::default(),
         }
     }
 

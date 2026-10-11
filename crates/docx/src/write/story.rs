@@ -469,12 +469,12 @@ impl Writer<'_> {
                 w.close("w:r");
                 self.rev_close(w, props);
             }
-            InlineObject::Shape { kind, w: sw, h: sh, float, effects, freeform, .. } => {
+            InlineObject::Shape { kind, w: sw, h: sh, float, effects, freeform, extra, .. } => {
                 self.rev_open(w, props);
                 w.open("w:r", &[]);
                 self.rpr(w, props);
                 w.open("w:drawing", &[]);
-                let docpr = self.next_docpr();
+                let docpr = self.shape_docpr(extra.id);
                 // Ink is told apart by its name (and its pen), which reading looks for.
                 let name = shape_name(*kind, freeform.as_deref(), &docpr);
                 // The effect extent leaves room for the shadow and glow.
@@ -526,8 +526,8 @@ impl Writer<'_> {
                                 self.pic(w, &c.obj, &file, at, rels);
                             }
                         }
-                        InlineObject::Shape { .. } => {
-                            let id = self.next_docpr();
+                        InlineObject::Shape { extra, .. } => {
+                            let id = self.shape_docpr(extra.id);
                             self.wsp(w, &c.obj, Some(&id), at, rels, depth);
                         }
                         _ => {}
@@ -657,14 +657,28 @@ impl Writer<'_> {
     /// A shape's or text box's `wps:wsp`, at `off` in its group (or 0, 0). In a group it carries
     /// its own `wps:cNvPr` with drawing id `id`.
     fn wsp(&mut self, w: &mut W, o: &InlineObject, id: Option<&str>, off: (f32, f32), rels: &mut PartRels, depth: usize) {
-        let InlineObject::Shape { kind, w: sw, h: sh, fill, stroke, stroke_width, story, effects, float, freeform } = o else { return };
+        let InlineObject::Shape { kind, w: sw, h: sh, fill, stroke, stroke_width, story, effects, float, freeform, extra } = o else { return };
         let geom = freeform.as_deref().filter(|_| *kind == ShapeKind::Freeform);
         w.open("wps:wsp", &[]);
         if let Some(id) = id {
             let name = shape_name(*kind, freeform.as_deref(), id);
             w.empty("wps:cNvPr", &[("id", id), ("name", &name)]);
         }
-        if *kind == ShapeKind::TextBox {
+        if kind.is_connector() {
+            // A connector's glued ends (ECMA-376 §20.1.2.2.8 `cNvCxnSpPr`).
+            let ends = [("a:stCxn", extra.start), ("a:endCxn", extra.end)];
+            if ends.iter().any(|(_, e)| e.is_some()) {
+                w.open("wps:cNvCnPr", &[]);
+                for (tag, e) in ends {
+                    if let Some(e) = e {
+                        w.empty(tag, &[("id", &e.id.to_string()), ("idx", &e.site.to_string())]);
+                    }
+                }
+                w.close("wps:cNvCnPr");
+            } else {
+                w.empty("wps:cNvCnPr", &[]);
+            }
+        } else if *kind == ShapeKind::TextBox {
             w.empty("wps:cNvSpPr", &[("txBox", "1")]);
         } else {
             w.empty("wps:cNvSpPr", &[]);
@@ -678,6 +692,9 @@ impl Writer<'_> {
             ShapeKind::Triangle => "triangle",
             ShapeKind::Diamond => "diamond",
             ShapeKind::Line => "line",
+            ShapeKind::StraightConnector => "straightConnector1",
+            ShapeKind::ElbowConnector => "bentConnector3",
+            ShapeKind::CurvedConnector => "curvedConnector3",
             ShapeKind::Arrow => "rightArrow",
             ShapeKind::Star => "star5",
             ShapeKind::Heart => "heart",
@@ -692,7 +709,7 @@ impl Writer<'_> {
         }
         let alpha = geom.map_or(1.0, |f| f.alpha);
         let ink = geom.is_some_and(|f| f.is_ink());
-        match fill.filter(|_| !ink) {
+        match fill.filter(|_| !ink && !kind.is_open()) {
             Some(c) => {
                 w.open("a:solidFill", &[]);
                 w.empty("a:srgbClr", &[("val", &c.hex())]);
@@ -717,6 +734,7 @@ impl Writer<'_> {
                 if ink {
                     w.empty("a:round", &[]);
                 }
+                arrow_ends(w, extra);
                 w.close("a:ln");
             }
             None => {
@@ -740,7 +758,14 @@ impl Writer<'_> {
             w.close("wps:txbx");
             self.boxes.leave();
         }
-        w.empty("wps:bodyPr", &[]);
+        match extra.warp.as_ref().and_then(|t| t.sanitized()) {
+            Some(warp) => {
+                w.open("wps:bodyPr", &[]);
+                text_warp(w, &warp);
+                w.close("wps:bodyPr");
+            }
+            None => w.empty("wps:bodyPr", &[]),
+        }
         w.close("wps:wsp");
     }
 
@@ -1022,6 +1047,31 @@ fn cust_geom(w: &mut W, f: &wordcraft_doc::freeform::Freeform, sw: f32, sh: f32)
 }
 
 /// A shape's `a:effectLst` (ECMA-376 Part 1 §20.1.8.26), children in schema order.
+/// A line's arrowheads (`a:headEnd`, `a:tailEnd`, ECMA-376 §20.1.8.38 / §20.1.8.57).
+fn arrow_ends(w: &mut W, extra: &wordcraft_doc::connector::ShapeExtra) {
+    if extra.arrow_start {
+        w.empty("a:headEnd", &[("type", "triangle")]);
+    }
+    if extra.arrow_end {
+        w.empty("a:tailEnd", &[("type", "triangle")]);
+    }
+}
+
+/// A preset text warp (`a:prstTxWarp`, ECMA-376 §20.1.9.19) with its adjust values.
+fn text_warp(w: &mut W, warp: &wordcraft_doc::wordart::TextWarp) {
+    w.open("a:prstTxWarp", &[("prst", &warp.preset)]);
+    if warp.adj.is_empty() {
+        w.empty("a:avLst", &[]);
+    } else {
+        w.open("a:avLst", &[]);
+        for (name, v) in &warp.adj {
+            w.empty("a:gd", &[("name", name), ("fmla", &format!("val {v}"))]);
+        }
+        w.close("a:avLst");
+    }
+    w.close("a:prstTxWarp");
+}
+
 fn effect_list(w: &mut W, effects: &ShapeEffects) {
     let fx = effects.sanitized();
     if fx.is_empty() {

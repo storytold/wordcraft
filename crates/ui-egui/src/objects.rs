@@ -6,6 +6,9 @@
 //!
 //! While dragging, nothing is laid out or rendered: the preview is the object's own pixels taken
 //! from its page's cached texture. The drop is one command, one relayout.
+//!
+//! A selected connector shows a handle at each end instead of a frame: dragging one onto a shape
+//! glues it to the nearest connection site there (`shape.connect`), elsewhere leaves it free.
 
 use egui::{Color32, Painter, Pos2, Rect, Ui};
 use serde_json::json;
@@ -33,6 +36,40 @@ pub struct ObjectDrag {
     /// Smallest size it can be resized to, points.
     min: f32,
     picture: bool,
+    /// Dragging a connector's end (false: its start, true: its end) to this page point.
+    end: Option<(bool, (f32, f32))>,
+}
+
+/// How near (screen points) a press must be to a connector's end to grab it.
+const END_GRAB: f32 = 7.0;
+
+/// The selected connector's start and end on its page (points), and its layout.
+fn connector_ends(app: &WordApp, layout: &DocLayout) -> Option<(ObjectHit, (f32, f32), (f32, f32))> {
+    let (pos, InlineObject::Shape { kind, float, .. }) = selected(app)? else { return None };
+    if !kind.is_connector() {
+        return None;
+    }
+    let (flip_h, flip_v) = (float.flip_h, float.flip_v);
+    let o = layout.object(&pos, app.session.page_hint)?;
+    let (a, b) = wordcraft_doc::connector::ends(o.rect.x, o.rect.y, o.rect.w, o.rect.h, flip_h, flip_v);
+    Some((o, a, b))
+}
+
+fn point_on_screen(pages: &[Rect], scale: f32, page: usize, (x, y): (f32, f32)) -> Option<Pos2> {
+    pages.get(page).map(|p| egui::pos2(p.min.x + x * scale, p.min.y + y * scale))
+}
+
+/// The selected connector's end under `at` (screen): which (false: start), and the connector.
+fn connector_end_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Pos2) -> Option<(ObjectHit, bool)> {
+    let (o, a, b) = connector_ends(app, layout)?;
+    let near = |p: (f32, f32)| point_on_screen(pages, scale, o.page, p).is_some_and(|s| s.distance(at) <= END_GRAB);
+    if near(b) {
+        Some((o, true))
+    } else if near(a) {
+        Some((o, false))
+    } else {
+        None
+    }
 }
 
 /// The selected object: the selection is exactly one picture, shape or text box in the body.
@@ -79,6 +116,21 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             return true; // cancelled: dropped without a change
         }
+        if let Some((which, _)) = d.end {
+            if ui.input(|i| i.pointer.primary_down()) {
+                if let Some((_, x, y)) = crate::canvas::page_at(pages, layout, scale, at).filter(|(p, ..)| *p == d.object.page) {
+                    d.end = Some((which, (x, y)));
+                    d.drag.moved = true;
+                }
+                app.canvas.obj_drag = Some(d);
+            } else if d.drag.moved
+                && let Some((_, (x, y))) = d.end
+            {
+                let key = if which { "end" } else { "start" };
+                let _ = app.run("shape.connect", json!({key: {"x": x, "y": y, "page": d.object.page}}));
+            }
+            return true;
+        }
         if ui.input(|i| i.pointer.primary_down()) {
             let shift = ui.input(|i| i.modifiers.shift);
             if d.drag.grab == Grab::Rotate {
@@ -98,6 +150,12 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
     if !(pressed || multi) || crate::canvas::editing_header_footer(app, layout) {
         return false;
     }
+    // A selected connector's end: drag it to glue it.
+    if pressed && let Some((object, which)) = connector_end_at(app, layout, pages, scale, at) {
+        let drag = Drag::new(Grab::Move, object.page, object.rect, 0.0, at);
+        app.canvas.obj_drag = Some(ObjectDrag { drag, object, min: 0.0, picture: false, end: Some((which, (0.0, 0.0))) });
+        return true;
+    }
     let Some((object, grab)) = grab_at(app, layout, pages, scale, at) else { return false };
     // Shift/Ctrl+click adds an object to the selected ones (or takes it out), for Group.
     let adding = ui.input(|i| i.modifiers.shift || i.modifiers.command);
@@ -115,7 +173,8 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         };
         // Objects in table cells can be selected and resized, not moved; charts neither.
         if !fixed(app, &object) && (grab != Grab::Move || movable(&object)) {
-            app.canvas.obj_drag = Some(ObjectDrag { drag: Drag::new(grab, object.page, object.rect, object.spin.deg, at), object, min, picture });
+            app.canvas.obj_drag =
+                Some(ObjectDrag { drag: Drag::new(grab, object.page, object.rect, object.spin.deg, at), object, min, picture, end: None });
         }
     }
     true
@@ -163,6 +222,23 @@ fn drop(app: &mut WordApp, d: &ObjectDrag) {
 
 /// Draw the frame of the active object, or the drag preview.
 pub fn paint(app: &WordApp, painter: &Painter, t: &Tokens, layout: &DocLayout, pages: &[Rect], scale: f32) {
+    if let Some(d) = app.canvas.obj_drag.as_ref().filter(|d| d.end.is_some()) {
+        paint_end_drag(app, d, painter, t, layout, pages, scale);
+        return;
+    }
+    if let Some((o, a, b)) = connector_ends(app, layout) {
+        // A connector: a handle at each end (filled when glued).
+        let glued = match selected(app) {
+            Some((_, InlineObject::Shape { extra, .. })) => (extra.start.is_some(), extra.end.is_some()),
+            _ => (false, false),
+        };
+        for (p, on) in [(a, glued.0), (b, glued.1)] {
+            if let Some(c) = point_on_screen(pages, scale, o.page, p) {
+                painter.circle(c, 4.5, if on { t.accent } else { Color32::WHITE }, egui::Stroke::new(1.2, t.accent));
+            }
+        }
+        return;
+    }
     if let Some(d) = app.canvas.obj_drag.as_ref().filter(|d| d.drag.moved) {
         let Some(to) = screen(pages, scale, d.drag.to_page, d.drag.rect) else { return };
         if d.drag.grab == Grab::Rotate {
@@ -207,13 +283,56 @@ pub fn paint(app: &WordApp, painter: &Painter, t: &Tokens, layout: &DocLayout, p
     }
 }
 
+/// A connector's end being dragged: a line from its other end to the pointer, and the connection
+/// sites of the shapes near the pointer (the one it would glue to, filled).
+fn paint_end_drag(app: &WordApp, d: &ObjectDrag, painter: &Painter, t: &Tokens, layout: &DocLayout, pages: &[Rect], scale: f32) {
+    let Some((which, at)) = d.end.filter(|_| d.drag.moved) else { return };
+    let Some((_, a, b)) = connector_ends(app, layout) else { return };
+    let fixed = if which { a } else { b };
+    let snap = wordcraft_engine::cmd::connectors::SNAP;
+    let mut best: Option<((f32, f32), f32)> = None;
+    if let Some(pg) = layout.pages.get(d.object.page) {
+        for it in &pg.items {
+            let wordcraft_layout::Placed::Object { rect, spin, story: StoryRef::Body, path, off, .. } = it else { continue };
+            let pos = Pos { story: StoryRef::Body, path: path.clone(), off: *off };
+            let Some(InlineObject::Shape { kind, .. }) = app.session.doc.para_at(&pos).and_then(|p| p.object_at(pos.off)) else { continue };
+            if kind.is_connector() || pos == d.object.pos() {
+                continue;
+            }
+            let r = [rect.x, rect.y, rect.w, rect.h];
+            // Sites of shapes the pointer is near.
+            if at.0 < rect.x - 4.0 * snap || at.0 > rect.right() + 4.0 * snap || at.1 < rect.y - 4.0 * snap || at.1 > rect.bottom() + 4.0 * snap {
+                continue;
+            }
+            for (i, _) in wordcraft_doc::connector::sites(*kind, rect.w, rect.h).iter().enumerate() {
+                let Some(p) = wordcraft_doc::connector::site_point(*kind, r, *spin, i as u32) else { continue };
+                let dist = ((p.0 - at.0).powi(2) + (p.1 - at.1).powi(2)).sqrt();
+                if let Some(c) = point_on_screen(pages, scale, d.object.page, p) {
+                    painter.circle_stroke(c, 3.5, egui::Stroke::new(1.0, t.accent));
+                }
+                if dist <= snap && best.is_none_or(|b| dist < b.1) {
+                    best = Some((p, dist));
+                }
+            }
+        }
+    }
+    let to = best.map_or(at, |b| b.0);
+    if let (Some(f), Some(e)) = (point_on_screen(pages, scale, d.object.page, fixed), point_on_screen(pages, scale, d.object.page, to)) {
+        painter.line_segment([f, e], egui::Stroke::new(1.5, t.accent));
+        painter.circle(e, 4.5, if best.is_some() { t.accent } else { Color32::WHITE }, egui::Stroke::new(1.2, t.accent));
+    }
+}
+
 /// The pointer over an object or a handle (or dragging): its cursor.
 pub fn cursor(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Pos2) -> Option<egui::CursorIcon> {
     if let Some(d) = &app.canvas.obj_drag {
-        return Some(d.drag.grab.cursor());
+        return Some(if d.end.is_some() { egui::CursorIcon::Crosshair } else { d.drag.grab.cursor() });
     }
     if crate::canvas::editing_header_footer(app, layout) {
         return None;
+    }
+    if connector_end_at(app, layout, pages, scale, at).is_some() {
+        return Some(egui::CursorIcon::Crosshair);
     }
     grab_at(app, layout, pages, scale, at).map(|(o, g)| if fixed(app, &o) { egui::CursorIcon::Default } else { g.cursor() })
 }
@@ -278,6 +397,7 @@ mod tests {
             story: None,
             freeform: None,
             effects: Default::default(),
+            extra: Default::default(),
         };
         let (app, hit) = app_with(shape);
         assert!(!fixed(&app, &hit));

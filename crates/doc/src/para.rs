@@ -209,6 +209,10 @@ pub enum ShapeKind {
     TextBox,
     /// A shape drawn point by point, such as ink (its geometry is the shape's `freeform`).
     Freeform,
+    /// Connectors: lines whose ends can be glued to other shapes (see [`crate::connector`]).
+    StraightConnector,
+    ElbowConnector,
+    CurvedConnector,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -270,6 +274,9 @@ pub enum InlineObject {
         /// Shadow, glow and soft edges.
         #[serde(default, skip_serializing_if = "crate::effects::ShapeEffects::is_empty")]
         effects: crate::effects::ShapeEffects,
+        /// Drawing id, text warp, connector ends and arrowheads.
+        #[serde(default, skip_serializing_if = "crate::connector::ShapeExtra::is_empty")]
+        extra: crate::connector::ShapeExtra,
     },
     /// Pictures, shapes and text boxes grouped into one object (Layout › Arrange › Group): it
     /// moves, wraps and resizes as one. Its members are laid out in the group's own coordinate

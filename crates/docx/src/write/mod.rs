@@ -4,6 +4,7 @@ mod embed;
 mod math;
 mod props;
 mod story;
+mod wordart;
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -69,6 +70,8 @@ pub(crate) struct Writer<'d> {
     bookmarks: HashMap<String, u32>,
     next_rev_id: u32,
     docpr: u32,
+    /// Shapes' own drawing ids written so far (connectors refer to them).
+    shape_ids: std::collections::HashSet<u32>,
     z: u32,
     /// Note part id → file note id, in first-reference order.
     footnotes: Vec<u32>,
@@ -122,7 +125,9 @@ pub fn write_as(doc: &Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
         media_files: BTreeMap::new(),
         bookmarks: HashMap::new(),
         next_rev_id: 0,
-        docpr: 0,
+        // Fresh drawing ids start past the shapes' own (connectors refer to those).
+        docpr: doc.next_shape_id().saturating_sub(1),
+        shape_ids: std::collections::HashSet::new(),
         z: 251_658_240,
         footnotes: Vec::new(),
         endnotes: Vec::new(),
@@ -485,8 +490,13 @@ impl Writer<'_> {
     }
 
     fn next_docpr(&mut self) -> String {
-        self.docpr += 1;
+        self.docpr = self.docpr.saturating_add(1);
         self.docpr.to_string()
+    }
+
+    /// The drawing id of a shape: its own (once; a copy gets a fresh one), else a fresh one.
+    fn shape_docpr(&mut self, own: u32) -> String {
+        if own != 0 && self.shape_ids.insert(own) { own.to_string() } else { self.next_docpr() }
     }
 
     fn bookmark_id(&mut self, name: &str) -> String {
