@@ -4,8 +4,8 @@
 use serde_json::{Value, json};
 use wordcraft_doc::para::InlineObject;
 use wordcraft_doc::props::{Align, CharProps};
-use wordcraft_doc::section::SectionProps;
-use wordcraft_doc::{Block, Document, Paragraph, Pos, StoryRef, Table, para_block};
+use wordcraft_doc::section::{SectionProps, SectionStart};
+use wordcraft_doc::{Block, Blocks, Document, Paragraph, Part, PartKind, Pos, StoryRef, Table, para_block};
 
 use super::{delete_selection, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
@@ -74,18 +74,20 @@ pub fn specs() -> Vec<CommandSpec> {
             let instr = match rule.as_str() {
                 "IF" => format!(
                     "IF {{ MERGEFIELD {} }} = \"{}\" \"{}\" \"{}\"",
-                    p::str(v, "field").unwrap_or("Field"),
+                    quote(p::str(v, "field").unwrap_or("Field")),
                     p::str(v, "value").unwrap_or(""),
                     p::str(v, "then").unwrap_or(""),
                     p::str(v, "else").unwrap_or("")
                 ),
-                "SKIPIF" => format!("SKIPIF {{ MERGEFIELD {} }} = \"{}\"", p::str(v, "field").unwrap_or("Field"), p::str(v, "value").unwrap_or("")),
+                "SKIPIF" | "NEXTIF" => {
+                    format!("{rule} {{ MERGEFIELD {} }} = \"{}\"", quote(p::str(v, "field").unwrap_or("Field")), p::str(v, "value").unwrap_or(""))
+                }
                 "MERGEREC" => "MERGEREC".into(),
                 _ => "NEXT".into(),
             };
             insert_field(s, &instr, "")
         })
-        .params(r#"{"rule": "IF|SKIPIF|NEXT|MERGEREC", "field"?, "value"?, "then"?, "else"?}"#),
+        .params(r#"{"rule": "IF|SKIPIF|NEXTIF|NEXT|MERGEREC", "field"?, "value"?, "then"?, "else"?}"#),
         CommandSpec::new("mailings.matchFields", "Match Fields", "Mailings › Write & Insert Fields", |s, _| {
             Ok(json!({"fields": s.merge.headers, "address": address_map(&s.merge.headers)}))
         })
@@ -285,11 +287,11 @@ fn step(s: &mut Session, d: i64) -> CmdResult {
     Ok(json!({"record": s.merge.record + 1, "of": n}))
 }
 
-/// Field names used by MERGEFIELD fields in the document.
+/// Field names used by MERGEFIELD fields in the document (body, headers and footers).
 fn merge_fields(doc: &Document) -> Vec<String> {
     let mut v = Vec::new();
-    for path in doc.para_paths(StoryRef::Body) {
-        if let Some(p) = doc.para(StoryRef::Body, &path) {
+    for (story, path) in merge_stories(doc).into_iter().flat_map(|st| doc.para_paths(st).into_iter().map(move |p| (st, p))) {
+        if let Some(p) = doc.para(story, &path) {
             for o in &p.objects {
                 if let InlineObject::Field { instr, .. } = o
                     && let Some(name) = mergefield_name(instr)
@@ -349,105 +351,243 @@ fn greeting(s: &Session, row: usize) -> String {
     if name.is_empty() { "Dear Sir or Madam,".into() } else { format!("Dear {name},") }
 }
 
+/// What a merge-related field does for the current record.
+enum Act {
+    /// Show this text.
+    Text(String),
+    /// NEXT / a true NEXTIF: later fields in this merged document use the next record.
+    Next,
+    /// A true SKIPIF: drop this merged document and go on with the next record.
+    Skip,
+}
+
+/// Comparison of a rule condition `{ MERGEFIELD X } op "value" …` (IF, SKIPIF, NEXTIF) for
+/// `row`: whether it holds, and the quoted texts after the value (IF's true / false text).
+fn condition<'a>(s: &Session, t: &'a str, row: usize) -> (bool, Vec<&'a str>) {
+    let inner = t.split_once('{').and_then(|(_, r)| r.split('}').next()).unwrap_or("");
+    let field = mergefield_name(inner).unwrap_or_default();
+    let rest = t.split_once('}').map(|(_, r)| r).unwrap_or("");
+    let op: String = rest.trim_start().chars().take_while(|c| matches!(c, '=' | '<' | '>')).collect();
+    let mut quoted = rest.split('"').skip(1).step_by(2);
+    let cmp = quoted.next().unwrap_or("");
+    let v = value(s, row, &field);
+    // Numbers compare as numbers (Word: "7" = "7.0"), everything else as text.
+    let ord = match (v.trim().parse::<f64>(), cmp.trim().parse::<f64>()) {
+        (Ok(a), Ok(b)) => a.partial_cmp(&b),
+        _ => Some(v.as_str().cmp(cmp)),
+    };
+    use std::cmp::Ordering::{Equal, Greater, Less};
+    let holds = match op.as_str() {
+        "<>" => ord != Some(Equal),
+        "<" => ord == Some(Less),
+        ">" => ord == Some(Greater),
+        "<=" => matches!(ord, Some(Less | Equal)),
+        ">=" => matches!(ord, Some(Greater | Equal)),
+        _ => ord == Some(Equal),
+    };
+    (holds, quoted.collect())
+}
+
+/// The first word of a field instruction, upper-cased.
+fn keyword(instr: &str) -> String {
+    instr.split_whitespace().next().unwrap_or("").to_ascii_uppercase()
+}
+
 /// Evaluate a merge-related field for a record (None = not a merge field).
-fn eval(s: &Session, instr: &str, row: usize) -> Option<String> {
+fn act(s: &Session, instr: &str, row: usize) -> Option<Act> {
     let t = instr.trim();
     if let Some(n) = mergefield_name(t) {
-        return Some(value(s, row, &n));
+        return Some(Act::Text(value(s, row, &n)));
     }
-    let name = t.split_whitespace().next().unwrap_or("").to_ascii_uppercase();
-    match name.as_str() {
-        "ADDRESSBLOCK" => Some(address_block(s, row)),
-        "GREETINGLINE" => Some(greeting(s, row)),
-        "NEXT" | "MERGEREC" if name == "MERGEREC" => Some((row + 1).to_string()),
-        "NEXT" | "SKIPIF" => Some(String::new()),
-        "IF" => {
-            // IF { MERGEFIELD X } = "v" "then" "else"
-            let field =
-                t.split("MERGEFIELD").nth(1).and_then(|r| r.split('}').next()).map(|x| x.trim().trim_matches('"').to_string()).unwrap_or_default();
-            let quoted: Vec<&str> = t.split('"').skip(1).step_by(2).collect();
-            let (cmp, then, els) =
-                (quoted.first().copied().unwrap_or(""), quoted.get(1).copied().unwrap_or(""), quoted.get(2).copied().unwrap_or(""));
-            Some(if value(s, row, &field) == cmp { then.to_string() } else { els.to_string() })
+    Some(match keyword(t).as_str() {
+        "ADDRESSBLOCK" => Act::Text(address_block(s, row)),
+        "GREETINGLINE" => Act::Text(greeting(s, row)),
+        "MERGEREC" => Act::Text(row.saturating_add(1).to_string()),
+        "NEXT" => Act::Next,
+        "NEXTIF" if condition(s, t, row).0 => Act::Next,
+        "SKIPIF" if condition(s, t, row).0 => Act::Skip,
+        "NEXTIF" | "SKIPIF" => Act::Text(String::new()),
+        // IF { MERGEFIELD X } = "v" "then" "else" (an IF on other fields isn't ours to touch).
+        "IF" if t.contains("MERGEFIELD") => {
+            let (holds, texts) = condition(s, t, row);
+            Act::Text(texts.get(if holds { 0 } else { 1 }).copied().unwrap_or("").to_string())
         }
+        _ => return None,
+    })
+}
+
+/// What a merge field shows outside Preview Results (None = not a merge field).
+fn placeholder(instr: &str) -> Option<String> {
+    if let Some(n) = mergefield_name(instr) {
+        return Some(format!("«{n}»"));
+    }
+    match keyword(instr).as_str() {
+        "ADDRESSBLOCK" => Some("«AddressBlock»".into()),
+        "GREETINGLINE" => Some("«GreetingLine»".into()),
+        "NEXT" | "NEXTIF" | "SKIPIF" | "MERGEREC" => Some(String::new()),
+        "IF" if instr.contains("MERGEFIELD") => Some(String::new()),
         _ => None,
     }
 }
 
+/// The stories a merge resolves: the body, then every header and footer.
+fn merge_stories(doc: &Document) -> Vec<StoryRef> {
+    std::iter::once(StoryRef::Body).chain(header_footer_ids(doc).into_iter().map(StoryRef::Part)).collect()
+}
+
+fn header_footer_ids(doc: &Document) -> Vec<u32> {
+    doc.parts.iter().filter(|(_, p)| matches!(p.kind, PartKind::Header | PartKind::Footer)).map(|(id, _)| *id).collect()
+}
+
 /// Update merge field results: record values when previewing, «Field» placeholders otherwise.
+/// NEXT moves later fields of the previewed document to the next record, as Finish & Merge does.
 pub fn refresh(s: &mut Session) {
-    let row = s.merge.record;
     let preview = s.merge.preview && !s.merge.rows.is_empty();
-    for path in s.doc.para_paths(StoryRef::Body) {
-        let updates: Vec<(usize, String)> = match s.doc.para(StoryRef::Body, &path) {
-            Some(p) => p
-                .objects
-                .iter()
-                .enumerate()
-                .filter_map(|(k, o)| match o {
-                    InlineObject::Field { instr, .. } => {
-                        let placeholder = match mergefield_name(instr) {
-                            Some(n) => Some(format!("«{n}»")),
-                            None => match instr.split_whitespace().next().map(str::to_ascii_uppercase).as_deref() {
-                                Some("ADDRESSBLOCK") => Some("«AddressBlock»".into()),
-                                Some("GREETINGLINE") => Some("«GreetingLine»".into()),
-                                _ => None,
+    let last = s.merge.rows.len();
+    for story in merge_stories(&s.doc) {
+        let mut cur = s.merge.record;
+        for path in s.doc.para_paths(story) {
+            let updates: Vec<(usize, String)> = match s.doc.para(story, &path) {
+                Some(p) => p
+                    .objects
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(k, o)| {
+                        let InlineObject::Field { instr, .. } = o else { return None };
+                        let shown = placeholder(instr)?;
+                        if !preview {
+                            return Some((k, shown));
+                        }
+                        Some((
+                            k,
+                            match act(s, instr, cur) {
+                                Some(Act::Text(t)) => t,
+                                Some(Act::Next) => {
+                                    cur = cur.saturating_add(1).min(last);
+                                    String::new()
+                                }
+                                Some(Act::Skip) | None => String::new(),
                             },
-                        }?;
-                        Some((k, if preview { eval(s, instr, row).unwrap_or(placeholder) } else { placeholder }))
-                    }
-                    _ => None,
-                })
-                .collect(),
-            None => continue,
-        };
-        if updates.is_empty() {
-            continue;
-        }
-        if let Ok(p) = s.doc.para_mut(StoryRef::Body, &path) {
-            for (k, r) in updates {
-                if let Some(InlineObject::Field { result, .. }) = p.objects.get_mut(k) {
-                    *result = r;
-                }
+                        ))
+                    })
+                    .collect(),
+                None => continue,
+            };
+            if updates.is_empty() {
+                continue;
             }
-            p.touch();
+            if let Ok(p) = s.doc.para_mut(story, &path) {
+                for (k, r) in updates {
+                    if let Some(InlineObject::Field { result, .. }) = p.objects.get_mut(k) {
+                        *result = r;
+                    }
+                }
+                p.touch();
+            }
         }
     }
     s.touch();
 }
 
+/// Most merged documents' worth of body blocks Finish & Merge builds.
+const MAX_MERGED_BLOCKS: usize = 200_000;
+
 /// Build one merged copy per record: fields become plain text; records separated by page breaks
-/// (letters) or new paragraphs (directory).
+/// (letters) or new paragraphs (directory). A true SKIPIF drops the record's copy; NEXT moves the
+/// rest of a copy to the next record, and the following copy starts after it. Headers and footers
+/// are merged too: with merge fields in them, each letter becomes its own section with its own
+/// header/footer copies.
 fn finish(s: &mut Session, v: &Value) -> CmdResult {
     let n = s.merge.rows.len();
-    let from = p::u64(v, "from").unwrap_or(1).max(1) as usize - 1;
-    let to = (p::u64(v, "to").unwrap_or(n as u64) as usize).min(n);
+    let from = (p::u64(v, "from").unwrap_or(1).max(1) as usize).saturating_sub(1);
+    let to = (p::u64(v, "to").unwrap_or(n as u64).min(n as u64)) as usize;
     let directory = s.merge.kind == "directory";
+    let hf: Vec<u32> =
+        header_footer_ids(&s.doc).into_iter().filter(|id| s.doc.story(StoryRef::Part(*id)).is_some_and(|b| has_merge_fields(b, 0))).collect();
+    let per_record = !directory && !hf.is_empty();
     let mut out = s.doc.clone();
     out.body.clear();
-    let mut record = from;
-    while record < to {
-        for b in &s.doc.body {
-            let mut blk = (**b).clone();
-            merge_block(s, &mut blk, record);
-            out.body.push(std::sync::Arc::new(blk));
+    let mut next_id = s.doc.parts.keys().next_back().map_or(1, |k| k.saturating_add(1));
+    let mut start = from;
+    let mut count = 0usize;
+    let mut first_record = None;
+    // The section that ends the previous letter (per-record sections only).
+    let mut prev_section: Option<SectionProps> = None;
+    while start < to {
+        let mut body = s.doc.body.clone();
+        let record = start;
+        let mut cur = start;
+        let keep = merge_blocks(s, &mut body, &mut cur, to, 0);
+        start = cur.saturating_add(1);
+        if !keep {
+            continue;
         }
-        record += 1;
-        if record < to
+        first_record.get_or_insert(record);
+        if per_record {
+            // This letter's own header/footer copies, merged with its record.
+            let mut map = Vec::new();
+            for id in &hf {
+                let Some(part) = s.doc.parts.get(id) else { continue };
+                if next_id == u32::MAX {
+                    return Err(CmdError::Failed("too many headers and footers to merge".into()));
+                }
+                let mut blocks = part.blocks.clone();
+                let mut c = record;
+                merge_blocks(s, &mut blocks, &mut c, to, 0);
+                out.parts.insert(next_id, Part { kind: part.kind, blocks });
+                map.push((*id, next_id));
+                next_id += 1;
+            }
+            let mut first = true;
+            for b in &mut body {
+                if let Block::Para(p) = std::sync::Arc::make_mut(b)
+                    && let Some(sp) = p.section.as_deref_mut()
+                {
+                    remap_headers(sp, &map, first);
+                    first = false;
+                }
+            }
+            let mut last = s.doc.last_section.clone();
+            remap_headers(&mut last, &map, first);
+            if let Some(prev) = prev_section.replace(last) {
+                if !matches!(out.body.last().map(|b| &**b), Some(Block::Para(_))) {
+                    out.body.push(para_block(Paragraph::new()));
+                }
+                if let Some(Block::Para(p)) = out.body.last_mut().map(std::sync::Arc::make_mut) {
+                    p.section = Some(Box::new(prev));
+                }
+            }
+        } else if count > 0
             && !directory
-            && let Some(last) = out.body.last_mut().map(std::sync::Arc::make_mut)
-            && let Block::Para(p) = last
+            && let Some(Block::Para(p)) = out.body.last_mut().map(std::sync::Arc::make_mut)
         {
             let end = p.len();
             let props = p.props_at(end).clone();
             let _ = p.insert_text(end, "\u{000C}", &props);
         }
-        if out.body.len() > 200_000 {
+        out.body.extend(body);
+        count += 1;
+        if out.body.len() > MAX_MERGED_BLOCKS {
             break;
         }
     }
+    if let Some(last) = prev_section {
+        // The template's own header/footer stories are replaced by the letters' copies.
+        for id in &hf {
+            out.parts.remove(id);
+        }
+        out.last_section = last;
+    } else {
+        // One shared header/footer (directory, or no letters): merged with the first record.
+        let row = first_record.unwrap_or(from);
+        for id in &hf {
+            if let Some(part) = out.parts.get_mut(id) {
+                let mut c = row;
+                merge_blocks(s, &mut part.blocks, &mut c, to, 0);
+            }
+        }
+    }
     out.ensure_nonempty();
-    let count = to.saturating_sub(from);
     if let Some(path) = p::str(v, "path") {
         crate::io::save_path(std::path::Path::new(path), &out).map_err(CmdError::Failed)?;
         return Ok(json!({"records": count, "path": path}));
@@ -459,29 +599,74 @@ fn finish(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"records": count}))
 }
 
-fn merge_block(s: &Session, b: &mut Block, row: usize) {
-    match b {
-        Block::Para(p) => {
-            let offs = p.object_offsets();
-            for off in offs.into_iter().rev() {
-                let Some(InlineObject::Field { instr, .. }) = p.object_at(off).cloned() else { continue };
-                if let Some(val) = eval(s, &instr, row) {
+/// Point a letter's section at its own header/footer copies; the letter's first section starts
+/// on a new page.
+fn remap_headers(sp: &mut SectionProps, map: &[(u32, u32)], first: bool) {
+    for slot in
+        [&mut sp.headers.default, &mut sp.headers.first, &mut sp.headers.even, &mut sp.footers.default, &mut sp.footers.first, &mut sp.footers.even]
+    {
+        if let Some(id) = slot
+            && let Some((_, new)) = map.iter().find(|(old, _)| old == id)
+        {
+            *id = *new;
+        }
+    }
+    if first {
+        sp.start = SectionStart::NextPage;
+    }
+}
+
+/// Nesting depth of tables the merge descends into.
+const MAX_DEPTH: usize = 32;
+
+fn has_merge_fields(blocks: &Blocks, depth: usize) -> bool {
+    depth <= MAX_DEPTH
+        && blocks.iter().any(|b| match &**b {
+            Block::Para(p) => p.objects.iter().any(|o| matches!(o, InlineObject::Field { instr, .. } if placeholder(instr).is_some())),
+            Block::Table(t) => t.rows.iter().flat_map(|r| &r.cells).any(|c| has_merge_fields(&c.blocks, depth + 1)),
+        })
+}
+
+/// Replace the merge fields in `blocks` by their text, in document order, starting with record
+/// `*cur`. NEXT moves `*cur` on (records from `end` on are blank). Returns false when a SKIPIF
+/// drops this merged document.
+fn merge_blocks(s: &Session, blocks: &mut Blocks, cur: &mut usize, end: usize, depth: usize) -> bool {
+    if depth > MAX_DEPTH {
+        return true;
+    }
+    for b in blocks.iter_mut() {
+        match std::sync::Arc::make_mut(b) {
+            Block::Para(p) => {
+                let mut repl = Vec::new();
+                for off in p.object_offsets() {
+                    let Some(InlineObject::Field { instr, .. }) = p.object_at(off) else { continue };
+                    let row = if *cur < end { *cur } else { s.merge.rows.len() };
+                    match act(s, instr, row) {
+                        Some(Act::Text(t)) => repl.push((off, t)),
+                        Some(Act::Next) => {
+                            *cur = cur.saturating_add(1).min(end);
+                            repl.push((off, String::new()));
+                        }
+                        Some(Act::Skip) => return false,
+                        None => {}
+                    }
+                }
+                for (off, val) in repl.into_iter().rev() {
                     let props = p.props_of_char(off).clone();
                     let _ = p.delete(off, off + wordcraft_doc::para::OBJ.len_utf8());
                     let _ = p.insert_text(off, &val, &props);
                 }
             }
-        }
-        Block::Table(t) => {
-            for r in &mut t.rows {
-                for c in &mut r.cells {
-                    for blk in &mut c.blocks {
-                        merge_block(s, std::sync::Arc::make_mut(blk), row);
+            Block::Table(t) => {
+                for c in t.rows.iter_mut().flat_map(|r| &mut r.cells) {
+                    if !merge_blocks(s, &mut c.blocks, cur, end, depth + 1) {
+                        return false;
                     }
                 }
             }
         }
     }
+    true
 }
 
 fn envelopes(s: &mut Session, v: &Value) -> CmdResult {
@@ -637,6 +822,92 @@ mod tests {
         assert!(matches!(s.run("mailings.editRecipients", &json!({})), Err(CmdError::Disabled(_))));
         s.run("mailings.recipients", &json!({"csv": "Name\nAda"})).unwrap();
         assert_eq!(s.run("mailings.editRecipients", &json!({})).unwrap(), json!({"headers": ["Name"], "rows": [["Ada"]]}));
+    }
+
+    fn merged_text(rule: Option<Value>, rows: Value) -> String {
+        let mut s = Session::new(Document::new());
+        s.run("mailings.recipients", &json!({ "rows": rows })).unwrap();
+        s.run("mailings.start", &json!({"kind": "directory"})).unwrap();
+        if let Some(r) = rule {
+            s.run("mailings.rules", &r).unwrap();
+        }
+        s.run("mailings.insertField", &json!({"field": "Name"})).unwrap();
+        s.run("mailings.finish", &json!({})).unwrap();
+        s.doc.plain_text(StoryRef::Body)
+    }
+
+    /// #427: SKIPIF leaves out the recipients that match its condition.
+    #[test]
+    fn skipif_drops_matching_records() {
+        let rows = json!([{"Name": "Alpha", "Skip": "yes"}, {"Name": "Beta", "Skip": "no"}]);
+        let skip = |v: &str| Some(json!({"rule": "SKIPIF", "field": "Skip", "value": v}));
+        assert_eq!(merged_text(skip("yes"), rows.clone()), "Beta");
+        assert_eq!(merged_text(skip("no"), rows.clone()), "Alpha");
+        assert_eq!(merged_text(skip("absent"), rows.clone()), "Alpha\nBeta");
+        assert_eq!(merged_text(None, rows), "Alpha\nBeta");
+        let all = json!([{"Name": "Alpha", "Skip": "yes"}, {"Name": "Beta", "Skip": "yes"}]);
+        assert_eq!(merged_text(skip("yes"), all), "");
+    }
+
+    /// #428: NEXT moves the following merge fields to the next recipient, and the next merged
+    /// copy starts after it.
+    #[test]
+    fn next_record_advances_following_fields() {
+        let mut s = Session::new(Document::new());
+        s.run("mailings.recipients", &json!({"rows": [{"Name": "Alpha"}, {"Name": "Beta"}, {"Name": "Gamma"}]})).unwrap();
+        s.run("mailings.start", &json!({"kind": "directory"})).unwrap();
+        s.run("mailings.insertField", &json!({"field": "Name"})).unwrap();
+        s.run("text.insert", &json!({"text": " / "})).unwrap();
+        s.run("mailings.rules", &json!({"rule": "NEXT"})).unwrap();
+        s.run("mailings.insertField", &json!({"field": "Name"})).unwrap();
+        s.run("mailings.preview", &json!({"value": true})).unwrap();
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "Alpha / Beta");
+        s.run("mailings.finish", &json!({})).unwrap();
+        // Gamma has no record after it: NEXT past the end leaves the field blank, never panics.
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "Alpha / Beta\nGamma / ");
+    }
+
+    /// #429: an IF rule shows its true / false text in Preview Results, as Finish & Merge does.
+    #[test]
+    fn if_rule_previews_its_result() {
+        let mut s = Session::new(Document::new());
+        s.run("mailings.recipients", &json!({"rows": [{"Name": "Alpha", "Flag": "yes"}, {"Name": "Beta", "Flag": "no"}]})).unwrap();
+        s.run("mailings.start", &json!({"kind": "directory"})).unwrap();
+        s.run("mailings.rules", &json!({"rule": "IF", "field": "Flag", "value": "yes", "then": "Selected", "else": "Other"})).unwrap();
+        s.run("mailings.preview", &json!({"value": true})).unwrap();
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "Selected");
+        s.run("mailings.next", &json!({})).unwrap();
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "Other");
+        s.run("mailings.previous", &json!({})).unwrap();
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "Selected");
+        s.run("mailings.finish", &json!({})).unwrap();
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "Selected\nOther");
+    }
+
+    /// #430: merge fields in headers and footers are previewed and merged; each letter gets its
+    /// own header.
+    #[test]
+    fn header_and_footer_fields_merge() {
+        let mut s = Session::new(Document::new());
+        s.run("mailings.recipients", &json!({"rows": [{"Name": "Alpha"}, {"Name": "Beta"}]})).unwrap();
+        let hdr = s.run("insert.header", &json!({"text": "Recipient: "})).unwrap()["story"].as_u64().unwrap() as u32;
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("mailings.insertField", &json!({"field": "Name"})).unwrap();
+        s.run("insert.closeHeader", &json!({})).unwrap();
+        s.run("text.insert", &json!({"text": "Body: "})).unwrap();
+        s.run("mailings.insertField", &json!({"field": "Name"})).unwrap();
+        let header = |s: &Session, id: u32| s.doc.plain_text(StoryRef::Part(id));
+        s.run("mailings.preview", &json!({"value": true})).unwrap();
+        assert_eq!(header(&s, hdr), "Recipient: Alpha");
+        s.run("mailings.preview", &json!({"value": false})).unwrap();
+        assert_eq!(header(&s, hdr), "Recipient: «Name»");
+        s.run("mailings.finish", &json!({})).unwrap();
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "Body: Alpha\nBody: Beta");
+        let secs = s.doc.sections();
+        assert_eq!(secs.len(), 2, "one section per letter");
+        let texts: Vec<String> = secs.iter().map(|(_, sp)| header(&s, sp.headers.default.unwrap())).collect();
+        assert_eq!(texts, ["Recipient: Alpha", "Recipient: Beta"]);
+        assert!(!s.doc.parts.contains_key(&hdr), "the template header is replaced by the letters' copies");
     }
 
     #[test]
