@@ -432,11 +432,8 @@ impl<'a> Builder<'a> {
     /// text, since European numbers take an even bidi level.
     fn numeral_char(&self, text: &str, base: usize, at: usize, c: char, rtl: bool, use_levels: bool) -> char {
         let numeral = self.env.numeral;
-        let dir = if numeral == NumeralMode::Context && use_levels && is_numeral_digit(c) {
-            context_digit_rtl(text, &self.levels, base, at)
-        } else {
-            rtl
-        };
+        let dir =
+            if numeral == NumeralMode::Context && use_levels && is_numeral_digit(c) { context_digit_rtl(text, &self.levels, base, at) } else { rtl };
         numeral.map(c, dir)
     }
 
