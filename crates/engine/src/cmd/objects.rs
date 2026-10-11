@@ -414,7 +414,7 @@ pub fn text_box_target(s: &Session) -> Option<(Pos, u32)> {
 }
 
 /// Change the target text box's text direction, alignment or link.
-fn set_text_body(s: &mut Session, f: impl Fn(&mut TextBody)) -> CmdResult {
+pub(crate) fn set_text_body(s: &mut Session, f: impl Fn(&mut TextBody)) -> CmdResult {
     let (pos, id) = text_box_target(s).ok_or_else(|| CmdError::Disabled(NO_TEXT_BOX.into()))?;
     let part = s.doc.parts.get_mut(&id).ok_or_else(|| CmdError::Failed("text box vanished".into()))?;
     f(&mut part.body);

@@ -373,7 +373,7 @@ fn with_cells(s: &mut Session, f: impl Fn(&mut wordcraft_doc::Cell)) -> CmdResul
 
 /// Table Layout › Text Direction: turn the selected cells' text. Without a value it cycles the
 /// caret cell's direction (horizontal → down → up) and gives every selected cell the result.
-fn text_direction(s: &mut Session, v: &Value) -> CmdResult {
+pub(crate) fn text_direction(s: &mut Session, v: &Value) -> CmdResult {
     let (tp, r, c) = cell(s)?;
     let dir = match p::str(v, "value") {
         Some("horizontal" | "lrTb") => TextDirection::Horizontal,

@@ -761,6 +761,16 @@ fn design(app: &mut WordApp, ui: &mut Ui) {
 
 fn layout(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Page Setup", Some("ui.dialog"), app, |ui, app| {
+        // Text Direction works on what the caret is in: table cells, a text box, else the section.
+        let dir = wordcraft_engine::cmd::page::text_direction_at(&app.session);
+        menu_button(ui, app, "textDirection", Some("Text\nDirection"), "Text Direction", true, |ui, app| {
+            use wordcraft_doc::props::TextDirection;
+            for (label, d) in
+                [("Horizontal", TextDirection::Horizontal), ("Rotate all text 90°", TextDirection::Down), ("Rotate all text 270°", TextDirection::Up)]
+            {
+                mi_check(ui, app, label, dir == d, "layout.textDirection", json!({"value": d.ooxml()}));
+            }
+        });
         menu_button(ui, app, "margins", Some("Margins"), "Margins", true, |ui, app| {
             for (l, k) in [
                 ("Normal  1\" all", "normal"),
