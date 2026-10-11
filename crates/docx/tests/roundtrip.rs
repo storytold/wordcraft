@@ -917,7 +917,7 @@ fn groups_round_trip() {
     let group = InlineObject::Group {
         w: 240.0,
         h: 120.0,
-        float,
+        float: float.clone(),
         ch_w: 200.0,
         ch_h: 100.0,
         children: vec![
@@ -1375,8 +1375,8 @@ fn rotation_and_flips_round_trip() {
         effects: Default::default(),
     };
     let square = Float { wrap: Wrap::Square, ..Default::default() };
-    let tri = shape(ShapeKind::Triangle, Float { rot: 90.0, flip_h: true, ..square });
-    let flipped = shape(ShapeKind::Rectangle, Float { rot: 315.5, flip_v: true, ..square });
+    let tri = shape(ShapeKind::Triangle, Float { rot: 90.0, flip_h: true, ..square.clone() });
+    let flipped = shape(ShapeKind::Rectangle, Float { rot: 315.5, flip_v: true, ..square.clone() });
     let group = InlineObject::Group {
         w: 120.0,
         h: 60.0,
@@ -1459,4 +1459,46 @@ fn rotated_group_and_shadow_rotation_round_trip() {
         })
         .collect();
     assert_eq!(got, [(20.0, Some(true)), (20.0, Some(false))]);
+}
+
+#[test]
+fn wrap_polygons_round_trip() {
+    use wordcraft_doc::wrap::{WrapPolygon, shape_outline};
+    let mut d = Document::new();
+    let shape = |kind, float| InlineObject::Shape {
+        kind,
+        w: 80.0,
+        h: 40.0,
+        fill: Some(Rgb(1, 2, 3)),
+        stroke: None,
+        stroke_width: 0.0,
+        float,
+        story: None,
+        effects: Default::default(),
+        freeform: None,
+    };
+    // A hand-edited polygon, including points outside the frame.
+    let poly = WrapPolygon::new(true, [(-300, 0), (21_600, 1200), (18_000, 21_900), (0, 21_600)]).map(Arc::new);
+    let edited = Float { wrap: Wrap::Tight, v_rel: Anchor::Paragraph, wrap_polygon: poly.clone(), ..Default::default() };
+    // None: Through wrapping needs one, so the ellipse's own outline is written.
+    let derived = Float { wrap: Wrap::Through, ..Default::default() };
+    let mut p = Paragraph::with_text("wrapped ", CharProps::default());
+    for o in [shape(ShapeKind::Rectangle, edited.clone()), shape(ShapeKind::Ellipse, derived)] {
+        let end = p.len();
+        p.insert_object(end, o, &CharProps::default()).unwrap();
+    }
+    d.body = vec![para_block(p)];
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<wp:wrapPolygon edited="1"><wp:start x="-300" y="0"/><wp:lineTo x="21600" y="1200"/>"#), "{xml}");
+    assert!(xml.contains(r#"<wp:lineTo x="-300" y="0"/></wp:wrapPolygon>"#), "closed: {xml}");
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    let got = paras(&r)[0];
+    let floats: Vec<Float> = got.objects.iter().filter_map(|o| o.frame().map(|(_, _, f)| f.clone())).collect();
+    assert_eq!(floats[0], edited);
+    let ellipse = WrapPolygon::from_unit(false, &shape_outline(ShapeKind::Ellipse, 80.0, 40.0).unwrap());
+    assert_eq!(floats[1].wrap, Wrap::Through);
+    assert_eq!(floats[1].wrap_polygon.as_deref(), ellipse.as_ref());
 }
