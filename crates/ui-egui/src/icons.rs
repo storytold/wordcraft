@@ -340,6 +340,16 @@ impl Pen<'_> {
         self.path(&[(cx - r, y0 - r * 0.6), (cx - r, y0 - 0.4)], col);
         self.path(&[(cx + r, y0 - r * 0.6), (cx + r, y0 - 0.4)], col);
     }
+    /// The picture element from Picture: a frame `w` wide (13:11) with a mountain and a sun, at the
+    /// same proportions wherever it appears (Picture, Online Picture, Caption).
+    fn picture(&self, x0: f32, y0: f32, w: f32) {
+        let k = w / 13.0;
+        let at = |x: f32, y: f32| (x0 + x * k, y0 + y * k);
+        self.panel(x0, y0, x0 + w, y0 + 11.0 * k, 1.0);
+        self.line(&[at(2.5, 8.5), at(5.5, 5.0), at(8.0, 7.5), at(9.25, 6.25), at(10.5, 7.5)]);
+        let sun = at(9.25, 3.0);
+        self.dot(sun.0, sun.1, 1.25 * k, self.a);
+    }
     /// A plus sign with 2-unit arms.
     fn plus(&self, x: f32, y: f32, col: Color32) {
         self.path(&[(x, y - 2.0), (x, y + 2.0)], col);
@@ -479,8 +489,9 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.arrow(13.0, 2.5, 13.0, 9.0, a);
         }
         "case" => {
-            pen.glyph_a(4.75, 13.0, 9.0, c, c);
-            pen.glyph_small_a(12.75, 13.0, 4.0, a);
+            pen.glyph_small_a(3.25, 13.0, 4.0, c);
+            pen.glyph_a(11.0, 13.0, 8.5, c, c);
+            pen.arrow(2.0, 4.5, 7.25, 4.5, a);
         }
         "clear" => {
             pen.glyph_a(5.0, 12.5, 9.0, c, c);
@@ -504,7 +515,7 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.acc(&[(10.25, 4.0), (14.75, 4.0)]);
             pen.dot(13.5, 10.0, 1.0, a);
         }
-        "fontdialog" | "launcher" => {
+        "launcher" => {
             pen.line(&[(3.0, 6.5), (3.0, 13.0), (9.5, 13.0)]);
             pen.arrow(6.5, 9.5, 13.0, 3.0, a);
         }
@@ -677,18 +688,13 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.block(1.5, 2.5, 14.5, 6.0, 1.0, pen.a.gamma_multiply(0.5));
             pen.grid(1.5, 2.5, 14.5, 13.5, &[6.0, 10.0], &[6.0, 9.75]);
         }
-        "picture" => {
-            pen.panel(1.5, 2.5, 14.5, 13.5, 1.0);
-            pen.line(&[(4.0, 11.0), (7.0, 7.5), (9.5, 10.0), (10.75, 8.75), (12.0, 10.0)]);
-            pen.dot(10.75, 5.5, 1.25, a);
-        }
+        "picture" => pen.picture(1.5, 2.5, 13.0),
         "onlinePicture" => {
-            pen.panel(1.0, 1.0, 9.0, 8.0, 1.0);
-            pen.line(&[(3.5, 5.5), (5.0, 3.75), (6.5, 5.25)]);
-            pen.circle_c(12.0, 12.25, 2.75, a);
-            pen.acc(&[(9.25, 12.25), (14.75, 12.25)]);
-            pen.acc(&[(12.0, 9.5), (11.0, 12.25), (12.0, 15.0)]);
-            pen.acc(&[(12.0, 9.5), (13.0, 12.25), (12.0, 15.0)]);
+            pen.picture(1.0, 1.0, 9.0);
+            pen.circle_c(12.5, 12.5, 2.25, a);
+            pen.acc(&[(10.25, 12.5), (14.75, 12.5)]);
+            pen.acc(&[(12.5, 10.25), (11.7, 12.5), (12.5, 14.75)]);
+            pen.acc(&[(12.5, 10.25), (13.3, 12.5), (12.5, 14.75)]);
         }
         "shapes" => {
             pen.panel(1.5, 1.5, 6.5, 6.5, 1.0);
@@ -722,7 +728,9 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
         "chart" => {
             pen.line(&[(1.5, 14.5), (14.5, 14.5)]);
             pen.panel(1.75, 8.0, 4.25, 12.0, 0.75);
+            // Outlined like its neighbours, so all three bars share one baseline.
             pen.block(6.75, 2.5, 9.25, 12.0, 0.75, a);
+            pen.rect_c(6.75, 2.5, 9.25, 12.0, 0.75, a);
             pen.panel(11.75, 5.5, 14.25, 12.0, 0.75);
         }
         "screenshot" => {
@@ -874,9 +882,8 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.acc(&[(4.0, 10.5), (6.5, 6.0), (9.0, 9.5), (12.0, 5.5)]);
         }
         "replay" => {
-            pen.arc(8.0, 8.0, 6.0, -150.0, 150.0, c);
-            pen.head(2.8, 5.0, -100.0, c);
-            pen.fill(&[(6.5, 5.5), (11.0, 8.0), (6.5, 10.5)], a);
+            pen.cycle(8.0, 8.0, 6.0, c);
+            pen.fill(&[(6.5, 5.25), (11.0, 8.0), (6.5, 10.75)], a);
         }
         // Design
         "themes" => {
@@ -892,8 +899,8 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.p.circle_filled(pen.pt(8.0, 11.75), 2.75 * pen.s, green);
         }
         "fonts" => {
-            pen.glyph_a(5.5, 13.5, 11.0, c, c);
-            pen.text(12.25, 8.5, 9.0, "f", a, false);
+            pen.glyph_a(4.75, 13.0, 9.0, c, c);
+            pen.glyph_small_a(12.75, 13.0, 4.0, a);
         }
         "paraSpacing" => {
             pen.rows(7.0, 14.5, &[2.0, 4.75]);
@@ -1123,9 +1130,8 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             }
         }
         "caption" => {
-            pen.panel(1.5, 1.5, 14.5, 10.0, 1.0);
-            pen.line(&[(4.0, 7.5), (6.5, 4.5), (8.5, 6.5), (10.0, 5.0), (12.0, 7.5)]);
-            pen.acc(&[(1.5, 13.5), (10.0, 13.5)]);
+            pen.picture(2.5, 1.0, 11.0);
+            pen.acc(&[(2.5, 13.5), (13.5, 13.5)]);
         }
         "tableOfFigures" => {
             pen.page(2.5, 1.5, 13.5, 14.5);
@@ -1273,14 +1279,22 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.line(&[(8.0, 9.5), (11.0, 14.5)]);
         }
         "translate" => {
-            pen.glyph_a(4.5, 9.0, 7.5, c, c);
+            pen.glyph_a(4.25, 9.0, 7.5, c, c);
             pen.arrow(8.5, 4.0, 12.5, 4.0, a);
-            pen.text(11.75, 11.25, 8.5, "α", a, true);
+            pen.dot(12.1, 8.0, 0.75, a);
+            pen.acc(&[(9.5, 9.75), (14.75, 9.75)]);
+            pen.acc(&[(13.5, 9.75), (12.25, 12.25), (9.75, 14.75)]);
+            pen.acc(&[(10.5, 9.75), (11.75, 12.25), (14.5, 14.75)]);
         }
         "language" => {
             pen.disc(8.0, 8.0, 6.5);
-            pen.acc(&Pen::arc_pts(8.0, 8.0, 2.5, 0.0, 360.0).iter().map(|&(x, y)| (x, 8.0 + (y - 8.0) * 1.7)).collect::<Vec<_>>());
-            pen.acc(&[(4.0, 8.0), (12.0, 8.0)]);
+            pen.line(&[(1.5, 8.0), (14.5, 8.0)]);
+            pen.line(&[(2.75, 4.75), (13.25, 4.75)]);
+            pen.line(&[(2.75, 11.25), (13.25, 11.25)]);
+            let meridian =
+                |a0: f32, a1: f32| Pen::arc_pts(8.0, 8.0, 6.5, a0, a1).iter().map(|&(x, y)| (8.0 + (x - 8.0) * 0.45, y)).collect::<Vec<_>>();
+            pen.line(&meridian(-90.0, 90.0));
+            pen.line(&meridian(90.0, 270.0));
         }
         "deleteComment" => {
             pen.bubble(1.5, 2.0, 14.5, 11.5);
@@ -1508,12 +1522,12 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.acc(&[(11.75, 7.25), (11.75, 10.0)]);
         }
         "switchWindows" => {
-            pen.window(1.5, 1.5, 9.0, 7.5);
-            pen.window(7.0, 9.75, 14.5, 14.5);
+            pen.window(1.5, 1.5, 9.0, 7.0);
+            pen.window(7.0, 9.25, 14.5, 14.75);
             pen.acc(&[(11.5, 2.5), (13.0, 2.5), (13.0, 6.25)]);
             pen.head(13.0, 7.0, 90.0, a);
-            pen.acc(&[(4.5, 13.5), (3.0, 13.5), (3.0, 10.75)]);
-            pen.head(3.0, 10.0, -90.0, a);
+            pen.acc(&[(4.5, 13.75), (3.0, 13.75), (3.0, 10.25)]);
+            pen.head(3.0, 9.5, -90.0, a);
         }
         "macros" => {
             pen.panel(1.5, 1.5, 14.5, 14.5, 1.5);
@@ -1815,7 +1829,6 @@ pub const NAMES: &[&str] = &[
     "highlight",
     "fontcolor",
     "effects",
-    "fontdialog",
     "launcher",
     "bullets",
     "numbering",
@@ -2053,7 +2066,7 @@ pub const NAMES: &[&str] = &[
 ];
 
 /// Names that are deliberately the same drawing as another (aliases of one command or one idea).
-pub const ALIASES: &[(&str, &str)] = &[("search", "find"), ("launcher", "fontdialog")];
+pub const ALIASES: &[(&str, &str)] = &[("search", "find")];
 
 #[cfg(test)]
 mod tests {
