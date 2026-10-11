@@ -1,6 +1,6 @@
 # Typing parity with Word
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** trivial (status line, revision history and links to the other parity docs added; behaviour unchanged) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** trivial (outline keys in Outline view, #493) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 What Word does when you type, observed black-box (same keystrokes typed into Word and
 WordCraft, results read back paragraph by paragraph) and pinned by tests in
@@ -31,6 +31,20 @@ overall picture is in [`target-app-parity.md`](target-app-parity.md).
 | Enter (tracking on) | the new paragraph mark is a tracked insertion; Reject All joins the paragraphs again, Accept All keeps them | `tracked_enter_and_backspace_track_the_paragraph_mark`, `tests::reject_all_removes_a_tracked_paragraph_break` |
 | Backspace at a paragraph start / Delete at a paragraph end (tracking on) | the paragraph mark is marked deleted (still shown); the caret moves before it (Backspace) or past it (Delete). Accept joins the paragraphs, Reject keeps them. A mark you inserted yourself is just removed | `tracked_enter_and_backspace_track_the_paragraph_mark`, `tests::tracked_backspace_and_delete_mark_a_paragraph_break_deleted` |
 
+## Editing keys
+
+Word's documented keyboard behaviour (Microsoft's shortcut list, feature names only); the
+Windows/Linux keys are given first, macOS second.
+
+| Keys | Word's result | Test |
+|---|---|---|
+| Alt+Shift+Up / Down (⌃⇧↑ / ⌃⇧↓) | the paragraphs the selection touches swap with the paragraph above / below, keeping style and list membership; the selection moves with them; one undo step. A selection ending at the start of a paragraph doesn't take it along. Refused at the top or bottom of the story or cell, next to a table and across a section break | `alt_shift_down_then_up_moves_a_paragraph_and_back_and_undoes` |
+| Alt+Shift+Left / Right (⌃⇧← / ⌃⇧→) | Promote / Demote: a heading goes up or down one level (Heading 1 and Heading 9 are the ends); promoted body text becomes a heading at the level of the heading before it; a list item changes level like Shift+Tab / Tab | `alt_shift_left_and_right_promote_and_demote_headings_and_list_items` |
+| Outline view: Alt+Shift+Up / Down, Left / Right | as above, but a collapsed heading takes what is hidden under it along: moving passes whole shown paragraphs with their hidden content; promote/demote shifts the hidden subheadings too | `outline_collapse_hides_descendants_and_expand_restores` |
+| Outline view: Alt+Shift+Plus / Minus, Alt+Shift+1–9, Alt+Shift+A | Expand / Collapse the heading (one level at a time); Show Level 1–9; show all levels. The caret never stays in hidden text: it moves on to the next shown paragraph | `outline_show_level_filters_paragraphs` |
+| Shift+F5 | Go Back: the caret cycles through the last four places edited, most recent first | `shift_f5_goes_back_through_the_last_edits` |
+| Alt+X (no macOS default) | the hex code before the caret (up to six digits, `U+` optional) or the selected code becomes its character; otherwise the character before the caret becomes its code (`é` ↔ `00E9`); one undo step | `alt_x_toggles_between_a_character_and_its_code` |
+
 ## AutoCorrect and AutoFormat as you type
 
 Applied when a word is finished by a space, punctuation **or Enter** (`enter_finishes_a_word_for_autocorrect`):
@@ -55,6 +69,9 @@ Applied when a word is finished by a space, punctuation **or Enter** (`enter_fin
 - Word's body font Aptos isn't installed outside Office; our substitute (Carlito, else Helvetica
   Neue) is wider, so lines wrap earlier than in Word. Needs a metric-matched open substitute.
 - `:)` inside a word (`ok:)`) isn't replaced (Word replaces it).
+- Moving paragraphs with Track Changes on isn't recorded as a tracked move; whole table rows
+  don't move yet (a selection across cells is refused). Go Back's places aren't mapped through
+  later edits (they are clamped to the document).
 - Not yet compared: `+---+---+` Enter (table AutoFormat), `> ` arrow bullets, undo after a
   border line, Correct TWo INitial CApitals.
 
@@ -72,6 +89,8 @@ Applied when a word is finished by a space, punctuation **or Enter** (`enter_fin
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | trivial | Outline view keys: expand/collapse, Show Level, moving and promoting with collapsed content (#493) |
+| 2026-10-10 | minor | Editing keys: Move Paragraph Up/Down, Promote/Demote, Go Back (Shift+F5), Alt+X (#343) |
 | 2026-10-10 | trivial | Status line, revision history and cross-links added (progress-docs standard) |
 | 2026-10-10 | minor | Track Changes rows: tracked Enter, Backspace and Delete on paragraph marks (#244) |
 | 2026-10-10 | major | First version: lists, AutoCorrect and AutoFormat as you type, observed against Word (#204) |

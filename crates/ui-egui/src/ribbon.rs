@@ -36,6 +36,10 @@ pub fn contextual_tabs(s: &wordcraft_engine::Session) -> Vec<&'static str> {
     if s.math.is_some() {
         tabs.push("Equation");
     }
+    // Outline view (drawn first, next to File, as Word does).
+    if s.view.mode == wordcraft_layout::ViewMode::Outline {
+        tabs.push("Outlining");
+    }
     tabs
 }
 
@@ -62,6 +66,17 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     {
         app.ui.tab = prev;
     }
+    // Outline view brings up the Outlining tab; closing it goes back.
+    if app.session.view.mode == wordcraft_layout::ViewMode::Outline {
+        if app.outline_prev_tab.is_none() {
+            app.outline_prev_tab = Some(app.ui.tab.clone());
+            app.ui.tab = "Outlining".into();
+        }
+    } else if let Some(prev) = app.outline_prev_tab.take()
+        && app.ui.tab == "Outlining"
+    {
+        app.ui.tab = prev;
+    }
     // A contextual tab (Table, Picture Format) may be stored while the selection moved away.
     {
         let mut tabs: Vec<&str> = TABS.to_vec();
@@ -80,7 +95,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
                 let mut tabs: Vec<&str> = TABS.to_vec();
                 for ct in contextual_tabs(&app.session) {
-                    if !tabs.contains(&ct) {
+                    if ct == "Outlining" {
+                        tabs.insert(1.min(tabs.len()), ct);
+                    } else if !tabs.contains(&ct) {
                         tabs.push(ct);
                     }
                 }
@@ -180,6 +197,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         "Equation" if app.session.math.is_some() => crate::equation_tab::show(app, ui),
                         "Picture Format" => picture_format(app, ui),
                         "Shape Format" => shape_format(app, ui),
+                        "Outlining" => outlining(app, ui),
                         _ => home(app, ui),
                     }
                 });
@@ -1193,6 +1211,64 @@ fn view(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Macros", None, app, |ui, app| {
         big(ui, app, "macros", "Macros", "tools.macros", json!({}), false);
+    });
+}
+
+/// The Outlining tab (Outline view): outline levels, moving, expanding and collapsing, what is
+/// shown, and closing the view.
+fn outlining(app: &mut WordApp, ui: &mut Ui) {
+    use wordcraft_engine::layout::outline::{BODY, para_level};
+    let o = app.session.view.outline.clone();
+    let level = app.session.doc.para_at(&app.session.sel.focus).map(|p| para_level(&app.session.doc, p)).unwrap_or(BODY);
+    let name = |l: u8| if l >= BODY { tl!("Body Text").to_string() } else { crate::i18n::fmt(tl!("Level {n}"), &[("n", &l.to_string())]) };
+    group(ui, "Outline Tools", None, app, |ui, app| {
+        stack(ui, |ui| {
+            crate::widgets::row(ui, |ui| {
+                small(ui, app, "outlineTop", None, "Promote to Heading 1", "outline.promoteToHeading1", json!({}), false);
+                small(ui, app, "outlinePromote", None, "Promote", "outline.promote", json!({}), false);
+                let levels: Vec<String> = (1..=BODY).map(name).collect();
+                if let Some(v) = combo(ui, "outlineLevel", 100.0, &name(level), &levels, None)
+                    && let Some(i) = levels.iter().position(|x| *x == v)
+                {
+                    let l = if i + 1 >= usize::from(BODY) { json!("body") } else { json!(i + 1) };
+                    let _ = app.run("outline.level", json!({ "level": l }));
+                }
+                small(ui, app, "outlineDemote", None, "Demote", "outline.demote", json!({}), false);
+                small(ui, app, "outlineBody", None, "Demote to Body Text", "outline.demoteToBody", json!({}), false);
+            });
+            ui.add_space(3.0);
+            crate::widgets::row(ui, |ui| {
+                small(ui, app, "outlineUp", None, "Move Up", "outline.moveUp", json!({}), false);
+                small(ui, app, "outlineDown", None, "Move Down", "outline.moveDown", json!({}), false);
+                small(ui, app, "outlineExpand", None, "Expand", "outline.expand", json!({}), false);
+                small(ui, app, "outlineCollapse", None, "Collapse", "outline.collapse", json!({}), false);
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new(tl!("Show Level")).size(11.5));
+                let mut shown: Vec<String> = vec![tl!("All Levels").to_string()];
+                shown.extend((1..BODY).map(name));
+                let current = shown.get(usize::from(o.show_level)).cloned().unwrap_or_default();
+                if let Some(v) = combo(ui, "outlineShowLevel", 90.0, &current, &shown, None)
+                    && let Some(i) = shown.iter().position(|x| *x == v)
+                {
+                    let l = if i == 0 { json!("all") } else { json!(i) };
+                    let _ = app.run("outline.showLevel", json!({ "level": l }));
+                }
+            });
+            ui.add_space(3.0);
+            crate::widgets::row(ui, |ui| {
+                let mut f = !o.hide_formatting;
+                if ui.checkbox(&mut f, tl!("Show Text Formatting")).changed() {
+                    let _ = app.run("outline.showFormatting", json!({ "value": f }));
+                }
+                let mut first = o.first_line_only;
+                if ui.checkbox(&mut first, tl!("Show First Line Only")).changed() {
+                    let _ = app.run("outline.firstLineOnly", json!({ "value": first }));
+                }
+            });
+        });
+    });
+    group(ui, "Close", None, app, |ui, app| {
+        big(ui, app, "closeOutline", "Close Outline\nView", "outline.close", json!({}), false);
     });
 }
 

@@ -83,6 +83,9 @@ pub struct ViewState {
     /// Draw tab: the tool dragging on the page uses, and each pen's colour and thickness.
     #[serde(default)]
     pub draw: crate::cmd::draw::DrawState,
+    /// Outline view: collapsed headings, Show Level, first lines, text formatting.
+    #[serde(default)]
+    pub outline: crate::cmd::outline::OutlineState,
 }
 
 fn on() -> bool {
@@ -114,6 +117,7 @@ impl Default for ViewState {
             proofing: true,
             hide_ink: false,
             draw: Default::default(),
+            outline: Default::default(),
         }
     }
 }
@@ -224,7 +228,7 @@ pub struct Session {
     /// mail merge, recover), never on an edit.
     document_id: u64,
     cache: LayoutCache,
-    layout: Option<(u64, f32, ViewMode, Arc<DocLayout>, bool)>,
+    layout: Option<(u64, f32, ViewMode, Arc<DocLayout>, bool, Option<wordcraft_layout::outline::OutlineView>)>,
     /// Picture edits: edited media key → original media key (Reset Picture).
     pub originals: std::collections::HashMap<String, String>,
     /// Last mutating command (Repeat).
@@ -266,7 +270,15 @@ pub struct Session {
     pub column: Option<ColumnBlock>,
     /// Column selection mode (Ctrl+Shift+F8): caret movement extends the block.
     pub column_mode: bool,
+    /// Where the last edits happened, oldest first (at most [`EDIT_MARKS`]), for Go Back
+    /// (Shift+F5). Positions aren't mapped through later edits; they're clamped when used.
+    edit_marks: Vec<Pos>,
+    /// How many Go Back presses since the last edit (which place comes next).
+    go_back_step: usize,
 }
+
+/// The number of edit locations Go Back cycles through (Word: four).
+const EDIT_MARKS: usize = 4;
 
 /// The equation being edited.
 #[derive(Clone, Debug, PartialEq)]
@@ -347,7 +359,41 @@ impl Session {
             password: None,
             column: None,
             column_mode: false,
+            edit_marks: Vec::new(),
+            go_back_step: 0,
         }
+    }
+
+    /// Remember the caret as the place of an edit, for Go Back. Edits in the same paragraph as
+    /// the last one (typing on) update that place rather than adding one.
+    fn note_edit(&mut self) {
+        let at = self.sel.focus.clone();
+        match self.edit_marks.last_mut() {
+            Some(last) if last.story == at.story && last.path == at.path => *last = at,
+            _ => {
+                self.edit_marks.push(at);
+                if self.edit_marks.len() > EDIT_MARKS {
+                    self.edit_marks.remove(0);
+                }
+            }
+        }
+        self.go_back_step = 0;
+    }
+
+    /// Go Back (Shift+F5): the next of the last edit places, most recent first, cycling; a place
+    /// the caret is already at is skipped. `None` before any edit.
+    pub fn go_back(&mut self) -> Option<Pos> {
+        let n = self.edit_marks.len();
+        for _ in 0..n {
+            let i = n - 1 - self.go_back_step % n;
+            self.go_back_step = self.go_back_step.wrapping_add(1);
+            let Some(p) = self.edit_marks.get(i) else { continue };
+            let p = self.doc.clamp(p);
+            if p != self.sel.focus || n == 1 {
+                return Some(p);
+            }
+        }
+        self.edit_marks.last().map(|p| self.doc.clamp(p))
     }
 
     /// The line pieces of the current column selection, if there is one (the selection hasn't
@@ -384,11 +430,13 @@ impl Session {
     /// The current layout (recomputed when the document or view changed).
     pub fn layout(&mut self) -> Arc<DocLayout> {
         let ww = self.view.web_width;
-        if let Some((r, w, m, l, pf)) = &self.layout
+        let outline = (self.view.mode == ViewMode::Outline).then(|| self.view.outline.view());
+        if let Some((r, w, m, l, pf, o)) = &self.layout
             && *r == self.rev
             && (*w == ww || self.view.mode == ViewMode::Print)
             && *m == self.view.mode
             && *pf == self.view.proofing
+            && *o == outline
         {
             return l.clone();
         }
@@ -398,14 +446,15 @@ impl Session {
             show_hidden: self.view.marks,
             hide_deleted: !self.view.show_markup || self.prefs.markup.hides_deletions(),
             proofing: self.view.proofing,
+            outline: outline.clone(),
         };
         let l = Arc::new(wordcraft_layout::layout(&self.doc, &mut self.cache, &opts));
-        self.layout = Some((self.rev, ww, self.view.mode, l.clone(), self.view.proofing));
+        self.layout = Some((self.rev, ww, self.view.mode, l.clone(), self.view.proofing, outline));
         l
     }
     /// A layout for output (PDF, images, print): no proofing marks, print view.
     pub fn export_layout(&self) -> Arc<DocLayout> {
-        let opts = LayoutOptions { view: ViewMode::Print, web_width: 0.0, show_hidden: false, hide_deleted: false, proofing: false };
+        let opts = LayoutOptions { view: ViewMode::Print, ..Default::default() };
         Arc::new(wordcraft_layout::layout(&self.doc, &mut LayoutCache::new(), &opts))
     }
 
@@ -513,6 +562,9 @@ impl Session {
         self.also_selected.clear();
         self.column = None;
         self.column_mode = false;
+        self.edit_marks.clear();
+        self.go_back_step = 0;
+        self.view.outline.collapsed.clear();
         self.reset_history();
         self.touch();
         self.dirty = false;
@@ -586,6 +638,9 @@ impl Session {
             // Column selection, like `sel`'s shape: valid only while `sel` matches it.
             column: _,
             column_mode: _,
+            // Go Back's places, like the caret history: not part of the document.
+            edit_marks: _,
+            go_back_step: _,
         } = self;
         let head = if history.len() + SNAPSHOT_HEAD > MAX_UNDO { history.iter().take(SNAPSHOT_HEAD).cloned().collect() } else { Vec::new() };
         EditSnapshot {
@@ -736,6 +791,11 @@ impl Session {
                     self.doc.prune_text_boxes();
                 }
                 self.clamp_selection();
+                if spec.mutates && !matches!(id, "edit.undo" | "edit.redo") {
+                    self.note_edit();
+                }
+                // Outline view: collapsed headings follow edits; the caret stays where it shows.
+                crate::cmd::outline::after_command(self, &sel_before);
                 // Extra selected objects last until something else is edited or selected.
                 if !matches!(id, "select.addObject" | "arrange.ungroup") && (spec.mutates || self.sel != sel_before) {
                     self.also_selected.clear();

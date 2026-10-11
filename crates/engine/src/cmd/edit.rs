@@ -73,6 +73,14 @@ pub fn specs() -> Vec<CommandSpec> {
             .key("Mod+Alt+G / F5")
             .params(r#"{"page"?: n, "bookmark"?: string, "paragraph"?: n}"#)
             .pure(),
+        CommandSpec::new("edit.goBack", "Go Back", "Navigation", |s, _| {
+            let p = s.go_back().ok_or_else(|| CmdError::Failed("no edits to go back to yet".into()))?;
+            s.sel = Selection::caret(p);
+            s.goal_x = None;
+            sel_result(s)
+        })
+        .key("Shift+F5")
+        .pure(),
         CommandSpec::new("edit.formatPainter", "Format Painter", "Home › Clipboard", painter).params(r#"{"sticky"?: bool}"#).pure(),
         CommandSpec::new("edit.copyFormat", "Copy Formatting", "Home › Clipboard", |s, _| {
             painter_pick(s);

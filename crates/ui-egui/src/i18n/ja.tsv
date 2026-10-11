@@ -1310,4 +1310,37 @@
 	Rotate Left 90°	左へ 90 度回転
 	Flip Vertical	上下反転
 	Flip Horizontal	左右反転
+	Move Paragraph Up	段落を上へ移動
+	Move Paragraph Down	段落を下へ移動
+	Promote	レベル上げ
+	Demote	レベル下げ
+	Go Back	前の編集位置に戻る
+	Toggle Unicode Character	Unicode 文字の切り替え
 	Formatted	書式変更
+	Promote to Heading 1	見出し 1 に設定
+	Demote to Body Text	本文に設定
+	Move Up	上へ移動
+	Move Down	下へ移動
+	Expand	展開
+	Collapse	折りたたみ
+	Expand or Collapse Heading	見出しの展開/折りたたみ
+	Select Heading and Content	見出しと内容を選択
+	Show Level	レベルの表示
+	Show Level 1	レベル 1 を表示
+	Show Level 2	レベル 2 を表示
+	Show Level 3	レベル 3 を表示
+	Show Level 4	レベル 4 を表示
+	Show Level 5	レベル 5 を表示
+	Show Level 6	レベル 6 を表示
+	Show Level 7	レベル 7 を表示
+	Show Level 8	レベル 8 を表示
+	Show Level 9	レベル 9 を表示
+	Show All Levels	すべてのレベルを表示
+	All Levels	すべてのレベル
+	Show First Line Only	1 行目のみ表示
+	Show Text Formatting	文字列の書式を表示
+	Close Outline View	アウトライン表示を閉じる
+	Outline State	アウトラインの状態
+	Outlining	アウトライン
+	Outline Tools	アウトライン ツール
+	Close Outline\nView	アウトライン表示\nを閉じる

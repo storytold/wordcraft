@@ -1324,4 +1324,37 @@
 	Rotate Left 90°	Ротирај улево за 90°
 	Flip Vertical	Окрени вертикално
 	Flip Horizontal	Окрени хоризонтално
+	Move Paragraph Up	Помери пасус нагоре
+	Move Paragraph Down	Помери пасус надоле
+	Promote	Подигни ниво
+	Demote	Спусти ниво
+	Go Back	Врати се назад
+	Toggle Unicode Character	Пребаци Unicode знак
 	Formatted	Форматирано
+	Promote to Heading 1	Подигни на Наслов 1
+	Demote to Body Text	Спусти на основни текст
+	Move Up	Помери нагоре
+	Move Down	Помери надоле
+	Expand	Прошири
+	Collapse	Скупи
+	Expand or Collapse Heading	Прошири или скупи наслов
+	Select Heading and Content	Изабери наслов и садржај
+	Show Level	Прикажи ниво
+	Show Level 1	Прикажи ниво 1
+	Show Level 2	Прикажи ниво 2
+	Show Level 3	Прикажи ниво 3
+	Show Level 4	Прикажи ниво 4
+	Show Level 5	Прикажи ниво 5
+	Show Level 6	Прикажи ниво 6
+	Show Level 7	Прикажи ниво 7
+	Show Level 8	Прикажи ниво 8
+	Show Level 9	Прикажи ниво 9
+	Show All Levels	Прикажи све нивое
+	All Levels	Сви нивои
+	Show First Line Only	Прикажи само први ред
+	Show Text Formatting	Прикажи обликовање текста
+	Close Outline View	Затвори приказ контуре
+	Outline State	Стање контуре
+	Outlining	Контура
+	Outline Tools	Алатке контуре
+	Close Outline\nView	Затвори приказ\nконтуре

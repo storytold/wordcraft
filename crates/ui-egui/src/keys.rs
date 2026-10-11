@@ -32,7 +32,10 @@ pub fn key_name(k: Key) -> Option<&'static str> {
         Key::Num1 => "1",
         Key::Num2 => "2",
         Key::Num3 => "3",
+        Key::Num4 => "4",
         Key::Num5 => "5",
+        Key::Num6 => "6",
+        Key::Num7 => "7",
         Key::Num8 => "8",
         Key::Num9 => "9",
         Key::F3 => "F3",
@@ -147,6 +150,9 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
         return;
     }
     let events = ctx.input(|i| i.events.clone());
+    // An Alt shortcut that ran a command (Alt+X, Alt+=) also arrives as the text of its key on
+    // Linux and Windows: that text isn't typed.
+    let mut alt_shortcut_ran = false;
     for e in events {
         if let egui::Event::Paste(t) = &e {
             app.canvas.pasted = true;
@@ -194,7 +200,7 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
         match e {
             egui::Event::Text(t) => {
                 let m = ctx.input(|i| i.modifiers);
-                if m.command || (m.ctrl && !cfg!(target_os = "macos")) {
+                if m.command || (m.ctrl && !cfg!(target_os = "macos")) || std::mem::take(&mut alt_shortcut_ran) {
                     continue;
                 }
                 if t.chars().all(|c| !c.is_control()) && !t.is_empty() {
@@ -260,7 +266,7 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                     let _ = app.run("insert.closeHeader", json!({}));
                     continue;
                 }
-                dispatch(app, key, modifiers);
+                alt_shortcut_ran = dispatch(app, key, modifiers) && modifiers.alt;
             }
             _ => {}
         }
