@@ -772,7 +772,12 @@ impl Session {
             return p.clone();
         }
         let f = &self.sel.focus;
-        self.doc.para_at(f).map(|p| p.props_at(f.off).clone()).unwrap_or_default()
+        let Some(p) = self.doc.para_at(f) else { return CharProps::default() };
+        let props = p.props_at(f.off);
+        // As in Word, text typed at either end of a hyperlink isn't part of it; only typing
+        // inside the link extends it.
+        let inside_link = props.link.is_some() && f.off > 0 && f.off < p.len() && p.props_of_char(f.off).link == props.link;
+        if props.link.is_some() && !inside_link { props.unlinked() } else { props.clone() }
     }
 
     /// Words in the document, as the status bar shows them (see [`Prefs::count_notes`]).

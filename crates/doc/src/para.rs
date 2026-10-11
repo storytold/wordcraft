@@ -852,7 +852,8 @@ impl Paragraph {
             }
         }
         self.runs = keep;
-        let carry = self.props_at(off).clone();
+        // The new paragraph's mark takes the formatting at the split, but never a hyperlink.
+        let carry = self.props_at(off).unlinked();
         let mut tail = Paragraph {
             text: tail_text,
             runs: tail_runs,
@@ -863,7 +864,7 @@ impl Paragraph {
             rev: next_rev(),
         };
         if tail.text.is_empty() {
-            tail.mark = self.props_at(off).clone();
+            tail.mark = self.props_at(off).unlinked();
         }
         self.normalize();
         tail.normalize();

@@ -283,9 +283,15 @@ impl Document {
             let from = if p == a.path { a.off } else { 0 };
             let to = if p == b.path { b.off } else { para.len() };
             para.format(from, to, f)?;
-            // A fully selected paragraph also gets the mark formatted (Word does).
+            // A fully selected paragraph also gets the mark formatted (Word does), but a hyperlink
+            // ends before the mark: a linked mark would carry the link into every paragraph Enter
+            // makes from it (issue #413).
             if to == para.len() && (from == 0 || p != a.path) {
+                let style = para.mark.style.clone();
                 f(&mut para.mark);
+                if para.mark.link.take().is_some() {
+                    para.mark.style = style.filter(|s| s != "Hyperlink");
+                }
             }
         }
         Ok(())
