@@ -921,9 +921,25 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.rect(3.0, 3.0, 17.0, 17.0, c);
             pen.line_c(&[(3.0, 10.0), (17.0, 10.0)], a);
         }
-        "sideBySide" | "syncScroll" | "switchWindows" => {
+        "sideBySide" => {
             pen.rect(2.0, 4.0, 9.5, 16.0, c);
             pen.rect(10.5, 4.0, 18.0, 16.0, a);
+        }
+        "syncScroll" => {
+            // Two windows side by side, both scrolling down.
+            pen.rect(2.0, 3.0, 9.5, 17.0, c);
+            pen.rect(10.5, 3.0, 18.0, 17.0, c);
+            for x in [5.75, 14.25] {
+                pen.line_c(&[(x, 6.0), (x, 12.0)], a);
+                pen.fill(&[(x - 2.0, 11.0), (x + 2.0, 11.0), (x, 14.0)], a);
+            }
+        }
+        "switchWindows" => {
+            // A window behind another, with a title bar each.
+            pen.rect(2.5, 7.0, 13.0, 17.5, c);
+            pen.line_c(&[(2.5, 9.5), (13.0, 9.5)], c);
+            pen.rect(7.0, 2.5, 17.5, 13.0, a);
+            pen.line_c(&[(7.0, 5.0), (17.5, 5.0)], a);
         }
         "macros" => {
             pen.rect(3.0, 3.0, 17.0, 17.0, c);

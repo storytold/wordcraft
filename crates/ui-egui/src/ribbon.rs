@@ -1190,10 +1190,38 @@ fn view(app: &mut WordApp, ui: &mut Ui) {
         big(ui, app, "newWindow", "New\nWindow", "view.newWindow", json!({}), false);
         big(ui, app, "arrangeAll", "Arrange\nAll", "view.arrangeAll", json!({}), false);
         big(ui, app, "split", "Split", "view.split", json!({}), false);
+        // Across WordCraft windows (#322; `windows`): each is its own process and document.
+        let w = app.session.windows.clone();
+        stack(ui, |ui| {
+            if w.side_by_side.is_none() && w.others.len() > 1 {
+                menu_button(ui, app, "sideBySide", Some("View Side by Side"), "View Side by Side", false, |ui, app| {
+                    window_list(ui, app, &w.others, "view.sideBySide")
+                });
+            } else {
+                small(ui, app, "sideBySide", Some("View Side by Side"), "View Side by Side", "view.sideBySide", json!({}), w.side_by_side.is_some());
+            }
+            small(ui, app, "syncScroll", Some("Synchronous Scrolling"), "Synchronous Scrolling", "view.syncScroll", json!({}), w.sync_scroll);
+        });
+        menu_button(ui, app, "switchWindows", Some("Switch\nWindows"), "Switch Windows", true, |ui, app| {
+            window_list(ui, app, &w.others, "view.switchWindows")
+        });
     });
     group(ui, "Macros", None, app, |ui, app| {
         big(ui, app, "macros", "Macros", "tools.macros", json!({}), false);
     });
+}
+
+/// The other WordCraft windows by title; picking one runs `id` with it.
+fn window_list(ui: &mut Ui, app: &mut WordApp, others: &[wordcraft_engine::cmd::view::OtherWindow], id: &str) {
+    if others.is_empty() {
+        ui.add_enabled(false, egui::Label::new(tl!("No other WordCraft windows are open.")));
+    }
+    for o in others {
+        if ui.add(egui::Button::new(o.title.as_str()).min_size(vec2(200.0, 0.0))).clicked() {
+            let _ = app.run(id, json!({"window": o.id}));
+            ui.close();
+        }
+    }
 }
 
 fn help(app: &mut WordApp, ui: &mut Ui) {

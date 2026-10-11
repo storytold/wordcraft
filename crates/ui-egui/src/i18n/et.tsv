@@ -1323,4 +1323,10 @@
 	Type the field's name and its switches, for example PAGE \\* roman.	Sisesta välja nimi ja lülitid, näiteks PAGE \\* roman.
 	Width and spacing	Laius ja vahe
 	from Unicode (hex)	Unicode (kuueteistkümnend)
+	Switch Windows	Vaheta akent
+	Switch\nWindows	Vaheta\nakent
+	Arrange All	Korralda kõik
+	View Side by Side	Kuva kõrvuti
+	Synchronous Scrolling	Sünkroonne kerimine
+	No other WordCraft windows are open.	Muid WordCrafti aknaid pole avatud.
 	Formatted	Vormindatud
