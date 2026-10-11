@@ -1,24 +1,65 @@
 //! WordCraft's icon set, drawn in code (original artwork; no external icon assets).
 //!
-//! The rules:
-//! - A 16×16 grid. Icons are drawn at 16 px (small buttons, menus, toolbars) or 32 px (large
-//!   ribbon buttons); other sizes scale.
-//! - One stroke weight per drawn size ([`stroke_px`]), round caps and joins.
-//! - Every part has one colour, and separate parts keep at least 1.25 units of clear space
-//!   (2.25 between stroke centre lines); parts of different colours never touch. Strokes stay
-//!   between 1 and 15, so nothing is clipped.
-//! - Line work in the ink colour `c`, one meaningful detail in the accent `a`, and an optional soft
-//!   accent tint inside the main shape. Status colours (green, red, orange) come from the theme.
-//! - Letters only where the command is about letters.
-//! - Elements that appear in more than one icon are drawn by one helper at fixed proportions, never
-//!   redrawn by hand: page ([`Pen::page_h`], one ratio; text only on full-size pages, on
-//!   [`Pen::page_slot`]), speech bubble, window, table, picture, lens, pencil, padlock, person,
-//!   chain link, field brackets, ink scribble, plus, check, cross and arrow head. Free text lines
-//!   use one pitch for paragraphs (3 units) and one for lists (5 units).
-//! - Every command has its own drawing; only true aliases share an arm.
+//! `paint(painter, rect, name, ink, accent)` draws icon `name`. Every icon must say what its
+//! command does **at a glance**: the ribbon is icon-dense, so an icon that needs its label to be
+//! understood is a bug. These rules apply to every icon; follow them when adding or changing one.
 //!
-//! Disabled icons pass the same colour as ink and accent; then every colour, the status colours
-//! and the tint included, follows the ink.
+//! # Grid and drawing
+//! - A 16 × 16 unit grid, drawn at 16 px (small buttons, menus, toolbars) or 32 px (large ribbon
+//!   buttons). Don't paint at other sizes.
+//! - Stroke width comes from [`stroke_px`] (about 1.25 px at 16, 2 px at 32); never set a width
+//!   by hand. Bold lettering uses `Pen::heavy`.
+//! - Every corner is rounded with `CORNER` (lines, outlines and fills alike); arrow heads, checks
+//!   and letter apexes use `TIP`. Hand-drawn strokes and rope use `Pen::curve`, not polylines.
+//! - Strokes stay between 1 and 15, so nothing is clipped. Draw only inside the given rect.
+//!
+//! # Colour
+//! - Line work in the ink colour; **one** meaningful detail in the accent (the arrow, the new
+//!   item, the changed part); an optional soft tint (`pen.t`) inside the main shape.
+//! - Status colours only where the colour *is* the meaning, and only from the theme: green = add,
+//!   accept, OK; red = remove, reject, error; orange = warning. Never hard-code colours or use
+//!   black-alpha shadows (they vanish in the dark theme).
+//! - Colour commands (font colour, highlight, shading) draw their bar in the accent; the split
+//!   button passes the current colour as the accent.
+//! - Disabled icons pass the same colour as ink and accent; then every colour, the status colours
+//!   and the tint included, follows the ink.
+//!
+//! # Spacing
+//! - Each part has one colour, and parts of different colours never touch.
+//! - Separate parts keep at least 1.25 units of clear space (2.25 between stroke centre lines).
+//! - Shapes never overlap or cross: show depth by a gap or by drawing only the visible part of the
+//!   back shape (see `copy`), never by stacking.
+//! - Balance the composition in the frame; don't crowd one corner.
+//!
+//! # Reused elements
+//! Anything that appears in more than one icon is drawn by its `Pen` helper at fixed proportions,
+//! never redrawn by hand: `page_h` / `page_landscape` (one ratio, `PAGE_RATIO`; text only through
+//! `page_slot` / `page_rows`, and only on full-size pages), `bubble`, `window`, `table`,
+//! `picture`, `lens`, `pencil`, `lock`, `person` / `person_filled`, `chain`, `brackets`,
+//! `scribble`, `glyph_a` / `glyph_small_a`, `plus`, `check`, `cross`, `arrow` / `span` / `head`
+//! (`HEAD`) and `cycle`.
+//! - If an element is needed twice, add a helper; don't copy coordinates.
+//! - Scale a helper, never stretch it. Windows may change aspect with the arrangement shown (side
+//!   by side tall, stacked wide) but match within an arrangement.
+//! - Free text lines use one pitch for paragraphs (3 units: 3.5, 6.5, 9.5, 12.5) and one for lists
+//!   (5 units: 3, 8, 13).
+//!
+//! # Meaning
+//! - Draw what the command does. Letters only where the command is about letters (Bold, Italic,
+//!   Aa…); font letters must exist in Inter (`theme::tests::interface_symbols_have_glyphs`), other
+//!   scripts are drawn with strokes.
+//! - One command, one drawing: only true aliases share an arm ([`ALIASES`]), enforced by
+//!   `tests::every_icon_is_distinct`.
+//! - Related commands share a base and differ in one clear detail (Find, Zoom, Zoom In, Zoom Out;
+//!   Comment, New, Delete, Resolve).
+//! - Don't imitate another product's icon compositions or approximate third-party logos.
+//!
+//! # Adding or changing an icon
+//! 1. Add the name to [`NAMES`] and draw it with the helpers, following the rules above.
+//! 2. Look at it: at 16 and 32 px, on the light and dark ribbon, next to its neighbours in the same
+//!    ribbon group (headless `ui_shot`, then read the PNG).
+//! 3. Run `cargo test -p wordcraft-ui-egui` (distinct drawings, no fallback tiles, glyph coverage)
+//!    and `cargo xtask ci`.
 
 use egui::{Color32, CornerRadius, FontId, Painter, Pos2, Rect, Shape, Stroke, pos2, vec2};
 
