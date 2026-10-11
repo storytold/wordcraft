@@ -21,7 +21,8 @@ enum Piece<'a> {
     Br(Option<&'static str>),
     NbHyphen,
     SoftHyphen,
-    Obj(&'a InlineObject),
+    /// An object and its byte offset in the paragraph.
+    Obj(&'a InlineObject, usize),
 }
 
 impl Writer<'_> {
@@ -31,10 +32,15 @@ impl Writer<'_> {
             w.raw("<w:p/>");
             return;
         }
-        let toc = if top { toc_span(bl) } else { None };
+        let plan = super::sdt::plan(bl);
+        // A TOC inside a content control already has one (read from a file).
+        let toc = if top { toc_span(bl).filter(|(start, _)| !plan.covers(*start)) } else { None };
         // Whether the heading's TOC field was written and still needs its end.
         let mut toc_field_open = false;
         for (i, b) in bl.iter().enumerate() {
+            for c in plan.opens.get(i).into_iter().flatten() {
+                super::sdt::open(w, c);
+            }
             if let Some((start, end)) = toc {
                 if i == start {
                     w.raw(TOC_SDT_OPEN);
@@ -44,7 +50,10 @@ impl Writer<'_> {
                 self.toc_end_here = toc_field_open && i == end;
             }
             match &**b {
-                Block::Para(p) => self.para(w, p, rels, top, depth),
+                Block::Para(p) => {
+                    self.inline_controls = plan.inline_in(i);
+                    self.para(w, p, rels, top, depth);
+                }
                 Block::Table(t) => self.table(w, t, rels, depth),
             }
             if let Some((start, end)) = toc {
@@ -57,6 +66,9 @@ impl Writer<'_> {
                     w.raw("</w:sdtContent></w:sdt>");
                 }
             }
+            for _ in 0..plan.closes.get(i).copied().unwrap_or(0) {
+                super::sdt::close(w);
+            }
         }
         if bl.last().is_none_or(|b| matches!(**b, Block::Table(_))) {
             w.raw("<w:p/>");
@@ -64,6 +76,8 @@ impl Writer<'_> {
     }
 
     fn para(&mut self, w: &mut W, p: &Paragraph, rels: &mut PartRels, top: bool, depth: usize) {
+        // Which content control markers are written inline (set by `blocks`).
+        let inline = std::mem::take(&mut self.inline_controls);
         // A drop cap is a separate framed paragraph holding the first character.
         if let Some(lines) = p.props.drop_cap.filter(|l| *l > 0)
             && let Some(first) = p.text.chars().next().filter(|c| !matches!(*c, wordcraft_doc::para::OBJ | '\t' | '\n' | '\u{c}' | '\u{e}'))
@@ -77,10 +91,12 @@ impl Writer<'_> {
                 self.para_inner(w, &head, rels, false, depth, true);
                 tail.props.drop_cap = None;
                 tail.section = p.section.clone();
+                self.inline_controls = inline.iter().filter_map(|o| o.checked_sub(first.len_utf8())).collect();
                 self.para_inner(w, &tail, rels, top, depth, false);
                 return;
             }
         }
+        self.inline_controls = inline;
         self.para_inner(w, p, rels, top, depth, false);
     }
 
@@ -166,13 +182,16 @@ impl Writer<'_> {
     }
 
     fn para_content(&mut self, w: &mut W, p: &Paragraph, rels: &mut PartRels, depth: usize) {
+        // Taken first: a text box in this paragraph writes paragraphs of its own.
+        let inline = std::mem::take(&mut self.inline_controls);
         // Split into pieces with their props.
         let mut pieces: Vec<(Piece, &CharProps)> = Vec::new();
         let mut k = 0usize;
         for (range, props) in p.run_ranges() {
+            let base = range.start;
             let Some(text) = p.text.get(range) else { continue };
             let mut buf = String::new();
-            for c in text.chars() {
+            for (ci, c) in text.char_indices() {
                 let special = match c {
                     '\t' => Some(Piece::Tab),
                     '\n' => Some(Piece::Br(None)),
@@ -184,7 +203,7 @@ impl Writer<'_> {
                         let o = p.objects.get(k);
                         k += 1;
                         Some(match o {
-                            Some(o) => Piece::Obj(o),
+                            Some(o) => Piece::Obj(o, base + ci),
                             None => Piece::Text(String::new()),
                         })
                     }
@@ -210,6 +229,22 @@ impl Writer<'_> {
         while i < pieces.len() {
             let Some((piece, props)) = pieces.get(i) else { break };
             let props: &CharProps = props;
+            // Content control boundaries: written inline when the plan says so (else they are
+            // written around the paragraph, or were left without a partner). A hyperlink never
+            // crosses one.
+            if let Piece::Obj(o @ (InlineObject::ControlStart { .. } | InlineObject::ControlEnd), off) = piece {
+                if inline.binary_search(off).is_ok() {
+                    if open_link.take().is_some() {
+                        w.close("w:hyperlink");
+                    }
+                    match o {
+                        InlineObject::ControlStart { control } => super::sdt::open(w, control),
+                        _ => super::sdt::close(w),
+                    }
+                }
+                i += 1;
+                continue;
+            }
             // Hyperlink grouping.
             if props.link != open_link {
                 if open_link.is_some() {
@@ -227,7 +262,7 @@ impl Writer<'_> {
                 }
             }
             match piece {
-                Piece::Obj(o) => {
+                Piece::Obj(o, _) => {
                     self.object(w, o, props, rels, depth);
                     i += 1;
                 }
@@ -235,7 +270,7 @@ impl Writer<'_> {
                     // Gather simple pieces sharing these props into one run.
                     let mut j = i;
                     while let Some((pc, pr)) = pieces.get(j) {
-                        if matches!(pc, Piece::Obj(_)) || !(std::ptr::eq(*pr, props) || *pr == props) {
+                        if matches!(pc, Piece::Obj(..)) || !(std::ptr::eq(*pr, props) || *pr == props) {
                             break;
                         }
                         j += 1;
@@ -335,6 +370,8 @@ impl Writer<'_> {
 
     fn object(&mut self, w: &mut W, o: &InlineObject, props: &CharProps, rels: &mut PartRels, depth: usize) {
         match o {
+            // Written by `para_content` (inline) or `blocks` (around paragraphs).
+            InlineObject::ControlStart { .. } | InlineObject::ControlEnd => {}
             InlineObject::BookmarkStart { name } => {
                 let id = self.bookmark_id(name);
                 w.empty("w:bookmarkStart", &[("w:id", &id), ("w:name", name)]);
@@ -836,18 +873,46 @@ impl Writer<'_> {
             w.empty("w:gridCol", &[("w:w", &twips(gw.max(0.0)))]);
         }
         w.close("w:tblGrid");
+        // Controls around rows and cells (repeating sections): opens and closes balanced
+        // whatever editing left, the ones still open closed at the end.
+        let mut open_rows = 0u32;
         for r in rows {
+            for c in &r.controls.open {
+                super::sdt::open(w, c);
+                open_rows += 1;
+            }
             w.open("w:tr", &[]);
             let chg = r.props.fmt_change.as_ref().map(|c| self.change_attrs(c.rev));
             trpr(w, &r.props, chg.as_ref());
+            let mut open_cells = 0u32;
             for c in &r.cells {
+                for ctl in &c.controls.open {
+                    super::sdt::open(w, ctl);
+                    open_cells += 1;
+                }
                 w.open("w:tc", &[]);
                 let chg = c.props.fmt_change.as_ref().map(|c| self.change_attrs(c.rev));
                 tcpr(w, &c.props, chg.as_ref());
                 self.blocks(w, &c.blocks, rels, false, depth + 1);
                 w.close("w:tc");
+                let n = c.controls.close.min(open_cells);
+                for _ in 0..n {
+                    super::sdt::close(w);
+                }
+                open_cells -= n;
+            }
+            for _ in 0..open_cells {
+                super::sdt::close(w);
             }
             w.close("w:tr");
+            let n = r.controls.close.min(open_rows);
+            for _ in 0..n {
+                super::sdt::close(w);
+            }
+            open_rows -= n;
+        }
+        for _ in 0..open_rows {
+            super::sdt::close(w);
         }
         w.close("w:tbl");
     }

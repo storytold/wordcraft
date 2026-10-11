@@ -1311,3 +1311,37 @@
 	Flip Vertical	上下反転
 	Flip Horizontal	左右反転
 	Formatted	書式変更
+	Developer	開発
+	Controls	コントロール
+	Rich Text Content Control	リッチ テキスト コンテンツ コントロール
+	Plain Text Content Control	プレーン テキスト コンテンツ コントロール
+	Picture Content Control	画像コンテンツ コントロール
+	Building Block Gallery Content Control	構成要素ギャラリー コンテンツ コントロール
+	Check Box Content Control	チェック ボックス コンテンツ コントロール
+	Combo Box Content Control	コンボ ボックス コンテンツ コントロール
+	Drop-Down List Content Control	ドロップダウン リスト コンテンツ コントロール
+	Date Picker Content Control	日付選択コンテンツ コントロール
+	Repeating Section Content Control	繰り返しセクション コンテンツ コントロール
+	Design Mode	デザイン モード
+	Content Control at Selection	選択位置のコンテンツ コントロール
+	Toggle Check Box	チェック ボックスの切り替え
+	Choose List Item	リスト項目を選択
+	Set Date	日付を設定
+	Remove Content Control	コンテンツ コントロールの削除
+	Content Control Properties	コンテンツ コントロールのプロパティ
+	Title	タイトル
+	Tag	タグ
+	Placeholder text	プレースホルダー テキスト
+	Can't be deleted	削除できない
+	Contents can't be edited	内容を編集できない
+	Remove the control once edited	編集したらコントロールを削除する
+	Allow line breaks	改行を許可する
+	Date format	日付の形式
+	Checked symbol	オンの記号
+	Unchecked symbol	オフの記号
+	List entries	リストの項目
+	Display text	表示テキスト
+	Value	値
+	Remove	削除
+	Today	今日
+	Put the caret in a content control first.	先にカーソルをコンテンツ コントロールに置いてください。

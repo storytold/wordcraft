@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::control::ControlWrap;
 use crate::props::{CellProps, RowProps, TableProps, VMerge};
 use crate::{Blocks, Paragraph, para_block};
 
@@ -11,14 +12,21 @@ pub struct Cell {
     #[serde(default)]
     pub props: CellProps,
     pub blocks: Blocks,
+    /// Content controls around the cell (see [`crate::control`]).
+    #[serde(default, skip_serializing_if = "ControlWrap::is_empty")]
+    pub controls: ControlWrap,
 }
 
 impl Cell {
     pub fn empty() -> Cell {
-        Cell { props: CellProps { span: 1, ..Default::default() }, blocks: vec![para_block(Paragraph::new())] }
+        Cell { props: CellProps { span: 1, ..Default::default() }, blocks: vec![para_block(Paragraph::new())], controls: ControlWrap::default() }
     }
     pub fn with_text(s: &str) -> Cell {
-        Cell { props: CellProps { span: 1, ..Default::default() }, blocks: vec![para_block(Paragraph::with_text(s, Default::default()))] }
+        Cell {
+            props: CellProps { span: 1, ..Default::default() },
+            blocks: vec![para_block(Paragraph::with_text(s, Default::default()))],
+            controls: ControlWrap::default(),
+        }
     }
     pub fn span(&self) -> usize {
         self.props.span.clamp(1, 63) as usize
@@ -30,6 +38,9 @@ pub struct Row {
     #[serde(default)]
     pub props: RowProps,
     pub cells: Vec<Cell>,
+    /// Content controls around the row (repeating sections; see [`crate::control`]).
+    #[serde(default, skip_serializing_if = "ControlWrap::is_empty")]
+    pub controls: ControlWrap,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
@@ -39,6 +50,9 @@ pub struct Table {
     /// Grid column widths, points.
     pub grid: Vec<f32>,
     pub rows: Vec<Row>,
+    /// Content controls whose content starts or ends with this table (see [`crate::control`]).
+    #[serde(default, skip_serializing_if = "ControlWrap::is_empty")]
+    pub controls: ControlWrap,
 }
 
 /// Hard limits that keep hostile input from exhausting memory.
@@ -64,8 +78,10 @@ impl Table {
                             c
                         })
                         .collect(),
+                    controls: ControlWrap::default(),
                 })
                 .collect(),
+            controls: ControlWrap::default(),
         }
     }
 
@@ -97,7 +113,7 @@ impl Table {
         if self.rows.len() >= MAX_ROWS {
             return;
         }
-        let mut row = Row { props: src.props.clone(), cells: Vec::with_capacity(src.cells.len()) };
+        let mut row = Row { props: src.props.clone(), cells: Vec::with_capacity(src.cells.len()), controls: ControlWrap::default() };
         row.props.header = false;
         for c in &src.cells {
             let mut nc = Cell::empty();

@@ -96,7 +96,9 @@ fn hyperlink_runs_and_wrappers() {
     let bytes = docx(body, &[("rId5", "hyperlink", "https://example.org/")], &[]);
     let d = wordcraft_docx::read(&bytes).unwrap();
     let p = paras(&d);
-    assert_eq!(p[0].text, "siteXABC\u{F04A}\u{2011}\u{AD}\n\u{C}\u{E} e&T");
+    // The content control around "C" is kept (zero-width markers in the text).
+    assert_eq!(p[0].plain_text(), "siteXABC\u{F04A}\u{2011}\u{AD}\n\u{C}\u{E} e&T");
+    assert!(matches!(p[0].objects.first(), Some(InlineObject::ControlStart { .. })));
     assert_eq!(p[0].props_of_char(0).link.as_deref(), Some("https://example.org/"));
     assert_eq!(p[0].props_of_char(0).style.as_deref(), Some("Hyperlink"));
     assert_eq!(p[0].props_of_char(4).link.as_deref(), Some("https://example.org/#frag"));
@@ -104,7 +106,7 @@ fn hyperlink_runs_and_wrappers() {
     assert_eq!(p[0].props_of_char(sym_off).font.as_deref(), Some("Wingdings"));
     let t = p[0].props_of_char(p[0].text.len() - 1);
     assert_eq!((t.bold, t.italic, t.caps, t.strike, t.color), (Some(false), Some(false), Some(false), Some(true), Some(TextColor::Auto)));
-    assert_eq!(p[1].text, "in block sdt");
+    assert_eq!(p[1].plain_text(), "in block sdt");
 }
 
 #[test]

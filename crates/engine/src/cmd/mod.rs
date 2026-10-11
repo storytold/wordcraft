@@ -3,6 +3,7 @@
 pub mod caret;
 pub mod citations;
 pub mod column;
+pub mod controls;
 pub mod design;
 pub mod draw;
 pub mod edit;
@@ -63,6 +64,7 @@ pub fn registry() -> Registry {
     v.extend(draw::specs());
     v.extend(tools::specs());
     v.extend(speech::specs());
+    v.extend(controls::specs());
     Registry::new(v)
 }
 
@@ -91,6 +93,7 @@ pub fn delete_selection(s: &mut Session) -> Result<Pos, CmdError> {
     if a == b {
         return Ok(a);
     }
+    controls::check_delete(s, &a, &b)?;
     let at = if s.doc.settings.track_changes { track_delete(s, &a, &b)? } else { s.doc.delete_range(&a, &b)? };
     s.sel = crate::Selection::caret(at.clone());
     Ok(at)
@@ -181,6 +184,10 @@ pub(crate) fn track_delete(s: &mut Session, a: &Pos, b: &Pos) -> Result<Pos, Cmd
 /// Insert typed text at the caret (replacing the selection), with pending formatting and track changes.
 pub fn type_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
     let mut props = s.typing_props();
+    // Content controls: a placeholder is replaced, locked ones refuse.
+    if let Some(p) = controls::prepare_edit(s)? {
+        props = p;
+    }
     delete_selection(s)?;
     // Typed text is new: never deleted, and not a formatting change of the text around it.
     props.fmt_change = None;

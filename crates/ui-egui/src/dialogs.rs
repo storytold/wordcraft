@@ -247,6 +247,10 @@ pub enum Dialog {
     TrackOptions {
         form: Box<crate::dialogs_lists::TrackForm>,
     },
+    /// Developer › Controls › Properties.
+    Control {
+        form: Box<crate::dialogs_controls::ControlForm>,
+    },
 }
 
 /// The Table Properties dialog's fields. Lengths are in the interface unit
@@ -650,6 +654,7 @@ impl Dialog {
             Dialog::EncryptPassword { .. } => "encryptPassword",
             Dialog::DefineList { .. } => "defineList",
             Dialog::TrackOptions { .. } => "trackChangesOptions",
+            Dialog::Control { .. } => "controlProperties",
         }
     }
 
@@ -812,6 +817,13 @@ impl Dialog {
             }
             "defineList" => Dialog::DefineList { form: Box::new(crate::dialogs_lists::ListForm::read(app)) },
             "trackChangesOptions" => Dialog::TrackOptions { form: Box::new(crate::dialogs_lists::TrackForm::read(app)) },
+            "controlProperties" => match crate::dialogs_controls::ControlForm::read(app) {
+                Some(form) => Dialog::Control { form: Box::new(form) },
+                None => {
+                    app.status(tl!("Put the caret in a content control first."));
+                    return None;
+                }
+            },
             _ => return None,
         })
     }
@@ -938,6 +950,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::EncryptPassword { .. } => "Encrypt with Password",
         Dialog::DefineList { .. } => "Define New Multilevel List",
         Dialog::TrackOptions { .. } => "Track Changes Options",
+        Dialog::Control { .. } => "Content Control Properties",
     };
     egui::Window::new(tl!(title))
         .id(egui::Id::new(("dialog", title)))
@@ -1779,6 +1792,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         }
         Dialog::DefineList { form } => crate::dialogs_lists::define_list(app, ui, form),
         Dialog::TrackOptions { form } => crate::dialogs_lists::track_options(app, ui, form),
+        Dialog::Control { form } => crate::dialogs_controls::body(app, ui, form),
         Dialog::FindRecipient { text, message } => {
             ui.horizontal(|ui| {
                 ui.label(tl!("Find:"));

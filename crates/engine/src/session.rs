@@ -83,6 +83,9 @@ pub struct ViewState {
     /// Draw tab: the tool dragging on the page uses, and each pen's colour and thickness.
     #[serde(default)]
     pub draw: crate::cmd::draw::DrawState,
+    /// Developer › Design Mode: every content control shows its frame and title.
+    #[serde(default)]
+    pub design_mode: bool,
 }
 
 fn on() -> bool {
@@ -114,6 +117,7 @@ impl Default for ViewState {
             proofing: true,
             hide_ink: false,
             draw: Default::default(),
+            design_mode: false,
         }
     }
 }

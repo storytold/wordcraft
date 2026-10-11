@@ -461,13 +461,16 @@ pub fn format_date(fmt: &str) -> String {
     let hh: u32 = iso.get(11..13).and_then(|x| x.parse().ok()).unwrap_or(0);
     let mm: u32 = iso.get(14..16).and_then(|x| x.parse().ok()).unwrap_or(0);
     let ss: u32 = iso.get(17..19).and_then(|x| x.parse().ok()).unwrap_or(0);
+    format_date_parts(fmt, y, m, d, (hh, mm, ss), (super::now_unix() / 86_400) as i64)
+}
+
+/// Format a date and time with a Word picture; `days_since` (days since 1970-01-01) gives the weekday.
+pub fn format_date_parts(fmt: &str, y: i64, m: usize, d: u32, (hh, mm, ss): (u32, u32, u32), days_since: i64) -> String {
     const MONTHS: [&str; 12] =
         ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
     const DAYS: [&str; 7] = ["Thursday", "Friday", "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday"];
-    // Days since the epoch, for the weekday.
-    let days_since = (super::now_unix() / 86_400) as usize;
     let month = MONTHS.get(m.saturating_sub(1)).copied().unwrap_or("January");
-    let day = DAYS.get(days_since % 7).copied().unwrap_or("Monday");
+    let day = DAYS.get(days_since.rem_euclid(7) as usize).copied().unwrap_or("Monday");
     let mut out = String::new();
     let chars: Vec<char> = fmt.chars().collect();
     let mut i = 0;

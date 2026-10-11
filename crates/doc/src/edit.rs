@@ -218,21 +218,40 @@ impl Document {
         if a.story != b.story {
             return Err(DocError::Invalid("range spans stories".into()));
         }
+        // Content control markers whose partner is outside the range stay (the control is
+        // emptied, not broken).
+        let kept = self.kept_control_markers(&a, &b);
+        let kept_in = |path: &Path| -> Vec<usize> { kept.iter().filter(|(p, _)| p == path).map(|(_, o)| *o).collect() };
         if a.path == b.path {
-            self.para_mut(a.story, &a.path)?.delete(a.off, b.off)?;
+            self.para_mut(a.story, &a.path)?.delete_except(a.off, b.off, &kept_in(&a.path))?;
             return Ok(a);
         }
         if a.path.parent() == b.path.parent() {
             // Same container: trim the ends, drop the blocks between, join.
             let (ia, ib) = (a.path.last(), b.path.last());
+            // Kept markers of the paragraphs in between move to the join.
+            let mut moved: Vec<(InlineObject, CharProps)> = Vec::new();
+            for (path, off) in &kept {
+                if *path != a.path
+                    && *path != b.path
+                    && let Some(p) = self.para(a.story, path)
+                    && let Some(o) = p.object_at(*off)
+                {
+                    moved.push((o.clone(), p.props_of_char(*off).clone()));
+                }
+            }
             {
                 let pa = self.para_mut(a.story, &a.path)?;
                 let end = pa.len();
-                pa.delete(a.off, end)?;
+                pa.delete_except(a.off, end, &kept_in(&a.path))?;
+                for (o, props) in moved {
+                    let at = pa.len();
+                    pa.insert_object(at, o, &props)?;
+                }
             }
             let mut tail = {
                 let pb = self.para_mut(b.story, &b.path)?;
-                pb.delete(0, b.off)?;
+                pb.delete_except(0, b.off, &kept_in(&b.path))?;
                 pb.clone()
             };
             let bl = self.container_mut(a.story, &a.path)?;
@@ -256,7 +275,7 @@ impl Document {
                 let to = if *p == b.path { b.off } else { para.len() };
                 (from, to)
             };
-            self.para_mut(a.story, p)?.delete(from, to)?;
+            self.para_mut(a.story, p)?.delete_except(from, to, &kept_in(p))?;
         }
         // Drop top-level tables strictly between a and b at a's level.
         if a.path.depth() == 0 && b.path.depth() > 0 {
@@ -303,7 +322,9 @@ impl Document {
 
     /// Copy `a..b` into a fragment (with copies of the text boxes in it).
     pub fn copy_range(&self, a: &Pos, b: &Pos) -> Fragment {
-        let blocks = self.copy_blocks(a, b);
+        let mut blocks = self.copy_blocks(a, b);
+        // Half a content control (one marker without the other) isn't copied.
+        crate::control::balance_blocks(&mut blocks);
         let parts = self.text_box_parts(&blocks);
         Fragment { blocks, parts }
     }

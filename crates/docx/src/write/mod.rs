@@ -3,6 +3,7 @@
 mod embed;
 mod math;
 mod props;
+mod sdt;
 mod story;
 
 use std::collections::{BTreeMap, HashMap};
@@ -89,6 +90,8 @@ pub(crate) struct Writer<'d> {
     toc_begin_here: bool,
     /// Close the open TOC field at the end of the paragraph being written.
     toc_end_here: bool,
+    /// Byte offsets of the content control markers the next paragraph writes inline.
+    inline_controls: Vec<usize>,
     /// Media keys actually referenced by a written drawing.
     used_media: std::collections::BTreeSet<String>,
     /// Bounds writing text boxes inside text boxes (as layout shows them).
@@ -134,6 +137,7 @@ pub fn write_as(doc: &Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
         toc_field: None,
         toc_begin_here: false,
         toc_end_here: false,
+        inline_controls: Vec::new(),
         used_media: Default::default(),
         boxes: wordcraft_doc::BoxBudget::default(),
         embeds: embed::EmbedWriter::new(doc),

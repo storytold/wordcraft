@@ -502,7 +502,10 @@ fn split_table(s: &mut Session, _: &Value) -> CmdResult {
     let story = s.sel.focus.story;
     let t = s.doc.table_mut(story, &tp)?;
     let tail_rows = t.rows.split_off(r);
-    let tail = Table { props: t.props.clone(), grid: t.grid.clone(), rows: tail_rows };
+    // Content controls closing after the table now close after its second part.
+    let close = std::mem::take(&mut t.controls.close);
+    let controls = wordcraft_doc::ControlWrap { open: Vec::new(), close };
+    let tail = Table { props: t.props.clone(), grid: t.grid.clone(), rows: tail_rows, controls };
     let after = tp.with_last(tp.last() + 1);
     s.doc.insert_block(story, &after, Block::Para(Paragraph::new()))?;
     s.doc.insert_block(story, &after.with_last(after.last() + 1), Block::Table(tail))?;
