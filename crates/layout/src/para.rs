@@ -12,6 +12,7 @@ use wordcraft_doc::resolve::{ResolvedChar, ResolvedPara};
 use wordcraft_doc::{Document, Paragraph};
 use wordcraft_fonts::FaceRef;
 
+use crate::NumeralMode;
 use crate::fields::{FieldCtx, field_text};
 
 /// A face at a size with the formatting needed to draw it.
@@ -283,6 +284,8 @@ pub struct ParaEnv<'a> {
     /// The table style's formatting for text in this paragraph's cell (`None` outside tables).
     pub table: Option<&'a CellText>,
     pub proofing: bool,
+    /// How digits look on screen (already resolved: never `System`).
+    pub numeral: NumeralMode,
     /// Areas text must flow around (floating objects), relative to the paragraph: x from the
     /// column's left edge, y from the top of the first line.
     pub exclusions: &'a [Exclusion],
@@ -338,6 +341,48 @@ fn is_mark(c: char) -> bool {
     matches!(unicode_bidi::bidi_class(c), NSM | BN) && !c.is_control()
 }
 
+/// A digit Word's Numeral modes substitute: ASCII or Arabic-Indic (U+0660–U+0669).
+fn is_numeral_digit(c: char) -> bool {
+    c.is_ascii_digit() || ('\u{660}'..='\u{669}').contains(&c)
+}
+
+/// Characters skipped when looking for the text around a number: digits, spaces and the
+/// Arabic decimal/thousands separators (٫ ٬).
+fn is_number_inside(c: char) -> bool {
+    is_numeral_digit(c) || ('\u{6f0}'..='\u{6f9}').contains(&c) || c == ' ' || c == '\t' || c == '\u{66b}' || c == '\u{66c}'
+}
+
+/// Is the digit at byte `at` of run `text` in right-to-left surroundings (Word › Numeral ›
+/// Context)? European numbers take an even bidi level, so the digit's own level says nothing;
+/// the nearest digit-or-space-skipping neighbour on either side decides. Out-of-range or
+/// mid-character offsets fall back to left to right, never panic.
+fn context_digit_rtl(text: &str, levels: &[u8], base: usize, at: usize) -> bool {
+    let odd = |o: usize| levels.get(base.saturating_add(o)).is_some_and(|l| l % 2 == 1);
+    if odd(at) {
+        return true;
+    }
+    let left = text.get(..at).unwrap_or("").char_indices().rev().find(|(_, c)| !is_number_inside(*c));
+    if left.is_some_and(|(o, _)| odd(o)) {
+        return true;
+    }
+    text.get(at..).unwrap_or("").char_indices().skip(1).find(|(_, c)| !is_number_inside(*c)).is_some_and(|(o, _)| odd(at.saturating_add(o)))
+}
+
+/// Map a byte range of numeral-substituted display text back to the original text.
+///
+/// `map_starts[i]` is the display byte offset of the `i`th char and `orig_of[i]` its original
+/// byte offset (`orig_of` ends with the original length as a sentinel). Substitution is
+/// 1 char → 1 char, so both ends land on char boundaries; anything else falls back to the
+/// end of the original text instead of panicking or slicing mid-character.
+pub(crate) fn remap_range(map_starts: &[usize], orig_of: &[usize], orig_len: usize, ms: usize, me: usize) -> (usize, usize) {
+    let n = map_starts.len();
+    let i = map_starts.partition_point(|&b| b < ms).min(n);
+    let j = map_starts.partition_point(|&b| b < me).min(n);
+    let s = orig_of.get(i).copied().unwrap_or(orig_len);
+    let e = orig_of.get(j).copied().unwrap_or(orig_len);
+    (s.min(e), s.max(e))
+}
+
 /// Bidi embedding levels per byte of `text` (UAX #9 rules up to I2), or empty when the
 /// paragraph is left to right and has no right-to-left characters.
 pub fn bidi_levels(text: &str, rtl_para: bool) -> Vec<u8> {
@@ -382,6 +427,19 @@ pub fn visual_order(levels: &[u8]) -> Vec<usize> {
 }
 
 impl<'a> Builder<'a> {
+    /// Displayed form of `c` at run-relative byte `at` (Word › Numeral): one char in, one
+    /// char out. `rtl` is the shaping direction; Context additionally follows the surrounding
+    /// text, since European numbers take an even bidi level.
+    fn numeral_char(&self, text: &str, base: usize, at: usize, c: char, rtl: bool, use_levels: bool) -> char {
+        let numeral = self.env.numeral;
+        let dir = if numeral == NumeralMode::Context && use_levels && is_numeral_digit(c) {
+            context_digit_rtl(text, &self.levels, base, at)
+        } else {
+            rtl
+        };
+        numeral.map(c, dir)
+    }
+
     /// Style index for a resolved char in `face` (caps-scaled `size` override for small caps).
     fn style(&mut self, rc: &Arc<ResolvedChar>, face_override: Option<FaceRef>, small: bool) -> u16 {
         let r = wordcraft_fonts::word::resolve(&rc.font, rc.bold, rc.italic);
@@ -456,24 +514,28 @@ impl<'a> Builder<'a> {
         let mut cur: Option<SegKey> = None;
         let mut segs: Vec<(usize, usize, SegKey)> = Vec::new();
         for (i, c) in text.char_indices() {
+            let rtl = use_levels && self.levels.get(base + i).is_some_and(|l| l % 2 == 1);
+            // Displayed form (Word › Numeral): one char in, one char out. Coverage and the
+            // fallback face are picked for the displayed char, so Hindi digits land in an
+            // Arabic-capable face and Western digits in a Latin one.
+            let dc = self.numeral_char(text, base, i, c, rtl, use_levels);
             let mark = is_mark(c);
             let complex = match cur {
                 Some(k) if mark => k.complex,
-                _ => rc_cs.is_some() && rc.uses_complex(c),
+                _ => rc_cs.is_some() && rc.uses_complex(dc),
             };
             let prim = if complex { primary_cs.unwrap_or(primary) } else { primary };
             let face = match cur {
                 Some(k) if mark => k.face,
-                _ if prim.covers(c) || c.is_whitespace() || c.is_control() || c == SOFT_HYPHEN => None,
+                _ if prim.covers(dc) || c.is_whitespace() || c.is_control() || c == SOFT_HYPHEN => None,
                 // Stay in the fallback face the word started in while it covers the letters.
-                Some(SegKey { face: Some(f), .. }) if f.covers(c) => Some(f),
+                Some(SegKey { face: Some(f), .. }) if f.covers(dc) => Some(f),
                 _ => {
                     let (bold, italic) = if complex { (rc.bold_cs, rc.italic_cs) } else { (rc.bold, rc.italic) };
-                    wordcraft_fonts::FontDb::global().fallback_styled(c, prim.id(), bold, italic).map(|f| FaceRef::of(&f))
+                    wordcraft_fonts::FontDb::global().fallback_styled(dc, prim.id(), bold, italic).map(|f| FaceRef::of(&f))
                 }
             };
             let small = rc.small_caps && !rc.caps && c.is_lowercase();
-            let rtl = use_levels && self.levels.get(base + i).is_some_and(|l| l % 2 == 1);
             let k = SegKey { face, small, complex, rtl };
             match cur {
                 Some(p) if p.same(&k) => {}
@@ -499,19 +561,36 @@ impl<'a> Builder<'a> {
             let si = self.style(rc, key.face, small);
             let Some(st) = self.styles.get(si as usize).cloned() else { continue };
             let upper = rc.caps || small;
+            // Displayed text: numeral substitution is 1 char → 1 char, so codepoints stay
+            // aligned with the document and only byte offsets shift; `orig_of` maps each
+            // displayed char back to its original byte offset (+ a `sub.len()` sentinel).
+            let substituted = sub.char_indices().any(|(i, c)| self.numeral_char(text, base, a + i, c, key.rtl, use_levels) != c);
+            let mut mapped = String::new();
+            let mut map_starts: Vec<usize> = Vec::new();
+            let mut orig_of: Vec<usize> = Vec::new();
+            if substituted {
+                mapped = String::with_capacity(sub.len());
+                for (i, c) in sub.char_indices() {
+                    map_starts.push(mapped.len());
+                    orig_of.push(i);
+                    mapped.push(self.numeral_char(text, base, a + i, c, key.rtl, use_levels));
+                }
+                orig_of.push(sub.len());
+            }
+            let shape_text = if substituted { mapped.as_str() } else { sub };
             let map = |c: char| if upper { c.to_uppercase().next().unwrap_or(c) } else { c };
             let shaped = if use_levels {
-                wordcraft_fonts::shape_run(&st.face, sub, &[], map, key.rtl)
+                wordcraft_fonts::shape_run(&st.face, shape_text, &[], map, key.rtl)
             } else {
-                wordcraft_fonts::shape(&st.face, sub, &[], map)
+                wordcraft_fonts::shape(&st.face, shape_text, &[], map)
             };
             let k = st.size / st.face.upem.max(1.0) as f32;
             let hscale = rc.scale / 100.0;
             // Group glyphs by cluster byte offset; graphemes may span several shaper clusters.
-            let bounds: Vec<usize> = unicode_segmentation::UnicodeSegmentation::grapheme_indices(sub, true).map(|(i, _)| i).collect();
+            let bounds: Vec<usize> = unicode_segmentation::UnicodeSegmentation::grapheme_indices(shape_text, true).map(|(i, _)| i).collect();
             let mut gi = 0usize;
             for (bi, &gs) in bounds.iter().enumerate() {
-                let ge = bounds.get(bi + 1).copied().unwrap_or(sub.len());
+                let ge = bounds.get(bi + 1).copied().unwrap_or(shape_text.len());
                 let g0 = self.glyphs.len() as u32;
                 let mut adv = 0.0f32;
                 while let Some(g) = shaped.get(gi) {
@@ -523,7 +602,7 @@ impl<'a> Builder<'a> {
                     gi += 1;
                 }
                 let g1 = self.glyphs.len() as u32;
-                let s = sub.get(gs..ge).unwrap_or("");
+                let s = shape_text.get(gs..ge).unwrap_or("");
                 let ch = s.chars().next().unwrap_or(' ');
                 let kind = kind_override.unwrap_or(if ch == ' ' || ch == '\u{3000}' {
                     ClKind::Space
@@ -533,9 +612,11 @@ impl<'a> Builder<'a> {
                     ClKind::Text
                 });
                 let adv = if kind == ClKind::Marker { 0.0 } else { adv + rc.spacing };
+                // Clusters index the document text, never the displayed text.
+                let (cs, ce) = if substituted { remap_range(&map_starts, &orig_of, sub.len(), gs, ge) } else { (gs, ge) };
                 self.clusters.push(Cluster {
-                    start: base + a + gs,
-                    end: base + a + ge,
+                    start: base + a + cs,
+                    end: base + a + ce,
                     adv,
                     kind,
                     style: si,

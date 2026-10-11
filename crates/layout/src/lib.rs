@@ -44,6 +44,84 @@ pub enum ViewMode {
     Draft,
 }
 
+/// How digits look on screen (Word › File › Options › Advanced › Numeral).
+///
+/// Display only: the document text keeps the typed codepoints, so find, spelling, copying and
+/// the saved file all see the original digits. Extended Arabic-Indic digits (U+06F0–U+06F9,
+/// Persian/Urdu ۰۱۲۳…) always show as typed; only ASCII and Arabic-Indic (U+0660–U+0669) digits
+/// are substituted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NumeralMode {
+    /// Western digits everywhere (`0123456789`); the default, today's behaviour.
+    #[default]
+    Arabic,
+    /// Eastern Arabic-Indic digits everywhere (`٠١٢٣٤٥٦٧٨٩`).
+    Hindi,
+    /// Hindi digits in and around right-to-left text, Western digits elsewhere (numbers take
+    /// an even bidi level, so the surrounding text decides).
+    Context,
+    /// Hindi digits when the system locale is an Arabic-script language, else Western digits.
+    /// Call [`NumeralMode::resolve`] before laying out.
+    System,
+}
+
+impl NumeralMode {
+    /// Parse a command value (`"arabic" | "hindi" | "context" | "system"`, any case).
+    pub fn parse(s: &str) -> Option<NumeralMode> {
+        match s.to_lowercase().as_str() {
+            "arabic" => Some(NumeralMode::Arabic),
+            "hindi" => Some(NumeralMode::Hindi),
+            "context" => Some(NumeralMode::Context),
+            "system" => Some(NumeralMode::System),
+            _ => None,
+        }
+    }
+
+    /// Resolve `System` against the `LC_ALL`/`LANG` locale; other modes pass through.
+    pub fn resolve(self) -> NumeralMode {
+        if self != NumeralMode::System {
+            return self;
+        }
+        if hindi_system_locale() { NumeralMode::Hindi } else { NumeralMode::Arabic }
+    }
+
+    /// The displayed form of `c` in a run shaped with direction `rtl`.
+    ///
+    /// One character maps to exactly one character, so shaped text stays codepoint-aligned
+    /// with the document text (only byte offsets shift). A `System` mode that was not
+    /// resolved falls back to Western digits.
+    pub fn map(self, c: char, rtl: bool) -> char {
+        let hindi = match self {
+            NumeralMode::Arabic => false,
+            NumeralMode::Hindi => true,
+            NumeralMode::Context => rtl,
+            NumeralMode::System => false,
+        };
+        if hindi {
+            if c.is_ascii_digit() { char::from_u32(0x660 + (c as u32 - '0' as u32)).unwrap_or(c) } else { c }
+        } else if ('\u{660}'..='\u{669}').contains(&c) {
+            (b'0' + (c as u32 - 0x660) as u8) as char
+        } else {
+            c
+        }
+    }
+}
+
+/// Does the system locale use Hindi digits (Arabic, Persian, Urdu, Pashto, Sindhi, Kurdish)?
+/// `C`/`POSIX`/empty entries are skipped so `LC_ALL=C` still honours a real `LANG`.
+fn hindi_system_locale() -> bool {
+    for key in ["LC_ALL", "LANG"] {
+        let text = std::env::var(key).unwrap_or_default();
+        let lang = text.split(['_', '-', '.', '@']).next().unwrap_or_default().to_lowercase();
+        if lang.is_empty() || lang == "c" || lang == "posix" {
+            continue;
+        }
+        return matches!(lang.as_str(), "ar" | "fa" | "ur" | "ps" | "sd" | "ku" | "ckb");
+    }
+    false
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct LayoutOptions {
     pub view: ViewMode,
@@ -54,6 +132,8 @@ pub struct LayoutOptions {
     pub hide_deleted: bool,
     /// Check spelling and grammar (squiggles).
     pub proofing: bool,
+    /// How digits look on screen (display only; the text is untouched).
+    pub numeral: NumeralMode,
 }
 
 /// Something placed on a page (page coordinates, points, y down).
@@ -322,7 +402,15 @@ fn hash_of<T: Hash>(t: &T) -> u64 {
 
 fn env_hash(doc: &Document, opts: &LayoutOptions) -> u64 {
     let s = serde_json::to_string(&(&doc.styles, &doc.numbering, doc.settings.default_tab, &doc.settings.footnote_format)).unwrap_or_default();
-    hash_of(&(s, opts.show_hidden, opts.hide_deleted, opts.proofing, wordcraft_proof::user_dictionary().len(), doc.settings.auto_hyphenation))
+    hash_of(&(
+        s,
+        opts.show_hidden,
+        opts.hide_deleted,
+        opts.proofing,
+        opts.numeral,
+        wordcraft_proof::user_dictionary().len(),
+        doc.settings.auto_hyphenation,
+    ))
 }
 
 fn has_page_fields(p: &Paragraph) -> bool {
@@ -370,6 +458,7 @@ impl Ctx<'_> {
             hide_deleted: false,
             table: None,
             proofing: false,
+            numeral: self.opts.numeral.resolve(),
             exclusions: &[],
             eq_number: 0,
         };
@@ -432,6 +521,7 @@ impl Ctx<'_> {
             hide_deleted: self.opts.hide_deleted,
             table,
             proofing: self.opts.proofing,
+            numeral: self.opts.numeral.resolve(),
             exclusions,
             eq_number,
         };
@@ -1829,6 +1919,7 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32) -> f32 {
                 hide_deleted: ctx.opts.hide_deleted,
                 table: None,
                 proofing: false,
+                numeral: ctx.opts.numeral.resolve(),
                 exclusions: &[],
                 eq_number: ctx.eq_count,
             };
@@ -2083,3 +2174,5 @@ pub fn now_ms() -> f64 {
 mod tests;
 #[cfg(test)]
 mod tests_bidi;
+#[cfg(test)]
+mod tests_numeral;
