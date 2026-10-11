@@ -810,11 +810,16 @@ fn layout(app: &mut WordApp, ui: &mut Ui) {
                 {
                     mi(ui, app, l, "layout.lineNumbers", json!({"value": v}));
                 }
+                ui.separator();
+                mi(ui, app, "Line Numbering Options…", "ui.dialog", json!({"name": "lineNumbers"}));
             });
             let hy = app.session.doc.settings.auto_hyphenation;
             menu_button(ui, app, "hyphenation", Some("Hyphenation"), "Hyphenation", false, |ui, app| {
                 mi(ui, app, if hy { "✓ Automatic" } else { "Automatic" }, "layout.hyphenation", json!({"value": true}));
                 mi(ui, app, if hy { "None" } else { "✓ None" }, "layout.hyphenation", json!({"value": false}));
+                mi(ui, app, "Manual…", "ui.dialog", json!({"name": "manualHyphenation"}));
+                ui.separator();
+                mi(ui, app, "Hyphenation Options…", "ui.dialog", json!({"name": "hyphenation"}));
             });
         });
     });

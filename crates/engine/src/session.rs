@@ -286,11 +286,13 @@ pub struct Prefs {
     /// Track Changes Options: what markup shows and how revisions are drawn (per user, as in
     /// Word).
     pub markup: wordcraft_layout::display::MarkupOptions,
+    /// Language › Detect language automatically (per user, as in Word).
+    pub detect_language: bool,
 }
 
 impl Default for Prefs {
     fn default() -> Self {
-        Prefs { count_notes: true, markup: Default::default() }
+        Prefs { count_notes: true, markup: Default::default(), detect_language: true }
     }
 }
 

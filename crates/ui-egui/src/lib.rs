@@ -20,6 +20,7 @@ pub mod control;
 pub mod credits;
 pub mod dialogs;
 pub mod dialogs_insert;
+pub mod dialogs_layout;
 pub mod dialogs_lists;
 pub mod dialogs_para;
 pub mod equation_tab;
@@ -1106,16 +1107,22 @@ fn input_dialog(id: &str, params: &Value) -> Option<&'static str> {
         // Define New Multilevel List and Track Changes Options without settings show their dialogs.
         "list.define" if params.get("levels").is_none() => Some("defineList"),
         "review.trackingOptions" if params.as_object().is_none_or(|m| m.is_empty()) => Some("trackChangesOptions"),
+        // Language, Envelopes and Labels without settings show their dialogs (#407).
+        "review.language" if params.as_object().is_none_or(|m| m.is_empty()) => Some("language"),
+        "mailings.envelopes" if params.as_object().is_none_or(|m| m.is_empty()) => Some("envelopes"),
+        "mailings.labels" if params.as_object().is_none_or(|m| m.is_empty()) => Some("labels"),
         _ => None,
     }
 }
 
 /// User commands that replace or close the document (`file.open` without a path only shows the
 /// file picker; the open that follows is checked). Envelopes, Labels and Finish & Merge make a
-/// new document in its place; a merge written to a file (`path`) leaves it alone.
+/// new document in its place; a merge written to a file (`path`) and an envelope added to this
+/// document (`add`) leave it alone.
 fn discards_document(id: &str, params: &Value) -> bool {
     match id {
-        "file.new" | "file.close" | "mailings.envelopes" | "mailings.labels" => true,
+        "file.new" | "file.close" | "mailings.labels" => true,
+        "mailings.envelopes" => params.get("add").and_then(Value::as_bool) != Some(true),
         "file.open" => params.get("path").is_some(),
         "mailings.finish" => params.get("path").and_then(Value::as_str).is_none(),
         _ => false,
@@ -1863,6 +1870,15 @@ mod tests {
 
     const MAILINGS: [&str; 3] = ["mailings.envelopes", "mailings.labels", "mailings.finish"];
 
+    /// What the user gave: Envelopes and Labels without anything open their dialogs (#407).
+    fn mailing(id: &str) -> Value {
+        match id {
+            "mailings.envelopes" => json!({"delivery": "Ada"}),
+            "mailings.labels" => json!({"text": "Ada"}),
+            _ => json!({}),
+        }
+    }
+
     /// Envelopes, Labels and Finish & Merge replace the document with a new one, like New, but
     /// the ribbon ran them at once and the unsaved document was gone without a question.
     #[test]
@@ -1871,7 +1887,7 @@ mod tests {
             let mut a = typed();
             a.run("mailings.recipients", json!({"csv": "Name\nAda"})).unwrap();
             let document = a.session.document_id();
-            a.run(id, json!({})).unwrap();
+            a.run(id, mailing(id)).unwrap();
             assert_eq!(prompt(&a), Some("saveChanges"), "{id}");
             assert_eq!(a.session.document_id(), document, "{id}: untouched while the prompt is up");
 
@@ -1881,7 +1897,7 @@ mod tests {
             assert!(body_text(&a).contains(UNSAVED));
             assert!(a.session.dirty);
 
-            a.run(id, json!({})).unwrap();
+            a.run(id, mailing(id)).unwrap();
             a.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
             assert_eq!(prompt(&a), None);
             assert_ne!(a.session.document_id(), document, "{id}: Don't Save makes the new document");
@@ -1905,7 +1921,7 @@ mod tests {
             a.run("file.save", json!({"path": dir.join("saved.docx").to_string_lossy()})).unwrap();
             assert!(!a.session.dirty);
             let document = a.session.document_id();
-            a.run(id, json!({})).unwrap();
+            a.run(id, mailing(id)).unwrap();
             assert_eq!(prompt(&a), None, "{id}");
             assert_ne!(a.session.document_id(), document, "{id}");
         }
@@ -1933,7 +1949,7 @@ mod tests {
             assert!(a.autosaves());
             a.run("mailings.recipients", json!({"csv": "Name\nAda"})).unwrap();
             a.run("text.insert", json!({"text": "Again "})).unwrap();
-            a.run(id, json!({})).unwrap();
+            a.run(id, mailing(id)).unwrap();
             a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
             assert_eq!(prompt(&a), None);
             let saved = std::fs::read(&path).unwrap();
@@ -2009,7 +2025,7 @@ mod tests {
             a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
             a.run("mailings.recipients", json!({"csv": "Name\nAda"})).unwrap();
             a.run("file.save", json!({})).unwrap();
-            a.run(id, json!({})).unwrap();
+            a.run(id, mailing(id)).unwrap();
             assert_eq!(prompt(&a), None, "{id}: the document was saved");
             let result = body_text(&a);
 

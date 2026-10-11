@@ -340,17 +340,9 @@ pub fn specs() -> Vec<CommandSpec> {
             })
         })
         .params(r#"{"format": "decimal|upperRoman|lowerLetter…", "text"?: "%1.", "start"?: n}"#),
-        CommandSpec::new("review.language", "Language", "Review › Language", |s, v| {
-            let lang = p::str(v, "lang").unwrap_or("en-US").to_string();
-            let no_proof = p::bool(v, "noProof");
-            super::format::apply(s, &|c| {
-                c.lang = Some(lang.clone());
-                if let Some(np) = no_proof {
-                    c.no_proof = Some(np);
-                }
-            })
-        })
-        .params(r#"{"lang": "en-US|en-GB|fr-FR|…", "noProof"?: bool}"#),
+        CommandSpec::new("review.language", "Language", "Review › Language", language).params(
+            r#"{"lang"?: "en-US|en-GB|fr-FR|…", "noProof"?: bool, "detect"?: bool (detect language automatically, a preference), "default"?: bool (make `lang` the document's default language instead)}"#,
+        ),
         CommandSpec::new("review.showMarkup", "Show Markup", "Review › Tracking", |s, v| {
             s.view.show_markup = p::bool(v, "value").unwrap_or(!s.view.show_markup);
             s.relayout();
@@ -398,6 +390,48 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .pure(),
     ]
+}
+
+/// Set Proofing Language: the selection's language and "do not check spelling or grammar",
+/// or (`default`) the document's default language; `detect` is the per-user preference.
+/// Nothing at all sets US English, as before.
+fn language(s: &mut Session, v: &Value) -> CmdResult {
+    let lang = match p::str(v, "lang") {
+        Some(l) if !l.is_empty() && l.len() <= 35 && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') => Some(l.to_string()),
+        Some(l) => return Err(CmdError::Params(format!("`{l}` is not a language tag"))),
+        None => None,
+    };
+    let no_proof = p::bool(v, "noProof");
+    let detect = p::bool(v, "detect");
+    if let Some(d) = detect {
+        s.prefs.detect_language = d;
+    }
+    if p::bool(v, "default") == Some(true) {
+        let l = lang.ok_or_else(|| CmdError::Params("`lang` is required with `default`".into()))?;
+        s.doc.styles.default_chr.lang = Some(l.clone());
+        // A Normal style that names its own language follows the new default.
+        if let Some(n) = s.doc.styles.styles.iter_mut().find(|x| x.id == "Normal")
+            && n.chr.lang.is_some()
+        {
+            n.chr.lang = Some(l.clone());
+        }
+        return Ok(json!({"default": l, "detect": s.prefs.detect_language}));
+    }
+    let lang = match (lang, no_proof, detect) {
+        (None, None, None) => Some("en-US".to_string()),
+        (l, ..) => l,
+    };
+    if lang.is_none() && no_proof.is_none() {
+        return Ok(json!({"detect": s.prefs.detect_language}));
+    }
+    super::format::apply(s, &|c| {
+        if let Some(l) = &lang {
+            c.lang = Some(l.clone());
+        }
+        if let Some(np) = no_proof {
+            c.no_proof = Some(np);
+        }
+    })
 }
 
 fn macros(s: &mut Session, v: &Value) -> CmdResult {
@@ -956,5 +990,20 @@ mod tests {
         s.run("caret.docEnd", &json!({})).unwrap();
         s.run("insert.quickParts", &json!({"insert": "m"})).unwrap();
         assert!(s.doc.plain_text(StoryRef::Body).ends_with("Membership"));
+    }
+
+    /// #407 Language: the selection's language and "do not check", the default language and
+    /// the detect preference; a bad tag is refused.
+    #[test]
+    fn proofing_language_options() {
+        let mut s = Session::new(Document::from_text("Bonjour"));
+        s.run("select.all", &json!({})).unwrap();
+        s.run("review.language", &json!({"lang": "fr-FR", "noProof": true, "detect": false})).unwrap();
+        let rc = s.doc.para_at(&Pos::body(0, 1)).map(|p| p.props_at(1).clone()).unwrap();
+        assert_eq!((rc.lang.as_deref(), rc.no_proof), (Some("fr-FR"), Some(true)));
+        assert!(!s.prefs.detect_language);
+        s.run("review.language", &json!({"lang": "de-DE", "default": true})).unwrap();
+        assert_eq!(s.doc.styles.default_chr.lang.as_deref(), Some("de-DE"));
+        assert!(s.run("review.language", &json!({"lang": "<script>"})).is_err());
     }
 }
