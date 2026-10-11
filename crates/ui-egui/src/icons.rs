@@ -1,6 +1,6 @@
 //! WordCraft's icon set, drawn in code (original artwork; no external icon assets).
 //!
-//! The rules (see the design system's Iconography section):
+//! The rules:
 //! - A 16×16 grid. Icons are drawn at 16 px (small buttons, menus, toolbars) or 32 px (large
 //!   ribbon buttons); other sizes scale.
 //! - One stroke weight per drawn size ([`stroke_px`]), round caps and joins.
@@ -1841,7 +1841,7 @@ fn color_bar(pen: &Pen, col: Color32) {
     }
 }
 
-/// Every icon name the interface draws, for tests and the design system's catalogue.
+/// Every icon name the interface draws, for tests and the icon catalogue.
 pub const NAMES: &[&str] = &[
     "paste",
     "cut",
