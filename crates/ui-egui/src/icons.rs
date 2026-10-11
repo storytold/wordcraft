@@ -4,7 +4,9 @@
 //! - A 16×16 grid. Icons are drawn at 16 px (small buttons, menus, toolbars) or 32 px (large
 //!   ribbon buttons); other sizes scale.
 //! - One stroke weight per drawn size ([`stroke_px`]), round caps and joins.
-//! - Parts never cross: where two parts meet there is a gap of at least one unit.
+//! - Every part has one colour, and separate parts keep at least 1.25 units of clear space
+//!   (2.25 between stroke centre lines); parts of different colours never touch. Strokes stay
+//!   between 1 and 15, so nothing is clipped.
 //! - Line work in the ink colour `c`, one meaningful detail in the accent `a`, and an optional soft
 //!   accent tint inside the main shape. Status colours (green, red, orange) come from the theme.
 //! - Letters only where the command is about letters.
@@ -57,6 +59,18 @@ impl Pen<'_> {
     }
     fn acc(&self, pts: &[(f32, f32)]) {
         self.path(pts, self.a);
+    }
+    /// An ink polyline at a heavier weight (bold lettering).
+    fn heavy(&self, pts: &[(f32, f32)]) {
+        let v = self.pts(pts);
+        if v.len() < 2 {
+            return;
+        }
+        let w = self.w * 1.9;
+        for q in &v {
+            self.p.circle_filled(*q, w * 0.5, self.c);
+        }
+        self.p.add(Shape::line(v, Stroke::new(w, self.c)));
     }
     /// A closed outline in `col`.
     fn poly(&self, pts: &[(f32, f32)], col: Color32) {
@@ -169,7 +183,7 @@ impl Pen<'_> {
     }
     /// A page with a cut top-right corner, tinted.
     fn page(&self, x0: f32, y0: f32, x1: f32, y1: f32) {
-        let k = ((x1 - x0) * 0.3).min(3.5);
+        let k = ((x1 - x0) * 0.3).min(3.0);
         let pts = [(x0 + 1.0, y0), (x1 - k, y0), (x1, y0 + k), (x1, y1 - 1.0), (x1 - 1.0, y1), (x0 + 1.0, y1), (x0, y1 - 1.0), (x0, y0 + 1.0)];
         self.fill(&pts, self.t);
         self.poly(&pts, self.c);
@@ -225,7 +239,8 @@ impl Pen<'_> {
     /// A lens with its handle, the handle in `h`.
     fn lens(&self, x: f32, y: f32, r: f32, h: Color32) {
         self.disc(x, y, r);
-        let d = (r + 1.0) / std::f32::consts::SQRT_2;
+        // A handle in its own colour starts clear of the rim; an ink handle joins it.
+        let d = (r + if h == self.c { 0.5 } else { 2.25 }) / std::f32::consts::SQRT_2;
         self.path(&[(x + d, y + d), (14.5, 14.5)], h);
     }
 }
@@ -246,6 +261,8 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
 
 #[allow(clippy::too_many_lines)]
 fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Color32, orange: Color32) {
+    // Spacing rule: every part is one colour, and separate parts keep at least 1.25 units of clear
+    // space (2.25 between stroke centre lines). Strokes stay between 1 and 15.
     match name {
         // Clipboard
         "paste" => {
@@ -266,63 +283,61 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.arrow(8.0, 6.5, 8.0, 11.5, a);
         }
         "cut" => {
-            pen.circle(4.5, 12.0, 2.0);
-            pen.circle(11.5, 12.0, 2.0);
-            pen.line(&[(5.8, 10.4), (11.5, 2.0)]);
-            pen.line(&[(10.2, 10.4), (8.9, 8.5)]);
-            pen.acc(&[(7.1, 5.9), (4.5, 2.0)]);
+            pen.disc(4.5, 12.0, 2.0);
+            pen.disc(11.5, 12.0, 2.0);
+            pen.line(&[(5.6, 10.3), (11.5, 1.75)]);
+            pen.line(&[(10.4, 10.3), (4.5, 1.75)]);
         }
-        // The original's visible corner and the copy, which never crosses it.
         "copy" => {
-            pen.line(&[(10.5, 3.5), (10.5, 2.5), (9.5, 1.5), (2.5, 1.5), (1.5, 2.5), (1.5, 9.5), (2.5, 10.5), (3.5, 10.5)]);
+            pen.line(&[(10.5, 3.0), (10.5, 2.5), (9.5, 1.5), (2.5, 1.5), (1.5, 2.5), (1.5, 9.5), (2.5, 10.5), (3.0, 10.5)]);
             pen.block(5.5, 5.5, 14.5, 14.5, 1.0, pen.t);
             pen.rect_c(5.5, 5.5, 14.5, 14.5, 1.0, a);
         }
         // Format painter as a roller: pick up the look, roll it on.
         "painter" => {
-            pen.block(2.0, 2.0, 12.0, 6.0, 1.0, pen.t);
-            pen.rect_c(2.0, 2.0, 12.0, 6.0, 1.0, a);
-            pen.line(&[(12.0, 4.0), (14.0, 4.0), (14.0, 8.5), (8.0, 8.5), (8.0, 10.0)]);
+            pen.block(1.5, 2.0, 10.5, 6.0, 1.0, pen.t);
+            pen.rect_c(1.5, 2.0, 10.5, 6.0, 1.0, a);
+            pen.line(&[(12.75, 4.0), (14.25, 4.0), (14.25, 8.5), (8.0, 8.5), (8.0, 10.5)]);
             pen.rect(6.75, 10.5, 9.25, 14.5, 0.5);
         }
         // Font
         "bold" => {
-            pen.line(&[(5.0, 8.0), (9.0, 8.0)]);
-            pen.arc(9.0, 5.25, 2.75, -90.0, 90.0, c);
-            pen.arc(9.5, 10.75, 2.75, -90.0, 90.0, c);
-            pen.line(&[(9.0, 2.5), (4.5, 2.5), (4.5, 13.5), (9.5, 13.5)]);
-            pen.line(&[(5.6, 3.5), (5.6, 12.5)]);
+            pen.heavy(&[(5.0, 8.0), (8.5, 8.0)]);
+            pen.heavy(&Pen::arc_pts(8.5, 5.25, 2.75, -90.0, 90.0));
+            pen.heavy(&Pen::arc_pts(9.0, 10.75, 2.75, -90.0, 90.0));
+            pen.heavy(&[(8.5, 2.5), (4.75, 2.5), (4.75, 13.5), (9.0, 13.5)]);
         }
         "italic" => {
             pen.line(&[(7.0, 2.5), (12.0, 2.5)]);
             pen.line(&[(4.0, 13.5), (9.0, 13.5)]);
-            pen.acc(&[(9.5, 2.5), (6.5, 13.5)]);
+            pen.line(&[(9.5, 2.5), (6.5, 13.5)]);
         }
         "underline" => {
-            pen.line(&[(4.5, 2.0), (4.5, 7.5)]);
-            pen.arc(8.0, 7.5, 3.5, 180.0, 0.0, c);
-            pen.line(&[(11.5, 7.5), (11.5, 2.0)]);
+            pen.line(&[(4.5, 1.75), (4.5, 7.25)]);
+            pen.arc(8.0, 7.25, 3.5, 180.0, 0.0, c);
+            pen.line(&[(11.5, 7.25), (11.5, 1.75)]);
             pen.acc(&[(3.0, 14.0), (13.0, 14.0)]);
         }
         "strike" => {
             pen.arc(8.0, 5.25, 2.75, -20.0, -260.0, c);
             pen.arc(8.0, 10.75, 2.75, 160.0, -80.0, c);
-            pen.acc(&[(2.5, 8.0), (13.5, 8.0)]);
+            pen.line(&[(2.5, 8.0), (13.5, 8.0)]);
         }
         "charborder" => {
-            pen.block(1.5, 1.5, 14.5, 14.5, 1.0, pen.t);
-            pen.rect_c(1.5, 1.5, 14.5, 14.5, 1.0, a);
+            pen.block(1.5, 1.5, 14.5, 14.5, 1.5, pen.t);
+            pen.rect_c(1.5, 1.5, 14.5, 14.5, 1.5, a);
             pen.glyph_a(8.0, 11.5, 7.5, c, c);
         }
+        // Sub- and superscript: a drawn x and a smooth digit from the font.
         "subscript" => {
-            pen.line(&[(2.0, 3.5), (9.0, 11.5)]);
-            pen.line(&[(9.0, 3.5), (2.0, 11.5)]);
-            pen.acc(&[(11.0, 11.0), (12.5, 9.5), (14.0, 10.5), (11.0, 14.5), (14.5, 14.5)]);
+            pen.line(&[(1.5, 3.0), (8.0, 11.0)]);
+            pen.line(&[(8.0, 3.0), (1.5, 11.0)]);
+            pen.text(12.25, 12.0, 7.5, "2", a, true);
         }
         "superscript" => {
-            pen.line(&[(2.0, 5.5), (9.0, 13.5)]);
-            pen.line(&[(9.0, 5.5), (2.0, 13.5)]);
-            pen.acc(&[(11.0, 3.0), (12.5, 1.5), (14.0, 2.5), (11.0, 6.5), (14.5, 6.5)]);
+            pen.line(&[(1.5, 5.0), (8.0, 13.0)]);
+            pen.line(&[(8.0, 5.0), (1.5, 13.0)]);
+            pen.text(12.25, 4.0, 7.5, "2", a, true);
         }
         "grow" => {
             pen.glyph_a(6.0, 14.0, 11.0, c, c);
@@ -333,113 +348,118 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.arrow(13.0, 2.5, 13.0, 9.0, a);
         }
         "case" => {
-            pen.glyph_a(5.0, 13.0, 10.0, c, c);
-            pen.glyph_small_a(11.5, 13.0, 5.5, a);
+            pen.glyph_a(4.75, 13.0, 9.0, c, c);
+            pen.glyph_small_a(12.75, 13.0, 4.0, a);
         }
-        // Clear formatting: a letter and an eraser stroke beside it.
         "clear" => {
-            pen.glyph_a(5.5, 12.5, 10.0, c, c);
-            pen.acc(&[(10.5, 9.0), (14.5, 13.0)]);
-            pen.acc(&[(14.5, 9.0), (10.5, 13.0)]);
+            pen.glyph_a(5.0, 12.5, 9.0, c, c);
+            pen.path(&[(11.25, 9.0), (14.5, 12.25)], red);
+            pen.path(&[(14.5, 9.0), (11.25, 12.25)], red);
         }
         // Highlight, font colour, shading: the bar is the colour that will be applied. The split
         // button passes the current colour as the accent.
         "highlight" => {
-            pen.poly(&[(6.0, 8.0), (10.5, 2.0), (13.5, 4.5), (9.0, 10.5)], c);
-            pen.line(&[(6.0, 8.0), (4.5, 10.5), (6.5, 11.5), (9.0, 10.5)]);
+            pen.fill(&[(6.0, 6.5), (10.5, 0.75), (13.5, 3.25), (9.0, 9.0)], pen.t);
+            pen.poly(&[(6.0, 6.5), (10.5, 0.75), (13.5, 3.25), (9.0, 9.0)], c);
+            pen.line(&[(6.0, 6.5), (4.5, 9.0), (6.5, 10.0), (9.0, 9.0)]);
             color_bar(pen, a);
         }
         "fontcolor" => {
-            pen.glyph_a(8.0, 11.0, 9.5, c, c);
+            pen.glyph_a(8.0, 10.0, 8.5, c, c);
             color_bar(pen, a);
         }
         "effects" => {
-            pen.glyph_a(7.0, 12.0, 10.0, c, c);
-            pen.path(&[(12.0, 2.0), (12.0, 6.0)], a);
-            pen.path(&[(10.0, 4.0), (14.0, 4.0)], a);
-            pen.dot(14.0, 9.5, 0.9, a);
+            pen.glyph_a(6.0, 13.0, 10.0, c, c);
+            pen.acc(&[(12.5, 1.75), (12.5, 6.25)]);
+            pen.acc(&[(10.25, 4.0), (14.75, 4.0)]);
+            pen.dot(13.5, 10.0, 1.0, a);
         }
         "fontdialog" | "launcher" => {
-            pen.line(&[(3.5, 7.0), (3.5, 12.5), (9.0, 12.5)]);
-            pen.arrow(6.5, 9.5, 12.5, 3.5, a);
+            pen.line(&[(3.0, 6.5), (3.0, 13.0), (9.5, 13.0)]);
+            pen.arrow(6.5, 9.5, 13.0, 3.0, a);
         }
         // Paragraph
         "bullets" => {
-            for (i, y) in [3.5, 8.0, 12.5].iter().enumerate() {
-                pen.dot(3.0, *y, 1.25, if i == 0 { a } else { c });
-                pen.line(&[(6.5, *y), (14.0, *y)]);
+            for (i, y) in [3.0, 8.0, 13.0].iter().enumerate() {
+                pen.dot(2.75, *y, 1.25, if i == 0 { a } else { c });
+                pen.line(&[(6.5, *y), (14.5, *y)]);
             }
         }
         "numbering" => {
-            for (i, y) in [3.5, 8.0, 12.5].iter().enumerate() {
-                pen.text(2.8, *y, 5.0, ["1", "2", "3"][i], if i == 0 { a } else { c }, true);
-                pen.line(&[(6.5, *y), (14.0, *y)]);
+            for (i, y) in [3.0, 8.0, 13.0].iter().enumerate() {
+                pen.text(2.75, *y, 5.0, ["1", "2", "3"][i], if i == 0 { a } else { c }, true);
+                pen.line(&[(7.0, *y), (14.5, *y)]);
             }
         }
         "multilevel" => {
-            pen.dot(2.5, 3.0, 1.1, a);
-            pen.line(&[(5.0, 3.0), (14.5, 3.0)]);
-            pen.dot(5.5, 8.0, 1.1, c);
-            pen.line(&[(8.0, 8.0), (14.5, 8.0)]);
-            pen.dot(8.5, 13.0, 1.1, c);
-            pen.line(&[(11.0, 13.0), (14.5, 13.0)]);
+            for (i, (x, y)) in [(2.5, 3.0), (5.0, 8.0), (7.5, 13.0)].iter().enumerate() {
+                pen.dot(*x, *y, 1.1, if i == 0 { a } else { c });
+                pen.line(&[(x + 3.5, *y), (14.5, *y)]);
+            }
         }
         "indent" => {
-            pen.rows(7.5, 14.5, &[6.0, 10.0]);
             pen.rows(1.5, 14.5, &[2.0, 14.0]);
-            pen.arrow(1.5, 8.0, 5.0, 8.0, a);
+            pen.rows(7.5, 14.5, &[6.0, 10.0]);
+            pen.arrow(1.5, 8.0, 4.75, 8.0, a);
         }
         "outdent" => {
-            pen.rows(7.5, 14.5, &[6.0, 10.0]);
             pen.rows(1.5, 14.5, &[2.0, 14.0]);
-            pen.arrow(5.0, 8.0, 1.5, 8.0, a);
+            pen.rows(7.5, 14.5, &[6.0, 10.0]);
+            pen.arrow(4.75, 8.0, 1.5, 8.0, a);
         }
         "sort" => {
-            pen.rows(1.5, 9.0, &[3.0]);
-            pen.rows(1.5, 7.0, &[6.5]);
-            pen.rows(1.5, 5.0, &[10.0]);
-            pen.rows(1.5, 3.0, &[13.5]);
+            pen.rows(1.5, 8.5, &[3.0]);
+            pen.rows(1.5, 6.5, &[6.5]);
+            pen.rows(1.5, 4.5, &[10.0]);
+            pen.rows(1.5, 2.5, &[13.5]);
             pen.arrow(12.5, 2.0, 12.5, 14.0, a);
         }
         "pilcrow" => {
             pen.block(4.0, 2.0, 8.5, 8.5, 3.0, pen.t);
             pen.arc(7.5, 5.25, 3.25, 90.0, 270.0, c);
-            pen.line(&[(7.5, 2.0), (12.5, 2.0)]);
-            pen.line(&[(7.5, 8.5), (7.5, 2.0)]);
+            pen.line(&[(7.5, 8.5), (7.5, 2.0), (12.0, 2.0)]);
             pen.line(&[(8.5, 2.5), (8.5, 14.0)]);
-            pen.acc(&[(11.0, 2.5), (11.0, 14.0)]);
+            pen.line(&[(11.0, 2.5), (11.0, 14.0)]);
         }
+        // Alignment: the edge the text holds to, in accent.
         "alignLeft" => {
-            pen.rows(2.0, 14.0, &[3.0, 9.0]);
-            pen.rows(2.0, 10.0, &[6.0, 12.0]);
-            pen.acc(&[(2.0, 15.0), (2.0, 15.0)]);
+            pen.acc(&[(1.5, 2.0), (1.5, 14.0)]);
+            pen.rows(4.0, 14.5, &[3.0, 9.0]);
+            pen.rows(4.0, 10.5, &[6.0, 12.0]);
         }
         "alignCenter" => {
-            pen.rows(2.0, 14.0, &[3.0, 9.0]);
-            pen.rows(4.5, 11.5, &[6.0, 12.0]);
+            pen.rows(1.5, 14.5, &[3.0, 9.0]);
+            for y in [6.0, 12.0] {
+                pen.acc(&[(4.5, y), (11.5, y)]);
+            }
         }
         "alignRight" => {
-            pen.rows(2.0, 14.0, &[3.0, 9.0]);
-            pen.rows(6.0, 14.0, &[6.0, 12.0]);
+            pen.acc(&[(14.5, 2.0), (14.5, 14.0)]);
+            pen.rows(1.5, 12.0, &[3.0, 9.0]);
+            pen.rows(5.5, 12.0, &[6.0, 12.0]);
         }
-        "justify" => pen.rows(2.0, 14.0, &[3.0, 6.0, 9.0, 12.0]),
+        "justify" => {
+            pen.acc(&[(1.5, 2.0), (1.5, 14.0)]);
+            pen.acc(&[(14.5, 2.0), (14.5, 14.0)]);
+            pen.rows(4.0, 12.0, &[3.0, 6.0, 9.0, 12.0]);
+        }
         "textLtr" => {
-            pen.rows(2.0, 14.0, &[3.0]);
-            pen.rows(2.0, 10.0, &[6.5]);
+            pen.rows(2.0, 14.0, &[2.5]);
+            pen.rows(2.0, 10.0, &[6.0]);
             pen.arrow(2.0, 11.5, 14.0, 11.5, a);
         }
         "textRtl" => {
-            pen.rows(2.0, 14.0, &[3.0]);
-            pen.rows(6.0, 14.0, &[6.5]);
+            pen.rows(2.0, 14.0, &[2.5]);
+            pen.rows(6.0, 14.0, &[6.0]);
             pen.arrow(14.0, 11.5, 2.0, 11.5, a);
         }
         "lineSpacing" => {
-            pen.rows(7.0, 14.0, &[3.5, 8.0, 12.5]);
+            pen.rows(7.0, 14.5, &[3.0, 8.0, 13.0]);
             pen.span(3.0, 2.0, 3.0, 14.0, a);
         }
         "shading" => {
-            pen.block(2.0, 2.0, 14.0, 10.0, 1.0, pen.t);
-            pen.rows(4.0, 12.0, &[4.5, 7.5]);
+            pen.block(2.0, 1.5, 14.0, 10.0, 1.0, pen.t);
+            pen.rows(4.5, 11.5, &[4.25, 7.25]);
             color_bar(pen, a);
         }
         "borders" => {
@@ -465,53 +485,53 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
         // Editing
         "find" | "search" => pen.lens(6.5, 6.5, 4.5, a),
         "replace" => {
-            pen.line(&[(2.0, 4.0), (9.0, 4.0)]);
-            pen.acc(&[(7.0, 12.0), (14.0, 12.0)]);
-            pen.line(&[(12.0, 4.0), (13.5, 4.0), (13.5, 8.0)]);
-            pen.head(13.5, 8.5, 90.0, 1.8, c);
-            pen.line(&[(4.0, 12.0), (2.5, 12.0), (2.5, 8.0)]);
-            pen.head(2.5, 7.5, -90.0, 1.8, c);
+            pen.line(&[(1.5, 4.0), (8.5, 4.0)]);
+            pen.acc(&[(7.5, 12.0), (14.5, 12.0)]);
+            pen.line(&[(11.5, 4.0), (13.5, 4.0), (13.5, 7.5)]);
+            pen.head(13.5, 8.25, 90.0, 1.8, c);
+            pen.line(&[(4.5, 12.0), (2.5, 12.0), (2.5, 8.5)]);
+            pen.head(2.5, 7.75, -90.0, 1.8, c);
         }
-        // Select: a dashed marquee with a pointer inside.
         "select" => {
-            for (x0, y0, x1, y1) in [(1.5, 1.5, 4.0, 1.5), (6.5, 1.5, 9.0, 1.5), (1.5, 1.5, 1.5, 4.0), (1.5, 6.5, 1.5, 9.0), (11.5, 1.5, 12.5, 1.5)] {
-                pen.line(&[(x0, y0), (x1, y1)]);
-            }
-            pen.fill(&[(6.0, 6.0), (14.0, 9.5), (10.0, 10.5)], a);
-            pen.fill(&[(6.0, 6.0), (10.0, 10.5), (9.0, 14.0)], a);
+            pen.line(&[(1.5, 4.0), (1.5, 1.5), (4.0, 1.5)]);
+            pen.line(&[(7.0, 1.5), (9.0, 1.5)]);
+            pen.line(&[(1.5, 7.0), (1.5, 9.0)]);
+            pen.fill(&[(6.0, 6.0), (14.5, 9.5), (10.25, 10.25)], a);
+            pen.fill(&[(6.0, 6.0), (10.25, 10.25), (9.5, 14.5)], a);
         }
         "dictate" => {
-            pen.panel(6.0, 1.5, 10.0, 9.5, 2.0);
-            pen.arc(8.0, 8.0, 4.5, 0.0, 180.0, a);
-            pen.line(&[(8.0, 12.5), (8.0, 14.5)]);
+            pen.panel(6.0, 1.5, 10.0, 9.0, 2.0);
+            pen.acc(&Pen::arc_pts(8.0, 7.75, 4.5, 0.0, 180.0));
+            pen.acc(&[(8.0, 12.25), (8.0, 14.5)]);
         }
-        // Editor: a line of text with a review check.
         "editor" => {
-            pen.rows(1.5, 9.0, &[3.0, 6.5]);
-            pen.rows(1.5, 6.0, &[10.0]);
-            pen.path(&[(8.5, 11.5), (10.5, 13.5), (14.5, 8.5)], green);
+            pen.rows(1.5, 9.5, &[3.0, 6.5]);
+            pen.rows(1.5, 5.5, &[10.0]);
+            pen.path(&[(8.5, 11.75), (10.5, 13.75), (14.5, 9.0)], green);
         }
         "spelling" => {
-            pen.text(6.5, 5.5, 8.5, "abc", c, true);
-            pen.path(&[(2.0, 11.5), (3.5, 10.5), (5.0, 11.5), (6.5, 10.5), (8.0, 11.5)], red);
-            pen.path(&[(9.5, 12.0), (11.0, 13.5), (14.5, 9.5)], green);
+            pen.text(7.0, 4.25, 7.0, "abc", c, true);
+            pen.path(&[(1.75, 11.75), (3.25, 10.75), (4.75, 11.75), (6.25, 10.75), (7.75, 11.75)], red);
+            pen.path(&[(9.5, 11.5), (11.25, 13.25), (14.5, 9.25)], green);
         }
         "styles" => {
-            pen.panel(1.5, 1.5, 10.0, 10.0, 1.0);
-            pen.glyph_a(5.75, 8.5, 5.5, c, c);
-            pen.acc(&[(12.5, 5.0), (12.5, 14.5), (3.0, 14.5)]);
+            pen.panel(1.5, 1.5, 11.0, 11.0, 1.0);
+            pen.glyph_a(6.25, 8.75, 4.5, c, c);
+            pen.acc(&[(13.5, 4.5), (13.5, 13.5), (4.5, 13.5)]);
         }
         "stylesPane" => {
             pen.window(1.5, 1.5, 14.5, 14.5);
-            pen.line(&[(9.5, 4.0), (9.5, 14.5)]);
-            pen.acc(&[(11.0, 7.0), (13.0, 7.0)]);
-            pen.rows(11.0, 13.0, &[9.5, 12.0]);
+            pen.line(&[(9.25, 4.0), (9.25, 14.5)]);
+            pen.rows(4.0, 6.75, &[7.0, 10.0]);
+            pen.dot(12.0, 7.0, 0.65, a);
+            pen.dot(12.0, 9.5, 0.65, c);
+            pen.dot(12.0, 12.0, 0.65, c);
         }
         // Insert
         "coverPage" => {
             pen.page(2.5, 1.5, 13.5, 14.5);
-            pen.block(4.5, 5.0, 11.5, 9.0, 0.5, a);
-            pen.rows(4.5, 9.0, &[11.5]);
+            pen.block(5.0, 5.0, 11.0, 8.5, 0.5, a);
+            pen.rows(5.0, 9.0, &[11.5]);
         }
         "blankPage" => {
             pen.page(2.5, 1.5, 13.5, 14.5);
@@ -521,17 +541,12 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
         "pageBreak" => {
             pen.line(&[(2.5, 1.0), (2.5, 5.0), (13.5, 5.0), (13.5, 1.0)]);
             pen.line(&[(2.5, 15.0), (2.5, 11.0), (13.5, 11.0), (13.5, 15.0)]);
-            for x in [1.5, 5.0, 8.5, 12.0] {
-                pen.acc(&[(x, 8.0), (x + 2.0, 8.0)]);
-            }
+            dashes(pen, 8.0);
         }
+        // Table: the header row is tinted, never a second line colour on the grid.
         "table" => {
-            pen.block(1.5, 2.5, 14.5, 6.0, 1.0, pen.t);
-            pen.rect(1.5, 2.5, 14.5, 13.5, 1.0);
-            pen.acc(&[(1.5, 6.0), (14.5, 6.0)]);
-            pen.line(&[(1.5, 9.75), (14.5, 9.75)]);
-            pen.line(&[(6.0, 6.0), (6.0, 13.5)]);
-            pen.line(&[(10.0, 6.0), (10.0, 13.5)]);
+            pen.block(1.5, 2.5, 14.5, 6.0, 1.0, pen.a.gamma_multiply(0.5));
+            pen.grid(1.5, 2.5, 14.5, 13.5, &[6.0, 10.0], &[6.0, 9.75]);
         }
         "picture" => {
             pen.panel(1.5, 2.5, 14.5, 13.5, 1.0);
@@ -539,142 +554,134 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.dot(10.75, 5.5, 1.25, a);
         }
         "onlinePicture" => {
-            pen.panel(1.5, 1.5, 11.5, 10.5, 1.0);
-            pen.line(&[(3.5, 8.5), (6.0, 5.5), (8.0, 7.5), (9.5, 6.5)]);
-            pen.circle_c(12.0, 12.0, 3.0, a);
-            pen.path(&[(9.0, 12.0), (15.0, 12.0)], a);
-            pen.arc(12.0, 12.0, 3.0, 0.0, 0.0, a);
-            pen.path(&[(12.0, 9.0), (11.0, 12.0), (12.0, 15.0)], a);
+            pen.panel(1.0, 1.0, 9.0, 8.0, 1.0);
+            pen.line(&[(3.5, 5.5), (5.0, 3.75), (6.5, 5.25)]);
+            pen.circle_c(12.0, 12.25, 2.75, a);
+            pen.acc(&[(9.25, 12.25), (14.75, 12.25)]);
+            pen.acc(&[(12.0, 9.5), (11.0, 12.25), (12.0, 15.0)]);
+            pen.acc(&[(12.0, 9.5), (13.0, 12.25), (12.0, 15.0)]);
         }
-        // Shapes sit apart instead of overlapping.
         "shapes" => {
-            pen.panel(1.5, 1.5, 7.5, 7.5, 1.0);
-            pen.circle_c(11.5, 11.5, 3.0, a);
-            pen.poly(&[(4.5, 9.5), (7.5, 14.5), (1.5, 14.5)], c);
+            pen.panel(1.5, 1.5, 6.5, 6.5, 1.0);
+            pen.circle_c(11.75, 4.25, 2.75, a);
+            pen.fill(&[(8.0, 9.0), (12.5, 14.5), (3.5, 14.5)], pen.t);
+            pen.poly(&[(8.0, 9.0), (12.5, 14.5), (3.5, 14.5)], c);
         }
-        // Shape effects: a shape and an offset echo of its outline, not a grey shadow.
         "shapeEffects" => {
-            pen.panel(1.5, 1.5, 10.5, 10.5, 1.5);
+            pen.panel(1.5, 1.5, 10.0, 10.0, 1.5);
             pen.acc(&[(12.5, 4.0), (12.5, 11.0), (11.0, 12.5), (4.0, 12.5)]);
-            pen.acc(&[(14.5, 6.5), (14.5, 13.5), (13.5, 14.5), (6.5, 14.5)]);
         }
         "icons" => {
-            pen.disc(5.0, 5.0, 3.0);
-            pen.poly(&[(11.5, 1.75), (14.5, 7.75), (8.5, 7.75)], c);
-            pen.block(2.0, 10.0, 8.0, 14.5, 1.0, a);
-            pen.circle(11.5, 12.0, 2.5);
+            pen.disc(4.5, 4.5, 2.5);
+            pen.poly(&[(11.5, 2.0), (14.0, 6.75), (9.0, 6.75)], c);
+            pen.block(2.0, 9.25, 7.0, 14.0, 1.0, a);
+            pen.circle(11.5, 11.5, 2.5);
         }
         "models3d" => {
-            pen.fill(&[(8.0, 1.5), (14.0, 4.5), (8.0, 7.5), (2.0, 4.5)], pen.t);
+            pen.fill(&[(8.0, 1.5), (14.0, 4.5), (8.0, 7.5), (2.0, 4.5)], pen.a.gamma_multiply(0.5));
             pen.poly(&[(8.0, 1.5), (14.0, 4.5), (14.0, 11.5), (8.0, 14.5), (2.0, 11.5), (2.0, 4.5)], c);
-            pen.acc(&[(2.0, 4.5), (8.0, 7.5), (14.0, 4.5)]);
-            pen.acc(&[(8.0, 7.5), (8.0, 14.5)]);
+            pen.line(&[(2.0, 4.5), (8.0, 7.5), (14.0, 4.5)]);
+            pen.line(&[(8.0, 7.5), (8.0, 14.5)]);
         }
         "smartArt" => {
-            pen.block(5.5, 1.5, 10.5, 5.5, 1.0, a);
+            pen.block(5.5, 1.5, 10.5, 5.0, 1.0, a);
+            pen.line(&[(8.0, 7.25), (8.0, 8.5)]);
+            pen.line(&[(4.0, 10.5), (4.0, 8.5), (12.0, 8.5), (12.0, 10.5)]);
             pen.panel(1.5, 10.5, 6.5, 14.5, 1.0);
             pen.panel(9.5, 10.5, 14.5, 14.5, 1.0);
-            pen.line(&[(8.0, 7.0), (8.0, 8.0), (4.0, 8.0), (4.0, 9.0)]);
-            pen.line(&[(8.0, 8.0), (12.0, 8.0), (12.0, 9.0)]);
         }
         "chart" => {
             pen.line(&[(1.5, 14.5), (14.5, 14.5)]);
-            pen.panel(2.5, 8.5, 5.0, 12.5, 0.75);
-            pen.block(6.75, 3.0, 9.25, 12.5, 0.75, a);
-            pen.panel(11.0, 6.0, 13.5, 12.5, 0.75);
+            pen.panel(1.75, 8.0, 4.25, 12.0, 0.75);
+            pen.block(6.75, 2.5, 9.25, 12.0, 0.75, a);
+            pen.panel(11.75, 5.5, 14.25, 12.0, 0.75);
         }
         "screenshot" => {
             pen.line(&[(1.5, 5.0), (1.5, 1.5), (5.0, 1.5)]);
             pen.line(&[(11.0, 1.5), (14.5, 1.5), (14.5, 5.0)]);
             pen.line(&[(14.5, 11.0), (14.5, 14.5), (11.0, 14.5)]);
             pen.line(&[(5.0, 14.5), (1.5, 14.5), (1.5, 11.0)]);
-            pen.block(4.5, 5.5, 11.5, 11.0, 1.0, pen.t);
-            pen.rect(4.5, 5.5, 11.5, 11.0, 1.0);
-            pen.dot(8.0, 8.25, 1.4, a);
+            pen.p.circle_filled(pen.pt(8.0, 8.0), 2.25 * pen.s, a);
         }
         "video" => {
-            pen.panel(1.5, 3.5, 11.0, 12.5, 1.5);
+            pen.panel(1.5, 3.5, 10.0, 12.5, 1.5);
             pen.poly(&[(12.5, 7.0), (14.5, 5.0), (14.5, 11.0), (12.5, 9.0)], a);
         }
         "link" => {
             pen.line(&[(7.0, 4.0), (8.5, 2.5), (10.0, 1.8), (11.8, 1.8), (13.5, 2.5), (14.2, 4.2), (14.2, 6.0), (13.5, 7.5), (12.0, 9.0)]);
             pen.line(&[(9.0, 12.0), (7.5, 13.5), (6.0, 14.2), (4.2, 14.2), (2.5, 13.5), (1.8, 11.8), (1.8, 10.0), (2.5, 8.5), (4.0, 7.0)]);
-            pen.acc(&[(6.0, 10.0), (10.0, 6.0)]);
+            pen.acc(&[(6.25, 9.75), (9.75, 6.25)]);
         }
         "bookmark" => {
-            let pts = [(3.5, 1.5), (12.5, 1.5), (12.5, 14.5), (8.0, 11.0), (3.5, 14.5)];
             pen.fill(&[(3.5, 1.5), (12.5, 1.5), (12.5, 14.5), (8.0, 11.0)], pen.t);
             pen.fill(&[(3.5, 1.5), (8.0, 11.0), (3.5, 14.5)], pen.t);
-            pen.poly(&pts, c);
+            pen.poly(&[(3.5, 1.5), (12.5, 1.5), (12.5, 14.5), (8.0, 11.0), (3.5, 14.5)], c);
             pen.acc(&[(6.0, 5.0), (10.0, 5.0)]);
         }
         "crossRef" => {
             pen.page(1.5, 1.5, 8.5, 10.0);
-            pen.rows(3.5, 6.0, &[5.0, 7.5]);
-            pen.acc(&[(5.0, 12.0), (5.0, 14.0), (13.5, 14.0), (13.5, 6.0)]);
-            pen.head(13.5, 5.5, -90.0, 2.0, a);
+            pen.acc(&[(5.0, 12.5), (5.0, 14.0), (13.5, 14.0), (13.5, 6.5)]);
+            pen.head(13.5, 5.75, -90.0, 2.0, a);
         }
         "comment" => {
             pen.bubble(1.5, 2.0, 14.5, 11.5);
             pen.rows(4.5, 11.5, &[5.0, 8.0]);
         }
         "newComment" => {
-            pen.block(1.5, 2.0, 9.0, 11.5, 1.0, pen.t);
-            pen.line(&[(5.0, 11.5), (3.0, 14.0), (3.0, 11.5), (2.5, 11.5), (1.5, 10.5), (1.5, 3.0), (2.5, 2.0), (9.0, 2.0)]);
-            pen.line(&[(14.5, 9.0), (14.5, 10.5), (13.5, 11.5), (5.0, 11.5)]);
-            pen.acc(&[(13.0, 1.0), (13.0, 6.0)]);
-            pen.acc(&[(10.5, 3.5), (15.5, 3.5)]);
+            pen.block(1.5, 2.0, 8.0, 11.5, 1.0, pen.t);
+            pen.line(&[(5.0, 11.5), (3.0, 14.0), (3.0, 11.5), (2.5, 11.5), (1.5, 10.5), (1.5, 3.0), (2.5, 2.0), (8.0, 2.0)]);
+            pen.line(&[(14.5, 8.0), (14.5, 10.5), (13.5, 11.5), (5.0, 11.5)]);
+            pen.acc(&[(12.5, 1.5), (12.5, 5.5)]);
+            pen.acc(&[(10.5, 3.5), (14.5, 3.5)]);
         }
         "header" => {
             pen.page(2.5, 1.5, 13.5, 14.5);
-            pen.acc(&[(5.0, 4.5), (9.5, 4.5)]);
+            pen.acc(&[(5.0, 4.5), (8.5, 4.5)]);
             pen.rows(5.0, 11.0, &[8.0, 10.5]);
         }
         "footer" => {
             pen.page(2.5, 1.5, 13.5, 14.5);
-            pen.rows(5.0, 11.0, &[5.0, 7.5]);
-            pen.acc(&[(5.0, 11.5), (11.0, 11.5)]);
+            pen.rows(5.0, 9.5, &[5.0]);
+            pen.rows(5.0, 11.0, &[7.5]);
+            pen.acc(&[(5.0, 11.75), (11.0, 11.75)]);
         }
         "pageNumber" => {
             pen.page(2.5, 1.5, 13.5, 14.5);
-            pen.rows(5.0, 11.0, &[5.0, 7.5]);
-            pen.text(8.0, 11.5, 4.5, "1", a, true);
+            pen.rows(5.0, 9.5, &[5.0]);
+            pen.rows(5.0, 11.0, &[7.5]);
+            pen.text(8.0, 11.0, 4.5, "1", a, true);
         }
         "textBox" => {
-            for (x0, x1) in [(1.5, 3.5), (6.0, 10.0), (12.5, 14.5)] {
-                pen.line(&[(x0, 1.5), (x1, 1.5)]);
-                pen.line(&[(x0, 14.5), (x1, 14.5)]);
-            }
-            for (y0, y1) in [(3.5, 5.5), (10.5, 12.5)] {
-                pen.line(&[(1.5, y0), (1.5, y1)]);
-                pen.line(&[(14.5, y0), (14.5, y1)]);
-            }
-            pen.line(&[(1.5, 7.5), (1.5, 8.5)]);
-            pen.line(&[(14.5, 7.5), (14.5, 8.5)]);
+            pen.line(&[(1.5, 4.0), (1.5, 1.5), (4.0, 1.5)]);
+            pen.line(&[(12.0, 1.5), (14.5, 1.5), (14.5, 4.0)]);
+            pen.line(&[(14.5, 12.0), (14.5, 14.5), (12.0, 14.5)]);
+            pen.line(&[(4.0, 14.5), (1.5, 14.5), (1.5, 12.0)]);
+            pen.line(&[(6.5, 1.5), (9.5, 1.5)]);
+            pen.line(&[(6.5, 14.5), (9.5, 14.5)]);
+            pen.line(&[(1.5, 6.5), (1.5, 9.5)]);
+            pen.line(&[(14.5, 6.5), (14.5, 9.5)]);
             pen.acc(&[(5.5, 5.0), (10.5, 5.0)]);
             pen.acc(&[(8.0, 5.0), (8.0, 11.5)]);
         }
         "quickParts" => {
-            pen.panel(1.5, 1.5, 7.0, 7.0, 1.0);
-            pen.block(9.0, 1.5, 14.5, 7.0, 1.0, a);
-            pen.panel(1.5, 9.0, 7.0, 14.5, 1.0);
-            pen.panel(9.0, 9.0, 14.5, 14.5, 1.0);
+            pen.panel(1.5, 1.5, 6.5, 6.5, 1.0);
+            pen.block(9.5, 1.5, 14.5, 6.5, 1.0, a);
+            pen.panel(1.5, 9.5, 6.5, 14.5, 1.0);
+            pen.panel(9.5, 9.5, 14.5, 14.5, 1.0);
         }
-        // WordArt: a letter on a curved baseline.
         "wordArt" => {
-            pen.glyph_a(8.0, 10.0, 9.0, c, c);
-            pen.arc(8.0, 4.0, 10.5, 60.0, 120.0, a);
+            pen.glyph_a(8.0, 10.0, 8.5, c, c);
+            pen.arc(8.0, 3.5, 11.0, 58.0, 122.0, a);
         }
         "dropCap" => {
-            pen.panel(1.5, 1.5, 7.0, 8.0, 1.0);
-            pen.glyph_a(4.25, 6.75, 4.0, a, a);
-            pen.rows(9.0, 14.5, &[2.5, 5.0, 7.5]);
-            pen.rows(1.5, 14.5, &[10.5, 13.5]);
+            pen.panel(1.0, 1.0, 8.5, 9.25, 1.0);
+            pen.glyph_a(4.75, 7.0, 3.75, a, a);
+            pen.rows(11.0, 14.5, &[2.0, 5.0, 8.0]);
+            pen.rows(1.5, 14.5, &[11.75, 14.5]);
         }
         "signature" => {
-            pen.acc(&[(2.0, 10.0), (4.0, 5.0), (5.5, 9.5), (8.0, 4.0), (9.5, 9.0), (12.0, 7.0)]);
+            pen.acc(&[(2.0, 10.0), (4.0, 5.0), (5.5, 9.5), (8.0, 4.0), (9.5, 9.0), (12.0, 7.0), (14.0, 8.0)]);
             pen.line(&[(1.5, 13.5), (14.5, 13.5)]);
-            pen.line(&[(2.0, 11.5), (3.5, 12.5)]);
         }
         "dateTime" => {
             pen.panel(1.5, 2.5, 14.5, 14.5, 1.5);
@@ -682,6 +689,7 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.line(&[(5.0, 1.0), (5.0, 3.5)]);
             pen.line(&[(11.0, 1.0), (11.0, 3.5)]);
             pen.dot(10.5, 10.5, 1.4, a);
+            pen.dot(5.5, 10.5, 1.0, c);
         }
         "object" => {
             pen.panel(1.5, 1.5, 14.5, 14.5, 1.5);
@@ -689,8 +697,8 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
         }
         "equation" => {
             pen.line(&[(1.5, 9.0), (3.5, 8.0), (6.0, 14.0), (9.0, 2.0), (14.5, 2.0)]);
-            pen.acc(&[(9.5, 6.5), (13.5, 11.5)]);
-            pen.acc(&[(13.5, 6.5), (9.5, 11.5)]);
+            pen.acc(&[(10.5, 6.5), (14.5, 11.5)]);
+            pen.acc(&[(14.5, 6.5), (10.5, 11.5)]);
         }
         "symbol" => {
             pen.arc(8.0, 7.0, 5.0, 130.0, 410.0, c);
@@ -698,37 +706,38 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.line(&[(14.0, 13.5), (11.0, 13.5), (11.2, 10.8)]);
             pen.dot(8.0, 7.0, 1.0, a);
         }
-        // Draw
+        // Draw: a nib or tip set apart from the body by a clear gap.
         "pen" => {
-            pen.poly(&[(2.0, 14.0), (2.8, 10.6), (10.5, 2.9), (13.1, 5.5), (5.4, 13.2)], c);
-            pen.acc(&[(2.8, 10.6), (5.4, 13.2)]);
-            pen.dot(3.2, 12.8, 0.6, a);
+            pen.fill(&[(1.5, 14.5), (2.5, 11.0), (5.0, 13.5)], a);
+            pen.poly(&[(3.9, 9.6), (10.5, 3.0), (13.0, 5.5), (6.4, 12.1)], c);
+            pen.line(&[(9.2, 4.3), (11.7, 6.8)]);
         }
         "pencil" => {
-            pen.poly(&[(2.0, 14.0), (2.8, 10.6), (10.5, 2.9), (13.1, 5.5), (5.4, 13.2)], c);
-            pen.path(&[(2.8, 10.6), (5.4, 13.2)], orange);
-            pen.line(&[(9.0, 4.4), (11.6, 7.0)]);
+            pen.fill(&[(1.5, 14.5), (2.5, 11.0), (5.0, 13.5)], orange);
+            pen.fill(&[(3.9, 9.6), (10.5, 3.0), (13.0, 5.5), (6.4, 12.1)], pen.t);
+            pen.poly(&[(3.9, 9.6), (10.5, 3.0), (13.0, 5.5), (6.4, 12.1)], c);
+            pen.line(&[(5.3, 8.2), (7.8, 10.7)]);
         }
         "eraser" => {
-            pen.fill(&[(1.5, 10.0), (5.0, 6.5), (10.5, 12.0), (8.5, 14.0), (5.5, 14.0)], pen.t);
-            pen.poly(&[(1.5, 10.0), (8.0, 3.5), (13.5, 9.0), (8.5, 14.0), (5.5, 14.0)], c);
-            pen.acc(&[(5.0, 6.5), (11.0, 12.5)]);
-            pen.line(&[(11.0, 14.5), (14.5, 14.5)]);
+            pen.fill(&[(1.5, 9.5), (4.75, 6.25), (10.25, 11.75), (8.5, 13.5), (5.5, 13.5)], pen.a.gamma_multiply(0.5));
+            pen.poly(&[(1.5, 9.5), (8.0, 3.0), (13.5, 8.5), (8.5, 13.5), (5.5, 13.5)], c);
+            pen.line(&[(4.75, 6.25), (10.75, 12.25)]);
+            pen.line(&[(11.5, 14.5), (14.5, 14.5)]);
         }
         "lasso" => {
             pen.block(2.0, 2.0, 14.0, 9.5, 4.0, pen.t);
             pen.poly(&[(4.0, 2.5), (12.0, 2.0), (14.0, 5.5), (12.0, 9.0), (5.5, 9.5), (2.0, 6.5)], c);
-            pen.acc(&[(4.5, 9.5), (3.5, 12.0), (5.5, 14.5)]);
+            pen.acc(&[(4.5, 11.75), (3.75, 13.25), (5.25, 14.5)]);
         }
         "inkToShape" => {
-            pen.acc(&[(1.5, 9.0), (3.0, 5.5), (5.0, 10.0), (6.5, 6.0)]);
-            pen.arrow(7.5, 8.0, 9.5, 8.0, c);
-            pen.panel(10.5, 5.0, 14.5, 11.0, 1.0);
+            pen.acc(&[(1.0, 9.5), (2.25, 5.5), (3.75, 10.0), (5.0, 6.0)]);
+            pen.arrow(6.75, 8.0, 9.0, 8.0, c);
+            pen.panel(11.25, 5.25, 14.5, 10.75, 1.0);
         }
         "inkToMath" => {
-            pen.acc(&[(1.5, 10.0), (3.0, 5.5), (4.5, 10.0), (6.0, 5.5)]);
-            pen.arrow(7.0, 8.0, 9.0, 8.0, c);
-            pen.line(&[(10.0, 8.5), (11.0, 8.0), (12.0, 11.0), (13.5, 5.0), (15.0, 5.0)]);
+            pen.acc(&[(1.0, 10.0), (2.0, 6.0), (3.0, 10.0), (4.0, 6.0)]);
+            pen.arrow(5.5, 8.0, 7.75, 8.0, c);
+            pen.line(&[(10.0, 8.5), (11.0, 8.0), (12.0, 11.0), (13.5, 5.0), (14.75, 5.0)]);
         }
         "canvas" => {
             pen.panel(1.5, 2.5, 14.5, 13.5, 1.0);
@@ -742,23 +751,23 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
         // Design
         "themes" => {
             pen.panel(1.5, 1.5, 14.5, 14.5, 1.5);
-            pen.block(3.5, 3.5, 7.5, 7.5, 1.0, a);
-            pen.block(8.5, 3.5, 12.5, 7.5, 1.0, orange);
-            pen.block(3.5, 8.5, 7.5, 12.5, 1.0, green);
-            pen.rows(9.5, 11.5, &[10.5]);
+            pen.block(3.25, 3.25, 7.25, 7.25, 1.0, a);
+            pen.block(8.75, 3.25, 12.75, 7.25, 1.0, orange);
+            pen.block(3.25, 8.75, 7.25, 12.75, 1.0, green);
+            pen.line(&[(9.5, 10.75), (12.0, 10.75)]);
         }
         "colors" => {
-            pen.p.circle_filled(pen.pt(5.0, 5.5), 3.25 * pen.s, red);
-            pen.p.circle_filled(pen.pt(11.0, 5.5), 3.25 * pen.s, a);
-            pen.p.circle_filled(pen.pt(8.0, 11.0), 3.25 * pen.s, green);
+            pen.p.circle_filled(pen.pt(4.25, 5.0), 2.75 * pen.s, red);
+            pen.p.circle_filled(pen.pt(11.75, 5.0), 2.75 * pen.s, a);
+            pen.p.circle_filled(pen.pt(8.0, 11.75), 2.75 * pen.s, green);
         }
         "fonts" => {
-            pen.glyph_a(5.0, 13.0, 10.0, c, c);
-            pen.text(11.5, 9.5, 8.0, "f", a, false);
+            pen.glyph_a(5.5, 13.5, 11.0, c, c);
+            pen.text(12.25, 8.5, 9.0, "f", a, false);
         }
         "paraSpacing" => {
-            pen.rows(7.0, 14.5, &[2.5, 5.0]);
-            pen.rows(7.0, 14.5, &[11.0, 13.5]);
+            pen.rows(7.0, 14.5, &[2.0, 4.75]);
+            pen.rows(7.0, 14.5, &[11.25, 14.0]);
             pen.span(3.0, 5.5, 3.0, 10.5, a);
         }
         "effectsDesign" => {
@@ -767,76 +776,70 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
         }
         "setDefault" => {
             pen.page(2.5, 1.5, 13.5, 14.5);
-            pen.path(&[(5.0, 8.5), (7.0, 10.5), (11.0, 6.0)], green);
+            pen.path(&[(5.0, 8.5), (7.0, 10.5), (10.75, 6.25)], green);
         }
         "watermark" => {
             pen.page(2.5, 1.5, 13.5, 14.5);
-            pen.acc(&[(4.5, 11.5), (11.0, 5.0)]);
+            pen.acc(&[(5.0, 11.5), (10.0, 6.5)]);
         }
         "pageColor" => {
             pen.page(2.5, 1.5, 13.5, 14.5);
-            pen.block(4.5, 9.0, 11.5, 12.5, 0.5, a);
+            pen.block(4.5, 8.5, 11.5, 12.0, 0.5, a);
         }
         "pageBorders" => {
             pen.page(2.5, 1.5, 13.5, 14.5);
-            pen.rect_c(4.75, 4.0, 11.25, 12.25, 0.5, a);
+            pen.rect_c(4.75, 5.25, 11.0, 12.25, 0.5, a);
         }
         // Layout
         "margins" => {
             pen.page(2.5, 1.5, 13.5, 14.5);
-            pen.acc(&[(5.0, 4.5), (5.0, 11.5)]);
-            pen.acc(&[(11.0, 6.0), (11.0, 11.5)]);
+            pen.acc(&[(5.0, 4.5), (5.0, 11.75)]);
+            pen.acc(&[(11.0, 6.5), (11.0, 11.75)]);
         }
         "orientation" => {
-            pen.page(1.5, 1.5, 8.5, 11.5);
-            pen.block(6.0, 9.0, 14.5, 14.5, 1.0, pen.t);
-            pen.rect_c(10.5, 9.0, 14.5, 14.5, 1.0, a);
-            pen.arc(9.0, 5.0, 4.0, -80.0, 0.0, a);
-            pen.head(13.0, 5.6, 100.0, 1.8, a);
+            pen.page(1.5, 1.25, 6.5, 8.25);
+            pen.page(5.5, 10.5, 14.5, 14.75);
+            pen.arc(9.0, 8.0, 5.0, -90.0, 0.0, a);
+            pen.head(14.0, 8.25, 90.0, 1.8, a);
         }
         "size" => {
-            pen.page(4.5, 1.5, 14.5, 12.0);
-            pen.span(1.5, 2.0, 1.5, 11.5, a);
-            pen.span(5.0, 14.5, 14.0, 14.5, a);
+            pen.page(5.5, 1.5, 14.5, 10.0);
+            pen.span(2.25, 2.0, 2.25, 10.0, a);
+            pen.span(5.5, 13.25, 14.0, 13.25, a);
         }
         "columns" => {
-            pen.rows(1.5, 6.5, &[3.0, 6.0, 9.0, 12.0]);
-            pen.rows(9.5, 14.5, &[3.0, 6.0, 9.0]);
+            pen.rows(1.5, 5.5, &[3.0, 6.0, 9.0, 12.0]);
+            pen.rows(10.5, 14.5, &[3.0, 6.0, 9.0]);
             pen.acc(&[(8.0, 2.0), (8.0, 14.0)]);
         }
         "breaks" => {
-            pen.page(2.5, 1.0, 13.5, 6.0);
-            pen.page(2.5, 10.0, 13.5, 15.0);
-            for x in [1.5, 5.0, 8.5, 12.0] {
-                pen.acc(&[(x, 8.0), (x + 2.0, 8.0)]);
-            }
+            pen.page(2.5, 1.0, 13.5, 5.5);
+            pen.page(2.5, 10.5, 13.5, 15.0);
+            dashes(pen, 8.0);
         }
         "lineNumbers" => {
-            for (i, y) in [2.5, 6.0, 9.5, 13.0].iter().enumerate() {
-                pen.text(2.5, *y, 4.5, ["1", "2", "3", "4"][i], a, true);
-                pen.line(&[(5.5, *y), (14.5, *y)]);
+            for (i, y) in [3.0, 8.0, 13.0].iter().enumerate() {
+                pen.text(2.5, *y, 5.0, ["1", "2", "3"][i], a, true);
+                pen.line(&[(6.0, *y), (14.5, *y)]);
             }
         }
         "hyphenation" => {
-            pen.rows(1.5, 9.0, &[3.0]);
-            pen.acc(&[(11.0, 3.0), (14.0, 3.0)]);
+            pen.rows(1.5, 8.5, &[3.0]);
+            pen.acc(&[(11.0, 3.0), (13.0, 3.0)]);
             pen.rows(1.5, 14.5, &[7.5]);
             pen.rows(1.5, 10.0, &[12.0]);
         }
-        // Position: a frame with nine anchor points, one chosen.
         "position" => {
             pen.panel(1.5, 1.5, 14.5, 14.5, 1.5);
-            for x in [4.5, 8.0, 11.5] {
-                for y in [4.5, 8.0, 11.5] {
-                    if (x, y) == (11.5, 4.5) {
-                        pen.block(10.0, 3.0, 13.0, 6.0, 0.5, a);
-                    } else {
-                        pen.dot(x, y, 0.7, c);
-                    }
+            for x in [4.75, 8.0] {
+                for y in [4.75, 8.0, 11.25] {
+                    pen.dot(x, y, 0.7, c);
                 }
             }
+            pen.dot(11.25, 8.0, 0.7, c);
+            pen.dot(11.25, 11.25, 0.7, c);
+            pen.block(10.0, 3.5, 12.5, 6.0, 0.5, a);
         }
-        // Wrap text: rows flowing round an object.
         "wrapText" => {
             pen.rows(1.5, 14.5, &[2.0, 14.0]);
             pen.rows(1.5, 4.5, &[6.0, 10.0]);
@@ -844,279 +847,255 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.block(6.25, 4.5, 9.75, 11.5, 1.0, a);
         }
         "bringForward" => {
-            pen.line(&[(9.5, 3.5), (9.5, 2.5), (8.5, 1.5), (2.5, 1.5), (1.5, 2.5), (1.5, 8.5), (2.5, 9.5), (3.5, 9.5)]);
+            pen.line(&[(9.5, 3.0), (9.5, 2.5), (8.5, 1.5), (2.5, 1.5), (1.5, 2.5), (1.5, 8.5), (2.5, 9.5), (3.0, 9.5)]);
             pen.block(5.5, 5.5, 14.5, 14.5, 1.0, a);
         }
         "sendBackward" => {
-            pen.block(1.5, 1.5, 6.5, 6.5, 1.0, a);
-            pen.line(&[(1.5, 7.5), (1.5, 8.5), (2.5, 9.5), (3.5, 9.5)]);
-            pen.line(&[(7.5, 1.5), (8.5, 1.5), (9.5, 2.5), (9.5, 3.5)]);
+            pen.acc(&[(9.5, 3.0), (9.5, 2.5), (8.5, 1.5), (2.5, 1.5), (1.5, 2.5), (1.5, 8.5), (2.5, 9.5), (3.0, 9.5)]);
             pen.panel(5.5, 5.5, 14.5, 14.5, 1.0);
         }
         "selectionPane" => {
             pen.window(1.5, 1.5, 14.5, 14.5);
-            pen.dot(4.5, 7.0, 0.8, a);
-            pen.dot(4.5, 10.0, 0.8, c);
-            pen.dot(4.5, 13.0, 0.8, c);
-            pen.acc(&[(6.5, 7.0), (12.0, 7.0)]);
-            pen.rows(6.5, 12.0, &[10.0]);
-            pen.line(&[(6.5, 12.5), (12.0, 12.5)]);
+            for (i, y) in [6.75, 9.25, 11.75].iter().enumerate() {
+                pen.dot(4.25, *y, 0.75, if i == 0 { a } else { c });
+                pen.line(&[(7.0, *y), (12.0, *y)]);
+            }
         }
         "align" => {
-            pen.acc(&[(2.0, 1.5), (2.0, 14.5)]);
-            pen.panel(4.0, 3.0, 14.0, 7.0, 1.0);
-            pen.panel(4.0, 9.0, 10.0, 13.0, 1.0);
+            pen.acc(&[(1.5, 1.5), (1.5, 14.5)]);
+            pen.panel(4.0, 2.5, 14.0, 6.5, 1.0);
+            pen.panel(4.0, 9.5, 10.0, 13.5, 1.0);
         }
-        // Group: two shapes inside a dashed bounding frame.
         "group" => {
-            for (x0, y0, x1, y1) in [
-                (1.5, 1.5, 4.0, 1.5),
-                (1.5, 1.5, 1.5, 4.0),
-                (12.0, 1.5, 14.5, 1.5),
-                (14.5, 1.5, 14.5, 4.0),
-                (1.5, 12.0, 1.5, 14.5),
-                (1.5, 14.5, 4.0, 14.5),
-                (14.5, 12.0, 14.5, 14.5),
-                (12.0, 14.5, 14.5, 14.5),
+            for pts in [
+                [(1.5, 4.0), (1.5, 1.5), (4.0, 1.5)],
+                [(12.0, 1.5), (14.5, 1.5), (14.5, 4.0)],
+                [(14.5, 12.0), (14.5, 14.5), (12.0, 14.5)],
+                [(4.0, 14.5), (1.5, 14.5), (1.5, 12.0)],
             ] {
-                pen.acc(&[(x0, y0), (x1, y1)]);
+                pen.acc(&pts);
             }
-            pen.panel(4.0, 4.0, 8.5, 8.5, 1.0);
-            pen.disc(10.75, 10.75, 2.25);
+            pen.panel(4.25, 4.25, 8.0, 8.0, 1.0);
+            pen.disc(10.75, 10.75, 1.75);
         }
         "rotate" => {
-            pen.panel(5.0, 5.0, 11.0, 11.0, 1.0);
-            pen.arc(8.0, 8.0, 6.5, 200.0, 330.0, a);
-            pen.head(13.6, 4.75, 60.0, 2.0, a);
+            pen.panel(5.5, 8.0, 10.5, 13.0, 1.0);
+            pen.arc(8.0, 10.0, 6.5, 200.0, 330.0, a);
+            pen.head(13.63, 6.75, 60.0, 2.0, a);
         }
         "indentLeft" => {
-            pen.rows(6.5, 14.5, &[3.0, 8.0, 13.0]);
             pen.acc(&[(1.5, 5.5), (1.5, 10.5)]);
-            pen.head(4.5, 8.0, 0.0, 2.0, a);
-            pen.acc(&[(1.5, 8.0), (4.5, 8.0)]);
+            pen.arrow(1.5, 8.0, 4.5, 8.0, a);
+            pen.rows(7.0, 14.5, &[3.0, 8.0, 13.0]);
         }
         "indentRight" => {
-            pen.rows(1.5, 9.5, &[3.0, 8.0, 13.0]);
             pen.acc(&[(14.5, 5.5), (14.5, 10.5)]);
-            pen.head(11.5, 8.0, 180.0, 2.0, a);
-            pen.acc(&[(14.5, 8.0), (11.5, 8.0)]);
+            pen.arrow(14.5, 8.0, 11.5, 8.0, a);
+            pen.rows(1.5, 9.0, &[3.0, 8.0, 13.0]);
         }
         "spaceBefore" => {
             pen.acc(&[(1.5, 1.5), (14.5, 1.5)]);
-            pen.span(8.0, 3.5, 8.0, 7.5, a);
-            pen.rows(1.5, 14.5, &[10.0, 13.5]);
+            pen.span(8.0, 4.0, 8.0, 7.75, a);
+            pen.rows(1.5, 14.5, &[10.75, 13.75]);
         }
         "spaceAfter" => {
-            pen.rows(1.5, 14.5, &[2.5, 6.0]);
-            pen.span(8.0, 8.5, 8.0, 12.5, a);
+            pen.rows(1.5, 14.5, &[2.25, 5.25]);
+            pen.span(8.0, 8.25, 8.0, 12.0, a);
             pen.acc(&[(1.5, 14.5), (14.5, 14.5)]);
         }
         // References
         "toc" => {
             pen.page(2.5, 1.5, 13.5, 14.5);
-            for y in [5.0, 8.0, 11.0] {
-                pen.line(&[(4.75, y), (8.0, y)]);
+            for y in [5.5, 8.5, 11.5] {
+                pen.line(&[(5.0, y), (8.0, y)]);
                 pen.dot(10.75, y, 0.75, a);
             }
         }
         "addText" => {
-            pen.rows(1.5, 11.0, &[3.0, 7.0, 11.0]);
-            pen.acc(&[(13.0, 9.5), (13.0, 14.5)]);
-            pen.acc(&[(10.5, 12.0), (15.5, 12.0)]);
+            pen.rows(1.5, 14.5, &[3.0, 6.5]);
+            pen.rows(1.5, 8.0, &[10.0]);
+            pen.acc(&[(12.5, 10.5), (12.5, 14.5)]);
+            pen.acc(&[(10.5, 12.5), (14.5, 12.5)]);
         }
         "update" => pen.cycle(8.0, 8.0, 5.5, a),
         "updateTable" => {
-            pen.grid(1.5, 1.5, 9.5, 9.5, &[5.5], &[5.5]);
-            pen.cycle(11.0, 11.0, 3.5, a);
+            pen.grid(1.0, 1.0, 7.5, 7.5, &[4.25], &[4.25]);
+            pen.cycle(11.5, 11.5, 2.75, a);
         }
         "footnote" => {
             pen.rows(1.5, 9.0, &[3.0, 6.5]);
-            pen.text(12.5, 3.0, 5.0, "1", a, true);
-            pen.line(&[(1.5, 11.0), (6.0, 11.0)]);
-            pen.acc(&[(1.5, 14.0), (12.0, 14.0)]);
+            pen.text(12.0, 3.0, 5.0, "1", a, true);
+            pen.line(&[(1.5, 10.5), (6.0, 10.5)]);
+            pen.acc(&[(1.5, 13.75), (12.0, 13.75)]);
         }
         "endnote" => {
             pen.page(2.5, 1.5, 13.5, 14.5);
-            pen.rows(5.0, 11.0, &[5.0, 7.5]);
-            pen.acc(&[(5.0, 11.5), (9.0, 11.5)]);
+            pen.rows(5.0, 9.5, &[5.0]);
+            pen.rows(5.0, 11.0, &[7.75]);
+            pen.acc(&[(5.0, 11.75), (8.5, 11.75)]);
         }
         "nextFootnote" => {
-            pen.rows(1.5, 9.0, &[3.0]);
-            pen.text(12.5, 3.0, 5.0, "1", c, true);
+            pen.rows(1.5, 8.5, &[3.0]);
+            pen.text(12.0, 3.0, 5.0, "1", c, true);
             pen.arrow(2.0, 10.5, 13.0, 10.5, a);
         }
         "showNotes" => {
             pen.page(2.5, 1.5, 13.5, 14.5);
-            pen.line(&[(5.0, 9.0), (8.0, 9.0)]);
-            pen.block(4.75, 10.75, 11.25, 12.75, 0.5, a);
+            pen.line(&[(5.0, 6.0), (9.5, 6.0)]);
+            pen.block(5.0, 9.5, 11.0, 12.0, 0.5, a);
         }
         "researcher" => {
-            pen.page(1.5, 1.5, 8.5, 11.0);
-            pen.rows(3.5, 6.0, &[4.5, 7.0]);
-            pen.circle_c(11.0, 11.0, 2.5, a);
-            pen.acc(&[(12.9, 12.9), (14.5, 14.5)]);
+            pen.page(1.5, 1.5, 7.5, 10.0);
+            pen.circle_c(11.5, 11.5, 2.25, a);
+            pen.acc(&[(13.25, 13.25), (14.5, 14.5)]);
         }
         // Zotero
         "docPrefs" => {
-            pen.page(1.5, 1.5, 10.5, 14.5);
-            pen.rows(3.5, 7.0, &[5.0, 7.5]);
-            pen.circle_c(12.0, 11.5, 1.6, a);
+            pen.page(1.5, 1.5, 7.0, 12.0);
+            pen.circle_c(12.0, 12.0, 1.4, a);
             for k in 0..6 {
                 let t = k as f32 * std::f32::consts::PI / 3.0;
                 let (dx, dy) = (t.cos(), t.sin());
-                pen.acc(&[(12.0 + 2.6 * dx, 11.5 + 2.6 * dy), (12.0 + 3.2 * dx, 11.5 + 3.2 * dy)]);
+                pen.acc(&[(12.0 + 2.1 * dx, 12.0 + 2.1 * dy), (12.0 + 2.7 * dx, 12.0 + 2.7 * dy)]);
             }
         }
         "unlinkCitations" => {
             pen.line(&[(5.5, 2.5), (7.0, 1.8), (8.8, 1.8), (10.5, 2.5), (11.2, 4.2), (11.2, 6.0), (10.5, 7.5), (9.0, 9.0)]);
-            pen.line(&[(7.0, 7.0), (5.5, 8.5)]);
             pen.line(&[(10.5, 13.5), (9.0, 14.2), (7.2, 14.2), (5.5, 13.5), (4.8, 11.8), (4.8, 10.0), (5.5, 8.5)]);
             pen.acc(&[(1.5, 9.5), (3.0, 9.0)]);
             pen.acc(&[(13.0, 7.0), (14.5, 6.5)]);
-            pen.acc(&[(12.5, 10.0), (14.0, 11.0)]);
+            pen.acc(&[(12.75, 10.25), (14.0, 11.25)]);
         }
         "addNote" => {
             pen.fill(&[(1.5, 1.5), (14.5, 1.5), (14.5, 10.5), (10.5, 14.5), (1.5, 14.5)], pen.t);
             pen.poly(&[(1.5, 1.5), (14.5, 1.5), (14.5, 10.5), (10.5, 14.5), (1.5, 14.5)], c);
             pen.line(&[(10.5, 14.5), (10.5, 10.5), (14.5, 10.5)]);
-            pen.acc(&[(4.5, 6.0), (9.5, 6.0)]);
-            pen.acc(&[(7.0, 3.5), (7.0, 8.5)]);
+            pen.acc(&[(4.75, 7.0), (9.25, 7.0)]);
+            pen.acc(&[(7.0, 4.75), (7.0, 9.25)]);
         }
         "citation" => {
-            pen.dot(3.0, 4.0, 1.5, a);
-            pen.acc(&[(4.5, 4.0), (3.5, 7.5)]);
-            pen.dot(7.0, 4.0, 1.5, a);
-            pen.acc(&[(8.5, 4.0), (7.5, 7.5)]);
-            pen.rows(10.5, 14.5, &[3.0, 6.5]);
+            for x in [3.0, 7.5] {
+                pen.dot(x, 4.0, 1.5, a);
+                pen.acc(&[(x + 1.25, 4.5), (x + 0.25, 7.25)]);
+            }
+            pen.rows(11.0, 14.5, &[3.0, 6.5]);
             pen.rows(1.5, 14.5, &[10.5, 14.0]);
         }
-        // Sources: books on a shelf; bibliography: a list with hanging indents.
         "sources" => {
-            pen.panel(1.5, 2.5, 4.5, 13.5, 0.5);
-            pen.panel(5.5, 2.5, 8.5, 13.5, 0.5);
-            pen.poly(&[(10.0, 3.5), (12.5, 2.7), (14.8, 12.5), (12.3, 13.3)], a);
+            pen.panel(1.5, 2.5, 4.0, 12.25, 0.5);
+            pen.panel(6.25, 2.5, 8.75, 12.25, 0.5);
+            pen.poly(&[(11.0, 3.75), (12.75, 3.25), (14.5, 11.75), (12.75, 12.25)], a);
             pen.line(&[(1.0, 14.5), (15.0, 14.5)]);
         }
         "bibliography" => {
             pen.page(2.5, 1.5, 13.5, 14.5);
-            for y in [4.5, 9.5] {
-                pen.acc(&[(4.5, y), (11.0, y)]);
-                pen.line(&[(6.5, y + 2.5), (11.0, y + 2.5)]);
+            for y in [4.75, 9.75] {
+                pen.acc(&[(5.0, y), (10.0, y)]);
+                pen.line(&[(6.75, y + 2.5), (11.0, y + 2.5)]);
             }
         }
         "caption" => {
             pen.panel(1.5, 1.5, 14.5, 10.0, 1.0);
-            pen.line(&[(3.5, 8.0), (6.0, 5.0), (8.0, 7.0), (9.5, 5.5), (12.0, 8.0)]);
+            pen.line(&[(4.0, 7.5), (6.5, 4.5), (8.5, 6.5), (10.0, 5.0), (12.0, 7.5)]);
             pen.acc(&[(1.5, 13.5), (10.0, 13.5)]);
         }
         "tableOfFigures" => {
             pen.page(2.5, 1.5, 13.5, 14.5);
-            for y in [5.0, 9.0] {
+            for y in [5.25, 9.25] {
                 pen.block(4.5, y - 1.25, 7.0, y + 1.25, 0.5, a);
-                pen.line(&[(8.5, y), (11.0, y)]);
+                pen.line(&[(9.25, y), (11.0, y)]);
             }
-            pen.line(&[(4.5, 12.0), (11.0, 12.0)]);
+            pen.line(&[(5.0, 12.25), (11.0, 12.25)]);
         }
-        // Mark entry: a tag; index: a page of grouped entries.
         "markEntry" => {
-            pen.fill(&[(1.5, 4.5), (10.0, 4.5), (13.5, 8.0), (10.0, 11.5), (1.5, 11.5)], pen.t);
-            pen.poly(&[(1.5, 4.5), (10.0, 4.5), (13.5, 8.0), (10.0, 11.5), (1.5, 11.5)], c);
+            pen.fill(&[(1.5, 3.5), (10.0, 3.5), (14.0, 8.0), (10.0, 12.5), (1.5, 12.5)], pen.t);
+            pen.poly(&[(1.5, 3.5), (10.0, 3.5), (14.0, 8.0), (10.0, 12.5), (1.5, 12.5)], c);
             pen.acc(&[(4.0, 8.0), (8.5, 8.0)]);
         }
         "index" => {
             pen.page(2.5, 1.5, 13.5, 14.5);
-            pen.glyph_a(6.0, 6.5, 3.5, a, a);
-            pen.rows(5.0, 11.0, &[9.0]);
-            pen.rows(6.5, 11.0, &[11.5]);
+            pen.glyph_a(6.25, 7.0, 3.5, a, a);
+            pen.rows(5.0, 11.0, &[9.75]);
+            pen.rows(6.75, 11.0, &[12.25]);
         }
         "markCitation" => {
-            pen.fill(&[(1.5, 4.5), (10.0, 4.5), (13.5, 8.0), (10.0, 11.5), (1.5, 11.5)], pen.t);
-            pen.poly(&[(1.5, 4.5), (10.0, 4.5), (13.5, 8.0), (10.0, 11.5), (1.5, 11.5)], c);
-            pen.text(6.5, 8.0, 6.5, "§", a, true);
+            pen.fill(&[(1.5, 3.5), (10.0, 3.5), (14.0, 8.0), (10.0, 12.5), (1.5, 12.5)], pen.t);
+            pen.poly(&[(1.5, 3.5), (10.0, 3.5), (14.0, 8.0), (10.0, 12.5), (1.5, 12.5)], c);
+            pen.text(6.25, 8.0, 5.5, "\u{a7}", a, true);
         }
         "tableOfAuthorities" => {
             pen.page(2.5, 1.5, 13.5, 14.5);
-            pen.text(6.0, 5.5, 5.5, "§", a, true);
-            pen.rows(5.0, 11.0, &[9.0, 11.5]);
+            pen.text(6.25, 5.25, 5.0, "\u{a7}", a, true);
+            pen.rows(5.0, 11.0, &[9.75, 12.25]);
         }
         // Mailings
         "envelope" => {
             pen.panel(1.5, 3.0, 14.5, 13.0, 1.5);
-            pen.acc(&[(2.5, 4.5), (8.0, 9.0), (13.5, 4.5)]);
+            pen.acc(&[(4.0, 5.5), (8.0, 8.75), (12.0, 5.5)]);
         }
         "labels" => {
             pen.panel(1.5, 1.5, 14.5, 14.5, 1.5);
-            pen.block(3.5, 3.5, 7.5, 7.0, 0.75, a);
-            pen.rect(8.5, 3.5, 12.5, 7.0, 0.75);
-            pen.rect(3.5, 9.0, 7.5, 12.5, 0.75);
-            pen.rect(8.5, 9.0, 12.5, 12.5, 0.75);
+            pen.block(4.0, 3.5, 12.0, 7.0, 0.75, a);
+            pen.rect(4.0, 9.75, 12.0, 12.25, 0.75);
         }
         // Mail merge: one letter, many copies out.
         "mailMerge" => {
-            pen.page(1.5, 1.5, 8.5, 10.5);
-            pen.rows(3.5, 6.5, &[5.0]);
-            pen.acc(&[(4.0, 7.5), (6.0, 7.5)]);
-            pen.arrow(9.5, 9.0, 13.5, 13.0, a);
-            pen.line(&[(10.5, 3.5), (14.5, 3.5), (14.5, 9.0)]);
+            pen.page(1.5, 1.5, 8.0, 14.5);
+            pen.acc(&[(4.0, 8.0), (5.5, 8.0)]);
+            for y in [4.0, 8.0, 12.0] {
+                pen.arrow(10.25, y, 14.0, y, a);
+            }
         }
         "recipients" => {
-            pen.person(5.5, 14.0, 1.0, c);
-            pen.person(12.0, 12.0, 0.75, a);
+            pen.person(5.0, 14.5, 0.9, c);
+            pen.person(12.0, 10.0, 0.7, a);
         }
         "editRecipients" => {
-            pen.person(5.5, 14.0, 1.0, c);
-            pen.acc(&[(9.5, 14.0), (14.5, 9.0)]);
-            pen.acc(&[(9.5, 14.0), (9.2, 14.8)]);
+            pen.person(5.0, 14.0, 1.0, c);
+            pen.acc(&[(11.5, 14.5), (14.5, 11.5)]);
+            pen.dot(11.0, 15.0, 0.5, a);
         }
         "mergeField" => {
-            pen.line(&[(4.0, 3.0), (1.5, 3.0), (1.5, 13.0), (4.0, 13.0)]);
-            pen.line(&[(12.0, 3.0), (14.5, 3.0), (14.5, 13.0), (12.0, 13.0)]);
-            pen.acc(&[(5.0, 8.0), (11.0, 8.0)]);
+            brackets(pen, 3.0, 13.0);
+            pen.acc(&[(6.25, 8.0), (9.75, 8.0)]);
         }
         "addressBlock" => {
-            pen.line(&[(4.0, 2.0), (1.5, 2.0), (1.5, 14.0), (4.0, 14.0)]);
-            pen.line(&[(12.0, 2.0), (14.5, 2.0), (14.5, 14.0), (12.0, 14.0)]);
-            pen.acc(&[(4.5, 5.0), (11.0, 5.0)]);
-            pen.rows(4.5, 11.5, &[8.0]);
-            pen.rows(4.5, 9.0, &[11.0]);
+            brackets(pen, 2.0, 14.0);
+            pen.acc(&[(6.25, 5.0), (9.75, 5.0)]);
+            pen.rows(6.25, 9.75, &[8.0]);
+            pen.rows(6.25, 8.5, &[11.0]);
         }
         "greetingLine" => {
-            pen.line(&[(4.0, 3.0), (1.5, 3.0), (1.5, 13.0), (4.0, 13.0)]);
-            pen.line(&[(12.0, 3.0), (14.5, 3.0), (14.5, 13.0), (12.0, 13.0)]);
-            pen.acc(&[(4.5, 8.0), (9.0, 8.0)]);
-            pen.dot(11.0, 8.75, 0.7, a);
-            pen.acc(&[(11.0, 8.75), (10.5, 10.0)]);
+            brackets(pen, 3.0, 13.0);
+            pen.acc(&[(5.75, 8.0), (7.5, 8.0)]);
+            pen.dot(10.0, 8.5, 0.6, a);
+            pen.acc(&[(10.0, 8.5), (9.6, 9.75)]);
         }
-        // Rules: a field that branches.
         "rules" => {
-            pen.line(&[(3.0, 2.0), (1.5, 2.0), (1.5, 6.0), (3.0, 6.0)]);
-            pen.line(&[(6.0, 2.0), (7.5, 2.0), (7.5, 6.0), (6.0, 6.0)]);
-            pen.acc(&[(4.5, 6.5), (4.5, 9.5), (11.5, 9.5)]);
-            pen.acc(&[(4.5, 9.5), (4.5, 13.5), (11.5, 13.5)]);
-            pen.dot(13.0, 9.5, 1.0, c);
-            pen.dot(13.0, 13.5, 1.0, c);
+            pen.line(&[(3.0, 1.5), (1.5, 1.5), (1.5, 6.0), (3.0, 6.0)]);
+            pen.line(&[(6.0, 1.5), (7.5, 1.5), (7.5, 6.0), (6.0, 6.0)]);
+            pen.acc(&[(4.5, 8.5), (4.5, 13.5), (9.5, 13.5)]);
+            pen.acc(&[(4.5, 10.0), (9.5, 10.0)]);
+            pen.dot(12.25, 10.0, 1.0, c);
+            pen.dot(12.25, 13.5, 1.0, c);
         }
         "matchFields" => {
             for y in [3.0, 8.0, 13.0] {
-                pen.line(&[(1.5, y), (5.0, y)]);
-                pen.line(&[(11.0, y), (14.5, y)]);
+                pen.line(&[(1.5, y), (4.5, y)]);
+                pen.line(&[(11.5, y), (14.5, y)]);
             }
-            pen.acc(&[(6.5, 3.0), (9.5, 8.0)]);
-            pen.acc(&[(6.5, 8.0), (9.5, 3.0)]);
-            pen.acc(&[(6.5, 13.0), (9.5, 13.0)]);
+            pen.acc(&[(6.75, 3.0), (9.25, 8.0)]);
+            pen.acc(&[(6.75, 8.0), (9.25, 3.0)]);
+            pen.acc(&[(6.75, 13.0), (9.25, 13.0)]);
         }
         "highlightFields" => {
-            pen.block(4.5, 6.0, 11.5, 10.0, 1.0, a.gamma_multiply(0.45));
-            pen.line(&[(4.0, 3.0), (1.5, 3.0), (1.5, 13.0), (4.0, 13.0)]);
-            pen.line(&[(12.0, 3.0), (14.5, 3.0), (14.5, 13.0), (12.0, 13.0)]);
-            pen.acc(&[(5.5, 8.0), (10.5, 8.0)]);
+            pen.block(5.25, 6.0, 10.75, 10.0, 1.0, a.gamma_multiply(0.45));
+            brackets(pen, 3.0, 13.0);
+            pen.acc(&[(6.5, 8.0), (9.5, 8.0)]);
         }
-        // Preview results: a document seen through an eye.
         "preview" => {
-            let top = Pen::arc_pts(8.0, 13.0, 8.5, 210.0, 330.0);
-            let bottom = Pen::arc_pts(8.0, 3.0, 8.5, 30.0, 150.0);
-            pen.line(&top);
-            pen.line(&bottom);
+            pen.line(&Pen::arc_pts(8.0, 13.0, 8.5, 210.0, 330.0));
+            pen.line(&Pen::arc_pts(8.0, 3.0, 8.5, 30.0, 150.0));
             pen.disc(8.0, 8.0, 2.5);
             pen.dot(8.0, 8.0, 1.0, a);
         }
@@ -1131,30 +1110,25 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.acc(&[(4.5, 3.0), (9.5, 8.0), (4.5, 13.0)]);
         }
         "finish" => {
-            pen.page(1.5, 1.5, 10.5, 12.5);
-            pen.rows(3.5, 8.0, &[5.0, 7.5]);
-            pen.path(&[(9.0, 12.0), (11.0, 14.0), (14.5, 9.5)], green);
+            pen.page(1.5, 1.5, 7.0, 14.5);
+            pen.path(&[(9.5, 8.5), (11.25, 10.25), (14.5, 6.25)], green);
         }
         "checkErrors" => {
-            pen.page(1.5, 1.5, 10.5, 12.5);
-            pen.rows(3.5, 8.0, &[5.0, 7.5]);
-            pen.circle_c(12.0, 12.0, 2.75, red);
-            pen.path(&[(12.0, 10.6), (12.0, 12.2)], red);
-            pen.dot(12.0, 13.4, 0.45, red);
+            pen.page(1.5, 1.5, 7.0, 14.5);
+            pen.circle_c(11.75, 8.0, 2.75, red);
+            pen.path(&[(11.75, 6.6), (11.75, 8.2)], red);
+            pen.dot(11.75, 9.4, 0.45, red);
         }
         // Review
         "thesaurus" => {
             pen.panel(2.5, 1.5, 13.5, 14.5, 1.0);
             pen.line(&[(5.0, 1.5), (5.0, 14.5)]);
-            pen.acc(&[(7.0, 5.0), (11.5, 5.0)]);
-            pen.rows(7.0, 11.5, &[8.0, 11.0]);
+            pen.acc(&[(7.5, 5.0), (11.0, 5.0)]);
+            pen.rows(7.5, 11.0, &[8.0, 11.0]);
         }
         "wordCount" => {
-            pen.text(5.0, 8.0, 7.5, "12", c, true);
-            pen.acc(&[(10.0, 4.0), (10.0, 12.0)]);
-            pen.acc(&[(13.0, 4.0), (13.0, 12.0)]);
-            pen.acc(&[(8.5, 6.5), (14.5, 6.5)]);
-            pen.acc(&[(8.5, 9.5), (14.5, 9.5)]);
+            pen.text(8.0, 6.0, 7.0, "123", c, true);
+            pen.acc(&[(2.5, 12.5), (13.5, 12.5)]);
         }
         "readAloud" => {
             pen.glyph_a(4.5, 12.5, 9.0, c, c);
@@ -1170,57 +1144,61 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
         "translate" => {
             pen.glyph_a(4.5, 9.0, 7.5, c, c);
             pen.arrow(8.5, 4.0, 12.5, 4.0, a);
-            pen.acc(&[(9.5, 9.0), (14.5, 9.0)]);
-            pen.acc(&[(12.0, 9.0), (12.0, 14.5)]);
-            pen.acc(&[(10.0, 11.5), (14.0, 14.0)]);
+            pen.acc(&[(10.0, 9.0), (14.5, 9.0)]);
+            pen.acc(&[(12.25, 9.0), (12.25, 14.5)]);
+            pen.acc(&[(10.25, 11.75), (14.0, 14.25)]);
         }
         "language" => {
             pen.disc(8.0, 8.0, 6.5);
-            pen.line(&[(1.5, 8.0), (14.5, 8.0)]);
-            pen.acc(&[(8.0, 1.5), (5.5, 8.0), (8.0, 14.5)]);
-            pen.acc(&[(8.0, 1.5), (10.5, 8.0), (8.0, 14.5)]);
+            pen.acc(&Pen::arc_pts(8.0, 8.0, 2.5, 0.0, 360.0).iter().map(|&(x, y)| (x, 8.0 + (y - 8.0) * 1.7)).collect::<Vec<_>>());
+            pen.acc(&[(4.0, 8.0), (12.0, 8.0)]);
         }
         "deleteComment" => {
             pen.bubble(1.5, 2.0, 14.5, 11.5);
-            pen.path(&[(6.0, 4.5), (10.0, 8.5)], red);
-            pen.path(&[(10.0, 4.5), (6.0, 8.5)], red);
+            pen.path(&[(6.0, 4.75), (10.0, 8.75)], red);
+            pen.path(&[(10.0, 4.75), (6.0, 8.75)], red);
         }
         "prevComment" => {
             pen.bubble(1.5, 2.0, 14.5, 11.5);
-            pen.acc(&[(9.5, 4.0), (6.5, 6.75), (9.5, 9.5)]);
+            pen.acc(&[(9.5, 4.5), (6.75, 6.75), (9.5, 9.0)]);
         }
         "nextComment" => {
             pen.bubble(1.5, 2.0, 14.5, 11.5);
-            pen.acc(&[(6.5, 4.0), (9.5, 6.75), (6.5, 9.5)]);
+            pen.acc(&[(6.5, 4.5), (9.25, 6.75), (6.5, 9.0)]);
         }
+        // Show comments: text with a comment balloon in the margin.
         "showComments" => {
-            pen.window(1.5, 1.5, 14.5, 14.5);
-            pen.line(&[(9.5, 4.0), (9.5, 14.5)]);
-            pen.rows(3.5, 7.5, &[7.0, 10.0]);
-            pen.block(10.75, 6.0, 13.25, 9.0, 0.5, a);
+            pen.rows(1.5, 7.5, &[3.0, 6.5, 10.0, 13.5]);
+            pen.block(10.0, 2.0, 14.5, 7.0, 1.0, pen.t);
+            pen.poly(
+                &[(10.0, 3.0), (11.0, 2.0), (13.5, 2.0), (14.5, 3.0), (14.5, 6.0), (13.5, 7.0), (12.0, 7.0), (11.0, 8.5), (11.0, 7.0), (10.0, 6.0)],
+                a,
+            );
         }
         "resolve" => {
             pen.bubble(1.5, 2.0, 14.5, 11.5);
-            pen.path(&[(5.0, 6.75), (7.0, 8.75), (11.0, 4.5)], green);
+            pen.path(&[(5.25, 6.75), (7.25, 8.75), (10.75, 4.75)], green);
         }
+        // Track changes as a diff: a removed line in red, an added line in green, each with its
+        // sign in the margin.
         "trackChanges" => {
-            pen.rows(5.5, 14.0, &[3.0, 6.5]);
-            pen.rows(5.5, 10.0, &[10.0]);
-            pen.rows(5.5, 12.5, &[13.5]);
-            pen.acc(&[(2.0, 8.5), (2.0, 15.0)]);
+            pen.rows(5.75, 14.5, &[2.0]);
+            pen.path(&[(1.25, 6.0), (3.25, 6.0)], red);
+            pen.path(&[(5.75, 6.0), (12.0, 6.0)], red);
+            pen.path(&[(1.25, 10.0), (3.25, 10.0)], green);
+            pen.path(&[(2.25, 9.0), (2.25, 11.0)], green);
+            pen.path(&[(5.75, 10.0), (13.5, 10.0)], green);
+            pen.rows(5.75, 11.0, &[14.0]);
         }
-        // All markup: rows with a change balloon in the margin.
         "markup" => {
-            pen.rows(1.5, 8.5, &[3.0, 6.5, 10.0, 13.5]);
+            pen.rows(1.5, 8.25, &[3.0, 6.5, 10.0, 13.5]);
             pen.block(10.5, 2.0, 14.5, 8.0, 1.0, a);
-            pen.acc(&[(8.5, 6.5), (10.5, 6.5)]);
         }
         "reviewingPane" => {
             pen.window(1.5, 1.5, 14.5, 14.5);
-            pen.line(&[(6.0, 4.0), (6.0, 14.5)]);
-            pen.acc(&[(3.0, 6.5), (4.5, 6.5)]);
-            pen.rows(3.0, 4.5, &[9.0, 11.5]);
-            pen.rows(7.5, 12.5, &[6.5, 9.0]);
+            pen.line(&[(4.0, 6.75), (12.0, 6.75)]);
+            pen.line(&[(1.5, 9.5), (14.5, 9.5)]);
+            pen.acc(&[(4.0, 12.0), (9.0, 12.0)]);
         }
         "accept" => {
             pen.disc(8.0, 8.0, 6.5);
@@ -1240,63 +1218,57 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.acc(&[(11.5, 3.0), (14.5, 8.0), (11.5, 13.0)]);
         }
         "compare" => {
-            pen.page(1.0, 2.5, 7.0, 13.5);
-            pen.page(9.0, 2.5, 15.0, 13.5);
-            pen.acc(&[(3.0, 8.0), (5.0, 8.0)]);
-            pen.acc(&[(11.0, 6.5), (13.0, 6.5)]);
-            pen.acc(&[(11.0, 9.5), (13.0, 9.5)]);
+            pen.page(1.5, 2.5, 6.5, 13.5);
+            pen.page(9.5, 2.5, 14.5, 13.5);
+            pen.dot(4.0, 9.0, 0.75, c);
+            pen.dot(12.0, 9.0, 0.75, a);
         }
         "combine" => {
-            pen.page(1.0, 1.0, 6.5, 7.5);
-            pen.page(9.5, 1.0, 15.0, 7.5);
-            pen.acc(&[(3.75, 8.5), (3.75, 10.5), (12.25, 10.5), (12.25, 8.5)]);
+            pen.page(1.0, 1.0, 6.5, 6.5);
+            pen.page(9.5, 1.0, 15.0, 6.5);
+            pen.acc(&[(3.75, 8.75), (3.75, 10.5), (12.25, 10.5), (12.25, 8.75)]);
             pen.arrow(8.0, 10.5, 8.0, 15.0, a);
         }
         "protect" => pen.lock(3.0, 7.0, 13.0, 14.5, c),
         "restrict" => {
-            pen.page(1.5, 1.5, 10.5, 14.5);
-            pen.rows(3.5, 7.5, &[5.0, 7.5]);
-            pen.lock(9.5, 10.5, 14.5, 14.5, a);
+            pen.page(1.5, 1.5, 7.5, 14.5);
+            pen.lock(10.0, 10.25, 14.5, 14.5, a);
         }
         "blockAuthors" => {
-            pen.person(5.5, 14.0, 1.0, c);
-            pen.lock(10.0, 10.5, 15.0, 14.5, a);
+            pen.person(4.75, 14.5, 0.9, c);
+            pen.lock(10.25, 10.25, 14.5, 14.5, a);
         }
         "hideInk" => {
-            pen.acc(&[(2.0, 11.0), (4.5, 6.0), (7.0, 11.0), (9.5, 6.0)]);
-            pen.line(&[(2.0, 2.0), (14.0, 14.0)]);
+            pen.acc(&[(2.0, 11.0), (4.5, 6.0), (7.0, 11.0), (9.5, 6.0), (12.0, 11.0)]);
+            pen.acc(&[(2.0, 2.0), (14.0, 14.0)]);
         }
         // View
         "readMode" => {
-            pen.fill(&[(1.5, 3.0), (7.5, 4.0), (7.5, 14.0), (1.5, 13.0)], pen.t);
-            pen.poly(&[(1.5, 3.0), (7.5, 4.0), (7.5, 14.0), (1.5, 13.0)], c);
-            pen.poly(&[(14.5, 3.0), (8.5, 4.0), (8.5, 14.0), (14.5, 13.0)], a);
+            pen.fill(&[(1.5, 3.0), (6.75, 4.0), (6.75, 14.0), (1.5, 13.0)], pen.t);
+            pen.poly(&[(1.5, 3.0), (6.75, 4.0), (6.75, 14.0), (1.5, 13.0)], c);
+            pen.poly(&[(14.5, 3.0), (9.25, 4.0), (9.25, 14.0), (14.5, 13.0)], a);
         }
         "printLayout" => {
             pen.page(2.5, 1.5, 13.5, 14.5);
-            pen.rows(5.0, 11.0, &[5.0, 8.0, 11.0]);
+            pen.rows(5.0, 9.5, &[5.5]);
+            pen.rows(5.0, 11.0, &[8.5, 11.5]);
         }
+        // Web layout: a browser window with a wide banner and a line of text.
         "webLayout" => {
-            pen.disc(8.0, 8.0, 6.5);
-            pen.line(&[(1.5, 8.0), (14.5, 8.0)]);
-            pen.acc(&[(8.0, 1.5), (5.5, 8.0), (8.0, 14.5)]);
-            pen.acc(&[(8.0, 1.5), (10.5, 8.0), (8.0, 14.5)]);
-            pen.line(&[(3.0, 4.5), (13.0, 4.5)]);
-            pen.line(&[(3.0, 11.5), (13.0, 11.5)]);
+            pen.window(1.5, 1.5, 14.5, 14.5);
+            pen.block(4.0, 6.5, 12.0, 9.0, 0.5, a);
+            pen.line(&[(4.0, 11.75), (12.0, 11.75)]);
         }
         "outline" => {
-            pen.dot(2.5, 3.0, 1.1, a);
-            pen.line(&[(5.0, 3.0), (14.5, 3.0)]);
-            pen.dot(5.5, 8.0, 1.1, a);
-            pen.line(&[(8.0, 8.0), (14.5, 8.0)]);
-            pen.dot(5.5, 13.0, 1.1, a);
-            pen.line(&[(8.0, 13.0), (14.5, 13.0)]);
+            for (x, y) in [(2.5, 3.0), (5.5, 8.0), (5.5, 13.0)] {
+                pen.dot(x, y, 1.1, a);
+                pen.line(&[(x + 3.25, y), (14.5, y)]);
+            }
         }
-        // Draft: plain rows with no page around them.
         "draft" => {
             pen.rows(1.5, 14.5, &[2.5, 6.0, 9.5]);
-            pen.rows(1.5, 9.0, &[13.0]);
-            pen.acc(&[(11.5, 13.0), (14.5, 13.0)]);
+            pen.rows(1.5, 8.5, &[13.0]);
+            pen.acc(&[(11.0, 13.0), (14.5, 13.0)]);
         }
         "focus" => {
             pen.line(&[(1.5, 5.0), (1.5, 1.5), (5.0, 1.5)]);
@@ -1307,40 +1279,42 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.rows(5.0, 9.5, &[9.5]);
         }
         "immersive" => {
-            pen.fill(&[(1.5, 3.0), (7.5, 4.0), (7.5, 14.0), (1.5, 13.0)], pen.t);
-            pen.poly(&[(1.5, 3.0), (7.5, 4.0), (7.5, 14.0), (1.5, 13.0)], c);
-            pen.poly(&[(14.5, 3.0), (8.5, 4.0), (8.5, 14.0), (14.5, 13.0)], c);
-            pen.dot(11.5, 8.5, 1.5, a);
+            pen.fill(&[(1.5, 3.0), (6.75, 4.0), (6.75, 14.0), (1.5, 13.0)], pen.t);
+            pen.poly(&[(1.5, 3.0), (6.75, 4.0), (6.75, 14.0), (1.5, 13.0)], c);
+            pen.poly(&[(14.5, 3.0), (9.25, 4.0), (9.25, 14.0), (14.5, 13.0)], c);
+            pen.dot(11.875, 8.75, 0.9, a);
         }
         "vertical" => {
-            pen.page(3.5, 0.5, 12.5, 6.5);
-            pen.page(3.5, 9.5, 12.5, 15.5);
-            pen.acc(&[(8.0, 7.25), (8.0, 8.75)]);
+            pen.page(3.5, 1.25, 12.5, 6.75);
+            pen.page(3.5, 9.25, 12.5, 14.75);
         }
         "sideToSide" => {
-            pen.page(0.5, 2.0, 7.0, 11.0);
-            pen.page(9.0, 2.0, 15.5, 11.0);
-            pen.span(3.0, 14.0, 13.0, 14.0, a);
+            pen.page(1.5, 1.5, 6.75, 10.0);
+            pen.page(9.25, 1.5, 14.5, 10.0);
+            pen.span(3.0, 13.75, 13.0, 13.75, a);
         }
         "ruler" => {
-            pen.panel(1.5, 5.0, 14.5, 11.0, 1.0);
+            pen.fill(&[(4.0, 1.5), (7.0, 1.5), (5.5, 3.5)], a);
+            pen.panel(1.5, 5.5, 14.5, 11.5, 1.0);
             for (i, x) in [4.0, 6.5, 9.0, 11.5].iter().enumerate() {
-                let y = if i % 2 == 0 { 8.5 } else { 7.5 };
-                pen.acc(&[(*x, 5.0), (*x, y)]);
+                pen.line(&[(*x, 5.5), (*x, if i % 2 == 0 { 8.75 } else { 7.75 })]);
             }
         }
         "gridlines" => {
+            pen.block(5.75, 5.75, 10.25, 10.25, 0.0, pen.a.gamma_multiply(0.5));
             pen.rect(1.5, 1.5, 14.5, 14.5, 1.0);
             for k in [5.75, 10.25] {
-                pen.acc(&[(k, 1.5), (k, 14.5)]);
-                pen.acc(&[(1.5, k), (14.5, k)]);
+                pen.line(&[(k, 1.5), (k, 14.5)]);
+                pen.line(&[(1.5, k), (14.5, k)]);
             }
         }
         "navPane" => {
             pen.window(1.5, 1.5, 14.5, 14.5);
-            pen.line(&[(6.0, 4.0), (6.0, 14.5)]);
-            pen.acc(&[(3.0, 6.5), (4.5, 6.5)]);
-            pen.rows(3.0, 4.5, &[9.0, 11.5]);
+            pen.line(&[(6.75, 4.0), (6.75, 14.5)]);
+            pen.dot(4.0, 7.0, 0.7, a);
+            pen.dot(4.0, 9.5, 0.7, c);
+            pen.dot(4.0, 12.0, 0.7, c);
+            pen.rows(9.25, 12.0, &[7.0, 9.5, 12.0]);
         }
         "zoom" => {
             pen.lens(6.5, 6.5, 4.5, c);
@@ -1356,66 +1330,64 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.acc(&[(4.5, 6.5), (8.5, 6.5)]);
         }
         "zoom100" => {
-            pen.text(8.0, 7.0, 6.0, "100", a, true);
-            pen.line(&[(2.5, 12.0), (13.5, 12.0)]);
+            pen.text(8.0, 6.5, 5.5, "100", a, true);
+            pen.line(&[(2.5, 11.5), (13.5, 11.5)]);
         }
         "onePage" => {
             pen.page(3.5, 1.5, 12.5, 14.5);
-            pen.rows(5.5, 10.5, &[5.0, 7.5]);
+            pen.rows(6.0, 9.5, &[5.5]);
+            pen.rows(6.0, 10.0, &[8.5, 11.5]);
         }
         "multiplePages" => {
-            for (x, y) in [(1.5, 1.5), (8.5, 1.5), (1.5, 8.5), (8.5, 8.5)] {
-                pen.page(x, y, x + 6.0, y + 6.0);
+            for (x, y) in [(1.5, 1.5), (9.5, 1.5), (1.5, 9.5), (9.5, 9.5)] {
+                pen.page(x, y, x + 5.0, y + 5.0);
             }
-            pen.dot(4.5, 4.5, 0.9, a);
+            pen.dot(4.0, 4.25, 0.9, a);
         }
         "pageWidth" => {
-            pen.page(3.5, 1.5, 12.5, 14.5);
-            pen.span(1.5, 8.0, 14.5, 8.0, a);
+            pen.page(3.5, 1.5, 12.5, 10.0);
+            pen.span(3.5, 13.75, 12.5, 13.75, a);
         }
-        // Switch modes (dark page): a disc, half light and half dark.
         "darkMode" => {
             pen.circle(8.0, 8.0, 6.0);
-            let half: Vec<(f32, f32)> = Pen::arc_pts(8.0, 8.0, 6.0, 90.0, 270.0);
-            pen.fill(&half, c);
+            pen.fill(&Pen::arc_pts(8.0, 8.0, 6.0, 90.0, 270.0), c);
         }
         "interfaceTheme" => {
             pen.window(1.5, 2.0, 14.5, 14.0);
             pen.block(8.0, 4.5, 14.5, 14.0, 1.0, c);
-            pen.acc(&[(3.5, 7.0), (6.0, 7.0)]);
+            pen.acc(&[(3.75, 7.0), (5.75, 7.0)]);
         }
         "newWindow" => {
-            pen.window(1.5, 3.5, 11.5, 14.5);
-            pen.acc(&[(13.0, 0.5), (13.0, 5.5)]);
-            pen.acc(&[(10.5, 3.0), (15.5, 3.0)]);
+            pen.window(1.5, 5.0, 10.5, 14.5);
+            pen.acc(&[(13.0, 1.5), (13.0, 4.5)]);
+            pen.acc(&[(11.5, 3.0), (14.5, 3.0)]);
         }
         "arrangeAll" => {
             pen.window(1.5, 1.5, 14.5, 7.0);
-            pen.panel(1.5, 9.0, 14.5, 14.5, 1.0);
-            pen.acc(&[(1.5, 11.5), (14.5, 11.5)]);
+            pen.window(1.5, 9.5, 14.5, 14.5);
         }
         "split" => {
-            pen.panel(1.5, 1.5, 14.5, 6.5, 1.0);
-            pen.panel(1.5, 9.5, 14.5, 14.5, 1.0);
-            pen.acc(&[(0.5, 8.0), (15.5, 8.0)]);
+            pen.panel(1.5, 1.5, 14.5, 14.5, 1.0);
+            pen.acc(&[(4.0, 8.0), (12.0, 8.0)]);
         }
         "sideBySide" => {
-            pen.window(1.0, 2.5, 7.25, 13.5);
-            pen.window(8.75, 2.5, 15.0, 13.5);
-            pen.acc(&[(8.0, 1.0), (8.0, 15.0)]);
+            pen.window(1.5, 2.5, 6.75, 13.5);
+            pen.window(9.25, 2.5, 14.5, 13.5);
         }
+        // Synchronous scrolling: two windows whose scroll positions match.
         "syncScroll" => {
-            pen.window(1.0, 2.5, 6.5, 13.5);
-            pen.window(9.5, 2.5, 15.0, 13.5);
-            pen.span(8.0, 4.0, 8.0, 12.0, a);
+            pen.window(1.5, 2.5, 6.75, 13.5);
+            pen.window(9.25, 2.5, 14.5, 13.5);
+            pen.acc(&[(4.25, 7.25), (4.25, 10.0)]);
+            pen.acc(&[(11.75, 7.25), (11.75, 10.0)]);
         }
         "switchWindows" => {
             pen.window(1.5, 1.5, 9.0, 7.5);
-            pen.window(7.0, 8.5, 14.5, 14.5);
-            pen.acc(&[(11.5, 2.5), (13.0, 2.5), (13.0, 6.0)]);
-            pen.head(13.0, 6.5, 90.0, 1.6, a);
-            pen.acc(&[(4.5, 13.5), (3.0, 13.5), (3.0, 10.0)]);
-            pen.head(3.0, 9.5, -90.0, 1.6, a);
+            pen.window(7.0, 9.75, 14.5, 14.5);
+            pen.acc(&[(11.5, 2.5), (13.0, 2.5), (13.0, 6.25)]);
+            pen.head(13.0, 7.0, 90.0, 1.6, a);
+            pen.acc(&[(4.5, 13.5), (3.0, 13.5), (3.0, 10.75)]);
+            pen.head(3.0, 10.0, -90.0, 1.6, a);
         }
         "macros" => {
             pen.panel(1.5, 1.5, 14.5, 14.5, 1.5);
@@ -1423,81 +1395,78 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
         }
         "info" => {
             pen.disc(8.0, 8.0, 6.5);
-            pen.acc(&[(8.0, 7.5), (8.0, 11.5)]);
-            pen.dot(8.0, 5.0, 1.0, a);
+            pen.acc(&[(8.0, 7.75), (8.0, 11.5)]);
+            pen.dot(8.0, 4.75, 1.0, a);
         }
-        // Properties: two sliders.
         "properties" => {
             pen.line(&[(1.5, 5.0), (14.5, 5.0)]);
             pen.line(&[(1.5, 11.0), (14.5, 11.0)]);
-            pen.p.circle_filled(pen.pt(5.0, 5.0), 2.0 * pen.s, a);
+            pen.disc(5.0, 5.0, 2.0);
             pen.disc(11.0, 11.0, 2.0);
         }
         // Table tools
         "insertAbove" => {
-            pen.grid(1.5, 7.0, 14.5, 14.5, &[8.0], &[]);
-            pen.acc(&[(8.0, 0.5), (8.0, 5.0)]);
-            pen.acc(&[(5.75, 2.75), (10.25, 2.75)]);
+            pen.grid(1.5, 7.5, 14.5, 14.5, &[8.0], &[]);
+            pen.acc(&[(8.0, 1.25), (8.0, 5.25)]);
+            pen.acc(&[(6.0, 3.25), (10.0, 3.25)]);
         }
         "insertBelow" => {
-            pen.grid(1.5, 1.5, 14.5, 9.0, &[8.0], &[]);
-            pen.acc(&[(8.0, 11.0), (8.0, 15.5)]);
-            pen.acc(&[(5.75, 13.25), (10.25, 13.25)]);
+            pen.grid(1.5, 1.5, 14.5, 8.5, &[8.0], &[]);
+            pen.acc(&[(8.0, 10.75), (8.0, 14.75)]);
+            pen.acc(&[(6.0, 12.75), (10.0, 12.75)]);
         }
         "insertLeft" => {
-            pen.grid(7.0, 1.5, 14.5, 14.5, &[], &[8.0]);
-            pen.acc(&[(0.5, 8.0), (5.0, 8.0)]);
-            pen.acc(&[(2.75, 5.75), (2.75, 10.25)]);
+            pen.grid(7.5, 1.5, 14.5, 14.5, &[], &[8.0]);
+            pen.acc(&[(1.25, 8.0), (5.25, 8.0)]);
+            pen.acc(&[(3.25, 6.0), (3.25, 10.0)]);
         }
         "insertRight" => {
-            pen.grid(1.5, 1.5, 9.0, 14.5, &[], &[8.0]);
-            pen.acc(&[(11.0, 8.0), (15.5, 8.0)]);
-            pen.acc(&[(13.25, 5.75), (13.25, 10.25)]);
+            pen.grid(1.5, 1.5, 8.5, 14.5, &[], &[8.0]);
+            pen.acc(&[(10.75, 8.0), (14.75, 8.0)]);
+            pen.acc(&[(12.75, 6.0), (12.75, 10.0)]);
         }
         "deleteTable" => {
-            pen.grid(1.5, 1.5, 10.5, 10.5, &[6.0], &[6.0]);
-            pen.path(&[(10.5, 12.5), (14.5, 16.5)], red);
-            pen.path(&[(14.5, 12.5), (10.5, 16.5)], red);
+            pen.grid(1.5, 1.5, 8.5, 8.5, &[5.0], &[5.0]);
+            pen.path(&[(10.75, 10.75), (14.25, 14.25)], red);
+            pen.path(&[(14.25, 10.75), (10.75, 14.25)], red);
         }
         "merge" => {
             pen.panel(1.5, 3.5, 14.5, 12.5, 1.0);
-            pen.acc(&[(3.5, 8.0), (6.5, 8.0)]);
-            pen.head(6.5, 8.0, 0.0, 1.8, a);
-            pen.acc(&[(12.5, 8.0), (9.5, 8.0)]);
-            pen.head(9.5, 8.0, 180.0, 1.8, a);
+            pen.arrow(3.75, 8.0, 6.75, 8.0, a);
+            pen.arrow(12.25, 8.0, 9.25, 8.0, a);
         }
         "splitCells" => {
             pen.panel(1.5, 3.5, 14.5, 12.5, 1.0);
-            pen.acc(&[(8.0, 3.5), (8.0, 12.5)]);
+            pen.acc(&[(8.0, 5.75), (8.0, 10.25)]);
             pen.head(4.0, 8.0, 180.0, 1.6, c);
             pen.head(12.0, 8.0, 0.0, 1.6, c);
         }
         "splitTable" => {
-            pen.grid(1.5, 1.5, 14.5, 6.5, &[8.0], &[]);
-            pen.grid(1.5, 9.5, 14.5, 14.5, &[8.0], &[]);
-            pen.acc(&[(0.5, 8.0), (15.5, 8.0)]);
+            pen.grid(1.5, 1.5, 14.5, 6.0, &[8.0], &[]);
+            pen.grid(1.5, 10.0, 14.5, 14.5, &[8.0], &[]);
+            pen.acc(&[(3.5, 8.0), (12.5, 8.0)]);
         }
         "autofit" => {
             pen.grid(1.5, 2.5, 14.5, 13.5, &[8.0], &[8.0]);
-            pen.acc(&[(3.5, 5.25), (6.0, 5.25)]);
-            pen.acc(&[(10.0, 5.25), (12.5, 5.25)]);
-            pen.span(3.5, 10.75, 12.5, 10.75, a);
+            for (x, y) in [(3.75, 5.25), (10.25, 5.25), (3.75, 10.75), (10.25, 10.75)] {
+                pen.acc(&[(x, y), (x + 2.0, y)]);
+            }
         }
         "distributeRows" => {
-            pen.grid(5.5, 1.5, 14.5, 14.5, &[], &[5.83, 10.17]);
-            pen.span(2.5, 2.0, 2.5, 14.0, a);
+            pen.grid(6.0, 1.5, 14.5, 14.5, &[], &[5.83, 10.17]);
+            pen.span(2.75, 2.0, 2.75, 14.0, a);
         }
         "distributeCols" => {
-            pen.grid(1.5, 5.5, 14.5, 14.5, &[5.83, 10.17], &[]);
-            pen.span(2.0, 2.5, 14.0, 2.5, a);
+            pen.grid(1.5, 6.0, 14.5, 14.5, &[5.83, 10.17], &[]);
+            pen.span(2.0, 2.75, 14.0, 2.75, a);
         }
         "rowHeight" => {
-            pen.panel(5.5, 4.5, 14.5, 11.5, 1.0);
-            pen.span(2.5, 4.5, 2.5, 11.5, a);
+            pen.panel(6.0, 4.5, 14.5, 11.5, 1.0);
+            pen.span(2.75, 4.5, 2.75, 11.5, a);
         }
         "colWidth" => {
-            pen.panel(4.5, 5.5, 11.5, 14.5, 1.0);
-            pen.span(4.5, 2.5, 11.5, 2.5, a);
+            pen.panel(4.5, 6.0, 11.5, 14.5, 1.0);
+            pen.span(4.5, 2.75, 11.5, 2.75, a);
         }
         "cellAlign" => {
             pen.panel(1.5, 1.5, 14.5, 14.5, 1.0);
@@ -1505,12 +1474,12 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.rows(6.0, 10.0, &[10.0]);
         }
         "textDirection" => {
-            pen.glyph_a(6.0, 13.0, 10.0, c, c);
+            pen.glyph_a(5.5, 13.0, 10.0, c, c);
             pen.arrow(13.0, 2.5, 13.0, 13.5, a);
         }
         "cellMargins" => {
             pen.panel(1.5, 1.5, 14.5, 14.5, 1.0);
-            for (x0, y0, x1, y1) in [(4.5, 4.5, 11.5, 4.5), (4.5, 11.5, 11.5, 11.5), (4.5, 6.5, 4.5, 9.5), (11.5, 6.5, 11.5, 9.5)] {
+            for (x0, y0, x1, y1) in [(6.0, 4.5, 10.0, 4.5), (6.0, 11.5, 10.0, 11.5), (4.5, 7.0, 4.5, 9.0), (11.5, 7.0, 11.5, 9.0)] {
                 pen.acc(&[(x0, y0), (x1, y1)]);
             }
         }
@@ -1521,27 +1490,29 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.line(&[(8.0, 7.5), (8.0, 14.5)]);
         }
         "toText" => {
-            pen.grid(1.5, 1.5, 7.5, 7.5, &[4.5], &[4.5]);
-            pen.arrow(8.5, 9.5, 10.5, 11.5, a);
-            pen.rows(11.5, 14.5, &[10.0]);
-            pen.rows(4.0, 14.5, &[13.5]);
+            pen.grid(1.5, 1.5, 7.0, 7.0, &[4.25], &[4.25]);
+            pen.arrow(8.75, 8.75, 10.75, 10.75, a);
+            pen.rows(12.25, 14.5, &[12.25]);
+            pen.rows(2.0, 14.5, &[14.75]);
         }
         "formula" => {
             pen.arc(8.5, 4.0, 2.0, 0.0, -180.0, c);
             pen.line(&[(6.5, 4.0), (6.5, 12.0), (5.5, 13.5), (3.5, 13.5)]);
-            pen.line(&[(4.5, 7.0), (9.0, 7.0)]);
-            pen.acc(&[(10.0, 8.0), (14.0, 13.0)]);
-            pen.acc(&[(14.0, 8.0), (10.0, 13.0)]);
+            pen.line(&[(4.5, 7.0), (8.5, 7.0)]);
+            pen.acc(&[(10.5, 8.0), (14.5, 13.0)]);
+            pen.acc(&[(14.5, 8.0), (10.5, 13.0)]);
         }
         "selectTable" => {
-            pen.grid(1.5, 1.5, 11.0, 11.0, &[6.25], &[6.25]);
-            pen.fill(&[(9.0, 9.0), (15.0, 11.5), (12.0, 12.25)], a);
-            pen.fill(&[(9.0, 9.0), (12.0, 12.25), (11.5, 15.0)], a);
+            pen.grid(1.5, 1.5, 9.5, 9.5, &[5.5], &[5.5]);
+            pen.fill(&[(11.0, 11.0), (15.0, 12.75), (12.75, 13.25)], a);
+            pen.fill(&[(11.0, 11.0), (12.75, 13.25), (12.25, 15.0)], a);
         }
+        // Draw table: a pencil drawing a grid.
         "draw" => {
-            pen.grid(1.5, 1.5, 10.5, 10.5, &[6.0], &[6.0]);
-            pen.acc(&[(9.0, 14.5), (14.5, 9.0)]);
-            pen.acc(&[(9.0, 14.5), (8.6, 15.4)]);
+            pen.grid(1.5, 1.5, 7.5, 7.5, &[4.5], &[4.5]);
+            pen.fill(&[(9.25, 9.25), (11.94, 10.1), (10.1, 11.94)], a);
+            pen.fill(&[(11.94, 10.1), (14.27, 12.71), (12.71, 14.27), (10.1, 11.94)], pen.t);
+            pen.poly(&[(9.25, 9.25), (11.94, 10.1), (14.27, 12.71), (12.71, 14.27), (10.1, 11.94)], a);
         }
         "borderPainter" => {
             pen.acc(&[(1.5, 1.5), (9.0, 1.5)]);
@@ -1558,13 +1529,13 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.line(&[(3.0, 6.5), (10.0, 6.5)]);
             pen.arc(10.0, 10.0, 3.5, -90.0, 90.0, c);
             pen.line(&[(10.0, 13.5), (6.0, 13.5)]);
-            pen.head(2.5, 6.5, 180.0, 3.0, a);
+            pen.head(2.5, 6.5, 180.0, 3.0, c);
         }
         "redo" => {
             pen.line(&[(13.0, 6.5), (6.0, 6.5)]);
             pen.arc(6.0, 10.0, 3.5, -90.0, -270.0, c);
             pen.line(&[(6.0, 13.5), (10.0, 13.5)]);
-            pen.head(13.5, 6.5, 0.0, 3.0, a);
+            pen.head(13.5, 6.5, 0.0, 3.0, c);
         }
         "share" => {
             pen.line(&[
@@ -1582,9 +1553,8 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.arrow(8.0, 10.5, 8.0, 1.5, a);
         }
         "user" => {
-            pen.p.circle_filled(pen.pt(8.0, 5.0), 3.0 * pen.s, a);
-            let body = Pen::arc_pts(8.0, 15.0, 6.0, 180.0, 360.0);
-            pen.fill(&body, a);
+            pen.p.circle_filled(pen.pt(8.0, 4.5), 2.75 * pen.s, a);
+            pen.fill(&Pen::arc_pts(8.0, 15.0, 6.0, 180.0, 360.0), a);
         }
         "close" => {
             pen.line(&[(3.5, 3.5), (12.5, 12.5)]);
@@ -1599,8 +1569,8 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
         "pin" => {
             pen.fill(&[(5.5, 1.5), (10.5, 1.5), (10.5, 8.5), (5.5, 8.5)], pen.t);
             pen.line(&[(5.5, 8.5), (5.5, 1.5), (10.5, 1.5), (10.5, 8.5)]);
-            pen.acc(&[(3.0, 9.0), (13.0, 9.0)]);
-            pen.line(&[(8.0, 10.5), (8.0, 15.0)]);
+            pen.line(&[(3.0, 9.0), (13.0, 9.0)]);
+            pen.line(&[(8.0, 9.0), (8.0, 15.0)]);
         }
         "plus" => {
             pen.line(&[(8.0, 3.0), (8.0, 13.0)]);
@@ -1625,28 +1595,27 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
         "mediaStop" => pen.block(3.0, 3.0, 13.0, 13.0, 1.0, c),
         "mediaPrev" => {
             pen.block(2.5, 3.0, 4.5, 13.0, 0.5, c);
-            pen.fill(&[(13.0, 3.0), (5.5, 8.0), (13.0, 13.0)], c);
+            pen.fill(&[(13.0, 3.0), (6.0, 8.0), (13.0, 13.0)], c);
         }
         "mediaNext" => {
             pen.block(11.5, 3.0, 13.5, 13.0, 0.5, c);
-            pen.fill(&[(3.0, 3.0), (10.5, 8.0), (3.0, 13.0)], c);
+            pen.fill(&[(3.0, 3.0), (10.0, 8.0), (3.0, 13.0)], c);
         }
         "pastCitation" => {
             pen.line(&[(3.0, 7.0), (1.5, 7.0), (1.5, 14.0), (3.0, 14.0)]);
             pen.line(&[(8.0, 7.0), (9.5, 7.0), (9.5, 14.0), (8.0, 14.0)]);
-            pen.rows(4.0, 7.0, &[10.5]);
-            pen.arc(8.0, 7.0, 5.0, 200.0, 330.0, a);
-            pen.head(12.3, 4.5, 75.0, 1.8, a);
-            pen.acc(&[(13.5, 8.0), (13.5, 14.5)]);
+            pen.rows(4.25, 6.75, &[10.5]);
+            pen.arc(7.5, 6.75, 5.0, 210.0, 320.0, a);
+            pen.head(11.3, 3.5, 75.0, 1.8, a);
+            pen.acc(&[(13.5, 8.5), (13.5, 14.5)]);
         }
         "addins" => {
-            pen.panel(1.5, 1.5, 7.0, 7.0, 1.0);
-            pen.panel(9.0, 1.5, 14.5, 7.0, 1.0);
-            pen.panel(1.5, 9.0, 7.0, 14.5, 1.0);
-            pen.acc(&[(11.75, 9.0), (11.75, 14.5)]);
-            pen.acc(&[(9.0, 11.75), (14.5, 11.75)]);
+            pen.panel(1.5, 1.5, 6.5, 6.5, 1.0);
+            pen.panel(9.5, 1.5, 14.5, 6.5, 1.0);
+            pen.panel(1.5, 9.5, 6.5, 14.5, 1.0);
+            pen.acc(&[(12.0, 9.5), (12.0, 14.5)]);
+            pen.acc(&[(9.5, 12.0), (14.5, 12.0)]);
         }
-        // Community: two speech bubbles in conversation. No third-party mark.
         "discord" => {
             pen.bubble(1.5, 1.5, 10.0, 8.5);
             pen.path(
@@ -1669,11 +1638,10 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
         "help" => {
             pen.disc(8.0, 8.0, 6.5);
             pen.arc(8.0, 6.3, 2.0, 190.0, 400.0, a);
-            pen.acc(&[(9.3, 7.8), (8.0, 8.9), (8.0, 9.6)]);
-            pen.dot(8.0, 11.8, 0.9, a);
+            pen.acc(&[(9.3, 7.8), (8.0, 8.9), (8.0, 9.25)]);
+            pen.dot(8.0, 11.9, 0.9, a);
         }
         _ => {
-            // Fallback for an unknown name: a dashed tile (a bug; every used name has a drawing).
             for (x0, y0, x1, y1) in [(2.0, 2.0, 5.0, 2.0), (11.0, 2.0, 14.0, 2.0), (2.0, 14.0, 5.0, 14.0), (11.0, 14.0, 14.0, 14.0)] {
                 pen.line(&[(x0, y0), (x1, y1)]);
             }
@@ -1681,6 +1649,19 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.line(&[(14.0, 2.0), (14.0, 14.0)]);
         }
     }
+}
+
+/// A dashed accent line across the middle (a break between two pages).
+fn dashes(pen: &Pen, y: f32) {
+    for (x0, x1) in [(1.5, 3.5), (7.0, 9.0), (12.5, 14.5)] {
+        pen.acc(&[(x0, y), (x1, y)]);
+    }
+}
+
+/// Field brackets from `y0` to `y1` (mail merge fields).
+fn brackets(pen: &Pen, y0: f32, y1: f32) {
+    pen.line(&[(3.75, y0), (1.5, y0), (1.5, y1), (3.75, y1)]);
+    pen.line(&[(12.25, y0), (14.5, y0), (14.5, y1), (12.25, y1)]);
 }
 
 /// The colour bar under the colour commands, in the colour that will be applied. A very light
