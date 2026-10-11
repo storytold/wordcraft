@@ -18,7 +18,7 @@ use harfrust::{Direction, ShapeOptions, Tag, UnicodeBuffer};
 pub use kurbo::BezPath;
 use skrifa::MetadataProvider;
 use skrifa::instance::Size;
-pub use ui_fallback::{SystemUiFont, system_cjk_ui_font, ui_needs_system_cjk};
+pub use ui_fallback::{SystemUiFont, is_cjk, system_cjk_ui_font, ui_needs_system_cjk, ui_uncovered_cjk};
 
 /// A font from the optional craft-fonts build input (https://github.com/storytold/craft-fonts;
 /// empty unless built with `CRAFT_FONTS_DIR`, see `build.rs`).

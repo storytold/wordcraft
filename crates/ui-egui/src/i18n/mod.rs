@@ -119,6 +119,14 @@ impl Lang {
         self.0.name.chars().any(|c| ('\u{2E80}'..='\u{9FFF}').contains(&c) || ('\u{AC00}'..='\u{D7AF}').contains(&c))
     }
 
+    /// The CJK interface text the fonts must cover with the Chinese (`hans`) or other CJK fallback
+    /// order: the catalogs of the CJK languages using that order, and every language's own name (the
+    /// Options list). The interface fonts check the embedded faces against it (#486).
+    pub fn cjk_font_text(hans: bool) -> (Vec<&'static str>, String) {
+        let catalogs = Lang::all().filter(|l| l.uses_cjk() && l.prefers_hans() == hans).map(|l| l.0.source).collect();
+        (catalogs, Lang::all().map(Lang::name).collect::<Vec<_>>().join(" "))
+    }
+
     /// A language by its exact code (any case).
     pub fn from_code(code: &str) -> Option<Lang> {
         LANGUAGES.iter().find(|l| l.code.eq_ignore_ascii_case(code)).map(Lang)
