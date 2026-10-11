@@ -1544,17 +1544,17 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.fill(&Pen::arc_pts(8.0, 8.0, 6.0, 90.0, 270.0), c);
         }
         "interfaceTheme" => {
-            pen.window(1.5, 2.0, 14.5, 14.0);
-            pen.block(8.0, 4.5, 14.5, 14.0, 1.0, c);
+            pen.window(1.5, 1.5, 14.5, 14.5);
+            pen.block(8.0, 4.0, 14.5, 14.5, 1.0, c);
             pen.acc(&[(3.75, 7.0), (5.75, 7.0)]);
         }
         "newWindow" => {
-            pen.window(1.5, 5.0, 10.5, 14.5);
+            pen.window(1.5, 5.5, 10.5, 14.5);
             pen.plus(12.5, 3.0, a);
         }
         "arrangeAll" => {
-            pen.window(1.5, 1.5, 14.5, 7.0);
-            pen.window(1.5, 9.5, 14.5, 14.5);
+            pen.window(1.5, 1.5, 14.5, 6.75);
+            pen.window(1.5, 9.25, 14.5, 14.5);
         }
         "split" => {
             pen.window(1.5, 1.5, 14.5, 14.5);
