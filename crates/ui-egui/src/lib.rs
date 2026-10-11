@@ -80,6 +80,20 @@ pub struct Services {
     /// Desktop: the picture on the system clipboard, if any — egui's paste only carries text
     /// (#45). Read when Paste finds no text; see [`paste_picture`].
     pub clipboard_picture: Option<Box<dyn Fn() -> Option<paste_picture::ClipboardPicture>>>,
+    /// Desktop: File › Options › General › Make WordCraft the default for Word documents (#295),
+    /// through `ui.makeDefaultApp`. Windows opens the Settings app's Default apps page (apps can't
+    /// set defaults themselves); Linux and BSD set it with `xdg-mime`. `None` (web, macOS) hides
+    /// the button; macOS shows how to do it in Finder instead. An error means nothing changed.
+    pub make_default_app: Option<Box<dyn Fn() -> Result<DefaultApp, String>>>,
+}
+
+/// What [`Services::make_default_app`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DefaultApp {
+    /// The system's default-apps settings opened; the user picks WordCraft there (Windows).
+    SettingsOpened,
+    /// WordCraft is now the default app for Word documents (Linux, BSD).
+    MadeDefault,
 }
 
 /// Files delivered asynchronously.
@@ -652,6 +666,9 @@ impl WordApp {
             // page; this is the button on it, and the one programmatic call that opens system UI
             // here, like `ui.openFileDialog` — only when the host can print.
             "ui.print" => return Some(self.print_to_system()),
+            // File › Options › General: make WordCraft the default app for Word documents
+            // (#295). Opens system settings on Windows, like `ui.print` — only with the host hook.
+            "ui.makeDefaultApp" => return Some(self.make_default_app()),
             "ui.discord" => {
                 self.canvas.open_url = Some("https://discord.gg/artcraft".into());
                 json!({})
@@ -676,6 +693,30 @@ impl WordApp {
             Err(e) => {
                 log::error!("print failed: {e}");
                 let msg = i18n::fmt(tl!("Print failed: {error}"), &[("error", &e)]);
+                self.status(msg.clone());
+                Err(msg)
+            }
+        }
+    }
+
+    /// `ui.makeDefaultApp`: hand over to the host's [`Services::make_default_app`] and say in the
+    /// status bar what happened. An error when the host has no hook (web, macOS).
+    fn make_default_app(&mut self) -> Result<Value, String> {
+        let Some(hook) = self.services.make_default_app.as_ref() else {
+            return Err("WordCraft can't change the default apps here; use your system's settings".into());
+        };
+        match hook() {
+            Ok(DefaultApp::SettingsOpened) => {
+                self.status(tl!("In Default apps, choose WordCraft for the document types you want it to open."));
+                Ok(json!({"settingsOpened": true}))
+            }
+            Ok(DefaultApp::MadeDefault) => {
+                self.status(tl!("WordCraft is now the default app for Word documents."));
+                Ok(json!({"default": true}))
+            }
+            Err(e) => {
+                log::warn!("make default app: {e}");
+                let msg = i18n::fmt(tl!("Couldn't make WordCraft the default: {error}"), &[("error", &e)]);
                 self.status(msg.clone());
                 Err(msg)
             }
@@ -1631,6 +1672,34 @@ mod tests {
         assert!(a.status_msg.as_ref().is_some_and(|(m, _)| m.contains("blocked by the browser")), "the status bar says why");
     }
 
+    /// `ui.makeDefaultApp` (#295) goes through the host's hook and reports the outcome in the
+    /// status bar; without a hook (web, macOS) it's an error and nothing runs.
+    #[test]
+    fn make_default_app_needs_the_hosts_hook_and_reports_the_outcome() {
+        let mut a = app();
+        assert!(a.run("ui.makeDefaultApp", json!({})).is_err(), "no hook: an error");
+
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let seen = calls.clone();
+        a.services.make_default_app = Some(Box::new(move || {
+            seen.set(seen.get() + 1);
+            Ok(DefaultApp::MadeDefault)
+        }));
+        assert_eq!(a.run("ui.makeDefaultApp", json!({})).unwrap()["default"], true);
+        assert_eq!(calls.get(), 1);
+        assert!(a.status_msg.as_ref().is_some_and(|(m, _)| m.contains("now the default")), "{:?}", a.status_msg);
+
+        a.services.make_default_app = Some(Box::new(|| Ok(DefaultApp::SettingsOpened)));
+        assert_eq!(a.run("ui.makeDefaultApp", json!({})).unwrap()["settingsOpened"], true);
+        assert!(a.status_msg.as_ref().is_some_and(|(m, _)| m.contains("Default apps")), "{:?}", a.status_msg);
+
+        a.services.make_default_app = Some(Box::new(|| Err("xdg-mime isn't installed".into())));
+        let e = a.run("ui.makeDefaultApp", json!({})).unwrap_err();
+        assert!(e.contains("xdg-mime isn't installed"), "{e}");
+        assert!(a.status_msg.as_ref().is_some_and(|(m, _)| m.contains("xdg-mime isn't installed")), "the status bar says why");
+        assert!(!a.session.dirty, "the document is untouched");
+    }
+
     /// The Print page shows the Print button only when the host can print, and the button
     /// prints through `ui.print`.
     #[test]
@@ -1667,6 +1736,42 @@ mod tests {
                 h.step();
                 h.step();
                 assert_eq!(printed.get(), 1, "the button printed");
+            }
+        }
+    }
+
+    /// File › Options shows Make WordCraft the default… only when the host can do it (#295), and
+    /// the button goes through `ui.makeDefaultApp`.
+    #[test]
+    fn the_default_app_button_shows_only_with_the_hosts_hook() {
+        use egui_kittest::kittest::Queryable;
+        const LABEL: &str = "Make WordCraft the default for Word documents…";
+        for hook in [false, true] {
+            let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+            let mut a = app();
+            if hook {
+                let seen = calls.clone();
+                a.services.make_default_app = Some(Box::new(move || {
+                    seen.set(seen.get() + 1);
+                    Ok(DefaultApp::MadeDefault)
+                }));
+            }
+            a.run("ui.backstage", json!({"value": true, "page": "options"})).unwrap();
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+                |ui, app: &mut WordApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                a,
+            );
+            h.run_steps(4);
+            assert!(h.query_by_label("Show rulers").is_some(), "hook {hook}: the Options page rendered");
+            assert_eq!(h.query_by_label(LABEL).is_some(), hook, "hook {hook}: the button");
+            if hook {
+                h.get_by_label(LABEL).click();
+                h.run_steps(2);
+                assert_eq!(calls.get(), 1, "the button ran the hook");
             }
         }
     }

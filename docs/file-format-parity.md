@@ -1,6 +1,6 @@
 # File-format parity with Microsoft Word
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** trivial (formatting revisions landed, #41; previously major: first version; every format Word reads or writes, measured from the readers and writers on origin/main) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4, plus Word for Windows' extra formats
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (file associations and the default-app button, #295; previously trivial: formatting revisions landed, #41; previously major: first version; every format Word reads or writes, measured from the readers and writers on origin/main) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4, plus Word for Windows' extra formats
 
 Every format Word opens or saves, what WordCraft does with it, and how it's tested. Fidelity is the
 share of a typical real-world file's content and formatting that survives (read: shows correctly;
@@ -70,6 +70,18 @@ Measured by grepping `crates/docx/src/read` and `src/write` for the OOXML elemen
 | Glossary document (building blocks), `w:altChunk`, sub-documents | ❌ | ❌ | |
 | Hostile input | ✅ | — | `malformed.rs`, capped allocations, never-crash standard |
 
+## Opening files from the system
+
+Double-clicking a document, Open With, and making WordCraft the default app (#295). The installers
+register WordCraft for these types but never take over a default; File › Options › General has
+**Make WordCraft the default for Word documents…** where the system allows it.
+
+| Platform | Registered types | Default app | Notes |
+|---|---|---|---|
+| Windows (MSI) | `.docx` `.docm` `.dotx` `.dotm` `.doc` `.dot` `.rtf` `.odt`; `.md` `.txt` under Open With only | Options button opens Settings › Default apps on WordCraft's page | One ProgId per type, `OpenWithProgids`, Capabilities + `RegisteredApplications` (`packaging/windows/wordcraft.wxs`). Not yet tried on a real install |
+| Linux, BSD (deb, rpm, Flatpak, AppImage) | Word, ODT, RTF, Markdown, LaTeX, HTML, text (`MimeType=` in the desktop entry, AppStream `mediatype`) | Options button runs `xdg-mime default` for the Word, RTF and ODT types | Not from inside Flatpak (the sandbox can't change host defaults); a bare AppImage needs desktop integration first |
+| macOS | `CFBundleDocumentTypes` as Alternate handler (Word, ODT, RTF, Markdown, HTML, text) | Finder › Get Info › Open with › Change All (the Options page says so) | Apple events open the files (#27) |
+
 ## What decides beta for formats
 
 1. A **real-world DOCX corpus** opened, rendered and round-tripped, compared page by page with
@@ -83,6 +95,7 @@ Measured by grepping `crates/docx/src/read` and `src/write` for the OOXML elemen
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | Opening files from the system: file associations and the default-app button (#295) |
 | 2026-10-11 | trivial | Formatting revisions (`w:rPrChange`, `w:pPrChange`, table, row, cell, section and numbering changes) read and written (#41) |
 | 2026-10-10 | trivial | OLE objects turned or flipped in WordCraft keep the turn on save (VML `rotation`/`flip`, DrawingML `a:xfrm` with the rotated effect extent); test counts refreshed |
 | 2026-10-10 | trivial | Charts, SmartArt and OLE objects written back on save with their parts (#319); chart/SmartArt reading (#292) recorded |

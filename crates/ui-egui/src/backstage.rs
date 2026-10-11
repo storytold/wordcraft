@@ -394,6 +394,7 @@ fn options_page(app: &mut WordApp, ui: &mut Ui) {
         let _ = app.run("view.darkMode", json!({"value": dark_page}));
     }
     ui.checkbox(&mut app.ui.show_discord, tl!("Show the community button in the title bar"));
+    default_app_button(app, ui);
     ui.add_space(10.0);
     ui.label(egui::RichText::new(tl!("Display")).font(semibold(15.0)));
     let mut marks = app.session.view.marks;
@@ -407,6 +408,28 @@ fn options_page(app: &mut WordApp, ui: &mut Ui) {
     ui.add_space(10.0);
     ui.label(egui::RichText::new(tl!("Agents")).font(semibold(15.0)));
     ui.label(tl!("Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel."));
+}
+
+/// File ▸ Options ▸ General: make WordCraft the default app for Word documents (#295). Only where
+/// the host can (`Services::make_default_app`: Windows opens Default apps, Linux and BSD use
+/// `xdg-mime`); macOS shows how to do it in Finder, the web shows nothing.
+fn default_app_button(app: &mut WordApp, ui: &mut Ui) {
+    if app.services.make_default_app.is_some() {
+        let hint = if cfg!(target_os = "windows") {
+            tl!("Opens Settings › Default apps, where you choose WordCraft for .docx and the other document types.")
+        } else {
+            tl!("Opens .docx, .doc, .rtf and .odt files and Word templates with WordCraft from now on.")
+        };
+        if ui.button(tl!("Make WordCraft the default for Word documents…")).on_hover_text(hint).clicked() {
+            let _ = app.run("ui.makeDefaultApp", json!({}));
+        }
+    } else if cfg!(target_os = "macos") {
+        ui.label(
+            egui::RichText::new(tl!("To open Word documents with WordCraft by default: select one in Finder, choose File › Get Info, pick WordCraft under Open with, then click Change All."))
+                .small()
+                .weak(),
+        );
+    }
 }
 
 /// File ▸ Options ▸ Interface theme: Light, Dark, or follow the system's appearance (#115).

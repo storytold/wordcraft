@@ -12,6 +12,7 @@
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod control_server;
+mod default_apps;
 mod file_dialogs;
 #[cfg(any(target_os = "windows", test))]
 mod graphics;
@@ -121,12 +122,14 @@ fn save_prefs(app: &WordApp) {
 }
 
 /// Native file dialogs, shown without blocking the window (`file_dialogs`, #94), File › Print
-/// through the system's PDF viewer (`print`, #15), and pictures on the system clipboard (#45).
+/// through the system's PDF viewer (`print`, #15), pictures on the system clipboard (#45), and
+/// making WordCraft the default app for Word documents (`default_apps`, #295).
 fn services(file_dialog: file_dialogs::Hook) -> Services {
     Services {
         file_dialog: Some(file_dialog),
         print: Some(print::hook()),
         clipboard_picture: Some(Box::new(clipboard_picture)),
+        make_default_app: default_apps::hook(),
         ..Default::default()
     }
 }

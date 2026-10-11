@@ -71,6 +71,7 @@
 	Click level to modify:	変更するレベルをクリック:
 	Color only	色のみ
 	Compress punctuation at the start of a line	行頭の約物を詰める
+	Couldn't make WordCraft the default: {error}	WordCraft を既定のアプリにできませんでした: {error}
 	Dark page (white text on black)	ダーク ページ (黒地に白い文字)
 	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	四角形をドラッグして表を描くか、セルを横切る線を引いて分割します。Esc で終了します。
 	Draw Table	表を描画
@@ -86,6 +87,7 @@
 	Insertions and Deletions	挿入と削除
 	Insertions:	挿入された箇所:
 	Left border	左罫線
+	In Default apps, choose WordCraft for the document types you want it to open.	既定のアプリで、WordCraft で開きたい文書の種類ごとに WordCraft を選んでください。
 	Left Margin	左余白
 	Indents and Spacing	インデントと間隔
 	Legal style numbering	正規形式で番号付け
@@ -99,6 +101,9 @@
 	Number format	番号書式
 	Number style for this level:	このレベルの番号の種類:
 	Outside border	外側の罫線
+	Make WordCraft the default for Word documents…	WordCraft を Word 文書の既定のアプリにする…
+	Opens .docx, .doc, .rtf and .odt files and Word templates with WordCraft from now on.	今後、.docx、.doc、.rtf、.odt ファイルと Word テンプレートを WordCraft で開きます。
+	Opens Settings › Default apps, where you choose WordCraft for .docx and the other document types.	設定 › 既定のアプリ を開きます。そこで .docx などの文書の種類ごとに WordCraft を選びます。
 	Reopen	再度開く
 	Restart list after:	リストを振り直すレベル:
 	Right border	右罫線
@@ -263,6 +268,8 @@
 	Delete Style	スタイルの削除
 	Delete Table	表の削除
 	Design	デザイン
+	To open Word documents with WordCraft by default: select one in Finder, choose File › Get Info, pick WordCraft under Open with, then click Change All.	Word 文書を既定で WordCraft で開くには: Finder で文書を選び、ファイル › 情報を見る を選んで、「このアプリケーションで開く」で WordCraft を選び、「すべてを変更」をクリックします。
+	WordCraft is now the default app for Word documents.	WordCraft が Word 文書の既定のアプリになりました。
 	development build	開発ビルド
 	Diagonal	対角線
 	Diamond	ひし形

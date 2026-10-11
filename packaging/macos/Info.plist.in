@@ -59,6 +59,7 @@
       <array>
         <string>org.openxmlformats.wordprocessingml.document</string>
         <string>org.openxmlformats.wordprocessingml.template</string>
+        <string>com.microsoft.word.doc</string>
         <string>org.oasis-open.opendocument.text</string>
         <string>public.rtf</string>
         <string>net.daringfireball.markdown</string>

@@ -228,6 +228,7 @@
 	Copy	Копіювати
 	Copy Formatting	Копіювати форматування
 	Corrections	Виправлення
+	Couldn't make WordCraft the default: {error}	Не вдалося зробити WordCraft типовою програмою: {error}
 	Count words in text boxes and notes	Рахувати слова в текстових полях і виносках
 	Cover Page	Титульна сторінка
 	Create	Створити
@@ -265,14 +266,20 @@
 	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	Перетягніть прямокутник, щоб намалювати таблицю, або лінію через клітинки, щоб їх розділити. Esc завершує.
 	Draw Table	Намалювати таблицю
 	Edit Comment	Редагувати коментар
+	In Default apps, choose WordCraft for the document types you want it to open.	У програмах за замовчуванням виберіть WordCraft для типів документів, які він має відкривати.
 	Left Margin	Ліве поле
 	Indents and Spacing	Відступи й інтервали
 	Line breaking	Розрив рядків
+	Make WordCraft the default for Word documents…	Зробити WordCraft типовою програмою для документів Word…
 	More templates →	Більше шаблонів →
 	No templates match your search.	Немає шаблонів, що відповідають пошуку.
+	Opens .docx, .doc, .rtf and .odt files and Word templates with WordCraft from now on.	Відтепер файли .docx, .doc, .rtf, .odt і шаблони Word відкриватимуться у WordCraft.
+	Opens Settings › Default apps, where you choose WordCraft for .docx and the other document types.	Відкриває Параметри › Програми за замовчуванням, де ви вибираєте WordCraft для .docx та інших типів документів.
 	Reopen	Відкрити знову
 	Right Margin	Праве поле
 	Search for templates	Пошук шаблонів
+	To open Word documents with WordCraft by default: select one in Finder, choose File › Get Info, pick WordCraft under Open with, then click Change All.	Щоб документи Word типово відкривалися у WordCraft: виберіть документ у Finder, оберіть Файл › Отримати інфо, виберіть WordCraft у розділі «Відкривати за допомогою» і натисніть «Змінити все».
+	WordCraft is now the default app for Word documents.	WordCraft тепер типова програма для документів Word.
 	development build	Збірка для розробки
 	Diagonal	Діагональ
 	Diamond	Ромб
