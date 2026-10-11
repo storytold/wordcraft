@@ -363,75 +363,142 @@ fn change_case(s: &mut Session, v: &Value) -> CmdResult {
         }
     });
     for path in s.doc.paths_between(&a, &b) {
-        let (from, to, src) = {
+        // Changed stretches of one run each: (start, end, replacement), in text order.
+        let groups = {
             let Some(p) = s.doc.para(a.story, &path) else { continue };
             let from = if path == a.path { a.off } else { 0 };
             let to = if path == b.path { b.off } else { p.len() };
-            (from, to, p.text.get(from..to).unwrap_or("").to_string())
+            let Some(src) = p.text.get(from..to) else { continue };
+            case_groups(p, from, src, &convert_chars(src, &mode, from == 0))
         };
-        let new = convert(&src, &mode, from == 0);
-        if new.len() != src.len() {
-            // Lengths differ (ß → SS): replace text keeping the first run's formatting.
-            let para = s.doc.para_mut(a.story, &path)?;
-            let props = para.props_of_char(from).clone();
-            para.delete(from, to)?;
-            para.insert_text(from, &new, &props)?;
-        } else {
-            let para = s.doc.para_mut(a.story, &path)?;
-            if let Some(slice) = para.text.get(from..to)
-                && slice.len() == new.len()
-            {
-                para.text.replace_range(from..to, &new);
-                para.touch();
+        if groups.is_empty() {
+            continue;
+        }
+        // Each stretch keeps its own run's formatting (#421); right to left so offsets hold.
+        let para = s.doc.para_mut(a.story, &path)?;
+        for (start, end, new) in groups.iter().rev() {
+            if new.len() == end - start {
+                if para.text.get(*start..*end).is_some() {
+                    para.text.replace_range(*start..*end, new);
+                }
+            } else {
+                let props = para.props_of_char(*start).clone();
+                para.delete(*start, *end)?;
+                para.insert_text(*start, new, &props)?;
+            }
+        }
+        para.touch();
+        // The selection keeps covering the converted text when its length changed (#420).
+        let spans: Vec<(usize, usize, usize)> = groups.iter().map(|(x, y, n)| (*x, *y, n.len())).collect();
+        for end in [&mut s.sel.anchor, &mut s.sel.focus] {
+            if end.story == a.story && end.path == path {
+                end.off = map_offset(&spans, end.off);
             }
         }
     }
     sel_result(s)
 }
 
+/// Group the characters of `src` (at `from` in `p`) whose converted form `conv` differs into
+/// stretches that stay inside one run: `(start, end, replacement)`, in text order.
+fn case_groups(p: &wordcraft_doc::Paragraph, from: usize, src: &str, conv: &[String]) -> Vec<(usize, usize, String)> {
+    let runs: Vec<std::ops::Range<usize>> = p.run_ranges().map(|(r, _)| r).collect();
+    let run_of = |off: usize| runs.iter().position(|r| r.contains(&off));
+    let mut out: Vec<(usize, usize, String, Option<usize>)> = Vec::new();
+    for ((i, c), new) in src.char_indices().zip(conv) {
+        let (start, end) = (from + i, from + i + c.len_utf8());
+        let mut buf = [0u8; 4];
+        if new.as_str() == c.encode_utf8(&mut buf) {
+            continue;
+        }
+        let run = run_of(start);
+        match out.last_mut() {
+            Some(g) if g.1 == start && g.3 == run => {
+                g.1 = end;
+                g.2.push_str(new);
+            }
+            _ => out.push((start, end, new.clone(), run)),
+        }
+    }
+    out.into_iter().map(|(a, b, n, _)| (a, b, n)).collect()
+}
+
+/// Where `off` lands after the stretches `(start, end, new_len)` (text order) were replaced;
+/// an offset inside a stretch moves to its end.
+fn map_offset(spans: &[(usize, usize, usize)], off: usize) -> usize {
+    let mut out = off;
+    for &(start, end, new_len) in spans {
+        if end <= off {
+            out = out.saturating_sub(end.saturating_sub(start)).saturating_add(new_len);
+        } else if start < off {
+            out = out.saturating_sub(off - start).saturating_add(new_len);
+        }
+    }
+    out
+}
+
 fn is_title(t: &str) -> bool {
     t.split_whitespace().all(|w| w.chars().next().is_some_and(char::is_uppercase))
 }
 
+#[cfg(test)]
 fn convert(src: &str, mode: &str, para_start: bool) -> String {
-    match mode {
-        "upper" => src.to_uppercase(),
-        "lower" => src.to_lowercase(),
-        "toggle" => src.chars().map(|c| if c.is_uppercase() { c.to_lowercase().collect::<String>() } else { c.to_uppercase().collect() }).collect(),
-        "title" => {
-            let mut out = String::with_capacity(src.len());
-            let mut up = true;
-            for c in src.chars() {
-                if up && c.is_alphabetic() {
-                    out.extend(c.to_uppercase());
-                    up = false;
+    convert_chars(src, mode, para_start).concat()
+}
+
+/// The case-converted form of each character of `src`, in order (one entry per char, so a
+/// change of length such as ß → SS or İ → i̇ can be applied run by run).
+fn convert_chars(src: &str, mode: &str, para_start: bool) -> Vec<String> {
+    let chars: Vec<char> = src.chars().collect();
+    // Greek capital sigma lowers to the final form at the end of a word (as `str::to_lowercase`).
+    let lower = |i: usize, c: char| -> String {
+        let prev = i.checked_sub(1).and_then(|j| chars.get(j)).is_some_and(|p| p.is_alphabetic());
+        let next = chars.get(i + 1).is_some_and(|n| n.is_alphabetic());
+        if c == 'Σ' && prev && !next { "ς".to_string() } else { c.to_lowercase().collect() }
+    };
+    // Title case capitalises the first word of any selection; sentence case only at a paragraph start.
+    let mut up = mode == "title" || para_start;
+    let mut out = Vec::with_capacity(chars.len());
+    for (i, &c) in chars.iter().enumerate() {
+        let new = match mode {
+            "upper" => c.to_uppercase().collect(),
+            "lower" => lower(i, c),
+            "toggle" => {
+                if c.is_uppercase() {
+                    lower(i, c)
                 } else {
-                    out.extend(c.to_lowercase());
+                    c.to_uppercase().collect()
                 }
+            }
+            "title" => {
+                let n = if up && c.is_alphabetic() {
+                    up = false;
+                    c.to_uppercase().collect()
+                } else {
+                    lower(i, c)
+                };
                 if c.is_whitespace() {
                     up = true;
                 }
+                n
             }
-            out
-        }
-        _ => {
-            // Sentence case.
-            let mut out = String::with_capacity(src.len());
-            let mut up = para_start;
-            for c in src.chars() {
-                if up && c.is_alphabetic() {
-                    out.extend(c.to_uppercase());
+            _ => {
+                // Sentence case.
+                let n = if up && c.is_alphabetic() {
                     up = false;
+                    c.to_uppercase().collect()
                 } else {
-                    out.extend(c.to_lowercase());
-                }
+                    lower(i, c)
+                };
                 if matches!(c, '.' | '!' | '?') {
                     up = true;
                 }
+                n
             }
-            out
-        }
+        };
+        out.push(new);
     }
+    out
 }
 
 fn clear(s: &mut Session, _: &Value) -> CmdResult {
@@ -503,5 +570,7 @@ mod tests {
         assert_eq!(convert("hello WORLD", "title", true), "Hello World");
         assert_eq!(convert("Hello", "toggle", true), "hELLO");
         assert_eq!(convert("straße", "upper", true), "STRASSE");
+        assert_eq!(convert("hello world", "title", false), "Hello World");
+        assert_eq!(convert("ΣΟΦΟΣ ΟΔΟΣ", "lower", true), "σοφος οδος");
     }
 }
