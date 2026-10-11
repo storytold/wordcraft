@@ -67,6 +67,16 @@ pub enum NumeralMode {
 }
 
 impl NumeralMode {
+    /// Short UI label (Word's option names).
+    pub fn label(self) -> &'static str {
+        match self {
+            NumeralMode::Arabic => "Arabic",
+            NumeralMode::Hindi => "Hindi",
+            NumeralMode::Context => "Context",
+            NumeralMode::System => "System",
+        }
+    }
+
     /// Parse a command value (`"arabic" | "hindi" | "context" | "system"`, any case).
     pub fn parse(s: &str) -> Option<NumeralMode> {
         match s.to_lowercase().as_str() {

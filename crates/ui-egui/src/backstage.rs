@@ -404,9 +404,28 @@ fn options_page(app: &mut WordApp, ui: &mut Ui) {
     if ui.checkbox(&mut ruler, tl!("Show rulers")).changed() {
         let _ = app.run("view.ruler", json!({"value": ruler}));
     }
+    numeral_picker(app, ui);
     ui.add_space(10.0);
     ui.label(egui::RichText::new(tl!("Agents")).font(semibold(15.0)));
     ui.label(tl!("Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel."));
+}
+
+/// File ▸ Options ▸ Numerals: how digits look on screen (display only, like Word's
+/// File › Options › Advanced › Numeral).
+fn numeral_picker(app: &mut WordApp, ui: &mut Ui) {
+    use wordcraft_layout::NumeralMode;
+    ui.horizontal(|ui| {
+        ui.label(tl!("Numerals:"));
+        let mut sel = app.session.view.numeral;
+        egui::ComboBox::from_id_salt("numerals").selected_text(tl!(sel.label())).width(220.0).show_ui(ui, |ui| {
+            for m in [NumeralMode::Arabic, NumeralMode::Hindi, NumeralMode::Context, NumeralMode::System] {
+                ui.selectable_value(&mut sel, m, tl!(m.label()));
+            }
+        });
+        if sel != app.session.view.numeral {
+            let _ = app.run("view.numeral", json!({ "value": sel }));
+        }
+    });
 }
 
 /// File ▸ Options ▸ Interface theme: Light, Dark, or follow the system's appearance (#115).
