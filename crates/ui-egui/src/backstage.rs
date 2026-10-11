@@ -23,6 +23,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let mac = app.integrated_titlebar;
     egui::Panel::left("backstage_nav")
         .exact_size(200.0)
+        // Fixed width, as in Word: without this egui shows a resize handle that does nothing (#502).
+        .resizable(false)
         .frame(egui::Frame::NONE.fill(APP_COLOR).inner_margin(egui::Margin { left: 0, right: 0, top: if mac { 0 } else { 12 }, bottom: 12 }))
         .show(ui, |ui| {
             let back = if mac {
