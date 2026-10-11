@@ -26,6 +26,28 @@ fn doc_extension_dispatches_to_docbin() {
 }
 
 #[test]
+fn txt_open_decodes_windows_1252_and_unmarked_utf16() {
+    // #433: the TXT open path sniffs encodings like the formats importer.
+    let open = |b: &[u8]| crate::io::open_bytes("x.txt", b).unwrap().plain_text(StoryRef::Body);
+    assert_eq!(open(b"\x80"), "€");
+    assert_eq!(open(b"A\0B\0"), "AB");
+    assert_eq!(open(b"\0A\0B"), "AB");
+    assert_eq!(open("€".as_bytes()), "€");
+    assert_eq!(open(b"\xFF\xFEA\0B\0"), "AB");
+    assert_eq!(open(b"A\0B"), "AB", "odd byte count stays safe");
+    assert_eq!(crate::io::decode_text(b"caf\xE9 \x80"), "café €");
+}
+
+#[test]
+fn txt_save_writes_list_labels() {
+    // #434: list paragraphs keep their bullet or number and a tab in plain text.
+    let doc = crate::io::open_bytes("l.md", b"- alpha\n- beta\n\n1. first\n2. second\n").unwrap();
+    assert_eq!(crate::io::save_bytes("l.txt", &doc).unwrap(), "•\talpha\r\n•\tbeta\r\n1.\tfirst\r\n2.\tsecond".as_bytes());
+    let plain = crate::io::open_bytes("p.md", b"alpha\n\nbeta\n").unwrap();
+    assert_eq!(crate::io::save_bytes("p.txt", &plain).unwrap(), b"alpha\r\nbeta");
+}
+
+#[test]
 fn every_command_has_unique_id() {
     let reg = cmd::registry();
     let mut ids: Vec<&str> = reg.all().iter().map(|c| c.id).collect();

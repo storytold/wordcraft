@@ -383,6 +383,10 @@ struct Builder<'r> {
     para: Option<Para>,
     /// The current paragraph continues a list item (joins the previous paragraph).
     para_cont: bool,
+    /// Whether the current paragraph's first / last text was read with preserved white space
+    /// (CSS `white-space: pre…`): those edge spaces are kept when the paragraph ends.
+    pre_lead: Option<bool>,
+    pre_tail: bool,
     meta: Meta,
     title: Option<String>,
 }
@@ -575,6 +579,8 @@ impl<'r> Builder<'r> {
             stack: Vec::new(),
             para: None,
             para_cont: false,
+            pre_lead: None,
+            pre_tail: false,
             meta: Meta::default(),
             title: None,
         }
@@ -643,8 +649,17 @@ impl<'r> Builder<'r> {
 
     fn flush(&mut self) {
         let Some(mut p) = self.para.take() else { return };
+        let (pre_lead, pre_tail) = (self.pre_lead.take().unwrap_or(false), std::mem::take(&mut self.pre_tail));
         if p.kind != Kind::Code {
-            p.trim();
+            // Preserved white space keeps its spaces and tabs at the edges; line breaks there
+            // (source formatting) still go.
+            const ALL: &[char] = &[' ', '\t', '\r', '\n'];
+            const BREAKS: &[char] = &['\r', '\n'];
+            p.trim_with(if pre_lead { BREAKS } else { ALL }, if pre_tail { BREAKS } else { ALL });
+            if p.text().trim().is_empty() {
+                // Only white space (indentation between blocks): nothing to keep.
+                p.trim();
+            }
         }
         if p.inlines.len() == 1 && p.text() == "\u{00A0}" {
             // `<p>&nbsp;</p>`: an empty paragraph on purpose.
@@ -712,6 +727,7 @@ impl<'r> Builder<'r> {
             return;
         }
         if self.preserve() {
+            self.note_edge(true);
             self.start_para().push_text(t, &f);
             return;
         }
@@ -736,7 +752,16 @@ impl<'r> Builder<'r> {
         if s.is_empty() {
             return;
         }
+        self.note_edge(false);
         self.start_para().push_text(&s, &f);
+    }
+
+    /// Record whether text about to be added keeps its white space (see `pre_lead`).
+    fn note_edge(&mut self, preserved: bool) {
+        if self.para.as_ref().is_none_or(|p| p.inlines.is_empty()) {
+            self.pre_lead = Some(preserved);
+        }
+        self.pre_tail = preserved;
     }
 
     fn pre_fresh(&self) -> bool {
@@ -1294,7 +1319,10 @@ fn table_html(t: &FTable, out: &mut String, depth: usize) {
             if c.rowspan > 1 {
                 attrs.push_str(&format!(" rowspan=\"{}\"", c.rowspan));
             }
-            let mut css = vec!["border:1px solid #999".to_string(), "padding:4px 6px".to_string(), "vertical-align:top".to_string()];
+            let mut css = vec!["padding:4px 6px".to_string(), "vertical-align:top".to_string()];
+            if !t.borderless {
+                css.insert(0, "border:1px solid #999".to_string());
+            }
             if let Some(s) = c.shading {
                 css.push(format!("background-color:#{}", s.hex()));
             }
@@ -1472,6 +1500,31 @@ mod tests {
         assert_eq!(table_style("<table border=1><tr><td>a</table>").as_deref(), Some("TableGrid"));
         assert_eq!(table_style("<table style='border:1px solid #000'><tr><td>a</table>").as_deref(), Some("TableGrid"));
         assert_eq!(table_style("<table><tr><td style='border:1px solid #999'>a</table>").as_deref(), Some("TableGrid"));
+    }
+
+    #[test]
+    fn borderless_tables_export_without_cell_borders() {
+        // #438: a table without grid style and borders writes no cell borders and reopens borderless.
+        for (src, grid) in [
+            ("<table style='border:none'><tr><td>A<td>B</table>", false),
+            ("<table><tr><td>A<td>B</table>", false),
+            ("<table border=1><tr><td>A<td>B</table>", true),
+        ] {
+            let out = export(&crate::model::to_doc(&parse(src)));
+            assert_eq!(out.contains("border:1px"), grid, "{src}: {out}");
+            assert_eq!(table_style(&out).as_deref(), Some(if grid { "TableGrid" } else { "" }), "{src}");
+            assert!(out.contains(">A</td>") && out.contains(">B</td>"), "{out}");
+        }
+    }
+
+    #[test]
+    fn css_preformatted_paragraphs_keep_edge_spaces() {
+        // #439: `white-space:pre` keeps leading and trailing spaces like `<pre>`; normal
+        // paragraphs still collapse.
+        let f = parse(
+            "<p style=\"white-space:pre\">  Alpha  Beta  </p><p style=\"white-space:pre-wrap\">\n  Gamma  \n</p><pre>  Alpha  </pre><p>  Alpha  Beta  </p>",
+        );
+        assert_eq!(texts(&f), vec!["NormalNone:  Alpha  Beta  ", "NormalNone:  Gamma  ", "CodeNone:  Alpha  ", "NormalNone:Alpha Beta"]);
     }
 
     #[test]
