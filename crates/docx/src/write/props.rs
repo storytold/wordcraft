@@ -29,11 +29,18 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     // The complex-script font is written only when set: without it, Persian/Arabic text keeps
     // the style's. Complex-script bold, italic and size default to the plain ones (they come in
     // pairs, see `CharProps::overlay`), so text formatted here looks the same in Word.
-    match (&c.font, &c.font_cs) {
-        (Some(f), Some(cs)) => w.empty("w:rFonts", &[("w:ascii", f), ("w:hAnsi", f), ("w:cs", cs)]),
-        (Some(f), None) => w.empty("w:rFonts", &[("w:ascii", f), ("w:hAnsi", f)]),
-        (None, Some(cs)) => w.empty("w:rFonts", &[("w:cs", cs)]),
-        (None, None) => {}
+    let mut fonts: Vec<(&str, &str)> = Vec::new();
+    if let Some(f) = &c.font {
+        fonts.extend([("w:ascii", f.as_str()), ("w:hAnsi", f.as_str())]);
+    }
+    if let Some(ea) = &c.font_ea {
+        fonts.push(("w:eastAsia", ea));
+    }
+    if let Some(cs) = &c.font_cs {
+        fonts.push(("w:cs", cs));
+    }
+    if !fonts.is_empty() {
+        w.empty("w:rFonts", &fonts);
     }
     toggle(w, "w:b", c.bold);
     toggle(w, "w:bCs", c.bold_cs.or(c.bold));

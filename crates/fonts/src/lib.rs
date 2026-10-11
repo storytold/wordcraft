@@ -12,7 +12,7 @@ pub mod math;
 mod ui_fallback;
 pub mod word;
 
-pub use fontdb::{FALLBACK_FAMILY, FaceRef, FontDb, FontFace, base_style, bundled, system_font_dirs};
+pub use fontdb::{FALLBACK_FAMILY, FaceRef, FontDb, FontFace, LocalName, base_style, bundled, name_language_matches, system_font_dirs};
 pub use harfrust::Feature;
 use harfrust::{Direction, ShapeOptions, Tag, UnicodeBuffer};
 pub use kurbo::BezPath;

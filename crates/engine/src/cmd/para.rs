@@ -378,12 +378,14 @@ fn apply_style(s: &mut Session, v: &Value) -> CmdResult {
             para.format(0, len, &|c| {
                 c.font = None;
                 c.font_cs = None;
+                c.font_ea = None;
                 c.size = None;
                 c.size_cs = None;
                 c.color = None;
             })?;
             para.mark.font = None;
             para.mark.font_cs = None;
+            para.mark.font_ea = None;
             para.mark.size = None;
             para.mark.size_cs = None;
             para.mark.color = None;

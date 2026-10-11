@@ -272,10 +272,19 @@ fn font(s: &mut Session, v: &Value) -> CmdResult {
     if name.is_empty() || name.len() > 128 {
         return Err(CmdError::Params("bad font name".into()));
     }
-    // The font applies to Persian/Arabic text in the selection too (its complex-script font).
+    // The font applies to Persian/Arabic text in the selection too (its complex-script font). A
+    // Chinese, Japanese or Korean font is the East Asian text's font as well (`w:eastAsia`), as in
+    // Word; choosing a Latin font leaves that text's font as it was.
+    let east_asian = {
+        let r = wordcraft_fonts::word::resolve(&name, false, false);
+        !r.substituted && r.face.is_east_asian()
+    };
     apply(s, &|c| {
         c.font = Some(name.clone());
         c.font_cs = Some(name.clone());
+        if east_asian {
+            c.font_ea = Some(name.clone());
+        }
     })
 }
 

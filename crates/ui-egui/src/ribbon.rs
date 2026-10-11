@@ -279,9 +279,11 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
         stack(ui, |ui| {
             crate::widgets::row(ui, |ui| {
                 let font = st.get("font").and_then(Value::as_str).unwrap_or("").to_string();
+                let font = app.previews.font_shown(&font);
                 let fams = app.previews.families();
                 let prev = app.previews.font_preview_fn();
                 if let Some(f) = font_combo(ui, "font", 150.0, &font, &fams, Some(&*prev)) {
+                    let f = app.previews.font_stored(&f);
                     let _ = app.run("format.font", json!({"name": f}));
                 }
                 let size = st
