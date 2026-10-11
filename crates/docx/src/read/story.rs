@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use wordcraft_doc::effects::{Glow, Shadow, ShapeEffects};
 use wordcraft_doc::graphic::{Embedded, Graphic, GraphicItem, GraphicKind};
-use wordcraft_doc::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
+use wordcraft_doc::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap, WrapText};
 use wordcraft_doc::props::{CharProps, NumChange, PropChange, Rgb};
 use wordcraft_doc::table::{Cell, MAX_COLS, MAX_ROWS, Row, Table};
 use wordcraft_doc::{Block, Blocks, InlineObject, Paragraph, PartKind, RevisionKind, Run, para_block};
@@ -1042,9 +1042,15 @@ fn anchor_float(c: &El) -> Float {
     let behind = on_off_attr(c, "behindDoc");
     for k in c.els() {
         match k.name.as_str() {
-            "wp:wrapSquare" => f.wrap = Wrap::Square,
-            "wp:wrapTight" => f.wrap = Wrap::Tight,
-            "wp:wrapThrough" => f.wrap = Wrap::Through,
+            "wp:wrapSquare" => {
+                f.wrap = Wrap::Square;
+                f.wrap_text = k.attr("wrapText").and_then(WrapText::from_ooxml).unwrap_or_default();
+            }
+            "wp:wrapTight" | "wp:wrapThrough" => {
+                f.wrap = if k.name == "wp:wrapTight" { Wrap::Tight } else { Wrap::Through };
+                f.wrap_text = k.attr("wrapText").and_then(WrapText::from_ooxml).unwrap_or_default();
+                f.wrap_polygon = k.child("wp:wrapPolygon").and_then(wrap_polygon).map(Arc::new);
+            }
             "wp:wrapTopAndBottom" => f.wrap = Wrap::TopAndBottom,
             "wp:wrapNone" => f.wrap = if behind { Wrap::BehindText } else { Wrap::InFrontOfText },
             "wp:positionH" | "wp:positionV" => {
@@ -1084,6 +1090,30 @@ fn anchor_float(c: &El) -> Float {
     f.dist_top = dist("distT");
     f.dist_bottom = dist("distB");
     f
+}
+
+/// A `wp:wrapPolygon`: `wp:start`, then the `wp:lineTo` points (ECMA-376 Part 1, §20.4.2.16).
+fn wrap_polygon(e: &El) -> Option<wordcraft_doc::wrap::WrapPolygon> {
+    let pts = e
+        .els()
+        .filter(|k| k.name == "wp:start" || k.name == "wp:lineTo")
+        .take(wordcraft_doc::wrap::MAX_WRAP_POINTS + 1)
+        .filter_map(|k| Some((int(k.attr("x")?)?, int(k.attr("y")?)?)));
+    let mut pts: Vec<(i64, i64)> = pts.collect();
+    // The last point usually repeats the start to close the polygon.
+    if pts.len() > 3 && pts.first() == pts.last() {
+        pts.pop();
+    }
+    let edited = on_off_attr(e, "edited");
+    // An unedited polygon round the whole frame says nothing the object doesn't (it's what we
+    // write when there's no outline): keep deriving the outline.
+    let s = i64::from(wordcraft_doc::wrap::WRAP_SPACE);
+    let mut corners = pts.clone();
+    corners.sort_unstable();
+    if !edited && corners == [(0, 0), (0, s), (s, 0), (s, s)] {
+        return None;
+    }
+    wordcraft_doc::wrap::WrapPolygon::new(edited, pts)
 }
 
 /// The value of property `key` in a VML `style` attribute (CSS declarations; the last one wins).

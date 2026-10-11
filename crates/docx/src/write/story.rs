@@ -478,9 +478,15 @@ impl Writer<'_> {
                 // Ink is told apart by its name (and its pen), which reading looks for.
                 let name = shape_name(*kind, freeform.as_deref(), &docpr);
                 // The effect extent leaves room for the shadow and glow.
-                let mut float = *float;
+                let mut float = float.clone();
                 for (e, fx) in float.effect.iter_mut().zip(effects.extent()) {
                     *e = wordcraft_geom::finite(*e).max(fx);
+                }
+                // Tight and Through wrapping need a polygon: the shape's outline unless it has one.
+                if matches!(float.wrap, Wrap::Tight | Wrap::Through) && float.wrap_polygon.is_none() {
+                    float.wrap_polygon = wordcraft_doc::wrap::shape_outline(*kind, *sw, *sh)
+                        .and_then(|pts| wordcraft_doc::wrap::WrapPolygon::from_unit(false, &pts))
+                        .map(std::sync::Arc::new);
                 }
                 let float = &float;
                 self.drawing_open(w, float, *sw, *sh, &docpr, &name, "");
@@ -803,14 +809,20 @@ impl Writer<'_> {
         w.empty("wp:effectExtent", &[("l", &el), ("t", &et), ("r", &er), ("b", &eb)]);
         match float.wrap {
             Wrap::Inline => {}
-            Wrap::Square => w.empty("wp:wrapSquare", &[("wrapText", "bothSides")]),
+            Wrap::Square => w.empty("wp:wrapSquare", &[("wrapText", float.wrap_text.ooxml())]),
             Wrap::Tight | Wrap::Through => {
                 let tag = if float.wrap == Wrap::Tight { "wp:wrapTight" } else { "wp:wrapThrough" };
-                w.open(tag, &[("wrapText", "bothSides")]);
-                w.open("wp:wrapPolygon", &[("edited", "0")]);
-                w.empty("wp:start", &[("x", "0"), ("y", "0")]);
-                for (x, y) in [("0", "21600"), ("21600", "21600"), ("21600", "0"), ("0", "0")] {
-                    w.empty("wp:lineTo", &[("x", x), ("y", y)]);
+                w.open(tag, &[("wrapText", float.wrap_text.ooxml())]);
+                // The object's own polygon, or its rectangle (the schema requires one).
+                let s = wordcraft_doc::wrap::WRAP_SPACE;
+                let (edited, pts) = match float.wrap_polygon.as_deref() {
+                    Some(p) if p.points.len() >= 3 => (p.edited, p.points.clone()),
+                    _ => (false, vec![[0, 0], [0, s], [s, s], [s, 0]]),
+                };
+                w.open("wp:wrapPolygon", &[("edited", if edited { "1" } else { "0" })]);
+                // Closed: back to the start.
+                for (i, [x, y]) in pts.iter().chain(pts.first()).enumerate() {
+                    w.empty(if i == 0 { "wp:start" } else { "wp:lineTo" }, &[("x", &x.to_string()), ("y", &y.to_string())]);
                 }
                 w.close("wp:wrapPolygon");
                 w.close(tag);

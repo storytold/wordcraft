@@ -8,6 +8,7 @@
 //! - [`hit`]: point ↔ position, caret geometry, line navigation, selection rectangles.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod contour;
 pub mod display;
 pub mod fields;
 pub mod hit;
@@ -21,7 +22,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use wordcraft_doc::numbering::{Counters, Level};
-use wordcraft_doc::para::{Anchor, Float, FloatAlign, InlineObject, Wrap};
+use wordcraft_doc::para::{Anchor, Float, FloatAlign, InlineObject, Wrap, WrapText};
 use wordcraft_doc::props::{Border, CharProps, Rgb, TableFloat, TextDirection};
 use wordcraft_doc::section::{SectionProps, SectionStart};
 use wordcraft_doc::{Block, Blocks, Document, Paragraph, Path, StoryRef};
@@ -293,6 +294,9 @@ struct Key {
 #[derive(Default)]
 pub struct LayoutCache {
     paras: HashMap<Key, Arc<ParaLayout>>,
+    /// Outlines of pictures' opaque pixels (Tight and Through wrapping), by media key, the
+    /// media's bytes (address and length) and crop.
+    outlines: HashMap<(String, usize, usize, [u32; 4]), Option<Arc<Vec<(f32, f32)>>>>,
     env: u64,
     used: HashSet<Key>,
     pub hits: u64,
@@ -311,6 +315,7 @@ impl LayoutCache {
     }
     pub fn clear(&mut self) {
         self.paras.clear();
+        self.outlines.clear();
     }
 }
 
@@ -350,6 +355,25 @@ struct Ctx<'a> {
 }
 
 impl Ctx<'_> {
+    /// The outline Tight and Through wrapping follow around `o` (see [`contour::wrap_outline`]);
+    /// pictures' are worked out once per picture and crop.
+    fn wrap_outline(&mut self, o: &InlineObject) -> Option<Arc<Vec<(f32, f32)>>> {
+        let (doc, cache) = (self.doc, &mut *self.cache);
+        contour::wrap_outline(o, |media, crop| {
+            let bytes = doc.media.get(media)?;
+            let key = (media.to_string(), Arc::as_ptr(bytes) as usize, bytes.len(), crop.map(f32::to_bits));
+            if let Some(o) = cache.outlines.get(&key) {
+                return o.clone();
+            }
+            if cache.outlines.len() >= 256 {
+                cache.outlines.clear();
+            }
+            let outline = contour::picture_outline(bytes, crop).map(Arc::new);
+            cache.outlines.insert(key, outline.clone());
+            outline
+        })
+    }
+
     /// A laid-out line number (cached).
     fn number_para(&mut self, n: u32) -> Arc<ParaLayout> {
         if let Some(p) = self.numbers.get(&n) {
@@ -531,7 +555,7 @@ fn layout_box(
     // Pictures behind the text go first; `behind` counts them.
     let mut behind = 0;
     // Wrap areas of the box's floating objects.
-    let mut excl: Vec<(Rect, bool)> = Vec::new();
+    let mut excl: Vec<WrapArea> = Vec::new();
     // Areas of the box's floating tables, which other floating tables may have to avoid.
     let mut float_tables: Vec<Rect> = Vec::new();
     let mut y = 0.0f32;
@@ -562,7 +586,8 @@ fn layout_box(
                         continue;
                     }
                     let r = float_rect(frame, (0.0, width), y, w, h, float);
-                    excl.extend(wrap_area(r, float));
+                    let outline = ctx.wrap_outline(o);
+                    excl.extend(wrap_area(r, float, outline.as_deref().map(|v| v.as_slice())));
                     floats.insert(oi, r);
                 }
                 let rel = rel_exclusions(&excl, 0.0, y);
@@ -595,7 +620,7 @@ fn layout_box(
                     Some(f) => {
                         let legacy = if ctx.doc.settings.compat_mode < 15 { table::first_cell_left_margin(ctx, t) } else { 0.0 };
                         let (r, area) = box_float_table_rect(frame, width, y, &tl, &f, legacy, &float_tables);
-                        excl.push((area, false));
+                        excl.push((area, false, None, WrapText::BothSides));
                         float_tables.push(area);
                         (r.x, r.y)
                     }
@@ -804,7 +829,7 @@ struct PageBuilder<'a> {
     /// The previous paragraph: (style, contextual spacing, space after) for contextual spacing.
     prev: Option<(String, bool, f32)>,
     /// Wrap areas of floating objects on this page (see [`wrap_area`]).
-    excl: Vec<(Rect, bool)>,
+    excl: Vec<WrapArea>,
     /// Wrap areas of the floating tables on this page, which others may not overlap.
     float_tables: Vec<Rect>,
     /// Line numbering counter.
@@ -1379,24 +1404,42 @@ fn align_in((start, extent): (f32, f32), offset: f32, size: f32, align: Option<F
     }
 }
 
+/// An area text keeps clear of: its bounds, whether text may only go above and below it, and
+/// (Tight and Through wrapping) the outline text follows inside it, and the sides text may go on.
+type WrapArea = (Rect, bool, Option<Arc<contour::Contour>>, WrapText);
+
 /// The area text keeps clear of around a floating object at `r` (its rectangle grown by the
-/// distances from text), and whether text may only go above and below it. `None` when text
-/// flows over or under the object.
-fn wrap_area(r: Rect, float: &Float) -> Option<(Rect, bool)> {
+/// distances from text; Tight and Through: around `outline`, unit coordinates across `r`, when
+/// it has one), and whether text may only go above and below it. `None` when text flows over
+/// or under the object.
+fn wrap_area(r: Rect, float: &Float, outline: Option<&[(f32, f32)]>) -> Option<WrapArea> {
     if matches!(float.wrap, Wrap::Inline | Wrap::BehindText | Wrap::InFrontOfText) {
         return None;
+    }
+    if matches!(float.wrap, Wrap::Tight | Wrap::Through)
+        && let Some((area, c)) = outline.and_then(|o| contour::contour_area(r, float, o))
+    {
+        return Some((area, false, Some(Arc::new(c)), float.wrap_text));
     }
     let d = |v: f32| if v.is_finite() { v.clamp(0.0, 1584.0) } else { 0.0 };
     let (side, top, bottom) = (d(float.dist), d(float.dist_top), d(float.dist_bottom));
     // A rotated object keeps text clear of its rotated bounds.
     let r = float.spin().bounds(r);
-    Some((Rect::new(r.x - side, r.y - top, r.w + side * 2.0, r.h + top + bottom), float.wrap == Wrap::TopAndBottom))
+    Some((Rect::new(r.x - side, r.y - top, r.w + side * 2.0, r.h + top + bottom), float.wrap == Wrap::TopAndBottom, None, float.wrap_text))
 }
 
 /// Wrap areas relative to a paragraph whose column starts at `x0` and whose top is `y0`.
-fn rel_exclusions(excl: &[(Rect, bool)], x0: f32, y0: f32) -> Vec<para::Exclusion> {
+fn rel_exclusions(excl: &[WrapArea], x0: f32, y0: f32) -> Vec<para::Exclusion> {
     excl.iter()
-        .map(|(r, tb)| para::Exclusion { top: r.y - y0, bottom: r.bottom() - y0, left: r.x - x0, right: r.right() - x0, top_bottom: *tb })
+        .map(|(r, tb, c, side)| para::Exclusion {
+            top: r.y - y0,
+            bottom: r.bottom() - y0,
+            left: r.x - x0,
+            right: r.right() - x0,
+            top_bottom: *tb,
+            contour: c.clone(),
+            side: *side,
+        })
         .filter(|e| e.bottom > 0.0)
         .collect()
 }
@@ -1475,7 +1518,8 @@ fn anchor_floats(
             }
             let r = float_rect(Some(frame), (col_x, width), y0, w, h, float);
             rects.insert(oi, r);
-            if let Some(area) = wrap_area(r, float) {
+            let outline = ctx.wrap_outline(o);
+            if let Some(area) = wrap_area(r, float, outline.as_deref().map(|v| v.as_slice())) {
                 pb.excl.push(area);
             }
         }
@@ -1942,7 +1986,7 @@ fn place_floating_table(pb: &mut PageBuilder, tl: &table::TableLayout, f: &Table
             }
         }
         let area = r.inset(-dl, -dt, -dr, -db);
-        pb.excl.push((area, false));
+        pb.excl.push((area, false, None, WrapText::BothSides));
         pb.float_tables.push(area);
         return;
     }
@@ -1973,10 +2017,10 @@ fn below_floats(pb: &mut PageBuilder, x0: f32, x1: f32) {
 
 /// `y`, moved below the wrap areas in `excl` in the way of something spanning `x0..x1` that
 /// starts there.
-fn below(excl: &[(Rect, bool)], mut y: f32, x0: f32, x1: f32) -> f32 {
+fn below(excl: &[WrapArea], mut y: f32, x0: f32, x1: f32) -> f32 {
     for _ in 0..64 {
-        let in_the_way = excl.iter().filter(|(r, _)| r.y <= y + 0.01 && r.bottom() > y && r.x < x1 && r.right() > x0);
-        let Some(bottom) = in_the_way.map(|(r, _)| r.bottom()).reduce(f32::max) else { break };
+        let in_the_way = excl.iter().filter(|(r, ..)| r.y <= y + 0.01 && r.bottom() > y && r.x < x1 && r.right() > x0);
+        let Some(bottom) = in_the_way.map(|(r, ..)| r.bottom()).reduce(f32::max) else { break };
         y = bottom;
     }
     y

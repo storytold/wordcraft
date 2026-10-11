@@ -4,7 +4,7 @@
 //! caret). Picture adjustments re-encode the bitmap (originals are kept for Reset Picture).
 
 use serde_json::{Value, json};
-use wordcraft_doc::para::{Float, InlineObject, Wrap};
+use wordcraft_doc::para::{Float, InlineObject, Wrap, WrapText};
 use wordcraft_doc::props::Rgb;
 use wordcraft_doc::{Pos, StoryRef};
 use wordcraft_geom::Spin;
@@ -228,6 +228,13 @@ pub fn specs() -> Vec<CommandSpec> {
             with_float(s, |f| f.wrap = wrap)
         })
         .params(r#"{"wrap": "inline|square|tight|through|topAndBottom|behindText|inFrontOfText"}"#)
+        .when(has_movable),
+        CommandSpec::new("arrange.wrapText", "Wrap Text Sides", "Layout › Arrange", |s, v| {
+            let side = p::str(v, "side").unwrap_or("bothSides");
+            let side = WrapText::from_ooxml(side).ok_or_else(|| CmdError::Params(format!("unknown side {side:?}")))?;
+            with_float(s, |f| f.wrap_text = side)
+        })
+        .params(r#"{"side": "bothSides|left|right|largest"}  (the sides of the selected Square, Tight or Through object text flows on; largest: the wider side, line by line)"#)
         .when(has_movable),
         CommandSpec::new("arrange.position", "Position", "Layout › Arrange", |s, v| {
             let preset = p::str(v, "preset").unwrap_or("middleCenter").to_string();
@@ -977,7 +984,7 @@ fn group(s: &mut Session, _: &Value) -> CmdResult {
             _ => children.push(member(obj, [r.x, r.y, r.w, r.h])),
         }
     }
-    let float = found.first().and_then(|(o, _)| o.frame()).map(|(_, _, f)| *f).unwrap_or_default();
+    let float = found.first().and_then(|(o, _)| o.frame()).map(|(_, _, f)| f.clone()).unwrap_or_default();
     let grouped = InlineObject::Group { w, h, float, ch_w: w, ch_h: h, children };
     // Take the members out, last first so the earlier positions hold, and put the group where
     // the first one was.
@@ -1015,7 +1022,7 @@ fn ungroup(s: &mut Session, _: &Value) -> CmdResult {
     };
     let obj = s.doc.para_at(&pos).and_then(|p| p.object_at(pos.off)).cloned().ok_or_else(|| CmdError::Failed("object vanished".into()))?;
     let Some((w, h, float)) = obj.frame() else { return Err(CmdError::Failed("object vanished".into())) };
-    let float = *float;
+    let float = float.clone();
     let members: Vec<InlineObject> = obj
         .group_rects(0.0, 0.0, w, h)
         .into_iter()
@@ -1023,7 +1030,7 @@ fn ungroup(s: &mut Session, _: &Value) -> CmdResult {
             let mut c = c.clone();
             c.set_size(cw.max(min_size(&c)), ch.max(min_size(&c)));
             if let Some(f) = c.float_mut() {
-                *f = Float { x: (float.x + x).clamp(-MAX_OFFSET, MAX_OFFSET), y: (float.y + y).clamp(-MAX_OFFSET, MAX_OFFSET), ..float };
+                *f = Float { x: (float.x + x).clamp(-MAX_OFFSET, MAX_OFFSET), y: (float.y + y).clamp(-MAX_OFFSET, MAX_OFFSET), ..float.clone() };
             }
             c
         })
@@ -1164,6 +1171,13 @@ mod tests {
         assert_eq!(obj_size(&selected(&s).unwrap().1), (100.0, 50.0));
         s.run("picture.reset", &json!({})).unwrap();
         s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+        // Text on one side only (#354), one undo step; an unknown side is refused.
+        let side = |s: &Session| selected(s).unwrap().1.frame().unwrap().2.wrap_text;
+        s.run("arrange.wrapText", &json!({"side": "largest"})).unwrap();
+        assert_eq!(side(&s), WrapText::Largest);
+        assert!(s.run("arrange.wrapText", &json!({"side": "middle"})).is_err());
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(side(&s), WrapText::BothSides);
         s.run("arrange.position", &json!({"preset": "topRight"})).unwrap();
         let l = s.run("arrange.selectionPane", &json!({})).unwrap();
         assert_eq!(l.as_array().unwrap().len(), 1);
