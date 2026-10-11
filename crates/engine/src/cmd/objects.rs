@@ -699,13 +699,8 @@ fn size(s: &mut Session, v: &Value) -> CmdResult {
         _ => {}
     }
     let (w, h) = (w.clamp(1.0, 4000.0), h.clamp(1.0, 4000.0));
-    with_obj(s, |o| match o {
-        InlineObject::Image { w: ow, h: oh, .. } | InlineObject::Graphic { w: ow, h: oh, .. } | InlineObject::Shape { w: ow, h: oh, .. } => {
-            *ow = w;
-            *oh = h;
-        }
-        _ => {}
-    })
+    // Any drawing: a group's members scale with its frame (its child space is kept).
+    with_obj(s, |o| o.set_size(w, h))
 }
 
 /// Apply an image operation to the selected picture's bitmap (stored as a new PNG).
@@ -955,29 +950,42 @@ fn group(s: &mut Session, _: &Value) -> CmdResult {
     if found.iter().any(|(_, h)| h.page != page) {
         return Err(CmdError::Disabled("objects on different pages can't be grouped".into()));
     }
-    let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
-    for (_, h) in &found {
-        (x0, y0) = (x0.min(h.rect.x), y0.min(h.rect.y));
-        (x1, y1) = (x1.max(h.rect.right()), y1.max(h.rect.bottom()));
-    }
-    let (w, h) = ((x1 - x0).clamp(1.0, MAX_OFFSET), (y1 - y0).clamp(1.0, MAX_OFFSET));
-    let mut children = Vec::new();
-    let member = |obj: &InlineObject, r: [f32; 4]| {
-        let mut obj = obj.clone();
-        obj.set_size(r[2], r[3]);
-        if let Some(f) = obj.float_mut() {
-            *f = Float::default();
-        }
-        GroupChild { x: r[0] - x0, y: r[1] - y0, obj }
-    };
+    // The members as they show on the page: each one's unturned frame and turn (a group among
+    // them gives its members, its turn taken into theirs).
+    let mut shown: Vec<([f32; 4], Spin, &InlineObject)> = Vec::new();
     for (obj, hit) in &found {
         let r = hit.rect;
         match obj {
-            InlineObject::Group { .. } => children.extend(obj.group_rects(r.x, r.y, r.w, r.h).into_iter().map(|(cr, c)| member(c, cr))),
-            _ => children.push(member(obj, [r.x, r.y, r.w, r.h])),
+            InlineObject::Group { .. } => shown.extend(shown_members(obj, [r.x, r.y, r.w, r.h])),
+            _ => shown.push(([r.x, r.y, r.w, r.h], hit.spin, obj)),
         }
     }
-    let float = found.first().and_then(|(o, _)| o.frame()).map(|(_, _, f)| *f).unwrap_or_default();
+    // The group's box takes in what they cover, turned.
+    let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for ([x, y, w, h], spin, _) in &shown {
+        let b = spin.bounds(wordcraft_geom::Rect::new(*x, *y, *w, *h));
+        (x0, y0) = (x0.min(b.x), y0.min(b.y));
+        (x1, y1) = (x1.max(b.right()), y1.max(b.bottom()));
+    }
+    if shown.is_empty() {
+        return Err(CmdError::Failed("nothing to group".into()));
+    }
+    let (w, h) = ((x1 - x0).clamp(1.0, MAX_OFFSET), (y1 - y0).clamp(1.0, MAX_OFFSET));
+    // Each member keeps its turn: the group itself starts unturned.
+    let children: Vec<GroupChild> = shown
+        .into_iter()
+        .map(|([x, y, cw, ch], spin, obj)| {
+            let mut obj = obj.clone();
+            obj.set_size(cw, ch);
+            if let Some(f) = obj.float_mut() {
+                *f = Float::default();
+                f.set_spin(spin);
+            }
+            GroupChild { x: x - x0, y: y - y0, obj }
+        })
+        .collect();
+    let mut float = found.first().and_then(|(o, _)| o.frame()).map(|(_, _, f)| *f).unwrap_or_default();
+    float.set_spin(Spin::default());
     let grouped = InlineObject::Group { w, h, float, ch_w: w, ch_h: h, children };
     // Take the members out, last first so the earlier positions hold, and put the group where
     // the first one was.
@@ -1016,14 +1024,19 @@ fn ungroup(s: &mut Session, _: &Value) -> CmdResult {
     let obj = s.doc.para_at(&pos).and_then(|p| p.object_at(pos.off)).cloned().ok_or_else(|| CmdError::Failed("object vanished".into()))?;
     let Some((w, h, float)) = obj.frame() else { return Err(CmdError::Failed("object vanished".into())) };
     let float = *float;
-    let members: Vec<InlineObject> = obj
-        .group_rects(0.0, 0.0, w, h)
+    // Each member where the group shows it: the group's turn moves its centre about the group's
+    // centre and adds to its own turn.
+    let members: Vec<InlineObject> = shown_members(&obj, [0.0, 0.0, w, h])
         .into_iter()
-        .map(|([x, y, cw, ch], c)| {
+        .map(|([x, y, cw, ch], spin, c)| {
             let mut c = c.clone();
-            c.set_size(cw.max(min_size(&c)), ch.max(min_size(&c)));
+            let (mw, mh) = (cw.max(min_size(&c)), ch.max(min_size(&c)));
+            c.set_size(mw, mh);
+            // Grown to its smallest size about its centre, so it stays centred where it was.
+            let (x, y) = (x - (mw - cw) / 2.0, y - (mh - ch) / 2.0);
             if let Some(f) = c.float_mut() {
                 *f = Float { x: (float.x + x).clamp(-MAX_OFFSET, MAX_OFFSET), y: (float.y + y).clamp(-MAX_OFFSET, MAX_OFFSET), ..float };
+                f.set_spin(spin);
             }
             c
         })
@@ -1043,6 +1056,24 @@ fn ungroup(s: &mut Session, _: &Value) -> CmdResult {
     s.sel = Selection { anchor: first.clone(), focus: Pos { off: first.off + len, ..first } };
     s.also_selected = placed.into_iter().skip(1).collect();
     sel_result(s)
+}
+
+/// A group's members as it shows them in its frame `[x, y, w, h]`: each member's unturned frame
+/// and the turn it is drawn with (its own inside the group's). The group's turn, about its
+/// centre, moves each member's centre. Empty for anything but a group.
+fn shown_members(group: &InlineObject, [x, y, w, h]: [f32; 4]) -> Vec<([f32; 4], Spin, &InlineObject)> {
+    let outer = group.frame().map(|(_, _, f)| f.spin()).unwrap_or_default();
+    let [x, y, w, h] = [x, y, w, h].map(wordcraft_geom::finite);
+    let (gx, gy) = (x + w / 2.0, y + h / 2.0);
+    group
+        .group_rects(x, y, w, h)
+        .into_iter()
+        .map(|([mx, my, mw, mh], c)| {
+            let own = c.frame().map(|(_, _, f)| f.spin()).unwrap_or_default();
+            let (cx, cy) = outer.apply(gx, gy, mx + mw / 2.0, my + mh / 2.0);
+            ([cx - mw / 2.0, cy - mh / 2.0, mw, mh], own.within(outer), c)
+        })
+        .collect()
 }
 
 fn all_objects(s: &Session) -> Vec<(Pos, InlineObject)> {
@@ -1270,6 +1301,121 @@ mod tests {
         // Undo goes back step by step.
         s.run("edit.undo", &json!({})).unwrap();
         assert_eq!(all_objects(&s).len(), 2);
+    }
+
+    /// Page 1 as exported (`file.exportPng` at scale 1), its pixels.
+    fn page_pixels(s: &Session) -> Vec<u8> {
+        let l = s.export_layout();
+        wordcraft_render::render_page(&s.doc, &l.pages[0], 1.0, &Default::default()).pixels
+    }
+
+    /// How many pixels of two renders clearly differ (not just in antialiasing).
+    fn pixels_differing(a: &[u8], b: &[u8]) -> usize {
+        assert_eq!(a.len(), b.len());
+        a.chunks(4).zip(b.chunks(4)).filter(|(p, q)| p.iter().zip(q.iter()).any(|(x, y)| x.abs_diff(*y) > 96)).count()
+    }
+
+    /// A rectangle at (100, 100) and an arrow at (250, 100), both 80 × 40, on a blank page; the
+    /// arrow turned `arrow_deg`.
+    fn rectangle_and_arrow(arrow_deg: f32) -> Session {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("insert.shape", &json!({"kind": "rectangle", "width": 80, "height": 40})).unwrap();
+        s.run("arrange.bounds", &json!({"x": 100, "y": 100})).unwrap();
+        s.run("select.collapse", &json!({"end": true})).unwrap();
+        s.run("insert.shape", &json!({"kind": "arrow", "width": 80, "height": 40})).unwrap();
+        s.run("arrange.bounds", &json!({"x": 250, "y": 100})).unwrap();
+        s.run("arrange.rotation", &json!({"degrees": arrow_deg})).unwrap();
+        s
+    }
+
+    fn select_both(s: &mut Session) {
+        s.run("select.objects", &json!({"index": 0})).unwrap();
+        s.run("select.addObject", &json!({"index": 1})).unwrap();
+    }
+
+    /// #441: grouping keeps a turned member's orientation, through save and reopen too.
+    #[test]
+    fn group_keeps_a_rotated_members_orientation() {
+        for deg in [90.0, 0.0] {
+            let mut s = rectangle_and_arrow(deg);
+            let before = page_pixels(&s);
+            select_both(&mut s);
+            s.run("arrange.group", &json!({})).unwrap();
+            let (_, g) = selected(&s).unwrap();
+            let InlineObject::Group { children, float, .. } = &g else { panic!("a group: {g:?}") };
+            assert_eq!(children.len(), 2, "both members stay shapes");
+            assert!(children.iter().all(|c| matches!(c.obj, InlineObject::Shape { .. })));
+            let rots: Vec<f32> = children.iter().filter_map(|c| c.obj.frame().map(|(_, _, f)| f.rot)).collect();
+            assert_eq!(rots, vec![0.0, deg], "the rectangle unturned, the arrow keeps its turn");
+            assert_eq!(float.rot, 0.0, "the group itself is unturned");
+            assert!(pixels_differing(&before, &page_pixels(&s)) < 20, "{deg}°: grouping changes nothing on the page");
+            // Saved and reopened, it looks the same.
+            let back = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+            let reopened = Session::new(back);
+            assert!(pixels_differing(&before, &page_pixels(&reopened)) < 20, "{deg}°: reopened");
+            // Undo gives back the two objects.
+            s.run("edit.undo", &json!({})).unwrap();
+            assert_eq!(all_objects(&s).len(), 2);
+            assert!(pixels_differing(&before, &page_pixels(&s)) < 20);
+        }
+    }
+
+    /// #442: Size resizes a selected group, its members scaled with it, as Move or Resize does.
+    #[test]
+    fn size_resizes_a_group() {
+        let grouped = || {
+            let mut s = Session::new(wordcraft_doc::Document::new());
+            s.run("insert.shape", &json!({"kind": "rectangle", "width": 80, "height": 40})).unwrap();
+            s.run("arrange.bounds", &json!({"x": 100, "y": 100})).unwrap();
+            s.run("select.collapse", &json!({"end": true})).unwrap();
+            s.run("insert.shape", &json!({"kind": "rectangle", "width": 80, "height": 40})).unwrap();
+            s.run("arrange.bounds", &json!({"x": 250, "y": 100})).unwrap();
+            s.run("select.addObject", &json!({"index": 0})).unwrap();
+            s.run("arrange.group", &json!({})).unwrap();
+            assert_eq!(s.run("arrange.selectionPane", &json!({})).unwrap()[0]["size"], json!([230.0, 40.0]));
+            s
+        };
+        let mut sized = grouped();
+        sized.run("picture.size", &json!({"width": 400, "height": 200})).unwrap();
+        let list = sized.run("arrange.selectionPane", &json!({})).unwrap();
+        assert_eq!((list.as_array().unwrap().len(), &list[0]["kind"], &list[0]["size"]), (1, &json!("group"), &json!([400.0, 200.0])));
+        let mut moved = grouped();
+        moved.run("arrange.bounds", &json!({"width": 400, "height": 200})).unwrap();
+        let (_, a) = selected(&sized).unwrap();
+        let (_, b) = selected(&moved).unwrap();
+        assert_eq!(a, b, "the same group, members and all, as Move or Resize makes");
+        let InlineObject::Group { children, .. } = &a else { panic!() };
+        assert_eq!(children.len(), 2);
+        let members: Vec<[f32; 4]> = a.group_rects(0.0, 0.0, 400.0, 200.0).into_iter().map(|(r, _)| r).collect();
+        assert!(near(members[1], [400.0 * 150.0 / 230.0, 0.0, 400.0 * 80.0 / 230.0, 200.0]), "scaled with the group: {members:?}");
+    }
+
+    /// #443: ungrouping a turned group keeps its members where, and as turned as, it showed them.
+    #[test]
+    fn ungroup_keeps_a_rotated_groups_arrangement() {
+        for turn in [true, false] {
+            let mut s = rectangle_and_arrow(0.0);
+            select_both(&mut s);
+            s.run("arrange.group", &json!({})).unwrap();
+            if turn {
+                s.run("arrange.rotation", &json!({"degrees": 90})).unwrap();
+            }
+            let before = page_pixels(&s);
+            s.run("arrange.ungroup", &json!({})).unwrap();
+            let list = all_objects(&s);
+            assert_eq!(list.len(), 2, "two separate objects");
+            let want = if turn { 90.0 } else { 0.0 };
+            assert!(list.iter().all(|(_, o)| o.frame().is_some_and(|(_, _, f)| f.rot == want)));
+            assert!(pixels_differing(&before, &page_pixels(&s)) < 20, "turned {turn}: ungrouping changes nothing on the page");
+            if turn {
+                // The rectangle is above the arrow now, as the turned group showed it.
+                let r: Vec<[f32; 4]> = list.iter().map(|(p, _)| rect_of(&mut s, p)).collect();
+                assert!((r[0][0] - r[1][0]).abs() < 0.5 && r[0][1] < r[1][1], "{r:?}");
+            }
+            s.run("edit.undo", &json!({})).unwrap();
+            assert!(matches!(all_objects(&s).as_slice(), [(_, InlineObject::Group { .. })]));
+            assert_eq!(pixels_differing(&before, &page_pixels(&s)), 0);
+        }
     }
 
     #[test]
