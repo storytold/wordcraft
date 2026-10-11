@@ -13,6 +13,7 @@ macro_rules! tl {
     };
 }
 
+pub mod a11y;
 pub mod backstage;
 pub mod canvas;
 pub mod chrome;
