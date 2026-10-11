@@ -57,7 +57,9 @@ pub(crate) fn parse(word: &[u8], table: &[u8], fib: &Fib) -> Vec<Section> {
             })
         {
             for prl in sprm::iter(grpprl) {
-                if prl.op == S_ORIENTATION {
+                // Only a defined operand counts as explicit; anything else leaves the
+                // orientation to the page shape.
+                if prl.op == S_ORIENTATION && matches!(prl.operand.first(), Some(1 | 2)) {
                     explicit_orient = true;
                 }
                 apply_section(&mut props, &prl);
@@ -89,9 +91,12 @@ fn apply_section(s: &mut SectionProps, prl: &Prl) {
     match prl.op {
         S_BKC => {
             s.start = match prl.operand.first().copied().unwrap_or(2) {
+                // SBkcOperand ([MS-DOC] sprmSBkc): bkcContinuous, bkcNewColumn, bkcNewPage,
+                // bkcEvenPage, bkcOddPage; anything else falls back to the default (new page).
                 0 => SectionStart::Continuous,
-                1 => SectionStart::EvenPage,
-                2 => SectionStart::OddPage,
+                1 => SectionStart::NextColumn,
+                3 => SectionStart::EvenPage,
+                4 => SectionStart::OddPage,
                 _ => SectionStart::NextPage,
             };
         }
@@ -107,7 +112,12 @@ fn apply_section(s: &mut SectionProps, prl: &Prl) {
                 s.page_num_format = NumFormat::Decimal;
             }
         }
-        S_ORIENTATION => s.landscape = prl.operand.first() == Some(&1),
+        // SBOrientationOperand ([MS-DOC] §2.9.236): 1 portrait, 2 landscape.
+        S_ORIENTATION => match prl.operand.first() {
+            Some(1) => s.landscape = false,
+            Some(2) => s.landscape = true,
+            _ => {}
+        },
         S_HDR_TOP => {
             if let Some(v) = s16(prl) {
                 s.header = tw(v as i32);

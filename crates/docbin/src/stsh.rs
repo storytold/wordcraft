@@ -11,7 +11,7 @@ const MAX_STYLES: usize = 4096;
 pub(crate) struct RawStyle {
     /// 1 paragraph, 2 character, 3 table, 4 numbering.
     pub(crate) stk: u8,
-    /// 0x0FFF = none.
+    /// Zero-based index of the parent style; 0x0FFF = none.
     pub(crate) istd_base: u16,
     pub(crate) name: String,
     /// Paragraph-formatting UPX grpprl (paragraph styles).
@@ -57,15 +57,15 @@ pub(crate) fn parse(table: &[u8], fc: u32, lcb: u32) -> Result<Vec<RawStyle>, Do
             out.push(RawStyle::default());
             continue;
         };
-        // StdfBase (10 bytes): sti(12)+flags(4); stk(4)+istdNext(12); cupx(4)+istdBase(12);
-        // bchUpe(16) (= cbStd); grfstd(16). Validated against Word's own files: bchUpe equals
-        // cbStd and style 0 is sti 0 ("Normal").
+        // StdfBase ([MS-DOC] §2.9.260, 10 bytes): sti(12)+flags(4); stk(4)+istdBase(12);
+        // cupx(4)+istdNext(12); bchUpe(16) (= cbStd); grfstd(16). istdBase is a zero-based
+        // index into the stylesheet, 0x0FFF meaning "no parent".
         let stk = (stdf.get(2).copied().unwrap_or(1) & 0x0F).max(1);
         let w1 = stdf.get(2..4).map(|b| u16::from_le_bytes([b[0], b[1]])).unwrap_or(0xFFF1);
-        let _istd_next = w1 >> 4; // next-paragraph style; unused for now
+        let istd_base = w1 >> 4;
         let w2 = stdf.get(4..6).map(|b| u16::from_le_bytes([b[0], b[1]])).unwrap_or(0);
         let cupx = (w2 & 0x0F) as usize;
-        let istd_base = w2 >> 4;
+        let _istd_next = w2 >> 4; // next-paragraph style; unused for now
         let mut at = 2 + cb_std_base;
         // xstzName: Xst (cch u16 + UTF-16LE) + terminator u16.
         let mut name = String::new();
@@ -105,22 +105,25 @@ pub(crate) fn parse(table: &[u8], fc: u32, lcb: u32) -> Result<Vec<RawStyle>, Do
     Ok(out)
 }
 
-/// Font names from the `SttbfFfn` at `table[fc..fc+lcb]`: an STTB of FFN records. Extended
-/// tables carry a 2-byte length per record; non-extended ones rely on each FFN's NUL-
-/// terminated name ([MS-DOC] §2.9.243/§2.9.247).
+/// Font names from the `SttbfFfn` at `table[fc..fc+lcb]` ([MS-DOC] §2.9.286): an STTB
+/// (§2.2.4) whose entries are FFN records (§2.9.82). Each entry is a length (`cchData`: a
+/// one-byte byte count in the non-extended table the spec requires, a two-byte count of
+/// 16-bit units in an extended one) followed by the FFN, and that length alone decides where
+/// the next entry starts: an FFN ends with its primary name and an optional alternate name
+/// (`xszAlt`), so scanning for the primary name's terminator would land inside the latter.
 pub(crate) fn fonts(table: &[u8], fc: u32, lcb: u32) -> Vec<String> {
     let end = match (fc as usize).checked_add(lcb as usize) {
         Some(e) if e <= table.len() => e,
         _ => return Vec::new(),
     };
-    let sttb = &table[fc as usize..end];
-    let u16at = |o: usize| -> Option<u16> { sttb.get(o..o + 2).map(|b| u16::from_le_bytes([b[0], b[1]])) };
+    let Some(sttb) = table.get(fc as usize..end) else { return Vec::new() };
+    let u16at = |o: usize| -> Option<u16> { sttb.get(o..o.checked_add(2)?).map(|b| u16::from_le_bytes([b[0], b[1]])) };
     let Some(first) = u16at(0) else { return Vec::new() };
-    // FFN header: ffid(1) wWeight(2) ixchSzAlt(2) chs(1) panose(10) fs(24) = 40 bytes, then
-    // the name, NUL-terminated, as UTF-16LE in every extended table and in the Word 97 files
-    // we accept from non-extended ones.
+    // FFN: ffid(1) wWeight(2) chs(1) ixchSzAlt(1) panose(10) fs(24) = 39 bytes, then the
+    // primary name, NUL-terminated, as UTF-16LE in the Word 97 files we accept (8-bit names
+    // from older writers fall back to Windows-1252).
     let name_of = |ffn: &[u8]| -> String {
-        let tail = ffn.get(40.min(ffn.len())..).unwrap_or(&[]);
+        let tail = ffn.get(FFN_HEADER.min(ffn.len())..).unwrap_or(&[]);
         let units: Vec<u16> = tail.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).take_while(|&u| u != 0).take(64).collect();
         let s = String::from_utf16_lossy(&units);
         if s.chars().any(|c| c as u32 > 0x7F || c.is_ascii_graphic() || c == ' ') || s.is_empty() {
@@ -130,34 +133,27 @@ pub(crate) fn fonts(table: &[u8], fc: u32, lcb: u32) -> Vec<String> {
             tail.iter().take_while(|&&b| b != 0).take(64).map(|&b| wordcraft_doc::encoding::cp1252(b)).collect()
         }
     };
+    // STTB header: [fExtend 0xFFFF] cData(2) cbExtra(2); each entry is followed by cbExtra
+    // bytes (0 for font tables, but skip them if present).
+    let (extended, cdata, cb_extra, mut at) =
+        if first == 0xFFFF { (true, u16at(2).unwrap_or(0), u16at(4).unwrap_or(0), 6usize) } else { (false, first, u16at(2).unwrap_or(0), 4usize) };
     let mut out = Vec::new();
-    if first == 0xFFFF {
-        // Extended: fExtend, cbExtra, cData, then cbData + FFN + extra per record.
-        let cdata = u16at(4).unwrap_or(0).min(1024) as usize;
-        let mut at = 6usize;
-        for _ in 0..cdata {
-            let Some(cb) = u16at(at).map(|v| v as usize) else { break };
-            if let Some(ffn) = sttb.get(at + 2..at + 2 + cb) {
-                out.push(name_of(ffn));
-            }
-            at += 2 + cb;
-        }
-    } else {
-        // Non-extended: cData, cbExtra (0 for Ffn tables), then self-delimiting FFNs.
-        let cdata = first.min(1024) as usize;
-        let cb_extra = u16at(2).unwrap_or(0) as usize;
-        let mut at = 4usize;
-        for _ in 0..cdata {
-            let rest = sttb.get(at..).unwrap_or(&[]);
-            if rest.is_empty() {
-                break;
-            }
-            // The name ends at the UTF-16 NUL; keep a cap for hostile inputs.
-            let name_len = rest[40.min(rest.len())..].as_chunks::<2>().0.iter().position(|c| c == &[0, 0]).unwrap_or(64).saturating_mul(2);
-            let rec_len = 40 + name_len + 2;
-            out.push(name_of(rest));
-            at += rec_len + cb_extra;
-        }
+    for _ in 0..cdata.min(1024) {
+        let (len_bytes, cb) = if extended {
+            let Some(cb) = u16at(at) else { break };
+            (2usize, usize::from(cb).saturating_mul(2))
+        } else {
+            let Some(&cb) = sttb.get(at) else { break };
+            (1usize, usize::from(cb))
+        };
+        let start = at.saturating_add(len_bytes);
+        let stop = start.saturating_add(cb);
+        // A record cut short by the end of the table still yields what it holds.
+        out.push(name_of(sttb.get(start..stop.min(sttb.len())).unwrap_or(&[])));
+        at = stop.saturating_add(usize::from(cb_extra));
     }
     out
 }
+
+/// Bytes of an FFN before its primary name ([MS-DOC] §2.9.82).
+const FFN_HEADER: usize = 39;

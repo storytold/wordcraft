@@ -363,18 +363,24 @@ fn grpprl(prls: &[(u16, &[u8])]) -> Vec<u8> {
     v
 }
 
-/// One STD record (Word 97 shape, cbSTDBaseInFile = 10).
+/// One STD record (Word 97 shape, cbSTDBaseInFile = 10) with no next-paragraph style.
+/// `istd_base` is zero-based; 0x0FFF means no parent.
 fn std_bytes(stk: u8, istd_base: u16, name: &str, papx: &[u8], chpx: &[u8]) -> Vec<u8> {
+    std_bytes_next(stk, istd_base, 0x0FFF, name, papx, chpx)
+}
+
+/// One STD record with an explicit next-paragraph style ([MS-DOC] §2.9.260 StdfBase).
+fn std_bytes_next(stk: u8, istd_base: u16, istd_next: u16, name: &str, papx: &[u8], chpx: &[u8]) -> Vec<u8> {
     let cupx = if stk == 1 { 2 } else { 1 };
     let mut base = vec![0u8; 10];
     // sti 0xFFF (user-defined) | flags
     base[0] = 0xFF;
     base[1] = 0x0F;
-    // stk(4) | istdNext(12) = none (0xFFF)
-    base[2] = stk | 0xF0;
-    base[3] = 0xFF;
-    // cupx(4) | istdBase(12)
-    let w2 = (cupx as u16) | (istd_base << 4);
+    // stk(4) | istdBase(12)
+    let w1 = (stk as u16) | (istd_base << 4);
+    base[2..4].copy_from_slice(&w1.to_le_bytes());
+    // cupx(4) | istdNext(12)
+    let w2 = (cupx as u16) | (istd_next << 4);
     base[4..6].copy_from_slice(&w2.to_le_bytes());
     // bchUpe filled below; grfstd = 0
     let mut v = base;
@@ -422,14 +428,29 @@ fn stsh_bytes(styles: &[Vec<u8>]) -> Vec<u8> {
 
 /// A non-extended SttbfFfn of font names.
 fn ffn_bytes(names: &[&str]) -> Vec<u8> {
-    let mut v = (names.len() as u16).to_le_bytes().to_vec();
+    let fonts: Vec<(&str, Option<&str>)> = names.iter().map(|n| (*n, None)).collect();
+    ffn_bytes_alt(&fonts)
+}
+
+/// A non-extended SttbfFfn ([MS-DOC] §2.9.286): cData, cbExtra = 0, then per font a one-byte
+/// cchData and an FFN (39-byte header, NUL-terminated UTF-16 name, optional alternate name
+/// whose offset in characters is `ixchSzAlt`).
+fn ffn_bytes_alt(fonts: &[(&str, Option<&str>)]) -> Vec<u8> {
+    let utf16z = |s: &str| -> Vec<u8> { s.chars().chain(['\0']).flat_map(|c| (c as u16).to_le_bytes()).collect() };
+    let mut v = (fonts.len() as u16).to_le_bytes().to_vec();
     v.extend_from_slice(&0u16.to_le_bytes()); // cbExtra
-    for n in names {
-        v.extend_from_slice(&[0u8; 40]); // FFN header
-        for c in n.chars() {
-            v.extend_from_slice(&(c as u16).to_le_bytes());
+    for (name, alt) in fonts {
+        let mut ffn = vec![0u8; 39];
+        let primary = utf16z(name);
+        if alt.is_some() {
+            ffn[4] = (primary.len() / 2) as u8; // ixchSzAlt
         }
-        v.extend_from_slice(&0u16.to_le_bytes()); // NUL
+        ffn.extend_from_slice(&primary);
+        if let Some(a) = alt {
+            ffn.extend_from_slice(&utf16z(a));
+        }
+        v.push(ffn.len() as u8); // cchData
+        v.extend_from_slice(&ffn);
     }
     v
 }
@@ -499,12 +520,34 @@ struct RichSpec {
     papx_entries: Vec<(u32, u16, Vec<u8>)>,
 }
 
+/// Optional extras of a [`rich_doc`]: Prcs and the piece's Prm, alternate font names
+/// (parallel to `RichSpec::fonts`) and next-paragraph styles (parallel to `RichSpec::styles`).
+#[derive(Default)]
+struct RichExtra {
+    prcs: Vec<Vec<u8>>,
+    prm: u16,
+    alt_fonts: Vec<Option<&'static str>>,
+    style_next: Vec<u16>,
+}
+
 fn rich_doc(spec: &RichSpec) -> Vec<u8> {
+    rich_doc_with(spec, &RichExtra::default())
+}
+
+fn rich_doc_with(spec: &RichSpec, extra: &RichExtra) -> Vec<u8> {
     let text: String = spec.text.into();
     let ccp = text.chars().count() as u32;
-    let _ = &text;
-    let plc = plcpcd(&[Piece { compressed: false, text: text.clone() }], TEXT_FC);
-    let mut clx = vec![0x02u8];
+    let mut plc = plcpcd(&[Piece { compressed: false, text: text.clone() }], TEXT_FC);
+    // The single Pcd is last: its Prm is the final two bytes.
+    let n = plc.len();
+    plc[n - 2..].copy_from_slice(&extra.prm.to_le_bytes());
+    let mut clx = Vec::new();
+    for g in &extra.prcs {
+        clx.push(0x01u8);
+        clx.extend_from_slice(&(g.len() as u16).to_le_bytes());
+        clx.extend_from_slice(g);
+    }
+    clx.push(0x02u8);
     clx.extend_from_slice(&(plc.len() as u32).to_le_bytes());
     clx.extend_from_slice(&plc);
 
@@ -518,9 +561,15 @@ fn rich_doc(spec: &RichSpec) -> Vec<u8> {
     word.extend_from_slice(&papx_fkp(&spec.papx_entries));
 
     // Table: STSH | FFN | Clx | bin tables.
-    let styles: Vec<Vec<u8>> = spec.styles.iter().map(|s| std_bytes(s.0, s.1, s.2, &s.3, &s.4)).collect();
+    let styles: Vec<Vec<u8>> = spec
+        .styles
+        .iter()
+        .enumerate()
+        .map(|(i, s)| std_bytes_next(s.0, s.1, extra.style_next.get(i).copied().unwrap_or(0x0FFF), s.2, &s.3, &s.4))
+        .collect();
     let stsh = stsh_bytes(&styles);
-    let ffn = ffn_bytes(&spec.fonts);
+    let fonts: Vec<(&str, Option<&str>)> = spec.fonts.iter().enumerate().map(|(i, n)| (*n, extra.alt_fonts.get(i).copied().flatten())).collect();
+    let ffn = ffn_bytes_alt(&fonts);
     let clx_at = 0x40;
     let bins_at = clx_at + clx.len();
     let plcf_chpx =
@@ -564,7 +613,7 @@ fn para0(doc: &wordcraft_doc::Document) -> wordcraft_doc::Paragraph {
 fn character_formatting_applied() {
     let spec = RichSpec {
         text: "plain bold red\r",
-        styles: vec![(1, 0, "Normal", Vec::new(), Vec::new())],
+        styles: vec![(1, 0x0FFF, "Normal", Vec::new(), Vec::new())],
         fonts: vec!["Times New Roman", "Arial"],
         chpx_runs: vec![
             (0, Vec::new()),
@@ -588,8 +637,8 @@ fn font_and_size_from_style_and_direct() {
     let spec = RichSpec {
         text: "Hello\r",
         styles: vec![
-            (1, 0, "Normal", Vec::new(), grpprl(&[(0x4A43, &24u16.to_le_bytes())])), // 12pt
-            (2, 0, "Emphasis", Vec::new(), grpprl(&[(0x4A4F, &1u16.to_le_bytes())])), // Arial
+            (1, 0x0FFF, "Normal", Vec::new(), grpprl(&[(0x4A43, &24u16.to_le_bytes())])), // 12pt
+            (2, 0x0FFF, "Emphasis", Vec::new(), grpprl(&[(0x4A4F, &1u16.to_le_bytes())])), // Arial
         ],
         fonts: vec!["Times New Roman", "Arial"],
         chpx_runs: vec![(0, grpprl(&[(0x4A4F, &1u16.to_le_bytes())]))],
@@ -606,7 +655,7 @@ fn paragraph_props_and_heading_style() {
     let spec = RichSpec {
         text: "centered\rplain\r",
         styles: vec![
-            (1, 0, "Normal", Vec::new(), Vec::new()),
+            (1, 0x0FFF, "Normal", Vec::new(), Vec::new()),
             (1, 0, "heading 1", grpprl(&[(0x2461, &[0x01, 0x00])]), Vec::new()), // centered
         ],
         fonts: vec!["Times New Roman"],
@@ -772,7 +821,7 @@ fn struct_doc(spec: &StructSpec) -> Vec<u8> {
     table.extend_from_slice(&plcf_sed);
     let hdd_plc_at = table.len();
     table.extend_from_slice(&plcf_hdd);
-    let stsh = stsh_bytes(&[std_bytes(1, 0, "Normal", &Vec::new(), &Vec::new())]);
+    let stsh = stsh_bytes(&[std_bytes(1, 0x0FFF, "Normal", &Vec::new(), &Vec::new())]);
     let stsh_at = table.len();
     table.extend_from_slice(&stsh);
     let ffn = ffn_bytes(&["Times New Roman"]);
@@ -1575,4 +1624,152 @@ fn list_and_lfo_offsets_near_u32_max_are_safe() {
     let f = raw_piece_doc_with(&[0, 2], &[fc], b"a\r", 2, &[(73, far, 2), (74, far, 4)]);
     let doc = read(&f).expect("opens");
     assert!(doc.numbering.nums.is_empty());
+}
+
+/// A StructSpec with one section (`sepx`) over `text`, no lists, notes or extras.
+fn one_section(text: &'static str, sepx: Vec<u8>, papx_entries: Vec<(u32, u16, Vec<u8>)>) -> StructSpec {
+    StructSpec {
+        text,
+        header_stories: vec![],
+        sections: vec![(text.chars().count() as u32, sepx)],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries,
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    }
+}
+
+#[test]
+fn piece_prm_character_formatting_applied() {
+    // #458. Bit 0 of a Prm is fComplex ([MS-DOC] §2.9.215/§2.9.216): Prm0 = isprm in bits
+    // 1-7 plus a one-byte operand in bits 8-15 (isprm 0x55 is sprmCFBold); Prm1 = a
+    // zero-based Prc index in bits 1-15. Piece properties apply after the CHPX.
+    let bold = grpprl(&[(0x0835, &[0x01])]);
+    let prcs = vec![bold.clone(), [grpprl(&[(0x0836, &[0x01])]), bold.clone()].concat()];
+    let run = |prm: u16, chpx: Vec<u8>| {
+        let spec = RichSpec {
+            text: "Bold\r",
+            styles: vec![(1, 0x0FFF, "Normal", Vec::new(), Vec::new())],
+            fonts: vec!["Times New Roman"],
+            chpx_runs: vec![(0, chpx)],
+            papx_entries: vec![(0, 0, Vec::new())],
+        };
+        let doc = read(&rich_doc_with(&spec, &RichExtra { prcs: prcs.clone(), prm, ..Default::default() })).expect("opens");
+        let p = para0(&doc);
+        assert_eq!(p.text, "Bold");
+        p.runs.first().map(|r| (r.props.bold, r.props.italic)).unwrap_or_default()
+    };
+    assert_eq!(run(0x01AA, Vec::new()), (Some(true), None), "Prm0 bold on");
+    assert_eq!(run(0x0001, Vec::new()), (Some(true), None), "Prm1 → Prc 0 (bold)");
+    assert_eq!(run(0x0003, Vec::new()), (Some(true), Some(true)), "Prm1 → Prc 1 (italic + bold)");
+    assert_eq!(run(0x00AA, bold.clone()).0, Some(false), "Prm0 bold off overrides the CHPX");
+    assert_eq!(run(0x0000, Vec::new()), (None, None), "no Prm: plain");
+    assert_eq!(run(0x0000, bold).0, Some(true), "CHPX bold alone");
+}
+
+#[test]
+fn section_break_kinds_imported() {
+    // #459. SBkcOperand: 0 continuous, 1 new column, 2 new page, 3 even page, 4 odd page.
+    use wordcraft_doc::section::SectionStart;
+    let kinds = [SectionStart::Continuous, SectionStart::NextColumn, SectionStart::NextPage, SectionStart::EvenPage, SectionStart::OddPage];
+    for (bkc, want) in kinds.into_iter().enumerate() {
+        let spec = one_section("Text\r", grpprl(&[(0x3009, &[bkc as u8])]), vec![(0, 0, Vec::new())]);
+        let doc = read(&struct_doc(&spec)).expect("opens");
+        assert_eq!(doc.last_section.start, want, "sprmSBkc {bkc}");
+    }
+}
+
+#[test]
+fn explicit_section_orientation_imported() {
+    // #460. SBOrientationOperand ([MS-DOC] §2.9.236): 1 portrait, 2 landscape.
+    let page = |w: u16, h: u16, orient: Option<u8>| {
+        let mut prls: Vec<(u16, &[u8])> = Vec::new();
+        let (w, h) = (w.to_le_bytes(), h.to_le_bytes());
+        let o = orient.map(|o| [o]);
+        if let Some(o) = &o {
+            prls.push((0x301D, o));
+        }
+        prls.push((0xB01F, &w));
+        prls.push((0xB020, &h));
+        let doc = read(&struct_doc(&one_section("Text\r", grpprl(&prls), vec![(0, 0, Vec::new())]))).expect("opens");
+        (doc.last_section.landscape, doc.last_section.page_w, doc.last_section.page_h)
+    };
+    assert_eq!(page(12240, 15840, Some(1)), (false, 612.0, 792.0), "explicit portrait");
+    assert_eq!(page(15840, 12240, Some(2)), (true, 792.0, 612.0), "explicit landscape");
+    assert_eq!(page(12240, 15840, None), (false, 612.0, 792.0), "inferred portrait");
+    assert_eq!(page(15840, 12240, None), (true, 792.0, 612.0), "inferred landscape");
+}
+
+#[test]
+fn negative_list_reference_keeps_list_membership() {
+    // #461. sprmPIlfo 0xF802-0xFFFF is the negation of a 1-based LFO index whose paragraph
+    // keeps its own indents ([MS-DOC] §2.6.2); 0 and 0xF801 mean "not in a list".
+    let levels: Vec<Vec<u8>> = (0..9).map(|_| lvl(1, 0x00, &[0x0000, 0x002E], true)).collect();
+    let listed = |ilfo: u16| [grpprl(&[(0x260A, &[0x00]), (0x840F, &720u16.to_le_bytes())]), grpprl(&[(0x460B, &ilfo.to_le_bytes())])].concat();
+    let text = "pos\rneg\rzero\rnone\r";
+    let mut spec = one_section(text, Vec::new(), vec![(0, 0, listed(0x0001)), (4, 0, listed(0xFFFF)), (8, 0, listed(0)), (13, 0, listed(0xF801))]);
+    spec.plf_lst = plf_lst(0x1000, true, &levels[..1]);
+    spec.plf_lfo = plf_lfo(0x1000);
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let para = |i: usize| doc.body.get(i).and_then(|b| b.as_para()).map(|p| (p.props.numbering, p.props.indent_left)).unwrap_or_default();
+    let one = Some(wordcraft_doc::props::NumRef { num: 1, level: 0 });
+    assert_eq!(para(0), (one, Some(36.0)), "0x0001");
+    assert_eq!(para(1), (one, Some(36.0)), "0xFFFF = -1");
+    assert_eq!(para(2).0, None, "0");
+    assert_eq!(para(3).0, None, "0xF801");
+}
+
+#[test]
+fn style_inherits_its_declared_base() {
+    // #462. StdfBase ([MS-DOC] §2.9.260): stk + istdBase share the second word, cupx +
+    // istdNext the third; istdBase is zero-based. The next style must not affect the base.
+    for next in [0u16, 1, 2, 0x0FFF] {
+        let spec = RichSpec {
+            text: "Text\r",
+            styles: vec![
+                (1, 0x0FFF, "Normal", Vec::new(), grpprl(&[(0x0835, &[0x01])])), // bold
+                (1, 0, "Derived", Vec::new(), Vec::new()),
+                (1, 1, "Grandchild", Vec::new(), grpprl(&[(0x0836, &[0x01])])), // italic
+                // A corrupt cycle must neither hang nor crash.
+                (1, 4, "Loop A", Vec::new(), Vec::new()),
+                (1, 3, "Loop B", Vec::new(), Vec::new()),
+            ],
+            fonts: vec!["Times New Roman"],
+            chpx_runs: vec![(0, Vec::new())],
+            papx_entries: vec![(0, 1, Vec::new())],
+        };
+        let extra = RichExtra { style_next: vec![0x0FFF, next, 0x0FFF, 0x0FFF, 0x0FFF], ..Default::default() };
+        let doc = read(&rich_doc_with(&spec, &extra)).expect("opens");
+        let style = |name: &str| doc.styles.styles.iter().find(|s| s.name == name).cloned().expect("style");
+        let derived = style("Derived");
+        assert_eq!(derived.based_on.as_deref(), Some("Normal"), "next {next}");
+        assert_eq!(derived.chr.bold, Some(true), "next {next}");
+        let grand = style("Grandchild");
+        assert_eq!(grand.based_on.as_deref(), Some("Derived"));
+        assert_eq!((grand.chr.bold, grand.chr.italic), (Some(true), Some(true)), "two-level chain");
+        assert_eq!(style("Normal").based_on, None);
+        assert_eq!(para0(&doc).props.style.as_deref(), Some("Derived"));
+    }
+}
+
+#[test]
+fn alternate_font_name_keeps_later_entries() {
+    // #463. An STTB entry's length is its cchData ([MS-DOC] §2.2.4), which covers the FFN's
+    // optional alternate name (§2.9.82 xszAlt); the next entry starts after it.
+    for alt in [None, Some("ArialMT")] {
+        let spec = RichSpec {
+            text: "ab\r",
+            styles: vec![(1, 0x0FFF, "Normal", Vec::new(), Vec::new())],
+            fonts: vec!["Arial", "Courier New"],
+            chpx_runs: vec![(0, grpprl(&[(0x4A4F, &0u16.to_le_bytes())])), (1, grpprl(&[(0x4A4F, &1u16.to_le_bytes())]))],
+            papx_entries: vec![(0, 0, Vec::new())],
+        };
+        let doc = read(&rich_doc_with(&spec, &RichExtra { alt_fonts: vec![alt, None], ..Default::default() })).expect("opens");
+        let fonts: Vec<Option<String>> = para0(&doc).runs.iter().map(|r| r.props.font.clone()).collect();
+        assert_eq!(fonts, [Some("Arial".to_string()), Some("Courier New".to_string())], "alt {alt:?}");
+    }
 }

@@ -100,13 +100,20 @@ impl PieceTable {
         Ok(PieceTable { cps, pieces, prc_grpprls })
     }
 
-    /// The Prls this piece's `Prm` adds: Prm0 holds one short sprm (isprm, val), Prm1
-    /// references a grpprl from one of the Clx's Prcs ([MS-DOC] Prm).
+    /// The Prls this piece's `Prm` adds. Bit 0 (`fComplex`) discriminates: a Prm0
+    /// ([MS-DOC] §2.9.215) holds a 7-bit `isprm` in bits 1-7 and its one-byte operand in
+    /// bits 8-15; a Prm1 (§2.9.216) holds a zero-based index into the Clx's Prcs in bits
+    /// 1-15.
     pub(crate) fn piece_prm(&self, cp: u32) -> PrmRef<'_> {
-        match self.piece_of(cp) {
-            Some(p) if p.prm & 0x8000 == 0 && (p.prm & 0x7F) != 0 => PrmRef::Sprm0 { isprm: (p.prm & 0x7F) as u8, val: (p.prm >> 8) as u8 },
-            Some(p) if p.prm & 0x8000 != 0 => PrmRef::Grpprl(self.prc_grpprls.get((p.prm & 0x7FFF) as usize).map(|v| v.as_slice())),
-            _ => PrmRef::None,
+        let Some(p) = self.piece_of(cp) else { return PrmRef::None };
+        if p.prm & 1 == 0 {
+            let isprm = ((p.prm >> 1) & 0x7F) as u8;
+            if isprm == 0 {
+                return PrmRef::None;
+            }
+            PrmRef::Sprm0 { isprm, val: (p.prm >> 8) as u8 }
+        } else {
+            PrmRef::Grpprl(self.prc_grpprls.get((p.prm >> 1) as usize).map(|v| v.as_slice()))
         }
     }
 
