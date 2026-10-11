@@ -31,6 +31,7 @@ js-sys = "0.3"
 
 [dev-dependencies]
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
+zip = { workspace = true }
 
 [build-dependencies]
 serde_json = { workspace = true }

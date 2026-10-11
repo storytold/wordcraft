@@ -1081,6 +1081,8 @@
 	Type at least one recipient.	宛先を1件以上入力してください。
 	Type the recipients, or load them from a file.	宛先を入力するか、ファイルから読み込みます。
 	Use an Existing List…	既存のリストを使用…
+	Choose the sheet that holds the recipients.	宛先が入っているシートを選んでください。
+	First row of data contains column headers	データの先頭行を列見出しとして使う
 	Interface theme:	表示テーマ:
 	Interface\nTheme	表示テーマ
 	Interface Theme	表示テーマ

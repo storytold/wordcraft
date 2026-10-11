@@ -1082,6 +1082,8 @@
 	Type at least one recipient.	請至少輸入一位收件者。
 	Type the recipients, or load them from a file.	輸入收件者，或從檔案載入。
 	Use an Existing List…	使用現有清單…
+	Choose the sheet that holds the recipients.	選擇包含收件者的工作表。
+	First row of data contains column headers	資料第一列包含欄標題
 	Interface theme:	介面主題：
 	Interface\nTheme	介面主題
 	Interface Theme	介面主題

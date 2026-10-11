@@ -1093,6 +1093,8 @@
 	Type at least one recipient.	Digite pelo menos um destinatário.
 	Type the recipients, or load them from a file.	Digite os destinatários ou carregue-os de um arquivo.
 	Use an Existing List…	Usar uma lista existente…
+	Choose the sheet that holds the recipients.	Escolha a planilha que contém os destinatários.
+	First row of data contains column headers	A primeira linha de dados contém cabeçalhos de coluna
 	Interface theme:	Tema da interface:
 	Interface\nTheme	Tema da\ninterface
 	Interface Theme	Tema da interface

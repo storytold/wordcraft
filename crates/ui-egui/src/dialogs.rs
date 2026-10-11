@@ -2,7 +2,7 @@
 //! Word Count, Zoom, Watermark, New/Modify Style, Manage Styles, New/Modify Table Style, Table
 //! Properties, Command search, Paste Special, About, Save Changes, the password to open a
 //! document and Encrypt with Password, and the mail-merge Recipient List, Insert Merge Field, Find
-//! Recipient, merge rules, Match Fields and Check for Errors. Every dialog ends by running a
+//! Recipient, merge rules, Match Fields, Check for Errors and Select Table (a workbook's sheet). Every dialog ends by running a
 //! command (or shows one's result), so agents get the same result without the dialog.
 
 use egui::{Sense, Ui, vec2};
@@ -182,6 +182,17 @@ pub enum Dialog {
         fields: Vec<String>,
         rows: Vec<Vec<String>>,
         message: String,
+    },
+    /// Mailings › Select Recipients › Use an Existing List… picked a workbook with several sheets
+    /// (#334): which sheet holds the recipients, and whether its first row names the fields.
+    /// OK runs `mailings.recipients` with `params` (the file) plus `sheet` and `headers`.
+    SelectTable {
+        sheets: Vec<String>,
+        selected: usize,
+        headers: bool,
+        message: String,
+        #[serde(skip)]
+        params: Value,
     },
     /// Mailings › Insert Merge Field: one of the recipient list's fields (or a typed name).
     InsertMergeField {
@@ -639,6 +650,7 @@ impl Dialog {
             Dialog::About { .. } => "about",
             Dialog::SaveChanges { .. } => "saveChanges",
             Dialog::RecipientList { .. } => "recipientList",
+            Dialog::SelectTable { .. } => "selectTable",
             Dialog::InsertMergeField { .. } => "insertMergeField",
             Dialog::FindRecipient { .. } => "findRecipient",
             Dialog::MergeRule { rule, .. } if rule == "SKIPIF" => "ruleSkipIf",
@@ -927,6 +939,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::About { .. } => "About WordCraft",
         Dialog::SaveChanges { .. } => "WordCraft",
         Dialog::RecipientList { .. } => "Recipient List",
+        Dialog::SelectTable { .. } => "Select Table",
         Dialog::InsertMergeField { .. } => "Insert Merge Field",
         Dialog::FindRecipient { .. } => "Find Recipient",
         Dialog::MergeRule { rule, .. } if rule == "SKIPIF" => "Skip Record If",
@@ -1779,6 +1792,41 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         }
         Dialog::DefineList { form } => crate::dialogs_lists::define_list(app, ui, form),
         Dialog::TrackOptions { form } => crate::dialogs_lists::track_options(app, ui, form),
+        Dialog::SelectTable { sheets, selected, headers, message, params } => {
+            ui.label(tl!("Choose the sheet that holds the recipients."));
+            ui.add_space(4.0);
+            // A double-click picks the sheet as OK does.
+            let mut picked = false;
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.set_min_width(300.0);
+                egui::ScrollArea::vertical().id_salt("select_table").max_height(220.0).show(ui, |ui| {
+                    for (i, name) in sheets.iter().enumerate() {
+                        let r = ui.selectable_label(*selected == i, name.as_str());
+                        if r.clicked() || r.double_clicked() {
+                            *selected = i;
+                        }
+                        picked |= r.double_clicked();
+                    }
+                });
+            });
+            ui.checkbox(headers, tl!("First row of data contains column headers"));
+            if !message.is_empty() {
+                ui.label(egui::RichText::new(message.as_str()).color(Tokens::get(ui.ctx()).red));
+            }
+            let (ok, cancel) = buttons(ui, tl!("OK"));
+            if ok || picked {
+                let mut p = params.clone();
+                if let Some(o) = p.as_object_mut() {
+                    o.insert("sheet".into(), json!(*selected + 1));
+                    o.insert("headers".into(), json!(*headers));
+                }
+                match app.load_recipients(p) {
+                    Ok(_) => return true,
+                    Err(e) => *message = e,
+                }
+            }
+            cancel
+        }
         Dialog::FindRecipient { text, message } => {
             ui.horizontal(|ui| {
                 ui.label(tl!("Find:"));

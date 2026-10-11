@@ -1,5 +1,5 @@
-//! Mailings tab: mail merge (recipients from CSV/JSON, merge fields, preview, finish), envelopes
-//! and labels.
+//! Mailings tab: mail merge (recipients from CSV/JSON or an Excel/OpenDocument spreadsheet,
+//! merge fields, preview, finish), envelopes and labels.
 
 use serde_json::{Value, json};
 use wordcraft_doc::para::InlineObject;
@@ -47,7 +47,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"kind": "letters|emails|envelopes|labels|directory|normal"}"#)
         .pure(),
         CommandSpec::new("mailings.recipients", "Select Recipients", "Mailings › Start Mail Merge", recipients)
-            .params(r#"{"csv"?: string, "path"?: string, "rows"?: [{field: value}] | [[value]], "fields"?: [string] (column order; required with array rows)}"#)
+            .params(r#"{"csv"?: string, "path"?: string (.csv/.tsv/.txt, or a .xlsx/.xlsm/.ods workbook), "data"?: base64 (a file's bytes, as for path), "sheet"?: name | number (1 = first; a workbook with several sheets and no sheet answers {"sheets": [...], "chooseSheet": true} and loads nothing), "headers"?: bool (default true: the first non-blank row names the fields; false: fields are Column 1…N), "rows"?: [{field: value}] | [[value]], "fields"?: [string] (column order; required with array rows)}"#)
             .pure(),
         CommandSpec::new("mailings.editRecipients", "Edit Recipient List", "Mailings › Start Mail Merge", |s, v| {
             if v.get("rows").and_then(Value::as_array).is_some() {
@@ -244,37 +244,99 @@ fn table_from_rows(fields: Option<&Vec<Value>>, arr: &[Value]) -> Result<(Vec<St
 }
 
 fn recipients(s: &mut Session, v: &Value) -> CmdResult {
+    let mut sheet = Value::Null;
     let (headers, rows) = if let Some(arr) = v.get("rows").and_then(Value::as_array) {
         table_from_rows(v.get("fields").and_then(Value::as_array), arr)?
     } else {
-        let text = if let Some(c) = p::str(v, "csv") {
-            c.to_string()
-        } else if let Some(path) = p::str(v, "path") {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                let b = std::fs::read(path).map_err(|e| CmdError::Failed(format!("{path}: {e}")))?;
-                crate::io::decode_text(&b)
-            }
-            #[cfg(target_arch = "wasm32")]
-            {
-                let _ = path;
-                return Err(CmdError::Failed("paths aren't available on the web".into()));
-            }
+        let all = if let Some(c) = p::str(v, "csv") {
+            parse_csv(c)
         } else {
-            return Err(CmdError::Params("`csv`, `path` or `rows` required".into()));
+            let (bytes, ext) = if let Some(d) = p::str(v, "data") {
+                let b = super::insert::base64_decode(d.trim()).ok_or_else(|| CmdError::Params("`data` isn't valid base64".into()))?;
+                (b, p::str(v, "path").and_then(extension))
+            } else if let Some(path) = p::str(v, "path") {
+                (read_file(path)?, extension(path))
+            } else {
+                return Err(CmdError::Params("`csv`, `path`, `data` or `rows` required".into()));
+            };
+            let spreadsheet =
+                ext.as_deref().is_some_and(wordcraft_formats::sheet::is_extension) || wordcraft_formats::sheet::detect(&bytes).is_some();
+            if spreadsheet {
+                use wordcraft_formats::sheet::{Pick, read_rows, sheet_names};
+                let pick = match v.get("sheet") {
+                    Some(Value::String(n)) => Pick::Name(n.as_str()),
+                    Some(x) if x.as_u64().is_some_and(|n| n >= 1) => {
+                        Pick::Index(usize::try_from(x.as_u64().unwrap_or(1).saturating_sub(1)).unwrap_or(usize::MAX))
+                    }
+                    Some(Value::Null) | None => {
+                        let names = sheet_names(&bytes).map_err(CmdError::Failed)?;
+                        if names.len() > 1 {
+                            return Ok(json!({"sheets": names, "chooseSheet": true}));
+                        }
+                        Pick::Index(0)
+                    }
+                    Some(_) => return Err(CmdError::Params("`sheet` must be a sheet name or number".into())),
+                };
+                let (names, rows) = read_rows(&bytes, pick).map_err(CmdError::Failed)?;
+                let chosen = match pick {
+                    Pick::Index(i) => names.get(i).cloned(),
+                    Pick::Name(n) => {
+                        names.iter().find(|s| s.as_str() == n).or_else(|| names.iter().find(|s| s.eq_ignore_ascii_case(n.trim()))).cloned()
+                    }
+                };
+                sheet = json!(chosen);
+                rows
+            } else {
+                parse_csv(&crate::io::decode_text(&bytes))
+            }
         };
-        let mut all = parse_csv(&text);
-        if all.is_empty() {
-            return Err(CmdError::Failed("the recipient list is empty".into()));
-        }
-        let headers: Vec<String> = all.remove(0).into_iter().map(|h| h.trim().to_string()).collect();
-        (headers, all)
+        header_split(all, p::bool(v, "headers").unwrap_or(true))?
     };
     s.merge.headers = headers;
     s.merge.rows = rows;
     s.merge.record = 0;
     refresh(s);
-    Ok(json!({"fields": s.merge.headers, "records": s.merge.rows.len()}))
+    let mut r = json!({"fields": s.merge.headers, "records": s.merge.rows.len()});
+    if !sheet.is_null() {
+        r["sheet"] = sheet;
+    }
+    Ok(r)
+}
+
+/// A file's extension, lower case.
+fn extension(path: &str) -> Option<String> {
+    std::path::Path::new(path).extension().map(|e| e.to_string_lossy().to_ascii_lowercase())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_file(path: &str) -> Result<Vec<u8>, CmdError> {
+    std::fs::read(path).map_err(|e| CmdError::Failed(format!("{path}: {e}")))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn read_file(_path: &str) -> Result<Vec<u8>, CmdError> {
+    Err(CmdError::Failed("paths aren't available on the web; pass `data`".into()))
+}
+
+/// Field names and records from a table's rows: with `headers`, the first row names the fields
+/// (blank names become `Column N`, repeats are numbered); otherwise every row is a record and
+/// the fields are `Column 1`…`Column N`. Records are padded or cut to the fields, and capped.
+fn header_split(mut all: Vec<Vec<String>>, headers: bool) -> Result<(Vec<String>, Vec<Vec<String>>), CmdError> {
+    if all.is_empty() {
+        return Err(CmdError::Failed("the recipient list is empty".into()));
+    }
+    let fields = if headers {
+        let first = all.remove(0);
+        wordcraft_formats::sheet::field_names(&first[..first.len().min(MAX_FIELDS)])
+    } else {
+        let width = all.iter().map(Vec::len).max().unwrap_or(0).min(MAX_FIELDS);
+        (1..=width).map(|i| format!("Column {i}")).collect()
+    };
+    all.truncate(MAX_RECORDS);
+    for r in &mut all {
+        r.resize(fields.len(), String::new());
+    }
+    Ok((fields, all))
 }
 
 fn step(s: &mut Session, d: i64) -> CmdResult {
@@ -603,6 +665,41 @@ mod tests {
     }
 
     /// A typed list (#240) keeps its column order, and rows may be arrays in that order.
+    #[test]
+    fn recipients_from_a_workbook_ask_for_the_sheet_when_there_are_several() {
+        use std::io::Write;
+        let cell = |t: &str| format!(r#"<table:table-cell office:value-type="string"><text:p>{t}</text:p></table:table-cell>"#);
+        let row = |cells: &[&str]| format!("<table:table-row>{}</table:table-row>", cells.iter().map(|c| cell(c)).collect::<String>());
+        let content = format!(
+            r#"<office:document-content xmlns:office="o" xmlns:table="t" xmlns:text="x"><office:body><office:spreadsheet><table:table table:name="Notes">{}</table:table><table:table table:name="Guests">{}{}{}</table:table></office:spreadsheet></office:body></office:document-content>"#,
+            row(&["n"]),
+            row(&["Name", "", "Name"]),
+            row(&["Ada", "London", "A"]),
+            row(&["Alan", "Wilmslow", "B"]),
+        );
+        let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, body) in [("mimetype", "application/vnd.oasis.opendocument.spreadsheet"), ("content.xml", content.as_str())] {
+            z.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            z.write_all(body.as_bytes()).unwrap();
+        }
+        let data = super::super::insert::base64_encode(&z.finish().unwrap().into_inner());
+        let mut s = Session::new(Document::new());
+        // Two sheets and none chosen: the names come back and nothing loads.
+        let r = s.run("mailings.recipients", &json!({"data": data})).unwrap();
+        assert_eq!(r, json!({"sheets": ["Notes", "Guests"], "chooseSheet": true}));
+        assert!(s.merge.headers.is_empty());
+        let r = s.run("mailings.recipients", &json!({"data": data, "sheet": "guests"})).unwrap();
+        assert_eq!(r, json!({"fields": ["Name", "Column 2", "Name 2"], "records": 2, "sheet": "Guests"}));
+        assert_eq!(s.merge.rows[1], ["Alan", "Wilmslow", "B"]);
+        // Without a header row every row is a record.
+        let r = s.run("mailings.recipients", &json!({"data": data, "sheet": 2, "headers": false})).unwrap();
+        assert_eq!(r["fields"], json!(["Column 1", "Column 2", "Column 3"]));
+        assert_eq!(r["records"], 3);
+        assert!(s.run("mailings.recipients", &json!({"data": data, "sheet": 3})).is_err());
+        assert!(s.run("mailings.recipients", &json!({"data": data, "sheet": 0})).is_err());
+        assert!(s.run("mailings.recipients", &json!({"data": "%%%"})).is_err());
+    }
+
     #[test]
     fn recipients_from_fields_and_array_rows() {
         let mut s = Session::new(Document::new());

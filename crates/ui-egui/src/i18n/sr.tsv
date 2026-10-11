@@ -1157,6 +1157,8 @@
 	Type at least one recipient.	Унесите бар једног примаоца.
 	Type the recipients, or load them from a file.	Унесите примаоце или их учитајте из фајла.
 	Use an Existing List…	Користи постојећу листу…
+	Choose the sheet that holds the recipients.	Изаберите лист на коме су примаоци.
+	First row of data contains column headers	Први ред података садржи заглавља колона
 	A file dialog is already open.	Дијалог за фајлове је већ отворен.
 	Height:	Висина:
 	Width:	Ширина:
