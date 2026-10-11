@@ -1312,3 +1312,77 @@
 	Flip Vertical	垂直翻轉
 	Flip Horizontal	水平翻轉
 	Formatted	已設定格式
+
+# Compare / Combine, AutoCorrect Options and Restrict Editing (#412)
+	1. Formatting restrictions	1. 格式設定限制
+	2. Editing restrictions	2. 編輯限制
+	3. Start enforcement	3. 開始保護
+	<< Less	<< 較少
+	Another file	其他檔案
+	Apply as you type	輸入時套用
+	AutoCorrect	自動校正
+	AutoFormat As You Type	輸入時自動格式設定
+	Automatic bulleted lists	自動項目符號清單
+	Automatic numbered lists	自動編號清單
+	Border lines	框線
+	Capitalize first letter of sentences	句首字母大寫
+	Capitalize first letter of table cells	表格儲存格首字母大寫
+	Capitalize names of days	星期名稱首字母大寫
+	Case changes	大小寫變更
+	Character level	字元層級
+	Checked styles are allowed:	勾選的樣式可以使用:
+	Combine Documents	合併文件
+	Compare Documents	比較文件
+	Compared: {changes} changes	已比較: {changes} 處變更
+	Comparing with another file needs the desktop app.	與其他檔案比較需要桌面版應用程式。
+	Comparison settings	比較設定
+	Don't capitalize after:	不在以下內容後大寫:
+	Editing in this document is restricted.	此文件的編輯受到限制。
+	Every change is recorded as a tracked change.	每項變更都會記錄為追蹤修訂。
+	Everyone	所有人
+	Exceptions (optional)	例外狀況 (選用)
+	Exceptions…	例外狀況…
+	Fields	功能變數
+	Filling in forms	填寫表單
+	Find Next Editable Region	尋找下一個可編輯區域
+	Footnotes and endnotes	註腳和章節附註
+	Formatting, case changes, white space and tables are compared; the other settings are kept for later.	會比較格式、大小寫、空白和表格；其他設定留待日後支援。
+	Fractions (1/2) as fraction characters (½)	分數 (1/2) 取代為分數字元 (½)
+	Headers and footers	頁首及頁尾
+	Hyphens (--) as dashes (—)	連字號 (--) 取代為破折號 (—)
+	In equations, typing a name after a backslash replaces it with its symbol.	在方程式中，於反斜線後輸入名稱會取代為對應符號。
+	Internet addresses as links	網際網路位址取代為連結
+	Label changes with:	變更標記為:
+	Limit formatting to a selection of styles	限制格式為選取的樣式
+	Math AutoCorrect	數學自動校正
+	More >>	更多 >>
+	Moves	移動
+	New document	新文件
+	No changes (read only)	不允許任何變更 (唯讀)
+	Only allow this kind of editing:	僅允許此類編輯:
+	Only comments can be added, except in regions marked editable.	只能新增註解，標示為可編輯的區域除外。
+	Only form fields can be filled in.	只能填寫表單欄位。
+	Only the allowed styles can be applied.	只能套用允許的樣式。
+	Ordinals (1st) as superscript	序數 (1st) 取代為上標
+	Original document	原始文件
+	Protection stopped. The document's password uses an older form WordCraft can't check.	已停止保護。此文件的密碼採用 WordCraft 無法驗證的舊格式。
+	Replace as you type	輸入時自動取代
+	Replace text as you type	輸入時自動取代文字
+	Replace:	取代:
+	Revised document	修訂的文件
+	Select text, then tick who can still edit it.	選取文字，然後勾選仍可編輯的人。
+	Settings…	設定…
+	Show changes at:	顯示變更的層級:
+	Show changes in:	顯示變更於:
+	Smart quotes instead of straight quotes	以彎引號取代直引號
+	Start Enforcing Protection	開始強制保護
+	Stop Protection	停止保護
+	Text boxes	文字方塊
+	The document is read only, except for regions marked editable.	文件為唯讀，標示為可編輯的區域除外。
+	The password is optional; without it anyone can stop the protection.	密碼為選用；沒有密碼，任何人都能停止保護。
+	This document	此文件
+	Tracked changes	追蹤修訂
+	Type the password to stop the protection.	輸入密碼以停止保護。
+	White space	空白
+	With:	取代為:
+	Word level	字組層級

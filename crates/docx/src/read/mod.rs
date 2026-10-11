@@ -49,6 +49,8 @@ pub(crate) struct Reader<'p> {
     pub comment_map: HashMap<String, u32>,
     pub comments_ended: HashSet<u32>,
     pub bookmarks: HashMap<String, String>,
+    /// Restrict Editing exception ranges (`w:permStart`): the file's id → ours.
+    pub perms: HashMap<String, u32>,
     /// Chart and diagram parts by path, parsed once.
     graphic_parts: HashMap<String, Option<Arc<El>>>,
     /// Charts and diagrams by (kind, part path, width bits, height bits), built once.
@@ -106,6 +108,7 @@ pub(crate) fn read_package(bytes: &[u8]) -> Result<Document, DocxError> {
         comment_map: HashMap::new(),
         comments_ended: HashSet::new(),
         bookmarks: HashMap::new(),
+        perms: HashMap::new(),
         graphic_parts: HashMap::new(),
         graphics: HashMap::new(),
         graphic_budget: MAX_GRAPHIC_WORK,
@@ -474,6 +477,7 @@ impl Reader<'_> {
                 quick: flag(s, "w:qFormat").unwrap_or(false),
                 hidden: flag(s, "w:semiHidden").unwrap_or(false) || flag(s, "w:hidden").unwrap_or(false),
                 builtin: !s.attr("w:customStyle").is_some_and(|v| v == "1" || v == "true"),
+                locked: flag(s, "w:locked").unwrap_or(false),
                 ..Default::default()
             };
             if let Some(p) = s.child("w:pPr") {
@@ -700,12 +704,7 @@ impl Reader<'_> {
                         s.endnote_format = NumFormat::from_ooxml(f);
                     }
                 }
-                "w:documentProtection" => {
-                    let enforced = k.attr("w:enforcement").is_some_and(|v| !matches!(v, "0" | "false" | "off"));
-                    if enforced && let Some(e) = k.attr("w:edit") {
-                        s.protection = Some(e.to_string());
-                    }
-                }
+                "w:documentProtection" => read_protection(k, s),
                 _ => {}
             }
         }
@@ -832,4 +831,47 @@ impl Reader<'_> {
 
 fn default_level(i: usize) -> Level {
     Level { indent: 36.0 * (i as f32 + 1.0), text: String::new(), ..Level::default() }
+}
+
+/// The password hash attributes of `w:documentProtection` that are kept (ECMA-376 §17.15.1.29:
+/// the current `algorithmName`/`hashValue`/`saltValue`/`spinCount`, and the older transitional
+/// `crypt*`/`hash`/`salt` set).
+pub(crate) const PROTECTION_HASH_ATTRS: [&str; 16] = [
+    "w:algorithmName",
+    "w:hashValue",
+    "w:saltValue",
+    "w:spinCount",
+    "w:cryptProviderType",
+    "w:cryptAlgorithmClass",
+    "w:cryptAlgorithmType",
+    "w:cryptAlgorithmSid",
+    "w:cryptSpinCount",
+    "w:cryptProvider",
+    "w:algIdExt",
+    "w:algIdExtSource",
+    "w:cryptProviderTypeExt",
+    "w:cryptProviderTypeExtSource",
+    "w:hash",
+    "w:salt",
+];
+
+/// Restrict Editing (`w:documentProtection`, §17.15.1.29): the editing restriction, whether
+/// formatting is limited to unlocked styles, and the password hash. Only enforced protection is
+/// kept; a hostile attribute value can't be longer than a hash needs.
+fn read_protection(k: &El, s: &mut wordcraft_doc::Settings) {
+    let on = |v: &str| !matches!(v, "0" | "false" | "off");
+    if !k.attr("w:enforcement").is_some_and(on) {
+        return;
+    }
+    let edit = k.attr("w:edit").filter(|e| matches!(*e, "readOnly" | "comments" | "trackedChanges" | "forms"));
+    let formatting = k.attr("w:formatting").is_some_and(on);
+    if edit.is_none() && !formatting {
+        return;
+    }
+    s.protection = Some(edit.unwrap_or("none").to_string());
+    s.protect_formatting = formatting;
+    s.protect_hash = PROTECTION_HASH_ATTRS
+        .iter()
+        .filter_map(|n| k.attr(n).filter(|v| !v.is_empty() && v.len() <= 1024).map(|v| (n.to_string(), v.to_string())))
+        .collect();
 }

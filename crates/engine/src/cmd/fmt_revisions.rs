@@ -182,6 +182,13 @@ pub(crate) fn record(s: &mut Session, id: &str, before: &Document) {
     }
 }
 
+/// Compare Documents: record how paragraph `new` (the revised version, same text) is formatted
+/// differently from `old` as tracked formatting changes by `author`.
+pub(crate) fn compare_formatting(old: &Paragraph, new: &mut Paragraph, revisions: &mut Vec<Revision>, author: &str, date: &str) {
+    let mut r = Recorder { author: author.to_string(), date: date.to_string(), before: &[], revisions, rid: None };
+    r.para(old, new);
+}
+
 /// The properties a change sets, as the Style Inspector lists them: `[{"prop", "value"}]` in
 /// field order; a switch turned off is `false`, a value removed is `null`.
 pub fn diff<T: Serialize>(old: &T, new: &T) -> Vec<Value> {

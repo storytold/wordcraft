@@ -1322,3 +1322,77 @@
 	Flip Vertical	垂直翻转
 	Flip Horizontal	水平翻转
 	Formatted	已设置格式
+
+# Compare / Combine, AutoCorrect Options and Restrict Editing (#412)
+	1. Formatting restrictions	1. 格式限制
+	2. Editing restrictions	2. 编辑限制
+	3. Start enforcement	3. 启动保护
+	<< Less	<< 更少
+	Another file	其他文件
+	Apply as you type	键入时应用
+	AutoCorrect	自动更正
+	AutoFormat As You Type	键入时自动套用格式
+	Automatic bulleted lists	自动项目符号列表
+	Automatic numbered lists	自动编号列表
+	Border lines	边框线
+	Capitalize first letter of sentences	句首字母大写
+	Capitalize first letter of table cells	表格单元格首字母大写
+	Capitalize names of days	星期名称首字母大写
+	Case changes	大小写更改
+	Character level	字符级
+	Checked styles are allowed:	选中的样式允许使用:
+	Combine Documents	合并文档
+	Compare Documents	比较文档
+	Compared: {changes} changes	已比较: {changes} 处更改
+	Comparing with another file needs the desktop app.	与其他文件比较需要桌面版应用。
+	Comparison settings	比较设置
+	Don't capitalize after:	不在以下内容后大写:
+	Editing in this document is restricted.	此文档的编辑受到限制。
+	Every change is recorded as a tracked change.	每处更改都会作为修订记录。
+	Everyone	每个人
+	Exceptions (optional)	例外项(可选)
+	Exceptions…	例外项…
+	Fields	域
+	Filling in forms	填写窗体
+	Find Next Editable Region	查找下一个可编辑区域
+	Footnotes and endnotes	脚注和尾注
+	Formatting, case changes, white space and tables are compared; the other settings are kept for later.	会比较格式、大小写、空白和表格；其他设置留待以后支持。
+	Fractions (1/2) as fraction characters (½)	分数 (1/2) 替换为分数字符 (½)
+	Headers and footers	页眉和页脚
+	Hyphens (--) as dashes (—)	连字符 (--) 替换为破折号 (—)
+	In equations, typing a name after a backslash replaces it with its symbol.	在公式中，在反斜杠后键入名称会将其替换为相应符号。
+	Internet addresses as links	Internet 地址替换为链接
+	Label changes with:	修订者标记:
+	Limit formatting to a selection of styles	将格式限制为所选样式
+	Math AutoCorrect	数学符号自动更正
+	More >>	更多 >>
+	Moves	移动
+	New document	新文档
+	No changes (read only)	不允许任何更改(只读)
+	Only allow this kind of editing:	仅允许此类编辑:
+	Only comments can be added, except in regions marked editable.	只能添加批注，标记为可编辑的区域除外。
+	Only form fields can be filled in.	只能填写窗体域。
+	Only the allowed styles can be applied.	只能应用允许的样式。
+	Ordinals (1st) as superscript	序数 (1st) 替换为上标
+	Original document	原文档
+	Protection stopped. The document's password uses an older form WordCraft can't check.	已停止保护。此文档的密码采用 WordCraft 无法验证的旧格式。
+	Replace as you type	键入时自动替换
+	Replace text as you type	键入时自动替换文本
+	Replace:	替换:
+	Revised document	修订的文档
+	Select text, then tick who can still edit it.	选择文本，然后勾选仍可编辑它的人。
+	Settings…	设置…
+	Show changes at:	显示修订的级别:
+	Show changes in:	修订的显示位置:
+	Smart quotes instead of straight quotes	以弯引号替换直引号
+	Start Enforcing Protection	启动强制保护
+	Stop Protection	停止保护
+	Text boxes	文本框
+	The document is read only, except for regions marked editable.	文档为只读，标记为可编辑的区域除外。
+	The password is optional; without it anyone can stop the protection.	密码是可选的；没有密码，任何人都可以停止保护。
+	This document	此文档
+	Tracked changes	修订
+	Type the password to stop the protection.	键入密码以停止保护。
+	White space	空白
+	With:	替换为:
+	Word level	字词级

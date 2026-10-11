@@ -1325,3 +1325,77 @@
 	Flip Vertical	Окрени вертикално
 	Flip Horizontal	Окрени хоризонтално
 	Formatted	Форматирано
+
+# Compare / Combine, AutoCorrect Options and Restrict Editing (#412)
+	1. Formatting restrictions	1. Ограничења обликовања
+	2. Editing restrictions	2. Ограничења уређивања
+	3. Start enforcement	3. Покретање заштите
+	<< Less	<< Мање
+	Another file	Друга датотека
+	Apply as you type	Примени док куцаш
+	AutoCorrect	Аутоматска исправка
+	AutoFormat As You Type	Аутоматско обликовање током куцања
+	Automatic bulleted lists	Аутоматске листе са знаковима
+	Automatic numbered lists	Аутоматске нумерисане листе
+	Border lines	Линије ивица
+	Capitalize first letter of sentences	Велико прво слово реченице
+	Capitalize first letter of table cells	Велико прво слово у ћелијама табеле
+	Capitalize names of days	Велико слово у називима дана
+	Case changes	Промене величине слова
+	Character level	Ниво знака
+	Checked styles are allowed:	Означени стилови су дозвољени:
+	Combine Documents	Спајање докумената
+	Compare Documents	Упоређивање докумената
+	Compared: {changes} changes	Упоређено: измена {changes}
+	Comparing with another file needs the desktop app.	За поређење са другом датотеком потребна је десктоп апликација.
+	Comparison settings	Подешавања поређења
+	Don't capitalize after:	Без великог слова после:
+	Editing in this document is restricted.	Уређивање овог документа је ограничено.
+	Every change is recorded as a tracked change.	Свака измена се бележи као праћена измена.
+	Everyone	Сви
+	Exceptions (optional)	Изузеци (необавезно)
+	Exceptions…	Изузеци…
+	Fields	Поља
+	Filling in forms	Попуњавање образаца
+	Find Next Editable Region	Пронађи следећи део за уређивање
+	Footnotes and endnotes	Фусноте и крајње напомене
+	Formatting, case changes, white space and tables are compared; the other settings are kept for later.	Пореде се обликовање, величина слова, размаци и табеле; остала подешавања се чувају за касније.
+	Fractions (1/2) as fraction characters (½)	Разломци (1/2) као знакови разломка (½)
+	Headers and footers	Заглавља и подножја
+	Hyphens (--) as dashes (—)	Цртице (--) као црте (—)
+	In equations, typing a name after a backslash replaces it with its symbol.	У једначинама се назив откуцан после обрнуте косе црте замењује симболом.
+	Internet addresses as links	Интернет адресе као везе
+	Label changes with:	Означи измене са:
+	Limit formatting to a selection of styles	Ограничи обликовање на изабране стилове
+	Math AutoCorrect	Аутоматска исправка математике
+	More >>	Више >>
+	Moves	Премештања
+	New document	Нови документ
+	No changes (read only)	Без измена (само за читање)
+	Only allow this kind of editing:	Дозволи само ову врсту уређивања:
+	Only comments can be added, except in regions marked editable.	Могу се додавати само коментари, осим у деловима означеним за уређивање.
+	Only form fields can be filled in.	Могу се попунити само поља обрасца.
+	Only the allowed styles can be applied.	Могу се применити само дозвољени стилови.
+	Ordinals (1st) as superscript	Редни бројеви (1st) као експонент
+	Original document	Оригинални документ
+	Protection stopped. The document's password uses an older form WordCraft can't check.	Заштита је заустављена. Лозинка документа користи старији облик који WordCraft не може да провери.
+	Replace as you type	Замени док куцаш
+	Replace text as you type	Замени текст док куцаш
+	Replace:	Замени:
+	Revised document	Измењени документ
+	Select text, then tick who can still edit it.	Изаберите текст, па означите ко још може да га уређује.
+	Settings…	Подешавања…
+	Show changes at:	Прикажи измене на нивоу:
+	Show changes in:	Прикажи измене у:
+	Smart quotes instead of straight quotes	Типографски наводници уместо правих
+	Start Enforcing Protection	Покрени заштиту
+	Stop Protection	Заустави заштиту
+	Text boxes	Оквири за текст
+	The document is read only, except for regions marked editable.	Документ је само за читање, осим делова означених за уређивање.
+	The password is optional; without it anyone can stop the protection.	Лозинка није обавезна; без ње свако може да заустави заштиту.
+	This document	Овај документ
+	Tracked changes	Праћене измене
+	Type the password to stop the protection.	Унесите лозинку да бисте зауставили заштиту.
+	White space	Размаци
+	With:	Са:
+	Word level	Ниво речи

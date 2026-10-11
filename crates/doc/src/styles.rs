@@ -37,6 +37,10 @@ pub struct Style {
     pub hidden: bool,
     /// Built in (cannot be deleted).
     pub builtin: bool,
+    /// Can't be applied while Restrict Editing limits formatting to a selection of styles
+    /// (`w:locked`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub locked: bool,
     /// Table style: conditional formatting for header row, banding etc.
     pub table: Option<TableStyleParts>,
 }

@@ -177,7 +177,7 @@ impl Reader<'_> {
                         self.read_blocks(sc, c, rels, out, depth + 1);
                     }
                 }
-                "w:bookmarkStart" | "w:bookmarkEnd" | "w:commentRangeStart" | "w:commentRangeEnd" => {
+                "w:bookmarkStart" | "w:bookmarkEnd" | "w:commentRangeStart" | "w:commentRangeEnd" | "w:permStart" | "w:permEnd" => {
                     if let Some(o) = self.marker(e) {
                         sc.pending.push(o);
                     }
@@ -217,6 +217,21 @@ impl Reader<'_> {
             }
             "w:bookmarkEnd" => self.bookmarks.get(&id).map(|n| InlineObject::BookmarkEnd { name: n.clone() }),
             "w:commentRangeStart" => self.comment_id(&id).map(|id| InlineObject::CommentStart { id }),
+            "w:permStart" => {
+                // Bounded: a hostile file can't grow the map without end.
+                if self.perms.len() >= 100_000 {
+                    return None;
+                }
+                let n = self.perms.len() as u32;
+                let id = *self.perms.entry(id).or_insert(n);
+                let text = |a: &str| e.attr(a).filter(|v| v.len() <= 256).unwrap_or("").to_string();
+                let (group, editor) = (text("w:edGrp"), text("w:ed"));
+                if group.is_empty() && editor.is_empty() {
+                    return None;
+                }
+                Some(InlineObject::PermStart { id, group, editor })
+            }
+            "w:permEnd" => self.perms.get(&id).map(|id| InlineObject::PermEnd { id: *id }),
             "w:commentRangeEnd" => {
                 let cid = self.comment_id(&id)?;
                 self.comments_ended.insert(cid);
@@ -352,7 +367,7 @@ impl Reader<'_> {
                 self.read_inline_children(sc, pb, k, rels, ctx, depth + 1);
                 self.end_field(sc, pb);
             }
-            "w:bookmarkStart" | "w:bookmarkEnd" | "w:commentRangeStart" | "w:commentRangeEnd" => {
+            "w:bookmarkStart" | "w:bookmarkEnd" | "w:commentRangeStart" | "w:commentRangeEnd" | "w:permStart" | "w:permEnd" => {
                 if let Some(o) = self.marker(k) {
                     let props = self.run_props_none(ctx);
                     // Markers go straight into the paragraph (never into a field's cached result).

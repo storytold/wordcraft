@@ -1323,3 +1323,77 @@
 	Flip Vertical	Віддзеркалити по вертикалі
 	Flip Horizontal	Віддзеркалити по горизонталі
 	Formatted	Відформатовано
+
+# Compare / Combine, AutoCorrect Options and Restrict Editing (#412)
+	1. Formatting restrictions	1. Обмеження форматування
+	2. Editing restrictions	2. Обмеження редагування
+	3. Start enforcement	3. Увімкнення захисту
+	<< Less	<< Менше
+	Another file	Інший файл
+	Apply as you type	Застосовувати під час введення
+	AutoCorrect	Автовиправлення
+	AutoFormat As You Type	Автоформат під час введення
+	Automatic bulleted lists	Автоматичні марковані списки
+	Automatic numbered lists	Автоматичні нумеровані списки
+	Border lines	Лінії меж
+	Capitalize first letter of sentences	Перша літера речення велика
+	Capitalize first letter of table cells	Перша літера в клітинках таблиці велика
+	Capitalize names of days	Назви днів із великої літери
+	Case changes	Зміни регістру
+	Character level	Рівень символів
+	Checked styles are allowed:	Позначені стилі дозволено:
+	Combine Documents	Об'єднання документів
+	Compare Documents	Порівняння документів
+	Compared: {changes} changes	Порівняно: змін {changes}
+	Comparing with another file needs the desktop app.	Для порівняння з іншим файлом потрібна настільна програма.
+	Comparison settings	Параметри порівняння
+	Don't capitalize after:	Не робити великої літери після:
+	Editing in this document is restricted.	Редагування цього документа обмежено.
+	Every change is recorded as a tracked change.	Кожна зміна записується як відстежувана.
+	Everyone	Усі
+	Exceptions (optional)	Винятки (необов'язково)
+	Exceptions…	Винятки…
+	Fields	Поля
+	Filling in forms	Заповнення форм
+	Find Next Editable Region	Знайти наступну область для редагування
+	Footnotes and endnotes	Виноски та кінцеві виноски
+	Formatting, case changes, white space and tables are compared; the other settings are kept for later.	Порівнюються форматування, регістр, пробіли й таблиці; інші параметри збережено на майбутнє.
+	Fractions (1/2) as fraction characters (½)	Дроби (1/2) як символи дробів (½)
+	Headers and footers	Колонтитули
+	Hyphens (--) as dashes (—)	Дефіси (--) як тире (—)
+	In equations, typing a name after a backslash replaces it with its symbol.	У рівняннях назва після зворотної скісної риски замінюється символом.
+	Internet addresses as links	Інтернет-адреси як посилання
+	Label changes with:	Позначати зміни іменем:
+	Limit formatting to a selection of styles	Обмежити форматування вибраними стилями
+	Math AutoCorrect	Математичне автовиправлення
+	More >>	Більше >>
+	Moves	Переміщення
+	New document	Новий документ
+	No changes (read only)	Без змін (лише читання)
+	Only allow this kind of editing:	Дозволити лише такий тип редагування:
+	Only comments can be added, except in regions marked editable.	Можна лише додавати коментарі, крім областей, позначених для редагування.
+	Only form fields can be filled in.	Можна заповнювати лише поля форми.
+	Only the allowed styles can be applied.	Можна застосовувати лише дозволені стилі.
+	Ordinals (1st) as superscript	Порядкові (1st) як надрядкові
+	Original document	Вихідний документ
+	Protection stopped. The document's password uses an older form WordCraft can't check.	Захист вимкнено. Пароль документа має старий формат, який WordCraft не може перевірити.
+	Replace as you type	Замінювати під час введення
+	Replace text as you type	Замінювати текст під час введення
+	Replace:	Замінити:
+	Revised document	Змінений документ
+	Select text, then tick who can still edit it.	Виділіть текст і позначте, хто може його редагувати.
+	Settings…	Параметри…
+	Show changes at:	Показувати зміни на рівні:
+	Show changes in:	Показувати зміни в:
+	Smart quotes instead of straight quotes	Типографські лапки замість прямих
+	Start Enforcing Protection	Увімкнути захист
+	Stop Protection	Вимкнути захист
+	Text boxes	Текстові поля
+	The document is read only, except for regions marked editable.	Документ лише для читання, крім областей, позначених для редагування.
+	The password is optional; without it anyone can stop the protection.	Пароль необов'язковий; без нього будь-хто може вимкнути захист.
+	This document	Цей документ
+	Tracked changes	Відстежувані зміни
+	Type the password to stop the protection.	Введіть пароль, щоб вимкнути захист.
+	White space	Пробіли
+	With:	На:
+	Word level	Рівень слів

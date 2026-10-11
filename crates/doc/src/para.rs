@@ -325,6 +325,20 @@ pub enum InlineObject {
     CommentEnd {
         id: u32,
     },
+    /// The start of a range that stays editable while the document is protected (Restrict
+    /// Editing exceptions, `w:permStart`): for everyone (`group` = `everyone`), another editing
+    /// group, or one editor (`editor`, a user name or address).
+    PermStart {
+        id: u32,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        group: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        editor: String,
+    },
+    /// The end of the editable range [`InlineObject::PermStart`] with the same `id` opened.
+    PermEnd {
+        id: u32,
+    },
     /// An equation: its linear format (`x=(-b±√(b^2-4ac))/2a`, for plain text) and structure.
     /// A display equation sits on a line of its own.
     Equation {
@@ -447,6 +461,8 @@ impl InlineObject {
                 | InlineObject::BookmarkEnd { .. }
                 | InlineObject::CommentStart { .. }
                 | InlineObject::CommentEnd { .. }
+                | InlineObject::PermStart { .. }
+                | InlineObject::PermEnd { .. }
                 | InlineObject::FieldStart { .. }
                 | InlineObject::FieldEnd
         )

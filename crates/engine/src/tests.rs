@@ -238,8 +238,9 @@ fn failed_command_restores_history_changed_by_nested_commands() {
     // outer and nested checkpoints each evict the oldest step.
     fn timeline(s: &mut Session) -> Vec<(Vec<String>, wordcraft_doc::Document)> {
         let mut out = Vec::new();
+        // Straight through the history (the commands won't undo past Restrict Editing).
         while s.can_redo() {
-            run(s, "edit.redo", json!({}));
+            s.redo();
         }
         loop {
             // Comments are stamped with the time to the second, and the two sessions compared
@@ -250,7 +251,7 @@ fn failed_command_restores_history_changed_by_nested_commands() {
             if !s.can_undo() {
                 return out;
             }
-            run(s, "edit.undo", json!({}));
+            s.undo();
         }
     }
     let kept = {
@@ -1972,7 +1973,7 @@ fn column_selection_copies_the_block() {
     // A caret move drops the block; pasting the copy gives three paragraphs.
     run(&mut s, "caret.docEnd", json!({}));
     assert!(s.column_segments().is_none());
-    s.autocorrect_on = false;
+    s.prefs.autocorrect.enabled = false;
     run(&mut s, "text.newParagraph", json!({}));
     run(&mut s, "edit.paste", json!({}));
     assert_eq!(text(&s), "abcdef\nabcdef\nabcdef\ncd\ncd\ncd");

@@ -1,4 +1,5 @@
-//! Side panes: Navigation (headings, pages, search results), Clipboard, Styles, Style Inspector, Comments.
+//! Side panes: Navigation (headings, pages, search results), Clipboard, Styles, Style Inspector,
+//! Restrict Editing ([`crate::dialogs_review`]), Comments.
 
 use egui::{Stroke, Ui, vec2};
 use serde_json::{Value, json};
@@ -36,6 +37,19 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             .resizable(true)
             .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
             .show(ui, |ui| inspector(app, ui));
+    }
+    if app.restrict.open {
+        egui::Panel::right("restrict_pane")
+            .default_size(270.0)
+            .resizable(true)
+            .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
+            .show(ui, |ui| {
+                if header(ui, "Restrict Editing") {
+                    app.restrict.open = false;
+                    return;
+                }
+                crate::dialogs_review::restrict_pane(app, ui);
+            });
     }
     if app.session.view.comments_pane {
         egui::Panel::right("comments_pane")
