@@ -107,6 +107,11 @@ impl Exempt {
         names.extend(app.session.doc.styles.styles.iter().map(|s| s.name.clone()));
         // Fonts a document asks for, installed or not (Aptos is drawn with a substitute).
         names.extend([wordcraft_doc::styles::BODY_FONT, wordcraft_doc::styles::HEADING_FONT].map(str::to_string));
+        // The selected chart's data (Edit Data's grid): document content.
+        if let Some(c) = wordcraft_engine::cmd::chart::selected_chart(&app.session) {
+            names.extend(c.categories.iter().cloned());
+            names.extend(c.series.iter().map(|s| s.name.clone()));
+        }
         for m in crate::credits::MODELS {
             names.extend([m.company, m.model, m.version].map(str::to_string));
         }
@@ -213,19 +218,30 @@ fn untranslated_interface_text() {
         let drawn = frame(&ctx, &mut app);
         record(&app, &format!("tab {tab}"), drawn);
     }
+    let _ = app.run("insert.chart", json!({"type": "column"}));
+    let _ = app.run("ui.tab", json!({"tab": "Chart Design"}));
+    let drawn = frame(&ctx, &mut app);
+    record(&app, "tab Chart Design", drawn);
+    for name in ["chartData", "changeChartType", "insertChart"] {
+        let _ = app.run("ui.dialog", json!({"name": name}));
+        let drawn = frame(&ctx, &mut app);
+        record(&app, &format!("dialog {name}"), drawn);
+        app.dialog = None;
+    }
     let _ = app.run("insert.equation", json!({}));
     let _ = app.run("ui.tab", json!({"tab": "Equation"}));
     let drawn = frame(&ctx, &mut app);
     record(&app, "tab Equation", drawn);
     // Every ribbon control on every tab, and whatever menu or dialog it opens. A fresh app per
     // tab keeps one tab's commands from changing the next.
-    let contextual = ["Table Design", "Table Layout", "Equation"];
+    let contextual = ["Table Design", "Table Layout", "Equation", "Chart Design"];
     for tab in tabs.iter().chain(&contextual) {
         let ctx = egui::Context::default();
         let mut app = fresh_app(&ctx);
         match *tab {
             "Table Design" | "Table Layout" => drop(app.run("insert.table", json!({"rows": 2, "cols": 2}))),
             "Equation" => drop(app.run("insert.equation", json!({}))),
+            "Chart Design" => drop(app.run("insert.chart", json!({"type": "column"}))),
             _ => {}
         }
         let _ = app.run("ui.tab", json!({"tab": tab}));

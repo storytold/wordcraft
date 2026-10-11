@@ -121,6 +121,19 @@ impl<'d> EmbedWriter<'d> {
         }
     }
 
+    /// A free part name `{stem}{n}{ext}` for a new part, from n = 1 up.
+    fn fresh(&mut self, stem: &str, ext: &str) -> String {
+        let mut n: u32 = 1;
+        loop {
+            let name = format!("{stem}{n}{ext}");
+            let lower = name.to_ascii_lowercase();
+            if !Self::reserved(&lower) && self.taken.insert(lower) {
+                return name;
+            }
+            n = n.saturating_add(1);
+        }
+    }
+
     /// Can part `name` be written (bytes and manifest entry both kept)?
     fn available(&self, name: &str) -> bool {
         self.manifest.parts.contains_key(name) && self.passthrough.contains_key(name)
@@ -247,6 +260,29 @@ impl super::Writer<'_> {
             self.resize_object(&mut root, w, h, float, 0);
         }
         Some(root.to_xml())
+    }
+
+    /// The `a:graphic` of a chart written from its model: a new chart part (`word/charts/chartN.xml`)
+    /// related from the story part through `rels`.
+    pub(super) fn chart_graphic(&mut self, spec: &wordcraft_doc::chart::ChartSpec, rels: &mut PartRels) -> String {
+        let name = self.embeds.fresh("word/charts/chart", ".xml");
+        let bytes = crate::chart_spec::chart_xml(spec).into_bytes();
+        self.embeds.parts.push((name.clone(), bytes, crate::chart_spec::CHART_CT.to_string(), PartRels::default()));
+        let id = rels.add(crate::package::rt::CHART, &relative(STORY_PART, &name), false);
+        let mut w = xml::W::default();
+        w.open("a:graphic", &[("xmlns:a", "http://schemas.openxmlformats.org/drawingml/2006/main")]);
+        w.open("a:graphicData", &[("uri", crate::chart_spec::CHART_URI)]);
+        w.empty(
+            "c:chart",
+            &[
+                ("xmlns:c", "http://schemas.openxmlformats.org/drawingml/2006/chart"),
+                ("xmlns:r", "http://schemas.openxmlformats.org/officeDocument/2006/relationships"),
+                ("r:id", &id),
+            ],
+        );
+        w.close("a:graphicData");
+        w.close("a:graphic");
+        w.s
     }
 
     /// Write an OLE object's size (and position, when floating), rotation and flips into its VML

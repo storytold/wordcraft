@@ -2341,6 +2341,107 @@ fn charts_and_diagrams_can_be_selected_and_deleted_but_not_moved() {
     assert!(s.doc.para_at(&Pos::body(0, 0)).is_some_and(|p| p.objects.is_empty()), "the chart is deleted");
 }
 
+/// The chart model of the first object in the body's first paragraph.
+fn first_chart(doc: &wordcraft_doc::Document) -> Option<wordcraft_doc::chart::ChartSpec> {
+    use wordcraft_doc::para::InlineObject;
+    let p = doc.para_at(&Pos::body(0, 0))?;
+    p.object_offsets().into_iter().find_map(|off| match p.object_at(off) {
+        Some(InlineObject::Graphic { graphic, .. }) => graphic.chart.as_deref().cloned(),
+        _ => None,
+    })
+}
+
+#[test]
+fn inserted_chart_is_saved_and_reopened_with_its_data() {
+    let mut s = s();
+    let data =
+        json!({"categories": ["Jan", "Feb", "Mar"], "series": [{"name": "Rain", "values": [12.5, null, 3]}, {"name": "Sun", "values": [4, 5, 6]}]});
+    let r = run(&mut s, "insert.chart", json!({"type": "line", "data": data, "title": "Weather", "legend": "right"}));
+    assert_eq!(r["chart"]["type"], "line");
+    let spec = first_chart(&s.doc).expect("a chart with a model");
+    assert_eq!(spec.series[0].values, vec![Some(12.5), None, Some(3.0)]);
+    assert!(crate::cmd::chart::selected_chart(&s).is_some(), "the new chart is selected");
+    let bytes = wordcraft_docx::write(&s.doc).unwrap();
+    assert!(bytes.windows(22).any(|w| w == b"word/charts/chart1.xml"), "a chart part is written");
+    let back = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(first_chart(&back), Some(spec), "the chart reads back as the same editable chart");
+    // Sample data when none is given.
+    let mut s2 = self::s();
+    run(&mut s2, "insert.chart", json!({"type": "pie"}));
+    assert!(first_chart(&s2.doc).is_some_and(|c| c.kind == wordcraft_doc::chart::ChartType::Pie && !c.series.is_empty()));
+    // No params: the picker, nothing inserted.
+    let mut s3 = self::s();
+    run(&mut s3, "insert.chart", json!({}));
+    assert!(s3.ui_requests.iter().any(|r| r["open"] == "insertChart"));
+    assert!(first_chart(&s3.doc).is_none());
+}
+
+#[test]
+fn chart_edits_are_one_undo_step_each() {
+    use wordcraft_doc::chart::{ChartType, LegendPos};
+    let mut s = s();
+    run(&mut s, "insert.chart", json!({"type": "column"}));
+    let before = first_chart(&s.doc).unwrap();
+    run(&mut s, "chart.editData", json!({"data": {"categories": ["A", "B"], "series": [{"name": "X", "values": [1, 2]}]}}));
+    run(&mut s, "chart.type", json!({"type": "barStacked"}));
+    run(&mut s, "chart.title", json!({"text": "Totals"}));
+    run(&mut s, "chart.legend", json!({"pos": "none"}));
+    run(&mut s, "chart.dataLabels", json!({"on": true}));
+    let c = first_chart(&s.doc).unwrap();
+    assert_eq!((c.kind, c.title.as_deref(), c.legend, c.data_labels), (ChartType::BarStacked, Some("Totals"), None, true));
+    assert_eq!((c.categories.len(), c.series.len()), (2, 1));
+    let steps: [&dyn Fn(&wordcraft_doc::chart::ChartSpec) -> bool; 5] = [
+        &|c| !c.data_labels,
+        &|c| c.legend == Some(LegendPos::Bottom),
+        &|c| c.title.is_none(),
+        &|c| c.kind == ChartType::Column && c.series.len() == 1,
+        &|c| *c == before,
+    ];
+    for (k, check) in steps.iter().enumerate() {
+        run(&mut s, "edit.undo", json!({}));
+        assert!(check(&first_chart(&s.doc).unwrap()), "undo step {k}");
+    }
+    // Resizing draws the chart again at its new size.
+    run(&mut s, "edit.redo", json!({}));
+    run(&mut s, "picture.size", json!({"width": 300, "height": 150, "lockAspect": false}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    let Some(wordcraft_doc::para::InlineObject::Graphic { graphic, w, .. }) = p.object_offsets().into_iter().find_map(|o| p.object_at(o)) else {
+        panic!()
+    };
+    assert_eq!((*w, graphic.w, graphic.h), (300.0, 300.0, 150.0));
+}
+
+#[test]
+fn hostile_chart_data_is_capped() {
+    use wordcraft_doc::chart::{MAX_CELLS, MAX_POINTS, MAX_SERIES, MAX_TEXT};
+    let mut s = s();
+    let values: Vec<serde_json::Value> = (0..5000).map(|i| if i % 2 == 0 { json!("NaN") } else { json!(1e308) }).collect();
+    let series: Vec<serde_json::Value> = (0..300).map(|i| json!({"name": "n".repeat(10_000), "values": values, "x": i})).collect();
+    let cats: Vec<serde_json::Value> = (0..6000).map(|i| json!(i)).collect();
+    run(
+        &mut s,
+        "insert.chart",
+        json!({"type": "scatter", "data": {"categories": cats, "series": series}, "title": "\u{0}".repeat(9999), "width": 1e30}),
+    );
+    let c = first_chart(&s.doc).unwrap();
+    assert!(c.series.len() <= MAX_SERIES && c.points() <= MAX_POINTS && c.series.len() * c.points() <= MAX_CELLS);
+    assert!(c.series.iter().all(|x| x.name.chars().count() <= MAX_TEXT && x.values.len() == c.points()));
+    assert!(c.series[0].values.iter().all(|v| v.is_none_or(f64::is_finite)));
+    let _ = s.layout();
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+    assert_eq!(first_chart(&back), Some(c));
+    for bad in [json!({"type": "radar"}), json!({"data": {"series": 5}}), json!({"data": {"series": []}})] {
+        assert!(s.run("insert.chart", &bad).is_err(), "{bad}");
+    }
+    // A chart without a model (from another program) is shown, not edited.
+    let mut s = self::s();
+    let foreign =
+        wordcraft_doc::para::InlineObject::Graphic { w: 200.0, h: 100.0, alt: String::new(), float: Default::default(), graphic: Default::default() };
+    s.doc.insert_object(&Pos::body(0, 0), foreign, &Default::default()).unwrap();
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, wordcraft_doc::para::OBJ.len_utf8())}));
+    assert!(s.run("chart.type", &json!({"type": "pie"})).is_err());
+}
+
 #[test]
 fn accessibility_reports_a_chart_without_alt_text() {
     use std::sync::Arc;

@@ -1323,3 +1323,34 @@
 	Flip Vertical	Віддзеркалити по вертикалі
 	Flip Horizontal	Віддзеркалити по горизонталі
 	Formatted	Відформатовано
+	Change Chart Type	Змінити тип діаграми
+	Chart Design	Конструктор діаграми
+	Type	Тип
+	Edit Data	Редагувати дані
+	Chart Title	Назва діаграми
+	Chart Layouts	Макети діаграми
+	Add Chart Element	Додати елемент діаграми
+	Legend	Легенда
+	Data Labels	Підписи даних
+	Above Chart	Над діаграмою
+	Insert Chart	Вставити діаграму
+	Clustered Column	Стовпці з групуванням
+	Stacked Column	Стовпці з накопиченням
+	Clustered Bar	Смуги з групуванням
+	Stacked Bar	Смуги з накопиченням
+	Area	Області
+	Pie	Кругова
+	Doughnut	Кільцева
+	Scatter	Точкова
+	“{text}” ({row}, {series}) isn't a number.	«{text}» ({row}, {series}) — не число.
+	Category {n}	Категорія {n}
+	Series {n}	Ряд {n}
+	Type the categories down the side and a column of values per series.	Введіть категорії збоку та стовпець значень для кожного ряду.
+	Categories	Категорії
+	Series name	Назва ряду
+	Remove series	Видалити ряд
+	Remove row	Видалити рядок
+	Add Row	Додати рядок
+	Add Series	Додати ряд
+	Edit\nData	Редагувати\nдані
+	Change\nChart Type	Змінити тип\nдіаграми

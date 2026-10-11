@@ -1,6 +1,6 @@
 # Where WordCraft falls short of Word
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** trivial (formatting revisions landed, #41; previously trivial: Draw Table and Eraser landed, #303; previously minor: beta distance restated: ~15 points, ~150–230 h; previously: first version; every known shortfall from the 2026-10-10 re-measure, ranked) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** trivial (Insert › Chart landed, #409; previously trivial: formatting revisions landed, #41; previously trivial: Draw Table and Eraser landed, #303; previously minor: beta distance restated: ~15 points, ~150–230 h; previously: first version; every known shortfall from the 2026-10-10 re-measure, ranked) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 The work list. One entry per shortfall, ranked by how much it stops a Word user from switching
 (**B** = blocks beta). Each says what's missing, the evidence, who it hurts, an Opus 5.5 agent
@@ -25,7 +25,7 @@ first (`gh pr list`), and update this file and the parity doc when a gap closes.
 | 10 | **Objects**: no group (#267 open), rotated text-box text (free rotation and flips landed, #332), contour (tight/through) wrap, shape effects, WordArt, connectors, Drawing Canvas, Icons | | [parity-checklist.md](parity-checklist.md) (Shape Format 2/6, Layout › Group) | Newsletters, flyers, reports with diagrams | 20–30 | [target-app-parity.md](target-app-parity.md) |
 | 11 | **Interface languages**: 8 of the 12 key languages missing (hi, ar, fr, id, de, ko, vi, pt-PT); no mirrored RTL interface; ~5% of strings still English in the six translated catalogs | | [localization-parity.md](localization-parity.md) | Most of the world's writers | 50–80 | [localization-parity.md](localization-parity.md) |
 | 12 | **Draw tab / ink**: pens, pencil, highlighter, eraser, Select and Hide Ink landed (#307); missing: Lasso Select, Add Pen, Ink to Shape, Ink to Math, Ink Replay, pressure, Word's own ink (`w14:contentPart`/InkML) | | [parity-checklist.md](parity-checklist.md) (Draw 5/11) | Pen and tablet users | 8–14 | [hardware-parity.md](hardware-parity.md) |
-| 13 | **Charts and SmartArt editing** (own renderer, chart data editing, SmartArt layouts) | | `insert.chart`, `insert.smartArt` missing | Reports and business documents | 45–70 | [target-app-parity.md](target-app-parity.md) |
+| 13 | **Charts and SmartArt editing** (editing charts from Word, more chart types and formatting, SmartArt layouts) | | `insert.chart` and Chart Design basics landed (#409): WordCraft's own charts are editable; charts from Word stay read-only (no embedded-workbook editing), no combo/3D/radar/stock charts, axis or series formatting; `insert.smartArt` missing | Reports and business documents | 35–55 | [target-app-parity.md](target-app-parity.md) |
 | 14 | **`.doc` can't be written; metafile pictures and Word 6/95 files refused** | | `crates/docbin` is read-only | Users exchanging files with old Word or legacy systems | 25–40 | [file-format-parity.md](file-format-parity.md) |
 | 15 | **References depth**: 4 of Word's 12 bibliography styles; sources not saved in DOCX (#169 open); no EndNote/Mendeley desktop integration | | Word's `Resources/Style` lists 12 styles | Students and researchers | 10–15 | [target-app-parity.md](target-app-parity.md) |
 | 16 | **Right-to-left completeness**: RTL sections and tables, kashida, RTL in HTML/ODT/RTF; eight older RTL bug reports to re-verify after #207 (#215, #211, #199, #66, #63, #48, #19) | | [layout-parity.md](layout-parity.md) | Arabic, Persian, Hebrew writers | 10–15 | [layout-parity.md](layout-parity.md) |
@@ -66,6 +66,7 @@ The same gaps grouped the way the parity documents are, for agents working in on
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | trivial | Insert › Chart landed (#409); gap #13 narrowed to editing Word's charts, more types and SmartArt, 35–55 h |
 | 2026-10-11 | trivial | Formatting revisions landed (#41); gap #5 narrowed to move tracking and content controls, 8–12 h |
 | 2026-10-10 | trivial | Draw Table and Eraser landed (#303); removed from the feature-gap list |
 | 2026-10-10 | trivial | Tabs and Borders and Shading dialogs landed (#320); removed from the dialog-depth list |

@@ -1312,3 +1312,34 @@
 	Flip Vertical	垂直翻轉
 	Flip Horizontal	水平翻轉
 	Formatted	已設定格式
+	Change Chart Type	變更圖表類型
+	Chart Design	圖表設計
+	Type	類型
+	Edit Data	編輯資料
+	Chart Title	圖表標題
+	Chart Layouts	圖表版面配置
+	Add Chart Element	新增圖表項目
+	Legend	圖例
+	Data Labels	資料標籤
+	Above Chart	圖表上方
+	Insert Chart	插入圖表
+	Clustered Column	群組直條圖
+	Stacked Column	堆疊直條圖
+	Clustered Bar	群組橫條圖
+	Stacked Bar	堆疊橫條圖
+	Area	區域圖
+	Pie	圓形圖
+	Doughnut	環圈圖
+	Scatter	散佈圖
+	“{text}” ({row}, {series}) isn't a number.	「{text}」（{row}，{series}）不是數字。
+	Category {n}	類別 {n}
+	Series {n}	數列 {n}
+	Type the categories down the side and a column of values per series.	在左側輸入類別，每個數列輸入一欄數值。
+	Categories	類別
+	Series name	數列名稱
+	Remove series	移除數列
+	Remove row	移除列
+	Add Row	新增列
+	Add Series	新增數列
+	Edit\nData	編輯\n資料
+	Change\nChart Type	變更\n圖表類型

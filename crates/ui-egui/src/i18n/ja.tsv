@@ -1311,3 +1311,34 @@
 	Flip Vertical	上下反転
 	Flip Horizontal	左右反転
 	Formatted	書式変更
+	Change Chart Type	グラフの種類の変更
+	Chart Design	グラフのデザイン
+	Type	種類
+	Edit Data	データの編集
+	Chart Title	グラフ タイトル
+	Chart Layouts	グラフのレイアウト
+	Add Chart Element	グラフ要素の追加
+	Legend	凡例
+	Data Labels	データ ラベル
+	Above Chart	グラフの上
+	Insert Chart	グラフの挿入
+	Clustered Column	集合縦棒
+	Stacked Column	積み上げ縦棒
+	Clustered Bar	集合横棒
+	Stacked Bar	積み上げ横棒
+	Area	面
+	Pie	円
+	Doughnut	ドーナツ
+	Scatter	散布図
+	“{text}” ({row}, {series}) isn't a number.	「{text}」（{row}、{series}）は数値ではありません。
+	Category {n}	カテゴリ {n}
+	Series {n}	系列 {n}
+	Type the categories down the side and a column of values per series.	左端の列にカテゴリを、系列ごとに 1 列ずつ値を入力します。
+	Categories	カテゴリ
+	Series name	系列名
+	Remove series	系列を削除
+	Remove row	行を削除
+	Add Row	行の追加
+	Add Series	系列の追加
+	Edit\nData	データの\n編集
+	Change\nChart Type	グラフの種類\nの変更

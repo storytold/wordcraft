@@ -416,10 +416,18 @@ impl Writer<'_> {
                 self.rev_close(w, props);
             }
             // A chart or diagram read from a file: its frame from the object's size and position,
-            // the graphic inside as read. Ones made some other way have nothing to write.
+            // the graphic inside as read. Ones made some other way have nothing to write, except
+            // charts with a model (made or edited in WordCraft).
             InlineObject::Graphic { w: gw, h: gh, alt, float, graphic } => {
-                let Some(src) = graphic.source.as_deref() else { return };
-                let Some(inner) = self.embedded_xml(src, rels, None) else { return };
+                // A chart WordCraft can edit: a chart part written from its model.
+                let inner = match (graphic.chart.as_deref(), graphic.source.as_deref()) {
+                    (Some(spec), _) => self.chart_graphic(spec, rels),
+                    (None, Some(src)) => {
+                        let Some(inner) = self.embedded_xml(src, rels, None) else { return };
+                        inner
+                    }
+                    (None, None) => return,
+                };
                 self.rev_open(w, props);
                 w.open("w:r", &[]);
                 self.rpr(w, props);

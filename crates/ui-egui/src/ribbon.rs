@@ -19,6 +19,11 @@ pub fn has_shape_selected(s: &wordcraft_engine::Session) -> bool {
     matches!(wordcraft_engine::cmd::objects::selected(s), Some((_, wordcraft_doc::para::InlineObject::Shape { .. })))
 }
 
+/// Whether the selection is a chart WordCraft can edit (so Chart Design is shown).
+pub fn has_chart_selected(s: &wordcraft_engine::Session) -> bool {
+    wordcraft_engine::cmd::chart::selected_chart(s).is_some()
+}
+
 /// Contextual tabs for the current selection (pure, tested).
 pub fn contextual_tabs(s: &wordcraft_engine::Session) -> Vec<&'static str> {
     let mut tabs = Vec::new();
@@ -31,6 +36,9 @@ pub fn contextual_tabs(s: &wordcraft_engine::Session) -> Vec<&'static str> {
     }
     if has_shape_selected(s) {
         tabs.push("Shape Format");
+    }
+    if has_chart_selected(s) {
+        tabs.push("Chart Design");
     }
     // Editing an equation.
     if s.math.is_some() {
@@ -85,7 +93,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     }
                 }
                 for tab in tabs {
-                    let contextual = tab.starts_with("Table ") || tab.ends_with(" Format") || tab == "Equation";
+                    let contextual = tab.starts_with("Table ") || tab.ends_with(" Format") || tab == "Equation" || tab == "Chart Design";
                     let shown = tl!(tab);
                     let w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(shown.to_string(), medium(12.5), t.text).size().x) + 18.0;
                     let (r, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
@@ -180,6 +188,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         "Equation" if app.session.math.is_some() => crate::equation_tab::show(app, ui),
                         "Picture Format" => picture_format(app, ui),
                         "Shape Format" => shape_format(app, ui),
+                        "Chart Design" => chart_design(app, ui),
                         _ => home(app, ui),
                     }
                 });
@@ -1206,6 +1215,59 @@ fn help(app: &mut WordApp, ui: &mut Ui) {
     });
 }
 
+/// Chart Design: the selected chart's elements (title, legend, data labels), its data and type,
+/// and its size.
+fn chart_design(app: &mut WordApp, ui: &mut Ui) {
+    let Some(chart) = wordcraft_engine::cmd::chart::selected_chart(&app.session) else { return };
+    group(ui, "Chart Layouts", None, app, |ui, app| {
+        menu_button(ui, app, "chartTitle", Some("Chart Title"), "Chart Title", true, |ui, app| {
+            mi_check(ui, app, "None", chart.title.is_none(), "chart.title", json!({"text": null}));
+            let text = chart.title.clone().unwrap_or_else(|| tl!("Chart Title").to_string());
+            mi_check(ui, app, "Above Chart", chart.title.is_some(), "chart.title", json!({"text": text}));
+        });
+        menu_button(ui, app, "legend", Some("Legend"), "Legend", true, |ui, app| {
+            mi_check(ui, app, "None", chart.legend.is_none(), "chart.legend", json!({"pos": "none"}));
+            for (label, pos) in [
+                ("Right", wordcraft_doc::chart::LegendPos::Right),
+                ("Top", wordcraft_doc::chart::LegendPos::Top),
+                ("Left", wordcraft_doc::chart::LegendPos::Left),
+                ("Bottom", wordcraft_doc::chart::LegendPos::Bottom),
+            ] {
+                mi_check(ui, app, label, chart.legend == Some(pos), "chart.legend", json!({"pos": pos.id()}));
+            }
+        });
+        menu_button(ui, app, "dataLabels", Some("Data Labels"), "Data Labels", true, |ui, app| {
+            mi_check(ui, app, "None", !chart.data_labels, "chart.dataLabels", json!({"on": false}));
+            mi_check(ui, app, "Show", chart.data_labels, "chart.dataLabels", json!({"on": true}));
+        });
+    });
+    group(ui, "Data", None, app, |ui, app| {
+        big(ui, app, "chartData", "Edit\nData", "chart.editData", json!({}), false);
+    });
+    group(ui, "Type", None, app, |ui, app| {
+        big(ui, app, "changeChartType", "Change\nChart Type", "chart.type", json!({}), false);
+    });
+    group(ui, "Size", None, app, |ui, app| {
+        let (w0, h0) =
+            wordcraft_engine::cmd::objects::selected(&app.session).and_then(|(_, o)| o.frame().map(|(w, h, _)| (w, h))).unwrap_or((0.0, 0.0));
+        stack(ui, |ui| {
+            for (label, key, v0) in [("H:", "height", h0), ("W:", "width", w0)] {
+                crate::widgets::row(ui, |ui| {
+                    ui.label(egui::RichText::new(tl!(label)).small());
+                    let mut v = v0;
+                    let r = ui.add(egui::DragValue::new(&mut v).speed(1.0).range(36.0..=2000.0).suffix(" pt"));
+                    if r.changed() {
+                        if r.dragged() && !r.drag_started() {
+                            app.session.join_next_undo();
+                        }
+                        let _ = app.run("picture.size", json!({key: v, "lockAspect": false}));
+                    }
+                });
+            }
+        });
+    });
+}
+
 /// Shape Format: fill, outline and effects of the selected shape, and its arrangement.
 fn shape_format(app: &mut WordApp, ui: &mut Ui) {
     let (stroke, glow_size) = match wordcraft_engine::cmd::objects::selected(&app.session) {
@@ -1697,6 +1759,24 @@ mod tests {
         s.run("select.collapse", &json!({"end": true})).unwrap();
         s.run("text.insert", &json!({"text": "x"})).unwrap();
         assert!(!contextual_tabs(&s).contains(&"Shape Format"));
+    }
+
+    #[test]
+    fn chart_design_tab_appears_when_chart_selected_and_buttons_open_dialogs() {
+        let mut app = crate::WordApp::new(Session::new(wordcraft_doc::Document::new()), Default::default());
+        // Insert › Chart without a type opens the gallery; choosing inserts.
+        let _ = app.run("insert.chart", json!({}));
+        assert_eq!(app.dialog.as_ref().map(crate::dialogs::Dialog::name), Some("insertChart"));
+        app.dialog = None;
+        app.run("insert.chart", json!({"type": "doughnut"})).unwrap();
+        assert!(contextual_tabs(&app.session).contains(&"Chart Design"));
+        let _ = app.run("chart.editData", json!({}));
+        assert_eq!(app.dialog.as_ref().map(crate::dialogs::Dialog::name), Some("chartData"));
+        let _ = app.run("chart.type", json!({}));
+        assert_eq!(app.dialog.as_ref().map(crate::dialogs::Dialog::name), Some("changeChartType"));
+        app.session.run("select.collapse", &json!({"end": true})).unwrap();
+        app.session.run("text.insert", &json!({"text": "x"})).unwrap();
+        assert!(!contextual_tabs(&app.session).contains(&"Chart Design"));
     }
 
     #[test]

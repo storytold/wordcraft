@@ -19,6 +19,7 @@ pub mod chrome;
 pub mod control;
 pub mod credits;
 pub mod dialogs;
+pub mod dialogs_chart;
 pub mod dialogs_insert;
 pub mod dialogs_lists;
 pub mod dialogs_para;
@@ -1095,6 +1096,10 @@ fn input_dialog(id: &str, params: &Value) -> Option<&'static str> {
         // Symbol without a character and Field without a code show their dialogs (#321).
         "insert.symbol" if !has("char") => Some("symbol"),
         "insert.field" if !has("instr") => Some("field"),
+        // Chart without a type shows the gallery; Change Chart Type and Edit Data their dialogs.
+        "insert.chart" if !has("type") && !has("data") => Some("insertChart"),
+        "chart.type" if !has("type") => Some("changeChartType"),
+        "chart.editData" if !["data", "categories", "series"].into_iter().any(has) => Some("chartData"),
         // Table Properties without settings shows the dialog (with settings it applies them).
         "table.properties" if params.as_object().is_none_or(|m| m.is_empty()) => Some("tableProperties"),
         // Tabs, Borders and Shading, and Page Borders without settings show their dialogs (#320).
