@@ -948,9 +948,9 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
         }
         // Ink thickness: three strokes, thin to thick; the thickest in the accent.
         "thickness" => {
-            pen.line(&[(2.0, 3.5), (14.0, 3.5)]);
-            pen.heavy(&[(2.0, 7.5), (14.0, 7.5)]);
-            pen.block(2.0, 11.0, 14.0, 14.5, 1.0, a);
+            pen.line(&[(2.5, 3.0), (13.5, 3.0)]);
+            pen.block(2.0, 5.75, 14.0, 8.0, 0.75, c);
+            pen.block(2.0, 10.5, 14.0, 13.75, 1.0, a);
         }
         "lasso" => {
             // One rope: a loose loop that runs on into a trailing end.
@@ -1742,10 +1742,11 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.fill(&[(11.0, 11.0), (15.0, 12.75), (12.75, 13.25)], a);
             pen.fill(&[(11.0, 11.0), (12.75, 13.25), (12.25, 15.0)], a);
         }
-        // Draw table: a pencil drawing a grid.
+        // Draw Table: the Table icon's table with a pencil below its corner, clear of it (the same
+        // pairing as Edit Recipients).
         "draw" | "drawTable" => {
-            pen.table(1.5, 9.0, 6.0);
-            pen.pencil(7.5, -1.0, 0.55, a);
+            pen.table(1.0, 1.0, 9.5);
+            pen.pencil(8.25, 8.0, 0.48, a);
         }
         "borderPainter" => {
             pen.acc(&[(1.5, 1.5), (8.5, 1.5)]);
