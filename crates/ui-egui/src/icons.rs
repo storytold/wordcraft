@@ -350,6 +350,16 @@ impl Pen<'_> {
         let sun = at(9.25, 3.0);
         self.dot(sun.0, sun.1, 1.25 * k, self.a);
     }
+    /// The pencil from Pencil, scaled by `k` with its 16-unit frame at (x0, y0): body outline in
+    /// ink, a band across it, and the tip in `tip`, set apart from the body.
+    fn pencil(&self, x0: f32, y0: f32, k: f32, tip: Color32) {
+        let at = |pts: &[(f32, f32)]| pts.iter().map(|&(x, y)| (x0 + x * k, y0 + y * k)).collect::<Vec<_>>();
+        let body = at(&[(3.9, 9.6), (10.5, 3.0), (13.0, 5.5), (6.4, 12.1)]);
+        self.fill(&at(&[(1.5, 14.5), (2.5, 11.0), (5.0, 13.5)]), tip);
+        self.fill(&body, self.t);
+        self.poly(&body, self.c);
+        self.line(&at(&[(9.2, 4.3), (11.7, 6.8)]));
+    }
     /// A plus sign with 2-unit arms.
     fn plus(&self, x: f32, y: f32, col: Color32) {
         self.path(&[(x, y - 2.0), (x, y + 2.0)], col);
@@ -540,13 +550,13 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
         }
         "indent" => {
             pen.rows(1.5, 14.5, &[2.0, 14.0]);
-            pen.rows(7.5, 14.5, &[6.0, 10.0]);
-            pen.arrow(1.5, 8.0, 4.75, 8.0, a);
+            pen.rows(8.0, 14.5, &[6.0, 10.0]);
+            pen.arrow(1.5, 8.0, 5.75, 8.0, a);
         }
         "outdent" => {
             pen.rows(1.5, 14.5, &[2.0, 14.0]);
-            pen.rows(7.5, 14.5, &[6.0, 10.0]);
-            pen.arrow(4.75, 8.0, 1.5, 8.0, a);
+            pen.rows(8.0, 14.5, &[6.0, 10.0]);
+            pen.arrow(5.75, 8.0, 1.5, 8.0, a);
         }
         "sort" => {
             pen.rows(1.5, 8.5, &[3.0]);
@@ -626,12 +636,12 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
         // Editing
         "find" | "search" => pen.lens(6.5, 6.5, 4.5, a),
         "replace" => {
-            pen.line(&[(1.5, 4.0), (8.5, 4.0)]);
-            pen.acc(&[(7.5, 12.0), (14.5, 12.0)]);
-            pen.line(&[(11.5, 4.0), (13.5, 4.0), (13.5, 7.5)]);
-            pen.head(13.5, 8.25, 90.0, c);
-            pen.line(&[(4.5, 12.0), (2.5, 12.0), (2.5, 8.5)]);
-            pen.head(2.5, 7.75, -90.0, c);
+            pen.circle(4.25, 4.25, 2.75);
+            pen.line(&[(6.4, 6.4), (7.75, 7.75)]);
+            pen.line(&[(9.5, 3.0), (14.5, 3.0)]);
+            pen.acc(&[(5.5, 13.5), (14.5, 13.5)]);
+            pen.curve(&[(11.5, 5.5), (12.25, 8.0), (11.0, 10.25)], false, a);
+            pen.head(10.75, 10.75, 120.0, a);
         }
         "select" => {
             pen.line(&[(1.5, 4.0), (1.5, 1.5), (4.0, 1.5)]);
@@ -848,12 +858,7 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.poly(&[(3.9, 9.6), (10.5, 3.0), (13.0, 5.5), (6.4, 12.1)], c);
             pen.line(&[(9.2, 4.3), (11.7, 6.8)]);
         }
-        "pencil" => {
-            pen.fill(&[(1.5, 14.5), (2.5, 11.0), (5.0, 13.5)], orange);
-            pen.fill(&[(3.9, 9.6), (10.5, 3.0), (13.0, 5.5), (6.4, 12.1)], pen.t);
-            pen.poly(&[(3.9, 9.6), (10.5, 3.0), (13.0, 5.5), (6.4, 12.1)], c);
-            pen.line(&[(5.3, 8.2), (7.8, 10.7)]);
-        }
+        "pencil" => pen.pencil(0.0, 0.0, 1.0, orange),
         "eraser" => {
             pen.fill(&[(1.5, 9.5), (4.75, 6.25), (10.25, 11.75), (8.5, 13.5), (5.5, 13.5)], pen.a.gamma_multiply(0.5));
             pen.poly(&[(1.5, 9.5), (8.0, 3.0), (13.5, 8.5), (8.5, 13.5), (5.5, 13.5)], c);
@@ -903,13 +908,15 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.glyph_small_a(12.75, 13.0, 4.0, a);
         }
         "paraSpacing" => {
-            pen.rows(7.0, 14.5, &[2.0, 4.75]);
-            pen.rows(7.0, 14.5, &[11.25, 14.0]);
-            pen.span(3.0, 5.5, 3.0, 10.5, a);
+            pen.rows(6.0, 14.5, &[1.5, 4.0]);
+            pen.span(2.75, 4.25, 2.75, 11.75, a);
+            pen.rows(6.0, 14.5, &[12.0, 14.5]);
         }
         "effectsDesign" => {
-            pen.disc(8.0, 8.0, 5.5);
-            pen.arc(8.0, 8.0, 3.0, 200.0, 290.0, a);
+            pen.disc(6.5, 9.5, 5.0);
+            pen.acc(&[(13.0, 1.5), (13.0, 5.5)]);
+            pen.acc(&[(11.0, 3.5), (15.0, 3.5)]);
+            pen.dot(14.0, 9.0, 0.9, a);
         }
         "setDefault" => {
             pen.page(2.5, 1.5, 13.5, 14.5);
@@ -920,8 +927,9 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.acc(&[(5.0, 11.5), (10.0, 6.5)]);
         }
         "pageColor" => {
+            let k = 11.0 * 0.3;
+            pen.fill(&[(2.5, 1.5), (13.5 - k, 1.5), (13.5, 1.5 + k), (13.5, 14.5), (2.5, 14.5)], a.gamma_multiply(0.55));
             pen.page(2.5, 1.5, 13.5, 14.5);
-            pen.block(4.5, 8.5, 11.5, 12.0, 0.5, a);
         }
         "pageBorders" => {
             pen.page(2.5, 1.5, 13.5, 14.5);
@@ -1021,24 +1029,24 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.head(13.63, 6.75, 60.0, a);
         }
         "indentLeft" => {
-            pen.acc(&[(1.5, 5.5), (1.5, 10.5)]);
-            pen.arrow(1.5, 8.0, 4.5, 8.0, a);
-            pen.rows(7.0, 14.5, &[3.0, 8.0, 13.0]);
+            pen.acc(&[(1.5, 4.5), (1.5, 11.5)]);
+            pen.arrow(1.5, 8.0, 5.75, 8.0, a);
+            pen.rows(8.0, 14.5, &[3.0, 8.0, 13.0]);
         }
         "indentRight" => {
-            pen.acc(&[(14.5, 5.5), (14.5, 10.5)]);
-            pen.arrow(14.5, 8.0, 11.5, 8.0, a);
-            pen.rows(1.5, 9.0, &[3.0, 8.0, 13.0]);
+            pen.acc(&[(14.5, 4.5), (14.5, 11.5)]);
+            pen.arrow(14.5, 8.0, 10.25, 8.0, a);
+            pen.rows(1.5, 8.0, &[3.0, 8.0, 13.0]);
         }
         "spaceBefore" => {
-            pen.acc(&[(1.5, 1.5), (14.5, 1.5)]);
-            pen.span(8.0, 4.0, 8.0, 7.75, a);
-            pen.rows(1.5, 14.5, &[10.75, 13.75]);
+            pen.rows(6.0, 14.5, &[1.5]);
+            pen.span(2.75, 1.75, 2.75, 9.25, a);
+            pen.rows(6.0, 14.5, &[9.5, 12.0, 14.5]);
         }
         "spaceAfter" => {
-            pen.rows(1.5, 14.5, &[2.25, 5.25]);
-            pen.span(8.0, 8.25, 8.0, 12.0, a);
-            pen.acc(&[(1.5, 14.5), (14.5, 14.5)]);
+            pen.rows(6.0, 14.5, &[1.5, 4.0, 6.5]);
+            pen.span(2.75, 6.75, 2.75, 14.25, a);
+            pen.rows(6.0, 14.5, &[14.5]);
         }
         // References
         "toc" => {
@@ -1067,8 +1075,9 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
         "endnote" => {
             pen.page(2.5, 1.5, 13.5, 14.5);
             pen.rows(5.0, 9.5, &[5.0]);
-            pen.rows(5.0, 11.0, &[7.75]);
-            pen.acc(&[(5.0, 11.75), (8.5, 11.75)]);
+            pen.rows(5.0, 8.5, &[7.75]);
+            pen.text(10.25, 7.25, 4.0, "1", a, true);
+            pen.acc(&[(5.0, 11.75), (11.0, 11.75)]);
         }
         "nextFootnote" => {
             pen.rows(1.5, 8.5, &[3.0]);
@@ -1076,9 +1085,10 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.arrow(2.0, 10.5, 13.0, 10.5, a);
         }
         "showNotes" => {
-            pen.page(2.5, 1.5, 13.5, 14.5);
-            pen.line(&[(5.0, 6.0), (9.5, 6.0)]);
-            pen.block(5.0, 9.5, 11.0, 12.0, 0.5, a);
+            pen.rows(1.5, 9.0, &[2.5, 6.0]);
+            pen.text(12.0, 2.5, 5.0, "1", a, true);
+            pen.line(&[(1.5, 9.5), (6.0, 9.5)]);
+            pen.block(1.5, 11.75, 14.5, 14.5, 1.0, a);
         }
         "researcher" => {
             pen.page_h(1.5, 1.5, 8.5);
@@ -1186,9 +1196,8 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.person(12.0, 10.0, 0.7, a);
         }
         "editRecipients" => {
-            pen.person(5.0, 14.0, 1.0, c);
-            pen.acc(&[(11.5, 14.5), (14.5, 11.5)]);
-            pen.dot(11.0, 15.0, 0.5, a);
+            pen.person(4.5, 9.5, 0.7, c);
+            pen.pencil(6.75, 6.25, 0.58, a);
         }
         "mergeField" => {
             brackets(pen, 3.0, 13.0);
@@ -1202,9 +1211,7 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
         }
         "greetingLine" => {
             brackets(pen, 3.0, 13.0);
-            pen.acc(&[(5.75, 8.0), (7.5, 8.0)]);
-            pen.dot(10.0, 8.5, 0.6, a);
-            pen.acc(&[(10.0, 8.5), (9.6, 9.75)]);
+            pen.text(8.0, 8.0, 7.0, "Hi", a, true);
         }
         "rules" => {
             pen.line(&[(3.0, 1.5), (1.5, 1.5), (1.5, 6.0), (3.0, 6.0)]);
@@ -1427,8 +1434,9 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.dot(11.875, 8.75, 0.9, a);
         }
         "vertical" => {
-            pen.page_h(5.57, 1.125, 5.75);
-            pen.page_h(5.57, 9.125, 5.75);
+            pen.page_h(2.75, 1.125, 5.75);
+            pen.page_h(2.75, 9.125, 5.75);
+            pen.arrow(12.25, 2.0, 12.25, 14.0, a);
         }
         "sideToSide" => {
             let x1 = pen.page_h(1.25, 1.5, 6.75);
@@ -1507,8 +1515,8 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
             pen.window(1.5, 9.5, 14.5, 14.5);
         }
         "split" => {
-            pen.panel(1.5, 1.5, 14.5, 14.5, 1.0);
-            pen.acc(&[(4.0, 8.0), (12.0, 8.0)]);
+            pen.window(1.5, 1.5, 14.5, 14.5);
+            pen.block(3.5, 8.25, 12.5, 9.75, 0.75, a);
         }
         "sideBySide" => {
             pen.window(1.5, 2.5, 6.75, 13.5);
@@ -1605,8 +1613,12 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
         }
         "cellAlign" => {
             pen.panel(1.5, 1.5, 14.5, 14.5, 1.0);
-            pen.acc(&[(5.0, 7.0), (11.0, 7.0)]);
-            pen.rows(6.0, 10.0, &[10.0]);
+            pen.acc(&[(5.0, 6.75), (11.0, 6.75)]);
+            pen.acc(&[(6.25, 9.25), (9.75, 9.25)]);
+            pen.line(&[(8.0, 1.5), (8.0, 3.0)]);
+            pen.line(&[(8.0, 13.0), (8.0, 14.5)]);
+            pen.line(&[(1.5, 8.0), (3.0, 8.0)]);
+            pen.line(&[(13.0, 8.0), (14.5, 8.0)]);
         }
         "textDirection" => {
             pen.glyph_a(5.5, 13.0, 10.0, c, c);
@@ -1644,15 +1656,13 @@ fn draw(pen: &Pen, name: &str, c: Color32, a: Color32, green: Color32, red: Colo
         }
         // Draw table: a pencil drawing a grid.
         "draw" => {
-            pen.grid(1.5, 1.5, 7.5, 7.5, &[4.5], &[4.5]);
-            pen.fill(&[(9.25, 9.25), (11.94, 10.1), (10.1, 11.94)], a);
-            pen.fill(&[(11.94, 10.1), (14.27, 12.71), (12.71, 14.27), (10.1, 11.94)], pen.t);
-            pen.poly(&[(9.25, 9.25), (11.94, 10.1), (14.27, 12.71), (12.71, 14.27), (10.1, 11.94)], a);
+            pen.grid(1.5, 9.0, 6.5, 14.0, &[4.0], &[11.5]);
+            pen.pencil(7.5, -1.0, 0.55, a);
         }
         "borderPainter" => {
-            pen.acc(&[(1.5, 1.5), (9.0, 1.5)]);
+            pen.acc(&[(1.5, 1.5), (8.5, 1.5)]);
             pen.line(&[(1.5, 4.0), (1.5, 7.0)]);
-            pen.poly(&[(4.0, 14.5), (4.6, 12.0), (11.5, 5.1), (13.9, 7.5), (7.0, 14.4)], c);
+            pen.pencil(2.25, 2.0, 0.8, a);
         }
         // Chrome
         // Save: into a tray, not a floppy disk.
