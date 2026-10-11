@@ -487,6 +487,7 @@ pub fn sectpr(e: &El) -> (SectionProps, Vec<HfRef>) {
             }
             "w:titlePg" => s.title_page = on_off(k),
             "w:bidi" => s.rtl = on_off(k),
+            "w:textDirection" => s.text_direction = wordcraft_doc::props::TextDirection::from_ooxml(k.attr("w:val").unwrap_or("")),
             "w:pgNumType" => {
                 s.page_num_start = k.attr("w:start").and_then(u32_of);
                 if let Some(f) = k.attr("w:fmt") {

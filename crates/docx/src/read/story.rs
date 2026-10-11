@@ -894,6 +894,41 @@ impl Reader<'_> {
             Some(t) if sc.story_depth < MAX_STORY_DEPTH => Some(self.read_textbox(sc, t, rels)),
             _ => None,
         };
+        // A box continuing another's text (Create Link): its own, empty story, linked up once the
+        // whole document is read.
+        let linked = wsp.child("wps:linkedTxbx").filter(|_| txbx.is_none());
+        let story = match linked {
+            Some(l) => {
+                kind = ShapeKind::TextBox;
+                let id = l.attr("id").and_then(|v| v.trim().parse::<u32>().ok());
+                let seq = l.attr("seq").and_then(|v| v.trim().parse::<u32>().ok());
+                match (id, seq) {
+                    (Some(id), Some(seq)) if seq > 0 => {
+                        let part = self.doc.add_part(PartKind::TextBox, Blocks::new());
+                        self.txbx_links.push((id, seq, part));
+                        Some(part)
+                    }
+                    _ => story,
+                }
+            }
+            None => {
+                if let (Some(part), Some(id)) = (story, wsp.child("wps:txbx").and_then(|t| t.attr("id")).and_then(|v| v.trim().parse::<u32>().ok())) {
+                    self.txbx_links.push((id, 0, part));
+                }
+                story
+            }
+        };
+        // Text direction and alignment (`wps:bodyPr`).
+        if let (Some(id), Some(bp)) = (story, wsp.child("wps:bodyPr"))
+            && let Some(part) = self.doc.parts.get_mut(&id)
+        {
+            if let Some(v) = bp.attr("vert") {
+                part.body.vert = wordcraft_doc::props::TextVert::from_ooxml(v);
+            }
+            if let Some(a) = bp.attr("anchor") {
+                part.body.anchor = wordcraft_doc::props::valign_from_anchor(a);
+            }
+        }
         InlineObject::Shape { kind, w, h, fill, stroke, stroke_width, float, story, freeform: None, effects }
     }
 

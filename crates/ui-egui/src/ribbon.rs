@@ -761,6 +761,16 @@ fn design(app: &mut WordApp, ui: &mut Ui) {
 
 fn layout(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Page Setup", Some("ui.dialog"), app, |ui, app| {
+        // Text Direction works on what the caret is in: table cells, a text box, else the section.
+        let dir = wordcraft_engine::cmd::page::text_direction_at(&app.session);
+        menu_button(ui, app, "textDirection", Some("Text\nDirection"), "Text Direction", true, |ui, app| {
+            use wordcraft_doc::props::TextDirection;
+            for (label, d) in
+                [("Horizontal", TextDirection::Horizontal), ("Rotate all text 90°", TextDirection::Down), ("Rotate all text 270°", TextDirection::Up)]
+            {
+                mi_check(ui, app, label, dir == d, "layout.textDirection", json!({"value": d.ooxml()}));
+            }
+        });
         menu_button(ui, app, "margins", Some("Margins"), "Margins", true, |ui, app| {
             for (l, k) in [
                 ("Normal  1\" all", "normal"),
@@ -1241,6 +1251,7 @@ fn shape_format(app: &mut WordApp, ui: &mut Ui) {
             });
         });
     });
+    shape_text_group(app, ui);
     group(ui, "Arrange", None, app, |ui, app| {
         big(ui, app, "position", "Position", "arrange.position", json!({}), false);
         big(ui, app, "wrapText", "Wrap\nText", "arrange.wrap", json!({}), false);
@@ -1268,6 +1279,39 @@ fn shape_format(app: &mut WordApp, ui: &mut Ui) {
             });
             ui.add_space(2.0);
             crate::widgets::row(ui, |ui| rotation_field(ui, app));
+        });
+    });
+}
+
+/// Shape Format › Text: the text box's Text Direction and Align Text, and Create Link (Break Link
+/// once it is linked to another box).
+fn shape_text_group(app: &mut WordApp, ui: &mut Ui) {
+    use wordcraft_doc::props::{TextVert, VAlign};
+    let target = wordcraft_engine::cmd::objects::text_box_target(&app.session);
+    let body = target.and_then(|(_, id)| app.session.doc.parts.get(&id).map(|p| p.body)).unwrap_or_default();
+    group(ui, "Text", None, app, |ui, app| {
+        stack(ui, |ui| {
+            menu_button(ui, app, "textDirection", Some("Text Direction"), "Text Direction", false, |ui, app| {
+                for (label, vert) in [
+                    ("Horizontal", TextVert::Horz),
+                    ("Rotate all text 90°", TextVert::Vert),
+                    ("Rotate all text 270°", TextVert::Vert270),
+                    ("Stacked", TextVert::Stacked),
+                ] {
+                    mi_check(ui, app, label, body.vert == vert, "shape.textDirection", json!({"dir": vert.ooxml()}));
+                }
+            });
+            menu_button(ui, app, "alignText", Some("Align Text"), "Align Text", false, |ui, app| {
+                for (label, anchor) in [("Top", VAlign::Top), ("Middle", VAlign::Center), ("Bottom", VAlign::Bottom)] {
+                    mi_check(ui, app, label, body.anchor == anchor, "shape.alignText", json!({"anchor": wordcraft_doc::props::anchor_ooxml(anchor)}));
+                }
+            });
+            if body.next.is_some() {
+                small(ui, app, "textBoxUnlink", Some("Break Link"), "Break Link", "shape.breakLink", json!({}), false);
+            } else {
+                let waiting = app.canvas.link_from.is_some();
+                small(ui, app, "textBoxLink", Some("Create Link"), "Create Link", "ui.linkTextBox", json!({}), waiting);
+            }
         });
     });
 }

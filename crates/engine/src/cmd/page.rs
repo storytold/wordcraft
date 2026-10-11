@@ -62,6 +62,9 @@ pub fn specs() -> Vec<CommandSpec> {
             };
             with_sect(s, |x| x.valign = va)
         }),
+        CommandSpec::new("layout.textDirection", "Text Direction", "Layout › Page Setup", text_direction).params(
+            r#"{"value"?: "horizontal|down|up"} (also lrTb|tbRl|btLr; down: rotate all text 90°, lines top to bottom stacking right to left; up: 270°; default: the next after the current). In a table cell it turns the selected cells, in a text box the box; anywhere else the section(s) of the selection"#,
+        ),
         CommandSpec::new("layout.differentFirstPage", "Different First Page", "Header & Footer › Options", |s, v| {
             let on = p::bool(v, "value").unwrap_or(!sect(s).title_page);
             with_sect(s, |x| x.title_page = on)
@@ -109,6 +112,44 @@ fn with_sect(s: &mut Session, f: impl Fn(&mut SectionProps)) -> CmdResult {
         f(s.doc.section_mut(block));
     }
     Ok(serde_json::to_value(sect(s)).unwrap_or(Value::Null))
+}
+
+/// The text direction Layout › Text Direction would change: the caret cell's, the text box's,
+/// or the section's.
+pub fn text_direction_at(s: &Session) -> wordcraft_doc::props::TextDirection {
+    if let Some((tp, r, c)) = s.sel.focus.path.cell() {
+        return s.doc.table(s.sel.focus.story, &tp).and_then(|t| t.rows.get(r)?.cells.get(c).map(|cl| cl.props.text_direction)).unwrap_or_default();
+    }
+    if let Some((_, id)) = super::objects::text_box_target(s) {
+        return s.doc.parts.get(&id).map(|p| p.body.vert.turn()).unwrap_or_default();
+    }
+    sect(s).text_direction
+}
+
+/// Layout › Text Direction: like Word's button it works on what the caret is in — the selected
+/// table cells, the text box, or else the section.
+fn text_direction(s: &mut Session, v: &Value) -> CmdResult {
+    use wordcraft_doc::props::{TextDirection, TextVert};
+    let dir = match p::str(v, "value") {
+        Some("horizontal" | "lrTb" | "horz") => Some(TextDirection::Horizontal),
+        Some("down" | "tbRl" | "vert" | "rotate90") => Some(TextDirection::Down),
+        Some("up" | "btLr" | "vert270" | "rotate270") => Some(TextDirection::Up),
+        Some(x) => return Err(CmdError::Params(format!("unknown text direction `{x}`"))),
+        None => None,
+    };
+    let dir = dir.unwrap_or(text_direction_at(s).next());
+    if s.sel.focus.path.cell().is_some() {
+        return super::table::text_direction(s, &json!({"value": dir.ooxml()}));
+    }
+    if super::objects::text_box_target(s).is_some() {
+        let vert = match dir {
+            TextDirection::Horizontal => TextVert::Horz,
+            TextDirection::Down => TextVert::Vert,
+            TextDirection::Up => TextVert::Vert270,
+        };
+        return super::objects::set_text_body(s, |b| b.vert = vert);
+    }
+    with_sect(s, |x| x.text_direction = dir)
 }
 
 fn margins(s: &mut Session, v: &Value) -> CmdResult {
@@ -285,6 +326,29 @@ mod tests {
 
     fn doc() -> Session {
         Session::new(wordcraft_doc::Document::from_text("one\ntwo\nthree"))
+    }
+
+    /// Layout › Text Direction turns the section, or the table cell the caret is in; one undo step.
+    #[test]
+    fn text_direction_turns_the_section_or_the_cell() {
+        use wordcraft_doc::props::TextDirection;
+        let mut s = doc();
+        s.run("layout.textDirection", &json!({"value": "down"})).unwrap();
+        assert_eq!(sect(&s).text_direction, TextDirection::Down);
+        assert_eq!(text_direction_at(&s), TextDirection::Down);
+        // Without a value: the next one, like Word's button.
+        s.run("layout.textDirection", &json!({})).unwrap();
+        assert_eq!(sect(&s).text_direction, TextDirection::Up);
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(sect(&s).text_direction, TextDirection::Down);
+        assert!(s.run("layout.textDirection", &json!({"value": "diagonal"})).is_err());
+        assert_eq!(sect(&s).text_direction, TextDirection::Down);
+        // In a table cell it turns the cell, not the section.
+        s.run("insert.table", &json!({"rows": 1, "cols": 2})).unwrap();
+        assert!(s.sel.focus.path.cell().is_some());
+        s.run("layout.textDirection", &json!({"value": "btLr"})).unwrap();
+        assert_eq!(text_direction_at(&s), TextDirection::Up);
+        assert_eq!(sect(&s).text_direction, TextDirection::Down);
     }
 
     /// More Columns: unequal widths with a line between, as one undo step.

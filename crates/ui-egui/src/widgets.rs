@@ -79,6 +79,7 @@ pub fn enabled(app: &WordApp, id: &str) -> bool {
         Some(s) => (s.enabled)(&app.session).is_none(),
         // Zotero: one command at a time, and only in the desktop app.
         None if id.starts_with("ui.zotero.") => app.zotero.busy.is_none() && !cfg!(target_arch = "wasm32"),
+        None if id == "ui.linkTextBox" => enabled(app, "shape.link"),
         None => id.starts_with("ui."),
     }
 }

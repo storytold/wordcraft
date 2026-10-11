@@ -296,6 +296,10 @@ pub struct SectionProps {
     pub page_borders: Option<Borders>,
     /// Text direction / bidi section.
     pub rtl: bool,
+    /// Which way the section's text runs (`w:textDirection`, ECMA-376 §17.6.20): vertical
+    /// sections turn the page's text area (headers and footers stay horizontal).
+    #[serde(skip_serializing_if = "is_horizontal")]
+    pub text_direction: crate::props::TextDirection,
     /// Tracked change of the section's properties (`w:sectPrChange`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fmt_change: Option<Box<crate::props::PropChange<SectionProps>>>,
@@ -326,9 +330,14 @@ impl Default for SectionProps {
             valign: VAlign::Top,
             page_borders: None,
             rtl: false,
+            text_direction: crate::props::TextDirection::Horizontal,
             fmt_change: None,
         }
     }
+}
+
+fn is_horizontal(d: &crate::props::TextDirection) -> bool {
+    !d.is_turned()
 }
 
 impl SectionProps {

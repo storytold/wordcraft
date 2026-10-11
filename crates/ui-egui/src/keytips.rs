@@ -224,6 +224,7 @@ fn controls(tab: &str) -> Vec<Control> {
             m("Page Borders", "design.pageBorders"),
         ],
         "Layout" => vec![
+            m("Text Direction", "layout.textDirection"),
             m("Margins", "layout.margins"),
             m("Orientation", "layout.orientation"),
             m("Size", "layout.size"),

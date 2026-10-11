@@ -758,6 +758,71 @@ impl TextDirection {
     }
 }
 
+/// Which way a text box's text runs (Shape Format › Text › Text Direction; DrawingML
+/// `a:bodyPr/@vert`, ECMA-376 §21.1.10.83 `ST_TextVerticalType`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum TextVert {
+    /// Upright, lines stacking downwards (`horz`).
+    #[default]
+    Horz,
+    /// Turned 90° clockwise (`vert`).
+    Vert,
+    /// Turned 270° (`vert270`).
+    Vert270,
+    /// Upright letters stacked one above the other (`wordArtVert`).
+    Stacked,
+}
+
+impl TextVert {
+    /// The direction an `ST_TextVerticalType` value names; the East Asian and Mongolian vertical
+    /// layouts turn like `vert`, unknown values are horizontal.
+    pub fn from_ooxml(v: &str) -> TextVert {
+        match v {
+            "vert" | "eaVert" | "mongolianVert" => TextVert::Vert,
+            "vert270" => TextVert::Vert270,
+            "wordArtVert" | "wordArtVertRtl" => TextVert::Stacked,
+            _ => TextVert::Horz,
+        }
+    }
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            TextVert::Horz => "horz",
+            TextVert::Vert => "vert",
+            TextVert::Vert270 => "vert270",
+            TextVert::Stacked => "wordArtVert",
+        }
+    }
+    /// How its lines turn on the page (stacked text stays upright).
+    pub fn turn(self) -> TextDirection {
+        match self {
+            TextVert::Vert => TextDirection::Down,
+            TextVert::Vert270 => TextDirection::Up,
+            TextVert::Horz | TextVert::Stacked => TextDirection::Horizontal,
+        }
+    }
+}
+
+/// Where a text box's text sits between its top and bottom (Align Text; `a:bodyPr/@anchor`,
+/// `ST_TextAnchoringType`): reuses [`VAlign`]. Justified and distributed anchoring read as top
+/// and middle.
+pub fn valign_from_anchor(v: &str) -> VAlign {
+    match v {
+        "ctr" | "dist" => VAlign::Center,
+        "b" => VAlign::Bottom,
+        _ => VAlign::Top,
+    }
+}
+
+/// The `ST_TextAnchoringType` value for `a`.
+pub fn anchor_ooxml(a: VAlign) -> &'static str {
+    match a {
+        VAlign::Top => "t",
+        VAlign::Center => "ctr",
+        VAlign::Bottom => "b",
+    }
+}
+
 /// Table-wide properties.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]

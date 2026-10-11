@@ -5,8 +5,8 @@
 
 use serde_json::{Value, json};
 use wordcraft_doc::para::{Float, InlineObject, Wrap};
-use wordcraft_doc::props::Rgb;
-use wordcraft_doc::{Pos, StoryRef};
+use wordcraft_doc::props::{Rgb, TextVert, VAlign};
+use wordcraft_doc::{Pos, StoryRef, TextBody};
 use wordcraft_geom::Spin;
 
 use super::sel_result;
@@ -342,7 +342,128 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"kind": string}"#)
         .when(has_shape),
+        CommandSpec::new("shape.textDirection", "Text Direction", "Shape Format › Text", |s, v| {
+            let dir = p::str(v, "dir").unwrap_or("horz");
+            let vert = match dir {
+                "horz" | "horizontal" => TextVert::Horz,
+                "vert" | "rotate90" => TextVert::Vert,
+                "vert270" | "rotate270" => TextVert::Vert270,
+                "wordArtVert" | "stacked" => TextVert::Stacked,
+                other => return Err(CmdError::Params(format!("unknown text direction `{other}`"))),
+            };
+            set_text_body(s, |b| b.vert = vert)
+        })
+        .params(r#"{"dir": "horz|vert|vert270|wordArtVert"}  (horizontal, rotate all text 90°, 270°, stacked; the selected text box or the one the caret is in)"#)
+        .when(has_text_box),
+        CommandSpec::new("shape.alignText", "Align Text", "Shape Format › Text", |s, v| {
+            let anchor = match p::str(v, "anchor").unwrap_or("t") {
+                "t" | "top" => VAlign::Top,
+                "ctr" | "middle" | "center" => VAlign::Center,
+                "b" | "bottom" => VAlign::Bottom,
+                other => return Err(CmdError::Params(format!("unknown text alignment `{other}`"))),
+            };
+            set_text_body(s, |b| b.anchor = anchor)
+        })
+        .params(r#"{"anchor": "t|ctr|b"}  (top, middle, bottom of the box: for turned text, from the side its lines start on)"#)
+        .when(has_text_box),
+        CommandSpec::new("shape.link", "Create Link", "Shape Format › Text", link_text_box)
+            .params(r#"{"target": Pos | n}  (the empty text box the selected box's text continues in: its position, or its Selection Pane index)"#)
+            .when(can_link),
+        CommandSpec::new("shape.breakLink", "Break Link", "Shape Format › Text", |s, _| {
+            let (pos, id) = text_box_target(s).ok_or_else(|| CmdError::Disabled(NO_TEXT_BOX.into()))?;
+            let part = s.doc.parts.get_mut(&id).ok_or_else(|| CmdError::Failed("text box vanished".into()))?;
+            if part.body.next.take().is_none() {
+                return Err(CmdError::Disabled("this text box isn't linked to another".into()));
+            }
+            edit_obj(s, &pos, |_| {})?;
+            Ok(json!({"textBox": id}))
+        })
+        .params(r#"{}  (the text stops at the end of the selected box; the boxes after it go back to their own text)"#)
+        .when(|s| match text_box_target(s) {
+            Some((_, id)) if s.doc.parts.get(&id).is_some_and(|p| p.body.next.is_some()) => None,
+            _ => Some("select a text box linked to another first"),
+        }),
     ]
+}
+
+const NO_TEXT_BOX: &str = "select a text box first";
+
+fn has_text_box(s: &Session) -> Option<&'static str> {
+    if text_box_target(s).is_some() { None } else { Some(NO_TEXT_BOX) }
+}
+
+fn is_text_box(s: &Session, id: u32) -> bool {
+    s.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox)
+}
+
+/// The text box the Shape Format › Text commands work on: the selected one, or the one whose
+/// text the caret is in. Its U+FFFC's position and its story.
+pub fn text_box_target(s: &Session) -> Option<(Pos, u32)> {
+    if let Some((pos, InlineObject::Shape { story: Some(id), .. })) = selected(s)
+        && is_text_box(s, id)
+    {
+        return Some((pos, id));
+    }
+    let StoryRef::Part(id) = s.sel.focus.story else { return None };
+    if !is_text_box(s, id) {
+        return None;
+    }
+    let after = s.doc.text_box_anchor(id)?;
+    let off = after.off.checked_sub(wordcraft_doc::para::OBJ.len_utf8())?;
+    Some((Pos { off, ..after }, id))
+}
+
+/// Change the target text box's text direction, alignment or link.
+pub(crate) fn set_text_body(s: &mut Session, f: impl Fn(&mut TextBody)) -> CmdResult {
+    let (pos, id) = text_box_target(s).ok_or_else(|| CmdError::Disabled(NO_TEXT_BOX.into()))?;
+    let part = s.doc.parts.get_mut(&id).ok_or_else(|| CmdError::Failed("text box vanished".into()))?;
+    f(&mut part.body);
+    let body = part.body;
+    // Its paragraph is laid out again.
+    edit_obj(s, &pos, |_| {})?;
+    Ok(json!({"textBox": id, "body": body}))
+}
+
+fn can_link(s: &Session) -> Option<&'static str> {
+    match text_box_target(s) {
+        None => Some(NO_TEXT_BOX),
+        Some((_, id)) if s.doc.parts.get(&id).is_some_and(|p| p.body.next.is_some()) => Some("this text box is already linked: break the link first"),
+        Some(_) => None,
+    }
+}
+
+/// `shape.link`: the selected text box's text continues in the target box, which must be an
+/// empty text box no other box links to, and not one of those the text already runs through.
+fn link_text_box(s: &mut Session, v: &Value) -> CmdResult {
+    let (pos, from) = text_box_target(s).ok_or_else(|| CmdError::Disabled(NO_TEXT_BOX.into()))?;
+    let target = v.get("target").ok_or_else(|| CmdError::Params("`target`: the text box to link to".into()))?;
+    let at = match target.as_u64() {
+        Some(n) => all_objects(s).into_iter().nth(usize::try_from(n).unwrap_or(usize::MAX)).map(|(p, _)| p),
+        None => super::parse_pos(target),
+    }
+    .ok_or_else(|| CmdError::Params("no object there".into()))?;
+    let to = match s.doc.para_at(&at).and_then(|q| q.object_at(at.off)) {
+        Some(InlineObject::Shape { story: Some(id), .. }) if is_text_box(s, *id) => *id,
+        _ => return Err(CmdError::Params("the target isn't a text box".into())),
+    };
+    if s.doc.parts.get(&from).is_some_and(|p| p.body.next.is_some()) {
+        return Err(CmdError::Failed("this text box is already linked: break the link first".into()));
+    }
+    if to == from || s.doc.text_box_chain(from).is_some_and(|c| c.contains(&to)) {
+        return Err(CmdError::Failed("a text box can't link to itself or to a box its text already runs through".into()));
+    }
+    if s.doc.text_box_chains().iter().any(|c| c.iter().skip(1).any(|id| *id == to)) {
+        return Err(CmdError::Failed("another text box already links to that one".into()));
+    }
+    if !s.doc.plain_text(StoryRef::Part(to)).trim().is_empty() {
+        return Err(CmdError::Failed("the text box to link to must be empty".into()));
+    }
+    if let Some(p) = s.doc.parts.get_mut(&from) {
+        p.body.next = Some(to);
+    }
+    edit_obj(s, &pos, |_| {})?;
+    edit_obj(s, &at, |_| {})?;
+    Ok(json!({"textBox": from, "next": to}))
 }
 
 /// The selection when it is exactly one picture, shape or text box (its U+FFFC), rather than
@@ -1283,5 +1404,46 @@ mod tests {
         let InlineObject::Image { alt, crop, .. } = o else { panic!("expected image") };
         assert_eq!(alt, "A red box");
         assert_eq!(crop, [0.1, 0.2, 0.05, 0.0]);
+    }
+
+    /// Shape Format › Text (#369): direction and alignment on the box the caret is in, then
+    /// Create Link to an empty box and Break Link, each one undo step.
+    #[test]
+    fn text_direction_alignment_and_links() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("insert.textBox", &json!({"text": "Some text that flows on"})).unwrap();
+        let a = text_box_target(&s).unwrap().1;
+        s.run("shape.textDirection", &json!({"dir": "vert270"})).unwrap();
+        s.run("shape.alignText", &json!({"anchor": "ctr"})).unwrap();
+        let body = |s: &Session, id: u32| s.doc.parts.get(&id).unwrap().body;
+        assert_eq!((body(&s, a).vert, body(&s, a).anchor), (TextVert::Vert270, VAlign::Center));
+        assert!(s.run("shape.textDirection", &json!({"dir": "sideways"})).is_err());
+        assert_eq!(body(&s, a).vert, TextVert::Vert270, "a bad value changes nothing");
+
+        // A second, empty box after the first; link the first to it by its pane index.
+        s.run("caret.set", &json!({"pos": Pos::body(0, 3)})).unwrap();
+        s.run("insert.textBox", &json!({})).unwrap();
+        let b = text_box_target(&s).unwrap().1;
+        s.run("select.objects", &json!({"index": 0})).unwrap();
+        assert_eq!(text_box_target(&s).map(|t| t.1), Some(a));
+        s.run("shape.link", &json!({"target": 1})).unwrap();
+        assert_eq!(s.doc.text_box_chains(), vec![vec![a, b]]);
+        assert!(can_link(&s).is_some(), "linked once: Break Link first");
+        // The second box shows the first one's story.
+        let l = s.layout();
+        assert_eq!(
+            l.pages[0].items.iter().filter(|it| matches!(it, wordcraft_layout::Placed::Object { text_box: Some(t), .. } if *t == a)).count(),
+            2
+        );
+        // Linking back to the start, or to a box with text, is refused.
+        s.run("select.objects", &json!({"index": 1})).unwrap();
+        assert!(s.run("shape.link", &json!({"target": 0})).is_err());
+        s.run("select.objects", &json!({"index": 0})).unwrap();
+        s.run("shape.breakLink", &json!({})).unwrap();
+        assert!(s.doc.text_box_chains().is_empty());
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.doc.text_box_chains(), vec![vec![a, b]]);
+        s.run("edit.undo", &json!({})).unwrap();
+        assert!(s.doc.text_box_chains().is_empty());
     }
 }

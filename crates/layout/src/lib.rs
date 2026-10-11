@@ -15,6 +15,8 @@ pub mod kinsoku;
 pub mod math;
 pub mod para;
 mod table;
+mod textbox;
+mod vertical;
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -347,6 +349,8 @@ struct Ctx<'a> {
     eq_count: u32,
     /// Bounds laying out text boxes inside text boxes, for the whole layout.
     boxes: wordcraft_doc::BoxBudget,
+    /// Linked text boxes (Create Link).
+    chains: textbox::Chains,
 }
 
 impl Ctx<'_> {
@@ -1137,6 +1141,7 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
         numbers: HashMap::new(),
         eq_count: 0,
         boxes: wordcraft_doc::BoxBudget::default(),
+        chains: Default::default(),
     };
     let sections = doc.sections();
     let web = opts.view != ViewMode::Print;
@@ -1179,12 +1184,28 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
         page_items_start: 0,
     };
     let mut block = 0usize;
+    // Vertical sections are laid out on their pages turned on their side (see `vertical`).
+    let turned: Vec<Option<SectionProps>> = sections
+        .iter()
+        .map(|(_, s)| {
+            (!web && s.text_direction.is_turned()).then(|| {
+                let top = body_top_for(&mut ctx, s, s.headers.default);
+                vertical::unturned_sect(s, top)
+            })
+        })
+        .collect();
+    let mut prev_turn = TextDirection::Horizontal;
     for (si, (end, sect)) in sections.iter().enumerate() {
-        let sect: &SectionProps = if web { sect_ref } else { sect };
+        let turn = if web { TextDirection::Horizontal } else { sect.text_direction };
+        let sect: &SectionProps = match turned.get(si) {
+            Some(Some(t)) => t,
+            _ if web => sect_ref,
+            _ => sect,
+        };
         pb.sect = sect;
         pb.sect_idx = si;
-        let body_top = if web { sect.margin_top } else { body_top_for(&mut ctx, sect, sect.headers.default) };
-        let first_top = if web || !sect.title_page { body_top } else { body_top_for(&mut ctx, sect, sect.headers.first) };
+        let body_top = if web || turn.is_turned() { sect.margin_top } else { body_top_for(&mut ctx, sect, sect.headers.default) };
+        let first_top = if web || turn.is_turned() || !sect.title_page { body_top } else { body_top_for(&mut ctx, sect, sect.headers.first) };
         let restart = sect.page_num_start;
         if sect.line_numbers.as_ref().is_some_and(|l| l.restart == wordcraft_doc::section::LineNumberRestart::Section) {
             pb.line_no = 0;
@@ -1192,7 +1213,8 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
         let start = if si == 0 { SectionStart::NextPage } else { sect.start };
         if web && si > 0 {
             // one long page
-        } else if pb.pages.is_empty() || start != SectionStart::Continuous {
+        } else if pb.pages.is_empty() || start != SectionStart::Continuous || turn != prev_turn {
+            // A page holds text running one way: a section turning the other way starts a page.
             if let Some(n) = restart {
                 pb.number = n.saturating_sub(1);
             }
@@ -1209,6 +1231,7 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
             pb.col = 0;
             pb.top = pb.y;
         }
+        prev_turn = turn;
         let last = (*end).min(doc.body.len().saturating_sub(1));
         while block <= last {
             let Some(b) = doc.body.get(block) else { break };
@@ -1279,6 +1302,13 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
     }
     pb.carry.clear();
     let mut pages = pb.pages;
+    for p in &mut pages {
+        if let Some((_, s)) = sections.get(p.section)
+            && !web
+        {
+            vertical::turn_page(p, s.text_direction, s);
+        }
+    }
     if web && let Some(p) = pages.first_mut() {
         let bottom = p
             .items
@@ -1545,13 +1575,15 @@ fn place_objects(
                 }
                 _ => None,
             };
+            // A box linked from another shows (and edits) that box's story.
+            let shown = text_box.map(|id| textbox::shown_story(ctx, id));
             front.push(Placed::Object {
                 rect,
                 spin: float.spin(),
                 story,
                 path: Path(path.to_vec()),
                 off: c.start,
-                text_box,
+                text_box: shown,
                 wrap: float.wrap,
                 origin: Point::new(at.col.0, at.para_y),
             });
@@ -1571,18 +1603,9 @@ fn place_objects(
                 _ => text_box.map(|id| (id, rect)).into_iter().collect(),
             };
             for (id, rect) in boxes {
-                if !ctx.boxes.enter(id) {
-                    continue;
-                }
-                let blocks = ctx.doc.parts.get(&id).map(|p| p.blocks.clone()).unwrap_or_default();
-                let inner = layout_box(ctx, StoryRef::Part(id), &blocks, &[], (rect.w - 2.0 * BOX_INSET_X).max(12.0), None, depth + 1, None).items;
-                ctx.boxes.leave();
+                let items = textbox::box_items(ctx, id, rect, depth);
                 let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
-                // Text that doesn't fit inside the margins is hidden, as in Word.
-                for mut it in fit_box(inner, rect.h - 2.0 * BOX_INSET_Y) {
-                    it.translate(rect.x + BOX_INSET_X, rect.y + BOX_INSET_Y);
-                    layer.push(it);
-                }
+                layer.extend(items);
             }
         }
     }
@@ -2083,3 +2106,7 @@ pub fn now_ms() -> f64 {
 mod tests;
 #[cfg(test)]
 mod tests_bidi;
+#[cfg(test)]
+mod tests_textbox;
+#[cfg(test)]
+mod tests_vertical;

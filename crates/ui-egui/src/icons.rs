@@ -1128,6 +1128,25 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.fcircle(7.5, 10.5, 1.5, Color32::WHITE);
             pen.fcircle(12.5, 10.5, 1.5, Color32::WHITE);
         }
+        "alignText" => {
+            // A box with its text lines in the middle, arrows to the top and bottom edges.
+            pen.rect(3.0, 2.5, 17.0, 17.5, c);
+            pen.lines(5.5, 11.0, &[9.0, 11.5]);
+            pen.line_c(&[(14.0, 5.0), (14.0, 15.0)], a);
+            pen.line_c(&[(12.5, 6.5), (14.0, 5.0), (15.5, 6.5)], a);
+            pen.line_c(&[(12.5, 13.5), (14.0, 15.0), (15.5, 13.5)], a);
+        }
+        "textBoxLink" | "textBoxUnlink" => {
+            // Two boxes, the text running from the first into the second (broken: cut through).
+            pen.rect(2.0, 3.0, 8.5, 11.0, c);
+            pen.rect(11.5, 9.0, 18.0, 17.0, c);
+            pen.lines(3.5, 7.0, &[5.5, 8.0]);
+            pen.line_c(&[(5.0, 11.0), (5.0, 14.0), (11.5, 14.0)], a);
+            pen.line_c(&[(9.5, 12.5), (11.5, 14.0), (9.5, 15.5)], a);
+            if name == "textBoxUnlink" {
+                pen.line_c(&[(6.5, 16.5), (9.0, 11.5)], c);
+            }
+        }
         "help" => {
             pen.circle(10.0, 10.0, 7.0, c);
             pen.text(10.0, 10.0, 10.0, "?", a, true);
