@@ -444,7 +444,7 @@ jobs:
   release:
     name: Draft GitHub Release
     # Needs the signing jobs, which only run on `release`: a branch dry run never gets here.
-    needs: [version, macos, windows, linux, flatpak, freebsd, web]
+    needs: [version, macos, windows, linux, linux-riscv64, flatpak, freebsd, web]
     runs-on: ubuntu-latest
     environment: release
     permissions:
