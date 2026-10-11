@@ -32,6 +32,7 @@ pub mod keys;
 pub mod keytips;
 pub mod mini_toolbar;
 pub mod objects;
+pub mod options;
 pub mod panes;
 pub mod paste_picture;
 pub mod previews;
@@ -124,7 +125,27 @@ pub struct UiState {
     /// View › Switch Modes: show pages dark (white text on black), kept between runs. Only the
     /// pages: the interface follows [`UiState::theme`] (#312).
     pub dark_page: bool,
+    /// File › Options › General: initials for comments; empty = the user name's. The session
+    /// owns them while running, like `author`.
+    pub initials: String,
+    /// The File › Options pane last shown ([`wordcraft_engine::cmd::options::PANES`]).
+    pub options_pane: String,
+    /// File › Options › Advanced: how many recent documents File › Home and Open list (0–50).
+    pub recent_count: usize,
+    /// File › Options › General: show the mini toolbar over a selection.
+    pub mini_toolbar: bool,
+    /// File › Options › Display: print the page colour (off, as in Word).
+    pub print_backgrounds: bool,
+    /// File › Options › Display: update fields (dates, page numbers, SEQ…) before printing.
+    pub update_fields_before_print: bool,
+    /// The custom dictionary (File › Options › Proofing, Add to Dictionary), kept between runs.
+    pub dictionary: Vec<String>,
 }
+
+/// Most recent documents kept (File › Options › Advanced offers 0–50, as Word does).
+pub const MAX_RECENT: usize = 50;
+/// Most custom dictionary words read back from `ui.json`.
+pub const MAX_DICTIONARY: usize = 10_000;
 
 impl Default for UiState {
     fn default() -> Self {
@@ -148,7 +169,29 @@ impl Default for UiState {
             keytips: crate::keytips::Phase::Off,
             alt_chord_used: false,
             dark_page: false,
+            initials: String::new(),
+            options_pane: "general".into(),
+            recent_count: 12,
+            mini_toolbar: true,
+            print_backgrounds: false,
+            update_fields_before_print: false,
+            dictionary: Vec::new(),
         }
+    }
+}
+
+impl UiState {
+    /// Read `ui.json` leniently: a setting with a value of the wrong type (or a newer or older
+    /// version's idea of it) falls back to its default instead of discarding every setting.
+    /// `None` only when the file isn't a JSON object.
+    pub fn from_json(bytes: &[u8]) -> Option<UiState> {
+        let v: Value = serde_json::from_slice(bytes).ok()?;
+        v.is_object().then(|| options::lenient(&v))
+    }
+
+    /// How many recent documents to list.
+    pub fn recent_shown(&self) -> usize {
+        self.recent_count.min(MAX_RECENT)
     }
 }
 
@@ -285,6 +328,8 @@ impl WordApp {
     pub fn prefs(&self) -> UiState {
         let mut ui = self.ui.clone();
         ui.author = self.session.author.clone();
+        ui.initials = self.session.initials.clone();
+        ui.dictionary = wordcraft_engine::proof::user_dictionary();
         ui.editing = self.session.prefs.clone();
         ui.read_aloud_rate = self.session.read_aloud.rate();
         ui.read_aloud_skip_citations = self.session.read_aloud.skip_citations;
@@ -304,6 +349,13 @@ impl WordApp {
         let author = std::mem::take(&mut self.ui.author);
         if !author.trim().is_empty() {
             self.session.author = author;
+        }
+        self.session.initials = std::mem::take(&mut self.ui.initials).chars().take(wordcraft_engine::cmd::options::MAX_INITIALS_CHARS).collect();
+        for w in std::mem::take(&mut self.ui.dictionary).iter().take(MAX_DICTIONARY) {
+            let w = w.trim();
+            if !w.is_empty() && w.chars().count() <= wordcraft_engine::cmd::options::MAX_WORD_CHARS {
+                wordcraft_engine::proof::add_word(w);
+            }
         }
         self.session.prefs = std::mem::take(&mut self.ui.editing);
         self.session.read_aloud.set_rate(self.ui.read_aloud_rate);
@@ -510,6 +562,7 @@ impl WordApp {
     }
 
     fn after_command(&mut self, id: &str) {
+        options::sync(self);
         self.canvas.caret_visible_since = now_ms();
         if !id.starts_with("view.") && !id.starts_with("document.") && !id.starts_with("format.state") {
             self.canvas.scroll_to_caret = true;
@@ -522,7 +575,7 @@ impl WordApp {
         {
             self.ui.recent.retain(|r| *r != p);
             self.ui.recent.insert(0, p);
-            self.ui.recent.truncate(12);
+            self.ui.recent.truncate(MAX_RECENT);
         }
         if !self.session.status.is_empty() {
             let s = std::mem::take(&mut self.session.status);
@@ -546,6 +599,9 @@ impl WordApp {
                 "options" => {
                     self.ui.backstage = true;
                     self.ui.backstage_page = "options".into();
+                    if let Some(pane) = req.get("pane").and_then(Value::as_str) {
+                        self.ui.options_pane = pane.into();
+                    }
                 }
                 "pasteSpecial" => self.dialog = Some(dialogs::Dialog::paste_special(self, req)),
                 other => self.dialog = dialogs::Dialog::open(other, self),
@@ -579,6 +635,9 @@ impl WordApp {
                 self.ui.backstage = p.get("value").and_then(Value::as_bool).unwrap_or(!self.ui.backstage);
                 if let Some(pg) = s("page") {
                     self.ui.backstage_page = pg.into();
+                }
+                if let Some(pane) = s("pane") {
+                    self.ui.options_pane = pane.into();
                 }
                 json!({"backstage": self.ui.backstage})
             }
@@ -666,7 +725,18 @@ impl WordApp {
         if self.services.print.is_none() {
             return Err("printing to the system print dialog isn't available here; export a PDF instead".into());
         }
-        let result = wordcraft_engine::io::save_bytes("document.pdf", &self.session.doc)
+        // File › Options › Display: fields first, and the page colour only when asked for.
+        if self.ui.update_fields_before_print
+            && let Err(e) = self.session.run("references.updateFields", &json!({}))
+        {
+            log::warn!("updating fields before printing: {e}");
+        }
+        let without_colour = (!self.ui.print_backgrounds && self.session.doc.settings.page_color.is_some()).then(|| {
+            let mut d = self.session.doc.clone();
+            d.settings.page_color = None;
+            d
+        });
+        let result = wordcraft_engine::io::save_bytes("document.pdf", without_colour.as_ref().unwrap_or(&self.session.doc))
             .and_then(|bytes| self.services.print.as_ref().map_or(Ok(()), |print| print(&bytes)).map(|()| bytes.len()));
         match result {
             Ok(len) => {
@@ -765,6 +835,7 @@ impl WordApp {
     pub fn logic(&mut self, ctx: &egui::Context) {
         let lang = i18n::Lang::from_pref(&self.ui.language);
         i18n::set_current(lang);
+        options::sync(self);
         // Chinese text wants the Chinese face before the Japanese one (one glyph style per line).
         // An installed CJK font is read only once CJK text is shown (#241): never for an English
         // interface that doesn't open the language list.

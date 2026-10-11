@@ -101,7 +101,7 @@ pub struct ColumnsForm {
 
 impl ColumnsForm {
     fn k() -> f32 {
-        wordcraft_geom::Unit::default().pt_per_unit()
+        crate::options::unit().pt_per_unit()
     }
 
     pub fn read(app: &WordApp) -> ColumnsForm {
@@ -332,7 +332,7 @@ fn columns_preview(ui: &mut Ui, f: &ColumnsForm, t: &Tokens) {
 
 fn columns_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ColumnsForm) -> bool {
     let t = Tokens::get(ui.ctx());
-    let unit = wordcraft_geom::Unit::default();
+    let unit = crate::options::unit();
     ui.set_width(420.0);
     ui.label(egui::RichText::new(tl!("Presets")).font(semibold(12.5)));
     let current = f.current_preset();

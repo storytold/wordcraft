@@ -49,12 +49,14 @@
 	Arrange\nAll	全部排列
 	Arrow	箭號
 	Artistic Effects	美術效果
+	As you type	輸入時
 	Asian Typography	亞洲版式
 	Author	作者
 	AutoCorrect Options	自動校正選項
 	AutoFit	自動調整
 	AutoFit Contents	依內容自動調整
 	AutoFit Window	依視窗自動調整
+	AutoSave writes your changes to the file a moment after you stop typing.	停止輸入片刻後，自動儲存會將變更寫入檔案。
 	Automatic	自動
 	Automatic ({language})	自動（{language}）
 	Automatic follows your system's language. Menus and commands change; your documents don't.	「自動」會跟隨系統語言。功能表與命令會改變，文件內容不會改變。
@@ -65,13 +67,17 @@
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	自動儲存失敗：{error}。重新儲存文件後將恢復自動儲存。
 	Balloons	註解方塊
 	Bottom Margin	下邊界
+	Centimeters	公分
+	Check spelling as you type	輸入時檢查拼字
 	Click a border between two cells to merge them. Esc stops.	按一下兩個儲存格之間的框線以合併它們。按 Esc 結束。
 	Bullet	項目符號
 	By author	依作者
 	Changed lines:	修訂行：
 	Click level to modify:	按一下要修改的層級：
+	Click to switch back to inserting	按一下以切換回插入模式
 	Color only	僅色彩
 	Compress punctuation at the start of a line	壓縮行首標點
+	Custom dictionary	自訂字典
 	Dark page (white text on black)	深色頁面（黑底白字）
 	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	拖出矩形以繪製表格，或拖出穿過儲存格的線條以分割儲存格。按 Esc 結束。
 	Draw Table	繪製表格
@@ -82,10 +88,19 @@
 	Enter formatting for number:	輸入編號的格式：
 	Follow number with:	編號之後：
 	Formatting	格式設定
+	Formatting marks	格式化標記
+	Hidden text	隱藏文字
+	Ignore web and file addresses	忽略網址和檔案路徑
+	Ignore words in capitals	忽略全部大寫的單字
+	Ignore words with numbers	忽略包含數字的單字
+	Inches	英寸
 	Include level number from:	包含的層級編號來自：
+	Initials:	縮寫：
 	Ink	筆跡
 	Insertions and Deletions	插入和刪除
 	Insertions:	插入內容：
+	Interface	介面
+	Interface language	介面語言
 	Left border	左框線
 	Left Margin	左邊界
 	Indents and Spacing	縮排和間距
@@ -93,17 +108,36 @@
 	Line breaking	斷行
 	Link level to style:	將層級連結到樣式：
 	List Definition	清單定義
+	Mark grammar errors as you type	輸入時標示文法錯誤
+	Measurement units:	度量單位：
+	Millimeters	公釐
 	More templates →	更多範本 →
+	New comments and tracked changes are recorded under this name and these initials.	新的註解和追蹤修訂會以此名稱和縮寫記錄。
+	New word	新單字
 	No templates match your search.	沒有符合搜尋的範本。
+	No words yet. Add to Dictionary on a misspelled word puts it here.	還沒有單字。對拼字錯誤的單字選擇「新增至字典」會將它放在這裡。
 	Nothing	無
 	Number alignment:	編號對齊方式：
 	Number format	編號格式
 	Number style for this level:	此層級的編號樣式：
 	Outside border	外側框線
+	Overtype	取代
+	Overtype (typing replaces the characters after the caret)	取代（輸入的內容會取代插入點後的字元）
+	Page display	頁面顯示
+	Paragraph marks	段落標記
+	Personalize	個人化
+	Picas	派卡
+	Points	點
+	Print the page color	列印頁面色彩
+	Printing	列印
+	Proofing language	校訂語言
+	Recent documents to show:	顯示的最近文件數：
+	Remove	移除
 	Reopen	重新開啟
 	Restart list after:	重新開始清單的層級：
 	Right border	右框線
 	Right Margin	右邊界
+	Save documents	儲存文件
 	Search for templates	搜尋範本
 	Show all revisions inline	以內嵌方式顯示所有修訂
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	像「檢視 › 切換模式」一樣以反轉的色彩顯示文件。儲存、列印和 PDF 不受影響。
@@ -131,6 +165,11 @@
 	Border Painter	框線複製
 	Border\nPainter	框線複製
 	Borders	框線
+	Show the mini toolbar when text is selected	選取文字時顯示迷你工具列
+	Spaces	空格
+	Spelling	拼字
+	Spelling and grammar are checked in English (United States).	拼字和文法依英文（美國）檢查。
+	Tab characters	定位字元
 	Tab stop position:	定位點位置：
 	Default tab stops:	預設定位點間距：
 	Tab stops to be cleared:	要清除的定位點：
@@ -141,6 +180,10 @@
 	Set	設定
 	Page Border	頁面框線設定
 	Apply to:	套用至：
+	These marks show even when Show/Hide ¶ is off.	即使關閉「顯示/隱藏 ¶」，這些標記也會顯示。
+	Typing replaces selected text	輸入的內容取代選取的文字
+	Update fields before printing	列印前更新功能變數
+	Use the Insert key to switch overtype on and off	使用 Insert 鍵切換取代模式
 	Whole document	整份文件
 	This section	本節
 	Fill	填滿

@@ -1,7 +1,7 @@
 //! Typing and deleting.
 
 use serde_json::Value;
-use wordcraft_doc::para::{COLUMN_BREAK, NB_HYPHEN, NBSP, PAGE_BREAK, SOFT_HYPHEN};
+use wordcraft_doc::para::{COLUMN_BREAK, NB_HYPHEN, NBSP, OBJ, PAGE_BREAK, SOFT_HYPHEN};
 use wordcraft_doc::props::{Border, BorderStyle, NumRef};
 use wordcraft_doc::{Block, ListKind, Pos};
 
@@ -45,9 +45,35 @@ fn autoformat(s: &mut Session, text: &str) -> Option<String> {
     }
 }
 
+/// File › Options › Advanced before typed text goes in: with "Typing replaces selected text"
+/// off the text goes in front of the selection and leaves it; in overtype the text replaces as
+/// many characters after the caret as it has, up to the paragraph's end or an object (picture,
+/// field), which stay.
+fn typing_options(s: &mut Session, text: &str) {
+    if !s.sel.is_collapsed() {
+        if !s.prefs.typing_replaces_selection {
+            let (start, _) = s.sel.ordered();
+            s.sel = Selection::caret(start);
+        }
+        return;
+    }
+    if !s.prefs.overtype || text.contains(['\r', '\n', '\u{2029}', '\u{000B}']) {
+        return;
+    }
+    let f = s.sel.focus.clone();
+    let Some(rest) = s.doc.para_at(&f).and_then(|p| p.text.get(f.off..)) else { return };
+    let n = text.chars().count();
+    let len: usize = rest.chars().take(n).take_while(|c| *c != OBJ).map(char::len_utf8).sum();
+    if len > 0 {
+        // The caret (focus) stays where typing happens; the characters after it are selected.
+        s.sel = Selection { anchor: Pos { off: f.off + len, ..f.clone() }, focus: f };
+    }
+}
+
 fn insert(s: &mut Session, v: &Value) -> CmdResult {
     let text = p::req_str(v, "text")?;
     let raw = p::bool(v, "raw").unwrap_or(false);
+    typing_options(s, text);
     let t = if raw { None } else { autoformat(s, text) };
     type_text(s, t.as_deref().unwrap_or(text))?;
     let trigger = text.chars().count() == 1 && text.chars().all(|c| c == ' ' || ",.;:!?".contains(c));

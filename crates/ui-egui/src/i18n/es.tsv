@@ -62,6 +62,7 @@
 	Arrange\nAll	Organizar\ntodo
 	Arrow	Flecha
 	Artistic Effects	Efectos artísticos
+	As you type	Mientras escribes
 	Asian Typography	Tipografía asiática
 	Author	Autor
 	AutoCorrect Options	Opciones de autocorrección
@@ -72,33 +73,66 @@
 	AutoSave saves every change to the file (needs a saved document)	El autoguardado guarda cada cambio en el archivo (requiere un documento guardado)
 	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	El autoguardado no está disponible en el navegador: no puede escribir en sus archivos. Guardar descarga una copia.
 	AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave.	El autoguardado solo mantiene archivos .docx, .odt y .rtf; {name} no puede conservar todo el formato. Guarde como .docx para activar el autoguardado.
+	AutoSave writes your changes to the file a moment after you stop typing.	El autoguardado escribe tus cambios en el archivo poco después de que dejes de escribir.
 	Balloons	Globos
 	Bullet	Viñeta
 	By author	Por autor
+	Centimeters	Centímetros
 	Changed lines:	Líneas cambiadas:
+	Check spelling as you type	Revisar la ortografía mientras escribes
 	Click level to modify:	Haga clic en el nivel que desea modificar:
+	Click to switch back to inserting	Haz clic para volver a insertar
 	Color only	Solo color
+	Custom dictionary	Diccionario personalizado
 	Define New Multilevel List	Definir nueva lista multinivel
 	Define New Multilevel List…	Definir nueva lista multinivel…
 	Deletions:	Eliminaciones:
 	Enter formatting for number:	Formato del número:
 	Follow number with:	Después del número:
 	Formatting	Formato
+	Formatting marks	Marcas de formato
+	Hidden text	Texto oculto
+	Ignore web and file addresses	Omitir direcciones web y de archivo
+	Ignore words in capitals	Omitir palabras en mayúsculas
+	Ignore words with numbers	Omitir palabras con números
+	Inches	Pulgadas
 	Include level number from:	Incluir número de nivel de:
+	Initials:	Iniciales:
 	Ink	Entrada de lápiz
 	Insertions and Deletions	Inserciones y eliminaciones
 	Insertions:	Inserciones:
+	Interface	Interfaz
+	Interface language	Idioma de la interfaz
 	Left border	Borde izquierdo
 	Legal style numbering	Numeración de estilo legal
 	Link level to style:	Vincular nivel con estilo:
 	List Definition	Definición de lista
+	Mark grammar errors as you type	Marcar errores gramaticales mientras escribes
+	Measurement units:	Unidades de medida:
+	Millimeters	Milímetros
+	New comments and tracked changes are recorded under this name and these initials.	Los comentarios y cambios con seguimiento nuevos se registran con este nombre y estas iniciales.
+	New word	Palabra nueva
+	No words yet. Add to Dictionary on a misspelled word puts it here.	Aún no hay palabras. Añadir al diccionario sobre una palabra mal escrita la pone aquí.
 	Nothing	Nada
 	Number alignment:	Alineación del número:
 	Number format	Formato de número
 	Number style for this level:	Estilo de número para este nivel:
 	Outside border	Borde exterior
+	Overtype	Sobrescribir
+	Overtype (typing replaces the characters after the caret)	Sobrescribir (lo que escribes reemplaza los caracteres tras el cursor)
+	Page display	Visualización de página
+	Paragraph marks	Marcas de párrafo
+	Personalize	Personalizar
+	Picas	Picas
+	Points	Puntos
+	Print the page color	Imprimir el color de página
+	Printing	Impresión
+	Proofing language	Idioma de revisión
+	Recent documents to show:	Documentos recientes que mostrar:
+	Remove	Quitar
 	Restart list after:	Reiniciar lista después de:
 	Right border	Borde derecho
+	Save documents	Guardar documentos
 	Save the document to turn on AutoSave	Guarde el documento para activar el autoguardado
 	Save the document to turn on AutoSave (a file you have only opened isn't rewritten until you save it)	Guarde el documento para activar el autoguardado (un archivo que solo ha abierto no se reescribe hasta que lo guarde)
 	AutoText	Texto automático
@@ -125,6 +159,11 @@
 	Border Painter	Pincel de bordes
 	Border\nPainter	Pincel de\nbordes
 	Borders	Bordes
+	Show the mini toolbar when text is selected	Mostrar la minibarra de herramientas al seleccionar texto
+	Spaces	Espacios
+	Spelling	Ortografía
+	Spelling and grammar are checked in English (United States).	La ortografía y la gramática se revisan en inglés (Estados Unidos).
+	Tab characters	Caracteres de tabulación
 	Tab stop position:	Posición de la tabulación:
 	Default tab stops:	Tabulaciones predeterminadas:
 	Tab stops to be cleared:	Tabulaciones que se borrarán:
@@ -135,6 +174,10 @@
 	Set	Fijar
 	Page Border	Borde de página
 	Apply to:	Aplicar a:
+	These marks show even when Show/Hide ¶ is off.	Estas marcas se muestran aunque Mostrar u ocultar ¶ esté desactivado.
+	Typing replaces selected text	Lo que escribes reemplaza el texto seleccionado
+	Update fields before printing	Actualizar campos antes de imprimir
+	Use the Insert key to switch overtype on and off	Usar la tecla Insert para activar y desactivar la sobrescritura
 	Whole document	Todo el documento
 	This section	Esta sección
 	Fill	Relleno de color

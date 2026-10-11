@@ -826,12 +826,15 @@ fn layout(app: &mut WordApp, ui: &mut Ui) {
             ui.label("");
             ui.label(egui::RichText::new(tl!("Spacing")).small().strong());
             ui.end_row();
-            let mut l = rp.indent_left / 72.0;
+            // Indents in the File › Options unit.
+            let u = crate::options::unit();
+            let k = u.pt_per_unit();
+            let mut l = rp.indent_left / k;
             let mut b = rp.space_before;
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(tl!("Left:")).small());
-                if ui.add(egui::DragValue::new(&mut l).speed(0.05).range(-11.0..=22.0).suffix("\"").max_decimals(2)).changed() {
-                    let _ = app.run("para.indents", json!({"left": l * 72.0}));
+                if ui.add(egui::DragValue::new(&mut l).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).suffix(u.suffix()).max_decimals(2)).changed() {
+                    let _ = app.run("para.indents", json!({"left": l * k}));
                 }
             });
             ui.label("");
@@ -842,12 +845,12 @@ fn layout(app: &mut WordApp, ui: &mut Ui) {
                 }
             });
             ui.end_row();
-            let mut r = rp.indent_right / 72.0;
+            let mut r = rp.indent_right / k;
             let mut a = rp.space_after;
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(tl!("Right:")).small());
-                if ui.add(egui::DragValue::new(&mut r).speed(0.05).range(-11.0..=22.0).suffix("\"").max_decimals(2)).changed() {
-                    let _ = app.run("para.indents", json!({"right": r * 72.0}));
+                if ui.add(egui::DragValue::new(&mut r).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).suffix(u.suffix()).max_decimals(2)).changed() {
+                    let _ = app.run("para.indents", json!({"right": r * k}));
                 }
             });
             ui.label("");
@@ -1548,7 +1551,7 @@ fn cell_size_boxes(ui: &mut Ui, app: &mut WordApp) {
         }
         _ => None,
     });
-    let unit = wordcraft_geom::Unit::default();
+    let unit = crate::options::unit();
     let k = unit.pt_per_unit();
     let h0 = row.height.or(laid.map(|x| x.h)).unwrap_or(0.0);
     let w0 = laid.map(|x| x.w).or(stored_w).unwrap_or(0.0);

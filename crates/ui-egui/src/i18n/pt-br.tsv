@@ -58,12 +58,14 @@
 	Arrange\nAll	Organizar\ntudo
 	Arrow	Seta
 	Artistic Effects	Efeitos artísticos
+	As you type	Enquanto você digita
 	Asian Typography	Tipografia asiática
 	Author	Autor
 	AutoCorrect Options	Opções de autocorreção
 	AutoFit	Autoajuste
 	AutoFit Contents	Autoajustar ao conteúdo
 	AutoFit Window	Autoajustar à janela
+	AutoSave writes your changes to the file a moment after you stop typing.	O salvamento automático grava suas alterações no arquivo pouco depois que você para de digitar.
 	Automatic	Automático
 	Automatic ({language})	Automático ({language})
 	Automatic follows your system's language. Menus and commands change; your documents don't.	Automático segue o idioma do seu sistema. Menus e comandos mudam; seus documentos, não.
@@ -76,30 +78,62 @@
 	Balloons	Balões
 	Bullet	Marcador
 	By author	Por autor
+	Centimeters	Centímetros
 	Changed lines:	Linhas alteradas:
+	Check spelling as you type	Verificar a ortografia enquanto você digita
 	Click level to modify:	Clique no nível a modificar:
+	Click to switch back to inserting	Clique para voltar a inserir
 	Color only	Somente cor
+	Custom dictionary	Dicionário personalizado
 	Define New Multilevel List	Definir nova lista de vários níveis
 	Define New Multilevel List…	Definir nova lista de vários níveis…
 	Deletions:	Exclusões:
 	Enter formatting for number:	Formatação do número:
 	Follow number with:	Após o número:
 	Formatting	Formatação
+	Formatting marks	Marcas de formatação
+	Hidden text	Texto oculto
+	Ignore web and file addresses	Ignorar endereços da Web e de arquivos
+	Ignore words in capitals	Ignorar palavras em maiúsculas
+	Ignore words with numbers	Ignorar palavras com números
+	Inches	Polegadas
 	Include level number from:	Incluir número do nível:
+	Initials:	Iniciais:
 	Ink	Tinta
 	Insertions and Deletions	Inserções e exclusões
 	Insertions:	Inserções:
+	Interface	Interface
+	Interface language	Idioma da interface
 	Left border	Borda esquerda
 	Legal style numbering	Numeração no estilo legal
 	Link level to style:	Vincular nível ao estilo:
 	List Definition	Definição da lista
+	Mark grammar errors as you type	Marcar erros gramaticais enquanto você digita
+	Measurement units:	Unidades de medida:
+	Millimeters	Milímetros
+	New comments and tracked changes are recorded under this name and these initials.	Novos comentários e alterações controladas são registrados com este nome e estas iniciais.
+	New word	Nova palavra
+	No words yet. Add to Dictionary on a misspelled word puts it here.	Ainda não há palavras. Adicionar ao dicionário em uma palavra com erro a coloca aqui.
 	Nothing	Nada
 	Number alignment:	Alinhamento do número:
 	Number format	Formato do número
 	Number style for this level:	Estilo de número deste nível:
 	Outside border	Borda externa
+	Overtype	Sobrescrever
+	Overtype (typing replaces the characters after the caret)	Sobrescrever (o que você digita substitui os caracteres após o cursor)
+	Page display	Exibição da página
+	Paragraph marks	Marcas de parágrafo
+	Personalize	Personalizar
+	Picas	Paicas
+	Points	Pontos
+	Print the page color	Imprimir a cor da página
+	Printing	Impressão
+	Proofing language	Idioma de revisão
+	Recent documents to show:	Documentos recentes a mostrar:
+	Remove	Remover
 	Restart list after:	Reiniciar lista após:
 	Right border	Borda direita
+	Save documents	Salvar documentos
 	Save the document to turn on AutoSave	Salve o documento para ativar o salvamento automático
 	Save the document to turn on AutoSave (a file you have only opened isn't rewritten until you save it)	Salve o documento para ativar o salvamento automático (um arquivo que você apenas abriu não é regravado até você salvá-lo)
 	AutoText	Autotexto
@@ -121,6 +155,11 @@
 	Border Painter	Pincel de bordas
 	Border\nPainter	Pincel\nde bordas
 	Borders	Bordas
+	Show the mini toolbar when text is selected	Mostrar a minibarra de ferramentas ao selecionar texto
+	Spaces	Espaços
+	Spelling	Ortografia
+	Spelling and grammar are checked in English (United States).	A ortografia e a gramática são verificadas em inglês (Estados Unidos).
+	Tab characters	Caracteres de tabulação
 	Tab stop position:	Posição da tabulação:
 	Default tab stops:	Tabulações padrão:
 	Tab stops to be cleared:	Tabulações a remover:
@@ -131,6 +170,10 @@
 	Set	Definir
 	Page Border	Borda da página
 	Apply to:	Aplicar a:
+	These marks show even when Show/Hide ¶ is off.	Estas marcas aparecem mesmo com Mostrar/ocultar ¶ desativado.
+	Typing replaces selected text	O que você digita substitui o texto selecionado
+	Update fields before printing	Atualizar campos antes de imprimir
+	Use the Insert key to switch overtype on and off	Usar a tecla Insert para ativar e desativar a sobrescrita
 	Whole document	Documento inteiro
 	This section	Esta seção
 	Fill	Cor de fundo

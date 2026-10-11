@@ -65,12 +65,14 @@
 	Arrow	Strelica
 	Artistic Effects	Umetnički efekti
 	As Recommended	Kao što je preporučeno
+	As you type	Tokom kucanja
 	Asian Typography	Azijska tipografija
 	Author	Autor
 	AutoCorrect Options	Opcije automatske ispravke
 	AutoFit	Automatsko uklapanje
 	AutoFit Contents	Automatski uklopi prema sadržaju
 	AutoFit Window	Automatski uklopi prema prozoru
+	AutoSave writes your changes to the file a moment after you stop typing.	Automatsko čuvanje upisuje izmene u datoteku čim prestanete da kucate.
 	Automatic	Automatski
 	Automatic ({language})	Automatski ({language})
 	Automatic follows your system's language. Menus and commands change; your documents don't.	Automatski prati jezik sistema. Meniji i naredbe se menjaju; dokumenti ne.
@@ -81,6 +83,8 @@
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	Automatsko čuvanje neuspelo: {error}. Sačuvajte dokument da biste ga ponovo uključili.
 	Balloons	Oblačići
 	Bottom Margin	Donja margina
+	Centimeters	Centimetri
+	Check spelling as you type	Proveravaj pravopis tokom kucanja
 	Click a border between two cells to merge them. Esc stops.	Kliknite ivicu između dve ćelije da ih spojite. Esc završava.
 	Based on: {style}	Zasnovan na: {style}
 	Built-in style	Ugrađeni stil
@@ -92,12 +96,14 @@
 	Character style	Stil znakova
 	Click an item to paste it.	Kliknite na stavku da biste je nalepili.
 	Click level to modify:	Kliknite nivo koji menjate:
+	Click to switch back to inserting	Kliknite da biste se vratili na umetanje
 	Clipboard Items	Stavke ostave
 	Clipboard Pane	Okno ostave
 	Color only	Samo boja
 	Color: {color}	Boja: {color}
 	Compress punctuation at the start of a line	Sažmi interpunkciju na početku reda
 	Confirm password:	Potvrdite lozinku:
+	Custom dictionary	Prilagođeni rečnik
 	Dark page (white text on black)	Tamna stranica (beo tekst na crnom)
 	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	Prevucite pravougaonik da nacrtate tabelu ili liniju preko ćelija da ih podelite. Esc završava.
 	Draw Table	Nacrtaj tabelu
@@ -108,20 +114,47 @@
 	Enter formatting for number:	Oblik broja:
 	Follow number with:	Posle broja:
 	Formatting	Oblikovanje
+	Formatting marks	Oznake oblikovanja
+	Hidden text	Skriveni tekst
+	Ignore web and file addresses	Zanemari veb-adrese i putanje datoteka
+	Ignore words in capitals	Zanemari reči pisane velikim slovima
+	Ignore words with numbers	Zanemari reči sa brojevima
+	Inches	Inči
 	Include level number from:	Uključi broj nivoa:
+	Initials:	Inicijali:
 	Ink	Mastilo
 	Insertions and Deletions	Umetanja i brisanja
 	Insertions:	Umetanja:
+	Interface	Interfejs
+	Interface language	Jezik interfejsa
 	Left border	Leva ivica
 	Left Margin	Leva margina
 	Legal style numbering	Pravno numerisanje
 	Link level to style:	Poveži nivo sa stilom:
 	List Definition	Definicija liste
+	Mark grammar errors as you type	Označavaj gramatičke greške tokom kucanja
+	Measurement units:	Jedinice mere:
+	Millimeters	Milimetri
+	New comments and tracked changes are recorded under this name and these initials.	Novi komentari i praćene izmene beleže se pod ovim imenom i inicijalima.
+	New word	Nova reč
+	No words yet. Add to Dictionary on a misspelled word puts it here.	Još nema reči. Dodaj u rečnik na pogrešno napisanoj reči stavlja je ovde.
 	Nothing	Ništa
 	Number alignment:	Poravnanje broja:
 	Number format	Format broja
 	Number style for this level:	Stil broja za ovaj nivo:
 	Outside border	Spoljna ivica
+	Overtype	Prepisivanje
+	Overtype (typing replaces the characters after the caret)	Prepisivanje (otkucano zamenjuje znakove posle kursora)
+	Page display	Prikaz strane
+	Paragraph marks	Oznake pasusa
+	Personalize	Personalizacija
+	Picas	Pike
+	Points	Tačke
+	Print the page color	Štampaj boju strane
+	Printing	Štampanje
+	Proofing language	Jezik provere pisanja
+	Recent documents to show:	Broj nedavnih dokumenata za prikaz:
+	Remove	Ukloni
 	Reopen	Ponovo otvori
 	Restart list after:	Ponovo počni listu posle:
 	Right border	Desna ivica
@@ -159,6 +192,7 @@
 	Paste Clipboard Item	Nalepi stavku iz ostave
 	Preview	Pregled
 	Remove Password	Ukloni lozinku
+	Save documents	Čuvanje dokumenata
 	Shadow, glow and soft edges	Senka, sjaj i meke ivice
 	Shape Effects	Efekti oblika
 	Show all revisions inline	Prikaži sve izmene u tekstu
@@ -187,6 +221,11 @@
 	Border Painter	Kopiranje ivica
 	Border\nPainter	Kopiranje\nivica
 	Borders	Ivice
+	Show the mini toolbar when text is selected	Prikaži mini traku sa alatkama pri izboru teksta
+	Spaces	Razmaci
+	Spelling	Pravopis
+	Spelling and grammar are checked in English (United States).	Pravopis i gramatika se proveravaju na engleskom (Sjedinjene Države).
+	Tab characters	Znakovi tabulatora
 	Tab stop position:	Položaj tabulatora:
 	Default tab stops:	Podrazumevani tabulatori:
 	Tab stops to be cleared:	Tabulatori za brisanje:
@@ -197,6 +236,10 @@
 	Set	Postavi
 	Page Border	Ivica strane
 	Apply to:	Primeni na:
+	These marks show even when Show/Hide ¶ is off.	Ove oznake se prikazuju i kada je Prikaži/sakrij ¶ isključeno.
+	Typing replaces selected text	Otkucano zamenjuje izabrani tekst
+	Update fields before printing	Ažuriraj polja pre štampanja
+	Use the Insert key to switch overtype on and off	Taster Insert uključuje i isključuje prepisivanje
 	Whole document	Ceo dokument
 	This section	Ovaj odeljak
 	Fill	Ispuna

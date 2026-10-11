@@ -60,12 +60,14 @@
 	Arrange\nAll	Упорядкувати\nвсі
 	Arrow	Стрілка
 	Artistic Effects	Художні ефекти
+	As you type	Під час введення
 	Asian Typography	Азійська типографіка
 	Author	Автор
 	AutoCorrect Options	Параметри автовиправлення
 	AutoFit	Добір розміру
 	AutoFit Contents	Добір розміру за вмістом
 	AutoFit Window	Добір розміру за шириною вікна
+	AutoSave writes your changes to the file a moment after you stop typing.	Автозбереження записує зміни у файл невдовзі після того, як ви припините вводити текст.
 	Automatic	Автоматично
 	Automatic ({language})	Автоматично ({language})
 	Automatic follows your system's language. Menus and commands change; your documents don't.	Автоматичний режим використовує мову вашої системи. Змінюються меню й команди, а вміст документів залишається незмінним.
@@ -78,30 +80,62 @@
 	Balloons	Виноски
 	Bullet	Маркер
 	By author	За автором
+	Centimeters	Сантиметри
 	Changed lines:	Змінені рядки:
+	Check spelling as you type	Перевіряти правопис під час введення
 	Click level to modify:	Виберіть рівень для змінення:
+	Click to switch back to inserting	Клацніть, щоб повернутися до вставлення
 	Color only	Лише колір
+	Custom dictionary	Власний словник
 	Define New Multilevel List	Визначити новий багаторівневий список
 	Define New Multilevel List…	Визначити новий багаторівневий список…
 	Deletions:	Видалення:
 	Enter formatting for number:	Вигляд номера:
 	Follow number with:	Після номера:
 	Formatting	Форматування
+	Formatting marks	Знаки форматування
+	Hidden text	Прихований текст
+	Ignore web and file addresses	Пропускати веб-адреси та шляхи до файлів
+	Ignore words in capitals	Пропускати слова з великих літер
+	Ignore words with numbers	Пропускати слова з цифрами
+	Inches	Дюйми
 	Include level number from:	Додати номер рівня:
+	Initials:	Ініціали:
 	Ink	Рукописні примітки
 	Insertions and Deletions	Вставлення й видалення
 	Insertions:	Вставлення:
+	Interface	Інтерфейс
+	Interface language	Мова інтерфейсу
 	Left border	Ліва межа
 	Legal style numbering	Юридична нумерація
 	Link level to style:	Зв'язати рівень зі стилем:
 	List Definition	Визначення списку
+	Mark grammar errors as you type	Позначати граматичні помилки під час введення
+	Measurement units:	Одиниці виміру:
+	Millimeters	Міліметри
+	New comments and tracked changes are recorded under this name and these initials.	Нові коментарі та відстежувані зміни записуються під цим іменем і цими ініціалами.
+	New word	Нове слово
+	No words yet. Add to Dictionary on a misspelled word puts it here.	Слів ще немає. «Додати до словника» для слова з помилкою додає його сюди.
 	Nothing	Нічого
 	Number alignment:	Вирівнювання номера:
 	Number format	Формат номера
 	Number style for this level:	Стиль номера для цього рівня:
 	Outside border	Зовнішня межа
+	Overtype	Заміна
+	Overtype (typing replaces the characters after the caret)	Заміна (введений текст замінює символи після курсора)
+	Page display	Відображення сторінки
+	Paragraph marks	Знаки абзацу
+	Personalize	Персоналізація
+	Picas	Піки
+	Points	Пункти
+	Print the page color	Друкувати колір сторінки
+	Printing	Друк
+	Proofing language	Мова перевірки
+	Recent documents to show:	Кількість останніх документів:
+	Remove	Вилучити
 	Restart list after:	Почати список знову після:
 	Right border	Права межа
+	Save documents	Збереження документів
 	Save the document to turn on AutoSave	Збережіть документ, щоб увімкнути автозбереження
 	Save the document to turn on AutoSave (a file you have only opened isn't rewritten until you save it)	Збережіть документ, щоб увімкнути автозбереження (файл, який ви лише відкрили, не перезаписується, доки ви його не збережете)
 	AutoText	Автоматичний текст
@@ -123,6 +157,11 @@
 	Border Painter	Пензель меж
 	Border\nPainter	Пензель\nмеж
 	Borders	Межі
+	Show the mini toolbar when text is selected	Показувати міні-панель інструментів під час виділення тексту
+	Spaces	Пробіли
+	Spelling	Правопис
+	Spelling and grammar are checked in English (United States).	Правопис і граматика перевіряються англійською (США).
+	Tab characters	Символи табуляції
 	Tab stop position:	Позиція табуляції:
 	Default tab stops:	Типові позиції табуляції:
 	Tab stops to be cleared:	Позиції, які буде видалено:
@@ -133,6 +172,10 @@
 	Set	Встановити
 	Page Border	Межа сторінки
 	Apply to:	Застосувати до:
+	These marks show even when Show/Hide ¶ is off.	Ці знаки відображаються, навіть коли «Показати/приховати ¶» вимкнено.
+	Typing replaces selected text	Введення замінює виділений текст
+	Update fields before printing	Оновлювати поля перед друком
+	Use the Insert key to switch overtype on and off	Клавіша Insert вмикає та вимикає режим заміни
 	Whole document	Увесь документ
 	This section	Цей розділ
 	Fill	Колір заливки

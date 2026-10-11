@@ -1,6 +1,6 @@
 # Where WordCraft falls short of Word
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** trivial (formatting revisions landed, #41; previously trivial: Draw Table and Eraser landed, #303; previously minor: beta distance restated: ~15 points, ~150–230 h; previously: first version; every known shortfall from the 2026-10-10 re-measure, ranked) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** trivial (File › Options panes landed, #485; previously trivial: formatting revisions landed, #41; previously trivial: Draw Table and Eraser landed, #303; previously minor: beta distance restated: ~15 points, ~150–230 h; previously: first version; every known shortfall from the 2026-10-10 re-measure, ranked) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 The work list. One entry per shortfall, ranked by how much it stops a Word user from switching
 (**B** = blocks beta). Each says what's missing, the evidence, who it hurts, an Opus 5.5 agent
@@ -17,9 +17,9 @@ first (`gh pr list`), and update this file and the parity doc when a gap closes.
 | 4 | **Pagination differs from Word**: Aptos has no metric-matched substitute; columns don't balance; custom footnote continuation separators and notices aren't read; legacy compatibility options ignored; no page-by-page comparison harness | B | [layout-parity.md](layout-parity.md); [typing-parity.md](typing-parity.md) Known gaps | Page counts and line breaks differ, which matters for forms, legal and academic work | 30–50 + owner (font) | [layout-parity.md](layout-parity.md) |
 | 5 | **Move tracking and content controls** are lost (`w:moveFrom`/`w:moveTo` read as insert/delete; `w:sdt` unwrapped). Formatting revisions landed (#41): `w:rPrChange`/`w:pPrChange`/`w:tblPrChange`/`w:trPrChange`/`w:tcPrChange`/`w:sectPrChange`/`w:numberingChange` round-trip, are recorded while tracking, accepted/rejected and shown in balloons; still missing: tracked style-definition changes and table/section changes made in WordCraft | B | Issue #41; source grep | Legal and editorial review workflows; templates with form controls | 8–12 | [file-format-parity.md](file-format-parity.md) |
 | 6 | **No native printing** on desktop: File › Print opens the PDF in the system viewer, which prints (#286); no print dialog of our own (printer, copies, ranges); web prints through the browser (#209) | B | `ui.print` → `apps/wordcraft/src/print.rs`; issue #15 | Everyone who prints | 5–8 | [hardware-parity.md](hardware-parity.md) |
-| 7 | **Dialog depth**: 22 modal dialogs vs Word's ~100 (Define Multilevel List, Track Changes Options, Options panes…) | B | `Dialog` enum in `crates/ui-egui/src/dialogs.rs` | Power users reach for dialogs the ribbon alone doesn't cover | 20–30 | [ui-parity.md](ui-parity.md) |
-| 7 | **Dialog depth**: 19 modal dialogs vs Word's ~100 (Tabs, Borders and Shading, Define Multilevel List, Track Changes Options, Options panes…) | B | `Dialog` enum in `crates/ui-egui/src/dialogs.rs` | Power users reach for dialogs the ribbon alone doesn't cover | 20–30 | [ui-parity.md](ui-parity.md) |
-| 7 | **Dialog depth**: 18 modal dialogs vs Word's ~100 (Tabs, Borders and Shading, Columns, Symbol, Field, Options panes…) | B | `Dialog` enum in `crates/ui-egui/src/dialogs.rs` | Power users reach for dialogs the ribbon alone doesn't cover | 20–30 | [ui-parity.md](ui-parity.md) |
+| 7 | **Dialog depth**: 22 modal dialogs vs Word's ~100 (Define Multilevel List, Track Changes Options…) | B | `Dialog` enum in `crates/ui-egui/src/dialogs.rs` | Power users reach for dialogs the ribbon alone doesn't cover | 20–30 | [ui-parity.md](ui-parity.md) |
+| 7 | **Dialog depth**: 19 modal dialogs vs Word's ~100 (Tabs, Borders and Shading, Define Multilevel List, Track Changes Options…) | B | `Dialog` enum in `crates/ui-egui/src/dialogs.rs` | Power users reach for dialogs the ribbon alone doesn't cover | 20–30 | [ui-parity.md](ui-parity.md) |
+| 7 | **Dialog depth**: 18 modal dialogs vs Word's ~100 (Tabs, Borders and Shading, Columns, Symbol, Field…) | B | `Dialog` enum in `crates/ui-egui/src/dialogs.rs` | Power users reach for dialogs the ribbon alone doesn't cover | 20–30 | [ui-parity.md](ui-parity.md) |
 | 8 | **Proofing is English only**; no language per run, no dictionaries for other languages | | `crates/proof` has one dictionary; Word ships 120 proofing tools; issues #25, #40, #100 | Every non-English writer | 25–45 | [localization-parity.md](localization-parity.md) |
 | 9 | **Password-protected files** can't be opened or saved | | #55; `docbin` detects and refuses RC4/XOR | Corporate and legal users | 6–10 | [file-format-parity.md](file-format-parity.md) |
 | 10 | **Objects**: no group (#267 open), rotated text-box text (free rotation and flips landed, #332), contour (tight/through) wrap, shape effects, WordArt, connectors, Drawing Canvas, Icons | | [parity-checklist.md](parity-checklist.md) (Shape Format 2/6, Layout › Group) | Newsletters, flyers, reports with diagrams | 20–30 | [target-app-parity.md](target-app-parity.md) |
@@ -66,6 +66,7 @@ The same gaps grouped the way the parity documents are, for agents working in on
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | trivial | File › Options panes landed (#485); removed from the dialog-depth list |
 | 2026-10-11 | trivial | Formatting revisions landed (#41); gap #5 narrowed to move tracking and content controls, 8–12 h |
 | 2026-10-10 | trivial | Draw Table and Eraser landed (#303); removed from the feature-gap list |
 | 2026-10-10 | trivial | Tabs and Borders and Shading dialogs landed (#320); removed from the dialog-depth list |

@@ -12,7 +12,7 @@ pub const MAX_AUTHOR_CHARS: usize = 255;
 /// Sets the user name that new tracked changes and comments are recorded under. The name is
 /// trimmed, stripped of control characters (they can't go into the saved XML) and cut to
 /// [`MAX_AUTHOR_CHARS`]; a blank name is refused so revisions always carry an author.
-fn set_author(s: &mut Session, v: &Value) -> CmdResult {
+pub(crate) fn set_author(s: &mut Session, v: &Value) -> CmdResult {
     let name: String = p::req_str(v, "name")?.trim().chars().filter(|c| !c.is_control()).take(MAX_AUTHOR_CHARS).collect();
     let name = name.trim_end();
     if name.is_empty() {
@@ -69,11 +69,6 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("file.properties", "Properties", "File › Info", properties)
             .params(r#"{"title"?, "subject"?, "author"?, "keywords"?, "comments"?, "category"?, "custom"?: {name: string | null (removes)}}"#),
         CommandSpec::new("file.info", "Info", "File", info).pure(),
-        CommandSpec::new("file.options", "Options", "File", |s, _| {
-            s.ui_requests.push(json!({"open": "options"}));
-            sel_result(s)
-        })
-        .pure(),
         CommandSpec::new("file.setAuthor", "User Name", "File › Options › General", set_author)
             .params(r#"{"name": string (author of new tracked changes and comments)}"#)
             .pure(),

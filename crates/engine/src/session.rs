@@ -205,6 +205,8 @@ pub struct Session {
     pub registry: Arc<Registry>,
     /// Author name for comments and tracked changes.
     pub author: String,
+    /// Initials for comments (File › Options › General); empty = the name's initials.
+    pub initials: String,
     /// Format painter: copied formatting waiting to be applied (and whether it stays on).
     pub painter: Option<(CharProps, wordcraft_doc::props::ParaProps, bool)>,
     /// Last message for the status bar / agents.
@@ -278,6 +280,7 @@ pub struct MathEdit {
 }
 
 /// Editing preferences that persist between runs (the front end saves and restores them).
+/// File › Options sets most of them (`file.options`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Prefs {
@@ -286,11 +289,49 @@ pub struct Prefs {
     /// Track Changes Options: what markup shows and how revisions are drawn (per user, as in
     /// Word).
     pub markup: wordcraft_layout::display::MarkupOptions,
+    /// Typing over a selection replaces it; off, the typed text goes in front of it.
+    pub typing_replaces_selection: bool,
+    /// The Insert key switches overtype on and off.
+    pub insert_key_overtype: bool,
+    /// Overtype: typed characters replace the ones after the caret.
+    pub overtype: bool,
+    /// The unit rulers and dialogs show lengths in.
+    pub units: wordcraft_geom::Unit,
+    /// Formatting marks shown even while Show/Hide ¶ is off.
+    pub marks: wordcraft_layout::display::FormattingMarks,
+    /// Mark grammar errors as you type (with Check spelling as you type on).
+    pub mark_grammar: bool,
+    pub ignore_uppercase: bool,
+    pub ignore_numbers: bool,
+    pub ignore_internet: bool,
 }
 
 impl Default for Prefs {
     fn default() -> Self {
-        Prefs { count_notes: true, markup: Default::default() }
+        Prefs {
+            count_notes: true,
+            markup: Default::default(),
+            typing_replaces_selection: true,
+            insert_key_overtype: false,
+            overtype: false,
+            units: Default::default(),
+            marks: Default::default(),
+            mark_grammar: true,
+            ignore_uppercase: true,
+            ignore_numbers: true,
+            ignore_internet: true,
+        }
+    }
+}
+
+impl Prefs {
+    /// What the spelling check skips.
+    pub fn spelling(&self) -> wordcraft_proof::Options {
+        wordcraft_proof::Options {
+            ignore_uppercase: self.ignore_uppercase,
+            ignore_numbers: self.ignore_numbers,
+            ignore_internet: self.ignore_internet,
+        }
     }
 }
 
@@ -315,6 +356,7 @@ impl Session {
             page_hint: 0,
             registry: Arc::new(crate::cmd::registry()),
             author: "WordCraft User".into(),
+            initials: String::new(),
             painter: None,
             status: String::new(),
             history: Vec::new(),
@@ -381,6 +423,12 @@ impl Session {
         self.find.highlights.as_ref().map(|(_, v)| v.as_slice()).unwrap_or(&[])
     }
 
+    /// Initials for new comments: the ones set in File › Options, else the user name's.
+    pub fn user_initials(&self) -> String {
+        let set = self.initials.trim();
+        if set.is_empty() { self.author.split_whitespace().filter_map(|w| w.chars().next()).collect() } else { set.to_string() }
+    }
+
     /// The current layout (recomputed when the document or view changed).
     pub fn layout(&mut self) -> Arc<DocLayout> {
         let ww = self.view.web_width;
@@ -395,9 +443,10 @@ impl Session {
         let opts = LayoutOptions {
             view: self.view.mode,
             web_width: ww,
-            show_hidden: self.view.marks,
+            show_hidden: self.view.marks || self.prefs.marks.hidden,
             hide_deleted: !self.view.show_markup || self.prefs.markup.hides_deletions(),
             proofing: self.view.proofing,
+            proof: wordcraft_layout::ProofOptions { grammar: self.prefs.mark_grammar, spelling: self.prefs.spelling() },
         };
         let l = Arc::new(wordcraft_layout::layout(&self.doc, &mut self.cache, &opts));
         self.layout = Some((self.rev, ww, self.view.mode, l.clone(), self.view.proofing));
@@ -405,7 +454,8 @@ impl Session {
     }
     /// A layout for output (PDF, images, print): no proofing marks, print view.
     pub fn export_layout(&self) -> Arc<DocLayout> {
-        let opts = LayoutOptions { view: ViewMode::Print, web_width: 0.0, show_hidden: false, hide_deleted: false, proofing: false };
+        let opts =
+            LayoutOptions { view: ViewMode::Print, web_width: 0.0, show_hidden: false, hide_deleted: false, proofing: false, ..Default::default() };
         Arc::new(wordcraft_layout::layout(&self.doc, &mut LayoutCache::new(), &opts))
     }
 
@@ -551,6 +601,7 @@ impl Session {
             page_hint: _,
             registry: _,
             author: _,
+            initials: _,
             painter: _,
             status: _,
             history,
