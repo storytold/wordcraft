@@ -144,6 +144,23 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
             })
         })),
+        // Table Properties › Alt Text: the title (`w:tblCaption`) and description (`w:tblDescription`).
+        t(CommandSpec::new("table.altText", "Alt Text", "Table Layout › Table › Properties", |s, v| {
+            let (title, text) = (p::str(v, "title"), p::str(v, "text"));
+            if title.is_none() && text.is_none() {
+                return Err(CmdError::Params("`text` or `title` (string) is required".into()));
+            }
+            let set = |x: Option<&str>, cur: &Option<String>| match x {
+                Some(x) if x.trim().is_empty() => None,
+                Some(x) => Some(wordcraft_doc::para::cap_alt(x)),
+                None => cur.clone(),
+            };
+            with_table(s, |t| {
+                t.props.caption = set(title, &t.props.caption);
+                t.props.description = set(text, &t.props.description);
+            })
+        })
+        .params(r#"{"text"?: string, "title"?: string} (empty clears)"#)),
         t(CommandSpec::new("table.sort", "Sort", "Table Layout › Data", sort_table)
             .params(r#"{"column"?: n, "descending"?: bool, "header"?: bool}"#)),
         t(CommandSpec::new("table.toText", "Convert to Text", "Table Layout › Data", to_text).params(r#"{"separator"?: "tab|comma|paragraph"}"#)),

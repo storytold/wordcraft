@@ -38,6 +38,11 @@ pub const NAMESPACES: &[(&str, &str)] = &[
     ("w10", "urn:schemas-microsoft-com:office:word"),
 ];
 
+/// The `a:ext` URI under which a drawing is marked decorative ([MS-ODRAWXML]), and the
+/// namespace of its `adec:decorative` element.
+pub const DECORATIVE_EXT: &str = "{C183D7F6-B498-43B3-948B-1728B52AA6E4}";
+pub const DECORATIVE_NS: &str = "http://schemas.microsoft.com/office/drawing/2017/decorative";
+
 /// Namespaces that only appear in non-body parts.
 const OTHER_NAMESPACES: &[(&str, &str)] = &[
     ("rel", "http://schemas.openxmlformats.org/package/2006/relationships"),

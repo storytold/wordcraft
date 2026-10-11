@@ -13,6 +13,7 @@ macro_rules! tl {
     };
 }
 
+pub mod a11y_pane;
 pub mod backstage;
 pub mod canvas;
 pub mod chrome;
@@ -337,6 +338,10 @@ impl WordApp {
             return r;
         }
         let r = self.execute_user(id, params);
+        // Check Accessibility shows its findings in the Accessibility pane, kept up to date there.
+        if id == "file.accessibility" && r.is_ok() {
+            self.session.view.accessibility_pane = true;
+        }
         // Match Fields and Check for Errors show what they found.
         if let Ok(v) = &r
             && let Some(d) = dialogs::Dialog::report(id, v)

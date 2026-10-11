@@ -1608,6 +1608,10 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     item(ui, app, "Paragraph…", "ui.dialog", json!({"name": "paragraph"}));
     item(ui, app, "Link…", "ui.dialog", json!({"name": "link"}));
     item(ui, app, "New Comment", "review.newComment", json!({}));
+    let object = wordcraft_engine::cmd::objects::selected(&app.session).is_some();
+    if object || app.session.sel.focus.path.cell().is_some() {
+        item(ui, app, "View Alt Text…", "view.altTextPane", json!({"value": true}));
+    }
     if crate::ribbon::has_picture_selected(&app.session) {
         ui.separator();
         item(ui, app, "Change Picture…", "ui.changePicture", json!({}));

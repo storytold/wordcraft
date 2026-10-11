@@ -273,6 +273,7 @@ Review|Proofing|Thesaurus|review.thesaurus
 Review|Proofing|Word Count|review.wordCount
 Review|Speech|Read Aloud|review.readAloud
 Review|Accessibility|Check Accessibility|file.accessibility
+Review|Accessibility|Alt Text|view.altTextPane
 Review|Language|Translate|review.translate
 Review|Language|Language|review.language
 Review|Comments|New Comment|review.newComment
@@ -340,6 +341,7 @@ Table Layout|Table|Select Row|table.selectRow
 Table Layout|Table|Select Cell|table.selectCell
 Table Layout|Table|View Gridlines|table.viewGridlines
 Table Layout|Table|Properties|table.properties
+Table Layout|Table|Alt Text|table.altText
 Table Layout|Draw|Draw Table|table.draw
 Table Layout|Draw|Eraser|table.eraser
 Table Layout|Rows & Columns|Delete Cells|table.deleteCells
@@ -398,6 +400,7 @@ Picture Format|Adjust|Reset Picture|picture.reset
 Picture Format|Picture Styles|Picture Styles|picture.style
 Picture Format|Picture Styles|Picture Border|picture.border
 Picture Format|Accessibility|Alt Text|picture.altText
+Shape Format|Accessibility|Alt Text|object.altText
 Picture Format|Size|Crop|picture.crop
 Picture Format|Size|Size|picture.size
 Picture Format|Size|Rotation|arrange.rotation

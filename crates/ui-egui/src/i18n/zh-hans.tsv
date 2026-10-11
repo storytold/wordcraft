@@ -1322,3 +1322,18 @@
 	Flip Vertical	垂直翻转
 	Flip Horizontal	水平翻转
 	Formatted	已设置格式
+	Accessibility Pane	辅助功能窗格
+	Alt Text Pane	替代文字窗格
+	Alt\nText	替代\n文字
+	View Alt Text…	查看替代文字…
+	Mark as decorative	标记为装饰性
+	Title:	标题：
+	Errors ({n})	错误 ({n})
+	Warnings ({n})	警告 ({n})
+	Tips ({n})	提示 ({n})
+	No accessibility issues found.	未发现辅助功能问题。
+	Describe what this object shows, for people who can't see it.	请为看不见的人描述此对象显示的内容。
+	Decorative objects only add visual interest: screen readers skip them.	装饰性对象仅增添视觉效果：屏幕阅读器会跳过它们。
+	Describe what this table shows, for people who can't see it.	请为看不见的人描述此表格显示的内容。
+	Select a picture, shape, chart or table to describe it.	选择图片、形状、图表或表格以添加描述。
+	In Line with Text	嵌入型

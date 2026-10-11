@@ -191,7 +191,7 @@ impl super::Writer<'_> {
     /// story part's) and the parts it needs queued for writing. `resize`, for an OLE object, writes
     /// the object's current size and position into its own markup (a chart or diagram's frame is
     /// written by the caller). `None` when it can't be written back (its parts are gone).
-    pub(super) fn embedded_xml(&mut self, src: &Embedded, rels: &mut PartRels, resize: Option<(f32, f32, &Float)>) -> Option<String> {
+    pub(super) fn embedded_xml(&mut self, src: &Embedded, rels: &mut PartRels, resize: Option<(f32, f32, &Float, &str)>) -> Option<String> {
         let Some(left) = self.embeds.markup_bytes.checked_sub(src.xml.len() as u64) else {
             log::warn!("docx: too much embedded-object markup; the rest is left out");
             return None;
@@ -243,16 +243,16 @@ impl super::Writer<'_> {
             }
         }
         set_rel_ids(&mut root, &ids, 0);
-        if let Some((w, h, float)) = resize {
-            self.resize_object(&mut root, w, h, float, 0);
+        if let Some((w, h, float, alt)) = resize {
+            self.resize_object(&mut root, w, h, float, alt, 0);
         }
         Some(root.to_xml())
     }
 
     /// Write an OLE object's size (and position, when floating), rotation and flips into its VML
     /// shape and DrawingML picture, with the effect extent covering the rotated bounds as for
-    /// other drawings, and give its drawing a fresh `wp:docPr` id.
-    fn resize_object(&mut self, e: &mut El, w: f32, h: f32, float: &Float, depth: usize) {
+    /// other drawings, its alt text into both, and give its drawing a fresh `wp:docPr` id.
+    fn resize_object(&mut self, e: &mut El, w: f32, h: f32, float: &Float, alt: &str, depth: usize) {
         if depth > MAX_DEPTH {
             return;
         }
@@ -261,6 +261,7 @@ impl super::Writer<'_> {
                 if let Some((_, style)) = e.attrs.iter_mut().find(|(k, _)| k == "style") {
                     *style = vml_style_with(style, w, h, float);
                 }
+                set_attr(e, "alt", alt);
             }
             "wp:extent" => set_size_attrs(e, w, h),
             // A turned object needs an effect extent (filled in below) right after its extent.
@@ -299,12 +300,13 @@ impl super::Writer<'_> {
                 if let Some((_, v)) = e.attrs.iter_mut().find(|(k, _)| k == "id") {
                     *v = id;
                 }
+                set_attr(e, "descr", alt);
             }
             _ => {}
         }
         for k in e.kids.iter_mut() {
             if let xml::Node::El(c) = k {
-                self.resize_object(c, w, h, float, depth + 1);
+                self.resize_object(c, w, h, float, alt, depth + 1);
             }
         }
     }
@@ -318,6 +320,15 @@ fn set_size_attrs(e: &mut El, w: f32, h: f32) {
             "cy" => *v = emu(h.max(0.0)),
             _ => {}
         }
+    }
+}
+
+/// Set attribute `k` of `e` to `v` (added when missing; left out when both are empty).
+fn set_attr(e: &mut El, k: &str, v: &str) {
+    match e.attrs.iter_mut().find(|(n, _)| n == k) {
+        Some((_, old)) => *old = v.to_string(),
+        None if !v.is_empty() => e.attrs.push((k.to_string(), v.to_string())),
+        None => {}
     }
 }
 

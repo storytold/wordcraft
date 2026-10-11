@@ -1241,6 +1241,7 @@ fn shape_format(app: &mut WordApp, ui: &mut Ui) {
             });
         });
     });
+    alt_text_group(ui, app);
     group(ui, "Arrange", None, app, |ui, app| {
         big(ui, app, "position", "Position", "arrange.position", json!({}), false);
         big(ui, app, "wrapText", "Wrap\nText", "arrange.wrap", json!({}), false);
@@ -1269,6 +1270,13 @@ fn shape_format(app: &mut WordApp, ui: &mut Ui) {
             ui.add_space(2.0);
             crate::widgets::row(ui, |ui| rotation_field(ui, app));
         });
+    });
+}
+
+/// Picture/Shape Format › Accessibility: Alt Text opens the Alt Text pane.
+fn alt_text_group(ui: &mut Ui, app: &mut WordApp) {
+    group(ui, "Accessibility", None, app, |ui, app| {
+        big(ui, app, "altText", "Alt\nText", "view.altTextPane", json!({"value": true}), false);
     });
 }
 
@@ -1353,6 +1361,7 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
             }
         });
     });
+    alt_text_group(ui, app);
     group(ui, "Arrange", None, app, |ui, app| {
         big(ui, app, "position", "Position", "arrange.position", json!({}), false);
         big(ui, app, "wrapText", "Wrap\nText", "arrange.wrap", json!({}), false);

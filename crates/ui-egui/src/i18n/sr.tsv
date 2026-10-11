@@ -1325,3 +1325,18 @@
 	Flip Vertical	Окрени вертикално
 	Flip Horizontal	Окрени хоризонтално
 	Formatted	Форматирано
+	Accessibility Pane	Окно приступачности
+	Alt Text Pane	Окно алтернативног текста
+	Alt\nText	Алтернативни\nтекст
+	View Alt Text…	Прикажи алтернативни текст…
+	Mark as decorative	Означи као декоративно
+	Title:	Наслов:
+	Errors ({n})	Грешке ({n})
+	Warnings ({n})	Упозорења ({n})
+	Tips ({n})	Савети ({n})
+	No accessibility issues found.	Није пронађен ниједан проблем приступачности.
+	Describe what this object shows, for people who can't see it.	Опишите шта овај објекат приказује, за оне који не могу да га виде.
+	Decorative objects only add visual interest: screen readers skip them.	Декоративни објекти само доприносе изгледу: читачи екрана их прескачу.
+	Describe what this table shows, for people who can't see it.	Опишите шта ова табела приказује, за оне који не могу да је виде.
+	Select a picture, shape, chart or table to describe it.	Изаберите слику, облик, графикон или табелу да бисте их описали.
+	In Line with Text	У равни са текстом

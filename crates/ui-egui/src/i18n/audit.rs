@@ -107,6 +107,11 @@ impl Exempt {
         names.extend(app.session.doc.styles.styles.iter().map(|s| s.name.clone()));
         // Fonts a document asks for, installed or not (Aptos is drawn with a substitute).
         names.extend([wordcraft_doc::styles::BODY_FONT, wordcraft_doc::styles::HEADING_FONT].map(str::to_string));
+        // The accessibility checker's findings: like command messages, they answer scripts and
+        // MCP too, so they stay English for now.
+        for i in wordcraft_engine::cmd::accessibility::check(&app.session.doc) {
+            names.extend(["issue", "fix"].iter().filter_map(|k| i[*k].as_str()).map(str::to_string));
+        }
         for m in crate::credits::MODELS {
             names.extend([m.company, m.model, m.version].map(str::to_string));
         }

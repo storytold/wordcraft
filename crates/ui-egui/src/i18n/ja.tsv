@@ -1311,3 +1311,18 @@
 	Flip Vertical	上下反転
 	Flip Horizontal	左右反転
 	Formatted	書式変更
+	Accessibility Pane	アクセシビリティ ウィンドウ
+	Alt Text Pane	代替テキスト ウィンドウ
+	Alt\nText	代替\nテキスト
+	View Alt Text…	代替テキストを表示…
+	Mark as decorative	装飾用にする
+	Title:	タイトル:
+	Errors ({n})	エラー ({n})
+	Warnings ({n})	警告 ({n})
+	Tips ({n})	ヒント ({n})
+	No accessibility issues found.	アクセシビリティの問題は見つかりませんでした。
+	Describe what this object shows, for people who can't see it.	このオブジェクトが示す内容を、見ることができない人のために説明してください。
+	Decorative objects only add visual interest: screen readers skip them.	装飾用のオブジェクトは見た目を整えるだけなので、スクリーン リーダーは読み上げません。
+	Describe what this table shows, for people who can't see it.	この表が示す内容を、見ることができない人のために説明してください。
+	Select a picture, shape, chart or table to describe it.	説明する画像、図形、グラフ、または表を選択してください。
+	In Line with Text	行内

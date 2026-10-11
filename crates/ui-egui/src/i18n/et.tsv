@@ -1324,3 +1324,18 @@
 	Width and spacing	Laius ja vahe
 	from Unicode (hex)	Unicode (kuueteistkümnend)
 	Formatted	Vormindatud
+	Accessibility Pane	Ligipääsetavuse paan
+	Alt Text Pane	Asendusteksti paan
+	Alt\nText	Asendus-\ntekst
+	View Alt Text…	Kuva asendustekst…
+	Mark as decorative	Märgi dekoratiivseks
+	Title:	Pealkiri:
+	Errors ({n})	Vead ({n})
+	Warnings ({n})	Hoiatused ({n})
+	Tips ({n})	Näpunäited ({n})
+	No accessibility issues found.	Ligipääsetavuse probleeme ei leitud.
+	Describe what this object shows, for people who can't see it.	Kirjeldage, mida see objekt näitab, neile, kes seda ei näe.
+	Decorative objects only add visual interest: screen readers skip them.	Dekoratiivsed objektid lisavad ainult visuaalset huvi: ekraanilugerid jätavad need vahele.
+	Describe what this table shows, for people who can't see it.	Kirjeldage, mida see tabel näitab, neile, kes seda ei näe.
+	Select a picture, shape, chart or table to describe it.	Valige pilt, kujund, diagramm või tabel, et seda kirjeldada.
+	In Line with Text	Tekstiga reas

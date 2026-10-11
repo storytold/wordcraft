@@ -1323,3 +1323,18 @@
 	Flip Vertical	Віддзеркалити по вертикалі
 	Flip Horizontal	Віддзеркалити по горизонталі
 	Formatted	Відформатовано
+	Accessibility Pane	Панель доступності
+	Alt Text Pane	Панель альтернативного тексту
+	Alt\nText	Альтернативний\nтекст
+	View Alt Text…	Переглянути альтернативний текст…
+	Mark as decorative	Позначити як декоративний
+	Title:	Заголовок:
+	Errors ({n})	Помилки ({n})
+	Warnings ({n})	Попередження ({n})
+	Tips ({n})	Поради ({n})
+	No accessibility issues found.	Проблем із доступністю не знайдено.
+	Describe what this object shows, for people who can't see it.	Опишіть, що показує цей об’єкт, для тих, хто не може його бачити.
+	Decorative objects only add visual interest: screen readers skip them.	Декоративні об’єкти лише прикрашають документ: засоби читання з екрана їх пропускають.
+	Describe what this table shows, for people who can't see it.	Опишіть, що показує ця таблиця, для тих, хто не може її бачити.
+	Select a picture, shape, chart or table to describe it.	Виберіть зображення, фігуру, діаграму або таблицю, щоб описати її.
+	In Line with Text	У тексті

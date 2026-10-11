@@ -1,7 +1,7 @@
 //! Blocks, paragraphs, runs, objects and tables → WordprocessingML.
 
 use wordcraft_doc::effects::ShapeEffects;
-use wordcraft_doc::para::{Anchor, Float, NoteKind, ShapeKind, Wrap};
+use wordcraft_doc::para::{AltText, Anchor, Float, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{CharProps, PropChange, Rgb};
 use wordcraft_doc::section::{LineNumberRestart, SectionProps, SectionStart};
 use wordcraft_doc::table::Table;
@@ -440,7 +440,7 @@ impl Writer<'_> {
             InlineObject::Image { media, w: iw, h: ih, alt, float, ole, .. } => {
                 // An OLE object read from a file: the object itself, at its current size.
                 if let Some(src) = ole.as_deref()
-                    && let Some(obj) = self.embedded_xml(src, rels, Some((*iw, *ih, float)))
+                    && let Some(obj) = self.embedded_xml(src, rels, Some((*iw, *ih, float, alt.as_str())))
                 {
                     self.rev_open(w, props);
                     w.open("w:r", &[]);
@@ -478,12 +478,12 @@ impl Writer<'_> {
                 // Ink is told apart by its name (and its pen), which reading looks for.
                 let name = shape_name(*kind, freeform.as_deref(), &docpr);
                 // The effect extent leaves room for the shadow and glow.
-                let mut float = *float;
+                let mut float = float.clone();
                 for (e, fx) in float.effect.iter_mut().zip(effects.extent()) {
                     *e = wordcraft_geom::finite(*e).max(fx);
                 }
                 let float = &float;
-                self.drawing_open(w, float, *sw, *sh, &docpr, &name, "");
+                self.drawing_open(w, float, *sw, *sh, &docpr, &name, o.alt_text());
                 w.empty("wp:cNvGraphicFramePr", &[]);
                 w.open("a:graphic", &[]);
                 w.open("a:graphicData", &[("uri", "http://schemas.microsoft.com/office/word/2010/wordprocessingShape")]);
@@ -502,7 +502,7 @@ impl Writer<'_> {
                 w.open("w:drawing", &[]);
                 let docpr = self.next_docpr();
                 let name = format!("Group {docpr}");
-                self.drawing_open(w, float, *gw, *gh, &docpr, &name, "");
+                self.drawing_open(w, float, *gw, *gh, &docpr, &name, o.alt_text());
                 w.empty("wp:cNvGraphicFramePr", &[]);
                 w.open("a:graphic", &[]);
                 w.open("a:graphicData", &[("uri", "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup")]);
@@ -630,7 +630,7 @@ impl Writer<'_> {
         self.used_media.insert(media.clone());
         w.open("pic:pic", &[]);
         w.open("pic:nvPicPr", &[]);
-        w.empty("pic:cNvPr", &[("id", "0"), ("name", file), ("descr", alt)]);
+        nv_props(w, "pic:cNvPr", "0", file, alt, &float.alt);
         w.open("pic:cNvPicPr", &[]);
         w.empty("a:picLocks", &[("noChangeAspect", "1"), ("noChangeArrowheads", "1")]);
         w.close("pic:cNvPicPr");
@@ -662,7 +662,7 @@ impl Writer<'_> {
         w.open("wps:wsp", &[]);
         if let Some(id) = id {
             let name = shape_name(*kind, freeform.as_deref(), id);
-            w.empty("wps:cNvPr", &[("id", id), ("name", &name)]);
+            nv_props(w, "wps:cNvPr", id, &name, &float.alt.text, &float.alt);
         }
         if *kind == ShapeKind::TextBox {
             w.empty("wps:cNvSpPr", &[("txBox", "1")]);
@@ -818,7 +818,7 @@ impl Writer<'_> {
             Wrap::TopAndBottom => w.empty("wp:wrapTopAndBottom", &[]),
             Wrap::BehindText | Wrap::InFrontOfText => w.empty("wp:wrapNone", &[]),
         }
-        w.empty("wp:docPr", &[("id", docpr), ("name", name), ("descr", alt)]);
+        nv_props(w, "wp:docPr", docpr, name, alt, &float.alt);
     }
 
     fn table(&mut self, w: &mut W, t: &Table, rels: &mut PartRels, depth: usize) {
@@ -1130,4 +1130,29 @@ fn toc_span(bl: &Blocks) -> Option<(usize, usize)> {
         })
         .count();
     (entries > 0).then_some((start, start + entries))
+}
+
+/// A drawing's `wp:docPr` (or a group member's `pic:cNvPr`/`wps:cNvPr`, ECMA-376
+/// `CT_NonVisualDrawingProps`) with its alt text `descr`, its title, and the decorative mark as
+/// the `adec:decorative` extension ([MS-ODRAWXML]). A description that is only the title (read
+/// from a file with no description) is not written twice.
+pub(super) fn nv_props(w: &mut W, tag: &str, id: &str, name: &str, descr: &str, alt: &AltText) {
+    let mut attrs = vec![("id", id), ("name", name)];
+    if descr != alt.title || descr.is_empty() {
+        attrs.push(("descr", descr));
+    }
+    if !alt.title.is_empty() {
+        attrs.push(("title", alt.title.as_str()));
+    }
+    if !alt.decorative {
+        w.empty(tag, &attrs);
+        return;
+    }
+    w.open(tag, &attrs);
+    w.open("a:extLst", &[]);
+    w.open("a:ext", &[("uri", crate::xml::DECORATIVE_EXT)]);
+    w.empty("adec:decorative", &[("xmlns:adec", crate::xml::DECORATIVE_NS), ("val", "1")]);
+    w.close("a:ext");
+    w.close("a:extLst");
+    w.close(tag);
 }

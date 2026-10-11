@@ -917,7 +917,7 @@ fn groups_round_trip() {
     let group = InlineObject::Group {
         w: 240.0,
         h: 120.0,
-        float,
+        float: float.clone(),
         ch_w: 200.0,
         ch_h: 100.0,
         children: vec![
@@ -1375,8 +1375,8 @@ fn rotation_and_flips_round_trip() {
         effects: Default::default(),
     };
     let square = Float { wrap: Wrap::Square, ..Default::default() };
-    let tri = shape(ShapeKind::Triangle, Float { rot: 90.0, flip_h: true, ..square });
-    let flipped = shape(ShapeKind::Rectangle, Float { rot: 315.5, flip_v: true, ..square });
+    let tri = shape(ShapeKind::Triangle, Float { rot: 90.0, flip_h: true, ..square.clone() });
+    let flipped = shape(ShapeKind::Rectangle, Float { rot: 315.5, flip_v: true, ..square.clone() });
     let group = InlineObject::Group {
         w: 120.0,
         h: 60.0,
@@ -1459,4 +1459,77 @@ fn rotated_group_and_shadow_rotation_round_trip() {
         })
         .collect();
     assert_eq!(got, [(20.0, Some(true)), (20.0, Some(false))]);
+}
+
+#[test]
+fn alt_text_title_and_decorative_round_trip_for_every_object() {
+    use wordcraft_doc::para::AltText;
+    let mut d = Document::new();
+    let key = d.add_media(tiny_png(), "png");
+    let pic = InlineObject::Image {
+        media: key,
+        w: 100.0,
+        h: 50.0,
+        alt: "A kiln at dusk".into(),
+        float: Float { alt: AltText { title: "Kiln".into(), ..Default::default() }, ..Default::default() },
+        crop: [0.0; 4],
+        ole: None,
+    };
+    let shape = |alt: AltText| InlineObject::Shape {
+        kind: ShapeKind::Ellipse,
+        w: 80.0,
+        h: 40.0,
+        fill: Some(Rgb(1, 2, 3)),
+        stroke: None,
+        stroke_width: 0.0,
+        float: Float { alt, ..Default::default() },
+        story: None,
+        effects: Default::default(),
+        freeform: None,
+    };
+    let described = shape(AltText { text: "Process flow & \"steps\"".into(), ..Default::default() });
+    let decorative = shape(AltText { decorative: true, ..Default::default() });
+    let group = InlineObject::Group {
+        w: 120.0,
+        h: 60.0,
+        float: Float { alt: AltText { text: "Two circles".into(), ..Default::default() }, ..Default::default() },
+        ch_w: 120.0,
+        ch_h: 60.0,
+        children: vec![wordcraft_doc::para::GroupChild { x: 0.0, y: 0.0, obj: shape(AltText { text: "Left circle".into(), ..Default::default() }) }],
+    };
+    let mut p = Paragraph::with_text("objects ", CharProps::default());
+    for o in [pic, described, decorative, group] {
+        let end = p.len();
+        p.insert_object(end, o, &CharProps::default()).unwrap();
+    }
+    let mut t = Table::new(2, 2, 300.0);
+    t.props.caption = Some("Prices".into());
+    t.props.description = Some("Prices by year".into());
+    d.body = vec![para_block(p), Arc::new(Block::Table(t))];
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"{C183D7F6-B498-43B3-948B-1728B52AA6E4}"><adec:decorative xmlns:adec="http://schemas.microsoft.com/office/drawing/2017/decorative" val="1"/>"#), "{xml}");
+    assert!(
+        xml.contains(r#"<w:tblLook "#) && xml.contains(r#"<w:tblCaption w:val="Prices"/><w:tblDescription w:val="Prices by year"/></w:tblPr>"#),
+        "{xml}"
+    );
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    let objs = &paras(&r)[0].objects;
+    let alts: Vec<_> =
+        objs.iter().map(|o| (o.alt_text().to_string(), o.frame().map(|f| f.2.alt.title.clone()).unwrap_or_default(), o.is_decorative())).collect();
+    assert_eq!(
+        alts,
+        [
+            ("A kiln at dusk".into(), "Kiln".into(), false),
+            ("Process flow & \"steps\"".into(), String::new(), false),
+            (String::new(), String::new(), true),
+            ("Two circles".into(), String::new(), false),
+        ]
+    );
+    let InlineObject::Group { children, .. } = &objs[3] else { panic!("{objs:?}") };
+    assert_eq!(children[0].obj.alt_text(), "Left circle");
+    let Some(Block::Table(t)) = r.body.iter().map(|b| &**b).find(|b| matches!(b, Block::Table(_))) else { panic!() };
+    assert_eq!((t.props.caption.as_deref(), t.props.description.as_deref()), (Some("Prices"), Some("Prices by year")));
 }

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use wordcraft_doc::effects::{Glow, Shadow, ShapeEffects};
 use wordcraft_doc::graphic::{Embedded, Graphic, GraphicItem, GraphicKind};
-use wordcraft_doc::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
+use wordcraft_doc::para::{AltText, Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap, cap_alt};
 use wordcraft_doc::props::{CharProps, NumChange, PropChange, Rgb};
 use wordcraft_doc::table::{Cell, MAX_COLS, MAX_ROWS, Row, Table};
 use wordcraft_doc::{Block, Blocks, InlineObject, Paragraph, PartKind, RevisionKind, Run, para_block};
@@ -675,8 +675,9 @@ impl Reader<'_> {
         let ext = c.child("wp:extent");
         let dim = |n: &str| ext.and_then(|e| e.attr(n)).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0).clamp(0.0, crate::units::MAX_LEN_PT);
         let (w, h) = (dim("cx"), dim("cy"));
-        let alt = c.child("wp:docPr").and_then(|p| p.attr("descr").filter(|s| !s.is_empty()).or_else(|| p.attr("title"))).unwrap_or("").to_string();
+        let (alt, meta) = nv_alt(c.child("wp:docPr"));
         let mut float = if anchored { anchor_float(c) } else { Float::default() };
+        float.alt = meta;
         if let Some(e) = c.child("wp:effectExtent") {
             for (slot, n) in float.effect.iter_mut().zip(["l", "t", "r", "b"]) {
                 // Negative for a rotated object narrower than its frame; settled below.
@@ -708,7 +709,7 @@ impl Reader<'_> {
         let mut obj = if let Some(g) = gd.child("wpg:wgp") {
             self.read_group(sc, g, rels, w, h, float)?
         } else if gd.find("a:blip").is_some() {
-            self.read_pic(gd, rels, w, h, alt, float)?
+            self.read_pic(gd, rels, w, h, alt.clone(), float)?
         } else {
             let wsp = gd.find("wps:wsp")?;
             let mut obj = self.read_wsp(sc, wsp, rels, w, h, float);
@@ -724,6 +725,9 @@ impl Reader<'_> {
             }
             obj
         };
+        if !alt.is_empty() {
+            obj.set_alt_text(&alt);
+        }
         // Word's effect extent also covers a rotated object's overhang; the model keeps that
         // apart (it follows from the angle), so take it back out.
         if let Some(f) = obj.float_mut() {
@@ -850,12 +854,14 @@ impl Reader<'_> {
             let max = crate::units::MAX_LEN_PT;
             let fit = |v: f32, lo: f32| wordcraft_geom::finite(v).clamp(lo, max);
             let (w, h) = (fit(ew * sx, 0.0), fit(eh * sy, 0.0));
-            let obj = if e.name == "pic:pic" {
-                let alt = e.find("pic:cNvPr").and_then(|p| p.attr("descr")).unwrap_or("").to_string();
-                self.read_pic(e, rels, w, h, alt, Float::default())
-            } else {
-                Some(self.read_wsp(sc, e, rels, w, h, Float::default()))
-            };
+            let (alt, meta) = nv_alt(if e.name == "pic:pic" { e.find("pic:cNvPr") } else { e.child("wps:cNvPr") });
+            let float = Float { alt: meta, ..Float::default() };
+            let obj =
+                if e.name == "pic:pic" { self.read_pic(e, rels, w, h, alt.clone(), float) } else { Some(self.read_wsp(sc, e, rels, w, h, float)) };
+            let obj = obj.map(|mut o| {
+                o.set_alt_text(&alt);
+                o
+            });
             if let Some(obj) = obj {
                 out.push(wordcraft_doc::para::GroupChild { x: fit(x0 + ox * sx, -max), y: fit(y0 + oy * sy, -max), obj });
             }
@@ -1035,6 +1041,23 @@ fn collect<'a>(e: &'a El, name: &str, out: &mut Vec<&'a El>, depth: usize) {
 
 fn on_off_attr(e: &El, name: &str) -> bool {
     e.attr(name).is_some_and(|v| !matches!(v, "0" | "false" | "off"))
+}
+
+/// The alternative text of a `wp:docPr`, `pic:cNvPr` or `wps:cNvPr` (ECMA-376
+/// `CT_NonVisualDrawingProps`): the description (the title when there is none, as before), and
+/// the title and decorative mark (the `adec:decorative` extension of [MS-ODRAWXML]).
+fn nv_alt(p: Option<&El>) -> (String, AltText) {
+    let Some(p) = p else { return Default::default() };
+    let title = cap_alt(p.attr("title").unwrap_or(""));
+    let descr = p.attr("descr").filter(|s| !s.is_empty()).map(cap_alt).unwrap_or_else(|| title.clone());
+    let decorative = p
+        .child("a:extLst")
+        .into_iter()
+        .flat_map(|l| l.children("a:ext"))
+        .filter(|x| x.attr("uri").is_some_and(|u| u.eq_ignore_ascii_case(crate::xml::DECORATIVE_EXT)))
+        .flat_map(|x| x.els())
+        .any(|d| d.local() == "decorative" && on_off_attr(d, "val"));
+    (descr, AltText { text: String::new(), title, decorative })
 }
 
 fn anchor_float(c: &El) -> Float {
