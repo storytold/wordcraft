@@ -17,6 +17,7 @@ mod file_dialogs;
 mod graphics;
 mod logging;
 mod print;
+mod update_check;
 
 use wordcraft_engine::Session;
 use wordcraft_ui_egui::{
@@ -121,12 +122,14 @@ fn save_prefs(app: &WordApp) {
 }
 
 /// Native file dialogs, shown without blocking the window (`file_dialogs`, #94), File › Print
-/// through the system's PDF viewer (`print`, #15), and pictures on the system clipboard (#45).
+/// through the system's PDF viewer (`print`, #15), pictures on the system clipboard (#45), and the
+/// daily update check (#201).
 fn services(file_dialog: file_dialogs::Hook) -> Services {
     Services {
         file_dialog: Some(file_dialog),
         print: Some(print::hook()),
         clipboard_picture: Some(Box::new(clipboard_picture)),
+        check_update: update_check::service(prefs_enabled()),
         ..Default::default()
     }
 }

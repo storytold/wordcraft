@@ -394,6 +394,10 @@ fn options_page(app: &mut WordApp, ui: &mut Ui) {
         let _ = app.run("view.darkMode", json!({"value": dark_page}));
     }
     ui.checkbox(&mut app.ui.show_discord, tl!("Show the community button in the title bar"));
+    if app.services.check_update.is_some() {
+        ui.checkbox(&mut app.ui.check_updates, tl!("Check for updates"))
+            .on_hover_text(tl!("Once a day, ask GitHub whether a newer WordCraft release is out and show a notice. Nothing else is sent."));
+    }
     ui.add_space(10.0);
     ui.label(egui::RichText::new(tl!("Display")).font(semibold(15.0)));
     let mut marks = app.session.view.marks;

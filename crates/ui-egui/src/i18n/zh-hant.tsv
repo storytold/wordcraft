@@ -1312,3 +1312,10 @@
 	Flip Vertical	垂直翻轉
 	Flip Horizontal	水平翻轉
 	Formatted	已設定格式
+	WordCraft {version} is available.	WordCraft {version} 已推出。
+	Download	下載
+	Open the release page in your browser	在瀏覽器中開啟發行頁面
+	Skip this version	略過此版本
+	Dismiss	忽略
+	Check for updates	檢查更新
+	Once a day, ask GitHub whether a newer WordCraft release is out and show a notice. Nothing else is sent.	每天向 GitHub 查詢一次是否有較新的 WordCraft 版本，並顯示通知。不會傳送其他任何資訊。

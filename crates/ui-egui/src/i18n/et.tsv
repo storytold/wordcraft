@@ -1324,3 +1324,10 @@
 	Width and spacing	Laius ja vahe
 	from Unicode (hex)	Unicode (kuueteistkümnend)
 	Formatted	Vormindatud
+	WordCraft {version} is available.	WordCraft {version} on saadaval.
+	Download	Laadi alla
+	Open the release page in your browser	Ava väljalaske leht brauseris
+	Skip this version	Jäta see versioon vahele
+	Dismiss	Sulge teade
+	Check for updates	Otsi värskendusi
+	Once a day, ask GitHub whether a newer WordCraft release is out and show a notice. Nothing else is sent.	Küsi kord päevas GitHubilt, kas WordCrafti uuem versioon on välja tulnud, ja näita teadet. Muud midagi ei saadeta.
