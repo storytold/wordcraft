@@ -857,7 +857,11 @@ fn runs_differing_only_in_link_or_decoration_keep_their_own_style() {
 fn web_view_is_one_page() {
     let d = Document::from_text(&"text ".repeat(3000));
     let mut c = LayoutCache::new();
-    let l = layout(&d, &mut c, &LayoutOptions { view: ViewMode::Web, web_width: 800.0, show_hidden: false, hide_deleted: false, proofing: false });
+    let l = layout(
+        &d,
+        &mut c,
+        &LayoutOptions { view: ViewMode::Web, web_width: 800.0, show_hidden: false, hide_deleted: false, proofing: false, ..Default::default() },
+    );
     assert_eq!(l.pages.len(), 1);
     assert!(l.pages[0].h > 800.0);
 }

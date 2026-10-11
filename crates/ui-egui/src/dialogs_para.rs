@@ -15,7 +15,7 @@ use crate::theme::{Tokens, semibold};
 const SAME_POS: f32 = 0.5;
 
 fn unit() -> wordcraft_geom::Unit {
-    wordcraft_geom::Unit::default()
+    crate::options::unit()
 }
 
 /// The Tabs dialog's fields. Positions in `stops` and `cleared` are points; `pos` and

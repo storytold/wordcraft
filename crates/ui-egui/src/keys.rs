@@ -243,6 +243,13 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                 if key == Key::Escape && crate::table_pen::stop(app) {
                     continue;
                 }
+                // File › Options › Advanced: the Insert key switches overtype only when asked to.
+                if key == Key::Insert && modifiers.is_none() {
+                    if app.session.prefs.insert_key_overtype {
+                        let _ = app.run("text.overtype", json!({}));
+                    }
+                    continue;
+                }
                 if crate::objects::key(app, key, modifiers) {
                     continue;
                 }

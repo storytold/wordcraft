@@ -166,7 +166,7 @@ pub fn measure_table_columns(doc: &wordcraft_doc::Document, t: &Table) -> Vec<(f
                 show_hidden: false,
                 hide_deleted: false,
                 table: text.as_ref(),
-                proofing: false,
+                proofing: None,
                 exclusions: &[],
                 eq_number: 0,
             };

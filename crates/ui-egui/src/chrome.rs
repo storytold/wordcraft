@@ -105,7 +105,7 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                     // Account / community.
                     let (r, resp) = ui.allocate_exact_size(vec2(control_h, control_h), Sense::click());
                     ui.painter().circle_filled(r.center(), control_h / 2.0 - 1.0, t.accent);
-                    let initials: String = app.session.author.split_whitespace().filter_map(|w| w.chars().next()).take(2).collect();
+                    let initials: String = app.session.user_initials().chars().take(2).collect();
                     ui.painter().text(r.center(), Align2::CENTER_CENTER, initials, semibold(10.5), egui::Color32::WHITE);
                     resp.on_hover_text(format!("{} — set your name in File › Options", app.session.author));
                     ui.add_space(8.0);
@@ -239,6 +239,9 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                 st(ui, tl!("English (United States)"));
                 if app.session.doc.settings.track_changes {
                     st(ui, tl!("Track Changes: On"));
+                }
+                if app.session.prefs.overtype && st(ui, tl!("Overtype")).on_hover_text(tl!("Click to switch back to inserting")).clicked() {
+                    let _ = app.run("text.overtype", json!({"value": false}));
                 }
                 if let Some((msg, at)) = &app.status_msg
                     && crate::now_ms() - at < 6000.0

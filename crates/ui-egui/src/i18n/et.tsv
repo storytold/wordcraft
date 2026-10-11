@@ -49,6 +49,7 @@
 	Arrange\nAll	Paiguta\nkõik
 	Arrow	Nool
 	Artistic Effects	Kunstilised efektid
+	As you type	Kirjutamise ajal
 	Author	Autor
 	AutoCorrect Options	Automaatparanduse valikud
 	AutoFit	Automaatne sobitus
@@ -56,6 +57,7 @@
 	AutoFit Window	Sobita aknaga
 	AutoSave	Automaatsalvestus
 	AutoSave saves every change to the file (needs a saved document)	Automaatsalvestus salvestab iga muudatuse faili (dokument peab olema salvestatud)
+	AutoSave writes your changes to the file a moment after you stop typing.	Automaatsalvestus kirjutab muudatused faili veidi pärast seda, kui lõpetad kirjutamise.
 	AutoText	Automaattekst
 	Automatic	Automaatne
 	Automatic ({language})	Automaatne ({language})
@@ -96,6 +98,7 @@
 	Cell Size	Lahtri suurus
 	Cell\nMargins	Lahtri\nveerised
 	Center	Keskele
+	Centimeters	Sentimeetrid
 	Change	Muuda
 	Change Case	Muuda tähesuurust
 	Change List Level	Muuda loendi taset
@@ -114,6 +117,7 @@
 	Check Compatibility	Kontrolli ühilduvust
 	Check Spelling as You Type	Kontrolli õigekirja kirjutamise ajal
 	Check for Errors	Kontrolli vigu
+	Check spelling as you type	Kontrolli õigekirja kirjutamise ajal
 	Check\nAccessibility	Kontrolli\nligipääsetavust
 	Citation Style	Viitamisstiil
 	Citations & Bibliography	Viited ja allikaloend
@@ -124,6 +128,7 @@
 	Clear Character Style	Eemalda märgistiil
 	Clear Formatting Level	Eemalda vormindustase
 	Clear Paragraph Formatting	Eemalda lõiguvormindus
+	Click to switch back to inserting	Klõpsa, et naasta lisamisrežiimi
 	Clipboard	Lõikelaud
 	Close	Sulge
 	Close Header and Footer	Sulge päis ja jalus
@@ -164,6 +169,7 @@
 	Custom Margins…	Kohandatud veerised…
 	Custom Watermark	Kohandatud vesimärk
 	Custom Watermark…	Kohandatud vesimärk…
+	Custom dictionary	Kohandatud sõnastik
 	Customize Quick Access Toolbar	Kohanda kiirpääsuriba
 	Cut	Lõika
 	Dark Mode	Tume režiim
@@ -276,6 +282,7 @@
 	Format Painter	Vormingupintsel
 	Formatted Text	Vormindatud tekst
 	Formatting at Selection	Valiku vormindus
+	Formatting marks	Vormindusmärgid
 	Formula	Valem
 	General	Üldine
 	Go To	Mine
@@ -301,6 +308,7 @@
 	Heart	Süda
 	Help	Abi
 	Hidden	Peidetud
+	Hidden text	Peidetud tekst
 	Highlight Merge Fields	Tõsta ühendamisväljad esile
 	Highlight\nMerge Fields	Tõsta ühendamis-\nväljad esile
 	Highlighter	Marker
@@ -310,10 +318,14 @@
 	Hyphenation	Poolitus
 	Icons	Ikoonid
 	Ignore All	Eira kõiki
+	Ignore web and file addresses	Eira veebi- ja failiaadresse
+	Ignore words in capitals	Eira suurtähtedega sõnu
+	Ignore words with numbers	Eira numbritega sõnu
 	Illustrations	Illustratsioonid
 	Immersive	Süvenemine
 	Immersive Reader	Süvaluger
 	Immersive\nReader	Süva-\nluger
+	Inches	Tollid
 	Increase Font Size	Suurenda fondi suurust
 	Increase Indent	Suurenda taanet
 	Indent	Taane
@@ -321,6 +333,7 @@
 	Indents	Taanded
 	Index	Register
 	Info	Teave
+	Initials:	Initsiaalid:
 	Ink to\nMath	Käsikiri\nvalemiks
 	Ink to\nShape	Käsikiri\nkujundiks
 	Ink\nReplay	Esita\nkäsikiri
@@ -349,6 +362,8 @@
 	Inside Borders	Siseäärised
 	Inspect Document	Kontrolli dokumenti
 	Inspect Styles at Selection	Kontrolli valiku stiile
+	Interface	Kasutajaliides
+	Interface language	Kasutajaliidese keel
 	Interface language:	Kasutajaliidese keel:
 	Italic	Kaldkiri
 	Join the ArtCraft community on Discord	Liitu ArtCrafti kogukonnaga Discordis
@@ -398,16 +413,19 @@
 	Margins	Veerised
 	Mark Citation	Märgi õigusallikas
 	Mark Entry	Märgi registrikirje
+	Mark grammar errors as you type	Märgi grammatikavead kirjutamise ajal
 	Mark\nCitation	Märgi\nõigusallikas
 	Mark\nEntry	Märgi\nregistrikirje
 	Markdown (*.md)	Markdown (*.md)
 	Match Fields	Vastenda väljad
 	Match case	Erista suur- ja väiketähti
 	Matrix	Maatriks
+	Measurement units:	Mõõtühikud:
 	Merge	Ühenda
 	Merge Cells	Ühenda lahtrid
 	Merge Formatting	Ühenda vormindus
 	Merged PRs	Ühendatud PR-id
+	Millimeters	Millimeetrid
 	Mirrored	Peegeldatud
 	Moderate	Mõõdukas
 	Modify Style	Muuda stiili
@@ -426,7 +444,9 @@
 	New Paragraph	Uus lõik
 	New Style…	Uus stiil…
 	New Window	Uus aken
+	New comments and tracked changes are recorded under this name and these initials.	Uued kommentaarid ja jälitatud muudatused salvestatakse selle nime ja nende initsiaalidega.
 	New from Template	Uus mallist
+	New word	Uus sõna
 	New\nComment	Uus\nkommentaar
 	New\nWindow	Uus\naken
 	Next	Järgmine
@@ -443,6 +463,7 @@
 	No contributor data was built into this copy.	Selles versioonis pole kaasautorite andmeid.
 	No model credits were built into this copy.	Selles versioonis pole mudelite autoriteavet.
 	No templates match your search.	Otsingule vastavaid malle pole.
+	No words yet. Add to Dictionary on a misspelled word puts it here.	Sõnu veel pole. Valik „Lisa sõnastikku“ valesti kirjutatud sõnal lisab selle siia.
 	Nonbreaking Hyphen	Poolitamatu sidekriips
 	Nonbreaking Space	Poolitamatu tühik
 	None	Puudub
@@ -470,6 +491,8 @@
 	Outline Level	Liigendustase
 	Outside Borders	Välisäärised
 	Oval	Ovaal
+	Overtype	Ülekirjutus
+	Overtype (typing replaces the characters after the caret)	Ülekirjutus (kirjutatu asendab kursori järel olevad märgid)
 	PDF document (*.pdf)	PDF-dokument (*.pdf)
 	Page	Leht
 	Page Background	Lehe taust
@@ -486,6 +509,7 @@
 	Page Width	Lehe laius
 	Page X of Y	Leht X / Y
 	Page break before	Lehepiir enne
+	Page display	Lehe kuvamine
 	Page image (*.png)	Lehe pilt (*.png)
 	Page width	Lehe laius
 	Page {page}	Leht {page}
@@ -500,6 +524,7 @@
 	Paragraph Settings	Lõigu sätted
 	Paragraph Spacing	Lõiguvahe
 	Paragraph Up	Lõigu võrra üles
+	Paragraph marks	Lõigumärgid
 	Paragraphs	Lõigud
 	Paste	Kleebi
 	Paste (⌘V)	Kleebi (⌘V)
@@ -511,11 +536,14 @@
 	Paste: Merge Formatting	Kleebi: ühenda vormindus
 	Pen	Pliiats
 	Pencil	Grafiitpliiats
+	Personalize	Isikupärastamine
+	Picas	Piikad
 	Picture Border	Pildi ääris
 	Picture Format	Pildi vorming
 	Picture Styles	Pildistiilid
 	Pictures	Pildid
 	Plain text (*.txt)	Lihttekst (*.txt)
+	Points	Punktid
 	Portrait	Püstpaigutus
 	Position	Asukoht
 	Preview Results	Tulemuste eelvaade
@@ -527,9 +555,12 @@
 	Previous Section	Eelmine jaotis
 	Print	Prindi
 	Print Layout	Prindipaigutus
+	Print the page color	Prindi lehe värv
 	Print\nLayout	Prindi-\npaigutus
+	Printing	Printimine
 	Proofing	Keelekontroll
 	Proofing Issues	Keelekontrolli probleemid
+	Proofing language	Keelekontrolli keel
 	Properties	Atribuudid
 	Protect	Kaitse
 	Protect Document	Kaitse dokumenti
@@ -544,6 +575,7 @@
 	Reads the clipboard's web content and keeps its formatting.	Loeb lõikelaualt veebisisu ja säilitab vorminduse.
 	Reading Highlight	Otsingutulemuste esiletõst
 	Recent	Hiljutised
+	Recent documents to show:	Kuvatavad hiljutised dokumendid:
 	Record Macro	Salvesta makro
 	Recover Unsaved Documents	Taasta salvestamata dokumendid
 	Rectangle	Ristkülik
@@ -554,6 +586,7 @@
 	Reject All Changes	Lükka kõik muudatused tagasi
 	Reject Change	Lükka muudatus tagasi
 	Relaxed	Hõre
+	Remove	Eemalda
 	Remove Background	Eemalda taust
 	Remove Footer	Eemalda jalus
 	Remove Header	Eemalda päis
@@ -604,6 +637,7 @@
 	Save As	Salvesta nimega
 	Save a copy in another format. Printing goes through a PDF you can print from any viewer.	Salvesta koopia teises vormingus. Printimiseks luuakse PDF, mille saad printida PDF-vaaturist.
 	Save as Template	Salvesta mallina
+	Save documents	Dokumentide salvestamine
 	Saved	Salvestatud
 	Search Commands	Otsi käske
 	Search commands and help	Otsi käske ja abi
@@ -652,6 +686,7 @@
 	Show all formatting marks	Kuva kõik vormindusmärgid
 	Show rulers	Kuva joonlauad
 	Show the community button in the title bar	Kuva tiitliribal kogukonna nupp
+	Show the mini toolbar when text is selected	Kuva teksti valimisel minitööriistariba
 	Show/Hide ¶	Kuva/peida ¶
 	Show\nComments	Kuva\nkommentaarid
 	Shrink Font 1 Point	Vähenda fonti 1 punkti võrra
@@ -668,12 +703,15 @@
 	Sort	Sordi
 	Source code: github.com/storytold/wordcraft	Lähtekood: github.com/storytold/wordcraft
 	Space before/after:	Vahe enne/pärast:
+	Spaces	Tühikud
 	Spacing	Vahe
 	Spacing (pt):	Vahe (pt):
 	Speech	Kõne
+	Spelling	Õigekiri
 	Spelling & Grammar	Õigekiri ja grammatika
 	Spelling &\nGrammar	Õigekiri ja\ngrammatika
 	Spelling Suggestions	Õigekirjasoovitused
+	Spelling and grammar are checked in English (United States).	Õigekirja ja grammatikat kontrollitakse inglise keeles (Ameerika Ühendriigid).
 	Split	Tükelda
 	Split Cells	Tükelda lahtrid
 	Split Table	Tükelda tabel
@@ -702,6 +740,7 @@
 	Symbols	Sümbolid
 	Synonyms	Sünonüümid
 	Tab	Tabeldus
+	Tab characters	Tabeldusmärgid
 	Table	Tabel
 	Table Column Width	Tabeli veerulaius
 	Table Design	Tabeli kujundus
@@ -735,6 +774,7 @@
 	Theme List	Kujunduste loend
 	Themes	Kujundused
 	Thesaurus	Sünonüümisõnastik
+	These marks show even when Show/Hide ¶ is off.	Need märgid on nähtavad ka siis, kui Kuva/peida ¶ on välja lülitatud.
 	Thick	Paks
 	Three	Kolm
 	Tight	Tihe
@@ -751,6 +791,7 @@
 	Two	Kaks
 	Type Text	Sisesta tekst
 	Type a command, e.g. "insert table"	Sisesta käsk, nt "lisa tabel"
+	Typing replaces selected text	Kirjutatu asendab valitud teksti
 	UPPERCASE	SUURTÄHED
 	Underline	Allajoon
 	Underline Words Only	Jooni alla ainult sõnad
@@ -763,8 +804,10 @@
 	Update Style to Match Selection	Uuenda stiil valiku järgi
 	Update Table	Uuenda tabelit
 	Update Table of Figures	Uuenda illustratsioonide loendit
+	Update fields before printing	Värskenda välju enne printimist
 	Update to Match	Uuenda vastavaks
 	Update to Match Selection	Uuenda valiku järgi
+	Use the Insert key to switch overtype on and off	Kasuta Insert-klahvi ülekirjutuse sisse- ja väljalülitamiseks
 	User Name	Kasutajanimi
 	User name:	Kasutajanimi:
 	Version History	Versiooniajalugu

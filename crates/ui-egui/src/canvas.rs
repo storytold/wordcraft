@@ -257,7 +257,7 @@ fn page_key(app: &WordApp, page: &Page, scale_px: f32, dim_body: bool) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     scale_px.to_bits().hash(&mut h);
     let v = &app.session.view;
-    (v.marks, v.show_markup, v.dark_mode, wordcraft_render::DARK_PAPER, v.hide_ink).hash(&mut h);
+    (v.marks, app.session.prefs.marks, v.show_markup, v.dark_mode, wordcraft_render::DARK_PAPER, v.hide_ink).hash(&mut h);
     app.session.prefs.markup.hash(&mut h);
     dim_body.hash(&mut h);
     format!("{:?}{:?}", app.session.doc.settings.page_color, app.session.doc.settings.watermark).hash(&mut h);
@@ -448,6 +448,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             if !fresh && (rendered < 2 || !app.canvas.textures.contains_key(&i) && rendered < 4) {
                 let mut opts = screen_render_options();
                 opts.display.marks = app.session.view.marks;
+                opts.display.always = app.session.prefs.marks;
                 opts.display.placeholders = true;
                 opts.display.markup = app.session.view.show_markup;
                 opts.display.hide_ink = app.session.view.hide_ink;
@@ -724,7 +725,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     if let (Some(h), Some(v)) = (hruler, vruler) {
         rulers(app, ui, h, v, &rects, &layout, geo.scale);
     }
-    if let Some(sel) = app.canvas.mini_anchor {
+    if let Some(sel) = app.canvas.mini_anchor
+        && app.ui.mini_toolbar
+    {
         crate::mini_toolbar::show(app, ui.ctx(), sel, area);
     }
 }
@@ -1211,21 +1214,22 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
     hp.rect_filled(bar, 0.0, t.ruler_margin);
     let text = Rect::from_min_max(pos2(x0 + page.body.x * scale, bar.min.y), pos2(x0 + page.body.right() * scale, bar.max.y));
     hp.rect_filled(text, 0.0, t.ruler);
-    let unit = 72.0;
+    // Graduations in the File › Options unit.
+    let (unit, div, step) = ruler_scale(app.session.prefs.units);
     let origin = page.body.x;
-    let mut k = -((origin / unit).ceil() as i32) * 8;
+    let mut k = -((origin / unit).ceil() as i32) * div;
     loop {
-        let xpt = origin + k as f32 * unit / 8.0;
+        let xpt = origin + k as f32 * unit / div as f32;
         if xpt > page.w {
             break;
         }
         if xpt >= 0.0 {
             let sx = x0 + xpt * scale;
-            let (len, label) = if k % 8 == 0 {
-                (0.0, Some(k / 8))
-            } else if k % 4 == 0 {
+            let (len, label) = if k % div == 0 {
+                (0.0, Some(k / div * step))
+            } else if k % (div / 2) == 0 {
                 (5.0, None)
-            } else if k % 2 == 0 {
+            } else if div >= 8 && k % (div / 4) == 0 {
                 (3.0, None)
             } else {
                 (1.5, None)
@@ -1236,7 +1240,7 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
                 }
                 Some(_) => {}
                 None => {
-                    if scale * unit / 8.0 > 4.0 || k % 2 == 0 {
+                    if scale * unit / div as f32 > 4.0 || k % 2 == 0 {
                         hp.line_segment([pos2(sx, bar.center().y - len / 2.0), pos2(sx, bar.center().y + len / 2.0)], Stroke::new(1.0, t.ruler_tick));
                     }
                 }
@@ -1354,15 +1358,21 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
         margin_handle(app, ui, edge, zone, |p| (p.y - y0) / scale, &sect);
     }
     let origin = page.body.y;
-    let mut k = -((origin / unit).ceil() as i32) * 8;
+    let mut k = -((origin / unit).ceil() as i32) * div;
     loop {
-        let ypt = origin + k as f32 * unit / 8.0;
+        let ypt = origin + k as f32 * unit / div as f32;
         if ypt > page.h.min(20_000.0) {
             break;
         }
-        if ypt >= 0.0 && k % 8 == 0 && k != 0 {
-            vp.text(pos2(vbar.center().x, y0 + ypt * scale), egui::Align2::CENTER_CENTER, (k / 8).abs().to_string(), regular(9.5), t.ruler_tick);
-        } else if ypt >= 0.0 && k % 4 == 0 {
+        if ypt >= 0.0 && k % div == 0 && k != 0 {
+            vp.text(
+                pos2(vbar.center().x, y0 + ypt * scale),
+                egui::Align2::CENTER_CENTER,
+                (k / div * step).abs().to_string(),
+                regular(9.5),
+                t.ruler_tick,
+            );
+        } else if ypt >= 0.0 && k % (div / 2) == 0 {
             let sy = y0 + ypt * scale;
             vp.line_segment([pos2(vbar.center().x - 2.5, sy), pos2(vbar.center().x + 2.5, sy)], Stroke::new(1.0, t.ruler_tick));
         }
@@ -1370,6 +1380,19 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
         if k > 2000 {
             break;
         }
+    }
+}
+
+/// A ruler's graduation for a unit: points per numbered step, divisions per step, and how much
+/// each step counts (millimetre rulers number every centimetre as 10, 20…).
+fn ruler_scale(u: wordcraft_geom::Unit) -> (f32, i32, i32) {
+    use wordcraft_geom::Unit;
+    match u {
+        Unit::Centimeters => (wordcraft_geom::PT_PER_CM, 4, 1),
+        Unit::Millimeters => (wordcraft_geom::PT_PER_CM, 4, 10),
+        Unit::Points => (72.0, 8, 72),
+        Unit::Picas => (72.0, 8, 6),
+        Unit::Inches => (72.0, 8, 1),
     }
 }
 

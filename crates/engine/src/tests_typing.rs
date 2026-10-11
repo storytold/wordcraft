@@ -327,3 +327,37 @@ fn tracked_enter_and_backspace_track_the_paragraph_mark() {
     assert_eq!(s.sel.focus, Pos::body(0, 3));
     assert!(s.doc.para_at(&Pos::body(0, 0)).is_some_and(|p| p.mark.del.is_some()));
 }
+
+/// File › Options › Advanced, "Typing replaces selected text" (#485): on (Word's default) the
+/// typed text replaces the selection; off, it goes in front of the selection and keeps it.
+#[test]
+fn typing_over_a_selection_follows_the_replace_selection_option() {
+    let mut s = typed("One two");
+    run(&mut s, "select.text", json!({"text": "two"}));
+    typ(&mut s, "X");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "One X");
+    let mut s = typed("One two");
+    run(&mut s, "file.options", json!({"typingReplacesSelection": false}));
+    run(&mut s, "select.text", json!({"text": "two"}));
+    typ(&mut s, "XY");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "One XYtwo");
+}
+
+/// Overtype (#485): typed characters replace the ones after the caret, never past the end of the
+/// paragraph; the Insert key toggles it only with "Use the Insert key to control overtype" on
+/// (the UI checks that option; `text.overtype` is the switch).
+#[test]
+fn overtype_replaces_the_characters_after_the_caret() {
+    let mut s = typed("Abcdef\nXy");
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 1)}));
+    run(&mut s, "text.overtype", json!({"value": true}));
+    typ(&mut s, "XY");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "AXYdef\nXy");
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 5)}));
+    typ(&mut s, "123");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "AXYde123\nXy", "the paragraph mark isn't typed over");
+    run(&mut s, "text.overtype", json!({}));
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 0)}));
+    typ(&mut s, "Z");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "ZAXYde123\nXy", "insert mode again");
+}

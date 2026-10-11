@@ -137,10 +137,40 @@ impl Draw {
     }
 }
 
+/// Formatting marks shown even while Show/Hide ¶ is off (File › Options › Display, "Always show
+/// these formatting marks"). Show/Hide ¶ on shows them all.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct FormattingMarks {
+    /// Tab characters (→).
+    pub tabs: bool,
+    /// Spaces (·).
+    pub spaces: bool,
+    /// Paragraph marks (¶), line breaks, page, column and section breaks.
+    pub paragraphs: bool,
+    /// Hidden text (shown with its dotted underline instead of left out).
+    pub hidden: bool,
+}
+
+impl FormattingMarks {
+    pub const ALL: FormattingMarks = FormattingMarks { tabs: true, spaces: true, paragraphs: true, hidden: true };
+
+    /// The marks on screen: all of them with Show/Hide ¶ on, else the chosen ones.
+    pub fn shown(self, show_all: bool) -> FormattingMarks {
+        if show_all { FormattingMarks::ALL } else { self }
+    }
+
+    pub fn any(self) -> bool {
+        self.tabs || self.spaces || self.paragraphs || self.hidden
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct DisplayOptions {
-    /// Show formatting marks (¶).
+    /// Show formatting marks (¶): Show/Hide ¶, every mark.
     pub marks: bool,
+    /// Marks shown while `marks` is off (File › Options › Display).
+    pub always: FormattingMarks,
     /// Dim headers/footers (editing the body) or the body (editing a header/footer).
     pub dim_header: bool,
     pub dim_body: bool,
@@ -158,6 +188,7 @@ impl Default for DisplayOptions {
     fn default() -> Self {
         DisplayOptions {
             marks: false,
+            always: FormattingMarks::default(),
             dim_header: true,
             dim_body: false,
             markup: true,
@@ -810,7 +841,8 @@ fn lines(
             }
         }
         // Formatting marks.
-        if opts.marks {
+        let marks = opts.always.shown(opts.marks);
+        if marks.any() {
             let msize = pl.styles.first().map(|s| s.size).unwrap_or(11.0);
             for k in line.c0..line.c1 {
                 let Some(c) = pl.clusters.get(k) else { continue };
@@ -819,14 +851,14 @@ fn lines(
                 let size = pl.styles.get(c.style as usize).map(|s| s.size).unwrap_or(msize);
                 let arrow = if line.rtl { '←' } else { '→' };
                 match c.kind {
-                    ClKind::Space => {
+                    ClKind::Space if marks.spaces => {
                         out.push(Draw::Mark { x: (cx + nx) / 2.0 - size * 0.12, baseline: base - size * 0.08, size, ch: '·', color: None })
                     }
-                    ClKind::Tab => {
+                    ClKind::Tab if marks.tabs => {
                         out.push(Draw::Mark { x: cx + ((nx - cx) / 2.0 - size * 0.3).max(0.0), baseline: base, size, ch: arrow, color: None })
                     }
-                    ClKind::LineBreak => out.push(Draw::Mark { x: cx + 1.0, baseline: base, size, ch: '↵', color: None }),
-                    ClKind::PageBreak | ClKind::ColumnBreak => {
+                    ClKind::LineBreak if marks.paragraphs => out.push(Draw::Mark { x: cx + 1.0, baseline: base, size, ch: '↵', color: None }),
+                    ClKind::PageBreak | ClKind::ColumnBreak if marks.paragraphs => {
                         let label = if c.kind == ClKind::PageBreak { '⤓' } else { '⇥' };
                         out.push(Draw::Line {
                             x0: cx + 2.0,
@@ -843,7 +875,7 @@ fn lines(
                     _ => {}
                 }
             }
-            if line.end == LineEnd::Para {
+            if line.end == LineEnd::Para && marks.paragraphs {
                 // The mark follows the line's visual end, past every glyph, even where the
                 // logically last text runs against the paragraph's direction.
                 let ex = x + line.visual_end_x();

@@ -164,6 +164,11 @@ fn untranslated_interface_text() {
         let drawn = frame(&ctx, &mut app);
         record(&app, &format!("File › {page}"), drawn);
     }
+    for pane in wordcraft_engine::cmd::options::PANES {
+        let _ = app.run("ui.backstage", json!({"value": true, "page": "options", "pane": pane}));
+        let drawn = frame(&ctx, &mut app);
+        record(&app, &format!("File › Options › {pane}"), drawn);
+    }
     let _ = app.run("ui.backstage", json!({"value": false}));
     let dialogs = [
         "font",

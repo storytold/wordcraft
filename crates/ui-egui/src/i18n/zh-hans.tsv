@@ -59,12 +59,14 @@
 	Arrange\nAll	全部重排
 	Arrow	箭头
 	Artistic Effects	艺术效果
+	As you type	键入时
 	Asian Typography	亚洲版式
 	Author	作者
 	AutoCorrect Options	自动更正选项
 	AutoFit	自动调整
 	AutoFit Contents	根据内容自动调整
 	AutoFit Window	根据窗口自动调整
+	AutoSave writes your changes to the file a moment after you stop typing.	停止键入片刻后，自动保存会将更改写入文件。
 	Automatic	自动
 	Automatic ({language})	自动（{language}）
 	Automatic follows your system's language. Menus and commands change; your documents don't.	“自动”跟随系统语言。菜单和命令会改变，文档内容不会改变。
@@ -75,13 +77,17 @@
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	自动保存失败：{error}。重新保存文档后将恢复自动保存。
 	Balloons	批注框
 	Bottom Margin	下边距
+	Centimeters	厘米
+	Check spelling as you type	键入时检查拼写
 	Click a border between two cells to merge them. Esc stops.	单击两个单元格之间的边框以合并它们。按 Esc 结束。
 	Bullet	项目符号
 	By author	按作者
 	Changed lines:	修订行：
 	Click level to modify:	单击要修改的级别：
+	Click to switch back to inserting	单击以切换回插入模式
 	Color only	仅颜色
 	Compress punctuation at the start of a line	压缩行首标点
+	Custom dictionary	自定义词典
 	Dark page (white text on black)	深色页面（黑底白字）
 	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	拖出矩形以绘制表格，或拖出穿过单元格的线条以拆分单元格。按 Esc 结束。
 	Draw Table	绘制表格
@@ -92,10 +98,19 @@
 	Enter formatting for number:	输入编号的格式：
 	Follow number with:	编号之后：
 	Formatting	格式
+	Formatting marks	格式标记
+	Hidden text	隐藏文字
+	Ignore web and file addresses	忽略网址和文件路径
+	Ignore words in capitals	忽略全部大写的单词
+	Ignore words with numbers	忽略包含数字的单词
+	Inches	英寸
 	Include level number from:	包含的级别编号来自：
+	Initials:	缩写：
 	Ink	墨迹
 	Insertions and Deletions	插入和删除
 	Insertions:	插入内容：
+	Interface	界面
+	Interface language	界面语言
 	Left border	左框线
 	Left Margin	左边距
 	Indents and Spacing	缩进和间距
@@ -103,17 +118,36 @@
 	Line breaking	断行
 	Link level to style:	将级别链接到样式：
 	List Definition	列表定义
+	Mark grammar errors as you type	键入时标记语法错误
+	Measurement units:	度量单位：
+	Millimeters	毫米
 	More templates →	更多模板 →
+	New comments and tracked changes are recorded under this name and these initials.	新批注和修订将以此名称和缩写记录。
+	New word	新单词
 	No templates match your search.	没有与搜索匹配的模板。
+	No words yet. Add to Dictionary on a misspelled word puts it here.	还没有单词。对拼写错误的单词选择“添加到词典”会将其放在这里。
 	Nothing	无
 	Number alignment:	编号对齐方式：
 	Number format	编号格式
 	Number style for this level:	此级别的编号样式：
 	Outside border	外侧框线
+	Overtype	改写
+	Overtype (typing replaces the characters after the caret)	改写（键入的内容替换插入点后的字符）
+	Page display	页面显示
+	Paragraph marks	段落标记
+	Personalize	个性化
+	Picas	派卡
+	Points	磅
+	Print the page color	打印页面颜色
+	Printing	打印
+	Proofing language	校对语言
+	Recent documents to show:	显示的最近文档数：
+	Remove	移除
 	Reopen	重新打开
 	Restart list after:	重新开始列表的级别：
 	Right border	右框线
 	Right Margin	右边距
+	Save documents	保存文档
 	Search for templates	搜索模板
 	Show all revisions inline	以嵌入方式显示所有修订
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	像“视图 › 切换模式”一样以反转的颜色显示文档。保存、打印和 PDF 不受影响。
@@ -141,6 +175,11 @@
 	Border Painter	边框刷
 	Border\nPainter	边框刷
 	Borders	边框
+	Show the mini toolbar when text is selected	选择文本时显示浮动工具栏
+	Spaces	空格
+	Spelling	拼写
+	Spelling and grammar are checked in English (United States).	拼写和语法按英语（美国）检查。
+	Tab characters	制表符
 	Tab stop position:	制表位位置：
 	Default tab stops:	默认制表位：
 	Tab stops to be cleared:	要清除的制表位：
@@ -151,6 +190,10 @@
 	Set	设置
 	Page Border	页面边框线
 	Apply to:	应用于：
+	These marks show even when Show/Hide ¶ is off.	即使关闭“显示/隐藏 ¶”，这些标记也会显示。
+	Typing replaces selected text	键入内容替换所选文字
+	Update fields before printing	打印前更新域
+	Use the Insert key to switch overtype on and off	用 Insert 键切换改写模式
 	Whole document	整篇文档
 	This section	本节
 	Fill	填充

@@ -48,12 +48,14 @@
 	Arrange\nAll	整列
 	Arrow	矢印
 	Artistic Effects	アート効果
+	As you type	入力中
 	Asian Typography	アジア文字の組版
 	Author	作成者
 	AutoCorrect Options	オートコレクトのオプション
 	AutoFit	自動調整
 	AutoFit Contents	文字列の幅に合わせる
 	AutoFit Window	ウィンドウ幅に合わせる
+	AutoSave writes your changes to the file a moment after you stop typing.	自動保存は、入力を止めて少したつと変更をファイルに書き込みます。
 	Automatic	自動
 	Automatic ({language})	自動（{language}）
 	Automatic follows your system's language. Menus and commands change; your documents don't.	「自動」はシステムの言語に従います。メニューとコマンドの表示が変わり、文書の内容は変わりません。
@@ -64,13 +66,17 @@
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	自動保存できませんでした: {error}。文書を保存し直すと、自動保存が再開します。
 	Balloons	吹き出し
 	Bottom Margin	下余白
+	Centimeters	センチメートル
+	Check spelling as you type	入力中にスペル チェックを行う
 	Click a border between two cells to merge them. Esc stops.	2 つのセルの間の境界線をクリックすると結合します。Esc で終了します。
 	Bullet	行頭文字
 	By author	校閲者別
 	Changed lines:	変更された行:
 	Click level to modify:	変更するレベルをクリック:
+	Click to switch back to inserting	クリックすると挿入モードに戻ります
 	Color only	色のみ
 	Compress punctuation at the start of a line	行頭の約物を詰める
+	Custom dictionary	ユーザー辞書
 	Dark page (white text on black)	ダーク ページ (黒地に白い文字)
 	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	四角形をドラッグして表を描くか、セルを横切る線を引いて分割します。Esc で終了します。
 	Draw Table	表を描画
@@ -81,10 +87,19 @@
 	Enter formatting for number:	番号の書式:
 	Follow number with:	番号に続く文字:
 	Formatting	書式
+	Formatting marks	編集記号
+	Hidden text	隠し文字
+	Ignore web and file addresses	Web アドレスとファイル パスを無視する
+	Ignore words in capitals	すべて大文字の単語を無視する
+	Ignore words with numbers	数字を含む単語を無視する
+	Inches	インチ
 	Include level number from:	含めるレベルの番号:
+	Initials:	イニシャル:
 	Ink	インク
 	Insertions and Deletions	挿入と削除
 	Insertions:	挿入された箇所:
+	Interface	インターフェイス
+	Interface language	表示言語
 	Left border	左罫線
 	Left Margin	左余白
 	Indents and Spacing	インデントと間隔
@@ -92,17 +107,36 @@
 	Line breaking	行の分割
 	Link level to style:	レベルに対応付けるスタイル:
 	List Definition	リストの定義
+	Mark grammar errors as you type	入力中に文法の誤りに印を付ける
+	Measurement units:	単位:
+	Millimeters	ミリメートル
 	More templates →	その他のテンプレート →
+	New comments and tracked changes are recorded under this name and these initials.	新しいコメントと変更履歴は、この名前とイニシャルで記録されます。
+	New word	新しい単語
 	No templates match your search.	検索に一致するテンプレートはありません。
+	No words yet. Add to Dictionary on a misspelled word puts it here.	まだ単語はありません。スペルミスの単語で [辞書に追加] を選ぶと、ここに追加されます。
 	Nothing	なし
 	Number alignment:	番号の配置:
 	Number format	番号書式
 	Number style for this level:	このレベルの番号の種類:
 	Outside border	外側の罫線
+	Overtype	上書き
+	Overtype (typing replaces the characters after the caret)	上書き (入力した文字がカーソルの後ろの文字を置き換えます)
+	Page display	ページの表示
+	Paragraph marks	段落記号
+	Personalize	個人設定
+	Picas	パイカ
+	Points	ポイント
+	Print the page color	ページの色を印刷する
+	Printing	印刷
+	Proofing language	文章校正の言語
+	Recent documents to show:	表示する最近使ったドキュメントの数:
+	Remove	削除
 	Reopen	再度開く
 	Restart list after:	リストを振り直すレベル:
 	Right border	右罫線
 	Right Margin	右余白
+	Save documents	ドキュメントの保存
 	Search for templates	テンプレートを検索
 	Show all revisions inline	すべての変更履歴を本文中に表示
 	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	表示 › モードの切り替えと同様に、文書の色を反転して表示します。保存、印刷、PDF は変わりません。
@@ -130,6 +164,11 @@
 	Border Painter	罫線の書式設定
 	Border\nPainter	罫線の書式設定
 	Borders	罫線
+	Show the mini toolbar when text is selected	テキストを選択したときにミニ ツール バーを表示する
+	Spaces	スペース
+	Spelling	スペル チェック
+	Spelling and grammar are checked in English (United States).	スペルと文法は英語 (米国) でチェックされます。
+	Tab characters	タブ
 	Tab stop position:	タブ位置:
 	Default tab stops:	既定のタブ間隔:
 	Tab stops to be cleared:	削除するタブ:
@@ -140,6 +179,10 @@
 	Set	設定
 	Page Border	ページ罫線の設定
 	Apply to:	適用先:
+	These marks show even when Show/Hide ¶ is off.	これらの記号は、[編集記号の表示/非表示 ¶] がオフでも表示されます。
+	Typing replaces selected text	入力時に選択文字列を置き換える
+	Update fields before printing	印刷前にフィールドを更新する
+	Use the Insert key to switch overtype on and off	Insert キーで上書きのオンとオフを切り替える
 	Whole document	文書全体
 	This section	このセクション
 	Fill	塗りつぶし

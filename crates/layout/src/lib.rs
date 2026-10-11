@@ -52,8 +52,24 @@ pub struct LayoutOptions {
     pub show_hidden: bool,
     /// Final text ("No Markup"): tracked deletions take no space and draw nothing.
     pub hide_deleted: bool,
-    /// Check spelling and grammar (squiggles).
+    /// Check spelling as you type (squiggles).
     pub proofing: bool,
+    /// What the spelling check skips, and whether grammar is marked too (File › Options › Proofing).
+    pub proof: ProofOptions,
+}
+
+/// File › Options › Proofing choices that change the squiggles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ProofOptions {
+    /// Mark grammar errors as you type.
+    pub grammar: bool,
+    pub spelling: wordcraft_proof::Options,
+}
+
+impl Default for ProofOptions {
+    fn default() -> Self {
+        ProofOptions { grammar: true, spelling: wordcraft_proof::Options::default() }
+    }
 }
 
 /// Something placed on a page (page coordinates, points, y down).
@@ -322,7 +338,15 @@ fn hash_of<T: Hash>(t: &T) -> u64 {
 
 fn env_hash(doc: &Document, opts: &LayoutOptions) -> u64 {
     let s = serde_json::to_string(&(&doc.styles, &doc.numbering, doc.settings.default_tab, &doc.settings.footnote_format)).unwrap_or_default();
-    hash_of(&(s, opts.show_hidden, opts.hide_deleted, opts.proofing, wordcraft_proof::user_dictionary().len(), doc.settings.auto_hyphenation))
+    hash_of(&(
+        s,
+        opts.show_hidden,
+        opts.hide_deleted,
+        opts.proofing,
+        opts.proof,
+        wordcraft_proof::dictionary_generation(),
+        doc.settings.auto_hyphenation,
+    ))
 }
 
 fn has_page_fields(p: &Paragraph) -> bool {
@@ -369,7 +393,7 @@ impl Ctx<'_> {
             show_hidden: false,
             hide_deleted: false,
             table: None,
-            proofing: false,
+            proofing: None,
             exclusions: &[],
             eq_number: 0,
         };
@@ -431,7 +455,7 @@ impl Ctx<'_> {
             show_hidden: self.opts.show_hidden,
             hide_deleted: self.opts.hide_deleted,
             table,
-            proofing: self.opts.proofing,
+            proofing: self.opts.proofing.then_some(self.opts.proof),
             exclusions,
             eq_number,
         };
@@ -1828,7 +1852,7 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32) -> f32 {
                 show_hidden: ctx.opts.show_hidden,
                 hide_deleted: ctx.opts.hide_deleted,
                 table: None,
-                proofing: false,
+                proofing: None,
                 exclusions: &[],
                 eq_number: ctx.eq_count,
             };

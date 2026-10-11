@@ -52,7 +52,7 @@ pub struct LevelForm {
 
 impl LevelForm {
     fn read(i: usize, v: &Value) -> LevelForm {
-        let k = wordcraft_geom::Unit::default().pt_per_unit();
+        let k = crate::options::unit().pt_per_unit();
         let s = |key: &str| v.get(key).and_then(Value::as_str).unwrap_or("").to_string();
         let f = |key: &str| v.get(key).and_then(Value::as_f64).map(|x| x as f32 / k).filter(|x| x.is_finite());
         let restart_after = v.get("restartAfter").and_then(Value::as_u64);
@@ -78,7 +78,7 @@ impl LevelForm {
 
     /// The level as `list.define` takes it.
     pub fn params(&self, i: usize) -> Value {
-        let k = wordcraft_geom::Unit::default().pt_per_unit();
+        let k = crate::options::unit().pt_per_unit();
         json!({
             "format": self.format,
             "text": self.text,
@@ -162,7 +162,7 @@ impl ListForm {
 
 /// Define New Multilevel List. Returns true to close.
 pub fn define_list(app: &mut WordApp, ui: &mut Ui, f: &mut ListForm) -> bool {
-    let unit = wordcraft_geom::Unit::default();
+    let unit = crate::options::unit();
     fn len(v: &mut f32, unit: wordcraft_geom::Unit) -> egui::DragValue<'_> {
         egui::DragValue::new(v).speed(0.01).range(-10.0..=22.0).suffix(unit.suffix()).max_decimals(2)
     }
@@ -310,7 +310,7 @@ fn preview(ui: &mut Ui, f: &ListForm) {
     let p = ui.painter_at(rect);
     p.rect_filled(rect, 2.0, egui::Color32::WHITE);
     p.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, t.border_strong), egui::StrokeKind::Inside);
-    let k = wordcraft_geom::Unit::default().pt_per_unit();
+    let k = crate::options::unit().pt_per_unit();
     // Positions in points, scaled so 4.5 inches fit.
     let scale = (rect.width() - 16.0) / 324.0;
     let x_of = |v: f32| rect.left() + 8.0 + (v * k * scale).clamp(0.0, rect.width() - 40.0);
