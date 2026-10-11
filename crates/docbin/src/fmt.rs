@@ -281,22 +281,14 @@ pub(crate) fn stylesheet(raw: &[crate::stsh::RawStyle], fonts: &[String]) -> Sty
             4 => StyleKind::Numbering,
             _ => StyleKind::Paragraph,
         };
-        let base = st
-            .istd_base
-            .checked_sub(1)
-            .filter(|&i| (i as usize) < istd && raw.get(i as usize).is_some_and(|b| !b.name.is_empty()))
-            .map(|i| style_id(&raw[i as usize].name));
-        // Inherit: character props come from the base chain, then our own chpx.
+        let base = base_of(raw, istd).and_then(|i| raw.get(i)).map(|b| style_id(&b.name));
+        // Inherit: properties come from the base chain, root first, then our own grpprls.
         let mut chr = CharProps::default();
-        if let Some(b) = st.istd_base.checked_sub(1).filter(|&i| (i as usize) < istd).and_then(|i| raw.get(i as usize)) {
-            apply_chain(&mut chr, &b.chpx, fonts);
-        }
-        apply_chain(&mut chr, &st.chpx, fonts);
         let mut para = ParaProps::default();
-        if let Some(b) = st.istd_base.checked_sub(1).filter(|&i| (i as usize) < istd).and_then(|i| raw.get(i as usize)) {
-            apply_chain_para(&mut para, &b.papx);
+        for s in style_chain(raw, istd).into_iter().filter_map(|i| raw.get(i)) {
+            apply_chain(&mut chr, &s.chpx, fonts);
+            apply_chain_para(&mut para, &s.papx);
         }
-        apply_chain_para(&mut para, &st.papx);
         if para.outline_level.is_none() && kind == StyleKind::Paragraph {
             let h = heading_level(&st.name);
             if h > 0 {
@@ -306,6 +298,34 @@ pub(crate) fn stylesheet(raw: &[crate::stsh::RawStyle], fonts: &[String]) -> Sty
         sheet.styles.push(Style { id, name: display_name(&st.name), kind, based_on: base, chr, para, ..Default::default() });
     }
     sheet
+}
+
+/// Most `istdBase` links followed; a longer chain (or a cycle) in a corrupt file stops there.
+const MAX_STYLE_DEPTH: usize = 16;
+
+/// The parent of style `istd`: its zero-based `istdBase` ([MS-DOC] §2.9.260), when that names
+/// another existing, named style (0x0FFF means none).
+fn base_of(raw: &[crate::stsh::RawStyle], istd: usize) -> Option<usize> {
+    let b = raw.get(istd)?.istd_base;
+    let b = usize::from(b);
+    (b != 0x0FFF && b != istd && raw.get(b).is_some_and(|s| !s.name.is_empty())).then_some(b)
+}
+
+/// Style `istd` and its ancestors, root first and `istd` last. Cycles and chains deeper than
+/// [`MAX_STYLE_DEPTH`] are cut.
+fn style_chain(raw: &[crate::stsh::RawStyle], istd: usize) -> Vec<usize> {
+    let mut chain = vec![istd];
+    let mut cur = istd;
+    while chain.len() < MAX_STYLE_DEPTH {
+        let Some(b) = base_of(raw, cur) else { break };
+        if chain.contains(&b) {
+            break;
+        }
+        chain.push(b);
+        cur = b;
+    }
+    chain.reverse();
+    chain
 }
 
 /// The style-id form of a stored (lower-case) built-in name, matching the docx reader's ids.

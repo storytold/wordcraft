@@ -519,13 +519,14 @@ fn pic_location(chpx: &[u8]) -> Option<u32> {
     None
 }
 
-/// `sprmPIlfo` operand → the num id, if the paragraph is in a list. Values 0xF802-0xFFFF are
-/// the negation of a 1-based index and keep the paragraph's own indents, which we do by
-/// leaving the level's indents out of the paragraph (they never enter `ParaProps` anyway).
+/// `sprmPIlfo` operand (a signed 16-bit value, [MS-DOC] §2.6.2) → the num id, if the
+/// paragraph is in a list. 0x0001-0x07FE is a 1-based LFO index; 0xF802-0xFFFF (-2046..=-1)
+/// is the negation of one and keeps the paragraph's own indents, which we do by leaving the
+/// level's indents out of the paragraph (they never enter `ParaProps` anyway). 0 and 0xF801
+/// mean "not in a list".
 fn num_of(ilfo: i32) -> Option<u32> {
     match ilfo {
-        0x0001..=0x07FE => Some(ilfo as u32),
-        0xF802..=0xFFFF => Some((-(ilfo as i16)) as i32 as u32),
+        0x0001..=0x07FE | -0x07FE..=-1 => Some(ilfo.unsigned_abs()),
         _ => None,
     }
 }
