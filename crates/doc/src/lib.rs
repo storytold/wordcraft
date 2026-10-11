@@ -263,7 +263,7 @@ pub struct Revision {
 pub struct Source {
     /// Unique tag cited by CITATION fields.
     pub tag: String,
-    /// book, article, website, report, film, other
+    /// book, bookSection, article (journal), periodical, conference, report, website, film, other
     pub kind: String,
     /// "Last, First; Last, First"
     pub author: String,
@@ -275,6 +275,15 @@ pub struct Source {
     pub volume: String,
     pub pages: String,
     pub url: String,
+    /// More bibliography fields (Create Source › Show All Bibliography Fields).
+    pub editor: String,
+    pub edition: String,
+    pub issue: String,
+    pub month: String,
+    pub day: String,
+    /// Date accessed (websites).
+    pub accessed: String,
+    pub doi: String,
 }
 
 /// A custom document property (File › Info › Properties › Custom). Citation managers keep

@@ -1311,3 +1311,101 @@
 	Flip Vertical	上下反転
 	Flip Horizontal	左右反転
 	Formatted	書式変更
+	A, B, C, …	A, B, C, …
+	Above the item	項目の上
+	Accessed on	アクセス日
+	Add New Source…	新しい資料文献の追加…
+	Add the chapter number	章番号を付ける
+	Atmosphere	大気
+	Below the item	項目の下
+	Book	書籍
+	Book title	書籍名
+	Caption	図表番号
+	Caption Numbering	図表番号の書式
+	Caption text	図表番号の文字列
+	Caption:	図表番号:
+	Chapter in a book	書籍の章
+	Chapters begin at:	章の開始:
+	Collect entries from:	項目の取得元:
+	Columns:	段数:
+	Conference	会議
+	Conference paper	会議論文
+	Container Title	掲載元の名前
+	Create Source	資料文献の作成
+	Cross-reference:	相互参照:
+	Custom Table of Contents…	ユーザー設定の目次…
+	DOI	DOI
+	Day	日
+	Delete Label	ラベル削除
+	Edit Source	資料文献の編集
+	Edition	版
+	Edit…	編集…
+	Entry marked.	項目を登録しました。
+	Example: {sample}	例: {sample}
+	Figure	図
+	Film	映画
+	Heading styles (levels 1–{n})	見出しスタイル (レベル 1–{n})
+	Heading {n}	見出し {n}
+	I, II, III, …	I, II, III, …
+	Include page numbers	ページ番号を含める
+	Indented	インデント
+	Institution	機関
+	Ionosphere	電離圏
+	Issue	号
+	Journal	学術誌
+	Label:	ラベル:
+	Last, First; Last, First	姓, 名; 姓, 名
+	Leave the label out of the caption	ラベルを図表番号に含めない
+	Letter headings	文字見出し
+	Levels:	レベル:
+	Link entries to their headings	項目を見出しにリンクする
+	Made from the author and year when empty	空欄なら著者と年から作成
+	Magazine or newspaper article	雑誌・新聞の記事
+	Main entry:	主項目:
+	Mark	登録
+	Mark All	すべて登録
+	Mark Entry…	索引登録…
+	Mark Index Entry	索引登録
+	Mesosphere	中間圏
+	Month	月
+	New Label	新しいラベル
+	New Label…	ラベル名…
+	New…	新規作成…
+	No sources yet.	資料文献はまだありません。
+	Numbering…	番号付け…
+	Options…	オプション…
+	Other	その他
+	Other styles and their TOC level:	その他のスタイルと目次レベル:
+	Outline levels	アウトライン レベル
+	Page number style	ページ番号のスタイル
+	Page numbers at the right margin	ページ番号を右端に配置
+	Page title	ページ名
+	Pages of bookmark:	ブックマークのページ:
+	Periodical	定期刊行物
+	Position:	位置:
+	Publisher	出版社
+	Run-in	追い込み
+	See	参照
+	Separator:	区切り文字:
+	Show every bibliography field	すべての文献フィールドを表示
+	Site name	サイト名
+	Source Manager	資料文献の管理
+	Source type:	資料文献の種類:
+	Sources in this document:	この文書の資料文献:
+	Styles:	スタイル:
+	Subentry:	副項目:
+	TC entry fields	TC 項目フィールド
+	Tab leader:	タブ リーダー:
+	Table of Contents Options	目次オプション
+	Table of Contents Styles	目次スタイル
+	Tag	タグ
+	This page	このページ
+	Title	タイトル
+	Type:	種類:
+	URL	URL
+	Volume	巻
+	Website	Web サイト
+	Year	年
+	a, b, c, …	a, b, c, …
+	i, ii, iii, …	i, ii, iii, …
+	{n} entries marked.	{n} 件の項目を登録しました。

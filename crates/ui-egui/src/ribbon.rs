@@ -913,6 +913,8 @@ fn references(app: &mut WordApp, ui: &mut Ui) {
         menu_button(ui, app, "toc", Some("Table of\nContents"), "Table of Contents", true, |ui, app| {
             mi(ui, app, "Automatic Table 1 (3 levels)", "references.toc", json!({"levels": 3}));
             mi(ui, app, "Automatic Table 2 (2 levels)", "references.toc", json!({"levels": 2, "title": "Table of Contents"}));
+            ui.separator();
+            mi(ui, app, "Custom Table of Contents…", "ui.dialog", json!({"name": "toc"}));
             mi(ui, app, "Remove Table of Contents", "references.removeToc", json!({}));
         });
         stack(ui, |ui| {
@@ -937,7 +939,18 @@ fn references(app: &mut WordApp, ui: &mut Ui) {
         big(ui, app, "researcher", "Researcher", "references.researcher", json!({}), false);
     });
     group(ui, "Citations & Bibliography", None, app, |ui, app| {
-        big(ui, app, "citation", "Insert\nCitation", "references.citation", json!({}), false);
+        // The document's sources to cite, then a new one (Create Source, #402).
+        menu_button(ui, app, "citation", Some("Insert\nCitation"), "Insert Citation", true, |ui, app| {
+            let sources: Vec<(String, String)> =
+                app.session.doc.sources.iter().map(|s| (s.tag.clone(), format!("{} — {}", s.author, s.title))).collect();
+            for (tag, label) in sources {
+                mi_text(ui, app, &label, "references.citation", json!({"tag": tag}));
+            }
+            if !app.session.doc.sources.is_empty() {
+                ui.separator();
+            }
+            mi(ui, app, "Add New Source…", "ui.dialog", json!({"name": "createSource"}));
+        });
         stack(ui, |ui| {
             small(ui, app, "sources", Some("Manage Sources"), "Manage Sources", "references.sources", json!({}), false);
             small(ui, app, "styles", Some("Style: APA"), "Citation Style", "references.citationStyle", json!({}), false);

@@ -1312,3 +1312,101 @@
 	Flip Vertical	垂直翻轉
 	Flip Horizontal	水平翻轉
 	Formatted	已設定格式
+	A, B, C, …	A, B, C, …
+	Above the item	項目上方
+	Accessed on	存取日期
+	Add New Source…	新增來源…
+	Add the chapter number	加入章節編號
+	Atmosphere	大氣
+	Below the item	項目下方
+	Book	書籍
+	Book title	書名
+	Caption	標號
+	Caption Numbering	標號編號
+	Caption text	標號文字
+	Caption:	標號：
+	Chapter in a book	書籍章節
+	Chapters begin at:	章節起始於：
+	Collect entries from:	項目來源：
+	Columns:	欄數：
+	Conference	會議
+	Conference paper	會議論文
+	Container Title	載體標題
+	Create Source	建立來源
+	Cross-reference:	交互參照：
+	Custom Table of Contents…	自訂目錄…
+	DOI	DOI
+	Day	日
+	Delete Label	刪除標籤
+	Edit Source	編輯來源
+	Edition	版次
+	Edit…	編輯…
+	Entry marked.	已標記項目。
+	Example: {sample}	範例：{sample}
+	Figure	圖
+	Film	電影
+	Heading styles (levels 1–{n})	標題樣式（階層 1–{n}）
+	Heading {n}	標題 {n}
+	I, II, III, …	I, II, III, …
+	Include page numbers	包含頁碼
+	Indented	縮排式
+	Institution	機構
+	Ionosphere	電離層
+	Issue	期號
+	Journal	期刊
+	Label:	標籤：
+	Last, First; Last, First	姓, 名; 姓, 名
+	Leave the label out of the caption	標號中不含標籤
+	Letter headings	字母標題
+	Levels:	階層：
+	Link entries to their headings	將項目連結到標題
+	Made from the author and year when empty	留空時由作者和年份產生
+	Magazine or newspaper article	雜誌或報紙文章
+	Main entry:	主索引項：
+	Mark	標記
+	Mark All	全部標記
+	Mark Entry…	標記項目…
+	Mark Index Entry	標記索引項目
+	Mesosphere	中氣層
+	Month	月
+	New Label	新增標籤
+	New Label…	新增標籤…
+	New…	新增…
+	No sources yet.	尚無來源。
+	Numbering…	編號…
+	Options…	選項…
+	Other	其他
+	Other styles and their TOC level:	其他樣式及其目錄階層：
+	Outline levels	大綱階層
+	Page number style	頁碼樣式
+	Page numbers at the right margin	頁碼靠右邊界
+	Page title	頁面標題
+	Pages of bookmark:	書籤所在頁：
+	Periodical	期刊名
+	Position:	位置：
+	Publisher	出版者
+	Run-in	接排式
+	See	參見
+	Separator:	分隔符號：
+	Show every bibliography field	顯示所有書目欄位
+	Site name	網站名稱
+	Source Manager	來源管理員
+	Source type:	來源類型：
+	Sources in this document:	此文件中的來源：
+	Styles:	樣式：
+	Subentry:	次索引項：
+	TC entry fields	TC 項目功能變數
+	Tab leader:	定位點前置字元：
+	Table of Contents Options	目錄選項
+	Table of Contents Styles	目錄樣式
+	Tag	標記名
+	This page	目前頁面
+	Title	標題
+	Type:	類型：
+	URL	URL
+	Volume	卷
+	Website	網站
+	Year	年份
+	a, b, c, …	a, b, c, …
+	i, ii, iii, …	i, ii, iii, …
+	{n} entries marked.	已標記 {n} 個項目。

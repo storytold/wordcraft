@@ -134,6 +134,7 @@ impl Exempt {
             || plain.contains('┬') || plain.contains('\u{2061}') // equation input (UnicodeMath), drawn as math
             || matches!(plain, "WordCraft" | "WordCraft User" | "Discord" | "https://" | "auto" | "I. II. III." | "i. ii. iii.")
             || plain == "CONFIDENTIAL" // the watermark dialog's text: document content, kept as typed
+            || plain == "Figure 1" // the caption dialog's sample: the label goes into the document as is
     }
 }
 
@@ -187,6 +188,12 @@ fn untranslated_interface_text() {
         "models",
         "insertMergeField",
         "findRecipient",
+        "caption",
+        "index",
+        "markEntry",
+        "toc",
+        "sourceManager",
+        "createSource",
     ];
     for name in dialogs {
         let _ = app.run("ui.dialog", json!({"name": name}));
