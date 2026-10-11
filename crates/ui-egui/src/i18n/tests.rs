@@ -349,9 +349,41 @@ fn chinese_interface_fonts_load_and_cover_simplified_hanzi() {
     ctx.set_fonts(crate::theme::font_definitions(true, true));
     ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
     let covered = ctx.fonts_mut(|f| f.has_glyphs(&egui::FontId::proportional(14.0), "删除页选"));
-    let embedded = !wordcraft_fonts::ui_needs_system_cjk(true, &wordcraft_fonts::ui_cjk_fonts(true));
-    if embedded || wordcraft_fonts::system_cjk_ui_font(true).is_some() {
+    let (catalogs, _) = Lang::cjk_font_text(true);
+    let embedded = !wordcraft_fonts::ui_needs_system_cjk(&catalogs, &wordcraft_fonts::ui_cjk_fonts(true));
+    if embedded || wordcraft_fonts::system_cjk_ui_font(true, &['页']).is_some() {
         assert!(covered, "a Chinese face is available but the interface lacks simplified hanzi");
+    }
+}
+
+#[test]
+fn cjk_catalogs_are_covered_by_the_embedded_interface_faces() {
+    // #486: every CJK character of the Chinese and Japanese catalogs and of the language names
+    // has a glyph in the interface font chain built from the embedded faces alone, in every
+    // interface weight; `?` and boxes showed where the Japanese face was the only CJK one. Needs
+    // a craft-fonts build (CRAFT_FONTS_DIR); without one there is nothing embedded to check, and
+    // the interface reads an installed CJK font instead.
+    if wordcraft_fonts::ui_cjk_fonts(false).is_empty() {
+        eprintln!("skipped: built without craft-fonts (CRAFT_FONTS_DIR)");
+        return;
+    }
+    let names: String = Lang::all().map(Lang::name).collect();
+    for code in ["zh-hans", "zh-hant", "ja"] {
+        let l = lang(code);
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::theme::font_definitions(l.prefers_hans(), false));
+        ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
+        let (entries, errors) = parse_entries(l.0.source);
+        assert!(errors.is_empty(), "{code}: {errors:?}");
+        let chars: std::collections::BTreeSet<char> =
+            entries.iter().flat_map(|e| e.translation.chars()).chain(names.chars()).filter(|c| wordcraft_fonts::is_cjk(*c)).collect();
+        assert!(chars.len() > 300, "{code}: {} CJK characters", chars.len());
+        for font in [crate::theme::regular(14.0), crate::theme::medium(14.0), crate::theme::semibold(14.0)] {
+            let missing: String = ctx.fonts_mut(|f| chars.iter().filter(|c| !f.has_glyph(&font, **c)).collect());
+            assert!(missing.is_empty(), "{code}: no glyph in {font:?} for {missing}");
+        }
+        // So the interface reads no installed CJK font for these languages.
+        assert_eq!(wordcraft_fonts::ui_uncovered_cjk(&[l.0.source, &names], &wordcraft_fonts::ui_cjk_fonts(l.prefers_hans())), []);
     }
 }
 
