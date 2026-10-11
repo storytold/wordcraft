@@ -727,12 +727,20 @@ impl Writer<'_> {
         }
         effect_list(w, effects);
         w.close("wps:spPr");
-        // Its text, within the same bounds layout shows boxes inside boxes with.
-        if let Some(id) = *story
-            && let Some(part) = self.doc.parts.get(&id).filter(|p| p.kind == wordcraft_doc::PartKind::TextBox)
+        // Its text, within the same bounds layout shows boxes inside boxes with. A box linked
+        // from another (Create Link) shows the rest of that box's text: it names the chain and
+        // its place in it instead.
+        let part = (*story).and_then(|id| self.doc.parts.get(&id).filter(|p| p.kind == wordcraft_doc::PartKind::TextBox).map(|p| (id, p)));
+        let link = part.and_then(|(id, _)| self.txbx_links.get(&id).copied());
+        if let Some((n, seq)) = link.filter(|(_, seq)| *seq > 0) {
+            w.empty("wps:linkedTxbx", &[("id", &n.to_string()), ("seq", &seq.to_string())]);
+        } else if let Some((id, part)) = part
             && self.boxes.enter(id)
         {
-            w.open("wps:txbx", &[]);
+            match link {
+                Some((n, _)) => w.open("wps:txbx", &[("id", &n.to_string())]),
+                None => w.open("wps:txbx", &[]),
+            }
             w.open("w:txbxContent", &[]);
             let blocks = part.blocks.clone();
             self.blocks(w, &blocks, rels, false, depth + 1);
@@ -740,7 +748,16 @@ impl Writer<'_> {
             w.close("wps:txbx");
             self.boxes.leave();
         }
-        w.empty("wps:bodyPr", &[]);
+        // Text direction and alignment, when not the defaults.
+        let body = part.map(|(_, p)| p.body).unwrap_or_default();
+        let mut attrs: Vec<(&str, &str)> = Vec::new();
+        if body.vert != wordcraft_doc::props::TextVert::Horz {
+            attrs.push(("vert", body.vert.ooxml()));
+        }
+        if body.anchor != wordcraft_doc::props::VAlign::Top {
+            attrs.push(("anchor", wordcraft_doc::props::anchor_ooxml(body.anchor)));
+        }
+        w.empty("wps:bodyPr", &attrs);
         w.close("wps:wsp");
     }
 

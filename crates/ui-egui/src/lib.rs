@@ -656,6 +656,15 @@ impl WordApp {
                 self.canvas.open_url = Some("https://discord.gg/artcraft".into());
                 json!({})
             }
+            // Shape Format › Text › Create Link: the next click on an empty text box links the
+            // selected box to it (`shape.link` with that box as the target); Esc cancels.
+            "ui.linkTextBox" => {
+                let from = wordcraft_engine::cmd::objects::text_box_target(&self.session).filter(|_| widgets::enabled(self, "shape.link"));
+                let Some((pos, _)) = from else { return Some(Err("select a text box that isn't linked yet first".into())) };
+                self.canvas.link_from = Some(pos);
+                self.status(tl!("Click the empty text box the text should continue in (Esc cancels)"));
+                json!({"pending": "link"})
+            }
             _ => return None,
         }))
     }

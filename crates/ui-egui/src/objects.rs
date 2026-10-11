@@ -94,6 +94,10 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         return true;
     }
     let pressed = ui.input(|i| i.pointer.primary_pressed()) && resp.contains_pointer();
+    if app.canvas.link_from.is_some() && (pressed || ui.input(|i| i.key_pressed(egui::Key::Escape))) {
+        link_click(app, layout, pages, scale, at, pressed);
+        return true;
+    }
     let multi = resp.double_clicked() || resp.triple_clicked();
     if !(pressed || multi) || crate::canvas::editing_header_footer(app, layout) {
         return false;
@@ -119,6 +123,27 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         }
     }
     true
+}
+
+/// Create Link's click: link the box it started from to the text box under `at` (anywhere on it),
+/// if `pressed`; either way, linking is over.
+fn link_click(app: &mut WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Pos2, pressed: bool) {
+    let Some(from) = app.canvas.link_from.take() else { return };
+    if !pressed {
+        return;
+    }
+    let target = crate::canvas::page_at(pages, layout, scale, at).and_then(|(page, x, y)| {
+        layout.find_object(page, |o| o.page == page && o.text_box.is_some() && o.rect.contains(wordcraft_geom::Point::new(x, y)))
+    });
+    let Some(target) = target else {
+        app.status(tl!("Not linked: click a text box"));
+        return;
+    };
+    let end = Pos { off: from.off + OBJ.len_utf8(), ..from.clone() };
+    let _ = app.run("select.range", json!({"anchor": from, "focus": end}));
+    if let Err(e) = app.run("shape.link", json!({"target": target.pos()})) {
+        app.status(e);
+    }
 }
 
 /// What a press at `at` would grab: a handle of the shown frame, else an object.
@@ -240,6 +265,8 @@ pub fn key(app: &mut WordApp, key: egui::Key, m: egui::Modifiers) -> bool {
 /// With a text box selected, put the caret at the end of its text (typing goes there).
 pub fn enter_text_box(app: &mut WordApp) -> bool {
     let Some(id) = selected_text_box(app) else { return false };
+    // A box linked from another shows (and edits) the first box's story.
+    let id = app.session.doc.text_box_chain(id).and_then(|c| c.first().copied()).unwrap_or(id);
     let end = app.session.doc.end_of(StoryRef::Part(id));
     app.run("caret.set", json!({"pos": end})).is_ok()
 }
