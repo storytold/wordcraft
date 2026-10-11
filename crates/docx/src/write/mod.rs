@@ -824,6 +824,9 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool) -> Vec<u8> {
         w.close(tag);
     }
     w.open("w:compat", &[]);
+    if s.add_paragraph_spacing {
+        w.empty("w:doNotUseHTMLParagraphAutoSpacing", &[]);
+    }
     let mode = doc.settings.compat_mode.clamp(11, 15).to_string();
     w.empty("w:compatSetting", &[("w:name", "compatibilityMode"), ("w:uri", "http://schemas.microsoft.com/office/word"), ("w:val", &mode)]);
     w.close("w:compat");

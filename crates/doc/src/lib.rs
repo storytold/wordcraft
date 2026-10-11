@@ -335,6 +335,9 @@ pub struct Settings {
     /// Equation options (`m:mathPr`), when the document has them.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub math: Option<math::MathProps>,
+    /// Space between paragraphs is the previous paragraph's space after plus this one's space
+    /// before (`w:doNotUseHTMLParagraphAutoSpacing`). Off, Word's default: the larger of the two.
+    pub add_paragraph_spacing: bool,
 }
 
 /// Word's compatibility mode for documents that don't state one.
@@ -399,6 +402,7 @@ impl Default for Settings {
             grid_h: DEFAULT_GRID,
             grid_v: DEFAULT_GRID,
             math: None,
+            add_paragraph_spacing: false,
         }
     }
 }

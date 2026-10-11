@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use wordcraft_doc::numbering::{Counters, Level};
 use wordcraft_doc::para::{Anchor, Float, FloatAlign, InlineObject, Wrap};
-use wordcraft_doc::props::{Border, CharProps, Rgb, TableFloat, TextDirection};
+use wordcraft_doc::props::{Border, Borders, CharProps, Rgb, TableFloat, TextDirection};
 use wordcraft_doc::section::{SectionProps, SectionStart};
 use wordcraft_doc::{Block, Blocks, Document, Paragraph, Path, StoryRef};
 use wordcraft_geom::{Point, Rect, Spin};
@@ -537,6 +537,7 @@ fn layout_box(
     let mut y = 0.0f32;
     let mut prev_after = 0.0f32;
     let mut prev_style: Option<(String, bool)> = None;
+    let mut prev_borders: Option<Borders> = None;
     for (i, b) in blocks.iter().enumerate() {
         let mut path = prefix.to_vec();
         path.push(i as u32);
@@ -550,8 +551,14 @@ fn layout_box(
                 if same && ctxl {
                     y -= prev_after;
                 }
-                // Word: space between paragraphs is before + after (no collapsing).
-                y += if i == 0 { before } else { before.max(0.0) };
+                let after = if same && ctxl { 0.0 } else { prev_after };
+                y += if i == 0 { before } else { overlap_spacing(ctx.doc, after, before.max(0.0)) };
+                let next = match blocks.get(i + 1).map(|b| &**b) {
+                    Some(Block::Para(n)) => ctx.doc.styles.resolve_para(&n.props).borders,
+                    _ => None,
+                };
+                let (above, below) = border_room(&pl.rp.borders, &prev_borders, &next);
+                y += above;
                 // Floating objects anchored here: place them, then wrap the text around them.
                 // One left out of the layout (hidden, or deleted in the final text) takes no room.
                 let mut floats = HashMap::new();
@@ -580,11 +587,13 @@ fn layout_box(
                     items.splice(at..at, back);
                     items.extend(front);
                 }
-                y += pl.height + pl.rp.space_after;
+                y += pl.height + below + pl.rp.space_after;
                 prev_after = if same && ctxl { 0.0 } else { pl.rp.space_after };
                 prev_style = Some((pl.rp.style.clone(), ctxl));
+                prev_borders = pl.rp.borders;
             }
             Block::Table(t) => {
+                prev_borders = None;
                 if depth > 8 {
                     continue;
                 }
@@ -803,6 +812,8 @@ struct PageBuilder<'a> {
     orig_bottom: f32,
     /// The previous paragraph: (style, contextual spacing, space after) for contextual spacing.
     prev: Option<(String, bool, f32)>,
+    /// The previous paragraph's borders: a run of paragraphs with the same borders is one box.
+    prev_borders: Option<Borders>,
     /// Wrap areas of floating objects on this page (see [`wrap_area`]).
     excl: Vec<(Rect, bool)>,
     /// Wrap areas of the floating tables on this page, which others may not overlap.
@@ -1173,6 +1184,7 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
         carry: Vec::new(),
         orig_bottom: 0.0,
         prev: None,
+        prev_borders: None,
         excl: Vec::new(),
         float_tables: Vec::new(),
         line_no: 0,
@@ -1626,18 +1638,27 @@ fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, 
     }
     // Contextual spacing: no space between paragraphs of the same style when either asks for it.
     let mut before = pl.rp.space_before;
-    if let Some((style, ctxl, after)) = pb.prev.take()
-        && style == pl.rp.style
+    if let Some((style, ctxl, mut after)) = pb.prev.take()
         && !pb.at_top()
     {
-        if ctxl {
-            pb.y -= after;
+        if style == pl.rp.style {
+            if ctxl {
+                pb.y -= after;
+                after = 0.0;
+            }
+            if pl.rp.contextual_spacing {
+                before = 0.0;
+            }
         }
-        if pl.rp.contextual_spacing {
-            before = 0.0;
-        }
+        before = overlap_spacing(ctx.doc, after, before);
     }
     pb.y += before;
+    let next_borders = match ctx.doc.body.get(block + 1).map(|b| &**b) {
+        Some(Block::Para(n)) => ctx.doc.styles.resolve_para(&n.props).borders,
+        _ => None,
+    };
+    let (border_above, border_below) = border_room(&pl.rp.borders, &pb.prev_borders.take(), &next_borders);
+    pb.y += border_above;
     // Keep lines together: if it doesn't fit but would on an empty column, move it.
     if pl.rp.keep_lines || pl.rp.keep_next {
         let need = pl.height + if pl.rp.keep_next { next_first_line(ctx, block, width) } else { 0.0 };
@@ -1810,8 +1831,27 @@ fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, 
             _ => {}
         }
     }
-    pb.y += pl.rp.space_after;
+    pb.y += border_below + pl.rp.space_after;
     pb.prev = Some((pl.rp.style.clone(), pl.rp.contextual_spacing, pl.rp.space_after));
+    pb.prev_borders = pl.rp.borders;
+}
+
+/// How much of `before` to add after a paragraph that ended with `after` of space. Word overlaps
+/// the two, so the larger one is the gap, unless the document turns that off
+/// (`w:doNotUseHTMLParagraphAutoSpacing`); then they add up. Negative space is left as it is.
+fn overlap_spacing(doc: &Document, after: f32, before: f32) -> f32 {
+    if doc.settings.add_paragraph_spacing || after <= 0.0 || before <= 0.0 { before } else { (before - after).max(0.0) }
+}
+
+/// Room a paragraph's top and bottom borders take above and below its text: the border's
+/// distance from the text plus its width. A run of paragraphs with the same borders is one box,
+/// so there is no room between them.
+fn border_room(own: &Option<Borders>, prev: &Option<Borders>, next: &Option<Borders>) -> (f32, f32) {
+    let Some(b) = own else { return (0.0, 0.0) };
+    let room = |side: &Option<Border>| side.filter(Border::is_visible).map_or(0.0, |s| (s.space + s.width).clamp(0.0, 100.0));
+    let above = if prev.as_ref() == Some(b) { 0.0 } else { room(&b.top) };
+    let below = if next.as_ref() == Some(b) { 0.0 } else { room(&b.bottom) };
+    (above, below)
 }
 
 /// Height of the first line of the block after `block` (for keep-with-next).
@@ -1843,6 +1883,7 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32) -> f32 {
 
 fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, block: usize, body_top: f32) {
     pb.prev = None;
+    pb.prev_borders = None;
     let width = pb.col_w();
     let mut tl = table::layout_table(ctx, StoryRef::Body, t, &[block as u32], width, 1);
     if let Some(f) = t.props.float.filter(|_| !pb.web) {

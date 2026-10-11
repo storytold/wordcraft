@@ -966,6 +966,14 @@ fn compatibility_mode_round_trips() {
 }
 
 #[test]
+fn paragraph_spacing_mode_round_trips() {
+    let mut d = Document::new();
+    assert!(!rt(&d).settings.add_paragraph_spacing, "Word's default: spacing overlaps");
+    d.settings.add_paragraph_spacing = true;
+    assert!(rt(&d).settings.add_paragraph_spacing);
+}
+
+#[test]
 fn settings_core_theme_round_trip() {
     let mut d = Document::new();
     d.settings.track_changes = true;
