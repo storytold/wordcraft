@@ -58,6 +58,11 @@ fn font_dir(name: &str) -> PathBuf {
     dir
 }
 
+/// (family, style, legacy family) of each face the scan finds in the file at `path`.
+fn names(path: &Path) -> Vec<(String, String, String)> {
+    file_face_names(path).into_iter().map(|f| (f.family, f.style, f.legacy)).collect()
+}
+
 fn has(list: &[String], family: &str) -> bool {
     list.iter().any(|f| f == family)
 }
@@ -171,7 +176,7 @@ fn fallback_lookups_are_remembered_until_fonts_load() {
 #[test]
 fn the_scan_reads_names_without_loading_the_font() {
     let dir = font_dir("names");
-    assert_eq!(file_face_names(&dir.join("Sysfont-Regular.ttf")), [(FAMILY.to_string(), "Regular".to_string(), FAMILY.to_string())]);
+    assert_eq!(names(&dir.join("Sysfont-Regular.ttf")), [(FAMILY.to_string(), "Regular".to_string(), FAMILY.to_string())]);
     assert!(file_face_names(&dir.join("damaged.ttf")).is_empty());
     assert!(file_face_names(&dir.join("readme.txt")).is_empty());
     assert!(file_face_names(&dir.join("missing.ttf")).is_empty());
@@ -184,7 +189,7 @@ fn installed_weights_are_found_by_their_legacy_family_name() {
     let dir = font_dir("legacy");
     std::fs::write(dir.join("Sysfont-Semibold.ttf"), renamed("SourceSans3-Semibold.ttf")).unwrap();
     let semibold = format!("{FAMILY} Semibold");
-    assert_eq!(file_face_names(&dir.join("Sysfont-Semibold.ttf")), [(FAMILY.to_string(), "Semibold".to_string(), semibold.clone())]);
+    assert_eq!(names(&dir.join("Sysfont-Semibold.ttf")), [(FAMILY.to_string(), "Semibold".to_string(), semibold.clone())]);
     let db = || FontDb::with_font_dirs(vec![dir.clone()]);
     assert!(has(&db().families(), FAMILY) && has(&db().families(), &semibold));
     assert!(db().has_family(&semibold.to_uppercase()));
@@ -216,7 +221,7 @@ fn the_scan_lists_a_variable_fonts_named_instances_as_loading_it_does() {
     };
     let data = std::fs::read(path).unwrap();
     let loaded: Vec<(String, String, String)> = enumerate_faces(&data).into_iter().map(|f| (f.family, f.style, f.legacy)).collect();
-    assert_eq!(file_face_names(path), loaded);
+    assert_eq!(names(path), loaded);
     if loaded.len() > 1 {
         // Instances other than Regular, Bold and Italic have names of their own.
         assert!(loaded.iter().any(|(family, _, legacy)| family != legacy), "{loaded:?}");
@@ -243,4 +248,78 @@ fn fallback_cache_is_dropped_when_a_face_loads_by_its_legacy_family_name() {
     let cache = db.fallbacks.read().unwrap();
     assert_eq!(cache.faces, db.read_faces().len());
     assert!(!cache.map.contains_key(&(thai, latin.id())), "answers from before the load are dropped");
+}
+
+/// A bundled font renamed by a `name` table holding just its family names: (Windows language id,
+/// name) pairs, English (0x0409) first, as SimSun's names 宋体 for Simplified Chinese.
+fn with_family_names(file: &str, names: &[(u16, &str)]) -> Vec<u8> {
+    let data = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts").join(file)).unwrap();
+    let font = skrifa::FontRef::new(&data).unwrap();
+    // Records sorted by language, then name ID: family (1) and subfamily (2, English only).
+    let mut records: Vec<(u16, u16, Vec<u8>)> =
+        names.iter().map(|(lang, n)| (*lang, 1, n.encode_utf16().flat_map(u16::to_be_bytes).collect())).collect();
+    records.push((0x0409, 2, "Regular".encode_utf16().flat_map(u16::to_be_bytes).collect()));
+    records.sort_by_key(|r| (r.0, r.1));
+    let mut name = Vec::new();
+    for v in [0u16, records.len() as u16, (6 + 12 * records.len()) as u16] {
+        name.extend_from_slice(&v.to_be_bytes());
+    }
+    let mut offset = 0u16;
+    for (lang, id, s) in &records {
+        for v in [3u16, 1, *lang, *id, s.len() as u16, offset] {
+            name.extend_from_slice(&v.to_be_bytes());
+        }
+        offset += s.len() as u16;
+    }
+    for (_, _, s) in &records {
+        name.extend_from_slice(s);
+    }
+    let mut tables: Vec<([u8; 4], Vec<u8>)> = font
+        .table_directory()
+        .table_records()
+        .iter()
+        .filter(|r| r.tag() != skrifa::Tag::new(b"name"))
+        .map(|r| (r.tag().to_be_bytes(), font.table_data(r.tag()).unwrap().as_bytes().to_vec()))
+        .collect();
+    tables.push((*b"name", name));
+    tables.sort_by_key(|t| t.0);
+    mini_font(&tables)
+}
+
+#[test]
+fn chinese_fonts_are_listed_by_their_chinese_names_in_a_chinese_interface() {
+    // #505: the font list showed fonts only by their English names (SimSun, never 宋体). Here a
+    // Chinese font is the second face of a collection, as in simsun.ttc and msyh.ttc.
+    let dir = font_dir("localized");
+    let song = with_family_names("SourceSans3-Regular.ttf", &[(0x0409, "Songti Test"), (0x0804, "测试宋体"), (0x0404, "測試宋體")]);
+    std::fs::write(dir.join("song.ttc"), collection(&[renamed("SourceSans3-Semibold.ttf"), song])).unwrap();
+    let db = FontDb::with_font_dirs(vec![dir]);
+    // English names in the English list; the Chinese names in place of them in a Chinese one.
+    assert!(has(&db.families(), "Songti Test") && !has(&db.families(), "测试宋体"));
+    assert!(has(&db.families_in("en"), "Songti Test"));
+    let hans = db.families_in("zh-hans");
+    assert!(has(&hans, "测试宋体") && !has(&hans, "Songti Test") && has(&hans, FAMILY), "{hans:?}");
+    assert!(has(&db.families_in("zh-hant"), "測試宋體"));
+    assert_eq!(db.localized_names("zh-hans"), [("Songti Test".to_string(), "测试宋体".to_string())]);
+    // Either name finds the font, before and after it loads.
+    assert!(db.has_family("测试宋体") && db.has_family("測試宋體"));
+    assert_eq!(db.styles("测试宋体"), ["Regular"]);
+    let f = db.face("测试宋体", "Regular");
+    assert_eq!((f.family.as_str(), f.index()), ("Songti Test", 1));
+    assert_eq!(db.face("測試宋體", "Bold").id(), f.id());
+    assert_eq!(db.english_family("测试宋体").as_deref(), Some("Songti Test"));
+    assert!(db.has_family("测试宋体"));
+    // Name table languages against interface languages.
+    for (ui, tag, ok) in [
+        ("zh-hans", "zh-Hans", true),
+        ("zh-hans", "zh-SG", true),
+        ("zh-hans", "zh-TW", false),
+        ("zh-hant", "zh-HK", true),
+        ("zh-hant", "zh-Hans", false),
+        ("ja", "ja-JP", true),
+        ("ja", "ko-KR", false),
+        ("en", "zh-Hans", false),
+    ] {
+        assert_eq!(name_language_matches(ui, tag), ok, "{ui} {tag}");
+    }
 }

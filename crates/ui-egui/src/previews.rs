@@ -15,7 +15,11 @@ use crate::theme::{Tokens, regular};
 #[derive(Default)]
 pub struct Previews {
     tex: HashMap<String, TextureHandle>,
-    families: Option<Vec<String>>,
+    /// The font list, for the interface language it was made in.
+    families: Option<(&'static str, Vec<String>)>,
+    /// Lowercase English family → its name in that language (simsun → 宋体), and back.
+    local_names: HashMap<String, String>,
+    english_names: HashMap<String, String>,
     styles_hash: (u64, u64),
     /// Previews rendered this frame (rendering is spread over frames).
     budget: std::cell::Cell<u32>,
@@ -23,9 +27,13 @@ pub struct Previews {
 }
 
 impl Previews {
+    /// The font list: installed families, each by its name in the interface language when it has
+    /// one (宋体 for SimSun in Chinese, #505), like Word's.
     pub fn families(&mut self) -> Vec<String> {
-        if self.families.is_none() {
-            let mut f: Vec<String> = wordcraft_fonts::FontDb::global().families().into_iter().filter(|f| !f.starts_with('.')).collect();
+        let lang = crate::i18n::current().code();
+        if self.families.as_ref().is_none_or(|(l, _)| *l != lang) {
+            let db = wordcraft_fonts::FontDb::global();
+            let mut f: Vec<String> = db.families_in(lang).into_iter().filter(|f| !f.starts_with('.')).collect();
             for w in [wordcraft_doc::styles::BODY_FONT, wordcraft_doc::styles::HEADING_FONT] {
                 if !f.iter().any(|x| x == w) {
                     f.push(w.to_string());
@@ -33,9 +41,26 @@ impl Previews {
             }
             f.sort_by_key(|a| a.to_lowercase());
             f.dedup();
-            self.families = Some(f);
+            let names = db.localized_names(lang);
+            self.local_names = names.iter().map(|(e, l)| (e.to_lowercase(), l.clone())).collect();
+            self.english_names = names.into_iter().map(|(e, l)| (l, e)).collect();
+            self.families = Some((lang, f));
         }
-        self.families.clone().unwrap_or_default()
+        self.families.as_ref().map(|(_, f)| f.clone()).unwrap_or_default()
+    }
+
+    /// The name the font box shows for the document's font `family`: its name in the interface
+    /// language when the font has one.
+    pub fn font_shown(&mut self, family: &str) -> String {
+        self.families();
+        self.local_names.get(&family.to_lowercase()).cloned().unwrap_or_else(|| family.to_string())
+    }
+
+    /// The family name a font chosen in the font box is stored as: the English name for a font
+    /// listed by its localized name (宋体 → SimSun), so the document reads the same anywhere.
+    pub fn font_stored(&mut self, shown: &str) -> String {
+        self.families();
+        self.english_names.get(shown).cloned().unwrap_or_else(|| shown.to_string())
     }
 
     /// A closure drawing a font-menu entry in its own face.

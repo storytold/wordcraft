@@ -96,9 +96,11 @@ fn content(app: &mut WordApp, ui: &mut egui::Ui, t: &Tokens) {
     let align = app.session.doc.para_at(&app.session.sel.focus).map(|p| app.session.doc.styles.resolve_para(&p.props).align).unwrap_or_default();
 
     let font = st.get("font").and_then(Value::as_str).unwrap_or("").to_string();
+    let font = app.previews.font_shown(&font);
     let fams = app.previews.families();
     let prev = app.previews.font_preview_fn();
     if let Some(f) = widgets::font_combo(ui, "mini_font", COMBO_FONT_W, &font, &fams, Some(&*prev)) {
+        let f = app.previews.font_stored(&f);
         let _ = app.run("format.font", json!({"name": f}));
     }
     let size = st.get("size").and_then(Value::as_f64).map(|s| if s.fract() == 0.0 { format!("{s:.0}") } else { s.to_string() }).unwrap_or_default();

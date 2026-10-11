@@ -54,6 +54,9 @@ pub struct FontFace {
     /// Semibold"): the typographic family for Regular, Bold and Italic faces, the family plus the
     /// other style words for the rest. See [`legacy_family`].
     pub legacy_family: String,
+    /// The family's names in other languages (宋体 for SimSun), from the `name` table. Lookups by
+    /// family name accept them; the font list shows them in a matching interface language.
+    pub local_names: Vec<LocalName>,
     /// usWeightClass-style weight (400 = regular).
     pub weight: f32,
     pub italic: bool,
@@ -212,6 +215,47 @@ impl FontFace {
     pub fn glyph_for(&self, c: char) -> u32 {
         self.skrifa().and_then(|f| f.charmap().map(c)).map(|g| g.to_u32()).unwrap_or(0)
     }
+    /// Is this an East Asian (Chinese, Japanese or Korean) font? Its OS/2 code pages say so
+    /// (Shift-JIS, GB2312, Wansung, Big5, Johab), or, without them, it maps common ideographs.
+    /// Word applies such a font to East Asian text too (`w:eastAsia`).
+    pub fn is_east_asian(&self) -> bool {
+        use skrifa::raw::TableProvider;
+        const CJK_CODE_PAGES: u32 = 0b1_1111 << 17;
+        match self.skrifa().and_then(|f| f.os2().ok()).and_then(|t| t.ul_code_page_range_1()) {
+            Some(pages) if pages != 0 => pages & CJK_CODE_PAGES != 0,
+            _ => ['中', '国', '日'].iter().all(|c| self.covers(*c)),
+        }
+    }
+}
+
+/// A family name in another language, from a font's `name` table.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LocalName {
+    /// BCP 47 language tag, lowercase (`zh-hans`, `zh-tw`, `ja-jp`).
+    pub lang: String,
+    /// The name in that language (宋体).
+    pub name: String,
+    /// The English family name it stands for (SimSun): the face's typographic or legacy family.
+    pub english: String,
+}
+
+/// Does a `name` table language tag (`zh-Hans`, `zh-TW`, `ja-JP`) suit the interface language
+/// `ui` (`zh-hans`, `zh-hant`, `ja`)? Chinese matches by script: Simplified for mainland China and
+/// Singapore, Traditional for Taiwan, Hong Kong and Macao.
+pub fn name_language_matches(ui: &str, tag: &str) -> bool {
+    let parts = |s: &str| s.split(['-', '_']).map(str::to_ascii_lowercase).collect::<Vec<_>>();
+    let (u, t) = (parts(ui), parts(tag));
+    let (Some(up), Some(tp)) = (u.first(), t.first()) else { return false };
+    if up.is_empty() || up != tp {
+        return false;
+    }
+    if up != "zh" {
+        return true;
+    }
+    let traditional = |p: &[String]| p.iter().any(|x| matches!(x.as_str(), "hant" | "tw" | "hk" | "mo"));
+    let simplified = |p: &[String]| p.iter().any(|x| matches!(x.as_str(), "hans" | "cn" | "sg"));
+    // Plain `zh` is Simplified Chinese, as in the interface languages.
+    if traditional(&u) { traditional(&t) } else { simplified(&t) }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -220,6 +264,7 @@ struct CatalogEntry {
     family: String,
     style: String,
     legacy: String,
+    local: Vec<LocalName>,
     path: std::path::PathBuf,
 }
 
@@ -327,6 +372,35 @@ fn name(font: &skrifa::FontRef<'_>, ids: &[StringId]) -> Option<String> {
     ids.iter().find_map(|id| font.localized_strings(*id).english_or_first().map(|s| s.to_string()).filter(|s| !s.is_empty()))
 }
 
+/// The family's names in other languages: localized typographic family names (name ID 16) stand
+/// for `family`, localized legacy family names (name ID 1) for `id1` (or for `family` when the
+/// font has no typographic names). Bounded: a damaged font can list any number of records.
+fn local_names(f: &skrifa::FontRef<'_>, family: &str, id1: Option<&str>) -> Vec<LocalName> {
+    const MAX_NAMES: usize = 64;
+    const MAX_CHARS: usize = 128;
+    let typographic = f.localized_strings(StringId::TYPOGRAPHIC_FAMILY_NAME).next().is_some();
+    let legacy = if typographic { id1 } else { Some(family) };
+    let mut out: Vec<LocalName> = Vec::new();
+    for (id, english) in [(StringId::TYPOGRAPHIC_FAMILY_NAME, Some(family)), (StringId::FAMILY_NAME, legacy)] {
+        let Some(english) = english else { continue };
+        for s in f.localized_strings(id) {
+            let Some(lang) = s.language().map(str::to_ascii_lowercase) else { continue };
+            if lang == "en" || lang.starts_with("en-") {
+                continue;
+            }
+            let name: String = s.chars().take(MAX_CHARS).collect::<String>().trim().to_string();
+            if name.is_empty() || name.eq_ignore_ascii_case(english) || out.iter().any(|n| n.lang == lang && n.name == name) {
+                continue;
+            }
+            if out.len() >= MAX_NAMES {
+                return out;
+            }
+            out.push(LocalName { lang, name, english: english.to_string() });
+        }
+    }
+    out
+}
+
 /// A face's family and style names (the default instance's style for a variable font), and its
 /// legacy family name (name ID 1) when it has one.
 pub(crate) fn face_names(f: &skrifa::FontRef<'_>) -> Option<(String, String, Option<String>)> {
@@ -345,11 +419,12 @@ pub(crate) fn legacy_family(family: &str, style: &str) -> String {
     if extra.is_empty() { family.to_string() } else { format!("{family} {}", extra.join(" ")) }
 }
 
-/// (family, style, legacy family) of every face in the font file at `path`, reading only its
-/// table directories and `name` and `fvar` tables: a scan opens hundreds of font files, many of
-/// them megabytes long. A variable font yields one entry per named instance, as it does loaded.
+/// The names of every face in the font file at `path`, reading only its table directories and
+/// `name` and `fvar` tables: a scan opens hundreds of font files, many of them megabytes long
+/// (CJK collections run to 20 MB and more). A variable font yields one entry per named instance,
+/// as it does loaded.
 #[cfg(not(target_arch = "wasm32"))]
-fn file_face_names(path: &std::path::Path) -> Vec<(String, String, String)> {
+fn file_face_names(path: &std::path::Path) -> Vec<Found> {
     use std::io::{Read, Seek, SeekFrom};
     /// Caps on what a (possibly damaged) file can make the scan read.
     const MAX_FACES: u32 = 256;
@@ -390,8 +465,7 @@ fn file_face_names(path: &std::path::Path) -> Vec<(String, String, String)> {
             tables.push((*b"name", name));
             // A font holding just those tables, to read them as the font itself would.
             let font = mini_font(&tables);
-            let faces = font_faces(&skrifa::FontRef::new(&font).ok()?, 0);
-            Some(faces.into_iter().map(|f| (f.family, f.style, f.legacy)).collect::<Vec<_>>())
+            Some(font_faces(&skrifa::FontRef::new(&font).ok()?, 0))
         })
         .flatten()
         .collect()
@@ -467,6 +541,8 @@ struct Found {
     style: String,
     /// The legacy family name ([`FontFace::legacy_family`]).
     legacy: String,
+    /// The family's names in other languages ([`FontFace::local_names`]).
+    local: Vec<LocalName>,
     /// Variable fonts: the named instance's axis settings.
     coords: Vec<([u8; 4], f32)>,
 }
@@ -475,6 +551,7 @@ struct Found {
 /// (InDesign lists them as styles), otherwise the font itself.
 fn font_faces(f: &skrifa::FontRef<'_>, index: u32) -> Vec<Found> {
     let Some((family, style, id1)) = face_names(f) else { return vec![] };
+    let local = local_names(f, &family, id1.as_deref());
     let axes = f.axes();
     let mut named: Vec<Found> = Vec::new();
     for ni in f.named_instances().iter() {
@@ -485,13 +562,15 @@ fn font_faces(f: &skrifa::FontRef<'_>, index: u32) -> Vec<Found> {
         let coords: Vec<([u8; 4], f32)> = axes.iter().zip(ni.user_coords()).map(|(a, v)| (a.tag().to_be_bytes(), v)).collect();
         // Name ID 1 names the default instance only.
         let legacy = legacy_family(&family, &style);
-        named.push(Found { index, family: family.clone(), style, legacy, coords });
+        // Name ID 1 names the default instance only: keep the names of the whole family.
+        let local = local.iter().filter(|n| n.english.eq_ignore_ascii_case(&family)).cloned().collect();
+        named.push(Found { index, family: family.clone(), style, legacy, local, coords });
     }
     if !named.is_empty() {
         return named;
     }
     let legacy = id1.filter(|n| !n.eq_ignore_ascii_case(&family)).unwrap_or_else(|| legacy_family(&family, &style));
-    vec![Found { index, family, style, legacy, coords: Vec::new() }]
+    vec![Found { index, family, style, legacy, local, coords: Vec::new() }]
 }
 
 /// Parse every face in `data` (a font file or collection); a variable font yields one face per
@@ -544,6 +623,7 @@ fn make_face(bytes: FontBytes, index: u32, family: String, style: String, legacy
         family,
         style,
         legacy_family,
+        local_names: Vec::new(),
         weight,
         italic,
         upem: m.units_per_em.max(1) as f64,
@@ -605,8 +685,9 @@ impl FontDb {
         let craft = crate::japanese_document_fonts().into_iter().map(|f| f.bytes);
         for data in BUNDLED.iter().copied().chain(craft) {
             for f in enumerate_faces(data) {
-                if let Some(f) = make_face(FontBytes::Static(data), f.index, f.family, f.style, f.legacy, f.coords) {
-                    faces.push(Arc::new(f));
+                if let Some(mut face) = make_face(FontBytes::Static(data), f.index, f.family, f.style, f.legacy, f.coords) {
+                    face.local_names = f.local;
+                    faces.push(Arc::new(face));
                 }
             }
         }
@@ -670,9 +751,65 @@ impl FontDb {
         v
     }
 
+    /// Every family's name in the interface language `lang` (`zh-hans`, `zh-hant`, `ja`…), as
+    /// (English name, localized name) pairs: SimSun is 宋体 in Simplified Chinese. Families without
+    /// a name in that language are left out.
+    pub fn localized_names(&self, lang: &str) -> Vec<(String, String)> {
+        let mut v: Vec<(String, String)> = Vec::new();
+        let mut add = |names: &[LocalName]| {
+            for n in names.iter().filter(|n| name_language_matches(lang, &n.lang)) {
+                if !v.iter().any(|(e, _)| e.eq_ignore_ascii_case(&n.english)) {
+                    v.push((n.english.clone(), n.name.clone()));
+                }
+            }
+        };
+        for f in self.read_faces().iter() {
+            add(&f.local_names);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        for c in self.read_catalog().iter() {
+            add(&c.local);
+        }
+        v
+    }
+
+    /// [`FontDb::families`] as the font list shows them in the interface language `lang`: each
+    /// family that has a name in that language by that name (宋体, 微软雅黑 in Simplified Chinese),
+    /// the others by their English names. Lookups accept either name.
+    pub fn families_in(&self, lang: &str) -> Vec<String> {
+        let local: HashMap<String, String> = self.localized_names(lang).into_iter().map(|(e, l)| (e.to_lowercase(), l)).collect();
+        let mut v: Vec<String> = self.families().into_iter().map(|f| local.get(&f.to_lowercase()).cloned().unwrap_or(f)).collect();
+        v.sort_by_key(|a| a.to_lowercase());
+        v.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+        v
+    }
+
+    /// The English family a localized family name stands for (宋体 → SimSun), when no face has
+    /// `family` as its English name. `None` for names no font has.
+    pub fn english_family(&self, family: &str) -> Option<String> {
+        let hit = |names: &[LocalName]| names.iter().find(|n| n.name.eq_ignore_ascii_case(family)).map(|n| n.english.clone());
+        if let Some(e) = self.read_faces().iter().find_map(|f| hit(&f.local_names)) {
+            return Some(e);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(e) = self.read_catalog().iter().find_map(|c| hit(&c.local)) {
+            return Some(e);
+        }
+        None
+    }
+
     /// Style names available for `family` (Regular first, then by weight). For a legacy family
-    /// name ("Roboto Light"), the styles of the faces it names ("Light", "Light Italic").
+    /// name ("Roboto Light"), the styles of the faces it names ("Light", "Light Italic"); for a
+    /// localized name (宋体), those of the family it names.
     pub fn styles(&self, family: &str) -> Vec<String> {
+        let v = self.styles_named(family);
+        match self.english_family(family) {
+            Some(en) if v.is_empty() => self.styles_named(&en),
+            _ => v,
+        }
+    }
+
+    fn styles_named(&self, family: &str) -> Vec<String> {
         let mut v: Vec<(bool, f32, String)> = Vec::new();
         for legacy in [false, true] {
             let named = |typographic: &str, legacy_name: &str| (if legacy { legacy_name } else { typographic }).eq_ignore_ascii_case(family);
@@ -712,8 +849,9 @@ impl FontDb {
         for bytes in files {
             let data = Arc::new(bytes);
             for f in enumerate_faces(&data) {
-                if let Some(f) = make_face(FontBytes::Owned(data.clone()), f.index, f.family, f.style, f.legacy, f.coords) {
-                    new.push(Arc::new(f));
+                if let Some(mut face) = make_face(FontBytes::Owned(data.clone()), f.index, f.family, f.style, f.legacy, f.coords) {
+                    face.local_names = f.local;
+                    new.push(Arc::new(face));
                 }
             }
         }
@@ -780,8 +918,8 @@ impl FontDb {
                 if !matches!(ext.as_deref(), Some("ttf" | "otf" | "ttc" | "otc")) {
                     continue;
                 }
-                for (family, style, legacy) in file_face_names(&p) {
-                    found.push(CatalogEntry { family, style, legacy, path: p.clone() });
+                for f in file_face_names(&p) {
+                    found.push(CatalogEntry { family: f.family, style: f.style, legacy: f.legacy, local: f.local, path: p.clone() });
                 }
             }
         }
@@ -833,13 +971,27 @@ impl FontDb {
                 return f;
             }
         }
+        // A localized family name (宋体 → SimSun).
+        if let Some(en) = self.english_family(family).filter(|en| !en.eq_ignore_ascii_case(family)) {
+            if let Some(f) = self.find(&en, style) {
+                return f;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                self.load_cataloged(&en);
+                if let Some(f) = self.find(&en, style) {
+                    return f;
+                }
+            }
+        }
         self.find(FALLBACK_FAMILY, style)
             .or_else(|| self.find(FALLBACK_FAMILY, "Regular"))
             .or_else(|| self.read_faces().first().cloned())
             .unwrap_or_else(last_resort_face)
     }
 
-    /// Is `family` available (loaded, or installed on the system)?
+    /// Is `family` available (loaded, or installed on the system)? English and localized family
+    /// names both count.
     pub fn has_family(&self, family: &str) -> bool {
         if self.is_loaded(family) {
             return true;
@@ -848,7 +1000,7 @@ impl FontDb {
         if self.read_catalog().iter().any(|c| c.family.eq_ignore_ascii_case(family) || c.legacy.eq_ignore_ascii_case(family)) {
             return true;
         }
-        false
+        self.english_family(family).is_some()
     }
 
     /// Is a face named `family` (its typographic or legacy family) loaded?
@@ -891,7 +1043,8 @@ impl FontDb {
                 None => coords.push((tag, v)),
             }
         }
-        let f = make_face(base.bytes.clone(), base.index, base.family.clone(), style.to_string(), base.legacy_family.clone(), coords)?;
+        let mut f = make_face(base.bytes.clone(), base.index, base.family.clone(), style.to_string(), base.legacy_family.clone(), coords)?;
+        f.local_names = base.local_names.clone();
         let f = Arc::new(f);
         self.faces.write().unwrap_or_else(|e| e.into_inner()).push(f.clone());
         Some(f)
