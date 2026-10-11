@@ -1311,3 +1311,20 @@
 	Flip Vertical	上下反転
 	Flip Horizontal	左右反転
 	Formatted	書式変更
+	Customize Keyboard	キーボードのユーザー設定
+	Choose a command	コマンドを選択
+	Choose a shortcut	ショートカットを選択
+	All Commands	すべてのコマンド
+	Commands:	コマンド:
+	Keys for this command:	このコマンドのキー:
+	New shortcut:	新しいショートカット:
+	Now used by {command}	現在の割り当て: {command}
+	Not used by any command	どのコマンドにも割り当てられていません
+	Remove every custom shortcut and restore the built-in keys?	すべてのカスタム ショートカットを削除し、既定のキーに戻しますか?
+	Assign	割り当て
+	Remove	削除
+	Reset All…	すべてリセット…
+	Press a key combination	キーの組み合わせを押してください
+	Customize	ユーザー設定
+	Keyboard shortcuts:	キーボード ショートカット:
+	Customize…	ユーザー設定…

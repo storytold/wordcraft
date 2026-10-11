@@ -1327,3 +1327,20 @@
 	Flip Vertical	Voltear verticalmente
 	Flip Horizontal	Voltear horizontalmente
 	Formatted	Con formato
+	Customize Keyboard	Personalizar teclado
+	Choose a command	Elija un comando
+	Choose a shortcut	Elija un método abreviado
+	All Commands	Todos los comandos
+	Commands:	Comandos:
+	Keys for this command:	Teclas de este comando:
+	New shortcut:	Nuevo método abreviado:
+	Now used by {command}	Ahora lo usa {command}
+	Not used by any command	Ningún comando lo usa
+	Remove every custom shortcut and restore the built-in keys?	¿Quitar todos los métodos abreviados personalizados y restaurar las teclas integradas?
+	Assign	Asignar
+	Remove	Quitar
+	Reset All…	Restablecer todo…
+	Press a key combination	Pulse una combinación de teclas
+	Customize	Personalizar
+	Keyboard shortcuts:	Métodos abreviados de teclado:
+	Customize…	Personalizar…

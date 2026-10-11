@@ -1321,3 +1321,20 @@
 	Flip Vertical	Okreni vertikalno
 	Flip Horizontal	Okreni horizontalno
 	Formatted	Formatirano
+	Customize Keyboard	Prilagođavanje tastature
+	Choose a command	Izaberite komandu
+	Choose a shortcut	Izaberite prečicu
+	All Commands	Sve komande
+	Commands:	Komande:
+	Keys for this command:	Tasteri za ovu komandu:
+	New shortcut:	Nova prečica:
+	Now used by {command}	Sada koristi: {command}
+	Not used by any command	Nijedna komanda je ne koristi
+	Remove every custom shortcut and restore the built-in keys?	Ukloniti sve prilagođene prečice i vratiti ugrađene tastere?
+	Assign	Dodeli
+	Remove	Ukloni
+	Reset All…	Resetuj sve…
+	Press a key combination	Pritisnite kombinaciju tastera
+	Customize	Prilagođavanje
+	Keyboard shortcuts:	Prečice na tastaturi:
+	Customize…	Prilagodi…

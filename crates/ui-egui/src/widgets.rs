@@ -10,10 +10,15 @@ use crate::{WordApp, icons};
 pub const CONTENT_H: f32 = 66.0;
 pub const LABEL_H: f32 = 16.0;
 
-/// Shortcut text for a command (`⌘B` on macOS, `Ctrl+B` elsewhere).
+/// Shortcut text for a command (`⌘B` on macOS, `Ctrl+B` elsewhere): its first key in effect,
+/// custom keys included (Customize Keyboard).
 pub fn shortcut_text(app: &WordApp, id: &str) -> String {
-    let Some(spec) = app.session.registry.get(id) else { return String::new() };
-    let sc = spec.shortcut.split(" / ").next().unwrap_or("");
+    let keys = app.session.keymap.keys_for(&app.session.registry, id);
+    keys.first().map(|k| key_text(k)).unwrap_or_default()
+}
+
+/// A key as the platform writes it (`⌘⇧K` on macOS, `Ctrl+Shift+K` elsewhere).
+pub fn key_text(sc: &str) -> String {
     if sc.is_empty() {
         return String::new();
     }

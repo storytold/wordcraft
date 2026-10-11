@@ -1323,3 +1323,20 @@
 	Flip Vertical	Віддзеркалити по вертикалі
 	Flip Horizontal	Віддзеркалити по горизонталі
 	Formatted	Відформатовано
+	Customize Keyboard	Настроювання клавіатури
+	Choose a command	Виберіть команду
+	Choose a shortcut	Виберіть сполучення клавіш
+	All Commands	Усі команди
+	Commands:	Команди:
+	Keys for this command:	Клавіші цієї команди:
+	New shortcut:	Нове сполучення клавіш:
+	Now used by {command}	Зараз використовує: {command}
+	Not used by any command	Не використовується жодною командою
+	Remove every custom shortcut and restore the built-in keys?	Видалити всі власні сполучення клавіш і відновити вбудовані?
+	Assign	Призначити
+	Remove	Видалити
+	Reset All…	Скинути все…
+	Press a key combination	Натисніть сполучення клавіш
+	Customize	Настроювання
+	Keyboard shortcuts:	Сполучення клавіш:
+	Customize…	Настроїти…

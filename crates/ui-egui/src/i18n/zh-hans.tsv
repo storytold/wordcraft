@@ -1322,3 +1322,20 @@
 	Flip Vertical	垂直翻转
 	Flip Horizontal	水平翻转
 	Formatted	已设置格式
+	Customize Keyboard	自定义键盘
+	Choose a command	选择命令
+	Choose a shortcut	选择快捷键
+	All Commands	所有命令
+	Commands:	命令：
+	Keys for this command:	此命令的按键：
+	New shortcut:	新快捷键：
+	Now used by {command}	当前由 {command} 使用
+	Not used by any command	未被任何命令使用
+	Remove every custom shortcut and restore the built-in keys?	删除所有自定义快捷键并恢复内置按键？
+	Assign	指定
+	Remove	删除
+	Reset All…	全部重置…
+	Press a key combination	请按组合键
+	Customize	自定义
+	Keyboard shortcuts:	键盘快捷方式：
+	Customize…	自定义…

@@ -1324,3 +1324,20 @@
 	Width and spacing	Laius ja vahe
 	from Unicode (hex)	Unicode (kuueteistkümnend)
 	Formatted	Vormindatud
+	All Commands	Kõik käsud
+	Assign	Määra
+	Choose a command	Vali käsk
+	Choose a shortcut	Vali kiirklahv
+	Commands:	Käsud:
+	Customize	Kohanda
+	Customize Keyboard	Kohanda klaviatuuri
+	Customize…	Kohanda…
+	Keyboard shortcuts:	Kiirklahvid:
+	Keys for this command:	Selle käsu klahvid:
+	New shortcut:	Uus kiirklahv:
+	Not used by any command	Ükski käsk ei kasuta seda
+	Now used by {command}	Praegu kasutab: {command}
+	Press a key combination	Vajuta klahvikombinatsiooni
+	Remove	Eemalda
+	Remove every custom shortcut and restore the built-in keys?	Kas eemaldada kõik kohandatud kiirklahvid ja taastada sisseehitatud klahvid?
+	Reset All…	Lähtesta kõik…

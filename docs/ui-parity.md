@@ -14,7 +14,7 @@ own (`AGENTS.md`: no Microsoft iconography, ever).
 | Keytips (Alt / ⌃⌥ letters) | ✅ (#43) | ✅ | 85% | 1–2 |
 | Mini-toolbar on selection | ✅ (#43) | ✅ | 80% | 1–2 |
 | Quick Access Toolbar | Undo, Redo, Repeat, AutoSave | customizable | 50% | 2–3 |
-| Customize Ribbon / Customize Keyboard | ❌ | ✅ | 0% | 6–10 |
+| Customize Ribbon / Customize Keyboard | Customize Keyboard (#368): categories, a command's keys, press a combination to see which command uses it, Assign / Remove / Reset All; custom keys override built-ins, removed built-ins do nothing, saved per user; `tools.customizeKeyboard` for agents. No Customize Ribbon | ✅ | 50% | 3–5 |
 | Keyboard shortcuts | **101** bound in `CommandSpec::key` (measured) | ~250 default shortcuts | ~60% | 4–6 |
 | Modal dialogs | **22** (`Dialog` enum: Font, Paragraph, Tabs, Borders and Shading, Find, Go To, Insert Table, Table Properties, Page Setup, Link, Bookmark, Word Count, Zoom, Watermark, New/Modify Style, Commands, About, Save Changes; Columns, Symbol with Special Characters, Field (#321)) plus panes and menus for the rest | ~100 (Caption, Index, TOC options, Citation, Define Multilevel List, Track Changes Options, Compare, Protect, Language, Hyphenation, Line Numbers, Envelopes, Labels, Mail Merge, AutoCorrect, Options panes…) | ~40% | 20–30 |
 | Modal dialogs | **20** (`Dialog` enum: Font, Paragraph, Find, Go To, Insert Table, Table Properties, Page Setup, Link, Bookmark, Word Count, Zoom, Watermark, New/Modify Style, Commands, About, Save Changes; Columns, Symbol with Special Characters, Field (#321)) plus panes and menus for the rest | ~100 (Tabs, Borders and Shading, Caption, Index, TOC options, Citation, Define Multilevel List, Track Changes Options, Compare, Protect, Language, Hyphenation, Line Numbers, Envelopes, Labels, Mail Merge, AutoCorrect, Options panes…) | ~40% | 20–30 |
@@ -38,6 +38,7 @@ own (`AGENTS.md`: no Microsoft iconography, ever).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | trivial | Customize Keyboard dialog (Tools › Customize Keyboard, File › Options › Keyboard shortcuts): custom keys override built-ins and persist (#368) |
 | 2026-10-11 | trivial | Font box (ribbon and mini toolbar): typing lists the matching fonts (prefix first, then any part of the name); Up/Down, Enter or a click picks one, Escape cancels (#359) |
 | 2026-10-10 | trivial | Tabs dialog (Paragraph › Tabs…, double-click a ruler tab) and Borders and Shading with Borders, Page Border and Shading tabs (#320) |
 | 2026-10-10 | trivial | Columns (presets, unequal widths, line between, apply to), Symbol (font coverage grid by Unicode subset, recently used, character code, Special Characters) and Field (categories, options, field codes) dialogs (#321) |
