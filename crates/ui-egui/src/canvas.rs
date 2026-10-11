@@ -1123,7 +1123,7 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
         let Some(pos) = layout.hit(page, x, y, story) else { return };
         // Ctrl/⌘+click follows a hyperlink.
         if mods.command
-            && let Some(link) = app.session.doc.para_at(&pos).and_then(|pp| pp.props_of_char(pos.off).link.clone())
+            && let Some(link) = link_under(app, layout, page, x, y, &pos)
         {
             if let Some(name) = link.strip_prefix('#') {
                 let _ = app.run("edit.goto", json!({"bookmark": name}));
@@ -1183,7 +1183,7 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
     if resp.hovered()
         && !app.canvas.dragging
         && let Some(pos) = layout.hit(page, x, y, story)
-        && let Some(link) = app.session.doc.para_at(&pos).and_then(|pp| pp.props_of_char(pos.off).link.clone())
+        && let Some(link) = link_under(app, layout, page, x, y, &pos)
     {
         let key = if cfg!(target_os = "macos") { "⌘" } else { "Ctrl" };
         let tip = format!("{link}\n{}", crate::i18n::fmt(tl!("{key}+Click to follow link"), &[("key", key)]));
@@ -1635,6 +1635,21 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
 /// draws it, so a page looks as it does in other Mac apps (exports never are).
 pub(crate) fn screen_render_options() -> wordcraft_render::RenderOptions {
     wordcraft_render::RenderOptions { text_darkening: cfg!(target_os = "macos"), ..Default::default() }
+}
+
+/// The hyperlink under the pointer at (x, y) on `page`, where `pos` is the caret position the
+/// point hits. The hit snaps to the nearest text, so the link only counts when the point is on
+/// the linked character itself, not beside, above or below it (issue #413).
+fn link_under(app: &WordApp, layout: &DocLayout, page: usize, x: f32, y: f32, pos: &Pos) -> Option<String> {
+    let doc = &app.session.doc;
+    let para = doc.para_at(pos)?;
+    let at = wordcraft_geom::Point::new(x, y);
+    // The caret falls between characters: the one under the point is on either side of it.
+    [(pos.off, para.next_boundary(pos.off)), (para.prev_boundary(pos.off), pos.off)].into_iter().filter(|(a, b)| a < b).find_map(|(a, b)| {
+        let link = para.props_of_char(a).link.clone()?;
+        let (from, to) = (Pos { off: a, ..pos.clone() }, Pos { off: b, ..pos.clone() });
+        layout.selection_rects(doc, &from, &to, page).into_iter().any(|(pi, r)| pi == page && r.contains(at)).then_some(link)
+    })
 }
 
 /// Whether Ctrl/⌘+click may hand a document's hyperlink to the system: web and email links only,

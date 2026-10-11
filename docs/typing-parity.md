@@ -1,6 +1,6 @@
 # Typing parity with Word
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** trivial (status line, revision history and links to the other parity docs added; behaviour unchanged) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-11 · **Change:** minor (text typed next to a hyperlink stays outside it, #413) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 What Word does when you type, observed black-box (same keystrokes typed into Word and
 WordCraft, results read back paragraph by paragraph) and pinned by tests in
@@ -42,6 +42,10 @@ Applied when a word is finished by a space, punctuation **or Enter** (`enter_fin
 - `1/2 1/4 3/4` → `½ ¼ ¾`; `1st 22nd 13th` get superscript suffixes (`ordinals_become_superscript`).
 - `word -- word` → en dash, `word - word` → en dash, `word--word` → em dash (`dashes`).
 - Web addresses become links; following text isn't linked (`web_addresses_become_links`).
+- A hyperlink covers only its own text: typing at either end of it, or after Enter at its end,
+  isn't linked; typing inside it is. Linking a whole paragraph doesn't link its mark, so the
+  paragraphs Enter makes from it aren't links (#413; `a_link_covers_only_its_own_text`,
+  `typing_at_either_end_of_a_link_is_not_linked`).
 - Enter after `---` `===` `***` `___` `~~~` `###` → a bottom border on the paragraph above
   (single, double, dotted, thick, wave, triple) (`border_line_autoformat`).
 
@@ -72,6 +76,7 @@ Applied when a word is finished by a space, punctuation **or Enter** (`enter_fin
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | minor | Hyperlinks: text typed at either end of a link or after Enter stays outside it (#413) |
 | 2026-10-10 | trivial | Status line, revision history and cross-links added (progress-docs standard) |
 | 2026-10-10 | minor | Track Changes rows: tracked Enter, Backspace and Delete on paragraph marks (#244) |
 | 2026-10-10 | major | First version: lists, AutoCorrect and AutoFormat as you type, observed against Word (#204) |

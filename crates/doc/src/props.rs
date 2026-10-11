@@ -355,6 +355,16 @@ macro_rules! overlay_fields {
 }
 
 impl CharProps {
+    /// The same formatting outside a hyperlink: no link target, and no "Hyperlink" character
+    /// style that came with it. What a paragraph mark or text typed next to a link gets.
+    pub fn unlinked(&self) -> CharProps {
+        let mut c = self.clone();
+        if c.link.take().is_some() && c.style.as_deref() == Some("Hyperlink") {
+            c.style = None;
+        }
+        c
+    }
+
     /// Apply every `Some` field of `patch` on top of `self`.
     ///
     /// Size, bold and italic come in pairs with their complex-script values (Word's own buttons
