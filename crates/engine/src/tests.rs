@@ -2261,6 +2261,30 @@ fn page_and_table_gridlines_toggle_independently() {
     assert_eq!(state["tableGridlines"], false);
 }
 
+/// File › Options › Advanced › Numeral: the display mode for digits (display only).
+#[test]
+fn numeral_mode_sets_gets_and_rejects_junk() {
+    use wordcraft_layout::NumeralMode;
+    let mut s = s();
+    assert_eq!(s.view.numeral, NumeralMode::Arabic, "Western digits by default");
+    let r = run(&mut s, "view.numeral", json!({"value": "hindi"}));
+    assert_eq!(r["value"], "hindi");
+    assert_eq!(s.view.numeral, NumeralMode::Hindi);
+    let r = run(&mut s, "view.numeral", json!({}));
+    assert_eq!(r["value"], "hindi", "no params reads the current mode");
+    run(&mut s, "view.numeral", json!({"value": "Context"}));
+    assert_eq!(s.view.numeral, NumeralMode::Context, "mode names ignore case");
+    assert!(s.run("view.numeral", &json!({"value": "western"})).is_err());
+    assert!(s.run("view.numeral", &json!({"value": 3})).is_err());
+    assert!(s.run("view.numeral", &json!({"value": ["hindi"]})).is_err());
+    assert_eq!(s.view.numeral, NumeralMode::Context, "rejected values keep the mode");
+    // Switching modes relayouts without disturbing the text.
+    s.doc = wordcraft_doc::Document::from_text("Year 2024");
+    run(&mut s, "view.numeral", json!({"value": "hindi"}));
+    let _l = s.layout();
+    assert_eq!(text(&s), "Year 2024");
+}
+
 /// Issue #67: View › Zoom steps. Zoom In/Out leave a fit mode and step 10% from the current zoom
 /// (the UI keeps `view.zoom` equal to the shown zoom while a fit mode is on), and never get stuck
 /// short of the 10%–500% limits.

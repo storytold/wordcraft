@@ -1,7 +1,7 @@
 //! View tab and status bar: views, zoom, show/hide, panes.
 
 use serde_json::{Value, json};
-use wordcraft_layout::ViewMode;
+use wordcraft_layout::{NumeralMode, ViewMode};
 
 use super::sel_result;
 use crate::{CmdError, CmdResult, CommandSpec, Session, p};
@@ -74,6 +74,22 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("view.state", "View State", "View", |s, _| serde_json::to_value(&s.view).map_err(|e| CmdError::Failed(e.to_string())))
             .pure(),
+        // Word › File › Options › Advanced › Numeral: how digits look on screen (display
+        // only; the document text keeps the typed codepoints).
+        CommandSpec::new("view.numeral", "Numerals", "File › Options › Advanced", |s, v| match v.get("value") {
+            None => Ok(json!({"value": s.view.numeral})),
+            Some(Value::String(name)) => {
+                let Some(mode) = NumeralMode::parse(name) else {
+                    return Err(CmdError::Params("numeral mode: arabic|hindi|context|system".into()));
+                };
+                s.view.numeral = mode;
+                s.relayout();
+                Ok(json!({"value": s.view.numeral}))
+            }
+            Some(_) => Err(CmdError::Params("numeral mode: arabic|hindi|context|system".into())),
+        })
+        .params(r#"{"value"?: "arabic|hindi|context|system"}"#)
+        .pure(),
     ]
 }
 
