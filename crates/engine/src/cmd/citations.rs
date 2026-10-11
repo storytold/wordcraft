@@ -77,16 +77,9 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         CommandSpec::new("insert.crossReference", "Cross-reference", "Insert › Links", cross_ref)
             .params(r#"{"to": "heading|bookmark|figure|table", "target": string (text / name / number), "show"?: "text|page|number|aboveBelow"} or {} to list targets"#),
-        CommandSpec::new("references.noteOptions", "Footnote and Endnote", "References › Footnotes", |s, v| {
-            if let Some(f) = p::str(v, "footnoteFormat") {
-                s.doc.settings.footnote_format = wordcraft_doc::section::NumFormat::from_ooxml(f);
-            }
-            if let Some(f) = p::str(v, "endnoteFormat") {
-                s.doc.settings.endnote_format = wordcraft_doc::section::NumFormat::from_ooxml(f);
-            }
-            Ok(json!({"footnoteFormat": s.doc.settings.footnote_format, "endnoteFormat": s.doc.settings.endnote_format}))
-        })
-        .params(r#"{"footnoteFormat"?: "decimal|lowerRoman|upperRoman|lowerLetter|upperLetter", "endnoteFormat"?: …}"#),
+        CommandSpec::new("references.noteOptions", "Footnote and Endnote", "References › Footnotes", super::references::note_options).params(
+            r#"{"kind"?: "footnote|endnote", "pos"?: "pageBottom|beneathText" (footnotes) | "sectEnd|docEnd" (endnotes), "numFmt"?: "decimal|lowerRoman|upperRoman|lowerLetter|upperLetter|…", "numStart"?: 1-32767, "numRestart"?: "continuous|eachSect|eachPage" (each page: footnotes only), "scope"?: "document|section", "footnoteFormat"?: …, "endnoteFormat"?: …} — no settings: the options in effect at the caret"#,
+        ),
         CommandSpec::new("references.researcher", "Researcher", "References › Research", |s, _| {
             s.status = "Researcher needs an online service; WordCraft keeps your documents offline.".into();
             Ok(json!({"available": false}))

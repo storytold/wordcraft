@@ -63,7 +63,7 @@ full parity for the area.
 | Tables | 8 | 76% | 72% | 10–16 | Merge/split, styles (cell text takes style formatting, #104), custom table styles saved in the .docx (#256), Word 2013 edge, floating tables, rows split across pages, sort, formula, cell gridlines (#243), Draw Table and Eraser (#303). Missing: splitting or erasing around vertically merged cells, nested-table polish, interactive column resize (#49 open, #217). Cell text direction landed (#245). |
 | Page layout and sections | 7 | 70% | 72% | 12–20 | Margins, size, columns, breaks, page borders, line numbers, vertical alignment, drop caps, hyphenation. Columns don't balance; no document grid; no vertical text; RTL sections missing. Detail: [layout-parity.md](layout-parity.md). |
 | Headers, footers, page numbers, fields | 5 | 70% | 70% | 8–12 | First/even/odd, link to previous, TOC as an updatable field (#52), cross-references to real bookmarks (#227). Field coverage is a subset of Word's ~90 field codes; Field dialog missing. |
-| Footnotes and endnotes | 3 | 60% | 60% | 5–8 | Placed and editable, numbers from Word files (#103). Long notes don't continue onto the next page; no continuation separator; no note options per section. |
+| Footnotes and endnotes | 3 | 60% | 60% | 3–5 | Placed and editable, numbers from Word files (#103); long notes continue onto the next page under the continuation separator (#352). Footnote and Endnote dialog with options per section: below text, end of section, number format, start at, restart each section or page, custom mark, convert (#385). |
 | References (TOC, citations, bibliography, captions, index, TOA) | 5 | 65% | 60% | 12–20 | Working first versions, Zotero integration (#189), Zotero/Mendeley `ADDIN` fields round-trip. 4 of Word's 12 bibliography styles (APA, MLA, Chicago, IEEE); source manager depth; bibliography sources not yet in DOCX (#169 open). |
 | Review (proofing UI, comments, track changes, compare, protect) | 8 | 72% | 75% | 15–25 | Comment balloons, tracked insert/delete incl. paragraph marks (#244, #125), compare, restrict editing. Formatting revisions (#41): kept in DOCX, recorded while tracking, accepted/rejected, "Formatted: …" balloons and change bars. Missing: move tracking, insert/delete balloons, Translate, Block Authors, modern comment threads/mentions. Lowered: these gaps are confirmed by source (no `rPrChange` anywhere). |
 | Proofing (spelling, grammar, thesaurus, languages) | 5 | 35% | (in Review) | 25–45 | English only: one dictionary, a rule-based grammar checker. Word ships 120 proofing tools for ~50 languages plus Editor (style refinements, similarity). Issues #25, #40, #100. |
@@ -249,6 +249,7 @@ can be used without committing Word output.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | trivial | Footnotes and endnotes: Footnote and Endnote dialog, options per section (position, format, start, restart each section/page), convert notes (#385); no percentage change |
 | 2026-10-11 | trivial | Formatting revisions (#41): Review row updated; no percentage change |
 | 2026-10-10 | trivial | #307: Draw tab pens, eraser and Hide Ink; catalog 384/430 → 390/430 (90.7%) |
 | 2026-10-10 | trivial | Draw Table and Eraser (#303): catalog 384/430 → 387/430 (90.0%) |

@@ -2732,3 +2732,54 @@ fn deleting_the_last_cell_column_never_leaves_a_table_without_rows() {
     run(&mut s, "edit.undo", json!({}));
     assert!(s.doc.body.iter().any(|b| b.as_table().is_some_and(|t| !t.rows.is_empty())));
 }
+
+/// #385: note options for the whole document or one section, and converting notes, which undoes
+/// in one step.
+#[test]
+fn note_options_per_section_and_convert_notes() {
+    use wordcraft_doc::PartKind;
+    use wordcraft_doc::para::{InlineObject, NoteKind};
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "One"}));
+    let a = run(&mut s, "references.footnote", json!({"text": "First", "mark": "*"}))["id"].as_u64().unwrap() as u32;
+    s.sel = crate::Selection::caret(s.doc.end_of(StoryRef::Body));
+    run(&mut s, "layout.break", json!({"kind": "nextPage"}));
+    run(&mut s, "text.insert", json!({"text": "Two"}));
+    let b = run(&mut s, "references.footnote", json!({"text": "Second"}))["id"].as_u64().unwrap() as u32;
+    s.sel = crate::Selection::caret(s.doc.end_of(StoryRef::Body));
+    // The second section restarts at 3 in letters; the first keeps the document's options.
+    let got = run(&mut s, "references.noteOptions", json!({"numFmt": "lowerLetter", "numStart": 3, "numRestart": "eachSect", "scope": "section"}));
+    assert_eq!((got["footnote"]["numFmt"].as_str(), got["footnote"]["numStart"].as_u64()), (Some("lowerLetter"), Some(3)));
+    let sections = s.doc.sections();
+    assert!(sections[0].1.footnote_pr.is_empty());
+    assert_eq!(sections[1].1.footnote_pr.num_start, Some(3));
+    // Hostile or wrong values are refused or clamped.
+    assert!(s.run("references.noteOptions", &json!({"kind": "endnote", "pos": "pageBottom"})).is_err());
+    assert!(s.run("references.noteOptions", &json!({"kind": "endnote", "numRestart": "eachPage"})).is_err());
+    let got = run(&mut s, "references.noteOptions", json!({"kind": "endnote", "pos": "sectEnd", "numStart": -5}));
+    assert_eq!((got["endnote"]["pos"].as_str(), got["endnote"]["numStart"].as_u64()), (Some("sectEnd"), Some(1)));
+    // The whole document: the section's own start gives way.
+    run(&mut s, "references.noteOptions", json!({"numStart": 2}));
+    assert_eq!(s.doc.sections()[1].1.footnote_pr.num_start, None);
+    assert_eq!(s.doc.settings.footnote_pr.num_start, Some(2));
+    // Convert footnotes to endnotes: kinds, marks and styles; the custom mark stays. One undo.
+    let kinds = |s: &Session| -> Vec<NoteKind> {
+        let mut v = Vec::new();
+        s.doc.objects_in_reading_order(&mut |o| {
+            if let InlineObject::NoteRef { kind, .. } = o {
+                v.push(*kind);
+            }
+        });
+        v
+    };
+    assert_eq!(run(&mut s, "references.convertNotes", json!({"to": "endnote"}))["converted"], 2);
+    assert_eq!(kinds(&s), vec![NoteKind::Endnote, NoteKind::Endnote]);
+    assert!([a, b].iter().all(|id| s.doc.parts[id].kind == PartKind::Endnote));
+    let note = s.doc.para(StoryRef::Part(a), &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(note.props.style.as_deref(), Some("EndnoteText"));
+    assert!(matches!(&note.objects[0], InlineObject::NoteRef { kind: NoteKind::Endnote, custom, .. } if custom == "*"));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(kinds(&s), vec![NoteKind::Footnote, NoteKind::Footnote]);
+    assert_eq!(s.doc.parts[&b].kind, PartKind::Footnote);
+    assert!(s.run("references.convertNotes", &json!({"to": "sideways"})).is_err());
+}

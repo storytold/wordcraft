@@ -3,7 +3,7 @@
 use wordcraft_doc::effects::ShapeEffects;
 use wordcraft_doc::para::{Anchor, Float, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{CharProps, PropChange, Rgb};
-use wordcraft_doc::section::{LineNumberRestart, SectionProps, SectionStart};
+use wordcraft_doc::section::{LineNumberRestart, NoteProps, SectionProps, SectionStart};
 use wordcraft_doc::table::Table;
 use wordcraft_doc::{Block, Blocks, InlineObject, Paragraph, RevisionKind};
 
@@ -879,6 +879,14 @@ impl Writer<'_> {
 /// `w:sectPr` content after the header and footer references.
 fn sectpr_body(w: &mut W, s: &SectionProps) {
     {
+        // The section's own note options come before `w:type` (ECMA-376 §17.6.17).
+        for (tag, pr) in [("w:footnotePr", &s.footnote_pr), ("w:endnotePr", &s.endnote_pr)] {
+            if !pr.is_empty() {
+                w.open(tag, &[]);
+                note_pr_inner(w, pr);
+                w.close(tag);
+            }
+        }
         let start = match s.start {
             SectionStart::NextPage => "nextPage",
             SectionStart::Continuous => "continuous",
@@ -1130,4 +1138,21 @@ fn toc_span(bl: &Blocks) -> Option<(usize, usize)> {
         })
         .count();
     (entries > 0).then_some((start, start + entries))
+}
+
+/// The children of a `w:footnotePr` / `w:endnotePr` in schema order (`w:pos`, `w:numFmt`,
+/// `w:numStart`, `w:numRestart`; ECMA-376 §17.11.11), for the fields that are set.
+pub(super) fn note_pr_inner(w: &mut W, pr: &NoteProps) {
+    if let Some(p) = pr.pos {
+        w.val("w:pos", p.ooxml());
+    }
+    if let Some(f) = pr.num_fmt {
+        w.val("w:numFmt", f.ooxml());
+    }
+    if let Some(n) = pr.num_start {
+        w.val("w:numStart", &n.clamp(1, wordcraft_doc::section::MAX_NOTE_START).to_string());
+    }
+    if let Some(r) = pr.num_restart {
+        w.val("w:numRestart", r.ooxml());
+    }
 }

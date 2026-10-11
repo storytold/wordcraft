@@ -177,7 +177,7 @@ fn styles_numbering_settings_notes_comments_from_parts() {
         r#"<w:numbering {W_NS}><w:abstractNum w:abstractNumId="7"><w:name w:val="L"/><w:lvl w:ilvl="0"><w:start w:val="3"/><w:numFmt w:val="upperLetter"/><w:lvlText w:val="%1)"/><w:lvlJc w:val="right"/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl><w:lvl w:ilvl="1"><w:numFmt w:val="bullet"/><w:suff w:val="space"/><w:lvlText w:val="o"/><w:rPr><w:rFonts w:ascii="Courier New"/></w:rPr></w:lvl></w:abstractNum><w:num w:numId="2"><w:abstractNumId w:val="7"/><w:lvlOverride w:ilvl="0"><w:startOverride w:val="5"/></w:lvlOverride></w:num></w:numbering>"#
     );
     let settings = format!(
-        r#"<w:settings {W_NS}><w:trackRevisions/><w:defaultTabStop w:val="708"/><w:evenAndOddHeaders w:val="1"/><w:footnotePr><w:numFmt w:val="lowerRoman"/></w:footnotePr></w:settings>"#
+        r#"<w:settings {W_NS}><w:trackRevisions/><w:defaultTabStop w:val="708"/><w:evenAndOddHeaders w:val="1"/><w:footnotePr><w:pos w:val="sideways"/><w:numFmt w:val="lowerRoman"/><w:numStart w:val="-99999999999"/><w:numRestart w:val="eachPage"/></w:footnotePr></w:settings>"#
     );
     let footnotes = format!(
         r#"<w:footnotes {W_NS}><w:footnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:footnote><w:footnote w:id="1"><w:p><w:r><w:footnoteRef/></w:r><w:r><w:t xml:space="preserve"> Note text</w:t></w:r></w:p></w:footnote></w:footnotes>"#
@@ -244,6 +244,9 @@ fn styles_numbering_settings_notes_comments_from_parts() {
     assert!(d.settings.track_changes && d.settings.even_odd_headers);
     assert_eq!(d.settings.default_tab, 35.4);
     assert_eq!(d.settings.footnote_format, wordcraft_doc::section::NumFormat::LowerRoman);
+    // A hostile start is clamped, an unknown position left out.
+    let fp = d.settings.footnote_pr;
+    assert_eq!((fp.pos, fp.num_start, fp.num_restart), (None, Some(1), Some(wordcraft_doc::section::NoteRestart::EachPage)));
     // Body.
     let p = paras(&d);
     assert_eq!(p[0].props.style.as_deref(), Some("1"));
@@ -1074,4 +1077,52 @@ fn formatting_revisions_round_trip() {
     assert_eq!(again.body, d.body);
     assert_eq!(again.last_section, d.last_section);
     assert_eq!(again.revisions, d.revisions);
+}
+
+/// A document's own footnote separators and continuation notice are kept (ECMA-376 §17.11), and
+/// written back as Word numbers them: -1, 0 and 1, the notes after them.
+#[test]
+fn note_separators_and_continuation_notice_round_trip() {
+    let footnotes = format!(
+        r#"<w:footnotes {W_NS}><w:footnote w:type="separator" w:id="-1"><w:p><w:pPr><w:spacing w:after="0"/></w:pPr><w:r><w:separator/></w:r></w:p></w:footnote><w:footnote w:type="continuationSeparator" w:id="0"><w:p><w:r><w:t xml:space="preserve">More: </w:t></w:r><w:r><w:continuationSeparator/></w:r></w:p></w:footnote><w:footnote w:type="continuationNotice" w:id="1"><w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:t>(continued)</w:t></w:r></w:p></w:footnote><w:footnote w:id="2"><w:p><w:r><w:footnoteRef/></w:r><w:r><w:t xml:space="preserve"> The note.</w:t></w:r></w:p></w:footnote></w:footnotes>"#
+    );
+    let body = r#"<w:p><w:r><w:t>Text</w:t></w:r><w:r><w:footnoteReference w:id="2"/></w:r></w:p>"#;
+    let bytes = docx(body, &[("rId1", "footnotes", "footnotes.xml")], &[("word/footnotes.xml", &footnotes)]);
+    let check = |d: &Document| {
+        let s = &d.footnote_separators;
+        let first = |b: &Option<wordcraft_doc::Blocks>| b.as_ref().unwrap()[0].as_para().unwrap().clone();
+        let sep = first(&s.separator);
+        assert_eq!(sep.objects.iter().map(InlineObject::as_note_separator).collect::<Vec<_>>(), vec![Some(false)]);
+        assert_eq!(sep.props.space_after, Some(0.0));
+        let cont = first(&s.continuation_separator);
+        assert_eq!(cont.plain_text(), "More: ");
+        assert_eq!(cont.objects.iter().map(InlineObject::as_note_separator).collect::<Vec<_>>(), vec![Some(true)]);
+        let notice = first(&s.continuation_notice);
+        assert_eq!(notice.plain_text(), "(continued)");
+        assert_eq!(notice.props.align, Some(Align::Right));
+        assert!(d.endnote_separators.is_empty());
+        // The note itself is read as before.
+        let InlineObject::NoteRef { id, .. } = paras(d)[0].objects[0] else { panic!() };
+        assert_eq!(d.parts[&id].blocks[0].as_para().unwrap().plain_text(), " The note.");
+        assert_eq!(d.parts.len(), 1, "special notes aren't notes");
+    };
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    check(&d);
+
+    let out = wordcraft_docx::write(&d).unwrap();
+    let part = |name: &str| {
+        let mut z = zip::ZipArchive::new(std::io::Cursor::new(&out)).unwrap();
+        let mut xml = String::new();
+        std::io::Read::read_to_string(&mut z.by_name(name).unwrap(), &mut xml).unwrap();
+        xml
+    };
+    let notes = part("word/footnotes.xml");
+    for (kind, id) in [("separator", "-1"), ("continuationSeparator", "0"), ("continuationNotice", "1")] {
+        assert!(notes.contains(&format!(r#"<w:footnote w:type="{kind}" w:id="{id}">"#)), "{kind}: {notes}");
+    }
+    assert!(notes.contains(r#"<w:footnote w:id="2">"#), "the note follows the notice: {notes}");
+    assert!(part("word/document.xml").contains(r#"<w:footnoteReference w:id="2"/>"#));
+    let settings = part("word/settings.xml");
+    assert!(settings.contains(r#"<w:footnote w:id="-1"/><w:footnote w:id="0"/><w:footnote w:id="1"/>"#), "{settings}");
+    check(&wordcraft_docx::read(&out).unwrap());
 }

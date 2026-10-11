@@ -467,6 +467,24 @@ impl InlineObject {
             _ => None,
         }
     }
+    /// The line a footnote or endnote separator draws (ECMA-376 §17.11: the `w:separator` and
+    /// `w:continuationSeparator` run elements): a short line, or with `continuation` one across
+    /// the column. Kept as the run element itself.
+    pub fn note_separator(continuation: bool) -> InlineObject {
+        let el = if continuation { "w:continuationSeparator" } else { "w:separator" };
+        InlineObject::Opaque { format: "docx".into(), xml: format!("<w:r><{el}/></w:r>"), text: String::new() }
+    }
+    /// For a [`InlineObject::note_separator`]: whether it is the continuation separator.
+    pub fn as_note_separator(&self) -> Option<bool> {
+        match self {
+            InlineObject::Opaque { format, xml, .. } if format == "docx" => match xml.as_str() {
+                "<w:r><w:separator/></w:r>" => Some(false),
+                "<w:r><w:continuationSeparator/></w:r>" => Some(true),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
     /// The text this object contributes to plain-text extraction.
     pub fn plain_text(&self) -> &str {
         match self {

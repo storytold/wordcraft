@@ -195,30 +195,51 @@ pub fn write_as(doc: &Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
 
     // Notes (references were collected from the body and headers).
     for foot in [true, false] {
-        let ids = if foot { wr.footnotes.clone() } else { wr.endnotes.clone() };
-        if ids.is_empty() {
+        let seps = if foot { &doc.footnote_separators } else { &doc.endnote_separators };
+        if !notes_part(doc, &wr, foot) {
             continue;
         }
         let (root, tag, file) = if foot { ("w:footnotes", "w:footnote", "footnotes.xml") } else { ("w:endnotes", "w:endnote", "endnotes.xml") };
         let mut prels = PartRels::default();
         let mut w = W::new();
         w.open(root, &ns_refs);
-        for (id, kind) in [("-1", "separator"), ("0", "continuationSeparator")] {
-            w.open(tag, &[("w:type", kind), ("w:id", id)]);
-            w.open("w:p", &[]);
-            w.open("w:pPr", &[]);
-            w.empty("w:spacing", &[("w:after", "0"), ("w:line", "240"), ("w:lineRule", "auto")]);
-            w.close("w:pPr");
-            w.open("w:r", &[]);
-            w.empty(if kind == "separator" { "w:separator" } else { "w:continuationSeparator" }, &[]);
-            w.close("w:r");
-            w.close("w:p");
-            w.close(tag);
+        // The separators and continuation notice: the document's own, else the defaults (no
+        // notice). Word numbers them -1, 0 and 1.
+        for (id, kind, own) in [
+            ("-1", "separator", &seps.separator),
+            ("0", "continuationSeparator", &seps.continuation_separator),
+            ("1", "continuationNotice", &seps.continuation_notice),
+        ] {
+            match own {
+                Some(blocks) => {
+                    w.open(tag, &[("w:type", kind), ("w:id", id)]);
+                    if blocks.is_empty() {
+                        w.empty("w:p", &[]);
+                    } else {
+                        wr.blocks(&mut w, blocks, &mut prels, false, 0);
+                    }
+                    w.close(tag);
+                }
+                None if kind != "continuationNotice" => {
+                    w.open(tag, &[("w:type", kind), ("w:id", id)]);
+                    w.open("w:p", &[]);
+                    w.open("w:pPr", &[]);
+                    w.empty("w:spacing", &[("w:after", "0"), ("w:line", "240"), ("w:lineRule", "auto")]);
+                    w.close("w:pPr");
+                    w.open("w:r", &[]);
+                    w.empty(if kind == "separator" { "w:separator" } else { "w:continuationSeparator" }, &[]);
+                    w.close("w:r");
+                    w.close("w:p");
+                    w.close(tag);
+                }
+                None => {}
+            }
         }
+        let base = note_id_base(doc, foot);
         let mut k = 0;
         while let Some(pid) = (if foot { &wr.footnotes } else { &wr.endnotes }).get(k).copied() {
+            let nid = (k + base).to_string();
             k += 1;
-            let nid = k.to_string();
             w.open(tag, &[("w:id", &nid)]);
             let blocks: Blocks = doc.parts.get(&pid).map(|p| p.blocks.clone()).unwrap_or_default();
             wr.note_blocks(&mut w, &blocks, &mut prels, foot, pid);
@@ -301,7 +322,7 @@ pub fn write_as(doc: &Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
         &mut entries,
         &mut overrides,
         "word/settings.xml",
-        settings_xml(doc, !wr.footnotes.is_empty(), !wr.endnotes.is_empty()),
+        settings_xml(doc, notes_part(doc, &wr, true), notes_part(doc, &wr, false)),
         &format!("{CT_WML}settings+xml"),
         PartRels::default(),
     );
@@ -495,6 +516,7 @@ impl Writer<'_> {
     }
 
     fn note_id(&mut self, part: u32, foot: bool) -> String {
+        let base = note_id_base(self.doc, foot);
         let list = if foot { &mut self.footnotes } else { &mut self.endnotes };
         let idx = match list.iter().position(|p| *p == part) {
             Some(i) => i,
@@ -503,7 +525,7 @@ impl Writer<'_> {
                 list.len() - 1
             }
         };
-        (idx + 1).to_string()
+        (idx + base).to_string()
     }
 
     fn hf_rel(&mut self, part: u32, footer: bool, rels: &mut PartRels) -> Option<String> {
@@ -780,8 +802,23 @@ fn write_level(w: &mut W, i: usize, l: &Level) {
     w.close("w:lvl");
 }
 
+/// The file id of the first footnote or endnote: after the separators (-1, 0) and the
+/// continuation notice (1), when the document has one.
+fn note_id_base(doc: &Document, foot: bool) -> usize {
+    let seps = if foot { &doc.footnote_separators } else { &doc.endnote_separators };
+    if seps.continuation_notice.is_some() { 2 } else { 1 }
+}
+
+/// Whether the footnotes (or endnotes) part is written: there are notes, or separators of the
+/// document's own to keep.
+fn notes_part(doc: &Document, wr: &Writer<'_>, foot: bool) -> bool {
+    let (ids, seps) = if foot { (&wr.footnotes, &doc.footnote_separators) } else { (&wr.endnotes, &doc.endnote_separators) };
+    !ids.is_empty() || !seps.is_empty()
+}
+
 fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool) -> Vec<u8> {
     let s = &doc.settings;
+    let s_notes = (&doc.footnote_separators, &doc.endnote_separators);
     let mut w = W::new();
     let ns = xml::body_ns();
     let ns_refs: Vec<(&str, &str)> = ns.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
@@ -812,14 +849,19 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool) -> Vec<u8> {
         }
     }
     w.val("w:characterSpacingControl", "doNotCompress");
-    for (tag, fmt, used, el) in
-        [("w:footnotePr", s.footnote_format, footnotes, "w:footnote"), ("w:endnotePr", s.endnote_format, endnotes, "w:endnote")]
-    {
+    for (tag, fmt, pr, used, el) in [
+        ("w:footnotePr", s.footnote_format, &s.footnote_pr, footnotes, "w:footnote"),
+        ("w:endnotePr", s.endnote_format, &s.endnote_pr, endnotes, "w:endnote"),
+    ] {
         w.open(tag, &[]);
-        w.val("w:numFmt", fmt.ooxml());
+        story::note_pr_inner(&mut w, &wordcraft_doc::section::NoteProps { num_fmt: Some(fmt), ..*pr });
         if used {
             w.empty(el, &[("w:id", "-1")]);
             w.empty(el, &[("w:id", "0")]);
+            let seps = if el == "w:footnote" { &s_notes.0 } else { &s_notes.1 };
+            if seps.continuation_notice.is_some() {
+                w.empty(el, &[("w:id", "1")]);
+            }
         }
         w.close(tag);
     }

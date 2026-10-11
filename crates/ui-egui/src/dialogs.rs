@@ -247,6 +247,10 @@ pub enum Dialog {
     TrackOptions {
         form: Box<crate::dialogs_lists::TrackForm>,
     },
+    /// References › Footnotes › Footnote and Endnote (#385).
+    NoteOptions {
+        form: Box<crate::dialogs_notes::NoteForm>,
+    },
 }
 
 /// The Table Properties dialog's fields. Lengths are in the interface unit
@@ -650,6 +654,7 @@ impl Dialog {
             Dialog::EncryptPassword { .. } => "encryptPassword",
             Dialog::DefineList { .. } => "defineList",
             Dialog::TrackOptions { .. } => "trackChangesOptions",
+            Dialog::NoteOptions { .. } => "noteOptions",
         }
     }
 
@@ -812,6 +817,7 @@ impl Dialog {
             }
             "defineList" => Dialog::DefineList { form: Box::new(crate::dialogs_lists::ListForm::read(app)) },
             "trackChangesOptions" => Dialog::TrackOptions { form: Box::new(crate::dialogs_lists::TrackForm::read(app)) },
+            "noteOptions" => Dialog::NoteOptions { form: Box::new(crate::dialogs_notes::NoteForm::read(app)) },
             _ => return None,
         })
     }
@@ -938,6 +944,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::EncryptPassword { .. } => "Encrypt with Password",
         Dialog::DefineList { .. } => "Define New Multilevel List",
         Dialog::TrackOptions { .. } => "Track Changes Options",
+        Dialog::NoteOptions { .. } => "Footnote and Endnote",
     };
     egui::Window::new(tl!(title))
         .id(egui::Id::new(("dialog", title)))
@@ -1779,6 +1786,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         }
         Dialog::DefineList { form } => crate::dialogs_lists::define_list(app, ui, form),
         Dialog::TrackOptions { form } => crate::dialogs_lists::track_options(app, ui, form),
+        Dialog::NoteOptions { form } => crate::dialogs_notes::note_options(app, ui, form),
         Dialog::FindRecipient { text, message } => {
             ui.horizontal(|ui| {
                 ui.label(tl!("Find:"));

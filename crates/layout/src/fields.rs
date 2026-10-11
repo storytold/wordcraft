@@ -16,17 +16,32 @@ pub struct FieldCtx {
     /// Pages in the current section.
     pub section_pages: u32,
     pub section: u32,
-    /// Note part id → number, in document order.
-    pub notes: Arc<HashMap<u32, u32>>,
+    /// Note part id → its number.
+    pub notes: Arc<HashMap<u32, NoteNum>>,
     /// Document title / author for TITLE / AUTHOR fields.
     pub title: Arc<str>,
     pub author: Arc<str>,
     pub filename: Arc<str>,
 }
 
+/// A footnote's or endnote's number, as its section's options give it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct NoteNum {
+    pub n: u32,
+    pub fmt: NumFormat,
+    /// Index of the section (`Document::sections`) its reference is in.
+    pub section: usize,
+    /// Place among the notes of its kind, in document order.
+    pub order: u32,
+}
+
 impl FieldCtx {
-    pub fn note_number(&self, id: u32) -> u32 {
-        self.notes.get(&id).copied().unwrap_or(1)
+    /// The mark of note `id` (its number in its format); `fmt` for a note not counted.
+    pub fn note_mark(&self, id: u32, fmt: NumFormat) -> String {
+        match self.notes.get(&id) {
+            Some(n) => n.fmt.format(n.n),
+            None => fmt.format(1),
+        }
     }
     /// A key for caches: the parts of the context a page-dependent paragraph depends on.
     pub fn page_key(&self) -> (u32, u32, u32, u32) {
