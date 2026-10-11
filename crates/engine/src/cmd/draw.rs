@@ -153,16 +153,18 @@ fn pen(s: &mut Session, v: &Value, tool: InkTool) -> CmdResult {
     state(s)
 }
 
-/// Ink strokes laid out on `page`: their position and geometry on the page.
-fn ink_on(s: &Session, layout: &DocLayout, page: usize) -> Vec<(Pos, wordcraft_geom::Rect, Arc<Freeform>, f32)> {
+/// Ink strokes laid out on `page`: their position, unturned frame, turn and geometry on the page.
+fn ink_on(s: &Session, layout: &DocLayout, page: usize) -> Vec<(Pos, wordcraft_geom::Rect, wordcraft_geom::Spin, Arc<Freeform>, f32)> {
     let Some(pg) = layout.pages.get(page) else { return Vec::new() };
     pg.items
         .iter()
         .filter_map(|it| match it {
-            Placed::Object { rect, story, path, off, .. } => {
+            Placed::Object { rect, spin, story, path, off, .. } => {
                 let pos = Pos { story: *story, path: path.clone(), off: *off };
                 match s.doc.para_at(&pos).and_then(|p| p.object_at(*off)) {
-                    Some(InlineObject::Shape { freeform: Some(f), stroke_width, .. }) if f.is_ink() => Some((pos, *rect, f.clone(), *stroke_width)),
+                    Some(InlineObject::Shape { freeform: Some(f), stroke_width, .. }) if f.is_ink() => {
+                        Some((pos, *rect, *spin, f.clone(), *stroke_width))
+                    }
                     _ => None,
                 }
             }
@@ -177,9 +179,12 @@ pub fn ink_at(s: &mut Session, page: usize, x: f32, y: f32) -> Option<Pos> {
         return None;
     }
     let layout = s.layout();
-    ink_on(s, &layout, page).into_iter().rev().find_map(|(pos, r, f, sw)| {
+    ink_on(s, &layout, page).into_iter().rev().find_map(|(pos, r, spin, f, sw)| {
         let reach = (if sw.is_finite() { sw.clamp(0.0, MAX_WIDTH) } else { 1.0 }) / 2.0 + ERASE_SLOP;
-        f.distance(r.x, r.y, r.w, r.h, x, y).filter(|d| *d <= reach).map(|_| pos)
+        // A turned stroke is drawn turned about its frame's centre: test the point turned back
+        // into the stroke's own frame (a turn keeps distances, so the reach holds).
+        let (u, v) = spin.unapply(r.x + r.w / 2.0, r.y + r.h / 2.0, x, y);
+        f.distance(r.x, r.y, r.w, r.h, u, v).filter(|d| *d <= reach).map(|_| pos)
     })
 }
 
@@ -371,6 +376,32 @@ mod tests {
         assert_eq!((s.view.draw.mode, s.view.draw.pencil.width), (super::DrawMode::Pen(InkTool::Pencil), super::MAX_WIDTH));
         s.run("draw.select", &json!({})).unwrap();
         assert_eq!(s.view.draw.mode, super::DrawMode::Select);
+    }
+
+    /// #445: a turned stroke is erased where it is drawn, not where it was before the turn.
+    #[test]
+    fn a_rotated_stroke_is_erased_where_it_is_drawn() {
+        let rotated = || {
+            let mut s = session();
+            s.run("draw.stroke", &json!({"page": 0, "points": [[100, 100], [200, 100]], "width": 2, "color": "000000"})).unwrap();
+            s.run("select.objects", &json!({"index": 0})).unwrap();
+            s.run("arrange.rotation", &json!({"degrees": 90})).unwrap();
+            s
+        };
+        // Its old horizontal path is blank now: nothing to erase there, and it stays.
+        let mut s = rotated();
+        assert!(s.run("draw.erase", &json!({"page": 0, "x": 110, "y": 100})).is_err());
+        assert_eq!(ink(&s).len(), 1);
+        // The visible vertical stroke (centred on x = 150) is erased.
+        s.run("draw.erase", &json!({"page": 0, "x": 150, "y": 60})).unwrap();
+        assert!(ink(&s).is_empty());
+        let mut s = rotated();
+        s.run("draw.eraser", &json!({"page": 0, "x": 150, "y": 140})).unwrap();
+        assert!(ink(&s).is_empty(), "the point-taking eraser too");
+        // Hidden ink stays out of reach.
+        let mut s = rotated();
+        s.run("review.hideInk", &json!({"value": true})).unwrap();
+        assert!(s.run("draw.erase", &json!({"page": 0, "x": 150, "y": 60})).is_err());
     }
 
     /// `draw.eraser` is a view command, but with a point it erases through `draw.erase`, which
