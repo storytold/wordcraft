@@ -327,3 +327,41 @@ fn tracked_enter_and_backspace_track_the_paragraph_mark() {
     assert_eq!(s.sel.focus, Pos::body(0, 3));
     assert!(s.doc.para_at(&Pos::body(0, 0)).is_some_and(|p| p.mark.del.is_some()));
 }
+
+#[test]
+fn reject_all_takes_out_the_paragraph_breaks_a_tracked_paste_inserted() {
+    // Issue #417: Paste's paragraph marks weren't tracked, so Reject All left the split.
+    for text in ["X\nY", "\n"] {
+        let mut s = s();
+        run(&mut s, "text.insert", json!({"text": "AB", "raw": true}));
+        run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 1}}));
+        run(&mut s, "review.trackChanges", json!({"value": true}));
+        run(&mut s, "edit.paste", json!({"text": text}));
+        let (head, tail) = text.split_once('\n').unwrap_or_default();
+        assert_eq!(texts(&s), [format!("a{}", head.to_lowercase()), format!("{}b", tail.to_lowercase())], "{text:?}");
+        let pasted = texts(&s);
+        run(&mut s, "review.rejectAll", json!({}));
+        assert_eq!(texts(&s), ["ab"], "{text:?}");
+        assert!(s.doc.revisions.is_empty(), "{text:?}");
+        run(&mut s, "edit.undo", json!({}));
+        run(&mut s, "review.acceptAll", json!({}));
+        assert_eq!(texts(&s), pasted, "{text:?}: accepting keeps the break");
+    }
+}
+
+#[test]
+fn plain_text_paste_keeps_an_empty_paragraph_in_a_list() {
+    // Issue #422: the pasted paragraph separators went through Enter, which ends the list on an
+    // empty item, so `A\n\nB` lost its empty paragraph.
+    for (id, v) in [("edit.pasteText", json!({"text": "A\n\nB"})), ("edit.pasteSpecial", json!({"as": "text", "text": "A\n\nB"}))] {
+        let mut s = s();
+        run(&mut s, "para.bullets", json!({}));
+        run(&mut s, id, v);
+        assert_eq!(texts(&s), ["a", "", "b"], "{id}");
+    }
+    // Enter twice still ends the list.
+    let mut s = s();
+    run(&mut s, "para.bullets", json!({}));
+    typ(&mut s, "A\n\nB");
+    assert_eq!(paras(&s), vec![para("A", Some(0)), para("B", None)]);
+}

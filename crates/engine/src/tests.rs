@@ -2732,3 +2732,73 @@ fn deleting_the_last_cell_column_never_leaves_a_table_without_rows() {
     run(&mut s, "edit.undo", json!({}));
     assert!(s.doc.body.iter().any(|b| b.as_table().is_some_and(|t| !t.rows.is_empty())));
 }
+
+#[test]
+fn replace_all_splits_paragraphs_at_a_paragraph_mark_in_the_replacement() {
+    // Issue #423: untracked Replace All left `\r` in the paragraph instead of splitting it.
+    for with in ["A\rB", "A\u{2029}B"] {
+        let mut s = s();
+        run(&mut s, "text.insert", json!({"text": "cat cat"}));
+        run(&mut s, "edit.replaceAll", json!({"text": "cat", "with": with}));
+        assert_eq!(body_texts(&s), ["A", "B A", "B"], "{with:?}");
+    }
+    // A line feed stays a line break.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "cat"}));
+    run(&mut s, "edit.replaceAll", json!({"text": "cat", "with": "A\nB"}));
+    assert_eq!(body_texts(&s), ["A\nB"]);
+}
+
+/// A one-row table converted from tab-separated `text`.
+fn table_from(text: &str) -> Session {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": text}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "table.fromText", json!({}));
+    s
+}
+
+fn table_texts(s: &Session) -> Vec<Vec<String>> {
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).expect("a table");
+    t.rows.iter().map(|r| r.cells.iter().map(|c| c.blocks.iter().filter_map(|b| b.as_para()).map(|p| p.text.clone()).collect()).collect()).collect()
+}
+
+#[test]
+fn delete_columns_deletes_every_selected_column() {
+    // Issue #431: only the selection's focus column went.
+    let cell = |r: u32, c: u32, off: usize| json!({"story": "body", "path": [0, r, c, 0], "off": off});
+    for (anchor, focus) in [(cell(0, 0, 0), cell(1, 1, 1)), (cell(1, 1, 1), cell(0, 0, 0))] {
+        let mut s = table_from("Left\tMiddle\tRight\nA\tB\tC");
+        run(&mut s, "select.range", json!({"anchor": anchor, "focus": focus}));
+        run(&mut s, "table.deleteColumn", json!({}));
+        assert_eq!(table_texts(&s), [["Right"], ["C"]]);
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(table_texts(&s), [["Left", "Middle", "Right"], ["A", "B", "C"]]);
+    }
+    // A caret deletes its own column only.
+    let mut s = table_from("Left\tMiddle\tRight");
+    run(&mut s, "caret.set", json!({"pos": cell(0, 1, 0)}));
+    run(&mut s, "table.deleteColumn", json!({}));
+    assert_eq!(table_texts(&s), [["Left", "Right"]]);
+}
+
+#[test]
+fn split_cells_leaves_the_other_rows_alone() {
+    // Issue #432: splitting a cell inserted a grid column with a new cell in every row.
+    let spans = |s: &Session| -> Vec<Vec<usize>> {
+        let t = s.doc.body.iter().find_map(|b| b.as_table()).expect("a table");
+        t.rows.iter().map(|r| r.cells.iter().map(wordcraft_doc::Cell::span).collect()).collect()
+    };
+    let mut s = table_from("Left\nA");
+    let width: f32 = s.doc.body.iter().find_map(|b| b.as_table()).unwrap().total_width();
+    run(&mut s, "table.split", json!({"columns": 2}));
+    assert_eq!(table_texts(&s), [vec!["Left", ""], vec!["A"]]);
+    assert_eq!(spans(&s), [vec![1, 1], vec![2]]);
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert!((t.total_width() - width).abs() < 0.1, "{:?}", t.grid);
+    assert!((t.grid[0] - width / 2.0).abs() < 0.1, "{:?}", t.grid);
+    let mut s = table_from("Left\tMiddle\tRight\nA\tB\tC");
+    run(&mut s, "table.split", json!({"columns": 2}));
+    assert_eq!(table_texts(&s), [vec!["Left", "", "Middle", "Right"], vec!["A", "B", "C"]]);
+    assert_eq!(spans(&s), [vec![1, 1, 1, 1], vec![2, 1, 1]]);
+}

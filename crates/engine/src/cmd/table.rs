@@ -455,13 +455,28 @@ fn del_row(s: &mut Session, _: &Value) -> CmdResult {
 
 fn del_col(s: &mut Session, _: &Value) -> CmdResult {
     let (tp, r, c) = cell(s)?;
+    let cells = selected_cells(s);
     let story = s.sel.focus.story;
     let t = s.doc.table_mut(story, &tp)?;
     if t.grid.len() <= 1 {
         return del_table(s, &Value::Null);
     }
-    let g = t.grid_col(r, c);
-    t.delete_col(g);
+    // Every grid column a selected cell covers goes (the caret's alone without a selection).
+    let mut cols = std::collections::BTreeSet::new();
+    for (rr, cc) in cells {
+        let g = t.grid_col(rr, cc);
+        let span = t.rows.get(rr).and_then(|x| x.cells.get(cc)).map_or(1, wordcraft_doc::Cell::span);
+        cols.extend(g..g.saturating_add(span).min(t.grid.len()));
+    }
+    if cols.is_empty() {
+        cols.insert(t.grid_col(r, c));
+    }
+    if cols.len() >= t.grid.len() {
+        return del_table(s, &Value::Null);
+    }
+    for g in cols.iter().rev() {
+        t.delete_col(*g);
+    }
     // Rows left without cells are dropped; if that was every row, no table is left.
     if t.rows.is_empty() {
         return del_table(s, &Value::Null);

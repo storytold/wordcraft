@@ -180,6 +180,17 @@ pub(crate) fn track_delete(s: &mut Session, a: &Pos, b: &Pos) -> Result<Pos, Cmd
 
 /// Insert typed text at the caret (replacing the selection), with pending formatting and track changes.
 pub fn type_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
+    insert_text(s, text, true)
+}
+
+/// Insert pasted plain text like [`type_text`], except that its paragraph separators are text
+/// being transferred, not Enter key presses: an empty list item between them stays (Enter on
+/// one would end the list).
+pub fn paste_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
+    insert_text(s, text, false)
+}
+
+fn insert_text(s: &mut Session, text: &str, enter: bool) -> Result<(), CmdError> {
     let mut props = s.typing_props();
     delete_selection(s)?;
     // Typed text is new: never deleted, and not a formatting change of the text around it.
@@ -195,7 +206,7 @@ pub fn type_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
     let mut first = true;
     for part in text.split(['\r', '\u{2029}']) {
         if !first {
-            at = split_para(s, &at)?;
+            at = split_para_as(s, &at, enter)?;
         }
         first = false;
         let part = part.replace('\u{000B}', "\n");
@@ -226,9 +237,14 @@ pub fn leave_list(para: &mut wordcraft_doc::Paragraph) {
 /// Split the paragraph at `at` like Enter does: an empty list paragraph leaves the list, the
 /// next paragraph gets the style's "next" style when Enter is at the end.
 pub fn split_para(s: &mut Session, at: &Pos) -> Result<Pos, CmdError> {
+    split_para_as(s, at, true)
+}
+
+/// [`split_para`]; without `enter` an empty list item is split like any other paragraph.
+fn split_para_as(s: &mut Session, at: &Pos, enter: bool) -> Result<Pos, CmdError> {
     // `num: 0` means "explicitly not in a list", so it isn't a list item.
     let (at_end, style, empty_list) = match s.doc.para_at(at) {
-        Some(p) => (at.off >= p.len(), p.props.style.clone(), p.props.numbering.filter(|n| n.num != 0 && p.is_empty())),
+        Some(p) => (at.off >= p.len(), p.props.style.clone(), p.props.numbering.filter(|n| enter && n.num != 0 && p.is_empty())),
         None => return Err(CmdError::Failed("no paragraph at caret".into())),
     };
     if let Some(n) = empty_list {
