@@ -113,6 +113,14 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"level": 0-8}"#),
         CommandSpec::new("para.restartNumbering", "Restart at 1", "Home › Paragraph › Numbering", restart_numbering),
+        CommandSpec::new("para.moveUp", "Move Paragraph Up", "Home › Paragraph", |s, _| move_paras(s, true))
+            .key(if cfg!(target_os = "macos") { "Ctrl+Shift+Up" } else { "Alt+Shift+Up" }),
+        CommandSpec::new("para.moveDown", "Move Paragraph Down", "Home › Paragraph", |s, _| move_paras(s, false))
+            .key(if cfg!(target_os = "macos") { "Ctrl+Shift+Down" } else { "Alt+Shift+Down" }),
+        CommandSpec::new("para.promote", "Promote", "Home › Paragraph", |s, _| outline_step(s, true))
+            .key(if cfg!(target_os = "macos") { "Ctrl+Shift+Left" } else { "Alt+Shift+Left" }),
+        CommandSpec::new("para.demote", "Demote", "Home › Paragraph", |s, _| outline_step(s, false))
+            .key(if cfg!(target_os = "macos") { "Ctrl+Shift+Right" } else { "Alt+Shift+Right" }),
         CommandSpec::new("para.shading", "Shading", "Home › Paragraph", |s, v| {
             let c = p::str(v, "color").and_then(Rgb::parse);
             fmt(s, &|p| p.shading = c)
@@ -553,6 +561,144 @@ pub fn border_sides(v: &Value, space_tb: f32, space_lr: f32) -> Result<Borders, 
         between: side("between", space_tb),
         inside_v: None,
     })
+}
+
+/// Move Paragraph Up / Down (Alt+Shift+Up/Down, ⌃⇧↑/↓ on macOS): the paragraphs the selection
+/// touches swap places with the paragraph above or below, in their own container (the story or
+/// a table cell), keeping their formatting and list membership; the selection moves with them.
+/// A selection that ends at the very start of a paragraph doesn't touch that paragraph (a
+/// selected paragraph includes its mark). Refused at the top or bottom of the container, next to
+/// a table, across a section break and for a selection across table cells.
+fn move_paras(s: &mut Session, up: bool) -> CmdResult {
+    let (a, b) = s.sel.ordered();
+    if a.story != b.story || a.path.parent() != b.path.parent() {
+        return Err(CmdError::Failed("select paragraphs in one place (not across table cells) to move them".into()));
+    }
+    let i0 = a.path.last();
+    let mut i1 = b.path.last();
+    let past_end = i1 > i0 && b.off == 0;
+    if past_end {
+        i1 -= 1;
+    }
+    let bl = s.doc.container_mut(a.story, &a.path)?;
+    let (lo, hi) = if up {
+        let Some(n) = i0.checked_sub(1) else { return Err(CmdError::Failed("already at the top".into())) };
+        (n, i1)
+    } else {
+        let n = i1.saturating_add(1);
+        if n >= bl.len() {
+            return Err(CmdError::Failed("already at the bottom".into()));
+        }
+        (i0, n)
+    };
+    let neighbour = if up { lo } else { hi };
+    if !matches!(bl.get(neighbour).map(|b| &**b), Some(Block::Para(_))) {
+        return Err(CmdError::Failed("a table is in the way".into()));
+    }
+    let Some(slice) = bl.get_mut(lo..=hi) else { return Err(CmdError::Failed("bad range".into())) };
+    if slice.iter().any(|b| b.as_para().is_some_and(|p| p.section.is_some())) {
+        return Err(CmdError::Failed("paragraphs don't move across a section break".into()));
+    }
+    if up {
+        slice.rotate_left(1);
+    } else {
+        slice.rotate_right(1);
+    }
+    // The selection follows the moved paragraphs.
+    let len = bl.len();
+    let shift = |p: &Pos| -> Pos {
+        let i = p.path.last();
+        let j = if (i0..=i1).contains(&i) {
+            if up { i - 1 } else { i + 1 }
+        } else if !up && i == i1 + 1 {
+            // The end just past the range: the start of whatever follows it now.
+            return if i1 + 2 < len {
+                Pos { path: p.path.with_last(i1 + 2), off: 0, ..p.clone() }
+            } else {
+                Pos { path: p.path.with_last(i1 + 1), off: usize::MAX, ..p.clone() }
+            };
+        } else {
+            i
+        };
+        Pos { path: p.path.with_last(j), ..p.clone() }
+    };
+    let (anchor, focus) = (shift(&s.sel.anchor), shift(&s.sel.focus));
+    s.sel = crate::Selection { anchor: s.doc.clamp(&anchor), focus: s.doc.clamp(&focus) };
+    s.goal_x = None;
+    sel_result(s)
+}
+
+/// The heading level (1–9) a paragraph's style gives it, if it is a heading.
+fn heading_level(s: &Session, props: &ParaProps) -> Option<u8> {
+    s.doc.styles.resolve_para(props).outline_level.filter(|l| *l < 9).map(|l| l + 1)
+}
+
+/// Make sure the built-in `Heading{n}` style (and its linked character style) is in the
+/// document, for files that didn't bring it.
+fn ensure_heading_style(s: &mut Session, n: u8) -> String {
+    let id = format!("Heading{n}");
+    if s.doc.styles.get(&id).is_none() {
+        let builtin = wordcraft_doc::styles::StyleSheet::builtin();
+        for sid in [id.clone(), format!("{id}Char")] {
+            if s.doc.styles.get(&sid).is_none()
+                && let Some(st) = builtin.get(&sid).cloned()
+            {
+                s.doc.styles.upsert(st);
+            }
+        }
+        touch_all(s);
+    }
+    id
+}
+
+/// Promote / Demote (Alt+Shift+Left/Right, ⌃⇧←/→ on macOS), Word's outline keys outside Outline
+/// view: a heading goes up or down one level (Heading 1 and Heading 9 are the ends); body text
+/// promoted becomes a heading at the level of the heading before it (Heading 1 when there is
+/// none) and can't be demoted further; a list item changes list level like Shift+Tab / Tab.
+fn outline_step(s: &mut Session, promote: bool) -> CmdResult {
+    let (a, b) = s.sel.ordered();
+    let paths = s.doc.paths_between(&a, &b);
+    // The heading before the selection, for promoted body text.
+    let before = s
+        .doc
+        .para_paths(a.story)
+        .into_iter()
+        .take_while(|p| *p < a.path)
+        .filter_map(|p| s.doc.para(a.story, &p).and_then(|q| heading_level(s, &q.props)))
+        .last()
+        .unwrap_or(1);
+    let mut changed = false;
+    for path in paths {
+        let Some(p) = s.doc.para(a.story, &path) else { continue };
+        let list = p.props.numbering.filter(|n| n.num != 0);
+        let target = match (list, heading_level(s, &p.props)) {
+            (Some(n), _) => {
+                let level = if promote { n.level.saturating_sub(1) } else { (n.level + 1).min(8) };
+                if level != n.level {
+                    let para = s.doc.para_mut(a.story, &path)?;
+                    para.props.numbering = Some(NumRef { num: n.num, level });
+                    para.touch();
+                    changed = true;
+                }
+                continue;
+            }
+            (None, Some(h)) if promote => h.checked_sub(1).filter(|l| *l >= 1),
+            (None, Some(h)) => Some(h + 1).filter(|l| *l <= 9),
+            (None, None) if promote => Some(before),
+            (None, None) => None,
+        };
+        let Some(n) = target else { continue };
+        let id = ensure_heading_style(s, n);
+        let para = s.doc.para_mut(a.story, &path)?;
+        para.props.style = Some(id);
+        para.props.outline_level = None;
+        para.touch();
+        changed = true;
+    }
+    if !changed {
+        return Err(CmdError::Failed(if promote { "nothing to promote".into() } else { "nothing to demote".into() }));
+    }
+    sel_result(s)
 }
 
 fn borders(s: &mut Session, v: &Value) -> CmdResult {

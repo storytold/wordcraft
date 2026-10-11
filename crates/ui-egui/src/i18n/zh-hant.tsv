@@ -1311,4 +1311,10 @@
 	Rotate Left 90°	向左旋轉 90°
 	Flip Vertical	垂直翻轉
 	Flip Horizontal	水平翻轉
+	Move Paragraph Up	上移段落
+	Move Paragraph Down	下移段落
+	Promote	升級
+	Demote	降級
+	Go Back	返回上次編輯位置
+	Toggle Unicode Character	切換 Unicode 字元
 	Formatted	已設定格式

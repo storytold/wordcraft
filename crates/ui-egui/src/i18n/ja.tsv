@@ -1310,4 +1310,10 @@
 	Rotate Left 90°	左へ 90 度回転
 	Flip Vertical	上下反転
 	Flip Horizontal	左右反転
+	Move Paragraph Up	段落を上へ移動
+	Move Paragraph Down	段落を下へ移動
+	Promote	レベル上げ
+	Demote	レベル下げ
+	Go Back	前の編集位置に戻る
+	Toggle Unicode Character	Unicode 文字の切り替え
 	Formatted	書式変更

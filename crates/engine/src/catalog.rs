@@ -421,6 +421,11 @@ Editing|Keyboard|Backspace|text.backspace
 Editing|Keyboard|Delete|text.delete
 Editing|Keyboard|Delete Previous Word|text.deleteWordBack
 Editing|Keyboard|Delete Next Word|text.deleteWordForward
+Editing|Keyboard|Move Paragraph Up|para.moveUp
+Editing|Keyboard|Move Paragraph Down|para.moveDown
+Editing|Keyboard|Promote|para.promote
+Editing|Keyboard|Demote|para.demote
+Editing|Keyboard|Toggle Unicode Character|text.toggleUnicode
 Editing|Navigation|Word Left|caret.wordLeft
 Editing|Navigation|Word Right|caret.wordRight
 Editing|Navigation|Line Start|caret.home
@@ -431,6 +436,7 @@ Editing|Navigation|Document Start|caret.docStart
 Editing|Navigation|Document End|caret.docEnd
 Editing|Navigation|Page Up|caret.pageUp
 Editing|Navigation|Page Down|caret.pageDown
+Editing|Navigation|Go Back|edit.goBack
 Editing|Selection|Select Word|select.word
 Editing|Selection|Select Sentence|select.sentence
 Editing|Selection|Select Paragraph|select.paragraph

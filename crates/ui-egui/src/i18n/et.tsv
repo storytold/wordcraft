@@ -1323,4 +1323,10 @@
 	Type the field's name and its switches, for example PAGE \\* roman.	Sisesta välja nimi ja lülitid, näiteks PAGE \\* roman.
 	Width and spacing	Laius ja vahe
 	from Unicode (hex)	Unicode (kuueteistkümnend)
+	Move Paragraph Up	Teisalda lõik üles
+	Move Paragraph Down	Teisalda lõik alla
+	Promote	Tõsta taset
+	Demote	Langeta taset
+	Go Back	Mine tagasi
+	Toggle Unicode Character	Lülita Unicode-märk
 	Formatted	Vormindatud
