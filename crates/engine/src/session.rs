@@ -734,6 +734,10 @@ impl Session {
                     self.touch();
                     self.doc.ensure_nonempty();
                     self.doc.prune_text_boxes();
+                    // Glued connectors follow the shapes they join.
+                    if crate::cmd::connectors::reroutes_after(id) && crate::cmd::connectors::reroute(self) {
+                        self.touch();
+                    }
                 }
                 self.clamp_selection();
                 // Extra selected objects last until something else is edited or selected.

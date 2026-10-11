@@ -1311,3 +1311,40 @@
 	Flip Vertical	上下反転
 	Flip Horizontal	左右反転
 	Formatted	書式変更
+
+# WordArt and connectors (#416).
+	WordArt Styles	ワードアートのスタイル
+	Text Fill	文字の塗りつぶし
+	Text Outline	文字の輪郭
+	Transform	変形
+	No Fill	塗りつぶしなし
+	No Outline	輪郭なし
+	Reflection	反射
+	No Reflection	反射なし
+	No Transform	変形なし
+	Connect Shapes	図形をつなぐ
+	Straight Connector	直線コネクタ
+	Straight Arrow Connector	直線矢印コネクタ
+	Elbow Connector	カギ線コネクタ
+	Elbow Arrow Connector	カギ線矢印コネクタ
+	Curved Connector	曲線コネクタ
+	Curved Arrow Connector	曲線矢印コネクタ
+	Arch Up	上向きアーチ
+	Arch Down	下向きアーチ
+	Circle	円
+	Slant Up	右上がり
+	Slant Down	右下がり
+	Inflate	膨張
+	Deflate	収縮
+	Chevron Up	上向き山形
+	Chevron Down	下向き山形
+	Triangle Up	上向き三角形
+	Triangle Down	下向き三角形
+	Solid Accent	アクセントの単色
+	Light with Outline	明るい色と輪郭
+	Hollow	中抜き
+	Accent Gradient	アクセントのグラデーション
+	Dark with Shadow	暗い色と影
+	Soft Glow	柔らかい光彩
+	Accent with Reflection	アクセントと反射
+	Warm Gradient with Outline	暖色のグラデーションと輪郭

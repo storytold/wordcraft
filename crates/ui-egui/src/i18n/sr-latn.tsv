@@ -1321,3 +1321,40 @@
 	Flip Vertical	Okreni vertikalno
 	Flip Horizontal	Okreni horizontalno
 	Formatted	Formatirano
+
+# WordArt and connectors (#416).
+	WordArt Styles	WordArt stilovi
+	Text Fill	Popuna teksta
+	Text Outline	Kontura teksta
+	Transform	Transformacija
+	No Fill	Bez popune
+	No Outline	Bez konture
+	Reflection	Odraz
+	No Reflection	Bez odraza
+	No Transform	Bez transformacije
+	Connect Shapes	Poveži oblike
+	Straight Connector	Pravi konektor
+	Straight Arrow Connector	Pravi konektor sa strelicom
+	Elbow Connector	Ugaoni konektor
+	Elbow Arrow Connector	Ugaoni konektor sa strelicom
+	Curved Connector	Zakrivljeni konektor
+	Curved Arrow Connector	Zakrivljeni konektor sa strelicom
+	Arch Up	Luk nagore
+	Arch Down	Luk nadole
+	Circle	Krug
+	Slant Up	Nagib nagore
+	Slant Down	Nagib nadole
+	Inflate	Naduvavanje
+	Deflate	Izduvavanje
+	Chevron Up	Ševron nagore
+	Chevron Down	Ševron nadole
+	Triangle Up	Trougao nagore
+	Triangle Down	Trougao nadole
+	Solid Accent	Puna boja isticanja
+	Light with Outline	Svetlo sa konturom
+	Hollow	Šuplje
+	Accent Gradient	Gradijent boje isticanja
+	Dark with Shadow	Tamno sa senkom
+	Soft Glow	Meki sjaj
+	Accent with Reflection	Isticanje sa odrazom
+	Warm Gradient with Outline	Topli gradijent sa konturom

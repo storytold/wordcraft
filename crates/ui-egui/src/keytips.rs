@@ -192,7 +192,7 @@ fn controls(tab: &str) -> Vec<Control> {
             m("Page Number", "insert.pageNumber"),
             c("Text Box", "insert.textBox"),
             c("Quick Parts", "insert.quickParts"),
-            c("WordArt", "insert.wordArt"),
+            m("WordArt", "insert.wordArt"),
             c("Drop Cap", "insert.dropCap"),
             c("Signature Line", "insert.signatureLine"),
             c("Date & Time", "insert.dateTime"),

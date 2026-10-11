@@ -26,7 +26,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("insert.table", "Table", "Insert › Tables", table).params(r#"{"rows": n, "cols": n, "style"?: string}"#),
         CommandSpec::new("insert.picture", "Pictures", "Insert › Illustrations", picture).params(r#"{"path"?: string, "data"?: base64, "width"?: pt, "alt"?: string}"#),
         CommandSpec::new("insert.shape", "Shapes", "Insert › Illustrations", shape)
-            .params(r#"{"kind": "rectangle|roundedRectangle|ellipse|triangle|diamond|line|arrow|star|heart", "width"?: pt, "height"?: pt, "fill"?: "RRGGBB", "stroke"?: "RRGGBB"}"#),
+            .params(r#"{"kind": "rectangle|roundedRectangle|ellipse|triangle|diamond|line|arrow|star|heart|straightConnector|elbowConnector|curvedConnector", "width"?: pt, "height"?: pt, "fill"?: "RRGGBB", "stroke"?: "RRGGBB", "arrow"?: "none"|"start"|"end"|"both" (lines and connectors; glue a connector's ends with shape.connect)}"#),
         CommandSpec::new("insert.textBox", "Text Box", "Insert › Text", text_box)
             .params(r#"{"text"?: string, "width"?: pt, "height"?: pt}"#)
             .when(|s| {
@@ -80,14 +80,6 @@ pub fn specs() -> Vec<CommandSpec> {
             super::para::fmt(s, &|p| {
                 p.borders = Some(wordcraft_doc::props::Borders { bottom: Some(wordcraft_doc::props::Border::single(1.5)), ..Default::default() })
             })
-        }),
-        CommandSpec::new("insert.wordArt", "WordArt", "Insert › Text", |s, v| {
-            let text = p::str(v, "text").unwrap_or("Your text here").to_string();
-            let props = CharProps { size: Some(36.0), bold: Some(true), color: Some(TextColor::Rgb(Rgb(0x15, 0x60, 0x82))), outline: Some(false), ..Default::default() };
-            let at = delete_selection(s)?;
-            let end = s.doc.insert_text(&at, &text, &props)?;
-            s.sel = Selection { anchor: at, focus: end };
-            sel_result(s)
         }),
         CommandSpec::new("insert.textFromFile", "Text from File", "Insert › Text › Object", |s, v| {
             let path = p::req_str(v, "path")?;
@@ -245,27 +237,33 @@ fn shape(s: &mut Session, v: &Value) -> CmdResult {
     let kind: ShapeKind =
         serde_json::from_value(v.get("kind").cloned().unwrap_or(json!("rectangle"))).map_err(|e| CmdError::Params(e.to_string()))?;
     let w = p::f32(v, "width").unwrap_or(108.0).clamp(4.0, 2000.0);
-    let h = p::f32(v, "height").unwrap_or(if kind == ShapeKind::Line { 1.0 } else { 72.0 }).clamp(1.0, 2000.0);
+    let h =
+        p::f32(v, "height").unwrap_or(if kind == ShapeKind::Line { 1.0 } else { 72.0 }).clamp(if kind.is_connector() { 0.0 } else { 1.0 }, 2000.0);
     let fill = match p::str(v, "fill") {
         Some(c) => Rgb::parse(c),
-        None if kind == ShapeKind::Line => None,
+        None if kind.is_open() => None,
         None => Some(Rgb(0x15, 0x60, 0x82)),
+    };
+    // Arrowheads on lines and connectors.
+    let (arrow_start, arrow_end) = match p::str(v, "arrow") {
+        Some("end") => (false, true),
+        Some("start") => (true, false),
+        Some("both") => (true, true),
+        Some("none") | None => (false, false),
+        Some(x) => return Err(CmdError::Params(format!("`arrow`: none, start, end or both, not `{x}`"))),
+    };
+    let extra = wordcraft_doc::connector::ShapeExtra { arrow_start, arrow_end, ..Default::default() };
+    // Connectors float in front of the text, so they can be glued to floating shapes.
+    let float = if kind.is_connector() {
+        Float { wrap: Wrap::InFrontOfText, ..Default::default() }
+    } else {
+        Float { wrap: Wrap::Inline, ..Default::default() }
     };
     let stroke = p::str(v, "stroke").and_then(Rgb::parse).or(Some(Rgb(0x0E, 0x40, 0x5A)));
     let props = s.typing_props();
     let at = delete_selection(s)?;
-    let obj = InlineObject::Shape {
-        kind,
-        w,
-        h,
-        fill,
-        stroke,
-        stroke_width: 1.0,
-        float: Float { wrap: Wrap::Inline, ..Default::default() },
-        story: None,
-        freeform: None,
-        effects: Default::default(),
-    };
+    let obj =
+        InlineObject::Shape { kind, w, h, fill, stroke, stroke_width: 1.0, float, story: None, freeform: None, effects: Default::default(), extra };
     let end = s.doc.insert_object(&at, obj, &props)?;
     s.sel = Selection { anchor: at, focus: end };
     sel_result(s)
@@ -289,6 +287,7 @@ fn text_box(s: &mut Session, v: &Value) -> CmdResult {
         story: Some(id),
         freeform: None,
         effects: Default::default(),
+        extra: Default::default(),
     };
     s.doc.insert_object(&at, obj, &props)?;
     // Like Word, type straight into the new box.

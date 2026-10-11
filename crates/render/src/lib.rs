@@ -13,6 +13,7 @@ use wordcraft_doc::props::Rgb;
 use wordcraft_fonts::FontDb;
 use wordcraft_layout::Page;
 use wordcraft_layout::display::{DisplayOptions, Draw, Stroke, page_display};
+use wordcraft_layout::wordart::ArtPaint;
 use wordcraft_metafile::{Item, Picture, PlacedItem, Seg};
 
 /// Worker threads for rasterising (0 on the web, where there are no threads).
@@ -521,6 +522,10 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             line(ctx, 0.0);
         }
         Draw::Glyphs { face, size, glyphs, color: c, alpha, synth_bold, synth_italic, .. } => {
+            // Invisible glyphs (WordArt letters are drawn from their outlines) carry text only.
+            if *alpha <= 0.0 {
+                return;
+            }
             let db = FontDb::global();
             let k = *size as f64 / face.upem.max(1.0);
             ctx.set_paint(color(opts.ink(*c), *alpha));
@@ -646,6 +651,32 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 ctx.set_paint(color(opts.ink(*s), 1.0));
                 ctx.set_stroke(kurbo::Stroke::new(w as f64));
                 ctx.stroke_path(&path);
+            }
+        }
+        Draw::Art { path, fx, color: c, alpha } => {
+            let Some(b) = wordcraft_layout::wordart::path_box(path) else { return };
+            if !b.inflate(200.0, 200.0).overlaps(*visible) {
+                return;
+            }
+            ctx.set_transform(view);
+            for l in wordcraft_layout::wordart::art_layers(path, fx, *c, *alpha) {
+                match &l.paint {
+                    ArtPaint::Solid(c, a) => ctx.set_paint(color(opts.ink(*c), *a)),
+                    ArtPaint::Linear { p0, p1, stops } => {
+                        let stops: Vec<peniko::ColorStop> =
+                            stops.iter().map(|(o, c, a)| peniko::ColorStop::from((o.clamp(0.0, 1.0), color(opts.ink(*c), *a)))).collect();
+                        let g = peniko::Gradient::new_linear((f64::from(p0.0), f64::from(p0.1)), (f64::from(p1.0), f64::from(p1.1)))
+                            .with_stops(stops.as_slice());
+                        ctx.set_paint(g);
+                    }
+                }
+                match l.stroke {
+                    Some(w) => {
+                        ctx.set_stroke(kurbo::Stroke::new(f64::from(w.clamp(0.1, 400.0))).with_join(kurbo::Join::Round));
+                        ctx.stroke_path(&l.path);
+                    }
+                    None => ctx.fill_path(&l.path),
+                }
             }
         }
         Draw::Ink { pts, color: c, width, alpha } => {
@@ -784,6 +815,13 @@ pub fn shape_path(kind: ShapeKind, r: kurbo::Rect) -> BezPath {
             p.line_to((r.x1, r.y0));
             p
         }
+        // Connectors are drawn as paths (`Draw::Path`); this is their frame's diagonal.
+        ShapeKind::StraightConnector | ShapeKind::ElbowConnector | ShapeKind::CurvedConnector => {
+            let mut p = BezPath::new();
+            p.move_to((r.x0, r.y0));
+            p.line_to((r.x1, r.y1));
+            p
+        }
         ShapeKind::Arrow => {
             let h = r.height();
             poly(&[
@@ -887,6 +925,7 @@ mod tests {
                 story: None,
                 freeform: None,
                 effects,
+                extra: Default::default(),
             };
             let at = wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 0 };
             d.insert_object(&at, shape, &Default::default()).unwrap();

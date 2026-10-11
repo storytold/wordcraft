@@ -106,6 +106,9 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
         (None, Some(b)) => w.empty("w:lang", &[("w:bidi", b)]),
         (None, None) => {}
     }
+    if let Some(fx) = &c.text_effects {
+        super::wordart::rpr_effects(w, fx);
+    }
 }
 
 /// Does `c` produce any `w:rPr` content (besides a tracked change)?

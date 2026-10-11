@@ -18,6 +18,8 @@ pub struct PropCtx {
     pub minor_font: String,
     /// Style id renames (e.g. a localized default paragraph style id → `Normal`).
     pub alias: HashMap<String, String>,
+    /// The theme's colours (for WordArt effects in theme colours).
+    pub theme: Vec<Rgb>,
 }
 
 impl PropCtx {
@@ -109,6 +111,13 @@ impl PropCtx {
                 "w:lang" => {
                     c.lang = k.attr("w:val").filter(|v| !v.is_empty() && v.len() < 64).map(str::to_string);
                     c.lang_bidi = k.attr("w:bidi").filter(|v| !v.is_empty() && v.len() < 64).map(str::to_string);
+                }
+                n if n.starts_with("w14:") => {
+                    let fx = c.text_effects.get_or_insert_with(Default::default);
+                    super::wordart::read(k, &self.theme, fx);
+                    if fx.is_empty() {
+                        c.text_effects = None;
+                    }
                 }
                 _ => {}
             }

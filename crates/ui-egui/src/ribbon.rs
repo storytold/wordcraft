@@ -227,7 +227,7 @@ fn stack(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
     });
 }
 
-fn mi(ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: Value) {
+pub(crate) fn mi(ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: Value) {
     mi_text(ui, app, tl!(label), id, params);
 }
 
@@ -332,6 +332,14 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                 small(ui, app, "charborder", None, "Character Border", "format.border", json!({}), flag("border"));
                 ui.add_space(4.0);
                 menu_button(ui, app, "effects", None, "Text Effects and Typography", false, |ui, app| {
+                    let theme = app.session.doc.settings.theme_colors.clone();
+                    crate::wordart_menus::style_gallery(ui, app, "format.textEffects");
+                    ui.separator();
+                    ui.menu_button(tl!("Text Fill"), |ui| crate::wordart_menus::fill_menu(ui, app, &theme));
+                    let outline = crate::wordart_menus::current_outline(app);
+                    ui.menu_button(tl!("Text Outline"), |ui| crate::wordart_menus::outline_menu(ui, app, &theme, outline));
+                    crate::wordart_menus::effects_menu(ui, app, &theme, false);
+                    ui.separator();
                     mi(ui, app, "Outline", "format.outline", json!({}));
                     mi(ui, app, "Shadow", "format.shadow", json!({}));
                     mi(ui, app, "Small Caps", "format.smallCaps", json!({}));
@@ -549,6 +557,18 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
             ] {
                 mi(ui, app, l, "insert.shape", json!({"kind": k}));
             }
+            ui.separator();
+            // Connectors: glue their ends to shapes by dragging them (shape.connect).
+            for (l, k, arrow) in [
+                ("Straight Connector", "straightConnector", "none"),
+                ("Straight Arrow Connector", "straightConnector", "end"),
+                ("Elbow Connector", "elbowConnector", "none"),
+                ("Elbow Arrow Connector", "elbowConnector", "end"),
+                ("Curved Connector", "curvedConnector", "none"),
+                ("Curved Arrow Connector", "curvedConnector", "end"),
+            ] {
+                mi(ui, app, l, "insert.shape", json!({"kind": k, "arrow": arrow}));
+            }
         });
         stack(ui, |ui| {
             small(ui, app, "icons", Some("Icons"), "Icons", "insert.icon", json!({}), false);
@@ -604,7 +624,9 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
                 }
                 mi(ui, app, "Field…", "ui.dialog", json!({"name": "field"}));
             });
-            small(ui, app, "wordArt", Some("WordArt"), "WordArt", "insert.wordArt", json!({}), false);
+            menu_button(ui, app, "wordArt", Some("WordArt"), "WordArt", false, |ui, app| {
+                crate::wordart_menus::style_gallery(ui, app, "insert.wordArt")
+            });
             small(ui, app, "dropCap", Some("Drop Cap"), "Drop Cap", "insert.dropCap", json!({}), false);
         });
         stack(ui, |ui| {
@@ -1238,6 +1260,21 @@ fn shape_format(app: &mut WordApp, ui: &mut Ui) {
             });
             menu_button(ui, app, "shapeEffects", Some("Shape Effects"), "Shadow, glow and soft edges", false, |ui, app| {
                 shape_effects_menu(ui, app, &theme, glow_size)
+            });
+        });
+    });
+    group(ui, "WordArt Styles", None, app, |ui, app| {
+        menu_button(ui, app, "wordArt", Some("Styles"), "WordArt Styles", true, |ui, app| {
+            crate::wordart_menus::style_gallery(ui, app, "wordArt.style")
+        });
+        stack(ui, |ui| {
+            menu_button(ui, app, "textFill", Some("Text Fill"), "Text Fill", false, |ui, app| crate::wordart_menus::fill_menu(ui, app, &theme));
+            let outline = crate::wordart_menus::current_outline(app);
+            menu_button(ui, app, "textOutline", Some("Text Outline"), "Text Outline", false, |ui, app| {
+                crate::wordart_menus::outline_menu(ui, app, &theme, outline)
+            });
+            menu_button(ui, app, "transform", Some("Text Effects"), "Text Effects", false, |ui, app| {
+                crate::wordart_menus::effects_menu(ui, app, &theme, true)
             });
         });
     });

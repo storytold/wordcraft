@@ -430,6 +430,26 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.text(10.0, 10.5, 15.0, "A", a, true);
             pen.line_c(&[(3.0, 17.5), (17.0, 17.5)], orange);
         }
+        "textFill" => {
+            pen.text(10.0, 8.5, 13.0, "A", c, true);
+            pen.frect(3.0, 15.0, 17.0, 18.5, a);
+        }
+        "textOutline" => {
+            pen.text(10.0, 8.5, 13.0, "A", a, false);
+            pen.rect(3.0, 15.0, 17.0, 18.5, c);
+        }
+        "transform" => {
+            // Letters along an arch.
+            let arc: Vec<(f32, f32)> = (0..=12)
+                .map(|i| {
+                    let t = std::f32::consts::PI * (1.0 - i as f32 / 12.0);
+                    (10.0 + 7.5 * t.cos(), 15.0 - 9.0 * t.sin())
+                })
+                .collect();
+            pen.line_c(&arc, a);
+            pen.text(10.0, 13.0, 8.0, "A", c, true);
+            pen.line(&[(2.5, 17.5), (17.5, 17.5)]);
+        }
         "dropCap" => {
             pen.text(6.0, 8.0, 12.0, "A", a, true);
             pen.lines(11.0, 17.0, &[4.0, 8.0, 12.0]);

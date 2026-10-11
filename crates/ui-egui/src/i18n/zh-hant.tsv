@@ -1312,3 +1312,40 @@
 	Flip Vertical	垂直翻轉
 	Flip Horizontal	水平翻轉
 	Formatted	已設定格式
+
+# WordArt and connectors (#416).
+	WordArt Styles	文字藝術師樣式
+	Text Fill	文字填滿
+	Text Outline	文字外框
+	Transform	轉換
+	No Fill	無填滿
+	No Outline	無外框
+	Reflection	反射
+	No Reflection	無反射
+	No Transform	無轉換
+	Connect Shapes	連接圖案
+	Straight Connector	直線接點
+	Straight Arrow Connector	直線箭頭接點
+	Elbow Connector	肘形接點
+	Elbow Arrow Connector	肘形箭頭接點
+	Curved Connector	曲線接點
+	Curved Arrow Connector	曲線箭頭接點
+	Arch Up	上彎弧形
+	Arch Down	下彎弧形
+	Circle	圓形
+	Slant Up	向上傾斜
+	Slant Down	向下傾斜
+	Inflate	膨脹
+	Deflate	收縮
+	Chevron Up	向上V形
+	Chevron Down	向下V形
+	Triangle Up	正三角形
+	Triangle Down	倒三角形
+	Solid Accent	實心強調色
+	Light with Outline	淺色加外框
+	Hollow	空心
+	Accent Gradient	強調色漸層
+	Dark with Shadow	深色加陰影
+	Soft Glow	柔和光暈
+	Accent with Reflection	強調色加反射
+	Warm Gradient with Outline	暖色漸層加外框

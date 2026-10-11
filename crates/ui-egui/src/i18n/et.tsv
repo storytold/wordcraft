@@ -1324,3 +1324,40 @@
 	Width and spacing	Laius ja vahe
 	from Unicode (hex)	Unicode (kuueteistkümnend)
 	Formatted	Vormindatud
+
+# WordArt and connectors (#416).
+	WordArt Styles	WordArti laadid
+	Text Fill	Teksti täide
+	Text Outline	Teksti kontuur
+	Transform	Teisenda
+	No Fill	Täiteta
+	No Outline	Kontuurita
+	Reflection	Peegeldus
+	No Reflection	Peegelduseta
+	No Transform	Teisenduseta
+	Connect Shapes	Ühenda kujundid
+	Straight Connector	Sirge ühendusjoon
+	Straight Arrow Connector	Sirge noolega ühendusjoon
+	Elbow Connector	Nurgeline ühendusjoon
+	Elbow Arrow Connector	Nurgeline noolega ühendusjoon
+	Curved Connector	Kaardus ühendusjoon
+	Curved Arrow Connector	Kaardus noolega ühendusjoon
+	Arch Up	Kaar üles
+	Arch Down	Kaar alla
+	Circle	Ring
+	Slant Up	Kalle üles
+	Slant Down	Kalle alla
+	Inflate	Paisutus
+	Deflate	Kokkutõmme
+	Chevron Up	Sparre üles
+	Chevron Down	Sparre alla
+	Triangle Up	Kolmnurk üles
+	Triangle Down	Kolmnurk alla
+	Solid Accent	Ühtlane rõhuvärv
+	Light with Outline	Hele kontuuriga
+	Hollow	Õõnes
+	Accent Gradient	Rõhuvärvi üleminek
+	Dark with Shadow	Tume varjuga
+	Soft Glow	Pehme kuma
+	Accent with Reflection	Rõhuvärv peegeldusega
+	Warm Gradient with Outline	Soe üleminek kontuuriga

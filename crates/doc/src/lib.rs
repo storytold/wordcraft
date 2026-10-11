@@ -11,6 +11,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod bidi;
+pub mod connector;
 pub mod edit;
 pub mod effects;
 pub mod encoding;
@@ -29,6 +30,7 @@ pub mod resolve;
 pub mod section;
 pub mod styles;
 pub mod table;
+pub mod wordart;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -804,6 +806,49 @@ impl Document {
             }
         }
         out
+    }
+
+    /// A drawing id no shape uses yet (for gluing a connector to a shape that has none).
+    pub fn next_shape_id(&self) -> u32 {
+        let mut max = 0u32;
+        let mut see = |o: &InlineObject| match o {
+            InlineObject::Shape { extra, .. } => max = max.max(extra.id),
+            InlineObject::Group { children, .. } => {
+                for c in children {
+                    if let InlineObject::Shape { extra, .. } = &c.obj {
+                        max = max.max(extra.id);
+                    }
+                }
+            }
+            _ => {}
+        };
+        for blocks in std::iter::once(&self.body).chain(self.parts.values().map(|p| &p.blocks)) {
+            for b in blocks {
+                edit::each_para(b, 0, &mut |p| p.objects.iter().for_each(&mut see));
+            }
+        }
+        max.saturating_add(1).max(1)
+    }
+
+    /// Change every inline object in every story (paragraphs inside tables too), copying only
+    /// the blocks whose paragraphs `wants` says have objects to change.
+    pub fn objects_mut(&mut self, wants: &dyn Fn(&InlineObject) -> bool, f: &mut dyn FnMut(&mut InlineObject)) {
+        let mut stories: Vec<&mut Blocks> = vec![&mut self.body];
+        stories.extend(self.parts.values_mut().map(|p| &mut p.blocks));
+        for blocks in stories {
+            for b in blocks.iter_mut() {
+                let mut any = false;
+                edit::each_para(b, 0, &mut |p| any |= p.objects.iter().any(wants));
+                if any {
+                    edit::each_para_mut(Arc::make_mut(b), 0, &mut |p| {
+                        if p.objects.iter().any(wants) {
+                            p.objects.iter_mut().filter(|o| wants(o)).for_each(&mut *f);
+                            p.touch();
+                        }
+                    });
+                }
+            }
+        }
     }
 
     /// Number of paragraphs in the body (all depths).
