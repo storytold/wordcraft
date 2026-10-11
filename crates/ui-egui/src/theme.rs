@@ -79,6 +79,55 @@ impl From<Appearance> for String {
     }
 }
 
+/// Interface size (File › Options › General, `ui.interfaceSize`), in percent (#475): scales the
+/// ribbon, menus, panes and dialogs on top of the display scale the system reports, through
+/// egui's zoom factor. Document zoom (View › Zoom) is a separate setting and never changes with it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[serde(from = "serde_json::Value", into = "u16")]
+pub struct InterfaceSize(u16);
+
+impl InterfaceSize {
+    pub const MIN: u16 = 80;
+    pub const MAX: u16 = 200;
+    pub const DEFAULT: InterfaceSize = InterfaceSize(100);
+    /// The choices in File › Options, in percent.
+    pub const PRESETS: [u16; 8] = [80, 90, 100, 110, 125, 150, 175, 200];
+
+    /// A size from any number: rounded and clamped to 80–200 %; `None` for NaN or infinity.
+    pub fn from_percent(percent: f64) -> Option<InterfaceSize> {
+        percent.is_finite().then(|| InterfaceSize(percent.round().clamp(f64::from(Self::MIN), f64::from(Self::MAX)) as u16))
+    }
+
+    pub fn percent(self) -> u16 {
+        self.0
+    }
+
+    /// The egui zoom factor (1.0 at 100 %).
+    pub fn zoom_factor(self) -> f32 {
+        f32::from(self.0) / 100.0
+    }
+}
+
+impl Default for InterfaceSize {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// A saved value that isn't a number reads as 100 %, and an out-of-range one is clamped, rather than
+/// discarding the whole `ui.json`.
+impl From<serde_json::Value> for InterfaceSize {
+    fn from(v: serde_json::Value) -> Self {
+        v.as_f64().and_then(InterfaceSize::from_percent).unwrap_or_default()
+    }
+}
+
+impl From<InterfaceSize> for u16 {
+    fn from(s: InterfaceSize) -> Self {
+        s.0
+    }
+}
+
 /// Every colour the UI uses; widgets never hard-code colours.
 #[derive(Clone, Copy, Debug)]
 pub struct Tokens {
