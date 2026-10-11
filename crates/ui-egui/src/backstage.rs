@@ -375,6 +375,7 @@ fn options_page(app: &mut WordApp, ui: &mut Ui) {
         }
     });
     theme_picker(app, ui);
+    interface_size_picker(app, ui);
     // The browser can't write to the user's files, so AutoSave can't be turned on there (#176).
     let browser = app.autosave_block() == Some(crate::AutoSaveBlock::Browser);
     let mut autosave = app.autosave && !browser;
@@ -422,6 +423,29 @@ fn theme_picker(app: &mut WordApp, ui: &mut Ui) {
             }
         });
     });
+}
+
+/// File ▸ Options ▸ Interface size: 80–200 %, on top of the system's display scale (#475).
+fn interface_size_picker(app: &mut WordApp, ui: &mut Ui) {
+    use crate::theme::InterfaceSize;
+    let current = app.ui.interface_size.percent();
+    ui.horizontal(|ui| {
+        ui.label(tl!("Interface size:"));
+        egui::ComboBox::from_id_salt("interface_size").selected_text(format!("{current}%")).width(220.0).show_ui(ui, |ui| {
+            for pct in InterfaceSize::PRESETS {
+                if ui.selectable_label(current == pct, format!("{pct}%")).clicked() {
+                    let _ = app.run("ui.interfaceSize", json!({"percent": pct}));
+                }
+            }
+        });
+    });
+    ui.label(
+        egui::RichText::new(tl!(
+            "Makes the ribbon, menus and dialogs larger or smaller, on top of your system's display scaling. Document zoom is separate."
+        ))
+        .small()
+        .weak(),
+    );
 }
 
 /// File ▸ Options ▸ Interface language: follow the system (the default) or pick one (#8).
