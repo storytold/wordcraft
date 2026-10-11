@@ -522,6 +522,10 @@ impl Reader<'_> {
                     *note = Some((kind, id, None));
                 }
             }
+            // The lines of a note separator (only there).
+            "w:separator" | "w:continuationSeparator" if self.in_note_sep => {
+                self.emit_obj(sc, pb, InlineObject::note_separator(k.name == "w:continuationSeparator"), props);
+            }
             "w:commentReference" => {
                 if let Some(cid) = k.attr("w:id").and_then(|i| self.comment_id(i))
                     && !self.comments_ended.contains(&cid)

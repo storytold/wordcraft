@@ -19,7 +19,7 @@ use wordcraft_doc::para::OBJ;
 use wordcraft_doc::props::Rgb;
 use wordcraft_doc::section::NumFormat;
 use wordcraft_doc::styles::{Style, StyleKind, StyleSheet, TableStyleParts};
-use wordcraft_doc::{Block, Blocks, Comment, Document, InlineObject, PartKind, Revision, RevisionKind};
+use wordcraft_doc::{Block, Blocks, Comment, Document, InlineObject, Paragraph, PartKind, Revision, RevisionKind, para_block};
 
 use crate::DocxError;
 use crate::package::{ContentTypes, EMBEDDED_PARTS, EmbeddedManifest, MAX_VBA_RELATED, Package, Rels, VBA_PROJECT_PART, VBA_RELATED, rel_is, rt};
@@ -46,6 +46,9 @@ pub(crate) struct Reader<'p> {
     /// The note being read (kind, part id): its `w:footnoteRef` / `w:endnoteRef` mark is a
     /// reference to itself.
     current_note: Option<(NoteKind, u32)>,
+    /// Reading a footnote or endnote separator or continuation notice (where the `w:separator`
+    /// and `w:continuationSeparator` run elements belong).
+    in_note_sep: bool,
     pub comment_map: HashMap<String, u32>,
     pub comments_ended: HashSet<u32>,
     pub bookmarks: HashMap<String, String>,
@@ -103,6 +106,7 @@ pub(crate) fn read_package(bytes: &[u8]) -> Result<Document, DocxError> {
         footnotes: HashMap::new(),
         endnotes: HashMap::new(),
         current_note: None,
+        in_note_sep: false,
         comment_map: HashMap::new(),
         comments_ended: HashSet::new(),
         bookmarks: HashMap::new(),
@@ -717,8 +721,13 @@ impl Reader<'_> {
         let rels = self.pkg.rels(path);
         let tag = if foot { "w:footnote" } else { "w:endnote" };
         for n in root.children(tag) {
-            if n.attr("w:type").is_some_and(|t| t != "normal") {
-                continue;
+            match n.attr("w:type") {
+                None | Some("normal") => {}
+                Some(t @ ("separator" | "continuationSeparator" | "continuationNotice")) => {
+                    self.read_note_sep(n, &rels, foot, t);
+                    continue;
+                }
+                Some(_) => continue,
             }
             let Some(fid) = n.attr("w:id").and_then(int) else { continue };
             if self.doc.parts.len() >= MAX_PARTS {
@@ -745,6 +754,36 @@ impl Reader<'_> {
             }
         }
         Ok(())
+    }
+
+    /// A document's own separator, continuation separator or continuation notice (`kind`, the
+    /// note's `w:type`) for its footnotes or endnotes. The first of each kind counts.
+    fn read_note_sep(&mut self, n: &El, rels: &Rels, foot: bool, kind: &str) {
+        let seps = if foot { &self.doc.footnote_separators } else { &self.doc.endnote_separators };
+        let taken = match kind {
+            "separator" => seps.separator.is_some(),
+            "continuationSeparator" => seps.continuation_separator.is_some(),
+            _ => seps.continuation_notice.is_some(),
+        };
+        if taken {
+            return;
+        }
+        let mut sc = StoryCtx::default();
+        let mut blocks = Blocks::new();
+        self.in_note_sep = true;
+        self.read_blocks(&mut sc, n, rels, &mut blocks, 0);
+        self.flush_pending(&mut sc, &mut blocks);
+        self.in_note_sep = false;
+        if blocks.is_empty() {
+            blocks.push(para_block(Paragraph::new()));
+        }
+        let seps = if foot { &mut self.doc.footnote_separators } else { &mut self.doc.endnote_separators };
+        let slot = match kind {
+            "separator" => &mut seps.separator,
+            "continuationSeparator" => &mut seps.continuation_separator,
+            _ => &mut seps.continuation_notice,
+        };
+        *slot = Some(blocks);
     }
 
     fn read_comments(&mut self, path: &str, ext: Option<&str>) -> Result<(), DocxError> {

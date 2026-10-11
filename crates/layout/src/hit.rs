@@ -114,7 +114,7 @@ fn objects_in(items: &[Placed], index: usize) -> impl Iterator<Item = ObjectHit>
 fn text_at(p: &Page, index: usize, x: f32, y: f32) -> Option<StoryRef> {
     let boxes: Vec<StoryRef> = objects(p, index).filter_map(|o| o.text_box.map(StoryRef::Part)).collect();
     p.items.iter().find_map(|it| match it {
-        Placed::Lines { story, .. } if boxes.contains(story) => None,
+        Placed::Lines { story, .. } if boxes.contains(story) || *story == crate::DECOR_STORY => None,
         Placed::Lines { story, .. } if it.turned_bounds().is_some() => {
             it.turned_bounds().filter(|r| r.expand(2.0).contains(Point::new(x, y))).map(|_| *story)
         }
