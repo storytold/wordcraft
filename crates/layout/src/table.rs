@@ -358,16 +358,26 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
         tborders.overlay(&own);
     }
     let first_cell = t.rows.first().and_then(|r| r.cells.first());
-    let x = match t.props.align {
-        Some(Align::Center) => (avail - total) / 2.0,
-        Some(Align::Right) => avail - total,
-        _ if ctx.doc.settings.compat_mode >= 15 => {
-            // The border is centred on the edge, so half of it sits outside: Word moves the
-            // table in by that half.
-            let border = first_cell.and_then(|c| c.props.borders.and_then(|b| b.left)).or(tborders.left);
-            indent + border.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0) / 2.0)
-        }
-        _ => indent - first_cell_left_margin_in(t, margins_def),
+    // A right-to-left table (`w:bidiVisual`) mirrors: its first column stands at the right, its
+    // start alignment and indent are measured from the right margin, and each cell's start
+    // (left) margin and border are on its right.
+    let rtl = t.props.bidi_visual;
+    // How far in from the start margin the table's edge sits when it is start-aligned.
+    let start_offset = if ctx.doc.settings.compat_mode >= 15 {
+        // The border is centred on the edge, so half of it sits outside: Word moves the table in
+        // by that half.
+        let border = first_cell.and_then(|c| c.props.borders.and_then(|b| b.left)).or(tborders.left);
+        indent + border.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0) / 2.0)
+    } else {
+        indent - first_cell_left_margin_in(t, margins_def)
+    };
+    let x = match (t.props.align, rtl) {
+        (Some(Align::Center), _) => (avail - total) / 2.0,
+        // End alignment: the right margin, or the left one in a right-to-left table.
+        (Some(Align::Right), false) => avail - total,
+        (Some(Align::Right), true) => 0.0,
+        (_, true) => avail - total - start_offset,
+        (_, false) => start_offset,
     };
     let nrows = t.rows.len();
     let header_rows = t.props.look.header_row;
@@ -402,7 +412,11 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             let span = cell.span();
             let x0 = colx.get(g).copied().unwrap_or(acc);
             let x1 = colx.get((g + span).min(ncols)).copied().unwrap_or(acc);
+            // Right to left: grid columns run from the right edge, and the start (left) margin
+            // is on the cell's right.
+            let (x0, x1) = if rtl { ((acc - x1).max(0.0), (acc - x0).max(0.0)) } else { (x0, x1) };
             let margins = cell.props.margins.unwrap_or(margins_def);
+            let margins = if rtl { [margins[0], margins[3], margins[2], margins[1]] } else { margins };
             let cw = (x1 - x0 - margins[1] - margins[3]).max(4.0);
             let mut fill = cell.props.shading;
             let region = region_of(t, style.as_ref(), ri, g, span, ncols);
@@ -462,6 +476,10 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                 && let Some(b) = parts.and_then(|p| p.total_border_top)
             {
                 borders.top = Some(b);
+            }
+            // The logical start (left) and end (right) borders, drawn mirrored in an RTL table.
+            if rtl {
+                std::mem::swap(&mut borders.left, &mut borders.right);
             }
             // Word keeps the cell's text clear of its top border (and the last row's of its bottom
             // border): the border's width sits on top of the cell margin.

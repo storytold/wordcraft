@@ -449,3 +449,73 @@ fn inline_picture_in_rtl_text_sits_in_its_place() {
     assert!(placed.iter().any(|r| (r.x - a).abs() < 0.5), "placed {placed:?} vs {a}");
     assert!(a < 540.0 - 20.0, "after the first word, so left of the right margin");
 }
+
+/// A right-to-left table (`w:bidiVisual`, #362): the first logical column stands at the right
+/// edge, the table is start-aligned against the right margin, and each cell's start (left)
+/// margin and border are drawn on its right. Clicks find cells by where they are drawn.
+#[test]
+fn rtl_table_lays_its_columns_out_right_to_left() {
+    use wordcraft_doc::props::{Border, Borders};
+    use wordcraft_doc::{Path, Table};
+    let mut d = Document::from_text("before\nafter");
+    let mut t = Table::new(1, 3, 300.0);
+    t.props.bidi_visual = true;
+    // Start margin 10pt, end margin 2pt.
+    t.props.cell_margins = Some([0.0, 10.0, 0.0, 2.0]);
+    for (i, c) in t.rows[0].cells.iter_mut().enumerate() {
+        c.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("c{i}"), Default::default()))];
+    }
+    // A thick start border on the first cell.
+    t.rows[0].cells[0].props.borders = Some(Borders { left: Some(Border::single(3.0)), ..Default::default() });
+    d.insert_block(StoryRef::Body, &Path::top(1), Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let items = &l.pages[0].items;
+    let cell =
+        |k: usize| items.iter().find_map(|i| if let Placed::Cell { rect, cell, .. } = i { (*cell == k).then_some(*rect) } else { None }).unwrap();
+    let (c0, c1, c2) = (cell(0), cell(1), cell(2));
+    // Start-aligned against the right margin (72 + 468), first column rightmost.
+    let right = 72.0 + 468.0;
+    assert!((c0.right() - right).abs() < 2.0, "{c0:?}");
+    assert!(c0.x > c1.x && c1.x > c2.x, "{c0:?} {c1:?} {c2:?}");
+    assert!((c1.right() - c0.x).abs() < 0.01 && (c2.right() - c1.x).abs() < 0.01);
+    assert!((c2.x - (right - 300.0)).abs() < 2.0, "{c2:?}");
+    // The first cell's text sits its end margin (2pt) in from the cell's left edge.
+    let text_x =
+        items.iter().find_map(|i| if let Placed::Lines { path, x, .. } = i { (path.0 == [1, 0, 0, 0]).then_some(*x) } else { None }).unwrap();
+    assert!((text_x - (c0.x + 2.0)).abs() < 0.5, "text at {text_x}, cell {c0:?}");
+    // The thick start border is drawn on the cell's right edge.
+    let thick: Vec<f32> = items
+        .iter()
+        .filter_map(|i| match i {
+            Placed::Rule { x0, x1, border, .. } if (x0 - x1).abs() < 0.01 && (border.width - 3.0).abs() < 0.01 => Some(*x0),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(thick.len(), 1, "{thick:?}");
+    assert!((thick[0] - c0.right()).abs() < 0.01, "{thick:?} vs {c0:?}");
+    // A click in the rightmost cell lands in the first logical cell.
+    let hit = l.cell_at(0, c0.x + c0.w / 2.0, c0.y + 2.0).unwrap();
+    assert_eq!((hit.2, hit.3), (0, 0), "{hit:?}");
+}
+
+/// A right-to-left section (`w:sectPr/w:bidi`, #362): newspaper columns run right to left, the
+/// first column at the right, and the line between them stays midway.
+#[test]
+fn rtl_section_puts_its_first_column_on_the_right() {
+    use wordcraft_doc::section::Columns;
+    let text = "Columns flow from the right edge in a right-to-left section. ".repeat(150);
+    let mut d = Document::from_text(&text);
+    d.last_section.rtl = true;
+    d.last_section.columns = Columns { count: 2, space: 36.0, separator: true, widths: Vec::new() };
+    let l = lay(&d);
+    let page = &l.pages[0];
+    let xs: Vec<f32> = page.items.iter().filter_map(|i| if let Placed::Lines { x, .. } = i { Some(*x) } else { None }).collect();
+    // Columns are 216pt wide: the first at 72 + 252, the second at the left margin.
+    assert!((xs[0] - (72.0 + 252.0)).abs() < 1.0, "first column on the right: {xs:?}");
+    assert!(xs.iter().any(|x| (x - 72.0).abs() < 1.0), "second column on the left: {xs:?}");
+    let caret = l.caret(&Pos::body(0, 0)).unwrap();
+    assert!(caret.x > 72.0 + 252.0 - 1.0, "{caret:?}");
+    let sep: Vec<f32> =
+        page.items.iter().filter_map(|i| if let Placed::Rule { x0, x1, .. } = i { ((x0 - x1).abs() < 0.01).then_some(*x0) } else { None }).collect();
+    assert_eq!(sep, vec![72.0 + 234.0], "line between the columns");
+}

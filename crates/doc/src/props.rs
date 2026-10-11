@@ -787,6 +787,11 @@ pub struct TableProps {
     /// Tracked formatting change (`w:tblPrChange`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fmt_change: Option<Box<PropChange<TableProps>>>,
+    /// Right-to-left table (`w:bidiVisual`): the first logical column stands at the right edge,
+    /// cell margins and left/right borders mirror, and the alignment and indent are measured from
+    /// the right margin.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub bidi_visual: bool,
 }
 
 /// Where a floating table sits; the text after it wraps around it.

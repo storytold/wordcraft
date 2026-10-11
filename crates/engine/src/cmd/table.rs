@@ -163,8 +163,17 @@ pub fn specs() -> Vec<CommandSpec> {
             select_cells(s, &tp, Some((r, Some(c))))
         })
         .pure()),
+        t(CommandSpec::new("table.rtl", "Right-to-Left Table", "Table Layout › Table", |s, v| {
+            let (tp, _, _) = cell(s)?;
+            let on = match p::bool(v, "value") {
+                Some(b) => b,
+                None => !s.doc.table(s.sel.focus.story, &tp).is_some_and(|t| t.props.bidi_visual),
+            };
+            with_table(s, |t| t.props.bidi_visual = on)
+        })
+        .params(r#"{"value"?: bool} (true: the first column stands at the right; without a value it toggles)"#)),
         t(CommandSpec::new("table.properties", "Properties", "Table Layout › Table", properties).params(
-            r#"{"align"?: "left|center|right", "width"?: pt|null, "widthPct"?: percent, "indent"?: pt, "rowHeight"?: pt|null, "rowHeightRule"?: "atLeast|exact", "allowBreak"?: bool, "headerRow"?: bool, "columnWidth"?: pt, "cellWidth"?: pt|null, "valign"?: "top|center|bottom"} (row, column and cell settings apply to the caret's; without settings it returns the current ones)"#,
+            r#"{"align"?: "left|center|right", "rtl"?: bool, "width"?: pt|null, "widthPct"?: percent, "indent"?: pt, "rowHeight"?: pt|null, "rowHeightRule"?: "atLeast|exact", "allowBreak"?: bool, "headerRow"?: bool, "columnWidth"?: pt, "cellWidth"?: pt|null, "valign"?: "top|center|bottom"} (row, column and cell settings apply to the caret's; without settings it returns the current ones)"#,
         )),
         CommandSpec::new("table.fromText", "Convert Text to Table", "Insert › Tables", from_text).params(r#"{"separator"?: "tab|comma"}"#),
         CommandSpec::new("table.quick", "Quick Tables", "Insert › Tables", quick_table).params(r#"{"kind"?: "calendar|tabular|matrix"}"#),
@@ -235,8 +244,20 @@ fn set_column_width(t: &mut Table, r: usize, c: usize, w: f32) {
 /// cell settings apply to the caret's. Without any setting it returns the current values.
 fn properties(s: &mut Session, v: &Value) -> CmdResult {
     let (tp, r, c) = cell(s)?;
-    let keys =
-        ["align", "width", "widthPct", "indent", "rowHeight", "rowHeightRule", "allowBreak", "headerRow", "columnWidth", "cellWidth", "valign"];
+    let keys = [
+        "align",
+        "rtl",
+        "width",
+        "widthPct",
+        "indent",
+        "rowHeight",
+        "rowHeightRule",
+        "allowBreak",
+        "headerRow",
+        "columnWidth",
+        "cellWidth",
+        "valign",
+    ];
     if !keys.iter().any(|k| v.get(*k).is_some()) {
         let t = s.doc.table(s.sel.focus.story, &tp).cloned().unwrap_or_default();
         let mut out = serde_json::to_value(&t.props).unwrap_or(Value::Null);
@@ -284,9 +305,13 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
     let header = p::bool(v, "headerRow");
     let column_width = p::f32(v, "columnWidth").map(|x| x.clamp(6.0, 1584.0));
     let cell_width = size("cellWidth", 6.0, 1584.0);
+    let rtl = p::bool(v, "rtl");
     with_table(s, |t| {
         if let Some(a) = align {
             t.props.align = Some(a);
+        }
+        if let Some(on) = rtl {
+            t.props.bidi_visual = on;
         }
         if let Some(i) = indent {
             t.props.indent = Some(i);

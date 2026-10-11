@@ -1215,6 +1215,11 @@ mod tests {
         assert_eq!(t.props.align, Some(wordcraft_doc::props::Align::Center));
         assert_eq!((t.rows[0].props.height, t.rows[0].props.header), (Some(36.0), true));
         assert_eq!(dialogs::TableForm::read(&a).unwrap().changes(&f), json!({}), "the dialog reopens with the new values");
+        // Table direction (#362) is one more setting of the same step.
+        let mut g = dialogs::TableForm::read(&a).unwrap();
+        let basis = g.clone();
+        g.rtl = true;
+        assert_eq!(g.changes(&basis), json!({"rtl": true}));
     }
 
     /// Issue #139: Ctrl+wheel over the page didn't zoom.

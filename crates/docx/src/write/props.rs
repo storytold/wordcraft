@@ -360,6 +360,9 @@ fn tblpr_inner(w: &mut W, t: &TableProps) {
     if let Some(f) = &t.float {
         table_float(w, f);
     }
+    if t.bidi_visual {
+        w.empty("w:bidiVisual", &[]);
+    }
     if let Some(p) = t.width_pct {
         w.empty("w:tblW", &[("w:w", &n(round(p.clamp(0.0, 1000.0) * 50.0))), ("w:type", "pct")]);
     } else if let Some(v) = t.width {

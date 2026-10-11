@@ -1059,8 +1059,10 @@ impl PageBuilder<'_> {
             if s.columns.separator && s.columns.count > 1 {
                 let cols = s.column_boxes();
                 for w in cols.windows(2) {
-                    if let [(ax, aw), (bx, _)] = w {
-                        let x = s.margin_left + s.gutter + (ax + aw + bx) / 2.0;
+                    if let [(ax, aw), (bx, bw)] = w {
+                        // Midway across the space between neighbours (leftwards in an RTL section).
+                        let mid = if bx >= ax { (ax + aw + bx) / 2.0 } else { (bx + bw + ax) / 2.0 };
+                        let x = s.margin_left + s.gutter + mid;
                         decor.push(Placed::Rule { x0: x, y0: body_top, x1: x, y1: s.page_h - s.margin_bottom, border: Border::single(0.5) });
                     }
                 }
