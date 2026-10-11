@@ -23,6 +23,45 @@ People trust WordCraft with their writing; a crash loses their work. **This outr
 - Fonts: new font files go to [`storytold/craft-fonts`](https://github.com/storytold/craft-fonts), never this repo; it's an optional build input (`CRAFT_FONTS_DIR`). Documents asking for proprietary fonts (Calibri, Aptos, Cambria…) are rendered with installed system fonts or metric-compatible open substitutes (`crates/fonts/src/word.rs`) — never bundle proprietary fonts.
 - Templates, sample documents and themes are our own text and colours (`crates/engine/src/sample.rs`, `cmd/design.rs`). Demo images are public domain, with sources recorded.
 
+## Icons
+All icons are drawn in code in `crates/ui-egui/src/icons.rs` (`icons::paint(painter, rect, name, ink, accent)`). Original artwork only — see Assets. Every icon must say what its command does **at a glance**: the ribbon is icon-dense, so an icon that needs its label to be understood is a bug.
+
+**Grid and drawing**
+- 16 × 16 unit grid, drawn at **16 px** (small buttons, menus, toolbars) or **32 px** (large ribbon buttons). Don't paint at other sizes.
+- Stroke width comes from `stroke_px` (≈1.25 px at 16, 2 px at 32); never set a width by hand. Bold lettering uses `heavy`.
+- Every corner is rounded with `CORNER` (lines, outlines and fills alike); arrow heads, checks and letter apexes use `TIP`. Hand-drawn strokes and rope use `curve` (smooth), not polylines.
+- Keep strokes between 1 and 15 so nothing is clipped. Draw only inside the given rect — never spill into neighbours.
+
+**Colour**
+- Line work in the ink colour; **one** meaningful detail in the accent (the arrow, the new item, the changed part); an optional soft tint (`pen.t`) inside the main shape.
+- Status colours only where the colour *is* the meaning, and only from the theme: green = add / accept / OK, red = remove / reject / error, orange = warning. Never hard-code colours; never use black-alpha shadows (they vanish in dark mode).
+- Colour commands (font colour, highlight, shading) draw their bar in the accent; the split button passes the current colour as the accent.
+- Disabled icons pass the same colour as ink and accent; everything (status colours, tint) follows it.
+
+**Spacing**
+- Each part has **one** colour. Parts of different colours never touch.
+- Separate parts keep **≥ 1.25 units of clear space** (≥ 2.25 between stroke centre lines).
+- Shapes never overlap or cross; show depth by leaving a gap or drawing only the visible part of the back shape (see `copy`), not by stacking.
+- Balance the composition in the frame; don't crowd one corner.
+
+**Reused elements — never redraw them by hand**
+Anything that appears in more than one icon is drawn by its `Pen` helper at fixed proportions:
+`page_h` / `page_landscape` (one page ratio, `PAGE_RATIO`; text only via `page_slot`/`page_rows`, and only on full-size pages), `bubble`, `window`, `table`, `picture`, `lens`, `pencil`, `lock`, `person` / `person_filled`, `chain`, `brackets`, `scribble`, `glyph_a` / `glyph_small_a`, `plus`, `check`, `cross`, `arrow` / `span` / `head` (`HEAD`), `cycle`.
+- If you need an element twice, add a helper — don't copy coordinates.
+- Scale a helper; never stretch it. Windows may change aspect with the arrangement shown (side by side = tall, stacked = wide) but must match within an arrangement.
+- Free text lines use one pitch for paragraphs (3 units: 3.5, 6.5, 9.5, 12.5) and one for lists (5 units: 3, 8, 13).
+
+**Meaning**
+- Draw what the command does, not a letter, unless the command is about letters (Bold, Italic, Aa…). Letters from the font must exist in Inter (`interface_symbols_have_glyphs`); draw other scripts with strokes.
+- One command, one drawing. Only true aliases share an arm (`ALIASES`); `every_icon_is_distinct` enforces it.
+- Related commands share their base and differ in one clear detail (Find / Zoom / Zoom In / Zoom Out; Comment / New / Delete / Resolve).
+- Don't imitate another product's icon composition, and don't approximate third-party logos.
+
+**Adding or changing an icon**
+1. Add the name to `NAMES`, draw it with the helpers, keep the module docs' rules.
+2. Look at it: render at 16 and 32 px, on the light and dark ribbon, next to its neighbours in the same ribbon group (headless `ui_shot`, then read the PNG).
+3. `cargo test -p wordcraft-ui-egui` (distinct drawings, no fallback tiles, glyph coverage) and `cargo xtask ci`.
+
 ## Clean room
 - Microsoft Word is installed on the dev machine and may be **observed** black-box: run it, use its UI with synthetic documents, take screenshots **of its window only** (by window id — the machine runs other work; never capture the whole desktop) stored only under `plan/word/screenshots/` (gitignored, never committed).
 - Never read, disassemble or copy anything inside the Word bundle (file names/listings only). Never commit files produced by Word. Never copy Microsoft wording beyond feature names.
