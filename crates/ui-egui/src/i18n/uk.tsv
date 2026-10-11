@@ -1323,3 +1323,44 @@
 	Flip Vertical	Віддзеркалити по вертикалі
 	Flip Horizontal	Віддзеркалити по горизонталі
 	Formatted	Відформатовано
+	Add Shape	Додати фігуру
+	Change Colors	Змінити кольори
+	Change Layout	Змінити макет
+	Create Graphic	Створення графіки
+	Demote	Понизити рівень
+	Edit Items	Редагувати елементи
+	Layouts	Макети
+	Promote	Підвищити рівень
+	Reset Graphic	Скинути графіку
+	SmartArt Design	Конструктор SmartArt
+	SmartArt Styles	Стилі SmartArt
+	Text Pane	Область тексту
+	List	Список
+	Process	Процес
+	Cycle	Цикл
+	Hierarchy	Ієрархія
+	Relationship	Зв’язок
+	Pyramid	Піраміда
+	Basic List	Простий список
+	Basic Process	Простий процес
+	Basic Cycle	Простий цикл
+	Basic Pyramid	Проста піраміда
+	Basic Radial	Проста радіальна
+	Basic Matrix	Проста матриця
+	Basic Venn	Проста діаграма Венна
+	Shows items of equal weight as blocks in rows.	Показує рівноцінні елементи як блоки в рядках.
+	Shows steps in order, left to right, with arrows between them.	Показує кроки по порядку, зліва направо, зі стрілками між ними.
+	Shows steps that repeat, around a circle.	Показує кроки, що повторюються, по колу.
+	Shows a tree: each item below the item it belongs to.	Показує дерево: кожен елемент під елементом, до якого він належить.
+	Shows parts that build on each other, largest at the bottom.	Показує частини, що спираються одна на одну, найбільша внизу.
+	Shows items around a central idea: the first item is the centre.	Показує елементи навколо центральної ідеї: перший елемент — центр.
+	Shows parts of a whole as quadrants.	Показує частини цілого як квадранти.
+	Shows overlapping ideas as overlapping circles.	Показує ідеї, що перетинаються, як кола, що перетинаються.
+	Accent {n}	Акцент {n}
+	Colorful	Різнокольоровий
+	Insert SmartArt	Вставити SmartArt
+	One line per item. Enter adds an item.	Один рядок на елемент. Enter додає елемент.
+	Remove	Видалити
+	Add\nShape	Додати\nфігуру
+	Change\nColors	Змінити\nкольори
+	Reset\nGraphic	Скинути\nграфіку

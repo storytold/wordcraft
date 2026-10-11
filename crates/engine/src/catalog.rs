@@ -401,6 +401,13 @@ Picture Format|Accessibility|Alt Text|picture.altText
 Picture Format|Size|Crop|picture.crop
 Picture Format|Size|Size|picture.size
 Picture Format|Size|Rotation|arrange.rotation
+SmartArt Design|Create Graphic|Add Shape|smartArt.addShape
+SmartArt Design|Create Graphic|Promote|smartArt.promote
+SmartArt Design|Create Graphic|Demote|smartArt.demote
+SmartArt Design|Create Graphic|Text Pane|smartArt.textPane
+SmartArt Design|Layouts|Layouts|smartArt.layout
+SmartArt Design|SmartArt Styles|Change Colors|smartArt.colors
+SmartArt Design|Reset|Reset Graphic|smartArt.reset
 Shape Format|Shape Styles|Shape Fill|shape.fill
 Shape Format|Shape Styles|Shape Outline|shape.outline
 Shape Format|Shape Styles|Shape Effects|shape.effects

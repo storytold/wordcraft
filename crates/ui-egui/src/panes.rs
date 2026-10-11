@@ -1,4 +1,5 @@
-//! Side panes: Navigation (headings, pages, search results), Clipboard, Styles, Style Inspector, Comments.
+//! Side panes: Navigation (headings, pages, search results), Clipboard, Styles, Style Inspector, Comments,
+//! and the SmartArt Text Pane.
 
 use egui::{Stroke, Ui, vec2};
 use serde_json::{Value, json};
@@ -9,6 +10,20 @@ use crate::theme::{Tokens, regular, semibold};
 
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
+    // SmartArt Design › Text Pane, while a SmartArt graphic WordCraft can edit is selected.
+    if app.session.view.smart_art_pane && wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session).is_some() {
+        egui::Panel::left("smart_art_pane")
+            .default_size(250.0)
+            .resizable(true)
+            .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
+            .show(ui, |ui| {
+                if header(ui, "Text Pane") {
+                    let _ = app.run("smartArt.textPane", json!({"value": false}));
+                    return;
+                }
+                crate::dialogs_smart_art::text_pane(app, ui);
+            });
+    }
     if app.session.view.nav_pane {
         egui::Panel::left("nav_pane")
             .default_size(260.0)

@@ -234,7 +234,9 @@ fn kind_of(prst: &str) -> Option<ShapeKind> {
         "ellipse" => ShapeKind::Ellipse,
         "triangle" => ShapeKind::Triangle,
         "diamond" => ShapeKind::Diamond,
-        "line" | "straightConnector1" => ShapeKind::Line,
+        // A line runs from its box's top-left to its bottom-right corner (a path; the Line shape
+        // kind draws the other diagonal).
+        "line" | "straightConnector1" => return None,
         "rightArrow" => ShapeKind::Arrow,
         "star5" | "star4" | "star6" => ShapeKind::Star,
         "heart" => ShapeKind::Heart,
@@ -466,9 +468,14 @@ fn text(sp: &El, xf: Xf, b: [f64; 4], theme: &[Rgb], filled: bool, fit: f32, out
     }
 }
 
+/// How wide `s` is at `size` points by the estimate chart and diagram text uses.
+pub(crate) fn text_width(s: &str, size: f32) -> f32 {
+    text_w(s, size)
+}
+
 /// Splits `text` into at most `max` lines of whole words that fit `width` points (by the shared
 /// text width estimate); a word wider than that keeps its own line.
-fn wrap(text: &str, size: f32, width: f32, max: usize) -> Vec<String> {
+pub(crate) fn wrap(text: &str, size: f32, width: f32, max: usize) -> Vec<String> {
     let limit = if width > 0.0 && size > 0.0 { width } else { f32::INFINITY };
     let space = text_w(" ", size);
     let mut lines = Vec::new();
@@ -519,6 +526,14 @@ impl Reader<'_> {
         let data = super::part_of(rels, dm, rt::DIAGRAM_DATA)?;
         let id = self.graphic_part(&data)?.find("dsp:dataModelExt")?.attr("relId")?.to_string();
         rels.by_id(&id).is_some_and(|r| !r.external && rel_is(&r.kind, rt::DIAGRAM_DRAWING)).then_some(id)
+    }
+
+    /// The SmartArt model of a diagram WordCraft wrote (its data part exactly as WordCraft writes
+    /// it); `None` for any other.
+    pub(super) fn smart_art_spec(&mut self, gd: &El, rels: &Rels) -> Option<wordcraft_doc::smart_art::SmartArtSpec> {
+        let dm = gd.child("dgm:relIds")?.attr("r:dm")?;
+        let data = super::part_of(rels, dm, rt::DIAGRAM_DATA)?;
+        crate::smart_art::spec_of(self.graphic_part(&data)?.as_ref())
     }
 
     /// The items of the SmartArt drawing part at `path`, fitted to `w` × `h` points.

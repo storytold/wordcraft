@@ -19,6 +19,11 @@ pub fn has_shape_selected(s: &wordcraft_engine::Session) -> bool {
     matches!(wordcraft_engine::cmd::objects::selected(s), Some((_, wordcraft_doc::para::InlineObject::Shape { .. })))
 }
 
+/// Whether the selection is a SmartArt graphic WordCraft can edit (so SmartArt Design is shown).
+pub fn has_smart_art_selected(s: &wordcraft_engine::Session) -> bool {
+    wordcraft_engine::cmd::smart_art::selected_smart_art(s).is_some()
+}
+
 /// Contextual tabs for the current selection (pure, tested).
 pub fn contextual_tabs(s: &wordcraft_engine::Session) -> Vec<&'static str> {
     let mut tabs = Vec::new();
@@ -31,6 +36,9 @@ pub fn contextual_tabs(s: &wordcraft_engine::Session) -> Vec<&'static str> {
     }
     if has_shape_selected(s) {
         tabs.push("Shape Format");
+    }
+    if has_smart_art_selected(s) {
+        tabs.push("SmartArt Design");
     }
     // Editing an equation.
     if s.math.is_some() {
@@ -85,7 +93,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     }
                 }
                 for tab in tabs {
-                    let contextual = tab.starts_with("Table ") || tab.ends_with(" Format") || tab == "Equation";
+                    let contextual = tab.starts_with("Table ") || tab.ends_with(" Format") || tab == "Equation" || tab == "SmartArt Design";
                     let shown = tl!(tab);
                     let w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(shown.to_string(), medium(12.5), t.text).size().x) + 18.0;
                     let (r, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
@@ -180,6 +188,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         "Equation" if app.session.math.is_some() => crate::equation_tab::show(app, ui),
                         "Picture Format" => picture_format(app, ui),
                         "Shape Format" => shape_format(app, ui),
+                        "SmartArt Design" => smart_art_design(app, ui),
                         _ => home(app, ui),
                     }
                 });
@@ -1206,6 +1215,66 @@ fn help(app: &mut WordApp, ui: &mut Ui) {
     });
 }
 
+/// SmartArt Design: the selected graphic's items (Add Shape, Promote, Demote, Text Pane), its
+/// layout (a gallery of previews), its colours and Reset.
+fn smart_art_design(app: &mut WordApp, ui: &mut Ui) {
+    use wordcraft_doc::smart_art::{SmartArtColors, SmartArtLayout};
+    let Some(g) = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session) else { return };
+    let theme = app.session.doc.settings.theme_colors.clone();
+    // The Text Pane's current item, else the last.
+    let current = app.smart_art_item.filter(|i| *i < g.items.len());
+    group(ui, "Create Graphic", None, app, |ui, app| {
+        big(ui, app, "addShape", "Add\nShape", "smartArt.addShape", current.map_or(json!({}), |i| json!({"after": i})), false);
+        stack(ui, |ui| {
+            let idx = current.map_or(json!({}), |i| json!({"index": i}));
+            small(ui, app, "promote", Some("Promote"), "Promote", "smartArt.promote", idx.clone(), false);
+            small(ui, app, "demote", Some("Demote"), "Demote", "smartArt.demote", idx, false);
+            small(ui, app, "textPane", Some("Text Pane"), "Text Pane", "smartArt.textPane", json!({}), app.session.view.smart_art_pane);
+        });
+    });
+    group(ui, "Layouts", None, app, |ui, app| {
+        let t = Tokens::get(ui.ctx());
+        egui::Grid::new("smart_art_layout_gallery").spacing(vec2(2.0, 2.0)).show(ui, |ui| {
+            for (k, layout) in SmartArtLayout::ALL.into_iter().enumerate() {
+                let (r, resp) = ui.allocate_exact_size(vec2(46.0, 31.0), Sense::click());
+                let on = g.layout == layout;
+                let fill = if on {
+                    t.checked
+                } else if resp.hovered() {
+                    t.hover
+                } else {
+                    t.ribbon
+                };
+                ui.painter().rect(r, 3.0, fill, Stroke::new(1.0, if on { t.accent } else { t.border }), egui::StrokeKind::Inside);
+                crate::dialogs_smart_art::preview(ui.painter(), r.shrink(2.0), layout, g.colors, &theme, t.text_dim);
+                if resp.on_hover_text(tl!(layout.label())).clicked() && !on {
+                    let _ = app.run("smartArt.layout", json!({"layout": layout.id()}));
+                }
+                if k % 4 == 3 {
+                    ui.end_row();
+                }
+            }
+        });
+    });
+    group(ui, "SmartArt Styles", None, app, |ui, app| {
+        menu_button(ui, app, "smartArtColors", Some("Change\nColors"), "Change Colors", true, |ui, app| {
+            for colors in SmartArtColors::ALL {
+                let on = g.colors == colors;
+                let resp = ui.add(egui::Button::new(crate::dialogs_smart_art::colors_label(colors)).selected(on).min_size(vec2(200.0, 24.0)));
+                let sw = Rect::from_min_size(pos2(resp.rect.right() - 74.0, resp.rect.center().y - 6.0), vec2(66.0, 12.0));
+                crate::dialogs_smart_art::swatches(ui.painter(), sw, colors, &theme);
+                if resp.clicked() {
+                    let _ = app.run("smartArt.colors", json!({"variant": colors.id()}));
+                    ui.close();
+                }
+            }
+        });
+    });
+    group(ui, "Reset", None, app, |ui, app| {
+        big(ui, app, "resetGraphic", "Reset\nGraphic", "smartArt.reset", json!({}), false);
+    });
+}
+
 /// Shape Format: fill, outline and effects of the selected shape, and its arrangement.
 fn shape_format(app: &mut WordApp, ui: &mut Ui) {
     let (stroke, glow_size) = match wordcraft_engine::cmd::objects::selected(&app.session) {
@@ -1697,6 +1766,22 @@ mod tests {
         s.run("select.collapse", &json!({"end": true})).unwrap();
         s.run("text.insert", &json!({"text": "x"})).unwrap();
         assert!(!contextual_tabs(&s).contains(&"Shape Format"));
+    }
+
+    #[test]
+    fn smart_art_picker_inserts_and_design_tab_follows_the_selection() {
+        let mut app = crate::WordApp::new(Session::new(wordcraft_doc::Document::new()), Default::default());
+        // Insert › SmartArt without a layout opens the picker.
+        let _ = app.run("insert.smartArt", json!({}));
+        assert_eq!(app.dialog.as_ref().map(crate::dialogs::Dialog::name), Some("insertSmartArt"));
+        app.dialog = None;
+        app.run("insert.smartArt", json!({"layout": "cycle"})).unwrap();
+        assert!(contextual_tabs(&app.session).contains(&"SmartArt Design"));
+        app.run("smartArt.textPane", json!({})).unwrap();
+        assert!(app.session.view.smart_art_pane);
+        app.session.run("select.collapse", &json!({"end": true})).unwrap();
+        app.session.run("text.insert", &json!({"text": "x"})).unwrap();
+        assert!(!contextual_tabs(&app.session).contains(&"SmartArt Design"));
     }
 
     #[test]

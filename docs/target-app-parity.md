@@ -1,6 +1,6 @@
 # WordCraft parity with Microsoft Word
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** trivial (formatting revisions landed, #41; previously trivial: Draw Table and Eraser landed, #303; previously minor: readiness table with hours per audience; full number back to the additive weighted sum, 60%; mainstream and essentials numbers added; alpha gate checked; previously major: full re-measure against Word for Mac 16.113.4; replaces the parity tables that lived in ROADMAP.md) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** trivial (Insert › SmartArt landed, #497; previously trivial: formatting revisions landed, #41; previously trivial: Draw Table and Eraser landed, #303; previously minor: readiness table with hours per audience; full number back to the additive weighted sum, 60%; mainstream and essentials numbers added; alpha gate checked; previously major: full re-measure against Word for Mac 16.113.4; replaces the parity tables that lived in ROADMAP.md) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 The authoritative assessment of how close WordCraft is to Microsoft Word. [`ROADMAP.md`](../ROADMAP.md)
 summarizes it; [`gaps.md`](gaps.md) itemizes every shortfall; the deep checklists are
@@ -70,7 +70,7 @@ full parity for the area.
 | Mailings | 2 | 70% | 70% | 6–10 | Mail merge from CSV, fields, rules, preview, envelopes, labels. Select Recipients takes a typed list or CSV (#247); no Excel/Outlook/Contacts data sources, no email merge. |
 | Pictures, shapes, text boxes, WordArt | 6 | 60% | 60% | 20–30 | Insert, crop, recolour, styles, floating placement like Word (#136), wrap (square/top-bottom/behind/front), text boxes edit and overflow (#46), VML text boxes (#242), free rotation and flips with a rotation handle (#332). Missing: tight/through contour wrap, rotated text-box text, group (#267 open), shape effects, WordArt, connectors, Drawing Canvas, Icons, online pictures, screenshot. |
 | Equations | 1 | 75% | 20% (with Draw) | 4–8 | OMML read/write, OpenType MATH layout, in-place editor with an Equation tab (#191). Missing: line breaking of long display equations, ink equations. |
-| Charts, SmartArt, Draw/ink, 3D models, icons | 4 | 3% | (20% with equations) | 70–110 | Draw: pens, pencil, highlighter, stroke eraser and Hide Ink (#307), ink saved as DrawingML freeforms; lasso, ink to shape/math and replay missing; charts and SmartArt are dropped on DOCX read (no `c:chart`/`dgm` handling in `crates/docx`). |
+| Charts, SmartArt, Draw/ink, 3D models, icons | 4 | 3% | (20% with equations) | 70–110 | Draw: pens, pencil, highlighter, stroke eraser and Hide Ink (#307), ink saved as DrawingML freeforms; lasso, ink to shape/math and replay missing; charts and SmartArt are drawn on DOCX read and kept on save (#292, #319); Insert › SmartArt (#497) creates and edits list, process, cycle, hierarchy, pyramid, radial, matrix and Venn graphics with our own layouts, a Text Pane and the SmartArt Design tab, saved as diagram parts with the drawing; SmartArt from other programs stays read-only; charts can't be created yet. |
 | View (modes, zoom, panes, windows) | 3 | 72% | 70% | 6–10 | Print/web/draft/read/focus, dark page (#194), pages side by side when zoomed out (#251), navigation pane. Missing: View Side by Side, Synchronous Scrolling, Arrange All, Switch Windows, Outline view depth, Immersive Reader depth. |
 | Backstage, printing, options | 3 | 58% | 55% | 12–20 | New/Home pages (#254), save prompts (#151), web printing via the browser (#209). Desktop printing still goes through PDF; Options has a fraction of Word's panes. |
 | Right-to-left and complex scripts | 1 | 50% | 55% | 15–25 | UAX #9, Arabic shaping, RTL paragraphs (#207). No RTL sections/tables, kashida justification or mirrored UI; open bug reports (#215, #211, #199, #66, #63, #48, #19) need re-testing against #207. |
@@ -249,6 +249,7 @@ can be used without committing Word output.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | trivial | Insert › SmartArt (#497): charts/SmartArt row updated; catalog 410/441 (93.0%); no percentage change |
 | 2026-10-11 | trivial | Formatting revisions (#41): Review row updated; no percentage change |
 | 2026-10-10 | trivial | #307: Draw tab pens, eraser and Hide Ink; catalog 384/430 → 390/430 (90.7%) |
 | 2026-10-10 | trivial | Draw Table and Eraser (#303): catalog 384/430 → 387/430 (90.0%) |

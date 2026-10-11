@@ -1321,3 +1321,44 @@
 	Flip Vertical	Okreni vertikalno
 	Flip Horizontal	Okreni horizontalno
 	Formatted	Formatirano
+	Add Shape	Dodaj oblik
+	Change Colors	Promeni boje
+	Change Layout	Promeni raspored
+	Create Graphic	Kreiranje grafike
+	Demote	Spusti nivo
+	Edit Items	Uredi stavke
+	Layouts	Rasporedi
+	Promote	Podigni nivo
+	Reset Graphic	Resetuj grafiku
+	SmartArt Design	SmartArt dizajn
+	SmartArt Styles	SmartArt stilovi
+	Text Pane	Okno za tekst
+	List	Lista
+	Process	Proces
+	Cycle	Ciklus
+	Hierarchy	Hijerarhija
+	Relationship	Odnos
+	Pyramid	Piramida
+	Basic List	Osnovna lista
+	Basic Process	Osnovni proces
+	Basic Cycle	Osnovni ciklus
+	Basic Pyramid	Osnovna piramida
+	Basic Radial	Osnovni radijalni
+	Basic Matrix	Osnovna matrica
+	Basic Venn	Osnovni Venov dijagram
+	Shows items of equal weight as blocks in rows.	Prikazuje stavke jednake važnosti kao blokove u redovima.
+	Shows steps in order, left to right, with arrows between them.	Prikazuje korake redom, sleva nadesno, sa strelicama između njih.
+	Shows steps that repeat, around a circle.	Prikazuje korake koji se ponavljaju, oko kruga.
+	Shows a tree: each item below the item it belongs to.	Prikazuje stablo: svaka stavka ispod stavke kojoj pripada.
+	Shows parts that build on each other, largest at the bottom.	Prikazuje delove koji se oslanjaju jedan na drugi, najveći na dnu.
+	Shows items around a central idea: the first item is the centre.	Prikazuje stavke oko centralne ideje: prva stavka je u sredini.
+	Shows parts of a whole as quadrants.	Prikazuje delove celine kao kvadrante.
+	Shows overlapping ideas as overlapping circles.	Prikazuje ideje koje se preklapaju kao krugove koji se preklapaju.
+	Accent {n}	Akcenat {n}
+	Colorful	Šareno
+	Insert SmartArt	Umetni SmartArt
+	One line per item. Enter adds an item.	Jedan red po stavci. Enter dodaje stavku.
+	Remove	Ukloni
+	Add\nShape	Dodaj\noblik
+	Change\nColors	Promeni\nboje
+	Reset\nGraphic	Resetuj\ngrafiku

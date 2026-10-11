@@ -11,12 +11,14 @@ mod crypt;
 mod custom;
 mod package;
 mod read;
+mod smart_art;
 mod units;
 mod write;
 mod xml;
 
 pub use crypt::{DEFAULT_SPIN_COUNT, MAX_PASSWORD_CHARS, check_password, decrypt, encrypt, encrypt_with_spin_count, is_encrypted};
 pub use read::read;
+pub use smart_art::smart_art_items;
 pub use write::{write, write_as};
 
 /// What [`DocxError::PasswordRequired`] says.

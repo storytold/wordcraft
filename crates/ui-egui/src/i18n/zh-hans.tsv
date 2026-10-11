@@ -1322,3 +1322,44 @@
 	Flip Vertical	垂直翻转
 	Flip Horizontal	水平翻转
 	Formatted	已设置格式
+	Add Shape	添加形状
+	Change Colors	更改颜色
+	Change Layout	更改布局
+	Create Graphic	创建图形
+	Demote	降级
+	Edit Items	编辑项目
+	Layouts	布局
+	Promote	升级
+	Reset Graphic	重设图形
+	SmartArt Design	SmartArt 设计
+	SmartArt Styles	SmartArt 样式
+	Text Pane	文本窗格
+	List	列表
+	Process	流程
+	Cycle	循环
+	Hierarchy	层次结构
+	Relationship	关系
+	Pyramid	棱锥图
+	Basic List	基本列表
+	Basic Process	基本流程
+	Basic Cycle	基本循环
+	Basic Pyramid	基本棱锥图
+	Basic Radial	基本射线图
+	Basic Matrix	基本矩阵
+	Basic Venn	基本维恩图
+	Shows items of equal weight as blocks in rows.	将同等重要的项目显示为成行排列的方块。
+	Shows steps in order, left to right, with arrows between them.	按从左到右的顺序显示步骤，步骤之间用箭头连接。
+	Shows steps that repeat, around a circle.	沿圆周显示重复的步骤。
+	Shows a tree: each item below the item it belongs to.	显示树形结构：每个项目位于其所属项目的下方。
+	Shows parts that build on each other, largest at the bottom.	显示层层递进的部分，最大的在底部。
+	Shows items around a central idea: the first item is the centre.	围绕中心思想显示项目：第一个项目位于中心。
+	Shows parts of a whole as quadrants.	将整体的各部分显示为象限。
+	Shows overlapping ideas as overlapping circles.	将相互重叠的观点显示为重叠的圆。
+	Accent {n}	着色 {n}
+	Colorful	彩色
+	Insert SmartArt	插入 SmartArt
+	One line per item. Enter adds an item.	每个项目一行。按 Enter 添加项目。
+	Remove	删除
+	Add\nShape	添加\n形状
+	Change\nColors	更改\n颜色
+	Reset\nGraphic	重设\n图形
