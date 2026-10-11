@@ -1048,7 +1048,9 @@ impl Reader {
                 }
                 return;
             }
-            Dest::Info(_) | Dest::FldInst | Dest::Bookmark => return,
+            // Text destinations take Unicode escapes (with fallback skipping) like the body.
+            Dest::Info(_) | Dest::FldInst | Dest::Bookmark if !matches!(w, "u" | "uc") => return,
+            Dest::Info(_) | Dest::FldInst | Dest::Bookmark => {}
             Dest::Body => {}
         }
         match w {
@@ -1279,7 +1281,10 @@ pub fn parse(bytes: &[u8]) -> Result<Flow, String> {
                     if word == "info" {
                         r.info_depth = Some(r.depth());
                     }
-                    if r.skip_chars > 0 && r.st.dest == Dest::Body && !matches!(word, "par" | "pard" | "cell" | "row") {
+                    if r.skip_chars > 0
+                        && matches!(r.st.dest, Dest::Body | Dest::Info(_) | Dest::FldInst | Dest::Bookmark)
+                        && !matches!(word, "par" | "pard" | "cell" | "row")
+                    {
                         r.skip_chars -= 1;
                         first_in_group = false;
                         continue;
@@ -1459,6 +1464,22 @@ mod tests {
             }));
         }
         Ok(())
+    }
+
+    #[test]
+    fn unicode_in_info_bookmarks_and_field_instructions() {
+        // #435: `\uN` (with its `\ucN` fallback skipped) decodes in every text destination.
+        let rtf = br#"{\rtf1\ansi\uc1{\info{\title Caf\u233?}{\author Caf\u233\'3f}}{\*\bkmkstart caf\u233?}{\*\bkmkend caf\u233?}{\field{\*\fldinst{HYPERLINK "https://example.test/caf\u233?"}}{\fldrslt{link}}}\par Caf\u233?\par}"#;
+        let f = parse(rtf).unwrap();
+        assert_eq!(f.meta.title, "Café");
+        assert_eq!(f.meta.author, "Café");
+        let inl: Vec<&Inline> = f.blocks.iter().flat_map(|b| if let FBlock::Para(p) = b { p.inlines.iter().collect() } else { vec![] }).collect();
+        assert!(inl.iter().any(|i| matches!(i, Inline::Anchor(n) if n == "café")), "{inl:?}");
+        assert!(
+            inl.iter().any(|i| matches!(i, Inline::Text(t, f) if t == "link" && f.link.as_deref() == Some("https://example.test/café"))),
+            "{inl:?}"
+        );
+        assert_eq!(texts(&f).last().map(String::as_str), Some("Normal:Café"));
     }
 
     #[test]

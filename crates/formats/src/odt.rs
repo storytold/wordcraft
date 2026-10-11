@@ -631,6 +631,8 @@ struct StyleInfo {
     page_break: bool,
     outline: Option<u8>,
     border_bottom: bool,
+    /// `fo:background-color` of a table-cell style's `style:table-cell-properties`.
+    cell_background: Option<Rgb>,
 }
 
 /// Length → points.
@@ -786,6 +788,13 @@ impl Styles {
                         }
                     }
                 }
+                "table-cell-properties" => {
+                    if let Some((_, s)) = &mut cur
+                        && let Some(c) = get(&a, "fo:background-color").and_then(model::parse_color)
+                    {
+                        s.cell_background = Some(c);
+                    }
+                }
                 "paragraph-properties" => {
                     if let Some((_, s)) = &mut cur {
                         s.align = match get(&a, "fo:text-align") {
@@ -861,11 +870,22 @@ impl Styles {
         f
     }
 
-    /// Paragraph kind, alignment, page break, rule and base formatting (automatic styles only).
+    /// Background colour of a table-cell style (whole chain).
+    fn cell_background(&self, name: &str) -> Option<Rgb> {
+        self.chain(name).iter().find_map(|(_, s)| s.cell_background)
+    }
+
+    /// Paragraph kind, alignment, page break, rule and base formatting. The text formatting of
+    /// every style in the chain applies (automatic and common, ODF 1.3 §16.2 inheritance), except
+    /// the style that gives the paragraph its kind and that style's ancestors: their formatting
+    /// is the kind's own look (a heading's size and colour), not direct formatting. `Standard`,
+    /// the default paragraph style, holds document defaults and is left out too.
     fn para(&self, name: &str) -> (Kind, Option<Align>, bool, bool, Fmt) {
         let chain = self.chain(name);
         let mut kind = Kind::Normal;
-        for (n, s) in &chain {
+        let mut kind_at = chain.len();
+        for (i, (n, s)) in chain.iter().enumerate() {
+            kind_at = i;
             let dn = s.display.as_deref().unwrap_or(n).to_ascii_lowercase().replace("_20_", " ");
             let nn = n.to_ascii_lowercase().replace("_20_", " ");
             for cand in [dn.as_str(), nn.as_str()] {
@@ -886,12 +906,13 @@ impl Styles {
                 kind = Kind::Heading(o.min(6));
                 break;
             }
+            kind_at = chain.len();
         }
         let align = chain.iter().find_map(|(_, s)| s.align);
         let pb = chain.iter().take_while(|(_, s)| s.auto).any(|(_, s)| s.page_break);
         let rule = chain.iter().any(|(_, s)| s.border_bottom);
         let mut f = Fmt::default();
-        for (_, s) in chain.iter().rev().filter(|(_, s)| s.auto) {
+        for (_, s) in chain.iter().take(kind_at).rev().filter(|(n, s)| s.auto || *n != "Standard") {
             s.fmt.apply(&mut f);
         }
         (kind, align, pb, rule, f)
@@ -1149,7 +1170,7 @@ impl Body<'_> {
                 self.end_para();
                 let span = get(a, "table:number-columns-spanned").and_then(|v| v.parse::<u32>().ok()).unwrap_or(1).clamp(1, 63);
                 let rows = get(a, "table:number-rows-spanned").and_then(|v| v.parse::<u32>().ok()).unwrap_or(1).clamp(1, 1000);
-                let shading = get(a, "table:style-name").and_then(|s| self.styles.map.get(s)).and_then(|s| s.fmt.background);
+                let shading = get(a, "table:style-name").and_then(|s| self.styles.cell_background(s));
                 if let Some(t) = self.tables.last_mut() {
                     t.hcover = span as usize - 1;
                 }
@@ -1403,5 +1424,58 @@ mod tests {
     #[test]
     fn rejects_garbage() {
         assert!(parse(b"not a zip").is_err());
+    }
+
+    const NS_T: &str = r#"xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0""#;
+
+    /// A package with `content.xml` and, when given, `styles.xml`.
+    fn package(content: &str, styles: Option<&str>) -> Vec<u8> {
+        let mut z = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        for (name, data) in
+            [("mimetype", "application/vnd.oasis.opendocument.text"), ("content.xml", content)].into_iter().chain(styles.map(|s| ("styles.xml", s)))
+        {
+            z.start_file(name, o).unwrap();
+            z.write_all(data.as_bytes()).unwrap();
+        }
+        z.finish().unwrap().into_inner()
+    }
+
+    fn paras(f: &Flow) -> Vec<&Para> {
+        f.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None }).collect()
+    }
+
+    #[test]
+    fn common_paragraph_styles_give_text_formatting() {
+        // #436: a common paragraph style's text properties reach its paragraphs, directly,
+        // through a derived common style and through an automatic style's parent.
+        let props = r##"<style:text-properties fo:font-weight="bold" fo:color="#ff0000" fo:font-size="24pt"/>"##;
+        let styles = format!(
+            r#"<office:document-styles {NS_T}><office:styles><style:style style:name="Standard" style:family="paragraph"/><style:style style:name="Emphasis" style:family="paragraph" style:parent-style-name="Standard">{props}</style:style><style:style style:name="Derived" style:family="paragraph" style:parent-style-name="Emphasis"/></office:styles></office:document-styles>"#
+        );
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="Bridge" style:family="paragraph" style:parent-style-name="Emphasis"/></office:automatic-styles><office:body><office:text><text:p>Plain</text:p><text:p text:style-name="Emphasis">Common</text:p><text:p text:style-name="Derived">Derived</text:p><text:p text:style-name="Bridge">Bridge</text:p></office:text></office:body></office:document-content>"#
+        );
+        let f = parse(&package(&content, Some(&styles))).unwrap();
+        let ps = paras(&f);
+        assert_eq!(ps.len(), 4);
+        let fmt = |p: &Para| p.inlines.iter().find_map(|i| if let Inline::Text(_, f) = i { Some(f.clone()) } else { None }).unwrap();
+        assert_eq!(fmt(ps[0]), Fmt::default());
+        for p in &ps[1..] {
+            let f = fmt(p);
+            assert!(f.bold && f.color == Some(Rgb(255, 0, 0)) && f.size == Some(24.0), "{}: {f:?}", p.text());
+        }
+    }
+
+    #[test]
+    fn table_cell_style_background_is_shading() {
+        // #437: `fo:background-color` on `style:table-cell-properties` is the cell's shading.
+        let content = format!(
+            r##"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="RedCell" style:family="table-cell"><style:table-cell-properties fo:background-color="#ff0000"/></style:style></office:automatic-styles><office:body><office:text><table:table><table:table-column table:number-columns-repeated="2"/><table:table-row><table:table-cell table:style-name="RedCell"><text:p>Red</text:p></table:table-cell><table:table-cell><text:p>Plain</text:p></table:table-cell></table:table-row></table:table></office:text></office:body></office:document-content>"##
+        );
+        let f = parse(&package(&content, None)).unwrap();
+        let Some(FBlock::Table(t)) = f.blocks.iter().find(|b| matches!(b, FBlock::Table(_))) else { panic!("no table") };
+        let row: Vec<_> = t.rows[0].iter().map(|c| (c.text(), c.shading)).collect();
+        assert_eq!(row, vec![("Red".to_string(), Some(Rgb(255, 0, 0))), ("Plain".to_string(), None)]);
     }
 }

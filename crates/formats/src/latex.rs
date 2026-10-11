@@ -2076,12 +2076,15 @@ impl<'a> Parser<'a> {
                 Tok::Tie => self.text("\u{A0}"),
                 Tok::Amp => self.text(" "),
                 Tok::Open => {
-                    // A group scopes declarations (`{\bfseries …}`).
+                    // A group scopes declarations (`{\bfseries …}`, `{\centering …\par}`):
+                    // character formatting and paragraph alignment come back at its end.
                     let toks = {
                         self.pos -= 1;
                         self.arg_tokens()
                     };
+                    let saved_ctx = self.ctx;
                     self.inline_with(toks, |_| {});
+                    self.ctx = saved_ctx;
                 }
                 Tok::Close => {}
                 Tok::Math(m, display) => {
@@ -2861,6 +2864,21 @@ Caf\'e na\"ive \c{c}a \v{s}\'{e} and {\bfseries grouped bold} after.
 {\color{red} red text} \textcolor[HTML]{00FF00}{green}.
 \end{document}
 "#;
+
+    #[test]
+    fn alignment_declarations_end_with_their_group() {
+        // #440: `{\centering …\par}` centres only inside the group; the outer alignment returns.
+        let align = |body: &str| -> Vec<(String, Option<Align>)> {
+            paras(&format!("\\documentclass{{article}}\\begin{{document}}{body}\\end{{document}}")).iter().map(|p| (p.text(), p.align)).collect()
+        };
+        let a = |t: &str, al: Option<Align>| (t.to_string(), al);
+        assert_eq!(align(r"{\centering Center\par}After\par"), vec![a("Center", Some(Align::Center)), a("After", None)]);
+        assert_eq!(
+            align(r"\raggedleft Outer\par{\centering Inner\par}Restored\par"),
+            vec![a("Outer", Some(Align::Right)), a("Inner", Some(Align::Center)), a("Restored", Some(Align::Right))]
+        );
+        assert_eq!(align(r"\centering One\par Two\par"), vec![a("One", Some(Align::Center)), a("Two", Some(Align::Center))]);
+    }
 
     #[test]
     fn article_structure() {
