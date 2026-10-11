@@ -412,3 +412,86 @@ fn bundled_interface_fonts_cover_estonian_letters() {
         }
     }
 }
+
+#[test]
+fn turkish_locales_and_saved_preference_work_without_changing_the_document() {
+    let tr = lang("tr");
+    for tag in ["tr", "tr-TR", "TR_tr.UTF-8", "tr-CY", "tr-Latn-TR", "tr_TR.UTF-8@euro"] {
+        assert_eq!(lang_from_tag(tag), Some(tr), "{tag}");
+    }
+    assert_eq!(first_supported(["fr-FR", "tr-TR", "en-US"]), Some(tr));
+    assert_eq!(normalize_pref("TR"), Some("tr"));
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), Default::default());
+    let before = serde_json::to_value(&app.session.doc).unwrap();
+    let result = app.run("ui.language", serde_json::json!({"value": "TR"})).unwrap();
+    assert_eq!(result["effective"], "tr");
+    assert_eq!(app.ui.language, "tr");
+    assert!(result["available"].as_array().unwrap().iter().any(|l| l["code"] == "tr" && l["name"] == "Türkçe"));
+    assert_eq!(serde_json::to_value(&app.session.doc).unwrap(), before);
+    let saved = serde_json::to_string(&app.ui).unwrap();
+    let restored: crate::UiState = serde_json::from_str(&saved).unwrap();
+    assert_eq!(Lang::from_pref(&restored.language), tr);
+    assert!(app.run("ui.language", serde_json::json!({"value": "tr-unknown"})).is_err());
+    assert_eq!(app.ui.language, "tr", "invalid preferences must keep the saved language");
+    app.run("ui.language", serde_json::json!({"value": "auto"})).unwrap();
+    assert_eq!(app.ui.language, AUTO);
+    assert_eq!(tr.name(), "Türkçe");
+}
+
+#[test]
+fn turkish_covers_the_entire_existing_interface_catalog_and_preserves_templates() {
+    use std::collections::HashSet;
+    let keys = |source| parse_entries(source).0.into_iter().map(|e| e.source).collect::<HashSet<_>>();
+    // Spanish carries every key the interface looks up; Chinese lacks only a few newer labels.
+    assert_eq!(keys(lang("tr").0.source), keys(lang("es").0.source));
+    assert!(keys(lang("zh-hans").0.source).is_subset(&keys(lang("tr").0.source)));
+    let tr = lang("tr");
+    for (source, expected) in [
+        ("Home", "Giriş"),
+        ("Font", "Yazı Tipi"),
+        ("Review", "İncele"),
+        ("Italic", "İtalik"),
+        ("Table of Contents", "İçindekiler Tablosu"),
+        ("Track Changes", "Değişiklikleri İzle"),
+        ("Save", "Kaydet"),
+        ("UPPERCASE", "BÜYÜK HARF"),
+        ("lowercase", "küçük harf"),
+        ("WordCraft", "WordCraft"),
+        ("unknown future label", "unknown future label"),
+    ] {
+        assert_eq!(super::tr(tr, source), expected);
+    }
+    assert_eq!(fmt(super::tr(tr, "Exported {path}"), &[("path", "taslak-{words}.docx")]), "Dışa aktarıldı: taslak-{words}.docx");
+    assert_eq!(fmt(super::tr(tr, "Page {page} of {pages}"), &[("page", "3"), ("pages", "9")]), "Sayfa 3 / 9");
+    // The Font dialog uppercases its preview sample for All Caps, so the sample has no lowercase i.
+    assert_eq!(super::tr(tr, "AaBbYyZz").to_uppercase(), "AABBYYZZ ĞĞİIŞŞ");
+    // Turkish count nouns remain singular for both one and other, including zero and large counts.
+    for count in [0, 1, 2, 5, 11, 21, 100, 1000] {
+        let words = count.to_string();
+        assert_eq!(fmt(super::tr(tr, "{words} words"), &[("words", &words)]), format!("{count} sözcük"));
+        assert_eq!(fmt(super::tr(tr, "{selected} of {words} words"), &[("selected", "1"), ("words", &words)]), format!("{count} sözcükten 1 seçili"));
+    }
+    set_current(tr);
+    assert_eq!(location("Home › Font"), "Giriş › Yazı Tipi");
+    assert_eq!(prefixed("Undo", "Italic"), "Geri Al: İtalik");
+    set_current(Lang::EN);
+    assert_eq!(super::tr(Lang::EN, "Italic"), "Italic");
+}
+
+#[test]
+fn bundled_interface_fonts_cover_turkish_without_system_fallbacks() {
+    let db = wordcraft_fonts::FontDb::with_font_dirs(Vec::new());
+    let (entries, errors) = parse_entries(lang("tr").0.source);
+    assert!(errors.is_empty());
+    let extra = "ÇçĞğİıÖöŞşÜü";
+    let chars: std::collections::HashSet<char> =
+        entries.iter().flat_map(|e| e.translation.chars()).filter(|c| extra.contains(*c)).chain(extra.chars()).collect();
+    for (family, style) in [("Inter", "Regular"), ("Inter", "Medium"), ("Inter", "SemiBold"), ("JetBrains Mono", "Regular")] {
+        let face = db.face(family, style);
+        assert_eq!(face.family, family, "must use the bundled interface face");
+        for ch in &chars {
+            assert_ne!(face.glyph_for(*ch), 0, "{family} {style} lacks {ch}");
+        }
+    }
+    assert!(!lang("tr").uses_cjk());
+}

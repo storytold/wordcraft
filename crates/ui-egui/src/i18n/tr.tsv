@@ -1,0 +1,1324 @@
+# Turkish (tr) interface catalog. Columns, separated by a TAB:
+#   context <TAB> English source <TAB> translation
+#   context    empty (WordCraft uses no contexts yet)
+#   source     exact English lookup key (tl!(...), ribbon and command labels)
+#   escapes    \n  \t  \\ inside a column. Keep all `{name}` placeholders and trailing ….
+#   Lines starting with # and blank lines are ignored. Missing entries show in English.
+#
+# Clean room: written from the meaning of the English labels in ordinary Turkish computing
+# vocabulary. No Microsoft Word or other proprietary product's translated UI or string table
+# was consulted or copied. Product/format names (WordCraft, PDF, Markdown, MCP ...) stay intact.
+# Commands use imperatives; labels use natural Turkish. After a count the noun stays singular
+# (1 sözcük, 2 sözcük). This catalog format has no plural contexts or separate one/other forms.
+# Turkish capitals (İ/i, I/ı) are written explicitly, never generated from translated labels.
+# The font preview sample (AaBbYyZz) has no lowercase i: the Font dialog uppercases it for All Caps.
+# Terminology: Font = Yazı Tipi, Paragraph = Paragraf, Review = İncele, References = Başvurular,
+# Track Changes = Değişiklikleri İzle, Caption = Resim Yazısı, Citation = Atıf, Mail Merge = Posta
+# Birleştirme, Symbol = Sembol (Icons = Simgeler), Page {page} of {pages} = Sayfa {page} / {pages}.
+	(no suggestions)	(öneri yok)
+	1.5 Line Spacing	1,5 Satır Aralığı
+	A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.	Rust ile sıfırdan yazılmış ücretsiz, açık kaynak bir kelime işlemci.\nArtCraft ekibinin Crafting Apps ailesinin bir parçası.
+	About	Hakkında
+	About WordCraft	WordCraft Hakkında
+	Accept	Kabul Et
+	Accept All Changes	Tüm Değişiklikleri Kabul Et
+	Accept This Change	Bu Değişikliği Kabul Et
+	Accessibility	Erişilebilirlik
+	Add	Ekle
+	Add Space Before Paragraph	Paragraf Öncesine Boşluk Ekle
+	Add Text	Metin Ekle
+	Add a Table	Tablo Ekle
+	Add a comment	Yorum ekle
+	Add to Dictionary	Sözlüğe Ekle
+	Add to Style Gallery	Stil Galerisine Ekle
+	Address Block	Adres Bloğu
+	Address:	Adres:
+	Address\nBlock	Adres\nBloğu
+	Adjust	Ayarla
+	Advanced	Gelişmiş
+	Advanced Find	Gelişmiş Bul
+	Advanced Find…	Gelişmiş Bul…
+	After:	Sonra:
+	Agents	Ajanlar
+	Align	Hizala
+	Align Left	Sola Hizala
+	Align Right	Sağa Hizala
+	Alignment	Hizalama
+	All Borders	Tüm Kenarlıklar
+	All Caps	Tümü Büyük Harf
+	All Markup	Tüm İşaretler
+	All caps	Tümü büyük harf
+	Alt Text	Alternatif Metin
+	Apply Character Style	Karakter Stili Uygula
+	Apply Style	Stil Uygula
+	Arrange	Yerleştir
+	Arrange\nAll	Tümünü\nYerleştir
+	Arrow	Ok
+	Artistic Effects	Sanatsal Efektler
+	Author	Yazar
+	AutoCorrect Options	Otomatik Düzeltme Seçenekleri
+	AutoFit	Otomatik Sığdır
+	AutoFit Contents	İçeriğe Sığdır
+	AutoFit Window	Pencereye Sığdır
+	AutoSave	Otomatik Kaydet
+	AutoSave saves every change to the file (needs a saved document)	Otomatik Kaydet, her değişikliği dosyaya kaydeder (belgenin önce kaydedilmesi gerekir)
+	AutoText	Otomatik Metin
+	Automatic	Otomatik
+	Automatic ({language})	Otomatik ({language})
+	Automatic Table 1 (3 levels)	Otomatik Tablo 1 (3 düzey)
+	Automatic Table 2 (2 levels)	Otomatik Tablo 2 (2 düzey)
+	Automatic follows your system's language. Menus and commands change; your documents don't.	Otomatik seçeneği sisteminizin dilini kullanır. Menüler ve komutlar değişir; belgeleriniz değişmez.
+	Backspace	Geri Sil
+	Banded Columns	Şeritli Sütunlar
+	Banded Rows	Şeritli Satırlar
+	Before:	Önce:
+	Bibliography	Kaynakça
+	Binary assets added	Eklenen ikili varlıklar
+	Binary assets removed	Kaldırılan ikili varlıklar
+	Blank	Boş
+	Blank (Three Columns)	Boş (Üç Sütun)
+	Blank Page	Boş Sayfa
+	Blank document	Boş belge
+	Block\nAuthors	Yazarları\nEngelle
+	Bold	Kalın
+	Bookmark	Yer İşareti
+	Bookmark name:	Yer işareti adı:
+	Border Painter	Kenarlık Fırçası
+	Border\nPainter	Kenarlık\nFırçası
+	Borders	Kenarlıklar
+	Bottom Border	Alt Kenarlık
+	Bottom Margin	Alt Kenar Boşluğu
+	Bottom of Page	Sayfa Altı
+	Bottom:	Alt:
+	Box	Kutu
+	Breaks	Sonlar
+	Bring Forward	Öne Getir
+	Bullet Library	Madde İşareti Kitaplığı
+	Bullets	Madde İşaretleri
+	Calendar	Takvim
+	Cancel	İptal
+	Capitalize Each Word	Her Sözcüğün İlk Harfini Büyüt
+	Captions	Resim Yazıları
+	Cell Margins	Hücre Kenar Boşlukları
+	Cell Size	Hücre Boyutu
+	Cell\nMargins	Hücre Kenar\nBoşlukları
+	Center	Ortala
+	Change	Değiştir
+	Change Case	Harf Büyüklüğünü Değiştir
+	Change List Level	Liste Düzeyini Değiştir
+	Change Picture	Resmi Değiştir
+	Change Shape	Şekli Değiştir
+	Changes	Değişiklikler
+	Character Position	Karakter Konumu
+	Character Scale	Karakter Ölçeği
+	Character Shading	Karakter Gölgelendirmesi
+	Character Spacing	Karakter Aralığı
+	Characters	Karakterler
+	Characters (no spaces)	Karakterler (boşluksuz)
+	Characters (with spaces)	Karakterler (boşluklu)
+	Chart	Grafik
+	Check Accessibility	Erişilebilirliği Denetle
+	Check Compatibility	Uyumluluğu Denetle
+	Check Spelling as You Type	Yazarken Yazımı Denetle
+	Check for Errors	Hataları Denetle
+	Check\nAccessibility	Erişilebilirliği\nDenetle
+	Citation Style	Atıf Stili
+	Citations & Bibliography	Atıflar ve Kaynakça
+	Clear	Temizle
+	Clear All	Tümünü Temizle
+	Clear All Formatting	Tüm Biçimlendirmeyi Temizle
+	Clear Character Formatting	Karakter Biçimlendirmesini Temizle
+	Clear Character Style	Karakter Stilini Temizle
+	Clear Formatting Level	Biçimlendirme Düzeyini Temizle
+	Clear Paragraph Formatting	Paragraf Biçimlendirmesini Temizle
+	Clipboard	Pano
+	Close	Kapat
+	Close Header and Footer	Üstbilgi ve Altbilgiyi Kapat
+	Collapse Selection	Seçimi Daralt
+	Color	Renk
+	Color:	Renk:
+	Colors	Renkler
+	Column	Sütun
+	Column Break	Sütun Sonu
+	Columns	Sütunlar
+	Combine	Birleştir
+	Commands	Komutlar
+	Comment	Yorum
+	Comments	Yorumlar
+	Comments Pane	Yorumlar Bölmesi
+	Community\nDiscord	Topluluk\nDiscord'u
+	Compact	Kompakt
+	Compare	Karşılaştır
+	Compress Pictures	Resimleri Sıkıştır
+	Continuous	Sürekli
+	Convert	Dönüştür
+	Convert Text to Table	Metni Tabloya Dönüştür
+	Convert Text to Table…	Metni Tabloya Dönüştür…
+	Convert to Text	Metne Dönüştür
+	Copy	Kopyala
+	Copy Formatting	Biçimlendirmeyi Kopyala
+	Corrections	Düzeltmeler
+	Count words in text boxes and notes	Metin kutularındaki ve notlardaki sözcükleri say
+	Cover Page	Kapak Sayfası
+	Create	Oluştur
+	Create New Style	Yeni Stil Oluştur
+	Create a Style	Stil Oluştur
+	Create an interactive outline of your document.\n\nIt's a great way to keep track of where you are or quickly move your content around.\n\nTo get started, go to the Home tab and apply Heading styles to the headings in your document.	Belgenizin etkileşimli ana hattını oluşturun.\n\nKonumunuzu takip etmek veya içeriğinizi hızla taşımak için kullanabilirsiniz.\n\nBaşlamak için Giriş sekmesine gidin ve belgenizin başlıklarına Başlık stillerini uygulayın.
+	Crop	Kırp
+	Cross-reference	Çapraz Başvuru
+	Current Position	Geçerli Konum
+	Current style: {style}	Geçerli stil: {style}
+	Custom Margins…	Özel Kenar Boşlukları…
+	Custom Watermark	Özel Filigran
+	Custom Watermark…	Özel Filigran…
+	Customize Quick Access Toolbar	Hızlı Erişim Araç Çubuğunu Özelleştir
+	Cut	Kes
+	Dark Mode	Koyu Mod
+	Dashed	Kesikli
+	Data	Veri
+	Date & Time	Tarih ve Saat
+	Decrease Font Size	Yazı Tipi Boyutunu Küçült
+	Decrease Indent	Girintiyi Azalt
+	Default	Varsayılan
+	Define New Bullet	Yeni Madde İşareti Tanımla
+	Define New Number Format	Yeni Numara Biçimi Tanımla
+	Delete	Sil
+	Delete Cells	Hücreleri Sil
+	Delete Columns	Sütunları Sil
+	Delete Comment	Yorumu Sil
+	Delete Next Word	Sonraki Sözcüğü Sil
+	Delete Previous Word	Önceki Sözcüğü Sil
+	Delete Rows	Satırları Sil
+	Delete Style	Stili Sil
+	Delete Table	Tabloyu Sil
+	Design	Tasarım
+	Diagonal	Çapraz
+	Diamond	Eşkenar Dörtgen
+	Dictate	Dikte Et
+	Different First Page	İlk Sayfa Farklı
+	Different Odd & Even Pages	Tek ve Çift Sayfalar Farklı
+	Direct formatting	Doğrudan biçimlendirme
+	Discord	Discord
+	Discord community	Discord topluluğu
+	Display	Görüntü
+	Display for Review	İnceleme Görünümü
+	Distribute Columns	Sütunları Eşit Dağıt
+	Distribute Rows	Satırları Eşit Dağıt
+	Distributed	Dağıtılmış
+	Do Not Show in TOC	İçindekilerde Gösterme
+	Document End	Belge Sonu
+	Document Formatting	Belge Biçimlendirmesi
+	Document Property	Belge Özelliği
+	Document Start	Belge Başı
+	Document Text	Belge Metni
+	Document Title	Belge Başlığı
+	Documents you open will show up here.	Açtığınız belgeler burada görünür.
+	Dot-dash	Nokta-çizgi
+	Dotted	Noktalı
+	Double	Çift
+	Double Spacing	Çift Satır Aralığı
+	Double Strikethrough	Çift Üstü Çizili
+	Double Underline	Çift Altı Çizili
+	Down	Aşağı
+	Draft	Taslak
+	Draw	Çiz
+	Drawing Tools	Çizim Araçları
+	Drawing\nCanvas	Çizim\nTuvali
+	Drop Cap	Büyük Başlangıç Harfi
+	Drops all formatting and pastes plain text.	Tüm biçimlendirmeyi kaldırır ve düz metin yapıştırır.
+	Edit Comment	Yorumu Düzenle
+	Edit Footer	Altbilgiyi Düzenle
+	Edit Header	Üstbilgiyi Düzenle
+	Edit Recipient List	Alıcı Listesini Düzenle
+	Edit\nRecipient List	Alıcı Listesini\nDüzenle
+	Edited	Düzenlendi
+	Editing	Düzenleme
+	Editing header/footer	Üstbilgi/altbilgi düzenleniyor
+	Editing — edit the document directly	Düzenleme — belgeyi doğrudan düzenleyin
+	Editor	Düzenleyici
+	Effects	Efektler
+	Emboss	Kabartma
+	Encrypt with Password	Parolayla Şifrele
+	English (United States)	İngilizce (Amerika Birleşik Devletleri)
+	Engrave	Oyma
+	Enter page number:	Sayfa numarası girin:
+	Envelopes	Zarflar
+	Eraser	Silgi
+	Even Page	Çift Sayfa
+	Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel.	Her komut betiklere ve AI ajanlarına açıktır: MCP sunucusu için `wordcraft-cli mcp` çalıştırın veya JSON denetim kanalı için uygulamayı `--control <port>` ile başlatın.
+	Export	Dışa Aktar
+	Export PDF	PDF Olarak Dışa Aktar
+	Export Page as PNG	Sayfayı PNG Olarak Dışa Aktar
+	Export a copy to share (PDF, Word document)	Paylaşmak için bir kopya dışa aktarın (PDF, Word belgesi)
+	Exported {path}	Dışa aktarıldı: {path}
+	Extend Selection	Seçimi Genişlet
+	Field	Alan
+	File	Dosya
+	Find	Bul
+	Find Next	Sonrakini Bul
+	Find Previous	Öncekini Bul
+	Find Recipient	Alıcı Bul
+	Find and Replace	Bul ve Değiştir
+	Find what:	Aranan:
+	Finish	Bitir
+	Finish & Merge	Bitir ve Birleştir
+	Finish &\nMerge	Bitir ve\nBirleştir
+	First Column	İlk Sütun
+	First commit	İlk commit
+	First line:	İlk satır:
+	Fixed Column Width	Sabit Sütun Genişliği
+	Focus	Odak
+	Font	Yazı Tipi
+	Font Color	Yazı Tipi Rengi
+	Font Dialog	Yazı Tipi İletişim Kutusu
+	Font Size	Yazı Tipi Boyutu
+	Font color:	Yazı tipi rengi:
+	Font:	Yazı tipi:
+	Fonts	Yazı Tipleri
+	Footer	Altbilgi
+	Footnote and Endnote	Dipnot ve Sonnot
+	Footnotes	Dipnotlar
+	Format	Biçim
+	Format Page Numbers	Sayfa Numaralarını Biçimlendir
+	Format Page Numbers…	Sayfa Numaralarını Biçimlendir…
+	Format Painter	Biçim Fırçası
+	Formatted Text	Biçimlendirilmiş Metin
+	Formatting at Selection	Seçimdeki Biçimlendirme
+	Formula	Formül
+	General	Genel
+	Go To	Git
+	Go To (⌘⌥G)	Git (⌘⌥G)
+	Go To…	Git…
+	Go to	Git
+	Grab bag	Çeşitli
+	Greeting Line	Selamlama Satırı
+	Greeting\nLine	Selamlama\nSatırı
+	Gridlines	Kılavuz Çizgileri
+	Group	Grupla
+	Grow Font 1 Point	Yazı Tipini 1 Punto Büyüt
+	HTML Format	HTML Biçimi
+	Hanging Indent	Asılı Girinti
+	Header	Üstbilgi
+	Header & Footer	Üstbilgi ve Altbilgi
+	Header Row	Başlık Satırı
+	Header/Footer Position	Üstbilgi/Altbilgi Konumu
+	Heading 1	Başlık 1
+	Heading 2	Başlık 2
+	Heading 3	Başlık 3
+	Headings	Başlıklar
+	Heart	Kalp
+	Help	Yardım
+	Hidden	Gizli
+	Highlight Merge Fields	Birleştirme Alanlarını Vurgula
+	Highlight\nMerge Fields	Birleştirme\nAlanlarını Vurgula
+	Highlighter	Vurgulayıcı
+	Home	Giriş
+	Horizontal	Yatay
+	Horizontal Line	Yatay Çizgi
+	Hyphenation	Heceleme
+	Icons	Simgeler
+	Ignore All	Tümünü Yoksay
+	Illustrations	Çizimler
+	Immersive	Odaklı
+	Immersive Reader	Odaklı Okuyucu
+	Immersive\nReader	Odaklı\nOkuyucu
+	Increase Font Size	Yazı Tipi Boyutunu Büyüt
+	Increase Indent	Girintiyi Artır
+	Indent	Girinti
+	Indentation	Girintileme
+	Indents	Girintiler
+	Index	Dizin
+	Info	Bilgi
+	Ink to\nMath	Mürekkebi\nMatematiğe Dönüştür
+	Ink to\nShape	Mürekkebi\nŞekle Dönüştür
+	Ink\nReplay	Mürekkebi\nYeniden Oynat
+	Insert	Ekle
+	Insert Above	Üste Ekle
+	Insert Below	Alta Ekle
+	Insert Caption	Resim Yazısı Ekle
+	Insert Citation	Atıf Ekle
+	Insert Endnote	Sonnot Ekle
+	Insert Footnote	Dipnot Ekle
+	Insert Hyperlink	Bağlantı Ekle
+	Insert Index	Dizin Ekle
+	Insert Left	Sola Ekle
+	Insert Merge Field	Birleştirme Alanı Ekle
+	Insert Merge\nField	Birleştirme\nAlanı Ekle
+	Insert Right	Sağa Ekle
+	Insert Shapes	Şekil Ekle
+	Insert Table	Tablo Ekle
+	Insert Table of Authorities	Hukuki Kaynaklar Tablosu Ekle
+	Insert Table of Figures	Şekiller Listesi Ekle
+	Insert Table…	Tablo Ekle…
+	Insert\nAbove	Üste\nEkle
+	Insert\nCaption	Resim Yazısı\nEkle
+	Insert\nCitation	Atıf\nEkle
+	Insert\nFootnote	Dipnot\nEkle
+	Inside Borders	İç Kenarlıklar
+	Inspect Document	Belgeyi İncele
+	Inspect Styles at Selection	Seçimdeki Stilleri İncele
+	Interface language:	Arayüz dili:
+	Italic	İtalik
+	Join the ArtCraft community on Discord	Discord'da ArtCraft topluluğuna katılın
+	Join us on Discord: discord.gg/artcraft	Discord'da bize katılın: discord.gg/artcraft
+	Justify	İki Yana Yasla
+	Keep Lines Together	Satırları Birlikte Tut
+	Keep Text Only	Yalnızca Metni Koru
+	Keep lines together	Satırları birlikte tut
+	Keep with Next	Sonrakiyle Birlikte Tut
+	Keep with next	Sonrakiyle birlikte tut
+	Keeps the fonts and formatting of the copied text.	Kopyalanan metnin yazı tiplerini ve biçimlendirmesini korur.
+	Labels	Etiketler
+	Landscape	Yatay
+	Language	Dil
+	Lasso	Kement
+	Last Column	Son Sütun
+	Last commit	Son commit
+	Layout	Düzen
+	Layout Summary	Düzen Özeti
+	Left	Sol
+	Left Border	Sol Kenarlık
+	Left Margin	Sol Kenar Boşluğu
+	Left:	Sol:
+	Letter	Letter
+	Line	Satır
+	Line Break	Satır Sonu
+	Line End	Satırın Sonu
+	Line Numbers	Satır Numaraları
+	Line Spacing	Satır Aralığı
+	Line Spacing Options…	Satır Aralığı Seçenekleri…
+	Line Start	Satırın Başı
+	Line and Page Breaks	Satır ve Sayfa Sonları
+	Line and Paragraph Spacing	Satır ve Paragraf Aralığı
+	Line delta	Satır farkı
+	Line spacing:	Satır aralığı:
+	Lines	Satırlar
+	Lines added	Eklenen satırlar
+	Lines deleted	Silinen satırlar
+	Link	Bağlantı
+	Link to Previous	Öncekine Bağla
+	Links	Bağlantılar
+	Location: {path}	Konum: {path}
+	MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.	MIT OR Apache-2.0. Telif hakkı (c) 2026 ArtCraft ekibi ve WordCraft'a katkıda bulunanlar.
+	Macros	Makrolar
+	Mailings	Postalar
+	Manage Sources	Kaynakları Yönet
+	Many pages	Çok sayfa
+	Margins	Kenar Boşlukları
+	Mark Citation	Atıfı İşaretle
+	Mark Entry	Girdiyi İşaretle
+	Mark\nCitation	Atıfı\nİşaretle
+	Mark\nEntry	Girdiyi\nİşaretle
+	Markdown (*.md)	Markdown (*.md)
+	Match Fields	Alanları Eşleştir
+	Match case	Büyük/küçük harfe duyarlı
+	Matrix	Matris
+	Merge	Birleştir
+	Merge Cells	Hücreleri Birleştir
+	Merge Formatting	Biçimlendirmeyi Birleştir
+	Merged PRs	Birleştirilen PR'lar
+	Mirrored	Aynalı
+	Moderate	Orta
+	Modify Style	Stili Değiştir
+	Modify…	Değiştir…
+	More templates →	Diğer şablonlar →
+	Move or Resize	Taşı veya Boyutlandır
+	Multilevel List	Çok Düzeyli Liste
+	Multiple Pages	Birden Çok Sayfa
+	Name (A–Z)	Ad (A–Z)
+	Name:	Ad:
+	Narrow  0.5" all	Dar  her kenar 0,5 inç
+	Navigation	Gezinti
+	Navigation Pane	Gezinti Bölmesi
+	New	Yeni
+	New Comment	Yeni Yorum
+	New Paragraph	Yeni Paragraf
+	New Style…	Yeni Stil…
+	New Window	Yeni Pencere
+	New from Template	Şablondan Yeni
+	New\nComment	Yeni\nYorum
+	New\nWindow	Yeni\nPencere
+	Next	Sonraki
+	Next Change	Sonraki Değişiklik
+	Next Comment	Sonraki Yorum
+	Next Footnote	Sonraki Dipnot
+	Next Page	Sonraki Sayfa
+	Next Record	Sonraki Kayıt
+	Next Section	Sonraki Bölüm
+	No Border	Kenarlık Yok
+	No Color	Renk Yok
+	No Markup	İşaret Yok
+	No Paragraph Space	Paragraf Boşluğu Yok
+	No contributor data was built into this copy.	Bu kopyaya katkıda bulunan verisi eklenmemiş.
+	No model credits were built into this copy.	Bu kopyaya model katkıları eklenmemiş.
+	No templates match your search.	Aramanızla eşleşen şablon yok.
+	Nonbreaking Hyphen	Bölünemez Kısa Çizgi
+	Nonbreaking Space	Bölünemez Boşluk
+	None	Yok
+	Normal  1" all	Normal  her kenar 1 inç
+	Normal Style	Normal Stil
+	Not available right now	Şu anda kullanılamıyor
+	Not saved	Kaydedilmedi
+	Not saved yet	Henüz kaydedilmedi
+	Nudge	Az Kaydır
+	Number of columns:	Sütun sayısı:
+	Number of rows:	Satır sayısı:
+	Numbering	Numaralandırma
+	OK	Tamam
+	Object	Nesne
+	Odd Page	Tek Sayfa
+	Office 2003 Default	Office 2003 Varsayılanı
+	One	Bir
+	One Page	Bir Sayfa
+	Open	Aç
+	OpenDocument Text (*.odt)	OpenDocument Metni (*.odt)
+	Optional Hyphen	İsteğe Bağlı Kısa Çizgi
+	Options	Seçenekler
+	Orientation	Sayfa Yönü
+	Outline	Ana Hat
+	Outline Level	Ana Hat Düzeyi
+	Outside Borders	Dış Kenarlıklar
+	Oval	Oval
+	PDF document (*.pdf)	PDF belgesi (*.pdf)
+	Page	Sayfa
+	Page Background	Sayfa Arka Planı
+	Page Borders	Sayfa Kenarlıkları
+	Page Break	Sayfa Sonu
+	Page Break Before	Öncesinde Sayfa Sonu
+	Page Breaks	Sayfa Sonları
+	Page Color	Sayfa Rengi
+	Page Down	Bir Sayfa Aşağı
+	Page Movement	Sayfa Geçişi
+	Page Number	Sayfa Numarası
+	Page Setup	Sayfa Ayarları
+	Page Up	Bir Sayfa Yukarı
+	Page Width	Sayfa Genişliği
+	Page X of Y	Sayfa X / Y
+	Page break before	Öncesinde sayfa sonu
+	Page image (*.png)	Sayfa görüntüsü (*.png)
+	Page width	Sayfa genişliği
+	Page {page}	Sayfa {page}
+	Page {page} of {pages}	Sayfa {page} / {pages}
+	Page\nBorders	Sayfa\nKenarlıkları
+	Page\nColor	Sayfa\nRengi
+	Page\nNumber	Sayfa\nNumarası
+	Pages	Sayfalar
+	Paragraph	Paragraf
+	Paragraph Details	Paragraf Ayrıntıları
+	Paragraph Down	Sonraki Paragraf
+	Paragraph Settings	Paragraf Ayarları
+	Paragraph Spacing	Paragraf Aralığı
+	Paragraph Up	Önceki Paragraf
+	Paragraphs	Paragraflar
+	Paste	Yapıştır
+	Paste (⌘V)	Yapıştır (⌘V)
+	Paste Formatting	Biçimlendirmeyi Yapıştır
+	Paste Special	Özel Yapıştır
+	Paste Special…	Özel Yapıştır…
+	Paste as:	Yapıştırma biçimi:
+	Paste: Keep Text Only	Yapıştır: Yalnızca Metni Koru
+	Paste: Merge Formatting	Yapıştır: Biçimlendirmeyi Birleştir
+	Pen	Kalem
+	Pencil	Kurşun Kalem
+	Picture Border	Resim Kenarlığı
+	Picture Format	Resim Biçimi
+	Picture Styles	Resim Stilleri
+	Pictures	Resimler
+	Plain text (*.txt)	Düz metin (*.txt)
+	Portrait	Dikey
+	Position	Konum
+	Preview Results	Sonuçları Önizle
+	Preview\nResults	Sonuçları\nÖnizle
+	Previous	Önceki
+	Previous Change	Önceki Değişiklik
+	Previous Comment	Önceki Yorum
+	Previous Record	Önceki Kayıt
+	Previous Section	Önceki Bölüm
+	Print	Yazdır
+	Print Layout	Baskı Düzeni
+	Print\nLayout	Baskı\nDüzeni
+	Proofing	Dil Denetimi
+	Proofing Issues	Dil Denetimi Sorunları
+	Properties	Özellikler
+	Protect	Koru
+	Protect Document	Belgeyi Koru
+	Quick Access Toolbar	Hızlı Erişim Araç Çubuğu
+	Quick Parts	Hızlı Parçalar
+	Quick Tables	Hızlı Tablolar
+	Read Aloud	Sesli Oku
+	Read Mode	Okuma Modu
+	Read\nAloud	Sesli\nOku
+	Read\nMode	Okuma\nModu
+	Reads the clipboard's rich text and keeps its formatting.	Panodaki zengin metni okur ve biçimlendirmesini korur.
+	Reads the clipboard's web content and keeps its formatting.	Panodaki web içeriğini okur ve biçimlendirmesini korur.
+	Reading Highlight	Okuma Vurgusu
+	Recent	Son Kullanılanlar
+	Record Macro	Makro Kaydet
+	Recover Unsaved Documents	Kaydedilmemiş Belgeleri Kurtar
+	Rectangle	Dikdörtgen
+	Redo	Yinele
+	Reduce Hanging Indent	Asılı Girintiyi Azalt
+	References	Başvurular
+	Reject	Reddet
+	Reject All Changes	Tüm Değişiklikleri Reddet
+	Reject Change	Değişikliği Reddet
+	Relaxed	Geniş Aralıklı
+	Remove Background	Arka Planı Kaldır
+	Remove Footer	Altbilgiyi Kaldır
+	Remove Header	Üstbilgiyi Kaldır
+	Remove Hyperlink	Bağlantıyı Kaldır
+	Remove Space After Paragraph	Paragraf Sonrası Boşluğu Kaldır
+	Remove Table of Contents	İçindekiler Tablosunu Kaldır
+	Remove Watermark	Filigranı Kaldır
+	Reopen	Yeniden Aç
+	Repeat	Tekrarla
+	Repeat Header Rows	Başlık Satırlarını Tekrarla
+	Replace	Değiştir
+	Replace All	Tümünü Değiştir
+	Replace Document Text	Belge Metnini Değiştir
+	Replace with:	Şununla değiştir:
+	Replay	Yeniden Oynat
+	Reply	Yanıtla
+	Report	Rapor
+	Research	Araştırma
+	Researcher	Araştırmacı
+	Reset Picture	Resmi Sıfırla
+	Reset to Normal	Normale Sıfırla
+	Resolve	Çöz
+	Resolved	Çözüldü
+	Restart Each Page	Her Sayfada Yeniden Başlat
+	Restart Each Section	Her Bölümde Yeniden Başlat
+	Restart at 1	1'den Yeniden Başlat
+	Restrict Editing	Düzenlemeyi Kısıtla
+	Restrict\nEditing	Düzenlemeyi\nKısıtla
+	Result	Sonuç
+	Results	Sonuçlar
+	Reverse the order	Sırayı ters çevir
+	Reviewing	İnceleme
+	Reviewing Pane	İnceleme Bölmesi
+	Reviewing — edits become suggestions	İnceleme — düzenlemeler öneriye dönüşür
+	Rich Text Format (*.rtf)	Zengin Metin Biçimi (*.rtf)
+	Rich Text Format (RTF)	Zengin Metin Biçimi (RTF)
+	Right	Sağ
+	Right Border	Sağ Kenarlık
+	Right Margin	Sağ Kenar Boşluğu
+	Right-to-Left Text Direction	Sağdan Sola Metin Yönü
+	Left-to-Right Text Direction	Soldan Sağa Metin Yönü
+	Right:	Sağ:
+	Rotate	Döndür
+	Rounded Rectangle	Yuvarlatılmış Dikdörtgen
+	Rows & Columns	Satırlar ve Sütunlar
+	Ruler	Cetvel
+	Rules	Kurallar
+	Résumé	Özgeçmiş
+	Save	Kaydet
+	Save As	Farklı Kaydet
+	Save a copy in another format. Printing goes through a PDF you can print from any viewer.	Başka bir biçimde kopya kaydedin. Yazdırma, herhangi bir görüntüleyiciden yazdırabileceğiniz bir PDF üzerinden yapılır.
+	Save as Template	Şablon Olarak Kaydet
+	Saved	Kaydedildi
+	Search Commands	Komut Ara
+	Search commands and help	Komutlarda ve yardımda ara
+	Search document	Belgede ara
+	Search for templates	Şablon ara
+	Section Breaks	Bölüm Sonları
+	Section Properties	Bölüm Özellikleri
+	Sections	Bölümler
+	Select	Seç
+	Select All	Tümünü Seç
+	Select Cell	Hücre Seç
+	Select Line	Satır Seç
+	Select Objects	Nesneleri Seç
+	Select Paragraph	Paragraf Seç
+	Select Range	Aralık Seç
+	Select Recipients	Alıcıları Seç
+	Select Row	Tablo Satırı Seç
+	Select Sentence	Cümle Seç
+	Select Table	Tablo Seç
+	Select Text	Metin Seç
+	Select Text with Similar Formatting	Benzer Biçimlendirilmiş Metni Seç
+	Select Word	Sözcük Seç
+	Select\nRecipients	Alıcıları\nSeç
+	Selection	Seçim
+	Selection Pane	Seçim Bölmesi
+	Send Backward	Arkaya Gönder
+	Sentence case.	Cümle düzeni.
+	Set Caret	İmleci Konumlandır
+	Set Character Formatting	Karakter Biçimlendirmesini Ayarla
+	Set Numbering Value	Numaralandırma Değerini Ayarla
+	Set Paragraph Formatting	Paragraf Biçimlendirmesini Ayarla
+	Set as Default	Varsayılan Yap
+	Shading	Gölgelendirme
+	Shadow	Gölge
+	Shape Fill	Şekil Dolgusu
+	Shape Format	Şekil Biçimi
+	Shape Outline	Şekil Çizgisi
+	Shape Styles	Şekil Stilleri
+	Shapes	Şekiller
+	Share	Paylaş
+	Shift+Tab	Shift+Tab
+	Show	Göster
+	Show Comments	Yorumları Göster
+	Show Markup	İşaretleri Göster
+	Show Notes	Notları Göster
+	Show all formatting marks	Tüm biçimlendirme işaretlerini göster
+	Show rulers	Cetvelleri göster
+	Show the community button in the title bar	Başlık çubuğunda topluluk düğmesini göster
+	Show/Hide ¶	Göster/Gizle ¶
+	Show\nComments	Yorumları\nGöster
+	Shrink Font 1 Point	Yazı Tipini 1 Punto Küçült
+	Side to Side	Yan Yana
+	Side\nto Side	Yan\nYana
+	Signature Line	İmza Satırı
+	Single	Tek
+	Single Spacing	Tek Satır Aralığı
+	Size	Boyut
+	Size:	Boyut:
+	Small Caps	Küçük Büyük Harf
+	Small caps	Küçük büyük harf
+	SmartArt	SmartArt
+	Sort	Sırala
+	Source code: github.com/storytold/wordcraft	Kaynak kod: github.com/storytold/wordcraft
+	Space before/after:	Önce/sonra boşluk:
+	Spacing	Aralık
+	Spacing (pt):	Aralık (pt):
+	Speech	Konuşma
+	Spelling & Grammar	Yazım ve Dilbilgisi
+	Spelling &\nGrammar	Yazım ve\nDilbilgisi
+	Spelling Suggestions	Yazım Önerileri
+	Split	Böl
+	Split Cells	Hücreleri Böl
+	Split Table	Tabloyu Böl
+	Spreadsheet Table	Elektronik Tablo
+	Standard Colors	Standart Renkler
+	Star	Yıldız
+	Start Mail Merge	Posta Birleştirmeyi Başlat
+	Start Mail\nMerge	Posta\nBirleştirmeyi Başlat
+	Statistics	İstatistikler
+	Status Bar	Durum Çubuğu
+	Strikethrough	Üstü Çizili
+	Studio cover	Stüdyo kapağı
+	Studio handbook (sample)	Stüdyo el kitabı (örnek)
+	Style	Stil
+	Style Inspector	Stil Denetçisi
+	Style Set	Stil Kümesi
+	Style based on:	Temel alınan stil:
+	Style: APA	Stil: APA
+	Styles	Stiller
+	Styles Pane	Stiller Bölmesi
+	Subscript	Alt Simge
+	Superscript	Üst Simge
+	Switch Modes	Mod Değiştir
+	Switch\nModes	Mod\nDeğiştir
+	Symbol	Sembol
+	Symbols	Semboller
+	Synonyms	Eş Anlamlılar
+	Tab	Sekme
+	Table	Tablo
+	Table Column Width	Tablo Sütun Genişliği
+	Table Design	Tablo Tasarımı
+	Table Layout	Tablo Düzeni
+	Table Properties	Tablo Özellikleri
+	Table Row Height	Tablo Satır Yüksekliği
+	Table Style Options	Tablo Stili Seçenekleri
+	Table Styles	Tablo Stilleri
+	Table of Authorities	Hukuki Kaynaklar Tablosu
+	Table of Contents	İçindekiler Tablosu
+	Table of\nContents	İçindekiler\nTablosu
+	Tables	Tablolar
+	Tabs	Sekmeler
+	Tabular List	Tablo Biçiminde Liste
+	Text	Metin
+	Text Box	Metin Kutusu
+	Text Direction	Metin Yönü
+	Text Effects	Metin Efektleri
+	Text Effects and Typography	Metin Efektleri ve Tipografi
+	Text Highlight Color	Metin Vurgu Rengi
+	Text Wrapping	Metin Kaydırma
+	Text from File	Dosyadan Metin
+	Text to display:	Görüntülenecek metin:
+	Text:	Metin:
+	Text\nBox	Metin\nKutusu
+	Text\nDirection	Metin\nYönü
+	The clipboard is empty.	Pano boş.
+	The new style takes the formatting of the current paragraph.	Yeni stil, geçerli paragrafın biçimlendirmesini alır.
+	Theme Colors	Tema Renkleri
+	Theme Fonts	Tema Yazı Tipleri
+	Theme List	Tema Listesi
+	Themes	Temalar
+	Thesaurus	Eş Anlamlılar Sözlüğü
+	Thick	Kalın
+	Three	Üç
+	Tight	Sıkı
+	Top Border	Üst Kenarlık
+	Top Margin	Üst Kenar Boşluğu
+	Top of Page	Sayfa Üstü
+	Top:	Üst:
+	Total Row	Toplam Satırı
+	Track Changes	Değişiklikleri İzle
+	Track Changes: On	Değişiklikleri İzle: Açık
+	Tracking	İzleme
+	Translate	Çevir
+	Transparency	Saydamlık
+	Triangle	Üçgen
+	Two	İki
+	Type Text	Metin Yaz
+	Type a command, e.g. "insert table"	Bir komut yazın, ör. "tablo ekle"
+	UPPERCASE	BÜYÜK HARF
+	Underline	Altı Çizili
+	Underline Words Only	Yalnızca Sözcüklerin Altını Çiz
+	Undo	Geri Al
+	Undo {action}	Geri Al: {action}
+	Unformatted Text	Biçimlendirilmemiş Metin
+	Up	Yukarı
+	Update Field	Alanı Güncelle
+	Update Index	Dizini Güncelle
+	Update Style to Match Selection	Stili Seçime Göre Güncelle
+	Update Table	Tabloyu Güncelle
+	Update Table of Figures	Şekiller Listesini Güncelle
+	Update to Match	Eşleşecek Şekilde Güncelle
+	Update to Match Selection	Seçime Göre Güncelle
+	User Name	Kullanıcı Adı
+	User name:	Kullanıcı adı:
+	Version History	Sürüm Geçmişi
+	Version {version} ({build})	Sürüm {version} ({build})
+	Vertical	Dikey
+	Vertical Alignment	Dikey Hizalama
+	View	Görünüm
+	View Gridlines	Kılavuz Çizgilerini Göster
+	View State	Görünüm Durumu
+	Views	Görünümler
+	Voice	Ses
+	Watermark	Filigran
+	Wave	Dalga
+	Web Layout	Web Düzeni
+	Web\nLayout	Web\nDüzeni
+	Web page (*.html)	Web sayfası (*.html)
+	Whole page	Tüm sayfa
+	Whole words	Tam sözcükler
+	Wide	Geniş
+	Widow/Orphan Control	Tek Kalan Satır Denetimi
+	Widow/Orphan control	Tek kalan satır denetimi
+	Wildcards (regex)	Joker karakterler (regex)
+	Window	Pencere
+	Word Count	Sözcük Sayısı
+	Word Left	Önceki Sözcük
+	Word Right	Sonraki Sözcük
+	Word document (*.docx)	Word belgesi (*.docx)
+	WordArt	WordArt
+	WordCraft	WordCraft
+	Words	Sözcükler
+	Words only	Yalnızca sözcükler
+	Wrap Text	Metni Kaydır
+	Wrap\nText	Metni\nKaydır
+	Write & Insert Fields	Alanları Yaz ve Ekle
+	Write a reply	Yanıt yazın
+	Zoom	Yakınlaştırma
+	Zoom In	Yakınlaştır
+	Zoom Out	Uzaklaştır
+	development build	geliştirme derlemesi
+	lowercase	küçük harf
+	{group} settings	{group} ayarları
+	{key}+Click to follow link	Bağlantıyı açmak için {key} tuşunu basılı tutup tıklayın
+	{selected} of {words} words	{words} sözcükten {selected} seçili
+	{words} words	{words} sözcük
+	Equation	Denklem
+	Review	İncele
+	Track\nChanges	Değişiklikleri\nİzle
+	Track\nChanges ✓	Değişiklikleri\nİzle ✓
+	Scroll ribbon left	Şeridi sola kaydır
+	Scroll ribbon right	Şeridi sağa kaydır
+	Apply Styles	Stilleri Uygula
+	Dark page (white text on black)	Koyu sayfa (siyah üzerine beyaz metin)
+	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Belgeleri, Görünüm › Mod Değiştir'deki gibi ters renklerle gösterir. Kaydetme, yazdırma ve PDF'ler değişmez.
+	Only web (http, https) and email (mailto) links can be followed	Yalnızca web (http, https) ve e-posta (mailto) bağlantıları açılabilir
+	Character Border	Karakter Kenarlığı
+	Direction:	Yön:
+	Right-to-left	Sağdan sola
+	Left-to-right	Soldan sağa
+	Zotero	Zotero
+	Citations	Atıflar
+	Document	Belge
+	Add/Edit\nCitation	Atıf\nEkle/Düzenle
+	Add\nNote	Not\nEkle
+	Add/Edit\nBibliography	Kaynakça\nEkle/Düzenle
+	Refresh	Yenile
+	Document\nPreferences	Belge\nTercihleri
+	Unlink\nCitations	Atıf Bağlarını\nKaldır
+	Waiting for Zotero…	Zotero bekleniyor…
+	Zotero: done	Zotero: tamamlandı
+	Zotero: cancelled	Zotero: iptal edildi
+	Yes	Evet
+	No	Hayır
+	Move Past Citation	Atıf Sonrasına Git
+	Move Past\nCitation	Atıf Sonrasına\nGit
+	Next Sentence	Sonraki Cümle
+	Previous Sentence	Önceki Cümle
+	Next sentence	Sonraki cümle
+	Previous sentence	Önceki cümle
+	Play/Pause	Oynat/Duraklat
+	Read Aloud Status	Sesli Okuma Durumu
+	Reading Speed	Okuma Hızı
+	Skip Citations and Bibliography	Atıfları ve Kaynakçayı Atla
+	Skip citations & bibliography	Atıfları ve kaynakçayı atla
+	Stop Reading	Okumayı Durdur
+	Don't read Zotero, Mendeley or EndNote citations and bibliographies	Zotero, Mendeley ve EndNote atıfları ile kaynakçaları okunmaz
+	Play	Oynat
+	Pause	Duraklat
+	Stop	Durdur
+	Sentence	Cümle
+	Paused	Duraklatıldı
+	Finished	Tamamlandı
+	Stopped	Durduruldu
+	Speed	Hız
+	Normal speed	Normal hız
+	AutoSave documents you have saved in WordCraft	WordCraft'ta kaydettiğiniz belgeleri otomatik kaydet
+	AutoSave failed: {error}. Save the document to turn AutoSave back on.	Otomatik Kaydet başarısız oldu: {error}. Otomatik Kaydet'i yeniden açmak için belgeyi kaydedin.
+	Couldn't download {name}: {error}	{name} indirilemedi: {error}
+	Do you want to save changes to {name}?	{name} içindeki değişiklikleri kaydetmek istiyor musunuz?
+	Don't Save	Kaydetme
+	That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.	Bu biçim her şeyi korumaz; bu yüzden belge açık kalır. Devam etmek için Word belgesi (.docx) olarak kaydedin.
+	Your changes will be lost if you don't save them.	Kaydetmezseniz değişiklikleriniz kaybolur.
+	Change Structure	Yapıyı Değiştir
+	Change to Display	Ayrı Satıra Dönüştür
+	Change to Inline	Satır İçine Dönüştür
+	Conversions	Dönüşümler
+	Delete Back in Equation	Denklemde Geri Sil
+	Delete in Equation	Denklemde Sil
+	Edit Equation	Denklemi Düzenle
+	Enter in Equation	Denklemde Yeni Satır
+	Equation Gallery	Denklem Galerisi
+	Equation Info	Denklem Bilgisi
+	Equation Number	Denklem Numarası
+	Input Format	Girdi Biçimi
+	Insert Structure	Yapı Ekle
+	Insert Symbol	Sembol Ekle
+	Justification	Hizalama
+	Leave Equation	Denklemden Çık
+	Move in Equation	Denklemde İmleci Taşı
+	Normal Text	Normal Metin
+	Set Equation	Denklemi Ayarla
+	Structure Actions	Yapı İşlemleri
+	Structures	Yapılar
+	Tools	Araçlar
+	Type in Equation	Denklemde Yaz
+	Inline	Satır İçi
+	Number	Numara
+	Close Equation	Denklemi Kapat
+	Insert New Equation	Yeni Denklem Ekle
+	Built-In	Yerleşik
+	Professional	Profesyonel
+	Linear	Doğrusal
+	Fraction	Kesir
+	Script	Üst/Alt Simge
+	Radical	Kök
+	Integral	İntegral
+	Large\nOperator	Büyük\nİşleç
+	Bracket	Parantez
+	Function	Fonksiyon
+	Accent	Vurgu İşareti
+	Limit and\nLog	Limit ve\nLogaritma
+	Operator	İşleç
+	Equation Options	Denklem Seçenekleri
+	All symbol sets	Tüm sembol kümeleri
+	Send the document straight to the system print dialog, or save a copy in another format below.	Belgeyi doğrudan sistem yazdırma iletişim kutusuna gönderin veya aşağıdan başka bir biçimde kopya kaydedin.
+	Or save a copy in another format:	Veya başka bir biçimde kopya kaydedin:
+	Opening print dialog…	Yazdırma iletişim kutusu açılıyor…
+	Print failed: {error}	Yazdırma başarısız: {error}
+	Couldn't open {path}: {error}	{path} açılamadı: {error}
+	Column Selection	Sütun Seçimi
+	New Table Style	Yeni Tablo Stili
+	Modify Table Style	Tablo Stilini Değiştir
+	New Table Style…	Yeni Tablo Stili…
+	Modify Table Style…	Tablo Stilini Değiştir…
+	Apply formatting to:	Biçimlendirilecek alan:
+	Whole Table	Tüm Tablo
+	Fill color:	Dolgu rengi:
+	{count} items highlighted	{count} öğe vurgulandı
+	{n} pt	{n} pt
+	Not {name}	{name} değil
+	Level {n}	Düzey {n}
+	Body Text	Gövde Metni
+	{n} lines	{n} satır
+	At least {n}	En az {n}
+	Exactly {n}	Tam {n}
+	Centered	Ortalanmış
+	Character spacing	Karakter aralığı
+	Don't add space between paragraphs of the same style	Aynı stildeki paragraflar arasına boşluk ekleme
+	Don't hyphenate	Heceleme yapma
+	Double strikethrough	Çift üstü çizili
+	Drop cap	Büyük başlangıç harfi
+	First line	İlk satır
+	Font color	Yazı tipi rengi
+	Highlight	Vurgu
+	Justified	İki yana yaslanmış
+	Left indent	Sol girinti
+	Line spacing	Satır aralığı
+	Outline level	Ana hat düzeyi
+	Raised/lowered	Yükseltilmiş/alçaltılmış
+	Right indent	Sağ girinti
+	Scale	Ölçek
+	Space after	Sonra boşluk
+	Space before	Önce boşluk
+	Suppress line numbers	Satır numaralarını gizle
+	Underline color	Alt çizgi rengi
+	Letters	Mektuplar
+	E-mail Messages	E-posta İletileri
+	Directory	Katalog
+	Normal Word Document	Normal Word Belgesi
+	If…Then…Else…	Eğer…O Zaman…Yoksa…
+	If…Then…Else	Eğer…O Zaman…Yoksa
+	Merge Record #	Birleştirme Kaydı No.
+	Skip Record If…	Koşula Göre Kaydı Atla…
+	Skip Record If	Koşula Göre Kaydı Atla
+	Equals:	Eşittir:
+	Then insert:	Bu durumda ekle:
+	Otherwise insert:	Diğer durumda ekle:
+	Courtesy Title	Hitap
+	First Name	Ad
+	Last Name	Soyad
+	Company	Şirket
+	Address	Adres
+	City	Şehir
+	State	İl/Eyalet
+	Postal Code	Posta Kodu
+	Country	Ülke
+	(not matched)	(eşleşmedi)
+	Leave a recipient out of the merge when a field has this value.	Bir alan bu değere sahipse alıcıyı birleştirmeden çıkarır.
+	Insert one text or another, depending on a field's value.	Bir alanın değerine göre farklı bir metin ekler.
+	Select recipients first to match their fields.	Alanları eşleştirmek için önce alıcıları seçin.
+	The recipient-list field that fills each part of an address block and greeting line.	Adres bloğunun ve selamlama satırının her bölümünü dolduran alıcı listesi alanı.
+	No errors found: every merge field is in the recipient list.	Hata bulunamadı: her birleştirme alanı alıcı listesinde var.
+	These merge fields aren't in the recipient list:	Bu birleştirme alanları alıcı listesinde yok:
+	Add at least one field.	En az bir alan ekleyin.
+	Add Field	Alan Ekle
+	Every field needs a name.	Her alanın bir adı olmalıdır.
+	Field name	Alan adı
+	Field names must be different.	Alan adları farklı olmalıdır.
+	Fields:	Alanlar:
+	Field:	Alan:
+	Find:	Bul:
+	New Entry	Yeni Girdi
+	Recipient List	Alıcı Listesi
+	Recipients: {count}	Alıcılar: {count}
+	Remove field	Alanı kaldır
+	Remove recipient	Alıcıyı kaldır
+	Select recipients first to choose from their fields.	Alanlarından seçim yapmak için önce alıcıları seçin.
+	Type a New List…	Yeni Liste Yaz…
+	Type at least one recipient.	En az bir alıcı girin.
+	Type the recipients, or load them from a file.	Alıcıları yazın veya dosyadan yükleyin.
+	Use an Existing List…	Var Olan Listeyi Kullan…
+	Interface theme:	Arayüz teması:
+	Interface\nTheme	Arayüz\nTeması
+	Interface Theme	Arayüz Teması
+	Light	Açık
+	Dark	Koyu
+	Use system setting	Sistem ayarını kullan
+	A file dialog is already open.	Bir dosya iletişim kutusu zaten açık.
+	Alt text	Alternatif metin
+	Alt:	Alt metin:
+	W:	G:
+	H:	Y:
+	Reset	Sıfırla
+	Reset Crop	Kırpmayı Sıfırla
+	Insert a new equation (Alt+=)	Yeni denklem ekle (Alt+=)
+	Leave the equation (Esc)	Denklemden çık (Esc)
+	Preview	Önizleme
+	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft
+	(no style)	(stil yok)
+	Add Object to Selection	Nesneyi Seçime Ekle
+	Add space between Asian and Latin text	Asya ve Latin metni arasına boşluk ekle
+	Add space between Asian text and numbers	Asya metni ile sayılar arasına boşluk ekle
+	Add tab stop at:	Sekme durağı ekle:
+	Aligned at:	Hizalama konumu:
+	Allow hanging punctuation	Asılı noktalamaya izin ver
+	Allow Latin text to wrap in the middle of a word	Latin metninin sözcük ortasında alt satıra geçmesine izin ver
+	Apply Asian line-breaking rules (kinsoku)	Asya satır bölme kurallarını uygula (kinsoku)
+	Asian Typography	Asya Tipografisi
+	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	Otomatik Kaydet tarayıcıda kullanılamaz: dosyalarınıza yazamaz. Kaydet komutu bir kopya indirir.
+	AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave.	Otomatik Kaydet yalnızca .docx, .odt ve .rtf dosyalarıyla çalışır; {name} tüm biçimlendirmeyi koruyamaz. Otomatik Kaydet'i açmak için .docx olarak kaydedin.
+	Balloons	Balonlar
+	Bullet	Madde İşareti
+	By author	Yazara göre
+	Changed lines:	Değişen satırlar:
+	Click level to modify:	Değiştirilecek düzeye tıklayın:
+	Color only	Yalnızca renk
+	Define New Multilevel List	Yeni Çok Düzeyli Liste Tanımla
+	Define New Multilevel List…	Yeni Çok Düzeyli Liste Tanımla…
+	Deletions:	Silmeler:
+	Enter formatting for number:	Numara biçimini girin:
+	Follow number with:	Numaradan sonra:
+	Formatting	Biçimlendirme
+	Include level number from:	Şu düzeyin numarasını ekle:
+	Ink	Mürekkep
+	Insertions and Deletions	Eklemeler ve Silmeler
+	Insertions:	Eklemeler:
+	Left border	Sol kenarlık
+	Legal style numbering	Hukuki stilde numaralandırma
+	Link level to style:	Düzeyi stile bağla:
+	List Definition	Liste Tanımı
+	Nothing	Hiçbiri
+	Number alignment:	Numara hizalaması:
+	Number format	Numara biçimi
+	Number style for this level:	Bu düzeyin numara stili:
+	Outside border	Dış kenarlık
+	Restart list after:	Listeyi şundan sonra yeniden başlat:
+	Right border	Sağ kenarlık
+	Save the document to turn on AutoSave	Otomatik Kaydet'i açmak için belgeyi kaydedin
+	Save the document to turn on AutoSave (a file you have only opened isn't rewritten until you save it)	Otomatik Kaydet'i açmak için belgeyi kaydedin (yalnızca açtığınız bir dosya, siz kaydedene kadar yeniden yazılmaz)
+	Tab stop position:	Sekme durağı konumu:
+	Default tab stops:	Varsayılan sekme durakları:
+	Tab stops to be cleared:	Temizlenecek sekme durakları:
+	All	Tümü
+	Decimal	Ondalık
+	Bar	Çubuk
+	Leader	Dolgu karakteri
+	Set	Ayarla
+	Page Border	Sayfa Kenarlığı
+	Apply to:	Uygula:
+	Whole document	Tüm belge
+	This section	Bu bölüm
+	Fill	Dolgu
+	Setting:	Ayar:
+	3-D	3B
+	Custom	Özel
+	Style:	Stil:
+	Dot dash	Nokta çizgi
+	Triple	Üçlü
+	Between	Paragraflar arası
+	Borders and Shading	Kenarlıklar ve Gölgelendirme
+	Tabs…	Sekmeler…
+	Borders and Shading…	Kenarlıklar ve Gölgelendirme…
+	Click a border between two cells to merge them. Esc stops.	İki hücreyi birleştirmek için aradaki kenarlığa tıklayın. Esc ile bitirin.
+	Clipboard Pane	Pano Bölmesi
+	Clipboard Items	Pano Öğeleri
+	Paste Clipboard Item	Pano Öğesini Yapıştır
+	Paste All	Tümünü Yapıştır
+	Delete Clipboard Item	Pano Öğesini Sil
+	Click an item to paste it.	Yapıştırmak için bir öğeye tıklayın.
+	Nothing collected yet. Items you copy or cut appear here.	Henüz bir şey toplanmadı. Kopyaladığınız veya kestiğiniz öğeler burada görünür.
+	(picture or object)	(resim veya nesne)
+	Compress punctuation at the start of a line	Satır başındaki noktalamayı sıkıştır
+	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	Tablo çizmek için bir dikdörtgen, hücreleri bölmek için üzerlerinden bir çizgi sürükleyin. Esc ile bitirin.
+	Draw Table	Tablo Çiz
+	Indents and Spacing	Girintiler ve Aralık
+	Line breaking	Satır bölme
+	Show all revisions inline	Tüm düzeltmeleri satır içinde göster
+	Show only comments and formatting in balloons	Balonlarda yalnızca yorumları ve biçimlendirmeyi göster
+	Show revisions in balloons	Düzeltmeleri balonlarda göster
+	Space	Boşluk
+	Start at:	Başlangıç değeri:
+	Tab character	Sekme karakteri
+	Text indent at:	Metin girintisi:
+	Track Changes Options	Değişiklikleri İzleme Seçenekleri
+	Track formatting	Biçimlendirmeyi izle
+	Ungroup	Grubu Çöz
+	Browse…	Gözat…
+	Height:	Yükseklik:
+	Width:	Genişlik:
+	Row	Satır
+	Cell	Hücre
+	Preferred width:	Tercih edilen genişlik:
+	Alignment:	Hizalama:
+	Indent from left:	Soldan girinti:
+	Specify height:	Yüksekliği belirt:
+	Exactly	Tam
+	At least	En az
+	Allow row to break across pages	Satırın sayfalar arasında bölünmesine izin ver
+	Repeat as header row on each page	Her sayfada başlık satırı olarak tekrarla
+	Vertical alignment:	Dikey hizalama:
+	Top	Üst
+	Bottom	Alt
+	Draw Ink	Mürekkeple Çiz
+	Erase Ink	Mürekkebi Sil
+	Hide Ink	Mürekkebi Gizle
+	Hide\nInk	Mürekkebi\nGizle
+	Pens	Kalemler
+	Thickness	Kalınlık
+	(All)	(Tümü)
+	(none)	(yok)
+	(normal text)	(normal metin)
+	1/4 Em Space	1/4 Em Boşluk
+	A mail merge field	Bir posta birleştirme alanı
+	A numbered sequence (figures, tables…)	Numaralı bir dizi (şekiller, tablolar…)
+	A table of contents	Bir içindekiler tablosu
+	Categories:	Kategoriler:
+	Character	Karakter
+	Character code:	Karakter kodu:
+	Col #:	Sütun no.:
+	Copyright	Telif Hakkı
+	Date and Time	Tarih ve Saat
+	Date formats:	Tarih biçimleri:
+	Description:	Açıklama:
+	Document Information	Belge Bilgileri
+	Double Closing Quote	Çift Kapanış Tırnağı
+	Double Opening Quote	Çift Açılış Tırnağı
+	Ellipsis	Üç Nokta
+	Em Dash	Uzun Tire
+	En Dash	Orta Tire
+	Em Space	Em Boşluk
+	En Space	En Boşluk
+	Equal column width	Eşit sütun genişliği
+	Field Codes	Alan Kodları
+	Field code:	Alan kodu:
+	Field codes:	Alan kodları:
+	Field name:	Alan adı:
+	Field names:	Alan adları:
+	Field properties	Alan özellikleri
+	Field…	Alan…
+	Format:	Biçim:
+	Hide Codes	Kodları Gizle
+	Index and Tables	Dizin ve Tablolar
+	Line between	Sütunlar arasında çizgi
+	Links and References	Bağlantılar ve Başvurular
+	Mail Merge	Posta Birleştirme
+	More Columns…	Diğer Sütunlar…
+	More Symbols…	Diğer Semboller…
+	No-Width Non Break	Sıfır Genişlikli Bölünmez
+	No-Width Optional Break	Sıfır Genişlikli İsteğe Bağlı Bölme
+	Paragraph Mark	Paragraf İşareti
+	Pick a field from the list	Listeden bir alan seçin
+	Preserve formatting during updates	Güncellemelerde biçimlendirmeyi koru
+	Presets	Hazır ayarlar
+	Recently used symbols:	Son kullanılan semboller:
+	Registered	Tescilli Marka
+	Section Mark	Bölüm İşareti
+	Sequence name:	Dizi adı:
+	Shortcut key:	Kısayol tuşu:
+	Single Closing Quote	Tek Kapanış Tırnağı
+	Single Opening Quote	Tek Açılış Tırnağı
+	Spacing:	Aralık:
+	Special Characters	Özel Karakterler
+	Subset:	Alt küme:
+	The time right now	Şu anki saat
+	When this document was first created	Belgenin ilk oluşturulduğu tarih
+	When this document was most recently printed	Belgenin en son yazdırıldığı tarih
+	When this document was most recently saved	Belgenin en son kaydedildiği tarih
+	The document has no bookmarks yet.	Belgede henüz yer işareti yok.
+	Who the document properties name as author	Belge özelliklerinde yazar olarak geçen kişi
+	Name of the file this document is saved as	Belgenin kaydedildiği dosyanın adı
+	Title from the document properties	Belge özelliklerindeki başlık
+	How many pages the whole document has	Belgenin toplam sayfa sayısı
+	How many pages this section has	Bu bölümün sayfa sayısı
+	Number of the page the field sits on	Alanın bulunduğu sayfanın numarası
+	Number of the section the field sits in	Alanın bulunduğu bölümün numarası
+	How many words the document holds	Belgedeki sözcük sayısı
+	Page on which a bookmarked passage falls	Yer işaretli metnin bulunduğu sayfa
+	Copy of the text a bookmark marks	Yer işaretinin kapsadığı metnin kopyası
+	This field has no options.	Bu alanın seçeneği yok.
+	This font has no characters to show.	Bu yazı tipinde gösterilecek karakter yok.
+	This point forward	Bu noktadan itibaren
+	The date it is today	Bugünün tarihi
+	Trademark	Ticari Marka
+	Type the field's name and its switches, for example PAGE \\* roman.	Alanın adını ve anahtarlarını yazın, örneğin PAGE \\* roman.
+	Width and spacing	Genişlik ve aralık
+	from Unicode (hex)	Unicode'dan (onaltılık)
+	Shape Effects	Şekil Efektleri
+	Glow	Parlama
+	Soft Edges	Yumuşak Kenarlar
+	No Shadow	Gölge Yok
+	No Glow	Parlama Yok
+	No Soft Edges	Yumuşak Kenar Yok
+	Glow Colors	Parlama Renkleri
+	Weight	Kalınlık
+	Shadow, glow and soft edges	Gölge, parlama ve yumuşak kenarlar
+	Offset: Bottom Right	Kaydırma: Sağ Alt
+	Offset: Bottom	Kaydırma: Alt
+	Offset: Bottom Left	Kaydırma: Sol Alt
+	Offset: Right	Kaydırma: Sağ
+	Offset: Center	Kaydırma: Orta
+	Offset: Left	Kaydırma: Sol
+	Offset: Top Right	Kaydırma: Sağ Üst
+	Offset: Top	Kaydırma: Üst
+	Offset: Top Left	Kaydırma: Sol Üst
+	Manage Styles	Stilleri Yönet
+	Show or Hide Style	Stili Göster veya Gizle
+	Manage Styles…	Stilleri Yönet…
+	Sort order:	Sıralama:
+	As Recommended	Önerilen sırayla
+	Alphabetical	Alfabetik
+	Font: {font}	Yazı tipi: {font}
+	{size} pt	{size} pt
+	Color: {color}	Renk: {color}
+	Space before: {pt} pt	Önce boşluk: {pt} pt
+	Space after: {pt} pt	Sonra boşluk: {pt} pt
+	Based on: {style}	Temel alınan: {style}
+	Paragraph style	Paragraf stili
+	Character style	Karakter stili
+	Linked style (paragraph and character)	Bağlantılı stil (paragraf ve karakter)
+	Table style	Tablo stili
+	Built-in style	Yerleşik stil
+	Show in the Styles gallery	Stiller galerisinde göster
+	Hide from style lists	Stil listelerinde gizle
+	Built-in styles can't be deleted.	Yerleşik stiller silinemez.
+	Delete Table Style	Tablo Stilini Sil
+	Password	Parola
+	Password:	Parola:
+	Confirm password:	Parolayı onaylayın:
+	Encrypt with Password…	Parolayla Şifrele…
+	Change Password…	Parolayı Değiştir…
+	Remove Password	Parolayı Kaldır
+	A password is required to open this document.	Bu belgeyi açmak için parola gerekiyor.
+	Anyone can open this document. Encrypt it with a password to keep it private.	Bu belgeyi herkes açabilir. Gizli tutmak için parolayla şifreleyin.
+	Anyone who opens the document will need this password.	Belgeyi açmak isteyen herkesin bu parolaya ihtiyacı olacak.
+	{name} is protected with a password.	{name} parolayla korunuyor.
+	That password isn't right. Check it (passwords are case-sensitive) and try again.	Parola yanlış. Kontrol edip yeniden deneyin (parolalar büyük/küçük harfe duyarlıdır).
+	The document will be saved with a password. Save it to protect it.	Belge parolayla kaydedilecek. Korumak için belgeyi kaydedin.
+	The password is removed. Save the document to keep the change.	Parola kaldırıldı. Değişikliği korumak için belgeyi kaydedin.
+	The passwords don't match.	Parolalar eşleşmiyor.
+	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	Parolayı güvenli bir yerde saklayın: parola olmadan WordCraft dahil hiç kimse belgeyi açamaz. Parolayı kaldırmak için iki kutuyu da boş bırakın.
+	Align Top Left	Sol Üste Hizala
+	Align Top Center	Üst Ortaya Hizala
+	Align Top Right	Sağ Üste Hizala
+	Align Center Left	Sol Ortaya Hizala
+	Align Center	Ortaya Hizala
+	Align Center Right	Sağ Ortaya Hizala
+	Align Bottom Left	Sol Alta Hizala
+	Align Bottom Center	Alt Ortaya Hizala
+	Align Bottom Right	Sağ Alta Hizala
+	{contributors} contributors · {commits} commits	{contributors} katkıda bulunan · {commits} commit
+	{cols}×{rows} Table	{cols}×{rows} Tablo
+	AaBbYyZz	AaBbYyZz ĞğİıŞş
+	pt	pt
+	Document1	Belge1
+	Username	Kullanıcı adı
+	Display name	Görünen ad
+	Real name	Gerçek ad
+	Name	Ad
+	PRs	PR'lar
+	Commits	Commit'ler
+	First	İlk
+	Last	Son
+	Model	Model
+	Version	Sürüm
+	% of all commits	Commit payı (%)
+	Lines +/−	Satır +/−
+	Craft	Zanaat
+	Studio	Stüdyo
+	Atelier	Atölye
+	Darkroom	Karanlık Oda
+	Gallery	Galeri
+	Sketchbook	Eskiz Defteri
+	Change Picture…	Resmi Değiştir…
+	Font…	Yazı Tipi…
+	Paragraph…	Paragraf…
+	Link…	Bağlantı…
+	Size and Crop…	Boyut ve Kırpma…
+	Insert Columns to the Left	Sola Sütun Ekle
+	Insert Columns to the Right	Sağa Sütun Ekle
+	Insert Rows Above	Üste Satır Ekle
+	Insert Rows Below	Alta Satır Ekle
+	Mon	Pzt
+	Tue	Sal
+	Wed	Çar
+	Sum	Toplam
+	North	Kuzey
+	South	Güney
+	West	Batı
+	Total	Toplam
+	Rotation	Döndürme
+	Rotation:	Döndürme:
+	Rotate Right 90°	Sağa 90° Döndür
+	Rotate Left 90°	Sola 90° Döndür
+	Flip Vertical	Dikey Çevir
+	Flip Horizontal	Yatay Çevir
+	Formatted	Biçimlendirildi
