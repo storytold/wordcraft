@@ -22,6 +22,7 @@ pub mod dialogs;
 pub mod dialogs_insert;
 pub mod dialogs_lists;
 pub mod dialogs_para;
+pub mod dialogs_smart_art;
 pub mod equation_tab;
 pub mod file_dialogs;
 pub mod frame;
@@ -195,6 +196,10 @@ pub struct WordApp {
     last_autosave: f64,
     /// The tab shown before the Equation tab came up (restored when editing ends).
     pub(crate) equation_prev_tab: Option<String>,
+    /// SmartArt Text Pane: the item last focused (Promote, Demote and Add Shape act on it) and
+    /// the item being typed in (its keystrokes join one undo step).
+    pub smart_art_item: Option<usize>,
+    pub(crate) smart_art_typing: Option<usize>,
     /// Zotero commands in flight (`ui.zotero.*`).
     pub zotero: zotero::ZoteroLink,
     /// The egui context, once the first frame has run (background work wakes the UI with it).
@@ -263,6 +268,8 @@ impl WordApp {
             word_count: (0, 0),
             last_autosave: 0.0,
             equation_prev_tab: None,
+            smart_art_item: None,
+            smart_art_typing: None,
             zotero: zotero::ZoteroLink::default(),
             ctx: None,
             read_aloud_at: None,
@@ -1095,6 +1102,8 @@ fn input_dialog(id: &str, params: &Value) -> Option<&'static str> {
         // Symbol without a character and Field without a code show their dialogs (#321).
         "insert.symbol" if !has("char") => Some("symbol"),
         "insert.field" if !has("instr") => Some("field"),
+        // SmartArt without a layout or items shows the layout picker.
+        "insert.smartArt" if !has("layout") && !has("items") => Some("insertSmartArt"),
         // Table Properties without settings shows the dialog (with settings it applies them).
         "table.properties" if params.as_object().is_none_or(|m| m.is_empty()) => Some("tableProperties"),
         // Tabs, Borders and Shading, and Page Borders without settings show their dialogs (#320).

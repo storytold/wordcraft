@@ -1323,3 +1323,44 @@
 	Flip Vertical	Inverter verticalmente
 	Flip Horizontal	Inverter horizontalmente
 	Formatted	Formatado
+	Add Shape	Adicionar forma
+	Change Colors	Alterar cores
+	Change Layout	Alterar layout
+	Create Graphic	Criar gráfico
+	Demote	Rebaixar
+	Edit Items	Editar itens
+	Layouts	Layouts
+	Promote	Promover
+	Reset Graphic	Redefinir gráfico
+	SmartArt Design	Design do SmartArt
+	SmartArt Styles	Estilos de SmartArt
+	Text Pane	Painel de texto
+	List	Lista
+	Process	Processo
+	Cycle	Ciclo
+	Hierarchy	Hierarquia
+	Relationship	Relação
+	Pyramid	Pirâmide
+	Basic List	Lista básica
+	Basic Process	Processo básico
+	Basic Cycle	Ciclo básico
+	Basic Pyramid	Pirâmide básica
+	Basic Radial	Radial básico
+	Basic Matrix	Matriz básica
+	Basic Venn	Venn básico
+	Shows items of equal weight as blocks in rows.	Mostra itens de mesmo peso como blocos em linhas.
+	Shows steps in order, left to right, with arrows between them.	Mostra etapas em ordem, da esquerda para a direita, com setas entre elas.
+	Shows steps that repeat, around a circle.	Mostra etapas que se repetem, ao redor de um círculo.
+	Shows a tree: each item below the item it belongs to.	Mostra uma árvore: cada item abaixo do item ao qual pertence.
+	Shows parts that build on each other, largest at the bottom.	Mostra partes que se apoiam umas nas outras, a maior embaixo.
+	Shows items around a central idea: the first item is the centre.	Mostra itens ao redor de uma ideia central: o primeiro item é o centro.
+	Shows parts of a whole as quadrants.	Mostra as partes de um todo como quadrantes.
+	Shows overlapping ideas as overlapping circles.	Mostra ideias sobrepostas como círculos sobrepostos.
+	Accent {n}	Ênfase {n}
+	Colorful	Colorido
+	Insert SmartArt	Inserir SmartArt
+	One line per item. Enter adds an item.	Uma linha por item. Enter adiciona um item.
+	Remove	Remover
+	Add\nShape	Adicionar\nforma
+	Change\nColors	Alterar\ncores
+	Reset\nGraphic	Redefinir\ngráfico

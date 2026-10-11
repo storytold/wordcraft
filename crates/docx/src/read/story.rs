@@ -744,14 +744,21 @@ impl Reader<'_> {
             GraphicKind::Chart => gd.child("c:chart").and_then(|c| c.attr("r:id")).and_then(|id| super::part_of(rels, id, rt::CHART)),
             GraphicKind::Diagram => self.diagram_part(gd, rels),
         };
-        let Some(path) = part else { return Arc::new(Graphic { kind, items: Vec::new(), w, h, source }) };
+        let Some(path) = part else { return Arc::new(Graphic { kind, items: Vec::new(), w, h, source, smart_art: None }) };
         let key = (kind, path, w.to_bits(), h.to_bits());
         if let Some(g) = self.graphics.get(&key) {
             return g.clone();
         }
         let items = if self.graphic_budget == 0 { Vec::new() } else { self.graphic_items(kind, &key.1, w, h) };
         self.graphic_budget = self.graphic_budget.saturating_sub(graphic_work(&items));
-        let g = Arc::new(Graphic { kind, items, w, h, source });
+        // SmartArt that is exactly what WordCraft writes for its model can be edited (and is
+        // written from the model); any other stays as it was read.
+        let smart_art = match kind {
+            GraphicKind::Diagram if !items.is_empty() => self.smart_art_spec(gd, rels).map(Arc::new),
+            _ => None,
+        };
+        let source = if smart_art.is_some() { None } else { source };
+        let g = Arc::new(Graphic { kind, items, w, h, source, smart_art });
         self.graphics.insert(key, g.clone());
         g
     }

@@ -2732,3 +2732,130 @@ fn deleting_the_last_cell_column_never_leaves_a_table_without_rows() {
     run(&mut s, "edit.undo", json!({}));
     assert!(s.doc.body.iter().any(|b| b.as_table().is_some_and(|t| !t.rows.is_empty())));
 }
+
+/// The first SmartArt (or other graphic) in the body, selected.
+fn select_graphic(s: &mut Session) {
+    let (path, off) = (0..s.doc.body.len() as u32)
+        .find_map(|b| {
+            let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path(vec![b]))?;
+            let off = p.object_offsets().into_iter().find(|o| matches!(p.object_at(*o), Some(wordcraft_doc::InlineObject::Graphic { .. })))?;
+            Some((wordcraft_doc::Path(vec![b]), off))
+        })
+        .expect("a graphic");
+    let at = Pos { story: StoryRef::Body, path, off };
+    let end = Pos { off: off + wordcraft_doc::para::OBJ.len_utf8(), ..at.clone() };
+    s.sel = crate::Selection { anchor: at, focus: end };
+}
+
+/// #497: Insert › SmartArt saves as diagram parts (data, layout, style, colours, drawing) and
+/// reopens as the same editable graphic; an edited data part stays read-only.
+#[test]
+fn smart_art_round_trips_through_docx() {
+    use std::io::Read;
+    let mut s = s();
+    let r = run(
+        &mut s,
+        "insert.smartArt",
+        json!({"layout": "hierarchy", "items": ["Root", "\tLeft", {"text": "Right", "level": 1}], "colors": "colorful"}),
+    );
+    assert_eq!(r["smartArt"]["layout"], "hierarchy");
+    let spec = cmd::smart_art::selected_smart_art(&s).expect("selected after insert");
+    let bytes = crate::io::save_bytes("sa.docx", &s.doc).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    for part in ["data1", "layout1", "quickStyle1", "colors1", "drawing1"] {
+        assert!(zip.by_name(&format!("word/diagrams/{part}.xml")).is_ok(), "{part} written");
+    }
+    let mut ct = String::new();
+    zip.by_name("[Content_Types].xml").unwrap().read_to_string(&mut ct).unwrap();
+    assert!(ct.contains("diagramDrawing+xml") && ct.contains("diagramData+xml"), "{ct}");
+    let mut s2 = Session::new(crate::io::open_bytes("sa.docx", &bytes).unwrap());
+    select_graphic(&mut s2);
+    assert_eq!(cmd::smart_art::selected_smart_art(&s2).as_deref(), Some(&*spec), "reopens editable");
+    run(&mut s2, "smartArt.layout", json!({"layout": "venn"}));
+    // Saved again, and once more after reopening: still the same graphic.
+    let again = crate::io::save_bytes("sa.docx", &s2.doc).unwrap();
+    let mut s3 = Session::new(crate::io::open_bytes("sa.docx", &again).unwrap());
+    select_graphic(&mut s3);
+    assert_eq!(cmd::smart_art::selected_smart_art(&s3).map(|g| g.layout), Some(wordcraft_doc::smart_art::SmartArtLayout::Venn));
+    // A data part another program rewrote: shown, not editable.
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&again)).unwrap();
+    let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for i in 0..zip.len() {
+        let mut f = zip.by_index(i).unwrap();
+        let name = f.name().to_string();
+        let mut buf = Vec::new();
+        f.read_to_end(&mut buf).unwrap();
+        if name.ends_with("data1.xml") {
+            buf = String::from_utf8(buf).unwrap().replace("<dgm:bg/>", "<dgm:bg><a:noFill/></dgm:bg>").into_bytes();
+        }
+        out.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        std::io::Write::write_all(&mut out, &buf).unwrap();
+    }
+    let foreign = out.finish().unwrap().into_inner();
+    let mut s4 = Session::new(crate::io::open_bytes("sa.docx", &foreign).unwrap());
+    select_graphic(&mut s4);
+    assert!(cmd::smart_art::selected_smart_art(&s4).is_none());
+    assert!(s4.run("smartArt.layout", &json!({"layout": "cycle"})).is_err());
+}
+
+/// #497: item, layout and colour edits are one undo step each; promote and demote move an item
+/// with the items under it.
+#[test]
+fn smart_art_edits_undo_one_step_each() {
+    let mut s = s();
+    run(&mut s, "insert.smartArt", json!({"layout": "process"}));
+    let items = |s: &Session| cmd::smart_art::selected_smart_art(s).unwrap().items.iter().map(|i| (i.text.clone(), i.level)).collect::<Vec<_>>();
+    let before = items(&s);
+    run(&mut s, "smartArt.items", json!({"items": ["One", "Two", "\tTwo a"]}));
+    assert_eq!(items(&s), [("One".to_string(), 0), ("Two".to_string(), 0), ("Two a".to_string(), 1)]);
+    run(&mut s, "smartArt.demote", json!({"index": 1}));
+    assert_eq!(items(&s)[1..], [("Two".to_string(), 1), ("Two a".to_string(), 2)]);
+    run(&mut s, "smartArt.promote", json!({"index": 1}));
+    run(&mut s, "smartArt.addShape", json!({"after": 0, "text": "New"}));
+    assert_eq!(items(&s)[1], ("New".to_string(), 0));
+    run(&mut s, "smartArt.colors", json!({"variant": "accent4"}));
+    run(&mut s, "smartArt.layout", json!({"layout": "pyramid"}));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(cmd::smart_art::selected_smart_art(&s).unwrap().layout, wordcraft_doc::smart_art::SmartArtLayout::Process);
+    for _ in 0..5 {
+        run(&mut s, "edit.undo", json!({}));
+    }
+    assert_eq!(items(&s), before);
+    assert!(s.run("smartArt.promote", &json!({"index": 0})).is_err(), "already at the top");
+    run(&mut s, "picture.size", json!({"width": 200, "height": 120, "lockAspect": false}));
+}
+
+/// #497: hostile SmartArt params are capped or refused, never a panic.
+#[test]
+fn smart_art_hostile_params_are_capped() {
+    use wordcraft_doc::smart_art::{MAX_ITEMS, MAX_LEVEL, MAX_TEXT};
+    let mut s = s();
+    let many: Vec<serde_json::Value> = (0..MAX_ITEMS * 3).map(|i| json!({"text": "x".repeat(10_000), "level": i * 1000})).collect();
+    run(&mut s, "insert.smartArt", json!({"layout": "hierarchy", "items": many, "width": 1e30, "height": -5}));
+    let g = cmd::smart_art::selected_smart_art(&s).unwrap();
+    assert_eq!(g.items.len(), MAX_ITEMS);
+    assert!(g.items.iter().all(|i| i.text.chars().count() <= MAX_TEXT && i.level <= MAX_LEVEL));
+    for bad in [json!({"items": []}), json!({"items": "x"}), json!({"items": [5]}), json!({"layout": "spiral"}), json!({"layout": 3})] {
+        assert!(s.run("insert.smartArt", &bad).is_err(), "{bad}");
+    }
+    let junk = [json!(null), json!({}), json!({"index": -1, "after": 1e300, "items": [{"level": "deep"}], "variant": [], "layout": {}})];
+    for id in [
+        "smartArt.items",
+        "smartArt.addShape",
+        "smartArt.promote",
+        "smartArt.demote",
+        "smartArt.layout",
+        "smartArt.colors",
+        "smartArt.reset",
+        "smartArt.textPane",
+    ] {
+        for j in &junk {
+            let _ = s.run(id, j);
+        }
+    }
+    for _ in 0..MAX_ITEMS {
+        let _ = s.run("smartArt.addShape", &json!({}));
+    }
+    assert_eq!(cmd::smart_art::selected_smart_art(&s).unwrap().items.len(), MAX_ITEMS);
+    let _ = s.layout();
+}

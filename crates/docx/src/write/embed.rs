@@ -121,6 +121,24 @@ impl<'d> EmbedWriter<'d> {
         }
     }
 
+    /// A number `n` for which every `{stem}{n}{ext}` is a free part name, with those names taken.
+    fn fresh_set(&mut self, stems: &[&str], ext: &str) -> Vec<String> {
+        let mut n: u32 = 1;
+        loop {
+            let names: Vec<String> = stems.iter().map(|s| format!("{s}{n}{ext}")).collect();
+            if names.iter().all(|name| {
+                let lower = name.to_ascii_lowercase();
+                !Self::reserved(&lower) && !self.taken.contains(&lower)
+            }) {
+                for name in &names {
+                    self.taken.insert(name.to_ascii_lowercase());
+                }
+                return names;
+            }
+            n = n.saturating_add(1);
+        }
+    }
+
     /// Can part `name` be written (bytes and manifest entry both kept)?
     fn available(&self, name: &str) -> bool {
         self.manifest.parts.contains_key(name) && self.passthrough.contains_key(name)
@@ -247,6 +265,51 @@ impl super::Writer<'_> {
             self.resize_object(&mut root, w, h, float, 0);
         }
         Some(root.to_xml())
+    }
+
+    /// The `a:graphic` of a SmartArt graphic written from its model, laid out `w` × `h` points:
+    /// new diagram parts (`word/diagrams/{data,layout,quickStyle,colors,drawing}N.xml`) related
+    /// from the story part through `rels`.
+    pub(super) fn smart_art_graphic(&mut self, spec: &wordcraft_doc::smart_art::SmartArtSpec, w: f32, h: f32, rels: &mut PartRels) -> String {
+        use crate::package::rt;
+        use crate::smart_art as sa;
+        let names = self.embeds.fresh_set(
+            &["word/diagrams/data", "word/diagrams/layout", "word/diagrams/quickStyle", "word/diagrams/colors", "word/diagrams/drawing"],
+            ".xml",
+        );
+        let [data, layout, style, colors, drawing] = names.as_slice() else { return String::new() };
+        // The drawing first: the data part names it by the story part's relationship id.
+        let drawing_id = rels.add(rt::DIAGRAM_DRAWING, &relative(STORY_PART, drawing), false);
+        let parts = [
+            (data, sa::data_xml(spec, &drawing_id), sa::DATA_CT, rt::DIAGRAM_DATA),
+            (layout, sa::layout_xml(spec.layout), sa::LAYOUT_CT, rt::DIAGRAM_LAYOUT),
+            (style, sa::quick_style_xml(), sa::STYLE_CT, rt::DIAGRAM_QUICK_STYLE),
+            (colors, sa::colors_xml(spec.colors), sa::COLORS_CT, rt::DIAGRAM_COLORS),
+            (drawing, sa::drawing_xml(spec, w, h), sa::DRAWING_CT, rt::DIAGRAM_DRAWING),
+        ];
+        let mut ids = Vec::new();
+        for (name, xml, ct, kind) in parts {
+            self.embeds.parts.push((name.clone(), xml.into_bytes(), ct.to_string(), PartRels::default()));
+            ids.push(rels.add(kind, &relative(STORY_PART, name), false));
+        }
+        let id = |i: usize| ids.get(i).cloned().unwrap_or_default();
+        let mut x = xml::W::default();
+        x.open("a:graphic", &[("xmlns:a", "http://schemas.openxmlformats.org/drawingml/2006/main")]);
+        x.open("a:graphicData", &[("uri", sa::DIAGRAM_URI)]);
+        x.empty(
+            "dgm:relIds",
+            &[
+                ("xmlns:dgm", "http://schemas.openxmlformats.org/drawingml/2006/diagram"),
+                ("xmlns:r", "http://schemas.openxmlformats.org/officeDocument/2006/relationships"),
+                ("r:dm", &id(0)),
+                ("r:lo", &id(1)),
+                ("r:qs", &id(2)),
+                ("r:cs", &id(3)),
+            ],
+        );
+        x.close("a:graphicData");
+        x.close("a:graphic");
+        x.s
     }
 
     /// Write an OLE object's size (and position, when floating), rotation and flips into its VML

@@ -1324,3 +1324,44 @@
 	Width and spacing	Laius ja vahe
 	from Unicode (hex)	Unicode (kuueteistkümnend)
 	Formatted	Vormindatud
+	Add Shape	Lisa kujund
+	Change Colors	Muuda värve
+	Change Layout	Muuda paigutust
+	Create Graphic	Loo graafika
+	Demote	Alanda taset
+	Edit Items	Redigeeri üksusi
+	Layouts	Paigutused
+	Promote	Tõsta taset
+	Reset Graphic	Lähtesta graafika
+	SmartArt Design	SmartArti kujundus
+	SmartArt Styles	SmartArti laadid
+	Text Pane	Tekstipaan
+	List	Loend
+	Process	Protsess
+	Cycle	Tsükkel
+	Hierarchy	Hierarhia
+	Relationship	Seos
+	Pyramid	Püramiid
+	Basic List	Lihtne loend
+	Basic Process	Lihtne protsess
+	Basic Cycle	Lihtne tsükkel
+	Basic Pyramid	Lihtne püramiid
+	Basic Radial	Lihtne radiaal
+	Basic Matrix	Lihtne maatriks
+	Basic Venn	Lihtne Venni diagramm
+	Shows items of equal weight as blocks in rows.	Näitab võrdse kaaluga üksusi plokkidena ridades.
+	Shows steps in order, left to right, with arrows between them.	Näitab samme järjekorras vasakult paremale, nende vahel nooled.
+	Shows steps that repeat, around a circle.	Näitab korduvaid samme ringi ümber.
+	Shows a tree: each item below the item it belongs to.	Näitab puud: iga üksus on selle üksuse all, kuhu see kuulub.
+	Shows parts that build on each other, largest at the bottom.	Näitab teineteisele toetuvaid osi, suurim all.
+	Shows items around a central idea: the first item is the centre.	Näitab üksusi keskse idee ümber: esimene üksus on keskel.
+	Shows parts of a whole as quadrants.	Näitab terviku osi veeranditena.
+	Shows overlapping ideas as overlapping circles.	Näitab kattuvaid ideid kattuvate ringidena.
+	Accent {n}	Rõhk {n}
+	Colorful	Värviline
+	Insert SmartArt	Lisa SmartArt
+	One line per item. Enter adds an item.	Üks rida üksuse kohta. Sisestusklahv lisab üksuse.
+	Remove	Eemalda
+	Add\nShape	Lisa\nkujund
+	Change\nColors	Muuda\nvärve
+	Reset\nGraphic	Lähtesta\ngraafika

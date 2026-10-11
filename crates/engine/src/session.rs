@@ -68,6 +68,9 @@ pub struct ViewState {
     /// The Clipboard pane (Home › Clipboard): items collected by Copy and Cut.
     #[serde(default)]
     pub clipboard_pane: bool,
+    /// SmartArt Design › Text Pane: the selected SmartArt graphic's items as an editable outline.
+    #[serde(default)]
+    pub smart_art_pane: bool,
     pub multi_page: bool,
     /// Zoom to fit: "pageWidth", "onePage", "multiplePages", or empty.
     pub fit: String,
@@ -105,6 +108,7 @@ impl Default for ViewState {
             style_inspector: false,
             comments_pane: false,
             clipboard_pane: false,
+            smart_art_pane: false,
             multi_page: false,
             fit: String::new(),
             web_width: 800.0,

@@ -16,6 +16,7 @@ pub enum InsertDialog {
     Columns(ColumnsForm),
     Symbol(SymbolForm),
     Field(FieldForm),
+    SmartArt(crate::dialogs_smart_art::SmartArtForm),
 }
 
 impl InsertDialog {
@@ -24,6 +25,7 @@ impl InsertDialog {
             InsertDialog::Columns(_) => "columns",
             InsertDialog::Symbol(_) => "symbol",
             InsertDialog::Field(_) => "field",
+            InsertDialog::SmartArt(_) => "insertSmartArt",
         }
     }
 
@@ -33,17 +35,20 @@ impl InsertDialog {
             InsertDialog::Columns(_) => "Columns",
             InsertDialog::Symbol(_) => "Symbol",
             InsertDialog::Field(_) => "Field",
+            InsertDialog::SmartArt(_) => "Insert SmartArt",
         }
     }
 }
 
-/// The dialog `ui.dialog` opens by `name`: `columns`, `symbol`, `specialCharacters` or `field`.
+/// The dialog `ui.dialog` opens by `name`: `columns`, `symbol`, `specialCharacters`, `field` or
+/// `insertSmartArt`.
 pub fn open(name: &str, app: &WordApp) -> Option<InsertDialog> {
     Some(match name {
         "columns" => InsertDialog::Columns(ColumnsForm::read(app)),
         "symbol" => InsertDialog::Symbol(SymbolForm::new(app, 0)),
         "specialCharacters" => InsertDialog::Symbol(SymbolForm::new(app, 1)),
         "field" => InsertDialog::Field(FieldForm::new(app)),
+        "insertSmartArt" => InsertDialog::SmartArt(crate::dialogs_smart_art::SmartArtForm::new(app)),
         _ => return None,
     })
 }
@@ -54,11 +59,12 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, d: &mut InsertDialog) -> bool {
         InsertDialog::Columns(f) => columns_ui(app, ui, f),
         InsertDialog::Symbol(f) => symbol_ui(app, ui, f),
         InsertDialog::Field(f) => field_ui(app, ui, f),
+        InsertDialog::SmartArt(f) => crate::dialogs_smart_art::picker_ui(app, ui, f),
     }
 }
 
 /// OK / Cancel (or another OK label); returns (ok, cancel). `ok_enabled` greys OK out.
-fn buttons(ui: &mut Ui, ok: &str, cancel: &str, ok_enabled: bool) -> (bool, bool) {
+pub(crate) fn buttons(ui: &mut Ui, ok: &str, cancel: &str, ok_enabled: bool) -> (bool, bool) {
     let mut r = (false, false);
     ui.add_space(8.0);
     ui.horizontal(|ui| {

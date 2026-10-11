@@ -107,6 +107,10 @@ impl Exempt {
         names.extend(app.session.doc.styles.styles.iter().map(|s| s.name.clone()));
         // Fonts a document asks for, installed or not (Aptos is drawn with a substitute).
         names.extend([wordcraft_doc::styles::BODY_FONT, wordcraft_doc::styles::HEADING_FONT].map(str::to_string));
+        // The selected SmartArt graphic's items (the Text Pane): document content.
+        if let Some(g) = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session) {
+            names.extend(g.items.iter().map(|i| i.text.clone()));
+        }
         for m in crate::credits::MODELS {
             names.extend([m.company, m.model, m.version].map(str::to_string));
         }
@@ -213,19 +217,30 @@ fn untranslated_interface_text() {
         let drawn = frame(&ctx, &mut app);
         record(&app, &format!("tab {tab}"), drawn);
     }
+    let _ = app.run("insert.smartArt", json!({"layout": "hierarchy"}));
+    let _ = app.run("smartArt.textPane", json!({"value": true}));
+    let _ = app.run("ui.tab", json!({"tab": "SmartArt Design"}));
+    let drawn = frame(&ctx, &mut app);
+    record(&app, "tab SmartArt Design", drawn);
+    let _ = app.run("smartArt.textPane", json!({"value": false}));
+    let _ = app.run("ui.dialog", json!({"name": "insertSmartArt"}));
+    let drawn = frame(&ctx, &mut app);
+    record(&app, "dialog insertSmartArt", drawn);
+    app.dialog = None;
     let _ = app.run("insert.equation", json!({}));
     let _ = app.run("ui.tab", json!({"tab": "Equation"}));
     let drawn = frame(&ctx, &mut app);
     record(&app, "tab Equation", drawn);
     // Every ribbon control on every tab, and whatever menu or dialog it opens. A fresh app per
     // tab keeps one tab's commands from changing the next.
-    let contextual = ["Table Design", "Table Layout", "Equation"];
+    let contextual = ["Table Design", "Table Layout", "Equation", "SmartArt Design"];
     for tab in tabs.iter().chain(&contextual) {
         let ctx = egui::Context::default();
         let mut app = fresh_app(&ctx);
         match *tab {
             "Table Design" | "Table Layout" => drop(app.run("insert.table", json!({"rows": 2, "cols": 2}))),
             "Equation" => drop(app.run("insert.equation", json!({}))),
+            "SmartArt Design" => drop(app.run("insert.smartArt", json!({"layout": "process"}))),
             _ => {}
         }
         let _ = app.run("ui.tab", json!({"tab": tab}));

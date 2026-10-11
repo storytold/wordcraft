@@ -2589,7 +2589,7 @@ fn oversized_graphic_draws_shrunk_with_its_items() {
         stroke: Some(Rgb::BLACK),
         stroke_width: 4.0,
     }];
-    let graphic = Graphic { kind: GraphicKind::Chart, items, w: 1000.0, h: 500.0, source: None };
+    let graphic = Graphic { kind: GraphicKind::Chart, items, w: 1000.0, h: 500.0, source: None, smart_art: None };
     let obj = InlineObject::Graphic { w: 1000.0, h: 500.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) };
     let mut d = Document::from_text("Chart");
     d.insert_object(&Pos::body(0, 0), obj, &Default::default()).unwrap();

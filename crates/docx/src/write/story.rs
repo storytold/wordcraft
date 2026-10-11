@@ -416,10 +416,20 @@ impl Writer<'_> {
                 self.rev_close(w, props);
             }
             // A chart or diagram read from a file: its frame from the object's size and position,
-            // the graphic inside as read. Ones made some other way have nothing to write.
+            // the graphic inside as read. Ones made some other way have nothing to write, except
+            // SmartArt with a model (made or edited in WordCraft): its parts are written from it.
             InlineObject::Graphic { w: gw, h: gh, alt, float, graphic } => {
-                let Some(src) = graphic.source.as_deref() else { return };
-                let Some(inner) = self.embedded_xml(src, rels, None) else { return };
+                let inner = match (graphic.smart_art.as_deref(), graphic.source.as_deref()) {
+                    (Some(spec), _) => self.smart_art_graphic(spec, *gw, *gh, rels),
+                    (None, Some(src)) => {
+                        let Some(inner) = self.embedded_xml(src, rels, None) else { return };
+                        inner
+                    }
+                    (None, None) => return,
+                };
+                if inner.is_empty() {
+                    return;
+                }
                 self.rev_open(w, props);
                 w.open("w:r", &[]);
                 self.rpr(w, props);

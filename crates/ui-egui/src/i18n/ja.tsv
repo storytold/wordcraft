@@ -1311,3 +1311,44 @@
 	Flip Vertical	上下反転
 	Flip Horizontal	左右反転
 	Formatted	書式変更
+	Add Shape	図形の追加
+	Change Colors	色の変更
+	Change Layout	レイアウトの変更
+	Create Graphic	グラフィックの作成
+	Demote	レベル下げ
+	Edit Items	項目の編集
+	Layouts	レイアウト
+	Promote	レベル上げ
+	Reset Graphic	グラフィックのリセット
+	SmartArt Design	SmartArt のデザイン
+	SmartArt Styles	SmartArt のスタイル
+	Text Pane	テキスト ウィンドウ
+	List	リスト
+	Process	手順
+	Cycle	循環
+	Hierarchy	階層構造
+	Relationship	関係
+	Pyramid	ピラミッド
+	Basic List	基本リスト
+	Basic Process	基本ステップ
+	Basic Cycle	基本循環
+	Basic Pyramid	基本ピラミッド
+	Basic Radial	基本放射
+	Basic Matrix	基本マトリックス
+	Basic Venn	基本ベン図
+	Shows items of equal weight as blocks in rows.	同じ重みの項目をブロックとして行に並べて表示します。
+	Shows steps in order, left to right, with arrows between them.	手順を左から右へ順に、矢印でつないで表示します。
+	Shows steps that repeat, around a circle.	繰り返す手順を円の周りに表示します。
+	Shows a tree: each item below the item it belongs to.	ツリーを表示します。各項目は所属する項目の下に置かれます。
+	Shows parts that build on each other, largest at the bottom.	積み重なる部分を表示します。最も大きいものが一番下です。
+	Shows items around a central idea: the first item is the centre.	中心となる考えの周りに項目を表示します。最初の項目が中心です。
+	Shows parts of a whole as quadrants.	全体の各部分を四分割で表示します。
+	Shows overlapping ideas as overlapping circles.	重なり合う考えを重なる円で表示します。
+	Accent {n}	アクセント {n}
+	Colorful	カラフル
+	Insert SmartArt	SmartArt の挿入
+	One line per item. Enter adds an item.	1 行に 1 項目。Enter キーで項目を追加します。
+	Remove	削除
+	Add\nShape	図形の\n追加
+	Change\nColors	色の\n変更
+	Reset\nGraphic	グラフィックの\nリセット
