@@ -1101,9 +1101,28 @@ impl Exporter<'_> {
         }
     }
 
-    /// Where a bookmark is: (output page, x, y).
+    /// Where a bookmark is: (output page, x, y) — the page and line its start lands on, which
+    /// in a paragraph split across pages need not be the paragraph's first page.
     fn bookmark(&self, name: &str) -> Option<(usize, f32, f32)> {
         let (_, pos) = self.doc.bookmarks().into_iter().find(|(n, _)| n == name)?;
+        if let Some(c) = self.lay.caret(&pos)
+            && let Some(out) = self.out_index.get(&c.page)
+        {
+            // The left edge of the paragraph's piece on that page, at the top of the line.
+            let x = self
+                .lay
+                .index
+                .get(&(pos.story, pos.path.clone()))
+                .into_iter()
+                .flatten()
+                .filter(|(pi, _)| *pi == c.page)
+                .find_map(|(pi, ii)| match self.lay.pages.get(*pi).and_then(|p| p.items.get(*ii)) {
+                    Some(Placed::Lines { x, .. }) => Some(*x),
+                    _ => None,
+                })
+                .unwrap_or(c.x);
+            return Some((*out, x, c.top));
+        }
         self.locate(pos.story, &pos.path)
     }
 
