@@ -223,6 +223,53 @@ pub fn check_password(password: &str) -> Result<(), DocxError> {
     Ok(())
 }
 
+/// Restrict Editing's password (`w:documentProtection`, ECMA-376 Part 1 §17.15.1.29): the
+/// attributes that store its hash — SHA-512 of a random 16-byte salt and the password as UTF-16LE,
+/// hashed again `spin_count` times with the iteration number appended ([MS-OFFCRYPTO] §2.4.2.4,
+/// the ISO write-protection method). Protection isn't encryption: the document stays readable,
+/// the password only guards turning protection off.
+pub fn protection_hash(password: &str, spin_count: u32) -> Result<Vec<(String, String)>, DocxError> {
+    check_password(password)?;
+    let spin_count = spin_count.min(MAX_SPIN_COUNT);
+    let salt = random(SALT)?;
+    let hash = iterate_appended(Hash::Sha512, &salt, password, spin_count);
+    let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    Ok(vec![
+        ("w:algorithmName".into(), "SHA-512".into()),
+        ("w:hashValue".into(), b64(&hash)),
+        ("w:saltValue".into(), b64(&salt)),
+        ("w:spinCount".into(), spin_count.to_string()),
+    ])
+}
+
+/// Does `password` match a Restrict Editing hash (attributes as [`protection_hash`] makes them, or
+/// as read from a file)? `None` when the attributes use a scheme WordCraft can't check (the older
+/// `w:cryptAlgorithmSid` form, which runs the password through Word's legacy key first), or are
+/// damaged. A hostile spin count is capped at the specification's maximum.
+pub fn check_protection_password(attrs: &[(String, String)], password: &str) -> Option<bool> {
+    let get = |k: &str| attrs.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+    let hash = Hash::parse(get("w:algorithmName")?)?;
+    let dec = |k: &str| get(k).and_then(|v| base64::engine::general_purpose::STANDARD.decode(v.trim()).ok());
+    let (want, salt) = (dec("w:hashValue")?, dec("w:saltValue")?);
+    let spin_count: u32 = get("w:spinCount").and_then(|v| v.trim().parse().ok()).unwrap_or(0);
+    if want.len() != hash.size() || salt.len() > 1024 {
+        return None;
+    }
+    let got = iterate_appended(hash, &salt, password, spin_count.min(MAX_SPIN_COUNT));
+    Some(same(&got, &want))
+}
+
+/// The ISO write-protection hash ([MS-OFFCRYPTO] §2.4.2.4): H0 = H(salt + password as UTF-16LE),
+/// Hn = H(Hn-1 + iterator) — the iterator after the hash, unlike encryption's [`iterate`].
+fn iterate_appended(hash: Hash, salt: &[u8], password: &str, spin_count: u32) -> Zeroizing<Vec<u8>> {
+    let pw: Zeroizing<Vec<u8>> = Zeroizing::new(password.encode_utf16().flat_map(u16::to_le_bytes).collect());
+    let mut h = Zeroizing::new(hash.hash(&[salt, &pw]));
+    for i in 0..spin_count.min(MAX_SPIN_COUNT) {
+        *h = hash.hash(&[&h, &i.to_le_bytes()]);
+    }
+    h
+}
+
 fn bad(msg: impl Into<String>) -> DocxError {
     DocxError::Encryption(msg.into())
 }
@@ -626,6 +673,19 @@ fn primary_transform() -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn protection_password_round_trip() {
+        let attrs = super::protection_hash("s3cret", 1000).unwrap();
+        assert_eq!(super::check_protection_password(&attrs, "s3cret"), Some(true));
+        assert_eq!(super::check_protection_password(&attrs, "S3cret"), Some(false));
+        // The older form can't be checked; damaged attributes neither.
+        let legacy = vec![("w:cryptAlgorithmSid".to_string(), "14".to_string()), ("w:hash".into(), "AAAA".into())];
+        assert_eq!(super::check_protection_password(&legacy, "x"), None);
+        let mut bad = attrs.clone();
+        bad.retain(|(k, _)| k != "w:saltValue");
+        assert_eq!(super::check_protection_password(&bad, "s3cret"), None);
+    }
+
     use super::*;
 
     fn zip_package() -> Vec<u8> {

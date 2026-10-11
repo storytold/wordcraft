@@ -14,12 +14,18 @@ fn has_sel(s: &Session) -> Option<&'static str> {
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("edit.undo", "Undo", "Quick Access Toolbar", |s, _| {
+            if s.step_lifts_protection(false) {
+                return Err(CmdError::Disabled("edit.undo: use Stop Protection to lift the document's protection".into()));
+            }
             s.undo();
             sel_result(s)
         })
         .key("Mod+Z")
         .pure(),
         CommandSpec::new("edit.redo", "Redo", "Quick Access Toolbar", |s, _| {
+            if s.step_lifts_protection(true) {
+                return Err(CmdError::Disabled("edit.redo: use Stop Protection to lift the document's protection".into()));
+            }
             s.redo();
             sel_result(s)
         })

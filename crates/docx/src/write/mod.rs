@@ -629,6 +629,9 @@ fn style_xml(w: &mut W, st: &Style) {
     if st.quick {
         w.empty("w:qFormat", &[]);
     }
+    if st.locked {
+        w.empty("w:locked", &[]);
+    }
     if !st.para.is_empty() && st.kind != StyleKind::Character {
         w.open("w:pPr", &[]);
         props::ppr_inner(w, &st.para, false, None);
@@ -797,7 +800,21 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool) -> Vec<u8> {
         w.empty("w:trackRevisions", &[]);
     }
     if let Some(p) = &s.protection {
-        w.empty("w:documentProtection", &[("w:edit", p), ("w:enforcement", "1")]);
+        let mut a: Vec<(&str, &str)> = Vec::new();
+        if p != "none" {
+            a.push(("w:edit", p));
+        }
+        if s.protect_formatting {
+            a.push(("w:formatting", "1"));
+        }
+        a.push(("w:enforcement", "1"));
+        // Only the hash attributes the reader keeps, each once.
+        for name in crate::read::PROTECTION_HASH_ATTRS {
+            if let Some((_, v)) = s.protect_hash.iter().find(|(k, _)| k == name) {
+                a.push((name, v));
+            }
+        }
+        w.empty("w:documentProtection", &a);
     }
     w.val("w:defaultTabStop", &crate::units::twips(s.default_tab.clamp(1.0, 1584.0)));
     if s.auto_hyphenation {

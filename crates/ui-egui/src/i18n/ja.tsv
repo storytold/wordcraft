@@ -1311,3 +1311,77 @@
 	Flip Vertical	上下反転
 	Flip Horizontal	左右反転
 	Formatted	書式変更
+
+# Compare / Combine, AutoCorrect Options and Restrict Editing (#412)
+	1. Formatting restrictions	1. 書式の制限
+	2. Editing restrictions	2. 編集の制限
+	3. Start enforcement	3. 保護の開始
+	<< Less	<< 表示を減らす
+	Another file	別のファイル
+	Apply as you type	入力中に適用
+	AutoCorrect	オートコレクト
+	AutoFormat As You Type	入力オートフォーマット
+	Automatic bulleted lists	箇条書き (自動)
+	Automatic numbered lists	段落番号 (自動)
+	Border lines	罫線
+	Capitalize first letter of sentences	文の先頭文字を大文字にする
+	Capitalize first letter of table cells	表のセルの先頭文字を大文字にする
+	Capitalize names of days	曜日の先頭文字を大文字にする
+	Case changes	大文字/小文字の変更
+	Character level	文字単位
+	Checked styles are allowed:	チェックしたスタイルを使用可能:
+	Combine Documents	文書の組み込み
+	Compare Documents	文書の比較
+	Compared: {changes} changes	比較しました: 変更 {changes} 件
+	Comparing with another file needs the desktop app.	別のファイルとの比較にはデスクトップ版が必要です。
+	Comparison settings	比較の設定
+	Don't capitalize after:	次の後は大文字にしない:
+	Editing in this document is restricted.	この文書の編集は制限されています。
+	Every change is recorded as a tracked change.	すべての変更が変更履歴として記録されます。
+	Everyone	すべてのユーザー
+	Exceptions (optional)	例外 (省略可能)
+	Exceptions…	例外…
+	Fields	フィールド
+	Filling in forms	フォームへの入力
+	Find Next Editable Region	次の編集可能な範囲を検索
+	Footnotes and endnotes	脚注と文末脚注
+	Formatting, case changes, white space and tables are compared; the other settings are kept for later.	書式、大文字/小文字、空白、表を比較します。その他の設定は今後の対応です。
+	Fractions (1/2) as fraction characters (½)	分数 (1/2) を分数文字 (½) に
+	Headers and footers	ヘッダーとフッター
+	Hyphens (--) as dashes (—)	ハイフン (--) をダッシュ (—) に
+	In equations, typing a name after a backslash replaces it with its symbol.	数式では、円記号 (バックスラッシュ) の後に名前を入力すると記号に置き換わります。
+	Internet addresses as links	インターネットのアドレスをリンクに
+	Label changes with:	変更者のラベル:
+	Limit formatting to a selection of styles	書式を選択したスタイルに制限する
+	Math AutoCorrect	数式オートコレクト
+	More >>	オプション >>
+	Moves	移動
+	New document	新規文書
+	No changes (read only)	変更不可 (読み取り専用)
+	Only allow this kind of editing:	次の種類の編集のみを許可:
+	Only comments can be added, except in regions marked editable.	編集可能とマークされた範囲を除き、コメントの追加のみ可能です。
+	Only form fields can be filled in.	フォーム フィールドへの入力のみ可能です。
+	Only the allowed styles can be applied.	使用を許可されたスタイルだけを適用できます。
+	Ordinals (1st) as superscript	序数 (1st) を上付き文字に
+	Original document	元の文書
+	Protection stopped. The document's password uses an older form WordCraft can't check.	保護を停止しました。この文書のパスワードは WordCraft で確認できない古い形式です。
+	Replace as you type	入力中に自動で変更
+	Replace text as you type	入力中に自動修正する
+	Replace:	修正文字列:
+	Revised document	変更された文書
+	Select text, then tick who can still edit it.	テキストを選択し、編集できるユーザーをチェックします。
+	Settings…	設定…
+	Show changes at:	変更の表示単位:
+	Show changes in:	変更の表示先:
+	Smart quotes instead of straight quotes	左右の区別がない引用符を区別がある引用符に
+	Start Enforcing Protection	保護を開始
+	Stop Protection	保護の中止
+	Text boxes	テキスト ボックス
+	The document is read only, except for regions marked editable.	編集可能とマークされた範囲を除き、この文書は読み取り専用です。
+	The password is optional; without it anyone can stop the protection.	パスワードは省略できます。省略すると、誰でも保護を中止できます。
+	This document	この文書
+	Tracked changes	変更履歴
+	Type the password to stop the protection.	保護を中止するにはパスワードを入力してください。
+	White space	空白
+	With:	修正後の文字列:
+	Word level	単語単位

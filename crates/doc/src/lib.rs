@@ -324,7 +324,18 @@ pub struct Settings {
     pub theme_name: String,
     pub footnote_format: section::NumFormat,
     pub endnote_format: section::NumFormat,
+    /// Restrict Editing, when enforced: `readOnly`, `comments`, `trackedChanges`, `forms`, or
+    /// `none` when only formatting is restricted (`w:documentProtection w:edit`).
     pub protection: Option<String>,
+    /// Restrict Editing limits formatting to the styles that aren't locked, and forbids direct
+    /// formatting (`w:formatting="1"`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub protect_formatting: bool,
+    /// The protection password's hash, as the file's `w:documentProtection` attributes
+    /// (`w:algorithmName`, `w:hashValue`, `w:saltValue`, `w:spinCount`, or the older
+    /// `w:cryptAlgorithmSid`, `w:hash`, `w:salt`…). Empty: no password.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub protect_hash: Vec<(String, String)>,
     /// Word compatibility mode the document is laid out in (`compatibilityMode`): 15 for Word
     /// 2013 and later, which places a table's border at the margin rather than its text and lets
     /// justified lines shrink their spaces to fit more text.
@@ -395,6 +406,8 @@ impl Default for Settings {
             footnote_format: section::NumFormat::Decimal,
             endnote_format: section::NumFormat::LowerRoman,
             protection: None,
+            protect_formatting: false,
+            protect_hash: Vec::new(),
             compat_mode: COMPAT_MODE_CURRENT,
             grid_h: DEFAULT_GRID,
             grid_v: DEFAULT_GRID,
@@ -850,6 +863,47 @@ impl Document {
         self.custom_props.len() != n
     }
 
+    /// Ranges that stay editable while the document is protected (Restrict Editing exceptions),
+    /// in document order across every story: the [`InlineObject::PermStart`]'s id, group and
+    /// editor, its start (just after the marker) and its end (at the matching
+    /// [`InlineObject::PermEnd`], or the end of the story when it has none).
+    pub fn perm_ranges(&self) -> Vec<PermRange> {
+        let mut out: Vec<PermRange> = Vec::new();
+        let stories = std::iter::once(StoryRef::Body).chain(self.parts.keys().map(|k| StoryRef::Part(*k)));
+        for story in stories {
+            let mut open: Vec<usize> = Vec::new();
+            for path in self.para_paths(story) {
+                let Some(p) = self.para(story, &path) else { continue };
+                for off in p.object_offsets() {
+                    match p.object_at(off) {
+                        Some(InlineObject::PermStart { id, group, editor }) => {
+                            let start = Pos { story, path: path.clone(), off: off + para::OBJ.len_utf8() };
+                            open.push(out.len());
+                            out.push(PermRange { id: *id, group: group.clone(), editor: editor.clone(), start: start.clone(), end: start });
+                        }
+                        Some(InlineObject::PermEnd { id }) => {
+                            if let Some(k) = open.iter().rposition(|i| out.get(*i).is_some_and(|r| r.id == *id)) {
+                                let i = open.remove(k);
+                                if let Some(r) = out.get_mut(i) {
+                                    r.end = Pos { story, path: path.clone(), off };
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            // A range left open runs to the end of its story.
+            let end = self.end_of(story);
+            for i in open {
+                if let Some(r) = out.get_mut(i) {
+                    r.end = end.clone();
+                }
+            }
+        }
+        out
+    }
+
     /// Bookmark names in the body, in order.
     pub fn bookmarks(&self) -> Vec<(String, Pos)> {
         let mut out = Vec::new();
@@ -863,6 +917,25 @@ impl Document {
             }
         }
         out
+    }
+}
+
+/// A range that stays editable while the document is protected; see [`Document::perm_ranges`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PermRange {
+    pub id: u32,
+    /// Editing group (`everyone`, `editors`…); empty when the range names an editor.
+    pub group: String,
+    /// The one editor the range is for; empty for a group.
+    pub editor: String,
+    pub start: Pos,
+    pub end: Pos,
+}
+
+impl PermRange {
+    /// Can everyone edit it (rather than one person or group)?
+    pub fn everyone(&self) -> bool {
+        self.group.eq_ignore_ascii_case("everyone")
     }
 }
 

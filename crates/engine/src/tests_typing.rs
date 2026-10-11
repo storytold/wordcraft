@@ -186,6 +186,23 @@ fn autocorrect_as_you_type() {
 }
 
 #[test]
+fn autocorrect_options_change_what_typing_does() {
+    let mut s = s();
+    // A user entry, a deleted built-in entry, an added exception; names of days.
+    run(&mut s, "tools.autocorrect", json!({"add": {"from": "wc", "to": "WordCraft"}}));
+    run(&mut s, "tools.autocorrect", json!({"delete": "teh"}));
+    run(&mut s, "tools.autocorrect", json!({"addException": "approx."}));
+    typ(&mut s, "wc ships on monday. teh end is approx. three weeks ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "WordCraft ships on Monday. Teh end is approx. three weeks ");
+    // AutoFormat options off: straight quotes, no dashes, no list; sentences not capitalised.
+    let mut s = self::s();
+    run(&mut s, "tools.autocorrect", json!({"smartQuotes": false, "dashes": false, "bullets": false, "capSentences": false, "capDays": false}));
+    typ(&mut s, "* \"hi\" a -- b sunday ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "* \"hi\" a -- b sunday ");
+    assert_eq!(paras(&s)[0].1, None);
+}
+
+#[test]
 fn enter_finishes_a_word_for_autocorrect() {
     let s = typed("hello\nteh end\n");
     assert_eq!(s.doc.plain_text(StoryRef::Body), "Hello\nThe end\n");

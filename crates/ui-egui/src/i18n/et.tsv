@@ -1324,3 +1324,77 @@
 	Width and spacing	Laius ja vahe
 	from Unicode (hex)	Unicode (kuueteistkümnend)
 	Formatted	Vormindatud
+
+# Compare / Combine, AutoCorrect Options and Restrict Editing (#412)
+	1. Formatting restrictions	1. Vormingupiirangud
+	2. Editing restrictions	2. Muutmispiirangud
+	3. Start enforcement	3. Kaitse jõustamine
+	<< Less	<< Vähem
+	Another file	Muu fail
+	Apply as you type	Rakenda tippimise ajal
+	AutoCorrect	Automaatparandus
+	AutoFormat As You Type	Automaatvorming tippimisel
+	Automatic bulleted lists	Automaatsed täpploendid
+	Automatic numbered lists	Automaatsed nummerloendid
+	Border lines	Äärisjooned
+	Capitalize first letter of sentences	Lausete esitäht suureks
+	Capitalize first letter of table cells	Tabelilahtrite esitäht suureks
+	Capitalize names of days	Nädalapäevade nimed suure algustähega
+	Case changes	Tähesuuruse muutused
+	Character level	Märgi tasandil
+	Checked styles are allowed:	Märgitud laadid on lubatud:
+	Combine Documents	Ühenda dokumendid
+	Compare Documents	Võrdle dokumente
+	Compared: {changes} changes	Võrreldud: {changes} muudatust
+	Comparing with another file needs the desktop app.	Teise failiga võrdlemiseks on vaja töölauarakendust.
+	Comparison settings	Võrdlemise sätted
+	Don't capitalize after:	Ära muuda suureks pärast:
+	Editing in this document is restricted.	Selle dokumendi muutmine on piiratud.
+	Every change is recorded as a tracked change.	Iga muudatus salvestatakse jälitatud muudatusena.
+	Everyone	Kõik
+	Exceptions (optional)	Erandid (valikuline)
+	Exceptions…	Erandid…
+	Fields	Väljad
+	Filling in forms	Vormide täitmine
+	Find Next Editable Region	Leia järgmine muudetav piirkond
+	Footnotes and endnotes	Allmärkused ja lõpumärkused
+	Formatting, case changes, white space and tables are compared; the other settings are kept for later.	Võrreldakse vormingut, tähesuurust, tühikuid ja tabeleid; ülejäänud sätted jäävad hilisemaks.
+	Fractions (1/2) as fraction characters (½)	Murrud (1/2) murrumärkidena (½)
+	Headers and footers	Päised ja jalused
+	Hyphens (--) as dashes (—)	Sidekriipsud (--) mõttekriipsudena (—)
+	In equations, typing a name after a backslash replaces it with its symbol.	Võrrandites asendatakse kaldkriipsu järel tipitud nimi selle sümboliga.
+	Internet addresses as links	Internetiaadressid linkidena
+	Label changes with:	Muudatuste silt:
+	Limit formatting to a selection of styles	Piira vorming valitud laadidega
+	Math AutoCorrect	Matemaatika automaatparandus
+	More >>	Rohkem >>
+	Moves	Teisaldused
+	New document	Uus dokument
+	No changes (read only)	Muudatusi pole (kirjutuskaitstud)
+	Only allow this kind of editing:	Luba ainult seda tüüpi muutmist:
+	Only comments can be added, except in regions marked editable.	Lisada saab ainult kommentaare, välja arvatud muudetavaks märgitud piirkondades.
+	Only form fields can be filled in.	Täita saab ainult vormivälju.
+	Only the allowed styles can be applied.	Rakendada saab ainult lubatud laade.
+	Ordinals (1st) as superscript	Järgarvud (1st) ülaindeksina
+	Original document	Algdokument
+	Protection stopped. The document's password uses an older form WordCraft can't check.	Kaitse lõpetati. Dokumendi parool kasutab vanemat vormi, mida WordCraft ei saa kontrollida.
+	Replace as you type	Asenda tippimise ajal
+	Replace text as you type	Asenda tekst tippimise ajal
+	Replace:	Asenda:
+	Revised document	Muudetud dokument
+	Select text, then tick who can still edit it.	Vali tekst ja märgi, kes saab seda veel muuta.
+	Settings…	Sätted…
+	Show changes at:	Kuva muudatused tasandil:
+	Show changes in:	Kuva muudatused:
+	Smart quotes instead of straight quotes	Nutikad jutumärgid sirgete asemel
+	Start Enforcing Protection	Jõusta kaitse
+	Stop Protection	Lõpeta kaitse
+	Text boxes	Tekstiväljad
+	The document is read only, except for regions marked editable.	Dokument on kirjutuskaitstud, välja arvatud muudetavaks märgitud piirkonnad.
+	The password is optional; without it anyone can stop the protection.	Parool on valikuline; ilma selleta saab igaüks kaitse lõpetada.
+	This document	See dokument
+	Tracked changes	Jälitatud muudatused
+	Type the password to stop the protection.	Kaitse lõpetamiseks sisesta parool.
+	White space	Tühikud
+	With:	Millega:
+	Word level	Sõna tasandil

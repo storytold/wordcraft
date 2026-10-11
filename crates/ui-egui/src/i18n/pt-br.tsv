@@ -1323,3 +1323,77 @@
 	Flip Vertical	Inverter verticalmente
 	Flip Horizontal	Inverter horizontalmente
 	Formatted	Formatado
+
+# Compare / Combine, AutoCorrect Options and Restrict Editing (#412)
+	1. Formatting restrictions	1. Restrições de formatação
+	2. Editing restrictions	2. Restrições de edição
+	3. Start enforcement	3. Aplicar a proteção
+	<< Less	<< Menos
+	Another file	Outro arquivo
+	Apply as you type	Aplicar ao digitar
+	AutoCorrect	Autocorreção
+	AutoFormat As You Type	AutoFormatação ao digitar
+	Automatic bulleted lists	Listas com marcadores automáticas
+	Automatic numbered lists	Listas numeradas automáticas
+	Border lines	Linhas de borda
+	Capitalize first letter of sentences	Primeira letra das frases em maiúscula
+	Capitalize first letter of table cells	Primeira letra das células em maiúscula
+	Capitalize names of days	Nomes dos dias em maiúscula
+	Case changes	Alterações de maiúsculas
+	Character level	Nível de caractere
+	Checked styles are allowed:	Os estilos marcados são permitidos:
+	Combine Documents	Combinar documentos
+	Compare Documents	Comparar documentos
+	Compared: {changes} changes	Comparado: {changes} alterações
+	Comparing with another file needs the desktop app.	Para comparar com outro arquivo é preciso o aplicativo para desktop.
+	Comparison settings	Configurações de comparação
+	Don't capitalize after:	Não colocar maiúscula depois de:
+	Editing in this document is restricted.	A edição deste documento está restrita.
+	Every change is recorded as a tracked change.	Cada alteração é registrada como alteração controlada.
+	Everyone	Todos
+	Exceptions (optional)	Exceções (opcional)
+	Exceptions…	Exceções…
+	Fields	Campos
+	Filling in forms	Preenchimento de formulários
+	Find Next Editable Region	Localizar a próxima região editável
+	Footnotes and endnotes	Notas de rodapé e notas de fim
+	Formatting, case changes, white space and tables are compared; the other settings are kept for later.	Formatação, maiúsculas, espaços em branco e tabelas são comparados; as outras configurações ficam para depois.
+	Fractions (1/2) as fraction characters (½)	Frações (1/2) como caracteres de fração (½)
+	Headers and footers	Cabeçalhos e rodapés
+	Hyphens (--) as dashes (—)	Hífens (--) como travessões (—)
+	In equations, typing a name after a backslash replaces it with its symbol.	Nas equações, digitar um nome após uma barra invertida o substitui pelo símbolo.
+	Internet addresses as links	Endereços da Internet como links
+	Label changes with:	Rotular alterações com:
+	Limit formatting to a selection of styles	Limitar a formatação a uma seleção de estilos
+	Math AutoCorrect	Autocorreção de matemática
+	More >>	Mais >>
+	Moves	Movimentações
+	New document	Novo documento
+	No changes (read only)	Sem alterações (somente leitura)
+	Only allow this kind of editing:	Permitir somente este tipo de edição:
+	Only comments can be added, except in regions marked editable.	Somente comentários podem ser adicionados, exceto nas regiões marcadas como editáveis.
+	Only form fields can be filled in.	Somente os campos de formulário podem ser preenchidos.
+	Only the allowed styles can be applied.	Somente os estilos permitidos podem ser aplicados.
+	Ordinals (1st) as superscript	Ordinais (1st) sobrescritos
+	Original document	Documento original
+	Protection stopped. The document's password uses an older form WordCraft can't check.	Proteção interrompida. A senha do documento usa um formato antigo que o WordCraft não consegue verificar.
+	Replace as you type	Substituir ao digitar
+	Replace text as you type	Substituir texto ao digitar
+	Replace:	Substituir:
+	Revised document	Documento revisado
+	Select text, then tick who can still edit it.	Selecione o texto e marque quem ainda pode editá-lo.
+	Settings…	Configurações…
+	Show changes at:	Mostrar alterações no nível de:
+	Show changes in:	Mostrar alterações em:
+	Smart quotes instead of straight quotes	Aspas inteligentes em vez de retas
+	Start Enforcing Protection	Aplicar a proteção
+	Stop Protection	Parar proteção
+	Text boxes	Caixas de texto
+	The document is read only, except for regions marked editable.	O documento é somente leitura, exceto nas regiões marcadas como editáveis.
+	The password is optional; without it anyone can stop the protection.	A senha é opcional; sem ela, qualquer pessoa pode parar a proteção.
+	This document	Este documento
+	Tracked changes	Alterações controladas
+	Type the password to stop the protection.	Digite a senha para parar a proteção.
+	White space	Espaços em branco
+	With:	Por:
+	Word level	Nível de palavra

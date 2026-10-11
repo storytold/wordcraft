@@ -343,6 +343,18 @@ impl Writer<'_> {
                 let id = self.bookmark_id(name);
                 w.empty("w:bookmarkEnd", &[("w:id", &id)]);
             }
+            InlineObject::PermStart { id, group, editor } => {
+                let id = id.to_string();
+                let mut a = vec![("w:id", id.as_str())];
+                if !group.is_empty() {
+                    a.push(("w:edGrp", group.as_str()));
+                }
+                if !editor.is_empty() {
+                    a.push(("w:ed", editor.as_str()));
+                }
+                w.empty("w:permStart", &a);
+            }
+            InlineObject::PermEnd { id } => w.empty("w:permEnd", &[("w:id", &id.to_string())]),
             InlineObject::CommentStart { id } => {
                 if self.doc.comments.contains_key(id) {
                     w.empty("w:commentRangeStart", &[("w:id", &id.to_string())]);
