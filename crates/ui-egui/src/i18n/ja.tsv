@@ -1311,3 +1311,67 @@
 	Flip Vertical	上下反転
 	Flip Horizontal	左右反転
 	Formatted	書式変更
+	Add line numbering	行番号を追加する
+	Add to Document	文書に追加
+	Address labels	宛名ラベル
+	Arabic	アラビア語
+	Auto	自動
+	Automatically hyphenate document	文書を自動的にハイフネーションする
+	Chinese (Simplified)	中国語（簡体字）
+	Chinese (Traditional)	中国語（繁体字）
+	Column:	列:
+	Count by:	増分:
+	Czech	チェコ語
+	Danish	デンマーク語
+	Delivery address:	宛先:
+	Detect language automatically	言語を自動的に検出する
+	Do not check spelling or grammar	スペルチェックと文章校正を行わない
+	Dutch	オランダ語
+	English (United Kingdom)	英語（英国）
+	Envelope size:	封筒サイズ:
+	Estonian	エストニア語
+	Finnish	フィンランド語
+	French (France)	フランス語（フランス）
+	From text:	本文からの距離:
+	Full page of the same label	同じラベルで 1 ページ全体
+	German (Germany)	ドイツ語（ドイツ）
+	Greek	ギリシャ語
+	Hebrew	ヘブライ語
+	Hyphenate at:	ハイフネーション位置:
+	Hyphenate words in CAPS	大文字の単語をハイフネーションする
+	Hyphenation Options…	ハイフネーションのオプション…
+	Hyphenation zone:	ハイフネーション領域:
+	Italian	イタリア語
+	Japanese	日本語
+	Korean	韓国語
+	Label:	ラベル:
+	Limit consecutive hyphens to:	連続するハイフンの上限:
+	Line Numbering Options…	行番号のオプション…
+	Manual Hyphenation	手動ハイフネーション
+	Manual hyphenation is complete.	手動ハイフネーションが完了しました。
+	Manual…	手動…
+	Mark selected text as:	選択した文字列の言語:
+	New Document	新規文書
+	No limit	制限なし
+	Norwegian (Bokmål)	ノルウェー語（ブークモール）
+	Numbering:	番号の付け方:
+	Omit	省略
+	One label per recipient	宛先ごとに 1 枚のラベル
+	Polish	ポーランド語
+	Portuguese (Brazil)	ポルトガル語（ブラジル）
+	Portuguese (Portugal)	ポルトガル語（ポルトガル）
+	Return address labels	差出人ラベル
+	Return address:	差出人住所:
+	Row:	行:
+	Russian	ロシア語
+	Serbian (Cyrillic)	セルビア語（キリル文字）
+	Serbian (Latin)	セルビア語（ラテン文字）
+	Set As Default	既定に設定
+	Shipping labels	配送ラベル
+	Single label	1 枚のラベル
+	Spanish (Mexico)	スペイン語（メキシコ）
+	Spanish (Spain)	スペイン語（スペイン）
+	Swedish	スウェーデン語
+	Turkish	トルコ語
+	Ukrainian	ウクライナ語
+	{language} is now the document's default language.	{language} がこの文書の既定の言語になりました。

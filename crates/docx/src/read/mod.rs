@@ -690,6 +690,17 @@ impl Reader<'_> {
                 "m:mathPr" => s.math = Some(math::read_math_pr(k)),
                 "w:mirrorMargins" => s.mirror_margins = on_off(k),
                 "w:autoHyphenation" => s.auto_hyphenation = on_off(k),
+                "w:doNotHyphenateCaps" => s.hyphenate_caps = !on_off(k),
+                "w:hyphenationZone" => {
+                    if let Some(v) = tw(k, "w:val").filter(|v| v.is_finite() && *v >= 0.0) {
+                        s.hyphenation_zone = v.min(1584.0);
+                    }
+                }
+                "w:consecutiveHyphenLimit" => {
+                    if let Some(v) = k.attr("w:val").and_then(u32_of) {
+                        s.consecutive_hyphen_limit = v.min(32_767);
+                    }
+                }
                 "w:footnotePr" => {
                     if let Some(f) = k.child_val("w:numFmt") {
                         s.footnote_format = NumFormat::from_ooxml(f);

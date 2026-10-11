@@ -314,6 +314,13 @@ pub struct Settings {
     pub even_odd_headers: bool,
     pub mirror_margins: bool,
     pub auto_hyphenation: bool,
+    /// Hyphenation zone (`w:hyphenationZone`), points: a line is hyphenated only when breaking
+    /// it at a word boundary would leave more than this empty at its end.
+    pub hyphenation_zone: f32,
+    /// Words in capitals may be hyphenated (`w:doNotHyphenateCaps` turns it off).
+    pub hyphenate_caps: bool,
+    /// Most consecutive lines that may end with a hyphen (`w:consecutiveHyphenLimit`); 0 = no limit.
+    pub consecutive_hyphen_limit: u32,
     pub page_color: Option<Rgb>,
     pub watermark: Option<Watermark>,
     /// Theme fonts (major = headings, minor = body).
@@ -342,6 +349,9 @@ pub const LEGACY_COMPAT_MODE: u32 = 12;
 
 /// The compatibility mode of documents created by Word 2013 and later, and by WordCraft.
 pub const COMPAT_MODE_CURRENT: u32 = 15;
+
+/// Word's hyphenation zone when a document doesn't set one (0.25"), points.
+pub const DEFAULT_HYPHENATION_ZONE: f32 = 18.0;
 
 /// ECMA-376 §17.15.1.44/45: 180 twentieths of a point when a document doesn't say.
 pub const DEFAULT_GRID: f32 = 9.0;
@@ -386,6 +396,9 @@ impl Default for Settings {
             even_odd_headers: false,
             mirror_margins: false,
             auto_hyphenation: false,
+            hyphenation_zone: DEFAULT_HYPHENATION_ZONE,
+            hyphenate_caps: true,
+            consecutive_hyphen_limit: 0,
             page_color: None,
             watermark: None,
             major_font: styles::HEADING_FONT.into(),

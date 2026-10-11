@@ -1375,6 +1375,32 @@ fn auto_hyphenation_breaks_long_words() {
     let _ = hyphens(&l2);
 }
 
+/// Hyphenation Options (#407): a consecutive-hyphen limit of 1 never lets two lines in a row end
+/// with a hyphen, and words in capitals stay whole when the document says so.
+#[test]
+fn hyphenation_options_limit_hyphens_and_spare_capitals() {
+    let text = "Internationalization considerations notwithstanding, administrators systematically reconsidered extraordinarily uncharacteristic responsibilities. ".repeat(6);
+    let lines = |d: &Document| -> Vec<bool> {
+        lay(d).pages[0]
+            .items
+            .iter()
+            .filter_map(|i| {
+                if let Placed::Lines { para, .. } = i { Some(para.lines.iter().map(|x| x.hyphen.is_some()).collect::<Vec<_>>()) } else { None }
+            })
+            .flatten()
+            .collect()
+    };
+    let mut d = Document::from_text(&text);
+    d.settings.auto_hyphenation = true;
+    d.settings.consecutive_hyphen_limit = 1;
+    let hy = lines(&d);
+    assert!(hy.windows(2).all(|w| !(w[0] && w[1])), "two hyphenated lines in a row: {hy:?}");
+    let mut caps = Document::from_text(&text.to_uppercase());
+    caps.settings.auto_hyphenation = true;
+    caps.settings.hyphenate_caps = false;
+    assert!(lines(&caps).iter().all(|h| !h), "a word in capitals was hyphenated");
+}
+
 /// A table of `rows` x 2 with text in every cell, after a "before" paragraph.
 fn styled_table_doc(style: Option<&str>, rows: usize) -> Document {
     let mut d = Document::from_text("before\nafter");

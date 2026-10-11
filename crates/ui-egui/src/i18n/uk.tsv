@@ -1323,3 +1323,67 @@
 	Flip Vertical	Віддзеркалити по вертикалі
 	Flip Horizontal	Віддзеркалити по горизонталі
 	Formatted	Відформатовано
+	Add line numbering	Додати нумерацію рядків
+	Add to Document	Додати до документа
+	Address labels	Адресні етикетки
+	Arabic	Арабська
+	Auto	Авто
+	Automatically hyphenate document	Автоматично переносити слова в документі
+	Chinese (Simplified)	Китайська (спрощена)
+	Chinese (Traditional)	Китайська (традиційна)
+	Column:	Стовпець:
+	Count by:	Крок:
+	Czech	Чеська
+	Danish	Данська
+	Delivery address:	Адреса одержувача:
+	Detect language automatically	Визначати мову автоматично
+	Do not check spelling or grammar	Не перевіряти правопис і граматику
+	Dutch	Нідерландська
+	English (United Kingdom)	Англійська (Велика Британія)
+	Envelope size:	Розмір конверта:
+	Estonian	Естонська
+	Finnish	Фінська
+	French (France)	Французька (Франція)
+	From text:	Від тексту:
+	Full page of the same label	Ціла сторінка однакових етикеток
+	German (Germany)	Німецька (Німеччина)
+	Greek	Грецька
+	Hebrew	Іврит
+	Hyphenate at:	Перенести після:
+	Hyphenate words in CAPS	Переносити слова з ВЕЛИКИХ ЛІТЕР
+	Hyphenation Options…	Параметри перенесення слів…
+	Hyphenation zone:	Зона перенесення:
+	Italian	Італійська
+	Japanese	Японська
+	Korean	Корейська
+	Label:	Етикетка:
+	Limit consecutive hyphens to:	Обмежити кількість переносів поспіль:
+	Line Numbering Options…	Параметри нумерації рядків…
+	Manual Hyphenation	Ручне перенесення слів
+	Manual hyphenation is complete.	Ручне перенесення слів завершено.
+	Manual…	Вручну…
+	Mark selected text as:	Позначити виділений текст як:
+	New Document	Новий документ
+	No limit	Без обмеження
+	Norwegian (Bokmål)	Норвезька (букмол)
+	Numbering:	Нумерація:
+	Omit	Пропустити
+	One label per recipient	Одна етикетка на одержувача
+	Polish	Польська
+	Portuguese (Brazil)	Португальська (Бразилія)
+	Portuguese (Portugal)	Португальська (Португалія)
+	Return address labels	Етикетки зі зворотною адресою
+	Return address:	Зворотна адреса:
+	Row:	Рядок:
+	Russian	Російська
+	Serbian (Cyrillic)	Сербська (кирилиця)
+	Serbian (Latin)	Сербська (латиниця)
+	Set As Default	Зробити типовою
+	Shipping labels	Етикетки для відправлень
+	Single label	Одна етикетка
+	Spanish (Mexico)	Іспанська (Мексика)
+	Spanish (Spain)	Іспанська (Іспанія)
+	Swedish	Шведська
+	Turkish	Турецька
+	Ukrainian	Українська
+	{language} is now the document's default language.	{language} тепер типова мова документа.

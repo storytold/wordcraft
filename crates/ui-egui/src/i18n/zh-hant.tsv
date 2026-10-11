@@ -1312,3 +1312,67 @@
 	Flip Vertical	垂直翻轉
 	Flip Horizontal	水平翻轉
 	Formatted	已設定格式
+	Add line numbering	新增行號
+	Add to Document	新增至文件
+	Address labels	地址標籤
+	Arabic	阿拉伯文
+	Auto	自動
+	Automatically hyphenate document	自動斷字
+	Chinese (Simplified)	中文（簡體）
+	Chinese (Traditional)	中文（繁體）
+	Column:	欄：
+	Count by:	行號間距：
+	Czech	捷克文
+	Danish	丹麥文
+	Delivery address:	收件人地址：
+	Detect language automatically	自動偵測語言
+	Do not check spelling or grammar	不要檢查拼字或文法
+	Dutch	荷蘭文
+	English (United Kingdom)	英文（英國）
+	Envelope size:	信封大小：
+	Estonian	愛沙尼亞文
+	Finnish	芬蘭文
+	French (France)	法文（法國）
+	From text:	距本文：
+	Full page of the same label	整頁相同的標籤
+	German (Germany)	德文（德國）
+	Greek	希臘文
+	Hebrew	希伯來文
+	Hyphenate at:	斷字位置：
+	Hyphenate words in CAPS	大寫單字斷字
+	Hyphenation Options…	斷字選項…
+	Hyphenation zone:	斷字區：
+	Italian	義大利文
+	Japanese	日文
+	Korean	韓文
+	Label:	標籤：
+	Limit consecutive hyphens to:	連續斷字數上限：
+	Line Numbering Options…	行號選項…
+	Manual Hyphenation	手動斷字
+	Manual hyphenation is complete.	手動斷字已完成。
+	Manual…	手動…
+	Mark selected text as:	將選取的文字標示為：
+	New Document	新文件
+	No limit	不限
+	Norwegian (Bokmål)	挪威文（巴克摩）
+	Numbering:	編號：
+	Omit	省略
+	One label per recipient	每位收件人一個標籤
+	Polish	波蘭文
+	Portuguese (Brazil)	葡萄牙文（巴西）
+	Portuguese (Portugal)	葡萄牙文（葡萄牙）
+	Return address labels	寄件人地址標籤
+	Return address:	寄件人地址：
+	Row:	列：
+	Russian	俄文
+	Serbian (Cyrillic)	塞爾維亞文（斯拉夫文）
+	Serbian (Latin)	塞爾維亞文（拉丁文）
+	Set As Default	設為預設值
+	Shipping labels	寄送標籤
+	Single label	單一標籤
+	Spanish (Mexico)	西班牙文（墨西哥）
+	Spanish (Spain)	西班牙文（西班牙）
+	Swedish	瑞典文
+	Turkish	土耳其文
+	Ukrainian	烏克蘭文
+	{language} is now the document's default language.	{language} 現在是此文件的預設語言。

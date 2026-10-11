@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 use wordcraft_doc::section::{Columns, LineNumbering, SectionProps, SectionStart};
-use wordcraft_doc::{Block, Pos};
+use wordcraft_doc::{Block, Pos, StoryRef};
 
 use super::sel_result;
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
@@ -28,23 +28,14 @@ pub fn specs() -> Vec<CommandSpec> {
             ),
         CommandSpec::new("layout.break", "Breaks", "Layout › Page Setup", breaks)
             .params(r#"{"kind": "page|column|textWrapping|nextPage|continuous|evenPage|oddPage"}"#),
-        CommandSpec::new("layout.lineNumbers", "Line Numbers", "Layout › Page Setup", |s, v| {
-            let mode = p::str(v, "value").unwrap_or("continuous");
-            with_sect(s, |x| {
-                x.line_numbers = match mode {
-                    "none" => None,
-                    "restartPage" => Some(LineNumbering { restart: wordcraft_doc::section::LineNumberRestart::Page, ..Default::default() }),
-                    "restartSection" => Some(LineNumbering { restart: wordcraft_doc::section::LineNumberRestart::Section, ..Default::default() }),
-                    _ => Some(LineNumbering { restart: wordcraft_doc::section::LineNumberRestart::Continuous, ..Default::default() }),
-                }
-            })
-        })
-        .params(r#"{"value": "none|continuous|restartPage|restartSection"}"#),
-        CommandSpec::new("layout.hyphenation", "Hyphenation", "Layout › Page Setup", |s, v| {
-            let on = p::bool(v, "value").unwrap_or(!s.doc.settings.auto_hyphenation);
-            s.doc.settings.auto_hyphenation = on;
-            Ok(json!({"value": on}))
-        }),
+        CommandSpec::new("layout.lineNumbers", "Line Numbers", "Layout › Page Setup", line_numbers).params(
+            r#"{"value"?: "none|continuous|restartPage|restartSection", "start"?: 1-32767, "countBy"?: 1-100, "distance"?: pt (0 = auto)}"#,
+        ),
+        CommandSpec::new("layout.hyphenation", "Hyphenation", "Layout › Page Setup", hyphenation)
+            .params(r#"{"value"?: bool (automatic; toggles when nothing is given), "zone"?: pt, "caps"?: bool (hyphenate words in capitals), "limit"?: n (consecutive hyphens, 0 = no limit)}"#),
+        CommandSpec::new("layout.manualHyphenation", "Manual Hyphenation", "Layout › Page Setup › Hyphenation", manual_hyphenation)
+            .params(r#"{"from"?: Pos (default: the caret)} → the next word at a line end that could be hyphenated: {"word", "pos", "points": [char index], "suggest": char index} or {"done": true}"#)
+            .pure(),
         CommandSpec::new("layout.pageSetup", "Page Setup", "Layout › Page Setup", |s, v| {
             if let Some(props) = v.get("section") {
                 let new: SectionProps = serde_json::from_value(props.clone()).map_err(|e| CmdError::Params(e.to_string()))?;
@@ -86,6 +77,130 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .pure(),
     ]
+}
+
+/// Line Numbers: on with a restart mode (`value`), or off (`none`). `start`, `countBy` and
+/// `distance` change the numbering's options and turn it on (keeping its restart mode).
+fn line_numbers(s: &mut Session, v: &Value) -> CmdResult {
+    use wordcraft_doc::section::LineNumberRestart as R;
+    let mode = p::str(v, "value");
+    if mode == Some("none") {
+        return with_sect(s, |x| x.line_numbers = None);
+    }
+    let restart = match mode {
+        Some("restartPage") => Some(R::Page),
+        Some("restartSection") => Some(R::Section),
+        Some("continuous") => Some(R::Continuous),
+        Some(x) => return Err(CmdError::Params(format!("unknown value `{x}`"))),
+        None => None,
+    };
+    let start = p::u64(v, "start").map(|n| n.clamp(1, 32_767) as u32);
+    let count_by = p::u64(v, "countBy").map(|n| n.clamp(1, 100) as u32);
+    let distance = p::f32(v, "distance").map(|d| d.clamp(0.0, 1584.0));
+    let options = start.is_some() || count_by.is_some() || distance.is_some();
+    with_sect(s, |x| {
+        // Options alone keep the current numbering's other settings; a new mode alone starts over.
+        let mut l = match (&x.line_numbers, options) {
+            (Some(cur), true) => cur.clone(),
+            (None, true) => LineNumbering { restart: R::Continuous, ..Default::default() },
+            _ => LineNumbering::default(),
+        };
+        if let Some(r) = restart.or(if options { None } else { Some(R::Continuous) }) {
+            l.restart = r;
+        }
+        if let Some(n) = start {
+            l.start = n;
+        }
+        if let Some(n) = count_by {
+            l.count_by = n;
+        }
+        if let Some(d) = distance {
+            l.distance = d;
+        }
+        x.line_numbers = Some(l);
+    })
+}
+
+/// Hyphenation: automatic on or off, and its options (Hyphenation Options).
+fn hyphenation(s: &mut Session, v: &Value) -> CmdResult {
+    let st = &mut s.doc.settings;
+    let options = ["zone", "caps", "limit"].iter().any(|k| v.get(*k).is_some_and(|x| !x.is_null()));
+    match p::bool(v, "value") {
+        Some(on) => st.auto_hyphenation = on,
+        None if !options => st.auto_hyphenation = !st.auto_hyphenation,
+        None => {}
+    }
+    if let Some(z) = p::f32(v, "zone") {
+        st.hyphenation_zone = z.clamp(0.0, 1584.0);
+    }
+    if let Some(c) = p::bool(v, "caps") {
+        st.hyphenate_caps = c;
+    }
+    if let Some(n) = p::u64(v, "limit") {
+        st.consecutive_hyphen_limit = n.min(32_767) as u32;
+    }
+    Ok(json!({"value": st.auto_hyphenation, "zone": st.hyphenation_zone, "caps": st.hyphenate_caps, "limit": st.consecutive_hyphen_limit}))
+}
+
+/// Manual hyphenation: the next word after `from` that starts a line after a line wrapped at a
+/// space, and could end the line before it if hyphenated. `points` are where a hyphen may go
+/// (char indices into `word`); `suggest` is the last one whose first part fits on that line.
+/// Accepting is `caret.set` to `pos` plus the chosen point, then `text.optionalHyphen`.
+fn manual_hyphenation(s: &mut Session, v: &Value) -> CmdResult {
+    let from = match v.get("from") {
+        Some(f) if !f.is_null() => super::parse_pos(f).ok_or_else(|| CmdError::Params("bad `from`".into()))?,
+        _ => s.sel.ordered().0,
+    };
+    let lim = wordcraft_proof::hyphen::Limits::default();
+    let caps = s.doc.settings.hyphenate_caps;
+    let layout = s.layout();
+    let mut best: Option<(Pos, Value)> = None;
+    for page in &layout.pages {
+        for it in &page.items {
+            let wordcraft_layout::Placed::Lines { story, path, para, l0, l1, .. } = it else { continue };
+            if *story != StoryRef::Body {
+                continue;
+            }
+            let Some(text) = s.doc.para_at(&Pos { story: *story, path: path.clone(), off: 0 }).map(|p| p.text.clone()) else { continue };
+            for li in (*l0).max(1)..*l1 {
+                let (Some(prev), Some(line)) = (para.lines.get(li - 1), para.lines.get(li)) else { continue };
+                if prev.end != wordcraft_layout::LineEnd::Wrap || prev.hyphen.is_some() {
+                    continue;
+                }
+                let at = Pos { story: *story, path: path.clone(), off: line.start };
+                if at < from || best.as_ref().is_some_and(|(b, _)| *b <= at) {
+                    continue;
+                }
+                let Some(rest) = text.get(line.start..) else { continue };
+                let len = rest.char_indices().find(|(_, c)| !(c.is_alphabetic() || *c == '\'' || *c == '\u{2019}')).map_or(rest.len(), |(i, _)| i);
+                let Some(word) = rest.get(..len) else { continue };
+                // A word with an optional hyphen already breaks where its author said.
+                if rest.get(len..).is_some_and(|r| r.starts_with('\u{ad}'))
+                    || word.chars().count() < lim.min_word
+                    || (!caps && word.chars().all(char::is_uppercase))
+                {
+                    continue;
+                }
+                let points = wordcraft_proof::hyphen::hyphen_points(word, &lim);
+                // The room left at the end of the line above, and the width of each first part.
+                let room = prev.right - prev.end_x();
+                let hyphen_w = para
+                    .x_of(li, line.start)
+                    .zip(para.x_of(li, line.start + word.chars().next().map_or(0, char::len_utf8)))
+                    .map_or(6.0, |(a, b)| (b - a) * 0.6);
+                let fits = |pt: usize| {
+                    let bytes = word.char_indices().nth(pt).map_or(word.len(), |(i, _)| i);
+                    match (para.x_of(li, line.start), para.x_of(li, line.start + bytes)) {
+                        (Some(a), Some(b)) => (b - a) + hyphen_w <= room,
+                        _ => false,
+                    }
+                };
+                let Some(suggest) = points.iter().copied().filter(|pt| fits(*pt)).max() else { continue };
+                best = Some((at.clone(), json!({"word": word, "pos": super::pos_json(&at), "points": points, "suggest": suggest})));
+            }
+        }
+    }
+    Ok(best.map(|(_, v)| v).unwrap_or_else(|| json!({"done": true})))
 }
 
 fn block_of(s: &Session) -> usize {
@@ -318,5 +433,62 @@ mod tests {
         assert_eq!(counts, vec![1, 2]);
         assert_eq!(s.doc.last_section.start, SectionStart::Continuous);
         assert!(s.run("layout.columns", &json!({"count": 2, "apply": "elsewhere"})).is_err());
+    }
+
+    /// #407 Line Numbers options: start, count by, distance and restart; options alone keep the
+    /// restart mode, `none` turns numbering off.
+    #[test]
+    fn line_numbering_options() {
+        use wordcraft_doc::section::LineNumberRestart;
+        let mut s = Session::new(wordcraft_doc::Document::from_text("One\nTwo"));
+        s.run("layout.lineNumbers", &json!({"value": "restartSection", "start": 5, "countBy": 2, "distance": 18})).unwrap();
+        let l = s.doc.last_section.line_numbers.clone().unwrap();
+        assert_eq!((l.start, l.count_by, l.distance, l.restart), (5, 2, 18.0, LineNumberRestart::Section));
+        s.run("layout.lineNumbers", &json!({"countBy": 1e9, "start": -3})).unwrap();
+        let l = s.doc.last_section.line_numbers.clone().unwrap();
+        assert_eq!((l.start, l.count_by, l.restart), (5, 100, LineNumberRestart::Section), "clamped, mode kept");
+        s.run("layout.lineNumbers", &json!({"value": "none"})).unwrap();
+        assert!(s.doc.last_section.line_numbers.is_none());
+        assert!(s.run("layout.lineNumbers", &json!({"value": "sometimes"})).is_err());
+    }
+
+    /// #407 Hyphenation Options: options don't toggle automatic hyphenation; Manual finds a
+    /// word at a line start that would fit hyphenated on the line above, and an optional hyphen
+    /// there breaks the word.
+    #[test]
+    fn hyphenation_options_and_manual_hyphenation() {
+        let mut s = Session::new(wordcraft_doc::Document::from_text(
+            &"a extraordinarily be uncharacteristic of responsibilities the considerations ".repeat(12),
+        ));
+        let r = s.run("layout.hyphenation", &json!({"zone": 36, "caps": false, "limit": 3})).unwrap();
+        assert_eq!(r, json!({"value": false, "zone": 36.0, "caps": false, "limit": 3}));
+        s.run("layout.hyphenation", &json!({})).unwrap();
+        assert!(s.doc.settings.auto_hyphenation, "nothing given toggles");
+        s.run("layout.hyphenation", &json!({"value": false})).unwrap();
+        // Accept every candidate (which words they are depends on the fonts).
+        let mut found = 0;
+        let mut from = json!(null);
+        while found < 5 {
+            let c = s.run("layout.manualHyphenation", &json!({"from": from})).unwrap();
+            if c["done"] == true {
+                break;
+            }
+            let word = c["word"].as_str().unwrap().to_string();
+            let pts = c["points"].as_array().unwrap();
+            assert!(!pts.is_empty() && pts.contains(&c["suggest"]), "{c}");
+            let at = c["suggest"].as_u64().unwrap() as usize;
+            let mut pos = c["pos"].clone();
+            let off = pos["off"].as_u64().unwrap() as usize + word.char_indices().nth(at).unwrap().0;
+            pos["off"] = json!(off);
+            s.run("caret.set", &json!({"pos": pos})).unwrap();
+            s.run("text.optionalHyphen", &json!({})).unwrap();
+            pos["off"] = json!(off + word.len());
+            from = pos;
+            found += 1;
+        }
+        // Some line of thirty or so starts with a long word that fits hyphenated above, whatever the font.
+        assert!(found > 0, "no candidates");
+        assert_eq!(s.doc.plain_text(wordcraft_doc::StoryRef::Body).matches('\u{ad}').count(), found);
+        assert!(s.run("layout.manualHyphenation", &json!({"from": {"block": 999, "off": 0}})).unwrap()["done"] == true);
     }
 }
