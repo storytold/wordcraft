@@ -196,7 +196,17 @@ pub fn specs() -> Vec<CommandSpec> {
 
 /// Resolved paragraph props at the caret.
 fn cur(s: &Session) -> wordcraft_doc::resolve::ResolvedPara {
-    let props = s.doc.para_at(&s.sel.focus).map(|p| p.props.clone()).unwrap_or_default();
+    // A selection ending at the next paragraph's start doesn't format that paragraph (#418), so
+    // its state comes from the last paragraph it does cover.
+    let (a, b) = s.sel.ordered();
+    let mut at = s.sel.focus.clone();
+    if let Some(last) = s.doc.para_paths_in(&a, &b).pop()
+        && last != at.path
+        && at == b
+    {
+        at = Pos { path: last, off: 0, ..at };
+    }
+    let props = s.doc.para_at(&at).map(|p| p.props.clone()).unwrap_or_default();
     s.doc.styles.resolve_para(&props)
 }
 
@@ -283,7 +293,7 @@ fn asian_typography(s: &mut Session, v: &Value) -> CmdResult {
 
 pub fn indent(s: &mut Session, _: &Value) -> CmdResult {
     let (a, b) = s.sel.ordered();
-    let paths = s.doc.paths_between(&a, &b);
+    let paths = s.doc.para_paths_in(&a, &b);
     let tab = s.doc.settings.default_tab.max(1.0);
     for path in paths {
         let (num, left) = {
@@ -302,7 +312,7 @@ pub fn indent(s: &mut Session, _: &Value) -> CmdResult {
 
 pub fn outdent(s: &mut Session, _: &Value) -> CmdResult {
     let (a, b) = s.sel.ordered();
-    let paths = s.doc.paths_between(&a, &b);
+    let paths = s.doc.para_paths_in(&a, &b);
     let tab = s.doc.settings.default_tab.max(1.0);
     for path in paths {
         let (num, left) = {
@@ -399,7 +409,7 @@ fn list(s: &mut Session, v: &Value, default: ListKind) -> CmdResult {
     let (a, b) = s.sel.ordered();
     // Toggle: if every selected paragraph already has this kind of list, remove it.
     let current: Vec<Option<NumRef>> =
-        s.doc.paths_between(&a, &b).iter().map(|p| s.doc.para(a.story, p).and_then(|x| x.props.numbering).filter(|n| n.num != 0)).collect();
+        s.doc.para_paths_in(&a, &b).iter().map(|p| s.doc.para(a.story, p).and_then(|x| x.props.numbering).filter(|n| n.num != 0)).collect();
     let same_kind = |n: &NumRef| {
         s.doc.numbering.level(n.num, 0).is_some_and(|l| {
             let want = wordcraft_doc::numbering::levels_for(kind);

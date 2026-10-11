@@ -327,3 +327,44 @@ fn tracked_enter_and_backspace_track_the_paragraph_mark() {
     assert_eq!(s.sel.focus, Pos::body(0, 3));
     assert!(s.doc.para_at(&Pos::body(0, 0)).is_some_and(|p| p.mark.del.is_some()));
 }
+
+#[test]
+fn typing_then_selecting_then_typing_are_two_undo_steps() {
+    // #419: a selection that moves the insertion point ends the typing group, like a caret move.
+    let mut s = typed("alpha");
+    run(&mut s, "select.text", json!({"text": "ph"}));
+    run(&mut s, "text.insert", json!({"text": "X"}));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "alXa");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "alpha");
+    assert_eq!(s.selected_text(), "ph");
+    assert!(s.can_undo());
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "");
+    // Uninterrupted typing (a read-only command in between included) is still one step.
+    let mut s = typed("alpha");
+    run(&mut s, "document.inspect", json!({}));
+    typ(&mut s, "X");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "");
+}
+
+#[test]
+fn undoing_bold_at_the_caret_turns_bold_typing_off_again() {
+    // #424: Bold at a caret in an empty paragraph, Undo, type: the text isn't bold.
+    let mut s = s();
+    run(&mut s, "format.bold", json!({"value": true}));
+    run(&mut s, "edit.undo", json!({}));
+    assert_ne!(s.typing_props().bold, Some(true));
+    typ(&mut s, "abc");
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    assert_eq!(p.text, "abc");
+    assert_ne!(p.props_of_char(0).bold, Some(true));
+    // Redo brings bold typing back.
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "format.bold", json!({"value": true}));
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "edit.redo", json!({}));
+    typ(&mut s, "abc");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().props_of_char(0).bold, Some(true));
+}

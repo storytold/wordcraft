@@ -143,6 +143,8 @@ struct Undo {
     label: String,
     doc: Document,
     sel: Selection,
+    /// Formatting waiting at the caret (Bold with nothing selected), so Undo takes it back too.
+    pending: Option<CharProps>,
 }
 
 /// What [`Session::restore`] needs to take commands back exactly: the document, the selection,
@@ -421,7 +423,7 @@ impl Session {
             return;
         }
         self.typing_open = label == "Typing";
-        self.history.push(Arc::new(Undo { label: label.to_string(), doc: self.doc.clone(), sel: self.sel.clone() }));
+        self.history.push(Arc::new(Undo { label: label.to_string(), doc: self.doc.clone(), sel: self.sel.clone(), pending: self.pending.clone() }));
         if self.history.len() > MAX_UNDO {
             self.history.remove(0);
             self.undo_evicted += 1;
@@ -431,7 +433,7 @@ impl Session {
     /// Record `doc`/`sel` as their own undo step after the fact and close the typing group, so
     /// Undo right after an automatic change (AutoFormat, AutoCorrect) reverts only that change.
     pub fn push_undo(&mut self, label: &str, doc: Document, sel: Selection) {
-        self.history.push(Arc::new(Undo { label: label.to_string(), doc, sel }));
+        self.history.push(Arc::new(Undo { label: label.to_string(), doc, sel, pending: self.pending.clone() }));
         if self.history.len() > MAX_UNDO {
             self.history.remove(0);
             self.undo_evicted += 1;
@@ -482,7 +484,12 @@ impl Session {
     pub fn undo(&mut self) -> bool {
         self.typing_open = false;
         let Some(u) = self.history.pop().map(Arc::unwrap_or_clone) else { return false };
-        let cur = Undo { label: u.label.clone(), doc: std::mem::replace(&mut self.doc, u.doc), sel: std::mem::replace(&mut self.sel, u.sel) };
+        let cur = Undo {
+            label: u.label.clone(),
+            doc: std::mem::replace(&mut self.doc, u.doc),
+            sel: std::mem::replace(&mut self.sel, u.sel),
+            pending: std::mem::replace(&mut self.pending, u.pending),
+        };
         self.redo.push(Arc::new(cur));
         self.touch();
         true
@@ -490,7 +497,12 @@ impl Session {
     pub fn redo(&mut self) -> bool {
         self.typing_open = false;
         let Some(u) = self.redo.pop().map(Arc::unwrap_or_clone) else { return false };
-        let cur = Undo { label: u.label.clone(), doc: std::mem::replace(&mut self.doc, u.doc), sel: std::mem::replace(&mut self.sel, u.sel) };
+        let cur = Undo {
+            label: u.label.clone(),
+            doc: std::mem::replace(&mut self.doc, u.doc),
+            sel: std::mem::replace(&mut self.sel, u.sel),
+            pending: std::mem::replace(&mut self.pending, u.pending),
+        };
         self.history.push(Arc::new(cur));
         self.touch();
         true
@@ -736,6 +748,11 @@ impl Session {
                     self.doc.prune_text_boxes();
                 }
                 self.clamp_selection();
+                // A selection command that moves the insertion point ends the typing group, like
+                // caret movement: typing, Select, typing are two undo steps (#419).
+                if !spec.mutates && self.sel != sel_before {
+                    self.typing_open = false;
+                }
                 // Extra selected objects last until something else is edited or selected.
                 if !matches!(id, "select.addObject" | "arrange.ungroup") && (spec.mutates || self.sel != sel_before) {
                     self.also_selected.clear();
