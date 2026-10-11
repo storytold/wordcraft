@@ -7,7 +7,7 @@ use wordcraft_doc::StoryRef;
 use crate::theme::{Tokens, TypeRung, medium, paint_text, regular, semibold, text_width};
 use crate::{WordApp, icons};
 
-fn qat_button(ui: &mut Ui, app: &mut WordApp, icon: &str, tip: &str, id: &str, enabled: bool) {
+fn qat_button(ui: &mut Ui, app: &mut WordApp, icon: &str, tip: &str, id: &str, enabled: bool) -> egui::Response {
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(vec2(26.0, 24.0), Sense::click());
     if resp.hovered() && enabled {
@@ -19,6 +19,66 @@ fn qat_button(ui: &mut Ui, app: &mut WordApp, icon: &str, tip: &str, id: &str, e
     let resp = resp.on_hover_text(if sc.is_empty() { tip.to_string() } else { format!("{tip} ({sc})") });
     if resp.clicked() && enabled {
         let _ = app.run(id, json!({}));
+    }
+    resp
+}
+
+/// Commands the Quick Access Toolbar's menu offers to show or hide with one click (#376).
+const QAT_MENU: [&str; 10] =
+    ["file.new", "file.open", "file.save", "file.print", "edit.undo", "edit.redo", "edit.repeat", "review.spelling", "view.readMode", "insert.table"];
+
+/// The Quick Access Toolbar (#379): the user's commands (Save, Undo, Redo until customized), each
+/// with a right-click menu, then the menu button that customizes it (#376).
+fn quick_access(ui: &mut Ui, app: &mut WordApp) {
+    let ids: Vec<String> = app.session.ribbon.qat().into_iter().map(str::to_string).collect();
+    for id in &ids {
+        let id = id.as_str();
+        let (tip, enabled) = match id {
+            "edit.undo" => (crate::i18n::prefixed("Undo", app.session.undo_label().unwrap_or("")), app.session.can_undo()),
+            "edit.redo" => (tl!("Redo").to_string(), app.session.can_redo()),
+            "file.save" => (tl!("Save").to_string(), true),
+            _ => (app.session.registry.get(id).map(|s| tl!(s.label).to_string()).unwrap_or_default(), crate::widgets::enabled(app, id)),
+        };
+        let resp = qat_button(ui, app, crate::widgets::command_icon(id), &tip, id, enabled);
+        crate::widgets::command_menu(&resp, app, id);
+    }
+    let t = Tokens::get(ui.ctx());
+    let (r, _) = ui.allocate_exact_size(vec2(26.0, 24.0), Sense::hover());
+    let resp = ui.interact(r, qat_menu_button_id(), Sense::click());
+    if resp.hovered() {
+        ui.painter().rect_filled(r, 4.0, t.hover);
+    }
+    icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(16.0, 16.0)), "more", t.icon, t.accent);
+    let resp = resp.on_hover_text(tl!("Customize Quick Access Toolbar"));
+    egui::Popup::menu(&resp).show(|ui| {
+        ui.set_min_width(220.0);
+        qat_menu(ui, app);
+    });
+}
+
+/// The Quick Access Toolbar's menu button (…), which opens [`qat_menu`].
+pub(crate) fn qat_menu_button_id() -> egui::Id {
+    egui::Id::new("qat_menu_button")
+}
+
+/// The Quick Access Toolbar's menu: common commands to show or hide, and More Commands…
+pub(crate) fn qat_menu(ui: &mut Ui, app: &mut WordApp) {
+    ui.label(egui::RichText::new(tl!("Customize Quick Access Toolbar")).font(semibold(12.0)));
+    ui.separator();
+    for id in QAT_MENU {
+        let Some(label) = app.session.registry.get(id).map(|s| tl!(s.label).to_string()) else { continue };
+        let on = app.session.ribbon.qat().contains(&id);
+        let mark = egui::RichText::new("✓");
+        let mark = if on { mark } else { mark.color(egui::Color32::TRANSPARENT) };
+        if ui.add(egui::Button::new((mark, label)).selected(on)).clicked() {
+            let key = if on { "qatRemove" } else { "qatAdd" };
+            let _ = app.run("tools.customizeRibbon", json!({ key: id }));
+        }
+    }
+    ui.separator();
+    if ui.button(tl!("More Commands…")).clicked() {
+        crate::dialogs_ribbon::open(app, crate::dialogs_ribbon::Page::QuickAccess);
+        ui.close();
     }
 }
 
@@ -94,12 +154,7 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                     }
                 }
                 ui.add_space(8.0);
-                qat_button(ui, app, "save", tl!("Save"), "file.save", true);
-                let can_undo = app.session.can_undo();
-                let can_redo = app.session.can_redo();
-                qat_button(ui, app, "undo", &crate::i18n::prefixed("Undo", app.session.undo_label().unwrap_or("")), "edit.undo", can_undo);
-                qat_button(ui, app, "redo", tl!("Redo"), "edit.redo", can_redo);
-                qat_button(ui, app, "more", tl!("Customize Quick Access Toolbar"), "ui.dialog", true);
+                quick_access(ui, app);
                 qat_end = ui.min_rect().max.x;
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // Account / community.

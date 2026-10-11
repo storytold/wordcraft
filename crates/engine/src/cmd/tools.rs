@@ -89,6 +89,16 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"enabled"?: bool, "add"?: {"from": string, "to": string}}"#)
         .pure(),
+        CommandSpec::new("tools.customizeKeyboard", "Customize Keyboard", "File › Options", customize_keyboard)
+            .params(
+                r#"{"command"?: id (its keys), "key"?: "Mod+Shift+K" (the command it runs), "assign"?: {"command": id, "key": string}, "remove"?: {"command": id, "key": string}, "reset"?: true (built-in keys only)} → {custom: {assigned: {key: id}, removed: [key]}, …}; no params opens the dialog"#,
+            )
+            .pure(),
+        CommandSpec::new("tools.customizeRibbon", "Customize Ribbon", "File › Options", customize_ribbon)
+            .params(
+                r#"{"hide"?: tab, "show"?: tab, "newTab"?: {"name"?, "after"?: tab}, "newGroup"?: {"tab", "name"?}, "add"?: {"tab", "group", "command", "after"?: id}, "remove"?: {"tab", "group"?, "command"?}, "rename"?: {"tab", "group"?, "to"}, "move"?: {"tab", "group"?, "command"?, "by": int}, "qatAdd"?: id, "qatRemove"?: id, "qatMove"?: {"command", "by": int}, "reset"?: true | "ribbon" | "qat", "layout"?: object} → {tabs: [{name, custom?, hidden?, groups?: [{name, commands}]}], qat: [id]}; only custom tabs and groups can be renamed or removed (built-in tabs can be hidden and moved); no params opens the dialog"#,
+            )
+            .pure(),
         CommandSpec::new("review.compare", "Compare", "Review › Compare", compare).params(r#"{"path"?: string, "text"?: string (revised version)}"#),
         CommandSpec::new("review.combine", "Combine", "Review › Compare", compare).params(r#"{"path"?: string}"#),
         CommandSpec::new("file.accessibility", "Check Accessibility", "Review › Accessibility", accessibility).pure(),
@@ -900,6 +910,128 @@ fn select_similar(s: &mut Session, _: &Value) -> CmdResult {
         s.sel = Selection { anchor: a, focus: b };
     }
     Ok(json!({"runs": count}))
+}
+
+/// Tools › Customize Keyboard: read and change the custom keyboard shortcuts ([`crate::KeyMap`]).
+/// Without params it opens the dialog; with any, it only does what they ask (no dialog).
+fn customize_keyboard(s: &mut Session, v: &Value) -> CmdResult {
+    let reg = s.registry.clone();
+    let pair = |x: &Value| -> Result<(String, String), CmdError> { Ok((p::req_str(x, "command")?.to_string(), p::req_str(x, "key")?.to_string())) };
+    let mut out = serde_json::Map::new();
+    let mut asked = false;
+    if p::bool(v, "reset") == Some(true) {
+        asked = true;
+        s.keymap.reset();
+    }
+    if let Some(a) = v.get("assign") {
+        asked = true;
+        let (id, key) = pair(a)?;
+        let previous = s.keymap.assign(&reg, &id, &key).map_err(CmdError::Params)?;
+        out.insert("replaced".into(), json!(previous));
+    }
+    if let Some(r) = v.get("remove") {
+        asked = true;
+        let (id, key) = pair(r)?;
+        out.insert("removed".into(), json!(s.keymap.remove(&reg, &id, &key).map_err(CmdError::Params)?));
+    }
+    if let Some(id) = p::str(v, "command") {
+        asked = true;
+        if reg.get(id).is_none() {
+            return Err(CmdError::Params(format!("unknown command `{id}`")));
+        }
+        out.insert("keys".into(), json!(s.keymap.keys_for(&reg, id)));
+    }
+    if let Some(key) = p::str(v, "key") {
+        asked = true;
+        let key = crate::keymap::normalize(key).ok_or_else(|| CmdError::Params(format!("`{key}` isn't a key (e.g. Mod+Shift+K, Alt+F7, F2)")))?;
+        out.insert("assignedTo".into(), json!(s.keymap.resolve(&reg, &key).map(|c| c.id)));
+        out.insert("key".into(), json!(key));
+    }
+    out.insert("custom".into(), serde_json::to_value(&s.keymap).unwrap_or(Value::Null));
+    if !asked {
+        s.ui_requests.push(json!({"open": "customizeKeyboard"}));
+    }
+    Ok(Value::Object(out))
+}
+
+/// Tools › Customize Ribbon: read and change the ribbon's tabs, custom groups and the Quick Access
+/// Toolbar ([`crate::RibbonLayout`]). Without params it opens the dialog; with any, it only does
+/// what they ask (no dialog).
+fn customize_ribbon(s: &mut Session, v: &Value) -> CmdResult {
+    let reg = s.registry.clone();
+    let l = &mut s.ribbon;
+    let e = CmdError::Params;
+    let str_of = |x: &Value, k: &str| x.get(k).and_then(Value::as_str).map(str::to_string);
+    let req = |x: &Value, k: &str| p::req_str(x, k).map(str::to_string);
+    let by = |x: &Value| x.get("by").and_then(Value::as_i64).ok_or_else(|| e("`by` (integer, e.g. -1 or 1) is required".into()));
+    let mut out = serde_json::Map::new();
+    let mut asked = false;
+    if let Some(x) = v.get("layout") {
+        asked = true;
+        *l = crate::RibbonLayout::from_value(x);
+        l.retain_known(&reg);
+    }
+    if let Some(r) = v.get("reset") {
+        asked = true;
+        match (r.as_bool(), r.as_str()) {
+            (Some(true), _) => *l = crate::RibbonLayout::default(),
+            (_, Some("ribbon")) => l.reset_ribbon(),
+            (_, Some("qat")) => l.reset_qat(),
+            _ => return Err(e("`reset` is true, \"ribbon\" or \"qat\"".into())),
+        }
+    }
+    for (key, hidden) in [("hide", true), ("show", false)] {
+        if let Some(tab) = p::str(v, key) {
+            asked = true;
+            l.set_hidden(tab, hidden).map_err(e)?;
+        }
+    }
+    if let Some(x) = v.get("newTab") {
+        asked = true;
+        let name = l.new_tab(str_of(x, "name").as_deref(), str_of(x, "after").as_deref()).map_err(e)?;
+        out.insert("tab".into(), json!(name));
+    }
+    if let Some(x) = v.get("newGroup") {
+        asked = true;
+        let name = l.new_group(&req(x, "tab")?, str_of(x, "name").as_deref()).map_err(e)?;
+        out.insert("group".into(), json!(name));
+    }
+    if let Some(x) = v.get("add") {
+        asked = true;
+        let added = l.add(&reg, &req(x, "tab")?, &req(x, "group")?, &req(x, "command")?, str_of(x, "after").as_deref()).map_err(e)?;
+        out.insert("added".into(), json!(added));
+    }
+    if let Some(x) = v.get("remove") {
+        asked = true;
+        l.remove(&req(x, "tab")?, str_of(x, "group").as_deref(), str_of(x, "command").as_deref()).map_err(e)?;
+    }
+    if let Some(x) = v.get("rename") {
+        asked = true;
+        let name = l.rename(&req(x, "tab")?, str_of(x, "group").as_deref(), &req(x, "to")?).map_err(e)?;
+        out.insert("name".into(), json!(name));
+    }
+    if let Some(x) = v.get("move") {
+        asked = true;
+        l.move_by(&req(x, "tab")?, str_of(x, "group").as_deref(), str_of(x, "command").as_deref(), by(x)?).map_err(e)?;
+    }
+    if let Some(id) = p::str(v, "qatAdd") {
+        asked = true;
+        out.insert("added".into(), json!(l.qat_add(&reg, id, None).map_err(e)?));
+    }
+    if let Some(id) = p::str(v, "qatRemove") {
+        asked = true;
+        out.insert("removed".into(), json!(l.qat_remove(id)));
+    }
+    if let Some(x) = v.get("qatMove") {
+        asked = true;
+        l.qat_move(&req(x, "command")?, by(x)?).map_err(e)?;
+    }
+    out.insert("tabs".into(), serde_json::to_value(l.tabs().as_ref()).unwrap_or(Value::Null));
+    out.insert("qat".into(), json!(l.qat()));
+    if !asked {
+        s.ui_requests.push(json!({"open": "customizeRibbon"}));
+    }
+    Ok(Value::Object(out))
 }
 
 #[cfg(test)]

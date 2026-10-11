@@ -1,6 +1,6 @@
 # UI parity with Microsoft Word
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (first version; ribbon, dialogs, shortcuts and on-canvas interaction measured from `crates/ui-egui` and the command registry) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** trivial (Customize Ribbon and the Quick Access Toolbar, #379; previously: major, first version; ribbon, dialogs, shortcuts and on-canvas interaction measured from `crates/ui-egui` and the command registry) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 How WordCraft looks and feels next to Word: ribbon, dialogs, panes, keyboard, mouse and touch.
 Typing behaviour has its own checklist ([`typing-parity.md`](typing-parity.md)). All assets are our
@@ -13,8 +13,8 @@ own (`AGENTS.md`: no Microsoft iconography, ever).
 | Ribbon tabs and groups | All Word tabs including contextual Table Design/Layout, Picture Format, Shape Format, Header & Footer, Equation; ribbon overflow (#43, #129). Draw tab: Select, Eraser, Pen, Pencil, Highlighter with colour and thickness (#307); missing: Lasso, Add Pen, Ink to Shape/Math, Ink Replay | Same plus Draw | 85% | (Draw in features) |
 | Keytips (Alt / ⌃⌥ letters) | ✅ (#43) | ✅ | 85% | 1–2 |
 | Mini-toolbar on selection | ✅ (#43) | ✅ | 80% | 1–2 |
-| Quick Access Toolbar | Undo, Redo, Repeat, AutoSave | customizable | 50% | 2–3 |
-| Customize Ribbon / Customize Keyboard | ❌ | ✅ | 0% | 6–10 |
+| Quick Access Toolbar | AutoSave, then the user's commands (Save, Undo, Redo by default); add, remove and reorder from its … menu (common commands, More Commands…), right-click on any ribbon button, or Customize Ribbon; saved per user (#379, #376). Not shown below the ribbon | customizable | 90% | 0.5 |
+| Customize Ribbon / Customize Keyboard | Customize Keyboard (#368): categories, a command's keys, press a combination to see which command uses it, Assign / Remove / Reset All; custom keys override built-ins, removed built-ins do nothing, saved per user; `tools.customizeKeyboard` for agents. Customize Ribbon (#379): show, hide and reorder tabs, custom tabs and custom groups (on any tab) holding any commands, rename, remove, Reset; right-click on the ribbon; saved per user; `tools.customizeRibbon` for agents. Built-in tabs can't be renamed; no import/export file | ✅ | 85% | 1–2 |
 | Keyboard shortcuts | **101** bound in `CommandSpec::key` (measured) | ~250 default shortcuts | ~60% | 4–6 |
 | Modal dialogs | **22** (`Dialog` enum: Font, Paragraph, Tabs, Borders and Shading, Find, Go To, Insert Table, Table Properties, Page Setup, Link, Bookmark, Word Count, Zoom, Watermark, New/Modify Style, Commands, About, Save Changes; Columns, Symbol with Special Characters, Field (#321)) plus panes and menus for the rest | ~100 (Caption, Index, TOC options, Citation, Define Multilevel List, Track Changes Options, Compare, Protect, Language, Hyphenation, Line Numbers, Envelopes, Labels, Mail Merge, AutoCorrect, Options panes…) | ~40% | 20–30 |
 | Modal dialogs | **20** (`Dialog` enum: Font, Paragraph, Find, Go To, Insert Table, Table Properties, Page Setup, Link, Bookmark, Word Count, Zoom, Watermark, New/Modify Style, Commands, About, Save Changes; Columns, Symbol with Special Characters, Field (#321)) plus panes and menus for the rest | ~100 (Tabs, Borders and Shading, Caption, Index, TOC options, Citation, Define Multilevel List, Track Changes Options, Compare, Protect, Language, Hyphenation, Line Numbers, Envelopes, Labels, Mail Merge, AutoCorrect, Options panes…) | ~40% | 20–30 |
@@ -38,6 +38,8 @@ own (`AGENTS.md`: no Microsoft iconography, ever).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-11 | trivial | Customize Ribbon (custom tabs and groups, hidden and reordered tabs) and a customizable Quick Access Toolbar with a working … menu (#379, #376) |
+| 2026-10-11 | trivial | Customize Keyboard dialog (Tools › Customize Keyboard, File › Options › Keyboard shortcuts): custom keys override built-ins and persist (#368) |
 | 2026-10-11 | trivial | Font box (ribbon and mini toolbar): typing lists the matching fonts (prefix first, then any part of the name); Up/Down, Enter or a click picks one, Escape cancels (#359) |
 | 2026-10-10 | trivial | Tabs dialog (Paragraph › Tabs…, double-click a ruler tab) and Borders and Shading with Borders, Page Border and Shading tabs (#320) |
 | 2026-10-10 | trivial | Columns (presets, unequal widths, line between, apply to), Symbol (font coverage grid by Unicode subset, recently used, character code, Special Characters) and Field (categories, options, field codes) dialogs (#321) |

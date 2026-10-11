@@ -1323,3 +1323,39 @@
 	Flip Vertical	Віддзеркалити по вертикалі
 	Flip Horizontal	Віддзеркалити по горизонталі
 	Formatted	Відформатовано
+	Customize Keyboard	Настроювання клавіатури
+	Choose a command	Виберіть команду
+	Choose a shortcut	Виберіть сполучення клавіш
+	All Commands	Усі команди
+	Commands:	Команди:
+	Keys for this command:	Клавіші цієї команди:
+	New shortcut:	Нове сполучення клавіш:
+	Now used by {command}	Зараз використовує: {command}
+	Not used by any command	Не використовується жодною командою
+	Remove every custom shortcut and restore the built-in keys?	Видалити всі власні сполучення клавіш і відновити вбудовані?
+	Assign	Призначити
+	Remove	Видалити
+	Reset All…	Скинути все…
+	Press a key combination	Натисніть сполучення клавіш
+	Customize	Настроювання
+	Keyboard shortcuts:	Сполучення клавіш:
+	Customize…	Настроїти…
+	Customize Ribbon	Налаштувати стрічку
+	Add to Quick Access Toolbar	Додати на панель швидкого доступу
+	Remove from Quick Access Toolbar	Видалити з панелі швидкого доступу
+	Customize the Ribbon…	Налаштувати стрічку…
+	Customize Quick Access Toolbar…	Налаштувати панель швидкого доступу…
+	More Commands…	Інші команди…
+	Ribbon	Стрічка
+	(Custom)	(Користувацька)
+	Remove every custom tab and group and show all tabs again?	Видалити всі користувацькі вкладки й групи та знову показати всі вкладки?
+	Put the default commands back on the Quick Access Toolbar?	Повернути стандартні команди на панель швидкого доступу?
+	Reset…	Скинути…
+	Add >>	Додати >>
+	<< Remove	<< Видалити
+	Pick a custom group (New Group makes one)	Виберіть користувацьку групу (її створює «Нова група»)
+	Ribbon tabs	Вкладки стрічки
+	New Tab	Нова вкладка
+	New Group	Нова група
+	Rename…	Перейменувати…
+	Ribbon and Quick Access Toolbar:	Стрічка й панель швидкого доступу:

@@ -1324,3 +1324,39 @@
 	Width and spacing	Laius ja vahe
 	from Unicode (hex)	Unicode (kuueteistkümnend)
 	Formatted	Vormindatud
+	All Commands	Kõik käsud
+	Assign	Määra
+	Choose a command	Vali käsk
+	Choose a shortcut	Vali kiirklahv
+	Commands:	Käsud:
+	Customize	Kohanda
+	Customize Keyboard	Kohanda klaviatuuri
+	Customize…	Kohanda…
+	Keyboard shortcuts:	Kiirklahvid:
+	Keys for this command:	Selle käsu klahvid:
+	New shortcut:	Uus kiirklahv:
+	Not used by any command	Ükski käsk ei kasuta seda
+	Now used by {command}	Praegu kasutab: {command}
+	Press a key combination	Vajuta klahvikombinatsiooni
+	Remove	Eemalda
+	Remove every custom shortcut and restore the built-in keys?	Kas eemaldada kõik kohandatud kiirklahvid ja taastada sisseehitatud klahvid?
+	Reset All…	Lähtesta kõik…
+	(Custom)	(Kohandatud)
+	<< Remove	<< Eemalda
+	Add >>	Lisa >>
+	Add to Quick Access Toolbar	Lisa kiirpääsuribale
+	Customize Quick Access Toolbar…	Kohanda kiirpääsuriba…
+	Customize Ribbon	Kohanda linti
+	Customize the Ribbon…	Kohanda linti…
+	More Commands…	Rohkem käske…
+	New Group	Uus rühm
+	New Tab	Uus vahekaart
+	Pick a custom group (New Group makes one)	Vali kohandatud rühm (nupp Uus rühm loob selle)
+	Put the default commands back on the Quick Access Toolbar?	Kas panna vaikekäsud kiirpääsuribale tagasi?
+	Remove every custom tab and group and show all tabs again?	Kas eemaldada kõik kohandatud vahekaardid ja rühmad ning kuvada uuesti kõik vahekaardid?
+	Remove from Quick Access Toolbar	Eemalda kiirpääsuribalt
+	Rename…	Nimeta ümber…
+	Reset…	Lähtesta…
+	Ribbon	Lint
+	Ribbon and Quick Access Toolbar:	Lint ja kiirpääsuriba:
+	Ribbon tabs	Lindi vahekaardid

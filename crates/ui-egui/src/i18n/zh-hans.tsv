@@ -1322,3 +1322,39 @@
 	Flip Vertical	垂直翻转
 	Flip Horizontal	水平翻转
 	Formatted	已设置格式
+	Customize Keyboard	自定义键盘
+	Choose a command	选择命令
+	Choose a shortcut	选择快捷键
+	All Commands	所有命令
+	Commands:	命令：
+	Keys for this command:	此命令的按键：
+	New shortcut:	新快捷键：
+	Now used by {command}	当前由 {command} 使用
+	Not used by any command	未被任何命令使用
+	Remove every custom shortcut and restore the built-in keys?	删除所有自定义快捷键并恢复内置按键？
+	Assign	指定
+	Remove	删除
+	Reset All…	全部重置…
+	Press a key combination	请按组合键
+	Customize	自定义
+	Keyboard shortcuts:	键盘快捷方式：
+	Customize…	自定义…
+	Customize Ribbon	自定义功能区
+	Add to Quick Access Toolbar	添加到快速访问工具栏
+	Remove from Quick Access Toolbar	从快速访问工具栏删除
+	Customize the Ribbon…	自定义功能区…
+	Customize Quick Access Toolbar…	自定义快速访问工具栏…
+	More Commands…	其他命令…
+	Ribbon	功能区
+	(Custom)	(自定义)
+	Remove every custom tab and group and show all tabs again?	删除所有自定义选项卡和组，并重新显示所有选项卡？
+	Put the default commands back on the Quick Access Toolbar?	恢复快速访问工具栏的默认命令？
+	Reset…	重置…
+	Add >>	添加 >>
+	<< Remove	<< 删除
+	Pick a custom group (New Group makes one)	请选择一个自定义组（可用“新建组”创建）
+	Ribbon tabs	功能区选项卡
+	New Tab	新建选项卡
+	New Group	新建组
+	Rename…	重命名…
+	Ribbon and Quick Access Toolbar:	功能区和快速访问工具栏：

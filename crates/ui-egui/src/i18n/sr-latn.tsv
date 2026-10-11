@@ -1321,3 +1321,39 @@
 	Flip Vertical	Okreni vertikalno
 	Flip Horizontal	Okreni horizontalno
 	Formatted	Formatirano
+	Customize Keyboard	Prilagođavanje tastature
+	Choose a command	Izaberite komandu
+	Choose a shortcut	Izaberite prečicu
+	All Commands	Sve komande
+	Commands:	Komande:
+	Keys for this command:	Tasteri za ovu komandu:
+	New shortcut:	Nova prečica:
+	Now used by {command}	Sada koristi: {command}
+	Not used by any command	Nijedna komanda je ne koristi
+	Remove every custom shortcut and restore the built-in keys?	Ukloniti sve prilagođene prečice i vratiti ugrađene tastere?
+	Assign	Dodeli
+	Remove	Ukloni
+	Reset All…	Resetuj sve…
+	Press a key combination	Pritisnite kombinaciju tastera
+	Customize	Prilagođavanje
+	Keyboard shortcuts:	Prečice na tastaturi:
+	Customize…	Prilagodi…
+	Customize Ribbon	Prilagodi traku
+	Add to Quick Access Toolbar	Dodaj na traku sa alatkama za brzi pristup
+	Remove from Quick Access Toolbar	Ukloni sa trake sa alatkama za brzi pristup
+	Customize the Ribbon…	Prilagodi traku…
+	Customize Quick Access Toolbar…	Prilagodi traku sa alatkama za brzi pristup…
+	More Commands…	Još komandi…
+	Ribbon	Traka
+	(Custom)	(Prilagođeno)
+	Remove every custom tab and group and show all tabs again?	Ukloniti sve prilagođene kartice i grupe i ponovo prikazati sve kartice?
+	Put the default commands back on the Quick Access Toolbar?	Vratiti podrazumevane komande na traku sa alatkama za brzi pristup?
+	Reset…	Resetuj…
+	Add >>	Dodaj >>
+	<< Remove	<< Ukloni
+	Pick a custom group (New Group makes one)	Izaberite prilagođenu grupu (Nova grupa pravi jednu)
+	Ribbon tabs	Kartice trake
+	New Tab	Nova kartica
+	New Group	Nova grupa
+	Rename…	Preimenuj…
+	Ribbon and Quick Access Toolbar:	Traka i traka sa alatkama za brzi pristup:

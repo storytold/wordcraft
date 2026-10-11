@@ -1325,3 +1325,39 @@
 	Flip Vertical	Окрени вертикално
 	Flip Horizontal	Окрени хоризонтално
 	Formatted	Форматирано
+	Customize Keyboard	Прилагођавање тастатуре
+	Choose a command	Изаберите команду
+	Choose a shortcut	Изаберите пречицу
+	All Commands	Све команде
+	Commands:	Команде:
+	Keys for this command:	Тастери за ову команду:
+	New shortcut:	Нова пречица:
+	Now used by {command}	Сада користи: {command}
+	Not used by any command	Ниједна команда је не користи
+	Remove every custom shortcut and restore the built-in keys?	Уклонити све прилагођене пречице и вратити уграђене тастере?
+	Assign	Додели
+	Remove	Уклони
+	Reset All…	Ресетуј све…
+	Press a key combination	Притисните комбинацију тастера
+	Customize	Прилагођавање
+	Keyboard shortcuts:	Пречице на тастатури:
+	Customize…	Прилагоди…
+	Customize Ribbon	Прилагоди траку
+	Add to Quick Access Toolbar	Додај на траку са алаткама за брзи приступ
+	Remove from Quick Access Toolbar	Уклони са траке са алаткама за брзи приступ
+	Customize the Ribbon…	Прилагоди траку…
+	Customize Quick Access Toolbar…	Прилагоди траку са алаткама за брзи приступ…
+	More Commands…	Још команди…
+	Ribbon	Трака
+	(Custom)	(Прилагођено)
+	Remove every custom tab and group and show all tabs again?	Уклонити све прилагођене картице и групе и поново приказати све картице?
+	Put the default commands back on the Quick Access Toolbar?	Вратити подразумеване команде на траку са алаткама за брзи приступ?
+	Reset…	Ресетуј…
+	Add >>	Додај >>
+	<< Remove	<< Уклони
+	Pick a custom group (New Group makes one)	Изаберите прилагођену групу (Нова група прави једну)
+	Ribbon tabs	Картице траке
+	New Tab	Нова картица
+	New Group	Нова група
+	Rename…	Преименуј…
+	Ribbon and Quick Access Toolbar:	Трака и трака са алаткама за брзи приступ:

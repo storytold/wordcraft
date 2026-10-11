@@ -1128,6 +1128,19 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.fcircle(7.5, 10.5, 1.5, Color32::WHITE);
             pen.fcircle(12.5, 10.5, 1.5, Color32::WHITE);
         }
+        // Open: a folder with its flap lifted.
+        "open" => {
+            pen.closed(&[(2.5, 5.0), (7.5, 5.0), (9.0, 6.5), (15.5, 6.5), (15.5, 9.0)], c);
+            pen.line(&[(2.5, 5.0), (2.5, 16.0)]);
+            pen.closed(&[(2.5, 16.0), (5.0, 9.0), (18.0, 9.0), (15.5, 16.0)], a);
+        }
+        // Print: a printer with a sheet coming out.
+        "print" => {
+            pen.rect(6.0, 2.5, 14.0, 7.0, c);
+            pen.rect(2.5, 7.0, 17.5, 14.0, c);
+            pen.closed(&[(6.0, 11.5), (14.0, 11.5), (14.0, 17.5), (6.0, 17.5)], a);
+            pen.fcircle(15.0, 9.5, 0.8, c);
+        }
         "help" => {
             pen.circle(10.0, 10.0, 7.0, c);
             pen.text(10.0, 10.0, 10.0, "?", a, true);

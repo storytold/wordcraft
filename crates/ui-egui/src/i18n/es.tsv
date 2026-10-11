@@ -1327,3 +1327,39 @@
 	Flip Vertical	Voltear verticalmente
 	Flip Horizontal	Voltear horizontalmente
 	Formatted	Con formato
+	Customize Keyboard	Personalizar teclado
+	Choose a command	Elija un comando
+	Choose a shortcut	Elija un método abreviado
+	All Commands	Todos los comandos
+	Commands:	Comandos:
+	Keys for this command:	Teclas de este comando:
+	New shortcut:	Nuevo método abreviado:
+	Now used by {command}	Ahora lo usa {command}
+	Not used by any command	Ningún comando lo usa
+	Remove every custom shortcut and restore the built-in keys?	¿Quitar todos los métodos abreviados personalizados y restaurar las teclas integradas?
+	Assign	Asignar
+	Remove	Quitar
+	Reset All…	Restablecer todo…
+	Press a key combination	Pulse una combinación de teclas
+	Customize	Personalizar
+	Keyboard shortcuts:	Métodos abreviados de teclado:
+	Customize…	Personalizar…
+	Customize Ribbon	Personalizar cinta de opciones
+	Add to Quick Access Toolbar	Agregar a la barra de herramientas de acceso rápido
+	Remove from Quick Access Toolbar	Quitar de la barra de herramientas de acceso rápido
+	Customize the Ribbon…	Personalizar la cinta de opciones…
+	Customize Quick Access Toolbar…	Personalizar barra de herramientas de acceso rápido…
+	More Commands…	Más comandos…
+	Ribbon	Cinta de opciones
+	(Custom)	(Personalizado)
+	Remove every custom tab and group and show all tabs again?	¿Quitar todas las pestañas y grupos personalizados y volver a mostrar todas las pestañas?
+	Put the default commands back on the Quick Access Toolbar?	¿Volver a poner los comandos predeterminados en la barra de herramientas de acceso rápido?
+	Reset…	Restablecer…
+	Add >>	Agregar >>
+	<< Remove	<< Quitar
+	Pick a custom group (New Group makes one)	Elija un grupo personalizado (Nuevo grupo crea uno)
+	Ribbon tabs	Pestañas de la cinta
+	New Tab	Nueva pestaña
+	New Group	Nuevo grupo
+	Rename…	Cambiar nombre…
+	Ribbon and Quick Access Toolbar:	Cinta de opciones y barra de acceso rápido:

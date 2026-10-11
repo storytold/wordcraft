@@ -10,10 +10,15 @@ use crate::{WordApp, icons};
 pub const CONTENT_H: f32 = 66.0;
 pub const LABEL_H: f32 = 16.0;
 
-/// Shortcut text for a command (`⌘B` on macOS, `Ctrl+B` elsewhere).
+/// Shortcut text for a command (`⌘B` on macOS, `Ctrl+B` elsewhere): its first key in effect,
+/// custom keys included (Customize Keyboard).
 pub fn shortcut_text(app: &WordApp, id: &str) -> String {
-    let Some(spec) = app.session.registry.get(id) else { return String::new() };
-    let sc = spec.shortcut.split(" / ").next().unwrap_or("");
+    let keys = app.session.keymap.keys_for(&app.session.registry, id);
+    keys.first().map(|k| key_text(k)).unwrap_or_default()
+}
+
+/// A key as the platform writes it (`⌘⇧K` on macOS, `Ctrl+Shift+K` elsewhere).
+pub fn key_text(sc: &str) -> String {
     if sc.is_empty() {
         return String::new();
     }
@@ -131,6 +136,7 @@ fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str,
         y += 13.0;
     }
     let resp = tooltip(app, resp, &label.replace('\n', " "), id);
+    command_menu(&resp, app, id);
     if resp.clicked() && on && !menu {
         let _ = app.run(id, params);
     }
@@ -153,6 +159,7 @@ pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, ti
         ui.painter().text(pos2(r.min.x + 24.0, r.center().y), Align2::LEFT_CENTER, l, regular(11.5), if on { t.text } else { t.text_disabled });
     }
     let resp = tooltip(app, resp, tip, id);
+    command_menu(&resp, app, id);
     if resp.clicked() && on {
         let _ = app.run(id, params);
     }
@@ -185,6 +192,7 @@ pub fn split(
     }
     icons::paint(ui.painter(), Rect::from_center_size(ar.center(), vec2(10.0, 10.0)), "dropdown", t.icon, t.accent);
     let resp = tooltip(app, resp, tip, id);
+    command_menu(&resp, app, id);
     if resp.clicked() {
         let _ = app.run(id, params);
     }
@@ -247,8 +255,11 @@ pub fn menu_button(
 /// A ribbon group: content, a centred label below and a divider on the right.
 pub fn group(ui: &mut Ui, title: &str, launcher: Option<&str>, app: &mut WordApp, add: impl FnOnce(&mut Ui, &mut WordApp)) {
     // The English title keys the launcher's id; the drawn title is translated.
-    let id_title = title;
-    let title = tl!(title);
+    group_titled(ui, title, tl!(title), launcher, app, add);
+}
+
+/// A ribbon group whose title is shown as is (a custom group's name, Customize Ribbon).
+pub fn group_titled(ui: &mut Ui, id_title: &str, title: &str, launcher: Option<&str>, app: &mut WordApp, add: impl FnOnce(&mut Ui, &mut WordApp)) {
     let t = Tokens::get(ui.ctx());
     let label_w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(title.to_string(), regular(11.0), t.group_label).size().x);
     let start = ui.cursor().min;
@@ -277,6 +288,69 @@ pub fn group(ui: &mut Ui, title: &str, launcher: Option<&str>, app: &mut WordApp
     let x = ui.cursor().min.x;
     ui.painter().line_segment([pos2(x, start.y + 4.0), pos2(x, start.y + CONTENT_H + LABEL_H - 4.0)], Stroke::new(1.0, t.border));
     ui.add_space(6.0);
+}
+
+/// The icon a command's button shows outside its own ribbon group (custom groups, the Quick
+/// Access Toolbar): the one its ribbon button uses, which is usually named after the id's last
+/// part. Names the icon set doesn't have draw a lettered tile ([`icons::paint`]).
+pub fn command_icon(id: &str) -> &str {
+    const ICONS: &[(&str, &str)] = &[
+        ("arrange.wrap", "wrapText"),
+        ("draw.highlighter", "highlight"),
+        ("format.border", "charborder"),
+        ("format.color", "fontcolor"),
+        ("format.growFont", "grow"),
+        ("format.shrinkFont", "shrink"),
+        ("format.strikethrough", "strike"),
+        ("format.highlight", "highlight"),
+        ("insert.signatureLine", "signature"),
+        ("mailings.envelopes", "envelope"),
+        ("mailings.insertField", "mergeField"),
+        ("para.ltr", "textLtr"),
+        ("para.rtl", "textRtl"),
+        ("para.bullets", "bullets"),
+        ("para.numbering", "numbering"),
+        ("table.insertRowAbove", "insertAbove"),
+        ("view.commentsPane", "showComments"),
+        ("view.marks", "pilcrow"),
+        ("edit.repeat", "redo"),
+        ("file.new", "blankPage"),
+        ("tools.customizeRibbon", "more"),
+    ];
+    ICONS.iter().find(|(c, _)| *c == id).map_or_else(|| id.rsplit('.').next().unwrap_or(id), |(_, icon)| *icon)
+}
+
+/// Right-click on a command's button: put it on (or take it off) the Quick Access Toolbar, or
+/// open Customize Ribbon (#379).
+pub fn command_menu(resp: &Response, app: &mut WordApp, id: &str) {
+    resp.context_menu(|ui| {
+        let known = app.session.registry.get(id).is_some();
+        let on_qat = app.session.ribbon.qat().contains(&id);
+        if known && !on_qat && ui.button(tl!("Add to Quick Access Toolbar")).clicked() {
+            let _ = app.run("tools.customizeRibbon", serde_json::json!({"qatAdd": id}));
+            ui.close();
+        }
+        if on_qat && ui.button(tl!("Remove from Quick Access Toolbar")).clicked() {
+            let _ = app.run("tools.customizeRibbon", serde_json::json!({"qatRemove": id}));
+            ui.close();
+        }
+        if known {
+            ui.separator();
+        }
+        customize_menu_items(ui, app);
+    });
+}
+
+/// "Customize the Ribbon…" and "Customize Quick Access Toolbar…" (context menus).
+pub fn customize_menu_items(ui: &mut Ui, app: &mut WordApp) {
+    if ui.button(tl!("Customize the Ribbon…")).clicked() {
+        crate::dialogs_ribbon::open(app, crate::dialogs_ribbon::Page::Ribbon);
+        ui.close();
+    }
+    if ui.button(tl!("Customize Quick Access Toolbar…")).clicked() {
+        crate::dialogs_ribbon::open(app, crate::dialogs_ribbon::Page::QuickAccess);
+        ui.close();
+    }
 }
 
 /// A row of small buttons (used inside a vertical stack).
