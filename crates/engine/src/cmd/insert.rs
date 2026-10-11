@@ -225,8 +225,6 @@ fn picture(s: &mut Session, v: &Value) -> CmdResult {
         h *= max_w / w;
         w = max_w;
     }
-    let props = s.typing_props();
-    let at = delete_selection(s)?;
     let obj = InlineObject::Image {
         media: key.clone(),
         w,
@@ -236,6 +234,12 @@ fn picture(s: &mut Session, v: &Value) -> CmdResult {
         crop: [0.0; 4],
         ole: None,
     };
+    // A selected Drawing Canvas takes it in.
+    if let Some(i) = super::canvas::add_member(s, obj.clone())? {
+        return Ok(json!({"media": key, "canvasMember": i}));
+    }
+    let props = s.typing_props();
+    let at = delete_selection(s)?;
     let end = s.doc.insert_object(&at, obj, &props)?;
     s.sel = Selection { anchor: at, focus: end };
     Ok(json!({"media": key, "width": w, "height": h}))
@@ -252,8 +256,6 @@ fn shape(s: &mut Session, v: &Value) -> CmdResult {
         None => Some(Rgb(0x15, 0x60, 0x82)),
     };
     let stroke = p::str(v, "stroke").and_then(Rgb::parse).or(Some(Rgb(0x0E, 0x40, 0x5A)));
-    let props = s.typing_props();
-    let at = delete_selection(s)?;
     let obj = InlineObject::Shape {
         kind,
         w,
@@ -266,6 +268,12 @@ fn shape(s: &mut Session, v: &Value) -> CmdResult {
         freeform: None,
         effects: Default::default(),
     };
+    // A selected Drawing Canvas takes it in (and stays selected for the next one).
+    if super::canvas::add_member(s, obj.clone())?.is_some() {
+        return sel_result(s);
+    }
+    let props = s.typing_props();
+    let at = delete_selection(s)?;
     let end = s.doc.insert_object(&at, obj, &props)?;
     s.sel = Selection { anchor: at, focus: end };
     sel_result(s)
@@ -276,8 +284,6 @@ fn text_box(s: &mut Session, v: &Value) -> CmdResult {
     let w = p::f32(v, "width").unwrap_or(144.0).clamp(18.0, 2000.0);
     let h = p::f32(v, "height").unwrap_or(72.0).clamp(18.0, 2000.0);
     let id = s.doc.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text(&text, CharProps::default()))]);
-    let props = s.typing_props();
-    let at = delete_selection(s)?;
     let obj = InlineObject::Shape {
         kind: ShapeKind::TextBox,
         w,
@@ -290,7 +296,12 @@ fn text_box(s: &mut Session, v: &Value) -> CmdResult {
         freeform: None,
         effects: Default::default(),
     };
-    s.doc.insert_object(&at, obj, &props)?;
+    // A selected Drawing Canvas takes it in; otherwise it goes at the caret.
+    if super::canvas::add_member(s, obj.clone())?.is_none() {
+        let props = s.typing_props();
+        let at = delete_selection(s)?;
+        s.doc.insert_object(&at, obj, &props)?;
+    }
     // Like Word, type straight into the new box.
     s.sel = Selection::caret(s.doc.end_of(StoryRef::Part(id)));
     Ok(json!({"story": id}))

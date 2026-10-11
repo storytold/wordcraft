@@ -114,6 +114,14 @@ pub enum Placed {
         off: usize,
         spin: Spin,
     },
+    /// `items` clipped to `rect`: a floating Drawing Canvas's members, kept inside its frame.
+    /// `rect` is the unturned frame and `items` sit in it; `spin` turns the clipped whole about
+    /// the frame's centre.
+    Clip {
+        rect: Rect,
+        spin: Spin,
+        items: Vec<Placed>,
+    },
     /// A table cell's area (for hit testing and cell selection).
     Cell {
         rect: Rect,
@@ -161,6 +169,13 @@ impl Placed {
                 origin.x += dx;
                 origin.y += dy;
             }
+            Placed::Clip { rect, items, .. } => {
+                rect.x += dx;
+                rect.y += dy;
+                for it in items {
+                    it.translate(dx, dy);
+                }
+            }
             Placed::Rule { x0, y0, x1, y1, .. } => {
                 *x0 += dx;
                 *x1 += dx;
@@ -207,6 +222,12 @@ impl Placed {
             Placed::Object { rect, origin, .. } => {
                 *rect = turn_rect(turn, x, y, *rect);
                 (origin.x, origin.y) = turn_point(turn, x, y, origin.x, origin.y);
+            }
+            Placed::Clip { rect, items, .. } => {
+                *rect = turn_rect(turn, x, y, *rect);
+                for it in items {
+                    it.turn(turn, x, y);
+                }
             }
             Placed::Rule { x0, y0, x1, y1, .. } => {
                 (*x0, *y0) = turn_point(turn, x, y, *x0, *y0);
@@ -732,6 +753,7 @@ fn fit_box(items: Vec<Placed>, height: f32) -> Vec<Placed> {
             Placed::Image { rect, .. }
             | Placed::Shape { rect, .. }
             | Placed::Graphic { rect, .. }
+            | Placed::Clip { rect, .. }
             | Placed::Cell { rect, .. }
             | Placed::Object { rect, .. }
                 if rect.y < limit =>
@@ -839,6 +861,7 @@ fn v_span(it: &Placed) -> (f32, f32) {
         | Placed::Image { rect, .. }
         | Placed::Shape { rect, .. }
         | Placed::Graphic { rect, .. }
+        | Placed::Clip { rect, .. }
         | Placed::Cell { rect, .. }
         | Placed::Object { rect, .. } => (rect.y, rect.y + rect.h),
         Placed::Rule { y0, y1, .. } => (y0.min(*y1), y0.max(*y1)),
@@ -1429,7 +1452,31 @@ fn float_items(o: &InlineObject, rect: Rect, outer: (Spin, Point), story: StoryR
         }
         InlineObject::Group { .. } => {
             let centre = Point::new(rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
-            group_members(o, rect).into_iter().flat_map(|(r, c)| float_items(c, r, (spin, centre), story, path, off)).collect()
+            match o.canvas_style() {
+                // A Drawing Canvas: its background and outline, then its members clipped to its
+                // frame, all turned together: the members sit in the unturned frame and the clip
+                // carries the turn (drawn as the turn around the clip).
+                Some(c) => {
+                    let members = group_members(o, rect)
+                        .into_iter()
+                        .flat_map(|(r, m)| float_items(m, r, (Spin::default(), centre), story, path, off))
+                        .collect();
+                    vec![
+                        Placed::Shape {
+                            rect,
+                            kind: wordcraft_doc::para::ShapeKind::Rectangle,
+                            fill: c.fill,
+                            stroke: c.stroke,
+                            stroke_width: c.stroke_width,
+                            effects: Default::default(),
+                            freeform: None,
+                            spin,
+                        },
+                        Placed::Clip { rect, spin, items: members },
+                    ]
+                }
+                None => group_members(o, rect).into_iter().flat_map(|(r, c)| float_items(c, r, (spin, centre), story, path, off)).collect(),
+            }
         }
         _ => Vec::new(),
     }
