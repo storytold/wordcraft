@@ -88,6 +88,10 @@ pub enum Dialog {
         left: f32,
         right: f32,
         landscape: bool,
+        /// Document grid: kind (0 none, 1 lines, 2 lines and characters, 3 snap to characters),
+        /// lines per page and characters per line; `grid_was` as opened (applied only if changed).
+        grid: (u8, u32, u32),
+        grid_was: (u8, u32, u32),
     },
     Link {
         url: String,
@@ -740,12 +744,23 @@ impl Dialog {
             "insertTable" => Dialog::InsertTable { rows: 2, cols: 5 },
             "pageSetup" => {
                 let sp = wordcraft_engine::cmd::page::sect(&app.session);
+                use wordcraft_doc::section::DocGridType;
+                let kind = match sp.doc_grid.map(|g| g.kind) {
+                    Some(DocGridType::Lines) => 1,
+                    Some(DocGridType::LinesAndChars) => 2,
+                    Some(DocGridType::SnapToChars) => 3,
+                    _ => 0,
+                };
+                let size = app.session.doc.styles.resolve_char(Some("Normal"), &Default::default()).size;
+                let grid = (kind, sp.grid_lines_per_page().min(1000), sp.grid_chars_per_line(size).min(1000));
                 Dialog::PageSetup {
                     top: sp.margin_top / 72.0,
                     bottom: sp.margin_bottom / 72.0,
                     left: sp.margin_left / 72.0,
                     right: sp.margin_right / 72.0,
                     landscape: sp.landscape,
+                    grid,
+                    grid_was: grid,
                 }
             }
             "link" => Dialog::Link { url: "https://".into(), text: app.session.selected_text() },
@@ -1266,7 +1281,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             ok || cancel
         }
-        Dialog::PageSetup { top, bottom, left, right, landscape } => {
+        Dialog::PageSetup { top, bottom, left, right, landscape, grid, grid_was } => {
             ui.label(egui::RichText::new(tl!("Margins")).font(semibold(12.5)));
             egui::Grid::new("ps").num_columns(4).show(ui, |ui| {
                 ui.label(tl!("Top:"));
@@ -1285,11 +1300,36 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 ui.radio_value(landscape, false, tl!("Portrait"));
                 ui.radio_value(landscape, true, tl!("Landscape"));
             });
+            ui.label(egui::RichText::new(tl!("Document Grid")).font(semibold(12.5)));
+            ui.horizontal_wrapped(|ui| {
+                ui.radio_value(&mut grid.0, 0, tl!("No grid"));
+                ui.radio_value(&mut grid.0, 1, tl!("Lines only"));
+                ui.radio_value(&mut grid.0, 2, tl!("Lines and characters"));
+                ui.radio_value(&mut grid.0, 3, tl!("Text snaps to characters"));
+            });
+            egui::Grid::new("ps_grid").num_columns(4).show(ui, |ui| {
+                ui.add_enabled(grid.0 >= 2, egui::Label::new(tl!("Characters per line:")));
+                ui.add_enabled(grid.0 >= 2, egui::DragValue::new(&mut grid.2).range(1..=1000));
+                ui.add_enabled(grid.0 >= 1, egui::Label::new(tl!("Lines per page:")));
+                ui.add_enabled(grid.0 >= 1, egui::DragValue::new(&mut grid.1).range(1..=1000));
+                ui.end_row();
+            });
             let (ok, cancel) = buttons(ui, tl!("OK"));
             if ok {
                 let _ = app.run("layout.orientation", json!({"value": if *landscape { "landscape" } else { "portrait" }}));
                 let _ =
                     app.run("layout.margins", json!({"top": *top * 72.0, "bottom": *bottom * 72.0, "left": *left * 72.0, "right": *right * 72.0}));
+                if grid != grid_was {
+                    let kind = ["none", "lines", "linesAndChars", "snapToChars"].get(grid.0 as usize).copied().unwrap_or("none");
+                    let mut v = json!({"type": kind});
+                    if grid.1 != grid_was.1 {
+                        v["linesPerPage"] = json!(grid.1);
+                    }
+                    if grid.2 != grid_was.2 {
+                        v["charsPerLine"] = json!(grid.2);
+                    }
+                    let _ = app.run("layout.documentGrid", v);
+                }
             }
             ok || cancel
         }

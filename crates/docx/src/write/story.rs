@@ -963,6 +963,18 @@ fn sectpr_body(w: &mut W, s: &SectionProps) {
         if s.rtl {
             w.empty("w:bidi", &[]);
         }
+        if let Some(g) = &s.doc_grid {
+            let mut a = vec![("w:linePitch", twips(g.line_pitch()))];
+            if g.kind != wordcraft_doc::section::DocGridType::Default {
+                a.insert(0, ("w:type", g.kind.ooxml().to_string()));
+            }
+            if g.char_space != 0 {
+                let cs = g.char_space.clamp(-wordcraft_doc::section::MAX_CHAR_SPACE, wordcraft_doc::section::MAX_CHAR_SPACE);
+                a.push(("w:charSpace", n(cs as i64)));
+            }
+            let refs: Vec<(&str, &str)> = a.iter().map(|(k, v)| (*k, v.as_str())).collect();
+            w.empty("w:docGrid", &refs);
+        }
     }
 }
 

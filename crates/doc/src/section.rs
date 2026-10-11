@@ -266,6 +266,79 @@ pub enum LineNumberRestart {
     Continuous,
 }
 
+/// Document grid kind (`w:docGrid/@w:type`, ECMA-376 §17.6.5, §17.18.14).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum DocGridType {
+    /// No grid.
+    #[default]
+    Default,
+    /// Line grid only: line heights snap to the line pitch.
+    Lines,
+    /// Line and character grid: East Asian characters advance by the character pitch.
+    LinesAndChars,
+    /// Line grid, and all text snaps to the character grid.
+    SnapToChars,
+}
+
+impl DocGridType {
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            DocGridType::Default => "default",
+            DocGridType::Lines => "lines",
+            DocGridType::LinesAndChars => "linesAndChars",
+            DocGridType::SnapToChars => "snapToChars",
+        }
+    }
+    pub fn from_ooxml(s: &str) -> Option<DocGridType> {
+        [DocGridType::Default, DocGridType::Lines, DocGridType::LinesAndChars, DocGridType::SnapToChars].into_iter().find(|t| t.ooxml() == s)
+    }
+}
+
+/// Smallest and largest line or character pitch the layout uses, points.
+pub const MIN_GRID_PITCH: f32 = 1.0;
+pub const MAX_GRID_PITCH: f32 = 1584.0;
+/// `w:charSpace` bound (4096ths of a point): ±1584 pt.
+pub const MAX_CHAR_SPACE: i32 = 1584 * 4096;
+
+/// The document grid (`w:docGrid`): lines per page and characters per line, as pitches.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DocGrid {
+    #[serde(rename = "type")]
+    pub kind: DocGridType,
+    /// Distance between grid lines, points (`w:linePitch`, twips in the file).
+    pub line_pitch: f32,
+    /// Added to the default font size to give the character pitch, 4096ths of a point
+    /// (`w:charSpace`).
+    pub char_space: i32,
+}
+
+impl Default for DocGrid {
+    /// Word's grid for a new document: no grid, an 18 pt pitch kept for when one is turned on.
+    fn default() -> Self {
+        DocGrid { kind: DocGridType::Default, line_pitch: 18.0, char_space: 0 }
+    }
+}
+
+impl DocGrid {
+    /// The line pitch, clamped to something layout can use.
+    pub fn line_pitch(&self) -> f32 {
+        if self.line_pitch.is_finite() { self.line_pitch.clamp(MIN_GRID_PITCH, MAX_GRID_PITCH) } else { 18.0 }
+    }
+    /// The character pitch for a document whose default font is `font_size` points.
+    pub fn char_pitch(&self, font_size: f32) -> f32 {
+        let size = if font_size.is_finite() { font_size.clamp(MIN_GRID_PITCH, MAX_GRID_PITCH) } else { 10.5 };
+        (size + self.char_space.clamp(-MAX_CHAR_SPACE, MAX_CHAR_SPACE) as f32 / 4096.0).clamp(MIN_GRID_PITCH, MAX_GRID_PITCH)
+    }
+    /// The `w:charSpace` that gives `pitch` with the default font at `font_size` points.
+    pub fn char_space_for(pitch: f32, font_size: f32) -> i32 {
+        let pitch = if pitch.is_finite() { pitch.clamp(MIN_GRID_PITCH, MAX_GRID_PITCH) } else { font_size };
+        let size = if font_size.is_finite() { font_size.clamp(MIN_GRID_PITCH, MAX_GRID_PITCH) } else { 10.5 };
+        (((pitch - size) * 4096.0).round() as i32).clamp(-MAX_CHAR_SPACE, MAX_CHAR_SPACE)
+    }
+}
+
 /// Page setup and section-level settings.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -299,6 +372,8 @@ pub struct SectionProps {
     /// Tracked change of the section's properties (`w:sectPrChange`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fmt_change: Option<Box<crate::props::PropChange<SectionProps>>>,
+    /// Document grid (`w:docGrid`); `None` when the file has none (no grid).
+    pub doc_grid: Option<DocGrid>,
 }
 
 impl Default for SectionProps {
@@ -327,6 +402,7 @@ impl Default for SectionProps {
             page_borders: None,
             rtl: false,
             fmt_change: None,
+            doc_grid: None,
         }
     }
 }
@@ -358,6 +434,25 @@ impl SectionProps {
             self.margin_bottom = l;
             self.margin_top = r;
         }
+    }
+    /// The line grid's pitch, points, when the section has a line grid (any grid but "no grid").
+    pub fn grid_line_pitch(&self) -> Option<f32> {
+        self.doc_grid.filter(|g| g.kind != DocGridType::Default).map(|g| g.line_pitch())
+    }
+    /// The character grid's pitch, points, when the section has one (`linesAndChars`,
+    /// `snapToChars`); `font_size` is the default font size (Normal style).
+    pub fn grid_char_pitch(&self, font_size: f32) -> Option<f32> {
+        self.doc_grid.filter(|g| matches!(g.kind, DocGridType::LinesAndChars | DocGridType::SnapToChars)).map(|g| g.char_pitch(font_size))
+    }
+    /// Lines per page the line pitch gives (at least 1).
+    pub fn grid_lines_per_page(&self) -> u32 {
+        let pitch = self.doc_grid.unwrap_or_default().line_pitch();
+        ((self.text_height() / pitch + 0.001).floor() as u32).max(1)
+    }
+    /// Characters per line the character pitch gives (at least 1).
+    pub fn grid_chars_per_line(&self, font_size: f32) -> u32 {
+        let pitch = self.doc_grid.unwrap_or_default().char_pitch(font_size);
+        ((self.text_width() / pitch + 0.001).floor() as u32).max(1)
     }
     /// Column (x offset from the text area's left, width) for each column.
     pub fn column_boxes(&self) -> Vec<(f32, f32)> {
@@ -411,6 +506,22 @@ mod tests {
         s.set_landscape(false);
         assert_eq!(s.margin_left, 50.0);
         assert_eq!((s.page_w, s.page_h), (612.0, 792.0));
+    }
+
+    #[test]
+    fn grid_pitches_are_clamped() {
+        let mut s = SectionProps::default();
+        assert_eq!(s.grid_line_pitch(), None);
+        s.doc_grid = Some(DocGrid { kind: DocGridType::Lines, line_pitch: 0.0, char_space: i32::MIN });
+        assert_eq!(s.grid_line_pitch(), Some(MIN_GRID_PITCH));
+        assert_eq!(s.grid_char_pitch(10.5), None);
+        s.doc_grid = Some(DocGrid { kind: DocGridType::LinesAndChars, line_pitch: f32::NAN, char_space: i32::MIN });
+        assert_eq!(s.grid_line_pitch(), Some(18.0));
+        assert_eq!(s.grid_char_pitch(10.5), Some(MIN_GRID_PITCH));
+        // 648 pt of text height at an 18 pt pitch: 36 lines; 468 pt / 13 pt = 36 characters.
+        s.doc_grid = Some(DocGrid { kind: DocGridType::LinesAndChars, line_pitch: 18.0, char_space: DocGrid::char_space_for(13.0, 10.5) });
+        assert_eq!(s.grid_lines_per_page(), 36);
+        assert_eq!(s.grid_chars_per_line(10.5), 36);
     }
 
     #[test]

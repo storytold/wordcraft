@@ -1322,3 +1322,10 @@
 	Flip Vertical	垂直翻转
 	Flip Horizontal	水平翻转
 	Formatted	已设置格式
+	Document Grid	文档网格
+	No grid	无网格
+	Lines only	仅行
+	Lines and characters	行和字符
+	Text snaps to characters	文字贴合字符网格
+	Characters per line:	每行字数：
+	Lines per page:	每页行数：
