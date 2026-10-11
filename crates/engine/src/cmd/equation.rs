@@ -319,31 +319,45 @@ fn nodes_of(s: &Session, at: &Pos) -> Option<Arg> {
 
 fn move_caret(s: &mut Session, v: &Value) -> CmdResult {
     let m = current(s)?;
-    // Leaving a slot finishes what was typed there (AutoCorrect names, build-up).
-    let latex = s.math_latex;
-    let mut pos = m.pos.clone();
-    let mut changed = false;
-    if !s.math_normal_text {
-        with_eq(s, &m.at, |math, _| {
-            if math.linear {
-                return;
-            }
-            if let Some(p) = me::autocorrect(&mut math.nodes, &pos) {
-                pos = p;
-                changed = true;
-            }
-            if let Some(p) = me::build_up(&mut math.nodes, &pos, latex) {
-                pos = p;
-                changed = true;
-            }
-        })?;
+    let dir = p::str(v, "dir").unwrap_or("right");
+    if !matches!(dir, "left" | "right" | "up" | "down" | "home" | "end" | "next" | "prev") {
+        return Err(CmdError::Params(format!("unknown direction {dir}")));
     }
-    if changed && let Some(mm) = s.math.as_mut() {
-        mm.pos = pos;
+    // Leaving a slot finishes what was typed there (AutoCorrect names, build-up). That is worked
+    // out on a copy: plain navigation must leave the equation (and its source OMML) untouched,
+    // and a real change is a document edit — undoable and marking the document dirty (#446, #447).
+    let shown_linear = matches!(
+        s.doc.para_at(&m.at).and_then(|p| p.object_at(m.at.off)),
+        Some(InlineObject::Equation { math, .. }) if math.linear
+    );
+    if !s.math_normal_text
+        && !shown_linear
+        && let Some(before) = nodes_of(s, &m.at)
+    {
+        let latex = s.math_latex;
+        let mut nodes = before.clone();
+        let mut pos = m.pos.clone();
+        let mut changed = false;
+        if let Some(p) = me::autocorrect(&mut nodes, &pos) {
+            pos = p;
+            changed = true;
+        }
+        if let Some(p) = me::build_up(&mut nodes, &pos, latex) {
+            pos = p;
+            changed = true;
+        }
+        if changed && nodes != before {
+            // `equation.move` is a pure command, so record the edit here.
+            s.checkpoint("Build Up");
+            with_eq(s, &m.at, |math, _| math.nodes = nodes)?;
+            s.touch();
+            if let Some(mm) = s.math.as_mut() {
+                mm.pos = pos;
+            }
+        }
     }
     let m = current(s)?;
     let nodes = nodes_of(s, &m.at).ok_or_else(|| CmdError::Failed("no equation there".into()))?;
-    let dir = p::str(v, "dir").unwrap_or("right");
     let next = match dir {
         "left" => me::move_left(&nodes, &m.pos),
         "right" => me::move_right(&nodes, &m.pos),
@@ -512,26 +526,11 @@ fn number(s: &mut Session, v: &Value) -> CmdResult {
             *display = true;
             pos_reset = true;
         } else if !want && numbered {
-            if let [MNode::EqArr { rows }] = math.nodes.as_mut_slice()
-                && let Some(row) = rows.first_mut()
-            {
-                // Drop everything from the `#` on.
-                let mut out = Vec::new();
-                for n in std::mem::take(row) {
-                    if let MNode::Run(mut r) = n {
-                        if let Some(k) = r.text.find('#') {
-                            r.text.truncate(k);
-                            if !r.text.is_empty() {
-                                out.push(MNode::Run(r));
-                            }
-                            break;
-                        }
-                        out.push(MNode::Run(r));
-                    } else {
-                        out.push(n);
-                    }
-                }
-                math.nodes = out;
+            // Every row loses its number; a single row stands alone again, several stay an
+            // array (#444).
+            if let [MNode::EqArr { rows }] = math.nodes.as_mut_slice() {
+                let mut rows: Vec<Arg> = std::mem::take(rows).into_iter().map(without_number).collect();
+                math.nodes = if rows.len() == 1 { rows.pop().unwrap_or_default() } else { vec![MNode::EqArr { rows }] };
             }
             pos_reset = true;
         }
@@ -541,6 +540,26 @@ fn number(s: &mut Session, v: &Value) -> CmdResult {
     }
     s.clamp_selection();
     result(s)
+}
+
+/// An equation-array row without its number: everything from the `#` on goes.
+fn without_number(row: Arg) -> Arg {
+    let mut out = Vec::new();
+    for n in row {
+        match n {
+            MNode::Run(mut r) if !r.lit && r.text.contains('#') => {
+                if let Some(k) = r.text.find('#') {
+                    r.text.truncate(k);
+                }
+                if !r.text.is_empty() {
+                    out.push(MNode::Run(r));
+                }
+                break;
+            }
+            n => out.push(n),
+        }
+    }
+    out
 }
 
 fn set(s: &mut Session, v: &Value) -> CmdResult {
@@ -724,6 +743,109 @@ mod tests {
         for b in crate::math_gallery::BUILT_INS {
             let mut s = session();
             s.run("insert.equation", &json!({"builtin": b.0, "edit": false})).unwrap();
+        }
+    }
+
+    /// A session on a DOCX whose only paragraph is `<m:oMath>{math}</m:oMath>`.
+    fn imported(math: &str) -> Session {
+        use std::io::Write;
+        let w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        let m = "http://schemas.openxmlformats.org/officeDocument/2006/math";
+        let parts = [
+            (
+                "[Content_Types].xml",
+                r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#.to_string(),
+            ),
+            (
+                "_rels/.rels",
+                r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#.to_string(),
+            ),
+            ("word/document.xml", format!(r#"<w:document xmlns:w="{w}" xmlns:m="{m}"><w:body><w:p><m:oMath>{math}</m:oMath></w:p><w:sectPr/></w:body></w:document>"#)),
+        ];
+        let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, xml) in parts {
+            zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            zw.write_all(xml.as_bytes()).unwrap();
+        }
+        let bytes = zw.finish().unwrap().into_inner();
+        let mut s = Session::new(wordcraft_docx::read(&bytes).unwrap());
+        s.run("equation.edit", &json!({})).unwrap();
+        s
+    }
+
+    fn document_xml(s: &Session) -> String {
+        use std::io::Read;
+        let bytes = wordcraft_docx::write(&s.doc).unwrap();
+        let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut xml = String::new();
+        z.by_name("word/document.xml").unwrap().read_to_string(&mut xml).unwrap();
+        xml
+    }
+
+    #[test]
+    fn removing_numbers_keeps_every_row() {
+        // #444: a numbered two-row array lost its second row when its numbers were removed.
+        for numbered in ["█(a#(1)@b#(2))", "█(a@b#(2))"] {
+            let mut s = session();
+            s.run("insert.equation", &json!({"linear": numbered})).unwrap();
+            s.run("equation.number", &json!({"value": false})).unwrap();
+            assert_eq!(linear(&s), "█(a@b)", "{numbered}");
+            let mut back = Session::new(wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap());
+            assert_eq!(back.run("equation.get", &json!({})).unwrap()["linear"], "█(a@b)", "{numbered} after save and reopen");
+            s.run("edit.undo", &json!({})).unwrap();
+            assert_eq!(linear(&s), numbered, "Undo restores the numbers");
+        }
+        // A single numbered row stands alone again.
+        let mut s = session();
+        s.run("insert.equation", &json!({"linear": "a#(1)"})).unwrap();
+        s.run("equation.number", &json!({"value": false})).unwrap();
+        assert_eq!(linear(&s), "a");
+    }
+
+    #[test]
+    fn navigation_keeps_imported_omml() {
+        // #446: a Left move without any change dropped the fraction's imported control colour.
+        let red = r#"<m:f><m:fPr><m:ctrlPr><w:rPr><w:color w:val="FF0000"/></w:rPr></m:ctrlPr></m:fPr><m:num><m:r><m:t>a</m:t></m:r></m:num><m:den><m:r><m:t>b</m:t></m:r></m:den></m:f>"#;
+        let mut s = imported(red);
+        s.run("equation.move", &json!({"dir": "left"})).unwrap();
+        assert!(document_xml(&s).contains(r#"w:val="FF0000""#), "the control colour survives navigation");
+        // A genuine edit still writes the new content.
+        s.run("equation.type", &json!({"text": "x"})).unwrap();
+        assert_eq!(linear(&s), "a/bx");
+        assert!(document_xml(&s).contains(">bx<"));
+    }
+
+    #[test]
+    fn navigation_build_up_is_an_undoable_edit() {
+        // #447: building `a/b` up on a Left move left the document clean and Undo did nothing.
+        let mut s = imported("<m:r><m:t>a/b</m:t></m:r>");
+        assert!(!s.dirty);
+        s.run("equation.move", &json!({"dir": "left"})).unwrap();
+        assert_eq!(s.run("equation.get", &json!({})).unwrap()["latex"], "\\frac{a}{b}");
+        assert!(s.dirty, "build-up marks the document dirty");
+        s.run("edit.undo", &json!({})).unwrap();
+        s.run("equation.edit", &json!({})).unwrap();
+        assert_eq!(s.run("equation.get", &json!({})).unwrap()["latex"], "a/b", "Undo restores the plain run");
+        // Plain navigation is no edit.
+        let mut s = imported("<m:r><m:t>abc</m:t></m:r>");
+        s.run("equation.move", &json!({"dir": "left"})).unwrap();
+        assert!(!s.dirty);
+        assert_eq!(s.undo_depth(), 0);
+    }
+
+    #[test]
+    fn latex_text_keeps_its_spaces() {
+        // #448: `\text{for all x}` came out as `forallx`.
+        for (tex, want) in [
+            ("\\text{for all x}", "\\text{for all x}"),
+            ("\\text{a b}", "\\text{a b}"),
+            ("\\text{ab}", "\\text{ab}"),
+            ("x + y", "x+y"),
+            ("x+y", "x+y"),
+        ] {
+            let mut s = session();
+            s.run("insert.equation", &json!({"latex": tex})).unwrap();
+            assert_eq!(s.run("equation.get", &json!({})).unwrap()["latex"], want, "{tex}");
         }
     }
 }

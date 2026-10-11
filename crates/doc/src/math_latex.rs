@@ -21,12 +21,27 @@ enum Tok {
     Ch(char),
 }
 
+/// Commands whose `{…}` argument is text, where spaces are part of the content.
+const TEXT_COMMANDS: &[&str] = &["text", "textrm", "mbox", "textnormal", "textbf", "textit"];
+
 fn tokenize(s: &str) -> Vec<Tok> {
     let cs: Vec<char> = s.chars().take(20_000).collect();
     let mut out = Vec::new();
     let mut i = 0;
+    // A text command was just read: its `{` starts text, where spaces count (#448).
+    let mut text_next = false;
+    // Brace depth inside a text argument.
+    let mut text_depth: Option<u32> = None;
     while let Some(&c) = cs.get(i) {
         i += 1;
+        if text_depth.is_some() && matches!(c, ' ' | '\t' | '\n' | '\r') {
+            // A run of white space is one space, as in LaTeX.
+            if out.last() != Some(&Tok::Ch(' ')) {
+                out.push(Tok::Ch(' '));
+            }
+            continue;
+        }
+        let was_text_next = std::mem::take(&mut text_next);
         match c {
             '\\' => {
                 let start = i;
@@ -46,15 +61,31 @@ fn tokenize(s: &str) -> Vec<Tok> {
                         None => {}
                     }
                 } else {
-                    out.push(Tok::Cmd(cs.get(start..i).unwrap_or(&[]).iter().collect()));
+                    let name: String = cs.get(start..i).unwrap_or(&[]).iter().collect();
+                    text_next = text_depth.is_none() && TEXT_COMMANDS.contains(&name.as_str());
+                    out.push(Tok::Cmd(name));
                 }
             }
-            '{' => out.push(Tok::Open),
-            '}' => out.push(Tok::Close),
+            '{' => {
+                text_depth = match text_depth {
+                    Some(d) => Some(d.saturating_add(1)),
+                    None if was_text_next => Some(0),
+                    None => None,
+                };
+                out.push(Tok::Open);
+            }
+            '}' => {
+                text_depth = match text_depth {
+                    Some(0) | None => None,
+                    Some(d) => Some(d.saturating_sub(1)),
+                };
+                out.push(Tok::Close);
+            }
             '^' => out.push(Tok::Sup),
             '_' => out.push(Tok::Sub),
             '&' => out.push(Tok::Amp),
-            ' ' | '\t' | '\n' | '\r' => {}
+            // White space between a text command and its `{` doesn't end the wait.
+            ' ' | '\t' | '\n' | '\r' => text_next = was_text_next,
             '~' => out.push(Tok::Ch('\u{A0}')),
             c => out.push(Tok::Ch(c)),
         }
