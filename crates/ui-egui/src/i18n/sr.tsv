@@ -1325,3 +1325,34 @@
 	Flip Vertical	Окрени вертикално
 	Flip Horizontal	Окрени хоризонтално
 	Formatted	Форматирано
+	Change Chart Type	Промени тип графикона
+	Chart Design	Дизајн графикона
+	Type	Тип
+	Edit Data	Уреди податке
+	Chart Title	Наслов графикона
+	Chart Layouts	Распореди графикона
+	Add Chart Element	Додај елемент графикона
+	Legend	Легенда
+	Data Labels	Ознаке података
+	Above Chart	Изнад графикона
+	Insert Chart	Уметни графикон
+	Clustered Column	Груписане колоне
+	Stacked Column	Наслагане колоне
+	Clustered Bar	Груписане траке
+	Stacked Bar	Наслагане траке
+	Area	Површински
+	Pie	Кружни
+	Doughnut	Прстенасти
+	Scatter	Распршени
+	“{text}” ({row}, {series}) isn't a number.	„{text}” ({row}, {series}) није број.
+	Category {n}	Категорија {n}
+	Series {n}	Серија {n}
+	Type the categories down the side and a column of values per series.	Унесите категорије са стране и по једну колону вредности за сваку серију.
+	Categories	Категорије
+	Series name	Назив серије
+	Remove series	Уклони серију
+	Remove row	Уклони ред
+	Add Row	Додај ред
+	Add Series	Додај серију
+	Edit\nData	Уреди\nподатке
+	Change\nChart Type	Промени тип\nграфикона

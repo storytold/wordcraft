@@ -1327,3 +1327,34 @@
 	Flip Vertical	Voltear verticalmente
 	Flip Horizontal	Voltear horizontalmente
 	Formatted	Con formato
+	Change Chart Type	Cambiar tipo de gráfico
+	Chart Design	Diseño de gráfico
+	Type	Tipo
+	Edit Data	Editar datos
+	Chart Title	Título del gráfico
+	Chart Layouts	Diseños de gráfico
+	Add Chart Element	Agregar elemento de gráfico
+	Legend	Leyenda
+	Data Labels	Etiquetas de datos
+	Above Chart	Encima del gráfico
+	Insert Chart	Insertar gráfico
+	Clustered Column	Columnas agrupadas
+	Stacked Column	Columnas apiladas
+	Clustered Bar	Barras agrupadas
+	Stacked Bar	Barras apiladas
+	Area	Área
+	Pie	Circular
+	Doughnut	Anillo
+	Scatter	Dispersión
+	“{text}” ({row}, {series}) isn't a number.	«{text}» ({row}, {series}) no es un número.
+	Category {n}	Categoría {n}
+	Series {n}	Serie {n}
+	Type the categories down the side and a column of values per series.	Escribe las categorías en el lateral y una columna de valores por serie.
+	Categories	Categorías
+	Series name	Nombre de la serie
+	Remove series	Quitar serie
+	Remove row	Quitar fila
+	Add Row	Agregar fila
+	Add Series	Agregar serie
+	Edit\nData	Editar\ndatos
+	Change\nChart Type	Cambiar tipo\nde gráfico

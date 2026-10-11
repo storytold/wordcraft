@@ -16,6 +16,8 @@ pub enum InsertDialog {
     Columns(ColumnsForm),
     Symbol(SymbolForm),
     Field(FieldForm),
+    ChartType(crate::dialogs_chart::ChartTypeForm),
+    ChartData(crate::dialogs_chart::ChartDataForm),
 }
 
 impl InsertDialog {
@@ -24,6 +26,9 @@ impl InsertDialog {
             InsertDialog::Columns(_) => "columns",
             InsertDialog::Symbol(_) => "symbol",
             InsertDialog::Field(_) => "field",
+            InsertDialog::ChartType(f) if f.change => "changeChartType",
+            InsertDialog::ChartType(_) => "insertChart",
+            InsertDialog::ChartData(_) => "chartData",
         }
     }
 
@@ -33,17 +38,24 @@ impl InsertDialog {
             InsertDialog::Columns(_) => "Columns",
             InsertDialog::Symbol(_) => "Symbol",
             InsertDialog::Field(_) => "Field",
+            InsertDialog::ChartType(f) if f.change => "Change Chart Type",
+            InsertDialog::ChartType(_) => "Insert Chart",
+            InsertDialog::ChartData(_) => "Edit Data",
         }
     }
 }
 
-/// The dialog `ui.dialog` opens by `name`: `columns`, `symbol`, `specialCharacters` or `field`.
+/// The dialog `ui.dialog` opens by `name`: `columns`, `symbol`, `specialCharacters`, `field`,
+/// `insertChart`, `changeChartType` or `chartData` (the last two for the selected chart).
 pub fn open(name: &str, app: &WordApp) -> Option<InsertDialog> {
     Some(match name {
         "columns" => InsertDialog::Columns(ColumnsForm::read(app)),
         "symbol" => InsertDialog::Symbol(SymbolForm::new(app, 0)),
         "specialCharacters" => InsertDialog::Symbol(SymbolForm::new(app, 1)),
         "field" => InsertDialog::Field(FieldForm::new(app)),
+        "insertChart" => InsertDialog::ChartType(crate::dialogs_chart::ChartTypeForm::new(app, false)?),
+        "changeChartType" => InsertDialog::ChartType(crate::dialogs_chart::ChartTypeForm::new(app, true)?),
+        "chartData" => InsertDialog::ChartData(crate::dialogs_chart::ChartDataForm::new(app)?),
         _ => return None,
     })
 }
@@ -54,6 +66,8 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, d: &mut InsertDialog) -> bool {
         InsertDialog::Columns(f) => columns_ui(app, ui, f),
         InsertDialog::Symbol(f) => symbol_ui(app, ui, f),
         InsertDialog::Field(f) => field_ui(app, ui, f),
+        InsertDialog::ChartType(f) => crate::dialogs_chart::type_ui(app, ui, f),
+        InsertDialog::ChartData(f) => crate::dialogs_chart::data_ui(app, ui, f),
     }
 }
 

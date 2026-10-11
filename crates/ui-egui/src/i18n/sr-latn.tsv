@@ -1321,3 +1321,34 @@
 	Flip Vertical	Okreni vertikalno
 	Flip Horizontal	Okreni horizontalno
 	Formatted	Formatirano
+	Change Chart Type	Promeni tip grafikona
+	Chart Design	Dizajn grafikona
+	Type	Tip
+	Edit Data	Uredi podatke
+	Chart Title	Naslov grafikona
+	Chart Layouts	Rasporedi grafikona
+	Add Chart Element	Dodaj element grafikona
+	Legend	Legenda
+	Data Labels	Oznake podataka
+	Above Chart	Iznad grafikona
+	Insert Chart	Umetni grafikon
+	Clustered Column	Grupisane kolone
+	Stacked Column	Naslagane kolone
+	Clustered Bar	Grupisane trake
+	Stacked Bar	Naslagane trake
+	Area	Površinski
+	Pie	Kružni
+	Doughnut	Prstenasti
+	Scatter	Raspršeni
+	“{text}” ({row}, {series}) isn't a number.	„{text}” ({row}, {series}) nije broj.
+	Category {n}	Kategorija {n}
+	Series {n}	Serija {n}
+	Type the categories down the side and a column of values per series.	Unesite kategorije sa strane i po jednu kolonu vrednosti za svaku seriju.
+	Categories	Kategorije
+	Series name	Naziv serije
+	Remove series	Ukloni seriju
+	Remove row	Ukloni red
+	Add Row	Dodaj red
+	Add Series	Dodaj seriju
+	Edit\nData	Uredi\npodatke
+	Change\nChart Type	Promeni tip\ngrafikona

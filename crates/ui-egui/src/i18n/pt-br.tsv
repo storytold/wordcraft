@@ -1323,3 +1323,34 @@
 	Flip Vertical	Inverter verticalmente
 	Flip Horizontal	Inverter horizontalmente
 	Formatted	Formatado
+	Change Chart Type	Alterar tipo de gráfico
+	Chart Design	Design do gráfico
+	Type	Tipo
+	Edit Data	Editar dados
+	Chart Title	Título do gráfico
+	Chart Layouts	Layouts do gráfico
+	Add Chart Element	Adicionar elemento ao gráfico
+	Legend	Legenda
+	Data Labels	Rótulos de dados
+	Above Chart	Acima do gráfico
+	Insert Chart	Inserir gráfico
+	Clustered Column	Colunas agrupadas
+	Stacked Column	Colunas empilhadas
+	Clustered Bar	Barras agrupadas
+	Stacked Bar	Barras empilhadas
+	Area	Área
+	Pie	Pizza
+	Doughnut	Rosca
+	Scatter	Dispersão
+	“{text}” ({row}, {series}) isn't a number.	“{text}” ({row}, {series}) não é um número.
+	Category {n}	Categoria {n}
+	Series {n}	Série {n}
+	Type the categories down the side and a column of values per series.	Digite as categorias na lateral e uma coluna de valores por série.
+	Categories	Categorias
+	Series name	Nome da série
+	Remove series	Remover série
+	Remove row	Remover linha
+	Add Row	Adicionar linha
+	Add Series	Adicionar série
+	Edit\nData	Editar\ndados
+	Change\nChart Type	Alterar tipo\nde gráfico

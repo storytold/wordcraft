@@ -1324,3 +1324,34 @@
 	Width and spacing	Laius ja vahe
 	from Unicode (hex)	Unicode (kuueteistkümnend)
 	Formatted	Vormindatud
+	Change Chart Type	Muuda diagrammi tüüpi
+	Chart Design	Diagrammi kujundus
+	Type	Tüüp
+	Edit Data	Redigeeri andmeid
+	Chart Title	Diagrammi pealkiri
+	Chart Layouts	Diagrammi paigutused
+	Add Chart Element	Lisa diagrammi element
+	Legend	Legend
+	Data Labels	Andmesildid
+	Above Chart	Diagrammi kohal
+	Insert Chart	Lisa diagramm
+	Clustered Column	Rühmitatud tulbad
+	Stacked Column	Virnastatud tulbad
+	Clustered Bar	Rühmitatud ribad
+	Stacked Bar	Virnastatud ribad
+	Area	Pind
+	Pie	Sektor
+	Doughnut	Rõngas
+	Scatter	Hajuvus
+	“{text}” ({row}, {series}) isn't a number.	„{text}” ({row}, {series}) ei ole arv.
+	Category {n}	Kategooria {n}
+	Series {n}	Sari {n}
+	Type the categories down the side and a column of values per series.	Sisesta kategooriad külje peale ja iga sarja jaoks väärtuste veerg.
+	Categories	Kategooriad
+	Series name	Sarja nimi
+	Remove series	Eemalda sari
+	Remove row	Eemalda rida
+	Add Row	Lisa rida
+	Add Series	Lisa sari
+	Edit\nData	Redigeeri\nandmeid
+	Change\nChart Type	Muuda\ndiagrammi tüüpi

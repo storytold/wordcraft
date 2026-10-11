@@ -351,6 +351,43 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.frect(13.5, 9.0, 16.5, 17.0, green);
             pen.line(&[(2.0, 17.5), (18.0, 17.5)]);
         }
+        "changeChartType" => {
+            pen.frect(3.0, 11.0, 5.5, 17.0, a);
+            pen.frect(7.0, 7.0, 9.5, 17.0, orange);
+            pen.line(&[(2.0, 17.5), (11.0, 17.5)]);
+            pen.fill(&[(15.0, 10.0), (15.0, 5.0), (19.0, 8.5)], green);
+            pen.circle(15.0, 10.0, 4.0, c);
+            pen.line_c(&[(4.0, 5.0), (9.0, 2.5), (12.0, 4.5)], a);
+        }
+        "chartData" => {
+            pen.rect(2.5, 3.0, 17.5, 17.0, c);
+            pen.frect(2.5, 3.0, 17.5, 6.5, a);
+            pen.line(&[(2.5, 10.0), (17.5, 10.0)]);
+            pen.line(&[(2.5, 13.5), (17.5, 13.5)]);
+            pen.line(&[(7.5, 3.0), (7.5, 17.0)]);
+            pen.line(&[(12.5, 3.0), (12.5, 17.0)]);
+            pen.frect(9.0, 14.5, 11.0, 16.0, orange);
+        }
+        "chartTitle" => {
+            pen.frect(5.0, 2.5, 15.0, 4.5, a);
+            pen.frect(4.0, 11.0, 7.0, 17.0, c);
+            pen.frect(8.5, 8.0, 11.5, 17.0, c);
+            pen.frect(13.0, 12.5, 16.0, 17.0, c);
+            pen.line(&[(2.5, 17.5), (17.5, 17.5)]);
+        }
+        "legend" => {
+            for (k, col) in [a, orange, green].into_iter().enumerate() {
+                let y = 5.0 + 5.0 * k as f32;
+                pen.frect(3.0, y - 1.5, 6.0, y + 1.5, col);
+                pen.line(&[(8.0, y), (17.0, y)]);
+            }
+        }
+        "dataLabels" => {
+            pen.frect(3.5, 11.0, 7.0, 17.5, a);
+            pen.frect(12.0, 8.0, 15.5, 17.5, orange);
+            pen.rect(2.5, 5.5, 8.0, 9.0, c);
+            pen.rect(11.0, 2.5, 16.5, 6.0, c);
+        }
         "screenshot" => {
             pen.line(&[(3.0, 7.0), (3.0, 3.0), (7.0, 3.0)]);
             pen.line(&[(13.0, 3.0), (17.0, 3.0), (17.0, 7.0)]);

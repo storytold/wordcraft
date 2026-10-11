@@ -1,11 +1,12 @@
-//! Charts and SmartArt diagrams: drawings shown but not edited, kept as neutral items ready to draw.
+//! Charts and SmartArt diagrams: drawings kept as neutral items ready to draw. Charts WordCraft can
+//! edit also keep their [`crate::chart::ChartSpec`]; the rest are shown, not edited.
 
 use serde::{Deserialize, Serialize};
 
 use crate::para::ShapeKind;
 use crate::props::Rgb;
 
-/// A drawing shown but not edited: a chart or a SmartArt diagram, as items ready to draw.
+/// A chart or a SmartArt diagram, as items ready to draw (and, for an editable chart, its model).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Graphic {
@@ -23,6 +24,10 @@ pub struct Graphic {
     /// only these items). `None` for graphics made some other way.
     #[serde(skip)]
     pub source: Option<std::sync::Arc<Embedded>>,
+    /// A chart WordCraft can edit (one it made, or one read back that holds nothing more): saving
+    /// writes the chart part from it, and the items are drawn from it. See [`crate::chart`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart: Option<std::sync::Arc<crate::chart::ChartSpec>>,
 }
 
 /// What an object read from a file needs to be written back as it was: its own markup in the
