@@ -23,7 +23,7 @@ use std::sync::Arc;
 use wordcraft_doc::numbering::{Counters, Level};
 use wordcraft_doc::para::{Anchor, Float, FloatAlign, InlineObject, Wrap};
 use wordcraft_doc::props::{Border, CharProps, Rgb, TableFloat, TextDirection};
-use wordcraft_doc::section::{SectionProps, SectionStart};
+use wordcraft_doc::section::{HeaderSet, SectionProps, SectionStart};
 use wordcraft_doc::{Block, Blocks, Document, Paragraph, Path, StoryRef};
 use wordcraft_geom::{Point, Rect, Spin};
 
@@ -811,6 +811,9 @@ struct PageBuilder<'a> {
     line_no: u32,
     /// Index of the first body item of the current page (vertical alignment shifts from here).
     page_items_start: usize,
+    /// Top of the footer of the pages being started: a footer reaching above the bottom margin
+    /// pushes the body up (`f32::MAX`: no footer).
+    foot_top: f32,
 }
 
 /// Gap above the footnote separator and its length.
@@ -940,6 +943,22 @@ impl NoteBox {
     }
 }
 
+/// Page borders, measured from the page edge (Word's default), so they surround the header,
+/// footer and line numbers. The first items of every printed page.
+fn page_border_rules(s: &SectionProps) -> Vec<Placed> {
+    let mut v = Vec::new();
+    if let Some(b) = &s.page_borders {
+        let sp = |e: &Option<Border>| e.map(|x| x.space).unwrap_or(24.0);
+        let (x0, x1, y0, y1) = (sp(&b.left), s.page_w - sp(&b.right), sp(&b.top), s.page_h - sp(&b.bottom));
+        for (e, a, bb) in [(b.top, (x0, y0), (x1, y0)), (b.bottom, (x0, y1), (x1, y1)), (b.left, (x0, y0), (x0, y1)), (b.right, (x1, y0), (x1, y1))] {
+            if let Some(e) = e.filter(Border::is_visible) {
+                v.push(Placed::Rule { x0: a.0, y0: a.1, x1: bb.0, y1: bb.1, border: e });
+            }
+        }
+    }
+    v
+}
+
 impl PageBuilder<'_> {
     /// Space footnotes take at the bottom of the page.
     fn notes_h(&self) -> f32 {
@@ -1039,29 +1058,20 @@ impl PageBuilder<'_> {
         let s = self.sect;
         self.number = self.number.saturating_add(1);
         let (w, h) = if self.web { (s.page_w, f32::MAX / 4.0) } else { (s.page_w, s.page_h) };
-        let body = Rect::new(s.margin_left + s.gutter, body_top, s.text_width(), (s.page_h - s.margin_bottom - body_top).max(36.0));
+        // A footer taller than the bottom margin pushes the body up (Word: no gap), leaving it at
+        // least a little room.
+        let bottom = (s.page_h - s.margin_bottom).min(self.foot_top.max(body_top + 36.0));
+        let body = Rect::new(s.margin_left + s.gutter, body_top, s.text_width(), (bottom - body_top).max(36.0));
         let mut decor = Vec::new();
         if !self.web {
-            // Page borders, measured from the page edge (Word's default), so they surround the
-            // header, footer and line numbers.
-            if let Some(b) = &s.page_borders {
-                let sp = |e: &Option<Border>| e.map(|x| x.space).unwrap_or(24.0);
-                let (x0, x1, y0, y1) = (sp(&b.left), s.page_w - sp(&b.right), sp(&b.top), s.page_h - sp(&b.bottom));
-                for (e, a, bb) in
-                    [(b.top, (x0, y0), (x1, y0)), (b.bottom, (x0, y1), (x1, y1)), (b.left, (x0, y0), (x0, y1)), (b.right, (x1, y0), (x1, y1))]
-                {
-                    if let Some(e) = e.filter(Border::is_visible) {
-                        decor.push(Placed::Rule { x0: a.0, y0: a.1, x1: bb.0, y1: bb.1, border: e });
-                    }
-                }
-            }
+            decor = page_border_rules(s);
             // Lines between columns.
             if s.columns.separator && s.columns.count > 1 {
                 let cols = s.column_boxes();
                 for w in cols.windows(2) {
                     if let [(ax, aw), (bx, _)] = w {
                         let x = s.margin_left + s.gutter + (ax + aw + bx) / 2.0;
-                        decor.push(Placed::Rule { x0: x, y0: body_top, x1: x, y1: s.page_h - s.margin_bottom, border: Border::single(0.5) });
+                        decor.push(Placed::Rule { x0: x, y0: body_top, x1: x, y1: bottom, border: Border::single(0.5) });
                     }
                 }
             }
@@ -1071,7 +1081,7 @@ impl PageBuilder<'_> {
         self.col = 0;
         self.cols = s.column_boxes();
         self.top = body_top;
-        self.bottom = if self.web { f32::MAX / 8.0 } else { s.page_h - s.margin_bottom };
+        self.bottom = if self.web { f32::MAX / 8.0 } else { bottom };
         self.orig_bottom = self.bottom;
         self.y = self.top;
         // Notes continued from the page before come first in this page's note area.
@@ -1177,14 +1187,19 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
         float_tables: Vec::new(),
         line_no: 0,
         page_items_start: 0,
+        foot_top: f32::MAX,
     };
     let mut block = 0usize;
     for (si, (end, sect)) in sections.iter().enumerate() {
         let sect: &SectionProps = if web { sect_ref } else { sect };
         pb.sect = sect;
         pb.sect_idx = si;
-        let body_top = if web { sect.margin_top } else { body_top_for(&mut ctx, sect, sect.headers.default) };
-        let first_top = if web || !sect.title_page { body_top } else { body_top_for(&mut ctx, sect, sect.headers.first) };
+        // Headers and footers left out are linked to the previous section's, and take its room.
+        let (heads, feet) = (linked(&sections, si, |s| s.headers), linked(&sections, si, |s| s.footers));
+        let body_top = if web { sect.margin_top } else { body_top_for(&mut ctx, sect, heads.default) };
+        let first_top = if web || !sect.title_page { body_top } else { body_top_for(&mut ctx, sect, heads.first) };
+        let foot_top = if web { f32::MAX } else { foot_top_for(&mut ctx, sect, feet.default) };
+        let first_foot = if web || !sect.title_page { foot_top } else { foot_top_for(&mut ctx, sect, feet.first) };
         let restart = sect.page_num_start;
         if sect.line_numbers.as_ref().is_some_and(|l| l.restart == wordcraft_doc::section::LineNumberRestart::Section) {
             pb.line_no = 0;
@@ -1196,7 +1211,9 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
             if let Some(n) = restart {
                 pb.number = n.saturating_sub(1);
             }
+            pb.foot_top = first_foot;
             pb.new_page(block, first_top);
+            pb.foot_top = foot_top;
             if !web && matches!(start, SectionStart::EvenPage | SectionStart::OddPage) {
                 let want_even = start == SectionStart::EvenPage;
                 if pb.number.is_multiple_of(2) != want_even {
@@ -1209,6 +1226,7 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
             pb.col = 0;
             pb.top = pb.y;
         }
+        pb.foot_top = foot_top;
         let last = (*end).min(doc.body.len().saturating_sub(1));
         while block <= last {
             let Some(b) = doc.body.get(block) else { break };
@@ -1247,21 +1265,51 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
             });
         }
         pb.y += 8.0;
+        let mut added = 0usize;
         for id in endnotes {
             let Some(part) = doc.parts.get(&id) else { continue };
             let blocks = part.blocks.clone();
             let BoxLayout { items, height: h, .. } = layout_box(&mut ctx, StoryRef::Part(id), &blocks, &[], pb.col_w(), None, 0, None);
-            if pb.y + h > pb.bottom && !pb.at_top() {
-                pb.advance(block, pb.top);
-            }
-            let (x, y) = (pb.col_x(), pb.y);
-            if let Some(pg) = pb.page() {
-                for mut it in items {
-                    it.translate(x, y);
-                    pg.items.push(it);
+            // A note longer than the room left continues at a line break in the next column or
+            // on a new page (Word). Each page takes at least a line, so this ends; the page cap
+            // is a backstop (the rest then runs off the last page).
+            let mut note = NoteBox { id, items, h, cont: false };
+            loop {
+                let room = pb.bottom - pb.y;
+                let cut = if note.h <= room + 0.01 || added >= MAX_NOTE_PAGES {
+                    None
+                } else {
+                    let cuts = note.cuts();
+                    match cuts.iter().rev().find(|&&c| c <= room + 0.01).or(cuts.first().filter(|_| pb.at_top())) {
+                        Some(&c) => Some(c),
+                        None if pb.at_top() => None,
+                        None => {
+                            pb.advance(block, pb.top);
+                            added += 1;
+                            continue;
+                        }
+                    }
+                };
+                let (head, rest) = match cut {
+                    Some(c) => {
+                        let (head, rest) = note.split(c);
+                        (head, Some(rest))
+                    }
+                    None => (note, None),
+                };
+                let (x, y) = (pb.col_x(), pb.y);
+                if let Some(pg) = pb.page() {
+                    for mut it in head.items {
+                        it.translate(x, y);
+                        pg.items.push(it);
+                    }
                 }
+                pb.y += head.h;
+                let Some(rest) = rest else { break };
+                note = rest;
+                pb.advance(block, pb.top);
+                added += 1;
             }
-            pb.y += h;
         }
     }
     pb.apply_valign();
@@ -1289,6 +1337,9 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
     }
     if !web {
         headers_footers(&mut ctx, &mut pages, &sections);
+        if doc.settings.mirror_margins {
+            mirror_even_pages(&mut pages, &sections);
+        }
     }
     // Evict paragraph layouts that weren't used this pass if the cache grew large.
     if ctx.cache.paras.len() > 4 * ctx.cache.used.len().max(1024) {
@@ -1323,6 +1374,14 @@ fn body_top_for(ctx: &mut Ctx, sect: &SectionProps, header: Option<u32>) -> f32 
     let h = layout_box(ctx, StoryRef::Part(id), &blocks, &[], sect.text_width(), None, 0, Some(frame)).height;
     // Word starts the body right below a header that reaches past the top margin, no gap.
     sect.margin_top.max(sect.header + h)
+}
+
+/// Where the footer starts (as `headers_footers` places it), `f32::MAX` without one.
+fn foot_top_for(ctx: &mut Ctx, sect: &SectionProps, footer: Option<u32>) -> f32 {
+    let Some(part) = footer.and_then(|id| ctx.doc.parts.get(&id).map(|p| (id, p))) else { return f32::MAX };
+    let (id, blocks) = (part.0, part.1.blocks.clone());
+    let h = layout_box(ctx, StoryRef::Part(id), &blocks, &[], sect.text_width(), None, 0, None).height;
+    sect.page_h - sect.footer - h
 }
 
 /// Where a box of laid-out items sits on its page, for floating objects positioned relative to
@@ -1982,6 +2041,22 @@ fn below(excl: &[(Rect, bool)], mut y: f32, x0: f32, x1: f32) -> f32 {
     y
 }
 
+/// Section `si`'s headers (or footers, as `get` picks), with those it leaves out inherited from
+/// the sections before it (Word's "link to previous").
+fn linked(sections: &[(usize, &SectionProps)], si: usize, get: fn(&SectionProps) -> HeaderSet) -> HeaderSet {
+    let mut set = sections.get(si).map(|(_, s)| get(s)).unwrap_or_default();
+    for (_, s) in sections.iter().take(si).rev() {
+        if set.default.is_some() && set.first.is_some() && set.even.is_some() {
+            break;
+        }
+        let o = get(s);
+        set.default = set.default.or(o.default);
+        set.first = set.first.or(o.first);
+        set.even = set.even.or(o.even);
+    }
+    set
+}
+
 fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &SectionProps)]) {
     let total = pages.len() as u32;
     // Pages per section.
@@ -2000,19 +2075,8 @@ fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &Secti
     for (i, page) in pages.iter_mut().enumerate() {
         let Some((_, sect)) = sections.get(page.section) else { continue };
         // Inherit header/footer references from earlier sections (Word's "link to previous").
-        let pick = |get: &dyn Fn(&SectionProps) -> wordcraft_doc::section::HeaderSet| -> Option<u32> {
-            let mut set = get(sect);
-            for k in (0..page.section).rev() {
-                if set.default.is_some() && set.first.is_some() && set.even.is_some() {
-                    break;
-                }
-                if let Some((_, s)) = sections.get(k) {
-                    let o = get(s);
-                    set.default = set.default.or(o.default);
-                    set.first = set.first.or(o.first);
-                    set.even = set.even.or(o.even);
-                }
-            }
+        let pick = |get: fn(&SectionProps) -> HeaderSet| -> Option<u32> {
+            let set = linked(sections, page.section, get);
             if sect.title_page && first_of_section.contains(&i) {
                 return set.first;
             }
@@ -2021,8 +2085,8 @@ fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &Secti
             }
             set.default
         };
-        let hid = pick(&|s: &SectionProps| s.headers);
-        let fid = pick(&|s: &SectionProps| s.footers);
+        let hid = pick(|s| s.headers);
+        let fid = pick(|s| s.footers);
         ctx.fields.page = page.number;
         ctx.fields.page_format = sect.page_num_format;
         ctx.fields.pages = total;
@@ -2059,6 +2123,24 @@ fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &Secti
     }
 }
 
+/// Mirrored margins: even pages have the inside margin (and gutter) on the right, so their
+/// header, text, notes and footer move to start at the outside margin. Page borders, measured
+/// from the page edge, stay.
+fn mirror_even_pages(pages: &mut [Page], sections: &[(usize, &SectionProps)]) {
+    for page in pages.iter_mut().filter(|p| p.number % 2 == 0) {
+        let Some((_, s)) = sections.get(page.section) else { continue };
+        let dx = s.margin_right - s.margin_left - s.gutter;
+        if dx.abs() < 0.001 || !dx.is_finite() {
+            continue;
+        }
+        let borders = page_border_rules(s).len();
+        for it in page.items.iter_mut().skip(borders).chain(page.header.iter_mut()).chain(page.footer.iter_mut()) {
+            it.translate(dx, 0.0);
+        }
+        page.body.x += dx;
+    }
+}
+
 /// Is an object floating (not laid out inline)?
 pub fn is_floating(o: &InlineObject) -> bool {
     o.is_floating()
@@ -2083,3 +2165,5 @@ pub fn now_ms() -> f64 {
 mod tests;
 #[cfg(test)]
 mod tests_bidi;
+#[cfg(test)]
+mod tests_pages;

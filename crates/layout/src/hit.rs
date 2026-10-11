@@ -280,16 +280,47 @@ impl DocLayout {
             order.insert(0, page_hint);
         }
         for pi in order {
-            let Some(p) = self.pages.get(pi) else { continue };
-            let found: Vec<(usize, &Placed)> = items_of(p, story)
-                .filter(|it| matches!(it, Placed::Lines { story: s, path: q, .. } if *s == story && q == path))
-                .map(|it| (pi, it))
-                .collect();
-            if !found.is_empty() {
-                return found;
+            let mut found = self.pieces_on(pi, story, path);
+            if found.is_empty() {
+                continue;
             }
+            // A note continued over pages has the rest of the paragraph on the pages before or
+            // after (a repeated header shows all of it on every page: one page is enough).
+            let lines = |v: &[(usize, &Placed)]| {
+                v.iter()
+                    .filter_map(|(_, it)| if let Placed::Lines { para, l0, l1, .. } = it { Some((*l0, *l1, para.lines.len())) } else { None })
+                    .fold((usize::MAX, 0, 0), |(a, b, _), (l0, l1, n)| (a.min(l0), b.max(l1), n))
+            };
+            let (mut lo, mut hi, n) = lines(&found);
+            let mut k = pi;
+            while lo > 0 && k > 0 {
+                k -= 1;
+                let more = self.pieces_on(k, story, path);
+                if more.is_empty() {
+                    break;
+                }
+                lo = lo.min(lines(&more).0);
+                found.extend(more);
+            }
+            let mut k = pi;
+            while hi < n && k + 1 < self.pages.len() {
+                k += 1;
+                let more = self.pieces_on(k, story, path);
+                if more.is_empty() {
+                    break;
+                }
+                hi = hi.max(lines(&more).1);
+                found.extend(more);
+            }
+            return found;
         }
         Vec::new()
+    }
+
+    /// Pieces of a paragraph of story part `story` on page `pi`.
+    fn pieces_on(&self, pi: usize, story: StoryRef, path: &Path) -> Vec<(usize, &Placed)> {
+        let Some(p) = self.pages.get(pi) else { return Vec::new() };
+        items_of(p, story).filter(|it| matches!(it, Placed::Lines { story: s, path: q, .. } if *s == story && q == path)).map(|it| (pi, it)).collect()
     }
 
     /// Caret geometry for a position.
