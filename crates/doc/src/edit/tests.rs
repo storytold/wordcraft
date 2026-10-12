@@ -688,6 +688,8 @@ fn adopting_a_document_renumbers_what_it_refers_to() {
     let p = theirs.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
     p.props.numbering = Some(crate::props::NumRef { num: list, level: 0 });
     p.runs[0].props.del = Some(0);
+    // An insertion naming a revision it doesn't have.
+    p.runs[0].props.ins = Some(7);
     let props = p.props_of_char(0).clone();
     p.insert_object(0, InlineObject::NoteRef { kind: NoteKind::Footnote, id: note, custom: String::new() }, &props).unwrap();
     p.insert_object(0, InlineObject::CommentStart { id: 0 }, &props).unwrap();
@@ -701,6 +703,7 @@ fn adopting_a_document_renumbers_what_it_refers_to() {
     // Their deletion is their revision, after ours.
     let del = p.runs.iter().find_map(|r| r.props.del).unwrap();
     assert_eq!(ours.revisions.get(del as usize).map(|r| r.kind), Some(RevisionKind::Delete));
+    assert!(p.runs.iter().all(|r| r.props.ins.is_none()));
     // Their note and comment come along under ids of their own.
     let (note_id, comment_id) = p.objects.iter().fold((None, None), |(n, c), o| match o {
         InlineObject::NoteRef { id, .. } => (Some(*id), c),
@@ -721,6 +724,55 @@ fn adopting_a_document_renumbers_what_it_refers_to() {
 }
 
 #[test]
+fn a_kept_character_style_leaves_what_it_doesnt_set_to_the_paragraph_style() {
+    use crate::styles::{Style, StyleKind, StyleSheet};
+    let mut ours = doc(&["ours"]);
+    let mut theirs = doc(&["theirs"]);
+    theirs.styles = StyleSheet::empty();
+    theirs.styles.default_chr = CharProps { size: Some(9.0), ..Default::default() };
+    let big = CharProps { size: Some(20.0), ..Default::default() };
+    theirs.styles.upsert(Style { id: "Big".into(), name: "Big".into(), chr: big, ..Default::default() });
+    theirs.styles.upsert(Style { id: "Link".into(), name: "Link".into(), kind: StyleKind::Character, ..Default::default() });
+    let p = theirs.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.props.style = Some("Big".into());
+    p.runs[0].props.style = Some("Link".into());
+
+    let frag = ours.adopt_with(theirs, true);
+    let Some(Block::Para(p)) = frag.blocks.first() else { panic!() };
+    assert_eq!(ours.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props).size, 20.0);
+}
+
+#[test]
+fn kept_styles_renamed_on_adoption_are_renamed_in_list_levels_too() {
+    use crate::styles::Style;
+    let mut ours = doc(&["ours"]);
+    ours.styles.upsert(Style { id: "Heading1".into(), name: "heading 1".into(), ..Default::default() });
+    let mut theirs = doc(&["theirs"]);
+    theirs.styles.upsert(Style { id: "Heading1".into(), name: "heading 1".into(), ..Default::default() });
+    let list = theirs.numbering.add_list(crate::numbering::ListKind::Numbered);
+    let abs = theirs.numbering.nums.iter().find(|n| n.id == list).map(|n| n.abstract_id).unwrap();
+    let a = theirs.numbering.abstracts.iter_mut().find(|a| a.id == abs).unwrap();
+    a.levels[0].style = Some("Heading1".into());
+    let level = a.levels[0].clone();
+    theirs.numbering.nums.iter_mut().find(|n| n.id == list).unwrap().level_overrides.push((1, level));
+
+    let before = ours.numbering.abstracts.len();
+    ours.adopt_with(theirs, true);
+    let copied = &ours.numbering.abstracts[before..];
+    let styles: Vec<_> = copied
+        .iter()
+        .flat_map(|a| a.levels.iter())
+        .chain(ours.numbering.nums.iter().flat_map(|n| n.level_overrides.iter().map(|(_, l)| l)))
+        .filter_map(|l| l.style.clone())
+        .collect();
+    assert_eq!(styles.len(), 2, "{styles:?}");
+    for st in &styles {
+        assert_ne!(st, "Heading1");
+        assert!(ours.styles.get(st).is_some(), "{st}");
+    }
+}
+
+#[test]
 fn an_adopted_section_breaks_tracked_change_names_its_revision() {
     use crate::{Revision, RevisionKind, SectionProps};
     let mut ours = doc(&["ours"]);
@@ -737,36 +789,47 @@ fn an_adopted_section_breaks_tracked_change_names_its_revision() {
 }
 
 #[test]
-fn an_adopted_tracked_format_change_keeps_its_old_list() {
+fn an_adopted_tracked_format_change_keeps_its_old_styles_and_list() {
     use crate::props::{NumRef, ParaProps, PropChange};
     use crate::{Revision, RevisionKind};
-    let mut ours = doc(&["ours"]);
-    let our_list = ours.numbering.add_list(crate::numbering::ListKind::Bullet);
-    let mut theirs = doc(&["theirs"]);
-    theirs.revisions.push(Revision { kind: RevisionKind::Format, ..Revision::default() });
-    let list = theirs.numbering.add_list(crate::numbering::ListKind::Bullet);
-    assert_eq!(list, our_list);
-    let p = theirs.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
-    p.props.numbering = Some(NumRef { num: list, level: 0 });
-    p.props.fmt_change = PropChange::boxed(0, ParaProps { numbering: Some(NumRef { num: list, level: 0 }), ..ParaProps::default() });
+    for keep in [false, true] {
+        let mut ours = doc(&["ours"]);
+        let our_list = ours.numbering.add_list(crate::numbering::ListKind::Bullet);
+        let mut theirs = doc(&["theirs"]);
+        theirs.revisions.push(Revision { kind: RevisionKind::Format, ..Revision::default() });
+        let list = theirs.numbering.add_list(crate::numbering::ListKind::Bullet);
+        assert_eq!(list, our_list);
+        let p = theirs.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        // Live and old props name the same styles (ours has them too) and their list.
+        p.props.style = Some("Quote".into());
+        p.props.numbering = Some(NumRef { num: list, level: 0 });
+        let old = ParaProps { style: Some("Quote".into()), numbering: Some(NumRef { num: list, level: 0 }), ..ParaProps::default() };
+        p.props.fmt_change = PropChange::boxed(0, old);
+        p.runs[0].props.style = Some("Strong".into());
+        p.runs[0].props.fmt_change = PropChange::boxed(0, CharProps { style: Some("Strong".into()), ..CharProps::default() });
 
-    let frag = ours.adopt(theirs);
-    let Some(Block::Para(p)) = frag.blocks.first() else { panic!() };
-    let old = &p.props.fmt_change.as_ref().unwrap().old;
-    assert_eq!(old.numbering, p.props.numbering);
-    assert_ne!(old.numbering.map(|n| n.num), Some(our_list));
+        let frag = ours.adopt_with(theirs, keep);
+        let Some(Block::Para(p)) = frag.blocks.first() else { panic!() };
+        let old = &p.props.fmt_change.as_ref().unwrap().old;
+        assert_eq!((&old.style, old.numbering), (&p.props.style, p.props.numbering), "keep_styles {keep}");
+        assert_ne!(old.numbering.map(|n| n.num), Some(our_list));
+        let run = &p.runs[0].props;
+        assert_eq!(run.fmt_change.as_ref().unwrap().old.style, run.style, "keep_styles {keep}");
+    }
 }
 
 #[test]
 fn adopted_styles_never_become_our_defaults() {
     use crate::styles::{Style, StyleKind};
-    let mut ours = doc(&["ours"]);
-    let mut theirs = doc(&["theirs"]);
-    // A localized default character style, and one whose id we have too.
-    theirs.styles.upsert(Style { id: "Absatz".into(), kind: StyleKind::Character, default: true, ..Default::default() });
-    theirs.styles.upsert(Style { id: "Strong".into(), kind: StyleKind::Character, default: true, ..Default::default() });
-    ours.adopt(theirs);
-    assert!(ours.styles.styles.iter().all(|s| !s.default));
+    for keep in [false, true] {
+        let mut ours = doc(&["ours"]);
+        let mut theirs = doc(&["theirs"]);
+        // A localized default character style, and one whose id we have too.
+        theirs.styles.upsert(Style { id: "Absatz".into(), kind: StyleKind::Character, default: true, ..Default::default() });
+        theirs.styles.upsert(Style { id: "Strong".into(), kind: StyleKind::Character, default: true, ..Default::default() });
+        ours.adopt_with(theirs, keep);
+        assert!(ours.styles.styles.iter().all(|s| !s.default), "keep_styles {keep}");
+    }
 }
 
 #[test]

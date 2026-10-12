@@ -16,18 +16,33 @@ fn p(text: &str) -> String {
 
 /// A package whose body is `body`, with the chunk `afchunk.{ext}` (content type `ct`) as `rIdC`.
 fn package(body: &str, chunk: Option<(&str, &str, &[u8])>) -> Vec<u8> {
+    package_styled(body, chunk, None)
+}
+
+/// [`package`] with a styles part holding `styles`.
+fn package_styled(body: &str, chunk: Option<(&str, &str, &[u8])>, styles: Option<&str>) -> Vec<u8> {
     let doc = format!(r#"<w:document {NS}><w:body>{body}<w:sectPr/></w:body></w:document>"#);
     let mut files: Vec<(String, Vec<u8>)> = vec![("_rels/.rels".into(), ROOT_RELS.into()), ("word/document.xml".into(), doc.into_bytes())];
     let mut types = String::from(
         r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>"#,
     );
+    let mut rels = String::new();
     if let Some((ext, ct, bytes)) = chunk {
         types.push_str(&format!(r#"<Default Extension="{ext}" ContentType="{ct}"/>"#));
+        rels.push_str(&format!(r#"<Relationship Id="rIdC" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/aFChunk" Target="/word/afchunk.{ext}"/>"#));
+        files.push((format!("word/afchunk.{ext}"), bytes.to_vec()));
+    }
+    if let Some(styles) = styles {
+        rels.push_str(
+            r#"<Relationship Id="rIdS" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#,
+        );
+        files.push(("word/styles.xml".into(), format!(r#"<w:styles {NS}>{styles}</w:styles>"#).into_bytes()));
+    }
+    if !rels.is_empty() {
         files.push((
             "word/_rels/document.xml.rels".into(),
-            format!(r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdC" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/aFChunk" Target="/word/afchunk.{ext}"/></Relationships>"#).into_bytes(),
+            format!(r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{rels}</Relationships>"#).into_bytes(),
         ));
-        files.push((format!("word/afchunk.{ext}"), bytes.to_vec()));
     }
     types.push_str(r#"<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#);
     files.push(("[Content_Types].xml".into(), types.into_bytes()));
@@ -208,6 +223,79 @@ fn a_wordprocessing_chunk_is_read_without_an_importer_and_flows_in_its_section()
     assert_eq!(body_lines(&d), ["Before", "Inner one", "Inner two", "After"]);
     // The inner document's own section doesn't come along.
     assert_eq!(d.sections().len(), 1);
+}
+
+/// Styles a matchSrc chunk brings under new ids get distinct ones: with `A` and `A1` ours and
+/// `A` to `A10` the chunk's, its `A` and `A1` both renamed don't land on one id (the second then
+/// lost, its paragraphs taking the first's formatting), and keep their formatting through a save.
+#[test]
+fn match_src_gives_each_renamed_style_its_own_id() {
+    let style = |id: &str, half_points: u32| {
+        format!(r#"<w:style w:type="paragraph" w:styleId="{id}"><w:name w:val="{id}"/><w:rPr><w:sz w:val="{half_points}"/></w:rPr></w:style>"#)
+    };
+    let ours: String = ["A", "A1"].iter().map(|id| style(id, 22)).collect();
+    let mut theirs = style("A", 20) + &style("A1", 28);
+    for n in 2..=10 {
+        theirs += &style(&format!("A{n}"), 16);
+    }
+    let para = |id: &str, text: &str| format!(r#"<w:p><w:pPr><w:pStyle w:val="{id}"/></w:pPr><w:r><w:t>{text}</w:t></w:r></w:p>"#);
+    let inner = package_styled(&(para("A", "ten") + &para("A1", "fourteen")), None, Some(&theirs));
+    let body = format!(r#"{}<w:altChunk r:id="rIdC"><w:altChunkPr><w:matchSrc/></w:altChunkPr></w:altChunk>"#, p("Ours"));
+    let d = read(&package_styled(&body, Some(("docx", DOCX_MAIN, &inner)), Some(&ours))).unwrap();
+    let check = |d: &Document| {
+        let look = |text: &str| {
+            d.body
+                .iter()
+                .find_map(|b| match &**b {
+                    Block::Para(p) if p.text == text => {
+                        Some((p.props.style.clone(), d.styles.resolve_char(p.props.style.as_deref(), p.props_of_char(0)).size))
+                    }
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let ((ten, ten_size), (fourteen, fourteen_size)) = (look("ten"), look("fourteen"));
+        assert_ne!(ten, fourteen);
+        assert_eq!((ten_size, fourteen_size), (10.0, 14.0));
+    };
+    check(&d);
+    check(&read(&wordcraft_docx::write(&d).unwrap()).unwrap());
+}
+
+#[test]
+fn match_src_keeps_a_word_chunks_own_formatting() {
+    // Both define Normal and Subtitle differently, and the chunk's defaults differ from ours.
+    let ours = r#"<w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="22"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="200"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:pPr><w:spacing w:after="248" w:line="248" w:lineRule="exact"/></w:pPr></w:style><w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:rPr><w:i/></w:rPr></w:style>"#;
+    let theirs = r#"<w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:basedOn w:val="Normal"/></w:style>"#;
+    let inner = package_styled(
+        &format!(r#"{}<w:p><w:pPr><w:pStyle w:val="Subtitle"/></w:pPr><w:r><w:t>Sub</w:t></w:r></w:p>"#, p("Plain")),
+        None,
+        Some(theirs),
+    );
+    for match_src in [true, false] {
+        let pr = if match_src { "<w:altChunkPr><w:matchSrc/></w:altChunkPr>" } else { "" };
+        let body = format!(r#"{}<w:altChunk r:id="rIdC">{pr}</w:altChunk>"#, p("Ours"));
+        let d = read(&package_styled(&body, Some(("docx", DOCX_MAIN, &inner)), Some(ours))).unwrap();
+        let look = |i: usize| match &*d.body[i] {
+            Block::Para(p) => {
+                let para = d.styles.resolve_para(&p.props);
+                let chr = d.styles.resolve_char(p.props.style.as_deref(), p.props_of_char(0));
+                (para.space_after, chr.size, chr.italic)
+            }
+            b => panic!("{b:?}"),
+        };
+        // Ours stays ours either way.
+        assert_eq!(look(0), (12.4, 11.0, false));
+        if match_src {
+            // The chunk's own Normal (its 12 pt, Word's no space after) and its Subtitle (not italic).
+            assert_eq!(look(1), (0.0, 12.0, false));
+            assert_eq!(look(2), (0.0, 12.0, false));
+        } else {
+            // Without it the chunk takes our styles (our Subtitle stands on our defaults).
+            assert_eq!(look(1), (12.4, 11.0, false));
+            assert_eq!(look(2), (10.0, 11.0, true));
+        }
+    }
 }
 
 #[test]

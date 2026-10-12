@@ -62,7 +62,8 @@ impl Reader<'_> {
         let ct = self.content_types.get_or_insert_with(|| ContentTypes::read(pkg)).of(&part).unwrap_or("").to_string();
         let chunk = AltChunk { content_type: &ct, part: &part, bytes };
         // A WordprocessingML chunk is a package; one that isn't Word's fails to read (logged).
-        let doc = if bytes.starts_with(b"PK\x03\x04") { self.read_nested(bytes, depth) } else { self.chunks.import.and_then(|f| f(&chunk)) };
+        let is_docx = bytes.starts_with(b"PK\x03\x04");
+        let doc = if is_docx { self.read_nested(bytes, depth) } else { self.chunks.import.and_then(|f| f(&chunk)) };
         let Some(mut doc) = doc else {
             log::warn!("docx: alternative format chunk {part} ({ct}) is in a format WordCraft can't bring in");
             return;
@@ -76,7 +77,10 @@ impl Reader<'_> {
                 p.section = None;
             }
         }
-        let mut blocks = self.doc.adopt_blocks(doc, &mut self.next_perm);
+        // `w:matchSrc`: a Word document's content keeps its own styles (other formats' formatting
+        // is their own already).
+        let keep = is_docx && e.child("w:altChunkPr").and_then(|p| p.child("w:matchSrc")).is_some_and(crate::units::on_off);
+        let mut blocks = self.doc.adopt_blocks(doc, keep, &mut self.next_perm);
         // Bookmarks and comment marks read before the chunk stay before it.
         self.flush_pending_before(sc, out, &mut blocks);
         out.extend(blocks.into_iter().map(Arc::new));
