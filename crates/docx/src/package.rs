@@ -47,6 +47,7 @@ pub mod rt {
     pub const DIAGRAM_COLORS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramColors";
     pub const CUSTOM_XML: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml";
     pub const GLOSSARY: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/glossaryDocument";
+    pub const AF_CHUNK: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/aFChunk";
 }
 
 /// Content type of a glossary document part (ECMA-376 Part 1 §11.3.8).
@@ -250,6 +251,11 @@ impl Package {
             files.insert(name, Arc::new(buf));
         }
         Ok(Package::new(files))
+    }
+
+    /// The bytes of all its parts.
+    pub fn size(&self) -> u64 {
+        self.files.values().map(|f| f.len() as u64).sum()
     }
 
     /// A package from parts already in memory (a Flat OPC file, a converted document), by part
@@ -587,7 +593,7 @@ mod tests {
             ("word/media/pic.png", b"\x89PNG picture bytes".to_vec()),
         ]);
         let pkg = Package::open(&z).unwrap();
-        let doc = crate::read::read_opened(&pkg).unwrap();
+        let doc = crate::read::read_opened(&pkg, None).unwrap();
         let held = doc.media.values().next().expect("the picture is read");
         assert!(Arc::ptr_eq(held, pkg.get_shared("word/media/pic.png").unwrap()), "the same bytes, not a copy");
         assert_eq!(pkg.get("/WORD/media/PIC.png"), Some(&b"\x89PNG picture bytes"[..]), "lookups are unchanged");

@@ -664,3 +664,167 @@ fn a_table_nested_deeper_than_the_paragraph_walk_is_never_removed_whole() {
     d.delete_range(&Pos { story: StoryRef::Body, path: first, off: 0 }, &Pos::body(2, 0)).unwrap();
     assert!(d.body.get(1).is_some_and(|b| b.as_table().is_some()), "a table with paragraphs the walk never saw was removed");
 }
+#[test]
+fn adopting_a_document_renumbers_what_it_refers_to() {
+    use crate::para::NoteKind;
+    use crate::{Comment, Revision, RevisionKind};
+    // Ours already has a footnote, a comment, a list and a revision with the ids the other's use.
+    let mut ours = doc(&["ours"]);
+    let our_note = ours.add_part(PartKind::Footnote, vec![para_block(Paragraph::with_text("our note", CharProps::default()))]);
+    ours.comments.insert(0, Comment { part: our_note, ..Comment::default() });
+    let our_list = ours.numbering.add_list(crate::numbering::ListKind::Bullet);
+    ours.revisions.push(Revision { kind: RevisionKind::Insert, ..Revision::default() });
+
+    let mut theirs = doc(&["theirs"]);
+    let note = theirs.add_part(PartKind::Footnote, vec![para_block(Paragraph::with_text("their note", CharProps::default()))]);
+    let said = theirs.add_part(PartKind::Comment, vec![para_block(Paragraph::with_text("their comment", CharProps::default()))]);
+    theirs.comments.insert(0, Comment { author: "Them".into(), part: said, durable_id: Some("0A0B0C0D".into()), ..Comment::default() });
+    let list = theirs.numbering.add_list(crate::numbering::ListKind::Bullet);
+    assert_eq!(list, our_list);
+    theirs.revisions.push(Revision { kind: RevisionKind::Delete, ..Revision::default() });
+    let mut style = crate::styles::Style { id: "TheirList".into(), name: "Their List".into(), ..Default::default() };
+    style.para.numbering = Some(crate::props::NumRef { num: list, level: 0 });
+    theirs.styles.upsert(style);
+    let p = theirs.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.props.numbering = Some(crate::props::NumRef { num: list, level: 0 });
+    p.runs[0].props.del = Some(0);
+    let props = p.props_of_char(0).clone();
+    p.insert_object(0, InlineObject::NoteRef { kind: NoteKind::Footnote, id: note, custom: String::new() }, &props).unwrap();
+    p.insert_object(0, InlineObject::CommentStart { id: 0 }, &props).unwrap();
+
+    let frag = ours.adopt(theirs);
+    let Some(Block::Para(p)) = frag.blocks.first() else { panic!() };
+    let new_list = p.props.numbering.unwrap().num;
+    assert_ne!(new_list, our_list);
+    assert!(ours.numbering.num(new_list).is_some());
+    assert_eq!(ours.styles.get("TheirList").and_then(|s| s.para.numbering).map(|n| n.num), Some(new_list));
+    // Their deletion is their revision, after ours.
+    let del = p.runs.iter().find_map(|r| r.props.del).unwrap();
+    assert_eq!(ours.revisions.get(del as usize).map(|r| r.kind), Some(RevisionKind::Delete));
+    // Their note and comment come along under ids of their own.
+    let (note_id, comment_id) = p.objects.iter().fold((None, None), |(n, c), o| match o {
+        InlineObject::NoteRef { id, .. } => (Some(*id), c),
+        InlineObject::CommentStart { id } => (n, Some(*id)),
+        _ => (n, c),
+    });
+    let text = |id: u32| {
+        ours.parts
+            .get(&id)
+            .map(|p| p.blocks.iter().map(|b| if let Block::Para(p) = &**b { p.text.clone() } else { String::new() }).collect::<String>())
+    };
+    assert_eq!(text(note_id.unwrap()).as_deref(), Some("their note"));
+    let comment = ours.comments.get(&comment_id.unwrap()).unwrap();
+    assert_eq!((comment.author.as_str(), text(comment.part).as_deref()), ("Them", Some("their comment")));
+    // Its durable id is the other document's: the writer gives the copy one of its own.
+    assert_eq!(comment.durable_id, None);
+    assert_eq!(text(our_note).as_deref(), Some("our note"));
+}
+
+#[test]
+fn an_adopted_section_breaks_tracked_change_names_its_revision() {
+    use crate::{Revision, RevisionKind, SectionProps};
+    let mut ours = doc(&["ours"]);
+    ours.revisions.push(Revision { kind: RevisionKind::Insert, ..Revision::default() });
+    let mut theirs = doc(&["theirs"]);
+    theirs.revisions.push(Revision { kind: RevisionKind::Format, ..Revision::default() });
+    let p = theirs.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.section = Some(Box::new(SectionProps { fmt_change: crate::props::PropChange::boxed(0, SectionProps::default()), ..SectionProps::default() }));
+
+    let frag = ours.adopt(theirs);
+    let Some(Block::Para(p)) = frag.blocks.first() else { panic!() };
+    let rev = p.section.as_ref().and_then(|s| s.fmt_change.as_ref()).map(|c| c.rev);
+    assert_eq!(rev.and_then(|r| ours.revisions.get(r as usize)).map(|r| r.kind), Some(RevisionKind::Format));
+}
+
+#[test]
+fn an_adopted_tracked_format_change_keeps_its_old_list() {
+    use crate::props::{NumRef, ParaProps, PropChange};
+    use crate::{Revision, RevisionKind};
+    let mut ours = doc(&["ours"]);
+    let our_list = ours.numbering.add_list(crate::numbering::ListKind::Bullet);
+    let mut theirs = doc(&["theirs"]);
+    theirs.revisions.push(Revision { kind: RevisionKind::Format, ..Revision::default() });
+    let list = theirs.numbering.add_list(crate::numbering::ListKind::Bullet);
+    assert_eq!(list, our_list);
+    let p = theirs.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.props.numbering = Some(NumRef { num: list, level: 0 });
+    p.props.fmt_change = PropChange::boxed(0, ParaProps { numbering: Some(NumRef { num: list, level: 0 }), ..ParaProps::default() });
+
+    let frag = ours.adopt(theirs);
+    let Some(Block::Para(p)) = frag.blocks.first() else { panic!() };
+    let old = &p.props.fmt_change.as_ref().unwrap().old;
+    assert_eq!(old.numbering, p.props.numbering);
+    assert_ne!(old.numbering.map(|n| n.num), Some(our_list));
+}
+
+#[test]
+fn adopted_styles_never_become_our_defaults() {
+    use crate::styles::{Style, StyleKind};
+    let mut ours = doc(&["ours"]);
+    let mut theirs = doc(&["theirs"]);
+    // A localized default character style, and one whose id we have too.
+    theirs.styles.upsert(Style { id: "Absatz".into(), kind: StyleKind::Character, default: true, ..Default::default() });
+    theirs.styles.upsert(Style { id: "Strong".into(), kind: StyleKind::Character, default: true, ..Default::default() });
+    ours.adopt(theirs);
+    assert!(ours.styles.styles.iter().all(|s| !s.default));
+}
+
+#[test]
+fn adopted_permission_ranges_keep_ids_of_their_own() {
+    let perm = |id, editor: &str| InlineObject::PermStart { id, group: String::new(), editor: editor.into() };
+    let mut ours = doc(&["ours"]);
+    ours.insert_object(&Pos::body(0, 4), InlineObject::PermEnd { id: 0 }, &CharProps::default()).unwrap();
+    ours.insert_object(&Pos::body(0, 0), perm(0, "us"), &CharProps::default()).unwrap();
+    // Theirs: a closed range and one left open, numbered from 0 like ours.
+    let mut theirs = doc(&["theirs"]);
+    theirs.insert_object(&Pos::body(0, 6), perm(1, "them"), &CharProps::default()).unwrap();
+    theirs.insert_object(&Pos::body(0, 6), InlineObject::PermEnd { id: 0 }, &CharProps::default()).unwrap();
+    theirs.insert_object(&Pos::body(0, 0), perm(0, "them"), &CharProps::default()).unwrap();
+
+    let frag = ours.adopt(theirs);
+    let Some(Block::Para(p)) = frag.blocks.first() else { panic!() };
+    let ids: Vec<u32> = p
+        .objects
+        .iter()
+        .filter_map(|o| match o {
+            InlineObject::PermStart { id, .. } | InlineObject::PermEnd { id } => Some(*id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ids.len(), 3);
+    assert!(!ids.contains(&0), "{ids:?}");
+    assert_eq!(ids[0], ids[1], "a range's start and end still pair: {ids:?}");
+    assert_ne!(ids[1], ids[2]);
+}
+
+#[test]
+fn an_adopted_notes_text_box_gets_a_story_of_its_own() {
+    use crate::para::NoteKind;
+    // Ours has a text box under the id their note's text box has.
+    let mut ours = doc(&["ours"]);
+    ours.add_part(PartKind::Footnote, Vec::new());
+    let our_box = text_box(&mut ours, &Pos::body(0, 0), "our box");
+    let mut theirs = doc(&["theirs"]);
+    let note = theirs.add_part(PartKind::Footnote, vec![para_block(Paragraph::with_text("note", CharProps::default()))]);
+    let their_box = theirs.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("their box", CharProps::default()))]);
+    assert_eq!(their_box, our_box);
+    theirs
+        .insert_object(&Pos { story: StoryRef::Part(note), path: Path::top(0), off: 0 }, box_shape(Some(their_box)), &CharProps::default())
+        .unwrap();
+    theirs
+        .insert_object(&Pos::body(0, 0), InlineObject::NoteRef { kind: NoteKind::Footnote, id: note, custom: String::new() }, &CharProps::default())
+        .unwrap();
+
+    let blocks = ours.adopt(theirs).blocks;
+    let Some(Block::Para(p)) = blocks.first() else { panic!() };
+    let new_note = p.objects.iter().find_map(|o| if let InlineObject::NoteRef { id, .. } = o { Some(*id) } else { None }).unwrap();
+    let story = ours.parts[&new_note]
+        .blocks
+        .iter()
+        .find_map(|b| if let Block::Para(p) = &**b { p.objects.iter().find_map(|o| o.text_boxes().first().copied()) } else { None })
+        .unwrap();
+    assert_ne!(story, our_box);
+    let part = &ours.parts[&story];
+    assert_eq!(part.kind, PartKind::TextBox);
+    assert!(matches!(part.blocks.first().map(|b| &**b), Some(Block::Para(p)) if p.text == "their box"));
+}

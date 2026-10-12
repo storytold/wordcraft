@@ -389,7 +389,107 @@ fn restyle_block(b: &mut Block, from: &str, to: &Option<String>, depth: usize) -
     }
 }
 
+/// One past the highest permission range id in `blocks`.
+fn perm_end<'a>(blocks: impl Iterator<Item = &'a Arc<Block>>) -> u32 {
+    let mut end = 0u32;
+    for b in blocks {
+        each_para(b, 0, &mut |p| {
+            for o in &p.objects {
+                if let InlineObject::PermStart { id, .. } | InlineObject::PermEnd { id } = o {
+                    end = end.max(id.saturating_add(1));
+                }
+            }
+        });
+    }
+    end
+}
+
 /// Text box story ids of a paragraph's shapes.
+/// What [`Document::adopt`] renumbers in another document's content: media keys, lists, note
+/// and comment stories, comment ids, text boxes (one it doesn't bring is dropped) and revisions
+/// (after ours, at `rev`).
+struct Relink<'a> {
+    media: &'a BTreeMap<String, String>,
+    nums: &'a BTreeMap<u32, u32>,
+    notes: &'a BTreeMap<u32, u32>,
+    comments: &'a BTreeMap<u32, u32>,
+    boxes: &'a BTreeMap<u32, Part>,
+    /// Added to permission range ids: ours come first.
+    perms: u32,
+    rev: u32,
+}
+
+impl Relink<'_> {
+    // shortcut: tracked changes of table, row and cell properties keep their revision ids; renumber them too when tables from other documents carry revisions.
+    fn block(&self, b: &mut Block) {
+        each_para_mut(b, 0, &mut |p| self.para(p));
+    }
+
+    fn para(&self, p: &mut Paragraph) {
+        // A tracked change's old formatting names lists as the live one does.
+        let old = p.props.fmt_change.as_mut().and_then(|f| f.old.numbering.as_mut());
+        for n in p.props.numbering.iter_mut().chain(old) {
+            if n.num != 0 {
+                n.num = self.nums.get(&n.num).copied().unwrap_or(0);
+            }
+        }
+        let shift = |r: &mut u32| *r = r.saturating_add(self.rev);
+        for c in p.runs.iter_mut().map(|r| &mut r.props).chain([&mut p.mark]) {
+            c.ins.iter_mut().chain(c.del.iter_mut()).for_each(shift);
+            if let Some(f) = c.fmt_change.as_mut() {
+                shift(&mut f.rev);
+            }
+        }
+        if let Some(f) = p.props.fmt_change.as_mut() {
+            shift(&mut f.rev);
+        }
+        if let Some(f) = p.section.as_deref_mut().and_then(|s| s.fmt_change.as_mut()) {
+            shift(&mut f.rev);
+        }
+        if let Some(f) = p.props.num_change.as_mut() {
+            shift(&mut f.rev);
+        }
+        for o in &mut p.objects {
+            self.object(o, 0);
+        }
+        p.touch();
+    }
+
+    fn object(&self, o: &mut InlineObject, depth: usize) {
+        // An id that names nothing here becomes one that names nothing at all.
+        let map = |m: &BTreeMap<u32, u32>, id: &mut u32| *id = m.get(id).copied().unwrap_or(u32::MAX);
+        match o {
+            InlineObject::Image { media, .. } => {
+                if let Some(k) = self.media.get(media.as_str()) {
+                    *media = k.clone();
+                }
+            }
+            InlineObject::Graphic { graphic, .. } => {
+                let mapped = |m: &str| self.media.get(m).filter(|k| k.as_str() != m);
+                if graphic.items.iter().any(|i| matches!(i, crate::graphic::GraphicItem::Image { media, .. } if mapped(media).is_some())) {
+                    for i in &mut Arc::make_mut(graphic).items {
+                        if let crate::graphic::GraphicItem::Image { media, .. } = i
+                            && let Some(k) = self.media.get(media.as_str())
+                        {
+                            *media = k.clone();
+                        }
+                    }
+                }
+            }
+            InlineObject::Group { children, .. } if depth < MAX_BOX_DEPTH => children.iter_mut().for_each(|c| self.object(&mut c.obj, depth + 1)),
+            InlineObject::NoteRef { id, .. } => map(self.notes, id),
+            InlineObject::CommentStart { id } | InlineObject::CommentEnd { id } => map(self.comments, id),
+            InlineObject::PermStart { id, .. } | InlineObject::PermEnd { id } => *id = id.saturating_add(self.perms),
+            _ => {}
+        }
+        for story in o.text_box_slots() {
+            if story.is_some_and(|id| !self.boxes.contains_key(&id)) {
+                *story = None;
+            }
+        }
+    }
+}
+
 fn box_ids(p: &Paragraph) -> impl Iterator<Item = u32> + '_ {
     p.objects.iter().flat_map(InlineObject::text_boxes)
 }
@@ -864,6 +964,113 @@ impl Document {
         let blocks: Vec<Block> = self.body.iter().map(|b| (**b).clone()).collect();
         let parts = self.text_box_parts(&blocks);
         Fragment { blocks, parts }
+    }
+
+    /// Another document's body as a fragment of this one, to insert: the media, lists, styles,
+    /// notes, comments and tracked changes it refers to come along (lists, notes, comments and
+    /// revisions renumbered so they can't collide with ours; a style we already have by id stays
+    /// ours), and its text boxes ride in [`Fragment::parts`].
+    pub fn adopt(&mut self, src: Document) -> Fragment {
+        self.adopt_in(src, &mut 0)
+    }
+
+    /// [`Self::adopt`], its permission range ids from at least `perms` on (and past ours);
+    /// `perms` moves past them.
+    fn adopt_in(&mut self, src: Document, perms: &mut u32) -> Fragment {
+        let mut media = BTreeMap::new();
+        for (key, data) in &src.media {
+            let ext = key.rsplit_once('.').map(|(_, e)| e).unwrap_or("png");
+            media.insert(key.clone(), self.add_media(data.to_vec(), ext));
+        }
+        let next_abs = self.numbering.abstracts.iter().map(|a| a.id.saturating_add(1)).max().unwrap_or(0);
+        let mut abs_map = BTreeMap::new();
+        for (i, a) in src.numbering.abstracts.iter().enumerate() {
+            let id = next_abs.saturating_add(i as u32);
+            abs_map.insert(a.id, id);
+            self.numbering.abstracts.push(crate::numbering::AbstractNum { id, ..a.clone() });
+        }
+        let next_num = self.numbering.nums.iter().map(|n| n.id.saturating_add(1)).max().unwrap_or(1).max(1);
+        let mut nums = BTreeMap::new();
+        for (i, n) in src.numbering.nums.iter().enumerate() {
+            let id = next_num.saturating_add(i as u32);
+            nums.insert(n.id, id);
+            let abstract_id = abs_map.get(&n.abstract_id).copied().unwrap_or(n.abstract_id);
+            self.numbering.nums.push(crate::numbering::Num { id, abstract_id, ..n.clone() });
+        }
+        let renumber = |n: &mut Option<crate::props::NumRef>| {
+            if let Some(n) = n.as_mut()
+                && n.num != 0
+            {
+                n.num = nums.get(&n.num).copied().unwrap_or(0);
+            }
+        };
+        for st in &src.styles.styles {
+            if self.styles.get(&st.id).is_none() {
+                let mut st = st.clone();
+                // Our defaults stay ours.
+                st.default = false;
+                renumber(&mut st.para.numbering);
+                self.styles.upsert(st);
+            }
+        }
+        let rev = u32::try_from(self.revisions.len()).unwrap_or(u32::MAX);
+        self.revisions.extend(src.revisions.iter().cloned());
+        // Notes and comments get stories (and comments ids) of their own here; their text is
+        // relinked below, once every new id is known.
+        let mut notes = BTreeMap::new();
+        for (id, part) in src.parts.iter().filter(|(_, p)| matches!(p.kind, PartKind::Footnote | PartKind::Endnote)) {
+            notes.insert(*id, self.add_part(part.kind, Vec::new()));
+        }
+        let mut comments = BTreeMap::new();
+        let mut next_comment = self.comments.keys().next_back().map_or(0, |k| k.saturating_add(1));
+        for (id, c) in &src.comments {
+            if src.parts.get(&c.part).is_some_and(|p| p.kind == PartKind::Comment) {
+                notes.insert(c.part, self.add_part(PartKind::Comment, Vec::new()));
+                comments.insert(*id, next_comment);
+                next_comment = next_comment.saturating_add(1);
+            }
+        }
+        let boxes: BTreeMap<u32, Part> = src.parts.iter().filter(|(_, p)| p.kind == PartKind::TextBox).map(|(k, p)| (*k, p.clone())).collect();
+        // Its permission ranges are numbered after ours, so no end of theirs closes one of ours.
+        let first_perm = perm_end(self.body.iter().chain(self.parts.values().flat_map(|p| p.blocks.iter()))).max(*perms);
+        *perms = first_perm.saturating_add(perm_end(src.body.iter().chain(src.parts.values().flat_map(|p| p.blocks.iter()))));
+        let link = Relink { media: &media, nums: &nums, notes: &notes, comments: &comments, boxes: &boxes, perms: first_perm, rev };
+        let mut parts = boxes.clone();
+        for part in parts.values_mut() {
+            part.blocks.iter_mut().for_each(|b| link.block(Arc::make_mut(b)));
+        }
+        // A note's or comment's text boxes get stories here now; the body's go with the fragment.
+        let mut budget = BoxBudget::new();
+        for (old, new) in &notes {
+            let Some(part) = src.parts.get(old) else { continue };
+            let mut blocks: Vec<Block> = part.blocks.iter().map(|b| (**b).clone()).collect();
+            blocks.iter_mut().for_each(|b| link.block(b));
+            self.adopt_text_boxes(&mut blocks, &parts, 0, &mut budget);
+            if let Some(p) = self.parts.get_mut(new) {
+                p.blocks = blocks.into_iter().map(Arc::new).collect();
+            }
+        }
+        for (id, c) in &src.comments {
+            if let (Some(new), Some(part)) = (comments.get(id), notes.get(&c.part)) {
+                let parent = c.parent.and_then(|p| comments.get(&p).copied());
+                // Its durable id is unique in its own document only: the writer gives the copy one.
+                self.comments.insert(*new, crate::Comment { parent, part: *part, durable_id: None, ..c.clone() });
+            }
+        }
+        let mut blocks: Vec<Block> = src.body.iter().map(|b| (**b).clone()).collect();
+        blocks.iter_mut().for_each(|b| link.block(b));
+        Fragment { blocks, parts }
+    }
+
+    /// [`Self::adopt`] as blocks to place in a story directly (a reader building one): its text
+    /// boxes already have stories of their own here. `perms` is the first permission range id the
+    /// reader hasn't given out (ranges it holds aren't in this document yet); it moves past the
+    /// adopted ones.
+    pub fn adopt_blocks(&mut self, src: Document, perms: &mut u32) -> Vec<Block> {
+        let Fragment { mut blocks, parts } = self.adopt_in(src, perms);
+        let mut budget = BoxBudget::new();
+        self.adopt_text_boxes(&mut blocks, &parts, 0, &mut budget);
+        blocks
     }
 
     /// Copies of the text box stories shapes in `blocks` show, nested boxes included.
