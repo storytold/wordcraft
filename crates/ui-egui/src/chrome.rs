@@ -331,7 +331,7 @@ pub fn window_frame(app: &WordApp, ctx: &egui::Context) {
     ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("wc_window_border"))).rect_stroke(
         screen,
         0.0,
-        Stroke::new(1.0, t.border_strong),
+        Stroke::new(1.0, t.border),
         egui::StrokeKind::Inside,
     );
     let Some(pos) = ctx.input(|i| i.pointer.latest_pos()) else { return };
