@@ -50,6 +50,7 @@ pub fn open_filters(purpose: &str) -> &'static [(&'static str, &'static [&'stati
         "picture" => &[("Pictures", PICTURES)],
         "font" => &[("Fonts", wordcraft_fonts::FONT_FILE_EXTS)],
         "sources" => &[("Word sources", &["xml"]), ("All files", &["*"])],
+        "addin" => &[("Add-in manifest", &["json"])],
         "recipients" => &[("Recipient lists", wordcraft_engine::cmd::mailings::RECIPIENT_EXTENSIONS), ("All files", &["*"])],
         _ => &[("Documents", DOCUMENTS), ("Word document", &["docx"]), ("All files", &["*"])],
     }
@@ -75,6 +76,8 @@ pub(crate) enum AfterPick {
     /// document through Manage Sources (#2640).
     #[cfg(not(target_arch = "wasm32"))]
     Sources,
+    /// Load the add-in whose `plugin.json` was picked (File › Options › Add-ins).
+    AddIn,
     /// Hand the picked path to the open dialog (`WordApp::dialog_pick`): Templates and Add-ins,
     /// Organizer (#377).
     ForDialog,
@@ -274,6 +277,12 @@ impl WordApp {
                     };
                     self.status(msg);
                 }
+                r
+            }
+            AfterPick::AddIn => {
+                let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                let r = self.run("plugins.load", json!({"path": path}));
+                self.plugin_install.outcome = Some(r.clone().map(|info| crate::plugin_ui::loaded_message(&info)));
                 r
             }
             AfterPick::ForDialog => {
@@ -479,6 +488,11 @@ impl WordApp {
         } else {
             self.status(tl!("All system fonts are already available."));
         }
+    }
+
+    /// Pick an add-in's `plugin.json` to load (the desktop app; the web can't run add-ins).
+    pub(crate) fn pick_addin(&mut self) {
+        let _ = self.ask_file(FileDialogRequest::Open { purpose: "addin".into() }, AfterPick::AddIn);
     }
 }
 

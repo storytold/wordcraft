@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use crate::{CmdError, CmdResult, CommandSpec, Prefs, Session, p};
 
 /// Options panes, in the order the page lists them (the `pane` param of `file.options`).
-pub const PANES: [&str; 8] = ["general", "display", "proofing", "save", "language", "accessibility", "advanced", "agents"];
+pub const PANES: [&str; 9] = ["general", "display", "proofing", "save", "language", "accessibility", "advanced", "addins", "agents"];
 
 /// Longest initials kept, in characters.
 pub const MAX_INITIALS_CHARS: usize = 9;

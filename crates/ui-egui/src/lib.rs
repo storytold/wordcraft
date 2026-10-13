@@ -59,6 +59,7 @@ pub mod objects;
 pub mod options;
 pub mod panes;
 pub mod paste_picture;
+pub mod plugin_ui;
 pub mod previews;
 pub mod print_page;
 pub mod printing;
@@ -494,6 +495,8 @@ pub struct WordApp {
     /// A file picked for the open dialog (Templates and Add-ins › Attach…, Organizer ›
     /// Browse…); the dialog takes it on its next frame.
     pub(crate) dialog_pick: Option<String>,
+    /// Installing an add-in from GitHub (File › Options › Add-ins, Insert › Add-ins).
+    pub plugin_install: plugin_ui::Install,
     /// macOS: the window has no title bar; leave room for the traffic lights.
     pub integrated_titlebar: bool,
     /// macOS: the title bar's height and where its content starts, around the traffic lights.

@@ -204,6 +204,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::NoteOptions { .. } => "Footnote and Endnote",
         Dialog::Templates { .. } => "Templates and Add-ins",
         Dialog::Organizer { .. } => "Organizer",
+        Dialog::AddIns => "Add-ins",
         Dialog::CustomProperties { .. } => "Custom Document Properties",
         Dialog::Layout(d) => d.title(),
     };

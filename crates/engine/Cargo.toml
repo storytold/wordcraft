@@ -23,6 +23,7 @@ wordcraft-render = { workspace = true }
 wordcraft-proof = { workspace = true }
 wordcraft-docx = { workspace = true }
 wordcraft-docbin = { workspace = true }
+wordcraft-plugin = { workspace = true }
 wordcraft-pdf = { workspace = true }
 wordcraft-formats = { workspace = true }
 serde = { workspace = true }
@@ -55,3 +56,8 @@ libc = { workspace = true }
 encoding_rs = { workspace = true }
 zip = { workspace = true }
 cfb = { workspace = true }
+
+# Runs without libtest: the test binary doubles as the plugin process it starts.
+[[test]]
+name = "plugins"
+harness = false

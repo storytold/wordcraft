@@ -1,6 +1,6 @@
 //! WordCraft desktop app.
 //!
-//! Usage: `wordcraft [--control <port>] [--sample] [files…]`; `--help` prints `USAGE`.
+//! Usage: `wordcraft [--control <port>] [--sample] [--plugin <dir>…] [files…]`; `--help` prints `USAGE`.
 //!
 //! `--control <port>` (or `WORDCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server:
 //! `{"id":1,"key":"…","method":"engine.execute","params":{"command":"text.insert","params":{"text":"Hi"}}}`.
@@ -253,6 +253,25 @@ fn load_user_fonts() {
     }
 }
 
+/// Add-ins: those named with `--plugin`, in `WORDCRAFT_PLUGIN_PATH` and in `plugins` in
+/// the settings folder, where File › Options › Add-ins installs them too. The ones the user
+/// turned off stay off. Runs without preferences don't read the settings folder's.
+fn load_plugins(app: &WordApp, extra: &[std::path::PathBuf]) {
+    let mut dirs = extra.to_vec();
+    if prefs_enabled()
+        && let Some(dir) = wordcraft_control_key::settings_dir().map(|d| d.join("plugins"))
+    {
+        wordcraft_plugin::install::set_install_dir(Some(dir.clone()));
+        dirs.push(dir);
+    }
+    for (dir, r) in wordcraft_plugin::autoload(&dirs) {
+        if let Err(e) = r {
+            log::warn!("add-in {}: {e}", dir.display());
+        }
+    }
+    wordcraft_engine::cmd::plugins::apply_prefs(&app.session.prefs);
+}
+
 /// The saved window geometry, read before the window opens (`load_prefs` runs after).
 fn saved_window() -> Option<WindowGeometry> {
     if !prefs_enabled() {
@@ -332,12 +351,13 @@ const USAGE: &str = "\
 wordcraft — the WordCraft desktop app
 
 USAGE:
-  wordcraft [--sample] [--control PORT] [FILE…]
+  wordcraft [--sample] [--control PORT] [--plugin DIR…] [FILE…]
 
 OPTIONS:
   --sample            open the sample document
   --control PORT      start the localhost control server on PORT, for agents and scripts
                       (or set WORDCRAFT_CONTROL_PORT); see docs/control-protocol.md
+  --plugin DIR        load the add-in(s) in DIR (repeatable; or WORDCRAFT_PLUGIN_PATH)
   --version           print the version
   -h, --help          print this help
 ";
@@ -418,6 +438,7 @@ fn main() -> eframe::Result {
     let mut control_port: Option<u16> = std::env::var("WORDCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok());
     let mut files = Vec::new();
     let mut sample = false;
+    let mut plugin_dirs: Vec<std::path::PathBuf> = Vec::new();
     let (args, other_files) = text_args();
     // Only macOS (Finder / LaunchServices) adds these; elsewhere `-NS…` could be a real file name.
     let args = if cfg!(target_os = "macos") { without_launch_args(args) } else { args };
@@ -433,6 +454,7 @@ fn main() -> eframe::Result {
                     None => bad_control = Some(port),
                 }
             }
+            "--plugin" => plugin_dirs.extend(args.next().map(std::path::PathBuf::from)),
             "--sample" => sample = true,
             "--version" => {
                 println!("wordcraft {} ({})", env!("CARGO_PKG_VERSION"), build_sha());
@@ -528,6 +550,7 @@ fn main() -> eframe::Result {
             app.set_startup_update_check(true);
             load_prefs(&mut app);
             load_user_dictionary(&mut app);
+            load_plugins(&app, &plugin_dirs);
             // Language packs from the suite's font store; an Install click is the person's own.
             wordcraft_engine::packs::use_font_store(true);
             // A region chosen in File › Options replaces the system's for the first blank

@@ -59,6 +59,8 @@ pub struct Prefs {
     /// in Word). A damaged saved value reads as the defaults.
     #[serde(deserialize_with = "crate::cmd::tools::lenient_autocorrect")]
     pub autocorrect: crate::cmd::tools::AutoCorrectPrefs,
+    /// Add-ins the user turned off (File › Options › Add-ins): listed, but not run.
+    pub disabled_plugins: Vec<String>,
 }
 
 impl Default for Prefs {
@@ -84,6 +86,7 @@ impl Default for Prefs {
             detect_language: true,
             default_language: None,
             autocorrect: Default::default(),
+            disabled_plugins: Vec::new(),
         }
     }
 }

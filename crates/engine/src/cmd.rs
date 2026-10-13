@@ -33,6 +33,7 @@ pub mod page;
 pub mod para;
 pub mod paste;
 pub mod phonetic;
+pub mod plugins;
 pub mod protect;
 pub mod references;
 pub mod review;
@@ -106,6 +107,7 @@ pub fn registry() -> Registry {
     v.extend(protect::specs());
     v.extend(speech::specs());
     v.extend(controls::specs());
+    v.extend(plugins::specs());
     Registry::new(v)
 }
 

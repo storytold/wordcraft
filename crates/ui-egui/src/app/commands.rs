@@ -436,6 +436,10 @@ impl WordApp {
         if req.get("toggle").and_then(Value::as_str) == Some("interfaceTheme") {
             self.ui.theme = if self.ui_is_dark() { theme::Appearance::Light } else { theme::Appearance::Dark };
         }
+        // An add-in's web page (`plugins.openHomepage`); only web links get this far.
+        if let Some(url) = req.get("openUrl").and_then(Value::as_str) {
+            self.canvas.open_url = Some(url.to_string());
+        }
         if let Some(what) = req.get("open").and_then(Value::as_str) {
             match what {
                 "openFile" => self.open_dialog(),

@@ -206,6 +206,9 @@ pub(super) fn context_menu(app: &mut WordApp, ui: &mut Ui) {
         }
         item(ui, app, "Table Properties…", "table.properties", json!({}));
     }
+    // Add-ins' items, last.
+    let in_table = app.session.sel.focus.path.cell().is_some();
+    crate::plugin_ui::context_menu_items(app, ui, in_table, picture || object);
 }
 
 /// What of a table the selection is: Word's context menu offers different table items for each.
