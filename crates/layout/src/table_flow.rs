@@ -249,6 +249,11 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
                 }
             }
             fresh = true;
+            // The whole row moved on: a merged cell's text running on into it starts at the
+            // cell's top margin.
+            if rest.is_none() {
+                rest = table::at_page_top(row);
+            }
         }
         let last = rest.as_ref().unwrap_or(row);
         place(pb, last);
