@@ -121,6 +121,9 @@ pub(super) fn review(app: &mut WordApp, ui: &mut Ui) {
 
 /// Developer › Controls: content controls.
 pub(super) fn developer(app: &mut WordApp, ui: &mut Ui) {
+    group(ui, "Add-ins", None, app, |ui, app| {
+        big(ui, app, "addins", "Add-ins", "ui.dialog", json!({"name": "addIns"}), false);
+    });
     let design = app.session.view.design_mode;
     group(ui, "Controls", None, app, |ui, app| {
         let rows: [[(&str, &str, &str); 3]; 3] = [

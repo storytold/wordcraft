@@ -1,0 +1,209 @@
+//! Add-ins (Insert › Add-ins, File › Options › Add-ins): load, install and unload out-of-process
+//! plugins, turn them off and on, and run their commands (see `wordcraft_plugin`).
+//!
+//! A plugin command answers with engine commands; [`run`] executes them as one undoable step,
+//! and if one fails the document goes back to how it was. While automation is confined to
+//! folders (`wordcraft-cli mcp --automation-read-root …`), plugins can't be loaded, installed or
+//! turned on: a plugin is a program, and would reach past the roots.
+
+use serde_json::{Value, json};
+
+use crate::{CmdError, CmdResult, CommandSpec, Session, p};
+
+/// Longest selection or paragraph text a plugin command receives, in characters.
+const MAX_CONTEXT_CHARS: usize = 100_000;
+
+pub fn specs() -> Vec<CommandSpec> {
+    const LOC: &str = "File › Options › Add-ins";
+    vec![
+        CommandSpec::new("addins.get", "Get Add-ins", "Insert › Add-ins", |_, _| Ok(list()))
+            .params("{} → the loaded add-ins: [{id, name, version, status, enabled, commands, ui…}]")
+            .pure(),
+        CommandSpec::new("plugins.list", "Add-ins", LOC, |_, _| Ok(list()))
+            .params("{} → [{id, name, version, description, author, homepage, dir, status, enabled, commands, ui}]")
+            .pure(),
+        CommandSpec::new("plugins.load", "Load Add-in", LOC, load).params("{path} → the add-in. `path`: a folder holding plugin.json, or the manifest").pure(),
+        CommandSpec::new("plugins.install", "Install Add-in from GitHub", LOC, install)
+            .params(
+                "{url, dir?} → the add-in. Downloads the plugin in a GitHub repository (the release zip for this platform, else its source) into `dir` (default: the app's plugins folder) and loads it",
+            )
+            .pure(),
+        CommandSpec::new("plugins.unload", "Unload Add-in", LOC, unload).params("{id} → {unloaded}. Until the next start").pure(),
+        CommandSpec::new("plugins.setEnabled", "Turn Add-in On or Off", LOC, set_enabled)
+            .params("{id, enabled} → the add-in. Off, it stays listed but its commands, ribbon and menu items are gone; remembered in the preferences")
+            .pure(),
+        CommandSpec::new("plugins.openHomepage", "Add-in Documentation", LOC, open_homepage)
+            .params("{id} → {url}. Opens the add-in's web page (its manifest's `homepage`) in the browser")
+            .pure(),
+        CommandSpec::new("plugins.run", "Run Add-in Command", "Insert › Add-ins", run)
+            .params("{plugin, command, params?} → {ran, message?, result?}. The add-in's commands run as one undoable step"),
+    ]
+}
+
+fn bad(msg: impl Into<String>) -> CmdError {
+    CmdError::Params(msg.into())
+}
+
+/// `addins.get` and `plugins.list`.
+pub fn list() -> Value {
+    Value::Array(wordcraft_plugin::list().iter().map(|p| p.info()).collect())
+}
+
+/// Plugins are programs: an agent confined to folders can't start new ones.
+fn check_unconfined(what: &str) -> Result<(), CmdError> {
+    if crate::file_access::current().is_some() {
+        return Err(CmdError::Disabled(format!("{what}: add-ins can't be loaded while automation is confined to folders")));
+    }
+    Ok(())
+}
+
+fn load(s: &mut Session, v: &Value) -> CmdResult {
+    check_unconfined("plugins.load")?;
+    let path = p::str(v, "path").filter(|x| !x.trim().is_empty()).ok_or_else(|| bad("`path` (string) is required"))?;
+    load_from(s, std::path::Path::new(path))
+}
+
+fn install(s: &mut Session, v: &Value) -> CmdResult {
+    check_unconfined("plugins.install")?;
+    let url = p::str(v, "url").filter(|x| !x.trim().is_empty()).ok_or_else(|| bad("`url` (string) is required"))?;
+    let root = match p::str(v, "dir").filter(|x| !x.trim().is_empty()) {
+        Some(d) => std::path::PathBuf::from(d),
+        None => wordcraft_plugin::install::install_dir().ok_or_else(|| bad("there's no plugins folder: pass `dir`"))?,
+    };
+    let dir = wordcraft_plugin::install::from_github(url, &root).map_err(CmdError::Failed)?;
+    load_from(s, &dir)
+}
+
+/// Loads the plugin in `path` (a folder or its manifest); one the preferences list as off stays off.
+pub fn load_from(s: &mut Session, path: &std::path::Path) -> CmdResult {
+    let plugin = wordcraft_plugin::load(path).map_err(CmdError::Failed)?;
+    if s.prefs.disabled_plugins.contains(&plugin.manifest.id) {
+        let _ = wordcraft_plugin::set_enabled(&plugin.manifest.id, false);
+    }
+    Ok(plugin.info())
+}
+
+fn unload(_: &mut Session, v: &Value) -> CmdResult {
+    let id = p::req_str(v, "id")?;
+    if !wordcraft_plugin::unload(id) {
+        return Err(bad(format!("no add-in `{id}` is loaded")));
+    }
+    Ok(json!({"unloaded": id}))
+}
+
+fn set_enabled(s: &mut Session, v: &Value) -> CmdResult {
+    let id = p::req_str(v, "id")?;
+    let on = p::bool(v, "enabled").ok_or_else(|| bad("`enabled` (true or false) is required"))?;
+    if on {
+        check_unconfined("plugins.setEnabled")?;
+    }
+    let plugin = wordcraft_plugin::get(id).ok_or_else(|| bad(format!("no add-in `{id}` is loaded")))?;
+    wordcraft_plugin::set_enabled(id, on).map_err(CmdError::Failed)?;
+    s.prefs.disabled_plugins.retain(|x| x != id);
+    if !on {
+        s.prefs.disabled_plugins.push(id.to_string());
+    }
+    Ok(plugin.info())
+}
+
+fn open_homepage(s: &mut Session, v: &Value) -> CmdResult {
+    let id = p::req_str(v, "id")?;
+    let plugin = wordcraft_plugin::get(id).ok_or_else(|| bad(format!("no add-in `{id}` is loaded")))?;
+    let url = plugin.manifest.homepage.trim();
+    if url.is_empty() {
+        return Err(CmdError::Failed(format!("add-in {id} has no web page")));
+    }
+    s.ui_requests.push(json!({"openUrl": url}));
+    Ok(json!({"url": url}))
+}
+
+/// Turns off the loaded plugins the preferences list as off (at startup, after loading them).
+pub fn apply_prefs(prefs: &crate::Prefs) {
+    for id in &prefs.disabled_plugins {
+        if wordcraft_plugin::get(id).is_some()
+            && let Err(e) = wordcraft_plugin::set_enabled(id, false)
+        {
+            log::warn!("add-in {id}: {e}");
+        }
+    }
+}
+
+/// At most `max` characters of `text`.
+fn capped(text: &str, max: usize) -> (String, bool) {
+    match text.char_indices().nth(max) {
+        Some((i, _)) => (text.get(..i).unwrap_or("").to_string(), true),
+        None => (text.to_string(), false),
+    }
+}
+
+/// What a plugin command sees of the document: its name, the selection (its text and ends) and
+/// the paragraph the caret is in. Texts are cut at 100,000 characters (`truncated`).
+fn context(s: &Session) -> Value {
+    let (a, b) = s.sel.ordered();
+    let (sel_text, sel_cut) = capped(&s.selected_text(), MAX_CONTEXT_CHARS);
+    // Pictures, fields and other objects sit in the text as one placeholder character each.
+    let para = s.doc.para_at(&s.sel.focus).map(|p| p.text.replace(wordcraft_doc::para::OBJ, "")).unwrap_or_default();
+    let (para_text, para_cut) = capped(&para, MAX_CONTEXT_CHARS);
+    let name = s.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string());
+    json!({
+        "document": {
+            "name": name,
+            "path": s.path.as_ref().map(|p| p.display().to_string()),
+            "title": s.doc.core.title,
+            "words": s.word_count(),
+        },
+        "selection": {
+            "text": sel_text,
+            "empty": a == b,
+            "truncated": sel_cut,
+            "anchor": super::pos_json(&s.sel.anchor),
+            "focus": super::pos_json(&s.sel.focus),
+            "inTable": s.sel.focus.path.cell().is_some(),
+        },
+        "paragraph": {"text": para_text, "truncated": para_cut},
+    })
+}
+
+/// Commands a plugin's reply can't run: managing plugins, and undo history (the reply is one
+/// step of it).
+fn refused(id: &str) -> bool {
+    id.starts_with("plugins.") || matches!(id, "edit.undo" | "edit.undoTo" | "edit.redo" | "edit.repeat" | "tools.macros" | "tools.recordMacro")
+}
+
+fn run(s: &mut Session, v: &Value) -> CmdResult {
+    let plugin = p::req_str(v, "plugin")?;
+    let command = p::req_str(v, "command")?;
+    let params = v.get("params").cloned().filter(|x| !x.is_null()).unwrap_or_else(|| json!({}));
+    let reply = wordcraft_plugin::run_command(plugin, command, params, context(s)).map_err(CmdError::Failed)?;
+    if let Some((id, _)) = reply.commands.iter().find(|(id, _)| refused(id)) {
+        return Err(CmdError::Failed(format!("an add-in command can't run `{id}`")));
+    }
+    // `Session::run` made this command's undo step and restores the document if it fails. The
+    // reply's commands join that step, and aren't recorded in a macro or Repeat on their own (this
+    // command is).
+    let recording = s.recording.take();
+    let last = s.last_command.clone();
+    let mut failure = None;
+    for (id, params) in &reply.commands {
+        s.join_next_undo();
+        let params = if params.is_null() { json!({}) } else { params.clone() };
+        if let Err(e) = s.run(id, &params) {
+            failure = Some(format!("{id}: {e}"));
+            break;
+        }
+    }
+    s.recording = recording;
+    s.last_command = last;
+    if let Some(why) = failure {
+        return Err(CmdError::Failed(format!("{plugin} › {command} failed, nothing was changed: {why}")));
+    }
+    let mut out = json!({"ran": reply.commands.len()});
+    if let Some(m) = reply.message {
+        s.status = m.clone();
+        out["message"] = json!(m);
+    }
+    if !reply.result.is_null() {
+        out["result"] = reply.result;
+    }
+    Ok(out)
+}

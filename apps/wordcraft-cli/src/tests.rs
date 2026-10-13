@@ -15,6 +15,16 @@ fn peer_text_stays_on_one_visible_line() {
 }
 
 #[test]
+fn plugin_folders_are_taken_out_of_the_arguments() {
+    let os = |v: &[&str]| v.iter().map(OsString::from).collect::<Vec<_>>();
+    let (left, dirs) = take_plugins(os(&["--plugin", "a", "run", "--plugin=b", "--cmd", "x"])).unwrap();
+    assert_eq!(left, os(&["run", "--cmd", "x"]));
+    assert_eq!(dirs, vec![PathBuf::from("a"), "b".into()]);
+    assert!(take_plugins(os(&["run", "--plugin"])).is_err());
+    assert!(take_plugins(os(&["--plugin", "--cmd"])).is_err());
+}
+
+#[test]
 fn validators_accept_only_the_documented_options() {
     assert!(validate_options("info", &args(&["file.docx"]), PASSWORD_OPTIONS).is_ok());
     assert!(validate_options("render", &args(&["in.docx", "out.png", "--page", "2", "--scale", "1.5"]), RENDER_OPTIONS).is_ok());

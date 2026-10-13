@@ -165,6 +165,7 @@ impl WordApp {
             printing: _,
             print_feedback_seen: _,
             font_generation: _,
+            plugin_install: _,
             integrated_titlebar: _,
             mac_titlebar: _,
             control_rx: _,

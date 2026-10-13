@@ -57,6 +57,12 @@ pub(super) fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         Dialog::NoteOptions { form } => crate::dialogs_notes::note_options(app, ui, form),
         Dialog::Templates { form } => crate::dialogs_templates::templates(app, ui, form),
         Dialog::Organizer { form } => crate::dialogs_templates::organizer(app, ui, form),
+        Dialog::AddIns => {
+            ui.set_width(720.0);
+            egui::ScrollArea::vertical().max_height(520.0).show(ui, |ui| crate::plugin_ui::page(app, ui, true));
+            ui.add_space(8.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.button(tl!("Close")).clicked()).inner
+        }
         Dialog::CustomProperties(form) => custom_properties(app, ui, form),
         Dialog::Layout(d) => crate::dialogs_layout::body(app, ui, d),
         Dialog::FindRecipient { .. } => find_recipient_dialog(app, ui, d),

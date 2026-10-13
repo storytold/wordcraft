@@ -104,6 +104,7 @@ impl WordApp {
             clipboard_published: false,
             printing: Default::default(),
             print_feedback_seen: None,
+            plugin_install: Default::default(),
             integrated_titlebar: false,
             mac_titlebar: chrome::MacTitleBar::default(),
             updates_rt: updates_ui::Runtime::default(),
@@ -260,6 +261,7 @@ impl WordApp {
         }
         options::sync(self);
         self.settle_async_saves();
+        crate::plugin_ui::poll_install(self, ctx);
         // Chinese text wants the Chinese face before the Japanese one (one glyph style per line).
         // An installed CJK font is read only once CJK text is shown (#241): a CJK interface, the
         // language names in Options, or a file name the caption is drawing. A file opened later
