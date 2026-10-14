@@ -147,6 +147,20 @@ impl Flavor {
     pub fn macros(self) -> bool {
         matches!(self, Flavor::MacroDocument | Flavor::MacroTemplate)
     }
+
+    /// The macro-enabled flavour of the same kind (a document stays a document, a template a
+    /// template), and its extension.
+    pub fn with_macros(self) -> (Flavor, &'static str) {
+        match self {
+            Flavor::Document | Flavor::MacroDocument => (Flavor::MacroDocument, "docm"),
+            Flavor::Template | Flavor::MacroTemplate => (Flavor::MacroTemplate, "dotm"),
+        }
+    }
+}
+
+/// Whether the document holds a macro project (kept from the file it was read from).
+pub fn has_macros(doc: &wordcraft_doc::Document) -> bool {
+    doc.passthrough.get(package::VBA_PROJECT_PART).is_some_and(|b| !b.is_empty())
 }
 
 /// Errors from reading or writing a DOCX package.
