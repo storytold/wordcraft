@@ -24,6 +24,8 @@
 
 pub mod imposition;
 
+pub mod import;
+
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU16;
 use std::sync::Arc;
