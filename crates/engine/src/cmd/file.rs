@@ -414,6 +414,10 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
         s.clear_recovery_before_password()?;
         s.password = Some(crate::io::Password::new(pw));
     }
+    // Macros need a macro-enabled format: Notes.docx is saved as Notes.docm (the .docx is left alone).
+    let asked = path.clone();
+    let path = crate::io::macro_enabled_path(&s.doc, &asked).unwrap_or(path);
+    let renamed = (path != asked).then(|| asked.to_string_lossy().into_owned());
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     let mut opts = export_options(s, v);
     match v.get("format").filter(|f| !f.is_null()) {
@@ -460,7 +464,12 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
         // What the file holds now.
         s.md_file = super::md_source::FileText::saved(exact.filter(|_| super::md_source::is_markdown_file(&path)));
     }
-    Ok(json!({"saved": true, "path": path.to_string_lossy(), "encrypted": encrypted, "rewritten": rewritten}))
+    if renamed.is_some() {
+        let ext = asked.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+        s.push_ui_request(json!({"status": format!("This document has macros, which a .{ext} file can't hold, so it was saved as {name}.")}));
+    }
+    Ok(json!({"saved": true, "path": path.to_string_lossy(), "encrypted": encrypted, "rewritten": rewritten, "renamedFrom": renamed}))
 }
 
 /// Does `path` hold a Word 2003 XML Document already (so a plain save keeps that format)?

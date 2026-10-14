@@ -47,6 +47,20 @@ fn ext_of(name: &str) -> String {
     file.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase()).unwrap_or_default()
 }
 
+/// Where a document with macros goes instead of `path`: a .docx can't hold them, so it becomes a
+/// .docm (a .dotx template, a .dotm), Word's macro-enabled formats. `None` when `path` is fine.
+pub fn macro_enabled_path(doc: &wordcraft_doc::Document, path: &std::path::Path) -> Option<std::path::PathBuf> {
+    if !wordcraft_docx::has_macros(doc) {
+        return None;
+    }
+    let ext = path.extension().and_then(|e| e.to_str())?;
+    let flavor = wordcraft_docx::Flavor::from_ext(ext).filter(|f| !f.macros())?;
+    let to = flavor.with_macros().1;
+    // The same case as the name had (NOTES.DOCX → NOTES.DOCM).
+    let to = if ext.chars().all(|c| c.is_ascii_uppercase()) { to.to_ascii_uppercase() } else { to.to_string() };
+    Some(path.with_extension(to))
+}
+
 /// Is `ext` one of Word's package formats (.docx/.docm/.dotx/.dotm), which save without loss?
 pub fn is_word_package(ext: &str) -> bool {
     wordcraft_docx::Flavor::from_ext(ext).is_some()

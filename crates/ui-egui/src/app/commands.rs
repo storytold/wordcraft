@@ -493,6 +493,10 @@ impl WordApp {
             self.quit_requested = true;
         }
         crate::windows::arrange::request(self, req);
+        // A word from a command for the status bar (Save turning a .docx with macros into a .docm).
+        if let Some(text) = req.get("status").and_then(Value::as_str) {
+            self.status(text.to_string());
+        }
     }
 
     /// A request made for document `document`, which isn't shown and which no other window
