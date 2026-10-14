@@ -173,31 +173,49 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         // tabs took clicks that did nothing, so the empty window had no way back to
                         // the Start screen (#3045).
                         ui.add_enabled_ui(app.has_document(), |ui| {
-                            let (share_size, share_text) =
-                                if plan.buttons < 2 { (((share_w + 36.0).max(74.0), 24.0), true) } else { ((30.0, 24.0), false) };
-                            let (r, resp) = ui.allocate_exact_size(vec2(share_size.0, share_size.1), Sense::click());
-                            ui.painter().rect_filled(r, 4.0, if resp.hovered() { t.accent_text } else { t.accent });
-                            let rtl = crate::rtl::on();
-                            let icon_x = if share_text { crate::rtl::lead_x(rtl, r, 14.0) } else { r.center().x };
-                            icons::paint(
-                                ui.painter(),
-                                Rect::from_center_size(pos2(icon_x, r.center().y), vec2(14.0, 14.0)),
-                                "share",
-                                t.on_accent,
-                                t.on_accent,
-                            );
-                            if share_text {
-                                ui.painter().text(
-                                    pos2(crate::rtl::lead_x(rtl, r, 26.0), r.center().y),
-                                    crate::rtl::lead_center(rtl),
-                                    share,
-                                    medium(12.0),
+                            // Who is signed in and who else is here, at the far right, where every office
+                            // suite puts them. Drawn first because this layout runs right to left.
+                            crate::cloud::who(app, ui);
+                            // Share, Editing mode, Comments.
+                            //
+                            // Share means share when there is somewhere to share to. The dialog itself
+                            // lives in craft-ui, so every Craft app offers the same one. Without a service
+                            // that reports sharing this falls back to the export menu the button used to
+                            // be, rather than offering a share that would fail.
+                            if crate::cloud::shares(app) {
+                                ui.add_space(6.0);
+                                // A split button, drawn by craft-ui so every Craft app offers the same
+                                // one. Only the Save a Copy formats under it are WordCraft's own.
+                                if let Some(fmt) = crate::cloud::share_button(app, ui, &crate::cloud::copies()) {
+                                    app.export_dialog(&fmt);
+                                }
+                            } else {
+                                let (share_size, share_text) =
+                                    if plan.buttons < 2 { (((share_w + 36.0).max(74.0), 24.0), true) } else { ((30.0, 24.0), false) };
+                                let (r, resp) = ui.allocate_exact_size(vec2(share_size.0, share_size.1), Sense::click());
+                                ui.painter().rect_filled(r, 4.0, if resp.hovered() { t.accent_text } else { t.accent });
+                                let rtl = crate::rtl::on();
+                                let icon_x = if share_text { crate::rtl::lead_x(rtl, r, 14.0) } else { r.center().x };
+                                icons::paint(
+                                    ui.painter(),
+                                    Rect::from_center_size(pos2(icon_x, r.center().y), vec2(14.0, 14.0)),
+                                    "share",
+                                    t.on_accent,
                                     t.on_accent,
                                 );
-                            }
-                            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, share));
-                            if resp.on_hover_text(tl!("Export a copy to share (PDF, Word document)")).clicked() {
-                                let _ = app.run("ui.backstage", json!({"value": true, "page": "export"}));
+                                if share_text {
+                                    ui.painter().text(
+                                        pos2(crate::rtl::lead_x(rtl, r, 26.0), r.center().y),
+                                        crate::rtl::lead_center(rtl),
+                                        share,
+                                        medium(12.0),
+                                        t.on_accent,
+                                    );
+                                }
+                                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, share));
+                                if resp.on_hover_text(tl!("Export a copy to share (PDF, Word document)")).clicked() {
+                                    let _ = app.run("ui.backstage", json!({"value": true, "page": "export"}));
+                                }
                             }
                             ui.add_space(6.0);
                             let track = app.session.doc.settings.track_changes;

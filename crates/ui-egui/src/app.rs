@@ -5,7 +5,7 @@ use super::services::Services;
 use super::state::{AutoSaveBlock, DefaultApp, PromptSave, SaveChoice, keeps_everything};
 use super::{
     AwaitingSave, ControlRequest, DEFAULT_TAB, MAX_DICTIONARY, MAX_RECENT, QUIT, SaveInFlight, Session, UiState, Value, WordApp, applied_font,
-    async_saves, backstage, canvas, chrome, colors, content_controls, crop, desktop_theme, dialogs, dialogs_table_style, documents, file_dialogs,
+    async_saves, backstage, canvas, chrome, cloud, colors, content_controls, crop, desktop_theme, dialogs, dialogs_table_style, documents, file_dialogs,
     i18n, json, keys, keytips, options, panes, paste_picture, printing, push_recent_font, read_aloud, recent_fonts_from, ribbon, scroll,
     system_clipboard, table_pen, theme, updates_ui, widgets, window_ui, windows, zotero,
 };
@@ -150,6 +150,11 @@ impl WordApp {
             canvas,
             controls,
             dialog,
+            cloud: cloud::CloudFiles::new(),
+            cloud_sent: cloud::Sent::new(),
+            cloud_opening: None,
+            share: craft_ui::share::ShareDialog::new(),
+            presence: craft_ui::presence::PresenceBar::new().badges_only(),
             colors,
             restrict,
             spelling_review,
@@ -308,6 +313,8 @@ impl WordApp {
         } else {
             self.poll_printing(ctx);
         }
+        // Answers from the cloud worker, and anything still in flight.
+        cloud::poll(self, ctx);
         self.drain_control(ctx);
         // The active window's own work; with native windows each window does it again as it
         // draws, for itself.

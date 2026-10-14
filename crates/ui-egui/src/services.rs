@@ -82,6 +82,9 @@ pub struct Services {
     pub forget_font: Option<Box<dyn Fn(&str)>>,
     /// Web: request browser to query and load local installed fonts (`window.queryLocalFonts()`).
     pub load_system_fonts: Option<Box<dyn Fn()>>,
+    /// Open a URL in the user's browser. Without one the frontend asks egui, which is what the
+    /// desktop and the web shell both want. A host that has to decide for itself supplies one.
+    pub open_url: Option<Box<dyn Fn(&str)>>,
     /// Desktop: File › Options › General › Make WordCraft the default for Word documents (#295),
     /// only from that button (never a programmatic command). Windows opens the Settings app's
     /// Default apps page (apps can't set defaults themselves); Linux and BSD set it with
