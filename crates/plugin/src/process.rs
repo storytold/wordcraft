@@ -17,6 +17,24 @@ pub struct RequestError {
     pub fatal: bool,
 }
 
+/// The host's answer to a plugin's request (protocol 1.1): `Ok(result)` or an error.
+pub type HostHandler<'a> = dyn FnMut(&str, &Json) -> Result<Json, HostError> + 'a;
+
+/// A JSON-RPC error the host answers a plugin's request with.
+#[derive(Debug)]
+pub struct HostError {
+    pub code: i64,
+    pub message: String,
+    pub data: Json,
+}
+
+impl HostError {
+    /// The plugin asked for a method the host doesn't have.
+    pub fn unknown() -> HostError {
+        HostError { code: -32601, message: "the host has no such method".into(), data: Json::Null }
+    }
+}
+
 impl RequestError {
     fn fatal(message: impl Into<String>) -> RequestError {
         RequestError { message: message.into(), fatal: true }
@@ -43,6 +61,9 @@ mod web {
         pub fn request(&mut self, _method: &str, _params: Json, _timeout: Duration) -> Result<Json, RequestError> {
             Err(RequestError::fatal("plugins need the desktop app or the CLI"))
         }
+        pub fn request_with(&mut self, _method: &str, _params: Json, _timeout: Duration, _host: &mut HostHandler<'_>) -> Result<Json, RequestError> {
+            Err(RequestError::fatal("plugins need the desktop app or the CLI"))
+        }
         pub fn shutdown(self) {}
     }
 }
@@ -65,6 +86,8 @@ mod native {
 
     pub struct Connection {
         id: String,
+        /// The plugin's last lines of standard error, for the message when it exits.
+        stderr_tail: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
         child: Child,
         to_plugin: Sender<Vec<u8>>,
         from_plugin: Receiver<Result<Json, String>>,
@@ -78,10 +101,10 @@ mod native {
             let mut child = Command::new(&program)
                 .args(&m.run.args)
                 .current_dir(dir)
-                .env("WORDCRAFT_PLUGIN_DIR", dir)
+                .env("GRIDCRAFT_PLUGIN_DIR", dir)
                 .env("CRAFT_PLUGIN_DIR", dir)
                 .env("CRAFT_HOST", crate::HOST_ID)
-                .env("WORDCRAFT_VERSION", env!("CARGO_PKG_VERSION"))
+                .env("GRIDCRAFT_VERSION", env!("CARGO_PKG_VERSION"))
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -141,8 +164,10 @@ mod native {
                 }
             });
 
+            let stderr_tail: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
             if let Some(stderr) = child.stderr.take() {
                 let eid = id.clone();
+                let tail = stderr_tail.clone();
                 let _ = std::thread::Builder::new().name(format!("plugin-{id}-err")).spawn(move || {
                     let mut err = BufReader::new(stderr);
                     let mut line = Vec::new();
@@ -150,7 +175,18 @@ mod native {
                         line.clear();
                         match err.by_ref().take(MAX_STDERR_LINE).read_until(b'\n', &mut line) {
                             Ok(0) | Err(_) => break,
-                            Ok(_) => log::info!("plugin {eid}: {}", String::from_utf8_lossy(&line).trim_end()),
+                            Ok(_) => {
+                                let text = String::from_utf8_lossy(&line).trim_end().to_string();
+                                log::info!("plugin {eid}: {text}");
+                                let mut t = match tail.lock() {
+                                    Ok(g) => g,
+                                    Err(p) => p.into_inner(),
+                                };
+                                if t.len() >= 3 {
+                                    t.remove(0);
+                                }
+                                t.push(text.chars().take(300).collect());
+                            }
                         }
                     }
                 });
@@ -161,29 +197,50 @@ mod native {
                 let _ = child.wait();
                 return Err("can't start the plugin's I/O threads".into());
             }
-            Ok(Connection { id, child, to_plugin, from_plugin, next_id: 1 })
+            Ok(Connection { id, stderr_tail, child, to_plugin, from_plugin, next_id: 1 })
         }
 
         pub fn request(&mut self, method: &str, params: Json, timeout: Duration) -> Result<Json, RequestError> {
+            self.request_with(method, params, timeout, &mut |_, _| Err(HostError::unknown()))
+        }
+
+        /// [`Connection::request`], answering the plugin's own requests (protocol 1.1: `host/…`)
+        /// with `host` while it works. Each answer starts the timeout again: a macro that keeps
+        /// calling the host is working, not hung.
+        pub fn request_with(&mut self, method: &str, params: Json, timeout: Duration, host: &mut HostHandler<'_>) -> Result<Json, RequestError> {
             let id = self.next_id;
             self.next_id = self.next_id.wrapping_add(1);
             let mut bytes = serde_json::to_vec(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))
                 .map_err(|e| RequestError::fatal(format!("encoding the request: {e}")))?;
             bytes.push(b'\n');
             self.to_plugin.send(bytes).map_err(|_| RequestError::fatal("the plugin stopped reading"))?;
-            let deadline = Instant::now() + timeout;
+            let mut deadline = Instant::now() + timeout;
             loop {
                 let left = deadline.saturating_duration_since(Instant::now());
                 let msg = match self.from_plugin.recv_timeout(left) {
                     Ok(Ok(msg)) => msg,
-                    Ok(Err(e)) => return Err(RequestError::fatal(e)),
+                    Ok(Err(e)) => return Err(RequestError::fatal(self.with_stderr(e))),
                     Err(RecvTimeoutError::Timeout) => {
                         return Err(RequestError::fatal(format!("{method} took longer than {} ms", timeout.as_millis())));
                     }
                     Err(RecvTimeoutError::Disconnected) => return Err(RequestError::fatal("the plugin exited")),
                 };
-                if msg.get("id").and_then(Json::as_u64) != Some(id) || msg.get("method").is_some() {
-                    // A notification or request from the plugin: not supported by protocol 1.
+                if let Some(call) = msg.get("method").and_then(Json::as_str) {
+                    // The plugin asks the host something while it works (or notifies it).
+                    let answer = host(call, msg.get("params").unwrap_or(&Json::Null));
+                    if let Some(rid) = msg.get("id") {
+                        let reply = match answer {
+                            Ok(result) => json!({"jsonrpc": "2.0", "id": rid, "result": result}),
+                            Err(e) => json!({"jsonrpc": "2.0", "id": rid, "error": {"code": e.code, "message": e.message, "data": e.data}}),
+                        };
+                        let mut bytes = serde_json::to_vec(&reply).map_err(|e| RequestError::fatal(format!("encoding an answer: {e}")))?;
+                        bytes.push(b'\n');
+                        self.to_plugin.send(bytes).map_err(|_| RequestError::fatal("the plugin stopped reading"))?;
+                    }
+                    deadline = Instant::now() + timeout;
+                    continue;
+                }
+                if msg.get("id").and_then(Json::as_u64) != Some(id) {
                     log::debug!("plugin {}: ignored message {msg}", self.id);
                     continue;
                 }
@@ -193,6 +250,17 @@ mod native {
                 }
                 return Ok(msg.get("result").cloned().unwrap_or(Json::Null));
             }
+        }
+
+        /// `message`, then what the plugin last wrote to standard error (why it exited, say).
+        fn with_stderr(&self, message: String) -> String {
+            // Give the error reader a moment to catch the process's last words.
+            std::thread::sleep(Duration::from_millis(50));
+            let tail = match self.stderr_tail.lock() {
+                Ok(g) => g.join(" / "),
+                Err(p) => p.into_inner().join(" / "),
+            };
+            if tail.is_empty() { message } else { format!("{message}: {tail}") }
         }
 
         /// Asks the plugin to exit, then makes sure it has.

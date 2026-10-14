@@ -9,6 +9,7 @@ pub mod column;
 pub mod connectors;
 pub mod controls;
 pub mod design;
+pub mod developer_vba;
 pub mod draw;
 pub mod edit;
 pub mod equation;
@@ -27,6 +28,7 @@ pub mod mailings;
 pub mod md_source;
 pub mod moves;
 pub mod objects;
+pub mod office;
 pub mod options;
 pub mod outline;
 pub mod packs;
@@ -110,6 +112,8 @@ pub fn registry() -> Registry {
     v.extend(speech::specs());
     v.extend(controls::specs());
     v.extend(plugins::specs());
+    v.extend(office::specs());
+    v.extend(developer_vba::specs());
     Registry::new(v)
 }
 

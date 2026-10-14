@@ -11,10 +11,16 @@
 //! `uiFor` gives each app its own ribbon and menus, and `initialize` tells the plugin which app
 //! started it. A plugin runs in its own process, so a crash, a hang or a bad answer from it fails
 //! the command, never the document. The protocol is documented in `docs/plugins.md`.
+//!
+//! Protocol 1.1: while a plugin works on a request of WordCraft's it may ask the host for the
+//! document (`host/*`), and a plugin that declares `macros` runs the document's macros
+//! (`macros/*`, the Developer tab). Office add-ins (`manifest.xml`) load as plugins whose
+//! commands open task panes ([`office`]).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
 pub mod install;
+pub mod office;
 mod process;
 
 use std::collections::BTreeMap;
@@ -26,7 +32,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 
-pub use process::{Connection, RequestError};
+pub use process::{Connection, HostError, HostHandler, RequestError};
 
 /// The protocol version this host speaks (sent in `initialize`).
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -68,6 +74,8 @@ pub struct Manifest {
     /// The apps the plugin is made for (`wordcraft`, `gridcraft`, …); empty: any.
     #[serde(default)]
     pub apps: Vec<String>,
+    /// The program to start; empty for an Office add-in, whose commands open its task pane.
+    #[serde(default)]
     pub run: RunSpec,
     /// Spreadsheet functions (GridCraft's). WordCraft lists them and doesn't call them.
     #[serde(default)]
@@ -84,11 +92,24 @@ pub struct Manifest {
     /// The `ui` this app uses, read from `uiFor.wordcraft` or `ui` by [`Manifest::parse`].
     #[serde(skip)]
     ui: UiDecl,
+    /// A scripting language the plugin runs macros in (protocol 1.1: `macros/*`), e.g. VBA.
+    #[serde(default)]
+    pub macros: Option<MacrosDecl>,
+    /// An Office add-in (read from its `manifest.xml`): its task panes and permissions.
+    #[serde(skip)]
+    pub office: Option<office::OfficeInfo>,
+}
+
+/// A plugin that runs macros (`"macros": {"language": "VBA"}`): the Developer tab's Macros and
+/// Visual Basic use it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct MacrosDecl {
+    pub language: String,
 }
 
 /// How to start the plugin. A `command` containing a path separator is relative to the plugin
 /// folder; a bare name is looked up on `PATH`. The plugin runs in its folder.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct RunSpec {
     pub command: String,
     #[serde(default)]
@@ -202,6 +223,11 @@ fn valid_id(s: &str) -> bool {
 impl Manifest {
     /// Parses and validates a manifest.
     pub fn parse(text: &str) -> Result<Manifest, String> {
+        Manifest::parse_with(text, false)
+    }
+
+    /// [`Manifest::parse`]; an Office add-in (`office`) has no program to run.
+    pub(crate) fn parse_with(text: &str, office: bool) -> Result<Manifest, String> {
         let mut m: Manifest = serde_json::from_str(text).map_err(|e| format!("{MANIFEST}: {e}"))?;
         if !m.for_this_app() {
             let apps = m.apps.join(", ");
@@ -210,7 +236,7 @@ impl Manifest {
         // Another app's `ui` (GridCraft's cell menus…) means nothing here: only this app's is read.
         let own = m.ui_for.get(HOST_ID).unwrap_or(&m.ui_json);
         m.ui = if own.is_null() { UiDecl::default() } else { serde_json::from_value(own.clone()).map_err(|e| format!("{MANIFEST}: ui: {e}"))? };
-        m.validate()?;
+        m.validate(office)?;
         Ok(m)
     }
 
@@ -224,7 +250,7 @@ impl Manifest {
         &self.ui
     }
 
-    fn validate(&self) -> Result<(), String> {
+    fn validate(&self, office: bool) -> Result<(), String> {
         if !valid_id(&self.id) {
             return Err(format!("{MANIFEST}: id `{}` must be 1–128 letters, digits, `.`, `-` or `_`, starting with a letter or digit", self.id));
         }
@@ -239,7 +265,7 @@ impl Manifest {
         {
             return Err(format!("{MANIFEST}: `homepage` must be an http(s) URL"));
         }
-        if self.run.command.trim().is_empty() {
+        if !office && self.run.command.trim().is_empty() {
             return Err(format!("{MANIFEST}: `run.command` is empty"));
         }
         if self.functions.len() > MAX_DECLARATIONS || self.commands.len() > MAX_DECLARATIONS || self.apps.len() > 64 {
@@ -312,6 +338,11 @@ pub struct Plugin {
     pub source: Option<Json>,
 }
 
+thread_local! {
+    /// Plugins this thread is waiting for (see [`Plugin::request_with`]).
+    static BUSY: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     match m.lock() {
         Ok(g) => g,
@@ -324,8 +355,29 @@ impl Plugin {
         Plugin { manifest, state: Mutex::new((State::Idle, 0)), enabled: AtomicBool::new(true), source: install::read_source(&dir), dir }
     }
 
-    /// Sends a request and waits for its result, starting the plugin when needed.
-    fn request(&self, method: &str, params: Json, timeout: Duration) -> Result<Json, String> {
+    /// Sends a request and waits for its result, starting the plugin when needed, answering
+    /// the plugin's `host/…` requests with `host` meanwhile (protocol 1.1).
+    fn request_with(&self, method: &str, params: Json, timeout: Duration, host: &mut HostHandler<'_>) -> Result<Json, String> {
+        // A host request of this plugin's can run a command that calls the plugin again: that
+        // waits for nobody, it fails.
+        if BUSY.with(|b| b.borrow().contains(&self.manifest.id)) {
+            return Err(format!("plugin {} is busy", self.manifest.id));
+        }
+        BUSY.with(|b| b.borrow_mut().push(self.manifest.id.clone()));
+        let r = self.request_inner(method, params, timeout, host);
+        BUSY.with(|b| {
+            let mut b = b.borrow_mut();
+            if let Some(i) = b.iter().rposition(|x| *x == self.manifest.id) {
+                b.remove(i);
+            }
+        });
+        r
+    }
+
+    fn request_inner(&self, method: &str, params: Json, timeout: Duration, host: &mut HostHandler<'_>) -> Result<Json, String> {
+        if self.manifest.office.is_some() {
+            return Err(format!("{} is an Office add-in: it runs in its task pane", self.manifest.id));
+        }
         let mut guard = lock(&self.state);
         // Checked under the lock: turning off stores the flag, then stops the process under it.
         if !self.enabled() {
@@ -351,7 +403,7 @@ impl Plugin {
             *state = State::Running(conn);
         }
         let State::Running(conn) = state else { return Err("plugin not running".into()) };
-        match conn.request(method, params, timeout) {
+        match conn.request_with(method, params, timeout, host) {
             Ok(v) => Ok(v),
             Err(e) if e.fatal => {
                 // The connection is gone or out of step: stop the process and start afresh next time.
@@ -401,6 +453,12 @@ impl Plugin {
                 "id": c.id, "label": c.label, "description": c.description, "params": c.params,
             })).collect::<Vec<_>>(),
             "ui": m.ui(),
+            "macros": m.macros,
+            "kind": if m.office.is_some() { "office" } else { "native" },
+            "office": m.office.as_ref().map(|o| json!({
+                "id": o.office_id, "permissions": o.permissions, "sourceLocation": o.source_location,
+                "requirements": o.requirements, "iconUrl": o.icon_url,
+            })),
         })
     }
 
@@ -434,7 +492,10 @@ pub fn list() -> Vec<Arc<Plugin>> {
 /// with the same id is unloaded first. The process starts on first use.
 pub fn load(path: &Path) -> Result<Arc<Plugin>, String> {
     let (dir, file) = if path.is_dir() {
-        (path.to_path_buf(), path.join(MANIFEST))
+        // An Office add-in's folder holds `manifest.xml` instead of `plugin.json`.
+        let office = path.join(office::MANIFEST_FILE);
+        let file = if !path.join(MANIFEST).is_file() && office.is_file() { office } else { path.join(MANIFEST) };
+        (path.to_path_buf(), file)
     } else {
         (path.parent().unwrap_or(Path::new(".")).to_path_buf(), path.to_path_buf())
     };
@@ -443,7 +504,8 @@ pub fn load(path: &Path) -> Result<Arc<Plugin>, String> {
         return Err(format!("{}: manifest larger than 1 MiB", file.display()));
     }
     let text = std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
-    let manifest = Manifest::parse(&text)?;
+    let is_office = file.extension().is_some_and(|e| e.eq_ignore_ascii_case("xml"));
+    let manifest = if is_office { office::parse_manifest(&text, HOST_ID)? } else { Manifest::parse(&text)? };
     let dir = std::fs::canonicalize(&dir).unwrap_or(dir);
     Ok(add(manifest, dir))
 }
@@ -493,13 +555,14 @@ pub fn discover(extra: &[PathBuf]) -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = std::env::var_os(PATH_ENV).map(|v| std::env::split_paths(&v).collect()).unwrap_or_default();
     roots.extend(extra.iter().cloned());
     let mut out = Vec::new();
+    let is_plugin = |p: &Path| p.join(MANIFEST).is_file() || p.join(office::MANIFEST_FILE).is_file();
     for root in roots {
-        if root.join(MANIFEST).is_file() {
+        if is_plugin(&root) {
             out.push(root);
             continue;
         }
         let Ok(entries) = std::fs::read_dir(&root) else { continue };
-        let mut dirs: Vec<PathBuf> = entries.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.join(MANIFEST).is_file()).collect();
+        let mut dirs: Vec<PathBuf> = entries.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| is_plugin(p)).collect();
         dirs.sort();
         out.extend(dirs);
     }
@@ -532,6 +595,8 @@ pub struct CommandReply {
     pub message: Option<String>,
     /// Anything else the plugin returned (handed back to the caller).
     pub result: Json,
+    /// An Office add-in's command: what the app opens or calls (no process is involved).
+    pub office: Option<office::OfficeCommand>,
 }
 
 /// Most engine commands one plugin command may run.
@@ -539,6 +604,11 @@ pub const MAX_REPLY_COMMANDS: usize = 10_000;
 
 /// Runs one of a plugin's commands. `context` describes the document (selection, paragraph).
 pub fn run_command(plugin_id: &str, command: &str, params: Json, context: Json) -> Result<CommandReply, String> {
+    run_command_with(plugin_id, command, params, context, &mut |_, _| Err(HostError::unknown()))
+}
+
+/// [`run_command`], answering the plugin's `host/…` requests with `host` while it runs.
+pub fn run_command_with(plugin_id: &str, command: &str, params: Json, context: Json, host: &mut HostHandler<'_>) -> Result<CommandReply, String> {
     let plugin = get(plugin_id).ok_or_else(|| format!("no plugin `{plugin_id}` is loaded"))?;
     if !plugin.enabled() {
         return Err(format!("plugin {plugin_id} is turned off (File › Options › Add-ins)"));
@@ -546,8 +616,34 @@ pub fn run_command(plugin_id: &str, command: &str, params: Json, context: Json) 
     if !plugin.manifest.commands.iter().any(|c| c.id == command) {
         return Err(format!("plugin {plugin_id} has no command `{command}`"));
     }
-    let r = plugin.request("commands/run", json!({"command": command, "params": params, "context": context}), COMMAND_TIMEOUT)?;
+    if let Some(o) = &plugin.manifest.office {
+        let what = o.commands.get(command).cloned().ok_or_else(|| format!("plugin {plugin_id} has no command `{command}`"))?;
+        return Ok(CommandReply { office: Some(what), ..Default::default() });
+    }
+    let r = plugin.request_with("commands/run", json!({"command": command, "params": params, "context": context}), COMMAND_TIMEOUT, host)?;
     parse_reply(r)
+}
+
+/// Sends a macro plugin one of its `macros/…` requests (protocol 1.1), answering its `host/…`
+/// requests with `host` meanwhile.
+pub fn call_macros(plugin_id: &str, method: &str, params: Json, host: &mut HostHandler<'_>) -> Result<Json, String> {
+    let plugin = get(plugin_id).ok_or_else(|| format!("no plugin `{plugin_id}` is loaded"))?;
+    if !plugin.enabled() {
+        return Err(format!("plugin {plugin_id} is turned off (File › Options › Add-ins)"));
+    }
+    if plugin.manifest.macros.is_none() || !method.starts_with("macros/") {
+        return Err(format!("plugin {plugin_id} doesn't run macros"));
+    }
+    plugin.request_with(method, params, COMMAND_TIMEOUT, host)
+}
+
+/// The enabled plugins that run macros, with their language.
+pub fn macro_plugins() -> Vec<(String, String)> {
+    list()
+        .into_iter()
+        .filter(|p| p.enabled())
+        .filter_map(|p| p.manifest.macros.as_ref().map(|m| (p.manifest.id.clone(), m.language.clone())))
+        .collect()
 }
 
 fn parse_reply(r: Json) -> Result<CommandReply, String> {

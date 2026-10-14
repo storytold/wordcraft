@@ -64,6 +64,9 @@ pub struct Prefs {
     pub autocorrect: crate::cmd::tools::AutoCorrectPrefs,
     /// Add-ins the user turned off (File › Options › Add-ins): listed, but not run.
     pub disabled_plugins: Vec<String>,
+    /// Which documents' macros may run: `disable`, `prompt` (once enabled for the document) or
+    /// `enable` (Developer › Macro Security).
+    pub macro_security: String,
 }
 
 impl Default for Prefs {
@@ -91,6 +94,7 @@ impl Default for Prefs {
             default_language: None,
             autocorrect: Default::default(),
             disabled_plugins: Vec::new(),
+            macro_security: "prompt".into(),
         }
     }
 }

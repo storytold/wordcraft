@@ -121,6 +121,19 @@ pub(super) fn review(app: &mut WordApp, ui: &mut Ui) {
 
 /// Developer › Controls: content controls.
 pub(super) fn developer(app: &mut WordApp, ui: &mut Ui) {
+    // VBA macros, once an add-in that runs them (craft-vba) is loaded.
+    if crate::dialogs_developer::visible() {
+        let recording = app.session.recording.is_some();
+        group(ui, "Code", None, app, |ui, app| {
+            big(ui, app, "macros", "Visual Basic", "ui.dialog", json!({"name": "visualBasic"}), false);
+            big(ui, app, "macros", "Macros", "ui.dialog", json!({"name": "vbaMacros"}), false);
+            stack(ui, |ui| {
+                let label = if recording { "Stop Recording" } else { "Record Macro" };
+                small(ui, app, "macros", Some(label), label, crate::widgets::ButtonAction::new("developer.recordMacro", json!({"stop": recording}), recording));
+                small(ui, app, "macros", Some("Macro Security"), "Macro Security", crate::widgets::ButtonAction::new("ui.dialog", json!({"name": "macroSecurity"}), false));
+            });
+        });
+    }
     group(ui, "Add-ins", None, app, |ui, app| {
         big(ui, app, "addins", "Add-ins", "ui.dialog", json!({"name": "addIns"}), false);
     });

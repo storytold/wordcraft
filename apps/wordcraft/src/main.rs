@@ -23,6 +23,8 @@ mod graphics;
 mod logging;
 #[cfg(all(unix, not(target_os = "macos")))]
 mod portal_save;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod office_web;
 mod print;
 mod region;
 #[cfg(target_os = "macos")]
@@ -127,6 +129,9 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.0.ui(ui);
         self.3.show(frame);
+        // Office add-ins' task panes: their web views follow the panes drawn this frame.
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        office_web::flush(frame);
     }
     fn on_exit(&mut self) {
         print::finish_pending_jobs();
@@ -408,6 +413,8 @@ fn services(file_dialog: file_dialogs::Hook, cancel_file_dialog: file_dialogs::C
         clipboard_rtf: Some(Box::new(clipboard::rtf)),
         clipboard_formats: Some(Box::new(clipboard::formats)),
         save_prefs: Some(Box::new(try_save_prefs)),
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        office: Some(office_web::service()),
         ..Default::default()
     }
 }

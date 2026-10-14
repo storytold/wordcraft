@@ -449,6 +449,8 @@ pub enum Dialog {
     },
     /// Compare / Combine Documents and AutoCorrect Options ([`crate::dialogs_review`], #412).
     Review(Box<crate::dialogs_review::ReviewDialog>),
+    /// Developer › Code: Macros, Visual Basic, Macro Security ([`crate::dialogs_developer`]).
+    Developer(Box<crate::dialogs_developer::DevDialog>),
     /// Tools › Customize Keyboard (#368).
     CustomizeKeyboard {
         form: Box<crate::dialogs_keyboard::KeyboardForm>,
@@ -555,6 +557,7 @@ impl Dialog {
             Dialog::DefineList { .. } => "defineList",
             Dialog::TrackOptions { .. } => "trackChangesOptions",
             Dialog::Review(d) => d.name(),
+            Dialog::Developer(d) => d.name(),
             Dialog::CustomizeKeyboard { .. } => "customizeKeyboard",
             Dialog::CustomizeRibbon { .. } => "customizeRibbon",
             Dialog::Control { .. } => "controlProperties",
@@ -597,6 +600,9 @@ impl Dialog {
         }
         if let Some(d) = crate::dialogs_layout::open(name, app) {
             return Some(Dialog::Layout(Box::new(d)));
+        }
+        if let Some(d) = crate::dialogs_developer::open(name, app) {
+            return Some(Dialog::Developer(Box::new(d)));
         }
         if matches!(name, "compare" | "combine" | "autoCorrect" | "restrictEditing") {
             return crate::dialogs_review::open(name, app).map(|d| Dialog::Review(Box::new(d)));
@@ -912,6 +918,7 @@ impl Dialog {
 
 pub mod dialogs_chart;
 pub mod dialogs_controls;
+pub mod dialogs_developer;
 pub mod dialogs_insert;
 pub mod dialogs_keyboard;
 pub mod dialogs_layout;

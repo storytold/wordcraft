@@ -167,14 +167,52 @@ fn context(s: &Session) -> Value {
 /// Commands a plugin's reply can't run: managing plugins, and undo history (the reply is one
 /// step of it).
 fn refused(id: &str) -> bool {
-    id.starts_with("plugins.") || matches!(id, "edit.undo" | "edit.undoTo" | "edit.redo" | "edit.repeat" | "tools.macros" | "tools.recordMacro")
+    id.starts_with("plugins.")
+        || id.starts_with("office.")
+        || matches!(id, "edit.undo" | "edit.undoTo" | "edit.redo" | "edit.repeat" | "tools.macros" | "tools.recordMacro")
+        || matches!(
+            id,
+            "developer.macros"
+                | "developer.runMacro"
+                | "developer.modules"
+                | "developer.saveModule"
+                | "developer.deleteModule"
+                | "developer.recordMacro"
+        )
 }
 
 fn run(s: &mut Session, v: &Value) -> CmdResult {
     let plugin = p::req_str(v, "plugin")?;
     let command = p::req_str(v, "command")?;
     let params = v.get("params").cloned().filter(|x| !x.is_null()).unwrap_or_else(|| json!({}));
-    let reply = wordcraft_plugin::run_command(plugin, command, params, context(s)).map_err(CmdError::Failed)?;
+    // The add-in may read and write the document while it works (`host/sync`, protocol 1.1): that
+    // and its answer's commands are this command's one step.
+    let ctx = context(s);
+    let reply = {
+        let recording = s.recording.take();
+        let last = s.last_command.clone();
+        let plugin_id = plugin.to_string();
+        let r = wordcraft_plugin::run_command_with(plugin, command, params, ctx, &mut |m, p| {
+            s.join_next_undo();
+            super::developer_vba::host_call(s, &plugin_id, m, p)
+        });
+        s.recording = recording;
+        s.last_command = last;
+        r.map_err(CmdError::Failed)?
+    };
+    // An Office add-in's command opens its task pane or calls its function: nothing runs here.
+    if let Some(office) = reply.office {
+        let title = wordcraft_plugin::get(plugin).map(|p| p.manifest.name.clone()).unwrap_or_default();
+        s.ui_requests.push(match &office {
+            wordcraft_plugin::office::OfficeCommand::ShowTaskpane { url, taskpane_id } => {
+                json!({"officePane": {"plugin": plugin, "title": title, "url": url, "pane": taskpane_id}})
+            }
+            wordcraft_plugin::office::OfficeCommand::ExecuteFunction { function, url } => {
+                json!({"officeFunction": {"plugin": plugin, "url": url, "function": function}})
+            }
+        });
+        return Ok(json!({"ran": 0, "office": office}));
+    }
     if let Some((id, _)) = reply.commands.iter().find(|(id, _)| refused(id)) {
         return Err(CmdError::Failed(format!("an add-in command can't run `{id}`")));
     }
