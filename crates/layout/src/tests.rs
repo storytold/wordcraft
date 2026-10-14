@@ -6755,6 +6755,33 @@ fn autofit_handles_spanning_cells_long_words_and_empty_tables() {
     assert!(x > 72.0 + 200.0, "the second 50% column starts at {x}");
 }
 
+/// Preferred cell widths wider than the page (a template library writing 6000 and 24000 twips
+/// on A4) are squeezed the way Word does: each column gets its longest word, and the room left
+/// is shared in proportion to how far each preferred width exceeds that. On a label column and a
+/// text column Word gives the label column 116 pt where a plain proportional split gives 94.
+#[test]
+fn preferred_widths_wider_than_the_page_are_squeezed_like_word() {
+    let text = |s: &str| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(s, Default::default()));
+    let mut t = Table::new(2, 2, 468.0);
+    t.grid = vec![300.0, 1200.0];
+    for r in &mut t.rows {
+        r.cells[0].props.width = Some(300.0);
+        r.cells[1].props.width = Some(1200.0);
+    }
+    t.rows[0].cells[0].blocks = vec![text("Territorial limits")];
+    t.rows[0].cells[1].blocks = vec![text(&"Running text that wraps over several lines in the wide column. ".repeat(3))];
+    t.rows[1].cells[0].blocks = vec![text("Operations")];
+    t.rows[1].cells[1].blocks = vec![text("Open and specific")];
+    let mut d = Document::from_text("After");
+    d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let (&[(sx, _, n)], &[(lx, _, _)]) = (&para_at(&l, &[0, 0, 0, 0])[..], &para_at(&l, &[0, 0, 1, 0])[..]) else { panic!("lines missing") };
+    assert!(lx < 72.0 + 468.0, "the table runs past the margin: second column at {lx}");
+    let label_w = lx - sx;
+    assert!((100.0..150.0).contains(&label_w), "the label column is {label_w} pt wide");
+    assert_eq!(n, 1, "the label wraps over {n} lines");
+}
+
 #[test]
 fn an_inherited_footer_sizes_its_percentage_table_by_its_own_section() {
     use wordcraft_doc::section::SectionProps;

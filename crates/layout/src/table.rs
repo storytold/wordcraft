@@ -449,8 +449,12 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
         }
         total = tw;
     }
-    // A table with its own width keeps it, however far it runs past the margins (as in Word).
-    if target.is_none() && total > avail * 1.5 && !t.props.fixed {
+    // A table with its own width keeps it, however far it runs past the margins (as in Word). An
+    // autofit one wider than its room is squeezed into it: the preferred widths are kept for
+    // `autofit` to share the room out by.
+    let mut preferred = None;
+    if target.is_none() && total > avail * 1.02 && !t.props.fixed {
+        preferred = Some(grid.clone());
         let k = avail / total.max(1.0);
         grid.iter_mut().for_each(|w| *w *= k);
         total = avail;
@@ -461,7 +465,7 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
         let content = column_content(ctx, t, style, depth, &grid);
         ctx.eq_count = eq_count;
         if let Some(content) = content {
-            autofit(&mut grid, &content, t, avail);
+            autofit(&mut grid, &content, t, avail, preferred.as_deref());
             // Never wider than the room it had, however long an unbreakable word.
             let fitted: f32 = grid.iter().sum();
             let cap = avail.max(total);
@@ -1482,10 +1486,27 @@ fn apply_cell_widths(t: &Table, grid: &mut [f32]) {
 /// - With no preferred width anywhere (the table's and every cell's automatic) the columns come
 ///   from their content alone: each its widest line if they all fit in `avail`, else shared out
 ///   between narrowest and widest in proportion to how much each can give.
+/// - A table whose `preferred` widths are wider than the room (a template library writes cells
+///   of 6000 and 24000 twips on an A4 page) is squeezed the way Word does it: every column gets
+///   its longest word, and the room left is shared in proportion to how far each preferred
+///   width exceeds that, so a column of short labels keeps most of its lines whole while one of
+///   running text wraps. (Measured against Word: 116 pt predicted, 116 pt drawn.)
 /// - Otherwise the grid stands, but no column is narrower than its longest word: the columns with
 ///   room to spare give up the difference.
-fn autofit(grid: &mut [f32], content: &[(f32, f32)], t: &Table, avail: f32) {
+fn autofit(grid: &mut [f32], content: &[(f32, f32)], t: &Table, avail: f32, preferred: Option<&[f32]>) {
     if grid.len() != content.len() || !avail.is_finite() {
+        return;
+    }
+    if let Some(pref) = preferred.filter(|p| p.len() == grid.len() && !is_automatic(t)) {
+        let mins: Vec<f32> = content.iter().map(|c| if c.0.is_finite() { c.0.max(4.0) } else { 4.0 }).collect();
+        let lo: f32 = mins.iter().sum();
+        let room = (avail - lo).max(0.0);
+        let give: Vec<f32> = pref.iter().zip(&mins).map(|(p, m)| if p.is_finite() { (p - m).max(0.0) } else { 0.0 }).collect();
+        let total_give: f32 = give.iter().sum();
+        let even = 1.0 / grid.len().max(1) as f32;
+        for ((w, m), g) in grid.iter_mut().zip(&mins).zip(&give) {
+            *w = m + room * if total_give > 0.01 { g / total_give } else { even };
+        }
         return;
     }
     if is_automatic(t) {
