@@ -158,6 +158,8 @@ impl Flavor {
     }
 }
 
+pub use package::{VBA_PROJECT_PART, VBA_RELATED};
+
 /// Whether the document holds a macro project (kept from the file it was read from).
 pub fn has_macros(doc: &wordcraft_doc::Document) -> bool {
     doc.passthrough.get(package::VBA_PROJECT_PART).is_some_and(|b| !b.is_empty())

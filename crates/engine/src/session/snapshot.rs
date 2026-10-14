@@ -16,6 +16,7 @@ impl Session {
         self.doc = doc;
         self.doc.ensure_nonempty();
         self.password = None;
+        self.macros_enabled = false;
         self.file_name = None;
         // The old document's equation is gone: its editing session cannot carry over.
         self.math = None;
@@ -149,6 +150,8 @@ impl Session {
             math_normal_text: _,
             // The save password, like the file path: not an edit to the document.
             password: _,
+            // The user's Enable Content: a decision about the document, not an edit to it.
+            macros_enabled: _,
             #[cfg(not(target_arch = "wasm32"))]
                 recovery: _,
             #[cfg(not(target_arch = "wasm32"))]

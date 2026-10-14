@@ -38,6 +38,43 @@ impl Session {
         self.join_anchor = true;
     }
 
+    /// Runs `f` (which runs commands of its own) as one undo step named `label`: the steps the
+    /// commands inside make are folded into one, recorded only if the document changed. If `f`
+    /// fails, the document, the selection and the undo history go back to how they were.
+    pub fn one_step<T, E>(&mut self, label: &str, f: impl FnOnce(&mut Session) -> Result<T, E>) -> Result<T, E> {
+        let before = (self.doc.clone(), self.sel.clone(), self.history.clone(), self.redo.clone(), self.typing_open, self.undo_evicted);
+        let (rev, dirty) = (self.rev, self.dirty);
+        self.typing_open = false;
+        let r = f(self);
+        let (doc, sel, history, redo, typing, evicted) = before;
+        match &r {
+            Ok(_) => {
+                let changed = self.rev != rev;
+                self.history = history;
+                self.undo_evicted = evicted;
+                self.typing_open = false;
+                if changed {
+                    self.redo.clear();
+                    self.push_undo(label, doc, sel);
+                } else {
+                    self.redo = redo;
+                    self.typing_open = typing;
+                }
+            }
+            Err(_) => {
+                self.doc = doc;
+                self.sel = sel;
+                self.history = history;
+                self.redo = redo;
+                self.typing_open = typing;
+                self.undo_evicted = evicted;
+                // Caches follow the document back; it's as saved as it was.
+                self.rev = self.rev.wrapping_add(1);
+                self.dirty = dirty;
+            }
+        }
+        r
+    }
     /// Make the next mutating command part of the previous undo step instead of a new one, so a
     /// drag that runs a command every frame is a single Undo. Call it on every frame of the drag
     /// except the first; it is consumed by the next `run`.

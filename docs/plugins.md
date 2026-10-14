@@ -1,6 +1,6 @@
 # Add-ins (plugins)
 
-> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** major (first version: out-of-process add-ins, protocol 1, File › Options › Add-ins, install from GitHub) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (protocol 1.1: host requests, VBA macros through an add-in, the Developer tab's Code group; Office add-ins; previously major: first version: out-of-process add-ins, protocol 1, File › Options › Add-ins, install from GitHub) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 An add-in adds **commands** that people and agents run, and can put them on the ribbon (a group
 on a built-in tab, or a tab of its own) and in the right-click menu. It's a separate program,
@@ -214,6 +214,77 @@ for line in sys.stdin:
  "ui": {"menus": [{"command": "shout"}]}}
 ```
 
+## Protocol 1.1: asking the host, and macros
+
+The same protocol as GridCraft and DeckCraft. While WordCraft waits for an answer to one of its
+requests (`commands/run`, `macros/*`), the add-in may send requests of its own; WordCraft answers
+them, then goes on waiting:
+
+| Request | Answer |
+|---|---|
+| `host/sync {actions}` | `{results}`: the same actions as an Office add-in's `context.sync()` (below), on the open document; an error's `data` is `{code, action}`, and a failed sync changes nothing |
+| `host/vbaProject/get {}` | `{base64}`: the document's `word/vbaProject.bin`, or `null` |
+| `host/vbaProject/set {base64}` | `{}`: replaces it (at most 64 MiB; signatures over the old one are dropped) |
+| `host/message {text}` | `{result: 1}`: shown in the status bar |
+| `host/log {text}` | `{}`: written to the log |
+
+What the add-in changes this way is part of the running command's one undo step.
+
+**Macros.** An add-in that declares `"macros": {"language": "VBA"}` (craft-vba,
+[sirmmo/craft-vba](https://github.com/sirmmo/craft-vba)) runs the document's VBA. With one
+loaded, the Developer tab gets a **Code** group: Visual Basic (the code modules in an editor),
+Macros (run, edit, create), Record Macro (WordCraft records the commands, the add-in writes them
+as VBA) and Macro Security. The add-in answers `macros/list`, `macros/run {name, control?}`,
+`macros/modules`, `macros/saveModule {name, source}`, `macros/deleteModule {name}`,
+`macros/record {steps}`. Commands: `developer.macros`, `developer.runMacro`, `developer.modules`,
+`developer.saveModule`, `developer.deleteModule`, `developer.recordMacro`,
+`developer.enableMacros`, `developer.macroSecurity`. A macro is one undo step; a run-time error
+takes back everything it did. WordCraft's own recorded command macros (View › Macros) are separate.
+
+**Macro security** (Developer › Macro Security): `prompt`, the default, runs a document's macros
+once the user clicked **Enable Content** in the bar a document with macros opens with; `disable`
+runs none; `enable` runs all. Agents and the CLI are bound by the same setting. A document with
+macros saved as `.docx` (`.dotx`) is saved as `.docm` (`.dotm`).
+
+## Office add-ins
+
+An Office add-in's `manifest.xml` (`<Host Name="Document"/>`, `https://` pages) loads as the
+add-in `office.<its Id>`: its default task pane is the command `taskpane`, and each add-in command
+(buttons on Office tabs — `TabHome`, `TabInsert`, `TabDraw`, `TabDesign`, `TabPageLayoutWord`,
+`TabReferences`, `TabMailings`, `TabReview`, `TabView`, `TabDeveloper`, `TabHelp` — or custom tabs,
+menus, the text right-click menu `ContextMenuText`) is a command of its own. Its `<Permissions>`
+bound what the page may do.
+
+The task pane is the system web view (WKWebView on macOS, WebView2 on Windows) over a right-hand
+panel (`apps/wordcraft/src/office_web.rs`). Before the page's scripts run it gets
+`crates/office-js/bootstrap.js` (the one hand-written script, as in the other craft apps) and
+WordCraft's own Office.js built to wasm (`cargo xtask office-js`; the macOS package carries it in
+`Resources/office-js`, or set `WORDCRAFT_OFFICE_JS`). Microsoft's `office.js` is never loaded,
+read or shipped. Each `context.sync()` becomes one `office.sync` command: one undo step, all or
+nothing (a sync that only reads makes none).
+
+**Objects** (Word JavaScript API; reported as WordApi 1.3, with only these objects):
+
+| Object | Properties | Methods |
+|---|---|---|
+| `document` | `name` (r) | `body`, `paragraphs`, `properties`, `getSelection()`, `save()` |
+| `DocumentProperties` | `title`, `subject`, `author`, `keywords`, `comments` | |
+| `Body` | `text` (r), `style` | `paragraphs`, `font`, `getRange(Whole/Start/End)`, `insertText(text, Start/End/Replace)`, `insertParagraph(text, Start/End)`, `clear()`, `search(text, {matchCase, matchWholeWord})` |
+| `ParagraphCollection` | `items` | `getFirst()`, `getLast()` |
+| `Paragraph` | `text` (r), `style`, `styleBuiltIn`, `alignment`, `firstLineIndent`, `leftIndent`, `rightIndent`, `lineSpacing`, `spaceAfter`, `spaceBefore`, `isListItem` (r) | `font`, `getRange()`, `getNext()`, `getPrevious()`, `insertText`, `insertParagraph(text, Before/After)`, `delete()`, `select()` |
+| `Range` | `text` (r), `isEmpty` (r), `style` | `font`, `paragraphs`, `insertText(text, Start/End/Before/After/Replace)`, `insertParagraph`, `delete()`, `select(Select/Start/End)` |
+| `Font` | `bold`, `italic`, `underline`, `size`, `name`, `color`, `highlightColor` (`null` when the text is mixed) | |
+
+The common API: `Office.onReady`, `getSelectedDataAsync`/`setSelectedDataAsync` (text), `settings`
+(kept per open document until it closes), `requirements.isSetSupported`.
+
+Word's API has no ids for paragraphs and ranges; WordCraft hands out opaque ones (`p:<path>`,
+`r:<path>:<from>-<path>:<to>`), kept right across the edits of one sync and good until the
+document's structure changes after it.
+
+**Not yet:** content controls, inline pictures, tables, lists, sections, headers and footers,
+HTML/OOXML in and out, events, dialogs, custom properties, a web view on Linux.
+
 ## Publishing an add-in on GitHub
 
 Put `plugin.json` at the root of the repository (or in one folder of it). An add-in written in a
@@ -240,17 +311,20 @@ in the zip are kept.
 ## Limits and next steps
 
 - Commands are synchronous: the window waits while an add-in works (up to 60 s).
-- Add-ins can't show their own panes or dialogs, react to events (typing, opening a document) or
-  read the whole document yet; they see the selection and the caret's paragraph.
+- Add-ins can't show their own panes or dialogs (Office add-ins can: their task panes) or react
+  to events (typing, opening a document). A command sees the selection and the caret's paragraph
+  in its context, and the whole document through `host/sync` (protocol 1.1).
 - Installed add-ins aren't updated automatically; install again to update. There's no Uninstall
   button yet: unload the add-in and delete its folder.
 - Ribbon groups go at the end of a tab; add-ins can't place them between built-in groups, add
   drop-downs or toggles, or ship their own icons yet.
 - The web app can't start processes, so add-ins need the desktop app or the CLI.
-- Office add-ins (Office.js) and COM add-ins don't run; documents that use them keep their data.
+- COM add-ins don't run; documents that use them keep their data. Office add-ins run with the
+  subset of the Word JavaScript API above; VBA runs through a macro add-in (craft-vba).
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Protocol 1.1 (`host/*` requests, one undo step), VBA macros through a macro add-in with the Developer tab's Code group and Macro Security; Office add-ins' task panes on the Word JavaScript API with WordCraft's own Office.js |
 | 2026-10-14 | major | Created: out-of-process add-ins (the craft plugin protocol 1 shared with GridCraft: `apps`, `uiFor`, `host.id`), commands, ribbon groups and tabs, right-click menu items, File › Options › Add-ins, the Add-ins dialog, install from GitHub |

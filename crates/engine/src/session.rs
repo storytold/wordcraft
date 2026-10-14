@@ -207,6 +207,8 @@ pub struct Session {
     /// Password, `file.encrypt`); `None` saves them unencrypted. Kept from a password-protected
     /// file that was opened, cleared when the document is replaced.
     pub password: Option<crate::io::Password>,
+    /// The user let this document's macros run (Enable Content), until another document opens.
+    pub macros_enabled: bool,
     /// The recovery worker every open document's copy is kept through (desktop hosts only).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) recovery: Option<crate::recovery::Recovery>,

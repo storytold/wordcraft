@@ -101,6 +101,8 @@ impl WordApp {
             printing: Default::default(),
             print_feedback_seen: None,
             plugin_install: Default::default(),
+            office: crate::office_pane::Panes::default(),
+            macro_bar_done: None,
             integrated_titlebar: false,
             mac_titlebar: chrome::MacTitleBar::default(),
             updates_rt: updates_ui::Runtime::default(),
@@ -447,6 +449,7 @@ impl WordApp {
         crate::keytips::logic(self, &ctx);
         // Alt codes in a text box are read before the box is drawn, so it types the character.
         crate::keys::field_alt_codes(self, &ctx);
+        crate::office_pane::pump(self);
         // A failed Recent open, or a failed Save As, is news only until File closes (#2938).
         if !self.ui.backstage {
             backstage::forget_open_error(&ctx);

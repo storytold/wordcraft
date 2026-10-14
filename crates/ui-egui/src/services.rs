@@ -51,6 +51,8 @@ pub struct Services {
     /// Desktop: the picture on the system clipboard, if any — egui's paste only carries text
     /// (#45). Read when Paste finds no text; see [`paste_picture`].
     pub clipboard_picture: Option<Box<dyn Fn() -> Option<paste_picture::ClipboardPicture>>>,
+    /// Web views for Office add-ins' task panes (the desktop app on macOS and Windows).
+    pub office: Option<Box<dyn crate::office_pane::OfficeHost>>,
     /// Whether the system has animation effects on (Windows: Animation effects; macOS: Reduce
     /// motion; Linux and the BSDs: the desktop's setting; browsers: `prefers-reduced-motion`), or
     /// `None` when it doesn't say. What "Use system setting" follows ([`theme::Animations`]).

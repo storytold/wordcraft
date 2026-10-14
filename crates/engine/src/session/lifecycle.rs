@@ -75,6 +75,7 @@ impl Session {
             merge,
             math,
             password,
+            macros_enabled,
             #[cfg(not(target_arch = "wasm32"))]
             recovery_slot,
             also_selected,
@@ -156,6 +157,7 @@ impl Session {
             editing_lang: None,
             read_aloud: Default::default(),
             password,
+            macros_enabled,
             #[cfg(not(target_arch = "wasm32"))]
             recovery: None,
             #[cfg(not(target_arch = "wasm32"))]

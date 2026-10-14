@@ -59,6 +59,7 @@ pub mod objects;
 pub mod options;
 pub mod panes;
 pub mod paste_picture;
+pub mod office_pane;
 pub mod plugin_ui;
 pub mod previews;
 pub mod print_page;
@@ -92,6 +93,7 @@ use wordcraft_engine::Session;
 pub use control::ControlRequest;
 pub use dialogs::dialogs_chart;
 pub use dialogs::dialogs_controls;
+pub use dialogs::dialogs_developer;
 pub use dialogs::dialogs_insert;
 pub use dialogs::dialogs_keyboard;
 pub use dialogs::dialogs_layout;
@@ -497,6 +499,10 @@ pub struct WordApp {
     pub(crate) dialog_pick: Option<String>,
     /// Installing an add-in from GitHub (File › Options › Add-ins, Insert › Add-ins).
     pub plugin_install: plugin_ui::Install,
+    /// Office add-ins' task panes.
+    pub office: office_pane::Panes,
+    /// The document (`document_id`) whose "macros disabled" bar was closed or acted on.
+    pub macro_bar_done: Option<u64>,
     /// macOS: the window has no title bar; leave room for the traffic lights.
     pub integrated_titlebar: bool,
     /// macOS: the title bar's height and where its content starts, around the traffic lights.

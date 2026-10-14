@@ -245,3 +245,88 @@ mod install {
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
+
+mod office {
+    use crate::office::{OfficeCommand, Permission, parse_manifest};
+    use crate::{MenuKind, run_command};
+
+    /// An add-in manifest written for these tests from the public schema: a default task pane, a
+    /// button on the References tab, and a text menu item.
+    const MANIFEST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0" xsi:type="TaskPaneApp">
+  <Id>0d5c7a1e-2222-4bcd-9eaf-0123456789ab</Id>
+  <Version>1.0.0.0</Version>
+  <ProviderName>Acme</ProviderName>
+  <DefaultLocale>en-US</DefaultLocale>
+  <DisplayName DefaultValue="Acme Cite"/>
+  <Description DefaultValue="Citations from the web."/>
+  <Hosts><Host Name="Document"/></Hosts>
+  <Requirements><Sets DefaultMinVersion="1.1"><Set Name="WordApi" MinVersion="1.3"/></Sets></Requirements>
+  <DefaultSettings><SourceLocation DefaultValue="https://acme.example/pane.html"/></DefaultSettings>
+  <Permissions>ReadWriteDocument</Permissions>
+  <VersionOverrides xmlns="http://schemas.microsoft.com/office/taskpaneappversionoverrides" xsi:type="VersionOverridesV1_0">
+    <Hosts>
+      <Host xsi:type="Document">
+        <DesktopFormFactor>
+          <ExtensionPoint xsi:type="PrimaryCommandSurface">
+            <OfficeTab id="TabReferences">
+              <Group id="Acme.Group"><Label resid="Group.Label"/>
+                <Control xsi:type="Button" id="Acme.Pane"><Label resid="Button.Label"/>
+                  <Action xsi:type="ShowTaskpane"><SourceLocation resid="Pane.Url"/></Action>
+                </Control>
+              </Group>
+            </OfficeTab>
+          </ExtensionPoint>
+          <ExtensionPoint xsi:type="ContextMenu">
+            <OfficeMenu id="ContextMenuText">
+              <Control xsi:type="Button" id="Acme.Text"><Label resid="Text.Label"/>
+                <Action xsi:type="ShowTaskpane"><SourceLocation resid="Pane.Url"/></Action>
+              </Control>
+            </OfficeMenu>
+          </ExtensionPoint>
+        </DesktopFormFactor>
+      </Host>
+    </Hosts>
+    <Resources>
+      <bt:Urls><bt:Url id="Pane.Url" DefaultValue="https://acme.example/pane.html"/></bt:Urls>
+      <bt:ShortStrings>
+        <bt:String id="Group.Label" DefaultValue="Acme"/>
+        <bt:String id="Button.Label" DefaultValue="Cite"/>
+        <bt:String id="Text.Label" DefaultValue="Cite This"/>
+      </bt:ShortStrings>
+    </Resources>
+  </VersionOverrides>
+</OfficeApp>"#;
+
+    #[test]
+    fn word_add_in_manifests_become_plugins_that_open_panes() {
+        let m = parse_manifest(MANIFEST, "wordcraft").unwrap();
+        assert_eq!(m.id, "office.0d5c7a1e-2222-4bcd-9eaf-0123456789ab");
+        assert_eq!(m.apps, ["wordcraft"]);
+        let o = m.office.as_ref().unwrap();
+        assert_eq!(o.permissions, Permission::ReadWriteDocument);
+        assert_eq!(o.requirements, [("WordApi".to_string(), "1.3".to_string())]);
+        assert_eq!((m.ui().ribbon[0].tab.as_str(), m.ui().ribbon[0].group.as_str()), ("References", "Acme"));
+        assert_eq!(m.ui().menus[0].menu, MenuKind::Text);
+        assert!(parse_manifest(MANIFEST, "gridcraft").is_err(), "a Word add-in isn't Excel's");
+        let id = m.id.clone();
+        crate::add(m, std::env::temp_dir());
+        let r = run_command(&id, "Acme.Text", serde_json::json!({}), serde_json::json!({})).unwrap();
+        assert!(matches!(r.office, Some(OfficeCommand::ShowTaskpane { .. })));
+        assert_eq!(crate::get(&id).unwrap().info()["kind"], "office");
+        assert!(crate::unload(&id));
+    }
+
+    #[test]
+    fn macro_plugins_are_listed_with_their_language() {
+        let m = crate::Manifest::parse(r#"{"id": "t.vba", "name": "VBA", "macros": {"language": "VBA"}, "run": {"command": "./never"}}"#).unwrap();
+        crate::add(m, std::env::temp_dir());
+        assert!(crate::macro_plugins().contains(&("t.vba".to_string(), "VBA".to_string())));
+        let e = crate::call_macros("t.vba", "commands/run", serde_json::json!({}), &mut |_, _| Err(crate::HostError::unknown())).unwrap_err();
+        assert!(e.contains("doesn't run macros"), "{e}");
+        crate::set_enabled("t.vba", false).unwrap();
+        assert!(!crate::macro_plugins().iter().any(|(id, _)| id == "t.vba"));
+        assert!(crate::unload("t.vba"));
+    }
+}

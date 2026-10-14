@@ -49,6 +49,7 @@ impl WordApp {
         let window = self.windows.shown();
         let moved = |app: &WordApp| app.windows.shown() != window;
         if self.ui.backstage {
+            crate::office_pane::covered(self);
             backstage::show(self, ui);
         } else if !self.has_document() {
             // No document open (#1129): the ribbon greyed out but for Help, and no page.
@@ -72,7 +73,9 @@ impl WordApp {
                     return;
                 }
                 crate::language_packs::bar(self, ui);
+                crate::dialogs_developer::macro_bar(self, ui);
                 chrome::status_bar(self, ui);
+                crate::office_pane::show(self, ui);
                 panes::show(self, ui);
             }
             if moved(self) {

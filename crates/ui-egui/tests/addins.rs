@@ -137,3 +137,129 @@ fn the_add_ins_dialog_lists_commands_and_unloads() {
     assert!(wordcraft_plugin::get(ID).is_none());
     assert!(h.query_by_label("No add-ins are loaded.").is_some());
 }
+
+#[test]
+fn a_macro_add_in_brings_the_code_group_and_the_macros_bar() {
+    let _g = serial();
+    let m = wordcraft_plugin::Manifest::parse(
+        r#"{"id": "t.ui-vba", "name": "VBA Test", "macros": {"language": "VBA"}, "run": {"command": "./not-started"}}"#,
+    )
+    .unwrap();
+    wordcraft_plugin::add(m, std::env::temp_dir());
+    struct Unload;
+    impl Drop for Unload {
+        fn drop(&mut self) {
+            wordcraft_plugin::unload("t.ui-vba");
+        }
+    }
+    let _unload = Unload;
+    let mut doc = wordcraft_doc::Document::new();
+    doc.passthrough.insert(wordcraft_docx::VBA_PROJECT_PART.to_string(), std::sync::Arc::new(b"project".to_vec()));
+    let mut a = WordApp::new(Session::new(doc), Services::default());
+    a.run("ui.tab", json!({"tab": "Developer"})).unwrap();
+    let mut h = harness(a);
+    h.run_steps(4);
+    // A document with macros opens with them off, and the bar says so until Enable Content.
+    assert!(h.query_by_label("Enable Content").is_some(), "the macros bar");
+    h.get_by_label("Enable Content").click();
+    h.run_steps(4);
+    assert!(h.state().session.macros_enabled);
+    assert!(h.query_by_label("Enable Content").is_none());
+    // Developer › Code (its buttons open these dialogs: ribbon buttons are painted, not labelled).
+    assert!(wordcraft_ui_egui::dialogs_developer::visible());
+    h.state_mut().run("ui.dialog", json!({"name": "macroSecurity"})).unwrap();
+    h.run_steps(4);
+    h.get_by_label("Disable all macros").click();
+    h.run_steps(4);
+    assert_eq!(h.state().session.prefs.macro_security, "disable");
+    // The Macros dialog says why the add-in can't start instead of hanging.
+    h.state_mut().dialog = None;
+    h.state_mut().run("ui.dialog", json!({"name": "vbaMacros"})).unwrap();
+    h.run_steps(4);
+    assert!(h.query_by_label("Macro name:").is_some());
+    wordcraft_plugin::unload("t.ui-vba");
+    assert!(!wordcraft_ui_egui::dialogs_developer::visible(), "no macro add-in, no Code group");
+}
+
+/// A web view host that records what it was asked and lets the test post a page's messages.
+#[derive(Clone, Default)]
+struct FakeWeb(std::sync::Arc<Mutex<Web>>);
+
+#[derive(Default)]
+struct Web {
+    shown: Vec<(String, String)>,
+    inbox: Vec<(String, String)>,
+    replies: Vec<(String, String)>,
+    hidden: Vec<String>,
+}
+
+impl wordcraft_ui_egui::office_pane::OfficeHost for FakeWeb {
+    fn show(&mut self, key: &str, url: &str, _rect: egui::Rect, _ppp: f32) {
+        let mut w = self.0.lock().unwrap();
+        if !w.shown.iter().any(|(k, _)| k == key) {
+            w.shown.push((key.into(), url.into()));
+        }
+    }
+    fn hide(&mut self, key: &str) {
+        self.0.lock().unwrap().hidden.push(key.into());
+    }
+    fn close(&mut self, _key: &str) {}
+    fn run_function(&mut self, _key: &str, _url: &str, _function: &str) {}
+    fn take_messages(&mut self) -> Vec<(String, String)> {
+        std::mem::take(&mut self.0.lock().unwrap().inbox)
+    }
+    fn reply(&mut self, key: &str, json: &str) {
+        self.0.lock().unwrap().replies.push((key.into(), json.into()));
+    }
+}
+
+#[test]
+fn an_office_add_ins_task_pane_reads_and_writes_the_document() {
+    let _g = serial();
+    let manifest = r#"<?xml version="1.0" encoding="UTF-8"?>
+<OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="TaskPaneApp">
+  <Id>0d5c7a1e-0000-4bcd-9eaf-0000000000bb</Id><Version>1.0.0.0</Version><ProviderName>Tests</ProviderName><DefaultLocale>en-US</DefaultLocale>
+  <DisplayName DefaultValue="Pane Test"/><Description DefaultValue="Tests"/>
+  <Hosts><Host Name="Document"/></Hosts>
+  <DefaultSettings><SourceLocation DefaultValue="https://tests.example/pane.html"/></DefaultSettings>
+  <Permissions>ReadWriteDocument</Permissions>
+</OfficeApp>"#;
+    let m = wordcraft_plugin::office::parse_manifest(manifest, wordcraft_plugin::HOST_ID).unwrap();
+    let id = m.id.clone();
+    wordcraft_plugin::add(m, std::env::temp_dir());
+    let web = FakeWeb::default();
+    let services = Services { office: Some(Box::new(web.clone())), ..Default::default() };
+    let mut h = harness(WordApp::new(Session::new(wordcraft_doc::Document::from_text("Hello")), services));
+    h.run_steps(2);
+    h.state_mut().run("plugins.run", json!({"plugin": id, "command": "taskpane"})).unwrap();
+    h.run_steps(3);
+    let key = web.0.lock().unwrap().shown.first().cloned().map(|(k, url)| {
+        assert_eq!(url, "https://tests.example/pane.html");
+        k
+    });
+    let key = key.expect("the pane's page was shown");
+    // One context.sync(): a paragraph at the end, then the body's text.
+    let msg = json!({"id": 7, "actions": [
+        {"op": "call", "path": [{"p": "document"}, {"p": "body"}], "method": "insertParagraph", "args": ["World", "End"]},
+        {"op": "load", "path": [{"p": "document"}, {"p": "body"}], "props": ["text"]}
+    ]});
+    web.0.lock().unwrap().inbox.push((key.clone(), msg.to_string()));
+    h.run_steps(2);
+    let (to, reply) = web.0.lock().unwrap().replies.last().cloned().unwrap();
+    assert_eq!(to, key);
+    let reply: serde_json::Value = serde_json::from_str(&reply).unwrap();
+    assert_eq!(reply["id"], 7);
+    assert_eq!(reply["results"][1]["text"], "Hello\nWorld", "{reply}");
+    // A failing sync answers its error and changes nothing.
+    let bad = json!({"id": 8, "actions": [{"op": "load", "path": [{"p": "nowhere"}], "props": ["text"]}]});
+    web.0.lock().unwrap().inbox.push((key.clone(), bad.to_string()));
+    h.run_steps(2);
+    let (_, reply) = web.0.lock().unwrap().replies.last().cloned().unwrap();
+    let reply: serde_json::Value = serde_json::from_str(&reply).unwrap();
+    assert_eq!((reply["id"].clone(), reply["error"]["code"].clone()), (json!(8), json!("InvalidArgument")), "{reply}");
+    // The File tab hides the page (a native web view would cover it).
+    h.state_mut().ui.backstage = true;
+    h.run_steps(2);
+    assert!(web.0.lock().unwrap().hidden.contains(&key));
+    wordcraft_plugin::unload(&id);
+}

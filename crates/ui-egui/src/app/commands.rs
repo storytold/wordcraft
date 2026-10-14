@@ -470,6 +470,15 @@ impl WordApp {
         if req.get("close").is_some() {
             self.quit_requested = true;
         }
+        // An Office add-in's command: its task pane, or a function in its hidden page.
+        if let Some(p) = req.get("officePane") {
+            let s = |k: &str| p.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+            crate::office_pane::open(self, &s("plugin"), &s("title"), &s("url"), p.get("pane").and_then(Value::as_str));
+        }
+        if let Some(p) = req.get("officeFunction") {
+            let s = |k: &str| p.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+            crate::office_pane::run_function(self, &s("plugin"), &s("url"), &s("function"));
+        }
         // A word from a command for the status bar (Save turning a .docx with macros into a .docm).
         if let Some(text) = req.get("status").and_then(Value::as_str) {
             self.status(text.to_string());

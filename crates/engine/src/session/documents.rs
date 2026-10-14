@@ -77,6 +77,7 @@ pub struct DocState {
     pub(super) merge: crate::cmd::mailings::MergeState,
     pub(super) math: Option<MathEdit>,
     pub(super) password: Option<crate::io::Password>,
+    pub(super) macros_enabled: bool,
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) recovery_slot: crate::recovery::Slot,
     pub(super) also_selected: Vec<Pos>,
@@ -131,6 +132,7 @@ impl DocState {
             merge: Default::default(),
             math: None,
             password: None,
+            macros_enabled: false,
             #[cfg(not(target_arch = "wasm32"))]
             recovery_slot: Default::default(),
             also_selected: Vec::new(),
@@ -231,6 +233,7 @@ impl Session {
             merge: _,
             math: _,
             password: _,
+            macros_enabled: _,
             #[cfg(not(target_arch = "wasm32"))]
                 recovery_slot: _,
             also_selected: _,
@@ -320,6 +323,7 @@ impl Session {
             merge,
             math,
             password,
+            macros_enabled,
             #[cfg(not(target_arch = "wasm32"))]
             recovery_slot,
             also_selected,
@@ -367,6 +371,7 @@ impl Session {
         swap(&mut self.merge, merge);
         swap(&mut self.math, math);
         swap(&mut self.password, password);
+        swap(&mut self.macros_enabled, macros_enabled);
         #[cfg(not(target_arch = "wasm32"))]
         swap(&mut self.recovery_slot, recovery_slot);
         swap(&mut self.also_selected, also_selected);

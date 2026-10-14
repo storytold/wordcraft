@@ -35,6 +35,8 @@ impl Class {
 pub const TABLE: &[(&str, Class)] = &[
     ("geom", Class::Layer(0)),
     ("control-key", Class::Standalone),
+    // Office.js for add-ins' task panes (wasm, loaded by the desktop app's web views).
+    ("office-js", Class::Standalone),
     ("doc", Class::Layer(1)),
     ("fonts", Class::Layer(1)),
     ("metafile", Class::Layer(1)),
