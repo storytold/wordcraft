@@ -435,15 +435,31 @@ pub fn now_iso() -> String {
 /// The local time zone's offset from UTC in seconds (east positive) at `unix`, daylight saving
 /// included: the system's zone, or the browser's on the web. 0 (UTC) when it can't be found.
 pub fn local_offset_secs(unix: u64) -> i64 {
+    system_offset_secs(unix).clamp(-26 * 3600, 26 * 3600)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn system_offset_secs(unix: u64) -> i64 {
     use chrono::Offset;
     let Some(utc) = i64::try_from(unix).ok().and_then(|secs| chrono::DateTime::from_timestamp(secs, 0)) else {
         return 0;
     };
     // chrono's `Local` has internal `expect`s (unreadable zone data, an unmapped Windows year), so
-    // fence it: a failure means UTC, never a crash.
-    std::panic::catch_unwind(|| i64::from(utc.with_timezone(&chrono::Local).offset().fix().local_minus_utc()))
-        .unwrap_or(0)
-        .clamp(-26 * 3600, 26 * 3600)
+    // fence it: a failure means UTC, never a crash. A caught panic is still reported by the app's
+    // panic hook (logged, no abort); the document is untouched.
+    std::panic::catch_unwind(|| i64::from(utc.with_timezone(&chrono::Local).offset().fix().local_minus_utc())).unwrap_or(0)
+}
+
+/// On the web the browser's `Date` gives the offset directly (chrono isn't used there).
+#[cfg(target_arch = "wasm32")]
+fn system_offset_secs(unix: u64) -> i64 {
+    let ms = (unix as f64) * 1000.0;
+    if !ms.is_finite() {
+        return 0;
+    }
+    // `getTimezoneOffset` is minutes *west* of UTC (UTC+13 gives -780); NaN for an invalid date.
+    let west_min = js_sys::Date::new(&js_sys::wasm_bindgen::JsValue::from_f64(ms)).get_timezone_offset();
+    if west_min.is_finite() && west_min.abs() <= 26.0 * 60.0 { -(west_min as i64) * 60 } else { 0 }
 }
 
 /// The local civil date and time now: see [`local_civil`].

@@ -27,7 +27,6 @@ regex = { workspace = true }
 regex-automata = { workspace = true }
 image = { workspace = true }
 zeroize = { workspace = true }
-chrono = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # The browser clock for `now_iso` (`SystemTime::now()` panics on wasm32).
@@ -35,6 +34,8 @@ js-sys = "0.3"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 getrandom = { workspace = true }
+# The local time zone's offset for Insert ▸ Date & Time and date fields (#1707).
+chrono = { workspace = true }
 
 [dev-dependencies]
 encoding_rs = { workspace = true }
