@@ -6782,6 +6782,63 @@ fn preferred_widths_wider_than_the_page_are_squeezed_like_word() {
     assert_eq!(n, 1, "the label wraps over {n} lines");
 }
 
+/// A table that sets its own width keeps it even when it is wider than the text area (Word lets
+/// it run into the margin and past the page): only a table whose width comes from its columns
+/// is squeezed into the room.
+#[test]
+fn a_table_with_its_own_width_keeps_it_past_the_margin() {
+    let text = |s: &str| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(s, Default::default()));
+    let second_column_x = |own_width: Option<f32>| {
+        let mut t = Table::new(1, 2, 468.0);
+        t.grid = vec![200.0, 350.0];
+        t.props.width = own_width;
+        for (c, w) in t.rows[0].cells.iter_mut().zip([200.0, 350.0]) {
+            c.props.width = Some(w);
+            c.blocks = vec![text("Cell")];
+        }
+        let mut d = Document::from_text("After");
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        let [(x, _, _)] = para_at(&lay(&d), &[0, 0, 1, 0])[..] else { panic!("second cell missing") };
+        x - 72.0
+    };
+    let kept = second_column_x(Some(550.0));
+    assert!((kept - 200.0).abs() < 8.0, "own width kept: second column at {kept}");
+    let squeezed = second_column_x(None);
+    assert!(squeezed < 190.0, "columns alone are squeezed into the 468 pt: second column at {squeezed}");
+}
+
+/// When no cell asks for a width, Word sizes the columns by their content and ignores the grid
+/// (generators write a placeholder one); a table with a width of its own is then stretched to
+/// it, every column in proportion to its widest line.
+#[test]
+fn without_cell_widths_columns_follow_their_content_whatever_the_grid() {
+    let text = |s: &str| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(s, Default::default()));
+    let widths = |own_pct: Option<f32>, grid: Vec<f32>| {
+        let mut t = Table::new(1, 3, 468.0);
+        t.grid = grid;
+        t.props.width = None;
+        t.props.width_pct = own_pct;
+        for (c, s) in t.rows[0].cells.iter_mut().zip(["a", "bb bb bb", "ccc"]) {
+            c.props.width = None;
+            c.blocks = vec![text(s)];
+        }
+        let mut d = Document::from_text("After");
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let xs: Vec<f32> = (0..3).map(|i| para_at(&l, &[0, 0, i, 0])[0].0).collect();
+        [xs[1] - xs[0], xs[2] - xs[1]]
+    };
+    // A placeholder grid of equal 5 pt columns, or one favouring the first column: the same widths.
+    let placeholder = widths(Some(100.0), vec![5.0, 5.0, 5.0]);
+    let skewed = widths(Some(100.0), vec![300.0, 50.0, 100.0]);
+    assert!((placeholder[0] - skewed[0]).abs() < 0.5 && (placeholder[1] - skewed[1]).abs() < 0.5, "{placeholder:?} vs {skewed:?}");
+    // Stretched to the full width in proportion to the content: the middle column is the widest.
+    assert!(placeholder[1] > placeholder[0] * 1.5, "{placeholder:?}");
+    // Without a width of its own the table stays as narrow as its content.
+    let narrow = widths(None, vec![300.0, 50.0, 100.0]);
+    assert!(narrow[0] < placeholder[0] / 2.0, "{narrow:?} vs {placeholder:?}");
+}
+
 #[test]
 fn an_inherited_footer_sizes_its_percentage_table_by_its_own_section() {
     use wordcraft_doc::section::SectionProps;
