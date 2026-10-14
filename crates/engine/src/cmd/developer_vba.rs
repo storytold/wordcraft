@@ -8,8 +8,14 @@
 //! Macro security (`prefs.macro_security`): `disable` runs nothing; `prompt` (the default) runs a
 //! document's macros once the user enabled them for it (`developer.enableMacros`, the message
 //! bar's Enable Content); `enable` runs all.
+//!
+//! The document's ribbon (`developer.ribbon`, `addRibbonButton`…): tabs, groups and buttons that
+//! run its macros, saved with it (`customUI14.xml`) so Word shows them too. A button runs its
+//! macro as Word does, with the button as the argument (`Sub Go(control As IRibbonControl)`).
 
 use serde_json::{Value, json};
+use wordcraft_doc::ribbon::{MAX_RIBBON_ITEMS, builtin_tab_id, builtin_tab_name};
+use wordcraft_doc::{Ribbon, RibbonButton, RibbonGroup, RibbonTab};
 use wordcraft_plugin::office::{Action, Permission};
 use wordcraft_plugin::{HostError, call_macros, macro_plugins};
 
@@ -36,6 +42,18 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("developer.deleteModule", "Remove Module", LOC, delete_module).params(r#"{"name": string, "plugin"?: id}"#).pure(),
         CommandSpec::new("developer.recordMacro", "Record Macro", LOC, record_macro)
             .params(r#"{"stop"?: bool, "module"?: "Module1"} → {"recording"} or, when stopping, {"module", "source", "steps"}: records what you do as a VBA macro"#)
+            .pure(),
+        CommandSpec::new("developer.ribbon", "Ribbon Buttons", LOC, ribbon)
+            .params(r#"{} → {"tabs": [{"tab", "id", "builtin", "label", "groups": [{"id", "label", "buttons": [{"id", "label", "macro", "image", "large", "screentip", "tag"}]}]}], "editable"}: the document's own ribbon buttons"#)
+            .pure(),
+        CommandSpec::new("developer.addRibbonButton", "Add Ribbon Button", LOC, add_ribbon_button).params(
+            r#"{"macro": "Module1.Go", "label"?, "tab"?: "Macros"|"Home"|"References"…, "group"?: "Macros", "image"?, "large"?: bool, "screentip"?, "tag"?} → {"id"}: a button that runs the macro, saved with the document"#,
+        ),
+        CommandSpec::new("developer.editRibbonButton", "Edit Ribbon Button", LOC, edit_ribbon_button)
+            .params(r#"{"id", "macro"?, "label"?, "image"?, "large"?, "screentip"?, "tag"?} → {"id"}"#),
+        CommandSpec::new("developer.removeRibbonButton", "Remove Ribbon Button", LOC, remove_ribbon_button).params(r#"{"id"} → {}"#),
+        CommandSpec::new("developer.pressRibbonButton", "Press Ribbon Button", LOC, press_ribbon_button)
+            .params(r#"{"id"} → {"ran"}: runs the button's macro, as clicking it does"#)
             .pure(),
         CommandSpec::new("developer.enableMacros", "Enable Content", LOC, enable_macros).params(r#"{"on"?: bool} → {"enabled"}: lets this document's macros run (until it closes)"#).pure(),
         CommandSpec::new("developer.macroSecurity", "Macro Security", LOC, macro_security)
@@ -186,6 +204,192 @@ fn run_macro(s: &mut Session, v: &Value) -> CmdResult {
     }
     call(s, "Run Macro", &plugin, "macros/run", params)?;
     Ok(json!({"ran": name}))
+}
+
+/// The document's ribbon: its own (editable), or the buttons of a richer one kept from the file.
+pub fn current_ribbon(s: &Session) -> (Ribbon, bool) {
+    if let Some(data) = wordcraft_docx::custom_ui::kept_part(&s.doc) {
+        return (wordcraft_docx::custom_ui::parse_buttons(data), false);
+    }
+    (s.doc.ribbon.clone().unwrap_or_default(), !wordcraft_docx::custom_ui::has_kept_ribbon(&s.doc))
+}
+
+/// The WordCraft tab a ribbon tab shows on.
+pub fn tab_name(t: &RibbonTab) -> String {
+    match &t.builtin {
+        Some(mso) => builtin_tab_name(mso).map(str::to_string).unwrap_or_else(|| mso.trim_start_matches("Tab").to_string()),
+        None if !t.label.trim().is_empty() => t.label.clone(),
+        None => t.id.clone(),
+    }
+}
+
+fn ribbon(s: &mut Session, _v: &Value) -> CmdResult {
+    let (r, editable) = current_ribbon(s);
+    let tabs: Vec<Value> = r
+        .tabs
+        .iter()
+        .map(|t| {
+            let groups: Vec<Value> = t
+                .groups
+                .iter()
+                .map(|g| {
+                    let buttons: Vec<Value> = g
+                        .buttons
+                        .iter()
+                        .map(|b| {
+                            json!({"id": b.id, "label": b.label, "macro": b.on_action, "image": b.image, "large": b.large, "screentip": b.screentip, "tag": b.tag})
+                        })
+                        .collect();
+                    json!({"id": g.id, "label": g.label, "buttons": buttons})
+                })
+                .collect();
+            json!({"tab": tab_name(t), "id": t.id, "builtin": t.builtin, "label": t.label, "groups": groups})
+        })
+        .collect();
+    Ok(json!({"tabs": tabs, "editable": editable}))
+}
+
+/// Text for a ribbon attribute: trimmed, at most 1024 characters (RibbonX's limit for labels).
+fn text(v: &Value, key: &str) -> Option<String> {
+    p::str(v, key).map(|t| t.trim().chars().take(1024).collect())
+}
+
+/// The document's editable ribbon, for a change.
+fn ribbon_mut(s: &mut Session) -> Result<&mut Ribbon, CmdError> {
+    if !current_ribbon(s).1 {
+        return Err(CmdError::Disabled(
+            "this document's ribbon came from another program with more than buttons: WordCraft runs it but doesn't change it".into(),
+        ));
+    }
+    Ok(s.doc.ribbon.get_or_insert_with(Ribbon::default))
+}
+
+/// A macro name a button may run: `Module1.Go`, `Go`, or `Project.Module1.Go`.
+fn macro_name(v: &Value) -> Result<Option<String>, CmdError> {
+    let Some(m) = text(v, "macro") else { return Ok(None) };
+    let ok = !m.is_empty() && m.len() <= 255 && m.chars().all(|c| c.is_alphanumeric() || "_.!'[] -".contains(c));
+    if !ok {
+        return Err(CmdError::Params("`macro` is a macro's name, like Module1.Hello".into()));
+    }
+    Ok(Some(m))
+}
+
+/// `image`: absent (no change), cleared, or a built-in picture's name.
+fn image(v: &Value) -> Result<Option<Option<String>>, CmdError> {
+    match v.get("image") {
+        None => Ok(None),
+        Some(Value::Null) => Ok(Some(None)),
+        Some(Value::String(t)) if t.is_empty() => Ok(Some(None)),
+        Some(Value::String(t)) if t.len() <= 64 && t.chars().all(|c| c.is_ascii_alphanumeric()) => Ok(Some(Some(t.clone()))),
+        Some(_) => Err(CmdError::Params("`image` is a built-in picture's name, like HappyFace".into())),
+    }
+}
+
+fn add_ribbon_button(s: &mut Session, v: &Value) -> CmdResult {
+    let on_action = macro_name(v)?.ok_or_else(|| CmdError::Params("missing `macro`".into()))?;
+    let image = image(v)?.flatten();
+    let label = text(v, "label").filter(|l| !l.is_empty()).unwrap_or_else(|| on_action.rsplit(['.', '!']).next().unwrap_or(&on_action).to_string());
+    let tab = text(v, "tab").filter(|t| !t.is_empty()).unwrap_or_else(|| "Macros".into());
+    let group = text(v, "group").filter(|g| !g.is_empty()).unwrap_or_else(|| "Macros".into());
+    let r = ribbon_mut(s)?;
+    let builtin = builtin_tab_id(&tab);
+    let found = r.tabs.iter().position(|t| match builtin {
+        Some(_) => t.builtin.as_deref().and_then(builtin_tab_name).is_some_and(|n| n.eq_ignore_ascii_case(&tab)),
+        None => t.builtin.is_none() && tab_name(t).eq_ignore_ascii_case(&tab),
+    });
+    let ti = match found {
+        Some(i) => i,
+        None => {
+            if r.tabs.len() >= MAX_RIBBON_ITEMS {
+                return Err(CmdError::Params("the ribbon has too many tabs".into()));
+            }
+            let id = if builtin.is_some() { String::new() } else { r.fresh_id("craftTab") };
+            r.tabs.push(RibbonTab {
+                id,
+                builtin: builtin.map(str::to_string),
+                label: if builtin.is_some() { String::new() } else { tab.clone() },
+                groups: vec![],
+            });
+            r.tabs.len() - 1
+        }
+    };
+    let group_id = r.fresh_id("craftGroup");
+    let button_id = r.fresh_id("craftButton");
+    let Some(t) = r.tabs.get_mut(ti) else { return Err(CmdError::Failed("no such tab".into())) };
+    let gi = match t.groups.iter().position(|g| g.label.eq_ignore_ascii_case(&group)) {
+        Some(i) => i,
+        None => {
+            if t.groups.len() >= MAX_RIBBON_ITEMS {
+                return Err(CmdError::Params("the tab has too many groups".into()));
+            }
+            t.groups.push(RibbonGroup { id: group_id, label: group, buttons: vec![] });
+            t.groups.len() - 1
+        }
+    };
+    let Some(g) = t.groups.get_mut(gi) else { return Err(CmdError::Failed("no such group".into())) };
+    if g.buttons.len() >= MAX_RIBBON_ITEMS {
+        return Err(CmdError::Params("the group has too many buttons".into()));
+    }
+    g.buttons.push(RibbonButton {
+        id: button_id.clone(),
+        label,
+        on_action,
+        image,
+        large: v.get("large").and_then(Value::as_bool).unwrap_or(true),
+        screentip: text(v, "screentip").filter(|t| !t.is_empty()),
+        supertip: None,
+        tag: text(v, "tag").filter(|t| !t.is_empty()),
+    });
+    Ok(json!({"id": button_id}))
+}
+
+fn edit_ribbon_button(s: &mut Session, v: &Value) -> CmdResult {
+    let id = p::req_str(v, "id")?.to_string();
+    let on_action = macro_name(v)?;
+    let image = image(v)?;
+    let r = ribbon_mut(s)?;
+    let b = r.button_mut(&id).ok_or_else(|| CmdError::Params(format!("no ribbon button `{id}`")))?;
+    if let Some(m) = on_action {
+        b.on_action = m;
+    }
+    if let Some(l) = text(v, "label").filter(|l| !l.is_empty()) {
+        b.label = l;
+    }
+    if let Some(i) = image {
+        b.image = i;
+    }
+    if let Some(l) = v.get("large").and_then(Value::as_bool) {
+        b.large = l;
+    }
+    if let Some(t) = text(v, "screentip") {
+        b.screentip = Some(t).filter(|t| !t.is_empty());
+    }
+    if let Some(t) = text(v, "tag") {
+        b.tag = Some(t).filter(|t| !t.is_empty());
+    }
+    Ok(json!({"id": id}))
+}
+
+fn remove_ribbon_button(s: &mut Session, v: &Value) -> CmdResult {
+    let id = p::req_str(v, "id")?.to_string();
+    let r = ribbon_mut(s)?;
+    if !r.remove_button(&id) {
+        return Err(CmdError::Params(format!("no ribbon button `{id}`")));
+    }
+    // A document left without buttons has no ribbon part.
+    if r.is_empty() {
+        s.doc.ribbon = None;
+    }
+    Ok(json!({}))
+}
+
+fn press_ribbon_button(s: &mut Session, v: &Value) -> CmdResult {
+    let id = p::req_str(v, "id")?;
+    let (r, _) = current_ribbon(s);
+    let b = r.button(id).ok_or_else(|| CmdError::Params(format!("no ribbon button `{id}`")))?;
+    // A macro named with its file (`'Letter.docm'!Module1.Go`) is this document's.
+    let name = b.on_action.rsplit('!').next().unwrap_or(&b.on_action).to_string();
+    run_macro(s, &json!({"name": name, "control": {"id": b.id, "tag": b.tag.clone().unwrap_or_default()}}))
 }
 
 fn modules(s: &mut Session, v: &Value) -> CmdResult {

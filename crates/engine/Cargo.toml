@@ -61,3 +61,8 @@ cfb = { workspace = true }
 [[test]]
 name = "plugins"
 harness = false
+
+# The same: the test binary is also the macro add-in its ribbon buttons call.
+[[test]]
+name = "ribbon_buttons"
+harness = false

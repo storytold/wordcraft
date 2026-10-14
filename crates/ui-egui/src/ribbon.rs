@@ -121,6 +121,12 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             tabs.push((t, true));
         }
     }
+    // The document's own tabs (its ribbon buttons that run macros), after those.
+    for t in crate::dialogs_developer::book_tabs(app) {
+        if !tabs.iter().any(|(n, _)| n.eq_ignore_ascii_case(&t)) && t != "File" && !wordcraft_engine::ribbon::CONTEXTUAL_TABS.contains(&t.as_str()) {
+            tabs.push((t, true));
+        }
+    }
     for ct in contextual_tabs(&app.session) {
         if ct == "Outlining" {
             tabs.insert(1.min(tabs.len()), (ct.to_string(), false));
@@ -408,6 +414,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         "Chart Design" => chart_design(app, ui),
                         // A tab an add-in added (or one whose add-in was just turned off).
                         other if !crate::plugin_ui::groups(other).is_empty() => {}
+                        // A tab of the document's own (its macro buttons).
+                        other if crate::dialogs_developer::has_book_groups(app, other) => {}
                         _ => home(app, ui),
                     }
                     if let Some(e) = entry {
@@ -416,6 +424,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     // Add-in groups: at the end of a built-in tab, or the whole of an add-in's own tab.
                     let tab = app.ui.tab.clone();
                     crate::plugin_ui::ribbon_groups(app, ui, &tab);
+                    // Then the document's own buttons on this tab.
+                    crate::dialogs_developer::book_ribbon_groups(app, ui, &tab);
                 };
                 if rtl {
                     measured = ui.allocate_ui_with_layout(size, egui::Layout::right_to_left(egui::Align::Min), body).response.rect.width();

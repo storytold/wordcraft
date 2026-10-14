@@ -43,6 +43,7 @@ pub mod para;
 pub mod picfx;
 pub mod props;
 pub mod resolve;
+pub mod ribbon;
 pub mod section;
 pub mod smart_art;
 pub mod styles;
@@ -60,6 +61,7 @@ use serde::{Deserialize, Serialize};
 
 pub use control::{ContentControl, ControlKind, ControlLock, ControlRange, ControlWrap};
 pub use fields::FieldRange;
+pub use ribbon::{Ribbon, RibbonButton, RibbonGroup, RibbonTab};
 pub use numbering::{ListKind, Numbering};
 pub use para::{InlineObject, Paragraph, Run};
 pub use props::{Align, CharProps, ParaProps, Rgb, TextColor};
@@ -130,6 +132,10 @@ pub struct Document {
     /// The document's own building blocks (its glossary document), in file order.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub glossary: Vec<BuildingBlock>,
+    /// The document's own ribbon tabs, groups and macro buttons (`customUI14.xml`). `None` = none,
+    /// or a richer customisation kept unchanged as a package part.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ribbon: Option<Ribbon>,
     /// Lookup cache for [`Document::add_media`]; not part of the document (never saved, ignored
     /// by `==`).
     #[serde(skip)]

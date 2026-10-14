@@ -552,6 +552,13 @@ impl WordApp {
                 self.colors = Some(d);
                 json!({"dialog": "colors"})
             }
+            // Developer › Ribbon Buttons with a macro picked (`macro`), as the Macros window's Add to Ribbon.
+            "ui.dialog" if s("name") == Some("ribbonButtons") => {
+                let macro_name = s("macro").map(str::to_string);
+                let d = crate::dialogs_developer::buttons_dialog(self, macro_name.as_deref());
+                self.dialog = Some(dialogs::Dialog::Developer(Box::new(d)));
+                json!({"dialog": "ribbonButtons"})
+            }
             "ui.dialog" => {
                 self.dialog = dialogs::Dialog::open(s("name").unwrap_or(""), self);
                 // New / Modify Table Style can open on a part (`"part": "firstRow"`…).

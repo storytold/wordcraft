@@ -177,6 +177,7 @@ fn a_macro_add_in_brings_the_code_group_and_the_macros_bar() {
     h.state_mut().run("ui.dialog", json!({"name": "vbaMacros"})).unwrap();
     h.run_steps(4);
     assert!(h.query_by_label("Macro name:").is_some());
+    assert!(h.query_by_label("Add to Ribbon…").is_some(), "a macro goes on the ribbon from here");
     wordcraft_plugin::unload("t.ui-vba");
     assert!(!wordcraft_ui_egui::dialogs_developer::visible(), "no macro add-in, no Code group");
 }
@@ -262,4 +263,61 @@ fn an_office_add_ins_task_pane_reads_and_writes_the_document() {
     h.run_steps(2);
     assert!(web.0.lock().unwrap().hidden.contains(&key));
     wordcraft_plugin::unload(&id);
+}
+
+#[test]
+fn a_documents_ribbon_buttons_show_on_their_tabs_and_run_their_macros() {
+    use wordcraft_doc::{Ribbon, RibbonButton, RibbonGroup, RibbonTab};
+    // No macro add-in loaded meanwhile: the buttons show without one.
+    let _g = serial();
+    let button = |id: &str, label: &str| RibbonButton {
+        id: id.into(),
+        label: label.into(),
+        on_action: format!("Module1.{label}"),
+        large: true,
+        ..Default::default()
+    };
+    let group = |b| vec![RibbonGroup { id: "g".into(), label: "Letters".into(), buttons: vec![b] }];
+    let mut doc = wordcraft_doc::Document::new();
+    doc.ribbon = Some(Ribbon {
+        tabs: vec![
+            RibbonTab { id: "tTools".into(), label: "Tools".into(), groups: group(button("b1", "Go")), ..Default::default() },
+            RibbonTab { builtin: Some("TabReferences".into()), groups: group(button("b2", "Hello")), ..Default::default() },
+        ],
+    });
+    let mut a = WordApp::new(Session::new(doc), Services::default());
+    a.run("ui.tab", json!({"tab": "References"})).unwrap();
+    let mut h = harness(a);
+    h.run_steps(4);
+    // On References, after its own groups.
+    assert!(h.query_by_label("Hello").is_some(), "the document's button on References");
+    assert!(h.query_by_label("Go").is_none());
+    // Its own tab joins the tab row.
+    h.state_mut().run("ui.tab", json!({"tab": "Tools"})).unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.tab, "Tools");
+    h.get_by_label("Go").click();
+    h.run_steps(4);
+    // Macros start disabled: the click says so instead of running.
+    let said = h.state().status_msg.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+    assert!(said.contains("disabled"), "{said}");
+    // Developer › Ribbon Buttons (as the Macros window's Add to Ribbon opens it) adds one more,
+    // saved in the document.
+    h.state_mut().run("ui.dialog", json!({"name": "ribbonButtons", "macro": "Module1.Report"})).unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("ribbonButtons"));
+    assert!(h.query_by_label("Tools › Letters › Go").is_some(), "the document's buttons are listed");
+    h.get_by_label("Add").click();
+    h.run_steps(4);
+    let ribbon = h.state().session.doc.ribbon.clone().unwrap();
+    let added = ribbon.tabs.iter().find(|t| t.label == "Macros").and_then(|t| t.groups.first()).and_then(|g| g.buttons.first()).cloned();
+    assert_eq!(added.map(|b| (b.label, b.on_action, b.image)), Some(("Report".into(), "Module1.Report".into(), Some("MacroPlay".into()))));
+    // Its tab joins the tab row: open it and the button is there; undo takes it away.
+    h.state_mut().dialog = None;
+    h.state_mut().run("ui.tab", json!({"tab": "Macros"})).unwrap();
+    h.run_steps(4);
+    assert!(h.query_by_label("Report").is_some());
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    h.run_steps(4);
+    assert!(h.query_by_label("Report").is_none());
 }

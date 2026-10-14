@@ -144,8 +144,9 @@ impl Reader<'_> {
     /// glossary…), with every part they reach, so saving carries them unchanged. Skipped: the
     /// relationship types the writer produces or the reader models ([`HANDLED_RELS`]) and any
     /// relationship the main document's markup refers to by id (its target goes with the
-    /// element, or not at all).
-    pub(super) fn keep_unmodelled(&mut self, root: &El, package: &Rels, document: &Rels) {
+    /// element, or not at all). `modelled` names package relationships whose content the model
+    /// took over (the ribbon).
+    pub(super) fn keep_unmodelled(&mut self, root: &El, package: &Rels, document: &Rels, modelled: &[String]) {
         // The ids the main document's markup refers to, in one pass over the markup: an id is
         // named in a relationship attribute (`r:id="rId5"`). One scan for all of them, not one
         // search per relationship — a large document with many relationships took minutes to
@@ -159,6 +160,7 @@ impl Reader<'_> {
                 let tail = rel.kind.rsplit('/').next().unwrap_or("");
                 if HANDLED_RELS.contains(&tail)
                     || (owner == "D" && referenced.contains(rel.id.as_bytes()))
+                    || (owner == "P" && modelled.contains(&rel.id))
                     || (owner == "D" && tail == "glossaryDocument" && std::mem::replace(&mut glossary, true))
                     || ![&rel.kind, &rel.target].iter().all(|s| manifest_field_ok(s))
                 {

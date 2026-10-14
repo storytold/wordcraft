@@ -184,6 +184,16 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
         push_part(&mut entries, &mut overrides, &name, bytes, &ct, prels);
     }
 
+    // The document's ribbon, unless the file kept a richer one of its own (both would clash).
+    if let Some(r) = doc.ribbon.as_ref().filter(|r| !r.is_empty() && !crate::custom_ui::has_kept_ribbon(doc)) {
+        let part = crate::custom_ui::PART_CUSTOM_UI14;
+        if entries.iter().any(|(n, _)| n.eq_ignore_ascii_case(part)) {
+            log::warn!("docx: {part} is taken by a kept part; the document's ribbon is left out");
+        } else {
+            push_part(&mut entries, &mut overrides, part, crate::custom_ui::write(r).into_bytes(), "application/xml", PartRels::default());
+            root.add(crate::custom_ui::REL_CUSTOM_UI14, part, false);
+        }
+    }
     // The macro project and the parts it relates to (VBA data, signatures…), verbatim. A
     // macro-free package can't hold them (Word drops them too).
     if let Some(vba) = doc.passthrough.get(VBA_PROJECT_PART).filter(|b| !b.is_empty()) {

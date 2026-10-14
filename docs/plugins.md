@@ -1,6 +1,6 @@
 # Add-ins (plugins)
 
-> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (protocol 1.1: host requests, VBA macros through an add-in, the Developer tab's Code group; Office add-ins; previously major: first version: out-of-process add-ins, protocol 1, File › Options › Add-ins, install from GitHub) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-15 · **Change:** minor (ribbon buttons that run macros: `macros/run` gets the button; previously minor: protocol 1.1: host requests, VBA macros through an add-in, the Developer tab's Code group; Office add-ins; previously major: first version: out-of-process add-ins, protocol 1, File › Options › Add-ins, install from GitHub) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 An add-in adds **commands** that people and agents run, and can put them on the ribbon (a group
 on a built-in tab, or a tab of its own) and in the right-click menu. It's a separate program,
@@ -246,6 +246,22 @@ once the user clicked **Enable Content** in the bar a document with macros opens
 runs none; `enable` runs all. Agents and the CLI are bound by the same setting. A document with
 macros saved as `.docx` (`.dotx`) is saved as `.docm` (`.dotm`).
 
+**Ribbon buttons** (Developer › Code › Ribbon Buttons, or Add to Ribbon… in the Macros window):
+buttons that run the document's macros, on a built-in tab (Home, Insert, Design, Layout,
+References, Mailings, Review, View, Developer) or a tab of the document's own (Macros by default).
+They are saved with the document as Word's ribbon part (`customUI/customUI14.xml`), so Word shows
+them too, and a document made in Word brings its buttons along. A ribbon that holds more than
+tabs, groups and buttons (pictures of its own, menus, `onLoad`) is kept unchanged: its buttons show
+and run but can't be edited. The buttons show whether or not a macro add-in is loaded; a click
+runs the macro under Macro Security like any other. A button runs its macro as Word does, with
+the button: `macros/run` gets `control: {id, tag}`, which a VBA add-in passes as the
+`IRibbonControl` argument (`Sub Go(control As IRibbonControl)`); a macro without parameters runs as
+it is. Commands (the same ids, params and results as GridCraft's): `developer.ribbon`,
+`developer.addRibbonButton {macro, label?, tab?, group?, image?, large?, screentip?, tag?}`,
+`developer.editRibbonButton {id, …}`, `developer.removeRibbonButton {id}` (adding, editing and
+removing are undoable), `developer.pressRibbonButton {id}`. `ui.dialog {name: "ribbonButtons",
+macro?}` opens the window with a macro picked.
+
 ## Office add-ins
 
 An Office add-in's `manifest.xml` (`<Host Name="Document"/>`, `https://` pages) loads as the
@@ -326,5 +342,6 @@ in the zip are kept.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Ribbon buttons that run the document's macros, saved as its `customUI14.xml`; `macros/run` gets `control {id, tag}`; Developer › Ribbon Buttons and Add to Ribbon in the Macros window |
 | 2026-10-14 | minor | Protocol 1.1 (`host/*` requests, one undo step), VBA macros through a macro add-in with the Developer tab's Code group and Macro Security; Office add-ins' task panes on the Word JavaScript API with WordCraft's own Office.js |
 | 2026-10-14 | major | Created: out-of-process add-ins (the craft plugin protocol 1 shared with GridCraft: `apps`, `uiFor`, `host.id`), commands, ribbon groups and tabs, right-click menu items, File › Options › Add-ins, the Add-ins dialog, install from GitHub |
