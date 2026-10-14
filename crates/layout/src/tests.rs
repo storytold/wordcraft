@@ -499,6 +499,17 @@ fn paragraph_layouts_keep_no_spare_capacity() {
     assert!(seen >= 3, "{seen}");
 }
 
+/// A finished page's items hold no spare room: a long document keeps every page.
+#[test]
+fn finished_pages_keep_no_spare_capacity() {
+    let d = Document::from_text(&"Line of text\n".repeat(400));
+    let l = lay(&d);
+    assert!(l.pages.len() >= 3, "{}", l.pages.len());
+    for p in &l.pages[..l.pages.len() - 1] {
+        assert_eq!(p.items.capacity(), p.items.len());
+    }
+}
+
 #[test]
 fn hidden_marks_take_no_space() {
     let mut d = Document::new();
