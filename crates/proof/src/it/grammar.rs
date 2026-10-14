@@ -16,7 +16,7 @@
 //!   `un altro`, `un anno` (a masculine word in `-o`; `auto` and `eco` are feminine), and
 //!   `un altra`, `un amica` → `un'altra`, `un'amica` (a word in `-a`, except the masculine and
 //!   common-gender ones: `-ista`, `-ita`, `-ota`, `-cida`, `-ma`, `-eta`, `atleta`, `acrobata`…).
-//!   The same for `nessun`, `ciascun`, `qualcun` and `alcun`.
+//!   The same for `nessun`, `ciascun`, `qualcun`, `alcun` and `buon` (`buon'anno` → `buon anno`).
 //!
 //! No comma rule and no English rule (such as `a`/`an`) applies to Italian text.
 
@@ -26,20 +26,27 @@ use crate::{Issue, IssueKind, ProofLang, words};
 const ALLOWED_REPEATS: &[&str] = &[
     "sì", "no", "piano", "bene", "male", "ecco", "oh", "ah", "eh", "mh", "bah", "ehi", "urrà", "evviva", "ciao", "addio", "adagio", "forte", "lento",
     "chiaro", "pian", "poco", "quasi", "presto", "subito", "zitto", "via", "così", "tanto", "molto", "pure", "dai", "su", "avanti", "basta", "aiuto",
+    "lì", "passo", "terra",
 ];
 
 /// Indefinite articles (and the like) that elide to `un'` before a feminine word only.
 const UN_FORMS: &[&str] = &["un", "nessun", "ciascun", "qualcun", "alcun"];
 
-/// Feminine words in `-o` that start with a vowel (`un'auto`, `un'eco`).
-const FEMININE_IN_O: &[&str] = &["auto", "autoradio", "eco", "ecografo"];
+/// Truncated forms that never take an apostrophe before a masculine word: [`UN_FORMS`] and
+/// `buon` (`buon'anno` → `buon anno`). Before a feminine word `buona` is the usual form, so
+/// `buon amica` isn't flagged.
+const NO_APOSTROPHE_BEFORE_MASCULINE: &[&str] = &["un", "nessun", "ciascun", "qualcun", "alcun", "buon"];
 
-/// Endings of masculine or common-gender words in `-a` (`un artista`, `un idiota`, `un enigma`).
-const MASCULINE_A_ENDINGS: &[&str] = &["ista", "ita", "ota", "cida", "ma", "eta", "nauta", "iatra", "arca"];
+/// Feminine words in `-o` that start with a vowel (`un'auto`, `un'eco`).
+const FEMININE_IN_O: &[&str] = &["auto", "autoradio", "eco"];
+
+/// Endings of masculine or common-gender words in `-a` (`un artista`, `un idiota`, `un enigma`,
+/// `un entusiasta`, `un iconoclasta`).
+const MASCULINE_A_ENDINGS: &[&str] = &["ista", "ita", "ota", "cida", "ma", "eta", "nauta", "iatra", "arca", "iasta", "clasta"];
 
 /// Words in `-a` after `un` that aren't feminine nouns: masculine or common-gender ones that fit
 /// no ending above, and verbs and pronouns (`un ha`, `un una`).
-const NOT_FEMININE_IN_A: &[&str] = &["acrobata", "autodidatta", "alfa", "omega", "ha", "una"];
+const NOT_FEMININE_IN_A: &[&str] = &["acrobata", "autodidatta", "alfa", "omega", "alpaca", "ha", "una"];
 
 /// Abbreviations written with a final period after which a sentence goes on in lower case
 /// (lower case, without the period).
@@ -302,13 +309,13 @@ fn un_apostrophe(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
     for (a, b) in ws {
         let Some(w) = text.get(*a..*b) else { continue };
         let Some((head, tail)) = w.split_once(is_apostrophe) else { continue };
-        if UN_FORMS.contains(&head.to_lowercase().as_str())
+        if NO_APOSTROPHE_BEFORE_MASCULINE.contains(&head.to_lowercase().as_str())
             && tail.chars().all(|c| c.is_alphabetic() && c.is_lowercase())
             && starts_with_vowel(tail)
             && tail.ends_with('o')
             && !FEMININE_IN_O.contains(&tail)
         {
-            v.push(issue(*a, *b, format!("Davanti a un nome maschile «{head}» non vuole l'apostrofo"), vec![format!("{head} {tail}")]));
+            v.push(issue(*a, *b, format!("Davanti a una parola maschile «{head}» non vuole l'apostrofo"), vec![format!("{head} {tail}")]));
         }
     }
     for pair in ws.windows(2) {
@@ -320,7 +327,7 @@ fn un_apostrophe(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
             && starts_with_vowel(w1)
             && feminine_in_a(w1)
         {
-            v.push(issue(*a0, *b1, format!("Davanti a un nome femminile si scrive «{w0}'», con l'apostrofo"), vec![format!("{w0}'{w1}")]));
+            v.push(issue(*a0, *b1, format!("Davanti a una parola femminile si scrive «{w0}'», con l'apostrofo"), vec![format!("{w0}'{w1}")]));
         }
     }
 }
@@ -419,6 +426,9 @@ mod tests {
         assert_eq!(fixes("Prendo un altra strada"), [pair("un altra", "un'altra")]);
         assert_eq!(fixes("Ho un amica a Roma"), [pair("un amica", "un'amica")]);
         assert_eq!(fixes("Non c'è nessun altra via"), [pair("nessun altra", "nessun'altra")]);
+        assert_eq!(fixes("Buon'anno a tutti"), [pair("Buon'anno", "Buon anno")]);
+        assert!(check("Ho un'altro").iter().any(|i| i.message.contains("parola maschile")));
+        assert!(check("Ho un altra").iter().any(|i| i.message.contains("parola femminile")));
         for ok in [
             "Un altro amico",
             "Un'altra amica",
@@ -438,6 +448,12 @@ mod tests {
             "Un'Alfa",
             "Un Andrea",
             "Un ha",
+            "Un entusiasta",
+            "Un iconoclasta",
+            "Un alpaca",
+            "Buon anno",
+            "Buon'amica",
+            "Una buon amica",
         ] {
             assert!(fixes(ok).is_empty(), "{ok}: {:?}", fixes(ok));
         }
@@ -445,7 +461,8 @@ mod tests {
 
     #[test]
     fn more_emphatic_doubles_are_allowed() {
-        for ok in ["Pian piano", "Poco poco", "Zitto zitto", "Via via", "Così così", "Dai dai"] {
+        for ok in ["Pian piano", "Poco poco", "Zitto zitto", "Via via", "Così così", "Dai dai", "Lì lì per cadere", "Passo passo", "Terra terra"]
+        {
             assert!(fixes(ok).is_empty(), "{ok}: {:?}", fixes(ok));
         }
     }
