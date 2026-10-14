@@ -789,14 +789,9 @@ fn date_time(s: &mut Session, v: &Value) -> CmdResult {
 
 /// Format today's date with a Word picture (`M/d/yyyy`, `MMMM d, yyyy`, `yyyy-MM-dd`, `dddd`…).
 pub fn format_date(fmt: &str) -> String {
-    let iso = super::now_iso();
-    let y: i64 = iso.get(0..4).and_then(|x| x.parse().ok()).unwrap_or(2026);
-    let m: usize = iso.get(5..7).and_then(|x| x.parse().ok()).unwrap_or(1);
-    let d: u32 = iso.get(8..10).and_then(|x| x.parse().ok()).unwrap_or(1);
-    let hh: u32 = iso.get(11..13).and_then(|x| x.parse().ok()).unwrap_or(0);
-    let mm: u32 = iso.get(14..16).and_then(|x| x.parse().ok()).unwrap_or(0);
-    let ss: u32 = iso.get(17..19).and_then(|x| x.parse().ok()).unwrap_or(0);
-    format_date_parts(fmt, y, m, d, (hh, mm, ss), (super::now_unix() / 86_400) as i64)
+    // Word shows the computer's local date and time (#1707), not UTC's.
+    let (y, m, d, hms, days) = super::local_now();
+    format_date_parts(fmt, y, m as usize, d, hms, days)
 }
 
 /// Format a date and time with a Word picture; `days_since` (days since 1970-01-01) gives the weekday.
@@ -929,6 +924,33 @@ fn cover_page(s: &mut Session, v: &Value) -> CmdResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1707: Insert ▸ Date & Time and DATE/TIME fields use the local civil date, time and
+    /// weekday, not UTC's.
+    #[test]
+    fn local_civil_date_follows_the_utc_offset() {
+        let pic = "dddd d MMMM yyyy HH:mm";
+        let show = |unix: u64, off: i64| {
+            let (y, m, d, hms, days) = super::super::local_civil(unix, off);
+            format_date_parts(pic, y, m as usize, d, hms, days)
+        };
+        // 2026-10-30T23:00:00Z in New Zealand (UTC+13) is Saturday 31 October, noon.
+        assert_eq!(show(1_793_401_200, 13 * 3600), "Saturday 31 October 2026 12:00");
+        // 2026-11-01T02:00:00Z at UTC-5 is still Saturday 31 October, 21:00.
+        assert_eq!(show(1_793_498_400, -5 * 3600), "Saturday 31 October 2026 21:00");
+        // Offset 0 is UTC.
+        assert_eq!(show(1_793_401_200, 0), "Friday 30 October 2026 23:00");
+        // Near the epoch with a negative offset: the day before 1970, no overflow.
+        assert_eq!(show(0, -3600), "Wednesday 31 December 1969 23:00");
+        // Hostile values never panic.
+        let _ = super::super::local_civil(u64::MAX, i64::MAX);
+        let _ = super::super::local_civil(u64::MAX, i64::MIN);
+        let _ = super::super::local_civil(0, i64::MIN);
+        // The machine's zone is a real offset (within ±26 h) and asking never panics.
+        for unix in [0, 1_793_401_200, u64::MAX] {
+            assert!(super::super::local_offset_secs(unix).abs() <= 26 * 3600);
+        }
+    }
 
     /// #960: editing the header of a page that has none creates the one that page shows (first
     /// page, even page or default); typing goes into it, and closing an unwritten one takes it

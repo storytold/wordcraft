@@ -432,6 +432,37 @@ pub fn now_iso() -> String {
     iso_from_unix_secs(now_unix())
 }
 
+/// The local time zone's offset from UTC in seconds (east positive) at `unix`, daylight saving
+/// included: the system's zone, or the browser's on the web. 0 (UTC) when it can't be found.
+pub fn local_offset_secs(unix: u64) -> i64 {
+    use chrono::Offset;
+    let Some(utc) = i64::try_from(unix).ok().and_then(|secs| chrono::DateTime::from_timestamp(secs, 0)) else {
+        return 0;
+    };
+    // chrono's `Local` has internal `expect`s (unreadable zone data, an unmapped Windows year), so
+    // fence it: a failure means UTC, never a crash.
+    std::panic::catch_unwind(|| i64::from(utc.with_timezone(&chrono::Local).offset().fix().local_minus_utc()))
+        .unwrap_or(0)
+        .clamp(-26 * 3600, 26 * 3600)
+}
+
+/// The local civil date and time now: see [`local_civil`].
+pub fn local_now() -> (i64, u32, u32, (u32, u32, u32), i64) {
+    let now = now_unix();
+    local_civil(now, local_offset_secs(now))
+}
+
+/// Local civil date and time for an instant: (year, month, day, (hour, minute, second), days since
+/// 1970-01-01 of that local day, for the weekday). `offset_secs` is the local zone's offset from
+/// UTC (east positive). Saturating, so a hostile offset or clock never overflows.
+pub fn local_civil(unix: u64, offset_secs: i64) -> (i64, u32, u32, (u32, u32, u32), i64) {
+    let local = i64::try_from(unix).unwrap_or(i64::MAX).saturating_add(offset_secs);
+    let days = local.div_euclid(86_400);
+    let t = local.rem_euclid(86_400) as u32;
+    let (y, m, d) = civil_from_days(days);
+    (y, m, d, (t / 3600, t / 60 % 60, t % 60), days)
+}
+
 /// Days since 1970-01-01 → (year, month, day) (Howard Hinnant's algorithm).
 pub fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;

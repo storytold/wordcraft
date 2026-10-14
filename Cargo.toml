@@ -70,6 +70,9 @@ sha2 = "0.11"
 hmac = "0.13"
 base64 = "0.22"
 getrandom = "0.3"
+# The local time zone's UTC offset for Insert ▸ Date & Time and DATE/TIME fields (#1707): chrono
+# (MIT OR Apache-2.0), clock only; on the web `wasmbind` asks the browser's Date.
+chrono = { version = "0.4.42", default-features = false, features = ["clock", "wasmbind"] }
 zeroize = "1"
 
 # ui
