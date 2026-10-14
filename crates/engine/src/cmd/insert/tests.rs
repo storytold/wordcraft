@@ -358,6 +358,14 @@ fn date_pictures() {
 /// #1707: Insert ▸ Date & Time and DATE/TIME fields use the local civil date, time and
 /// weekday, not UTC's.
 #[test]
+fn format_date_uses_the_local_offset() {
+    // Noon on Saturday 31 October in New Zealand (UTC+13) is 2026-10-30T23:00:00Z.
+    assert_eq!(format_date_at("dddd, MMMM d, yyyy h:mm am/pm", 1_793_401_200, 13 * 3600), "Saturday, October 31, 2026 12:00 PM");
+    assert_eq!(format_date_at("M/d/yyyy H:mm", 1_793_498_400, -5 * 3600), "10/31/2026 21:00");
+    assert_eq!(format_date_at("M/d/yyyy H:mm", 1_793_401_200, 0), "10/30/2026 23:00");
+}
+
+#[test]
 fn local_civil_date_follows_the_utc_offset() {
     let pic = "dddd d MMMM yyyy HH:mm";
     let show = |unix: u64, off: i64| {

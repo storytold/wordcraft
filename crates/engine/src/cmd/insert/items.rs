@@ -62,7 +62,14 @@ pub(super) fn date_time(s: &mut Session, v: &Value) -> CmdResult {
 /// Format today's date with a Word picture (`M/d/yyyy`, `MMMM d, yyyy`, `yyyy-MM-dd`, `dddd`…).
 pub fn format_date(fmt: &str) -> String {
     // Word shows the computer's local date and time (#1707), not UTC's.
-    let (y, m, d, hms, days) = crate::cmd::local_now();
+    let now = crate::cmd::now_unix();
+    format_date_at(fmt, now, crate::cmd::local_offset_secs(now))
+}
+
+/// Format the instant `unix` (seconds since the epoch, UTC) with a Word picture, in the zone
+/// `offset_secs` east of UTC.
+pub fn format_date_at(fmt: &str, unix: u64, offset_secs: i64) -> String {
+    let (y, m, d, hms, days) = crate::cmd::local_civil(unix, offset_secs);
     format_date_parts(fmt, y, m as usize, d, hms, days)
 }
 
