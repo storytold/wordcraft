@@ -82,18 +82,26 @@ fn missing_argument() -> Failure {
     format!("missing argument\n\n{USAGE}").into()
 }
 
-/// Open a document for a subcommand. A password-protected Word file needs its password
-/// ([`password_from`]). As in the app, a document opened with one is saved with it again, so
-/// `convert` does not quietly write a copy the password no longer protects.
+/// Open a document for a subcommand. A password-protected Word file or PDF needs its password
+/// ([`password_from`]). As in the app, a Word document opened with one is saved with it again,
+/// so `convert` does not quietly write a copy the password no longer protects. A PDF is
+/// converted into a new document (#1532): the conversion's warnings go to stderr, and it has no
+/// file of its own, so nothing is ever written back over the PDF.
 fn open(path: &Path, password: Option<&str>) -> Result<Session, String> {
     // A file that gives no page size (HTML, Markdown, plain text) opens on the system region's
     // paper, as in the app: A4 in Italy, Letter in the US (#1381).
-    let region = system_region();
-    let (doc, encrypted) = wordcraft_engine::io::open_path_in(path, password, &region)?;
-    let mut s = session(doc);
-    s.path = Some(path.into());
-    if encrypted {
-        s.password = password.map(wordcraft_engine::io::Password::new);
+    let opened = wordcraft_engine::io::open_path_report_in(path, password, &system_region())?;
+    let mut s = session(opened.doc);
+    if let Some(summary) = opened.pdf {
+        for warning in summary.warnings {
+            eprintln!("PDF import: {warning}");
+        }
+        s.dirty = true;
+    } else {
+        s.path = Some(path.into());
+        if opened.encrypted {
+            s.password = password.map(wordcraft_engine::io::Password::new);
+        }
     }
     Ok(s)
 }
@@ -764,6 +772,22 @@ fn main() -> ExitCode {
             eprintln!("wordcraft-cli: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod pdf_import_tests {
+    #[test]
+    fn cli_open_does_not_set_the_pdf_as_an_implicit_save_target() {
+        let path = std::env::temp_dir().join(format!("wordcraft-cli-pdf-import-{}.pdf", std::process::id()));
+        let bytes = wordcraft_engine::io::save_bytes("sample.pdf", &wordcraft_doc::Document::from_text("CLI import")).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        let mut session = super::open(&path).unwrap();
+        assert!(session.path.is_none() && session.dirty);
+        let result = session.run("file.save", &serde_json::json!({})).unwrap();
+        assert_eq!(result["saved"], false);
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        std::fs::remove_file(path).unwrap();
     }
 }
 

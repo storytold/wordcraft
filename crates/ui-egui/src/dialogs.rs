@@ -311,6 +311,9 @@ pub enum Dialog {
         #[serde(skip)]
         note: String,
     },
+    PdfImportReport {
+        warnings: Vec<String>,
+    },
     /// Tabs: 0 About, 1 Contributors, 2 Models.
     About {
         tab: u8,
@@ -511,6 +514,7 @@ impl Dialog {
             Dialog::Refs(d) => d.name(),
             Dialog::Icons { .. } => "icons",
             Dialog::PasteSpecial { .. } => "pasteSpecial",
+            Dialog::PdfImportReport { .. } => "pdfImportReport",
             Dialog::About { .. } => "about",
             Dialog::SaveChanges { .. } => "saveChanges",
             Dialog::DiscardRecovery { .. } => "discardRecovery",

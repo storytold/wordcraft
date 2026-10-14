@@ -102,6 +102,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::Refs(d) => d.title(),
         Dialog::Icons { .. } => "Icons",
         Dialog::PasteSpecial { .. } => "Paste Special",
+        Dialog::PdfImportReport { .. } => "PDF import",
         Dialog::About { .. } => "About WordCraft",
         Dialog::SaveChanges { .. } => "WordCraft",
         Dialog::DiscardRecovery { .. } => "Discard recovery copy",
