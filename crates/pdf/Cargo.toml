@@ -3,7 +3,7 @@ name = "wordcraft-pdf"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "WordCraft PDF export (craft-pdf / Krilla): embedded font subsets with selectable text, links, outline, tagging"
+description = "WordCraft PDF import and export (craft-pdf / Krilla): editable text and pictures, embedded subsets, links and tagging"
 
 [lints]
 workspace = true
@@ -20,12 +20,10 @@ image = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
 chrono = { workspace = true }
+hayro-syntax = "0.7.2"
+hayro-interpret = { version = "0.7.0", default-features = false, features = ["embed-fonts"] }
+hayro-cmap = "0.1"
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 # The browser clock (`SystemTime::now()` panics on wasm32-unknown-unknown).
 js-sys = "0.3"
-
-[dev-dependencies]
-hayro-syntax = "0.7.2"
-hayro-interpret = { version = "0.7.0", default-features = false, features = ["embed-fonts"] }
-hayro-cmap = "0.1"

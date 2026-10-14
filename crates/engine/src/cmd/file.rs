@@ -90,7 +90,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("file.new", "New", "File", new).key("Mod+N").params(r#"{"template"?: "blank|sample|letter|resume|report"}"#).pure(),
         CommandSpec::new("file.open", "Open", "File", open)
             .key("Mod+O / Mod+F12 / Mod+Alt+F2")
-            .params(r#"{"path": string, "data"?: base64 (the file's bytes; `path` then only names it), "password"?: string (for a password-protected Word document)}"#)
+            .params(r#"{"path": string, "data"?: base64 (the file's bytes; `path` then only names it), "password"?: string (for a password-protected Word document or PDF)}"#)
             .pure(),
         CommandSpec::new("file.save", "Save", "File", save)
             .key("Mod+S / Shift+F12 / Alt+Shift+F2")
@@ -257,7 +257,7 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     }
     let password = p::str(v, "password");
     // An empty file opens as a new blank document that saves back to it (#1384).
-    let (doc, encrypted) = read_document(s, path, v)?;
+    let crate::io::OpenedDocument { doc, encrypted, pdf } = read_document(s, path, v)?;
     match s.used_because() {
         None => s.set_document(doc),
         Some(why) => {
@@ -268,7 +268,12 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(z) = s.doc.settings.zoom {
         super::view::restore_zoom(s, z);
     }
-    s.path = Some(path.into());
+    // A reflowed PDF is a new editable document, never an implicit overwrite of the source.
+    s.path = if pdf.is_some() { None } else { Some(path.into()) };
+    if pdf.is_some() {
+        s.dirty = true;
+        s.status = "PDF imported as an editable copy.".into();
+    }
     // A Markdown file's own text, for the view to show and Save to write back as it is.
     if super::md_source::is_markdown_file(std::path::Path::new(path)) {
         s.md_file = markdown_file_text(path, v);
@@ -277,9 +282,12 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     if encrypted {
         s.password = password.map(crate::io::Password::new);
     }
-    Ok(
-        json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted, "alreadyOpen": false, "id": s.document_id()}),
-    )
+    let mut result = json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted, "alreadyOpen": false, "id": s.document_id()});
+    if let Some(summary) = pdf {
+        s.push_ui_request(json!({"open": "pdfImportReport", "warnings": summary.warnings}));
+        result["import"] = json!({"format": "pdf", "pages": summary.pages, "textCharacters": summary.text_characters, "images": summary.images, "warnings": summary.warnings, "saveAsRequired": true});
+    }
+    Ok(result)
 }
 
 /// A Markdown file's own text as `file.open` finds it: the bytes the caller hands over (base64 in
@@ -306,30 +314,30 @@ fn markdown_file_text(path: &str, v: &Value) -> super::md_source::FileText {
 
 /// The document the file at `path` holds (or its bytes, base64 in `data`, with `path` only
 /// naming it), read with `password`, and whether it was encrypted: what `file.open` and
-/// `file.newFromTemplate` read. An empty file (File Explorer's New › Microsoft Word Document makes
+/// `file.newFromTemplate` read, with the PDF import summary when it was a PDF. An empty file (File Explorer's New › Microsoft Word Document makes
 /// one) is a new blank document (#1384). Plain text and Markdown carry no language, so they are
 /// in the editing language.
-fn read_document(s: &Session, path: &str, v: &Value) -> Result<(Document, bool), CmdError> {
+fn read_document(s: &Session, path: &str, v: &Value) -> Result<crate::io::OpenedDocument, CmdError> {
     let password = p::str(v, "password");
-    let (mut doc, encrypted) = if let Some(data) = p::str(v, "data") {
+    let mut opened = if let Some(data) = p::str(v, "data") {
         let bytes = super::insert::base64_decode(data).ok_or_else(|| CmdError::Params("bad base64".into()))?;
         if bytes.is_empty() {
-            (normal_document(s), false)
+            crate::io::OpenedDocument { doc: normal_document(s), encrypted: false, pdf: None }
         } else {
-            crate::io::open_bytes_in(path, &bytes, password, &s.region()).map_err(CmdError::Failed)?
+            crate::io::open_bytes_report_in(path, &bytes, password, &s.region()).map_err(CmdError::Failed)?
         }
     } else if crate::io::is_empty_file(std::path::Path::new(path)) {
-        (normal_document(s), false)
+        crate::io::OpenedDocument { doc: normal_document(s), encrypted: false, pdf: None }
     } else {
-        crate::io::open_path_in(std::path::Path::new(path), password, &s.region()).map_err(CmdError::Failed)?
+        crate::io::open_path_report_in(std::path::Path::new(path), password, &s.region()).map_err(CmdError::Failed)?
     };
     let ext = std::path::Path::new(path).extension().and_then(std::ffi::OsStr::to_str).unwrap_or("").to_ascii_lowercase();
     if let Some(lang) = s.prefs.default_language.as_ref().or(s.editing_lang.as_ref())
         && matches!(ext.as_str(), "txt" | "text" | "md" | "markdown")
     {
-        Arc::make_mut(&mut doc.styles).default_chr.lang = Some(lang.clone());
+        Arc::make_mut(&mut opened.doc.styles).default_chr.lang = Some(lang.clone());
     }
-    Ok((doc, encrypted))
+    Ok(opened)
 }
 
 /// File › New from a template (#2852): a new, untitled document with the template's content,
@@ -340,7 +348,7 @@ fn read_document(s: &Session, path: &str, v: &Value) -> Result<(Document, bool),
 /// saving it asks where to write, and a protected template's password doesn't come along.
 pub(crate) fn new_from_template(s: &mut Session, v: &Value) -> CmdResult {
     let path = p::req_str(v, "path")?;
-    let (mut doc, _) = read_document(s, path, v)?;
+    let mut doc = read_document(s, path, v)?.doc;
     doc.settings.attached_template = Some(path.to_string());
     if p::bool(v, "replaceBlank") == Some(true) && s.used_because().is_none() {
         s.set_document(doc);
