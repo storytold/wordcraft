@@ -207,7 +207,18 @@ pub(crate) fn bg(ui: &Ui, r: Rect, resp: &Response, checked: bool, t: &Tokens) {
 /// continues without another click, as in Word (#686). Interface commands (`ui.*`) open dialogs,
 /// panes and tabs that take focus themselves, so they keep it.
 pub(crate) fn run_from_ribbon(app: &mut WordApp, id: &str, params: Value) {
-    let _ = app.run(id, params);
+    if id == "file.checkForUpdates" {
+        // A manual check must answer every outcome: the notice bar covers a newer release, and the
+        // status bar says "up to date" or why the check could not reach GitHub (#15 review P3).
+        if let Some(ctx) = app.ctx.clone() {
+            crate::update::queue_check(app, params, true, &ctx);
+        } else {
+            let result = app.run(id, params);
+            crate::backstage::report_update_check(app, result);
+        }
+    } else {
+        let _ = app.run(id, params);
+    }
     if !id.starts_with("ui.") {
         app.canvas.want_focus = true;
     }

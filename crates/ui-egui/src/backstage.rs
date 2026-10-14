@@ -122,7 +122,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
             }
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                for (label, id) in [("About", "about"), ("Discord community", "discord")] {
+                for (label, id) in [("Check for updates", "checkUpdates"), ("About", "about"), ("Discord community", "discord")] {
                     let (r, resp) = ui.allocate_exact_size(vec2(200.0, 32.0), Sense::click());
                     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tl!(label)));
                     if resp.hovered() {
@@ -132,6 +132,13 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     if resp.clicked() {
                         if id == "discord" {
                             let _ = app.run("ui.discord", json!({}));
+                        } else if id == "checkUpdates" {
+                            if let Some(ctx) = app.ctx.clone() {
+                                crate::update::queue_check(app, json!({"force": true}), true, &ctx);
+                            } else {
+                                let result = app.run("file.checkForUpdates", json!({"force": true}));
+                                report_update_check(app, result);
+                            }
                         } else {
                             app.dialog = crate::dialogs::Dialog::open("about", app);
                         }
@@ -215,6 +222,33 @@ fn recovery_page(app: &mut WordApp, ui: &mut Ui) {
 /// The Backstage pages that work while no document is open (#1129).
 fn works_without_document(page: &str) -> bool {
     matches!(page, "home" | "new" | "open" | "options")
+}
+
+/// Report a manual **Check for updates** in the status bar when the notice bar won't: a newer
+/// release already shows its own notice, but "up to date" and network errors produced no visible
+/// answer before (#15 review). Shared with the ribbon's Help ▸ Check for Updates.
+pub(crate) fn report_update_check(app: &mut WordApp, result: Result<serde_json::Value, String>) {
+    match result {
+        Ok(v) => match v.get("status").and_then(serde_json::Value::as_str) {
+            // `available` draws the update notice through the command's UI request; drop any answer
+            // bar left by a previous check so the two never sit together.
+            Some("available") => app.update.message = None,
+            Some("error") => {
+                let key = v.get("error").and_then(serde_json::Value::as_str).unwrap_or("");
+                if let Some(detail) = v.get("errorDetail").and_then(serde_json::Value::as_str) {
+                    log::warn!("update check failed: {detail}");
+                }
+                let text = if key.is_empty() { tl!(wordcraft_engine::update::MSG_CHECK_FAILED) } else { tl!(key) };
+                app.update_feedback(text);
+            }
+            // `current`, or a throttled automatic check that the user forced past: say so.
+            _ => app.update_feedback(tl!("WordCraft is up to date.")),
+        },
+        Err(e) => {
+            log::warn!("update check failed: {e}");
+            app.update_feedback(tl!(wordcraft_engine::update::MSG_CHECK_FAILED));
+        }
+    }
 }
 
 fn heading(ui: &mut Ui, s: &str) {
@@ -706,7 +740,7 @@ mod tests {
     use egui_kittest::kittest::Queryable;
     use serde_json::json;
 
-    use super::{HOME_TEMPLATES, TEMPLATES, matching_templates};
+    use super::{HOME_TEMPLATES, TEMPLATES, matching_templates, report_update_check};
     use crate::{Services, WordApp};
 
     /// #1714: every side-menu item has its own icon, a drawn one (an unknown name would fall back
@@ -1048,6 +1082,44 @@ mod tests {
         assert!(!root.join("must-not-write.docx").exists());
         drop(h);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// #15 review: a manual check that finds nothing new, or cannot reach GitHub, must say so; only
+    /// an available update draws its own notice. Backstage's status bar is hidden, so the answer is
+    /// rendered in the update bar too (asserted below).
+    #[test]
+    fn manual_update_check_reports_current_error_and_failure() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+        report_update_check(&mut a, Ok(json!({"status": "current", "current": "0.6.1"})));
+        assert!(a.status_msg.as_ref().is_some_and(|(m, _)| m.contains("up to date")), "{:?}", a.status_msg);
+        report_update_check(&mut a, Ok(json!({"status": "error", "error": wordcraft_engine::update::MSG_CHECK_FAILED, "errorDetail": "dns"})));
+        assert!(a.status_msg.as_ref().is_some_and(|(m, _)| m.contains("reach GitHub")), "{:?}", a.status_msg);
+        report_update_check(&mut a, Err("nope".to_string()));
+        assert!(a.status_msg.as_ref().is_some_and(|(m, _)| m.contains("reach GitHub")), "{:?}", a.status_msg);
+        a.status_msg = None;
+        report_update_check(&mut a, Ok(json!({"status": "available"})));
+        assert!(a.status_msg.is_none(), "the notice bar speaks for itself: {:?}", a.status_msg);
+        assert!(a.update.message.is_none(), "an available update draws its own notice, not the bar message");
+    }
+
+    /// #15 review: File ▸ Check for updates runs from Backstage, whose status bar is hidden, so the
+    /// "up to date" answer must render in the update bar there.
+    #[test]
+    fn manual_update_check_answer_is_rendered_in_backstage() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+        a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+        report_update_check(&mut a, Ok(json!({"status": "current", "current": "0.6.1"})));
+        assert!(a.update.message.as_deref().is_some_and(|m| m.contains("up to date")), "{:?}", a.update.message);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        assert!(h.query_by_label("WordCraft is up to date.").is_some(), "the answer is rendered over Backstage");
     }
 
     #[test]
