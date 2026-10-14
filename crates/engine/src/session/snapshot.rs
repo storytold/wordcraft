@@ -158,6 +158,10 @@ impl Session {
             column: _,
             column_mode: _,
             widened: _,
+            // The collaboration layer and whether a remote edit is being applied: host wiring and
+            // a flag that lives for one command, not part of the document.
+            collab: _,
+            applying_remote: _,
             // Go Back's places, like the caret history: not part of the document.
             edit_marks: _,
             go_back_step: _,
