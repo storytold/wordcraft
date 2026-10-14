@@ -61,14 +61,9 @@ pub(super) fn date_time(s: &mut Session, v: &Value) -> CmdResult {
 
 /// Format today's date with a Word picture (`M/d/yyyy`, `MMMM d, yyyy`, `yyyy-MM-dd`, `dddd`…).
 pub fn format_date(fmt: &str) -> String {
-    let iso = crate::cmd::now_iso();
-    let y: i64 = iso.get(0..4).and_then(|x| x.parse().ok()).unwrap_or(2026);
-    let m: usize = iso.get(5..7).and_then(|x| x.parse().ok()).unwrap_or(1);
-    let d: u32 = iso.get(8..10).and_then(|x| x.parse().ok()).unwrap_or(1);
-    let hh: u32 = iso.get(11..13).and_then(|x| x.parse().ok()).unwrap_or(0);
-    let mm: u32 = iso.get(14..16).and_then(|x| x.parse().ok()).unwrap_or(0);
-    let ss: u32 = iso.get(17..19).and_then(|x| x.parse().ok()).unwrap_or(0);
-    format_date_parts(fmt, y, m, d, (hh, mm, ss), (crate::cmd::now_unix() / 86_400) as i64)
+    // Word shows the computer's local date and time (#1707), not UTC's.
+    let (y, m, d, hms, days) = crate::cmd::local_now();
+    format_date_parts(fmt, y, m as usize, d, hms, days)
 }
 
 /// Format a date and time with a Word picture; `days_since` (days since 1970-01-01) gives the weekday.
