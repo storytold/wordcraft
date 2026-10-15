@@ -2379,7 +2379,8 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
         && let Some(link) = link_under(app, layout, page, x, y, &pos)
     {
         let key = if cfg!(target_os = "macos") { "⌘" } else { "Ctrl" };
-        let tip = format!("{link}\n{}", crate::i18n::fmt(tl!("{key}+Click to follow link"), &[("key", key)]));
+        let target = if is_generated_bookmark_link(&link) { tl!("Current Document").to_string() } else { link };
+        let tip = format!("{target}\n{}", crate::i18n::fmt(tl!("{key}+Click to follow link"), &[("key", key)]));
         egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), egui::Id::new("link_tip"), egui::PopupAnchor::Pointer).show(|ui| {
             ui.label(tip);
         });
@@ -3052,6 +3053,12 @@ fn link_under(app: &WordApp, layout: &DocLayout, page: usize, x: f32, y: f32, po
     })
 }
 
+/// A link to a hidden bookmark (`#_Toc…`, `#_Ref…`): a name the program made, which nobody
+/// chose or sees, so the hover tip says where it goes instead of showing it (#2177).
+fn is_generated_bookmark_link(link: &str) -> bool {
+    link.strip_prefix("#_").is_some()
+}
+
 /// Whether Ctrl/⌘+click may hand a document's hyperlink to the system: web and email links only,
 /// so a document can't launch `file:` paths, programs or custom-scheme handlers.
 fn is_followable_link(url: &str) -> bool {
@@ -3066,6 +3073,16 @@ mod tests {
     /// What `page_image` replaced: the raster un-premultiplied, for egui to premultiply again.
     fn by_straight_alpha(img: &wordcraft_render::Rendered) -> egui::ColorImage {
         egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.to_straight())
+    }
+
+    /// #2177: only a link to a program-made hidden bookmark hides its name in the hover tip.
+    #[test]
+    fn hover_tip_hides_generated_bookmark_names_only() {
+        assert!(is_generated_bookmark_link("#_Toc123456"));
+        assert!(is_generated_bookmark_link("#_Ref42"));
+        assert!(!is_generated_bookmark_link("#Chapter1"));
+        assert!(!is_generated_bookmark_link("https://example.com/_x"));
+        assert!(!is_generated_bookmark_link(""));
     }
 
     #[test]
