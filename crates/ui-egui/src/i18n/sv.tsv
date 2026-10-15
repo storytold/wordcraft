@@ -2647,3 +2647,62 @@ preview	Title	Titel
 	Bottom Right Cell	Nedre högra cellen
 	Inside Horizontal Border	Inre vågrät kantlinje
 	Inside Vertical Border	Inre lodrät kantlinje
+# Network printer destination (File > Print): machine-drafted by an AI agent from the plain meaning of the English, clean room; needs a native speaker's review.
+	Printer address:	Skrivarens adress:
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names. ipp:// or an /ipp/ path means IPP; anything else is WS-Print.	Endast IP-adresser i det här nätverket godtas (privata, link-local eller loopback), inte värdnamn. ipp:// eller en sökväg med /ipp/ betyder IPP; allt annat är WS-Print.
+	Query printer	Fråga skrivaren
+	Asking the printer…	Frågar skrivaren…
+	Query the printer first to see what it supports.	Fråga först skrivaren för att se vad den stöder.
+	Printer status: {state}	Skrivarstatus: {state}
+	Reasons: {reasons}	Orsaker: {reasons}
+	The printer accepts none of the formats this document can be sent in	Skrivaren godtar inget av de format som dokumentet kan skickas i
+	Copies:	Kopior:
+	Two-sided:	Dubbelsidigt:
+	Flip on long edge	Vänd på långsidan
+	Flip on short edge	Vänd på kortsidan
+	Printer orientation:	Skrivarens orientering:
+	Reverse portrait	Stående, omvänd
+	Reverse landscape	Liggande, omvänd
+	Quality:	Kvalitet:
+	High	Hög
+	Photo	Foto
+	Colour	Färg
+	Black and white	Svartvitt
+	Resolution:	Upplösning:
+	This printer does not take a copies setting.	Den här skrivaren stöder inte inställningen för kopior.
+	This printer only prints one-sided.	Den här skrivaren skriver bara ut enkelsidigt.
+	This printer does not take an orientation setting.	Den här skrivaren stöder inte inställningen för orientering.
+	This printer does not take a quality setting.	Den här skrivaren stöder inte inställningen för kvalitet.
+	This printer only prints in black and white.	Den här skrivaren skriver bara ut i svartvitt.
+	This printer does not take a resolution setting.	Den här skrivaren stöder inte inställningen för upplösning.
+	Not confirmed by the printer	Inte bekräftat av skrivaren
+	I confirm sending this document to this printer	Jag bekräftar att dokumentet skickas till den här skrivaren
+	Sending to {printer}…	Skickar till {printer}…
+	Canceling…	Avbryter…
+	Sent to {printer}	Skickat till {printer}
+	Accepted by {printer}	Godtaget av {printer}
+	Waiting in the printer's queue	Väntar i skrivarens kö
+	Held by the printer	Hållet av skrivaren
+	The printer is printing it	Skrivaren skriver ut det
+	The printer paused the job; it needs attention	Skrivaren pausade jobbet; det behöver uppmärksamhet
+	Sheets printed: {n}	Utskrivna ark: {n}
+	Sheets printed: {done} of {total}	Utskrivna ark: {done} av {total}
+	Printed with warnings	Utskrivet med varningar
+	Printed with errors	Utskrivet med fel
+	The job was canceled	Jobbet avbröts
+	The printer stopped the job	Skrivaren stoppade jobbet
+	The printer no longer lists the job; it most likely finished	Skrivaren listar inte längre jobbet; det är troligen klart
+	Still printing; the job continues on the printer	Skriver fortfarande ut; jobbet fortsätter på skrivaren
+	Sent. The printer can't say whether it printed.	Skickat. Skrivaren kan inte säga om det skrevs ut.
+	The printer may have received the document. Check the printer before sending again.	Skrivaren kan ha tagit emot dokumentet. Kontrollera skrivaren innan du skickar igen.
+	The printer address was refused	Skrivarens adress avvisades
+	Couldn't reach the printer	Det gick inte att nå skrivaren
+	The printer's reply couldn't be understood	Skrivarens svar gick inte att förstå
+	The printer refused the request	Skrivaren avvisade begäran
+	The printer doesn't support this setting	Skrivaren stöder inte den här inställningen
+	The document couldn't be prepared	Dokumentet kunde inte förberedas
+	A setting isn't valid	En inställning är ogiltig
+	The print job stopped unexpectedly	Utskriftsjobbet stoppades oväntat
+	System printer	Systemskrivare
+	Network printer	Nätverksskrivare
+	Sending to the network printer…	Skickar till nätverksskrivaren…

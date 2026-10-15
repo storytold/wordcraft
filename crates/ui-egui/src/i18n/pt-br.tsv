@@ -2245,3 +2245,63 @@
 # Reading Mode column widths (#1040)
 	Narrow	Estreita
 	Medium	Média
+# Network printer destination (File > Print): machine-drafted by an AI agent from the plain meaning of the English, clean room; needs a native speaker's review.
+	Printer address:	Endereço da impressora:
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names. ipp:// or an /ipp/ path means IPP; anything else is WS-Print.	Somente endereços IP desta rede são aceitos (privados, link-local ou loopback), não nomes de host. ipp:// ou um caminho /ipp/ significa IPP; qualquer outro é WS-Print.
+	Query printer	Consultar impressora
+	Asking the printer…	Consultando a impressora…
+	Query the printer first to see what it supports.	Consulte primeiro a impressora para ver o que ela oferece.
+	Printer status: {state}	Status da impressora: {state}
+	Reasons: {reasons}	Motivos: {reasons}
+	The printer accepts none of the formats this document can be sent in	A impressora não aceita nenhum dos formatos em que este documento pode ser enviado
+	Copies:	Cópias:
+	Two-sided:	Frente e verso:
+	Flip on long edge	Virar na borda longa
+	Flip on short edge	Virar na borda curta
+	Printer orientation:	Orientação da impressora:
+	Reverse portrait	Retrato invertido
+	Reverse landscape	Paisagem invertida
+	Quality:	Qualidade:
+	Normal	Normal
+	High	Alta
+	Photo	Foto
+	Colour	Cor
+	Black and white	Preto e branco
+	Resolution:	Resolução:
+	This printer does not take a copies setting.	Esta impressora não aceita ajuste de cópias.
+	This printer only prints one-sided.	Esta impressora só imprime em um lado.
+	This printer does not take an orientation setting.	Esta impressora não aceita ajuste de orientação.
+	This printer does not take a quality setting.	Esta impressora não aceita ajuste de qualidade.
+	This printer only prints in black and white.	Esta impressora só imprime em preto e branco.
+	This printer does not take a resolution setting.	Esta impressora não aceita ajuste de resolução.
+	Not confirmed by the printer	Não confirmado pela impressora
+	I confirm sending this document to this printer	Confirmo o envio deste documento para esta impressora
+	Sending to {printer}…	Enviando para {printer}…
+	Canceling…	Cancelando…
+	Sent to {printer}	Enviado para {printer}
+	Accepted by {printer}	Aceito por {printer}
+	Waiting in the printer's queue	Aguardando na fila da impressora
+	Held by the printer	Retido pela impressora
+	The printer is printing it	A impressora está imprimindo
+	The printer paused the job; it needs attention	A impressora pausou o trabalho; ele precisa de atenção
+	Sheets printed: {n}	Folhas impressas: {n}
+	Sheets printed: {done} of {total}	Folhas impressas: {done} de {total}
+	Printed with warnings	Impresso com avisos
+	Printed with errors	Impresso com erros
+	The job was canceled	O trabalho foi cancelado
+	The printer stopped the job	A impressora interrompeu o trabalho
+	The printer no longer lists the job; it most likely finished	A impressora não lista mais o trabalho; provavelmente terminou
+	Still printing; the job continues on the printer	Ainda imprimindo; o trabalho continua na impressora
+	Sent. The printer can't say whether it printed.	Enviado. A impressora não informa se imprimiu.
+	The printer may have received the document. Check the printer before sending again.	A impressora pode ter recebido o documento. Verifique a impressora antes de enviar novamente.
+	The printer address was refused	O endereço da impressora foi recusado
+	Couldn't reach the printer	Não foi possível alcançar a impressora
+	The printer's reply couldn't be understood	A resposta da impressora não pôde ser entendida
+	The printer refused the request	A impressora recusou a solicitação
+	The printer doesn't support this setting	A impressora não oferece suporte a esta configuração
+	The document couldn't be prepared	Não foi possível preparar o documento
+	A setting isn't valid	Uma configuração não é válida
+	The print job stopped unexpectedly	O trabalho de impressão parou inesperadamente
+	System printer	Impressora do sistema
+	Network printer	Impressora de rede
+	Sending to the network printer…	Enviando para a impressora de rede…

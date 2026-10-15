@@ -2240,3 +2240,63 @@
 # Reading Mode column widths (#1040)
 	Narrow	Étroite
 	Medium	Moyenne
+# Network printer destination (File > Print): machine-drafted by an AI agent from the plain meaning of the English, clean room; needs a native speaker's review.
+	Printer address:	Adresse de l'imprimante :
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names. ipp:// or an /ipp/ path means IPP; anything else is WS-Print.	Seules les adresses IP du réseau local sont acceptées (privées, lien local ou boucle locale), pas les noms d'hôte. ipp:// ou un chemin /ipp/ désigne IPP ; tout le reste est WS-Print.
+	Query printer	Interroger l'imprimante
+	Asking the printer…	Interrogation de l'imprimante…
+	Query the printer first to see what it supports.	Interrogez d'abord l'imprimante pour voir ce qu'elle prend en charge.
+	Printer status: {state}	État de l'imprimante : {state}
+	Reasons: {reasons}	Raisons : {reasons}
+	The printer accepts none of the formats this document can be sent in	L'imprimante n'accepte aucun des formats dans lesquels ce document peut être envoyé
+	Copies:	Copies :
+	Two-sided:	Recto verso :
+	Flip on long edge	Retourner sur le bord long
+	Flip on short edge	Retourner sur le bord court
+	Printer orientation:	Orientation de l'imprimante :
+	Reverse portrait	Portrait inversé
+	Reverse landscape	Paysage inversé
+	Quality:	Qualité :
+	Normal	Normale
+	High	Élevée
+	Photo	Photo
+	Colour	Couleur
+	Black and white	Noir et blanc
+	Resolution:	Résolution :
+	This printer does not take a copies setting.	Cette imprimante n'accepte pas de réglage du nombre de copies.
+	This printer only prints one-sided.	Cette imprimante n'imprime qu'en recto.
+	This printer does not take an orientation setting.	Cette imprimante n'accepte pas de réglage d'orientation.
+	This printer does not take a quality setting.	Cette imprimante n'accepte pas de réglage de qualité.
+	This printer only prints in black and white.	Cette imprimante n'imprime qu'en noir et blanc.
+	This printer does not take a resolution setting.	Cette imprimante n'accepte pas de réglage de résolution.
+	Not confirmed by the printer	Non confirmé par l'imprimante
+	I confirm sending this document to this printer	Je confirme l'envoi de ce document à cette imprimante
+	Sending to {printer}…	Envoi à {printer}…
+	Canceling…	Annulation…
+	Sent to {printer}	Envoyé à {printer}
+	Accepted by {printer}	Accepté par {printer}
+	Waiting in the printer's queue	En attente dans la file de l'imprimante
+	Held by the printer	Retenu par l'imprimante
+	The printer is printing it	L'imprimante l'imprime
+	The printer paused the job; it needs attention	L'imprimante a suspendu le travail ; il demande de l'attention
+	Sheets printed: {n}	Feuilles imprimées : {n}
+	Sheets printed: {done} of {total}	Feuilles imprimées : {done} sur {total}
+	Printed with warnings	Imprimé avec des avertissements
+	Printed with errors	Imprimé avec des erreurs
+	The job was canceled	Le travail a été annulé
+	The printer stopped the job	L'imprimante a arrêté le travail
+	The printer no longer lists the job; it most likely finished	L'imprimante ne liste plus le travail ; il est très probablement terminé
+	Still printing; the job continues on the printer	Impression en cours ; le travail continue sur l'imprimante
+	Sent. The printer can't say whether it printed.	Envoyé. L'imprimante ne peut pas dire s'il a été imprimé.
+	The printer may have received the document. Check the printer before sending again.	L'imprimante a peut-être reçu le document. Vérifiez l'imprimante avant de renvoyer.
+	The printer address was refused	L'adresse de l'imprimante a été refusée
+	Couldn't reach the printer	Impossible de joindre l'imprimante
+	The printer's reply couldn't be understood	La réponse de l'imprimante n'a pas été comprise
+	The printer refused the request	L'imprimante a refusé la demande
+	The printer doesn't support this setting	L'imprimante ne prend pas en charge ce réglage
+	The document couldn't be prepared	Le document n'a pas pu être préparé
+	A setting isn't valid	Un réglage n'est pas valide
+	The print job stopped unexpectedly	Le travail d'impression s'est arrêté de façon inattendue
+	System printer	Imprimante du système
+	Network printer	Imprimante réseau
+	Sending to the network printer…	Envoi à l'imprimante réseau…

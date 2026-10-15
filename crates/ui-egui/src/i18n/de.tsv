@@ -2232,3 +2232,63 @@
 # Reading Mode column widths (#1040)
 	Narrow	Schmal
 	Medium	Mittel
+# Network printer destination (File > Print): machine-drafted by an AI agent from the plain meaning of the English, clean room; needs a native speaker's review.
+	Printer address:	Druckeradresse:
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names. ipp:// or an /ipp/ path means IPP; anything else is WS-Print.	Nur IP-Adressen im lokalen Netzwerk werden akzeptiert (privat, Link-Local oder Loopback), keine Hostnamen. ipp:// oder ein Pfad mit /ipp/ bedeutet IPP, alles andere WS-Print.
+	Query printer	Drucker abfragen
+	Asking the printer…	Drucker wird abgefragt…
+	Query the printer first to see what it supports.	Fragen Sie zuerst den Drucker ab, um zu sehen, was er unterstützt.
+	Printer status: {state}	Druckerstatus: {state}
+	Reasons: {reasons}	Gründe: {reasons}
+	The printer accepts none of the formats this document can be sent in	Der Drucker akzeptiert keines der Formate, in denen dieses Dokument gesendet werden kann
+	Copies:	Kopien:
+	Two-sided:	Beidseitig:
+	Flip on long edge	An der langen Kante wenden
+	Flip on short edge	An der kurzen Kante wenden
+	Printer orientation:	Druckerausrichtung:
+	Reverse portrait	Hochformat umgekehrt
+	Reverse landscape	Querformat umgekehrt
+	Quality:	Qualität:
+	Normal	Normal
+	High	Hoch
+	Photo	Foto
+	Colour	Farbe
+	Black and white	Schwarzweiß
+	Resolution:	Auflösung:
+	This printer does not take a copies setting.	Dieser Drucker unterstützt keine Kopienanzahl.
+	This printer only prints one-sided.	Dieser Drucker druckt nur einseitig.
+	This printer does not take an orientation setting.	Dieser Drucker unterstützt keine Ausrichtungseinstellung.
+	This printer does not take a quality setting.	Dieser Drucker unterstützt keine Qualitätseinstellung.
+	This printer only prints in black and white.	Dieser Drucker druckt nur in Schwarzweiß.
+	This printer does not take a resolution setting.	Dieser Drucker unterstützt keine Auflösungseinstellung.
+	Not confirmed by the printer	Vom Drucker nicht bestätigt
+	I confirm sending this document to this printer	Ich bestätige das Senden dieses Dokuments an diesen Drucker
+	Sending to {printer}…	Senden an {printer}…
+	Canceling…	Wird abgebrochen…
+	Sent to {printer}	An {printer} gesendet
+	Accepted by {printer}	Von {printer} angenommen
+	Waiting in the printer's queue	Wartet in der Druckerwarteschlange
+	Held by the printer	Vom Drucker angehalten
+	The printer is printing it	Der Drucker druckt den Auftrag
+	The printer paused the job; it needs attention	Der Drucker hat den Auftrag angehalten; er braucht Aufmerksamkeit
+	Sheets printed: {n}	Gedruckte Blätter: {n}
+	Sheets printed: {done} of {total}	Gedruckte Blätter: {done} von {total}
+	Printed with warnings	Mit Warnungen gedruckt
+	Printed with errors	Mit Fehlern gedruckt
+	The job was canceled	Der Auftrag wurde abgebrochen
+	The printer stopped the job	Der Drucker hat den Auftrag beendet
+	The printer no longer lists the job; it most likely finished	Der Drucker listet den Auftrag nicht mehr auf; er ist höchstwahrscheinlich fertig
+	Still printing; the job continues on the printer	Druckt noch; der Auftrag läuft auf dem Drucker weiter
+	Sent. The printer can't say whether it printed.	Gesendet. Der Drucker kann nicht sagen, ob gedruckt wurde.
+	The printer may have received the document. Check the printer before sending again.	Der Drucker hat das Dokument möglicherweise erhalten. Prüfen Sie den Drucker, bevor Sie erneut senden.
+	The printer address was refused	Die Druckeradresse wurde abgelehnt
+	Couldn't reach the printer	Der Drucker ist nicht erreichbar
+	The printer's reply couldn't be understood	Die Antwort des Druckers wurde nicht verstanden
+	The printer refused the request	Der Drucker hat die Anfrage abgelehnt
+	The printer doesn't support this setting	Der Drucker unterstützt diese Einstellung nicht
+	The document couldn't be prepared	Das Dokument konnte nicht vorbereitet werden
+	A setting isn't valid	Eine Einstellung ist ungültig
+	The print job stopped unexpectedly	Der Druckauftrag wurde unerwartet beendet
+	System printer	Systemdrucker
+	Network printer	Netzwerkdrucker
+	Sending to the network printer…	Senden an den Netzwerkdrucker…

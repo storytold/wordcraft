@@ -2632,3 +2632,62 @@ preview	Title	Naslov
 	Bottom Right Cell	Donja desna ćelija
 	Inside Horizontal Border	Unutarnji vodoravni obrub
 	Inside Vertical Border	Unutarnji okomiti obrub
+# Network printer destination (File > Print): machine-drafted by an AI agent from the plain meaning of the English, clean room; needs a native speaker's review.
+	Printer address:	Adresa pisača:
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names. ipp:// or an /ipp/ path means IPP; anything else is WS-Print.	Prihvaćaju se samo IP adrese ove mreže (privatne, link-local ili loopback), ne nazivi hostova. ipp:// ili putanja /ipp/ znači IPP; sve ostalo je WS-Print.
+	Query printer	Upitaj pisač
+	Asking the printer…	Upitujem pisač…
+	Query the printer first to see what it supports.	Najprije upitajte pisač da vidite što podržava.
+	Printer status: {state}	Stanje pisača: {state}
+	Reasons: {reasons}	Razlozi: {reasons}
+	The printer accepts none of the formats this document can be sent in	Pisač ne prihvaća nijedan od formata u kojima se ovaj dokument može poslati
+	Copies:	Kopije:
+	Two-sided:	Obostrano:
+	Flip on long edge	Okreni po dužem rubu
+	Flip on short edge	Okreni po kraćem rubu
+	Printer orientation:	Orijentacija pisača:
+	Reverse portrait	Okomito, obrnuto
+	Reverse landscape	Vodoravno, obrnuto
+	Quality:	Kvaliteta:
+	High	Visoka
+	Photo	Fotografija
+	Colour	Boja
+	Black and white	Crno-bijelo
+	Resolution:	Razlučivost:
+	This printer does not take a copies setting.	Ovaj pisač ne podržava postavku broja kopija.
+	This printer only prints one-sided.	Ovaj pisač ispisuje samo jednostrano.
+	This printer does not take an orientation setting.	Ovaj pisač ne podržava postavku orijentacije.
+	This printer does not take a quality setting.	Ovaj pisač ne podržava postavku kvalitete.
+	This printer only prints in black and white.	Ovaj pisač ispisuje samo crno-bijelo.
+	This printer does not take a resolution setting.	Ovaj pisač ne podržava postavku razlučivosti.
+	Not confirmed by the printer	Pisač nije potvrdio
+	I confirm sending this document to this printer	Potvrđujem slanje ovog dokumenta na ovaj pisač
+	Sending to {printer}…	Slanje na {printer}…
+	Canceling…	Otkazivanje…
+	Sent to {printer}	Poslano na {printer}
+	Accepted by {printer}	Prihvatio {printer}
+	Waiting in the printer's queue	Čeka u redu pisača
+	Held by the printer	Zadržano na pisaču
+	The printer is printing it	Pisač ga ispisuje
+	The printer paused the job; it needs attention	Pisač je pauzirao zadatak; potrebna je pozornost
+	Sheets printed: {n}	Ispisani listovi: {n}
+	Sheets printed: {done} of {total}	Ispisani listovi: {done} od {total}
+	Printed with warnings	Ispisano s upozorenjima
+	Printed with errors	Ispisano s pogreškama
+	The job was canceled	Zadatak je otkazan
+	The printer stopped the job	Pisač je zaustavio zadatak
+	The printer no longer lists the job; it most likely finished	Pisač više ne navodi zadatak; najvjerojatnije je gotov
+	Still printing; the job continues on the printer	Još se ispisuje; zadatak se nastavlja na pisaču
+	Sent. The printer can't say whether it printed.	Poslano. Pisač ne može reći je li ispisano.
+	The printer may have received the document. Check the printer before sending again.	Pisač je možda primio dokument. Provjerite pisač prije ponovnog slanja.
+	The printer address was refused	Adresa pisača je odbijena
+	Couldn't reach the printer	Pisač nije dostupan
+	The printer's reply couldn't be understood	Odgovor pisača nije razumljiv
+	The printer refused the request	Pisač je odbio zahtjev
+	The printer doesn't support this setting	Pisač ne podržava ovu postavku
+	The document couldn't be prepared	Dokument se nije mogao pripremiti
+	A setting isn't valid	Neka postavka nije valjana
+	The print job stopped unexpectedly	Zadatak ispisa neočekivano se zaustavio
+	System printer	Sistemski pisač
+	Network printer	Mrežni pisač
+	Sending to the network printer…	Slanje na mrežni pisač…

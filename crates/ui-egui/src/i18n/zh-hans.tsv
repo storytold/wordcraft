@@ -2245,3 +2245,63 @@
 # Reading Mode column widths (#1040)
 	Narrow	窄
 	Medium	中等
+# Network printer destination (File > Print): machine-drafted by an AI agent from the plain meaning of the English, clean room; needs a native speaker's review.
+	Printer address:	打印机地址:
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names. ipp:// or an /ipp/ path means IPP; anything else is WS-Print.	只接受本网络内的 IP 地址(私有、链路本地或环回地址),不接受主机名。ipp:// 或含 /ipp/ 的路径表示 IPP,其他都按 WS-Print 处理。
+	Query printer	查询打印机
+	Asking the printer…	正在查询打印机…
+	Query the printer first to see what it supports.	请先查询打印机,了解它支持什么。
+	Printer status: {state}	打印机状态:{state}
+	Reasons: {reasons}	原因:{reasons}
+	The printer accepts none of the formats this document can be sent in	打印机不接受此文档可发送的任何格式
+	Copies:	份数:
+	Two-sided:	双面:
+	Flip on long edge	长边翻转
+	Flip on short edge	短边翻转
+	Printer orientation:	打印机方向:
+	Reverse portrait	纵向(反向)
+	Reverse landscape	横向(反向)
+	Quality:	质量:
+	Normal	普通
+	High	高
+	Photo	照片
+	Colour	彩色
+	Black and white	黑白
+	Resolution:	分辨率:
+	This printer does not take a copies setting.	此打印机不支持份数设置。
+	This printer only prints one-sided.	此打印机只能单面打印。
+	This printer does not take an orientation setting.	此打印机不支持方向设置。
+	This printer does not take a quality setting.	此打印机不支持质量设置。
+	This printer only prints in black and white.	此打印机只能黑白打印。
+	This printer does not take a resolution setting.	此打印机不支持分辨率设置。
+	Not confirmed by the printer	打印机未确认
+	I confirm sending this document to this printer	我确认将此文档发送到这台打印机
+	Sending to {printer}…	正在发送到 {printer}…
+	Canceling…	正在取消…
+	Sent to {printer}	已发送到 {printer}
+	Accepted by {printer}	{printer} 已接收
+	Waiting in the printer's queue	在打印机队列中等待
+	Held by the printer	已被打印机挂起
+	The printer is printing it	打印机正在打印
+	The printer paused the job; it needs attention	打印机已暂停该作业,需要处理
+	Sheets printed: {n}	已打印的纸张数:{n}
+	Sheets printed: {done} of {total}	已打印的纸张数:{done} / {total}
+	Printed with warnings	已打印,有警告
+	Printed with errors	已打印,有错误
+	The job was canceled	作业已取消
+	The printer stopped the job	打印机已停止该作业
+	The printer no longer lists the job; it most likely finished	打印机的列表中已没有该作业,很可能已完成
+	Still printing; the job continues on the printer	仍在打印,作业在打印机上继续
+	Sent. The printer can't say whether it printed.	已发送。打印机无法说明是否已打印。
+	The printer may have received the document. Check the printer before sending again.	打印机可能已收到文档。再次发送前请先检查打印机。
+	The printer address was refused	打印机地址被拒绝
+	Couldn't reach the printer	无法连接到打印机
+	The printer's reply couldn't be understood	无法理解打印机的回复
+	The printer refused the request	打印机拒绝了请求
+	The printer doesn't support this setting	打印机不支持此设置
+	The document couldn't be prepared	无法准备文档
+	A setting isn't valid	某项设置无效
+	The print job stopped unexpectedly	打印作业意外停止
+	System printer	系统打印机
+	Network printer	网络打印机
+	Sending to the network printer…	正在发送到网络打印机…

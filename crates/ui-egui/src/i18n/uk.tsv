@@ -2245,3 +2245,63 @@
 # Reading Mode column widths (#1040)
 	Narrow	Вузька
 	Medium	Середня
+# Network printer destination (File > Print): machine-drafted by an AI agent from the plain meaning of the English, clean room; needs a native speaker's review.
+	Printer address:	Адреса принтера:
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names. ipp:// or an /ipp/ path means IPP; anything else is WS-Print.	Приймаються лише IP-адреси цієї мережі (приватні, link-local або loopback), а не імена хостів. ipp:// або шлях /ipp/ означає IPP; усе інше — WS-Print.
+	Query printer	Опитати принтер
+	Asking the printer…	Опитування принтера…
+	Query the printer first to see what it supports.	Спершу опитайте принтер, щоб побачити, що він підтримує.
+	Printer status: {state}	Стан принтера: {state}
+	Reasons: {reasons}	Причини: {reasons}
+	The printer accepts none of the formats this document can be sent in	Принтер не приймає жодного з форматів, у яких можна надіслати цей документ
+	Copies:	Копії:
+	Two-sided:	Двосторонній друк:
+	Flip on long edge	Перевертати за довшим краєм
+	Flip on short edge	Перевертати за коротшим краєм
+	Printer orientation:	Орієнтація принтера:
+	Reverse portrait	Книжкова, перевернута
+	Reverse landscape	Альбомна, перевернута
+	Quality:	Якість:
+	Normal	Звичайна
+	High	Висока
+	Photo	Фото
+	Colour	Колір
+	Black and white	Чорно-біле
+	Resolution:	Роздільна здатність:
+	This printer does not take a copies setting.	Цей принтер не підтримує налаштування кількості копій.
+	This printer only prints one-sided.	Цей принтер друкує лише з одного боку.
+	This printer does not take an orientation setting.	Цей принтер не підтримує налаштування орієнтації.
+	This printer does not take a quality setting.	Цей принтер не підтримує налаштування якості.
+	This printer only prints in black and white.	Цей принтер друкує лише чорно-біле.
+	This printer does not take a resolution setting.	Цей принтер не підтримує налаштування роздільної здатності.
+	Not confirmed by the printer	Не підтверджено принтером
+	I confirm sending this document to this printer	Підтверджую надсилання цього документа на цей принтер
+	Sending to {printer}…	Надсилання на {printer}…
+	Canceling…	Скасування…
+	Sent to {printer}	Надіслано на {printer}
+	Accepted by {printer}	Прийнято принтером {printer}
+	Waiting in the printer's queue	Очікує в черзі принтера
+	Held by the printer	Утримується принтером
+	The printer is printing it	Принтер друкує його
+	The printer paused the job; it needs attention	Принтер призупинив завдання; потрібна увага
+	Sheets printed: {n}	Надруковано аркушів: {n}
+	Sheets printed: {done} of {total}	Надруковано аркушів: {done} з {total}
+	Printed with warnings	Надруковано з попередженнями
+	Printed with errors	Надруковано з помилками
+	The job was canceled	Завдання скасовано
+	The printer stopped the job	Принтер зупинив завдання
+	The printer no longer lists the job; it most likely finished	Принтер більше не показує завдання; імовірно, його завершено
+	Still printing; the job continues on the printer	Друк триває; завдання виконується на принтері
+	Sent. The printer can't say whether it printed.	Надіслано. Принтер не може сказати, чи надруковано.
+	The printer may have received the document. Check the printer before sending again.	Принтер міг отримати документ. Перевірте принтер, перш ніж надсилати знову.
+	The printer address was refused	Адресу принтера відхилено
+	Couldn't reach the printer	Не вдалося зв'язатися з принтером
+	The printer's reply couldn't be understood	Відповідь принтера не вдалося зрозуміти
+	The printer refused the request	Принтер відхилив запит
+	The printer doesn't support this setting	Принтер не підтримує це налаштування
+	The document couldn't be prepared	Не вдалося підготувати документ
+	A setting isn't valid	Одне з налаштувань недійсне
+	The print job stopped unexpectedly	Завдання друку несподівано зупинилося
+	System printer	Системний принтер
+	Network printer	Мережевий принтер
+	Sending to the network printer…	Надсилання на мережевий принтер…

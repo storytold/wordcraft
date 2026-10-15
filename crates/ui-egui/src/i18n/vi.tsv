@@ -2672,3 +2672,62 @@ template	Letter	Thư
 # Reading Mode column widths (#1040)
 	Narrow	Hẹp
 	Medium	Trung bình
+# Network printer destination (File > Print): machine-drafted by an AI agent from the plain meaning of the English, clean room; needs a native speaker's review.
+	Printer address:	Địa chỉ máy in:
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names. ipp:// or an /ipp/ path means IPP; anything else is WS-Print.	Chỉ chấp nhận địa chỉ IP trong mạng này (riêng tư, link-local hoặc loopback), không chấp nhận tên máy chủ. ipp:// hoặc đường dẫn /ipp/ nghĩa là IPP; mọi thứ khác là WS-Print.
+	Query printer	Truy vấn máy in
+	Asking the printer…	Đang hỏi máy in…
+	Query the printer first to see what it supports.	Hãy truy vấn máy in trước để xem nó hỗ trợ những gì.
+	Printer status: {state}	Trạng thái máy in: {state}
+	Reasons: {reasons}	Lý do: {reasons}
+	The printer accepts none of the formats this document can be sent in	Máy in không chấp nhận định dạng nào mà tài liệu này có thể được gửi đi
+	Copies:	Số bản:
+	Two-sided:	In hai mặt:
+	Flip on long edge	Lật theo cạnh dài
+	Flip on short edge	Lật theo cạnh ngắn
+	Printer orientation:	Hướng giấy của máy in:
+	Reverse portrait	Dọc ngược
+	Reverse landscape	Ngang ngược
+	Quality:	Chất lượng:
+	High	Cao
+	Photo	Ảnh
+	Colour	Màu
+	Black and white	Đen trắng
+	Resolution:	Độ phân giải:
+	This printer does not take a copies setting.	Máy in này không hỗ trợ cài đặt số bản.
+	This printer only prints one-sided.	Máy in này chỉ in một mặt.
+	This printer does not take an orientation setting.	Máy in này không hỗ trợ cài đặt hướng giấy.
+	This printer does not take a quality setting.	Máy in này không hỗ trợ cài đặt chất lượng.
+	This printer only prints in black and white.	Máy in này chỉ in đen trắng.
+	This printer does not take a resolution setting.	Máy in này không hỗ trợ cài đặt độ phân giải.
+	Not confirmed by the printer	Máy in chưa xác nhận
+	I confirm sending this document to this printer	Tôi xác nhận gửi tài liệu này đến máy in này
+	Sending to {printer}…	Đang gửi đến {printer}…
+	Canceling…	Đang hủy…
+	Sent to {printer}	Đã gửi đến {printer}
+	Accepted by {printer}	{printer} đã nhận
+	Waiting in the printer's queue	Đang chờ trong hàng đợi của máy in
+	Held by the printer	Máy in đang giữ lại
+	The printer is printing it	Máy in đang in
+	The printer paused the job; it needs attention	Máy in đã tạm dừng công việc; cần được chú ý
+	Sheets printed: {n}	Số tờ đã in: {n}
+	Sheets printed: {done} of {total}	Số tờ đã in: {done} trên {total}
+	Printed with warnings	Đã in kèm cảnh báo
+	Printed with errors	Đã in kèm lỗi
+	The job was canceled	Công việc đã bị hủy
+	The printer stopped the job	Máy in đã dừng công việc
+	The printer no longer lists the job; it most likely finished	Máy in không còn liệt kê công việc này; nhiều khả năng đã xong
+	Still printing; the job continues on the printer	Vẫn đang in; công việc tiếp tục trên máy in
+	Sent. The printer can't say whether it printed.	Đã gửi. Máy in không cho biết đã in hay chưa.
+	The printer may have received the document. Check the printer before sending again.	Máy in có thể đã nhận tài liệu. Hãy kiểm tra máy in trước khi gửi lại.
+	The printer address was refused	Địa chỉ máy in bị từ chối
+	Couldn't reach the printer	Không thể kết nối với máy in
+	The printer's reply couldn't be understood	Không hiểu được phản hồi của máy in
+	The printer refused the request	Máy in đã từ chối yêu cầu
+	The printer doesn't support this setting	Máy in không hỗ trợ cài đặt này
+	The document couldn't be prepared	Không thể chuẩn bị tài liệu
+	A setting isn't valid	Một cài đặt không hợp lệ
+	The print job stopped unexpectedly	Công việc in đã dừng bất ngờ
+	System printer	Máy in hệ thống
+	Network printer	Máy in mạng
+	Sending to the network printer…	Đang gửi đến máy in mạng…

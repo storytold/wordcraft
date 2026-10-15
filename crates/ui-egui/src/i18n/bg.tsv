@@ -2621,3 +2621,62 @@
 # Reading Mode column widths (#1040)
 	Narrow	Тясна
 	Medium	Средна
+# Network printer destination (File > Print): machine-drafted by an AI agent from the plain meaning of the English, clean room; needs a native speaker's review.
+	Printer address:	Адрес на принтера:
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names. ipp:// or an /ipp/ path means IPP; anything else is WS-Print.	Приемат се само IP адреси от тази мрежа (частни, link-local или loopback), не имена на хостове. ipp:// или път /ipp/ означава IPP; всичко останало е WS-Print.
+	Query printer	Запитване към принтера
+	Asking the printer…	Запитване към принтера…
+	Query the printer first to see what it supports.	Първо направете запитване към принтера, за да видите какво поддържа.
+	Printer status: {state}	Състояние на принтера: {state}
+	Reasons: {reasons}	Причини: {reasons}
+	The printer accepts none of the formats this document can be sent in	Принтерът не приема нито един от форматите, в които може да се изпрати този документ
+	Copies:	Копия:
+	Two-sided:	Двустранно:
+	Flip on long edge	Обръщане по дългия ръб
+	Flip on short edge	Обръщане по късия ръб
+	Printer orientation:	Ориентация на принтера:
+	Reverse portrait	Портрет, обърнат
+	Reverse landscape	Пейзаж, обърнат
+	Quality:	Качество:
+	High	Високо
+	Photo	Снимка
+	Colour	Цвят
+	Black and white	Черно-бяло
+	Resolution:	Разделителна способност:
+	This printer does not take a copies setting.	Този принтер не поддържа настройка за копия.
+	This printer only prints one-sided.	Този принтер печата само едностранно.
+	This printer does not take an orientation setting.	Този принтер не поддържа настройка за ориентация.
+	This printer does not take a quality setting.	Този принтер не поддържа настройка за качество.
+	This printer only prints in black and white.	Този принтер печата само черно-бяло.
+	This printer does not take a resolution setting.	Този принтер не поддържа настройка за разделителна способност.
+	Not confirmed by the printer	Не е потвърдено от принтера
+	I confirm sending this document to this printer	Потвърждавам изпращането на този документ към този принтер
+	Sending to {printer}…	Изпращане към {printer}…
+	Canceling…	Отмяна…
+	Sent to {printer}	Изпратено към {printer}
+	Accepted by {printer}	Прието от {printer}
+	Waiting in the printer's queue	Чака в опашката на принтера
+	Held by the printer	Задържано от принтера
+	The printer is printing it	Принтерът го отпечатва
+	The printer paused the job; it needs attention	Принтерът спря задачата; нужно е внимание
+	Sheets printed: {n}	Отпечатани листове: {n}
+	Sheets printed: {done} of {total}	Отпечатани листове: {done} от {total}
+	Printed with warnings	Отпечатано с предупреждения
+	Printed with errors	Отпечатано с грешки
+	The job was canceled	Задачата беше отменена
+	The printer stopped the job	Принтерът спря задачата
+	The printer no longer lists the job; it most likely finished	Принтерът вече не показва задачата; най-вероятно е приключила
+	Still printing; the job continues on the printer	Все още се печата; задачата продължава на принтера
+	Sent. The printer can't say whether it printed.	Изпратено. Принтерът не може да каже дали е отпечатано.
+	The printer may have received the document. Check the printer before sending again.	Принтерът може да е получил документа. Проверете принтера, преди да изпратите отново.
+	The printer address was refused	Адресът на принтера беше отхвърлен
+	Couldn't reach the printer	Не може да се стигне до принтера
+	The printer's reply couldn't be understood	Отговорът на принтера не беше разбран
+	The printer refused the request	Принтерът отхвърли заявката
+	The printer doesn't support this setting	Принтерът не поддържа тази настройка
+	The document couldn't be prepared	Документът не можа да бъде подготвен
+	A setting isn't valid	Една настройка не е валидна
+	The print job stopped unexpectedly	Заданието за печат спря неочаквано
+	System printer	Системен принтер
+	Network printer	Мрежов принтер
+	Sending to the network printer…	Изпращане към мрежовия принтер…

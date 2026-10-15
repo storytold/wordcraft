@@ -62,6 +62,7 @@ pub mod ink;
 pub mod keys;
 pub mod keytips;
 pub mod mini_toolbar;
+pub mod network_print;
 pub mod objects;
 pub mod options;
 pub mod panes;
@@ -98,6 +99,9 @@ pub struct Services {
     pub printers: Option<printing::Discover>,
     /// Desktop: submit the PDF with the chosen settings on a worker.
     pub print_native: Option<printing::Submit>,
+    /// Desktop: print to a network printer by address (WS-Print or IPP). Without it the Print page
+    /// has no network destination. Nothing connects until a printer is queried or a job confirmed.
+    pub print_network: Option<network_print::NetworkPrint>,
     /// Pick a file to open; the argument says what for (`document`, `picture`).
     pub pick_open: Option<Box<dyn Fn(&str) -> Option<String>>>,
     /// Pick a path to save to, given a suggested name.
@@ -422,6 +426,10 @@ pub struct WordApp {
     pub ui: UiState,
     pub services: Services,
     pub printing: printing::State,
+    /// The Print page's network printer destination (address, query, options, confirmation, job).
+    pub net_print: craft_ui::printing::network::State,
+    /// The pass the Print page was last drawn in, to notice it opening (which clears the confirmation).
+    net_print_page_pass: u64,
     print_feedback_seen: Option<printing::Feedback>,
     pub canvas: canvas::CanvasState,
     /// Content control frames, check boxes and lists on the page.
@@ -575,6 +583,8 @@ impl WordApp {
             ui: UiState::default(),
             services,
             printing: Default::default(),
+            net_print: Default::default(),
+            net_print_page_pass: 0,
             print_feedback_seen: None,
             canvas: canvas::CanvasState::default(),
             controls: Default::default(),
@@ -1159,7 +1169,10 @@ impl WordApp {
     /// The window's close button (or the system) asked to quit. Returns true to let the window
     /// close; with unsaved changes it asks first and returns false.
     pub fn close_requested(&mut self) -> bool {
-        if self.printing.busy() {
+        // A network job still being sent has an unknown outcome if the process ends now; once the
+        // printer has accepted it, following it is only for the status line.
+        let sending = matches!(self.net_print.draft.job, craft_ui::printing::network::JobView::Running { .. });
+        if self.printing.busy() || sending {
             self.status(tl!("Wait for the print job to finish submitting before closing."));
             return false;
         }
@@ -1726,6 +1739,7 @@ impl WordApp {
 
     /// Terminal feedback also reaches the normal window when printing starts through control.
     pub fn poll_printing(&mut self, ctx: &egui::Context) {
+        network_print::poll(self, ctx);
         self.printing.poll(ctx);
         if self.printing.message == self.print_feedback_seen {
             return;

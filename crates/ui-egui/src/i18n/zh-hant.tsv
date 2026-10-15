@@ -2234,3 +2234,63 @@
 # Reading Mode column widths (#1040)
 	Narrow	窄
 	Medium	中等
+# Network printer destination (File > Print): machine-drafted by an AI agent from the plain meaning of the English, clean room; needs a native speaker's review.
+	Printer address:	印表機位址:
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names. ipp:// or an /ipp/ path means IPP; anything else is WS-Print.	只接受此網路內的 IP 位址(私人、連結本機或迴路位址),不接受主機名稱。ipp:// 或含 /ipp/ 的路徑表示 IPP,其他都視為 WS-Print。
+	Query printer	查詢印表機
+	Asking the printer…	正在查詢印表機…
+	Query the printer first to see what it supports.	請先查詢印表機,了解它支援什麼。
+	Printer status: {state}	印表機狀態:{state}
+	Reasons: {reasons}	原因:{reasons}
+	The printer accepts none of the formats this document can be sent in	印表機不接受此文件可傳送的任何格式
+	Copies:	份數:
+	Two-sided:	雙面:
+	Flip on long edge	長邊翻轉
+	Flip on short edge	短邊翻轉
+	Printer orientation:	印表機方向:
+	Reverse portrait	直向(反向)
+	Reverse landscape	橫向(反向)
+	Quality:	品質:
+	Normal	一般
+	High	高
+	Photo	相片
+	Colour	彩色
+	Black and white	黑白
+	Resolution:	解析度:
+	This printer does not take a copies setting.	此印表機不支援份數設定。
+	This printer only prints one-sided.	此印表機只能單面列印。
+	This printer does not take an orientation setting.	此印表機不支援方向設定。
+	This printer does not take a quality setting.	此印表機不支援品質設定。
+	This printer only prints in black and white.	此印表機只能黑白列印。
+	This printer does not take a resolution setting.	此印表機不支援解析度設定。
+	Not confirmed by the printer	印表機未確認
+	I confirm sending this document to this printer	我確認將此文件傳送到這台印表機
+	Sending to {printer}…	正在傳送到 {printer}…
+	Canceling…	正在取消…
+	Sent to {printer}	已傳送到 {printer}
+	Accepted by {printer}	{printer} 已接收
+	Waiting in the printer's queue	在印表機佇列中等待
+	Held by the printer	已被印表機保留
+	The printer is printing it	印表機正在列印
+	The printer paused the job; it needs attention	印表機已暫停該工作,需要處理
+	Sheets printed: {n}	已列印的紙張數:{n}
+	Sheets printed: {done} of {total}	已列印的紙張數:{done} / {total}
+	Printed with warnings	已列印,有警告
+	Printed with errors	已列印,有錯誤
+	The job was canceled	工作已取消
+	The printer stopped the job	印表機已停止該工作
+	The printer no longer lists the job; it most likely finished	印表機的清單中已沒有該工作,很可能已完成
+	Still printing; the job continues on the printer	仍在列印,工作在印表機上繼續
+	Sent. The printer can't say whether it printed.	已傳送。印表機無法說明是否已列印。
+	The printer may have received the document. Check the printer before sending again.	印表機可能已收到文件。再次傳送前請先檢查印表機。
+	The printer address was refused	印表機位址被拒絕
+	Couldn't reach the printer	無法連線到印表機
+	The printer's reply couldn't be understood	無法理解印表機的回應
+	The printer refused the request	印表機拒絕了要求
+	The printer doesn't support this setting	印表機不支援此設定
+	The document couldn't be prepared	無法準備文件
+	A setting isn't valid	某項設定無效
+	The print job stopped unexpectedly	列印工作意外停止
+	System printer	系統印表機
+	Network printer	網路印表機
+	Sending to the network printer…	正在傳送到網路印表機…

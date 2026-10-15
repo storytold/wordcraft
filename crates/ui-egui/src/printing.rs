@@ -8,8 +8,15 @@ pub type Submit = Box<dyn Fn(Vec<u8>, Settings, bool, Vec<(String, String)>) -> 
 /// Metadata for the app-owned commands. Inspecting it never discovers printers or submits.
 pub fn commands(app: &crate::WordApp) -> Vec<serde_json::Value> {
     use serde_json::json;
-    let enabled = if app.services.print_native.is_some() { app.printing.ready() } else { app.services.print.is_some() };
-    let submit_params = "range?: all|current|selection|custom; pages?: string (1-3,5); parity?: all|odd|even; copies?: integer 1..999; collate?: bool; orientation?: auto|portrait|landscape. Native uses the selected printer, duplex and grayscale from ui.printSettings; omitted copies/collation use current settings. Browser printing opens its dialog. Submits only when explicitly executed.";
+    let network = app.ui.print.network && app.services.print_network.is_some();
+    let enabled = if network {
+        !app.net_print.draft.running()
+    } else if app.services.print_native.is_some() {
+        app.printing.ready()
+    } else {
+        app.services.print.is_some()
+    };
+    let submit_params = "range?: all|current|selection|custom; pages?: string (1-3,5); parity?: all|odd|even; copies?: integer 1..999; collate?: bool; orientation?: auto|portrait|landscape. Native uses the selected printer, duplex and grayscale from ui.printSettings; with a network printer chosen on the Print page the job goes to it only after its confirmation box was ticked there (never by a parameter); omitted copies/collation use current settings. Browser printing opens its dialog. Submits only when explicitly executed.";
     vec![
         json!({"id":"ui.printSettings", "label":"Print settings", "location":"File › Print", "shortcut":null,
             "params":"printer?: discovered name; copies?: integer 1..999; duplex?: printerDefault|off|longEdge|shortEdge|null; grayscale?: bool; refresh?: bool. Empty params inspect printer/copies/duplex/grayscale, printers, busy/discovering/ready and status/detail. Updates are atomic; refresh discovers only on native hosts. Never submits or opens a dialog.",
@@ -117,11 +124,17 @@ pub fn feedback(message: &Feedback, translate: impl Fn(&str) -> String) -> Strin
 /// Build the upstream page-range/markup PDF and hand it to the chosen host print flow.
 pub fn submit(app: &mut crate::WordApp, params: &serde_json::Value) -> Result<serde_json::Value, String> {
     use serde_json::json;
-    if app.services.print.is_none() && app.services.print_native.is_none() {
+    // The destination chosen on the Print page: a network printer by address, or the spooler.
+    let network = app.ui.print.network && app.services.print_network.is_some();
+    if app.services.print.is_none() && app.services.print_native.is_none() && !network {
         return Err("printing to the system print dialog isn't available here; export a PDF instead".into());
     }
-    let native = app.services.print_native.is_some();
-    if native && !app.printing.ready() {
+    let native = app.services.print_native.is_some() || network;
+    if network {
+        if app.net_print.draft.running() {
+            return Err("A print job is already being sent.".into());
+        }
+    } else if native && !app.printing.ready() {
         return Err("Select an available printer in File > Print before submitting.".into());
     }
     let mut pdf_params = params.clone();
@@ -151,11 +164,21 @@ pub fn submit(app: &mut crate::WordApp, params: &serde_json::Value) -> Result<se
         app.session.doc.settings.page_picture = picture;
     }
     let result = pdf.and_then(|(bytes, plan)| {
-        if native && plan.chosen.checked_mul(settings.copies as usize).is_none_or(|pages| pages > wordcraft_engine::print::MAX_PRINT_PAGES) {
+        // The network printer takes its copies from its own section; the PDF has one.
+        let copies = if network { 1 } else { settings.copies as usize };
+        if native && plan.chosen.checked_mul(copies).is_none_or(|pages| pages > wordcraft_engine::print::MAX_PRINT_PAGES) {
             return Err("the selected pages and copies exceed the print-job page limit".into());
         }
         let len = bytes.len();
-        if let Some(submit) = &app.services.print_native {
+        if network {
+            // The sheet size picks the printer's media when it lists it; the page count is the job's total.
+            let lay = app.session.export_layout();
+            let media =
+                plan.pages.first().and_then(|&index| lay.pages.get(index)).and_then(|page| crate::network_print::media_for_points(page.w, page.h));
+            if !crate::network_print::send(app, bytes, plan.pages.len(), media) {
+                return Err("Query the printer, then tick the confirmation box in File > Print before sending.".into());
+            }
+        } else if let Some(submit) = &app.services.print_native {
             let mut print_options = Vec::new();
             let orientation = params.get("orientation").and_then(|v| v.as_str()).unwrap_or(&app.ui.print.orientation);
             let is_landscape = if orientation == "landscape" {
@@ -181,8 +204,14 @@ pub fn submit(app: &mut crate::WordApp, params: &serde_json::Value) -> Result<se
     });
     match result {
         Ok(len) => {
-            app.status(if native { tl!("Submitting print job…") } else { tl!("Opening print dialog…") });
-            Ok(json!({"printing": true, "bytes": len, "pending": native}))
+            app.status(if network {
+                tl!("Sending to the network printer…")
+            } else if native {
+                tl!("Submitting print job…")
+            } else {
+                tl!("Opening print dialog…")
+            });
+            Ok(json!({"printing": true, "bytes": len, "pending": native, "network": network}))
         }
         Err(error) => {
             log::error!("print failed: {error}");

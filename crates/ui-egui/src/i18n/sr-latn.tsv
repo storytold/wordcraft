@@ -2243,3 +2243,63 @@
 # Reading Mode column widths (#1040)
 	Narrow	Uska
 	Medium	Srednja
+# Network printer destination (File > Print): machine-drafted by an AI agent from the plain meaning of the English, clean room; needs a native speaker's review.
+	Printer address:	Adresa štampača:
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names. ipp:// or an /ipp/ path means IPP; anything else is WS-Print.	Prihvataju se samo IP adrese ove mreže (privatne, link-local ili loopback), ne imena hostova. ipp:// ili putanja /ipp/ znači IPP; sve ostalo je WS-Print.
+	Query printer	Upitaj štampač
+	Asking the printer…	Upitujem štampač…
+	Query the printer first to see what it supports.	Prvo upitajte štampač da vidite šta podržava.
+	Printer status: {state}	Stanje štampača: {state}
+	Reasons: {reasons}	Razlozi: {reasons}
+	The printer accepts none of the formats this document can be sent in	Štampač ne prihvata nijedan od formata u kojima se ovaj dokument može poslati
+	Copies:	Kopije:
+	Two-sided:	Obostrano:
+	Flip on long edge	Okreni po dužoj ivici
+	Flip on short edge	Okreni po kraćoj ivici
+	Printer orientation:	Orijentacija štampača:
+	Reverse portrait	Uspravno, obrnuto
+	Reverse landscape	Vodoravno, obrnuto
+	Quality:	Kvalitet:
+	Normal	Normalan
+	High	Visok
+	Photo	Fotografija
+	Colour	Boja
+	Black and white	Crno-belo
+	Resolution:	Rezolucija:
+	This printer does not take a copies setting.	Ovaj štampač ne podržava podešavanje broja kopija.
+	This printer only prints one-sided.	Ovaj štampač štampa samo jednostrano.
+	This printer does not take an orientation setting.	Ovaj štampač ne podržava podešavanje orijentacije.
+	This printer does not take a quality setting.	Ovaj štampač ne podržava podešavanje kvaliteta.
+	This printer only prints in black and white.	Ovaj štampač štampa samo crno-belo.
+	This printer does not take a resolution setting.	Ovaj štampač ne podržava podešavanje rezolucije.
+	Not confirmed by the printer	Štampač nije potvrdio
+	I confirm sending this document to this printer	Potvrđujem slanje ovog dokumenta na ovaj štampač
+	Sending to {printer}…	Slanje na {printer}…
+	Canceling…	Otkazivanje…
+	Sent to {printer}	Poslato na {printer}
+	Accepted by {printer}	Prihvatio {printer}
+	Waiting in the printer's queue	Čeka u redu štampača
+	Held by the printer	Zadržano na štampaču
+	The printer is printing it	Štampač ga štampa
+	The printer paused the job; it needs attention	Štampač je pauzirao zadatak; potrebna je pažnja
+	Sheets printed: {n}	Odštampani listovi: {n}
+	Sheets printed: {done} of {total}	Odštampani listovi: {done} od {total}
+	Printed with warnings	Odštampano sa upozorenjima
+	Printed with errors	Odštampano sa greškama
+	The job was canceled	Zadatak je otkazan
+	The printer stopped the job	Štampač je zaustavio zadatak
+	The printer no longer lists the job; it most likely finished	Štampač više ne navodi zadatak; najverovatnije je završen
+	Still printing; the job continues on the printer	Još se štampa; zadatak se nastavlja na štampaču
+	Sent. The printer can't say whether it printed.	Poslato. Štampač ne može reći da li je odštampano.
+	The printer may have received the document. Check the printer before sending again.	Štampač je možda primio dokument. Proverite štampač pre ponovnog slanja.
+	The printer address was refused	Adresa štampača je odbijena
+	Couldn't reach the printer	Štampač nije dostupan
+	The printer's reply couldn't be understood	Odgovor štampača nije razumljiv
+	The printer refused the request	Štampač je odbio zahtev
+	The printer doesn't support this setting	Štampač ne podržava ovo podešavanje
+	The document couldn't be prepared	Dokument nije mogao da se pripremi
+	A setting isn't valid	Neka postavka nije važeća
+	The print job stopped unexpectedly	Zadatak štampanja neočekivano je zaustavljen
+	System printer	Sistemski štampač
+	Network printer	Mrežni štampač
+	Sending to the network printer…	Slanje na mrežni štampač…

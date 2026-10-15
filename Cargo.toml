@@ -72,6 +72,13 @@ base64 = "0.22"
 getrandom = "0.3"
 zeroize = "1"
 
+# Shared craft-libs (storytold/craft-libs). The refs follow the open PRs until they merge, then pin
+# immutable revisions: craft-ui #112 (printing::network, scanning), craft-print #116 (print backends,
+# registry, WS-Print, IPP), craft-scan/craft-job/craft-devices #144. Every craft-* crate must resolve
+# to one copy (`cargo tree -d`), so the PR crates share one ref each.
+craft-ui = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "refs/pull/112/head" }
+craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "refs/pull/116/head" }
+
 # ui
 egui = "0.36"
 egui_extras = { version = "0.36", default-features = false }

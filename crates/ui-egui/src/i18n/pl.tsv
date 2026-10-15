@@ -2622,3 +2622,62 @@ preview	Title	Tytuł
 # Reading Mode column widths (#1040)
 	Narrow	Wąska
 	Medium	Średnia
+# Network printer destination (File > Print): machine-drafted by an AI agent from the plain meaning of the English, clean room; needs a native speaker's review.
+	Printer address:	Adres drukarki:
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names. ipp:// or an /ipp/ path means IPP; anything else is WS-Print.	Akceptowane są tylko adresy IP tej sieci (prywatne, link-local lub pętli zwrotnej), nie nazwy hostów. ipp:// lub ścieżka /ipp/ oznacza IPP; wszystko inne to WS-Print.
+	Query printer	Zapytaj drukarkę
+	Asking the printer…	Pytanie drukarki…
+	Query the printer first to see what it supports.	Najpierw zapytaj drukarkę, aby zobaczyć, co obsługuje.
+	Printer status: {state}	Stan drukarki: {state}
+	Reasons: {reasons}	Powody: {reasons}
+	The printer accepts none of the formats this document can be sent in	Drukarka nie przyjmuje żadnego z formatów, w których można wysłać ten dokument
+	Copies:	Kopie:
+	Two-sided:	Dwustronnie:
+	Flip on long edge	Obróć wzdłuż dłuższej krawędzi
+	Flip on short edge	Obróć wzdłuż krótszej krawędzi
+	Printer orientation:	Orientacja drukarki:
+	Reverse portrait	Pionowo odwrócona
+	Reverse landscape	Poziomo odwrócona
+	Quality:	Jakość:
+	High	Wysoka
+	Photo	Zdjęcie
+	Colour	Kolor
+	Black and white	Czarno-biało
+	Resolution:	Rozdzielczość:
+	This printer does not take a copies setting.	Ta drukarka nie obsługuje ustawienia liczby kopii.
+	This printer only prints one-sided.	Ta drukarka drukuje tylko jednostronnie.
+	This printer does not take an orientation setting.	Ta drukarka nie obsługuje ustawienia orientacji.
+	This printer does not take a quality setting.	Ta drukarka nie obsługuje ustawienia jakości.
+	This printer only prints in black and white.	Ta drukarka drukuje tylko czarno-biało.
+	This printer does not take a resolution setting.	Ta drukarka nie obsługuje ustawienia rozdzielczości.
+	Not confirmed by the printer	Niepotwierdzone przez drukarkę
+	I confirm sending this document to this printer	Potwierdzam wysłanie tego dokumentu na tę drukarkę
+	Sending to {printer}…	Wysyłanie do {printer}…
+	Canceling…	Anulowanie…
+	Sent to {printer}	Wysłano do {printer}
+	Accepted by {printer}	Przyjęte przez {printer}
+	Waiting in the printer's queue	Oczekuje w kolejce drukarki
+	Held by the printer	Wstrzymane przez drukarkę
+	The printer is printing it	Drukarka go drukuje
+	The printer paused the job; it needs attention	Drukarka wstrzymała zadanie; wymaga uwagi
+	Sheets printed: {n}	Wydrukowane arkusze: {n}
+	Sheets printed: {done} of {total}	Wydrukowane arkusze: {done} z {total}
+	Printed with warnings	Wydrukowano z ostrzeżeniami
+	Printed with errors	Wydrukowano z błędami
+	The job was canceled	Zadanie zostało anulowane
+	The printer stopped the job	Drukarka zatrzymała zadanie
+	The printer no longer lists the job; it most likely finished	Drukarka nie wymienia już zadania; najprawdopodobniej zostało ukończone
+	Still printing; the job continues on the printer	Nadal drukuje; zadanie jest kontynuowane na drukarce
+	Sent. The printer can't say whether it printed.	Wysłano. Drukarka nie potrafi powiedzieć, czy wydrukowała.
+	The printer may have received the document. Check the printer before sending again.	Drukarka mogła odebrać dokument. Sprawdź drukarkę przed ponownym wysłaniem.
+	The printer address was refused	Adres drukarki został odrzucony
+	Couldn't reach the printer	Nie można połączyć się z drukarką
+	The printer's reply couldn't be understood	Nie zrozumiano odpowiedzi drukarki
+	The printer refused the request	Drukarka odrzuciła żądanie
+	The printer doesn't support this setting	Drukarka nie obsługuje tego ustawienia
+	The document couldn't be prepared	Nie udało się przygotować dokumentu
+	A setting isn't valid	Któreś ustawienie jest nieprawidłowe
+	The print job stopped unexpectedly	Zadanie drukowania niespodziewanie się zatrzymało
+	System printer	Drukarka systemowa
+	Network printer	Drukarka sieciowa
+	Sending to the network printer…	Wysyłanie do drukarki sieciowej…

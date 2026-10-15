@@ -2628,3 +2628,62 @@
 # Reading Mode column widths (#1040)
 	Narrow	Keskeny
 	Medium	Közepes
+# Network printer destination (File > Print): machine-drafted by an AI agent from the plain meaning of the English, clean room; needs a native speaker's review.
+	Printer address:	Nyomtató címe:
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names. ipp:// or an /ipp/ path means IPP; anything else is WS-Print.	Csak ennek a hálózatnak az IP-címei fogadhatók el (privát, link-local vagy loopback), gazdanevek nem. Az ipp:// vagy az /ipp/ útvonal IPP-t jelent; minden más WS-Print.
+	Query printer	Nyomtató lekérdezése
+	Asking the printer…	Nyomtató lekérdezése…
+	Query the printer first to see what it supports.	Először kérdezze le a nyomtatót, hogy lássa, mit támogat.
+	Printer status: {state}	Nyomtató állapota: {state}
+	Reasons: {reasons}	Okok: {reasons}
+	The printer accepts none of the formats this document can be sent in	A nyomtató a dokumentum küldésére használható formátumok egyikét sem fogadja el
+	Copies:	Példányszám:
+	Two-sided:	Kétoldalas:
+	Flip on long edge	Átfordítás a hosszú élen
+	Flip on short edge	Átfordítás a rövid élen
+	Printer orientation:	Nyomtató tájolása:
+	Reverse portrait	Fordított álló
+	Reverse landscape	Fordított fekvő
+	Quality:	Minőség:
+	High	Magas
+	Photo	Fénykép
+	Colour	Színes
+	Black and white	Fekete-fehér
+	Resolution:	Felbontás:
+	This printer does not take a copies setting.	Ez a nyomtató nem támogatja a példányszám beállítását.
+	This printer only prints one-sided.	Ez a nyomtató csak egyoldalasan nyomtat.
+	This printer does not take an orientation setting.	Ez a nyomtató nem támogatja a tájolás beállítását.
+	This printer does not take a quality setting.	Ez a nyomtató nem támogatja a minőség beállítását.
+	This printer only prints in black and white.	Ez a nyomtató csak fekete-fehérben nyomtat.
+	This printer does not take a resolution setting.	Ez a nyomtató nem támogatja a felbontás beállítását.
+	Not confirmed by the printer	A nyomtató nem erősítette meg
+	I confirm sending this document to this printer	Megerősítem, hogy elküldöm ezt a dokumentumot erre a nyomtatóra
+	Sending to {printer}…	Küldés ide: {printer}…
+	Canceling…	Megszakítás…
+	Sent to {printer}	Elküldve ide: {printer}
+	Accepted by {printer}	{printer} elfogadta
+	Waiting in the printer's queue	Várakozik a nyomtató sorában
+	Held by the printer	A nyomtató visszatartja
+	The printer is printing it	A nyomtató nyomtatja
+	The printer paused the job; it needs attention	A nyomtató szüneteltette a feladatot; figyelmet igényel
+	Sheets printed: {n}	Kinyomtatott lapok: {n}
+	Sheets printed: {done} of {total}	Kinyomtatott lapok: {done} / {total}
+	Printed with warnings	Figyelmeztetésekkel nyomtatva
+	Printed with errors	Hibákkal nyomtatva
+	The job was canceled	A feladat megszakítva
+	The printer stopped the job	A nyomtató leállította a feladatot
+	The printer no longer lists the job; it most likely finished	A nyomtató már nem listázza a feladatot; valószínűleg elkészült
+	Still printing; the job continues on the printer	Még nyomtat; a feladat a nyomtatón folytatódik
+	Sent. The printer can't say whether it printed.	Elküldve. A nyomtató nem tudja megmondani, hogy kinyomtatta-e.
+	The printer may have received the document. Check the printer before sending again.	A nyomtató megkaphatta a dokumentumot. Újraküldés előtt ellenőrizze a nyomtatót.
+	The printer address was refused	A nyomtató címét elutasították
+	Couldn't reach the printer	A nyomtató nem érhető el
+	The printer's reply couldn't be understood	A nyomtató válasza nem értelmezhető
+	The printer refused the request	A nyomtató elutasította a kérést
+	The printer doesn't support this setting	A nyomtató nem támogatja ezt a beállítást
+	The document couldn't be prepared	A dokumentumot nem sikerült előkészíteni
+	A setting isn't valid	Egy beállítás érvénytelen
+	The print job stopped unexpectedly	A nyomtatási feladat váratlanul leállt
+	System printer	Rendszernyomtató
+	Network printer	Hálózati nyomtató
+	Sending to the network printer…	Küldés a hálózati nyomtatóra…

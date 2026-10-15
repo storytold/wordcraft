@@ -2488,3 +2488,62 @@ preview	Title	제목
 	Bottom Right Cell	오른쪽 아래 셀
 	Inside Horizontal Border	안쪽 가로 테두리
 	Inside Vertical Border	안쪽 세로 테두리
+# Network printer destination (File > Print): machine-drafted by an AI agent from the plain meaning of the English, clean room; needs a native speaker's review.
+	Printer address:	프린터 주소:
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names. ipp:// or an /ipp/ path means IPP; anything else is WS-Print.	이 네트워크의 IP 주소(사설, 링크 로컬, 루프백)만 허용되며 호스트 이름은 사용할 수 없습니다. ipp:// 또는 /ipp/ 경로는 IPP를, 그 외에는 WS-Print를 뜻합니다.
+	Query printer	프린터 조회
+	Asking the printer…	프린터에 묻는 중…
+	Query the printer first to see what it supports.	먼저 프린터를 조회하여 지원하는 기능을 확인하세요.
+	Printer status: {state}	프린터 상태: {state}
+	Reasons: {reasons}	이유: {reasons}
+	The printer accepts none of the formats this document can be sent in	프린터가 이 문서를 보낼 수 있는 형식을 하나도 지원하지 않습니다
+	Copies:	매수:
+	Two-sided:	양면:
+	Flip on long edge	긴 쪽 넘김
+	Flip on short edge	짧은 쪽 넘김
+	Printer orientation:	프린터 방향:
+	Reverse portrait	세로(뒤집음)
+	Reverse landscape	가로(뒤집음)
+	Quality:	품질:
+	High	높음
+	Photo	사진
+	Colour	컬러
+	Black and white	흑백
+	Resolution:	해상도:
+	This printer does not take a copies setting.	이 프린터는 매수 설정을 지원하지 않습니다.
+	This printer only prints one-sided.	이 프린터는 단면 인쇄만 지원합니다.
+	This printer does not take an orientation setting.	이 프린터는 방향 설정을 지원하지 않습니다.
+	This printer does not take a quality setting.	이 프린터는 품질 설정을 지원하지 않습니다.
+	This printer only prints in black and white.	이 프린터는 흑백 인쇄만 지원합니다.
+	This printer does not take a resolution setting.	이 프린터는 해상도 설정을 지원하지 않습니다.
+	Not confirmed by the printer	프린터가 확인하지 않음
+	I confirm sending this document to this printer	이 문서를 이 프린터로 보내는 것을 확인합니다
+	Sending to {printer}…	{printer}(으)로 보내는 중…
+	Canceling…	취소하는 중…
+	Sent to {printer}	{printer}(으)로 보냄
+	Accepted by {printer}	{printer}에서 접수함
+	Waiting in the printer's queue	프린터 대기열에서 대기 중
+	Held by the printer	프린터가 보류함
+	The printer is printing it	프린터가 인쇄하는 중
+	The printer paused the job; it needs attention	프린터가 작업을 일시 중지했습니다. 확인이 필요합니다
+	Sheets printed: {n}	인쇄된 용지: {n}장
+	Sheets printed: {done} of {total}	인쇄된 용지: {done} / {total}장
+	Printed with warnings	경고와 함께 인쇄됨
+	Printed with errors	오류와 함께 인쇄됨
+	The job was canceled	작업이 취소되었습니다
+	The printer stopped the job	프린터가 작업을 중단했습니다
+	The printer no longer lists the job; it most likely finished	프린터에 더 이상 작업이 표시되지 않습니다. 완료되었을 가능성이 높습니다
+	Still printing; the job continues on the printer	아직 인쇄 중입니다. 작업은 프린터에서 계속됩니다
+	Sent. The printer can't say whether it printed.	보냈습니다. 프린터가 인쇄 여부를 알려 주지 않습니다.
+	The printer may have received the document. Check the printer before sending again.	프린터가 문서를 받았을 수 있습니다. 다시 보내기 전에 프린터를 확인하세요.
+	The printer address was refused	프린터 주소가 거부되었습니다
+	Couldn't reach the printer	프린터에 연결할 수 없습니다
+	The printer's reply couldn't be understood	프린터의 응답을 이해할 수 없습니다
+	The printer refused the request	프린터가 요청을 거부했습니다
+	The printer doesn't support this setting	프린터가 이 설정을 지원하지 않습니다
+	The document couldn't be prepared	문서를 준비할 수 없습니다
+	A setting isn't valid	유효하지 않은 설정이 있습니다
+	The print job stopped unexpectedly	인쇄 작업이 예기치 않게 중단되었습니다
+	System printer	시스템 프린터
+	Network printer	네트워크 프린터
+	Sending to the network printer…	네트워크 프린터로 보내는 중…

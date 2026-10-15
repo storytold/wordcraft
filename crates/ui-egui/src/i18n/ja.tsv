@@ -2233,3 +2233,63 @@
 # Reading Mode column widths (#1040)
 	Narrow	狭い
 	Medium	中
+# Network printer destination (File > Print): machine-drafted by an AI agent from the plain meaning of the English, clean room; needs a native speaker's review.
+	Printer address:	プリンターのアドレス:
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names. ipp:// or an /ipp/ path means IPP; anything else is WS-Print.	このネットワーク内の IP アドレス(プライベート、リンクローカル、ループバック)のみ使えます。ホスト名は使えません。ipp:// または /ipp/ を含むパスは IPP、それ以外は WS-Print です。
+	Query printer	プリンターに問い合わせ
+	Asking the printer…	プリンターに問い合わせています…
+	Query the printer first to see what it supports.	まずプリンターに問い合わせて、対応している機能を確認してください。
+	Printer status: {state}	プリンターの状態: {state}
+	Reasons: {reasons}	理由: {reasons}
+	The printer accepts none of the formats this document can be sent in	プリンターは、この文書を送れる形式のいずれにも対応していません
+	Copies:	部数:
+	Two-sided:	両面:
+	Flip on long edge	長辺とじ
+	Flip on short edge	短辺とじ
+	Printer orientation:	プリンターの向き:
+	Reverse portrait	縦(逆向き)
+	Reverse landscape	横(逆向き)
+	Quality:	品質:
+	Normal	標準
+	High	高
+	Photo	写真
+	Colour	カラー
+	Black and white	白黒
+	Resolution:	解像度:
+	This printer does not take a copies setting.	このプリンターは部数の設定に対応していません。
+	This printer only prints one-sided.	このプリンターは片面印刷のみです。
+	This printer does not take an orientation setting.	このプリンターは向きの設定に対応していません。
+	This printer does not take a quality setting.	このプリンターは品質の設定に対応していません。
+	This printer only prints in black and white.	このプリンターは白黒印刷のみです。
+	This printer does not take a resolution setting.	このプリンターは解像度の設定に対応していません。
+	Not confirmed by the printer	プリンターでは確認されていません
+	I confirm sending this document to this printer	この文書をこのプリンターへ送信することを確認します
+	Sending to {printer}…	{printer} に送信しています…
+	Canceling…	キャンセルしています…
+	Sent to {printer}	{printer} に送信しました
+	Accepted by {printer}	{printer} が受け付けました
+	Waiting in the printer's queue	プリンターの待ち行列で待機中
+	Held by the printer	プリンターが保留しています
+	The printer is printing it	プリンターが印刷中です
+	The printer paused the job; it needs attention	プリンターがジョブを一時停止しました。対応が必要です
+	Sheets printed: {n}	印刷済みの枚数: {n}
+	Sheets printed: {done} of {total}	印刷済みの枚数: {done} / {total}
+	Printed with warnings	警告つきで印刷しました
+	Printed with errors	エラーつきで印刷しました
+	The job was canceled	ジョブはキャンセルされました
+	The printer stopped the job	プリンターがジョブを停止しました
+	The printer no longer lists the job; it most likely finished	プリンターのジョブ一覧にありません。おそらく完了しています
+	Still printing; the job continues on the printer	印刷中です。ジョブはプリンターで続行されます
+	Sent. The printer can't say whether it printed.	送信しました。印刷されたかどうかはプリンターから分かりません。
+	The printer may have received the document. Check the printer before sending again.	プリンターが文書を受け取った可能性があります。再送信する前にプリンターを確認してください。
+	The printer address was refused	プリンターのアドレスは拒否されました
+	Couldn't reach the printer	プリンターに接続できませんでした
+	The printer's reply couldn't be understood	プリンターの応答を解釈できませんでした
+	The printer refused the request	プリンターが要求を拒否しました
+	The printer doesn't support this setting	プリンターはこの設定に対応していません
+	The document couldn't be prepared	文書を準備できませんでした
+	A setting isn't valid	無効な設定があります
+	The print job stopped unexpectedly	印刷ジョブが予期せず停止しました
+	System printer	システムのプリンター
+	Network printer	ネットワークプリンター
+	Sending to the network printer…	ネットワークプリンターに送信しています…

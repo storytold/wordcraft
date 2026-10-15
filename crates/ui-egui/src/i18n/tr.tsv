@@ -2629,3 +2629,62 @@ preview	Title	Örnek
 # Reading Mode column widths (#1040)
 	Narrow	Dar
 	Medium	Orta
+# Network printer destination (File > Print): machine-drafted by an AI agent from the plain meaning of the English, clean room; needs a native speaker's review.
+	Printer address:	Yazıcı adresi:
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names. ipp:// or an /ipp/ path means IPP; anything else is WS-Print.	Yalnızca bu ağdaki IP adresleri kabul edilir (özel, bağlantı-yerel veya geri döngü), ana bilgisayar adları kabul edilmez. ipp:// veya /ipp/ yolu IPP anlamına gelir; diğer her şey WS-Print'tir.
+	Query printer	Yazıcıyı sorgula
+	Asking the printer…	Yazıcı sorgulanıyor…
+	Query the printer first to see what it supports.	Neleri desteklediğini görmek için önce yazıcıyı sorgulayın.
+	Printer status: {state}	Yazıcı durumu: {state}
+	Reasons: {reasons}	Nedenler: {reasons}
+	The printer accepts none of the formats this document can be sent in	Yazıcı, bu belgenin gönderilebileceği biçimlerin hiçbirini kabul etmiyor
+	Copies:	Kopya:
+	Two-sided:	Çift taraflı:
+	Flip on long edge	Uzun kenardan çevir
+	Flip on short edge	Kısa kenardan çevir
+	Printer orientation:	Yazıcı yönü:
+	Reverse portrait	Ters dikey
+	Reverse landscape	Ters yatay
+	Quality:	Kalite:
+	High	Yüksek
+	Photo	Fotoğraf
+	Colour	Renkli
+	Black and white	Siyah beyaz
+	Resolution:	Çözünürlük:
+	This printer does not take a copies setting.	Bu yazıcı kopya sayısı ayarını desteklemiyor.
+	This printer only prints one-sided.	Bu yazıcı yalnızca tek taraflı yazdırıyor.
+	This printer does not take an orientation setting.	Bu yazıcı yön ayarını desteklemiyor.
+	This printer does not take a quality setting.	Bu yazıcı kalite ayarını desteklemiyor.
+	This printer only prints in black and white.	Bu yazıcı yalnızca siyah beyaz yazdırıyor.
+	This printer does not take a resolution setting.	Bu yazıcı çözünürlük ayarını desteklemiyor.
+	Not confirmed by the printer	Yazıcı tarafından onaylanmadı
+	I confirm sending this document to this printer	Bu belgenin bu yazıcıya gönderilmesini onaylıyorum
+	Sending to {printer}…	{printer} yazıcısına gönderiliyor…
+	Canceling…	İptal ediliyor…
+	Sent to {printer}	{printer} yazıcısına gönderildi
+	Accepted by {printer}	{printer} kabul etti
+	Waiting in the printer's queue	Yazıcının kuyruğunda bekliyor
+	Held by the printer	Yazıcı tarafından bekletiliyor
+	The printer is printing it	Yazıcı yazdırıyor
+	The printer paused the job; it needs attention	Yazıcı işi duraklattı; ilgilenilmesi gerekiyor
+	Sheets printed: {n}	Yazdırılan sayfa: {n}
+	Sheets printed: {done} of {total}	Yazdırılan sayfa: {done} / {total}
+	Printed with warnings	Uyarılarla yazdırıldı
+	Printed with errors	Hatalarla yazdırıldı
+	The job was canceled	İş iptal edildi
+	The printer stopped the job	Yazıcı işi durdurdu
+	The printer no longer lists the job; it most likely finished	Yazıcı işi artık listelemiyor; büyük olasılıkla tamamlandı
+	Still printing; the job continues on the printer	Hâlâ yazdırılıyor; iş yazıcıda sürüyor
+	Sent. The printer can't say whether it printed.	Gönderildi. Yazıcı yazdırılıp yazdırılmadığını söyleyemiyor.
+	The printer may have received the document. Check the printer before sending again.	Yazıcı belgeyi almış olabilir. Yeniden göndermeden önce yazıcıyı denetleyin.
+	The printer address was refused	Yazıcı adresi reddedildi
+	Couldn't reach the printer	Yazıcıya ulaşılamadı
+	The printer's reply couldn't be understood	Yazıcının yanıtı anlaşılamadı
+	The printer refused the request	Yazıcı isteği reddetti
+	The printer doesn't support this setting	Yazıcı bu ayarı desteklemiyor
+	The document couldn't be prepared	Belge hazırlanamadı
+	A setting isn't valid	Bir ayar geçerli değil
+	The print job stopped unexpectedly	Yazdırma işi beklenmedik şekilde durdu
+	System printer	Sistem yazıcısı
+	Network printer	Ağ yazıcısı
+	Sending to the network printer…	Ağ yazıcısına gönderiliyor…

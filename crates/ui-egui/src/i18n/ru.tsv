@@ -2630,3 +2630,62 @@ preview	Title	Пример
 # Reading Mode column widths (#1040)
 	Narrow	Узкая
 	Medium	Средняя
+# Network printer destination (File > Print): machine-drafted by an AI agent from the plain meaning of the English, clean room; needs a native speaker's review.
+	Printer address:	Адрес принтера:
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names. ipp:// or an /ipp/ path means IPP; anything else is WS-Print.	Принимаются только IP-адреса этой сети (частные, link-local или loopback), но не имена хостов. ipp:// или путь /ipp/ означает IPP; всё остальное — WS-Print.
+	Query printer	Опросить принтер
+	Asking the printer…	Опрос принтера…
+	Query the printer first to see what it supports.	Сначала опросите принтер, чтобы узнать, что он поддерживает.
+	Printer status: {state}	Состояние принтера: {state}
+	Reasons: {reasons}	Причины: {reasons}
+	The printer accepts none of the formats this document can be sent in	Принтер не принимает ни один из форматов, в которых можно отправить этот документ
+	Copies:	Копии:
+	Two-sided:	Двусторонняя печать:
+	Flip on long edge	Переворот по длинному краю
+	Flip on short edge	Переворот по короткому краю
+	Printer orientation:	Ориентация принтера:
+	Reverse portrait	Книжная перевёрнутая
+	Reverse landscape	Альбомная перевёрнутая
+	Quality:	Качество:
+	High	Высокое
+	Photo	Фото
+	Colour	Цвет
+	Black and white	Чёрно-белая
+	Resolution:	Разрешение:
+	This printer does not take a copies setting.	Этот принтер не поддерживает настройку числа копий.
+	This printer only prints one-sided.	Этот принтер печатает только на одной стороне.
+	This printer does not take an orientation setting.	Этот принтер не поддерживает настройку ориентации.
+	This printer does not take a quality setting.	Этот принтер не поддерживает настройку качества.
+	This printer only prints in black and white.	Этот принтер печатает только в чёрно-белом режиме.
+	This printer does not take a resolution setting.	Этот принтер не поддерживает настройку разрешения.
+	Not confirmed by the printer	Не подтверждено принтером
+	I confirm sending this document to this printer	Подтверждаю отправку этого документа на этот принтер
+	Sending to {printer}…	Отправка на {printer}…
+	Canceling…	Отмена…
+	Sent to {printer}	Отправлено на {printer}
+	Accepted by {printer}	Принято принтером {printer}
+	Waiting in the printer's queue	Ожидает в очереди принтера
+	Held by the printer	Задержано принтером
+	The printer is printing it	Принтер печатает задание
+	The printer paused the job; it needs attention	Принтер приостановил задание; требуется внимание
+	Sheets printed: {n}	Напечатано листов: {n}
+	Sheets printed: {done} of {total}	Напечатано листов: {done} из {total}
+	Printed with warnings	Напечатано с предупреждениями
+	Printed with errors	Напечатано с ошибками
+	The job was canceled	Задание отменено
+	The printer stopped the job	Принтер остановил задание
+	The printer no longer lists the job; it most likely finished	Принтер больше не показывает задание; скорее всего, оно завершено
+	Still printing; the job continues on the printer	Печать продолжается; задание выполняется на принтере
+	Sent. The printer can't say whether it printed.	Отправлено. Принтер не может сообщить, напечатано ли.
+	The printer may have received the document. Check the printer before sending again.	Принтер мог получить документ. Проверьте принтер, прежде чем отправлять снова.
+	The printer address was refused	Адрес принтера отклонён
+	Couldn't reach the printer	Не удалось связаться с принтером
+	The printer's reply couldn't be understood	Ответ принтера не удалось понять
+	The printer refused the request	Принтер отклонил запрос
+	The printer doesn't support this setting	Принтер не поддерживает эту настройку
+	The document couldn't be prepared	Не удалось подготовить документ
+	A setting isn't valid	Недопустимая настройка
+	The print job stopped unexpectedly	Задание печати неожиданно остановилось
+	System printer	Системный принтер
+	Network printer	Сетевой принтер
+	Sending to the network printer…	Отправка на сетевой принтер…

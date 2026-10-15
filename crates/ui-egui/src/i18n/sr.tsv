@@ -2247,3 +2247,63 @@
 # Reading Mode column widths (#1040)
 	Narrow	Уска
 	Medium	Средња
+# Network printer destination (File > Print): machine-drafted by an AI agent from the plain meaning of the English, clean room; needs a native speaker's review.
+	Printer address:	Адреса штампача:
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names. ipp:// or an /ipp/ path means IPP; anything else is WS-Print.	Прихватају се само IP адресе ове мреже (приватне, link-local или loopback), не имена хостова. ipp:// или путања /ipp/ значи IPP; све остало је WS-Print.
+	Query printer	Упитај штампач
+	Asking the printer…	Упитујем штампач…
+	Query the printer first to see what it supports.	Прво упитајте штампач да видите шта подржава.
+	Printer status: {state}	Стање штампача: {state}
+	Reasons: {reasons}	Разлози: {reasons}
+	The printer accepts none of the formats this document can be sent in	Штампач не прихвата ниједан од формата у којима се овај документ може послати
+	Copies:	Копије:
+	Two-sided:	Обострано:
+	Flip on long edge	Окрени по дужој ивици
+	Flip on short edge	Окрени по краћој ивици
+	Printer orientation:	Оријентација штампача:
+	Reverse portrait	Усправно, обрнуто
+	Reverse landscape	Водоравно, обрнуто
+	Quality:	Квалитет:
+	Normal	Нормалан
+	High	Висок
+	Photo	Фотографија
+	Colour	Боја
+	Black and white	Црно-бело
+	Resolution:	Резолуција:
+	This printer does not take a copies setting.	Овај штампач не подржава подешавање броја копија.
+	This printer only prints one-sided.	Овај штампач штампа само једнострано.
+	This printer does not take an orientation setting.	Овај штампач не подржава подешавање оријентације.
+	This printer does not take a quality setting.	Овај штампач не подржава подешавање квалитета.
+	This printer only prints in black and white.	Овај штампач штампа само црно-бело.
+	This printer does not take a resolution setting.	Овај штампач не подржава подешавање резолуције.
+	Not confirmed by the printer	Штампач није потврдио
+	I confirm sending this document to this printer	Потврђујем слање овог документа на овај штампач
+	Sending to {printer}…	Слање на {printer}…
+	Canceling…	Отказивање…
+	Sent to {printer}	Послато на {printer}
+	Accepted by {printer}	Прихватио {printer}
+	Waiting in the printer's queue	Чека у реду штампача
+	Held by the printer	Задржано на штампачу
+	The printer is printing it	Штампач га штампа
+	The printer paused the job; it needs attention	Штампач је паузирао задатак; потребна је пажња
+	Sheets printed: {n}	Одштампани листови: {n}
+	Sheets printed: {done} of {total}	Одштампани листови: {done} од {total}
+	Printed with warnings	Одштампано са упозорењима
+	Printed with errors	Одштампано са грешкама
+	The job was canceled	Задатак је отказан
+	The printer stopped the job	Штампач је зауставио задатак
+	The printer no longer lists the job; it most likely finished	Штампач више не наводи задатак; највероватније је завршен
+	Still printing; the job continues on the printer	Још се штампа; задатак се наставља на штампачу
+	Sent. The printer can't say whether it printed.	Послато. Штампач не може рећи да ли је одштампано.
+	The printer may have received the document. Check the printer before sending again.	Штампач је можда примио документ. Проверите штампач пре поновног слања.
+	The printer address was refused	Адреса штампача је одбијена
+	Couldn't reach the printer	Штампач није доступан
+	The printer's reply couldn't be understood	Одговор штампача није разумљив
+	The printer refused the request	Штампач је одбио захтев
+	The printer doesn't support this setting	Штампач не подржава ово подешавање
+	The document couldn't be prepared	Документ није могао да се припреми
+	A setting isn't valid	Нека поставка није важећа
+	The print job stopped unexpectedly	Задатак штампања неочекивано је заустављен
+	System printer	Системски штампач
+	Network printer	Мрежни штампач
+	Sending to the network printer…	Слање на мрежни штампач…

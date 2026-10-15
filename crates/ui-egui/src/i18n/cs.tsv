@@ -2624,3 +2624,62 @@ preview	Title	Ukázka
 # Reading Mode column widths (#1040)
 	Narrow	Úzká
 	Medium	Střední
+# Network printer destination (File > Print): machine-drafted by an AI agent from the plain meaning of the English, clean room; needs a native speaker's review.
+	Printer address:	Adresa tiskárny:
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names. ipp:// or an /ipp/ path means IPP; anything else is WS-Print.	Přijímají se jen IP adresy z této sítě (soukromé, link-local nebo loopback), ne názvy hostitelů. ipp:// nebo cesta /ipp/ znamená IPP; vše ostatní je WS-Print.
+	Query printer	Dotázat se tiskárny
+	Asking the printer…	Dotazuji se tiskárny…
+	Query the printer first to see what it supports.	Nejprve se tiskárny zeptejte, co podporuje.
+	Printer status: {state}	Stav tiskárny: {state}
+	Reasons: {reasons}	Důvody: {reasons}
+	The printer accepts none of the formats this document can be sent in	Tiskárna nepřijímá žádný z formátů, v nichž lze tento dokument odeslat
+	Copies:	Kopie:
+	Two-sided:	Oboustranně:
+	Flip on long edge	Otočit podél delší hrany
+	Flip on short edge	Otočit podél kratší hrany
+	Printer orientation:	Orientace tiskárny:
+	Reverse portrait	Na výšku, obráceně
+	Reverse landscape	Na šířku, obráceně
+	Quality:	Kvalita:
+	High	Vysoká
+	Photo	Fotografie
+	Colour	Barva
+	Black and white	Černobíle
+	Resolution:	Rozlišení:
+	This printer does not take a copies setting.	Tato tiskárna nepodporuje nastavení počtu kopií.
+	This printer only prints one-sided.	Tato tiskárna tiskne pouze jednostranně.
+	This printer does not take an orientation setting.	Tato tiskárna nepodporuje nastavení orientace.
+	This printer does not take a quality setting.	Tato tiskárna nepodporuje nastavení kvality.
+	This printer only prints in black and white.	Tato tiskárna tiskne pouze černobíle.
+	This printer does not take a resolution setting.	Tato tiskárna nepodporuje nastavení rozlišení.
+	Not confirmed by the printer	Tiskárnou nepotvrzeno
+	I confirm sending this document to this printer	Potvrzuji odeslání tohoto dokumentu na tuto tiskárnu
+	Sending to {printer}…	Odesílání na {printer}…
+	Canceling…	Ruším…
+	Sent to {printer}	Odesláno na {printer}
+	Accepted by {printer}	Přijato tiskárnou {printer}
+	Waiting in the printer's queue	Čeká ve frontě tiskárny
+	Held by the printer	Pozdrženo tiskárnou
+	The printer is printing it	Tiskárna ji tiskne
+	The printer paused the job; it needs attention	Tiskárna úlohu pozastavila; vyžaduje pozornost
+	Sheets printed: {n}	Vytištěné listy: {n}
+	Sheets printed: {done} of {total}	Vytištěné listy: {done} z {total}
+	Printed with warnings	Vytištěno s upozorněními
+	Printed with errors	Vytištěno s chybami
+	The job was canceled	Úloha byla zrušena
+	The printer stopped the job	Tiskárna úlohu zastavila
+	The printer no longer lists the job; it most likely finished	Tiskárna úlohu již neuvádí; nejspíš je hotová
+	Still printing; the job continues on the printer	Stále se tiskne; úloha pokračuje na tiskárně
+	Sent. The printer can't say whether it printed.	Odesláno. Tiskárna nedokáže říct, zda se vytisklo.
+	The printer may have received the document. Check the printer before sending again.	Tiskárna mohla dokument přijmout. Před dalším odesláním tiskárnu zkontrolujte.
+	The printer address was refused	Adresa tiskárny byla odmítnuta
+	Couldn't reach the printer	Tiskárnu se nepodařilo kontaktovat
+	The printer's reply couldn't be understood	Odpovědi tiskárny nebylo možné porozumět
+	The printer refused the request	Tiskárna požadavek odmítla
+	The printer doesn't support this setting	Tiskárna toto nastavení nepodporuje
+	The document couldn't be prepared	Dokument se nepodařilo připravit
+	A setting isn't valid	Některé nastavení není platné
+	The print job stopped unexpectedly	Tisková úloha se neočekávaně zastavila
+	System printer	Systémová tiskárna
+	Network printer	Síťová tiskárna
+	Sending to the network printer…	Odesílání na síťovou tiskárnu…

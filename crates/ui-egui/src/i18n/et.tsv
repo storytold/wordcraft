@@ -2267,3 +2267,63 @@
 # Reading Mode column widths (#1040)
 	Narrow	Kitsas
 	Medium	Keskmine
+# Network printer destination (File > Print): machine-drafted by an AI agent from the plain meaning of the English, clean room; needs a native speaker's review.
+	Printer address:	Printeri aadress:
+	Only IP addresses on this network are accepted (private, link-local or loopback), not host names. ipp:// or an /ipp/ path means IPP; anything else is WS-Print.	Aktsepteeritakse ainult selle võrgu IP-aadresse (privaatsed, link-local või loopback), mitte hostinimesid. ipp:// või tee /ipp/ tähendab IPP-d; kõik muu on WS-Print.
+	Query printer	Päri printerit
+	Asking the printer…	Printerit päritakse…
+	Query the printer first to see what it supports.	Päri kõigepealt printerit, et näha, mida see toetab.
+	Printer status: {state}	Printeri olek: {state}
+	Reasons: {reasons}	Põhjused: {reasons}
+	The printer accepts none of the formats this document can be sent in	Printer ei võta vastu ühtegi vormingut, milles seda dokumenti saab saata
+	Copies:	Koopiaid:
+	Two-sided:	Kahepoolne:
+	Flip on long edge	Pööra pikal serval
+	Flip on short edge	Pööra lühikesel serval
+	Printer orientation:	Printeri suund:
+	Reverse portrait	Vastupidine püstpaigutus
+	Reverse landscape	Vastupidine rõhtpaigutus
+	Quality:	Kvaliteet:
+	Normal	Tavaline
+	High	Kõrge
+	Photo	Foto
+	Colour	Värviline
+	Black and white	Mustvalge
+	Resolution:	Eraldusvõime:
+	This printer does not take a copies setting.	See printer ei toeta koopiate arvu seadet.
+	This printer only prints one-sided.	See printer prindib ainult ühepoolselt.
+	This printer does not take an orientation setting.	See printer ei toeta suuna seadet.
+	This printer does not take a quality setting.	See printer ei toeta kvaliteedi seadet.
+	This printer only prints in black and white.	See printer prindib ainult mustvalgelt.
+	This printer does not take a resolution setting.	See printer ei toeta eraldusvõime seadet.
+	Not confirmed by the printer	Printer pole kinnitanud
+	I confirm sending this document to this printer	Kinnitan selle dokumendi saatmist sellele printerile
+	Sending to {printer}…	Saadan printerisse {printer}…
+	Canceling…	Tühistan…
+	Sent to {printer}	Saadetud printerisse {printer}
+	Accepted by {printer}	Printer {printer} võttis vastu
+	Waiting in the printer's queue	Ootab printeri järjekorras
+	Held by the printer	Printer hoiab kinni
+	The printer is printing it	Printer prindib seda
+	The printer paused the job; it needs attention	Printer peatas töö; see vajab tähelepanu
+	Sheets printed: {n}	Prinditud lehti: {n}
+	Sheets printed: {done} of {total}	Prinditud lehti: {done} / {total}
+	Printed with warnings	Prinditud hoiatustega
+	Printed with errors	Prinditud vigadega
+	The job was canceled	Töö tühistati
+	The printer stopped the job	Printer peatas töö
+	The printer no longer lists the job; it most likely finished	Printer ei loetle tööd enam; tõenäoliselt on see valmis
+	Still printing; the job continues on the printer	Prinditakse veel; töö jätkub printeris
+	Sent. The printer can't say whether it printed.	Saadetud. Printer ei oska öelda, kas prinditi.
+	The printer may have received the document. Check the printer before sending again.	Printer võis dokumendi kätte saada. Kontrolli printerit enne uuesti saatmist.
+	The printer address was refused	Printeri aadress lükati tagasi
+	Couldn't reach the printer	Printerini ei jõutud
+	The printer's reply couldn't be understood	Printeri vastusest ei saadud aru
+	The printer refused the request	Printer lükkas taotluse tagasi
+	The printer doesn't support this setting	Printer ei toeta seda seadet
+	The document couldn't be prepared	Dokumenti ei õnnestunud ette valmistada
+	A setting isn't valid	Mõni seade pole kehtiv
+	The print job stopped unexpectedly	Prinditöö peatus ootamatult
+	System printer	Süsteemi printer
+	Network printer	Võrguprinter
+	Sending to the network printer…	Saadan võrguprinterisse…

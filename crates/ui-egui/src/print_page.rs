@@ -27,6 +27,9 @@ pub struct PrintSettings {
     pub preview: usize,
     /// `auto`, `portrait` or `landscape`.
     pub orientation: String,
+    /// The destination is a network printer (WS-Print or IPP, by address) instead of the system's.
+    /// Only offered when the host brings the service.
+    pub network: bool,
     /// The preview's zoom (1.0 is the page's real size), or `None` to fit the whole page.
     pub zoom: Option<f32>,
 }
@@ -42,6 +45,7 @@ impl Default for PrintSettings {
             preview: 0,
             zoom: None,
             orientation: "auto".into(),
+            network: false,
         }
     }
 }
@@ -131,9 +135,37 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             // The settings scroll on their own: the preview beside them keeps the whole height (#1156).
             egui::ScrollArea::vertical().id_salt("print_settings").show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 8.0;
-                let native = app.services.print_native.is_some();
-                let hook = native || app.services.print.is_some();
-                if native {
+                let network_offered = app.services.print_network.is_some();
+                if !network_offered {
+                    app.ui.print.network = false;
+                }
+                let network = app.ui.print.network;
+                // The destination: the system's printers, or a network printer by address.
+                if network_offered {
+                    ui.horizontal(|ui| {
+                        ui.add_enabled_ui(!app.net_print.draft.running(), |ui| {
+                            ui.selectable_value(&mut app.ui.print.network, false, tl!("System printer"));
+                            ui.selectable_value(&mut app.ui.print.network, true, tl!("Network printer"));
+                        });
+                    });
+                }
+                // Opening the page clears the confirmation: it attests to what the page showed then.
+                let pass = ui.ctx().cumulative_pass_nr();
+                if pass > app.net_print_page_pass + 1 {
+                    app.net_print.dialog_opened();
+                }
+                app.net_print_page_pass = pass;
+                let native = app.services.print_native.is_some() && !network;
+                let hook = native || network || app.services.print.is_some();
+                let mut network_block = None;
+                if network {
+                    network_block = crate::network_print::show(
+                        app,
+                        ui,
+                        wordcraft_engine::print::plan(&app.ui.print.params(), total, current).is_ok() && total > 0,
+                    );
+                    app.ui.print.copies = 1;
+                } else if native {
                     if let Some(discover) = &app.services.printers {
                         crate::printing::show(&mut app.printing, ui, discover, |label| crate::i18n::t(label).to_owned());
                     }
@@ -147,12 +179,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     ui.label(tl!("Save a copy in another format. Printing goes through a PDF you can print from any viewer."));
                 }
                 ui.add_space(4.0);
+                let print_ready = if network { network_block.is_none() && !app.net_print.draft.running() } else { !native || app.printing.ready() };
                 if hook
                     && ui
-                        .add_enabled(
-                            !native || app.printing.ready(),
-                            egui::Button::new(egui::RichText::new(tl!("Print")).font(medium(13.5))).min_size(vec2(320.0, 34.0)),
-                        )
+                        .add_enabled(print_ready, egui::Button::new(egui::RichText::new(tl!("Print")).font(medium(13.5))).min_size(vec2(320.0, 34.0)))
                         .clicked()
                 {
                     let params = app.ui.print.params();
@@ -166,7 +196,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
                 ui.add_space(6.0);
 
-                if native {
+                if network {
+                    // The printer's own section above takes the copies; nothing to collate here.
+                } else if native {
                     if app.ui.print.copies > 1 {
                         ui.add_enabled(!app.printing.busy(), egui::Checkbox::new(&mut app.ui.print.collate, tl!("Collate copies")));
                     }
