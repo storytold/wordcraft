@@ -475,14 +475,27 @@ fn closes_p(n: &str) -> bool {
     )
 }
 
+fn strip_important(v: &str) -> &str {
+    let t = v.trim();
+    if let Some(pos) = t.rfind('!') {
+        let after = t[pos + 1..].trim();
+        if after.eq_ignore_ascii_case("important") {
+            return t[..pos].trim_end();
+        }
+    }
+    t
+}
+
 fn css_len_pt(v: &str) -> Option<f32> {
-    let v = v.trim().to_ascii_lowercase();
+    let v = strip_important(v).trim().to_ascii_lowercase();
     let num = |s: &str| s.trim().parse::<f32>().ok().filter(|x| x.is_finite());
     if let Some(x) = v.strip_suffix("pt") {
         num(x)
     } else if let Some(x) = v.strip_suffix("px") {
         num(x).map(|p| p * 0.75)
     } else if let Some(x) = v.strip_suffix("rem").or_else(|| v.strip_suffix("em")) {
+        num(x).map(|p| p * 12.0)
+    } else if let Some(x) = v.strip_suffix("pc") {
         num(x).map(|p| p * 12.0)
     } else if let Some(x) = v.strip_suffix("in") {
         num(x).map(|p| p * 72.0)
@@ -511,7 +524,7 @@ fn apply_style(css: &str, f: &mut Fmt, align: &mut Option<Align>, preserve: &mut
     for decl in css.split(';').take(64) {
         let Some((k, v)) = decl.split_once(':') else { continue };
         let k = k.trim().to_ascii_lowercase();
-        let v = v.trim().trim_end_matches("!important").trim();
+        let v = strip_important(v);
         let lv = v.to_ascii_lowercase();
         match k.as_str() {
             "font-weight" => f.bold = lv.starts_with("bold") || lv.parse::<u32>().is_ok_and(|w| w >= 600),
@@ -955,7 +968,7 @@ impl<'r> Builder<'r> {
             }
             "img" => {
                 let alt = attr(attrs, "alt").unwrap_or("").to_string();
-                let dim = |k: &str| attr(attrs, k).and_then(|v| v.trim().trim_end_matches("px").trim().parse::<f32>().ok()).map(|p| p * 0.75);
+                let dim = |k: &str| attr(attrs, k).and_then(css_len_pt);
                 let mut w = dim("width");
                 let mut h = dim("height");
                 if let Some(st) = attr(attrs, "style") {
@@ -1784,5 +1797,27 @@ mod tests {
     #[test]
     fn entities() {
         assert_eq!(unescape("a &lt;b&gt; &#65;&#x42; &bogus; &"), "a <b> AB &bogus; &");
+    }
+
+    #[test]
+    fn test_css_len_pc_and_important_and_img_dimensions() {
+        assert_eq!(css_len_pt("1pc"), Some(12.0));
+        assert_eq!(css_len_pt("2PC"), Some(24.0));
+        assert_eq!(css_len_pt("100px !important"), Some(75.0));
+        assert_eq!(css_len_pt("12pt ! IMPORTANT"), Some(12.0));
+        assert_eq!(css_len_pt("2in !important"), Some(144.0));
+
+        let html = r#"<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGNiAAAABgADNjd8qAAAAABJRU5ErkJggg==" width="100PX" height="80PX" style="width: 200px !important; height: 100px !important">"#;
+        let flow = parse(html);
+        if let FBlock::Para(p) = &flow.blocks[0] {
+            if let Inline::Image(img) = &p.inlines[0] {
+                assert_eq!(img.w, 150.0);
+                assert_eq!(img.h, 75.0);
+            } else {
+                panic!("expected image");
+            }
+        } else {
+            panic!("expected para");
+        }
     }
 }
