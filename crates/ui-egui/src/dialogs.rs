@@ -35,7 +35,8 @@ use bookmarks::bookmark_at_caret;
 use bookmarks::bookmark_names;
 pub use chrome::show;
 pub(crate) use chrome::{
-    block_behind, buttons, cancel_key_pressed, color_menu, drag_by_title_bar, forget_nudge, ok_cancel_responses, release_keyboard,
+    block_behind, buttons, cancel_key_pressed, color_menu, count_dialog_frame, drag_by_title_bar, forget_nudge, ok_cancel_responses, place_dialog,
+    release_keyboard,
 };
 pub(crate) use dispatch::search_results;
 pub(crate) use find::swallow_shortcut_text;
@@ -490,6 +491,8 @@ pub enum Dialog {
     /// Insert › Add-ins › Get Add-ins, Developer › Add-ins: the loaded add-ins, their commands,
     /// installing and loading more.
     AddIns,
+    /// An add-in's own dialog (protocol 1.2): a list, a form or a message.
+    Plugin(Box<crate::plugin_dialog::PluginDialog>),
 }
 
 impl Dialog {
@@ -565,6 +568,7 @@ impl Dialog {
             Dialog::NoteOptions { .. } => "noteOptions",
             Dialog::Templates { .. } => "templates",
             Dialog::AddIns => "addIns",
+            Dialog::Plugin(_) => "pluginDialog",
             Dialog::Organizer { .. } => "organizer",
             Dialog::CustomProperties(..) => "customProperties",
             Dialog::Layout(d) => d.name(),

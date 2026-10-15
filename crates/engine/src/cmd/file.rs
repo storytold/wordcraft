@@ -90,11 +90,11 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("file.new", "New", "File", new).key("Mod+N").params(r#"{"template"?: "blank|sample|letter|resume|report"}"#).pure(),
         CommandSpec::new("file.open", "Open", "File", open)
             .key("Mod+O / Mod+F12 / Mod+Alt+F2")
-            .params(r#"{"path": string, "data"?: base64 (the file's bytes; `path` then only names it), "password"?: string (for a password-protected Word document)}"#)
+            .params(r#"{"path": string, "data"?: base64 (the file's bytes; `path` then only names it), "password"?: string (for a password-protected Word document), "label"?: string (where the document came from, shown as its location: an add-in's `open`, at most 200 characters)}"#)
             .pure(),
         CommandSpec::new("file.save", "Save", "File", save)
             .key("Mod+S / Shift+F12 / Alt+Shift+F2")
-            .params(r#"{"path"?: string, "password"?: string (encrypt this and later saves with it, as file.encrypt does), "markup"?: bool (Print Markup for a PDF, PNG, HTML, Markdown or text copy: comments shown; default file.printMarkup), "format"?: "wordml2003" (an .xml file as a Word 2003 XML Document) | "flatopc" (as a Word XML Document, the default; saving over a Word 2003 XML file keeps that format), "strict"?: bool (a .pdf or .png only: refuse, writing nothing, if a character can't be drawn or a picture is missing; see file.strictReport)}"#)
+            .params(r#"{"path"?: string, "password"?: string (encrypt this and later saves with it, as file.encrypt does), "markup"?: bool (Print Markup for a PDF, PNG, HTML, Markdown or text copy: comments shown; default file.printMarkup), "format"?: "wordml2003" (an .xml file as a Word 2003 XML Document) | "flatopc" (as a Word XML Document, the default; saving over a Word 2003 XML file keeps that format), "autosave"?: bool (an AutoSave write: add-ins aren't told of it), "strict"?: bool (a .pdf or .png only: refuse, writing nothing, if a character can't be drawn or a picture is missing; see file.strictReport)}"#)
             .pure(),
         CommandSpec::new("file.saveAs", "Save As", "File", save_as).key(super::mac_or("F12 / Mod+Shift+S", "F12 / Alt+F2")).params(r#"{"path": string, "password"?: string, "markup"?: bool, "format"?: string (as file.save), "strict"?: bool (as file.save)}"#).pure(),
         // Pure: the password must not land in Repeat or a recorded macro, and it isn't an edit
@@ -272,6 +272,12 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     // A Markdown file's own text, for the view to show and Save to write back as it is.
     if super::md_source::is_markdown_file(std::path::Path::new(path)) {
         s.md_file = markdown_file_text(path, v);
+    }
+    s.location_label =
+        p::str(v, "label").map(|l| wordcraft_plugin::dialog::cut(l.trim(), wordcraft_plugin::dialog::MAX_TITLE)).filter(|l| !l.is_empty());
+    // Add-ins hear that this document opened from its file.
+    if p::str(v, "data").is_none() {
+        super::plugins::notify(wordcraft_plugin::DocumentEvent::Opened, std::path::Path::new(path));
     }
     // Like Word, a document opened with a password is saved with it again.
     if encrypted {
@@ -458,6 +464,10 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
     let own_file = s.path.as_deref() == Some(path.as_path());
     let markdown_to_markdown = super::md_source::is_markdown_file(&path) && s.path.as_deref().is_some_and(super::md_source::is_markdown_file);
     if own_file || markdown_to_markdown || ["docx", "docm", "dotx", "dotm", "odt", "ott", "fodt", "rtf", "json", "xml"].contains(&ext.as_str()) {
+        // Saved somewhere else, the document isn't where an add-in's label said any more.
+        if !own_file {
+            s.location_label = None;
+        }
         s.path = Some(path.clone());
         s.dirty = false;
         s.relayout();
@@ -468,6 +478,10 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
         let ext = asked.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
         s.push_ui_request(json!({"status": format!("This document has macros, which a .{ext} file can't hold, so it was saved as {name}.")}));
+    }
+    // Add-ins hear of the save (protocol 1.2), not of AutoSave's writes.
+    if !p::bool(v, "autosave").unwrap_or(false) {
+        super::plugins::notify(wordcraft_plugin::DocumentEvent::Saved, &path);
     }
     Ok(json!({"saved": true, "path": path.to_string_lossy(), "encrypted": encrypted, "rewritten": rewritten, "renamedFrom": renamed}))
 }
@@ -647,6 +661,7 @@ fn info(s: &mut Session, _: &Value) -> CmdResult {
     let l = s.layout();
     Ok(json!({
         "path": s.path.as_ref().map(|p| p.to_string_lossy().to_string()),
+        "location": s.location_label,
         "dirty": s.dirty,
         "pages": l.pages.len(),
         "words": s.doc.word_count(),

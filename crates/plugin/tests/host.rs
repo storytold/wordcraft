@@ -79,3 +79,40 @@ fn a_missing_program_is_an_error() {
     assert!(wordcraft_plugin::unload("t.missing"));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn protocol_1_2_features_dialogs_and_events() {
+    let _g = serial();
+    wordcraft_plugin::set_host_language("it");
+    let (_p, dir) = load_example("protocol-1-2");
+    // `initialize` tells the plugin what the host does and its interface language.
+    let info = wordcraft_plugin::run_command(ID, "hostInfo", json!({}), json!({})).unwrap().result;
+    assert_eq!(info["features"], json!(["dialogs", "open", "events", "document"]));
+    assert_eq!(info["language"], "it");
+    assert_eq!(info["id"], "wordcraft");
+    // A command answers with a form the app draws; its OK runs another command.
+    let r = wordcraft_plugin::run_command(ID, "greeting", json!({}), json!({})).unwrap();
+    let d = r.dialog.expect("a dialog");
+    assert_eq!(d.kind, wordcraft_plugin::DialogKind::Form);
+    assert_eq!((d.title.as_str(), d.command.as_deref(), d.ok_label.as_deref()), ("Greeting", Some("greet"), Some("Greet")));
+    assert_eq!(d.fields[0].value, json!("World"));
+    let params = wordcraft_plugin::dialog::with(&d.params, [("fields", json!({"name": "Ada"}))]);
+    let r = wordcraft_plugin::run_command(ID, "greet", params, json!({})).unwrap();
+    assert_eq!(r.commands[0].1["text"], "Hello, Ada!");
+    // Events go to the plugins that declared them, on their own thread; the answer is queued.
+    let _ = wordcraft_plugin::take_event_outcomes();
+    let sent =
+        wordcraft_plugin::send_event(wordcraft_plugin::DocumentEvent::Saved, json!({"path": "/tmp/a.docx", "name": "a.docx", "format": "docx"}));
+    assert_eq!(sent, 1);
+    assert_eq!(
+        wordcraft_plugin::send_event(wordcraft_plugin::DocumentEvent::Opened, json!({"path": "/tmp/a.docx", "name": "a.docx"})),
+        0,
+        "not declared"
+    );
+    assert!(wordcraft_plugin::wait_for_events(std::time::Duration::from_secs(20)));
+    let out = wordcraft_plugin::take_event_outcomes();
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert_eq!(out[0].message.as_deref(), Some("Example saw a.docx saved (docx)"));
+    assert!(wordcraft_plugin::unload(ID));
+    let _ = std::fs::remove_dir_all(dir);
+}

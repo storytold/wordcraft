@@ -5,6 +5,12 @@
 //! and if one fails the document goes back to how it was. While automation is confined to
 //! folders (`wordcraft-cli mcp --automation-read-root …`), plugins can't be loaded, installed or
 //! turned on: a plugin is a program, and would reach past the roots.
+//!
+//! Protocol 1.2: a command's answer may also ask for a dialog the app draws or a local file to
+//! open. `plugins.run` checks them and returns them in its result (`dialog`, `open`); the app's
+//! interface shows or opens them when the user ran the command, a script or an agent gets them
+//! to act on. Add-ins that declare `events` hear when documents open, save and close
+//! ([`notify`]), without ever holding those up.
 
 use serde_json::{Value, json};
 
@@ -36,7 +42,8 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{id} → {url}. Opens the add-in's web page (its manifest's `homepage`) in the browser")
             .pure(),
         CommandSpec::new("plugins.run", "Run Add-in Command", "Insert › Add-ins", run)
-            .params("{plugin, command, params?} → {ran, message?, result?}. The add-in's commands run as one undoable step"),
+            .params("{plugin, command, params?} → {ran, message?, result?, open?, dialog?}. The add-in's commands run as one undoable step. `open` {path, label?, readOnly?}: a file the add-in asks to open; `dialog`: a dialog it asks to show (the app does both when the user ran the command; a script acts on them itself)")
+            .pure(),
     ]
 }
 
@@ -136,6 +143,53 @@ fn capped(text: &str, max: usize) -> (String, bool) {
     }
 }
 
+/// The document as a plugin sees it (`context.document`): its file (`path`, `null` for a new
+/// document never saved) and `name`, whether it has unsaved changes (`dirty`), its title and
+/// word count.
+pub fn document_context(s: &Session) -> Value {
+    let name = s.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string());
+    json!({
+        "name": name,
+        "path": s.path.as_ref().map(|p| p.display().to_string()),
+        "dirty": s.dirty,
+        "title": s.doc.core.title,
+        "words": s.word_count(),
+    })
+}
+
+/// Tells the add-ins that declared `event` about it (protocol 1.2), without waiting for them:
+/// `path` is the document's file. A save's event carries its `format`, the file's extension.
+pub fn notify(event: wordcraft_plugin::DocumentEvent, path: &std::path::Path) {
+    if wordcraft_plugin::events::listeners(event).is_empty() {
+        return;
+    }
+    let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let mut params = json!({"path": path.display().to_string(), "name": name});
+    if event == wordcraft_plugin::DocumentEvent::Saved {
+        params["format"] = json!(path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default());
+    }
+    wordcraft_plugin::send_event(event, params);
+}
+
+/// Checks a file an add-in asks to open: an absolute path to a regular file WordCraft opens.
+fn check_open(path: &str) -> Result<(), CmdError> {
+    let fail = |why: &str| Err(CmdError::Failed(format!("the add-in asked to open {path}, which {why}")));
+    let p = std::path::Path::new(path);
+    if !p.is_absolute() {
+        return fail("isn't an absolute path");
+    }
+    let lower = p.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+    if !crate::io::OPEN_EXTS.iter().any(|ext| lower.strip_suffix(ext).is_some_and(|stem| stem.len() > 1 && stem.ends_with('.'))) {
+        return fail("isn't a kind of file WordCraft opens");
+    }
+    match crate::io::is_regular_file(p) {
+        Some(true) => Ok(()),
+        Some(false) => fail("isn't a file"),
+        None => fail("doesn't exist"),
+    }
+}
+
 /// What a plugin command sees of the document: its name, the selection (its text and ends) and
 /// the paragraph the caret is in. Texts are cut at 100,000 characters (`truncated`).
 fn context(s: &Session) -> Value {
@@ -144,14 +198,8 @@ fn context(s: &Session) -> Value {
     // Pictures, fields and other objects sit in the text as one placeholder character each.
     let para = s.doc.para_at(&s.sel.focus).map(|p| p.text.replace(wordcraft_doc::para::OBJ, "")).unwrap_or_default();
     let (para_text, para_cut) = capped(&para, MAX_CONTEXT_CHARS);
-    let name = s.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string());
     json!({
-        "document": {
-            "name": name,
-            "path": s.path.as_ref().map(|p| p.display().to_string()),
-            "title": s.doc.core.title,
-            "words": s.word_count(),
-        },
+        "document": document_context(s),
         "selection": {
             "text": sel_text,
             "empty": a == b,
@@ -181,7 +229,22 @@ fn refused(id: &str) -> bool {
         )
 }
 
+/// `plugins.run`: one undo step, made only when the add-in changed something, so a command that
+/// only answers (a dialog's step, a message) neither marks the document as changed nor adds a
+/// step. Repeat and a recorded macro repeat the add-in command when it changed something.
 fn run(s: &mut Session, v: &Value) -> CmdResult {
+    let rev = s.rev();
+    let r = s.one_step("Run Add-in Command", |s| run_step(s, v));
+    if r.is_ok() && s.rev() != rev {
+        s.last_command = Some(("plugins.run".to_string(), v.clone()));
+        if let Some((_, steps)) = s.recording.as_mut() {
+            steps.push(("plugins.run".to_string(), v.clone()));
+        }
+    }
+    r
+}
+
+fn run_step(s: &mut Session, v: &Value) -> CmdResult {
     let plugin = p::req_str(v, "plugin")?;
     let command = p::req_str(v, "command")?;
     let params = v.get("params").cloned().filter(|x| !x.is_null()).unwrap_or_else(|| json!({}));
@@ -216,8 +279,11 @@ fn run(s: &mut Session, v: &Value) -> CmdResult {
     if let Some((id, _)) = reply.commands.iter().find(|(id, _)| refused(id)) {
         return Err(CmdError::Failed(format!("an add-in command can't run `{id}`")));
     }
-    // `Session::run` made this command's undo step and restores the document if it fails. The
-    // reply's commands join that step, and aren't recorded in a macro or Repeat on their own (this
+    if let Some(o) = &reply.open {
+        check_open(&o.path)?;
+    }
+    // `run` makes this command's undo step and restores the document if it fails. The reply's
+    // commands join that step, and aren't recorded in a macro or Repeat on their own (this
     // command is).
     let recording = s.recording.take();
     let last = s.last_command.clone();
@@ -242,6 +308,13 @@ fn run(s: &mut Session, v: &Value) -> CmdResult {
     }
     if !reply.result.is_null() {
         out["result"] = reply.result;
+    }
+    // Protocol 1.2: shown or opened by the app after this step, or acted on by the caller.
+    if let Some(o) = reply.open {
+        out["open"] = serde_json::to_value(o).map_err(|e| CmdError::Failed(e.to_string()))?;
+    }
+    if let Some(d) = reply.dialog {
+        out["dialog"] = serde_json::to_value(d).map_err(|e| CmdError::Failed(e.to_string()))?;
     }
     Ok(out)
 }

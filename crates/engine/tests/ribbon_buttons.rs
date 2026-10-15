@@ -38,6 +38,8 @@ fn serve() {
         let p = msg["params"].clone();
         let answer = match msg["method"].as_str() {
             Some("macros/list") => json!({"result": {"macros": [{"name": "Module1.Pressed", "module": "Module1", "procedure": "Pressed"}]}}),
+            // Protocol 1.2: a macro sees the document's file, as commands do.
+            Some("macros/run") if !p["context"]["document"]["dirty"].is_boolean() => json!({"error": {"code": 1, "message": "no context.document"}}),
             Some("macros/run") if p["name"] == "Module1.Pressed" => {
                 let text = format!("{}/{}", p["control"]["id"].as_str().unwrap_or("none"), p["control"]["tag"].as_str().unwrap_or(""));
                 next += 1;

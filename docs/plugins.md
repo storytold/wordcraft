@@ -1,6 +1,6 @@
 # Add-ins (plugins)
 
-> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-15 · **Change:** minor (ribbon buttons that run macros: `macros/run` gets the button; previously minor: protocol 1.1: host requests, VBA macros through an add-in, the Developer tab's Code group; Office add-ins; previously major: first version: out-of-process add-ins, protocol 1, File › Options › Add-ins, install from GitHub) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-15 · **Change:** minor (protocol 1.2: dialogs WordCraft draws, opening local files, document events, `context.document`; previously minor: ribbon buttons that run macros: `macros/run` gets the button; previously minor: protocol 1.1: host requests, VBA macros through an add-in, the Developer tab's Code group; Office add-ins; previously major: first version: out-of-process add-ins, protocol 1, File › Options › Add-ins, install from GitHub) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 An add-in adds **commands** that people and agents run, and can put them on the ribbon (a group
 on a built-in tab, or a tab of its own) and in the right-click menu. It's a separate program,
@@ -130,6 +130,7 @@ loaded with `--plugin` before that keep working.
 | `uiFor.<app>` | …or for one app: `uiFor.wordcraft` is used instead of `ui` when it's there |
 | `ui.ribbon[]` | A group of buttons: `tab`, `group`, `buttons`. A built-in tab's English name (`Home`, `Insert`, `Draw`, `Design`, `Layout`, `References`, `Mailings`, `Review`, `View`, `Developer`, `Help`) adds the group at the end of that tab; any other name makes a new tab after the built-in ones, shared by the add-ins that name it |
 | `buttons[]` | `command` (one of the add-in's `commands[].id`), `label` and `tooltip` (default: the command's label and description), `icon`, `size` (`large`, the default, or `small`: stacked three high), `params` (passed to the command) |
+| `events` | The document events the add-in hears (protocol 1.2): `documentOpened`, `documentSaved`, `documentClosed`. Names WordCraft doesn't know are ignored; at most 64 |
 | `ui.menus[]` | A right-click menu item: `menu` (`text`, the default, always shown; `table` in a table; `picture` with a picture, shape or text box selected), `command`, `label`, `params`. Items go at the end of the menu, after a separator |
 
 Icons are named from WordCraft's own icon set (`crates/ui-egui/src/icons.rs`), for example
@@ -262,6 +263,88 @@ it is. Commands (the same ids, params and results as GridCraft's): `developer.ri
 removing are undoable), `developer.pressRibbonButton {id}`. `ui.dialog {name: "ribbonButtons",
 macro?}` opens the window with a macro picked.
 
+## Protocol 1.2: dialogs, opening files, document events
+
+The same in GridCraft, WordCraft and DeckCraft (the contract craft-nextcloud is written against).
+It adds to 1.1 and changes nothing that exists; `protocolVersion` stays `1`.
+
+**Detection.** `initialize`'s `host` gains `features`: `["dialogs", "open", "events", "document"]`,
+and `language`, the interface language as a BCP 47 tag (`it`, `pt-br`, `zh-hans`…; English is
+`en`). An add-in checks for a feature before relying on it.
+
+**`context.document`.** `commands/run`'s `context.document` and `macros/run`'s
+`context.document` (new) hold `path` (the file the document was opened from or last saved to,
+`null` for a new document never saved), `name` (its file name), `dirty` (unsaved changes), and,
+as before for commands, `title` and `words`.
+
+**`open`.** A command's answer may hold `{"open": {"path", "label"?, "readOnly"?}}`. The path
+must be absolute, be a regular file and have an extension WordCraft opens (`.docx`, `.docm`,
+`.dotx`, `.dotm`, `.doc`, `.dot`, `.odt`, `.rtf`, `.txt`, `.md`, `.html`, `.tex`, `.xml`,
+`.json`…); otherwise the command fails with a message and its step is taken back. Run from the
+interface (a ribbon button, a menu item, a dialog's button), WordCraft opens the file after the
+step exactly as File › Open does: in the window, asking first about unsaved changes, with a
+password prompt for an encrypted file. `label` (at most 200 characters) is shown as the document's
+location: in File › Info (the file's path as its tooltip) and in the title's tooltip; it goes
+when the document is saved elsewhere. `readOnly` is ignored: WordCraft has no read-only opening.
+Agents and scripts can do the same with `file.open {"path", "label"}`.
+
+**`dialog`.** A command's answer may hold a `dialog`, which WordCraft draws itself, with its own
+widgets and theme, after the step. Nothing waits: the add-in has already answered. What the user
+does runs another of the add-in's commands, as `plugins.run` does, and its answer may bring
+another dialog (dialogs chain), an `open`, a `message` or commands.
+
+```json
+"dialog": {
+  "title": "Open from Nextcloud", "kind": "list", "prompt": "Documents",
+  "items": [{"id": "/Documents/Reports", "label": "Reports", "detail": "Folder", "icon": "folder"},
+            {"id": "/Documents/Notes.docx", "label": "Notes.docx", "detail": "12 KB", "icon": "file"}],
+  "command": "browse", "params": {"account": "me@cloud.example"}, "okLabel": "Open",
+  "buttons": [{"label": "Up", "command": "browse", "params": {"path": "/"}}]
+}
+```
+
+| Kind | Shows | OK runs `command` with `params` plus |
+|---|---|---|
+| `list` | `items` (at most 10,000; `id` at most 4,096 characters, `label` and `detail` at most 256), each with its icon (WordCraft's icon names, as for ribbon buttons; unknown names get a file icon), label and detail. A filter box (by label) when there are more than 20. `"multi": true` allows several | `"id"`: the selected item (`"ids": [...]` with `multi`). A double-click runs OK on that item; OK waits for a selection |
+| `form` | `fields` (at most 16): `{id, label, value?, kind?}`, `kind` `text` (default), `secret` (a password box), `number`, `checkbox` (`value` true or false), `choice` (`options: [{id, label}]`, `value` an option's id) | `"fields": {"<id>": value}`: text, a number (or `null` when empty), true or false, the option's id. A number field that isn't a number is said so in the dialog and nothing runs |
+| `message` | `prompt` (several lines, at most 4,000 characters) | `params` alone; without `command`, OK just closes |
+
+Every kind: `title` (at most 200; empty shows the add-in's name), `prompt` (text above the
+content), `okLabel` (default WordCraft's own "OK") and up to 4 `buttons` `{label, command,
+params?}`, shown left of OK, running their command with their own `params` plus the selected
+`id`/`ids` (for a list, when something is selected) or `fields` (for a form). Cancel, Escape and
+the window's close button just close. A step that fails keeps the dialog open with its error. The
+add-in's words show as given: it translates them (`host.language` says into what). Anything over a
+limit is cut; a malformed dialog, or one whose OK or buttons run a command the add-in doesn't
+declare in `commands`, fails the command with a message. Run by a script (`plugins.run` from the
+CLI, MCP or the control channel), nothing is opened or shown: the result holds `open` and
+`dialog`, checked and bounded, for the caller to act on.
+
+A command that changes nothing (a dialog's step that only answers with the next dialog) makes no
+undo step and leaves the document as saved as it was.
+
+One answer may combine fields: `open` with a `message` (the file opens and the message shows in
+the status bar), a `dialog` with `result` and `message`, commands with either.
+
+**Document events.** An add-in whose manifest declares `events` gets these requests, after the
+fact:
+
+| Request | Params | When |
+|---|---|---|
+| `events/documentOpened` | `{path, name}` | A document was opened from a local file: File › Open, Recent, a file dropped on the window, an add-in's `open`, `file.open` from a script (not one opened from bytes, on the web) |
+| `events/documentSaved` | `{path, name, format}` | Save or Save As to a local file succeeded (`format`: the file's extension, lower case). Not AutoSave's writes or recovery copies (`file.save {"autosave": true}` tells no one) |
+| `events/documentClosed` | `{path, name}` | A document that has a file is closed: replaced by File › Open or New in its window, or the app quits with it open |
+
+`path` is absolute. The answer is `{}` or `{"message": "Uploaded to Nextcloud"}`; WordCraft shows
+the message in its status bar, and an error answer as an error there, naming the add-in.
+`documentOpened` and `documentSaved` time out after 30 s, `documentClosed` after 5 s; the time is
+the whole time, host requests or not. Events go to each add-in on a thread of their own: the save,
+open or close never waits for them and never fails because of them. Quitting waits at most 5 s for
+`documentClosed`. An event is never part of an undo step; a timeout or crash counts as one of the
+add-in's failures (three and it stops). During an event an add-in may send `host/log` and
+`host/message`; `host/sync` (and `host/vbaProject/*`) is refused with `AccessDenied` (the error's
+`data.code`): events are notifications, not edits.
+
 ## Office add-ins
 
 An Office add-in's `manifest.xml` (`<Host Name="Document"/>`, `https://` pages) loads as the
@@ -327,9 +410,11 @@ in the zip are kept.
 ## Limits and next steps
 
 - Commands are synchronous: the window waits while an add-in works (up to 60 s).
-- Add-ins can't show their own panes or dialogs (Office add-ins can: their task panes) or react
-  to events (typing, opening a document). A command sees the selection and the caret's paragraph
-  in its context, and the whole document through `host/sync` (protocol 1.1).
+- Add-ins show dialogs WordCraft draws (protocol 1.2: lists, forms, messages; no HTML), not
+  panes of their own (Office add-ins can: their task panes). They hear documents open, save and
+  close, not typing or the selection changing. A command sees the selection and the caret's
+  paragraph in its context, and the whole document through `host/sync` (protocol 1.1); an event
+  sees only the file.
 - Installed add-ins aren't updated automatically; install again to update. There's no Uninstall
   button yet: unload the add-in and delete its folder.
 - Ribbon groups go at the end of a tab; add-ins can't place them between built-in groups, add
@@ -342,6 +427,7 @@ in the zip are kept.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Protocol 1.2 (shared with GridCraft and DeckCraft, used by craft-nextcloud): `host.features` and `host.language`; `context.document {path, name, dirty}` for commands and macros; answers with `open` (a local file, opened as File › Open does, with a location `label`) and `dialog` (list, form or message drawn by WordCraft, chaining); manifest `events` and `events/documentOpened`, `documentSaved`, `documentClosed`, sent without holding anything up |
 | 2026-10-15 | minor | Ribbon buttons that run the document's macros, saved as its `customUI14.xml`; `macros/run` gets `control {id, tag}`; Developer › Ribbon Buttons and Add to Ribbon in the Macros window |
 | 2026-10-14 | minor | Protocol 1.1 (`host/*` requests, one undo step), VBA macros through a macro add-in with the Developer tab's Code group and Macro Security; Office add-ins' task panes on the Word JavaScript API with WordCraft's own Office.js |
 | 2026-10-14 | major | Created: out-of-process add-ins (the craft plugin protocol 1 shared with GridCraft: `apps`, `uiFor`, `host.id`), commands, ribbon groups and tabs, right-click menu items, File › Options › Add-ins, the Add-ins dialog, install from GitHub |

@@ -16,9 +16,15 @@
 //! document (`host/*`), and a plugin that declares `macros` runs the document's macros
 //! (`macros/*`, the Developer tab). Office add-ins (`manifest.xml`) load as plugins whose
 //! commands open task panes ([`office`]).
+//!
+//! Protocol 1.2: a command's answer may ask for a dialog the app draws, or a local file to open
+//! ([`dialog`]); a plugin whose manifest declares `events` hears when documents open, save and
+//! close ([`events`]). `initialize` lists these in `host.features`.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+pub mod dialog;
+pub mod events;
 pub mod install;
 pub mod office;
 mod process;
@@ -32,10 +38,15 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 
+pub use dialog::{Dialog, DialogKind, OpenRequest};
+pub use events::{DocumentEvent, EventOutcome, events_in_flight, send_event, take_event_outcomes, wait_for_events};
 pub use process::{Connection, HostError, HostHandler, RequestError};
 
-/// The protocol version this host speaks (sent in `initialize`).
+/// The protocol version this host speaks (sent in `initialize`). Protocol 1.1 and 1.2 add to 1
+/// without changing it; a plugin checks `host.features` instead.
 pub const PROTOCOL_VERSION: u32 = 1;
+/// What this host does beyond protocol 1.1 (`initialize`'s `host.features`, protocol 1.2).
+pub const FEATURES: &[&str] = &["dialogs", "open", "events", "document"];
 /// This app's id in a manifest's `apps` and `uiFor`, and in `initialize`'s `host.id`.
 pub const HOST_ID: &str = "wordcraft";
 /// This app's name in `initialize`'s `host.name`.
@@ -98,6 +109,10 @@ pub struct Manifest {
     /// An Office add-in (read from its `manifest.xml`): its task panes and permissions.
     #[serde(skip)]
     pub office: Option<office::OfficeInfo>,
+    /// The document events the plugin hears (protocol 1.2): `documentOpened`, `documentSaved`,
+    /// `documentClosed`. Names this host doesn't know are ignored.
+    #[serde(default)]
+    pub events: Vec<String>,
 }
 
 /// A plugin that runs macros (`"macros": {"language": "VBA"}`): the Developer tab's Macros and
@@ -271,6 +286,9 @@ impl Manifest {
         if self.functions.len() > MAX_DECLARATIONS || self.commands.len() > MAX_DECLARATIONS || self.apps.len() > 64 {
             return Err(format!("{MANIFEST}: at most {MAX_DECLARATIONS} functions and {MAX_DECLARATIONS} commands"));
         }
+        if self.events.len() > 64 || self.events.iter().any(|e| e.len() > MAX_LABEL) {
+            return Err(format!("{MANIFEST}: `events` holds at most 64 event names"));
+        }
         let mut seen = std::collections::HashSet::new();
         for c in &self.commands {
             if !valid_id(&c.id) {
@@ -358,13 +376,22 @@ impl Plugin {
     /// Sends a request and waits for its result, starting the plugin when needed, answering
     /// the plugin's `host/…` requests with `host` meanwhile (protocol 1.1).
     fn request_with(&self, method: &str, params: Json, timeout: Duration, host: &mut HostHandler<'_>) -> Result<Json, String> {
+        self.request_guarded(method, params, timeout, false, host)
+    }
+
+    /// An event (protocol 1.2): `timeout` is the whole time it has, host requests or not.
+    pub(crate) fn request_event(&self, method: &str, params: Json, timeout: Duration, host: &mut HostHandler<'_>) -> Result<Json, String> {
+        self.request_guarded(method, params, timeout, true, host)
+    }
+
+    fn request_guarded(&self, method: &str, params: Json, timeout: Duration, hard: bool, host: &mut HostHandler<'_>) -> Result<Json, String> {
         // A host request of this plugin's can run a command that calls the plugin again: that
         // waits for nobody, it fails.
         if BUSY.with(|b| b.borrow().contains(&self.manifest.id)) {
             return Err(format!("plugin {} is busy", self.manifest.id));
         }
         BUSY.with(|b| b.borrow_mut().push(self.manifest.id.clone()));
-        let r = self.request_inner(method, params, timeout, host);
+        let r = self.request_inner(method, params, timeout, hard, host);
         BUSY.with(|b| {
             let mut b = b.borrow_mut();
             if let Some(i) = b.iter().rposition(|x| *x == self.manifest.id) {
@@ -374,7 +401,7 @@ impl Plugin {
         r
     }
 
-    fn request_inner(&self, method: &str, params: Json, timeout: Duration, host: &mut HostHandler<'_>) -> Result<Json, String> {
+    fn request_inner(&self, method: &str, params: Json, timeout: Duration, hard: bool, host: &mut HostHandler<'_>) -> Result<Json, String> {
         if self.manifest.office.is_some() {
             return Err(format!("{} is an Office add-in: it runs in its task pane", self.manifest.id));
         }
@@ -389,9 +416,13 @@ impl Plugin {
         }
         if !matches!(state, State::Running(_)) {
             let mut conn = Connection::start(&self.manifest, &self.dir)?;
+            let mut host_info = json!({"id": HOST_ID, "name": HOST_NAME, "version": env!("CARGO_PKG_VERSION"), "features": FEATURES});
+            if let Some(lang) = host_language() {
+                host_info["language"] = json!(lang);
+            }
             let init = json!({
                 "protocolVersion": PROTOCOL_VERSION,
-                "host": {"id": HOST_ID, "name": HOST_NAME, "version": env!("CARGO_PKG_VERSION")},
+                "host": host_info,
                 "plugin": {"id": self.manifest.id, "dir": self.dir.display().to_string()},
             });
             if let Err(e) = conn.request("initialize", init, INIT_TIMEOUT) {
@@ -403,7 +434,7 @@ impl Plugin {
             *state = State::Running(conn);
         }
         let State::Running(conn) = state else { return Err("plugin not running".into()) };
-        match conn.request_with(method, params, timeout, host) {
+        match conn.request_bounded(method, params, timeout, hard, host) {
             Ok(v) => Ok(v),
             Err(e) if e.fatal => {
                 // The connection is gone or out of step: stop the process and start afresh next time.
@@ -427,7 +458,13 @@ impl Plugin {
         if !self.enabled() {
             return "off".into();
         }
-        match &lock(&self.state).0 {
+        // A plugin busy with an event (on another thread) is running; asking doesn't wait for it.
+        let guard = match self.state.try_lock() {
+            Ok(g) => g,
+            Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return "running".into(),
+        };
+        match &guard.0 {
             State::Idle => "ready".into(),
             State::Running(_) => "running".into(),
             State::Failed(why) => format!("failed: {why}"),
@@ -468,6 +505,26 @@ impl Plugin {
             conn.shutdown();
         }
     }
+}
+
+/// The interface language `initialize` passes as `host.language` (protocol 1.2), a BCP 47 tag.
+fn language_slot() -> &'static Mutex<Option<String>> {
+    static LANGUAGE: Mutex<Option<String>> = Mutex::new(None);
+    &LANGUAGE
+}
+
+/// Sets the interface language plugins started from now on are told (`host.language`). Tags
+/// that aren't BCP 47-shaped (letters, digits and `-`, at most 35 characters) are ignored.
+pub fn set_host_language(tag: &str) {
+    let ok = !tag.is_empty() && tag.len() <= 35 && tag.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+    if ok {
+        *lock(language_slot()) = Some(tag.to_string());
+    }
+}
+
+/// The interface language plugins are told, if the app set one.
+pub fn host_language() -> Option<String> {
+    lock(language_slot()).clone()
 }
 
 // ---------------------------------------------------------------- the registry
@@ -597,6 +654,10 @@ pub struct CommandReply {
     pub result: Json,
     /// An Office add-in's command: what the app opens or calls (no process is involved).
     pub office: Option<office::OfficeCommand>,
+    /// A local file to open after the step (protocol 1.2).
+    pub open: Option<OpenRequest>,
+    /// A dialog to show after the step (protocol 1.2).
+    pub dialog: Option<Dialog>,
 }
 
 /// Most engine commands one plugin command may run.
@@ -621,7 +682,14 @@ pub fn run_command_with(plugin_id: &str, command: &str, params: Json, context: J
         return Ok(CommandReply { office: Some(what), ..Default::default() });
     }
     let r = plugin.request_with("commands/run", json!({"command": command, "params": params, "context": context}), COMMAND_TIMEOUT, host)?;
-    parse_reply(r)
+    let reply = parse_reply(r)?;
+    // What the dialog's OK and buttons run must be the plugin's commands, or they could only fail.
+    if let Some(d) = &reply.dialog
+        && let Some(unknown) = d.commands().find(|c| plugin.manifest.command(c).is_none())
+    {
+        return Err(format!("the dialog runs `{unknown}`, which isn't one of plugin {plugin_id}'s commands"));
+    }
+    Ok(reply)
 }
 
 /// Sends a macro plugin one of its `macros/…` requests (protocol 1.1), answering its `host/…`
@@ -650,6 +718,8 @@ fn parse_reply(r: Json) -> Result<CommandReply, String> {
     let mut reply = CommandReply {
         message: r.get("message").and_then(Json::as_str).map(str::to_string),
         result: r.get("result").cloned().unwrap_or(Json::Null),
+        open: r.get("open").filter(|o| !o.is_null()).map(dialog::parse_open).transpose()?,
+        dialog: r.get("dialog").filter(|d| !d.is_null()).map(dialog::parse_dialog).transpose()?,
         ..Default::default()
     };
     if let Some(list) = r.get("commands") {

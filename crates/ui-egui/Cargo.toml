@@ -70,3 +70,8 @@ accesskit_consumer = "=0.39.1"
 [build-dependencies]
 serde_json = { workspace = true }
 toml = "1"
+
+# Runs without libtest: the test binary doubles as the add-in process whose dialogs it drives.
+[[test]]
+name = "plugin_dialogs"
+harness = false

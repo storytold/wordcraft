@@ -6,6 +6,9 @@
 //! - File › Options › Add-ins and Insert › Add-ins › Get Add-ins: the loaded add-ins as cards
 //!   (Documentation, Activate/Deactivate, Unload), installing one from GitHub, loading one from a
 //!   folder.
+//! - Protocol 1.2: what an add-in command run from here asks for after its step ([`after_run`]: a
+//!   file to open, a dialog — `plugin_dialog`), and what add-ins answer document events with
+//!   ([`poll_events`]: the status bar).
 
 use egui::{RichText, Ui};
 use serde_json::{Value, json};
@@ -216,6 +219,53 @@ pub fn start_install(app: &mut WordApp, url: &str) {
     {
         let _ = (url, root);
         st.outcome = Some(Err(tl!("Add-ins need the desktop app.").to_string()));
+    }
+}
+
+/// After an add-in command the user ran (a ribbon button, a menu item, a dialog's OK): opens the
+/// file it asked for through File › Open's path (so unsaved changes are asked about first), then
+/// shows the dialog it asked for. A script running `plugins.run` gets both in the result instead.
+pub fn after_run(app: &mut WordApp, plugin: &str, result: &Value) {
+    if let Some(o) = result.get("open").filter(|o| !o.is_null()) {
+        match wordcraft_plugin::dialog::parse_open(o) {
+            // `readOnly`: WordCraft has no read-only opening; the document opens as usual.
+            Ok(o) => {
+                let mut params = json!({"path": o.path});
+                if let Some(label) = o.label {
+                    params["label"] = json!(label);
+                }
+                if let Err(e) = app.run("file.open", params) {
+                    app.status(e);
+                }
+            }
+            Err(e) => app.status(e),
+        }
+    }
+    if let Some(d) = result.get("dialog").filter(|d| !d.is_null()) {
+        match wordcraft_plugin::dialog::parse_dialog(d) {
+            // Not over a question the open asked (Save Changes): the open goes first.
+            Ok(d) if app.dialog.is_none() => {
+                app.dialog = Some(crate::dialogs::Dialog::Plugin(Box::new(crate::plugin_dialog::PluginDialog::new(plugin, d))))
+            }
+            Ok(_) => log::info!("add-in {plugin}: its dialog waits for nothing; another dialog is open"),
+            Err(e) => app.status(e),
+        }
+    }
+}
+
+/// Shows what add-ins answered document events with: a message on the status bar, an error as
+/// one too, naming the add-in (every frame; nothing to do most of them).
+pub fn poll_events(app: &mut WordApp, ctx: &egui::Context) {
+    for o in wordcraft_plugin::take_event_outcomes() {
+        if let Some(m) = o.message {
+            app.status(m);
+        }
+        if let Some(e) = o.error {
+            app.status(crate::i18n::fmt(tl!("The add-in {name} reported an error: {error}"), &[("name", &o.name), ("error", &e)]));
+        }
+    }
+    if wordcraft_plugin::events_in_flight() > 0 {
+        ctx.request_repaint_after(std::time::Duration::from_millis(200));
     }
 }
 

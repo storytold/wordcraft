@@ -330,3 +330,132 @@ mod office {
         assert!(crate::unload("t.vba"));
     }
 }
+
+mod protocol_1_2 {
+    use serde_json::json;
+
+    use crate::dialog::{DialogKind, FieldKind, MAX_BUTTONS, MAX_FIELDS, MAX_ITEMS, MAX_PROMPT, MAX_TITLE, parse_dialog, parse_open};
+    use crate::{Manifest, parse_reply};
+
+    #[test]
+    fn manifests_declare_events() {
+        let m =
+            Manifest::parse(r#"{"id": "t.ev", "name": "Ev", "run": {"command": "true"}, "events": ["documentSaved", "somethingLater"]}"#).unwrap();
+        assert_eq!(m.events, ["documentSaved", "somethingLater"]);
+        assert!(Manifest::parse(r#"{"id": "t.ev", "name": "Ev", "run": {"command": "true"}}"#).unwrap().events.is_empty());
+        assert!(Manifest::parse(r#"{"id": "t.ev", "name": "Ev", "run": {"command": "true"}, "events": "documentSaved"}"#).is_err());
+        let many = json!({"id": "t.ev", "name": "Ev", "run": {"command": "true"}, "events": vec!["documentSaved"; 65]});
+        assert!(Manifest::parse(&many.to_string()).is_err());
+        assert_eq!(crate::FEATURES, ["dialogs", "open", "events", "document"]);
+    }
+
+    #[test]
+    fn list_dialogs_are_read_and_bounded() {
+        let items: Vec<_> =
+            (0..MAX_ITEMS + 5).map(|i| json!({"id": format!("/f{i}"), "label": "x".repeat(300), "detail": "Folder", "icon": "folder"})).collect();
+        let d = parse_dialog(&json!({
+            "title": "t".repeat(500), "kind": "list", "prompt": "p".repeat(5000), "items": items, "command": "browse",
+            "params": {"account": "me"}, "multi": true,
+            "buttons": (0..6).map(|i| json!({"label": format!("B{i}"), "command": "browse", "params": {"path": "/"}})).collect::<Vec<_>>(),
+        }))
+        .unwrap();
+        assert_eq!(d.kind, DialogKind::List);
+        assert_eq!(d.items.len(), MAX_ITEMS, "anything over a limit is cut");
+        assert_eq!(d.items[0].label.chars().count(), 256);
+        assert_eq!(d.title.chars().count(), MAX_TITLE);
+        assert_eq!(d.prompt.chars().count(), MAX_PROMPT);
+        assert_eq!(d.buttons.len(), MAX_BUTTONS);
+        assert!(d.multi);
+        assert_eq!(d.params, json!({"account": "me"}));
+        assert_eq!(d.ok_label, None);
+        assert_eq!(d.commands().count(), 1 + MAX_BUTTONS);
+        // Text is cut at character boundaries.
+        let d = parse_dialog(&json!({"kind": "message", "title": "é".repeat(300)})).unwrap();
+        assert_eq!(d.title, "é".repeat(MAX_TITLE));
+        assert_eq!(d.command, None, "a message may just close");
+    }
+
+    #[test]
+    fn forms_are_read_with_typed_values() {
+        let fields: Vec<_> = (0..MAX_FIELDS + 3).map(|i| json!({"id": format!("f{i}"), "label": "F"})).collect();
+        let d = parse_dialog(&json!({"kind": "form", "command": "go", "fields": fields})).unwrap();
+        assert_eq!(d.fields.len(), MAX_FIELDS);
+        let d = parse_dialog(&json!({"kind": "form", "command": "go", "okLabel": "Sign in", "fields": [
+            {"id": "user", "label": "User", "value": 12},
+            {"id": "pw", "label": "Password", "kind": "secret"},
+            {"id": "n", "label": "N", "kind": "number", "value": "3.5"},
+            {"id": "ok", "label": "Remember", "kind": "checkbox", "value": true},
+            {"id": "c", "label": "Server", "kind": "choice", "value": "nope", "options": [{"id": "a", "label": "A"}, {"id": "b"}]}
+        ]}))
+        .unwrap();
+        let v: Vec<_> = d.fields.iter().map(|f| f.value.clone()).collect();
+        assert_eq!(v, [json!("12"), json!(""), json!(3.5), json!(true), json!("a")]);
+        assert_eq!(d.fields[1].kind, FieldKind::Secret);
+        assert_eq!(d.fields[4].options[1].label, "b", "an option without a label shows its id");
+        assert_eq!(d.ok_label.as_deref(), Some("Sign in"));
+    }
+
+    #[test]
+    fn malformed_dialogs_fail_never_panic() {
+        for bad in [
+            json!("list"),
+            json!({"title": "No kind"}),
+            json!({"kind": "web", "command": "x"}),
+            json!({"kind": "list", "items": []}),
+            json!({"kind": "form", "fields": []}),
+            json!({"kind": "list", "command": "x", "items": [{"label": "no id"}]}),
+            json!({"kind": "list", "command": "x", "items": [{"id": 3, "label": "L"}]}),
+            json!({"kind": "list", "command": "x", "items": "many"}),
+            json!({"kind": "list", "command": "x y", "items": []}),
+            json!({"kind": "list", "command": "x", "params": [1]}),
+            json!({"kind": "list", "command": "x", "multi": "yes"}),
+            json!({"kind": "form", "command": "x", "fields": [{"id": "a"}, {"id": "a"}]}),
+            json!({"kind": "form", "command": "x", "fields": [{"id": "a", "kind": "slider"}]}),
+            json!({"kind": "form", "command": "x", "fields": [{"id": "a", "kind": "choice"}]}),
+            json!({"kind": "form", "command": "x", "fields": [{"id": "a", "kind": "checkbox", "value": "yes"}]}),
+            json!({"kind": "form", "command": "x", "fields": [{"id": "a", "kind": "number", "value": "many"}]}),
+            json!({"kind": "message", "buttons": [{"label": "Go"}]}),
+            json!({"kind": "message", "title": 5}),
+        ] {
+            assert!(parse_dialog(&bad).is_err(), "{bad}");
+        }
+        // In a reply, a bad dialog fails the whole answer.
+        assert!(parse_reply(json!({"dialog": {"kind": "nope"}})).is_err());
+        assert!(parse_reply(json!({"dialog": null, "open": null})).is_ok());
+    }
+
+    #[test]
+    fn open_requests_are_read() {
+        let o = parse_open(&json!({"path": "/home/me/Budget.docx", "label": "L".repeat(300), "readOnly": true})).unwrap();
+        assert_eq!(o.label.as_deref().map(|l| l.chars().count()), Some(MAX_TITLE));
+        assert!(o.read_only);
+        for bad in [
+            json!({"label": "x"}),
+            json!({"path": ""}),
+            json!({"path": 3}),
+            json!({"path": "a\u{0}b"}),
+            json!({"path": "/a", "readOnly": 1}),
+            json!("/a"),
+        ] {
+            assert!(parse_open(&bad).is_err(), "{bad}");
+        }
+        let r = parse_reply(json!({"open": {"path": "/x.docx"}, "message": "Opening"})).unwrap();
+        assert_eq!(r.open.map(|o| o.path), Some("/x.docx".to_string()));
+    }
+
+    #[test]
+    fn dialogs_may_only_run_the_plugins_commands() {
+        // Checked against the manifest when the command answers (a fake that answers nothing
+        // can't be run here; the engine's tests drive a real process).
+        let d = parse_dialog(&json!({"kind": "list", "command": "browse", "items": [], "buttons": [{"label": "Up", "command": "up"}]})).unwrap();
+        assert_eq!(d.commands().collect::<Vec<_>>(), ["browse", "up"]);
+    }
+
+    #[test]
+    fn host_language_must_look_like_a_tag() {
+        crate::set_host_language("pt-br");
+        assert_eq!(crate::host_language().as_deref(), Some("pt-br"));
+        crate::set_host_language("not a tag!");
+        assert_eq!(crate::host_language().as_deref(), Some("pt-br"), "ignored");
+    }
+}

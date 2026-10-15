@@ -1,5 +1,6 @@
-//! `wordcraft-example-plugin`: the reference plugin, in Rust. It speaks protocol 1 over standard
-//! input and output, and doubles as the plugin the host's tests drive.
+//! `wordcraft-example-plugin`: the reference plugin, in Rust. It speaks protocol 1 (with 1.2's
+//! dialogs and document events) over standard input and output, and doubles as the plugin the
+//! host's tests drive.
 //!
 //! `wordcraft-example-plugin --manifest` prints its `plugin.json`.
 //!
@@ -7,7 +8,12 @@
 //! - `upperCase`: the selected text in capitals;
 //! - `countWords`: words and characters in the selection (or the paragraph), as a message;
 //! - `signature {name?}`: a closing line at the end of the document;
+//! - `greeting`: asks for a name in a form the app draws (protocol 1.2), whose OK runs `greet`;
+//! - `greet {fields: {name}}`: types a greeting;
+//! - `hostInfo`: what `initialize` told it about the host (for the tests);
 //! - `sleep {ms}` and `crash`: for the host's tests (a hang and a process that dies).
+//!
+//! It hears `documentSaved` (protocol 1.2) and answers with a message for the status bar.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -30,8 +36,12 @@ fn manifest() -> Json {
             {"id": "countWords", "label": "Count Words", "description": "Words and characters in the selection, or in the paragraph"},
             {"id": "signature", "label": "Signature", "description": "Adds a closing line at the end of the document", "params": "{name?: string}"},
             {"id": "sleep", "label": "Sleep", "description": "Waits (for tests)", "params": "{ms: number}"},
-            {"id": "crash", "label": "Crash", "description": "Exits at once (for tests)"}
+            {"id": "crash", "label": "Crash", "description": "Exits at once (for tests)"},
+            {"id": "greeting", "label": "Greeting", "description": "Asks for a name, then types a greeting"},
+            {"id": "greet", "label": "Greet", "description": "Types a greeting", "params": "{fields: {name: string}}"},
+            {"id": "hostInfo", "label": "Host Info", "description": "What the host said in initialize (for tests)"}
         ],
+        "events": ["documentSaved"],
         "ui": {
             "ribbon": [
                 {"tab": "Example", "group": "Text", "buttons": [
@@ -54,8 +64,8 @@ fn text_of(context: &Json) -> String {
     if sel.is_empty() { context.pointer("/paragraph/text").and_then(Json::as_str).unwrap_or("").to_string() } else { sel.to_string() }
 }
 
-/// A command's answer, or an error message.
-fn run(command: &str, params: &Json, context: &Json) -> Result<Json, String> {
+/// A command's answer, or an error message. `host` is what `initialize` said about the host.
+fn run(command: &str, params: &Json, context: &Json, host: &Json) -> Result<Json, String> {
     match command {
         "upperCase" => {
             let sel = context.pointer("/selection/text").and_then(Json::as_str).unwrap_or("");
@@ -87,6 +97,16 @@ fn run(command: &str, params: &Json, context: &Json) -> Result<Json, String> {
             Ok(json!({"message": "awake"}))
         }
         "crash" => std::process::exit(3),
+        "greeting" => Ok(json!({"dialog": {
+            "title": "Greeting", "kind": "form", "prompt": "Who is it for?",
+            "fields": [{"id": "name", "label": "Name", "value": "World"}],
+            "command": "greet", "okLabel": "Greet"
+        }})),
+        "greet" => {
+            let name = params.pointer("/fields/name").and_then(Json::as_str).unwrap_or("World");
+            Ok(json!({"commands": [{"command": "text.insert", "params": {"text": format!("Hello, {name}!"), "raw": true}}]}))
+        }
+        "hostInfo" => Ok(json!({"result": host})),
         _ => Err(format!("unknown command {command}")),
     }
 }
@@ -97,6 +117,7 @@ fn main() {
         return;
     }
     let mut out = std::io::stdout();
+    let mut host = Json::Null;
     for line in std::io::stdin().lock().lines() {
         let Ok(line) = line else { break };
         let Ok(msg) = serde_json::from_str::<Json>(&line) else {
@@ -107,10 +128,18 @@ fn main() {
         let Some(id) = msg.get("id").cloned() else { break };
         let params = msg.get("params").cloned().unwrap_or(Json::Null);
         let answer = match msg.get("method").and_then(Json::as_str) {
-            Some("initialize") => Ok(json!({"protocolVersion": 1})),
+            Some("initialize") => {
+                host = params.get("host").cloned().unwrap_or(Json::Null);
+                Ok(json!({"protocolVersion": 1}))
+            }
             Some("commands/run") => {
                 let command = params.get("command").and_then(Json::as_str).unwrap_or("");
-                run(command, params.get("params").unwrap_or(&Json::Null), params.get("context").unwrap_or(&Json::Null))
+                run(command, params.get("params").unwrap_or(&Json::Null), params.get("context").unwrap_or(&Json::Null), &host)
+            }
+            Some("events/documentSaved") => {
+                let name = params.get("name").and_then(Json::as_str).unwrap_or("the document");
+                let format = params.get("format").and_then(Json::as_str).unwrap_or("");
+                Ok(json!({"message": format!("Example saw {name} saved ({format})")}))
             }
             Some(other) => Err(format!("unknown method {other}")),
             None => Err("no method".into()),
