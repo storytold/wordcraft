@@ -19,6 +19,7 @@ pub mod ribbon;
 pub mod sample;
 mod session;
 pub mod speech;
+pub mod update;
 
 use std::collections::HashMap;
 

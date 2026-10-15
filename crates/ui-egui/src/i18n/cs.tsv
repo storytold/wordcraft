@@ -2624,3 +2624,36 @@ preview	Title	Ukázka
 # Reading Mode column widths (#1040)
 	Narrow	Úzká
 	Medium	Střední
+
+# Desktop updates
+	Check for Updates	Check for Updates
+	Check for\nUpdates	Check for\nUpdates
+	Check for updates	Check for updates
+	Check for updates on startup	Check for updates on startup
+	WordCraft {version} is available.	WordCraft {version} is available.
+	Download	Download
+	Skip this version	Skip this version
+	Later	Later
+	Update	Update
+	Check for updates?	Check for updates?
+	Once a day, WordCraft can ask GitHub whether a newer WordCraft release is out. Nothing else is sent.	Once a day, WordCraft can ask GitHub whether a newer WordCraft release is out. Nothing else is sent.
+	Once a day, ask GitHub whether a newer WordCraft release is out and show a notice. Nothing else is sent.	Once a day, ask GitHub whether a newer WordCraft release is out and show a notice. Nothing else is sent.
+	Updates for this install are provided by Flatpak or AppImage, not from here.	Updates for this install are provided by Flatpak or AppImage, not from here.
+	Update Preferences	Update Preferences
+	Save or discard unsaved changes before updating.	Save or discard unsaved changes before updating.
+	Open the release page in your browser to update.	Open the release page in your browser to update.
+	Downloaded file does not match the published SHA-256 checksum.	Downloaded file does not match the published SHA-256 checksum.
+	Drag WordCraft into Applications, then reopen it.	Drag WordCraft into Applications, then reopen it.
+	The update check could not reach GitHub. Check your connection and try again.	The update check could not reach GitHub. Check your connection and try again.
+	GitHub returned an update WordCraft could not read.	GitHub returned an update WordCraft could not read.
+	This release has no installer for your system.	This release has no installer for your system.
+	The release does not publish SHA-256 checksums, so the download was not installed.	The release does not publish SHA-256 checksums, so the download was not installed.
+	The release's checksum file could not be read.	The release's checksum file could not be read.
+	The release does not list a checksum for this file.	The release does not list a checksum for this file.
+	The downloaded file does not match the published SHA-256 checksum.	The downloaded file does not match the published SHA-256 checksum.
+	The update installer is not available in this build.	The update installer is not available in this build.
+	The update could not be installed.	The update could not be installed.
+	The update could not be started.	The update could not be started.
+	WordCraft is up to date.	WordCraft is up to date.
+	Wait for the update to finish before closing.	Wait for the update to finish before closing.
+	WordCraft was updated. Restart the computer to finish the update.	WordCraft was updated. Restart the computer to finish the update.

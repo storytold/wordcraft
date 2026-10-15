@@ -2,6 +2,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod automation_args;
+mod update_check;
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
@@ -31,6 +32,7 @@ USAGE:
                                               who tracked changes and comments are by)
   wordcraft-cli commands [--json]             list every command
   wordcraft-cli parity [--markdown]           feature-catalog parity
+  wordcraft-cli update --check                ask GitHub for a newer release (JSON)
   wordcraft-cli mcp [--connect HOST:PORT | --author NAME] [--automation-read-root DIR] [--automation-write-root DIR]
                                               MCP server on stdio (headless, or bridged to the app).
                                               --automation-read-root / --automation-write-root confine
@@ -54,7 +56,7 @@ same output on every machine.
 ";
 
 /// The subcommands, in `USAGE` order; `--help` or `-h` after any of them prints `USAGE` (#968).
-const SUBCOMMANDS: &[&str] = &["convert", "info", "text", "inspect", "render", "run", "commands", "parity", "mcp", "zotero"];
+const SUBCOMMANDS: &[&str] = &["convert", "info", "text", "inspect", "render", "run", "commands", "parity", "update", "mcp", "zotero"];
 
 fn wants_help(cmd: &str, rest: &[String]) -> bool {
     SUBCOMMANDS.contains(&cmd) && rest.iter().any(|a| a == "--help" || a == "-h")
@@ -119,6 +121,52 @@ fn listed_text(doc: &wordcraft_doc::Document) -> Result<String, String> {
 /// `--author NAME`: the author recorded on tracked changes and comments (`file.setAuthor`).
 fn set_author(s: &mut Session, name: &str) -> Result<(), String> {
     s.run("file.setAuthor", &json!({"name": name})).map(|_| ()).map_err(|e| format!("--author: {e}"))
+}
+
+/// Run `file.checkForUpdates` for `wordcraft-cli update --check` and return the result. The HTTP
+/// hook and the install-detection environment are injected so tests run offline and independent of
+/// the host; the response must stay a single JSON value on stdout, with no probe output leaking in.
+fn run_update_check(http: wordcraft_engine::update::HttpGet, env: Option<wordcraft_engine::update::EnvReadBox>) -> Result<Value, String> {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.update_http = Some(http);
+    s.update_env = env;
+    // A test hook (`WORDCRAFT_UPDATE_CHECK_EXE`) lets the subprocess test put the running path
+    // under `/usr/bin` so install detection actually probes `dpkg-query`; otherwise the CLI's own
+    // path is used.
+    if let Ok(exe) = std::env::var("WORDCRAFT_UPDATE_CHECK_EXE") {
+        s.update_exe = Some(exe);
+    } else if let Ok(exe) = std::env::current_exe() {
+        s.update_exe = Some(exe.to_string_lossy().into_owned());
+    }
+    s.run("file.checkForUpdates", &serde_json::json!({"force": true})).map_err(|e| e.to_string())
+}
+
+/// Pretty JSON for `wordcraft-cli update --check` (one value, trailing newline).
+fn format_update_check_json(v: &Value) -> String {
+    serde_json::to_string_pretty(v).unwrap_or_default()
+}
+
+/// Build the headless MCP session, wiring the same update HTTP hook the desktop app uses so
+/// `file.checkForUpdates` is reachable through MCP too (#15). `http` is injected so tests run with
+/// an offline fake and no request ever leaves the machine.
+fn headless_session(
+    http: wordcraft_engine::update::HttpGet,
+    author: Option<String>,
+    roots: Option<std::sync::Arc<wordcraft_engine::file_access::AutomationRoots>>,
+) -> Result<wordcraft_mcp::Headless, String> {
+    let mut headless = wordcraft_mcp::Headless::default();
+    headless.session.update_http = Some(http);
+    if let Some(roots) = roots {
+        // Every thread of this process, not only the server's: nothing reaches past the roots.
+        wordcraft_engine::file_access::confine_process(roots.clone());
+        let show = |root: Option<&std::path::Path>| root.map_or_else(|| "none".to_string(), |r| r.display().to_string());
+        eprintln!("wordcraft-cli: files confined: read root {}, write root {}", show(roots.read_root()), show(roots.write_root()));
+        headless = headless.with_automation_roots(Some(roots));
+    }
+    if let Some(name) = author {
+        set_author(&mut headless.session, &name)?;
+    }
+    Ok(headless)
 }
 
 fn arg_value(args: &[String], name: &str) -> Option<String> {
@@ -238,6 +286,7 @@ const RUN_OPTIONS: &[OptionSpec] = &[
 const COMMANDS_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--json", takes_value: false }];
 const PARITY_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--markdown", takes_value: false }];
 const MCP_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--connect", takes_value: true }, OptionSpec { name: "--author", takes_value: true }];
+const UPDATE_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--check", takes_value: false }];
 const ZOTERO_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--cmd", takes_value: true },
     OptionSpec { name: "--save", takes_value: true },
@@ -433,6 +482,14 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                 write_stdout(|o| writeln!(o, "{}", serde_json::to_string_pretty(&p).unwrap_or_default()))
             }
         }
+        "update" => {
+            validate_options("update", &rest, UPDATE_OPTIONS)?;
+            if !rest.iter().any(|a| a == "--check") {
+                return Err(format!("update: pass --check\n\n{USAGE}").into());
+            }
+            let v = run_update_check(update_check::http_get(), None)?;
+            write_stdout(|o| writeln!(o, "{}", format_update_check_json(&v)))
+        }
         "mcp" => {
             let (roots, rest) = automation_roots("mcp", &rest)?;
             validate_options("mcp", &rest, MCP_OPTIONS)?;
@@ -456,20 +513,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                     }
                     Box::new(remote)
                 }
-                None => {
-                    let mut headless = wordcraft_mcp::Headless::default();
-                    if let Some(roots) = roots {
-                        // Every thread of this process, not only the server's: nothing reaches past the roots.
-                        wordcraft_engine::file_access::confine_process(roots.clone());
-                        let show = |root: Option<&std::path::Path>| root.map_or_else(|| "none".to_string(), |r| r.display().to_string());
-                        eprintln!("wordcraft-cli: files confined: read root {}, write root {}", show(roots.read_root()), show(roots.write_root()));
-                        headless = headless.with_automation_roots(Some(roots));
-                    }
-                    if let Some(name) = author {
-                        set_author(&mut headless.session, &name)?;
-                    }
-                    Box::new(headless)
-                }
+                None => Box::new(headless_session(update_check::http_get(), author, roots)?),
             };
             let mut server = wordcraft_mcp::Server::new(backend);
             let stdin = std::io::stdin();
@@ -892,5 +936,63 @@ mod tests {
         assert!(!run_invalid.exists());
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// #15: the headless MCP backend must carry the update HTTP hook, so `file.checkForUpdates`
+    /// works through MCP. The injected fake proves it with no real request.
+    #[test]
+    fn headless_mcp_checks_for_updates_offline() {
+        use std::sync::{Arc, Mutex};
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let c = Arc::clone(&calls);
+        let http: wordcraft_engine::update::HttpGet = Arc::new(move |url, _max| {
+            c.lock().unwrap_or_else(|e| e.into_inner()).push(url.to_string());
+            Ok(br#"{"tag_name":"v0.0.1","draft":false,"prerelease":false,"assets":[]}"#.to_vec())
+        });
+        let mut h = headless_session(http, None, None).expect("headless backend");
+        assert!(h.session.update_http.is_some(), "the hook is installed");
+        let r = wordcraft_mcp::Backend::call(&mut h, "engine.execute", json!({"command": "file.checkForUpdates", "params": {"force": true}}))
+            .expect("mcp call");
+        assert_eq!(r["status"], "current");
+        let seen = calls.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        assert_eq!(seen, vec![wordcraft_engine::update::LATEST_API.to_string()], "exactly one offline release request");
+    }
+
+    /// #15: `wordcraft-cli update --check` prints exactly one JSON value. Install detection runs
+    /// inside the command, so this pins the response shape at the CLI boundary: `serde_json` rejects
+    /// any probe output that precedes or follows the value. The engine's captured probe helper is
+    /// what keeps a `dpkg-query -S` from inheriting stdout in the first place.
+    #[test]
+    fn update_check_prints_one_json_value() {
+        struct FakeEnv;
+        impl wordcraft_engine::update::EnvRead for FakeEnv {
+            fn flatpak(&self) -> bool {
+                false
+            }
+            fn appimage(&self) -> Option<String> {
+                None
+            }
+            fn install_override(&self) -> Option<wordcraft_engine::update::InstallKind> {
+                Some(wordcraft_engine::update::InstallKind::Unknown)
+            }
+            fn windows(&self) -> bool {
+                false
+            }
+            fn macos(&self) -> bool {
+                false
+            }
+            fn linux(&self) -> bool {
+                true
+            }
+            fn linux_deb_package(&self, _exe: &str) -> bool {
+                false
+            }
+        }
+        let http: wordcraft_engine::update::HttpGet =
+            std::sync::Arc::new(|_, _| Ok(br#"{"tag_name":"v0.0.1","draft":false,"prerelease":false,"assets":[]}"#.to_vec()));
+        let v = run_update_check(http, Some(std::sync::Arc::new(FakeEnv))).expect("offline check");
+        let text = format_update_check_json(&v);
+        let _: Value = serde_json::from_str(text.trim()).expect("the response is one JSON value");
+        assert!(text.trim_start().starts_with('{') && text.trim_end().ends_with('}'), "no probe output wraps the JSON: {text:?}");
     }
 }

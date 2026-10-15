@@ -422,6 +422,20 @@ pub struct Session {
     pub merge: crate::cmd::mailings::MergeState,
     /// Requests from commands to the UI (open a dialog, scroll…), drained by the front end.
     pub ui_requests: Vec<Value>,
+    /// Update check settings (mirrored in `ui.json` by the desktop app).
+    pub update_prefs: crate::update::UpdatePrefs,
+    /// HTTP GET for update checks (desktop/CLI set ureq; tests inject fakes).
+    pub update_http: Option<crate::update::HttpGet>,
+    /// Platform installer handoff after a verified download.
+    pub update_install: Option<crate::update::InstallFn>,
+    /// Path to the running executable (install-type detection).
+    pub update_exe: Option<String>,
+    /// Install detection override (tests only; production uses [`crate::update::SystemEnv`]).
+    pub update_env: Option<crate::update::EnvReadBox>,
+    /// Wall clock for throttling (overridden in tests).
+    pub update_now_unix: fn() -> u64,
+    /// Release asset arch segment (`x86_64`, `aarch64`, `x64`…); tests set this instead of using the host CPU.
+    pub update_release_arch: Option<String>,
     /// Read Aloud player (Review › Speech).
     pub read_aloud: crate::speech::ReadAloud,
     /// Preferences the front end saves between runs.
@@ -632,6 +646,13 @@ impl Session {
             bib_style,
             merge: Default::default(),
             ui_requests: Vec::new(),
+            update_prefs: crate::update::UpdatePrefs::default(),
+            update_http: None,
+            update_install: None,
+            update_exe: None,
+            update_env: None,
+            update_now_unix: crate::update::unix_now,
+            update_release_arch: None,
             math: None,
             math_latex: false,
             math_normal_text: false,
@@ -1078,6 +1099,13 @@ impl Session {
             bib_style: _,
             merge: _,
             ui_requests: _,
+            update_prefs: _,
+            update_http: _,
+            update_install: _,
+            update_exe: _,
+            update_env: _,
+            update_now_unix: _,
+            update_release_arch: _,
             document_id: _,
             read_aloud: _,
             prefs: _,

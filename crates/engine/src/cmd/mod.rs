@@ -46,6 +46,7 @@ pub mod table_style;
 pub mod templates;
 pub mod text;
 pub mod tools;
+pub mod update;
 pub mod view;
 pub mod wordart;
 
@@ -81,6 +82,7 @@ pub fn registry() -> Registry {
     v.extend(table_mouse::specs());
     v.extend(review::specs());
     v.extend(file::specs());
+    v.extend(update::specs());
     v.extend(options::specs());
     v.extend(design::specs());
     v.extend(references::specs());
