@@ -7,8 +7,7 @@
 //! Nothing here discovers anything or connects on its own: a printer is contacted when the person
 //! presses Query printer, and a document is sent only after the confirmation box was ticked (the
 //! registry refuses a network job without a [`UserConfirmed`]). Addresses are numeric private,
-//! link-local or loopback IPs, as craft-wsd's policy decides. Printers on the deny list
-//! (`CRAFT_PRINT_DENY`) are refused by the registry before anything is asked of them.
+//! link-local or loopback IPs, as craft-wsd's policy decides.
 //!
 //! The protocol follows the address: `ipp://...`, or a `/ipp/` path, or port 631 is IPP; anything
 //! else is WS-Print. All network work runs on its own threads; the UI thread only starts it and
@@ -69,12 +68,10 @@ pub fn validate(text: &str) -> Result<(), net::Failure> {
     }
 }
 
-/// What the workers are made with: the transport (`None`: plain HTTP) and the deny list (`None`: the
-/// environment's, `CRAFT_PRINT_DENY`). Tests give an in-memory printer and a list of their own.
+/// What the workers are made with: the transport (`None`: plain HTTP). Tests give an in-memory printer.
 #[derive(Clone, Default)]
 pub struct Env {
     pub transport: Option<Transport>,
-    pub deny: Option<Vec<String>>,
 }
 
 /// One printer: its checked address behind a registry that holds only that printer's backend.
@@ -84,13 +81,9 @@ struct Printer {
 }
 
 impl Printer {
-    /// Opens no connection. The deny list is the registry's own (it reads `CRAFT_PRINT_DENY` on
-    /// every call) unless `env` brings one.
+    /// Opens no connection.
     fn open(address: &str, env: &Env) -> Result<Self, PrintError> {
         let registry = Registry::new();
-        if env.deny.is_some() {
-            registry.set_deny_list(env.deny.clone());
-        }
         let transport = env.transport.clone().unwrap_or_else(craft_print::wsd::adapter::default_transport);
         let (backend, id): (Box<dyn craft_print::backends::Backend>, String) = match proto_of(address) {
             Proto::Wsd => {
@@ -108,8 +101,7 @@ impl Printer {
         Ok(Self { id, registry })
     }
 
-    /// What the printer is and lists: one read-only request. A printer on the deny list is refused
-    /// before the request is made.
+    /// What the printer is and lists: one read-only request.
     fn details(&self) -> Result<PrinterDetails, PrintError> {
         self.registry.printer_details(&self.id)
     }
@@ -127,7 +119,6 @@ fn failure(e: &PrintError, open: bool) -> net::Failure {
         K::Encode
     } else {
         match e.kind() {
-            ErrorKind::Denied => K::Policy,
             ErrorKind::InvalidRequest if open => K::Policy,
             ErrorKind::InvalidRequest | ErrorKind::ConsentRequired => K::Invalid,
             ErrorKind::UnsupportedFormat => K::NoCommonFormat,
@@ -340,7 +331,7 @@ fn run_job(
 ) -> Result<net::Report, net::Failure> {
     let printer = Printer::open(address, env).map_err(|e| failure(&e, true))?;
     // What the person was shown is what the registry decides on: no second read of the printer,
-    // unless nothing was queried. The read also puts the deny list's name check before any send.
+    // unless nothing was queried.
     let details = match queried.filter(|(id, _)| *id == printer.id) {
         Some((_, details)) => details,
         None => printer.details().map_err(|e| failure(&e, false))?,
@@ -395,7 +386,7 @@ pub fn service_with(env: Env) -> NetworkPrint {
     }
 }
 
-/// The service for the running app: the plain-HTTP transport and the environment's deny list.
+/// The service for the running app: the plain-HTTP transport.
 pub fn service() -> NetworkPrint {
     service_with(Env::default())
 }
