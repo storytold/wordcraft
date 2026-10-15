@@ -115,6 +115,9 @@ pub struct Spacing {
     pub right: Option<f32>,
     /// First-line indent; negative = hanging.
     pub first: Option<f32>,
+    /// HTML's automatic space before / after (see `ParaProps::space_before_auto`).
+    pub before_auto: bool,
+    pub after_auto: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -134,6 +137,8 @@ pub struct Para {
     /// Tracked deletion of the paragraph mark (only [`from_doc_tracked`] and formats that keep
     /// revisions set it).
     pub mark_del: Option<Box<RevMark>>,
+    /// Formatting of an empty paragraph's mark (what sizes its line), when the source gives it.
+    pub mark: Option<Box<Fmt>>,
 }
 
 impl Para {
@@ -474,6 +479,9 @@ impl<'a> Builder<'a> {
             out.props.numbering = Some(NumRef { num, level: li.level.min(8) });
         }
         out.props.align = p.align;
+        if let Some(f) = &p.mark {
+            out.mark = char_props(f);
+        }
         let sp = p.spacing;
         out.props.space_before = sp.before.or(out.props.space_before);
         out.props.space_after = sp.after.or(out.props.space_after);
@@ -481,6 +489,12 @@ impl<'a> Builder<'a> {
         out.props.indent_left = sp.left.or(out.props.indent_left);
         out.props.indent_right = sp.right.or(out.props.indent_right);
         out.props.indent_first = sp.first.or(out.props.indent_first);
+        if sp.before_auto {
+            out.props.space_before_auto = Some(true);
+        }
+        if sp.after_auto {
+            out.props.space_after_auto = Some(true);
+        }
         if p.page_break {
             out.props.page_break_before = Some(true);
         }
@@ -833,6 +847,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool) -> Vec<Para> {
         section: None,
         mark_ins: None,
         mark_del: None,
+        mark: None,
     };
     let in_code = kind == Kind::Code;
     let mut k = 0usize;
@@ -861,6 +876,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool) -> Vec<Para> {
                         section: None,
                         mark_ins: None,
                         mark_del: None,
+                        mark: None,
                     };
                     let prev = std::mem::replace(&mut out, next);
                     if prev.inlines.is_empty() {

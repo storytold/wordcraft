@@ -18,6 +18,8 @@ pub const OPEN_EXTS: &[&str] = &[
     "markdown",
     "html",
     "htm",
+    "mht",
+    "mhtml",
     "rtf",
     "odt",
     "tex",
@@ -181,7 +183,7 @@ fn load_embedded_fonts(doc: &Document) {
 fn read_bytes(name: &str, bytes: &[u8], password: Option<&str>, page: &wordcraft_doc::SectionProps) -> Result<(Document, bool), String> {
     let ext = ext_of(name);
     if matches!(ext.as_str(), "docx" | "docm" | "dotx" | "dotm" | "doc" | "dot") && wordcraft_docx::is_encrypted(bytes) {
-        let mut doc = wordcraft_docx::read_with_password(bytes, password).map_err(|e| e.to_string())?;
+        let mut doc = read_docx(bytes, password).map_err(|e| e.to_string())?;
         opened(&mut doc);
         return Ok((doc, true));
     }
@@ -208,6 +210,42 @@ fn read_bytes(name: &str, bytes: &[u8], password: Option<&str>, page: &wordcraft
     };
     opened(&mut doc);
     Ok((doc, false))
+}
+
+/// Read a Word package (decrypted with `password` if it is encrypted), bringing in its
+/// alternative format chunks (`w:altChunk`) as Word does when it opens one: see [`import_chunk`].
+pub(crate) fn read_docx(bytes: &[u8], password: Option<&str>) -> Result<Document, wordcraft_docx::DocxError> {
+    wordcraft_docx::read_with(bytes, &wordcraft_docx::ReadOptions { password, chunks: Some(&import_chunk) })
+}
+
+/// An alternative format chunk in a format the docx reader leaves to the format importers, as a
+/// document: an MHT web archive, HTML, RTF or plain text, told by its content type, its part's
+/// extension or what it holds. Its pictures fit the text width, as when the file is opened.
+fn import_chunk(c: &wordcraft_docx::AltChunk) -> Option<Document> {
+    use wordcraft_formats::{html, mht, rtf, txt};
+    let full = c.content_type.to_ascii_lowercase();
+    let ct = full.split(';').next().unwrap_or("").trim();
+    let charset = full.split(';').skip(1).find_map(|p| p.trim().strip_prefix("charset=")).map(|v| v.trim_matches('"'));
+    let ext = ext_of(c.part);
+    let b = c.bytes;
+    let mut doc = if matches!(ct, "message/rfc822" | "application/x-mimearchive")
+        || ct.starts_with("multipart/")
+        || matches!(ext.as_str(), "mht" | "mhtml")
+        || mht::is_mht(b)
+    {
+        mht::import(b)
+    } else if ct.contains("rtf") || ext == "rtf" || b.starts_with(b"{\\rtf") {
+        rtf::import(b).ok()?
+    } else if ct.contains("html") || matches!(ext.as_str(), "html" | "htm" | "xhtml") {
+        html::import_page(&html::decode_as(b, charset), &|_| None)
+    } else if ct == "text/plain" || ext == "txt" {
+        txt::import(b)
+    } else {
+        return None;
+    };
+    // shortcut: pictures fit the chunk's default page, not the section it lands in; fit them there if wide pictures in chunks overflow narrow sections.
+    fit_pictures(&mut doc);
+    Some(doc)
 }
 
 /// The narrowest text width of the document's sections, points: what a picture must fit.
@@ -282,9 +320,9 @@ fn open_by_content(
     page: &wordcraft_doc::SectionProps,
 ) -> Result<(Document, bool), String> {
     let (mut doc, encrypted) = if bytes.starts_with(OLE_SIG) && wordcraft_docx::is_encrypted(bytes) {
-        (wordcraft_docx::read_with_password(bytes, password).map_err(|e| e.to_string())?, true)
+        (read_docx(bytes, password).map_err(|e| e.to_string())?, true)
     } else if bytes.starts_with(ZIP_SIG) {
-        (wordcraft_docx::read(bytes).map_err(|e| format!("{name}: not a document WordCraft can open ({e})"))?, false)
+        (read_docx(bytes, None).map_err(|e| format!("{name}: not a document WordCraft can open ({e})"))?, false)
     } else if bytes.starts_with(OLE_SIG) {
         open_binary_doc(bytes, password)
             .map_err(|e| if needs_password(&e) || wrong_password(&e) { e } else { format!("{name}: not a document WordCraft can open ({e})") })?

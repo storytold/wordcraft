@@ -7,7 +7,6 @@
 //! HTML source can also be pasted as that format. Paste keeps the source formatting of another
 //! program's HTML or RTF; Merge Formatting keeps only its emphasis (#687).
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use serde_json::{Value, json};
@@ -307,35 +306,6 @@ pub(crate) fn each_para(b: &mut Block, depth: usize, f: &mut dyn FnMut(&mut Para
     }
 }
 
-/// Point a tracked formatting change at its renumbered revision (dropped when it has none).
-fn remap_change<T>(c: &mut Option<Box<wordcraft_doc::props::PropChange<T>>>, rev: &dyn Fn(&mut Option<u32>)) {
-    let mut r = c.as_ref().map(|c| c.rev);
-    rev(&mut r);
-    match (r, c.as_mut()) {
-        (Some(v), Some(x)) => x.rev = v,
-        _ => *c = None,
-    }
-}
-
-/// [`remap_change`] for the table, row and cell formatting changes in `b` (bounded depth).
-fn remap_table_changes(b: &mut Block, depth: usize, rev: &dyn Fn(&mut Option<u32>)) {
-    if depth > MAX_DEPTH {
-        return;
-    }
-    if let Block::Table(t) = b {
-        remap_change(&mut t.props.fmt_change, rev);
-        for row in &mut t.rows {
-            remap_change(&mut row.props.fmt_change, rev);
-            for cell in &mut row.cells {
-                remap_change(&mut cell.props.fmt_change, rev);
-                for cb in &mut cell.blocks {
-                    remap_table_changes(Arc::make_mut(cb), depth + 1, rev);
-                }
-            }
-        }
-    }
-}
-
 /// Section breaks brought in from another document keep their page, but their header and
 /// footer ids are that document's: clear them (and the different first page that went with
 /// them) so the sections link to the previous section's headers and footers, as in Word.
@@ -354,81 +324,12 @@ pub(crate) fn unlink_sections(blocks: &mut [Block]) {
 /// Turn an imported document into a fragment of the session's document: bring over the media,
 /// lists and styles it refers to (renumbered so they can't collide with ours).
 fn adopt(s: &mut Session, src: Document) -> Fragment {
-    let mut media = BTreeMap::new();
-    for (key, data) in &src.media {
-        let ext = key.rsplit_once('.').map(|(_, e)| e).unwrap_or("png");
-        media.insert(key.clone(), s.doc.add_media(data.to_vec(), ext));
-    }
-    let next_abs = s.doc.numbering.abstracts.iter().map(|a| a.id.saturating_add(1)).max().unwrap_or(0);
-    let mut abs_map = BTreeMap::new();
-    for (i, a) in src.numbering.abstracts.iter().enumerate() {
-        let id = next_abs.saturating_add(i as u32);
-        abs_map.insert(a.id, id);
-        s.doc.numbering.abstracts.push(wordcraft_doc::numbering::AbstractNum { id, ..a.clone() });
-    }
-    let next_num = s.doc.numbering.nums.iter().map(|n| n.id.saturating_add(1)).max().unwrap_or(1).max(1);
-    let mut num_map = BTreeMap::new();
-    for (i, n) in src.numbering.nums.iter().enumerate() {
-        let id = next_num.saturating_add(i as u32);
-        num_map.insert(n.id, id);
-        let abstract_id = abs_map.get(&n.abstract_id).copied().unwrap_or(n.abstract_id);
-        s.doc.numbering.nums.push(wordcraft_doc::numbering::Num { id, abstract_id, ..n.clone() });
-    }
-    for st in &src.styles.styles {
-        if s.doc.styles.get(&st.id).is_none() {
-            s.doc.styles.upsert(st.clone());
-        }
-    }
-    // Tracked changes the source carries (RTF revisions) point at its own revisions: add them
-    // after ours and renumber.
-    let rev_base = u32::try_from(s.doc.revisions.len()).unwrap_or(u32::MAX);
-    let src_revs = src.revisions.len();
-    s.doc.revisions.extend(src.revisions.iter().cloned());
-    let rev = |i: &mut Option<u32>| {
-        *i = i.filter(|v| (*v as usize) < src_revs).and_then(|v| rev_base.checked_add(v));
-    };
-    let mut blocks: Vec<Block> = src.body.iter().map(|b| (**b).clone()).collect();
+    let mut frag = s.doc.adopt(src);
     // Pasted pictures fit our text width, like Insert › Pictures (layout keeps their size).
     let max_w = crate::io::text_width(&s.doc);
-    for b in &mut blocks {
+    for b in &mut frag.blocks {
         crate::io::fit_block_pictures(b, max_w);
     }
-    for b in &mut blocks {
-        each_para(b, 0, &mut |p| {
-            if let Some(n) = p.props.numbering.as_mut()
-                && n.num != 0
-            {
-                n.num = num_map.get(&n.num).copied().unwrap_or(0);
-            }
-            for r in &mut p.runs {
-                rev(&mut r.props.ins);
-                rev(&mut r.props.del);
-                remap_change(&mut r.props.fmt_change, &rev);
-            }
-            rev(&mut p.mark.ins);
-            rev(&mut p.mark.del);
-            remap_change(&mut p.mark.fmt_change, &rev);
-            remap_change(&mut p.props.fmt_change, &rev);
-            let mut n = p.props.num_change.as_ref().map(|c| c.rev);
-            rev(&mut n);
-            match (n, p.props.num_change.as_mut()) {
-                (Some(v), Some(c)) => c.rev = v,
-                _ => p.props.num_change = None,
-            }
-            for o in &mut p.objects {
-                if let wordcraft_doc::InlineObject::Image { media: key, .. } = o
-                    && let Some(k) = media.get(key.as_str())
-                {
-                    *key = k.clone();
-                }
-            }
-        });
-    }
-    for b in &mut blocks {
-        remap_table_changes(b, 0, &rev);
-    }
-    unlink_sections(&mut blocks);
-    // Text box stories the imported shapes show; pasting gives each a new story of its own.
-    let parts = src.parts.into_iter().filter(|(_, p)| p.kind == wordcraft_doc::PartKind::TextBox).collect();
-    Fragment { blocks, parts }
+    unlink_sections(&mut frag.blocks);
+    frag
 }

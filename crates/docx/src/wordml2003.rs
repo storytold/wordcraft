@@ -33,7 +33,7 @@ const MAX_STORIES: usize = 50_000;
 
 /// Read a Word 2003 XML Document.
 pub fn read(bytes: &[u8]) -> Result<Document, DocxError> {
-    crate::read::read_opened(&convert(bytes)?)
+    crate::read::read_opened(&convert(bytes)?, None)
 }
 
 /// Parts the converted package gets relationships for.

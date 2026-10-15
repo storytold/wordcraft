@@ -44,6 +44,7 @@ pub mod rt {
     pub const DIAGRAM_QUICK_STYLE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramQuickStyle";
     pub const DIAGRAM_COLORS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramColors";
     pub const CUSTOM_XML: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml";
+    pub const AF_CHUNK: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/aFChunk";
 }
 
 /// `Document::passthrough` key for a macro project, kept as opaque bytes (never parsed or run).
@@ -201,6 +202,11 @@ impl Package {
             files.insert(name, buf);
         }
         Ok(Package { files })
+    }
+
+    /// The bytes of all its parts.
+    pub fn size(&self) -> u64 {
+        self.files.values().map(|f| f.len() as u64).sum()
     }
 
     /// A package from parts already in memory (a Flat OPC file, a converted document), by part

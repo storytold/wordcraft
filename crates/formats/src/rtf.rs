@@ -1307,6 +1307,7 @@ impl Reader {
             left: self.st.li.map(pt),
             right: self.st.ri.map(pt),
             first: self.st.fi.map(pt),
+            ..Default::default()
         }
     }
 

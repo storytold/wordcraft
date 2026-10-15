@@ -28,7 +28,7 @@ pub use crypt::{
 };
 pub use flat::{XmlKind, sniff_xml, write as write_flat};
 pub use fonts::embedded_fonts;
-pub use read::read;
+pub use read::{AltChunk, ChunkImporter, ReadOptions, read};
 pub use smart_art::smart_art_items;
 pub use wordml2003_write::write as write_wordml2003;
 pub use write::{write, write_as};
@@ -64,11 +64,18 @@ pub(crate) const CANVAS_SPIN_EXT: &str = "urn:wordcraft:canvas-xfrm";
 /// `password` first. An encrypted package without a password gives
 /// [`DocxError::PasswordRequired`]; a wrong one, [`DocxError::WrongPassword`].
 pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<wordcraft_doc::Document, DocxError> {
+    read_with(bytes, &ReadOptions { password, ..Default::default() })
+}
+
+/// Read a package with options: the password of an encrypted one ([`read_with_password`]) and
+/// an importer for `w:altChunk` content in formats other than WordprocessingML (see
+/// [`ChunkImporter`]).
+pub fn read_with(bytes: &[u8], opts: &ReadOptions) -> Result<wordcraft_doc::Document, DocxError> {
     if is_encrypted(bytes) {
-        let package = zeroize::Zeroizing::new(decrypt(bytes, password)?);
-        return read::read_package(&package);
+        let package = zeroize::Zeroizing::new(decrypt(bytes, opts.password)?);
+        return read::read_package(&package, opts.chunks);
     }
-    read(bytes)
+    read::read_package(bytes, opts.chunks)
 }
 
 /// Which kind of WordprocessingML package to write. The main part's content type differs per

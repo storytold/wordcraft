@@ -217,6 +217,7 @@ impl Reader<'_> {
                     }
                 }
                 "w:sdt" => self.read_block_sdt(sc, e, rels, out, depth),
+                "w:altChunk" => self.read_alt_chunk(sc, e, rels, out, depth),
                 "w:customXml" | "w:smartTag" | "w:ins" | "w:moveTo" => self.read_blocks(sc, e, rels, out, depth + 1),
                 "mc:AlternateContent" => {
                     if let Some(c) = children_of_choice(e) {
@@ -1375,7 +1376,7 @@ impl Reader<'_> {
     fn read_textbox(&mut self, sc: &StoryCtx, content: &El, rels: &Rels) -> u32 {
         let mut inner = StoryCtx { story_depth: sc.story_depth + 1, ..Default::default() };
         let mut blocks = Blocks::new();
-        self.read_blocks(&mut inner, content, rels, &mut blocks, 0);
+        self.read_blocks(&mut inner, content, rels, &mut blocks, self.chunks.depth);
         self.flush_pending(&mut inner, &mut blocks);
         self.doc.add_part(PartKind::TextBox, blocks)
     }

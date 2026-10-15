@@ -7,16 +7,20 @@
 //! (colspan/rowspan), `img` (`data:` URIs, other sources through a caller's [`ImageLoader`]), `blockquote`, `pre`, `font`, and the CSS
 //! properties `color`, `background-color`, `font-weight`, `font-style`, `font-size`,
 //! `font-family`, `text-decoration`, `vertical-align`, `text-align`, `white-space` and page
-//! breaks. Scripts and styles are skipped; nesting is capped.
+//! breaks, and on paragraphs `margin`, `text-indent` and `line-height`. CSS comes from `style`
+//! attributes and from `style` elements' rules with simple selectors (`p`, `.note`, `p.note`),
+//! applied in cascade order (specificity, then source order, then the `style` attribute).
+//! Scripts are skipped; nesting is capped.
 //!
 //! Export writes clean semantic HTML with inline CSS and pictures as `data:` URIs.
 
 use std::sync::Arc;
 
+use wordcraft_doc::props::LineSpacing;
 use wordcraft_doc::{Align, Document};
 
 use crate::model::{
-    self, Cell, FBlock, FTable, Flow, Fmt, Inline, Kind, ListInfo, Meta, Para, base64_encode, data_uri, make_img, mime_of, parse_color,
+    self, Cell, FBlock, FTable, Flow, Fmt, Inline, Kind, ListInfo, Meta, Para, Spacing, base64_encode, data_uri, make_img, mime_of, parse_color,
 };
 
 /// Open elements kept at most (deeper start tags are ignored).
@@ -167,15 +171,37 @@ pub fn unescape(s: &str) -> String {
 /// Decode HTML bytes: BOM, then a `charset` in the first 2 KB, else UTF-8 with a Windows-1252
 /// fallback.
 pub fn decode(b: &[u8]) -> String {
+    decode_as(b, None)
+}
+
+/// [`decode`] in the `charset` its container states (a MIME part's, a content type's), when it
+/// states one. Single-byte Windows code pages (`windows-1250`…, `iso-8859-1`, `us-ascii` as 1252)
+/// are decoded as such.
+pub fn decode_as(b: &[u8], charset: Option<&str>) -> String {
     if b.starts_with(&[0xFF, 0xFE]) || b.starts_with(&[0xFE, 0xFF]) || b.starts_with(&[0xEF, 0xBB, 0xBF]) {
         return crate::txt::decode(b);
     }
     let head = String::from_utf8_lossy(b.get(..b.len().min(2048)).unwrap_or(b)).to_ascii_lowercase();
-    let latin = head.contains("charset=windows-1252") || head.contains("charset=iso-8859-1") || head.contains("charset=\"windows-1252\"");
-    if !latin && let Ok(s) = std::str::from_utf8(b) {
-        return s.to_string();
+    let named = charset.map(str::to_ascii_lowercase).or_else(|| {
+        let at = head.find("charset=")? + "charset=".len();
+        Some(head.get(at..)?.trim_start_matches(['"', '\'']).chars().take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')).collect())
+    });
+    let code_page = match named.as_deref().map(str::trim) {
+        Some("iso-8859-1" | "latin1" | "us-ascii") => Some(1252),
+        Some(cs) => cs
+            .strip_prefix("windows-")
+            .or_else(|| cs.strip_prefix("cp"))
+            .and_then(|n| n.parse::<u16>().ok())
+            .filter(|cp| wordcraft_doc::encoding::SINGLE_BYTE_CODE_PAGES.contains(cp)),
+        None => None,
+    };
+    match code_page {
+        Some(cp) => b.iter().map(|&c| wordcraft_doc::encoding::windows_byte(cp, c)).collect(),
+        None => match std::str::from_utf8(b) {
+            Ok(s) => s.to_string(),
+            Err(_) => crate::txt::decode(b),
+        },
     }
-    crate::txt::decode(b)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -344,6 +370,12 @@ struct El {
     name: String,
     kind: ElKind,
     fmt: Fmt,
+    /// Margins, indents and line height its CSS states (blocks only; they don't inherit; on a
+    /// page's spans, their margins).
+    spacing: Spacing,
+    /// A page's `p` or heading: margins its CSS leaves out (or writes invalidly) are HTML's
+    /// automatic spacing.
+    auto_margins: bool,
     align: Option<Align>,
     preserve: bool,
     page_break: bool,
@@ -356,22 +388,30 @@ struct TableB {
     row: Option<Vec<Cell>>,
     /// The table or one of its cells asks for borders.
     bordered: bool,
+    /// Column widths, points, from the cells that give one and span a single column.
+    widths: Vec<Option<f32>>,
 }
 
-/// Whether an element's `border` attribute or `style` declares a visible border.
-fn declares_border(attrs: &[(String, String)], is_table: bool) -> bool {
+/// Whether an element's `border` attribute or its CSS declares a visible border.
+fn declares_border(attrs: &[(String, String)], css: &str, is_table: bool) -> bool {
     if is_table && attr(attrs, "border").is_some_and(|b| b.trim().parse::<u32>().map(|n| n > 0).unwrap_or(b.trim().is_empty())) {
         return true;
     }
-    let Some(style) = attr(attrs, "style") else { return false };
-    style.split(';').any(|decl| {
-        let Some((name, value)) = decl.split_once(':') else { return false };
-        let name = name.trim().to_ascii_lowercase();
+    decls(css).any(|(name, value)| {
         if !matches!(name.as_str(), "border" | "border-top" | "border-right" | "border-bottom" | "border-left") {
             return false;
         }
-        let value = value.trim().to_ascii_lowercase();
+        let value = value.to_ascii_lowercase();
         !value.is_empty() && !value.split_whitespace().any(|tok| matches!(tok, "none" | "hidden" | "0" | "0px" | "0pt"))
+    })
+}
+
+/// A declaration block's declarations, at most [`MAX_DECLS`]: (property in lower case, value
+/// without `!important`).
+fn decls(css: &str) -> impl Iterator<Item = (String, &str)> {
+    css.split(';').take(MAX_DECLS).filter_map(|d| {
+        let (k, v) = d.split_once(':')?;
+        Some((k.trim().to_ascii_lowercase(), v.trim().trim_end_matches("!important").trim()))
     })
 }
 
@@ -395,6 +435,12 @@ struct Builder<'r> {
     pre_tail: bool,
     meta: Meta,
     title: Option<String>,
+    /// Rules of the page's `style` elements.
+    sheet: Sheet,
+    /// Read as Word opens a web page ([`import_page`]), not as a pasted fragment.
+    page: bool,
+    /// What is left of [`MAX_CSS_WORK`].
+    css_work: usize,
 }
 
 fn is_void(n: &str) -> bool {
@@ -508,10 +554,7 @@ fn css_len_pt(v: &str) -> Option<f32> {
 
 /// Apply a `style` attribute to formatting / block properties.
 fn apply_style(css: &str, f: &mut Fmt, align: &mut Option<Align>, preserve: &mut bool, page_break: &mut bool) {
-    for decl in css.split(';').take(64) {
-        let Some((k, v)) = decl.split_once(':') else { continue };
-        let k = k.trim().to_ascii_lowercase();
-        let v = v.trim().trim_end_matches("!important").trim();
+    for (k, v) in decls(css) {
         let lv = v.to_ascii_lowercase();
         match k.as_str() {
             "font-weight" => f.bold = lv.starts_with("bold") || lv.parse::<u32>().is_ok_and(|w| w >= 600),
@@ -571,12 +614,302 @@ fn apply_style(css: &str, f: &mut Fmt, align: &mut Option<Align>, preserve: &mut
     }
 }
 
+/// The paragraph spacing a block's CSS states: `margin` (and its sides) as space before / after
+/// and left / right indents, `text-indent` as the first-line indent, `line-height` as line
+/// spacing (a number or percentage: a multiple; a length: exactly). `auto` and values that don't
+/// parse state nothing.
+fn block_spacing(css: &str) -> Spacing {
+    let mut sp = Spacing::default();
+    // A length with a unit, or 0: a bare number, a percentage or a keyword states nothing.
+    let len = |v: &str| match v.trim() {
+        "0" => Some(0.0),
+        v if v.ends_with('%') || v.parse::<f32>().is_ok() || !v.starts_with(|c: char| c.is_ascii_digit() || matches!(c, '.' | '-' | '+')) => None,
+        v => css_len_pt(v).filter(|x| x.abs() <= 1584.0),
+    };
+    for (k, v) in decls(css) {
+        match k.as_str() {
+            "margin" => {
+                let parts: Vec<Option<f32>> = v.split_whitespace().map(len).collect();
+                let [top, right, bottom, left] = match parts.as_slice() {
+                    [a] => [*a; 4],
+                    [a, b] => [*a, *b, *a, *b],
+                    [a, b, c] => [*a, *b, *c, *b],
+                    [a, b, c, d] => [*a, *b, *c, *d],
+                    _ => continue,
+                };
+                sp.before = top.map(|x| x.max(0.0)).or(sp.before);
+                sp.after = bottom.map(|x| x.max(0.0)).or(sp.after);
+                sp.left = left.or(sp.left);
+                sp.right = right.or(sp.right);
+            }
+            "margin-top" => sp.before = len(v).map(|x| x.max(0.0)).or(sp.before),
+            "margin-bottom" => sp.after = len(v).map(|x| x.max(0.0)).or(sp.after),
+            "margin-left" => sp.left = len(v).or(sp.left),
+            "margin-right" => sp.right = len(v).or(sp.right),
+            "text-indent" => sp.first = len(v).or(sp.first),
+            "line-height" => {
+                let lv = v.to_ascii_lowercase();
+                let multiple = |m: f32| (m.is_finite() && m > 0.0).then(|| LineSpacing::Multiple(m.clamp(0.25, 10.0)));
+                sp.line = if let Some(pc) = lv.strip_suffix('%') {
+                    pc.trim().parse::<f32>().ok().and_then(|p| multiple(p / 100.0))
+                } else if let Ok(m) = lv.parse::<f32>() {
+                    multiple(m)
+                } else if lv == "normal" {
+                    Some(LineSpacing::Multiple(1.0))
+                } else {
+                    len(&lv).filter(|x| *x > 0.0).map(LineSpacing::Exactly)
+                }
+                .or(sp.line);
+            }
+            _ => {}
+        }
+    }
+    sp
+}
+
+/// A rule of a `style` element with a simple selector: an element name, classes or both.
+#[derive(Clone, Debug)]
+struct Rule {
+    tag: Option<String>,
+    classes: Vec<String>,
+    /// Classes count ten, an element name one.
+    specificity: usize,
+    /// Shared by the selectors of one block.
+    decls: Arc<str>,
+    /// How many declarations `decls` holds.
+    count: usize,
+}
+
+/// Most rules kept from a page's style elements.
+const MAX_RULES: usize = 10_000;
+/// Most declarations read for one element (its rules' and its `style` attribute's).
+const MAX_DECLS: usize = 512;
+/// Most declarations read from one `style` attribute.
+const INLINE_DECLS: usize = 64;
+/// Rule matching (rules looked at plus bytes gathered) one page may spend.
+const MAX_CSS_WORK: usize = 64 << 20;
+/// Most bytes of declarations gathered from the rules one element matches.
+const MAX_RULE_CSS: usize = 64 * 1024;
+/// Most of an element's classes looked up.
+const MAX_CLASSES: usize = 32;
+
+/// A page's style rules, found by the element name or a class they need.
+#[derive(Default)]
+struct Sheet {
+    rules: Vec<Rule>,
+    /// Rules naming classes, by their first class.
+    by_class: std::collections::HashMap<String, Vec<usize>>,
+    /// Rules naming only an element, by its name.
+    by_tag: std::collections::HashMap<String, Vec<usize>>,
+    /// `*` rules.
+    any: Vec<usize>,
+}
+
+impl Sheet {
+    fn push(&mut self, r: Rule) {
+        let i = self.rules.len();
+        match (r.classes.first(), &r.tag) {
+            (Some(c), _) => self.by_class.entry(c.clone()).or_default().push(i),
+            (None, Some(t)) => self.by_tag.entry(t.clone()).or_default().push(i),
+            (None, None) => self.any.push(i),
+        }
+        self.rules.push(r);
+    }
+}
+
+/// Read the rules of a style sheet into `out`. At-rules (`@media`, `@page`…) and rules whose
+/// selectors aren't simple (descendants, pseudo-classes, attributes…) are skipped.
+fn parse_sheet(css: &str, out: &mut Sheet) {
+    // Comments go, as do the `<!-- -->` old pages hide their styles in.
+    let mut text = String::with_capacity(css.len());
+    let mut rest = css;
+    while let Some(i) = rest.find("/*") {
+        text.push_str(rest.get(..i).unwrap_or(""));
+        rest = rest.get(i + 2..).and_then(|r| r.find("*/").and_then(|j| r.get(j + 2..))).unwrap_or("");
+    }
+    text.push_str(rest);
+    let text = text.replace("<!--", " ").replace("-->", " ");
+    let mut rest = text.as_str();
+    while let Some(open) = rest.find('{') {
+        // A statement at-rule before it (`@charset "x";`, `@import url(a);`) isn't a selector.
+        let selectors = rest.get(..open).unwrap_or("").rsplit(';').next().unwrap_or("").trim();
+        let body = rest.get(open + 1..).unwrap_or("");
+        // The block's end, counting nested braces (an at-rule's own rules).
+        let mut depth = 1usize;
+        let mut end = body.len();
+        for (i, c) in body.char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let decls = body.get(..end).unwrap_or("");
+        rest = body.get(end + 1..).unwrap_or("");
+        if selectors.starts_with('@') || decls.contains('{') || decls.len() > MAX_RULE_CSS {
+            continue;
+        }
+        let (count, decls) = (decls.split(';').count(), Arc::<str>::from(decls));
+        for sel in selectors.split(',') {
+            if out.rules.len() >= MAX_RULES {
+                return;
+            }
+            if let Some((tag, classes)) = simple_selector(sel.trim()) {
+                let specificity = classes.len() * 10 + usize::from(tag.is_some());
+                out.push(Rule { tag, classes, specificity, decls: decls.clone(), count });
+            }
+        }
+    }
+}
+
+/// `p`, `.note`, `p.note.wide` or `*`: (element name, classes). Class names may start with a
+/// digit (`.000003`): browsers drop such a rule, but Word's HTML import applies it, and
+/// converters write them.
+fn simple_selector(sel: &str) -> Option<(Option<String>, Vec<String>)> {
+    if sel == "*" {
+        return Some((None, Vec::new()));
+    }
+    let mut parts = sel.split('.');
+    let tag = parts.next()?;
+    let tag = if tag.is_empty() {
+        None
+    } else if tag.chars().all(|c| c.is_ascii_alphanumeric()) && tag.starts_with(|c: char| c.is_ascii_alphabetic()) {
+        Some(tag.to_ascii_lowercase())
+    } else {
+        return None;
+    };
+    let ident = |c: &str| !c.is_empty() && c.chars().all(|ch| ch.is_alphanumeric() || ch == '_' || ch == '-');
+    let classes: Vec<String> = parts.map(str::to_string).collect();
+    if classes.iter().any(|c| !ident(c)) || (tag.is_none() && classes.is_empty()) {
+        return None;
+    }
+    Some((tag, classes))
+}
+
+impl Builder<'_> {
+    /// An element's CSS: the declarations of the style sheet rules it matches, in cascade order,
+    /// then its `style` attribute (later declarations win).
+    fn css_of(&mut self, name: &str, attrs: &[(String, String)]) -> String {
+        // The `style` attribute's first declarations always fit in what is read of the result.
+        let inline: Vec<&str> = attr(attrs, "style").unwrap_or("").split(';').take(INLINE_DECLS).collect();
+        let inline = inline.join(";");
+        let sheet = &self.sheet;
+        if sheet.rules.is_empty() || self.css_work == 0 {
+            return inline;
+        }
+        let mut classes: Vec<&str> = attr(attrs, "class").map(|c| c.split_whitespace().take(MAX_CLASSES).collect()).unwrap_or_default();
+        classes.sort_unstable();
+        classes.dedup();
+        let mut candidates: Vec<usize> = sheet.any.clone();
+        candidates.extend(sheet.by_tag.get(name).into_iter().flatten());
+        for c in &classes {
+            candidates.extend(sheet.by_class.get(*c).into_iter().flatten());
+        }
+        let mut hits: Vec<(usize, usize)> = candidates
+            .iter()
+            .filter_map(|&i| sheet.rules.get(i).map(|r| (i, r)))
+            .filter(|(_, r)| r.tag.as_deref().is_none_or(|t| t == name) && r.classes.iter().all(|c| classes.contains(&c.as_str())))
+            .map(|(i, r)| (r.specificity, i))
+            .collect();
+        hits.sort_unstable();
+        let mut css = String::new();
+        let mut count = 0;
+        for (_, i) in hits {
+            let Some(r) = sheet.rules.get(i) else { continue };
+            if css.len() + r.decls.len() > MAX_RULE_CSS || count + r.count > MAX_DECLS - INLINE_DECLS {
+                break;
+            }
+            css.push_str(&r.decls);
+            css.push(';');
+            count += r.count;
+        }
+        // A page whose rules cost too much to apply reads on without them.
+        self.css_work = self.css_work.saturating_sub(candidates.len() + css.len());
+        css.push_str(&inline);
+        css
+    }
+}
+
+/// The borders a cell's CSS gives it (`border`, `border-top`…: style, width and colour in any
+/// order; `windowtext` is the automatic colour). `None` when it states none.
+fn cell_borders(css: &str) -> Option<wordcraft_doc::props::Borders> {
+    use wordcraft_doc::props::{Border, BorderStyle, Borders};
+    let mut b = Borders::default();
+    let mut any = false;
+    for (k, v) in decls(css) {
+        let sides: &[u8] = match k.as_str() {
+            "border" => b"tlbr",
+            "border-top" => b"t",
+            "border-left" => b"l",
+            "border-bottom" => b"b",
+            "border-right" => b"r",
+            _ => continue,
+        };
+        // CSS's default width is `medium`.
+        let (mut style, mut width, mut color) = (None, 2.25_f32, None);
+        for tok in v.split_whitespace() {
+            let lt = tok.to_ascii_lowercase();
+            match lt.as_str() {
+                "none" | "hidden" => style = Some(BorderStyle::None),
+                "solid" => style = Some(BorderStyle::Single),
+                "double" => style = Some(BorderStyle::Double),
+                "dotted" => style = Some(BorderStyle::Dotted),
+                "dashed" => style = Some(BorderStyle::Dashed),
+                "thin" => width = 0.75,
+                "medium" => width = 2.25,
+                "thick" => width = 3.75,
+                "windowtext" => {}
+                _ => match css_len_pt(tok).filter(|_| tok.starts_with(|c: char| c.is_ascii_digit() || c == '.')) {
+                    Some(w) => width = w.clamp(0.0, 12.0),
+                    None => color = parse_color(tok).or(color),
+                },
+            }
+        }
+        // CSS draws no border without a style.
+        let border = Border { style: style.unwrap_or(BorderStyle::None), width, color, space: 0.0 };
+        for side in sides {
+            let slot = match side {
+                b't' => &mut b.top,
+                b'l' => &mut b.left,
+                b'b' => &mut b.bottom,
+                _ => &mut b.right,
+            };
+            *slot = Some(border);
+        }
+        any = true;
+    }
+    any.then_some(b)
+}
+
+/// Most columns given widths in one table.
+const MAX_TABLE_COLS: usize = 63;
+
+/// A cell's width, points: its CSS `width`, else its `width` attribute (pixels); percentages
+/// and widths that don't parse give none.
+fn cell_width(css: &str, attrs: &[(String, String)]) -> Option<f32> {
+    let from_css = decls(css).filter(|(k, v)| k == "width" && !v.ends_with('%')).filter_map(|(_, v)| css_len_pt(v));
+    let from_attr = || {
+        attr(attrs, "width")
+            .map(str::trim)
+            .filter(|v| !v.ends_with('%'))
+            .and_then(|v| v.trim_end_matches("px").trim().parse::<f32>().ok())
+            .map(|px| px * 0.75)
+    };
+    from_css.last().or_else(from_attr).filter(|w| w.is_finite() && *w > 1.0 && *w <= 1584.0)
+}
+
 fn attr<'a>(attrs: &'a [(String, String)], name: &str) -> Option<&'a str> {
     attrs.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
 }
 
 impl<'r> Builder<'r> {
-    fn new(images: ImageLoader<'r>) -> Builder<'r> {
+    fn new(images: ImageLoader<'r>, page: bool) -> Builder<'r> {
         Builder {
             images,
             containers: vec![Vec::new()],
@@ -589,11 +922,19 @@ impl<'r> Builder<'r> {
             pre_tail: false,
             meta: Meta::default(),
             title: None,
+            sheet: Sheet::default(),
+            page,
+            css_work: MAX_CSS_WORK,
         }
     }
 
     fn fmt(&self) -> Fmt {
-        self.stack.last().map(|e| e.fmt.clone()).unwrap_or_default()
+        match self.stack.last() {
+            Some(e) => e.fmt.clone(),
+            // A web page's text is Times New Roman 12 pt unless its CSS says otherwise.
+            None if self.page => Fmt { font: Some(PAGE_FONT.into()), size: Some(12.0), ..Fmt::default() },
+            None => Fmt::default(),
+        }
     }
 
     fn preserve(&self) -> bool {
@@ -611,6 +952,15 @@ impl<'r> Builder<'r> {
             let mut list_level: Option<(bool, usize)> = None;
             let mut li_at: Option<usize> = None;
             let mut lists = 0usize;
+            let mut spaced = false;
+            // A page's first span stating margins (see below).
+            let span = self
+                .stack
+                .iter()
+                .rev()
+                .take_while(|e| e.kind == ElKind::Inline)
+                .find(|e| e.spacing.before.is_some() || e.spacing.after.is_some())
+                .map(|e| (e.spacing.before, e.spacing.after));
             for (i, e) in self.stack.iter().enumerate().rev() {
                 match e.kind {
                     ElKind::Cell => {
@@ -643,6 +993,23 @@ impl<'r> Builder<'r> {
                 }
                 if p.align.is_none() && e.align.is_some() && e.kind != ElKind::Inline {
                     p.align = e.align;
+                }
+                // Margins belong to the paragraph's own block, not to those around it.
+                if !spaced && e.kind != ElKind::Inline {
+                    p.spacing = e.spacing;
+                    if self.page {
+                        // Word opens a page's paragraphs with single lines; a margin a span
+                        // states replaces the one its paragraph states, and one the paragraph
+                        // leaves out is automatic spacing.
+                        let (top, bottom) = span.unwrap_or_default();
+                        let sp = &mut p.spacing;
+                        sp.before_auto = sp.before.is_none() && e.auto_margins;
+                        sp.after_auto = sp.after.is_none() && e.auto_margins;
+                        sp.before = sp.before.map(|own| top.unwrap_or(own));
+                        sp.after = sp.after.map(|own| bottom.unwrap_or(own));
+                        sp.line = sp.line.or(Some(LineSpacing::Multiple(1.0)));
+                    }
+                    spaced = true;
                 }
             }
             if let (Some((o, _)), Some(li)) = (list_level, li_at) {
@@ -683,7 +1050,11 @@ impl<'r> Builder<'r> {
             }
         }
         if p.inlines.len() == 1 && p.text() == "\u{00A0}" {
-            // `<p>&nbsp;</p>`: an empty paragraph on purpose.
+            // `<p>&nbsp;</p>`: an empty paragraph on purpose, whose line is as high as the
+            // space's formatting makes it.
+            if let Some(Inline::Text(_, f)) = p.inlines.first() {
+                p.mark = Some(Box::new(f.clone()));
+            }
             p.inlines.clear();
             self.para_cont = false;
             self.container().push(FBlock::Para(p));
@@ -834,6 +1205,10 @@ impl<'r> Builder<'r> {
                     // O(rows × rowspan) work of `insert_covered` on a table of millions of `<tr>`.
                     let rows: Vec<_> = t.rows.into_iter().filter(|r| !r.is_empty()).take(wordcraft_doc::table::MAX_ROWS).collect();
                     let mut ft = FTable { rows, widths: Vec::new(), borderless };
+                    // Columns keep the widths their cells give when every column has one.
+                    if t.widths.len() == ft.cols() {
+                        ft.widths = t.widths.iter().copied().collect::<Option<Vec<f32>>>().unwrap_or_default();
+                    }
                     if !ft.rows.is_empty() {
                         ft.insert_covered();
                         self.container().push(FBlock::Table(ft));
@@ -1049,14 +1424,23 @@ impl<'r> Builder<'r> {
         if name == "center" {
             align = Some(Align::Center);
         }
-        if let Some(st) = attr(attrs, "style") {
-            apply_style(st, &mut fmt, &mut align, &mut preserve, &mut page_break);
+        if self.page
+            && let ElKind::Heading(n) = kind
+        {
+            // A page's headings are bold, black and sized as browsers show them.
+            fmt.bold = true;
+            fmt.color = Some(wordcraft_doc::Rgb(0, 0, 0));
+            fmt.size = PAGE_HEADING_SIZES.get(usize::from(n.clamp(1, 6)) - 1).copied();
         }
+        let css = self.css_of(name, attrs);
+        apply_style(&css, &mut fmt, &mut align, &mut preserve, &mut page_break);
         if kind == ElKind::Pre {
             preserve = true;
         }
         match kind {
-            ElKind::Table => self.tables.push(TableB { rows: Vec::new(), row: None, bordered: declares_border(attrs, true) }),
+            ElKind::Table => {
+                self.tables.push(TableB { rows: Vec::new(), row: None, bordered: declares_border(attrs, &css, true), widths: Vec::new() })
+            }
             ElKind::Tr => {
                 if let Some(t) = self.tables.last_mut()
                     && let Some(r) = t.row.take()
@@ -1067,7 +1451,7 @@ impl<'r> Builder<'r> {
             ElKind::Cell => {
                 let tb = self.find_open(|e| e.kind == ElKind::Tr, |e| e.kind == ElKind::Table).is_none();
                 if let Some(t) = self.tables.last_mut()
-                    && declares_border(attrs, false)
+                    && declares_border(attrs, &css, false)
                 {
                     t.bordered = true;
                 }
@@ -1079,22 +1463,42 @@ impl<'r> Builder<'r> {
                     t.row = Some(Vec::new());
                 }
                 let num = |k: &str| attr(attrs, k).and_then(|v| v.trim().parse::<u32>().ok()).map(|v| v.clamp(1, 63));
+                let colspan = num("colspan").unwrap_or(1);
+                if colspan == 1
+                    && let Some(w) = cell_width(&css, attrs)
+                    && let Some(t) = self.tables.last_mut()
+                {
+                    // shortcut: columns covered by a rowspan from a row above aren't counted; count them if tables with spanned rows lose widths.
+                    let col = t.row.iter().flatten().map(|c| c.colspan.clamp(1, 63) as usize).sum::<usize>();
+                    if col < MAX_TABLE_COLS {
+                        if t.widths.len() <= col {
+                            t.widths.resize(col + 1, None);
+                        }
+                        if let Some(slot) = t.widths.get_mut(col) {
+                            slot.get_or_insert(w);
+                        }
+                    }
+                }
                 let shading = attr(attrs, "bgcolor").and_then(parse_color).or(fmt.background);
                 self.cells.push(Cell {
                     blocks: Vec::new(),
-                    colspan: num("colspan").unwrap_or(1),
+                    colspan,
                     rowspan: attr(attrs, "rowspan").and_then(|v| v.trim().parse::<u32>().ok()).map(|v| v.clamp(1, 1000)).unwrap_or(1),
                     covered: false,
                     header: name == "th",
                     shading,
-                    borders: None,
+                    borders: cell_borders(&css),
                 });
                 fmt.background = None;
                 self.containers.push(Vec::new());
             }
             _ => {}
         }
-        self.stack.push(El { name: name.to_string(), kind, fmt, align, preserve, page_break, used: false });
+        // The page's own margins (`body`, `html`) aren't its paragraphs'.
+        let spacing =
+            if (kind != ElKind::Inline || self.page) && !matches!(name, "body" | "html") { block_spacing(&css) } else { Spacing::default() };
+        let auto_margins = self.page && (name == "p" || matches!(kind, ElKind::Heading(_)));
+        self.stack.push(El { name: name.to_string(), kind, fmt, spacing, auto_margins, align, preserve, page_break, used: false });
     }
 
     fn end(&mut self, name: &str) {
@@ -1140,8 +1544,12 @@ pub fn parse(s: &str) -> Flow {
 
 /// [`parse`], loading pictures that aren't `data:` URIs through `images`.
 pub fn parse_with(s: &str, images: ImageLoader) -> Flow {
+    parse_in(s, images, false)
+}
+
+fn parse_in(s: &str, images: ImageLoader, page: bool) -> Flow {
     let mut lx = Lexer { s, pos: 0 };
-    let mut b = Builder::new(images);
+    let mut b = Builder::new(images, page);
     let mut guard = 0usize;
     while let Some(t) = lx.next() {
         guard += 1;
@@ -1162,7 +1570,11 @@ pub fn parse_with(s: &str, images: ImageLoader) -> Flow {
                     continue;
                 }
                 if matches!(name.as_str(), "script" | "style" | "noscript" | "template" | "textarea") && !self_close {
-                    lx.skip_past(&format!("</{name}"));
+                    let from = lx.pos;
+                    let to = lx.skip_past(&format!("</{name}"));
+                    if name == "style" {
+                        parse_sheet(s.get(from..to).unwrap_or(""), &mut b.sheet);
+                    }
                     lx.skip_past(">");
                     continue;
                 }
@@ -1264,11 +1676,26 @@ pub fn import_with(s: &str, images: ImageLoader) -> Document {
     model::to_doc(&parse_with(s, images))
 }
 
-/// [`import_with`] onto `page` (its size and margins), which tables size to: HTML gives no page
+/// A web page opened as a document, as Word opens one (a file, or a document's HTML
+/// `w:altChunk`): its text is Times New Roman 12 pt on single lines, headings bold and black at
+/// the sizes browsers give them, and a `p` or heading whose CSS leaves a margin out (or writes it
+/// invalidly) gets HTML's automatic spacing there; a margin a span states replaces the one its
+/// paragraph states (both as Word's import does). [`import`] reads a pasted fragment, which takes
+/// the document's own formatting instead (but its CSS still applies).
+pub fn import_page(s: &str, images: ImageLoader) -> Document {
+    model::to_doc(&parse_in(s, images, true))
+}
+
+/// [`import_page`] onto `page` (its size and margins), which tables size to: HTML gives no page
 /// size, so the caller picks it (the region's paper, #1381).
 pub fn import_on(s: &str, images: ImageLoader, page: &wordcraft_doc::SectionProps) -> Document {
-    model::to_doc_in(&parse_with(s, images), page.clone())
+    model::to_doc_in(&parse_in(s, images, true), page.clone())
 }
+
+/// The font of a web page's text when its CSS names none.
+pub const PAGE_FONT: &str = "Times New Roman";
+/// Heading sizes on a web page, `h1`–`h6`, points.
+const PAGE_HEADING_SIZES: [f32; 6] = [24.0, 18.0, 13.5, 12.0, 10.0, 7.5];
 
 // ---------------------------------------------------------------------------------------------
 // Export
@@ -1784,5 +2211,153 @@ mod tests {
     #[test]
     fn entities() {
         assert_eq!(unescape("a &lt;b&gt; &#65;&#x42; &bogus; &"), "a <b> AB &bogus; &");
+    }
+
+    fn paras(f: &Flow) -> Vec<&Para> {
+        f.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None }).collect()
+    }
+    fn fmt_of(p: &Para) -> Fmt {
+        p.inlines.iter().find_map(|i| if let Inline::Text(_, f) = i { Some(f.clone()) } else { None }).unwrap_or_default()
+    }
+
+    #[test]
+    fn style_sheet_rules_apply_in_cascade_order() {
+        let f = parse(
+            "<style><!-- p { color: #00ff00; font-size: 10pt } .big { font-size: 20pt } p.big { font-weight: bold } \
+             /* a comment { } */ @media print { p { color: #ff0000 } } div p, li:hover { font-style: italic } .000003 { text-align: center } --></style>\
+             <p>plain</p><p class='big x'>big</p><p class=big style='font-size: 8pt'>inline wins</p><p class=000003>digits</p>",
+        );
+        let ps = paras(&f);
+        let (plain, big, inline, digits) = (fmt_of(ps[0]), fmt_of(ps[1]), fmt_of(ps[2]), fmt_of(ps[3]));
+        assert_eq!((plain.color, plain.size, plain.bold, plain.italic), (Some(wordcraft_doc::Rgb(0, 255, 0)), Some(10.0), false, false));
+        assert_eq!((big.size, big.bold), (Some(20.0), true));
+        assert_eq!(inline.size, Some(8.0));
+        assert_eq!(ps[3].align, Some(Align::Center));
+        assert_eq!(digits.size, Some(10.0));
+    }
+
+    #[test]
+    fn paragraph_css_states_spacing_indents_and_line_height() {
+        let f = parse(
+            "<style>p.a { margin: 6pt 1in 3pt; text-indent: -18pt; line-height: 150% }</style>\
+             <p class=a>a</p><p style='margin-top: 14,4px; margin-bottom: auto; line-height: 20pt'>b</p><p>c</p>",
+        );
+        let ps = paras(&f);
+        assert_eq!(
+            ps[0].spacing,
+            Spacing {
+                before: Some(6.0),
+                after: Some(3.0),
+                left: Some(72.0),
+                right: Some(72.0),
+                first: Some(-18.0),
+                line: Some(LineSpacing::Multiple(1.5)),
+                ..Spacing::default()
+            }
+        );
+        // Values that don't parse (a comma decimal, `auto`) state nothing.
+        assert_eq!(ps[1].spacing, Spacing { line: Some(LineSpacing::Exactly(20.0)), ..Spacing::default() });
+        assert_eq!(ps[2].spacing, Spacing::default());
+    }
+
+    #[test]
+    fn a_page_opens_as_word_opens_one() {
+        let html = "<style>p.k { margin-bottom: 13px } span.z { margin: 0in }</style>\
+                    <p>first</p><h1>Head</h1><p class=k><span class=z>kept</span></p><p class=k>own</p><div>bare</div><p>&nbsp;</p>";
+        let f = parse_in(html, &|_| None, true);
+        let ps = paras(&f);
+        // Times New Roman 12 pt on single lines; headings bold and black at a browser's sizes.
+        let first = fmt_of(ps[0]);
+        assert_eq!((first.font.as_deref(), first.size), (Some(PAGE_FONT), Some(12.0)));
+        assert_eq!(ps[0].spacing.line, Some(LineSpacing::Multiple(1.0)));
+        let head = fmt_of(ps[1]);
+        assert_eq!((head.bold, head.size, head.color), (true, Some(24.0), Some(wordcraft_doc::Rgb(0, 0, 0))));
+        // Automatic spacing where a p or heading leaves its margins out (layout drops it at the
+        // top of the page and of a cell).
+        let auto = |p: &Para| (p.spacing.before_auto, p.spacing.after_auto, p.spacing.before, p.spacing.after);
+        assert_eq!(auto(ps[0]), (true, true, None, None));
+        assert_eq!(auto(ps[1]), (true, true, None, None));
+        // A span's margin replaces the one its paragraph states; the one it leaves out stays automatic.
+        assert_eq!(auto(ps[2]), (true, false, None, Some(0.0)));
+        assert_eq!(auto(ps[3]), (true, false, None, Some(9.75)));
+        // Other blocks get no automatic spacing.
+        assert_eq!(auto(ps[4]), (false, false, None, None));
+        // The document says so, and the empty paragraph's mark keeps its size.
+        let d = model::to_doc(&f);
+        let props = |i: usize| match &*d.body[i] {
+            wordcraft_doc::Block::Para(p) => p.clone(),
+            b => panic!("{b:?}"),
+        };
+        assert_eq!((props(0).props.space_before_auto, props(0).props.space_after_auto), (Some(true), Some(true)));
+        assert_eq!((props(2).props.space_after_auto, props(2).props.space_after), (None, Some(0.0)));
+        assert_eq!(props(5).mark.size, Some(12.0));
+        // `<p>&nbsp;</p>` keeps the size of its space for its line.
+        assert!(ps[5].inlines.is_empty());
+        assert_eq!(ps[5].mark.as_ref().and_then(|m| m.size), Some(12.0));
+        // A fragment (a paste) keeps the document's own formatting.
+        let pasted = parse(html);
+        assert_eq!(fmt_of(paras(&pasted)[0]).font, None);
+        assert_eq!(paras(&pasted)[0].spacing, Spacing::default());
+    }
+
+    #[test]
+    fn cells_give_their_columns_widths() {
+        let f = parse(
+            "<style>td.n { width: 42px }</style><table border=1><tr><td colspan=3>t</td></tr><tr><td class=n>1</td><td width=200>a</td><td style='width: 2in'>b</td></tr></table>",
+        );
+        let FBlock::Table(t) = &f.blocks[0] else { panic!("{:?}", f.blocks) };
+        assert_eq!(t.widths, [31.5, 150.0, 144.0]);
+        // A column without a width leaves them all to the layout.
+        let f = parse("<table><tr><td width=100>a</td><td>b</td></tr></table>");
+        let FBlock::Table(t) = &f.blocks[0] else { panic!() };
+        assert!(t.widths.is_empty());
+    }
+
+    #[test]
+    fn cells_take_their_css_borders() {
+        use wordcraft_doc::props::{Border, BorderStyle};
+        let f = parse(
+            "<style>td.b { border-top: solid windowtext 1px; border-bottom: 2pt double #ff0000; border-left: none }</style><table><tr><td class=b>a</td><td>b</td></tr></table>",
+        );
+        let FBlock::Table(t) = &f.blocks[0] else { panic!() };
+        let b = t.rows[0][0].borders.expect("borders");
+        assert_eq!(b.top, Some(Border::single(0.75)));
+        assert_eq!(b.bottom, Some(Border { style: BorderStyle::Double, width: 2.0, color: Some(wordcraft_doc::Rgb(255, 0, 0)), space: 0.0 }));
+        assert_eq!(b.left.map(|l| l.style), Some(BorderStyle::None));
+        assert_eq!(b.right, None);
+        assert_eq!(t.rows[0][1].borders, None);
+    }
+
+    #[test]
+    fn style_sheet_edge_cases() {
+        let f = parse_in(
+            "<style>@charset \"utf-8\"; @import url(a.css); p.a { color: #0000ff } body { margin: 20px } p.b { margin: 10 5% medium }</style>\
+             <body><p class=a>a</p>bare<p class=b>b</p></body>",
+            &|_| None,
+            true,
+        );
+        let ps = paras(&f);
+        // A rule right after statement at-rules still applies.
+        assert_eq!(fmt_of(ps[0]).color, Some(wordcraft_doc::Rgb(0, 0, 255)));
+        // The body's margins aren't the paragraphs' indents.
+        assert_eq!((ps[1].spacing.left, ps[1].spacing.before), (None, None));
+        // Bare numbers, percentages and keywords state no margin: automatic spacing stays.
+        assert_eq!((ps[2].spacing.before_auto, ps[2].spacing.left), (true, None));
+        // The `style` attribute wins even over a sheet with more declarations than are read.
+        let many = (0..600).map(|i| format!("x-{i}: 1")).collect::<Vec<_>>().join(";");
+        let f = parse(&format!("<style>p {{ {many}; color: #ff0000 }}</style><p style='color: #00ff00'>c</p>"));
+        assert_eq!(fmt_of(paras(&f)[0]).color, Some(wordcraft_doc::Rgb(0, 255, 0)));
+    }
+
+    #[test]
+    fn hostile_style_sheets_never_panic() {
+        // One declaration block shared by many selectors isn't copied for each.
+        let selectors = vec!["p"; 20_000].join(",");
+        let huge = format!("<style>{selectors} {{ color: red; {} }}</style><p>x</p>", "x: y;".repeat(200_000));
+        let _ = parse_in(&huge, &|_| None, true);
+        let many = ".a { color: red } ".repeat(20_000);
+        for css in ["{", "}", "p {", "@media { p { x } ", "p { color: red", "/* open", ".{}", "p..a{}", "\u{0}.é{x:y}", many.as_str()] {
+            let _ = parse_in(&format!("<style>{css}</style><p class='a é'>x</p><td style='width: 1e40px'>y</td>"), &|_| None, true);
+        }
     }
 }

@@ -311,6 +311,25 @@ fn box_para(story: u32, id: u32) -> Blocks {
 }
 
 #[test]
+fn adopting_relinks_lists_in_deeply_nested_tables() {
+    // As #1339: a list paragraph 20 tables down takes the list it is brought in with.
+    let mut ours = Document::from_text("ours");
+    let our_list = ours.numbering.add_list(numbering::ListKind::Bullet);
+    let mut theirs = Document::from_text("theirs");
+    let list = theirs.numbering.add_list(numbering::ListKind::Bullet);
+    assert_eq!(list, our_list);
+    let mut p = Paragraph::with_text("item", CharProps::default());
+    p.props.numbering = Some(props::NumRef { num: list, level: 0 });
+    theirs.body = nested_tables(20, vec![para_block(p)]);
+    let mut nums = Vec::new();
+    for b in &ours.adopt(theirs).blocks {
+        edit::each_para(b, 0, &mut |p| nums.extend(p.props.numbering.map(|n| n.num)));
+    }
+    assert_eq!(nums.len(), 1);
+    assert_ne!(nums[0], our_list);
+}
+
+#[test]
 fn text_boxes_shown_from_deeply_nested_tables_are_kept() {
     // #1339: the paragraph walk stopped 16 tables down, so a box shown only from deeper was taken
     // for unshown and the next edit pruned its story.
