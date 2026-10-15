@@ -22,10 +22,10 @@ use std::collections::HashMap;
 // crates they come from.
 pub use craft_cloud::{Capability, Entry, EntryKind};
 pub use craft_ui::cloud::{
-    Account, Busy, CloudApp, CloudBackend, CloudFiles, Conflict, CopyFormat, DocumentKind, Event, Fault, Folder, Job, Link, Origin, Post, Source,
-    UNAVAILABLE, available, browse, can_converse, conflict_modal, destination_name, has_target, link, load_shared, open_entry, open_page, origin,
-    parent_of, prefers_cloud, progress, pump, reload_active, save, save_as, save_page, share_button, shares, sign_in, sign_out, start, who,
-    work_together,
+    Account, Busy, CloudApp, CloudBackend, CloudFiles, Conflict, CopyFormat, Destination, DocumentKind, Event, Fault, Folder, Job, Link, Origin,
+    Post, Source, UNAVAILABLE, available, browse, can_converse, conflict_modal, destination_name, has_target, link, load_shared, open_entry,
+    open_page, origin, parent_of, prefers_cloud, progress, pump, reload_active, save, save_as, save_page, share_button, shares, sign_in, sign_out,
+    start, who, work_together,
 };
 use egui::{Color32, Painter, Rect, Ui};
 use serde_json::{Value as Json, json};
@@ -149,23 +149,6 @@ fn service_host() -> String {
         .unwrap_or_default()
 }
 
-/// The file name the save in flight is about, which decides the format its bytes are written in.
-///
-/// `save_name` is that name whenever a Save As is what is happening. The Save page is where it is
-/// typed, and the share dialog hands over what the user called the copy. A Save that writes back
-/// clears it, and the entry's own name answers instead. So a document opened as `.odt` is written
-/// back as ODT, and a copy named `.docx` is written as a Word document.
-fn target_name(app: &WordApp) -> String {
-    let typed = document_name(&app.cloud.save_name);
-    if !typed.is_empty() {
-        return typed;
-    }
-    match origin(app) {
-        Some(origin) => origin.entry.name.clone(),
-        None => document_name(&app.title_stem()),
-    }
-}
-
 /// Answers from the cloud worker, and anything still in flight. Called once a frame.
 pub fn poll(app: &mut WordApp, ctx: &egui::Context) {
     pump(app, ctx);
@@ -261,11 +244,11 @@ impl CloudApp for WordApp {
         Ok(Some(self.session.document_id()))
     }
 
-    fn encode(&mut self, uid: u64) -> Result<Vec<u8>, String> {
+    fn encode(&mut self, uid: u64, into: Destination<'_>) -> Result<Vec<u8>, String> {
         if uid != self.session.document_id() {
             return Err("that document is no longer open".to_owned());
         }
-        let name = target_name(self);
+        let name = into.name.to_owned();
         // A save is a save, cloud or not: the modified stamp and the revision advance, as they do
         // for a save to a file and for the browser's download.
         self.session.stamp_save();
