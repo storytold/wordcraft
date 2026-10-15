@@ -654,15 +654,45 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     }
                     // Reading zoom changes only reading presentation, never the normal view zoom.
                     let mut v = if reading { app.session.view.read_zoom } else { app.canvas.scale / crate::canvas::PX_PER_PT };
-                    let slider = egui::Slider::new(&mut v, if reading { 0.75..=1.5 } else { 0.1..=5.0 }).logarithmic(!reading).show_value(false);
                     ui.spacing_mut().slider_width = 110.0;
-                    let response = ui.add(slider);
-                    response.widget_info(|| {
-                        egui::WidgetInfo::labeled(egui::Role::Slider, ui.is_enabled(), if reading { tl!("Text Size") } else { tl!("Zoom") })
-                    });
-                    if response.changed() {
-                        let command = if reading { "view.readTextSize" } else { "view.zoom" };
-                        let _ = app.run(command, json!({"value": (v * 100.0).round()}));
+
+                    if reading {
+                        let slider = egui::Slider::new(&mut v, 0.75..=1.5).show_value(false);
+                        if ui.add(slider).changed() {
+                            let _ = app.run("view.readTextSize", json!({"value": (v * 100.0).round()}));
+                        }
+                    } else {
+                        // Word's zoom slider: 10-100% fills the left half of the track and 100-500%
+                        // the right, so 100% sits in the middle where people work, and a drag lands
+                        // on whole percents.
+                        let z = (v * 100.0).round();
+                        let mut frac = zoom_slider_frac(z);
+                        let slider = egui::Slider::new(&mut frac, 0.0..=1.0).show_value(false);
+                        let resp = ui.add(slider);
+                        if resp.changed() {
+                            let _ = app.run("view.zoom", json!({"value": zoom_slider_percent(frac)}));
+                        }
+                        // The wheel over the slider zooms 10% a notch, like Word. The canvas only
+                        // scrolls when the pointer is over it, so nothing scrolls the page from
+                        // here. (Touchpads report points, not whole notches, and keep scrolling.)
+                        if resp.hovered() {
+                            let notches = ui.input(|i| {
+                                i.events
+                                    .iter()
+                                    .filter_map(|e| match e {
+                                        egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta, .. }
+                                            if delta.x == 0.0 && delta.y != 0.0 && delta.y.fract() == 0.0 =>
+                                        {
+                                            Some(delta.y)
+                                        }
+                                        _ => None,
+                                    })
+                                    .sum::<f32>()
+                            });
+                            if notches != 0.0 {
+                                let _ = app.run("view.zoom", json!({"value": (z + 10.0 * notches.signum()).clamp(10.0, 500.0)}));
+                            }
+                        }
                     }
                     if small_icon(ui, "minus", tl!("Zoom Out")) {
                         if reading {
@@ -762,5 +792,274 @@ impl WordApp {
     }
 }
 
+/// Word's status-bar zoom slider: 10-100% fills the left half of the track and 100-500% the
+/// right, so 100% sits in the middle where people work. Maps a zoom percentage to the slider's
+/// 0..=1 fraction.
+fn zoom_slider_frac(percent: f32) -> f32 {
+    let z = percent.clamp(10.0, 500.0);
+    if z <= 100.0 { 0.5 * (z / 10.0).log10() } else { 0.5 + 0.5 * (z / 100.0).log(5.0) }
+}
+
+/// The inverse of [`zoom_slider_frac`], snapped to whole percents like Word's slider.
+fn zoom_slider_percent(frac: f32) -> f32 {
+    let f = frac.clamp(0.0, 1.0);
+    if f <= 0.5 { (10.0 * 10.0f32.powf(2.0 * f)).round() } else { (100.0 * 5.0f32.powf(2.0 * f - 1.0)).round() }
+}
+
 #[cfg(test)]
 mod tests;
+
+mod tests {
+    use super::*;
+
+    fn ctx() -> egui::Context {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        crate::theme::apply(&ctx, crate::theme::Appearance::Light);
+        ctx.run_ui(egui::RawInput::default(), |_| {}).drop_without_applying_deltas();
+        ctx
+    }
+
+    fn frame(ctx: &egui::Context, n: &mut u32, events: Vec<egui::Event>, a: &mut WordApp) {
+        *n += 1;
+        let input = egui::RawInput { time: Some(f64::from(*n) / 60.0), predicted_dt: 1.0 / 60.0, events, ..Default::default() };
+        ctx.run_ui(input, |ui| title_bar(a, ui)).drop_without_applying_deltas();
+    }
+
+    fn click(ctx: &egui::Context, n: &mut u32, pos: egui::Pos2, a: &mut WordApp) {
+        let button = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        frame(ctx, n, vec![egui::Event::PointerMoved(pos), button(true)], a);
+        frame(ctx, n, vec![button(false)], a);
+    }
+
+    /// #701: the arrow beside Undo lists the session's undo steps, newest first; clicking the third
+    /// row undoes three steps at once.
+    #[test]
+    fn undo_list_matches_the_session_and_undoes_up_to_the_clicked_row() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.run("text.insert", json!({"text": "Hello"})).unwrap();
+        a.run("select.all", json!({})).unwrap();
+        a.run("format.bold", json!({})).unwrap();
+        a.run("format.italic", json!({})).unwrap();
+        a.run("caret.docEnd", json!({})).unwrap();
+        a.run("text.insert", json!({"text": " world"})).unwrap();
+        let session: Vec<String> = a.session.undo_history().into_iter().map(str::to_string).collect();
+        assert_eq!(session, ["Typing", "Italic", "Bold", "Typing"]);
+        assert_eq!(undo_list_rows(&a), session);
+        assert_eq!(undo_list_footer(0), "Cancel");
+        assert_eq!(undo_list_footer(1), "Undo 1 Action");
+        assert_eq!(undo_list_footer(3), "Undo 3 Actions");
+
+        let (ctx, mut n) = (ctx(), 0);
+        frame(&ctx, &mut n, vec![], &mut a);
+        let arrow = ctx.read_response(undo_list_button_id()).unwrap();
+        let popup = egui::Popup::default_response_id(&arrow);
+        click(&ctx, &mut n, arrow.rect.center(), &mut a);
+        assert!(egui::Popup::is_id_open(&ctx, popup), "the arrow opens the Undo list");
+        frame(&ctx, &mut n, vec![], &mut a);
+        for i in 0..4 {
+            assert!(ctx.read_response(undo_list_row_id(i)).is_some(), "row {i} is drawn");
+        }
+        assert!(ctx.read_response(undo_list_row_id(4)).is_none(), "one row per step");
+        let third = ctx.read_response(undo_list_row_id(2)).unwrap();
+        click(&ctx, &mut n, third.rect.center(), &mut a);
+        assert_eq!(a.session.undo_history(), ["Typing"], "three steps undone in one go");
+        assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Hello");
+        frame(&ctx, &mut n, vec![], &mut a);
+        assert!(!egui::Popup::is_id_open(&ctx, popup), "the list closes");
+    }
+
+    /// #1975: the zoom percentage gains and loses digits (9% → 100% → 500%); the controls to its
+    /// left must not shift with it.
+    #[test]
+    fn status_bar_controls_hold_still_across_zoom_levels() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        let ctx = ctx();
+        ctx.enable_accesskit();
+        let names = ["Focus", "Print Layout", "Web Layout"];
+        let mut seen: Vec<(f32, Vec<f64>)> = Vec::new();
+        for (n, zoom) in [10.0_f32, 9.0, 100.0, 500.0].into_iter().enumerate() {
+            a.canvas.scale = zoom / 100.0 * crate::canvas::PX_PER_PT;
+            let input = egui::RawInput {
+                time: Some(n as f64 / 60.0),
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 800.0))),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| status_bar(&mut a, ui));
+            out.textures_delta.clear();
+            let update = out.platform_output.accesskit_update.take().unwrap();
+            let xs: Vec<f64> = names
+                .iter()
+                .map(|name| {
+                    let node =
+                        update.nodes.iter().find(|(_, node)| node.label() == Some(*name)).unwrap_or_else(|| panic!("{name} is drawn")).1.clone();
+                    node.bounds().unwrap().x0
+                })
+                .collect();
+            seen.push((zoom, xs));
+        }
+        let first = &seen[0].1;
+        for (zoom, xs) in &seen {
+            assert_eq!(xs, first, "status bar controls moved at {zoom}% zoom");
+        }
+    }
+
+    /// #1903: the footer's Cancel row closes the Undo list without undoing anything.
+    #[test]
+    fn undo_list_cancel_closes_without_undoing() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.run("text.insert", json!({"text": "Hello"})).unwrap();
+        let before: Vec<String> = a.session.undo_history().into_iter().map(str::to_string).collect();
+        assert!(!before.is_empty());
+
+        let (ctx, mut n) = (ctx(), 0);
+        frame(&ctx, &mut n, vec![], &mut a);
+        let arrow = ctx.read_response(undo_list_button_id()).unwrap();
+        let popup = egui::Popup::default_response_id(&arrow);
+        click(&ctx, &mut n, arrow.rect.center(), &mut a);
+        assert!(egui::Popup::is_id_open(&ctx, popup), "the arrow opens the Undo list");
+        frame(&ctx, &mut n, vec![], &mut a);
+        let cancel = ctx.read_response(undo_list_cancel_id()).expect("Cancel is drawn");
+        click(&ctx, &mut n, cancel.rect.center(), &mut a);
+        let after: Vec<String> = a.session.undo_history().into_iter().map(str::to_string).collect();
+        assert_eq!(after, before, "nothing undone");
+        frame(&ctx, &mut n, vec![], &mut a);
+        assert!(!egui::Popup::is_id_open(&ctx, popup), "Cancel closes the list");
+    }
+
+    #[test]
+    fn mac_title_bar_centres_and_clears_the_traffic_lights() {
+        // The lights are centred in the bar, and content keeps the same gap after them.
+        let margin = (MAC_TITLE_BAR - MAC_LIGHT) / 2.0;
+        let lights_end = MAC_LIGHTS_LEFT + 2.0 * MAC_LIGHT_PITCH + MAC_LIGHT;
+        assert_eq!(MAC_CONTENT_LEFT - lights_end, margin);
+        // `egui::Margin` is in `i8`.
+        assert!(MAC_CONTENT_LEFT <= f32::from(i8::MAX));
+    }
+
+    #[test]
+    fn mac_title_bar_follows_the_measured_lights() {
+        // The standard lights give the standard bar.
+        let lights_end = MAC_LIGHTS_LEFT + 2.0 * MAC_LIGHT_PITCH + MAC_LIGHT;
+        assert_eq!(MacTitleBar::around_lights(lights_end, MAC_TITLE_BAR / 2.0, MAC_LIGHT), MacTitleBar::default());
+        // Larger, lower lights (macOS 26): a taller bar, and content clear of the green button.
+        let bar = MacTitleBar::around_lights(78.0, 18.0, 14.0);
+        assert_eq!(bar.height, 36.0);
+        assert_eq!(bar.content_left, 89.0);
+        // Never tighter than the standard layout.
+        assert_eq!(MacTitleBar::around_lights(40.0, 10.0, 12.0), MacTitleBar::default());
+    }
+
+    /// #1945: Hide Quick Access Toolbar, the last item of the toolbar's menu, takes the toolbar's
+    /// buttons and its … button out of the title bar, which keeps its title; the command brings
+    /// them back.
+    #[test]
+    fn hide_quick_access_toolbar_takes_the_toolbar_out_of_the_title_bar() {
+        use egui_kittest::kittest::Queryable;
+        let a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                // The fonts `logic` installs take effect on the next frame, as `WordApp::ui` waits.
+                if app.fonts_frames < 2 {
+                    app.fonts_frames += 1;
+                    return;
+                }
+                title_bar(app, ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        let drawn = |h: &egui_kittest::Harness<'static, WordApp>, id: &str| h.ctx.read_response(qat_button_id(id)).is_some();
+        for id in ["file.save", "edit.undo", "edit.redo"] {
+            assert!(drawn(&h, id), "{id} is on the toolbar");
+        }
+        let at = h.ctx.read_response(qat_menu_button_id()).expect("the … button").rect.center();
+        h.event(egui::Event::PointerMoved(at));
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+        }
+        h.run_steps(2);
+        h.get_by_label("Hide Quick Access Toolbar").click();
+        // `read_response` also reads the frame before last, so run two frames past the change.
+        h.run_steps(3);
+        assert!(!h.state().ui.quick_access_toolbar, "the menu's last item hides the toolbar");
+        assert!(h.query_by_label("Hide Quick Access Toolbar").is_none(), "and closes the menu");
+        for id in ["file.save", "edit.undo", "edit.redo"] {
+            assert!(!drawn(&h, id), "{id} is gone");
+        }
+        assert!(h.ctx.read_response(qat_menu_button_id()).is_none(), "so is the … button");
+        assert!(h.query_by_label_contains("Not saved").is_some(), "the title is still drawn");
+        h.state_mut().run("ui.quickAccessToolbar", json!({"value": true})).unwrap();
+        h.run_steps(2);
+        for id in ["file.save", "edit.undo", "edit.redo"] {
+            assert!(drawn(&h, id), "{id} is back");
+        }
+        assert!(h.ctx.read_response(qat_menu_button_id()).is_some());
+    }
+
+    /// #3040: clicking a row in the Undo list hands the keyboard back to the document.
+    #[test]
+    fn undo_list_row_returns_focus_to_the_document() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.run("text.insert", json!({"text": "Hello"})).unwrap();
+        assert_eq!(a.session.undo_history().len(), 1);
+
+        let (ctx, mut n) = (ctx(), 0);
+        frame(&ctx, &mut n, vec![], &mut a);
+        let arrow = ctx.read_response(undo_list_button_id()).unwrap();
+        let popup = egui::Popup::default_response_id(&arrow);
+        click(&ctx, &mut n, arrow.rect.center(), &mut a);
+        assert!(egui::Popup::is_id_open(&ctx, popup), "the arrow opens the Undo list");
+        frame(&ctx, &mut n, vec![], &mut a);
+        let row = ctx.read_response(undo_list_row_id(0)).unwrap();
+        a.canvas.want_focus = false;
+        click(&ctx, &mut n, row.rect.center(), &mut a);
+        assert!(a.canvas.want_focus, "the row click returns focus to the document");
+        assert!(a.session.undo_history().is_empty(), "the step was undone");
+    }
+}
+
+#[cfg(test)]
+mod zoom_slider_tests {
+    use super::*;
+
+    #[test]
+    fn hundred_percent_sits_in_the_middle_of_the_track() {
+        assert_eq!(zoom_slider_frac(100.0), 0.5);
+        assert_eq!(zoom_slider_frac(10.0), 0.0);
+        assert_eq!(zoom_slider_frac(500.0), 1.0);
+        assert_eq!(zoom_slider_percent(0.5), 100.0);
+        assert_eq!(zoom_slider_percent(0.0), 10.0);
+        assert_eq!(zoom_slider_percent(1.0), 500.0);
+    }
+
+    #[test]
+    fn each_half_of_the_track_is_logarithmic() {
+        // The left half runs 10-100%: a quarter of the track is 10*sqrt(10).
+        assert!((zoom_slider_frac(10.0 * 10.0f32.sqrt()) - 0.25).abs() < 1e-4);
+        // The right half runs 100-500%: three quarters of the track is 100*sqrt(5).
+        assert!((zoom_slider_frac(100.0 * 5.0f32.sqrt()) - 0.75).abs() < 1e-4);
+        assert_eq!(zoom_slider_percent(0.25), 32.0);
+        assert_eq!(zoom_slider_percent(0.75), 224.0);
+    }
+
+    #[test]
+    fn drags_land_on_whole_percents_and_round_trip() {
+        for frac in [0.0f32, 0.1, 0.37, 0.5, 0.62, 0.9, 1.0] {
+            let z = zoom_slider_percent(frac);
+            assert_eq!(z, z.round(), "frac {frac} lands on a whole percent: {z}");
+            assert!((10.0..=500.0).contains(&z), "frac {frac} stays in range: {z}");
+            assert!((zoom_slider_frac(z) - frac).abs() < 0.01, "round trip {frac} -> {z}");
+        }
+    }
+
+    #[test]
+    fn values_outside_the_track_clamp() {
+        assert_eq!(zoom_slider_frac(0.0), 0.0);
+        assert_eq!(zoom_slider_frac(1000.0), 1.0);
+        assert_eq!(zoom_slider_percent(-1.0), 10.0);
+        assert_eq!(zoom_slider_percent(2.0), 500.0);
+    }
+}
