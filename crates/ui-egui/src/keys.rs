@@ -126,6 +126,11 @@ fn dispatch(app: &mut WordApp, key: Key, m: Modifiers) -> bool {
     let Some(name) = key_name(key) else { return false };
     let reg = app.session.registry.clone();
     if let Some(spec) = app.session.keymap.resolve(&reg, &combo(m, name, true)) {
+        // On macOS Option types characters: a shortcut that can't run here leaves its key's
+        // character to be typed (Option+Shift+- outside Outline view is an em dash, #1933).
+        if option_types(m) && (spec.enabled)(&app.session).is_some() {
+            return false;
+        }
         let _ = app.run(spec.id, json!({}));
         return true;
     }
@@ -138,6 +143,11 @@ fn dispatch(app: &mut WordApp, key: Key, m: Modifiers) -> bool {
         return true;
     }
     false
+}
+
+/// Option held without ⌘ or Control on macOS, where it types the key's alternate character.
+fn option_types(m: Modifiers) -> bool {
+    cfg!(target_os = "macos") && m.alt && !m.command && !m.mac_cmd && !m.ctrl
 }
 
 /// How a command bound to a plain key runs when Shift is also held and nothing is bound to the
@@ -724,6 +734,24 @@ mod tests {
 
     fn alt_key(key: Key, pressed: bool, repeat: bool) -> egui::Event {
         egui::Event::Key { key, physical_key: Some(key), pressed, repeat, modifiers: Modifiers { alt: true, ..Default::default() } }
+    }
+
+    /// Option+Shift+- types an em dash on macOS: outside Outline view the Alt+Shift+- shortcut
+    /// (Collapse) doesn't apply, so the key's text is typed; in Outline view it still collapses (#1933).
+    #[test]
+    fn option_shift_dash_types_an_em_dash_outside_outline_view() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let (ctx, mut a) = alt_frame_app();
+        let text = |a: &WordApp| a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end().to_string();
+        let m = Modifiers { alt: true, shift: true, ..Default::default() };
+        let key = |pressed| egui::Event::Key { key: Key::Minus, physical_key: Some(Key::Minus), pressed, repeat: false, modifiers: m };
+        alt_frame(&ctx, &mut a, vec![key(true), egui::Event::Text("—".into()), key(false)]);
+        assert_eq!(text(&a), "—");
+        let _ = a.run("view.outline", json!({}));
+        alt_frame(&ctx, &mut a, vec![key(true), egui::Event::Text("—".into()), key(false)]);
+        assert_eq!(text(&a), "—", "Collapse runs instead of typing");
     }
 
     /// Holding a digit with Alt adds it once: its auto-repeat presses don't (#961).
