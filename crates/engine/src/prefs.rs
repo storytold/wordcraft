@@ -67,6 +67,10 @@ pub struct Prefs {
     /// Which documents' macros may run: `disable`, `prompt` (once enabled for the document) or
     /// `enable` (Developer › Macro Security).
     pub macro_security: String,
+    /// Live sessions: this person's stable id (made on first use) and colour (`#RRGGBB`); their
+    /// name is the author name.
+    pub collab_user_id: String,
+    pub collab_color: String,
 }
 
 impl Default for Prefs {
@@ -95,6 +99,8 @@ impl Default for Prefs {
             autocorrect: Default::default(),
             disabled_plugins: Vec::new(),
             macro_security: "prompt".into(),
+            collab_user_id: String::new(),
+            collab_color: String::new(),
         }
     }
 }

@@ -41,6 +41,20 @@ impl RequestError {
     }
 }
 
+/// Sends lines to a running plugin without waiting for anything (protocol 2: notifications and
+/// answers to the plugin's own requests, interleaved with the app's requests).
+#[derive(Clone)]
+pub struct Notifier(std::sync::mpsc::Sender<Vec<u8>>);
+
+impl Notifier {
+    /// Sends one JSON-RPC message.
+    pub fn send(&self, msg: &Json) -> Result<(), String> {
+        let mut bytes = serde_json::to_vec(msg).map_err(|e| format!("encoding a message: {e}"))?;
+        bytes.push(b'\n');
+        self.0.send(bytes).map_err(|_| "the plugin stopped reading".to_string())
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub use native::Connection;
 
@@ -74,6 +88,9 @@ mod web {
         ) -> Result<Json, RequestError> {
             Err(RequestError::fatal("plugins need the desktop app or the CLI"))
         }
+        pub fn sender(&self) -> Option<Notifier> {
+            None
+        }
         pub fn shutdown(self) {}
     }
 }
@@ -83,10 +100,13 @@ mod web {
 mod native {
     use std::io::{BufRead, BufReader, Read, Write};
     use std::process::{Child, Command, Stdio};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
     use std::time::Instant;
 
     use serde_json::json;
+
+    use crate::push::{self, FloodMeter, Incoming};
 
     use super::*;
 
@@ -102,6 +122,9 @@ mod native {
         to_plugin: Sender<Vec<u8>>,
         from_plugin: Receiver<Result<Json, String>>,
         next_id: u64,
+        /// A request of the app's is waiting for its answer: the plugin's own requests go to it
+        /// (protocol 1.1 `host/…`), not to the push queue.
+        in_request: std::sync::Arc<AtomicBool>,
     }
 
     impl Connection {
@@ -139,34 +162,66 @@ mod native {
 
             let (inbox, from_plugin) = channel::<Result<Json, String>>();
             let rid = id.clone();
+            let in_request: std::sync::Arc<AtomicBool> = Default::default();
+            let busy = in_request.clone();
+            // Protocol 2: standard output is read all the time. Answers to the app's requests go
+            // to the request waiting for them; what the plugin says on its own goes to the push
+            // queue the app's main loop takes from.
             let reader = std::thread::Builder::new().name(format!("plugin-{id}-out")).spawn(move || {
                 let mut out = BufReader::new(stdout);
                 let mut line = Vec::new();
+                let mut meter = FloodMeter::default();
+                let start = Instant::now();
+                let mut flooded = false;
                 loop {
                     line.clear();
                     match out.by_ref().take(MAX_LINE).read_until(b'\n', &mut line) {
                         Ok(0) => {
+                            push::push(&rid, Incoming::Exited("the plugin exited".into()));
                             let _ = inbox.send(Err("the plugin exited".into()));
                             break;
                         }
                         Ok(_) if !line.ends_with(b"\n") && line.len() as u64 >= MAX_LINE => {
+                            push::push(&rid, Incoming::Exited("the plugin sent a message larger than 64 MiB".into()));
                             let _ = inbox.send(Err("the plugin sent a message larger than 64 MiB".into()));
                             break;
                         }
                         Ok(_) => match serde_json::from_slice::<Json>(&line) {
                             Ok(msg) => {
-                                if inbox.send(Ok(msg)).is_err() {
+                                let method = msg.get("method").and_then(Json::as_str);
+                                // `host/…` requests during one of the app's requests are still
+                                // answered by that request (protocol 1.1).
+                                let pushed = method.is_some_and(|m| m.starts_with("collab/") || !busy.load(Ordering::SeqCst));
+                                if pushed {
+                                    if flooded {
+                                        continue;
+                                    }
+                                    if line.len() > push::MAX_PUSH_LINE {
+                                        log::warn!("plugin {rid}: dropped a message of {} bytes", line.len());
+                                        push::push(&rid, Incoming::Overlong);
+                                        continue;
+                                    }
+                                    if meter.hit(start.elapsed().as_secs()) {
+                                        log::warn!("plugin {rid}: more than {} messages a second: stopped", push::FLOOD_RATE);
+                                        flooded = true;
+                                        push::push(&rid, Incoming::Flood);
+                                        continue;
+                                    }
+                                    push::push(&rid, Incoming::Message(msg));
+                                } else if inbox.send(Ok(msg)).is_err() {
                                     break;
                                 }
                             }
                             Err(_) => {
                                 let text = String::from_utf8_lossy(&line);
                                 if !text.trim().is_empty() {
-                                    log::warn!("plugin {rid}: ignored a line that is not JSON: {}", text.trim());
+                                    let shown: String = text.trim().chars().take(300).collect();
+                                    log::warn!("plugin {rid}: ignored a line that is not JSON: {shown}");
                                 }
                             }
                         },
                         Err(e) => {
+                            push::push(&rid, Incoming::Exited(format!("reading from the plugin: {e}")));
                             let _ = inbox.send(Err(format!("reading from the plugin: {e}")));
                             break;
                         }
@@ -207,7 +262,7 @@ mod native {
                 let _ = child.wait();
                 return Err("can't start the plugin's I/O threads".into());
             }
-            Ok(Connection { id, stderr_tail, child, to_plugin, from_plugin, next_id: 1 })
+            Ok(Connection { id, stderr_tail, child, to_plugin, from_plugin, next_id: 1, in_request })
         }
 
         pub fn request(&mut self, method: &str, params: Json, timeout: Duration) -> Result<Json, RequestError> {
@@ -224,6 +279,25 @@ mod native {
         /// [`Connection::request_with`]; `hard`: `timeout` is the whole time the request has,
         /// however often the plugin calls the host meanwhile (events, protocol 1.2).
         pub fn request_bounded(
+            &mut self,
+            method: &str,
+            params: Json,
+            timeout: Duration,
+            hard: bool,
+            host: &mut HostHandler<'_>,
+        ) -> Result<Json, RequestError> {
+            self.in_request.store(true, Ordering::SeqCst);
+            let r = self.request_inner(method, params, timeout, hard, host);
+            self.in_request.store(false, Ordering::SeqCst);
+            r
+        }
+
+        /// A handle that sends to this plugin from anywhere, without the connection.
+        pub fn sender(&self) -> Option<Notifier> {
+            Some(Notifier(self.to_plugin.clone()))
+        }
+
+        fn request_inner(
             &mut self,
             method: &str,
             params: Json,

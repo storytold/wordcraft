@@ -346,7 +346,34 @@ mod protocol_1_2 {
         assert!(Manifest::parse(r#"{"id": "t.ev", "name": "Ev", "run": {"command": "true"}, "events": "documentSaved"}"#).is_err());
         let many = json!({"id": "t.ev", "name": "Ev", "run": {"command": "true"}, "events": vec!["documentSaved"; 65]});
         assert!(Manifest::parse(&many.to_string()).is_err());
-        assert_eq!(crate::FEATURES, ["dialogs", "open", "events", "document"]);
+        assert_eq!(crate::FEATURES, ["dialogs", "open", "events", "document", "push", "collab"]);
+    }
+
+    #[test]
+    fn transports_declare_collab_and_answer_with_a_room() {
+        let m = Manifest::parse(
+            r#"{"id": "t.live", "name": "Live", "run": {"command": "true"}, "collab": {"transport": "mqtt", "label": "Live (MQTT)"}}"#,
+        )
+        .unwrap();
+        assert_eq!(m.collab.as_ref().map(|c| c.transport.as_str()), Some("mqtt"));
+        let bad = r#"{"id": "t.live", "name": "Live", "run": {"command": "true"}, "collab": {"transport": ""}}"#;
+        assert!(Manifest::parse(bad).is_err(), "a transport needs a name");
+        assert!(Manifest::parse(r#"{"id": "t.p", "name": "P", "run": {"command": "true"}}"#).unwrap().collab.is_none());
+        let r = parse_reply(json!({"collab": {"join": {"room": "mqtt:x", "mode": "share"}}, "result": {"link": "craft+mqtt://h/x"}})).unwrap();
+        assert_eq!(r.collab_join, Some(json!({"room": "mqtt:x", "mode": "share"})));
+        assert!(parse_reply(json!({"collab": {"join": "mqtt:x"}})).is_err(), "`collab.join` is an object");
+        assert!(parse_reply(json!({"collab": {"join": null}})).unwrap().collab_join.is_none());
+    }
+
+    #[test]
+    fn flooding_is_cut_off_and_the_queue_is_bounded() {
+        // The flood meter (5 s over 1,000 messages a second) is tested in `push`; the queue keeps
+        // what it's given, per add-in.
+        crate::push::push("t.a", crate::push::Incoming::Overlong);
+        crate::push::push("t.b", crate::push::Incoming::Flood);
+        let a = crate::push::take_for("t.a");
+        assert_eq!(a.len(), 1);
+        assert!(crate::push::take_for("t.b").iter().any(|p| p.incoming == crate::push::Incoming::Flood));
     }
 
     #[test]

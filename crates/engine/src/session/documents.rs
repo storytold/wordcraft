@@ -255,6 +255,10 @@ impl Session {
             // Shared by every open document.
             // Names the document it belongs to, so it never applies to another one.
             review_style: _,
+            // A live session is about one document: activating another ends it
+            // (`collab::after_command`).
+            collab: _,
+            depth: _,
             user_dict_path: _,
             clipboard: _,
             clipboard_text: _,

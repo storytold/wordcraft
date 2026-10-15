@@ -3,6 +3,8 @@
 use wordcraft_doc::Document;
 
 #[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod rooms;
+#[cfg(not(target_arch = "wasm32"))]
 mod safe_save;
 
 /// Formats WordCraft opens.

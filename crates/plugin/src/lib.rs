@@ -20,6 +20,11 @@
 //! Protocol 1.2: a command's answer may ask for a dialog the app draws, or a local file to open
 //! ([`dialog`]); a plugin whose manifest declares `events` hears when documents open, save and
 //! close ([`events`]). `initialize` lists these in `host.features`.
+//!
+//! Protocol 2: every running plugin's standard output is read all the time; what a plugin says
+//! on its own (notifications, `collab/snapshot` and `host/log` requests) lands in [`push`] for
+//! the app's main loop. A plugin whose manifest declares `collab` is a co-editing transport: a
+//! command's answer may carry `collab.join`, and the app talks `collab/*` with it.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -28,6 +33,7 @@ pub mod events;
 pub mod install;
 pub mod office;
 mod process;
+pub mod push;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -40,13 +46,15 @@ use serde_json::{Value as Json, json};
 
 pub use dialog::{Dialog, DialogKind, OpenRequest};
 pub use events::{DocumentEvent, EventOutcome, events_in_flight, send_event, take_event_outcomes, wait_for_events};
-pub use process::{Connection, HostError, HostHandler, RequestError};
+pub use process::{Connection, HostError, HostHandler, Notifier, RequestError};
 
 /// The protocol version this host speaks (sent in `initialize`). Protocol 1.1 and 1.2 add to 1
 /// without changing it; a plugin checks `host.features` instead.
 pub const PROTOCOL_VERSION: u32 = 1;
-/// What this host does beyond protocol 1.1 (`initialize`'s `host.features`, protocol 1.2).
-pub const FEATURES: &[&str] = &["dialogs", "open", "events", "document"];
+/// What this host does beyond protocol 1.1 (`initialize`'s `host.features`): host drawn dialogs,
+/// opening files, document events and `context.document` (protocol 1.2); the push channel and
+/// co-editing (protocol 2).
+pub const FEATURES: &[&str] = &["dialogs", "open", "events", "document", "push", "collab"];
 /// This app's id in a manifest's `apps` and `uiFor`, and in `initialize`'s `host.id`.
 pub const HOST_ID: &str = "wordcraft";
 /// This app's name in `initialize`'s `host.name`.
@@ -113,6 +121,20 @@ pub struct Manifest {
     /// `documentClosed`. Names this host doesn't know are ignored.
     #[serde(default)]
     pub events: Vec<String>,
+    /// A co-editing transport (protocol 2): `{"transport": "mqtt", "label": "Live (MQTT)"}`.
+    /// Only such a plugin may join rooms.
+    #[serde(default)]
+    pub collab: Option<CollabDecl>,
+}
+
+/// A transport plugin's declaration (protocol 2).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CollabDecl {
+    /// The kind of transport (`mqtt`, `loopback`, `y-websocket`…).
+    pub transport: String,
+    /// What the Share dialog calls it.
+    #[serde(default)]
+    pub label: String,
 }
 
 /// A plugin that runs macros (`"macros": {"language": "VBA"}`): the Developer tab's Macros and
@@ -286,6 +308,11 @@ impl Manifest {
         if self.functions.len() > MAX_DECLARATIONS || self.commands.len() > MAX_DECLARATIONS || self.apps.len() > 64 {
             return Err(format!("{MANIFEST}: at most {MAX_DECLARATIONS} functions and {MAX_DECLARATIONS} commands"));
         }
+        if let Some(c) = &self.collab
+            && (c.transport.trim().is_empty() || c.transport.len() > 64 || c.label.chars().count() > MAX_LABEL)
+        {
+            return Err(format!("{MANIFEST}: `collab.transport` needs 1–64 characters and `collab.label` at most {MAX_LABEL}"));
+        }
         if self.events.len() > 64 || self.events.iter().any(|e| e.len() > MAX_LABEL) {
             return Err(format!("{MANIFEST}: `events` holds at most 64 event names"));
         }
@@ -354,6 +381,8 @@ pub struct Plugin {
     enabled: AtomicBool,
     /// Where it was installed from (`.craft-source.json`), for plugins installed from GitHub.
     pub source: Option<Json>,
+    /// Sends to the running process without its lock (protocol 2's notifications).
+    notifier: Mutex<Option<Notifier>>,
 }
 
 thread_local! {
@@ -370,7 +399,14 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 
 impl Plugin {
     fn new(manifest: Manifest, dir: PathBuf) -> Plugin {
-        Plugin { manifest, state: Mutex::new((State::Idle, 0)), enabled: AtomicBool::new(true), source: install::read_source(&dir), dir }
+        Plugin {
+            manifest,
+            state: Mutex::new((State::Idle, 0)),
+            enabled: AtomicBool::new(true),
+            source: install::read_source(&dir),
+            dir,
+            notifier: Mutex::new(None),
+        }
     }
 
     /// Sends a request and waits for its result, starting the plugin when needed, answering
@@ -415,23 +451,18 @@ impl Plugin {
             return Err(why.clone());
         }
         if !matches!(state, State::Running(_)) {
-            let mut conn = Connection::start(&self.manifest, &self.dir)?;
-            let mut host_info = json!({"id": HOST_ID, "name": HOST_NAME, "version": env!("CARGO_PKG_VERSION"), "features": FEATURES});
-            if let Some(lang) = host_language() {
-                host_info["language"] = json!(lang);
+            match self.start(failures) {
+                Ok(conn) => {
+                    *lock(&self.notifier) = conn.sender();
+                    *state = State::Running(conn);
+                }
+                Err(e) => {
+                    if *failures >= MAX_FAILURES {
+                        *state = State::Failed(format!("stopped after {failures} failures: {e}"));
+                    }
+                    return Err(e);
+                }
             }
-            let init = json!({
-                "protocolVersion": PROTOCOL_VERSION,
-                "host": host_info,
-                "plugin": {"id": self.manifest.id, "dir": self.dir.display().to_string()},
-            });
-            if let Err(e) = conn.request("initialize", init, INIT_TIMEOUT) {
-                *failures += 1;
-                *state =
-                    if *failures >= MAX_FAILURES { State::Failed(format!("stopped after {failures} failures: {}", e.message)) } else { State::Idle };
-                return Err(e.message);
-            }
-            *state = State::Running(conn);
         }
         let State::Running(conn) = state else { return Err("plugin not running".into()) };
         match conn.request_bounded(method, params, timeout, hard, host) {
@@ -442,10 +473,121 @@ impl Plugin {
                 log::warn!("plugin {}: {} (failure {failures} of {MAX_FAILURES})", self.manifest.id, e.message);
                 *state =
                     if *failures >= MAX_FAILURES { State::Failed(format!("stopped after {failures} failures: {}", e.message)) } else { State::Idle };
+                *lock(&self.notifier) = None;
                 Err(e.message)
             }
             Err(e) => Err(e.message),
         }
+    }
+
+    /// Starts the process and sends `initialize`. A failure counts.
+    fn start(&self, failures: &mut u32) -> Result<Connection, String> {
+        let mut conn = Connection::start(&self.manifest, &self.dir)?;
+        let mut host_info = json!({"id": HOST_ID, "name": HOST_NAME, "version": env!("CARGO_PKG_VERSION"), "features": FEATURES});
+        if let Some(lang) = host_language() {
+            host_info["language"] = json!(lang);
+        }
+        host_info["collab"] = json!({
+            "formats": [wordcraft_collab::FORMAT],
+            "app": wordcraft_collab::APP,
+            "schema": wordcraft_collab::SCHEMA,
+            "encryption": ["aes-256-gcm"],
+        });
+        let init = json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "host": host_info,
+            "plugin": {"id": self.manifest.id, "dir": self.dir.display().to_string()},
+        });
+        if let Err(e) = conn.request("initialize", init, INIT_TIMEOUT) {
+            *failures += 1;
+            return Err(e.message);
+        }
+        Ok(conn)
+    }
+
+    /// Starts the process when it isn't running (protocol 2: a transport runs while it's in a
+    /// room, not only during calls).
+    pub fn ensure_running(&self) -> Result<(), String> {
+        if self.manifest.office.is_some() {
+            return Err(format!("{} is an Office add-in: it runs in its task pane", self.manifest.id));
+        }
+        let mut guard = lock(&self.state);
+        if !self.enabled() {
+            return Err(format!("plugin {} is turned off", self.manifest.id));
+        }
+        let (state, failures) = &mut *guard;
+        match state {
+            State::Running(_) => Ok(()),
+            State::Failed(why) => Err(why.clone()),
+            State::Idle => match self.start(failures) {
+                Ok(conn) => {
+                    *lock(&self.notifier) = conn.sender();
+                    *state = State::Running(conn);
+                    Ok(())
+                }
+                Err(e) => {
+                    if *failures >= MAX_FAILURES {
+                        *state = State::Failed(format!("stopped after {failures} failures: {e}"));
+                    }
+                    Err(e)
+                }
+            },
+        }
+    }
+
+    /// Sends a notification (protocol 2), without waiting for a request in progress.
+    pub fn notify(&self, method: &str, params: Json) -> Result<(), String> {
+        let n = lock(&self.notifier).clone().ok_or_else(|| format!("plugin {} isn't running", self.manifest.id))?;
+        n.send(&json!({"jsonrpc": "2.0", "method": method, "params": params}))
+    }
+
+    /// Answers one of the plugin's own requests (protocol 2's *anytime* requests).
+    pub fn respond(&self, id: &Json, answer: Result<Json, HostError>) -> Result<(), String> {
+        let n = lock(&self.notifier).clone().ok_or_else(|| format!("plugin {} isn't running", self.manifest.id))?;
+        let msg = match answer {
+            Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
+            Err(e) => json!({"jsonrpc": "2.0", "id": id, "error": {"code": e.code, "message": e.message, "data": e.data}}),
+        };
+        n.send(&msg)
+    }
+
+    /// Records a failure that happened outside a request (the process exited, a message was too
+    /// long). The next use starts it again, until it failed too often.
+    pub fn count_failure(&self, why: &str) {
+        let mut guard = lock(&self.state);
+        let (state, failures) = &mut *guard;
+        *failures += 1;
+        log::warn!("plugin {}: {why} (failure {failures} of {MAX_FAILURES})", self.manifest.id);
+        if *failures >= MAX_FAILURES {
+            if let State::Running(conn) = std::mem::replace(state, State::Failed(format!("stopped after {failures} failures: {why}"))) {
+                conn.shutdown();
+            }
+            *lock(&self.notifier) = None;
+        }
+    }
+
+    /// The process exited on its own: it's started again on next use.
+    pub fn exited(&self) {
+        let mut guard = lock(&self.state);
+        if matches!(guard.0, State::Running(_)) {
+            guard.0 = State::Idle;
+        }
+        *lock(&self.notifier) = None;
+    }
+
+    /// Stops the plugin and marks it failed (it flooded the app, say) until it is reloaded.
+    pub fn fail(&self, why: &str) {
+        let mut guard = lock(&self.state);
+        if let State::Running(conn) = std::mem::replace(&mut guard.0, State::Failed(why.to_string())) {
+            conn.shutdown();
+        }
+        *lock(&self.notifier) = None;
+        log::warn!("plugin {}: {why}", self.manifest.id);
+    }
+
+    /// A co-editing transport (its manifest has `collab`).
+    pub fn is_transport(&self) -> bool {
+        self.manifest.collab.is_some() && self.manifest.office.is_none()
     }
 
     /// False once turned off with [`set_enabled`].
@@ -492,6 +634,7 @@ impl Plugin {
             "ui": m.ui(),
             "macros": m.macros,
             "kind": if m.office.is_some() { "office" } else { "native" },
+            "collab": m.collab,
             "office": m.office.as_ref().map(|o| json!({
                 "id": o.office_id, "permissions": o.permissions, "sourceLocation": o.source_location,
                 "requirements": o.requirements, "iconUrl": o.icon_url,
@@ -501,6 +644,7 @@ impl Plugin {
 
     fn stop(&self) {
         let mut guard = lock(&self.state);
+        *lock(&self.notifier) = None;
         if let State::Running(conn) = std::mem::replace(&mut guard.0, State::Idle) {
             conn.shutdown();
         }
@@ -658,6 +802,8 @@ pub struct CommandReply {
     pub open: Option<OpenRequest>,
     /// A dialog to show after the step (protocol 1.2).
     pub dialog: Option<Dialog>,
+    /// `collab.join`: a room to join or start (protocol 2), as the plugin gave it.
+    pub collab_join: Option<Json>,
 }
 
 /// Most engine commands one plugin command may run.
@@ -732,7 +878,18 @@ fn parse_reply(r: Json) -> Result<CommandReply, String> {
             reply.commands.push((id.to_string(), c.get("params").cloned().unwrap_or(Json::Null)));
         }
     }
+    if let Some(j) = r.get("collab").and_then(|c| c.get("join")).filter(|j| !j.is_null()) {
+        if !j.is_object() {
+            return Err("`collab.join` must be an object".into());
+        }
+        reply.collab_join = Some(j.clone());
+    }
     Ok(reply)
+}
+
+/// The enabled co-editing transports (protocol 2), in load order.
+pub fn transports() -> Vec<Arc<Plugin>> {
+    list().into_iter().filter(|p| p.enabled() && p.is_transport()).collect()
 }
 
 #[cfg(test)]
