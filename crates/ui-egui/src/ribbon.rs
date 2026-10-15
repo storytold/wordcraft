@@ -208,7 +208,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 );
                             }
                             resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, share));
-                            if resp.on_hover_text(tl!("Export a copy to share (PDF, Word document)")).clicked() {
+                            // A live session's Share when a co-editing add-in is loaded; else Export.
+                            if let Some(resp) = crate::collab_ui::share_button(app, ui, r, resp)
+                                && resp.on_hover_text(tl!("Export a copy to share (PDF, Word document)")).clicked()
+                            {
                                 let _ = app.run("ui.backstage", json!({"value": true, "page": "export"}));
                             }
                             ui.add_space(6.0);

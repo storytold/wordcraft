@@ -1506,6 +1506,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         // it can move out from under the pointer and flicker between preview and live layouts.
         let anchor_rects = if app.canvas.command_previewed.is_some() { live_selection_screen_rects(app, &rects, geo.scale) } else { screen_rects };
         app.canvas.mini_anchor = crate::mini_toolbar::visible_anchor(anchor_rects, visible_clip);
+        // Others in a live session: their selections, carets and recent edits.
+        if app.session.active_room().is_some() {
+            let scale = |pi: usize, pr: Rect| layout.pages.get(pi).map_or(geo.scale, |page| page_screen_scale(pr, page, geo.scale));
+            crate::collab_ui::paint_remote(app, &painter, &layout, &rects, &scale);
+        }
         // Content controls: the frame of the one the caret is in (all of them in Design Mode).
         crate::content_controls::paint(app, &painter, &t, &layout, &rects, geo.scale);
         paint_read_aloud_highlight(app, &painter, &layout, &rects, &geo, &t);

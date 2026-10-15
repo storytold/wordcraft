@@ -30,6 +30,7 @@ pub mod backstage;
 pub mod canvas;
 pub mod caret_glide;
 pub mod chrome;
+pub mod collab_ui;
 pub mod colors;
 pub mod content_controls;
 pub mod control;
@@ -486,6 +487,8 @@ pub struct WordApp {
     /// The language-aware spelling and grammar task pane.
     pub spelling_review: Option<proofing_pane::SpellingForm>,
     pub status_msg: Option<(String, f64)>,
+    /// Live sessions: others' edits highlighted, the recovery timer.
+    pub collab: collab_ui::CollabUi,
     pub previews: previews::Previews,
     /// Media key of the picture a pending Change Picture replaces (#147).
     pub change_picture_target: Option<String>,

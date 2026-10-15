@@ -358,6 +358,11 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                     }
                     qat_end = if rtl { ui.min_rect().min.x } else { ui.min_rect().max.x };
                     ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
+                        // The people in a live session (protocol 2; Share is on the tab strip).
+                        if app.has_document() && app.session.active_room().is_some() {
+                            crate::collab_ui::title_bar(app, ui, control_h);
+                            ui.add_space(10.0);
+                        }
                         // Account / community.
                         let (r, resp) = ui.allocate_exact_size(vec2(control_h, control_h), Sense::click());
                         ui.painter().circle_filled(r.center(), control_h / 2.0 - 1.0, t.accent);
@@ -699,6 +704,8 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     if app.session.prefs.overtype && st(ui, tl!("Overtype")).on_hover_text(tl!("Click to switch back to inserting")).clicked() {
                         let _ = app.run("text.overtype", json!({"value": false}));
                     }
+                    // A live session: its state, and the room's message.
+                    crate::collab_ui::status(app, ui);
                     // The message is drawn where the row is now; the controls on the right are laid
                     // out first, so the message can be shortened to the space they leave (#2402): a
                     // long one (the path of a file that isn't there) must not be drawn over the

@@ -150,6 +150,10 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         crate::plugin_dialog::show(app, ctx);
         return;
     }
+    if matches!(app.dialog, Some(Dialog::Share(_))) {
+        crate::collab_ui::show_dialog(app, ctx);
+        return;
+    }
     let Some(mut d) = app.dialog.take() else {
         ctx.data_mut(|d| d.remove::<(egui::Id, u8)>(dialog_top_key()));
         return;
@@ -205,6 +209,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::Developer(d) => d.title(),
         // Drawn by `plugin_dialog::show` (above): its title is the add-in's.
         Dialog::Plugin(_) => "Add-in",
+        Dialog::Share(_) => "Live Session",
         Dialog::CustomizeKeyboard { .. } => "Customize Keyboard",
         Dialog::CustomizeRibbon { .. } => "Customize Ribbon",
         Dialog::Control { .. } => "Content Control Properties",

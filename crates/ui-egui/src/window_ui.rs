@@ -166,6 +166,8 @@ impl WordApp {
             print_feedback_seen: _,
             font_generation: _,
             plugin_install: _,
+            // A live session is the session's, whichever window shows it.
+            collab: _,
             office: _,
             macro_bar_done: _,
             integrated_titlebar: _,

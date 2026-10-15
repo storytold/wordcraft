@@ -226,6 +226,14 @@ pub fn start_install(app: &mut WordApp, url: &str) {
 /// file it asked for through File › Open's path (so unsaved changes are asked about first), then
 /// shows the dialog it asked for. A script running `plugins.run` gets both in the result instead.
 pub fn after_run(app: &mut WordApp, plugin: &str, result: &Value) {
+    // Protocol 2: the add-in (a transport) asks to start or join a live session.
+    if let Some(j) = result.get("collab").and_then(|c| c.get("join")).filter(|j| j.is_object()) {
+        let mut params = j.clone();
+        params["plugin"] = json!(plugin);
+        if let Err(e) = app.run("collab.join", params) {
+            app.status(e);
+        }
+    }
     if let Some(o) = result.get("open").filter(|o| !o.is_null()) {
         match wordcraft_plugin::dialog::parse_open(o) {
             // `readOnly`: WordCraft has no read-only opening; the document opens as usual.

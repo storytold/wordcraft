@@ -101,6 +101,7 @@ impl WordApp {
             printing: Default::default(),
             print_feedback_seen: None,
             plugin_install: Default::default(),
+            collab: Default::default(),
             office: crate::office_pane::Panes::default(),
             macro_bar_done: None,
             integrated_titlebar: false,
@@ -262,6 +263,8 @@ impl WordApp {
         self.settle_async_saves();
         crate::plugin_ui::poll_install(self, ctx);
         crate::plugin_ui::poll_events(self, ctx);
+        // Live sessions: remote changes into the document, the selection out (protocol 2).
+        crate::collab_ui::pump(self, ctx);
         // Chinese text wants the Chinese face before the Japanese one (one glyph style per line).
         // An installed CJK font is read only once CJK text is shown (#241): a CJK interface, the
         // language names in Options, or a file name the caption is drawing. A file opened later
