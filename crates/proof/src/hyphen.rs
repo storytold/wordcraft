@@ -15,6 +15,9 @@
 //!
 //! **Bulgarian**: the Bulgarian syllable rules ([`crate::bg`]); no pattern file or word list.
 //!
+//! **German**: the TeX German patterns for the reformed spelling ([`Patterns::de`]), also for
+//! Swiss text, whose `ss` the patterns split like any double consonant (`Stras-se`).
+//!
 //! Then the paragraph's limits ([`Limits`]) are applied.
 
 pub use crate::dict;
@@ -36,6 +39,9 @@ static PT_PAT: &str = include_str!("../../../assets/hyphenation/pt.pat");
 /// hyph-utf8's `hyph-it.tex`, unmodified (offered under MIT or LPPL; WordCraft uses MIT, whose
 /// notice is in the file's header).
 static IT_PAT: &str = include_str!("../../../assets/hyphenation/it.pat");
+/// hyph-utf8's `hyph-de-1996.tex` (reformed spelling), unmodified (MIT; the notice is in the
+/// file's header).
+static DE_PAT: &str = include_str!("../../../assets/hyphenation/de.pat");
 
 impl Dictionary {
     /// The bundled US English dictionary (decoded on first use).
@@ -76,6 +82,12 @@ impl Patterns {
     pub fn it() -> &'static Patterns {
         static P: OnceLock<Patterns> = OnceLock::new();
         P.get_or_init(|| Patterns::parse(IT_PAT))
+    }
+
+    /// The bundled German patterns (parsed on first use; the file has no exception words).
+    pub fn de() -> &'static Patterns {
+        static P: OnceLock<Patterns> = OnceLock::new();
+        P.get_or_init(|| Patterns::parse(DE_PAT))
     }
 }
 
@@ -130,11 +142,11 @@ fn core_breaks(core: &[char], lang: ProofLang) -> (Vec<usize>, Source) {
     if lang == ProofLang::Tr && core.iter().all(|&c| crate::tr::hyphen::is_letter(c)) {
         return (crate::tr::hyphen::points(core), Source::Rules);
     }
-    if lang == ProofLang::Pt {
-        return core_breaks_pt(core);
-    }
-    if lang == ProofLang::It {
-        return core_breaks_it(core);
+    match lang {
+        ProofLang::Pt => return core_breaks_patterns(Patterns::pt(), core),
+        ProofLang::It => return core_breaks_patterns(Patterns::it(), core),
+        ProofLang::De => return core_breaks_patterns(Patterns::de(), core),
+        _ => {}
     }
     if lang == ProofLang::Ru && core.iter().all(|&c| crate::ru::is_cyrillic(c)) {
         return (crate::ru::hyphen::points(core), Source::Heuristic);
@@ -178,25 +190,9 @@ fn core_breaks_pl(core: &[char]) -> (Vec<usize>, Source) {
     (heuristic_points_pl(core), Source::Heuristic)
 }
 
-/// [`core_breaks_pl`] for Portuguese: the bundled patterns, then the generic heuristic.
-fn core_breaks_pt(core: &[char]) -> (Vec<usize>, Source) {
-    let pats = Patterns::pt();
-    let s: String = core.iter().collect();
-    if let Some(p) = pats.exception(&s) {
-        return (p.to_vec(), Source::Dictionary);
-    }
-    if !pats.is_empty()
-        && let Some(p) = pats.points(core)
-    {
-        return (p, Source::Patterns);
-    }
-    (heuristic_points(core), Source::Heuristic)
-}
-
-/// [`core_breaks_pt`] for Italian: the bundled patterns (the file has no exception words),
-/// then the generic heuristic.
-fn core_breaks_it(core: &[char]) -> (Vec<usize>, Source) {
-    let pats = Patterns::it();
+/// [`core_breaks_pl`] for a language with bundled patterns (Portuguese, Italian, German): its
+/// exception words, the patterns, then the generic heuristic.
+fn core_breaks_patterns(pats: &Patterns, core: &[char]) -> (Vec<usize>, Source) {
     let s: String = core.iter().collect();
     if let Some(p) = pats.exception(&s) {
         return (p.to_vec(), Source::Dictionary);
@@ -860,6 +856,27 @@ mod tests {
                 assert_eq!(hyphen_points_in(w, &Limits::default(), lang), hyphen_points(w, &Limits::default()), "{w}");
             }
         }
+    }
+
+    #[test]
+    fn german_patterns_load() {
+        let p = Patterns::de();
+        assert_eq!(p.len(), 36_709);
+        // The file has no exception words, and its `\message{…}` line adds none.
+        assert_eq!(p.exception_count(), 0);
+    }
+
+    #[test]
+    fn german_words_follow_the_german_patterns() {
+        let de = |w: &str| hyphenate_word_in(w, &Limits::default(), ProofLang::De);
+        assert_eq!(de("Silbentrennung"), "Sil-ben-tren-nung");
+        assert_eq!(de("unterliegende"), "un-ter-lie-gen-de");
+        assert_eq!(de("öffentlich-rechtlicher"), "öf-fent-lich-recht-li-cher");
+        assert_eq!(de("Begründung"), "Be-grün-dung");
+        assert_eq!(de("Zucker"), "Zu-cker");
+        // Swiss spelling: `ss` splits like any double consonant.
+        assert_eq!(de("Strasse"), "Stras-se");
+        assert_eq!(word_breaks_in("Unterlagen", ProofLang::De).1, Source::Patterns);
     }
 
     #[test]

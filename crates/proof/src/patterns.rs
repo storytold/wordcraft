@@ -116,13 +116,16 @@ pub struct Patterns {
 enum Block {
     Patterns,
     Exceptions,
+    /// Another command's argument (`\message{…}`), ignored.
+    Skip,
 }
 
 impl Patterns {
     /// Parse patterns: whitespace-separated, `%` comments to the end of the line (`#` too at the
     /// start of a line). A whole TeX pattern file works as is: `\patterns{…}` holds patterns and
-    /// `\hyphenation{…}` exception words written with their hyphens (`ni-gdy`); outside any
-    /// block, a token with a hyphen is an exception and anything else a pattern.
+    /// `\hyphenation{…}` exception words written with their hyphens (`ni-gdy`), and other
+    /// commands' arguments (`\message{…}`) are skipped; outside any block, a token with a hyphen
+    /// is an exception and anything else a pattern.
     pub fn parse(text: &str) -> Patterns {
         let mut p = Patterns::default();
         let mut block = Block::Patterns;
@@ -136,12 +139,18 @@ impl Patterns {
                 let mut tok = tok;
                 if let Some(cmd) = tok.strip_prefix('\\') {
                     let (name, rest) = cmd.split_once('{').unwrap_or((cmd, ""));
-                    block = if name == "hyphenation" { Block::Exceptions } else { Block::Patterns };
+                    block = match name {
+                        "hyphenation" => Block::Exceptions,
+                        "patterns" => Block::Patterns,
+                        // shortcut: the argument ends at the first `}`, so nested braces would leak; no bundled file has them.
+                        _ if cmd.contains('{') => Block::Skip,
+                        _ => Block::Patterns,
+                    };
                     tok = rest;
                 }
                 let closes = tok.ends_with('}');
                 let tok = tok.trim_end_matches('}');
-                if !tok.is_empty() {
+                if !tok.is_empty() && block != Block::Skip {
                     if block == Block::Exceptions || tok.contains('-') {
                         p.insert_exception(tok);
                     } else {
@@ -335,6 +344,12 @@ mod tests {
         let w: Vec<char> = "abcdefghijklmn".chars().collect();
         assert_eq!(p.values(&w).unwrap()[13], 5);
         assert!(p.to_tex().contains(&".ab4cdefghijklm5n".to_string()));
+    }
+
+    #[test]
+    fn other_commands_arguments_are_skipped() {
+        let p = Patterns::parse("\\message{Some Patterns `x-y' 2024-02-28}\n\\patterns{%\na1b\n}\n\\endinput\n");
+        assert_eq!((p.len(), p.exception_count()), (1, 0));
     }
 
     #[test]
