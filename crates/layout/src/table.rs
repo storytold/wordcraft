@@ -33,6 +33,9 @@ pub struct RowLayout {
     /// How far that content reaches above where a cell's text starts (it runs on from the row
     /// above): the room [`at_page_top`] makes for it when the row starts a page.
     pub lead: f32,
+    /// The bottom edges, at y 0, of the vertical merges that go on below the row: Word closes
+    /// a merged cell where a page break cuts it, on both pages.
+    pub open: Vec<Placed>,
 }
 
 /// A cell of a [`RowLayout`].
@@ -785,6 +788,7 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
         let carried = items.len();
         let mut parts: Vec<CellPart> = run_on.into_iter().map(|(_, p)| p).collect();
         parts.reserve(cells.len());
+        let mut open = Vec::new();
         for (ci, c) in cells.into_iter().enumerate() {
             let first = items.len();
             // A restart cell spans several rows: its height is their sum.
@@ -898,8 +902,12 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
                 items.push(Placed::Rule { x0: hx0, y0, x1: hx1, y1: y0, border: e });
             }
             let last_of_merge = c.vmerge == VMerge::None || !cont.get(ri + 1).is_some_and(|v| v.contains(&c.g));
-            if last_of_merge && let Some(e) = b.bottom.filter(Border::is_visible) {
-                items.push(Placed::Rule { x0: hx0, y0: y1, x1: hx1, y1, border: e });
+            if let Some(e) = b.bottom.filter(Border::is_visible) {
+                if last_of_merge {
+                    items.push(Placed::Rule { x0: hx0, y0: y1, x1: hx1, y1, border: e });
+                } else {
+                    open.push(Placed::Rule { x0: hx0, y0: 0.0, x1: hx1, y1: 0.0, border: e });
+                }
             }
             if let Some(e) = b.left.filter(Border::is_visible) {
                 items.push(Placed::Rule { x0, y0, x1: x0, y1, border: e });
@@ -920,15 +928,7 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
             let end_here = end.filter(|(band, _)| *band == 0).map(|(_, e)| e);
             parts.push(CellPart { top, items: first..items.len(), end: end_here, align });
         }
-        out.push(RowLayout {
-            height: rh,
-            items,
-            bottom: bottoms.get(ri).copied().unwrap_or(0.0),
-            edge: edges.get(ri).copied().unwrap_or(0.0),
-            cells: parts,
-            carried,
-            lead,
-        });
+        out.push(RowLayout { height: rh, items, bottom: bottoms.get(ri).copied().unwrap_or(0.0), edge: edges.get(ri).copied().unwrap_or(0.0), cells: parts, carried, lead, open });
     }
     TableLayout { x, width: total, rows: out }
 }
@@ -1078,7 +1078,7 @@ pub fn at_page_top(row: &RowLayout) -> Option<RowLayout> {
             align: c.align.clone(),
         })
         .collect();
-    Some(RowLayout { height: row.height + d, items, bottom: row.bottom, edge: row.edge, cells, carried: 0, lead: 0.0 })
+    Some(RowLayout { height: row.height + d, items, bottom: row.bottom, edge: row.edge, cells, carried: 0, lead: 0.0, open: row.open.clone() })
 }
 
 /// Split a row at `cut` (points below the row's top) so the part above fits on this page.
@@ -1334,8 +1334,8 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
     }
     // The part left on the page is placed and never split again.
     Some((
-        RowLayout { height: cut, items: a, bottom: row.bottom, edge: 0.0, cells: Vec::new(), carried: 0, lead: 0.0 },
-        RowLayout { height, items: b, bottom: row.bottom, edge: row.edge, cells: parts, carried: 0, lead: 0.0 },
+        RowLayout { height: cut, items: a, bottom: row.bottom, edge: 0.0, cells: Vec::new(), carried: 0, lead: 0.0, open: Vec::new() },
+        RowLayout { height, items: b, bottom: row.bottom, edge: row.edge, cells: parts, carried: 0, lead: 0.0, open: row.open.clone() },
     ))
 }
 

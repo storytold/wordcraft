@@ -2234,6 +2234,44 @@ fn a_vertical_merge_without_a_page_break_keeps_its_lines_in_place() {
     }
 }
 
+/// A page break inside a vertical merge closes the merged cell on both pages, as Word does: its
+/// part at the foot of the page has a bottom edge and its part at the head of the next a top
+/// edge, whether the break falls between rows or splits one.
+#[test]
+fn a_page_break_closes_a_vertical_merge() {
+    for (rows, text) in [(60, "step"), (6, "a step long enough to wrap over several lines of its cell; ".repeat(12).as_str())] {
+        let mut d = Document::from_text(&"filler\n".repeat(20));
+        let mut t = Table::new(rows, 2, 468.0);
+        for (i, row) in t.rows.iter_mut().enumerate() {
+            row.cells[0].props.vmerge = if i == 0 { wordcraft_doc::props::VMerge::Restart } else { wordcraft_doc::props::VMerge::Continue };
+            row.cells[1].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))];
+        }
+        d.insert_block(StoryRef::Body, &Path::top(20), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let pages: Vec<_> = l.pages.iter().filter(|p| p.items.iter().any(|i| matches!(i, Placed::Cell { .. }))).collect();
+        assert!(pages.len() >= 2, "{rows} rows: the table runs onto a second page");
+        for (n, p) in pages.iter().enumerate() {
+            // The merged cell's left edge on this page, and the horizontal edges across its middle.
+            let x =
+                p.items.iter().filter_map(|i| if let Placed::Cell { rect, cell: 0, .. } = i { Some(rect.x) } else { None }).fold(f32::MAX, f32::min);
+            let (top, bottom) = p
+                .items
+                .iter()
+                .filter_map(
+                    |i| if let Placed::Rule { x0, y0, x1, y1, .. } = i { (x0 == x1 && (x0 - x).abs() < 0.5).then_some((*y0, *y1)) } else { None },
+                )
+                .fold((f32::MAX, f32::MIN), |(a, b), (y0, y1)| (a.min(y0), b.max(y1)));
+            let edge = |y: f32| {
+                p.items.iter().any(
+                    |i| matches!(i, Placed::Rule { x0, y0, x1, y1, .. } if y0 == y1 && (y0 - y).abs() < 0.5 && *x0 <= x + 1.0 && *x1 >= x + 20.0),
+                )
+            };
+            assert!(edge(top), "{rows} rows, page {n}: the merged cell is closed at its top ({top})");
+            assert!(edge(bottom), "{rows} rows, page {n}: the merged cell is closed at its bottom ({bottom})");
+        }
+    }
+}
+
 /// A 1×3 table after "before" whose middle cell holds `text` running `dir`.
 fn turned_table(dir: TextDirection, text: &str, row: Option<f32>) -> Document {
     let mut d = Document::from_text("before\nafter");
@@ -4110,6 +4148,7 @@ fn split_row_rejects_a_hostile_cut() {
         cells: vec![CellPart { top: 2.0, items: 0..2, end: Some(170.0), align: None }],
         carried: 0,
         lead: 0.0,
+        open: Vec::new(),
     };
     for cut in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -1.0, 200.0] {
         assert!(split_row(&row(200.0, 4.0), cut).is_none(), "{cut}");
@@ -7419,6 +7458,7 @@ fn a_split_row_moves_shading_below_the_cut_with_it() {
         cells: vec![CellPart { top: 2.0, items: 0..4, end: None, align: None }],
         carried: 0,
         lead: 0.0,
+        open: Vec::new(),
     };
     let (a, b) = split_row(&row, 100.0).expect("splits");
     let fills = |r: &RowLayout| {
@@ -10831,6 +10871,7 @@ fn split_cell_moves_image_frame() {
             cells: vec![CellPart { top, items: 0..3, end: Some(170.0), align: None }],
             carried: 0,
             lead: 0.0,
+            open: Vec::new(),
         };
         let (first, rest) = split_row(&row, 100.0).unwrap();
         assert_eq!(first.items.len(), 1);
