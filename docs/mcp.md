@@ -81,8 +81,8 @@ config works across the suite) keep the agent to the folders you give it:
   folder. A save replaces
   the name it is given, so that name must be inside the write root as well as what it leads to:
   a link outside the root pointing in is refused (#3735).
-- Add-ins are programs, so with either root given `plugins.load`, `plugins.install` and turning an
-  add-in on (`plugins.setEnabled`) are refused. Add-ins loaded with `--plugin` before the server
+- Add-ins are programs, so with either root given `plugins.load`, `plugins.install`,
+  `plugins.installMissing` and turning an add-in on (`plugins.setEnabled`) are refused. Add-ins loaded with `--plugin` before the server
   starts still run ([plugins.md](plugins.md)).
 - Read and write access are separate. Give the same folder twice for both; a root left out grants
   none of its access (with only `--automation-read-root`, nothing can be written to disk). Without

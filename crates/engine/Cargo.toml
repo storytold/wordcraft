@@ -77,3 +77,8 @@ harness = false
 [[test]]
 name = "collab_loopback"
 harness = false
+
+# Runs without libtest: the test binary doubles as the add-ins whose requirements it checks.
+[[test]]
+name = "plugin_requires"
+harness = false

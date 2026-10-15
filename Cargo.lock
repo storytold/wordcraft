@@ -7729,6 +7729,7 @@ dependencies = [
  "serde_json",
  "ureq 2.12.1",
  "wordcraft-collab",
+ "wordcraft-office-js",
  "zip 3.0.0",
 ]
 

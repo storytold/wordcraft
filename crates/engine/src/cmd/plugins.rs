@@ -11,8 +11,18 @@
 //! interface shows or opens them when the user ran the command, a script or an agent gets them
 //! to act on. Add-ins that declare `events` hear when documents open, save and close
 //! ([`notify`]), without ever holding those up.
+//!
+//! Manifest 1.3: an add-in may require other add-ins (with version ranges), app versions, the
+//! protocol and host features. One whose requirements aren't met is blocked; `plugins.list` says
+//! why, `plugins.requirements` shows the tree, `plugins.installMissing` (and `plugins.install`
+//! with `withRequirements`) installs what's missing from GitHub, and installing a version outside
+//! the range a turned-on add-in needs is refused unless `force`.
 
 use serde_json::{Value, json};
+
+use wordcraft_plugin::install::Fetched;
+use wordcraft_plugin::requires::MAX_DEPTH;
+use wordcraft_plugin::version::{Range, Version};
 
 use crate::{CmdError, CmdResult, CommandSpec, Session, p};
 
@@ -26,17 +36,27 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{} → the loaded add-ins: [{id, name, version, status, enabled, commands, ui…}]")
             .pure(),
         CommandSpec::new("plugins.list", "Add-ins", LOC, |_, _| Ok(list()))
-            .params("{} → [{id, name, version, description, author, homepage, dir, status, enabled, commands, ui}]")
+            .params("{} → [{id, name, version, description, author, homepage, dir, status, state, blockedBy, requires, requiredBy, enabled, commands, ui}]. `state`: loaded, running, failed, blocked (a requirement isn't met: `blockedBy` [{id?, kind, need, have?, message}]) or disabled")
             .pure(),
-        CommandSpec::new("plugins.load", "Load Add-in", LOC, load).params("{path} → the add-in. `path`: a folder holding plugin.json, or the manifest").pure(),
+        CommandSpec::new("plugins.load", "Load Add-in", LOC, load)
+            .params("{path, force?} → the add-in. `path`: a folder holding plugin.json, or the manifest. Replacing an add-in with a version outside the range a turned-on add-in requires fails unless `force` (that add-in is then blocked)")
+            .pure(),
         CommandSpec::new("plugins.install", "Install Add-in from GitHub", LOC, install)
             .params(
-                "{url, dir?} → the add-in. Downloads the plugin in a GitHub repository (the release zip for this platform, else its source) into `dir` (default: the app's plugins folder) and loads it",
+                "{url (or github), dir?, version?, withRequirements?, force?} → the add-in, with `release`, `missing` (its required and optional add-ins that aren't installed or are out of range) and, with `withRequirements`, `installed` and `failed`. Downloads the plugin in a GitHub repository (the release zip for this platform, else its source; with `version`, a range, the newest release whose tag is in it) into `dir` (default: the app's plugins folder) and loads it. `withRequirements` (default false) also installs the missing required add-ins that name `github`. A version outside the range a turned-on add-in requires fails unless `force`",
             )
             .pure(),
-        CommandSpec::new("plugins.unload", "Unload Add-in", LOC, unload).params("{id} → {unloaded}. Until the next start").pure(),
+        CommandSpec::new("plugins.installMissing", "Install Missing Add-ins", LOC, install_missing)
+            .params("{id, dir?, force?} → {id, installed: [{id, name, version, release}], failed: [{id, error}], missing, satisfied}. Installs the missing or out-of-range required add-ins of add-in `id` that name `github` (the newest release in range), and theirs in turn")
+            .pure(),
+        CommandSpec::new("plugins.requirements", "Add-in Requirements", LOC, requirements)
+            .params("{id} → {id, satisfied, blockedBy, tree: [{id, name, need, have, state, optional, why, github, children}]}. `state` `missing` for an add-in that isn't installed")
+            .pure(),
+        CommandSpec::new("plugins.unload", "Unload Add-in", LOC, unload)
+            .params("{id} → {unloaded, dependentsBlocked}. Until the next start. The add-ins that require it are blocked, and listed")
+            .pure(),
         CommandSpec::new("plugins.setEnabled", "Turn Add-in On or Off", LOC, set_enabled)
-            .params("{id, enabled} → the add-in. Off, it stays listed but its commands, ribbon and menu items are gone; remembered in the preferences")
+            .params("{id, enabled} → the add-in, with `dependentsBlocked` (the add-ins that require it, now blocked). Off, it stays listed but its commands, ribbon and menu items are gone; remembered in the preferences")
             .pure(),
         CommandSpec::new("plugins.openHomepage", "Add-in Documentation", LOC, open_homepage)
             .params("{id} → {url}. Opens the add-in's web page (its manifest's `homepage`) in the browser")
@@ -67,18 +87,158 @@ fn check_unconfined(what: &str) -> Result<(), CmdError> {
 fn load(s: &mut Session, v: &Value) -> CmdResult {
     check_unconfined("plugins.load")?;
     let path = p::str(v, "path").filter(|x| !x.trim().is_empty()).ok_or_else(|| bad("`path` (string) is required"))?;
-    load_from(s, std::path::Path::new(path))
+    let path = std::path::Path::new(path);
+    let (manifest, _) = wordcraft_plugin::read_manifest(path).map_err(CmdError::Failed)?;
+    check_conflicts(&manifest, p::bool(v, "force").unwrap_or(false))?;
+    load_from(s, path)
+}
+
+/// Refuses a version outside the range a turned-on add-in requires, unless `force`.
+pub fn check_conflicts(manifest: &wordcraft_plugin::Manifest, force: bool) -> Result<(), CmdError> {
+    let conflicts = wordcraft_plugin::conflicts(manifest);
+    if conflicts.is_empty() || force {
+        return Ok(());
+    }
+    let what: Vec<&str> = conflicts.iter().map(|c| c.message.as_str()).collect();
+    Err(CmdError::Failed(format!("{}. Pass `force: true` to install it anyway (those add-ins are then blocked)", what.join("; "))))
+}
+
+/// The plugins folder: `dir`, else the app's.
+fn plugins_root(v: &Value) -> Result<std::path::PathBuf, CmdError> {
+    match p::str(v, "dir").filter(|x| !x.trim().is_empty()) {
+        Some(d) => Ok(std::path::PathBuf::from(d)),
+        None => wordcraft_plugin::install::install_dir().ok_or_else(|| bad("there's no plugins folder: pass `dir`")),
+    }
 }
 
 fn install(s: &mut Session, v: &Value) -> CmdResult {
     check_unconfined("plugins.install")?;
-    let url = p::str(v, "url").filter(|x| !x.trim().is_empty()).ok_or_else(|| bad("`url` (string) is required"))?;
-    let root = match p::str(v, "dir").filter(|x| !x.trim().is_empty()) {
-        Some(d) => std::path::PathBuf::from(d),
-        None => wordcraft_plugin::install::install_dir().ok_or_else(|| bad("there's no plugins folder: pass `dir`"))?,
+    let url = p::str(v, "url")
+        .or_else(|| p::str(v, "github"))
+        .filter(|x| !x.trim().is_empty())
+        .ok_or_else(|| bad("`url` (or `github`, a string) is required"))?;
+    let root = plugins_root(v)?;
+    let force = p::bool(v, "force").unwrap_or(false);
+    let range = match p::str(v, "version") {
+        Some(r) => Some(Range::parse(r).map_err(bad)?),
+        None => None,
     };
-    let dir = wordcraft_plugin::install::from_github(url, &root).map_err(CmdError::Failed)?;
-    load_from(s, &dir)
+    let fetched = wordcraft_plugin::install::fetch(url, range.as_ref()).map_err(CmdError::Failed)?;
+    let mut fetch = |github: &str, range: &Range| wordcraft_plugin::install::fetch(github, Some(range));
+    install_fetched(s, fetched, &root, force, p::bool(v, "withRequirements").unwrap_or(false), &mut fetch)
+}
+
+/// Downloads a plugin for [`install_fetched`] and [`install_requirements`]: `(github, range)`.
+pub type Fetcher<'a> = dyn FnMut(&str, &Range) -> Result<Fetched, String> + 'a;
+
+/// Installs a downloaded plugin into `root` and loads it (`plugins.install`, after the
+/// download): refused when its version is outside the range a turned-on add-in requires, unless
+/// `force`. With `with_requirements`, its missing required add-ins that name `github` are
+/// installed too, through `fetch`.
+pub fn install_fetched(
+    s: &mut Session,
+    fetched: Fetched,
+    root: &std::path::Path,
+    force: bool,
+    with_requirements: bool,
+    fetch: &mut Fetcher<'_>,
+) -> CmdResult {
+    check_conflicts(&fetched.manifest, force)?;
+    let dir = fetched.unpack(root).map_err(CmdError::Failed)?;
+    let mut info = load_from(s, &dir)?;
+    let plugin = fetched.manifest.id.clone();
+    info["release"] = json!(fetched.release);
+    if with_requirements {
+        let (installed, failed) = install_requirements(s, &plugin, root, false, fetch);
+        info["installed"] = Value::Array(installed);
+        info["failed"] = Value::Array(failed);
+        // Its own state may have changed since `load_from`.
+        if let Some(p) = wordcraft_plugin::get(&plugin) {
+            info["state"] = json!(p.state());
+            info["blockedBy"] = json!(p.blocked_by());
+            info["status"] = json!(p.status());
+        }
+    }
+    info["missing"] = json!(wordcraft_plugin::missing(&plugin));
+    Ok(info)
+}
+
+/// Installs `plugin`'s missing or out-of-range required add-ins that name `github` (the newest
+/// release in range, through `fetch`), then theirs in turn, at most [`MAX_DEPTH`] deep and 64 in
+/// all. Returns what was installed (`{id, name, version, release}`) and what failed (`{id, error}`).
+pub fn install_requirements(s: &mut Session, plugin: &str, root: &std::path::Path, force: bool, fetch: &mut Fetcher<'_>) -> (Vec<Value>, Vec<Value>) {
+    const MAX_INSTALLS: usize = 64;
+    let (mut installed, mut failed) = (Vec::new(), Vec::new());
+    let mut seen: Vec<String> = vec![plugin.to_string()];
+    let mut queue: std::collections::VecDeque<(String, usize)> = std::collections::VecDeque::from([(plugin.to_string(), 0)]);
+    while let Some((pid, depth)) = queue.pop_front() {
+        for m in wordcraft_plugin::missing(&pid).into_iter().filter(|m| !m.optional) {
+            if seen.contains(&m.id) || installed.len() + failed.len() >= MAX_INSTALLS {
+                continue;
+            }
+            seen.push(m.id.clone());
+            let Some(github) = m.github.clone() else { continue };
+            let outcome = (|| -> Result<Value, String> {
+                let range = Range::parse(&m.version)?;
+                let fetched = fetch(&github, &range)?;
+                let got = &fetched.manifest;
+                if got.id != m.id {
+                    return Err(format!("github.com/{github} holds {}, not {}", got.id, m.id));
+                }
+                let fits = Version::parse(&got.version).map(|v| range.matches(&v)).unwrap_or(range.is_any());
+                if !fits {
+                    return Err(format!("{} {} from github.com/{github} isn't in {}", m.name, got.version, range));
+                }
+                check_conflicts(got, force).map_err(|e| e.to_string())?;
+                let dir = fetched.unpack(root)?;
+                load_from(s, &dir).map_err(|e| e.to_string())?;
+                Ok(json!({"id": m.id, "name": got.name, "version": got.version, "release": fetched.release}))
+            })();
+            match outcome {
+                Ok(done) => {
+                    installed.push(done);
+                    if depth + 1 < MAX_DEPTH {
+                        queue.push_back((m.id.clone(), depth + 1));
+                    }
+                }
+                Err(e) => failed.push(json!({"id": m.id, "error": e})),
+            }
+        }
+    }
+    (installed, failed)
+}
+
+fn install_missing(s: &mut Session, v: &Value) -> CmdResult {
+    check_unconfined("plugins.installMissing")?;
+    let id = p::req_str(v, "id")?;
+    if wordcraft_plugin::get(id).is_none() {
+        return Err(bad(format!("no add-in `{id}` is loaded")));
+    }
+    let root = plugins_root(v)?;
+    let mut fetch = |github: &str, range: &Range| wordcraft_plugin::install::fetch(github, Some(range));
+    Ok(install_missing_with(s, id, &root, p::bool(v, "force").unwrap_or(false), &mut fetch))
+}
+
+/// `plugins.installMissing` with a given downloader (tests use one without a network).
+pub fn install_missing_with(s: &mut Session, id: &str, root: &std::path::Path, force: bool, fetch: &mut Fetcher<'_>) -> Value {
+    let (installed, failed) = install_requirements(s, id, root, force, fetch);
+    json!({
+        "id": id,
+        "installed": installed,
+        "failed": failed,
+        "missing": wordcraft_plugin::missing(id),
+        "satisfied": wordcraft_plugin::get(id).is_some_and(|p| !p.is_blocked()),
+    })
+}
+
+fn requirements(_: &mut Session, v: &Value) -> CmdResult {
+    let id = p::req_str(v, "id")?;
+    wordcraft_plugin::requirements(id).map_err(bad)
+}
+
+/// The plugins in `ids` that are blocked now.
+fn now_blocked(ids: &[String]) -> Vec<String> {
+    ids.iter().filter(|d| wordcraft_plugin::get(d).is_some_and(|p| p.is_blocked())).cloned().collect()
 }
 
 /// Loads the plugin in `path` (a folder or its manifest); one the preferences list as off stays off.
@@ -92,10 +252,11 @@ pub fn load_from(s: &mut Session, path: &std::path::Path) -> CmdResult {
 
 fn unload(_: &mut Session, v: &Value) -> CmdResult {
     let id = p::req_str(v, "id")?;
+    let dependents = wordcraft_plugin::dependents(id);
     if !wordcraft_plugin::unload(id) {
         return Err(bad(format!("no add-in `{id}` is loaded")));
     }
-    Ok(json!({"unloaded": id}))
+    Ok(json!({"unloaded": id, "dependentsBlocked": now_blocked(&dependents)}))
 }
 
 fn set_enabled(s: &mut Session, v: &Value) -> CmdResult {
@@ -105,12 +266,15 @@ fn set_enabled(s: &mut Session, v: &Value) -> CmdResult {
         check_unconfined("plugins.setEnabled")?;
     }
     let plugin = wordcraft_plugin::get(id).ok_or_else(|| bad(format!("no add-in `{id}` is loaded")))?;
+    let dependents = if on { Vec::new() } else { wordcraft_plugin::dependents(id) };
     wordcraft_plugin::set_enabled(id, on).map_err(CmdError::Failed)?;
     s.prefs.disabled_plugins.retain(|x| x != id);
     if !on {
         s.prefs.disabled_plugins.push(id.to_string());
     }
-    Ok(plugin.info())
+    let mut info = plugin.info();
+    info["dependentsBlocked"] = json!(now_blocked(&dependents));
+    Ok(info)
 }
 
 fn open_homepage(s: &mut Session, v: &Value) -> CmdResult {
@@ -132,6 +296,10 @@ pub fn apply_prefs(prefs: &crate::Prefs) {
         {
             log::warn!("add-in {id}: {e}");
         }
+    }
+    // Say which add-ins can't start, and why.
+    for (id, why) in wordcraft_plugin::refresh().blocked {
+        log::warn!("add-in {id} is blocked: {}", why.iter().map(|b| b.message.as_str()).collect::<Vec<_>>().join("; "));
     }
 }
 

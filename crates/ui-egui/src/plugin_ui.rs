@@ -9,6 +9,9 @@
 //! - Protocol 1.2: what an add-in command run from here asks for after its step ([`after_run`]: a
 //!   file to open, a dialog — `plugin_dialog`), and what add-ins answer document events with
 //!   ([`poll_events`]: the status bar).
+//! - Manifest 1.3: a blocked add-in's card says why, with Install Missing; installing an add-in
+//!   offers the add-ins it needs; updating one to a version an add-in that needs it doesn't accept,
+//!   and turning off or unloading one others need, ask first.
 
 use egui::{RichText, Ui};
 use serde_json::{Value, json};
@@ -39,14 +42,15 @@ impl Item {
     }
 }
 
-fn enabled_plugins() -> Vec<std::sync::Arc<wordcraft_plugin::Plugin>> {
-    wordcraft_plugin::list().into_iter().filter(|p| p.enabled()).collect()
+/// The add-ins whose ribbon groups, tabs and menu items show: turned on and not blocked.
+fn active_plugins() -> Vec<std::sync::Arc<wordcraft_plugin::Plugin>> {
+    wordcraft_plugin::list().into_iter().filter(|p| p.active()).collect()
 }
 
 /// The tabs add-ins add (names not among the built-in tabs), in load order.
 pub fn extra_tabs() -> Vec<String> {
     let mut tabs: Vec<String> = Vec::new();
-    for p in enabled_plugins() {
+    for p in active_plugins() {
         for g in &p.manifest.ui().ribbon {
             let builtin = wordcraft_plugin::RIBBON_TABS.contains(&g.tab.as_str()) || crate::ribbon::TABS.contains(&g.tab.as_str());
             if !builtin && !tabs.contains(&g.tab) {
@@ -60,7 +64,7 @@ pub fn extra_tabs() -> Vec<String> {
 /// The add-in groups on `tab`: (group name, buttons).
 pub fn groups(tab: &str) -> Vec<(String, Vec<Item>)> {
     let mut out = Vec::new();
-    for p in enabled_plugins() {
+    for p in active_plugins() {
         let m = &p.manifest;
         for g in m.ui().ribbon.iter().filter(|g| g.tab == tab) {
             let buttons = g
@@ -89,7 +93,7 @@ pub fn groups(tab: &str) -> Vec<(String, Vec<Item>)> {
 /// `picture` ones with a picture or shape selected.
 pub fn menu_items(in_table: bool, picture: bool) -> Vec<Item> {
     let mut out = Vec::new();
-    for p in enabled_plugins() {
+    for p in active_plugins() {
         let m = &p.manifest;
         let shown = |k: MenuKind| match k {
             MenuKind::Text => true,
@@ -175,15 +179,49 @@ fn described(resp: egui::Response, b: &Item) {
 // ---------------------------------------------------------------- managing add-ins
 
 /// Installing an add-in from GitHub: the address typed, the confirmation step, and the
-/// download, which runs on its own thread so the window keeps painting.
+/// download, which runs on its own thread so the window keeps painting. Also the questions
+/// requirements between add-ins raise (manifest 1.3): installing the add-ins an add-in needs,
+/// updating one to a version an add-in that needs it doesn't accept, and turning off one others
+/// need.
 #[derive(Default)]
 pub struct Install {
     pub url: String,
     /// The repository waiting for the user's go-ahead (`owner/name`).
     pub confirming: Option<String>,
-    pending: Option<std::sync::mpsc::Receiver<Result<std::path::PathBuf, String>>>,
+    pending: Option<std::sync::mpsc::Receiver<Result<Done, String>>>,
     /// The last install's (or load's) outcome: `Ok(message)` or `Err(error)`.
     pub outcome: Option<Result<String, String>>,
+    /// A download whose version an installed add-in that needs it doesn't accept: what to say.
+    pub confirm_update: Option<(wordcraft_plugin::install::Fetched, String)>,
+    /// The add-ins an add-in needs, offered for installing ("Install it too?").
+    pub offer: Option<Offer>,
+    /// Turning off or unloading an add-in others need: asking first.
+    pub confirm_off: Option<ConfirmOff>,
+}
+
+/// The missing add-ins of `plugin` offered for installing, each with whether it's ticked
+/// (required ones are, optional ones aren't).
+pub struct Offer {
+    pub plugin: String,
+    pub name: String,
+    pub items: Vec<(wordcraft_plugin::requires::Missing, bool)>,
+}
+
+/// Turning off (or unloading) `id`, which `dependents` need.
+pub struct ConfirmOff {
+    pub id: String,
+    pub unload: bool,
+    pub dependents: Vec<String>,
+}
+
+/// What a download thread hands back.
+enum Done {
+    /// Downloaded; the add-ins that need it don't accept its version (the messages).
+    Conflicts(Box<wordcraft_plugin::install::Fetched>, Vec<String>),
+    /// Unpacked into this folder.
+    Unpacked(std::path::PathBuf),
+    /// Required add-ins: per add-in, its folder and release, or why it failed.
+    Requirements(Vec<(String, Result<(std::path::PathBuf, Option<String>), String>)>),
 }
 
 impl Install {
@@ -192,20 +230,14 @@ impl Install {
     }
 }
 
-/// Starts downloading the add-in at `url` (after the user confirmed).
-pub fn start_install(app: &mut WordApp, url: &str) {
-    let url = url.trim().to_string();
+/// Runs `job` on a thread; its outcome is picked up by [`poll_install`].
+fn spawn(app: &mut WordApp, job: impl FnOnce() -> Result<Done, String> + Send + 'static) {
     let st = &mut app.plugin_install;
-    st.confirming = None;
-    let Some(root) = wordcraft_plugin::install::install_dir() else {
-        st.outcome = Some(Err(tl!("There's no add-ins folder to install into.").to_string()));
-        return;
-    };
     #[cfg(not(target_arch = "wasm32"))]
     {
         let (tx, rx) = std::sync::mpsc::channel();
         let spawned = std::thread::Builder::new().name("plugin-install".into()).spawn(move || {
-            let _ = tx.send(wordcraft_plugin::install::from_github(&url, &root));
+            let _ = tx.send(job());
         });
         match spawned {
             Ok(_) => {
@@ -217,9 +249,91 @@ pub fn start_install(app: &mut WordApp, url: &str) {
     }
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = (url, root);
+        drop(job);
         st.outcome = Some(Err(tl!("Add-ins need the desktop app.").to_string()));
     }
+}
+
+/// The plugins folder, or why there's none (the outcome says so).
+fn install_root(app: &mut WordApp) -> Option<std::path::PathBuf> {
+    let root = wordcraft_plugin::install::install_dir();
+    if root.is_none() {
+        app.plugin_install.outcome = Some(Err(tl!("There's no add-ins folder to install into.").to_string()));
+    }
+    root
+}
+
+/// Starts downloading the add-in at `url` (after the user confirmed).
+pub fn start_install(app: &mut WordApp, url: &str) {
+    let url = url.trim().to_string();
+    app.plugin_install.confirming = None;
+    let Some(root) = install_root(app) else { return };
+    spawn(app, move || {
+        let fetched = wordcraft_plugin::install::fetch(&url, None)?;
+        let conflicts = wordcraft_plugin::conflicts(&fetched.manifest);
+        if !conflicts.is_empty() {
+            return Ok(Done::Conflicts(Box::new(fetched), conflicts.into_iter().map(|c| c.message).collect()));
+        }
+        fetched.unpack(&root).map(Done::Unpacked)
+    });
+}
+
+/// Installs the ticked add-ins of the offer: for each, the newest release in its range.
+pub fn install_offer(app: &mut WordApp) {
+    let Some(offer) = app.plugin_install.offer.take() else { return };
+    let wanted: Vec<wordcraft_plugin::requires::Missing> = offer.items.into_iter().filter(|(_, on)| *on).map(|(m, _)| m).collect();
+    if wanted.is_empty() {
+        return;
+    }
+    let Some(root) = install_root(app) else { return };
+    spawn(app, move || {
+        let done = wanted
+            .into_iter()
+            .map(|m| {
+                let r = (|| -> Result<(std::path::PathBuf, Option<String>), String> {
+                    let github = m.github.as_deref().ok_or_else(|| format!("{} has no GitHub repository to install from", m.name))?;
+                    let range = wordcraft_plugin::version::Range::parse(&m.version)?;
+                    let fetched = wordcraft_plugin::install::fetch(github, Some(&range))?;
+                    if fetched.manifest.id != m.id {
+                        return Err(format!("github.com/{github} holds {}, not {}", fetched.manifest.id, m.id));
+                    }
+                    let fits =
+                        wordcraft_plugin::version::Version::parse(&fetched.manifest.version).map(|v| range.matches(&v)).unwrap_or(range.is_any());
+                    if !fits {
+                        return Err(format!("{} {} from github.com/{github} isn't in {range}", m.name, fetched.manifest.version));
+                    }
+                    if let Some(c) = wordcraft_plugin::conflicts(&fetched.manifest).first() {
+                        return Err(c.message.clone());
+                    }
+                    Ok((fetched.unpack(&root)?, fetched.release.clone()))
+                })();
+                (m.id, r)
+            })
+            .collect();
+        Ok(Done::Requirements(done))
+    });
+}
+
+/// Offers the missing or out-of-range add-ins `id` needs that name a GitHub repository; does
+/// nothing when there are none.
+pub fn offer_missing(app: &mut WordApp, id: &str) {
+    let items: Vec<(wordcraft_plugin::requires::Missing, bool)> =
+        wordcraft_plugin::missing(id).into_iter().filter(|m| m.github.is_some()).map(|m| (m.clone(), !m.optional)).collect();
+    if items.is_empty() {
+        return;
+    }
+    let name = wordcraft_plugin::get(id).map(|p| p.manifest.name.clone()).unwrap_or_else(|| id.to_string());
+    app.plugin_install.offer = Some(Offer { plugin: id.to_string(), name, items });
+}
+
+/// Whether `id` is blocked by required add-ins that Install Missing can install.
+pub fn can_install_missing(id: &str) -> bool {
+    wordcraft_plugin::missing(id).iter().any(|m| !m.optional && m.github.is_some())
+}
+
+/// Loads an add-in unpacked by a download thread (its version was checked, or the user agreed).
+fn load_unpacked(app: &mut WordApp, dir: &std::path::Path) -> Result<Value, String> {
+    app.run("plugins.load", json!({"path": dir, "force": true}))
 }
 
 /// After an add-in command the user ran (a ribbon button, a menu item, a dialog's OK): opens the
@@ -289,11 +403,56 @@ pub fn poll_install(app: &mut WordApp, ctx: &egui::Context) {
         Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("the download stopped unexpectedly".into()),
     };
     app.plugin_install.pending = None;
-    let outcome = result.and_then(|dir| app.run("plugins.load", json!({"path": dir})).map_err(|e| e.to_string())).map(|info| loaded_message(&info));
-    if outcome.is_ok() {
-        app.plugin_install.url.clear();
+    match result {
+        Err(e) => app.plugin_install.outcome = Some(Err(e)),
+        Ok(Done::Conflicts(fetched, why)) => {
+            let name = format!("{} {}", fetched.manifest.name, fetched.manifest.version);
+            let text = crate::i18n::fmt(tl!("{why}. Install {name} anyway?"), &[("why", &why.join("; ")), ("name", name.trim())]);
+            app.plugin_install.confirm_update = Some((*fetched, text));
+        }
+        Ok(Done::Unpacked(dir)) => {
+            let outcome =
+                load_unpacked(app, &dir).map(|info| (info.get("id").and_then(Value::as_str).unwrap_or("").to_string(), loaded_message(&info)));
+            if let Ok((id, _)) = &outcome {
+                app.plugin_install.url.clear();
+                let id = id.clone();
+                offer_missing(app, &id);
+            }
+            app.plugin_install.outcome = Some(outcome.map(|(_, m)| m));
+        }
+        Ok(Done::Requirements(list)) => {
+            let (mut done, mut failed, mut ids) = (Vec::new(), Vec::new(), Vec::new());
+            for (id, r) in list {
+                match r.and_then(|(dir, release)| load_unpacked(app, &dir).map(|info| (info, release))) {
+                    Ok((info, release)) => {
+                        let name = info.get("name").and_then(Value::as_str).unwrap_or(&id).to_string();
+                        let version = info.get("version").and_then(Value::as_str).unwrap_or("").to_string();
+                        let name = format!("{name} {version}").trim_end().to_string();
+                        done.push(match release {
+                            Some(tag) => crate::i18n::fmt(tl!("{name} (release {tag})"), &[("name", &name), ("tag", &tag)]),
+                            None => name,
+                        });
+                        ids.push(id);
+                    }
+                    Err(e) => failed.push(e),
+                }
+            }
+            // What the new ones need in turn.
+            for id in ids {
+                if app.plugin_install.offer.is_none() {
+                    offer_missing(app, &id);
+                }
+            }
+            let installed = crate::i18n::fmt(tl!("Installed {name}"), &[("name", &done.join(", "))]);
+            app.plugin_install.outcome = Some(if failed.is_empty() {
+                Ok(installed)
+            } else if done.is_empty() {
+                Err(failed.join("; "))
+            } else {
+                Err(format!("{installed}; {}", failed.join("; ")))
+            });
+        }
     }
-    app.plugin_install.outcome = Some(outcome);
 }
 
 pub(crate) fn loaded_message(info: &Value) -> String {
@@ -303,7 +462,8 @@ pub(crate) fn loaded_message(info: &Value) -> String {
 }
 
 /// "Install from GitHub": an address field, a confirmation naming the repository, progress and
-/// the outcome.
+/// the outcome; then the questions an install can raise (an update the add-ins that need it
+/// don't accept; the add-ins it needs).
 pub fn install_row(app: &mut WordApp, ui: &mut Ui) {
     ui.horizontal(|ui| {
         ui.label(tl!("Install from GitHub:"));
@@ -340,6 +500,26 @@ pub fn install_row(app: &mut WordApp, ui: &mut Ui) {
             });
         });
     }
+    if let Some((_, text)) = &app.plugin_install.confirm_update {
+        let text = text.clone();
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.add(egui::Label::new(text).wrap());
+            ui.label(RichText::new(tl!("The add-ins that need the installed version are blocked until it suits them again.")).weak());
+            ui.horizontal(|ui| {
+                if ui.button(tl!("Install Anyway")).clicked()
+                    && let Some((fetched, _)) = app.plugin_install.confirm_update.take()
+                    && let Some(root) = install_root(app)
+                {
+                    spawn(app, move || fetched.unpack(&root).map(Done::Unpacked));
+                }
+                if ui.button(tl!("Cancel")).clicked() {
+                    app.plugin_install.confirm_update = None;
+                }
+            });
+        });
+    }
+    offer_frame(app, ui);
     match &app.plugin_install.outcome {
         Some(Ok(m)) => {
             ui.label(RichText::new(m).color(crate::theme::Tokens::get(ui.ctx()).accent_text));
@@ -349,6 +529,73 @@ pub fn install_row(app: &mut WordApp, ui: &mut Ui) {
         }
         None => {}
     }
+}
+
+/// "Reports needs craft-vba ^0.1.4 (Runs the report macros). Install it too?", one tick box per
+/// add-in (optional ones unticked), and Install Selected / Not Now.
+fn offer_frame(app: &mut WordApp, ui: &mut Ui) {
+    let busy = app.plugin_install.busy();
+    let Some(offer) = app.plugin_install.offer.as_mut() else { return };
+    let mut install = false;
+    let mut dismiss = false;
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        for (m, on) in offer.items.iter_mut() {
+            let why = if m.why.trim().is_empty() { String::new() } else { format!(" ({})", m.why.trim()) };
+            let mut what = format!("{} {}{why}", m.name, m.version);
+            if let Some(v) = &m.installed {
+                what = crate::i18n::fmt(tl!("{addin}; version {version} is installed"), &[("addin", &what), ("version", v)]);
+            }
+            let text = if m.optional {
+                crate::i18n::fmt(tl!("{name} can use {addin}. Install it too?"), &[("name", &offer.name), ("addin", &what)])
+            } else {
+                crate::i18n::fmt(tl!("{name} needs {addin}. Install it too?"), &[("name", &offer.name), ("addin", &what)])
+            };
+            ui.checkbox(on, text);
+            if let Some(g) = &m.github {
+                ui.indent(("offer", &m.id), |ui| {
+                    ui.label(RichText::new(format!("github.com/{g} · {}", tl!("the newest release in range"))).weak());
+                });
+            }
+        }
+        ui.label(RichText::new(tl!("Add-ins are programs that run with your permissions. Install them only if you trust their authors.")).weak());
+        ui.horizontal(|ui| {
+            install = ui.add_enabled(!busy && offer.items.iter().any(|(_, on)| *on), egui::Button::new(tl!("Install Selected"))).clicked();
+            dismiss = ui.button(tl!("Not Now")).clicked();
+        });
+    });
+    if install {
+        install_offer(app);
+    } else if dismiss {
+        app.plugin_install.offer = None;
+    }
+}
+
+/// Turns `id` off (or unloads it), and first the add-ins that need it when the user agreed.
+fn turn_off(app: &mut WordApp, id: &str, unload: bool, dependents: &[String]) {
+    // The ones furthest up the chain first.
+    for d in dependents.iter().rev() {
+        run_or_status(app, "plugins.setEnabled", json!({"id": d, "enabled": false}));
+    }
+    if unload {
+        run_or_status(app, "plugins.unload", json!({"id": id}));
+    } else {
+        run_or_status(app, "plugins.setEnabled", json!({"id": id, "enabled": false}));
+    }
+}
+
+/// Deactivate or Unload: asks first when other add-ins need it.
+fn ask_turn_off(app: &mut WordApp, id: &str, unload: bool) {
+    let dependents = wordcraft_plugin::dependents(id);
+    if dependents.is_empty() {
+        turn_off(app, id, unload, &[]);
+    } else {
+        app.plugin_install.confirm_off = Some(ConfirmOff { id: id.to_string(), unload, dependents });
+    }
+}
+
+fn names(ids: &[String]) -> Vec<String> {
+    ids.iter().map(|d| wordcraft_plugin::get(d).map(|p| p.manifest.name.clone()).unwrap_or_else(|| d.clone())).collect()
 }
 
 /// Loads an add-in from its `plugin.json`, picked in a file dialog (desktop only).
@@ -362,7 +609,8 @@ fn load_from_file(app: &mut WordApp) {
 
 /// One add-in as a full-width card: name and version, then status, author, id and where it came
 /// from, the description across the width, and Documentation / Activate or Deactivate / Unload on
-/// the right. `commands` adds a button per command (the Add-ins dialog).
+/// the right. `commands` adds a button per command (the Add-ins dialog). A blocked add-in says
+/// why, with Install Missing when that can help; turning off one that others need asks first.
 pub fn plugin_card(app: &mut WordApp, ui: &mut Ui, p: &wordcraft_plugin::Plugin, commands: bool) {
     let m = &p.manifest;
     let on = p.enabled();
@@ -374,6 +622,7 @@ pub fn plugin_card(app: &mut WordApp, ui: &mut Ui, p: &wordcraft_plugin::Plugin,
                 let status = p.status();
                 let mut about = vec![match status.as_str() {
                     "off" => tl!("Inactive").to_string(),
+                    s if s.starts_with("blocked") => tl!("Blocked").to_string(),
                     s if s.starts_with("failed") => s.to_string(),
                     _ => tl!("Active").to_string(),
                 }];
@@ -388,20 +637,54 @@ pub fn plugin_card(app: &mut WordApp, ui: &mut Ui, p: &wordcraft_plugin::Plugin,
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button(tl!("Unload")).on_hover_text(tl!("Until the next start")).clicked() {
-                    run_or_status(app, "plugins.unload", json!({"id": m.id}));
+                    ask_turn_off(app, &m.id, true);
                 }
                 if ui.button(if on { tl!("Deactivate") } else { tl!("Activate") }).clicked() {
-                    run_or_status(app, "plugins.setEnabled", json!({"id": m.id, "enabled": !on}));
+                    if on {
+                        ask_turn_off(app, &m.id, false);
+                    } else {
+                        run_or_status(app, "plugins.setEnabled", json!({"id": m.id, "enabled": true}));
+                    }
+                }
+                if on
+                    && p.is_blocked()
+                    && can_install_missing(&m.id)
+                    && ui.add_enabled(!app.plugin_install.busy(), egui::Button::new(tl!("Install Missing"))).clicked()
+                {
+                    offer_missing(app, &m.id);
                 }
                 if !m.homepage.trim().is_empty() && ui.link(tl!("Documentation")).on_hover_text(m.homepage.trim()).clicked() {
                     run_or_status(app, "plugins.openHomepage", json!({"id": m.id}));
                 }
             });
         });
+        if on {
+            for b in p.blocked_by() {
+                ui.add(egui::Label::new(RichText::new(&b.message).color(ui.visuals().warn_fg_color)).wrap());
+            }
+        }
         if !m.description.is_empty() {
             ui.add(egui::Label::new(&m.description).wrap());
         }
-        if commands && on && !m.commands.is_empty() {
+        let asking = app.plugin_install.confirm_off.as_ref().filter(|c| c.id == m.id).map(|c| (c.unload, c.dependents.clone()));
+        if let Some((unloading, dependents)) = asking {
+            let who = names(&dependents).join(", ");
+            let one = dependents.len() == 1;
+            let question = if one { tl!("{who} needs {name}. Turn both off?") } else { tl!("{who} need {name}. Turn them all off?") };
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.add(egui::Label::new(crate::i18n::fmt(question, &[("who", &who), ("name", &m.name)])).wrap());
+                ui.horizontal(|ui| {
+                    if ui.button(if one { tl!("Turn Both Off") } else { tl!("Turn All Off") }).clicked() {
+                        app.plugin_install.confirm_off = None;
+                        turn_off(app, &m.id, unloading, &dependents);
+                    }
+                    if ui.button(tl!("Cancel")).clicked() {
+                        app.plugin_install.confirm_off = None;
+                    }
+                });
+            });
+        }
+        if commands && p.active() && !m.commands.is_empty() {
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(tl!("Commands:")).weak());
                 for c in &m.commands {

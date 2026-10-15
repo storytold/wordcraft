@@ -26,6 +26,18 @@ const MAX_DEPTH: usize = 64;
 /// Longest URL kept from a manifest.
 const MAX_URL: usize = 2048;
 
+/// The requirement sets WordCraft's Office.js library (`crates/office-js`) supports, with the
+/// highest version of each: an add-in whose `<Requirements>` ask for more is blocked. The
+/// library's `isSetSupported` answers from the same table (a test there keeps them equal).
+pub const API_SETS: &[(&str, (u64, u64))] = &[("WordApi", (1, 3)), ("Settings", (1, 1)), ("Selection", (1, 1)), ("TextCoercion", (1, 1))];
+
+/// The Common API methods the library implements (`<Requirements><Methods>`).
+pub const API_METHODS: &[&str] =
+    &["Document.getSelectedDataAsync", "Document.setSelectedDataAsync", "Settings.get", "Settings.set", "Settings.remove", "Settings.saveAsync"];
+
+/// Most requirement sets and methods kept from a manifest.
+const MAX_REQUIREMENTS: usize = 200;
+
 /// What an Office add-in may do with the document (`<Permissions>`), weakest first.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Permission {
@@ -84,8 +96,12 @@ pub struct OfficeInfo {
     pub source_location: String,
     /// Origins the add-in may navigate to besides its own (`<AppDomains>`).
     pub app_domains: Vec<String>,
-    /// Requirement sets it asks for: (name, minimum version).
+    /// Requirement sets it asks for: (name, minimum version; `DefaultMinVersion`, else 1.1, when
+    /// the set has no `MinVersion`).
     pub requirements: Vec<(String, String)>,
+    /// Common API methods it asks for (`<Methods><Method Name="Document.getSelectedDataAsync"/>`).
+    #[serde(default)]
+    pub methods: Vec<String>,
     pub icon_url: String,
     /// The plugin command id → what it does.
     pub commands: BTreeMap<String, OfficeCommand>,
@@ -285,7 +301,7 @@ impl Resources {
     }
 }
 
-/// Reads an Office add-in manifest (XML) into a plugin manifest for `host` (`gridcraft`).
+/// Reads an Office add-in manifest (XML) into a plugin manifest for `host` (`wordcraft`).
 pub fn parse_manifest(text: &str, host: &str) -> Result<Manifest, String> {
     let app = parse_xml(text)?;
     let office_id = app.child_value("Id");
@@ -314,7 +330,23 @@ pub fn parse_manifest(text: &str, host: &str) -> Result<Manifest, String> {
             .and_then(|r| r.child("Sets"))
             .map(|s| {
                 let default = s.attr("DefaultMinVersion").unwrap_or("1.1").to_string();
-                s.children("Set").filter_map(|n| Some((n.attr("Name")?.to_string(), n.attr("MinVersion").unwrap_or(&default).to_string()))).collect()
+                s.children("Set")
+                    .filter_map(|n| Some((n.attr("Name")?.trim().to_string(), n.attr("MinVersion").unwrap_or(&default).trim().to_string())))
+                    .filter(|(name, _)| !name.is_empty() && name.len() <= 128)
+                    .take(MAX_REQUIREMENTS)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        methods: app
+            .child("Requirements")
+            .and_then(|r| r.child("Methods"))
+            .map(|m| {
+                m.children("Method")
+                    .filter_map(|n| n.attr("Name"))
+                    .map(|n| n.trim().to_string())
+                    .filter(|n| !n.is_empty() && n.len() <= 128)
+                    .take(MAX_REQUIREMENTS)
+                    .collect()
             })
             .unwrap_or_default(),
         icon_url: https_url(&app.child_value("IconUrl")).unwrap_or_default(),

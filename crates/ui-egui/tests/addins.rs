@@ -321,3 +321,58 @@ fn a_documents_ribbon_buttons_show_on_their_tabs_and_run_their_macros() {
     h.run_steps(4);
     assert!(h.query_by_label("Report").is_none());
 }
+
+/// Manifest 1.3: a blocked add-in's card says why and offers to install what it needs; its
+/// ribbon group is absent until then; turning off an add-in another needs asks first.
+#[test]
+fn blocked_add_ins_say_why_and_offer_to_install_what_they_need() {
+    let _g = serial();
+    let m = wordcraft_plugin::Manifest::parse(
+        r#"{"id": "t.ui-reports", "name": "Reports", "version": "1.4.0", "run": {"command": "./not-started"},
+            "commands": [{"id": "go", "label": "Go"}],
+            "ui": {"ribbon": [{"tab": "Review", "group": "R", "buttons": [{"command": "go", "label": "Reports Button"}]}]},
+            "requires": {"addins": [
+                {"id": "t.ui-vba", "version": "^0.1.4", "github": "sirmmo/craft-vba", "why": "Runs the report macros"},
+                {"id": "t.ui-mqtt", "version": "*", "github": "sirmmo/craft-collab", "optional": true}]}}"#,
+    )
+    .unwrap();
+    wordcraft_plugin::add(m, std::env::temp_dir());
+    assert!(wordcraft_ui_egui::plugin_ui::groups("Review").is_empty(), "a blocked add-in's ribbon group is absent");
+    let mut a = app();
+    a.run("ui.backstage", json!({"value": true, "page": "options", "pane": "addins"})).unwrap();
+    let mut h = harness(a);
+    h.run_steps(4);
+    assert!(h.query_by_label("Blocked · t.ui-reports").is_some());
+    assert!(h.query_by_label("Needs craft-vba, which isn't installed").is_some());
+    h.get_by_label("Install Missing").click();
+    h.run_steps(3);
+    let offer = h.state().plugin_install.offer.as_ref().expect("Install Missing offers the missing add-ins");
+    assert_eq!(offer.plugin, "t.ui-reports");
+    let ticked: Vec<(&str, bool)> = offer.items.iter().map(|(m, on)| (m.id.as_str(), *on)).collect();
+    assert_eq!(ticked, [("t.ui-vba", true), ("t.ui-mqtt", false)], "optional add-ins are offered unticked");
+    assert!(h.query_by_label("Reports needs craft-vba ^0.1.4 (Runs the report macros). Install it too?").is_some());
+    assert!(h.query_by_label("Reports can use craft-collab *. Install it too?").is_some());
+    h.get_by_label("Not Now").click();
+    h.run_steps(3);
+    assert!(h.state().plugin_install.offer.is_none());
+
+    // Once the required add-in is there, the add-in unblocks; turning that one off asks first.
+    let vba =
+        wordcraft_plugin::Manifest::parse(r#"{"id": "t.ui-vba", "name": "craft-vba", "version": "0.1.5", "run": {"command": "./not-started"}}"#)
+            .unwrap();
+    wordcraft_plugin::add(vba, std::env::temp_dir());
+    h.run_steps(3);
+    assert!(h.query_by_label("Install Missing").is_none());
+    assert_eq!(wordcraft_ui_egui::plugin_ui::groups("Review").len(), 1, "unblocked without a restart");
+    let deactivate = h.query_all_by_label("Deactivate").last().expect("the second card's button");
+    deactivate.click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Reports needs craft-vba. Turn both off?").is_some());
+    assert!(wordcraft_plugin::get("t.ui-vba").unwrap().enabled(), "nothing is turned off before the answer");
+    h.get_by_label("Turn Both Off").click();
+    h.run_steps(3);
+    assert!(!wordcraft_plugin::get("t.ui-vba").unwrap().enabled());
+    assert!(!wordcraft_plugin::get("t.ui-reports").unwrap().enabled());
+    wordcraft_plugin::unload("t.ui-reports");
+    wordcraft_plugin::unload("t.ui-vba");
+}

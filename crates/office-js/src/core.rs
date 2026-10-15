@@ -427,8 +427,15 @@ pub fn enum_value(key: &str) -> String {
 /// WordApi is answered as 1.3 although only its text, paragraph, range, font and properties
 /// objects are there (no content controls, pictures, tables or HTML/OOXML): add-ins check the set
 /// before they start, and the other craft apps report their partial ExcelApi and PowerPointApi
-/// sets the same way. What's missing is listed in docs/officejs.md.
+/// sets the same way. What's missing is listed in docs/officejs.md. The plugin host checks Office
+/// add-ins' `<Requirements>` against the same table (`wordcraft_plugin::office::API_SETS`; a test
+/// there keeps them equal).
 pub const REQUIREMENT_SETS: &[(&str, (u32, u32))] = &[("WordApi", (1, 3)), ("Settings", (1, 1)), ("Selection", (1, 1)), ("TextCoercion", (1, 1))];
+
+/// The Common API methods this library implements (`<Requirements><Methods>`), as the plugin
+/// host checks them (`wordcraft_plugin::office::API_METHODS`).
+pub const SUPPORTED_METHODS: &[&str] =
+    &["Document.getSelectedDataAsync", "Document.setSelectedDataAsync", "Settings.get", "Settings.set", "Settings.remove", "Settings.saveAsync"];
 
 /// `Office.context.requirements.isSetSupported(name, minVersion)`.
 pub fn is_set_supported(name: &str, min: Option<&str>) -> bool {

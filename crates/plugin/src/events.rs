@@ -133,9 +133,9 @@ pub fn wait_for_events(_timeout: Duration) -> bool {
     true
 }
 
-/// The loaded, enabled plugins that declared `event` (Office add-ins hear none).
+/// The loaded, active (on, not blocked) plugins that declared `event` (Office add-ins hear none).
 pub fn listeners(event: DocumentEvent) -> Vec<std::sync::Arc<crate::Plugin>> {
-    crate::list().into_iter().filter(|p| p.enabled() && p.manifest.office.is_none() && p.manifest.events.iter().any(|e| e == event.name())).collect()
+    crate::list().into_iter().filter(|p| p.active() && p.manifest.office.is_none() && p.manifest.events.iter().any(|e| e == event.name())).collect()
 }
 
 /// The answer to a plugin's host request during an event.
