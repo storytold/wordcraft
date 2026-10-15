@@ -182,6 +182,32 @@ fn a_tall_footer_pushes_the_body_up() {
     assert!((l.pages[0].body.bottom() - (792.0 - 72.0)).abs() < 0.01, "{:?}", l.pages[0].body);
 }
 
+/// The extra leading of double spacing may hang into the bottom margin, but not into a footer
+/// that reaches above the margin and pushed the body up: wherever the page breaks, the body's
+/// lines end above the footer.
+#[test]
+fn line_spacing_leading_does_not_hang_into_a_tall_footer() {
+    use wordcraft_doc::props::LineSpacing;
+    for shift in 0..30 {
+        let mut d = Document::from_text(&"Body line\n".repeat(40));
+        let end = Pos::body(d.body.len() - 1, 0);
+        d.format_paragraphs(&Pos::body(0, 0), &end, &|p| {
+            p.line_spacing = Some(LineSpacing::Multiple(2.0));
+            p.space_after = Some(0.0);
+        })
+        .unwrap();
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.space_before = Some(shift as f32)).unwrap();
+        let id = d.add_part(PartKind::Footer, paras("Footer line", 8));
+        d.last_section.footers.default = Some(id);
+        let l = lay(&d);
+        for (i, p) in l.pages.iter().enumerate() {
+            let (_, body_bottom) = extent(&p.items, StoryRef::Body).unwrap();
+            let (top, _) = extent(&p.footer, StoryRef::Part(id)).unwrap();
+            assert!(body_bottom <= top + 0.01, "shift {shift}, page {i}: body ends at {body_bottom}, footer starts at {top}");
+        }
+    }
+}
+
 #[test]
 fn a_linked_tall_header_pushes_the_next_sections_body_down() {
     // #454: section 2 has no header of its own and shows section 1's (link to previous).
