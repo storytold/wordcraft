@@ -1654,7 +1654,7 @@ fn placeholder_of(s: &str) -> String {
 }
 
 fn on_off_attr(e: &El, name: &str) -> bool {
-    e.attr(name).is_some_and(|v| !matches!(v, "0" | "false" | "off"))
+    e.attr(name).is_some_and(crate::units::is_on)
 }
 
 /// The alternative text of a `wp:docPr`, `pic:cNvPr` or `wps:cNvPr` (ECMA-376
@@ -1945,7 +1945,7 @@ fn effect_list(l: &El) -> ShapeEffects {
         // `dir`: 60000ths of a degree, clockwise.
         let angle = e.attr("dir").and_then(int).map(|v| (v.rem_euclid(21_600_000) as f32) / 60_000.0).unwrap_or(0.0);
         // `rotWithShape` is true unless it says otherwise (ECMA-376 §20.1.8.49).
-        let rot_with_shape = e.attr("rotWithShape").is_none_or(|v| !matches!(v, "0" | "false" | "off"));
+        let rot_with_shape = e.attr("rotWithShape").is_none_or(crate::units::is_on);
         Shadow { color: color.unwrap_or(Rgb::BLACK), transparency, blur: pt(e, "blurRad"), distance: pt(e, "dist"), angle, rot_with_shape }
     });
     let glow = l.child("a:glow").map(|e| {

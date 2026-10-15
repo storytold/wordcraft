@@ -61,7 +61,7 @@ pub fn read_math_pr(e: &El) -> MathProps {
 fn on(e: &El) -> bool {
     match e.attr("m:val") {
         None => true,
-        Some(v) => !matches!(v.trim(), "0" | "false" | "off" | "False" | "FALSE"),
+        Some(v) => crate::units::is_on(v),
     }
 }
 

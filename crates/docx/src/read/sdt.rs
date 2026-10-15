@@ -15,7 +15,7 @@ fn text(v: Option<&str>) -> String {
 
 /// An on/off element: on unless its value (`w:val`, or the extension's own) says off.
 fn on(e: &El) -> bool {
-    e.attr("w:val").or_else(|| e.attr("w14:val")).or_else(|| e.attr("w15:val")).is_none_or(|v| !matches!(v, "0" | "false" | "off"))
+    e.attr("w:val").or_else(|| e.attr("w14:val")).or_else(|| e.attr("w15:val")).is_none_or(crate::units::is_on)
 }
 
 fn symbol(e: Option<&El>, default: char) -> (char, String) {
@@ -51,7 +51,7 @@ pub fn sdt_pr(pr: Option<&El>, block: bool) -> ContentControl {
             "w:temporary" => c.temporary = on(k),
             "w:showingPlcHdr" => c.showing_placeholder = on(k),
             "w:richText" => c.kind = ControlKind::RichText,
-            "w:text" => c.kind = ControlKind::Text { multi_line: k.attr("w:multiLine").is_some_and(|v| !matches!(v, "0" | "false" | "off")) },
+            "w:text" => c.kind = ControlKind::Text { multi_line: k.attr("w:multiLine").is_some_and(crate::units::is_on) },
             "w14:checkbox" => {
                 let checked = k.child("w14:checked").is_some_and(on);
                 let (checked_char, checked_font) = symbol(k.child("w14:checkedState"), CHECKED);

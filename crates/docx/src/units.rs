@@ -56,11 +56,17 @@ pub fn tw(e: &El, attr: &str) -> Option<f32> {
     e.attr(attr).and_then(|v| measure(v, 20.0))
 }
 
+/// ST_OnOff string value: `0`, `false`, `off` (case-insensitive, trimmed) = off (false); otherwise on (true).
+pub fn is_on(s: &str) -> bool {
+    let t = s.trim();
+    !t.eq_ignore_ascii_case("0") && !t.eq_ignore_ascii_case("false") && !t.eq_ignore_ascii_case("off")
+}
+
 /// ST_OnOff: absent `w:val` = on; `0`, `false`, `off` = off.
 pub fn on_off(e: &El) -> bool {
     match e.attr("w:val") {
         None => true,
-        Some(v) => !matches!(v.trim(), "0" | "false" | "off" | "False" | "FALSE"),
+        Some(v) => is_on(v),
     }
 }
 
@@ -100,5 +106,33 @@ mod tests {
         assert_eq!(measure("x", 20.0), None);
         assert_eq!(int("12.6"), Some(13));
         assert_eq!(u32_of("-5"), Some(0));
+    }
+
+    #[test]
+    fn test_is_on_and_on_off() {
+        assert!(is_on("1"));
+        assert!(is_on("true"));
+        assert!(is_on("True"));
+        assert!(is_on("TRUE"));
+        assert!(is_on("on"));
+        assert!(is_on("On"));
+        assert!(is_on("ON"));
+        assert!(!is_on("0"));
+        assert!(!is_on(" 0 "));
+        assert!(!is_on("false"));
+        assert!(!is_on("False"));
+        assert!(!is_on("FALSE"));
+        assert!(!is_on("off"));
+        assert!(!is_on("Off"));
+        assert!(!is_on("OFF"));
+
+        let el_on = crate::xml::parse(r#"<w:b xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>"#.as_bytes()).unwrap();
+        assert!(on_off(&el_on));
+
+        let el_off_upper = crate::xml::parse(r#"<w:b xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:val="OFF"/>"#.as_bytes()).unwrap();
+        assert!(!on_off(&el_off_upper));
+
+        let el_off_space = crate::xml::parse(r#"<w:b xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:val=" 0 "/>"#.as_bytes()).unwrap();
+        assert!(!on_off(&el_off_space));
     }
 }
