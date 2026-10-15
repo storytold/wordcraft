@@ -76,6 +76,7 @@ impl Session {
             math,
             password,
             macros_enabled,
+            location_label,
             #[cfg(not(target_arch = "wasm32"))]
             recovery_slot,
             also_selected,
@@ -158,6 +159,7 @@ impl Session {
             read_aloud: Default::default(),
             password,
             macros_enabled,
+            location_label,
             #[cfg(not(target_arch = "wasm32"))]
             recovery: None,
             #[cfg(not(target_arch = "wasm32"))]

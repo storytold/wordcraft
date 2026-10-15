@@ -33,6 +33,8 @@ impl WordApp {
         // part of it: saving and exporting go on without it (the refusal stays on the status
         // line), and replacing the document asks Save / Don't Save / Cancel about it.
         let refused = if flushes_comment_drafts(id, &params) { panes::flush_comment_drafts(self).err() } else { None };
+        // An add-in command run from the interface: its dialog or file comes after it (below).
+        let plugin = (id == "plugins.run").then(|| params.get("plugin").and_then(Value::as_str).map(str::to_string)).flatten();
         if id == "file.recover" && params.as_object().is_none_or(|p| p.is_empty()) {
             self.ui.backstage = true;
             self.ui.backstage_page = "recover".into();
@@ -93,6 +95,9 @@ impl WordApp {
             self.spelling_review = Some(crate::proofing_pane::SpellingForm::new(self, v.clone()));
         }
         let r = system_clipboard::explain(self, id, r);
+        if let (Some(plugin), Ok(v)) = (&plugin, &r) {
+            crate::plugin_ui::after_run(self, plugin, v);
+        }
         // Check Accessibility shows its findings in the Accessibility pane, kept up to date there.
         if id == "file.accessibility" && r.is_ok() {
             self.session.view.accessibility_pane = true;

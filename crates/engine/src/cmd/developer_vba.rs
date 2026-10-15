@@ -197,7 +197,8 @@ fn run_macro(s: &mut Session, v: &Value) -> CmdResult {
         return Err(CmdError::Disabled("macros are disabled for this document: Enable Content, or change Developer › Macro Security".into()));
     }
     let (plugin, _) = macro_plugin(v)?;
-    let mut params = json!({"name": name});
+    // Protocol 1.2: the macro sees the document's file, as commands do.
+    let mut params = json!({"name": name, "context": {"document": super::plugins::document_context(s)}});
     // A ribbon button's macro gets the button (`control.Id`, `control.Tag`).
     if let Some(c) = v.get("control").filter(|c| c.is_object()) {
         params["control"] = json!({"id": c.get("id").cloned().unwrap_or(json!("")), "tag": c.get("tag").cloned().unwrap_or(json!(""))});

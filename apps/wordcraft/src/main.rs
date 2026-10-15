@@ -104,6 +104,8 @@ impl eframe::App for App {
             {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.0.quit_requested = false;
+                // `terminate:` skips `on_exit`: add-ins hear the documents close here.
+                self.0.closing();
                 schedule_macos_terminate(&mut self.0, self.2.as_ref());
             }
             #[cfg(not(target_os = "macos"))]
@@ -128,6 +130,8 @@ impl eframe::App for App {
         office_web::flush(frame);
     }
     fn on_exit(&mut self) {
+        // Add-ins that listen hear the documents close (at most 5 s).
+        self.0.closing();
         print::finish_pending_jobs();
         self.0.session.finish_recovery();
         save_prefs(&self.0);

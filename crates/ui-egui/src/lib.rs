@@ -60,6 +60,7 @@ pub mod options;
 pub mod panes;
 pub mod paste_picture;
 pub mod office_pane;
+pub mod plugin_dialog;
 pub mod plugin_ui;
 pub mod previews;
 pub mod print_page;
@@ -592,6 +593,8 @@ pub struct WordApp {
     /// Escape may leave full screen. Read before anything handles the frame's keys.
     escape_free: bool,
     pub quit_requested: bool,
+    /// Add-ins have been told the documents close with the app ([`WordApp::closing`]).
+    closing_told: bool,
     pub autosave: bool,
     /// The document's fonts that aren't installed, for the status bar and the font box, and the
     /// layout they were read from.

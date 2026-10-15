@@ -64,6 +64,16 @@ mod web {
         pub fn request_with(&mut self, _method: &str, _params: Json, _timeout: Duration, _host: &mut HostHandler<'_>) -> Result<Json, RequestError> {
             Err(RequestError::fatal("plugins need the desktop app or the CLI"))
         }
+        pub fn request_bounded(
+            &mut self,
+            _method: &str,
+            _params: Json,
+            _timeout: Duration,
+            _hard: bool,
+            _host: &mut HostHandler<'_>,
+        ) -> Result<Json, RequestError> {
+            Err(RequestError::fatal("plugins need the desktop app or the CLI"))
+        }
         pub fn shutdown(self) {}
     }
 }
@@ -208,6 +218,19 @@ mod native {
         /// with `host` while it works. Each answer starts the timeout again: a macro that keeps
         /// calling the host is working, not hung.
         pub fn request_with(&mut self, method: &str, params: Json, timeout: Duration, host: &mut HostHandler<'_>) -> Result<Json, RequestError> {
+            self.request_bounded(method, params, timeout, false, host)
+        }
+
+        /// [`Connection::request_with`]; `hard`: `timeout` is the whole time the request has,
+        /// however often the plugin calls the host meanwhile (events, protocol 1.2).
+        pub fn request_bounded(
+            &mut self,
+            method: &str,
+            params: Json,
+            timeout: Duration,
+            hard: bool,
+            host: &mut HostHandler<'_>,
+        ) -> Result<Json, RequestError> {
             let id = self.next_id;
             self.next_id = self.next_id.wrapping_add(1);
             let mut bytes = serde_json::to_vec(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))
@@ -237,7 +260,9 @@ mod native {
                         bytes.push(b'\n');
                         self.to_plugin.send(bytes).map_err(|_| RequestError::fatal("the plugin stopped reading"))?;
                     }
-                    deadline = Instant::now() + timeout;
+                    if !hard {
+                        deadline = Instant::now() + timeout;
+                    }
                     continue;
                 }
                 if msg.get("id").and_then(Json::as_u64) != Some(id) {

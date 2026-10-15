@@ -624,6 +624,19 @@ impl LocalImages {
     }
 }
 
+/// What is at `path`: `Some(true)` a regular file, `Some(false)` something else (a folder), `None`
+/// nothing (or nothing readable). For checks before opening, such as an add-in's `open`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn is_regular_file(path: &std::path::Path) -> Option<bool> {
+    std::fs::metadata(path).ok().map(|m| m.is_file())
+}
+
+/// The browser has no local files.
+#[cfg(target_arch = "wasm32")]
+pub fn is_regular_file(_path: &std::path::Path) -> Option<bool> {
+    None
+}
+
 /// Up to `limit + 1` bytes of the regular file at `path` (more than `limit` means too large), or
 /// `None` for anything else. A named pipe blocks when opened and a device reports a length of 0
 /// and may never end, so the path is checked before opening, the opened handle is checked again,

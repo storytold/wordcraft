@@ -209,6 +209,9 @@ pub struct Session {
     pub password: Option<crate::io::Password>,
     /// The user let this document's macros run (Enable Content), until another document opens.
     pub macros_enabled: bool,
+    /// Where the document came from, in words, when an add-in opened it (`file.open`'s `label`,
+    /// protocol 1.2: "Nextcloud · Documents/Budget.docx"); shown as its location.
+    pub location_label: Option<String>,
     /// The recovery worker every open document's copy is kept through (desktop hosts only).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) recovery: Option<crate::recovery::Recovery>,
