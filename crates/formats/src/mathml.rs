@@ -442,7 +442,8 @@ pub fn local(name: &str) -> &str {
 /// The linear format of a `<math>` element, and whether it's a display equation. `None` when it
 /// holds nothing.
 pub fn read(math: &El) -> Option<(String, bool)> {
-    let display = math.attr("display").is_some_and(|d| d.eq_ignore_ascii_case("block")) || math.attr("mode").is_some_and(|d| d == "display");
+    let display = math.attr("display").is_some_and(|d| d.trim().eq_ignore_ascii_case("block"))
+        || math.attr("mode").is_some_and(|d| d.trim().eq_ignore_ascii_case("display"));
     let linear = linear_of(math);
     let linear: String = linear.chars().filter(|c| !c.is_control()).collect();
     let linear = linear.trim().to_string();
@@ -555,8 +556,41 @@ fn elem(e: &El, depth: usize, budget: &mut usize) -> Arg {
                 return Vec::new();
             }
             let mut r = MRun::new(t);
-            if local(&e.name) == "mi" && e.attr("mathvariant") == Some("normal") && t.chars().count() == 1 {
-                r.sty = Some(MSty::Plain);
+            if let Some(mv) = e.attr("mathvariant") {
+                let mv_lower = mv.trim().to_ascii_lowercase();
+                let (scr, bold, italic, plain) = match mv_lower.as_str() {
+                    "normal" => (MScr::Roman, false, false, true),
+                    "bold" => (MScr::Roman, true, false, false),
+                    "italic" => (MScr::Roman, false, true, false),
+                    "bold-italic" => (MScr::Roman, true, true, false),
+                    "double-struck" => (MScr::DoubleStruck, false, false, false),
+                    "script" => (MScr::Script, false, false, false),
+                    "bold-script" => (MScr::Script, true, false, false),
+                    "fraktur" => (MScr::Fraktur, false, false, false),
+                    "bold-fraktur" => (MScr::Fraktur, true, false, false),
+                    "sans-serif" => (MScr::SansSerif, false, false, false),
+                    "bold-sans-serif" => (MScr::SansSerif, true, false, false),
+                    "sans-serif-italic" => (MScr::SansSerif, false, true, false),
+                    "sans-serif-bold-italic" => (MScr::SansSerif, true, true, false),
+                    "monospace" => (MScr::Monospace, false, false, false),
+                    _ => (MScr::Roman, false, false, false),
+                };
+                if plain {
+                    if local(&e.name) == "mi" && t.chars().count() == 1 {
+                        r.sty = Some(MSty::Plain);
+                    }
+                } else if scr != MScr::Roman || bold || italic {
+                    r.scr = scr;
+                    r.sty = match (bold, italic) {
+                        (true, true) => Some(MSty::BoldItalic),
+                        (true, false) => Some(MSty::Bold),
+                        (false, true) => Some(MSty::Italic),
+                        (false, false) => None,
+                    };
+                    if scr != MScr::Roman || bold {
+                        r.text = r.text.chars().map(|c| math_alnum(c, bold, italic, scr)).collect();
+                    }
+                }
             }
             vec![MNode::Run(r)]
         }
@@ -892,4 +926,18 @@ mod tests {
         let m = to_mathml(&n, false, "z");
         assert!(m.ends_with("</math>"));
     }
+
+    #[test]
+    fn test_mathvariant_and_mode_display() {
+        let (lin, disp) = pasted("<math mode=\"DISPLAY\"><mi mathvariant=\"bold\">v</mi></math>").remove(0);
+        assert!(disp);
+        assert_eq!(lin, "𝐯");
+
+        let (lin, _) = pasted("<math><mi mathvariant=\"double-struck\">R</mi></math>").remove(0);
+        assert_eq!(lin, "ℝ");
+
+        let (lin, _) = pasted("<math><mi mathvariant=\"fraktur\">g</mi></math>").remove(0);
+        assert_eq!(lin, "𝔤");
+    }
 }
+
