@@ -56,12 +56,24 @@ pub fn tw(e: &El, attr: &str) -> Option<f32> {
     e.attr(attr).and_then(|v| measure(v, 20.0))
 }
 
+/// Returns true if string `s` represents an off/false value in ECMA-376 ST_OnOff
+/// (0, false, off, f) case-insensitively and ignoring whitespace.
+pub fn is_off(s: &str) -> bool {
+    let t = s.trim();
+    t == "0" || t.eq_ignore_ascii_case("false") || t.eq_ignore_ascii_case("off") || t.eq_ignore_ascii_case("f")
+}
+
 /// ST_OnOff: absent `w:val` = on; `0`, `false`, `off` = off.
 pub fn on_off(e: &El) -> bool {
     match e.attr("w:val") {
         None => true,
-        Some(v) => !matches!(v.trim(), "0" | "false" | "off" | "False" | "FALSE"),
+        Some(v) => !is_off(v),
     }
+}
+
+/// An attribute parsed as ST_OnOff: present and not off.
+pub fn on_off_attr(e: &El, name: &str) -> bool {
+    e.attr(name).is_some_and(|v| !is_off(v))
 }
 
 /// An on/off child of `parent`, if present.
@@ -100,5 +112,25 @@ mod tests {
         assert_eq!(measure("x", 20.0), None);
         assert_eq!(int("12.6"), Some(13));
         assert_eq!(u32_of("-5"), Some(0));
+    }
+
+    #[test]
+    fn test_is_off() {
+        assert!(is_off("0"));
+        assert!(is_off("false"));
+        assert!(is_off("False"));
+        assert!(is_off("FALSE"));
+        assert!(is_off("off"));
+        assert!(is_off("Off"));
+        assert!(is_off("OFF"));
+        assert!(is_off("f"));
+        assert!(is_off("F"));
+        assert!(is_off(" 0 "));
+        assert!(is_off(" off "));
+        assert!(!is_off("1"));
+        assert!(!is_off("true"));
+        assert!(!is_off("True"));
+        assert!(!is_off("on"));
+        assert!(!is_off("On"));
     }
 }

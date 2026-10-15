@@ -13,7 +13,7 @@ use wordcraft_doc::section::{
 };
 
 use super::drawing_color::adjust_lum;
-use crate::units::{int, measure, on_off, tw, u32_of};
+use crate::units::{int, is_off, measure, on_off, tw, u32_of};
 
 /// A text frame (`w:framePr` without a drop cap, ECMA-376 §17.3.1.11), sizes and offsets in
 /// points (clamped), names kept as OOXML writes them.
@@ -480,7 +480,7 @@ pub fn look(e: &El) -> TableLook {
         l.banded_rows = bits & 0x0200 == 0;
         l.banded_columns = bits & 0x0400 == 0;
     }
-    let b = |name: &str| e.attr(name).map(|v| !matches!(v, "0" | "false" | "off"));
+    let b = |name: &str| e.attr(name).map(|v| !is_off(v));
     if let Some(v) = b("w:firstRow") {
         l.header_row = v;
     }
@@ -634,8 +634,8 @@ pub fn sectpr(e: &El) -> (SectionProps, Vec<HfRef>) {
                 if let Some(sp) = tw(k, "w:space") {
                     c.space = sp.max(0.0);
                 }
-                c.separator = k.attr("w:sep").is_some_and(|v| !matches!(v, "0" | "false" | "off"));
-                let equal = k.attr("w:equalWidth").is_none_or(|v| !matches!(v, "0" | "false" | "off"));
+                c.separator = k.attr("w:sep").is_some_and(|v| !is_off(v));
+                let equal = k.attr("w:equalWidth").is_none_or(|v| !is_off(v));
                 if !equal {
                     c.widths = k
                         .children("w:col")

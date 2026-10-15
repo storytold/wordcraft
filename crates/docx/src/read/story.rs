@@ -15,7 +15,7 @@ use super::Reader;
 use super::props::{sectpr, tcpr, trpr};
 use super::shape_style::{preset_kind, shape_paint, vml_color, vml_preset_kind};
 use crate::package::{ContentTypes, Rels, rt};
-use crate::units::{int, measure, u32_of};
+use crate::units::{int, is_off, measure, on_off_attr, u32_of};
 use crate::xml::{El, Node};
 use wordcraft_doc::wordart::TextWarp;
 
@@ -1653,9 +1653,6 @@ fn placeholder_of(s: &str) -> String {
     s.chars().map(|c| if c.is_control() { ' ' } else { c }).take(wordcraft_doc::control::MAX_CONTROL_TEXT).collect::<String>().trim().to_string()
 }
 
-fn on_off_attr(e: &El, name: &str) -> bool {
-    e.attr(name).is_some_and(|v| !matches!(v, "0" | "false" | "off"))
-}
 
 /// The alternative text of a `wp:docPr`, `pic:cNvPr` or `wps:cNvPr` (ECMA-376
 /// `CT_NonVisualDrawingProps`): the description (the title when there is none, as before), and
@@ -1945,7 +1942,7 @@ fn effect_list(l: &El) -> ShapeEffects {
         // `dir`: 60000ths of a degree, clockwise.
         let angle = e.attr("dir").and_then(int).map(|v| (v.rem_euclid(21_600_000) as f32) / 60_000.0).unwrap_or(0.0);
         // `rotWithShape` is true unless it says otherwise (ECMA-376 §20.1.8.49).
-        let rot_with_shape = e.attr("rotWithShape").is_none_or(|v| !matches!(v, "0" | "false" | "off"));
+        let rot_with_shape = e.attr("rotWithShape").is_none_or(|v| !is_off(v));
         Shadow { color: color.unwrap_or(Rgb::BLACK), transparency, blur: pt(e, "blurRad"), distance: pt(e, "dist"), angle, rot_with_shape }
     });
     let glow = l.child("a:glow").map(|e| {

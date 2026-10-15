@@ -2830,3 +2830,49 @@ fn row_table_borders_round_trip() {
     let again = wordcraft_docx::read(&saved).unwrap();
     assert_eq!(d.body, again.body);
 }
+
+#[test]
+fn st_on_off_case_insensitivity() {
+    let body = r#"<w:p>
+        <w:pPr>
+            <w:sectPr>
+                <w:cols w:sep="False"/>
+            </w:sectPr>
+        </w:pPr>
+        <w:r>
+            <w:rPr>
+                <w:b w:val="Off"/>
+                <w:i w:val="FALSE"/>
+            </w:rPr>
+            <w:t>Hello</w:t>
+        </w:r>
+        <w:r>
+            <w:fldChar w:fldCharType="begin" w:fldLock="False"/>
+            <w:instrText>PAGE</w:instrText>
+            <w:fldChar w:fldCharType="separate"/>
+            <w:t>1</w:t>
+            <w:fldChar w:fldCharType="end"/>
+        </w:r>
+    </w:p>
+    <w:tbl>
+        <w:tblPr>
+            <w:tblLook w:firstRow="False" w:lastRow="Off"/>
+        </w:tblPr>
+        <w:tr><w:tc><w:p/></w:tc></w:tr>
+    </w:tbl>"#;
+    let doc = wordcraft_docx::read(&docx(body, &[], &[])).unwrap();
+    let p = doc.body.first().unwrap().as_para().unwrap();
+    let r = p.runs.first().unwrap();
+    assert_eq!(r.props.bold, Some(false));
+    assert_eq!(r.props.italic, Some(false));
+
+    let fld = match p.objects.first() {
+        Some(InlineObject::Field { locked, .. }) => *locked,
+        _ => panic!("expected field"),
+    };
+    assert!(!fld);
+
+    let t = doc.body.get(1).unwrap().as_table().unwrap();
+    assert!(!t.props.look.header_row);
+    assert!(!t.props.look.total_row);
+}

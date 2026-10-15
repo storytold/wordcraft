@@ -1494,7 +1494,7 @@ pub(crate) const PROTECTION_HASH_ATTRS: [&str; 16] = [
 /// formatting is limited to unlocked styles, and the password hash. Only enforced protection is
 /// kept; a hostile attribute value can't be longer than a hash needs.
 fn read_protection(k: &El, s: &mut wordcraft_doc::Settings) {
-    let on = |v: &str| !matches!(v, "0" | "false" | "off");
+    let on = |v: &str| !crate::units::is_off(v);
     if !k.attr("w:enforcement").is_some_and(on) {
         return;
     }
