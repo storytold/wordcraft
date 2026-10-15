@@ -211,6 +211,29 @@ impl Lexer<'_> {
         found.map(|k| start + k).unwrap_or(self.s.len())
     }
 
+    /// Skip past the next matching end tag `</tag...>` (ASCII case-insensitive), or to the end.
+    fn skip_past_end_tag(&mut self, tag: &str) {
+        let prefix = format!("</{tag}");
+        let p = prefix.as_bytes();
+        while self.pos < self.s.len() {
+            let hay = self.rest().as_bytes();
+            let found = hay.windows(p.len().max(1)).position(|w| w.eq_ignore_ascii_case(p));
+            let Some(k) = found else {
+                self.pos = self.s.len();
+                return;
+            };
+            let after_tag = k + p.len();
+            let next_byte = hay.get(after_tag);
+            if next_byte.is_none_or(|b| b.is_ascii_whitespace() || *b == b'>' || *b == b'/') {
+                self.pos += after_tag;
+                self.skip_past(">");
+                return;
+            } else {
+                self.pos += k + 2;
+            }
+        }
+    }
+
     fn next(&mut self) -> Option<Tok> {
         let rest = self.rest();
         if rest.is_empty() {
@@ -1162,8 +1185,7 @@ pub fn parse_with(s: &str, images: ImageLoader) -> Flow {
                     continue;
                 }
                 if matches!(name.as_str(), "script" | "style" | "noscript" | "template" | "textarea") && !self_close {
-                    lx.skip_past(&format!("</{name}"));
-                    lx.skip_past(">");
+                    lx.skip_past_end_tag(&name);
                     continue;
                 }
                 b.start(&name, &attrs, self_close);
@@ -1784,5 +1806,24 @@ mod tests {
     #[test]
     fn entities() {
         assert_eq!(unescape("a &lt;b&gt; &#65;&#x42; &bogus; &"), "a <b> AB &bogus; &");
+    }
+
+    #[test]
+    fn raw_text_elements_skip_only_matching_end_tag() {
+        let f = parse("<script>var a = \"</scripted>\"; var b = \"<b>malicious</b>\";</script><p>Hello</p>");
+        assert_eq!(f.blocks.len(), 1);
+        let p = match &f.blocks[0] {
+            FBlock::Para(p) => p,
+            b => panic!("expected para, got {b:?}"),
+        };
+        assert_eq!(p.text(), "Hello");
+
+        let f = parse("<style>/* </styles> */ p { color: red; }</style><p>World</p>");
+        assert_eq!(f.blocks.len(), 1);
+        let p = match &f.blocks[0] {
+            FBlock::Para(p) => p,
+            b => panic!("expected para, got {b:?}"),
+        };
+        assert_eq!(p.text(), "World");
     }
 }
