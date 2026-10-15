@@ -161,7 +161,7 @@ fn list_marker(t: &str) -> Option<Marker> {
         (Marker { ordered: true, ch: d, len: digits + 1, start }, digits + 1)
     };
     let rest = t.get(len..)?;
-    if rest.is_empty() || rest.starts_with(' ') { Some(m) } else { None }
+    if rest.is_empty() || rest.starts_with([' ', '\t']) { Some(m) } else { None }
 }
 
 fn split_row(l: &str) -> Vec<String> {
@@ -255,12 +255,15 @@ fn join_lines(lines: &[String]) -> String {
         } else if l.ends_with("  ") {
             s.push_str(l.trim_end());
             s.push('\n');
-        } else if l.ends_with('\\') && !l.ends_with("\\\\") {
-            s.push_str(&l[..l.len() - 1]);
-            s.push('\n');
         } else {
-            s.push_str(l.trim_end());
-            s.push(' ');
+            let num_bs = l.chars().rev().take_while(|&c| c == '\\').count();
+            if num_bs % 2 == 1 {
+                s.push_str(&l[..l.len() - 1]);
+                s.push('\n');
+            } else {
+                s.push_str(l.trim_end());
+                s.push(' ');
+            }
         }
     }
     s
@@ -435,13 +438,19 @@ fn parse_list(lines: &[String], mut i: usize, depth: usize, level: u8, out: &mut
             break;
         }
         let after = t.get(m.len..).unwrap_or("");
-        let spaces = indent(after);
+        let tab_stop = 4 - ((ind + m.len) % 4);
+        let spaces = if after.starts_with('\t') { tab_stop } else { indent(after) };
         let content_indent = if is_blank(after) || spaces > 4 { ind + m.len + 1 } else { ind + m.len + spaces };
-        let mut item: Vec<String> =
-            vec![if is_blank(after) { String::new() } else { after.get(spaces.min(4).min(after.len())..).unwrap_or("").to_string() }];
-        if spaces > 4 {
-            item[0] = after.get(1..).unwrap_or("").to_string();
-        }
+        let first_text = if is_blank(after) {
+            String::new()
+        } else if let Some(stripped) = after.strip_prefix('\t') {
+            stripped.to_string()
+        } else if spaces > 4 {
+            after.get(1..).unwrap_or("").to_string()
+        } else {
+            after.get(spaces.min(4).min(after.len())..).unwrap_or("").to_string()
+        };
+        let mut item: Vec<String> = vec![first_text];
         i += 1;
         while let Some(l) = lines.get(i) {
             if is_blank(l) {
@@ -634,10 +643,19 @@ fn link_dest(s: &str, at: usize) -> Option<(String, usize)> {
     i += ws;
     let r = s.get(i..)?;
     let (dest, used) = if let Some(inner) = r.strip_prefix('<') {
-        let end = inner.find(['>', '\n'])?;
-        if inner.get(end..)?.starts_with('\n') {
-            return None;
+        let mut end = None;
+        let mut chars = inner.char_indices().peekable();
+        while let Some((k, c)) = chars.next() {
+            if c == '\\' {
+                chars.next();
+            } else if c == '>' {
+                end = Some(k);
+                break;
+            } else if c == '\n' || c == '<' {
+                return None;
+            }
         }
+        let end = end?;
         (inner.get(..end)?.to_string(), end + 2)
     } else {
         let mut depth = 0i32;
@@ -670,7 +688,17 @@ fn link_dest(s: &str, at: usize) -> Option<(String, usize)> {
     let r = s.get(i..)?;
     if let Some(q) = r.chars().next().filter(|c| matches!(c, '"' | '\'' | '(')) {
         let close = if q == '(' { ')' } else { q };
-        let end = r.get(1..)?.find(close)?;
+        let mut end = None;
+        let mut chars = r.get(1..)?.char_indices().peekable();
+        while let Some((k, c)) = chars.next() {
+            if c == '\\' {
+                chars.next();
+            } else if c == close {
+                end = Some(k);
+                break;
+            }
+        }
+        let end = end?;
         i += end + 2;
         let r = s.get(i..)?;
         i += r.len() - r.trim_start().len();
@@ -701,20 +729,21 @@ fn tag_attr(tag: &str, name: &str) -> Option<String> {
     while let Some(k) = lower.get(from..)?.find(name) {
         let at = from + k;
         let before = lower.get(..at)?.chars().next_back();
-        let after = lower.get(at + name.len()..)?.trim_start();
-        if before.is_some_and(|c| c.is_whitespace()) && after.starts_with('=') {
-            let v = after.get(1..)?.trim_start();
-            let q = v.chars().next()?;
-            return Some(if q == '"' || q == '\'' {
-                let inner = v.get(1..)?;
-                let off = tag.len() - inner.len();
+        let after_name = lower.get(at + name.len()..)?;
+        let trimmed_after = after_name.trim_start();
+        if before.is_some_and(|c| c.is_whitespace()) && trimmed_after.starts_with('=') {
+            let eq_pos = at + name.len() + (after_name.len() - trimmed_after.len());
+            let after_eq = tag.get(eq_pos + 1..)?.trim_start();
+            let mut chars = after_eq.chars();
+            let q = chars.next()?;
+            if q == '"' || q == '\'' {
+                let inner = after_eq.get(1..)?;
                 let end = inner.find(q)?;
-                tag.get(off..off + end)?.to_string()
+                return Some(inner.get(..end)?.to_string());
             } else {
-                let end = v.find(|c: char| c.is_whitespace() || c == '>').unwrap_or(v.len());
-                let off = tag.len() - v.len();
-                tag.get(off..off + end)?.to_string()
-            });
+                let end = after_eq.find(|c: char| c.is_whitespace() || c == '>' || c == '/').unwrap_or(after_eq.len());
+                return Some(after_eq.get(..end)?.to_string());
+            }
         }
         from = at + name.len();
     }
@@ -855,7 +884,8 @@ fn tokenize(s: &str, base: &Fmt, depth: usize) -> Vec<Node> {
                 let lower = inner.to_ascii_lowercase();
                 let is_auto = !inner.is_empty()
                     && !inner.contains([' ', '<', '\n'])
-                    && (inner.contains("://") || lower.starts_with("mailto:") || (inner.contains('@') && !inner.contains('/')));
+                    && !inner.chars().any(|c| c.is_ascii_control())
+                    && (is_autolink_uri(inner) || (inner.contains('@') && !inner.contains('/')));
                 if is_auto {
                     flush!();
                     let mut f = base.clone();
@@ -868,12 +898,16 @@ fn tokenize(s: &str, base: &Fmt, depth: usize) -> Vec<Node> {
                     push_text(&mut nodes, "\n", base);
                     i += inner.len() + 2;
                     text_start = i;
-                } else if lower.starts_with("a ") && rest.get(inner.len() + 1..).is_some_and(|r| r.to_ascii_lowercase().starts_with("</a>")) {
+                } else if lower.starts_with("a ")
+                    && (inner.trim_end().ends_with('/')
+                        || rest.get(inner.len() + 1..).is_some_and(|r| r.to_ascii_lowercase().starts_with("</a>")))
+                {
                     flush!();
                     if let Some(name) = tag_attr(inner, "id").or_else(|| tag_attr(inner, "name")) {
                         nodes.push(Node::Inl(Inline::Anchor(name)));
                     }
-                    i += inner.len() + 2 + 4;
+                    let advance = if inner.trim_end().ends_with('/') { inner.len() + 2 } else { inner.len() + 2 + 4 };
+                    i += advance;
                     text_start = i;
                 } else {
                     i += 1;
@@ -896,6 +930,25 @@ fn tokenize(s: &str, base: &Fmt, depth: usize) -> Vec<Node> {
     }
     flush!();
     nodes
+}
+
+fn is_autolink_uri(inner: &str) -> bool {
+    let Some(colon) = inner.find(':') else { return false };
+    let scheme = &inner[..colon];
+    let mut chars = scheme.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() => {}
+        _ => return false,
+    }
+    let mut len = 1;
+    for c in chars {
+        if c.is_ascii_alphanumeric() || c == '+' || c == '.' || c == '-' {
+            len += 1;
+        } else {
+            return false;
+        }
+    }
+    (2..=32).contains(&len)
 }
 
 /// Longest `<...>` tag or autolink taken as inline HTML.
@@ -1679,5 +1732,65 @@ mod tests {
         let FBlock::Table(back_table2) = &back_flow2.blocks[0] else { panic!() };
         assert_eq!(back_table2.rows[1][0].text(), "a`b|c");
         assert_eq!(back_table2.rows[1][1].text(), "CRITICAL_DISTINCTIVE_INFO");
+    }
+
+    #[test]
+    fn hard_line_breaks_odd_backslashes() {
+        let f = parse("first line\\\\\\\nsecond line\n\nfirst\\\\\\\\\nsecond");
+        let FBlock::Para(p0) = &f.blocks[0] else { panic!() };
+        // Three backslashes: one escaped literal backslash + hard break (\n)
+        assert_eq!(p0.text(), "first line\\\nsecond line");
+        let FBlock::Para(p1) = &f.blocks[1] else { panic!() };
+        // Four backslashes: two escaped literal backslashes + soft break (space)
+        assert_eq!(p1.text(), "first\\\\ second");
+    }
+
+    #[test]
+    fn list_marker_with_tabs() {
+        let f = parse("-\tbullet item\n+\tplus item\n1.\tnumber item\n");
+        assert_eq!(f.blocks.len(), 3);
+        let FBlock::Para(p0) = &f.blocks[0] else { panic!() };
+        assert!(p0.list.is_some_and(|l| !l.ordered && l.level == 0));
+        assert_eq!(p0.text(), "bullet item");
+        let FBlock::Para(p1) = &f.blocks[1] else { panic!() };
+        assert!(p1.list.is_some_and(|l| !l.ordered && l.level == 0));
+        assert_eq!(p1.text(), "plus item");
+        let FBlock::Para(p2) = &f.blocks[2] else { panic!() };
+        assert!(p2.list.is_some_and(|l| l.ordered && l.level == 0));
+        assert_eq!(p2.text(), "number item");
+    }
+
+    #[test]
+    fn autolinks_various_schemes() {
+        let inlines = inl("Contact <tel:+1234567890> or <geo:37.7749,-122.4194> or <urn:isbn:0451450523>");
+        let links: Vec<_> = inlines
+            .iter()
+            .filter_map(|i| if let Inline::Text(t, f) = i { f.link.as_ref().map(|l| (t.as_str(), l.as_str())) } else { None })
+            .collect();
+        assert_eq!(links, vec![
+            ("tel:+1234567890", "tel:+1234567890"),
+            ("geo:37.7749,-122.4194", "geo:37.7749,-122.4194"),
+            ("urn:isbn:0451450523", "urn:isbn:0451450523"),
+        ]);
+    }
+
+    #[test]
+    fn anchor_tags_self_closing_and_spaced_attributes() {
+        let inlines = inl("<a id = \"target1\" ></a><a id= 'target2' /><a id=\"target3\" class=\"extra\"/>");
+        let anchors: Vec<_> = inlines
+            .iter()
+            .filter_map(|i| if let Inline::Anchor(a) = i { Some(a.as_str()) } else { None })
+            .collect();
+        assert_eq!(anchors, vec!["target1", "target2", "target3"]);
+    }
+
+    #[test]
+    fn link_escaped_title_and_dest() {
+        let inlines = inl(r#"[label](<https://example.com/a\>b> "title with \"quotes\"")"#);
+        let link: Vec<_> = inlines
+            .iter()
+            .filter_map(|i| if let Inline::Text(t, f) = i { f.link.as_ref().map(|l| (t.as_str(), l.as_str())) } else { None })
+            .collect();
+        assert_eq!(link, vec![("label", "https://example.com/a>b")]);
     }
 }
