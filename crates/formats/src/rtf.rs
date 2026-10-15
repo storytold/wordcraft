@@ -547,14 +547,16 @@ fn export_with(m: &Meta, w: &Writer, body: &str, sec: &wordcraft_doc::SectionPro
     }
     out.push_str("}\n");
     let tw = |v: f32| (v * 20.0).round() as i64;
+    let gutter = if sec.gutter > 0.0 { format!("\\gutter{}", tw(sec.gutter)) } else { String::new() };
     out.push_str(&format!(
-        "\\paperw{}\\paperh{}\\margl{}\\margr{}\\margt{}\\margb{}\\viewkind4\n",
+        "\\paperw{}\\paperh{}\\margl{}\\margr{}\\margt{}\\margb{}{}\\viewkind4\n",
         tw(sec.page_w),
         tw(sec.page_h),
         tw(sec.margin_left),
         tw(sec.margin_right),
         tw(sec.margin_top),
-        tw(sec.margin_bottom)
+        tw(sec.margin_bottom),
+        gutter
     ));
     out.push_str(body);
     out.push_str("}\n");
@@ -710,6 +712,7 @@ struct PageGeom {
     right: Option<i32>,
     top: Option<i32>,
     bottom: Option<i32>,
+    gutter: Option<i32>,
     header: Option<i32>,
     footer: Option<i32>,
     landscape: bool,
@@ -736,6 +739,7 @@ impl PageGeom {
             (self.right, &mut s.margin_right),
             (self.top, &mut s.margin_top),
             (self.bottom, &mut s.margin_bottom),
+            (self.gutter, &mut s.gutter),
             (self.header, &mut s.header),
             (self.footer, &mut s.footer),
         ] {
@@ -745,8 +749,8 @@ impl PageGeom {
         }
         // Margins that leave no room for text fall back to Word's.
         let d = wordcraft_doc::SectionProps::default();
-        if s.page_w - s.margin_left - s.margin_right < 72.0 {
-            (s.margin_left, s.margin_right) = (d.margin_left, d.margin_right);
+        if s.page_w - s.margin_left - s.margin_right - s.gutter < 72.0 {
+            (s.margin_left, s.margin_right, s.gutter) = (d.margin_left, d.margin_right, d.gutter);
         }
         if s.page_h - s.margin_top - s.margin_bottom < 72.0 {
             (s.margin_top, s.margin_bottom) = (d.margin_top, d.margin_bottom);
@@ -781,6 +785,7 @@ impl SecFmt {
             right: p.right.or(doc.right),
             top: p.top.or(doc.top),
             bottom: p.bottom.or(doc.bottom),
+            gutter: p.gutter.or(doc.gutter),
             header: p.header.or(doc.header),
             footer: p.footer.or(doc.footer),
             // A section that gives its own page size or orientation has its own orientation;
@@ -979,6 +984,7 @@ impl Reader {
             "margrsxn" => sec.page.right = Some(pv),
             "margtsxn" => sec.page.top = Some(pv),
             "margbsxn" => sec.page.bottom = Some(pv),
+            "guttersxn" => sec.page.gutter = Some(pv),
             "headery" => sec.page.header = Some(pv),
             "footery" => sec.page.footer = Some(pv),
             "lndscpsxn" => sec.page.landscape = on,
@@ -1722,7 +1728,7 @@ impl Reader {
             "slmult" => self.st.slmult = on,
             "li" | "lin" => self.st.li = Some(pv),
             "ri" | "rin" => self.st.ri = Some(pv),
-            "fi" => self.st.fi = Some(pv),
+            "fi" | "fin" => self.st.fi = Some(pv),
             "clbrdrt" => self.cell_side = Some('t'),
             "clbrdrl" => self.cell_side = Some('l'),
             "clbrdrb" => self.cell_side = Some('b'),
@@ -1767,6 +1773,7 @@ impl Reader {
             "margr" => self.page.right = Some(pv),
             "margt" => self.page.top = Some(pv),
             "margb" => self.page.bottom = Some(pv),
+            "gutter" => self.page.gutter = Some(pv),
             "landscape" => self.page.landscape = on,
             _ if self.section_word(w, p) => {}
             "cellx" => {
@@ -2245,6 +2252,11 @@ mod tests {
         let first = d.body.iter().find_map(|b| if let wordcraft_doc::Block::Para(p) = &**b { Some(p) } else { None }).unwrap();
         assert_eq!(first.props.space_after, Some(7.5));
         assert_eq!(first.props.indent_first, Some(-18.0));
+
+        let rtf_fin = br"{\rtf1\ansi\pard\lin720\rin360\fin360 fin_para\par}";
+        let f_fin = parse(rtf_fin).unwrap();
+        let sp_fin: Vec<model::Spacing> = f_fin.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p.spacing) } else { None }).collect();
+        assert_eq!((sp_fin[0].left, sp_fin[0].right, sp_fin[0].first), (Some(36.0), Some(18.0), Some(18.0)));
     }
 
     #[test]
@@ -2294,6 +2306,11 @@ mod tests {
         // Nonsense keeps Word's defaults.
         let d = import(br"{\rtf1\ansi\paperw0\margl99999 x\par}").unwrap();
         assert_eq!(d.last_section, wordcraft_doc::SectionProps::default());
+
+        let d = import(br"{\rtf1\ansi\paperw11906\paperh16838\margl1134\margr850\margt1134\margb1134\gutter360 x\par}").unwrap();
+        assert!((d.last_section.gutter - 18.0).abs() < 0.1);
+        let back = import(export(&d).as_bytes()).unwrap();
+        assert!((back.last_section.gutter - 18.0).abs() < 0.1);
     }
 
     #[test]
