@@ -472,24 +472,25 @@ pub fn asset_name(version: Version, kind: InstallKind, arch: &str) -> Option<Str
     }
 }
 
-/// Map Rust's target arch to release file arch segment.
+/// Map Rust's target arch to release file arch segment. An arch WordCraft doesn't ship for
+/// (RISC-V, 32-bit ARM, say) keeps its own name, so no release asset matches it and the update
+/// reports that there is no installer for this computer, rather than downloading another
+/// processor's build.
 pub fn target_arch() -> &'static str {
-    match std::env::consts::ARCH {
-        "x86_64" => "x86_64",
-        "aarch64" => "aarch64",
-        "x86" => "x86",
-        "arm" => "arm64",
-        _ => "x86_64",
-    }
+    release_arch_label(std::env::consts::ARCH, false)
 }
 
 /// Windows release arch label (x64, x86, arm64).
 pub fn windows_arch() -> &'static str {
-    match std::env::consts::ARCH {
-        "x86_64" => "x64",
-        "x86" => "x86",
-        "aarch64" => "arm64",
-        _ => "x64",
+    release_arch_label(std::env::consts::ARCH, true)
+}
+
+/// The release file arch segment for Rust's `arch` (`std::env::consts::ARCH`), on Windows or not.
+pub fn release_arch_label(arch: &'static str, windows: bool) -> &'static str {
+    match (arch, windows) {
+        ("x86_64", true) => "x64",
+        ("aarch64", true) => "arm64",
+        (other, _) => other,
     }
 }
 
@@ -727,6 +728,21 @@ mod tests {
     fn asset_names_per_kind() {
         let v = (0, 6, 1);
         assert_eq!(asset_name(v, InstallKind::LinuxDeb, "x86_64").as_deref(), Some("wordcraft-0.6.1-linux-x86_64.deb"));
+        // Arches without a release keep their own name, so they never pick another arch's build.
+        for (arch, windows, want) in [
+            ("x86_64", false, "x86_64"),
+            ("aarch64", false, "aarch64"),
+            ("x86_64", true, "x64"),
+            ("aarch64", true, "arm64"),
+            ("x86", true, "x86"),
+            ("riscv64", false, "riscv64"),
+            ("riscv64", true, "riscv64"),
+            ("arm", false, "arm"),
+            ("powerpc64", false, "powerpc64"),
+        ] {
+            assert_eq!(release_arch_label(arch, windows), want, "{arch} windows={windows}");
+        }
+        assert_eq!(asset_name(v, InstallKind::LinuxDeb, "riscv64").as_deref(), Some("wordcraft-0.6.1-linux-riscv64.deb"));
         assert_eq!(asset_name(v, InstallKind::LinuxDeb, "aarch64").as_deref(), Some("wordcraft-0.6.1-linux-aarch64.deb"));
         assert_eq!(asset_name(v, InstallKind::WindowsMsi, "x64").as_deref(), Some("wordcraft-0.6.1-windows-x64.msi"));
         assert!(asset_name(v, InstallKind::Unknown, "x86_64").is_none());
