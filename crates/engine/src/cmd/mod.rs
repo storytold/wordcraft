@@ -50,6 +50,7 @@ pub mod view;
 pub mod wordart;
 
 use serde_json::{Value, json};
+use wordcraft_doc::edit::Fragment;
 use wordcraft_doc::props::CharProps;
 use wordcraft_doc::{Pos, Revision, RevisionKind, StoryRef};
 
@@ -152,10 +153,39 @@ pub fn delete_selection(s: &mut Session) -> Result<Pos, CmdError> {
     if a == b {
         return Ok(a);
     }
-    controls::check_delete(s, &a, &b)?;
-    let at = if s.doc.settings.track_changes { track_delete(s, &a, &b)? } else { s.doc.delete_range(&a, &b)? };
+    let at = delete_range(s, &a, &b)?;
     s.sel = crate::Selection::caret(at.clone());
     Ok(at)
+}
+
+/// Delete `a..b` as a command would: content-control locks refuse it, and with Track Changes on
+/// it becomes a deletion revision. Returns where the range collapsed; the selection is left alone.
+pub fn delete_range(s: &mut Session, a: &Pos, b: &Pos) -> Result<Pos, CmdError> {
+    if a == b {
+        return Ok(a.clone());
+    }
+    controls::check_delete(s, a, b)?;
+    if s.doc.settings.track_changes { track_delete(s, a, b) } else { Ok(s.doc.delete_range(a, b)?) }
+}
+
+/// Insert `frag` at `at` as a paste would: a content control locked against editing refuses
+/// it, and with Track Changes on it becomes an insertion revision (its paragraph marks too).
+/// Returns the end of the inserted content; the selection is left alone.
+pub fn insert_fragment(s: &mut Session, at: &Pos, frag: Fragment) -> Result<Pos, CmdError> {
+    controls::check_insert(s, at)?;
+    let rid = s.doc.settings.track_changes.then(|| new_revision(s, RevisionKind::Insert));
+    paste::insert_marked(s, at, frag, rid)
+}
+
+/// Formatting for new text inserted at `at` with `props`: never deleted nor a formatting
+/// change, and an insertion revision while Track Changes is on. A content control locked
+/// against editing at `at` refuses it.
+pub fn new_text_props(s: &mut Session, at: &Pos, mut props: CharProps) -> Result<CharProps, CmdError> {
+    controls::check_insert(s, at)?;
+    props.fmt_change = None;
+    props.del = None;
+    props.ins = s.doc.settings.track_changes.then(|| new_revision(s, RevisionKind::Insert));
+    Ok(props)
 }
 
 /// A revision record for the current author.

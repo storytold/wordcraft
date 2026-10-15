@@ -361,6 +361,12 @@ pub fn check_edit(s: &mut Session, a: &Pos, b: &Pos) -> Result<(), CmdError> {
     if refused { Err(locked(s, CANT_EDIT)) } else { Ok(()) }
 }
 
+/// Before inserting at `at` outside typing (an integration such as Zotero): refuse inside a
+/// control whose content can't be edited.
+pub fn check_insert(s: &mut Session, at: &Pos) -> Result<(), CmdError> {
+    if s.doc.control_at(at).is_some_and(|r| !r.control.lock.can_edit()) { Err(locked(s, CANT_EDIT)) } else { Ok(()) }
+}
+
 /// After the user deleted something: a control left empty shows its placeholder again.
 pub fn restore_placeholder(s: &mut Session) -> Result<(), CmdError> {
     let at = s.sel.focus.clone();

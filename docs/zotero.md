@@ -46,6 +46,21 @@ Switching between an in-text style and a note style in Document Preferences move
 into new footnotes (or endnotes) at the same place, and back into the text where the note marks
 were; a note that held only the citation is removed.
 
+## Protection and Track Changes
+
+Zotero's edits follow the same rules as typing and commands. In a document with Restrict Editing
+on, Zotero can't insert, refresh, unlink or delete citations, change the bibliography's style or
+save its document preferences; Zotero reports the error and the document stays as it was.
+With exceptions (regions you may edit) or fillable content controls in forms mode, a change that
+stays inside them goes through, and anything reaching outside them (a citation moved into a new
+footnote, a change to the document's styles) is refused. Citations inside a content control
+locked against editing can't be added, refreshed, unlinked or deleted.
+
+With Track Changes on (or the "tracked changes" restriction), Zotero's insertions, refreshes,
+unlinks and deletions are tracked like your own edits: Reject brings the old text and citation
+back. A citation whose field is a tracked deletion no longer counts as a citation for Zotero.
+Changes to a citation's hidden code aren't tracked.
+
 ## Word compatibility
 
 Citations are stored as Word's Zotero plugin stores them — fields with the code
@@ -60,6 +75,12 @@ Word's "Field" in the file.)
 - Zotero's "Bookmarks" field type isn't supported; keep the default.
 - Zotero's document transfer (Export/Import Document) isn't needed and isn't supported.
 - The web version can't reach Zotero (browsers can't open the socket).
+- A citation's hidden code isn't a tracked change. After Reject All undoes a tracked refresh,
+  the citation's text is back but its code keeps the refreshed version, so on the next refresh
+  Zotero says the citation was modified and asks whether to keep it.
+- In a protected document with exceptions (or fillable controls), Zotero can't change the
+  document's styles. Add/Edit Bibliography fails there unless a "Bibliography" style with
+  Zotero's settings already exists; nothing in the document changes.
 
 ## How it works
 

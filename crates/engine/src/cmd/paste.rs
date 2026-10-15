@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 use wordcraft_doc::edit::Fragment;
-use wordcraft_doc::{Block, Document, Paragraph};
+use wordcraft_doc::{Block, Document, Paragraph, Pos};
 
 use super::{delete_selection, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
@@ -245,18 +245,25 @@ pub fn merge_formatting(s: &Session, frag: &mut Fragment) {
 }
 
 /// Replace the selection with `frag`, marking it as an insertion under Track Changes.
-pub fn insert(s: &mut Session, mut frag: Fragment) -> Result<(), CmdError> {
+pub fn insert(s: &mut Session, frag: Fragment) -> Result<(), CmdError> {
     super::controls::prepare_edit(s)?;
     let at = delete_selection(s)?;
-    let track = s.doc.settings.track_changes;
     let mut rid = None;
-    if track {
+    if s.doc.settings.track_changes {
         // What the last command cut, pasted again: the two ends of a move.
-        let r = match super::moves::take_paste(s, &frag) {
+        rid = Some(match super::moves::take_paste(s, &frag) {
             Some(r) => r,
             None => super::new_revision(s, wordcraft_doc::RevisionKind::Insert),
-        };
-        rid = Some(r);
+        });
+    }
+    let end = insert_marked(s, &at, frag, rid)?;
+    s.sel = Selection::caret(end);
+    Ok(())
+}
+
+/// Insert `frag` at `at`, marked as insertion revision `rid` when given. Returns its end.
+pub(crate) fn insert_marked(s: &mut Session, at: &Pos, mut frag: Fragment, rid: Option<u32>) -> Result<Pos, CmdError> {
+    if let Some(r) = rid {
         for b in &mut frag.blocks {
             each_para(b, 0, &mut |p| {
                 for run in &mut p.runs {
@@ -269,7 +276,7 @@ pub fn insert(s: &mut Session, mut frag: Fragment) -> Result<(), CmdError> {
             });
         }
     }
-    let end = s.doc.insert_fragment(&at, &frag)?;
+    let end = s.doc.insert_fragment(at, &frag)?;
     // The paragraph marks the paste added are inserted too, so rejecting it joins the
     // paragraphs again. The last paragraph ends with the original mark and keeps it.
     if let Some(r) = rid
@@ -284,8 +291,7 @@ pub fn insert(s: &mut Session, mut frag: Fragment) -> Result<(), CmdError> {
             }
         }
     }
-    s.sel = Selection::caret(end);
-    Ok(())
+    Ok(end)
 }
 
 /// Every paragraph in a block, tables included (bounded depth).

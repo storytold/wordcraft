@@ -1302,6 +1302,44 @@ impl Session {
         result
     }
 
+    /// Run an edit made outside the command registry, by an integration answering its own
+    /// protocol (Zotero, #1323), under the rules commands obey. Restrict Editing refuses it
+    /// outright, or lets it change only the editable regions (and none of the styles); the
+    /// trackedChanges restriction turns Track Changes on, so the edit's revision-aware paths
+    /// ([`crate::cmd::delete_range`], [`crate::cmd::insert_fragment`]) record revisions. A
+    /// refused, failed or panicking edit leaves the document, selection and undo history as they
+    /// were. `what` names the edit in messages.
+    pub fn guarded_edit<T, E: std::fmt::Display>(&mut self, what: &str, f: impl FnOnce(&mut Session) -> Result<T, E>) -> Result<T, CmdError> {
+        let guard = crate::cmd::protect::check_before(self, what, &Value::Null)?;
+        if self.doc.settings.protection.as_deref() == Some("trackedChanges") {
+            self.doc.settings.track_changes = true;
+        }
+        let before =
+            (self.doc.clone(), self.sel.clone(), self.history.clone(), self.redo.clone(), self.typing_open, self.undo_evicted, self.column.clone());
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self)));
+        let mut result = match r {
+            Ok(r) => r.map_err(|e| CmdError::Failed(e.to_string())),
+            Err(_) => Err(CmdError::Failed(format!("{what}: internal error"))),
+        };
+        if result.is_ok()
+            && guard
+            && (!crate::cmd::protect::outside_unchanged(&before.0, &self.doc, &self.author) || before.0.styles != self.doc.styles)
+        {
+            result = Err(CmdError::Disabled(format!("{what}: only the editable regions of this protected document can change")));
+        }
+        if result.is_err() {
+            let (d, s, h, r, t, ev, c) = before;
+            self.doc = d;
+            self.sel = s;
+            self.history = h;
+            self.redo = r;
+            self.typing_open = t;
+            self.undo_evicted = ev;
+            self.column = c;
+        }
+        result
+    }
+
     /// The paragraph path the caret is in.
     pub fn caret_path(&self) -> &Path {
         &self.sel.focus.path

@@ -56,9 +56,12 @@ pub fn stored_code(code: &str) -> String {
     format!("{PREFIX}{}", code.trim())
 }
 
+/// A story's Zotero fields. A field whose start marker Track Changes holds as deleted is gone
+/// for Zotero (rejecting the deletion brings it back).
 fn story_fields(doc: &Document, story: StoryRef, note_index: u32) -> Vec<ZField> {
     doc.field_ranges(story)
         .into_iter()
+        .filter(|r| doc.para(story, &r.start.path).is_none_or(|p| p.props_of_char(r.start.off).del.is_none()))
         .filter_map(|r| zotero_code(&r.instr).map(|c| ZField { start: r.start, end: r.end, code: c.to_string(), note_index }))
         .collect()
 }
