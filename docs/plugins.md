@@ -1,6 +1,6 @@
 # Add-ins (plugins)
 
-> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-15 · **Change:** minor (protocol 1.2: dialogs WordCraft draws, opening local files, document events, `context.document`; previously minor: ribbon buttons that run macros: `macros/run` gets the button; previously minor: protocol 1.1: host requests, VBA macros through an add-in, the Developer tab's Code group; Office add-ins; previously major: first version: out-of-process add-ins, protocol 1, File › Options › Add-ins, install from GitHub) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-15 · **Change:** minor (protocol 2: the push channel, transports and live sessions; previously minor: protocol 1.2: dialogs WordCraft draws, opening local files, document events, `context.document`; previously minor: ribbon buttons that run macros: `macros/run` gets the button; previously minor: protocol 1.1: host requests, VBA macros through an add-in, the Developer tab's Code group; Office add-ins; previously major: first version: out-of-process add-ins, protocol 1, File › Options › Add-ins, install from GitHub) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 An add-in adds **commands** that people and agents run, and can put them on the ribbon (a group
 on a built-in tab, or a tab of its own) and in the right-click menu. It's a separate program,
@@ -345,6 +345,35 @@ add-in's failures (three and it stops). During an event an add-in may send `host
 `host/message`; `host/sync` (and `host/vbaProject/*`) is refused with `AccessDenied` (the error's
 `data.code`): events are notifications, not edits.
 
+## Protocol 2: the push channel and live sessions
+
+The same in GridCraft, WordCraft and DeckCraft, normative in
+[craft plugin protocol 2](https://github.com/sirmmo/craft-collab/blob/main/docs/protocol-2.md)
+(version 2.0.1). It adds to 1, 1.1 and 1.2 and changes nothing in them; `protocolVersion` stays
+`1` and an add-in checks `host.features`.
+
+**Push channel.** WordCraft reads every running add-in's standard output all the time. An add-in
+may write at any moment: notifications (no `id`), and requests with its own ids to the *anytime*
+methods (`collab/snapshot`, `host/log`), which WordCraft answers asynchronously from its main
+loop. WordCraft may send the add-in notifications at any time, interleaved with its own requests,
+so an add-in must read standard input continuously and match answers by `id`. Lines may be 64
+MiB; notifications never count as failures (a malformed one is dropped); an add-in sending more
+than 1,000 messages a second for 5 s is stopped and marked failed. `host/…` requests an add-in
+sends while WordCraft waits for one of its answers are still answered there (protocol 1.1).
+
+**Detection.** `host.features` adds `"push"` and `"collab"`, and `host.collab` is
+`{"formats": ["yjs-v1"], "app": "wordcraft", "schema": 1, "encryption": ["aes-256-gcm"]}`.
+
+**Transports.** An add-in whose manifest declares `"collab": {"transport": "mqtt", "label": "Live
+(MQTT)"}` is a co-editing transport: it moves a live session's bytes between people and knows
+nothing about documents. Its command's answer may carry `"collab": {"join": {room, mode, user,
+role, key?, path?, title?}}`; run from the interface, WordCraft joins that room (`collab.join`);
+`plugins.run` returns it to a script as `collab.join`, with the invitation from `result.link`
+added. The Share dialog (Share on the tab strip) runs a transport's `share` command (`{name, color, encrypt}`)
+or `join` command (`{link, name, color}`), the conventions craft-collab's conformance checker
+uses. The `collab/*` messages, rooms, encryption and limits are protocol 2's; WordCraft's shared
+document (schema 1) and behaviour are in [collab.md](collab.md).
+
 ## Office add-ins
 
 An Office add-in's `manifest.xml` (`<Host Name="Document"/>`, `https://` pages) loads as the
@@ -427,6 +456,7 @@ in the zip are kept.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Protocol 2 (2.0.1, shared with GridCraft and DeckCraft): the push channel (standard output read all the time, notifications and anytime requests, 64 MiB lines, flood cut-off), `host.features` `push`/`collab` and `host.collab`, manifest `collab` for transports, `collab.join` in command answers; live sessions in [collab.md](collab.md) |
 | 2026-10-15 | minor | Protocol 1.2 (shared with GridCraft and DeckCraft, used by craft-nextcloud): `host.features` and `host.language`; `context.document {path, name, dirty}` for commands and macros; answers with `open` (a local file, opened as File › Open does, with a location `label`) and `dialog` (list, form or message drawn by WordCraft, chaining); manifest `events` and `events/documentOpened`, `documentSaved`, `documentClosed`, sent without holding anything up |
 | 2026-10-15 | minor | Ribbon buttons that run the document's macros, saved as its `customUI14.xml`; `macros/run` gets `control {id, tag}`; Developer › Ribbon Buttons and Add to Ribbon in the Macros window |
 | 2026-10-14 | minor | Protocol 1.1 (`host/*` requests, one undo step), VBA macros through a macro add-in with the Developer tab's Code group and Macro Security; Office add-ins' task panes on the Word JavaScript API with WordCraft's own Office.js |

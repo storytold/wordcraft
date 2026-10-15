@@ -493,6 +493,8 @@ pub enum Dialog {
     AddIns,
     /// An add-in's own dialog (protocol 1.2): a list, a form or a message.
     Plugin(Box<crate::plugin_dialog::PluginDialog>),
+    /// Share: start or join a live session (drawn by `collab_ui::show_dialog`).
+    Share(Box<crate::collab_ui::ShareDialog>),
 }
 
 impl Dialog {
@@ -569,6 +571,7 @@ impl Dialog {
             Dialog::Templates { .. } => "templates",
             Dialog::AddIns => "addIns",
             Dialog::Plugin(_) => "pluginDialog",
+            Dialog::Share(_) => "collabShare",
             Dialog::Organizer { .. } => "organizer",
             Dialog::CustomProperties(..) => "customProperties",
             Dialog::Layout(d) => d.name(),
@@ -595,6 +598,9 @@ impl Dialog {
         // Search opens in the title bar's box when the window shows it (#5398).
         if name == "commands" && crate::chrome::open_title_search(app) {
             return None;
+        }
+        if name == "collabShare" {
+            return Some(Dialog::Share(Box::new(crate::collab_ui::ShareDialog::new(app, false))));
         }
         if let Some(d) = crate::dialogs_insert::open(name, app) {
             return Some(Dialog::Insert(Box::new(d)));

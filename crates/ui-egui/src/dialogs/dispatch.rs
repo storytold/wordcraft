@@ -50,8 +50,8 @@ pub(super) fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         Dialog::TrackOptions { form } => crate::dialogs_lists::track_options(app, ui, form),
         Dialog::Review(d) => crate::dialogs_review::body(app, ui, d),
         Dialog::Developer(d) => crate::dialogs_developer::body(app, ui, d),
-        // Drawn by `plugin_dialog::show`, never here.
-        Dialog::Plugin(_) => true,
+        // Drawn by `plugin_dialog::show` and `collab_ui::show_dialog`, never here.
+        Dialog::Plugin(_) | Dialog::Share(_) => true,
         Dialog::CustomizeKeyboard { form } => crate::dialogs_keyboard::customize_keyboard(app, ui, form),
         Dialog::CustomizeRibbon { form } => crate::dialogs_ribbon::customize_ribbon(app, ui, form),
         Dialog::FieldCode { .. } => field_code_dialog(app, ui, d),
