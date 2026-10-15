@@ -666,19 +666,24 @@ fn xlsx_rows(pkg: &mut Package<'_>, path: &str) -> Result<Vec<Vec<String>>, Stri
 
 fn xlsx_value(c: &XCell, shared: &[String], formats: &[Option<DateKind>], date1904: bool) -> String {
     let v = c.value.trim();
-    match c.kind.as_str() {
-        "s" => v.parse::<usize>().ok().and_then(|i| shared.get(i)).cloned().unwrap_or_default(),
-        "inlineStr" => c.inline.clone(),
-        "str" | "e" => c.value.clone(),
-        "b" => if v == "1" || v.eq_ignore_ascii_case("true") { "TRUE" } else { "FALSE" }.into(),
-        "d" => iso_datetime(v).unwrap_or_else(|| v.to_string()),
-        _ if v.is_empty() => c.inline.clone(),
-        _ => {
-            let Ok(x) = v.parse::<f64>() else { return v.to_string() };
-            match formats.get(c.style).copied().flatten() {
-                Some(kind) => serial_date(x, date1904, kind).unwrap_or_else(|| number(x)),
-                None => number(x),
-            }
+    let kind = c.kind.trim();
+    if kind.eq_ignore_ascii_case("s") {
+        v.parse::<usize>().ok().and_then(|i| shared.get(i)).cloned().unwrap_or_default()
+    } else if kind.eq_ignore_ascii_case("inlineStr") {
+        if c.inline.is_empty() { c.value.clone() } else { c.inline.clone() }
+    } else if kind.eq_ignore_ascii_case("str") || kind.eq_ignore_ascii_case("e") {
+        c.value.clone()
+    } else if kind.eq_ignore_ascii_case("b") {
+        if v == "1" || v.eq_ignore_ascii_case("true") { "TRUE" } else { "FALSE" }.into()
+    } else if kind.eq_ignore_ascii_case("d") {
+        iso_datetime(v).unwrap_or_else(|| v.to_string())
+    } else if v.is_empty() {
+        c.inline.clone()
+    } else {
+        let Ok(x) = v.parse::<f64>() else { return v.to_string() };
+        match formats.get(c.style).copied().flatten() {
+            Some(kind) => serial_date(x, date1904, kind).unwrap_or_else(|| number(x)),
+            None => number(x),
         }
     }
 }
@@ -763,22 +768,31 @@ fn iso_datetime(v: &str) -> Option<String> {
     Some(out)
 }
 
-/// An ISO 8601 duration time (`PT13H45M00S`) as `hh:mm[:ss]`.
+/// An ISO 8601 duration time (`PT13H45M00S`) or clock time (`13:45[:00]`) as `hh:mm[:ss]`.
 fn iso_time(v: &str) -> Option<String> {
-    let t = v.trim().strip_prefix("PT")?;
-    let (mut h, mut m, mut s) = (0u64, 0u64, 0f64);
-    let mut num = String::new();
-    for c in t.chars() {
-        match c {
-            'H' => h = std::mem::take(&mut num).parse().ok()?,
-            'M' => m = std::mem::take(&mut num).parse().ok()?,
-            'S' => s = std::mem::take(&mut num).parse().ok()?,
-            c if num.len() < 20 => num.push(c),
-            _ => return None,
+    let t = v.trim();
+    if let Some(t) = t.strip_prefix("PT") {
+        let (mut h, mut m, mut s) = (0u64, 0u64, 0f64);
+        let mut num = String::new();
+        for c in t.chars() {
+            match c {
+                'H' => h = std::mem::take(&mut num).parse().ok()?,
+                'M' => m = std::mem::take(&mut num).parse().ok()?,
+                'S' => s = std::mem::take(&mut num).parse().ok()?,
+                c if num.len() < 20 => num.push(c),
+                _ => return None,
+            }
         }
+        let s = s.round() as u64;
+        return Some(if s == 0 { format!("{h:02}:{m:02}") } else { format!("{h:02}:{m:02}:{s:02}") });
     }
-    let s = s.round() as u64;
-    Some(if s == 0 { format!("{h:02}:{m:02}") } else { format!("{h:02}:{m:02}:{s:02}") })
+    // xs:time: hh:mm[:ss[.sss]][Z|+...]
+    let hms: Vec<u32> = t.split(['Z', '+', '-']).next().unwrap_or("").split(':').filter_map(|p| p.split('.').next().and_then(|x| x.parse().ok())).collect();
+    if let [h, mi, rest @ ..] = hms.as_slice() {
+        let s = rest.first().copied().unwrap_or(0);
+        return Some(if s == 0 { format!("{h:02}:{mi:02}") } else { format!("{h:02}:{mi:02}:{s:02}") });
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -827,11 +841,13 @@ fn ods_read(xml: &[u8], want: Option<usize>) -> Result<(Vec<String>, Vec<Vec<Str
                 b"table-cell" | b"covered-table-cell" if row.is_some() => {
                     let repeat = attr(e, b"number-columns-repeated").and_then(|v| v.trim().parse().ok()).unwrap_or(1u64).max(1);
                     let kind = attr(e, b"value-type").unwrap_or_default();
-                    let value = match kind.as_str() {
-                        "float" => attr(e, b"value"),
+                    let kind_lower = kind.trim().to_ascii_lowercase();
+                    let value = match kind_lower.as_str() {
+                        "float" | "percentage" | "currency" => attr(e, b"value"),
                         "date" => attr(e, b"date-value"),
                         "time" => attr(e, b"time-value"),
                         "boolean" => attr(e, b"boolean-value"),
+                        "string" => attr(e, b"string-value"),
                         _ => None,
                     };
                     // A covered cell's own content is hidden by the merge.
@@ -935,11 +951,16 @@ fn ods_read(xml: &[u8], want: Option<usize>) -> Result<(Vec<String>, Vec<Vec<Str
 
 fn ods_value(c: &OCell) -> String {
     let v = c.value.as_deref().map(str::trim);
-    match (c.kind.as_str(), v) {
+    let kind = c.kind.trim().to_ascii_lowercase();
+    match (kind.as_str(), v) {
         ("float", Some(v)) => v.parse::<f64>().map(number).unwrap_or_else(|_| c.text.clone()),
         ("date", Some(v)) => iso_datetime(v).unwrap_or_else(|| c.text.clone()),
         ("time", Some(v)) => iso_time(v).unwrap_or_else(|| c.text.clone()),
         ("boolean", Some(v)) => if v.eq_ignore_ascii_case("true") || v == "1" { "TRUE" } else { "FALSE" }.into(),
+        ("percentage" | "currency", Some(v)) if c.text.trim().is_empty() => {
+            v.parse::<f64>().map(number).unwrap_or_else(|_| c.text.clone())
+        }
+        ("string", Some(v)) if c.text.trim().is_empty() => v.to_string(),
         _ => c.text.clone(),
     }
 }
@@ -1065,5 +1086,38 @@ mod tests {
         assert_eq!(serial_date(-1.0, false, DateKind::Date), None);
         assert_eq!(number(1234567.0), "1234567");
         assert_eq!(number(0.1 + 0.2), "0.3");
+    }
+
+    #[test]
+    fn test_sheet_extended_value_parsing() {
+        assert_eq!(iso_time("13:45:00").as_deref(), Some("13:45"));
+        assert_eq!(iso_time("13:45:30.500").as_deref(), Some("13:45:30"));
+        assert_eq!(iso_time("13:45:30Z").as_deref(), Some("13:45:30"));
+        assert_eq!(iso_time("PT13H45M").as_deref(), Some("13:45"));
+
+        // ODS with string-value and percentage without text:p, and case-insensitive float
+        let content = r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0">
+            <office:body><office:spreadsheet><table:table table:name="Sheet1">
+                <table:table-row>
+                    <table:table-cell office:value-type="STRING" office:string-value="Hello"/>
+                    <table:table-cell office:value-type="percentage" office:value="0.15"/>
+                    <table:table-cell office:value-type="FLOAT" office:value="42"/>
+                    <table:table-cell office:value-type="time" office:time-value="14:30:00"/>
+                </table:table-row>
+            </table:table></office:spreadsheet></office:body></office:document-content>"#;
+        let book = zip(&[("mimetype", "application/vnd.oasis.opendocument.spreadsheet"), ("content.xml", content)]);
+        let (_, rows) = read_rows(&book, Pick::Index(0)).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0], vec!["Hello", "0.15", "42", "14:30"]);
+
+        // XLSX with case-insensitive cell types
+        let sheet = r#"<worksheet><sheetData><row r="1">
+            <c r="A1" t="B"><v>1</v></c>
+            <c r="B1" t="INLINESTR"><is><t>World</t></is></c>
+            <c r="C1" t="S"><v>0</v></c>
+        </row></sheetData></worksheet>"#;
+        let (_, rows) = read_rows(&xlsx(sheet), Pick::Index(0)).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0], vec!["TRUE", "World", "Name"]);
     }
 }
