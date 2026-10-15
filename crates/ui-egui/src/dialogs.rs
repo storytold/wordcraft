@@ -170,6 +170,10 @@ pub enum Dialog {
         hidden: bool,
         color: String,
         spacing: f32,
+        /// Kerning for fonts (`w:kern`), from the Advanced tab: `None` while the selected text
+        /// differs, shown neither on nor off; `kern_at` is its Points and above size.
+        kern: Option<bool>,
+        kern_at: f32,
         /// The properties the fields stood for when the dialog opened: OK sends only what the
         /// user changed, so formatting the dialog can't show (a double underline) or left
         /// alone stays as it is.
@@ -890,6 +894,7 @@ impl Dialog {
                     text
                 };
                 let asian = ["zh", "ja", "ko"].iter().any(|l| lang.starts_with(l)) || !font_ea.is_empty() || text.chars().any(east_asian_char);
+                let kern = st.get("kern").and_then(Value::as_f64);
                 let mut d = Dialog::Font {
                     font_was: font.clone(),
                     font,
@@ -908,6 +913,8 @@ impl Dialog {
                     hidden: b("hidden"),
                     color: s("color"),
                     spacing: st.get("spacing").and_then(Value::as_f64).unwrap_or(0.0) as f32,
+                    kern: kern.map(|k| k > 0.0),
+                    kern_at: kern.filter(|k| *k > 0.0).unwrap_or(12.0) as f32,
                     start: serde_json::Map::new(),
                 };
                 let props = font_props(&d);
@@ -1447,7 +1454,10 @@ pub(crate) fn buttons(ui: &mut Ui, ok: &str) -> (bool, bool) {
 
 /// The character properties the Font dialog's fields stand for.
 fn font_props(d: &Dialog) -> serde_json::Map<String, Value> {
-    let Dialog::Font { font, font_ea, size, bold, italic, underline, strike, sup, sub, small_caps, caps, hidden, color, spacing, .. } = d else {
+    let Dialog::Font {
+        font, font_ea, size, bold, italic, underline, strike, sup, sub, small_caps, caps, hidden, color, spacing, kern, kern_at, ..
+    } = d
+    else {
         return serde_json::Map::new();
     };
     let mut props = serde_json::Map::new();
@@ -1467,6 +1477,15 @@ fn font_props(d: &Dialog) -> serde_json::Map<String, Value> {
     props.insert("caps".into(), json!(*caps));
     props.insert("hidden".into(), json!(*hidden));
     props.insert("spacing".into(), json!(*spacing));
+    match kern {
+        Some(true) => {
+            props.insert("kern".into(), json!(kern_at.clamp(1.0, 1638.0)));
+        }
+        Some(false) => {
+            props.insert("kern".into(), json!(0.0));
+        }
+        None => {}
+    }
     if !font.trim().is_empty() {
         props.insert("font".into(), json!(font.trim()));
     }
@@ -1539,7 +1558,26 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             false
         }
 
-        Dialog::Font { font, font_ea, asian, size, bold, italic, underline, strike, sup, sub, small_caps, caps, hidden, color, spacing, .. } => {
+        Dialog::Font {
+            font,
+            font_ea,
+            asian,
+            size,
+            bold,
+            italic,
+            underline,
+            strike,
+            sup,
+            sub,
+            small_caps,
+            caps,
+            hidden,
+            color,
+            spacing,
+            kern,
+            kern_at,
+            ..
+        } => {
             // Build the sample text format for the preview pane below.
             let preview_size = size.trim().parse::<f32>().unwrap_or(12.0).clamp(6.0, 72.0);
             let preview_color = wordcraft_doc::Rgb::parse(color).map(crate::theme::c32).unwrap_or_else(|| ui.visuals().text_color());
@@ -1599,6 +1637,22 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 ui.end_row();
                 ui.label(tl!("Spacing (pt):"));
                 ui.add(egui::DragValue::new(spacing).speed(0.1).range(-20.0..=20.0));
+                ui.end_row();
+                let label = tl!("Kerning for fonts:");
+                match kern {
+                    Some(on) => {
+                        ui.checkbox(on, label);
+                    }
+                    None => {
+                        if ui.add(egui::Checkbox::new(&mut false, label).indeterminate(true)).clicked() {
+                            *kern = Some(true);
+                        }
+                    }
+                }
+                ui.horizontal(|ui| {
+                    ui.add_enabled(*kern == Some(true), egui::DragValue::new(kern_at).speed(0.5).range(1.0..=1638.0).max_decimals(1));
+                    ui.label(tl!("Points and above"));
+                });
                 ui.end_row();
             });
             ui.separator();
@@ -4131,6 +4185,42 @@ mod tests {
         apply_font(&mut app, &d);
         let c = app.session.doc.para_at(&wordcraft_doc::Pos::body(0, 0)).map(|p| p.props_of_char(0).clone()).unwrap_or_default();
         assert_eq!((c.small_caps, c.caps, c.size), (Some(false), Some(true), Some(14.0)));
+    }
+
+    /// Kerning for fonts and its Points and above size set `w:kern` on the selection in one undo
+    /// step; off is 0. Text that differs shows the box neither on nor off, and OK leaves each
+    /// run's own kerning.
+    #[test]
+    fn font_dialog_sets_kerning_for_fonts() {
+        let mut app = app_with("Kerned plain");
+        let _ = app.run("select.all", json!({}));
+        let _ = app.run("format.set", json!({"props": {"kern": 0}}));
+        let kern = |app: &WordApp, off| app.session.doc.para_at(&Pos::body(0, 0)).and_then(|p| p.props_of_char(off).kern);
+        let Some(mut d) = Dialog::open("font", &mut app) else { panic!("no font dialog") };
+        let Dialog::Font { kern: on, kern_at, .. } = &mut d else { panic!() };
+        assert_eq!((*on, *kern_at), (Some(false), 12.0), "off, offering 12 pt");
+        *on = Some(true);
+        *kern_at = 16.0;
+        apply_font(&mut app, &d);
+        assert_eq!((kern(&app, 0), kern(&app, 7)), (Some(16.0), Some(16.0)));
+        let _ = app.run("edit.undo", json!({}));
+        assert_eq!(kern(&app, 0), Some(0.0), "one undo step");
+        let _ = app.run("edit.redo", json!({}));
+        let Some(mut d) = Dialog::open("font", &mut app) else { panic!() };
+        let Dialog::Font { kern: on, kern_at, .. } = &mut d else { panic!() };
+        assert_eq!((*on, *kern_at), (Some(true), 16.0));
+        *on = Some(false);
+        apply_font(&mut app, &d);
+        assert_eq!((kern(&app, 0), kern(&app, 7)), (Some(0.0), Some(0.0)));
+        let _ = app.run("select.text", json!({"text": "Kerned"}));
+        let _ = app.run("format.set", json!({"props": {"kern": 14}}));
+        let _ = app.run("select.all", json!({}));
+        let Some(mut d) = Dialog::open("font", &mut app) else { panic!() };
+        let Dialog::Font { kern: on, size, .. } = &mut d else { panic!() };
+        assert_eq!(*on, None, "mixed kerning shows neither on nor off");
+        *size = "13".into();
+        apply_font(&mut app, &d);
+        assert_eq!((kern(&app, 0), kern(&app, 7)), (Some(14.0), Some(0.0)), "each run keeps its kerning");
     }
 
     /// #1178: Modify Style's font box is the ribbon's font box, so typing part of a name picks the

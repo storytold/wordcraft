@@ -4960,6 +4960,23 @@ fn print_markup_exports_comments() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Kerning for fonts (`w:kern`) at the selection, for the Font dialog: the size it starts at, 0
+/// when off, null when the selected text differs.
+#[test]
+fn format_state_reports_kerning_for_fonts() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Kerned plain"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.set", json!({"props": {"kern": 14}}));
+    assert_eq!(run(&mut s, "format.state", json!({}))["kern"], json!(14.0));
+    run(&mut s, "format.set", json!({"props": {"kern": 0}}));
+    assert_eq!(run(&mut s, "format.state", json!({}))["kern"], json!(0.0));
+    run(&mut s, "select.text", json!({"text": "Kerned"}));
+    run(&mut s, "format.set", json!({"props": {"kern": 12}}));
+    run(&mut s, "select.all", json!({}));
+    assert_eq!(run(&mut s, "format.state", json!({}))["kern"], serde_json::Value::Null);
+}
+
 /// #606: the colour commands behind More Colors… take any `RRGGBB` (with or without `#`, any
 /// case), not only the palette's colours; junk is a params error and changes nothing.
 #[test]

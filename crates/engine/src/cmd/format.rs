@@ -685,6 +685,8 @@ pub fn state(s: &Session) -> Value {
         "caps": all.iter().all(|r| r.caps),
         "hidden": all.iter().all(|r| r.hidden),
         "spacing": same(&|r| json!(r.spacing)),
+        // Kerning for fonts: the smallest kerned size, points; 0 = off.
+        "kern": same(&|r| json!(r.kern)),
         "color": same(&|r| json!(match r.color { TextColor::Auto => "auto".to_string(), TextColor::Rgb(c) => c.hex() })),
         "highlight": same(&|r| json!(r.highlight.map(|c| c.hex()))),
         "style": style,
