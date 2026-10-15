@@ -1140,3 +1140,92 @@ fn typing_after_a_citation_goes_outside_its_field() {
     let inside = Pos { off: f[0].start.off + wordcraft_doc::para::OBJ.len_utf8(), ..f[0].start.clone() };
     assert_eq!(s.doc.copy_range(&inside, &f[0].end).plain_text(), "(Smith 2020)");
 }
+
+/// Each body paragraph's laid-out number (`None`: none) and its style.
+fn numbers(s: &mut Session) -> Vec<(Option<String>, String)> {
+    let l = s.layout();
+    let labels: Vec<Option<String>> = l
+        .pages
+        .iter()
+        .flat_map(|p| &p.items)
+        .filter_map(|i| {
+            if let wordcraft_layout::Placed::Lines { para, l0: 0, .. } = i { Some(para.label.as_ref().map(|lb| lb.text.clone())) } else { None }
+        })
+        .collect();
+    let styles = s.doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.props.style.clone().unwrap_or_else(|| "Normal".into()));
+    labels.into_iter().zip(styles).collect()
+}
+
+fn num(label: Option<&str>, style: &str) -> (Option<String>, String) {
+    (label.map(str::to_string), style.to_string())
+}
+
+/// #1793 (Word for Mac, 2026-10-15): after the "1 / 1.1 / 1.1.1" heading list, a new Heading 2
+/// typed after "Three" is numbered 2.1 on its own; the body text after it stays unnumbered.
+#[test]
+fn a_new_heading_after_a_heading_linked_list_is_numbered() {
+    let mut s = s();
+    typ(&mut s, "One");
+    run(&mut s, "para.heading1", json!({}));
+    typ(&mut s, "\nTwo");
+    run(&mut s, "para.heading2", json!({}));
+    typ(&mut s, "\nThree");
+    run(&mut s, "para.heading1", json!({}));
+    // The caret in "Three" (a Heading 1, the list's first level).
+    run(&mut s, "list.multilevelPreset", json!({"preset": "headings"}));
+    run(&mut s, "caret.docEnd", json!({}));
+    typ(&mut s, "\n");
+    run(&mut s, "para.heading2", json!({}));
+    typ(&mut s, "Four\nBody");
+    assert_eq!(
+        numbers(&mut s),
+        [num(Some("1"), "Heading1"), num(Some("1.1"), "Heading2"), num(Some("2"), "Heading1"), num(Some("2.1"), "Heading2"), num(None, "Normal")]
+    );
+}
+
+/// #1793: plain Numbering on a Heading 1 numbers it "1." and keeps Heading 1 (Word: "1. One").
+#[test]
+fn numbering_a_heading_keeps_the_heading_style() {
+    let mut s = s();
+    typ(&mut s, "One");
+    run(&mut s, "para.heading1", json!({}));
+    run(&mut s, "para.numbering", json!({}));
+    assert_eq!(numbers(&mut s), [num(Some("1."), "Heading1")]);
+}
+
+/// #1793: applying a heading style that carries list numbering numbers the paragraph, even one
+/// whose numbering was switched off before.
+#[test]
+fn applying_a_numbered_heading_style_numbers_the_paragraph() {
+    let mut s = s();
+    typ(&mut s, "One");
+    run(&mut s, "para.heading1", json!({}));
+    run(&mut s, "list.multilevelPreset", json!({"preset": "headings"}));
+    typ(&mut s, "\nTwo");
+    run(&mut s, "para.numbering", json!({}));
+    run(&mut s, "para.numbering", json!({"off": true}));
+    assert_eq!(numbers(&mut s)[1].0, None);
+    run(&mut s, "para.heading2", json!({}));
+    assert_eq!(numbers(&mut s), [num(Some("1"), "Heading1"), num(Some("1.1"), "Heading2")]);
+}
+
+/// #1793: "1. " typed at the start of a heading numbers it and keeps the heading style; only
+/// body text becomes List Paragraph.
+#[test]
+fn typing_1_dot_in_a_heading_keeps_the_heading_style() {
+    let mut s = s();
+    run(&mut s, "para.heading1", json!({}));
+    typ(&mut s, "1. One\n");
+    run(&mut s, "para.normal", json!({}));
+    typ(&mut s, "1. Body");
+    assert_eq!(numbers(&mut s), [num(Some("1."), "Heading1"), num(Some("1."), "ListParagraph")]);
+    for (style, keys) in [("Heading2", "a) Part"), ("Subtitle", "1. Item")] {
+        let mut s = self::s();
+        run(&mut s, "para.style", json!({"style": style}));
+        typ(&mut s, keys);
+        let got = numbers(&mut s);
+        assert_eq!(got.len(), 1);
+        assert!(got[0].0.is_some(), "{style}: a list");
+        assert_eq!(got[0].1, style);
+    }
+}

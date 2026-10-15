@@ -465,10 +465,13 @@ fn apply_style(s: &mut Session, v: &Value) -> CmdResult {
         return super::format::apply(s, &|c| c.style = Some(id.clone()));
     }
     let (a, b) = s.sel.ordered();
+    // A style linked to a list level (a heading in a numbered-headings list) brings its number.
+    let numbered = s.doc.styles.resolve_para(&ParaProps { style: Some(id.clone()), ..Default::default() }).numbering.is_some();
     fmt(s, &|p| {
         p.style = Some(id.clone());
-        // Applying a heading or Normal removes direct list numbering (except list styles).
-        if (id.starts_with("Heading") || id == "Title" || id == "Normal") && p.numbering.is_some_and(|n| n.num != 0) {
+        // Applying a heading or Normal removes direct list numbering (except list styles); a
+        // numbered style's own number replaces any direct numbering, even numbering switched off.
+        if numbered || ((id.starts_with("Heading") || id == "Title" || id == "Normal") && p.numbering.is_some_and(|n| n.num != 0)) {
             p.numbering = None;
         }
     })?;
@@ -755,7 +758,7 @@ pub(crate) fn set_heading(s: &mut Session, story: wordcraft_doc::StoryRef, path:
 
 /// Make sure the built-in `Heading{n}` style (and its linked character style) is in the
 /// document, for files that didn't bring it.
-fn ensure_heading_style(s: &mut Session, n: u8) -> String {
+pub(crate) fn ensure_heading_style(s: &mut Session, n: u8) -> String {
     let id = format!("Heading{n}");
     if s.doc.styles.get(&id).is_none() {
         let builtin = wordcraft_doc::styles::StyleSheet::builtin();

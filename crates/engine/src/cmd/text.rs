@@ -160,7 +160,10 @@ fn list_autoformat(s: &mut Session) -> Result<bool, CmdError> {
     let len = para.len();
     para.delete(0, len)?;
     para.props.numbering = Some(NumRef { num, level: 0 });
-    para.props.style = Some("ListParagraph".into());
+    // A heading stays a heading (Word: "1. " in a Heading 1 gives a numbered Heading 1).
+    if para.props.style.as_deref().is_none_or(|st| st == "Normal") {
+        para.props.style = Some("ListParagraph".into());
+    }
     s.sel = Selection::caret(Pos { off: 0, ..f });
     Ok(true)
 }
