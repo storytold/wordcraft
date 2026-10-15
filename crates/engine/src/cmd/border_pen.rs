@@ -5,7 +5,7 @@
 //! coordinates, which paints just that border with the pen (one undo step).
 
 use serde_json::{Value, json};
-use wordcraft_doc::props::{Border, BorderStyle, Rgb};
+use wordcraft_doc::props::{Border, BorderStyle, Rgb, VMerge};
 use wordcraft_doc::{Path, StoryRef, Table};
 use wordcraft_layout::Placed;
 
@@ -62,7 +62,7 @@ pub fn clamp_width(w: f32) -> f32 {
 }
 
 /// A `color` parameter: `None` when absent; `Some(None)` for automatic (null, "" or "auto").
-fn color_param(v: &Value) -> Result<Option<Option<Rgb>>, CmdError> {
+pub(crate) fn color_param(v: &Value) -> Result<Option<Option<Rgb>>, CmdError> {
     match v.get("color") {
         None => Ok(None),
         Some(Value::Null) => Ok(Some(None)),
@@ -80,7 +80,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"style"?: "single|double|dotted|dashed|thick|triple|dotDash|wave", "width"?: pt (0.25–6), "color"?: "RRGGBB" | "auto" | null} (sets the border pen that Borders and Border Painter draw with; returns the pen. In the app, picking a style also turns on Border Painter.)"#)
             .pure(),
         CommandSpec::new("table.borderPainter", "Border Painter", "Table Design › Borders", border_painter).params(
-            r#"{"page": n, "x": pt, "y": pt} (a click on a table border in page points, 0-based page: paints that one border with the pen) | {"kind"?: "all|outside|inside|none|top|bottom|left|right"} (the pen on those borders of the caret's table; default all). In the app, the button turns the painter on and off."#,
+            r#"{"page": n, "x": pt, "y": pt} (a click on a table border in page points, 0-based page: paints that border with the pen, along every cell it runs past, a merged cell's whole side) | {"kind"?: "all|outside|inside|none|top|bottom|left|right", "style"?, "width"?, "color"?} (headless: those borders of the caret's table, default all, with the pen; style/width/color as on table.borders win over it). In the app (and over --connect) a call without coordinates or kind, e.g. {} or {"on": bool}, turns the Border Painter mode on or off instead; pass kind to paint borders."#,
         ),
     ]
 }
@@ -104,8 +104,13 @@ fn border_painter(s: &mut Session, v: &Value) -> CmdResult {
     if v.get("page").is_some() || v.get("x").is_some() || v.get("y").is_some() {
         return paint_at(s, v);
     }
-    let kind = p::str(v, "kind").unwrap_or("all");
-    s.run("table.borders", &json!({"kind": kind}))
+    let mut args = json!({"kind": p::str(v, "kind").unwrap_or("all")});
+    for k in ["style", "width", "color"] {
+        if let (Some(x), Some(o)) = (v.get(k), args.as_object_mut()) {
+            o.insert(k.into(), x.clone());
+        }
+    }
+    s.run("table.borders", &args)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -174,8 +179,145 @@ fn set_side(t: &mut Table, r: usize, c: usize, side: Side, b: Border) {
     cell.props.borders = Some(own);
 }
 
-/// Paints the border under a click with the pen: the clicked cell's side and its neighbour's
-/// matching side, so the line between them is the pen's whichever cell draws it.
+/// Whether cell (`r`, `c`) continues a vertical merge from the row above.
+fn continues(t: &Table, r: usize, c: usize) -> bool {
+    t.rows.get(r).and_then(|row| row.cells.get(c)).is_some_and(|x| x.props.vmerge == VMerge::Continue)
+}
+
+/// The cell of row `r` at grid column `g` and whether it continues a merge from above.
+fn at_grid(t: &Table, r: usize, g: usize) -> Option<(usize, bool)> {
+    t.cell_at_grid(r, g).map(|c| (c, continues(t, r, c)))
+}
+
+/// The grid columns cell (`r`, `c`) covers.
+fn grid_span(t: &Table, r: usize, c: usize) -> (usize, usize) {
+    let g = t.grid_col(r, c);
+    let span = t.rows.get(r).and_then(|row| row.cells.get(c)).map_or(1, |x| x.span().max(1));
+    (g, g.saturating_add(span))
+}
+
+/// The last row of the vertical merge starting at row `r` in grid column `g` (`r` itself when
+/// the cell isn't merged down).
+fn merge_end(t: &Table, r: usize, g: usize) -> usize {
+    let mut last = r;
+    while last + 1 < t.rows.len() && at_grid(t, last + 1, g).is_some_and(|(_, cont)| cont) {
+        last += 1;
+    }
+    last
+}
+
+/// Paints the horizontal line below row `upper` (above row 0 when `None`) over grid columns
+/// `g0..g1`, widened to whole cells on both sides: the cells above get the pen as their bottom
+/// and those below as their top, as the layout draws a line from both (a vertical merge's
+/// bottom from its last cell). Where a merge runs through the line there is no line to paint.
+fn paint_horizontal(t: &mut Table, upper: Option<usize>, g0: usize, g1: usize, b: Border) {
+    let lower = upper.map_or(0, |u| u.saturating_add(1));
+    let lower = (lower < t.rows.len()).then_some(lower);
+    let crosses = |t: &Table, g: usize| lower.is_some_and(|l| at_grid(t, l, g).is_some_and(|(_, cont)| cont));
+    // Widen to whole cells on both sides (bounded: the range only grows, up to the grid's width).
+    let (mut a, mut z) = (g0, g1.max(g0.saturating_add(1)));
+    for _ in 0..=t.cols() {
+        let (mut na, mut nz) = (a, z);
+        for g in a..z {
+            if crosses(t, g) {
+                continue;
+            }
+            for r in [upper, lower].into_iter().flatten() {
+                if let Some(c) = t.cell_at_grid(r, g) {
+                    let (s0, s1) = grid_span(t, r, c);
+                    na = na.min(s0);
+                    nz = nz.max(s1);
+                }
+            }
+        }
+        if (na, nz) == (a, z) {
+            break;
+        }
+        (a, z) = (na, nz);
+    }
+    for g in a..z {
+        if crosses(t, g) {
+            continue;
+        }
+        if let Some(u) = upper
+            && let Some(c) = t.cell_at_grid(u, g)
+        {
+            set_side(t, u, c, Side::Bottom, b);
+        }
+        if let Some(l) = lower
+            && let Some(c) = t.cell_at_grid(l, g)
+        {
+            set_side(t, l, c, Side::Top, b);
+        }
+    }
+}
+
+/// Paints the clicked `side` of cell (`row`, `cell`) as the layout draws it: a top or bottom
+/// line along every cell it borders (a vertical merge's bottom below its last row), a left or
+/// right side on every row of a vertical merge, with each row's neighbour.
+fn paint_edge(t: &mut Table, row: usize, cell: usize, side: Side, b: Border) {
+    let (g0, g1) = grid_span(t, row, cell);
+    let last = merge_end(t, row, g0);
+    match side {
+        Side::Top => paint_horizontal(t, row.checked_sub(1), g0, g1, b),
+        Side::Bottom => paint_horizontal(t, Some(last), g0, g1, b),
+        Side::Left => paint_vertical(t, g0, row, last, b),
+        Side::Right => paint_vertical(t, g1, row, last, b),
+    }
+}
+
+/// The first row of the vertical merge holding row `r` in grid column `g`.
+fn merge_start(t: &Table, r: usize, g: usize) -> usize {
+    let mut first = r;
+    while first > 0 && at_grid(t, first, g).is_some_and(|(_, cont)| cont) {
+        first -= 1;
+    }
+    first
+}
+
+/// Paints the vertical line at grid line `gb` over rows `r0..=r1`, widened to whole vertical
+/// merges on both sides: the cell left of it gets the pen as its right side and the cell right
+/// of it as its left, on every row, as the layout draws sides row by row.
+fn paint_vertical(t: &mut Table, gb: usize, r0: usize, r1: usize, b: Border) {
+    let sides = |t: &Table, r: usize| {
+        let left = gb.checked_sub(1).and_then(|g| t.cell_at_grid(r, g));
+        let right = t.cell_at_grid(r, gb);
+        (left, right)
+    };
+    let (mut a, mut z) = (r0, r1);
+    for _ in 0..=t.rows.len() {
+        let (mut na, mut nz) = (a, z);
+        for r in a..=z {
+            for g in [gb.checked_sub(1), Some(gb)].into_iter().flatten() {
+                if t.cell_at_grid(r, g).is_some() {
+                    na = na.min(merge_start(t, r, g));
+                    nz = nz.max(merge_end(t, r, g));
+                }
+            }
+        }
+        if (na, nz) == (a, z) {
+            break;
+        }
+        (a, z) = (na, nz);
+    }
+    for r in a..=z {
+        match sides(t, r) {
+            // One cell spans over the line: there's no line in this row.
+            (Some(l), Some(rt)) if l == rt => {}
+            (l, rt) => {
+                if let Some(c) = l {
+                    set_side(t, r, c, Side::Right, b);
+                }
+                if let Some(c) = rt {
+                    set_side(t, r, c, Side::Left, b);
+                }
+            }
+        }
+    }
+}
+
+/// Paints the border under a click with the pen (`paint_edge`), so the line drawn there is the
+/// pen's whichever cell draws it.
 fn paint_at(s: &mut Session, v: &Value) -> CmdResult {
     let page =
         p::u64(v, "page").map(|n| usize::try_from(n).unwrap_or(usize::MAX)).ok_or_else(|| CmdError::Params("`page` (number) is required".into()))?;
@@ -193,20 +335,7 @@ fn paint_at(s: &mut Session, v: &Value) -> CmdResult {
         (true, Side::Right) => Side::Left,
         (_, side) => side,
     };
-    set_side(t, row, cell, side, b);
-    let g = t.grid_col(row, cell);
-    let neighbour = match side {
-        Side::Right => Some((row, cell.saturating_add(1), Side::Left)),
-        Side::Left => cell.checked_sub(1).map(|c| (row, c, Side::Right)),
-        Side::Top => row.checked_sub(1).and_then(|r| t.cell_at_grid(r, g).map(|c| (r, c, Side::Bottom))),
-        Side::Bottom => {
-            let r = row.saturating_add(1);
-            t.cell_at_grid(r, g).map(|c| (r, c, Side::Top))
-        }
-    };
-    if let Some((r, c, other)) = neighbour {
-        set_side(t, r, c, other, b);
-    }
+    paint_edge(t, row, cell, side, b);
     table::touch_cells(s, &tp)?;
     sel_result(s)
 }

@@ -1766,6 +1766,125 @@ fn border_styles_reject_or_clamp_hostile_params() {
     assert!(s.run("table.borderStyles", &json!({"style": "none"})).is_err());
 }
 
+/// A table of `rows` × `cols` whose grid cells `(r0..=r1, g0..=g1)` are merged, the pen set to
+/// double; returns its path.
+fn merged_table(s: &mut Session, rows: u32, cols: u32, merge: (usize, usize, usize, usize)) -> wordcraft_doc::Path {
+    run(s, "insert.table", json!({"rows": rows, "cols": cols}));
+    let i = s.doc.body.iter().position(|b| b.as_table().is_some()).unwrap();
+    let tp = wordcraft_doc::Path(vec![i as u32]);
+    s.doc.table_mut(StoryRef::Body, &tp).unwrap().merge(merge.0, merge.1, merge.2, merge.3);
+    crate::cmd::table::touch_cells(s, &tp).unwrap();
+    run(s, "table.borderStyles", json!({"style": "double"}));
+    tp
+}
+
+/// The drawn (not covered) box of cell (`row`, `cell`) on page 0.
+fn drawn_cell(s: &mut Session, row: usize, cell: usize) -> wordcraft_geom::Rect {
+    s.layout().pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            crate::layout::Placed::Cell { rect, row: r, cell: c, covered: false, .. } if *r == row && *c == cell => Some(*rect),
+            _ => None,
+        })
+        .unwrap()
+}
+
+/// The style of every rule drawn through page point (`x`, `y`) along the given direction
+/// (horizontal rules at `y` covering `x`, or vertical rules at `x` covering `y`).
+fn rules_through(s: &mut Session, x: f32, y: f32, horizontal: bool) -> Vec<BorderStyle> {
+    let near = |a: f32, b: f32| (a - b).abs() < 0.6;
+    s.layout().pages[0]
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            crate::layout::Placed::Rule { x0, y0, x1, y1, border } => {
+                let hit = if horizontal {
+                    near(*y0, y) && near(*y1, y) && x0.min(*x1) <= x && x <= x0.max(*x1)
+                } else {
+                    near(*x0, x) && near(*x1, x) && y0.min(*y1) <= y && y <= y0.max(*y1)
+                };
+                hit.then_some(border.style)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// A vertically merged cell's bottom is drawn by the merge's last cell and the cell below: a
+/// click on it from inside the merge paints that line; its side is drawn row by row, so a click
+/// on it paints every row of the merge.
+#[test]
+fn the_border_painter_paints_a_vertically_merged_cells_edges() {
+    let mut s = s();
+    // Column 0, rows 0–1 merged, in a 3 × 2 table.
+    merged_table(&mut s, 3, 2, (0, 1, 0, 0));
+    let m = drawn_cell(&mut s, 0, 0);
+    let (mid_x, bottom) = (m.x + m.w / 2.0, m.y + m.h);
+    assert!(!rules_through(&mut s, mid_x, bottom, true).contains(&BorderStyle::Double));
+    run(&mut s, "table.borderPainter", json!({"page": 0, "x": mid_x, "y": bottom - 1.0}));
+    let drawn = rules_through(&mut s, mid_x, bottom, true);
+    assert!(!drawn.is_empty() && drawn.iter().all(|b| *b == BorderStyle::Double), "the merge's bottom line: {drawn:?}");
+    // Its right side, clicked beside the merge's second row: both rows' parts change.
+    let right = m.x + m.w;
+    let row0 = drawn_cell(&mut s, 0, 1);
+    let row1 = drawn_cell(&mut s, 1, 1);
+    run(&mut s, "table.borderPainter", json!({"page": 0, "x": right - 1.0, "y": row1.y + row1.h / 2.0}));
+    for y in [row0.y + row0.h / 2.0, row1.y + row1.h / 2.0] {
+        let drawn = rules_through(&mut s, right, y, false);
+        assert!(!drawn.is_empty() && drawn.iter().all(|b| *b == BorderStyle::Double), "the merge's right side at y {y}: {drawn:?}");
+    }
+}
+
+/// Next to a cell spanning several columns, every cell along the line gets the pen, so no old
+/// line is left drawn under (or over) the new one.
+#[test]
+fn the_border_painter_paints_across_a_column_span() {
+    let mut s = s();
+    // Row 0: grid columns 0–1 merged into one wide cell, in a 2 × 3 table.
+    merged_table(&mut s, 2, 3, (0, 0, 0, 1));
+    let wide = drawn_cell(&mut s, 0, 0);
+    let bottom = wide.y + wide.h;
+    run(&mut s, "table.borderPainter", json!({"page": 0, "x": wide.x + wide.w / 2.0, "y": bottom - 1.0}));
+    for x in [wide.x + wide.w * 0.25, wide.x + wide.w * 0.75] {
+        let drawn = rules_through(&mut s, x, bottom, true);
+        assert!(!drawn.is_empty() && drawn.iter().all(|b| *b == BorderStyle::Double), "under the wide cell at x {x}: {drawn:?}");
+    }
+    let last = drawn_cell(&mut s, 0, 1);
+    assert!(rules_through(&mut s, last.x + last.w / 2.0, bottom, true).iter().all(|b| *b != BorderStyle::Double), "not past the line");
+    // From below, under the wide cell's second column: the same whole line, from the other side.
+    let mut s2 = Session::new(wordcraft_doc::Document::new());
+    merged_table(&mut s2, 2, 3, (0, 0, 0, 1));
+    let below = drawn_cell(&mut s2, 1, 1);
+    run(&mut s2, "table.borderPainter", json!({"page": 0, "x": below.x + below.w / 2.0, "y": below.y + 1.0}));
+    for x in [wide.x + wide.w * 0.25, wide.x + wide.w * 0.75] {
+        let drawn = rules_through(&mut s2, x, bottom, true);
+        assert!(!drawn.is_empty() && drawn.iter().all(|b| *b == BorderStyle::Double), "from below at x {x}: {drawn:?}");
+    }
+}
+
+/// Headless, Border Painter without coordinates puts the pen on the table's borders; a style,
+/// width or colour given with it wins over the pen, as on `table.borders`.
+#[test]
+fn border_painter_without_a_click_takes_the_borders_params() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    run(&mut s, "table.borderPainter", json!({"kind": "top", "width": 3.0, "color": "FF0000", "style": "dashed"}));
+    let top = table_borders(&s).top.unwrap();
+    assert_eq!((top.style, top.width, top.color.map(|c| c.hex())), (BorderStyle::Dashed, 3.0, Some("FF0000".to_string())));
+}
+
+#[test]
+fn table_borders_reject_a_bad_colour() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    assert!(s.run("table.borders", &json!({"kind": "all", "color": "not a colour"})).is_err());
+    run(&mut s, "table.borders", json!({"kind": "all", "color": "auto"}));
+    assert_eq!(table_borders(&s).top.map(|b| b.color), Some(None));
+    run(&mut s, "table.borders", json!({"kind": "all", "color": "#00FF00"}));
+    assert_eq!(table_borders(&s).top.and_then(|b| b.color).map(|c| c.hex()), Some("00FF00".into()));
+}
+
 #[test]
 fn the_border_painter_paints_the_clicked_segment() {
     let mut s = s();
