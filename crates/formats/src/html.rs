@@ -128,6 +128,14 @@ pub fn decode_entity(name: &str) -> Option<String> {
         "omega" => 'ω',
         "zwj" => '\u{200D}',
         "zwnj" => '\u{200C}',
+        "prime" => '′',
+        "Prime" => '″',
+        "radic" => '√',
+        "sum" => '∑',
+        "prod" => '∏',
+        "approx" | "asymp" => '≈',
+        "equiv" => '≡',
+        "sdot" => '⋅',
         _ => return None,
     };
     Some(c.to_string())
@@ -486,6 +494,8 @@ fn css_len_pt(v: &str) -> Option<f32> {
         num(x).map(|p| p * 12.0)
     } else if let Some(x) = v.strip_suffix("in") {
         num(x).map(|p| p * 72.0)
+    } else if let Some(x) = v.strip_suffix("pc") {
+        num(x).map(|p| p * 12.0)
     } else if let Some(x) = v.strip_suffix("cm") {
         num(x).map(|p| p * 72.0 / 2.54)
     } else if let Some(x) = v.strip_suffix("mm") {
@@ -511,7 +521,10 @@ fn apply_style(css: &str, f: &mut Fmt, align: &mut Option<Align>, preserve: &mut
     for decl in css.split(';').take(64) {
         let Some((k, v)) = decl.split_once(':') else { continue };
         let k = k.trim().to_ascii_lowercase();
-        let v = v.trim().trim_end_matches("!important").trim();
+        let v = match v.trim().rsplit_once('!') {
+            Some((val, bang)) if bang.trim().eq_ignore_ascii_case("important") => val.trim(),
+            _ => v.trim(),
+        };
         let lv = v.to_ascii_lowercase();
         match k.as_str() {
             "font-weight" => f.bold = lv.starts_with("bold") || lv.parse::<u32>().is_ok_and(|w| w >= 600),
@@ -1011,6 +1024,8 @@ impl<'r> Builder<'r> {
             "code" | "kbd" | "tt" | "samp" => fmt.code = true,
             "sup" => fmt.sup = true,
             "sub" => fmt.sub = true,
+            "small" => fmt.size = Some(fmt.size.unwrap_or(12.0) * 0.833),
+            "big" => fmt.size = Some(fmt.size.unwrap_or(12.0) * 1.2),
             "mark" => fmt.background = Some(wordcraft_doc::Rgb(255, 255, 0)),
             "font" => {
                 if let Some(c) = attr(attrs, "color").and_then(parse_color) {
@@ -1048,6 +1063,9 @@ impl<'r> Builder<'r> {
         }
         if name == "center" {
             align = Some(Align::Center);
+        }
+        if let Some(bg) = attr(attrs, "bgcolor").and_then(parse_color) {
+            fmt.background = Some(bg);
         }
         if let Some(st) = attr(attrs, "style") {
             apply_style(st, &mut fmt, &mut align, &mut preserve, &mut page_break);
@@ -1784,5 +1802,33 @@ mod tests {
     #[test]
     fn entities() {
         assert_eq!(unescape("a &lt;b&gt; &#65;&#x42; &bogus; &"), "a <b> AB &bogus; &");
+    }
+
+    #[test]
+    fn test_html_extended_css_and_attributes() {
+        // 1. !important in CSS declarations with whitespace and casing
+        let f = parse(r#"<p style="text-align: right !Important"><span style="color: #ff0000 !IMPORTANT; font-size: 14pt ! important; font-weight: bold !important">styled</span></p>"#);
+        let FBlock::Para(p) = &f.blocks[0] else { panic!("expected para") };
+        assert_eq!(p.align, Some(Align::Right));
+        assert!(matches!(&p.inlines[0], Inline::Text(t, fmt) if t == "styled" && fmt.color == Some(wordcraft_doc::Rgb(255, 0, 0)) && fmt.size == Some(14.0) && fmt.bold));
+
+        // 2. CSS picas (pc) unit
+        let f_pc = parse(r#"<p><span style="font-size: 1.5pc">pica text</span></p>"#);
+        let FBlock::Para(p_pc) = &f_pc.blocks[0] else { panic!("expected para") };
+        assert!(matches!(&p_pc.inlines[0], Inline::Text(_, fmt) if fmt.size == Some(18.0)));
+
+        // 3. Tr bgcolor inherited by cells
+        let f_tbl = parse(r##"<table><tr bgcolor="#00ff00"><td>cell</td></tr></table>"##);
+        let FBlock::Table(tbl) = &f_tbl.blocks[0] else { panic!("expected table") };
+        assert_eq!(tbl.rows[0][0].shading, Some(wordcraft_doc::Rgb(0, 255, 0)));
+
+        // 4. <small> and <big> tags
+        let f_sb = parse(r#"<p><small>smaller</small> and <big>bigger</big></p>"#);
+        let FBlock::Para(p_sb) = &f_sb.blocks[0] else { panic!("expected para") };
+        assert!(matches!(&p_sb.inlines[0], Inline::Text(t, fmt) if t == "smaller" && fmt.size.unwrap() < 12.0));
+        assert!(matches!(&p_sb.inlines[2], Inline::Text(t, fmt) if t == "bigger" && fmt.size.unwrap() > 12.0));
+
+        // 5. Extended entities
+        assert_eq!(unescape("&prime; &sum; &radic; &approx;"), "′ ∑ √ ≈");
     }
 }
