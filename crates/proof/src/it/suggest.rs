@@ -1,6 +1,8 @@
 //! Italian spelling suggestions, best first: the shared ranking ([`crate::affix_suggest`]) with the
 //! words Italian runs into their neighbours (`perme` → `per me`, `amilano` → `a milano`) and
-//! letters to try for a dictionary without a TRY line.
+//! letters to try for a dictionary without a TRY line, and the `q`/`c` confusions Italian
+//! dictionaries' REP tables leave out (`squola` → `scuola`, `aqua` → `acqua`, `coscenza` →
+//! `coscienza`).
 
 use crate::affix::AffixDict;
 use crate::affix_suggest::{Split, Tuning};
@@ -20,11 +22,18 @@ const TRAILING_WORDS: &[&str] = &[
     "è",
 ];
 
+/// Confusions Italian writers make that the `it_IT` dictionary's `REP` table lacks: `qu`/`cu`
+/// (`squola`, `quore`), a missing or extra `c` before `qu` (`aqua`, `soqquadro`), and the `i`
+/// dropped after `sc`/`c` (`coscenza`, `sufficente`).
+const CONFUSIONS: &[(&str, &str)] = &[("qu", "cu"), ("cu", "qu"), ("qu", "cqu"), ("cqu", "qu"), ("sce", "scie"), ("cen", "cien")];
+
 /// What Italian adds to its dictionary's tables.
-const TUNING: Tuning =
-    Tuning {
-        split: Split::Near { leading: LEADING_WORDS, trailing: TRAILING_WORDS }, alphabet: "aeiortnslcdupmghfbqvàèéìòóùz", ..Tuning::DEFAULT
-    };
+const TUNING: Tuning = Tuning {
+    split: Split::Near { leading: LEADING_WORDS, trailing: TRAILING_WORDS },
+    alphabet: "aeiortnslcdupmghfbqvàèéìòóùz",
+    rep: CONFUSIONS,
+    ..Tuning::DEFAULT
+};
 
 /// Spelling suggestions for an Italian word, best first, at most `max`, in the word's letter case.
 pub fn suggest(word: &str, max: usize) -> Vec<String> {
@@ -72,6 +81,8 @@ mod tests {
         crate::it::test_dict::install();
         assert_eq!(suggest("caffe", 3).first().map(String::as_str), Some("caffè"));
         assert_eq!(suggest("perche", 3).first().map(String::as_str), Some("perché"));
+        assert_eq!(suggest("squola", 3).first().map(String::as_str), Some("scuola"));
+        assert_eq!(suggest("aqua", 3).first().map(String::as_str), Some("acqua"));
     }
 
     #[test]
