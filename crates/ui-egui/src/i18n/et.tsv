@@ -2267,3 +2267,8 @@
 # Reading Mode column widths (#1040)
 	Narrow	Kitsas
 	Medium	Keskmine
+	Collapsed by default	Vaikimisi ahendatud
+	Expand Heading	Laienda pealkiri
+	Collapse Heading	Ahenda pealkiri
+	Expand All Headings	Laienda kõik pealkirjad
+	Collapse All Headings	Ahenda kõik pealkirjad

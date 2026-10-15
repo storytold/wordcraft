@@ -378,6 +378,10 @@ fn split_para_as(s: &mut Session, at: &Pos, enter: bool) -> Result<Pos, CmdError
         }
         return Ok(at.clone());
     }
+    // Enter in a collapsed heading expands it (#1745): the new paragraph would be hidden.
+    if at.story == StoryRef::Body && at.path.0.len() == 1 {
+        outline::expand_heading(s, at.path.last());
+    }
     let mark_revs = s.doc.para_at(at).map(|p| (p.mark.ins, p.mark.del)).unwrap_or_default();
     let new = s.doc.split_paragraph(at)?;
     if at_end && let Some(st) = style.as_deref() {

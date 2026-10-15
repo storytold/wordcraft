@@ -269,6 +269,7 @@ pub fn insert(s: &mut Session, mut frag: Fragment) -> Result<(), CmdError> {
             });
         }
     }
+    super::outline::open_for_insert(s, &at, frag.blocks.len());
     let end = s.doc.insert_fragment(&at, &frag)?;
     // The paragraph marks the paste added are inserted too, so rejecting it joins the
     // paragraphs again. The last paragraph ends with the original mark and keeps it.

@@ -122,6 +122,7 @@ pub fn specs() -> Vec<CommandSpec> {
             let mut frag = doc.body_fragment();
             super::paste::unlink_sections(&mut frag.blocks);
             let at = delete_selection(s)?;
+            super::outline::open_for_insert(s, &at, frag.blocks.len());
             let end = s.doc.insert_fragment(&at, &frag)?;
             s.sel = Selection::caret(end);
             sel_result(s)
@@ -921,6 +922,7 @@ fn cover_page(s: &mut Session, v: &Value) -> CmdResult {
     let start = s.doc.start_of(StoryRef::Body);
     let at = s.doc.split_paragraph(&start)?;
     let _ = at;
+    super::outline::open_for_insert(s, &start, frag.blocks.len());
     s.doc.insert_fragment(&start, &frag)?;
     s.sel = Selection::caret(s.doc.start_of(StoryRef::Body));
     sel_result(s)

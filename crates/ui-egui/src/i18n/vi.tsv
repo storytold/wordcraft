@@ -2672,3 +2672,8 @@ template	Letter	Thư
 # Reading Mode column widths (#1040)
 	Narrow	Hẹp
 	Medium	Trung bình
+	Collapsed by default	Thu gọn theo mặc định
+	Expand Heading	Mở rộng tiêu đề
+	Collapse Heading	Thu gọn tiêu đề
+	Expand All Headings	Mở rộng tất cả tiêu đề
+	Collapse All Headings	Thu gọn tất cả tiêu đề

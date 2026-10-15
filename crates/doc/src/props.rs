@@ -775,6 +775,11 @@ pub struct ParaProps {
     /// 0..=8 = Level 1..9; 9 = body text.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outline_level: Option<u8>,
+    /// "Collapsed by default" ([MS-DOCX] `w15:collapsed`): a heading (a paragraph with an outline
+    /// level) hides what is under it, up to the next heading of its level or higher. Ignored on
+    /// body text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collapsed: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub numbering: Option<NumRef>,
     /// Tab stops (replaces the inherited list; `TabAlign::Clear` stops remove inherited ones).
@@ -832,7 +837,7 @@ pub struct ParaProps {
 impl ParaProps {
     pub fn overlay(&mut self, patch: &ParaProps) {
         overlay_fields!(self, patch; style, align, indent_left, indent_right, indent_first, indent_left_chars, indent_right_chars, indent_first_chars, space_before, space_after, space_before_auto, space_after_auto, line_spacing,
-            contextual_spacing, mirror_indents, keep_next, keep_lines, page_break_before, widow_control, outline_level, numbering, tabs, shading, borders,
+            contextual_spacing, mirror_indents, keep_next, keep_lines, page_break_before, widow_control, outline_level, collapsed, numbering, tabs, shading, borders,
             suppress_hyphens, suppress_line_numbers, bidi, drop_cap, frame, kinsoku, word_wrap, overflow_punct, top_line_punct, auto_space_de, auto_space_dn,
             snap_to_grid);
     }

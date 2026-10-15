@@ -364,6 +364,8 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
     if let Some(l) = p.outline_level {
         w.val("w:outlineLvl", &n(l.min(9) as i64));
     }
+    // [MS-DOCX] extension: every part root declares `w15` and lists it in `mc:Ignorable`.
+    toggle(w, "w15:collapsed", p.collapsed);
 }
 
 pub fn margins(w: &mut W, tag: &str, m: &[f32; 4]) {

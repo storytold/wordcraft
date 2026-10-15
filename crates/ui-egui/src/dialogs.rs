@@ -203,6 +203,10 @@ pub enum Dialog {
         /// Mirror indents, don't add space between paragraphs of the same style, suppress line
         /// numbers, don't hyphenate (#512).
         opts: [bool; 4],
+        /// Outline level: 0–8 for Level 1–9, 9 for body text.
+        outline: u8,
+        /// Collapsed by default (#1745): only for an outline level other than body text.
+        collapsed: bool,
         /// The fields every selected paragraph shares, as `para_fields` names them, from when
         /// the dialog opened: OK sends only the fields that differ from these, so an untouched
         /// tab adds no direct formatting (#1346).
@@ -1648,6 +1652,8 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             tab,
             asian,
             opts,
+            outline,
+            collapsed,
             mixed,
             ..
         } => {
@@ -1688,6 +1694,28 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                                 }
                             }
                         });
+                    });
+                    // Outline level, and "Collapsed by default" beside it: greyed for body text,
+                    // as in Word (#1745).
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{}:", tl!("Outline level")));
+                        let name = |l: u8| {
+                            if l >= BODY_LEVEL {
+                                tl!("Body Text").to_string()
+                            } else {
+                                crate::i18n::fmt(tl!("Level {n}"), &[("n", &(l + 1).to_string())])
+                            }
+                        };
+                        let shown = if mixed.contains("outlineLevel") { String::new() } else { name(*outline) };
+                        egui::ComboBox::from_id_salt("para_outline").selected_text(shown).show_ui(ui, |ui| {
+                            for l in std::iter::once(BODY_LEVEL).chain(0..BODY_LEVEL) {
+                                if ui.selectable_value(outline, l, name(l)).clicked() {
+                                    mixed.remove("outlineLevel");
+                                }
+                            }
+                        });
+                        let heading = *outline < BODY_LEVEL && !mixed.contains("outlineLevel");
+                        ui.add_enabled_ui(heading, |ui| para_check(ui, collapsed, tl!("Collapsed by default"), "collapsed", mixed));
                     });
                     ui.label(egui::RichText::new(tl!("Indentation")).font(semibold(12.5)));
                     // Mirrored indents are the inside and outside ones (they swap on even pages).
@@ -3024,6 +3052,9 @@ fn table_properties(ui: &mut Ui, f: &mut TableForm) {
     });
 }
 
+/// The Paragraph dialog's outline level for body text (the model's `outline_level` 9).
+const BODY_LEVEL: u8 = 9;
+
 /// The Paragraph dialog as one paragraph's formatting fills it, on page `tab`.
 fn paragraph_dialog(rp: &wordcraft_doc::resolve::ResolvedPara, tab: u8) -> Dialog {
     let line = match rp.line_spacing {
@@ -3048,6 +3079,8 @@ fn paragraph_dialog(rp: &wordcraft_doc::resolve::ResolvedPara, tab: u8) -> Dialo
         tab,
         asian: [rp.kinsoku, rp.word_wrap, rp.overflow_punct, rp.top_line_punct, rp.auto_space_de, rp.auto_space_dn],
         opts: [rp.mirror_indents, rp.contextual_spacing, rp.suppress_line_numbers, rp.suppress_hyphens],
+        outline: rp.outline_level.unwrap_or(BODY_LEVEL).min(BODY_LEVEL),
+        collapsed: rp.collapsed,
         start: serde_json::Map::new(),
         mixed: BTreeSet::new(),
     }
@@ -3056,7 +3089,25 @@ fn paragraph_dialog(rp: &wordcraft_doc::resolve::ResolvedPara, tab: u8) -> Dialo
 /// The Paragraph dialog's fields as `para.set` takes them: `align`, `left` and `right` as seen
 /// on the page (its `onPage`), the rest as paragraph properties, line spacing as a multiple.
 fn para_fields(d: &Dialog) -> serde_json::Map<String, Value> {
-    let Dialog::Paragraph { rtl, align, left, right, first, before, after, line, keep_next, keep_lines, page_break, widow, asian, opts, .. } = d
+    let Dialog::Paragraph {
+        rtl,
+        align,
+        left,
+        right,
+        first,
+        before,
+        after,
+        line,
+        keep_next,
+        keep_lines,
+        page_break,
+        widow,
+        asian,
+        opts,
+        outline,
+        collapsed,
+        ..
+    } = d
     else {
         return serde_json::Map::new();
     };
@@ -3069,6 +3120,7 @@ fn para_fields(d: &Dialog) -> serde_json::Map<String, Value> {
         "keepNext": keep_next, "keepLines": keep_lines, "pageBreakBefore": page_break, "widowControl": widow,
         "mirrorIndents": mirror, "contextualSpacing": contextual, "suppressLineNumbers": no_numbers, "suppressHyphens": no_hyphens,
         "kinsoku": kinsoku, "wordWrap": word_wrap, "overflowPunct": overflow, "topLinePunct": top_line, "autoSpaceDE": de, "autoSpaceDN": dn,
+        "outlineLevel": outline, "collapsed": collapsed,
     });
     match fields {
         Value::Object(m) => m,
@@ -3127,10 +3179,12 @@ fn apply_paragraph(app: &mut WordApp, d: &Dialog) {
     let Dialog::Paragraph { start, mixed, .. } = d else { return };
     let fields = para_fields(d);
     let turned = !mixed.contains("bidi") && fields.get("bidi") != start.get("bidi");
+    // "Collapsed by default" is greyed for body text: what it shows isn't sent then (#1745).
+    let body_text = fields.get("outlineLevel").and_then(Value::as_u64).is_none_or(|l| l >= u64::from(BODY_LEVEL));
     let (mut props, mut page) = (serde_json::Map::new(), serde_json::Map::new());
     for (k, v) in fields {
         let on_page = matches!(k.as_str(), "align" | "left" | "right");
-        if mixed.contains(&k) || (start.get(&k) == Some(&v) && !(turned && on_page)) {
+        if mixed.contains(&k) || (start.get(&k) == Some(&v) && !(turned && on_page)) || (k == "collapsed" && body_text) {
             continue;
         }
         if on_page {
@@ -3867,6 +3921,48 @@ mod tests {
         let _ = app.run("para.set", json!({ "props": props }));
         let _ = app.run("select.all", json!({}));
         app
+    }
+
+    /// #1745: Indents and Spacing › General has the outline level and, beside it, "Collapsed by
+    /// default" (greyed for body text): a collapsed heading hides what is under it.
+    #[test]
+    fn paragraph_dialog_sets_outline_level_and_collapsed_by_default() {
+        let mut app = app_with("Intro\nBody\nMore");
+        let _ = app.run("caret.docStart", json!({}));
+        let _ = app.run("para.style", json!({"style": "Heading 1"}));
+        app.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(1, 0));
+        let Some(Dialog::Paragraph { outline, collapsed, .. }) = Dialog::open("paragraph", &mut app) else { panic!() };
+        assert_eq!((outline, collapsed), (BODY_LEVEL, false), "body text");
+        ok_unchanged(&mut app);
+        assert_eq!(para_props(&app, 1).outline_level, None, "an unchanged OK sets no level");
+        ok_edit(&mut app, |d| {
+            if let Dialog::Paragraph { outline, .. } = d {
+                *outline = 1;
+            }
+        });
+        assert_eq!(para_props(&app, 1).outline_level, Some(1), "Level 2");
+        app.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 0));
+        let Some(Dialog::Paragraph { outline, collapsed, .. }) = Dialog::open("paragraph", &mut app) else { panic!() };
+        assert_eq!((outline, collapsed), (0, false), "Heading 1");
+        ok_edit(&mut app, |d| {
+            if let Dialog::Paragraph { collapsed, .. } = d {
+                *collapsed = true;
+            }
+        });
+        assert_eq!(para_props(&app, 0).collapsed, Some(true));
+        let shown =
+            |app: &mut WordApp, i: usize| app.session.layout().index.contains_key(&(wordcraft_doc::StoryRef::Body, wordcraft_doc::Path::top(i)));
+        assert!(shown(&mut app, 0) && !shown(&mut app, 1) && !shown(&mut app, 2));
+        // The box is greyed for body text: ticking it and choosing Body Text sends no flag.
+        app.session.sel = wordcraft_engine::Selection::caret(wordcraft_doc::Pos::body(0, 0));
+        let _ = app.run("para.collapsed", json!({"value": false}));
+        ok_edit(&mut app, |d| {
+            if let Dialog::Paragraph { outline, collapsed, .. } = d {
+                *outline = BODY_LEVEL;
+                *collapsed = true;
+            }
+        });
+        assert_eq!((para_props(&app, 0).outline_level, para_props(&app, 0).collapsed), (Some(BODY_LEVEL), Some(false)));
     }
 
     #[test]

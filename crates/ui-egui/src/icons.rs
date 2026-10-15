@@ -1475,3 +1475,31 @@ pub fn library(p: &Painter, r: Rect, icon: &wordcraft_render::icon_lib::Icon, c:
         }
     }
 }
+
+/// Which way a heading's fold arrow points (#1745).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fold {
+    /// Expanded: what is under the heading shows.
+    Open,
+    /// Collapsed, in a left-to-right heading (the arrow points along the line).
+    ClosedLtr,
+    /// Collapsed, in a right-to-left heading.
+    ClosedRtl,
+}
+
+/// A heading's fold arrow (#1745): an open chevron with round joints, drawn with a stroke that
+/// stays crisp at any zoom (`width` screen points). Original artwork.
+pub fn fold_arrow(p: &Painter, r: Rect, fold: Fold, c: Color32, width: f32) {
+    let h = r.width().min(r.height()) * 0.28;
+    let m = r.center();
+    let pts = match fold {
+        Fold::Open => [pos2(m.x - h, m.y - h * 0.5), pos2(m.x, m.y + h * 0.5), pos2(m.x + h, m.y - h * 0.5)],
+        Fold::ClosedLtr => [pos2(m.x - h * 0.5, m.y - h), pos2(m.x + h * 0.5, m.y), pos2(m.x - h * 0.5, m.y + h)],
+        Fold::ClosedRtl => [pos2(m.x + h * 0.5, m.y - h), pos2(m.x - h * 0.5, m.y), pos2(m.x + h * 0.5, m.y + h)],
+    };
+    let stroke = Stroke::new(width, c);
+    p.add(Shape::line(pts.to_vec(), stroke));
+    for q in pts {
+        p.circle_filled(q, width / 2.0, c);
+    }
+}

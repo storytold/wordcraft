@@ -549,6 +549,16 @@ fn sample_text(s: &Session) -> Option<String> {
     Some(text)
 }
 
+/// Whether the caret is at the end of a body heading that hides what follows it (#1745).
+fn fold_at_end(s: &Session) -> bool {
+    let f = &s.sel.focus;
+    f.story == StoryRef::Body
+        && f.path.0.len() == 1
+        && s.doc.para_at(f).is_some_and(|p| f.off >= p.len())
+        && super::outline::folds(s, f.path.last())
+        && super::outline::folded(s).get(f.path.last().saturating_add(1)).copied().unwrap_or(false)
+}
+
 fn new_paragraph(s: &mut Session, _: &Value) -> CmdResult {
     // Enter in a one-line plain text control (or a check box or list) does nothing, as in Word.
     if super::controls::refuses_paragraph(s) {
@@ -559,6 +569,11 @@ fn new_paragraph(s: &mut Session, _: &Value) -> CmdResult {
         let end = s.sel.focus.clone();
         s.sel = Selection { anchor: Pos { off: 0, ..end.clone() }, focus: end };
         type_text(s, &text)?;
+        return sel_result(s);
+    }
+    // Enter at the end of a collapsed heading only expands it (Word for Mac, #1745).
+    if s.sel.is_collapsed() && fold_at_end(s) {
+        super::outline::expand_heading(s, s.sel.focus.path.last());
         return sel_result(s);
     }
     let mut at = delete_selection(s)?;
@@ -678,6 +693,15 @@ fn backspace_inner(s: &mut Session, _: &Value) -> CmdResult {
         return sel_result(s);
     }
     // At the start of a paragraph.
+    // Just after a fold, the first press only expands it (Word for Mac, #1745).
+    if f.story == StoryRef::Body
+        && f.path.0.len() == 1
+        && let Some(prev) = f.path.last().checked_sub(1)
+        && super::outline::folded(s).get(prev).copied().unwrap_or(false)
+    {
+        super::outline::show_block(s, prev);
+        return sel_result(s);
+    }
     if para.props.numbering.is_some_and(|n| n.num != 0) {
         // First Backspace removes the number but keeps the item's indent (Word): the text stays
         // where it was, so the indent becomes the paragraph's own (`num: 0` alone drops it).
@@ -762,6 +786,11 @@ fn delete_inner(s: &mut Session, _: &Value) -> CmdResult {
         let b = Pos { off: para.next_boundary(f.off), ..f.clone() };
         s.sel = Selection { anchor: f, focus: b };
         delete_selection(s)?;
+        return sel_result(s);
+    }
+    // At the end of a collapsed heading, the first press only expands it (Word for Mac, #1745).
+    if fold_at_end(s) {
+        super::outline::expand_heading(s, f.path.last());
         return sel_result(s);
     }
     // At the end: join with the next paragraph in the same container.

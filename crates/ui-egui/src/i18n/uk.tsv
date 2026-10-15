@@ -2245,3 +2245,8 @@
 # Reading Mode column widths (#1040)
 	Narrow	Вузька
 	Medium	Середня
+	Collapsed by default	Згорнуто за замовчуванням
+	Expand Heading	Розгорнути заголовок
+	Collapse Heading	Згорнути заголовок
+	Expand All Headings	Розгорнути всі заголовки
+	Collapse All Headings	Згорнути всі заголовки

@@ -2628,3 +2628,8 @@
 # Reading Mode column widths (#1040)
 	Narrow	Keskeny
 	Medium	Közepes
+	Collapsed by default	Alapértelmezés szerint összecsukva
+	Expand Heading	Címsor kibontása
+	Collapse Heading	Címsor összecsukása
+	Expand All Headings	Minden címsor kibontása
+	Collapse All Headings	Minden címsor összecsukása

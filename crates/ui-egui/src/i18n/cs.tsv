@@ -2624,3 +2624,8 @@ preview	Title	Ukázka
 # Reading Mode column widths (#1040)
 	Narrow	Úzká
 	Medium	Střední
+	Collapsed by default	Ve výchozím stavu sbaleno
+	Expand Heading	Rozbalit nadpis
+	Collapse Heading	Sbalit nadpis
+	Expand All Headings	Rozbalit všechny nadpisy
+	Collapse All Headings	Sbalit všechny nadpisy

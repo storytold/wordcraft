@@ -7232,3 +7232,69 @@ fn vertical_align_command_sets_justified() {
         assert_eq!(serde_json::to_value(crate::cmd::page::sect(&s)).unwrap()["valign"], json!(name));
     }
 }
+
+/// #1745: "Collapsed by default" (Paragraph dialog, `para.collapsed`) and the heading fold
+/// commands set the stored flag (undoable, saved with the file), only on headings; a caret the
+/// fold would hide moves onto the heading.
+#[test]
+fn collapsed_by_default_and_heading_fold_commands() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Intro\nBody one.\nPart\nBody two.\nNext\nBody three."}));
+    for (i, style) in [(0, "Heading 1"), (2, "Heading 2"), (4, "Heading 1")] {
+        s.sel = crate::Selection::caret(Pos::body(i, 0));
+        run(&mut s, "para.style", json!({"style": style}));
+    }
+    let flags = |s: &Session| -> Vec<Option<bool>> { s.doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.props.collapsed).collect() };
+    let shown = |s: &mut Session| -> Vec<usize> {
+        let l = s.layout();
+        (0..6).filter(|i| l.index.contains_key(&(StoryRef::Body, wordcraft_doc::Path::top(*i)))).collect()
+    };
+    // Body text can't collapse: the command is disabled there (the dialog greys the box).
+    s.sel = crate::Selection::caret(Pos::body(1, 0));
+    assert!(matches!(s.run("para.collapsed", &json!({"value": true})), Err(crate::CmdError::Disabled(_))));
+    s.sel = crate::Selection::caret(Pos::body(0, 2));
+    run(&mut s, "para.collapsed", json!({"value": true}));
+    assert_eq!(flags(&s), [Some(true), None, None, None, None, None]);
+    assert_eq!(shown(&mut s), [0, 4, 5]);
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(flags(&s), [None; 6]);
+    // Without a value it toggles.
+    run(&mut s, "para.collapsed", json!({}));
+    assert_eq!(flags(&s)[0], Some(true));
+    run(&mut s, "para.collapsed", json!({}));
+    assert_eq!(flags(&s)[0], Some(false));
+    // Collapse Heading from body text folds the heading it is under; the caret moves onto it.
+    s.sel = crate::Selection::caret(Pos::body(3, 4));
+    run(&mut s, "outline.collapseHeading", json!({}));
+    assert_eq!(flags(&s)[2], Some(true));
+    assert_eq!(s.sel.focus, Pos::body(2, 4));
+    assert_eq!(shown(&mut s), [0, 1, 2, 4, 5]);
+    run(&mut s, "outline.expandHeading", json!({}));
+    assert_eq!(flags(&s)[2], None);
+    // The fold arrow: toggle a given heading.
+    run(&mut s, "outline.toggleHeading", json!({"block": 4}));
+    assert_eq!(flags(&s)[4], Some(true));
+    assert_eq!(shown(&mut s), [0, 1, 2, 3, 4]);
+    run(&mut s, "outline.toggleHeading", json!({"block": 4}));
+    assert_eq!(flags(&s)[4], None);
+    assert!(s.run("outline.toggleHeading", &json!({"block": 1})).is_err());
+    assert!(s.run("outline.toggleHeading", &json!({"block": u64::MAX})).is_err());
+    // All headings with something under them, and back.
+    run(&mut s, "outline.collapseAllHeadings", json!({}));
+    assert_eq!(flags(&s), [Some(true), None, Some(true), None, Some(true), None]);
+    assert_eq!(shown(&mut s), [0, 4]);
+    run(&mut s, "outline.expandAllHeadings", json!({}));
+    assert!(flags(&s).iter().all(|f| *f != Some(true)));
+    assert_eq!(shown(&mut s), [0, 1, 2, 3, 4, 5]);
+    // A style that collapses its headings is overridden by expanding one.
+    run(&mut s, "styles.modify", json!({"style": "Heading 1", "para": {"collapsed": true}}));
+    assert_eq!(shown(&mut s), [0, 4]);
+    s.sel = crate::Selection::caret(Pos::body(0, 0));
+    run(&mut s, "outline.expandHeading", json!({}));
+    assert_eq!(flags(&s)[0], Some(false));
+    assert_eq!(shown(&mut s), [0, 1, 2, 3, 4]);
+    // Saved and read back.
+    let bytes = wordcraft_docx::write(&s.doc).unwrap();
+    let back = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(back.body.iter().filter_map(|b| b.as_para()).map(|p| p.props.collapsed).collect::<Vec<_>>(), flags(&s));
+}

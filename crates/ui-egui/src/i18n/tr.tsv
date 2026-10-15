@@ -2629,3 +2629,8 @@ preview	Title	Örnek
 # Reading Mode column widths (#1040)
 	Narrow	Dar
 	Medium	Orta
+	Collapsed by default	Varsayılan olarak daraltılmış
+	Expand Heading	Başlığı genişlet
+	Collapse Heading	Başlığı daralt
+	Expand All Headings	Tüm başlıkları genişlet
+	Collapse All Headings	Tüm başlıkları daralt

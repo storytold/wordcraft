@@ -2621,3 +2621,8 @@
 # Reading Mode column widths (#1040)
 	Narrow	Тясна
 	Medium	Средна
+	Collapsed by default	Свито по подразбиране
+	Expand Heading	Разгъване на заглавието
+	Collapse Heading	Свиване на заглавието
+	Expand All Headings	Разгъване на всички заглавия
+	Collapse All Headings	Свиване на всички заглавия

@@ -2247,3 +2247,8 @@
 # Reading Mode column widths (#1040)
 	Narrow	Уска
 	Medium	Средња
+	Collapsed by default	Подразумевано скупљено
+	Expand Heading	Прошири наслов
+	Collapse Heading	Скупи наслов
+	Expand All Headings	Прошири све наслове
+	Collapse All Headings	Скупи све наслове

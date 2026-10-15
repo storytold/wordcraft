@@ -2245,3 +2245,8 @@
 # Reading Mode column widths (#1040)
 	Narrow	窄
 	Medium	中等
+	Collapsed by default	默认折叠
+	Expand Heading	展开标题
+	Collapse Heading	折叠标题
+	Expand All Headings	展开所有标题
+	Collapse All Headings	折叠所有标题

@@ -499,6 +499,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 blocks: lines.iter().map(|l| Block::Para(Paragraph::with_text(l, CharProps::default()).styled("NoSpacing"))).collect(),
                 ..Default::default()
             };
+            super::outline::open_for_insert(s, &at, frag.blocks.len());
             let end = s.doc.insert_fragment(&at, &frag)?;
             s.sel = Selection::caret(end);
             sel_result(s)
@@ -1567,6 +1568,7 @@ fn quick_parts(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(name) = p::str(v, "insert") {
         let frag = s.building_blocks.get(name).cloned().ok_or_else(|| CmdError::Params(format!("no Quick Part `{name}`")))?;
         let at = delete_selection(s)?;
+        super::outline::open_for_insert(s, &at, frag.blocks.len());
         let end = s.doc.insert_fragment(&at, &frag)?;
         s.sel = Selection::caret(end);
     }

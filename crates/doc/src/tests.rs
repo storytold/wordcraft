@@ -151,6 +151,29 @@ fn json_round_trip() {
     assert_eq!(back.para(StoryRef::Body, &Path::top(0)).unwrap().runs[0].props.bold, Some(true));
 }
 
+/// "Collapsed by default" (#1745): stored only when set, so older files (without it) load and
+/// files without folded headings don't change; a style can carry it too.
+#[test]
+fn collapsed_flag_is_optional_in_json_and_resolves() {
+    let mut p = Paragraph::with_text("Intro", CharProps::default());
+    let plain = serde_json::to_string(&p).unwrap();
+    assert!(!plain.contains("collapsed"), "{plain}");
+    let old: Paragraph = serde_json::from_str(&plain).unwrap();
+    assert_eq!(old.props.collapsed, None);
+    p.props.collapsed = Some(true);
+    let json = serde_json::to_string(&p).unwrap();
+    assert!(json.contains(r#""collapsed":true"#), "{json}");
+    let back: Paragraph = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.props.collapsed, Some(true));
+    let s = StyleSheet::builtin();
+    assert!(s.resolve_para(&back.props).collapsed);
+    assert!(!s.resolve_para(&old.props).collapsed);
+    // Direct formatting overrides a style's flag.
+    let mut base = ParaProps { collapsed: Some(true), ..ParaProps::default() };
+    base.overlay(&ParaProps { collapsed: Some(false), ..ParaProps::default() });
+    assert_eq!(base.collapsed, Some(false));
+}
+
 #[test]
 fn ensure_nonempty_repairs() {
     let mut d = Document::new();

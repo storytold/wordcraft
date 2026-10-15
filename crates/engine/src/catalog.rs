@@ -109,6 +109,11 @@ Home|Paragraph|Keep Lines Together|para.keepLines
 Home|Paragraph|Page Break Before|para.pageBreakBefore
 Home|Paragraph|Widow/Orphan Control|para.widowControl
 Home|Paragraph|Outline Level|para.outlineLevel
+Home|Paragraph|Collapsed by Default|para.collapsed
+Home|Paragraph|Expand Heading|outline.expandHeading
+Home|Paragraph|Collapse Heading|outline.collapseHeading
+Home|Paragraph|Expand All Headings|outline.expandAllHeadings
+Home|Paragraph|Collapse All Headings|outline.collapseAllHeadings
 Home|Paragraph|Hanging Indent|para.hangingIndent
 Home|Paragraph|Right-to-Left Text Direction|para.rtl
 Home|Paragraph|Left-to-Right Text Direction|para.ltr

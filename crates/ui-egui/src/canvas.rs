@@ -1568,6 +1568,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         let fallback = if in_bar { egui::CursorIcon::Default } else { egui::CursorIcon::Text };
         ui.ctx().set_cursor_icon(over_object.unwrap_or(fallback));
     }
+    paint_fold_arrows(app, ui, &layout, &rects, geo.scale);
     crate::table_resize::cursor(app, ui, &resp, &layout, &rects, geo.scale);
     crate::table_mouse::cursor(app, ui, &resp, &layout, &rects, geo.scale);
     crate::table_pen::cursor(app, ui, &resp);
@@ -2238,6 +2239,16 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
         if app.session.math.is_some() {
             let _ = app.run("equation.exit", json!({}));
         }
+        // A heading's fold arrow in the left margin (#1745) expands or collapses it.
+        if story == StoryRef::Body
+            && !mods.shift
+            && !mods.alt
+            && folds_headings(app)
+            && let Some(block) = layout.fold_arrow_at(page, x, y)
+        {
+            let _ = app.run("outline.toggleHeading", json!({ "block": block }));
+            return;
+        }
         // The selection bar (the left margin beside body text, #856): a click selects the line,
         // a double-click the paragraph, a triple-click or Ctrl/⌘+click the document; Shift+click
         // extends by lines; dragging grows the selection by the clicked unit.
@@ -2806,6 +2817,59 @@ fn equation_menu(app: &mut WordApp, ui: &mut Ui) {
     }
 }
 
+/// Whether the caret is in a body heading (a top-level paragraph with an outline level) in a view
+/// that folds headings (not Outline view, which has its own expand and collapse).
+fn caret_in_heading(app: &WordApp) -> bool {
+    let s = &app.session;
+    let at = &s.sel.focus;
+    folds_headings(app)
+        && at.story == StoryRef::Body
+        && at.path.0.len() == 1
+        && s.doc.para_at(at).is_some_and(|p| s.doc.styles.resolve_para(&p.props).outline_level.filter(|l| *l < 9).is_some())
+}
+
+/// Whether the view folds collapsed headings (#1745): every view but Outline.
+fn folds_headings(app: &WordApp) -> bool {
+    app.session.view.mode != wordcraft_layout::ViewMode::Outline || app.session.view.read_mode
+}
+
+/// The fold arrows beside headings (#1745), in the left margin: always for a collapsed heading
+/// (pointing along the line), and for an expanded one while the pointer is over its line or the
+/// arrow (pointing down). Drawn on screen only, never printed.
+fn paint_fold_arrows(app: &WordApp, ui: &Ui, layout: &DocLayout, rects: &[Rect], scale: f32) {
+    if !folds_headings(app) || app.session.sel.focus.story != StoryRef::Body {
+        return;
+    }
+    let hover = ui.input(|i| i.pointer.hover_pos()).and_then(|p| page_at(rects, layout, scale, p));
+    let painter = ui.painter();
+    for (i, r) in rects.iter().enumerate() {
+        if !ui.clip_rect().intersects(*r) {
+            continue;
+        }
+        let Some(page) = layout.pages.get(i) else { continue };
+        let k = page_screen_scale(*r, page, scale);
+        for a in layout.fold_arrows(i) {
+            // Over the heading's first line or the arrow (not the same height in another column).
+            let (x0, x1) = (a.line.0.min(a.rect.x), a.line.1.max(a.rect.x + a.rect.w));
+            let over = hover.is_some_and(|(hp, x, y)| hp == i && y >= a.rect.y && y <= a.rect.y + a.rect.h && x >= x0 && x <= x1);
+            if !a.collapsed && !over {
+                continue;
+            }
+            let fold = match (a.collapsed, a.rtl) {
+                (false, _) => crate::icons::Fold::Open,
+                (true, false) => crate::icons::Fold::ClosedLtr,
+                (true, true) => crate::icons::Fold::ClosedRtl,
+            };
+            // Centred on the first line, at least 10 screen points across.
+            let centre = to_screen(pos2(0.0, 0.0), *r, k, a.rect.x + a.rect.w / 2.0, a.rect.y + a.rect.h / 2.0);
+            let side = (a.rect.w * k).max(10.0);
+            // The page is paper (white in both themes): greys that read on it.
+            let c = if over { Color32::from_gray(0x50) } else { Color32::from_gray(0x8C) };
+            crate::icons::fold_arrow(painter, Rect::from_center_size(centre, vec2(side, side)), fold, c, 1.6);
+        }
+    }
+}
+
 fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     if app.session.math.is_some() {
         return equation_menu(app, ui);
@@ -2863,6 +2927,15 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     }
     item(ui, app, "Font…", "ui.dialog", json!({"name": "font"}));
     item(ui, app, "Paragraph…", "ui.dialog", json!({"name": "paragraph"}));
+    // On a heading: fold it, or every heading (#1745; Word for Windows has this submenu).
+    if caret_in_heading(app) {
+        ui.menu_button(tl!("Expand or Collapse Heading"), |ui| {
+            item(ui, app, "Expand Heading", "outline.expandHeading", json!({}));
+            item(ui, app, "Collapse Heading", "outline.collapseHeading", json!({}));
+            item(ui, app, "Expand All Headings", "outline.expandAllHeadings", json!({}));
+            item(ui, app, "Collapse All Headings", "outline.collapseAllHeadings", json!({}));
+        });
+    }
     item(ui, app, "Link…", "ui.dialog", json!({"name": "link"}));
     item(ui, app, "New Comment", "review.newComment", json!({}));
     if !wordcraft_engine::cmd::fields::selected(&app.session).is_empty() {
@@ -3382,6 +3455,55 @@ mod tests {
         // it lands on the copy.
         drag(&mut h, Modifiers::NONE);
         assert_eq!((objects(&mut h), xs(&mut h)), (2, vec![350]));
+    }
+
+    /// #1745: clicking the fold arrow in the left margin beside a heading collapses it (what is
+    /// under it disappears), and clicking it again expands it; the caret doesn't move into the
+    /// margin's line selection.
+    #[test]
+    fn fold_arrow_beside_a_heading_toggles_it() {
+        use egui::{Event, PointerButton};
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("text.insert", json!({"text": "Intro\rBody one\rNext"})).unwrap();
+        for i in [0, 2] {
+            a.session.sel = wordcraft_engine::Selection::caret(Pos::body(i, 0));
+            a.run("para.style", json!({"style": "Heading 1"})).unwrap();
+        }
+        a.run("view.commentsPane", json!({"value": false})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        for _ in 0..6 {
+            h.step();
+        }
+        let click = |h: &mut egui_kittest::Harness<'_, WordApp>| {
+            let arrow = h.state_mut().session.layout().fold_arrows(0).into_iter().find(|a| a.block == 0).expect("an arrow beside Intro");
+            let at = page_to_screen(h.state_mut(), 0, arrow.rect.x + arrow.rect.w / 2.0, arrow.rect.y + arrow.rect.h / 2.0).expect("on screen");
+            h.event(Event::PointerMoved(at));
+            h.step();
+            for pressed in [true, false] {
+                h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Default::default() });
+                h.step();
+            }
+            for _ in 0..3 {
+                h.step();
+            }
+        };
+        let shown = |h: &mut egui_kittest::Harness<'_, WordApp>| {
+            let l = h.state_mut().session.layout();
+            (0..3).filter(|i| l.index.contains_key(&(StoryRef::Body, wordcraft_doc::Path::top(*i)))).collect::<Vec<_>>()
+        };
+        assert_eq!(shown(&mut h), [0, 1, 2]);
+        click(&mut h);
+        assert_eq!(shown(&mut h), [0, 2], "collapsed");
+        assert!(h.state().session.sel.is_collapsed(), "no line selected");
+        click(&mut h);
+        assert_eq!(shown(&mut h), [0, 1, 2], "expanded again");
     }
 
     /// #856: the left margin beside body text is Word's selection bar. A click selects the line,

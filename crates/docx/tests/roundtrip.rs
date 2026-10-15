@@ -151,6 +151,7 @@ fn every_para_prop_round_trips() {
         page_break_before: Some(true),
         widow_control: Some(false),
         outline_level: Some(2),
+        collapsed: Some(true),
         numbering: Some(NumRef { num: 0, level: 0 }),
         tabs: Some(vec![
             TabStop { pos: 72.0, align: TabAlign::Center, leader: TabLeader::Dot },

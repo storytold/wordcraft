@@ -2232,3 +2232,8 @@
 # Reading Mode column widths (#1040)
 	Narrow	Schmal
 	Medium	Mittel
+	Collapsed by default	Standardmäßig reduziert
+	Expand Heading	Überschrift erweitern
+	Collapse Heading	Überschrift reduzieren
+	Expand All Headings	Alle Überschriften erweitern
+	Collapse All Headings	Alle Überschriften reduzieren

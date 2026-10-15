@@ -166,6 +166,9 @@ pub struct ResolvedPara {
     pub page_break_before: bool,
     pub widow_control: bool,
     pub outline_level: Option<u8>,
+    /// "Collapsed by default" (see `ParaProps::collapsed`); only headings fold.
+    #[serde(default)]
+    pub collapsed: bool,
     pub numbering: Option<NumRef>,
     pub tabs: Vec<TabStop>,
     pub shading: Option<Rgb>,
@@ -244,6 +247,7 @@ impl ResolvedPara {
             page_break_before: p.page_break_before.unwrap_or(false),
             widow_control: p.widow_control.unwrap_or(true),
             outline_level: p.outline_level.filter(|l| *l < 9),
+            collapsed: p.collapsed.unwrap_or(false),
             numbering: p.numbering.filter(|n| n.num != 0),
             tabs,
             shading: p.shading,

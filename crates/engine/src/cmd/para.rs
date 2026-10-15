@@ -187,6 +187,10 @@ pub fn specs() -> Vec<CommandSpec> {
             let l = p::u64(v, "level").map(|x| x.min(9) as u8);
             fmt(s, &|p| p.outline_level = l)
         }),
+        // The Paragraph dialog's "Collapsed by default" (#1745), greyed for body text.
+        CommandSpec::new("para.collapsed", "Collapsed by default", "Home › Paragraph › Paragraph", collapsed)
+            .params(r#"{"value"?: bool} — the selected headings (paragraphs with an outline level) hide what is under them, up to the next heading of their level or higher; toggles without `value`; body text is left alone"#)
+            .when(|s| cur(s).outline_level.is_none().then_some("only headings (paragraphs with an outline level) collapse")),
         CommandSpec::new("para.set", "Set Paragraph Formatting", "Home › Paragraph › Paragraph", set_props).params(
             r#"{"props": ParaProps, "onPage"?: {"align"?: "left|center|right|justify|distribute", "left"?: pt, "right"?: pt} (alignment and indents as seen on the page: each paragraph's own direction, after `props`, says which edge is its start)}"#,
         ),
@@ -303,6 +307,22 @@ fn tog(s: &mut Session, v: &Value, get: fn(&ParaProps) -> Option<bool>, set: fn(
         !get(&props).unwrap_or(false)
     });
     fmt(s, &|p| set(p, on))
+}
+
+/// "Collapsed by default" (#1745): the stored flag, on the selected headings only.
+fn collapsed(s: &mut Session, v: &Value) -> CmdResult {
+    let on = p::bool(v, "value").unwrap_or_else(|| !cur(s).collapsed);
+    let story = s.sel.focus.story;
+    for path in super::selected_paths(s) {
+        if !s.doc.para(story, &path).is_some_and(|p| s.doc.styles.resolve_para(&p.props).outline_level.is_some()) {
+            continue;
+        }
+        let para = s.doc.para_mut(story, &path)?;
+        para.props.collapsed = Some(on);
+        para.touch();
+    }
+    super::outline::keep_caret_shown(s);
+    sel_result(s)
 }
 
 /// Asian Typography (the Paragraph dialog's tab): sets the given flags on every selected

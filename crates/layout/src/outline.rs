@@ -106,6 +106,42 @@ pub fn hidden(levels: &[u8], view: &OutlineView) -> Vec<bool> {
         .collect()
 }
 
+/// "Collapsed by default" headings ([`ResolvedPara::collapsed`], #1745) as the other views show
+/// them: which blocks they hide. A collapsed heading hides what follows it up to the next heading
+/// of its level or higher, or the end of the story; the heading itself shows; body text can't
+/// collapse. `collapsed` is by block index (missing entries are not collapsed).
+///
+/// [`ResolvedPara::collapsed`]: wordcraft_doc::resolve::ResolvedPara::collapsed
+pub fn fold(levels: &[u8], collapsed: &[bool]) -> Vec<bool> {
+    let view = OutlineView { collapsed: collapsed.iter().enumerate().filter(|(_, c)| **c).map(|(i, _)| i).collect(), ..Default::default() };
+    hidden(levels, &view)
+}
+
+/// The body blocks collapsed headings hide ([`fold`]), by block index; empty (nothing hidden)
+/// when no paragraph or style is collapsed, so documents without folds pay nothing. Linear in
+/// the body's length; headings inside table cells don't fold.
+pub fn folded(doc: &Document) -> Vec<bool> {
+    let st = &doc.styles;
+    let any = st.default_para.collapsed == Some(true)
+        || st.styles.iter().any(|s| s.para.collapsed == Some(true))
+        || doc.body.iter().any(|b| b.as_para().is_some_and(|p| p.props.collapsed == Some(true)));
+    if !any {
+        return Vec::new();
+    }
+    let (levels, collapsed): (Vec<u8>, Vec<bool>) = doc
+        .body
+        .iter()
+        .map(|b| match &**b {
+            Block::Para(p) => {
+                let rp = st.resolve_para(&p.props);
+                (rp.outline_level.filter(|l| *l < 9).map(|l| l + 1).unwrap_or(BODY), rp.collapsed)
+            }
+            Block::Table(_) => (BODY, false),
+        })
+        .unzip();
+    fold(&levels, &collapsed)
+}
+
 /// How far block `i` is indented: a heading by its level, body text one level deeper than the
 /// heading it follows.
 pub fn indent(levels: &[u8], i: usize) -> f32 {
@@ -216,6 +252,62 @@ impl DocLayout {
     }
 }
 
+/// How wide a heading's fold arrow is, points, and its gap from the text.
+pub const FOLD_ARROW: f32 = 9.0;
+const FOLD_GAP: f32 = 3.0;
+
+/// A heading's fold arrow (#1745): in the margin beside its first line, on its start side.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FoldArrow {
+    /// The heading's body block.
+    pub block: usize,
+    /// Where it sits on the page, points.
+    pub rect: Rect,
+    /// The heading is collapsed (the arrow points along the line, not down).
+    pub collapsed: bool,
+    /// The heading reads right to left: the arrow is on the right, pointing left when collapsed.
+    pub rtl: bool,
+    /// The left and right edges of the heading's first line on the page: pointing anywhere
+    /// between them and the arrow shows it.
+    pub line: (f32, f32),
+}
+
+impl DocLayout {
+    /// The fold arrows of the body headings that start on `page` (top-level paragraphs with an
+    /// outline level; not in Outline view, which has its own symbols).
+    pub fn fold_arrows(&self, page: usize) -> Vec<FoldArrow> {
+        let Some(page) = self.pages.get(page) else { return Vec::new() };
+        page.items
+            .iter()
+            .filter_map(|it| {
+                let Placed::Lines { story: StoryRef::Body, path, para, l0: 0, x, y, turn: wordcraft_doc::props::TextDirection::Horizontal, .. } = it
+                else {
+                    return None;
+                };
+                let [block] = path.0.as_slice() else { return None };
+                para.rp.outline_level.filter(|l| *l < 9)?;
+                let first = para.lines.first()?;
+                let side = if first.rtl { x + first.right + FOLD_GAP } else { x + first.left - FOLD_GAP - FOLD_ARROW };
+                Some(FoldArrow {
+                    block: *block as usize,
+                    rect: Rect::new(side, *y, FOLD_ARROW, first.height.max(FOLD_ARROW)),
+                    collapsed: para.rp.collapsed,
+                    rtl: first.rtl,
+                    line: (x + first.left, x + first.right),
+                })
+            })
+            .collect()
+    }
+
+    /// The heading whose fold arrow is at page point (`x`, `y`), with a little slack around it.
+    pub fn fold_arrow_at(&self, page: usize, x: f32, y: f32) -> Option<usize> {
+        self.fold_arrows(page)
+            .into_iter()
+            .find(|a| x >= a.rect.x - 2.0 && x <= a.rect.x + a.rect.w + 2.0 && y >= a.rect.y && y <= a.rect.y + a.rect.h)
+            .map(|a| a.block)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,5 +333,75 @@ mod tests {
         assert_eq!(subtree_end(&levels, 99), 99);
         assert_eq!(indent(&levels, 3), 2.0 * LEVEL_INDENT);
         assert_eq!(indent(&levels, 0), 0.0);
+    }
+
+    /// "Collapsed by default" (#1745): a collapsed heading hides what follows it up to the next
+    /// heading of its level or higher; nested collapsed headings and tables; body text and the
+    /// last heading fold nothing.
+    #[test]
+    fn collapsed_headings_fold_up_to_the_next_heading_of_their_level() {
+        // H1, body, H2, table, H3, body, H2, body, H1, body
+        let levels = [1, BODY, 2, BODY, 3, BODY, 2, BODY, 1, BODY];
+        let at = |ix: &[usize]| -> Vec<bool> { (0..levels.len()).map(|i| ix.contains(&i)).collect() };
+        assert_eq!(fold(&levels, &at(&[])), vec![false; 10]);
+        assert_eq!(fold(&levels, &at(&[0])), at(&[1, 2, 3, 4, 5, 6, 7]));
+        assert_eq!(fold(&levels, &at(&[2])), at(&[3, 4, 5]));
+        assert_eq!(fold(&levels, &at(&[4])), at(&[5]));
+        // Nested: the outer fold covers the inner one, and both end where the outer one does.
+        assert_eq!(fold(&levels, &at(&[0, 2, 4])), at(&[1, 2, 3, 4, 5, 6, 7]));
+        assert_eq!(fold(&levels, &at(&[2, 6])), at(&[3, 4, 5, 7]));
+        // Body text can't collapse; the last heading runs to the end of the story.
+        assert_eq!(fold(&levels, &at(&[1, 3])), vec![false; 10]);
+        assert_eq!(fold(&levels, &at(&[8])), at(&[9]));
+        // Short or long flag lists don't matter.
+        assert_eq!(fold(&levels, &[true]), at(&[1, 2, 3, 4, 5, 6, 7]));
+        assert_eq!(fold(&[], &[true]), Vec::<bool>::new());
+    }
+
+    /// The document version: levels from styles or direct formatting, tables are body text, and
+    /// a document without collapsed headings costs nothing (an empty list).
+    #[test]
+    fn folded_reads_the_flag_from_paragraphs_and_styles() {
+        use wordcraft_doc::props::ParaProps;
+        use wordcraft_doc::{Table, para_block};
+        let para = |text: &str, props: ParaProps| {
+            let mut p = Paragraph::with_text(text, CharProps::default());
+            p.props = props;
+            para_block(p)
+        };
+        let h = |n: u8| ParaProps { style: Some(format!("Heading{n}")), ..ParaProps::default() };
+        let mut doc = Document::new();
+        doc.body = vec![
+            para("Intro", ParaProps { collapsed: Some(true), ..h(1) }),
+            para("Body one", ParaProps::default()),
+            Arc::new(Block::Table(Table::new(1, 1, 100.0))),
+            para("Part", h(2)),
+            para("Next", h(1)),
+            para("Level 2 by hand", ParaProps { outline_level: Some(1), collapsed: Some(true), ..ParaProps::default() }),
+            para("Under it", ParaProps::default()),
+            para("Body can't fold", ParaProps { collapsed: Some(true), ..ParaProps::default() }),
+        ];
+        assert_eq!(folded(&doc), vec![false, true, true, true, false, false, true, true]);
+        // A collapsed style folds its headings; direct formatting switches it off again.
+        let mut styled = doc.clone();
+        styled.body = doc
+            .body
+            .iter()
+            .map(|b| match b.as_para() {
+                Some(p) => {
+                    let mut p = p.clone();
+                    p.props.collapsed = None;
+                    para_block(p)
+                }
+                None => b.clone(),
+            })
+            .collect();
+        assert!(folded(&styled).is_empty());
+        if let Some(s) = styled.styles.styles.iter_mut().find(|s| s.id == "Heading2") {
+            s.para.collapsed = Some(true);
+        }
+        assert_eq!(folded(&styled), vec![false, false, false, false, false, false, false, false]);
+        styled.body.insert(4, para("Under Part", ParaProps::default()));
+        assert_eq!(folded(&styled), vec![false, false, false, false, true, false, false, false, false]);
     }
 }

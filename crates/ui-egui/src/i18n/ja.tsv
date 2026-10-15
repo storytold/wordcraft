@@ -2233,3 +2233,8 @@
 # Reading Mode column widths (#1040)
 	Narrow	狭い
 	Medium	中
+	Collapsed by default	既定で折りたたむ
+	Expand Heading	見出しを展開
+	Collapse Heading	見出しを折りたたむ
+	Expand All Headings	すべての見出しを展開
+	Collapse All Headings	すべての見出しを折りたたむ
