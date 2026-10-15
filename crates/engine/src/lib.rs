@@ -28,7 +28,8 @@ pub use io::Password;
 pub use keymap::KeyMap;
 pub use ribbon::RibbonLayout;
 pub use session::{
-    CellRange, ColumnBlock, EditSnapshot, FindState, MathEdit, Prefs, Selection, Session, UNDO_LIST_MAX, ViewState, blank_document, set_system_locale,
+    CellRange, ColumnBlock, EDITING_LOCKED, EditSnapshot, FindState, MathEdit, Prefs, Selection, Session, UNDO_LIST_MAX, ViewState, blank_document,
+    set_system_locale,
 };
 pub use wordcraft_doc as doc;
 pub use wordcraft_geom::Region;

@@ -23,7 +23,7 @@ use wordcraft_doc::props::CharProps;
 use wordcraft_doc::{Document, Path, Pos, StoryRef, Table};
 use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, NumeralMode, ViewMode};
 
-use crate::{CmdError, Registry};
+use crate::{CmdError, CommandSpec, Registry};
 
 /// A selection: anchor (where it started) and focus (where the caret is).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -329,6 +329,9 @@ impl EditSnapshot {
     }
 }
 
+/// Why a command that changes the document is refused while [`Session::editing_locked`] is set.
+pub const EDITING_LOCKED: &str = "editing is locked by the page WordCraft is embedded in";
+
 /// An editing session.
 pub struct Session {
     pub doc: Document,
@@ -449,6 +452,11 @@ pub struct Session {
     /// Password, `file.encrypt`); `None` saves them unencrypted. Kept from a password-protected
     /// file that was opened, cleared when the document is replaced.
     pub password: Option<crate::io::Password>,
+    /// Editing locked by whoever embeds the editor (the web build's host page, while someone
+    /// else holds the document): every command that changes the document is refused until it is
+    /// unlocked. Unlike Restrict Editing it isn't part of the document, so it is never saved and
+    /// the person can't lift it; opening, saving, viewing, selecting and copying still work.
+    pub editing_locked: bool,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) recovery: Option<crate::recovery::Recovery>,
     /// More pictures and shapes selected along with the one the selection holds (Shift+click),
@@ -643,6 +651,7 @@ impl Session {
             editing_lang: None,
             read_aloud: Default::default(),
             password: None,
+            editing_locked: false,
             #[cfg(not(target_arch = "wasm32"))]
             recovery: None,
             column: None,
@@ -1092,6 +1101,8 @@ impl Session {
             math_normal_text: _,
             // The save password, like the file path: not an edit to the document.
             password: _,
+            // Set by the embedding host, like `user_dict_path`: not an edit to the document.
+            editing_locked: _,
             #[cfg(not(target_arch = "wasm32"))]
                 recovery: _,
             also_selected: _,
@@ -1161,6 +1172,23 @@ impl Session {
         }
     }
 
+    /// Why a command can't run now, or `None` when it can: its own `enabled` check, or an
+    /// editing lock from the host (`editing_locked`) for a command that changes the document.
+    pub fn disabled_reason(&self, spec: &CommandSpec) -> Option<&'static str> {
+        // Undo and Redo put a saved document back themselves rather than run an edit, so they
+        // aren't `mutates`; they change the document all the same.
+        let edits = spec.mutates || matches!(spec.id, "edit.undo" | "edit.undoTo" | "edit.redo");
+        if edits && self.editing_locked {
+            return Some(EDITING_LOCKED);
+        }
+        (spec.enabled)(self)
+    }
+
+    /// Whether the command `id` exists and can run now ([`Session::disabled_reason`]).
+    pub fn command_enabled(&self, id: &str) -> bool {
+        self.registry.get(id).is_some_and(|spec| self.disabled_reason(spec).is_none())
+    }
+
     /// Run a command by id with JSON params (the single entry point for the UI, CLI, MCP and
     /// control channel). Mutating commands are undoable; a failed command leaves the document as
     /// it was; a panic inside a command becomes an error.
@@ -1168,7 +1196,7 @@ impl Session {
         let join = std::mem::take(&mut self.join_next);
         let reg = self.registry.clone();
         let Some(spec) = reg.get(id) else { return Err(CmdError::Unknown(id.to_string())) };
-        if let Some(why) = (spec.enabled)(self) {
+        if let Some(why) = self.disabled_reason(spec) {
             return Err(CmdError::Disabled(format!("{id}: {why}")));
         }
         // Restrict Editing: refused outright, or allowed as long as it only edits the exceptions.

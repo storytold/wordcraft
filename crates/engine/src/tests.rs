@@ -7232,3 +7232,63 @@ fn vertical_align_command_sets_justified() {
         assert_eq!(serde_json::to_value(crate::cmd::page::sect(&s)).unwrap()["valign"], json!(name));
     }
 }
+
+/// The host's editing lock (#2229): edits, undo and redo are refused while it's on, and the
+/// document can still be read, selected, copied and saved; unlocking lets edits through again.
+/// It isn't part of the document, so saving and reopening never brings it back.
+#[test]
+fn host_editing_lock_refuses_edits_only() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Shared draft"));
+    s.run("text.insert", &json!({"text": "A "})).unwrap();
+    s.editing_locked = true;
+    let before = text(&s);
+    for (id, params) in [("text.insert", json!({"text": "x"})), ("format.bold", json!({})), ("edit.undo", json!({}))] {
+        let err = s.run(id, &params).unwrap_err().to_string();
+        assert!(err.contains(crate::EDITING_LOCKED), "{id}: {err}");
+        assert!(!s.command_enabled(id), "{id}");
+    }
+    assert_eq!(text(&s), before);
+    s.run("select.all", &json!({})).unwrap();
+    s.run("edit.copy", &json!({})).unwrap();
+    assert!(s.command_enabled("file.save"));
+    let dir = std::env::temp_dir().join(format!("wordcraft-host-lock-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("shared.docx");
+    s.run("file.save", &json!({"path": path.to_string_lossy()})).unwrap();
+    s.run("file.open", &json!({"path": path.to_string_lossy()})).unwrap();
+    assert!(s.editing_locked, "opening a document leaves the host's lock alone");
+    s.editing_locked = false;
+    s.run("caret.docEnd", &json!({})).unwrap();
+    s.run("text.insert", &json!({"text": "!"})).unwrap();
+    assert!(text(&s).ends_with('!'));
+    let mut reopened = Session::new(crate::io::open_path(&path).unwrap());
+    assert!(!reopened.editing_locked);
+    reopened.run("text.insert", &json!({"text": "y"})).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Every command, run while the host's editing lock is on, leaves the document as it was:
+/// `mutates` commands are refused, Undo and Redo too, and pure commands that edit do it through
+/// nested `run` calls the lock also refuses. File commands are left out: they reach files, and
+/// opening or starting a document replaces it (the host decides what is open).
+#[test]
+fn host_editing_lock_leaves_the_document_unchanged() {
+    let reg = cmd::registry();
+    for spec in reg.all() {
+        if spec.id.starts_with("file.") || spec.id == "insert.picture" || spec.id == "insert.textFromFile" {
+            continue;
+        }
+        for params in [json!({}), json!({"text": "x"})] {
+            let mut s = Session::new(crate::sample::sample_document());
+            s.run("caret.docEnd", &json!({})).unwrap();
+            s.run("text.insert", &json!({"text": " (edited)"})).unwrap();
+            s.run("edit.undo", &json!({})).unwrap();
+            s.run("text.insert", &json!({"text": " again"})).unwrap();
+            s.run("select.all", &json!({})).unwrap();
+            s.editing_locked = true;
+            let before = s.doc.clone();
+            let _ = s.run(spec.id, &params);
+            assert!(s.doc == before, "{} changed the locked document", spec.id);
+        }
+    }
+}
