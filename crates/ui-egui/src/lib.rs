@@ -1212,6 +1212,10 @@ impl WordApp {
         if !go {
             return Ok(json!({"done": false}));
         }
+        if then == "file.checkForUpdates" && choice == SaveChoice::DontSave {
+            // The update may now install over this revision's unsaved changes.
+            self.update.discard_approved = Some(self.session.rev());
+        }
         if then == "file.checkForUpdates"
             && update::can_run_off_thread(self)
             && let Some(ctx) = self.ctx.clone()
@@ -1435,6 +1439,10 @@ impl WordApp {
         }
         if !std::mem::take(&mut self.update.quit_pending) {
             return false;
+        }
+        // Don't Save was the answer for this revision: close without asking again.
+        if self.session.dirty && !self.update.unsaved_blocks(&self.session) {
+            self.quit_requested = true;
         }
         self.close_requested()
     }
@@ -2962,6 +2970,8 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.discord"
             | "ui.caretAnimation"
             | "ui.startScreen"
+            | "file.checkForUpdates"
+            | "file.updatePrefs"
     ) || id.starts_with("help.")
 }
 

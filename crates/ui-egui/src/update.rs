@@ -29,6 +29,18 @@ pub struct UpdateCheck {
     /// that carries these in the editor is hidden while Backstage (File) is open, where a check
     /// started from File ▸ Check for updates runs (#15 review).
     pub message: Option<String>,
+    /// "Save changes?" before an update was answered Don't Save: the document revision the
+    /// person agreed to lose. The update may install and quit over it; any later edit is a new
+    /// revision and gets the usual prompt.
+    pub discard_approved: Option<u64>,
+}
+
+impl UpdateCheck {
+    /// Whether the document's unsaved changes stand in the way of an update: they don't when
+    /// the person chose Don't Save for this very revision.
+    pub(crate) fn unsaved_blocks(&self, session: &Session) -> bool {
+        session.dirty && self.discard_approved != Some(session.rev())
+    }
 }
 
 struct PendingWorker {
@@ -191,7 +203,7 @@ fn snapshot_from(app: &WordApp) -> Option<CheckSnapshot> {
         exe: app.session.update_exe.clone(),
         env: app.session.update_env.clone(),
         prefs: app.session.update_prefs.clone(),
-        dirty: app.session.dirty,
+        dirty: app.update.unsaved_blocks(&app.session),
         now_unix: app.session.update_now_unix,
         release_arch: app.session.update_release_arch.clone(),
     })
@@ -373,7 +385,7 @@ pub fn bar(app: &mut WordApp, ui: &mut Ui) {
                     ui.label(egui::RichText::new(text).font(TypeRung::Control.medium()).color(t.text));
                     if (notice.one_click || notice.verified_update) && !notice.external_updater {
                         if ui.button(tl!("Update")).clicked() {
-                            if app.session.dirty {
+                            if app.update.unsaved_blocks(&app.session) {
                                 let name = app
                                     .session
                                     .path
@@ -540,6 +552,51 @@ mod tests {
         app.run("ui.saveChanges", json!({"answer": "cancel"})).unwrap();
         assert!(!app.quit_requested, "cancelling keeps the document open");
         assert!(!app.update.quit_pending, "the pending update quit was consumed");
+    }
+
+    /// "Save changes?" before an update answered Don't Save: the update goes ahead over those
+    /// changes and quits without asking again. An edit after that is new work and is asked about.
+    #[test]
+    fn dont_save_lets_the_update_install_and_quit() {
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        app.run("text.insert", json!({"text": "unsaved"})).unwrap();
+        assert!(app.session.dirty);
+        assert!(app.update.unsaved_blocks(&app.session), "unsaved work stops an update");
+        app.dialog = Some(crate::dialogs::Dialog::SaveChanges {
+            name: "Document".into(),
+            then: "file.checkForUpdates".into(),
+            params: json!({"force": true, "apply": true}),
+            document: app.session.document_id(),
+            message: String::new(),
+        });
+        let _ = app.run("ui.saveChanges", json!({"answer": "dontSave"}));
+        assert!(!app.update.unsaved_blocks(&app.session), "Don't Save lets the update past this revision");
+
+        let done = WorkerDone {
+            result: Ok(json!({"status": "available", "release": {"oneClick": true}})),
+            prefs: UpdatePrefs::default(),
+            ui_requests: vec![json!({"quit": true})],
+        };
+        let _ = apply_worker_result(&mut app, done, false, true);
+        assert!(app.update_quit_requested(), "the update quits without a second prompt");
+        assert!(app.dialog.is_none(), "no save prompt");
+
+        // A later edit is a new revision: it is protected again.
+        let mut app2 = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        app2.run("text.insert", json!({"text": "unsaved"})).unwrap();
+        app2.update.discard_approved = Some(app2.session.rev());
+        app2.run("text.insert", json!({"text": " more"})).unwrap();
+        assert!(app2.update.unsaved_blocks(&app2.session), "an edit after Don't Save is asked about");
+    }
+
+    /// The first-launch question and a manual check work before any document is open.
+    #[test]
+    fn update_settings_work_without_a_document() {
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        assert!(app.start_screen(), "the Start screen: no document is open");
+        assert!(!app.has_document());
+        app.run("file.updatePrefs", json!({"checkOnStartup": true, "askedStartup": true})).unwrap();
+        assert!(app.session.update_prefs.asked_startup && app.session.update_prefs.check_on_startup);
     }
 
     /// A clean document quits once the update finishes, through the same path.
