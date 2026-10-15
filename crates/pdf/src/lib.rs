@@ -94,11 +94,25 @@ pub struct PdfOptions {
     /// Rec. 709 weights, the same as the Print page's grayscale preview, so a printer that ignores
     /// a monochrome request still prints gray.
     pub grayscale: bool,
+    /// Write the link annotations (URLs, internal links). Printing turns this off: an annotation
+    /// is clickable, not printed, and a print path that refits pages to the paper cannot move
+    /// one. The links' look (colour, underline) is page content, so it stays either way.
+    pub annotations: bool,
 }
 
 impl Default for PdfOptions {
     fn default() -> Self {
-        PdfOptions { pages: None, title: None, author: None, tagged: true, include_markup: false, comments: false, compress: true, grayscale: false }
+        PdfOptions {
+            pages: None,
+            title: None,
+            author: None,
+            tagged: true,
+            include_markup: false,
+            comments: false,
+            compress: true,
+            grayscale: false,
+            annotations: true,
+        }
     }
 }
 
@@ -234,8 +248,10 @@ fn write_attempt(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[us
             s.pop();
         }
         s.finish();
-        for a in ex.annotations(fit) {
-            kp.add_annotation(a);
+        if opts.annotations {
+            for a in ex.annotations(fit) {
+                kp.add_annotation(a);
+            }
         }
         kp.finish();
     }

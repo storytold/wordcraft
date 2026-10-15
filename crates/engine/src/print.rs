@@ -151,6 +151,10 @@ impl Session {
             comments: markup.comments,
             // The Print page's Grayscale box: the pages are gray, whatever the driver does.
             grayscale: p::bool(v, "grayscale").unwrap_or(false),
+            // Links are clickable, not printed (their underline and colour are page content), and a
+            // spooler that fits pages to the paper can't move annotations: a print job has none.
+            // A job saved to a PDF file (`file.printPdf`) asks for them back with `annotations`.
+            annotations: p::bool(v, "annotations").unwrap_or(false),
             ..Default::default()
         };
         let bytes = wordcraft_pdf::export_layout(&self.doc, &lay, &opts).map_err(|e| CmdError::Failed(e.to_string()))?;
@@ -162,7 +166,12 @@ impl Session {
 pub(crate) fn print_pdf_to_file(s: &mut Session, v: &Value) -> Result<Value, CmdError> {
     let path = p::req_str(v, "path")?;
     let path = if path.to_ascii_lowercase().ends_with(".pdf") { path.to_string() } else { format!("{path}.pdf") };
-    let (bytes, plan) = s.print_pdf(v)?;
+    // A saved PDF is read on a screen: its links stay clickable unless the caller says otherwise.
+    let mut v = v.clone();
+    if let Some(o) = v.as_object_mut() {
+        o.entry("annotations").or_insert(json!(true));
+    }
+    let (bytes, plan) = s.print_pdf(&v)?;
     // Through `io`, so an agent confined to an automation write root (#769) can't print elsewhere.
     #[cfg(not(target_arch = "wasm32"))]
     crate::io::write_file(&path, &bytes).map_err(CmdError::Failed)?;
@@ -203,6 +212,23 @@ mod tests {
         assert_eq!(p(json!({"copies": -5, "range": "current"})), Ok(vec![2]));
     }
 
+    /// The sample's hyperlink prints as styled text, not as a clickable annotation: a print job
+    /// has no `/Annots` (the spooler's shrink-to-fit refuses pages that have any), and a saved
+    /// PDF keeps its links.
+    #[test]
+    fn a_printed_pdf_has_no_annotations_and_a_saved_one_keeps_its_links() {
+        let s = Session::new(crate::sample::sample_document());
+        let links = |v: Value| {
+            let pdf = s.print_pdf(&v).unwrap().0;
+            let raw = String::from_utf8_lossy(&pdf).into_owned();
+            (raw.matches("/Subtype /Link").count() + raw.matches("/Subtype/Link").count(), raw.contains("/Annots"))
+        };
+        assert_eq!(links(json!({})), (0, false), "print: no annotations at all");
+        assert_eq!(links(json!({"copies": 2, "grayscale": true})), (0, false));
+        let (kept, annots) = links(json!({"annotations": true}));
+        assert!(kept > 0 && annots, "an export that asks keeps the links");
+    }
+
     #[test]
     fn print_pdf_writes_only_the_chosen_pages() {
         let mut s = Session::new(crate::sample::sample_document());
@@ -239,7 +265,9 @@ mod tests {
             s.run("file.printPdf", &json!({"path": inside})).unwrap();
         });
         assert!(!base.join("outside/job.pdf").exists(), "nothing printed outside the root");
-        assert!(std::fs::read(base.join("out/job.pdf")).unwrap().starts_with(b"%PDF"));
+        let saved = std::fs::read(base.join("out/job.pdf")).unwrap();
+        assert!(saved.starts_with(b"%PDF"));
+        assert!(String::from_utf8_lossy(&saved).contains("/Annots"), "Save these pages as PDF keeps the links");
         // Without roots nothing is checked: the behaviour is unchanged.
         s.run("file.printPdf", &json!({"path": outside})).unwrap();
         assert!(base.join("outside/job.pdf").is_file());

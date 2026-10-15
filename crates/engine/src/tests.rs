@@ -7232,3 +7232,28 @@ fn vertical_align_command_sets_justified() {
         assert_eq!(serde_json::to_value(crate::cmd::page::sect(&s)).unwrap()["valign"], json!(name));
     }
 }
+
+/// A print job with Print Markup ticked carries the comments as balloons in the page content,
+/// never as annotations: nothing in the job is a clickable area the spooler's fit could not move.
+#[test]
+fn print_markup_job_has_balloons_and_no_annotations() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("The quarterly figures look strong."));
+    s.author = "Ada Reviewer".into();
+    s.run("select.text", &json!({"text": "figures"})).unwrap();
+    s.run("review.newComment", &json!({"text": "Check the totals"})).unwrap();
+    s.run("select.text", &json!({"text": "strong"})).unwrap();
+    s.run("insert.link", &json!({"url": "https://example.com/"})).unwrap();
+    let job = |markup: bool, annotations: bool| {
+        let mut v = json!({"markup": markup});
+        if annotations {
+            v["annotations"] = json!(true);
+        }
+        String::from_utf8_lossy(&s.print_pdf(&v).unwrap().0).replace(' ', "")
+    };
+    for markup in [false, true] {
+        let raw = job(markup, false);
+        assert!(!raw.contains("/Annots") && !raw.contains("/Subtype/Link") && !raw.contains("/Subtype/Text"), "markup={markup}: no annotation");
+    }
+    assert!(job(true, true).contains("/Subtype/Link"), "the saved copy keeps the link");
+    assert!(job(true, false).len() > job(false, false).len(), "the balloons are page content");
+}
