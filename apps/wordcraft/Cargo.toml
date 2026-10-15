@@ -28,7 +28,7 @@ craft-cloud-client = { git = "https://github.com/wdunn001/collabcraft", rev = "8
 # The share dialog's and the cloud pages' backend. Both are drawn by wordcraft-ui-egui, which
 # opens no socket; this is the half that reaches CollabCraft, and it lives here because the
 # session this application collects lives here too.
-craft-ui = { git = "https://github.com/wdunn001/craft-libs", rev = "289d562cc6e8b567819aee51f759a78f41a65454", features = ["cloud"] }
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "289d562cc6e8b567819aee51f759a78f41a65454", features = ["cloud"] }
 collabcraft-share = { git = "https://github.com/wdunn001/collabcraft", rev = "80bfaec" }
 # Only the relay client is async, and NativeHub needs a runtime to live on.
 tokio = { version = "1", features = ["rt-multi-thread"] }

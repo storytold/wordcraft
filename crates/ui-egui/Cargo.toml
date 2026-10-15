@@ -14,16 +14,17 @@ workspace = true
 # repository already reached craft-print. The interface half opens no socket, so this builds for
 # the web. The host application supplies the backend that reaches the service (see `cloud`).
 #
-# NOTE: pinned to the wdunn001 fork, not storytold/craft-libs, because the `cloud` feature and
-# the `craft-cloud` crate only exist on the fork (craft-libs#123, the CollabCraft fold-in, has not
-# landed upstream yet). craft-i18n and craft-window below come from storytold/craft-libs instead,
-# because the fork has not rebased onto storytold/main since before those crates existed on it.
-# There is currently no single craft-libs commit that has both the cloud feature and
-# craft-i18n/craft-window.
-craft-ui = { git = "https://github.com/wdunn001/craft-libs", rev = "289d562cc6e8b567819aee51f759a78f41a65454", features = ["cloud"] }
+# NOTE: pinned by rev to storytold/craft-libs (one source, per this commit's intent). That rev
+# (289d562c) is fork content reachable through storytold's URL only because GitHub shares git
+# objects across a fork network; it is not actually on storytold/craft-libs's own main (the
+# craft-libs#123 CollabCraft fold-in has not landed there for real) and does not include
+# craft-i18n/craft-window. craft-i18n and craft-window below are pinned to a real, later
+# storytold/main commit instead, so there is still no single commit with everything; this only
+# collapses the `cloud`/`craft-cloud` pins from two remotes down to one.
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "289d562cc6e8b567819aee51f759a78f41a65454", features = ["cloud"] }
 # The vendor-neutral cloud types (a file entry, a capability). Types and contracts only: the crate
 # opens no socket and names no provider, so this builds for the web too.
-craft-cloud = { git = "https://github.com/wdunn001/craft-libs", rev = "289d562cc6e8b567819aee51f759a78f41a65454" }
+craft-cloud = { git = "https://github.com/storytold/craft-libs", rev = "289d562cc6e8b567819aee51f759a78f41a65454" }
 # Interface translations: lookup, fallback, plurals and system-locale matching over the craft-i18n
 # catalogs that `build.rs` embeds from `CRAFT_I18N_DIR` (storytold/craft-i18n, pinned in
 # `craft-i18n.rev`). It brings lazy per-locale parsing (storytold/craft-libs#247), ICU4X plural
