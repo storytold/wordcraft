@@ -294,6 +294,20 @@ pub fn paper_name(w: f32, h: f32) -> Option<&'static str> {
         .map(|(n, _, _)| *n)
 }
 
+/// Gray of an 8-bit colour with Rec. 709 weights, in integers that sum to 256 (white stays 255,
+/// black 0). The one conversion behind the Print page's grayscale preview and the PDF it sends.
+pub fn gray_of(r: u8, g: u8, b: u8) -> u8 {
+    ((u32::from(r) * 54 + u32::from(g) * 183 + u32::from(b) * 19) >> 8) as u8
+}
+
+/// Turn RGBA pixels (4 bytes each; alpha is kept) gray in place with [`gray_of`].
+pub fn gray_rgba_in_place(pixels: &mut [u8]) {
+    for px in pixels.as_chunks_mut::<4>().0.iter_mut() {
+        let y = gray_of(px[0], px[1], px[2]);
+        px[..3].fill(y);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,5 +383,13 @@ mod tests {
         assert_eq!(paper_name(612.0, 792.0), Some("Letter"));
         assert_eq!(paper_name(792.0, 612.0), Some("Letter"));
         assert_eq!(paper_name(100.0, 100.0), None);
+    }
+
+    #[test]
+    fn gray_is_rec709_keeps_alpha_and_the_extremes() {
+        let mut px = vec![255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 0, 255, 255, 255, 255, 0, 0, 0, 255];
+        gray_rgba_in_place(&mut px);
+        assert_eq!(px, [53, 53, 53, 255, 182, 182, 182, 128, 18, 18, 18, 0, 255, 255, 255, 255, 0, 0, 0, 255]);
+        assert_eq!(gray_of(90, 90, 90), 90);
     }
 }

@@ -2266,13 +2266,12 @@
 	High	高
 	Photo	照片
 	Colour	彩色
-	Black and white	黑白
 	Resolution:	分辨率:
 	This printer does not take a copies setting.	此打印机不支持份数设置。
 	This printer only prints one-sided.	此打印机只能单面打印。
 	This printer does not take an orientation setting.	此打印机不支持方向设置。
 	This printer does not take a quality setting.	此打印机不支持质量设置。
-	This printer only prints in black and white.	此打印机只能黑白打印。
+	This printer only prints in grayscale.	此打印机只能以灰度打印。
 	This printer does not take a resolution setting.	此打印机不支持分辨率设置。
 	Not confirmed by the printer	打印机未确认
 	I confirm sending this document to this printer	我确认将此文档发送到这台打印机
@@ -2302,6 +2301,5 @@
 	The document couldn't be prepared	无法准备文档
 	A setting isn't valid	某项设置无效
 	The print job stopped unexpectedly	打印作业意外停止
-	System printer	系统打印机
-	Network printer	网络打印机
+	Network printer…	网络打印机…
 	Sending to the network printer…	正在发送到网络打印机…

@@ -90,11 +90,15 @@ pub struct PdfOptions {
     pub comments: bool,
     /// Compress content streams.
     pub compress: bool,
+    /// Grayscale output: every colour (text, shapes, gradients, pictures) is converted to gray with
+    /// Rec. 709 weights, the same as the Print page's grayscale preview, so a printer that ignores
+    /// a monochrome request still prints gray.
+    pub grayscale: bool,
 }
 
 impl Default for PdfOptions {
     fn default() -> Self {
-        PdfOptions { pages: None, title: None, author: None, tagged: true, include_markup: false, comments: false, compress: true }
+        PdfOptions { pages: None, title: None, author: None, tagged: true, include_markup: false, comments: false, compress: true, grayscale: false }
     }
 }
 
@@ -151,7 +155,42 @@ enum Attempt {
     BadFont(u32, String),
 }
 
+thread_local! {
+    /// Set while a grayscale export runs: every colour made by [`rgbc`] and every decoded picture is gray.
+    static GRAY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Restores [`GRAY`] when an export ends, however it ends.
+struct GrayGuard(bool);
+
+impl GrayGuard {
+    fn set(on: bool) -> Self {
+        GrayGuard(GRAY.replace(on))
+    }
+}
+
+impl Drop for GrayGuard {
+    fn drop(&mut self) {
+        GRAY.set(self.0);
+    }
+}
+
+fn is_gray() -> bool {
+    GRAY.get()
+}
+
+/// A krilla colour; gray (Rec. 709) during a grayscale export.
+fn rgbc(r: u8, g: u8, b: u8) -> rgb::Color {
+    if is_gray() {
+        let y = wordcraft_geom::gray_of(r, g, b);
+        rgb::Color::new(y, y, y)
+    } else {
+        rgb::Color::new(r, g, b)
+    }
+}
+
 fn write_attempt(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[usize], outlined: &HashSet<u32>) -> Result<Attempt, PdfError> {
+    let _gray = GrayGuard::set(opts.grayscale);
     let settings = krilla::SerializeSettings { compress_content_streams: opts.compress, enable_tagging: opts.tagged, ..Default::default() };
     let language = doc.styles.default_chr.lang.clone().filter(|l| !l.is_empty() && l.is_ascii());
     let mut writer = Writer::new_with_language(settings, metadata(doc, opts), language);
@@ -462,7 +501,7 @@ fn norm(v: f32) -> NormalizedF32 {
 }
 
 fn fill(c: Rgb, alpha: f32) -> Fill {
-    Fill { paint: rgb::Color::new(c.0, c.1, c.2).into(), opacity: norm(alpha), rule: FillRule::NonZero }
+    Fill { paint: rgbc(c.0, c.1, c.2).into(), opacity: norm(alpha), rule: FillRule::NonZero }
 }
 
 fn ok(v: f32) -> bool {
@@ -508,7 +547,7 @@ fn shape_effects(
             && let Some(p) = shape_path(kind, &grown(rect, 0.0, dx, dy), corner)
         {
             s.set_fill(None);
-            s.set_stroke(Some(Stroke { paint: rgb::Color::new(c.0, c.1, c.2).into(), width: sw + 2.0 * g, opacity: norm(a), ..Default::default() }));
+            s.set_stroke(Some(Stroke { paint: rgbc(c.0, c.1, c.2).into(), width: sw + 2.0 * g, opacity: norm(a), ..Default::default() }));
             s.draw_path(&p);
         }
     };
@@ -948,7 +987,7 @@ impl Exporter<'_> {
                 let Some(p) = pb.finish() else { return };
                 s.set_fill(f.map(|c| fill(c, 1.0)));
                 s.set_stroke(stroke.map(|c| Stroke {
-                    paint: rgb::Color::new(c.0, c.1, c.2).into(),
+                    paint: rgbc(c.0, c.1, c.2).into(),
                     // Width 0 (or none) is a hairline.
                     width: if stroke_width.is_finite() && *stroke_width > 0.0 { stroke_width.clamp(0.25, 200.0) } else { 0.75 },
                     ..Default::default()
@@ -979,7 +1018,7 @@ impl Exporter<'_> {
                 let Some(p) = pb.finish() else { return };
                 s.set_fill(None);
                 s.set_stroke(Some(Stroke {
-                    paint: rgb::Color::new(color.0, color.1, color.2).into(),
+                    paint: rgbc(color.0, color.1, color.2).into(),
                     width: if width.is_finite() { width.clamp(0.25, 200.0) } else { 1.0 },
                     opacity: norm(*alpha),
                     line_cap: LineCap::Round,
@@ -1011,7 +1050,7 @@ impl Exporter<'_> {
                 }
                 s.set_fill(f.filter(|_| can_fill).map(|c| fill(c, 1.0)));
                 s.set_stroke(stroke.map(|c| Stroke {
-                    paint: rgb::Color::new(c.0, c.1, c.2).into(),
+                    paint: rgbc(c.0, c.1, c.2).into(),
                     width: if stroke_width.is_finite() { stroke_width.clamp(0.25, 200.0) } else { 0.75 },
                     ..Default::default()
                 }));
@@ -1027,15 +1066,11 @@ impl Exporter<'_> {
                     append_path(&mut pb, &l.path);
                     let Some(p) = pb.finish() else { continue };
                     let (paint, opacity): (krilla::paint::Paint, f32) = match &l.paint {
-                        ArtPaint::Solid(c, a) => (rgb::Color::new(c.0, c.1, c.2).into(), *a),
+                        ArtPaint::Solid(c, a) => (rgbc(c.0, c.1, c.2).into(), *a),
                         ArtPaint::Linear { p0, p1, stops } => {
                             let stops = stops
                                 .iter()
-                                .map(|(o, c, a)| krilla::paint::Stop {
-                                    offset: norm(*o),
-                                    color: rgb::Color::new(c.0, c.1, c.2).into(),
-                                    opacity: norm(*a),
-                                })
+                                .map(|(o, c, a)| krilla::paint::Stop { offset: norm(*o), color: rgbc(c.0, c.1, c.2).into(), opacity: norm(*a) })
                                 .collect();
                             let g = krilla::paint::LinearGradient {
                                 x1: p0.0,
@@ -1110,7 +1145,7 @@ impl Exporter<'_> {
             return;
         }
         let w = if width.is_finite() { width.clamp(0.1, 100.0) } else { 0.5 };
-        let paint: krilla::paint::Paint = rgb::Color::new(c.0, c.1, c.2).into();
+        let paint: krilla::paint::Paint = rgbc(c.0, c.1, c.2).into();
         let stroke = |width: f32, dash: Option<StrokeDash>, cap: LineCap| Stroke {
             paint: paint.clone(),
             width,
@@ -1363,7 +1398,7 @@ impl Exporter<'_> {
         }
         s.set_fill(Some(fill(color, alpha)));
         s.set_stroke(if bold {
-            Some(Stroke { paint: rgb::Color::new(color.0, color.1, color.2).into(), width: size * 0.03, opacity: norm(alpha), ..Default::default() })
+            Some(Stroke { paint: rgbc(color.0, color.1, color.2).into(), width: size * 0.03, opacity: norm(alpha), ..Default::default() })
         } else {
             None
         });
@@ -1603,13 +1638,21 @@ fn build_vector(bytes: &[u8]) -> Option<Vector> {
     if !pic.has_size() {
         return None;
     }
-    let images = pic.items.iter_mut().map(|it| it.take_pixels().map(|(w, h, px)| Image::from_rgba8(px, w, h))).collect();
+    let images = pic.items.iter_mut().map(|it| it.take_pixels().map(|(w, h, px)| Image::from_rgba8(gray_pixels(px), w, h))).collect();
     Some(Vector { pic, images })
+}
+
+/// RGBA pixels, turned gray when a grayscale export is running (alpha is kept).
+fn gray_pixels(mut px: Vec<u8>) -> Vec<u8> {
+    if is_gray() {
+        wordcraft_geom::gray_rgba_in_place(&mut px);
+    }
+    px
 }
 
 /// A straight RGBA colour as a krilla colour and opacity.
 fn paint_of(c: [u8; 4]) -> (rgb::Color, NormalizedF32) {
-    (rgb::Color::new(c[0], c[1], c[2]), norm(f32::from(c[3]) / 255.0))
+    (rgbc(c[0], c[1], c[2]), norm(f32::from(c[3]) / 255.0))
 }
 
 /// Narrowest metafile stroke in points. Cosmetic (width 0) pens get it rather than PDF's 0-width
@@ -1692,10 +1735,10 @@ fn load_image(data: &Arc<Vec<u8>>) -> Option<Image> {
     if w == 0 || h == 0 || w > MAX_IMAGE_SIDE || h > MAX_IMAGE_SIDE {
         return None;
     }
-    if fmt == image::ImageFormat::Jpeg && matches!(dec.color(), image::ColorType::L8 | image::ColorType::Rgb8) {
+    if !is_gray() && fmt == image::ImageFormat::Jpeg && matches!(dec.color(), image::ColorType::L8 | image::ColorType::Rgb8) {
         return Image::from_jpeg(data.clone().into(), true).ok();
     }
-    Some(Image::from_rgba8(dec.to_rgba8().into_raw(), w, h))
+    Some(Image::from_rgba8(gray_pixels(dec.to_rgba8().into_raw()), w, h))
 }
 
 #[cfg(test)]

@@ -2642,13 +2642,12 @@ preview	Title	Tytuł
 	High	Wysoka
 	Photo	Zdjęcie
 	Colour	Kolor
-	Black and white	Czarno-biało
 	Resolution:	Rozdzielczość:
 	This printer does not take a copies setting.	Ta drukarka nie obsługuje ustawienia liczby kopii.
 	This printer only prints one-sided.	Ta drukarka drukuje tylko jednostronnie.
 	This printer does not take an orientation setting.	Ta drukarka nie obsługuje ustawienia orientacji.
 	This printer does not take a quality setting.	Ta drukarka nie obsługuje ustawienia jakości.
-	This printer only prints in black and white.	Ta drukarka drukuje tylko czarno-biało.
+	This printer only prints in grayscale.	Ta drukarka drukuje tylko w odcieniach szarości.
 	This printer does not take a resolution setting.	Ta drukarka nie obsługuje ustawienia rozdzielczości.
 	Not confirmed by the printer	Niepotwierdzone przez drukarkę
 	I confirm sending this document to this printer	Potwierdzam wysłanie tego dokumentu na tę drukarkę
@@ -2678,6 +2677,5 @@ preview	Title	Tytuł
 	The document couldn't be prepared	Nie udało się przygotować dokumentu
 	A setting isn't valid	Któreś ustawienie jest nieprawidłowe
 	The print job stopped unexpectedly	Zadanie drukowania niespodziewanie się zatrzymało
-	System printer	Drukarka systemowa
-	Network printer	Drukarka sieciowa
+	Network printer…	Drukarka sieciowa…
 	Sending to the network printer…	Wysyłanie do drukarki sieciowej…

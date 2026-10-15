@@ -2266,13 +2266,12 @@
 	High	Висока
 	Photo	Фото
 	Colour	Колір
-	Black and white	Чорно-біле
 	Resolution:	Роздільна здатність:
 	This printer does not take a copies setting.	Цей принтер не підтримує налаштування кількості копій.
 	This printer only prints one-sided.	Цей принтер друкує лише з одного боку.
 	This printer does not take an orientation setting.	Цей принтер не підтримує налаштування орієнтації.
 	This printer does not take a quality setting.	Цей принтер не підтримує налаштування якості.
-	This printer only prints in black and white.	Цей принтер друкує лише чорно-біле.
+	This printer only prints in grayscale.	Цей принтер друкує лише у відтінках сірого.
 	This printer does not take a resolution setting.	Цей принтер не підтримує налаштування роздільної здатності.
 	Not confirmed by the printer	Не підтверджено принтером
 	I confirm sending this document to this printer	Підтверджую надсилання цього документа на цей принтер
@@ -2302,6 +2301,5 @@
 	The document couldn't be prepared	Не вдалося підготувати документ
 	A setting isn't valid	Одне з налаштувань недійсне
 	The print job stopped unexpectedly	Завдання друку несподівано зупинилося
-	System printer	Системний принтер
-	Network printer	Мережевий принтер
+	Network printer…	Мережевий принтер…
 	Sending to the network printer…	Надсилання на мережевий принтер…

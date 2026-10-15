@@ -2649,13 +2649,12 @@ preview	Title	Örnek
 	High	Yüksek
 	Photo	Fotoğraf
 	Colour	Renkli
-	Black and white	Siyah beyaz
 	Resolution:	Çözünürlük:
 	This printer does not take a copies setting.	Bu yazıcı kopya sayısı ayarını desteklemiyor.
 	This printer only prints one-sided.	Bu yazıcı yalnızca tek taraflı yazdırıyor.
 	This printer does not take an orientation setting.	Bu yazıcı yön ayarını desteklemiyor.
 	This printer does not take a quality setting.	Bu yazıcı kalite ayarını desteklemiyor.
-	This printer only prints in black and white.	Bu yazıcı yalnızca siyah beyaz yazdırıyor.
+	This printer only prints in grayscale.	Bu yazıcı yalnızca gri tonlamalı yazdırıyor.
 	This printer does not take a resolution setting.	Bu yazıcı çözünürlük ayarını desteklemiyor.
 	Not confirmed by the printer	Yazıcı tarafından onaylanmadı
 	I confirm sending this document to this printer	Bu belgenin bu yazıcıya gönderilmesini onaylıyorum
@@ -2685,6 +2684,5 @@ preview	Title	Örnek
 	The document couldn't be prepared	Belge hazırlanamadı
 	A setting isn't valid	Bir ayar geçerli değil
 	The print job stopped unexpectedly	Yazdırma işi beklenmedik şekilde durdu
-	System printer	Sistem yazıcısı
-	Network printer	Ağ yazıcısı
+	Network printer…	Ağ yazıcısı…
 	Sending to the network printer…	Ağ yazıcısına gönderiliyor…

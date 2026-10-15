@@ -2268,13 +2268,12 @@
 	High	Висок
 	Photo	Фотографија
 	Colour	Боја
-	Black and white	Црно-бело
 	Resolution:	Резолуција:
 	This printer does not take a copies setting.	Овај штампач не подржава подешавање броја копија.
 	This printer only prints one-sided.	Овај штампач штампа само једнострано.
 	This printer does not take an orientation setting.	Овај штампач не подржава подешавање оријентације.
 	This printer does not take a quality setting.	Овај штампач не подржава подешавање квалитета.
-	This printer only prints in black and white.	Овај штампач штампа само црно-бело.
+	This printer only prints in grayscale.	Овај штампач штампа само у сивим тоновима.
 	This printer does not take a resolution setting.	Овај штампач не подржава подешавање резолуције.
 	Not confirmed by the printer	Штампач није потврдио
 	I confirm sending this document to this printer	Потврђујем слање овог документа на овај штампач
@@ -2304,6 +2303,5 @@
 	The document couldn't be prepared	Документ није могао да се припреми
 	A setting isn't valid	Нека поставка није важећа
 	The print job stopped unexpectedly	Задатак штампања неочекивано је заустављен
-	System printer	Системски штампач
-	Network printer	Мрежни штампач
+	Network printer…	Мрежни штампач…
 	Sending to the network printer…	Слање на мрежни штампач…

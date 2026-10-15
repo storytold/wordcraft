@@ -2644,13 +2644,12 @@ preview	Title	Ukázka
 	High	Vysoká
 	Photo	Fotografie
 	Colour	Barva
-	Black and white	Černobíle
 	Resolution:	Rozlišení:
 	This printer does not take a copies setting.	Tato tiskárna nepodporuje nastavení počtu kopií.
 	This printer only prints one-sided.	Tato tiskárna tiskne pouze jednostranně.
 	This printer does not take an orientation setting.	Tato tiskárna nepodporuje nastavení orientace.
 	This printer does not take a quality setting.	Tato tiskárna nepodporuje nastavení kvality.
-	This printer only prints in black and white.	Tato tiskárna tiskne pouze černobíle.
+	This printer only prints in grayscale.	Tato tiskárna tiskne pouze ve stupních šedi.
 	This printer does not take a resolution setting.	Tato tiskárna nepodporuje nastavení rozlišení.
 	Not confirmed by the printer	Tiskárnou nepotvrzeno
 	I confirm sending this document to this printer	Potvrzuji odeslání tohoto dokumentu na tuto tiskárnu
@@ -2680,6 +2679,5 @@ preview	Title	Ukázka
 	The document couldn't be prepared	Dokument se nepodařilo připravit
 	A setting isn't valid	Některé nastavení není platné
 	The print job stopped unexpectedly	Tisková úloha se neočekávaně zastavila
-	System printer	Systémová tiskárna
-	Network printer	Síťová tiskárna
+	Network printer…	Síťová tiskárna…
 	Sending to the network printer…	Odesílání na síťovou tiskárnu…

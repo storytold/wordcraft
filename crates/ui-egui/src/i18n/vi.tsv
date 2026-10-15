@@ -2692,13 +2692,12 @@ template	Letter	Thư
 	High	Cao
 	Photo	Ảnh
 	Colour	Màu
-	Black and white	Đen trắng
 	Resolution:	Độ phân giải:
 	This printer does not take a copies setting.	Máy in này không hỗ trợ cài đặt số bản.
 	This printer only prints one-sided.	Máy in này chỉ in một mặt.
 	This printer does not take an orientation setting.	Máy in này không hỗ trợ cài đặt hướng giấy.
 	This printer does not take a quality setting.	Máy in này không hỗ trợ cài đặt chất lượng.
-	This printer only prints in black and white.	Máy in này chỉ in đen trắng.
+	This printer only prints in grayscale.	Máy in này chỉ in thang độ xám.
 	This printer does not take a resolution setting.	Máy in này không hỗ trợ cài đặt độ phân giải.
 	Not confirmed by the printer	Máy in chưa xác nhận
 	I confirm sending this document to this printer	Tôi xác nhận gửi tài liệu này đến máy in này
@@ -2728,6 +2727,5 @@ template	Letter	Thư
 	The document couldn't be prepared	Không thể chuẩn bị tài liệu
 	A setting isn't valid	Một cài đặt không hợp lệ
 	The print job stopped unexpectedly	Công việc in đã dừng bất ngờ
-	System printer	Máy in hệ thống
-	Network printer	Máy in mạng
+	Network printer…	Máy in mạng…
 	Sending to the network printer…	Đang gửi đến máy in mạng…

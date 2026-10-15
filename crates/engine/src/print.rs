@@ -149,6 +149,8 @@ impl Session {
             tagged: plan.copies <= 1,
             include_markup: markup.markup,
             comments: markup.comments,
+            // The Print page's Grayscale box: the pages are gray, whatever the driver does.
+            grayscale: p::bool(v, "grayscale").unwrap_or(false),
             ..Default::default()
         };
         let bytes = wordcraft_pdf::export_layout(&self.doc, &lay, &opts).map_err(|e| CmdError::Failed(e.to_string()))?;

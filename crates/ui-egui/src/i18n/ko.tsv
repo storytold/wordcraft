@@ -2508,13 +2508,12 @@ preview	Title	제목
 	High	높음
 	Photo	사진
 	Colour	컬러
-	Black and white	흑백
 	Resolution:	해상도:
 	This printer does not take a copies setting.	이 프린터는 매수 설정을 지원하지 않습니다.
 	This printer only prints one-sided.	이 프린터는 단면 인쇄만 지원합니다.
 	This printer does not take an orientation setting.	이 프린터는 방향 설정을 지원하지 않습니다.
 	This printer does not take a quality setting.	이 프린터는 품질 설정을 지원하지 않습니다.
-	This printer only prints in black and white.	이 프린터는 흑백 인쇄만 지원합니다.
+	This printer only prints in grayscale.	이 프린터는 회색조 인쇄만 지원합니다.
 	This printer does not take a resolution setting.	이 프린터는 해상도 설정을 지원하지 않습니다.
 	Not confirmed by the printer	프린터가 확인하지 않음
 	I confirm sending this document to this printer	이 문서를 이 프린터로 보내는 것을 확인합니다
@@ -2544,6 +2543,5 @@ preview	Title	제목
 	The document couldn't be prepared	문서를 준비할 수 없습니다
 	A setting isn't valid	유효하지 않은 설정이 있습니다
 	The print job stopped unexpectedly	인쇄 작업이 예기치 않게 중단되었습니다
-	System printer	시스템 프린터
-	Network printer	네트워크 프린터
+	Network printer…	네트워크 프린터…
 	Sending to the network printer…	네트워크 프린터로 보내는 중…

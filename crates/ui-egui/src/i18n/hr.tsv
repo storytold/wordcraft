@@ -2652,13 +2652,12 @@ preview	Title	Naslov
 	High	Visoka
 	Photo	Fotografija
 	Colour	Boja
-	Black and white	Crno-bijelo
 	Resolution:	Razlučivost:
 	This printer does not take a copies setting.	Ovaj pisač ne podržava postavku broja kopija.
 	This printer only prints one-sided.	Ovaj pisač ispisuje samo jednostrano.
 	This printer does not take an orientation setting.	Ovaj pisač ne podržava postavku orijentacije.
 	This printer does not take a quality setting.	Ovaj pisač ne podržava postavku kvalitete.
-	This printer only prints in black and white.	Ovaj pisač ispisuje samo crno-bijelo.
+	This printer only prints in grayscale.	Ovaj pisač ispisuje samo u sivim tonovima.
 	This printer does not take a resolution setting.	Ovaj pisač ne podržava postavku razlučivosti.
 	Not confirmed by the printer	Pisač nije potvrdio
 	I confirm sending this document to this printer	Potvrđujem slanje ovog dokumenta na ovaj pisač
@@ -2688,6 +2687,5 @@ preview	Title	Naslov
 	The document couldn't be prepared	Dokument se nije mogao pripremiti
 	A setting isn't valid	Neka postavka nije valjana
 	The print job stopped unexpectedly	Zadatak ispisa neočekivano se zaustavio
-	System printer	Sistemski pisač
-	Network printer	Mrežni pisač
+	Network printer…	Mrežni pisač…
 	Sending to the network printer…	Slanje na mrežni pisač…

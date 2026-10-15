@@ -2648,13 +2648,12 @@
 	High	Magas
 	Photo	Fénykép
 	Colour	Színes
-	Black and white	Fekete-fehér
 	Resolution:	Felbontás:
 	This printer does not take a copies setting.	Ez a nyomtató nem támogatja a példányszám beállítását.
 	This printer only prints one-sided.	Ez a nyomtató csak egyoldalasan nyomtat.
 	This printer does not take an orientation setting.	Ez a nyomtató nem támogatja a tájolás beállítását.
 	This printer does not take a quality setting.	Ez a nyomtató nem támogatja a minőség beállítását.
-	This printer only prints in black and white.	Ez a nyomtató csak fekete-fehérben nyomtat.
+	This printer only prints in grayscale.	Ez a nyomtató csak szürkeárnyalatosan nyomtat.
 	This printer does not take a resolution setting.	Ez a nyomtató nem támogatja a felbontás beállítását.
 	Not confirmed by the printer	A nyomtató nem erősítette meg
 	I confirm sending this document to this printer	Megerősítem, hogy elküldöm ezt a dokumentumot erre a nyomtatóra
@@ -2684,6 +2683,5 @@
 	The document couldn't be prepared	A dokumentumot nem sikerült előkészíteni
 	A setting isn't valid	Egy beállítás érvénytelen
 	The print job stopped unexpectedly	A nyomtatási feladat váratlanul leállt
-	System printer	Rendszernyomtató
-	Network printer	Hálózati nyomtató
+	Network printer…	Hálózati nyomtató…
 	Sending to the network printer…	Küldés a hálózati nyomtatóra…

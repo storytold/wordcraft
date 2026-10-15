@@ -2261,13 +2261,12 @@
 	High	Élevée
 	Photo	Photo
 	Colour	Couleur
-	Black and white	Noir et blanc
 	Resolution:	Résolution :
 	This printer does not take a copies setting.	Cette imprimante n'accepte pas de réglage du nombre de copies.
 	This printer only prints one-sided.	Cette imprimante n'imprime qu'en recto.
 	This printer does not take an orientation setting.	Cette imprimante n'accepte pas de réglage d'orientation.
 	This printer does not take a quality setting.	Cette imprimante n'accepte pas de réglage de qualité.
-	This printer only prints in black and white.	Cette imprimante n'imprime qu'en noir et blanc.
+	This printer only prints in grayscale.	Cette imprimante n'imprime qu'en niveaux de gris.
 	This printer does not take a resolution setting.	Cette imprimante n'accepte pas de réglage de résolution.
 	Not confirmed by the printer	Non confirmé par l'imprimante
 	I confirm sending this document to this printer	Je confirme l'envoi de ce document à cette imprimante
@@ -2297,6 +2296,5 @@
 	The document couldn't be prepared	Le document n'a pas pu être préparé
 	A setting isn't valid	Un réglage n'est pas valide
 	The print job stopped unexpectedly	Le travail d'impression s'est arrêté de façon inattendue
-	System printer	Imprimante du système
-	Network printer	Imprimante réseau
+	Network printer…	Imprimante réseau…
 	Sending to the network printer…	Envoi à l'imprimante réseau…

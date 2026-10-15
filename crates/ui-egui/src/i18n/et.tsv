@@ -2288,13 +2288,12 @@
 	High	Kõrge
 	Photo	Foto
 	Colour	Värviline
-	Black and white	Mustvalge
 	Resolution:	Eraldusvõime:
 	This printer does not take a copies setting.	See printer ei toeta koopiate arvu seadet.
 	This printer only prints one-sided.	See printer prindib ainult ühepoolselt.
 	This printer does not take an orientation setting.	See printer ei toeta suuna seadet.
 	This printer does not take a quality setting.	See printer ei toeta kvaliteedi seadet.
-	This printer only prints in black and white.	See printer prindib ainult mustvalgelt.
+	This printer only prints in grayscale.	See printer prindib ainult halltoonides.
 	This printer does not take a resolution setting.	See printer ei toeta eraldusvõime seadet.
 	Not confirmed by the printer	Printer pole kinnitanud
 	I confirm sending this document to this printer	Kinnitan selle dokumendi saatmist sellele printerile
@@ -2324,6 +2323,5 @@
 	The document couldn't be prepared	Dokumenti ei õnnestunud ette valmistada
 	A setting isn't valid	Mõni seade pole kehtiv
 	The print job stopped unexpectedly	Prinditöö peatus ootamatult
-	System printer	Süsteemi printer
-	Network printer	Võrguprinter
+	Network printer…	Võrguprinter…
 	Sending to the network printer…	Saadan võrguprinterisse…

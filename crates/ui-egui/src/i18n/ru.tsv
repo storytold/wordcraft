@@ -2650,13 +2650,12 @@ preview	Title	Пример
 	High	Высокое
 	Photo	Фото
 	Colour	Цвет
-	Black and white	Чёрно-белая
 	Resolution:	Разрешение:
 	This printer does not take a copies setting.	Этот принтер не поддерживает настройку числа копий.
 	This printer only prints one-sided.	Этот принтер печатает только на одной стороне.
 	This printer does not take an orientation setting.	Этот принтер не поддерживает настройку ориентации.
 	This printer does not take a quality setting.	Этот принтер не поддерживает настройку качества.
-	This printer only prints in black and white.	Этот принтер печатает только в чёрно-белом режиме.
+	This printer only prints in grayscale.	Этот принтер печатает только в оттенках серого.
 	This printer does not take a resolution setting.	Этот принтер не поддерживает настройку разрешения.
 	Not confirmed by the printer	Не подтверждено принтером
 	I confirm sending this document to this printer	Подтверждаю отправку этого документа на этот принтер
@@ -2686,6 +2685,5 @@ preview	Title	Пример
 	The document couldn't be prepared	Не удалось подготовить документ
 	A setting isn't valid	Недопустимая настройка
 	The print job stopped unexpectedly	Задание печати неожиданно остановилось
-	System printer	Системный принтер
-	Network printer	Сетевой принтер
+	Network printer…	Сетевой принтер…
 	Sending to the network printer…	Отправка на сетевой принтер…

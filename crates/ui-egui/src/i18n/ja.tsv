@@ -2254,13 +2254,12 @@
 	High	高
 	Photo	写真
 	Colour	カラー
-	Black and white	白黒
 	Resolution:	解像度:
 	This printer does not take a copies setting.	このプリンターは部数の設定に対応していません。
 	This printer only prints one-sided.	このプリンターは片面印刷のみです。
 	This printer does not take an orientation setting.	このプリンターは向きの設定に対応していません。
 	This printer does not take a quality setting.	このプリンターは品質の設定に対応していません。
-	This printer only prints in black and white.	このプリンターは白黒印刷のみです。
+	This printer only prints in grayscale.	このプリンターはグレースケール印刷のみです。
 	This printer does not take a resolution setting.	このプリンターは解像度の設定に対応していません。
 	Not confirmed by the printer	プリンターでは確認されていません
 	I confirm sending this document to this printer	この文書をこのプリンターへ送信することを確認します
@@ -2290,6 +2289,5 @@
 	The document couldn't be prepared	文書を準備できませんでした
 	A setting isn't valid	無効な設定があります
 	The print job stopped unexpectedly	印刷ジョブが予期せず停止しました
-	System printer	システムのプリンター
-	Network printer	ネットワークプリンター
+	Network printer…	ネットワークプリンター…
 	Sending to the network printer…	ネットワークプリンターに送信しています…

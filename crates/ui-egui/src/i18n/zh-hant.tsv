@@ -2255,13 +2255,12 @@
 	High	高
 	Photo	相片
 	Colour	彩色
-	Black and white	黑白
 	Resolution:	解析度:
 	This printer does not take a copies setting.	此印表機不支援份數設定。
 	This printer only prints one-sided.	此印表機只能單面列印。
 	This printer does not take an orientation setting.	此印表機不支援方向設定。
 	This printer does not take a quality setting.	此印表機不支援品質設定。
-	This printer only prints in black and white.	此印表機只能黑白列印。
+	This printer only prints in grayscale.	此印表機只能以灰階列印。
 	This printer does not take a resolution setting.	此印表機不支援解析度設定。
 	Not confirmed by the printer	印表機未確認
 	I confirm sending this document to this printer	我確認將此文件傳送到這台印表機
@@ -2291,6 +2290,5 @@
 	The document couldn't be prepared	無法準備文件
 	A setting isn't valid	某項設定無效
 	The print job stopped unexpectedly	列印工作意外停止
-	System printer	系統印表機
-	Network printer	網路印表機
+	Network printer…	網路印表機…
 	Sending to the network printer…	正在傳送到網路印表機…

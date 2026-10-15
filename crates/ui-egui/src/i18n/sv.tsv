@@ -2667,13 +2667,12 @@ preview	Title	Titel
 	High	Hög
 	Photo	Foto
 	Colour	Färg
-	Black and white	Svartvitt
 	Resolution:	Upplösning:
 	This printer does not take a copies setting.	Den här skrivaren stöder inte inställningen för kopior.
 	This printer only prints one-sided.	Den här skrivaren skriver bara ut enkelsidigt.
 	This printer does not take an orientation setting.	Den här skrivaren stöder inte inställningen för orientering.
 	This printer does not take a quality setting.	Den här skrivaren stöder inte inställningen för kvalitet.
-	This printer only prints in black and white.	Den här skrivaren skriver bara ut i svartvitt.
+	This printer only prints in grayscale.	Den här skrivaren skriver bara ut i gråskala.
 	This printer does not take a resolution setting.	Den här skrivaren stöder inte inställningen för upplösning.
 	Not confirmed by the printer	Inte bekräftat av skrivaren
 	I confirm sending this document to this printer	Jag bekräftar att dokumentet skickas till den här skrivaren
@@ -2703,6 +2702,5 @@ preview	Title	Titel
 	The document couldn't be prepared	Dokumentet kunde inte förberedas
 	A setting isn't valid	En inställning är ogiltig
 	The print job stopped unexpectedly	Utskriftsjobbet stoppades oväntat
-	System printer	Systemskrivare
-	Network printer	Nätverksskrivare
+	Network printer…	Nätverksskrivare…
 	Sending to the network printer…	Skickar till nätverksskrivaren…

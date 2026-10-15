@@ -1486,3 +1486,29 @@ fn bundled_unicode_glyphs_are_visible_and_extractable() {
     assert!(String::from_utf8_lossy(&bytes).contains("/ToUnicode"));
     assert_eq!(squash(&extract_text(&bytes).concat()), TEXT);
 }
+
+/// The Print page's Grayscale box: every colour in the PDF is gray (Rec. 709), however the driver
+/// treats a monochrome request, and the setting does not leak into the next export.
+#[test]
+fn grayscale_export_converts_colours_and_pictures() {
+    let mut d = Document::new();
+    let media = d.add_media(red_right_half_emf(), "emf");
+    let mut p = Paragraph::with_text("Figure: ", CharProps::default());
+    let n = p.len();
+    p.insert_object(
+        n,
+        InlineObject::Image { media, w: 70.0, h: 70.0, alt: "red".into(), float: Default::default(), crop: [0.0; 4], ole: None },
+        &CharProps::default(),
+    )
+    .unwrap();
+    d.body = vec![para_block(p)];
+    let raw = |grayscale| {
+        String::from_utf8_lossy(&export(&d, &PdfOptions { compress: false, tagged: false, grayscale, ..Default::default() }).unwrap()).into_owned()
+    };
+    let gray = raw(true);
+    assert!(!gray.contains("1 0 0 rg"), "the red rectangle is no longer red");
+    let y = format!("{} {0} {0} rg", 53.0 / 255.0);
+    let level = &y[..6];
+    assert!(gray.contains(level), "the rectangle is filled with the Rec. 709 gray 53/255: {level}");
+    assert!(raw(false).contains("1 0 0 rg"), "the next, colour export is unaffected");
+}

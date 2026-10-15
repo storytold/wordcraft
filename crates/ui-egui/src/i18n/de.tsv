@@ -2253,13 +2253,12 @@
 	High	Hoch
 	Photo	Foto
 	Colour	Farbe
-	Black and white	Schwarzweiß
 	Resolution:	Auflösung:
 	This printer does not take a copies setting.	Dieser Drucker unterstützt keine Kopienanzahl.
 	This printer only prints one-sided.	Dieser Drucker druckt nur einseitig.
 	This printer does not take an orientation setting.	Dieser Drucker unterstützt keine Ausrichtungseinstellung.
 	This printer does not take a quality setting.	Dieser Drucker unterstützt keine Qualitätseinstellung.
-	This printer only prints in black and white.	Dieser Drucker druckt nur in Schwarzweiß.
+	This printer only prints in grayscale.	Dieser Drucker druckt nur in Graustufen.
 	This printer does not take a resolution setting.	Dieser Drucker unterstützt keine Auflösungseinstellung.
 	Not confirmed by the printer	Vom Drucker nicht bestätigt
 	I confirm sending this document to this printer	Ich bestätige das Senden dieses Dokuments an diesen Drucker
@@ -2289,6 +2288,5 @@
 	The document couldn't be prepared	Das Dokument konnte nicht vorbereitet werden
 	A setting isn't valid	Eine Einstellung ist ungültig
 	The print job stopped unexpectedly	Der Druckauftrag wurde unerwartet beendet
-	System printer	Systemdrucker
-	Network printer	Netzwerkdrucker
+	Network printer…	Netzwerkdrucker…
 	Sending to the network printer…	Senden an den Netzwerkdrucker…

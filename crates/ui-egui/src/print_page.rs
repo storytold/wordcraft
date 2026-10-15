@@ -100,11 +100,29 @@ fn layout_of(app: &WordApp, ctx: &egui::Context) -> Arc<DocLayout> {
     l
 }
 
+/// What a preview texture was drawn for: revision, page, width, pixels per point (x100), gray.
+type PreviewKey = (u64, usize, u32, u32, bool);
+
+/// The page as the preview shows it: gray (the same Rec. 709 conversion as the PDF) when Grayscale
+/// is chosen, so the preview never shows a colour the printout will not have.
+fn preview_image(doc: &wordcraft_doc::Document, page: &wordcraft_layout::Page, scale: f32, gray: bool) -> egui::ColorImage {
+    let img = wordcraft_render::render_page(doc, page, scale, &Default::default());
+    let mut pixels = img.to_straight();
+    if gray {
+        wordcraft_geom::gray_rgba_in_place(&mut pixels);
+    }
+    egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &pixels)
+}
+
 /// The texture of one page, re-rendered only when the document, page or size changes.
 fn page_texture(app: &WordApp, ctx: &egui::Context, lay: &DocLayout, page: usize, width: f32) -> Option<TextureHandle> {
     let id = egui::Id::new("print_page_texture");
-    let key = (app.session.rev(), page, width as u32, (ctx.pixels_per_point() * 100.0) as u32);
-    if let Some((k, t)) = ctx.data(|d| d.get_temp::<((u64, usize, u32, u32), TextureHandle)>(id))
+    // Grayscale is its own field of the key (not folded into another number), so the colour and gray
+    // pictures can never be mistaken for each other: after a toggle the page is drawn again, gray from
+    // the first frame.
+    let gray = crate::printing::grayscale(app);
+    let key = (app.session.rev(), page, width as u32, (ctx.pixels_per_point() * 100.0) as u32, gray);
+    if let Some((k, t)) = ctx.data(|d| d.get_temp::<(PreviewKey, TextureHandle)>(id))
         && k == key
     {
         return Some(t);
@@ -113,8 +131,7 @@ fn page_texture(app: &WordApp, ctx: &egui::Context, lay: &DocLayout, page: usize
     // Zoomed in, the texture stays within what the GPU takes and is stretched beyond that.
     let max_side = ctx.input(|i| i.max_texture_side) as f32 / pg.w.max(pg.h).max(1.0);
     let scale = (width / pg.w.max(1.0) * ctx.pixels_per_point()).clamp(0.05, 4.0).min(max_side);
-    let img = wordcraft_render::render_page(&app.session.doc, pg, scale, &Default::default());
-    let color = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.to_straight());
+    let color = preview_image(&app.session.doc, pg, scale, gray);
     let tex = ctx.load_texture("print_page_preview", color, egui::TextureOptions::LINEAR);
     ctx.data_mut(|d| d.insert_temp(id, (key, tex.clone())));
     Some(tex)
@@ -139,22 +156,23 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 if !network_offered {
                     app.ui.print.network = false;
                 }
-                let network = app.ui.print.network;
-                // The destination: the system's printers, or a network printer by address.
-                if network_offered {
-                    ui.horizontal(|ui| {
-                        ui.add_enabled_ui(!app.net_print.draft.running(), |ui| {
-                            ui.selectable_value(&mut app.ui.print.network, false, tl!("System printer"));
-                            ui.selectable_value(&mut app.ui.print.network, true, tl!("Network printer"));
-                        });
-                    });
-                }
                 // Opening the page clears the confirmation: it attests to what the page showed then.
                 let pass = ui.ctx().cumulative_pass_nr();
                 if pass > app.net_print_page_pass + 1 {
                     app.net_print.dialog_opened();
                 }
                 app.net_print_page_pass = pass;
+                // One Printer list: the system's queues, then "Network printer…".
+                if let Some(discover) = &app.services.printers
+                    && app.services.print_native.is_some()
+                {
+                    // The destination stays put while a network document is being sent.
+                    let locked = app.net_print.draft.running();
+                    crate::printing::show_picker(&mut app.printing, &mut app.ui.print.network, network_offered, locked, ui, discover, |label| {
+                        crate::i18n::t(label).to_owned()
+                    });
+                }
+                let network = app.ui.print.network;
                 let native = app.services.print_native.is_some() && !network;
                 let hook = native || network || app.services.print.is_some();
                 let mut network_block = None;
@@ -166,9 +184,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     );
                     app.ui.print.copies = 1;
                 } else if native {
-                    if let Some(discover) = &app.services.printers {
-                        crate::printing::show(&mut app.printing, ui, discover, |label| crate::i18n::t(label).to_owned());
-                    }
+                    crate::printing::show_options(&mut app.printing, ui, |label| crate::i18n::t(label).to_owned());
                     app.ui.print.copies = app.printing.settings.copies;
                 } else if hook {
                     ui.label(tl!("Send the document straight to the system print dialog, or save a copy in another format below."));
@@ -359,5 +375,26 @@ pub fn export_formats(app: &mut WordApp, ui: &mut Ui) {
             app.export_dialog(ext);
         }
         ui.add_space(4.0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_preview_is_gray_exactly_when_grayscale_is_chosen_and_the_two_cache_keys_differ() {
+        let mut doc = wordcraft_doc::Document::new();
+        doc.settings.page_color = Some(wordcraft_doc::Rgb(255, 0, 0));
+        let lay = wordcraft_layout::layout(&doc, &mut wordcraft_layout::LayoutCache::new(), &Default::default());
+        let page = &lay.pages[0];
+        let colour = preview_image(&doc, page, 0.2, false);
+        let gray = preview_image(&doc, page, 0.2, true);
+        assert!(colour.pixels.iter().any(|p| p.r() != p.g()), "the colour preview is red");
+        assert!(gray.pixels.iter().all(|p| p.r() == p.g() && p.g() == p.b()), "the grayscale preview has no colour");
+        assert_eq!(gray.pixels[gray.pixels.len() / 2].r(), 53, "red becomes the Rec. 709 gray");
+        // The flag is its own field of the key: it cannot collide with the revision, page or size.
+        let (a, b): (PreviewKey, PreviewKey) = ((7, 0, 300, 100, false), (7, 0, 300, 100, true));
+        assert_ne!(a, b);
     }
 }

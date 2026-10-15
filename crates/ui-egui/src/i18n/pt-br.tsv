@@ -2266,13 +2266,12 @@
 	High	Alta
 	Photo	Foto
 	Colour	Cor
-	Black and white	Preto e branco
 	Resolution:	Resolução:
 	This printer does not take a copies setting.	Esta impressora não aceita ajuste de cópias.
 	This printer only prints one-sided.	Esta impressora só imprime em um lado.
 	This printer does not take an orientation setting.	Esta impressora não aceita ajuste de orientação.
 	This printer does not take a quality setting.	Esta impressora não aceita ajuste de qualidade.
-	This printer only prints in black and white.	Esta impressora só imprime em preto e branco.
+	This printer only prints in grayscale.	Esta impressora só imprime em tons de cinza.
 	This printer does not take a resolution setting.	Esta impressora não aceita ajuste de resolução.
 	Not confirmed by the printer	Não confirmado pela impressora
 	I confirm sending this document to this printer	Confirmo o envio deste documento para esta impressora
@@ -2302,6 +2301,5 @@
 	The document couldn't be prepared	Não foi possível preparar o documento
 	A setting isn't valid	Uma configuração não é válida
 	The print job stopped unexpectedly	O trabalho de impressão parou inesperadamente
-	System printer	Impressora do sistema
-	Network printer	Impressora de rede
+	Network printer…	Impressora de rede…
 	Sending to the network printer…	Enviando para a impressora de rede…

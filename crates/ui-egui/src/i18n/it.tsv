@@ -2661,13 +2661,12 @@ preview	Title	Esempio
 	High	Alta
 	Photo	Foto
 	Colour	Colore
-	Black and white	Bianco e nero
 	Resolution:	Risoluzione:
 	This printer does not take a copies setting.	Questa stampante non supporta l'impostazione delle copie.
 	This printer only prints one-sided.	Questa stampante stampa solo su un lato.
 	This printer does not take an orientation setting.	Questa stampante non supporta l'impostazione dell'orientamento.
 	This printer does not take a quality setting.	Questa stampante non supporta l'impostazione della qualità.
-	This printer only prints in black and white.	Questa stampante stampa solo in bianco e nero.
+	This printer only prints in grayscale.	Questa stampante stampa solo in scala di grigi.
 	This printer does not take a resolution setting.	Questa stampante non supporta l'impostazione della risoluzione.
 	Not confirmed by the printer	Non confermato dalla stampante
 	I confirm sending this document to this printer	Confermo l'invio di questo documento a questa stampante
@@ -2697,6 +2696,5 @@ preview	Title	Esempio
 	The document couldn't be prepared	Impossibile preparare il documento
 	A setting isn't valid	Un'impostazione non è valida
 	The print job stopped unexpectedly	Il lavoro di stampa si è interrotto in modo imprevisto
-	System printer	Stampante di sistema
-	Network printer	Stampante di rete
+	Network printer…	Stampante di rete…
 	Sending to the network printer…	Invio alla stampante di rete…
