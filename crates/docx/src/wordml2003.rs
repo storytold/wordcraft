@@ -248,8 +248,12 @@ impl Conv {
         }
         if el.name == "w:style" {
             for (k, v) in &mut el.attrs {
-                if k == "w:default" && v == "on" {
-                    *v = "1".into();
+                if k == "w:default" || k == "w:customStyle" {
+                    if v == "on" {
+                        *v = "1".into();
+                    } else if v == "off" {
+                        *v = "0".into();
+                    }
                 }
             }
         }
@@ -450,15 +454,40 @@ fn num_fmt(e: &El) -> El {
         6 => "cardinalText",
         7 => "ordinalText",
         9 => "chicago",
+        10 => "ideographDigital",
+        11 => "japaneseCounting",
+        12 => "aiueo",
+        13 => "iroha",
         14 | 19 => "decimalFullWidth",
         15 => "decimalHalfWidth",
+        16 => "japaneseLegal",
+        17 => "japaneseDigitalTenThousand",
         18 => "decimalEnclosedCircle",
+        20 | 30 => "ideographTraditional",
+        21 => "ideographZodiac",
         22 => "decimalZero",
         23 => "bullet",
         24 => "ganada",
         25 => "chosung",
         26 => "decimalEnclosedFullstop",
         27 => "decimalEnclosedParen",
+        28 => "decimalEnclosedCircleChinese",
+        29 => "ideographEnclosedCircle",
+        38 => "hebrew1",
+        39 => "arabicAlpha",
+        40 => "hebrew2",
+        41 => "arabicAbjad",
+        42 => "hindiVowels",
+        43 => "hindiConsonants",
+        44 => "hindiNumbers",
+        45 => "hindiCounting",
+        46 => "thaiLetters",
+        47 => "thaiNumbers",
+        48 => "thaiCounting",
+        49 => "vietnameseCounting",
+        50 => "numberInDash",
+        51 => "russianLower",
+        52 => "russianUpper",
         255 => "none",
         _ => "decimal",
     };

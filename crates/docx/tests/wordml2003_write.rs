@@ -179,3 +179,43 @@ fn big_and_deep_documents_write() {
         let _ = read_xml(&xml);
     }
 }
+
+#[test]
+fn extended_nfc_and_custom_style_support() {
+    use wordcraft_doc::section::NumFormat;
+
+    let xml = r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:wordDocument xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:wx="http://schemas.microsoft.com/office/word/2003/auxHint">
+  <w:lists>
+    <w:listDef w:listDefId="1">
+      <w:lvl w:ilvl="0"><w:start w:val="1"/><w:nfc w:val="50"/><w:lvlText w:val="- %1 -"/><w:lvlJc w:val="left"/></w:lvl>
+      <w:lvl w:ilvl="1"><w:start w:val="1"/><w:nfc w:val="51"/><w:lvlText w:val="%2)"/><w:lvlJc w:val="left"/></w:lvl>
+    </w:listDef>
+    <w:list w:ilfo="1"><w:ilst w:val="1"/></w:list>
+  </w:lists>
+  <w:styles>
+    <w:style w:type="paragraph" w:styleId="MyCustom" w:customStyle="on">
+      <w:name w:val="My Custom"/>
+    </w:style>
+  </w:styles>
+  <w:body>
+    <w:p><w:pPr><w:pStyle w:val="MyCustom"/><w:listPr><w:ilvl w:val="0"/><w:ilfo w:val="1"/></w:listPr></w:pPr><w:r><w:t>Dashed</w:t></w:r></w:p>
+  </w:body>
+</w:wordDocument>"##;
+
+    let doc = read_xml(xml.as_bytes()).expect("read");
+    let st = doc.styles.get("MyCustom").expect("custom style");
+    assert!(!st.builtin);
+
+    let lvl0 = doc.numbering.level(1, 0).expect("level 0");
+    assert_eq!(lvl0.format, NumFormat::NumberInDash);
+    let lvl1 = doc.numbering.level(1, 1).expect("level 1");
+    assert_eq!(lvl1.format, NumFormat::RussianLower);
+
+    // Verify round-trip preserves NFC 50 and 51
+    let written = write_wordml2003(&doc).expect("write");
+    let text = String::from_utf8(written).expect("utf-8");
+    assert!(text.contains(r#"<w:nfc w:val="50"/>"#), "nfc 50 in output");
+    assert!(text.contains(r#"<w:nfc w:val="51"/>"#), "nfc 51 in output");
+    assert!(text.contains(r#"w:customStyle="on""#), "customStyle in output");
+}
