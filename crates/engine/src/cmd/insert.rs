@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 use wordcraft_doc::para::{Float, InlineObject, ShapeKind, Wrap};
-use wordcraft_doc::props::{Align, CharProps, Rgb, TabAlign, TabStop, TextColor};
+use wordcraft_doc::props::{Align, Border, Borders, CharProps, Rgb, TabAlign, TabStop, TextColor};
 use wordcraft_doc::{Block, Paragraph, PartKind, Path, Pos, StoryRef, Table, para_block};
 
 use super::{delete_selection, sel_result, split_para, type_text};
@@ -555,18 +555,39 @@ fn hf_part(s: &mut Session, header: bool) -> u32 {
     id
 }
 
+/// Three independently editable cells spanning the section's text width.
+fn three_column_hf(s: &mut Session, style: &str) -> wordcraft_doc::Blocks {
+    let block = s.sel.focus.path.0.first().copied().unwrap_or(0) as usize;
+    let width = s.doc.section_mut(block).text_width();
+    let mut table = Table::new(1, 3, width);
+    table.props.style = Some("TableNormal".into());
+    table.props.width = Some(width);
+    table.props.fixed = true;
+    // Explicit nil borders also override borders inherited from the document's table style.
+    table.props.borders = Some(Borders::all(Border::default()));
+    for row in &mut table.rows {
+        for (cell, align) in row.cells.iter_mut().zip([Align::Left, Align::Center, Align::Right]) {
+            let mut para = Paragraph::new().styled(style);
+            para.props.align = Some(align);
+            cell.blocks = vec![para_block(para)];
+        }
+    }
+    // Keep a trailing paragraph so the story can also be edited after the table.
+    vec![std::sync::Arc::new(Block::Table(table)), para_block(Paragraph::new().styled(style))]
+}
+
 fn header_footer(s: &mut Session, v: &Value, header: bool) -> CmdResult {
     let id = hf_part(s, header);
     let style = if header { "Header" } else { "Footer" };
     if let Some(text) = p::str(v, "text") {
         let blocks = text.split('\n').map(|l| para_block(Paragraph::with_text(l, CharProps::default()).styled(style))).collect();
         s.doc.set_story(StoryRef::Part(id), blocks)?;
+    } else if p::str(v, "preset") == Some("blankThree") {
+        let blocks = three_column_hf(s, style);
+        s.doc.set_story(StoryRef::Part(id), blocks)?;
     } else if let Some(preset) = p::str(v, "preset") {
         let mut para = Paragraph::new().styled(style);
         match preset {
-            "blankThree" => {
-                para.insert_text(0, "[Type here]\t[Type here]\t[Type here]", &CharProps::default())?;
-            }
             "title" => {
                 para.insert_text(0, if s.doc.core.title.is_empty() { "[Document title]" } else { &s.doc.core.title }, &CharProps::default())?;
                 para.props.align = Some(Align::Center);
