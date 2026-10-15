@@ -241,6 +241,9 @@ pub enum Placed {
         spin: Spin,
         /// Arrowheads and text warp (see [`wordcraft_doc::connector::ShapeExtra`]).
         extra: wordcraft_doc::connector::ShapeExtra,
+        /// The description it is tagged with as a figure in tagged PDF (see
+        /// [`shape_figure_alt`]); empty for a shape that is an artifact.
+        alt: String,
     },
     /// A floating chart or diagram, drawn from its items inside `rect`. The object is the U+FFFC at
     /// byte `off` of paragraph `path` (its alt text).
@@ -2795,6 +2798,7 @@ fn float_items(o: &InlineObject, rect: Rect, outer: (Spin, Point), story: StoryR
                 freeform: freeform.clone(),
                 spin,
                 extra: extra.clone(),
+                alt: shape_figure_alt(o).unwrap_or_default().to_string(),
             }]
         }
         InlineObject::Graphic { graphic, .. } => {
@@ -2822,6 +2826,7 @@ fn float_items(o: &InlineObject, rect: Rect, outer: (Spin, Point), story: StoryR
                             freeform: None,
                             spin,
                             extra: Default::default(),
+                            alt: String::new(),
                         },
                         Placed::Clip { rect, spin, items: members },
                     ]
@@ -2830,6 +2835,16 @@ fn float_items(o: &InlineObject, rect: Rect, outer: (Spin, Point), story: StoryR
             }
         }
         _ => Vec::new(),
+    }
+}
+
+/// The description a shape is tagged with as a figure in tagged PDF: its own, when it has one,
+/// isn't marked decorative and shows no text. A shape without one is an artifact screen readers
+/// skip, and a text box's text is read as text, so its description isn't used.
+pub fn shape_figure_alt(o: &InlineObject) -> Option<&str> {
+    match o {
+        InlineObject::Shape { story: None, float, .. } if !float.alt.decorative && !float.alt.text.trim().is_empty() => Some(&float.alt.text),
+        _ => None,
     }
 }
 
