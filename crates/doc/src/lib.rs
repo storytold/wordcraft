@@ -136,6 +136,10 @@ pub struct Document {
     /// or a richer customisation kept unchanged as a package part.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ribbon: Option<Ribbon>,
+    /// Where new story and comment ids come from: in a live session, a block of ids no other
+    /// person's copy uses (see [`IdSpace`]). Not part of the document.
+    #[serde(skip)]
+    pub id_space: IdSpace,
     /// Lookup cache for [`Document::add_media`]; not part of the document (never saved, ignored
     /// by `==`).
     #[serde(skip)]
@@ -150,3 +154,59 @@ pub struct Document {
 mod test_log;
 #[cfg(test)]
 mod tests;
+
+/// Where a document makes new story (part), comment and list ids. The default (`start` 0): one
+/// past the highest ([`free_id`]). In a live session each person's copy makes them in its own
+/// block of 65,536 ids from `start`, never below `floor` (so an id given up by an undo isn't
+/// given again while others may still have the old story), and two people adding a footnote or a
+/// comment at once don't pick the same id. Not part of the document: every `IdSpace` equals
+/// every other.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct IdSpace {
+    pub start: u32,
+    /// The lowest id this copy may make next.
+    pub floor: u32,
+}
+
+impl PartialEq for IdSpace {
+    fn eq(&self, _: &IdSpace) -> bool {
+        true
+    }
+}
+
+impl IdSpace {
+    /// Ids in a block.
+    pub const BLOCK: u32 = 1 << 16;
+
+    /// The block of ids from `start`.
+    pub fn new(start: u32) -> IdSpace {
+        IdSpace { start, floor: start }
+    }
+
+    /// Whether `id` is in this block.
+    pub fn contains(&self, id: u32) -> bool {
+        self.start > 0 && (self.start..self.start.saturating_add(Self::BLOCK)).contains(&id)
+    }
+
+    /// A new id not in `taken`, at least `floor`; [`IdSpace::take`] it. `None` when every id
+    /// is taken.
+    pub fn next(&self, taken: impl Iterator<Item = u32> + Clone, floor: u32) -> Option<u32> {
+        if self.start > 0 {
+            let end = self.start.saturating_add(Self::BLOCK);
+            let lo = self.start.max(self.floor);
+            let mine = taken.clone().filter(|id| (self.start..end).contains(id)).max().map(|m| m.saturating_add(1)).unwrap_or(lo).max(lo).max(floor);
+            if mine < end {
+                return Some(mine);
+            }
+            // The block is full: one past the highest.
+        }
+        free_id(taken.clone().max(), taken, floor)
+    }
+
+    /// Records that `id` was made, so it isn't made again.
+    pub fn take(&mut self, id: u32) {
+        if self.contains(id) {
+            self.floor = self.floor.max(id.saturating_add(1));
+        }
+    }
+}

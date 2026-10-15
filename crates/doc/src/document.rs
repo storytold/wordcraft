@@ -1,13 +1,13 @@
 use super::block::{Block, Blocks, BoxBudget};
 use super::compare::{para_block, same_blocks, same_bytes, same_glossary, same_parts};
 use super::error::{DocError, Result};
-use super::parts::{MAX_LINKED_BOXES, NoteSeparators, Part, PartKind, PermRange, TextBody, free_id};
+use super::parts::{MAX_LINKED_BOXES, NoteSeparators, Part, PartKind, PermRange, TextBody};
 use super::position::{Path, Pos, StoryRef};
 use super::settings::{CoreProps, CustomProp, Settings};
 use super::text_walk::{TextMode, notes_and_boxes, story_word_count_of, text_of, walk};
 use std::sync::Arc;
 
-use super::{BTreeMap, CharProps, Document, InlineObject, Paragraph, SectionProps, StyleSheet, Table, edit, numbering, para, section};
+use super::{BTreeMap, CharProps, Document, IdSpace, InlineObject, Paragraph, SectionProps, StyleSheet, Table, edit, numbering, para, section};
 
 /// [`Document::media`] by content, so adding media is linear in the bytes added rather than a
 /// scan of every earlier image (CWE-407). Rebuilt whenever `media` changed size behind its back;
@@ -76,6 +76,7 @@ impl Document {
             passthrough: BTreeMap::new(),
             glossary: Vec::new(),
             ribbon: None,
+            id_space: IdSpace::default(),
             media_index: MediaIndex::default(),
             kept: Default::default(),
         }
@@ -154,6 +155,8 @@ impl Document {
             passthrough,
             glossary,
             ribbon,
+            // Where new ids come from, not content.
+            id_space: _,
             media_index: _,
             kept: _,
         } = self;
@@ -175,6 +178,7 @@ impl Document {
             passthrough: other_passthrough,
             glossary: other_glossary,
             ribbon: other_ribbon,
+            id_space: _,
             media_index: _,
             kept: _,
         } = other;
@@ -440,14 +444,29 @@ impl Document {
 
     /// [`Document::add_part`], or an error, adding nothing, when every part id is taken.
     pub fn try_add_part(&mut self, kind: PartKind, blocks: Blocks) -> Result<u32> {
-        let id = free_id(self.parts.keys().next_back().copied(), self.parts.keys().copied(), 1)
-            .ok_or_else(|| DocError::Invalid("no free part id".into()))?;
+        let id = self.id_space.next(self.parts.keys().copied(), 1).ok_or_else(|| DocError::Invalid("no free part id".into()))?;
+        self.id_space.take(id);
         let mut part = Part { kind, blocks, body: TextBody::default() };
         if part.blocks.is_empty() {
             part.blocks.push(para_block(Paragraph::new()));
         }
         self.parts.insert(id, part);
         Ok(id)
+    }
+
+    /// A new comment id ([`Document::id_space`]), for a comment about to be added; `None` when
+    /// every id is taken.
+    pub fn next_comment_id(&mut self) -> Option<u32> {
+        let id = self.id_space.next(self.comments.keys().copied(), 0)?;
+        self.id_space.take(id);
+        Some(id)
+    }
+
+    /// Sets where new story, comment and list ids come from (a live session's block, or
+    /// [`IdSpace::default`]).
+    pub fn set_id_space(&mut self, space: IdSpace) {
+        self.id_space = space;
+        self.numbering.id_space = space;
     }
 
     /// Count words like Word's status bar ([`crate::count_words`], plus generated numbered-list labels).

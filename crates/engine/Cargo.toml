@@ -24,6 +24,7 @@ wordcraft-proof = { workspace = true }
 wordcraft-docx = { workspace = true }
 wordcraft-docbin = { workspace = true }
 wordcraft-plugin = { workspace = true }
+wordcraft-collab = { workspace = true }
 wordcraft-pdf = { workspace = true }
 wordcraft-formats = { workspace = true }
 serde = { workspace = true }
@@ -65,4 +66,14 @@ harness = false
 # The same: the test binary is also the macro add-in its ribbon buttons call.
 [[test]]
 name = "ribbon_buttons"
+harness = false
+
+# Runs without libtest: the test binary doubles as the co-editing transport it starts.
+[[test]]
+name = "collab_push"
+harness = false
+
+# Runs without libtest: the test binary doubles as the two WordCraft peers it starts.
+[[test]]
+name = "collab_loopback"
 harness = false

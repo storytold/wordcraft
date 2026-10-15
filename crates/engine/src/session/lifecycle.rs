@@ -133,6 +133,8 @@ impl Session {
             ime_state_exhausted: false,
             pending_ime_application_change: false,
             ime_origin: false,
+            depth: 0,
+            collab: Default::default(),
             cache,
             layout,
             typing,

@@ -44,6 +44,8 @@ pub const TABLE: &[(&str, Class)] = &[
     ("docx", Class::Layer(2)),
     ("docbin", Class::Layer(2)),
     ("formats", Class::Layer(2)),
+    // Co-editing (plugin protocol 2): the document as a Yjs document; no I/O, wasm-safe.
+    ("collab", Class::Layer(2)),
     ("render", Class::Layer(3)),
     ("pdf", Class::Layer(3)),
     ("plugin", Class::Layer(3)),

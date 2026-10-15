@@ -42,7 +42,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{id} → {url}. Opens the add-in's web page (its manifest's `homepage`) in the browser")
             .pure(),
         CommandSpec::new("plugins.run", "Run Add-in Command", "Insert › Add-ins", run)
-            .params("{plugin, command, params?} → {ran, message?, result?, open?, dialog?}. The add-in's commands run as one undoable step. `open` {path, label?, readOnly?}: a file the add-in asks to open; `dialog`: a dialog it asks to show (the app does both when the user ran the command; a script acts on them itself)")
+            .params("{plugin, command, params?} → {ran, message?, result?, open?, dialog?, collab?}. `collab.join` (protocol 2): a live session the add-in asks to start or join, for the caller to pass to `collab.join` with `plugin`. The add-in's commands run as one undoable step. `open` {path, label?, readOnly?}: a file the add-in asks to open; `dialog`: a dialog it asks to show (the app does both when the user ran the command; a script acts on them itself)")
             .pure(),
     ]
 }
@@ -315,6 +315,17 @@ fn run_step(s: &mut Session, v: &Value) -> CmdResult {
     }
     if let Some(d) = reply.dialog {
         out["dialog"] = serde_json::to_value(d).map_err(|e| CmdError::Failed(e.to_string()))?;
+    }
+    // Protocol 2: a room to join or start, for the caller (the interface runs `collab.join`).
+    if let Some(mut j) = reply.collab_join {
+        // The invitation a transport's `share` gives (`result.link`) travels with the room.
+        if j.get("invitation").is_none()
+            && let Some(link) = out.get("result").and_then(|r| r.get("link")).filter(|l| l.is_string()).cloned()
+            && let Some(o) = j.as_object_mut()
+        {
+            o.insert("invitation".into(), link);
+        }
+        out["collab"] = json!({"join": j});
     }
     Ok(out)
 }

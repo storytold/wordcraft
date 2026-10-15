@@ -155,6 +155,9 @@ impl Session {
             macros_enabled: _,
             // Like the file path: where the document is, not part of it.
             location_label: _,
+            // A live session is where the document is shared, not part of it.
+            collab: _,
+            depth: _,
             #[cfg(not(target_arch = "wasm32"))]
                 recovery: _,
             #[cfg(not(target_arch = "wasm32"))]

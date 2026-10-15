@@ -9,6 +9,7 @@ description = "WordCraft plugin host: out-of-process plugins over JSON-RPC (comm
 workspace = true
 
 [dependencies]
+wordcraft-collab = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }

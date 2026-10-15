@@ -87,7 +87,8 @@ fn protocol_1_2_features_dialogs_and_events() {
     let (_p, dir) = load_example("protocol-1-2");
     // `initialize` tells the plugin what the host does and its interface language.
     let info = wordcraft_plugin::run_command(ID, "hostInfo", json!({}), json!({})).unwrap().result;
-    assert_eq!(info["features"], json!(["dialogs", "open", "events", "document"]));
+    assert_eq!(info["features"], json!(["dialogs", "open", "events", "document", "push", "collab"]));
+    assert_eq!(info["collab"], json!({"formats": ["yjs-v1"], "app": "wordcraft", "schema": 1, "encryption": ["aes-256-gcm"]}));
     assert_eq!(info["language"], "it");
     assert_eq!(info["id"], "wordcraft");
     // A command answers with a form the app draws; its OK runs another command.

@@ -151,10 +151,16 @@ impl Session {
     }
 
     pub fn can_undo(&self) -> bool {
+        if let Some(can) = crate::collab::room_undo(self, false) {
+            return can;
+        }
         !self.history.is_empty()
     }
 
     pub fn can_redo(&self) -> bool {
+        if let Some(can) = crate::collab::room_undo(self, true) {
+            return can;
+        }
         !self.redo.is_empty()
     }
 

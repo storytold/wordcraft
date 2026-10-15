@@ -245,7 +245,10 @@ impl Session {
             widened: _,
             edit_marks: _,
             go_back_step: _,
-            // Shared by every open document.
+            // Shared by every open document. A live session is about one document: activating
+            // another ends it (`collab::after_command`).
+            collab: _,
+            depth: _,
             user_dict_path: _,
             clipboard: _,
             clipboard_text: _,

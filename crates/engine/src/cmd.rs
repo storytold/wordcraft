@@ -112,6 +112,7 @@ pub fn registry() -> Registry {
     v.extend(plugins::specs());
     v.extend(office::specs());
     v.extend(developer_vba::specs());
+    v.extend(crate::collab::specs());
     Registry::new(v)
 }
 

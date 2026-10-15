@@ -212,6 +212,11 @@ pub struct Session {
     /// Where the document came from, in words, when an add-in opened it (`file.open`'s `label`,
     /// protocol 1.2: "Nextcloud · Documents/Budget.docx"); shown as its location.
     pub location_label: Option<String>,
+    /// Live sessions (plugin protocol 2): this document's room, if it is shared.
+    pub collab: crate::collab::Collab,
+    /// Commands running inside commands (a plugin command's steps): a live session shares the
+    /// outermost one's effect as one change.
+    pub(crate) depth: u32,
     /// The recovery worker every open document's copy is kept through (desktop hosts only).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) recovery: Option<crate::recovery::Recovery>,

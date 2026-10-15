@@ -52,7 +52,35 @@ impl Session {
     /// Run a command by id with JSON params (the single entry point for the UI, CLI, MCP and
     /// control channel). Mutating commands are undoable; a failed command leaves the document as
     /// it was; a panic inside a command becomes an error.
+    ///
+    /// In a live session the outermost command's change is shared as one update, and Undo and
+    /// Redo are the person's own; while the session's document is read-only (joining, a viewer)
+    /// commands that change it are refused.
     pub fn run(&mut self, id: &str, params: &Value) -> Result<Value, CmdError> {
+        if self.collab.room.is_some() {
+            if self.depth == 0
+                && let Some(r) = crate::collab::intercept(self, id, params)
+            {
+                return r;
+            }
+            if self.registry.get(id).is_some_and(|spec| spec.mutates)
+                && let Some(why) = crate::collab::read_only(self)
+            {
+                return Err(CmdError::Disabled(format!("{id}: {why}")));
+            }
+        }
+        // Typing that goes on (and the later frames of a drag) is one undo step, in a room too.
+        let joins = self.join_next || (self.typing_open && matches!(id, "text.insert" | "equation.type"));
+        self.depth = self.depth.saturating_add(1);
+        let r = self.run_command(id, params);
+        self.depth = self.depth.saturating_sub(1);
+        if self.depth == 0 && self.collab.room.is_some() {
+            crate::collab::after_command(self, joins && r.is_ok());
+        }
+        r
+    }
+
+    fn run_command(&mut self, id: &str, params: &Value) -> Result<Value, CmdError> {
         // The document the command starts in, and the first id a document it opens can have.
         let home = self.document_id;
         let mark = document_id_mark();
