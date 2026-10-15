@@ -1061,24 +1061,49 @@ impl Styles {
                 "text-properties" => {
                     if let Some((_, s)) = &mut cur {
                         let d = &mut s.fmt;
-                        if let Some(w) = get(&a, "fo:font-weight") {
-                            d.bold = Some(w == "bold" || w.parse::<u32>().is_ok_and(|n| n >= 600));
+                        let is_bold = |w: &str| {
+                            let w = w.trim();
+                            w.eq_ignore_ascii_case("bold") || w.parse::<u32>().is_ok_and(|n| n >= 600)
+                        };
+                        let weights: Vec<&str> = [get(&a, "fo:font-weight"), get(&a, "style:font-weight-asian"), get(&a, "style:font-weight-complex")]
+                            .into_iter()
+                            .flatten()
+                            .collect();
+                        if !weights.is_empty() {
+                            d.bold = Some(weights.iter().any(|&w| is_bold(w)));
                         }
-                        if let Some(v) = get(&a, "fo:font-style") {
-                            d.italic = Some(v == "italic" || v == "oblique");
+                        let is_italic = |v: &str| {
+                            let v = v.trim();
+                            v.eq_ignore_ascii_case("italic") || v.eq_ignore_ascii_case("oblique")
+                        };
+                        let styles: Vec<&str> = [get(&a, "fo:font-style"), get(&a, "style:font-style-asian"), get(&a, "style:font-style-complex")]
+                            .into_iter()
+                            .flatten()
+                            .collect();
+                        if !styles.is_empty() {
+                            d.italic = Some(styles.iter().any(|&v| is_italic(v)));
                         }
-                        if let Some(v) = get(&a, "style:text-underline-style") {
-                            d.underline = Some(v != "none");
+                        let is_not_none = |v: &str| !v.trim().eq_ignore_ascii_case("none");
+                        let ul_attrs: Vec<&str> = [get(&a, "style:text-underline-style"), get(&a, "style:text-underline-type")]
+                            .into_iter()
+                            .flatten()
+                            .collect();
+                        if !ul_attrs.is_empty() {
+                            d.underline = Some(ul_attrs.iter().any(|&v| is_not_none(v)));
                         }
-                        if let Some(v) = get(&a, "style:text-line-through-style") {
-                            d.strike = Some(v != "none");
+                        let strike_attrs: Vec<&str> = [get(&a, "style:text-line-through-style"), get(&a, "style:text-line-through-type")]
+                            .into_iter()
+                            .flatten()
+                            .collect();
+                        if !strike_attrs.is_empty() {
+                            d.strike = Some(strike_attrs.iter().any(|&v| is_not_none(v)));
                         }
                         if let Some(v) = get(&a, "style:text-position") {
                             let v = v.trim();
                             let first = v.split_whitespace().next().unwrap_or("");
                             let pct = first.trim_end_matches('%').parse::<f32>().unwrap_or(0.0);
-                            d.sup = Some(first == "super" || pct > 0.0);
-                            d.sub = Some(first == "sub" || pct < 0.0);
+                            d.sup = Some(first.eq_ignore_ascii_case("super") || pct > 0.0);
+                            d.sub = Some(first.eq_ignore_ascii_case("sub") || pct < 0.0);
                         }
                         if let Some(c) = get(&a, "fo:color").and_then(model::parse_color) {
                             d.color = Some(c);
@@ -1091,7 +1116,7 @@ impl Styles {
                         }
                         if let Some(fam) = get(&a, "fo:font-family").or_else(|| get(&a, "style:font-name")) {
                             let fam = fam.split(',').next().unwrap_or("").trim().trim_matches(['\'', '"']).to_string();
-                            if model::is_mono(&fam) || get(&a, "style:font-pitch") == Some("fixed") {
+                            if model::is_mono(&fam) || get(&a, "style:font-pitch").is_some_and(|p| p.trim().eq_ignore_ascii_case("fixed")) {
                                 d.code = Some(true);
                             } else if !fam.is_empty() {
                                 d.font = Some(fam);
@@ -1115,20 +1140,20 @@ impl Styles {
                 }
                 "paragraph-properties" => {
                     if let Some((_, s)) = &mut cur {
-                        s.align = match get(&a, "fo:text-align") {
+                        s.align = match get(&a, "fo:text-align").map(|v| v.trim().to_ascii_lowercase()).as_deref() {
                             Some("center") => Some(Align::Center),
                             Some("end") | Some("right") => Some(Align::Right),
                             Some("justify") => Some(Align::Justify),
                             Some("start") | Some("left") => Some(Align::Left),
                             _ => s.align,
                         };
-                        if get(&a, "fo:break-before") == Some("page") {
+                        if get(&a, "fo:break-before").is_some_and(|b| b.trim().eq_ignore_ascii_case("page")) {
                             s.page_break = true;
                         }
                         if let Some(v) = get(&a, "style:page-number") {
                             s.page_number = Some(v.trim().parse::<u32>().ok().map(|n| n.min(32_767)));
                         }
-                        if get(&a, "fo:border-bottom").is_some_and(|b| b != "none") {
+                        if get(&a, "fo:border-bottom").is_some_and(|b| !b.trim().eq_ignore_ascii_case("none")) {
                             s.border_bottom = true;
                         }
                     }
@@ -2919,5 +2944,37 @@ mod tests {
         assert!(back.revisions.first().is_some_and(|r| r.date.len() >= 19 && r.date.starts_with("20")), "{:?}", back.revisions);
         assert_eq!(marks(&back), marks(&doc));
         assert_eq!(marks(&back).len(), 1);
+    }
+
+    #[test]
+    fn test_asian_complex_and_extended_text_properties() {
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:automatic-styles>
+                <style:style style:name="AsianBold" style:family="paragraph"><style:text-properties style:font-weight-asian="bold"/></style:style>
+                <style:style style:name="ComplexItalic" style:family="paragraph"><style:text-properties style:font-style-complex="italic"/></style:style>
+                <style:style style:name="UlType" style:family="paragraph"><style:text-properties style:text-underline-type="single"/></style:style>
+                <style:style style:name="StrikeType" style:family="paragraph"><style:text-properties style:text-line-through-type="double"/></style:style>
+                <style:style style:name="CaseAlign" style:family="paragraph"><style:paragraph-properties fo:text-align="CENTER" fo:break-before="PAGE"/><style:text-properties fo:font-weight="BOLD"/></style:style>
+            </office:automatic-styles><office:body><office:text>
+                <text:p text:style-name="AsianBold">Asian</text:p>
+                <text:p text:style-name="ComplexItalic">Complex</text:p>
+                <text:p text:style-name="UlType">Underlined</text:p>
+                <text:p text:style-name="StrikeType">Struck</text:p>
+                <text:p text:style-name="CaseAlign">Centered</text:p>
+            </office:text></office:body></office:document-content>"#
+        );
+        let f = parse(&package(&content, None)).unwrap();
+        let ps = paras(&f);
+        assert_eq!(ps.len(), 5);
+
+        let fmt = |p: &Para| p.inlines.iter().find_map(|i| if let Inline::Text(_, f) = i { Some(f.clone()) } else { None }).unwrap();
+
+        assert!(fmt(ps[0]).bold);
+        assert!(fmt(ps[1]).italic);
+        assert!(fmt(ps[2]).underline);
+        assert!(fmt(ps[3]).strike);
+        assert!(fmt(ps[4]).bold);
+        assert_eq!(ps[4].align, Some(Align::Center));
+        assert!(ps[4].page_break);
     }
 }
