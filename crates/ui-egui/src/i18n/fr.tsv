@@ -2229,6 +2229,9 @@
 	Existing File or Web Page	Fichier ou page web existant(e)
 	Link to:	Lier à :
 	Place in This Document	Emplacement dans ce document
+	Border Styles	Styles de bordure
+	Border\nStyles	Styles de\nbordure
+	Click a table border to paint it with the chosen border style. Esc stops.	Cliquez sur une bordure du tableau pour lui appliquer le style de bordure choisi. Appuyez sur Échap pour arrêter.
 # Table Layout › Sort dialog (#1205)
 	Column {n}	Colonne {n}
 	Header row	Ligne d’en-tête

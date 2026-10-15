@@ -2256,6 +2256,9 @@
 	Existing File or Web Page	Olemasolev fail või veebileht
 	Link to:	Link:
 	Place in This Document	Koht selles dokumendis
+	Border Styles	Äärisestiilid
+	Border\nStyles	Äärise-\nstiilid
+	Click a table border to paint it with the chosen border style. Esc stops.	Klõpsa tabeli äärist, et värvida see valitud äärisestiiliga. Esc lõpetab.
 # Table Layout › Sort dialog (#1205)
 	Column {n}	Veerg {n}
 	Header row	Päiserida

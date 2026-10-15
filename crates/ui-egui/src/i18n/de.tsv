@@ -2221,6 +2221,9 @@
 	Existing File or Web Page	Datei oder Webseite
 	Link to:	Link zu:
 	Place in This Document	Aktuelles Dokument
+	Border Styles	Rahmenlinienarten
+	Border\nStyles	Rahmenlinien-\narten
+	Click a table border to paint it with the chosen border style. Esc stops.	Klicken Sie auf eine Rahmenlinie der Tabelle, um sie mit der gewählten Rahmenlinienart zu zeichnen. Esc beendet.
 # Table Layout › Sort dialog (#1205)
 	Column {n}	Spalte {n}
 	Header row	Überschriftszeile

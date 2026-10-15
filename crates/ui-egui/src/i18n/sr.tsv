@@ -2236,6 +2236,9 @@
 	Existing File or Web Page	Постојећа датотека или веб страница
 	Link to:	Веза ка:
 	Place in This Document	Место у овом документу
+	Border Styles	Стилови ивица
+	Border\nStyles	Стилови\nивица
+	Click a table border to paint it with the chosen border style. Esc stops.	Кликните ивицу табеле да је обојите изабраним стилом ивице. Esc завршава.
 # Table Layout › Sort dialog (#1205)
 	Column {n}	Колона {n}
 	Header row	Ред заглавља

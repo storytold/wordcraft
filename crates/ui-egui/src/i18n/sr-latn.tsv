@@ -2232,6 +2232,9 @@
 	Existing File or Web Page	Postojeća datoteka ili veb stranica
 	Link to:	Veza ka:
 	Place in This Document	Mesto u ovom dokumentu
+	Border Styles	Stilovi ivica
+	Border\nStyles	Stilovi\nivica
+	Click a table border to paint it with the chosen border style. Esc stops.	Kliknite ivicu tabele da je obojite izabranim stilom ivice. Esc završava.
 # Table Layout › Sort dialog (#1205)
 	Column {n}	Kolona {n}
 	Header row	Red zaglavlja

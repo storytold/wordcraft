@@ -1683,6 +1683,135 @@ fn table_border_presets_mask_the_sides_they_clear() {
     }
 }
 
+/// The first table's own borders in the body.
+fn table_borders(s: &Session) -> wordcraft_doc::props::Borders {
+    s.doc.body.iter().find_map(|x| x.as_table()).unwrap().props.borders.unwrap()
+}
+
+/// A cell's own borders in the body's first table.
+fn cell_borders(s: &Session, row: usize, cell: usize) -> wordcraft_doc::props::Borders {
+    s.doc.body.iter().find_map(|x| x.as_table()).unwrap().rows[row].cells[cell].props.borders.unwrap_or_default()
+}
+
+#[test]
+fn table_borders_take_a_line_style() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    run(&mut s, "table.borders", json!({"kind": "all", "style": "double"}));
+    let b = table_borders(&s);
+    for side in [b.top, b.bottom, b.left, b.right, b.between, b.inside_v] {
+        assert_eq!(side.map(|x| x.style), Some(BorderStyle::Double));
+    }
+    run(&mut s, "table.borders", json!({"kind": "top", "style": "dotted", "width": 1.5}));
+    let top = table_borders(&s).top.unwrap();
+    assert_eq!((top.style, top.width), (BorderStyle::Dotted, 1.5));
+    for (name, style) in [
+        ("single", BorderStyle::Single),
+        ("dashed", BorderStyle::Dashed),
+        ("thick", BorderStyle::Thick),
+        ("triple", BorderStyle::Triple),
+        ("dotDash", BorderStyle::DotDash),
+        ("wave", BorderStyle::Wave),
+    ] {
+        run(&mut s, "table.borders", json!({"kind": "bottom", "style": name}));
+        assert_eq!(table_borders(&s).bottom.map(|x| x.style), Some(style), "{name}");
+    }
+    // An unknown style is an error and leaves the table as it was.
+    assert!(s.run("table.borders", &json!({"kind": "bottom", "style": "zigzag"})).is_err());
+    assert_eq!(table_borders(&s).bottom.map(|x| x.style), Some(BorderStyle::Wave));
+}
+
+#[test]
+fn border_styles_set_the_pen_that_borders_and_the_painter_use() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    // The default pen: single ½ pt, automatic colour.
+    let pen = run(&mut s, "table.borderStyles", json!({}));
+    assert_eq!(pen, json!({"style": "single", "width": 0.5, "color": null}));
+    // Picking a style sets the pen; `{}` reports it.
+    let pen = run(&mut s, "table.borderStyles", json!({"style": "double", "width": 1.5, "color": "156082"}));
+    assert_eq!(pen, json!({"style": "double", "width": 1.5, "color": "156082"}));
+    assert_eq!(run(&mut s, "table.borderStyles", json!({})), pen, "{{}} reports the pen");
+    // Only what is given changes.
+    assert_eq!(run(&mut s, "table.borderStyles", json!({"width": 0.5})), json!({"style": "double", "width": 0.5, "color": "156082"}));
+    run(&mut s, "table.borderStyles", json!({"width": 1.5}));
+    // Borders without their own style, width or colour draw with the pen.
+    run(&mut s, "table.borders", json!({"kind": "outside"}));
+    let top = table_borders(&s).top.unwrap();
+    assert_eq!((top.style, top.width, top.color.map(|c| c.hex())), (BorderStyle::Double, 1.5, Some("156082".to_string())));
+    // An explicit parameter wins over the pen.
+    run(&mut s, "table.borders", json!({"kind": "top", "style": "single", "width": 3.0, "color": "FF0000"}));
+    let top = table_borders(&s).top.unwrap();
+    assert_eq!((top.style, top.width, top.color.map(|c| c.hex())), (BorderStyle::Single, 3.0, Some("FF0000".to_string())));
+    // Border Painter with a kind applies the pen there; alone, to every border.
+    run(&mut s, "table.borderPainter", json!({"kind": "inside"}));
+    assert_eq!(table_borders(&s).between.map(|x| (x.style, x.width)), Some((BorderStyle::Double, 1.5)));
+    run(&mut s, "table.borderPainter", json!({}));
+    assert_eq!(table_borders(&s).top.map(|x| (x.style, x.width)), Some((BorderStyle::Double, 1.5)));
+    // "auto" (or null) colour is automatic.
+    assert_eq!(run(&mut s, "table.borderStyles", json!({"color": "auto"}))["color"], json!(null));
+    assert_eq!(run(&mut s, "table.borderStyles", json!({"color": "156082"}))["color"], json!("156082"));
+    assert_eq!(run(&mut s, "table.borderStyles", json!({"color": null}))["color"], json!(null));
+}
+
+#[test]
+fn border_styles_reject_or_clamp_hostile_params() {
+    let mut s = s();
+    assert!(s.run("table.borderStyles", &json!({"style": "zigzag"})).is_err());
+    assert!(s.run("table.borderStyles", &json!({"style": "double", "color": "not a colour"})).is_err());
+    assert_eq!(run(&mut s, "table.borderStyles", json!({}))["style"], json!("single"), "a refused pen isn't kept");
+    assert_eq!(run(&mut s, "table.borderStyles", json!({"width": 1e30}))["width"], json!(6.0));
+    assert_eq!(run(&mut s, "table.borderStyles", json!({"width": -4}))["width"], json!(0.25));
+    // "none" isn't a pen.
+    assert!(s.run("table.borderStyles", &json!({"style": "none"})).is_err());
+}
+
+#[test]
+fn the_border_painter_paints_the_clicked_segment() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    run(&mut s, "table.borderStyles", json!({"style": "double", "color": "E97132"}));
+    let rect = |s: &mut Session, row: usize, cell: usize| {
+        s.layout().pages[0]
+            .items
+            .iter()
+            .find_map(|it| match it {
+                crate::layout::Placed::Cell { rect, row: r, cell: c, .. } if *r == row && *c == cell => Some(*rect),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let double = |b: Option<wordcraft_doc::props::Border>| {
+        b.is_some_and(|b| b.style == BorderStyle::Double && b.color.map(|c| c.hex()) == Some("E97132".into()))
+    };
+    // Just inside cell (0, 0)'s right edge: the border between it and (0, 1).
+    let a = rect(&mut s, 0, 0);
+    let own = s.doc.body.iter().find_map(|x| x.as_table()).unwrap().props.borders;
+    run(&mut s, "table.borderPainter", json!({"page": 0, "x": a.x + a.w - 1.0, "y": a.y + a.h / 2.0}));
+    assert!(double(cell_borders(&s, 0, 0).right));
+    assert!(double(cell_borders(&s, 0, 1).left));
+    let c00 = cell_borders(&s, 0, 0);
+    assert!(c00.top.is_none() && c00.left.is_none() && c00.bottom.is_none());
+    assert!(cell_borders(&s, 1, 0).right.is_none(), "only the clicked segment");
+    assert_eq!(s.doc.body.iter().find_map(|x| x.as_table()).unwrap().props.borders, own, "the table's own borders stay");
+    // Just inside cell (1, 1)'s top: the border between it and (0, 1).
+    let d = rect(&mut s, 1, 1);
+    run(&mut s, "table.borderPainter", json!({"page": 0, "x": d.x + d.w / 2.0, "y": d.y + 1.0}));
+    assert!(double(cell_borders(&s, 1, 1).top));
+    assert!(double(cell_borders(&s, 0, 1).bottom));
+    // The table's outer edge has no neighbour: just that cell.
+    run(&mut s, "table.borderPainter", json!({"page": 0, "x": a.x + 1.0, "y": a.y + a.h / 2.0}));
+    assert!(double(cell_borders(&s, 0, 0).left));
+    // One undo step per click.
+    run(&mut s, "edit.undo", json!({}));
+    assert!(cell_borders(&s, 0, 0).left.is_none());
+    assert!(double(cell_borders(&s, 1, 1).top));
+    // Off the table, or a page that isn't there: an error, nothing painted.
+    assert!(s.run("table.borderPainter", &json!({"page": 0, "x": 1.0, "y": 1.0})).is_err());
+    assert!(s.run("table.borderPainter", &json!({"page": 1e18, "x": -1e30, "y": 1e30})).is_err());
+    assert!(s.run("table.borderPainter", &json!({"page": 0, "x": "left"})).is_err());
+}
+
 #[test]
 fn page_setup_and_breaks() {
     let mut s = s();

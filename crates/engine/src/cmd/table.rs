@@ -77,7 +77,7 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"color": "RRGGBB" | null}"#)),
         t(CommandSpec::new("table.borders", "Borders", "Table Design › Borders", borders)
-            .params(r#"{"kind": "all|outside|inside|none|top|bottom|left|right", "width"?: pt, "color"?: "RRGGBB"}"#)),
+            .params(r#"{"kind": "all|outside|inside|none|top|bottom|left|right", "style"?: "single|double|dotted|dashed|thick|triple|dotDash|wave", "width"?: pt, "color"?: "RRGGBB"} (style, width and colour default to the border pen, table.borderStyles)"#)),
         t(CommandSpec::new("table.cellAlign", "Alignment", "Table Layout › Alignment", |s, v| {
             let (h, va) = match p::str(v, "value").unwrap_or("topLeft") {
                 "topLeft" => (Align::Left, VAlign::Top),
@@ -703,9 +703,12 @@ fn split_table(s: &mut Session, _: &Value) -> CmdResult {
 
 fn borders(s: &mut Session, v: &Value) -> CmdResult {
     let kind = p::str(v, "kind").unwrap_or("all");
-    let w = p::f32(v, "width").unwrap_or(0.5).clamp(0.25, 6.0);
-    let color = p::str(v, "color").and_then(Rgb::parse);
-    let b = Border { style: BorderStyle::Single, width: w, color, space: 0.0 };
+    // What isn't given comes from the border pen (Border Styles).
+    let pen = s.border_pen;
+    let style = p::str(v, "style").map(super::border_pen::parse_style).transpose()?.unwrap_or(pen.style);
+    let w = p::f32(v, "width").map_or(pen.width, super::border_pen::clamp_width);
+    let color = if v.get("color").is_some() { p::str(v, "color").and_then(Rgb::parse) } else { pen.color };
+    let b = Border { style, width: w, color, space: 0.0 };
     let none = Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 };
     with_table(s, |t| {
         let mut cur = t.props.borders.unwrap_or_default();

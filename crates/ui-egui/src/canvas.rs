@@ -2928,6 +2928,7 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
                 item(ui, app, "Fixed Column Width", "table.autofit", json!({"mode": "fixed"}));
             });
         }
+        ui.menu_button(tl!("Border Styles"), |ui| crate::ribbon::border_styles_gallery(ui, app));
         item(ui, app, "Text Direction", "table.textDirection", json!({}));
         if pick == TablePick::Table {
             item(ui, app, "Insert Caption…", "references.caption", json!({}));
@@ -4197,7 +4198,7 @@ mod tests {
         let at = screen(&mut h, b.x + b.w / 2.0, b.y + b.h / 2.0);
         right_click(&mut h, at);
         assert_eq!(h.state().session.sel.focus.path.cell().map(|(_, r, c)| (r, c)), Some((1, 2)), "the caret moved to the cell");
-        assert_menu(&h, &["Insert", "Delete", "Split Cells", "Text Direction", "Table Properties…"], true);
+        assert_menu(&h, &["Insert", "Delete", "Split Cells", "Border Styles", "Text Direction", "Table Properties…"], true);
         assert_menu(&h, &["Merge Cells", "Distribute Rows", "AutoFit", "Select", "Cell Alignment"], false);
         let depth = h.state().session.undo_depth();
         pick(&mut h, &["Insert", "Insert Rows Below"]);
@@ -4206,10 +4207,31 @@ mod tests {
         h.state_mut().run("table.selectTable", json!({})).unwrap();
         right_click(&mut h, at);
         assert!(h.state().session.cell_range().is_some(), "a right-click on the selected table keeps it");
-        assert_menu(&h, &["Delete", "Distribute Rows", "Distribute Columns", "AutoFit", "Insert Caption…", "Table Properties…"], true);
+        assert_menu(
+            &h,
+            &["Delete", "Distribute Rows", "Distribute Columns", "AutoFit", "Border Styles", "Insert Caption…", "Table Properties…"],
+            true,
+        );
         assert_menu(&h, &["Split Cells", "Merge Cells"], false);
         pick(&mut h, &["Delete", "Delete Table"]);
         assert!(h.state().session.doc.body.iter().all(|b| b.as_table().is_none()));
+    }
+
+    /// Right-click › Border Styles offers the pens (three lines in Automatic and six theme
+    /// colours); picking one sets the pen and turns on the Border Painter, changing nothing yet.
+    #[test]
+    fn a_right_click_picks_a_border_style() {
+        let mut h = table_window();
+        let b = cell(&mut h, 0, 1);
+        let at = screen(&mut h, b.x + b.w / 2.0, b.y + b.h / 2.0);
+        right_click(&mut h, at);
+        let depth = h.state().session.undo_depth();
+        pick(&mut h, &["Border Styles", "Double ½ pt, Accent 2"]);
+        assert_eq!(h.state().canvas.table_tool, Some(crate::table_pen::TableTool::Paint));
+        let pen = h.state_mut().run("table.borderStyles", json!({})).unwrap();
+        let accent2 = h.state().session.doc.settings.theme_colors.get(5).map(|c| c.hex());
+        assert_eq!((pen["style"].as_str(), pen["width"].as_f64(), pen["color"].as_str().map(str::to_string)), (Some("double"), Some(0.5), accent2));
+        assert_eq!(h.state().session.undo_depth(), depth, "picking a pen changes nothing in the document");
     }
 
     /// With just the caret in a cell, right-click › Delete › Delete Table removes the table, in
@@ -4241,7 +4263,7 @@ mod tests {
         let at = screen(&mut h, on.x + on.w / 2.0, on.y + on.h / 2.0);
         right_click(&mut h, at);
         assert_eq!(h.state().session.cell_range().map(|r| r.cols), Some((0, 0)), "still the column");
-        assert_menu(&h, &["Merge Cells", "Distribute Rows", "Distribute Columns", "Text Direction"], true);
+        assert_menu(&h, &["Merge Cells", "Distribute Rows", "Distribute Columns", "Border Styles", "Text Direction"], true);
         assert_menu(&h, &["Split Cells", "AutoFit"], false);
         let depth = h.state().session.undo_depth();
         pick(&mut h, &["Text Direction"]);

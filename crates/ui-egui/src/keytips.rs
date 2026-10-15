@@ -341,7 +341,12 @@ fn controls(tab: &str) -> Vec<Control> {
         ],
         "Help" => vec![d("Help", "about"), c("Community Discord", "ui.discord"), d("Commands", "commands")],
         "Table Design" => {
-            vec![m("Shading", "table.shading"), m("Borders", "table.borders"), c("Border Painter", "table.borderPainter")]
+            vec![
+                m("Shading", "table.shading"),
+                m("Border Styles", "table.borderStyles"),
+                m("Borders", "table.borders"),
+                c("Border Painter", "table.borderPainter"),
+            ]
         }
         "Table Layout" => vec![
             m("Select", "table.selectCell"),
