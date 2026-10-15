@@ -160,6 +160,9 @@ fn sync(s: &mut Session, v: &Value) -> CmdResult {
     if !plugin.enabled() {
         return Err(CmdError::Failed(format!("{addin} is turned off")));
     }
+    if let Some(b) = plugin.blocked_by().first() {
+        return Err(CmdError::Failed(format!("{addin} is blocked: {}", b.message)));
+    }
     let actions: Vec<Action> = serde_json::from_value(v.get("actions").cloned().unwrap_or(Value::Array(Vec::new())))
         .map_err(|e| CmdError::Params(format!("`actions`: {e}")))?;
     if actions.len() > MAX_ACTIONS {

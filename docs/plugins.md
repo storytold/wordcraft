@@ -1,6 +1,6 @@
 # Add-ins (plugins)
 
-> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-15 · **Change:** minor (protocol 2: the push channel, transports and live sessions; previously minor: protocol 1.2: dialogs WordCraft draws, opening local files, document events, `context.document`; previously minor: ribbon buttons that run macros: `macros/run` gets the button; previously minor: protocol 1.1: host requests, VBA macros through an add-in, the Developer tab's Code group; Office add-ins; previously major: first version: out-of-process add-ins, protocol 1, File › Options › Add-ins, install from GitHub) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (manifest 1.3: add-ins that require other add-ins, with version ranges; previously minor: protocol 2: the push channel, transports and live sessions; previously minor: protocol 1.2: dialogs WordCraft draws, opening local files, document events, `context.document`; previously minor: ribbon buttons that run macros: `macros/run` gets the button; previously minor: protocol 1.1: host requests, VBA macros through an add-in, the Developer tab's Code group; Office add-ins; previously major: first version: out-of-process add-ins, protocol 1, File › Options › Add-ins, install from GitHub) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 An add-in adds **commands** that people and agents run, and can put them on the ribbon (a group
 on a built-in tab, or a tab of its own) and in the right-click menu. It's a separate program,
@@ -62,11 +62,13 @@ editing preferences in `ui.json`). **Unload** removes it until the next start. T
 
 | Command | Params | Does |
 |---|---|---|
-| `plugins.list` (also `addins.get`) | `{}` | The loaded add-ins with their status, commands and ribbon and menu items |
-| `plugins.load` | `{path}` | Loads the add-in in a folder (or a manifest file). One with the same id is replaced |
-| `plugins.install` | `{url, dir?}` | Installs the add-in in a GitHub repository into `dir` (default: the app's add-ins folder) and loads it |
-| `plugins.unload` | `{id}` | Unloads an add-in and stops its process (until the next start) |
-| `plugins.setEnabled` | `{id, enabled}` | Turns an add-in off or back on, and remembers it in the preferences |
+| `plugins.list` (also `addins.get`) | `{}` | The loaded add-ins with their status, `state` (`loaded`, `running`, `failed`, `blocked`, `disabled`), `blockedBy`, `requires`, `requiredBy`, commands and ribbon and menu items |
+| `plugins.load` | `{path, force?}` | Loads the add-in in a folder (or a manifest file). One with the same id is replaced; with a version outside the range a turned-on add-in requires, only with `force` |
+| `plugins.install` | `{url (or github), dir?, version?, withRequirements?, force?}` | Installs the add-in in a GitHub repository into `dir` (default: the app's add-ins folder) and loads it. The result adds `release` and `missing`; see [Requirements](#requirements-manifest-13) |
+| `plugins.installMissing` | `{id, dir?, force?}` | Installs the missing required add-ins of `id` that name `github` |
+| `plugins.requirements` | `{id}` | `{id, satisfied, blockedBy, tree}`: what `id` needs and what's installed |
+| `plugins.unload` | `{id}` | Unloads an add-in and stops its process (until the next start); `dependentsBlocked` lists the add-ins that needed it |
+| `plugins.setEnabled` | `{id, enabled}` | Turns an add-in off or back on, and remembers it in the preferences; turning off reports `dependentsBlocked` |
 | `plugins.openHomepage` | `{id}` | Opens the add-in's web page in the browser |
 | `plugins.run` | `{plugin, command, params?}` | Runs an add-in command (one undoable step) |
 
@@ -132,6 +134,10 @@ loaded with `--plugin` before that keep working.
 | `buttons[]` | `command` (one of the add-in's `commands[].id`), `label` and `tooltip` (default: the command's label and description), `icon`, `size` (`large`, the default, or `small`: stacked three high), `params` (passed to the command) |
 | `events` | The document events the add-in hears (protocol 1.2): `documentOpened`, `documentSaved`, `documentClosed`. Names WordCraft doesn't know are ignored; at most 64 |
 | `ui.menus[]` | A right-click menu item: `menu` (`text`, the default, always shown; `table` in a table; `picture` with a picture, shape or text box selected), `command`, `label`, `params`. Items go at the end of the menu, after a separator |
+| `requires.apps` | Manifest 1.3. Per app id, the app versions the add-in works with (`{"wordcraft": ">=0.7.0"}`); an app missing from the map isn't constrained. See [Requirements](#requirements-manifest-13) |
+| `requires.protocol` | The plugin protocol versions it needs (`">=1.2"`), checked against `host.protocol` (`"2.0"`) |
+| `requires.features` | Names from `host.features` (`dialogs`, `open`, `events`, `document`, `push`, `collab`) that must all be present |
+| `requires.addins[]` | Other add-ins it needs: `id`, `version` (a range; default `*`), `github` (`owner/repo` to install it from), `optional` (default false), `why` (shown to the person, at most 200 characters). At most 32 |
 
 Icons are named from WordCraft's own icon set (`crates/ui-egui/src/icons.rs`), for example
 `addins` (the default), `case`, `clear`, `wordCount`, `comment`, `link`, `table`, `picture`,
@@ -157,6 +163,11 @@ Sent once, after the process starts. Answer within 10 s with any result, for exa
 
 `host.id` says which app started the add-in, so one add-in can answer each app with its own
 commands.
+
+Since manifest 1.3, `host.protocol` is the protocol version as text (`"2.0"`, what
+`requires.protocol` is checked against), and `addins` lists every installed add-in as
+`{id, version, enabled}` (`enabled`: turned on, not blocked and not failed), so an add-in can adapt
+to the optional ones it found.
 
 ### `commands/run`
 
@@ -410,8 +421,96 @@ Word's API has no ids for paragraphs and ranges; WordCraft hands out opaque ones
 `r:<path>:<from>-<path>:<to>`), kept right across the edits of one sync and good until the
 document's structure changes after it.
 
+**Requirements.** The manifest's `<Requirements>` are checked when the add-in loads, against the
+requirement sets and methods WordCraft's Office.js reports: WordApi 1.3, Settings, Selection and
+TextCoercion 1.1; `Document.getSelectedDataAsync`, `Document.setSelectedDataAsync`,
+`Settings.get`, `set`, `remove`, `saveAsync` (one table, `wordcraft_plugin::office::API_SETS` and
+`API_METHODS`; a test keeps it equal to the one `isSetSupported` answers from). `<Sets>` lists
+`<Set Name="WordApi" MinVersion="1.3"/>`; a set without `MinVersion` takes the
+`<Sets DefaultMinVersion="…">` (else 1.1). `<Methods>` lists `<Method Name="…"/>`. An unmet one
+makes the add-in **blocked** ([Requirements](#requirements-manifest-13)): it stays listed in
+File › Options › Add-ins with the reason ("Needs WordApi 1.9; WordCraft supports up to 1.3",
+"Needs ExcelApi 1.1, which WordCraft doesn't support"), and its buttons and menu items are absent,
+instead of failing at its first call.
+
 **Not yet:** content controls, inline pictures, tables, lists, sections, headers and footers,
 HTML/OOXML in and out, events, dialogs, custom properties, a web view on Linux.
+
+## Requirements (manifest 1.3)
+
+An add-in can say which other add-ins it needs, in which versions, and which app versions and
+protocol features. WordCraft checks this before starting it, says what's missing, and offers to
+install it. The contract is shared with GridCraft and DeckCraft:
+[Craft plugin manifests 1.3](https://github.com/sirmmo/craft-collab/blob/main/docs/plugin-requirements.md).
+
+```json
+{
+  "id": "org.example.reports",
+  "version": "1.4.0",
+  "requires": {
+    "apps": {"wordcraft": ">=0.7.0", "gridcraft": ">=0.7.0"},
+    "protocol": ">=1.2",
+    "features": ["dialogs", "events"],
+    "addins": [
+      {"id": "org.craft.vba", "version": "^0.1.4", "github": "sirmmo/craft-vba", "why": "Runs the report macros"},
+      {"id": "org.craft.mqtt", "version": ">=0.1, <0.3", "github": "sirmmo/craft-collab", "optional": true, "why": "Live editing"}
+    ]
+  }
+}
+```
+
+**Versions** are `MAJOR.MINOR.PATCH`; missing parts are 0, a pre-release (`1.0.0-beta.1`) sorts
+before its release, `+build` is ignored, and an Office add-in's `1.0.0.0` compares on its first
+three parts. **Ranges** are Cargo's: comma-separated comparators that must all hold. `^1.2.3` (also
+a bare `1.2.3`) is `>=1.2.3, <2.0.0`, and for 0.x `^0.1.4` is `>=0.1.4, <0.2.0`; `~1.2.3` is
+`>=1.2.3, <1.3.0`; `>=`, `>`, `<=`, `<`, `=` take a full or partial version (`>=0.1` is `>=0.1.0`;
+as in Cargo, `=1.2` and `<=1.2` mean `1.2.*`, `>1.2` means `>=1.3.0`); `1.*` and `1.2.*` are
+wildcards; `*` or nothing is any version, pre-releases included. Otherwise a pre-release only
+matches a comparator that names a pre-release of the same version (`>=1.0.0-rc.1`). For the
+protocol write `>=1.2`: Cargo's `^1.2` leaves out 2.0. Ranges are at most 128 characters.
+
+**Blocked.** Whenever the add-ins change (start-up, install, `plugins.load`, turning one on or
+off, unloading, one failing for good), WordCraft resolves them all together. An add-in is
+**blocked**, with its reasons in `blockedBy` and in Options › Add-ins, when:
+
+| `kind` | When | Message |
+|---|---|---|
+| `app` | `requires.apps.wordcraft` doesn't match this version | Needs WordCraft 0.8 or later (this is 0.7.0) |
+| `protocol` | `requires.protocol` doesn't match `host.protocol` | Needs plugin protocol 3.0 or later (this WordCraft has 2.0) |
+| `feature` | A name in `requires.features` isn't in `host.features`; an Office add-in's requirement set or method isn't supported | Needs `x`, which this WordCraft doesn't have |
+| `addin` | A required (not optional) add-in isn't installed, is turned off, failed, is blocked itself, or its version is out of range | Needs craft-vba ^0.1.4 (installed: 0.1.3) |
+| `cycle` | Required add-ins need each other | Requirement cycle: Reports → craft-vba → Reports |
+| `depth` | The chain of required add-ins below it is more than 8 deep | Its required add-ins go 9 deep (at most 8) |
+| `range` | A range in its manifest doesn't parse | Its manifest's requirement for craft-vba (`soon`) isn't a version range |
+
+A blocked add-in isn't started; its commands, ribbon groups and menu items, its macros, document
+events and live-session transport are absent, as for an add-in that's turned off. Installing what
+it needs unblocks it at once, without restarting. Optional add-ins never block. Required add-ins
+start before the add-ins that need them.
+
+**Turning off or unloading** an add-in others need asks first in Options › Add-ins and the
+Add-ins dialog ("Reports needs craft-vba. Turn both off?"). Programmatically it just happens: the
+add-ins that needed it are blocked, and the result's `dependentsBlocked` lists them. **Installing
+or updating** an add-in to a version a turned-on add-in's range doesn't accept asks first
+("Reports needs craft-vba ^0.1.4; 0.2.0 doesn't match. Install craft-vba 0.2.0 anyway?");
+programmatically (`plugins.install`, `plugins.load`) it fails unless `force: true`, and then that
+add-in is blocked.
+
+**Installing what's missing.** After installing an add-in from GitHub, WordCraft offers its
+missing or out-of-range required add-ins that name `github` ("Reports needs craft-vba ^0.1.4 (Runs
+the report macros). Install it too?"), ticked; optional ones are offered unticked. For each it
+takes **the newest release whose tag is a version in range** (`v0.1.5` or `0.1.5`; drafts are
+skipped, and so are pre-releases unless the range names one; the newest 100 releases are looked
+at), not just the latest, and says which. What they need in turn is offered next. A blocked add-in
+whose missing add-ins name `github` shows **Install Missing** in Options › Add-ins and the Add-ins
+dialog.
+
+| Command | Does |
+|---|---|
+| `plugins.install {url, withRequirements?, force?, version?}` | `withRequirements` (default false here; the interface always asks) also installs the missing required add-ins that name `github`, with `installed` and `failed` in the result. The result always lists `missing` (`[{id, name, version, github?, optional, why, installed?}]`) for the caller to install. `version`, a range, picks the newest release in it |
+| `plugins.installMissing {id, force?}` | Installs `id`'s missing required add-ins that name `github`, then theirs (at most 8 deep, 64 in all): `{installed: [{id, name, version, release}], failed: [{id, error}], missing, satisfied}` |
+| `plugins.requirements {id}` | `{id, satisfied, blockedBy, tree: [{id, name, need, have, state, optional, why, github, children}]}`; `state` is `missing` for an add-in that isn't installed |
+| `plugins.list` | Per add-in: `state` (`blocked` among `loaded`, `running`, `failed`, `disabled`), `blockedBy: [{id?, kind, need, have?, message}]`, `requires` (the manifest's), `requiredBy` (the ids of the add-ins that need it) |
 
 ## Publishing an add-in on GitHub
 
@@ -444,7 +543,7 @@ in the zip are kept.
   close, not typing or the selection changing. A command sees the selection and the caret's
   paragraph in its context, and the whole document through `host/sync` (protocol 1.1); an event
   sees only the file.
-- Installed add-ins aren't updated automatically; install again to update. There's no Uninstall
+- Installed add-ins aren't updated automatically (no update check); install again to update. There's no Uninstall
   button yet: unload the add-in and delete its folder.
 - Ribbon groups go at the end of a tab; add-ins can't place them between built-in groups, add
   drop-downs or toggles, or ship their own icons yet.
@@ -456,6 +555,7 @@ in the zip are kept.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Manifest 1.3 (shared with GridCraft and DeckCraft): `requires` (apps, protocol, features, other add-ins with Cargo-style version ranges), blocked add-ins (`state`, `blockedBy`, `requiredBy`), start order, `host.protocol` and `addins` in `initialize`, `plugins.requirements`, `plugins.installMissing`, `plugins.install` `github`/`withRequirements`/`force`/`version` (newest release in range), `plugins.load` `force`, Install Missing, asking before turning off a needed add-in or updating out of range; Office add-ins' `<Requirements>` sets and methods checked |
 | 2026-10-15 | minor | Protocol 2 (2.0.1, shared with GridCraft and DeckCraft): the push channel (standard output read all the time, notifications and anytime requests, 64 MiB lines, flood cut-off), `host.features` `push`/`collab` and `host.collab`, manifest `collab` for transports, `collab.join` in command answers; live sessions in [collab.md](collab.md) |
 | 2026-10-15 | minor | Protocol 1.2 (shared with GridCraft and DeckCraft, used by craft-nextcloud): `host.features` and `host.language`; `context.document {path, name, dirty}` for commands and macros; answers with `open` (a local file, opened as File › Open does, with a location `label`) and `dialog` (list, form or message drawn by WordCraft, chaining); manifest `events` and `events/documentOpened`, `documentSaved`, `documentClosed`, sent without holding anything up |
 | 2026-10-15 | minor | Ribbon buttons that run the document's macros, saved as its `customUI14.xml`; `macros/run` gets `control {id, tag}`; Developer › Ribbon Buttons and Add to Ribbon in the Macros window |

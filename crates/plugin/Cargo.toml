@@ -20,6 +20,11 @@ quick-xml = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ureq = { version = "2.12.1", default-features = false, features = ["tls"] }
 
+[dev-dependencies]
+# Checks that the host blocks Office add-ins against the requirement sets WordCraft's Office.js
+# reports (a dev-dependency only: the standalone task-pane library depends on nothing here).
+wordcraft-office-js = { path = "../office-js" }
+
 # A reference plugin written in Rust; the tests drive it as a real child process.
 [[bin]]
 name = "wordcraft-example-plugin"

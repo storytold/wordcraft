@@ -151,7 +151,7 @@ pub fn answer(app: &mut WordApp, plugin: Option<&str>, text: &str) -> Json {
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     // Add-ins that were unloaded or turned off take their panes with them.
     let gone: Vec<usize> =
-        app.office.open.iter().enumerate().filter(|(_, p)| !wordcraft_plugin::get(&p.plugin).is_some_and(|q| q.enabled())).map(|(i, _)| i).collect();
+        app.office.open.iter().enumerate().filter(|(_, p)| !wordcraft_plugin::get(&p.plugin).is_some_and(|q| q.active())).map(|(i, _)| i).collect();
     for i in gone.into_iter().rev() {
         close(app, i);
     }

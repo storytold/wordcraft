@@ -5,6 +5,9 @@
 //! else the source of the default branch (or the named one). The folder holding `plugin.json` in
 //! the zip is unpacked into the plugins folder as `<plugin id>/`, replacing an earlier install, with
 //! `.craft-source.json` recording where it came from. Loading it is the caller's job.
+//!
+//! An add-in another one requires (manifest 1.3) is installed from the newest release whose tag
+//! is a version in the required range ([`fetch`] with a range; [`crate::requires::pick_release`]).
 
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
@@ -12,6 +15,7 @@ use std::sync::RwLock;
 
 use serde_json::{Value as Json, json};
 
+use crate::version::Range;
 use crate::{MANIFEST, Manifest};
 
 /// Written next to `plugin.json` in an installed plugin.
@@ -154,9 +158,9 @@ pub fn pick_asset(names: &[String], os: &str, arch: &str) -> Option<usize> {
     best.map(|(_, i)| i)
 }
 
-/// Unpacks the plugin in a zip into `root/<id>/` and returns that folder. The plugin is the
-/// shallowest folder holding `plugin.json` (a GitHub source zip wraps everything in one folder).
-pub fn unpack(zip_bytes: &[u8], root: &Path) -> Result<PathBuf, String> {
+/// Opens a plugin zip and reads its manifest: the shallowest `plugin.json` (a GitHub source zip
+/// wraps everything in one folder). Returns the zip, the manifest and the folder holding it.
+fn open_zip(zip_bytes: &[u8]) -> Result<(zip::ZipArchive<std::io::Cursor<&[u8]>>, Manifest, PathBuf), String> {
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(zip_bytes)).map_err(|e| format!("not a zip file: {e}"))?;
     if zip.len() > MAX_ENTRIES {
         return Err(format!("the zip holds more than {MAX_ENTRIES} files"));
@@ -179,7 +183,18 @@ pub fn unpack(zip_bytes: &[u8], root: &Path) -> Result<PathBuf, String> {
         .read_to_string(&mut text)
         .map_err(|e| format!("{MANIFEST}: {e}"))?;
     let manifest = Manifest::parse(&text)?;
+    Ok((zip, manifest, prefix))
+}
 
+/// The manifest of the plugin in a zip, without unpacking it.
+pub fn zip_manifest(zip_bytes: &[u8]) -> Result<Manifest, String> {
+    open_zip(zip_bytes).map(|(_, m, _)| m)
+}
+
+/// Unpacks the plugin in a zip into `root/<id>/` and returns that folder. The plugin is the
+/// shallowest folder holding `plugin.json` (a GitHub source zip wraps everything in one folder).
+pub fn unpack(zip_bytes: &[u8], root: &Path) -> Result<PathBuf, String> {
+    let (mut zip, manifest, prefix) = open_zip(zip_bytes)?;
     std::fs::create_dir_all(root).map_err(|e| format!("{}: {e}", root.display()))?;
     let staging = root.join(format!(".installing-{}-{}", manifest.id, std::process::id()));
     let _ = std::fs::remove_dir_all(&staging);
@@ -244,11 +259,39 @@ pub fn read_source(dir: &Path) -> Option<Json> {
     serde_json::from_str(&text).ok()
 }
 
+/// A plugin downloaded from GitHub, not unpacked yet: its manifest can be checked first (does
+/// the new version still suit the add-ins that need it?).
+#[derive(Clone, Debug)]
+pub struct Fetched {
+    pub manifest: Manifest,
+    /// The release's tag, when it came from a release.
+    pub release: Option<String>,
+    /// What `.craft-source.json` records.
+    pub source: Json,
+    bytes: Vec<u8>,
+}
+
+impl Fetched {
+    /// Unpacks it into `root/<id>/` (replacing an earlier install) and records where it came from.
+    pub fn unpack(&self, root: &Path) -> Result<PathBuf, String> {
+        let dir = unpack(&self.bytes, root)?;
+        let _ = std::fs::write(dir.join(SOURCE_FILE), serde_json::to_vec_pretty(&self.source).unwrap_or_default());
+        Ok(dir)
+    }
+}
+
 /// Downloads the plugin in a GitHub repository and unpacks it into `root` (see the module docs).
 /// Returns its folder; load it with [`crate::load`].
+pub fn from_github(url: &str, root: &Path) -> Result<PathBuf, String> {
+    fetch(url, None)?.unpack(root)
+}
+
+/// Downloads the plugin in a GitHub repository (see the module docs) without unpacking it. With
+/// `want` (a required add-in's range) and an address naming no release, the newest release
+/// whose tag is a version in range is taken; with `*` that's simply the latest.
 #[cfg(not(target_arch = "wasm32"))]
 #[allow(clippy::disallowed_methods)] // The clock is fine off wasm.
-pub fn from_github(url: &str, root: &Path) -> Result<PathBuf, String> {
+pub fn fetch(url: &str, want: Option<&Range>) -> Result<Fetched, String> {
     let repo = parse_github_url(url)?;
     let api = format!("https://api.github.com/repos/{}/{}", repo.owner, repo.name);
     let agent = ureq::AgentBuilder::new()
@@ -256,12 +299,20 @@ pub fn from_github(url: &str, root: &Path) -> Result<PathBuf, String> {
         .timeout_read(std::time::Duration::from_secs(60))
         .user_agent(&format!("WordCraft/{}", env!("CARGO_PKG_VERSION")))
         .build();
-    let release = match &repo.version {
-        Version::Latest => get_json(&agent, &format!("{api}/releases/latest"))?,
-        Version::Release(tag) => Some(
+    let release = match (&repo.version, want.filter(|r| !r.is_any())) {
+        (Version::Latest, Some(range)) => {
+            // One page of the newest 100 releases.
+            let list = get_json(&agent, &format!("{api}/releases?per_page=100"))?.unwrap_or(Json::Null);
+            let list = list.as_array().cloned().unwrap_or_default();
+            let (i, _) = crate::requires::pick_release(&list, range)
+                .ok_or_else(|| format!("{}/{} has no release whose tag is a version in {range}", repo.owner, repo.name))?;
+            list.get(i).cloned()
+        }
+        (Version::Latest, None) => get_json(&agent, &format!("{api}/releases/latest"))?,
+        (Version::Release(tag), _) => Some(
             get_json(&agent, &format!("{api}/releases/tags/{tag}"))?.ok_or_else(|| format!("{}/{} has no release {tag}", repo.owner, repo.name))?,
         ),
-        Version::Tree(_) => None,
+        (Version::Tree(_), _) => None,
     };
     let (download, asset) = match &release {
         Some(r) => {
@@ -279,24 +330,32 @@ pub fn from_github(url: &str, root: &Path) -> Result<PathBuf, String> {
             _ => (format!("{api}/zipball"), None),
         },
     };
-    log::info!("installing plugin from {download}");
+    log::info!("downloading plugin from {download}");
     let bytes = get_bytes(&agent, &download)?;
-    let dir = unpack(&bytes, root)?;
+    let manifest = zip_manifest(&bytes)?;
+    let tag = release.as_ref().and_then(|r| r.get("tag_name")).and_then(Json::as_str).map(str::to_string);
     let source = json!({
         "url": url.trim(),
         "repository": format!("https://github.com/{}/{}", repo.owner, repo.name),
-        "release": release.as_ref().and_then(|r| r.get("tag_name")).cloned().unwrap_or(Json::Null),
+        "release": tag,
         "asset": asset,
         "download": download,
+        "version": manifest.version,
         "installed": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
     });
-    let _ = std::fs::write(dir.join(SOURCE_FILE), serde_json::to_vec_pretty(&source).unwrap_or_default());
-    Ok(dir)
+    Ok(Fetched { manifest, release: tag, source, bytes })
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn from_github(_url: &str, _root: &Path) -> Result<PathBuf, String> {
+pub fn fetch(_url: &str, _want: Option<&Range>) -> Result<Fetched, String> {
     Err("plugins need the desktop app or the CLI".into())
+}
+
+/// A [`Fetched`] made from zip bytes at hand (tests, and installs from a file).
+pub fn fetched_from_zip(bytes: Vec<u8>, source: Json) -> Result<Fetched, String> {
+    let manifest = zip_manifest(&bytes)?;
+    let release = source.get("release").and_then(Json::as_str).map(str::to_string);
+    Ok(Fetched { manifest, release, source, bytes })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
