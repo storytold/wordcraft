@@ -1,6 +1,8 @@
 //! Command implementations, one module per area. Each module exposes `specs()`.
 
 pub mod accessibility;
+pub mod bangla;
+pub mod bangla_vocab;
 pub mod canvas;
 pub mod caret;
 pub mod chart;
@@ -95,6 +97,7 @@ pub fn registry() -> Registry {
     v.extend(canvas::specs());
     v.extend(wordart::specs());
     v.extend(connectors::specs());
+    v.extend(bangla::specs());
     v.extend(tools::specs());
     v.extend(templates::specs());
     v.extend(protect::specs());

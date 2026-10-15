@@ -24,7 +24,9 @@ pub use kurbo::BezPath;
 pub use script::{fallback_rank, needs_layout_tables, script_fallbacks};
 use skrifa::MetadataProvider;
 use skrifa::instance::Size;
-pub use ui_fallback::{SystemUiFont, is_cjk, system_cjk_ui_font, system_cjk_ui_font_for, ui_needs_system_cjk, ui_uncovered_cjk};
+pub use ui_fallback::{
+    SystemUiFont, is_cjk, system_bengali_ui_font, system_cjk_ui_font, system_cjk_ui_font_for, ui_needs_system_cjk, ui_uncovered_cjk,
+};
 
 /// A font from the optional craft-fonts build input (https://github.com/storytold/craft-fonts;
 /// empty unless built with `CRAFT_FONTS_DIR`, see `build.rs`).
@@ -63,6 +65,12 @@ pub fn japanese_ui_fonts(bold: bool) -> Vec<&'static CraftFont> {
 /// craft-fonts.
 pub fn chinese_fonts() -> impl Iterator<Item = &'static CraftFont> {
     CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Hans"))
+}
+
+/// The craft-fonts faces for Bengali (`"Beng"`), in manifest order. Empty without
+/// craft-fonts.
+pub fn bengali_fonts() -> impl Iterator<Item = &'static CraftFont> {
+    CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Beng"))
 }
 
 /// The craft-fonts faces for Korean (`"Kore"`), in manifest order. Empty without craft-fonts.

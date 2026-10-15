@@ -2641,3 +2641,11 @@ preview	Title	Esempio
 # Reading Mode column widths (#1040)
 	Narrow	Stretta
 	Medium	Media
+	Bangla	Bengali
+	Bangla Converter	Convertitore bengali
+	Bangla Input Mode	Modalità di immissione bengali
+	Bangla Phonetic Candidates	Suggerimenti fonetici bengali
+	Convert Bangla (Unicode / ANSI)	Converti bengali (Unicode / ANSI)
+	Transliterate Bangla	Traslittera bengali
+	Compatibility	Compatibilità
+	Automatically convert legacy Bijoy / ANSI documents to Unicode on open	Converti automaticamente i documenti legacy Bijoy / ANSI in Unicode all'apertura

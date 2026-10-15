@@ -2599,3 +2599,11 @@ preview	Title	Título
 # Reading Mode column widths (#1040)
 	Narrow	Estrecha
 	Medium	Media
+	Bangla	Bengalí
+	Bangla Converter	Convertidor de bengalí
+	Bangla Input Mode	Modo de entrada bengalí
+	Bangla Phonetic Candidates	Sugerencias fonéticas en bengalí
+	Convert Bangla (Unicode / ANSI)	Convertir bengalí (Unicode / ANSI)
+	Transliterate Bangla	Transliterar bengalí
+	Compatibility	Compatibilidad
+	Automatically convert legacy Bijoy / ANSI documents to Unicode on open	Convertir automáticamente documentos heredados de Bijoy / ANSI a Unicode al abrir

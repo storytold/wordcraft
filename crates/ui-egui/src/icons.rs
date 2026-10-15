@@ -277,6 +277,15 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.text(8.0, 7.0, 9.0, "abc", c, true);
             pen.line_c(&[(5.0, 13.0), (8.5, 16.5), (16.0, 9.0)], green);
         }
+        "bangla" | "bengali" => {
+            pen.rect(2.0, 3.0, 18.0, 17.0, c);
+            pen.text(10.0, 10.0, 11.0, "অ", a, true);
+        }
+        "banglaConverter" => {
+            pen.text(6.0, 8.0, 8.0, "অ", a, true);
+            pen.text(14.0, 12.0, 8.0, "A", c, true);
+            pen.line_c(&[(6.0, 14.0), (14.0, 6.0)], a);
+        }
         "styles" => {
             pen.text(10.0, 10.0, 14.0, "A", a, false);
             pen.line(&[(13.0, 15.0), (17.0, 11.0)]);

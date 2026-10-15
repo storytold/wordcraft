@@ -153,6 +153,40 @@ pub fn system_cjk_ui_font_for(hans: bool, korean: bool, needed: &[char]) -> Opti
     find_ui_font(&with_asset_data(crate::system_font_dirs()), &candidates(hans, korean), needed, hans)
 }
 
+/// The installed Bengali Unicode font for the interface, if one is found. Prevents Bengali text in
+/// UI text boxes, dialogs, candidate popups and navigation panes from drawing as missing-glyph
+/// boxes (`□`). Reads at most one font file per candidate; never panics on damaged files.
+pub fn system_bengali_ui_font() -> Option<SystemUiFont> {
+    let names: &[&str] = if cfg!(windows) {
+        &[
+            "Nirmala.ttf",
+            "Nirmala.ttc",
+            "NirmalaB.ttf",
+            "Kalpurush.ttf",
+            "kalpurush.ttf",
+            "vrinda.ttf",
+            "Shonar.ttf",
+            "SolaimanLipi.ttf",
+            "Nikosh.ttf",
+            "Siyamrupali.ttf",
+        ]
+    } else if cfg!(target_os = "macos") {
+        &["KohinoorBangla.ttc", "Bangla MN.ttc", "Bangla Sangam MN.ttc"]
+    } else {
+        &[
+            "noto/NotoSansBengali-Regular.ttf",
+            "truetype/noto/NotoSansBengali-Regular.ttf",
+            "google-noto-vf/NotoSansBengali[wdth,wght].ttf",
+            "noto/NotoSerifBengali-Regular.ttf",
+            "truetype/noto/NotoSerifBengali-Regular.ttf",
+            "lohit-bengali/Lohit-Bengali.ttf",
+            "truetype/lohit-bengali/Lohit-Bengali.ttf",
+            "truetype/freefont/FreeSans.ttf",
+        ]
+    };
+    find_ui_font(&crate::system_font_dirs(), names, &['ক'], false)
+}
+
 /// `dirs` and, for each macOS font asset folder among them (`com_apple_MobileAsset_Font<N>`),
 /// the `AssetData` folder of every `<hash>.asset` in it: macOS ships PingFang there, e.g.
 /// `/System/Library/AssetsV2/com_apple_MobileAsset_Font7/<hash>.asset/AssetData/PingFang.ttc`

@@ -2245,3 +2245,11 @@
 # Reading Mode column widths (#1040)
 	Narrow	Estreita
 	Medium	Média
+	Bangla	Bengali
+	Bangla Converter	Conversor de bengali
+	Bangla Input Mode	Modo de entrada de bengali
+	Bangla Phonetic Candidates	Sugestões fonéticas em bengali
+	Convert Bangla (Unicode / ANSI)	Converter bengali (Unicode / ANSI)
+	Transliterate Bangla	Transliterar bengali
+	Compatibility	Compatibilidade
+	Automatically convert legacy Bijoy / ANSI documents to Unicode on open	Converter automaticamente documentos herdados do Bijoy / ANSI para Unicode ao abrir

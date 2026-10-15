@@ -2647,3 +2647,11 @@ preview	Title	Titel
 	Bottom Right Cell	Nedre högra cellen
 	Inside Horizontal Border	Inre vågrät kantlinje
 	Inside Vertical Border	Inre lodrät kantlinje
+	Bangla	Bengali
+	Bangla Converter	Bengali-konverterare
+	Bangla Input Mode	Bengali-inmatningsläge
+	Bangla Phonetic Candidates	Fonetiska förslag för bengali
+	Convert Bangla (Unicode / ANSI)	Konvertera bengali (Unicode / ANSI)
+	Transliterate Bangla	Translitterera bengali
+	Compatibility	Kompatibilitet
+	Automatically convert legacy Bijoy / ANSI documents to Unicode on open	Konvertera automatiskt äldre Bijoy / ANSI-dokument till Unicode vid öppning

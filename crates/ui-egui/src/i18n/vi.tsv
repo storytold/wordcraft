@@ -2672,3 +2672,12 @@ template	Letter	Thư
 # Reading Mode column widths (#1040)
 	Narrow	Hẹp
 	Medium	Trung bình
+	Bangla	Tiếng Bengal
+	Bangla Converter	Bộ chuyển đổi tiếng Bengal
+	Bangla Input Mode	Chế độ nhập tiếng Bengal
+	Bangla Phonetic Candidates	Gợi ý phiên âm tiếng Bengal
+	Convert Bangla (Unicode / ANSI)	Chuyển đổi tiếng Bengal (Unicode / ANSI)
+	Transliterate Bangla	Chuyển tự tiếng Bengal
+
+	Compatibility	Tính tương thích
+	Automatically convert legacy Bijoy / ANSI documents to Unicode on open	Tự động chuyển đổi tài liệu Bijoy / ANSI cũ sang Unicode khi mở

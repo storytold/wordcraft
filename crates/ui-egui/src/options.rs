@@ -523,6 +523,9 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
         let _ = app.run("ui.caretAnimation", json!({"value": caret}));
     }
     ui.add_space(8.0);
+    section(ui, "Compatibility");
+    flag(app, ui, "Automatically convert legacy Bijoy / ANSI documents to Unicode on open", "convertBijoyOnOpen", pr.convert_bijoy_on_open);
+    ui.add_space(8.0);
     section(ui, "Customize");
     ui.horizontal(|ui| {
         ui.label(tl!("Keyboard shortcuts:"));

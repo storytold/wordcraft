@@ -213,12 +213,14 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
         if bytes.is_empty() {
             (normal_document(s), false)
         } else {
-            crate::io::open_bytes_in(path, &bytes, password, &s.region()).map_err(CmdError::Failed)?
+            let settings = crate::io::DocOpenSettings { convert_bijoy: s.prefs.convert_bijoy_on_open };
+            crate::io::open_bytes_opts(path, &bytes, password, &s.region(), &settings).map_err(CmdError::Failed)?
         }
     } else if crate::io::is_empty_file(std::path::Path::new(path)) {
         (normal_document(s), false)
     } else {
-        crate::io::open_path_in(std::path::Path::new(path), password, &s.region()).map_err(CmdError::Failed)?
+        let settings = crate::io::DocOpenSettings { convert_bijoy: s.prefs.convert_bijoy_on_open };
+        crate::io::open_path_opts(std::path::Path::new(path), password, &s.region(), &settings).map_err(CmdError::Failed)?
     };
     // Plain text and Markdown carry no language: they are in the editing language.
     let ext = std::path::Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();

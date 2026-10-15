@@ -6322,6 +6322,19 @@ fn new_documents_follow_the_region() {
     assert_eq!(t.prefs.region.as_deref(), Some("en-US"), "junk is saved as en-US");
 }
 
+#[test]
+fn options_can_toggle_convert_bijoy_on_open() {
+    let mut session = s();
+    assert!(session.prefs.convert_bijoy_on_open, "default is true");
+    let o = run(&mut session, "file.options", json!({"convertBijoyOnOpen": false}));
+    assert_eq!(o["convertBijoyOnOpen"], false);
+    assert!(!session.prefs.convert_bijoy_on_open);
+
+    let o2 = run(&mut session, "file.options", json!({"convertBijoyOnOpen": true}));
+    assert_eq!(o2["convertBijoyOnOpen"], true);
+    assert!(session.prefs.convert_bijoy_on_open);
+}
+
 /// Automatic (HTML-style) paragraph spacing: `para.spacing` turns it on and off, and a number
 /// replaces it, as typing one in Word's Paragraph dialog does; Ctrl+0 and Remove Space After work
 /// on it too.

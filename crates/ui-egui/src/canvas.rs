@@ -820,7 +820,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     // Keys first, so this frame lays out and paints what was typed (handled after painting, a
     // keystroke showed one frame later). Focus is the canvas's from the last frame.
     // While "Save changes?" is up, keys answer it rather than edit the document behind it.
-    if app.canvas.focused && !matches!(app.dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })) {
+    if (app.canvas.focused || app.canvas.want_focus) && !matches!(app.dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })) {
         crate::keys::canvas_events(app, ui.ctx());
     } else {
         // Alt+numpad entry doesn't survive the canvas losing the keyboard.
@@ -1407,6 +1407,33 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 let caret_color = caret_color(app);
                 let g = painter.text(pos2(x, y1), egui::Align2::LEFT_BOTTOM, &app.canvas.ime_preedit, regular(c.height * scale * 0.8), caret_color);
                 painter.line_segment([pos2(g.min.x, g.max.y), pos2(g.max.x, g.max.y)], Stroke::new(1.0, caret_color));
+            }
+            // Floating Bangla Phonetic candidate bar (Avro-style)
+            if app.session.bangla_mode == wordcraft_engine::cmd::bangla::BanglaMode::Phonetic
+                && !app.ui.phonetic_buffer.is_empty()
+                && !app.ui.phonetic_candidates.is_empty()
+            {
+                let pop_y = y1 + 6.0;
+                let mut label = format!("বাং [{}] ", app.ui.phonetic_buffer);
+                for (i, cand) in app.ui.phonetic_candidates.iter().enumerate() {
+                    label.push_str(&format!(" {}.{} ", i + 1, cand));
+                }
+                let font_size = 11.5;
+                let galley = painter.layout(label, semibold(font_size), t.text, 600.0);
+                let pad_x = 8.0;
+                let pad_y = 4.0;
+                let box_w = galley.size().x + pad_x * 2.0;
+                let box_h = galley.size().y + pad_y * 2.0;
+                let cand_rect = Rect::from_min_size(pos2(x - 4.0, pop_y), vec2(box_w, box_h));
+
+                painter.rect_filled(cand_rect.translate(vec2(0.0, 1.5)), 4.0, t.page_shadow);
+                painter.rect_filled(
+                    cand_rect,
+                    4.0,
+                    if app.ui_is_dark() { egui::Color32::from_rgb(0x28, 0x2A, 0x36) } else { egui::Color32::from_rgb(0xF8, 0xFA, 0xFC) },
+                );
+                painter.rect_stroke(cand_rect, 4.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
+                painter.galley(pos2(cand_rect.min.x + pad_x, cand_rect.min.y + pad_y), galley, t.text);
             }
         }
         crate::objects::paint(app, &painter, &t, &layout, &rects, geo.scale);
@@ -2202,6 +2229,10 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
     }
     let pressed = ui.input(|i| i.pointer.primary_pressed()) && resp.contains_pointer() && !over_balloon(app, p);
     if pressed {
+        app.ui.phonetic_buffer.clear();
+        app.ui.phonetic_rendered_len = 0;
+        app.ui.phonetic_candidates.clear();
+        app.ui.phonetic_expected_caret = None;
         let now = ui.input(|i| i.time);
         let (delay, dist) = ui.ctx().options(|o| (o.input_options.max_double_click_delay, o.input_options.max_click_dist));
         let clicks = press_count(app.canvas.last_press, now, p, delay, dist);

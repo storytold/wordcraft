@@ -2243,3 +2243,11 @@
 # Reading Mode column widths (#1040)
 	Narrow	Uska
 	Medium	Srednja
+	Bangla	Bengalski
+	Bangla Converter	Konvertor za bengalski
+	Bangla Input Mode	Režim unosa za bengalski
+	Bangla Phonetic Candidates	Fonetski predlozi za bengalski
+	Convert Bangla (Unicode / ANSI)	Pretvori bengalski (Unicode / ANSI)
+	Transliterate Bangla	Transliteruj bengalski
+	Compatibility	Kompatibilnost
+	Automatically convert legacy Bijoy / ANSI documents to Unicode on open	Automatski konvertuj starije Bijoy / ANSI dokumente u Unicode pri otvaranju

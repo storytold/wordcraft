@@ -318,7 +318,503 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                 if t.chars().all(|c| !c.is_control()) && !t.is_empty() {
                     // Typing with a text box selected types into it.
                     crate::objects::enter_text_box(app);
-                    let _ = app.run("text.insert", json!({"text": t}));
+                    match app.session.bangla_mode {
+                        wordcraft_engine::cmd::bangla::BanglaMode::Off => {
+                            let _ = app.run("text.insert", json!({"text": t}));
+                        }
+                        wordcraft_engine::cmd::bangla::BanglaMode::Jatiya => {
+                            for c in t.chars() {
+                                // 1. Linker key 'g':
+                                if c == 'g' {
+                                    if app.ui.jatiya_linker {
+                                        let _ = app.run("text.insert", json!({"text": "্"}));
+                                        app.ui.jatiya_linker = false;
+                                    } else {
+                                        app.ui.jatiya_linker = true;
+                                        let f = app.session.sel.focus.clone();
+                                        let before_caret = app.session.doc.para_at(&f).and_then(|p| p.text.get(..f.off)).unwrap_or("");
+                                        let prev_char = before_caret.chars().next_back();
+                                        if let Some(kar @ ('ি' | 'ে' | 'ৈ')) = prev_char {
+                                            let kar_len = kar.len_utf8();
+                                            if f.off >= kar_len {
+                                                let start_off = f.off - kar_len;
+                                                let a = wordcraft_doc::Pos { off: start_off, ..f.clone() };
+                                                if let Ok(pos) = app.session.doc.delete_range(&a, &f) {
+                                                    app.session.sel = wordcraft_engine::Selection::caret(pos);
+                                                }
+                                                let _ = app.run("text.insert", json!({"text": "্"}));
+                                                app.ui.jatiya_pre_kar = Some(match kar {
+                                                    'ি' => "ি",
+                                                    'ে' => "ে",
+                                                    'ৈ' => "ৈ",
+                                                    _ => "",
+                                                });
+                                            } else {
+                                                let _ = app.run("text.insert", json!({"text": "্"}));
+                                            }
+                                        } else {
+                                            let _ = app.run("text.insert", json!({"text": "্"}));
+                                        }
+                                    }
+                                    continue;
+                                }
+
+                                // 2. If linker 'g' was active:
+                                if app.ui.jatiya_linker {
+                                    app.ui.jatiya_linker = false;
+                                    // Check for independent vowel: 'g' + 'f' -> 'আ', 'g' + 'd' -> 'ই', etc.
+                                    if let Some(vowel) = wordcraft_engine::cmd::bangla::jatiya_linker_vowel(c) {
+                                        let f = app.session.sel.focus.clone();
+                                        let before = app.session.doc.para_at(&f).and_then(|p| p.text.get(..f.off)).unwrap_or("");
+                                        if before.ends_with('্') && f.off >= '্'.len_utf8() {
+                                            let start_off = f.off - '্'.len_utf8();
+                                            let a = wordcraft_doc::Pos { off: start_off, ..f.clone() };
+                                            if let Ok(pos) = app.session.doc.delete_range(&a, &f) {
+                                                app.session.sel = wordcraft_engine::Selection::caret(pos);
+                                            }
+                                        }
+                                        // If a pre-kar was stashed when 'g' was pressed (e.g. 'কে' -> 'ক্'),
+                                        // restore it back onto that preceding consonant so it isn't lost or leaked:
+                                        if let Some(stashed_kar) = app.ui.jatiya_pre_kar.take() {
+                                            let _ = app.run("text.insert", json!({"text": stashed_kar}));
+                                        }
+                                        let _ = app.run("text.insert", json!({"text": vowel}));
+                                        continue;
+                                    }
+                                    if c == '|' {
+                                        let f = app.session.sel.focus.clone();
+                                        let before = app.session.doc.para_at(&f).and_then(|p| p.text.get(..f.off)).unwrap_or("");
+                                        if before.ends_with('্') && f.off >= '্'.len_utf8() {
+                                            let start_off = f.off - '্'.len_utf8();
+                                            let a = wordcraft_doc::Pos { off: start_off, ..f.clone() };
+                                            if let Ok(pos) = app.session.doc.delete_range(&a, &f) {
+                                                app.session.sel = wordcraft_engine::Selection::caret(pos);
+                                            }
+                                        }
+                                        if let Some(stashed_kar) = app.ui.jatiya_pre_kar.take() {
+                                            let _ = app.run("text.insert", json!({"text": stashed_kar}));
+                                        }
+                                        let _ = app.run("text.insert", json!({"text": "ঃ"}));
+                                        continue;
+                                    }
+                                    if c == '.' || c == 'G' {
+                                        let f = app.session.sel.focus.clone();
+                                        let before = app.session.doc.para_at(&f).and_then(|p| p.text.get(..f.off)).unwrap_or("");
+                                        if before.ends_with('্') && f.off >= '্'.len_utf8() {
+                                            let start_off = f.off - '্'.len_utf8();
+                                            let a = wordcraft_doc::Pos { off: start_off, ..f.clone() };
+                                            if let Ok(pos) = app.session.doc.delete_range(&a, &f) {
+                                                app.session.sel = wordcraft_engine::Selection::caret(pos);
+                                            }
+                                        }
+                                        if let Some(stashed_kar) = app.ui.jatiya_pre_kar.take() {
+                                            let _ = app.run("text.insert", json!({"text": stashed_kar}));
+                                        }
+                                        let _ = app.run("text.insert", json!({"text": "।"}));
+                                        continue;
+                                    }
+                                    // Otherwise, it was a consonant in a conjunct!
+                                    // Virama is already in document, proceed down to insert consonant.
+                                }
+
+                                // 3. Reph key 'A' (Shift+a):
+                                if c == 'A' {
+                                    app.ui.jatiya_reph = true;
+                                    continue;
+                                }
+
+                                // 4. Pre-kar keys 'd' (ি), 'c' (ে), 'C' (ৈ):
+                                // In Jatiya/Bijoy keyboard, pre-kars are ALWAYS typed BEFORE the consonant (আগে কার, পরে বর্ণ).
+                                // They are held in jatiya_pre_kar and emitted immediately after the upcoming consonant/cluster.
+                                if c == 'd' || c == 'c' || c == 'C' {
+                                    let kar = match c {
+                                        'd' => "ি",
+                                        'c' => "ে",
+                                        'C' => "ৈ",
+                                        _ => "",
+                                    };
+                                    app.ui.jatiya_pre_kar = Some(kar);
+                                    continue;
+                                }
+
+                                // 5. O-kar / Ou-kar composition:
+                                // In Bijoy, 'c' (ে) + consonant + 'f' (া) = 'ো' (O-kar)
+                                // In Bijoy, 'c' (ে) + consonant + 'X' (ৌ) = 'ৌ' (Ou-kar)
+                                if c == 'f' || c == 'X' {
+                                    let f = app.session.sel.focus.clone();
+                                    let before_caret = app.session.doc.para_at(&f).and_then(|p| p.text.get(..f.off)).unwrap_or("");
+                                    if before_caret.ends_with('ে') && f.off >= 'ে'.len_utf8() {
+                                        let start_off = f.off - 'ে'.len_utf8();
+                                        let a = wordcraft_doc::Pos { off: start_off, ..f.clone() };
+                                        if let Ok(pos) = app.session.doc.delete_range(&a, &f) {
+                                            app.session.sel = wordcraft_engine::Selection::caret(pos);
+                                        }
+                                        let kar = if c == 'f' { "ো" } else { "ৌ" };
+                                        let _ = app.run("text.insert", json!({"text": kar}));
+                                        continue;
+                                    }
+                                }
+
+                                // 6. Stop mark / Dari: '.' or 'G' (Shift+g)
+                                if c == 'G' {
+                                    if let Some(kar) = app.ui.jatiya_pre_kar.take() {
+                                        let _ = app.run("text.insert", json!({"text": kar}));
+                                    }
+                                    let _ = app.run("text.insert", json!({"text": "।"}));
+                                    continue;
+                                }
+                                if c == '.' {
+                                    if let Some(kar) = app.ui.jatiya_pre_kar.take() {
+                                        let _ = app.run("text.insert", json!({"text": kar}));
+                                    }
+                                    let before_caret = app
+                                        .session
+                                        .doc
+                                        .para_at(&app.session.sel.focus)
+                                        .and_then(|p| p.text.get(..app.session.sel.focus.off))
+                                        .unwrap_or("");
+                                    let prev_char = before_caret.chars().next_back();
+                                    if let Some(ch) = prev_char
+                                        && (ch.is_ascii_digit() || ('\u{09E6}'..='\u{09EF}').contains(&ch))
+                                    {
+                                        let _ = app.run("text.insert", json!({"text": "."}));
+                                    } else {
+                                        let _ = app.run("text.insert", json!({"text": "।"}));
+                                    }
+                                    continue;
+                                }
+
+                                // 7. Bisarga: '|' (Shift of \ / ৎ)
+                                if c == '|' {
+                                    if let Some(kar) = app.ui.jatiya_pre_kar.take() {
+                                        let _ = app.run("text.insert", json!({"text": kar}));
+                                    }
+                                    let _ = app.run("text.insert", json!({"text": "ঃ"}));
+                                    continue;
+                                }
+
+                                // 7.5. Ra-fala ('z' = "্র") and Ya-fala ('Z' = "্য"):
+                                // In Unicode Bengali, consonant phalas (্র / ্য) are part of the consonant cluster
+                                // and MUST precede any vowel sign (ি, ে, ৈ, া, ী, ু, ূ, ৃ, ো, ৌ) on that syllable.
+                                // When a pre-kar (ি/ে/ৈ) was typed before the consonant or conjunct (e.g. w+f+d+b+g+k+z+j
+                                // for "যান্ত্রিক", d+r+z+W for "প্রিয়", or c+r+z+m for "প্রেম"), the pre-kar is currently at
+                                // the end of `before_caret` ("যান্তি", "পি", "পে"). Move that vowel sign AFTER the fala
+                                // so the syllable becomes "যান্ত্রি", "প্রি", "প্রে".
+                                if c == 'z' || c == 'Z' {
+                                    let fala = if c == 'z' { "্র" } else { "্য" };
+                                    let f = app.session.sel.focus.clone();
+                                    let before_caret = app.session.doc.para_at(&f).and_then(|p| p.text.get(..f.off)).unwrap_or("");
+                                    let prev_char = before_caret.chars().next_back();
+                                    let mut moved_kar: Option<char> = None;
+
+                                    if let Some(kar @ ('ি' | 'ে' | 'ৈ' | 'া' | 'ী' | 'ু' | 'ূ' | 'ৃ' | 'ো' | 'ৌ')) = prev_char {
+                                        let kar_len = kar.len_utf8();
+                                        if f.off >= kar_len {
+                                            let start_off = f.off - kar_len;
+                                            let a = wordcraft_doc::Pos { off: start_off, ..f.clone() };
+                                            if let Ok(pos) = app.session.doc.delete_range(&a, &f) {
+                                                app.session.sel = wordcraft_engine::Selection::caret(pos);
+                                                moved_kar = Some(kar);
+                                            }
+                                        }
+                                    }
+
+                                    // Also strip any redundant trailing '্' (e.g. if the user pressed 'g' right before 'z'/'Z'):
+                                    let f2 = app.session.sel.focus.clone();
+                                    let before2 = app.session.doc.para_at(&f2).and_then(|p| p.text.get(..f2.off)).unwrap_or("");
+                                    if before2.ends_with('্') && f2.off >= '্'.len_utf8() {
+                                        let start_off = f2.off - '্'.len_utf8();
+                                        let a = wordcraft_doc::Pos { off: start_off, ..f2.clone() };
+                                        if let Ok(pos) = app.session.doc.delete_range(&a, &f2) {
+                                            app.session.sel = wordcraft_engine::Selection::caret(pos);
+                                        }
+                                    }
+
+                                    let mut out = String::new();
+                                    if app.ui.jatiya_reph {
+                                        out.push_str("র্");
+                                        app.ui.jatiya_reph = false;
+                                    }
+                                    out.push_str(fala);
+                                    if let Some(kar) = moved_kar {
+                                        out.push(kar);
+                                    }
+                                    if let Some(stashed_kar) = app.ui.jatiya_pre_kar.take() {
+                                        out.push_str(stashed_kar);
+                                    }
+                                    let _ = app.run("text.insert", json!({"text": out}));
+                                    continue;
+                                }
+
+                                // 8. Normal character lookup:
+                                if let Some(s) = wordcraft_engine::cmd::bangla::jatiya_key(c) {
+                                    let mut out = String::new();
+                                    if app.ui.jatiya_reph {
+                                        out.push_str("র্");
+                                        app.ui.jatiya_reph = false;
+                                    }
+                                    out.push_str(s);
+                                    if let Some(kar) = app.ui.jatiya_pre_kar.take() {
+                                        out.push_str(kar);
+                                    }
+                                    let _ = app.run("text.insert", json!({"text": out}));
+                                } else {
+                                    if let Some(kar) = app.ui.jatiya_pre_kar.take() {
+                                        let _ = app.run("text.insert", json!({"text": kar}));
+                                    }
+                                    if app.ui.jatiya_reph {
+                                        let _ = app.run("text.insert", json!({"text": "র্"}));
+                                        app.ui.jatiya_reph = false;
+                                    }
+                                    let _ = app.run("text.insert", json!({"text": c.to_string()}));
+                                }
+                            }
+                        }
+                        wordcraft_engine::cmd::bangla::BanglaMode::Ansi => {
+                            for c in t.chars() {
+                                // 1. Linker key 'g':
+                                if c == 'g' {
+                                    if app.ui.ansi_linker {
+                                        let _ = app.run("text.insert", json!({"text": "&"}));
+                                        app.ui.ansi_linker = false;
+                                        app.ui.ansi_prev_bn = None;
+                                    } else {
+                                        app.ui.ansi_linker = true;
+                                    }
+                                    continue;
+                                }
+
+                                // 2. If ansi_linker is active:
+                                if app.ui.ansi_linker {
+                                    app.ui.ansi_linker = false;
+                                    // Independent vowel: 'g' + 'f' -> "Av", etc.
+                                    if let Some(vowel) = wordcraft_engine::cmd::bangla::bijoy_linker_vowel(c) {
+                                        let _ = app.run("text.insert", json!({"text": vowel}));
+                                        app.ui.ansi_prev_bn = None;
+                                        app.ui.ansi_prev_ansi_len = vowel.chars().count();
+                                        continue;
+                                    }
+
+                                    // Conjunct ligature:
+                                    if let Some(c1) = app.ui.ansi_prev_bn.take()
+                                        && let Some(c2_str) = wordcraft_engine::cmd::bangla::jatiya_key(c)
+                                        && let Some(c2) = c2_str.chars().next()
+                                    {
+                                        if let Some(conj) = wordcraft_engine::cmd::bangla::find_bijoy_conjunct(c1, c2) {
+                                            for _ in 0..app.ui.ansi_prev_ansi_len {
+                                                let _ = app.run("text.backspace", json!({}));
+                                            }
+                                            let mut out_conj = conj.to_string();
+                                            if app.ui.ansi_reph {
+                                                out_conj.push('©');
+                                                app.ui.ansi_reph = false;
+                                            }
+                                            let _ = app.run("text.insert", json!({"text": out_conj}));
+                                            app.ui.ansi_prev_bn = None;
+                                            app.ui.ansi_prev_ansi_len = out_conj.chars().count();
+                                            continue;
+                                        } else {
+                                            // Fallback for unligated conjunct: insert explicit hasanta '&'
+                                            let _ = app.run("text.insert", json!({"text": "&"}));
+                                        }
+                                    } else if !c.is_ascii_alphabetic() {
+                                        // Punctuation or space pressed right after linker 'g': insert '&' first!
+                                        let _ = app.run("text.insert", json!({"text": "&"}));
+                                    }
+                                }
+
+                                // 3. Reph key 'A' (Shift+a):
+                                if c == 'A' {
+                                    let before_caret = app
+                                        .session
+                                        .doc
+                                        .para_at(&app.session.sel.focus)
+                                        .and_then(|p| p.text.get(..app.session.sel.focus.off))
+                                        .unwrap_or("");
+                                    let prev_ch = before_caret.chars().next_back();
+                                    let is_pre_kar = prev_ch.is_some_and(|ch| ch == 'w' || ch == '†' || ch == '‡' || ch == '‰');
+                                    if !is_pre_kar && prev_ch.is_some_and(|ch| !ch.is_whitespace() && ch != '\n' && ch != '.' && ch != ':') {
+                                        // Preceding character in word is consonant or post-diacritic: insert Reph '©' immediately!
+                                        let _ = app.run("text.insert", json!({"text": "©"}));
+                                        app.ui.ansi_prev_bn = None;
+                                        app.ui.ansi_prev_ansi_len = 1;
+                                    } else {
+                                        // Arm Reph for next consonant (start of word or after pre-kar):
+                                        app.ui.ansi_reph = true;
+                                    }
+                                    continue;
+                                }
+
+                                // 3.5. Dari: 'G' (Shift+g)
+                                if c == 'G' {
+                                    let _ = app.run("text.insert", json!({"text": "।"}));
+                                    app.ui.ansi_prev_bn = None;
+                                    app.ui.ansi_prev_ansi_len = 1;
+                                    continue;
+                                }
+
+                                // 3.6. Ra-fala key 'z':
+                                if c == 'z' {
+                                    let f = app.session.sel.focus.clone();
+                                    let before_caret = app.session.doc.para_at(&f).and_then(|p| p.text.get(..f.off)).unwrap_or("");
+                                    let conj_rafala = if before_caret.ends_with("šÍ") {
+                                        Some(("šÍ", "š¿")) // ন্ত + ্র -> ন্ত্র
+                                    } else if before_caret.ends_with("¯Í") {
+                                        Some(("¯Í", "¯¿")) // স্ত + ্র -> স্ত্র
+                                    } else if before_caret.ends_with("¯‹") {
+                                        Some(("¯‹", "¯Œ")) // স্ক + ্র -> স্ক্র
+                                    } else {
+                                        None
+                                    };
+                                    if let Some((old_conj, new_conj)) = conj_rafala {
+                                        for _ in 0..old_conj.chars().count() {
+                                            let _ = app.run("text.backspace", json!({}));
+                                        }
+                                        let mut out_lig = new_conj.to_string();
+                                        if app.ui.ansi_reph {
+                                            out_lig.push('©');
+                                            app.ui.ansi_reph = false;
+                                        }
+                                        let _ = app.run("text.insert", json!({"text": out_lig}));
+                                        app.ui.ansi_prev_bn = None;
+                                        app.ui.ansi_prev_ansi_len = out_lig.chars().count();
+                                        continue;
+                                    }
+                                    if let Some(prev) = app.ui.ansi_prev_bn.take() {
+                                        let rafala_lig = match prev {
+                                            'ত' => Some("Î"),  // ত্র
+                                            'ক' => Some("µ"),  // ক্র
+                                            'ভ' => Some("å"),  // ভ্র
+                                            'প' => Some("cÖ"), // প্র
+                                            'গ' => Some("MÖ"), // গ্র
+                                            'ব' => Some("eª"), // ব্র
+                                            'শ' => Some("kÖ"), // শ্র
+                                            'স' => Some("mÖ"), // স্র
+                                            'ধ' => Some("aÖ"), // ধ্র
+                                            'ম' => Some("gÖ"), // ম্র
+                                            'হ' => Some("nÖ"), // হ্র
+                                            _ => None,
+                                        };
+                                        if let Some(lig) = rafala_lig {
+                                            for _ in 0..app.ui.ansi_prev_ansi_len {
+                                                let _ = app.run("text.backspace", json!({}));
+                                            }
+                                            let mut out_lig = lig.to_string();
+                                            if app.ui.ansi_reph {
+                                                out_lig.push('©');
+                                                app.ui.ansi_reph = false;
+                                            }
+                                            let _ = app.run("text.insert", json!({"text": out_lig}));
+                                            app.ui.ansi_prev_bn = None;
+                                            app.ui.ansi_prev_ansi_len = out_lig.chars().count();
+                                            continue;
+                                        }
+                                    }
+                                }
+
+                                // 4. Normal ANSI keypress:
+                                if let Some(ansi) = wordcraft_engine::cmd::bangla::bijoy_ansi_key(c) {
+                                    let bn_char = wordcraft_engine::cmd::bangla::jatiya_key(c).and_then(|s| s.chars().next());
+                                    let is_cons = bn_char.is_some_and(wordcraft_engine::cmd::bangla::is_bn_consonant);
+                                    let mut out = ansi.to_string();
+
+                                    // Medial E-kar / Ou-kar in SutonnyMJ:
+                                    // '†' (\u{2020}) is word-initial E-kar (has left-side bearing/gap).
+                                    // '‡' (\u{2021}) is medial E-kar (tight connection, no gap inside words like 'fv‡jvevwm').
+                                    if c == 'c' || c == 'X' {
+                                        let before_caret = app
+                                            .session
+                                            .doc
+                                            .para_at(&app.session.sel.focus)
+                                            .and_then(|p| p.text.get(..app.session.sel.focus.off))
+                                            .unwrap_or("");
+                                        let prev_char = before_caret.chars().next_back();
+                                        let is_medial = prev_char.is_some_and(|ch| !wordcraft_engine::cmd::bangla::is_word_boundary(ch));
+                                        if is_medial {
+                                            out = if c == 'c' { "‡".to_string() } else { "‡Š".to_string() };
+                                        }
+                                    }
+
+                                    if is_cons && app.ui.ansi_reph {
+                                        out.push('©');
+                                        app.ui.ansi_reph = false;
+                                    }
+                                    app.ui.ansi_prev_bn = bn_char;
+                                    app.ui.ansi_prev_ansi_len = out.chars().count();
+                                    let _ = app.run("text.insert", json!({"text": out}));
+                                } else {
+                                    app.ui.ansi_prev_bn = None;
+                                    app.ui.ansi_prev_ansi_len = 1;
+                                    let _ = app.run("text.insert", json!({"text": c.to_string()}));
+                                }
+                            }
+                        }
+                        wordcraft_engine::cmd::bangla::BanglaMode::Phonetic => {
+                            let is_delim = t.chars().all(|c| c.is_whitespace() || ",.!?;()[]{}\"/\\-+=*&%$#@~<>|".contains(c));
+                            if is_delim {
+                                app.ui.phonetic_buffer.clear();
+                                app.ui.phonetic_rendered_len = 0;
+                                app.ui.phonetic_candidates.clear();
+                                app.ui.phonetic_expected_caret = None;
+                                for c in t.chars() {
+                                    if c == '|' {
+                                        // Standard Avro Dari (Shift + \)
+                                        let _ = app.run("text.insert", json!({"text": "।"}));
+                                    } else if c == '.' {
+                                        let before_caret = app
+                                            .session
+                                            .doc
+                                            .para_at(&app.session.sel.focus)
+                                            .and_then(|p| p.text.get(..app.session.sel.focus.off))
+                                            .unwrap_or("");
+                                        let prev_char = before_caret.chars().next_back();
+                                        if prev_char == Some('.') {
+                                            // Double period ".." converts the "." into Bangla Dari "।"
+                                            let _ = app.run("text.backspace", json!({}));
+                                            let _ = app.run("text.insert", json!({"text": "।"}));
+                                        } else if let Some(ch) = prev_char
+                                            && (ch.is_ascii_digit() || ('\u{09E6}'..='\u{09EF}').contains(&ch))
+                                        {
+                                            let _ = app.run("text.insert", json!({"text": "."}));
+                                        } else {
+                                            let _ = app.run("text.insert", json!({"text": "।"}));
+                                        }
+                                    } else if c == '$' {
+                                        let _ = app.run("text.insert", json!({"text": "৳"}));
+                                    } else {
+                                        let _ = app.run("text.insert", json!({"text": c.to_string()}));
+                                    }
+                                }
+                            } else {
+                                // Anchor composition: if the caret moved away, commit/reset previous composition
+                                if app.ui.phonetic_rendered_len > 0 {
+                                    let caret_at_composition =
+                                        app.session.sel.is_collapsed() && app.ui.phonetic_expected_caret.as_ref() == Some(&app.session.sel.focus);
+                                    if !caret_at_composition {
+                                        app.ui.phonetic_buffer.clear();
+                                        app.ui.phonetic_rendered_len = 0;
+                                        app.ui.phonetic_candidates.clear();
+                                        app.ui.phonetic_expected_caret = None;
+                                    }
+                                }
+
+                                app.ui.phonetic_buffer.push_str(&t);
+                                app.ui.phonetic_candidates = wordcraft_engine::cmd::bangla::phonetic_candidates(&app.ui.phonetic_buffer);
+                                let bn = app
+                                    .ui
+                                    .phonetic_candidates
+                                    .first()
+                                    .cloned()
+                                    .unwrap_or_else(|| wordcraft_engine::cmd::bangla::phonetic_transliterate(&app.ui.phonetic_buffer));
+                                for _ in 0..app.ui.phonetic_rendered_len {
+                                    let _ = app.run("text.backspace", json!({}));
+                                }
+                                let _ = app.run("text.insert", json!({"text": bn}));
+                                app.ui.phonetic_rendered_len = bn.chars().count();
+                                app.ui.phonetic_expected_caret = Some(app.session.sel.focus.clone());
+                            }
+                        }
+                    }
                 }
             }
             egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) => app.canvas.ime_preedit = text,
@@ -344,6 +840,132 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                 let _ = app.run(id, json!({}));
             }
             egui::Event::Key { key, pressed: true, modifiers, .. } => {
+                if key == Key::F12 && !modifiers.shift && !modifiers.alt && !modifiers.ctrl && !modifiers.command {
+                    let _ = app.run("tools.banglaMode", json!({"toggle": true}));
+                    app.ui.phonetic_buffer.clear();
+                    app.ui.phonetic_rendered_len = 0;
+                    app.ui.phonetic_candidates.clear();
+                    app.ui.phonetic_expected_caret = None;
+                    continue;
+                }
+                // Classic Bijoy shortcuts: Ctrl+Alt+B (Bijoy Classic / ANSI) and Ctrl+Alt+V (Bijoy Unicode / Jatiya)
+                if (key == Key::B || key == Key::V) && (modifiers.ctrl || modifiers.command) && modifiers.alt {
+                    let mode = if key == Key::B { "ansi" } else { "jatiya" };
+                    let _ = app.run("tools.banglaMode", json!({"mode": mode}));
+                    app.ui.phonetic_buffer.clear();
+                    app.ui.phonetic_rendered_len = 0;
+                    app.ui.phonetic_candidates.clear();
+                    app.ui.phonetic_expected_caret = None;
+                    continue;
+                }
+                // Numeric key candidate selection (1..5) in Bangla Phonetic mode
+                if app.session.bangla_mode == wordcraft_engine::cmd::bangla::BanglaMode::Phonetic
+                    && !app.ui.phonetic_buffer.is_empty()
+                    && !modifiers.ctrl
+                    && !modifiers.command
+                    && !modifiers.alt
+                {
+                    let caret_at_composition =
+                        app.session.sel.is_collapsed() && app.ui.phonetic_expected_caret.as_ref() == Some(&app.session.sel.focus);
+                    if !caret_at_composition {
+                        app.ui.phonetic_buffer.clear();
+                        app.ui.phonetic_rendered_len = 0;
+                        app.ui.phonetic_candidates.clear();
+                        app.ui.phonetic_expected_caret = None;
+                    } else {
+                        let cand_idx = match key {
+                            Key::Num1 => Some(0),
+                            Key::Num2 => Some(1),
+                            Key::Num3 => Some(2),
+                            Key::Num4 => Some(3),
+                            Key::Num5 => Some(4),
+                            _ => None,
+                        };
+                        if let Some(idx) = cand_idx
+                            && let Some(cand) = app.ui.phonetic_candidates.get(idx).cloned()
+                        {
+                            for _ in 0..app.ui.phonetic_rendered_len {
+                                let _ = app.run("text.backspace", json!({}));
+                            }
+                            let _ = app.run("text.insert", json!({"text": cand}));
+                            app.ui.phonetic_buffer.clear();
+                            app.ui.phonetic_rendered_len = 0;
+                            app.ui.phonetic_candidates.clear();
+                            app.ui.phonetic_expected_caret = None;
+                            continue;
+                        }
+                    }
+                }
+                if key == Key::Backspace && app.session.bangla_mode == wordcraft_engine::cmd::bangla::BanglaMode::Jatiya {
+                    if app.ui.jatiya_pre_kar.take().is_some() {
+                        continue;
+                    }
+                    if app.ui.jatiya_linker {
+                        app.ui.jatiya_linker = false;
+                        continue;
+                    }
+                }
+                if key == Key::Backspace && app.session.bangla_mode == wordcraft_engine::cmd::bangla::BanglaMode::Phonetic {
+                    if app.ui.phonetic_rendered_len > 0 {
+                        let caret_at_composition =
+                            app.session.sel.is_collapsed() && app.ui.phonetic_expected_caret.as_ref() == Some(&app.session.sel.focus);
+                        if !caret_at_composition {
+                            app.ui.phonetic_buffer.clear();
+                            app.ui.phonetic_rendered_len = 0;
+                            app.ui.phonetic_candidates.clear();
+                            app.ui.phonetic_expected_caret = None;
+                        }
+                    }
+                    if !app.ui.phonetic_buffer.is_empty() {
+                        app.ui.phonetic_buffer.pop();
+                        for _ in 0..app.ui.phonetic_rendered_len {
+                            let _ = app.run("text.backspace", json!({}));
+                        }
+                        if !app.ui.phonetic_buffer.is_empty() {
+                            app.ui.phonetic_candidates = wordcraft_engine::cmd::bangla::phonetic_candidates(&app.ui.phonetic_buffer);
+                            let bn = app
+                                .ui
+                                .phonetic_candidates
+                                .first()
+                                .cloned()
+                                .unwrap_or_else(|| wordcraft_engine::cmd::bangla::phonetic_transliterate(&app.ui.phonetic_buffer));
+                            let _ = app.run("text.insert", json!({"text": bn}));
+                            app.ui.phonetic_rendered_len = bn.chars().count();
+                            app.ui.phonetic_expected_caret = Some(app.session.sel.focus.clone());
+                        } else {
+                            app.ui.phonetic_rendered_len = 0;
+                            app.ui.phonetic_candidates.clear();
+                            app.ui.phonetic_expected_caret = None;
+                        }
+                        continue;
+                    }
+                }
+                if matches!(key, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown | Key::Home | Key::End | Key::Enter) {
+                    app.ui.phonetic_buffer.clear();
+                    app.ui.phonetic_rendered_len = 0;
+                    app.ui.phonetic_candidates.clear();
+                    app.ui.phonetic_expected_caret = None;
+                    app.ui.jatiya_pre_kar = None;
+                    app.ui.jatiya_linker = false;
+                    app.ui.jatiya_reph = false;
+                    app.ui.ansi_linker = false;
+                    app.ui.ansi_prev_bn = None;
+                    app.ui.ansi_prev_ansi_len = 0;
+                    app.ui.ansi_reph = false;
+                }
+                if key == Key::Escape {
+                    app.ui.phonetic_buffer.clear();
+                    app.ui.phonetic_rendered_len = 0;
+                    app.ui.phonetic_candidates.clear();
+                    app.ui.phonetic_expected_caret = None;
+                    app.ui.jatiya_pre_kar = None;
+                    app.ui.jatiya_linker = false;
+                    app.ui.jatiya_reph = false;
+                    app.ui.ansi_linker = false;
+                    app.ui.ansi_prev_bn = None;
+                    app.ui.ansi_prev_ansi_len = 0;
+                    app.ui.ansi_reph = false;
+                }
                 if key == Key::Escape && app.session.painter.is_some() {
                     app.session.painter = None;
                     continue;

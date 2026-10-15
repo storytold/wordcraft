@@ -2232,3 +2232,11 @@
 # Reading Mode column widths (#1040)
 	Narrow	Schmal
 	Medium	Mittel
+	Bangla	Bangla
+	Bangla Converter	Bangla-Konverter
+	Bangla Input Mode	Bangla-Eingabemodus
+	Bangla Phonetic Candidates	Phonetische Bangla-Vorschläge
+	Convert Bangla (Unicode / ANSI)	Bangla konvertieren (Unicode / ANSI)
+	Transliterate Bangla	Bangla transliterieren
+	Compatibility	Kompatibilität
+	Automatically convert legacy Bijoy / ANSI documents to Unicode on open	Ältere Bijoy- / ANSI-Dokumente beim Öffnen automatisch in Unicode konvertieren

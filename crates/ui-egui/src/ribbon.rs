@@ -260,6 +260,83 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     if crate::widgets::icon_text_button(ui, "comment", tl!("Comments"), regular(12.0)).clicked() {
                         let _ = app.run("view.commentsPane", json!({}));
                     }
+                    ui.add_space(6.0);
+                    let sep_rect = ui.allocate_exact_size(vec2(1.0, 16.0), Sense::hover()).0;
+                    ui.painter().vline(sep_rect.center().x, sep_rect.y_range(), Stroke::new(1.0, t.border));
+                    ui.add_space(6.0);
+
+                    // Converter button
+                    if crate::widgets::icon_text_button(ui, "banglaConverter", tl!("Bangla Converter"), regular(12.0))
+                        .on_hover_text(tl!("Convert Bangla (Unicode / ANSI)"))
+                        .clicked()
+                    {
+                        let _ = app.run("tools.banglaConverter", json!({}));
+                    }
+                    ui.add_space(4.0);
+
+                    // Bangla Input Mode dropdown
+                    let is_bangla_on = app.session.bangla_mode != wordcraft_engine::cmd::bangla::BanglaMode::Off;
+                    let b_label = if is_bangla_on {
+                        match app.session.bangla_mode {
+                            wordcraft_engine::cmd::bangla::BanglaMode::Phonetic => "Bangla (Phonetic) ▾",
+                            wordcraft_engine::cmd::bangla::BanglaMode::Jatiya => "Bangla (Jatiya) ▾",
+                            wordcraft_engine::cmd::bangla::BanglaMode::Ansi => "Bangla (ANSI) ▾",
+                            _ => "Bangla ▾",
+                        }
+                    } else {
+                        "English ▾"
+                    };
+                    ui.menu_button(
+                        egui::RichText::new(b_label).font(if is_bangla_on { semibold(11.5) } else { regular(11.5) }).color(if is_bangla_on {
+                            t.accent_text
+                        } else {
+                            t.text
+                        }),
+                        |ui| {
+                            if ui
+                                .selectable_label(app.session.bangla_mode == wordcraft_engine::cmd::bangla::BanglaMode::Off, "English (F12)")
+                                .clicked()
+                            {
+                                let _ = app.run("tools.banglaMode", json!({"mode": "off"}));
+                                ui.close();
+                            }
+                            if ui
+                                .selectable_label(
+                                    app.session.bangla_mode == wordcraft_engine::cmd::bangla::BanglaMode::Phonetic,
+                                    "Bangla Phonetic (Avro)",
+                                )
+                                .clicked()
+                            {
+                                let _ = app.run("tools.banglaMode", json!({"mode": "phonetic"}));
+                                ui.close();
+                            }
+                            if ui
+                                .selectable_label(
+                                    app.session.bangla_mode == wordcraft_engine::cmd::bangla::BanglaMode::Jatiya,
+                                    "Bangla Jatiya (National / Ctrl+Alt+V)",
+                                )
+                                .clicked()
+                            {
+                                let _ = app.run("tools.banglaMode", json!({"mode": "jatiya"}));
+                                ui.close();
+                            }
+                            if ui
+                                .selectable_label(
+                                    app.session.bangla_mode == wordcraft_engine::cmd::bangla::BanglaMode::Ansi,
+                                    "Bangla ANSI (Bijoy / Ctrl+Alt+B)",
+                                )
+                                .clicked()
+                            {
+                                let _ = app.run("tools.banglaMode", json!({"mode": "ansi"}));
+                                ui.close();
+                            }
+                            ui.separator();
+                            if ui.button(tl!("Bangla Converter")).clicked() {
+                                let _ = app.run("tools.banglaConverter", json!({}));
+                                ui.close();
+                            }
+                        },
+                    );
                     ui.add_space(8.0);
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         // The tabs that don't fit go into a » menu at the end of the strip. File, the

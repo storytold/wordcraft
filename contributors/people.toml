@@ -94,6 +94,12 @@ sync_github_name = false
 [people.lupant]
 sync_github_name = true
 [people.Nael-Nathanael]
+
+[people.rbr48]
+real_name = "M S Rana"
+display_name = "Izhaan Intellect"
+sync_github_name = true
+
 [people.Losminek]
 [people.Nghiathan13]
 
@@ -119,10 +125,6 @@ display_name = "The Legend Of MTS Dev"
 
 [people.dotCooCoo]
 real_name = "Robert Lee"
-
-[people.rbr48]
-real_name = "M S Rana"
-display_name = "Izhaan Intellect"
 
 
 

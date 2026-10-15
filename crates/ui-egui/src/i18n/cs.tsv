@@ -2624,3 +2624,11 @@ preview	Title	Ukázka
 # Reading Mode column widths (#1040)
 	Narrow	Úzká
 	Medium	Střední
+	Bangla	Bengálština
+	Bangla Converter	Převodník bengálštiny
+	Bangla Input Mode	Režim zadávání bengálštiny
+	Bangla Phonetic Candidates	Fonetické návrhy pro bengálštinu
+	Convert Bangla (Unicode / ANSI)	Převést bengálštinu (Unicode / ANSI)
+	Transliterate Bangla	Transliterovat bengálštinu
+	Compatibility	Kompatibilita
+	Automatically convert legacy Bijoy / ANSI documents to Unicode on open	Při otevření automaticky převádět starší dokumenty Bijoy / ANSI na Unicode

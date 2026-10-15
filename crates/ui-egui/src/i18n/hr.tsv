@@ -2632,3 +2632,11 @@ preview	Title	Naslov
 	Bottom Right Cell	Donja desna ćelija
 	Inside Horizontal Border	Unutarnji vodoravni obrub
 	Inside Vertical Border	Unutarnji okomiti obrub
+	Bangla	Bengalski
+	Bangla Converter	Pretvarač za bengalski
+	Bangla Input Mode	Način unosa za bengalski
+	Bangla Phonetic Candidates	Fonetski prijedlozi za bengalski
+	Convert Bangla (Unicode / ANSI)	Pretvori bengalski (Unicode / ANSI)
+	Transliterate Bangla	Transliteriraj bengalski
+	Compatibility	Kompatibilnost
+	Automatically convert legacy Bijoy / ANSI documents to Unicode on open	Automatski pretvori stare Bijoy / ANSI dokumente u Unicode pri otvaranju

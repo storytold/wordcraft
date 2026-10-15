@@ -2630,3 +2630,11 @@ preview	Title	Пример
 # Reading Mode column widths (#1040)
 	Narrow	Узкая
 	Medium	Средняя
+	Bangla	Бенгальский
+	Bangla Converter	Конвертер бенгальского
+	Bangla Input Mode	Режим ввода бенгальского
+	Bangla Phonetic Candidates	Фонетические варианты для бенгальского
+	Convert Bangla (Unicode / ANSI)	Преобразовать бенгальский (Unicode / ANSI)
+	Transliterate Bangla	Транслитерировать бенгальский
+	Compatibility	Совместимость
+	Automatically convert legacy Bijoy / ANSI documents to Unicode on open	Автоматически преобразовывать устаревшие документы Bijoy / ANSI в Unicode при открытии

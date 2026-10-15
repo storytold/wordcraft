@@ -66,7 +66,30 @@ fn substitutes(family: &str) -> &'static [&'static str] {
         "DejaVu Serif",
         "Source Serif 4",
     ];
+    const BENGALI_ANSI: &[&str] = &[
+        "SutonnyMJ",
+        "Kalpurush ANSI",
+        "BijoyMJ",
+        "SutonnyBanglaOMJ",
+        "SutonnyCMJ",
+        "SutonnySushreeMJ",
+        "Classic Bangla",
+        "Kalpurush",
+        "Nirmala UI",
+        "SolaimanLipi",
+        "Siyam Rupali",
+        "Vrinda",
+        "Noto Sans Bengali",
+        "Noto Serif Bengali",
+    ];
+    const BENGALI: &[&str] = &["Kalpurush", "Nirmala UI", "SolaimanLipi", "Siyam Rupali", "Vrinda", "Noto Sans Bengali", "Noto Serif Bengali"];
     let f = family.to_ascii_lowercase();
+    if is_bengali_ansi_family(&f) {
+        return BENGALI_ANSI;
+    }
+    if is_bengali_family(&f) {
+        return BENGALI;
+    }
     if is_hebrew(&f) {
         return HEBREW;
     }
@@ -194,6 +217,54 @@ fn is_persian_sans(f: &str) -> bool {
     NAMES.contains(&f) || f.starts_with("iransans") || f.starts_with("iranyekan")
 }
 
+/// True for legacy Bijoy / ANSI Bengali font families (e.g. SutonnyMJ, BijoyMJ, Kalpurush ANSI).
+pub fn is_bengali_ansi_family(family: &str) -> bool {
+    let f = family.to_ascii_lowercase();
+    const NAMES: &[&str] = &[
+        "sutonnymj",
+        "sutonny bangla omj",
+        "sutonny",
+        "kalpurush ansi",
+        "bijoy",
+        "bijoymj",
+        "classic bangla",
+        "durgamj",
+        "sutonnycmj",
+        "sutonnysushreemj",
+    ];
+    let f_str = f.as_str();
+    NAMES.contains(&f_str) || f_str.contains("sutonny") || f_str.contains("bijoy") || f_str.contains("ansi") || f_str.ends_with("mj")
+}
+
+/// Bengali fonts (both ANSI/Bijoy legacy and Unicode faces).
+pub fn is_bengali_family(family: &str) -> bool {
+    let f = family.to_ascii_lowercase();
+    const NAMES: &[&str] = &[
+        "sutonnymj",
+        "sutonny bangla omj",
+        "sutonny",
+        "kalpurush",
+        "kalpurush ansi",
+        "solaimanlipi",
+        "nikosh",
+        "vrinda",
+        "siyam rupali",
+        "shonar bangla",
+        "bengali",
+        "bangla",
+        "bijoy",
+        "boshonto",
+        "durgamj",
+    ];
+    let f_str = f.as_str();
+    NAMES.contains(&f_str)
+        || f_str.contains("sutonny")
+        || f_str.contains("bijoy")
+        || f_str.contains("bangla")
+        || f_str.contains("bengali")
+        || f_str.ends_with("mj")
+}
+
 /// Hebrew document fonts.
 fn is_hebrew(f: &str) -> bool {
     const NAMES: &[&str] = &["david", "miriam", "noto sans hebrew", "arial hebrew", "calibri hebrew"];
@@ -262,7 +333,11 @@ pub fn line_metrics(face: &crate::FontFace) -> (f64, f64) {
         return *v;
     }
     let mut v = (face.ascent.max(1.0), face.descent.abs());
-    if let Some(f) = face.skrifa() {
+    if face.family.eq_ignore_ascii_case("Kalpurush") {
+        // Kalpurush's raw hhea table has an oversized ~1.45x em height; normalize to
+        // 1.23x em (0.95 ascent, 0.28 descent) for 1:1 letterhead and page-break parity.
+        v = (face.upem * 0.95, face.upem * 0.28);
+    } else if let Some(f) = face.skrifa() {
         // hhea ascender + descender + line gap (Word on macOS), the gap above the ascent; OS/2
         // win metrics only when the hhea values are missing, and never more than twice the em.
         let hhea = f.hhea().ok().map(|h| hhea_line(h.ascender().to_i16(), h.descender().to_i16(), h.line_gap().to_i16()));
@@ -349,6 +424,31 @@ mod tests {
         // JetBrains Mono ships only Regular here.
         let r = resolve("JetBrains Mono", true, true);
         assert!(r.synth_bold && r.synth_italic);
+    }
+
+    #[test]
+    fn bengali_font_substitutes() {
+        assert!(is_bengali_ansi_family("sutonnymj"));
+        assert!(is_bengali_ansi_family("SutonnyMJ"));
+        assert!(is_bengali_ansi_family("Sutonny Bangla OMJ"));
+        assert!(is_bengali_ansi_family("Bijoy"));
+        assert!(is_bengali_ansi_family("Classic Bangla"));
+        assert!(is_bengali_ansi_family("Kalpurush ANSI"));
+        assert!(!is_bengali_ansi_family("SolaimanLipi"));
+        assert!(!is_bengali_ansi_family("Nikosh"));
+
+        assert!(is_bengali_family("sutonnymj"));
+        assert!(is_bengali_family("Kalpurush"));
+        assert!(is_bengali_family("SolaimanLipi"));
+        assert!(is_bengali_family("Nikosh"));
+        assert!(is_bengali_family("Vrinda"));
+
+        let subs_ansi = substitutes("SutonnyMJ");
+        assert_eq!(subs_ansi[0], "SutonnyMJ");
+        assert_eq!(subs_ansi[1], "Kalpurush ANSI");
+
+        let subs_uni = substitutes("SolaimanLipi");
+        assert_eq!(subs_uni[0], "Kalpurush");
     }
 
     #[test]

@@ -422,6 +422,8 @@ pub struct Session {
     pub merge: crate::cmd::mailings::MergeState,
     /// Requests from commands to the UI (open a dialog, scroll…), drained by the front end.
     pub ui_requests: Vec<Value>,
+    /// Native Bangla typing mode.
+    pub bangla_mode: crate::cmd::bangla::BanglaMode,
     /// Read Aloud player (Review › Speech).
     pub read_aloud: crate::speech::ReadAloud,
     /// Preferences the front end saves between runs.
@@ -521,6 +523,10 @@ pub struct Prefs {
     pub ignore_uppercase: bool,
     pub ignore_numbers: bool,
     pub ignore_internet: bool,
+    /// Automatically convert legacy Bijoy / ANSI documents to Unicode on open.
+    /// When disabled, raw Bijoy ANSI bytes and font names are preserved for backward compatibility
+    /// with legacy Microsoft Word.
+    pub convert_bijoy_on_open: bool,
     /// AutoCorrect Options: replacements, capitalization and AutoFormat As You Type (per user, as
     /// in Word). A damaged saved value reads as the defaults.
     #[serde(deserialize_with = "crate::cmd::tools::lenient_autocorrect")]
@@ -544,6 +550,7 @@ impl Default for Prefs {
             ignore_uppercase: true,
             ignore_numbers: true,
             ignore_internet: true,
+            convert_bijoy_on_open: true,
             detect_language: true,
             autocorrect: Default::default(),
         }
@@ -632,6 +639,7 @@ impl Session {
             bib_style,
             merge: Default::default(),
             ui_requests: Vec::new(),
+            bangla_mode: crate::cmd::bangla::BanglaMode::Off,
             math: None,
             math_latex: false,
             math_normal_text: false,
@@ -1103,6 +1111,7 @@ impl Session {
             // Go Back's places, like the caret history: not part of the document.
             edit_marks: _,
             go_back_step: _,
+            bangla_mode: _,
         } = self;
         let head = if history.len() + SNAPSHOT_HEAD > MAX_UNDO { history.iter().take(SNAPSHOT_HEAD).cloned().collect() } else { Vec::new() };
         EditSnapshot {

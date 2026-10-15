@@ -2245,3 +2245,11 @@
 # Reading Mode column widths (#1040)
 	Narrow	窄
 	Medium	中等
+	Bangla	孟加拉语
+	Bangla Converter	孟加拉语转换器
+	Bangla Input Mode	孟加拉语输入模式
+	Bangla Phonetic Candidates	孟加拉语音标候选项
+	Convert Bangla (Unicode / ANSI)	转换孟加拉语 (Unicode / ANSI)
+	Transliterate Bangla	音译孟加拉语
+	Compatibility	兼容性
+	Automatically convert legacy Bijoy / ANSI documents to Unicode on open	打开时自动将旧版 Bijoy / ANSI 文档转换为 Unicode

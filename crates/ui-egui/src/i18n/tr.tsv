@@ -2629,3 +2629,11 @@ preview	Title	Örnek
 # Reading Mode column widths (#1040)
 	Narrow	Dar
 	Medium	Orta
+	Bangla	Bengalce
+	Bangla Converter	Bengalce Dönüştürücü
+	Bangla Input Mode	Bengalce Giriş Modu
+	Bangla Phonetic Candidates	Bengalce Fonetik Öneriler
+	Convert Bangla (Unicode / ANSI)	Bengalce Dönüştür (Unicode / ANSI)
+	Transliterate Bangla	Bengalce Harf Çevirisi Yap
+	Compatibility	Uyumluluk
+	Automatically convert legacy Bijoy / ANSI documents to Unicode on open	Eski Bijoy / ANSI belgelerini açılışta otomatik olarak Unicode'a dönüştür

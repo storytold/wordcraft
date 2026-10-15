@@ -2245,3 +2245,11 @@
 # Reading Mode column widths (#1040)
 	Narrow	Вузька
 	Medium	Середня
+	Bangla	Бенгальська
+	Bangla Converter	Конвертер бенгальської
+	Bangla Input Mode	Режим введення бенгальської
+	Bangla Phonetic Candidates	Фонетичні варіанти для бенгальської
+	Convert Bangla (Unicode / ANSI)	Перетворити бенгальську (Unicode / ANSI)
+	Transliterate Bangla	Транслітерувати бенгальську
+	Compatibility	Сумісність
+	Automatically convert legacy Bijoy / ANSI documents to Unicode on open	Автоматично перетворювати застарілі документи Bijoy / ANSI в Unicode під час відкриття

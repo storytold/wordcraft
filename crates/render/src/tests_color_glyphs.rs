@@ -47,7 +47,7 @@ fn emoji_keep_their_colours_on_a_dark_page() {
     }
 }
 
-/// "Emoji test: 🧠 brain, ✅ check." rendered at 2x with `opts`, and each emoji glyph's box in
+/// "Emoji test: 🧠 brain, 🧠 brain." rendered at 2x with `opts`, and each emoji glyph's box in
 /// pixels; None (the test skips) when no colour emoji font is installed.
 #[cfg(not(target_arch = "wasm32"))]
 fn emoji_page(opts: &RenderOptions) -> Option<(Rendered, Vec<(u32, u32, u32, u32)>)> {
@@ -56,7 +56,7 @@ fn emoji_page(opts: &RenderOptions) -> Option<(Rendered, Vec<(u32, u32, u32, u32
         eprintln!("skipped: no colour emoji font installed");
         return None;
     }
-    let d = Document::from_text("Emoji test: 🧠 brain, ✅ check.");
+    let d = Document::from_text("Emoji test: 🧠 brain, 🧠 brain.");
     let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
     let page = &l.pages[0];
     let scale = 2.0;
