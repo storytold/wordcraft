@@ -53,8 +53,9 @@ pub(crate) fn sync_cell_widths(t: &mut Table) {
     }
 }
 
-/// Set the width of the grid column cell `c` of row `r` starts in. The table's preferred width
-/// goes, so the layout doesn't scale the column back.
+/// Set the width of the grid column cell `c` of row `r` starts in. The columns' total becomes the
+/// table's own width, as in Word, so the layout neither scales the column back nor fits a widened
+/// table into the text column.
 /// Give every grid column the `cells` (row, cell) pairs touch the width `w`.
 pub(super) fn set_column_widths(t: &mut Table, cells: &[(usize, usize)], w: f32) {
     let mut cols: Vec<usize> = cells.iter().map(|&(r, c)| t.grid_col(r, c)).collect();
@@ -68,7 +69,7 @@ pub(super) fn set_column_widths(t: &mut Table, cells: &[(usize, usize)], w: f32)
         }
     }
     if any {
-        t.props.width = None;
+        t.props.width = Some(t.grid.iter().filter(|w| w.is_finite()).sum());
         t.props.width_pct = None;
         sync_cell_widths(t);
     }
