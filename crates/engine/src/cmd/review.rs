@@ -274,14 +274,22 @@ fn delete_comment(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"deleted": ids}))
 }
 
-/// Comments in document order with their anchors.
+/// Comments in document order with their anchors: the body's, then those in headers, footers,
+/// notes and text boxes, story by story (#2289). That is `Pos` order, which Next and Previous
+/// rely on. Comment text itself isn't scanned.
 pub fn comment_list(s: &Session) -> Vec<(u32, Option<Pos>)> {
     let mut found: Vec<(u32, Option<Pos>)> = Vec::new();
-    for path in s.doc.para_paths(StoryRef::Body) {
-        let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
-        for o in p.object_offsets() {
-            if let Some(InlineObject::CommentStart { id }) = p.object_at(o) {
-                found.push((*id, Some(Pos { story: StoryRef::Body, path: path.clone(), off: o })));
+    let stories = super::tools::all_stories(&s.doc).into_iter().filter(|st| match st {
+        StoryRef::Body => true,
+        StoryRef::Part(id) => s.doc.parts.get(id).is_some_and(|p| p.kind != wordcraft_doc::PartKind::Comment),
+    });
+    for story in stories {
+        for path in s.doc.para_paths(story) {
+            let Some(p) = s.doc.para(story, &path) else { continue };
+            for o in p.object_offsets() {
+                if let Some(InlineObject::CommentStart { id }) = p.object_at(o) {
+                    found.push((*id, Some(Pos { story, path: path.clone(), off: o })));
+                }
             }
         }
     }
@@ -1479,6 +1487,86 @@ mod tests {
         s.run("review.deleteComment", &json!({"id": root})).unwrap();
         assert!(s.doc.comments.is_empty());
         assert!(started.elapsed() < std::time::Duration::from_secs(5), "took {:?}", started.elapsed());
+    }
+
+    /// A body comment, then comments in a header, a footer and a text box, each on its story's
+    /// whole text. Returns their ids and stories in that order.
+    fn comments_in_every_story(s: &mut Session) -> Vec<(u64, wordcraft_doc::StoryRef)> {
+        use wordcraft_doc::StoryRef;
+        s.view.proofing = false;
+        s.run("document.setText", &json!({"text": "Body text with a comment on it."})).unwrap();
+        s.run("select.text", &json!({"text": "comment"})).unwrap();
+        let mut out = vec![(s.run("review.newComment", &json!({"text": "body"})).unwrap()["id"].as_u64().unwrap(), StoryRef::Body)];
+        for (cmd, text) in [("insert.header", "header"), ("insert.footer", "footer")] {
+            s.run("insert.closeHeader", &json!({})).unwrap();
+            let story = StoryRef::Part(s.run(cmd, &json!({"text": text})).unwrap()["story"].as_u64().unwrap() as u32);
+            s.run("select.all", &json!({})).unwrap();
+            out.push((s.run("review.newComment", &json!({"text": text})).unwrap()["id"].as_u64().unwrap(), story));
+        }
+        s.run("insert.closeHeader", &json!({})).unwrap();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("insert.textBox", &json!({"text": "boxed"})).unwrap();
+        let story = s.sel.focus.story;
+        s.run("select.all", &json!({})).unwrap();
+        out.push((s.run("review.newComment", &json!({"text": "text box"})).unwrap()["id"].as_u64().unwrap(), story));
+        s.run("caret.docStart", &json!({})).unwrap();
+        out
+    }
+
+    /// #2289: comments in headers, footers and text boxes are listed with their anchors, after
+    /// the body's, rather than with no anchor.
+    #[test]
+    fn comments_outside_the_body_are_listed_with_their_anchors() {
+        let mut s = Session::new(Document::new());
+        let want = comments_in_every_story(&mut s);
+        let listed = s.run("review.comments", &json!({})).unwrap();
+        let got: Vec<(u64, wordcraft_doc::StoryRef)> = listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| (c["id"].as_u64().unwrap(), serde_json::from_value(c["anchor"]["story"].clone()).expect("every comment has an anchor")))
+            .collect();
+        assert_eq!(got, want);
+    }
+
+    /// #2289: Next and Previous Comment go through every story's comments and wrap around.
+    #[test]
+    fn next_and_previous_comment_reach_comments_outside_the_body() {
+        let mut s = Session::new(Document::new());
+        let want: Vec<wordcraft_doc::StoryRef> = comments_in_every_story(&mut s).into_iter().map(|(_, st)| st).collect();
+        let mut forward = Vec::new();
+        for _ in 0..=want.len() {
+            s.run("review.nextComment", &json!({})).unwrap();
+            forward.push(s.sel.focus.story);
+        }
+        let mut wrapped = want.clone();
+        wrapped.push(want[0]);
+        assert_eq!(forward, wrapped, "Next visits each story's comment, then wraps to the first");
+        let mut back = Vec::new();
+        for _ in 0..want.len() {
+            s.run("review.previousComment", &json!({})).unwrap();
+            back.push(s.sel.focus.story);
+        }
+        let mut rev = want.clone();
+        rev.reverse();
+        assert_eq!(back, rev, "Previous from the first comment wraps to the last");
+    }
+
+    /// Text inside a comment isn't an anchor: a comment marker in a comment's own story is not
+    /// listed as that comment's place in the document.
+    #[test]
+    fn comment_list_skips_comment_text() {
+        let mut s = Session::new(Document::new());
+        s.view.proofing = false;
+        s.run("document.setText", &json!({"text": "hello"})).unwrap();
+        s.run("select.all", &json!({})).unwrap();
+        let id = s.run("review.newComment", &json!({"text": "note"})).unwrap()["id"].as_u64().unwrap() as u32;
+        let part = s.doc.comments.get(&id).unwrap().part;
+        let at = wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Part(part), path: wordcraft_doc::Path::top(0), off: 0 };
+        s.doc.insert_object(&at, wordcraft_doc::InlineObject::CommentStart { id }, &Default::default()).unwrap();
+        let list = super::comment_list(&s);
+        assert_eq!(list.iter().filter(|(x, _)| *x == id).count(), 1);
+        assert_eq!(list.first().and_then(|(_, p)| p.as_ref()).map(|p| p.story), Some(wordcraft_doc::StoryRef::Body));
     }
 
     #[test]
