@@ -584,6 +584,8 @@ const MATH_SYMBOLS: &[(char, &str)] = &[
     ('⌈', "lceil"),
     ('⌉', "rceil"),
     ('°', "circ"),
+    ('•', "bullet"),
+    ('⊤', "top"),
 ];
 
 /// Extra input spellings mapped to the same symbols.
@@ -610,6 +612,9 @@ const MATH_ALIASES: &[(&str, char)] = &[
     ("Vert", '‖'),
     ("lvert", '|'),
     ("rvert", '|'),
+    ("bot", '⊥'),
+    ("hslash", 'ℏ'),
+    ("colon", ':'),
 ];
 
 /// Operator names written upright in both formats.
@@ -965,7 +970,7 @@ fn math_seq(t: &[MTok], pos: &mut usize, depth: usize, in_opt: bool) -> String {
                         }
                     }
                     "text" | "textrm" | "textit" | "textbf" | "mathrm" | "mathit" | "mathbf" | "mathsf" | "mathtt" | "mathcal" | "mathbb"
-                    | "mathfrak" | "boldsymbol" | "operatorname" | "mbox" | "hbox" | "displaystyle" | "textstyle" | "scriptstyle" => {
+                    | "mathfrak" | "boldsymbol" | "bm" | "pmb" | "operatorname" | "mbox" | "hbox" | "displaystyle" | "textstyle" | "scriptstyle" => {
                         if t.get(*pos) == Some(&MTok::Open) || !matches!(name, "displaystyle" | "textstyle" | "scriptstyle") {
                             let a = math_arg(t, pos, depth);
                             o.push_str(&a);
@@ -977,6 +982,15 @@ fn math_seq(t: &[MTok], pos: &mut usize, depth: usize, in_opt: bool) -> String {
                     "vec" => o.push_str(&format!("{}⃗", math_arg(t, pos, depth))),
                     "dot" => o.push_str(&format!("{}̇", math_arg(t, pos, depth))),
                     "ddot" => o.push_str(&format!("{}̈", math_arg(t, pos, depth))),
+                    "acute" => o.push_str(&format!("{}́", math_arg(t, pos, depth))),
+                    "grave" => o.push_str(&format!("{}̀", math_arg(t, pos, depth))),
+                    "breve" => o.push_str(&format!("{}̆", math_arg(t, pos, depth))),
+                    "check" => o.push_str(&format!("{}̌", math_arg(t, pos, depth))),
+                    "pmod" => {
+                        let a = math_arg(t, pos, depth);
+                        o.push_str(&format!(" (mod {a})"));
+                    }
+                    "bmod" => o.push_str(" mod "),
                     "begin" | "end" => {
                         // Inner environments (`matrix`, `cases`, `aligned`…): keep the content.
                         let _ = math_arg(t, pos, depth);
@@ -2992,6 +3006,14 @@ Caf\'e na\"ive \c{c}a \v{s}\'{e} and {\bfseries grouped bold} after.
             (r"\left( a \right)", "( a )"),
             (r"\sin x + \text{if } y", "sin x + if y"),
             (r"a \cdot b \times c \neq d", "a ⋅ b × c ≠ d"),
+            (r"a \bullet b", "a • b"),
+            (r"x \top y \bot z", "x ⊤ y ⊥ z"),
+            (r"f \colon X \to Y", "f : X → Y"),
+            (r"\hbar \hslash", "ℏ ℏ"),
+            (r"\bm{v}", "v"),
+            (r"\acute{x} \grave{y} \breve{z} \check{w}", "x́ ỳ z̆ w̌"),
+            (r"a \equiv b \pmod{m}", "a ≡ b (mod m)"),
+            (r"a \bmod b", "a mod b"),
             (r"\unknowncmd", r"\unknowncmd"),
         ] {
             assert_eq!(latex_to_linear(tex), linear, "{tex}");
@@ -3001,6 +3023,8 @@ Caf\'e na\"ive \c{c}a \v{s}\'{e} and {\bfseries grouped bold} after.
             ("α ≤ β", r"\alpha \leq \beta"),
             ("αβ", r"\alpha\beta"),
             ("πr", r"\pi r"),
+            ("a • b", r"a \bullet b"),
+            ("x ⊤ y", r"x \top y"),
             ("a_(i+1)", r"a_{i+1}"),
             ("50% & #", r"50\% \& \#"),
             ("√(3&x)", r"\sqrt[3]{x}"),
