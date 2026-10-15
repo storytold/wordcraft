@@ -127,7 +127,7 @@ fn edge_at(l: &wordcraft_layout::DocLayout, page: usize, x: f32, y: f32) -> Opti
     let pg = l.pages.get(page)?;
     let mut best: Option<(f32, usize, (StoryRef, Path, usize, usize, Side, wordcraft_geom::Rect))> = None;
     for it in &pg.items {
-        let Placed::Cell { rect, table, row, cell, story, covered: false } = it else { continue };
+        let Placed::Cell { rect, table, row, cell, story, covered: false, .. } = it else { continue };
         let (left, top, right, bottom) = (rect.x, rect.y, rect.right(), rect.bottom());
         if x < left - REACH || x > right + REACH || y < top - REACH || y > bottom + REACH {
             continue;
