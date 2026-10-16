@@ -718,7 +718,10 @@ fn call(name: &str, args: &[Expr], here: &Here) -> Result<f64, CmdError> {
         }
         "ABS" => Ok(one(name, args, here)?.abs()),
         "INT" => Ok(one(name, args, here)?.floor()),
-        "SIGN" => Ok(one(name, args, here)?.signum()),
+        "SIGN" => {
+            let x = one(name, args, here)?;
+            Ok(if x == 0.0 { 0.0 } else { x.signum() })
+        }
         "ROUND" => match args {
             [a, b] => {
                 let x = scalar(eval(a, here)?)?;
@@ -812,6 +815,10 @@ mod tests {
         assert_eq!(ev(&t, 2, 0, "=MAX(A1:B2)"), Ok(4.0));
         assert_eq!(ev(&t, 2, 0, "=ROUND(2.5, 0)"), Ok(3.0));
         assert_eq!(ev(&t, 2, 0, "=MOD(7, 3)"), Ok(1.0));
+        assert_eq!(ev(&t, 2, 0, "=SIGN(5)"), Ok(1.0));
+        assert_eq!(ev(&t, 2, 0, "=SIGN(-5)"), Ok(-1.0));
+        assert_eq!(ev(&t, 2, 0, "=SIGN(0)"), Ok(0.0));
+        assert_eq!(ev(&t, 2, 0, "=SIGN(-0)"), Ok(0.0));
     }
 
     #[test]
