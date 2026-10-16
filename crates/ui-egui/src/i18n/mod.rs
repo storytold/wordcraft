@@ -152,7 +152,16 @@ pub static LANGUAGES: [LangInfo; 23] = [
         catalog: OnceLock::new(),
     },
     // Hungarian; `hu`, `hu-HU` and `hu_HU.UTF-8` resolve here.
-    LangInfo { code: "hu", name: "Magyar", source: include_str!("hu.tsv"), prefer_hans: false, editing_lang: None, catalog: OnceLock::new() },
+    // Hungarian; `hu`, `hu-HU` and `hu_HU.UTF-8` resolve here. New documents are written in
+    // Hungarian: `wordcraft-proof` checks it (`ProofLang::Hu`).
+    LangInfo {
+        code: "hu",
+        name: "Magyar",
+        source: include_str!("hu.tsv"),
+        prefer_hans: false,
+        editing_lang: Some("hu-HU"),
+        catalog: OnceLock::new(),
+    },
     // French; `fr`, `fr-FR`, `fr_CA` and other regions resolve here.
     LangInfo { code: "fr", name: "Français", source: include_str!("fr.tsv"), prefer_hans: false, editing_lang: None, catalog: OnceLock::new() },
     // Bulgarian; `bg`, `bg-BG` and `bg_BG.UTF-8` resolve here.

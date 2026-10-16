@@ -5605,6 +5605,46 @@ fn italian_proofing_through_the_review_commands() {
     assert_eq!(left.as_array().unwrap().len(), 1, "{left}");
 }
 
+/// A tiny synthetic Hungarian Hunspell dictionary (written for these tests), with a compound
+/// flag so `almafa` is checked as a compound.
+fn hungarian_test_dictionary() {
+    let aff = "SET UTF-8\nTRY aeoiuáéíóöőúüűzbnhk\nMAP 2\nMAP aá\nMAP oóöő\nCOMPOUNDFLAG Y\nCOMPOUNDMIN 2\nSFX A Y 1\nSFX A 0 ban [^a]\n";
+    let dic = "8\nház/YA\nkulcs/Y\nalma/Y\nfa/Y\ntudom\nhogy\njön\na\n";
+    wordcraft_proof::hu::install_dictionary(aff, dic).unwrap();
+}
+
+/// Review › Language and the proofing commands work in Hungarian end to end: compounds are
+/// words, F7 and the issue list use the Hungarian dictionary and grammar, and a suggestion fixes
+/// the text.
+#[test]
+fn hungarian_proofing_through_the_review_commands() {
+    hungarian_test_dictionary();
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Tudom hogy a hazban almafa jön."}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "review.language", json!({"lang": "hu_HU", "default": true}));
+    assert_eq!(s.doc.styles.default_chr.lang.as_deref(), Some("hu-HU"), "the tag is normalized");
+    let issues = run(&mut s, "review.issues", json!({}));
+    let arr = issues.as_array().unwrap();
+    let has = |text: &str, kind: &str, sugg: &str| {
+        arr.iter()
+            .any(|i| i["text"] == text && i["kind"] == kind && i["lang"] == "hu" && i["suggestions"].as_array().unwrap().iter().any(|x| x == sugg))
+    };
+    assert!(has("hazban", "spelling", "házban"), "{issues}");
+    assert!(has(" hogy", "grammar", ", hogy"), "{issues}");
+    assert_eq!(arr.len(), 2, "almafa is a compound: {issues}");
+    assert!(arr.iter().any(|i| i["message"] == "Vessző kell a „hogy” elé"), "{issues}");
+    // F7 from the start selects the comma first, then the misspelling; Change applies each fix.
+    run(&mut s, "caret.docStart", json!({}));
+    assert_eq!(run(&mut s, "review.spelling", json!({}))["text"], " hogy");
+    run(&mut s, "review.applySuggestion", json!({"text": ", hogy"}));
+    assert_eq!(run(&mut s, "review.spelling", json!({}))["text"], "hazban");
+    run(&mut s, "review.applySuggestion", json!({"text": "házban"}));
+    assert_eq!(text(&s), "Tudom, hogy a házban almafa jön.");
+    let left = run(&mut s, "review.issues", json!({}));
+    assert!(left.as_array().unwrap().is_empty(), "{left}");
+}
+
 #[test]
 fn polish_proofing_through_the_review_commands() {
     polish_test_dictionary();

@@ -1,6 +1,6 @@
 # Hungarian interface
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-11 · **Change:** minor (Hungarian interface catalog and regression checks) · **Target:** WordCraft 0.5.0
+> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (Hungarian proofing: spelling, suggestions, grammar, hyphenation; previously minor: Hungarian interface catalog and regression checks) · **Target:** WordCraft 0.5.0
 
 Choose **File › Options › Interface language › Magyar**, or follow a Hungarian system display
 language (`hu-HU`, `hu_HU.UTF-8`). The catalog code is `hu`; `ui.language` with `{"value":"hu"}`
@@ -65,11 +65,43 @@ and the glyphs `ÁáÉéÍíÓóÖöŐőÚúÜüŰű` in the bundled Inter (Regu
 (validation, every tab and command translated) include Hungarian automatically, and the on-demand
 interface audit (`untranslated_interface_text`) checks Hungarian alongside Russian.
 
-Spelling, grammar and hyphenation stay English-only: this is an interface translation, not
-Hungarian proofing. A native-speaker review of the catalog is welcome.
+A native-speaker review of the catalog is welcome.
+
+## Proofing
+
+Text in Hungarian (`hu`, `hu-HU`) is proofed by `crates/proof/src/hu`. A Hungarian interface
+writes new documents in Hungarian.
+
+- **Spelling** against the Hungarian Hunspell dictionary (Magyar Ispell, `hu_HU.aff`/`.dic`)
+  installed on the system: an OS package (`hunspell-hu`), Homebrew, LibreOffice, or the folder set
+  in File › Options › Proofing › Dictionaries folder. Without it Hungarian text has no spelling
+  marks. The affix engine reads the dictionary's flag aliases, compounding rules and word breaks,
+  so compounds (`almafa`, `házkulcsban`), the 6–3 rule for long ones, and hyphenated forms
+  (`SMS-ben`, `Petőfi-vers`) are checked as Hunspell checks them: on 31,248 test words labelled by
+  the Hunspell command line, the results agree on 99.7%.
+- **Suggestions**: missing accents first (`hazban` → `házban`), the dictionary's confusion table
+  (`hejesírás` → `helyesírás`), a missing space (`nemis` → `nem is`), one typo, then a stem scan.
+- **Grammar**, with Hungarian messages: repeated word, space before punctuation, double space,
+  sentence capital (knowing `pl.`, `stb.`, ordinals and dates), a missing comma before `hogy`,
+  `mert`, `hanem`, `de`, `ha` and the relative pronouns, `a` before a vowel (`az alma`), a capital
+  month after a year, doubled punctuation.
+- **Hyphenation** with the Hungarian patterns installed on the system (`hyph_hu_HU.dic`, the
+  `hyphen-hu` package or LibreOffice), which know compound boundaries; without them, the
+  Hungarian syllable rules. A doubled digraph (`ssz` in `asszony`) changes its spelling when
+  broken (`asz-szony`); WordCraft doesn't break there.
+
+### Licence of the dictionary data
+
+The Hungarian dictionary (Magyar Ispell, by László Németh and Ferenc Godó) and the Hungarian
+hyphenation patterns (by László Németh and contributors) are tri-licensed MPL 1.1 / GPL 2.0+ /
+LGPL 2.1+. WordCraft uses them under the MPL 1.1 option, which permits use in open-source
+projects under other licences such as MIT and Apache-2.0. Neither is bundled: WordCraft reads the
+copies installed on the system. The test dictionaries in the repository are written for the tests
+and contain no data from either.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Hungarian proofing: spelling with the installed `hu_HU` dictionary (compounds, word breaks), suggestions, grammar rules, hyphenation with the installed patterns or the syllable rules; the dictionary licence |
 | 2026-10-11 | minor | Hungarian catalog (2,419 entries: built-in style names, equation gallery, citation styles), conventions, terminology, scope and regression checks |
