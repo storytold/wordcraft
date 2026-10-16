@@ -137,7 +137,7 @@ pub fn submit(app: &mut crate::WordApp, params: &serde_json::Value) -> Result<se
         object.insert("copies".into(), json!(1));
     }
     if app.ui.update_fields_before_print
-        && let Err(error) = app.session.run("references.updateFields", &json!({}))
+        && let Err(error) = app.session.run("references.updateFields", &json!({"all": true}))
     {
         log::warn!("updating fields before printing: {error}");
     }

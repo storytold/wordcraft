@@ -74,11 +74,12 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("references.caption", "Insert Caption", "References › Captions", caption)
             .params(r#"{"label"?: "Figure|Table|Equation|any label", "text"?: string, "position"?: "below|above", "excludeLabel"?: bool, "format"?: "ARABIC|alphabetic|ALPHABETIC|roman|ROMAN", "chapter"?: heading level 1-9, "separator"?: "-|.|:|—|–"}"#),
         // F9: update fields; the selected ones that showed their code show their result again.
-        CommandSpec::new("references.updateFields", "Update Field", "References", |s, _| {
-            update_fields(s)?;
+        CommandSpec::new("references.updateFields", "Update Field", "References", |s, v| {
+            update_fields_in(s, v.get("all").and_then(Value::as_bool).unwrap_or(false))?;
             super::fields::show_results(s)?;
             sel_result(s)
         })
+        .params(r#"{"all"?: bool (the body and every header, footer, note and text box, wherever the caret is; default: the story the caret is in)}"#)
         .key("F9"),
     ]
 }
@@ -851,17 +852,32 @@ pub fn update_seq(s: &mut Session) -> Result<(), CmdError> {
     Ok(())
 }
 
-/// Update fields in the body: dates, SEQ numbering, cross-references, TOC.
+/// Update fields of the story being edited, as Word's F9 does: dates, REF/PAGEREF, TITLE, AUTHOR
+/// and NUMWORDS in the body, or in the header, footer, note or text box the caret is in (the body's
+/// fields stay as they are then). SEQ numbering, citations and TOC are body-only, so they run only
+/// when the caret is in the body.
 pub fn update_fields(s: &mut Session) -> Result<(), CmdError> {
-    update_seq(s)?;
+    update_fields_in(s, false)
+}
+
+/// [`update_fields`], or with `all` the whole document: the body (with SEQ, citations and TOC) and
+/// every part story, wherever the caret is (what printing needs).
+pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
+    let caret_story = s.sel.focus.story;
+    let in_body = all || caret_story == StoryRef::Body;
+    if in_body {
+        update_seq(s)?;
+    }
     let mut pages: std::collections::HashMap<String, u32> = Default::default();
     for (name, pos) in s.doc.bookmarks() {
         let l = s.layout();
         let page = l.caret(&pos).and_then(|c| l.pages.get(c.page)).map(|p| p.number).unwrap_or(1);
         pages.entry(name).or_insert(page);
     }
-    for path in s.doc.para_paths(StoryRef::Body) {
-        let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
+    let stories: Vec<StoryRef> =
+        if all { std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k))).collect() } else { vec![caret_story] };
+    for (story, path) in stories.into_iter().flat_map(|st| s.doc.para_paths(st).into_iter().map(move |p| (st, p))).collect::<Vec<_>>() {
+        let Some(p) = s.doc.para(story, &path) else { continue };
         if !p.objects.iter().any(|o| matches!(o, InlineObject::Field { .. })) {
             continue;
         }
@@ -904,7 +920,7 @@ pub fn update_fields(s: &mut Session) -> Result<(), CmdError> {
         if updates.is_empty() {
             continue;
         }
-        let para = s.doc.para_mut(StoryRef::Body, &path)?;
+        let para = s.doc.para_mut(story, &path)?;
         for (k, r) in updates {
             if let Some(InlineObject::Field { result, dirty, .. }) = para.objects.get_mut(k) {
                 // A computed result is no longer stale: Word's F9 clears `w:dirty` too.
@@ -913,6 +929,9 @@ pub fn update_fields(s: &mut Session) -> Result<(), CmdError> {
             }
         }
         para.touch();
+    }
+    if !in_body {
+        return Ok(());
     }
     super::citations::update_citations(s)?;
     update_toc(s)
@@ -1146,5 +1165,84 @@ mod tests {
         s.run("caret.docEnd", &json!({})).unwrap();
         s.run("references.caption", &json!({"label": "Table", "excludeLabel": true, "format": "ROMAN"})).unwrap();
         assert_eq!(s.doc.body.last().unwrap().as_para().unwrap().plain_text(), "I");
+    }
+
+    /// A document with a body AUTHOR field and a header holding AUTHOR, NUMWORDS and a locked TITLE,
+    /// all stale; the author is "Ada".
+    fn doc_with_header_fields() -> (wordcraft_doc::Document, u32) {
+        use wordcraft_doc::{CharProps, Paragraph, PartKind};
+        let field = |instr: &str, locked: bool| InlineObject::Field {
+            instr: instr.into(),
+            result: "stale".into(),
+            locked,
+            dirty: false,
+            code: false,
+            form: String::new(),
+        };
+        let mut doc = wordcraft_doc::Document::from_text("one two three");
+        doc.core.creator = "Ada".into();
+        let mut p = Paragraph::new();
+        for (instr, locked) in [("AUTHOR", false), ("NUMWORDS", false), ("TITLE", true)] {
+            let off = p.len();
+            p.insert_object(off, field(instr, locked), &CharProps::default()).unwrap();
+        }
+        let body_path = doc.para_paths(StoryRef::Body).remove(0);
+        doc.para_mut(StoryRef::Body, &body_path).unwrap().insert_object(0, field("AUTHOR", false), &CharProps::default()).unwrap();
+        let hdr = doc.add_part(PartKind::Header, vec![std::sync::Arc::new(wordcraft_doc::Block::Para(p))]);
+        (doc, hdr)
+    }
+
+    fn story_fields(s: &Session, story: StoryRef) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for path in s.doc.para_paths(story) {
+            for o in &s.doc.para(story, &path).unwrap().objects {
+                if let InlineObject::Field { instr, result, .. } = o {
+                    out.push((instr.clone(), result.clone()));
+                }
+            }
+        }
+        out
+    }
+
+    /// #1706 (Word check): Update Field with the caret in the body leaves a header's fields alone.
+    #[test]
+    fn update_fields_in_the_body_leaves_headers_alone() {
+        let (doc, hdr) = doc_with_header_fields();
+        let mut s = Session::new(doc);
+        s.run("references.updateFields", &json!({})).unwrap();
+        assert_eq!(story_fields(&s, StoryRef::Body)[0], ("AUTHOR".to_string(), "Ada".to_string()));
+        assert!(story_fields(&s, StoryRef::Part(hdr)).iter().all(|(_, r)| r == "stale"), "{:?}", story_fields(&s, StoryRef::Part(hdr)));
+    }
+
+    /// #1706: with the caret in a header (or other part), Update Field refreshes that part's
+    /// fields, but not locked ones and not the body's.
+    #[test]
+    fn update_fields_in_a_header_updates_that_header() {
+        let (doc, hdr) = doc_with_header_fields();
+        let mut s = Session::new(doc);
+        let path = s.doc.para_paths(StoryRef::Part(hdr)).remove(0);
+        s.sel = crate::session::Selection::caret(Pos::new(StoryRef::Part(hdr), path, 0));
+        s.run("references.updateFields", &json!({})).unwrap();
+        let got = story_fields(&s, StoryRef::Part(hdr));
+        assert_eq!(got.len(), 3, "{got:?}");
+        assert_eq!(got[0].1, "Ada");
+        assert_eq!(got[1].1, s.doc.word_count().to_string());
+        assert_eq!(got[2].1, "stale", "a locked field stays as it was");
+        assert!(story_fields(&s, StoryRef::Body).iter().all(|(_, r)| r == "stale"), "the body is not touched");
+    }
+
+    /// #1706: `all: true` (printing) updates the whole document even with the caret in a header.
+    #[test]
+    fn update_fields_all_covers_every_story() {
+        let (doc, hdr) = doc_with_header_fields();
+        let mut s = Session::new(doc);
+        let path = s.doc.para_paths(StoryRef::Part(hdr)).remove(0);
+        s.sel = crate::session::Selection::caret(Pos::new(StoryRef::Part(hdr), path, 0));
+        s.run("references.updateFields", &json!({"all": true})).unwrap();
+        let got = story_fields(&s, StoryRef::Part(hdr));
+        assert_eq!((got[0].1.as_str(), got[2].1.as_str()), ("Ada", "stale"), "{got:?}");
+        assert_eq!(story_fields(&s, StoryRef::Body)[0].1, "Ada");
+        // Junk values fall back to the caret's story.
+        s.run("references.updateFields", &json!({"all": "yes"})).unwrap();
     }
 }
