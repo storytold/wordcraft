@@ -215,6 +215,7 @@ fn delimiter_row(l: &str) -> Option<Vec<Option<Align>>> {
         out.push(match (left, right) {
             (true, true) => Some(Align::Center),
             (false, true) => Some(Align::Right),
+            (true, false) => Some(Align::Left),
             _ => None,
         });
     }
@@ -1280,6 +1281,7 @@ fn table_md(t: &FTable, out: &mut Vec<String>) {
         .map(|a| match a {
             Some(Align::Center) => ":---:",
             Some(Align::Right) => "---:",
+            Some(Align::Left) => ":---",
             _ => "---",
         })
         .collect();
@@ -1679,5 +1681,23 @@ mod tests {
         let FBlock::Table(back_table2) = &back_flow2.blocks[0] else { panic!() };
         assert_eq!(back_table2.rows[1][0].text(), "a`b|c");
         assert_eq!(back_table2.rows[1][1].text(), "CRITICAL_DISTINCTIVE_INFO");
+    }
+
+    #[test]
+    fn table_column_alignments_import_and_export() {
+        let md = "| Left | Center | Right | Default |\n| :--- | :---: | ---: | --- |\n| 1 | 2 | 3 | 4 |\n";
+        let flow = parse(md);
+        let FBlock::Table(t) = &flow.blocks[0] else { panic!("expected table") };
+        assert_eq!(t.rows.len(), 2);
+        let aligns: Vec<Option<Align>> = t.rows[0]
+            .iter()
+            .map(|c| c.blocks.iter().find_map(|b| if let FBlock::Para(p) = b { Some(p.align) } else { None }).flatten())
+            .collect();
+        assert_eq!(aligns, vec![Some(Align::Left), Some(Align::Center), Some(Align::Right), None]);
+
+        let mut out = Vec::new();
+        table_md(t, &mut out);
+        let exported = out.join("\n");
+        assert!(exported.contains("| :--- | :---: | ---: | --- |"), "Exported: {exported}");
     }
 }
