@@ -598,7 +598,7 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, alpha: f32, outer
         Placed::Cell { .. } | Placed::Object { .. } => {}
         Placed::Lines { story, path, para, l0, l1, x, y, turn } if turn.is_turned() => {
             let mut items = Vec::new();
-            lines(doc, *story, path, para, *l0, *l1, 0.0, 0.0, opts, alpha, &mut items);
+            lines(doc, *story, path, para, *l0, *l1, 0.0, 0.0, opts, alpha, *turn == TextDirection::Down, &mut items);
             // Link areas are axis-aligned page rectangles: turned text gets none.
             for d in &mut items {
                 if let Draw::Glyphs { link, .. } = d {
@@ -610,7 +610,7 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, alpha: f32, outer
             }
             out.push(Draw::Turned { x: *x, y: *y, turn: *turn, items });
         }
-        Placed::Lines { story, path, para, l0, l1, x, y, .. } => lines(doc, *story, path, para, *l0, *l1, *x, *y, opts, alpha, out),
+        Placed::Lines { story, path, para, l0, l1, x, y, .. } => lines(doc, *story, path, para, *l0, *l1, *x, *y, opts, alpha, false, out),
     }
 }
 
@@ -625,6 +625,7 @@ fn lines(
     y: f32,
     opts: &DisplayOptions,
     alpha: f32,
+    down: bool,
     out: &mut Vec<Draw>,
 ) {
     let Some(first) = pl.lines.get(l0) else { return };
@@ -891,12 +892,27 @@ fn lines(
                     g.0 = gid;
                 }
             }
-            // WordArt effects draw the letters from their outlines; the glyphs stay, invisible,
-            // for the PDF's text.
-            let art = rc.text_effects.as_ref().filter(|_| ins.is_none() && del.is_none() && !glyphs.is_empty());
-            if let Some(fx) = art {
-                let path = crate::wordart::glyph_path(&st.face, st.size, &glyphs, st.synth_italic);
-                out.push(Draw::Art { path, fx: fx.clone(), color, alpha });
+            let synth_bold = st.synth_bold || ins_mark == Some(InsertMark::Bold);
+            let synth_italic = st.synth_italic || ins_mark == Some(InsertMark::Italic);
+            // Text effects draw the letters from their outlines; the glyphs stay, invisible, for
+            // the PDF's text. Not for colour glyphs (no outlines), top-to-bottom text with upright
+            // characters (their outlines would lie on their side), `#` deletion marks, or WordArt
+            // in revision colours.
+            let upright = down && text.chars().any(upright_in_vertical);
+            let art = (!upright
+                && !glyphs.is_empty()
+                && del_mark != Some(DeleteMark::Hash)
+                && (rc.text_effects.is_none() || ins.is_none() && del.is_none()))
+            .then(|| crate::wordart::run_effects(rc, color))
+            .flatten()
+            .filter(|_| !st.face.has_color_glyphs());
+            let has_art = art.is_some();
+            if let Some(mut fx) = art {
+                if synth_bold {
+                    crate::wordart::embolden(&mut fx, color, st.size);
+                }
+                let path = crate::wordart::glyph_path(&st.face, st.size, &glyphs, synth_italic);
+                out.push(Draw::Art { path, fx: Box::new(fx), color, alpha });
             }
             if !glyphs.is_empty() {
                 out.push(Draw::Glyphs {
@@ -904,9 +920,9 @@ fn lines(
                     size: st.size,
                     glyphs,
                     color,
-                    alpha: if art.is_some() { 0.0 } else { alpha },
-                    synth_bold: st.synth_bold || ins_mark == Some(InsertMark::Bold),
-                    synth_italic: st.synth_italic || ins_mark == Some(InsertMark::Italic),
+                    alpha: if has_art { 0.0 } else { alpha },
+                    synth_bold,
+                    synth_italic,
                     text,
                     link: rc.link.clone(),
                     ranges,

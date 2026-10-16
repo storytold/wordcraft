@@ -1486,3 +1486,20 @@ fn bundled_unicode_glyphs_are_visible_and_extractable() {
     assert!(String::from_utf8_lossy(&bytes).contains("/ToUnicode"));
     assert_eq!(squash(&extract_text(&bytes).concat()), TEXT);
 }
+
+/// #2534: text with legacy font effects is drawn from its outlines and keeps its text, once.
+#[test]
+fn legacy_font_effects_keep_their_text() {
+    let mut d = Document::new();
+    d.body = [
+        CharProps { outline: Some(true), ..Default::default() },
+        CharProps { shadow: Some(true), ..Default::default() },
+        CharProps { emboss: Some(true), ..Default::default() },
+        CharProps { engrave: Some(true), ..Default::default() },
+    ]
+    .into_iter()
+    .map(|c| para_block(Paragraph::with_text("Effect", c)))
+    .collect();
+    let text = extract_text(&export(&d, &PdfOptions::default()).unwrap()).concat();
+    assert_eq!(text.matches("Effect").count(), 4, "{text}");
+}

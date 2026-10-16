@@ -1388,6 +1388,47 @@ mod tests {
         assert!(light > 30, "light {light}");
     }
 
+    /// #2534: legacy font effects are drawn: outlined letters are hollow; shadowed and embossed
+    /// ones have a grey copy down-right, imprinted ones up-left.
+    #[test]
+    fn legacy_font_effects_are_drawn() {
+        use wordcraft_doc::CharProps;
+        // Dark and grey pixel counts, and the grey pixels' mean offset from the dark ones.
+        let shot = |c: CharProps| {
+            let mut d = Document::from_text("x");
+            let cp = CharProps { size: Some(40.0), bold: Some(true), ..c };
+            d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("HHHH", cp))];
+            let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+            let img = render_page(&d, &l.pages[0], 2.0, &RenderOptions::default());
+            let (mut dark, mut grey) = ((0.0, 0.0, 0.0f64), (0.0, 0.0, 0.0f64));
+            for (x, y) in (100..800).flat_map(|x| (100..300).map(move |y| (x, y))) {
+                let v = img.pixel(x, y)[0];
+                let acc = match v {
+                    0..60 => &mut dark,
+                    100..=160 => &mut grey,
+                    _ => continue,
+                };
+                *acc = (acc.0 + 1.0, acc.1 + f64::from(x), acc.2 + f64::from(y));
+            }
+            let mean = |a: (f64, f64, f64)| (a.1 / a.0.max(1.0), a.2 / a.0.max(1.0));
+            let ((dx, dy), (gx, gy)) = (mean(dark), mean(grey));
+            (dark.0, grey.0, (gx - dx, gy - dy))
+        };
+        let (plain_dark, plain_grey, _) = shot(CharProps::default());
+        assert!(plain_dark > 2000.0, "plain {plain_dark}");
+        let (dark, _, _) = shot(CharProps { outline: Some(true), ..Default::default() });
+        assert!(dark < plain_dark / 3.0, "outline is hollow: {dark} vs {plain_dark}");
+        for (c, sign) in [
+            (CharProps { shadow: Some(true), ..Default::default() }, 1.0),
+            (CharProps { emboss: Some(true), ..Default::default() }, 1.0),
+            (CharProps { engrave: Some(true), ..Default::default() }, -1.0),
+        ] {
+            let (_, grey, (ox, oy)) = shot(c);
+            assert!(grey > plain_grey * 2.0, "a grey copy: {grey} vs {plain_grey}");
+            assert!(ox * sign > 1.0 && oy * sign > 1.0, "grey copy offset {ox} {oy}");
+        }
+    }
+
     /// A document whose only text is a yellow-highlighted run.
     fn yellow_highlight_doc() -> (Document, wordcraft_layout::DocLayout) {
         let cp = wordcraft_doc::CharProps { highlight: Some(wordcraft_doc::props::Highlight::Yellow), size: Some(24.0), ..Default::default() };
