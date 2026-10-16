@@ -1118,7 +1118,7 @@ fn layout_box(
                 }
                 // Automatic space after: none after the last paragraph of a cell or box.
                 let after = if pl.rp.after_auto && i + 1 == blocks.len() { 0.0 } else { pl.rp.space_after };
-                y += pl.height + after;
+                y += pl.height + after + border_after(&pl);
                 prev_after = after;
                 prev_after_auto = pl.rp.after_auto;
                 prev_listed = listed;
@@ -1340,6 +1340,14 @@ fn fit_box(items: Vec<Placed>, height: f32) -> Vec<Placed> {
         }
     }
     out
+}
+
+/// A bottom paragraph border keeps its gap and stroke below the line box.
+fn border_after(pl: &ParaLayout) -> f32 {
+    pl.rp.borders.as_ref().and_then(|b| b.bottom).filter(Border::is_visible).map_or(0.0, |b| {
+        let extent = b.space + b.width;
+        if extent.is_finite() { extent.max(0.0) } else { 0.0 }
+    })
 }
 
 /// Paragraph lines plus their shading and borders.
@@ -3175,8 +3183,8 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     // Keep lines together: if it doesn't fit but would on an empty column, move it. Keep with
     // next alone moves a paragraph only when it would fit here by itself (Word for Windows): one
     // that doesn't breaks as usual, its last lines going over with the next paragraph.
-    if pl.rp.keep_lines || (pl.rp.keep_next && pb.y + pl.height <= pb.bottom + 0.01) {
-        let need = pl.height + if pl.rp.keep_next { next_first_line(ctx, block, width, 0) } else { 0.0 };
+    if pl.rp.keep_lines || (pl.rp.keep_next && pb.y + pl.height + border_after(&pl) <= pb.bottom + 0.01) {
+        let need = pl.height + border_after(&pl) + if pl.rp.keep_next { next_first_line(ctx, block, width, 0) } else { 0.0 };
         // (Against the whole column: balanced columns grow to hold it.)
         if pb.y + need > pb.bottom && !pb.at_top() && need <= pb.uncapped_bottom() - pb.top {
             pb.advance(block, body_top);
@@ -3491,7 +3499,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     // A mark that stayed with its page break keeps its space after on that page too: the next page
     // starts with the next paragraph (Word, compatibility modes 12 to 15).
     let space_after = if pb.after_break_mark { 0.0 } else { pl.rp.space_after };
-    pb.y += space_after;
+    pb.y += space_after + if pb.after_break_mark { 0.0 } else { border_after(&pl) };
     pb.prev = Some((pl.rp.style.clone(), pl.rp.contextual_spacing, space_after, pl.rp.after_auto, label.is_some()));
 }
 
@@ -3626,7 +3634,7 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize) -> f32
             let _ = rp;
             let pl = para::layout_para(p, &env);
             if pl.rp.keep_next && depth < 8 {
-                pl.rp.space_before + pl.height + pl.rp.space_after + next_first_line(ctx, block + 1, width, depth + 1)
+                pl.rp.space_before + pl.height + border_after(&pl) + pl.rp.space_after + next_first_line(ctx, block + 1, width, depth + 1)
             } else {
                 // The room this one needs to start on the page with the kept paragraph before
                 // it (#966).
