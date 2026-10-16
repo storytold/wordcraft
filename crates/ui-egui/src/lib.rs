@@ -3887,6 +3887,39 @@ mod tests {
         assert!(copied(&ctx).contains(&text), "copy put {text:?} on the clipboard: {:?}", copied(&ctx));
     }
 
+    /// #2276: copying a selected picture, which has no text, still replaces what the system
+    /// clipboard held, so Paste inserts the picture instead of the text copied before it.
+    #[test]
+    fn copying_a_picture_replaces_the_clipboards_old_text() {
+        let last_copied = |ctx: &egui::Context| -> Option<String> {
+            ctx.output(|o| {
+                o.commands.iter().rev().find_map(|c| match c {
+                    egui::OutputCommand::CopyText(t) => Some(t.clone()),
+                    _ => None,
+                })
+            })
+        };
+        let ctx = egui::Context::default();
+        let mut a = typed();
+        a.ctx = Some(ctx.clone());
+        a.run("select.all", json!({})).unwrap();
+        a.run("edit.copy", json!({})).unwrap();
+        assert_eq!(last_copied(&ctx).as_deref(), Some(UNSAVED));
+
+        a.run("select.collapse", json!({"end": true})).unwrap();
+        let data = wordcraft_engine::cmd::insert::base64_encode(&png_bytes([200, 30, 30, 255]));
+        a.run("insert.picture", json!({"data": data})).unwrap();
+        assert!(crate::objects::selected(&a).is_some());
+        a.run("edit.copy", json!({})).unwrap();
+        assert_eq!(last_copied(&ctx).as_deref(), Some(""), "the old text is gone from the system clipboard");
+
+        // The system clipboard now holds no text, so Paste finds no text to send: our copy.
+        a.run("select.collapse", json!({"end": true})).unwrap();
+        a.run("edit.paste", json!({})).unwrap();
+        assert_eq!(object_count(&mut a), 2, "Paste duplicated the picture");
+        assert_eq!(body_text(&a).matches(UNSAVED).count(), 1, "and didn't paste the old text");
+    }
+
     /// #1265: every user entry point publishes Cut to the one clipboard sink — the ribbon's button
     /// and a real Cmd/Ctrl+X key event, not only the generic command dispatch the sink sits behind.
     #[test]
