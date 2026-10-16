@@ -277,6 +277,35 @@ mod tests {
         s
     }
 
+    /// #1798: Update Field evaluates `DOCPROPERTY` against custom and built-in document
+    /// properties (with a `\* MERGEFORMAT` switch), instead of leaving the cached result.
+    #[test]
+    fn update_fields_evaluates_docproperty() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("file.properties", &json!({"custom": {"ProjectName": "Atlas"}})).unwrap();
+        s.run("insert.field", &json!({"instr": "DOCPROPERTY \"ProjectName\" \\* MERGEFORMAT", "result": "stale"})).unwrap();
+        s.run("text.insert", &json!({"text": " "})).unwrap();
+        s.doc.core.title = "Report".into();
+        s.run("insert.field", &json!({"instr": "DOCPROPERTY Title", "result": ""})).unwrap();
+        s.run("references.updateFields", &json!({})).unwrap();
+        let results: Vec<String> = s
+            .doc
+            .body
+            .first()
+            .and_then(|b| b.as_para())
+            .map(|p| {
+                p.objects
+                    .iter()
+                    .filter_map(|o| match o {
+                        InlineObject::Field { result, .. } => Some(result.clone()),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert_eq!(results, ["Atlas", "Report"]);
+    }
+
     fn page_text(s: &mut Session) -> String {
         let l = s.layout();
         let mut out = String::new();

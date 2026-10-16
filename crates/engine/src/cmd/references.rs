@@ -898,6 +898,14 @@ pub fn update_fields(s: &mut Session) -> Result<(), CmdError> {
                 "TITLE" => updates.push((k, s.doc.core.title.clone())),
                 "AUTHOR" => updates.push((k, s.doc.core.creator.clone())),
                 "NUMWORDS" => updates.push((k, s.doc.word_count().to_string())),
+                // DOCPROPERTY <name>: a custom property first, then a built-in one (#1798).
+                "DOCPROPERTY" => {
+                    if let Some(name) = doc_property_arg(instr)
+                        && let Some(v) = doc_property(&s.doc, &name)
+                    {
+                        updates.push((k, v));
+                    }
+                }
                 _ => {}
             }
         }
@@ -954,6 +962,38 @@ pub fn refresh_date_fields(doc: &mut wordcraft_doc::Document) {
             para.touch();
         }
     }
+}
+
+/// The property name of a `DOCPROPERTY` field: the word (or quoted text) after the field name,
+/// before any switch (`DOCPROPERTY "Project Name" \* MERGEFORMAT`).
+fn doc_property_arg(instr: &str) -> Option<String> {
+    let rest = instr.trim().split_once(char::is_whitespace)?.1.trim_start();
+    let name = match rest.strip_prefix('"') {
+        Some(q) => q.split('"').next().unwrap_or(""),
+        None => rest.split([' ', '\\']).next().unwrap_or(""),
+    };
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// The value of a document property under the name a `DOCPROPERTY` field uses: a custom property
+/// when one has this name, else the built-in property (English names, case-insensitively, as
+/// Word's field accepts). `None` for a name this application doesn't know.
+fn doc_property(doc: &wordcraft_doc::Document, name: &str) -> Option<String> {
+    if let Some(v) = doc.custom_prop(name) {
+        return Some(v.to_string());
+    }
+    let c = &doc.core;
+    Some(match name.trim().to_ascii_lowercase().as_str() {
+        "title" => c.title.clone(),
+        "subject" => c.subject.clone(),
+        "author" | "creator" => c.creator.clone(),
+        "keywords" => c.keywords.clone(),
+        "comments" | "description" => c.description.clone(),
+        "category" => c.category.clone(),
+        "lastmodifiedby" | "last modified by" => c.last_modified_by.clone(),
+        "revisionnumber" | "revision number" | "revision" => c.revision.to_string(),
+        _ => return None,
+    })
 }
 
 /// A field's `\@` date picture: the quoted text after it (switches may follow), or one word.
