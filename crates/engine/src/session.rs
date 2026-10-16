@@ -406,6 +406,9 @@ pub struct Session {
     )>,
     /// Picture edits: edited media key → original media key (Reset Picture).
     pub originals: std::collections::HashMap<String, String>,
+    /// Picture effects, styles and borders: drawn media key → what was drawn on which bitmap,
+    /// so the next one replaces them instead of drawing over them (#2052).
+    pub picture_looks: std::collections::HashMap<String, crate::cmd::objects::PictureLook>,
     /// Last mutating command (Repeat).
     pub last_command: Option<(String, Value)>,
     /// Macro being recorded: (name, steps).
@@ -623,6 +626,7 @@ impl Session {
             cache: LayoutCache::new(),
             layout: None,
             originals: Default::default(),
+            picture_looks: Default::default(),
             last_command: None,
             recording: None,
             macros: Default::default(),
@@ -1069,6 +1073,7 @@ impl Session {
             cache: _,
             layout: _,
             originals: _,
+            picture_looks: _,
             last_command: _,
             recording: _,
             macros: _,

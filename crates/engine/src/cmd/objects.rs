@@ -151,32 +151,11 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"color": "RRGGBB"}"#)
         .when(has_picture),
         CommandSpec::new("picture.effects", "Artistic Effects", "Picture Format › Adjust", |s, v| {
+            // One effect at a time, as in Word: a second one replaces the first (#2052).
             let e = p::str(v, "effect").unwrap_or("blur").to_string();
-            adjust(s, move |img| match e.as_str() {
-                "blur" => img.blur(3.0),
-                "sharpen" => img.unsharpen(2.0, 2),
-                "invert" => {
-                    let mut i = img;
-                    i.invert();
-                    i
-                }
-                "posterize" => {
-                    let mut rgba = img.to_rgba8();
-                    for px in rgba.pixels_mut() {
-                        for c in px.0.iter_mut().take(3) {
-                            *c = (*c / 64) * 85;
-                        }
-                    }
-                    image::DynamicImage::ImageRgba8(rgba)
-                }
-                "pixelate" => {
-                    let (w, h) = (img.width().max(1), img.height().max(1));
-                    img.resize_exact((w / 12).max(1), (h / 12).max(1), image::imageops::FilterType::Nearest).resize_exact(w, h, image::imageops::FilterType::Nearest)
-                }
-                _ => img,
-            })
+            relook(s, move |l| l.effect = (e != "none").then_some(e))
         })
-        .params(r#"{"effect": "blur|sharpen|invert|posterize|pixelate"}"#)
+        .params(r#"{"effect": "blur|sharpen|invert|posterize|pixelate|none"} (replaces the picture's effect)"#)
         .when(has_picture),
         CommandSpec::new("picture.transparency", "Transparency", "Picture Format › Adjust", |s, v| {
             let t = p::f32(v, "percent").unwrap_or(50.0).clamp(0.0, 100.0);
@@ -230,17 +209,22 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"path"?: string, "data"?: base64}"#)
         .when(has_picture),
         CommandSpec::new("picture.style", "Picture Styles", "Picture Format › Picture Styles", |s, v| {
+            // A style replaces the picture's style and border, as Word's gallery does (#2052).
             let style = p::str(v, "style").unwrap_or("simpleFrame").to_string();
-            adjust(s, move |img| picture_style(img, &style))
+            relook(s, move |l| {
+                l.style = Some(style);
+                l.border = None;
+            })
         })
-        .params(r#"{"style": "simpleFrame|thickFrame|rounded|softEdge|shadow"}"#)
+        .params(r#"{"style": "simpleFrame|thickFrame|rounded|softEdge|shadow"} (replaces the picture's style and border)"#)
         .when(has_picture),
         CommandSpec::new("picture.border", "Picture Border", "Picture Format › Picture Styles", |s, v| {
             let c = p::str(v, "color").and_then(Rgb::parse).unwrap_or(Rgb::BLACK);
             let w = p::u64(v, "width").unwrap_or(4).clamp(1, 200) as u32;
-            adjust(s, move |img| frame(img, w, [c.0, c.1, c.2, 255]))
+            // Replaces the picture's border, keeping its style (#2052).
+            relook(s, move |l| l.border = Some((c, w)))
         })
-        .params(r#"{"color"?: "RRGGBB", "width"?: px}"#)
+        .params(r#"{"color"?: "RRGGBB", "width"?: px} (replaces the picture's border)"#)
         .when(has_picture),
         CommandSpec::new("arrange.rotate", "Rotate", "Layout › Arrange", |s, v| {
             // Turns and flips are the object's angle and mirroring (DrawingML `a:xfrm`): the
@@ -1064,6 +1048,97 @@ fn adjust_media(s: &mut Session, base: &str, f: impl Fn(image::DynamicImage) -> 
     })
 }
 
+/// What Artistic Effects, Picture Styles and Picture Border drew on a picture's bitmap: the
+/// bitmap they started from and the effect, style and border on it, so the next one draws again
+/// from that bitmap instead of over the last result. Picking a second style replaces the first,
+/// as in Word, instead of framing the frame (#2052). Kept in [`Session::picture_looks`] under the
+/// media key of the drawn bitmap.
+#[derive(Clone, Debug, Default)]
+pub struct PictureLook {
+    /// The media key of the bitmap before any of them.
+    pub base: String,
+    pub effect: Option<String>,
+    pub style: Option<String>,
+    pub border: Option<(Rgb, u32)>,
+    /// The drawn bitmap: a media key that names other bytes later (undo then a new picture
+    /// reusing the key) is not this look's.
+    pub drawn: std::sync::Arc<Vec<u8>>,
+}
+
+/// Change the selected picture's effect, style or border and draw it again from the bitmap
+/// under them (effect, then style, then border).
+fn relook(s: &mut Session, change: impl FnOnce(&mut PictureLook)) -> CmdResult {
+    let (_, o) = selected(s).ok_or_else(|| CmdError::Disabled("no picture".into()))?;
+    let InlineObject::Image { media, .. } = o else { return Err(CmdError::Disabled("not a picture".into())) };
+    let cur = s.doc.media.get(&media).cloned();
+    let mut look = s
+        .picture_looks
+        .get(&media)
+        .filter(|l| cur.as_ref().is_some_and(|c| std::sync::Arc::ptr_eq(c, &l.drawn)) && s.doc.media.contains_key(&l.base))
+        .cloned()
+        .unwrap_or_else(|| PictureLook { base: media.clone(), ..Default::default() });
+    change(&mut look);
+    if look.effect.is_none() && look.style.is_none() && look.border.is_none() {
+        // Nothing left on it: the bitmap as it was.
+        let base = look.base.clone();
+        return with_obj(s, |o| {
+            if let InlineObject::Image { media, .. } = o {
+                *media = base.clone();
+            }
+        });
+    }
+    let l = look.clone();
+    let out = adjust_media(s, &look.base, move |img| {
+        let mut img = match &l.effect {
+            Some(e) => artistic_effect(img, e),
+            None => img,
+        };
+        if let Some(st) = &l.style {
+            img = picture_style(img, st);
+        }
+        if let Some((c, w)) = l.border {
+            img = frame(img, w, [c.0, c.1, c.2, 255]);
+        }
+        img
+    })?;
+    if let Some((_, InlineObject::Image { media, .. })) = selected(s)
+        && let Some(drawn) = s.doc.media.get(&media).cloned()
+    {
+        s.picture_looks.insert(media, PictureLook { drawn, ..look });
+    }
+    Ok(out)
+}
+
+fn artistic_effect(img: image::DynamicImage, effect: &str) -> image::DynamicImage {
+    match effect {
+        "blur" => img.blur(3.0),
+        "sharpen" => img.unsharpen(2.0, 2),
+        "invert" => {
+            let mut i = img;
+            i.invert();
+            i
+        }
+        "posterize" => {
+            let mut rgba = img.to_rgba8();
+            for px in rgba.pixels_mut() {
+                for c in px.0.iter_mut().take(3) {
+                    *c = (*c / 64) * 85;
+                }
+            }
+            image::DynamicImage::ImageRgba8(rgba)
+        }
+        "pixelate" => {
+            let (w, h) = (img.width().max(1), img.height().max(1));
+            img.resize_exact((w / 12).max(1), (h / 12).max(1), image::imageops::FilterType::Nearest).resize_exact(
+                w,
+                h,
+                image::imageops::FilterType::Nearest,
+            )
+        }
+        _ => img,
+    }
+}
+
 fn reset(s: &mut Session, _: &Value) -> CmdResult {
     let (_, o) = selected(s).ok_or_else(|| CmdError::Disabled("no picture".into()))?;
     let InlineObject::Image { media, .. } = o else { return Err(CmdError::Disabled("not a picture".into())) };
@@ -1667,6 +1742,59 @@ mod tests {
         );
         s.run("picture.reset", &json!({})).unwrap();
         assert_eq!(rgba(&s), orig, "reset still finds the original");
+    }
+
+    /// #2052: a picture style picked after another replaces it (Thick Frame then Simple Frame is
+    /// only the simple frame), a border replaces the border and keeps the style, an artistic
+    /// effect replaces the effect, and transparency 50% then 10% is 10%, as in Word.
+    #[test]
+    fn picture_styles_borders_and_effects_replace_the_last_one() {
+        let picture = || {
+            let mut s = Session::new(wordcraft_doc::Document::new());
+            s.run("insert.picture", &json!({"data": super::super::insert::base64_encode(&png(80, 40))})).unwrap();
+            s
+        };
+        let bitmap = |s: &Session| {
+            let (_, o) = selected(s).unwrap();
+            let InlineObject::Image { media, .. } = o else { panic!("a picture") };
+            image::load_from_memory(&s.doc.media.get(&media).cloned().unwrap()).unwrap().to_rgba8()
+        };
+        let after = |cmds: &[(&str, Value)]| {
+            let mut s = picture();
+            for (id, v) in cmds {
+                s.run(id, v).unwrap();
+            }
+            bitmap(&s)
+        };
+        let (thick, simple) = (json!({"style": "thickFrame"}), json!({"style": "simpleFrame"}));
+        assert_eq!(after(&[("picture.style", thick.clone()), ("picture.style", simple.clone())]), after(&[("picture.style", simple.clone())]));
+        let (wide, thin) = (json!({"width": 8}), json!({"width": 2}));
+        assert_eq!(
+            after(&[("picture.style", thick.clone()), ("picture.border", wide.clone()), ("picture.border", thin.clone())]),
+            after(&[("picture.style", thick.clone()), ("picture.border", thin.clone())]),
+            "a border replaces the border and keeps the style"
+        );
+        assert_eq!(
+            after(&[("picture.border", wide), ("picture.style", simple.clone())]),
+            after(&[("picture.style", simple)]),
+            "a style replaces the border too"
+        );
+        assert_eq!(
+            after(&[("picture.effects", json!({"effect": "invert"})), ("picture.effects", json!({"effect": "posterize"}))]),
+            after(&[("picture.effects", json!({"effect": "posterize"}))])
+        );
+        assert_eq!(after(&[("picture.effects", json!({"effect": "invert"})), ("picture.effects", json!({"effect": "none"}))]), bitmap(&picture()));
+        let fifty_then_ten = after(&[("picture.transparency", json!({"percent": 50})), ("picture.transparency", json!({"percent": 10}))]);
+        assert!(fifty_then_ten.pixels().all(|p| p.0[3] == 229), "255 * 0.9");
+
+        // Undo then a new edit reusing the drawn bitmap's media key starts from what is there.
+        let mut s = picture();
+        s.run("picture.style", &thick).unwrap();
+        s.run("edit.undo", &json!({})).unwrap();
+        s.run("picture.effects", &json!({"effect": "invert"})).unwrap();
+        s.run("picture.border", &json!({"width": 2})).unwrap();
+        let (w, h) = bitmap(&s).dimensions();
+        assert_eq!((w, h), (84, 44), "the effect and a 2 px border, no thick frame from before the undo");
     }
 
     /// #513: Wrap Text › Fix Position on Page / Move with Text re-anchor a floating picture
