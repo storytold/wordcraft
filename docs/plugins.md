@@ -1,6 +1,6 @@
 # Add-ins (plugins)
 
-> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (manifest 1.3: add-ins that require other add-ins, with version ranges; previously minor: protocol 2: the push channel, transports and live sessions; previously minor: protocol 1.2: dialogs WordCraft draws, opening local files, document events, `context.document`; previously minor: ribbon buttons that run macros: `macros/run` gets the button; previously minor: protocol 1.1: host requests, VBA macros through an add-in, the Developer tab's Code group; Office add-ins; previously major: first version: out-of-process add-ins, protocol 1, File › Options › Add-ins, install from GitHub) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (Office add-ins: `office.js` defused, function commands, colour names, more of the Word API; [officejs.md](officejs.md); previously minor: manifest 1.3: add-ins that require other add-ins, with version ranges; previously minor: protocol 2: the push channel, transports and live sessions; previously minor: protocol 1.2: dialogs WordCraft draws, opening local files, document events, `context.document`; previously minor: ribbon buttons that run macros: `macros/run` gets the button; previously minor: protocol 1.1: host requests, VBA macros through an add-in, the Developer tab's Code group; Office add-ins; previously major: first version: out-of-process add-ins, protocol 1, File › Options › Add-ins, install from GitHub) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 An add-in adds **commands** that people and agents run, and can put them on the ribbon (a group
 on a built-in tab, or a tab of its own) and in the right-click menu. It's a separate program,
@@ -398,9 +398,13 @@ The task pane is the system web view (WKWebView on macOS, WebView2 on Windows) o
 panel (`apps/wordcraft/src/office_web.rs`). Before the page's scripts run it gets
 `crates/office-js/bootstrap.js` (the one hand-written script, as in the other craft apps) and
 WordCraft's own Office.js built to wasm (`cargo xtask office-js`; the macOS package carries it in
-`Resources/office-js`, or set `WORDCRAFT_OFFICE_JS`). Microsoft's `office.js` is never loaded,
-read or shipped. Each `context.sync()` becomes one `office.sync` command: one undo step, all or
-nothing (a sync that only reads makes none).
+`Resources/office-js`, or set `WORDCRAFT_OFFICE_JS`). Microsoft's `office.js` is never read or
+shipped, and a page that loads it from Microsoft's CDN gets it defused before it runs, with
+`Office` and `Word` globals no script can replace. Each `context.sync()` becomes one `office.sync`
+command: one undo step, all or nothing (a sync that only reads makes none). Function commands
+(`ExecuteFunction`) run in the add-in's function file once it has loaded, through
+`Office.actions.associate`, and WordCraft waits for `event.completed()`. The whole story, with
+what's covered and what isn't: [officejs.md](officejs.md).
 
 **Objects** (Word JavaScript API; reported as WordApi 1.3, with only these objects):
 
@@ -408,22 +412,26 @@ nothing (a sync that only reads makes none).
 |---|---|---|
 | `document` | `name` (r) | `body`, `paragraphs`, `properties`, `getSelection()`, `save()` |
 | `DocumentProperties` | `title`, `subject`, `author`, `keywords`, `comments` | |
-| `Body` | `text` (r), `style` | `paragraphs`, `font`, `getRange(Whole/Start/End)`, `insertText(text, Start/End/Replace)`, `insertParagraph(text, Start/End)`, `clear()`, `search(text, {matchCase, matchWholeWord})` |
+| `Body` | `text` (r), `style` | `paragraphs`, `font`, `getRange(Whole/Start/End)`, `insertText(text, Start/End/Replace)`, `insertParagraph(text, Start/End)`, `insertBreak(type, Start/End)`, `clear()`, `search(text, {matchCase, matchWholeWord})` |
 | `ParagraphCollection` | `items` | `getFirst()`, `getLast()` |
-| `Paragraph` | `text` (r), `style`, `styleBuiltIn`, `alignment`, `firstLineIndent`, `leftIndent`, `rightIndent`, `lineSpacing`, `spaceAfter`, `spaceBefore`, `isListItem` (r) | `font`, `getRange()`, `getNext()`, `getPrevious()`, `insertText`, `insertParagraph(text, Before/After)`, `delete()`, `select()` |
-| `Range` | `text` (r), `isEmpty` (r), `style` | `font`, `paragraphs`, `insertText(text, Start/End/Before/After/Replace)`, `insertParagraph`, `delete()`, `select(Select/Start/End)` |
-| `Font` | `bold`, `italic`, `underline`, `size`, `name`, `color`, `highlightColor` (`null` when the text is mixed) | |
+| `Paragraph` | `text` (r), `style`, `styleBuiltIn`, `alignment`, `firstLineIndent`, `leftIndent`, `rightIndent`, `lineSpacing`, `spaceAfter`, `spaceBefore`, `isListItem` (r) | `font`, `getRange()`, `getNext()`, `getPrevious()`, `insertText`, `insertParagraph(text, Before/After)`, `insertBreak(type, Before/After)`, `delete()`, `select()` |
+| `Range` | `text` (r), `isEmpty` (r), `style` | `font`, `paragraphs`, `insertText(text, Start/End/Before/After/Replace)`, `insertParagraph`, `insertBreak(type, Before/After)`, `delete()`, `select(Select/Start/End)` |
+| `Font` | `bold`, `italic`, `underline`, `size`, `name`, `color`, `highlightColor`, `strikeThrough`, `doubleStrikeThrough`, `subscript`, `superscript` (`null` when the text is mixed) | |
 
-The common API: `Office.onReady`, `getSelectedDataAsync`/`setSelectedDataAsync` (text), `settings`
-(kept per open document until it closes), `requirements.isSetSupported`.
+Every object also has `set({...})`. Colours are `#RRGGBB` or CSS colour names (`"blue"`).
+
+The common API: `Office.onReady`, `Office.initialize`, `Office.actions.associate`,
+`getSelectedDataAsync`/`setSelectedDataAsync` (text), `settings` (kept per open document until it
+closes), `requirements.isSetSupported`, `addHandlerAsync` for `DocumentSelectionChanged` (other
+events fail with `NotSupported`), the common enums (`EventType`, `Index`, `GoToType`, …).
 
 Word's API has no ids for paragraphs and ranges; WordCraft hands out opaque ones (`p:<path>`,
 `r:<path>:<from>-<path>:<to>`), kept right across the edits of one sync and good until the
 document's structure changes after it.
 
 **Requirements.** The manifest's `<Requirements>` are checked when the add-in loads, against the
-requirement sets and methods WordCraft's Office.js reports: WordApi 1.3, Settings, Selection and
-TextCoercion 1.1; `Document.getSelectedDataAsync`, `Document.setSelectedDataAsync`,
+requirement sets and methods WordCraft's Office.js reports: WordApi 1.3, Settings, Selection,
+TextCoercion, DocumentEvents and AddinCommands 1.1; `Document.getSelectedDataAsync`, `Document.setSelectedDataAsync`,
 `Settings.get`, `set`, `remove`, `saveAsync` (one table, `wordcraft_plugin::office::API_SETS` and
 `API_METHODS`; a test keeps it equal to the one `isSetSupported` answers from). `<Sets>` lists
 `<Set Name="WordApi" MinVersion="1.3"/>`; a set without `MinVersion` takes the
@@ -434,7 +442,8 @@ File › Options › Add-ins with the reason ("Needs WordApi 1.9; WordCraft supp
 instead of failing at its first call.
 
 **Not yet:** content controls, inline pictures, tables, lists, sections, headers and footers,
-HTML/OOXML in and out, events, dialogs, custom properties, a web view on Linux.
+HTML/OOXML in and out, events other than the selection's, dialogs, shared runtimes and keyboard
+shortcuts, custom properties, a web view on Linux.
 
 ## Requirements (manifest 1.3)
 
@@ -555,6 +564,7 @@ in the zip are kept.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Office add-ins ([officejs.md](officejs.md)): Microsoft's `office.js` defused in the page and the globals made irreplaceable; function commands run end to end (`Office.actions.associate`, the control id as `event.source.id`, `event.completed()`, a 5-minute limit); CSS colour names; `set()`, `insertBreak`, strikethrough and sub/superscript; `DocumentSelectionChanged`; common-API enums; late `Office.initialize` |
 | 2026-10-15 | minor | Manifest 1.3 (shared with GridCraft and DeckCraft): `requires` (apps, protocol, features, other add-ins with Cargo-style version ranges), blocked add-ins (`state`, `blockedBy`, `requiredBy`), start order, `host.protocol` and `addins` in `initialize`, `plugins.requirements`, `plugins.installMissing`, `plugins.install` `github`/`withRequirements`/`force`/`version` (newest release in range), `plugins.load` `force`, Install Missing, asking before turning off a needed add-in or updating out of range; Office add-ins' `<Requirements>` sets and methods checked |
 | 2026-10-15 | minor | Protocol 2 (2.0.1, shared with GridCraft and DeckCraft): the push channel (standard output read all the time, notifications and anytime requests, 64 MiB lines, flood cut-off), `host.features` `push`/`collab` and `host.collab`, manifest `collab` for transports, `collab.join` in command answers; live sessions in [collab.md](collab.md) |
 | 2026-10-15 | minor | Protocol 1.2 (shared with GridCraft and DeckCraft, used by craft-nextcloud): `host.features` and `host.language`; `context.document {path, name, dirty}` for commands and macros; answers with `open` (a local file, opened as File › Open does, with a location `label`) and `dialog` (list, form or message drawn by WordCraft, chaining); manifest `events` and `events/documentOpened`, `documentSaved`, `documentClosed`, sent without holding anything up |

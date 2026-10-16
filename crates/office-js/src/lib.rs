@@ -2,11 +2,13 @@
 //!
 //! An Office add-in's task pane is a web page that calls `Office.onReady`, `Word.run` and the
 //! proxy objects (`context.document.body.insertParagraph("Hi", "End")`,
-//! `body.paragraphs.load("items/text")`, `context.sync()`). WordCraft never loads Microsoft's
-//! `office.js`: this crate, compiled to wasm, defines those globals itself, written from the
-//! public API reference (Word JavaScript API, WordApi 1.1–1.3) on learn.microsoft.com (clean
-//! room). Each `context.sync()` sends the queued actions as one JSON batch to the host, which runs
-//! it as `office.sync` (one undo step) and answers with the loaded values or an error:
+//! `body.paragraphs.load("items/text")`, `context.sync()`). WordCraft never ships Microsoft's
+//! `office.js` (and `bootstrap.js` defuses it when a page loads it): this crate, compiled to wasm,
+//! defines those globals itself, written from the public API reference (Word JavaScript API,
+//! WordApi 1.1–1.3, and the common API) on learn.microsoft.com (clean room). What it covers is in
+//! `docs/officejs.md`. Each `context.sync()` sends the queued actions as one JSON batch to the
+//! host, which runs it as `office.sync` (one undo step) and answers with the loaded values or an
+//! error:
 //!
 //! - request `{"id": n, "actions": [{"op": "load"|"set"|"call", "path": [...], …}]}`, posted
 //!   with `globalThis.__craftOffice.post(json)`;
@@ -27,6 +29,12 @@
 //! - a collection's loaded items are named by their ids.
 //!
 //! Enum values (`"End"`, `"Centered"`, `"Heading1"`) travel as the API spells them.
+//!
+//! Besides syncs, the library tells the host `{"event": "ready"}` once it has started, and
+//! `{"event": "functionDone", "call", "error"?}` when a function command
+//! (`__craftOfficeRunFunction({"call", "name", "control"})`, run on a function associated with
+//! `Office.actions.associate`) completes or fails; the host calls `__craftOfficeEvent({"type":
+//! "documentSelectionChanged"})` for `addHandlerAsync`'s handlers.
 //!
 //! [`core`] is the batching, the naming and the cache of loaded properties (plain Rust, tested
 //! natively); the JavaScript side (`js`, wasm only) is the globals and proxy classes. What isn't
@@ -65,3 +73,22 @@ pub mod core;
 mod js;
 #[cfg(target_arch = "wasm32")]
 pub use js::*;
+
+#[cfg(test)]
+mod bootstrap_tests {
+    /// The bootstrap turns off Microsoft's `office.js` from the CDNs sample pages load it from,
+    /// and guards every global the library defines (`js::install_globals`).
+    #[test]
+    fn the_bootstrap_knows_the_office_js_hosts_and_guards_the_globals() {
+        let js = include_str!("../bootstrap.js");
+        for host in [r"appsforoffice\.microsoft\.com", r"officeapis\.public\.onecdn\.static\.microsoft", "@microsoft\\/office-js"] {
+            assert!(js.contains(host), "{host}");
+        }
+        for name in ["Office: office", "Word: fixed", "OfficeRuntime: {}", "OfficeExtension: {}"] {
+            assert!(js.contains(name), "{name}");
+        }
+        for hook in ["__craftOfficeAdopt", "__craftOfficeStart", "data:text/javascript,"] {
+            assert!(js.contains(hook), "{hook}");
+        }
+    }
+}

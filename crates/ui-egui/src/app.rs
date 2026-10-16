@@ -456,7 +456,7 @@ impl WordApp {
         crate::keytips::logic(self, &ctx);
         // Alt codes in a text box are read before the box is drawn, so it types the character.
         crate::keys::field_alt_codes(self, &ctx);
-        crate::office_pane::pump(self);
+        crate::office_pane::pump(self, ctx.input(|i| i.time));
         // A failed Recent open, or a failed Save As, is news only until File closes (#2938).
         if !self.ui.backstage {
             backstage::forget_open_error(&ctx);

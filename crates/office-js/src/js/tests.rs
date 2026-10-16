@@ -16,7 +16,8 @@ use super::{from_js, install, install_with_transport, to_js};
 
 const PARA_PROPS: &[&str] =
     &["style", "styleBuiltIn", "alignment", "firstLineIndent", "leftIndent", "rightIndent", "lineSpacing", "spaceAfter", "spaceBefore"];
-const FONT_PROPS: &[&str] = &["bold", "italic", "underline", "size", "name", "color", "highlightColor"];
+const FONT_PROPS: &[&str] =
+    &["bold", "italic", "underline", "size", "name", "color", "highlightColor", "strikeThrough", "doubleStrikeThrough", "subscript", "superscript"];
 
 #[derive(Clone)]
 struct Para {
@@ -47,6 +48,10 @@ impl Para {
             ("name", json!("Calibri")),
             ("color", json!("#000000")),
             ("highlightColor", Json::Null),
+            ("strikeThrough", json!(false)),
+            ("doubleStrikeThrough", json!(false)),
+            ("subscript", json!(false)),
+            ("superscript", json!(false)),
         ]);
         Para { text: text.into(), props, font, list: false }
     }
@@ -136,6 +141,8 @@ impl Doc {
 thread_local! {
     static DOC: RefCell<Doc> = RefCell::new(Doc::new());
     static LOG: RefCell<Vec<Vec<Json>>> = const { RefCell::new(Vec::new()) };
+    /// What the library told the host without asking (`functionCompleted`, `subscribe`).
+    static NOTES: RefCell<Vec<Json>> = const { RefCell::new(Vec::new()) };
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -420,6 +427,7 @@ fn call(d: &mut Doc, t: T, name: &str, args: &[Json]) -> Result<Json, Fail> {
             Ok(Json::Null)
         }
         (T::Doc, "save", _) => Ok(Json::Null),
+        (T::Body | T::Para(_) | T::Range(_), "insertBreak", "start" | "end" | "before" | "after") => Ok(Json::Null),
         (T::Settings, "save", _) => {
             d.settings = args.first().cloned().unwrap_or(json!({}));
             Ok(Json::Null)
@@ -463,7 +471,23 @@ fn office_sync(request: &str) -> String {
 fn setup() {
     DOC.with(|d| *d.borrow_mut() = Doc::new());
     LOG.with(|l| l.borrow_mut().clear());
-    install_with_transport(|r| office_sync(&r));
+    NOTES.with(|n| n.borrow_mut().clear());
+    install_with_transport(transport);
+}
+
+/// The fake host's channel: syncs (`{"id", "actions"}`) are answered; anything else is noted.
+fn transport(request: String) -> String {
+    let msg: Json = serde_json::from_str(&request).unwrap();
+    if msg.get("actions").is_none() {
+        NOTES.with(|n| n.borrow_mut().push(msg));
+        return "{}".into();
+    }
+    office_sync(&request)
+}
+
+/// The library's events, but `ready` (each install sends one).
+fn notes() -> Vec<Json> {
+    NOTES.with(|n| n.borrow().iter().filter(|m| m["event"] != "ready").cloned().collect())
 }
 
 fn doc<R>(f: impl FnOnce(&Doc) -> R) -> R {
@@ -583,7 +607,7 @@ async fn a_paragraph_is_inserted_at_the_end_styled_and_bolded() {
     assert_eq!(wire[0][2]["path"][3], json!({"p": "font"}));
     assert_eq!(wire[1][0]["path"], json!([{"p": "document"}, {"p": "paragraphs"}, {"m": "getById", "a": ["p:2"]}]));
     assert_eq!(wire[1][1]["path"], json!([{"p": "document"}, {"m": "getRangeById", "a": [{"result": 0}]}, {"p": "font"}]));
-    assert_eq!(wire[1][2]["props"], json!(["bold", "italic", "underline", "size", "name", "color", "highlightColor"]), "load('font') loads the font");
+    assert_eq!(wire[1][2]["props"], json!(FONT_PROPS), "load('font') loads the font");
 }
 
 #[wasm_bindgen_test]
@@ -740,7 +764,10 @@ async fn fonts_read_null_where_the_text_is_mixed() {
     let out = from_js(&out);
     assert_eq!(
         out["body"],
-        json!({"bold": null, "italic": false, "underline": "None", "size": 11, "name": "Calibri", "color": "#000000", "highlightColor": null})
+        json!({
+            "bold": null, "italic": false, "underline": "None", "size": 11, "name": "Calibri", "color": "#000000", "highlightColor": null,
+            "strikeThrough": false, "doubleStrikeThrough": false, "subscript": false, "superscript": false
+        })
     );
     assert_eq!((out["wholeBold"].clone(), out["wholeSize"].clone(), out["firstBold"].clone()), (Json::Null, json!(11), json!(false)));
     assert_eq!(out["wholeText"], "Hello world\rThe quick brown fox jumps over the lazy dog. A fox again.");
@@ -855,7 +882,7 @@ async fn settings_requirements_and_the_globals() {
     let saved = callback_only(&settings, "saveAsync").await;
     assert_eq!(g(&saved, "status").as_string().as_deref(), Some("succeeded"));
     // Installed again (the pane reloaded), the settings come back from the host.
-    install_with_transport(|r| office_sync(&r));
+    install_with_transport(transport);
     let _ = JsFuture::from(call_js(&office, "onReady", &[]).dyn_into::<Promise>().unwrap()).await.unwrap();
     assert_eq!(call_js(&settings, "get", &[s("theme")]).as_string().as_deref(), Some("dark"));
     assert!(call_js(&settings, "get", &[s("missing")]).is_null());
@@ -867,7 +894,7 @@ async fn settings_requirements_and_the_globals() {
     assert_eq!(supported("WordApi", "1.4"), Some(false));
     assert_eq!(supported("PowerPointApi", "1.1"), Some(false));
     // The globals can't be replaced or deleted by a later script (Microsoft's office.js, say).
-    for name in ["Word", "Office", "OfficeExtension"] {
+    for name in ["Word", "Office", "OfficeExtension", "OfficeRuntime"] {
         let _ = Reflect::set(&js_sys::global(), &name.into(), &JsValue::from(1));
         let _ = Reflect::delete_property(&js_sys::global(), &name.into());
         assert!(global(name).is_object(), "{name} stays");
@@ -914,4 +941,172 @@ async fn the_page_transport_posts_and_takes_replies() {
     .unwrap();
     assert_eq!(text.as_string().as_deref(), Some("Posted\nHello world\nThe quick brown fox jumps over the lazy dog. A fox again."));
     let _ = Reflect::delete_property(&js_sys::global(), &"__craftOffice".into());
+}
+
+/// Waits for the microtasks and callbacks queued so far.
+async fn settle() {
+    for _ in 0..4 {
+        let _ = JsFuture::from(Promise::resolve(&JsValue::UNDEFINED)).await;
+    }
+}
+
+#[wasm_bindgen_test]
+async fn set_takes_several_properties_and_breaks_go_in() {
+    setup();
+    word_run(|ctx| async move {
+        let second = call_js(&call_js(&path(&ctx, &["document", "body", "paragraphs"]), "getFirst", &[]), "getNext", &[]);
+        // The Word tutorial's "change font": several properties at once.
+        let props = to_js(&json!({"name": "Courier New", "bold": true, "size": 18}));
+        call_js(&g(&second, "font"), "set", &[props]);
+        // An object's properties through the object: `paragraph.set({font: {...}})`.
+        call_js(&second, "set", &[to_js(&json!({"alignment": "Centered", "font": {"strikeThrough": true}}))]);
+        assert!(try_call(&second, "set", &[to_js(&json!({"alignment": ["Left"]}))]).is_err());
+        call_js(
+            &call_js(&g(&ctx, "document"), "getSelection", &[]),
+            "insertBreak",
+            &[word(&["BreakType", "page"]), word(&["InsertLocation", "after"])],
+        );
+        sync(&ctx).await
+    })
+    .await
+    .unwrap();
+    let font = doc(|d| d.paras[1].font.clone());
+    assert_eq!(
+        (font["name"].clone(), font["bold"].clone(), font["size"].clone(), font["strikeThrough"].clone()),
+        (json!("Courier New"), json!(true), json!(18), json!(true))
+    );
+    assert_eq!(doc(|d| d.paras[1].props["alignment"].clone()), json!("Centered"));
+    let wire = syncs();
+    let last = wire.last().unwrap();
+    assert_eq!(last.last().unwrap()["method"], "insertBreak");
+    assert_eq!(last.last().unwrap()["args"], json!(["Page", "After"]));
+    assert_eq!(word(&["BreakType", "sectionContinuous"]).as_string().as_deref(), Some("SectionContinuous"));
+}
+
+/// Calls `__craftOfficeRunFunction({"call", "name", "control"})` and waits for it.
+async fn run_command(name: &str, control: &str, call: u32) {
+    let run: Function = global("__craftOfficeRunFunction").dyn_into().unwrap();
+    run.call1(&JsValue::UNDEFINED, &s(&json!({"call": call, "name": name, "control": control}).to_string())).unwrap();
+    settle().await;
+}
+
+#[wasm_bindgen_test]
+async fn function_commands_run_associated_functions_and_say_when_they_complete() {
+    setup();
+    thread_local! {
+        static SEEN: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    }
+    // The function file's top level: `Office.actions.associate("writeValue", writeValue)`.
+    let write_value = Closure::<dyn Fn(JsValue)>::new(|event: JsValue| {
+        SEEN.with(|s| s.borrow_mut().push(path(&event, &["source", "id"]).as_string().unwrap_or_default()));
+        call_js(&event, "completed", &[]);
+        // A second `completed()` says nothing more.
+        call_js(&event, "completed", &[]);
+    })
+    .into_js_value();
+    let associate = path(&global("Office"), &["actions"]);
+    call_js(&associate, "associate", &[s("writeValue"), write_value]);
+    run_command("writeValue", "Contoso.FunctionButton", 7).await;
+    assert_eq!(SEEN.with(|s| s.borrow().clone()), ["Contoso.FunctionButton"]);
+    assert_eq!(notes(), [json!({"event": "functionDone", "call": 7})]);
+    // Older function files define a global function instead.
+    let legacy = Closure::<dyn Fn(JsValue)>::new(|event: JsValue| {
+        call_js(&event, "completed", &[]);
+    })
+    .into_js_value();
+    Reflect::set(&js_sys::global(), &"legacyCommand".into(), &legacy).unwrap();
+    run_command("legacyCommand", "Old.Button", 8).await;
+    // A function that isn't there, or that throws, completes with an error.
+    run_command("missing", "X", 9).await;
+    let throws = Closure::<dyn Fn(JsValue) -> Result<(), JsValue>>::new(|_e: JsValue| Err(js_sys::Error::new("boom").into())).into_js_value();
+    call_js(&associate, "associate", &[s("throws"), throws]);
+    run_command("throws", "Y", 10).await;
+    let n = notes();
+    assert_eq!(n[1], json!({"event": "functionDone", "call": 8}));
+    assert_eq!(n[2]["call"], 9);
+    assert!(n[2]["error"].as_str().unwrap().contains("missing"), "{n:?}");
+    assert_eq!(n[3], json!({"event": "functionDone", "call": 10, "error": "boom"}));
+    // The library said it was ready once installed.
+    assert!(NOTES.with(|n| n.borrow().iter().any(|m| *m == json!({"event": "ready"}))));
+    let _ = Reflect::delete_property(&js_sys::global(), &"legacyCommand".into());
+}
+
+#[wasm_bindgen_test]
+async fn the_common_api_enums_events_and_late_initialize() {
+    setup();
+    let office = global("Office");
+    for (table, key, value) in [
+        ("EventType", "DocumentSelectionChanged", "documentSelectionChanged"),
+        ("Index", "First", "first"),
+        ("GoToType", "Index", "index"),
+        ("HostType", "Word", "Word"),
+        ("CoercionType", "Text", "text"),
+        ("BindingType", "Matrix", "matrix"),
+    ] {
+        assert_eq!(path(&office, &[table, key]).as_string().as_deref(), Some(value), "Office.{table}.{key}");
+    }
+    assert_eq!(path(&office, &["context", "host"]).as_string().as_deref(), Some("Word"));
+    // A frozen Office: its parts can't be swapped.
+    let _ = Reflect::set(&office, &"onReady".into(), &JsValue::from(1));
+    assert!(g(&office, "onReady").is_function());
+    // `Office.initialize` assigned after the library is ready is still called.
+    let _ = JsFuture::from(call_js(&office, "onReady", &[]).dyn_into::<Promise>().unwrap()).await.unwrap();
+    thread_local! {
+        static INIT: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    }
+    let init =
+        Closure::<dyn Fn(JsValue)>::new(|reason: JsValue| INIT.with(|i| i.borrow_mut().push(reason.as_string().unwrap_or_default()))).into_js_value();
+    assert!(Reflect::set(&office, &"initialize".into(), &init).unwrap());
+    settle().await;
+    assert_eq!(INIT.with(|i| i.borrow().clone()), ["inserted"]);
+    assert!(g(&office, "initialize").is_function());
+    // Handlers: DocumentSelectionChanged hears the host's events; other events fail
+    // asynchronously with NotSupported (not a TypeError).
+    let doc = path(&office, &["context", "document"]);
+    thread_local! {
+        static EVENTS: RefCell<Vec<Json>> = const { RefCell::new(Vec::new()) };
+    }
+    let handler =
+        Closure::<dyn Fn(JsValue)>::new(|e: JsValue| EVENTS.with(|v| v.borrow_mut().push(json!(g(&e, "type").as_string())))).into_js_value();
+    let added = handler_async(&doc, "addHandlerAsync", &[s("documentSelectionChanged"), handler.clone()]).await;
+    assert_eq!(g(&added, "status").as_string().as_deref(), Some("succeeded"));
+    let event: Function = global("__craftOfficeEvent").dyn_into().unwrap();
+    event.call1(&JsValue::UNDEFINED, &s(r#"{"type":"documentSelectionChanged"}"#)).unwrap();
+    event.call1(&JsValue::UNDEFINED, &s(r#"{"type":"somethingElse"}"#)).unwrap();
+    assert_eq!(EVENTS.with(|v| v.borrow().clone()), [json!("documentSelectionChanged")]);
+    let other = handler_async(&doc, "addHandlerAsync", &[s("bindingDataChanged"), handler.clone()]).await;
+    assert_eq!(path(&other, &["error", "code"]).as_string().as_deref(), Some("NotSupported"));
+    let removed = handler_async(&doc, "removeHandlerAsync", &[s("documentSelectionChanged"), to_js(&json!({}))]).await;
+    assert_eq!(g(&removed, "status").as_string().as_deref(), Some("succeeded"));
+    event.call1(&JsValue::UNDEFINED, &s(r#"{"type":"documentSelectionChanged"}"#)).unwrap();
+    assert_eq!(EVENTS.with(|v| v.borrow().len()), 1, "no handler any more");
+    // What isn't there answers NotSupported through the callback, or rejects with NotImplemented.
+    let file = handler_async(&doc, "getFileAsync", &[s("compressed")]).await;
+    assert_eq!(path(&file, &["error", "code"]).as_string().as_deref(), Some("NotSupported"));
+    let bindings = g(&doc, "bindings");
+    let b = handler_async(&bindings, "addFromSelectionAsync", &[s("text")]).await;
+    assert_eq!(path(&b, &["error", "code"]).as_string().as_deref(), Some("NotSupported"));
+    let shown = JsFuture::from(call_js(&g(&office, "addin"), "showAsTaskpane", &[]).dyn_into::<Promise>().unwrap()).await;
+    assert_eq!(code(&shown.unwrap_err()), "NotImplemented");
+    assert!(global("OfficeRuntime").is_object());
+}
+
+/// Calls `doc.<name>(...args, callback)` and waits for the callback; the call itself never throws
+/// and never calls back before it returns.
+async fn handler_async(doc: &JsValue, name: &str, args: &[JsValue]) -> JsValue {
+    let called = std::rc::Rc::new(std::cell::Cell::new(false));
+    let (doc, name, args) = (doc.clone(), name.to_string(), args.to_vec());
+    let c2 = called.clone();
+    let p = Promise::new(&mut |resolve, _| {
+        let c3 = c2.clone();
+        let cb = Closure::once_into_js(move |r: JsValue| {
+            c3.set(true);
+            let _ = resolve.call1(&JsValue::UNDEFINED, &r);
+        });
+        let mut all = args.clone();
+        all.push(cb);
+        try_call(&doc, &name, &all).unwrap();
+        assert!(!c2.get(), "{name} answers asynchronously");
+    });
+    JsFuture::from(p).await.unwrap()
 }

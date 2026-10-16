@@ -482,7 +482,7 @@ impl WordApp {
         }
         if let Some(p) = req.get("officeFunction") {
             let s = |k: &str| p.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-            crate::office_pane::run_function(self, &s("plugin"), &s("url"), &s("function"));
+            crate::office_pane::run_function(self, &s("plugin"), &s("url"), &s("function"), &s("control"));
         }
         // A word from a command for the status bar (Save turning a .docx with macros into a .docm).
         if let Some(text) = req.get("status").and_then(Value::as_str) {

@@ -438,8 +438,8 @@ fn run_step(s: &mut Session, v: &Value) -> CmdResult {
             wordcraft_plugin::office::OfficeCommand::ShowTaskpane { url, taskpane_id } => {
                 json!({"officePane": {"plugin": plugin, "title": title, "url": url, "pane": taskpane_id}})
             }
-            wordcraft_plugin::office::OfficeCommand::ExecuteFunction { function, url } => {
-                json!({"officeFunction": {"plugin": plugin, "url": url, "function": function}})
+            wordcraft_plugin::office::OfficeCommand::ExecuteFunction { function, url, control } => {
+                json!({"officeFunction": {"plugin": plugin, "url": url, "function": function, "control": control}})
             }
         });
         return Ok(json!({"ran": 0, "office": office}));
