@@ -42,25 +42,26 @@ pub fn decode_entity(name: &str) -> Option<String> {
         "gt" | "GT" => '>',
         "quot" | "QUOT" => '"',
         "apos" => '\'',
-        "nbsp" => '\u{00A0}',
+        "nbsp" | "NBSP" => '\u{00A0}',
         "ensp" => '\u{2002}',
         "emsp" => '\u{2003}',
         "thinsp" => '\u{2009}',
         "shy" => '\u{00AD}',
-        "copy" => '©',
-        "reg" => '®',
-        "trade" => '™',
+        "copy" | "COPY" => '©',
+        "reg" | "REG" => '®',
+        "trade" | "TRADE" => '™',
         "hellip" => '…',
         "mdash" => '—',
         "ndash" => '–',
+        "minus" => '−',
         "lsquo" => '‘',
         "rsquo" => '’',
         "sbquo" => '‚',
         "ldquo" => '“',
         "rdquo" => '”',
         "bdquo" => '„',
-        "laquo" => '«',
-        "raquo" => '»',
+        "laquo" | "LAQUO" => '«',
+        "raquo" | "RAQUO" => '»',
         "bull" => '•',
         "middot" => '·',
         "deg" => '°',
@@ -70,14 +71,16 @@ pub fn decode_entity(name: &str) -> Option<String> {
         "frac12" => '½',
         "frac14" => '¼',
         "frac34" => '¾',
-        "sect" => '§',
-        "para" => '¶',
-        "euro" => '€',
-        "pound" => '£',
-        "yen" => '¥',
-        "cent" => '¢',
+        "sect" | "SECT" => '§',
+        "para" | "PARA" => '¶',
+        "euro" | "EURO" => '€',
+        "pound" | "POUND" => '£',
+        "yen" | "YEN" => '¥',
+        "cent" | "CENT" => '¢',
         "dagger" => '†',
         "Dagger" => '‡',
+        "prime" => '′',
+        "Prime" => '″',
         "larr" => '←',
         "rarr" => '→',
         "uarr" => '↑',
@@ -86,8 +89,22 @@ pub fn decode_entity(name: &str) -> Option<String> {
         "le" => '≤',
         "ge" => '≥',
         "ne" => '≠',
+        "equiv" => '≡',
+        "asymp" | "approx" => '≈',
+        "sim" => '∼',
+        "perp" => '⊥',
+        "sdot" => '⋅',
+        "radic" => '√',
+        "permil" => '‰',
         "infin" => '∞',
         "check" => '✓',
+        "percnt" => '%',
+        "num" => '#',
+        "dollar" => '$',
+        "commat" => '@',
+        "tilde" => '~',
+        "lrm" => '\u{200E}',
+        "rlm" => '\u{200F}',
         "iexcl" => '¡',
         "iquest" => '¿',
         "szlig" => 'ß',
@@ -480,6 +497,8 @@ fn css_len_pt(v: &str) -> Option<f32> {
     let num = |s: &str| s.trim().parse::<f32>().ok().filter(|x| x.is_finite());
     if let Some(x) = v.strip_suffix("pt") {
         num(x)
+    } else if let Some(x) = v.strip_suffix("pc") {
+        num(x).map(|p| p * 12.0)
     } else if let Some(x) = v.strip_suffix("px") {
         num(x).map(|p| p * 0.75)
     } else if let Some(x) = v.strip_suffix("rem").or_else(|| v.strip_suffix("em")) {
@@ -490,6 +509,8 @@ fn css_len_pt(v: &str) -> Option<f32> {
         num(x).map(|p| p * 72.0 / 2.54)
     } else if let Some(x) = v.strip_suffix("mm") {
         num(x).map(|p| p * 72.0 / 25.4)
+    } else if let Some(x) = v.strip_suffix("q") {
+        num(x).map(|p| p * 72.0 / 101.6)
     } else if let Some(x) = v.strip_suffix('%') {
         num(x).map(|p| p * 0.12)
     } else {
@@ -501,6 +522,9 @@ fn css_len_pt(v: &str) -> Option<f32> {
             "large" => Some(13.5),
             "x-large" => Some(18.0),
             "xx-large" => Some(24.0),
+            "xxx-large" => Some(32.0),
+            "smaller" => Some(10.0),
+            "larger" => Some(14.4),
             _ => num(&v).map(|p| p * 0.75),
         }
     }
@@ -511,7 +535,13 @@ fn apply_style(css: &str, f: &mut Fmt, align: &mut Option<Align>, preserve: &mut
     for decl in css.split(';').take(64) {
         let Some((k, v)) = decl.split_once(':') else { continue };
         let k = k.trim().to_ascii_lowercase();
-        let v = v.trim().trim_end_matches("!important").trim();
+        let mut v = v.trim();
+        if let Some(idx) = v.rfind('!') {
+            let after_bang = v[idx + 1..].trim();
+            if after_bang.eq_ignore_ascii_case("important") {
+                v = v[..idx].trim();
+            }
+        }
         let lv = v.to_ascii_lowercase();
         match k.as_str() {
             "font-weight" => f.bold = lv.starts_with("bold") || lv.parse::<u32>().is_ok_and(|w| w >= 600),
@@ -1784,5 +1814,36 @@ mod tests {
     #[test]
     fn entities() {
         assert_eq!(unescape("a &lt;b&gt; &#65;&#x42; &bogus; &"), "a <b> AB &bogus; &");
+        assert_eq!(unescape("&minus; &COPY; &NBSP;&REG;&TRADE;&SECT;&PARA;&EURO;&POUND;&YEN;&CENT;"), "− © \u{00a0}®™§¶€£¥¢");
+        assert_eq!(unescape("&prime;&Prime;&approx;&equiv;&sim;&perp;&sdot;&radic;&permil;"), "′″≈≡∼⊥⋅√‰");
+        assert_eq!(unescape("&percnt;&num;&dollar;&commat;&tilde;&lrm;&rlm;"), "%#$@~\u{200e}\u{200f}");
+    }
+
+    #[test]
+    fn test_css_important_case_insensitive_and_whitespace() {
+        let f = parse("<p style='font-weight: bold !IMPORTANT; text-align: center ! important; font-size: 16pt !Important'>hello</p>");
+        let para = match &f.blocks[0] {
+            FBlock::Para(p) => p,
+            _ => panic!("expected para"),
+        };
+        assert_eq!(para.align, Some(Align::Center));
+        match &para.inlines[0] {
+            Inline::Text(t, fmt) => {
+                assert_eq!(t, "hello");
+                assert!(fmt.bold);
+                assert_eq!(fmt.size, Some(16.0));
+            }
+            _ => panic!("expected text"),
+        }
+    }
+
+    #[test]
+    fn test_css_length_units_and_font_size_keywords() {
+        assert_eq!(super::css_len_pt("1pc"), Some(12.0));
+        assert_eq!(super::css_len_pt("2pc"), Some(24.0));
+        assert_eq!(super::css_len_pt("xxx-large"), Some(32.0));
+        assert_eq!(super::css_len_pt("smaller"), Some(10.0));
+        assert_eq!(super::css_len_pt("larger"), Some(14.4));
+        assert!(super::css_len_pt("101.6q").is_some_and(|pt| (pt - 72.0).abs() < 0.01));
     }
 }
