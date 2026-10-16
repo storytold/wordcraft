@@ -256,6 +256,9 @@ pub struct UiState {
     #[serde(rename = "dark", skip_serializing)]
     pub(crate) legacy_dark: Option<bool>,
     pub nav_tab: String,
+    /// View › Navigation Pane: open or closed as the person left it, kept between runs (#2526).
+    /// The session owns it while running (see [`WordApp::prefs`]).
+    pub nav_pane: bool,
     pub show_discord: bool,
     /// User name (File › Options) for comments and tracked changes; empty keeps the default.
     pub author: String,
@@ -351,6 +354,7 @@ impl Default for UiState {
             animations: theme::Animations::default(),
             legacy_dark: None,
             nav_tab: "headings".into(),
+            nav_pane: false,
             show_discord: true,
             author: String::new(),
             window: None,
@@ -680,6 +684,7 @@ impl WordApp {
         ui.read_aloud_rate = self.session.read_aloud.rate();
         ui.read_aloud_skip_citations = self.session.read_aloud.skip_citations;
         ui.dark_page = self.session.view.dark_mode;
+        ui.nav_pane = self.session.view.nav_pane;
         ui.keyboard = self.session.keymap.clone();
         ui.ribbon = self.session.ribbon.clone();
         ui.ink_pens = self.session.view.draw.pens.clone();
@@ -722,6 +727,7 @@ impl WordApp {
         self.session.read_aloud.set_rate(self.ui.read_aloud_rate);
         self.session.read_aloud.skip_citations = self.ui.read_aloud_skip_citations;
         self.session.view.dark_mode = self.ui.dark_page;
+        self.session.view.nav_pane = self.ui.nav_pane;
         // Keys for commands this version doesn't have are dropped.
         self.session.keymap = std::mem::take(&mut self.ui.keyboard);
         let reg = self.session.registry.clone();
@@ -5680,6 +5686,32 @@ mod tests {
         let mut second = app();
         second.apply_prefs(serde_json::from_slice(&saved).unwrap());
         assert!(second.session.view.dark_mode);
+    }
+
+    /// #2526: the Navigation pane stays as the person left it at the next launch, and a
+    /// `ui.json` from before the setting leaves it closed.
+    #[test]
+    fn navigation_pane_visibility_survives_restart() {
+        let mut first = app();
+        assert!(!first.session.view.nav_pane);
+        first.session.view.nav_pane = true;
+        let saved = serde_json::to_vec(&first.prefs()).unwrap();
+
+        let mut second = app();
+        second.apply_prefs(serde_json::from_slice(&saved).unwrap());
+        assert!(second.session.view.nav_pane, "the pane is open again");
+
+        let mut closed = app();
+        closed.session.view.nav_pane = true;
+        closed.session.view.nav_pane = false;
+        let saved = serde_json::to_vec(&closed.prefs()).unwrap();
+        let mut third = app();
+        third.apply_prefs(serde_json::from_slice(&saved).unwrap());
+        assert!(!third.session.view.nav_pane, "a closed pane stays closed");
+
+        let mut old = app();
+        old.apply_prefs(serde_json::from_str(r#"{"navTab": "headings"}"#).unwrap());
+        assert!(!old.session.view.nav_pane, "no saved value: closed");
     }
 
     #[test]
