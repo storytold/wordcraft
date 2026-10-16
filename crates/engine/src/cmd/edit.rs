@@ -187,10 +187,13 @@ fn cut(s: &mut Session, v: &Value) -> CmdResult {
 }
 
 /// Paste keeps the source formatting: our own copy while the system clipboard still holds it,
-/// else another program's HTML or RTF (#687), else the system clipboard's text.
+/// else another program's HTML or RTF (#687). The system clipboard's text has none, so it pastes
+/// as Keep Text Only does.
 fn paste(s: &mut Session, v: &Value) -> CmdResult {
-    let frag = super::paste::paste_fragment(s, v)?;
-    super::paste::insert(s, frag)?;
+    match super::paste::paste_content(s, v)? {
+        super::paste::Pasted::Fragment(frag) => super::paste::insert(s, frag)?,
+        super::paste::Pasted::Text(text) => super::paste::insert_text(s, &text)?,
+    }
     sel_result(s)
 }
 

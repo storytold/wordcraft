@@ -1028,17 +1028,76 @@ fn reject_all_takes_out_the_paragraph_breaks_a_tracked_paste_inserted() {
 fn plain_text_paste_keeps_an_empty_paragraph_in_a_list() {
     // Issue #422: the pasted paragraph separators went through Enter, which ends the list on an
     // empty item, so `A\n\nB` lost its empty paragraph.
-    for (id, v) in [("edit.pasteText", json!({"text": "A\n\nB"})), ("edit.pasteSpecial", json!({"as": "text", "text": "A\n\nB"}))] {
+    // Paste of plain text from another program goes the same way.
+    for (id, v) in [
+        ("edit.pasteText", json!({"text": "A\n\nB"})),
+        ("edit.pasteSpecial", json!({"as": "text", "text": "A\n\nB"})),
+        ("edit.paste", json!({"text": "A\n\nB"})),
+    ] {
         let mut s = s();
         run(&mut s, "para.bullets", json!({}));
         run(&mut s, id, v);
-        assert_eq!(texts(&s), ["a", "", "b"], "{id}");
+        assert_eq!(paras(&s), vec![para("A", Some(0)), para("", Some(0)), para("B", Some(0))], "{id}");
     }
     // Enter twice still ends the list.
     let mut s = s();
     run(&mut s, "para.bullets", json!({}));
     typ(&mut s, "A\n\nB");
     assert_eq!(paras(&s), vec![para("A", Some(0)), para("B", None)]);
+}
+
+/// Each body paragraph's text and paragraph formatting.
+fn para_formats(s: &Session) -> Vec<(String, wordcraft_doc::props::ParaProps)> {
+    s.doc.body.iter().filter_map(|b| b.as_para()).map(|p| (p.text.clone(), p.props.clone())).collect()
+}
+
+/// Plain text from another program pastes as Keep Text Only does, as in Word: every pasted line
+/// becomes a paragraph formatted like the paragraph it lands in. Paste gave the lines after the
+/// first default formatting, and the text after the caret went with the last line, so a
+/// right-to-left paragraph came out left-to-right from its second line on.
+#[test]
+fn plain_text_paste_gives_every_line_the_formatting_of_its_paragraph() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "بداية نهاية", "raw": true}));
+    run(&mut s, "para.rtl", json!({}));
+    run(&mut s, "para.indents", json!({"left": 18, "right": 36}));
+    run(&mut s, "para.spacing", json!({"after": 12}));
+    let before = para_formats(&s);
+    let [(_, props)] = &before[..] else { panic!("{before:?}") };
+    assert_eq!(props.bidi, Some(true));
+    let off = "بداية ".len();
+    for id in ["edit.paste", "edit.pasteText"] {
+        run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": off}}));
+        run(&mut s, id, json!({"text": "سطر أول\r\nسطر ثان\r\nسطر ثالث"}));
+        let want: Vec<(String, _)> = ["بداية سطر أول", "سطر ثان", "سطر ثالثنهاية"].iter().map(|t| (t.to_string(), props.clone())).collect();
+        assert_eq!(para_formats(&s), want, "{id}");
+        // One undo step takes the whole paste out again.
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(para_formats(&s), before, "{id}");
+    }
+}
+
+/// Empty lines in pasted plain text come through as empty paragraphs, formatted like the rest,
+/// and so does a line break at the end of the text. The text takes the formatting before the
+/// caret.
+#[test]
+fn plain_text_paste_keeps_empty_lines_as_paragraphs() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Lead ", "raw": true}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "para.alignCenter", json!({}));
+    run(&mut s, "para.spacing", json!({"before": 6, "after": 18}));
+    let props = para_formats(&s)[0].1.clone();
+    run(&mut s, "edit.paste", json!({"text": "Alpha one.\n\nAlpha two.\n\n\nAlpha three.\n"}));
+    let got = para_formats(&s);
+    let texts: Vec<&str> = got.iter().map(|(t, _)| t.as_str()).collect();
+    assert_eq!(texts, ["Lead Alpha one.", "", "Alpha two.", "", "", "Alpha three.", ""]);
+    assert!(got.iter().all(|(_, p)| *p == props), "{got:?}");
+    assert_eq!(s.sel.focus, Pos::body(6, 0), "the caret ends after the pasted text");
+    let bold = s.doc.body.iter().filter_map(|b| b.as_para()).all(|p| p.runs.iter().all(|r| r.props.bold == Some(true)));
+    assert!(bold, "the pasted text takes the bold before the caret");
 }
 
 /// #713: Arabic or Hebrew typed into an empty paragraph makes it right-to-left; a paragraph that

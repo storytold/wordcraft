@@ -6,6 +6,7 @@
 //! with a richer clipboard) may pass `html`, `rtf` or a `picture` too. Text that is itself RTF or
 //! HTML source can also be pasted as that format. Paste keeps the source formatting of another
 //! program's HTML or RTF; Merge Formatting keeps only its emphasis (#687).
+//! Plain text has no formatting to keep, so Paste inserts it as Keep Text Only does.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -189,23 +190,49 @@ pub fn rich_fragment(s: &mut Session, v: &Value) -> Option<Fragment> {
     Some(adopt(s, doc))
 }
 
+/// What a Paste brings in.
+pub enum Pasted {
+    /// WordCraft's own copy, or another program's HTML or RTF: it keeps the formatting it carries.
+    Fragment(Fragment),
+    /// The system clipboard's text, lines separated by `\n`.
+    Text(String),
+}
+
 /// What Paste inserts: WordCraft's own copy while the system clipboard still holds it, else
 /// another program's formatted copy (HTML, RTF), else the system clipboard's text.
-pub fn paste_fragment(s: &mut Session, v: &Value) -> Result<Fragment, CmdError> {
+pub fn paste_content(s: &mut Session, v: &Value) -> Result<Pasted, CmdError> {
     let text = p::str(v, "text").map(|t| t.replace("\r\n", "\n"));
     if let Some(f) = &s.clipboard
         && text.as_ref().is_none_or(|t| f.clipboard_text() == *t)
         && (text.is_some() || (p::str(v, "html").is_none() && p::str(v, "rtf").is_none()))
     {
-        return Ok(f.clone());
+        return Ok(Pasted::Fragment(f.clone()));
     }
     if let Some(f) = rich_fragment(s, v) {
-        return Ok(f);
+        return Ok(Pasted::Fragment(f));
     }
     match text {
-        Some(t) if !t.is_empty() => Ok(Fragment::from_text(&t)),
+        Some(t) if !t.is_empty() => Ok(Pasted::Text(t)),
         _ => Err(CmdError::Failed("the clipboard is empty".into())),
     }
+}
+
+/// [`paste_content`] as a fragment. Text becomes paragraphs with no formatting of their own.
+pub fn paste_fragment(s: &mut Session, v: &Value) -> Result<Fragment, CmdError> {
+    Ok(match paste_content(s, v)? {
+        Pasted::Fragment(f) => f,
+        Pasted::Text(t) => Fragment::from_text(&t),
+    })
+}
+
+/// Paste plain text the way Keep Text Only does, which is what Word does with text that carries
+/// no formatting: the text takes the formatting before the caret, and each line after the first
+/// starts a paragraph formatted like the one the text lands in (direction, style, alignment,
+/// indents, list). Empty lines become empty paragraphs.
+pub fn insert_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
+    // Only our own cut, pasted straight after it, becomes a move (see `insert`).
+    s.pending_move = None;
+    super::paste_text(s, &text.replace("\r\n", "\r").replace('\n', "\r"))
 }
 
 /// Merge Formatting (#687): the pasted text takes the formatting where it lands — the paragraph's

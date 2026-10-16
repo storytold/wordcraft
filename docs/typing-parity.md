@@ -1,6 +1,6 @@
 # Typing parity with Word
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-14 · **Change:** trivial (Shift+Delete cuts the selection on every platform, #1669; previously trivial: Select All then Delete removes a table the document starts with, #1198; previously trivial: Alt+numpad character codes, #961; previously trivial: Down and Up from a line start beside a table go into it, #1007; previously trivial: sample-text formulas on Enter, #1067; previously trivial: Track Changes: Accept All after a tracked delete from a paragraph end keeps the next paragraph; Reject All after typing into an empty paragraph keeps it (#864); previously minor: Correct TWo INitial CApitals, cAPS LOCK and table-cell capitals, #544; previously trivial: complex-script caret and Backspace, #604; Move Paragraph Up/Down, Promote/Demote, Go Back and Alt+X keys, #343) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-15 · **Change:** trivial (plain text pasted from another program keeps the formatting of the paragraph it lands in). Previously trivial: Shift+Delete cuts the selection on every platform, #1669; previously trivial: Select All then Delete removes a table the document starts with, #1198; previously trivial: Alt+numpad character codes, #961; previously trivial: Down and Up from a line start beside a table go into it, #1007; previously trivial: sample-text formulas on Enter, #1067; previously trivial: Track Changes: Accept All after a tracked delete from a paragraph end keeps the next paragraph; Reject All after typing into an empty paragraph keeps it (#864); previously minor: Correct TWo INitial CApitals, cAPS LOCK and table-cell capitals, #544; previously trivial: complex-script caret and Backspace, #604; Move Paragraph Up/Down, Promote/Demote, Go Back and Alt+X keys, #343) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 What Word does when you type, observed black-box (same keystrokes typed into Word and
 WordCraft, results read back paragraph by paragraph) and pinned by tests in
@@ -48,6 +48,17 @@ formatting use the existing editing primitives. Tests: `sample_text_formulas_exp
 |---|---|---|
 | type, select some of it, type over it | two undo steps: the first ⌘Z brings the selected text back (still selected), the second removes the typing. Uninterrupted typing stays one step | `typing_then_selecting_then_typing_are_two_undo_steps` |
 | ⌘B with nothing selected, ⌘Z, type | the text isn't bold (Undo takes the waiting caret formatting back too); ⌘Y brings it back | `undoing_bold_at_the_caret_turns_bold_typing_off_again` |
+
+## Paste
+
+| Keys | Word's result | Test |
+|---|---|---|
+| Paste (⌘V) of plain text with several lines from another program, in the middle of a right-to-left paragraph | pasted as Keep Text Only pastes it: every line becomes a paragraph formatted like the paragraph it lands in (direction, style, alignment, indents, list), and so does the text after the caret. One ⌘Z takes the whole paste out ² | `plain_text_paste_gives_every_line_the_formatting_of_its_paragraph` |
+| … with empty lines, or a line break at the end | each empty line is an empty paragraph with that formatting too, in a list an empty item. The text takes the formatting before the caret (bold there makes it bold) ² | `plain_text_paste_keeps_empty_lines_as_paragraphs`, `plain_text_paste_keeps_an_empty_paragraph_in_a_list` |
+
+² From Microsoft's description of the paste options: Word offers no options for text without
+formatting, and Keep Text Only gives text the style of the paragraph where it is pasted and the
+formatting of the text before the cursor. Not yet compared side by side in Word.
 
 ## Track Changes
 
@@ -196,6 +207,7 @@ Word.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | trivial | Paste: plain text from another program pastes as Keep Text Only does. Every line takes the formatting of the paragraph it lands in (a right-to-left paragraph stays right-to-left), and empty lines stay empty paragraphs |
 | 2026-10-14 | trivial | Shift+Delete cuts the selection, and does nothing without one, on macOS and Linux too, as in Word for Windows (#1669); Shift+Backspace already erased (#707) |
 | 2026-10-13 | trivial | Select All then Delete or Backspace removes a table the document starts with (#1198) |
 | 2026-10-12 | trivial | Editing keys: Down and Up from the start of a line beside a table go into it instead of skipping it (#1007) |
