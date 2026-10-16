@@ -13,7 +13,7 @@ use wordcraft_doc::{Document, Paragraph};
 use wordcraft_fonts::FaceRef;
 
 use crate::NumeralMode;
-use crate::fields::{FIELD_SHADING, FieldCtx, field_code_text, field_text_on};
+use crate::fields::{FIELD_SHADING, FieldCtx, field_code_text, field_text_on, reference_link};
 
 /// How a run set in one of Word's symbol fonts (Symbol, Wingdings, Wingdings 2/3, Webdings)
 /// shows its characters. Those fonts are proprietary and usually missing: a substitute has other
@@ -1384,6 +1384,15 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                                     None => {
                                         let (t, page_dep) = field_text_on(instr, result, env.fields, env.fields.page_at(start));
                                         has_page_fields |= page_dep;
+                                        let rc = if rc.link.is_none()
+                                            && let Some(link) = reference_link(instr)
+                                        {
+                                            let mut linked = (*rc).clone();
+                                            linked.link = Some(link);
+                                            Arc::new(linked)
+                                        } else {
+                                            rc.clone()
+                                        };
                                         b.shape_atomic(&t, start, end, &rc);
                                     }
                                 }

@@ -1029,6 +1029,54 @@ fn bookmark_destination_is_the_page_of_its_start() {
     assert_eq!(ex.bookmark("first").map(|b| b.0), Some(0));
 }
 
+#[test]
+fn ref_fields_export_cached_links() {
+    use hayro_syntax::object::{Array, Dict};
+
+    for (instr, outer, code, expected) in [
+        (r"REF target \w \h \* MERGEFORMAT", None, false, Some(1)),
+        (r#"ref "target"\H"#, None, false, Some(1)),
+        (r"REF target", None, false, None),
+        (r"REF target \hello", None, false, None),
+        (r#"REF target \d "\h""#, None, false, None),
+        (r"REF absent \h", None, false, None),
+        (r"REF target \h", None, true, None),
+        (r"REF target \h", Some("#outer"), false, Some(2)),
+    ] {
+        let mut d = Document::new();
+        let mut p = Paragraph::new();
+        p.insert_object(
+            0,
+            InlineObject::Field { instr: instr.into(), result: "Cached label".into(), locked: true, dirty: false, code, form: String::new() },
+            &CharProps { link: outer.map(str::to_owned), ..Default::default() },
+        )
+        .unwrap();
+        d.body = vec![para_block(p)];
+        for name in ["target", "outer"] {
+            let mut p = Paragraph::with_text("Current target", CharProps::default());
+            p.props.page_break_before = Some(true);
+            p.insert_object(0, InlineObject::BookmarkStart { name: name.into() }, &CharProps::default()).unwrap();
+            d.body.push(para_block(p));
+        }
+        let before = d.body.clone();
+        let bytes = export(&d, &PdfOptions::default()).unwrap();
+        assert_eq!(d.body, before, "export must not refresh cached fields");
+        if !code {
+            assert_eq!(squash(&extract_text(&bytes)[0]), "Cached label");
+        }
+        let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
+        let targets: Vec<_> = pdf.pages()[0]
+            .raw()
+            .get::<Array>(b"Annots")
+            .into_iter()
+            .flat_map(|a| a.iter::<Dict>().collect::<Vec<_>>())
+            .map(|a| a.get::<Array>(b"Dest").unwrap().iter::<Dict>().next().unwrap().obj_id())
+            .collect();
+        let expected: Vec<_> = expected.map(|i| pdf.pages()[i].raw().obj_id()).into_iter().collect();
+        assert_eq!(targets, expected, "{instr}, enclosing={outer:?}, code={code}");
+    }
+}
+
 /// Print Markup (#589): the comments and their replies print beside each page, which is scaled
 /// down to keep its paper size; without it they stay out of the PDF.
 #[test]

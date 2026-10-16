@@ -98,6 +98,28 @@ fn paras(d: &Document) -> Vec<&Paragraph> {
 }
 
 #[test]
+fn ref_links_keep_cached_results() {
+    let d = read_body(
+        r#"
+<w:p><w:fldSimple w:instr="REF destination \h" w:fldLock="1"><w:r><w:rPr><w:b/></w:rPr><w:t>Cached simple</w:t></w:r></w:fldSimple></w:p>
+<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve">REF destination </w:instrText></w:r><w:r><w:instrText>\w \h</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>Cached complex</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+<w:p><w:bookmarkStart w:id="0" w:name="destination"/><w:r><w:t>Changed destination</w:t></w:r><w:bookmarkEnd w:id="0"/></w:p>"#,
+    );
+    let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    for doc in [&d, &again] {
+        let p = paras(doc);
+        for (index, instr, cached, locked) in
+            [(0, r"REF destination \h", "Cached simple", true), (1, r"REF destination \w \h", "Cached complex", false)]
+        {
+            assert!(matches!(&p[index].objects[0], InlineObject::Field { instr: actual, result, locked: lock, .. }
+                if actual == instr && result == cached && *lock == locked));
+        }
+        assert_eq!(p[0].props_of_char(0).bold, Some(true));
+        assert!(doc.bookmarks().iter().any(|(name, _)| name == "destination"));
+    }
+}
+
+#[test]
 fn single_entry_toc_keeps_formatted_result_and_nested_page_field() {
     let d = read_body(
         r#"

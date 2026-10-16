@@ -88,6 +88,42 @@ pub fn field_name(instr: &str) -> String {
     instr.split_whitespace().next().unwrap_or("").trim_start_matches('=').to_ascii_uppercase()
 }
 
+/// REF's hyperlink switch links its cached result without updating that result.
+pub(crate) fn reference_link(instr: &str) -> Option<String> {
+    let (name, args) = instr.trim_start().split_once(char::is_whitespace)?;
+    if !name.eq_ignore_ascii_case("REF") {
+        return None;
+    }
+    let args = args.trim_start();
+    let (target, switches) = if let Some(quoted) = args.strip_prefix('"') {
+        let end = quoted.find('"')?;
+        (quoted.get(..end)?, quoted.get(end + 1..)?)
+    } else {
+        let end = args.find(|c: char| c.is_whitespace() || c == '\\').unwrap_or(args.len());
+        (args.get(..end)?, args.get(end..)?)
+    };
+    if target.is_empty() {
+        return None;
+    }
+    // Switch arguments can contain quoted backslashes; those are not switches.
+    let mut chars = switches.chars().peekable();
+    let mut quoted = false;
+    while let Some(c) = chars.next() {
+        if quoted && c == '\\' {
+            chars.next();
+        } else if c == '"' {
+            quoted = !quoted;
+        } else if !quoted
+            && c == '\\'
+            && chars.next().is_some_and(|s| s.eq_ignore_ascii_case(&'h'))
+            && chars.peek().is_none_or(|c| !c.is_alphanumeric())
+        {
+            return Some(format!("#{target}"));
+        }
+    }
+    None
+}
+
 /// `\* FORMAT` switch value (Arabic, roman, ROMAN, alphabetic, ALPHABETIC, CardText, Ordinal…).
 pub fn format_switch(instr: &str) -> Option<NumFormat> {
     let mut it = instr.split_whitespace();
@@ -174,6 +210,16 @@ fn has_switch(instr: &str, sw: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ref_link_switches() {
+        for instr in [r"REF mark\w\h", r#" REF "mark" \h"#, "REF\tmark \\H"] {
+            assert_eq!(reference_link(instr).as_deref(), Some("#mark"), "{instr}");
+        }
+        for instr in ["", "REF", r"REF \h", r#"REF "" \h"#, r#"REF "mark \h"#, r"REF mark \hidden", r"NOTEREF mark \h", r#"REF mark \d "\h""#] {
+            assert_eq!(reference_link(instr), None, "{instr}");
+        }
+    }
 
     #[test]
     fn page_fields() {
