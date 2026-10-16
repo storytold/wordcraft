@@ -1460,6 +1460,39 @@ fn section_breaks_show_with_formatting_marks() {
     assert_eq!(labels(&Document::from_text("One\nTwo"), true), (vec![], 2));
 }
 
+/// Shaded paragraphs with a bar on the left (a call-out box): the top border's room pushes the
+/// first line down and is shaded, and paragraphs with the same borders make one box whose shading
+/// and bar run on through the space between them; a paragraph whose borders differ (here the
+/// first, with its top border) is a box of its own (Word).
+#[test]
+fn paragraphs_with_the_same_borders_join_in_one_shaded_box() {
+    let fill = wordcraft_doc::props::Rgb(0xFF, 0xF2, 0xCC);
+    let bar = Some(Border { width: 2.5, space: 8.0, ..Border::single(2.5) });
+    let top = Some(Border { color: Some(fill), space: 6.0, ..Border::single(0.25) });
+    let mut d = Document::from_text("Before\nTitle\nOne\nTwo\nAfter");
+    for i in 1..4 {
+        let p = d.para_mut(StoryRef::Body, &Path::top(i)).unwrap();
+        p.props.borders = Some(Borders { top: if i == 1 { top } else { None }, left: bar, ..Borders::default() });
+        p.props.shading = Some(fill);
+        (p.props.space_before, p.props.space_after) = (Some(6.0), Some(6.0));
+    }
+    let l = lay(&d);
+    let items = &l.pages[0].items;
+    let line_y: Vec<f32> = items.iter().filter_map(|i| if let Placed::Lines { y, .. } = i { Some(*y) } else { None }).collect();
+    let fills: Vec<Rect> = items.iter().filter_map(|i| if let Placed::Fill { rect, .. } = i { Some(*rect) } else { None }).collect();
+    let bars: Vec<(f32, f32)> =
+        items.iter().filter_map(|i| if let Placed::Rule { x0, x1, y0, y1, .. } = i { (x0 == x1).then_some((*y0, *y1)) } else { None }).collect();
+    assert_eq!(fills.len(), 3, "{fills:?}");
+    // The title: shaded from the top border's outer edge, its line below the border's room.
+    assert!((line_y[1] - fills[0].y - 6.25).abs() < 0.01, "{line_y:?} {fills:?}");
+    assert!((bars[0].0 - fills[0].y).abs() < 0.01, "{bars:?}");
+    // Its box ends at its text: the space below it is not shaded (the next paragraph's borders differ).
+    assert!(fills[1].y - fills[0].bottom() > 5.9, "{fills:?}");
+    // One and Two are one box: no gap between their shading or their bars.
+    assert!((fills[2].y - fills[1].bottom()).abs() < 0.01, "{fills:?}");
+    assert!((bars[2].0 - bars[1].1).abs() < 0.01, "{bars:?}");
+}
+
 #[test]
 fn space_between_paragraphs_is_the_larger_of_after_and_before() {
     // (space after the first, space before the second, contextual spacing on both) -> gap
