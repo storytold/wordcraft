@@ -456,3 +456,18 @@ fn font_list_previews_load_nothing_for_good() {
     assert_eq!(db.loaded_font_bytes(), used, "memory stays bounded across previews");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn catalog_full_names() {
+    let dir = font_dir("full-name");
+    let db = FontDb::with_font_dirs(vec![dir.clone()]);
+    assert!(!db.is_loaded("Sysfont Sans3 Bold"));
+    assert!(db.has_family("Sysfont Sans3 Bold"));
+    let face = db.face("Sysfont Sans3 Bold", "Regular");
+    assert_eq!((face.family.as_str(), face.style.as_str()), (FAMILY, "Bold"));
+    assert_eq!(db.face("sysfont sans3 bold", "Italic").id(), face.id());
+    assert!(db.is_loaded("Sysfont Sans3 Bold"));
+    assert!(!db.families().iter().any(|n| n == "Sysfont Sans3 Bold"));
+    assert_eq!(db.face(FAMILY, "Regular").style, "Regular");
+    let _ = std::fs::remove_dir_all(dir);
+}
