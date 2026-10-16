@@ -1819,8 +1819,11 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
             let shrink = if shrink_spaces && !has_tab { space_w * MAX_SPACE_SHRINK } else { 0.0 };
             let fits = absorbs || x + c.adv <= right_edge + shrink + 0.01 || c.kind == ClKind::Space || c.kind == ClKind::Marker;
             // A line's first item stays on it even when it doesn't fit; markers before it
-            // (a content control's start, a bookmark) take no room and don't count (Word).
-            if !fits && (c0..j).any(|k| pl.clusters.get(k).is_some_and(|c| c.kind != ClKind::Marker)) {
+            // (a content control's start, a bookmark) and floating objects' anchors take no room
+            // and don't count (Word: a picture a little wider than the line, after an anchor,
+            // stays on the first line rather than leaving the anchor a line of its own).
+            let takes_room = |c: &Cluster| c.kind != ClKind::Marker && !(matches!(c.kind, ClKind::Object(_)) && c.adv == 0.0 && c.obj_h == 0.0);
+            if !fits && (c0..j).any(|k| pl.clusters.get(k).is_some_and(takes_room)) {
                 // Wrap: back up to the last break opportunity on this line.
                 end = LineEnd::Wrap;
                 // Hyphenate only when the plain break leaves more than the hyphenation zone empty.

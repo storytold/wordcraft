@@ -4290,6 +4290,26 @@ fn inline_picture_wider_than_the_text_keeps_its_size() {
     assert!((r.w - 1000.0).abs() < 0.01 && (r.h - 100.0).abs() < 0.01, "{r:?}");
 }
 
+/// A floating object's anchor takes no room on a line: an inline picture a little wider than the
+/// line, after an anchor, stays on the first line as the line's first item, instead of leaving
+/// the anchor an empty line of its own above it (Word).
+#[test]
+fn a_float_anchor_does_not_push_a_wide_picture_to_a_second_line() {
+    let lines_of = |with_anchor: bool| {
+        let mut d = Document::from_text("");
+        let mut at = Pos::body(0, 0);
+        if with_anchor {
+            at = d.insert_object(&at, rect_shape(50.0, 30.0, page_float(300.0, 300.0)), &Default::default()).unwrap();
+        }
+        // 480 pt wide on a 468 pt line.
+        d.insert_object(&at, picture(480.0, 100.0, wordcraft_doc::para::Float::default()), &Default::default()).unwrap();
+        let l = lay(&d);
+        para_at(&l, &[0])[0].2
+    };
+    assert_eq!(lines_of(false), 1);
+    assert_eq!(lines_of(true), 1, "the anchor gets no line of its own");
+}
+
 #[test]
 fn a_picture_too_wide_after_a_content_control_start_stays_on_the_first_line() {
     // The picture opening a picture content control (a logo in a text box a little too
