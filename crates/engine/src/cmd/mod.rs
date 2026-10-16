@@ -361,9 +361,14 @@ pub fn split_para(s: &mut Session, at: &Pos) -> Result<Pos, CmdError> {
 
 /// [`split_para`]; without `enter` an empty list item is split like any other paragraph.
 fn split_para_as(s: &mut Session, at: &Pos, enter: bool) -> Result<Pos, CmdError> {
-    // `num: 0` means "explicitly not in a list", so it isn't a list item.
+    // `num: 0` means "explicitly not in a list", so it isn't a list item. The list may come from
+    // the paragraph's style (List Number 2 in a Word file) rather than the paragraph itself.
     let (at_end, style, empty_list) = match s.doc.para_at(at) {
-        Some(p) => (at.off >= p.len(), p.props.style.clone(), p.props.numbering.filter(|n| enter && n.num != 0 && p.is_empty())),
+        Some(p) => (
+            at.off >= p.len(),
+            p.props.style.clone(),
+            p.props.numbering.or_else(|| s.doc.styles.resolve_para(&p.props).numbering).filter(|n| enter && n.num != 0 && p.is_empty()),
+        ),
         None => return Err(CmdError::Failed("no paragraph at caret".into())),
     };
     if let Some(n) = empty_list {
