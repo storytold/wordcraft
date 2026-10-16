@@ -7263,3 +7263,26 @@ fn row_nil_overrides_style() {
     d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
     assert_eq!(rules_on_page0(&lay(&d)), vec![2.0]);
 }
+
+#[test]
+fn float_font_keeps_line_height() {
+    use wordcraft_doc::CharProps;
+    use wordcraft_doc::para::{Float, Wrap};
+
+    let pitch = |wrap, size| {
+        let small = CharProps { size: Some(9.0), ..Default::default() };
+        let mut p = wordcraft_doc::Paragraph::with_text("Anchor", small.clone());
+        p.mark = small;
+        p.props.space_after = Some(0.0);
+        p.insert_object(0, picture(1.0, 1.0, Float { wrap, ..Default::default() }), &CharProps { size: Some(size), ..Default::default() }).unwrap();
+        let mut d = Document::from_text("After");
+        d.body.insert(0, wordcraft_doc::para_block(p));
+        let l = lay(&d);
+        l.caret(&Pos::body(1, 0)).unwrap().top - l.caret(&Pos::body(0, 0)).unwrap().top
+    };
+
+    for wrap in [Wrap::BehindText, Wrap::InFrontOfText] {
+        assert!((pitch(wrap, 40.0) - pitch(wrap, 9.0)).abs() < 0.01, "{wrap:?}");
+    }
+    assert!(pitch(Wrap::Inline, 40.0) > pitch(Wrap::Inline, 9.0));
+}

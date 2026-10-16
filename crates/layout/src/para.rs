@@ -1977,7 +1977,9 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
             // Spaces and tabs never make a line taller, whatever their size: Word sizes a line by
             // its other characters (a line of only them takes the paragraph mark's), measured in
             // Word for Windows with 9 pt text and 11–20 pt tabs, spaces and ideographic spaces.
-            if matches!(c.kind, ClKind::Marker | ClKind::Space | ClKind::Tab) || c0 + k < dropped {
+            // Floating and hidden drawings have no inline extent; their anchor font takes no height.
+            let anchor = matches!(c.kind, ClKind::Object(_)) && c.adv == 0.0 && c.obj_h == 0.0;
+            if matches!(c.kind, ClKind::Marker | ClKind::Space | ClKind::Tab) || anchor || c0 + k < dropped {
                 continue;
             }
             if let Some(st) = pl.styles.get(c.style as usize) {
