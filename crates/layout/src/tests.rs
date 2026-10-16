@@ -3722,6 +3722,78 @@ fn floating_header_text_box_leaves_the_body_at_the_top_margin() {
     assert!(inline_top > 400.0 && inline_pages > control_pages, "inline box: body at {inline_top}, {inline_pages} pages");
 }
 
+/// Issue #2361: a square-wrapped logo anchored to its default-header paragraph (an extent,
+/// no `w:titlePg`, so page one uses the default header). The logo is drawn, and the body
+/// starts below the header float rather than at the top margin under it.
+#[test]
+fn square_wrapped_header_logo_is_drawn_and_pushes_the_body_down() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let mut d = Document::from_text("Body text.");
+    assert!(d.last_section.headers.first.is_none(), "no first-page header");
+    let logo = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 0.0, y: -26.45, dist: 9.0, ..Default::default() };
+    let mut hp = wordcraft_doc::Paragraph::with_text("Header label", Default::default());
+    hp.insert_object(
+        0,
+        InlineObject::Image { media: "logo.wmf".into(), w: 47.3, h: 65.55, alt: String::new(), float: logo, crop: [0.0; 4], ole: None },
+        &Default::default(),
+    )
+    .unwrap();
+    let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(hp)]);
+    d.last_section.headers.default = Some(id);
+    let l = lay(&d);
+    let logo_bottom = l.pages[0]
+        .header
+        .iter()
+        .find_map(|i| match i {
+            Placed::Image { rect, .. } => Some(rect.bottom()),
+            _ => None,
+        })
+        .expect("the logo is drawn in the header");
+    let body = first_line_top(&l.pages[0].items);
+    assert!(body >= logo_bottom - 0.5, "body starts at {body}, logo ends at {logo_bottom}");
+}
+
+/// Issue #2361: the header paragraphs carry a text frame (from their style, as in the file).
+/// Word lays them out as ordinary text — the three lines stack instead of overprinting — and
+/// a framed paragraph keeps its floating logo, which is drawn rather than dropped.
+#[test]
+fn framed_header_paragraphs_flow_and_keep_their_floats() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    use wordcraft_doc::props::TextFrame;
+    let mut d = Document::from_text("Body text.");
+    let frame = || TextFrame { h_anchor: "page".into(), v_anchor: "page".into(), x: 115.25, y: 108.05, ..Default::default() };
+    let mut paras = Vec::new();
+    for (i, text) in ["one", "two", "three"].iter().enumerate() {
+        let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
+        p.props.frame = Some(frame());
+        if i == 1 {
+            let logo = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, ..Default::default() };
+            p.insert_object(
+                0,
+                InlineObject::Image { media: "logo.wmf".into(), w: 47.3, h: 65.55, alt: String::new(), float: logo, crop: [0.0; 4], ole: None },
+                &Default::default(),
+            )
+            .unwrap();
+        }
+        paras.push(wordcraft_doc::para_block(p));
+    }
+    let id = d.add_part(wordcraft_doc::PartKind::Header, paras);
+    d.last_section.headers.default = Some(id);
+    let l = lay(&d);
+    let mut tops: Vec<f32> = l.pages[0]
+        .header
+        .iter()
+        .filter_map(|i| match i {
+            Placed::Lines { story: StoryRef::Part(_), y, .. } => Some(*y),
+            _ => None,
+        })
+        .collect();
+    tops.sort_by(|a, b| a.total_cmp(b));
+    assert_eq!(tops.len(), 3, "three header lines: {tops:?}");
+    assert!(tops[1] - tops[0] > 1.0 && tops[2] - tops[1] > 1.0, "the lines stack instead of overprinting: {tops:?}");
+    assert!(l.pages[0].header.iter().any(|i| matches!(i, Placed::Image { .. })), "the framed paragraph keeps its floating logo");
+}
+
 /// List labels drawn, in page order (each paragraph's first line).
 fn labels(l: &DocLayout) -> Vec<String> {
     l.pages
