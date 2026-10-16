@@ -2243,3 +2243,16 @@
 # Reading Mode column widths (#1040)
 	Narrow	Uska
 	Medium	Srednja
+# The Assistant, Nib (#959)
+	Assistant	Asistent
+	Assistant Suggestions	Predlozi asistenta
+	Agents connected to WordCraft can show you messages through the Assistant. Muted, they're told you'd rather not.	Agenti povezani sa WordCraft-om mogu da vam prikazuju poruke preko asistenta. Kada su utišani, obaveštavaju se da to ne želite.
+	Annoying	Dosadno
+	Mute agent messages	Utišaj poruke agenata
+	Nib floats over the window with tips and the occasional remark.	Nib lebdi iznad prozora sa savetima i ponekom primedbom.
+	Nib, your assistant. Drag to move; right-click for options.	Nib, vaš asistent. Prevucite da biste ga pomerili; desni klik za opcije.
+	Reset tips	Vrati savete
+	Sayings:	Dosetke:
+	Show the Assistant	Prikaži asistenta
+	Show the tips you asked not to see again.	Ponovo prikazuje savete koje ste sakrili.
+	Sometimes	Ponekad

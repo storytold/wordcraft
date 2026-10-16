@@ -340,6 +340,9 @@ fn autocorrect_options(s: &mut Session, v: &Value) -> CmdResult {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        CommandSpec::new("assistant.suggest", "Assistant Suggestions", "Help › Assistant", crate::assistant::suggest)
+            .params(r#"{} → {"offers": [{"id", "kind": "tip"|"saying", "text", "buttons": [{"label", "command", "params"}]}]}"#)
+            .pure(),
         CommandSpec::new("edit.repeat", "Repeat", "Quick Access Toolbar", |s, _| {
             let Some((id, params)) = s.last_command.clone() else { return Err(CmdError::Failed("nothing to repeat".into())) };
             s.run(&id, &params)

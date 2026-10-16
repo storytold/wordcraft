@@ -147,7 +147,7 @@ pub fn specs() -> Vec<CommandSpec> {
             })
         })
         .params(r#"{"level": 0-8}"#),
-        CommandSpec::new("para.restartNumbering", "Restart at 1", "Home › Paragraph › Numbering", restart_numbering),
+        CommandSpec::new("para.restartNumbering", "Restart at 1", "Home › Paragraph › Numbering", restart_numbering).when(in_numbered_list),
         CommandSpec::new("para.moveUp", "Move Paragraph Up", "Home › Paragraph", |s, _| move_paras(s, true))
             .key(if cfg!(target_os = "macos") { "Ctrl+Shift+Up" } else { "Alt+Shift+Up" }),
         CommandSpec::new("para.moveDown", "Move Paragraph Down", "Home › Paragraph", |s, _| move_paras(s, false))
@@ -555,6 +555,11 @@ fn list(s: &mut Session, v: &Value, default: ListKind) -> CmdResult {
             p.style = Some("ListParagraph".into());
         }
     })
+}
+
+/// Restart at 1 applies only inside a numbered list (greyed out elsewhere, as in Word).
+fn in_numbered_list(s: &Session) -> Option<&'static str> {
+    s.doc.para_at(&s.sel.focus).and_then(|p| p.props.numbering).filter(|n| n.num != 0).map_or(Some("not in a numbered list"), |_| None)
 }
 
 fn restart_numbering(s: &mut Session, _: &Value) -> CmdResult {

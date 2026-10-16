@@ -2624,3 +2624,16 @@ preview	Title	Ukázka
 # Reading Mode column widths (#1040)
 	Narrow	Úzká
 	Medium	Střední
+# The Assistant, Nib (#959)
+	Assistant	Asistent
+	Assistant Suggestions	Návrhy asistenta
+	Agents connected to WordCraft can show you messages through the Assistant. Muted, they're told you'd rather not.	Agenti připojení k WordCraftu vám mohou přes asistenta zobrazovat zprávy. Když je ztlumíte, dozvědí se, že o ně nestojíte.
+	Annoying	Otravně
+	Mute agent messages	Ztlumit zprávy agentů
+	Nib floats over the window with tips and the occasional remark.	Nib se vznáší nad oknem s tipy a občasnou poznámkou.
+	Nib, your assistant. Drag to move; right-click for options.	Nib, váš asistent. Přetažením přesunete; pravým tlačítkem otevřete možnosti.
+	Reset tips	Obnovit tipy
+	Sayings:	Hlášky:
+	Show the Assistant	Zobrazit asistenta
+	Show the tips you asked not to see again.	Znovu zobrazí tipy, které jste skryli.
+	Sometimes	Občas

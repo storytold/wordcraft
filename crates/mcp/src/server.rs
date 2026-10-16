@@ -32,6 +32,9 @@ pub const COMMANDS_URI: &str = "wordcraft://commands";
 pub struct Server {
     backend: Box<dyn Backend>,
     initialized: bool,
+    /// The client's name from `initialize` (`clientInfo`): what the Assistant shows as the
+    /// sender of an Agent message, so an agent can't speak as WordCraft or as another agent.
+    client: Option<String>,
 }
 
 fn response(id: Value, result: Value) -> Value {
@@ -44,7 +47,7 @@ fn error(id: Value, code: i64, message: impl Into<String>) -> Value {
 
 impl Server {
     pub fn new(backend: Box<dyn Backend>) -> Self {
-        Self { backend, initialized: false }
+        Self { backend, initialized: false, client: None }
     }
 
     pub fn backend(&mut self) -> &mut dyn Backend {
@@ -130,6 +133,10 @@ impl Server {
             "initialize" => {
                 let asked = params.get("protocolVersion").and_then(Value::as_str).unwrap_or(PROTOCOL_VERSION);
                 let version = if SUPPORTED_VERSIONS.contains(&asked) { asked } else { PROTOCOL_VERSION };
+                let info = params.get("clientInfo");
+                let name =
+                    info.and_then(|i| i.get("title").or_else(|| i.get("name"))).and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty());
+                self.client = name.map(|n| n.chars().filter(|c| !c.is_control()).take(40).collect());
                 Ok(json!({
                     "protocolVersion": version,
                     "capabilities": {"tools": {}, "resources": {}},
@@ -144,7 +151,8 @@ impl Server {
             "tools/list" => Ok(json!({"tools": tool_definitions()})),
             "tools/call" => {
                 let name = params.get("name").and_then(Value::as_str).ok_or((INVALID_PARAMS, "missing tool `name`".to_string()))?;
-                let args = params.get("arguments").cloned().unwrap_or(Value::Null);
+                let mut args = params.get("arguments").cloned().unwrap_or(Value::Null);
+                crate::tools::stamp_sender(name, &mut args, self.client.as_deref());
                 Ok(call_tool(self.backend.as_mut(), name, &args).to_value())
             }
             "resources/list" => Ok(json!({"resources": [

@@ -2234,3 +2234,16 @@
 # Reading Mode column widths (#1040)
 	Narrow	窄
 	Medium	中等
+# The Assistant, Nib (#959)
+	Assistant	助理
+	Assistant Suggestions	助理建議
+	Agents connected to WordCraft can show you messages through the Assistant. Muted, they're told you'd rather not.	連線到 WordCraft 的代理程式可以透過助理向你顯示訊息。靜音後，代理程式會得知你不想接收。
+	Annoying	煩人
+	Mute agent messages	將代理程式訊息靜音
+	Nib floats over the window with tips and the occasional remark.	Nib 漂浮在視窗上方，提供提示，偶爾也發表點意見。
+	Nib, your assistant. Drag to move; right-click for options.	你的助理 Nib。拖曳可移動；按右鍵開啟選項。
+	Reset tips	重設提示
+	Sayings:	俏皮話：
+	Show the Assistant	顯示助理
+	Show the tips you asked not to see again.	重新顯示你要求不再顯示的提示。
+	Sometimes	有時

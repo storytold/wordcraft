@@ -2267,3 +2267,16 @@
 # Reading Mode column widths (#1040)
 	Narrow	Kitsas
 	Medium	Keskmine
+# The Assistant, Nib (#959)
+	Assistant	Assistent
+	Assistant Suggestions	Assistendi soovitused
+	Agents connected to WordCraft can show you messages through the Assistant. Muted, they're told you'd rather not.	WordCraftiga ühendatud agendid saavad assistendi kaudu sulle sõnumeid näidata. Kui need on vaigistatud, antakse agentidele teada, et sa seda ei soovi.
+	Annoying	Tüütult
+	Mute agent messages	Vaigista agentide sõnumid
+	Nib floats over the window with tips and the occasional remark.	Nib hõljub akna kohal nõuannete ja aeg-ajalt mõne märkusega.
+	Nib, your assistant. Drag to move; right-click for options.	Nib, sinu assistent. Lohista liigutamiseks; paremklõps valikute jaoks.
+	Reset tips	Lähtesta nõuanded
+	Sayings:	Ütlused:
+	Show the Assistant	Kuva assistent
+	Show the tips you asked not to see again.	Näitab uuesti nõuandeid, mille peitsid.
+	Sometimes	Mõnikord

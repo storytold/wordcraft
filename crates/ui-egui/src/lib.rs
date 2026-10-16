@@ -22,6 +22,7 @@ macro_rules! tl {
 
 pub mod a11y;
 pub mod a11y_pane;
+pub mod assistant;
 pub mod async_saves;
 pub mod autoscroll;
 pub mod backstage;
@@ -323,6 +324,8 @@ pub struct UiState {
     pub update_fields_before_print: bool,
     /// The custom dictionary (File › Options › Proofing, Add to Dictionary), kept between runs.
     pub dictionary: Vec<String>,
+    /// The Assistant, Nib (#959): on or off, Sayings, dismissed Tips, where it stands.
+    pub assistant: assistant::Prefs,
 }
 
 /// The ribbon tab the app opens on, and the one it falls back to when the tab that was showing
@@ -378,6 +381,7 @@ impl Default for UiState {
             print_backgrounds: false,
             update_fields_before_print: false,
             dictionary: Vec::new(),
+            assistant: assistant::Prefs::default(),
         }
     }
 }
@@ -484,6 +488,8 @@ pub struct WordApp {
     legacy_interface_size: Option<f64>,
     /// The desktop's light/dark choice, watched while the app runs (Linux has no winit answer).
     desktop_theme: desktop_theme::DesktopTheme,
+    /// The Assistant while the app runs (#959); its settings are in [`UiState::assistant`].
+    pub assistant: assistant::Assistant,
     /// The last answer [`desktop_theme`] gave, so a frame that asks costs nothing.
     desktop_dark: Option<bool>,
     /// The interface language whose editing language the session last got ([`i18n::Lang::editing_lang`]).
@@ -605,6 +611,7 @@ impl WordApp {
             legacy_interface_size: None,
             // Inert until the app binary calls `watch_desktop_theme`.
             desktop_theme: desktop_theme::DesktopTheme::default(),
+            assistant: assistant::Assistant::default(),
             desktop_dark: None,
             applied_editing: None,
             system_animations: None,
@@ -788,7 +795,13 @@ impl WordApp {
         {
             return r;
         }
+        // The Assistant's Triggers notice deleting a lot at once (#959).
+        let deleting = matches!(id, "text.backspace" | "text.delete" | "edit.cut" | "edit.clear") && !self.session.sel.is_collapsed();
+        let deleted = if deleting { self.session.selected_text().chars().count() } else { 0 };
         let r = self.execute_user(id, params);
+        if r.is_ok() && !id.starts_with("ui.assistant") {
+            self.assistant.record(id, deleted);
+        }
         if matches!(id, "insert.picture" | "insert.icon") {
             self.select_inserted_picture(&r);
         }
@@ -1278,6 +1291,9 @@ impl WordApp {
 
     /// Commands that live in the UI layer.
     fn ui_command(&mut self, id: &str, p: &Value) -> Option<Result<Value, String>> {
+        if id.starts_with("ui.assistant") {
+            return assistant::command(self, id, p);
+        }
         let s = |k: &str| p.get(k).and_then(Value::as_str);
         Some(Ok(match id {
             "ui.tab" => {
@@ -2027,6 +2043,7 @@ impl WordApp {
         colors::show(self, &ctx);
         zotero::show_alert(self, &ctx);
         read_aloud::show(self, &ctx);
+        assistant::show(self, &ctx);
         crate::keytips::show(self, &ctx, ui);
         keys::global_shortcuts(self, &ctx);
         self.refocus_after_chrome_click(&ctx);
@@ -2393,6 +2410,12 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.discord"
             | "ui.caretAnimation"
             | "ui.startScreen"
+            | "ui.assistant"
+            | "ui.assistantSayings"
+            | "ui.assistantResetTips"
+            | "ui.assistantMute"
+            | "ui.assistantSay"
+            | "ui.assistantReply"
     ) || id.starts_with("help.")
 }
 

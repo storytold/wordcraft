@@ -145,6 +145,16 @@ pub fn tool_definitions() -> Value {
             false
         ),
         tool(
+            "say_to_user",
+            "Say to the user",
+            "Show the person at the keyboard a short message through Nib, WordCraft's Assistant (desktop app only), labelled as coming from you. \
+             Plain text, at most 280 characters; up to 3 `choices` (each ≤ 40 characters) make it a question. Returns an `id`: ask \
+             `execute ui.assistantReply {id}` later for the answer (`choice`, or null while `open`). One message every 3 seconds, at most 3 waiting; \
+             the user can mute agent messages.",
+            obj(json!({"text": s("The message"), "choices": {"type": "array", "items": {"type": "string"}, "maxItems": 3}}), &["text"]),
+            false
+        ),
+        tool(
             "ui_inspect",
             "Inspect UI",
             "UI state: tab, panes, dialog, page rectangles on screen, caret (desktop app only).",
@@ -152,6 +162,31 @@ pub fn tool_definitions() -> Value {
             true
         ),
     ])
+}
+
+/// Agent messages carry the connected client's name (`clientInfo` from `initialize`) as their
+/// sender, whatever the arguments say, so an agent can't speak as WordCraft or another agent.
+/// Covers `say_to_user`, and `ui.assistantSay` through `execute` and `batch`.
+pub fn stamp_sender(tool: &str, args: &mut Value, client: Option<&str>) {
+    let from = Value::String(client.unwrap_or("").to_string());
+    let stamp = |c: &mut Value| {
+        if c.get("command").and_then(Value::as_str) == Some("ui.assistantSay") {
+            if !c.get("params").is_some_and(Value::is_object) {
+                c["params"] = json!({});
+            }
+            c["params"]["from"] = from.clone();
+        }
+    };
+    match tool {
+        "say_to_user" if args.is_object() => args["from"] = from.clone(),
+        "execute" if args.is_object() => stamp(args),
+        "batch" => {
+            if let Some(cs) = args.get_mut("commands").and_then(Value::as_array_mut) {
+                cs.iter_mut().filter(|c| c.is_object()).for_each(stamp);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn exec(b: &mut dyn Backend, id: &str, params: Value) -> Result<Value, String> {
@@ -271,6 +306,7 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
         "click" => wrap(b.call("ui.click", a.clone())),
         "key" => wrap(b.call("ui.key", a.clone())),
         "ui_inspect" => wrap(b.call("ui.inspect", json!({}))),
+        "say_to_user" => wrap(exec(b, "ui.assistantSay", json!({"text": a.get("text"), "choices": a.get("choices"), "from": a.get("from")}))),
         other => ToolResult::error(format!("unknown tool `{other}`")),
     }
 }

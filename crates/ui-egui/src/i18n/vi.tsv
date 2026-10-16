@@ -2672,3 +2672,16 @@ template	Letter	Thư
 # Reading Mode column widths (#1040)
 	Narrow	Hẹp
 	Medium	Trung bình
+# The Assistant, Nib (#959)
+	Assistant	Trợ lý
+	Assistant Suggestions	Gợi ý của trợ lý
+	Agents connected to WordCraft can show you messages through the Assistant. Muted, they're told you'd rather not.	Các tác tử kết nối với WordCraft có thể hiển thị tin nhắn cho bạn qua trợ lý. Khi bị tắt tiếng, chúng sẽ được báo rằng bạn không muốn nhận.
+	Annoying	Phiền phức
+	Mute agent messages	Tắt tiếng tin nhắn của tác tử
+	Nib floats over the window with tips and the occasional remark.	Nib lơ lửng trên cửa sổ với các mẹo và thỉnh thoảng một lời bình.
+	Nib, your assistant. Drag to move; right-click for options.	Nib, trợ lý của bạn. Kéo để di chuyển; nhấp chuột phải để xem tùy chọn.
+	Reset tips	Đặt lại mẹo
+	Sayings:	Câu nói:
+	Show the Assistant	Hiện trợ lý
+	Show the tips you asked not to see again.	Hiện lại các mẹo bạn đã yêu cầu ẩn.
+	Sometimes	Thỉnh thoảng

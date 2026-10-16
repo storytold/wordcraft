@@ -2004,6 +2004,8 @@ fn help(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Help", None, app, |ui, app| {
         big(ui, app, "help", "Help", "ui.dialog", json!({"name": "about"}), false);
         big(ui, app, "discord", "Community\nDiscord", "ui.discord", json!({}), false);
+        let on = app.ui.assistant.visible;
+        crate::widgets::big_toggle(ui, app, "assistant", "Assistant", "ui.assistant", on);
     });
     group(ui, "Agents", None, app, |ui, app| {
         big(ui, app, "macros", "Commands", "ui.dialog", json!({"name": "commands"}), false);

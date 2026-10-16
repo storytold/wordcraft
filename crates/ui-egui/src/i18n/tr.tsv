@@ -2629,3 +2629,16 @@ preview	Title	Örnek
 # Reading Mode column widths (#1040)
 	Narrow	Dar
 	Medium	Orta
+# The Assistant, Nib (#959)
+	Assistant	Asistan
+	Assistant Suggestions	Asistan önerileri
+	Agents connected to WordCraft can show you messages through the Assistant. Muted, they're told you'd rather not.	WordCraft'a bağlı aracılar, asistan aracılığıyla size mesaj gösterebilir. Sessize alındığında, bunu istemediğiniz kendilerine bildirilir.
+	Annoying	Can sıkıcı
+	Mute agent messages	Aracı mesajlarını sessize al
+	Nib floats over the window with tips and the occasional remark.	Nib, ipuçları ve ara sıra yorumlarla pencerenin üzerinde süzülür.
+	Nib, your assistant. Drag to move; right-click for options.	Asistanınız Nib. Taşımak için sürükleyin; seçenekler için sağ tıklayın.
+	Reset tips	İpuçlarını sıfırla
+	Sayings:	Sözler:
+	Show the Assistant	Asistanı göster
+	Show the tips you asked not to see again.	Bir daha görmek istemediğiniz ipuçlarını yeniden gösterir.
+	Sometimes	Bazen

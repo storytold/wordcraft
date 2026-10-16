@@ -2245,3 +2245,16 @@
 # Reading Mode column widths (#1040)
 	Narrow	Вузька
 	Medium	Середня
+# The Assistant, Nib (#959)
+	Assistant	Помічник
+	Assistant Suggestions	Підказки помічника
+	Agents connected to WordCraft can show you messages through the Assistant. Muted, they're told you'd rather not.	Агенти, підключені до WordCraft, можуть показувати вам повідомлення через помічника. Якщо їх вимкнено, агенти дізнаються, що ви не хочете їх отримувати.
+	Annoying	Настирливо
+	Mute agent messages	Вимкнути повідомлення агентів
+	Nib floats over the window with tips and the occasional remark.	Ніб ширяє над вікном із порадами й зрідка зауваженнями.
+	Nib, your assistant. Drag to move; right-click for options.	Ніб, ваш помічник. Перетягніть, щоб перемістити; клацніть правою кнопкою для параметрів.
+	Reset tips	Скинути поради
+	Sayings:	Репліки:
+	Show the Assistant	Показувати помічника
+	Show the tips you asked not to see again.	Знову показує поради, які ви приховали.
+	Sometimes	Іноді

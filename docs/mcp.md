@@ -93,6 +93,7 @@ files it was given rather than guarding against other software on the computer.
 | `render_page` | a page as PNG |
 | `parity` | feature coverage |
 | `screenshot`, `click`, `key`, `ui_inspect` | app only (`--connect`) |
+| `say_to_user` | app only: a message (or a question with up to 3 `choices`) for the person at the keyboard, shown by Nib, the Assistant, labelled with your client's name (`clientInfo` from `initialize`); read the answer with `execute ui.assistantReply {id}` (#959) |
 
 `insert.picture` and `insert.icon` leave the caret after the new picture, so typing next doesn't
 replace it; Picture Format commands (`picture.*`, `arrange.*`) still act on it.

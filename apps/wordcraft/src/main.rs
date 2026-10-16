@@ -431,6 +431,8 @@ fn main() -> eframe::Result {
                 app.session.set_document(doc);
             }
             app.watch_desktop_theme(&cc.egui_ctx);
+            // Nib introduces itself once and, when turned on, offers Tips and Sayings (#959).
+            app.assistant.automatic = prefs_enabled();
             if prefs_enabled()
                 && let Some(dir) = wordcraft_control_key::settings_dir()
             {

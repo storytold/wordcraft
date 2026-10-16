@@ -2632,3 +2632,16 @@ preview	Title	Naslov
 	Bottom Right Cell	Donja desna ćelija
 	Inside Horizontal Border	Unutarnji vodoravni obrub
 	Inside Vertical Border	Unutarnji okomiti obrub
+# The Assistant, Nib (#959)
+	Assistant	Asistent
+	Assistant Suggestions	Prijedlozi asistenta
+	Agents connected to WordCraft can show you messages through the Assistant. Muted, they're told you'd rather not.	Agenti povezani s WordCraftom mogu vam prikazivati poruke putem asistenta. Kad su utišani, javlja im se da to ne želite.
+	Annoying	Dosadno
+	Mute agent messages	Utišaj poruke agenata
+	Nib floats over the window with tips and the occasional remark.	Nib lebdi iznad prozora sa savjetima i ponekom primjedbom.
+	Nib, your assistant. Drag to move; right-click for options.	Nib, vaš asistent. Povucite za premještanje; desni klik za mogućnosti.
+	Reset tips	Vrati savjete
+	Sayings:	Dosjetke:
+	Show the Assistant	Prikaži asistenta
+	Show the tips you asked not to see again.	Ponovno prikazuje savjete koje ste sakrili.
+	Sometimes	Ponekad

@@ -2599,3 +2599,16 @@ preview	Title	Título
 # Reading Mode column widths (#1040)
 	Narrow	Estrecha
 	Medium	Media
+# The Assistant, Nib (#959)
+	Assistant	Asistente
+	Assistant Suggestions	Sugerencias del asistente
+	Agents connected to WordCraft can show you messages through the Assistant. Muted, they're told you'd rather not.	Los agentes conectados a WordCraft pueden mostrarte mensajes a través del asistente. Si los silencias, se les avisa de que prefieres que no.
+	Annoying	Molesto
+	Mute agent messages	Silenciar mensajes de agentes
+	Nib floats over the window with tips and the occasional remark.	Nib flota sobre la ventana con consejos y algún que otro comentario.
+	Nib, your assistant. Drag to move; right-click for options.	Nib, tu asistente. Arrastra para moverlo; clic derecho para ver las opciones.
+	Reset tips	Restablecer consejos
+	Sayings:	Frases:
+	Show the Assistant	Mostrar el asistente
+	Show the tips you asked not to see again.	Vuelve a mostrar los consejos que pediste no ver.
+	Sometimes	A veces

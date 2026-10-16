@@ -1375,6 +1375,15 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.circle(10.0, 10.0, 7.0, c);
             pen.text(10.0, 10.0, 10.0, "?", a, true);
         }
+        // Help › Assistant: Nib, the Assistant (#959): a pen nib with two eyes.
+        "assistant" => {
+            let nib = [(10.0, 1.5), (14.5, 3.0), (16.0, 7.5), (14.5, 12.0), (10.0, 18.5), (5.5, 12.0), (4.0, 7.5), (5.5, 3.0)];
+            pen.fill(&nib, a.linear_multiply(0.35));
+            pen.closed(&nib, c);
+            pen.fcircle(7.6, 7.5, 1.1, c);
+            pen.fcircle(12.4, 7.5, 1.1, c);
+            pen.line(&[(10.0, 13.5), (10.0, 18.0)]);
+        }
         // Developer › Controls: a field's frame with what it holds.
         "ccRichText" => {
             pen.rect(2.5, 5.0, 17.5, 15.0, a);

@@ -205,6 +205,8 @@ fn general(app: &mut WordApp, ui: &mut Ui) {
         let _ = app.run("ui.startScreen", json!({"value": start}));
     }
     ui.add_space(8.0);
+    assistant(app, ui);
+    ui.add_space(8.0);
     section(ui, "Personalize");
     egui::Grid::new("options_user").num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
         ui.label(tl!("User name:"));
@@ -227,6 +229,38 @@ fn general(app: &mut WordApp, ui: &mut Ui) {
         ui.end_row();
     });
     note(ui, "New comments and tracked changes are recorded under this name and these initials.");
+}
+
+/// General › Assistant (#959): Nib on or off, how chatty it is, agent messages, and the Tips
+/// dismissed for good.
+fn assistant(app: &mut WordApp, ui: &mut Ui) {
+    use crate::assistant::Sayings;
+    section(ui, "Assistant");
+    let mut on = app.ui.assistant.visible;
+    if ui.checkbox(&mut on, tl!("Show the Assistant")).on_hover_text(tl!("Nib floats over the window with tips and the occasional remark.")).changed()
+    {
+        let _ = app.run("ui.assistant", json!({"show": on}));
+    }
+    ui.horizontal(|ui| {
+        ui.label(tl!("Sayings:"));
+        for (label, level) in [("Off", Sayings::Off), ("Sometimes", Sayings::Sometimes), ("Annoying", Sayings::Annoying)] {
+            if ui.radio(app.ui.assistant.sayings == level, tl!(label)).clicked() {
+                let _ = app.run("ui.assistantSayings", json!({"level": level.code()}));
+            }
+        }
+    });
+    let mut muted = app.ui.assistant.agent_messages_muted;
+    if ui
+        .checkbox(&mut muted, tl!("Mute agent messages"))
+        .on_hover_text(tl!("Agents connected to WordCraft can show you messages through the Assistant. Muted, they're told you'd rather not."))
+        .changed()
+    {
+        let _ = app.run("ui.assistantMute", json!({"value": muted}));
+    }
+    let dismissed = app.ui.assistant.dismissed_tips.len();
+    if ui.add_enabled(dismissed > 0, egui::Button::new(tl!("Reset tips"))).on_hover_text(tl!("Show the tips you asked not to see again.")).clicked() {
+        let _ = app.run("ui.assistantResetTips", json!({}));
+    }
 }
 
 fn display(app: &mut WordApp, ui: &mut Ui) {

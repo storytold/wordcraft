@@ -152,3 +152,35 @@ fn type_text_stops_at_a_refused_paragraph_break() {
     assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("paragraph break refused"), "{r}");
     assert_eq!(*calls.lock().unwrap(), vec!["text.insert", "text.newParagraph"]);
 }
+
+/// Agent messages (#959) go to the app's Assistant with the client's own name as the sender,
+/// whatever the agent claims.
+#[test]
+fn agent_messages_carry_the_clients_name() {
+    let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut s = Server::new(Box::new(FakeApp { calls: calls.clone() }));
+    call(
+        &mut s,
+        1,
+        "initialize",
+        json!({"protocolVersion": "2025-06-18", "clientInfo": {"name": "claude-code", "title": "Claude Code", "version": "1"}}),
+    );
+    call(&mut s, 2, "tools/call", json!({"name": "say_to_user", "arguments": {"text": "Done!", "choices": ["OK"], "from": "WordCraft"}}));
+    call(&mut s, 3, "tools/call", json!({"name": "execute", "arguments": {"command": "ui.assistantSay", "params": {"text": "Hi", "from": "Nib"}}}));
+    call(&mut s, 4, "tools/call", json!({"name": "batch", "arguments": {"commands": [{"command": "ui.assistantSay", "params": {"text": "Hey"}}]}}));
+    let calls = calls.lock().unwrap();
+    let says: Vec<&Value> =
+        calls.iter().filter(|(m, p)| m == "engine.execute" && p["command"] == "ui.assistantSay").map(|(_, p)| &p["params"]).collect();
+    assert_eq!(says.len(), 3, "{calls:?}");
+    assert!(says.iter().all(|p| p["from"] == "Claude Code"), "{says:?}");
+    assert_eq!(says[0]["choices"], json!(["OK"]));
+}
+
+/// Headless, there is no Nib to speak through: the agent is told to start the app.
+#[test]
+fn headless_agent_messages_need_the_app() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    let r = call(&mut s, 1, "tools/call", json!({"name": "say_to_user", "arguments": {"text": "Hi"}}));
+    assert_eq!(r["result"]["isError"], true);
+    assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("needs the desktop app"), "{r}");
+}
