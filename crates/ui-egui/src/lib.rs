@@ -3088,6 +3088,53 @@ mod tests {
         assert!((a.canvas.scroll_offset.y - at - notch).abs() < 0.5, "a notch scrolls {notch}: {}", a.canvas.scroll_offset.y - at);
     }
 
+    /// Read Mode turns columns with the keyboard (#1772): Right/Page Down forward, Left/Page Up back.
+    #[test]
+    fn reading_mode_keys_turn_columns() {
+        let ctx = egui::Context::default();
+        let mut a = app();
+        a.run("text.insert", json!({"text": "One readable paragraph in many narrow columns. ".repeat(300)})).unwrap();
+        a.run("caret.set", json!({"pos": wordcraft_doc::Pos::body(0, 0)})).unwrap();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 740.0));
+        let mut t = 0.0;
+        let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+            t += 1.0 / 60.0;
+            let input = egui::RawInput { events, time: Some(t), screen_rect: Some(screen), ..Default::default() };
+            ctx.run_ui(input, |ui| {
+                a.logic(ui.ctx());
+                a.ui(ui);
+            })
+            .drop_without_applying_deltas();
+        };
+        for _ in 0..3 {
+            frame(&mut a, vec![]);
+        }
+        a.run("view.readMode", json!({})).unwrap();
+        for _ in 0..3 {
+            frame(&mut a, vec![]);
+        }
+        let key = |key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+        let step = a.session.view.read_width * a.canvas.scale + 18.0;
+        assert!(a.canvas.focused, "the canvas has the keyboard");
+        frame(&mut a, vec![key(egui::Key::PageDown)]);
+        for _ in 0..30 {
+            frame(&mut a, vec![]);
+        }
+        assert!((a.canvas.scroll_offset.x - step).abs() < 1.0, "Page Down turns one column: {}", a.canvas.scroll_offset.x);
+        frame(&mut a, vec![key(egui::Key::ArrowRight)]);
+        for _ in 0..30 {
+            frame(&mut a, vec![]);
+        }
+        assert!((a.canvas.scroll_offset.x - 2.0 * step).abs() < 1.0, "Right turns one column: {}", a.canvas.scroll_offset.x);
+        frame(&mut a, vec![key(egui::Key::ArrowLeft)]);
+        for _ in 0..30 {
+            frame(&mut a, vec![]);
+        }
+        assert!((a.canvas.scroll_offset.x - step).abs() < 1.0, "Left turns back: {}", a.canvas.scroll_offset.x);
+        frame(&mut a, vec![key(egui::Key::Escape)]);
+        assert!(!a.session.view.read_mode, "Escape leaves Read Mode");
+    }
+
     /// Reading Mode: reflowed viewport-height columns, horizontal wheel/navigation, exit restores
     /// Print Layout without editing or changing the document's page setup.
     #[test]
@@ -3120,7 +3167,8 @@ mod tests {
         assert_eq!(a.canvas.cols, rects.len(), "one unwrapped row");
         assert!((rects[0].top() - rects[1].top()).abs() < 0.1);
         assert!(rects[1].left() > rects[0].right());
-        assert!((rects[0].height() - (a.canvas.canvas_rect.unwrap().height() - 36.0)).abs() < 2.0);
+        // Full height, less the top gap and the page-turn bar's strip at the bottom (#1772).
+        assert!((rects[0].height() - (a.canvas.canvas_rect.unwrap().height() - 62.0)).abs() < 2.0);
         let initial_width = a.session.view.read_width;
         // A simple mouse click in a later visible column must neither pull that column
         // to the leading edge nor select text under the stationary, held pointer.

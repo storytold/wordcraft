@@ -448,7 +448,28 @@ fn reading_size(avail: egui::Vec2, scale: f32, requested: Option<f32>) -> (f32, 
         let count = (width / 295.0).round().clamp(1.0, 5.0);
         ((width - (count + 1.0) * GAP) / count).max(192.0)
     };
-    (px / scale, (height - 2.0 * GAP).max(192.0) / scale)
+    // The columns end above the page-turn bar, which used to cover their last lines (#1772).
+    (px / scale, (height - GAP - READ_NAV_BAR).max(192.0) / scale)
+}
+
+/// Height kept free under Read Mode's columns for the page-turn bar at the bottom right.
+const READ_NAV_BAR: f32 = 44.0;
+
+/// The part of the canvas Read Mode scrolls in: as many whole columns as fit, centred. A chosen
+/// column width (or a resize) otherwise left the last column cut off at the right edge (#1772).
+/// `scale` is pixels per point: the column width is only re-laid out when it moves by more than
+/// half a point, so each column may overrun by that much before one is dropped.
+fn reading_viewport(full: Rect, column_px: f32, scale: f32) -> Rect {
+    if !column_px.is_finite() || column_px <= 0.0 || !full.width().is_finite() {
+        return full;
+    }
+    let step = column_px + GAP;
+    let slack = if scale.is_finite() { (0.5 * scale).clamp(0.0, 4.0) } else { 0.0 };
+    // A hair of tolerance too: columns sized to fill the canvas exactly come back from points
+    // as 2.9999998 of them, and flooring that dropped a whole column.
+    let whole = ((full.width() - GAP) / (step - slack) + 1e-3).floor().max(1.0);
+    let width = (whole * step + GAP).min(full.width());
+    Rect::from_min_size(pos2(full.center().x - width / 2.0, full.min.y), vec2(width, full.height()))
 }
 
 /// A single horizontal row of reflowed reading pages; no wrapping at the viewport edge.
@@ -846,6 +867,12 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     } else {
         (None, None, full)
     };
+    let area = if app.session.view.read_mode {
+        let column = app.session.view.read_width * app.session.view.read_zoom.clamp(0.75, 1.5) * PX_PER_PT;
+        reading_viewport(area, column, app.session.view.read_zoom.clamp(0.75, 1.5) * PX_PER_PT)
+    } else {
+        area
+    };
     app.canvas.canvas_rect = Some(area);
     // Ctrl/⌘ + wheel (and trackpad pinch) zooms the document, like Word. egui reports both as a
     // zoom factor and doesn't scroll for them. Start from the shown scale so fit modes zoom too.
@@ -951,7 +978,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     // momentum, wheel notches eased in (or all at once with animation effects off). Applied
     // before drawing, so it shows this frame. In reading mode, wheel and touchpad events turn
     // whole columns instead.
-    let hovered = wheel_hovered(ui.rect_contains_pointer(area), ui.ctx().dragged_id().is_some(), app.canvas.drag_selecting());
+    // Read Mode's centred columns leave margins at the sides; the wheel turns pages over them too.
+    let wheel_area = if app.session.view.read_mode { full } else { area };
+    let hovered = wheel_hovered(ui.rect_contains_pointer(wheel_area), ui.ctx().dragged_id().is_some(), app.canvas.drag_selecting());
     let notch = crate::scroll::notch_px(app.canvas.scale / PX_PER_PT);
     let wheel_delta = if app.session.view.read_mode {
         let turns = ui.input(|i| read_wheel_turns(&i.events, hovered, &mut app.canvas.read_wheel_accum));
@@ -1037,11 +1066,18 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let out = scroll_area.show_viewport(&mut ui_area, |ui, viewport| {
         origin = ui.min_rect().min - viewport.min.to_vec2();
         let content = Rect::from_min_size(ui.min_rect().min, geo.size);
-        let resp = ui.allocate_rect(content, Sense::click_and_drag());
+        // A fixed id: an automatic one follows how many widgets came before, which Read Mode's
+        // chrome changes, and a new id dropped the keyboard focus, so the arrows, Page Up/Down
+        // and Escape did nothing in Read Mode until the reader clicked a page (#1772).
+        ui.advance_cursor_after_rect(content);
+        let resp = ui.interact(content, egui::Id::new("wordcraft_canvas"), Sense::click_and_drag());
         if let Some(tr) = scroll_target {
             ui.scroll_to_rect(Rect::from_min_size(ui.min_rect().min + tr.min.to_vec2(), tr.size()), None);
         }
-        let painter = ui.painter_at(ui.clip_rect());
+        // Read Mode's neighbouring columns end right at the viewport's edges: keep their
+        // shadows from showing there as hairlines.
+        let clip = if app.session.view.read_mode { ui.clip_rect().shrink2(vec2(3.0, 0.0)) } else { ui.clip_rect() };
+        let painter = ui.painter_at(clip);
         let ppp = ui.ctx().pixels_per_point();
         let max_tex = ui.ctx().input(|i| i.max_texture_side).min(wordcraft_render::MAX_SIDE as usize).max(1) as f32;
         let mut visible_tile_keys = HashSet::new();
@@ -3097,6 +3133,105 @@ mod tests {
         assert!(wheel_hovered(true, true, true), "wheel keeps scrolling during a drag-select");
         assert!(!wheel_hovered(true, true, false), "another widget's drag still owns the wheel");
         assert!(!wheel_hovered(false, true, true));
+    }
+
+    /// #1772: the page-turn bar at the bottom right covered the last lines of the column under it.
+    #[test]
+    fn reading_columns_end_above_the_page_turn_bar() {
+        let scale = PX_PER_PT;
+        for (w, h) in [(1280.0, 740.0), (900.0, 700.0), (2000.0, 1200.0)] {
+            for requested in [None, Some(180.0), Some(350.0), Some(612.0)] {
+                let (_, ph) = reading_size(vec2(w, h), scale, requested);
+                let bottom = GAP + ph * scale;
+                assert!(bottom <= h - READ_NAV_BAR + 0.5, "{w}×{h} {requested:?}: column ends at {bottom}, bar starts at {}", h - READ_NAV_BAR);
+            }
+        }
+    }
+
+    /// #1772: a chosen column width (or a resized window) left the last visible column cut off at
+    /// the right edge. The reading viewport shows only whole columns, centred.
+    #[test]
+    fn reading_viewport_shows_whole_columns() {
+        let scale = PX_PER_PT;
+        for (w, h) in [(1280.0, 740.0), (900.0, 700.0), (1440.0, 820.0), (500.0, 600.0)] {
+            let full = Rect::from_min_size(pos2(10.0, 20.0), vec2(w, h));
+            for requested in [None, Some(180.0), Some(240.0), Some(350.0), Some(612.0)] {
+                for zoom in [0.75, 1.0, 1.5] {
+                    let (cw, _) = reading_size(full.size(), scale * zoom, requested);
+                    let column = cw * scale * zoom;
+                    let area = reading_viewport(full, column, scale * zoom);
+                    assert!(full.contains_rect(area), "inside the canvas");
+                    assert_eq!(area.height(), full.height());
+                    assert!((area.center().x - full.center().x).abs() < 0.5, "centred");
+                    // Columns at rest start at GAP + k·step from the viewport's left edge. Past
+                    // the whole ones, only a column short by under half a point each may show.
+                    let step = column + GAP;
+                    let whole = ((area.width() - GAP) / step + 1e-3).floor().max(1.0);
+                    let used = whole * step + GAP;
+                    let short = used + step - area.width();
+                    assert!(
+                        area.width() <= used + 0.5 || whole == 1.0 || short <= (whole + 1.0) * 0.5 * scale * zoom + 0.5,
+                        "{w}×{h} {requested:?} {zoom}: {} wide shows a cut column (columns use {used})",
+                        area.width()
+                    );
+                }
+            }
+        }
+        // With no width chosen the columns are sized to fill the canvas exactly, so none may be
+        // dropped: the stored width (pt) and back to px must still fit every one of them.
+        for zoom in [0.75, 1.0, 1.25, 1.5] {
+            let scale = PX_PER_PT * zoom;
+            for w in (300..=4000).step_by(7) {
+                let full = Rect::from_min_size(pos2(0.0, 0.0), vec2(w as f32, 700.0));
+                let count = (full.width() / 295.0).round().clamp(1.0, 5.0);
+                let px = (full.width() - (count + 1.0) * GAP) / count;
+                if px < 192.0 {
+                    continue; // the minimum width overflows; whole columns then shrink the view
+                }
+                let (cw, _) = reading_size(full.size(), scale, None);
+                let column = cw * scale;
+                let area = reading_viewport(full, column, scale);
+                let needed = count * column + (count + 1.0) * GAP;
+                assert!(area.width() >= needed - 0.5, "{w} at {zoom}: {} wide drops a column of {count} ({needed})", area.width());
+            }
+        }
+        // Junk sizes never panic and fall back to the whole canvas.
+        let full = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
+        assert_eq!(reading_viewport(full, f32::NAN, 1.0), full);
+        assert_eq!(reading_viewport(full, 0.0, f32::NAN), full);
+    }
+
+    #[test]
+    fn reading_viewport_keeps_columns_when_the_window_shrinks_a_little() {
+        // The column width is only re-laid out when it changes by more than half a point, so a
+        // window a few pixels narrower keeps slightly too wide columns: none may drop out.
+        for (zoom, shrink) in [(1.0, 1.0), (1.0, 3.0), (1.5, 1.0), (1.5, 3.0), (0.75, 1.0)] {
+            let scale = PX_PER_PT * zoom;
+            for w in (300..=4000).step_by(7) {
+                let before = vec2(w as f32, 700.0);
+                let count = (before.x / 295.0).round().clamp(1.0, 5.0);
+                if (before.x - (count + 1.0) * GAP) / count < 192.0 {
+                    continue;
+                }
+                let after = before - vec2(shrink, 0.0);
+                if (after.x / 295.0).round() != count {
+                    continue; // a different column count reflows anyway
+                }
+                let (kept, _) = reading_size(before, scale, None);
+                let (fresh, _) = reading_size(after, scale, None);
+                if (kept - fresh).abs() > 0.5 {
+                    continue; // re-laid out at once
+                }
+                let full = Rect::from_min_size(pos2(0.0, 0.0), after);
+                let area = reading_viewport(full, kept * scale, scale);
+                assert!(
+                    area.width() >= full.width() - 0.5,
+                    "{w}-{shrink} at {zoom}: kept {kept}pt columns, view narrowed to {} of {}",
+                    area.width(),
+                    full.width()
+                );
+            }
+        }
     }
 
     #[test]
