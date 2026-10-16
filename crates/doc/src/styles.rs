@@ -156,7 +156,8 @@ impl TablePart {
         }
     }
     pub fn from_ooxml(s: &str) -> Option<TablePart> {
-        TablePart::ALL.into_iter().find(|p| p.ooxml() == s)
+        let trimmed = s.trim();
+        TablePart::ALL.into_iter().find(|p| p.ooxml().eq_ignore_ascii_case(trimmed))
     }
     /// A part spanning whole rows (its left/right edges are the table's sides, `inside_v` the
     /// edges between its cells).
@@ -1020,5 +1021,14 @@ mod tests {
         assert_eq!(s.new_id("My Style"), "MyStyle");
         assert_eq!(s.new_id("Normal"), "Normal1");
         assert_eq!(s.new_id("!!!"), "Style");
+    }
+
+    #[test]
+    fn table_part_from_ooxml_case_insensitive() {
+        assert_eq!(TablePart::from_ooxml("firstRow"), Some(TablePart::FirstRow));
+        assert_eq!(TablePart::from_ooxml("  FIRSTROW  "), Some(TablePart::FirstRow));
+        assert_eq!(TablePart::from_ooxml("band1Horz"), Some(TablePart::Band1Horz));
+        assert_eq!(TablePart::from_ooxml("BAND1HORZ"), Some(TablePart::Band1Horz));
+        assert_eq!(TablePart::from_ooxml("unknown"), None);
     }
 }

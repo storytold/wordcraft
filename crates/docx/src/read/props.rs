@@ -598,13 +598,18 @@ pub fn sectpr(e: &El) -> (SectionProps, Vec<HfRef>) {
                 }
             }
             "w:type" => {
-                s.start = match k.attr("w:val") {
-                    Some("continuous") => SectionStart::Continuous,
-                    Some("evenPage") => SectionStart::EvenPage,
-                    Some("oddPage") => SectionStart::OddPage,
-                    Some("nextColumn") => SectionStart::NextColumn,
-                    _ => SectionStart::NextPage,
-                }
+                let v = k.attr("w:val").unwrap_or("").trim();
+                s.start = if v.eq_ignore_ascii_case("continuous") {
+                    SectionStart::Continuous
+                } else if v.eq_ignore_ascii_case("evenPage") {
+                    SectionStart::EvenPage
+                } else if v.eq_ignore_ascii_case("oddPage") {
+                    SectionStart::OddPage
+                } else if v.eq_ignore_ascii_case("nextColumn") {
+                    SectionStart::NextColumn
+                } else {
+                    SectionStart::NextPage
+                };
             }
             "w:pgSz" => {
                 if let Some(w) = tw(k, "w:w").filter(|v| *v >= 36.0) {
@@ -613,8 +618,8 @@ pub fn sectpr(e: &El) -> (SectionProps, Vec<HfRef>) {
                 if let Some(h) = tw(k, "w:h").filter(|v| *v >= 36.0) {
                     s.page_h = h;
                 }
-                s.landscape = match k.attr("w:orient") {
-                    Some("landscape") => true,
+                s.landscape = match k.attr("w:orient").map(|s| s.trim()) {
+                    Some(s) if s.eq_ignore_ascii_case("landscape") => true,
                     Some(_) => false,
                     None => s.page_w > s.page_h,
                 };
@@ -673,20 +678,15 @@ pub fn sectpr(e: &El) -> (SectionProps, Vec<HfRef>) {
                     l.start = (v.clamp(0, 32_767) + 1) as u32;
                 }
                 l.distance = tw(k, "w:distance").unwrap_or(0.0).max(0.0);
-                l.restart = match k.attr("w:restart") {
-                    Some("newSection") => LineNumberRestart::Section,
-                    Some("continuous") => LineNumberRestart::Continuous,
+                l.restart = match k.attr("w:restart").map(|s| s.trim()) {
+                    Some(s) if s.eq_ignore_ascii_case("newSection") => LineNumberRestart::Section,
+                    Some(s) if s.eq_ignore_ascii_case("continuous") => LineNumberRestart::Continuous,
                     _ => LineNumberRestart::Page,
                 };
                 s.line_numbers = Some(l);
             }
             "w:vAlign" => {
-                s.valign = match k.attr("w:val") {
-                    Some("center") => PageVAlign::Center,
-                    Some("both") => PageVAlign::Justify,
-                    Some("bottom") => PageVAlign::Bottom,
-                    _ => PageVAlign::Top,
-                }
+                s.valign = k.attr("w:val").map(PageVAlign::parse).unwrap_or(PageVAlign::Top);
             }
             "w:pgBorders" => s.page_borders = Some(borders(k)),
             "w:docGrid" => {

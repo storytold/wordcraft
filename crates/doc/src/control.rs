@@ -42,10 +42,10 @@ pub enum ControlLock {
 
 impl ControlLock {
     pub fn from_ooxml(v: &str) -> ControlLock {
-        match v {
-            "sdtLocked" => ControlLock::SdtLocked,
-            "contentLocked" => ControlLock::ContentLocked,
-            "sdtContentLocked" => ControlLock::SdtContentLocked,
+        match v.trim().to_ascii_lowercase().as_str() {
+            "sdtlocked" => ControlLock::SdtLocked,
+            "contentlocked" => ControlLock::ContentLocked,
+            "sdtcontentlocked" => ControlLock::SdtContentLocked,
             _ => ControlLock::Unlocked,
         }
     }
@@ -723,4 +723,20 @@ pub fn walk_controls(bl: &Blocks, f: &mut dyn FnMut(&ContentControl)) {
         }
     }
     go(bl, f, 0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_control_lock_from_ooxml() {
+        assert_eq!(ControlLock::from_ooxml("sdtLocked"), ControlLock::SdtLocked);
+        assert_eq!(ControlLock::from_ooxml("  SDTLOCKED  "), ControlLock::SdtLocked);
+        assert_eq!(ControlLock::from_ooxml("contentLocked"), ControlLock::ContentLocked);
+        assert_eq!(ControlLock::from_ooxml("CONTENTLOCKED"), ControlLock::ContentLocked);
+        assert_eq!(ControlLock::from_ooxml("sdtContentLocked"), ControlLock::SdtContentLocked);
+        assert_eq!(ControlLock::from_ooxml("  SDTCONTENTLOCKED \n"), ControlLock::SdtContentLocked);
+        assert_eq!(ControlLock::from_ooxml("unknown"), ControlLock::Unlocked);
+    }
 }

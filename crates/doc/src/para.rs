@@ -77,8 +77,8 @@ pub enum WrapText {
 impl WrapText {
     /// From the OOXML value (`bothSides`, `left`, `right`, `largest`).
     pub fn from_ooxml(v: &str) -> Option<WrapText> {
-        match v {
-            "bothSides" => Some(WrapText::BothSides),
+        match v.trim().to_ascii_lowercase().as_str() {
+            "bothsides" => Some(WrapText::BothSides),
             "left" => Some(WrapText::Left),
             "right" => Some(WrapText::Right),
             "largest" => Some(WrapText::Largest),
@@ -144,7 +144,7 @@ pub enum FloatAlign {
 impl FloatAlign {
     /// From an OOXML alignment (`wp:align`, `w:tblpXSpec`, `w:tblpYSpec`).
     pub fn from_ooxml(v: &str) -> Option<FloatAlign> {
-        match v {
+        match v.trim().to_ascii_lowercase().as_str() {
             "left" | "top" => Some(FloatAlign::Start),
             "center" => Some(FloatAlign::Center),
             "right" | "bottom" => Some(FloatAlign::End),
@@ -349,7 +349,8 @@ impl RubyAlign {
     }
 
     pub fn from_ooxml(v: &str) -> Option<RubyAlign> {
-        RubyAlign::ALL.into_iter().find(|a| a.ooxml() == v)
+        let trimmed = v.trim();
+        RubyAlign::ALL.into_iter().find(|a| a.ooxml().eq_ignore_ascii_case(trimmed))
     }
 }
 
@@ -1519,5 +1520,28 @@ mod tests {
                 proptest::prop_assert_eq!(p.text.matches(OBJ).count(), p.objects.len());
             }
         }
+    }
+
+    #[test]
+    fn ooxml_para_enums_case_insensitive() {
+        assert_eq!(WrapText::from_ooxml("bothSides"), Some(WrapText::BothSides));
+        assert_eq!(WrapText::from_ooxml("  BOTHSIDES  "), Some(WrapText::BothSides));
+        assert_eq!(WrapText::from_ooxml("largest"), Some(WrapText::Largest));
+        assert_eq!(WrapText::from_ooxml("LARGEST"), Some(WrapText::Largest));
+        assert_eq!(WrapText::from_ooxml("unknown"), None);
+
+        assert_eq!(FloatAlign::from_ooxml("left"), Some(FloatAlign::Start));
+        assert_eq!(FloatAlign::from_ooxml(" TOP "), Some(FloatAlign::Start));
+        assert_eq!(FloatAlign::from_ooxml("center"), Some(FloatAlign::Center));
+        assert_eq!(FloatAlign::from_ooxml("CENTER"), Some(FloatAlign::Center));
+        assert_eq!(FloatAlign::from_ooxml("right"), Some(FloatAlign::End));
+        assert_eq!(FloatAlign::from_ooxml("BOTTOM"), Some(FloatAlign::End));
+        assert_eq!(FloatAlign::from_ooxml("inside"), Some(FloatAlign::Inside));
+        assert_eq!(FloatAlign::from_ooxml(" OUTSIDE "), Some(FloatAlign::Outside));
+
+        assert_eq!(RubyAlign::from_ooxml("distributeLetter"), Some(RubyAlign::DistributeLetter));
+        assert_eq!(RubyAlign::from_ooxml(" DISTRIBUTELETTER "), Some(RubyAlign::DistributeLetter));
+        assert_eq!(RubyAlign::from_ooxml("rightVertical"), Some(RubyAlign::RightVertical));
+        assert_eq!(RubyAlign::from_ooxml("RIGHTVERTICAL"), Some(RubyAlign::RightVertical));
     }
 }

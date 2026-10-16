@@ -24,7 +24,7 @@ impl PageVAlign {
     /// From a command or file value: `top|center|justify|bottom` (also `both`, `justified`,
     /// `middle`); anything else is Top.
     pub fn parse(v: &str) -> PageVAlign {
-        match v {
+        match v.trim().to_ascii_lowercase().as_str() {
             "center" | "middle" => PageVAlign::Center,
             "justify" | "justified" | "both" => PageVAlign::Justify,
             "bottom" => PageVAlign::Bottom,
@@ -253,7 +253,8 @@ impl NumFormat {
     /// (as Word shows it). So is `custom` (a Word 2010 format string, always written with a
     /// decimal fallback).
     pub fn from_ooxml(s: &str) -> NumFormat {
-        NumFormat::ALL.into_iter().find(|f| f.ooxml() == s).unwrap_or(NumFormat::Decimal)
+        let trimmed = s.trim();
+        NumFormat::ALL.into_iter().find(|f| f.ooxml().eq_ignore_ascii_case(trimmed)).unwrap_or(NumFormat::Decimal)
     }
     /// Format `n` (1-based). Formats WordCraft doesn't draw yet (Hebrew, Arabic, Hindi, Thai,
     /// Vietnamese, text amounts) show decimal, as do values past a sequence's end
@@ -505,7 +506,8 @@ impl NotePos {
         }
     }
     pub fn from_ooxml(s: &str) -> Option<NotePos> {
-        [NotePos::PageBottom, NotePos::BeneathText, NotePos::SectEnd, NotePos::DocEnd].into_iter().find(|p| p.ooxml() == s)
+        let trimmed = s.trim();
+        [NotePos::PageBottom, NotePos::BeneathText, NotePos::SectEnd, NotePos::DocEnd].into_iter().find(|p| p.ooxml().eq_ignore_ascii_case(trimmed))
     }
 }
 
@@ -528,7 +530,8 @@ impl NoteRestart {
         }
     }
     pub fn from_ooxml(s: &str) -> Option<NoteRestart> {
-        [NoteRestart::Continuous, NoteRestart::EachSect, NoteRestart::EachPage].into_iter().find(|r| r.ooxml() == s)
+        let trimmed = s.trim();
+        [NoteRestart::Continuous, NoteRestart::EachSect, NoteRestart::EachPage].into_iter().find(|r| r.ooxml().eq_ignore_ascii_case(trimmed))
     }
 }
 
@@ -648,7 +651,8 @@ impl DocGridType {
         }
     }
     pub fn from_ooxml(s: &str) -> Option<DocGridType> {
-        [DocGridType::Default, DocGridType::Lines, DocGridType::LinesAndChars, DocGridType::SnapToChars].into_iter().find(|t| t.ooxml() == s)
+        let trimmed = s.trim();
+        [DocGridType::Default, DocGridType::Lines, DocGridType::LinesAndChars, DocGridType::SnapToChars].into_iter().find(|t| t.ooxml().eq_ignore_ascii_case(trimmed))
     }
 }
 
@@ -957,5 +961,33 @@ mod tests {
         };
         // Text width 468: the first column hugs the right edge, the second sits 20pt to its left.
         assert_eq!(s.column_boxes(), vec![(368.0, 100.0), (148.0, 200.0)]);
+    }
+
+    #[test]
+    fn ooxml_enum_parsing_case_insensitive() {
+        assert_eq!(PageVAlign::parse("Center"), PageVAlign::Center);
+        assert_eq!(PageVAlign::parse("  BOTH  "), PageVAlign::Justify);
+        assert_eq!(PageVAlign::parse("justified"), PageVAlign::Justify);
+        assert_eq!(PageVAlign::parse("bottom \t"), PageVAlign::Bottom);
+        assert_eq!(PageVAlign::parse("unknown"), PageVAlign::Top);
+
+        assert_eq!(NumFormat::from_ooxml("lowerRoman"), NumFormat::LowerRoman);
+        assert_eq!(NumFormat::from_ooxml("  UPPERROMAN  "), NumFormat::UpperRoman);
+        assert_eq!(NumFormat::from_ooxml("decimalZero"), NumFormat::DecimalZero);
+        assert_eq!(NumFormat::from_ooxml("DECIMALZERO"), NumFormat::DecimalZero);
+
+        assert_eq!(NotePos::from_ooxml("pageBottom"), Some(NotePos::PageBottom));
+        assert_eq!(NotePos::from_ooxml("  PAGEBOTTOM "), Some(NotePos::PageBottom));
+        assert_eq!(NotePos::from_ooxml("docEnd"), Some(NotePos::DocEnd));
+        assert_eq!(NotePos::from_ooxml("DocEnd"), Some(NotePos::DocEnd));
+
+        assert_eq!(NoteRestart::from_ooxml("eachSect"), Some(NoteRestart::EachSect));
+        assert_eq!(NoteRestart::from_ooxml(" EACHSECT "), Some(NoteRestart::EachSect));
+        assert_eq!(NoteRestart::from_ooxml("eachPage"), Some(NoteRestart::EachPage));
+        assert_eq!(NoteRestart::from_ooxml("EachPage"), Some(NoteRestart::EachPage));
+
+        assert_eq!(DocGridType::from_ooxml("linesAndChars"), Some(DocGridType::LinesAndChars));
+        assert_eq!(DocGridType::from_ooxml(" LINESANDCHARS "), Some(DocGridType::LinesAndChars));
+        assert_eq!(DocGridType::from_ooxml("snapToChars"), Some(DocGridType::SnapToChars));
     }
 }
