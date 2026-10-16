@@ -2632,3 +2632,10 @@ preview	Title	Naslov
 	Bottom Right Cell	Donja desna ćelija
 	Inside Horizontal Border	Unutarnji vodoravni obrub
 	Inside Vertical Border	Unutarnji okomiti obrub
+# Styles pane position (#1756)
+	Styles Pane Position	Položaj okna stilova
+	Dock Left	Usidri lijevo
+	Dock Right	Usidri desno
+	Float	Plutajuće
+	Pane position	Položaj okna
+	Drag out to float the pane	Povucite van da okno pluta

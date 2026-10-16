@@ -3382,6 +3382,31 @@ fn styles_apply_pane_is_not_an_edit() {
     assert!(s.view.styles_pane);
 }
 
+/// #1756: the Styles pane docks on the right (the default), on the left, or floats.
+#[test]
+fn styles_pane_docks_left_right_or_floats() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    s.dirty = false;
+    let undo = s.undo_labels();
+    assert_eq!(run(&mut s, "view.state", json!({}))["stylesPaneDock"], "right");
+    assert_eq!(run(&mut s, "view.stylesPaneDock", json!({})), json!({"dock": "right"}), "no dock reads it");
+    for dock in ["left", "float", "right"] {
+        assert_eq!(run(&mut s, "view.stylesPaneDock", json!({"dock": dock})), json!({"dock": dock}));
+        assert_eq!(run(&mut s, "view.stylesPaneDock", json!({})), json!({"dock": dock}));
+        assert_eq!(run(&mut s, "view.state", json!({}))["stylesPaneDock"], dock);
+    }
+    run(&mut s, "view.stylesPaneDock", json!({"dock": "left"}));
+    for junk in [json!({"dock": "top"}), json!({"dock": 1}), json!({"dock": null}), json!({"dock": ["left"]}), json!({"dock": "LEFT "})] {
+        assert!(s.run("view.stylesPaneDock", &junk).is_err(), "{junk} is an error");
+        assert_eq!(run(&mut s, "view.stylesPaneDock", json!({})), json!({"dock": "left"}), "{junk} changes nothing");
+    }
+    // A view setting: no undo step, the document isn't changed, and the pane's visibility stays.
+    assert_eq!(s.undo_labels(), undo);
+    assert!(!s.dirty);
+    assert!(!s.view.styles_pane);
+}
+
 #[test]
 fn styles_apply_rejects_bad_style_params() {
     let mut s = s();

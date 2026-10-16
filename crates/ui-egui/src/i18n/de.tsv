@@ -2232,3 +2232,10 @@
 # Reading Mode column widths (#1040)
 	Narrow	Schmal
 	Medium	Mittel
+# Styles pane position (#1756)
+	Styles Pane Position	Position des Formatvorlagenbereichs
+	Dock Left	Links andocken
+	Dock Right	Rechts andocken
+	Float	Unverankert
+	Pane position	Position des Bereichs
+	Drag out to float the pane	Herausziehen, um den Bereich zu lösen

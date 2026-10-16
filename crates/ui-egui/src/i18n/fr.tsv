@@ -2240,3 +2240,10 @@
 # Reading Mode column widths (#1040)
 	Narrow	Étroite
 	Medium	Moyenne
+# Styles pane position (#1756)
+	Styles Pane Position	Position du volet Styles
+	Dock Left	Ancrer à gauche
+	Dock Right	Ancrer à droite
+	Float	Flottant
+	Pane position	Position du volet
+	Drag out to float the pane	Faites glisser pour rendre le volet flottant

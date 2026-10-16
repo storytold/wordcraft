@@ -323,6 +323,17 @@ pub struct UiState {
     pub update_fields_before_print: bool,
     /// The custom dictionary (File › Options › Proofing, Add to Dictionary), kept between runs.
     pub dictionary: Vec<String>,
+    /// Where the Styles pane sits (#1756); the session owns it while running (`view.stylesPaneDock`).
+    pub styles_pane_dock: wordcraft_engine::StylesPaneDock,
+    /// The floating Styles pane's place and size, `[x, y, width, height]` in points; brought
+    /// back on screen when it is shown ([`panes::float_rect`]).
+    pub styles_pane_float: Option<[f32; 4]>,
+    /// The floating Styles pane has been placed at `styles_pane_float` this run; never persisted.
+    #[serde(skip)]
+    pub styles_pane_placed: bool,
+    /// Where a docked Styles pane's title was let go after a drag this frame; never persisted.
+    #[serde(skip)]
+    pub styles_title_dropped: Option<egui::Pos2>,
 }
 
 /// The ribbon tab the app opens on, and the one it falls back to when the tab that was showing
@@ -378,6 +389,10 @@ impl Default for UiState {
             print_backgrounds: false,
             update_fields_before_print: false,
             dictionary: Vec::new(),
+            styles_pane_dock: wordcraft_engine::StylesPaneDock::Right,
+            styles_pane_float: None,
+            styles_pane_placed: false,
+            styles_title_dropped: None,
         }
     }
 }
@@ -683,6 +698,7 @@ impl WordApp {
         ui.keyboard = self.session.keymap.clone();
         ui.ribbon = self.session.ribbon.clone();
         ui.ink_pens = self.session.view.draw.pens.clone();
+        ui.styles_pane_dock = self.session.view.styles_pane_dock;
         ui
     }
 
@@ -730,6 +746,7 @@ impl WordApp {
         self.session.ribbon = std::mem::take(&mut self.ui.ribbon);
         self.session.ribbon.retain_known(&reg);
         self.session.view.draw.pens = std::mem::take(&mut self.ui.ink_pens);
+        self.session.view.styles_pane_dock = self.ui.styles_pane_dock;
     }
 
     /// Select the picture or icon the person just inserted or pasted, so it shows its handles.
@@ -5680,6 +5697,109 @@ mod tests {
         let mut second = app();
         second.apply_prefs(serde_json::from_slice(&saved).unwrap());
         assert!(second.session.view.dark_mode);
+    }
+
+    /// #1756: where the Styles pane sits, and the floating pane's place and size, are kept
+    /// between runs in the preferences, never in the document.
+    #[test]
+    fn styles_pane_dock_survives_restart() {
+        use wordcraft_engine::StylesPaneDock;
+        let mut first = app();
+        assert_eq!(first.session.view.styles_pane_dock, StylesPaneDock::Right);
+        first.run("view.stylesPaneDock", json!({"dock": "float"})).unwrap();
+        first.ui.styles_pane_float = Some([300.0, 120.0, 280.0, 500.0]);
+        let saved = serde_json::to_vec(&first.prefs()).unwrap();
+        let mut second = app();
+        second.apply_prefs(UiState::from_json(&saved).unwrap());
+        assert_eq!(second.session.view.styles_pane_dock, StylesPaneDock::Floating);
+        assert_eq!(second.ui.styles_pane_float, Some([300.0, 120.0, 280.0, 500.0]));
+        first.run("view.stylesPaneDock", json!({"dock": "left"})).unwrap();
+        let mut third = app();
+        third.apply_prefs(UiState::from_json(&serde_json::to_vec(&first.prefs()).unwrap()).unwrap());
+        assert_eq!(third.session.view.styles_pane_dock, StylesPaneDock::Left);
+        // Settings from before #1756, or a value this version doesn't know: on the right.
+        for old in [r#"{"tab":"Insert"}"#, r#"{"stylesPaneDock":"top","stylesPaneFloat":"x"}"#] {
+            let mut a = app();
+            a.apply_prefs(UiState::from_json(old.as_bytes()).unwrap());
+            assert_eq!(a.session.view.styles_pane_dock, StylesPaneDock::Right, "{old}");
+            assert_eq!(a.ui.styles_pane_float, None, "{old}");
+        }
+    }
+
+    /// #1756: the Styles pane shows on the side it is docked to, or floats over the document.
+    #[test]
+    fn styles_pane_shows_where_it_is_docked() {
+        use egui_kittest::kittest::Queryable;
+        for (dock, check) in [("right", 0), ("left", 1), ("float", 2)] {
+            let mut a = app();
+            a.run("view.stylesPane", json!({"value": true})).unwrap();
+            a.run("view.stylesPaneDock", json!({"dock": dock})).unwrap();
+            let mut h = harness(a);
+            h.run_steps(4);
+            let r = h.get_by_label("Manage Styles…").rect();
+            match check {
+                0 => assert!(r.min.x > 1100.0, "docked right: {r:?}"),
+                1 => assert!(r.max.x < 340.0, "docked left: {r:?}"),
+                _ => assert!(r.min.x > 340.0 && r.max.x < 1100.0, "floating over the document: {r:?}"),
+            }
+        }
+    }
+
+    /// #1756: the mouse gestures. Dragging a docked pane's title onto the page floats it there;
+    /// dropping the floating pane at a window edge docks it on that side; dragging a docked
+    /// title to the opposite edge docks it there in one drag.
+    #[test]
+    fn styles_pane_title_drags_out_to_float_and_to_an_edge_to_dock() {
+        use wordcraft_engine::StylesPaneDock;
+        type H = egui_kittest::Harness<'static, WordApp>;
+        /// Drags the pane by its title to `to` and lets go.
+        fn drag(h: &mut H, to: egui::Pos2) {
+            let from = title(h);
+            let press =
+                |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+            h.event(egui::Event::PointerMoved(from));
+            h.step();
+            h.event(press(from, true));
+            h.step();
+            for i in 1..=6 {
+                h.event(egui::Event::PointerMoved(from + (to - from) * (i as f32 / 6.0)));
+                h.step();
+            }
+            h.event(press(to, false));
+            h.run_steps(4);
+        }
+        // The pane's "Styles" title: the label just above "Manage Styles…", lined up with it
+        // (the ribbon's Styles group label is elsewhere).
+        fn title(h: &H) -> egui::Pos2 {
+            let m = h.get_by_label("Manage Styles…").rect();
+            let found = h.query_all_by_label("Styles").map(|n| n.rect()).filter(|r| r.max.y < m.min.y && (r.min.x - m.min.x).abs() < 24.0);
+            found.max_by(|a, b| a.min.y.total_cmp(&b.min.y)).unwrap_or_else(|| panic!("no Styles title above {m:?}")).center()
+        }
+        let dock = |h: &H| h.state().session.view.styles_pane_dock;
+        let mut a = app();
+        a.run("view.stylesPane", json!({"value": true})).unwrap();
+        let mut h = harness(a);
+        h.run_steps(4);
+        assert_eq!(dock(&h), StylesPaneDock::Right);
+        // Out of the right-hand pane onto the page: floating where it was dropped.
+        let to = egui::pos2(700.0, 450.0);
+        drag(&mut h, to);
+        assert_eq!(dock(&h), StylesPaneDock::Floating);
+        let r = h.get_by_label("Manage Styles…").rect();
+        assert!(r.min.x > 600.0 && r.max.x < 1100.0, "floats near the drop: {r:?}");
+        // The floating pane dropped against the left edge: docked left.
+        drag(&mut h, egui::pos2(8.0, 450.0));
+        assert_eq!(dock(&h), StylesPaneDock::Left);
+        assert!(h.get_by_label("Manage Styles…").rect().max.x < 340.0);
+        // Floated again, then dropped against the right edge: docked right.
+        drag(&mut h, to);
+        assert_eq!(dock(&h), StylesPaneDock::Floating);
+        drag(&mut h, egui::pos2(1436.0, 450.0));
+        assert_eq!(dock(&h), StylesPaneDock::Right);
+        // A docked title dragged all the way to the other edge: docked there, in one drag.
+        drag(&mut h, egui::pos2(6.0, 450.0));
+        assert_eq!(dock(&h), StylesPaneDock::Left);
+        assert!(h.get_by_label("Manage Styles…").rect().max.x < 340.0);
     }
 
     #[test]

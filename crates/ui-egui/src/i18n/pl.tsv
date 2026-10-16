@@ -2622,3 +2622,10 @@ preview	Title	Tytuł
 # Reading Mode column widths (#1040)
 	Narrow	Wąska
 	Medium	Średnia
+# Styles pane position (#1756)
+	Styles Pane Position	Położenie okienka stylów
+	Dock Left	Zadokuj po lewej
+	Dock Right	Zadokuj po prawej
+	Float	Pływające
+	Pane position	Położenie okienka
+	Drag out to float the pane	Przeciągnij na zewnątrz, aby okienko było pływające

@@ -2672,3 +2672,10 @@ template	Letter	Thư
 # Reading Mode column widths (#1040)
 	Narrow	Hẹp
 	Medium	Trung bình
+# Styles pane position (#1756)
+	Styles Pane Position	Vị trí khung kiểu
+	Dock Left	Neo bên trái
+	Dock Right	Neo bên phải
+	Float	Nổi
+	Pane position	Vị trí khung
+	Drag out to float the pane	Kéo ra ngoài để khung nổi

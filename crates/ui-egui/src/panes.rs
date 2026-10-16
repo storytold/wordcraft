@@ -5,6 +5,7 @@
 use egui::{Stroke, Ui, vec2};
 use serde_json::{Value, json};
 use wordcraft_doc::{Pos, StoryRef};
+use wordcraft_engine::StylesPaneDock;
 
 use crate::WordApp;
 use crate::theme::{Tokens, regular, semibold};
@@ -40,11 +41,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             .show(ui, |ui| clipboard(app, ui));
     }
     if app.session.view.styles_pane {
-        egui::Panel::right("styles_pane")
-            .default_size(250.0)
-            .resizable(true)
-            .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
-            .show(ui, |ui| styles(app, ui));
+        styles_pane(app, ui, &t);
     }
     if app.session.view.style_inspector {
         egui::Panel::right("style_inspector")
@@ -89,6 +86,104 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     }
 }
 
+/// The smallest floating Styles pane, and the size it first floats at (#1756).
+pub(crate) const FLOAT_MIN: egui::Vec2 = vec2(200.0, 240.0);
+pub(crate) const FLOAT_DEFAULT: egui::Vec2 = vec2(270.0, 480.0);
+/// Dropping the floating pane this close to the window's left or right edge docks it there, and
+/// dragging a docked pane's title this far out of the pane floats it.
+const DOCK_SNAP: f32 = 32.0;
+
+/// The Styles pane, docked right (the default) or left, or floating as a window of its own (#1756).
+fn styles_pane(app: &mut WordApp, ui: &mut Ui, t: &Tokens) {
+    let frame = egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border));
+    let panel = match app.session.view.styles_pane_dock {
+        StylesPaneDock::Right => egui::Panel::right("styles_pane"),
+        StylesPaneDock::Left => egui::Panel::left("styles_pane_left"),
+        StylesPaneDock::Floating => {
+            let screen = ui.ctx().content_rect();
+            // The area the panes and the page share (below the ribbon, above the status bar):
+            // a pane floated for the first time goes there rather than over the ribbon.
+            let home = ui.available_rect_before_wrap();
+            let mut win = egui::Window::new(tl!("Styles"))
+                .id(egui::Id::new("styles_pane_float"))
+                .title_bar(false)
+                .collapsible(false)
+                .resizable(true)
+                .min_size(FLOAT_MIN)
+                .frame(frame.corner_radius(6).shadow(ui.style().visuals.window_shadow));
+            let rect = float_rect(app.ui.styles_pane_float, screen, home);
+            // Placed where it was saved (back on screen) the first time it shows in a run; egui
+            // keeps it on screen from there.
+            if !std::mem::replace(&mut app.ui.styles_pane_placed, true) {
+                win = win.current_pos(rect.min).default_size(rect.size());
+            } else {
+                win = win.default_rect(rect);
+            }
+            let Some(shown) = win.show(ui.ctx(), |ui| styles(app, ui)) else { return };
+            let r = shown.response.rect;
+            if r.is_finite() {
+                app.ui.styles_pane_float = Some([r.min.x, r.min.y, r.width(), r.height()]);
+            }
+            // Dropped against the window's left or right edge: docked there.
+            if shown.response.drag_stopped()
+                && let Some(p) = ui.ctx().pointer_latest_pos()
+                && let Some(side) = edge_side(p, screen)
+            {
+                let _ = app.run("view.stylesPaneDock", json!({"dock": side}));
+            }
+            return;
+        }
+    };
+    let screen = ui.ctx().content_rect();
+    let shown = panel.default_size(250.0).resizable(true).frame(frame).show(ui, |ui| styles(app, ui));
+    // The title dragged out of the docked pane: docked at the window edge it was dropped against
+    // (the other side in one drag), or else floating where it was dropped.
+    if let Some(p) = app.ui.styles_title_dropped.take()
+        && !shown.response.rect.expand(DOCK_SNAP).x_range().contains(p.x)
+    {
+        if let Some(side) = edge_side(p, screen) {
+            let _ = app.run("view.stylesPaneDock", json!({"dock": side}));
+            return;
+        }
+        let size = app.ui.styles_pane_float.map_or(FLOAT_DEFAULT, |r| vec2(r[2], r[3]));
+        app.ui.styles_pane_float = Some([p.x - 40.0, p.y - 12.0, size.x, size.y]);
+        app.ui.styles_pane_placed = false;
+        let _ = app.run("view.stylesPaneDock", json!({"dock": "float"}));
+    }
+}
+
+/// The window edge a pane dropped at `p` docks against, if it is that close to one.
+fn edge_side(p: egui::Pos2, screen: egui::Rect) -> Option<&'static str> {
+    if p.x <= screen.left() + DOCK_SNAP {
+        Some("left")
+    } else if p.x >= screen.right() - DOCK_SNAP {
+        Some("right")
+    } else {
+        None
+    }
+}
+
+/// Where the floating Styles pane goes: `saved` (`[x, y, width, height]`), or the default size
+/// right of the middle of `home` (the area below the ribbon), sized to at least [`FLOAT_MIN`]
+/// and at most the screen, and moved fully on screen. Junk (NaN, infinite, negative) never
+/// escapes: the result is always finite.
+pub(crate) fn float_rect(saved: Option<[f32; 4]>, screen: egui::Rect, home: egui::Rect) -> egui::Rect {
+    let screen = if screen.is_finite() && screen.is_positive() { screen } else { egui::Rect::from_min_size(egui::Pos2::ZERO, FLOAT_DEFAULT) };
+    let home = home.intersect(screen);
+    let home = if home.is_finite() && home.is_positive() { home } else { screen };
+    let size = saved.map_or(FLOAT_DEFAULT, |r| vec2(r[2], r[3]));
+    let size = vec2(if size.x.is_finite() { size.x } else { FLOAT_DEFAULT.x }, if size.y.is_finite() { size.y } else { FLOAT_DEFAULT.y })
+        .max(FLOAT_MIN)
+        .min(screen.size());
+    let free = (home.size() - size).max(egui::Vec2::ZERO);
+    // Whole points, so the rectangle's edges don't pick up float noise (198.00002).
+    let default = (home.min + vec2(free.x * 0.75, free.y * 0.3)).round();
+    let pos = saved.map_or(default, |r| egui::pos2(if r[0].is_finite() { r[0] } else { default.x }, if r[1].is_finite() { r[1] } else { default.y }));
+    // Element-wise max/min rather than `clamp`, which panics should rounding put max below min.
+    let pos = pos.max(screen.min).min((screen.max - size).max(screen.min));
+    egui::Rect::from_min_size(pos, size)
+}
+
 pub(crate) fn header(ui: &mut Ui, title: &str) -> bool {
     let mut close = false;
     ui.horizontal(|ui| {
@@ -98,6 +193,49 @@ pub(crate) fn header(ui: &mut Ui, title: &str) -> bool {
             if crate::widgets::icon_button(ui, "close", tl!("Close")).clicked() {
                 close = true;
             }
+        });
+    });
+    ui.add_space(4.0);
+    close
+}
+
+/// The Styles pane's header: its title, which can be dragged out to float a docked pane, a
+/// menu to dock it left or right or float it (#1756), and Close. `true` when Close was clicked.
+fn styles_header(app: &mut WordApp, ui: &mut Ui) -> bool {
+    let mut close = false;
+    let dock = app.session.view.styles_pane_dock;
+    ui.horizontal(|ui| {
+        let floating = dock == StylesPaneDock::Floating;
+        // A floating pane is moved by egui's window drag, so only a docked title takes the drag.
+        let sense = if floating { egui::Sense::hover() } else { egui::Sense::drag() };
+        // Not selectable: a selectable label takes the drag for text selection, so a floating
+        // pane couldn't be moved by its title.
+        let title = ui.add(egui::Label::new(egui::RichText::new(tl!("Styles")).font(semibold(15.0))).selectable(false).sense(sense));
+        if !floating {
+            let title = title.on_hover_text(tl!("Drag out to float the pane"));
+            if title.dragged() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            }
+            if title.drag_stopped() {
+                app.ui.styles_title_dropped = ui.ctx().pointer_latest_pos();
+            }
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if crate::widgets::icon_button(ui, "close", tl!("Close")).clicked() {
+                close = true;
+            }
+            let more = crate::widgets::icon_button(ui, "dropdown", tl!("Pane position"));
+            egui::Popup::menu(&more).show(|ui| {
+                for (d, label) in [(StylesPaneDock::Left, "Dock Left"), (StylesPaneDock::Right, "Dock Right"), (StylesPaneDock::Floating, "Float")] {
+                    if ui.selectable_label(dock == d, tl!(label)).clicked() {
+                        if d == StylesPaneDock::Floating {
+                            app.ui.styles_pane_placed = false;
+                        }
+                        let _ = app.run("view.stylesPaneDock", json!({"dock": d.name()}));
+                        ui.close();
+                    }
+                }
+            });
         });
     });
     ui.add_space(4.0);
@@ -275,7 +413,7 @@ fn clipboard(app: &mut WordApp, ui: &mut Ui) {
 }
 
 fn styles(app: &mut WordApp, ui: &mut Ui) {
-    if header(ui, "Styles") {
+    if styles_header(app, ui) {
         let _ = app.run("view.stylesPane", json!({"value": false}));
         return;
     }
@@ -737,6 +875,65 @@ mod tests {
         assert_eq!(comment_stamp("2026-10-12T04:44:31Z"), "2026-10-12 04:44");
         assert_eq!(comment_stamp("2026-10-12"), "2026-10-12");
         assert_eq!(comment_stamp(""), "");
+    }
+}
+
+#[cfg(test)]
+mod styles_float_tests {
+    use super::*;
+
+    /// #1756: a saved floating Styles pane comes back on screen, whatever the file says.
+    #[test]
+    fn floating_styles_pane_stays_on_screen() {
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(1440.0, 900.0));
+        let on = |r: egui::Rect| screen.contains_rect(r) && r.is_finite() && r.width() >= FLOAT_MIN.x && r.height() >= FLOAT_MIN.y;
+        // A sane rectangle is kept as it is.
+        assert_eq!(
+            float_rect(Some([300.0, 120.0, 280.0, 500.0]), screen, screen),
+            egui::Rect::from_min_size(egui::pos2(300.0, 120.0), vec2(280.0, 500.0))
+        );
+        // None: the default size, right of the middle.
+        let d = float_rect(None, screen, screen);
+        assert!(on(d), "{d:?}");
+        assert_eq!(d.size(), FLOAT_DEFAULT);
+        // Saved on a larger monitor: moved back on screen, size kept.
+        let r = float_rect(Some([3000.0, 2000.0, 280.0, 500.0]), screen, screen);
+        assert!(on(r), "{r:?}");
+        assert_eq!(r.size(), vec2(280.0, 500.0));
+        // Negative positions, tiny, huge, NaN and infinite values.
+        for junk in [
+            [-5000.0, -20.0, 280.0, 500.0],
+            [10.0, 10.0, 1.0, -3.0],
+            [10.0, 10.0, 1.0e9, 1.0e9],
+            [f32::NAN, 10.0, 280.0, 500.0],
+            [10.0, 10.0, f32::NAN, f32::INFINITY],
+            [f32::NEG_INFINITY, f32::INFINITY, 0.0, 0.0],
+        ] {
+            let r = float_rect(Some(junk), screen, screen);
+            assert!(on(r), "{junk:?} → {r:?}");
+        }
+        // A screen smaller than the minimum pane: the pane fills it from its top-left corner.
+        let small = egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(100.0, 80.0));
+        let r = float_rect(Some([50.0, 50.0, 280.0, 500.0]), small, small);
+        assert!(r.is_finite() && r.min == egui::Pos2::ZERO, "{r:?}");
+        // A screen that isn't finite: still a finite rectangle.
+        let bad = egui::Rect::from_min_max(egui::pos2(f32::NAN, 0.0), egui::pos2(f32::INFINITY, 900.0));
+        assert!(float_rect(Some([1.0, 1.0, 280.0, 500.0]), bad, bad).is_finite());
+
+        // #1756 review: first floated, the pane goes below the ribbon (inside `home`), not over it;
+        // a `home` that is junk, off screen or too small for the pane still gives a rect on screen.
+        let home = egui::Rect::from_min_max(egui::pos2(0.0, 160.0), egui::pos2(1440.0, 870.0));
+        let d = float_rect(None, screen, home);
+        assert!(home.contains_rect(d), "{d:?}");
+        for home in [
+            egui::Rect::NOTHING,
+            egui::Rect::from_min_max(egui::pos2(f32::NAN, 0.0), egui::pos2(10.0, 10.0)),
+            egui::Rect::from_min_size(egui::pos2(5000.0, 5000.0), vec2(100.0, 100.0)),
+            egui::Rect::from_min_size(egui::pos2(0.0, 800.0), vec2(1440.0, 50.0)),
+        ] {
+            let r = float_rect(None, screen, home);
+            assert!(on(r), "{home:?} → {r:?}");
+        }
     }
 }
 

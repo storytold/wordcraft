@@ -2647,3 +2647,10 @@ preview	Title	Titel
 	Bottom Right Cell	Nedre högra cellen
 	Inside Horizontal Border	Inre vågrät kantlinje
 	Inside Vertical Border	Inre lodrät kantlinje
+# Styles pane position (#1756)
+	Styles Pane Position	Stilpanelens placering
+	Dock Left	Docka till vänster
+	Dock Right	Docka till höger
+	Float	Flytande
+	Pane position	Panelens placering
+	Drag out to float the pane	Dra ut för att göra panelen flytande

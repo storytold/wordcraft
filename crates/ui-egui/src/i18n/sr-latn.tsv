@@ -2243,3 +2243,10 @@
 # Reading Mode column widths (#1040)
 	Narrow	Uska
 	Medium	Srednja
+# Styles pane position (#1756)
+	Styles Pane Position	Položaj okna stilova
+	Dock Left	Usidri levo
+	Dock Right	Usidri desno
+	Float	Plutajuće
+	Pane position	Položaj okna
+	Drag out to float the pane	Prevucite van da okno pluta

@@ -2599,3 +2599,10 @@ preview	Title	Título
 # Reading Mode column widths (#1040)
 	Narrow	Estrecha
 	Medium	Media
+# Styles pane position (#1756)
+	Styles Pane Position	Posición del panel de estilos
+	Dock Left	Acoplar a la izquierda
+	Dock Right	Acoplar a la derecha
+	Float	Flotante
+	Pane position	Posición del panel
+	Drag out to float the pane	Arrastre hacia fuera para que el panel flote

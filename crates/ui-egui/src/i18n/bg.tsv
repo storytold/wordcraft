@@ -2621,3 +2621,10 @@
 # Reading Mode column widths (#1040)
 	Narrow	Тясна
 	Medium	Средна
+# Styles pane position (#1756)
+	Styles Pane Position	Положение на панела със стилове
+	Dock Left	Закачане вляво
+	Dock Right	Закачане вдясно
+	Float	Откачане
+	Pane position	Положение на панела
+	Drag out to float the pane	Изтеглете навън, за да откачите панела

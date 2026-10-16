@@ -121,6 +121,10 @@ pub struct ViewState {
     pub table_gridlines: bool,
     pub nav_pane: bool,
     pub styles_pane: bool,
+    /// Where the Styles pane sits: docked right (the default) or left, or floating (#1756).
+    /// Kept in the user's preferences, not the document.
+    #[serde(default)]
+    pub styles_pane_dock: StylesPaneDock,
     /// Style Inspector pane (Home › Styles).
     #[serde(default)]
     pub style_inspector: bool,
@@ -191,6 +195,38 @@ pub struct ViewState {
     pub full_screen: bool,
 }
 
+/// Where the Styles pane sits (`view.stylesPaneDock`, #1756).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StylesPaneDock {
+    #[default]
+    Right,
+    Left,
+    /// A window of its own over the document, which can be moved and resized.
+    #[serde(rename = "float")]
+    Floating,
+}
+
+impl StylesPaneDock {
+    /// `left`, `right` or `float`; anything else is `None`.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "right" => Some(Self::Right),
+            "left" => Some(Self::Left),
+            "float" => Some(Self::Floating),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Right => "right",
+            Self::Left => "left",
+            Self::Floating => "float",
+        }
+    }
+}
+
 fn on() -> bool {
     true
 }
@@ -220,6 +256,7 @@ impl Default for ViewState {
             table_gridlines: true,
             nav_pane: false,
             styles_pane: false,
+            styles_pane_dock: StylesPaneDock::Right,
             style_inspector: false,
             comments_pane: false,
             clipboard_pane: false,

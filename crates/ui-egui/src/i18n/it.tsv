@@ -2641,3 +2641,10 @@ preview	Title	Esempio
 # Reading Mode column widths (#1040)
 	Narrow	Stretta
 	Medium	Media
+# Styles pane position (#1756)
+	Styles Pane Position	Posizione del riquadro Stili
+	Dock Left	Ancora a sinistra
+	Dock Right	Ancora a destra
+	Float	Mobile
+	Pane position	Posizione del riquadro
+	Drag out to float the pane	Trascina fuori per rendere mobile il riquadro

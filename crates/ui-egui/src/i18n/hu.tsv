@@ -2628,3 +2628,10 @@
 # Reading Mode column widths (#1040)
 	Narrow	Keskeny
 	Medium	Közepes
+# Styles pane position (#1756)
+	Styles Pane Position	Stílusok panel helye
+	Dock Left	Rögzítés balra
+	Dock Right	Rögzítés jobbra
+	Float	Lebegtetés
+	Pane position	Panel helye
+	Drag out to float the pane	Húzza ki a panel lebegtetéséhez

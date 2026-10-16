@@ -2234,3 +2234,10 @@
 # Reading Mode column widths (#1040)
 	Narrow	窄
 	Medium	中等
+# Styles pane position (#1756)
+	Styles Pane Position	樣式窗格位置
+	Dock Left	停駐在左側
+	Dock Right	停駐在右側
+	Float	浮動
+	Pane position	窗格位置
+	Drag out to float the pane	拖出以浮動窗格

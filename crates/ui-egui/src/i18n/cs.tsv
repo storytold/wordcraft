@@ -2624,3 +2624,10 @@ preview	Title	Ukázka
 # Reading Mode column widths (#1040)
 	Narrow	Úzká
 	Medium	Střední
+# Styles pane position (#1756)
+	Styles Pane Position	Umístění podokna stylů
+	Dock Left	Ukotvit vlevo
+	Dock Right	Ukotvit vpravo
+	Float	Plovoucí
+	Pane position	Umístění podokna
+	Drag out to float the pane	Přetažením ven podokno uvolníte

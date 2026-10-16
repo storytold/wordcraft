@@ -2630,3 +2630,10 @@ preview	Title	Пример
 # Reading Mode column widths (#1040)
 	Narrow	Узкая
 	Medium	Средняя
+# Styles pane position (#1756)
+	Styles Pane Position	Положение области стилей
+	Dock Left	Закрепить слева
+	Dock Right	Закрепить справа
+	Float	Открепить
+	Pane position	Положение области
+	Drag out to float the pane	Перетащите, чтобы открепить область

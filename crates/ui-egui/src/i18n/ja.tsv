@@ -2233,3 +2233,10 @@
 # Reading Mode column widths (#1040)
 	Narrow	狭い
 	Medium	中
+# Styles pane position (#1756)
+	Styles Pane Position	スタイル ウィンドウの位置
+	Dock Left	左にドッキング
+	Dock Right	右にドッキング
+	Float	フローティング
+	Pane position	ウィンドウの位置
+	Drag out to float the pane	外にドラッグするとフローティングになります
