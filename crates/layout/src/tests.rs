@@ -2571,6 +2571,85 @@ fn repeated_header_moves_with_the_first_row_that_does_not_fit() {
     assert_eq!(rows_per_page(40.0), vec![vec![], vec![0, 1, 2]]);
 }
 
+#[test]
+fn a_repeated_header_is_never_left_alone_when_the_table_starts_mid_page() {
+    // #1704: a table whose repeated header row fits at the bottom of a page while a body row
+    // does not must not leave the header row there alone. Sweeps filler counts across the page
+    // boundary for several table geometries (height ratios, a cantSplit body row, an exact
+    // height body row, two header rows) and pins, for every configuration while the table
+    // continues onto a next page: no page ends with only header rows, and no row is dropped.
+    // A table that starts at the very top of a page is exempt (#1705): there the header is the
+    // table's own beginning, so fillers = 0 skips that assertion.
+    #[derive(Debug)]
+    struct Geo {
+        header: f32,
+        body: f32,
+        body_cant_split: bool,
+        body_exact: bool,
+        header_rows: usize,
+    }
+    let geos = [
+        (Geo { header: 100.0, body: 400.0, body_cant_split: false, body_exact: false, header_rows: 1 }, 1usize),
+        (Geo { header: 300.0, body: 100.0, body_cant_split: false, body_exact: false, header_rows: 1 }, 4),
+        (Geo { header: 50.0, body: 250.0, body_cant_split: false, body_exact: false, header_rows: 1 }, 4),
+        (Geo { header: 100.0, body: 400.0, body_cant_split: true, body_exact: false, header_rows: 1 }, 4),
+        (Geo { header: 100.0, body: 400.0, body_cant_split: false, body_exact: true, header_rows: 1 }, 4),
+        (Geo { header: 100.0, body: 400.0, body_cant_split: false, body_exact: false, header_rows: 2 }, 4),
+    ];
+    let pages_with = |fillers: usize, geo: &Geo| -> Vec<Vec<usize>> {
+        let mut d = Document::new();
+        for i in 0..fillers {
+            let mut p = wordcraft_doc::Paragraph::with_text(&format!("Filler {i}"), Default::default());
+            p.props.space_after = Some(0.0);
+            d.body.push(wordcraft_doc::para_block(p));
+        }
+        let mut t = Table::new(geo.header_rows + 2, 1, 468.0);
+        for (ri, row) in t.rows.iter_mut().enumerate() {
+            row.props.header = ri < geo.header_rows;
+            row.props.height = Some(if ri < geo.header_rows { geo.header } else { geo.body });
+            row.props.height_rule = wordcraft_doc::props::HeightRule::AtLeast;
+            if ri >= geo.header_rows && geo.body_cant_split {
+                row.props.cant_split = true;
+            }
+            if ri >= geo.header_rows && geo.body_exact {
+                row.props.height_rule = wordcraft_doc::props::HeightRule::Exact;
+            }
+        }
+        d.insert_block(StoryRef::Body, &Path::top(d.body.len()), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        l.pages
+            .iter()
+            .map(|p| p.items.iter().filter_map(|i| if let Placed::Cell { row, cell: 0, .. } = i { Some(*row) } else { None }).collect())
+            .collect()
+    };
+    for (geo, coarse) in &geos {
+        for fillers in (0..60).step_by(*coarse) {
+            let pages = pages_with(fillers, geo);
+            for w in pages.windows(2) {
+                // While the table continues on the next page, a page never ends with only
+                // header rows. (fillers = 0 starts the table at the top of a page: exempt.)
+                if !w[1].is_empty() && fillers > 0 {
+                    assert!(
+                        w[0].is_empty() || w[0].iter().any(|&r| r >= geo.header_rows),
+                        "fillers {fillers}, geo {geo:?}: a page ends with header rows alone: {pages:?}"
+                    );
+                }
+            }
+            // No configuration drops rows: every row of the table is placed somewhere.
+            let placed: std::collections::HashSet<usize> = pages.iter().flatten().copied().collect();
+            assert_eq!(placed.len(), geo.header_rows + 2, "fillers {fillers}, geo {geo:?}: rows placed: {pages:?}");
+        }
+    }
+    // Room for the header and the first body row together keeps them on the page.
+    assert!(
+        (1..60).any(|fillers| {
+            let geo = &geos[0].0;
+            pages_with(fillers, geo).first().is_some_and(|p| p.contains(&0) && p.contains(&{ geo.header_rows }))
+        }),
+        "the header and a body row never share a page"
+    );
+}
+
 /// A drop-cap paragraph in a font larger than 1000 pt used to panic in layout (`clamp` with min > max).
 #[test]
 fn drop_cap_with_a_huge_font_lays_out() {
