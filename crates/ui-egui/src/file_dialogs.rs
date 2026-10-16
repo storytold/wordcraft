@@ -340,6 +340,173 @@ mod tests {
 
     const UNSAVED: &str = "My unsaved novel chapter";
 
+    /// Original Word 97 compound file: one compressed text piece, built from MS-DOC's FIB/Clx.
+    fn legacy_word_bytes() -> Vec<u8> {
+        use std::io::{Cursor, Write};
+        let text = b"Legacy contract\r";
+        let mut word = vec![0u8; 0x600];
+        for (at, value) in [(0, 0xA5ECu16), (2, 0x00C1), (0x0A, 0x1000), (0x0C, 0x00BF), (0x20, 14), (0x3E, 22), (0x98, 0x005D)] {
+            word[at..at + 2].copy_from_slice(&value.to_le_bytes());
+        }
+        word[0x40..0x44].copy_from_slice(&0x1000u32.to_le_bytes());
+        word[0x4C..0x50].copy_from_slice(&(text.len() as u32).to_le_bytes());
+        let mut clx = vec![2];
+        clx.extend_from_slice(&16u32.to_le_bytes());
+        clx.extend_from_slice(&0u32.to_le_bytes());
+        clx.extend_from_slice(&(text.len() as u32).to_le_bytes());
+        clx.extend_from_slice(&[0, 0]);
+        clx.extend_from_slice(&(0x4000_0000u32 | (2 * 0x600)).to_le_bytes());
+        clx.extend_from_slice(&[0, 0]);
+        let pair = 0x9A + 33 * 8;
+        word[pair..pair + 4].copy_from_slice(&0x40u32.to_le_bytes());
+        word[pair + 4..pair + 8].copy_from_slice(&(clx.len() as u32).to_le_bytes());
+        word.extend_from_slice(text);
+        let mut table = vec![0; 0x40];
+        table.extend_from_slice(&clx);
+        let mut file = cfb::CompoundFile::create(Cursor::new(Vec::new())).unwrap();
+        for (name, data) in [("/WordDocument", word), ("/0Table", table)] {
+            file.create_stream(name).unwrap().write_all(&data).unwrap();
+        }
+        file.into_inner().into_inner()
+    }
+
+    /// #2445: Save on an imported binary Word file asks for DOCX, preserving the import on Cancel.
+    #[test]
+    fn imported_word_save_asks_for_docx_and_preserves_the_original() {
+        for ext in ["doc", "DOT", "DOC", "dot"] {
+            let dir = scratch(&format!("imported-{ext}"));
+            let original = dir.join(format!("contract.{ext}"));
+            let bytes = legacy_word_bytes();
+            std::fs::write(&original, &bytes).unwrap();
+            let (mut a, shown) = async_app();
+            a.run("file.open", json!({"path": original.to_string_lossy()})).unwrap();
+            assert!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("Legacy contract"));
+            a.run("text.insert", json!({"text": "Revised "})).unwrap();
+            let draft = a.session.doc.clone();
+            let revision = a.session.rev();
+            let result = a.run("file.save", json!({})).unwrap();
+            assert_eq!(result["pending"], "saveAs");
+            assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "contract.docx".into() });
+            answer(&shown, None);
+            assert_eq!(a.poll_file_dialog().unwrap().unwrap()["saved"], false);
+            assert_eq!(a.session.doc, draft);
+            assert_eq!(a.session.rev(), revision);
+            assert!(a.session.dirty);
+            assert_eq!(a.session.path.as_deref(), Some(original.as_path()));
+            assert_eq!(std::fs::read(&original).unwrap(), bytes);
+
+            a.run("file.save", json!({})).unwrap();
+            let saved = dir.join("revised.docx");
+            answer(&shown, Some(&saved.to_string_lossy()));
+            assert_eq!(a.poll_file_dialog().unwrap().unwrap()["saved"], true);
+            assert!(!a.session.dirty);
+            assert_eq!(a.session.path.as_deref(), Some(saved.as_path()));
+            assert!(saved_text(&saved).contains("Revised Legacy contract"));
+            assert_eq!(std::fs::read(&original).unwrap(), bytes);
+            // The new supported path saves directly, without another chooser.
+            a.run("text.insert", json!({"text": "Again "})).unwrap();
+            assert_eq!(a.run("file.save", json!({})).unwrap()["saved"], true);
+            assert!(shown.borrow().is_empty());
+            assert!(saved_text(&saved).contains("Again "));
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn imported_word_close_waits_for_save_as_and_keeps_failed_or_cancelled_drafts() {
+        let dir = scratch("imported-close");
+        let original = dir.join("contract.doc");
+        let bytes = legacy_word_bytes();
+        std::fs::write(&original, &bytes).unwrap();
+        let (mut a, shown) = async_app();
+        a.run("file.open", json!({"path": original.to_string_lossy()})).unwrap();
+        a.run("text.insert", json!({"text": "Revised "})).unwrap();
+        let draft = a.session.doc.clone();
+
+        a.run("file.close", json!({})).unwrap();
+        assert_eq!(a.run("ui.saveChanges", json!({"answer": "save"})).unwrap()["pending"], "saveAs");
+        assert!(a.has_document() && !a.quit_requested);
+        answer(&shown, Some(&dir.join("missing").join("contract.docx").to_string_lossy()));
+        let error = a.poll_file_dialog().unwrap().unwrap_err();
+        assert!(error.contains("still open"), "{error}");
+        assert!(matches!(a.dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })));
+        assert!(a.has_document() && a.session.dirty && !a.quit_requested);
+        assert_eq!(a.session.path.as_deref(), Some(original.as_path()));
+        assert_eq!(std::fs::read(&original).unwrap(), bytes);
+        assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), draft.plain_text(wordcraft_doc::StoryRef::Body));
+
+        a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
+        answer(&shown, None);
+        assert_eq!(a.poll_file_dialog().unwrap().unwrap()["done"], false);
+        assert!(a.has_document() && a.session.dirty && !a.quit_requested);
+        assert_eq!(a.session.path.as_deref(), Some(original.as_path()));
+
+        a.run("file.close", json!({})).unwrap();
+        a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
+        let saved = dir.join("contract.docx");
+        answer(&shown, Some(&saved.to_string_lossy()));
+        assert_eq!(a.poll_file_dialog().unwrap().unwrap()["done"], true);
+        assert!(a.quit_requested, "Close runs only after the DOCX save succeeds");
+        assert!(saved_text(&saved).contains("Revised Legacy contract"));
+        assert_eq!(std::fs::read(&original).unwrap(), bytes);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn imported_word_programmatic_and_explicit_saves_never_open_dialogs() {
+        let dir = scratch("imported-explicit");
+        let original = dir.join("contract.doc");
+        let bytes = legacy_word_bytes();
+        std::fs::write(&original, &bytes).unwrap();
+        let (mut a, shown) = async_app();
+        a.run("file.open", json!({"path": original.to_string_lossy()})).unwrap();
+        a.run("text.insert", json!({"text": "Revised "})).unwrap();
+        let error = a.execute("file.save", json!({})).unwrap_err();
+        assert!(error.contains("can't save as `.doc`"), "{error}");
+        let error = a.run("file.save", json!({"path": original.to_string_lossy()})).unwrap_err();
+        assert!(error.contains("can't save as `.doc`"), "{error}");
+        assert!(shown.borrow().is_empty());
+        assert!(a.session.dirty);
+        assert_eq!(a.session.path.as_deref(), Some(original.as_path()));
+        assert_eq!(std::fs::read(&original).unwrap(), bytes);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn imported_word_toolbar_and_save_shortcut_ask_for_docx() {
+        let dir = scratch("imported-entry-points");
+        let original = dir.join("contract.doc");
+        let bytes = legacy_word_bytes();
+        std::fs::write(&original, &bytes).unwrap();
+        let (mut a, shown) = async_app();
+        a.run("file.open", json!({"path": original.to_string_lossy()})).unwrap();
+        a.run("text.insert", json!({"text": "Revised "})).unwrap();
+        crate::widgets::run_from_ribbon(&mut a, "file.save", json!({}));
+        assert!(a.file_dialog_open(), "the toolbar command asks for a supported target");
+        answer(&shown, None);
+        a.poll_file_dialog().unwrap().unwrap();
+
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: egui::Key::S,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::COMMAND,
+            }],
+            ..Default::default()
+        };
+        ctx.run_ui(input, |ui| crate::keys::global_shortcuts(&mut a, ui.ctx())).drop_without_applying_deltas();
+        assert!(a.file_dialog_open(), "the Mod+S key event asks too");
+        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "contract.docx".into() });
+        answer(&shown, None);
+        a.poll_file_dialog().unwrap().unwrap();
+        assert!(a.session.dirty);
+        assert_eq!(std::fs::read(&original).unwrap(), bytes);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// Dialogs the fake host was asked to show, each with the channel its answer goes through.
     type Shown = Rc<RefCell<Vec<(FileDialogRequest, Sender<FileDialogAnswer>)>>>;
 

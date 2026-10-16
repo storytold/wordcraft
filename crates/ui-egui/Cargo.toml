@@ -39,6 +39,7 @@ zbus = "=5.19.0"
 js-sys = "0.3"
 
 [dev-dependencies]
+cfb = { workspace = true }
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
 zip = { workspace = true }
 

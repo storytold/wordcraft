@@ -5380,6 +5380,7 @@ dependencies = [
 name = "wordcraft-ui-egui"
 version = "0.7.0"
 dependencies = [
+ "cfb",
  "craft-ui",
  "egui",
  "egui_kittest",

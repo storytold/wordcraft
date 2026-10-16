@@ -990,9 +990,9 @@ impl WordApp {
         let go = match choice {
             SaveChoice::Cancel => false,
             SaveChoice::DontSave => true,
-            // A new document: ask where through Save As; the command runs once that has saved,
-            // which with the desktop's non-blocking dialog is on a later frame (#94).
-            SaveChoice::Save if self.session.path.is_none() && self.services.download.is_none() => {
+            // A new document or an import-only Word file: ask where through Save As. The command
+            // runs once that has saved, on a later frame with the non-blocking dialog (#94).
+            SaveChoice::Save if (self.session.path.is_none() || self.legacy_word_path()) && self.services.download.is_none() => {
                 return match self.save_as(file_dialogs::AfterSave::Continue { then, params, document }) {
                     file_dialogs::Asked::Done(r) => r,
                     file_dialogs::Asked::Pending => Ok(json!({"pending": "saveAs"})),
@@ -1018,9 +1018,23 @@ impl WordApp {
         self.execute_user(&then, params).map(|r| json!({"done": true, "result": r}))
     }
 
-    /// [`WordApp::execute`] for something the user did: a document that turns out to be
-    /// password-protected asks for the password (and opens with it) instead of failing (#55).
+    /// User commands can ask for a supported Save As target or an opening password (#55).
+    /// Scripts and agents use [`WordApp::execute`], which never opens these dialogs.
     pub(crate) fn execute_user(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        // Legacy Word files are import-only (#2445). Only a user's implicit Save asks for
+        // a supported target; scripts and explicitly supplied paths keep their normal errors.
+        if id == "file.save"
+            && params.get("path").and_then(Value::as_str).is_none()
+            && self.has_document()
+            && self.legacy_word_path()
+            && self.services.download.is_none()
+        {
+            return match self.save_as(file_dialogs::AfterSave::Nothing) {
+                file_dialogs::Asked::Done(r) => r,
+                file_dialogs::Asked::Pending => Ok(json!({"pending": "saveAs"})),
+                file_dialogs::Asked::Busy => Ok(json!({"saved": false})),
+            };
+        }
         let retry = (id == "file.open").then(|| params.clone());
         let r = self.execute(id, params);
         if let (Err(e), Some(params)) = (&r, retry)
@@ -1651,6 +1665,16 @@ impl WordApp {
             self.status(i18n::fmt(tl!("Recipients: {count}"), &[("count", &records)]));
         }
         r
+    }
+
+    /// These paths have readers but no writer, so an interactive save needs another format.
+    fn legacy_word_path(&self) -> bool {
+        self.session
+            .path
+            .as_ref()
+            .and_then(|p| p.extension())
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("doc") || e.eq_ignore_ascii_case("dot"))
     }
 
     /// The name Save suggests: the open file's own Word format (so a .docm keeps its macros),
