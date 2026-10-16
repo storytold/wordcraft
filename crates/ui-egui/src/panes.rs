@@ -198,8 +198,22 @@ fn nav(app: &mut WordApp, ui: &mut Ui) {
             if items.is_empty() {
                 ui.label(egui::RichText::new(tl!("Create an interactive outline of your document.\n\nIt's a great way to keep track of where you are or quickly move your content around.\n\nTo get started, go to the Home tab and apply Heading styles to the headings in your document.")).weak());
             }
+            // A heading has children when the next heading is a deeper level (#1997).
+            let has_children: Vec<bool> = items.iter().enumerate().map(|(i, (_, lv, _))| items.get(i + 1).is_some_and(|n| n.1 > *lv)).collect();
+            let collapsed_flags: Vec<bool> = items.iter().enumerate().map(|(i, (p, _, _))| has_children[i] && app.ui.nav_collapsed.contains(p)).collect();
+            let levels: Vec<u8> = items.iter().map(|(_, lv, _)| *lv).collect();
+            let visible = visible_headings(&levels, &collapsed_flags);
             for (i, (path, lv, txt)) in items.into_iter().enumerate() {
-                if nav_heading(ui, lv, &txt, current == Some(i)).clicked() {
+                if !visible[i] {
+                    continue;
+                }
+                let collapsed = collapsed_flags[i];
+                let (toggle, r) = nav_heading(ui, lv, &txt, current == Some(i), has_children[i].then_some(collapsed));
+                if toggle {
+                    if !app.ui.nav_collapsed.remove(&path) {
+                        app.ui.nav_collapsed.insert(path);
+                    }
+                } else if r.clicked() {
                     let _ = app.run("caret.set", json!({"pos": Pos { story: StoryRef::Body, path, off: 0 }}));
                     // Align the chosen heading's page immediately against this pane, rather
                     // than the indeterminate minimum movement from scroll_to_rect.
@@ -212,19 +226,52 @@ fn nav(app: &mut WordApp, ui: &mut Ui) {
     });
 }
 
+/// Which headings the pane shows: those under a collapsed heading (every following heading
+/// of a deeper level) are hidden (#1997).
+fn visible_headings(levels: &[u8], collapsed: &[bool]) -> Vec<bool> {
+    let mut hide_below: Option<u8> = None;
+    levels
+        .iter()
+        .zip(collapsed)
+        .map(|(&lv, &c)| {
+            if hide_below.is_some_and(|h| lv > h) {
+                return false;
+            }
+            hide_below = c.then_some(lv);
+            true
+        })
+        .collect()
+}
+
 /// Constrain each heading to the available pane width so long document text cannot
 /// enlarge the panel. The full heading stays accessible on hover.
-fn nav_heading(ui: &mut Ui, level: u8, text: &str, selected: bool) -> egui::Response {
+fn nav_heading(ui: &mut Ui, level: u8, text: &str, selected: bool, collapsed: Option<bool>) -> (bool, egui::Response) {
     ui.horizontal(|ui| {
         ui.add_space(level as f32 * 14.0);
+        // The triangle is drawn in code; headings without children keep an empty slot so text aligns.
+        let mut toggled = false;
+        let (rect, tri) = ui.allocate_exact_size(vec2(14.0, ui.spacing().interact_size.y), egui::Sense::click());
+        if let Some(c) = collapsed {
+            let ctr = rect.center();
+            let col = ui.visuals().text_color();
+            let pts = if c {
+                vec![ctr + vec2(-2.5, -4.0), ctr + vec2(-2.5, 4.0), ctr + vec2(3.0, 0.0)]
+            } else {
+                vec![ctr + vec2(-4.0, -2.5), ctr + vec2(4.0, -2.5), ctr + vec2(0.0, 3.0)]
+            };
+            ui.painter().add(egui::Shape::convex_polygon(pts, col, Stroke::NONE));
+            toggled = tri.clicked();
+        }
         let label = egui::RichText::new(text).font(if level == 0 { semibold(12.5) } else { regular(12.5) });
-        ui.add_sized(
-            vec2(ui.available_width(), ui.spacing().interact_size.y),
-            // The trailing grow atom takes the spare width, so the text starts flush left
-            // under its parent instead of centred, as in Word (#1199).
-            egui::Button::selectable(selected, (label, egui::Atom::grow())).truncate(),
-        )
-        .on_hover_text(text)
+        let r = ui
+            .add_sized(
+                vec2(ui.available_width(), ui.spacing().interact_size.y),
+                // The trailing grow atom takes the spare width, so the text starts flush left
+                // under its parent instead of centred, as in Word (#1199).
+                egui::Button::selectable(selected, (label, egui::Atom::grow())).truncate(),
+            )
+            .on_hover_text(text);
+        (toggled, r)
     })
     .inner
 }
@@ -757,7 +804,7 @@ mod navigation_tests {
                 let result = egui::Panel::left("navigation_test")
                     .default_size(width)
                     .resizable(true)
-                    .show(ui, |ui| egui::ScrollArea::vertical().show(ui, |ui| nav_heading(ui, level, &text, true)).inner);
+                    .show(ui, |ui| egui::ScrollArea::vertical().show(ui, |ui| nav_heading(ui, level, &text, true, None).1).inner);
                 panel_rect = result.response.rect;
                 heading_rect = result.inner.rect;
             });
@@ -786,7 +833,7 @@ mod navigation_tests {
             let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(900.0, 600.0));
             let mut panel_left = 0.0;
             let output = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
-                let result = egui::Panel::left("navigation_test").default_size(260.0).show(ui, |ui| nav_heading(ui, level, "Kilns", false));
+                let result = egui::Panel::left("navigation_test").default_size(260.0).show(ui, |ui| nav_heading(ui, level, "Kilns", false, None));
                 panel_left = result.response.rect.min.x;
             });
             let x = output
@@ -801,7 +848,25 @@ mod navigation_tests {
             x - panel_left
         };
         let (top, second) = (text_left(0), text_left(1));
-        assert!(top < 30.0, "a top-level heading starts at the pane's left edge, not centred: {top}px in");
+        assert!(top < 40.0, "a top-level heading starts at the pane's left edge, not centred: {top}px in");
         assert!((second - top - 14.0).abs() < 0.5, "a level-2 heading is indented 14px under its parent: {top} / {second}");
+    }
+
+    /// Collapsing a heading hides everything nested under it, and only that (#1997).
+    #[test]
+    fn collapsed_heading_hides_its_descendants_only() {
+        // 1 / 1.1 / 1.1.1 / 1.2 / 1.2.1 / 2 / 2.1
+        let levels = [0, 1, 2, 1, 2, 0, 1];
+        let none = [false; 7];
+        assert_eq!(visible_headings(&levels, &none), vec![true; 7]);
+        let mut c = none;
+        c[3] = true; // collapse 1.2
+        assert_eq!(visible_headings(&levels, &c), vec![true, true, true, true, false, true, true]);
+        c[3] = false;
+        c[0] = true; // collapse 1
+        assert_eq!(visible_headings(&levels, &c), vec![true, false, false, false, false, true, true]);
+        // A collapsed child inside a collapsed parent stays hidden and does not reopen siblings.
+        c[1] = true;
+        assert_eq!(visible_headings(&levels, &c), vec![true, false, false, false, false, true, true]);
     }
 }
