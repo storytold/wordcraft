@@ -266,6 +266,11 @@ impl Writer {
                 }
                 Inline::Anchor(name) => o.push_str(&format!("\\hypertarget{{{}}}{{}}", escape_url(name))),
                 Inline::Figure(_) => {}
+                // LaTeX keeps no ruby (no package): its base text, in the run's formatting.
+                Inline::Ruby { base, fmt, .. } => {
+                    let s = self.span(base, fmt);
+                    o.push_str(&s);
+                }
                 Inline::Equation { linear, display } => {
                     self.uses.math = true;
                     let src = linear_to_latex(linear);

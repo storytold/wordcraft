@@ -317,7 +317,9 @@ impl Writer {
 
     fn plain_inlines(&mut self, inl: &[Inline], out: &mut String) {
         let mut prev_space = true;
-        let inl = model::equations_as_text(inl);
+        let eq = model::equations_as_text(inl);
+        // ODF has no ruby: its base text goes through the text path below.
+        let inl = model::ruby_as_text(&eq);
         for i in inl.iter() {
             match i {
                 Inline::Text(t, f) => {
@@ -387,6 +389,8 @@ impl Writer {
                     prev_space = false;
                 }
                 Inline::Anchor(a) => out.push_str(&format!("<text:bookmark text:name=\"{}\"/>", x(a))),
+                // Read as its base text by `ruby_as_text` above.
+                Inline::Ruby { .. } => {}
                 Inline::Figure(_) | Inline::Equation { .. } => {}
             }
         }
