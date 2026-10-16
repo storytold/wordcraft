@@ -49,6 +49,25 @@ pub(crate) struct EmbedWriter<'d> {
 }
 
 impl<'d> EmbedWriter<'d> {
+    /// Copy one validated recipient leaf through the shared allocator/manifest. This shares a
+    /// previously copied part and never traverses dependencies or invents recipient data.
+    pub(super) fn recipient_data(&mut self, target: &str) -> Result<String, crate::DocxError> {
+        let invalid = || crate::DocxError::MailMerge(format!("missing or unsupported recipient data part {target}"));
+        if crate::mail_merge::recipient_target("", target).as_deref() != Some(target) {
+            return Err(invalid());
+        }
+        let info = self.manifest.parts.get(target).ok_or_else(invalid)?;
+        let bytes = self.passthrough.get(target).ok_or_else(invalid)?;
+        if !info.rels.is_empty() {
+            return Err(invalid());
+        }
+        crate::mail_merge::validate_recipient(bytes, &info.content_type)?;
+        let mut memo = std::mem::take(&mut self.first);
+        let result = self.copy_tree(target, &mut memo, &mut Vec::new());
+        self.first = memo;
+        result.ok_or_else(invalid)
+    }
+
     pub fn new(doc: &'d wordcraft_doc::Document) -> EmbedWriter<'d> {
         let manifest = doc.passthrough.get(EMBEDDED_PARTS).map(|m| EmbeddedManifest::parse(m)).unwrap_or_default();
         let mut taken: HashSet<String> = [
