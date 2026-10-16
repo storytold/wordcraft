@@ -3,7 +3,7 @@
 //! messages; hyphenation keeps the existing fallback, without Czech pattern data.
 
 pub mod grammar;
-mod suggest;
+pub(crate) mod suggest;
 #[cfg(test)]
 pub(crate) mod test_dict;
 

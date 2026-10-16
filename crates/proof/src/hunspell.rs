@@ -201,6 +201,7 @@ mod tests {
         // LibreOffice's IDs are per dictionary: Polish is `dict-pl`, Brazilian Portuguese
         // `dict-pt-BR`, so both the primary-language folder and the dashed full name are tried.
         assert_eq!(super::lo_ext_dirs("cs_CZ"), ["dict-cs", "dict-cs-CZ"]);
+        assert_eq!(super::lo_ext_dirs("id_ID"), ["dict-id", "dict-id-ID"]);
         assert_eq!(super::lo_ext_dirs("pl_PL"), ["dict-pl", "dict-pl-PL"]);
         assert_eq!(super::lo_ext_dirs("pt_BR"), ["dict-pt", "dict-pt-BR"]);
         assert_eq!(super::lo_ext_dirs("de-DE"), ["dict-de", "dict-de-DE"]);

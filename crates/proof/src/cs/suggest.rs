@@ -1,5 +1,6 @@
 //! Czech suggestions: bounded MAP variants, REP replacements, KEY neighbours, TRY edits
-//! and a stem scan. All linguistic tables are read from the installed dictionary.
+//! and a stem scan. All linguistic tables are read from the installed dictionary, so Indonesian
+//! ([`crate::id`]) uses the same ranking with its own dictionary.
 
 use std::collections::{HashMap, HashSet};
 
