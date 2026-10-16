@@ -642,18 +642,24 @@ pub fn suppressed(app: &WordApp, ctx: &egui::Context) -> bool {
 
 /// Native backends report Alt through both key and modifier events, in either order. Track
 /// the transition once; the key-up event can still carry the old `alt: true` modifier state.
+/// A release is a keytip tap only if the Alt modifier was on during the press: AltGr (Right Alt
+/// on Polish, German, Czech… layouts) is a Right Alt key without it on Linux and Ctrl+Alt on
+/// Windows, and types characters instead (#2388).
 fn alt_transition(app: &mut WordApp, pressed: bool, modifiers: egui::Modifiers) -> bool {
     let other_modifier = modifiers.ctrl || modifiers.shift || modifiers.command || modifiers.mac_cmd;
     if pressed {
         if !app.ui.alt_pressed {
             app.ui.alt_chord_used = false;
+            app.ui.alt_modifier_seen = false;
         }
         app.ui.alt_pressed = true;
         app.ui.alt_chord_used |= other_modifier;
+        app.ui.alt_modifier_seen |= modifiers.alt;
         false
     } else {
         let released = std::mem::take(&mut app.ui.alt_pressed);
-        released && !std::mem::take(&mut app.ui.alt_chord_used) && !other_modifier
+        let seen = std::mem::take(&mut app.ui.alt_modifier_seen) || modifiers.alt;
+        released && !std::mem::take(&mut app.ui.alt_chord_used) && !other_modifier && seen
     }
 }
 
@@ -670,6 +676,8 @@ pub fn logic(app: &mut WordApp, ctx: &egui::Context) {
         app.ui.keytip_prefix.clear();
         app.ui.alt_pressed = false;
         app.ui.alt_chord_used = false;
+        app.ui.alt_key_down = false;
+        app.ui.alt_modifier_seen = false;
         app.keytip_rects.clear();
         ctx.data_mut(|d| {
             d.insert_temp(phase_id(), Phase::Off);
@@ -690,7 +698,10 @@ pub fn logic(app: &mut WordApp, ctx: &egui::Context) {
         match e {
             egui::Event::Key { key, pressed, modifiers, .. } => {
                 if is_alt(*key) {
-                    alt_released |= alt_transition(app, *pressed, *modifiers);
+                    app.ui.alt_key_down = *pressed;
+                    // Left Alt is never AltGr, whatever modifiers the event carries.
+                    let modifiers = egui::Modifiers { alt: modifiers.alt || *key == egui::Key::AltLeft, ..*modifiers };
+                    alt_released |= alt_transition(app, *pressed, modifiers);
                 } else if *pressed {
                     other_key = true;
                     app.ui.alt_chord_used = true;
@@ -699,7 +710,9 @@ pub fn logic(app: &mut WordApp, ctx: &egui::Context) {
                     }
                 }
             }
-            egui::Event::ModifiersChanged(modifiers) => {
+            // Alt off while an Alt key is still down (AltGr on Linux turns Level 3 Shift on, not
+            // Alt): the key's release ends the press, not this.
+            egui::Event::ModifiersChanged(modifiers) if !(app.ui.alt_key_down && !modifiers.alt) => {
                 alt_released |= alt_transition(app, modifiers.alt, *modifiers);
             }
             egui::Event::PointerButton { pressed: true, .. } => {

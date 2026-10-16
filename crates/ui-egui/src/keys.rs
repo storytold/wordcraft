@@ -713,6 +713,58 @@ mod tests {
         assert_eq!(a.ui.keytips, crate::keytips::Phase::Tabs);
     }
 
+    /// #2388: AltGr (Right Alt on a Polish layout under Wayland) arrives as the Right Alt key
+    /// followed by a modifiers event without Alt (it's Level 3 Shift). That event read as Alt
+    /// let go opened keytips while AltGr was still held, and the next letter went to them
+    /// instead of typing ś, ł, ż. A bare AltGr tap doesn't open keytips either; a Right Alt
+    /// that is Alt (US layout) still does.
+    #[test]
+    fn altgr_types_its_characters_without_keytips() {
+        if cfg!(target_os = "macos") {
+            return;
+        }
+        let doc_text = |a: &WordApp| a.session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+        let ctx = egui::Context::default();
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        let none = Modifiers::NONE;
+        let key = |key, pressed, modifiers| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers };
+        let frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+            ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+                crate::keytips::logic(a, ui.ctx());
+                canvas_events(a, ui.ctx());
+            })
+            .drop_without_applying_deltas();
+        };
+        let altgr_down = || vec![key(Key::AltRight, true, none), egui::Event::ModifiersChanged(none)];
+        let altgr_up = || vec![key(Key::AltRight, false, none), egui::Event::ModifiersChanged(none)];
+        // Held through three letters, one frame per event batch.
+        frame(&mut a, altgr_down());
+        assert_eq!(a.ui.keytips, crate::keytips::Phase::Off, "AltGr down doesn't open keytips");
+        for (k, t) in [(Key::S, "ś"), (Key::L, "ł"), (Key::Z, "ż")] {
+            frame(&mut a, vec![key(k, true, none), egui::Event::Text(t.into())]);
+            frame(&mut a, vec![key(k, false, none)]);
+            assert_eq!(a.ui.keytips, crate::keytips::Phase::Off, "{t}");
+        }
+        frame(&mut a, altgr_up());
+        assert_eq!(doc_text(&a).trim_end(), "śłż");
+        assert_eq!(a.ui.keytips, crate::keytips::Phase::Off);
+        // All in one frame.
+        frame(&mut a, [altgr_down(), vec![key(Key::A, true, none), egui::Event::Text("ą".into()), key(Key::A, false, none)], altgr_up()].concat());
+        assert_eq!(doc_text(&a).trim_end(), "śłżą");
+        assert_eq!(a.ui.keytips, crate::keytips::Phase::Off);
+        // A bare AltGr tap, in two frames or one.
+        frame(&mut a, altgr_down());
+        frame(&mut a, altgr_up());
+        assert_eq!(a.ui.keytips, crate::keytips::Phase::Off, "an AltGr tap isn't an Alt tap");
+        frame(&mut a, [altgr_down(), altgr_up()].concat());
+        assert_eq!(a.ui.keytips, crate::keytips::Phase::Off);
+        // Right Alt that is Alt still opens keytips.
+        let alt = Modifiers { alt: true, ..Default::default() };
+        frame(&mut a, vec![key(Key::AltRight, true, none), egui::Event::ModifiersChanged(alt)]);
+        frame(&mut a, vec![key(Key::AltRight, false, alt), egui::Event::ModifiersChanged(none)]);
+        assert_eq!(a.ui.keytips, crate::keytips::Phase::Tabs);
+    }
+
     fn alt_frame_app() -> (egui::Context, WordApp) {
         let a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
         (egui::Context::default(), a)
