@@ -188,25 +188,23 @@ impl<'a> Pieces<'a> {
         Some(String::from_utf16_lossy(&units))
     }
 
-    /// An XLUnicodeRichExtendedString (SST entries).
+    /// An XLUnicodeRichExtendedString (SST entries, RSTRING, rich LABEL/STRING).
     fn rich_string(&mut self) -> Option<String> {
         let cch = usize::from(self.u16()?);
         let flags = self.byte()?;
         let runs = if flags & 0x08 != 0 { usize::from(self.u16()?) } else { 0 };
         let ext = if flags & 0x04 != 0 { self.u32()? as usize } else { 0 };
         let s = self.chars(cch, flags & 1 != 0)?;
-        self.skip(runs.saturating_mul(4))?;
-        self.skip(ext)?;
+        let _ = self.skip(runs.saturating_mul(4));
+        let _ = self.skip(ext);
         Some(s)
     }
 }
 
-/// An XLUnicodeString (u16 count) inside one record.
+/// An XLUnicodeString (or XLUnicodeRichExtendedString) inside one record.
 fn unicode_string(d: &[u8], at: usize) -> Option<String> {
-    let cch = usize::from(u16_at(d, at)?);
-    let flags = *d.get(at + 2)?;
-    let mut p = Pieces::new(vec![d.get(at + 3..)?]);
-    p.chars(cch, flags & 1 != 0)
+    let mut p = Pieces::new(vec![d.get(at..)?]);
+    p.rich_string()
 }
 
 struct Globals {
@@ -316,8 +314,18 @@ fn sheet_rows(stream: &[u8], offset: usize, g: &Globals) -> Result<Vec<Vec<Strin
             break;
         }
         if kind == STRING {
-            if let (Some((r, c)), Some(s)) = (pending.take(), unicode_string(d, 0)) {
-                put(r, c, s, &mut count);
+            let mut parts = vec![d];
+            let mut p = next;
+            while let Some((CONTINUE, cd, cn)) = record(stream, p) {
+                parts.push(cd);
+                p = cn;
+            }
+            pos = p;
+            if let Some((r, c)) = pending.take() {
+                let mut pieces = Pieces::new(parts);
+                if let Some(s) = pieces.rich_string() {
+                    put(r, c, s, &mut count);
+                }
             }
             continue;
         }
@@ -329,7 +337,15 @@ fn sheet_rows(stream: &[u8], offset: usize, g: &Globals) -> Result<Vec<Vec<Strin
                 }
             }
             LABEL | RSTRING => {
-                if let Some(s) = unicode_string(d, 6) {
+                let mut parts = vec![d.get(6..).unwrap_or(&[])];
+                let mut p = next;
+                while let Some((CONTINUE, cd, cn)) = record(stream, p) {
+                    parts.push(cd);
+                    p = cn;
+                }
+                pos = p;
+                let mut pieces = Pieces::new(parts);
+                if let Some(s) = pieces.rich_string() {
                     put(row, col, s, &mut count);
                 }
             }
@@ -552,5 +568,90 @@ mod tests {
         comp.create_stream("/Book").unwrap();
         let old = comp.into_inner().into_inner();
         assert!(sheet_names(&old).unwrap_err().contains("Excel 5.0/95"));
+    }
+
+    #[test]
+    fn rstring_rich_strings_and_continue_records() {
+        // 1. unicode_string with formatting runs (flags & 0x08)
+        let rstring_data: &[u8] = &[5, 0, 0x08, 1, 0, b'H', b'e', b'l', b'l', b'o', 0, 0, 0, 0];
+        assert_eq!(unicode_string(rstring_data, 0), Some("Hello".to_string()));
+
+        // 2. unicode_string with phonetic extension (flags & 0x04)
+        let ext_data: &[u8] = &[4, 0, 0x04, 4, 0, 0, 0, b'T', b'e', b's', b't', 1, 2, 3, 4];
+        assert_eq!(unicode_string(ext_data, 0), Some("Test".to_string()));
+
+        // 3. unicode_string with both rich text and phonetic extension (flags & 0x0C)
+        let both_data: &[u8] = &[4, 0, 0x0C, 1, 0, 4, 0, 0, 0, b'B', b'o', b't', b'h', 0, 0, 0, 0, 9, 9, 9, 9];
+        assert_eq!(unicode_string(both_data, 0), Some("Both".to_string()));
+
+        // 4. End-to-end workbook with RSTRING and FORMULA + STRING + CONTINUE
+        let mut out = Vec::new();
+        fn rec(out: &mut Vec<u8>, kind: u16, data: &[u8]) {
+            out.extend_from_slice(&kind.to_le_bytes());
+            out.extend_from_slice(&(data.len() as u16).to_le_bytes());
+            out.extend_from_slice(data);
+        }
+        let bof = |dt: u16| {
+            let mut d = vec![0x00, 0x06];
+            d.extend_from_slice(&dt.to_le_bytes());
+            d.extend_from_slice(&[0; 12]);
+            d
+        };
+        rec(&mut out, BOF, &bof(0x0005));
+        let xf = vec![0u8; 20];
+        rec(&mut out, XF, &xf);
+        // BOUNDSHEET
+        let sheet_offset_pos = out.len() + 4;
+        let mut bs = vec![0, 0, 0, 0, 0, 0, 5, 0];
+        bs.extend_from_slice(b"Sheet");
+        rec(&mut out, BOUNDSHEET, &bs);
+        rec(&mut out, EOF, &[]);
+
+        // Sheet 1
+        let sheet_pos = out.len() as u32;
+        out[sheet_offset_pos..sheet_offset_pos + 4].copy_from_slice(&sheet_pos.to_le_bytes());
+        rec(&mut out, BOF, &bof(0x0010));
+
+        // RSTRING record at row 0, col 0: "RichText"
+        let mut rstr = vec![0, 0, 0, 0, 0, 0]; // rw 0, col 0, xf 0
+        rstr.extend_from_slice(&8u16.to_le_bytes()); // cch = 8
+        rstr.push(0x08); // flags: rich text
+        rstr.extend_from_slice(&1u16.to_le_bytes()); // crun = 1
+        rstr.extend_from_slice(b"RichText");
+        rstr.extend_from_slice(&[0, 0, 0, 0]); // 4-byte formatting run
+        rec(&mut out, RSTRING, &rstr);
+
+        // FORMULA record at row 1, col 0 with string result followed by STRING and CONTINUE
+        let mut form = vec![1, 0, 0, 0, 0, 0]; // rw 1, col 0, xf 0
+        form.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0xFF, 0xFF]); // formula string result marker
+        form.extend_from_slice(&[0, 0]); // chn
+        rec(&mut out, FORMULA, &form);
+
+        // STRING record (first part: "Part")
+        let mut srec = Vec::new();
+        srec.extend_from_slice(&8u16.to_le_bytes()); // cch = 8
+        srec.push(0x00); // flags = 0 (compressed)
+        srec.extend_from_slice(b"Part");
+        rec(&mut out, STRING, &srec);
+
+        // CONTINUE record (second part: "Two!")
+        let mut cont = Vec::new();
+        cont.push(0x00); // option byte
+        cont.extend_from_slice(b"Two!");
+        rec(&mut out, CONTINUE, &cont);
+
+        rec(&mut out, EOF, &[]);
+
+        let mut comp = cfb::CompoundFile::create(Cursor::new(Vec::new())).unwrap();
+        {
+            use std::io::Write;
+            let mut s = comp.create_stream("/Workbook").unwrap();
+            s.write_all(&out).unwrap();
+        }
+        comp.flush().unwrap();
+        let book = comp.into_inner().into_inner();
+
+        let (_, r) = read_rows(&book, Pick::Index(0)).unwrap();
+        assert_eq!(r, vec![vec!["RichText".to_string()], vec!["PartTwo!".to_string()]]);
     }
 }
