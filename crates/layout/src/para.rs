@@ -355,6 +355,9 @@ pub struct ParaLayout {
     pub shown: Vec<(usize, String, Vec<std::ops::Range<usize>>)>,
     /// Shapes drawn around overstruck field text (enclosed characters, `EQ \o`), by cluster index.
     pub enclosures: Vec<(usize, Enclosed)>,
+    /// Room after a cluster between Asian text and Latin text or digits ([`auto_space`]), by
+    /// cluster index, sorted. It is part of the cluster's advance, but takes no room at a line's end.
+    pub auto_space: Vec<(usize, f32)>,
 }
 
 /// A shape drawn over a cluster (an enclosed character's circle, square, triangle or diamond),
@@ -479,6 +482,54 @@ fn snap_chars(b: &mut Builder, text: &str, grid: &Grid) {
         }
         c.adv = adv;
     }
+}
+
+/// Automatic spacing (`w:autoSpaceDE`, `w:autoSpaceDN`): a quarter of the Asian character's font
+/// size between Asian text and Latin text or digits that touch, across runs. Measured on Word's
+/// PDF of a Chinese document at 16 pt (#2358), as JIS X 4051 asks. A field or note number is
+/// classed by the text it shows. The room goes after the first of the two characters; returns it
+/// by cluster index.
+fn auto_space(b: &mut Builder, text: &str, de: bool, dn: bool) -> Vec<(usize, f32)> {
+    let mut out = Vec::new();
+    if !de && !dn {
+        return out;
+    }
+    let mut shown = b.shown.iter().map(|s| (s.0, s.1.as_str())).peekable();
+    // The previous text cluster: index, its last character, its font size.
+    let mut prev: Option<(usize, char, f32)> = None;
+    for k in 0..b.clusters.len() {
+        let Some(c) = b.clusters.get(k) else { break };
+        match c.kind {
+            ClKind::Text => {}
+            ClKind::Marker if c.adv == 0.0 => continue,
+            _ => {
+                prev = None;
+                continue;
+            }
+        }
+        while shown.next_if(|s| s.0 < k).is_some() {}
+        let s = match shown.peek() {
+            Some(&(i, t)) if i == k => t,
+            _ => text.get(c.start..c.end).unwrap_or(""),
+        };
+        let (Some(first), Some(last)) = (s.chars().next(), s.chars().next_back()) else {
+            prev = None;
+            continue;
+        };
+        let size = b.styles.get(c.style as usize).map_or(0.0, |st| st.size);
+        if let Some((pk, pc, psize)) = prev
+            && let Some(side) = crate::kinsoku::auto_space(pc, first, de, dn)
+        {
+            let asian = if side == crate::kinsoku::AsianSide::Left { psize } else { size };
+            let gap = if asian.is_finite() { (asian / 4.0).clamp(0.0, 400.0) } else { 0.0 };
+            if let Some(pc) = b.clusters.get_mut(pk) {
+                pc.adv += gap;
+                out.push((pk, gap));
+            }
+        }
+        prev = Some((k, last, size));
+    }
+    out
 }
 
 /// An area text wraps around.
@@ -1457,6 +1508,9 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     if rp.snap_to_grid {
         snap_chars(&mut b, &p.text, &env.grid);
     }
+    // Text on a character grid keeps to its cells.
+    let auto_space =
+        if rp.snap_to_grid && env.grid.chars.is_some() { Vec::new() } else { auto_space(&mut b, &p.text, rp.auto_space_de, rp.auto_space_dn) };
     // Break opportunities and hyphenation points come from the text as laid out: hidden text that is
     // not shown and, without markup, tracked deletions are left out, so a space or soft hyphen there
     // is no place to break, and words are hyphenated as they read.
@@ -1577,6 +1631,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         displays,
         left_out: Vec::new(),
         enclosures,
+        auto_space,
     };
     let auto = env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens;
     pl.hyph_after = hyphenation_points(&text, to_para, &pl, auto, env.doc.settings.hyphenate_caps, &runs);
@@ -1817,7 +1872,8 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                 }
             });
             let shrink = if shrink_spaces && !has_tab { space_w * MAX_SPACE_SHRINK } else { 0.0 };
-            let fits = absorbs || x + c.adv <= right_edge + shrink + 0.01 || c.kind == ClKind::Space || c.kind == ClKind::Marker;
+            let fits =
+                absorbs || x + c.adv - pl.auto_space_after(j) <= right_edge + shrink + 0.01 || c.kind == ClKind::Space || c.kind == ClKind::Marker;
             // A line's first item stays on it even when it doesn't fit; markers before it
             // (a content control's start, a bookmark) take no room and don't count (Word).
             if !fits && (c0..j).any(|k| pl.clusters.get(k).is_some_and(|c| c.kind != ClKind::Marker)) {
@@ -2050,7 +2106,11 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                 Some(ClKind::Space) | Some(ClKind::Marker) | Some(ClKind::LineBreak) | Some(ClKind::PageBreak) | Some(ClKind::ColumnBreak) => {
                     content_end = xs.get(k - c0).copied().unwrap_or(content_end);
                 }
-                _ => break,
+                _ => {
+                    // The automatic space after the line's last character goes with the wrap.
+                    content_end -= pl.auto_space_after(k);
+                    break;
+                }
             }
         }
         let slack = right_edge - content_end;
@@ -2501,6 +2561,10 @@ fn resolve_tab(pl: &mut ParaLayout, pending: &mut Option<(usize, TabStop, f32)>,
 }
 
 impl ParaLayout {
+    /// The automatic space in cluster `k`'s advance ([`auto_space`]), 0 without one.
+    fn auto_space_after(&self, k: usize) -> f32 {
+        self.auto_space.binary_search_by_key(&k, |a| a.0).ok().and_then(|i| self.auto_space.get(i)).map_or(0.0, |a| a.1)
+    }
     /// The line the list label is drawn on: the first, unless the paragraph opens with a page
     /// break, when Word draws it with the text on the next page.
     pub fn label_line(&self) -> usize {
