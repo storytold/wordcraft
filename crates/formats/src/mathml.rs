@@ -1,7 +1,8 @@
 //! Equations as MathML (W3C MathML Core / Presentation MathML): written into HTML export and the
 //! HTML a copy puts on the system clipboard, so programs that read MathML can get a formatted
-//! equation instead of its linear text (#816; pasting into Word and LibreOffice not yet verified;
-//! OMML for Word is #1297); and read back from pasted or opened HTML.
+//! equation instead of its linear text (#816); for a copy of one equation alone, the text of the
+//! platform's MathML clipboard formats, which Word reads first when it pastes math (#1297;
+//! pasting into Word and LibreOffice not yet verified); and read back from pasted or opened HTML.
 //!
 //! The writer walks the equation tree ([`MNode`]) and wraps it in `<semantics>` with the linear
 //! format as an `application/x-unicodemath` annotation, which renderers ignore and WordCraft reads

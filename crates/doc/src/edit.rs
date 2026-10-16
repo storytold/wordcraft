@@ -40,6 +40,26 @@ impl Fragment {
         }
         found
     }
+    /// The equation (its linear format and whether it is a display equation) when the fragment
+    /// is that one equation and nothing else but white space and empty paragraphs: a copy of it
+    /// also goes on the system clipboard in the MathML formats that equation editors read (#1297).
+    pub fn sole_equation(&self) -> Option<(&str, bool)> {
+        let mut found = None;
+        for b in &self.blocks {
+            let Block::Para(p) = b else { return None };
+            for c in p.text.chars().filter(|c| !c.is_whitespace()) {
+                if c != crate::para::OBJ || found.is_some() {
+                    return None;
+                }
+                // The paragraph's only visible character, so its first object.
+                match p.objects.first() {
+                    Some(InlineObject::Equation { linear, display, .. }) => found = Some((linear.as_str(), *display)),
+                    _ => return None,
+                }
+            }
+        }
+        found
+    }
     /// The text a copy puts on the clipboard: [`Self::plain_text`] with symbol-font characters
     /// (Wingdings…) as their Unicode equivalents.
     pub fn clipboard_text(&self) -> String {

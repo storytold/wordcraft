@@ -948,6 +948,99 @@ fn copying_an_equation_puts_mathml_on_the_clipboard() {
     assert!(r["html"].as_str().is_some_and(|h| h.contains("Speed") && !h.contains("<math")), "{r}");
 }
 
+/// Whether `xml` is one element whose tags all nest and close (enough to check a clipboard
+/// payload without an XML parser in the engine's tests).
+fn one_balanced_element(xml: &str) -> bool {
+    let mut stack: Vec<String> = Vec::new();
+    let mut closed_root = false;
+    let mut rest = xml;
+    while let Some(lt) = rest.find('<') {
+        if closed_root || (stack.is_empty() && !rest[..lt].trim().is_empty()) {
+            return false;
+        }
+        let Some(gt) = rest[lt..].find('>') else { return false };
+        let tag = &rest[lt + 1..lt + gt];
+        rest = &rest[lt + gt + 1..];
+        if let Some(name) = tag.strip_prefix('/') {
+            if stack.pop().as_deref() != Some(name.trim()) {
+                return false;
+            }
+            closed_root = stack.is_empty();
+        } else if !tag.ends_with('/') {
+            stack.push(tag.split_whitespace().next().unwrap_or_default().to_string());
+        } else if stack.is_empty() {
+            closed_root = true;
+        }
+    }
+    closed_root && stack.is_empty() && rest.trim().is_empty()
+}
+
+#[test]
+fn copying_one_equation_gives_its_mathml_for_the_math_clipboard_formats() {
+    // #1297: Word reads a pasted equation first from the clipboard's "MathML" formats; a copy of
+    // one equation alone carries its MathML for the host to put there.
+    let cases = [
+        ("y=(a+b)/(c-d)", "<mfrac>"),
+        ("x_i^2+e^(-t)", "<msubsup>"),
+        ("√(x^2+1)+∛8", "<msqrt>"),
+        ("∑_(k=1)^n k^2", "<munderover>"),
+        ("∫_0^1 f(x)dx", "∫"),
+        ("■(1&0@0&1)", "<mtable>"),
+    ];
+    for (linear, element) in cases {
+        let mut s = s();
+        run(&mut s, "insert.equation", json!({"linear": linear, "edit": false}));
+        run(&mut s, "select.all", json!({}));
+        let r = run(&mut s, "edit.copy", json!({}));
+        let mathml = r["mathml"].as_str().unwrap_or_default().to_string();
+        assert!(mathml.starts_with("<math xmlns=\"http://www.w3.org/1998/Math/MathML\""), "{linear}: {mathml}");
+        assert!(mathml.contains(element), "{linear}: {mathml}");
+        // Alone on its line, it is a display equation.
+        assert!(mathml.contains("display=\"block\""), "{linear}: {mathml}");
+        assert!(one_balanced_element(&mathml), "{linear}: not one well-formed element: {mathml}");
+        // No XML prolog: the W3C transfer rules want `<math` first, so readers that sniff the
+        // start of the text recognise it.
+        assert!(!mathml.contains("<?xml"), "{mathml}");
+        // Pasting it back (as a MathML reader would get it) gives the same equation.
+        let mut t = s_with_paste(&mathml);
+        assert_eq!(equations(&t), equations(&s), "{mathml}");
+        // Its presentation elements alone, without our linear-format annotation (which Word
+        // ignores), still read as an equation of the same shape.
+        let bare = match (mathml.find("<annotation"), mathml.find("</annotation>")) {
+            (Some(a), Some(b)) => format!("{}{}", &mathml[..a], &mathml[b + "</annotation>".len()..]),
+            _ => mathml.clone(),
+        };
+        t = s_with_paste(&bare);
+        assert_eq!(equations(&t).len(), 1, "{linear}: {bare}");
+    }
+}
+
+fn s_with_paste(html: &str) -> Session {
+    let mut t = s();
+    run(&mut t, "edit.paste", json!({"text": "", "html": html}));
+    t
+}
+
+#[test]
+fn copying_an_equation_with_text_offers_no_math_clipboard_formats() {
+    // #1297: Word takes the "MathML" format before the HTML, so offering it for a copy with text
+    // around the equation would drop the text. Text alone has none either.
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Speed "}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "insert.equation", json!({"linear": "y=2x_s", "edit": false}));
+    run(&mut s, "select.all", json!({}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    assert!(r.get("mathml").is_none() && r["html"].as_str().is_some_and(|h| h.contains("<math")), "{r}");
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 5}}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    assert!(r.get("mathml").is_none(), "{r}");
+    // Cut of the equation alone offers it.
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 6}, "focus": {"block": 0, "off": 9}}));
+    let r = run(&mut s, "edit.cut", json!({}));
+    assert!(r["mathml"].as_str().is_some_and(|m| m.contains("<msub>") && !m.contains("display=")), "an inline equation: {r}");
+}
+
 #[test]
 fn copying_bold_text_puts_html_on_the_clipboard() {
     // #1523: formatted text reaches other programs as HTML, not only as plain text.

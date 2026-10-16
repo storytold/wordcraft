@@ -167,13 +167,25 @@ fn copy(s: &mut Session, _: &Value) -> CmdResult {
 }
 
 /// What Copy and Cut return: the clipboard's text, and the copy as HTML (equations as MathML,
-/// #816) for the host to put on the system clipboard too, so other programs keep the formatting.
+/// #816) for the host to put on the system clipboard too, so other programs keep the formatting;
+/// and for a copy of one equation alone, its MathML (#1297).
 pub(crate) fn copy_result(s: &mut Session) -> Value {
     s.clipboard_html = match &s.clipboard {
         Some(f) => wordcraft_formats::html::export_fragment(&f.to_document()),
         None => String::new(),
     };
-    if s.clipboard_html.is_empty() { json!({"text": s.clipboard_text}) } else { json!({"text": s.clipboard_text, "html": s.clipboard_html}) }
+    let mut r = json!({"text": s.clipboard_text});
+    if !s.clipboard_html.is_empty() {
+        r["html"] = json!(s.clipboard_html);
+    }
+    // A copy of one equation alone, as MathML for the clipboard formats equation editors read
+    // ("MathML" on Windows, `public.mathml.presentation` on macOS; #1297). Word looks for them
+    // before anything else when it pastes; a copy with text around the equation doesn't offer
+    // them, so pasting it keeps the text.
+    if let Some((linear, display)) = s.clipboard.as_ref().and_then(|f| f.sole_equation()) {
+        r["mathml"] = json!(wordcraft_formats::mathml::linear_to_mathml(linear, display));
+    }
+    r
 }
 
 fn cut(s: &mut Session, v: &Value) -> CmdResult {

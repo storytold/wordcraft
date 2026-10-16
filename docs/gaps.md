@@ -1,6 +1,6 @@
 # Where WordCraft falls short of Word
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** trivial (VML freeforms read and kept on save; previously trivial: consistent preferred cell widths; previously trivial: multi-paragraph field instructions no longer add blank lines; previously trivial: page-break-only list paragraphs hide their labels; previously trivial: floating-table overlap ignores empty line-break lines; previously trivial: copies keep their formatting on the clipboard as HTML, #1523; previously trivial: sample-text formulas on Enter, #1067; previously trivial: #29: copied equations as MathML, OMML open as #1297, #816; previously trivial: the Font list no longer keeps every previewed font in memory, #848; previously trivial: table column and row markers on the rulers, #700; previously trivial: table borders and the resize handle drag on the page, #217; previously trivial: formatting revisions landed, #41; previously trivial: Draw Table and Eraser landed, #303; previously minor: beta distance restated: ~15 points, ~150–230 h; previously: first version; every known shortfall from the 2026-10-10 re-measure, ranked) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-16 · **Change:** trivial (#29: a copied equation also goes in the MathML clipboard formats, #1297; previously trivial: VML freeforms read and kept on save; previously trivial: consistent preferred cell widths; previously trivial: multi-paragraph field instructions no longer add blank lines; previously trivial: page-break-only list paragraphs hide their labels; previously trivial: floating-table overlap ignores empty line-break lines; previously trivial: copies keep their formatting on the clipboard as HTML, #1523; previously trivial: sample-text formulas on Enter, #1067; previously trivial: #29: copied equations as MathML, OMML open as #1297, #816; previously trivial: the Font list no longer keeps every previewed font in memory, #848; previously trivial: table column and row markers on the rulers, #700; previously trivial: table borders and the resize handle drag on the page, #217; previously trivial: formatting revisions landed, #41; previously trivial: Draw Table and Eraser landed, #303; previously minor: beta distance restated: ~15 points, ~150–230 h; previously: first version; every known shortfall from the 2026-10-10 re-measure, ranked) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 > **Printing update:** 2026-10-12 · direct desktop printing through craft-print; details below.
 
@@ -52,7 +52,7 @@ Document renaming: desktop renaming requires a filesystem that supports hard lin
 | 27 | **View windows**: Side by Side, Synchronous Scrolling, Arrange All, Switch Windows | | [parity-checklist.md](parity-checklist.md) (View 25/29); PR #331 open | Comparing documents | 3–5 | [ui-parity.md](ui-parity.md) |
 | 26 | **Minor formats**: MHT, Works/WordPerfect | | Word XML Document (Flat OPC) opens and saves, Word 2003 XML opens (#548) and saves (#1081, not yet checked in Word) | Rare | 14–26 | [file-format-parity.md](file-format-parity.md) |
 | 28 | **Dictate** | | `tools.dictate` missing | Dictation users | 8–15 + owner (speech model) | [hardware-parity.md](hardware-parity.md) |
-| 29 | **Equations**: ink equations; copied equations as OMML for Word (#816, #1297) | | #191 notes; long display equations wrap at operators (#326); a copy holding an equation puts MathML in HTML on the clipboard (#816; Word/LibreOffice paste not yet verified) | Maths-heavy documents | 2–3 | [layout-parity.md](layout-parity.md) |
+| 29 | **Equations**: ink equations; a copied equation pasting into Word as an editable equation, still to be confirmed (#816, #1297) | | #191 notes; long display equations wrap at operators (#326); a copy holding an equation puts MathML in HTML on the clipboard (#816), and a copy of one equation alone also its MathML in the "MathML" clipboard formats Word reads first (Windows, macOS; #1297; Word/LibreOffice paste not yet verified) | Maths-heavy documents | 2–3 | [layout-parity.md](layout-parity.md) |
 
 **Beta needs #1–#7** (~150–230 h with the stability and layout work they imply): they are the
 blocking gaps, and closing them lifts file formats, layout, stability and UI enough to take the
@@ -73,8 +73,9 @@ The same gaps grouped the way the parity documents are, for agents working in on
 - **UI/UX gaps:** #7, #18, #24; context menus for objects (the table's landed; it still lacks Border Styles); Linux title bar theming (#78); File ›
   still missing: the Paste Options button after a paste, and RTF on macOS and X11. Copy puts
   HTML beside the text on the clipboard, so other programs keep the formatting (#1523), with
-  equations as MathML (#816; pasting into Word/LibreOffice not yet verified; OMML on the
-  clipboard is #1297); RTF on the clipboard is not written yet.
+  equations as MathML (#816), and a lone equation also in the MathML clipboard formats on
+  Windows and macOS (#1297; pasting into Word/LibreOffice not yet verified); RTF on the
+  clipboard is not written yet.
   Options › Animation effects › Use system setting reads macOS (Reduce motion) and the Linux/BSD
   desktops (`apps/wordcraft/src/animations.rs`) but hasn't been tried on a Mac or in a real
   GNOME or KDE session yet.
@@ -185,6 +186,7 @@ The same gaps grouped the way the parity documents are, for agents working in on
 | 2026-10-10 | trivial | #10: Drawing Canvas landed (#344); in-canvas dragging of members remains |
 | 2026-10-14 | trivial | Feature gaps: every copy puts HTML beside its text on the clipboard, not only copies with an equation (#1523); writing RTF stays open |
 | 2026-10-13 | trivial | #29: copied equations reach the clipboard as MathML in HTML (#816); OMML for Word stays open (#1297) |
+| 2026-10-16 | trivial | #29: a copy of one equation alone also goes in the MathML clipboard formats Word reads first (#1297); the gap keeps confirming the paste in Word |
 | 2026-10-10 | trivial | #29: long display equations wrap across lines (#326) |
 | 2026-10-10 | trivial | #3: Windows lag on GPUs without a DirectX 12 driver fixed with an OpenGL fallback (#316) |
 | 2026-10-10 | minor | #8: Polish proofing (spelling, grammar, hyphenation) and a proofing language per run landed; the gap is now the other languages (20–40 h) |

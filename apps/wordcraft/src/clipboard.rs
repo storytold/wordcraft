@@ -10,9 +10,14 @@
 //! Everything read here comes from other programs: sizes are capped as it is read.
 //!
 //! Written here: a copy puts HTML beside its text, so other programs keep its formatting (#1523),
-//! with equations as MathML (#816; pasting into Word and LibreOffice not yet verified). arboard sets HTML with a
-//! text alternative on every desktop platform; formats of other names (Word's "Office Open XML"
-//! with OMML, #1297) it can't, so they aren't offered.
+//! with equations as MathML (#816). arboard sets HTML with a text alternative on every desktop
+//! platform. A copy of one equation alone also goes in the platform's MathML formats (#1297),
+//! added beside arboard's: on Windows "MathML" and "MathML Presentation" (UTF-16LE), on macOS
+//! `public.mathml.presentation` and `public.mathml` — the names W3C MathML 3 §6.2.4 registers
+//! for transferring MathML, and the ones Microsoft documents its Office apps reading first when
+//! they paste math (learn.microsoft.com/office/math/mathml, "Clipboard support"). Pasting into
+//! Word and LibreOffice is not yet verified. Linux and the BSDs have no Word, and arboard can't
+//! add MIME types of other names, so there the HTML carries the MathML alone.
 
 use wordcraft_engine::cmd::paste::MAX_PASTE_BYTES;
 use wordcraft_ui_egui::paste_picture::ClipboardPicture;
@@ -26,13 +31,24 @@ thread_local! {
     static WRITER: std::cell::RefCell<Option<arboard::Clipboard>> = const { std::cell::RefCell::new(None) };
 }
 
-/// Put `html` on the clipboard with `text` as its plain-text alternative. `false` when it couldn't
-/// (the caller copies the text alone), including a Wayland session without the data-control
-/// protocol, where arboard would fall back to X11 and native Wayland programs might not see it.
-pub fn set_html(html: &str, text: &str) -> bool {
+/// Put `html` on the clipboard with `text` as its plain-text alternative, and `mathml` (a copy of
+/// one equation alone; empty for any other copy) in the platform's MathML formats. `false` when
+/// the HTML and text couldn't be set (the caller copies the text alone), including a Wayland
+/// session without the data-control protocol, where arboard would fall back to X11 and native
+/// Wayland programs might not see it. MathML that can't be added is logged: the HTML still
+/// carries it.
+pub fn set_html(html: &str, text: &str, mathml: &str) -> bool {
     if !platform::can_set() {
         return false;
     }
+    let set = set_html_text(html, text);
+    if set && !mathml.is_empty() && mathml.len() <= MAX_PASTE_BYTES {
+        platform::add_mathml(mathml);
+    }
+    set
+}
+
+fn set_html_text(html: &str, text: &str) -> bool {
     WRITER.with(|w| {
         let Ok(mut slot) = w.try_borrow_mut() else { return false };
         if slot.is_none() {
@@ -146,6 +162,9 @@ mod platform {
             )
     }
 
+    /// arboard serves its own MIME types only; Word, which reads the MathML formats, isn't here.
+    pub fn add_mathml(_mathml: &str) {}
+
     pub fn rtf() -> Option<Vec<u8>> {
         if !wayland() {
             return None;
@@ -193,9 +212,68 @@ mod platform {
     pub fn can_set() -> bool {
         true
     }
+
+    /// Add the MathML to what arboard just set, as "MathML" and "MathML Presentation": UTF-16LE
+    /// text (with its terminating NUL, as Windows text formats have).
+    pub fn add_mathml(mathml: &str) {
+        let Ok(_open) = Clipboard::new_attempts(10) else {
+            log::warn!("clipboard: couldn't open it to add MathML");
+            return;
+        };
+        let bytes: Vec<u8> = mathml.encode_utf16().chain(std::iter::once(0)).flat_map(u16::to_le_bytes).collect();
+        for name in super::MATHML_FORMATS {
+            let Some(format) = raw::register_format(name) else { continue };
+            if let Err(e) = raw::set_without_clear(format.get(), &bytes) {
+                log::warn!("clipboard: {name}: {e}");
+            }
+        }
+    }
 }
 
-#[cfg(not(any(target_os = "windows", all(unix, not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))))))]
+/// The clipboard format names for MathML that Windows programs read (W3C MathML 3 §6.2.4; Office
+/// reads and writes both).
+#[cfg(target_os = "windows")]
+const MATHML_FORMATS: [&str; 2] = ["MathML", "MathML Presentation"];
+
+#[cfg(target_os = "macos")]
+mod platform {
+    use objc2_app_kit::NSPasteboard;
+    use objc2_foundation::NSString;
+
+    pub fn formats() -> Vec<String> {
+        Vec::new()
+    }
+
+    pub fn rtf() -> Option<Vec<u8>> {
+        None
+    }
+
+    pub fn encoded_picture() -> Option<Vec<u8>> {
+        None
+    }
+
+    pub fn can_set() -> bool {
+        true
+    }
+
+    /// Add the MathML to the pasteboard item arboard just wrote, as the MathML types (W3C MathML 3
+    /// §6.2.4): presentation markup, and the generic type for readers that only know that one.
+    pub fn add_mathml(mathml: &str) {
+        let board = NSPasteboard::generalPasteboard();
+        let text = NSString::from_str(mathml);
+        for name in ["public.mathml.presentation", "public.mathml"] {
+            if !board.setString_forType(&text, &NSString::from_str(name)) {
+                log::warn!("clipboard: couldn't add {name}");
+            }
+        }
+    }
+}
+
+#[cfg(not(any(
+    target_os = "windows",
+    target_os = "macos",
+    all(unix, not(any(target_os = "macos", target_os = "android", target_os = "emscripten")))
+)))]
 mod platform {
     pub fn formats() -> Vec<String> {
         Vec::new()
@@ -212,4 +290,6 @@ mod platform {
     pub fn can_set() -> bool {
         true
     }
+
+    pub fn add_mathml(_mathml: &str) {}
 }
