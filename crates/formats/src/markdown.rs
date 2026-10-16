@@ -215,6 +215,7 @@ fn delimiter_row(l: &str) -> Option<Vec<Option<Align>>> {
         out.push(match (left, right) {
             (true, true) => Some(Align::Center),
             (false, true) => Some(Align::Right),
+            (true, false) => Some(Align::Left),
             _ => None,
         });
     }
@@ -868,6 +869,11 @@ fn tokenize(s: &str, base: &Fmt, depth: usize) -> Vec<Node> {
                     push_text(&mut nodes, "\n", base);
                     i += inner.len() + 2;
                     text_start = i;
+                } else if matches!(lower.trim_end_matches('/').trim(), "wbr") {
+                    flush!();
+                    push_text(&mut nodes, "\u{200B}", base);
+                    i += inner.len() + 2;
+                    text_start = i;
                 } else if lower.starts_with("a ") && rest.get(inner.len() + 1..).is_some_and(|r| r.to_ascii_lowercase().starts_with("</a>")) {
                     flush!();
                     if let Some(name) = tag_attr(inner, "id").or_else(|| tag_attr(inner, "name")) {
@@ -875,6 +881,59 @@ fn tokenize(s: &str, base: &Fmt, depth: usize) -> Vec<Node> {
                     }
                     i += inner.len() + 2 + 4;
                     text_start = i;
+                } else if (lower == "sub" || lower == "sup") && depth < MAX_NEST {
+                    let close_tag = if lower == "sub" { "</sub>" } else { "</sup>" };
+                    if let Some(close_pos) = rest.get(inner.len() + 1..).and_then(|after| after.to_ascii_lowercase().find(close_tag)) {
+                        let content = &rest[inner.len() + 1..inner.len() + 1 + close_pos];
+                        flush!();
+                        let mut f = base.clone();
+                        if lower == "sub" {
+                            f.sub = true;
+                        } else {
+                            f.sup = true;
+                        }
+                        for x in parse_inlines(content, &f, depth + 1) {
+                            nodes.push(Node::Inl(x));
+                        }
+                        i += inner.len() + 1 + close_pos + close_tag.len() + 1;
+                        text_start = i;
+                    } else {
+                        i += 1;
+                    }
+                } else if (lower == "u" || lower == "ins") && depth < MAX_NEST {
+                    let close_tag = if lower == "u" { "</u>" } else { "</ins>" };
+                    if let Some(close_pos) = rest.get(inner.len() + 1..).and_then(|after| after.to_ascii_lowercase().find(close_tag)) {
+                        let content = &rest[inner.len() + 1..inner.len() + 1 + close_pos];
+                        flush!();
+                        let mut f = base.clone();
+                        f.underline = true;
+                        for x in parse_inlines(content, &f, depth + 1) {
+                            nodes.push(Node::Inl(x));
+                        }
+                        i += inner.len() + 1 + close_pos + close_tag.len() + 1;
+                        text_start = i;
+                    } else {
+                        i += 1;
+                    }
+                } else if (lower == "del" || lower == "s" || lower == "strike") && depth < MAX_NEST {
+                    let close_tag = match lower.as_str() {
+                        "del" => "</del>",
+                        "s" => "</s>",
+                        _ => "</strike>",
+                    };
+                    if let Some(close_pos) = rest.get(inner.len() + 1..).and_then(|after| after.to_ascii_lowercase().find(close_tag)) {
+                        let content = &rest[inner.len() + 1..inner.len() + 1 + close_pos];
+                        flush!();
+                        let mut f = base.clone();
+                        f.strike = true;
+                        for x in parse_inlines(content, &f, depth + 1) {
+                            nodes.push(Node::Inl(x));
+                        }
+                        i += inner.len() + 1 + close_pos + close_tag.len() + 1;
+                        text_start = i;
+                    } else {
+                        i += 1;
+                    }
                 } else {
                     i += 1;
                 }
@@ -1219,7 +1278,17 @@ fn inlines_md_impl(inlines: &[Inline], in_table: bool) -> String {
                 out.push_str(&code_span(&text));
             }
         } else {
-            out.push_str(&escape(&text).replace('\n', "\\\n").replace('\t', "    "));
+            let mut s = escape(&text).replace('\n', "\\\n").replace('\t', "    ");
+            if f.sub {
+                s = format!("<sub>{s}</sub>");
+            }
+            if f.sup {
+                s = format!("<sup>{s}</sup>");
+            }
+            if f.underline {
+                s = format!("<u>{s}</u>");
+            }
+            out.push_str(&s);
         }
     }
     close_all(&mut out, &mut stack);
@@ -1280,6 +1349,7 @@ fn table_md(t: &FTable, out: &mut Vec<String>) {
         .map(|a| match a {
             Some(Align::Center) => ":---:",
             Some(Align::Right) => "---:",
+            Some(Align::Left) => ":---",
             _ => "---",
         })
         .collect();
@@ -1679,5 +1749,32 @@ mod tests {
         let FBlock::Table(back_table2) = &back_flow2.blocks[0] else { panic!() };
         assert_eq!(back_table2.rows[1][0].text(), "a`b|c");
         assert_eq!(back_table2.rows[1][1].text(), "CRITICAL_DISTINCTIVE_INFO");
+    }
+
+    #[test]
+    fn table_left_alignment_and_inlines() {
+        let md = "| Left | Center | Right | Default |\n| :--- | :---: | ---: | --- |\n| L | C | R | D |";
+        let flow = parse(md);
+        let FBlock::Table(t) = &flow.blocks[0] else { panic!() };
+        let head_p: Vec<_> = t.rows[0].iter().map(|c| if let FBlock::Para(p) = &c.blocks[0] { p.align } else { None }).collect();
+        assert_eq!(head_p, vec![Some(Align::Left), Some(Align::Center), Some(Align::Right), None]);
+        let data_p: Vec<_> = t.rows[1].iter().map(|c| if let FBlock::Para(p) = &c.blocks[0] { p.align } else { None }).collect();
+        assert_eq!(data_p, vec![Some(Align::Left), Some(Align::Center), Some(Align::Right), None]);
+
+        let mut out = Vec::new();
+        table_md(t, &mut out);
+        let exp = out.join("\n");
+        assert!(exp.contains("| :--- | :---: | ---: | --- |"), "Exported: {exp}");
+    }
+
+    #[test]
+    fn inline_html_tags_wbr_sub_sup_u() {
+        let flow = parse("Word<wbr>break H<sub>2</sub>O and x<sup>2</sup> and <u>underlined</u> and <del>deleted</del>");
+        let FBlock::Para(p) = &flow.blocks[0] else { panic!() };
+        assert_eq!(p.text(), "Word\u{200B}break H2O and x2 and underlined and deleted");
+        assert!(p.inlines.iter().any(|i| matches!(i, Inline::Text(t, f) if t == "2" && f.sub)));
+        assert!(p.inlines.iter().any(|i| matches!(i, Inline::Text(t, f) if t == "2" && f.sup)));
+        assert!(p.inlines.iter().any(|i| matches!(i, Inline::Text(t, f) if t == "underlined" && f.underline)));
+        assert!(p.inlines.iter().any(|i| matches!(i, Inline::Text(t, f) if t == "deleted" && f.strike)));
     }
 }
