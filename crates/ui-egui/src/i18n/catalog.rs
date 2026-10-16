@@ -135,6 +135,13 @@ impl Catalog {
         self.plain.get(s).map(String::as_str)
     }
 
+    /// Entries translated (contexts count separately): the coverage floor of #1189.
+    /// Test-only: production code looks keys up instead of counting them.
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.plain.len() + self.contextual.len()
+    }
+
     /// The entry for `s` in `context`, else the plain one.
     pub fn in_context(&self, context: &str, s: &str) -> Option<&str> {
         self.contextual.get(&(context.to_string(), s.to_string())).map(String::as_str).or_else(|| self.plain(s))

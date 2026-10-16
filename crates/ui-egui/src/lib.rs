@@ -141,6 +141,11 @@ pub struct Services {
     /// Desktop: the text on the system clipboard, if any. Ctrl+V gets it from egui's paste event;
     /// the ribbon and context-menu Paste read it here (#584).
     pub clipboard_text: Option<Box<dyn Fn() -> Option<String>>>,
+    /// Desktop: write text and its HTML rendering to the system clipboard (Copy/Cut, #1243).
+    /// `None` keeps the text-only copy through egui.
+    pub clipboard_write: Option<Box<dyn Fn(&str, &str)>>,
+    /// Desktop: write a copied picture as image data (Copy/Cut, #375). `None` copies text only.
+    pub clipboard_write_image: Option<Box<dyn Fn(u32, u32, Vec<u8>)>>,
     /// Desktop: the HTML on the system clipboard — another program's formatted copy (a Word
     /// document, a web page) — if any. Paste keeps its formatting (#687); see [`system_clipboard`].
     pub clipboard_html: Option<Box<dyn Fn() -> Option<String>>>,
@@ -323,6 +328,15 @@ pub struct UiState {
     pub update_fields_before_print: bool,
     /// The custom dictionary (File › Options › Proofing, Add to Dictionary), kept between runs.
     pub dictionary: Vec<String>,
+    /// Hunspell dictionaries folder, searched first (#100, #1063); empty uses the default
+    /// locations (and `WORDCRAFT_DICTIONARIES` when the launcher passes it through).
+    pub dictionaries_dir: String,
+    /// Fit modes by file path, most recent first (#995).
+    pub doc_views: Vec<(String, DocViewMemory)>,
+    /// Reopen the last document at startup (#918).
+    pub reopen_last: bool,
+    /// The last opened or saved file (#918).
+    pub last_open: Option<String>,
 }
 
 /// The ribbon tab the app opens on, and the one it falls back to when the tab that was showing
@@ -333,6 +347,17 @@ pub const DEFAULT_TAB: &str = "Home";
 pub const MAX_RECENT: usize = 50;
 /// Most custom dictionary words read back from `ui.json`.
 pub const MAX_DICTIONARY: usize = 10_000;
+/// Most per-file fit modes remembered (#995).
+pub const MAX_DOC_VIEWS: usize = 100;
+
+/// A file's fit mode, most recent first (#995): OOXML has no slot for one-page vs
+/// multiple-pages, so a reopened file gets back the fit it was saved or last opened with.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DocViewMemory {
+    pub fit: String,
+    pub multi_page: bool,
+}
 
 impl Default for UiState {
     fn default() -> Self {
@@ -378,6 +403,10 @@ impl Default for UiState {
             print_backgrounds: false,
             update_fields_before_print: false,
             dictionary: Vec::new(),
+            dictionaries_dir: String::new(),
+            doc_views: Vec::new(),
+            reopen_last: true,
+            last_open: None,
         }
     }
 }
@@ -716,7 +745,11 @@ impl WordApp {
         }
         self.session.prefs = std::mem::take(&mut self.ui.editing);
         // The saved dictionaries folder (#1063) is searched from the start.
-        if let Some(f) = self.session.prefs.dictionaries_folder.as_deref() {
+        let dict_dir = self.session.prefs.dictionaries_folder.as_deref().filter(|f| !f.trim().is_empty()).or_else(|| {
+            let d = self.ui.dictionaries_dir.trim();
+            (!d.is_empty()).then_some(d)
+        });
+        if let Some(f) = dict_dir {
             wordcraft_engine::cmd::options::use_dictionaries_folder(Some(f));
         }
         self.session.read_aloud.set_rate(self.ui.read_aloud_rate);
@@ -822,6 +855,11 @@ impl WordApp {
             let e = tl!("No document is open. Create a document or open one first.").to_string();
             self.status(e.clone());
             return Err(e);
+        }
+        // The control channel has no Save-changes dialog to answer: refuse to discard unsaved
+        // changes without an explicit `"force": true`, as `run` asks instead (#1268).
+        if self.session.dirty && discards_document(id, &params) && params.get("force").and_then(Value::as_bool) != Some(true) {
+            return Err("the document has unsaved changes (pass {\"force\": true} to discard them)".into());
         }
         if let Some(r) = self.ui_command(id, &params) {
             return r;
@@ -933,7 +971,7 @@ impl WordApp {
         if let Ok(v) = &r {
             self.keep_web_font(id, &params, v);
         }
-        self.after_command(id);
+        self.after_command(id, &r);
         if let Err(e) = &r {
             self.status(e.clone());
         }
@@ -1014,6 +1052,11 @@ impl WordApp {
         };
         if !go {
             return Ok(json!({"done": false}));
+        }
+        // The user answered the prompt: the discarding command runs without asking again (#1268).
+        let mut params = params;
+        if let Some(o) = params.as_object_mut() {
+            o.insert("force".into(), Value::Bool(true));
         }
         self.execute_user(&then, params).map(|r| json!({"done": true, "result": r}))
     }
@@ -1171,7 +1214,7 @@ impl WordApp {
         false
     }
 
-    fn after_command(&mut self, id: &str) {
+    fn after_command(&mut self, id: &str, r: &Result<Value, String>) {
         options::sync(self);
         self.canvas.caret_visible_since = now_ms();
         if id == "view.outline" {
@@ -1199,6 +1242,25 @@ impl WordApp {
             self.ui.recent.insert(0, p);
             self.ui.recent.truncate(MAX_RECENT);
         }
+        // #995: OOXML has no slot for the fit mode, so remember each file's and give it back
+        // on reopen (a saved document's own view settings, applied first, always win).
+        // #820: the Paste Options widget lives until another engine command runs.
+        if matches!(id, "edit.paste" | "edit.pasteMerge" | "edit.pasteText") {
+            self.canvas.paste_options =
+                if self.session.view.read_mode { None } else { crate::canvas::caret_screen(self).map(|(p, h)| p + egui::vec2(0.0, h + 4.0)) };
+        } else if !id.starts_with("ui.") {
+            self.canvas.paste_options = None;
+        }
+        // #918: the last opened file, for reopening at startup.
+        if let Ok(v) = r {
+            if matches!(id, "file.save" | "file.saveAs") && v.get("saved").and_then(Value::as_bool) == Some(true) {
+                self.remember_doc_view();
+                self.ui.last_open = self.session.path.as_ref().map(|p| p.to_string_lossy().to_string());
+            } else if id == "file.open" && v.get("path").and_then(Value::as_str).is_some() {
+                self.restore_doc_view();
+                self.ui.last_open = self.session.path.as_ref().map(|p| p.to_string_lossy().to_string());
+            }
+        }
         if !self.session.status.is_empty() {
             // Engine messages are English; the catalog translates the ones it knows.
             let s = std::mem::take(&mut self.session.status);
@@ -1210,6 +1272,27 @@ impl WordApp {
         {
             crate::table_pen::stop(self);
         }
+    }
+
+    /// Remember the current file's fit mode for its next open (#995).
+    fn remember_doc_view(&mut self) {
+        let Some(path) = self.session.path.as_ref().map(|p| p.to_string_lossy().to_string()) else { return };
+        let view = DocViewMemory { fit: self.session.view.fit.clone(), multi_page: self.session.view.multi_page };
+        self.ui.doc_views.retain(|(p, _)| *p != path);
+        self.ui.doc_views.insert(0, (path, view));
+        self.ui.doc_views.truncate(MAX_DOC_VIEWS);
+    }
+
+    /// Give a reopened file back the fit mode it was saved or last opened with (#995). The
+    /// file's own view settings (applied by `Session::set_document`) always win for mode and
+    /// zoom; only the fit, which OOXML cannot express, comes from memory.
+    fn restore_doc_view(&mut self) {
+        let Some(path) = self.session.path.as_ref().map(|p| p.to_string_lossy().to_string()) else { return };
+        let Some((_, view)) = self.ui.doc_views.iter().find(|(p, _)| *p == path).cloned() else { return };
+        self.session.view.fit = view.fit.clone();
+        self.session.view.multi_page = view.multi_page;
+        self.session.view.single_column = matches!(view.fit.as_str(), "onePage" | "pageWidth");
+        self.remember_doc_view();
     }
 
     /// Requests commands make of the UI (open a dialog…).
@@ -2008,7 +2091,17 @@ impl WordApp {
             chrome::title_bar(self, ui);
             ribbon::show(self, ui);
             chrome::status_bar(self, ui);
-            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |_| {});
+            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
+                ui.centered_and_justified(|ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.label(egui::RichText::new(tl!("No document open")).font(theme::semibold(16.0)).color(t.text_dim));
+                        ui.add_space(10.0);
+                        if ui.button(egui::RichText::new(tl!("Open File menu (Start screen)")).font(theme::medium(13.0))).clicked() {
+                            let _ = self.run("ui.backstage", json!({"value": true, "page": "home"}));
+                        }
+                    });
+                });
+            });
         } else {
             chrome::title_bar(self, ui);
             if !self.session.view.focus_mode {
@@ -2302,6 +2395,8 @@ fn input_dialog(id: &str, params: &Value) -> Option<&'static str> {
         "chart.editData" if !["data", "categories", "series"].into_iter().any(has) => Some("chartData"),
         // Table Properties without settings shows the dialog (with settings it applies them).
         "table.properties" if params.as_object().is_none_or(|m| m.is_empty()) => Some("tableProperties"),
+        // Format Page Numbers without settings shows the dialog (#1113).
+        "layout.pageNumberFormat" if params.as_object().is_none_or(|m| m.is_empty()) => Some("pageNumberFormat"),
         // Formula without one asks for it, suggested from the numbers next to the cell (#1201).
         "table.formula" if !has("formula") => Some("tableFormula"),
         // Sort without settings asks for the column, order and header row (#1200).
@@ -2725,6 +2820,14 @@ mod tests {
         assert!(!a.session.dirty && !a.has_document());
         assert!(a.close_requested(), "closing asks nothing");
         assert!(a.dialog.is_none());
+
+        // In the empty window, clicking the File tab opens Backstage (#1129):
+        h.get_by_label("File").click();
+        h.run_steps(4);
+        assert!(h.state().ui.backstage, "File tab opens Backstage");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(4);
+        assert!(!h.state().ui.backstage);
 
         let mut b = app();
         b.run("ui.startScreen", json!({"value": false})).unwrap();
@@ -3990,6 +4093,55 @@ mod tests {
         assert!(!body_text(&a).trim().is_empty());
     }
 
+    /// #918: the last opened file is recorded for reopening at startup.
+    #[test]
+    fn last_opened_file_is_recorded() {
+        let dir = scratch("last-open");
+        let path = dir.join("novel.docx");
+        let p = path.to_string_lossy().to_string();
+        let mut a = app();
+        assert!(a.ui.reopen_last, "reopening is on by default");
+        assert_eq!(a.ui.last_open, None);
+        a.execute("file.save", json!({"path": p})).unwrap();
+        assert_eq!(a.ui.last_open.as_deref(), Some(p.as_str()));
+        a.execute("file.open", json!({"path": p})).unwrap();
+        assert_eq!(a.ui.last_open.as_deref(), Some(p.as_str()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #995: a reopened file gets back the fit mode it was saved with (OOXML cannot express
+    /// one-page vs multiple-pages, so the app remembers it per file).
+    #[test]
+    fn reopened_files_keep_their_fit() {
+        let dir = scratch("fit");
+        let path = dir.join("fit.docx");
+        let p = path.to_string_lossy().to_string();
+        let mut a = app();
+        a.run("view.zoom", json!({"value": "onePage"})).unwrap();
+        a.run("file.save", json!({"path": p})).unwrap();
+        a.run("view.zoom", json!({"value": "multiplePages"})).unwrap();
+        a.run("file.open", json!({"path": p})).unwrap();
+        assert_eq!(a.session.view.fit, "onePage");
+        assert!(!a.session.view.multi_page);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #1268: the control channel has no dialog to answer, so `execute` refuses to discard
+    /// unsaved changes without `"force": true` instead of quitting on them.
+    #[test]
+    fn execute_refuses_to_discard_unsaved_changes() {
+        let mut a = typed();
+        let err = a.execute("file.close", json!({})).unwrap_err();
+        assert!(err.contains("unsaved"), "{err}");
+        assert!(body_text(&a).contains(UNSAVED), "nothing was discarded");
+        assert!(a.session.dirty);
+        assert!(!a.quit_requested, "the app doesn't quit on unsaved work");
+        a.execute("file.close", json!({"force": true})).unwrap();
+        assert!(a.quit_requested, "a forced close still closes");
+        let mut clean = app();
+        clean.execute("file.close", json!({})).unwrap();
+    }
+
     /// #55: a password-protected document asks for its password (after Save Changes) instead of
     /// opening blank; scripts get the error instead of a dialog; Encrypt with Password asks for one.
     #[test]
@@ -4562,7 +4714,7 @@ mod tests {
         assert_eq!(prompt(&a), Some("saveChanges"));
         let asked = a.dialog.clone();
         for command in [
-            json!({"command": "file.open", "params": {"path": path.to_string_lossy()}}),
+            json!({"command": "file.open", "params": {"path": path.to_string_lossy(), "force": true}}),
             json!({"command": "text.insert", "params": {"text": "Edited "}}),
         ] {
             let (req, _reply) = ControlRequest::new("engine.execute", command);
@@ -5266,12 +5418,19 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Scripts and agents (control channel, MCP bridge) are never asked anything.
+    /// Scripts and agents (control channel, MCP bridge) are never asked anything: discarding
+    /// unsaved work is an error without `"force": true` (#1268), never a prompt.
     #[test]
     fn programmatic_commands_never_prompt() {
         let ctx = egui::Context::default();
         let mut a = typed();
         let (req, _reply) = ControlRequest::new("engine.execute", json!({"command": "file.new"}));
+        let outcome = control::handle(&mut a, &ctx, &req);
+        let refused = matches!(&outcome, control::Outcome::Done(v) if v.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("unsaved")));
+        assert!(refused, "discarding without force is an error");
+        assert_eq!(prompt(&a), None);
+        assert!(body_text(&a).contains(UNSAVED), "nothing was discarded");
+        let (req, _reply) = ControlRequest::new("engine.execute", json!({"command": "file.new", "params": {"force": true}}));
         control::handle(&mut a, &ctx, &req);
         assert_eq!(prompt(&a), None);
         assert!(!body_text(&a).contains(UNSAVED));
@@ -5441,7 +5600,8 @@ mod tests {
         }
     }
 
-    /// Scripts and agents (control channel, MCP bridge) replace the document without a question.
+    /// Scripts and agents (control channel, MCP bridge) replace the document without a
+    /// question once they pass `"force": true` (#1268); without it the call is an error.
     #[test]
     fn programmatic_mailings_never_prompt() {
         let ctx = egui::Context::default();
@@ -5450,6 +5610,13 @@ mod tests {
             a.execute("mailings.recipients", json!({"csv": "Name\nAda"})).unwrap();
             let document = a.session.document_id();
             let (req, _reply) = ControlRequest::new("engine.execute", json!({"command": id}));
+            let outcome = control::handle(&mut a, &ctx, &req);
+            let refused =
+                matches!(&outcome, control::Outcome::Done(v) if v.get("error").and_then(|e| e.as_str()).is_some_and(|e| e.contains("unsaved")));
+            assert!(refused, "{id}: discarding without force is an error");
+            assert_eq!(prompt(&a), None, "{id}");
+            assert_eq!(a.session.document_id(), document, "{id}: nothing was discarded");
+            let (req, _reply) = ControlRequest::new("engine.execute", json!({"command": id, "params": {"force": true}}));
             control::handle(&mut a, &ctx, &req);
             assert_eq!(prompt(&a), None, "{id}");
             assert_ne!(a.session.document_id(), document, "{id}");
@@ -5465,7 +5632,7 @@ mod tests {
         for id in MAILINGS {
             let mut a = typed();
             a.execute("mailings.recipients", json!({"csv": "Name\nAda"})).unwrap();
-            a.execute(id, json!({})).unwrap();
+            a.execute(id, json!({"force": true})).unwrap();
             let result = body_text(&a);
             let b = a.session.document_id();
             assert!(a.session.dirty, "{id}: the result is unsaved");
@@ -5509,6 +5676,18 @@ mod tests {
             assert!(on_file(&path).contains("Signed contract"), "{id}: the original is untouched");
             let _ = std::fs::remove_dir_all(&dir);
         }
+    }
+
+    /// #184: AutoSave is off per document until it is saved where AutoSave can write: an
+    /// unsaved document is never written and never ambushed with Save As.
+    #[test]
+    fn autosave_never_touches_unsaved_documents() {
+        let mut a = typed();
+        assert!(a.session.path.is_none() && a.session.dirty);
+        assert!(!a.autosaves());
+        a.autosave_tick(now_ms() + 10_000.0);
+        assert!(a.session.ui_requests.is_empty(), "no Save As ambush");
+        assert!(a.session.dirty);
     }
 
     /// Surfaces finding 3: AutoSave rewrote any opened .docx ~2.5 s after the first keystroke,
@@ -5680,6 +5859,24 @@ mod tests {
         let mut second = app();
         second.apply_prefs(serde_json::from_slice(&saved).unwrap());
         assert!(second.session.view.dark_mode);
+    }
+
+    /// #100: a saved dictionaries folder is restored and takes effect for Hunspell lookups.
+    #[test]
+    fn dictionaries_folder_pref_is_restored_and_searched_first() {
+        let mut a = app();
+        let dir = std::env::temp_dir().join(format!("wordcraft-dictpref-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let saved = serde_json::json!({"dictionariesDir": dir.to_string_lossy()}).to_string();
+        a.apply_prefs(serde_json::from_str(&saved).unwrap());
+        assert_eq!(a.ui.dictionaries_dir, dir.to_string_lossy());
+        let first = wordcraft_engine::proof::hunspell::search_dirs(None).into_iter().next();
+        assert_eq!(first.as_deref(), Some(dir.as_path()));
+        wordcraft_engine::proof::hunspell::set_dictionary_dir(None);
+        let _ = std::fs::remove_dir_all(&dir);
+        let back = serde_json::to_string(&a.prefs()).unwrap();
+        assert!(back.contains("dictionariesDir"), "{back}");
     }
 
     #[test]

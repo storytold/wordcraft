@@ -2630,6 +2630,12 @@ preview	Title	Esempio
 	Existing File or Web Page	File o pagina Web esistente
 	Link to:	Collega a:
 	Place in This Document	Posizione nel documento
+
+# Templates (#1227) and reopen last document (#918)
+	APA paper	Documento APA
+	MLA paper	Documento MLA
+	Reopen the last document at startup	Riapri l'ultimo documento all'avvio
+	On: with nothing else to open, WordCraft reopens the file it had open instead of the Start screen.	Attivato: se non c'è altro da aprire, WordCraft riapre il file che aveva aperto invece della schermata iniziale.
 # Table Layout › Sort dialog (#1205)
 	Column {n}	Colonna {n}
 	Header row	Riga di intestazione

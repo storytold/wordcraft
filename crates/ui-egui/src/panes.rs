@@ -146,36 +146,46 @@ fn nav(app: &mut WordApp, ui: &mut Ui) {
     egui::ScrollArea::vertical().show(ui, |ui| match app.ui.nav_tab.as_str() {
         "pages" => {
             let l = app.session.layout();
-            for (i, p) in l.pages.iter().enumerate() {
-                let label = crate::i18n::fmt(tl!("Page {page}"), &[("page", &p.number.to_string())]);
-                if ui.selectable_label(app.session.page_hint == i, label).clicked() {
-                    let _ = app.run("edit.goto", json!({"page": i + 1}));
+            let row_height = ui.spacing().interact_size.y;
+            let total_rows = l.pages.len();
+            egui::ScrollArea::vertical().show_rows(ui, row_height, total_rows, |ui, row_range| {
+                for i in row_range {
+                    let p = &l.pages[i];
+                    let label = crate::i18n::fmt(tl!("Page {page}"), &[("page", &p.number.to_string())]);
+                    if ui.selectable_label(app.session.page_hint == i, label).clicked() {
+                        let _ = app.run("edit.goto", json!({"page": i + 1}));
+                    }
                 }
-            }
+            });
         }
         "results" => {
             let results = app.session.find.results.clone();
             ui.label(egui::RichText::new(format!("{} results", results.len())).small().weak());
-            for (a, b) in results.iter().take(500) {
-                let Some(p) = app.session.doc.para_at(a) else { continue };
-                let from = p.clamp(a.off.saturating_sub(30));
-                let to = p.clamp((b.off + 40).min(p.len()));
-                let pre = p.text.get(from..a.off).unwrap_or("");
-                let hit = p.text.get(a.off..b.off).unwrap_or("");
-                let post = p.text.get(b.off..to).unwrap_or("");
-                let mut job = egui::text::LayoutJob::default();
-                let fmt = |c| egui::TextFormat { font_id: regular(12.0), color: c, ..Default::default() };
-                job.append(pre, 0.0, fmt(ui.visuals().text_color()));
-                // The match is marked the way Find marks it on the page, per theme (#656).
-                let mark = Tokens::get(ui.ctx()).find_highlight;
-                job.append(hit, 0.0, egui::TextFormat { font_id: semibold(12.0), background: mark, color: ui.visuals().text_color(), ..Default::default() });
-                job.append(post, 0.0, fmt(ui.visuals().text_color()));
-                job.wrap.max_width = ui.available_width();
-                if ui.add(egui::Button::new(job).frame(false)).clicked() {
-                    let _ = app.run("select.range", json!({"anchor": a, "focus": b}));
+            let row_height = ui.spacing().interact_size.y + 1.0; // Approximate height including separator
+            let total_rows = results.len().min(500);
+            egui::ScrollArea::vertical().show_rows(ui, row_height, total_rows, |ui, row_range| {
+                for i in row_range {
+                    let (a, b) = &results[i];
+                    let Some(p) = app.session.doc.para_at(a) else { continue };
+                    let from = p.clamp(a.off.saturating_sub(30));
+                    let to = p.clamp((b.off + 40).min(p.len()));
+                    let pre = p.text.get(from..a.off).unwrap_or("");
+                    let hit = p.text.get(a.off..b.off).unwrap_or("");
+                    let post = p.text.get(b.off..to).unwrap_or("");
+                    let mut job = egui::text::LayoutJob::default();
+                    let fmt = |c| egui::TextFormat { font_id: regular(12.0), color: c, ..Default::default() };
+                    job.append(pre, 0.0, fmt(ui.visuals().text_color()));
+                    // The match is marked the way Find marks it on the page, per theme (#656).
+                    let mark = Tokens::get(ui.ctx()).find_highlight;
+                    job.append(hit, 0.0, egui::TextFormat { font_id: semibold(12.0), background: mark, color: ui.visuals().text_color(), ..Default::default() });
+                    job.append(post, 0.0, fmt(ui.visuals().text_color()));
+                    job.wrap.max_width = ui.available_width();
+                    if ui.add(egui::Button::new(job).frame(false)).clicked() {
+                        let _ = app.run("select.range", json!({"anchor": a, "focus": b}));
+                    }
+                    ui.separator();
                 }
-                ui.separator();
-            }
+            });
         }
         _ => {
             let caret = app.session.sel.focus.clone();
@@ -197,16 +207,22 @@ fn nav(app: &mut WordApp, ui: &mut Ui) {
             }
             if items.is_empty() {
                 ui.label(egui::RichText::new(tl!("Create an interactive outline of your document.\n\nIt's a great way to keep track of where you are or quickly move your content around.\n\nTo get started, go to the Home tab and apply Heading styles to the headings in your document.")).weak());
-            }
-            for (i, (path, lv, txt)) in items.into_iter().enumerate() {
-                if nav_heading(ui, lv, &txt, current == Some(i)).clicked() {
-                    let _ = app.run("caret.set", json!({"pos": Pos { story: StoryRef::Body, path, off: 0 }}));
-                    // Align the chosen heading's page immediately against this pane, rather
-                    // than the indeterminate minimum movement from scroll_to_rect.
-                    app.canvas.nav_to_caret = true;
-                    app.canvas.scroll_to_caret = false;
-                    app.canvas.want_focus = true;
-                }
+            } else {
+                let row_height = ui.spacing().interact_size.y;
+                let total_rows = items.len();
+                egui::ScrollArea::vertical().show_rows(ui, row_height, total_rows, |ui, row_range| {
+                    for i in row_range {
+                        let (path, lv, txt) = &items[i];
+                        if nav_heading(ui, *lv, txt, current == Some(i)).clicked() {
+                            let _ = app.run("caret.set", json!({"pos": Pos { story: StoryRef::Body, path: path.clone(), off: 0 }}));
+                            // Align the chosen heading's page immediately against this pane, rather
+                            // than the indeterminate minimum movement from scroll_to_rect.
+                            app.canvas.nav_to_caret = true;
+                            app.canvas.scroll_to_caret = false;
+                            app.canvas.want_focus = true;
+                        }
+                    }
+                });
             }
         }
     });

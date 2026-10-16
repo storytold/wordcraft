@@ -2613,6 +2613,12 @@ preview	Title	Ukázka
 	Existing File or Web Page	Existující soubor nebo webová stránka
 	Link to:	Odkaz na:
 	Place in This Document	Místo v tomto dokumentu
+
+# Templates (#1227) and reopen last document (#918)
+	APA paper	Práce APA
+	MLA paper	Práce MLA
+	Reopen the last document at startup	Znovu otevřít poslední dokument při spuštění
+	On: with nothing else to open, WordCraft reopens the file it had open instead of the Start screen.	Zapnuto: pokud není co jiného otevřít, WordCraft znovu otevře naposledy otevřený soubor místo úvodní obrazovky.
 # Table Layout › Sort dialog (#1205)
 	Column {n}	Sloupec {n}
 	Header row	Řádek záhlaví

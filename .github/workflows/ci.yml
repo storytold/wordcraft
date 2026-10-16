@@ -1,0 +1,45 @@
+# Run the full quality gate on every pull request and on main (#974, #754).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: xtask ci (Linux x86_64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build and software-rendering dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev \
+            libxi-dev libgtk-3-dev libfontconfig1-dev libfreetype-dev libvulkan1 mesa-vulkan-drivers
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Full gate (fmt, clippy, tests, assets, layers, wasm)
+        run: cargo xtask ci

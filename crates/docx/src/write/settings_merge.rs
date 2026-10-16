@@ -14,6 +14,8 @@
 
 /// Children of `w:settings` the model writes (`super::settings_xml`).
 const OWNED: &[&str] = &[
+    "w:view",
+    "w:zoom",
     "w:removePersonalInformation",
     "w:removeDateAndTime",
     "w:displayBackgroundShape",

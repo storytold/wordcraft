@@ -221,45 +221,44 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // No document open (#1129): nothing to share, edit or comment on.
-                    if !app.has_document() {
-                        ui.disable();
-                    }
                     // Share, Editing mode, Comments, drawn first so the tabs get only the room
                     // left of them (#897).
-                    let share = tl!("Share");
-                    let share_w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(share.to_string(), medium(12.0), t.text).size().x);
-                    let (r, resp) = ui.allocate_exact_size(vec2((share_w + 36.0).max(74.0), 24.0), Sense::click());
-                    ui.painter().rect_filled(r, 4.0, if resp.hovered() { t.accent_text } else { t.accent });
-                    icons::paint(
-                        ui.painter(),
-                        Rect::from_center_size(pos2(r.min.x + 14.0, r.center().y), vec2(14.0, 14.0)),
-                        "share",
-                        t.on_accent,
-                        t.on_accent,
-                    );
-                    ui.painter().text(pos2(r.min.x + 26.0, r.center().y), Align2::LEFT_CENTER, share, medium(12.0), t.on_accent);
-                    if resp.on_hover_text(tl!("Export a copy to share (PDF, Word document)")).clicked() {
-                        let _ = app.run("ui.backstage", json!({"value": true, "page": "export"}));
-                    }
-                    ui.add_space(6.0);
-                    let track = app.session.doc.settings.track_changes;
-                    let mode =
-                        crate::widgets::icon_text_menu_button(ui, "pencil", if track { tl!("Reviewing") } else { tl!("Editing") }, regular(12.0));
-                    egui::Popup::menu(&mode).show(|ui| {
-                        if ui.selectable_label(!track, tl!(tl!("Editing — edit the document directly"))).clicked() {
-                            let _ = app.run("review.trackChanges", json!({"value": false}));
-                            ui.close();
+                    // No document open (#1129): nothing to share, edit or comment on.
+                    ui.add_enabled_ui(app.has_document(), |ui| {
+                        let share = tl!("Share");
+                        let share_w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(share.to_string(), medium(12.0), t.text).size().x);
+                        let (r, resp) = ui.allocate_exact_size(vec2((share_w + 36.0).max(74.0), 24.0), Sense::click());
+                        ui.painter().rect_filled(r, 4.0, if resp.hovered() { t.accent_text } else { t.accent });
+                        icons::paint(
+                            ui.painter(),
+                            Rect::from_center_size(pos2(r.min.x + 14.0, r.center().y), vec2(14.0, 14.0)),
+                            "share",
+                            t.on_accent,
+                            t.on_accent,
+                        );
+                        ui.painter().text(pos2(r.min.x + 26.0, r.center().y), Align2::LEFT_CENTER, share, medium(12.0), t.on_accent);
+                        if resp.on_hover_text(tl!("Export a copy to share (PDF, Word document)")).clicked() {
+                            let _ = app.run("ui.backstage", json!({"value": true, "page": "export"}));
                         }
-                        if ui.selectable_label(track, tl!(tl!("Reviewing — edits become suggestions"))).clicked() {
-                            let _ = app.run("review.trackChanges", json!({"value": true}));
-                            ui.close();
+                        ui.add_space(6.0);
+                        let track = app.session.doc.settings.track_changes;
+                        let mode =
+                            crate::widgets::icon_text_menu_button(ui, "pencil", if track { tl!("Reviewing") } else { tl!("Editing") }, regular(12.0));
+                        egui::Popup::menu(&mode).show(|ui| {
+                            if ui.selectable_label(!track, tl!(tl!("Editing — edit the document directly"))).clicked() {
+                                let _ = app.run("review.trackChanges", json!({"value": false}));
+                                ui.close();
+                            }
+                            if ui.selectable_label(track, tl!(tl!("Reviewing — edits become suggestions"))).clicked() {
+                                let _ = app.run("review.trackChanges", json!({"value": true}));
+                                ui.close();
+                            }
+                        });
+                        ui.add_space(4.0);
+                        if crate::widgets::icon_text_button(ui, "comment", tl!("Comments"), regular(12.0)).clicked() {
+                            let _ = app.run("view.commentsPane", json!({}));
                         }
                     });
-                    ui.add_space(4.0);
-                    if crate::widgets::icon_text_button(ui, "comment", tl!("Comments"), regular(12.0)).clicked() {
-                        let _ = app.run("view.commentsPane", json!({}));
-                    }
                     ui.add_space(8.0);
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         // The tabs that don't fit go into a » menu at the end of the strip. File, the
@@ -281,16 +280,24 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             // A custom tab's name is the user's own text: shown as typed.
                             let shown = if custom { tab } else { tl!(tab) };
                             let w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(shown.to_string(), medium(12.5), t.text).size().x) + 18.0;
-                            let (r, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
+                            // File and Help always work; other tabs need an open document (#1129).
+                            let tab_on = app.has_document() || tab == "File" || tab == "Help";
+                            let (r, resp) = ui.add_enabled_ui(tab_on, |ui| ui.allocate_exact_size(vec2(w, 30.0), Sense::click())).inner;
                             if app.ui.keytips == crate::keytips::Phase::Tabs {
                                 crate::keytips::record_tab(r, tab, &app.ui.keytip_prefix, &mut app.keytip_rects);
                             }
                             let active = app.ui.tab == tab && !app.ui.backstage;
                             resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, active, shown));
-                            if resp.hovered() && !active {
+                            if tab_on && resp.hovered() && !active {
                                 ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, t.hover);
                             }
-                            let color = if contextual || active { t.accent_text } else { t.text };
+                            let color = if !tab_on {
+                                t.text_disabled
+                            } else if contextual || active {
+                                t.accent_text
+                            } else {
+                                t.text
+                            };
                             ui.painter().text(r.center(), Align2::CENTER_CENTER, shown, if active { semibold(12.5) } else { medium(12.5) }, color);
                             if active {
                                 let u = Rect::from_center_size(pos2(r.center().x, r.max.y - 2.0), vec2(w - 16.0, 3.0));
@@ -319,7 +326,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             ui.painter().text(r.center(), Align2::CENTER_CENTER, "»", medium(12.5), t.text);
                             egui::Popup::menu(&resp).show(|ui| {
                                 for (tab, shown) in left_out {
-                                    if ui.selectable_label(false, shown).clicked() {
+                                    let tab_on = app.has_document() || tab == "File" || tab == "Help";
+                                    if ui.add_enabled(tab_on, egui::Button::new(shown)).clicked() {
                                         let _ = app.run("ui.tab", json!({"tab": tab}));
                                         ui.close();
                                     }
@@ -2609,6 +2617,16 @@ fn table_layout(app: &mut WordApp, ui: &mut Ui) {
             let g = app.session.view.table_gridlines;
             small(ui, app, "gridlines", Some("View Gridlines"), "View Gridlines", "table.viewGridlines", json!({}), g);
             small(ui, app, "properties", Some("Properties"), "Table Properties", "table.properties", json!({}), false);
+            // Right-to-left tables (#529): the first column stands at the right.
+            let rtl = app
+                .session
+                .sel
+                .focus
+                .path
+                .cell()
+                .and_then(|(tp, _, _)| app.session.doc.table(app.session.sel.focus.story, &tp))
+                .is_some_and(|t| t.props.bidi_visual);
+            small(ui, app, "textRtl", Some("Right-to-Left Table"), "Right-to-Left Table", "table.rtl", json!({}), rtl);
         });
     });
     group(ui, "Draw", None, app, |ui, app| {

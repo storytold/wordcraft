@@ -642,6 +642,49 @@ fn notes_round_trip() {
     assert_eq!(r.settings.endnote_format, NumFormat::UpperRoman);
 }
 
+/// #999: a page background texture (media + fill type) survives a save.
+#[test]
+fn page_background_texture_round_trips() {
+    use wordcraft_doc::PagePicture;
+    let mut d = Document::new();
+    let key = d.add_media(tiny_png(), "png");
+    d.settings.page_color = Some(wordcraft_doc::Rgb(0xFF, 0xFF, 0xCC));
+    d.settings.page_picture = Some(PagePicture { media: key.clone(), fill_type: "tile".into(), title: "Parchment".into() });
+    let r = rt(&d);
+    assert_eq!(r.settings.page_color, Some(wordcraft_doc::Rgb(0xFF, 0xFF, 0xCC)));
+    let bg = r.settings.page_picture.as_ref().expect("background kept");
+    assert_eq!((bg.fill_type.as_str(), bg.title.as_str()), ("tile", "Parchment"));
+    assert_eq!(r.media.get(&bg.media).map(|b| b.len()), Some(tiny_png().len()));
+}
+
+/// #999: a real file's `v:background`/`v:fill` texture is picked up, not dropped.
+#[test]
+fn page_background_texture_is_read() {
+    use std::io::Write;
+    let doc = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><w:background w:color="FFFFCC"><v:background id="_x0000_s1025"><v:fill r:id="rId2" o:title="Parchment" type="tile"/></v:background></w:background><w:body><w:p><w:r><w:t>Hi</w:t></w:r></w:p></w:body></w:document>"#;
+    let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/></Relationships>"#;
+    let root_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, bytes) in [
+        ("_rels/.rels", root_rels.as_bytes()),
+        ("word/document.xml", doc.as_bytes()),
+        ("word/_rels/document.xml.rels", rels.as_bytes()),
+        ("word/media/image1.png", tiny_png().as_slice()),
+    ] {
+        zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        zw.write_all(bytes).unwrap();
+    }
+    let bytes = zw.finish().unwrap().into_inner();
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    let bg = d.settings.page_picture.as_ref().expect("background read");
+    assert_eq!((bg.fill_type.as_str(), bg.title.as_str()), ("tile", "Parchment"));
+    assert!(d.media.get(&bg.media).is_some_and(|b| b.len() == tiny_png().len()));
+    // …and a save keeps it.
+    let r = rt(&d);
+    assert!(r.settings.page_picture.is_some());
+    assert!(r.media.values().any(|b| b.len() == tiny_png().len()));
+}
+
 /// #385: footnote and endnote options round-trip for the document (settings) and per section
 /// (`w:sectPr`), in schema order: `w:footnotePr` and `w:endnotePr` before `w:type`.
 #[test]

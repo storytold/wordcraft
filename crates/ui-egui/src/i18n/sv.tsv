@@ -2647,3 +2647,9 @@ preview	Title	Titel
 	Bottom Right Cell	Nedre högra cellen
 	Inside Horizontal Border	Inre vågrät kantlinje
 	Inside Vertical Border	Inre lodrät kantlinje
+
+# Templates (#1227) and reopen last document (#918)
+	APA paper	APA-uppsats
+	MLA paper	MLA-uppsats
+	Reopen the last document at startup	Öppna det senaste dokumentet igen vid start
+	On: with nothing else to open, WordCraft reopens the file it had open instead of the Start screen.	På: när inget annat ska öppnas öppnar WordCraft den tidigare öppna filen igen i stället för startskärmen.

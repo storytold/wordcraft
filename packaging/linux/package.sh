@@ -14,6 +14,7 @@
 # glibc 2.35) so the binaries run on newer ones. Optional: desktop-file-validate, appstreamcli,
 # zsyncmake (the zsync package) for the AppImage's .zsync.
 set -euo pipefail
+umask 022
 # shellcheck source=../env.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 HERE="$ROOT/packaging/linux"
@@ -67,6 +68,22 @@ mkdir -p "$STAGE/usr/share/icons"
 cp -R "$ROOT/assets/app-icon/hicolor" "$STAGE/usr/share/icons/"
 mkdir -p "$STAGE/usr/share/doc/wordcraft"
 copy_docs "$STAGE/usr/share/doc/wordcraft"
+install -Dm644 "$HERE/copyright" "$STAGE/usr/share/doc/wordcraft/copyright"
+# Minimal Debian changelog (nfpm writes no upstream changelog of its own).
+CHANGE_DATE="$(date -u -d "$WORDCRAFT_BUILD_DATE" +"%a, %d %b %Y 00:00:00 +0000")"
+{
+  echo "wordcraft ($VERSION-1) stable; urgency=medium"
+  echo
+  echo "  * WordCraft $VERSION for Linux $ARCH."
+  echo
+  echo " -- WordCraft maintainers <wordcraft@storyteller.ai>  $CHANGE_DATE"
+} | gzip -9n >"$STAGE/usr/share/doc/wordcraft/changelog.Debian.gz"
+chmod 644 "$STAGE/usr/share/doc/wordcraft/changelog.Debian.gz"
+mkdir -p "$STAGE/usr/share/man/man1"
+for m in wordcraft wordcraft-cli; do
+  gzip -9n -c "$HERE/$m.1" >"$STAGE/usr/share/man/man1/$m.1.gz"
+  chmod 644 "$STAGE/usr/share/man/man1/$m.1.gz"
+done
 
 if command -v desktop-file-validate >/dev/null; then
   desktop-file-validate "$STAGE/usr/share/applications/$APP_ID.desktop"

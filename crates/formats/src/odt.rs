@@ -2490,6 +2490,27 @@ mod tests {
     }
 
     #[test]
+    fn unsafe_link_targets_export_as_plain_text() {
+        // #679: `javascript:` and friends must not reach `xlink:href` in ODT either.
+        use wordcraft_doc::{CharProps, Paragraph, para_block};
+        let mut d = Document::new();
+        let mut p = Paragraph::with_text("", CharProps::default());
+        for (text, l) in [("script", "javascript:alert(1)"), ("web", "https://ok.example/x")] {
+            let n = p.len();
+            p.insert_text(n, text, &CharProps { link: Some(l.to_string()), ..Default::default() }).unwrap();
+            let n = p.len();
+            p.insert_text(n, " ", &CharProps::default()).unwrap();
+        }
+        d.body = vec![para_block(p)];
+        let bytes = export(&d).unwrap();
+        let mut z = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let mut xml = String::new();
+        z.by_name("content.xml").unwrap().read_to_string(&mut xml).unwrap();
+        assert!(!xml.to_ascii_lowercase().contains("javascript"), "{xml}");
+        assert!(xml.contains("https://ok.example/x"), "{xml}");
+    }
+
+    #[test]
     fn text_after_a_drawing_shape_stays_in_its_paragraph() {
         // #1654: a shape's own text:p closed the paragraph it is anchored in, and the text after
         // the shape was dropped. Shapes are skipped like text boxes; the paragraph keeps its text.

@@ -488,14 +488,19 @@ pub fn iso_to_dttm(s: &str) -> Option<u32> {
 /// RTF text of a document.
 pub fn export(doc: &Document) -> String {
     let flow = model::from_doc_tracked(doc);
-    let base_font = doc.styles.default_chr.font.clone().unwrap_or_else(|| wordcraft_doc::styles::BODY_FONT.to_string());
+    // The base font is what unstyled text shows in: the Normal style resolved, so a modified
+    // Normal round-trips instead of falling back to the document defaults (#1264).
+    let normal = doc.styles.resolve_char_in(Some("Normal"), None, &wordcraft_doc::CharProps::default());
+    let base_font = normal.font;
+    let base_size = normal.size;
     let mut w = Writer { t: Tables { fonts: vec![base_font], colors: Vec::new() }, lists: Vec::new(), authors: None };
     let mut body = String::new();
     w.blocks(&flow.blocks, false, "\\par", &mut body, 0);
-    export_with(&flow.meta, &w, &body, &doc.last_section)
+    let rp = doc.styles.resolve_para_in(&wordcraft_doc::ParaProps { style: Some("Normal".into()), ..Default::default() }, None);
+    export_with(&flow.meta, &w, &body, &doc.last_section, base_size, rp.space_after, rp.space_before)
 }
 
-fn export_with(m: &Meta, w: &Writer, body: &str, sec: &wordcraft_doc::SectionProps) -> String {
+fn export_with(m: &Meta, w: &Writer, body: &str, sec: &wordcraft_doc::SectionProps, base_size: f32, base_sa: f32, base_sb: f32) -> String {
     let mut out = String::from("{\\rtf1\\ansi\\ansicpg1252\\deff0\\deflang1033\\uc1\n{\\fonttbl");
     for (i, f) in w.t.fonts.iter().enumerate() {
         let fam = if model::is_mono(f) { "\\fmodern" } else { "\\fswiss" };
@@ -505,7 +510,17 @@ fn export_with(m: &Meta, w: &Writer, body: &str, sec: &wordcraft_doc::SectionPro
     for c in &w.t.colors {
         out.push_str(&format!("\\red{}\\green{}\\blue{};", c.0, c.1, c.2));
     }
-    out.push_str("}\n{\\*\\generator WordCraft;}\n{\\stylesheet{\\s0\\snext0 Normal;}");
+    out.push_str("}\n{\\*\\generator WordCraft;}\n{\\stylesheet{\\s0\\snext0\\f0");
+    // The Normal size and spacing ride in its style definition: \plain resets to 12 pt
+    // with no space, and \deff carries neither size nor spacing (#1264). RTF defaults
+    // (12 pt, no space) stay implicit so default documents keep their bytes.
+    if (base_size - 12.0).abs() > 0.01 {
+        out.push_str(&format!("\\fs{}", (base_size * 2.0).round() as i32));
+    }
+    // Always explicit: an omitted \sa reads as "unstated", not zero (#1264).
+    out.push_str(&format!("\\sa{}", (base_sa.max(0.0) * 20.0).round() as i32));
+    out.push_str(&format!("\\sb{}", (base_sb.max(0.0) * 20.0).round() as i32));
+    out.push_str(" Normal;}");
     for n in 1..=6u32 {
         let sz = HEAD_SIZES.get(n as usize - 1).copied().unwrap_or(12.0);
         out.push_str(&format!("{{\\s{n}\\sbasedon0\\snext0\\outlinelevel{}\\keepn\\b\\fs{} heading {n};}}", n - 1, (sz * 2.0) as i32));
@@ -841,6 +856,14 @@ struct Reader {
     styles: HashMap<i32, String>,
     style_cur: i32,
     style_name: String,
+    /// The current stylesheet definition's font, size and spacing (for `\s0`, the Normal
+    /// style's: #1264).
+    style_font: Option<String>,
+    style_size: Option<f32>,
+    style_sa: Option<f32>,
+    style_sb: Option<f32>,
+    /// Stylesheet definitions by number: name, font, size and spacing.
+    style_props: HashMap<i32, (Option<String>, Option<f32>, Option<f32>, Option<f32>)>,
     meta: Meta,
     info_text: String,
     // Lists: list id → ordered per level; override ls → list id.
@@ -1094,6 +1117,7 @@ impl Reader {
         let name = std::mem::take(&mut self.style_name).trim().trim_end_matches(';').trim().to_string();
         if self.styles.len() < 4096 {
             self.styles.insert(self.style_cur, name);
+            self.style_props.insert(self.style_cur, (self.style_font.take(), self.style_size.take(), self.style_sa.take(), self.style_sb.take()));
         }
     }
 
@@ -1525,7 +1549,15 @@ impl Reader {
                     "s" | "cs" | "ds" | "ts" => {
                         self.style_cur = if w == "s" { pv } else { -1 - pv.saturating_abs() };
                         self.style_name.clear();
+                        self.style_font = None;
+                        self.style_size = None;
+                        self.style_sa = None;
+                        self.style_sb = None;
                     }
+                    "f" => self.style_font = self.fonts.get(&pv).cloned(),
+                    "fs" if pv > 0 => self.style_size = Some((pv as f32 / 2.0).clamp(1.0, 1638.0)),
+                    "sa" => self.style_sa = Some((pv as f32 / 20.0).clamp(0.0, 1584.0)),
+                    "sb" => self.style_sb = Some((pv as f32 / 20.0).clamp(0.0, 1584.0)),
                     _ => {}
                 }
                 return;
@@ -1838,6 +1870,8 @@ struct Parsed {
     /// The last section's properties (the others are on the paragraphs that end them).
     last_section: wordcraft_doc::SectionProps,
     default_font: Option<String>,
+    /// The `\s0` (Normal) style definition's font, size and spacing (#1264).
+    normal: (Option<String>, Option<f32>, Option<f32>, Option<f32>),
     /// Each section's headers and footers, in order, the last section's last.
     headers_footers: Vec<Vec<(HeaderFooter, Vec<FBlock>)>>,
 }
@@ -2029,8 +2063,11 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
     if blocks.is_empty() {
         blocks.push(FBlock::Para(Para::default()));
     }
-    let default_font = r.fonts.get(&r.deff).filter(|n| !model::is_mono(n)).cloned();
-    Ok(Parsed { flow: Flow { blocks, meta: r.meta }, page: r.page, last_section, default_font, headers_footers })
+    // A monospaced default is a default like any other: runs that never select a font
+    // inherit it, while explicit mono switches still mark code (#1264).
+    let default_font = r.fonts.get(&r.deff).cloned();
+    let normal = r.style_props.get(&0).cloned().unwrap_or_default();
+    Ok(Parsed { flow: Flow { blocks, meta: r.meta }, page: r.page, last_section, default_font, normal, headers_footers })
 }
 
 /// The column grid of a table from its rows' cell right edges: every distinct edge starts a grid
@@ -2072,7 +2109,7 @@ fn column_grid(rows: &mut [Vec<Cell>], rights: &[Vec<i32>]) -> Vec<f32> {
 
 /// Parse RTF bytes into a document.
 pub fn import(bytes: &[u8]) -> Result<Document, String> {
-    let Parsed { flow, last_section, default_font, headers_footers, .. } = parse_full(bytes)?;
+    let Parsed { flow, last_section, default_font, normal, headers_footers, .. } = parse_full(bytes)?;
     let mut doc = model::to_doc_in(&flow, last_section);
     // Each section's own headers and footers; those it leaves out stay linked to the previous.
     let mut sets = Vec::with_capacity(headers_footers.len());
@@ -2112,6 +2149,24 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
     dp.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
     if default_font.is_some() {
         doc.styles.default_chr.font = default_font;
+    }
+    // The Normal style definition's font, size and spacing become the style's (#1264).
+    let (font, size, sa, sb) = normal;
+    if (font.is_some() || size.is_some() || sa.is_some() || sb.is_some())
+        && let Some(st) = doc.styles.get_mut("Normal")
+    {
+        if let Some(f) = font.filter(|f| !f.trim().is_empty()) {
+            st.chr.font = Some(f);
+        }
+        if size.is_some() {
+            st.chr.size = size;
+        }
+        if sa.is_some() {
+            st.para.space_after = sa;
+        }
+        if sb.is_some() {
+            st.para.space_before = sb;
+        }
     }
     Ok(doc)
 }

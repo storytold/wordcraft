@@ -817,8 +817,17 @@ impl Writer<'_> {
         };
         self.rev_open(w, props);
         self.field_start(w, instr, locked, dirty, form, props);
+        // Field result inherits the field's formatting but not the deletion marking.
+        let mut result_props = props.clone();
+        result_props.del = None;
+        let run_result = |w: &mut W, f: &dyn Fn(&mut W)| {
+            w.open("w:r", &[]);
+            rpr(w, &result_props);
+            f(w);
+            w.close("w:r");
+        };
         if !result.is_empty() {
-            run(w, &|w| {
+            run_result(w, &|w| {
                 let mut buf = String::new();
                 let flush = |w: &mut W, buf: &mut String| {
                     if !buf.is_empty() {
@@ -893,7 +902,6 @@ impl Writer<'_> {
         run(w, props, &|w| w.empty("w:fldChar", &[("w:fldCharType", "end")]));
     }
 
-    /// A field's begin, instruction and separate runs.
     /// A field's begin, code and separator; `form` is a legacy form field's `w:ffData`, which
     /// belongs inside the begin.
     fn field_start(&self, w: &mut W, instr: &str, locked: bool, dirty: bool, form: &str, props: &CharProps) {

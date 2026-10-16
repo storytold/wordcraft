@@ -135,3 +135,8 @@ sync_github_name = false
 real_name = "Andrej Škvorc"
 display_name = "Andrej Škvorc"
 sync_github_name = false
+
+[people.asmodeus-oos]
+real_name = "Dr. Mohamed Elsayed"
+display_name = "asmodeus-oos"
+sync_github_name = false

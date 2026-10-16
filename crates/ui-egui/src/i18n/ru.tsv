@@ -2619,6 +2619,12 @@ preview	Title	Пример
 	Existing File or Web Page	Файл или веб-страница
 	Link to:	Связать с:
 	Place in This Document	Место в документе
+
+# Templates (#1227) and reopen last document (#918)
+	APA paper	Статья APA
+	MLA paper	Статья MLA
+	Reopen the last document at startup	Повторно открывать последний документ при запуске
+	On: with nothing else to open, WordCraft reopens the file it had open instead of the Start screen.	Включено: если больше нечего открывать, WordCraft снова открывает предыдущий файл вместо начального экрана.
 # Table Layout › Sort dialog (#1205)
 	Column {n}	Столбец {n}
 	Header row	Строка заголовка

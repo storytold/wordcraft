@@ -204,6 +204,8 @@ fn general(app: &mut WordApp, ui: &mut Ui) {
     {
         let _ = app.run("ui.startScreen", json!({"value": start}));
     }
+    ui.checkbox(&mut app.ui.reopen_last, tl!("Reopen the last document at startup"))
+        .on_hover_text(tl!("On: with nothing else to open, WordCraft reopens the file it had open instead of the Start screen."));
     ui.add_space(8.0);
     section(ui, "Personalize");
     egui::Grid::new("options_user").num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
@@ -274,11 +276,11 @@ fn proofing(app: &mut WordApp, ui: &mut Ui) {
     flag(app, ui, "Check spelling as you type", "checkSpelling", spelling);
     ui.add_enabled_ui(app.session.view.proofing, |ui| flag(app, ui, "Mark grammar errors as you type", "markGrammar", pr.mark_grammar));
     ui.add_space(8.0);
-    section(ui, "Custom dictionary");
-    custom_dictionary(app, ui);
-    ui.add_space(8.0);
     section(ui, "Dictionaries");
     dictionaries(app, ui);
+    ui.add_space(8.0);
+    section(ui, "Custom dictionary");
+    custom_dictionary(app, ui);
 }
 
 /// Where the spelling dictionaries come from (#1063): a folder searched before the system's
@@ -298,7 +300,10 @@ fn dictionaries(app: &mut WordApp, ui: &mut Ui) {
             let value = if folder.trim().is_empty() { "auto" } else { folder.trim() };
             match app.run("file.options", json!({"dictionariesFolder": value})) {
                 // Shown as saved (`~/` expanded).
-                Ok(_) => folder = app.session.prefs.dictionaries_folder.clone().unwrap_or_default(),
+                Ok(_) => {
+                    folder = app.session.prefs.dictionaries_folder.clone().unwrap_or_default();
+                    app.ui.dictionaries_dir = folder.clone();
+                }
                 Err(e) => app.status(e),
             }
         }
@@ -306,6 +311,7 @@ fn dictionaries(app: &mut WordApp, ui: &mut Ui) {
             && app.run("file.options", json!({"dictionariesFolder": "auto"})).is_ok()
         {
             folder.clear();
+            app.ui.dictionaries_dir.clear();
         }
     });
     ui.data_mut(|d| d.insert_temp(id, folder));
@@ -332,6 +338,22 @@ fn dictionaries(app: &mut WordApp, ui: &mut Ui) {
         };
         ui.add(egui::Label::new(RichText::new(line).small()).truncate());
     }
+    // Languages used by the open document that have no dictionary installed (#1167).
+    let rev = app.session.rev();
+    let key = egui::Id::new("options_missing_dicts");
+    let cached: Option<(u64, Vec<String>)> = ui.data(|d| d.get_temp(key));
+    let missing = match cached {
+        Some((r, langs)) if r == rev => langs,
+        _ => {
+            let langs = missing_dict_languages(&app.session.doc);
+            ui.data_mut(|d| d.insert_temp(key, (rev, langs.clone())));
+            langs
+        }
+    };
+    for lang in missing.iter().take(4) {
+        let text = crate::i18n::fmt(tl!("No dictionary for {lang}: those runs won't be spell-checked."), &[("lang", lang)]);
+        ui.label(egui::RichText::new(text).small());
+    }
 }
 
 /// The interface name of a language with a Hunspell dictionary.
@@ -348,6 +370,25 @@ fn language_name(lang: wordcraft_engine::proof::ProofLang) -> &'static str {
         // English uses its bundled word list; Bulgarian has no dictionary yet.
         ProofLang::En | ProofLang::Bg | ProofLang::Other => "",
     }
+}
+
+/// BCP 47 tags used anywhere in the body with no proofing dictionary installed, first-seen
+/// order (#1167). Bounded: distinct tags only.
+fn missing_dict_languages(doc: &wordcraft_doc::Document) -> Vec<String> {
+    use std::collections::BTreeSet;
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::new();
+    let story = wordcraft_doc::StoryRef::Body;
+    for path in doc.para_paths(story) {
+        let Some(p) = doc.para(story, &path) else { continue };
+        for (_, props) in p.run_ranges() {
+            let Some(tag) = props.lang.as_deref().map(str::trim).filter(|t| !t.is_empty()) else { continue };
+            if seen.insert(tag.to_ascii_lowercase()) && !wordcraft_engine::proof::has_dictionary(Some(tag)) && out.len() < 8 {
+                out.push(tag.to_string());
+            }
+        }
+    }
+    out
 }
 
 /// The custom dictionary: the words Add to Dictionary kept, each with a Remove button, and a
@@ -733,6 +774,20 @@ mod tests {
 
     fn app() -> WordApp {
         WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default())
+    }
+
+    #[test]
+    fn missing_dictionaries_are_listed_by_language() {
+        // #1167: runs tagged with a language WordCraft cannot proof are reported.
+        use wordcraft_doc::{Paragraph, para_block};
+        let mut d = wordcraft_doc::Document::new();
+        let mut p = Paragraph::with_text("Hello", wordcraft_doc::CharProps::default());
+        let n = p.len();
+        p.insert_text(n, " bonjour", &wordcraft_doc::CharProps { lang: Some("fr".into()), ..Default::default() }).unwrap();
+        d.body = vec![para_block(p)];
+        assert_eq!(super::missing_dict_languages(&d), vec!["fr".to_string()]);
+        let plain = wordcraft_doc::Document::from_text("Hello");
+        assert!(super::missing_dict_languages(&plain).is_empty());
     }
 
     fn nav_harness(language: &str, percent: u16) -> egui_kittest::Harness<'static, WordApp> {

@@ -1,6 +1,7 @@
 #!/bin/sh
-# deb/rpm post-install and post-remove: refresh the desktop, MIME and icon caches.
+# deb post-install and post-remove: refresh the desktop, MIME and icon caches.
 # Every tool is optional; missing ones are skipped.
+set -e
 if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database -q /usr/share/applications || true
 fi

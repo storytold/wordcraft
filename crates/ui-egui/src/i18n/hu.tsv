@@ -2617,6 +2617,12 @@
 	Existing File or Web Page	Létező fájl vagy weblap
 	Link to:	Hivatkozás helye:
 	Place in This Document	Dokumentumon belüli hely
+
+# Templates (#1227) and reopen last document (#918)
+	APA paper	APA dolgozat
+	MLA paper	MLA dolgozat
+	Reopen the last document at startup	Az utolsó dokumentum újbóli megnyitása indításkor
+	On: with nothing else to open, WordCraft reopens the file it had open instead of the Start screen.	Bekapcsolva: ha nincs más megnyitandó, a WordCraft a kezdőképernyő helyett az utoljára megnyitott fájlt nyitja meg újra.
 # Table Layout › Sort dialog (#1205)
 	Column {n}	{n}. oszlop
 	Header row	Fejlécsor

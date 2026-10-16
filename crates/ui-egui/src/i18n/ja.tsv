@@ -2222,6 +2222,12 @@
 	Existing File or Web Page	既存のファイル/Web ページ
 	Link to:	リンク先:
 	Place in This Document	このドキュメント内
+
+# Templates (#1227) and reopen last document (#918)
+	APA paper	APA 論文
+	MLA paper	MLA 論文
+	Reopen the last document at startup	起動時に最後に使った文書を再度開く
+	On: with nothing else to open, WordCraft reopens the file it had open instead of the Start screen.	オン: 他に開くものがない場合、WordCraft はスタート画面の代わりに前回開いていたファイルを再度開きます。
 # Table Layout › Sort dialog (#1205)
 	Column {n}	列 {n}
 	Header row	見出し行あり

@@ -880,6 +880,8 @@ impl Reader<'_> {
             None => (f.instr.trim().to_string(), result),
         };
         let obj = InlineObject::Field { instr, result, locked: f.locked, dirty: f.dirty, code: false, form: f.form };
+        // If this field is nested inside another field's instruction, append the result
+        // to the parent's instruction text instead of emitting a separate object.
         if let Some(parent) = sc.fields.last_mut()
             && !parent.spilled
             && parent.phase == Phase::Instr
@@ -1080,7 +1082,6 @@ impl Reader<'_> {
         let graphic = Arc::new(Graphic { kind: GraphicKind::Chart, items, w, h, source: Some(source), ..Default::default() });
         Some(InlineObject::Graphic { w, h, alt, float, graphic })
     }
-
     fn read_ink_content_part(&mut self, content: &El, rels: &Rels) -> Option<InlineObject> {
         let part = super::part_of(rels, content.attr("r:id")?, INK_REL)?;
         let pkg = self.pkg;

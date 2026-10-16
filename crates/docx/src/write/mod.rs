@@ -962,6 +962,10 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, template_rel: O
     let ns = xml::body_ns();
     let ns_refs: Vec<(&str, &str)> = ns.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
     w.open("w:settings", &ns_refs);
+    // #995: the view the document is opened in (Word reads this too).
+    if let Some(v) = s.view.as_deref().filter(|v| !v.is_empty()) {
+        w.empty("w:view", &[("w:val", v)]);
+    }
     let zoom = s.zoom.unwrap_or(wordcraft_doc::Zoom { percent: 100, fit: None });
     let percent = zoom.percent.clamp(10, 500).to_string();
     match zoom.fit {
@@ -1036,7 +1040,9 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, template_rel: O
             w.val(tag, &crate::units::twips(v.clamp(0.5, 1584.0)));
         }
     }
-    w.val("w:characterSpacingControl", "doNotCompress");
+    // w:characterSpacingControl is "doNotCompress" by default; only write if explicitly set
+    // (not currently exposed in Settings, use extra_xml if needed)
+    // w.val("w:characterSpacingControl", "doNotCompress");
     for (tag, fmt, pr, used, el) in [
         ("w:footnotePr", s.footnote_format, &s.footnote_pr, footnotes, "w:footnote"),
         ("w:endnotePr", s.endnote_format, &s.endnote_pr, endnotes, "w:endnote"),
@@ -1061,7 +1067,7 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, template_rel: O
     if s.allow_space_of_same_style_in_table {
         w.empty("w:allowSpaceOfSameStyleInTable", &[]);
     }
-    let mode = doc.settings.compat_mode.clamp(11, 15).to_string();
+    let mode = doc.settings.compat_mode.clamp(11, 99).to_string();
     w.empty("w:compatSetting", &[("w:name", "compatibilityMode"), ("w:uri", "http://schemas.microsoft.com/office/word"), ("w:val", &mode)]);
     w.close("w:compat");
     if let Some(m) = &s.math {

@@ -1,0 +1,40 @@
+.TH WORDCRAFT-CLI 1 "2026" "WordCraft" "User Commands"
+.SH NAME
+wordcraft-cli \- WordCraft from the command line
+.SH SYNOPSIS
+.B wordcraft-cli convert
+\fIin out\fR [\fB\-\-markup\fR]
+.br
+.B wordcraft-cli info
+\fIfile\fR
+.br
+.B wordcraft-cli text
+\fIfile\fR
+.br
+.B wordcraft-cli inspect
+\fIfile\fR
+.br
+.B wordcraft-cli render
+\fIfile out.png\fR [\fB\-\-page\fR \fIN\fR] [\fB\-\-scale\fR \fIS\fR]
+.br
+.B wordcraft-cli run
+[\fB\-\-file\fR \fIF\fR | \fB\-\-template\fR \fIT\fR] \fB\-\-cmd\fR \fI'id={json}'\fR [\fB\-\-cmd\fR ...] [\fB\-\-save\fR \fIOUT\fR] [\fB\-\-print\fR] [\fB\-\-author\fR \fINAME\fR]
+.br
+.B wordcraft-cli commands
+[\fB\-\-json\fR]
+.br
+.B wordcraft-cli parity
+[\fB\-\-markdown\fR]
+.br
+.B wordcraft-cli mcp
+[\fB\-\-connect\fR \fIHOST:PORT\fR | \fB\-\-author\fR \fINAME\fR]
+.br
+.B wordcraft-cli \-\-version
+.SH DESCRIPTION
+Headless WordCraft: convert between formats (docx, doc [read], pdf, odt,
+rtf, html, md, tex, txt, json, png), inspect documents, render pages,
+run commands, and serve the MCP server.
+\fB\-\-page\fR needs a positive integer, \fB\-\-scale\fR a positive number;
+bad values are errors, never silent defaults.
+.SH SEE ALSO
+.BR wordcraft (1)

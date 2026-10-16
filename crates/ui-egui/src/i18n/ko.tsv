@@ -2488,3 +2488,9 @@ preview	Title	제목
 	Bottom Right Cell	오른쪽 아래 셀
 	Inside Horizontal Border	안쪽 가로 테두리
 	Inside Vertical Border	안쪽 세로 테두리
+
+# Templates (#1227) and reopen last document (#918)
+	APA paper	APA 논문
+	MLA paper	MLA 논문
+	Reopen the last document at startup	시작할 때 마지막 문서 다시 열기
+	On: with nothing else to open, WordCraft reopens the file it had open instead of the Start screen.	켜짐: 열 다른 항목이 없으면 WordCraft가 시작 화면 대신 이전에 열었던 파일을 다시 엽니다.

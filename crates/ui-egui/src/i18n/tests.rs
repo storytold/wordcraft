@@ -7,6 +7,36 @@ fn lang(code: &str) -> Lang {
     Lang::from_code(code).unwrap_or_else(|| panic!("{code} registered"))
 }
 
+/// #1189: catalogue coverage per language only rises. Floors are the counts when the test
+/// landed; bump a floor whenever its translators add keys (like the parity floor).
+#[test]
+fn catalogue_key_counts_do_not_fall() {
+    let floors = [
+        ("bg", 2448),
+        ("cs", 2061),
+        ("de", 2061),
+        ("es", 2410),
+        ("et", 2087),
+        ("fr", 2072),
+        ("hu", 2458),
+        ("it", 2439),
+        ("ja", 2061),
+        ("pl", 2447),
+        ("pt-br", 2061),
+        ("ru", 2433),
+        ("sr", 2061),
+        ("sr-latn", 2061),
+        ("tr", 2433),
+        ("uk", 2061),
+        ("zh-hans", 2061),
+        ("zh-hant", 2061),
+    ];
+    for (code, floor) in floors {
+        let n = lang(code).catalog().len();
+        assert!(n >= floor, "{code}: {n} translated keys, floor {floor}");
+    }
+}
+
 #[test]
 fn system_locales_map_to_languages() {
     assert_eq!(lang_from_tag("zh_CN.UTF-8"), Some(lang("zh-hans")));

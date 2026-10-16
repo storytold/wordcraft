@@ -2618,6 +2618,12 @@ preview	Title	Örnek
 	Existing File or Web Page	Varolan Dosya veya Web Sayfası
 	Link to:	Bağlantı:
 	Place in This Document	Bu Belgede Bir Yer
+
+# Templates (#1227) and reopen last document (#918)
+	APA paper	APA makalesi
+	MLA paper	MLA makalesi
+	Reopen the last document at startup	Başlangıçta son belgeyi yeniden aç
+	On: with nothing else to open, WordCraft reopens the file it had open instead of the Start screen.	Açık: Açılacak başka bir şey yoksa, WordCraft Başlangıç ekranı yerine son açık dosyayı yeniden açar.
 # Table Layout › Sort dialog (#1205)
 	Column {n}	Sütun {n}
 	Header row	Başlık satırı

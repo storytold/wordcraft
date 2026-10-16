@@ -428,6 +428,18 @@ pub struct CustomProp {
     pub value: String,
 }
 
+/// A page background picture fill.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PageBackground {
+    /// Key in [`Document::media`].
+    pub media: String,
+    /// The `v:fill` type (`tile`, `frame`, …), written back verbatim.
+    pub fill: String,
+    /// The `v:fill` title, written back verbatim.
+    pub title: String,
+}
+
 /// Document properties (File › Info).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
@@ -448,6 +460,9 @@ pub struct CoreProps {
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
     pub track_changes: bool,
+    /// Document view (`w:view`: `print`, `web`, `outline`, …), when the file states one (#995).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub view: Option<String>,
     /// Default tab stop interval, points.
     pub default_tab: f32,
     pub even_odd_headers: bool,
@@ -614,6 +629,7 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             track_changes: false,
+            view: None,
             default_tab: 36.0,
             even_odd_headers: false,
             mirror_margins: false,

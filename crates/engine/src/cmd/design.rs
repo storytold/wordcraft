@@ -79,6 +79,11 @@ pub fn specs() -> Vec<CommandSpec> {
             r#"{"kind"?: "box|none", "width"?: pt, "color"?: "RRGGBB", "style"?: "single|double|dotted|dashed|thick|triple|dotDash|wave", "sides"?: {"top"|"left"|"bottom"|"right": {"style"?, "width"?: pt, "color"?: "RRGGBB"} | null} (exactly these sides, instead of `kind`), "applyTo"?: "section|document"}"#,
         ),
         CommandSpec::new("design.setDefault", "Set as Default", "Design › Document Formatting", |s, _| {
+            // Persist the open document's Normal style as the default for new documents (#1264).
+            if let Some(st) = s.doc.styles.get("Normal").cloned() {
+                s.prefs.normal_chr = st.chr;
+                s.prefs.normal_para = st.para;
+            }
             s.status = "These settings will be used for new documents.".into();
             sel_result(s)
         })

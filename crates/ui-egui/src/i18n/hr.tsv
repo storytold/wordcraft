@@ -2632,3 +2632,9 @@ preview	Title	Naslov
 	Bottom Right Cell	Donja desna ćelija
 	Inside Horizontal Border	Unutarnji vodoravni obrub
 	Inside Vertical Border	Unutarnji okomiti obrub
+
+# Templates (#1227) and reopen last document (#918)
+	APA paper	APA rad
+	MLA paper	MLA rad
+	Reopen the last document at startup	Ponovno otvori posljednji dokument pri pokretanju
+	On: with nothing else to open, WordCraft reopens the file it had open instead of the Start screen.	Uključeno: ako nema ničeg drugog za otvaranje, WordCraft ponovo otvara prethodno otvoren dokument umjesto početnog zaslona.

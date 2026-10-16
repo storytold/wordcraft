@@ -96,6 +96,33 @@ pub fn anchor_rect(selection_top: f32, selection_left: f32, viewport: Rect) -> O
     Some(Rect::from_min_size(pos2(x, y), Vec2::new(BAR_W, BAR_H)))
 }
 
+/// Paste Options after a paste (#820): Keep Source, Merge Formatting, Keep Text Only. An
+/// Floating Paste Options widget (#820) appearing at the end of the pasted text: choosing an
+/// option undoes the paste and redoes it in that form; if re-pasting fails, edit.redo restores the
+/// original paste so content isn't lost. Anything else dismisses the widget (see `after_command`).
+pub fn paste_options(app: &mut WordApp, ctx: &egui::Context) {
+    let Some(at) = app.canvas.paste_options else { return };
+    if app.dialog.is_some() || app.ui.backstage {
+        return;
+    }
+    egui::Area::new(egui::Id::new("wc_paste_options")).order(Order::Tooltip).interactable(true).fixed_pos(at).show(ctx, |ui| {
+        egui::Frame::popup(ui.style()).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                for (label, id) in [
+                    ("Keep Source Formatting", "edit.paste"),
+                    ("Match Destination Formatting", "edit.pasteMerge"),
+                    ("Keep Text Only", "edit.pasteText"),
+                ] {
+                    if ui.small_button(crate::i18n::t(label)).clicked() && app.run("edit.undo", json!({})).is_ok() && app.run(id, json!({})).is_err()
+                    {
+                        let _ = app.run("edit.redo", json!({}));
+                    }
+                }
+            });
+        });
+    });
+}
+
 /// Where the bar and the controls in it were drawn last frame (`[bar, controls]`), kept in the
 /// context's memory under this id so tests can check that no control spills out of the bar.
 pub fn shown_id() -> egui::Id {

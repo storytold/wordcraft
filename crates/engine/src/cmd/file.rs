@@ -64,7 +64,7 @@ fn rename(s: &mut Session, v: &Value) -> CmdResult {
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("file.rename", "Rename Document", "File › Info", rename).params(r#"{"name": string (document name without its extension)}"#).pure(),
-        CommandSpec::new("file.new", "New", "File", new).key("Mod+N").params(r#"{"template"?: "blank|sample|letter|resume|report"}"#).pure(),
+        CommandSpec::new("file.new", "New", "File", new).key("Mod+N").params(r#"{"template"?: "blank|sample|letter|resume|report|mla|apa"}"#).pure(),
         CommandSpec::new("file.open", "Open", "File", open)
             .key("Mod+O / Mod+F12 / Mod+Alt+F2")
             .params(r#"{"path": string, "data"?: base64 (the file's bytes; `path` then only names it), "password"?: string (for a password-protected Word document)}"#)
@@ -183,6 +183,8 @@ fn new(s: &mut Session, v: &Value) -> CmdResult {
         "letter" => crate::sample::letter(),
         "resume" => crate::sample::resume(),
         "report" => crate::sample::report(),
+        "mla" => crate::sample::mla(),
+        "apa" => crate::sample::apa(),
         _ => normal_document(s),
     };
     s.set_document(doc);
@@ -293,6 +295,18 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
         }
     }
     s.stamp_save();
+    // #995: remember the view in the file, so reopening restores it (Draft and Read have no
+    // OOXML view value and keep whatever the file had).
+    if !matches!(s.view.mode, wordcraft_layout::ViewMode::Draft | wordcraft_layout::ViewMode::Read) {
+        s.doc.settings.view = Some(
+            match s.view.mode {
+                wordcraft_layout::ViewMode::Web => "web",
+                wordcraft_layout::ViewMode::Outline => "outline",
+                _ => "print",
+            }
+            .to_string(),
+        );
+    }
     let password = s.password.as_ref().map(crate::io::Password::as_str);
     // A header/footer just made and left empty isn't saved (#960).
     let copy = super::insert::saved_copy(s);

@@ -2232,6 +2232,12 @@
 	Existing File or Web Page	Postojeća datoteka ili veb stranica
 	Link to:	Veza ka:
 	Place in This Document	Mesto u ovom dokumentu
+
+# Templates (#1227) and reopen last document (#918)
+	APA paper	APA rad
+	MLA paper	MLA rad
+	Reopen the last document at startup	Ponovo otvori poslednji dokument pri pokretanju
+	On: with nothing else to open, WordCraft reopens the file it had open instead of the Start screen.	Uključeno: ako nema ničeg drugog za otvaranje, WordCraft ponovo otvara prethodno otvoren dokument umesto početnog ekrana.
 # Table Layout › Sort dialog (#1205)
 	Column {n}	Kolona {n}
 	Header row	Red zaglavlja

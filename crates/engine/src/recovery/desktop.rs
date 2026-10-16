@@ -359,7 +359,7 @@ struct Event {
     outcome: Result<Outcome, String>,
 }
 pub(crate) struct Recovery {
-    tx: mpsc::SyncSender<Job>,
+    tx: Option<mpsc::SyncSender<Job>>,
     rx: mpsc::Receiver<Event>,
     pub documents: Vec<RecoveryInfo>,
     pub ready: bool,
@@ -370,12 +370,23 @@ pub(crate) struct Recovery {
     revision: Option<u64>,
     due: Instant,
     alive: bool,
+    handle: Option<std::thread::JoinHandle<()>>,
 }
+
+impl Drop for Recovery {
+    fn drop(&mut self) {
+        drop(self.tx.take());
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+    }
+}
+
 impl Recovery {
     pub fn start(root: PathBuf, wake: Arc<dyn Fn() + Send + Sync>) -> Result<Self, String> {
         let (tx, jobs) = mpsc::sync_channel(1);
         let (events, rx) = mpsc::channel();
-        std::thread::Builder::new()
+        let handle = std::thread::Builder::new()
             .name("wordcraft-recovery".into())
             .spawn(move || {
                 let mut store = match Store::new(root) {
@@ -406,7 +417,7 @@ impl Recovery {
             })
             .map_err(|e| e.to_string())?;
         Ok(Self {
-            tx,
+            tx: Some(tx),
             rx,
             documents: Vec::new(),
             ready: false,
@@ -417,6 +428,7 @@ impl Recovery {
             revision: None,
             due: Instant::now() + INTERVAL,
             alive: true,
+            handle: Some(handle),
         })
     }
     fn queue(&mut self, job: Job) -> Result<(), String> {
@@ -426,7 +438,10 @@ impl Recovery {
         if self.busy {
             return Err("recovery is busy; try again when it finishes".into());
         }
-        self.tx.try_send(job).map_err(|e| e.to_string())?;
+        let Some(tx) = &self.tx else {
+            return Err("recovery worker is unavailable".into());
+        };
+        tx.try_send(job).map_err(|e| e.to_string())?;
         self.busy = true;
         self.error = None;
         Ok(())

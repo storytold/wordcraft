@@ -109,6 +109,20 @@ fn ltr_paragraph_with_embedded_persian_word() {
 }
 
 #[test]
+fn hebrew_paragraph_reads_right_to_left() {
+    // #1018: Hebrew orders like Persian/Arabic: base direction right to left, digits stay put.
+    let s = "שלום עולם 123";
+    let d = doc_of(&[(s, true)]);
+    let l = lay(&d);
+    let right = 612.0 - 72.0;
+    assert!((caret_x(&l, 0, 0) - right).abs() < 0.5, "start caret at {}", caret_x(&l, 0, 0));
+    let xs: Vec<f32> = (0..5).map(|n| caret_x(&l, 0, at(s, n))).collect();
+    assert!(xs.windows(2).all(|w| w[1] < w[0] + 0.01), "caret moves leftwards: {xs:?}");
+    let x = |n: usize| cluster_x(&l, 0, at(s, n));
+    assert!(x(10) < x(11) && x(11) < x(12), "digits read left to right");
+}
+
+#[test]
 fn numbers_and_latin_inside_persian_keep_their_order() {
     // "Price 250 toman" in Persian, with a Latin product name and Persian punctuation.
     let s = "قیمت 250 تومان برای Word، امسال ۱۴۰۳.";
@@ -335,6 +349,13 @@ fn persian_letters_join_and_brackets_mirror() {
     // ZWNJ (نیم‌فاصله) breaks the join: "می‌خواهم" keeps می separate.
     let with_zwnj = cluster_glyphs(&wordcraft_fonts::shape_run(&face, "ب\u{200C}ب", &[], |c| c, true));
     assert_eq!(with_zwnj.first(), isolated.first(), "a letter before ZWNJ takes its isolated form");
+    // Farsi Yeh (ی, U+06CC) joins like any letter (#824).
+    let mi = wordcraft_fonts::shape_run(&face, "می", &[], |c| c, true);
+    let mi_cl = cluster_glyphs(&mi);
+    assert_eq!(mi_cl.len(), 2, "meem + Farsi Yeh: {mi_cl:?}");
+    assert!(mi.iter().all(|g| g.gid != 0), "the font has Farsi Yeh");
+    let meem_alone = cluster_glyphs(&wordcraft_fonts::shape_run(&face, "م", &[], |c| c, true));
+    assert_ne!(mi_cl[0], meem_alone[0], "meem takes its initial form before Yeh: {mi_cl:?} vs {meem_alone:?}");
     // In right-to-left text, "(" is drawn with the mirrored glyph.
     let open = wordcraft_fonts::shape_run(&face, "(", &[], |c| c, true);
     let close = wordcraft_fonts::shape_run(&face, ")", &[], |c| c, false);

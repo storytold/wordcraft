@@ -1,0 +1,32 @@
+.TH WORDCRAFT 1 "2026" "WordCraft" "User Commands"
+.SH NAME
+wordcraft \- open-source, native word processor
+.SH SYNOPSIS
+.B wordcraft
+[\fIOPTIONS\fR] [\fIFILE\fR...]
+.SH DESCRIPTION
+WordCraft is a fast, open-source word processor with the Word workflow:
+ribbon, styles, tables, track changes, references and mail merge.
+It reads and writes .docx and also opens .odt, .rtf, .html, .md and .txt,
+and exports PDF.
+.SH OPTIONS
+.TP
+.B \-\-sample
+Open with the sample document.
+.TP
+.B \-\-control PORT
+Expose the control channel on 127.0.0.1:PORT (see
+/usr/share/doc/wordcraft/README.md and the control protocol).
+.TP
+.B \-\-version
+Print the version and exit.
+.TP
+.B \-\-help, \-h
+Print help and exit.
+.SH FILES
+.I ~/.config/wordcraft/
+.RS
+Preferences, logs and control-channel key files.
+.RE
+.SH SEE ALSO
+.BR wordcraft-cli (1)

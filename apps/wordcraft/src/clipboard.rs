@@ -14,11 +14,40 @@
 //! text alternative on every desktop platform; formats of other names (Word's "Office Open XML"
 //! with OMML, #1297) it can't, so they aren't offered.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use wordcraft_engine::cmd::paste::MAX_PASTE_BYTES;
 use wordcraft_ui_egui::paste_picture::ClipboardPicture;
 
+/// Seconds a failed clipboard open short-circuits later opens (#1213): while the backend is
+/// broken (no Wayland data-control, no X server), every paste/look would otherwise pay for
+/// another failing handshake and spam the log, instead of failing fast.
+const RETRY_SECS: u64 = 5;
+static LAST_FAIL_SECS: AtomicU64 = AtomicU64::new(0);
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+fn backoff_active(now: u64, last_fail: u64) -> bool {
+    now.saturating_sub(last_fail) < RETRY_SECS
+}
+
 fn open() -> Option<arboard::Clipboard> {
-    arboard::Clipboard::new().map_err(|e| log::warn!("clipboard: {e}")).ok()
+    let now = now_secs();
+    if backoff_active(now, LAST_FAIL_SECS.load(Ordering::Relaxed)) {
+        return None;
+    }
+    match arboard::Clipboard::new() {
+        Ok(c) => Some(c),
+        Err(e) => {
+            // One warning per outage, not one per paste.
+            if now.saturating_sub(LAST_FAIL_SECS.swap(now, Ordering::Relaxed)) >= RETRY_SECS {
+                log::warn!("clipboard: {e}");
+            }
+            None
+        }
+    }
 }
 
 thread_local! {
@@ -55,6 +84,24 @@ pub fn text() -> Option<String> {
     open()?.get_text().ok()
 }
 
+/// Write a copied picture as image data (#375). A failure is logged, never fatal.
+pub fn set_image(width: u32, height: u32, rgba: Vec<u8>) {
+    let Some(mut clipboard) = open() else { return };
+    let image = arboard::ImageData { width: width as usize, height: height as usize, bytes: rgba.into() };
+    if let Err(e) = clipboard.set_image(image) {
+        log::warn!("clipboard: {e}");
+    }
+}
+
+/// Write text and its HTML rendering to the system clipboard (Copy/Cut, #1243). A failure is
+/// logged, never fatal: the text copy already went through egui.
+pub fn set(text: &str, html: &str) {
+    let Some(mut clipboard) = open() else { return };
+    if let Err(e) = clipboard.set_html(html, Some(text)) {
+        log::warn!("clipboard: {e}");
+    }
+}
+
 /// The clipboard's HTML (Windows: the fragment of its "HTML Format"), if not too large.
 pub fn html() -> Option<String> {
     open()?.get().html().ok().filter(|h| h.len() <= MAX_PASTE_BYTES)
@@ -81,11 +128,10 @@ pub fn formats() -> Vec<String> {
 /// picture in a format arboard doesn't decode. A picture that is there but can't be read says
 /// why (#833). The UI checks the sizes before inserting anything.
 pub fn picture() -> Option<ClipboardPicture> {
-    let mut clipboard = match arboard::Clipboard::new() {
-        Ok(c) => c,
-        Err(e) => {
-            log::warn!("clipboard: {e}");
-            return Some(ClipboardPicture::Unreadable(format!("the system clipboard couldn't be opened ({e})")));
+    let mut clipboard = match open() {
+        Some(c) => c,
+        None => {
+            return Some(ClipboardPicture::Unreadable("the system clipboard couldn't be opened".into()));
         }
     };
     if let Ok(files) = clipboard.get().file_list()
@@ -211,5 +257,20 @@ mod platform {
 
     pub fn can_set() -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clipboard_backoff_covers_a_fresh_outage() {
+        // #1213: while the backend is broken, opens fail fast instead of handshaking again.
+        assert!(backoff_active(100, 96));
+        assert!(backoff_active(100, 100));
+        assert!(!backoff_active(100, 95));
+        assert!(!backoff_active(100, 0));
+        assert!(backoff_active(90, 100), "clock skew fails fast rather than wedging anything open");
     }
 }

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::para::InlineObject;
-use crate::props::{CharProps, ParaProps};
+use crate::props::{Align, CharProps, Highlight, ParaProps, Rgb, Underline, VertAlign};
 use crate::{Block, Blocks, DocError, Document, Paragraph, Part, PartKind, Path, Pos, Result, para_block};
 
 /// A copied piece of a document: blocks, where the first and last paragraphs may be partial.
@@ -45,12 +45,159 @@ impl Fragment {
     pub fn clipboard_text(&self) -> String {
         self.to_document().shown_text(crate::StoryRef::Body)
     }
+    /// The HTML a copy puts on the clipboard next to [`Self::clipboard_text`], so pasting into
+    /// other programs keeps bold/italics/lists (#1243). Text is escaped; tracked deletions and
+    /// hidden runs read as final, as [`Paragraph::final_text`]; objects (pictures, fields) are
+    /// left out. Capped at [`MAX_HTML_BYTES`].
+    pub fn to_html(&self) -> String {
+        let mut out = String::from("<html><body>");
+        html_blocks(&self.blocks, &mut out, 0);
+        out.push_str("</body></html>");
+        if out.len() > MAX_HTML_BYTES {
+            let mut end = MAX_HTML_BYTES;
+            while !out.is_char_boundary(end) {
+                end -= 1;
+            }
+            out.truncate(end);
+        }
+        out
+    }
     pub fn from_text(s: &str) -> Fragment {
         let lines: Vec<&str> = s.split('\n').collect();
         Fragment {
             blocks: lines.iter().map(|l| Block::Para(Paragraph::with_text(l.trim_end_matches('\r'), CharProps::default()))).collect(),
             ..Default::default()
         }
+    }
+}
+
+/// Most HTML bytes one copy puts on the clipboard ([`Fragment::to_html`]).
+pub const MAX_HTML_BYTES: usize = 4 << 20;
+
+/// `&`, `<`, `>` and quotes as entities.
+fn esc(s: &str, out: &mut String) {
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            c => out.push(c),
+        }
+    }
+}
+
+fn html_color(c: Rgb, out: &mut String) {
+    out.push('#');
+    out.push_str(&c.hex());
+}
+
+fn html_run_style(p: &CharProps, out: &mut String) {
+    if p.bold == Some(true) {
+        out.push_str("font-weight:bold;");
+    }
+    if p.italic == Some(true) {
+        out.push_str("font-style:italic;");
+    }
+    match p.underline {
+        None | Some(Underline::None) => {}
+        Some(Underline::Double) => out.push_str("text-decoration:underline double;"),
+        Some(Underline::Dotted) => out.push_str("text-decoration:underline dotted;"),
+        Some(Underline::Dash) | Some(Underline::DotDash) | Some(Underline::DotDotDash) => {
+            out.push_str("text-decoration:underline dashed;");
+        }
+        _ => out.push_str("text-decoration:underline;"),
+    }
+    if p.strike == Some(true) || p.double_strike == Some(true) {
+        out.push_str("text-decoration:line-through;");
+    }
+    if let Some(crate::props::TextColor::Rgb(c)) = p.color {
+        out.push_str("color:");
+        html_color(c, out);
+        out.push(';');
+    }
+    let bg = p.highlight.and_then(Highlight::rgb).or(p.shading);
+    if let Some(c) = bg {
+        out.push_str("background-color:");
+        html_color(c, out);
+        out.push(';');
+    }
+    if let Some(size) = p.size.filter(|s| s.is_finite() && *s > 0.0 && *s <= 1638.0) {
+        out.push_str(&format!("font-size:{size}pt;"));
+    }
+}
+
+/// A paragraph's runs as HTML: tracked deletions and hidden runs read as final.
+fn html_para(p: &Paragraph, out: &mut String) {
+    let align = match p.props.align {
+        Some(Align::Center) => "text-align:center;",
+        Some(Align::Right) => "text-align:right;",
+        Some(Align::Justify) | Some(Align::Distribute) => "text-align:justify;",
+        _ => "",
+    };
+    out.push_str("<p");
+    if !align.is_empty() {
+        out.push_str(&format!(" style=\"{align}\""));
+    }
+    out.push('>');
+    for (range, props) in p.run_ranges() {
+        if props.hidden == Some(true) || props.del.is_some() {
+            continue;
+        }
+        let Some(text) = p.text.get(range) else { continue };
+        let mut style = String::new();
+        html_run_style(props, &mut style);
+        let (open, close) = match props.vert_align {
+            Some(VertAlign::Superscript) => ("<sup>", "</sup>"),
+            Some(VertAlign::Subscript) => ("<sub>", "</sub>"),
+            _ => ("", ""),
+        };
+        // Objects (pictures, fields) have no HTML here; their placeholder is left out.
+        let text: String = text.chars().filter(|c| *c != crate::para::OBJ).collect();
+        if text.is_empty() {
+            continue;
+        }
+        out.push_str(open);
+        if style.is_empty() {
+            esc(&text, out);
+        } else {
+            out.push_str(&format!("<span style=\"{style}\">"));
+            esc(&text, out);
+            out.push_str("</span>");
+        }
+        out.push_str(close);
+    }
+    out.push_str("</p>");
+}
+
+fn html_block(b: &Block, out: &mut String, depth: usize) {
+    if depth > 16 {
+        return;
+    }
+    match b {
+        Block::Para(p) => html_para(p, out),
+        Block::Table(t) => {
+            out.push_str("<table>");
+            for row in &t.rows {
+                out.push_str("<tr>");
+                for cell in &row.cells {
+                    out.push_str("<td>");
+                    for cb in &cell.blocks {
+                        html_block(cb, out, depth + 1);
+                    }
+                    out.push_str("</td>");
+                }
+                out.push_str("</tr>");
+            }
+            out.push_str("</table>");
+        }
+    }
+}
+
+fn html_blocks(blocks: &[Block], out: &mut String, depth: usize) {
+    for b in blocks {
+        html_block(b, out, depth);
     }
 }
 
@@ -923,5 +1070,35 @@ mod tests {
         let c = d.clamp(&Pos::body(9, 9));
         assert_eq!(c, Pos::body(0, 2));
         assert!(d.delete_range(&Pos { story: StoryRef::Part(3), path: Path::top(0), off: 0 }, &Pos::body(0, 0)).is_err());
+    }
+
+    #[test]
+    fn html_copy_keeps_formatting_and_escapes_text() {
+        use crate::props::{Align, Rgb, TextColor};
+        let mut p = Paragraph::with_text("", CharProps::default());
+        let n = p.len();
+        p.insert_text(n, "bold <", &CharProps { bold: Some(true), ..Default::default() }).unwrap();
+        let n = p.len();
+        p.insert_text(n, "red & blue", &CharProps { italic: Some(true), color: Some(TextColor::Rgb(Rgb(255, 0, 0))), ..Default::default() }).unwrap();
+        let n = p.len();
+        p.insert_text(n, "gone", &CharProps { del: Some(1), ..Default::default() }).unwrap();
+        p.props.align = Some(Align::Center);
+        let f = Fragment { blocks: vec![Block::Para(p)], ..Default::default() };
+        let html = f.to_html();
+        assert!(html.contains("text-align:center"), "{html}");
+        assert!(html.contains("<span style=\"font-weight:bold;\">bold &lt;</span>"), "{html}");
+        assert!(html.contains("font-style:italic;") && html.contains("color:#FF0000;"), "{html}");
+        assert!(html.contains("red &amp; blue"), "{html}");
+        assert!(!html.contains("gone"), "tracked deletions read as final: {html}");
+    }
+
+    #[test]
+    fn html_copy_writes_tables() {
+        let mut t = Table::new(1, 2, 200.0);
+        t.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("a", CharProps::default()))];
+        t.rows[0].cells[1].blocks = vec![para_block(Paragraph::with_text("b", CharProps::default()))];
+        let f = Fragment { blocks: vec![Block::Table(t)], ..Default::default() };
+        let html = f.to_html();
+        assert!(html.contains("<table>") && html.contains("<td><p>a</p></td><td><p>b</p></td>"), "{html}");
     }
 }

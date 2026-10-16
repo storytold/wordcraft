@@ -18,6 +18,7 @@ const MAX_DEPTH: usize = 16;
 pub struct FieldRange {
     pub instr: String,
     pub locked: bool,
+    pub dirty: bool,
     /// Where the `FieldStart` marker is.
     pub start: Pos,
     /// Where the `FieldEnd` marker is (the result is everything between the two).
@@ -37,7 +38,7 @@ fn scan(story: StoryRef, bl: &Blocks, prefix: &mut Vec<u32>, depth: usize, out: 
         return;
     }
     // Open starts: (index into out.ranges once closed is unknown, so keep the data here).
-    let mut open: Vec<(String, bool, Pos)> = Vec::new();
+    let mut open: Vec<(String, bool, bool, Pos)> = Vec::new();
     for (i, b) in bl.iter().enumerate() {
         prefix.push(u32::try_from(i).unwrap_or(u32::MAX));
         match &**b {
@@ -45,13 +46,13 @@ fn scan(story: StoryRef, bl: &Blocks, prefix: &mut Vec<u32>, depth: usize, out: 
                 let path = Path(prefix.clone());
                 for off in p.object_offsets() {
                     match p.object_at(off) {
-                        Some(InlineObject::FieldStart { instr, locked, .. }) => {
-                            open.push((instr.clone(), *locked, Pos::new(story, path.clone(), off)));
+                        Some(InlineObject::FieldStart { instr, locked, dirty }) => {
+                            open.push((instr.clone(), *locked, *dirty, Pos::new(story, path.clone(), off)));
                         }
                         Some(InlineObject::FieldEnd) => match open.pop() {
-                            Some((instr, locked, start)) => {
+                            Some((instr, locked, dirty, start)) => {
                                 let depth = open.len();
-                                out.ranges.push(FieldRange { instr, locked, start, end: Pos::new(story, path.clone(), off), depth });
+                                out.ranges.push(FieldRange { instr, locked, dirty, start, end: Pos::new(story, path.clone(), off), depth });
                             }
                             None => out.orphans.push((path.clone(), off)),
                         },
@@ -73,7 +74,7 @@ fn scan(story: StoryRef, bl: &Blocks, prefix: &mut Vec<u32>, depth: usize, out: 
         }
         prefix.pop();
     }
-    out.orphans.extend(open.into_iter().map(|(_, _, p)| (p.path, p.off)));
+    out.orphans.extend(open.into_iter().map(|(_, _, _, p)| (p.path, p.off)));
 }
 
 fn scan_story(story: StoryRef, bl: &Blocks) -> Scan {

@@ -2611,6 +2611,12 @@ preview	Title	Tytuł
 	Existing File or Web Page	Istniejący plik lub strona sieci Web
 	Link to:	Połącz z:
 	Place in This Document	Miejsce w tym dokumencie
+
+# Templates (#1227) and reopen last document (#918)
+	APA paper	Praca APA
+	MLA paper	Praca MLA
+	Reopen the last document at startup	Otwórz ponownie ostatni dokument przy uruchomieniu
+	On: with nothing else to open, WordCraft reopens the file it had open instead of the Start screen.	Włączone: gdy nie ma nic innego do otwarcia, WordCraft ponownie otwiera ostatnio otwarty plik zamiast ekranu startowego.
 # Table Layout › Sort dialog (#1205)
 	Column {n}	Kolumna {n}
 	Header row	Wiersz nagłówka

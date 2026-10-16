@@ -72,15 +72,18 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         CommandSpec::new("layout.pageNumberFormat", "Format Page Numbers", "Insert › Header & Footer › Page Number", |s, v| {
             let fmt = p::str(v, "format").map(wordcraft_doc::section::NumFormat::from_ooxml);
+            let has_start = v.get("start").is_some();
             let start = p::u64(v, "start").map(|x| x.min(100_000) as u32);
             with_sect(s, |x| {
                 if let Some(f) = fmt {
                     x.page_num_format = f;
                 }
-                x.page_num_start = start;
+                if has_start {
+                    x.page_num_start = start;
+                }
             })
         })
-        .params(r#"{"format"?: "decimal|lowerRoman|upperRoman|lowerLetter|upperLetter", "start"?: n}"#),
+        .params(r#"{"format"?: "decimal|lowerRoman|upperRoman|lowerLetter|upperLetter|numberInDash", "start"?: n|null (null: continue from previous section)}"#),
         CommandSpec::new("layout.documentGrid", "Document Grid", "Layout › Page Setup › Document Grid", document_grid).params(
             r#"{"type"?: "none|lines|linesAndChars|snapToChars", "linesPerPage"?: n (sets the line pitch from the text height), "charsPerLine"?: n (sets the character pitch from the text width), "linePitch"?: pt, "charSpace"?: n (4096ths of a point added to the default font size: the character pitch)} — left out stays as it is; returns the grid with its lines per page and characters per line"#,
         ),
@@ -1011,5 +1014,24 @@ mod tests {
         assert!(found > 0, "no candidates");
         assert_eq!(s.doc.plain_text(wordcraft_doc::StoryRef::Body).matches('\u{ad}').count(), found);
         assert!(s.run("layout.manualHyphenation", &json!({"from": {"block": 999, "off": 0}})).unwrap()["done"] == true);
+    }
+
+    /// #1113 / #1443: Format Page Numbers keeps start when format changes, and start: null continues.
+    #[test]
+    fn page_number_format_keeps_start_number() {
+        use wordcraft_doc::section::NumFormat;
+        let mut s = doc();
+        s.run("layout.pageNumberFormat", &json!({"start": 4})).unwrap();
+        assert_eq!(sect(&s).page_num_start, Some(4));
+        // Changing format alone keeps start at 4.
+        s.run("layout.pageNumberFormat", &json!({"format": "lowerRoman"})).unwrap();
+        assert_eq!(sect(&s).page_num_format, NumFormat::LowerRoman);
+        assert_eq!(sect(&s).page_num_start, Some(4));
+        // Empty object keeps both.
+        s.run("layout.pageNumberFormat", &json!({})).unwrap();
+        assert_eq!(sect(&s).page_num_start, Some(4));
+        // start: null clears it (continue from previous section).
+        s.run("layout.pageNumberFormat", &json!({"start": null})).unwrap();
+        assert_eq!(sect(&s).page_num_start, None);
     }
 }

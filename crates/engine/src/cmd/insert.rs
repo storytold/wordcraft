@@ -274,6 +274,8 @@ fn place_picture(s: &mut Session, bytes: Vec<u8>, width: Option<f32>, alt: &str)
     let props = s.typing_props();
     let at = delete_selection(s)?;
     let end = s.doc.insert_object(&at, obj, &props)?;
+    // The caret lands after the picture, collapsed: leaving it selected meant the next
+    // typing command deleted the picture (#965).
     s.sel = Selection::caret(end);
     Ok(json!({"media": key, "width": w, "height": h}))
 }

@@ -67,14 +67,64 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
     None
 }
 
+/// Largest picture side copied as image data, pixels.
+const MAX_IMAGE_DIM: u32 = 2048;
+
+/// The first picture in the copied fragment, decoded to RGBA (#375).
+pub(crate) fn copied_image(app: &WordApp) -> Option<(u32, u32, Vec<u8>)> {
+    use wordcraft_doc::{Block, InlineObject};
+    fn picture(block: &Block, depth: usize) -> Option<String> {
+        if depth > 8 {
+            return None;
+        }
+        match block {
+            Block::Para(p) => {
+                for o in &p.objects {
+                    if let InlineObject::Image { media, .. } = o {
+                        return Some(media.clone());
+                    }
+                }
+                None
+            }
+            Block::Table(t) => {
+                for cell in t.rows.iter().flat_map(|r| r.cells.iter()) {
+                    for cb in &cell.blocks {
+                        if let Some(m) = picture(cb, depth + 1) {
+                            return Some(m);
+                        }
+                    }
+                }
+                None
+            }
+        }
+    }
+    let f = app.session.clipboard.as_ref()?;
+    let key = f.blocks.iter().find_map(|b| picture(b, 0))?;
+    let bytes = app.session.doc.media.get(&key)?;
+    let img = image::load_from_memory(bytes).ok()?.to_rgba8();
+    (img.width() <= MAX_IMAGE_DIM && img.height() <= MAX_IMAGE_DIM).then(|| (img.width(), img.height(), img.into_raw()))
+}
+
 /// Put a copy on the system clipboard: its HTML beside the text (the formatting, #1523, and
 /// equations as MathML, #816) when the host can set it, else the text through egui. egui sets its
 /// text at the end of the frame, which would replace the HTML, so only one of them runs.
+/// A copied picture goes as image data too (#375).
 pub(crate) fn put(app: &WordApp, ctx: &egui::Context, text: &str, html: &str) {
+    if let Some(set_image) = &app.services.clipboard_write_image
+        && let Some((w, h, rgba)) = copied_image(app)
+    {
+        set_image(w, h, rgba);
+    }
     if text.is_empty() {
         return;
     }
     if !html.is_empty() && app.services.set_clipboard_html.as_ref().is_some_and(|f| f(html, text)) {
+        return;
+    }
+    if let Some(write) = &app.services.clipboard_write
+        && let Some(f) = &app.session.clipboard
+    {
+        write(text, &f.to_html());
         return;
     }
     ctx.copy_text(text.to_string());
@@ -84,6 +134,12 @@ pub(crate) fn put(app: &WordApp, ctx: &egui::Context, text: &str, html: &str) {
 pub(crate) fn put_result(app: &WordApp, ctx: &egui::Context, r: &Value) {
     let s = |k: &str| r.get(k).and_then(Value::as_str).unwrap_or("");
     put(app, ctx, s("text"), s("html"));
+}
+
+/// Copy/Cut finished: backward-compatible helper for callers passing plain text alone.
+#[allow(dead_code)]
+pub(crate) fn copied(app: &WordApp, ctx: &egui::Context, text: &str) {
+    put(app, ctx, text, "");
 }
 
 /// Format names worth showing: not the clipboard protocol's own bookkeeping targets.
@@ -140,6 +196,53 @@ mod tests {
 
     fn app(services: Services) -> WordApp {
         WordApp::new(Session::new(wordcraft_doc::Document::new()), services)
+    }
+
+    /// Copy offers the HTML rendering next to the text, so other programs keep the
+    /// formatting (#1243).
+    #[test]
+    fn copy_writes_html_next_to_text() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let written: Rc<RefCell<Vec<(String, String)>>> = Rc::default();
+        let w = written.clone();
+        let mut a =
+            app(Services { clipboard_write: Some(Box::new(move |t, h| w.borrow_mut().push((t.to_string(), h.to_string())))), ..Default::default() });
+        a.run("text.insert", json!({"text": "hi"})).unwrap();
+        a.run("select.all", json!({})).unwrap();
+        a.run("format.bold", json!({})).unwrap();
+        a.run("edit.copy", json!({})).unwrap();
+        let ctx = egui::Context::default();
+        copied(&a, &ctx, &a.session.clipboard_text.clone());
+        let w = written.borrow();
+        assert_eq!(w.len(), 1);
+        assert_eq!(w[0].0, "hi");
+        assert!(w[0].1.contains("font-weight:bold") && w[0].1.contains("hi"), "{}", w[0].1);
+    }
+
+    /// A copied picture goes on the clipboard as image data too (#375).
+    #[test]
+    fn copy_writes_picture_as_image_data() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let written: Rc<RefCell<Vec<(u32, u32, Vec<u8>)>>> = Rc::default();
+        let rec = written.clone();
+        let mut a = app(Services { clipboard_write_image: Some(Box::new(move |w, h, px| rec.borrow_mut().push((w, h, px)))), ..Default::default() });
+        let mut png = Vec::new();
+        image::RgbaImage::from_pixel(8, 4, image::Rgba([10, 80, 160, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let data = wordcraft_engine::cmd::insert::base64_encode(&png);
+        a.run("insert.picture", json!({"data": data})).unwrap();
+        a.run("select.all", json!({})).unwrap();
+        a.run("edit.copy", json!({})).unwrap();
+        let ctx = egui::Context::default();
+        copied(&a, &ctx, &a.session.clipboard_text.clone());
+        let w = written.borrow();
+        assert_eq!(w.len(), 1);
+        assert_eq!((w[0].0, w[0].1), (8, 4));
+        assert_eq!(w[0].2.len(), 8 * 4 * 4);
+        assert_eq!(&w[0].2[0..4], &[10, 80, 160, 255]);
     }
 
     fn first_para(a: &WordApp) -> String {

@@ -2229,6 +2229,12 @@
 	Existing File or Web Page	Fichier ou page web existant(e)
 	Link to:	Lier à :
 	Place in This Document	Emplacement dans ce document
+
+# Templates (#1227) and reopen last document (#918)
+	APA paper	Document APA
+	MLA paper	Document MLA
+	Reopen the last document at startup	Rouvrir le dernier document au démarrage
+	On: with nothing else to open, WordCraft reopens the file it had open instead of the Start screen.	Activé : s'il n'y a rien d'autre à ouvrir, WordCraft rouvre le fichier qui était ouvert au lieu de l'écran d'accueil.
 # Table Layout › Sort dialog (#1205)
 	Column {n}	Colonne {n}
 	Header row	Ligne d’en-tête

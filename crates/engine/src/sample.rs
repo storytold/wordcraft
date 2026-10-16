@@ -207,6 +207,80 @@ pub fn report() -> Document {
     d
 }
 
+/// An MLA-style paper shell: header line, centered title, section headings and a Works
+/// Cited page, double-spaced.
+pub fn mla() -> Document {
+    use wordcraft_doc::props::LineSpacing;
+    let body = |mut p: Paragraph| {
+        p.props.line_spacing = Some(LineSpacing::Multiple(2.0));
+        Block::Para(p)
+    };
+    let center = |text: &str| {
+        let mut p = para(text);
+        p.props.align = Some(Align::Center);
+        p.props.line_spacing = Some(LineSpacing::Multiple(2.0));
+        Block::Para(p)
+    };
+    let mut d = Document::new();
+    d.body = vec![
+        body(para("Lastname 1")),
+        body(para("Student Name")),
+        body(para("Instructor Name")),
+        body(para("Course")),
+        body(para("1 January 2026")),
+        center("Paper Title"),
+        body(styled("Introduction", "Heading1")),
+        body(para("State the thesis in the first paragraph.")),
+        body(styled("Body", "Heading1")),
+        body(para("Support the thesis, one idea per paragraph. Cite sources parenthetically (Author 12).")),
+        body(styled("Conclusion", "Heading1")),
+        body(para("Restate the thesis in new words.")),
+        center("Works Cited"),
+        body(para("Author, First. Title. Publisher, Year.")),
+    ]
+    .into_iter()
+    .map(std::sync::Arc::new)
+    .collect();
+    d
+}
+
+/// An APA-style paper shell: title block, section headings and a References page, double-spaced.
+pub fn apa() -> Document {
+    use wordcraft_doc::props::LineSpacing;
+    let body = |mut p: Paragraph| {
+        p.props.line_spacing = Some(LineSpacing::Multiple(2.0));
+        Block::Para(p)
+    };
+    let center = |text: &str| {
+        let mut p = para(text);
+        p.props.align = Some(Align::Center);
+        p.props.line_spacing = Some(LineSpacing::Multiple(2.0));
+        Block::Para(p)
+    };
+    let mut d = Document::new();
+    d.body = vec![
+        center("Paper Title"),
+        center("Author Name"),
+        center("Institution"),
+        body(styled("Abstract", "Heading1")),
+        body(para("Summarise the study in one paragraph.")),
+        body(styled("Introduction", "Heading1")),
+        body(para("Introduce the research question and hypotheses.")),
+        body(styled("Method", "Heading1")),
+        body(para("Describe participants, materials and procedure.")),
+        body(styled("Results", "Heading1")),
+        body(para("Report the findings.")),
+        body(styled("Discussion", "Heading1")),
+        body(para("Interpret the results and note limitations.")),
+        center("References"),
+        body(para("Author, F. (Year). Title. Publisher.")),
+    ]
+    .into_iter()
+    .map(std::sync::Arc::new)
+    .collect();
+    d
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,7 +288,7 @@ mod tests {
     #[test]
     fn samples_are_valid() {
         assert_eq!(sample_document().word_count(), 361);
-        for d in [sample_document(), letter(), resume(), report()] {
+        for d in [sample_document(), letter(), resume(), report(), mla(), apa()] {
             assert!(d.word_count() > 5);
             let l = wordcraft_layout::layout(&d, &mut wordcraft_layout::LayoutCache::new(), &Default::default());
             assert!(!l.pages.is_empty());

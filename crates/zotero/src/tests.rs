@@ -547,6 +547,28 @@ fn a_new_field_is_never_empty_so_zotero_keeps_a_new_bibliography() {
     assert_eq!(z.text(), "Text. Doe, J. (2020).");
 }
 
+#[test]
+fn citation_at_document_end_stays_closed() {
+    // #898: citing at the very end, typing after it, saving and reloading must all keep
+    // the field's end marker in place.
+    let mut z = Z::new("Hello", 5);
+    z.begin();
+    let id = z.cite(0, r"{\rtf  (Doe, {\i{}2020})}");
+    z.ok("Document_complete", json!([1]));
+    // Type right after the citation, at the very end of the document.
+    z.s.run("text.insert", &json!({"text": "!"})).unwrap();
+    assert_eq!(z.text(), "Hello (Doe, 2020)!");
+    let ranges = z.s.doc.field_ranges(StoryRef::Body);
+    assert_eq!(ranges.len(), 1);
+    assert!(z.s.sel.focus.off > ranges[0].end.off, "typed text lands outside the field");
+    let f = z.ok("Document_getFields", json!([1, "ReferenceMark"]));
+    assert_eq!(f, json!([[id], [CITE], [0]]));
+    // Save and reload: the end marker must survive the round trip.
+    let bytes = wordcraft_engine::io::save_bytes("probe.docx", &z.s.doc).unwrap();
+    let back = wordcraft_engine::io::open_bytes("probe.docx", &bytes).unwrap();
+    assert_eq!(back.field_ranges(StoryRef::Body).len(), 1);
+}
+
 /// #898: a click just after a citation puts the caret before its hidden field end. Zotero must
 /// see that caret outside the citation (as in Word), and a citation added there goes after the
 /// first one, not inside its result.

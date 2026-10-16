@@ -1,0 +1,11 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Source: https://github.com/storytold/wordcraft
+
+Files: *
+Copyright: 2026 the WordCraft authors
+License: MIT OR Apache-2.0
+
+License: MIT OR Apache-2.0
+ See /usr/share/common-licenses/MIT and /usr/share/common-licenses/Apache-2.0,
+ or the full texts in /usr/share/doc/wordcraft/LICENSE-MIT and
+ /usr/share/doc/wordcraft/LICENSE-APACHE.

@@ -5,10 +5,14 @@
 //! anchors…) sit in the text as U+FFFC; the k-th U+FFFC is `objects[k]`. Special characters:
 //! `\t` tab, `\n` manual line break, U+000C page break, U+000E column break.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 use serde::{Deserialize, Serialize};
 
+use crate::graphic::Embedded;
 use crate::props::{CharProps, ParaProps};
 use crate::section::SectionProps;
 use crate::{DocError, Result};
@@ -716,6 +720,16 @@ impl InlineObject {
     pub fn is_decorative(&self) -> bool {
         self.frame().is_some_and(|(_, _, f)| f.alt.decorative)
     }
+    /// Set the source (embedded XML + refs) on a Graphic object, so the original
+    /// markup is written back on save. Returns true if this is a Graphic.
+    pub fn set_source(&mut self, source: Arc<Embedded>) -> bool {
+        if let InlineObject::Graphic { graphic, .. } = self {
+            Arc::make_mut(graphic).source = Some(source);
+            true
+        } else {
+            false
+        }
+    }
     pub fn is_floating(&self) -> bool {
         match self {
             InlineObject::Image { float, .. }
@@ -724,6 +738,10 @@ impl InlineObject {
             | InlineObject::Group { float, .. } => float.wrap != Wrap::Inline,
             _ => false,
         }
+    }
+    /// Returns a mutable reference to the `source` field of a Graphic, if this is a Graphic.
+    pub fn source_slot_mut(&mut self) -> Option<&mut Option<Arc<Embedded>>> {
+        if let InlineObject::Graphic { graphic, .. } = self { Some(&mut Arc::make_mut(graphic).source) } else { None }
     }
     /// The geometry of an ink stroke (a freeform shape drawn with a pen), if this is one.
     pub fn ink(&self) -> Option<&crate::freeform::Freeform> {

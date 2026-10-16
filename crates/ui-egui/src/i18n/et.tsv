@@ -2256,6 +2256,12 @@
 	Existing File or Web Page	Olemasolev fail või veebileht
 	Link to:	Link:
 	Place in This Document	Koht selles dokumendis
+
+# Templates (#1227) and reopen last document (#918)
+	APA paper	APA uurimistöö
+	MLA paper	MLA uurimistöö
+	Reopen the last document at startup	Ava viimane dokument käivitamisel uuesti
+	On: with nothing else to open, WordCraft reopens the file it had open instead of the Start screen.	Sees: kui pole midagi muud avada, avab WordCraft avakuva asemel uuesti viimati avatud faili.
 # Table Layout › Sort dialog (#1205)
 	Column {n}	Veerg {n}
 	Header row	Päiserida

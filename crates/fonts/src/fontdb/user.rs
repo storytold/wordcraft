@@ -447,7 +447,9 @@ mod tests {
     }
 
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("wc-userfonts-{}-{name}", std::process::id()));
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let id = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("wc-userfonts-{}-{name}-{id}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }
@@ -599,6 +601,23 @@ mod tests {
         assert!(g != 0);
         assert_eq!(face.advance(g), src.advance(src.glyph_for('W')));
         assert_eq!(db.user_fonts().len(), 1);
+    }
+
+    #[test]
+    fn an_added_font_is_stored_for_the_next_start() {
+        // #582: with a user font folder, install_font stores the file; loading the folder
+        // again (the next start) brings the family back.
+        let dir = temp_dir("store");
+        let first = db();
+        let (loaded, _) = first.load_user_fonts(&dir);
+        assert!(loaded.is_empty());
+        let r = first.install_font("Userfont-Regular.ttf", &renamed("SourceSans3-Regular.ttf", FAMILY)).unwrap();
+        assert!(r.warning.is_none(), "{:?}", r.warning);
+        assert!(dir.join(&r.font.file).is_file(), "stored in the folder");
+        let next = db();
+        let (loaded, _) = next.load_user_fonts(&dir);
+        assert!(loaded.iter().any(|f| f.families().contains(&FAMILY.to_string())), "back after a restart");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

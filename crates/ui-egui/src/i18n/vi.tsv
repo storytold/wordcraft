@@ -2633,6 +2633,11 @@
 	Link to:	Liên kết tới:
 	Place in This Document	Vị trí trong tài liệu này
 
+# Templates (#1227) and reopen last document (#918)
+	APA paper	Bài viết APA
+	MLA paper	Bài viết MLA
+	Reopen the last document at startup	Mở lại tài liệu gần nhất khi khởi động
+	On: with nothing else to open, WordCraft reopens the file it had open instead of the Start screen.	Bật: khi không có gì khác để mở, WordCraft sẽ mở lại tệp đang mở thay vì màn hình Bắt đầu.
 # Missing dictionary on the status bar (#1441)
 	No spelling dictionary for {language} is installed, so it isn't checked. WordCraft looks for the Hunspell dictionary {name} in the WORDCRAFT_DICTIONARIES folder and in the usual system locations.	Chưa cài từ điển chính tả cho {language}, nên ngôn ngữ này không được kiểm tra. WordCraft tìm từ điển Hunspell {name} trong thư mục WORDCRAFT_DICTIONARIES và ở các vị trí thông thường của hệ thống.
 	{language} (no dictionary)	{language} (không có từ điển)

@@ -3,7 +3,7 @@
 use egui::{Align2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use serde_json::json;
 
-use crate::theme::{APP_COLOR, Tokens, medium, regular, semibold};
+use crate::theme::{Tokens, medium, regular, semibold};
 use crate::{WordApp, icons};
 
 const PAGES: [(&str, &str); 11] = [
@@ -29,11 +29,13 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         app.ui.backstage_page = "home".into();
     }
     let mac = app.integrated_titlebar;
+    let nav_fill = if recovery { egui::Color32::BLACK } else { t.panel };
+    let border_stroke = if recovery { Stroke::NONE } else { Stroke::new(1.0, t.border) };
     egui::Panel::left("backstage_nav")
         .exact_size(200.0)
         // Fixed width, as in Word: without this egui shows a resize handle that does nothing (#502).
         .resizable(false)
-        .frame(egui::Frame::NONE.fill(if recovery { egui::Color32::BLACK } else { APP_COLOR }).inner_margin(egui::Margin {
+        .frame(egui::Frame::NONE.fill(nav_fill).stroke(border_stroke).inner_margin(egui::Margin {
             left: 0,
             right: 0,
             top: if mac { 0 } else { 12 },
@@ -51,17 +53,21 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 // The chevron's stroke starts at the content edge.
                 let c = pos2(band.min.x + app.mac_titlebar.content_left + 3.0, band.center().y);
                 let resp = ui.interact(Rect::from_center_size(c, vec2(22.0, band.height())), ui.id().with("backstage_back"), Sense::click());
-                icons::paint(ui.painter(), Rect::from_center_size(c, vec2(18.0, 18.0)), "chevronLeft", egui::Color32::WHITE, egui::Color32::WHITE);
+                if resp.hovered() && !recovery {
+                    ui.painter().circle_filled(c, 11.0, t.hover);
+                }
+                let chevron_color = if recovery { egui::Color32::WHITE } else { t.icon };
+                icons::paint(ui.painter(), Rect::from_center_size(c, vec2(18.0, 18.0)), "chevronLeft", chevron_color, chevron_color);
                 resp
             } else {
                 let (r, resp) = ui.allocate_exact_size(vec2(200.0, 40.0), Sense::click());
-                icons::paint(
-                    ui.painter(),
-                    Rect::from_center_size(pos2(r.min.x + 26.0, r.center().y), vec2(18.0, 18.0)),
-                    "chevronLeft",
-                    egui::Color32::WHITE,
-                    egui::Color32::WHITE,
-                );
+                let c = pos2(r.min.x + 26.0, r.center().y);
+                if resp.hovered() {
+                    let fill = if recovery { egui::Color32::from_white_alpha(26) } else { t.hover };
+                    ui.painter().circle_filled(c, 14.0, fill);
+                }
+                let chevron_color = if recovery { egui::Color32::WHITE } else { t.icon };
+                icons::paint(ui.painter(), Rect::from_center_size(c, vec2(18.0, 18.0)), "chevronLeft", chevron_color, chevron_color);
                 resp
             };
             // Escape in the built-in file browser closes only the browser.
@@ -77,16 +83,30 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, on, tl!(label)));
                 let active = app.ui.backstage_page == id;
                 if active {
-                    ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(46));
+                    let fill = if recovery { egui::Color32::from_white_alpha(46) } else { t.checked };
+                    ui.painter().rect_filled(r, 0.0, fill);
+                    if !recovery {
+                        ui.painter().rect_filled(Rect::from_min_size(r.min, vec2(3.0, r.height())), 0.0, t.accent);
+                    }
                 } else if on && resp.hovered() {
-                    ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(26));
+                    let fill = if recovery { egui::Color32::from_white_alpha(26) } else { t.hover };
+                    ui.painter().rect_filled(r, 0.0, fill);
                 }
+                let text_color = if recovery {
+                    if on { egui::Color32::WHITE } else { egui::Color32::from_white_alpha(110) }
+                } else if !on {
+                    t.text_disabled
+                } else if active {
+                    t.accent_text
+                } else {
+                    t.text
+                };
                 ui.painter().text(
                     pos2(r.min.x + 22.0, r.center().y),
                     Align2::LEFT_CENTER,
                     tl!(label),
                     if active { semibold(14.0) } else { medium(14.0) },
-                    if on { egui::Color32::WHITE } else { egui::Color32::from_white_alpha(110) },
+                    text_color,
                 );
                 if resp.clicked() {
                     match id {
@@ -122,9 +142,17 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     let (r, resp) = ui.allocate_exact_size(vec2(200.0, 32.0), Sense::click());
                     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tl!(label)));
                     if resp.hovered() {
-                        ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(26));
+                        let fill = if recovery { egui::Color32::from_white_alpha(26) } else { t.hover };
+                        ui.painter().rect_filled(r, 0.0, fill);
                     }
-                    ui.painter().text(pos2(r.min.x + 22.0, r.center().y), Align2::LEFT_CENTER, tl!(label), regular(13.0), egui::Color32::WHITE);
+                    let text_color = if recovery {
+                        egui::Color32::WHITE
+                    } else if resp.hovered() {
+                        t.text
+                    } else {
+                        t.text_dim
+                    };
+                    ui.painter().text(pos2(r.min.x + 22.0, r.center().y), Align2::LEFT_CENTER, tl!(label), regular(13.0), text_color);
                     if resp.clicked() {
                         if id == "discord" {
                             let _ = app.run("ui.discord", json!({}));
@@ -268,8 +296,15 @@ fn template_tile(ui: &mut Ui, app: &mut WordApp, label: &str, template: &str) {
 }
 
 /// The built-in templates in gallery order: display label and the `file.new` template id.
-const TEMPLATES: [(&str, &str); 5] =
-    [("Blank document", "blank"), ("Studio handbook (sample)", "sample"), ("Letter", "letter"), ("Résumé", "resume"), ("Report", "report")];
+const TEMPLATES: [(&str, &str); 7] = [
+    ("Blank document", "blank"),
+    ("Studio handbook (sample)", "sample"),
+    ("Letter", "letter"),
+    ("Résumé", "resume"),
+    ("Report", "report"),
+    ("MLA paper", "mla"),
+    ("APA paper", "apa"),
+];
 
 /// How many templates Home shows before "More templates" (the rest are on New).
 const HOME_TEMPLATES: usize = 4;
@@ -601,7 +636,7 @@ mod tests {
     #[test]
     fn template_search_matches_labels_case_insensitively() {
         let ids = |q: &str| matching_templates(q).into_iter().map(|(_, id)| id).collect::<Vec<_>>();
-        assert_eq!(ids(""), ["blank", "sample", "letter", "resume", "report"]);
+        assert_eq!(ids(""), ["blank", "sample", "letter", "resume", "report", "mla", "apa"]);
         assert_eq!(ids("  LETTER "), ["letter"]);
         assert_eq!(ids("re"), ["resume", "report"]);
         assert_eq!(ids("résumé"), ["resume"]);
@@ -858,5 +893,25 @@ mod tests {
         h.get_by_label("Save As").click();
         h.run_steps(4);
         assert_eq!(h.state().ui.backstage_page, "saveAs");
+    }
+
+    #[test]
+    fn backstage_sidebar_adapts_to_theme() {
+        for dark in [false, true] {
+            let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+            a.ui.theme = if dark { crate::theme::Appearance::Dark } else { crate::theme::Appearance::Light };
+            a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+                |ui, app: &mut WordApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                a,
+            );
+            h.run_steps(4);
+            assert!(h.state().ui.backstage);
+            assert_eq!(h.state().ui.backstage_page, "home");
+        }
     }
 }

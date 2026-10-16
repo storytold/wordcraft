@@ -2610,6 +2610,12 @@
 	Existing File or Web Page	Съществуващ файл или уеб страница
 	Link to:	Връзка към:
 	Place in This Document	Място в този документ
+
+# Templates (#1227) and reopen last document (#918)
+	APA paper	Доклад APA
+	MLA paper	Доклад MLA
+	Reopen the last document at startup	Повторно отваряне на последния документ при стартиране
+	On: with nothing else to open, WordCraft reopens the file it had open instead of the Start screen.	Вкл.: когато няма нищо друго за отваряне, WordCraft отваря отново предишния файл вместо началния екран.
 # Table Layout › Sort dialog (#1205)
 	Column {n}	Колона {n}
 	Header row	Заглавен ред

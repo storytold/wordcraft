@@ -140,6 +140,41 @@ fn single_entry_toc_keeps_formatted_result_and_nested_page_field() {
     );
 }
 
+const FIELD_DEL_DOC: &str = r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> =SUM(ABOVE) </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:del w:id="1" w:author="Tester" w:date="2026-10-12T00:00:00Z"><w:r><w:delText>$150.00</w:delText></w:r></w:del><w:r><w:fldChar w:fldCharType="end"/></w:r><w:ins w:id="3" w:author="Tester" w:date="2026-10-12T00:00:00Z"><w:r><w:t>$140.00</w:t></w:r></w:ins></w:p><w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> =2+3 </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:del w:id="4" w:author="Tester" w:date="2026-10-12T00:00:00Z"><w:r><w:delText>5</w:delText></w:r></w:del><w:r><w:fldChar w:fldCharType="end"/></w:r><w:ins w:id="5" w:author="Tester" w:date="2026-10-12T00:00:00Z"><w:r><w:t>five</w:t></w:r></w:ins></w:p>"#;
+
+#[test]
+fn tracked_deletion_inside_a_field_result_stays_a_revision() {
+    // #1037: pandoc reads the original as `[$150.00]{.deletion}`; WordCraft used to see the
+    // deleted result as ordinary text, so Accept All left `$$140.00`.
+    let d = wordcraft_docx::read(&docx(FIELD_DEL_DOC, &[], &[])).unwrap();
+    // The deleted result is a tracked deletion, not shown text, and the insertions survive.
+    let final_text = |doc: &Document| doc.final_text(wordcraft_doc::StoryRef::Body).replace('\n', " ");
+    assert_eq!(final_text(&d), "$140.00 five");
+    assert!(!d.plain_text(wordcraft_doc::StoryRef::Body).replace('\u{FFFC}', "").is_empty());
+    // Saving writes the deletions back as revisions.
+    let r = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(final_text(&r), "$140.00 five");
+}
+
+#[test]
+fn dirty_field_begin_markers_round_trip() {
+    // #877: `w:dirty` on a field begin tells Word to rebuild the result; dropping it
+    // leaves stale placeholder text visible.
+    let d = read_body(
+        r#"<w:p><w:r><w:fldChar w:fldCharType="begin" w:dirty="true"/></w:r><w:r><w:instrText> TOC \o "1-1" \h </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>stale</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#,
+    );
+    let p = paras(&d);
+    assert_eq!(
+        p[0].objects.iter().find_map(|o| match o {
+            InlineObject::FieldStart { dirty, .. } => Some(*dirty),
+            _ => None,
+        }),
+        Some(true)
+    );
+    let files = unzip(&wordcraft_docx::write(&d).unwrap());
+    assert!(text(&files, "word/document.xml").contains("w:dirty"), "dirty survives the save");
+}
+
 #[test]
 fn toc_complex_field_spanning_paragraphs() {
     let body = r#"

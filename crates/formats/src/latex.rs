@@ -315,7 +315,9 @@ impl Writer {
         if let Some(size) = f.size.filter(|v| v.is_finite() && *v >= 1.0 && *v <= 1638.0) {
             s = format!("{{\\fontsize{{{}}}{{{}}}\\selectfont {s}}}", num(size), num(size * 1.2));
         }
-        if let Some(l) = f.link.as_deref().filter(|l| !l.is_empty()) {
+        // Non-web targets (e.g. `javascript:`) stay plain text, as in the HTML and
+        // Markdown exporters (`is_safe_href`).
+        if let Some(l) = f.link.as_deref().filter(|l| wordcraft_doc::link::is_safe_href(l)) {
             s = match l.strip_prefix('#') {
                 // An internal bookmark reference, not a URL.
                 Some(target) => format!("\\hyperlink{{{}}}{{{s}}}", escape_url(target)),
