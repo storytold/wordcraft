@@ -21,6 +21,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 unicode-segmentation = { workspace = true }
+icu_segmenter = { workspace = true }
+icu_normalizer = { workspace = true }
+icu_casemap = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
