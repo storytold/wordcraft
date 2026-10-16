@@ -343,8 +343,11 @@ fn shape(s: &mut Session, v: &Value) -> CmdResult {
     if super::canvas::add_member(s, obj.clone())?.is_some() {
         return sel_result(s);
     }
+    // Word draws a new shape beside what is selected and never deletes it: the shape just
+    // inserted (which is selected) stays, and so does selected text (#2019). It goes after the
+    // selection and becomes the selection. (A picture does replace the selection, as in Word.)
     let props = s.typing_props();
-    let at = delete_selection(s)?;
+    let (_, at) = s.sel.ordered();
     let end = s.doc.insert_object(&at, obj, &props)?;
     s.sel = Selection { anchor: at, focus: end };
     sel_result(s)

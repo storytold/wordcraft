@@ -1594,6 +1594,41 @@ mod tests {
         assert_eq!(s.run("arrange.selectionPane", &json!({})).unwrap().as_array().map(Vec::len), Some(2));
     }
 
+    /// #2019: Insert › Shapes adds each new shape beside the selected one, as Word draws it, so
+    /// shapes inserted in a row are all kept (the second used to replace the first, which stays
+    /// selected after its insert). Selected text stays too, and the new shape is selected.
+    #[test]
+    fn shapes_inserted_in_a_row_are_all_kept_and_keep_selected_text() {
+        let objects = |s: &mut Session| s.run("arrange.selectionPane", &json!({})).unwrap().as_array().map(Vec::len);
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        for kind in ["rectangle", "ellipse", "star"] {
+            s.run("insert.shape", &json!({"kind": kind})).unwrap();
+        }
+        assert_eq!(objects(&mut s), Some(3));
+
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Kiln room"));
+        s.run("select.text", &json!({"text": "Kiln"})).unwrap();
+        s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+        let text = s.doc.plain_text(StoryRef::Body);
+        assert!(text.starts_with("Kiln") && text.ends_with(" room"), "{text:?}");
+        assert_eq!(objects(&mut s), Some(1));
+        let (a, b) = s.sel.ordered();
+        let obj = wordcraft_doc::para::OBJ.len_utf8();
+        assert_eq!((a.off, b.off), (4, 4 + obj), "the new shape, after the text, is selected");
+    }
+
+    /// Insert › Pictures does replace a selected picture, as Word does (checked in Word for
+    /// Windows while fixing #2019): only shapes are added beside the selection.
+    #[test]
+    fn an_inserted_picture_replaces_a_selected_picture() {
+        let data = super::super::insert::base64_encode(&png(20, 10));
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("insert.picture", &json!({"data": data})).unwrap();
+        s.sel = crate::Selection { anchor: Pos::body(0, 0), focus: Pos::body(0, wordcraft_doc::para::OBJ.len_utf8()) };
+        s.run("insert.picture", &json!({"data": data})).unwrap();
+        assert_eq!(s.run("arrange.selectionPane", &json!({})).unwrap().as_array().map(Vec::len), Some(1));
+    }
+
     #[test]
     fn picture_pipeline() {
         let mut s = Session::new(wordcraft_doc::Document::new());
