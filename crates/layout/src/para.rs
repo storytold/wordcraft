@@ -1985,8 +1985,9 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                 // and descent, and grows above the baseline to fit a taller picture.
                 let (a, d) = if matches!(c.kind, ClKind::Object(_)) && c.obj_h > 0.0 {
                     if pl.maths.iter().any(|(k, _)| c.kind == ClKind::Object(*k)) {
-                        // An equation is text: its ascent and descent count like the text's.
-                        (c.obj_h, c.obj_d)
+                        // Exact spacing keeps the run's baseline; tall math may overflow the
+                        // fixed line box without moving adjacent text up by its denominator.
+                        if matches!(rp.line_spacing, LineSpacing::Exactly(_)) { (st.ascent, st.descent) } else { (c.obj_h, c.obj_d) }
                     } else {
                         obj_asc = obj_asc.max(c.obj_h);
                         (st.ascent, st.descent)

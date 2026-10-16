@@ -7263,3 +7263,56 @@ fn row_nil_overrides_style() {
     d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
     assert_eq!(rules_on_page0(&lay(&d)), vec![2.0]);
 }
+
+/// Exact line pitch keeps the text baseline even when an equation has a deep denominator.
+#[test]
+fn exact_math_keeps_run_baseline() {
+    use wordcraft_doc::props::LineSpacing;
+    for display in [false, true] {
+        for spacing in [LineSpacing::Exactly(12.0), LineSpacing::AtLeast(12.0), LineSpacing::Multiple(1.0)] {
+            let mut baseline = Vec::new();
+            let mut following = Vec::new();
+            for equation in [None, Some("a/(b/c)")] {
+                let chr = wordcraft_doc::CharProps { font: Some(wordcraft_doc::styles::BODY_FONT.into()), size: Some(12.0), ..Default::default() };
+                let mut p = wordcraft_doc::Paragraph::new();
+                p.props.line_spacing = Some(spacing);
+                match equation {
+                    None => {
+                        p.insert_text(0, "x", &chr).unwrap();
+                    }
+                    Some(text) => p
+                        .insert_object(
+                            0,
+                            InlineObject::Equation {
+                                linear: text.into(),
+                                display,
+                                math: wordcraft_doc::math::Math { nodes: wordcraft_doc::math::parse_linear(text), ..Default::default() },
+                            },
+                            &chr,
+                        )
+                        .unwrap(),
+                }
+                let mut d = Document::from_text("After");
+                d.body.insert(0, wordcraft_doc::para_block(p));
+                let l = lay(&d);
+                let (y, para) = l.pages[0]
+                    .items
+                    .iter()
+                    .find_map(|it| match it {
+                        Placed::Lines { path, y, para, .. } if *path == Path::top(0) => Some((*y, para)),
+                        _ => None,
+                    })
+                    .unwrap();
+                baseline.push(y + para.lines[0].baseline);
+                following.push(para_at(&l, &[1])[0].1);
+            }
+            match spacing {
+                LineSpacing::Exactly(_) => {
+                    assert!((baseline[0] - baseline[1]).abs() < 0.01, "display={display}: {baseline:?}");
+                    assert!((following[0] - following[1]).abs() < 0.01, "fixed pitch: {following:?}");
+                }
+                _ => assert!(following[1] > following[0], "minimum pitch grows for math: {following:?}"),
+            }
+        }
+    }
+}
