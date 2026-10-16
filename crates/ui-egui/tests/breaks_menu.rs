@@ -18,6 +18,10 @@ fn layout_tab() -> egui_kittest::Harness<'static, WordApp> {
     for _ in 0..6 {
         h.step();
     }
+    // The test looks for English ribbon labels. An integration test links the library without
+    // `cfg!(test)`, so the app follows the system language and a non-English machine labels the
+    // ribbon in its own language (#1976): pin the interface language through the app itself.
+    h.state_mut().run("ui.language", json!({"value": "en"})).unwrap();
     h.state_mut().run("ui.tab", json!({"tab": "Layout"})).unwrap();
     for _ in 0..3 {
         h.step();
