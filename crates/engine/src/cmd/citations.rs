@@ -519,18 +519,28 @@ pub fn entry(src: &Source, style_name: &str, n: usize) -> String {
     render(if src.journal.is_empty() { st.book } else { st.article }, &field)
 }
 
+/// The tag a new source gets, as Word makes it: the first three letters of the first author's
+/// name and the last two digits of the year (`Smi20`), with `1`, `2`… added while it is taken.
+fn auto_tag(doc: &Document, src: &Source) -> String {
+    let name: String =
+        authors(&src.author).first().map(|x| x.0.clone()).unwrap_or_default().chars().filter(|c| c.is_alphanumeric()).take(3).collect();
+    let name = if name.is_empty() { "Src".to_string() } else { name };
+    let digits: Vec<char> = src.year.chars().filter(char::is_ascii_digit).collect();
+    let year: String = digits.get(digits.len().saturating_sub(2)..).unwrap_or_default().iter().collect();
+    let base = format!("{name}{year}");
+    let taken = |t: &str| doc.sources.iter().any(|x| x.tag == t);
+    if !taken(&base) {
+        return base;
+    }
+    (1u32..).map(|n| format!("{base}{n}")).find(|t| !taken(t)).unwrap_or(base)
+}
+
 fn sources(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(a) = v.get("add") {
         let mut src: Source = serde_json::from_value(a.clone()).map_err(|e| CmdError::Params(e.to_string()))?;
+        // A new source's tag is made from its author and year; an edit keeps the tag it has.
         if src.tag.is_empty() {
-            let base: String = authors(&src.author)
-                .first()
-                .map(|x| x.0.clone())
-                .unwrap_or_else(|| "Source".into())
-                .chars()
-                .filter(|c| c.is_alphanumeric())
-                .collect();
-            src.tag = format!("{base}{}", src.year);
+            src.tag = auto_tag(&s.doc, &src);
         }
         // Edit Source keeps the source's place in the list and refreshes its citations.
         match s.doc.sources.iter().position(|x| x.tag == src.tag) {
@@ -1183,6 +1193,52 @@ mod tests {
         // The field sits after the bookmark, so it doesn't mark itself.
         let name = s.doc.bookmarks()[0].0.clone();
         assert_eq!(crate::cmd::references::bookmark_text(&s.doc, &name).as_deref(), Some("Kilns"));
+    }
+
+    fn src_of(author: &str, year: &str) -> Value {
+        json!({"author": author, "year": year, "title": "T"})
+    }
+
+    #[test]
+    fn editing_author_and_year_keeps_the_tag_and_updates_the_citation_text() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("references.sources", &json!({"add": src_of("Smith, Ann", "2020")})).unwrap();
+        assert_eq!(s.doc.sources[0].tag, "Smi20");
+        s.run("references.citation", &json!({"tag": "Smi20"})).unwrap();
+        // What the Edit Source dialog sends: the unchanged tag with the new author and year.
+        let mut edited = src_of("Jones, Bo", "2021");
+        edited["tag"] = json!("Smi20");
+        s.run("references.sources", &json!({"add": edited})).unwrap();
+        assert_eq!(s.doc.sources.len(), 1);
+        assert_eq!(s.doc.sources[0].tag, "Smi20");
+        let f = fields(&s);
+        assert_eq!(f[0].0, "CITATION Smi20");
+        assert!(f[0].1.contains("Jones") && f[0].1.contains("2021"), "{:?}", f[0].1);
+    }
+
+    #[test]
+    fn a_new_sources_tag_is_three_letters_and_two_year_digits() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        for (a, y) in [
+            ("Kim", "2000"),
+            ("Kim", "2000"),
+            ("Kim", "2000"),
+            ("Lee", "2019"),
+            ("Li", "1999"),
+            ("", ""),
+            ("", ""),
+            ("Ünal, Ece", "7"),
+            ("O'Neil", "20x5"),
+        ] {
+            s.run("references.sources", &json!({"add": src_of(a, y)})).unwrap();
+        }
+        let tags: Vec<_> = s.doc.sources.iter().map(|x| x.tag.as_str()).collect();
+        assert_eq!(tags, ["Kim00", "Kim001", "Kim002", "Lee19", "Li99", "Src", "Src1", "Üna7", "ONe05"]);
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        let mut a = src_of("Lee", "2019");
+        a["tag"] = json!("MyTag");
+        s.run("references.sources", &json!({"add": a})).unwrap();
+        assert_eq!(s.doc.sources[0].tag, "MyTag");
     }
 
     fn two_sources(s: &mut Session, a_title: &str) {
