@@ -133,7 +133,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect]
             if resp.double_clicked() && matches!(d.target.edge, Edge::Column(_)) {
                 let sc = page_scale(rects, layout, scale, d.page).unwrap_or(1.0);
                 let params = json!({"page": d.page, "x": d.from.0, "y": d.from.1, "reach": REACH_PX / sc});
-                if let Err(e) = app.run("table.fitColumn", params) {
+                if let Err(e) = app.run_keep_view("table.fitColumn", params) {
                     app.status(e);
                 }
             }
@@ -145,7 +145,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect]
             "page": d.page, "x": d.from.0, "y": d.from.1, "toX": d.to.0, "toY": d.to.1,
             "shift": share == Share::LeftOnly, "ctrl": share == Share::Proportional, "reach": REACH_PX / sc,
         });
-        if let Err(e) = app.run("table.resizeDrag", params) {
+        if let Err(e) = app.run_keep_view("table.resizeDrag", params) {
             app.status(e);
         }
         return true;
@@ -378,6 +378,30 @@ pub(crate) mod tests {
         assert_eq!(h.state().session.sel, sel, "the selection is kept");
         assert!(h.state_mut().session.undo());
         assert_eq!(cell(&mut h, 0, 0), a);
+    }
+
+    /// #1738: releasing a column-border drag leaves the view where it is, not scrolled back to
+    /// the caret; typing afterwards still follows the caret.
+    #[test]
+    fn dragging_a_column_border_keeps_the_view_where_it_is() {
+        let mut h = table_window();
+        let a = cell(&mut h, 0, 0);
+        let start = screen(&mut h, a.right(), a.y + a.h / 2.0);
+        let end = screen(&mut h, a.right() + 30.0, a.y + a.h / 2.0);
+        h.event(egui::Event::PointerMoved(start));
+        steps(&mut h, 2);
+        button(&h, start, true);
+        h.step();
+        h.event(egui::Event::PointerMoved(end));
+        steps(&mut h, 2);
+        h.state_mut().canvas.scroll_to_caret = false;
+        let depth = h.state().session.undo_depth();
+        button(&h, end, false);
+        h.step();
+        assert_eq!(h.state().session.undo_depth(), depth + 1, "the drag was applied");
+        assert!(!h.state().canvas.scroll_to_caret, "the resize scrolled to the caret");
+        h.state_mut().run("text.insert", json!({"text": "x"})).unwrap();
+        assert!(h.state().canvas.scroll_to_caret, "typing still brings the caret into view");
     }
 
     /// The zone of the ruler marker named `label` nearest to screen point `near`.

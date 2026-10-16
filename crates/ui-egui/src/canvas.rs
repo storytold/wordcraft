@@ -43,6 +43,9 @@ pub struct CanvasState {
     /// revision: finding out walks every paragraph, too slow for every frame (#811).
     markup_facts: std::cell::Cell<Option<((u64, u64), [bool; 3])>>,
     pub scroll_to_caret: bool,
+    /// Set while a command runs for a mouse drag on a table: the pointer is already
+    /// on the target, so the view stays put instead of following the caret (#1738).
+    pub keep_view: bool,
     /// A heading navigation click aligns its page against the navigation pane, not just visible.
     pub(crate) nav_to_caret: bool,
     /// Touchpad travel not yet converted to an entire reading-column turn.
@@ -188,6 +191,7 @@ impl Default for CanvasState {
             page_keys: PageKeys::default(),
             markup_facts: std::cell::Cell::new(None),
             scroll_to_caret: true,
+            keep_view: false,
             nav_to_caret: false,
             read_wheel_accum: 0.0,
             read_viewport: None,

@@ -66,7 +66,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect]
             // Released: a drag moves the table (one undo step), a click selects it.
             let moved = (d.to.0 - d.from.0).abs() >= 0.5 || (d.to.1 - d.from.1).abs() >= 0.5;
             let id = if moved && table_mouse::movable(&d.target.geom) { "table.moveDrag" } else { "table.selectAt" };
-            if let Err(e) = app.run(id, at) {
+            if let Err(e) = app.run_keep_view(id, at) {
                 app.status(e);
             }
             return true;
@@ -76,7 +76,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect]
         if down {
             if d.to != d.sent {
                 d.sent = d.to;
-                let _ = app.run("table.selectAt", at);
+                let _ = app.run_keep_view("table.selectAt", at);
             }
             app.canvas.table_drag = Some(d);
         } else if matches!(d.target.spot, Spot::Cell(..))
@@ -95,14 +95,14 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect]
     let at = json!({"page": page, "x": x, "y": y, "reach": reach});
     match target.spot {
         Spot::InsertRow(_) | Spot::InsertColumn(_) => {
-            if let Err(e) = app.run("table.insertAt", at) {
+            if let Err(e) = app.run_keep_view("table.insertAt", at) {
                 app.status(e);
             }
         }
         spot => {
             // A selection area selects at once; the move handle waits for the release.
             if spot != Spot::Handle
-                && let Err(e) = app.run("table.selectAt", at)
+                && let Err(e) = app.run_keep_view("table.selectAt", at)
             {
                 app.status(e);
             }
@@ -398,5 +398,27 @@ mod tests {
         let moved = cell(&mut h, 0, 0);
         assert!((moved.x - (a.x + 40.0)).abs() < 1.0 && (moved.y - (a.y + 30.0)).abs() < 1.0, "{a:?} → {moved:?}");
         assert_eq!(h.state().session.undo_depth(), depth + 1);
+    }
+
+    /// #1738: dropping the move handle leaves the view where it is.
+    #[test]
+    fn dropping_the_move_handle_keeps_the_view_where_it_is() {
+        let mut h = table_window();
+        let a = cell(&mut h, 0, 0);
+        let (hx, hy) = (a.x - 6.0, a.y - 6.0);
+        let start = screen(&mut h, hx, hy);
+        h.event(egui::Event::PointerMoved(start));
+        steps(&mut h, 2);
+        button(&h, start, true);
+        h.step();
+        let end = screen(&mut h, hx + 40.0, hy + 30.0);
+        h.event(egui::Event::PointerMoved(end));
+        steps(&mut h, 2);
+        h.state_mut().canvas.scroll_to_caret = false;
+        let depth = h.state().session.undo_depth();
+        button(&h, end, false);
+        h.step();
+        assert_eq!(h.state().session.undo_depth(), depth + 1, "the table moved");
+        assert!(!h.state().canvas.scroll_to_caret, "the move scrolled to the caret");
     }
 }

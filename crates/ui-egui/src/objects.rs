@@ -751,6 +751,55 @@ mod tests {
         let r = shape(&mut h);
         assert!((r.x + r.w / 2.0 - centre - 1.5).abs() < 0.01, "{r:?}");
     }
+    /// #1738: a floating shape dragged from page 1 onto page 2 leaves the view where it is, even
+    /// though the command that drops it (`arrange.bounds`) is not a view command.
+    #[test]
+    fn dropping_a_shape_on_another_page_keeps_the_view_where_it_is() {
+        use egui::{Event, PointerButton};
+        let mut a = WordApp::new(wordcraft_engine::Session::new(Document::new()), crate::Services::default());
+        a.run("view.commentsPane", json!({"value": false})).unwrap();
+        a.run("insert.shape", json!({"kind": "rectangle", "width": 100, "height": 50})).unwrap();
+        a.run("arrange.bounds", json!({"page": 0, "x": 100, "y": 250})).unwrap();
+        let end = Pos::body(0, wordcraft_doc::para::OBJ.len_utf8());
+        a.run("caret.set", json!({"pos": end})).unwrap();
+        a.run("text.insert", json!({"text": "one"})).unwrap();
+        a.run("text.newParagraph", json!({})).unwrap();
+        a.run("para.pageBreakBefore", json!({})).unwrap();
+        a.run("text.insert", json!({"text": "two"})).unwrap();
+        a.run("view.zoom", json!({"value": 30})).unwrap();
+        a.run("select.range", json!({"anchor": Pos::body(0, 0), "focus": end})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        for _ in 0..6 {
+            h.step();
+        }
+        let r = h.state_mut().session.layout().object(&Pos::body(0, 0), 0).unwrap().rect;
+        let from = crate::canvas::page_to_screen(h.state_mut(), 0, r.x + r.w / 2.0, r.y + r.h / 2.0).unwrap();
+        let to = crate::canvas::page_to_screen(h.state_mut(), 1, 200.0, 300.0).unwrap();
+        let button =
+            |at: Pos2, pressed: bool| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Default::default() };
+        h.event(Event::PointerMoved(from));
+        h.event(button(from, true));
+        h.step();
+        for k in 1..=4 {
+            h.event(Event::PointerMoved(from + (to - from) * (k as f32 / 4.0)));
+            h.step();
+        }
+        h.state_mut().canvas.scroll_to_caret = false;
+        h.event(button(to, false));
+        h.step();
+        h.step();
+        let landed = h.state_mut().session.layout().object_at(1, 200.0, 300.0, 0.0).is_some();
+        assert!(landed, "the shape landed on page 2");
+        assert!(!h.state().canvas.scroll_to_caret, "the drop scrolled to the caret");
+    }
+
     /// A floating rectangle shape, `w` × `h`.
     fn floating_rect(w: f32, h: f32) -> InlineObject {
         InlineObject::Shape {
