@@ -930,6 +930,8 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool) -> Vec<Para> {
         let (ins, del) = rev_marks(doc, &p.mark);
         (out.mark_ins, out.mark_del) = (ins.map(Box::new), del.map(Box::new));
     }
+    // The paragraph that ends a section carries its properties (the last piece of it does).
+    out.section.clone_from(&p.section);
     done.push(out);
     done
 }
