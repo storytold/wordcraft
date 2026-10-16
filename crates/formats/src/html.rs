@@ -1024,8 +1024,18 @@ impl<'r> Builder<'r> {
                         fmt.font = Some(fam);
                     }
                 }
-                if let Some(sz) = attr(attrs, "size").and_then(|s| s.trim().parse::<i32>().ok()) {
-                    fmt.size = Some([7.5, 10.0, 12.0, 13.5, 18.0, 24.0, 36.0].get((sz.clamp(1, 7) - 1) as usize).copied().unwrap_or(12.0));
+                if let Some(sz) = attr(attrs, "size") {
+                    let s = sz.trim();
+                    let val = if let Some(rest) = s.strip_prefix('+') {
+                        rest.parse::<i32>().ok().map(|d| 3 + d)
+                    } else if let Some(rest) = s.strip_prefix('-') {
+                        rest.parse::<i32>().ok().map(|d| 3 - d)
+                    } else {
+                        s.parse::<i32>().ok()
+                    };
+                    if let Some(sz) = val {
+                        fmt.size = Some([7.5, 10.0, 12.0, 13.5, 18.0, 24.0, 36.0].get((sz.clamp(1, 7) - 1) as usize).copied().unwrap_or(12.0));
+                    }
                 }
             }
             "a" => {
@@ -1784,5 +1794,22 @@ mod tests {
     #[test]
     fn entities() {
         assert_eq!(unescape("a &lt;b&gt; &#65;&#x42; &bogus; &"), "a <b> AB &bogus; &");
+    }
+
+    #[test]
+    fn font_size_relative_and_absolute() {
+        let f = parse("<font size=\"+1\">larger</font><font size=\"-1\">smaller</font><font size=\"5\">huge</font>");
+        let inls = match &f.blocks[0] {
+            FBlock::Para(p) => &p.inlines,
+            _ => panic!("expected para"),
+        };
+        let sizes: Vec<Option<f32>> = inls
+            .iter()
+            .map(|i| match i {
+                Inline::Text(_, fmt) => fmt.size,
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sizes, vec![Some(13.5), Some(10.0), Some(18.0)]);
     }
 }
