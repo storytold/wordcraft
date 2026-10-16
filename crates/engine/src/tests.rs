@@ -7232,3 +7232,25 @@ fn vertical_align_command_sets_justified() {
         assert_eq!(serde_json::to_value(crate::cmd::page::sect(&s)).unwrap()["valign"], json!(name));
     }
 }
+
+/// #1876 review: only Web Layout wraps to the window's `web_width`. Draft and Outline keep a fixed
+/// 800 pt column, also after a visit to a wide Web Layout, and the window width is never serialized.
+#[test]
+fn draft_keeps_its_column_after_web_layout() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Draft text wraps in a fixed column. ".repeat(80)}));
+    run(&mut s, "view.draft", json!({}));
+    let before = s.layout();
+    assert_eq!(before.pages[0].w, 800.0);
+    run(&mut s, "view.webLayout", json!({}));
+    s.view.web_width = 1400.0;
+    assert_eq!(s.layout().pages[0].w, 1400.0, "Web Layout follows the window");
+    run(&mut s, "view.draft", json!({}));
+    assert_eq!(s.layout().pages[0].w, 800.0, "Draft never sees Web Layout's window width");
+    run(&mut s, "view.outline", json!({}));
+    assert_eq!(s.layout().pages[0].w, 800.0, "nor does Outline");
+    let serialized = serde_json::to_value(&s.view).unwrap();
+    assert!(serialized.get("webWidth").is_none(), "a window width is not view state to keep");
+    let restored: crate::ViewState = serde_json::from_value(serialized).unwrap();
+    assert_eq!(restored.web_width, 800.0);
+}

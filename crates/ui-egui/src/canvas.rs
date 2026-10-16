@@ -17,6 +17,8 @@ use crate::theme::{Tokens, regular, semibold};
 /// Points on screen per document point at 100% (96 px per inch, like a word processor).
 pub const PX_PER_PT: f32 = 96.0 / 72.0;
 const GAP: f32 = 18.0;
+/// Width reserved for the vertical scrollbar beside the canvas.
+const SCROLLBAR: f32 = 14.0;
 const RULER: f32 = 22.0;
 /// Maximum device-pixel height of a tile on very tall Web/Draft pages.
 const TILE_HEIGHT_PX: usize = 1024;
@@ -48,8 +50,9 @@ pub struct CanvasState {
     /// Touchpad travel not yet converted to an entire reading-column turn.
     read_wheel_accum: f32,
     /// Last actual viewport seen during a resize, distinct from the committed reading page size.
-    read_viewport: Option<egui::Vec2>,
-    read_resized_at: f64,
+    read_viewport: Settle,
+    /// The same for Web Layout's window-wide text width (#1876).
+    web_viewport: Settle,
     /// Reading controls (as opposed to window resizes) must reflow without debounce.
     pub(crate) read_force_reflow: bool,
     /// First text position on the column currently leading the reading viewport, captured from
@@ -190,8 +193,8 @@ impl Default for CanvasState {
             scroll_to_caret: true,
             nav_to_caret: false,
             read_wheel_accum: 0.0,
-            read_viewport: None,
-            read_resized_at: 0.0,
+            read_viewport: Settle::default(),
+            web_viewport: Settle::default(),
             read_force_reflow: false,
             read_first_visible: None,
             read_target_page: None,
@@ -436,6 +439,49 @@ fn place_pages(sizes: &[(f32, f32)], markup: f32, scale: f32, cols: usize, avail
     (rects, vec2(content_w, y.max(avail.y)))
 }
 
+/// Full pagination is expensive. During a resize keep the already laid-out pages and reflow
+/// once the viewport has been stable this long (seconds).
+const RESIZE_SETTLE: f64 = 0.16;
+
+/// A layout size that follows the window (Read Mode's columns, Web Layout's width): the last
+/// viewport seen and when it last changed, so a window drag reflows once it settles, not per frame.
+#[derive(Clone, Copy, Debug, Default)]
+struct Settle {
+    viewport: Option<egui::Vec2>,
+    resized_at: f64,
+}
+
+impl Settle {
+    /// Whether nothing has been seen since the view was entered (or [`Settle::leave`]).
+    fn entering(&self) -> bool {
+        self.viewport.is_none()
+    }
+
+    /// Notes this frame's viewport `size` at time `now`. Returns whether a layout size that
+    /// `changed` should be applied now: at once when entering or `forced`, otherwise only after
+    /// the viewport has held still for [`RESIZE_SETTLE`].
+    fn apply(&mut self, size: egui::Vec2, now: f64, changed: bool, forced: bool) -> bool {
+        let entering = self.entering();
+        if self.viewport.is_none_or(|v| (v - size).length_sq() > 0.5) {
+            self.viewport = Some(size);
+            self.resized_at = now;
+        }
+        changed && (entering || forced || now - self.resized_at >= RESIZE_SETTLE)
+    }
+
+    fn leave(&mut self) {
+        self.viewport = None;
+    }
+}
+
+/// Web Layout's text width in points for a work area `avail_px` wide at `scale`: the whole width,
+/// clamped to what the layout accepts so a tiny or huge window never gives zero or a giant page.
+fn web_layout_width(avail_px: f32, scale: f32) -> f32 {
+    let scale = if scale.is_finite() && scale > 0.0 { scale } else { PX_PER_PT };
+    let w = avail_px / scale;
+    if w.is_finite() { w.clamp(144.0, 20_000.0) } else { 800.0 }
+}
+
 /// Reading columns use readable text at the user's chosen zoom. The window holds roughly 3–5
 /// narrow, full-height columns, and a resize reflows the text, not just the paper scale.
 fn reading_size(avail: egui::Vec2, scale: f32, requested: Option<f32>) -> (f32, f32) {
@@ -584,6 +630,20 @@ pub fn geometry(app: &WordApp, l: &DocLayout, avail: egui::Vec2) -> Geometry {
     };
     let cols = columns_for(avail.x, maxw * scale, l.pages.len(), min_cols, auto);
     let sizes: Vec<(f32, f32)> = l.pages.iter().map(|p| (p.w, p.h)).collect();
+    if v.mode == wordcraft_layout::ViewMode::Web {
+        // The sheet runs from side to side of the work area, no centred page with grey margins.
+        let rects: Vec<Rect> = sizes
+            .iter()
+            .scan(0.0f32, |y, &(w, h)| {
+                let r = Rect::from_min_size(pos2(0.0, *y), vec2(sane_dim(w, 1e5) * scale, sane_dim(h, 1e6) * scale));
+                *y = r.bottom();
+                Some(r)
+            })
+            .collect();
+        let size = vec2(rects.iter().map(|r| r.right()).fold(avail.x.max(0.0), f32::max), rects.last().map_or(0.0, |r| r.bottom()).max(avail.y));
+        let bands = rects.iter().map(|r| (0.0, r.height())).collect();
+        return Geometry { rects, size, scale, cols: 1, bands };
+    }
     let (mut rects, mut size) = place_pages(&sizes, markup, scale, cols, avail);
     let mut bands: Vec<(f32, f32)> = rects.iter().map(|r| (0.0, r.height())).collect();
     let editing_part = matches!(app.session.sel.focus.story, StoryRef::Part(_));
@@ -781,23 +841,18 @@ fn drawing_grid_step(spacing: f32, scale: f32) -> f32 {
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let full = ui.available_rect_before_wrap();
-    // Full pagination is expensive. During a resize keep the already laid-out columns and
-    // reflow once the viewport has been stable briefly; ordinary reading controls update now.
-    const RESIZE_SETTLE: f64 = 0.16;
+    // During a resize keep the already laid-out pages ([`Settle`]); ordinary reading controls
+    // and zoom update now.
     let mut reflow_anchor: Option<Pos> = None;
+    let now = ui.input(|i| i.time);
     if app.session.view.read_mode {
-        let now = ui.input(|i| i.time);
-        let resized = app.canvas.read_viewport.is_none_or(|v| (v - full.size()).length_sq() > 0.5);
-        let entering = app.canvas.read_viewport.is_none();
-        if resized {
-            app.canvas.read_viewport = Some(full.size());
-            app.canvas.read_resized_at = now;
-        }
+        app.canvas.web_viewport.leave();
+        let entering = app.canvas.read_viewport.entering();
         let scale = app.session.view.read_zoom.clamp(0.75, 1.5) * PX_PER_PT;
         let (w, h) = reading_size(full.size(), scale, app.session.view.read_column_width);
         let changed = (app.session.view.read_width - w).abs() > 0.5 || (app.session.view.read_height - h).abs() > 0.5;
         let forced = std::mem::take(&mut app.canvas.read_force_reflow) || entering;
-        if changed && (forced || now - app.canvas.read_resized_at >= RESIZE_SETTLE) {
+        if app.canvas.read_viewport.apply(full.size(), now, changed, forced) {
             if !entering {
                 reflow_anchor = app.canvas.read_first_visible.clone();
             }
@@ -812,7 +867,24 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             reflow_anchor = app.canvas.read_first_visible.clone();
         }
     } else {
-        app.canvas.read_viewport = None;
+        if app.session.view.mode == wordcraft_layout::ViewMode::Web {
+            // Web Layout wraps to the work area (#1876): at once on entry or a zoom (the viewport
+            // holds still), after a window drag has settled, and only on a real change.
+            let scale = app.session.view.zoom.clamp(0.1, 5.0) * PX_PER_PT;
+            let w = web_layout_width(full.width() - SCROLLBAR, scale);
+            let changed = (app.session.view.web_width - w).abs() > 0.5;
+            let entering = app.canvas.web_viewport.entering();
+            if app.canvas.web_viewport.apply(full.size(), now, changed, false) {
+                app.session.view.web_width = w;
+                // The pixel offset no longer points at the same text: keep the caret's line in view.
+                app.canvas.scroll_to_caret |= !entering;
+            } else if changed {
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(170));
+            }
+        } else {
+            app.canvas.web_viewport.leave();
+        }
+        app.canvas.read_viewport.leave();
         app.canvas.read_force_reflow = false;
         app.canvas.read_first_visible = None;
         app.canvas.read_target_page = None;
@@ -864,7 +936,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         let id = if reading { "view.readTextSize" } else { "view.zoom" };
         let _ = app.run(id, json!({"value": pct}));
     }
-    let avail = if app.session.view.read_mode { area.size() } else { area.size() - vec2(14.0, 0.0) };
+    let avail = if app.session.view.read_mode { area.size() } else { area.size() - vec2(SCROLLBAR, 0.0) };
     let geo = geometry(app, &layout, avail);
     // A pane or toolbar resize changes the reachable last column immediately. Navigation must
     // clamp against this frame's geometry, not the previous frame's scroll maximum.
@@ -3062,6 +3134,24 @@ fn is_followable_link(url: &str) -> bool {
 mod tests {
     use super::*;
     use crate::table_resize::tests::{H, cell, screen, steps, table_window};
+
+    /// A window-following layout size (#1876, Read Mode): applied at once on entry or when forced,
+    /// held while the window is dragged, applied once the size has been still for the settle time.
+    #[test]
+    fn settle_waits_for_a_drag_to_stop() {
+        let mut s = Settle::default();
+        assert!(s.entering());
+        assert!(s.apply(vec2(1400.0, 700.0), 1.0, true, false), "entering applies at once");
+        assert!(!s.apply(vec2(1400.0, 700.0), 1.01, false, false), "nothing changed");
+        assert!(!s.apply(vec2(1300.0, 700.0), 1.02, true, false), "a drag frame waits");
+        assert!(!s.apply(vec2(1200.0, 700.0), 1.10, true, false), "still dragging");
+        assert!(!s.apply(vec2(1200.0, 700.0), 1.20, true, false), "not settled yet");
+        assert!(s.apply(vec2(1200.0, 700.0), 1.11 + RESIZE_SETTLE, true, false), "settled");
+        assert!(s.apply(vec2(1100.0, 700.0), 2.0, true, true), "forced applies mid-drag");
+        assert!(s.apply(vec2(1100.0, 700.0), 5.0, true, false), "a zoom with a still window applies now");
+        s.leave();
+        assert!(s.entering());
+    }
 
     /// What `page_image` replaced: the raster un-premultiplied, for egui to premultiply again.
     fn by_straight_alpha(img: &wordcraft_render::Rendered) -> egui::ColorImage {

@@ -143,6 +143,9 @@ pub struct ViewState {
     pub single_column: bool,
     /// Zoom to fit: "pageWidth", "onePage", "multiplePages", or empty.
     pub fit: String,
+    /// Web Layout's text width, which the UI keeps at the window's width (#1876); never saved.
+    /// Draft and Outline don't use it: they keep a fixed 800 pt column.
+    #[serde(skip, default = "default_web_width")]
     pub web_width: f32,
     /// Transient viewport metrics for reading pagination; never saved in a document or preferences.
     #[serde(skip, default = "default_read_width")]
@@ -195,6 +198,13 @@ fn on() -> bool {
     true
 }
 
+/// The text column of Draft and Outline, and of Web Layout in a headless session.
+const DRAFT_WIDTH: f32 = 800.0;
+
+fn default_web_width() -> f32 {
+    DRAFT_WIDTH
+}
+
 fn default_read_width() -> f32 {
     300.0
 }
@@ -229,7 +239,7 @@ impl Default for ViewState {
             multi_page: false,
             single_column: false,
             fit: String::new(),
-            web_width: 800.0,
+            web_width: default_web_width(),
             read_width: default_read_width(),
             read_height: default_read_height(),
             read_column_width: None,
@@ -765,7 +775,11 @@ impl Session {
     /// The current layout (recomputed when the document or view changed).
     pub fn layout(&mut self) -> Arc<DocLayout> {
         let mode = if self.view.read_mode { ViewMode::Read } else { self.view.mode };
-        let width = if self.view.read_mode { self.view.read_width } else { self.view.web_width };
+        let width = match mode {
+            ViewMode::Read => self.view.read_width,
+            ViewMode::Web => self.view.web_width,
+            _ => DRAFT_WIDTH,
+        };
         let height = if self.view.read_mode { self.view.read_height } else { 0.0 };
         let spacing = if self.view.read_mode { self.view.read_line_spacing.map(f32::to_bits) } else { None };
         // Deletions in balloons depend on the view (the Comments pane, Read Mode, side by side), so

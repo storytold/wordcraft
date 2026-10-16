@@ -3088,6 +3088,86 @@ mod tests {
         assert!((a.canvas.scroll_offset.y - at - notch).abs() < 0.5, "a notch scrolls {notch}: {}", a.canvas.scroll_offset.y - at);
     }
 
+    /// Web Layout (#1876): text wraps to the work area, re-wraps once a resize has settled (not on
+    /// every frame of a drag) and at once on a zoom, and the width is clamped. Print Layout keeps its
+    /// page width and Draft keeps its 800 pt column after a visit to Web Layout.
+    #[test]
+    fn web_layout_fills_the_window_width() {
+        let ctx = egui::Context::default();
+        let mut a = app();
+        a.run("text.insert", json!({"text": "A long paragraph that wraps across the work area. ".repeat(200)})).unwrap();
+        let mut t = 0.0;
+        // One frame `dt` seconds after the last one, in a window `w` wide.
+        let mut frame = |a: &mut WordApp, w: f32, dt: f64| {
+            t += dt;
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w, 740.0));
+            let input = egui::RawInput { events: vec![], time: Some(t), screen_rect: Some(screen), ..Default::default() };
+            ctx.run_ui(input, |ui| {
+                a.logic(ui.ctx());
+                a.ui(ui);
+            })
+            .drop_without_applying_deltas();
+        };
+        let lines = |a: &mut WordApp| {
+            a.session
+                .layout()
+                .pages
+                .iter()
+                .flat_map(|p| p.items.iter())
+                .map(|it| if let wordcraft_layout::Placed::Lines { l0, l1, .. } = it { l1 - l0 } else { 0 })
+                .sum::<usize>()
+        };
+        let tick = 1.0 / 60.0;
+        for _ in 0..3 {
+            frame(&mut a, 1400.0, tick);
+        }
+        let print_lines = lines(&mut a);
+        a.run("view.draft", json!({})).unwrap();
+        frame(&mut a, 1400.0, tick);
+        let draft_lines = lines(&mut a);
+        a.run("view.webLayout", json!({})).unwrap();
+        frame(&mut a, 1400.0, tick);
+        let wide = a.session.view.web_width;
+        assert!((900.0..1400.0).contains(&wide), "entering Web Layout fills the window at once, not 800: {wide}");
+        let wide_lines = lines(&mut a);
+        frame(&mut a, 1400.0, tick);
+        assert_eq!(a.session.view.web_width, wide, "no change without a resize");
+        let page = a.canvas.page_rects[0];
+        assert!(page.left() < 4.0, "page starts at the left edge: {page:?}");
+        // A window drag: the width holds while the size keeps changing, then follows once it settles.
+        for w in [1300.0, 1100.0, 900.0, 700.0, 500.0] {
+            frame(&mut a, w, tick);
+            assert_eq!(a.session.view.web_width, wide, "no relayout mid-drag at {w}");
+        }
+        frame(&mut a, 500.0, 0.2);
+        let narrow = a.session.view.web_width;
+        assert!((144.0..500.0).contains(&narrow), "{narrow}");
+        assert!(lines(&mut a) > wide_lines, "narrower window wraps more");
+        // A zoom re-wraps at once: at 200% the window holds half as many points.
+        frame(&mut a, 1400.0, 0.2);
+        frame(&mut a, 1400.0, 0.2);
+        let at_100 = a.session.view.web_width;
+        a.run("view.zoom", json!({"value": 200})).unwrap();
+        frame(&mut a, 1400.0, tick);
+        let at_200 = a.session.view.web_width;
+        assert!((at_200 - at_100 / 2.0).abs() < 2.0, "200% halves the width: {at_100} -> {at_200}");
+        a.run("view.zoom", json!({"value": 100})).unwrap();
+        frame(&mut a, 20.0, 0.2);
+        frame(&mut a, 20.0, 0.2);
+        assert!(a.session.view.web_width >= 144.0);
+        frame(&mut a, 1400.0, 0.2);
+        frame(&mut a, 1400.0, 0.2);
+        a.run("view.draft", json!({})).unwrap();
+        frame(&mut a, 1400.0, tick);
+        assert_eq!(a.session.layout().pages[0].w, 800.0, "Draft keeps its column after Web Layout");
+        assert_eq!(lines(&mut a), draft_lines, "Draft wraps as before Web Layout");
+        a.run("view.printLayout", json!({})).unwrap();
+        for _ in 0..3 {
+            frame(&mut a, 1400.0, tick);
+        }
+        assert_eq!(lines(&mut a), print_lines, "Print Layout is unchanged");
+    }
+
     /// Reading Mode: reflowed viewport-height columns, horizontal wheel/navigation, exit restores
     /// Print Layout without editing or changing the document's page setup.
     #[test]
