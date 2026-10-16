@@ -6,7 +6,9 @@
 //!    `perche` → `perché`), up to four letters changed — Italian typed without accents is the
 //!    most common slip, so adding one ranks first, while taking away an accent the writer typed
 //!    ranks after the known confusions;
-//! 3. the dictionary's `REP` table of common confusions (`caffé` → `caffè`);
+//! 3. the dictionary's `REP` table of common confusions (`caffé` → `caffè`), and the `q`/`c`
+//!    ones Italian dictionaries leave out (`squola` → `scuola`, `aqua` → `acqua`, `coscenza` →
+//!    `coscienza`);
 //! 4. a missing space (`perme` → `per me`, `amilano` → `a milano`), cheaper when one half is a
 //!    short function word;
 //! 5. one typo: a letter left out, added, swapped with the next or mistyped (`TRY` letters);
@@ -35,6 +37,11 @@ const TRAILING_WORDS: &[&str] = &[
     "mi", "ti", "si", "ci", "vi", "ne", "lo", "la", "li", "le", "gli", "me", "te", "lui", "lei", "noi", "voi", "loro", "che", "cosa", "come", "dove",
     "è",
 ];
+/// Confusions Italian writers make that the `it_IT` dictionary's `REP` table lacks: `qu`/`cu`
+/// (`squola`, `quore`), a missing or extra `c` before `qu` (`aqua`, `soqquadro`), and the `i`
+/// dropped after `sc`/`c` (`coscenza`, `sufficente`).
+const CONFUSIONS: &[(&str, &str)] = &[("qu", "cu"), ("cu", "qu"), ("qu", "cqu"), ("cqu", "qu"), ("sce", "scie"), ("cen", "cien")];
+
 const MAX_LETTERS: usize = 40;
 const MAX_MAP_CHANGES: usize = 4;
 const MAX_MAP_VARIANTS: usize = 4096;
@@ -220,7 +227,8 @@ pub fn suggest_in(d: &AffixDict, word: &str, max: usize) -> Vec<String> {
         col.offer(v, *cost);
     }
     // 3. Common confusions.
-    for (from, to) in d.rep() {
+    let builtin = CONFUSIONS.iter().map(|(f, t)| ((*f).to_string(), (*t).to_string()));
+    for (from, to) in d.rep().iter().cloned().chain(builtin) {
         if from.is_empty() {
             continue;
         }
@@ -392,6 +400,9 @@ mod tests {
         crate::it::test_dict::install();
         assert_eq!(suggest("caffe", 3).first().map(String::as_str), Some("caffè"));
         assert_eq!(suggest("perche", 3).first().map(String::as_str), Some("perché"));
+        // `q`/`c` confusions rank as known slips, ahead of one-letter typos.
+        assert_eq!(suggest("squola", 3).first().map(String::as_str), Some("scuola"));
+        assert_eq!(suggest("aqua", 3).first().map(String::as_str), Some("acqua"));
     }
 
     #[test]
