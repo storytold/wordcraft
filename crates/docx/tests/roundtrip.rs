@@ -110,6 +110,13 @@ fn every_char_prop_round_trips() {
         bold_cs: Some(false),
         italic_cs: Some(true),
         lang_bidi: Some("fa-IR".into()),
+        east_asian_layout: Some(wordcraft_doc::props::EastAsianLayout {
+            id: Some(3),
+            combine: Some(true),
+            combine_brackets: Some(wordcraft_doc::props::CombineBrackets::Square),
+            vert: Some(false),
+            vert_compress: Some(true),
+        }),
         link: None,
         ins: None,
         del: None,

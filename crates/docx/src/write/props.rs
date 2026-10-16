@@ -1,8 +1,8 @@
 //! Property writers, in ECMA-376 schema element order.
 
 use wordcraft_doc::props::{
-    Align, Border, BorderStyle, Borders, CellProps, CharProps, HeightRule, Highlight, LineSpacing, ParaProps, RowProps, TabAlign, TabLeader,
-    TableFloat, TableLook, TableProps, TextColor, VAlign, VMerge, VertAlign,
+    Align, Border, BorderStyle, Borders, CellProps, CharProps, EastAsianLayout, HeightRule, Highlight, LineSpacing, ParaProps, RowProps, TabAlign,
+    TabLeader, TableFloat, TableLook, TableProps, TextColor, VAlign, VMerge, VertAlign,
 };
 
 use crate::units::{n, twips};
@@ -111,9 +111,36 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
         (None, Some(b)) => w.empty("w:lang", &[("w:bidi", b)]),
         (None, None) => {}
     }
+    // After w:lang (CT_RPr's sequence).
+    if let Some(l) = &c.east_asian_layout {
+        east_asian_layout(w, l);
+    }
     if let Some(fx) = &c.text_effects {
         super::wordart::rpr_effects(w, fx);
     }
+}
+
+/// `w:eastAsianLayout` with the attributes that are set (ISO/IEC 29500-1 §17.3.2.10).
+fn east_asian_layout(w: &mut W, l: &EastAsianLayout) {
+    let on = |v: bool| if v { "1" } else { "0" };
+    let id = l.id.map(|v| v.to_string());
+    let mut a: Vec<(&str, &str)> = Vec::new();
+    if let Some(id) = &id {
+        a.push(("w:id", id));
+    }
+    if let Some(v) = l.combine {
+        a.push(("w:combine", on(v)));
+    }
+    if let Some(b) = l.combine_brackets {
+        a.push(("w:combineBrackets", b.ooxml()));
+    }
+    if let Some(v) = l.vert {
+        a.push(("w:vert", on(v)));
+    }
+    if let Some(v) = l.vert_compress {
+        a.push(("w:vertCompress", on(v)));
+    }
+    w.empty("w:eastAsianLayout", &a);
 }
 
 /// Does `c` produce any `w:rPr` content (besides a tracked change)?

@@ -4,8 +4,9 @@ use std::collections::HashMap;
 
 use wordcraft_doc::para::cap_alt;
 use wordcraft_doc::props::{
-    Align, Border, BorderStyle, Borders, CellProps, CharProps, HeightRule, Highlight, LineSpacing, NumRef, ParaProps, Rgb, RowProps, TabAlign,
-    TabLeader, TabStop, TableFloat, TableLook, TableProps, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
+    Align, Border, BorderStyle, Borders, CellProps, CharProps, CombineBrackets, EastAsianLayout, HeightRule, Highlight, LineSpacing, NumRef,
+    ParaProps, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextColor, TextDirection, Underline, VAlign, VMerge,
+    VertAlign,
 };
 use wordcraft_doc::section::{
     Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, MAX_CHAR_SPACE, MAX_GRID_PITCH, NotePos, NoteProps, NoteRestart, NumFormat,
@@ -223,6 +224,10 @@ impl PropCtx {
                         "subscript" => VertAlign::Subscript,
                         _ => VertAlign::Baseline,
                     })
+                }
+                "w:eastAsianLayout" => {
+                    let l = east_asian_layout(k);
+                    c.east_asian_layout = (l != EastAsianLayout::default()).then_some(l);
                 }
                 "w:lang" => {
                     c.lang = k.attr("w:val").filter(|v| !v.is_empty() && v.len() < 64).map(str::to_string);
@@ -740,5 +745,24 @@ fn table_float(e: &El) -> TableFloat {
         v_align: align("w:tblpYSpec"),
         dist: [dist("w:leftFromText"), dist("w:topFromText"), dist("w:rightFromText"), dist("w:bottomFromText")],
         overlap: true,
+    }
+}
+
+/// `w:eastAsianLayout` (ISO/IEC 29500-1 §17.3.2.10). Attributes the schema doesn't allow (an id
+/// out of `xsd:int`, an unknown bracket, an on/off that isn't one) are left unset.
+fn east_asian_layout(e: &El) -> EastAsianLayout {
+    let flag = |name: &str| {
+        e.attr(name).and_then(|v| match v.trim() {
+            "1" | "true" | "on" => Some(true),
+            "0" | "false" | "off" => Some(false),
+            _ => None,
+        })
+    };
+    EastAsianLayout {
+        id: e.attr("w:id").and_then(int).and_then(|v| i32::try_from(v).ok()),
+        combine: flag("w:combine"),
+        combine_brackets: e.attr("w:combineBrackets").and_then(|v| CombineBrackets::from_ooxml(v.trim())),
+        vert: flag("w:vert"),
+        vert_compress: flag("w:vertCompress"),
     }
 }

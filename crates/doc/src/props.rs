@@ -372,6 +372,10 @@ pub struct CharProps {
     /// BCP 47 language of complex-script text (`w:lang/@w:bidi`, e.g. `fa-IR`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lang_bidi: Option<String>,
+    /// East Asian typography: two lines in one and horizontal in vertical (`w:eastAsianLayout`).
+    /// Kept for round trip; layout doesn't apply it yet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub east_asian_layout: Option<EastAsianLayout>,
     /// Hyperlink target: a URL, or `#bookmark` for an internal link.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
@@ -384,6 +388,60 @@ pub struct CharProps {
     /// Tracked formatting change (`w:rPrChange`): the formatting before it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fmt_change: Option<Box<PropChange<CharProps>>>,
+}
+
+/// East Asian typography settings of a run (ISO/IEC 29500-1 §17.3.2.10, `w:eastAsianLayout`):
+/// *two lines in one* sets the run's text on two sub-lines inside one line (warichu), *horizontal
+/// in vertical* turns it 90° to read across a vertical line (tate-chu-yoko). Each attribute is
+/// `None` when the file doesn't say.
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct EastAsianLayout {
+    /// East Asian typography run id (`w:id`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<i32>,
+    /// Two lines in one (`w:combine`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub combine: Option<bool>,
+    /// Brackets around two lines in one (`w:combineBrackets`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub combine_brackets: Option<CombineBrackets>,
+    /// Horizontal in vertical (`w:vert`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vert: Option<bool>,
+    /// Compress horizontal-in-vertical text to the line height (`w:vertCompress`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vert_compress: Option<bool>,
+}
+
+/// Brackets around two lines in one (`ST_CombineBrackets`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CombineBrackets {
+    None,
+    Round,
+    Square,
+    Angle,
+    Curly,
+}
+
+impl CombineBrackets {
+    pub const ALL: [CombineBrackets; 5] =
+        [CombineBrackets::None, CombineBrackets::Round, CombineBrackets::Square, CombineBrackets::Angle, CombineBrackets::Curly];
+    /// OOXML `w:combineBrackets` value.
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            CombineBrackets::None => "none",
+            CombineBrackets::Round => "round",
+            CombineBrackets::Square => "square",
+            CombineBrackets::Angle => "angle",
+            CombineBrackets::Curly => "curly",
+        }
+    }
+    /// The value for `s`, `None` for one the schema doesn't have.
+    pub fn from_ooxml(s: &str) -> Option<CombineBrackets> {
+        CombineBrackets::ALL.into_iter().find(|b| b.ooxml() == s)
+    }
 }
 
 /// A tracked formatting change (ECMA-376 §17.13.5: `w:rPrChange`, `w:pPrChange`,
@@ -442,7 +500,7 @@ impl CharProps {
     pub fn minus(mut self, base: &CharProps) -> CharProps {
         drop_same_fields!(self, base; style, font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
             shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl,
-            cs, font_cs, size_cs, bold_cs, italic_cs, lang_bidi, link, ins, del);
+            cs, font_cs, size_cs, bold_cs, italic_cs, lang_bidi, east_asian_layout, link, ins, del);
         self
     }
 
@@ -453,7 +511,7 @@ impl CharProps {
     pub fn overlay(&mut self, patch: &CharProps) {
         overlay_fields!(self, patch; style, font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
             shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl,
-            cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, link, ins, del, fmt_change);
+            cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, east_asian_layout, link, ins, del, fmt_change);
         if let Some(p) = &patch.text_effects {
             self.text_effects.get_or_insert_with(Default::default).overlay(p);
         }
