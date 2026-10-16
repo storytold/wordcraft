@@ -34,6 +34,17 @@ pub fn measure(s: &str, per_pt: f32) -> Option<f32> {
     pt.is_finite().then_some(pt.clamp(-MAX_LEN_PT, MAX_LEN_PT))
 }
 
+/// `w:line` under `lineRule="auto"`: the multiple of single line spacing, in 240ths (240 =
+/// single). Without a unit the value already is that — the transitional form. A universal
+/// measure is a height (strict OOXML writes `w:line="13.90pt"`, ISO 29500
+/// `ST_SignedTwipsMeasure`), so it goes through twips as Word reads it: × 20 ÷ 240 (13.90 pt =
+/// 278 twips, the 1.1583 multiple Word renders).
+pub fn line_multiple(s: &str) -> Option<f32> {
+    let t = s.trim();
+    let measured = t.ends_with(|c: char| c.is_ascii_alphabetic());
+    measure(t, 240.0).map(|v| if measured { v * 20.0 / 240.0 } else { v })
+}
+
 /// Plain integer (accepts decimals, rounds; clamps into i64 range).
 pub fn int(s: &str) -> Option<i64> {
     let t = s.trim();
@@ -98,6 +109,16 @@ mod tests {
         assert_eq!(measure("1e400", 20.0), None);
         assert_eq!(measure("99999999999999", 20.0), Some(MAX_LEN_PT));
         assert_eq!(measure("x", 20.0), None);
+        // `w:line` auto: the multiple in 240ths without a unit, through twips with one (#2329).
+        assert_eq!(line_multiple("240"), Some(1.0));
+        assert_eq!(line_multiple("276"), Some(1.15));
+        assert_eq!(line_multiple("0"), Some(0.0));
+        let strict = line_multiple("13.90pt").expect("strict line height");
+        assert!((strict - 278.0 / 240.0).abs() < 1e-5, "{strict}");
+        let inches = line_multiple("1.2in").expect("inches");
+        assert!((inches - 7.2).abs() < 1e-5, "{inches}");
+        assert_eq!(line_multiple("junk"), None);
+        assert_eq!(line_multiple(""), None);
         assert_eq!(int("12.6"), Some(13));
         assert_eq!(u32_of("-5"), Some(0));
     }

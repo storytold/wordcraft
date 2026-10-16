@@ -809,6 +809,28 @@ fn line_rule_is_read_case_insensitively() {
     assert_eq!(p[1].props.line_spacing, Some(wordcraft_doc::props::LineSpacing::Exactly(15.0)));
 }
 
+/// #2329: Word 2024 saves strict OOXML with the line height written out with a unit
+/// (`w:line="13.90pt"`). Under `auto` it reads through twips, as Word renders it (13.90 × 20 =
+/// 278; the 1.1583 multiple), not as 240ths of a line like the bare number — a Word file with
+/// a `line="13.90pt"` default came in at 13.9 lines per line of text.
+#[test]
+fn strict_line_heights_with_a_unit_are_read_as_point_multiples() {
+    let d = read_body(
+        r#"<w:p><w:pPr><w:spacing w:after="8pt" w:line="13.90pt" w:lineRule="auto"/></w:pPr><w:r><w:t>x</w:t></w:r></w:p><w:p><w:pPr><w:spacing w:line="13.90pt" w:lineRule="exact"/></w:pPr></w:p>"#,
+    );
+    let p = paras(&d);
+    let Some(wordcraft_doc::props::LineSpacing::Multiple(m)) = p[0].props.line_spacing else {
+        panic!("auto line spacing: {:?}", p[0].props.line_spacing)
+    };
+    assert!((m - 278.0 / 240.0).abs() < 1e-5, "{m}");
+    assert_eq!(p[0].props.space_after, Some(8.0), "the unit form of w:after too");
+    assert_eq!(p[1].props.line_spacing, Some(wordcraft_doc::props::LineSpacing::Exactly(13.9)), "exact keeps reading it as points");
+    // Saves as the transitional 240ths form and reads back the same multiple.
+    let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    let Some(wordcraft_doc::props::LineSpacing::Multiple(m2)) = paras(&again)[0].props.line_spacing else { panic!("multiple after a save") };
+    assert!((m2 - m).abs() < 1e-5, "{m2} vs {m}");
+}
+
 #[test]
 fn char_border_reads_and_nil_resolves_off() {
     let d = read_body(
