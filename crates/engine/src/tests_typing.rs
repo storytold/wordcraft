@@ -276,6 +276,39 @@ fn autocorrect_as_you_type() {
     assert_eq!(s.doc.plain_text(StoryRef::Body), "½ cup. iPhone. See readme.txt ");
 }
 
+/// #2223: the double-hyphen arrow is a replacement, not the existing arrow bullet.
+#[test]
+fn double_hyphen_arrow_autocorrect_preserves_typing_scope_and_undo() {
+    let mut s = typed("go --> ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Go → ");
+    assert_eq!(paras(&s)[0].1, None);
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Go --> ");
+    let s = typed("go --> here");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Go → here");
+    let s = typed("--> ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "→ ");
+    assert_eq!(paras(&s)[0].1, None);
+}
+
+#[test]
+fn double_hyphen_arrow_respects_autocorrect_preferences() {
+    for prefs in [json!({"enabled": false}), json!({"replaceText": false}), json!({"delete": "-->"})] {
+        let mut s = s();
+        run(&mut s, "tools.autocorrect", prefs);
+        typ(&mut s, "go --> here");
+        assert!(s.doc.plain_text(StoryRef::Body).ends_with(" --> here"));
+    }
+    let mut s = s();
+    run(&mut s, "review.language", json!({"lang": "pl-PL", "default": true}));
+    typ(&mut s, "go --> here");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Go → here");
+    let mut s = self::s();
+    run(&mut s, "tools.autocorrect", json!({"add": {"from": "-->", "to": "custom"}}));
+    typ(&mut s, "go --> here");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Go custom here");
+}
+
 /// #835: the English replacement list applies only to English text. Polish "i" ("and") stays
 /// lowercase; symbols still change; English and untagged text still get "I".
 #[test]
