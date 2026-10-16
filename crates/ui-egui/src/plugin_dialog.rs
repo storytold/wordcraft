@@ -230,9 +230,11 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     let title = d.title();
     let id = egui::Id::unique(("plugin-dialog", &d.plugin));
     let window = egui::Window::new(RichText::new(title)).id(id).collapsible(false).resizable(false);
+    // A form with a multi-line field (code, say) gets room for its lines (protocol 2.2).
+    let wide = d.dialog.fields.iter().any(|f| f.multiline);
     let shown = crate::dialogs::place_dialog(ctx, id, window).open(&mut open).show(ctx, |ui| {
-        ui.set_min_width(380.0);
-        ui.set_max_width(560.0);
+        ui.set_min_width(if wide { 640.0 } else { 380.0 });
+        ui.set_max_width(if wide { 760.0 } else { 560.0 });
         action = body(ui, &mut d);
     });
     if shown.is_some() {
@@ -282,6 +284,8 @@ fn body(ui: &mut Ui, d: &mut PluginDialog) -> Action {
     let t = Tokens::get(ui.ctx());
     let mut action = Action::None;
     let colors_open = crate::colors::is_open(ui.ctx());
+    // A multi-line field has the keyboard focus: Enter is a new line there, not OK.
+    let mut in_multiline = false;
     if !d.dialog.prompt.is_empty() {
         let prompt = d.dialog.prompt.clone();
         if d.dialog.kind == DialogKind::Message {
@@ -299,7 +303,7 @@ fn body(ui: &mut Ui, d: &mut PluginDialog) -> Action {
                 action = a;
             }
         }
-        DialogKind::Form => form(ui, d),
+        DialogKind::Form => in_multiline = form(ui, d),
         DialogKind::Message => {}
     }
     if !d.error.is_empty() {
@@ -329,8 +333,8 @@ fn body(ui: &mut Ui, d: &mut PluginDialog) -> Action {
     });
     if !colors_open {
         cancel |= ui.input(|i| i.key_pressed(egui::Key::Escape));
-        // Enter is OK, except in a multi-line text (none here) or with nothing to run yet.
-        ok |= d.ok_enabled() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        // Enter is OK, except in a multi-line text or with nothing to run yet.
+        ok |= !in_multiline && d.ok_enabled() && ui.input(|i| i.key_pressed(egui::Key::Enter));
     }
     if cancel {
         return Action::Close;
@@ -425,8 +429,10 @@ fn list(ui: &mut Ui, d: &mut PluginDialog, t: &Tokens) -> Option<Action> {
     None
 }
 
-/// A form: each field's label beside its box, check box or choice.
-fn form(ui: &mut Ui, d: &mut PluginDialog) {
+/// A form: each field's label beside its box, check box or choice. True when a multi-line
+/// field has the keyboard focus (Enter belongs to it).
+fn form(ui: &mut Ui, d: &mut PluginDialog) -> bool {
+    let mut in_multiline = false;
     egui::Grid::new("plugin-form").num_columns(2).spacing(vec2(12.0, 6.0)).show(ui, |ui| {
         for (i, f) in d.dialog.fields.iter().enumerate() {
             let Some(e) = d.edits.get_mut(i) else { continue };
@@ -445,6 +451,31 @@ fn form(ui: &mut Ui, d: &mut PluginDialog) {
                     });
                     combo.response.labelled_by(label.id);
                 }
+                (FieldKind::Text, Edit::Text(text)) if f.multiline => {
+                    // Protocol 2.2: several lines (Enter is a new line), monospace with Tab
+                    // indenting for code, scrolling past its height; bounded like the add-in's value.
+                    let label = ui.label(&f.label);
+                    let rows = f.rows.unwrap_or(wordcraft_plugin::dialog::DEFAULT_ROWS);
+                    let mut edit = egui::TextEdit::multiline(text)
+                        .desired_width(520.0)
+                        .desired_rows(usize::from(rows))
+                        .char_limit(wordcraft_plugin::dialog::MAX_MULTILINE_VALUE)
+                        .id_salt(("plugin-field", i));
+                    if f.code {
+                        edit = edit.code_editor();
+                    }
+                    let style = if f.code { egui::TextStyle::Monospace } else { egui::TextStyle::Body };
+                    let line_h = ui.text_style_height(&style);
+                    let r = egui::ScrollArea::vertical()
+                        .id_salt(("plugin-multiline", i))
+                        .max_height(line_h * f32::from(rows) + 12.0)
+                        .show(ui, |ui| ui.add(edit).labelled_by(label.id))
+                        .inner;
+                    in_multiline |= r.has_focus();
+                    if i == 0 && !ui.ctx().memory(|m| m.focused().is_some()) {
+                        r.request_focus();
+                    }
+                }
                 (kind, Edit::Text(text)) => {
                     let label = ui.label(&f.label);
                     let edit = egui::TextEdit::singleline(text).desired_width(260.0).password(kind == FieldKind::Secret).id_salt(("plugin-field", i));
@@ -461,4 +492,5 @@ fn form(ui: &mut Ui, d: &mut PluginDialog) {
             ui.end_row();
         }
     });
+    in_multiline
 }

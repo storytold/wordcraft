@@ -176,7 +176,7 @@ fn two_sessions_edit_through_the_transport() {
     // A plugin command answers `collab.join`: returned to the caller, who joins.
     let r = a.run("plugins.run", &json!({"plugin": PLUGIN, "command": "share"})).unwrap();
     let host = &r["result"]["init"];
-    assert_eq!(host["features"], json!(["dialogs", "open", "events", "document", "push", "collab"]), "{r}");
+    assert_eq!(host["features"], json!(["dialogs", "open", "events", "document", "push", "collab", "multiline", "literalValues"]), "{r}");
     assert_eq!(host["collab"], json!({"formats": ["yjs-v1"], "app": "wordcraft", "schema": 1, "encryption": ["aes-256-gcm"]}));
     let mut join = r["collab"]["join"].clone();
     assert_eq!(join["room"], "relay:a", "{r}");

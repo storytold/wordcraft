@@ -313,7 +313,7 @@ fn capped(text: &str, max: usize) -> (String, bool) {
 
 /// The document as a plugin sees it (`context.document`): its file (`path`, `null` for a new
 /// document never saved) and `name`, whether it has unsaved changes (`dirty`), its title and
-/// word count.
+/// word count, and its `id` (protocol 2.2: the same in the document events).
 pub fn document_context(s: &Session) -> Value {
     let name = s.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string());
     json!({
@@ -322,18 +322,20 @@ pub fn document_context(s: &Session) -> Value {
         "dirty": s.dirty,
         "title": s.doc.core.title,
         "words": s.word_count(),
+        "id": s.plugin_document_id(),
     })
 }
 
 /// Tells the add-ins that declared `event` about it (protocol 1.2), without waiting for them:
-/// `path` is the document's file. A save's event carries its `format`, the file's extension.
-pub fn notify(event: wordcraft_plugin::DocumentEvent, path: &std::path::Path) {
+/// `path` is the document's file and `id` the document's ([`Session::plugin_document_id`],
+/// protocol 2.2). A save's event carries its `format`, the file's extension.
+pub fn notify(event: wordcraft_plugin::DocumentEvent, path: &std::path::Path, id: &str) {
     if wordcraft_plugin::events::listeners(event).is_empty() {
         return;
     }
     let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
     let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-    let mut params = json!({"path": path.display().to_string(), "name": name});
+    let mut params = json!({"path": path.display().to_string(), "name": name, "id": id});
     if event == wordcraft_plugin::DocumentEvent::Saved {
         params["format"] = json!(path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default());
     }

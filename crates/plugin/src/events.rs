@@ -19,11 +19,11 @@ use crate::{HostError, lock};
 /// A document event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DocumentEvent {
-    /// `events/documentOpened {path, name}`.
+    /// `events/documentOpened {path, name, id}` (`id`: protocol 2.2, the document's session id).
     Opened,
-    /// `events/documentSaved {path, name, format}`.
+    /// `events/documentSaved {path, name, format, id}`.
     Saved,
-    /// `events/documentClosed {path, name}`.
+    /// `events/documentClosed {path, name, id}`.
     Closed,
 }
 

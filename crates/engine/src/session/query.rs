@@ -75,6 +75,13 @@ impl Session {
         self.document_id
     }
 
+    /// The document's id as add-ins see it (plugin protocol 2.2: `id` in `context.document` and
+    /// the document events): opaque, the same while the document is open (saved, renamed or
+    /// not), never reused for another document while the app runs (`doc-3`).
+    pub fn plugin_document_id(&self) -> String {
+        super::documents::plugin_document_id(self.document_id)
+    }
+
     /// How many times the body was replaced under this [`Self::document_id`].
     ///
     /// Front ends use it as the body's IME replacement epoch and to tell a body swap from an

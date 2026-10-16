@@ -21,9 +21,10 @@ fn main() {
         serve();
         return;
     }
-    let tests: [(&str, fn()); 2] = [
+    let tests: [(&str, fn()); 3] = [
         ("dialogs_chain_and_end_by_opening_a_file", dialogs_chain_and_end_by_opening_a_file),
         ("forms_send_their_fields_and_failures_keep_the_dialog", forms_send_their_fields_and_failures_keep_the_dialog),
+        ("a_multiline_code_field_keeps_its_lines", a_multiline_code_field_keeps_its_lines),
     ];
     for (name, t) in tests {
         t();
@@ -64,6 +65,14 @@ fn serve() {
             }
             (Some("commands/run"), Some("signIn")) => json!({"result": {"dialog": {"title": "Sign in", "kind": "form", "command": "hello",
                 "fields": [{"id": "name", "label": "Name"}, {"id": "pw", "label": "Password", "kind": "secret"}, {"id": "n", "label": "Copies", "kind": "number", "value": 2}]}}}),
+            // Protocol 2.2: a form with a multi-line code field; `run` types the code's lines
+            // joined by " | ", literally.
+            (Some("commands/run"), Some("code")) => json!({"result": {"dialog": {"title": "Run R", "kind": "form", "command": "run",
+                "fields": [{"id": "code", "label": "R code", "value": "x <- 1", "multiline": true, "code": true, "rows": 6}]}}}),
+            (Some("commands/run"), Some("run")) => {
+                let code = args["fields"]["code"].as_str().unwrap_or("").replace('\n', " | ");
+                json!({"result": {"commands": [{"command": "text.insert", "params": {"text": code, "literal": true}}]}})
+            }
             (Some("commands/run"), Some("hello")) => match args["fields"]["name"].as_str().filter(|n| !n.is_empty()) {
                 Some(name) => {
                     json!({"result": {"commands": [{"command": "text.insert", "params": {"text": format!("Hi {name} ({})", args["fields"]["n"]), "raw": true}}]}})
@@ -88,7 +97,8 @@ fn load() {
     let manifest = json!({
         "id": ID, "name": "Cloud", "apps": ["wordcraft"],
         "run": {"command": std::env::current_exe().unwrap(), "args": ["--serve-plugin"]},
-        "commands": [{"id": "browse", "label": "Browse"}, {"id": "pick", "label": "Pick"}, {"id": "signIn", "label": "Sign In"}, {"id": "hello", "label": "Hello"}],
+        "commands": [{"id": "browse", "label": "Browse"}, {"id": "pick", "label": "Pick"}, {"id": "signIn", "label": "Sign In"}, {"id": "hello", "label": "Hello"},
+                     {"id": "code", "label": "Code"}, {"id": "run", "label": "Run"}],
     });
     std::fs::write(dir.join("plugin.json"), manifest.to_string()).unwrap();
     wordcraft_plugin::load(&dir).unwrap();
@@ -180,4 +190,28 @@ fn forms_send_their_fields_and_failures_keep_the_dialog() {
     h.run_steps(4);
     assert!(h.state().dialog.is_none());
     assert_eq!(h.state().session.doc.plain_text(wordcraft_engine::doc::StoryRef::Body), "Hi Ada (3.0)");
+}
+
+/// Protocol 2.2: a multi-line code field is a multi-line editor. Enter adds a line instead of
+/// pressing OK, and OK sends the lines as typed.
+fn a_multiline_code_field_keeps_its_lines() {
+    load();
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.run("plugins.run", json!({"plugin": ID, "command": "code"})).unwrap();
+    let mut h = harness(a);
+    h.run_steps(4);
+    assert_eq!(shown(&h).as_deref(), Some("Run R"));
+    h.get_by_label("R code").click();
+    h.run_steps(2);
+    h.get_by_label("R code").type_text("\ny <- 2");
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert_eq!(shown(&h).as_deref(), Some("Run R"), "Enter in the code is a new line, not OK");
+    h.get_by_label("R code").type_text("x + y");
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(4);
+    assert!(h.state().dialog.is_none(), "{:?}", h.state().status_msg);
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_engine::doc::StoryRef::Body), "x <- 1 | y <- 2 | x + y");
 }

@@ -26,6 +26,13 @@ pub const MAX_TITLE: usize = 200;
 pub const MAX_BUTTONS: usize = 4;
 /// Longest field value, in characters (a host bound).
 pub const MAX_VALUE: usize = 100_000;
+/// Longest multi-line field value, in characters (protocol 2.2): a script of a few thousand lines.
+pub const MAX_MULTILINE_VALUE: usize = 200_000;
+/// A multi-line field's height in lines (protocol 2.2's `rows`): the default, the fewest and the
+/// most.
+pub const DEFAULT_ROWS: u8 = 8;
+pub const MIN_ROWS: u8 = 2;
+pub const MAX_ROWS: u8 = 30;
 /// Longest path `open` accepts, in bytes (a host bound).
 pub const MAX_PATH: usize = 4_096;
 /// Longest command id and icon name.
@@ -89,6 +96,20 @@ pub struct Field {
     pub kind: FieldKind,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<Choice>,
+    /// A text field edited on several lines (protocol 2.2's `"multiline": true`): Enter starts a
+    /// new line instead of pressing OK.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub multiline: bool,
+    /// A multi-line field holding code (`"code": true`): monospace, Tab indents.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub code: bool,
+    /// A multi-line field's height in lines (`rows`, 2–30, default 8); `None` on one-line fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rows: Option<u8>,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// An extra button: runs `command` with its own `params` (plus the selection or the fields).
@@ -228,11 +249,29 @@ fn field(v: &Json) -> Result<Field, String> {
             return Err(format!("{what} `{id}`: a choice needs `options`"));
         }
     }
+    // Protocol 2.2: multi-line and code apply to text fields; other kinds ignore them (a password
+    // box stays on one line). Malformed keys are errors, as everywhere in a dialog.
+    let flag = |key: &str| match v.get(key) {
+        None | Some(Json::Null) => Ok(false),
+        Some(Json::Bool(b)) => Ok(*b),
+        Some(_) => Err(format!("{what} `{id}`: `{key}` must be true or false")),
+    };
+    let (wants_multi, wants_code) = (flag("multiline")?, flag("code")?);
+    let rows = match v.get("rows") {
+        None | Some(Json::Null) => DEFAULT_ROWS,
+        Some(Json::Number(n)) => {
+            n.as_f64().filter(|x| x.is_finite()).map_or(DEFAULT_ROWS, |x| x.round().clamp(f64::from(MIN_ROWS), f64::from(MAX_ROWS)) as u8)
+        }
+        Some(_) => return Err(format!("{what} `{id}`: `rows` must be a number")),
+    };
+    let multiline = kind == FieldKind::Text && (wants_multi || wants_code);
+    let code = multiline && wants_code;
+    let max_value = if multiline { MAX_MULTILINE_VALUE } else { MAX_VALUE };
     let raw = v.get("value").unwrap_or(&Json::Null);
     let value = match kind {
         FieldKind::Text | FieldKind::Secret => match raw {
             Json::Null => Json::String(String::new()),
-            Json::String(s) => Json::String(cut(s, MAX_VALUE)),
+            Json::String(s) => Json::String(cut(s, max_value)),
             Json::Number(n) => Json::String(n.to_string()),
             Json::Bool(b) => Json::String(b.to_string()),
             _ => return Err(format!("{what} `{id}`: `value` must be text")),
@@ -263,7 +302,7 @@ fn field(v: &Json) -> Result<Field, String> {
             Json::String(pick)
         }
     };
-    Ok(Field { id, label, value, kind, options })
+    Ok(Field { id, label, value, kind, options, multiline, code, rows: multiline.then_some(rows) })
 }
 
 fn button(v: &Json) -> Result<DialogButton, String> {

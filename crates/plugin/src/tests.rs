@@ -425,7 +425,7 @@ mod protocol_1_2 {
         assert!(Manifest::parse(r#"{"id": "t.ev", "name": "Ev", "run": {"command": "true"}, "events": "documentSaved"}"#).is_err());
         let many = json!({"id": "t.ev", "name": "Ev", "run": {"command": "true"}, "events": vec!["documentSaved"; 65]});
         assert!(Manifest::parse(&many.to_string()).is_err());
-        assert_eq!(crate::FEATURES, ["dialogs", "open", "events", "document", "push", "collab"]);
+        assert_eq!(crate::FEATURES, ["dialogs", "open", "events", "document", "push", "collab", "multiline", "literalValues"]);
     }
 
     #[test]
@@ -662,7 +662,7 @@ mod requirements {
         let why = messages("t.req.future");
         assert_eq!(why.len(), 3, "{why:?}");
         assert!(why[0].starts_with("Needs WordCraft 99.0 or later (this is "), "{why:?}");
-        assert_eq!(why[1], "Needs plugin protocol 9.0 or later (this WordCraft has 2.0)");
+        assert_eq!(why[1], "Needs plugin protocol 9.0 or later (this WordCraft has 2.2)");
         assert_eq!(why[2], "Needs `telepathy`, which this WordCraft doesn't have");
         add(
             "t.req.today",
@@ -682,5 +682,29 @@ mod requirements {
         assert!(crate::unload("t.req.cyc-b"));
         assert_eq!(messages("t.req.cyc-a"), ["Needs t.req.cyc-b, which isn't installed"]);
         assert!(crate::unload("t.req.cyc-a"));
+    }
+}
+
+#[test]
+fn multiline_fields_are_bounded() {
+    use crate::dialog::{MAX_MULTILINE_VALUE, MAX_VALUE, parse_dialog};
+    let long = "x".repeat(MAX_MULTILINE_VALUE + 10);
+    let d = parse_dialog(&json!({"kind": "form", "command": "go", "fields": [
+        {"id": "code", "code": true, "value": long, "rows": 1},
+        {"id": "one", "value": long},
+        {"id": "secret", "kind": "secret", "multiline": true},
+        {"id": "tall", "multiline": true, "rows": 12.6},
+    ]}))
+    .unwrap();
+    let f = &d.fields;
+    assert!(f[0].multiline && f[0].code, "code implies multi-line");
+    assert_eq!(f[0].rows, Some(2), "rows are bounded");
+    assert_eq!(f[0].value.as_str().unwrap().chars().count(), MAX_MULTILINE_VALUE);
+    assert!(!f[1].multiline && f[1].rows.is_none());
+    assert_eq!(f[1].value.as_str().unwrap().chars().count(), MAX_VALUE);
+    assert!(!f[2].multiline, "a password box stays on one line");
+    assert_eq!(f[3].rows, Some(13));
+    for bad in [json!({"id": "a", "multiline": "yes"}), json!({"id": "a", "code": 1}), json!({"id": "a", "rows": "many"})] {
+        assert!(parse_dialog(&json!({"kind": "form", "command": "go", "fields": [bad]})).is_err(), "{bad}");
     }
 }

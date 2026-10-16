@@ -12,7 +12,7 @@ use crate::{CmdError, ImeEditOutcome, Registry};
 
 mod documents;
 mod views;
-pub use documents::{DocInfo, DocState};
+pub use documents::{DocInfo, DocState, plugin_document_id};
 use documents::{document_id_mark, next_document_id, untitled_name};
 pub use views::WindowView;
 mod history;

@@ -116,7 +116,7 @@ fn required_add_ins_start_first_and_initialize_lists_add_ins() {
     let ids: Vec<&str> = starts.iter().map(|x| x["id"].as_str().unwrap()).collect();
     assert_eq!(ids, ["t.order.base", "t.order.top"], "the required add-in starts first");
     let init = &starts[1]["params"];
-    assert_eq!(init["host"]["protocol"], "2.0");
+    assert_eq!(init["host"]["protocol"], "2.2");
     assert_eq!(init["protocolVersion"], 1);
     let addins = init["addins"].as_array().unwrap();
     let base = addins.iter().find(|a| a["id"] == "t.order.base").unwrap();
