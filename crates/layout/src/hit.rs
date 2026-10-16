@@ -447,6 +447,7 @@ impl DocLayout {
             let first = para.lines.get(*l0)?;
             let l = para.lines.get(li)?;
             let cx = para.x_of(li, pos.off)?;
+            let cx = para.caret_limit(li).map_or(cx, |m| cx.min(m));
             // In the lines' own frame (turned text turns it onto the page).
             let top = l.top - first.top;
             // Caret spans the text height (ascent + descent), not the full line spacing.

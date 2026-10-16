@@ -2528,6 +2528,21 @@ impl ParaLayout {
         }
         l.xs.last().copied()
     }
+    /// The farthest right a caret goes on left-to-right line `li`: spaces at the end of a line
+    /// hang past its right edge, but the caret after them stays at the edge, as in Word (#2146);
+    /// text that overflows the line still carries it. `None` on bidirectional lines.
+    pub fn caret_limit(&self, li: usize) -> Option<f32> {
+        let l = self.lines.get(li)?;
+        if !l.vis.is_empty() {
+            return None;
+        }
+        let ink = (l.c0..l.c1).rev().find(|&k| self.clusters.get(k).is_some_and(|c| c.kind != ClKind::Space));
+        let end = match ink {
+            Some(k) => l.xs.get(k + 1 - l.c0).copied(),
+            None => l.xs.first().copied(),
+        };
+        Some(end.unwrap_or(l.left).max(l.right))
+    }
     /// The line holding offset `off` (a position at a wrap point belongs to the next line).
     pub fn line_of(&self, off: usize) -> usize {
         for (i, l) in self.lines.iter().enumerate() {

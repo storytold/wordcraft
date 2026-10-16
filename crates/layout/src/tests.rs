@@ -1325,6 +1325,39 @@ fn headers_and_page_fields() {
     assert!(c.top > 700.0);
 }
 
+/// Spaces typed at the end of a line hang past the right margin (they don't wrap), but the caret
+/// after them stays at the margin, as in Word, instead of running off the page (#2146). A letter
+/// typed after them wraps to the next line. Same in the body and in a header.
+#[test]
+fn caret_after_hanging_spaces_stays_at_the_margin() {
+    let spaces = format!("a{}", " ".repeat(200));
+    for header in [false, true] {
+        for text in [spaces.clone(), format!("{spaces}b")] {
+            let mut d = Document::new();
+            let p = wordcraft_doc::Paragraph::with_text(&text, Default::default());
+            let pos = if header {
+                let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(p)]);
+                d.last_section.headers.default = Some(id);
+                Pos { story: StoryRef::Part(id), path: Path::top(0), off: text.len() }
+            } else {
+                d.body = vec![wordcraft_doc::para_block(p)];
+                Pos::body(0, text.len())
+            };
+            let right = d.last_section.page_w - d.last_section.margin_right;
+            let l = lay(&d);
+            let items = if header { &l.pages[0].header } else { &l.pages[0].items };
+            let lines = items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para.lines.len()) } else { None }).unwrap();
+            let c = l.caret(&pos).unwrap();
+            let typed = text.ends_with('b');
+            assert_eq!(lines, if typed { 2 } else { 1 }, "header {header}, letter typed {typed}");
+            assert!(c.x <= right + 0.5, "header {header}, letter typed {typed}: caret at {} past the margin at {right}", c.x);
+            if !typed {
+                assert!(c.x >= right - 0.5, "header {header}: the caret sits at the margin, after the spaces ({})", c.x);
+            }
+        }
+    }
+}
+
 #[test]
 fn tall_first_page_header_pushes_body_down() {
     let mut d = Document::from_text(&"para\n".repeat(120));
