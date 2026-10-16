@@ -197,6 +197,7 @@
 	No document is open. Create a document or open one first.	Nincs megnyitott dokumentum. Előbb hozz létre vagy nyiss meg egyet.
 	development build	fejlesztői kiadás
 	Diagonal	Átlós
+	Diagram	Diagram
 	Diamond	Rombusz
 	Dictate	Diktálás
 	Different First Page	Eltérő első oldal
@@ -788,6 +789,7 @@
 	Undo	Visszavonás
 	Undo {action}	Visszavonás: {action}
 	Up	Fel
+	Update Diagram	Diagram frissítése
 	Update Field	Mező frissítése
 	Update Index	Tárgymutató frissítése
 	Update Style to Match Selection	Stílus frissítése a kijelölés alapján
@@ -1537,6 +1539,7 @@
 	PRs	PR-ek
 	First	Első
 	Last	Utolsó
+	Edit Diagram	Diagram szerkesztése
 	Change Picture…	Kép cseréje…
 	Size and Crop…	Méret és körülvágás…
 	Insert Columns to the Left	Oszlopok beszúrása balra

@@ -195,6 +195,7 @@
 	No document is open. Create a document or open one first.	Açık belge yok. Önce bir belge oluşturun veya açın.
 	development build	geliştirme derlemesi
 	Diagonal	Çapraz
+	Diagram	Diyagram
 	Diamond	Eşkenar Dörtgen
 	Dictate	Dikte Et
 	Different First Page	İlk Sayfa Farklı
@@ -802,6 +803,7 @@ preview	Title	Örnek
 	Undo {n} Actions	{n} Eylemi Geri Al
 	Unformatted Text	Biçimlendirilmemiş Metin
 	Up	Yukarı
+	Update Diagram	Diyagramı güncelle
 	Update Field	Alanı Güncelle
 	Update Index	Dizini Güncelle
 	Update Style to Match Selection	Stili Seçime Göre Güncelle
@@ -1541,6 +1543,7 @@ preview	Title	Örnek
 	PRs	PR'lar
 	First	İlk
 	Last	Son
+	Edit Diagram	Diyagramı Düzenle
 	Change Picture…	Resmi Değiştir…
 	Size and Crop…	Boyut ve Kırpma…
 	Insert Columns to the Left	Sola Sütun Ekle

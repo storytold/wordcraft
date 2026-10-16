@@ -90,6 +90,8 @@ impl eframe::App for App {
     }
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.0.ui(ui);
+        // The diagram editor, opened inside this window (`diagram` needs a frame with one).
+        self.0.diagram_frame(frame);
         self.3.show(frame);
     }
     fn on_exit(&mut self) {

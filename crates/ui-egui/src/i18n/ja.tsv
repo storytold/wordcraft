@@ -338,6 +338,7 @@
 	WordCraft is now the default app for Word documents.	WordCraft が Word 文書の既定のアプリになりました。
 	development build	開発ビルド
 	Diagonal	対角線
+	Diagram	図表
 	Diamond	ひし形
 	Dictate	ディクテーション
 	Different First Page	先頭ページのみ別指定
@@ -927,6 +928,7 @@
 	Undo {n} Actions	{n} 件の操作を元に戻す
 	Ungroup	グループ解除
 	Up	上
+	Update Diagram	図表を更新
 	Update Field	フィールドの更新
 	Update Index	索引の更新
 	Update Style to Match Selection	選択箇所と一致するようにスタイルを更新
@@ -1386,6 +1388,7 @@
 	Darkroom	暗室
 	Gallery	ギャラリー
 	Sketchbook	スケッチブック
+	Edit Diagram	図表の編集
 	Change Picture…	図の変更…
 	Font…	フォント…
 	Paragraph…	段落…

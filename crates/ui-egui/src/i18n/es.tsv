@@ -329,6 +329,7 @@
 	Delete Table	Eliminar tabla
 	Design	Diseño
 	Diagonal	Diagonal
+	Diagram	Diagrama
 	Diamond	Rombo
 	Dictate	Dictar
 	Different First Page	Primera página diferente
@@ -975,6 +976,7 @@
 	Undo {n} Actions	Deshacer {n} acciones
 	Unformatted Text	Texto sin formato
 	Up	Arriba
+	Update Diagram	Actualizar diagrama
 	Update Field	Actualizar campo
 	Update Index	Actualizar índice
 	Update Style to Match Selection	Actualizar estilo para que coincida con la selección
@@ -1426,6 +1428,7 @@
 	Darkroom	Cuarto oscuro
 	Gallery	Galería
 	Sketchbook	Cuaderno de bocetos
+	Edit Diagram	Editar diagrama
 	Change Picture…	Cambiar imagen…
 	Font…	Fuente…
 	Paragraph…	Párrafo…

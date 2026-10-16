@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>WordCraft — diagram</title>
+<script>window.__wcEditorSrc = "__WC_EDITOR__"; window.__wcDiagramXml = "__WC_DIAGRAM__";</script>
+<style>
+	html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #fff; }
+	#editor { display: block; border: 0; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<iframe id="editor" allow="clipboard-read; clipboard-write"></iframe>
+<script>
+// draw.io in its embed mode, which is a conversation with the page around it: draw.io talks to
+// `window.parent` and listens there. So the editor lives in the iframe below and this page is the
+// parent — the diagram is handed over here, and every answer is forwarded to the app.
+//
+// The app fills in `__wcDiagramXml` (the `<mxfile>` out of the picture) and `__wcEditorSrc` (the
+// draw.io page to load) before this page runs; `wcLoad`/`wcSend` are what it calls.
+(function () {
+	'use strict';
+
+	var frame = document.getElementById('editor');
+	var loaded = false;
+
+	/** Something about the editor itself the app should know (a picture it can't read). */
+	function fail(message) {
+		try {
+			window.ipc.postMessage(JSON.stringify({ event: 'wcError', message: message }));
+		} catch (e) {
+			console.error(e);
+		}
+	}
+
+	// draw.io's answers, on their way to the app.
+	window.addEventListener('message', function (e) {
+		if (e.source !== frame.contentWindow || typeof e.data !== 'string') {
+			return;
+		}
+		try {
+			window.ipc.postMessage(e.data);
+		} catch (err) {
+			console.error(err);
+		}
+	});
+
+	/** Put the picture into draw.io: XML straight out of the PNG, so draw.io parses nothing. */
+	window.wcLoad = function () {
+		if (loaded) {
+			return;
+		}
+		loaded = true;
+		var xml = window.__wcDiagramXml;
+		if (typeof xml !== 'string' || xml.length === 0) {
+			fail('the picture carries no diagram to edit');
+			return;
+		}
+		// draw.io keeps the diagram, but not a file path: the document has it.
+		window.wcSend({ action: 'load', xml: xml, autosave: 0 });
+		// The keyboard belongs to the diagram from here on.
+		try {
+			frame.focus();
+			frame.contentWindow.focus();
+		} catch (e) {
+			// Cross-origin (the remote editor): the first click in it takes focus instead.
+		}
+	};
+
+	/** Everything else draw.io expects to hear, from the app. */
+	window.wcSend = function (message) {
+		frame.contentWindow.postMessage(JSON.stringify(message), '*');
+	};
+
+	if (!window.__wcEditorSrc) {
+		fail('there is no diagram editor to load');
+	} else {
+		frame.src = window.__wcEditorSrc;
+	}
+
+	// Clicking anywhere in the picture area counts as clicking into the editor.
+	window.addEventListener('mousedown', function (e) {
+		if (e.target === document.body) {
+			try {
+				frame.focus();
+			} catch (e2) {
+				// ignore
+			}
+		}
+	});
+})();
+</script>
+</body>
+</html>

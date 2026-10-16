@@ -1,0 +1,15 @@
+[package]
+name = "wordcraft-diagram"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Diagrams inside pictures: the draw.io XML riding in a PNG's text chunk"
+
+[lints]
+workspace = true
+
+[dependencies]
+# A draw.io PNG carries its diagram as base64 of deflated XML in a PNG text chunk.
+base64 = { workspace = true }
+miniz_oxide = { workspace = true }
+log = { workspace = true }

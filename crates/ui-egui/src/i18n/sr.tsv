@@ -390,6 +390,7 @@
 	WordCraft is now the default app for Word documents.	WordCraft је сада подразумевана апликација за Word документе.
 	development build	развојна верзија
 	Diagonal	Дијагонално
+	Diagram	Дијаграм
 	Diamond	Дијамант
 	Dictate	Диктирање
 	Different First Page	Другачија прва страна
@@ -990,6 +991,7 @@
 	Undo {n} Actions	Опозови радње: {n}
 	Ungroup	Разгруписање
 	Up	Горе
+	Update Diagram	Ажурирај дијаграм
 	Update Field	Ажурирај поље
 	Update Index	Ажурирај индекс
 	Update Style to Match Selection	Ажурирај стил према избору
@@ -1323,6 +1325,7 @@
 	Darkroom	Мрачна комора
 	Gallery	Галерија
 	Sketchbook	Блок за скице
+	Edit Diagram	Уреди дијаграм
 	Change Picture…	Промени слику…
 	Font…	Фонт…
 	Paragraph…	Пасус…

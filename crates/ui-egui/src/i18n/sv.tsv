@@ -322,6 +322,7 @@
 	Delete Table	Ta bort tabell
 	Design	Design
 	Diagonal	Diagonal
+	Diagram	Diagram
 	Diamond	Romb
 	Dictate	Diktera
 	Different First Page	Annan första sida
@@ -966,6 +967,7 @@
 	Undo {n} Actions	Ångra {n} åtgärder
 	Unformatted Text	Oformaterad text
 	Up	Uppåt
+	Update Diagram	Uppdatera diagram
 	Update Field	Uppdatera fält
 	Update Index	Uppdatera register
 	Update Style to Match Selection	Uppdatera stilen så att den matchar markeringen
@@ -1416,6 +1418,7 @@
 	Darkroom	Mörkrum
 	Gallery	Galleri
 	Sketchbook	Skissbok
+	Edit Diagram	Redigera diagram
 	Change Picture…	Byt bild…
 	Font…	Typsnitt…
 	Paragraph…	Stycke…

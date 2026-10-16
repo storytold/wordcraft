@@ -17,22 +17,35 @@ wordcraft-fonts = { workspace = true }
 wordcraft-layout = { workspace = true }
 wordcraft-render = { workspace = true }
 wordcraft-engine = { workspace = true }
+wordcraft-diagram = { workspace = true }
 wordcraft-zotero = { workspace = true }
 egui = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+# A draw.io PNG carries its diagram as base64 of deflated XML; the editor moves pictures over
+# draw.io's embed protocol as base64 too.
+base64 = { workspace = true }
 # Pictures pasted from the system clipboard arrive as pixels and are inserted as PNG (#45).
 image = { workspace = true }
 # The system's preferred interface languages (#8) and region (#838). Native: OS APIs; wasm:
 # the browser's languages (`js`).
 sys-locale = { version = "0.3", features = ["js"] }
+# The host hands its window over as a raw handle, so this crate needs no windowing library.
+raw-window-handle = "0.6"
 
 # Linux only, where winit reports no system theme: the desktop portal's light/dark answer (see
 # `desktop_theme.rs`). Already in the tree, with these features, through egui's own accessibility
 # bus; pinned to one version so nothing is built twice.
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = "=5.19.0"
+
+# macOS and Windows only: editing a draw.io diagram runs draw.io in a child webview of the app's
+# window. On Linux wry needs a gtk loop of its own, which this app doesn't run, and in a browser a
+# page can't host a second browsing context. wry is Apache-2.0/MIT and uses the system's own
+# webview (WKWebView on macOS, WebView2 on Windows); see README.md's credits.
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+wry = { version = "0.57", default-features = false, features = ["os-webview"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # The browser clock (`SystemTime::now()`/`Instant::now()` panic on wasm32).

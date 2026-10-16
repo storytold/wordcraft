@@ -339,6 +339,7 @@
 	WordCraft is now the default app for Word documents.	WordCraft 現在是 Word 文件的預設應用程式。
 	development build	開發版本
 	Diagonal	斜向
+	Diagram	圖示
 	Diamond	菱形
 	Dictate	聽寫
 	Different First Page	首頁不同
@@ -928,6 +929,7 @@
 	Undo {n} Actions	復原 {n} 項動作
 	Ungroup	取消群組
 	Up	上
+	Update Diagram	更新圖示
 	Update Field	更新功能變數
 	Update Index	更新索引
 	Update Style to Match Selection	更新樣式以符合選取範圍
@@ -1387,6 +1389,7 @@
 	Darkroom	暗房
 	Gallery	畫廊
 	Sketchbook	素描本
+	Edit Diagram	編輯圖示
 	Change Picture…	變更圖片…
 	Font…	字型…
 	Paragraph…	段落…
