@@ -3916,6 +3916,48 @@ fn a_page_anchored_floating_table_after_a_full_page_moves_to_the_next() {
     assert_eq!(page_of(&|p| p.0 == [25]), vec![1]);
 }
 
+/// #2359: a table placed relative to the paragraph (`w:tblpPr w:vertAnchor="text"`) that doesn't
+/// fit in the rest of the page starts where it stands and runs on across pages like a table in
+/// the text, as in Word, instead of moving whole to the next page and leaving page 1 half empty.
+/// The text after it follows below it, not beside it.
+#[test]
+fn a_paragraph_anchored_floating_table_that_doesnt_fit_runs_on_to_the_next_page() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::TableFloat;
+    let text: Vec<String> = (0..18).map(|i| format!("Paragraph {i} before the table.")).collect();
+    let mut d = Document::from_text(&(text.join("\n") + "\nAfter the table."));
+    let mut t = Table::new(30, 1, 300.0);
+    for (i, r) in t.rows.iter_mut().enumerate() {
+        r.cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("Row {i}"), Default::default()))];
+    }
+    t.props.float = Some(TableFloat { h_rel: Anchor::Column, v_rel: Anchor::Paragraph, y: 0.05, overlap: false, ..Default::default() });
+    d.insert_block(StoryRef::Body, &Path::top(18), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let placed = |want: &dyn Fn(&Path) -> bool| -> Vec<(usize, f32)> {
+        l.pages
+            .iter()
+            .enumerate()
+            .flat_map(|(i, p)| p.items.iter().map(move |it| (i, it)))
+            .filter_map(|(i, it)| if let Placed::Lines { story: StoryRef::Body, path, y, .. } = it { want(path).then_some((i, *y)) } else { None })
+            .collect()
+    };
+    let before = placed(&|p| p.0 == [17]);
+    assert_eq!(before.iter().map(|(pg, _)| *pg).collect::<Vec<_>>(), [0], "the text before the table is on page 1");
+    let rows = placed(&|p| p.0.first() == Some(&18) && p.0.len() > 1);
+    assert_eq!(rows.len(), 30, "every row is drawn once: {rows:?}");
+    let (first_page, first_y) = rows.first().copied().unwrap_or_default();
+    assert_eq!(first_page, 0, "the table starts on page 1, below the text before it: {rows:?}");
+    assert!(first_y > before[0].1, "first row at {first_y}, below the paragraph before it at {}", before[0].1);
+    assert_eq!(rows.last().map(|(pg, _)| *pg), Some(1), "the rows that don't fit run on to page 2: {rows:?}");
+    assert!(rows.iter().all(|(_, y)| *y < 792.0 - 72.0), "no row past the bottom margin: {rows:?}");
+    let after = placed(&|p| p.0 == [19]);
+    let last_row = rows.last().copied().unwrap_or_default();
+    assert!(
+        after.len() == 1 && after[0].0 == 1 && after[0].1 > last_row.1,
+        "the text after the table follows below its last row {last_row:?}: {after:?}"
+    );
+}
+
 /// #534: a paragraph that starts with a page break right where the page is full keeps the break
 /// on that page: no blank page between the two tables around it.
 #[test]
