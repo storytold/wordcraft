@@ -482,8 +482,8 @@ enum DateKind {
 /// The built-in number formats (§18.8.30) that show dates or times.
 fn builtin_date(id: u32) -> Option<DateKind> {
     match id {
-        14..=17 | 27..=36 | 50..=58 => Some(DateKind::Date),
-        18..=21 | 45..=47 => Some(DateKind::Time),
+        14..=17 | 27..=31 | 34..=36 | 50..=58 => Some(DateKind::Date),
+        18..=21 | 32..=33 | 45..=47 => Some(DateKind::Time),
         22 => Some(DateKind::DateTime),
         _ => None,
     }
@@ -491,7 +491,8 @@ fn builtin_date(id: u32) -> Option<DateKind> {
 
 /// Whether a custom format code (§18.8.31) shows a date or time: its first section, without
 /// quoted text, escaped characters, `[…]` (colours, locales, conditions) and `_x` / `*x`
-/// padding, has `d` or `y` (date), `h` or `s` (time), or `m` alone (a month).
+/// padding, has `d` or `y` (date), `h` or `s` (time), or `m` alone (a month). Elapsed
+/// time formats using brackets (`[h]`, `[m]`, `[s]`) are recognized as time.
 fn custom_date(code: &str) -> Option<DateKind> {
     let mut plain = String::new();
     let mut chars = code.chars();
@@ -506,10 +507,18 @@ fn custom_date(code: &str) -> Option<DateKind> {
                 }
             }
             '[' => {
+                let mut bracket = String::new();
                 for q in chars.by_ref() {
                     if q == ']' {
                         break;
                     }
+                    bracket.push(q);
+                }
+                match bracket.to_ascii_lowercase().as_str() {
+                    "h" | "hh" => plain.push('h'),
+                    "m" | "mm" => plain.push('m'),
+                    "s" | "ss" => plain.push('s'),
+                    _ => {}
                 }
             }
             '\\' | '_' | '*' => {
@@ -552,8 +561,9 @@ fn cell_formats(xml: &[u8]) -> Vec<Option<DateKind>> {
     xfs.into_iter().map(|id| custom.get(&id).copied().unwrap_or_else(|| builtin_date(id))).collect()
 }
 
-/// A cell reference's 0-based column (`C5` → 2); `None` when it isn't one.
+/// A cell reference's 0-based column (`C5` → 2, `$C$5` → 2); `None` when it isn't one.
 fn ref_col(r: &str) -> Option<usize> {
+    let r = r.trim().trim_start_matches('$');
     let mut col = 0usize;
     let mut letters = 0;
     for c in r.chars() {
@@ -741,10 +751,10 @@ fn civil(z: i64) -> (i64, i64, i64) {
     (y, m, d)
 }
 
-/// An ISO 8601 date or date-time (`2024-03-05`, `2024-03-05T13:45:00.000`) as `yyyy-mm-dd`,
+/// An ISO 8601 date or date-time (`2024-03-05`, `2024-03-05T13:45:00.000`, `2024-03-05 13:45:00-05:00`) as `yyyy-mm-dd`,
 /// with ` hh:mm[:ss]` when the time isn't midnight.
 fn iso_datetime(v: &str) -> Option<String> {
-    let (date, time) = v.split_once('T').unwrap_or((v, ""));
+    let (date, time) = v.split_once('T').or_else(|| v.split_once(' ')).unwrap_or((v, ""));
     let mut it = date.splitn(3, '-');
     let y: i64 = it.next()?.parse().ok()?;
     let m: u32 = it.next()?.parse().ok()?;
@@ -753,7 +763,10 @@ fn iso_datetime(v: &str) -> Option<String> {
         return None;
     }
     let mut out = format!("{y:04}-{m:02}-{d:02}");
-    let hms: Vec<u32> = time.split(['Z', '+', '.']).next().unwrap_or("").split(':').filter_map(|p| p.parse().ok()).collect();
+    let t_part = time.split(['Z', 'z', '+']).next().unwrap_or("");
+    let t_part = if let Some(idx) = t_part.find('-') { &t_part[..idx] } else { t_part };
+    let (hms_part, _frac) = t_part.split_once('.').unwrap_or((t_part, ""));
+    let hms: Vec<u32> = hms_part.split(':').filter_map(|p| p.parse().ok()).collect();
     if let [h, mi, rest @ ..] = hms.as_slice() {
         let s = rest.first().copied().unwrap_or(0);
         if (*h, *mi, s) != (0, 0, 0) {
@@ -763,22 +776,37 @@ fn iso_datetime(v: &str) -> Option<String> {
     Some(out)
 }
 
-/// An ISO 8601 duration time (`PT13H45M00S`) as `hh:mm[:ss]`.
+/// An ISO 8601 duration time (`PT13H45M00S`) or XML Schema time (`13:45:00`) as `hh:mm[:ss]`.
 fn iso_time(v: &str) -> Option<String> {
-    let t = v.trim().strip_prefix("PT")?;
-    let (mut h, mut m, mut s) = (0u64, 0u64, 0f64);
-    let mut num = String::new();
-    for c in t.chars() {
-        match c {
-            'H' => h = std::mem::take(&mut num).parse().ok()?,
-            'M' => m = std::mem::take(&mut num).parse().ok()?,
-            'S' => s = std::mem::take(&mut num).parse().ok()?,
-            c if num.len() < 20 => num.push(c),
-            _ => return None,
+    let t = v.trim();
+    if let Some(t) = t.strip_prefix("PT").or_else(|| t.strip_prefix("pt")) {
+        let (mut h, mut m, mut s) = (0u64, 0u64, 0f64);
+        let mut num = String::new();
+        for c in t.chars() {
+            match c {
+                'H' | 'h' => h = std::mem::take(&mut num).parse().ok()?,
+                'M' | 'm' => m = std::mem::take(&mut num).parse().ok()?,
+                'S' | 's' => s = std::mem::take(&mut num).parse().ok()?,
+                c if num.len() < 20 => num.push(c),
+                _ => return None,
+            }
         }
+        let s = s.round() as u64;
+        Some(if s == 0 { format!("{h:02}:{m:02}") } else { format!("{h:02}:{m:02}:{s:02}") })
+    } else if t.contains(':') {
+        let t_part = t.split(['Z', 'z', '+']).next().unwrap_or("");
+        let t_part = if let Some(idx) = t_part.find('-') { &t_part[..idx] } else { t_part };
+        let (hms_part, _frac) = t_part.split_once('.').unwrap_or((t_part, ""));
+        let parts: Vec<u32> = hms_part.split(':').filter_map(|p| p.parse().ok()).collect();
+        if let [h, mi, rest @ ..] = parts.as_slice() {
+            let s = rest.first().copied().unwrap_or(0);
+            Some(if s == 0 { format!("{h:02}:{mi:02}") } else { format!("{h:02}:{mi:02}:{s:02}") })
+        } else {
+            None
+        }
+    } else {
+        None
     }
-    let s = s.round() as u64;
-    Some(if s == 0 { format!("{h:02}:{m:02}") } else { format!("{h:02}:{m:02}:{s:02}") })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1056,9 +1084,20 @@ mod tests {
     fn dates_and_formats() {
         assert_eq!(custom_date("[$-409]mmmm d, yyyy;@"), Some(DateKind::Date));
         assert_eq!(custom_date("h:mm AM/PM"), Some(DateKind::Time));
+        assert_eq!(custom_date("[h]:mm"), Some(DateKind::Time));
+        assert_eq!(custom_date("[h]:mm:ss"), Some(DateKind::Time));
         assert_eq!(custom_date("\"days\" 0.00"), None);
         assert_eq!(custom_date("General"), None);
         assert_eq!(custom_date("[Red]#,##0.00"), None);
+        assert_eq!(builtin_date(32), Some(DateKind::Time));
+        assert_eq!(builtin_date(33), Some(DateKind::Time));
+        assert_eq!(ref_col("$A$1"), Some(0));
+        assert_eq!(ref_col("$C$5"), Some(2));
+        assert_eq!(iso_datetime("2024-03-05 13:45:30"), Some("2024-03-05 13:45:30".into()));
+        assert_eq!(iso_datetime("2024-03-05T13:45:30-05:00"), Some("2024-03-05 13:45:30".into()));
+        assert_eq!(iso_time("13:45:00"), Some("13:45".into()));
+        assert_eq!(iso_time("13:45:30-05:00"), Some("13:45:30".into()));
+        assert_eq!(iso_time("pt13h45m"), Some("13:45".into()));
         assert_eq!(serial_date(61.0, false, DateKind::Date).as_deref(), Some("1900-03-01"));
         assert_eq!(serial_date(0.0, true, DateKind::Date).as_deref(), Some("1904-01-01"));
         assert_eq!(serial_date(0.75, false, DateKind::Time).as_deref(), Some("18:00"));
