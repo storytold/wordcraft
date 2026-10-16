@@ -989,7 +989,7 @@ fn polish_covers_every_key_of_every_other_catalog() {
     let polish = keys(lang("pl").0.source);
     // Italian and Hungarian still carry "Style: APA", which the interface no longer shows;
     // Hungarian and Bulgarian also name the citation styles, and Bulgarian has a few one-line
-    for other in Lang::all().filter(|l| *l != Lang::EN && !matches!(l.code(), "pl" | "it" | "hu" | "bg" | "vi" | "sv" | "hr")) {
+    for other in Lang::all().filter(|l| *l != Lang::EN && !matches!(l.code(), "pl" | "it" | "hu" | "bg" | "vi" | "sv" | "hr" | "nb" | "nn")) {
         let mut missing: Vec<String> = keys(other.0.source).difference(&polish).cloned().collect();
         missing.sort();
         assert!(missing.is_empty(), "pl lacks {}'s {missing:?}", other.code());
@@ -1114,7 +1114,7 @@ fn an_italian_interface_writes_new_documents_in_italian() {
 #[test]
 fn the_editing_languages_are_the_ones_wordcraft_can_proof() {
     let with: Vec<(&str, &str)> = Lang::all().filter_map(|l| l.editing_lang().map(|e| (l.code(), e))).collect();
-    assert_eq!(with, [("pt-br", "pt-BR"), ("pl", "pl-PL"), ("cs", "cs-CZ"), ("tr", "tr-TR"), ("it", "it-IT")]);
+    assert_eq!(with, [("pt-br", "pt-BR"), ("pl", "pl-PL"), ("cs", "cs-CZ"), ("tr", "tr-TR"), ("it", "it-IT"), ("nb", "nb-NO"), ("nn", "nn-NO")]);
 }
 
 #[test]
@@ -1550,4 +1550,63 @@ fn bundled_interface_fonts_cover_vietnamese_letters() {
         }
     }
     assert!(!lang("vi").uses_cjk());
+}
+
+#[test]
+fn norwegian_locales_catalogs_and_startup_languages() {
+    use std::collections::HashSet;
+    let keys = |source| parse_entries(source).0.into_iter().map(|e| (e.context, e.source)).collect::<HashSet<_>>();
+    for (code, tag, home, save) in [("nb", "nb-NO", "Hjem", "Lagre"), ("nn", "nn-NO", "Heim", "Lagre")] {
+        let l = lang(code);
+        for locale in [code.to_string(), tag.to_string(), format!("{}.UTF-8", tag.replace('-', "_"))] {
+            assert_eq!(lang_from_tag(&locale), Some(l), "{locale}");
+        }
+        let mut reference = keys(lang("hr").0.source);
+        reference.retain(|(_, source)| source != "Style: APA" && !(source.contains(" × ") && source.ends_with('"')));
+        assert_eq!(keys(l.0.source), reference, "complete current catalog without retired paper labels");
+        assert_eq!(tr(l, "Home"), home);
+        assert_eq!(tr(l, "Save"), save);
+        assert_eq!(tr(l, "Norwegian (Nynorsk)"), "Norsk nynorsk");
+        for obsolete in [
+            "Normal  1\" all",
+            "Narrow  0.5\" all",
+            "Letter   8.50\" × 11.00\"",
+            "Makes the ribbon, menus and dialogs larger or smaller, on top of your system's display scaling. Document zoom is separate.",
+        ] {
+            assert!(!has(l, obsolete), "obsolete Norwegian key: {obsolete}");
+        }
+        assert_eq!(fmt(tr(l, "Normal  {size} all"), &[("size", "2,54 cm")]), "Normale  2,54 cm på alle sider");
+        assert_eq!(fmt(tr(l, "{name}   {height} × {width} mm"), &[("name", "A4"), ("height", "297"), ("width", "210")]), "A4   297 × 210 mm");
+        for label in ["Sort by", "Formula:", "Privacy Settings", "Filter Recipients", "Rename Document", "Dictionaries"] {
+            assert_ne!(tr(l, label), label, "new interface label: {label}");
+        }
+
+        let region = wordcraft_engine::Region::from_tag(tag);
+        assert_eq!(region.paper().0, "A4");
+        assert_eq!(region.units(), wordcraft_geom::Unit::Centimeters);
+        assert_eq!(region.decimal(), ',');
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.session.system_region = region;
+        let ctx = egui::Context::default();
+        app.run("ui.language", serde_json::json!({"value": code})).unwrap();
+        ctx.run_ui(egui::RawInput::default(), |ui| app.logic(ui.ctx())).drop_without_applying_deltas();
+        assert_eq!(app.session.editing_lang.as_deref(), Some(tag));
+        assert_eq!(app.session.doc.styles.default_chr.lang.as_deref(), Some(tag));
+        assert!(!app.session.dirty && !app.session.can_undo());
+        app.session.run("text.insert", &serde_json::json!({"text": "Norsk tekst."})).unwrap();
+        app.run("ui.language", serde_json::json!({"value": "en"})).unwrap();
+        ctx.run_ui(egui::RawInput::default(), |ui| app.logic(ui.ctx())).drop_without_applying_deltas();
+        assert_eq!(app.session.doc.styles.default_chr.lang.as_deref(), Some(tag), "existing content retains language");
+        app.run("ui.language", serde_json::json!({"value": code})).unwrap();
+        ctx.run_ui(egui::RawInput::default(), |ui| app.logic(ui.ctx())).drop_without_applying_deltas();
+        app.execute("file.new", serde_json::json!({})).unwrap();
+        assert!((app.session.doc.last_section.page_w - 595.28).abs() < 0.01);
+        assert!((app.session.doc.last_section.page_h - 841.89).abs() < 0.01);
+        assert_eq!(app.session.doc.styles.default_chr.lang.as_deref(), Some(tag));
+        app.execute("file.new", serde_json::json!({"template": "letter"})).unwrap();
+        assert_eq!(app.session.doc.styles.default_chr.lang.as_deref(), Some("en-US"), "English template content retains language");
+    }
+    assert_eq!(lang_from_tag("no_NO.UTF-8"), Some(lang("nb")));
+    assert_eq!(lang_from_tag("no-nn"), Some(lang("nn")));
+    set_current(Lang::EN);
 }

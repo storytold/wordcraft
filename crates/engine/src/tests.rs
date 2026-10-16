@@ -7232,3 +7232,55 @@ fn vertical_align_command_sets_justified() {
         assert_eq!(serde_json::to_value(crate::cmd::page::sect(&s)).unwrap()["valign"], json!(name));
     }
 }
+
+/// Norwegian dictionaries stay external; synthetic fixtures test language routing, F7,
+/// suggestions, correction, exclusions, and mixed-language DOCX persistence end to end.
+#[test]
+fn norwegian_proofing_commands_and_mixed_docx_round_trip() {
+    use wordcraft_proof::ProofLang;
+    let aff = "SET UTF-8\nTRY abcdefghijklmnopqrstuvwxyzæøå\nCOMPOUNDFLAG z\nCOMPOUNDMIN 4\n";
+    wordcraft_proof::norwegian::install_dictionary(ProofLang::Nb, aff, "5\njeg\nskriver\nærlig\nstavekontroll/z\nfelt/z\n").unwrap();
+    wordcraft_proof::norwegian::install_dictionary(ProofLang::Nn, aff, "5\neg\nskriv\nærleg\nstavekontroll/z\nfelt/z\n").unwrap();
+    assert!(wordcraft_proof::is_correct_for("jeg", Some("nb-NO")));
+    assert!(!wordcraft_proof::is_correct_for("jeg", Some("nn-NO")));
+    assert!(!wordcraft_proof::is_correct_for("eg", Some("nb-NO")));
+    assert!(wordcraft_proof::is_correct_for("eg", Some("nn-NO")));
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Jeg skriver ærlig stavekontrol. Eg skriv ærleg stavekontrol. Hello wrold."}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "review.language", json!({"lang": "nb_NO", "default": true}));
+    run(&mut s, "select.text", json!({"text": "Eg skriv ærleg stavekontrol."}));
+    run(&mut s, "review.language", json!({"lang": "nn_NO"}));
+    run(&mut s, "select.text", json!({"text": "Hello wrold."}));
+    run(&mut s, "review.language", json!({"lang": "en-US"}));
+    let bytes = crate::io::save_bytes("norsk.docx", &s.doc).unwrap();
+    let doc = crate::io::open_bytes("norsk.docx", &bytes).unwrap();
+    assert_eq!(doc.styles.default_chr.lang.as_deref(), Some("nb-NO"));
+    let mut back = Session::new(doc);
+    let issues = run(&mut back, "review.issues", json!({}));
+    let found: Vec<(&str, &str)> = issues.as_array().unwrap().iter().map(|i| (i["text"].as_str().unwrap(), i["lang"].as_str().unwrap())).collect();
+    assert_eq!(found, [("stavekontrol", "nb"), ("stavekontrol", "nn"), ("wrold", "en")], "{issues}");
+    let layout = back.layout();
+    let para = layout.pages[0]
+        .items
+        .iter()
+        .find_map(|i| match i {
+            wordcraft_layout::Placed::Lines { para, .. } => Some(para),
+            _ => None,
+        })
+        .unwrap();
+    let para_text = back.doc.body[0].as_para().unwrap().plain_text();
+    let marks: Vec<&str> = para.issues.iter().filter(|i| !i.2).map(|i| &para_text[i.0..i.1]).collect();
+    assert_eq!(marks, ["stavekontrol", "stavekontrol", "wrold"], "Unicode offsets in squiggles agree with Review");
+    run(&mut back, "caret.docStart", json!({}));
+    assert_eq!(run(&mut back, "review.spelling", json!({}))["text"], "stavekontrol");
+    run(&mut back, "select.text", json!({"text": "Eg skriv ærleg stavekontrol."}));
+    run(&mut back, "review.language", json!({"noProof": true}));
+    let excluded = run(&mut back, "review.issues", json!({}));
+    assert_eq!(excluded.as_array().unwrap().len(), 2, "{excluded}");
+    run(&mut back, "select.text", json!({"text": "stavekontrol"}));
+    let suggestions = run(&mut back, "review.suggestions", json!({}));
+    assert!(suggestions.to_string().contains("stavekontroll"), "{suggestions}");
+    run(&mut back, "review.applySuggestion", json!({"text": "stavekontroll"}));
+    assert_eq!(run(&mut back, "review.issues", json!({})).as_array().unwrap().len(), 1);
+}

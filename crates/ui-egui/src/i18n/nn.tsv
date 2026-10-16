@@ -1,0 +1,2610 @@
+# Original Norwegian Nynorsk interface catalog.
+# Context<TAB>English source<TAB>translation
+# Keys and placeholders follow the current interface; document content is never translated.
+	% of all commits	% av alle innsendingar
+	(All)	(Alle)
+	(Custom)	(Eigedefinert)
+	(no style)	(ingen stil)
+	(no suggestions)	(ingen forslag)
+	(none)	(ingen)
+	(normal text)	(vanleg tekst)
+	(not matched)	(ikkje kopla)
+	(picture or object)	(bilete eller objekt)
+	0 or More Characters	0 eller fleire teikn
+	1. Formatting restrictions	1. Formateringsavgrensingar
+	1.5 Line Spacing	1,5 linjeavstand
+	1/4 Em Space	Kvart gefirt
+	1×2 Empty Matrix	1×2 tom matrise
+	1×3 Empty Matrix	1×3 tom matrise
+	2. Editing restrictions	2. Redigeringsavgrensingar
+	2×1 Empty Matrix	2×1 tom matrise
+	2×2 Determinant	2×2 determinant
+	2×2 Empty Matrix	2×2 tom matrise
+	2×2 Identity Matrix	2×2 identitetsmatrise
+	2×2 Identity Matrix (sparse)	2×2 identitetsmatrise (glissen)
+	2×2 Matrix in Brackets	2×2 matrise i hakeparentesar
+	2×2 Matrix in Double Bars	2×2 matrise i doble strekar
+	2×2 Matrix in Parentheses	2×2 matrise i parentesar
+	2×3 Empty Matrix	2×3 tom matrise
+	3-D	3D
+	3. Start enforcement	3. Start handheving
+	3×1 Empty Matrix	3×1 tom matrise
+	3×2 Empty Matrix	3×2 tom matrise
+	3×3 Empty Matrix	3×3 tom matrise
+	3×3 Identity Matrix	3×3 identitetsmatrise
+	3×3 Identity Matrix (sparse)	3×3 identitetsmatrise (glissen)
+	<< Less	<< Færre
+	<< Remove	<< Fjern
+	A file dialog is already open.	Ein fildialog er allereie open.
+	A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.	Ein gratis teksthandsamar med open kjeldekode, skriven frå grunnen av i Rust.\nEin del av Crafting Apps frå ArtCraft-teamet.
+	A mail merge field	Eit flettefelt
+	A numbered sequence (figures, tables…)	Ein nummerert sekvens (figurar, tabellar…)
+	A password is required to open this document.	Eit passord krevst for å opne dette dokumentet.
+	A table of contents	Ei innhaldsliste
+	A xor B	A eksklusiv-eller B
+	A, B, C, …	A, B, C, …
+	APA	APA
+	ASAP	SNAREST
+	AaBbCcDd	AaBbCcDd
+	AaBbYyZz	AaBbYyZz
+	About	Om
+	About WordCraft	Om WordCraft
+	Above Chart	Over diagram
+	Above the item	Over elementet
+	Absolute value cases	Tilfelle for absoluttverdi
+	Accent	Aksent
+	Accent Gradient	Aksentgradient
+	Accent with Reflection	Aksent med spegling
+	Accent {n}	Aksent {n}
+	Accents	Aksentar
+	Accept	Godta
+	Accept All Changes	Godta alle endringar
+	Accept This Change	Godta denne endringa
+	Accessed on	Besøkt
+	Accessibility	Tilgjenge
+	Accessibility Pane	Tilgjengerute
+	Acute	Akutt aksent
+	Add	Legg til
+	Add >>	Legg til >>
+	Add Chart Element	Legg til diagramelement
+	Add Field	Legg til felt
+	Add Font…	Legg til skrift…
+	Add New Source…	Legg til ny kjelde…
+	Add Object to Selection	Legg til objekt i utvalet
+	Add Pen	Legg til penn
+	Add Row	Legg til rad
+	Add Series	Legg til serie
+	Add Shape	Legg til figur
+	Add Space Before Paragraph	Legg til avstand før avsnitt
+	Add Text	Legg til tekst
+	Add a Table	Legg til ein tabell
+	Add a comment	Legg til ein kommentar
+	Add at least one field.	Legg til minst eitt felt.
+	Add line numbering	Legg til linjenummerering
+	Add space between Asian and Latin text	Legg til mellomrom mellom asiatisk og latinsk tekst
+	Add space between Asian text and numbers	Legg til mellomrom mellom asiatisk tekst og tal
+	Add tab stop at:	Legg til tabulatorstopp ved:
+	Add the chapter number	Legg til kapittelnummeret
+	Add to Dictionary	Legg til i ordlista
+	Add to Document	Legg til i dokument
+	Add to Quick Access Toolbar	Legg til på verktøylinja for snøggtilgang
+	Add to Style Gallery	Legg til i stilgalleriet
+	Add/Edit\nBibliography	Legg til/rediger\nlitteraturliste
+	Add/Edit\nCitation	Legg til/rediger\nkjeldetilvising
+	Add\nNote	Legg til\nmerknad
+	Add\nPen	Legg til\npenn
+	Add\nShape	Legg til\nfigur
+	Added Fonts	Tillagte skrifter
+	Address	Adresse
+	Address Block	Adresseblokk
+	Address labels	Adresseetikettar
+	Address:	Adresse:
+	Address\nBlock	Adresseblokk
+	Adjust	Juster
+	Advanced	Avansert
+	Advanced Find	Avansert søk
+	Advanced Find…	Avansert søk…
+	After:	Etter:
+	Agents	Agentar
+	Align	Juster
+	Align Bottom Center	Juster nederst i midten
+	Align Bottom Left	Juster nederst til venstre
+	Align Bottom Right	Juster nederst til høgre
+	Align Center	Midtstill
+	Align Center Left	Juster i midten til venstre
+	Align Center Right	Juster i midten til høgre
+	Align Left	Venstrejuster
+	Align Right	Høgrejuster
+	Align Text	Juster tekst
+	Align Top Center	Juster øverst i midten
+	Align Top Left	Juster øverst til venstre
+	Align Top Right	Juster øverst til høgre
+	Aligned at:	Justert ved:
+	Alignment	Justering
+	Alignment:	Justering:
+	All	Alle
+	All - Linear	Alle – lineær
+	All - Professional	Alle – profesjonell
+	All Borders	Alle kantlinjer
+	All Caps	Berre store bokstavar
+	All Commands	Alle kommandoar
+	All Levels	Alle nivå
+	All Markup	Alle markeringar
+	All caps	Berre store bokstavar
+	All files	Alle filer
+	All pages	Alle sider
+	All pages in the range	Alle sider i området
+	All symbol sets	Alle symbolsett
+	Allow Latin text to wrap in the middle of a word	Tillat linjebryting midt i latinske ord
+	Allow hanging punctuation	Tillat hengande teiknsetjing
+	Allow line breaks	Tillat linjeskift
+	Allow row to break across pages	Tillat at rada blir delt over fleire sider
+	Alphabetical	Alfabetisk
+	Alt Text	Alternativ tekst
+	Alt Text Pane	Rute for alternativ tekst
+	Alt text	Alternativ tekst
+	Alt:	Alt.:
+	Alt\nText	Alternativ\ntekst
+	Angle Brackets	Vinkelparentesar
+	Angle Brackets with Separator	Vinkelparentesar med skiljeteikn
+	Angle Brackets with Two Separators	Vinkelparentesar med to skiljeteikn
+	Animate the caret (it glides and fades)	Animer markøren (han glir og tonar ut)
+	Animation	Animasjon
+	Animation effects:	Animasjonseffektar:
+	Annotation Reference	Merknadsreferanse
+	Annotation Subject	Merknadsemne
+	Annotation Text	Merknadstekst
+	Another file	Ei anna fil
+	Any Character	Eit kva som helst teikn
+	Any Digit	Eit kva som helst siffer
+	Any Letter	Ein kva som helst bokstav
+	Anyone can open this document. Encrypt it with a password to keep it private.	Alle kan opne dette dokumentet. Krypter det med eit passord for å halde det privat.
+	Anyone who opens the document will need this password.	Alle som opnar dokumentet, treng dette passordet.
+	Apply	Bruk
+	Apply Asian line-breaking rules (kinsoku)	Bruk asiatiske linjebrytingsreglar (kinsoku)
+	Apply Character Style	Bruk teiknstil
+	Apply Style	Bruk stil
+	Apply Styles	Bruk stilar
+	Apply as you type	Bruk medan du skriv
+	Apply formatting to:	Bruk formatering på:
+	Apply to:	Bruk på:
+	Arabic	Arabisk
+	Arch Down	Bue ned
+	Arch Up	Bue opp
+	Area	Område
+	Arrange	Ordne
+	Arrange\nAll	Ordne\nalle
+	Arrow	Pil
+	Arrows	Piler
+	Artistic Effects	Kunstnarlege effektar
+	As Recommended	Som tilrådd
+	As you type	Medan du skriv
+	Asian Typography	Asiatisk typografi
+	Asian text font:	Skrift for asiatisk tekst:
+	Assign	Tilordne
+	At least	Minst
+	At least {n}	Minst {n}
+	Atelier	Atelier
+	Atmosphere	Atmosfære
+	Attach Template	Knytt til mal
+	Attach…	Knytt til…
+	Author	Forfattar
+	Auto	Automatisk
+	AutoCorrect	Autokorrektur
+	AutoCorrect Options	Innstillingar for autokorrektur
+	AutoFit	Tilpass automatisk
+	AutoFit Column by Double-Clicking	Tilpass kolonne automatisk ved å dobbeltklikke
+	AutoFit Contents	Tilpass til innhald
+	AutoFit Window	Tilpass til vindauge
+	AutoFormat As You Type	Autoformatering medan du skriv
+	AutoSave	Automatisk lagring
+	AutoSave documents you have saved in WordCraft	Lagre automatisk dokument du har lagra i WordCraft
+	AutoSave failed: {error}. Save the document to turn AutoSave back on.	Automatisk lagring mislukkast: {error}. Lagre dokumentet for å slå på automatisk lagring igjen.
+	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	Automatisk lagring er ikkje tilgjengeleg i nettlesaren: han kan ikkje skrive til filene dine. Lagre lastar ned ein kopi.
+	AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave.	Automatisk lagring tek berre vare på .docx-, .odt- og .rtf-filer; {name} kan ikkje ta vare på all formatering. Lagre som .docx for å slå på automatisk lagring.
+	AutoSave saves every change to the file (needs a saved document)	Automatisk lagring lagrar kvar endring i fila (krev at dokumentet er lagra)
+	AutoSave writes your changes to the file a moment after you stop typing.	Automatisk lagring skriv endringane til fila kort tid etter at du sluttar å skrive.
+	AutoText	Autotekst
+	Automatic	Automatisk
+	Automatic ({language})	Automatisk ({language})
+	Automatic ({region})	Automatisk ({region})
+	Automatic Table 1 (3 levels)	Automatisk innhaldsliste 1 (3 nivå)
+	Automatic Table 2 (2 levels)	Automatisk innhaldsliste 2 (2 nivå)
+	Automatic bulleted lists	Automatiske punktlister
+	Automatic follows your system's language. Menus and commands change; your documents don't.	Automatisk følgjer systemspråket. Språket i menyar og kommandoar vert endra, dokumenta held på innhaldet sitt.
+	Automatic numbered lists	Automatiske nummererte lister
+	Automatically Update Document Styles	Oppdater dokumentstilar automatisk
+	Automatically hyphenate document	Del ord automatisk i dokumentet
+	Automatically update document styles	Oppdater dokumentstilar automatisk
+	Backspace	Slett bakover
+	Balloons	Bobler
+	Banded Columns	Stripete kolonnar
+	Banded Rows	Stripete rader
+	Bar	Strek
+	Base text:	Grunntekst:
+	Based on: {style}	Basert på: {style}
+	Baseline Dots	Prikker på grunnlinja
+	Basic Cycle	Enkel syklus
+	Basic List	Enkel liste
+	Basic Math	Grunnleggjande matematikk
+	Basic Matrix	Enkel matrise
+	Basic Process	Enkel prosess
+	Basic Pyramid	Enkel pyramide
+	Basic Radial	Enkel radial
+	Basic Venn	Enkelt Venn-diagram
+	Bayes' rule	Bayes' regel
+	Before:	Før:
+	Beginning of Word	Byrjinga av ord
+	Behind Text	Bak tekst
+	Below text	Under teksten
+	Below the item	Under elementet
+	Between	Mellom
+	Bibliography	Litteraturliste
+	Binary assets added	Binærfiler lagt til
+	Binary assets removed	Binærfiler fjerna
+	Binomial Coefficient	Binomialkoeffisient
+	Binomial Coefficient (angle)	Binomialkoeffisient (vinkel)
+	Binomial Coefficient with Angle Brackets	Binomialkoeffisient med vinkelparentesar
+	Binomial expansion of (x+a)ⁿ	Binomialutvikling av (x+a)ⁿ
+	Blank	Tom
+	Blank (Three Columns)	Tom (tre kolonnar)
+	Blank Page	Tom side
+	Blank document	Tomt dokument
+	Block\nAuthors	Blokker\nforfattarar
+	Blue:	Blå:
+	Body Text	Brødtekst
+	Body text in a short paragraph to show spacing.	Brødtekst i eit kort avsnitt for å vise avstanden.
+	Bold	Fet
+	Book	Bok
+	Book Title	Boktittel
+	Book title	Boktittel
+	Bookmark	Bokmerke
+	Bookmark name:	Namn på bokmerke:
+	Border Painter	Teikn kantlinjer
+	Border lines	Kantlinjer
+	Border\nPainter	Teikn\nkantlinjer
+	Borders	Kantlinjer
+	Borders and Shading	Kantlinjer og skyggelegging
+	Borders and Shading…	Kantlinjer og skyggelegging…
+	Both Sides	Begge sider
+	Bottom	Nederst
+	Bottom Border	Nedre kantlinje
+	Bottom Margin	Botnmarg
+	Bottom of Page	Nedst på sida
+	Bottom:	Nedst:
+	Box	Ramme
+	Boxed Formula	Innramma formel
+	Boxed Formula (example)	Innramma formel (døme)
+	Boxed Formulas	Innramma formlar
+	Braces	Klammeparentesar
+	Braces with Separator	Klammeparentesar med skiljeteikn
+	Bracket	Parentes
+	Brackets	Hakeparentesar
+	Brackets with Separators	Hakeparentesar med skiljeteikn
+	Break Link	Bryt kopling
+	Breaks	Skift
+	Breve	Breve
+	Bring Forward	Flytt framover
+	Browse in WordCraft…	Bla gjennom i WordCraft…
+	Browse…	Bla gjennom…
+	Building Block Gallery Content Control	Innhaldskontroll for byggjeblokkgalleri
+	Built-In	Innebygd
+	Built-in style	Innebygd stil
+	Built-in styles can't be deleted.	Innebygde stilar kan ikkje slettast.
+	Bullet	Punkt
+	Bullet Library	Punktbibliotek
+	Bullets	Punktliste
+	By author	Etter forfattar
+	CONFIDENTIAL	KONFIDENSIELT
+	Calendar	Kalender
+	Can't be deleted	Kan ikkje slettast
+	Cancel	Avbryt
+	Canvas Member	Lerretsmedlem
+	Capitalize Each Word	Stor forbokstav i kvart ord
+	Capitalize first letter of sentences	Stor forbokstav i setningar
+	Capitalize first letter of table cells	Stor forbokstav i tabellceller
+	Capitalize names of days	Stor forbokstav i dagnamn
+	Capitalize the first word of a sentence	Bruk stor forbokstav i starten av setninga
+	Caption	Bildetekst
+	Caption Numbering	Nummerering av bilettekstar
+	Caption text	Bilettekst
+	Caption:	Bilettekst:
+	Captions	Bilettekstar
+	Caret Character	Innsetjingsteikn
+	Case changes	Endringar i store og små bokstavar
+	Cases (Three Conditions)	Tilfelle (tre vilkår)
+	Cases (Two Conditions)	Tilfelle (to vilkår)
+	Cases and Stacks	Tilfelle og stablar
+	Categories	Kategoriar
+	Categories:	Kategoriar:
+	Category	Kategori
+	Category {n}	Kategori {n}
+	Ceiling	Takfunksjon
+	Cell	Celle
+	Cell Margins	Cellemargar
+	Cell Size	Cellestorleik
+	Cell\nMargins	Cellemargar
+	Center	Midtstill
+	Centered	Midtstilt
+	Centered as Group	Midtstilt som gruppe
+	Centimeters	Centimeter
+	Change	Endre
+	Change Case	Endre store og små bokstavar
+	Change Chart Type	Endre diagramtype
+	Change Colors	Endre fargar
+	Change Layout	Endre oppsett
+	Change List Level	Endre listenivå
+	Change Password…	Endre passord…
+	Change Picture	Bytt bilete
+	Change Picture…	Bytt bilete…
+	Change Shape	Endre figur
+	Change Structure	Endre struktur
+	Change in y over change in x	Endring i y over endring i x
+	Change to Display	Endre til frittståande
+	Change to Inline	Endre til innebygd
+	Change to Level 1	Endre til nivå 1
+	Change to Level 2	Endre til nivå 2
+	Change to Level 3	Endre til nivå 3
+	Change to Level 4	Endre til nivå 4
+	Change to Level 5	Endre til nivå 5
+	Change to Level 6	Endre til nivå 6
+	Change to Level 7	Endre til nivå 7
+	Change to Level 8	Endre til nivå 8
+	Change to Level 9	Endre til nivå 9
+	Change\nChart Type	Endre\ndiagramtype
+	Change\nColors	Endre\nfargar
+	Changed lines:	Endra linjer:
+	Changes	Endringar
+	Chapter in a book	Kapittel i ei bok
+	Chapters begin at:	Kapittel byrjar ved:
+	Character	Teikn
+	Character Border	Teiknkantlinje
+	Character Position	Teiknplassering
+	Character Scale	Teiknskalering
+	Character Shading	Teiknbakgrunn
+	Character Spacing	Teiknavstand
+	Character code:	Teiknkode:
+	Character in Range	Teikn i område
+	Character level	Teiknnivå
+	Character spacing	Teiknavstand
+	Character style	Teiknstil
+	Characters	Teikn
+	Characters (no spaces)	Teikn (utan mellomrom)
+	Characters (with spaces)	Teikn (med mellomrom)
+	Characters per line:	Teikn per linje:
+	Chart	Diagram
+	Chart Design	Diagramutforming
+	Chart Layouts	Diagramoppsett
+	Chart Title	Diagramtittel
+	Check	Hake
+	Check Accessibility	Kontroller tilgjenge
+	Check Box Content Control	Innhaldskontroll for avmerkingsboks
+	Check Compatibility	Kontroller kompatibilitet
+	Check Spelling as You Type	Kontroller stavemåten medan du skriv
+	Check for Errors	Sjå etter feil
+	Check spelling as you type	Kontroller stavemåte medan du skriv
+	Check\nAccessibility	Kontroller\ntilgjenge
+	Checked styles are allowed:	Avmerkte stilar er tillatne:
+	Checked symbol	Avmerkt symbol
+	Chevron Down	Vinkel ned
+	Chevron Up	Vinkel opp
+	Chicago	Chicago
+	Chinese (Simplified)	Kinesisk (forenkla)
+	Chinese (Traditional)	Kinesisk (tradisjonell)
+	Choose List Item	Vel listeelement
+	Choose a command	Vel ein kommando
+	Choose a shortcut	Vel ein hurtigtast
+	Choose the sheet that holds the recipients.	Vel arket med mottakarane.
+	Circle	Sirkel
+	Circle area from its radius	Sirkelareal frå radius
+	Circled Dot	Prikk i sirkel
+	Circled Plus	Pluss i sirkel
+	Circled Times	Gange i sirkel
+	Citation Style	Referansestil
+	Citations	Kjeldetilvisingar
+	Citations & Bibliography	Kjeldetilvisingar og litteraturliste
+	City	By
+	Clear	Tøm
+	Clear All	Fjern alt
+	Clear All Formatting	Fjern all formatering
+	Clear Character Formatting	Fjern teiknformatering
+	Clear Character Style	Fjern teiknstil
+	Clear Formatting Level	Fjern formateringsnivå
+	Clear Paragraph Formatting	Fjern avsnittsformatering
+	Click a border between two cells to merge them. Esc stops.	Klikk på ein kant mellom to celler for å slå dei saman. Esc stoppar.
+	Click an item to paste it.	Klikk på eit element for å lime det inn.
+	Click level to modify:	Klikk på nivået som skal endrast:
+	Click the empty text box the text should continue in (Esc cancels)	Klikk på den tomme tekstboksen teksten skal halde fram i (Esc avbryt)
+	Click to switch back to inserting	Klikk for å byte tilbake til innsetjing
+	Clipboard	Utklippstavle
+	Clipboard Contents	Innhald på utklippstavla
+	Clipboard Items	Utklippstavleelement
+	Clipboard Pane	Utklippstavlerute
+	Close	Lukk
+	Close Equation	Lukk likning
+	Close Header and Footer	Lukk topptekst og botntekst
+	Close Outline View	Lukk disposisjonsvising
+	Close Outline\nView	Lukk disposisjons-\nvising
+	Clustered Bar	Gruppert liggjande stolpediagram
+	Clustered Column	Gruppert ståande stolpediagram
+	Col #:	Kol. nr.:
+	Collapse	Skjul undernivå
+	Collapse Selection	Opphev markering
+	Collate copies	Sorter kopiar
+	Collect entries from:	Samle oppføringar frå:
+	Colon Equal	Kolon lik
+	Color	Farge
+	Color model:	Fargemodell:
+	Color only	Berre farge
+	Color:	Farge:
+	Color: {color}	Farge: {color}
+	Colorful	Fargerikt
+	Colors	Fargar
+	Colors:	Fargar:
+	Column	Kolonne
+	Column Break	Kolonneskift
+	Column Selection	Kolonneutval
+	Column width	Kolonnebreidd
+	Column:	Kolonne:
+	Columns	Kolonnar
+	Columns:	Kolonnar:
+	Combine	Kombiner
+	Combine Documents	Kombiner dokument
+	Combo Box Content Control	Innhaldskontroll for kombinasjonsboks
+	Commands	Kommandoar
+	Commands:	Kommandoar:
+	Comment	Kommentar
+	Comments	Kommentarar
+	Comments Pane	Kommentarpanel
+	Comments beside each page and tracked changes in PDFs, prints and images; a comment list at the end of web pages, Markdown and text.	Kommentarar ved sida av kvar side og spora endringar i PDF-ar, utskrifter og bilete; ei kommentarliste på slutten av nettsider, Markdown og tekst.
+	Commits	Innsendingar
+	Common Accent Objects	Vanlege aksentobjekt
+	Common Brackets	Vanlege parentesar
+	Common Fractions	Vanlege brøkar
+	Common Functions	Vanlege funksjonar
+	Common Large Operators	Vanlege store operatorar
+	Common Operator Structures	Vanlege operatorstrukturar
+	Common Operators	Vanlege operatorar
+	Common Radicals	Vanlege røter
+	Common Subscripts and Superscripts	Vanlege senka og heva indeksar
+	Communication	Kommunikasjon
+	Community\nDiscord	Fellesskap\nDiscord
+	Compact	Kompakt
+	Company	Firma
+	Compare	Samanlikn
+	Compare Documents	Samanlikn dokument
+	Compared: {changes} changes	Samanlikna: {changes} endringar
+	Comparing with another file needs the desktop app.	Samanlikning med ei anna fil krev skrivebordsappen.
+	Comparison settings	Samanlikningsinnstillingar
+	Compress Pictures	Komprimer bilete
+	Compress punctuation at the start of a line	Komprimer teiknsetjing i starten av ei linje
+	Conference	Konferanse
+	Conference paper	Konferansebidrag
+	Confirm password:	Bekreft passord:
+	Connect Shapes	Kople figurar
+	Container Title	Tittel på samling
+	Content Control Properties	Eigenskapar for innhaldskontroll
+	Content Control at Selection	Innhaldskontroll ved utvalet
+	Contents can't be edited	Innhaldet kan ikkje redigerast
+	Context	Kontekst
+	Continuous	Fortløpande
+	Continuous numbering	Fortløpande nummerering
+	Contour Integral	Konturintegral
+	Contour Integral with Limits	Konturintegral med grenser
+	Contour Integral with Stacked Limits	Konturintegral med stabla grenser
+	Contour Integrals	Konturintegral
+	Contributors	Bidragsytarar
+	Controls	Kontrollar
+	Conversions	Konverteringar
+	Convert	Konverter
+	Convert Notes	Konverter merknader
+	Convert Text to Table	Konverter tekst til tabell
+	Convert Text to Table…	Konverter tekst til tabell…
+	Convert between built-up and linear form	Konverter mellom oppbygd og lineær form
+	Convert to Shapes	Konverter til figurar
+	Convert to Text	Konverter til tekst
+	Copies	Kopiar
+	Coproduct	Koprodukt
+	Coproduct with Limits	Koprodukt med grenser
+	Coproduct with Lower Limit	Koprodukt med nedre grense
+	Coproduct with Subscript-Superscript Limits	Koprodukt med senka og heva grenser
+	Copy	Kopier
+	Copy Formatting	Kopier formatering
+	Copy Styles	Kopier stilar
+	Copy of the text a bookmark marks	Kopi av teksten som eit bokmerke markerer
+	Copyright	Opphavsrett
+	Copyright Sign	Opphavsrettsteikn
+	Correct TWo INitial CApitals	Rett to store bokstavar i byrjinga av ord
+	Correct accidental usage of cAPS LOCK key	Rett utilsikta bruk av Caps Lock
+	Corrections	Rettingar
+	Cosecant Function	Cosekansfunksjon
+	Cosine 2x	Cosinus 2x
+	Cosine Function	Cosinusfunksjon
+	Cotangent Function	Cotangensfunksjon
+	Couldn't download {name}: {error}	Kunne ikkje laste ned {name}: {error}
+	Couldn't make WordCraft the default: {error}	Kunne ikkje gjere WordCraft til standard: {error}
+	Couldn't open {path}: {error}	Kunne ikkje opne {path}: {error}
+	Count by:	Tel med intervall:
+	Count words in text boxes and notes	Tel ord i tekstboksar og merknader
+	Country	Land
+	Courtesy Title	Tiltaleform
+	Cover Page	Framside
+	Craft	Handverk
+	Create	Opprett
+	Create Graphic	Opprett grafikk
+	Create Link	Opprett kopling
+	Create New Style	Opprett ny stil
+	Create Source	Opprett kjelde
+	Create a Style	Opprett ein stil
+	Create an interactive outline of your document.\n\nIt's a great way to keep track of where you are or quickly move your content around.\n\nTo get started, go to the Home tab and apply Heading styles to the headings in your document.	Lag ei interaktiv oversikt over dokumentet.\n\nHo hjelper deg med å finne fram og flytte innhald raskt.\n\nStart med å gå til fana Heim og bruke overskriftsstilar på overskriftene i dokumentet.
+	Crop	Skjer til
+	Cross-reference	Kryssreferanse
+	Cross-reference:	Kryssreferanse:
+	Cube Root	Kubikkrot
+	Current	Gjeldande
+	Current - Linear	Gjeldande – lineær
+	Current - Professional	Gjeldande – profesjonell
+	Current Position	Gjeldande plassering
+	Current page	Gjeldande side
+	Current style: {style}	Gjeldande stil: {style}
+	Curved Arrow Connector	Bogen pilkopling
+	Curved Connector	Bogen kopling
+	Custom	Eigedefinert
+	Custom Margins…	Eigendefinerte margar…
+	Custom Table of Contents…	Eigedefinert innhaldsliste…
+	Custom Watermark	Eigendefinert vassmerke
+	Custom Watermark…	Eigendefinert vassmerke…
+	Custom dictionary	Eigedefinert ordbok
+	Custom mark:	Eigedefinert merke:
+	Custom range	Eigedefinert område
+	Customize	Tilpass
+	Customize Keyboard	Tilpass tastatur
+	Customize Quick Access Toolbar	Tilpass verktøylinja for hurtigtilgang
+	Customize Quick Access Toolbar…	Tilpass verktøylinja for snøggtilgang…
+	Customize Ribbon	Tilpass bandet
+	Customize the Ribbon…	Tilpass bandet…
+	Customize…	Tilpass…
+	Cut	Klipp ut
+	Cycle	Syklus
+	Czech	Tsjekkisk
+	DO NOT COPY	IKKJE KOPIER
+	DOI	DOI
+	DRAFT	UTKAST
+	Danish	Dansk
+	Dark	Mørkt
+	Dark Mode	Mørk modus
+	Dark page (white text on black)	Mørk side (kvit tekst på svart)
+	Dark with Shadow	Mørk med skygge
+	Darkroom	Mørkerom
+	Dashed	Stipla
+	Data	Data
+	Data Labels	Dataetikettar
+	Date & Time	Dato og klokkeslett
+	Date Picker Content Control	Innhaldskontroll for datoveljar
+	Date and Time	Dato og klokkeslett
+	Date format	Datoformat
+	Date formats:	Datoformat:
+	Day	Dag
+	Decimal	Desimal
+	Decorative objects only add visual interest: screen readers skip them.	Dekorative objekt har berre visuell verdi: skjermlesarar hoppar over dei.
+	Decrease Font Size	Reduser skriftstorleiken
+	Decrease Indent	Reduser innrykk
+	Default	Standard
+	Default Paragraph Font	Standard avsnittsskrift
+	Default tab stops:	Standard tabulatorstopp:
+	Define New Bullet	Definer nytt punkt
+	Define New Multilevel List	Definer ny flernivåliste
+	Define New Multilevel List…	Definer ny flernivåliste…
+	Define New Number Format	Definer nytt talformat
+	Deflate	Press saman
+	Delete	Slett
+	Delete Back in Equation	Slett bakover i likning
+	Delete Cells	Slett celler
+	Delete Clipboard Item	Slett utklippstavleelement
+	Delete Columns	Slett kolonnar
+	Delete Comment	Slett kommentar
+	Delete Label	Slett etikett
+	Delete Next Word	Slett neste ord
+	Delete Previous Word	Slett førre ord
+	Delete Rows	Slett rader
+	Delete Selected Ink	Slett valt blekk
+	Delete Style	Slett stil
+	Delete Table	Slett tabell
+	Delete Table Style	Slett tabellstil
+	Delete in Equation	Slett i likning
+	Deleted	Sletta
+	Deletions:	Slettingar:
+	Delivery address:	Mottakaradresse:
+	Delta Equal To	Delta lik
+	Delta over arrow	Delta over pil
+	Demote	Senk nivå
+	Demote to Body Text	Senk til brødtekst
+	Derivative as a limit	Derivert som grenseverdi
+	Describe what this object shows, for people who can't see it.	Skildre kva dette objektet viser, for dei som ikkje kan sjå det.
+	Describe what this table shows, for people who can't see it.	Skildre kva denne tabellen viser, for dei som ikkje kan sjå han.
+	Description:	Skildring:
+	Design	Utforming
+	Design Mode	Utformingsmodus
+	Detach Template	Kople frå mal
+	Detect language automatically	Finn språk automatisk
+	Developer	Utviklar
+	Diagonal	Diagonal
+	Diagonal Dots	Diagonale prikker
+	Diamond	Rombe
+	Dictate	Dikter
+	Different First Page	Annleis førsteside
+	Different Odd & Even Pages	Ulike oddetals- og partalssider
+	Differential	Differensial
+	Differential theta	Differensial theta
+	Differential x	Differensial x
+	Differential y	Differensial y
+	Differentials	Differensial
+	Direct formatting	Direkte formatering
+	Direction:	Retning:
+	Directory	Katalog
+	Discord	Discord
+	Discord community	Discord-fellesskapet
+	Display	Vising
+	Display for Review	Vising for gjennomgang
+	Display name	Visingsnamn
+	Display text	Visingstekst
+	Distribute Columns	Fordel kolonnar jamt
+	Distribute Rows	Fordel rader jamt
+	Distribute letters	Fordel bokstavar
+	Distribute spacing	Fordel avstand
+	Distributed	Fordelt
+	Do Not Check Spelling or Grammar	Ikkje kontroller stavemåte eller grammatikk
+	Do Not Show in TOC	Utelat frå innhaldslista
+	Do not check spelling or grammar	Ikkje kontroller stavemåte eller grammatikk
+	Do you want to save changes to {name}?	Vil du lagre endringane i {name}?
+	Document	Dokument
+	Document End	Slutten av dokumentet
+	Document Formatting	Dokumentformatering
+	Document Grid	Dokumentrutenett
+	Document Information	Dokumentinformasjon
+	Document Property	Dokumenteigenskap
+	Document Start	Starten av dokumentet
+	Document Text	Dokumenttekst
+	Document Title	Dokumenttittel
+	Document template:	Dokumentmal:
+	Document1	Dokument1
+	Document\nPreferences	Dokument-\ninnstillingar
+	Documents	Dokument
+	Documents you open will show up here.	Dokument du opnar, vert vist her.
+	Don't Save	Ikkje lagre
+	Don't add space between paragraphs of the same style	Ikkje legg til mellomrom mellom avsnitt med same stil
+	Don't capitalize after:	Ikkje bruk stor forbokstav etter:
+	Don't hyphenate	Ikkje bruk orddeling
+	Don't read Zotero, Mendeley or EndNote citations and bibliographies	Ikkje les kjeldetilvisingar og litteraturlister frå Zotero, Mendeley eller EndNote
+	Dot	Prikk
+	Dot dash	Punktstrek
+	Dot-dash	Prikk og strek
+	Dots	Prikker
+	Dotted	Prikka
+	Double	Dobbel
+	Double Bar	Dobbel strek
+	Double Closing Quote	Dobbelt avsluttande hermeteikn
+	Double Dot	Dobbel prikk
+	Double Integral	Dobbeltintegral
+	Double Integral with Limits	Dobbeltintegral med grenser
+	Double Integral with Stacked Limits	Dobbeltintegral med stabla grenser
+	Double Left Arrow with Text Above	Dobbel venstrepil med tekst over
+	Double Left Arrow with Text Below	Dobbel venstrepil med tekst under
+	Double Left Right Arrow with Text Above	Dobbel venstre-høgrepil med tekst over
+	Double Left Right Arrow with Text Below	Dobbel venstre-høgrepil med tekst under
+	Double Opening Quote	Dobbelt innleiande hermeteikn
+	Double Right Arrow with Text Above	Dobbel høgrepil med tekst over
+	Double Right Arrow with Text Below	Dobbel høgrepil med tekst under
+	Double Spacing	Dobbel linjeavstand
+	Double Square Brackets	Doble hakeparentesar
+	Double Strikethrough	Dobbel gjennomstreking
+	Double Underline	Dobbel understreking
+	Double Vertical Bars	Doble loddrette strekar
+	Double strikethrough	Dobbel gjennomstreking
+	Double summation	Dobbel summering
+	Doughnut	Ringdiagram
+	Down	Ned
+	Draft	Kladd
+	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	Dra eit rektangel for å teikne ein tabell, eller ei linje gjennom celler for å dele dei. Esc stoppar.
+	Draw	Teikn
+	Draw Ink	Teikn med blekk
+	Draw Table	Teikn tabell
+	Draw\nTable	Teikn\ntabell
+	Drawing Canvas	Teiknelerret
+	Drawing Tools	Teikneverktøy
+	Drawing\nCanvas	Teikneområde
+	Drop Cap	Stor innleiingsbokstav
+	Drop cap	Innfelt forbokstav
+	Drop-Down List Content Control	Innhaldskontroll for nedtrekksliste
+	Drops all formatting and pastes plain text.	Fjernar all formatering og limer inn rein tekst.
+	Dutch	Nederlandsk
+	E-mail Messages	E-postmeldingar
+	Edit Comment	Rediger kommentar
+	Edit Data	Rediger data
+	Edit Document	Rediger dokument
+	Edit Equation	Rediger likning
+	Edit Field Code	Rediger feltkode
+	Edit Field…	Rediger felt…
+	Edit Footer	Rediger botntekst
+	Edit Header	Rediger topptekst
+	Edit Items	Rediger element
+	Edit Recipient List	Rediger mottakarliste
+	Edit Source	Rediger kjelde
+	Edit\nData	Rediger\ndata
+	Edit\nRecipient List	Rediger\nmottakarliste
+	Edited	Redigert
+	Editing	Redigering
+	Editing header/footer	Redigerer topptekst/botntekst
+	Editing in this document is restricted.	Redigering i dette dokumentet er avgrensa.
+	Editing — edit the document directly	Redigering – rediger dokumentet direkte
+	Edition	Utgåve
+	Editor	Språkhjelp
+	Edit…	Rediger…
+	Effects	Effektar
+	Elbow Arrow Connector	Vinkla pilkopling
+	Elbow Connector	Vinkla kopling
+	Ellipsis	Ellipse
+	Em Dash	Lang tankestrek
+	Em Space	Gefirt
+	Emboss	Relieff
+	Emphasis	Utheving
+	Empty Matrices	Tomme matrisar
+	En Dash	Kort tankestrek
+	En Space	Halv gefirt
+	Enclose Characters	Omslutt teikn
+	Enclosure	Omslutning
+	Encrypt with Password	Krypter med passord
+	Encrypt with Password…	Krypter med passord…
+	End of Word	Slutten av ord
+	End of document	Slutten av dokumentet
+	End of section	Slutten av inndelinga
+	Endnote Reference	Sluttnotereferanse
+	Endnote Text	Sluttnotetekst
+	Endnotes	Sluttnotar
+	Endnotes to footnotes	Sluttnotar til fotnotar
+	English (United Kingdom)	Engelsk (Storbritannia)
+	English (United States)	Engelsk (USA)
+	Engrave	Gravert
+	Enlarge symbol	Forstørr symbol
+	Enter formatting for number:	Angi formatering for nummer:
+	Enter in Equation	Linjeskift i likning
+	Enter page number:	Skriv inn sidetal:
+	Entry marked.	Oppføring markert.
+	Envelope #10	Konvolutt #10
+	Envelope Address	Konvoluttadresse
+	Envelope DL	Konvolutt DL
+	Envelope Return	Returadresse på konvolutt
+	Envelope size:	Konvoluttstorleik:
+	Envelopes	Konvoluttar
+	Equal Equal	Lik lik
+	Equal by Definition	Lik per definisjon
+	Equal column width	Lik kolonnebreidd
+	Equals:	Er lik:
+	Equation	Likning
+	Equation Gallery	Likningsgalleri
+	Equation Info	Likningsinformasjon
+	Equation Number	Likningsnummer
+	Equation Options	Likningsalternativ
+	Erase Ink	Slett blekk
+	Eraser	Viskelær
+	Errors ({n})	Feil ({n})
+	Estonian	Estisk
+	Euler's identity	Eulers identitet
+	Even Page	Partalsside
+	Even pages only	Berre partalssider
+	Every change is recorded as a tracked change.	Alle endringar blir registrerte som spora endringar.
+	Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel.	Alle kommandoar er tilgjengelege for skript og KI-agentar: køyr `wordcraft-cli mcp` for ein MCP-server, eller start programmet med `--control <port>` for JSON-kontrollkanalen.
+	Every field needs a name.	Alle felt treng eit namn.
+	Everyone	Alle
+	Exactly	Nøyaktig
+	Exactly {n}	Nøyaktig {n}
+	Example: {sample}	Døme: {sample}
+	Exceptions (optional)	Unntak (valfritt)
+	Exceptions…	Unntak…
+	Expand	Utvid
+	Expand or Collapse Heading	Vis eller skjul innhald under overskrift
+	Exponential	Eksponential
+	Exponential series	Eksponentialrekkje
+	Export	Eksporter
+	Export PDF	Eksporter PDF
+	Export Page as PNG	Eksporter side som PNG
+	Export a copy to share (PDF, Word document)	Eksporter ein kopi for deling (PDF, Word-dokument)
+	Exported {path}	Eksportert til {path}
+	Expression	Uttrykk
+	Extend Selection	Utvid markering
+	Extend Selection by Units	Utvid utval etter einingar
+	Extra space	Ekstra mellomrom
+	Field	Felt
+	Field Codes	Feltkodar
+	Field code:	Feltkode:
+	Field codes:	Feltkodar:
+	Field name	Feltnamn
+	Field name:	Feltnamn:
+	Field names must be different.	Feltnamn må vere ulike.
+	Field names:	Feltnamn:
+	Field properties	Felteigenskapar
+	Field:	Felt:
+	Fields	Felt
+	Fields:	Felt:
+	Field…	Felt…
+	Figure	Figur
+	File	Fil
+	File name:	Filnamn:
+	Fill	Fyll
+	Fill color:	Fyllfarge:
+	Filling in forms	Utfylling av skjema
+	Film	Film
+	Find	Søk
+	Find Next	Finn neste
+	Find Next Editable Region	Finn neste redigerbare område
+	Find Previous	Finn førre
+	Find Recipient	Finn mottakar
+	Find What Expression	Søkeuttrykk
+	Find What Text	Søketekst
+	Find and Replace	Søk og erstatt
+	Find what:	Søk etter:
+	Find:	Finn:
+	Finding printers…	Søkjer etter skrivarar…
+	Finish	Fullfør
+	Finish & Merge	Fullfør og flett
+	Finish &\nMerge	Fullfør\nog flett
+	Finished	Ferdig
+	Finnish	Finsk
+	First	Første
+	First Column	Første kolonne
+	First Name	Fornamn
+	First commit	Første innsjekking
+	First line	Første linje
+	First line:	Første linje:
+	First row of data contains column headers	Første datarad inneheld kolonneoverskrifter
+	Fit	Tilpass
+	Fix Position on Page	Fast plassering på sida
+	Fixed Column Width	Fast kolonnebreidd
+	Flip Horizontal	Spegl vassrett
+	Flip Vertical	Spegl loddrett
+	Floor	Gulvfunksjon
+	Focus	Fokus
+	Follow number with:	Følg nummeret med:
+	Font	Skrift
+	Font Color	Skriftfarge
+	Font Dialog	Skriftdialog
+	Font Size	Skriftstorleik
+	Font color	Skriftfarge
+	Font color:	Skriftfarge:
+	Font:	Skrift:
+	Font: {font}	Skrift: {font}
+	Fonts	Skrifter
+	Font…	Skrift…
+	Footer	Botntekst
+	Footnote Reference	Fotnotereferanse
+	Footnote Text	Fotnotetekst
+	Footnote and Endnote	Fotnote og sluttnote
+	Footnotes	Fotnotar
+	Footnotes and endnotes	Fotnotar og sluttnotar
+	Footnotes to endnotes	Fotnotar til sluttnotar
+	Format	Format
+	Format Page Numbers	Formater sidetal
+	Format Page Numbers…	Formater sidetal…
+	Format Painter	Formatpensel
+	Format:	Format:
+	Formatted	Formatert
+	Formatted Text	Formatert tekst
+	Formatting	Formatering
+	Formatting at Selection	Formatering i markeringa
+	Formatting exceptions	Formateringsunntak
+	Formatting marks	Formateringsmerke
+	Formatting, case changes, white space and tables are compared; the other settings are kept for later.	Formatering, store og små bokstavar, mellomrom og tabellar blir samanlikna; dei andre innstillingane blir tekne vare på til seinare.
+	Formula	Formel
+	Forward	Framover
+	Fraction	Brøk
+	Fractions (1/2) as fraction characters (½)	Brøkar (1/2) som brøkteikn (½)
+	French (France)	Fransk (Frankrike)
+	From text:	Frå tekst:
+	Full page of the same label	Heil side med same etikett
+	Function	Funksjon
+	Functions	Funksjonar
+	GB/T 7714	GB/T 7714
+	GOST (name sort)	GOST (sortert etter namn)
+	GOST (title sort)	GOST (sortert etter tittel)
+	Gallery	Galleri
+	General	Generelt
+	Geometry	Geometri
+	German (Germany)	Tysk (Tyskland)
+	Glow	Glød
+	Glow Colors	Glødfargar
+	Go Back	Gå tilbake
+	Go To	Gå til
+	Go To (⌘⌥G)	Gå til (⌘⌥G)
+	Go To…	Gå til…
+	Go to	Gå til
+	Go to what:	Gå til kva:
+	Good afternoon	God ettermiddag
+	Good evening	God kveld
+	Good morning	God morgon
+	Grab bag	Tilfeldig utval
+	Graphic	Grafikk
+	Grave	Grav aksent
+	Grayscale	Gråtonar
+	Greek	Gresk
+	Greek Letters	Greske bokstavar
+	Green:	Grøn:
+	Greeting Line	Helsingslinje
+	Greeting\nLine	Helsingslinje
+	Grid Table 1 Light	Rutenettabell 1 lys
+	Grid Table 4 – Blue	Rutenettabell 4 – blå
+	Grid Table 4 – Green	Rutenettabell 4 – grøn
+	Grid Table 4 – Orange	Rutenettabell 4 – oransje
+	Grid Table 4 – Purple	Rutenettabell 4 – lilla
+	Gridlines	Rutenett
+	Group	Grupper
+	Grouping Character Above	Grupperingsteikn over
+	Grouping Character Below	Grupperingsteikn under
+	Grow Font 1 Point	Auk skriftstorleiken med 1 punkt
+	H:	H:
+	HTML Format	HTML-format
+	Hanging Indent	Hengande innrykk
+	Harvard (Anglia)	Harvard (Anglia)
+	Hat	Hatt
+	Header	Topptekst
+	Header & Footer	Topptekst og botntekst
+	Header Row	Overskriftsrad
+	Header/Footer Position	Plassering av topptekst/botntekst
+	Headers and footers	Topptekstar og botntekstar
+	Heading 1	Overskrift 1
+	Heading 2	Overskrift 2
+	Heading 3	Overskrift 3
+	Heading styles (levels 1–{n})	Overskriftsstilar (nivå 1–{n})
+	Heading {n}	Overskrift {n}
+	Headings	Overskrifter
+	Heart	Hjarte
+	Hebrew	Hebraisk
+	Height:	Høgd:
+	Help	Hjelp
+	Hex:	Heks.:
+	Hidden	Skjult
+	Hidden text	Skjult tekst
+	Hide Codes	Skjul kodar
+	Hide Ink	Skjul blekk
+	Hide White Space	Skjul tomrom
+	Hide from style lists	Skjul frå stillister
+	Hide\nInk	Skjul\nblekk
+	Hierarchy	Hierarki
+	Highlight	Utheving
+	Highlight Merge Fields	Uthev flettefelt
+	Highlight\nMerge Fields	Uthev\nflettefelt
+	Highlighter	Merkepenn
+	Hindi	Hindi
+	Hollow	Hol
+	Home	Heim
+	Home folder	Heimemappe
+	Horizontal	Vassrett
+	Horizontal Line	Vassrett linje
+	How many pages the whole document has	Talet på sider i heile dokumentet
+	How many pages this section has	Talet på sider i denne inndelinga
+	How many words the document holds	Talet på ord i dokumentet
+	Hue:	Fargetone:
+	Hyperbolic Cosecant Function	Hyperbolsk cosekansfunksjon
+	Hyperbolic Cosine Function	Hyperbolsk cosinusfunksjon
+	Hyperbolic Cotangent Function	Hyperbolsk cotangensfunksjon
+	Hyperbolic Functions	Hyperbolske funksjonar
+	Hyperbolic Secant Function	Hyperbolsk sekansfunksjon
+	Hyperbolic Sine Function	Hyperbolsk sinusfunksjon
+	Hyperbolic Tangent Function	Hyperbolsk tangensfunksjon
+	Hyperlink	Hyperlenkje
+	Hyphenate at:	Del ord ved:
+	Hyphenate words in CAPS	Del ord med STORE BOKSTAVAR
+	Hyphenation	Orddeling
+	Hyphenation Options…	Alternativ for orddeling…
+	Hyphenation zone:	Orddelingssone:
+	Hyphens (--) as dashes (—)	Bindestrekar (--) som tankestrekar (—)
+	Hypotenuse	Hypotenus
+	I, II, III, …	I, II, III, …
+	IEEE	IEEE
+	ISO 690 (author-date)	ISO 690 (forfattar–dato)
+	ISO 690 (numerical)	ISO 690 (numerisk)
+	Icon Color	Ikonfarge
+	Icons	Ikon
+	Identity Matrices	Identitetsmatrisar
+	If…Then…Else	Dersom…så…elles
+	If…Then…Else…	Dersom…så…elles…
+	Ignore All	Ignorer alle
+	Ignore punctuation characters	Ignorer teiknsetjing
+	Ignore web and file addresses	Ignorer nett- og filadresser
+	Ignore white-space characters	Ignorer blankteikn
+	Ignore words in capitals	Ignorer ord med store bokstavar
+	Ignore words with numbers	Ignorer ord med tal
+	Illustrations	Illustrasjonar
+	Immersive	Lesefokus
+	Immersive Reader	Fokusert lesing
+	Immersive\nReader	Fokusert\nlesing
+	In Default apps, choose WordCraft for the document types you want it to open.	Vel WordCraft for dokumenttypane du vil opne, i Standardappar.
+	In Front of Text	Foran tekst
+	In Line with Text	På linje med tekst
+	In equations, typing a name after a backslash replaces it with its symbol.	I likningar blir eit namn etter ein omvend skråstrek erstatta med symbolet sitt.
+	Inches	Tommar
+	Include level number from:	Ta med nivånummer frå:
+	Include page numbers	Ta med sidetal
+	Increase Font Size	Auk skriftstorleiken
+	Increase Indent	Auk innrykk
+	Indent	Innrykk
+	Indent from left:	Innrykk frå venstre:
+	Indentation	Innrykk
+	Indented	Med innrykk
+	Indents	Innrykk
+	Indents and Spacing	Innrykk og avstand
+	Index	Stikkordregister
+	Index Heading	Stikkordregisteroverskrift
+	Index and Tables	Stikkordregister og tabellar
+	Index {n}	Stikkordregister {n}
+	Inflate	Utvid
+	Info	Informasjon
+	Initials:	Initialar:
+	Ink	Blekk
+	Ink Replay	Spel av blekk
+	Ink to Shape	Blekk til figur
+	Ink to\nMath	Handskrift\ntil matematikk
+	Ink to\nShape	Handskrift\ntil figur
+	Ink\nReplay	Spel\nav pennestrøk
+	Inline	Innebygd
+	Input Format	Inndataformat
+	Insert	Set inn
+	Insert Above	Set inn over
+	Insert Below	Set inn under
+	Insert Caption	Set inn bildetekst
+	Insert Caption…	Set inn bilettekst…
+	Insert Chart	Set inn diagram
+	Insert Citation	Set inn kjeldetilvising
+	Insert Columns to the Left	Set inn kolonnar til venstre
+	Insert Columns to the Right	Set inn kolonnar til høgre
+	Insert Date Field	Set inn datofelt
+	Insert Endnote	Set inn sluttnote
+	Insert Footnote	Set inn fotnote
+	Insert Hyperlink	Set inn hyperlenkje
+	Insert Index	Set inn stikkordregister
+	Insert Left	Set inn til venstre
+	Insert Merge Field	Set inn flettefelt
+	Insert Merge\nField	Set\ninn flettefelt
+	Insert New Equation	Set inn ny likning
+	Insert Page Field	Set inn sidefelt
+	Insert Right	Set inn til høgre
+	Insert Row or Column by Clicking	Set inn rad eller kolonne ved å klikke
+	Insert Rows Above	Set inn rader over
+	Insert Rows Below	Set inn rader under
+	Insert Shapes	Set inn figurar
+	Insert SmartArt	Set inn SmartArt
+	Insert Structure	Set inn struktur
+	Insert Symbol	Set inn symbol
+	Insert Table	Set inn tabell
+	Insert Table of Authorities	Set inn register over rettskjelder
+	Insert Table of Figures	Set inn figurliste
+	Insert Table…	Set inn tabell…
+	Insert Time Field	Set inn klokkeslettfelt
+	Insert a new equation (Alt+=)	Set inn ei ny likning (Alt+=)
+	Insert one text or another, depending on a field's value.	Set inn ein av to tekstar, avhengig av verdien i eit felt.
+	Insert\nAbove	Set\ninn over
+	Insert\nCaption	Set\ninn bildetekst
+	Insert\nCitation	Set\ninn kjeldetilvising
+	Insert\nFootnote	Set\ninn fotnote
+	Insertions and Deletions	Innsetjingar og slettingar
+	Insertions:	Innsetjingar:
+	Inside Borders	Indre kantlinjer
+	Inside:	Innvendig:
+	Inspect Document	Undersøk dokument
+	Inspect Styles at Selection	Undersøk stilar i utvalet
+	Institution	Institusjon
+	Integral	Integral
+	Integral of e^(−x²)	Integral av e^(−x²)
+	Integral with Limits	Integral med grenser
+	Integral with Stacked Limits	Integral med stabla grenser
+	Integrals	Integral
+	Intense Emphasis	Sterk utheving
+	Intense Quote	Markert sitat
+	Intense Reference	Markert referanse
+	Interface	Grensesnitt
+	Interface Theme	Grensesnittema
+	Interface language	Grensesnittspråk
+	Interface language:	Språk i grensesnittet:
+	Interface size:	Grensesnittstorleik:
+	Interface theme:	Grensesnittema:
+	Interface\nTheme	Grensesnitt-\ntema
+	Internet addresses as links	Internettadresser som lenkjer
+	Intersection	Snitt
+	Intersection with Limits	Snitt med grenser
+	Intersection with Lower Limit	Snitt med nedre grense
+	Intersection with Subscript-Superscript Limits	Snitt med senka og heva grenser
+	Inverse Cosecant Function	Invers cosekansfunksjon
+	Inverse Cosine Function	Invers cosinusfunksjon
+	Inverse Cotangent Function	Invers cotangensfunksjon
+	Inverse Functions	Inverse funksjonar
+	Inverse Hyperbolic Cosecant Function	Invers hyperbolsk cosekansfunksjon
+	Inverse Hyperbolic Cosine Function	Invers hyperbolsk cosinusfunksjon
+	Inverse Hyperbolic Cotangent Function	Invers hyperbolsk cotangensfunksjon
+	Inverse Hyperbolic Functions	Inverse hyperbolske funksjonar
+	Inverse Hyperbolic Secant Function	Invers hyperbolsk sekansfunksjon
+	Inverse Hyperbolic Sine Function	Invers hyperbolsk sinusfunksjon
+	Inverse Hyperbolic Tangent Function	Invers hyperbolsk tangensfunksjon
+	Inverse Secant Function	Invers sekansfunksjon
+	Inverse Sine Function	Invers sinusfunksjon
+	Inverse Tangent Function	Invers tangensfunksjon
+	Ionosphere	Ionosfære
+	Issue	Utgåvenummer
+	Italian	Italiensk
+	Italic	Kursiv
+	Japanese	Japansk
+	Join the ArtCraft community on Discord	Bli med i ArtCraft-fellesskapet på Discord
+	Join us on Discord: discord.gg/artcraft	Bli med på Discord: discord.gg/artcraft
+	Journal	Tidsskrift
+	Justification	Justering
+	Justification of a display equation	Justering av ei frittståande likning
+	Justified	Blokkjustert
+	Justify	Juster begge sider
+	Keep Lines Together	Hald linjene samla
+	Keep Text Only	Hald på berre tekst
+	Keep lines together	Hald linjene samla
+	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	Ta vare på passordet: utan det kan ingen, heller ikkje WordCraft, opne dokumentet. La begge felta vere tomme for å fjerne passordet.
+	Keep with Next	Hald saman med neste
+	Keep with next	Hald saman med neste
+	Keeps the fonts and formatting of the copied text.	Held på skrifter og formatering frå den kopierte teksten.
+	Keyboard shortcuts:	Hurtigtastar:
+	Keys for this command:	Tastar for denne kommandoen:
+	Keywords	Nøkkelord
+	Korean	Koreansk
+	Label changes with:	Merk endringar med:
+	Label:	Etikett:
+	Labels	Etikettar
+	Landscape	Liggjande
+	Language	Språk
+	Large	Stor
+	Large\nOperator	Stor\noperator
+	Largest Only	Berre størst
+	Lasso	Lasso
+	Lasso Select	Lassoutval
+	Last	Siste
+	Last Column	Siste kolonne
+	Last Name	Etternamn
+	Last commit	Siste innsjekking
+	Last, First; Last, First	Etternamn, fornamn; etternamn, fornamn
+	Latin text font:	Skrift for latinsk tekst:
+	Layout	Oppsett
+	Layout Summary	Oppsettsoversikt
+	Layouts	Oppsett
+	Leader	Fyllteikn
+	Leave Equation	Forlat likning
+	Leave a recipient out of the merge when a field has this value.	Utelat ein mottakar frå flettinga når eit felt har denne verdien.
+	Leave the equation (Esc)	Forlat likninga (Esc)
+	Leave the label out of the caption	Utelat etiketten frå biletteksten
+	Left	Venstre
+	Left Arrow with Text Above	Venstrepil med tekst over
+	Left Arrow with Text Below	Venstrepil med tekst under
+	Left Border	Venstre kantlinje
+	Left Bracket Twice	Dobbel venstre hakeparentes
+	Left Margin	Venstremarg
+	Left Only	Berre venstre
+	Left Right Arrow Above	Venstre-høgrepil over
+	Left Right Arrow with Text Above	Venstre-høgrepil med tekst over
+	Left Right Arrow with Text Below	Venstre-høgrepil med tekst under
+	Left Subscript-Superscript	Venstre senka og heva indeks
+	Left border	Venstre kantlinje
+	Left indent	Venstre innrykk
+	Left-to-Right Text Direction	Tekstretning frå venstre mot høgre
+	Left-to-right	Frå venstre mot høgre
+	Left:	Venstre:
+	Leftwards Arrow Above	Venstrepil over
+	Leftwards Harpoon Above	Venstreharpun over
+	Legal style numbering	Juridisk nummerering
+	Legend	Forklaring
+template	Letter	Brev
+	Letter	Brev
+	Letter headings	Bokstavoverskrifter
+	Letter-Like Symbols	Bokstavliknande symbol
+	Letters	Brev
+	Level 1	Nivå 1
+	Level 2	Nivå 2
+	Level 3	Nivå 3
+	Level 4	Nivå 4
+	Level 5	Nivå 5
+	Level 6	Nivå 6
+	Level 7	Nivå 7
+	Level 8	Nivå 8
+	Level 9	Nivå 9
+	Level {n}	Nivå {n}
+	Levels:	Nivå:
+	Light	Lyst
+	Light with Outline	Lys med omriss
+	Limit	Grense
+	Limit Example	Grensedøme
+	Limit and	Grense og
+	Limit and\nLog	Grense og\nlogaritme
+	Limit consecutive hyphens to:	Avgrens påfølgjande bindestrekar til:
+	Limit formatting to a selection of styles	Avgrens formatering til eit utval stilar
+	Line	Linje
+	Line Break	Linjeskift
+	Line End	Slutten av linja
+	Line Number	Linjenummer
+	Line Numbering Options…	Alternativ for linjenummerering…
+	Line Numbers	Linjenummer
+	Line Spacing	Linjeavstand
+	Line Spacing Options…	Innstillingar for linjeavstand…
+	Line Start	Starten av linja
+	Line and Page Breaks	Linje- og sideskift
+	Line and Paragraph Spacing	Linje- og avsnittsavstand
+	Line between	Linje mellom
+	Line breaking	Linjebryting
+	Line delta	Endring i linjetal
+	Line spacing	Linjeavstand
+	Line spacing:	Linjeavstand:
+	Linear	Lineær
+	Linear Fraction	Lineær brøk
+	Lines	Linjer
+	Lines +/−	Linjer +/−
+	Lines added	Linjer lagt til
+	Lines and characters	Linjer og teikn
+	Lines deleted	Linjer sletta
+	Lines only	Berre linjer
+	Lines per page:	Linjer per side:
+	Link	Lenkje
+	Link entries to their headings	Lenk oppføringar til overskriftene
+	Link level to style:	Kople nivå til stil:
+	Link to Previous	Kople til førre
+	Linked style (paragraph and character)	Kopla stil (avsnitt og teikn)
+	Links	Lenkjer
+	Links and References	Lenkjer og referansar
+	Link…	Lenkje…
+	List	Liste
+	List Definition	Listedefinisjon
+	List Paragraph	Listeavsnitt
+	List Table 3 – Blue	Listetabell 3 – blå
+	List Table 3 – Green	Listetabell 3 – grøn
+	List Table 3 – Orange	Listetabell 3 – oransje
+	List Table 3 – Purple	Listetabell 3 – lilla
+	List entries	Listeoppføringar
+	Location	Plassering
+	Location: {path}	Plassering: {path}
+	Lock Fields	Lås felt
+	Log	Logaritme
+	Logarithm	Logaritme
+	Logarithm with Base	Logaritme med grunntal
+	Logical AND	Logisk OG
+	Logical AND with Limits	Logisk OG med grenser
+	Logical OR	Logisk ELLER
+	Logical OR with Limits	Logisk ELLER med grenser
+	Lum:	Lys:
+	MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.	MIT ELLER Apache-2.0. Opphavsrett (c) 2026 ArtCraft-teamet og bidragsytarane til WordCraft.
+	MLA	MLA
+	Macros	Makroar
+	Made from the author and year when empty	Blir laga av forfattar og år når feltet er tomt
+	Magazine or newspaper article	Artikkel i magasin eller avis
+	Mail Merge	Utskriftsfletting
+	Mailings	Utsendingar
+	Main entry:	Hovudoppføring:
+	Make WordCraft the default for Word documents…	Gjer WordCraft til standard for Word-dokument…
+	Manage Sources	Administrer kjelder
+	Manage Styles	Administrer stilar
+	Manage Styles…	Administrer stilar…
+	Manual Hyphenation	Manuell orddeling
+	Manual Line Break	Manuelt linjeskift
+	Manual Page Break	Manuelt sideskift
+	Manual hyphenation is complete.	Manuell orddeling er ferdig.
+	Manual…	Manuelt…
+	Many pages	Fleire sider
+	Margins	Margar
+	Mark	Marker
+	Mark All	Marker alle
+	Mark Citation	Marker kjeldetilvising
+	Mark Entry	Marker stikkord
+	Mark Entry…	Marker oppføring…
+	Mark Index Entry	Marker stikkordregisteroppføring
+	Mark as decorative	Marker som dekorativt
+	Mark grammar errors as you type	Marker grammatikkfeil medan du skriv
+	Mark selected text as:	Marker vald tekst som:
+	Mark\nCitation	Marker\nkjeldetilvising
+	Mark\nEntry	Marker\nstikkord
+	Markdown (*.md)	Markdown (*.md)
+	Match Fields	Kople felt
+	Match case	Skil mellom store og små bokstavar
+	Match prefix	Samsvar med prefiks
+	Match suffix	Samsvar med suffiks
+	Math AutoCorrect	Matematisk autokorrektur
+	Matrices with Brackets	Matrisar med parentesar
+	Matrix	Matrise
+	Maximum	Maksimum
+	Maximum Example	Maksimumsdøme
+	Measured By	Målt ved
+	Measurement units:	Måleiningar:
+	Merge	Flett
+	Merge Cells	Slå saman celler
+	Merge Formatting	Flett formatering
+	Merge Record #	Flettepost nr.
+	Merged PRs	Fletta endringsforslag
+	Mesosphere	Mesosfære
+	Middle	Midten
+	Midline Dots	Prikker på midtlinja
+	Millimeters	Millimeter
+	Minimum	Minimum
+	Minus Equal	Minus lik
+	Mirror indents	Spegl innrykk
+	Mirrored	Spegelvende
+	Model	Modell
+	Models	Modellar
+	Moderate	Middels
+	Modify Style	Endre stil
+	Modify Table Style	Endre tabellstil
+	Modify Table Style…	Endre tabellstil…
+	Modify…	Endre…
+	Mon	Mån
+	Month	Månad
+	More >>	Fleire >>
+	More Colors…	Fleire fargar…
+	More Columns…	Fleire kolonnar…
+	More Commands…	Fleire kommandoar…
+	More Symbols…	Fleire symbol…
+	More templates →	Fleire malar →
+	Move Down	Flytt ned
+	Move Paragraph Down	Flytt avsnitt ned
+	Move Paragraph Up	Flytt avsnitt opp
+	Move Past Citation	Flytt forbi kjeldetilvising
+	Move Past\nCitation	Flytt forbi\nkjeldetilvising
+	Move Selected Ink	Flytt valt blekk
+	Move Table by Dragging	Flytt tabell ved å dra
+	Move Up	Flytt opp
+	Move in Equation	Flytt i likning
+	Move or Resize	Flytt eller endre storleik
+	Move with Text	Flytt med tekst
+	Moved from	Flytta frå
+	Moved to	Flytta til
+	Moves	Flyttingar
+	Multilevel List	Fleirnivåliste
+	Multiple Pages	Fleire sider
+	Name	Namn
+	Name (A–Z)	Namn (A–Å)
+	Name of the file this document is saved as	Namnet på fila dokumentet er lagra som
+	Name:	Namn:
+	Narrow  {size} all	Smale  {size} på alle sider
+	Natural Logarithm	Naturleg logaritme
+	Nature	Natur
+	Navigation	Navigasjon
+	Navigation Pane	Navigasjonspanel
+	Negated Relations	Negerte relasjonar
+	New	Ny
+	New Comment	Ny kommentar
+	New Document	Nytt dokument
+	New Drawing Canvas	Nytt teiknelerret
+	New Entry	Ny oppføring
+	New Group	Ny gruppe
+	New Label	Ny etikett
+	New Label…	Ny etikett…
+	New Paragraph	Nytt avsnitt
+	New Style…	Ny stil…
+	New Tab	Ny fane
+	New Table Style	Ny tabellstil
+	New Table Style…	Ny tabellstil…
+	New Window	Nytt vindauge
+	New comments and tracked changes are recorded under this name and these initials.	Nye kommentarar og spora endringar blir registrerte med dette namnet og desse initialane.
+	New document	Nytt dokument
+	New from Template	Nytt frå mal
+	New shortcut:	Ny hurtigtast:
+	New word	Nytt ord
+	New\nComment	Ny\nkommentar
+	New\nWindow	Nytt\nvindauge
+	New…	Ny…
+	Next	Neste
+	Next Change	Neste endring
+	Next Comment	Neste kommentar
+	Next Field	Neste felt
+	Next Footnote	Neste fotnote
+	Next Page	Neste side
+	Next Record	Neste oppføring
+	Next Section	Neste seksjon
+	Next Sentence	Neste setning
+	Next sentence	Neste setning
+	No	Nei
+	No Border	Ingen kantlinje
+	No Color	Ingen farge
+	No Fill	Utan fyll
+	No Glow	Ingen glød
+	No Markup	Ingen markeringar
+	No Outline	Utan omriss
+	No Paragraph Space	Ingen avsnittsavstand
+	No Reflection	Utan spegling
+	No Shadow	Ingen skygge
+	No Soft Edges	Ingen mjuke kantar
+	No Spacing	Ingen avstand
+	No Transform	Utan transformering
+	No accessibility issues found.	Ingen tilgjengeproblem funne.
+	No changes (read only)	Ingen endringar (skriveverna)
+	No contributor data was built into this copy.	Denne versjonen inneheld ingen opplysningar om bidragsytarar.
+	No errors found: every merge field is in the recipient list.	Ingen feil funne: alle flettefelt finst i mottakarlista.
+	No grid	Intet rutenett
+	No icons match your search.	Ingen ikon passar med søket.
+	No limit	Ingen grense
+	No model credits were built into this copy.	Denne versjonen inneheld ingen opplysningar om KI-modellar.
+	No printers found. Configure a system printer or export a PDF.	Ingen skrivarar funne. Set opp ein systemskrivar eller eksporter ein PDF.
+	No sources yet.	Ingen kjelder enno.
+	No templates match your search.	Ingen malar passar med søket.
+	No words yet. Add to Dictionary on a misspelled word puts it here.	Ingen ord enno. Legg til i ordbok på eit feilstava ord legg det her.
+	No-Width Non Break	Nullbreidd utan linjeskift
+	No-Width Optional Break	Valfritt nullbreiddeskift
+	Nonbreaking Hyphen	Hard bindestrek
+	Nonbreaking Space	Hardt mellomrom
+	None	Ingen
+	Normal	Normal
+	Normal  {size} all	Normale  {size} på alle sider
+	Normal Indent	Normalt innrykk
+	Normal Style	Normal stil
+	Normal Table	Normal tabell
+	Normal Text	Vanleg tekst
+	Normal Word Document	Vanleg Word-dokument
+	Normal probability density	Sannsynstettleiken til normalfordelinga
+	Normal speed	Normal fart
+	North	Nord
+	Norwegian (Bokmål)	Norsk bokmål
+	Not	Ikkje
+	Not available right now	Ikkje tilgjengeleg akkurat no
+	Not linked: click a text box	Ikkje kopla: klikk på ein tekstboks
+	Not saved	Ikkje lagra
+	Not saved yet	Ikkje lagra enno
+	Not used by any command	Ikkje brukt av nokon kommando
+	Not {name}	Ikkje {name}
+	Nothing	Ingenting
+	Nothing collected yet. Items you copy or cut appear here.	Ingenting samla enno. Element du kopierer eller klipper ut, blir viste her.
+	Now used by {command}	Blir no brukt av {command}
+	Nudge	Flytt litt
+	Num Occurrences	Tal på førekomstar
+	Number	Nummer
+	Number alignment:	Nummerjustering:
+	Number format	Nummerformat
+	Number of columns:	Tal på kolonnar:
+	Number of rows:	Tal på rader:
+	Number of the page the field sits on	Nummeret på sida feltet står på
+	Number of the section the field sits in	Nummeret på inndelinga feltet står i
+	Number style for this level:	Nummerstil for dette nivået:
+	Number the equation; the number sits at the right margin (or type # then the number)	Nummerer likninga; nummeret står ved høgremargen (eller skriv # og nummeret)
+	Numbering	Nummerering
+	Numbering:	Nummerering:
+	Numbering…	Nummerering…
+	Numerals	Talteikn
+	Numerals:	Talteikn:
+	OK	OK
+	Object	Objekt
+	Odd Page	Oddetalsside
+	Odd pages only	Berre oddetalssider
+	Off	Av
+	Office	Kontor
+	Office 2003 Default	Standard frå Office 2003
+	Offset (pt):	Forskyving (pkt):
+	Offset: Bottom	Forskyving: ned
+	Offset: Bottom Left	Forskyving: ned til venstre
+	Offset: Bottom Right	Forskyving: ned til høgre
+	Offset: Center	Forskyving: midten
+	Offset: Left	Forskyving: venstre
+	Offset: Right	Forskyving: høgre
+	Offset: Top	Forskyving: opp
+	Offset: Top Left	Forskyving: opp til venstre
+	Offset: Top Right	Forskyving: opp til høgre
+	Omit	Utelat
+	On	På
+	On: WordCraft opens on File › Home, with a blank document, the templates and your recent documents. Off: it opens a blank document.	På: WordCraft opnar Fil › Heim med eit tomt dokument, malane og dei nylege dokumenta dine. Av: det opnar eit tomt dokument.
+	On: the caret glides to its new place when you type or use the arrow keys, and its blink fades. Off: it jumps and blinks on and off.	På: markøren glir til den nye staden når du skriv eller bruker piltastane, og blinkinga tonar ut. Av: han hoppar og blinkar av og på.
+	One	Ein
+	One Page	Éi side
+	One half	Ein halv
+	One label per recipient	Éin etikett per mottakar
+	One line per item. Enter adds an item.	Éi linje per element. Enter legg til eit element.
+	One-sided	Einsidig
+	Only allow this kind of editing:	Tillat berre denne typen redigering:
+	Only comments can be added, except in regions marked editable.	Berre kommentarar kan leggjast til, unnateke i område merkte som redigerbare.
+	Only form fields can be filled in.	Berre skjemafelt kan fyllast ut.
+	Only the allowed styles can be applied.	Berre tillatne stilar kan brukast.
+	Only web (http, https) and email (mailto) links can be followed	Berre nettlenkjer (http, https) og e-postlenkjer (mailto) kan opnast
+	Open	Opne
+	Open a file with WordCraft's own browser when the system file dialog doesn't appear.	Opne ei fil med WordCraft sin eigen filveljar når fildialogen i systemet ikkje blir vist.
+	OpenDocument Text (*.odt)	OpenDocument-tekst (*.odt)
+	Opening print dialog…	Opnar utskriftsdialog…
+	Opens .docx, .doc, .rtf and .odt files and Word templates with WordCraft from now on.	Opnar heretter .docx-, .doc-, .rtf- og .odt-filer og Word-malar med WordCraft.
+	Opens Settings › Default apps, where you choose WordCraft for .docx and the other document types.	Opnar Innstillingar › Standardappar, der du vel WordCraft for .docx og dei andre dokumenttypane.
+	Operator	Operator
+	Operator Structures	Operatorstrukturar
+	Operators	Operatorar
+	Optional Hyphen	Mjuk bindestrek
+	Options	Innstillingar
+	Options…	Alternativ…
+	Or save a copy in another format:	Eller lagre ein kopi i eit anna format:
+	Ordinals (1st) as superscript	Ordenstal (1st) som heva skrift
+	Organizer	Organisering
+	Organizer…	Organisering…
+	Orientation	Retning
+	Original document	Opphavleg dokument
+	Other	Anna
+	Other Large Operators	Andre store operatorar
+	Other styles and their TOC level:	Andre stilar og nivået deira i innhaldslista:
+	Otherwise insert:	Set elles inn:
+	Outline	Disposisjon
+	Outline Level	Disposisjonsnivå
+	Outline State	Disposisjonstilstand
+	Outline Tools	Disposisjonsverktøy
+	Outline level	Disposisjonsnivå
+	Outline levels	Disposisjonsnivå
+	Outlining	Disposisjon
+	Outside Borders	Ytre kantlinjer
+	Outside border	Ytre kantlinje
+	Outside:	Utvendig:
+	Outward Brackets	Utovervende parentesar
+	Oval	Oval
+	Overbar	Overstrek
+	Overbars and Underbars	Overstrekar og understrekar
+	Overbrace	Overklamme
+	Overtype	Overskriving
+	Overtype (typing replaces the characters after the caret)	Overskriving (skriving erstattar teikna etter markøren)
+	PDF document (*.pdf)	PDF-dokument (*.pdf)
+	PRs	Endringsforslag
+	Page	Side
+	Page Background	Sidebakgrunn
+	Page Border	Sidekantlinje
+	Page Borders	Sidekantar
+	Page Break	Sideskift
+	Page Break Before	Sideskift før
+	Page Breaks	Sideskift
+	Page Color	Sidefarge
+	Page Down	Side ned
+	Page Movement	Sideflytting
+	Page Number	Sidetal
+	Page Setup	Sideoppsett
+	Page Up	Side opp
+	Page Width	Sidebreidd
+	Page X of Y	Side X av Y
+	Page break before	Sideskift før
+	Page display	Sidevising
+	Page image (*.png)	Sidebilete (*.png)
+	Page number style	Sidetalstil
+	Page numbers at the right margin	Sidetal ved høgremargen
+	Page on which a bookmarked passage falls	Sida eit bokmerkt avsnitt står på
+	Page title	Sidetittel
+	Page width	Sidebreidd
+	Page {page}	Side {page}
+	Page {page} of {pages}	Side {page} av {pages}
+	Page\nBorders	Sidekantar
+	Page\nColor	Sidefarge
+	Page\nNumber	Sidetal
+	Pages	Sider
+	Pages like 1-3, 5	Sider som 1-3, 5
+	Pages of bookmark:	Sider i bokmerket:
+	Paragraph	Avsnitt
+	Paragraph Character	Avsnittsteikn
+	Paragraph Details	Avsnittsdetaljar
+	Paragraph Down	Neste avsnitt
+	Paragraph Mark	Avsnittsmerke
+	Paragraph Settings	Avsnittsinnstillingar
+	Paragraph Spacing	Avsnittsavstand
+	Paragraph Up	Førre avsnitt
+	Paragraph marks	Avsnittsmerke
+	Paragraph style	Avsnittsstil
+	Paragraphs	Avsnitt
+	Paragraph…	Avsnitt…
+	Parentheses	Parentesar
+	Parentheses with Separator	Parentesar med skiljeteikn
+	Partial Differential	Partielt differensial
+	Password	Passord
+	Password:	Passord:
+	Paste	Lim inn
+	Paste (⌘V)	Lim inn (⌘V)
+	Paste All	Lim inn alt
+	Paste Clipboard Item	Lim inn utklippstavleelement
+	Paste Formatting	Lim inn formatering
+	Paste Special	Lim inn utval
+	Paste Special…	Lim inn utval…
+	Paste as:	Lim inn som:
+	Paste: Keep Text Only	Lim inn: hald på berre tekst
+	Paste: Merge Formatting	Lim inn: flett formatering
+	Pastes the clipboard's picture.	Limer inn biletet frå utklippstavla.
+	Pause	Pause
+	Paused	På pause
+	Pen	Penn
+	Pencil	Blyant
+	Pens	Pennar
+	People	Personar
+	Periodical	Periodisk publikasjon
+	Personalize	Tilpass personleg
+	Phonetic Guide	Uttalerettleiing
+	Pi Over 2	Pi over 2
+	Picas	Pica
+	Pick a custom group (New Group makes one)	Vel ei eigedefinert gruppe (Ny gruppe lagar ei)
+	Pick a field from the list	Vel eit felt frå lista
+	Picture	Bilete
+	Picture Border	Biletkant
+	Picture Content Control	Innhaldskontroll for bilete
+	Picture Format	Biletformat
+	Picture Styles	Biletstilar
+	Pictures	Bilete
+	Pie	Sektordiagram
+	Placeholder text	Plasshaldetekst
+	Plain Table 1	Enkel tabell 1
+	Plain Text Content Control	Innhaldskontroll for rein tekst
+	Plain text (*.txt)	Rein tekst (*.txt)
+	Play	Spel av
+	Play/Pause	Spel av / pause
+	Plus Equal	Pluss lik
+	Points	Punkt
+	Polish	Polsk
+	Portrait	Ståande
+	Portuguese (Brazil)	Portugisisk (Brasil)
+	Portuguese (Portugal)	Portugisisk (Portugal)
+	Position	Plassering
+	Position:	Posisjon:
+	Possible spelling mistake	Mogleg stavefeil
+	Postal Code	Postnummer
+	Power series of (1+x)ⁿ	Potensrekkje for (1+x)ⁿ
+	Preferred width:	Føretrekt breidd:
+	Preserve formatting during updates	Hald på formatering ved oppdateringar
+	Presets	Førehandsinnstillingar
+	Press a key combination	Trykk ein tastekombinasjon
+	Preview	Førehandsvising
+	Preview Results	Førehandsvis resultat
+	Preview\nResults	Førehandsvis\nresultat
+	Previous	Førre
+	Previous 1 or More	Førre 1 eller fleire
+	Previous Change	Førre endring
+	Previous Comment	Førre kommentar
+	Previous Field	Førre felt
+	Previous Page	Førre side
+	Previous Record	Førre oppføring
+	Previous Section	Førre seksjon
+	Previous Sentence	Førre setning
+	Previous sentence	Førre setning
+	Print	Skriv ut
+	Print Layout	Utskriftsoppsett
+	Print Markup	Skriv ut markering
+	Print failed: the printing worker stopped.	Utskrift mislukkast: utskriftsprosessen stoppa.
+	Print failed: {error}	Utskrift mislukkast: {error}
+	Print job submitted.	Utskriftsjobb sendt.
+	Print job submitted: {receipt}	Utskriftsjobb sendt: {receipt}
+	Print the page color	Skriv ut sidefargen
+	Print to PDF	Skriv ut til PDF
+	Print\nLayout	Utskriftsoppsett
+	Printer	Skrivar
+	Printer default	Skrivarstandard
+	Printer discovery failed.	Søk etter skrivarar mislukkast.
+	Printing	Utskrift
+	Process	Prosess
+	Product	Produkt
+	Product of A	Produkt av A
+	Product with Limits	Produkt med grenser
+	Product with Lower Limit	Produkt med nedre grense
+	Product with Subscript-Superscript Limits	Produkt med senka og heva grenser
+	Products and Coproducts	Produkt og koprodukt
+	Professional	Profesjonell
+	Promote	Hev nivå
+	Promote to Heading 1	Hev til Overskrift 1
+	Proofing	Språkkontroll
+	Proofing Issues	Språkproblem
+	Proofing language	Korrekturspråk
+	Properties	Eigenskapar
+	Protect	Vern
+	Protect Document	Vern dokumentet
+	Publisher	Utgivar
+	Put the caret in a content control first.	Plasser markøren i ein innhaldskontroll først.
+	Put the default commands back on the Quick Access Toolbar?	Gjenopprette standardkommandoane på verktøylinja for snøggtilgang?
+	Pyramid	Pyramide
+	Quadratic Root	Kvadratisk rot
+	Quick Access Toolbar	Verktøylinje for hurtigtilgang
+	Quick Parts	Hurtigdelar
+	Quick Tables	Hurtigtabellar
+	Quote	Sitat
+	Radical	Rot
+	Radical with Degree	Rot med grad
+	Radicals	Røter
+	Raised/lowered	Heva/senka
+	Read Aloud	Les høgt
+	Read Aloud Status	Status for høgtlesing
+	Read Mode	Lesemodus
+	Read\nAloud	Les\nhøgt
+	Read\nMode	Lesemodus
+	Reading	Lesing
+	Reading Column Width	Kolonnebreidd ved lesing
+	Reading Highlight	Uthev søketreff
+	Reading Line Spacing	Linjeavstand ved lesing
+	Reading Mode	Lesemodus
+	Reading Speed	Lesefart
+	Reading Text Size	Tekststorleik ved lesing
+	Reads the clipboard's rich text and keeps its formatting.	Les rik tekst frå utklippstavla og held på formateringa.
+	Reads the clipboard's web content and keeps its formatting.	Les nettinnhald frå utklippstavla og held på formateringa.
+	Real name	Verkeleg namn
+	Recent	Nyleg brukt
+	Recent Colors	Nylege fargar
+	Recent documents to show:	Nylege dokument som skal visast:
+	Recently used symbols:	Nyleg brukte symbol:
+	Recipient List	Mottakarliste
+	Recipient lists	Mottakarlister
+	Recipients: {count}	Mottakarar: {count}
+	Recolor Selected Ink	Fargelegg valt blekk
+	Recolor a one-color picture, such as an icon	Fargelegg eit einsfarga bilete, som eit ikon
+	Record Macro	Ta opp makro
+	Recover Unsaved Documents	Attopprett ulagra dokument
+	Rectangle	Rektangel
+	Red:	Raud:
+	Redo	Gjer om
+	Reduce Hanging Indent	Reduser hengande innrykk
+	References	Referansar
+	Reflection	Spegling
+	Refresh	Oppdater
+	Refresh printers	Oppdater skrivarar
+	Region:	Region:
+	Registered	Registrert
+	Registered Sign	Registrert varemerketeikn
+	Regular expressions	Regulære uttrykk
+	Reject	Avvis
+	Reject All Changes	Avvis alle endringar
+	Reject Change	Avvis endring
+	Relationship	Forhold
+	Relaxed	Romsleg
+	Remove	Fjern
+	Remove Added Font	Fjern tillagt skrift
+	Remove Background	Fjern bakgrunn
+	Remove Content Control	Fjern innhaldskontroll
+	Remove Footer	Fjern botntekst
+	Remove Header	Fjern topptekst
+	Remove Hyperlink	Fjern hyperlenkje
+	Remove Password	Fjern passord
+	Remove Pen	Fjern penn
+	Remove Space After Paragraph	Fjern avstand etter avsnitt
+	Remove Table of Contents	Fjern innhaldsliste
+	Remove Watermark	Fjern vassmerke
+	Remove every custom shortcut and restore the built-in keys?	Fjerne alle eigedefinerte hurtigtastar og gjenopprette dei innebygde?
+	Remove every custom tab and group and show all tabs again?	Fjerne alle eigedefinerte faner og grupper og vise alle faner igjen?
+	Remove field	Fjern felt
+	Remove from Quick Access Toolbar	Fjern frå verktøylinja for snøggtilgang
+	Remove recipient	Fjern mottakar
+	Remove row	Fjern rad
+	Remove series	Fjern serie
+	Remove the control once edited	Fjern kontrollen etter redigering
+	Remove the space before the punctuation	Fjern mellomrommet før skiljeteiknet
+	Rename Style	Gi stil nytt namn
+	Rename…	Gi nytt namn…
+	Reopen	Opne på nytt
+	Repeat	Gjenta
+	Repeat Header Rows	Gjenta overskriftsrader
+	Repeat as header row on each page	Gjenta som overskriftsrad på kvar side
+	Repeating Section Content Control	Innhaldskontroll for gjenteken inndeling
+	Replace	Erstatt
+	Replace All	Erstatt alle
+	Replace Document Text	Erstatt dokumenttekst
+	Replace as you type	Erstatt medan du skriv
+	Replace text as you type	Erstatt tekst medan du skriv
+	Replace with:	Erstatt med:
+	Replace:	Erstatt:
+	Replay	Spel av att
+	Reply	Svar
+	Report	Rapport
+	Research	Undersøk
+	Researcher	Kjeldehjelp
+	Researcher needs an online service; WordCraft keeps your documents offline.	Forskar krev ei netteneste; WordCraft held dokumenta dine fråkopla.
+	Reset	Tilbakestill
+	Reset All…	Tilbakestill alle…
+	Reset Character Formatting	Tilbakestill teiknformatering
+	Reset Crop	Tilbakestill beskjæring
+	Reset Graphic	Tilbakestill grafikk
+	Reset Paragraph Formatting	Tilbakestill avsnittsformatering
+	Reset Picture	Tilbakestill bilete
+	Reset to Normal	Tilbakestill til Normal
+	Reset\nGraphic	Tilbakestill\ngrafikk
+	Reset…	Tilbakestill…
+	Resize Table by Dragging	Endre tabellstorleik ved å dra
+	Resolve	Løys
+	Resolved	Løyst
+	Restart Each Page	Start på nytt på kvar side
+	Restart Each Section	Start på nytt i kvar seksjon
+	Restart at 1	Start på 1 att
+	Restart list after:	Start lista på nytt etter:
+	Restrict Editing	Avgrens redigering
+	Restrict\nEditing	Avgrens\nredigering
+	Result	Resultat
+	Results	Resultat
+	Return address labels	Returadresseetikettar
+	Return address:	Returadresse:
+	Reverse the order	Snu rekkjefølgja
+	Review	Gjennomgang
+	Reviewing	Gjennomgang
+	Reviewing Pane	Gjennomgangspanel
+	Reviewing — edits become suggestions	Gjennomgang – endringar vert forslag
+	Revised document	Revidert dokument
+	Rewind	Spol tilbake
+	Ribbon	Band
+	Ribbon and Quick Access Toolbar:	Band og verktøylinje for snøggtilgang:
+	Ribbon tabs	Bandfaner
+	Rich Text Content Control	Innhaldskontroll for rik tekst
+	Rich Text Format (*.rtf)	Rikt tekstformat (*.rtf)
+	Rich Text Format (RTF)	Rik tekst-format (RTF)
+	Right	Høgre
+	Right (vertical)	Høgre (loddrett)
+	Right Arrow with Text Above	Høgrepil med tekst over
+	Right Arrow with Text Below	Høgrepil med tekst under
+	Right Border	Høgre kantlinje
+	Right Bracket Twice	Dobbel høgre hakeparentes
+	Right Margin	Høgre marg
+	Right Only	Berre høgre
+	Right border	Høgre kantlinje
+	Right indent	Høgre innrykk
+	Right-to-Left Section	Inndeling frå høgre mot venstre
+	Right-to-Left Table	Tabell frå høgre mot venstre
+	Right-to-Left Text Direction	Tekstretning frå høgre mot venstre
+	Right-to-left	Frå høgre mot venstre
+	Right:	Høgre:
+	Rightwards Arrow Above	Høgrepil over
+	Rightwards Harpoon Above	Høgreharpun over
+	Roots of ax²+bx+c	Røtter til ax²+bx+c
+	Rotate	Roter
+	Rotate Left 90°	Roter 90° mot venstre
+	Rotate Right 90°	Roter 90° mot høgre
+	Rotate all text 270°	Roter all tekst 270°
+	Rotate all text 90°	Roter all tekst 90°
+	Rotation	Rotasjon
+	Rotation:	Rotasjon:
+	Rounded Rectangle	Avrunda rektangel
+	Row	Rad
+	Row:	Rad:
+	Rows & Columns	Rader og kolonnar
+	Ruby text:	Uttaletekst:
+	Ruler	Linjal
+	Rules	Reglar
+	Run-in	Fortløpande
+	Russian	Russisk
+	Résumé	CV
+	SAMPLE	DØME
+	SIST02	SIST02
+	Sat:	Metning:
+	Save	Lagre
+	Save As	Lagre som
+	Save a copy in another format. Printing goes through a PDF you can print from any viewer.	Lagre ein kopi i eit anna format. Utskrift skjer via ein PDF som du kan skrive ut frå ein PDF-lesar.
+	Save as Template	Lagre som mal
+	Save documents	Lagre dokument
+	Save the document to turn on AutoSave	Lagre dokumentet for å slå på automatisk lagring
+	Save the document to turn on AutoSave (a file you have only opened isn't rewritten until you save it)	Lagre dokumentet for å slå på automatisk lagring (ei fil du berre har opna, blir ikkje overskriven før du lagrar henne)
+	Save these pages as PDF…	Lagre desse sidene som PDF…
+	Saved	Lagra
+	Scale	Skala
+	Scale Drawing	Skaler teikning
+	Scatter	Punktdiagram
+	Script	Indeks
+	Scripts	Indeksar
+	Scroll ribbon left	Rull bandet mot venstre
+	Scroll ribbon right	Rull bandet mot høgre
+	Search	Søk
+	Search Commands	Søk etter kommandoar
+	Search Options	Søkealternativ
+	Search commands and help	Søk i kommandoar og hjelp
+	Search document	Søk i dokumentet
+	Search for templates	Søk etter malar
+	Search icons	Søk etter ikon
+	Secant Function	Sekansfunksjon
+	Section Break	Inndelingsskift
+	Section Breaks	Seksjonsskift
+	Section Character	Inndelingsteikn
+	Section Mark	Inndelingsmerke
+	Section Properties	Seksjonseigenskapar
+	Section direction:	Inndelingsretning:
+	Sections	Seksjonar
+	See	Sjå
+	Select	Merk
+	Select All	Merk alt
+	Select Cell	Merk celle
+	Select Column	Vel kolonne
+	Select Heading and Content	Vel overskrift og innhald
+	Select Line	Merk linje
+	Select Objects	Merk objekt
+	Select Paragraph	Merk avsnitt
+	Select Range	Merk område
+	Select Recipients	Vel mottakarar
+	Select Row	Merk rad
+	Select Sentence	Merk setning
+	Select Table	Merk tabell
+	Select Table Cells by Clicking	Vel tabellceller ved å klikke
+	Select Text	Merk tekst
+	Select Text with Similar Formatting	Merk tekst med liknande formatering
+	Select Word	Merk ord
+	Select a picture, shape, chart or table to describe it.	Vel eit bilete, ein figur, eit diagram eller ein tabell for å skildre det.
+	Select a printer	Vel ein skrivar
+	Select recipients first to choose from their fields.	Vel mottakarar først for å velje blant felta deira.
+	Select recipients first to match their fields.	Vel mottakarar først for å kople felta deira.
+	Select text, then tick who can still edit it.	Vel tekst, og merk deretter kven som framleis kan redigere han.
+	Select\nRecipients	Vel\nmottakarar
+	Selected Fields	Valde felt
+	Selected pages	Valde sider
+	Selection	Markering
+	Selection Pane	Markeringspanel
+	Send Backward	Flytt bakover
+	Send the document straight to the system print dialog, or save a copy in another format below.	Send dokumentet direkte til utskriftsdialogen i systemet, eller lagre ein kopi i eit anna format nedanfor.
+	Sentence	Setning
+	Sentence case.	Stor forbokstav i setningar.
+	Separator:	Skiljeteikn:
+	Sequence name:	Sekvensnamn:
+	Serbian (Cyrillic)	Serbisk (kyrillisk)
+	Serbian (Latin)	Serbisk (latinsk)
+	Series name	Serienamn
+	Series {n}	Serie {n}
+	Set	Angi
+	Set As Default	Angi som standard
+	Set Caret	Plasser skrivemarkør
+	Set Character Formatting	Angi teiknformatering
+	Set Date	Angi dato
+	Set Equation	Angi likning
+	Set Numbering Value	Angi nummerverdi
+	Set Paragraph Formatting	Angi avsnittsformatering
+	Set as Default	Angi som standard
+	Setting:	Innstilling:
+	Settings…	Innstillingar…
+	Shading	Bakgrunnsfarge
+	Shadow	Skugge
+	Shadow, glow and soft edges	Skygge, glød og mjuke kantar
+	Shape Effects	Figureffekter
+	Shape Fill	Figurfyll
+	Shape Format	Figurformat
+	Shape Outline	Figurkontur
+	Shape Styles	Figurstilar
+	Shapes	Figurar
+	Share	Del
+	Shift+Tab	Shift+Tab
+	Shipping labels	Fraktetikettar
+	Shortcut key:	Hurtigtast:
+	Show	Vis
+	Show All Levels	Vis alle nivå
+	Show Comments	Vis kommentarar
+	Show First Line Only	Vis berre første linje
+	Show KeyTips (Alt or F10)	Vis tastetips (Alt eller F10)
+	Show Level	Vis nivå
+	Show Level 1	Vis nivå 1
+	Show Level 2	Vis nivå 2
+	Show Level 3	Vis nivå 3
+	Show Level 4	Vis nivå 4
+	Show Level 5	Vis nivå 5
+	Show Level 6	Vis nivå 6
+	Show Level 7	Vis nivå 7
+	Show Level 8	Vis nivå 8
+	Show Level 9	Vis nivå 9
+	Show Markup	Vis markeringar
+	Show Notes	Vis notar
+	Show Text Formatting	Vis tekstformatering
+	Show all formatting marks	Vis alle formateringsteikn
+	Show all revisions inline	Vis alle endringar i teksten
+	Show changes at:	Vis endringar ved:
+	Show changes in:	Vis endringar i:
+	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Vis dokument med omvende fargar, som Vis › Bytt modus. Lagring, utskrift og PDF-ar er uendra.
+	Show every bibliography field	Vis alle litteraturfelt
+	Show in the Styles gallery	Vis i stilgalleriet
+	Show only comments and formatting in balloons	Vis berre kommentarar og formatering i bobler
+	Show or Hide Style	Vis eller skjul stil
+	Show revisions in balloons	Vis endringar i bobler
+	Show rulers	Vis linjalar
+	Show the Start screen when WordCraft starts	Vis startskjermen når WordCraft startar
+	Show the community button in the title bar	Vis fellesskapsknappen i tittellinja
+	Show the equation in the line of text	Vis likninga på tekstlinja
+	Show the equation on a line of its own	Vis likninga på ei eiga linje
+	Show the mini toolbar when text is selected	Vis miniverktøylinja når tekst er vald
+	Show/Hide ¶	Vis/skjul ¶
+	Show\nComments	Vis\nkommentarar
+	Showing the first {count} items.	Viser dei første {count} elementa.
+	Shows a tree: each item below the item it belongs to.	Viser eit tre: kvart element under elementet det høyrer til.
+	Shows items around a central idea: the first item is the centre.	Viser element rundt ein sentral idé: det første elementet er midten.
+	Shows items of equal weight as blocks in rows.	Viser likeverdige element som blokker i rader.
+	Shows overlapping ideas as overlapping circles.	Viser overlappande idear som overlappande sirklar.
+	Shows parts of a whole as quadrants.	Viser delar av ein heilskap som kvadrantar.
+	Shows parts that build on each other, largest at the bottom.	Viser delar som byggjer på kvarandre, størst nederst.
+	Shows steps in order, left to right, with arrows between them.	Viser trinn i rekkjefølgje, frå venstre mot høgre, med piler mellom.
+	Shows steps that repeat, around a circle.	Viser trinn som blir gjentekne, rundt ein sirkel.
+	Shrink Font 1 Point	Reduser skriftstorleiken med 1 punkt
+	Shrink text	Krymp tekst
+	Side to Side	Side ved side
+	Side\nto Side	Side\nved side
+	Sides of a right triangle	Sider i ein rettvinkla trekant
+	Signature Line	Signaturlinje
+	Sine Function	Sinusfunksjon
+	Sine and cosine series of f(x)	Sinus- og cosinusrekkje for f(x)
+	Sine theta	Sinus theta
+	Single	Enkel
+	Single Brackets	Enkle parentesar
+	Single Closing Quote	Enkelt avsluttande hermeteikn
+	Single Left Angle	Enkel venstre vinkelparentes
+	Single Left Bar	Enkel venstre strek
+	Single Left Brace	Enkel venstre klammeparentes
+	Single Left Bracket	Enkel venstre hakeparentes
+	Single Left Parenthesis	Enkel venstre parentes
+	Single Opening Quote	Enkelt innleiande hermeteikn
+	Single Right Brace	Enkel høgre klammeparentes
+	Single Right Bracket	Enkel høgre hakeparentes
+	Single Right Parenthesis	Enkel høgre parentes
+	Single Spacing	Enkel linjeavstand
+	Single label	Éin etikett
+	Site name	Nettstadnamn
+	Size	Storleik
+	Size (pt):	Storleik (pkt):
+	Size and Crop…	Storleik og tilskjering…
+	Size:	Storleik:
+	Sketchbook	Skissebok
+	Skewed Fraction	Skrå brøk
+	Skip Citations and Bibliography	Hopp over kjeldetilvisingar og litteraturliste
+	Skip Record If	Hopp over post dersom
+	Skip Record If…	Hopp over post dersom…
+	Skip citations & bibliography	Hopp over kjeldetilvisingar og litteraturliste
+	Slant Down	Skrått ned
+	Slant Up	Skrått opp
+	Small Caps	Små versalar
+	Small caps	Små versalar
+	Small change	Liten endring
+	Smart quotes instead of straight quotes	Typografiske hermeteikn i staden for rette
+	SmartArt	SmartArt
+	SmartArt Design	SmartArt-utforming
+	SmartArt Styles	SmartArt-stilar
+	Smooth scrolling and zooming, and menus and buttons that fade in. Off shows every change at once.	Jamn rulling og zooming, og menyar og knappar som tonar inn. Av viser kvar endring med ein gong.
+	Soft Edges	Mjuke kantar
+	Soft Glow	Mjuk glød
+	Solid Accent	Einsfarga aksent
+	Sort	Sorter
+	Sort order:	Sorteringsrekkjefølgje:
+	Source Manager	Kjeldehandsaming
+	Source code: github.com/storytold/wordcraft	Kjeldekode: github.com/storytold/wordcraft
+	Source type:	Kjeldetype:
+	Sources in this document:	Kjelder i dette dokumentet:
+	South	Sør
+	Space	Mellomrom
+	Space after	Avstand etter
+	Space after: {pt} pt	Avstand etter: {pt} pkt
+	Space before	Avstand før
+	Space before/after:	Avstand før/etter:
+	Space before: {pt} pt	Avstand før: {pt} pkt
+	Spaces	Mellomrom
+	Spacing	Avstand
+	Spacing (pt):	Avstand (pt):
+	Spacing:	Avstand:
+	Spanish (Mexico)	Spansk (Mexico)
+	Spanish (Spain)	Spansk (Spania)
+	Sparse Matrices	Glisne matrisar
+	Special	Spesial
+	Special Characters	Spesialteikn
+	Specify height:	Angi høgd:
+	Speech	Tale
+	Speed	Fart
+	Spelling	Stavemåte
+	Spelling & Grammar	Stavekontroll og grammatikk
+	Spelling &\nGrammar	Stavekontroll\nog grammatikk
+	Spelling Suggestions	Staveforslag
+	Spelling and grammar are checked in English (United States).	Stavemåte og grammatikk blir kontrollerte på engelsk (USA).
+	Split	Del
+	Split Cells	Del celler
+	Split Table	Del tabell
+	Spreadsheet Table	Reknearktabell
+	Square	Firkant
+	Square Root	Kvadratrot
+	Square Root with Degree	Kvadratrot med grad
+	Square Union	Firkanta union
+	Stack Object	Stabelobjekt
+	Stack Object (Three)	Stabelobjekt (tre)
+	Stacked	Stabla
+	Stacked Bar	Stabla liggjande stolpediagram
+	Stacked Column	Stabla ståande stolpediagram
+	Stacked Fraction	Stabla brøk
+	Stacked, no bar	Stabla utan strek
+	Standard	Standard
+	Standard Colors	Standardfargar
+	Star	Stjerne
+	Start Enforcing Protection	Start handheving av vern
+	Start Mail Merge	Start brevfletting
+	Start Mail\nMerge	Start\nbrevfletting
+	Start at:	Start ved:
+	Start-up	Oppstart
+	State	Fylke
+	Statistics	Statistikk
+	Status Bar	Statuslinje
+	Stop	Stopp
+	Stop Protection	Stopp vern
+	Stop Reading	Stopp lesing
+	Stopped	Stoppa
+	Straight Arrow Connector	Rett pilkopling
+	Straight Connector	Rett kopling
+	Strikethrough	Gjennomstreking
+	Stroke {n} of {total}	Strøk {n} av {total}
+	Strong	Sterk
+	Structure Actions	Strukturhandlingar
+	Structures	Strukturar
+	Studio	Studio
+	Studio cover	Studioforside
+	Studio handbook (sample)	Studiohandbok (døme)
+	Style	Stil
+	Style Inspector	Stilinspektør
+	Style Set	Stilsett
+	Style based on:	Stil bygd på:
+	Style:	Stil:
+	Style: {style}	Stil: {style}
+	Styles	Stilar
+	Styles Pane	Stilpanel
+	Styles:	Stilar:
+	Subentry:	Underoppføring:
+	Subject	Emne
+	Submitting print job…	Sender utskriftsjobb…
+	Subscript	Senka skrift
+	Subscript-Superscript	Senka og heva indeks
+	Subscripts and Superscripts	Senka og heva indeksar
+	Subset:	Delsett:
+	Subtitle	Undertittel
+	Subtle Emphasis	Diskret utheving
+	Subtle Reference	Diskret referanse
+	Suggested	Foreslått
+	Sum	Sum
+	Sum of cosines	Sum av cosinusverdiar
+	Sum or difference of sines	Sum eller differanse av sinusverdiar
+	Summation	Summering
+	Summation from 0 to n	Summering frå 0 til n
+	Summation over binomials	Summering over binomial
+	Summation with Limits	Summering med grenser
+	Summation with Lower Limit	Summering med nedre grense
+	Summation with Subscript Limit	Summering med senka grense
+	Summation with Subscript-Superscript Limits	Summering med senka og heva grenser
+	Summations	Summeringar
+	Superscript	Heva skrift
+	Suppress line numbers	Skjul linjenummer
+	Surface Integral	Flateintegral
+	Surface Integral with Limits	Flateintegral med grenser
+	Surface Integral with Stacked Limits	Flateintegral med stabla grenser
+	Swap footnotes and endnotes	Byt fotnotar og sluttnotar
+	Swedish	Svensk
+	Switch Modes	Bytt modus
+	Switch\nModes	Bytt\nmodus
+	Symbol	Symbol
+	Symbols	Symbol
+	Synonyms	Synonym
+	System	System
+	TC entry fields	TC-oppføringsfelt
+	TOA Heading	Overskrift for kjelderegister
+	TOC Heading	Overskrift til innhaldsliste
+	TOC {n}	Innhaldsliste {n}
+	Tab	Tabulator
+	Tab Character	Tabulatorteikn
+	Tab character	Tabulatorteikn
+	Tab characters	Tabulatorteikn
+	Tab leader:	Tabulatorfyllteikn:
+	Tab stop position:	Tabulatorposisjon:
+	Tab stops to be cleared:	Tabulatorstopp som skal fjernast:
+	Table	Tabell
+	Table Column Width	Tabellkolonnebreidd
+	Table Design	Tabellutforming
+	Table Grid	Tabellrutenett
+	Table Layout	Tabelloppsett
+	Table Properties	Tabelleigenskapar
+	Table Properties…	Tabelleigenskapar…
+	Table Row Height	Tabellradhøgd
+	Table Style Options	Innstillingar for tabellstil
+	Table Styles	Tabellstilar
+	Table direction:	Tabellretning:
+	Table of Authorities	Register over rettskjelder
+	Table of Contents	Innhaldsliste
+	Table of Contents Options	Alternativ for innhaldsliste
+	Table of Contents Styles	Stilar for innhaldsliste
+	Table of Figures	Figurliste
+	Table of\nContents	Innhaldsliste
+	Table style	Tabellstil
+	Tables	Tabellar
+	Tabs	Tabulatorar
+	Tabs…	Tabulatorar…
+	Tabular List	Tabelliste
+	Tag	Merke
+	Tangent Function	Tangensfunksjon
+	Tangent formula	Tangensformel
+	Technology	Teknologi
+	Templates	Malar
+	Templates and Add-ins	Malar og tillegg
+	Text	Tekst
+	Text Box	Tekstboks
+	Text Direction	Tekstretning
+	Text Effects	Teksteffektar
+	Text Effects and Typography	Teksteffektar og typografi
+	Text Fill	Tekstfyll
+	Text Highlight Color	Markeringsfarge for tekst
+	Text Outline	Tekstomriss
+	Text Pane	Tekstrute
+	Text Wrapping	Tekstbryting
+	Text boxes	Tekstboksar
+	Text from File	Tekst frå fil
+	Text indent at:	Tekstinnrykk ved:
+	Text over Colon Equal	Tekst over kolon lik
+	Text over Equal	Tekst over lik
+	Text size	Tekststorleik
+	Text snaps to characters	Teksten blir festa til teikn
+	Text to display:	Tekst som skal visast:
+	Text:	Tekst:
+	Text\nBox	Tekstboks
+	Text\nDirection	Tekstretning
+	That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.	Dette formatet tek ikkje vare på alt, så dokumentet er framleis ope. Lagre det som eit Word-dokument (.docx) for å halde fram.
+	That password isn't right. Check it (passwords are case-sensitive) and try again.	Passordet er feil. Kontroller det (store og små bokstavar tel) og prøv igjen.
+	The clipboard is empty.	Utklippstavla er tom.
+	The date it is today	Dagens dato
+	The document has no bookmarks yet.	Dokumentet har ingen bokmerke enno.
+	The document is read only, except for regions marked editable.	Dokumentet er skriveverna, unnateke område merkte som redigerbare.
+	The document will be saved with a password. Save it to protect it.	Dokumentet blir lagra med eit passord. Lagre det for å verne det.
+	The new style takes the formatting of the current paragraph.	Den nye stilen får formateringa til gjeldande avsnitt.
+	The password is optional; without it anyone can stop the protection.	Passordet er valfritt; utan det kan alle stoppe vernet.
+	The password is removed. Save the document to keep the change.	Passordet er fjerna. Lagre dokumentet for å ta vare på endringa.
+	The passwords don't match.	Passorda er ikkje like.
+	The printer, two-sided printing and pages per sheet are chosen in that dialog.	Skrivar, tosidig utskrift og sider per ark blir valde i denne dialogen.
+	The recipient-list field that fills each part of an address block and greeting line.	Feltet i mottakarlista som fyller kvar del av ei adresseblokk og helsingslinje.
+	The spelling and grammar check is complete.	Stave- og grammatikkontrollen er ferdig.
+	The system file dialog isn't available, so WordCraft shows its own. To get the system dialog, install a file chooser portal (such as xdg-desktop-portal-gtk) or zenity.	Fildialogen i systemet er ikkje tilgjengeleg, så WordCraft viser sin eigen. Installer ein filveljarportal (som xdg-desktop-portal-gtk) eller zenity for å få systemdialogen.
+	The time right now	Klokkeslett no
+	Theme Colors	Temafargar
+	Theme Fonts	Temaskrifter
+	Theme List	Temaliste
+	Themes	Tema
+	Then insert:	Set deretter inn:
+	Thesaurus	Synonymordbok
+	These marks show even when Show/Hide ¶ is off.	Desse merka blir viste sjølv når Vis/skjul ¶ er av.
+	These merge fields aren't in the recipient list:	Desse flettefelta finst ikkje i mottakarlista:
+	These settings will be used for new documents.	Desse innstillingane blir brukte for nye dokument.
+	Thick	Tjukk
+	Thickness	Tjukkleik
+	This document	Dette dokumentet
+	This field has no options.	Dette feltet har ingen alternativ.
+	This folder can't be read: {error}	Denne mappa kan ikkje lesast: {error}
+	This font has no characters to show.	Denne skrifta har ingen teikn å vise.
+	This page	Denne sida
+	This password type isn't supported.	Denne passordtypen er ikkje støtta.
+	This point forward	Frå dette punktet
+	This section	Denne inndelinga
+	Three	Tre
+	Through	Gjennom
+	Tight	Tett
+	Tilde	Tilde
+	Tips ({n})	Tips ({n})
+	Title	Tittel
+preview	Title	Tittel
+	Title Bar	Tittellinje
+	Title from the document properties	Tittel frå dokumenteigenskapane
+	Title:	Tittel:
+	To open Word documents with WordCraft by default: select one in Finder, choose File › Get Info, pick WordCraft under Open with, then click Change All.	Slik opnar du Word-dokument med WordCraft som standard: vel eit i Finder, vel Fil › Vis info, vel WordCraft under Opne med, og klikk Endre alle.
+	Today	I dag
+	Toggle Check Box	Veksle avmerkingsboks
+	Toggle Field Codes	Veksle feltkodar
+	Toggle Unicode Character	Veksle Unicode-teikn
+	Tools	Verktøy
+	Top	Øverst
+	Top Border	Øvre kantlinje
+	Top Margin	Toppmarg
+	Top and Bottom	Øverst og nederst
+	Top of Page	Øvst på sida
+	Top:	Øvst:
+	Total	Totalt
+	Total Row	Sumrad
+	Track Changes	Spor endringar
+	Track Changes Options	Alternativ for sporing av endringar
+	Track Changes: On	Spor endringar: på
+	Track formatting	Spor formatering
+	Track\nChanges	Spor\nendringar
+	Track\nChanges ✓	Spor\nendringar ✓
+	Tracked changes	Spora endringar
+	Tracking	Endringssporing
+	Trademark	Varemerke
+	Trademark Sign	Varemerketeikn
+	Transform	Transformer
+	Translate	Omset
+	Transparency	Gjennomsikt
+	Transport	Transport
+	Triangle	Trekant
+	Triangle Down	Trekant ned
+	Triangle Up	Trekant opp
+	Trigonometric Functions	Trigonometriske funksjonar
+	Triple	Tredobbel
+	Triple Dot	Trippel prikk
+	Triple Integral	Trippelintegral
+	Triple Integral with Limits	Trippelintegral med grenser
+	Triple Integral with Stacked Limits	Trippelintegral med stabla grenser
+	Tue	Tys
+	Turabian	Turabian
+	Turkish	Tyrkisk
+	Two	To
+	Two-sided printing	Tosidig utskrift
+	Two-sided: long edge	Tosidig: langside
+	Two-sided: short edge	Tosidig: kortside
+	Type	Type
+	Type +2 or -1 to move from the page you are on.	Skriv +2 eller -1 for å flytte frå sida du er på.
+	Type Text	Skriv tekst
+	Type a New List…	Skriv ei ny liste…
+	Type a command, e.g. "insert table"	Skriv ein kommando, t.d. «set inn tabell»
+	Type at least one recipient.	Skriv inn minst éin mottakar.
+	Type equations in LaTeX	Skriv likningar i LaTeX
+	Type equations in the linear format (UnicodeMath)	Skriv likningar i lineært format (UnicodeMath)
+	Type in Equation	Skriv i likning
+	Type normal (non-math) text in the equation	Skriv vanleg (ikkje-matematisk) tekst i likninga
+	Type the categories down the side and a column of values per series.	Skriv kategoriane nedover sida og ei verdikolonne per serie.
+	Type the field's name and its switches, for example PAGE \\* roman.	Skriv namnet og brytarane til feltet, til dømes PAGE \\* roman.
+	Type the password to stop the protection.	Skriv passordet for å stoppe vernet.
+	Type the recipients, or load them from a file.	Skriv inn mottakarane, eller last dei frå ei fil.
+	Type:	Type:
+	Typing	Skriving
+	Typing replaces selected text	Skriving erstattar vald tekst
+	UPPERCASE	STORE BOKSTAVAR
+	URGENT	HASTAR
+	URL	URL
+	Ukrainian	Ukrainsk
+	Unchecked symbol	Uavmerkt symbol
+	Underbar	Understrek
+	Underbrace	Underklamme
+	Underline	Understreking
+	Underline Words Only	Understrek berre ord
+	Underline color	Understrekingsfarge
+	Undo	Angre
+	Undo 1 Action	Angre 1 handling
+	Undo Actions	Angre handlingar
+	Undo History	Angrehistorikk
+	Undo {action}	Angre {action}
+	Undo {n} Actions	Angre {n} handlingar
+	Unformatted Text	Uformatert tekst
+	Ungroup	Løys opp gruppe
+	Union	Union
+	Union of intersections	Union av snitt
+	Union with Limits	Union med grenser
+	Union with Lower Limit	Union med nedre grense
+	Union with Plus	Union med pluss
+	Union with Subscript-Superscript Limits	Union med senka og heva grenser
+	Unions and Intersections	Unionar og snitt
+	Unlink Fields	Fjern feltkoplingar
+	Unlink\nCitations	Fjern kopling til\nkjeldetilvisingar
+	Unlock Fields	Lås opp felt
+	Up	Opp
+	Up Diagonal Dots	Diagonale prikker opp
+	Up one level	Opp eitt nivå
+	Update Field	Oppdater felt
+	Update Index	Oppdater stikkordregister
+	Update Style to Match Selection	Oppdater stilen etter markeringa
+	Update Styles from Template	Oppdater stilar frå mal
+	Update Table	Oppdater innhaldslista
+	Update Table of Figures	Oppdater figurliste
+	Update fields before printing	Oppdater felt før utskrift
+	Update to Match	Oppdater etter formateringa
+	Update to Match Selection	Oppdater etter markeringa
+	Use "a" before a consonant sound	Bruk «a» framfor ein konsonantlyd
+	Use "an" before a vowel sound	Bruk «an» framfor ein vokallyd
+	Use an Existing List…	Bruk ei eksisterande liste…
+	Use system setting	Bruk systeminnstilling
+	Use the Insert key to switch overtype on and off	Bruk Insert-tasten for å slå overskriving av og på
+	Use wildcards	Bruk jokerteikn
+	User Name	Brukarnamn
+	User name:	Brukarnamn:
+	Username	Brukarnamn
+	Value	Verdi
+	Vector A	Vektor A
+	Vector AB	Vektor AB
+	Version	Versjon
+	Version History	Versjonshistorikk
+	Version {version} ({build})	Versjon {version} ({build})
+	Vertical	Loddrett
+	Vertical Alignment	Loddrett justering
+	Vertical Bars	Loddrette strekar
+	Vertical Dots	Loddrette prikker
+	Vertical alignment:	Loddrett justering:
+	View	Vis
+	View Alt Text…	Vis alternativ tekst…
+	View Gridlines	Vis rutenett
+	View State	Visingsstatus
+	Views	Visingar
+	Visual effects	Visuelle effektar
+	Voice	Stemme
+	Volume	Bind
+	Volume Integral	Volumintegral
+	Volume Integral with Limits	Volumintegral med grenser
+	Volume Integral with Stacked Limits	Volumintegral med stabla grenser
+	W:	B:
+	Waiting for Zotero…	Ventar på Zotero…
+	Warm Gradient with Outline	Varm gradient med omriss
+	Warnings ({n})	Åtvaringar ({n})
+	Watermark	Vassmerke
+	Wave	Bølgje
+	Weather	Vêr
+	Web Layout	Nettoppsett
+	Web page (*.html)	Nettside (*.html)
+	Web\nLayout	Nettoppsett
+	Website	Nettstad
+	Wed	Ons
+	Weight	Tjukkleik
+	West	Vest
+	When this document was first created	Då dokumentet blei oppretta
+	When this document was most recently printed	Då dokumentet sist blei skrive ut
+	When this document was most recently saved	Då dokumentet sist blei lagra
+	White Space	Blankteikn
+	White space	Blankteikn
+	Who the document properties name as author	Den dokumenteigenskapane oppgir som forfattar
+	Whole Table	Heile tabellen
+	Whole document	Heile dokumentet
+	Whole page	Heile sida
+	Whole words	Heile ord
+	Wide	Breie
+	Widow/Orphan Control	Unngå einslege linjer
+	Widow/Orphan control	Unngå einslege linjer
+	Width and spacing	Breidd og avstand
+	Width:	Breidd:
+	Wildcards (regex)	Jokerteikn (regulære uttrykk)
+	Window	Vindauge
+	With:	Med:
+	Word Count	Ordteljing
+	Word Left	Ord til venstre
+	Word Right	Ord til høgre
+	Word XML Document (*.xml)	Word XML-dokument (*.xml)
+	Word document	Word-dokument
+	Word document (*.docx)	Word-dokument (*.docx)
+	Word level	Ordnivå
+	WordArt	WordArt
+	WordArt Styles	WordArt-stilar
+	WordCraft	WordCraft
+	WordCraft is now the default app for Word documents.	WordCraft er no standardappen for Word-dokument.
+	Words	Ord
+	Words only	Berre ord
+	Wrap Text	Bryt tekst
+	Wrap Text Sides	Sider for tekstbryting
+	Wrap\nText	Bryt\ntekst
+	Write & Insert Fields	Skriv og set inn felt
+	Write a reply	Skriv eit svar
+	Year	År
+	Yes	Ja
+	Yields	Gir
+	Your changes will be lost if you don't save them.	Endringane går tapt dersom du ikkje lagrar dei.
+	Your system doesn't report an animation setting, so animation effects stay on.	Systemet oppgir inga animasjonsinnstilling, så animasjonseffektar held fram med å vere på.
+	Your system has animation effects turned off.	Systemet har slått av animasjonseffektar.
+	Your system has animation effects turned on.	Systemet har slått på animasjonseffektar.
+	Zoom	Zoom
+	Zoom In	Zoom inn
+	Zoom Out	Zoom ut
+	Zotero	Zotero
+	Zotero: cancelled	Zotero: avbrote
+	Zotero: done	Zotero: ferdig
+	a, b, c, …	a, b, c, …
+	can't split at the first row	kan ikkje dele ved første rad
+	development build	utviklingsversjon
+	from Unicode (hex)	frå Unicode (heksadesimal)
+	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft
+	i, ii, iii, …	i, ii, iii, …
+	lowercase	små bokstavar
+	n×n Identity Matrix	n×n identitetsmatrise
+	n×n Matrix	n×n matrise
+	pt	pkt
+	select two or more cells to merge	vel to eller fleire celler som skal slåast saman
+	tOGGLE cASE	vEKSL sTORE oG sMÅ
+	there is no ink to replay	det er ikkje noko blekk å spele av
+	there's no citation after the caret	det er inga kjeldetilvising etter markøren
+	this item is already at the top level	dette elementet er allereie på øvste nivå
+	x bar	x med overstrek
+	{cols}×{rows} Table	Tabell {cols}×{rows}
+	{contributors} contributors · {commits} commits	{contributors} bidragsytarar · {commits} innsendingar
+	{count} items highlighted	{count} element utheva
+	{count} of {total} pages will print	{count} av {total} sider blir skrivne ut
+	{group} settings	Innstillingar for {group}
+	{key}+Click to follow link	{key}+klikk for å følgje lenkja
+	{language} is now the document's default language.	{language} er no standardspråket til dokumentet.
+	{name} already exists. Choose Save again to replace it.	{name} finst allereie. Vel Lagre igjen for å erstatte henne.
+	{name} is protected with a password.	{name} er verna med eit passord.
+	{name} wasn't found.	{name} blei ikkje funne.
+	{n} entries marked.	{n} oppføringar markerte.
+	{n} lines	{n} linjer
+	{n} pt	{n} pkt
+	{selected} of {words} words	{selected} av {words} ord
+	{size} pt	{size} pkt
+	{words} words	{words} ord
+	“{text}” ({row}, {series}) isn't a number.	«{text}» ({row}, {series}) er ikkje eit tal.
+	✓ None	✓ Ingen
+	➕ New comment	➕ Ny kommentar
+	📂  Browse…	📂  Bla gjennom…
+	Account	Konto
+	Add Condition	Legg til vilkår
+	Add whether it is above or below	Legg til om det er over eller under
+	All system fonts are already available.	Alle systemskrifter er allereie tilgjengelege.
+	And	Og
+	Ascending	Stigande
+	Auto ({percent}%)	Automatisk ({percent} %)
+	Column {n}	Kolonne {n}
+	Compare to	Samanlikn med
+	Comparison	Samanlikning
+	Contains	Inneheld
+	Copy to	Kopier til
+	Croatian	Kroatisk
+	Custom size	Eigedefinert storleik
+	Delete Bookmark	Slett bokmerke
+	Descending	Søkkande
+	Dictionaries	Ordbøker
+	Dictionaries folder:	Ordbokmappe:
+	Document name	Dokumentnamn
+	Does not contain	Inneheld ikkje
+	Enter bookmark name:	Skriv inn bokmerkenamn:
+	Equal to	Lik
+	Existing File or Web Page	Eksisterande fil eller nettside
+	Filter Recipients	Filtrer mottakarar
+	Filter and Sort	Filtrer og sorter
+	Find “{text}” in the document	Finn «{text}» i dokumentet
+	For which item:	For kva element:
+	Formula:	Formel:
+	Full Screen	Fullskjerm
+	Full\nScreen	Full-\nskjerm
+	Greater than	Større enn
+	Greater than or equal	Større enn eller lik
+	Header row	Overskriftsrad
+	Heading	Overskrift
+	Heading text	Overskriftstekst
+	Hidden bookmarks	Skjulte bokmerke
+	Hunspell .aff and .dic files here (pl_PL, pt_BR, it_IT, hr_HR, tr_TR) are used before the system's.	Hunspell-filer (.aff og .dic) her (nb_NO, nn_NO, pl_PL, pt_BR, it_IT, hr_HR, tr_TR) blir brukte før filene i systemet.
+	In the margin	I margen
+	Insert reference to:	Set inn referanse til:
+	Is blank	Er tom
+	Is not blank	Er ikkje tom
+	Language Preferences…	Språkinnstillingar…
+	Leave out the date and time of comments and tracked changes when saving	Utelat dato og klokkeslett for kommentarar og spora endringar ved lagring
+	Less than	Mindre enn
+	Less than or equal	Mindre enn eller lik
+	Link to:	Lenkje til:
+	Load System Installed Fonts…	Last inn installerte systemskrifter…
+	Loaded {count} system fonts.	Lasta inn {count} systemskrifter.
+	Local font access is not supported by your browser.	Nettlesaren støttar ikkje tilgang til lokale skrifter.
+	Local font access was denied.	Tilgang til lokale skrifter blei avslått.
+	Makes the ribbon, menus and dialogs larger or smaller. Auto follows your system's display scaling; 100% is one screen pixel per point. Document zoom is separate.	Gjer bandet, menyane og dialogane større eller mindre. Automatisk følgjer skjermskaleringa i systemet; 100 % er éin skjermpiksel per punkt. Dokumentzoom er separat.
+	Mirror margins	Spegelvende margar
+	More Paper Sizes…	Fleire papirstorleikar…
+	Moved objects snap to the page's edges and centre, the margins and other objects. Hold Alt to move freely.	Objekt som blir flytta, blir festa til kantane og midtpunktet på sida, margane og andre objekt. Hald Alt inne for å flytte fritt.
+	My list has	Lista har
+	No document is open. Create a document or open one first.	Ingen dokument er opne. Opprett eller opne eit dokument først.
+	No header row	Ingen overskriftsrad
+	No spelling dictionary for {language} is installed, so it isn't checked. WordCraft looks for the Hunspell dictionary {name} in the WORDCRAFT_DICTIONARIES folder and in the usual system locations.	Inga staveordbok for {language} er installert, så språket blir ikkje kontrollert. WordCraft ser etter Hunspell-ordboka {name} i mappa WORDCRAFT_DICTIONARIES og på vanlege systemplasseringar.
+	Not equal to	Ikkje lik
+	Not set: the system's usual places	Ikkje valt: dei vanlege plasseringane i systemet
+	Number only, without the label's words	Berre nummeret, utan orda i etiketten
+	Only for the selected text	Berre for vald tekst
+	Or	Eller
+	Paper	Papir
+	Paper size:	Papirstorleik:
+	Paste function:	Lim inn funksjon:
+	Place in This Document	Plassering i dette dokumentet
+	Print settings	Utskriftsinnstillingar
+	Privacy Options	Personvernalternativ
+	Privacy Settings	Personverninnstillingar
+	Privacy for this document	Personvern for dette dokumentet
+	Recover	Gjenopprett
+	Reference type:	Referansetype:
+	Remove condition	Fjern vilkår
+	Remove my name from comments, changes and file properties when saving	Fjern namnet mitt frå kommentarar, endringar og fileigenskapar ved lagring
+	Rename	Gi nytt namn
+	Rename Document	Gi dokument nytt namn
+	Saving {name} was cancelled, so it is still open and nothing was lost.	Lagring av {name} blei avbroten, så dokumentet er framleis ope og ingenting gjekk tapt.
+	Set Proofing Language…	Angi korrekturspråk…
+	Show alignment guides when moving pictures and shapes	Vis hjelpelinjer ved flytting av bilete og figurar
+	Show its list number	Vis listenummeret
+	Show its number relative to this field	Vis nummeret relativt til dette feltet
+	Show its number with all higher levels	Vis nummeret med alle overordna nivå
+	Sort Recipients	Sorter mottakarar
+	Sort by	Sorter etter
+	Sort by:	Sorter etter:
+	Style name:	Stilnamn:
+	Submit print job	Send utskriftsjobb
+	Take the last match on the page	Bruk siste treff på sida
+	Text of the nearest paragraph with a given style (running headers)	Tekst frå næraste avsnitt med ein gitt stil (løpande topptekst)
+	The document you are editing keeps the names and dates; only the saved file leaves them out.	Dokumentet du redigerer, held på namn og datoar; berre den lagra fila utelèt dei.
+	The margins don't fit on a page this size; make the margins smaller first.	Margane passar ikkje på ei side av denne storleiken; gjer margane mindre først.
+	Then by	Deretter etter
+	This document has no bookmarks.	Dette dokumentet har ingen bokmerke.
+	Trust Center	Klareringssenter
+	Type Character Code	Skriv teiknkode
+	Type a page number, or +2 / -1.	Skriv eit sidetal, eller +2 / -1.
+	Use the browser's full screen (F11)	Bruk fullskjerm i nettlesaren (F11)
+	Wait for the print job to finish submitting before closing.	Vent til utskriftsjobben er send før du lukkar.
+	Waiting for the save to finish…	Ventar på at lagringa skal fullførast…
+	Word 2003 XML Document (*.xml)	Word 2003 XML-dokument (*.xml)
+	{count} of {total} recipients will be merged.	{count} av {total} mottakarar blir fletta.
+	{kind}, {columns} × {rows}, {size} ({paper})	{kind}, {columns} × {rows}, {size} ({paper})
+	{language} (no dictionary)	{language} (ingen ordbok)
+	{language}: no dictionary found	{language}: inga ordbok funnen
+	{language}: {file}	{language}: {file}
+	{name}   {height} × {width} in	{name}   {height} × {width} tommar
+	{name}   {height} × {width} mm	{name}   {height} × {width} mm
+	{width} × {height} mm	{width} × {height} mm
+	Narrow	Smal
+	Medium	Middels
+	Odd Banded Rows	Oddetalsrader med band
+	Even Banded Rows	Partalsrader med band
+	Odd Banded Columns	Oddetalskolonnar med band
+	Even Banded Columns	Partalskolonnar med band
+	Top Left Cell	Øverste venstre celle
+	Top Right Cell	Øvste høgre celle
+	Bottom Left Cell	Nederste venstre celle
+	Bottom Right Cell	Nedste høgre celle
+	Inside Horizontal Border	Indre vassrette kantlinje
+	Inside Vertical Border	Indre loddrette kantlinje
+	Norwegian (Nynorsk)	Norsk nynorsk

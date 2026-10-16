@@ -34,7 +34,11 @@ fn lo_ext_dirs(name: &str) -> Vec<String> {
     let dashed = name.replace('_', "-");
     let first = format!("dict-{primary}");
     let full = format!("dict-{dashed}");
-    if full == first { vec![first] } else { vec![first, full] }
+    let mut dirs = if full == first { vec![first] } else { vec![first, full] };
+    if matches!(primary, "nb" | "nn") {
+        dirs.push("dict-no".into());
+    }
+    dirs
 }
 
 /// Directories that may hold Hunspell dictionaries, most specific first. `lo_exts`, when a

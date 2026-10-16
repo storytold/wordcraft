@@ -14,7 +14,8 @@
 //! Supported: one-character flags (at most 128 distinct, any Unicode character — `FLAG UTF-8`),
 //! `PFX`/`SFX` with strip, append and condition (`.`, letters, `[abc]`, `[^abc]`), cross
 //! products, continuation classes on suffixes (at most two suffixes in a row, as in Hunspell),
-//! `FORBIDDENWORD`, `NOSUGGEST`, and the suggestion tables `TRY`, `KEY`, `MAP` and `REP`. Rejected: compounding,
+//! `FORBIDDENWORD`, `NOSUGGEST`, `COMPOUNDFLAG`/`COMPOUNDMIN`, `CHECKCOMPOUNDTRIPLE`,
+//! `SIMPLIFIEDTRIPLE`, and the suggestion tables `TRY`, `KEY`, `MAP` and `REP`. Rejected: other compounding modes,
 //! long or numeric flags, `NEEDAFFIX` and the other directives that change which words are correct.
 //!
 //! Lookups never panic: stems sit in one string, found through an open-addressing hash table, and
@@ -40,11 +41,17 @@ const UNSUPPORTED: &[&str] = &[
     "COMPLEXPREFIXES",
     "COMPOUNDBEGIN",
     "COMPOUNDEND",
-    "COMPOUNDFLAG",
     "COMPOUNDMIDDLE",
-    "COMPOUNDMIN",
     "COMPOUNDPERMITFLAG",
     "COMPOUNDRULE",
+    "COMPOUNDFORBIDFLAG",
+    "COMPOUNDWORDMAX",
+    "COMPOUNDMORESUFFIXES",
+    "CHECKCOMPOUNDCASE",
+    "CHECKCOMPOUNDDUP",
+    "CHECKCOMPOUNDREP",
+    "CHECKCOMPOUNDPATTERN",
+    "FORCEUCASE",
     "FULLSTRIP",
     "ICONV",
     "IGNORE",
@@ -172,6 +179,10 @@ pub struct AffixDict {
     sets: Vec<u128>,
     /// The `FORBIDDENWORD` flag's bit; stems carrying it are not words (0: none declared).
     forbidden: u128,
+    compound: u128,
+    compound_min: usize,
+    check_triple: bool,
+    simplified_triple: bool,
     /// Stems with NOSUGGEST are correct, but none of their forms are suggested.
     no_suggest: u128,
     /// Open-addressing hash table of stem indices (`EMPTY` = free).
@@ -255,6 +266,10 @@ struct Rules {
     rep: Vec<(String, String)>,
     /// The `FORBIDDENWORD` flag: stems carrying it are listed but never correct.
     forbidden: Option<char>,
+    compound: Option<char>,
+    compound_min: usize,
+    check_triple: bool,
+    simplified_triple: bool,
     no_suggest: Option<char>,
 }
 
@@ -289,14 +304,25 @@ fn parse_aff(aff: &str) -> Result<Rules, String> {
                     return Err(format!("line {}: FLAG {} is not supported (one-character flags only)", n + 1, at(1)));
                 }
             }
-            directive @ ("FORBIDDENWORD" | "NOSUGGEST") => {
+            "COMPOUNDMIN" => {
+                r.compound_min = at(1)
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|n| (1..=MAX_WORD_BYTES).contains(n))
+                    .ok_or_else(|| format!("line {}: invalid COMPOUNDMIN", n + 1))?;
+            }
+            "CHECKCOMPOUNDTRIPLE" => r.check_triple = true,
+            "SIMPLIFIEDTRIPLE" => r.simplified_triple = true,
+            directive @ ("FORBIDDENWORD" | "NOSUGGEST" | "COMPOUNDFLAG") => {
                 let mut it = at(1).chars();
                 match (it.next(), it.next()) {
                     (Some(c), None) if !c.is_whitespace() => {
                         if directive == "FORBIDDENWORD" {
                             r.forbidden = Some(c);
-                        } else {
+                        } else if directive == "NOSUGGEST" {
                             r.no_suggest = Some(c);
+                        } else {
+                            r.compound = Some(c);
                         }
                     }
                     _ => return Err(format!("line {}: {directive} needs one flag character", n + 1)),
@@ -348,7 +374,9 @@ fn parse_aff(aff: &str) -> Result<Rules, String> {
                     r.prefixes.push(rule);
                 }
             }
-            d if UNSUPPORTED.contains(&d) => return Err(format!("line {}: {d} is not supported", n + 1)),
+            d if UNSUPPORTED.contains(&d) || d.starts_with("COMPOUND") || d.starts_with("CHECKCOMPOUND") => {
+                return Err(format!("line {}: {d} is not supported", n + 1));
+            }
             _ => {}
         }
     }
@@ -399,6 +427,10 @@ impl AffixDict {
         // Flags: every one a rule or a stem uses gets a bit.
         let mut flag_chars: Vec<char> = rules.prefixes.iter().chain(&rules.suffixes).map(|r| r.0).collect();
         flag_chars.extend(stems.iter().flat_map(|s| s.1.chars()));
+        flag_chars.extend(rules.suffixes.iter().chain(&rules.prefixes).flat_map(|r| r.4.chars()));
+        flag_chars.extend(rules.forbidden);
+        flag_chars.extend(rules.no_suggest);
+        flag_chars.extend(rules.compound);
         flag_chars.sort_unstable();
         flag_chars.dedup();
         if flag_chars.len() > 128 {
@@ -413,6 +445,10 @@ impl AffixDict {
             offs: Vec::with_capacity(stems.len() + 1),
             flag_chars: flag_chars.clone(),
             forbidden,
+            compound: rules.compound.map_or(0, bit_of),
+            compound_min: if rules.compound_min == 0 { 3 } else { rules.compound_min },
+            check_triple: rules.check_triple,
+            simplified_triple: rules.simplified_triple,
             no_suggest: rules.no_suggest.map_or(0, bit_of),
             try_chars: rules.try_chars,
             key: rules.key,
@@ -636,6 +672,93 @@ impl AffixDict {
                 return true;
             }
         }
+        self.compound_word(w, excluded)
+    }
+
+    /// Hunspell permits prefixes on the first component and suffixes on the last.
+    /// The stem (or continuation class) must license compounding; ordinary words cannot
+    /// be joined indiscriminately. Other compound-affix modes are rejected by the parser.
+    fn compound_part(&self, w: &str, first: bool, last: bool, excluded: u128) -> bool {
+        if w.chars().count() < self.compound_min {
+            return false;
+        }
+        if self.stem_flags_excluding(w, excluded).is_some_and(|f| f & self.compound != 0) {
+            return true;
+        }
+        for (suffix, rules) in [(false, &self.prefixes), (true, &self.suffixes)] {
+            if (suffix && !last) || (!suffix && !first) {
+                continue;
+            }
+            for r in rules {
+                let base = if suffix { w.strip_suffix(&*r.add) } else { w.strip_prefix(&*r.add) };
+                let Some(base) = base else { continue };
+                let root = if suffix { format!("{base}{}", r.strip) } else { format!("{}{base}", r.strip) };
+                if r.cond_matches(&root, suffix)
+                    && self.stem_flags_excluding(&root, excluded).is_some_and(|f| f & r.bit != 0 && (f | r.cont) & self.compound != 0)
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn compound_word(&self, w: &str, excluded: u128) -> bool {
+        if self.compound == 0 || w.is_empty() || w.len() > MAX_WORD_BYTES {
+            return false;
+        }
+        // At most 120 byte positions, each with/without a restored triple consonant.
+        // Memoization makes even ambiguous dictionaries polynomial, never exponential.
+        let mut failed = std::collections::HashSet::new();
+        self.compound_tail(w, 0, None, &mut failed, excluded)
+    }
+
+    fn compound_tail(
+        &self,
+        w: &str,
+        start: usize,
+        restored: Option<char>,
+        failed: &mut std::collections::HashSet<(usize, Option<char>)>,
+        excluded: u128,
+    ) -> bool {
+        if failed.contains(&(start, restored)) {
+            return false;
+        }
+        let Some(tail) = w.get(start..) else { return false };
+        let first = start == 0;
+        for end in tail.char_indices().map(|(i, _)| start + i).filter(|&i| i > start).chain(std::iter::once(w.len())) {
+            let Some(part) = w.get(start..end) else { continue };
+            let part = match restored {
+                Some(c) => format!("{c}{part}"),
+                None => part.to_string(),
+            };
+            let last = end == w.len();
+            if last && first {
+                continue;
+            } // a compound needs at least two components
+            if !self.compound_part(&part, first, last, excluded) {
+                continue;
+            }
+            if last {
+                return true;
+            }
+            let Some(right) = w.get(end..) else { continue };
+            let mut left_chars = part.chars().rev();
+            let a = left_chars.next();
+            let b = left_chars.next();
+            let mut right_chars = right.chars();
+            let c = right_chars.next();
+            let d = right_chars.next();
+            let triple = a == c && (a == b || c == d);
+            if (!self.check_triple || !triple) && self.compound_tail(w, end, None, failed, excluded) {
+                return true;
+            }
+            // Restore the consonant elided at the boundary: trafikk|kork -> trafikkork.
+            if self.simplified_triple && a.is_some() && (a == b || a == c) && self.compound_tail(w, end, a, failed, excluded) {
+                return true;
+            }
+        }
+        failed.insert((start, restored));
         false
     }
 
@@ -814,6 +937,15 @@ impl AffixDict {
                 out.push_str(&format!("{directive} {c}\n"));
             }
         }
+        if let Some(c) = self.flag_char(self.compound) {
+            out.push_str(&format!("COMPOUNDFLAG {c}\nCOMPOUNDMIN {}\n", self.compound_min));
+        }
+        if self.check_triple {
+            out.push_str("CHECKCOMPOUNDTRIPLE\n");
+        }
+        if self.simplified_triple {
+            out.push_str("SIMPLIFIEDTRIPLE\n");
+        }
         let z = |s: &str| if s.is_empty() { "0".to_string() } else { s.to_string() };
         for (kind, rules) in [("PFX", &self.prefixes), ("SFX", &self.suffixes)] {
             for r in rules {
@@ -872,14 +1004,22 @@ impl AffixDict {
                 "KEY" => rules.key = at(1).to_string(),
                 "MAP" => rules.map.push(at(1).chars().collect()),
                 "REP" => rules.rep.push((at(1).replace('_', " "), at(2).replace('_', " "))),
-                directive @ ("FORBIDDENWORD" | "NOSUGGEST") => {
+                "COMPOUNDMIN" => {
+                    rules.compound_min =
+                        at(1).parse::<usize>().ok().filter(|n| (1..=MAX_WORD_BYTES).contains(n)).ok_or("affix dictionary: invalid COMPOUNDMIN")?;
+                }
+                "CHECKCOMPOUNDTRIPLE" => rules.check_triple = true,
+                "SIMPLIFIEDTRIPLE" => rules.simplified_triple = true,
+                directive @ ("FORBIDDENWORD" | "NOSUGGEST" | "COMPOUNDFLAG") => {
                     let mut it = at(1).chars();
                     match (it.next(), it.next()) {
                         (Some(c), None) if !c.is_whitespace() => {
                             if directive == "FORBIDDENWORD" {
                                 rules.forbidden = Some(c);
-                            } else {
+                            } else if directive == "NOSUGGEST" {
                                 rules.no_suggest = Some(c);
+                            } else {
+                                rules.compound = Some(c);
                             }
                         }
                         _ => return Err(format!("affix dictionary: bad {directive} in `{line}`")),
@@ -946,6 +1086,62 @@ pub(crate) mod tests {
 
     fn dict() -> AffixDict {
         AffixDict::from_hunspell(AFF, DIC, &["test data"]).unwrap()
+    }
+
+    #[test]
+    fn compound_suggestions_keep_nosuggest_and_forbidden_filters() {
+        let aff = "COMPOUNDFLAG z\nCOMPOUNDMIN 4\nNOSUGGEST X\nFORBIDDENWORD F\nSFX S Y 1\nSFX S e ene e\n";
+        let d = AffixDict::from_hunspell(aff, "4\nfelt/z\nliste/zSX\ntrygg/z\nulovlig/zF\n", &[]).unwrap();
+        for d in [&d, &AffixDict::from_bytes(&d.to_bytes()).unwrap()] {
+            for w in ["feltliste", "Feltliste", "feltlistene", "listefelt"] {
+                assert!(d.check(w), "{w} is valid when typed");
+                assert!(!d.can_suggest(w), "{w} must not be suggested");
+            }
+            assert!(d.can_suggest("tryggfelt"));
+            assert!(!d.check("ulovligfelt"));
+            assert!(!d.check("feltulovlig"));
+        }
+    }
+
+    #[test]
+    fn norwegian_compounds_and_triples_round_trip() {
+        // Original synthetic data: exercise Norwegian directives without bundling a dictionary.
+        let aff = "SET UTF-8\nCOMPOUNDFLAG z\nCOMPOUNDMIN 4\nCHECKCOMPOUNDTRIPLE\nSIMPLIFIEDTRIPLE\nFORBIDDENWORD X\nPFX P Y 1\nPFX P 0 u .\nSFX S Y 1\nSFX S e er e\n";
+        let dic = "10\nbok/z\nhylle/zS\ntrafikk/z\nkork/z\nøvelse/zP\nfelt/z\nleketøy\nforbud/zX\nball/z\nlekk/z\n";
+        let d = AffixDict::from_hunspell(aff, dic, &[]).unwrap();
+        for dict in [&d, &AffixDict::from_bytes(&d.to_bytes()).unwrap()] {
+            for word in ["øvelsefelt", "uøvelsefelt", "felthyller", "øvelsefelthylle", "trafikkork"] {
+                assert!(dict.check(word), "{word}");
+            }
+            for word in ["balllekk", "trafikkkork", "leketøyfelt", "forbudfelt", "feltforbud", "bokhylle", "felthylla"] {
+                assert!(!dict.check(word), "{word}");
+            }
+            assert!(dict.check("ballekk"));
+            assert!(!dict.check(&"felt".repeat(31)), "input limit");
+        }
+    }
+
+    #[test]
+    fn compounds_require_flags_and_respect_minimum_and_affix_position() {
+        let d = AffixDict::from_hunspell(
+            "COMPOUNDFLAG z\nCOMPOUNDMIN 2\nPFX P Y 1\nPFX P 0 u .\nSFX S Y 1\nSFX S 0 s .\n",
+            "3\nbok/zPS\nhylle/zPS\nx/z\n",
+            &[],
+        )
+        .unwrap();
+        for w in ["bokhylle", "ubokhylle", "bokhylles", "bokhyllebok"] {
+            assert!(d.check(w), "{w}");
+        }
+        for w in ["bokuhylle", "bokshylle", "bokxhylle"] {
+            assert!(!d.check(w), "{w}");
+        }
+        for min in ["0", "-1", "999999999999999999", "x"] {
+            assert!(AffixDict::from_hunspell(&format!("COMPOUNDMIN {min}"), "1\nword/z", &[]).is_err());
+        }
+        assert!(AffixDict::from_hunspell("COMPOUNDFLAG zz", "", &[]).is_err());
+        for directive in ["COMPOUNDRULE", "COMPOUNDSYLLABLE", "CHECKCOMPOUNDPATTERN", "FORCEUCASE"] {
+            assert!(AffixDict::from_hunspell(&format!("{directive} X"), "", &[]).is_err());
+        }
     }
 
     #[test]
@@ -1168,7 +1364,7 @@ pub(crate) mod tests {
     fn unsupported_and_broken_input_is_an_error() {
         assert!(AffixDict::from_hunspell("FLAG long\n", DIC, &[]).is_err());
         assert!(AffixDict::from_hunspell("FLAG num\n", DIC, &[]).is_err());
-        assert!(AffixDict::from_hunspell("COMPOUNDFLAG X\n", DIC, &[]).is_err());
+        assert!(AffixDict::from_hunspell("COMPOUNDRULE 1\n", DIC, &[]).is_err());
         assert!(AffixDict::from_hunspell("SFX a Y 1\nSFX a 0 y [ab\n", DIC, &[]).is_err());
         assert!(AffixDict::from_bytes(b"not deflate").is_err());
         let ok = dict().to_bytes();

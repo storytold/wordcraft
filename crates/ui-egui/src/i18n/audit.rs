@@ -333,7 +333,7 @@ fn untranslated_interface_text() {
     complete_catalogs_have_every_string_the_interface_looked_up(pseudo::looked_up());
 }
 
-/// Russian, Hungarian, Turkish, Bulgarian, Italian, Swedish and Croatian cover everything the audit saw
+/// Russian, Hungarian, Turkish, Bulgarian, Italian, Swedish, Croatian and Norwegian cover everything the audit saw
 /// translated, plus the equation gallery's labels (shown in menus the audit doesn't open one by
 /// one). Numbered style names go through a template.
 fn complete_catalogs_have_every_string_the_interface_looked_up(mut keys: std::collections::BTreeSet<String>) {
@@ -379,7 +379,7 @@ fn complete_catalogs_have_every_string_the_interface_looked_up(mut keys: std::co
     // translate: its placeholder names aren't words the interface shows.
     let words = |s: &str| english_words(&s.split('{').map(|p| p.split_once('}').map_or(p, |(_, rest)| rest)).collect::<String>());
     let mut report = String::new();
-    for code in ["ru", "hu", "tr", "bg", "it", "sv", "hr"] {
+    for code in ["ru", "hu", "tr", "bg", "it", "sv", "hr", "nb", "nn"] {
         let lang = super::Lang::from_code(code).unwrap_or(super::Lang::EN);
         let missing: Vec<&String> =
             keys.iter().filter(|s| words(s) && !super::has(lang, s) && !numbered(s) && !same(s) && !script_error(s)).collect();
