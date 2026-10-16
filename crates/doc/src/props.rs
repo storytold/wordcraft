@@ -155,6 +155,46 @@ impl Underline {
     }
 }
 
+/// The OpenType ligatures a run asks for ([MS-DOCX] `w14:ligatures`): standard (`liga`),
+/// contextual (`clig`), historical (`hlig`) and discretional (`dlig`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Ligatures {
+    pub standard: bool,
+    pub contextual: bool,
+    pub historical: bool,
+    pub discretional: bool,
+}
+
+impl Ligatures {
+    /// Every combination of the four flags.
+    pub fn all() -> impl Iterator<Item = Ligatures> {
+        (0u8..16).map(|b| Ligatures { standard: b & 1 != 0, contextual: b & 2 != 0, historical: b & 4 != 0, discretional: b & 8 != 0 })
+    }
+    /// The `w14:ligatures/@w14:val` name: `none`, `all`, or the set flags joined in camelCase
+    /// (`standardContextual`).
+    pub fn ooxml(self) -> String {
+        let on: Vec<&str> =
+            [(self.standard, "standard"), (self.contextual, "contextual"), (self.historical, "historical"), (self.discretional, "discretional")]
+                .into_iter()
+                .filter_map(|(on, n)| on.then_some(n))
+                .collect();
+        match on.len() {
+            0 => "none".into(),
+            4 => "all".into(),
+            _ => on
+                .iter()
+                .enumerate()
+                .flat_map(|(i, n)| n.chars().enumerate().map(move |(j, c)| if i > 0 && j == 0 { c.to_ascii_uppercase() } else { c }))
+                .collect(),
+        }
+    }
+    /// `None` for a name [MS-DOCX] doesn't define.
+    pub fn from_ooxml(s: &str) -> Option<Ligatures> {
+        Ligatures::all().find(|l| l.ooxml() == s)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum VertAlign {
@@ -331,6 +371,10 @@ pub struct CharProps {
     /// Kerning for fonts at or above this size (points); 0 = off.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kern: Option<f32>,
+    /// OpenType ligatures (`w14:ligatures`). `None` leaves WordCraft's default: standard and
+    /// contextual ligatures.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ligatures: Option<Ligatures>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outline: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -442,7 +486,7 @@ impl CharProps {
     pub fn minus(mut self, base: &CharProps) -> CharProps {
         drop_same_fields!(self, base; style, font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
             shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl,
-            cs, font_cs, size_cs, bold_cs, italic_cs, lang_bidi, link, ins, del);
+            cs, font_cs, size_cs, bold_cs, italic_cs, lang_bidi, link, ins, del, ligatures);
         self
     }
 
@@ -453,7 +497,7 @@ impl CharProps {
     pub fn overlay(&mut self, patch: &CharProps) {
         overlay_fields!(self, patch; style, font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
             shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl,
-            cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, link, ins, del, fmt_change);
+            cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, link, ins, del, fmt_change, ligatures);
         if let Some(p) = &patch.text_effects {
             self.text_effects.get_or_insert_with(Default::default).overlay(p);
         }
@@ -1193,6 +1237,37 @@ mod tests {
         }
         for h in Highlight::ALL {
             assert_eq!(Highlight::from_ooxml(h.ooxml()), h);
+        }
+    }
+
+    /// The 16 `w14:ligatures` values of [MS-DOCX], each to its flags and back.
+    #[test]
+    fn ligature_names() {
+        let l = |standard, contextual, historical, discretional| Ligatures { standard, contextual, historical, discretional };
+        for (name, flags) in [
+            ("none", l(false, false, false, false)),
+            ("standard", l(true, false, false, false)),
+            ("contextual", l(false, true, false, false)),
+            ("historical", l(false, false, true, false)),
+            ("discretional", l(false, false, false, true)),
+            ("standardContextual", l(true, true, false, false)),
+            ("standardHistorical", l(true, false, true, false)),
+            ("contextualHistorical", l(false, true, true, false)),
+            ("standardDiscretional", l(true, false, false, true)),
+            ("contextualDiscretional", l(false, true, false, true)),
+            ("historicalDiscretional", l(false, false, true, true)),
+            ("standardContextualHistorical", l(true, true, true, false)),
+            ("standardContextualDiscretional", l(true, true, false, true)),
+            ("standardHistoricalDiscretional", l(true, false, true, true)),
+            ("contextualHistoricalDiscretional", l(false, true, true, true)),
+            ("all", l(true, true, true, true)),
+        ] {
+            assert_eq!(Ligatures::from_ooxml(name), Some(flags), "{name}");
+            assert_eq!(flags.ooxml(), name);
+        }
+        assert_eq!(Ligatures::all().count(), 16);
+        for bad in ["", "Standard", "contextualStandard", "standardstandard", "allx"] {
+            assert_eq!(Ligatures::from_ooxml(bad), None, "{bad:?}");
         }
     }
 

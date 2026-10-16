@@ -39,6 +39,10 @@ pub struct ResolvedChar {
     /// Kerning: the smallest font size, in points, that is kerned (`w:kern`); 0 = never kerned.
     #[serde(default)]
     pub kern: f32,
+    /// OpenType ligatures (`w14:ligatures`); `None` = the shaper's default (standard and
+    /// contextual).
+    #[serde(default)]
+    pub ligatures: Option<crate::props::Ligatures>,
     pub outline: bool,
     pub shadow: bool,
     pub emboss: bool,
@@ -90,6 +94,7 @@ impl ResolvedChar {
             scale: c.scale.unwrap_or(100.0).clamp(1.0, 600.0),
             position: c.position.unwrap_or(0.0).clamp(-800.0, 800.0),
             kern: c.kern.filter(|k| k.is_finite()).unwrap_or(0.0).clamp(0.0, 1638.0),
+            ligatures: c.ligatures,
             outline: c.outline.unwrap_or(false),
             shadow: c.shadow.unwrap_or(false),
             emboss: c.emboss.unwrap_or(false),

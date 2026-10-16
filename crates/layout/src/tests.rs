@@ -6229,6 +6229,57 @@ fn kerning_follows_kerning_for_fonts_like_word() {
     assert!(d.styles.resolve_char(None, &Default::default()).kern == 0.0, "no Kerning for fonts: not kerned");
 }
 
+/// The ligatures a document asks for (`w14:ligatures`, Word's Font ▸ Advanced ▸ Ligatures) are
+/// the ones shaped: `none` draws every letter, `standard` turns them back on over a style that
+/// turned them off. Without a value WordCraft keeps its default, standard and contextual.
+#[test]
+fn ligatures_follow_w14_ligatures() {
+    use wordcraft_doc::props::{CharProps, Ligatures};
+    use wordcraft_doc::styles::{Style, StyleKind};
+    let text = "office affinity";
+    let face = wordcraft_fonts::word::resolve("Source Serif 4", false, false).face;
+    assert_eq!(wordcraft_fonts::shape(&face, "fi", &[], |c| c).len(), 1, "the test font draws fi as one glyph");
+    let glyphs = |style: Option<Ligatures>, run: Option<Ligatures>| {
+        let mut d = Document::new();
+        d.styles.upsert(Style {
+            id: "Plain".into(),
+            name: "Plain".into(),
+            kind: StyleKind::Character,
+            chr: CharProps { ligatures: style, ..Default::default() },
+            ..Default::default()
+        });
+        let chr =
+            CharProps { style: Some("Plain".into()), font: Some("Source Serif 4".into()), size: Some(14.0), ligatures: run, ..Default::default() };
+        d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, chr))];
+        let l = lay(&d);
+        l.pages
+            .iter()
+            .flat_map(|p| &p.items)
+            .map(|it| if let Placed::Lines { story: StoryRef::Body, para, .. } = it { para.glyphs.len() } else { 0 })
+            .sum::<usize>()
+    };
+    let letters = text.chars().count();
+    let none = Ligatures::from_ooxml("none");
+    let standard = Ligatures::from_ooxml("standard");
+    assert!(glyphs(None, None) < letters, "WordCraft's default draws ligatures");
+    assert_eq!(glyphs(None, none), letters, "none: one glyph per letter");
+    assert_eq!(glyphs(none, None), letters, "none from the character style");
+    assert!(glyphs(none, standard) < letters, "standard over a style with none draws them again");
+    assert_eq!(glyphs(None, Ligatures::from_ooxml("contextual")), letters, "fi is a standard ligature, not a contextual one");
+}
+
+/// Each flag of `w14:ligatures` sets its OpenType feature: standard `liga`, contextual `clig`,
+/// historical `hlig`, discretional `dlig`.
+#[test]
+fn ligature_flags_map_to_opentype_features() {
+    use wordcraft_doc::props::Ligatures;
+    let f = |t: &[u8; 4], v: u32| wordcraft_fonts::feature_value(t, v);
+    let hd = Ligatures { historical: true, discretional: true, ..Default::default() };
+    assert_eq!(para::ligature_features(hd), [f(b"liga", 0), f(b"clig", 0), f(b"hlig", 1), f(b"dlig", 1)]);
+    let sc = Ligatures { standard: true, contextual: true, ..Default::default() };
+    assert_eq!(para::ligature_features(sc), [f(b"liga", 1), f(b"clig", 1), f(b"hlig", 0), f(b"dlig", 0)]);
+}
+
 /// Word's automatic (HTML-style) paragraph spacing, measured in Word for Windows: 14 pt at any
 /// size; none before the first paragraph of the document or a cell, none after the last one of a
 /// cell; next to another paragraph's space the larger of the two counts.
