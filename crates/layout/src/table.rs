@@ -793,6 +793,18 @@ pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
                 .collect()
         })
         .collect();
+    // A cell that widow/orphan control leaves with nothing on this page, though its first line
+    // would fit there, takes the whole row on with it: Word doesn't leave the other cells behind
+    // beside an empty one (observed with synthetic documents).
+    for (items, splits) in cells.iter().zip(&splits) {
+        let first = items.iter().zip(splits).find_map(|(it, &split)| text_lines(it).map(|t| (t, split)));
+        if let Some(((para, l0, _, y), split)) = first
+            && split == l0
+            && para.lines.get(l0).is_some_and(|l| fits(y + l.top - para.lines.get(l0).map_or(0.0, |f| f.top) + l.height))
+        {
+            return None;
+        }
+    }
     // The top of the first thing that moves on in each cell.
     let mut kept_any = false;
     let mut moved = vec![f32::MAX; cells.len()];
