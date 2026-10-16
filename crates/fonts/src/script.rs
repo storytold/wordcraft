@@ -77,6 +77,9 @@ pub fn needs_layout_tables(c: char) -> bool {
 /// it: the platforms' own OpenType fonts and the open Noto/SIL families. Apple's older fonts for
 /// these scripts carry only AAT tables (which the shaper doesn't read), so they come last.
 pub fn script_fallbacks(c: char) -> &'static [&'static str] {
+    if is_emoji(c) {
+        return COLOR_EMOJI;
+    }
     match c.script() {
         Script::Myanmar => &["Myanmar Text", "Noto Sans Myanmar", "Padauk", "Pyidaungsu", "Noto Serif Myanmar", "Myanmar Sangam MN", "Myanmar MN"],
         Script::Khmer => &["Leelawadee UI", "Khmer UI", "Noto Sans Khmer", "Noto Serif Khmer", "Khmer OS", "Khmer Sangam MN", "Khmer MN"],
@@ -87,6 +90,53 @@ pub fn script_fallbacks(c: char) -> &'static [&'static str] {
         Script::Tamil | Script::Telugu | Script::Kannada | Script::Malayalam | Script::Gujarati | Script::Gurmukhi | Script::Oriya => &["Nirmala UI"],
         _ => &[],
     }
+}
+
+/// The platforms' colour emoji fonts. Emoji prefer them over the monochrome symbol fonts that
+/// also cover many emoji (Windows' Segoe UI Symbol has ✅, so it drew in black and white).
+const COLOR_EMOJI: &[&str] = &["Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji"];
+
+/// Characters drawn as emoji by default (Unicode `Emoji_Presentation`): the BMP ones listed in
+/// emoji-data.txt, and the pictograph blocks from U+1F000.
+// ponytail: all of U+1F000..U+1FAFF counts as emoji (a few text-default pictographs too); switch to the exact emoji-data ranges if one must draw monochrome
+pub fn is_emoji(c: char) -> bool {
+    matches!(
+        u32::from(c),
+        0x1F000..=0x1FAFF
+            | 0x231A..=0x231B
+            | 0x23E9..=0x23EC
+            | 0x23F0
+            | 0x23F3
+            | 0x25FD..=0x25FE
+            | 0x2614..=0x2615
+            | 0x2648..=0x2653
+            | 0x267F
+            | 0x2693
+            | 0x26A1
+            | 0x26AA..=0x26AB
+            | 0x26BD..=0x26BE
+            | 0x26C4..=0x26C5
+            | 0x26CE
+            | 0x26D4
+            | 0x26EA
+            | 0x26F2..=0x26F3
+            | 0x26F5
+            | 0x26FA
+            | 0x26FD
+            | 0x2705
+            | 0x270A..=0x270B
+            | 0x2728
+            | 0x274C
+            | 0x274E
+            | 0x2753..=0x2755
+            | 0x2757
+            | 0x2795..=0x2797
+            | 0x27B0
+            | 0x27BF
+            | 0x2B1B..=0x2B1C
+            | 0x2B50
+            | 0x2B55
+    )
 }
 
 /// How well `family` suits `c` as a fallback: 0 for the first preferred family, then the others
@@ -131,5 +181,18 @@ mod tests {
         assert!(fallback_rank('မ', "Noto Sans Myanmar") < fallback_rank('မ', "Myanmar Sangam MN"));
         assert!(fallback_rank('த', "Noto Sans Tamil") < fallback_rank('த', "Arial"));
         assert_eq!(fallback_rank('a', "Arial"), fallback_rank('a', "Noto Sans"));
+    }
+
+    #[test]
+    fn emoji_prefer_colour_emoji_fonts() {
+        for c in ['✅', '🧠', '⭐', '⌚', '🫶'] {
+            assert!(is_emoji(c), "{c}");
+            assert!(fallback_rank(c, "Segoe UI Emoji") < fallback_rank(c, "Segoe UI Symbol"), "{c}");
+            assert!(fallback_rank(c, "Noto Color Emoji") < fallback_rank(c, "Noto Emoji"), "{c}");
+        }
+        // Text-style symbols keep the symbol fonts.
+        for c in ['✔', '☺', '→', 'a', '1'] {
+            assert!(!is_emoji(c), "{c}");
+        }
     }
 }

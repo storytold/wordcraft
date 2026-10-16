@@ -21,7 +21,7 @@ pub use fontdb::{
 pub use harfrust::Feature;
 use harfrust::{Direction, ShapeOptions, Tag, UnicodeBuffer};
 pub use kurbo::BezPath;
-pub use script::{fallback_rank, needs_layout_tables, script_fallbacks};
+pub use script::{fallback_rank, is_emoji, needs_layout_tables, script_fallbacks};
 use skrifa::MetadataProvider;
 use skrifa::instance::Size;
 pub use ui_fallback::{SystemUiFont, is_cjk, system_cjk_ui_font, system_cjk_ui_font_for, ui_needs_system_cjk, ui_uncovered_cjk};

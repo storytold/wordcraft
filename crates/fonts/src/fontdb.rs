@@ -1474,10 +1474,12 @@ impl FontDb {
         let faces = self.read_faces();
         let mut order: Vec<&Arc<FontFace>> = faces.iter().filter(|f| f.id != exclude).collect();
         // Right-to-left letters prefer a font made for the script, so a word isn't split across
-        // fonts (that breaks Arabic joining).
+        // fonts (that breaks Arabic joining). Emoji prefer a colour emoji font.
         let rank = |f: &FontFace| {
             if crate::is_rtl(c) || arabic_block(c) {
                 RTL_FALLBACKS.iter().position(|n| f.family.eq_ignore_ascii_case(n)).unwrap_or(RTL_FALLBACKS.len())
+            } else if crate::is_emoji(c) {
+                crate::fallback_rank(c, &f.family)
             } else {
                 0
             }
