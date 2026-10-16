@@ -1129,7 +1129,9 @@ impl Writer<'_> {
         } else {
             let d = emu(float.dist.clamp(0.0, 1584.0));
             let (dt, db) = (emu(float.dist_top.clamp(0.0, 1584.0)), emu(float.dist_bottom.clamp(0.0, 1584.0)));
-            self.z += 1;
+            // The stacking order read from the file is kept; objects without one stack in
+            // document order above it.
+            self.z = if float.z > 0 { float.z } else { self.z.saturating_add(1) };
             let behind = if float.wrap == Wrap::BehindText { "1" } else { "0" };
             w.open(
                 "wp:anchor",

@@ -851,6 +851,25 @@ fn anchor_alignment_reference_areas_and_distances() {
 }
 
 #[test]
+fn anchor_stacking_order_is_read_and_kept() {
+    let shape = |z: &str| {
+        format!(
+            r#"<w:r><w:drawing><wp:anchor behindDoc="0" {z}><wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="127000" cy="127000"/><wp:wrapNone/><wp:docPr id="1" name="S"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:spPr><a:prstGeom prst="rect"/></wps:spPr></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>"#
+        )
+    };
+    let body = format!("<w:p>{}{}{}</w:p>", shape(r#"relativeHeight="251660288""#), shape(r#"relativeHeight="251657214""#), shape(""));
+    let zs = |d: &Document| -> Vec<u32> {
+        paras(d)[0].objects.iter().filter_map(|o| if let InlineObject::Shape { float, .. } = o { Some(float.z) } else { None }).collect()
+    };
+    let d = read_body(&body);
+    assert_eq!(zs(&d), [251660288, 251657214, 0]);
+    let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    let z = zs(&again);
+    assert_eq!(&z[..2], &[251660288, 251657214]);
+    assert!(z[2] > 0, "an object without one gets an order on saving: {z:?}");
+}
+
+#[test]
 fn documents_without_a_compatibility_mode_are_laid_out_as_word_2007() {
     assert_eq!(read_body("<w:p/>").settings.compat_mode, wordcraft_doc::LEGACY_COMPAT_MODE);
 }

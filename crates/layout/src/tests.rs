@@ -3595,6 +3595,38 @@ fn a_float_anchored_after_a_page_break_stays_on_its_paragraph_s_first_page() {
     assert!(shapes(&l.pages[1].items).is_empty(), "and not again on page two");
 }
 
+/// Floating objects are drawn in their stacking order (`relativeHeight`), not in the order of
+/// their anchors: a panel anchored after the text box it frames, but lower in the stack, is
+/// drawn first so the box stays visible over it. Objects without an order keep theirs.
+#[test]
+fn floats_are_drawn_in_their_stacking_order() {
+    let at = |x: f32, z: u32| rect_shape(50.0, 50.0, wordcraft_doc::para::Float { z, ..page_float(x, 100.0) });
+    let mut d = Document::from_text("Text");
+    for (x, z) in [(100.0, 30), (200.0, 10), (300.0, 20)] {
+        d.insert_object(&Pos::body(0, 4), at(x, z), &Default::default()).unwrap();
+    }
+    let xs: Vec<f32> = shapes(&lay(&d).pages[0].items).iter().map(|r| r.x).collect();
+    assert_eq!(xs, [200.0, 300.0, 100.0], "lowest first");
+    let mut d = Document::from_text("Text");
+    for (i, x) in [100.0, 200.0].into_iter().enumerate() {
+        let off = 4 + i * wordcraft_doc::para::OBJ.len_utf8();
+        d.insert_object(&Pos::body(0, off), at(x, 0), &Default::default()).unwrap();
+    }
+    let xs: Vec<f32> = shapes(&lay(&d).pages[0].items).iter().map(|r| r.x).collect();
+    assert_eq!(xs, [100.0, 200.0], "no order: as anchored");
+    // Behind the text too: the higher one comes first in the XML and stays on top.
+    let behind = |x: f32, z: u32| {
+        rect_shape(50.0, 50.0, wordcraft_doc::para::Float { z, wrap: wordcraft_doc::para::Wrap::BehindText, ..page_float(x, 100.0) })
+    };
+    let mut d = Document::from_text("Text");
+    for (i, (x, z)) in [(100.0, 20), (200.0, 10)].into_iter().enumerate() {
+        let off = 4 + i * wordcraft_doc::para::OBJ.len_utf8();
+        d.insert_object(&Pos::body(0, off), behind(x, z), &Default::default()).unwrap();
+    }
+    let xs: Vec<f32> = shapes(&lay(&d).pages[0].items).iter().map(|r| r.x).collect();
+    assert_eq!(xs, [200.0, 100.0], "behind the text: lowest first");
+}
+
 #[test]
 fn floats_in_headers_and_table_cells_are_drawn() {
     use wordcraft_doc::para::{Anchor, Float, Wrap};

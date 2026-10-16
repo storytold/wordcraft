@@ -216,6 +216,10 @@ pub struct Float {
     /// laid out, as Word for Windows does (Word for Mac draws hidden VML shapes).
     #[serde(skip_serializing_if = "is_false")]
     pub hidden: bool,
+    /// Stacking order among floating objects (`wp:anchor/@relativeHeight`): higher is drawn on
+    /// top. 0 = unknown, drawn in document order (objects inserted here, or from other formats).
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub z: u32,
 }
 
 /// Longest alternative text kept (characters): hostile files and commands are capped.
@@ -254,6 +258,9 @@ fn is_zero(v: &f32) -> bool {
 }
 fn is_false(v: &bool) -> bool {
     !*v
+}
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
 }
 
 impl Float {
