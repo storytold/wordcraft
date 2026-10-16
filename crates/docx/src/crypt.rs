@@ -93,16 +93,15 @@ pub fn decrypt(bytes: &[u8], password: Option<&str>) -> Result<Vec<u8>, DocxErro
     let key = Zeroizing::new(cbc_decrypt(&key_key, &iv, &pe.key_value)?);
     let key = Zeroizing::new(key.get(..info.key_bytes).ok_or_else(|| bad("the encrypted key is too short"))?.to_vec());
     // Data integrity (§2.3.4.14): an HMAC of the whole EncryptedPackage stream.
-    if let Some((enc_key, enc_value)) = &info.integrity {
-        let hmac_key = Zeroizing::new(cbc_decrypt(&key, &make_iv(info.hash, &info.salt, Some(&BK_HMAC_KEY), info.block_size), enc_key)?);
-        // The key is the salt, zero-padded to the block size; HMAC pads short keys with zeros
-        // anyway, so the padded key gives the same HMAC.
-        let hmac_key = hmac_key.get(..hmac_key.len().min(info.hash.size())).unwrap_or(&[]);
-        let expected = cbc_decrypt(&key, &make_iv(info.hash, &info.salt, Some(&BK_HMAC_VALUE), info.block_size), enc_value)?;
-        let expected = expected.get(..info.hash.size()).ok_or_else(|| bad("the integrity check value is too short"))?;
-        if !same(&info.hash.hmac(hmac_key, &package)?, expected) {
-            return Err(bad("the document is damaged (its integrity check failed)"));
-        }
+    let (enc_key, enc_value) = &info.integrity;
+    let hmac_key = Zeroizing::new(cbc_decrypt(&key, &make_iv(info.hash, &info.salt, Some(&BK_HMAC_KEY), info.block_size), enc_key)?);
+    // The key is the salt, zero-padded to the block size; HMAC pads short keys with zeros
+    // anyway, so the padded key gives the same HMAC.
+    let hmac_key = hmac_key.get(..hmac_key.len().min(info.hash.size())).unwrap_or(&[]);
+    let expected = cbc_decrypt(&key, &make_iv(info.hash, &info.salt, Some(&BK_HMAC_VALUE), info.block_size), enc_value)?;
+    let expected = expected.get(..info.hash.size()).ok_or_else(|| bad("the integrity check value is too short"))?;
+    if !same(&info.hash.hmac(hmac_key, &package)?, expected) {
+        return Err(bad("the document is damaged (its integrity check failed)"));
     }
     // The package itself (§2.3.4.15): StreamSize, then 4096-byte segments, each with its own IV.
     let size = package
@@ -610,7 +609,7 @@ struct Info {
     block_size: usize,
     key_bytes: usize,
     /// encryptedHmacKey, encryptedHmacValue.
-    integrity: Option<(Vec<u8>, Vec<u8>)>,
+    integrity: (Vec<u8>, Vec<u8>),
     password: PasswordEncryptor,
 }
 
@@ -652,9 +651,13 @@ fn parse_info(info: &[u8]) -> Result<Info, DocxError> {
     }
     let key_data = root.els().find(|e| e.local() == "keyData").ok_or_else(|| bad("EncryptionInfo has no keyData"))?;
     let kd = params(key_data)?;
+    // EncryptionInfo is not authenticated, so a package without its integrity element could be
+    // altered and still decrypt: refuse it instead of skipping the HMAC check.
     let integrity = match root.els().find(|e| e.local() == "dataIntegrity") {
-        Some(di) => Some((b64_attr(di, "encryptedHmacKey")?, b64_attr(di, "encryptedHmacValue")?)),
-        None => None,
+        Some(di) => (b64_attr(di, "encryptedHmacKey")?, b64_attr(di, "encryptedHmacValue")?),
+        None => {
+            return Err(bad("the file has no integrity check (dataIntegrity), so it can't be told from a tampered copy; WordCraft won't open it"));
+        }
     };
     // The password key encryptor is the `encryptedKey` with a spin count (a certificate key
     // encryptor has none).
@@ -920,6 +923,33 @@ mod tests {
         comp.into_inner().into_inner()
     }
 
+    /// #2115: EncryptionInfo is stored in the clear, so dropping `dataIntegrity` must not turn the
+    /// HMAC check off for a package that was changed.
+    #[test]
+    fn a_package_without_its_integrity_element_is_refused() {
+        let enc = encrypt_with_spin_count(&zip_package(), "pw", 2).unwrap();
+        let mut comp = cfb::CompoundFile::open(Cursor::new(&enc)).unwrap();
+        let mut info = Vec::new();
+        comp.open_stream("/EncryptionInfo").unwrap().read_to_end(&mut info).unwrap();
+        let mut package = Vec::new();
+        comp.open_stream("/EncryptedPackage").unwrap().read_to_end(&mut package).unwrap();
+        // The file as written still opens (its HMAC is valid).
+        assert_eq!(decrypt(&enc, Some("pw")).unwrap(), zip_package());
+        let xml = String::from_utf8(info[8..].to_vec()).unwrap();
+        let mut stripped = info[..8].to_vec();
+        stripped.extend_from_slice(xml.replacen("<dataIntegrity", "<nothing", 1).as_bytes());
+        // Untouched package, element removed: refused. Changed package, element removed: refused.
+        let last = package.len() - 1;
+        let mut changed = package.clone();
+        changed[last] ^= 1;
+        for p in [&package, &changed] {
+            let file = cfb_with(&stripped, p);
+            for password in [Some("pw"), None] {
+                assert!(matches!(decrypt(&file, password), Err(DocxError::Encryption(m)) if m.contains("integrity")), "{password:?}");
+            }
+        }
+    }
+
     #[test]
     fn hostile_encryption_info_errors_without_panicking() {
         let good = encrypt_with_spin_count(&zip_package(), "pw", 2).unwrap();
@@ -955,8 +985,8 @@ mod tests {
         cases.push((with("ChainingModeCBC", "ChainingModeCFB"), package.clone(), true));
         cases.push((with("saltValue=\"", "saltValue=\"!!"), package.clone(), true));
         cases.push((with("encryptedKeyValue=\"", "encryptedKeyValue=\"AAAA"), package.clone(), true));
-        // Data integrity is optional; without it a good file still opens.
-        cases.push((with("<dataIntegrity", "<nothing"), package.clone(), false));
+        // Without its integrity element a package could be altered unnoticed: it isn't opened.
+        cases.push((with("<dataIntegrity", "<nothing"), package.clone(), true));
         let mut huge = package.clone();
         huge[..8].copy_from_slice(&u64::MAX.to_le_bytes());
         cases.push((with("<dataIntegrity", "<nothing"), huge, true));
