@@ -68,13 +68,19 @@ impl SmartArtLayout {
         }
     }
 
-    /// The layout an id names (any ASCII case; `list` is the basic list).
+    /// The layout an id names (any ASCII case, ignoring hyphens, underscores and spaces;
+    /// `list` is the basic list; `basic process` or `process` is process, etc.).
     pub fn from_id(id: &str) -> Option<SmartArtLayout> {
-        let id = id.trim();
-        if id.eq_ignore_ascii_case("list") {
+        let norm = id.chars().filter(|c| !c.is_whitespace() && *c != '-' && *c != '_').collect::<String>();
+        if norm.eq_ignore_ascii_case("list") {
             return Some(SmartArtLayout::BasicList);
         }
-        SmartArtLayout::ALL.into_iter().find(|l| l.id().eq_ignore_ascii_case(id))
+        for l in SmartArtLayout::ALL {
+            if l.id().eq_ignore_ascii_case(&norm) || l.label().replace(' ', "").eq_ignore_ascii_case(&norm) {
+                return Some(l);
+            }
+        }
+        None
     }
 
     /// The name shown for it.
@@ -159,7 +165,13 @@ impl SmartArtColors {
     }
 
     pub fn from_id(id: &str) -> Option<SmartArtColors> {
-        SmartArtColors::ALL.into_iter().find(|c| c.id().eq_ignore_ascii_case(id.trim()))
+        let norm = id.chars().filter(|c| !c.is_whitespace() && *c != '-' && *c != '_').collect::<String>();
+        for c in SmartArtColors::ALL {
+            if c.id().eq_ignore_ascii_case(&norm) || c.label().replace(' ', "").eq_ignore_ascii_case(&norm) {
+                return Some(c);
+            }
+        }
+        None
     }
 
     /// The name shown for it.
@@ -287,8 +299,9 @@ impl SmartArtSpec {
 
 /// `s` as item text: control characters as spaces, ends trimmed, at most [`MAX_TEXT`] characters.
 pub fn clean_text(s: &str) -> String {
-    let s: String = s.chars().take(MAX_TEXT * 4).map(|c| if c.is_control() { ' ' } else { c }).collect();
-    s.trim().chars().take(MAX_TEXT).collect::<String>().trim_end().to_string()
+    let trimmed = s.trim_start_matches(|c: char| c.is_whitespace() || c.is_control());
+    let s: String = trimmed.chars().take(MAX_TEXT).map(|c| if c.is_control() { ' ' } else { c }).collect();
+    s.trim_end().to_string()
 }
 
 #[cfg(test)]
@@ -319,6 +332,13 @@ mod tests {
         assert_eq!(s.descendants(5), 6..6);
         assert_eq!(s.descendants(99), 0..0);
         assert_eq!(SmartArtLayout::from_id("VENN"), Some(SmartArtLayout::Venn));
+        assert_eq!(SmartArtLayout::from_id("basic-list"), Some(SmartArtLayout::BasicList));
+        assert_eq!(SmartArtLayout::from_id("Basic Process"), Some(SmartArtLayout::Process));
+        assert_eq!(SmartArtLayout::from_id("basic_cycle"), Some(SmartArtLayout::Cycle));
+        assert_eq!(SmartArtLayout::from_id("list"), Some(SmartArtLayout::BasicList));
         assert_eq!(SmartArtColors::from_id("colorful"), Some(SmartArtColors::Colorful));
+        assert_eq!(SmartArtColors::from_id("Accent 2"), Some(SmartArtColors::Accent2));
+        assert_eq!(SmartArtColors::from_id("accent-4"), Some(SmartArtColors::Accent4));
+        assert_eq!(clean_text(&format!("{}Valid Text", " ".repeat(1500))), "Valid Text");
     }
 }
