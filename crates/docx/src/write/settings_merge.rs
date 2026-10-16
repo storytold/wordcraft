@@ -222,9 +222,15 @@ fn merge_compat(orig: &str, generated: &str) -> Option<String> {
     match (mode(orig), mode(generated)) {
         (Some((a, b)), Some((c, d))) => Some(format!("{}{}{}", orig.get(..a)?, generated.get(c..d)?, orig.get(b..)?)),
         (None, Some((c, d))) => {
-            // No mode in the original: add the generated one before `</w:compat>`.
-            let close = orig.rfind("</w:compat>")?;
-            Some(format!("{}{}{}", orig.get(..close)?, generated.get(c..d)?, orig.get(close..)?))
+            // No mode in the original: add the generated one before `</w:compat>`, or expand a self-closing `<w:compat/>`.
+            if let Some(close) = orig.rfind("</w:compat>") {
+                Some(format!("{}{}{}", orig.get(..close)?, generated.get(c..d)?, orig.get(close..)?))
+            } else if let Some(slash) = orig.rfind("/>") {
+                let open = orig.get(..slash)?.trim_end();
+                Some(format!("{open}>{}</w:compat>", generated.get(c..d)?))
+            } else {
+                None
+            }
         }
         _ => Some(orig.to_string()),
     }
@@ -343,5 +349,13 @@ mod tests {
         assert!(out.contains("<w:useFELayout/>") && out.contains("compatibilityMode"), "{out}");
         assert!(has_unowned(orig.as_bytes()));
         assert!(!has_unowned(GEN.as_bytes()));
+    }
+
+    #[test]
+    fn a_self_closing_compat_block_gets_the_generated_mode() {
+        let orig = r#"<w:settings xmlns:w="w" xmlns:m="m" xmlns:r="r"><w:compat/><w:rsids><w:rsidRoot w:val="00112233"/></w:rsids></w:settings>"#;
+        let out = String::from_utf8(merge(orig.as_bytes(), GEN.as_bytes()).unwrap()).unwrap();
+        assert!(out.contains("<w:compat><w:compatSetting") && out.contains("</w:compat>"), "{out}");
+        assert!(out.contains("<w:rsidRoot w:val=\"00112233\"/>"), "{out}");
     }
 }

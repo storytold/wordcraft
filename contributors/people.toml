@@ -91,6 +91,10 @@ display_name = "cyril265"
 display_name = "Jason Brashear"
 sync_github_name = false
 
+[people.divyanshu2074]
+display_name = "Divyanshu Gupta"
+sync_github_name = false
+
 [people.lupant]
 sync_github_name = true
 [people.Nael-Nathanael]
