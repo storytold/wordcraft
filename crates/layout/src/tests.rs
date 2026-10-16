@@ -4468,7 +4468,7 @@ fn a_row_with_less_room_than_its_minimum_height_moves_on_whole() {
 }
 
 #[test]
-fn text_overflowing_an_exact_row_is_clipped_to_it() {
+fn exact_row_hides_partial_lines() {
     use wordcraft_doc::props::HeightRule;
     // An exactly 12 pt row holding three lines: Word shows what fits and cuts the rest at the row's
     // edge, rather than drawing it over the rows below.
@@ -4489,7 +4489,9 @@ fn text_overflowing_an_exact_row_is_clipped_to_it() {
             _ => false,
         })
     };
-    assert!(clipped("three"), "the overflowing row's text is drawn inside a clip");
+    assert!(clipped("one"), "the first line stays clipped even in a short row");
+    assert!(!clipped("two"), "an overflowing line must not leak glyph fragments");
+    assert!(!clipped("three"));
     assert!(!clipped("below"), "a row that fits isn't clipped");
 }
 

@@ -9,7 +9,7 @@ use wordcraft_doc::{Block, Blocks, Paragraph, StoryRef, Table};
 use wordcraft_geom::Rect;
 
 use crate::para::{CellText, ClKind, ParaLayout};
-use crate::{BoxContext, BoxLayout, Ctx, Placed, layout_box};
+use crate::{BoxContext, BoxLayout, Ctx, Placed, fit_box, layout_box};
 
 /// Largest preferred table width, as a share of the text column, that a file can ask for.
 const MAX_WIDTH_SHARE: f32 = 10.0;
@@ -711,6 +711,9 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                 for it in &mut cell_items {
                     it.turn(tn.turn, ox, oy);
                 }
+            } else if exact {
+                // Hide incomplete overflow lines before the cell clip can expose their glyph tops.
+                cell_items = fit_box(cell_items, span_h - c.margins[2]);
             }
             for mut it in cell_items {
                 it.translate(0.0, dy);

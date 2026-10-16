@@ -1486,3 +1486,27 @@ fn bundled_unicode_glyphs_are_visible_and_extractable() {
     assert!(String::from_utf8_lossy(&bytes).contains("/ToUnicode"));
     assert_eq!(squash(&extract_text(&bytes).concat()), TEXT);
 }
+
+#[test]
+fn exact_rows_hide_partial_lines() {
+    use wordcraft_doc::props::{HeightRule, LineSpacing};
+
+    for rule in [HeightRule::Exact, HeightRule::AtLeast] {
+        let mut t = Table::new(1, 1, 200.0);
+        t.props.cell_margins = Some([0.0; 4]);
+        t.rows[0].props.height = Some(16.0);
+        t.rows[0].props.height_rule = rule;
+        let mut p = Paragraph::with_text("Visible\nOverflow", CharProps::default());
+        p.props.line_spacing = Some(LineSpacing::Exactly(12.0));
+        t.rows[0].cells[0].blocks = vec![para_block(p)];
+        let mut d = Document::new();
+        d.body = vec![Arc::new(Block::Table(t))];
+
+        for tagged in [false, true] {
+            let bytes = export(&d, &PdfOptions { tagged, ..Default::default() }).unwrap();
+            let text = squash(&extract_text(&bytes).concat());
+            assert!(text.contains("Visible"), "{rule:?}, {tagged}: {text}");
+            assert_eq!(text.contains("Overflow"), rule == HeightRule::AtLeast, "{rule:?}, {tagged}: {text}");
+        }
+    }
+}
