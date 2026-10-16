@@ -3325,6 +3325,94 @@ fn body_starts_right_below_a_tall_header() {
     assert!((body - header_bottom).abs() < 0.01, "body at {body}, header ends at {header_bottom}");
 }
 
+fn background_doc() -> Document {
+    let mut d = Document::from_text("Body");
+    d.styles = wordcraft_doc::StyleSheet::empty();
+    d.styles.default_chr = CharProps { font: Some("Source Sans 3".into()), size: Some(10.0), ..Default::default() };
+    d.styles.default_para = ParaProps {
+        line_spacing: Some(wordcraft_doc::props::LineSpacing::Exactly(14.0)),
+        space_before: Some(3.0),
+        space_after: Some(3.0),
+        ..Default::default()
+    };
+    d.styles.styles.push(wordcraft_doc::Style { id: "Normal".into(), ..Default::default() });
+    d.styles.styles.push(wordcraft_doc::Style { id: "Header".into(), based_on: Some("Normal".into()), ..Default::default() });
+    d.settings.sum_paragraph_spacing = true;
+    d.settings.page_color = Some(Rgb::WHITE);
+    d.last_section.margin_top = 10.0;
+    d.last_section.header = 35.0;
+    d
+}
+
+fn exact_header(d: &mut Document, line: f32) -> u32 {
+    let mut p = Paragraph::new();
+    p.props = ParaProps {
+        style: Some("Header".into()),
+        line_spacing: Some(wordcraft_doc::props::LineSpacing::Exactly(line)),
+        space_before: Some(0.0),
+        space_after: Some(0.0),
+        ..Default::default()
+    };
+    d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(p)])
+}
+
+#[test]
+fn background_header_ownership() {
+    // Native Word 16.113.2: background clearance follows the initial header stories,
+    // including inherited uses, but not a replacement story in a later section.
+    for first in [false, true] {
+        let mut d = background_doc();
+        let a = exact_header(&mut d, 10.0);
+        let b = exact_header(&mut d, 20.0);
+        let replacement = exact_header(&mut d, 10.0);
+        let mut initial = d.last_section.clone();
+        initial.title_page = first;
+        initial.headers.default = Some(a);
+        initial.headers.first = Some(b);
+        let mut inherited = d.last_section.clone();
+        inherited.title_page = first;
+        d.last_section.title_page = first;
+        d.last_section.headers.default = Some(replacement);
+        d.last_section.headers.first = Some(replacement);
+        let mut p = Paragraph::with_text("Initial", Default::default());
+        p.section = Some(Box::new(initial));
+        let mut q = Paragraph::with_text("Inherited", Default::default());
+        q.section = Some(Box::new(inherited));
+        d.body = vec![
+            wordcraft_doc::para_block(p),
+            wordcraft_doc::para_block(q),
+            wordcraft_doc::para_block(Paragraph::with_text("Replacement", Default::default())),
+        ];
+        let l = lay(&d);
+        assert_eq!(l.pages.len(), 3);
+        let expected = if first { 75.0 } else { 65.0 };
+        assert!((l.pages[0].body.y - expected).abs() < 0.01, "first={first}: {}", l.pages[0].body.y);
+        assert!((l.pages[1].body.y - expected).abs() < 0.01);
+        assert!((l.pages[2].body.y - 45.0).abs() < 0.01);
+        assert_eq!(d.parts[&a].blocks.len(), 1, "layout does not insert document content");
+        d.settings.page_color = None;
+        let plain = lay(&d);
+        let expected = if first { 55.0 } else { 45.0 };
+        assert!((plain.pages[0].body.y - expected).abs() < 0.01);
+        assert!((plain.pages[1].body.y - expected).abs() < 0.01);
+    }
+}
+
+#[test]
+fn background_header_defaults() {
+    let mut d = background_doc();
+    // The implicit empty header plus the background paragraph use resolved line metrics.
+    assert!((lay(&d).pages[0].body.y - 75.0).abs() < 0.01);
+    d.styles.styles.retain(|s| s.id != "Header");
+    // Native Header-style restoration adds its inherited 3 + 3 pt spacing only once.
+    assert!((lay(&d).pages[0].body.y - 69.0).abs() < 0.01);
+    let id = exact_header(&mut d, 10.0);
+    d.last_section.headers.default = Some(id);
+    assert!((lay(&d).pages[0].body.y - 59.0).abs() < 0.01);
+    d.last_section.margin_top = 100.0;
+    assert!((lay(&d).pages[0].body.y - 100.0).abs() < 0.01);
+}
+
 #[test]
 fn inline_picture_keeps_room_for_its_effects() {
     let mut d = Document::from_text("");

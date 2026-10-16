@@ -2620,16 +2620,41 @@ fn with_pct_base<T>(ctx: &mut Ctx, base: Option<f32>, f: impl FnOnce(&mut Ctx) -
 
 /// Where body text starts: the top margin, or below the header if it's taller.
 fn body_top_for(ctx: &mut Ctx, sect: &SectionProps, header: Option<u32>) -> f32 {
-    let Some(id) = header else { return sect.margin_top };
-    let Some(part) = ctx.doc.parts.get(&id) else { return sect.margin_top };
-    let blocks = part.blocks.clone();
+    let background = background_header(ctx.doc, header);
+    let mut blocks = header.and_then(|id| ctx.doc.parts.get(&id)).map(|p| p.blocks.clone()).unwrap_or_default();
+    if blocks.is_empty() && background {
+        blocks.push(wordcraft_doc::para_block(Paragraph::new()));
+    }
+    if background {
+        // Word 16.113.2 reserves an empty Header-style paragraph for the page colour,
+        // owned by the initial header stories and retained when those stories are linked.
+        let mut p = Paragraph::new();
+        p.props.style = Some("Header".into());
+        if ctx.doc.styles.get("Header").is_none() {
+            p.props.space_before = Some(0.0);
+            p.props.space_after = Some(0.0);
+        }
+        blocks.push(wordcraft_doc::para_block(p));
+    }
+    if blocks.is_empty() {
+        return sect.margin_top;
+    }
+    let story = header.map(StoryRef::Part).unwrap_or(StoryRef::Body);
     // Placed as `headers_footers` draws it, so page-relative floats wrap the same way.
     let frame = PageFrame { sect, origin: (sect.margin_left + sect.gutter, sect.header), number: 1, mirror: ctx.mirror };
     let track = std::mem::replace(&mut ctx.track_totals, false);
-    let h = layout_box(ctx, StoryRef::Part(id), &blocks, &[], sect.text_width(), BoxContext::Other, 0, Some(frame)).height;
+    let h = layout_box(ctx, story, &blocks, &[], sect.text_width(), BoxContext::Other, 0, Some(frame)).height;
     ctx.track_totals = track;
     // Word starts the body right below a header that reaches past the top margin, no gap.
     sect.margin_top.max(sect.header + h)
+}
+
+fn background_header(doc: &Document, header: Option<u32>) -> bool {
+    if doc.settings.page_color.is_none() {
+        return false;
+    }
+    let first = doc.body.iter().find_map(|b| b.as_para().and_then(|p| p.section.as_deref())).unwrap_or(&doc.last_section);
+    header.is_none() || [first.headers.default, first.headers.first, first.headers.even].contains(&header)
 }
 
 /// Where the footer starts (as `headers_footers` places it), `f32::MAX` without one.
