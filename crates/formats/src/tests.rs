@@ -296,6 +296,15 @@ fn txt_round_trip() {
 }
 
 #[test]
+fn txt_unicode_newlines_and_page_break() {
+    let d = import("txt", "First\u{0085}Second\u{2028}Third\u{2029}Fourth\u{000C}Fifth".as_bytes()).unwrap().unwrap();
+    assert_eq!(d.plain_text(wordcraft_doc::StoryRef::Body), "First\nSecond\nThird\nFourth\nFifth");
+    assert_eq!(d.body.len(), 5);
+    let p_fifth = match &*d.body[4] { wordcraft_doc::Block::Para(p) => p, _ => panic!() };
+    assert_eq!(p_fifth.props.page_break_before, Some(true));
+}
+
+#[test]
 fn txt_export_writes_symbol_font_text_as_unicode() {
     let mut d = Document::from_text("Done J\u{F0FC}");
     d.format_range(&wordcraft_doc::Pos::body(0, 5), &wordcraft_doc::Pos::body(0, 9), &|c| c.font = Some("Wingdings".into())).unwrap();

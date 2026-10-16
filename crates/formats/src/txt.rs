@@ -110,9 +110,18 @@ pub fn decode_as(b: &[u8], label: &str) -> Option<String> {
 /// A document with one paragraph per line.
 pub fn import(bytes: &[u8]) -> Document {
     let text = decode(bytes);
-    let text = text.replace("\r\n", "\n").replace('\r', "\n");
+    let text = text
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .replace('\u{0085}', "\n")
+        .replace('\u{2028}', "\n")
+        .replace('\u{2029}', "\n");
     let clean: String = text.chars().filter(|c| !c.is_control() || matches!(c, '\n' | '\t' | '\u{000C}')).collect();
-    Document::from_text(&clean)
+    let mut doc = Document::from_text(&clean);
+    if clean.contains('\u{000C}') {
+        doc = crate::model::to_doc(&crate::model::from_doc(&doc));
+    }
+    doc
 }
 
 /// [`import`] onto `page`: plain text gives no page size (#1381).
