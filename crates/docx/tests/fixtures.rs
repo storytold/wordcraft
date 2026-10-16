@@ -2830,3 +2830,47 @@ fn row_table_borders_round_trip() {
     let again = wordcraft_docx::read(&saved).unwrap();
     assert_eq!(d.body, again.body);
 }
+
+#[test]
+fn field_result_keeps_run_props() {
+    let styles = format!(
+        r#"<w:styles {W_NS}><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:rPr><w:sz w:val="8"/></w:rPr></w:style><w:style w:type="character" w:styleId="Result"><w:name w:val="Result"/><w:rPr><w:sz w:val="16"/><w:b/></w:rPr></w:style></w:styles>"#
+    );
+    for result_pr in [r#"<w:sz w:val="16"/><w:b/>"#, r#"<w:rStyle w:val="Result"/>"#, ""] {
+        for simple in [false, true] {
+            let result = format!(r#"<w:r><w:rPr>{result_pr}</w:rPr><w:t>7</w:t></w:r>"#);
+            let field = if simple {
+                format!(r#"<w:fldSimple w:instr="PAGE" w:fldLock="1" w:dirty="1">{result}</w:fldSimple>"#)
+            } else {
+                format!(
+                    r#"<w:r><w:rPr><w:sz w:val="6"/><w:i/></w:rPr><w:fldChar w:fldCharType="begin" w:fldLock="1" w:dirty="1"/></w:r><w:r><w:instrText>PAGE</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:sz w:val="40"/></w:rPr><w:t/></w:r>{result}<w:r><w:rPr><w:sz w:val="50"/></w:rPr><w:fldChar w:fldCharType="end"/></w:r>"#
+                )
+            };
+            let body = format!(r#"<w:p><w:r><w:rPr><w:sz w:val="16"/></w:rPr><w:t>Counter </w:t></w:r>{field}</w:p>"#);
+            let mut d = wordcraft_docx::read(&docx(&body, &[("styles", "styles", "styles.xml")], &[("word/styles.xml", &styles)])).unwrap();
+            for _ in 0..2 {
+                let p = paras(&d)[0];
+                let props = p.props_of_char("Counter ".len());
+                assert_eq!(p.props_at(0).size, Some(8.0));
+                assert_eq!(props.size, result_pr.starts_with("<w:sz").then_some(8.0), "simple={simple}, result={result_pr}");
+                assert_eq!(props.style.as_deref(), result_pr.starts_with("<w:rStyle").then_some("Result"));
+                assert_eq!(props.italic, None);
+                assert!(
+                    matches!(&p.objects[0], InlineObject::Field { instr, result, locked: true, dirty: true, .. } if instr == "PAGE" && result == "7")
+                );
+                d = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn empty_field_keeps_begin_props() {
+    let d = read_body(
+        r#"<w:p><w:r><w:rPr><w:sz w:val="12"/><w:i/></w:rPr><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>PAGE</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:sz w:val="40"/></w:rPr><w:t/></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#,
+    );
+    let p = paras(&d)[0];
+    assert_eq!(p.props_at(0).size, Some(6.0));
+    assert_eq!(p.props_at(0).italic, Some(true));
+    assert!(matches!(&p.objects[0], InlineObject::Field { result, .. } if result.is_empty()));
+}
