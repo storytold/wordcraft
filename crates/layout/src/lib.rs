@@ -1025,6 +1025,9 @@ fn layout_box(
     let mut prev_listed = false;
     let mut prev_style: Option<(String, bool)> = None;
     let mut last_top = 0.0f32;
+    // Word has no frames in a text box: a framed paragraph there (its style's frame, usually)
+    // runs with the box's text (#2357).
+    let frames = !matches!(story, StoryRef::Part(id) if ctx.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox));
     for (i, b) in blocks.iter().enumerate() {
         last_top = y;
         let mut path = prefix.to_vec();
@@ -1037,7 +1040,7 @@ fn layout_box(
                 // A text frame (a footer's page number in a frame, say) is placed apart, like a
                 // floating object, and the text after it wraps around it; it takes no room in
                 // the flow.
-                if let Some(fr) = pl.rp.frame.clone() {
+                if let Some(fr) = pl.rp.frame.clone().filter(|_| frames) {
                     let fw = fr.w.unwrap_or_else(|| natural_width(&pl)).clamp(1.0, 1584.0);
                     let pf = if (fw - width).abs() > 0.01 { ctx.para_labelled(p, fw, table, &[], label) } else { pl };
                     let h = match fr.h {
