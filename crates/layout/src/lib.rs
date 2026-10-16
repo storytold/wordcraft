@@ -270,8 +270,7 @@ pub enum Placed {
         row: usize,
         cell: usize,
         story: StoryRef,
-        /// Its row is exactly as tall as it says and the content is taller: what runs past the
-        /// cell is cut off when drawn, as in Word.
+        /// Overflow in an exact-height or turned cell is cut off at its edges when drawn.
         clip: bool,
     },
     /// The area of a picture, shape or text box, for hit testing, selection handles and dragging

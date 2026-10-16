@@ -1206,6 +1206,9 @@ mod tests {
         let ink = |dir: TextDirection| {
             let mut d = Document::from_text("before\nafter");
             let mut t = wordcraft_doc::Table::new(1, 2, 400.0);
+            // Keep this orientation check independent of automatic row height.
+            t.rows[0].props.height = Some(160.0);
+            t.rows[0].props.height_rule = wordcraft_doc::props::HeightRule::Exact;
             t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("WWWWWWWWWWWW", Default::default()))];
             t.rows[0].cells[0].props.text_direction = dir;
             d.insert_block(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
@@ -1218,6 +1221,52 @@ mod tests {
         assert_eq!(ink(TextDirection::Horizontal), 0, "horizontal text stays in its line");
         assert!(ink(TextDirection::Down) > 30, "down");
         assert!(ink(TextDirection::Up) > 30, "up");
+    }
+
+    #[test]
+    fn automatic_turned_cell_clips() {
+        use wordcraft_doc::props::{LineSpacing, TextDirection};
+        for turn in [TextDirection::Up, TextDirection::Down] {
+            let mut d = Document::new();
+            let mut t = wordcraft_doc::Table::new(1, 1, 60.0);
+            t.props.style = None;
+            t.props.fixed = true;
+            t.props.cell_margins = Some([0.0; 4]);
+            let mut p = wordcraft_doc::Paragraph::with_text(&"W".repeat(40), Default::default());
+            p.props.space_before = Some(0.0);
+            p.props.space_after = Some(0.0);
+            p.props.line_spacing = Some(LineSpacing::Exactly(16.0));
+            t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+            t.rows[0].cells[0].props.text_direction = turn;
+            d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t))];
+            let mut l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+            let rect = l.pages[0]
+                .items
+                .iter()
+                .find_map(|it| match it {
+                    wordcraft_layout::Placed::Cell { rect, clip: true, .. } => Some(*rect),
+                    _ => None,
+                })
+                .unwrap();
+            assert!((rect.h - 16.0).abs() < 0.01, "{rect:?}");
+            let (left, top, right, bottom) = (rect.x as u32, rect.y as u32, rect.right() as u32, rect.bottom() as u32);
+            let ink = |img: &Rendered, xs: std::ops::Range<u32>, ys: std::ops::Range<u32>| {
+                xs.flat_map(|x| ys.clone().map(move |y| (x, y))).filter(|(x, y)| img.pixel(*x, *y)[0] < 128).count()
+            };
+            let outside = |img: &Rendered| ink(img, left - 20..left, top..bottom) + ink(img, right..right + 20, top..bottom);
+            let img = render_page(&d, &l.pages[0], 1.0, &RenderOptions::default());
+            assert!(ink(&img, left..right, top..bottom) > 30, "turned ink remains visible: {turn:?}");
+            assert_eq!(outside(&img), 0, "overflowing columns are clipped: {turn:?}");
+            assert_eq!(ink(&img, left..right, bottom..bottom + 20), 0, "short rows do not paint below their edge");
+            // Removing the clip must expose ink, so the bounds check catches a lost clip.
+            for it in &mut l.pages[0].items {
+                if let wordcraft_layout::Placed::Cell { clip, .. } = it {
+                    *clip = false;
+                }
+            }
+            let unclipped = render_page(&d, &l.pages[0], 1.0, &RenderOptions::default());
+            assert!(outside(&unclipped) > 0, "the negative control exposes overflow: {turn:?}: {}", outside(&unclipped));
+        }
     }
 
     /// Shape Effects (#275): an outer shadow paints dark pixels beside the shape on the side it is
