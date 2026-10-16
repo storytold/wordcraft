@@ -93,6 +93,7 @@ files it was given rather than guarding against other software on the computer.
 | `render_page` | a page as PNG |
 | `parity` | feature coverage |
 | `screenshot`, `click`, `key`, `ui_inspect` | app only (`--connect`) |
+| `wait_for_request`, `reply_to_request` | Ask Agent, app only (`--connect`): see [Ask Agent](#ask-agent) |
 
 `insert.picture` and `insert.icon` leave the caret after the new picture, so typing next doesn't
 replace it; Picture Format commands (`picture.*`, `arrange.*`) still act on it.
@@ -100,6 +101,18 @@ replace it; Picture Format commands (`picture.*`, `arrange.*`) still act on it.
 Resources: `wordcraft://document` (inspect) and `wordcraft://commands`.
 
 The acceptance test `crates/mcp/src/tests.rs` writes a formatted document using MCP only.
+
+## Ask Agent
+
+With `--connect`, the person can hand work to the agent from the WordCraft window: they select
+text, click **Ask Agent** (the chip beside the selection, Help › Agents, or Ctrl+Shift+O) and type an instruction. Two tools carry it, for any MCP client:
+
+| Tool | What it does |
+|---|---|
+| `wait_for_request` | waits up to `timeout_s` (default 30, at most 60) for the next request: `{id, instruction, history, selection: {text, anchor, focus}, document: {title, saved, language}}`, or `{none: true}` |
+| `reply_to_request` | `{id, text, done?}`: sends a progress note (`done: false`) or final answer (`done: true`) shown in the bubble under the selection |
+
+The agent's loop: `wait_for_request`; send progress notes with `reply_to_request {id, text: "Working…", done: false}`; edit the document with commands (tagged with `request_id`); answer with `reply_to_request {id, text: "Done."}`; then `wait_for_request` again. The bubble offers Keep (accepts edits), Undo (reverts the agent's edits in one step), or follow-up instructions.
 
 ## Character and paragraph properties
 

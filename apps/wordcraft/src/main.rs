@@ -447,11 +447,15 @@ fn main() -> eframe::Result {
                 app.mac_titlebar = bar;
             }
             let mut key_file = None;
-            if let Some(port) = control_port
-                && let Some((rx, file)) = control_server::start(port, cc.egui_ctx.clone(), wordcraft_control_key::settings_dir().as_deref())
-            {
-                app = app.with_control(rx);
-                key_file = file;
+            if let Some(port) = control_port {
+                // Ask Agent's queue, shared by the window and the control channel's connections.
+                let agents = wordcraft_ui_egui::AgentHub::default();
+                if let Some((rx, file)) =
+                    control_server::start(port, cc.egui_ctx.clone(), wordcraft_control_key::settings_dir().as_deref(), agents.clone())
+                {
+                    app = app.with_control(rx).with_agent_hub(agents);
+                    key_file = file;
+                }
             }
             // Nothing to open (no files, no sample, no control channel driving the editor): start
             // on File › Home, as Word does (#766), unless the Start screen option is off. Files

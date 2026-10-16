@@ -1072,6 +1072,11 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.rect(3.0, 3.0, 17.0, 17.0, c);
             pen.fill(&[(8.0, 6.5), (8.0, 13.5), (14.0, 10.0)], a);
         }
+        // Ask Agent: a speech bubble with a four-pointed spark in it (drawn here, our own).
+        "askAgent" => {
+            pen.closed(&[(2.5, 3.5), (17.5, 3.5), (17.5, 13.5), (9.0, 13.5), (5.0, 17.0), (5.5, 13.5), (2.5, 13.5)], c);
+            pen.fill(&[(10.0, 5.0), (11.0, 7.6), (13.5, 8.5), (11.0, 9.4), (10.0, 12.0), (9.0, 9.4), (6.5, 8.5), (9.0, 7.6)], a);
+        }
         // A page with a filled band at the top and a style mark: the document's template.
         "documentTemplate" => {
             pen.page(4.0, 2.0, 16.0, 18.0);

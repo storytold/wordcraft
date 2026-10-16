@@ -108,3 +108,14 @@ and their parameter documentation. Search is case-insensitive across IDs, labels
 and parameter descriptions. Listing commands never discovers printers, submits a job or opens
 a dialog. Settings inspection is always available; submission becomes enabled when the native
 printer is ready, or when the browser host provides its print flow.
+
+## Ask Agent
+
+With the control channel enabled, an agent can receive instructions and edit selections from the WordCraft window:
+
+| Method | Params | Result |
+|---|---|---|
+| `agent.listen` | `timeoutMs?` (default 30000, max 60000), `agent?` (name) | `{id, instruction, history, selection: {text, anchor, focus}, document: {title, saved, language}}` or `{none: true}` |
+| `agent.reply` | `id`, `text`, `done?` (default true), `error?` | `{id, shown: true, done}` or `{id, cancelled: true}` |
+
+While a request is open, mutating commands are owned by the connection that claimed it (`request_id` tagged). Edits for the request join into one undo group. The bubble in the window shows progress notes (`done: false`), final answer (`done: true`), Keep (retains changes), Undo (reverts all edits in the group), and follow-up prompts. Disconnecting returns an unanswered request to the queue.

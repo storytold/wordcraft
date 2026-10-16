@@ -2007,6 +2007,8 @@ fn help(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Agents", None, app, |ui, app| {
         big(ui, app, "macros", "Commands", "ui.dialog", json!({"name": "commands"}), false);
+        // An agent connected to the control channel takes the request (`ask_agent`).
+        big(ui, app, "askAgent", "Ask\nAgent", "ui.askAgent", json!({}), false);
     });
 }
 

@@ -26,7 +26,14 @@ impl ToolResult {
         Self::text(serde_json::to_string_pretty(v).unwrap_or_default())
     }
     pub fn error(t: impl Into<String>) -> Self {
-        Self { content: vec![json!({"type": "text", "text": t.into()})], is_error: true }
+        let message = t.into();
+        let text = match message.split_once(':') {
+            Some((code, _)) if !code.is_empty() && code.chars().all(|c| c.is_ascii_uppercase() || c == '_') => {
+                json!({"errorCode":code,"error":message}).to_string()
+            }
+            _ => message,
+        };
+        Self { content: vec![json!({"type": "text", "text": text})], is_error: true }
     }
     pub fn image(png_base64: String, info: &Value) -> Self {
         Self {
@@ -49,7 +56,7 @@ fn obj(props: Value, req: &[&str]) -> Value {
     json!({"type": "object", "properties": props, "required": req})
 }
 fn tool(name: &str, title: &str, desc: &str, schema: Value, ro: bool) -> Value {
-    json!({"name": name, "title": title, "description": desc, "inputSchema": schema, "annotations": {"title": title, "readOnlyHint": ro, "openWorldHint": false}})
+    json!({"name": name, "title": title, "description": desc, "inputSchema": schema, "annotations": {"title": title, "readOnlyHint": ro, "destructiveHint": false, "openWorldHint": false}})
 }
 
 pub fn tool_definitions() -> Value {
@@ -151,8 +158,40 @@ pub fn tool_definitions() -> Value {
             obj(json!({}), &[]),
             true
         ),
+        tool(
+            "wait_for_request",
+            "Wait for an Ask Agent request",
+            WAIT_DESCRIPTION,
+            json!({"type":"object","properties":{"timeout_s":{"type":"number","minimum":0,"default":30,"description":"Seconds to wait; capped at 60."},"agent":{"type":"string","description":"Optional display name; otherwise initialized MCP client name."}},"required":[],"additionalProperties":false}),
+            true
+        ),
+        tool(
+            "reply_to_request",
+            "Reply to an Ask Agent request",
+            REPLY_DESCRIPTION,
+            obj(
+                json!({
+                    "id": n("The request's id, from wait_for_request"),
+                    "text": s("What to show the person: a progress note, or your answer"),
+                    "error": s("Failure message: closes the request as failed"),
+                    "done": {"type": "boolean", "description": "true (default) closes the request; false is a progress note"},
+                }),
+                &["id"]
+            ),
+            false
+        ),
     ])
 }
+
+const WAIT_DESCRIPTION: &str = "Ask Agent: wait for the next request from the WordCraft window. \
+Returns {id, instruction, history, selection, document}, or {none: true} when nothing came within timeout_s. \
+Edit the document with normal commands tagged with request id, and answer with reply_to_request.";
+
+const REPLY_DESCRIPTION: &str = "Ask Agent: show a note or your answer for a request in the WordCraft window. \
+Send a progress note with done: false, or your final answer with done: true (the default), which closes the request.";
+
+/// Longest `wait_for_request` wait, in seconds (the app's own cap on `agent.listen`).
+const MAX_WAIT_S: f64 = 60.0;
 
 fn exec(b: &mut dyn Backend, id: &str, params: Value) -> Result<Value, String> {
     b.call("engine.execute", json!({"command": id, "params": params}))
@@ -271,6 +310,44 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
         "click" => wrap(b.call("ui.click", a.clone())),
         "key" => wrap(b.call("ui.key", a.clone())),
         "ui_inspect" => wrap(b.call("ui.inspect", json!({}))),
+        "wait_for_request" | "reply_to_request" if !b.has_ui() => ToolResult::error(crate::ASK_NEEDS_APP),
+        "wait_for_request" => {
+            if a.as_object().is_none_or(|o| o.keys().any(|k| !["timeout_s", "agent"].contains(&k.as_str()))) {
+                return ToolResult::error("INVALID_PARAMS: unknown wait parameter");
+            }
+            let secs = match a.get("timeout_s") {
+                None => 30.0,
+                Some(v) => match v.as_f64().filter(|n| n.is_finite() && *n >= 0.0) {
+                    Some(n) => n.min(MAX_WAIT_S),
+                    None => return ToolResult::error("INVALID_PARAMS: timeout_s must be nonnegative"),
+                },
+            };
+            let mut params = json!({"timeoutMs":(secs*1000.0).floor() as u64});
+            if let Some(agent) = a.get("agent") {
+                if !agent.is_string() {
+                    return ToolResult::error("INVALID_PARAMS: agent must be a string");
+                }
+                params["agent"] = agent.clone();
+            }
+            wrap(b.call("agent.listen", params))
+        }
+        "reply_to_request" => {
+            let Some(id) = a.get("id").and_then(Value::as_u64) else {
+                return ToolResult::error("missing `id`: the request's id from wait_for_request");
+            };
+            let mut params = json!({"id": id});
+            if let Some(text) = st("text") {
+                params["text"] = json!(text);
+            }
+            if let Some(error) = st("error") {
+                params["error"] = json!(error);
+            }
+            if params.get("text").is_none() && params.get("error").is_none() {
+                return ToolResult::error("missing `text` (what to show the person) or `error`");
+            }
+            params["done"] = json!(a.get("done").and_then(Value::as_bool).unwrap_or(true));
+            wrap(b.call("agent.reply", params))
+        }
         other => ToolResult::error(format!("unknown tool `{other}`")),
     }
 }

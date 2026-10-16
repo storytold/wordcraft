@@ -120,6 +120,87 @@ fn headless_sessions_keep_the_dictionary_in_memory() {
     assert!(h.session.user_dict_path.is_none());
 }
 
+/// Ask Agent: both tools are listed for every client, and without the app they say how to get it
+/// instead of failing obscurely.
+#[test]
+fn ask_agent_tools_are_listed_and_need_the_app() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    let tools = call(&mut s, 1, "tools/list", json!({}));
+    let names: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().filter_map(|t| t["name"].as_str()).collect();
+    assert!(names.contains(&"wait_for_request") && names.contains(&"reply_to_request"), "{names:?}");
+    for (name, args) in [("wait_for_request", json!({})), ("reply_to_request", json!({"id": 1, "text": "Done."}))] {
+        let r = call(&mut s, 2, "tools/call", json!({"name": name, "arguments": args}));
+        assert_eq!(r["result"]["isError"], true, "{name}: {r}");
+        let text = r["result"]["content"][0]["text"].as_str().unwrap_or("");
+        assert!(text.contains("WordCraft window") && text.contains("--connect"), "{name}: {text}");
+    }
+}
+
+/// A stand-in for the app's Ask Agent side: hands out one request, records replies.
+struct FakeAgentApp {
+    calls: std::sync::Arc<std::sync::Mutex<Vec<(String, Value)>>>,
+    request: Option<Value>,
+}
+
+impl crate::backend::Backend for FakeAgentApp {
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        self.calls.lock().unwrap().push((method.to_string(), params.clone()));
+        match method {
+            "agent.listen" => Ok(self.request.take().unwrap_or(json!({"none": true}))),
+            "agent.reply" => Ok(json!({"id": params["id"], "shown": true, "done": params["done"]})),
+            other => Err(format!("unexpected {other}")),
+        }
+    }
+    fn has_ui(&self) -> bool {
+        true
+    }
+    fn describe(&self) -> String {
+        "fake app".into()
+    }
+}
+
+fn ask_request() -> Value {
+    json!({"id": 7, "instruction": "shorten this", "selection": {"text": "Kilns fire clay slowly.", "anchor": {"story": "body", "path": [0], "off": 0}, "focus": {"story": "body", "path": [0], "off": 23}, "truncated": false}, "document": {"title": "Notes.docx", "language": "en-US"}})
+}
+
+#[test]
+fn ask_agent_tools_carry_the_contract() {
+    let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut s = Server::new(Box::new(FakeAgentApp { calls: calls.clone(), request: Some(ask_request()) }));
+    let r = tool(&mut s, "wait_for_request", json!({"timeout_s": 5}));
+    assert_eq!(r["id"], 7);
+    assert_eq!(r["selection"]["text"], "Kilns fire clay slowly.");
+    assert_eq!(tool(&mut s, "wait_for_request", json!({})), json!({"none": true}));
+    // The wait is bounded whatever the agent asks for.
+    tool(&mut s, "wait_for_request", json!({"timeout_s": 5000}));
+    let bad = call(&mut s, 3, "tools/call", json!({"name":"wait_for_request","arguments":{"timeout_s":-3}}));
+    assert_eq!(bad["result"]["isError"], true);
+    let waits: Vec<Value> = calls.lock().unwrap().iter().filter(|(m, _)| m == "agent.listen").map(|(_, p)| p["timeoutMs"].clone()).collect();
+    assert_eq!(waits, vec![json!(5000), json!(30000), json!(60000)]);
+    let r = tool(&mut s, "reply_to_request", json!({"id": 7, "text": "Cut it to one sentence."}));
+    assert_eq!(r["shown"], true);
+    let (m, p) = calls.lock().unwrap().last().cloned().unwrap();
+    assert_eq!((m.as_str(), p), ("agent.reply", json!({"id": 7, "text": "Cut it to one sentence.", "done": true})));
+    tool(&mut s, "reply_to_request", json!({"id": 7, "text": "Halfway", "done": false}));
+    assert_eq!(calls.lock().unwrap().last().unwrap().1["done"], false);
+    for bad in [json!({"text": "x"}), json!({"id": "seven", "text": "x"}), json!({"id": 7})] {
+        let r = call(&mut s, 3, "tools/call", json!({"name": "reply_to_request", "arguments": bad}));
+        assert_eq!(r["result"]["isError"], true, "{r}");
+    }
+}
+
+#[test]
+fn reply_to_request_reports_failure() {
+    let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut s = Server::new(Box::new(FakeAgentApp { calls: calls.clone(), request: Some(ask_request()) }));
+    tool(&mut s, "reply_to_request", json!({"id": 7, "error": "Provider unavailable"}));
+    assert_eq!(calls.lock().unwrap().last().unwrap().1, json!({"id": 7, "error": "Provider unavailable", "done": true}));
+    for bad in [json!({"id": 7}), json!({"id": "bad"})] {
+        let r = call(&mut s, 3, "tools/call", json!({"name": "reply_to_request", "arguments": bad}));
+        assert_eq!(r["result"]["isError"], true, "{r}");
+    }
+}
+
 /// A backend whose paragraph break is refused while text insertion would succeed.
 struct RefusesParagraph {
     calls: std::sync::Arc<std::sync::Mutex<Vec<String>>>,

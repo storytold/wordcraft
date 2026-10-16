@@ -23,6 +23,9 @@ const _: () = assert!(BIG_ICON_Y + 16.0 <= BIG_LABEL_Y);
 /// Shortcut text for a command (`⌘B` on macOS, `Ctrl+B` elsewhere): its first key in effect,
 /// custom keys included (Customize Keyboard).
 pub fn shortcut_text(app: &WordApp, id: &str) -> String {
+    if id == "ui.askAgent" {
+        return key_text(crate::ask_agent::SHORTCUT);
+    }
     let keys = app.session.keymap.keys_for(&app.session.registry, id);
     keys.first().map(|k| key_text(k)).unwrap_or_default()
 }
@@ -44,6 +47,8 @@ fn tooltip(app: &WordApp, resp: Response, label: &str, id: &str) -> Response {
     let sc = shortcut_text(app, id);
     let desc = app.session.registry.get(id).map(|s| crate::i18n::location(s.location)).unwrap_or_default();
     let enabled = app.session.registry.get(id).map(|s| (s.enabled)(&app.session).is_none()).unwrap_or(true);
+    // Ask Agent says why it is off (no control channel, no agent listening) and how to fix it.
+    let why = (id == "ui.askAgent").then(|| app.ask_agent.unavailable()).flatten();
     resp.on_hover_ui(|ui| {
         ui.set_max_width(260.0);
         if sc.is_empty() {
@@ -56,6 +61,9 @@ fn tooltip(app: &WordApp, resp: Response, label: &str, id: &str) -> Response {
         }
         if !enabled {
             ui.label(egui::RichText::new(tl!("Not available right now")).small().weak());
+        }
+        if let Some(why) = why {
+            ui.label(egui::RichText::new(why.shown()).small().weak());
         }
     })
 }
@@ -99,6 +107,8 @@ pub fn enabled(app: &WordApp, id: &str) -> bool {
         // Zotero: one command at a time, and only in the desktop app.
         None if id.starts_with("ui.zotero.") => app.zotero.busy.is_none() && !cfg!(target_arch = "wasm32"),
         None if id == "ui.linkTextBox" => enabled(app, "shape.link"),
+        // Ask Agent: a control channel with an agent listening on it.
+        None if id == "ui.askAgent" => app.ask_agent.unavailable().is_none(),
         None if id == "ui.crop" => crate::crop::can_toggle(app),
         None => id.starts_with("ui."),
     }

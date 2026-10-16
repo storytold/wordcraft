@@ -2604,6 +2604,21 @@ preview	Title	Tytuł
 # Backstage › Recover (#586)
 	Recover	Odzyskaj
 
+# Ask Agent
+	Any	Dowolny
+	Ask Agent	Zapytaj agenta
+	Held by Agent	Zarezerwowane przez agenta
+	Keep	Zachowaj
+	No agent is listening: ask your agent to wait for requests	Żaden agent nie nasłuchuje: poproś agenta, by czekał na prośby
+	Reply to refine…	Odpowiedz, aby doprecyzować…
+	Start WordCraft with --control to let an agent connect	Uruchom WordCraft z --control, aby agent mógł się połączyć
+	The document changed since the agent's edits; use Undo in the Edit menu	Dokument zmienił się od zmian agenta; użyj Cofnij w menu Edycja
+	Undo all of the agent's edits	Cofnij wszystkie zmiany agenta
+	Waiting for an agent…	Czekanie na agenta…
+	What should the agent do?	Co ma zrobić agent?
+	Working on it…	Pracuje…
+	Ask\nAgent	Zapytaj\nagenta
+
 # Page Setup › Mirror margins (#1239)
 	Mirror margins	Marginesy lustrzane
 

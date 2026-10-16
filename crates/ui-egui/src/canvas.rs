@@ -1293,7 +1293,19 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         // Anchor only to visible selection geometry. A selection can span pages, and its
         // document-first line may be scrolled offscreen; using it would pin the toolbar to an
         // old screen position unrelated to the visible selection.
+        // Ask Agent sits under the whole visible selection.
+        app.ask_agent.selection = screen_rects.iter().filter(|r| r.intersects(visible_clip)).copied().reduce(Rect::union);
         app.canvas.mini_anchor = crate::mini_toolbar::visible_anchor(screen_rects, visible_clip);
+        // Ask Agent: text an agent is working on, outlined in its colour.
+        for (a, b, [r, g, bl]) in crate::ask_agent::held_ranges(app) {
+            for (pi, hr) in layout.selection_rects(&app.session.doc, &a, &b, app.session.page_hint) {
+                if let Some(pr) = rects.get(pi) {
+                    let scale = layout.pages.get(pi).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
+                    let sr = Rect::from_min_size(pos2(pr.min.x + hr.x * scale, pr.min.y + hr.y * scale), vec2(hr.w * scale, hr.h * scale));
+                    painter.rect_stroke(sr.expand(1.0), 2.0, Stroke::new(1.5, Color32::from_rgb(r, g, bl)), egui::StrokeKind::Outside);
+                }
+            }
+        }
         // Content controls: the frame of the one the caret is in (all of them in Design Mode).
         crate::content_controls::paint(app, &painter, &t, &layout, &rects, geo.scale);
         // Read Aloud: the sentence being spoken.
@@ -1582,6 +1594,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     {
         crate::mini_toolbar::show(app, ui.ctx(), sel, out.inner_rect);
     }
+    // Ask Agent: the instruction box at the selection, and the agent's answers (`ask_agent`).
+    crate::ask_agent::show(app, ui.ctx(), area);
     if app.session.view.read_mode {
         // Fixed navigation chrome, independent of the horizontally moving columns.
         let step = app.session.view.read_width * app.canvas.scale + GAP;
@@ -2746,8 +2760,14 @@ fn context_suggestions(app: &mut WordApp) {
 
 /// Caret position on screen.
 pub fn caret_screen(app: &mut WordApp) -> Option<(Pos2, f32)> {
+    let focus = app.session.sel.focus.clone();
+    pos_screen(app, &focus)
+}
+
+/// Where a caret at `pos` would be on screen: its top and height.
+pub fn pos_screen(app: &mut WordApp, pos: &Pos) -> Option<(Pos2, f32)> {
     let l = app.session.layout();
-    let c = l.caret_on(&app.session.sel.focus, app.session.page_hint)?;
+    let c = l.caret_on(pos, app.session.page_hint)?;
     let p = page_to_screen(app, c.page, c.x, c.top)?;
     let scale = app
         .canvas
@@ -2865,6 +2885,21 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     item(ui, app, "Paragraph…", "ui.dialog", json!({"name": "paragraph"}));
     item(ui, app, "Link…", "ui.dialog", json!({"name": "link"}));
     item(ui, app, "New Comment", "review.newComment", json!({}));
+    // Ask Agent…, when the app has a control channel an agent can listen on; greyed out, with
+    // the reason, while no agent listens.
+    if app.ask_agent.hub.is_some() {
+        let why = app.ask_agent.unavailable();
+        let sc = crate::widgets::shortcut_text(app, "ui.askAgent");
+        let resp = ui.add_enabled(why.is_none(), egui::Button::new(tl!("Ask Agent…")).shortcut_text(sc));
+        let resp = match why {
+            Some(why) => resp.on_disabled_hover_text(why.shown()),
+            None => resp,
+        };
+        if resp.clicked() {
+            let _ = app.run("ui.askAgent", json!({}));
+            ui.close();
+        }
+    }
     if !wordcraft_engine::cmd::fields::selected(&app.session).is_empty() {
         ui.separator();
         item(ui, app, tl!("Update Field"), "references.updateFields", json!({}));

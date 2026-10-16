@@ -2632,3 +2632,18 @@ preview	Title	Naslov
 	Bottom Right Cell	Donja desna ćelija
 	Inside Horizontal Border	Unutarnji vodoravni obrub
 	Inside Vertical Border	Unutarnji okomiti obrub
+
+# Ask Agent
+	Any	Bilo koji
+	Ask Agent	Pitaj agenta
+	Held by Agent	Zadržao agent
+	Keep	Zadrži
+	No agent is listening: ask your agent to wait for requests	Nijedan agent ne sluša: zamolite agenta da čeka zahtjeve
+	Reply to refine…	Odgovorite za doradu…
+	Start WordCraft with --control to let an agent connect	Pokrenite WordCraft s --control da se agent može povezati
+	The document changed since the agent's edits; use Undo in the Edit menu	Dokument se promijenio nakon agentovih izmjena; upotrijebite Poništi u izborniku Uređivanje
+	Undo all of the agent's edits	Poništi sve agentove izmjene
+	Waiting for an agent…	Čeka se agent…
+	What should the agent do?	Što agent treba učiniti?
+	Working on it…	Radi na tome…
+	Ask\nAgent	Pitaj\nagenta

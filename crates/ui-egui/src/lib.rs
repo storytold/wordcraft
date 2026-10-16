@@ -22,6 +22,7 @@ macro_rules! tl {
 
 pub mod a11y;
 pub mod a11y_pane;
+pub mod ask_agent;
 pub mod async_saves;
 pub mod autoscroll;
 pub mod backstage;
@@ -88,6 +89,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use wordcraft_engine::Session;
 
+pub use ask_agent::AgentHub;
 pub use control::ControlRequest;
 pub use file_dialogs::{FileDialogAnswer, FileDialogRequest, open_filters};
 
@@ -449,6 +451,8 @@ pub struct WordApp {
     /// macOS: the title bar's height and where its content starts, around the traffic lights.
     pub mac_titlebar: chrome::MacTitleBar,
     control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
+    /// Ask Agent: the control channel's request queue and the instruction box (`ui.askAgent`).
+    pub ask_agent: ask_agent::AskAgent,
     shot_token: u64,
     queued_shots: Vec<(u64, f64, u32)>,
     pending_shots: Vec<(u64, Option<String>, std::sync::mpsc::Sender<Value>, f64)>,
@@ -586,6 +590,7 @@ impl WordApp {
             integrated_titlebar: false,
             mac_titlebar: chrome::MacTitleBar::default(),
             control_rx: None,
+            ask_agent: ask_agent::AskAgent::default(),
             shot_token: 0,
             queued_shots: Vec::new(),
             pending_shots: Vec::new(),
@@ -644,6 +649,13 @@ impl WordApp {
 
     pub fn with_control(mut self, rx: std::sync::mpsc::Receiver<ControlRequest>) -> Self {
         self.control_rx = Some(rx);
+        self
+    }
+
+    /// The control channel's Ask Agent queue, shared with its connection threads, which answer
+    /// `agent.listen` and `agent.reply` from it ([`ask_agent`]).
+    pub fn with_agent_hub(mut self, hub: AgentHub) -> Self {
+        self.ask_agent.hub = Some(hub);
         self
     }
 
@@ -751,6 +763,10 @@ impl WordApp {
     /// Close, Envelopes, Labels and Finish & Merge on a document with unsaved changes first ask
     /// Save / Don't Save / Cancel, and the command runs once that is answered (`ui.saveChanges`).
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        if let Some(why) = ask_agent::held(self, id) {
+            self.status(why.clone());
+            return Err(why);
+        }
         if id == "file.recover" && params.as_object().is_none_or(|p| p.is_empty()) {
             self.ui.backstage = true;
             self.ui.backstage_page = "recover".into();
@@ -1492,6 +1508,9 @@ impl WordApp {
                         .into(),
                 ));
             }
+            // Ask Agent… (Help › Agents, the context menu, Ctrl+Shift+O): an agent connected to the
+            // control channel takes the request (`ask_agent`).
+            "ui.askAgent" => return Some(ask_agent::command(self, p)),
             "ui.discord" => {
                 self.canvas.open_url = Some("https://discord.gg/artcraft".into());
                 json!({})
@@ -1742,6 +1761,7 @@ impl WordApp {
 
     /// Per-frame logic before layout: control requests, screenshots, shortcuts, file drops.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        ask_agent::escape(self, ctx);
         let lang = i18n::Lang::from_pref(&self.ui.language);
         i18n::set_current(lang);
         // New documents are written in the interface's language when WordCraft can proof it

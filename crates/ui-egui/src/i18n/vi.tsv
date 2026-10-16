@@ -2625,6 +2625,21 @@
 	Hidden bookmarks	Dấu trang ẩn
 	Sort by:	Sắp xếp theo:
 
+# Ask Agent
+	Any	Bất kỳ
+	Ask Agent	Hỏi tác tử
+	Held by Agent	Tác tử đang giữ
+	Keep	Giữ
+	No agent is listening: ask your agent to wait for requests	Không có tác tử nào đang nghe: hãy yêu cầu tác tử chờ yêu cầu
+	Reply to refine…	Trả lời để tinh chỉnh…
+	Start WordCraft with --control to let an agent connect	Khởi động WordCraft với --control để tác tử kết nối
+	The document changed since the agent's edits; use Undo in the Edit menu	Tài liệu đã thay đổi sau khi tác tử sửa; dùng Hoàn tác trong menu Chỉnh sửa
+	Undo all of the agent's edits	Hoàn tác mọi chỉnh sửa của tác tử
+	Waiting for an agent…	Đang chờ tác tử…
+	What should the agent do?	Tác tử nên làm gì?
+	Working on it…	Đang thực hiện…
+	Ask\nAgent	Hỏi\nđại lý
+
 # Page Setup › Mirror margins (#1239)
 	Mirror margins	Lề đối xứng
 

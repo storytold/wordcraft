@@ -22,7 +22,7 @@ const INSTRUCTIONS: &str = "WordCraft is a word processor (a Microsoft Word clon
 parameters with list_commands and run them with execute (or several with batch). Positions are \
 {story:\"body\", path:[block,(row,cell,block)...], off:byteOffset}. Typical flow: new_document → type_text \
 \"Hello\" → execute text.newParagraph → execute para.style {style:\"Heading 1\"} → select_text {text:\"Hello\"} → \
-execute format.bold → inspect_document to verify → render_page to look at the result → save {path:\"out.docx\"}.";
+execute format.bold → inspect_document to verify → render_page to look at the result → save {path:\"out.docx\"}. Ask Agent: wait_for_request waits for an instruction from the WordCraft window; reply_to_request answers.";
 
 /// Resource URIs.
 pub const DOC_URI: &str = "wordcraft://document";
@@ -128,6 +128,9 @@ impl Server {
     fn request(&mut self, method: &str, params: &Value) -> Result<Value, (i64, String)> {
         match method {
             "initialize" => {
+                if let Some(name) = params.pointer("/clientInfo/name").and_then(Value::as_str) {
+                    self.backend.set_client(name);
+                }
                 let asked = params.get("protocolVersion").and_then(Value::as_str).unwrap_or(PROTOCOL_VERSION);
                 let version = if SUPPORTED_VERSIONS.contains(&asked) { asked } else { PROTOCOL_VERSION };
                 Ok(json!({
