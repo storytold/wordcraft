@@ -129,3 +129,60 @@ fn a_date_field_in_a_header_is_refreshed_too() {
         .collect();
     assert_eq!(found, [today], "the header's field is refreshed as well as the body's");
 }
+
+/// A minimal Word 97-2003 file whose only paragraph holds a `DATE` field cached as " 2001":
+/// FIB, one compressed text piece, and the Clx that points at it.
+fn binary_doc_with_stale_date() -> Vec<u8> {
+    const TEXT_FC: usize = 0x600;
+    let text = "\x13DATE \\@ \"yyyy\"\x14 2001\x15\r";
+    let n = text.chars().count() as u32;
+    let mut plc = Vec::new();
+    for cp in [0u32, n] {
+        plc.extend_from_slice(&cp.to_le_bytes());
+    }
+    plc.extend_from_slice(&[0, 0]);
+    plc.extend_from_slice(&((2 * TEXT_FC as u32) | 0x4000_0000).to_le_bytes());
+    plc.extend_from_slice(&0u16.to_le_bytes());
+    let mut clx = vec![0x02u8];
+    clx.extend_from_slice(&(plc.len() as u32).to_le_bytes());
+    clx.extend_from_slice(&plc);
+    let clx_at = 0x40usize;
+    let mut table = vec![0u8; clx_at];
+    table.extend_from_slice(&clx);
+
+    let mut word = vec![0u8; TEXT_FC];
+    word.extend(text.chars().map(|c| c as u8));
+    let put16 = |v: &mut Vec<u8>, at: usize, x: u16| v[at..at + 2].copy_from_slice(&x.to_le_bytes());
+    let put32 = |v: &mut Vec<u8>, at: usize, x: u32| v[at..at + 4].copy_from_slice(&x.to_le_bytes());
+    put16(&mut word, 0x00, 0xA5EC);
+    put16(&mut word, 0x02, 0x00C1);
+    put16(&mut word, 0x0A, 0x1000);
+    put16(&mut word, 0x0C, 0x00BF);
+    put16(&mut word, 0x20, 0x000E);
+    put16(&mut word, 0x3E, 0x0016);
+    put32(&mut word, 0x40, 0x1000);
+    put32(&mut word, 0x4C, n);
+    put16(&mut word, 0x98, 0x005D);
+    put32(&mut word, 0x9A + 33 * 8, clx_at as u32);
+    put32(&mut word, 0x9A + 33 * 8 + 4, clx.len() as u32);
+
+    let mut comp = cfb::CompoundFile::create(std::io::Cursor::new(Vec::new())).unwrap();
+    for (name, data) in [("WordDocument", &word), ("0Table", &table)] {
+        let mut s = comp.create_stream(format!("/{name}")).unwrap();
+        s.write_all(data).unwrap();
+    }
+    comp.into_inner().into_inner()
+}
+
+#[test]
+fn binary_doc_opened_by_extension_refreshes_date_fields() {
+    let bytes = binary_doc_with_stale_date();
+    // The same bytes under a `.docx` name are read by content, which refreshes the field.
+    let expected = fields(&wordcraft_engine::io::open_bytes("d.docx", &bytes).expect("opens by content"));
+    assert_eq!(expected.len(), 1);
+    assert!(!expected[0].1.contains("2001"), "reference should be refreshed: {expected:?}");
+    for name in ["d.doc", "d.dot"] {
+        let got = fields(&wordcraft_engine::io::open_bytes(name, &bytes).expect("opens"));
+        assert_eq!(got, expected, "{name}: DATE field stale after opening");
+    }
+}

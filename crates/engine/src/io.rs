@@ -191,7 +191,7 @@ fn read_bytes(name: &str, bytes: &[u8], password: Option<&str>, page: &wordcraft
     let mut doc = match ext.as_str() {
         "doc" | "dot" => {
             let (mut doc, encrypted) = open_binary_doc(bytes, password)?;
-            doc.ensure_nonempty();
+            opened(&mut doc);
             return Ok((doc, encrypted));
         }
         // Plain text goes through the formats importer: BOMs, unmarked UTF-16, Windows-1252.
