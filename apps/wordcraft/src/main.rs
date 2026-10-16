@@ -424,9 +424,8 @@ fn main() -> eframe::Result {
             let mut app = WordApp::new(session, services(file_dialog, &cc.egui_ctx));
             load_prefs(&mut app);
             load_user_dictionary(&mut app);
-            // A region chosen in File › Options replaces the system's for the first blank
-            // document too (#838).
-            if !sample && app.session.prefs.region.is_some() {
+            // Preferences apply to the initial blank document too.
+            if !sample {
                 let doc = app.session.blank_document();
                 app.session.set_document(doc);
             }

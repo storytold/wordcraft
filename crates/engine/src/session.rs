@@ -19,7 +19,7 @@ pub(crate) fn system_locale() -> Option<&'static str> {
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use wordcraft_doc::edit::Fragment;
-use wordcraft_doc::props::CharProps;
+use wordcraft_doc::props::{CharProps, LineSpacing};
 use wordcraft_doc::{Document, Path, Pos, StoryRef, Table};
 use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, NumeralMode, ViewMode};
 
@@ -480,11 +480,87 @@ pub struct MathEdit {
     pub pos: wordcraft_doc::math_edit::MathPos,
 }
 
+/// Formatting used for every new blank document.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DefaultFormatting {
+    pub font: String,
+    pub size: f32,
+    pub space_before: f32,
+    pub space_after: f32,
+    pub line_spacing: LineSpacing,
+}
+
+impl Default for DefaultFormatting {
+    fn default() -> Self {
+        DefaultFormatting {
+            font: wordcraft_doc::styles::BODY_FONT.into(),
+            size: 12.0,
+            space_before: 0.0,
+            space_after: 8.0,
+            line_spacing: LineSpacing::Multiple(1.15),
+        }
+    }
+}
+
+impl DefaultFormatting {
+    /// Copy the effective Normal style from a document into a new-document template.
+    pub fn from_normal(doc: &Document) -> Self {
+        let chr = doc.styles.resolve_char(Some("Normal"), &CharProps::default());
+        let para = doc.styles.resolve_para(&wordcraft_doc::ParaProps { style: Some("Normal".into()), ..Default::default() });
+        DefaultFormatting {
+            font: chr.font,
+            size: chr.size,
+            space_before: para.space_before,
+            space_after: para.space_after,
+            line_spacing: para.line_spacing,
+        }
+    }
+
+    /// Apply the saved Normal-template values to a new document's style defaults.
+    pub fn apply_to(&self, doc: &mut Document) {
+        doc.styles.default_chr.font = Some(self.font.clone());
+        doc.styles.default_chr.size = Some(self.size);
+        doc.styles.default_para.space_before = Some(self.space_before);
+        doc.styles.default_para.space_after = Some(self.space_after);
+        doc.styles.default_para.line_spacing = Some(self.line_spacing);
+    }
+
+    /// Reject formatting values that could make a new document invalid or impractical to lay out.
+    pub fn validate(&self) -> Result<(), CmdError> {
+        if self.font.trim().is_empty() || self.font.chars().count() > 255 || self.font.chars().any(char::is_control) {
+            return Err(CmdError::Params("`defaultFormatting.font` must be a font name of at most 255 characters".into()));
+        }
+        let points = |name: &str, value: f32| {
+            if value.is_finite() && (0.0..=1584.0).contains(&value) {
+                Ok(())
+            } else {
+                Err(CmdError::Params(format!("`defaultFormatting.{name}` must be between 0 and 1584 points")))
+            }
+        };
+        if !self.size.is_finite() || !(1.0..=1584.0).contains(&self.size) {
+            return Err(CmdError::Params("`defaultFormatting.size` must be between 1 and 1584 points".into()));
+        }
+        points("spaceBefore", self.space_before)?;
+        points("spaceAfter", self.space_after)?;
+        let (name, value) = match self.line_spacing {
+            LineSpacing::Multiple(value) => ("lineSpacing.value", value),
+            LineSpacing::AtLeast(value) | LineSpacing::Exactly(value) => ("lineSpacing.value", value),
+        };
+        if !value.is_finite() || value <= 0.0 || value > 1584.0 {
+            return Err(CmdError::Params(format!("`defaultFormatting.{name}` must be greater than 0 and no more than 1584")));
+        }
+        Ok(())
+    }
+}
+
 /// Editing preferences that persist between runs (the front end saves and restores them).
 /// File › Options sets most of them (`file.options`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Prefs {
+    /// The Normal-template formatting used by File › New and a blank document at start-up.
+    pub default_formatting: DefaultFormatting,
     /// Word Count includes text boxes, footnotes and endnotes (Word's default).
     pub count_notes: bool,
     /// Track Changes Options: what markup shows and how revisions are drawn (per user, as in
@@ -530,6 +606,7 @@ pub struct Prefs {
 impl Default for Prefs {
     fn default() -> Self {
         Prefs {
+            default_formatting: DefaultFormatting::default(),
             count_notes: true,
             markup: Default::default(),
             print_markup: false,
@@ -990,7 +1067,9 @@ impl Session {
     /// A new blank document (the Normal template) on the region's paper: Letter in the US and
     /// other Letter regions, A4 elsewhere (#838). Margins stay 2.54 cm (1") all round.
     pub fn blank_document(&self) -> Document {
-        blank_document(&self.region())
+        let mut doc = blank_document(&self.region());
+        self.prefs.default_formatting.apply_to(&mut doc);
+        doc
     }
 
     /// Replace the document (open/new).

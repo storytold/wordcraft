@@ -89,8 +89,10 @@ struct Writer {
     t: Tables,
     /// List definitions: per list, the ordered flag per level.
     lists: Vec<[bool; 9]>,
-    /// Authors of tracked changes (`\revtbl` entries after "Unknown"), when the text has any.
-    authors: Option<Vec<String>>,
+/// Normal's font size, in points.
+default_size: f32,
+/// Authors of tracked changes (`\revtbl` entries after "Unknown"), when the text has any.
+authors: Option<Vec<String>>,
 }
 
 const HEAD_SIZES: [f32; 6] = [20.0, 16.0, 14.0, 12.0, 12.0, 11.0];
@@ -230,7 +232,7 @@ impl Writer {
     }
 
     fn para(&mut self, p: &Para, intbl: bool, ls: Option<(usize, String)>, end: &str, out: &mut String) {
-        out.push_str("\\pard\\plain");
+        out.push_str(&format!("\\pard\\plain\\f0\\fs{}", (self.default_size * 2.0).round().clamp(2.0, 3276.0) as i32));
         if intbl {
             out.push_str("\\intbl");
         }
@@ -488,8 +490,13 @@ pub fn iso_to_dttm(s: &str) -> Option<u32> {
 /// RTF text of a document.
 pub fn export(doc: &Document) -> String {
     let flow = model::from_doc_tracked(doc);
-    let base_font = doc.styles.default_chr.font.clone().unwrap_or_else(|| wordcraft_doc::styles::BODY_FONT.to_string());
-    let mut w = Writer { t: Tables { fonts: vec![base_font], colors: Vec::new() }, lists: Vec::new(), authors: None };
+    let normal = doc.styles.resolve_char(Some("Normal"), &wordcraft_doc::CharProps::default());
+    let mut w = Writer {
+        t: Tables { fonts: vec![normal.font], colors: Vec::new() },
+        lists: Vec::new(),
+        default_size: normal.size,
+        authors: None,
+    };
     let mut body = String::new();
     w.blocks(&flow.blocks, false, "\\par", &mut body, 0);
     export_with(&flow.meta, &w, &body, &doc.last_section)
@@ -505,7 +512,8 @@ fn export_with(m: &Meta, w: &Writer, body: &str, sec: &wordcraft_doc::SectionPro
     for c in &w.t.colors {
         out.push_str(&format!("\\red{}\\green{}\\blue{};", c.0, c.1, c.2));
     }
-    out.push_str("}\n{\\*\\generator WordCraft;}\n{\\stylesheet{\\s0\\snext0 Normal;}");
+    let default_size = (w.default_size * 2.0).round().clamp(2.0, 3276.0) as i32;
+    out.push_str(&format!("}}\n{{\\*\\generator WordCraft;}}\n{{\\stylesheet{{\\s0\\snext0\\f0\\fs{default_size} Normal;}}"));
     for n in 1..=6u32 {
         let sz = HEAD_SIZES.get(n as usize - 1).copied().unwrap_or(12.0);
         out.push_str(&format!("{{\\s{n}\\sbasedon0\\snext0\\outlinelevel{}\\keepn\\b\\fs{} heading {n};}}", n - 1, (sz * 2.0) as i32));
@@ -2029,7 +2037,7 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
     if blocks.is_empty() {
         blocks.push(FBlock::Para(Para::default()));
     }
-    let default_font = r.fonts.get(&r.deff).filter(|n| !model::is_mono(n)).cloned();
+    let default_font = r.fonts.get(&r.deff).cloned();
     Ok(Parsed { flow: Flow { blocks, meta: r.meta }, page: r.page, last_section, default_font, headers_footers })
 }
 
@@ -2254,9 +2262,28 @@ mod tests {
         assert_eq!(d.styles.default_chr.font.as_deref(), Some("Times New Roman Cyr"));
         let d = import(br"{\rtf1\ansi\deff1{\fonttbl{\f0 Times New Roman;}{\f1 Arial;}} x\par}").unwrap();
         assert_eq!(d.styles.default_chr.font.as_deref(), Some("Arial"));
+        let d = import(br"{\rtf1\ansi\deff0{\fonttbl{\f0\fmodern Courier New;}} Hello\par}").unwrap();
+        assert_eq!(d.styles.default_chr.font.as_deref(), Some("Courier New"));
         // No font table: our default stays.
         let d = import(br"{\rtf1\ansi x\par}").unwrap();
         assert_eq!(d.styles.default_chr.font, wordcraft_doc::StyleSheet::builtin().default_chr.font);
+    }
+
+    #[test]
+    fn normal_font_and_size_survive_rtf_round_trip() {
+        let mut doc = Document::new();
+        let normal = doc.styles.get_mut("Normal").unwrap();
+        normal.chr.font = Some("Courier New".into());
+        normal.chr.size = Some(10.0);
+        doc.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Hello", wordcraft_doc::CharProps::default()))];
+
+        let rtf = export(&doc);
+        assert!(rtf.contains("{\\s0\\snext0\\f0\\fs20 Normal;}"), "{rtf}");
+        assert!(rtf.contains("\\pard\\plain\\f0\\fs20\\ql Hello\\par"), "{rtf}");
+        let reread = import(rtf.as_bytes()).unwrap();
+        let first = reread.para_at(&wordcraft_doc::Pos::body(0, 0)).unwrap();
+        assert_eq!(first.props_at(0).font.as_deref(), Some("Courier New"));
+        assert_eq!(first.props_at(0).size, Some(10.0));
     }
 
     #[test]

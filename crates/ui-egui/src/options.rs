@@ -10,6 +10,8 @@ use egui::{RichText, Ui, vec2};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
+use wordcraft_doc::props::LineSpacing;
+use wordcraft_engine::DefaultFormatting;
 use wordcraft_engine::cmd::options::{MAX_WORD_CHARS, PANES};
 use wordcraft_geom::Unit;
 
@@ -193,6 +195,8 @@ fn general(app: &mut WordApp, ui: &mut Ui) {
     ui.checkbox(&mut app.ui.show_discord, tl!("Show the community button in the title bar"));
     default_app_button(app, ui);
     ui.add_space(8.0);
+    default_formatting(app, ui);
+    ui.add_space(8.0);
     section(ui, "Start-up");
     let mut start = app.ui.start_screen;
     if ui
@@ -227,6 +231,83 @@ fn general(app: &mut WordApp, ui: &mut Ui) {
         ui.end_row();
     });
     note(ui, "New comments and tracked changes are recorded under this name and these initials.");
+}
+
+fn save_default_formatting(app: &mut WordApp, formatting: DefaultFormatting) {
+    set(
+        app,
+        json!({
+            "defaultFormatting": {
+                "font": formatting.font,
+                "size": formatting.size,
+                "spaceBefore": formatting.space_before,
+                "spaceAfter": formatting.space_after,
+                "lineSpacing": formatting.line_spacing,
+            }
+        }),
+    );
+}
+
+fn default_formatting(app: &mut WordApp, ui: &mut Ui) {
+    section(ui, "New documents");
+    note(ui, "Normal formatting used by new blank documents.");
+    let formatting = app.session.prefs.default_formatting.clone();
+    egui::Grid::new("options_default_formatting").num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
+        ui.label(tl!("Font:"));
+        let mut font = formatting.font.clone();
+        let response = ui.add(egui::TextEdit::singleline(&mut font).desired_width(260.0));
+        if response.lost_focus() && response.changed() {
+            let mut next = formatting.clone();
+            next.font = font;
+            save_default_formatting(app, next);
+        }
+        ui.end_row();
+        ui.label(tl!("Size:"));
+        let mut size = formatting.size;
+        if ui.add(egui::DragValue::new(&mut size).range(1.0..=1584.0).speed(0.25).suffix(" pt")).changed() {
+            let mut next = formatting.clone();
+            next.size = size;
+            save_default_formatting(app, next);
+        }
+        ui.end_row();
+        ui.label(tl!("Space before:"));
+        let mut before = formatting.space_before;
+        if ui.add(egui::DragValue::new(&mut before).range(0.0..=1584.0).speed(0.25).suffix(" pt")).changed() {
+            let mut next = formatting.clone();
+            next.space_before = before;
+            save_default_formatting(app, next);
+        }
+        ui.end_row();
+        ui.label(tl!("Space after:"));
+        let mut after = formatting.space_after;
+        if ui.add(egui::DragValue::new(&mut after).range(0.0..=1584.0).speed(0.25).suffix(" pt")).changed() {
+            let mut next = formatting.clone();
+            next.space_after = after;
+            save_default_formatting(app, next);
+        }
+        ui.end_row();
+        ui.label(tl!("Line spacing:"));
+        let current = match formatting.line_spacing {
+            LineSpacing::Multiple(value) => value,
+            LineSpacing::AtLeast(_) | LineSpacing::Exactly(_) => 1.0,
+        };
+        egui::ComboBox::from_id_salt("options_default_line_spacing").selected_text(format!("{current}")).width(120.0).show_ui(ui, |ui| {
+            for value in [1.0, 1.15, 1.5, 2.0, 2.5, 3.0] {
+                if ui
+                    .selectable_label(matches!(formatting.line_spacing, LineSpacing::Multiple(current) if current == value), format!("{value}"))
+                    .clicked()
+                {
+                    let mut next = formatting.clone();
+                    next.line_spacing = LineSpacing::Multiple(value);
+                    save_default_formatting(app, next);
+                }
+            }
+        });
+        ui.end_row();
+    });
+    if ui.button(tl!("Use this document's Normal style")).clicked() {
+        set(app, json!({"useDocumentNormal": true}));
+    }
 }
 
 fn display(app: &mut WordApp, ui: &mut Ui) {
