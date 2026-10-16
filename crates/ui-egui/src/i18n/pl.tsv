@@ -781,6 +781,7 @@
 	Undo {action}	Cofnij: {action}
 	Unformatted Text	Tekst niesformatowany
 	Up	W górę
+	Update	Aktualizuj
 	Update Field	Aktualizuj pole
 	Update Index	Aktualizuj indeks
 	Update Style to Match Selection	Aktualizuj styl, aby pasował do zaznaczenia
@@ -2622,3 +2623,4 @@ preview	Title	Tytuł
 # Reading Mode column widths (#1040)
 	Narrow	Wąska
 	Medium	Średnia
+	Replace Image	Zamień obraz

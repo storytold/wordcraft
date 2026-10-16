@@ -189,7 +189,10 @@ fn equation_key(app: &mut WordApp, key: Key, m: Modifiers) -> bool {
         Key::Escape => ("equation.exit", json!({})),
         _ => return false,
     };
-    let _ = app.run(id, params);
+    // The equation editor window has the equation: the key is its, not the page's.
+    if !app.equation.is_open() {
+        let _ = app.run(id, params);
+    }
     true
 }
 
@@ -284,25 +287,29 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
             }
             continue;
         }
-        // Editing an equation: text and editing keys go into it.
+        // Editing an equation: text and editing keys go into it (into the equation editor
+        // window when it is open, which takes the keyboard back from the page).
         if app.session.math.is_some() {
+            let in_place = !app.equation.is_open();
             match &e {
                 egui::Event::Text(t) => {
                     let m = ctx.input(|i| i.modifiers);
-                    if !(m.command || t.is_empty() || (m.ctrl && !cfg!(target_os = "macos"))) && t.chars().all(|c| !c.is_control()) {
+                    if in_place && !(m.command || t.is_empty() || (m.ctrl && !cfg!(target_os = "macos"))) && t.chars().all(|c| !c.is_control()) {
                         let _ = app.run("equation.type", json!({"text": t}));
                     }
                     continue;
                 }
                 egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
                     app.canvas.ime_preedit.clear();
-                    if !text.is_empty() {
+                    if in_place && !text.is_empty() {
                         let _ = app.run("equation.type", json!({"text": text}));
                     }
                     continue;
                 }
                 egui::Event::Paste(t) => {
-                    let _ = app.run("equation.type", json!({"text": t}));
+                    if in_place {
+                        let _ = app.run("equation.type", json!({"text": t}));
+                    }
                     continue;
                 }
                 egui::Event::Key { key, pressed: true, modifiers, .. } if equation_key(app, *key, *modifiers) => continue,

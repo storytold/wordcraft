@@ -975,6 +975,7 @@
 	Undo {n} Actions	Deshacer {n} acciones
 	Unformatted Text	Texto sin formato
 	Up	Arriba
+	Update	Actualizar
 	Update Field	Actualizar campo
 	Update Index	Actualizar índice
 	Update Style to Match Selection	Actualizar estilo para que coincida con la selección
@@ -2599,3 +2600,4 @@ preview	Title	Título
 # Reading Mode column widths (#1040)
 	Narrow	Estrecha
 	Medium	Media
+	Replace Image	Reemplazar imagen

@@ -103,7 +103,7 @@ pub fn resolve_numbers(math: &Math, display: bool, counter: &mut u32) -> Option<
 }
 
 /// The equation colour the kept source OMML carries, as the reader lifts it.
-fn omml_color(omml: &str) -> Option<Rgb> {
+pub(crate) fn omml_color(omml: &str) -> Option<Rgb> {
     if omml.is_empty() {
         return None;
     }

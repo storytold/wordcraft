@@ -1247,6 +1247,29 @@ fn equation(items: &[MItem], x: f32, base: f32, alpha: f32, screen: bool, out: &
                 alpha,
                 text_bg: None,
             }),
+            MItem::Path { segs, color } => {
+                use wordcraft_doc::graphic::PathSeg as S;
+                let at = |px: f32, py: f32| (x + px, base - py);
+                let segs = segs
+                    .iter()
+                    .map(|sg| match *sg {
+                        S::Move(a, b) => {
+                            let (a, b) = at(a, b);
+                            S::Move(a, b)
+                        }
+                        S::Line(a, b) => {
+                            let (a, b) = at(a, b);
+                            S::Line(a, b)
+                        }
+                        S::Cubic(a, b, c, d, e, f) => {
+                            let ((a, b), (c, d), (e, f)) = (at(a, b), at(c, d), at(e, f));
+                            S::Cubic(a, b, c, d, e, f)
+                        }
+                        S::Close => S::Close,
+                    })
+                    .collect();
+                out.push(Draw::Path { segs, fill: Some(*color), stroke: None, stroke_width: 0.0 });
+            }
             MItem::ScreenOnly(inner) => {
                 if screen {
                     equation(std::slice::from_ref(inner), x, base, alpha, screen, out);

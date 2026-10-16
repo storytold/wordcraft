@@ -986,6 +986,7 @@
 	Undo {n} Actions	Opozovi radnje: {n}
 	Ungroup	Razgrupisanje
 	Up	Gore
+	Update	Ažuriraj
 	Update Field	Ažuriraj polje
 	Update Index	Ažuriraj indeks
 	Update Style to Match Selection	Ažuriraj stil prema izboru
@@ -2243,3 +2244,4 @@
 # Reading Mode column widths (#1040)
 	Narrow	Uska
 	Medium	Srednja
+	Replace Image	Zameni sliku

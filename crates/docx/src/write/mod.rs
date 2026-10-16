@@ -3,7 +3,7 @@
 mod embed;
 mod settings_merge;
 pub(crate) use settings_merge::has_unowned as settings_has_unowned;
-mod math;
+pub(crate) mod math;
 mod props;
 mod sdt;
 mod story;

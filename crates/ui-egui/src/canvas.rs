@@ -101,6 +101,9 @@ pub struct CanvasState {
     /// The selection the mini toolbar was put away for by a click outside the document (the
     /// ribbon, a pane, the status bar); it comes back when the selection changes.
     pub mini_dismissed: Option<wordcraft_engine::Selection>,
+    /// The equation being edited, as drawn this frame: screen x of its left edge, screen y of its
+    /// baseline, its font size in screen points, and its layout size (the editor overlays it).
+    pub equation_screen: Option<(f32, f32, f32)>,
     /// A picture, shape or text box being dragged by its frame.
     pub(crate) obj_drag: Option<crate::objects::ObjectDrag>,
     /// Crop mode (Picture Format › Crop) is on for the picture here (`crop`).
@@ -155,6 +158,8 @@ pub struct CanvasState {
     pub(crate) alt_code_echo: Option<crate::keys::AltCodeEcho>,
     /// Create Link is waiting for a click on the text box to link to: the linking box's object.
     pub(crate) link_from: Option<wordcraft_doc::Pos>,
+    /// A picture was double-clicked: the host may open it in a better editor (see `take_picture_edit`).
+    pub picture_edit: bool,
     /// What screen readers were last told about the document (#488).
     pub(crate) a11y: crate::a11y::A11yCache,
     /// A press on a table's selection area or move handle, held (`table_mouse`).
@@ -227,6 +232,7 @@ impl Default for CanvasState {
             context_menu_at: None,
             mini_anchor: None,
             mini_dismissed: None,
+            equation_screen: None,
             pasted: false,
             swallow_text: false,
             alt_code: String::new(),
@@ -247,6 +253,7 @@ impl Default for CanvasState {
             table_stroke: None,
             table_resize: None,
             link_from: None,
+            picture_edit: false,
             a11y: Default::default(),
             table_drag: None,
             tab_kind: Default::default(),
@@ -1311,17 +1318,23 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         let focused = resp.has_focus() || app.canvas.focused;
         // Editing an equation: shade it and draw the caret inside it.
         let mut math_caret = false;
+        app.canvas.equation_screen = None;
         if let Some(m) = app.session.math.clone()
             && let Some((pi, ex, base, ml)) = layout.equation_geom(&m.at, app.session.page_hint)
             && let Some(pr) = rects.get(pi)
         {
             math_caret = true;
             let s = geo.scale;
+            app.canvas.equation_screen = Some((pr.min.x + ex * s, pr.min.y + base * s, ml.size * s));
             let zone = Rect::from_min_max(
                 pos2(pr.min.x + ex * s - 2.0, pr.min.y + (base - ml.ascent) * s - 2.0),
                 pos2(pr.min.x + (ex + ml.width) * s + 2.0, pr.min.y + (base + ml.descent) * s + 2.0),
             );
-            painter.rect_filled(zone, 2.0, Color32::from_black_alpha(16));
+            // The equation editor draws the caret over equaSHion's layout (which has no slots of
+            // the document tree) and shows no box.
+            if !ml.slots.is_empty() {
+                painter.rect_filled(zone, 2.0, Color32::from_black_alpha(16));
+            }
             if let Some(slot) = ml.slot(&m.pos.path, m.pos.off) {
                 let x = (pr.min.x + (ex + slot.x) * s).round() + 0.5;
                 let y0 = pr.min.y + (base - slot.y - slot.a) * s;

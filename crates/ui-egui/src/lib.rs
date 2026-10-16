@@ -49,6 +49,7 @@ pub mod dialogs_ribbon;
 pub mod dialogs_smart_art;
 pub mod dialogs_table_style;
 pub mod dialogs_templates;
+pub mod equation_editor;
 pub mod equation_tab;
 /// The built-in file browser, for desktops without a system file dialog (#576).
 #[cfg(not(target_arch = "wasm32"))]
@@ -416,6 +417,17 @@ fn migrate_units(v: &mut Value) {
     }
 }
 
+impl WordApp {
+    /// Set when a picture was double-clicked: returns the encoded bytes of that (now selected)
+    /// picture once, so the host can open it in its own editor and later `picture.replaceImage`.
+    pub fn take_picture_edit(&mut self) -> Option<std::sync::Arc<Vec<u8>>> {
+        if !std::mem::take(&mut self.canvas.picture_edit) {
+            return None;
+        }
+        wordcraft_engine::cmd::objects::selected_picture_bytes(&self.session)
+    }
+}
+
 /// The application.
 pub struct WordApp {
     pub session: Session,
@@ -513,6 +525,8 @@ pub struct WordApp {
     pub(crate) smart_art_typing: Option<usize>,
     /// The tab shown before Outline view brought up the Outlining tab (restored when it closes).
     pub(crate) outline_prev_tab: Option<String>,
+    /// The equation editor window (equaSHion's widget) while an equation is being edited.
+    pub(crate) equation: equation_editor::EquationHost,
     /// Zotero commands in flight (`ui.zotero.*`).
     pub zotero: zotero::ZoteroLink,
     /// The egui context, once the first frame has run (background work wakes the UI with it).
@@ -622,6 +636,7 @@ impl WordApp {
             smart_art_item: None,
             smart_art_typing: None,
             outline_prev_tab: None,
+            equation: Default::default(),
             zotero: zotero::ZoteroLink::default(),
             ctx: None,
             read_aloud_at: None,
@@ -751,6 +766,10 @@ impl WordApp {
     /// Close, Envelopes, Labels and Finish & Merge on a document with unsaved changes first ask
     /// Save / Don't Save / Cancel, and the command runs once that is answered (`ui.saveChanges`).
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        // While the equation editor is open, the Equation tab works on it.
+        if let Some(r) = equation_editor::intercept(self, id, &params) {
+            return r;
+        }
         if id == "file.recover" && params.as_object().is_none_or(|p| p.is_empty()) {
             self.ui.backstage = true;
             self.ui.backstage_page = "recover".into();
@@ -1740,6 +1759,14 @@ impl WordApp {
         self.status(text);
     }
 
+    /// Another app has replaced the shared egui fonts and visuals (OfficeCraft hosts several in
+    /// one window): install this app's again before it draws its next frame.
+    pub fn context_changed(&mut self) {
+        self.styled = false;
+        self.applied_theme = None;
+        self.fonts_frames = 0;
+    }
+
     /// Per-frame logic before layout: control requests, screenshots, shortcuts, file drops.
     pub fn logic(&mut self, ctx: &egui::Context) {
         let lang = i18n::Lang::from_pref(&self.ui.language);
@@ -2030,6 +2057,8 @@ impl WordApp {
         crate::keytips::show(self, &ctx, ui);
         keys::global_shortcuts(self, &ctx);
         self.refocus_after_chrome_click(&ctx);
+        // Last: it follows whatever started or ended equation editing in this frame.
+        equation_editor::show(self, &ctx);
         if let Some(url) = self.canvas.open_url.take() {
             ctx.open_url(egui::OpenUrl::new_tab(url));
         }

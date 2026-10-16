@@ -795,6 +795,7 @@ preview	Title	Пример
 	Undo 1 Action	Отменить действие
 	Undo {n} Actions	Отменить действий: {n}
 	Up	Вверх
+	Update	Обновить
 	Update Field	Обновить поле
 	Update Index	Обновить указатель
 	Update Style to Match Selection	Обновить стиль по выделенному фрагменту
@@ -2630,3 +2631,4 @@ preview	Title	Пример
 # Reading Mode column widths (#1040)
 	Narrow	Узкая
 	Medium	Средняя
+	Replace Image	Заменить изображение

@@ -88,6 +88,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 r#"{"left"?, "top"?, "right"?, "bottom"? (fractions of the source 0–0.45; a side left out is uncropped), "width"?: pt, "height"?: pt (the new display size, in the same undo step; a floating picture also moves by what a left/top crop trims, so the visible part stays put)}"#,
             )
             .when(has_picture),
+        CommandSpec::new("picture.replaceImage", "Replace Image", "Picture Format › Adjust", replace_image)
+            .params(r#"{"data": base64 (the new picture; its size follows the old width)}"#)
+            .when(has_picture),
         // Kept for scripts written before every object had alt text: `object.altText` on a picture.
         CommandSpec::new("picture.altText", "Alt Text", "Picture Format › Accessibility", |s, v| {
             p::req_str(v, "text")?;
@@ -1064,6 +1067,33 @@ fn adjust_media(s: &mut Session, base: &str, f: impl Fn(image::DynamicImage) -> 
     })
 }
 
+/// The encoded bytes of the selected picture.
+pub fn selected_picture_bytes(s: &Session) -> Option<std::sync::Arc<Vec<u8>>> {
+    let (_, o) = selected(s)?;
+    let InlineObject::Image { media, .. } = o else { return None };
+    s.doc.media.get(&media).cloned()
+}
+
+/// `picture.replaceImage`: swaps the selected picture's image for `data`, keeping its width.
+fn replace_image(s: &mut Session, v: &Value) -> CmdResult {
+    let d = p::req_str(v, "data")?;
+    let bytes = crate::cmd::insert::base64_decode(d).ok_or_else(|| CmdError::Params("bad base64 data".into()))?;
+    let (pw, ph) = wordcraft_render::image_size(&bytes).ok_or_else(|| CmdError::Failed("not a supported image".into()))?;
+    let (_, o) = selected(s).ok_or_else(|| CmdError::Disabled("no picture".into()))?;
+    let InlineObject::Image { media, .. } = o else { return Err(CmdError::Disabled("not a picture".into())) };
+    let key = s.doc.add_media(bytes, "png");
+    let orig = s.originals.get(&media).cloned().unwrap_or(media);
+    s.originals.entry(key.clone()).or_insert(orig);
+    let ratio = ph as f32 / (pw as f32).max(1.0);
+    with_obj(s, |o| {
+        if let InlineObject::Image { media, w, h, crop, .. } = o {
+            *media = key.clone();
+            *h = *w * ratio;
+            *crop = [0.0; 4];
+        }
+    })
+}
+
 fn reset(s: &mut Session, _: &Value) -> CmdResult {
     let (_, o) = selected(s).ok_or_else(|| CmdError::Disabled("no picture".into()))?;
     let InlineObject::Image { media, .. } = o else { return Err(CmdError::Disabled("not a picture".into())) };
@@ -1993,6 +2023,21 @@ mod tests {
 
     /// A header picture resizes and drags like a body one: the move stays in the header story
     /// and lands where dropped; the header hit test finds it.
+    #[test]
+    fn replace_image_swaps_the_bitmap_keeps_the_width_and_undoes() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        let first = super::super::insert::base64_encode(&png(20, 10));
+        s.run("insert.picture", &json!({"data": first, "width": 100})).unwrap();
+        assert_eq!(selected_picture_bytes(&s).map(|b| b.len()), Some(png(20, 10).len()));
+        let second = super::super::insert::base64_encode(&png(40, 40));
+        let r = s.run("picture.replaceImage", &json!({"data": second})).unwrap();
+        assert_eq!(r["object"]["w"], 100.0);
+        assert_eq!(r["object"]["h"], 100.0);
+        assert_eq!(selected_picture_bytes(&s).map(|b| b.to_vec()), Some(png(40, 40)));
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(selected_picture_bytes(&s).map(|b| b.to_vec()), Some(png(20, 10)));
+    }
+
     #[test]
     fn header_pictures_can_be_resized_and_dragged() {
         let mut s = Session::new(wordcraft_doc::Document::new());

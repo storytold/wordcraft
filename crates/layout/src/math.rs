@@ -49,6 +49,11 @@ pub enum MItem {
         color: Rgb,
         dotted: bool,
     },
+    /// A filled shape (a glyph outline, radical sign or delimiter), `y` up from the baseline.
+    Path {
+        segs: Vec<wordcraft_doc::graphic::PathSeg>,
+        color: Rgb,
+    },
     /// Drawn on screen only (placeholders for empty slots, the empty-equation hint).
     ScreenOnly(Box<MItem>),
 }
@@ -72,6 +77,17 @@ impl MItem {
                 *y0 += dy;
                 *y1 += dy;
             }
+            MItem::Path { segs, .. } => {
+                use wordcraft_doc::graphic::PathSeg as S;
+                for sg in segs {
+                    *sg = match *sg {
+                        S::Move(x, y) => S::Move(x + dx, y + dy),
+                        S::Line(x, y) => S::Line(x + dx, y + dy),
+                        S::Cubic(a, b, c, d, e, f) => S::Cubic(a + dx, b + dy, c + dx, d + dy, e + dx, f + dy),
+                        S::Close => S::Close,
+                    };
+                }
+            }
             MItem::ScreenOnly(i) => i.shift(dx, dy),
         }
     }
@@ -92,6 +108,8 @@ pub struct Slot {
 /// A laid-out equation.
 #[derive(Clone, Debug, Default)]
 pub struct MathLayout {
+    /// The font size it was laid out at, points.
+    pub size: f32,
     pub width: f32,
     /// Extent above and below the baseline, points.
     pub ascent: f32,
@@ -187,6 +205,24 @@ pub fn layout_equation(
     props: &MathProps,
     counter: &mut u32,
 ) -> MathLayout {
+    if let Some(l) = via_equashion(math, linear, rc, display, avail) {
+        return l;
+    }
+    layout_equation_legacy(math, linear, rc, display, avail, props, counter)
+}
+
+/// The engine this crate had before equaSHion's: still what numbered rows, an equation shown as
+/// linear text and an empty equation (its hint) are laid out by, and the one that knows the
+/// document tree's caret slots.
+pub fn layout_equation_legacy(
+    math: &wordcraft_doc::math::Math,
+    linear: &str,
+    rc: &ResolvedChar,
+    display: bool,
+    avail: f32,
+    props: &MathProps,
+    counter: &mut u32,
+) -> MathLayout {
     let parsed;
     let nodes: &Arg = if math.nodes.is_empty() && !math.linear {
         parsed = parse_linear(linear);
@@ -227,7 +263,7 @@ pub fn layout_equation(
             s.d = em * 0.25;
         }
     }
-    MathLayout { width: b.w.max(0.0), ascent: b.a.max(0.0), descent: b.d.max(0.0), items: b.items, slots }
+    MathLayout { size: base, width: b.w.max(0.0), ascent: b.a.max(0.0), descent: b.d.max(0.0), items: b.items, slots }
 }
 
 /// Layout style: script level (0 = text size, 1 = script, 2 = script-script), display or inline,
@@ -1967,7 +2003,7 @@ mod tests {
     }
 
     fn lay(lin: &str, display: bool) -> MathLayout {
-        layout_equation(&Math::default(), lin, &rc(), display, 400.0, &MathProps::default(), &mut 0)
+        layout_equation_legacy(&Math::default(), lin, &rc(), display, 400.0, &MathProps::default(), &mut 0)
     }
 
     /// The glyphs of a laid-out equation by line: (baseline, [(x, text)]), top line first.
@@ -1991,7 +2027,7 @@ mod tests {
     }
 
     fn lay_in(math: &Math, lin: &str, display: bool, avail: f32, mp: &MathProps) -> MathLayout {
-        layout_equation(math, lin, &rc(), display, avail, mp, &mut 0)
+        layout_equation_legacy(math, lin, &rc(), display, avail, mp, &mut 0)
     }
 
     #[test]
@@ -2134,7 +2170,7 @@ mod tests {
             MNode::Run(MRun { text: "R".into(), scr: MScr::DoubleStruck, ..Default::default() }),
         ];
         for n in nodes {
-            let m = layout_equation(&Math { nodes: vec![n.clone()], ..Default::default() }, "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
+            let m = layout_equation_legacy(&Math { nodes: vec![n.clone()], ..Default::default() }, "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
             assert!(m.width > 0.0 && m.ascent + m.descent > 0.0, "{n:?} → {m:?}");
             for it in &m.items {
                 if let MItem::Glyphs { glyphs, .. } = it {
@@ -2148,7 +2184,7 @@ mod tests {
     fn caret_slots_cover_every_position() {
         use wordcraft_doc::math_edit::{MathPos, move_right, units};
         let math = Math { nodes: wordcraft_doc::math::parse_linear("x=(-b±√(b^2-4ac))/2a+■(a&b@c&d)"), ..Default::default() };
-        let m = layout_equation(&math, "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
+        let m = layout_equation_legacy(&math, "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
         // Walking the caret through the equation, every position has a slot.
         let mut p = MathPos::default();
         let mut seen = 0;
@@ -2172,17 +2208,17 @@ mod tests {
     #[test]
     fn empty_slots_show_placeholders_on_screen_only() {
         let math = Math { nodes: wordcraft_doc::math::parse_linear("⬚/⬚"), ..Default::default() };
-        let m = layout_equation(&math, "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
+        let m = layout_equation_legacy(&math, "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
         assert!(m.items.iter().all(|i| matches!(i, MItem::ScreenOnly(_) | MItem::Rect { .. })), "{:?}", m.items);
         assert!(m.slots.iter().any(|s| s.path == vec![(0, 0)] && s.off == 0));
-        let empty = layout_equation(&Math::default(), "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
+        let empty = layout_equation_legacy(&Math::default(), "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
         assert!(empty.width > 10.0 && empty.items.iter().all(|i| matches!(i, MItem::ScreenOnly(_))));
     }
 
     #[test]
     fn numbered_equations_fill_the_line_with_the_number_at_the_right() {
         let math = Math { nodes: wordcraft_doc::math::parse_linear("E=mc^2#(1)"), ..Default::default() };
-        let m = layout_equation(&math, "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
+        let m = layout_equation_legacy(&math, "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
         assert!((m.width - 400.0).abs() < 0.01, "{}", m.width);
         let xs: Vec<f32> =
             m.items.iter().filter_map(|i| if let MItem::Glyphs { glyphs, .. } = i { glyphs.first().map(|g| g.1) } else { None }).collect();
@@ -2193,7 +2229,7 @@ mod tests {
         // Automatic numbers count.
         let auto = Math { nodes: wordcraft_doc::math::parse_linear("a=b#"), ..Default::default() };
         let mut n = 4;
-        let _ = layout_equation(&auto, "", &rc(), true, 400.0, &MathProps::default(), &mut n);
+        let _ = layout_equation_legacy(&auto, "", &rc(), true, 400.0, &MathProps::default(), &mut n);
         assert_eq!(n, 5);
         assert_eq!(auto_numbers(&auto, true), 1);
     }
@@ -2216,7 +2252,7 @@ mod tests {
         for _ in 0..500 {
             n = vec![MNode::Frac { kind: FracKind::Bar, num: n.clone(), den: Vec::new() }];
         }
-        let _ = layout_equation(&Math { nodes: n, ..Default::default() }, "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
+        let _ = layout_equation_legacy(&Math { nodes: n, ..Default::default() }, "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
         // Empty everything.
         let empty = vec![
             MNode::Nary { chr: '\0', lim_loc: None, grow: true, sub_hide: false, sup_hide: false, sub: vec![], sup: vec![], e: vec![] },
@@ -2225,16 +2261,227 @@ mod tests {
             MNode::EqArr { rows: vec![] },
             MNode::Run(MRun { text: String::new(), size: Some(f32::NAN), ..Default::default() }),
         ];
-        let m = layout_equation(&Math { nodes: empty, ..Default::default() }, "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
+        let m = layout_equation_legacy(&Math { nodes: empty, ..Default::default() }, "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
         assert!(m.width.is_finite() && m.ascent.is_finite());
         // Breaks everywhere, odd wrap settings, no room at all.
         let runs: Vec<MNode> = (0..2000).map(|i| MNode::Run(MRun { brk: (i % 3 == 0).then_some((i % 256) as u8), ..MRun::new("−+=") })).collect();
         for avail in [0.0, f32::NAN, 1e9] {
             for brk_bin in [BrkBin::Before, BrkBin::After, BrkBin::Repeat] {
                 let mp = MathProps { brk_bin, brk_bin_sub: BrkBinSub::PlusMinus, wrap_indent: f32::INFINITY, wrap_right: avail == 0.0 };
-                let m = layout_equation(&Math { nodes: runs.clone(), ..Default::default() }, "", &rc(), true, avail, &mp, &mut 0);
+                let m = layout_equation_legacy(&Math { nodes: runs.clone(), ..Default::default() }, "", &rc(), true, avail, &mp, &mut 0);
                 assert!(m.width.is_finite() && m.descent.is_finite());
             }
         }
     }
+
+    // ---- equaSHion's layout ----
+
+    fn lay_eq(lin: &str, display: bool, avail: f32) -> MathLayout {
+        layout_equation(&Math::default(), lin, &rc(), display, avail, &MathProps::default(), &mut 0)
+    }
+
+    fn paths(m: &MathLayout) -> usize {
+        m.items.iter().filter(|i| matches!(i, MItem::Path { .. })).count()
+    }
+
+    #[test]
+    fn equations_are_laid_out_by_equashion() {
+        let m = lay_eq("a/b", false, 400.0);
+        assert!(m.width > 0.0 && m.ascent > 0.0 && m.descent >= 0.0);
+        assert!(paths(&m) >= 2, "glyphs are outlines");
+        assert!(m.items.iter().any(|i| matches!(i, MItem::Rect { .. })), "the fraction bar is a rule");
+        // Taller than a plain run of the same text.
+        let flat = lay_eq("ab", false, 400.0);
+        assert!(m.ascent + m.descent > flat.ascent + flat.descent);
+    }
+
+    #[test]
+    fn a_wide_display_equation_wraps_to_the_line() {
+        let sum = "y=a+b+c+d+e+f+g+h+i+j+k+l+m+n+o+p+q+r+s+t+u+v+w";
+        let wide = lay_eq(sum, true, 1e4);
+        let narrow = lay_eq(sum, true, wide.width * 0.4);
+        assert!(narrow.width < wide.width * 0.8, "{} vs {}", narrow.width, wide.width);
+        assert!(narrow.ascent + narrow.descent > wide.ascent + wide.descent, "more than one line");
+    }
+
+    #[test]
+    fn numbered_and_empty_equations_keep_the_other_engine() {
+        // An empty equation shows its hint (screen only) and the caret slot of the document tree.
+        let e = lay_eq("", false, 400.0);
+        assert!(!e.slots.is_empty());
+        // A numbered row: the number sits at the right margin, which only that engine knows.
+        let n = lay_eq("a=b#(1)", true, 400.0);
+        assert!(n.width >= 399.0, "the numbered equation fills the line: {}", n.width);
+    }
+
+    #[test]
+    fn the_colour_is_the_texts() {
+        let mut r = rc();
+        r.color = TextColor::Rgb(Rgb(200, 10, 10));
+        let m = layout_equation(&Math::default(), "x^2", &r, false, 400.0, &MathProps::default(), &mut 0);
+        assert!(m.items.iter().all(|i| match i {
+            MItem::Path { color, .. } | MItem::Rect { color, .. } => color.0 == 200,
+            _ => true,
+        }));
+        // And the cached layout is recoloured, not shared.
+        let k = layout_equation(&Math::default(), "x^2", &rc(), false, 400.0, &MathProps::default(), &mut 0);
+        assert!(k.items.iter().any(|i| matches!(i, MItem::Path { color, .. } if color.0 != 200)));
+    }
+}
+
+// ---- equaSHion ---------------------------------------------------------------------------
+
+/// equaSHion's bundled equation fonts: no system fonts, so an equation lays out the same
+/// everywhere, and as it does in the equation editor.
+fn eq_fonts() -> &'static equashion_layout::FontDb {
+    static DB: std::sync::LazyLock<equashion_layout::FontDb> = std::sync::LazyLock::new(equashion_layout::FontDb::bundled_only);
+    &DB
+}
+
+/// Slant of a synthetic italic, and stroke of a synthetic bold (em), as equaSHion's renderer.
+const SYNTH_ITALIC_SKEW: f64 = -0.21;
+const SYNTH_BOLD_STROKE: f64 = 0.03;
+
+type EqKey = (String, bool, u32, bool, bool, u32);
+static EQ_CACHE: std::sync::Mutex<Option<std::collections::HashMap<EqKey, Arc<MathLayout>>>> = std::sync::Mutex::new(None);
+const EQ_CACHE_MAX: usize = 512;
+
+/// Lay the equation out with equaSHion: the document's tree goes through OMML into equaSHion's,
+/// and its boxes come back as the same items the page draws. `None` for what the engine here
+/// keeps: numbered rows (`#`), an equation shown as linear text, and an empty one (its hint).
+fn via_equashion(math: &wordcraft_doc::math::Math, linear: &str, rc: &ResolvedChar, display: bool, avail: f32) -> Option<MathLayout> {
+    if math.linear {
+        return None;
+    }
+    let nodes: Arg = if math.nodes.is_empty() { parse_linear(linear) } else { math.nodes.clone() };
+    if nodes.is_empty() {
+        return None;
+    }
+    if display && matches!(nodes.as_slice(), [MNode::EqArr { rows }] if rows.iter().any(|r| split_number(r).is_some())) {
+        return None;
+    }
+    let tree = wordcraft_doc::math::Math { nodes, omml: String::new(), jc: math.jc, linear: false };
+    let omml = wordcraft_docx::omml::equation_to_omml(linear, display, &tree);
+    let color = match rc.color {
+        TextColor::Rgb(c) => c,
+        TextColor::Auto => Rgb::BLACK,
+    };
+    let size = rc.draw_size().clamp(1.0, 1638.0);
+    let max_w = if display && avail.is_finite() { avail.clamp(1.0, 1e5) } else { 0.0 };
+    let key: EqKey = (omml.clone(), display, size.to_bits(), rc.bold, false, max_w.to_bits());
+    if let Ok(g) = EQ_CACHE.lock()
+        && let Some(hit) = g.as_ref().and_then(|c| c.get(&key))
+    {
+        let mut l = (**hit).clone();
+        recolor(&mut l.items, color);
+        return Some(l);
+    }
+    let m = equashion_math::from_omml(&omml);
+    let fonts = eq_fonts();
+    let b = equashion_layout::layout_math_wrapped(
+        fonts,
+        &m,
+        equashion_layout::DEFAULT_FAMILY,
+        f64::from(size),
+        rc.bold,
+        display || m.para,
+        if max_w > 0.0 { f64::from(max_w) } else { f64::INFINITY },
+    );
+    let mut prims = Vec::new();
+    equashion_layout::emit(&b, 0.0, 0.0, equashion_layout::Rgb::BLACK, &mut prims);
+    let l = MathLayout {
+        size,
+        width: b.width() as f32,
+        ascent: b.ascent() as f32,
+        descent: b.descent() as f32,
+        items: items_of(prims, fonts, Rgb::BLACK),
+        slots: Vec::new(),
+    };
+    if let Ok(mut g) = EQ_CACHE.lock() {
+        let c = g.get_or_insert_with(std::collections::HashMap::new);
+        if c.len() >= EQ_CACHE_MAX {
+            c.clear();
+        }
+        c.insert(key, Arc::new(l.clone()));
+    }
+    let mut l = l;
+    recolor(&mut l.items, color);
+    Some(l)
+}
+
+fn recolor(items: &mut [MItem], to: Rgb) {
+    for it in items {
+        match it {
+            MItem::Path { color, .. } | MItem::Rect { color, .. } | MItem::Line { color, .. } | MItem::Glyphs { color, .. } => *color = to,
+            MItem::ScreenOnly(i) => recolor(std::slice::from_mut(&mut **i), to),
+        }
+    }
+}
+
+/// A kurbo path as page-path segments, y flipped to point up from the baseline.
+fn segs_of(p: &equashion_layout::BezPath, up: bool) -> Vec<wordcraft_doc::graphic::PathSeg> {
+    use wordcraft_doc::graphic::PathSeg as S;
+    let f = |v: f64| if up { -(v as f32) } else { v as f32 };
+    let mut out = Vec::new();
+    let mut cur = (0.0f64, 0.0f64);
+    for el in p.elements() {
+        match *el {
+            kurbo_el::MoveTo(pt) => {
+                cur = (pt.x, pt.y);
+                out.push(S::Move(pt.x as f32, f(pt.y)));
+            }
+            kurbo_el::LineTo(pt) => {
+                cur = (pt.x, pt.y);
+                out.push(S::Line(pt.x as f32, f(pt.y)));
+            }
+            kurbo_el::QuadTo(c, pt) => {
+                // A quadratic as the equal cubic.
+                let c1 = (cur.0 + 2.0 / 3.0 * (c.x - cur.0), cur.1 + 2.0 / 3.0 * (c.y - cur.1));
+                let c2 = (pt.x + 2.0 / 3.0 * (c.x - pt.x), pt.y + 2.0 / 3.0 * (c.y - pt.y));
+                out.push(S::Cubic(c1.0 as f32, f(c1.1), c2.0 as f32, f(c2.1), pt.x as f32, f(pt.y)));
+                cur = (pt.x, pt.y);
+            }
+            kurbo_el::CurveTo(a, b, pt) => {
+                out.push(S::Cubic(a.x as f32, f(a.y), b.x as f32, f(b.y), pt.x as f32, f(pt.y)));
+                cur = (pt.x, pt.y);
+            }
+            kurbo_el::ClosePath => out.push(S::Close),
+        }
+    }
+    out
+}
+
+use kurbo::PathEl as kurbo_el;
+
+/// The scene primitives of an equation as items: glyphs as filled outlines (the faces are
+/// equaSHion's, not the document's), rules as rectangles, shapes as paths.
+fn items_of(prims: Vec<equashion_layout::Prim>, fonts: &equashion_layout::FontDb, color: Rgb) -> Vec<MItem> {
+    use equashion_layout::Prim;
+    let mut out = Vec::with_capacity(prims.len());
+    for p in prims {
+        match p {
+            Prim::Rule(r, _) => out.push(MItem::Rect { x: r.x0 as f32, y: -(r.y1 as f32), w: (r.x1 - r.x0) as f32, h: (r.y1 - r.y0) as f32, color }),
+            Prim::Path(path, _) => out.push(MItem::Path { segs: segs_of(&path, true), color }),
+            Prim::Glyphs { font, size, glyphs, synth_bold, synth_italic, .. } => {
+                let Some(face) = fonts.face_by_id(font) else { continue };
+                let k = f64::from(size) / face.units_per_em().max(1.0);
+                let skew = if synth_italic { kurbo::Affine::new([1.0, 0.0, SYNTH_ITALIC_SKEW, 1.0, 0.0, 0.0]) } else { kurbo::Affine::IDENTITY };
+                for (gid, x, y) in glyphs {
+                    let o = fonts.outline(&face, gid);
+                    if o.elements().is_empty() {
+                        continue;
+                    }
+                    let place = kurbo::Affine::translate((f64::from(x), f64::from(y))) * skew * kurbo::Affine::scale(k);
+                    let mut placed = place * &*o;
+                    if synth_bold {
+                        let w = face.units_per_em() * SYNTH_BOLD_STROKE;
+                        let stroked = kurbo::stroke(o.iter(), &kurbo::Stroke::new(w), &kurbo::StrokeOpts::default(), 0.1);
+                        placed.extend((place * &stroked).iter());
+                    }
+                    out.push(MItem::Path { segs: segs_of(&placed, true), color });
+                }
+            }
+        }
+    }
+    out
 }

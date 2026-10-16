@@ -856,6 +856,7 @@
 	Undo {n} Actions	{n} Aktionen rückgängig
 	Ungroup	Gruppierung aufheben
 	Up	Nach oben
+	Update	Aktualisieren
 	Update Field	Feld aktualisieren
 	Update Index	Index aktualisieren
 	Update Style to Match Selection	Formatvorlage an Auswahl anpassen
@@ -2232,3 +2233,4 @@
 # Reading Mode column widths (#1040)
 	Narrow	Schmal
 	Medium	Mittel
+	Replace Image	Bild ersetzen

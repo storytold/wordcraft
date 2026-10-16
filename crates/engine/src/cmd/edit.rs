@@ -186,9 +186,38 @@ fn cut(s: &mut Session, v: &Value) -> CmdResult {
     Ok(r)
 }
 
+/// Text from the system clipboard that is exactly one equation (OMML, MathML or delimited LaTeX)
+/// pastes as an equation; one that cannot be read pastes as the text it is, with a note why. Our
+/// own copy coming back is never reinterpreted.
+fn paste_equation(s: &mut Session, v: &Value) -> Result<Option<Value>, CmdError> {
+    let Some(t) = p::str(v, "text") else { return Ok(None) };
+    let text = t.replace("\r\n", "\n");
+    if s.clipboard.as_ref().is_some_and(|f| f.clipboard_text() == text) {
+        return Ok(None);
+    }
+    match crate::equashion_bridge::clipboard_equation(t) {
+        Some((format, Ok((math, display)))) => {
+            let mut r = super::equation::insert_nodes_as_equation(s, math.nodes, &json!({"display": display, "edit": false}))?;
+            if let Some(o) = r.as_object_mut() {
+                o.insert("pasted".into(), json!("equation"));
+                o.insert("format".into(), json!(format.name()));
+            }
+            Ok(Some(r))
+        }
+        Some((format, Err(why))) => {
+            s.status = format!("Pasted as text: the {} equation could not be read ({why}).", format.name());
+            Ok(None)
+        }
+        None => Ok(None),
+    }
+}
+
 /// Paste keeps the source formatting: our own copy while the system clipboard still holds it,
 /// else another program's HTML or RTF (#687), else the system clipboard's text.
 fn paste(s: &mut Session, v: &Value) -> CmdResult {
+    if let Some(r) = paste_equation(s, v)? {
+        return Ok(r);
+    }
     let frag = super::paste::paste_fragment(s, v)?;
     super::paste::insert(s, frag)?;
     sel_result(s)

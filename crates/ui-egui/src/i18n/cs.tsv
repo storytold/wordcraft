@@ -1279,6 +1279,7 @@
 	Ungroup	Oddělit
 	Unlink\nCitations	Odpojit\ncitace
 	Up	Nahoru
+	Update	Aktualizovat
 	Update Field	Aktualizovat pole
 	Update Index	Aktualizovat rejstřík
 	Update Style to Match Selection	Aktualizovat styl podle výběru
@@ -2624,3 +2625,4 @@ preview	Title	Ukázka
 # Reading Mode column widths (#1040)
 	Narrow	Úzká
 	Medium	Střední
+	Replace Image	Nahradit obrázek

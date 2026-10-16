@@ -19,6 +19,8 @@ wordcraft-docx = { workspace = true }
 wordcraft-docbin = { workspace = true }
 wordcraft-pdf = { workspace = true }
 wordcraft-formats = { workspace = true }
+# Equations pasted as MathML or LaTeX, and the bridge to the equation editor's tree.
+equashion-math = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

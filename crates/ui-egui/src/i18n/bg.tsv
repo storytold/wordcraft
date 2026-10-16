@@ -886,6 +886,7 @@
 	Undo {action}	Отмяна: {action}
 	Unformatted Text	Неформатиран текст
 	Up	Нагоре
+	Update	Актуализиране
 	Update Field	Актуализиране на полето
 	Update Index	Актуализиране на индекса
 	Update Style to Match Selection	Актуализиране на стила според избраното
@@ -2621,3 +2622,4 @@
 # Reading Mode column widths (#1040)
 	Narrow	Тясна
 	Medium	Средна
+	Replace Image	Замяна на изображението

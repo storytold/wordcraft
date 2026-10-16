@@ -12,6 +12,7 @@ mod crypt;
 mod custom;
 mod flat;
 mod fonts;
+pub mod omml;
 mod package;
 mod read;
 mod smart_art;

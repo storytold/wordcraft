@@ -29,6 +29,17 @@ wordcraft-control-key = { path = "crates/control-key" }
 wordcraft-ui-egui = { path = "crates/ui-egui" }
 wordcraft-metafile = { path = "crates/metafile" }
 
+# equations: the equaSHion editor (math tree, OMML/MathML/LaTeX, the egui EquationEditor widget).
+# Same licence (MIT OR Apache-2.0). Pinned to a commit of its `main`; bump `rev` on purpose.
+# To develop against a local checkout, add this to the root Cargo.toml (do not commit it):
+#   [patch."https://github.com/shuff57/equaSHion"]
+#   equashion-math = { path = "../equaSHion/crates/math" }
+#   equashion-egui = { path = "../equaSHion/crates/egui" }
+equashion-math = { git = "https://github.com/shuff57/equaSHion", rev = "3d3b840c65d7b6e0e7933c6cd95e171384fdfb54" }
+equashion-egui = { git = "https://github.com/shuff57/equaSHion", rev = "3d3b840c65d7b6e0e7933c6cd95e171384fdfb54" }
+# The equation layout: what the editor draws with, so a page shows what was typed.
+equashion-layout = { git = "https://github.com/shuff57/equaSHion", rev = "3d3b840c65d7b6e0e7933c6cd95e171384fdfb54", features = ["extra-fonts"] }
+
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }
 thiserror = "2"

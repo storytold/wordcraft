@@ -24,7 +24,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("insert.equation", "Equation", "Insert › Symbols", insert)
             .key("Alt+=")
-            .params(r#"{"linear"?: string, "latex"?: string, "builtin"?: "pythagoras|area|quadratic|binomial|expansion|euler|derivative|taylor|gaussian|fourier|trig1|trig2|normal|bayes", "display"?: bool, "edit"?: bool (default true)}"#),
+            .params(r#"{"linear"?: string, "latex"?: string, "omml"?: string (one m:oMath or m:oMathPara), "builtin"?: "pythagoras|area|quadratic|binomial|expansion|euler|derivative|taylor|gaussian|fourier|trig1|trig2|normal|bayes", "display"?: bool, "edit"?: bool (default true)}"#),
         CommandSpec::new("equation.edit", "Edit Equation", "Equation", edit)
             .pure()
             .when(near_equation)
@@ -32,7 +32,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("equation.exit", "Leave Equation", "Equation", exit).pure().when(editing).params(r#"{"before"?: bool}"#),
         CommandSpec::new("equation.type", "Type in Equation", "Equation", type_text).when(editing).params(r#"{"text": string}"#),
         CommandSpec::new("equation.insertStructure", "Insert Structure", "Equation › Structures", insert_structure)
-            .params(r#"{"id"?: string (see equation.gallery), "linear"?: string, "latex"?: string}"#),
+            .params(r#"{"id"?: string (see equation.gallery), "linear"?: string, "latex"?: string, "omml"?: string}"#),
         CommandSpec::new("equation.insertSymbol", "Insert Symbol", "Equation › Symbols", insert_symbol).params(r#"{"char": string}"#),
         CommandSpec::new("equation.move", "Move in Equation", "Equation", move_caret)
             .pure()
@@ -63,7 +63,9 @@ pub fn specs() -> Vec<CommandSpec> {
             .when(near_equation)
             .params(r#"{"jc": "centerGroup|center|left|right"}"#),
         CommandSpec::new("equation.number", "Equation Number", "Equation", number).when(near_equation).params(r#"{"value"?: bool}"#),
-        CommandSpec::new("equation.set", "Set Equation", "Equation", set).when(near_equation).params(r#"{"linear"?: string, "latex"?: string}"#),
+        CommandSpec::new("equation.set", "Set Equation", "Equation", set)
+            .when(near_equation)
+            .params(r#"{"linear"?: string, "latex"?: string, "omml"?: string (one m:oMath or m:oMathPara)}"#),
         CommandSpec::new("equation.get", "Equation Info", "Equation", get).pure().when(near_equation),
         CommandSpec::new("equation.gallery", "Equation Gallery", "Equation › Structures", gallery).pure(),
         CommandSpec::new("equation.structureActions", "Structure Actions", "Equation", structure_actions).pure().when(editing),
@@ -138,13 +140,17 @@ fn result(s: &Session) -> CmdResult {
     Ok(json!({"editing": true, "linear": linear, "display": display, "pos": serde_json::to_value(&m.pos).unwrap_or(Value::Null)}))
 }
 
-/// Nodes from `linear`, `latex` or a gallery `id` / `builtin` parameter.
+/// Nodes from `linear`, `latex`, `omml` (one `m:oMath` / `m:oMathPara`, as the equation editor
+/// and the clipboard give it) or a gallery `id` / `builtin` parameter.
 fn nodes_from(v: &Value) -> Option<Arg> {
     if let Some(id) = p::str(v, "id") {
         return crate::math_gallery::template(id).map(|t| t.nodes());
     }
     if let Some(b) = p::str(v, "builtin") {
         return crate::math_gallery::BUILT_INS.iter().find(|(id, _, _)| *id == b).map(|(_, _, lin)| parse_linear(lin));
+    }
+    if let Some(x) = p::str(v, "omml") {
+        return crate::equashion_bridge::omml_equation(x).map(|(m, _)| m.nodes);
     }
     if let Some(l) = p::str(v, "latex") {
         return Some(parse_latex(l));
@@ -157,13 +163,14 @@ fn insert(s: &mut Session, v: &Value) -> CmdResult {
     let nodes = match nodes_from(v) {
         Some(n) => n,
         None if p::str(v, "id").is_some() || p::str(v, "builtin").is_some() => return Err(CmdError::Params("unknown equation".into())),
+        None if p::str(v, "omml").is_some() => return Err(CmdError::Params("not an OMML equation".into())),
         // Selected text becomes the equation (Word converts it).
         None => parse_linear(selected.trim()),
     };
     insert_nodes_as_equation(s, nodes, v)
 }
 
-fn insert_nodes_as_equation(s: &mut Session, nodes: Arg, v: &Value) -> CmdResult {
+pub(super) fn insert_nodes_as_equation(s: &mut Session, nodes: Arg, v: &Value) -> CmdResult {
     s.math = None;
     let props = s.typing_props();
     let at = delete_selection(s)?;
@@ -564,7 +571,7 @@ fn without_number(row: Arg) -> Arg {
 
 fn set(s: &mut Session, v: &Value) -> CmdResult {
     let at = equation_at_caret(s).ok_or_else(|| CmdError::Disabled("no equation at the caret".into()))?;
-    let nodes = nodes_from(v).ok_or_else(|| CmdError::Params("give linear or latex".into()))?;
+    let nodes = nodes_from(v).ok_or_else(|| CmdError::Params("give linear, latex or omml (an OMML equation)".into()))?;
     let end = me::units(&nodes);
     with_eq(s, &at, |math, _| {
         math.nodes = nodes;
@@ -732,6 +739,23 @@ mod tests {
         }
         assert!(s.math.is_none());
         assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().objects.len(), 0);
+    }
+
+    #[test]
+    fn omml_inserts_and_sets_equations() {
+        let mut s = session();
+        let frac = r#"<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><m:f><m:num><m:r><m:t>a</m:t></m:r></m:num><m:den><m:r><m:t>b</m:t></m:r></m:den></m:f></m:oMath>"#;
+        s.run("insert.equation", &json!({"omml": frac})).unwrap();
+        assert_eq!(linear(&s), "a/b");
+        // The equation editor's result: what `equation.set` applies, one undo step.
+        let depth = s.undo_depth();
+        s.run("equation.set", &json!({"omml": "<m:oMath><m:rad><m:radPr><m:degHide m:val=\"1\"/></m:radPr><m:deg/><m:e><m:r><m:t>x</m:t></m:r></m:e></m:rad></m:oMath>"})).unwrap();
+        assert_eq!(linear(&s), "√x");
+        assert_eq!(s.undo_depth(), depth + 1);
+        // Not OMML: an error, nothing changes.
+        assert!(s.run("equation.set", &json!({"omml": "<p>no math</p>"})).is_err());
+        assert!(s.run("insert.equation", &json!({"omml": "<<<"})).is_err());
+        assert_eq!(linear(&s), "√x");
     }
 
     #[test]

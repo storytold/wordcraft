@@ -977,6 +977,79 @@ fn copying_symbol_font_text_puts_the_unicode_symbols_on_the_clipboard() {
     assert_eq!(text(&s), "ok J\u{F0FC}ok J\u{F0FC}");
 }
 
+/// The body's equations: (linear text, display).
+fn equations_display(s: &Session) -> Vec<(String, bool)> {
+    let mut out = Vec::new();
+    for path in s.doc.para_paths(StoryRef::Body) {
+        let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
+        for off in p.object_offsets() {
+            if let Some(wordcraft_doc::InlineObject::Equation { linear, display, .. }) = p.object_at(off) {
+                out.push((linear.clone(), *display));
+            }
+        }
+    }
+    out
+}
+
+/// Text that is exactly one equation (OMML, MathML or LaTeX in `$..$`, `$$..$$`, `\(..\)`,
+/// `\[..\]`) pastes as an equation, in one undo step, with the caret after it. Everything else,
+/// and Keep Text Only, pastes as text.
+#[test]
+fn pasting_an_equation_inserts_an_equation() {
+    const M: &str = "http://schemas.openxmlformats.org/officeDocument/2006/math";
+    let frac = format!("<m:oMath xmlns:m=\"{M}\"><m:f><m:num><m:r><m:t>a</m:t></m:r></m:num><m:den><m:r><m:t>b</m:t></m:r></m:den></m:f></m:oMath>");
+    let para = format!(
+        "<m:oMathPara xmlns:m=\"{M}\"><m:oMath><m:sSub><m:e><m:r><m:t>x</m:t></m:r></m:e><m:sub><m:r><m:t>i</m:t></m:r></m:sub></m:sSub></m:oMath></m:oMathPara>"
+    );
+    let mathml = "<math xmlns=\"http://www.w3.org/1998/Math/MathML\"><msup><mi>e</mi><mi>x</mi></msup></math>".to_string();
+    let block = "<math display=\"block\"><mfrac><mn>1</mn><mn>2</mn></mfrac></math>".to_string();
+    for (clip, linear, display, format) in [
+        ("$x^2$".to_string(), "x^2", false, "LaTeX"),
+        ("  $$\\frac{a}{b}$$\n".to_string(), "a/b", true, "LaTeX"),
+        ("\\(\\sqrt{x}\\)".to_string(), "√x", false, "LaTeX"),
+        ("\\[\\sum_{i=1}^{n} i\\]".to_string(), "∑_(i=1)^n▒i", true, "LaTeX"),
+        (frac, "a/b", false, "OMML"),
+        (para, "x_i", true, "OMML"),
+        (mathml, "e^x", false, "MathML"),
+        (block, "1/2", true, "MathML"),
+    ] {
+        let mut s = s();
+        run(&mut s, "document.setText", json!({"text": "Before "}));
+        run(&mut s, "caret.docEnd", json!({}));
+        let depth = s.undo_depth();
+        let r = run(&mut s, "edit.paste", json!({"text": clip}));
+        assert_eq!((r["pasted"].as_str(), r["format"].as_str()), (Some("equation"), Some(format)), "{clip}");
+        assert_eq!(equations_display(&s), vec![(linear.to_string(), display)], "{clip}");
+        assert!(s.math.is_none(), "{clip}: the caret is after the equation, not in it");
+        assert_eq!(s.undo_depth(), depth + 1, "{clip}: one undo step");
+        run(&mut s, "edit.undo", json!({}));
+        assert!(equations_display(&s).is_empty(), "{clip}");
+        assert_eq!(text(&s), "Before ");
+    }
+
+    // Ordinary text with dollar signs (and markup that is not one equation) stays text.
+    for clip in ["It costs $5 and $6.", "$5", "between $ 5 and 6 $", "$a$ and $b$", "US$", "<b>x</b>", "<math><mi>x</mi></math> and more"] {
+        let mut s = s();
+        let r = run(&mut s, "edit.paste", json!({"text": clip}));
+        assert!(r.get("pasted").is_none(), "{clip}");
+        assert!(equations_display(&s).is_empty(), "{clip}");
+        assert_eq!(text(&s), clip);
+    }
+
+    // Keep Text Only pastes the LaTeX itself.
+    let mut kept = s();
+    run(&mut kept, "edit.pasteText", json!({"text": "$x^2$"}));
+    assert!(equations_display(&kept).is_empty());
+    assert_eq!(text(&kept), "$x^2$");
+
+    // An equation that cannot be read pastes as its text, and the status bar says why.
+    let mut bad = s();
+    run(&mut bad, "edit.paste", json!({"text": "<m:oMath/>"}));
+    assert!(equations_display(&bad).is_empty());
+    assert_eq!(text(&bad), "<m:oMath/>");
+    assert!(bad.status.contains("could not be read"), "{}", bad.status);
+}
+
 fn bold_at(s: &Session, block: usize, off: usize) -> bool {
     let pos = Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(block), off };
     s.doc.para_at(&pos).and_then(|p| p.props_of_char(off).bold).unwrap_or(false)

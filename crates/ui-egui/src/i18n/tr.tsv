@@ -802,6 +802,7 @@ preview	Title	Örnek
 	Undo {n} Actions	{n} Eylemi Geri Al
 	Unformatted Text	Biçimlendirilmemiş Metin
 	Up	Yukarı
+	Update	Güncelle
 	Update Field	Alanı Güncelle
 	Update Index	Dizini Güncelle
 	Update Style to Match Selection	Stili Seçime Göre Güncelle
@@ -2629,3 +2630,4 @@ preview	Title	Örnek
 # Reading Mode column widths (#1040)
 	Narrow	Dar
 	Medium	Orta
+	Replace Image	Resmi değiştir

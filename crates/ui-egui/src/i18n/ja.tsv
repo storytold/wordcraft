@@ -927,6 +927,7 @@
 	Undo {n} Actions	{n} 件の操作を元に戻す
 	Ungroup	グループ解除
 	Up	上
+	Update	更新
 	Update Field	フィールドの更新
 	Update Index	索引の更新
 	Update Style to Match Selection	選択箇所と一致するようにスタイルを更新
@@ -2233,3 +2234,4 @@
 # Reading Mode column widths (#1040)
 	Narrow	狭い
 	Medium	中
+	Replace Image	画像を置き換え
