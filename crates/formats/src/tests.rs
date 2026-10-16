@@ -513,6 +513,12 @@ fn hostile_rtf_bits() {
     ] {
         let _ = import("rtf", s).unwrap();
     }
+    // #1653: a flood of multibyte code-page bytes (leads and trails, raw and escaped) is capped
+    // and never panics.
+    let mut rtf = b"{\\rtf1\\ansi\\ansicpg932 ".to_vec();
+    rtf.resize(rtf.len() + 200_000, 0x93);
+    rtf.extend_from_slice(b"\\'fa\\par\\'93");
+    assert!(import("rtf", &rtf).unwrap().is_ok());
 }
 
 proptest::proptest! {
