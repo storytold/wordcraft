@@ -135,6 +135,25 @@ fn rescanning_finds_fonts_installed_since() {
     assert!(db.has_family(FAMILY) && has(&db.families(), FAMILY));
 }
 
+/// A rescan tells watchers (the UI lays out again and refreshes its font lists) and forgets the
+/// characters no font covered, so a font installed since serves as a fallback (#2499). The
+/// first scan changes nothing a watcher has seen.
+#[test]
+fn a_rescan_tells_watchers_and_retries_fallbacks() {
+    let dir = font_dir("rescan-watch");
+    let later = dir.join("Later");
+    let db = FontDb::with_font_dirs(vec![later.clone()]);
+    let start = db.generation();
+    assert_eq!(db.load_system_fonts(), 0);
+    assert_eq!(db.generation(), start, "the first scan");
+    db.sys.lock().unwrap().misses.insert('A');
+    std::fs::create_dir_all(&later).unwrap();
+    std::fs::copy(dir.join("Sysfont-Regular.ttf"), later.join("Sysfont-Regular.ttf")).unwrap();
+    assert_eq!(db.load_system_fonts(), 1);
+    assert!(db.generation() > start, "a rescan moves the generation");
+    assert!(db.sys.lock().unwrap().misses.is_empty(), "misses are retried after a rescan");
+}
+
 #[test]
 fn a_background_scan_serves_the_first_lookup() {
     let dir = font_dir("background");

@@ -12,6 +12,8 @@ use skrifa::raw::FileRef;
 use skrifa::string::StringId;
 use skrifa::{GlyphId, MetadataProvider};
 
+#[cfg(not(target_arch = "wasm32"))]
+mod fontconfig;
 mod user;
 pub use user::{FONT_FILE_EXTS, FontFormat, Installed, MAX_FONT_FILE_BYTES, UserFont, UserFontError, decode_font_file, is_font_file_name, sniff};
 
@@ -310,7 +312,8 @@ pub struct FontDb {
     catalog: RwLock<Vec<CatalogEntry>>,
     /// Fonts the user added at run time, and the folder they are stored in (#582).
     user: RwLock<user::UserFonts>,
-    /// Bumped whenever user fonts are added or removed ([`FontDb::generation`]).
+    /// Bumped whenever user fonts are added or removed, or the system font folders are scanned
+    /// again ([`FontDb::generation`]).
     generation: AtomicU64,
     /// The folders the system font scan reads (the platform's font folders for [`FontDb::global`]).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -736,6 +739,13 @@ pub fn system_font_dirs() -> Vec<std::path::PathBuf> {
             dirs.push(h.join(".fonts"));
             dirs.push(h.join(".local/share/fonts"));
         }
+        // And every folder the fontconfig configuration adds, as `fc-list` lists them (#2499).
+        #[cfg(not(target_arch = "wasm32"))]
+        for d in fontconfig::dirs(&fontconfig::Env::from_process()) {
+            if !dirs.contains(&d) {
+                dirs.push(d);
+            }
+        }
     }
     dirs
 }
@@ -1129,7 +1139,22 @@ impl FontDb {
         // The first scan, or a rescan once it is done (never both at once).
         let mut first = None;
         self.cataloged.get_or_init(|| first = Some(self.scan_font_dirs()));
-        first.unwrap_or_else(|| self.scan_font_dirs())
+        first.unwrap_or_else(|| {
+            let n = self.scan_font_dirs();
+            self.rescanned();
+            n
+        })
+    }
+
+    /// After a rescan: forget the fallback answers and the characters no font covered (a font
+    /// installed since may), and tell watchers ([`FontDb::generation`]), so text is laid out
+    /// again and the font lists show what was found (#2499).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn rescanned(&self) {
+        self.fallbacks.write().unwrap_or_else(|e| e.into_inner()).map.clear();
+        *self.ea_fallbacks.write().unwrap_or_else(|e| e.into_inner()) = EaFallbackCache::default();
+        self.sys.lock().unwrap_or_else(|e| e.into_inner()).misses.clear();
+        self.generation.fetch_add(1, Ordering::AcqRel);
     }
 
     #[cfg(not(target_arch = "wasm32"))]

@@ -318,13 +318,26 @@ impl WordApp {
         let _ = self.ask_file(FileDialogRequest::Open { purpose: "font".into() }, AfterPick::Font);
     }
 
-    /// Request loading local system installed fonts (web: queryLocalFonts).
+    /// Request loading local system installed fonts (web: queryLocalFonts). The desktop scans
+    /// the font folders again, for fonts installed since WordCraft started (#2499).
     pub(crate) fn load_system_fonts(&mut self) {
         if let Some(f) = &self.services.load_system_fonts {
             f();
-        } else {
-            self.status(tl!("All system fonts are already available."));
+            return;
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let db = wordcraft_fonts::FontDb::global();
+            let before: std::collections::HashSet<String> = db.families().iter().map(|f| f.to_lowercase()).collect();
+            db.load_system_fonts();
+            let found = db.families().iter().filter(|f| !before.contains(&f.to_lowercase())).count();
+            if found > 0 {
+                let msg = crate::i18n::fmt(tl!("Loaded {count} system fonts."), &[("count", &found.to_string())]);
+                self.status(msg);
+                return;
+            }
+        }
+        self.status(tl!("All system fonts are already available."));
     }
 }
 
@@ -577,6 +590,8 @@ mod tests {
         assert!(called.get());
     }
 
+    /// The desktop has no hook: it scans the font folders again, and with nothing installed
+    /// since, says so (#2499).
     #[test]
     fn load_system_fonts_without_hook_reports_status() {
         let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
