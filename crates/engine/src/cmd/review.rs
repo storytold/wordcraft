@@ -806,7 +806,7 @@ fn word_count(s: &mut Session, v: &Value) -> CmdResult {
     } else {
         wordcraft_doc::count_words(&text)
     };
-    let chars = text.chars().filter(|c| *c != '\n').count();
+    let chars = text.chars().filter(|c| *c != '\n' && *c != '\r').count();
     let chars_no_spaces = text.chars().filter(|c| !c.is_whitespace()).count();
     let paragraphs = text.split('\n').filter(|l| !l.trim().is_empty()).count();
     let lines: usize = {

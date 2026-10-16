@@ -2897,6 +2897,17 @@ fn word_count_includes_numbered_list_labels_in_words_but_not_characters() {
     assert_eq!(v["charactersWithSpaces"].as_u64(), Some(5));
 }
 
+#[test]
+fn word_count_excludes_carriage_returns_from_character_counts() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello\r\nWorld"}));
+    run(&mut s, "select.all", json!({}));
+    let v = run(&mut s, "review.wordCount", json!({}));
+    assert_eq!(v["words"].as_u64(), Some(2));
+    assert_eq!(v["characters"].as_u64(), Some(10));
+    assert_eq!(v["charactersWithSpaces"].as_u64(), Some(10));
+}
+
 /// The laid-out area of the only text box.
 fn box_area(s: &mut Session) -> wordcraft_layout::hit::ObjectHit {
     let l = s.layout();
