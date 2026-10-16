@@ -736,6 +736,10 @@ pub fn system_font_dirs() -> Vec<std::path::PathBuf> {
             dirs.push(h.join(".fonts"));
             dirs.push(h.join(".local/share/fonts"));
         }
+        // Flatpak (#1937): the folders above are the runtime's, and the host's system, local and
+        // user fonts are mounted here instead (no filesystem permission needed). Flatpak after
+        // 1.19.2 also mounts ~/.fonts, at user-fonts-legacy when the XDG user font folder exists too.
+        dirs.extend(["/run/host/fonts", "/run/host/local-fonts", "/run/host/user-fonts", "/run/host/user-fonts-legacy"].map(Into::into));
     }
     dirs
 }
@@ -1709,6 +1713,16 @@ mod tests_sysfonts;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    fn system_font_dirs_include_the_flatpak_host_folders() {
+        // Inside a Flatpak, /usr/share/fonts is the runtime's: the host's fonts are under /run/host (#1937).
+        let dirs = system_font_dirs();
+        for d in ["/usr/share/fonts", "/run/host/fonts", "/run/host/local-fonts", "/run/host/user-fonts", "/run/host/user-fonts-legacy"] {
+            assert!(dirs.contains(&std::path::PathBuf::from(d)), "{d} missing from {dirs:?}");
+        }
+    }
 
     #[test]
     fn east_asian_run_fallback_is_cached_per_char_set() {
