@@ -69,7 +69,13 @@ pub fn start() {
                     if !sample {
                         app.start_screen();
                     }
-                    Ok(Box::new(WebShell { app, inbox, messages }))
+                    Ok(Box::new(WebShell {
+                        app,
+                        inbox,
+                        messages,
+                        #[cfg(feature = "self-hosted-update")]
+                        updates: crate::updates::browser(cc.egui_ctx.clone()),
+                    }))
                 }),
             )
             .await;
@@ -92,6 +98,8 @@ struct WebShell {
     app: WordApp,
     inbox: Inbox,
     messages: Rc<RefCell<Vec<String>>>,
+    #[cfg(feature = "self-hosted-update")]
+    updates: crate::updates::Updates<craft_update::web::Client>,
 }
 
 impl eframe::App for WebShell {
@@ -123,6 +131,8 @@ impl eframe::App for WebShell {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        #[cfg(feature = "self-hosted-update")]
+        self.updates.show(ui);
         self.app.ui(ui);
     }
 }

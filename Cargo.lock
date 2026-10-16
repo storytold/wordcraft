@@ -886,6 +886,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-update"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=9b85a7c3973b6c799a28553a5376789d33846aa0#9b85a7c3973b6c799a28553a5376789d33846aa0"
+dependencies = [
+ "egui",
+ "js-sys",
+ "serde",
+ "serde_json",
+ "sha2",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
 name = "crc32fast"
 version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5406,8 +5421,10 @@ dependencies = [
 name = "wordcraft-web"
 version = "0.7.0"
 dependencies = [
+ "craft-update",
  "eframe",
  "egui",
+ "egui_kittest",
  "js-sys",
  "log",
  "rfd",

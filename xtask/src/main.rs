@@ -21,7 +21,8 @@ commands:
   assets          check that every icon/image/font/asset is attributed in ATTRIBUTION.md
   layers          enforce the crate dependency layering (plan/architecture.md §3)
   wasm            cargo check --target wasm32-unknown-unknown for the wasm-safe crates
-  ci              fmt --check, clippy -D warnings, test, assets, layers, wasm (stops at first failure)
+  ci              fmt --check, clippy -D warnings, test, assets, layers, wasm, self-hosted-update
+                  (stops at first failure)
   corpus [--download]
                   show where test corpora live; --download fetches PngSuite into corpus/pngsuite
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
@@ -153,6 +154,21 @@ fn cmd_wasm() -> Result<(), String> {
     if failed == 0 { Ok(()) } else { Err(format!("{failed} crate(s) failed the wasm check")) }
 }
 
+/// The web app's opt-in `self-hosted-update` feature is off in every other step, so it gets its
+/// own: clippy, its tests and the wasm build with the feature on.
+fn cmd_self_hosted_update() -> Result<(), String> {
+    let feature = ["-p", "wordcraft-web", "--features", "self-hosted-update"];
+    let mut c = cargo();
+    c.args(["clippy", "--all-targets"]).args(feature).args(["--", "-D", "warnings"]);
+    run(c, "cargo clippy --all-targets -p wordcraft-web --features self-hosted-update -- -D warnings")?;
+    let mut c = cargo();
+    c.arg("test").args(feature);
+    run(c, "cargo test -p wordcraft-web --features self-hosted-update")?;
+    let mut c = cargo();
+    c.args(["check", "--target", "wasm32-unknown-unknown"]).args(feature);
+    run(c, "cargo check --target wasm32-unknown-unknown -p wordcraft-web --features self-hosted-update")
+}
+
 fn cmd_ci() -> Result<(), String> {
     type Step = (&'static str, Box<dyn Fn() -> Result<(), String>>);
     let steps: Vec<Step> = vec![
@@ -183,6 +199,7 @@ fn cmd_ci() -> Result<(), String> {
         ("assets", Box::new(|| assets::run(&root()))),
         ("layers", Box::new(cmd_layers)),
         ("wasm", Box::new(cmd_wasm)),
+        ("self-hosted-update", Box::new(cmd_self_hosted_update)),
     ];
     let mut done = Vec::new();
     for (name, f) in &steps {

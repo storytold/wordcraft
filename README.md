@@ -144,6 +144,8 @@ wordcraft-cli run --template sample \
 ```
 
 Web: `cd apps/wordcraft-web && trunk serve`, then open <http://127.0.0.1:8771/?sample>.
+Hosting it yourself? The optional `self-hosted-update` feature adds update notices and an
+administrator-triggered update; see [`docs/self-hosted-updates.md`](docs/self-hosted-updates.md).
 
 ## For agents: CLI and MCP
 
