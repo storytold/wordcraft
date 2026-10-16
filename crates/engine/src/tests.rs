@@ -5605,6 +5605,50 @@ fn italian_proofing_through_the_review_commands() {
     assert_eq!(left.as_array().unwrap().len(), 1, "{left}");
 }
 
+fn romanian_test_dictionary() {
+    let aff = "SET UTF-8\nTRY iaăâșțîertolncus\nMAP 3\nMAP aăâî\nMAP iîâ\nMAP tț\nREP 1\nREP ia ea\n";
+    let dic = "7\ncasa\nțară\nmea\neste\nfrumoasă\nmare\nnu\n";
+    wordcraft_proof::ro::install_dictionary(aff, dic).unwrap();
+}
+
+/// Review › Language and the proofing commands work in Romanian end to end: the language makes
+/// the document's words Romanian, F7 and the issue list use the Romanian dictionary and grammar,
+/// suggestions come from it, and a suggestion fixes the text.
+#[test]
+fn romanian_proofing_through_the_review_commands() {
+    romanian_test_dictionary();
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Casa mea tara este mare mare, frumoasă."}));
+    // English by default: the Romanian words are English misspellings (`casa`, `mare`, `tara`
+    // are English words too).
+    let english = run(&mut s, "review.issues", json!({}));
+    assert!(english.as_array().unwrap().iter().any(|i| i["text"] == "frumoasă" && i["lang"] == "en"), "{english}");
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "review.language", json!({"lang": "ro_RO", "default": true}));
+    assert_eq!(s.doc.styles.default_chr.lang.as_deref(), Some("ro-RO"), "the tag is normalized");
+    assert_eq!(run(&mut s, "format.state", json!({}))["lang"], "ro-RO");
+    let issues = run(&mut s, "review.issues", json!({}));
+    let arr = issues.as_array().unwrap();
+    let has = |text: &str, kind: &str, sugg: &str| {
+        arr.iter()
+            .any(|i| i["text"] == text && i["kind"] == kind && i["lang"] == "ro" && i["suggestions"].as_array().unwrap().iter().any(|x| x == sugg))
+    };
+    assert!(has("tara", "spelling", "țară"), "{issues}");
+    assert!(has("mare mare", "grammar", "mare"), "{issues}");
+    assert_eq!(arr.len(), 2, "{issues}");
+    assert!(arr.iter().any(|i| i["message"] == "Cuvânt repetat: „mare”"), "{issues}");
+    // F7 from the start selects the first issue; Change applies a suggestion.
+    run(&mut s, "caret.docStart", json!({}));
+    let first = run(&mut s, "review.spelling", json!({}));
+    assert_eq!(first["text"], "tara");
+    run(&mut s, "review.applySuggestion", json!({"text": "țară"}));
+    assert!(text(&s).starts_with("Casa mea țară este"), "{}", text(&s));
+    // Add to Dictionary works for Romanian words too.
+    run(&mut s, "review.addToDictionary", json!({"word": "tara"}));
+    let left = run(&mut s, "review.issues", json!({}));
+    assert_eq!(left.as_array().unwrap().len(), 1, "{left}");
+}
+
 #[test]
 fn polish_proofing_through_the_review_commands() {
     polish_test_dictionary();
