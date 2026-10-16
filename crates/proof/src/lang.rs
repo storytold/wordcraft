@@ -21,6 +21,7 @@ pub enum ProofLang {
     /// friends, when there is one), the Portuguese grammar rules and the Portuguese hyphenation
     /// patterns.
     Pt,
+    Es,
     /// Italian (`it`, `it-IT`, `it-CH`): the installed Hunspell dictionary (`it_IT`, when there
     /// is one), the Italian grammar rules and the Italian hyphenation patterns.
     It,
@@ -44,8 +45,8 @@ pub enum ProofLang {
 
 impl ProofLang {
     /// Every language with a spelling dictionary, in display order.
-    pub const PROOFED: [ProofLang; 8] =
-        [ProofLang::En, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Hr, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs];
+    pub const PROOFED: [ProofLang; 9] =
+        [ProofLang::En, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Hr, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Es];
 
     /// The proofing language of a BCP 47 tag (`pl-PL`, `en_GB`, `PL`…). Only the primary subtag
     /// counts. No tag (or an empty one) is English, WordCraft's default editing language.
@@ -60,6 +61,8 @@ impl ProofLang {
             ProofLang::Bg
         } else if primary.eq_ignore_ascii_case("pt") || primary.eq_ignore_ascii_case("por") {
             ProofLang::Pt
+        } else if primary.eq_ignore_ascii_case("es") || primary.eq_ignore_ascii_case("spa") {
+            ProofLang::Es
         } else if primary.eq_ignore_ascii_case("it") || primary.eq_ignore_ascii_case("ita") {
             ProofLang::It
         } else if primary.eq_ignore_ascii_case("hr") || primary.eq_ignore_ascii_case("hrv") {
@@ -82,6 +85,7 @@ impl ProofLang {
             ProofLang::Pl => "pl",
             ProofLang::Bg => "bg",
             ProofLang::Pt => "pt",
+            ProofLang::Es => "es",
             ProofLang::It => "it",
             ProofLang::Hr => "hr",
             ProofLang::Tr => "tr",

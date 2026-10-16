@@ -43,6 +43,7 @@ pub mod affix;
 pub mod bg;
 pub mod cs;
 pub mod dict;
+pub mod es;
 pub mod hr;
 pub mod hunspell;
 pub mod hyphen;
@@ -594,6 +595,7 @@ fn spelling_issue(text: &str, a: usize, b: usize, lang: ProofLang, opts: &Option
         ProofLang::Pl => "Możliwy błąd pisowni",
         ProofLang::Hr => "Moguća pravopisna pogreška",
         ProofLang::Pt => "Possível erro de ortografia",
+        ProofLang::Es => "Posible error de ortografía",
         ProofLang::It => "Possibile errore di ortografia",
         ProofLang::Tr => "Olası yazım hatası",
         ProofLang::Ru => "Возможна орфографическая ошибка",
@@ -615,6 +617,7 @@ pub fn is_correct_in_with(word: &str, lang: ProofLang, opts: &Options) -> bool {
         ProofLang::Pl => accepted_by_options(word, opts) || pl::is_correct(word),
         ProofLang::Hr => accepted_by_options(word, opts) || hr::is_correct(word),
         ProofLang::Pt => accepted_by_options(word, opts) || pt::is_correct(word),
+        ProofLang::Es => accepted_by_options(word, opts) || es::is_correct(word),
         ProofLang::It => accepted_by_options(word, opts) || it::is_correct(word),
         ProofLang::Tr => accepted_by_options(word, opts) || tr::is_correct(word),
         ProofLang::Ru => accepted_by_options(word, opts) || ru::is_correct(word),
@@ -630,6 +633,7 @@ pub fn suggest_in(word: &str, max: usize, lang: ProofLang) -> Vec<String> {
         ProofLang::Pl => pl::suggest(word, max),
         ProofLang::Hr => hr::suggest(word, max),
         ProofLang::Pt => pt::suggest(word, max),
+        ProofLang::Es => es::suggest(word, max),
         ProofLang::It => it::suggest(word, max),
         ProofLang::Tr => tr::suggest(word, max),
         ProofLang::Ru => ru::suggest(word, max),
@@ -647,6 +651,7 @@ pub fn check_grammar_in(text: &str, lang: ProofLang) -> Vec<Issue> {
         ProofLang::Pl => pl::grammar::check(text),
         ProofLang::Hr => hr::grammar::check(text),
         ProofLang::Pt => pt::grammar::check(text),
+        ProofLang::Es => es::grammar::check(text),
         ProofLang::It => it::grammar::check(text),
         ProofLang::Tr => tr::grammar::check(text),
         ProofLang::Ru => ru::grammar::check(text),
@@ -1177,7 +1182,7 @@ mod tests {
         for l in [None, Some(""), Some("  "), Some("en"), Some("en-US"), Some("en-GB"), Some("EN-us"), Some("en_US")] {
             assert!(has_dictionary(l), "{l:?}");
         }
-        for l in [Some("lt-LT"), Some("fr-FR"), Some("de"), Some("uk"), Some("es"), Some("-US"), Some("e")] {
+        for l in [Some("lt-LT"), Some("fr-FR"), Some("de"), Some("uk"), Some("-US"), Some("e")] {
             assert!(!has_dictionary(l), "{l:?}");
         }
         // The gate follows the dictionaries, not English: every proofed language is proofed.
@@ -1281,6 +1286,14 @@ mod tests {
         let v = check_text(t, &[(0..t.len(), ProofLang::Pt)]);
         assert_eq!(flagged(t, &v), ["coraçao", "frequencia"], "{v:?}");
         assert!(v.iter().all(|i| i.lang == ProofLang::Pt && i.message == "Possível erro de ortografia"), "{v:?}");
+        // Spanish (es-419) checks in its span only, with the Spanish message and suggestions.
+        assert_eq!(ProofLang::from_tag(Some("es-419")), ProofLang::Es);
+        es::test_dict::install();
+        let t_es = "Él dijo que nino y accion existen.";
+        let v_es = check_text(t_es, &[(0..t_es.len(), ProofLang::from_tag(Some("es-419")))]);
+        assert_eq!(flagged(t_es, &v_es), ["nino", "accion"], "{v_es:?}");
+        assert!(v_es.iter().all(|i| i.lang == ProofLang::Es && i.message == "Posible error de ortografía"), "{v_es:?}");
+        assert!(suggest_in("nino", 3, ProofLang::Es).contains(&"niño".to_string()));
         // Italian checks in its span only, with the Italian message.
         it::test_dict::install();
         let t = "Vado a Roma con lbiro e caffe.";

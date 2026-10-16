@@ -85,7 +85,14 @@ pub static LANGUAGES: [LangInfo; 23] = [
         code: "uk", name: "Українська", source: include_str!("uk.tsv"), prefer_hans: false, editing_lang: None, catalog: OnceLock::new()
     },
     // Spanish, neutral across Spain and Latin America; `es-ES`, `es-MX`, `es-419` … resolve here.
-    LangInfo { code: "es", name: "Español", source: include_str!("es.tsv"), prefer_hans: false, editing_lang: None, catalog: OnceLock::new() },
+    LangInfo {
+        code: "es",
+        name: "Español",
+        source: include_str!("es.tsv"),
+        prefer_hans: false,
+        editing_lang: Some("es-419"),
+        catalog: OnceLock::new(),
+    },
     // Brazilian Portuguese; `pt-BR` and `pt-BR-*` resolve here. Plain `pt` and `pt-PT` have no
     // catalog yet (the European vocabulary differs), so they stay in English.
     LangInfo {

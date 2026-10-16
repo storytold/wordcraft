@@ -501,11 +501,12 @@ fn mi_text(ui: &mut Ui, app: &mut WordApp, text: &str, id: &str, params: Value) 
 }
 
 /// The proofing languages the Language menu offers: tag and English name (translated when drawn).
-pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 9] = [
+pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 10] = [
     ("en-US", "English (United States)"),
     ("en-GB", "English (United Kingdom)"),
     ("pl-PL", "Polish"),
     ("pt-BR", "Portuguese (Brazil)"),
+    ("es-419", "Spanish (Latin America)"),
     ("it-IT", "Italian"),
     ("hr-HR", "Croatian"),
     ("tr-TR", "Turkish"),
@@ -546,6 +547,7 @@ pub(crate) fn language_name(tag: Option<&str>) -> String {
             wordcraft_engine::proof::ProofLang::Pl => "Polish".into(),
             wordcraft_engine::proof::ProofLang::Hr => "Croatian".into(),
             wordcraft_engine::proof::ProofLang::Pt => "Portuguese (Brazil)".into(),
+            wordcraft_engine::proof::ProofLang::Es => "Spanish (Latin America)".into(),
             wordcraft_engine::proof::ProofLang::It => "Italian".into(),
             wordcraft_engine::proof::ProofLang::Tr => "Turkish".into(),
             wordcraft_engine::proof::ProofLang::Ru => "Russian".into(),
@@ -661,6 +663,7 @@ pub(crate) fn language_menu(ui: &mut Ui, app: &mut WordApp) {
         current.eq_ignore_ascii_case(tag)
             || (tag == "pl-PL" && current.eq_ignore_ascii_case("pl"))
             || (tag == "pt-BR" && current.eq_ignore_ascii_case("pt"))
+            || (tag == "es-419" && current.eq_ignore_ascii_case("es"))
             || (tag == "it-IT" && current.eq_ignore_ascii_case("it"))
             || (tag == "hr-HR" && current.eq_ignore_ascii_case("hr"))
             || (tag == "tr-TR" && current.eq_ignore_ascii_case("tr"))
