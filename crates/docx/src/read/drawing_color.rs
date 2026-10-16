@@ -147,7 +147,7 @@ pub(crate) fn lum(c: Rgb, f: impl Fn(f64) -> f64) -> Rgb {
 }
 
 /// `tint` (towards `to` = 255) and `shade` (towards 0): `v` is the share of the original colour kept.
-fn mix(c: Rgb, to: f64, v: f64) -> Rgb {
+pub(crate) fn mix(c: Rgb, to: f64, v: f64) -> Rgb {
     let f = |x: u8| (x as f64 * v + to * (1.0 - v)).round().clamp(0.0, 255.0) as u8;
     Rgb(f(c.0), f(c.1), f(c.2))
 }

@@ -97,15 +97,22 @@ fn fill(e: &El, theme: &[Rgb]) -> Option<TextFill> {
 /// The colour element inside `e` (`w14:srgbClr`, `w14:schemeClr`) with its modifiers, and its
 /// transparency (percent, from `w14:alpha`).
 fn color(e: &El, theme: &[Rgb]) -> Option<(Rgb, f32)> {
-    let c = e.els().find(|c| matches!(c.name.as_str(), "w14:srgbClr" | "w14:schemeClr"))?;
+    let c = e.els().find(|c| matches!(c.name.as_str(), "w14:srgbClr" | "w14:schemeClr" | "w14:prstClr"))?;
     let val = c.attr("w14:val")?;
-    let mut rgb = if c.name == "w14:srgbClr" { Rgb::parse(val)? } else { super::drawing_color::scheme(val, theme)? };
+    let mut rgb = match c.name.as_str() {
+        "w14:srgbClr" => Rgb::parse(val)?,
+        "w14:schemeClr" => super::drawing_color::scheme(val, theme)?,
+        "w14:prstClr" => super::drawing_color::preset_color(val)?,
+        _ => return None,
+    };
     let mut transparency = 0.0;
     for m in c.els() {
         let v = m.attr("w14:val").and_then(int).map_or(0.0, |v| (v as f64 / 100_000.0).clamp(-10.0, 10.0));
         match m.name.as_str() {
             "w14:lumMod" => rgb = super::drawing_color::lum(rgb, |l| l * v),
             "w14:lumOff" => rgb = super::drawing_color::lum(rgb, |l| l + v),
+            "w14:tint" => rgb = super::drawing_color::mix(rgb, 255.0, v),
+            "w14:shade" => rgb = super::drawing_color::mix(rgb, 0.0, v),
             // Unlike DrawingML's `a:alpha`, `w14:alpha` is the transparency.
             "w14:alpha" => transparency = (v.clamp(0.0, 1.0) * 100.0) as f32,
             _ => {}
@@ -113,3 +120,30 @@ fn color(e: &El, theme: &[Rgb]) -> Option<(Rgb, f32)> {
     }
     Some((rgb, transparency))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wordcraft_doc::THEME_COLORS;
+
+    const NS: &str = r#"xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml""#;
+
+    #[test]
+    fn color_modifiers_and_presets() {
+        let theme = THEME_COLORS.to_vec();
+        let el = |body: &str| crate::xml::parse(format!(r#"<w14:solidFill {NS}>{body}</w14:solidFill>"#).as_bytes()).unwrap();
+
+        // Preset color
+        let (c, tr) = color(&el(r#"<w14:prstClr w14:val="red"/>"#), &theme).unwrap();
+        assert_eq!((c, tr), (Rgb(0xFF, 0, 0), 0.0));
+
+        // Tint towards white
+        let (c, tr) = color(&el(r#"<w14:srgbClr w14:val="000000"><w14:tint w14:val="50000"/></w14:srgbClr>"#), &theme).unwrap();
+        assert!((c.0 as i32 - 128).abs() <= 1 && tr == 0.0);
+
+        // Shade towards black
+        let (c, tr) = color(&el(r#"<w14:srgbClr w14:val="FFFFFF"><w14:shade w14:val="50000"/></w14:srgbClr>"#), &theme).unwrap();
+        assert!((c.0 as i32 - 128).abs() <= 1 && tr == 0.0);
+    }
+}
+
