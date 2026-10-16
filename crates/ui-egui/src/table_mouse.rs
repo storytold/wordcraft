@@ -26,6 +26,8 @@ pub(crate) struct TableDrag {
     /// The resize reach at the press (page points).
     reach: f32,
     target: Target,
+    /// Cmd (macOS) or Ctrl was held at the press: the cells add to those selected.
+    add: bool,
 }
 
 /// Whether the table mouse is in reach: when resizing is, and not while a border is dragged.
@@ -41,7 +43,8 @@ fn target_at(app: &WordApp, layout: &DocLayout, rects: &[Rect], scale: f32, p: P
     Some((page, x, y, reach, t))
 }
 
-/// Mouse input: a press on a selection area selects (and a drag goes on selecting), on an insert
+/// Mouse input: a press on a selection area selects (and a drag goes on selecting; with Cmd or
+/// Ctrl it adds to the selection), on an insert
 /// button inserts, on the move handle starts a move (released without moving, it selects the
 /// table). `false` (nothing done) when the pointer isn't on any of them, so the caret logic runs.
 pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layout: &DocLayout, scale: f32) -> bool {
@@ -54,7 +57,10 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect]
             d.to = ((p.x - r.min.x) / sc, (p.y - r.min.y) / sc);
         }
         let down = ui.input(|i| i.pointer.primary_down());
-        let at = json!({"page": d.page, "x": d.from.0, "y": d.from.1, "reach": d.reach, "toX": d.to.0, "toY": d.to.1});
+        let mut at = json!({"page": d.page, "x": d.from.0, "y": d.from.1, "reach": d.reach, "toX": d.to.0, "toY": d.to.1});
+        if d.add {
+            at["add"] = json!(true);
+        }
         if d.target.spot == Spot::Handle {
             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 return true;
@@ -80,6 +86,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect]
             }
             app.canvas.table_drag = Some(d);
         } else if matches!(d.target.spot, Spot::Cell(..))
+            && !d.add
             && resp.double_clicked()
             && let Err(e) = app.run("table.selectRow", json!({}))
         {
@@ -92,7 +99,12 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect]
     }
     let Some(p) = latest else { return false };
     let Some((page, x, y, reach, target)) = target_at(app, layout, rects, scale, p) else { return false };
-    let at = json!({"page": page, "x": x, "y": y, "reach": reach});
+    let mut at = json!({"page": page, "x": x, "y": y, "reach": reach});
+    // Cmd+click (Ctrl+click off macOS) adds rows, columns or cells to the selection, as in Word.
+    let add = ui.input(|i| i.modifiers.command) && matches!(target.spot, Spot::Column(_) | Spot::Row(_) | Spot::Cell(..));
+    if add {
+        at["add"] = json!(true);
+    }
     match target.spot {
         Spot::InsertRow(_) | Spot::InsertColumn(_) => {
             if let Err(e) = app.run("table.insertAt", at) {
@@ -106,7 +118,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect]
             {
                 app.status(e);
             }
-            app.canvas.table_drag = Some(TableDrag { page, from: (x, y), to: (x, y), sent: (x, y), reach, target });
+            app.canvas.table_drag = Some(TableDrag { page, from: (x, y), to: (x, y), sent: (x, y), reach, target, add });
         }
     }
     true
@@ -285,6 +297,32 @@ mod tests {
         click(&mut h, text);
         assert!(h.state().session.cell_range().is_none());
         assert_eq!(h.state().session.sel.focus.path.cell().map(|(_, r, c)| (r, c)), Some((1, 2)));
+    }
+
+    /// Cmd+click (Ctrl+click off macOS) adds columns and rows to the selection, apart from each
+    /// other too, as in Word; the context menu then treats them as whole columns or rows.
+    #[test]
+    fn a_command_click_adds_to_the_selection() {
+        use crate::canvas::{TablePick, table_pick};
+        let mut h = table_window();
+        let (a, c) = (cell(&mut h, 0, 0), cell(&mut h, 0, 2));
+        let (col0, col2) = (screen(&mut h, a.x + a.w / 2.0, a.y - 3.0), screen(&mut h, c.x + c.w / 2.0, c.y - 3.0));
+        click(&mut h, col0);
+        let cmd = egui::Modifiers { mac_cmd: cfg!(target_os = "macos"), ctrl: !cfg!(target_os = "macos"), command: true, ..Default::default() };
+        h.event(egui::Event::ModifiersChanged(cmd));
+        click(&mut h, col2);
+        h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+        steps(&mut h, 1);
+        let s = &h.state().session;
+        let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+        assert_eq!(s.cell_range().map(|r| r.cells(t)), Some(vec![(0, 0), (0, 2), (1, 0), (1, 2)]));
+        assert_eq!(table_pick(s), TablePick::Columns);
+        // Without the modifier a click starts again.
+        let r1 = cell(&mut h, 1, 0);
+        let row1 = screen(&mut h, r1.x - 10.0, r1.y + r1.h / 2.0);
+        click(&mut h, row1);
+        assert_eq!(h.state().session.cell_range().map(|r| (r.rows, r.cols, r.is_rect())), Some(((1, 1), (0, 2), true)));
+        assert_eq!(table_pick(&h.state().session), TablePick::Rows);
     }
 
     /// A drag down the row selection areas selects every row it passes, as it goes.

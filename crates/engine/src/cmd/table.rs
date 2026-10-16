@@ -1,5 +1,7 @@
 //! Table Design and Table Layout tabs.
 
+use std::collections::BTreeSet;
+
 use serde_json::{Value, json};
 use wordcraft_doc::collate::{SortKey, sort_key};
 use wordcraft_doc::locale_number::parse_number;
@@ -440,6 +442,12 @@ fn selected_cells(s: &Session) -> Vec<(usize, usize)> {
     v
 }
 
+/// The selection is table cells that aren't one rectangle (Ctrl/Cmd+clicked rows, columns or
+/// cells apart from each other).
+fn scattered(s: &Session) -> bool {
+    s.cell_range().is_some_and(|r| !r.is_rect())
+}
+
 fn with_cells(s: &mut Session, f: impl Fn(&mut wordcraft_doc::Cell)) -> CmdResult {
     let (tp, _, _) = cell(s)?;
     let cells = selected_cells(s);
@@ -497,6 +505,9 @@ fn fix_caret(s: &mut Session, tp: &Path, r: usize, c: usize) -> CmdResult {
 /// Insert Above / Below: rows like the caret's, as many as the selection spans; the caret goes into the first.
 pub(super) fn row(s: &mut Session, below: bool) -> CmdResult {
     let (tp, r, c) = cell(s)?;
+    if scattered(s) {
+        return Err(CmdError::Disabled("select rows next to each other to insert rows beside them".into()));
+    }
     let cells = selected_cells(s);
     let n = cells.iter().map(|x| x.0).collect::<std::collections::BTreeSet<_>>().len().max(1);
     let t = s.doc.table_mut(s.sel.focus.story, &tp)?;
@@ -667,6 +678,9 @@ fn has_text(s: &Session, a: &Pos, b: &Pos, live: bool) -> bool {
 
 fn merge(s: &mut Session, _: &Value) -> CmdResult {
     let (tp, _, _) = cell(s)?;
+    if scattered(s) {
+        return Err(CmdError::Disabled("only cells next to each other can be merged".into()));
+    }
     let cells = selected_cells(s);
     if cells.len() < 2 {
         return Err(CmdError::Failed("select two or more cells to merge".into()));
@@ -952,8 +966,66 @@ pub(crate) fn select_range(s: &mut Session, story: StoryRef, tp: &Path, rows: (u
     let rows = (rows.0.min(rows.1).min(last_row), rows.0.max(rows.1).min(last_row));
     let cols = (cols.0.min(cols.1).min(last_col), cols.0.max(cols.1).min(last_col));
     let stream = rows.0 == rows.1 || (cols.0 == 0 && cols.1 == last_col);
-    let range = crate::CellRange { story, table: tp.clone(), rows, cols, stream };
-    let picked: std::collections::BTreeSet<(usize, usize)> = range.cells(t).into_iter().collect();
+    let range = crate::CellRange { story, table: tp.clone(), rows, cols, stream, picked: None, base: Vec::new(), removing: false };
+    select_cell_range(s, range)
+}
+
+/// The cells of table `t` that rows `rows` and grid columns `cols` (both inclusive, either
+/// order, clamped to the table) take in, as [`select_range`] selects them.
+pub(crate) fn rect_cells(t: &Table, rows: (usize, usize), cols: (usize, usize)) -> BTreeSet<(usize, usize)> {
+    let (last_row, last_col) = (t.rows.len().saturating_sub(1), t.cols().saturating_sub(1));
+    let rows = (rows.0.min(rows.1).min(last_row), rows.0.max(rows.1).min(last_row));
+    let cols = (cols.0.min(cols.1).min(last_col), cols.0.max(cols.1).min(last_col));
+    crate::session::rect_cells(t, rows, cols).into_iter().collect()
+}
+
+/// Select the cells `picked` (row, cell index) of table `tp`, next to each other or not (Ctrl/Cmd+
+/// clicks add rows, columns and cells). Cells that fill a rectangle are selected as
+/// [`select_range`] does; scattered ones are edited and formatted cell by cell. `base` and
+/// `removing` are kept with the selection for a Ctrl/Cmd+drag going on (see `CellRange::base`).
+pub(crate) fn select_set(
+    s: &mut Session,
+    story: StoryRef,
+    tp: &Path,
+    picked: &BTreeSet<(usize, usize)>,
+    base: Vec<(usize, usize)>,
+    removing: bool,
+) -> CmdResult {
+    let t = s.doc.table(story, tp).ok_or_else(|| CmdError::Failed("there's no table there".into()))?;
+    let picked: BTreeSet<(usize, usize)> = picked.iter().copied().filter(|&(r, c)| t.rows.get(r).is_some_and(|row| c < row.cells.len())).collect();
+    let (Some(r0), Some(r1)) = (picked.iter().map(|x| x.0).min(), picked.iter().map(|x| x.0).max()) else {
+        return Err(CmdError::Failed("there are no cells to select there".into()));
+    };
+    let span = |r: usize, c: usize| grid_cols(t, r, c);
+    let g0 = picked.iter().map(|&(r, c)| span(r, c).0).min().unwrap_or(0);
+    let g1 = picked.iter().map(|&(r, c)| span(r, c).1).max().unwrap_or(0);
+    if rect_cells(t, (r0, r1), (g0, g1)) == picked {
+        select_range(s, story, tp, (r0, r1), (g0, g1))?;
+    } else {
+        let range = crate::CellRange {
+            story,
+            table: tp.clone(),
+            rows: (r0, r1),
+            cols: (g0, g1),
+            stream: false,
+            picked: Some(picked.into_iter().collect()),
+            base: Vec::new(),
+            removing: false,
+        };
+        select_cell_range(s, range)?;
+    }
+    if let Some(range) = s.column.as_mut().and_then(|c| c.cells.as_mut()) {
+        range.base = base;
+        range.removing = removing;
+    }
+    sel_result(s)
+}
+
+/// Select the cells of `range` (its table must be there): see [`select_range`].
+fn select_cell_range(s: &mut Session, range: crate::CellRange) -> CmdResult {
+    let (story, tp) = (range.story, range.table.clone());
+    let t = s.doc.table(story, &tp).ok_or_else(|| CmdError::Failed("there's no table there".into()))?;
+    let picked: BTreeSet<(usize, usize)> = range.cells(t).into_iter().collect();
     // Every paragraph of the picked cells (nested tables' too), in document order.
     let depth = tp.0.len();
     let in_picked = |q: &Path| match (q.0.get(depth), q.0.get(depth + 1)) {

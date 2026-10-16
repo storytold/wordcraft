@@ -251,7 +251,8 @@ impl ResizeTarget {
 
     /// The selected cells of this table, as their rows (first, last) and the grid lines of
     /// their outer borders (left, right): whole cells (`Session::cell_range`), or a selection
-    /// running from one of its cells into another. `None` for text within one cell.
+    /// running from one of its cells into another. `None` for text within one cell, and for
+    /// cells that aren't one rectangle.
     fn selected_block(&self, s: &Session, t: &Table) -> Option<((usize, usize), (usize, usize))> {
         let lines = |cells: &[(usize, usize)]| -> Option<(usize, usize)> {
             let span = |r: usize, c: usize| t.rows.get(r).and_then(|row| row.cells.get(c)).map_or(1, Cell::span);
@@ -260,6 +261,10 @@ impl ResizeTarget {
             Some((lo, hi))
         };
         if let Some(range) = s.cell_range().filter(|c| c.story == self.story && c.table == self.table) {
+            // Cells apart from each other have no one block: a border drags as for the caret.
+            if !range.is_rect() {
+                return None;
+            }
             return Some((range.rows, lines(&range.cells(t))?));
         }
         let (a, b) = s.sel.ordered();

@@ -2938,7 +2938,7 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
 
 /// What of a table the selection is: Word's context menu offers different table items for each.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TablePick {
+pub(crate) enum TablePick {
     /// The caret or text in one cell, or that one cell.
     Cell,
     /// Cells of more than one row or column, but not whole rows or columns.
@@ -2948,17 +2948,45 @@ enum TablePick {
     Table,
 }
 
-fn table_pick(s: &wordcraft_engine::Session) -> TablePick {
+pub(crate) fn table_pick(s: &wordcraft_engine::Session) -> TablePick {
     if let Some(r) = s.cell_range()
         && let Some(t) = s.doc.table(r.story, &r.table)
     {
-        let all_rows = r.rows == (0, t.rows.len().saturating_sub(1));
-        let all_cols = r.cols == (0, t.cols().saturating_sub(1));
+        let cells = r.cells(t);
+        let (all_rows, all_cols) = if r.is_rect() {
+            (r.rows == (0, t.rows.len().saturating_sub(1)), r.cols == (0, t.cols().saturating_sub(1)))
+        } else {
+            // Rows or columns Cmd/Ctrl+clicked apart: whole rows when every row they touch is
+            // selected whole, whole columns likewise.
+            let picked: std::collections::BTreeSet<_> = cells.iter().copied().collect();
+            let rows: std::collections::BTreeSet<_> = cells.iter().map(|x| x.0).collect();
+            let whole_rows = rows.iter().all(|&r| t.rows.get(r).is_some_and(|row| (0..row.cells.len()).all(|c| picked.contains(&(r, c)))));
+            // The grid columns the cells reach into, and whether every cell of every row there is
+            // selected.
+            let span = |r: usize, c: usize| {
+                let g = t.grid_col(r, c);
+                (g, g + t.rows.get(r).and_then(|row| row.cells.get(c)).map_or(1, |x| x.span()))
+            };
+            let grid: std::collections::BTreeSet<usize> = cells
+                .iter()
+                .flat_map(|&(r, c)| {
+                    let (a, b) = span(r, c);
+                    a..b
+                })
+                .collect();
+            let whole_cols = t.rows.iter().enumerate().all(|(r, row)| {
+                (0..row.cells.len()).all(|c| {
+                    let (a, b) = span(r, c);
+                    !(a..b).any(|g| grid.contains(&g)) || picked.contains(&(r, c))
+                })
+            });
+            (whole_cols, whole_rows)
+        };
         return match (all_rows, all_cols) {
             (true, true) => TablePick::Table,
             (true, false) => TablePick::Columns,
             (false, true) => TablePick::Rows,
-            _ if r.cells(t).len() > 1 => TablePick::Cells,
+            _ if cells.len() > 1 => TablePick::Cells,
             _ => TablePick::Cell,
         };
     }

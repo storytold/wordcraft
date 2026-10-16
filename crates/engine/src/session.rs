@@ -62,7 +62,9 @@ pub struct ColumnBlock {
 }
 
 /// Whole table cells selected: rows `rows.0..=rows.1` and every cell of them that reaches into
-/// grid columns `cols.0..=cols.1`.
+/// grid columns `cols.0..=cols.1` or, when `picked` is set (Ctrl/Cmd+click added rows, columns
+/// or cells that aren't next to each other), just those cells, `rows` and `cols` then being
+/// their bounds.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CellRange {
     pub story: StoryRef,
@@ -71,27 +73,47 @@ pub struct CellRange {
     pub cols: (usize, usize),
     /// The cells are one run of the text (cells of one row, or whole rows), so the stream
     /// selection between the corners holds just them and commands act on that as usual.
-    /// Otherwise (part of a column) text edits and formatting go cell by cell.
+    /// Otherwise (part of a column, or scattered cells) text edits and formatting go cell by cell.
     pub stream: bool,
+    /// The selected cells (row, cell index) in document order when they aren't the whole
+    /// rectangle `rows` × `cols`; `None` when they are.
+    pub picked: Option<Vec<(usize, usize)>>,
+    /// The cells selected before a Ctrl/Cmd+click whose drag goes on: it adds the cells it goes
+    /// over to them (or, `removing`, takes those out of them). Empty otherwise.
+    pub(crate) base: Vec<(usize, usize)>,
+    pub(crate) removing: bool,
 }
 
 impl CellRange {
+    /// The cells are the whole rectangle `rows` × `cols` (not scattered ones).
+    pub fn is_rect(&self) -> bool {
+        self.picked.is_none()
+    }
+
     /// The selected cells of table `t` (row, cell index), in document order.
     pub fn cells(&self, t: &Table) -> Vec<(usize, usize)> {
-        let ((r0, r1), (g0, g1)) = (self.rows, self.cols);
-        let mut out = Vec::new();
-        for (r, row) in t.rows.iter().enumerate().take(r1.saturating_add(1)).skip(r0) {
-            let mut g = 0usize;
-            for (c, cell) in row.cells.iter().enumerate() {
-                let end = g.saturating_add(cell.span());
-                if g <= g1 && end > g0 {
-                    out.push((r, c));
-                }
-                g = end;
-            }
+        if let Some(picked) = &self.picked {
+            return picked.iter().copied().filter(|&(r, c)| t.rows.get(r).is_some_and(|row| c < row.cells.len())).collect();
         }
-        out
+        rect_cells(t, self.rows, self.cols)
     }
+}
+
+/// The cells (row, cell index) of table `t` in rows `r0..=r1` that reach into grid columns
+/// `g0..=g1`, in document order.
+pub(crate) fn rect_cells(t: &Table, (r0, r1): (usize, usize), (g0, g1): (usize, usize)) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    for (r, row) in t.rows.iter().enumerate().take(r1.saturating_add(1)).skip(r0) {
+        let mut g = 0usize;
+        for (c, cell) in row.cells.iter().enumerate() {
+            let end = g.saturating_add(cell.span());
+            if g <= g1 && end > g0 {
+                out.push((r, c));
+            }
+            g = end;
+        }
+    }
+    out
 }
 
 /// A selection Word's table rule widened to whole cells or rows (`cmd::table::extend_selection`),

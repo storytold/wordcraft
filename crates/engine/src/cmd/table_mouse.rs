@@ -7,7 +7,7 @@
 //! column left of it to its contents. The app sends each click or finished drag here in page
 //! points, so each is one command (one undo step when it changes the document).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 use wordcraft_doc::para::Anchor;
@@ -44,7 +44,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("table.selectAt", "Select Table Cells by Clicking", "Table Layout › Table › Select", select_at)
             .params(
-                r#"{"page": n, "x": pt, "y": pt, "toX"?: pt, "toY"?: pt, "reach"?: pt} (a click in page points, 0-based page, on a selection area of a table in the caret's story: just above a column selects the column, left of a row the row, along a cell's left edge inside it the cell, the move handle past the top-left corner the table; with toX/toY (a drag) every column, row or cell from there to that point. `reach` (default 3) is the column borders' resize reach, which the cell areas keep clear of.)"#,
+                r#"{"page": n, "x": pt, "y": pt, "toX"?: pt, "toY"?: pt, "reach"?: pt, "add"?: bool} (a click in page points, 0-based page, on a selection area of a table in the caret's story: just above a column selects the column, left of a row the row, along a cell's left edge inside it the cell, the move handle past the top-left corner the table; with toX/toY (a drag) every column, row or cell from there to that point. `reach` (default 3) is the column borders' resize reach, which the cell areas keep clear of. `add` (Ctrl/Cmd+click) adds them to the cells of that table already selected, next to them or not; clicking cells all selected already takes them out. A drag with `add` keeps the cells selected before it.)"#,
             )
             .pure(),
         CommandSpec::new("table.insertAt", "Insert Row or Column by Clicking", "Table Layout › Rows & Columns", insert_at).params(
@@ -351,7 +351,7 @@ fn select_at(s: &mut Session, v: &Value) -> CmdResult {
     let story = geom.story;
     let t = s.doc.table(story, &geom.table).ok_or_else(|| CmdError::Failed("there's no table there".into()))?;
     let (last_row, last_col) = (t.rows.len().saturating_sub(1), t.cols().saturating_sub(1));
-    let (rows, cols) = match spot {
+    let rows_cols = match spot {
         Spot::Column(g) => ((0, last_row), (g, to.map_or(g, |(tx, _)| column_at(&geom, tx)))),
         Spot::Row(r) => ((r, to.map_or(r, |(_, ty)| row_at(&geom, ty))), (0, last_col)),
         Spot::Cell(r, c) => {
@@ -367,6 +367,29 @@ fn select_at(s: &mut Session, v: &Value) -> CmdResult {
         Spot::Handle => ((0, last_row), (0, last_col)),
         Spot::InsertRow(_) | Spot::InsertColumn(_) => return Err(CmdError::Failed("there's an insert button there, not a selection area".into())),
     };
+    let (rows, cols) = rows_cols;
+    if p::bool(v, "add") == Some(true)
+        && let Some(range) = s.cell_range().filter(|r| r.story == story && r.table == geom.table)
+    {
+        // Ctrl/Cmd+click: the cells join those selected (or, all selected already, leave them);
+        // its drag goes on adding (or taking out) the cells it goes over, from those selected
+        // before the click.
+        let here = table::rect_cells(t, rows, cols);
+        let (before, removing): (BTreeSet<(usize, usize)>, bool) = if to.is_some() {
+            (range.base.iter().copied().collect(), range.removing)
+        } else {
+            let before: BTreeSet<(usize, usize)> = range.cells(t).into_iter().collect();
+            let removing = here.is_subset(&before);
+            (before, removing)
+        };
+        let picked: BTreeSet<(usize, usize)> =
+            if removing { before.difference(&here).copied().collect() } else { before.union(&here).copied().collect() };
+        // Taking out every cell leaves the selection as it is.
+        if picked.is_empty() {
+            return sel_result(s);
+        }
+        return table::select_set(s, story, &geom.table, &picked, before.into_iter().collect(), removing);
+    }
     table::select_range(s, story, &geom.table, rows, cols)
 }
 
@@ -735,6 +758,113 @@ mod tests {
         s.sel = Selection::caret(cell_pos(&s, 2, 1));
         s.run("table.selectRow", &json!({})).unwrap();
         assert_eq!(s.cell_range().map(|r| (r.rows, r.cols, r.stream)), Some(((2, 2), (0, 2), true)));
+    }
+
+    /// A point in row `r`'s selection area, left of the table.
+    fn row_area(s: &mut Session, r: usize) -> (f32, f32) {
+        let c = cell_rect(s, r, 0);
+        (c.x - 10.0, mid_y(c))
+    }
+
+    /// A point in column `c`'s selection area, above the table.
+    fn col_area(s: &mut Session, c: usize) -> (f32, f32) {
+        let b = cell_rect(s, 0, c);
+        (b.x + b.w / 2.0, b.y - 3.0)
+    }
+
+    /// A click (`add`: Ctrl/Cmd+click) at `at`.
+    fn click(s: &mut Session, (x, y): (f32, f32), add: bool) {
+        s.run("table.selectAt", &json!({"page": 0, "x": x, "y": y, "add": add})).unwrap();
+    }
+
+    fn picked(s: &Session) -> Vec<(usize, usize)> {
+        let t = first_table(s);
+        s.cell_range().unwrap().cells(&t)
+    }
+
+    fn row_cells(rows: &[usize], cols: usize) -> Vec<(usize, usize)> {
+        rows.iter().flat_map(|&r| (0..cols).map(move |c| (r, c))).collect()
+    }
+
+    /// Ctrl/Cmd+clicking rows apart from each other selects just them, as in Word: formatting,
+    /// shading and Delete Rows take only them; Merge and Insert need cells next to each other.
+    #[test]
+    fn ctrl_clicks_select_rows_apart() {
+        let mut s = table_session(4, 3);
+        fill(&mut s);
+        let (r0, r2) = (row_area(&mut s, 0), row_area(&mut s, 2));
+        click(&mut s, r0, false);
+        click(&mut s, r2, true);
+        let range = s.cell_range().cloned().unwrap();
+        assert!(!range.is_rect() && !range.stream);
+        assert_eq!((range.rows, range.cols), ((0, 2), (0, 2)), "rows and cols are the bounds");
+        assert_eq!(picked(&s), row_cells(&[0, 2], 3));
+        let text = s.selected_text();
+        assert!(text.contains("r0c1") && text.contains("r2c2") && !text.contains("r1c0"), "{text}");
+        s.run("format.bold", &json!({})).unwrap();
+        for c in 0..3 {
+            assert!(bold(&s, 0, c) && bold(&s, 2, c) && !bold(&s, 1, c) && !bold(&s, 3, c), "column {c}");
+        }
+        s.run("edit.undo", &json!({})).unwrap();
+        assert!(!bold(&s, 0, 0));
+        assert_eq!(picked(&s), row_cells(&[0, 2], 3), "undo keeps the rows selected");
+        s.run("table.shading", &json!({"color": "FF0000"})).unwrap();
+        let shaded: Vec<bool> = first_table(&s).rows.iter().map(|row| row.cells.iter().all(|c| c.props.shading.is_some())).collect();
+        assert_eq!(shaded, [true, false, true, false]);
+        let before = first_table(&s);
+        assert!(matches!(s.run("table.merge", &json!({})), Err(CmdError::Disabled(_))));
+        assert!(matches!(s.run("table.insertRowAbove", &json!({})), Err(CmdError::Disabled(_))));
+        assert!(matches!(s.run("table.insertRowBelow", &json!({})), Err(CmdError::Disabled(_))));
+        assert_eq!(first_table(&s), before);
+        s.run("table.deleteRow", &json!({})).unwrap();
+        let t = first_table(&s);
+        assert_eq!(t.rows.len(), 2);
+        assert_eq!((para(&s, 0, 0).plain_text(), para(&s, 1, 0).plain_text()), ("r1c0".to_string(), "r3c0".to_string()));
+    }
+
+    /// Ctrl/Cmd+clicks add columns and single cells, and take out what's selected already; a
+    /// Ctrl/Cmd+drag goes on from the cells selected before it.
+    #[test]
+    fn ctrl_clicks_add_and_take_out_columns_and_cells() {
+        let mut s = table_session(4, 3);
+        fill(&mut s);
+        let (col0, col2, r2, r3) = (col_area(&mut s, 0), col_area(&mut s, 2), row_area(&mut s, 2), row_area(&mut s, 3));
+        let c11 = cell_rect(&mut s, 1, 1);
+        let cell11 = (c11.x + 4.5, mid_y(c11));
+        // With nothing selected, Ctrl+click is a plain click.
+        click(&mut s, col0, true);
+        assert!(s.cell_range().unwrap().is_rect());
+        click(&mut s, col2, true);
+        let cols02: Vec<_> = (0..4).flat_map(|r| [(r, 0), (r, 2)]).collect();
+        assert_eq!(picked(&s), cols02);
+        s.run("format.bold", &json!({})).unwrap();
+        assert!(bold(&s, 3, 2) && !bold(&s, 3, 1));
+        // A cell joins them; clicking it again takes it out.
+        click(&mut s, cell11, true);
+        assert!(picked(&s).contains(&(1, 1)));
+        click(&mut s, cell11, true);
+        assert_eq!(picked(&s), cols02);
+        // Taking out column 2 leaves column 0, a rectangle again.
+        click(&mut s, col2, true);
+        let range = s.cell_range().cloned().unwrap();
+        assert!(range.is_rect());
+        assert_eq!((range.rows, range.cols), ((0, 3), (0, 0)));
+        // A Ctrl+drag over rows 2 and 3 keeps column 0.
+        click(&mut s, r2, true);
+        s.run("table.selectAt", &json!({"page": 0, "x": r2.0, "y": r2.1, "toX": r3.0, "toY": r3.1, "add": true})).unwrap();
+        let mut want: Vec<_> = [(0, 0), (1, 0)].into_iter().chain(row_cells(&[2, 3], 3)).collect();
+        assert_eq!(picked(&s), want);
+        // A Ctrl+click on selected row 3 takes it out, and a jiggle while the button is down
+        // doesn't put it back.
+        click(&mut s, r3, true);
+        s.run("table.selectAt", &json!({"page": 0, "x": r3.0, "y": r3.1, "toX": r3.0 + 0.5, "toY": r3.1, "add": true})).unwrap();
+        want.retain(|&(r, _)| r != 3);
+        assert_eq!(picked(&s), want);
+        // A plain click starts again; Ctrl+clicking the only selection leaves it.
+        let r0 = row_area(&mut s, 0);
+        click(&mut s, r0, false);
+        click(&mut s, r0, true);
+        assert_eq!(picked(&s), row_cells(&[0], 3));
     }
 
     /// The insert buttons add a row or column at their border, one undo step, and select it (as
