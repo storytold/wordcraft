@@ -19,12 +19,22 @@ use crate::units::{int, measure, on_off, tw, u32_of};
 /// points (clamped), names kept as OOXML writes them.
 fn text_frame(k: &El) -> wordcraft_doc::props::TextFrame {
     let len = |name: &str| tw(k, name).filter(|v| v.is_finite()).map(|v| v.clamp(-1584.0, 1584.0));
-    let word = |name: &str, allowed: &[&str], default: &str| k.attr(name).filter(|v| allowed.contains(v)).unwrap_or(default).to_string();
-    let align = |name: &str, allowed: &[&str]| k.attr(name).filter(|v| allowed.contains(v)).map(str::to_string);
+    let word = |name: &str, allowed: &[&str], default: &str| {
+        k.attr(name)
+            .map(str::trim)
+            .and_then(|v| allowed.iter().find(|a| a.eq_ignore_ascii_case(v)).copied())
+            .unwrap_or(default)
+            .to_string()
+    };
+    let align = |name: &str, allowed: &[&str]| {
+        k.attr(name)
+            .map(str::trim)
+            .and_then(|v| allowed.iter().find(|a| a.eq_ignore_ascii_case(v)).map(|s| (*s).to_string()))
+    };
     wordcraft_doc::props::TextFrame {
         w: len("w:w").filter(|v| *v > 0.0),
         h: len("w:h").map(f32::abs).filter(|v| *v > 0.0),
-        h_exact: k.attr("w:hRule") == Some("exact"),
+        h_exact: k.attr("w:hRule").map(str::trim).is_some_and(|v| v.eq_ignore_ascii_case("exact")),
         x: len("w:x").unwrap_or(0.0),
         y: len("w:y").unwrap_or(0.0),
         x_align: align("w:xAlign", &["left", "center", "right", "inside", "outside"]),
@@ -218,11 +228,7 @@ impl PropCtx {
                 "w:bdr" => c.border = Some(border(k)),
                 "w:shd" => c.shading = self.shd_fill(k),
                 "w:vertAlign" => {
-                    c.vert_align = k.attr("w:val").map(|v| match v {
-                        "superscript" => VertAlign::Superscript,
-                        "subscript" => VertAlign::Subscript,
-                        _ => VertAlign::Baseline,
-                    })
+                    c.vert_align = k.attr("w:val").map(VertAlign::from_ooxml);
                 }
                 "w:lang" => {
                     c.lang = k.attr("w:val").filter(|v| !v.is_empty() && v.len() < 64).map(str::to_string);
@@ -433,30 +439,29 @@ impl PropCtx {
             match k.name.as_str() {
                 "w:tblStyle" => t.style = k.attr("w:val").filter(|v| !v.is_empty()).map(|v| self.style_id(v)),
                 "w:tblW" => {
-                    let ty = k.attr("w:type").unwrap_or("dxa");
-                    let w = k.attr("w:w").unwrap_or("0");
-                    match ty {
-                        "pct" => {
-                            t.width_pct = if let Some(p) = w.strip_suffix('%') { measure(p, 1.0) } else { measure(w, 50.0) }
-                                .map(|v| v.clamp(0.0, 1000.0))
-                                .filter(|v| *v > 0.0)
-                        }
-                        "auto" | "nil" => {}
-                        _ => t.width = measure(w, 20.0).filter(|v| *v > 0.0),
+                    let ty = k.attr("w:type").unwrap_or("dxa").trim();
+                    let w = k.attr("w:w").unwrap_or("0").trim();
+                    if ty.eq_ignore_ascii_case("pct") {
+                        t.width_pct = if let Some(p) = w.strip_suffix('%') { measure(p, 1.0) } else { measure(w, 50.0) }
+                            .map(|v| v.clamp(0.0, 1000.0))
+                            .filter(|v| *v > 0.0);
+                    } else if ty.eq_ignore_ascii_case("auto") || ty.eq_ignore_ascii_case("nil") {
+                    } else {
+                        t.width = measure(w, 20.0).filter(|v| *v > 0.0);
                     }
                 }
                 "w:jc" => t.align = k.attr("w:val").map(align),
                 "w:tblInd" => t.indent = tw(k, "w:w"),
                 "w:tblBorders" => t.borders = Some(borders(k)),
                 "w:shd" => t.shading = self.shd_fill(k),
-                "w:tblLayout" => t.fixed = k.attr("w:type") == Some("fixed"),
+                "w:tblLayout" => t.fixed = k.attr("w:type").map(str::trim).is_some_and(|s| s.eq_ignore_ascii_case("fixed")),
                 "w:bidiVisual" => t.bidi_visual = on_off(k),
                 "w:tblCellMar" => t.cell_margins = Some(margins(k)),
                 "w:tblLook" => t.look = look(k),
                 "w:tblpPr" => t.float = Some(table_float(k)),
                 "w:tblOverlap" => {
                     if let Some(f) = t.float.as_mut() {
-                        f.overlap = k.attr("w:val") != Some("never");
+                        f.overlap = k.attr("w:val").map(str::trim).filter(|s| s.eq_ignore_ascii_case("never")).is_none();
                     }
                 }
                 "w:tblCaption" => t.caption = k.attr("w:val").map(cap_alt),
@@ -528,8 +533,9 @@ pub fn trpr(e: &El) -> RowProps {
 
 /// `w:wBefore`/`w:wAfter` in points: only a width in twips (`dxa`) is kept.
 fn gap_width(k: &El) -> Option<f32> {
-    match k.attr("w:type") {
-        None | Some("dxa") => tw(k, "w:w").filter(|v| *v >= 0.0).map(|v| v.min(crate::units::MAX_LEN_PT)),
+    match k.attr("w:type").map(str::trim) {
+        None => tw(k, "w:w").filter(|v| *v >= 0.0).map(|v| v.min(crate::units::MAX_LEN_PT)),
+        Some(s) if s.eq_ignore_ascii_case("dxa") => tw(k, "w:w").filter(|v| *v >= 0.0).map(|v| v.min(crate::units::MAX_LEN_PT)),
         _ => None,
     }
 }
@@ -540,10 +546,11 @@ pub fn tcpr(pc: &PropCtx, e: &El) -> (CellProps, bool) {
     let mut hcont = false;
     for k in e.els() {
         match k.name.as_str() {
-            "w:tcW" => match k.attr("w:type") {
-                None | Some("dxa") => c.width = tw(k, "w:w").filter(|v| *v > 0.0),
-                Some("pct") => {
-                    let w = k.attr("w:w").unwrap_or("0");
+            "w:tcW" => match k.attr("w:type").map(str::trim) {
+                None => c.width = tw(k, "w:w").filter(|v| *v > 0.0),
+                Some(s) if s.eq_ignore_ascii_case("dxa") => c.width = tw(k, "w:w").filter(|v| *v > 0.0),
+                Some(s) if s.eq_ignore_ascii_case("pct") => {
+                    let w = k.attr("w:w").unwrap_or("0").trim();
                     c.width_pct = if let Some(p) = w.strip_suffix('%') { measure(p, 1.0) } else { measure(w, 50.0) }
                         .map(|v| v.clamp(0.0, 100.0))
                         .filter(|v| *v > 0.0);
@@ -551,8 +558,8 @@ pub fn tcpr(pc: &PropCtx, e: &El) -> (CellProps, bool) {
                 _ => {}
             },
             "w:gridSpan" => c.span = k.attr("w:val").and_then(u32_of).unwrap_or(1).clamp(1, 63),
-            "w:hMerge" => hcont = k.attr("w:val") != Some("restart"),
-            "w:vMerge" => c.vmerge = if k.attr("w:val") == Some("restart") { VMerge::Restart } else { VMerge::Continue },
+            "w:hMerge" => hcont = k.attr("w:val").map(str::trim).filter(|v| v.eq_ignore_ascii_case("restart")).is_none(),
+            "w:vMerge" => c.vmerge = if k.attr("w:val").map(str::trim).is_some_and(|v| v.eq_ignore_ascii_case("restart")) { VMerge::Restart } else { VMerge::Continue },
             "w:tcBorders" => c.borders = Some(borders(k)),
             "w:shd" => c.shading = pc.shd_fill(k),
             "w:noWrap" => c.no_wrap = on_off(k),
@@ -560,14 +567,10 @@ pub fn tcpr(pc: &PropCtx, e: &El) -> (CellProps, bool) {
             "w:tcMar" => c.margins = Some(margins(k)),
             "w:textDirection" => {
                 c.text_direction = TextDirection::from_ooxml(k.attr("w:val").unwrap_or(""));
-                c.text_direction_set = k.attr("w:val") == Some("lrTb");
+                c.text_direction_set = k.attr("w:val").map(str::trim).is_some_and(|s| s.eq_ignore_ascii_case("lrTb"));
             }
             "w:vAlign" => {
-                c.valign = Some(match k.attr("w:val") {
-                    Some("center") => VAlign::Center,
-                    Some("bottom") => VAlign::Bottom,
-                    _ => VAlign::Top,
-                })
+                c.valign = k.attr("w:val").map(VAlign::from_ooxml);
             }
             _ => {}
         }
@@ -725,9 +728,9 @@ fn table_float(e: &El) -> TableFloat {
     use wordcraft_doc::para::{Anchor, FloatAlign};
     let pt = |n: &str| e.attr(n).and_then(|v| measure(v, 20.0)).map(|v| v.clamp(-31_680.0, 31_680.0)).unwrap_or(0.0);
     let dist = |n: &str| pt(n).clamp(0.0, 1584.0);
-    let rel = |n: &str, text: Anchor| match e.attr(n) {
-        Some("page") => Anchor::Page,
-        Some("margin") => Anchor::Margin,
+    let rel = |n: &str, text: Anchor| match e.attr(n).map(str::trim) {
+        Some(s) if s.eq_ignore_ascii_case("page") => Anchor::Page,
+        Some(s) if s.eq_ignore_ascii_case("margin") => Anchor::Margin,
         _ => text,
     };
     let align = |n: &str| e.attr(n).and_then(FloatAlign::from_ooxml);

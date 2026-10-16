@@ -164,6 +164,16 @@ pub enum VertAlign {
     Subscript,
 }
 
+impl VertAlign {
+    pub fn from_ooxml(v: &str) -> VertAlign {
+        match v.trim().to_ascii_lowercase().as_str() {
+            "superscript" => VertAlign::Superscript,
+            "subscript" => VertAlign::Subscript,
+            _ => VertAlign::Baseline,
+        }
+    }
+}
+
 /// Word's 16 highlighter colours (plus none).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -867,6 +877,16 @@ pub enum VAlign {
     Bottom,
 }
 
+impl VAlign {
+    pub fn from_ooxml(v: &str) -> VAlign {
+        match v.trim().to_ascii_lowercase().as_str() {
+            "center" => VAlign::Center,
+            "bottom" => VAlign::Bottom,
+            _ => VAlign::Top,
+        }
+    }
+}
+
 /// Which way a table cell's text runs (`w:textDirection`, ECMA-376 §17.4.72).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -884,9 +904,9 @@ impl TextDirection {
     /// The direction an OOXML `ST_TextDirection` value names (transitional and strict names).
     /// The East Asian vertical layouts turn like `Down`; unknown values are horizontal.
     pub fn from_ooxml(v: &str) -> TextDirection {
-        match v {
-            "tbRl" | "tbRlV" | "tbLrV" | "rl" | "rlV" | "lrV" => TextDirection::Down,
-            "btLr" | "lr" => TextDirection::Up,
+        match v.trim().to_ascii_lowercase().as_str() {
+            "tbrl" | "tbrlv" | "tblrv" | "rl" | "rlv" | "lrv" => TextDirection::Down,
+            "btlr" | "lr" => TextDirection::Up,
             _ => TextDirection::Horizontal,
         }
     }
@@ -912,7 +932,7 @@ impl TextDirection {
 }
 
 /// Which way a text box's text runs (Shape Format › Text › Text Direction; DrawingML
-/// `a:bodyPr/@vert`, ECMA-376 §21.1.10.83 `ST_TextVerticalType`).
+    /// `a:bodyPr/@vert`, ECMA-376 §21.1.10.83 `ST_TextVerticalType`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum TextVert {
@@ -931,10 +951,10 @@ impl TextVert {
     /// The direction an `ST_TextVerticalType` value names; the East Asian and Mongolian vertical
     /// layouts turn like `vert`, unknown values are horizontal.
     pub fn from_ooxml(v: &str) -> TextVert {
-        match v {
-            "vert" | "eaVert" | "mongolianVert" => TextVert::Vert,
+        match v.trim().to_ascii_lowercase().as_str() {
+            "vert" | "eavert" | "mongolianvert" => TextVert::Vert,
             "vert270" => TextVert::Vert270,
-            "wordArtVert" | "wordArtVertRtl" => TextVert::Stacked,
+            "wordartvert" | "wordartvertrtl" => TextVert::Stacked,
             _ => TextVert::Horz,
         }
     }
@@ -1256,5 +1276,35 @@ mod tests {
         assert_eq!(s, r#"{"bold":true}"#);
         let back: CharProps = serde_json::from_str(&s).unwrap();
         assert_eq!(back, p);
+    }
+
+    #[test]
+    fn test_enum_parsing_case_insensitive() {
+        assert_eq!(VertAlign::from_ooxml("superscript"), VertAlign::Superscript);
+        assert_eq!(VertAlign::from_ooxml(" SUPERSCRIPT "), VertAlign::Superscript);
+        assert_eq!(VertAlign::from_ooxml("subscript"), VertAlign::Subscript);
+        assert_eq!(VertAlign::from_ooxml("SUBSCRIPT"), VertAlign::Subscript);
+        assert_eq!(VertAlign::from_ooxml("baseline"), VertAlign::Baseline);
+        assert_eq!(VertAlign::from_ooxml("unknown"), VertAlign::Baseline);
+
+        assert_eq!(VAlign::from_ooxml("center"), VAlign::Center);
+        assert_eq!(VAlign::from_ooxml(" CENTER "), VAlign::Center);
+        assert_eq!(VAlign::from_ooxml("bottom"), VAlign::Bottom);
+        assert_eq!(VAlign::from_ooxml("BOTTOM"), VAlign::Bottom);
+        assert_eq!(VAlign::from_ooxml("top"), VAlign::Top);
+        assert_eq!(VAlign::from_ooxml("unknown"), VAlign::Top);
+
+        assert_eq!(TextDirection::from_ooxml("tbRl"), TextDirection::Down);
+        assert_eq!(TextDirection::from_ooxml(" TBRL "), TextDirection::Down);
+        assert_eq!(TextDirection::from_ooxml("btLr"), TextDirection::Up);
+        assert_eq!(TextDirection::from_ooxml("BTLR"), TextDirection::Up);
+        assert_eq!(TextDirection::from_ooxml("lrTb"), TextDirection::Horizontal);
+
+        assert_eq!(TextVert::from_ooxml("vert"), TextVert::Vert);
+        assert_eq!(TextVert::from_ooxml(" VERT "), TextVert::Vert);
+        assert_eq!(TextVert::from_ooxml("vert270"), TextVert::Vert270);
+        assert_eq!(TextVert::from_ooxml("VERT270"), TextVert::Vert270);
+        assert_eq!(TextVert::from_ooxml("wordArtVert"), TextVert::Stacked);
+        assert_eq!(TextVert::from_ooxml("WORDARTVERT"), TextVert::Stacked);
     }
 }
