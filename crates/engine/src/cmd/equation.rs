@@ -138,6 +138,77 @@ fn result(s: &Session) -> CmdResult {
     Ok(json!({"editing": true, "linear": linear, "display": display, "pos": serde_json::to_value(&m.pos).unwrap_or(Value::Null)}))
 }
 
+/// Cap on accepted LaTeX input: the validator allocates per input byte.
+const MAX_LATEX_LEN: usize = 4096;
+/// Deepest accepted brace nesting (mirrors the native tree): the KaTeX
+/// parser recurses per group, so deeper input would overflow the stack.
+const MAX_NESTING_DEPTH: usize = 64;
+
+/// Strip dollar and bracket delimiters. Returns the math body and whether it was
+/// display math. Bare input carries no display hint. Unknown shapes pass through.
+fn split_latex(latex: &str) -> (&str, bool) {
+    if let Some(math) = latex.strip_prefix("$").and_then(|s| s.strip_suffix("$")) {
+        return (math, false);
+    }
+    if let Some(math) = latex.strip_prefix("\\[").and_then(|s| s.strip_suffix("\\]")) {
+        return (math, true);
+    }
+    (latex, false)
+}
+
+/// Validate LaTeX math with the pure-Rust KaTeX engine (katex-rs). Anything it cannot
+/// parse is rejected here so a broken equation can never reach layout.
+fn check_latex(math: &str) -> Result<(), CmdError> {
+    if math.trim().is_empty() {
+        return Err(CmdError::Params("latex input is empty".into()));
+    }
+    if math.len() > MAX_LATEX_LEN {
+        return Err(CmdError::Params(format!("latex input is over the limit ({MAX_LATEX_LEN} bytes)")));
+    }
+    if nesting_too_deep(math) {
+        return Err(CmdError::Params(format!("latex nesting is over the limit ({MAX_NESTING_DEPTH} groups)")));
+    }
+    let ctx = katex::KatexContext::default();
+    katex::render_to_string(&ctx, math, &katex::Settings::default()).map(|_| ()).map_err(|e| CmdError::Params(format!("invalid LaTeX: {e}")))
+}
+
+/// True when brace nesting exceeds [`MAX_NESTING_DEPTH`]; escaped braces do
+/// not count. Keeps hostile input out of the recursive KaTeX parser.
+fn nesting_too_deep(math: &str) -> bool {
+    let mut depth = 0usize;
+    let mut chars = math.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            chars.next();
+            continue;
+        }
+        if c == '{' {
+            depth += 1;
+            if depth > MAX_NESTING_DEPTH {
+                return true;
+            }
+        } else if c == '}' {
+            depth = depth.saturating_sub(1);
+        }
+    }
+    false
+}
+
+/// The validated display hint of a latex parameter, if one was given.
+/// Rejects empty, overlong, over-nested and unparsable input before it
+/// can reach the native tree.
+fn checked_latex_display(v: &Value) -> Result<Option<bool>, CmdError> {
+    match p::str(v, "latex") {
+        Some(l) => {
+            let (body, disp) = split_latex(l);
+            check_latex(body)?;
+            let delimited = body.len() != l.len();
+            Ok(delimited.then_some(disp))
+        }
+        None => Ok(None),
+    }
+}
+
 /// Nodes from `linear`, `latex` or a gallery `id` / `builtin` parameter.
 fn nodes_from(v: &Value) -> Option<Arg> {
     if let Some(id) = p::str(v, "id") {
@@ -147,12 +218,13 @@ fn nodes_from(v: &Value) -> Option<Arg> {
         return crate::math_gallery::BUILT_INS.iter().find(|(id, _, _)| *id == b).map(|(_, _, lin)| parse_linear(lin));
     }
     if let Some(l) = p::str(v, "latex") {
-        return Some(parse_latex(l));
+        return Some(parse_latex(split_latex(l).0));
     }
     p::str(v, "linear").map(parse_linear)
 }
 
 fn insert(s: &mut Session, v: &Value) -> CmdResult {
+    let latex_display = checked_latex_display(v)?;
     let selected = if s.sel.is_collapsed() { String::new() } else { s.selected_text() };
     let nodes = match nodes_from(v) {
         Some(n) => n,
@@ -160,6 +232,11 @@ fn insert(s: &mut Session, v: &Value) -> CmdResult {
         // Selected text becomes the equation (Word converts it).
         None => parse_linear(selected.trim()),
     };
+    if let (Some(disp), None) = (latex_display, p::bool(v, "display")) {
+        let mut owned = v.clone();
+        owned["display"] = Value::Bool(disp);
+        return insert_nodes_as_equation(s, nodes, &owned);
+    }
     insert_nodes_as_equation(s, nodes, v)
 }
 
@@ -266,6 +343,7 @@ fn set_literal(nodes: &mut Arg) {
 }
 
 fn insert_structure(s: &mut Session, v: &Value) -> CmdResult {
+    checked_latex_display(v)?;
     let nodes = nodes_from(v).ok_or_else(|| CmdError::Params("give an id, linear or latex".into()))?;
     let Some(m) = s.math.clone() else {
         // Outside an equation: a new equation holding the structure.
@@ -564,6 +642,7 @@ fn without_number(row: Arg) -> Arg {
 
 fn set(s: &mut Session, v: &Value) -> CmdResult {
     let at = equation_at_caret(s).ok_or_else(|| CmdError::Disabled("no equation at the caret".into()))?;
+    checked_latex_display(v)?;
     let nodes = nodes_from(v).ok_or_else(|| CmdError::Params("give linear or latex".into()))?;
     let end = me::units(&nodes);
     with_eq(s, &at, |math, _| {
@@ -890,5 +969,59 @@ mod tests {
             s.run("insert.equation", &json!({"latex": tex})).unwrap();
             assert_eq!(s.run("equation.get", &json!({})).unwrap()["latex"], want, "{tex}");
         }
+    }
+
+    #[test]
+    fn latex_front_end_accepts_delimited_and_bare() {
+        // Delimiters choose inline vs display; bare input follows the empty-line rule.
+        let mut s = session();
+        s.run("insert.equation", &json!({"latex": "\\[x^2\\]"})).unwrap();
+        assert_eq!(s.run("equation.get", &json!({})).unwrap()["display"], true);
+        // `$...$` stays inline even on an empty line: delimiters win over the default.
+        let mut s = session();
+        s.run("insert.equation", &json!({"latex": "$x^2$"})).unwrap();
+        let r = s.run("equation.get", &json!({})).unwrap();
+        assert_eq!(r["display"], false);
+        assert_eq!(r["linear"], "x^2");
+        // Bare input on an empty line is a display equation, like linear input.
+        let mut s = session();
+        s.run("insert.equation", &json!({"latex": "\\frac{a}{b}"})).unwrap();
+        let r = s.run("equation.get", &json!({})).unwrap();
+        assert_eq!(r["display"], true);
+        assert_eq!(r["linear"], "a/b");
+        assert_eq!(r["latex"], "\\frac{a}{b}");
+    }
+
+    #[test]
+    fn latex_front_end_rejects_broken_input() {
+        // Broken input never reaches the native tree: the document is untouched
+        // and no undo step is left behind.
+        let mut s = session();
+        let undo = s.undo_labels();
+        for bad in ["\\frac{", "}", "{", "{{{{", "}}$x^2$", "", "   "] {
+            assert!(s.run("insert.equation", &json!({"latex": bad})).is_err(), "{bad}");
+        }
+        assert!(s.run("insert.equation", &json!({"latex": "x".repeat(5000)})).is_err());
+        let deep = ["{".repeat(70), "x".to_string(), "}".repeat(70)].concat();
+        assert!(s.run("insert.equation", &json!({"latex": deep})).is_err());
+        assert_eq!(s.undo_labels(), undo, "failed inserts leave no undo step");
+        assert!(s.doc.para_at(&s.sel.focus).unwrap().objects.is_empty());
+    }
+
+    #[test]
+    fn latex_set_rejects_bad_and_keeps_equation() {
+        let mut s = session();
+        s.run("insert.equation", &json!({"latex": "\\frac{a}{b}"})).unwrap();
+        let before = s.run("equation.get", &json!({})).unwrap();
+        assert!(s.run("equation.set", &json!({"latex": "\\frac{"})).is_err());
+        assert_eq!(s.run("equation.get", &json!({})).unwrap(), before);
+    }
+
+    #[test]
+    fn latex_equation_round_trips_through_docx() {
+        let mut s = session();
+        s.run("insert.equation", &json!({"latex": "\\[\\frac{a}{b}\\]"})).unwrap();
+        let mut back = Session::new(wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap());
+        assert_eq!(back.run("equation.get", &json!({})).unwrap()["linear"], "a/b");
     }
 }

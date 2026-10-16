@@ -543,6 +543,11 @@ fn only_case_differs(source: &std::path::Path, destination: &std::path::Path) ->
     std::fs::read_dir(dir).is_ok_and(|entries| entries.filter_map(Result::ok).all(|entry| entry.file_name() != to))
 }
 
+#[cfg(target_arch = "wasm32")]
+pub fn read_file_capped(path: &str, _max: u64, _what: &str) -> Result<Vec<u8>, String> {
+    Err(format!("{path}: files are opened through the browser on the web"))
+}
+
 /// Write `bytes` to the file at `path`, inside the automation write root when there is one.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn write_file(path: &str, bytes: &[u8]) -> Result<(), String> {
@@ -554,6 +559,34 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<(), String> {
 #[cfg(target_arch = "wasm32")]
 pub fn write_file(path: &str, _bytes: &[u8]) -> Result<(), String> {
     Err(format!("{path}: files are saved through the browser on the web"))
+}
+
+/// True for a regular file with any execute bit set (any existing file off
+/// unix), for probing helper programs such as the TeX engines on PATH. The
+/// automation read root applies, as for any other read.
+pub fn file_is_executable(path: &std::path::Path) -> bool {
+    if crate::file_access::check_read(&path.to_string_lossy()).is_err() {
+        return false;
+    }
+    let Ok(meta) = std::fs::metadata(path) else { return false };
+    if !meta.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        meta.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+/// Remove a worker scratch tree, best effort. Compiles stage their sources
+/// outside the document tree and always clean up after themselves.
+pub fn remove_scratch_dir(path: &std::path::Path) {
+    let _ = std::fs::remove_dir_all(path);
 }
 
 #[cfg(target_arch = "wasm32")]

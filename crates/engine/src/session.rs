@@ -445,6 +445,8 @@ pub struct Session {
     pub math_latex: bool,
     /// Text typed into equations is normal (non-math) text.
     pub math_normal_text: bool,
+    /// TeX sidecar: opaque source buffer plus last manual compile (outside undo).
+    pub tex: crate::tex::TexState,
     /// The password Word documents are saved with (File › Info › Protect Document › Encrypt with
     /// Password, `file.encrypt`); `None` saves them unencrypted. Kept from a password-protected
     /// file that was opened, cleared when the document is replaced.
@@ -635,6 +637,7 @@ impl Session {
             math: None,
             math_latex: false,
             math_normal_text: false,
+            tex: Default::default(),
             also_selected: Vec::new(),
             prefs: Prefs::default(),
             system_region: Default::default(),
@@ -1090,6 +1093,7 @@ impl Session {
             math: _,
             math_latex: _,
             math_normal_text: _,
+            tex: _,
             // The save password, like the file path: not an edit to the document.
             password: _,
             #[cfg(not(target_arch = "wasm32"))]
