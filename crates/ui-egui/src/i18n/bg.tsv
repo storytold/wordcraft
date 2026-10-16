@@ -2621,3 +2621,13 @@
 # Reading Mode column widths (#1040)
 	Narrow	Тясна
 	Medium	Средна
+# Split Cells and Convert Text to Table (#2592)
+	Merge cells before split	Обединяване на клетките преди разделяне
+	Table size	Размер на таблицата
+	AutoFit behavior	Поведение при автопобиране
+	Fixed column width	Фиксирана ширина на колоните
+	AutoFit to contents	Автопобиране по съдържанието
+	AutoFit to window	Автопобиране по прозореца
+	Separate text at	Разделяне на текста при
+	Commas	Запетаи
+	Other:	Друго:

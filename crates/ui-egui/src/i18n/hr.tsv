@@ -2632,3 +2632,13 @@ preview	Title	Naslov
 	Bottom Right Cell	Donja desna ćelija
 	Inside Horizontal Border	Unutarnji vodoravni obrub
 	Inside Vertical Border	Unutarnji okomiti obrub
+# Split Cells and Convert Text to Table (#2592)
+	Merge cells before split	Spoji ćelije prije razdvajanja
+	Table size	Veličina tablice
+	AutoFit behavior	Automatsko prilagođavanje
+	Fixed column width	Fiksna širina stupca
+	AutoFit to contents	Prilagodi sadržaju
+	AutoFit to window	Prilagodi prozoru
+	Separate text at	Odvoji tekst na
+	Commas	Zarezi
+	Other:	Ostalo:

@@ -5381,6 +5381,176 @@ fn split_cells_leaves_the_other_rows_alone() {
     assert_eq!(spans(&s), [vec![1, 1, 1, 1], vec![2, 1, 1]]);
 }
 
+fn table_spans(s: &Session) -> Vec<Vec<usize>> {
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).expect("a table");
+    t.rows.iter().map(|r| r.cells.iter().map(wordcraft_doc::Cell::span).collect()).collect()
+}
+
+fn table_vmerge(s: &Session) -> Vec<Vec<wordcraft_doc::props::VMerge>> {
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).expect("a table");
+    t.rows.iter().map(|r| r.cells.iter().map(|c| c.props.vmerge).collect()).collect()
+}
+
+/// #2592: Split Cells into columns and rows. A one-row cell gets new rows under it, the row's
+/// other cells merging down over them; one undo puts the table back.
+#[test]
+fn split_cells_into_columns_and_rows() {
+    use wordcraft_doc::props::VMerge::{Continue, None as No, Restart};
+    let mut s = table_from("A\tB\nC\tD");
+    let depth = s.undo_depth();
+    run(&mut s, "table.split", json!({"columns": 2, "rows": 2}));
+    assert_eq!(s.undo_depth(), depth + 1);
+    assert_eq!(table_texts(&s), [vec!["A", "", "B"], vec!["", "", ""], vec!["C", "D"]]);
+    assert_eq!(table_spans(&s), [vec![1, 1, 1], vec![1, 1, 1], vec![2, 1]]);
+    assert_eq!(table_vmerge(&s), [vec![No, No, Restart], vec![No, No, Continue], vec![No, No]]);
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(table_texts(&s), [["A", "B"], ["C", "D"]]);
+    assert_eq!(table_spans(&s), [[1, 1], [1, 1]]);
+    // Rows only.
+    let mut s = table_from("A\tB");
+    run(&mut s, "table.split", json!({"columns": 1, "rows": 3}));
+    assert_eq!(table_texts(&s), [vec!["A", "B"], vec!["", ""], vec!["", ""]]);
+    assert_eq!(table_vmerge(&s), [[No, Restart], [No, Continue], [No, Continue]]);
+}
+
+/// #2592: Merge cells before split merges the selection, then splits the merged cell; without
+/// it every selected cell is split on its own.
+#[test]
+fn split_cells_merge_before_split() {
+    use wordcraft_doc::props::VMerge::None as No;
+    let cell = |r: u32, c: u32| json!({"story": "body", "path": [0, r, c, 0], "off": 0});
+    let mut s = table_from("A\tB\nC\tD");
+    run(&mut s, "select.range", json!({"anchor": cell(0, 0), "focus": cell(1, 1)}));
+    let depth = s.undo_depth();
+    run(&mut s, "table.split", json!({"columns": 2, "rows": 2}));
+    assert_eq!(s.undo_depth(), depth + 1, "merge and split are one step");
+    assert_eq!(table_spans(&s), [[1, 1], [1, 1]]);
+    assert_eq!(table_vmerge(&s), [[No, No], [No, No]]);
+    assert_eq!(table_texts(&s), [["ABCD", ""], ["", ""]]);
+
+    let mut s = table_from("A\tB\nC\tD");
+    run(&mut s, "select.range", json!({"anchor": cell(0, 0), "focus": cell(1, 1)}));
+    run(&mut s, "table.split", json!({"columns": 2, "mergeFirst": false}));
+    assert_eq!(table_texts(&s), [["A", "", "B", ""], ["C", "", "D", ""]]);
+    assert_eq!(table_spans(&s), [[1, 1, 1, 1], [1, 1, 1, 1]]);
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(table_texts(&s), [["A", "B"], ["C", "D"]]);
+
+    // As in Word: merged cells split into at most as many rows as were selected, and cells split
+    // one by one keep their rows.
+    let mut s = table_from("A\tB\nC\tD");
+    run(&mut s, "select.range", json!({"anchor": cell(0, 0), "focus": cell(1, 0)}));
+    let depth = s.undo_depth();
+    assert!(s.run("table.split", &json!({"columns": 1, "rows": 3})).is_err(), "rows 1 to 2 only");
+    assert!(s.run("table.split", &json!({"columns": 2, "rows": 2, "mergeFirst": false})).is_err());
+    assert_eq!(s.undo_depth(), depth);
+    assert_eq!(table_texts(&s), [["A", "B"], ["C", "D"]]);
+    run(&mut s, "table.split", json!({"columns": 1, "rows": 2}));
+    assert_eq!(table_texts(&s), [["AC", "B"], ["", "D"]]);
+}
+
+/// #2592: a vertically merged cell splits into rows that divide its height; other counts are
+/// refused without changing anything.
+#[test]
+fn split_cells_of_a_vertically_merged_cell() {
+    use wordcraft_doc::props::VMerge::{Continue, None as No, Restart};
+    let cell = |r: u32, c: u32| json!({"story": "body", "path": [0, r, c, 0], "off": 0});
+    let merged = || {
+        let mut s = table_from("A\tB\nC\tD\nE\tF\nG\tH");
+        run(&mut s, "select.range", json!({"anchor": cell(0, 0), "focus": cell(3, 0)}));
+        run(&mut s, "table.merge", json!({}));
+        s
+    };
+    let mut s = merged();
+    assert_eq!(table_vmerge(&s), [[Restart, No], [Continue, No], [Continue, No], [Continue, No]]);
+    run(&mut s, "table.split", json!({"columns": 2, "rows": 2}));
+    assert_eq!(s.doc.body.iter().find_map(|b| b.as_table()).unwrap().rows.len(), 4, "no new rows");
+    assert_eq!(table_vmerge(&s), [[Restart, Restart, No], [Continue, Continue, No], [Restart, Restart, No], [Continue, Continue, No]]);
+    assert_eq!(table_spans(&s), [[1, 1, 1], [1, 1, 1], [1, 1, 1], [1, 1, 1]]);
+    // The caret in a continued cell splits the whole merged cell.
+    let mut s = merged();
+    run(&mut s, "caret.set", json!({"pos": cell(2, 0)}));
+    run(&mut s, "table.split", json!({"columns": 1, "rows": 4}));
+    assert_eq!(table_vmerge(&s), [[No, No], [No, No], [No, No], [No, No]]);
+    let mut s = merged();
+    let (depth, before) = (s.undo_depth(), table_vmerge(&s));
+    assert!(s.run("table.split", &json!({"columns": 1, "rows": 3})).is_err(), "3 doesn't divide 4");
+    assert_eq!((s.undo_depth(), table_vmerge(&s)), (depth, before));
+}
+
+/// #2592 review: cells split one by one split a vertically merged cell once, not once per row it
+/// covers, and every other selected cell in two.
+#[test]
+fn split_cells_one_by_one_with_a_merged_cell() {
+    use wordcraft_doc::props::VMerge::{Continue, None as No, Restart};
+    let cell = |r: u32, c: u32| json!({"story": "body", "path": [0, r, c, 0], "off": 0});
+    let merged = || {
+        let mut s = table_from("A\tB\nC\tD");
+        run(&mut s, "select.range", json!({"anchor": cell(0, 0), "focus": cell(1, 0)}));
+        run(&mut s, "table.merge", json!({}));
+        s
+    };
+    let mut s = merged();
+    run(&mut s, "table.selectTable", json!({}));
+    run(&mut s, "table.split", json!({"columns": 2, "mergeFirst": false}));
+    assert_eq!(table_spans(&s), [[1, 1, 1, 1], [1, 1, 1, 1]]);
+    assert_eq!(table_texts(&s), [["AC", "", "B", ""], ["", "", "D", ""]]);
+    assert_eq!(table_vmerge(&s), [[Restart, Restart, No, No], [Continue, Continue, No, No]]);
+    // The merged cell alone is one cell.
+    let mut s = merged();
+    run(&mut s, "select.range", json!({"anchor": cell(0, 0), "focus": cell(1, 0)}));
+    run(&mut s, "table.split", json!({"columns": 2, "mergeFirst": false}));
+    assert_eq!(table_spans(&s), [[1, 1, 1], [1, 1, 1]]);
+    assert_eq!(table_vmerge(&s), [[Restart, Restart, No], [Continue, Continue, No]]);
+}
+
+/// #2592: Convert Text to Table separates at paragraphs, commas, tabs or another character,
+/// takes a column count and an AutoFit behaviour, and undoes in one step.
+#[test]
+fn convert_text_to_table_dialog_options() {
+    let convert = |text: &str, params: serde_json::Value| {
+        let mut s = s();
+        run(&mut s, "document.setText", json!({"text": text}));
+        run(&mut s, "select.all", json!({}));
+        let depth = s.undo_depth();
+        run(&mut s, "table.fromText", params);
+        assert_eq!(s.undo_depth(), depth + 1);
+        s
+    };
+    let s1 = convert("a;b;c\nd;e", json!({"separator": "other", "char": ";"}));
+    assert_eq!(table_texts(&s1), [["a", "b", "c"], ["d", "e", ""]]);
+    let s1 = convert("a\nb\nc\nd", json!({"separator": "paragraph"}));
+    assert_eq!(table_texts(&s1), [["a"], ["b"], ["c"], ["d"]]);
+    let s1 = convert("a\nb\nc", json!({"separator": "paragraph", "columns": 2}));
+    assert_eq!(table_texts(&s1), [["a", "b"], ["c", ""]]);
+    // More columns than fields pads; fewer wraps a paragraph's fields onto more rows.
+    let s1 = convert("a\tb\tc\nd", json!({"columns": 4}));
+    assert_eq!(table_texts(&s1), [["a", "b", "c", ""], ["d", "", "", ""]]);
+    let s1 = convert("a\tb\tc\nd", json!({"columns": 2}));
+    assert_eq!(table_texts(&s1), [["a", "b"], ["c", ""], ["d", ""]]);
+    let mut s1 = convert("a,b\nc,d", json!({"separator": "comma", "autofit": "fixed"}));
+    let t = |s: &Session| s.doc.body.iter().find_map(|b| b.as_table()).unwrap().clone();
+    assert!(t(&s1).props.fixed);
+    run(&mut s1, "edit.undo", json!({}));
+    assert_eq!(body_texts(&s1), ["a,b", "c,d"]);
+    let s1 = convert("a,b\nc,d", json!({"separator": "comma", "autofit": "window"}));
+    assert_eq!((t(&s1).props.fixed, t(&s1).props.width_pct), (false, Some(100.0)));
+    let s1 = convert("a,b\nc,d", json!({"separator": "comma", "autofit": "contents"}));
+    let width = cmd::page::sect(&s1).text_width();
+    assert!(!t(&s1).props.fixed && t(&s1).total_width() < width / 2.0, "{:?}", t(&s1).grid);
+    // Junk is refused or clamped, never a panic.
+    let mut s1 = s();
+    run(&mut s1, "document.setText", json!({"text": "a-b"}));
+    run(&mut s1, "select.all", json!({}));
+    assert!(s1.run("table.fromText", &json!({"separator": "other"})).is_err(), "no character");
+    assert!(s1.run("table.fromText", &json!({"separator": "other", "char": ""})).is_err());
+    assert!(s1.run("table.fromText", &json!({"separator": "nonsense"})).is_err());
+    assert!(s1.run("table.fromText", &json!({"autofit": "nonsense"})).is_err());
+    assert_eq!(body_texts(&s1), ["a-b"]);
+    run(&mut s1, "table.fromText", json!({"separator": "other", "char": "-", "columns": 1_000_000_000_u64}));
+    assert_eq!(table_texts(&s1).first().map(Vec::len), Some(63));
+}
+
 /// #385: note options for the whole document or one section, and converting notes, which undoes
 /// in one step.
 #[test]

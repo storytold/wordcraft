@@ -259,16 +259,16 @@ impl Table {
     /// Split cell `c` of row `r` into `n` cells horizontally. When the cell spans fewer grid
     /// columns than that, the grid is refined inside the cell only: the new borders divide it
     /// into equal parts, and the cells of other rows widen over the new grid columns, so their
-    /// extent and the table's width stay as they were.
-    pub fn split_cell(&mut self, r: usize, c: usize, n: usize) {
+    /// extent and the table's width stay as they were. Returns the parts' spans, left to right.
+    pub fn split_cell(&mut self, r: usize, c: usize, n: usize) -> Vec<usize> {
         let n = n.clamp(1, MAX_COLS);
-        let Some(span) = self.rows.get(r).and_then(|row| row.cells.get(c)).map(Cell::span) else { return };
+        let Some(span) = self.rows.get(r).and_then(|row| row.cells.get(c)).map(Cell::span) else { return Vec::new() };
         if n <= 1 {
-            return;
+            return vec![span];
         }
         if span >= n {
-            let Some(row) = self.rows.get_mut(r) else { return };
-            let Some(cell) = row.cells.get_mut(c) else { return };
+            let Some(row) = self.rows.get_mut(r) else { return Vec::new() };
+            let Some(cell) = row.cells.get_mut(c) else { return Vec::new() };
             let w = cell.props.width.map(|w| w / n as f32);
             cell.props.width = w;
             cell.props.span = (span - (n - 1)) as u32;
@@ -277,7 +277,11 @@ impl Table {
                 nc.props.width = w;
                 row.cells.insert(c + k, nc);
             }
-            return;
+            let mut spans = vec![1; n];
+            if let Some(first) = spans.first_mut() {
+                *first = span - (n - 1);
+            }
+            return spans;
         }
         let g = self.grid_col(r, c);
         let mut end = g.saturating_add(span);
@@ -286,7 +290,7 @@ impl Table {
             self.grid.push(72.0);
         }
         if self.grid.len() < end {
-            return;
+            return vec![span];
         }
         for w in self.grid.get_mut(g..end).into_iter().flatten() {
             if !(w.is_finite() && *w > 0.0) {
@@ -341,7 +345,7 @@ impl Table {
         // The cell now spans `g..end`: cut it at the new lines.
         let grid = self.grid.clone();
         let width = |a: usize, b: usize| grid.get(a..b).map(|x| x.iter().sum::<f32>());
-        let Some(row) = self.rows.get_mut(r) else { return };
+        let Some(row) = self.rows.get_mut(r) else { return Vec::new() };
         let mut a = g;
         let mut parts = Vec::with_capacity(lines.len() + 1);
         for &b in lines.iter().chain(std::iter::once(&end)) {
@@ -363,6 +367,122 @@ impl Table {
                 row.cells.insert((c + k).min(row.cells.len()), nc);
             }
         }
+        parts.iter().map(|&(a, b)| b - a).collect()
+    }
+
+    /// The rows cell `c` of row `r` covers: (first row, count). A vertically merged cell runs from
+    /// its `Restart` cell down through the `Continue` cells that start at the same grid column.
+    pub fn vertical_extent(&self, r: usize, c: usize) -> Option<(usize, usize)> {
+        let g = self.grid_col(r, c);
+        let at = |rr: usize| -> Option<VMerge> {
+            let ci = self.cell_at_grid(rr, g)?;
+            if self.grid_col(rr, ci) != g {
+                return None;
+            }
+            Some(self.rows.get(rr)?.cells.get(ci)?.props.vmerge)
+        };
+        let mut top = r;
+        if self.rows.get(r)?.cells.get(c)?.props.vmerge == VMerge::Continue {
+            while let Some(up) = top.checked_sub(1).and_then(at) {
+                if up == VMerge::None {
+                    break;
+                }
+                top -= 1;
+                if up == VMerge::Restart {
+                    break;
+                }
+            }
+        }
+        let mut k = 1;
+        if at(top) != Some(VMerge::None) {
+            while at(top + k) == Some(VMerge::Continue) {
+                k += 1;
+            }
+        }
+        Some((top, k))
+    }
+
+    /// Split Cells: cut cell `c` of row `r` into `cols` × `rows` cells. A cell one row high gets
+    /// `rows - 1` new rows under it, over which the row's other cells merge down; a vertically
+    /// merged cell is regrouped instead, so `rows` must divide its height. The content stays in
+    /// the first part. Returns false (with the table unchanged) when the split can't be made.
+    pub fn split_cell_grid(&mut self, r: usize, c: usize, cols: usize, rows: usize) -> bool {
+        let (cols, rows) = (cols.clamp(1, MAX_COLS), rows.clamp(1, MAX_ROWS));
+        let Some((top, k)) = self.vertical_extent(r, c) else { return false };
+        let g = self.grid_col(r, c);
+        let Some(ci) = self.cell_at_grid(top, g) else { return false };
+        if (k > 1 && k % rows != 0) || (k == 1 && self.rows.len().saturating_add(rows - 1) > MAX_ROWS) {
+            return false;
+        }
+        let height = if k > 1 { k } else { rows };
+        if k > 1 && rows > 1 {
+            let q = k / rows;
+            for i in 0..k {
+                if let Some(cj) = self.cell_at_grid(top + i, g)
+                    && let Some(cell) = self.rows.get_mut(top + i).and_then(|row| row.cells.get_mut(cj))
+                {
+                    cell.props.vmerge = if q == 1 {
+                        VMerge::None
+                    } else if i % q == 0 {
+                        VMerge::Restart
+                    } else {
+                        VMerge::Continue
+                    };
+                }
+            }
+        } else if k == 1 && rows > 1 {
+            let Some(src) = self.rows.get_mut(top) else { return false };
+            let mut like = Row { props: src.props.clone(), cells: Vec::with_capacity(src.cells.len()), controls: ControlWrap::default() };
+            like.props.header = false;
+            for (i, cell) in src.cells.iter_mut().enumerate() {
+                let mut nc = Cell::empty();
+                nc.props = cell.props.clone();
+                if i == ci {
+                    cell.props.vmerge = VMerge::None;
+                    nc.props.vmerge = VMerge::None;
+                } else {
+                    // The row's other cells merge down over the new rows.
+                    if cell.props.vmerge == VMerge::None {
+                        cell.props.vmerge = VMerge::Restart;
+                    }
+                    nc.props.vmerge = VMerge::Continue;
+                }
+                like.cells.push(nc);
+            }
+            for _ in 1..rows {
+                self.rows.insert(top + 1, like.clone());
+            }
+        }
+        if cols > 1 {
+            let spans = self.split_cell(top, ci, cols);
+            let total: usize = spans.iter().sum();
+            let vmerge = self.rows.get(top).and_then(|row| row.cells.get(ci)).map(|cell| cell.props.vmerge).unwrap_or_default();
+            if let Some(row) = self.rows.get_mut(top) {
+                for cell in row.cells.iter_mut().skip(ci + 1).take(spans.len().saturating_sub(1)) {
+                    cell.props.vmerge = vmerge;
+                }
+            }
+            // The cells under it, which the new grid lines widened, are cut the same way.
+            let grid = self.grid.clone();
+            let width = |a: usize, b: usize| grid.get(a..b).map(|x| x.iter().sum::<f32>());
+            for rr in top + 1..top + height {
+                let Some(cj) = self.cell_at_grid(rr, g).filter(|&cj| self.grid_col(rr, cj) == g) else { continue };
+                let Some(row) = self.rows.get_mut(rr) else { continue };
+                let Some(cell) = row.cells.get_mut(cj).filter(|cell| cell.span() == total) else { continue };
+                let mut a = g;
+                let mut parts = Vec::with_capacity(spans.len());
+                for (n, &span) in spans.iter().enumerate() {
+                    let mut part = if n == 0 { cell.clone() } else { Cell::empty() };
+                    part.props.vmerge = cell.props.vmerge;
+                    part.props.span = span as u32;
+                    part.props.width = width(a, a + span);
+                    a += span;
+                    parts.push(part);
+                }
+                row.cells.splice(cj..=cj, parts);
+            }
+        }
+        true
     }
 
     pub fn total_width(&self) -> f32 {

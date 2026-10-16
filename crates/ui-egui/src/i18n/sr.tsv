@@ -2247,3 +2247,13 @@
 # Reading Mode column widths (#1040)
 	Narrow	Уска
 	Medium	Средња
+# Split Cells and Convert Text to Table (#2592)
+	Merge cells before split	Споји ћелије пре дељења
+	Table size	Величина табеле
+	AutoFit behavior	Аутоматско уклапање
+	Fixed column width	Фиксна ширина колоне
+	AutoFit to contents	Аутоматски уклопи према садржају
+	AutoFit to window	Аутоматски уклопи према прозору
+	Separate text at	Раздвоји текст на
+	Commas	Зарези
+	Other:	Друго:

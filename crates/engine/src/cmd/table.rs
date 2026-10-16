@@ -42,13 +42,8 @@ pub fn specs() -> Vec<CommandSpec> {
             fix_caret(s, &tp, r, 0)
         })),
         t(CommandSpec::new("table.merge", "Merge Cells", "Table Layout › Merge", merge)),
-        t(CommandSpec::new("table.split", "Split Cells", "Table Layout › Merge", |s, v| {
-            let n = p::u64(v, "columns").unwrap_or(2).clamp(1, 63) as usize;
-            let (tp, r, c) = cell(s)?;
-            s.doc.table_mut(s.sel.focus.story, &tp)?.split_cell(r, c, n);
-            fix_caret(s, &tp, r, c)
-        })
-        .params(r#"{"columns"?: n}"#)),
+        t(CommandSpec::new("table.split", "Split Cells", "Table Layout › Merge", split)
+            .params(r#"{"columns"?: n (2), "rows"?: n (1), "mergeFirst"?: bool (true: several selected cells are merged first)}"#)),
         t(CommandSpec::new("table.splitTable", "Split Table", "Table Layout › Merge", split_table)),
         t(CommandSpec::new("table.style", "Table Styles", "Table Design › Table Styles", |s, v| {
             let st = p::req_str(v, "style")?;
@@ -206,7 +201,8 @@ pub fn specs() -> Vec<CommandSpec> {
         t(CommandSpec::new("table.properties", "Properties", "Table Layout › Table", properties).params(
             r#"{"align"?: "left|center|right", "rtl"?: bool, "width"?: pt|null, "widthPct"?: percent, "indent"?: pt, "rowHeight"?: pt|null, "rowHeightRule"?: "atLeast|exact", "allowBreak"?: bool, "headerRow"?: bool, "columnWidth"?: pt, "cellWidth"?: pt|null, "valign"?: "top|center|bottom"} (row, column and cell settings apply to the caret's; without settings it returns the current ones)"#,
         )),
-        CommandSpec::new("table.fromText", "Convert Text to Table", "Insert › Tables", from_text).params(r#"{"separator"?: "tab|comma"}"#),
+        CommandSpec::new("table.fromText", "Convert Text to Table", "Insert › Tables", from_text)
+            .params(r#"{"separator"?: "tab|comma|paragraph|other", "char"?: string (with other), "columns"?: n, "autofit"?: "fixed|contents|window"}"#),
         CommandSpec::new("table.quick", "Quick Tables", "Insert › Tables", quick_table).params(r#"{"kind"?: "calendar|tabular|matrix"}"#),
     ]
 }
@@ -416,7 +412,7 @@ fn with_table(s: &mut Session, f: impl Fn(&mut Table)) -> CmdResult {
 }
 
 /// Selected cells: (row, cell) pairs covered by the selection (at least the caret's cell).
-fn selected_cells(s: &Session) -> Vec<(usize, usize)> {
+pub fn selected_cells(s: &Session) -> Vec<(usize, usize)> {
     // Whole cells selected (a column, say): just those, by grid column, so merged cells count.
     if let Some(range) = s.cell_range()
         && s.sel.focus.path.cell().is_some_and(|(tp, _, _)| tp == range.table)
@@ -680,6 +676,65 @@ fn merge(s: &mut Session, _: &Value) -> CmdResult {
     let g1 = t.grid_col(r0, c1) + t.rows.get(r0).and_then(|r| r.cells.get(c1)).map(|c| c.span()).unwrap_or(1) - 1;
     t.merge(r0, r1, g0, g1);
     fix_caret(s, &tp, r0, c0)
+}
+
+/// The selected cells as Split Cells sees them: one entry per cell, a vertically merged cell
+/// once (its top row), each as (top row, grid column).
+pub fn split_targets(s: &Session) -> Vec<(usize, usize)> {
+    let Ok((tp, _, _)) = cell(s) else { return Vec::new() };
+    let Some(t) = s.doc.table(s.sel.focus.story, &tp) else { return Vec::new() };
+    let mut v: Vec<(usize, usize)> = selected_cells(s)
+        .into_iter()
+        .filter(|&(r, c)| t.rows.get(r).is_some_and(|row| c < row.cells.len()))
+        .map(|(r, c)| (t.vertical_extent(r, c).map_or(r, |(top, _)| top), t.grid_col(r, c)))
+        .collect();
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
+/// Split Cells: the caret's cell, or the selected cells (merged first unless `mergeFirst` is
+/// false), into `columns` × `rows` cells.
+fn split(s: &mut Session, v: &Value) -> CmdResult {
+    let cols = p::u64(v, "columns").unwrap_or(2).clamp(1, 63) as usize;
+    let rows = p::u64(v, "rows").unwrap_or(1).clamp(1, 63) as usize;
+    let mut cells = split_targets(s);
+    if cells.len() > 1 && p::bool(v, "mergeFirst").unwrap_or(true) {
+        // As in Word: the merged cell splits into at most the rows it covered.
+        let mut sel_rows: Vec<usize> = selected_cells(s).iter().map(|&(r, _)| r).collect();
+        sel_rows.sort_unstable();
+        sel_rows.dedup();
+        if rows > sel_rows.len() {
+            return Err(CmdError::Params(format!("`rows` must be between 1 and {}", sel_rows.len())));
+        }
+        merge(s, &json!({}))?;
+        cells.clear();
+    } else if cells.len() > 1 && rows > 1 {
+        // Word greys out the row count when the cells split one by one.
+        return Err(CmdError::Params("several cells split one by one keep their rows: `rows` must be 1".into()));
+    }
+    let (tp, r, c) = cell(s)?;
+    let t = s.doc.table_mut(s.sel.focus.story, &tp)?;
+    if cells.is_empty() {
+        cells.push((t.vertical_extent(r, c).map_or(r, |(top, _)| top), t.grid_col(r, c)));
+    }
+    // Rightmost grid column first, bottom up: a split only adds grid columns inside the cell it
+    // splits, so the cells still to split keep their grid places. Each is found again by its grid
+    // column when its turn comes.
+    let first = cells.first().copied();
+    cells.sort_unstable_by_key(|&(top, g)| std::cmp::Reverse((g, top)));
+    for &(top, g) in &cells {
+        let Some(ci) = t.cell_at_grid(top, g) else { continue };
+        if !t.split_cell_grid(top, ci, cols, rows) {
+            return Err(CmdError::Failed(format!(
+                "can't split into {rows} rows: a merged cell splits into a number of rows that divides its height"
+            )));
+        }
+    }
+    // The caret goes to the first part of the first cell (the top of a merged cell).
+    let (top, g) = first.unwrap_or((r, 0));
+    let c = t.cell_at_grid(top, g).unwrap_or(c);
+    fix_caret(s, &tp, top, c)
 }
 
 fn split_table(s: &mut Session, _: &Value) -> CmdResult {
@@ -1100,8 +1155,9 @@ pub(crate) fn row_ends(doc: &Document, story: StoryRef, tp: &Path, r: usize) -> 
     Some((Pos { story, path: first, off: 0 }, Pos { story, path: last, off: len }))
 }
 
-fn from_text(s: &mut Session, v: &Value) -> CmdResult {
-    let sep = if p::str(v, "separator") == Some("comma") { ',' } else { '\t' };
+/// The paragraphs Convert Text to Table would convert: the selected ones, as text. Refused
+/// rather than dropping content when a table lies between them.
+pub fn text_table_lines(s: &Session) -> Result<Vec<String>, CmdError> {
     let (a, b) = s.sel.ordered();
     if a.path.parent() != b.path.parent() || a.story != b.story {
         return Err(CmdError::Failed("select paragraphs to convert".into()));
@@ -1112,15 +1168,58 @@ fn from_text(s: &mut Session, v: &Value) -> CmdResult {
     if lines.len() != b.path.last() - a.path.last() + 1 {
         return Err(CmdError::Failed("select only paragraphs to convert".into()));
     }
-    let cols = lines.iter().map(|l| l.split(sep).count()).max().unwrap_or(1);
+    Ok(lines)
+}
+
+/// The cells Convert Text to Table makes of `lines`, row by row, and the column count. `sep`
+/// `None` separates at paragraphs: each paragraph is a cell, `columns` (default 1) to a row.
+/// Otherwise each paragraph starts a row; `columns` defaults to the most fields in one, and a
+/// paragraph with more fields than that carries on over the next rows.
+pub fn text_table_cells(lines: &[String], sep: Option<char>, columns: Option<usize>) -> (Vec<Vec<&str>>, usize) {
+    let Some(sep) = sep else {
+        let cols = columns.unwrap_or(1).clamp(1, wordcraft_doc::table::MAX_COLS);
+        return (lines.chunks(cols).map(|ch| ch.iter().map(String::as_str).collect()).collect(), cols);
+    };
+    let cols = columns.unwrap_or_else(|| lines.iter().map(|l| l.split(sep).count()).max().unwrap_or(1)).max(1);
+    let mut rows = Vec::new();
+    for l in lines {
+        let fields: Vec<&str> = l.split(sep).collect();
+        rows.extend(fields.chunks(cols.min(wordcraft_doc::table::MAX_COLS)).map(<[&str]>::to_vec));
+    }
+    (rows, cols)
+}
+
+fn from_text(s: &mut Session, v: &Value) -> CmdResult {
+    let sep = match p::str(v, "separator") {
+        None | Some("tab") => Some('\t'),
+        Some("comma") => Some(','),
+        Some("paragraph") => None,
+        Some("other") => match p::str(v, "char").and_then(|c| c.chars().next()) {
+            Some(c) if c != '\n' && c != '\r' => Some(c),
+            _ => return Err(CmdError::Params("`char` (the separating character) is required with `other`".into())),
+        },
+        Some(x) => return Err(CmdError::Params(format!("unknown separator `{x}`"))),
+    };
+    let fit = match p::str(v, "autofit") {
+        None => None,
+        Some(m @ ("fixed" | "contents" | "window")) => Some(m),
+        Some(x) => return Err(CmdError::Params(format!("unknown AutoFit behavior `{x}`"))),
+    };
+    let columns = p::u64(v, "columns").map(|n| n.clamp(1, wordcraft_doc::table::MAX_COLS as u64) as usize);
+    let (a, b) = s.sel.ordered();
+    let lines = text_table_lines(s)?;
+    let (cells, cols) = text_table_cells(&lines, sep, columns);
     // A table has at most 63 columns; a longer row would lose its last fields.
-    if cols > 63 {
+    if cols > wordcraft_doc::table::MAX_COLS {
         return Err(CmdError::Failed("a table can have at most 63 columns".into()));
     }
+    if cells.len() > wordcraft_doc::table::MAX_ROWS {
+        return Err(CmdError::Failed(format!("a table can have at most {} rows", wordcraft_doc::table::MAX_ROWS)));
+    }
     let width = super::page::sect(s).text_width();
-    let mut t = Table::new(lines.len().max(1), cols, width);
-    for (r, l) in lines.iter().enumerate() {
-        for (c, txt) in l.split(sep).enumerate() {
+    let mut t = Table::new(cells.len().max(1), cols, width);
+    for (r, l) in cells.iter().enumerate() {
+        for (c, txt) in l.iter().enumerate() {
             if let Some(cl) = t.rows.get_mut(r).and_then(|row| row.cells.get_mut(c)) {
                 cl.blocks = vec![para_block(Paragraph::with_text(txt.trim(), Default::default()))];
             }
@@ -1133,7 +1232,10 @@ fn from_text(s: &mut Session, v: &Value) -> CmdResult {
     let mut first = a.path.0.clone();
     first.extend([0, 0, 0]);
     s.sel = Selection::caret(Pos { story: a.story, path: Path(first), off: 0 });
-    sel_result(s)
+    match fit {
+        Some(mode) => autofit(s, &json!({ "mode": mode })),
+        None => sel_result(s),
+    }
 }
 
 fn quick_table(s: &mut Session, v: &Value) -> CmdResult {

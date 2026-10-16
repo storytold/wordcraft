@@ -2245,3 +2245,13 @@
 # Reading Mode column widths (#1040)
 	Narrow	窄
 	Medium	中等
+# Split Cells and Convert Text to Table (#2592)
+	Merge cells before split	拆分前合并单元格
+	Table size	表格尺寸
+	AutoFit behavior	自动调整操作
+	Fixed column width	固定列宽
+	AutoFit to contents	根据内容调整表格
+	AutoFit to window	根据窗口调整表格
+	Separate text at	文字分隔位置
+	Commas	逗号
+	Other:	其他字符：

@@ -2240,3 +2240,13 @@
 # Reading Mode column widths (#1040)
 	Narrow	Étroite
 	Medium	Moyenne
+# Split Cells and Convert Text to Table (#2592)
+	Merge cells before split	Fusionner les cellules avant le fractionnement
+	Table size	Taille du tableau
+	AutoFit behavior	Comportement de l'ajustement automatique
+	Fixed column width	Largeur de colonne fixe
+	AutoFit to contents	Ajustement automatique au contenu
+	AutoFit to window	Ajustement automatique à la fenêtre
+	Separate text at	Séparer le texte au niveau des
+	Commas	Virgules
+	Other:	Autre :

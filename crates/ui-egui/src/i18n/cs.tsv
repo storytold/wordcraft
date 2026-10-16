@@ -2624,3 +2624,13 @@ preview	Title	Ukázka
 # Reading Mode column widths (#1040)
 	Narrow	Úzká
 	Medium	Střední
+# Split Cells and Convert Text to Table (#2592)
+	Merge cells before split	Před rozdělením buňky sloučit
+	Table size	Velikost tabulky
+	AutoFit behavior	Automatické přizpůsobení
+	Fixed column width	Pevná šířka sloupce
+	AutoFit to contents	Automaticky přizpůsobit obsahu
+	AutoFit to window	Automaticky přizpůsobit oknu
+	Separate text at	Oddělit text pomocí
+	Commas	Čárky
+	Other:	Jiné:

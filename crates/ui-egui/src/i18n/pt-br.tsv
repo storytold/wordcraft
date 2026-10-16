@@ -2245,3 +2245,13 @@
 # Reading Mode column widths (#1040)
 	Narrow	Estreita
 	Medium	Média
+# Split Cells and Convert Text to Table (#2592)
+	Merge cells before split	Mesclar células antes de dividir
+	Table size	Tamanho da tabela
+	AutoFit behavior	Comportamento de autoajuste
+	Fixed column width	Largura de coluna fixa
+	AutoFit to contents	Autoajustar ao conteúdo
+	AutoFit to window	Autoajustar à janela
+	Separate text at	Separar texto em
+	Commas	Vírgulas
+	Other:	Outro:

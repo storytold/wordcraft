@@ -2629,3 +2629,13 @@ preview	Title	Örnek
 # Reading Mode column widths (#1040)
 	Narrow	Dar
 	Medium	Orta
+# Split Cells and Convert Text to Table (#2592)
+	Merge cells before split	Bölmeden önce hücreleri birleştir
+	Table size	Tablo boyutu
+	AutoFit behavior	Otomatik sığdırma
+	Fixed column width	Sabit sütun genişliği
+	AutoFit to contents	İçeriğe sığdır
+	AutoFit to window	Pencereye sığdır
+	Separate text at	Metni ayırma yeri
+	Commas	Virgüller
+	Other:	Diğer:

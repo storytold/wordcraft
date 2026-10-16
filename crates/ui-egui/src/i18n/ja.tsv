@@ -2233,3 +2233,13 @@
 # Reading Mode column widths (#1040)
 	Narrow	狭い
 	Medium	中
+# Split Cells and Convert Text to Table (#2592)
+	Merge cells before split	分割する前にセルを結合する
+	Table size	表のサイズ
+	AutoFit behavior	自動調整
+	Fixed column width	列の幅を固定する
+	AutoFit to contents	文字列の幅に合わせる
+	AutoFit to window	ウィンドウ幅に合わせる
+	Separate text at	文字列の区切り
+	Commas	カンマ
+	Other:	その他:

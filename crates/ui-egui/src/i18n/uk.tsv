@@ -2245,3 +2245,13 @@
 # Reading Mode column widths (#1040)
 	Narrow	Вузька
 	Medium	Середня
+# Split Cells and Convert Text to Table (#2592)
+	Merge cells before split	Об'єднати клітинки перед розділенням
+	Table size	Розмір таблиці
+	AutoFit behavior	Добір розміру
+	Fixed column width	Фіксована ширина стовпця
+	AutoFit to contents	Добір розміру за вмістом
+	AutoFit to window	Добір розміру за шириною вікна
+	Separate text at	Розділювач тексту
+	Commas	Коми
+	Other:	Інше:

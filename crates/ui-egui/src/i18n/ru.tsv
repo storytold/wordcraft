@@ -2630,3 +2630,13 @@ preview	Title	Пример
 # Reading Mode column widths (#1040)
 	Narrow	Узкая
 	Medium	Средняя
+# Split Cells and Convert Text to Table (#2592)
+	Merge cells before split	Объединить ячейки перед разбиением
+	Table size	Размер таблицы
+	AutoFit behavior	Автоподбор ширины столбцов
+	Fixed column width	Фиксированная ширина столбцов
+	AutoFit to contents	Автоподбор по содержимому
+	AutoFit to window	Автоподбор по ширине окна
+	Separate text at	Разделитель
+	Commas	Запятые
+	Other:	Другой:

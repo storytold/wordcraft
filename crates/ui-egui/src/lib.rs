@@ -2306,6 +2306,9 @@ fn input_dialog(id: &str, params: &Value) -> Option<&'static str> {
         "table.formula" if !has("formula") => Some("tableFormula"),
         // Sort without settings asks for the column, order and header row (#1200).
         "table.sort" if params.as_object().is_none_or(|m| m.is_empty()) => Some("tableSort"),
+        // Split Cells and Convert Text to Table without settings ask for them (#2592).
+        "table.split" if params.as_object().is_none_or(|m| m.is_empty()) => Some("splitCells"),
+        "table.fromText" if params.as_object().is_none_or(|m| m.is_empty()) => Some("textToTable"),
         // Tabs, Borders and Shading, and Page Borders without settings show their dialogs (#320).
         "para.tabs" if params.as_object().is_none_or(|m| m.is_empty()) => Some("tabs"),
         "para.borders" if params.as_object().is_none_or(|m| m.is_empty()) => Some("borders"),

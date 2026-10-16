@@ -2628,3 +2628,13 @@
 # Reading Mode column widths (#1040)
 	Narrow	Keskeny
 	Medium	Közepes
+# Split Cells and Convert Text to Table (#2592)
+	Merge cells before split	Cellák egyesítése felosztás előtt
+	Table size	Táblázat mérete
+	AutoFit behavior	Automatikus igazítás
+	Fixed column width	Rögzített oszlopszélesség
+	AutoFit to contents	Igazítás a tartalomhoz
+	AutoFit to window	Igazítás az ablakhoz
+	Separate text at	Szöveg elválasztása
+	Commas	Vesszők
+	Other:	Egyéb:

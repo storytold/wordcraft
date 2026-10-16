@@ -2622,3 +2622,13 @@ preview	Title	Tytuł
 # Reading Mode column widths (#1040)
 	Narrow	Wąska
 	Medium	Średnia
+# Split Cells and Convert Text to Table (#2592)
+	Merge cells before split	Scal komórki przed podziałem
+	Table size	Rozmiar tabeli
+	AutoFit behavior	Autodopasowanie
+	Fixed column width	Stała szerokość kolumn
+	AutoFit to contents	Dopasuj do zawartości
+	AutoFit to window	Dopasuj do okna
+	Separate text at	Oddziel tekst przy
+	Commas	Przecinki
+	Other:	Inny:

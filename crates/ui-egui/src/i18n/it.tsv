@@ -2641,3 +2641,13 @@ preview	Title	Esempio
 # Reading Mode column widths (#1040)
 	Narrow	Stretta
 	Medium	Media
+# Split Cells and Convert Text to Table (#2592)
+	Merge cells before split	Unisci le celle prima di dividere
+	Table size	Dimensioni tabella
+	AutoFit behavior	Adattamento automatico
+	Fixed column width	Larghezza colonna fissa
+	AutoFit to contents	Adatta al contenuto
+	AutoFit to window	Adatta alla finestra
+	Separate text at	Separa il testo in corrispondenza di
+	Commas	Virgole
+	Other:	Altro:
