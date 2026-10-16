@@ -310,17 +310,45 @@ fn sheet_rows(stream: &[u8], offset: usize, g: &Globals) -> Result<Vec<Vec<Strin
     };
     // A FORMULA with a string result waits for the STRING record after it.
     let mut pending: Option<(u16, u16)> = None;
+    let mut depth = 1usize;
     while let Some((kind, d, next)) = record(stream, pos) {
         pos = next;
-        if kind == EOF || kind == BOF {
-            break;
+        if kind == BOF {
+            depth = depth.saturating_add(1);
+            continue;
         }
-        if kind == STRING {
-            if let (Some((r, c)), Some(s)) = (pending.take(), unicode_string(d, 0)) {
-                put(r, c, s, &mut count);
+        if kind == EOF {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                break;
             }
             continue;
         }
+        if depth > 1 {
+            continue;
+        }
+        if kind == STRING {
+            let mut parts = vec![d];
+            let mut p = pos;
+            while let Some((CONTINUE, cd, n)) = record(stream, p) {
+                parts.push(cd);
+                p = n;
+            }
+            pos = p;
+            if let Some((r, c)) = pending.take() {
+                let cch = usize::from(u16_at(parts[0], 0).unwrap_or(0));
+                let high = parts[0].get(2).is_some_and(|f| f & 1 != 0);
+                if let Some(s) = parts[0].get(3..).and_then(|first| {
+                    let mut all_parts = vec![first];
+                    all_parts.extend_from_slice(&parts[1..]);
+                    Pieces::new(all_parts).chars(cch, high)
+                }) {
+                    put(r, c, s, &mut count);
+                }
+            }
+            continue;
+        }
+        pending = None;
         let (Some(row), Some(col), Some(xf)) = (u16_at(d, 0), u16_at(d, 2), u16_at(d, 4)) else { continue };
         match kind {
             LABELSST => {
@@ -552,5 +580,39 @@ mod tests {
         comp.create_stream("/Book").unwrap();
         let old = comp.into_inner().into_inner();
         assert!(sheet_names(&old).unwrap_err().contains("Excel 5.0/95"));
+    }
+
+    #[test]
+    fn embedded_substream_does_not_truncate_sheet() {
+        let mut stream = Vec::new();
+        fn rec(out: &mut Vec<u8>, kind: u16, data: &[u8]) {
+            out.extend_from_slice(&kind.to_le_bytes());
+            out.extend_from_slice(&(data.len() as u16).to_le_bytes());
+            out.extend_from_slice(data);
+        }
+        rec(&mut stream, BOF, &[0x00, 0x06, 0x05, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        let sheet_offset = 37u32;
+        rec(&mut stream, BOUNDSHEET, &[sheet_offset as u8, 0, 0, 0, 0, 0, 1, 0, b'S']);
+        rec(&mut stream, EOF, &[]);
+        assert_eq!(stream.len(), sheet_offset as usize);
+        // Worksheet BOF
+        rec(&mut stream, BOF, &[0x00, 0x06, 0x10, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        // Cell row 0, col 0 = NUMBER 1.0
+        let mut c1 = vec![0, 0, 0, 0, 0, 0];
+        c1.extend_from_slice(&1.0f64.to_le_bytes());
+        rec(&mut stream, NUMBER, &c1);
+        // Embedded chart substream: BOF(0x0020) ... EOF
+        rec(&mut stream, BOF, &[0x00, 0x06, 0x20, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        rec(&mut stream, EOF, &[]);
+        // Cell row 1, col 0 = NUMBER 2.0
+        let mut c2 = vec![1, 0, 0, 0, 0, 0];
+        c2.extend_from_slice(&2.0f64.to_le_bytes());
+        rec(&mut stream, NUMBER, &c2);
+        // Worksheet EOF
+        rec(&mut stream, EOF, &[]);
+
+        let g = globals(&stream).unwrap();
+        let rows = sheet_rows(&stream, sheet_offset as usize, &g).unwrap();
+        assert_eq!(rows, vec![vec!["1".to_string()], vec!["2".to_string()]]);
     }
 }
