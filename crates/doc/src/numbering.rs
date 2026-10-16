@@ -281,8 +281,8 @@ impl Numbering {
 /// Running list counters while walking a document in order.
 #[derive(Default, Debug, Clone)]
 pub struct Counters {
-    /// Per abstract list: current value per level.
-    state: HashMap<u32, [u32; 9]>,
+    /// Per abstract list: current value per level (`None`: level not counted yet).
+    state: HashMap<u32, [Option<u32>; 9]>,
     /// Which nums have started (to apply start overrides once).
     seen: HashMap<u32, bool>,
 }
@@ -291,7 +291,12 @@ impl Counters {
     /// The current value of each level of `num`'s list (0 for a level not counted yet).
     pub fn values(&self, numbering: &Numbering, num: u32) -> Option<[u32; 9]> {
         let abs = numbering.abstract_of(num)?;
-        Some(self.state.get(&abs.id).copied().unwrap_or([0; 9]))
+        let raw = self.state.get(&abs.id).copied().unwrap_or([None; 9]);
+        let mut out = [0u32; 9];
+        for (i, v) in raw.iter().enumerate() {
+            out[i] = v.unwrap_or(0);
+        }
+        Some(out)
     }
 
     /// Advance the counter for `num`/`level` and return the label (`"1."`, `"a)"`, `"•"`).
@@ -306,27 +311,26 @@ impl Counters {
         if def.format == NumFormat::None {
             return None;
         }
-        let st = self.state.entry(abs.id).or_insert([0; 9]);
+        let st = self.state.entry(abs.id).or_insert([None; 9]);
         if let std::collections::hash_map::Entry::Vacant(e) = self.seen.entry(num) {
             e.insert(true);
             for (l, start) in &n.start_overrides {
-                if let Some(s) = st.get_mut(*l as usize) {
-                    *s = start.saturating_sub(1);
+                if let Some(slot) = st.get_mut(*l as usize) {
+                    *slot = Some(start.saturating_sub(1));
                 }
             }
         }
-        if let Some(v) = st.get_mut(lv) {
-            *v = if *v == 0 { def.start.max(if def.start == 0 { 0 } else { 1 }) } else { v.saturating_add(1) };
-            if *v == 0 {
-                *v = def.start;
-            }
-        }
+        let v = match st[lv] {
+            None => def.start,
+            Some(prev) => prev.saturating_add(1),
+        };
+        st[lv] = Some(v);
         // Deeper levels restart, unless they never restart or only restart after a level above
         // this one (Word's lvlRestart).
-        for (d, deeper) in st.iter_mut().enumerate().skip(lv + 1) {
+        for (d, slot) in st.iter_mut().enumerate().skip(lv + 1) {
             let restarts = level_def(d).is_none_or(|l| l.restart && l.restart_after.is_none_or(|k| lv < k as usize));
             if restarts {
-                *deeper = 0;
+                *slot = None;
             }
         }
         let vals = *st;
@@ -338,11 +342,11 @@ impl Counters {
         while let Some(c) = chars.next() {
             if c == '%'
                 && let Some(d) = chars.peek().and_then(|d| d.to_digit(10))
+                && (1..=9).contains(&d)
             {
                 chars.next();
-                let k = (d as usize).saturating_sub(1).min(8);
-                let val = vals.get(k).copied().unwrap_or(0);
-                let val = if val == 0 { level_def(k).map(|l| l.start).unwrap_or(1) } else { val };
+                let k = (d as usize) - 1;
+                let val = vals.get(k).copied().flatten().unwrap_or_else(|| level_def(k).map(|l| l.start).unwrap_or(1));
                 // Legal numbering (w:isLgl) shows every level in Arabic digits, whatever its own
                 // format (二 of a Chinese outline becomes 2 in "2.1").
                 let fmt = match level_def(k).map(|l| l.format).unwrap_or(NumFormat::Decimal) {
@@ -484,5 +488,30 @@ mod tests {
         assert_eq!(n.level(r, 0), Some(&own));
         let mut c = Counters::default();
         assert_eq!(c.next_label(&n, r, 0).unwrap().0, "Part V");
+    }
+
+    #[test]
+    fn start_zero_counters_increment_properly() {
+        let mut n = Numbering::default();
+        let id = n.add_list(ListKind::Numbered);
+        if let Some(a) = n.abstracts.first_mut() {
+            a.levels[0].start = 0;
+            a.levels[0].text = "Item %1.".into();
+        }
+        let mut c = Counters::default();
+        assert_eq!(c.next_label(&n, id, 0).unwrap().0, "Item 0.");
+        assert_eq!(c.next_label(&n, id, 0).unwrap().0, "Item 1.");
+        assert_eq!(c.next_label(&n, id, 0).unwrap().0, "Item 2.");
+    }
+
+    #[test]
+    fn placeholder_percent_zero_is_preserved_as_literal() {
+        let mut n = Numbering::default();
+        let id = n.add_list(ListKind::Numbered);
+        if let Some(a) = n.abstracts.first_mut() {
+            a.levels[0].text = "%0 %1.".into();
+        }
+        let mut c = Counters::default();
+        assert_eq!(c.next_label(&n, id, 0).unwrap().0, "%0 1.");
     }
 }
