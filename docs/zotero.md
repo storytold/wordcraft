@@ -18,6 +18,7 @@ Citations (each runs one of the commands below).
 | `ui.zotero.addNote` | Insert a Zotero note |
 | `ui.zotero.status` | `{busy, waitingForAnswer, last}` |
 | `ui.zotero.answer` | `{"button": n}`: answer a question Zotero is asking (OK/Yes 1, No/Cancel 0; with Yes/No/Cancel: Yes 2, No 1, Cancel 0) |
+| `ui.zotero.cancel` | Stop the command in flight: WordCraft hangs up on Zotero and the Zotero buttons work again. Edits already made stay (one undo step) |
 
 They run in the app (and through the control channel and MCP bridged to the app). A command
 returns at once with `{"started": …}`; Zotero then works in its own window and WordCraft answers
@@ -60,6 +61,26 @@ Word's "Field" in the file.)
 - Zotero's "Bookmarks" field type isn't supported; keep the default.
 - Zotero's document transfer (Export/Import Document) isn't needed and isn't supported.
 - The web version can't reach Zotero (browsers can't open the socket).
+
+## Session limits
+
+Whatever listens on Zotero's port can't keep WordCraft waiting or growing forever. A command ends
+with an error (shown in the status bar and in `ui.zotero.status`'s `last`) when:
+
+| Limit | Default | Why |
+|---|---|---|
+| No message from Zotero | 60 min | Zotero's dialogs wait for the user, so this is long; it only ends a session Zotero abandoned |
+| One message, once it starts arriving | 60 s | a peer that sends a message a byte at a time |
+| One reply, being sent | 60 s | a peer that stops reading |
+| The whole command | 4 h | dialogs included |
+| Messages in one command | 200,000 | a peer that calls forever |
+| One message | 32 MiB | |
+
+While a command runs the status bar says "Waiting for Zotero…" with a **Cancel** link
+(`ui.zotero.cancel`), which ends it at any time, even with no document open. A command's result
+keeps its first 20 failed calls (each cut to 500 bytes) and counts the rest (`moreErrors`); the
+app's log names the first 200 calls (each name cut to 128 bytes) and the first 20 failures, and
+counts the rest. A question from Zotero is shown up to 2,000 bytes. These are the fields of `client::Options` for the CLI and tests.
 
 ## How it works
 

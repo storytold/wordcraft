@@ -96,7 +96,8 @@ pub fn enabled(app: &WordApp, id: &str) -> bool {
     }
     match app.session.registry.get(id) {
         Some(s) => (s.enabled)(&app.session).is_none(),
-        // Zotero: one command at a time, and only in the desktop app.
+        // Zotero: one command at a time, and only in the desktop app; Cancel while one runs.
+        None if id == "ui.zotero.cancel" => app.zotero.busy.is_some(),
         None if id.starts_with("ui.zotero.") => app.zotero.busy.is_none() && !cfg!(target_arch = "wasm32"),
         None if id == "ui.linkTextBox" => enabled(app, "shape.link"),
         None if id == "ui.crop" => crate::crop::can_toggle(app),

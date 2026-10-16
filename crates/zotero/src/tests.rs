@@ -1,4 +1,5 @@
 use std::net::TcpListener;
+use std::time::Duration;
 
 use serde_json::{Value, json};
 use wordcraft_doc::para::OBJ;
@@ -400,6 +401,174 @@ fn command_names() {
     }
     assert_eq!(Command::from_name("ADDEDITCITATION"), Some(Command::AddEditCitation));
     assert_eq!(Command::from_name("exportDocument"), None);
+}
+
+// ---- transport limits (#1332) ----
+
+/// A fake peer: accepts one connection, reads the command and hands the socket to `then`.
+fn fake_peer(then: impl FnOnce(std::net::TcpStream) + Send + 'static) -> (std::net::SocketAddr, std::thread::JoinHandle<()>) {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = l.local_addr().unwrap();
+    let h = std::thread::spawn(move || {
+        let (mut s, _) = l.accept().unwrap();
+        let _command = wire::read_frame(&mut s).unwrap().unwrap();
+        then(s);
+    });
+    (addr, h)
+}
+
+/// Short limits so the tests run fast.
+fn quick(addr: std::net::SocketAddr) -> Options {
+    Options {
+        addr,
+        idle_timeout: Duration::from_secs(10),
+        frame_timeout: Duration::from_millis(300),
+        write_timeout: Duration::from_millis(300),
+        session_timeout: Duration::from_secs(10),
+        ..Options::default()
+    }
+}
+
+/// Run `command` on another thread; fail instead of hanging when it takes over `secs`.
+fn run_within(
+    secs: u64,
+    opts: Options,
+    mut answer: impl FnMut(&Call) -> Result<Value, String> + Send + 'static,
+) -> Result<client::Outcome, ZoteroError> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(client::run_command(&opts, Command::Refresh, &mut answer));
+    });
+    rx.recv_timeout(Duration::from_secs(secs)).expect("the session hung instead of ending")
+}
+
+#[test]
+fn a_peer_that_stops_reading_ends_the_session() {
+    let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+    let (addr, peer) = fake_peer(move |mut s| {
+        wire::write_frame(&mut s, 1, br#"["Document_getDocumentData",[1]]"#).unwrap();
+        // Never read the reply; keep the socket open until the test is done.
+        let _ = stop_rx.recv_timeout(Duration::from_secs(20));
+    });
+    let big = "x".repeat(wire::MAX_FRAME - 64);
+    let r = run_within(10, quick(addr), move |_| Ok(Value::String(big.clone())));
+    let _ = stop_tx.send(());
+    peer.join().unwrap();
+    let e = r.unwrap_err();
+    assert!(e.to_string().contains("stopped reading"), "{e}");
+}
+
+#[test]
+fn a_frame_dripped_byte_by_byte_times_out() {
+    let (addr, peer) = fake_peer(|mut s| {
+        use std::io::Write;
+        // A 64-byte call, one byte every 20 ms: every read makes progress, the frame never ends in time.
+        let _ = s.write_all(&[0, 0, 0, 1, 0, 0, 0, 64]);
+        for _ in 0..200 {
+            if s.write_all(b" ").is_err() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    });
+    let r = run_within(10, quick(addr), |_| Ok(Value::Null));
+    peer.join().unwrap();
+    let e = r.unwrap_err();
+    assert!(e.to_string().contains("part of a message"), "{e}");
+}
+
+#[test]
+fn waiting_between_calls_is_not_a_partial_frame() {
+    // Zotero's dialogs keep the user for minutes between calls; only the idle limit applies there.
+    let (addr, peer) = fake_peer(|mut s| {
+        for (tx, call) in [(1, json!(["Application_getActiveDocument", [3]])), (2, json!(["Document_complete", [1]]))] {
+            std::thread::sleep(Duration::from_millis(600));
+            wire::write_frame(&mut s, tx, &serde_json::to_vec(&call).unwrap()).unwrap();
+            wire::read_frame(&mut s).unwrap().unwrap();
+        }
+    });
+    let out = run_within(10, quick(addr), |_| Ok(Value::Null)).unwrap();
+    peer.join().unwrap();
+    assert!(out.completed);
+    assert_eq!(out.calls, 2);
+}
+
+#[test]
+fn endless_calls_are_capped() {
+    let (addr, peer) = fake_peer(|mut s| {
+        for tx in 1..100_000u32 {
+            if wire::write_frame(&mut s, tx, br#"["Document_getDocumentData",[1]]"#).is_err() {
+                return;
+            }
+            if !matches!(wire::read_frame(&mut s), Ok(Some(_))) {
+                return;
+            }
+        }
+    });
+    let opts = Options { max_calls: 50, ..quick(addr) };
+    let r = run_within(10, opts, |_| Ok(Value::Null));
+    peer.join().unwrap();
+    let e = r.unwrap_err();
+    assert!(e.to_string().contains("more than 50"), "{e}");
+}
+
+#[test]
+fn endless_errors_are_stored_bounded() {
+    let (addr, peer) = fake_peer(|mut s| {
+        for tx in 1..=500u32 {
+            wire::write_frame(&mut s, tx, br#"["Not_a_method",[]]"#).unwrap();
+            wire::read_frame(&mut s).unwrap().unwrap();
+        }
+        wire::write_frame(&mut s, 501, br#"["Document_complete",[1]]"#).unwrap();
+        wire::read_frame(&mut s).unwrap().unwrap();
+    });
+    let huge = "é".repeat(100_000);
+    let out = run_within(10, quick(addr), move |c| if c.method == "Document_complete" { Ok(Value::Null) } else { Err(huge.clone()) }).unwrap();
+    peer.join().unwrap();
+    assert!(out.completed);
+    assert_eq!(out.calls, 501);
+    assert_eq!(out.errors.len(), client::MAX_ERRORS);
+    assert_eq!(out.more_errors, 500 - client::MAX_ERRORS);
+    assert!(out.errors.iter().all(|e| e.len() <= client::MAX_ERROR_LEN + 4), "each stored error is clipped");
+}
+
+#[test]
+fn the_overall_limit_ends_a_session_that_keeps_calling() {
+    let (addr, peer) = fake_peer(|mut s| {
+        for tx in 1..1000u32 {
+            std::thread::sleep(Duration::from_millis(50));
+            if wire::write_frame(&mut s, tx, br#"["Document_getDocumentData",[1]]"#).is_err() {
+                return;
+            }
+            if !matches!(wire::read_frame(&mut s), Ok(Some(_))) {
+                return;
+            }
+        }
+    });
+    let opts = Options { session_timeout: Duration::from_millis(500), ..quick(addr) };
+    let r = run_within(10, opts, |_| Ok(Value::Null));
+    peer.join().unwrap();
+    let e = r.unwrap_err();
+    assert!(e.to_string().contains("ran longer than"), "{e}");
+}
+
+#[test]
+fn cancel_ends_a_silent_session() {
+    let (addr, peer) = fake_peer(|mut s| {
+        // Silent until WordCraft hangs up.
+        assert!(matches!(wire::read_frame(&mut s), Ok(None) | Err(_)));
+    });
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let opts = Options { cancel: Some(cancel.clone()), ..quick(addr) };
+    let flag = cancel.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    });
+    let r = run_within(5, opts, |_| Ok(Value::Null));
+    peer.join().unwrap();
+    let e = r.unwrap_err();
+    assert!(e.to_string().contains("cancelled"), "{e}");
 }
 
 #[test]
