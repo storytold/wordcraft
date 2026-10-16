@@ -92,9 +92,10 @@ pub fn field_name(instr: &str) -> String {
 pub fn format_switch(instr: &str) -> Option<NumFormat> {
     let mut it = instr.split_whitespace();
     while let Some(w) = it.next() {
-        if w == "\\*" {
-            let v = it.next()?;
-            return Some(match v {
+        if let Some(rest) = w.strip_prefix("\\*") {
+            let v = if rest.is_empty() { it.next()? } else { rest };
+            let v = v.split('\\').next().unwrap_or(v);
+            let fmt = match v {
                 "roman" => NumFormat::LowerRoman,
                 "ROMAN" | "Roman" => NumFormat::UpperRoman,
                 "alphabetic" => NumFormat::LowerLetter,
@@ -108,7 +109,8 @@ pub fn format_switch(instr: &str) -> Option<NumFormat> {
                 v if v.eq_ignore_ascii_case("ChineseNum2") => NumFormat::ChineseLegalSimplified,
                 v if v.eq_ignore_ascii_case("ChineseNum3") => NumFormat::IdeographDigital,
                 _ => continue,
-            });
+            };
+            return Some(fmt);
         }
     }
     None
@@ -180,6 +182,8 @@ mod tests {
         let ctx = FieldCtx { page: 4, pages: 12, ..Default::default() };
         assert_eq!(field_text("PAGE", "", &ctx), ("4".into(), true));
         assert_eq!(field_text(" PAGE \\* ROMAN ", "", &ctx).0, "IV");
+        assert_eq!(field_text("PAGE \\*roman", "", &ctx).0, "iv");
+        assert_eq!(field_text("PAGE \\*roman\\*MERGEFORMAT", "", &ctx).0, "iv");
         assert_eq!(field_text("NUMPAGES \\* CardText", "", &ctx).0, "Twelve");
         assert_eq!(field_text("NUMPAGES \\* CHINESENUM1", "", &ctx).0, "十二");
         assert_eq!(field_text("PAGE \\* ChineseNum2", "", &ctx).0, "肆");
