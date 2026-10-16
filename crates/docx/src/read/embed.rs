@@ -94,7 +94,8 @@ impl Reader<'_> {
     /// relationship the main document's markup refers to by id (its target goes with the
     /// element, or not at all).
     pub(super) fn keep_unmodelled(&mut self, package: &Rels, document: &Rels) {
-        let main = self.pkg.get(&self.main).map(|b| b.to_vec()).unwrap_or_default();
+        let pkg = self.pkg;
+        let main = pkg.get(&self.main).unwrap_or_default();
         let referenced = |id: &str| {
             let needle = format!("\"{id}\"");
             main.windows(needle.len()).any(|w| w == needle.as_bytes())
@@ -192,14 +193,14 @@ impl Reader<'_> {
             log::warn!("docx: more than {MAX_EMBEDDED_PARTS} parts for embedded objects; the rest are dropped");
             return false;
         }
-        let Some(bytes) = self.pkg.get(part) else {
+        let Some(bytes) = self.pkg.get_shared(part) else {
             log::warn!("docx: part {part} of an embedded object is missing");
             return false;
         };
         let pkg = self.pkg;
         let ct = self.content_types.get_or_insert_with(|| ContentTypes::read(pkg)).of(part).unwrap_or("application/octet-stream");
         let content_type = if manifest_field_ok(ct) { ct.to_string() } else { "application/octet-stream".to_string() };
-        self.doc.passthrough.entry(part.to_string()).or_insert_with(|| Arc::new(bytes.to_vec()));
+        self.doc.passthrough.entry(part.to_string()).or_insert_with(|| bytes.clone());
         self.embedded.parts.insert(part.to_string(), crate::package::EmbeddedPart { content_type, rels: Vec::new() });
         true
     }

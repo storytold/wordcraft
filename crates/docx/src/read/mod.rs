@@ -281,9 +281,9 @@ pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
     // bytes, never parsed or run, so a .docm/.dotm saved again carries exactly what the file had.
     // Only the relationships and content types are read.
     if let Some(v) = part(rt::VBA_PROJECT)
-        && let Some(b) = pkg.get(&v).filter(|b| !b.is_empty())
+        && let Some(b) = pkg.get_shared(&v).filter(|b| !b.is_empty())
     {
-        r.doc.passthrough.insert(VBA_PROJECT_PART.into(), Arc::new(b.to_vec()));
+        r.doc.passthrough.insert(VBA_PROJECT_PART.into(), b.clone());
         r.read_vba_related(&v);
     }
     r.keep_custom_xml(&root_rels, &rels);
@@ -577,7 +577,7 @@ impl Reader<'_> {
                 log::warn!("docx: not carrying VBA-related part {path:?}");
                 continue;
             }
-            let Some(bytes) = self.pkg.get(path) else {
+            let Some(bytes) = self.pkg.get_shared(path) else {
                 log::warn!("docx: VBA-related part {path} is missing; keeping the project without it");
                 continue;
             };
@@ -587,7 +587,7 @@ impl Reader<'_> {
             }
             kept += 1;
             manifest.push_str(&format!("{}\t{path}\t{ct}\n", rel.kind));
-            self.doc.passthrough.entry(path.to_string()).or_insert_with(|| Arc::new(bytes.to_vec()));
+            self.doc.passthrough.entry(path.to_string()).or_insert_with(|| bytes.clone());
         }
         if !manifest.is_empty() {
             self.doc.passthrough.insert(VBA_RELATED.into(), Arc::new(manifest.into_bytes()));
@@ -642,7 +642,7 @@ impl Reader<'_> {
         if let Some(k) = self.media_by_path.get(&rel.target) {
             return Some(k.clone());
         }
-        let bytes = self.pkg.get(&rel.target)?;
+        let bytes = self.pkg.get_shared(&rel.target)?;
         let base: String =
             rel.target.rsplit('/').next().unwrap_or("image").chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')).collect();
         let base = if base.is_empty() || base.starts_with('.') { format!("image{base}") } else { base };
@@ -655,7 +655,7 @@ impl Reader<'_> {
                 None => format!("{base}_{n}"),
             };
         }
-        self.doc.media.insert(key.clone(), Arc::new(bytes.to_vec()));
+        self.doc.media.insert(key.clone(), bytes.clone());
         self.media_by_path.insert(rel.target.clone(), key.clone());
         Some(key)
     }
