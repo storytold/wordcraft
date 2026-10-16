@@ -1671,7 +1671,8 @@ fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, rects: &[Re
         let text = format!("{}: {}", tl!("Deleted"), d.text);
         by_page.entry(c.page).or_default().push((c.x, c.top + c.height, Balloon::Format(d.author, text), d.at));
     }
-    let palette = [t.blue, Color32::from_rgb(0xB0, 0x3A, 0x2E), Color32::from_rgb(0x2E, 0x7D, 0x32), Color32::from_rgb(0x8E, 0x44, 0xAD), t.orange];
+    let palette = t.author_colors;
+    let leaders = t.leader_colors;
     let mut authors: Vec<String> = Vec::new();
     let mut clicked: Option<(u32, Pos)> = None;
     // The markup area extends each page.
@@ -1679,8 +1680,8 @@ fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, rects: &[Re
         let page_scale = layout.pages.get(pi).map_or(scale, |page| page_screen_scale(*pr, page, scale));
         let area = Rect::from_min_max(pos2(pr.max.x, pr.min.y), pos2(pr.max.x + mw * page_scale, pr.max.y));
         if mw > 0.0 && area.intersects(clip) {
-            painter.rect_filled(area, 0.0, Color32::from_rgb(0xF3, 0xF3, 0xF3));
-            painter.line_segment([area.left_top(), area.left_bottom()], Stroke::new(1.0, Color32::from_rgb(0xE0, 0xE0, 0xE0)));
+            painter.rect_filled(area, 0.0, t.markup_area);
+            painter.line_segment([area.left_top(), area.left_bottom()], Stroke::new(1.0, t.markup_edge));
         }
     }
     let mut pages: Vec<usize> = by_page.keys().copied().collect();
@@ -1724,7 +1725,8 @@ fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, rects: &[Re
                         continue;
                     }
                     let lead = Stroke::new(1.0, color.linear_multiply(0.7));
-                    dashed(painter, anchor, pos2(pr.max.x, anchor.y), lead);
+                    let on_page = Stroke::new(1.0, leaders.get(ai % leaders.len()).copied().unwrap_or(color).linear_multiply(0.7));
+                    dashed(painter, anchor, pos2(pr.max.x, anchor.y), on_page);
                     painter.line_segment([pos2(pr.max.x, anchor.y), pos2(x0, top + 10.0)], lead);
                     card_shapes(painter, &t, card, color, false, None);
                     let y = card.min.y + 6.0;
@@ -1774,7 +1776,11 @@ fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, rects: &[Re
             // Leader: from the anchor along the text to the page edge, then to the card.
             let lead = Stroke::new(if selected { 1.5 } else { 1.0 }, color.linear_multiply(if selected { 1.0 } else { 0.7 }));
             if !over_page {
-                dashed(painter, anchor, pos2(pr.max.x, anchor.y), lead);
+                let on_page = Stroke::new(
+                    lead.width,
+                    leaders.get(ai % leaders.len()).copied().unwrap_or(color).linear_multiply(if selected { 1.0 } else { 0.7 }),
+                );
+                dashed(painter, anchor, pos2(pr.max.x, anchor.y), on_page);
                 painter.line_segment([pos2(pr.max.x, anchor.y), pos2(x0, top + 10.0)], lead);
             }
             let card = if active {
@@ -1828,7 +1834,7 @@ fn author_name(a: &str) -> String {
 fn card_shapes(painter: &egui::Painter, t: &Tokens, card: Rect, color: Color32, selected: bool, slot: Option<egui::layers::ShapeIdx>) {
     let shapes = vec![
         egui::Shape::rect_filled(card.translate(vec2(0.0, 1.0)), 4.0, t.page_shadow),
-        egui::Shape::rect_filled(card, 4.0, if selected { t.checked } else { Color32::WHITE }),
+        egui::Shape::rect_filled(card, 4.0, if selected { t.checked } else { t.balloon }),
         egui::Shape::rect_stroke(card, 4.0, Stroke::new(if selected { 1.5 } else { 1.0 }, color), egui::StrokeKind::Inside),
         egui::Shape::rect_filled(Rect::from_min_size(card.min, vec2(4.0, card.height())), egui::CornerRadius { nw: 4, sw: 4, ne: 0, se: 0 }, color),
     ];
@@ -1961,7 +1967,7 @@ fn active_balloon(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, id: u
     child.horizontal(|ui| {
         ui.label(egui::RichText::new(name(app, id)).font(bold.clone()).color(t.text));
         if resolved {
-            ui.label(egui::RichText::new(tl!("Resolved")).font(small.clone()).color(t.green));
+            ui.label(egui::RichText::new(tl!("Resolved")).font(small.clone()).color(t.resolved_text));
         }
     });
     crate::panes::comment_editor(app, &mut child, id, Some(font.clone()), focus && !app.canvas.balloon_reply);
