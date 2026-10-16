@@ -840,21 +840,40 @@ pub fn icon_button(ui: &mut Ui, icon: &str, tip: &str) -> Response {
 /// fonts and would draw as empty boxes, so icons are painted (`icons.rs`) rather than typed.
 /// It looks and reacts like `ui.button` (see [`drawn_state`]).
 pub fn icon_text_button(ui: &mut Ui, icon: &str, text: &str, font: egui::FontId) -> Response {
-    icon_text_button_with(ui, icon, text, font, false)
+    icon_text_button_with(ui, icon, text, font, false, true)
 }
 
 /// [`icon_text_button`] that opens a menu: the drop-down marker follows the text.
 pub fn icon_text_menu_button(ui: &mut Ui, icon: &str, text: &str, font: egui::FontId) -> Response {
-    icon_text_button_with(ui, icon, text, font, true)
+    icon_text_button_with(ui, icon, text, font, true, true)
 }
 
-fn icon_text_button_with(ui: &mut Ui, icon: &str, text: &str, font: egui::FontId, marker: bool) -> Response {
+/// The icon-only form of [`icon_text_button`] / [`icon_text_menu_button`] for a crowded strip
+/// (#2026): `label` is the accessible name and the tooltip, not drawn.
+pub fn icon_only_button(ui: &mut Ui, icon: &str, label: &str, font: egui::FontId, marker: bool) -> Response {
+    icon_text_button_with(ui, icon, label, font, marker, false).on_hover_text(label)
+}
+
+/// Width [`icon_text_button`] (or its menu / icon-only forms) takes.
+pub fn icon_text_button_width(ui: &Ui, text: &str, font: egui::FontId, marker: bool, show_text: bool) -> f32 {
+    let text_w = if show_text { ui.ctx().fonts_mut(|f| f.layout_no_wrap(text.to_string(), font, Color32::PLACEHOLDER).size().x) } else { 0.0 };
+    icon_text_button_size(ui, text_w, marker, show_text)
+}
+
+fn icon_text_button_size(ui: &Ui, text_w: f32, marker: bool, show_text: bool) -> f32 {
+    let pad = ui.spacing().button_padding;
+    let gap = if show_text { 4.0 } else { 0.0 };
+    let marker_w = if marker { DROPDOWN + 4.0 } else { 0.0 };
+    pad.x + 16.0 + gap + text_w + marker_w + pad.x
+}
+
+fn icon_text_button_with(ui: &mut Ui, icon: &str, text: &str, font: egui::FontId, marker: bool, show_text: bool) -> Response {
     let t = Tokens::get(ui.ctx());
     let galley = ui.painter().layout_no_wrap(text.to_string(), font, Color32::PLACEHOLDER);
     let pad = ui.spacing().button_padding;
     let icon_w = 16.0;
-    let marker_w = if marker { DROPDOWN + 4.0 } else { 0.0 };
-    let size = vec2(pad.x + icon_w + 4.0 + galley.size().x + marker_w + pad.x, galley.size().y.max(icon_w) + 2.0 * pad.y);
+    let text_w = if show_text { galley.size().x } else { 0.0 };
+    let size = vec2(icon_text_button_size(ui, text_w, marker, show_text), galley.size().y.max(icon_w) + 2.0 * pad.y);
     let (r, resp) = ui.allocate_exact_size(size, Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), text));
     let st = drawn_state(ui, &resp, true);
@@ -867,9 +886,10 @@ fn icon_text_button_with(ui: &mut Ui, icon: &str, text: &str, font: egui::FontId
         t.icon,
         t.accent,
     );
-    let text_x = r.min.x + pad.x + icon_w + 4.0;
-    let text_w = galley.size().x;
-    ui.painter().galley(pos2(text_x, r.center().y - galley.size().y / 2.0), galley, st.text);
+    let text_x = r.min.x + pad.x + icon_w + if show_text { 4.0 } else { 0.0 };
+    if show_text {
+        ui.painter().galley(pos2(text_x, r.center().y - galley.size().y / 2.0), galley, st.text);
+    }
     if marker {
         let c = pos2(text_x + text_w + 4.0 + DROPDOWN / 2.0, r.center().y);
         icons::paint(ui.painter(), Rect::from_center_size(c, vec2(DROPDOWN, DROPDOWN)), "dropdown", st.text, st.text);

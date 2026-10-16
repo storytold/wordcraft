@@ -159,6 +159,88 @@ pub fn fit_tabs(tabs: &[(f32, bool)], avail: f32, more: f32) -> Vec<bool> {
     fits
 }
 
+/// One tab as the strip planner sees it (#2026).
+#[derive(Debug, Clone, Copy)]
+pub struct TabSpec {
+    /// Width of the label at full size.
+    pub text_w: f32,
+    /// File: always on the strip.
+    pub file: bool,
+    /// The tab being shown.
+    pub active: bool,
+    /// A contextual tab (Table Design, Picture Format…).
+    pub contextual: bool,
+}
+
+/// How the tab strip is laid out (#2026).
+#[derive(Debug, Clone, PartialEq)]
+pub struct StripPlan {
+    /// Padding each side of a tab label.
+    pub pad: f32,
+    /// How much of Comments / Editing / Share is spelled out: 0 all, 1 Share only, 2 none.
+    pub buttons: usize,
+    /// Whether each tab is on the strip (the others are in the » menu).
+    pub fits: Vec<bool>,
+    /// Width each tab takes on the strip (a label may be cut with …).
+    pub widths: Vec<f32>,
+}
+
+/// Smallest a tab label is cut down to before the tab goes into the » menu.
+const MIN_TAB_W: f32 = 44.0;
+
+/// Lays the tabs and the buttons on their right out on `avail` points, giving way in this order:
+/// the padding between tabs, the Comments / Editing labels, the Share label, the plain tabs (from
+/// the end, into »), the labels of the active and contextual tabs (cut with …), and last those tabs
+/// themselves. The buttons' room is always kept and File never leaves the strip. `buttons` is the
+/// width of the three buttons at each level (pure, tested).
+pub fn plan_strip(tabs: &[TabSpec], buttons: [f32; 3], avail: f32, more: f32) -> StripPlan {
+    const STEPS: [(f32, usize); 4] = [(18.0, 0), (10.0, 0), (10.0, 1), (10.0, 2)];
+    let widths_at = |pad: f32| -> Vec<f32> { tabs.iter().map(|t| t.text_w.max(0.0) + pad + 2.0).collect() };
+    for (pad, level) in STEPS {
+        let widths = widths_at(pad);
+        if widths.iter().sum::<f32>() <= avail - buttons[level] {
+            return StripPlan { pad, buttons: level, fits: vec![true; tabs.len()], widths };
+        }
+    }
+    let (pad, level) = (10.0, 2);
+    let mut widths = widths_at(pad);
+    let room = avail - buttons[level];
+    let specs: Vec<(f32, bool)> = widths.iter().zip(tabs).map(|(w, t)| (*w, t.file || t.active || t.contextual)).collect();
+    let mut fits = fit_tabs(&specs, room, more);
+    // The tabs that must stay share what the plain ones left; each is cut down to its share.
+    let kept = |fits: &[bool], i: usize| fits.get(i).copied().unwrap_or(false) && tabs.get(i).is_some_and(|t| !t.file);
+    loop {
+        let n = (0..tabs.len()).filter(|&i| kept(&fits, i)).count();
+        let others: f32 =
+            (0..tabs.len()).filter(|&i| fits.get(i) == Some(&true) && !kept(&fits, i)).map(|i| widths.get(i).copied().unwrap_or(0.0)).sum();
+        let own: f32 = (0..tabs.len()).filter(|&i| kept(&fits, i)).map(|i| widths.get(i).copied().unwrap_or(0.0)).sum();
+        let extra = if fits.iter().all(|f| *f) { 0.0 } else { more };
+        let share_room = room - extra - others;
+        if n == 0 || own <= share_room {
+            break;
+        }
+        if share_room >= n as f32 * MIN_TAB_W {
+            let share = share_room / n as f32;
+            for (i, w) in widths.iter_mut().enumerate() {
+                if kept(&fits, i) {
+                    *w = w.min(share);
+                }
+            }
+            break;
+        }
+        // Not even cut down: the last of them (the active tab last of all) goes into ».
+        let last = (0..tabs.len())
+            .rev()
+            .find(|&i| kept(&fits, i) && tabs.get(i).is_some_and(|t| !t.active))
+            .or_else(|| (0..tabs.len()).rev().find(|&i| kept(&fits, i)));
+        match last.and_then(|i| fits.get_mut(i)) {
+            Some(f) => *f = false,
+            None => break,
+        }
+    }
+    StripPlan { pad, buttons: level, fits, widths }
+}
+
 /// Whether the caret is inside a table (so the contextual tabs and their badges are shown).
 pub fn in_table_public(app: &WordApp) -> bool {
     app.session.sel.focus.path.cell().is_some()
@@ -220,32 +302,65 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
+                // Share, Editing mode and Comments keep their room; the tabs get what is left of it
+                // (#897, #2026), and the buttons give up their labels before a tab is drawn over them.
+                let share = tl!("Share");
+                let editing_label = if app.session.doc.settings.track_changes { tl!("Reviewing") } else { tl!("Editing") };
+                let comments = tl!("Comments");
+                let share_w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(share.to_string(), medium(12.0), t.text).size().x);
+                let spaced = |w: f32| w + 2.0;
+                let button_widths = |level: usize| -> f32 {
+                    let labels = level == 0;
+                    let share_full = (share_w + 36.0).max(74.0);
+                    let share_button = if level < 2 { share_full } else { 30.0 };
+                    let editing = crate::widgets::icon_text_button_width(ui, editing_label, regular(12.0), true, labels);
+                    let comment = crate::widgets::icon_text_button_width(ui, comments, regular(12.0), false, labels);
+                    // The gaps (6 + 4 + 8) and the strip's margin.
+                    spaced(share_button) + spaced(editing) + spaced(comment) + 18.0 + 12.0
+                };
+                let button_levels = [button_widths(0), button_widths(1), button_widths(2)];
+                let labels: Vec<&str> = tabs.iter().map(|(tab, custom)| if *custom { tab.as_str() } else { tl!(tab) }).collect();
+                let specs: Vec<TabSpec> = tabs
+                    .iter()
+                    .zip(&labels)
+                    .map(|((tab, custom), shown)| TabSpec {
+                        text_w: ui.ctx().fonts_mut(|f| f.layout_no_wrap(shown.to_string(), medium(12.5), t.text).size().x),
+                        file: tab == "File",
+                        active: *tab == app.ui.tab,
+                        contextual: !custom && wordcraft_engine::ribbon::CONTEXTUAL_TABS.contains(&tab.as_str()),
+                    })
+                    .collect();
+                let plan = plan_strip(&specs, button_levels, ui.available_width(), MORE_TABS_W + 2.0);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // No document open (#1129): nothing to share, edit or comment on.
                     if !app.has_document() {
                         ui.disable();
                     }
-                    // Share, Editing mode, Comments, drawn first so the tabs get only the room
-                    // left of them (#897).
-                    let share = tl!("Share");
-                    let share_w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(share.to_string(), medium(12.0), t.text).size().x);
-                    let (r, resp) = ui.allocate_exact_size(vec2((share_w + 36.0).max(74.0), 24.0), Sense::click());
+                    let (share_size, share_text) = if plan.buttons < 2 { (((share_w + 36.0).max(74.0), 24.0), true) } else { ((30.0, 24.0), false) };
+                    let (r, resp) = ui.allocate_exact_size(vec2(share_size.0, share_size.1), Sense::click());
                     ui.painter().rect_filled(r, 4.0, if resp.hovered() { t.accent_text } else { t.accent });
+                    let icon_x = if share_text { r.min.x + 14.0 } else { r.center().x };
                     icons::paint(
                         ui.painter(),
-                        Rect::from_center_size(pos2(r.min.x + 14.0, r.center().y), vec2(14.0, 14.0)),
+                        Rect::from_center_size(pos2(icon_x, r.center().y), vec2(14.0, 14.0)),
                         "share",
                         t.on_accent,
                         t.on_accent,
                     );
-                    ui.painter().text(pos2(r.min.x + 26.0, r.center().y), Align2::LEFT_CENTER, share, medium(12.0), t.on_accent);
+                    if share_text {
+                        ui.painter().text(pos2(r.min.x + 26.0, r.center().y), Align2::LEFT_CENTER, share, medium(12.0), t.on_accent);
+                    }
+                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, share));
                     if resp.on_hover_text(tl!("Export a copy to share (PDF, Word document)")).clicked() {
                         let _ = app.run("ui.backstage", json!({"value": true, "page": "export"}));
                     }
                     ui.add_space(6.0);
                     let track = app.session.doc.settings.track_changes;
-                    let mode =
-                        crate::widgets::icon_text_menu_button(ui, "pencil", if track { tl!("Reviewing") } else { tl!("Editing") }, regular(12.0));
+                    let mode = if plan.buttons == 0 {
+                        crate::widgets::icon_text_menu_button(ui, "pencil", editing_label, regular(12.0))
+                    } else {
+                        crate::widgets::icon_only_button(ui, "pencil", editing_label, regular(12.0), true)
+                    };
                     egui::Popup::menu(&mode).show(|ui| {
                         if ui.selectable_label(!track, tl!(tl!("Editing — edit the document directly"))).clicked() {
                             let _ = app.run("review.trackChanges", json!({"value": false}));
@@ -257,30 +372,24 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         }
                     });
                     ui.add_space(4.0);
-                    if crate::widgets::icon_text_button(ui, "comment", tl!("Comments"), regular(12.0)).clicked() {
+                    let comments_button = if plan.buttons == 0 {
+                        crate::widgets::icon_text_button(ui, "comment", comments, regular(12.0))
+                    } else {
+                        crate::widgets::icon_only_button(ui, "comment", comments, regular(12.0), false)
+                    };
+                    if comments_button.clicked() {
                         let _ = app.run("view.commentsPane", json!({}));
                     }
                     ui.add_space(8.0);
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        // The tabs that don't fit go into a » menu at the end of the strip. File, the
-                        // active tab and the contextual tabs (appended last) stay on the strip (#897).
-                        let labels: Vec<&str> = tabs.iter().map(|(tab, custom)| if *custom { tab.as_str() } else { tl!(tab) }).collect();
-                        let widths: Vec<(f32, bool)> = tabs
-                            .iter()
-                            .zip(&labels)
-                            .map(|((tab, custom), shown)| {
-                                let w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(shown.to_string(), medium(12.5), t.text).size().x) + 18.0;
-                                let contextual = !custom && wordcraft_engine::ribbon::CONTEXTUAL_TABS.contains(&tab.as_str());
-                                (w + 2.0, tab == "File" || *tab == app.ui.tab || contextual)
-                            })
-                            .collect();
-                        let fits = fit_tabs(&widths, ui.available_width(), MORE_TABS_W + 2.0);
-                        for ((tab, custom), _) in tabs.iter().zip(&fits).filter(|(_, fits)| **fits) {
+                        // The tabs that don't fit go into a » menu at the end of the strip (#897, #2026).
+                        for (i, ((tab, custom), _)) in tabs.iter().zip(&plan.fits).enumerate().filter(|(_, (_, fits))| **fits) {
                             let (tab, custom) = (tab.as_str(), *custom);
                             let contextual = !custom && wordcraft_engine::ribbon::CONTEXTUAL_TABS.contains(&tab);
                             // A custom tab's name is the user's own text: shown as typed.
                             let shown = if custom { tab } else { tl!(tab) };
-                            let w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(shown.to_string(), medium(12.5), t.text).size().x) + 18.0;
+                            let w = plan.widths.get(i).copied().unwrap_or(0.0) - 2.0;
+                            let cut = specs.get(i).is_some_and(|sp| sp.text_w + plan.pad > w + 0.5);
                             let (r, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
                             if app.ui.keytips == crate::keytips::Phase::Tabs {
                                 crate::keytips::record_tab(r, tab, &app.ui.keytip_prefix, &mut app.keytip_rects);
@@ -291,7 +400,29 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, t.hover);
                             }
                             let color = if contextual || active { t.accent_text } else { t.text };
-                            ui.painter().text(r.center(), Align2::CENTER_CENTER, shown, if active { semibold(12.5) } else { medium(12.5) }, color);
+                            if cut {
+                                let mut job = egui::text::LayoutJob::single_section(
+                                    shown.to_string(),
+                                    egui::text::TextFormat::simple(if active { semibold(12.5) } else { medium(12.5) }, color),
+                                );
+                                job.wrap = egui::text::TextWrapping {
+                                    max_width: (w - plan.pad).max(1.0),
+                                    max_rows: 1,
+                                    break_anywhere: true,
+                                    overflow_character: Some('…'),
+                                };
+                                let galley = ui.painter().layout_job(job);
+                                ui.painter().galley(r.center() - galley.size() / 2.0, galley, color);
+                            } else {
+                                ui.painter().text(
+                                    r.center(),
+                                    Align2::CENTER_CENTER,
+                                    shown,
+                                    if active { semibold(12.5) } else { medium(12.5) },
+                                    color,
+                                );
+                            }
+                            let resp = if cut { resp.on_hover_text(shown) } else { resp };
                             if active {
                                 let u = Rect::from_center_size(pos2(r.center().x, r.max.y - 2.0), vec2(w - 16.0, 3.0));
                                 ui.painter().rect_filled(u, 2.0, t.accent);
@@ -307,7 +438,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         let left_out: Vec<(&str, &str)> = tabs
                             .iter()
                             .zip(&labels)
-                            .zip(&fits)
+                            .zip(&plan.fits)
                             .filter(|(_, fits)| !**fits)
                             .map(|(((tab, _), shown), _)| (tab.as_str(), *shown))
                             .collect();
@@ -316,10 +447,18 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             if resp.hovered() {
                                 ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, t.hover);
                             }
-                            ui.painter().text(r.center(), Align2::CENTER_CENTER, "»", medium(12.5), t.text);
+                            // The active tab is in the menu: the button says so.
+                            let holds_active = left_out.iter().any(|(tab, _)| *tab == app.ui.tab);
+                            ui.painter().text(
+                                r.center(),
+                                Align2::CENTER_CENTER,
+                                "»",
+                                medium(12.5),
+                                if holds_active { t.accent_text } else { t.text },
+                            );
                             egui::Popup::menu(&resp).show(|ui| {
                                 for (tab, shown) in left_out {
-                                    if ui.selectable_label(false, shown).clicked() {
+                                    if ui.selectable_label(app.ui.tab == tab, shown).clicked() {
                                         let _ = app.run("ui.tab", json!({"tab": tab}));
                                         ui.close();
                                     }
@@ -2932,6 +3071,79 @@ mod tests {
             h.run_steps(2);
             assert_eq!(h.state().ui.tab, tab);
         }
+    }
+
+    /// #2026: at every width and in the longest languages no tab is drawn over Comments /
+    /// Editing / Share, the tabs stay inside the window, and the buttons keep their room.
+    #[test]
+    fn tab_strip_never_overlaps_the_right_buttons() {
+        use egui_kittest::kittest::Queryable;
+        for lang in ["en", "pl", "de"] {
+            for width in [300.0, 420.0, 520.0, 640.0, 765.0, 1280.0] {
+                let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+                app.run("insert.table", json!({"rows": 3, "cols": 3})).unwrap();
+                app.run("ui.language", json!({"value": lang})).unwrap();
+                app.run("ui.tab", json!({"tab": "Table Layout"})).unwrap();
+                let mut h = egui_kittest::Harness::builder().with_size(vec2(width, 600.0)).build_ui_state(
+                    |ui, app: &mut WordApp| {
+                        let ctx = ui.ctx().clone();
+                        app.logic(&ctx);
+                        app.ui(ui);
+                    },
+                    app,
+                );
+                h.run_steps(3);
+                let buttons: Vec<Rect> =
+                    [tl!("Comments"), tl!("Editing"), tl!("Share")].iter().filter_map(|b| h.query_by_label(b).map(|n| n.rect())).collect();
+                assert_eq!(buttons.len(), 3, "{lang} {width}: the three buttons are on the strip");
+                assert!(buttons.iter().all(|b| b.right() <= width + 0.5 && b.left() >= 0.0), "{lang} {width}: buttons inside {buttons:?}");
+                for tab in crate::ribbon::TABS.iter().copied().chain(["Table Design", "Table Layout"]) {
+                    let Some(node) = h.query_by_label(tl!(tab)) else { continue };
+                    let r = node.rect();
+                    if r.top() > 40.0 {
+                        continue; // a button of the ribbon with the same name, not the tab
+                    }
+                    assert!(r.right() <= width + 0.5, "{lang} {width}: {tab} {r:?} past the window");
+                    assert!(buttons.iter().all(|b| !b.intersects(r)), "{lang} {width}: {tab} {r:?} under {buttons:?}");
+                }
+                assert!(h.query_by_label(tl!("File")).is_some(), "{lang} {width}: File stays on the strip");
+            }
+        }
+    }
+
+    #[test]
+    fn plan_strip_gives_way_in_order() {
+        let spec = |text_w, file, active, contextual| TabSpec { text_w, file, active, contextual };
+        let tabs = [spec(20.0, true, false, false), spec(30.0, false, true, false), spec(30.0, false, false, false), spec(40.0, false, false, true)];
+        let buttons = [200.0, 150.0, 60.0];
+        // Plenty of room: nothing gives way.
+        let p = plan_strip(&tabs, buttons, 600.0, 26.0);
+        assert_eq!((p.pad, p.buttons, p.fits.iter().all(|f| *f)), (18.0, 0, true));
+        // Tighter: the padding goes first, then the Comments / Editing labels, then Share's.
+        let p = plan_strip(&tabs, buttons, 380.0, 26.0);
+        assert_eq!((p.pad, p.buttons), (10.0, 0));
+        let p = plan_strip(&tabs, buttons, 330.0, 26.0);
+        assert_eq!((p.pad, p.buttons), (10.0, 1));
+        let p = plan_strip(&tabs, buttons, 240.0, 26.0);
+        assert_eq!((p.pad, p.buttons), (10.0, 2));
+        // Then the plain tab goes into »; File, the active and the contextual tab stay.
+        let p = plan_strip(&tabs, buttons, 215.0, 26.0);
+        assert_eq!(p.fits, [true, true, false, true]);
+        // Then the labels of the active and contextual tabs are cut down.
+        let p = plan_strip(&tabs, buttons, 208.0, 26.0);
+        assert_eq!(p.fits, [true, true, false, true]);
+        assert!(p.widths[3] < 52.0 && p.widths[3] >= MIN_TAB_W - 0.01, "{:?}", p.widths);
+        // No room for that either: the contextual one goes into », the active one last.
+        let p = plan_strip(&tabs, buttons, 190.0, 26.0);
+        assert_eq!(p.fits, [true, true, false, false]);
+        let p = plan_strip(&tabs, buttons, 140.0, 26.0);
+        assert_eq!(p.fits, [true, false, false, false]);
+        // The buttons' room is never taken, and hostile numbers don't panic.
+        for avail in [0.0, -5.0, f32::NAN, f32::INFINITY] {
+            let _ = plan_strip(&tabs, buttons, avail, 26.0);
+        }
+        let _ = plan_strip(&[], buttons, 100.0, 26.0);
+        let _ = plan_strip(&[spec(f32::NAN, false, true, false)], [f32::NAN; 3], 100.0, f32::NAN);
     }
 
     #[test]
