@@ -1572,6 +1572,8 @@
 	Put the default commands back on the Quick Access Toolbar?	Kas panna vaikekäsud kiirpääsuribale tagasi?
 	Remove every custom tab and group and show all tabs again?	Kas eemaldada kõik kohandatud vahekaardid ja rühmad ning kuvada uuesti kõik vahekaardid?
 	Remove from Quick Access Toolbar	Eemalda kiirpääsuribalt
+	Hide Quick Access Toolbar	Peida kiirpääsuriba
+	Show Quick Access Toolbar	Kuva kiirpääsuriba
 	Rename…	Nimeta ümber…
 	Reset…	Lähtesta…
 	Ribbon	Lint

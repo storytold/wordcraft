@@ -1763,6 +1763,8 @@ template	Letter	Pismo
 	Remove every custom tab and group and show all tabs again?	Želite li ukloniti sve prilagođene kartice i grupe te ponovno prikazati sve kartice?
 	Remove field	Ukloni polje
 	Remove from Quick Access Toolbar	Ukloni s alatne trake za brzi pristup
+	Hide Quick Access Toolbar	Sakrij alatnu traku za brzi pristup
+	Show Quick Access Toolbar	Prikaži alatnu traku za brzi pristup
 	Remove recipient	Ukloni primatelja
 	Remove row	Ukloni redak
 	Remove series	Ukloni niz

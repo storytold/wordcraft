@@ -369,6 +369,12 @@ fn qat_page(app: &mut WordApp, ui: &mut Ui, f: &mut RibbonForm, h: f32) {
                 }
             });
         });
+        // The same switch as the toolbar menu's Hide Quick Access Toolbar (#1945).
+        ui.add_space(4.0);
+        let mut shown = app.ui.quick_access_toolbar;
+        if ui.checkbox(&mut shown, tl!("Show Quick Access Toolbar")).changed() {
+            let _ = app.run("ui.quickAccessToolbar", json!({"value": shown}));
+        }
     });
 }
 
@@ -473,5 +479,33 @@ mod tests {
         assert!(a.session.ribbon.qat().contains(&"file.new"));
         a.run("tools.customizeRibbon", json!({"qatRemove": "file.new"})).unwrap();
         assert_eq!(a.session.ribbon.qat(), ["file.save", "edit.undo", "edit.redo"]);
+    }
+
+    /// #1945: the Quick Access Toolbar page's Show Quick Access Toolbar check box is the toolbar's
+    /// visibility; the dialog stays open while it is switched.
+    #[test]
+    fn quick_access_page_has_a_show_toolbar_check_box() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let mut a = app();
+        super::open(&mut a, super::Page::QuickAccess);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        let ticked = |h: &egui_kittest::Harness<'static, WordApp>| h.get_by_label("Show Quick Access Toolbar").accesskit_node().toggled();
+        assert_eq!(ticked(&h), Some(egui::accesskit::Toggled::True), "ticked while the toolbar shows");
+        h.get_by_label("Show Quick Access Toolbar").click();
+        h.run_steps(2);
+        assert!(!h.state().ui.quick_access_toolbar, "unticking hides the toolbar");
+        assert!(matches!(h.state().dialog, Some(Dialog::CustomizeRibbon { .. })), "the dialog stays open");
+        assert_eq!(ticked(&h), Some(egui::accesskit::Toggled::False));
+        h.get_by_label("Show Quick Access Toolbar").click();
+        h.run_steps(2);
+        assert!(h.state().ui.quick_access_toolbar, "ticking shows it again");
     }
 }

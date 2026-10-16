@@ -601,7 +601,8 @@ pub(crate) fn qat_label(index: usize, count: usize) -> String {
 
 fn qat_key(app: &mut WordApp, name: &str) {
     app.ui.keytip_prefix.push_str(name);
-    let ids = app.session.ribbon.qat();
+    // A hidden toolbar has no badges, so a digit cancels the mode and runs nothing (#1945).
+    let ids = if app.ui.quick_access_toolbar { app.session.ribbon.qat() } else { Vec::new() };
     let mut hit = None;
     let mut pending = false;
     for (index, id) in ids.iter().enumerate() {
@@ -1098,6 +1099,25 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// #1945: a hidden Quick Access Toolbar has no number badges: a digit after Alt ends the mode
+    /// and runs none of the toolbar's commands; shown again, the same digit runs the first one.
+    #[test]
+    fn hidden_toolbar_has_no_digit_keytips() {
+        let mut a = app();
+        a.session.ribbon.qat = Some(vec!["format.bold".into()]);
+        a.run("ui.quickAccessToolbar", serde_json::json!({"value": false})).unwrap();
+        activate(&mut a);
+        assert_eq!(a.ui.keytips, Phase::Tabs);
+        assert!(handle_key(&mut a, egui::Key::Num1), "the digit is consumed");
+        assert_eq!(a.ui.keytips, Phase::Off);
+        assert!(a.ui.keytip_prefix.is_empty());
+        assert_eq!(a.session.run("format.state", &serde_json::json!({})).unwrap()["bold"], false, "Bold didn't run");
+        a.run("ui.quickAccessToolbar", serde_json::json!({"value": true})).unwrap();
+        activate(&mut a);
+        assert!(handle_key(&mut a, egui::Key::Num1));
+        assert_eq!(a.session.run("format.state", &serde_json::json!({})).unwrap()["bold"], true, "shown, 1 runs Bold");
     }
 
     #[test]

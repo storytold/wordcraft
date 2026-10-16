@@ -7,9 +7,15 @@ use wordcraft_doc::StoryRef;
 use crate::theme::{Tokens, TypeRung, medium, paint_text, regular, semibold, text_width};
 use crate::{WordApp, icons};
 
+/// The Quick Access Toolbar's button for command `id`.
+pub(crate) fn qat_button_id(id: &str) -> egui::Id {
+    egui::Id::new(("qat_button", id))
+}
+
 fn qat_button(ui: &mut Ui, app: &mut WordApp, icon: &str, tip: &str, id: &str, enabled: bool) -> egui::Response {
     let t = Tokens::get(ui.ctx());
-    let (r, resp) = ui.allocate_exact_size(vec2(26.0, 24.0), Sense::click());
+    let (r, _) = ui.allocate_exact_size(vec2(26.0, 24.0), Sense::hover());
+    let resp = ui.interact(r, qat_button_id(id), Sense::click());
     if resp.hovered() && enabled {
         ui.painter().rect_filled(r, 4.0, t.hover);
     }
@@ -179,6 +185,12 @@ pub(crate) fn qat_menu(ui: &mut Ui, app: &mut WordApp) {
         crate::dialogs_ribbon::open(app, crate::dialogs_ribbon::Page::QuickAccess);
         ui.close();
     }
+    ui.separator();
+    // Last, as in Word (#1945); the ribbon's right-click menu brings the toolbar back.
+    if ui.button(tl!("Hide Quick Access Toolbar")).clicked() {
+        let _ = app.run("ui.quickAccessToolbar", json!({"value": false}));
+        ui.close();
+    }
 }
 
 /// Height of the macOS integrated title bar (#225). AppKit draws the traffic lights itself, centred
@@ -280,7 +292,10 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                     }
                 }
                 ui.add_space(8.0);
-                quick_access(ui, app);
+                // Hidden (#1945): neither the buttons nor the … menu; the title centres as before.
+                if app.ui.quick_access_toolbar {
+                    quick_access(ui, app);
+                }
                 qat_end = ui.min_rect().max.x;
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // Account / community.
@@ -663,5 +678,54 @@ mod tests {
         assert_eq!(bar.content_left, 89.0);
         // Never tighter than the standard layout.
         assert_eq!(MacTitleBar::around_lights(40.0, 10.0, 12.0), MacTitleBar::default());
+    }
+
+    /// #1945: Hide Quick Access Toolbar, the last item of the toolbar's menu, takes the toolbar's
+    /// buttons and its … button out of the title bar, which keeps its title; the command brings
+    /// them back.
+    #[test]
+    fn hide_quick_access_toolbar_takes_the_toolbar_out_of_the_title_bar() {
+        use egui_kittest::kittest::Queryable;
+        let a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                // The fonts `logic` installs take effect on the next frame, as `WordApp::ui` waits.
+                if app.fonts_frames < 2 {
+                    app.fonts_frames += 1;
+                    return;
+                }
+                title_bar(app, ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        let drawn = |h: &egui_kittest::Harness<'static, WordApp>, id: &str| h.ctx.read_response(qat_button_id(id)).is_some();
+        for id in ["file.save", "edit.undo", "edit.redo"] {
+            assert!(drawn(&h, id), "{id} is on the toolbar");
+        }
+        let at = h.ctx.read_response(qat_menu_button_id()).expect("the … button").rect.center();
+        h.event(egui::Event::PointerMoved(at));
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+        }
+        h.run_steps(2);
+        h.get_by_label("Hide Quick Access Toolbar").click();
+        // `read_response` also reads the frame before last, so run two frames past the change.
+        h.run_steps(3);
+        assert!(!h.state().ui.quick_access_toolbar, "the menu's last item hides the toolbar");
+        assert!(h.query_by_label("Hide Quick Access Toolbar").is_none(), "and closes the menu");
+        for id in ["file.save", "edit.undo", "edit.redo"] {
+            assert!(!drawn(&h, id), "{id} is gone");
+        }
+        assert!(h.ctx.read_response(qat_menu_button_id()).is_none(), "so is the … button");
+        assert!(h.query_by_label_contains("Not saved").is_some(), "the title is still drawn");
+        h.state_mut().run("ui.quickAccessToolbar", json!({"value": true})).unwrap();
+        h.run_steps(2);
+        for id in ["file.save", "edit.undo", "edit.redo"] {
+            assert!(drawn(&h, id), "{id} is back");
+        }
+        assert!(h.ctx.read_response(qat_menu_button_id()).is_some());
     }
 }

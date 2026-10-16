@@ -412,8 +412,13 @@ pub fn command_menu(resp: &Response, app: &mut WordApp, id: &str) {
     });
 }
 
-/// "Customize the Ribbon…" and "Customize Quick Access Toolbar…" (context menus).
+/// "Customize the Ribbon…" and "Customize Quick Access Toolbar…" (context menus), and "Show
+/// Quick Access Toolbar" while the toolbar is hidden (#1945).
 pub fn customize_menu_items(ui: &mut Ui, app: &mut WordApp) {
+    if !app.ui.quick_access_toolbar && ui.button(tl!("Show Quick Access Toolbar")).clicked() {
+        let _ = app.run("ui.quickAccessToolbar", serde_json::json!({"value": true}));
+        ui.close();
+    }
     if ui.button(tl!("Customize the Ribbon…")).clicked() {
         crate::dialogs_ribbon::open(app, crate::dialogs_ribbon::Page::Ribbon);
         ui.close();
@@ -890,6 +895,48 @@ mod tests {
         ctx.run_ui(egui::RawInput::default(), |_| {}).drop_without_applying_deltas();
         let h = ctx.fonts_mut(|f| f.layout_no_wrap("Page Number Mail Merge gjpqy".into(), crate::theme::regular(11.5), Color32::WHITE).size().y);
         assert!(h <= LABEL_LINE_H, "label line is {h} px tall");
+    }
+
+    /// #1945: a ribbon button's right-click menu offers Show Quick Access Toolbar only while the
+    /// toolbar is hidden, and it brings the toolbar back.
+    #[test]
+    fn ribbon_menu_offers_show_quick_access_toolbar_only_while_hidden() {
+        use egui_kittest::kittest::Queryable;
+        let a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        // The ribbon's Bold is the topmost one (the mini toolbar's, when up, sits lower).
+        let ribbon_bold = |h: &egui_kittest::Harness<'static, WordApp>| {
+            h.get_all_by_label("Bold").map(|n| n.rect().center()).min_by(|a, b| a.y.total_cmp(&b.y)).expect("the ribbon has Bold")
+        };
+        let right_click = |h: &mut egui_kittest::Harness<'static, WordApp>, at: egui::Pos2| {
+            h.event(egui::Event::PointerMoved(at));
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+            }
+            h.run_steps(2);
+        };
+        let at = ribbon_bold(&h);
+        right_click(&mut h, at);
+        assert!(h.query_by_label("Add to Quick Access Toolbar").is_some(), "the button's menu opened");
+        assert!(h.query_by_label("Show Quick Access Toolbar").is_none(), "nothing extra while the toolbar shows");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        h.state_mut().run("ui.quickAccessToolbar", serde_json::json!({"value": false})).unwrap();
+        h.run_steps(2);
+        let at = ribbon_bold(&h);
+        right_click(&mut h, at);
+        h.get_by_label("Show Quick Access Toolbar").click();
+        h.run_steps(2);
+        assert!(h.state().ui.quick_access_toolbar, "Show Quick Access Toolbar brings it back");
+        assert!(h.query_by_label("Show Quick Access Toolbar").is_none(), "and closes the menu");
     }
 
     #[test]
