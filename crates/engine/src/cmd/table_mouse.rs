@@ -374,7 +374,7 @@ fn select_at(s: &mut Session, v: &Value) -> CmdResult {
 /// before it) or, at the table's right edge, a row's last cell (after it). (row, cell, after)
 fn beside_line(t: &Table, line: usize) -> Option<(usize, usize, bool)> {
     t.rows.iter().enumerate().find_map(|(r, row)| {
-        let mut g = 0usize;
+        let mut g = row.first_grid();
         for (c, cell) in row.cells.iter().enumerate() {
             if g == line {
                 return Some((r, c, false));

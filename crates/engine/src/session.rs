@@ -81,7 +81,7 @@ impl CellRange {
         let ((r0, r1), (g0, g1)) = (self.rows, self.cols);
         let mut out = Vec::new();
         for (r, row) in t.rows.iter().enumerate().take(r1.saturating_add(1)).skip(r0) {
-            let mut g = 0usize;
+            let mut g = row.first_grid();
             for (c, cell) in row.cells.iter().enumerate() {
                 let end = g.saturating_add(cell.span());
                 if g <= g1 && end > g0 {
