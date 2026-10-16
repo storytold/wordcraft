@@ -1140,3 +1140,20 @@ fn typing_after_a_citation_goes_outside_its_field() {
     let inside = Pos { off: f[0].start.off + wordcraft_doc::para::OBJ.len_utf8(), ..f[0].start.clone() };
     assert_eq!(s.doc.copy_range(&inside, &f[0].end).plain_text(), "(Smith 2020)");
 }
+
+/// #1670: smart quotes in Hebrew follow the characters around the quote in logical order, as
+/// Word does (Word for Mac 16.113.4): an opening “ after a space or at the start, a closing ”
+/// after a letter, and ” inside an acronym (צה"ל), not gershayim; ' after a letter is ’.
+#[test]
+fn smart_quotes_in_hebrew_use_logical_order() {
+    let bidi = |s: &Session| s.doc.body.iter().filter_map(|b| b.as_para()).next().and_then(|p| p.props.bidi);
+    let s = typed("הוא אמר \"שלום\" לי");
+    assert_eq!(bidi(&s), Some(true), "a right-to-left paragraph");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "הוא אמר “שלום” לי");
+    let s = typed("\"שלום\"");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "“שלום”");
+    let s = typed("צה\"ל ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "צה”ל ");
+    let s = typed("ג'ירפה 'כן'");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "ג’ירפה ‘כן’");
+}

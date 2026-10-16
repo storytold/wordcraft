@@ -175,3 +175,115 @@ fn body_edits_keep_styleref_headers_cached() {
     assert_eq!(shown(&edited.pages[2].header), ["The Middles", "above"]);
     assert_eq!(shown(&edited.pages[0].header), ["Beginnings", "below"]);
 }
+
+/// The x of each shown character's first glyph in a header field result, in text order.
+fn field_char_xs(d: &Document) -> Vec<(String, Vec<f32>)> {
+    let mut c = LayoutCache::new();
+    let l = layout(d, &mut c, &LayoutOptions::default());
+    let mut out = Vec::new();
+    for it in &l.pages[0].header {
+        let Placed::Lines { para, .. } = it else { continue };
+        for (k, text, ranges) in &para.shown {
+            let cl = &para.clusters[*k];
+            let glyphs = &para.glyphs[cl.g0 as usize..cl.g1 as usize];
+            let xs = text
+                .char_indices()
+                .map(|(i, _)| glyphs.iter().zip(ranges).find(|(_, r)| r.start == i).map(|(g, _)| g.dx).unwrap_or(f32::NAN))
+                .collect();
+            out.push((text.clone(), xs));
+        }
+    }
+    out
+}
+
+/// A STYLEREF showing a Hebrew heading reads right to left in the header like ordinary text
+/// (#1670): "פרק א" draws פ rightmost, not reversed as "א קרפ". Latin results keep their order,
+/// also in a right-to-left header paragraph.
+#[test]
+fn hebrew_styleref_result_reads_right_to_left() {
+    let d = doc(&[("Heading1", "פרק א", false), ("Normal", "Text.", false)], &[r#"STYLEREF "Heading 1""#]);
+    let got = field_char_xs(&d);
+    let (text, xs) = &got[0];
+    assert_eq!(text, "פרק א");
+    assert!(xs.iter().all(|x| x.is_finite()), "every letter has a glyph: {xs:?}");
+    assert!(xs.windows(2).all(|w| w[0] > w[1]), "letters in text order run right to left: {xs:?}");
+    // A Latin heading in a right-to-left header paragraph still reads left to right.
+    let mut d = doc(&[("Heading1", "Part one", false)], &[r#"STYLEREF "Heading 1""#]);
+    let hdr = d.last_section.headers.default.unwrap();
+    d.para_mut(StoryRef::Part(hdr), &Path::top(0)).unwrap().props.bidi = Some(true);
+    let got = field_char_xs(&d);
+    let (text, xs) = &got[0];
+    assert_eq!(text, "Part one");
+    assert!(xs.windows(2).all(|w| w[0] < w[1]), "Latin letters run left to right: {xs:?}");
+}
+
+/// What each header field result draws, read left to right: each glyph's character, a bracket
+/// read as the bracket its glyph shows (a mirrored `(` reads `)`).
+fn field_drawn(d: &Document, opts: &LayoutOptions) -> Vec<String> {
+    let mirror = |c: char| match c {
+        '(' => ')',
+        ')' => '(',
+        '{' => '}',
+        '}' => '{',
+        '[' => ']',
+        ']' => '[',
+        c => c,
+    };
+    let mut c = LayoutCache::new();
+    let l = layout(d, &mut c, opts);
+    let mut out = Vec::new();
+    for it in &l.pages[0].header {
+        let Placed::Lines { para, .. } = it else { continue };
+        for (k, text, ranges) in &para.shown {
+            let cl = &para.clusters[*k];
+            // A fallback face's glyphs share the cluster, so a glyph is matched in every face.
+            let gids = |ch: char| -> Vec<Option<u32>> {
+                para.styles.iter().map(|st| wordcraft_fonts::shape_run(&st.face, &ch.to_string(), &[], |c| c, false).first().map(|g| g.gid)).collect()
+            };
+            let glyphs = &para.glyphs[cl.g0 as usize..cl.g1 as usize];
+            let mut drawn: Vec<(f32, char)> = glyphs
+                .iter()
+                .zip(ranges)
+                .map(|(g, r)| {
+                    let ch = text[r.start..].chars().next().unwrap();
+                    let m = mirror(ch);
+                    let is = |ch: char| gids(ch).contains(&Some(g.gid));
+                    let shown = if m != ch && is(m) && !is(ch) { m } else { ch };
+                    (g.dx, shown)
+                })
+                .collect();
+            drawn.sort_by(|a, b| a.0.total_cmp(&b.0));
+            out.push(drawn.into_iter().map(|d| d.1).collect());
+        }
+    }
+    out
+}
+
+fn rtl_header(d: &mut Document) {
+    let hdr = d.last_section.headers.default.unwrap();
+    d.para_mut(StoryRef::Part(hdr), &Path::top(0)).unwrap().props.bidi = Some(true);
+}
+
+/// Brackets in a field result are mirrored and placed by the same bidi run (#1670 review): a
+/// field code or a Latin result in a right-to-left header keeps its brackets as written, and a
+/// Hebrew word in brackets in a left-to-right result draws its brackets the right way round.
+#[test]
+fn field_results_mirror_brackets_with_their_bidi_runs() {
+    let mut got = Vec::new();
+    // The field-code view of a PAGE field in a right-to-left header.
+    let mut d = doc(&[("Normal", "Text.", false)], &["PAGE"]);
+    rtl_header(&mut d);
+    got.extend(field_drawn(&d, &LayoutOptions { field_codes: true, ..LayoutOptions::default() }));
+    // A Latin result with brackets, and digits, in a right-to-left header.
+    for heading in ["(Chapter 1)", "12"] {
+        let mut d = doc(&[("Heading1", heading, false)], &[r#"STYLEREF "Heading 1""#]);
+        rtl_header(&mut d);
+        got.extend(field_drawn(&d, &LayoutOptions::default()));
+    }
+    // A Hebrew word in brackets at the end of a left-to-right result, and the Hebrew heading.
+    for heading in ["Part 1 (פרק)", "פרק א"] {
+        let d = doc(&[("Heading1", heading, false)], &[r#"STYLEREF "Heading 1""#]);
+        got.extend(field_drawn(&d, &LayoutOptions::default()));
+    }
+    assert_eq!(got, ["{ PAGE }", "(Chapter 1)", "12", "Part 1 (קרפ)", "א קרפ"]);
+}
