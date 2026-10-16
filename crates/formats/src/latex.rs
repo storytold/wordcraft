@@ -420,6 +420,8 @@ pub fn escape_text(s: &str) -> String {
             '>' => o.push_str("\\textgreater{}"),
             '|' => o.push_str("\\textbar{}"),
             '\u{A0}' => o.push('~'),
+            '\u{00AD}' => o.push_str("\\-"),
+            '\u{2011}' => o.push_str("\\mbox{-}"),
             // An opening bracket here would become an optional item or line-break argument.
             '[' if !line_has_text => o.push_str("{[}"),
             // Keep TeX from joining `--`, ``` `` ``` and `''` into dashes and quotes.
@@ -430,6 +432,12 @@ pub fn escape_text(s: &str) -> String {
             '\n' | '\u{000B}' => {
                 // A line break; LaTeX refuses one with nothing before it on the line.
                 o.push_str(if line_has_text { "\\\\\n" } else { "\\mbox{}\\\\\n" });
+                line_has_text = false;
+                prev = c;
+                continue;
+            }
+            '\u{000C}' | '\u{000E}' => {
+                o.push_str(if line_has_text { "\n\\newpage\n" } else { "\\newpage\n" });
                 line_has_text = false;
                 prev = c;
                 continue;
@@ -1294,7 +1302,9 @@ fn text_symbol(name: &str) -> Option<&'static str> {
         "," | ";" | ":" | "enspace" | "thinspace" => " ",
         "quad" => "\u{2003}",
         "qquad" => "\u{2003}\u{2003}",
-        "-" | "/" | "@" | "!" | "noindent" | "indent" | "relax" | "protect" | "selectfont" | "nobreak" | "sloppy" | "fussy" | "centering"
+        "-" => "\u{00AD}",
+        "textnonbreakinghyphen" => "\u{2011}",
+        "/" | "@" | "!" | "noindent" | "indent" | "relax" | "protect" | "selectfont" | "nobreak" | "sloppy" | "fussy" | "centering"
         | "raggedright" | "raggedleft" | "normalfont" | "item" => "",
         "textbackslash" | "backslash" => "\\",
         "textasciitilde" => "~",
@@ -3074,5 +3084,18 @@ Caf\'e na\"ive \c{c}a \v{s}\'{e} and {\bfseries grouped bold} after.
         let FBlock::Table(bt) = &back.blocks[0] else { panic!() };
         assert_eq!(bt.widths, vec![100.0, 200.0]);
         assert_eq!(bt.rows[1][0].colspan, 2);
+    }
+
+    #[test]
+    fn hyphens_and_breaks_support() {
+        let text = "dis\u{00AD}cre\u{00AD}tion\u{00AD}ary non\u{2011}breaking page\u{000C}break";
+        let escaped = escape_text(text);
+        assert!(escaped.contains("dis\\-cre\\-tion\\-ary"));
+        assert!(escaped.contains("non\\mbox{-}breaking"));
+        assert!(escaped.contains("\\newpage"));
+
+        let imported = parse("dis\\-cre\\-tion\\-ary non\\textnonbreakinghyphen breaking");
+        let FBlock::Para(p) = &imported.blocks[0] else { panic!() };
+        assert_eq!(p.text(), "dis\u{00AD}cre\u{00AD}tion\u{00AD}ary non\u{2011}breaking");
     }
 }
