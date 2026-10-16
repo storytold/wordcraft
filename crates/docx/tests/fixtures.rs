@@ -2830,3 +2830,26 @@ fn row_table_borders_round_trip() {
     let again = wordcraft_docx::read(&saved).unwrap();
     assert_eq!(d.body, again.body);
 }
+
+#[test]
+fn zero_effects_stay_zero_rotated() {
+    const ANGLE_UNITS_PER_DEGREE: i32 = 60_000;
+
+    // ECMA-376 §20.4.2.6: zero effect extents add no space around a rotated picture.
+    for degrees in [0, 90, 180, 270] {
+        for effects in ["", r#"<wp:effectExtent l="0" t="0" r="0" b="0"/>"#] {
+            let body = format!(
+                r#"<w:p><w:r><w:drawing><wp:inline><wp:extent cx="914400" cy="457200"/>{effects}<wp:docPr id="1" name="Synthetic picture"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:embed="rId1"/></pic:blipFill><pic:spPr><a:xfrm rot="{}"><a:off x="0" y="0"/><a:ext cx="914400" cy="457200"/></a:xfrm></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#,
+                degrees * ANGLE_UNITS_PER_DEGREE
+            );
+            let d = wordcraft_docx::read(&docx(&body, &[("rId1", "image", "media/marker.png")], &[("word/media/marker.png", "synthetic")])).unwrap();
+            let (w, h, float) = paras(&d)[0].objects[0].frame().unwrap();
+            assert_eq!(float.rot, degrees as f32);
+            assert_eq!(float.effect, [0.0; 4], "rotation {degrees} must not invent effects");
+            let (px, py) = float.spin_pad(w, h);
+            let expected = if degrees % 180 == 0 { (w, h) } else { (h, w) };
+            assert!((w + 2.0 * px - expected.0).abs() < 0.001);
+            assert!((h + 2.0 * py - expected.1).abs() < 0.001);
+        }
+    }
+}
