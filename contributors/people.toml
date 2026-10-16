@@ -135,3 +135,8 @@ sync_github_name = false
 real_name = "Andrej Škvorc"
 display_name = "Andrej Škvorc"
 sync_github_name = false
+
+[people.srandhyconnect]
+real_name = "Randhy"
+display_name = "Randhy"
+sync_github_name = true

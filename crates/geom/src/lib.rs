@@ -274,6 +274,7 @@ impl Spin {
 pub const PAPER_SIZES: &[(&str, f32, f32)] = &[
     ("Letter", 612.0, 792.0),
     ("Legal", 612.0, 1008.0),
+    ("F4 (Folio)", 612.0, 936.0),
     ("Executive", 522.0, 756.0),
     ("A3", 841.89, 1190.55),
     ("A4", 595.28, 841.89),
@@ -368,6 +369,8 @@ mod tests {
     fn paper_names() {
         assert_eq!(paper_name(612.0, 792.0), Some("Letter"));
         assert_eq!(paper_name(792.0, 612.0), Some("Letter"));
+        assert_eq!(paper_name(612.0, 936.0), Some("F4 (Folio)"));
+        assert_eq!(paper_name(936.0, 612.0), Some("F4 (Folio)"));
         assert_eq!(paper_name(100.0, 100.0), None);
     }
 }

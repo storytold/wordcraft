@@ -4459,7 +4459,7 @@ mod tests {
         assert_eq!((after, h.state().session.undo_depth()), (doc, depth), "nothing applied");
     }
 
-    /// #1433: Layout › Size › More Paper Sizes… opens Page Setup.
+    /// #1433: Layout › Size › More Paper Sizes… opens Page Setup with Custom size selected.
     #[test]
     fn more_paper_sizes_opens_page_setup() {
         use egui_kittest::kittest::Queryable;
@@ -4469,7 +4469,32 @@ mod tests {
         h.run_steps(2);
         h.get(egui_kittest::kittest::By::new().label_contains("More Paper Sizes…")).click();
         h.run_steps(2);
-        assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("pageSetup"));
+        assert!(matches!(h.state().dialog, Some(Dialog::PageSetup { paper_custom: true, .. })));
+    }
+
+    /// Layout › Size shows a checked Custom size entry when the section uses non-standard
+    /// dimensions, and its inline Width and Height fields change the page size directly.
+    #[test]
+    fn size_menu_supports_inline_and_checked_custom_size() {
+        use egui_kittest::kittest::{By, NodeT, Queryable};
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(400.0, 700.0))
+            .build_ui_state(|ui, app: &mut WordApp| crate::ribbon::size_menu(ui, app), app_with("Page"));
+        h.run_steps(2);
+        h.get_by_value("8.50\"").focus();
+        h.run_steps(2);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text("6".into()));
+        h.key_press(egui::Key::Tab);
+        h.run_steps(3);
+        let sect = wordcraft_engine::cmd::page::sect(&h.state().session);
+        assert_eq!((sect.page_w.round(), sect.page_h.round()), (432.0, 792.0));
+        let checked: Vec<String> = h
+            .query_all(By::new().predicate(|n| n.toggled() == Some(egui::accesskit::Toggled::True)))
+            .filter_map(|n| n.accesskit_node().label())
+            .collect();
+        assert_eq!(checked.len(), 1);
+        assert!(checked[0].contains("Custom size") && checked[0].contains("6\""), "{checked:?}");
     }
 
     /// #1320: Page Setup shows the section's vertical alignment, and OK applies a change.

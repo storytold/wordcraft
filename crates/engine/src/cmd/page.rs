@@ -514,9 +514,10 @@ pub const MAX_PAGE_SIDE: f32 = 1584.0;
 
 fn size(s: &mut Session, v: &Value) -> CmdResult {
     let (w, h) = if let Some(n) = p::str(v, "name") {
+        let canonical = if n.eq_ignore_ascii_case("F4") || n.eq_ignore_ascii_case("Folio") { "F4 (Folio)" } else { n };
         let (_, w, h) = wordcraft_geom::PAPER_SIZES
             .iter()
-            .find(|(name, _, _)| name.eq_ignore_ascii_case(n))
+            .find(|(name, _, _)| name.eq_ignore_ascii_case(canonical))
             .ok_or_else(|| CmdError::Params(format!("unknown paper `{n}`")))?;
         (*w, *h)
     } else {

@@ -1320,6 +1320,11 @@ impl WordApp {
                 {
                     *region = dialogs_table_style::part_index(part);
                 }
+                if let Some(dialogs::Dialog::PageSetup { paper_custom, .. }) = &mut self.dialog
+                    && p.get("custom").and_then(Value::as_bool) == Some(true)
+                {
+                    *paper_custom = true;
+                }
                 json!({"dialog": self.dialog.as_ref().map(|d| d.name())})
             }
             "ui.closeDialog" => {

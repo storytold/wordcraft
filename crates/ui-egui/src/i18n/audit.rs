@@ -369,6 +369,7 @@ fn complete_catalogs_have_every_string_the_interface_looked_up(mut keys: std::co
                 | "MLA"
                 | "SIST02"
                 | "Turabian"
+                | "F4 (Folio)"
         )
     };
     // A command called with parameters it can't use (`bad parameters: \`path\` (string) is

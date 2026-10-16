@@ -466,12 +466,18 @@ fn stack(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
     });
 }
 
-/// Layout › Size: the named paper sizes, then More Paper Sizes… for a custom size in Page
-/// Setup (#1433).
+/// Layout › Size: the named paper sizes, inline custom width and height controls, and More
+/// Paper Sizes… for Page Setup (#1433).
 pub(crate) fn size_menu(ui: &mut Ui, app: &mut WordApp) {
-    // The current paper size is checked.
+    // The current paper size is checked; a custom size shows checked above the named presets.
     let x = wordcraft_engine::cmd::page::sect(&app.session);
     let current = wordcraft_geom::paper_name(x.page_w, x.page_h);
+    let l = &crate::dialogs::PAPER_LABELS;
+    if current.is_none() {
+        let (width, height) = (crate::options::length(x.page_w), crate::options::length(x.page_h));
+        let label = crate::i18n::fmt(tl!("{paper}   {width} × {height}"), &[("paper", tl!(l.custom)), ("width", &width), ("height", &height)]);
+        mi_check(ui, app, &label, true, "layout.size", json!({"width": x.page_w, "height": x.page_h}));
+    }
     for (n, w, h) in wordcraft_geom::PAPER_SIZES {
         // Paper names are the industry's (Letter, A4, B5 (JIS)) and stay as they are; the
         // envelopes say what they are. Sizes in the measurement unit, written the region's
@@ -482,7 +488,42 @@ pub(crate) fn size_menu(ui: &mut Ui, app: &mut WordApp) {
         mi_check(ui, app, &label, current == Some(*n), "layout.size", json!({"name": n}));
     }
     ui.separator();
-    mi(ui, app, crate::dialogs::PAPER_LABELS.more, "ui.dialog", json!({"name": "pageSetup"}));
+    let unit = crate::options::unit();
+    let ppu = unit.pt_per_unit();
+    let mut w = x.page_w / ppu;
+    let mut h = x.page_h / ppu;
+    let range = wordcraft_engine::cmd::page::MIN_PAGE_SIDE / ppu..=wordcraft_engine::cmd::page::MAX_PAGE_SIDE / ppu;
+    ui.label(egui::RichText::new(tl!(l.custom)).small().strong());
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(tl!(l.width)).small());
+        let wr = ui.add(egui::DragValue::new(&mut w).speed(3.6 / ppu).range(range.clone()).measure(unit).max_decimals(2));
+        ui.label(egui::RichText::new(tl!(l.height)).small());
+        let hr = ui.add(egui::DragValue::new(&mut h).speed(3.6 / ppu).range(range).measure(unit).max_decimals(2));
+        if wr.changed() || hr.changed() {
+            let (w_pt, h_pt) = (w * ppu, h * ppu);
+            let dragged = (wr.dragged() && !wr.drag_started()) || (hr.dragged() && !hr.drag_started());
+            let snapshot = app.session.edit_snapshot();
+            if dragged {
+                app.session.join_next_undo();
+            }
+            let flip = (w_pt - h_pt).abs() >= 0.01 && (w_pt > h_pt) != x.landscape;
+            if flip {
+                let orient = if w_pt > h_pt { "landscape" } else { "portrait" };
+                if let Err(e) = app.run("layout.orientation", json!({"value": orient})) {
+                    app.session.restore(snapshot);
+                    app.status(e);
+                    return;
+                }
+                app.session.join_next_undo();
+            }
+            if let Err(e) = app.run("layout.size", json!({"width": w_pt, "height": h_pt})) {
+                app.session.restore(snapshot);
+                app.status(e);
+            }
+        }
+    });
+    ui.separator();
+    mi(ui, app, l.more, "ui.dialog", json!({"name": "pageSetup", "custom": true}));
 }
 
 pub(crate) fn mi(ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: Value) {
