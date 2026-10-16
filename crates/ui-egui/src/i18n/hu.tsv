@@ -2573,6 +2573,12 @@
 	Set Proofing Language…	Nyelvi ellenőrzés nyelvének beállítása…
 	Language Preferences…	Nyelvi beállítások…
 	Title Bar	Címsáv
+
+# Regional German proofing (#2087).
+	German (Austria)	Német (Ausztria)
+	German (Switzerland)	Német (Svájc)
+	Proofing follows each text's language. Use Review › Language to change it.	Az ellenőrzés az egyes szövegrészek nyelvét követi. A módosításhoz válassza a Véleményezés › Nyelv menüpontot.
+	German spelling needs the matching Hunspell dictionary: {dictionary}. Install {package}, or point WORDCRAFT_DICTIONARIES to a folder containing the matching .aff/.dic files.	A német helyesírás ellenőrzéséhez a megfelelő Hunspell-szótár szükséges: {dictionary}. Telepítse a {package} csomagot, vagy állítsa a WORDCRAFT_DICTIONARIES értékét a megfelelő .aff/.dic fájlokat tartalmazó mappa elérési útjára.
 	Printer	Nyomtató
 	Select a printer	Válasszon nyomtatót
 	Refresh printers	Nyomtatók frissítése

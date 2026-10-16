@@ -2574,6 +2574,12 @@ preview	Title	Örnek
 	Suggested	Önerilenler
 	Set Proofing Language…	Yazım denetimi dilini ayarla…
 	Language Preferences…	Dil tercihleri…
+
+# Regional German proofing (#2087).
+	German (Austria)	Almanca (Avusturya)
+	German (Switzerland)	Almanca (İsviçre)
+	Proofing follows each text's language. Use Review › Language to change it.	Denetim, her metin parçasının diline göre yapılır. Bunu değiştirmek için İncele › Dil yolunu kullanın.
+	German spelling needs the matching Hunspell dictionary: {dictionary}. Install {package}, or point WORDCRAFT_DICTIONARIES to a folder containing the matching .aff/.dic files.	Almanca yazım denetimi için uygun Hunspell sözlüğü gerekir: {dictionary}. {package} paketini yükleyin veya WORDCRAFT_DICTIONARIES değerini uygun .aff/.dic dosyalarını içeren bir klasörün yoluna ayarlayın.
 	Printer	Yazıcı
 	Select a printer	Bir yazıcı seçin
 	Refresh printers	Yazıcıları yenile

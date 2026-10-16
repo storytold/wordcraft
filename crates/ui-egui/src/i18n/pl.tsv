@@ -2569,6 +2569,12 @@ preview	Title	Tytuł
 	Suggested	Sugerowane
 	Set Proofing Language…	Ustaw język sprawdzania…
 	Language Preferences…	Preferencje językowe…
+
+# Regional German proofing (#2087).
+	German (Austria)	Niemiecki (Austria)
+	German (Switzerland)	Niemiecki (Szwajcaria)
+	Proofing follows each text's language. Use Review › Language to change it.	Sprawdzanie odbywa się w języku danego tekstu. Zmień go przez Recenzja › Język.
+	German spelling needs the matching Hunspell dictionary: {dictionary}. Install {package}, or point WORDCRAFT_DICTIONARIES to a folder containing the matching .aff/.dic files.	Sprawdzanie niemieckiej pisowni wymaga odpowiedniego słownika Hunspell: {dictionary}. Zainstaluj {package} lub ustaw WORDCRAFT_DICTIONARIES na folder z odpowiednimi plikami .aff/.dic.
 	Printer	Drukarka
 	Select a printer	Wybierz drukarkę
 	Refresh printers	Odśwież drukarki

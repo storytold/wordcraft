@@ -6,5 +6,6 @@ plan/
 /log
 .DS_Store
 /.claude/
+/.ori/
 /target-*/
 /craft-fonts/

@@ -2184,6 +2184,12 @@
 	Suggested	Vorschläge
 	Set Proofing Language…	Sprache für die Korrekturhilfen festlegen…
 	Language Preferences…	Spracheinstellungen…
+
+# Regional German proofing (#2087).
+	German (Austria)	Deutsch (Österreich)
+	German (Switzerland)	Deutsch (Schweiz)
+	Proofing follows each text's language. Use Review › Language to change it.	Die Prüfung folgt der Sprache des jeweiligen Textes. Ändern Sie sie unter Überprüfen › Sprache.
+	German spelling needs the matching Hunspell dictionary: {dictionary}. Install {package}, or point WORDCRAFT_DICTIONARIES to a folder containing the matching .aff/.dic files.	Die deutsche Rechtschreibprüfung benötigt das passende Hunspell-Wörterbuch: {dictionary}. Installieren Sie {package} oder setzen Sie WORDCRAFT_DICTIONARIES auf einen Ordner mit den passenden .aff/.dic-Dateien.
 	Printer	Drucker
 	Select a printer	Drucker auswählen
 	Refresh printers	Drucker aktualisieren

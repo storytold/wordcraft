@@ -382,10 +382,12 @@ fn manual_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ManualForm) -> bool {
 // Language
 
 /// Proofing languages offered, by BCP 47 tag, with their English names (translated for display).
-pub const LANGUAGES: [(&str, &str); 29] = [
+pub const LANGUAGES: [(&str, &str); 31] = [
     ("en-US", "English (United States)"),
     ("en-GB", "English (United Kingdom)"),
     ("de-DE", "German (Germany)"),
+    ("de-AT", "German (Austria)"),
+    ("de-CH", "German (Switzerland)"),
     ("fr-FR", "French (France)"),
     ("es-ES", "Spanish (Spain)"),
     ("es-MX", "Spanish (Mexico)"),
@@ -442,6 +444,31 @@ fn language_name(tag: &str) -> String {
     LANGUAGES.iter().find(|(t, _)| t.eq_ignore_ascii_case(tag)).map(|(_, n)| tl!(n).to_string()).unwrap_or_else(|| tag.to_string())
 }
 
+/// Explain how to enable German spelling when the selected region has no dictionary. Regional
+/// dictionaries are deliberately separate: a German dictionary must not proof Swiss text.
+pub(crate) fn missing_dictionary_hint(tag: &str) -> Option<String> {
+    use wordcraft_engine::proof::{ProofLang, de};
+    let lang = ProofLang::from_tag(Some(tag));
+    let hint = german_dictionary_hint(lang)?;
+    (!de::has_dictionary(lang)).then_some(hint)
+}
+
+fn german_dictionary_hint(lang: wordcraft_engine::proof::ProofLang) -> Option<String> {
+    use wordcraft_engine::proof::ProofLang;
+    let (dictionary, package) = match lang {
+        ProofLang::De => ("de_DE.aff / de_DE.dic", "hunspell-de-de"),
+        ProofLang::DeAt => ("de_AT.aff / de_AT.dic", "hunspell-de-at"),
+        ProofLang::DeCh => ("de_CH.aff / de_CH.dic", "hunspell-de-ch"),
+        _ => return None,
+    };
+    Some(crate::i18n::fmt(
+        tl!(
+            "German spelling needs the matching Hunspell dictionary: {dictionary}. Install {package}, or point WORDCRAFT_DICTIONARIES to a folder containing the matching .aff/.dic files."
+        ),
+        &[("dictionary", dictionary), ("package", package)],
+    ))
+}
+
 fn language_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LanguageForm) -> bool {
     ui.label(tl!("Mark selected text as:"));
     let mut list: Vec<(String, String)> = LANGUAGES.iter().map(|(t, _)| (t.to_string(), language_name(t))).collect();
@@ -464,6 +491,11 @@ fn language_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LanguageForm) -> bool {
     ui.add_space(4.0);
     ui.checkbox(&mut f.no_proof, tl!("Do not check spelling or grammar"));
     ui.checkbox(&mut f.detect, tl!("Detect language automatically"));
+    if !f.no_proof
+        && let Some(hint) = missing_dictionary_hint(&f.lang)
+    {
+        ui.add(egui::Label::new(egui::RichText::new(hint).small().weak()).wrap());
+    }
     ui.add_space(4.0);
     let set_default = ui.button(tl!("Set As Default")).clicked();
     if set_default && run(app, "review.language", json!({"lang": f.lang, "default": true, "detect": f.detect})) {
@@ -890,6 +922,24 @@ mod tests {
         assert_eq!(a.session.doc.styles.default_chr.lang.as_deref(), Some("fr-FR"));
         assert!(a.dialog.is_none());
         assert_eq!(language_name("xx-YY"), "xx-YY", "an unknown tag shows as itself");
+    }
+
+    #[test]
+    fn german_dictionary_setup_names_the_selected_region() {
+        use wordcraft_engine::proof::ProofLang;
+        for (lang, tag, package) in
+            [(ProofLang::De, "de_DE", "hunspell-de-de"), (ProofLang::DeAt, "de_AT", "hunspell-de-at"), (ProofLang::DeCh, "de_CH", "hunspell-de-ch")]
+        {
+            let hint = german_dictionary_hint(lang).unwrap();
+            assert!(hint.contains(&format!("{tag}.aff")), "{hint}");
+            assert!(hint.contains(&format!("{tag}.dic")), "{hint}");
+            assert!(hint.contains(package), "{hint}");
+            assert!(hint.contains("WORDCRAFT_DICTIONARIES"), "{hint}");
+        }
+        assert_eq!(missing_dictionary_hint("en-US"), None);
+        assert_eq!(missing_dictionary_hint("fr-FR"), None);
+        assert!(LANGUAGES.contains(&("de-AT", "German (Austria)")));
+        assert!(LANGUAGES.contains(&("de-CH", "German (Switzerland)")));
     }
 
     /// #407: Envelopes starts from the selected address; Add to Document puts an envelope

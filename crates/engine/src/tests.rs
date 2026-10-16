@@ -5746,6 +5746,50 @@ fn proofing_languages_survive_a_docx_round_trip() {
     assert_eq!(found, [("żeka".to_string(), "pl".to_string()), ("wrold".to_string(), "en".to_string())], "{issues}");
 }
 
+/// #2087: regional German language tags route through the same review commands used by the
+/// ribbon, F7 and programmatic callers. The document default and Swiss run survive DOCX I/O.
+#[test]
+fn german_proofing_keeps_regional_dictionaries_through_review_and_docx() {
+    use wordcraft_proof::ProofLang;
+    let aff = "SET UTF-8\nTRY esratß\nREP 2\nREP ss ß\nREP ß ss\n";
+    for lang in [ProofLang::De, ProofLang::DeAt] {
+        wordcraft_proof::de::install_dictionary(lang, aff, "2\nStraße\ngroß\n").unwrap();
+    }
+    wordcraft_proof::de::install_dictionary(ProofLang::DeCh, aff, "2\nStrasse\ngross\n").unwrap();
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Strasse. Straße."}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "review.language", json!({"lang": "de_at", "default": true}));
+    assert_eq!(s.doc.styles.default_chr.lang.as_deref(), Some("de-AT"));
+    run(&mut s, "select.text", json!({"text": "Straße"}));
+    run(&mut s, "review.language", json!({"lang": "de_ch"}));
+    assert_eq!(run(&mut s, "format.state", json!({}))["lang"], "de-CH");
+
+    let bytes = crate::io::save_bytes("regional.docx", &s.doc).unwrap();
+    let doc = crate::io::open_bytes("regional.docx", &bytes).unwrap();
+    assert_eq!(doc.styles.default_chr.lang.as_deref(), Some("de-AT"));
+    let mut back = Session::new(doc);
+    let issues = run(&mut back, "review.issues", json!({}));
+    let found: Vec<_> = issues.as_array().unwrap().iter().map(|i| (i["text"].clone(), i["lang"].clone())).collect();
+    assert_eq!(found, [(json!("Strasse"), json!("de-AT")), (json!("Straße"), json!("de-CH"))], "{issues}");
+    run(&mut back, "caret.docStart", json!({}));
+    let first = run(&mut back, "review.spelling", json!({}));
+    assert_eq!(first["text"], "Strasse");
+    assert!(first["suggestions"].as_array().unwrap().iter().any(|x| x == "Straße"), "{first}");
+    run(&mut back, "review.applySuggestion", json!({"text": "Straße"}));
+    let swiss = run(&mut back, "review.spelling", json!({}));
+    assert_eq!(swiss["lang"], "de-CH");
+    assert!(swiss["suggestions"].as_array().unwrap().iter().any(|x| x == "Strasse"), "{swiss}");
+    run(&mut back, "review.applySuggestion", json!({"text": "Strasse"}));
+    assert_eq!(run(&mut back, "review.issues", json!({})), json!([]));
+    assert_eq!(text(&back), "Straße. Strasse.");
+    run(&mut back, "select.text", json!({"text": "Strasse"}));
+    run(&mut back, "review.language", json!({"lang": "de-DE"}));
+    assert_eq!(run(&mut back, "review.issues", json!({}))[0]["lang"], "de");
+    run(&mut back, "review.language", json!({"noProof": true}));
+    assert_eq!(run(&mut back, "review.issues", json!({})), json!([]));
+}
+
 #[test]
 fn hide_white_space_toggles_view_state_only() {
     let mut s = s();

@@ -2488,3 +2488,9 @@ preview	Title	제목
 	Bottom Right Cell	오른쪽 아래 셀
 	Inside Horizontal Border	안쪽 가로 테두리
 	Inside Vertical Border	안쪽 세로 테두리
+
+# Regional German proofing (#2087).
+	German (Austria)	독일어(오스트리아)
+	German (Switzerland)	독일어(스위스)
+	Proofing follows each text's language. Use Review › Language to change it.	교정은 각 텍스트에 지정된 언어를 따릅니다. 검토 › 언어에서 변경할 수 있습니다.
+	German spelling needs the matching Hunspell dictionary: {dictionary}. Install {package}, or point WORDCRAFT_DICTIONARIES to a folder containing the matching .aff/.dic files.	독일어 맞춤법 검사에는 해당 Hunspell 사전이 필요합니다: {dictionary}. {package} 패키지를 설치하거나 WORDCRAFT_DICTIONARIES를 해당 .aff/.dic 파일이 들어 있는 폴더로 지정하세요.

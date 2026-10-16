@@ -2195,6 +2195,12 @@
 	Suggested	Predlozi
 	Set Proofing Language…	Postavi jezik provere…
 	Language Preferences…	Jezičke postavke…
+
+# Regional German proofing (#2087).
+	German (Austria)	Nemački (Austrija)
+	German (Switzerland)	Nemački (Švajcarska)
+	Proofing follows each text's language. Use Review › Language to change it.	Provera prati jezik svakog dela teksta. Promenite ga u odeljku „Pregled › Jezik“.
+	German spelling needs the matching Hunspell dictionary: {dictionary}. Install {package}, or point WORDCRAFT_DICTIONARIES to a folder containing the matching .aff/.dic files.	Za proveru nemačkog pravopisa potreban je odgovarajući Hunspell rečnik: {dictionary}. Instalirajte {package} ili podesite WORDCRAFT_DICTIONARIES tako da upućuje na fasciklu sa odgovarajućim .aff/.dic datotekama.
 	Printer	Štampač
 	Select a printer	Izaberite štampač
 	Refresh printers	Osveži štampače

@@ -345,6 +345,9 @@ fn language_name(lang: wordcraft_engine::proof::ProofLang) -> &'static str {
         ProofLang::Tr => tl!("Turkish"),
         ProofLang::Ru => tl!("Russian"),
         ProofLang::Cs => tl!("Czech"),
+        ProofLang::De => tl!("German (Germany)"),
+        ProofLang::DeAt => tl!("German (Austria)"),
+        ProofLang::DeCh => tl!("German (Switzerland)"),
         // English uses its bundled word list; Bulgarian has no dictionary yet.
         ProofLang::En | ProofLang::Bg | ProofLang::Other => "",
     }
@@ -423,7 +426,12 @@ fn language(app: &mut WordApp, ui: &mut Ui) {
     // #414 (detect the document's language) goes here.
     ui.add_space(8.0);
     section(ui, "Proofing language");
-    note(ui, "Spelling and grammar are checked in English (United States).");
+    ui.label(crate::ribbon::caret_language(app));
+    note(ui, "Proofing follows each text's language. Use Review › Language to change it.");
+    let tag = crate::ribbon::caret_lang_tag(app);
+    if let Some(hint) = tag.as_deref().and_then(crate::dialogs_layout::missing_dictionary_hint) {
+        ui.add(egui::Label::new(RichText::new(hint).small().weak()).wrap());
+    }
 }
 
 fn accessibility(app: &mut WordApp, ui: &mut Ui) {

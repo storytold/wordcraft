@@ -2186,6 +2186,12 @@
 	Suggested	建議
 	Set Proofing Language…	設定校訂語言…
 	Language Preferences…	語言喜好設定…
+
+# Regional German proofing (#2087).
+	German (Austria)	德文（奧地利）
+	German (Switzerland)	德文（瑞士）
+	Proofing follows each text's language. Use Review › Language to change it.	校訂會使用各段文字的語言。可在「校閱 › 語言」中變更。
+	German spelling needs the matching Hunspell dictionary: {dictionary}. Install {package}, or point WORDCRAFT_DICTIONARIES to a folder containing the matching .aff/.dic files.	德文拼字檢查需要相符的 Hunspell 字典：{dictionary}。請安裝 {package}，或將 WORDCRAFT_DICTIONARIES 指向包含相符 .aff/.dic 檔案的資料夾。
 	Printer	印表機
 	Select a printer	選取印表機
 	Refresh printers	重新整理印表機

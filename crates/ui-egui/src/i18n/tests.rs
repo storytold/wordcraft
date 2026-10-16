@@ -1114,7 +1114,31 @@ fn an_italian_interface_writes_new_documents_in_italian() {
 #[test]
 fn the_editing_languages_are_the_ones_wordcraft_can_proof() {
     let with: Vec<(&str, &str)> = Lang::all().filter_map(|l| l.editing_lang().map(|e| (l.code(), e))).collect();
-    assert_eq!(with, [("pt-br", "pt-BR"), ("pl", "pl-PL"), ("cs", "cs-CZ"), ("tr", "tr-TR"), ("it", "it-IT")]);
+    assert_eq!(with, [("pt-br", "pt-BR"), ("pl", "pl-PL"), ("cs", "cs-CZ"), ("de", "de-DE"), ("tr", "tr-TR"), ("it", "it-IT")]);
+}
+
+#[test]
+fn a_german_interface_writes_new_documents_in_german_and_keeps_swiss_text() {
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    let ctx = egui::Context::default();
+    let frame = |app: &mut crate::WordApp| ctx.run_ui(egui::RawInput::default(), |ui| app.logic(ui.ctx())).drop_without_applying_deltas();
+    frame(&mut app);
+    app.run("ui.language", serde_json::json!({"value": "de"})).unwrap();
+    frame(&mut app);
+    assert_eq!(app.session.editing_lang.as_deref(), Some("de-DE"));
+    assert_eq!(app.session.doc.styles.default_chr.lang.as_deref(), Some("de-DE"));
+    assert!(!app.session.dirty && !app.session.can_undo(), "the blank document's default needs no save or undo step");
+    app.run("file.new", serde_json::json!({})).unwrap();
+    assert_eq!(app.session.doc.styles.default_chr.lang.as_deref(), Some("de-DE"));
+    app.session.run("review.language", &serde_json::json!({"lang": "de-CH", "default": true})).unwrap();
+    app.session.run("text.insert", &serde_json::json!({"text": "Die Strasse"})).unwrap();
+    set_current(lang("de"));
+    assert_eq!(crate::ribbon::caret_language(&app), "Deutsch (Schweiz)");
+    app.run("ui.language", serde_json::json!({"value": "en"})).unwrap();
+    frame(&mut app);
+    assert_eq!(app.session.doc.styles.default_chr.lang.as_deref(), Some("de-CH"), "written text retains its regional language");
+    assert_eq!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Die Strasse");
+    set_current(Lang::EN);
 }
 
 #[test]
@@ -1146,6 +1170,8 @@ fn german_covers_the_interface_catalog_and_keeps_count_labels_neutral() {
     assert_eq!(tr(de, "Home"), "Start");
     assert_eq!(tr(de, "Save"), "Speichern");
     assert_eq!(tr(de, "Spelling & Grammar"), "Rechtschreibung und Grammatik");
+    assert_eq!(tr(de, "German (Austria)"), "Deutsch (Österreich)");
+    assert_eq!(tr(de, "German (Switzerland)"), "Deutsch (Schweiz)");
     assert_eq!(tr(de, "unknown future label"), "unknown future label");
     assert_eq!(fmt(tr(de, "Exported {path}"), &[("path", "draft-{words}.docx")]), "Exportiert: draft-{words}.docx");
     // Count-neutral wording is grammatical for every count: `Wörter: 21`, `Wörter: 21; ausgewählt: 1`.

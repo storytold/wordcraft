@@ -129,8 +129,16 @@ pub static LANGUAGES: [LangInfo; 23] = [
     },
     LangInfo { code: "et", name: "Eesti", source: include_str!("et.tsv"), prefer_hans: false, editing_lang: None, catalog: OnceLock::new() },
     // German, neutral across Germany, Austria and Switzerland; `de`, `de-DE`, `de-AT`, `de-CH` …
-    // resolve here.
-    LangInfo { code: "de", name: "Deutsch", source: include_str!("de.tsv"), prefer_hans: false, editing_lang: None, catalog: OnceLock::new() },
+    // resolve here. New documents default to Germany; Review › Language offers Austria and
+    // Switzerland separately, with their own spelling dictionaries.
+    LangInfo {
+        code: "de",
+        name: "Deutsch",
+        source: include_str!("de.tsv"),
+        prefer_hans: false,
+        editing_lang: Some("de-DE"),
+        catalog: OnceLock::new(),
+    },
     // Russian; `ru`, `ru-RU`, `ru_RU.UTF-8` and other regions resolve here.
     LangInfo { code: "ru", name: "Русский", source: include_str!("ru.tsv"), prefer_hans: false, editing_lang: None, catalog: OnceLock::new() },
     LangInfo {

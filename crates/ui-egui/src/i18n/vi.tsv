@@ -2518,6 +2518,11 @@
 	{name}   {height} × {width} mm	{name}   {height} × {width} mm
 	{width} × {height} mm	{width} × {height} mm
 
+# Regional German proofing (#2087).
+	German (Austria)	Tiếng Đức (Áo)
+	German (Switzerland)	Tiếng Đức (Thụy Sĩ)
+	Proofing follows each text's language. Use Review › Language to change it.	Việc kiểm tra dựa trên ngôn ngữ của từng phần văn bản. Dùng Xem lại › Ngôn ngữ để thay đổi.
+	German spelling needs the matching Hunspell dictionary: {dictionary}. Install {package}, or point WORDCRAFT_DICTIONARIES to a folder containing the matching .aff/.dic files.	Kiểm tra chính tả tiếng Đức cần từ điển Hunspell phù hợp: {dictionary}. Cài đặt {package}, hoặc đặt WORDCRAFT_DICTIONARIES thành thư mục chứa các tệp .aff/.dic phù hợp.
 # Custom paper sizes (#1496)
 	Custom size	Kích thước tùy chỉnh
 	More Paper Sizes…	Thêm khổ giấy…

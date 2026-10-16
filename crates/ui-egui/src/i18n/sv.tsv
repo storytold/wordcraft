@@ -2647,3 +2647,9 @@ preview	Title	Titel
 	Bottom Right Cell	Nedre högra cellen
 	Inside Horizontal Border	Inre vågrät kantlinje
 	Inside Vertical Border	Inre lodrät kantlinje
+
+# Regional German proofing (#2087).
+	German (Austria)	Tyska (Österrike)
+	German (Switzerland)	Tyska (Schweiz)
+	Proofing follows each text's language. Use Review › Language to change it.	Korrekturläsningen följer språket för varje textavsnitt. Ändra det via Granska › Språk.
+	German spelling needs the matching Hunspell dictionary: {dictionary}. Install {package}, or point WORDCRAFT_DICTIONARIES to a folder containing the matching .aff/.dic files.	Tysk stavningskontroll kräver rätt Hunspell-ordbok: {dictionary}. Installera {package} eller låt WORDCRAFT_DICTIONARIES peka på en mapp som innehåller motsvarande .aff/.dic-filer.

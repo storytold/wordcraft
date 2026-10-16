@@ -23,6 +23,10 @@
 //!   suggestions tuned for Italian (missing accents, `REP` confusions, missing spaces),
 //!   conservative grammar rules with Italian messages, and `hyph-utf8`'s Italian patterns
 //!   (Beccari, MIT option).
+//! - **German** ([`ProofLang::De`], [`ProofLang::DeAt`], [`ProofLang::DeCh`], module [`de`]):
+//!   installed regional Hunspell dictionaries, compound nouns and spelling suggestions.
+//!   Swiss German rejects `ß`; dictionaries never fall back across German regions.
+//!   German grammar and dedicated hyphenation patterns are not included yet.
 //! - **Russian** ([`ProofLang::Ru`], module [`ru`]): spelling against the Hunspell `ru_RU`
 //!   dictionary installed on the system (not bundled either), with `ё` optional and hyphenated
 //!   words (`кто-то`, `по-русски`, `северо-западный`) understood, suggestions tuned for Russian
@@ -42,6 +46,7 @@
 pub mod affix;
 pub mod bg;
 pub mod cs;
+pub mod de;
 pub mod dict;
 pub mod hr;
 pub mod hunspell;
@@ -595,6 +600,7 @@ fn spelling_issue(text: &str, a: usize, b: usize, lang: ProofLang, opts: &Option
         ProofLang::Hr => "Moguća pravopisna pogreška",
         ProofLang::Pt => "Possível erro de ortografia",
         ProofLang::It => "Possibile errore di ortografia",
+        ProofLang::De | ProofLang::DeAt | ProofLang::DeCh => "Möglicher Rechtschreibfehler",
         ProofLang::Tr => "Olası yazım hatası",
         ProofLang::Ru => "Возможна орфографическая ошибка",
         ProofLang::Cs => "Možná pravopisná chyba",
@@ -616,6 +622,7 @@ pub fn is_correct_in_with(word: &str, lang: ProofLang, opts: &Options) -> bool {
         ProofLang::Hr => accepted_by_options(word, opts) || hr::is_correct(word),
         ProofLang::Pt => accepted_by_options(word, opts) || pt::is_correct(word),
         ProofLang::It => accepted_by_options(word, opts) || it::is_correct(word),
+        ProofLang::De | ProofLang::DeAt | ProofLang::DeCh => accepted_by_options(word, opts) || de::is_correct(word, lang),
         ProofLang::Tr => accepted_by_options(word, opts) || tr::is_correct(word),
         ProofLang::Ru => accepted_by_options(word, opts) || ru::is_correct(word),
         ProofLang::Cs => accepted_by_options(word, opts) || cs::is_correct(word),
@@ -631,6 +638,7 @@ pub fn suggest_in(word: &str, max: usize, lang: ProofLang) -> Vec<String> {
         ProofLang::Hr => hr::suggest(word, max),
         ProofLang::Pt => pt::suggest(word, max),
         ProofLang::It => it::suggest(word, max),
+        ProofLang::De | ProofLang::DeAt | ProofLang::DeCh => de::suggest(word, max, lang),
         ProofLang::Tr => tr::suggest(word, max),
         ProofLang::Ru => ru::suggest(word, max),
         ProofLang::Cs => cs::suggest(word, max),
@@ -648,6 +656,7 @@ pub fn check_grammar_in(text: &str, lang: ProofLang) -> Vec<Issue> {
         ProofLang::Hr => hr::grammar::check(text),
         ProofLang::Pt => pt::grammar::check(text),
         ProofLang::It => it::grammar::check(text),
+        ProofLang::De | ProofLang::DeAt | ProofLang::DeCh => Vec::new(),
         ProofLang::Tr => tr::grammar::check(text),
         ProofLang::Ru => ru::grammar::check(text),
         ProofLang::Cs => cs::grammar::check(text),
@@ -1177,7 +1186,7 @@ mod tests {
         for l in [None, Some(""), Some("  "), Some("en"), Some("en-US"), Some("en-GB"), Some("EN-us"), Some("en_US")] {
             assert!(has_dictionary(l), "{l:?}");
         }
-        for l in [Some("lt-LT"), Some("fr-FR"), Some("de"), Some("uk"), Some("es"), Some("-US"), Some("e")] {
+        for l in [Some("lt-LT"), Some("fr-FR"), Some("uk"), Some("es"), Some("-US"), Some("e")] {
             assert!(!has_dictionary(l), "{l:?}");
         }
         // The gate follows the dictionaries, not English: every proofed language is proofed.
@@ -1185,6 +1194,24 @@ mod tests {
             assert!(has_dictionary(Some(d)), "{d}");
             assert!(has_dictionary(Some(&format!("{}-XX", d.to_ascii_uppercase()))), "{d}");
         }
+    }
+
+    #[test]
+    fn german_regions_route_spelling_suggestions_and_mixed_runs() {
+        de::test_dict::install();
+        let text = "Straße groß Strasse gross";
+        let cut = "Straße groß ".len();
+        let spans = [(0..cut, ProofLang::DeCh), (cut..text.len(), ProofLang::De)];
+        let issues = check_text(text, &spans);
+        assert_eq!(issues.iter().map(|i| text.get(i.start..i.end).unwrap()).collect::<Vec<_>>(), ["Straße", "groß", "Strasse", "gross"]);
+        assert!(issues.iter().all(|i| i.kind == IssueKind::Spelling && i.message == "Möglicher Rechtschreibfehler"));
+        assert_eq!(issues[0].lang, ProofLang::DeCh);
+        assert_eq!(issues[2].lang, ProofLang::De);
+        assert_eq!(suggest_in("Straße", 1, ProofLang::DeCh), ["Strasse"]);
+        assert!(is_correct_for("Jänner", Some("de-AT")));
+        assert!(!is_correct_for("Jänner", Some("de-DE")));
+        assert!(check_grammar_in("dies ist ist ein test", ProofLang::DeCh).is_empty());
+        assert!(check_text("Strasse gross Straße groß", &[(0..14, ProofLang::DeCh), (14..27, ProofLang::De)]).is_empty());
     }
 
     /// #100: runs in a language without a dictionary are never flagged; English still is.

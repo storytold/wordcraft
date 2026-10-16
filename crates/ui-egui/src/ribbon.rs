@@ -501,9 +501,12 @@ fn mi_text(ui: &mut Ui, app: &mut WordApp, text: &str, id: &str, params: Value) 
 }
 
 /// The proofing languages the Language menu offers: tag and English name (translated when drawn).
-pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 9] = [
+pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 12] = [
     ("en-US", "English (United States)"),
     ("en-GB", "English (United Kingdom)"),
+    ("de-DE", "German (Germany)"),
+    ("de-AT", "German (Austria)"),
+    ("de-CH", "German (Switzerland)"),
     ("pl-PL", "Polish"),
     ("pt-BR", "Portuguese (Brazil)"),
     ("it-IT", "Italian"),
@@ -520,15 +523,16 @@ pub(crate) fn language_name(tag: Option<&str>) -> String {
     let tag = tag.unwrap_or("en-US");
     let named =
         |t: &str| PROOFING_LANGUAGES.iter().chain(crate::dialogs_layout::LANGUAGES.iter()).find(|(l, _)| l.eq_ignore_ascii_case(t)).map(|(_, n)| *n);
-    // Any language the Language dialog offers (French, German…) by its name, not its tag (#860).
+    // Any language the Language dialog offers (French, Spanish…) by its name, not its tag (#860).
     if let Some(name) = named(tag) {
         return name.to_string();
     }
     let mut parts = tag.split(['-', '_']);
     let primary = parts.next().unwrap_or("");
     // The region: the first two-letter or three-digit subtag after the language (and script).
-    let region =
-        parts.find(|p| (p.len() == 2 && p.chars().all(|c| c.is_ascii_alphabetic())) || (p.len() == 3 && p.chars().all(|c| c.is_ascii_digit())));
+    let region = parts
+        .take_while(|p| p.len() != 1)
+        .find(|p| (p.len() == 2 && p.chars().all(|c| c.is_ascii_alphabetic())) || (p.len() == 3 && p.chars().all(|c| c.is_ascii_digit())));
     match region {
         // A region the list doesn't have: the language's name without its own region or variant.
         Some(r) => {
@@ -547,6 +551,9 @@ pub(crate) fn language_name(tag: Option<&str>) -> String {
             wordcraft_engine::proof::ProofLang::Hr => "Croatian".into(),
             wordcraft_engine::proof::ProofLang::Pt => "Portuguese (Brazil)".into(),
             wordcraft_engine::proof::ProofLang::It => "Italian".into(),
+            wordcraft_engine::proof::ProofLang::De => "German (Germany)".into(),
+            wordcraft_engine::proof::ProofLang::DeAt => "German (Austria)".into(),
+            wordcraft_engine::proof::ProofLang::DeCh => "German (Switzerland)".into(),
             wordcraft_engine::proof::ProofLang::Tr => "Turkish".into(),
             wordcraft_engine::proof::ProofLang::Ru => "Russian".into(),
             wordcraft_engine::proof::ProofLang::Cs => "Czech".into(),
@@ -631,7 +638,7 @@ pub(crate) fn caret_language(app: &WordApp) -> String {
 }
 
 /// The language tag at the caret, resolved through the styles and the document default.
-fn caret_lang_tag(app: &WordApp) -> Option<String> {
+pub(crate) fn caret_lang_tag(app: &WordApp) -> Option<String> {
     let s = &app.session;
     let style = s.doc.para_at(&s.sel.focus).and_then(|p| p.props.style.clone());
     s.doc.styles.resolve_char(style.as_deref(), &s.typing_props()).lang
@@ -644,7 +651,7 @@ pub(crate) fn caret_missing_dictionary(app: &WordApp) -> Option<&'static str> {
 
 /// Review › Language (and the status bar's language): set the selection's proofing language, or
 /// leave it unchecked. The current choice has a check mark; a language outside the short list
-/// (French, German…) shows checked above it. Set Proofing Language… opens the Language dialog
+/// (French, Spanish…) shows checked above it. Set Proofing Language… opens the Language dialog
 /// with every language and Set As Default, and Language Preferences… opens Options › Language
 /// (#860: the short list alone left no way to pick French).
 pub(crate) fn language_menu(ui: &mut Ui, app: &mut WordApp) {
@@ -2977,6 +2984,29 @@ mod tests {
         assert!(h.state().ui.backstage, "File › Options opened");
         assert_eq!(h.state().ui.options_pane, "language");
         assert_eq!(language_name(Some("de-DE")), "German (Germany)");
+    }
+
+    #[test]
+    fn language_menu_selects_each_german_dictionary_and_names_its_region() {
+        use egui_kittest::kittest::{By, Queryable};
+        let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Strasse")), crate::Services::default());
+        let mut h =
+            egui_kittest::Harness::builder().with_size(vec2(420.0, 460.0)).build_ui_state(|ui, app: &mut WordApp| language_menu(ui, app), app);
+        h.state_mut().run("select.all", json!({})).unwrap();
+        for (tag, name) in [("de-DE", "German (Germany)"), ("de-AT", "German (Austria)"), ("de-CH", "German (Switzerland)")] {
+            h.run();
+            h.get(By::new().label_contains(name)).click();
+            h.run();
+            assert_eq!(h.state_mut().run("format.state", json!({})).unwrap()["lang"], tag);
+            assert_eq!(caret_language(h.state()), name);
+            let checks = language_checks(tag, |candidate| candidate == tag);
+            assert_eq!(checks.extra, None, "the current region occurs only once");
+            assert_eq!(checks.listed.into_iter().filter(|on| *on).count(), 1);
+        }
+        assert_eq!(language_name(Some("de")), "German (Germany)");
+        assert_eq!(language_name(Some("de-x-ch")), "German (Germany)");
+        assert_eq!(language_name(Some("de_ch")), "German (Switzerland)");
+        assert_eq!(language_name(Some("de-Latn-AT")), "German (Austria)");
     }
 
     #[test]

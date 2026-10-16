@@ -2185,6 +2185,12 @@
 	Suggested	おすすめ
 	Set Proofing Language…	校正言語の設定…
 	Language Preferences…	言語の設定…
+
+# Regional German proofing (#2087).
+	German (Austria)	ドイツ語（オーストリア）
+	German (Switzerland)	ドイツ語（スイス）
+	Proofing follows each text's language. Use Review › Language to change it.	文章校正は各テキストの言語に従います。「校閲 › 言語」で変更できます。
+	German spelling needs the matching Hunspell dictionary: {dictionary}. Install {package}, or point WORDCRAFT_DICTIONARIES to a folder containing the matching .aff/.dic files.	ドイツ語のスペルチェックには、対応する Hunspell 辞書が必要です: {dictionary}。{package} をインストールするか、対応する .aff/.dic ファイルを含むフォルダーを WORDCRAFT_DICTIONARIES に指定してください。
 	Printer	プリンター
 	Select a printer	プリンターを選択
 	Refresh printers	プリンターを更新

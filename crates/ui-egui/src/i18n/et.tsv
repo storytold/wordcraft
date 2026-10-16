@@ -2219,6 +2219,12 @@
 	Suggested	Soovitused
 	Set Proofing Language…	Määra õigekeelsuskontrolli keel…
 	Language Preferences…	Keele-eelistused…
+
+# Regional German proofing (#2087).
+	German (Austria)	Saksa (Austria)
+	German (Switzerland)	Saksa (Šveits)
+	Proofing follows each text's language. Use Review › Language to change it.	Keelekontroll järgib iga tekstiosa keelt. Selle muutmiseks valige Läbivaatus › Keel.
+	German spelling needs the matching Hunspell dictionary: {dictionary}. Install {package}, or point WORDCRAFT_DICTIONARIES to a folder containing the matching .aff/.dic files.	Saksa õigekirjakontroll vajab vastavat Hunspelli sõnastikku: {dictionary}. Paigaldage {package} või määrake WORDCRAFT_DICTIONARIES väärtuseks vastavaid .aff/.dic-faile sisaldava kausta tee.
 	Printer	Printer
 	Select a printer	Vali printer
 	Refresh printers	Värskenda printereid

@@ -2632,3 +2632,9 @@ preview	Title	Naslov
 	Bottom Right Cell	Donja desna ćelija
 	Inside Horizontal Border	Unutarnji vodoravni obrub
 	Inside Vertical Border	Unutarnji okomiti obrub
+
+# Regional German proofing (#2087).
+	German (Austria)	Njemački (Austrija)
+	German (Switzerland)	Njemački (Švicarska)
+	Proofing follows each text's language. Use Review › Language to change it.	Provjera se ravna prema jeziku svakog dijela teksta. Promijenite ga u odjeljku „Pregled › Jezik”.
+	German spelling needs the matching Hunspell dictionary: {dictionary}. Install {package}, or point WORDCRAFT_DICTIONARIES to a folder containing the matching .aff/.dic files.	Za provjeru njemačkog pravopisa potreban je odgovarajući Hunspell rječnik: {dictionary}. Instalirajte {package} ili postavite WORDCRAFT_DICTIONARIES na mapu s odgovarajućim datotekama .aff/.dic.
