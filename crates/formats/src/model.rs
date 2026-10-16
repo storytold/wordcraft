@@ -1117,9 +1117,25 @@ pub fn base64_decode(s: &str) -> Option<Vec<u8>> {
 
 /// Decode a `data:` URI (base64 or percent-encoded).
 pub fn data_uri(uri: &str) -> Option<Vec<u8>> {
-    let rest = uri.trim().strip_prefix("data:")?;
+    let s = uri.trim();
+    let rest = if s.len() >= 5 && s[..5].eq_ignore_ascii_case("data:") {
+        &s[5..]
+    } else {
+        return None;
+    };
     let (head, data) = rest.split_once(',')?;
-    if head.ends_with(";base64") { base64_decode(data) } else { Some(percent_decode(data)) }
+    let is_base64 = head.split(';').any(|p| p.trim().eq_ignore_ascii_case("base64"));
+    if is_base64 {
+        if data.contains('%') {
+            let decoded = percent_decode(data);
+            let s = String::from_utf8_lossy(&decoded);
+            base64_decode(&s)
+        } else {
+            base64_decode(data)
+        }
+    } else {
+        Some(percent_decode(data))
+    }
 }
 
 pub fn percent_decode(s: &str) -> Vec<u8> {
@@ -1201,7 +1217,53 @@ impl ListCounter {
     }
 }
 
-/// Parse a CSS / HTML colour: `#rgb`, `#rrggbb`, `rgb(r,g,b)` or a basic name.
+fn parse_channel(x: &str) -> Option<u8> {
+    let x = x.trim();
+    if let Some(p) = x.strip_suffix('%') {
+        p.trim().parse::<f32>().ok().map(|f| (f.clamp(0.0, 100.0) * 2.55).round() as u8)
+    } else {
+        x.parse::<f32>().ok().map(|f| f.clamp(0.0, 255.0).round() as u8)
+    }
+}
+
+fn parse_hue(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(v) = s.strip_suffix("deg") {
+        v.trim().parse::<f32>().ok()
+    } else if let Some(v) = s.strip_suffix("turn") {
+        v.trim().parse::<f32>().ok().map(|t| t * 360.0)
+    } else if let Some(v) = s.strip_suffix("rad") {
+        v.trim().parse::<f32>().ok().map(|r| r.to_degrees())
+    } else if let Some(v) = s.strip_suffix("grad") {
+        v.trim().parse::<f32>().ok().map(|g| g * 0.9)
+    } else {
+        s.parse::<f32>().ok()
+    }
+}
+
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> Rgb {
+    let s = (s / 100.0).clamp(0.0, 1.0);
+    let l = (l / 100.0).clamp(0.0, 1.0);
+    let h = ((h % 360.0) + 360.0) % 360.0;
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let m = l - c / 2.0;
+    let (r, g, b) = match (h / 60.0) as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    Rgb(
+        ((r + m) * 255.0).round().clamp(0.0, 255.0) as u8,
+        ((g + m) * 255.0).round().clamp(0.0, 255.0) as u8,
+        ((b + m) * 255.0).round().clamp(0.0, 255.0) as u8,
+    )
+}
+
+/// Parse a CSS / HTML colour: `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, `rgb(...)`, `rgba(...)`, `hsl(...)`, `hsla(...)`, or CSS named colours.
 pub fn parse_color(s: &str) -> Option<Rgb> {
     let s = s.trim().to_ascii_lowercase();
     if let Some(h) = s.strip_prefix('#') {
@@ -1209,45 +1271,190 @@ pub fn parse_color(s: &str) -> Option<Rgb> {
             let d = |i: usize| h.get(i..i + 1).and_then(|x| u8::from_str_radix(x, 16).ok()).map(|v| v * 17);
             return Some(Rgb(d(0)?, d(1)?, d(2)?));
         }
-        return Rgb::parse(h);
+        if h.len() == 4 && h.is_ascii() {
+            let d = |i: usize| h.get(i..i + 1).and_then(|x| u8::from_str_radix(x, 16).ok()).map(|v| v * 17);
+            let _ = d(3)?;
+            return Some(Rgb(d(0)?, d(1)?, d(2)?));
+        }
+        if h.len() == 6 && h.is_ascii() {
+            return Rgb::parse(h);
+        }
+        if h.len() == 8 && h.is_ascii() {
+            let p = |i: usize| h.get(i..i + 2).and_then(|x| u8::from_str_radix(x, 16).ok());
+            let _ = p(6)?;
+            return Some(Rgb(p(0)?, p(2)?, p(4)?));
+        }
+        return None;
     }
     if let Some(inner) = s.strip_prefix("rgb(").or_else(|| s.strip_prefix("rgba(")) {
-        let v: Vec<u8> = inner
-            .trim_end_matches(')')
-            .split(',')
-            .take(3)
-            .filter_map(|x| {
-                let x = x.trim();
-                if let Some(p) = x.strip_suffix('%') {
-                    p.trim().parse::<f32>().ok().map(|f| (f.clamp(0.0, 100.0) * 2.55).round() as u8)
-                } else {
-                    x.parse::<f32>().ok().map(|f| f.clamp(0.0, 255.0).round() as u8)
-                }
-            })
-            .collect();
+        let inner = inner.trim().strip_suffix(')')?.trim();
+        let (channels, _) = inner.split_once('/').unwrap_or((inner, ""));
+        let v: Vec<u8> = if channels.contains(',') {
+            channels.split(',').take(3).filter_map(parse_channel).collect()
+        } else {
+            channels.split_whitespace().take(3).filter_map(parse_channel).collect()
+        };
         if let [r, g, b] = v[..] {
             return Some(Rgb(r, g, b));
         }
         return None;
     }
+    if let Some(inner) = s.strip_prefix("hsl(").or_else(|| s.strip_prefix("hsla(")) {
+        let inner = inner.trim().strip_suffix(')')?.trim();
+        let (channels, _) = inner.split_once('/').unwrap_or((inner, ""));
+        let parts: Vec<&str> = if channels.contains(',') {
+            channels.split(',').collect()
+        } else {
+            channels.split_whitespace().collect()
+        };
+        if parts.len() >= 3 {
+            let h = parse_hue(parts[0])?;
+            let s = parts[1].trim().strip_suffix('%').unwrap_or(parts[1].trim()).trim().parse::<f32>().ok()?;
+            let l = parts[2].trim().strip_suffix('%').unwrap_or(parts[2].trim()).trim().parse::<f32>().ok()?;
+            return Some(hsl_to_rgb(h, s, l));
+        }
+        return None;
+    }
     Some(match s.as_str() {
+        "aliceblue" => Rgb(240, 248, 255),
+        "antiquewhite" => Rgb(250, 235, 215),
+        "aqua" | "cyan" => Rgb(0, 255, 255),
+        "aquamarine" => Rgb(127, 255, 212),
+        "azure" => Rgb(240, 255, 255),
+        "beige" => Rgb(245, 245, 220),
+        "bisque" => Rgb(255, 228, 196),
         "black" => Rgb(0, 0, 0),
-        "white" => Rgb(255, 255, 255),
-        "red" => Rgb(255, 0, 0),
-        "green" => Rgb(0, 128, 0),
-        "lime" => Rgb(0, 255, 0),
+        "blanchedalmond" => Rgb(255, 235, 205),
         "blue" => Rgb(0, 0, 255),
-        "yellow" => Rgb(255, 255, 0),
-        "cyan" | "aqua" => Rgb(0, 255, 255),
-        "magenta" | "fuchsia" => Rgb(255, 0, 255),
+        "blueviolet" => Rgb(138, 43, 226),
+        "brown" => Rgb(165, 42, 42),
+        "burlywood" => Rgb(222, 184, 135),
+        "cadetblue" => Rgb(95, 158, 160),
+        "chartreuse" => Rgb(127, 255, 0),
+        "chocolate" => Rgb(210, 105, 30),
+        "coral" => Rgb(255, 127, 80),
+        "cornflowerblue" => Rgb(100, 149, 237),
+        "cornsilk" => Rgb(255, 248, 220),
+        "crimson" => Rgb(220, 20, 60),
+        "darkblue" => Rgb(0, 0, 139),
+        "darkcyan" => Rgb(0, 139, 139),
+        "darkgoldenrod" => Rgb(184, 134, 11),
+        "darkgray" | "darkgrey" => Rgb(169, 169, 169),
+        "darkgreen" => Rgb(0, 100, 0),
+        "darkkhaki" => Rgb(189, 183, 107),
+        "darkmagenta" => Rgb(139, 0, 139),
+        "darkolivegreen" => Rgb(85, 107, 47),
+        "darkorange" => Rgb(255, 140, 0),
+        "darkorchid" => Rgb(153, 50, 204),
+        "darkred" => Rgb(139, 0, 0),
+        "darksalmon" => Rgb(233, 150, 122),
+        "darkseagreen" => Rgb(143, 188, 143),
+        "darkslateblue" => Rgb(72, 61, 139),
+        "darkslategray" | "darkslategrey" => Rgb(47, 79, 79),
+        "darkturquoise" => Rgb(0, 206, 209),
+        "darkviolet" => Rgb(148, 0, 211),
+        "deeppink" => Rgb(255, 20, 147),
+        "deepskyblue" => Rgb(0, 191, 255),
+        "dimgray" | "dimgrey" => Rgb(105, 105, 105),
+        "dodgerblue" => Rgb(30, 144, 255),
+        "firebrick" => Rgb(178, 34, 34),
+        "floralwhite" => Rgb(255, 250, 240),
+        "forestgreen" => Rgb(34, 139, 34),
+        "fuchsia" | "magenta" => Rgb(255, 0, 255),
+        "gainsboro" => Rgb(220, 220, 220),
+        "ghostwhite" => Rgb(248, 248, 255),
+        "gold" => Rgb(255, 215, 0),
+        "goldenrod" => Rgb(218, 165, 32),
         "gray" | "grey" => Rgb(128, 128, 128),
-        "silver" => Rgb(192, 192, 192),
+        "green" => Rgb(0, 128, 0),
+        "greenyellow" => Rgb(173, 255, 47),
+        "honeydew" => Rgb(240, 255, 240),
+        "hotpink" => Rgb(255, 105, 180),
+        "indianred" => Rgb(205, 92, 92),
+        "indigo" => Rgb(75, 0, 130),
+        "ivory" => Rgb(255, 255, 240),
+        "khaki" => Rgb(240, 230, 140),
+        "lavender" => Rgb(230, 230, 250),
+        "lavenderblush" => Rgb(255, 240, 245),
+        "lawngreen" => Rgb(124, 252, 0),
+        "lemonchiffon" => Rgb(255, 250, 205),
+        "lightblue" => Rgb(173, 216, 230),
+        "lightcoral" => Rgb(240, 128, 128),
+        "lightcyan" => Rgb(224, 255, 255),
+        "lightgoldenrodyellow" => Rgb(250, 250, 210),
+        "lightgray" | "lightgrey" => Rgb(211, 211, 211),
+        "lightgreen" => Rgb(144, 238, 144),
+        "lightpink" => Rgb(255, 182, 193),
+        "lightsalmon" => Rgb(255, 160, 122),
+        "lightseagreen" => Rgb(32, 178, 170),
+        "lightskyblue" => Rgb(135, 206, 250),
+        "lightslategray" | "lightslategrey" => Rgb(119, 136, 153),
+        "lightsteelblue" => Rgb(176, 196, 222),
+        "lightyellow" => Rgb(255, 255, 224),
+        "lime" => Rgb(0, 255, 0),
+        "limegreen" => Rgb(50, 205, 50),
+        "linen" => Rgb(250, 240, 230),
         "maroon" => Rgb(128, 0, 0),
-        "olive" => Rgb(128, 128, 0),
+        "mediumaquamarine" => Rgb(102, 205, 170),
+        "mediumblue" => Rgb(0, 0, 205),
+        "mediumorchid" => Rgb(186, 85, 211),
+        "mediumpurple" => Rgb(147, 112, 219),
+        "mediumseagreen" => Rgb(60, 179, 113),
+        "mediumslateblue" => Rgb(123, 104, 238),
+        "mediumspringgreen" => Rgb(0, 250, 154),
+        "mediumturquoise" => Rgb(72, 209, 204),
+        "mediumvioletred" => Rgb(199, 21, 133),
+        "midnightblue" => Rgb(25, 25, 112),
+        "mintcream" => Rgb(245, 255, 250),
+        "mistyrose" => Rgb(255, 228, 225),
+        "moccasin" => Rgb(255, 228, 181),
+        "navajowhite" => Rgb(255, 222, 173),
         "navy" => Rgb(0, 0, 128),
-        "purple" => Rgb(128, 0, 128),
-        "teal" => Rgb(0, 128, 128),
+        "oldlace" => Rgb(253, 245, 230),
+        "olive" => Rgb(128, 128, 0),
+        "olivedrab" => Rgb(107, 142, 35),
         "orange" => Rgb(255, 165, 0),
+        "orangered" => Rgb(255, 69, 0),
+        "orchid" => Rgb(218, 112, 214),
+        "palegoldenrod" => Rgb(238, 232, 170),
+        "palegreen" => Rgb(152, 251, 152),
+        "paleturquoise" => Rgb(175, 238, 238),
+        "palevioletred" => Rgb(219, 112, 147),
+        "papayawhip" => Rgb(255, 239, 213),
+        "peachpuff" => Rgb(255, 218, 185),
+        "peru" => Rgb(205, 133, 63),
+        "pink" => Rgb(255, 192, 203),
+        "plum" => Rgb(221, 160, 221),
+        "powderblue" => Rgb(176, 224, 230),
+        "purple" => Rgb(128, 0, 128),
+        "rebeccapurple" => Rgb(102, 51, 153),
+        "red" => Rgb(255, 0, 0),
+        "rosybrown" => Rgb(188, 143, 143),
+        "royalblue" => Rgb(65, 105, 225),
+        "saddlebrown" => Rgb(139, 69, 19),
+        "salmon" => Rgb(250, 128, 114),
+        "sandybrown" => Rgb(244, 164, 96),
+        "seagreen" => Rgb(46, 139, 87),
+        "seashell" => Rgb(255, 245, 238),
+        "sienna" => Rgb(160, 82, 45),
+        "silver" => Rgb(192, 192, 192),
+        "skyblue" => Rgb(135, 206, 235),
+        "slateblue" => Rgb(106, 90, 205),
+        "slategray" | "slategrey" => Rgb(112, 128, 144),
+        "snow" => Rgb(255, 250, 250),
+        "springgreen" => Rgb(0, 255, 127),
+        "steelblue" => Rgb(70, 130, 180),
+        "tan" => Rgb(210, 180, 140),
+        "teal" => Rgb(0, 128, 128),
+        "thistle" => Rgb(216, 191, 216),
+        "tomato" => Rgb(255, 99, 71),
+        "turquoise" => Rgb(64, 224, 208),
+        "violet" => Rgb(238, 130, 238),
+        "wheat" => Rgb(245, 222, 179),
+        "white" => Rgb(255, 255, 255),
+        "whitesmoke" => Rgb(245, 245, 245),
+        "yellow" => Rgb(255, 255, 0),
+        "yellowgreen" => Rgb(154, 205, 50),
         _ => return None,
     })
 }
@@ -1275,16 +1482,31 @@ mod tests {
         assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
         assert!(base64_decode("@@").is_none());
         assert_eq!(data_uri("data:text/plain,a%20b").unwrap(), b"a b");
+        assert_eq!(data_uri("DATA:text/plain;charset=utf-8;base64,Zm9v").unwrap(), b"foo");
+        assert_eq!(data_uri("data:text/plain; base64 ;charset=utf-8,Zm9v").unwrap(), b"foo");
+        assert_eq!(data_uri("data:image/png;base64,Zm9v%2B%2F%3D").unwrap(), base64_decode("Zm9v+/=").unwrap());
     }
 
     #[test]
     fn colors() {
         assert_eq!(parse_color("#f00"), Some(Rgb(255, 0, 0)));
+        assert_eq!(parse_color("#f00f"), Some(Rgb(255, 0, 0)));
         assert_eq!(parse_color("#0080FF"), Some(Rgb(0, 128, 255)));
+        assert_eq!(parse_color("#0080FF80"), Some(Rgb(0, 128, 255)));
         assert_eq!(parse_color("rgb(1, 2, 3)"), Some(Rgb(1, 2, 3)));
+        assert_eq!(parse_color("rgb(1 2 3)"), Some(Rgb(1, 2, 3)));
+        assert_eq!(parse_color("rgb(1 2 3 / 0.5)"), Some(Rgb(1, 2, 3)));
+        assert_eq!(parse_color("rgba(1, 2, 3, 0.5)"), Some(Rgb(1, 2, 3)));
+        assert_eq!(parse_color("hsl(0, 100%, 50%)"), Some(Rgb(255, 0, 0)));
+        assert_eq!(parse_color("hsl(120deg 100% 50% / 0.8)"), Some(Rgb(0, 255, 0)));
         assert_eq!(parse_color("navy"), Some(Rgb(0, 0, 128)));
+        assert_eq!(parse_color("coral"), Some(Rgb(255, 127, 80)));
+        assert_eq!(parse_color("gold"), Some(Rgb(255, 215, 0)));
+        assert_eq!(parse_color("pink"), Some(Rgb(255, 192, 203)));
         assert_eq!(parse_color("#zz"), None);
+        assert_eq!(parse_color("#12"), None);
         assert_eq!(parse_color("rgb(1)"), None);
+        assert_eq!(parse_color("hsl(1)"), None);
     }
 
     #[test]
