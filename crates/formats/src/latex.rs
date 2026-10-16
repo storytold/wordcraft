@@ -584,10 +584,21 @@ const MATH_SYMBOLS: &[(char, &str)] = &[
     ('⌈', "lceil"),
     ('⌉', "rceil"),
     ('°', "circ"),
+    ('⊤', "top"),
+    ('⋆', "star"),
+    ('∙', "bullet"),
+    ('≺', "prec"),
+    ('≻', "succ"),
+    ('≼', "preceq"),
+    ('≽', "succeq"),
+    ('⊨', "models"),
+    ('⊢', "vdash"),
+    ('⊣', "dashv"),
 ];
 
 /// Extra input spellings mapped to the same symbols.
 const MATH_ALIASES: &[(&str, char)] = &[
+    ("bot", '⊥'),
     ("le", '≤'),
     ("ge", '≥'),
     ("ne", '≠'),
@@ -610,6 +621,8 @@ const MATH_ALIASES: &[(&str, char)] = &[
     ("Vert", '‖'),
     ("lvert", '|'),
     ("rvert", '|'),
+    ("setminus", '∖'),
+    ("backslash", '∖'),
 ];
 
 /// Operator names written upright in both formats.
@@ -1360,6 +1373,13 @@ fn text_symbol(name: &str) -> Option<&'static str> {
         "XeTeX" => "XeTeX",
         "LuaTeX" => "LuaTeX",
         "BibTeX" => "BibTeX",
+        "checkmark" => "✓",
+        "textminus" => "−",
+        "textperthousand" => "‰",
+        "textcelsius" => "℃",
+        "textnumero" => "№",
+        "textprime" => "′",
+        "textasciimacron" => "¯",
         _ => return None,
     })
 }
@@ -1608,7 +1628,7 @@ fn size_of(name: &str) -> Option<f32> {
 
 /// A named colour (`xcolor`'s base names).
 fn named_color(name: &str) -> Option<Rgb> {
-    Some(match name.trim() {
+    Some(match name.trim().to_ascii_lowercase().as_str() {
         "black" => Rgb(0, 0, 0),
         "white" => Rgb(255, 255, 255),
         "red" => Rgb(255, 0, 0),
@@ -1617,9 +1637,9 @@ fn named_color(name: &str) -> Option<Rgb> {
         "cyan" => Rgb(0, 255, 255),
         "magenta" => Rgb(255, 0, 255),
         "yellow" => Rgb(255, 255, 0),
-        "gray" => Rgb(128, 128, 128),
-        "darkgray" => Rgb(64, 64, 64),
-        "lightgray" => Rgb(191, 191, 191),
+        "gray" | "grey" => Rgb(128, 128, 128),
+        "darkgray" | "darkgrey" => Rgb(64, 64, 64),
+        "lightgray" | "lightgrey" => Rgb(191, 191, 191),
         "brown" => Rgb(191, 128, 64),
         "lime" => Rgb(191, 255, 0),
         "olive" => Rgb(128, 128, 0),
@@ -1632,11 +1652,14 @@ fn named_color(name: &str) -> Option<Rgb> {
     })
 }
 
-/// `\textcolor[model]{spec}`: HTML, RGB (0–255) and rgb (0–1) models, or a name.
+/// `\textcolor[model]{spec}`: HTML, RGB (0–255), rgb (0–1), cmyk (0–1), gray models, or a name.
 fn parse_color(model: Option<&str>, spec: &str) -> Option<Rgb> {
     let spec = spec.trim();
     match model.map(str::trim) {
-        Some("HTML") => crate::model::parse_color(&format!("#{spec}")),
+        Some(m) if m.eq_ignore_ascii_case("html") => {
+            let hex = spec.strip_prefix('#').unwrap_or(spec);
+            crate::model::parse_color(&format!("#{hex}"))
+        }
         Some("RGB") => {
             let v: Vec<u8> = spec.split(',').filter_map(|x| x.trim().parse::<f32>().ok()).map(|x| x.clamp(0.0, 255.0) as u8).collect();
             match v.as_slice() {
@@ -1656,7 +1679,24 @@ fn parse_color(model: Option<&str>, spec: &str) -> Option<Rgb> {
                 _ => None,
             }
         }
-        Some("gray") => spec.parse::<f32>().ok().filter(|x| x.is_finite()).map(|x| {
+        Some(m) if m.eq_ignore_ascii_case("cmyk") => {
+            let v: Vec<f32> = spec
+                .split(',')
+                .filter_map(|x| x.trim().parse::<f32>().ok())
+                .filter(|x| x.is_finite())
+                .map(|x| x.clamp(0.0, 1.0))
+                .collect();
+            match v.as_slice() {
+                [c, m, y, k] => {
+                    let r = ((1.0 - c) * (1.0 - k) * 255.0).round() as u8;
+                    let g = ((1.0 - m) * (1.0 - k) * 255.0).round() as u8;
+                    let b = ((1.0 - y) * (1.0 - k) * 255.0).round() as u8;
+                    Some(Rgb(r, g, b))
+                }
+                _ => None,
+            }
+        }
+        Some(m) if m.eq_ignore_ascii_case("gray") || m.eq_ignore_ascii_case("grey") => spec.parse::<f32>().ok().filter(|x| x.is_finite()).map(|x| {
             let g = (x.clamp(0.0, 1.0) * 255.0).round() as u8;
             Rgb(g, g, g)
         }),
@@ -3074,5 +3114,30 @@ Caf\'e na\"ive \c{c}a \v{s}\'{e} and {\bfseries grouped bold} after.
         let FBlock::Table(bt) = &back.blocks[0] else { panic!() };
         assert_eq!(bt.widths, vec![100.0, 200.0]);
         assert_eq!(bt.rows[1][0].colspan, 2);
+    }
+
+    #[test]
+    fn latex_color_models_and_named_colors() {
+        assert_eq!(parse_color(Some("cmyk"), "0, 1, 1, 0"), Some(Rgb(255, 0, 0)));
+        assert_eq!(parse_color(Some("CMYK"), "1, 0, 1, 0"), Some(Rgb(0, 255, 0)));
+        assert_eq!(parse_color(Some("html"), "#0000FF"), Some(Rgb(0, 0, 255)));
+        assert_eq!(parse_color(Some("HTML"), "FF00FF"), Some(Rgb(255, 0, 255)));
+        assert_eq!(parse_color(Some("grey"), "0.5"), Some(Rgb(128, 128, 128)));
+        assert_eq!(parse_color(None, "Grey"), Some(Rgb(128, 128, 128)));
+        assert_eq!(parse_color(None, "darkgrey"), Some(Rgb(64, 64, 64)));
+        assert_eq!(parse_color(None, "LightGrey"), Some(Rgb(191, 191, 191)));
+        assert_eq!(parse_color(None, "Blue"), Some(Rgb(0, 0, 255)));
+    }
+
+    #[test]
+    fn latex_text_symbols_and_math_extensions() {
+        let doc = import(b"\\checkmark \\textminus \\textperthousand \\textcelsius \\textnumero");
+        let txt = doc.plain_text(Default::default());
+        assert!(txt.contains("✓−‰℃№"), "{txt}");
+
+        let linear = latex_to_linear("\\top \\bot \\star \\bullet \\prec \\succ \\preceq \\succeq \\models \\vdash \\dashv");
+        assert_eq!(linear, "⊤ ⊥ ⋆ ∙ ≺ ≻ ≼ ≽ ⊨ ⊢ ⊣");
+        let tex = linear_to_latex("⊤ ⊥ ⋆ ∙ ≺ ≻ ≼ ≽ ⊨ ⊢ ⊣");
+        assert_eq!(tex, "\\top \\perp \\star \\bullet \\prec \\succ \\preceq \\succeq \\models \\vdash \\dashv");
     }
 }
