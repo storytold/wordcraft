@@ -2672,3 +2672,23 @@ template	Letter	Thư
 # Reading Mode column widths (#1040)
 	Narrow	Hẹp
 	Medium	Trung bình
+# Recovery page, Insert Link places, crop and save messages
+	Bookmarks	Dấu trang
+	Continue without restoring	Tiếp tục mà không khôi phục
+	Couldn't save {name}, so it is still open and nothing was lost: {error}	Không lưu được {name}, nên tài liệu vẫn đang mở và không mất gì: {error}
+	Crop on the page works on unturned pictures: set Rotation to 0° first, or use the crop boxes	Cắt trên trang chỉ dùng được với ảnh chưa xoay: hãy đặt Xoay về 0° trước, hoặc dùng các ô cắt
+	Discard	Loại bỏ
+	Discard the recovery copy of {name}?	Loại bỏ bản khôi phục của {name}?
+	Discard…	Loại bỏ…
+	Local recovery is unavailable or still loading.	Khôi phục cục bộ không khả dụng hoặc vẫn đang tải.
+	No recovery copies.	Không có bản khôi phục nào.
+	Nothing of this type in the document.	Tài liệu không có mục nào thuộc loại này.
+	Recover documents	Khôi phục tài liệu
+	Recovery copy	Bản khôi phục
+	Recovery is disabled while this document has a password.	Khôi phục bị tắt khi tài liệu này có mật khẩu.
+	Restore	Khôi phục
+	Restore opens an unsaved copy. Your original file stays unchanged.	Khôi phục sẽ mở một bản sao chưa lưu. Tệp gốc của bạn vẫn giữ nguyên.
+	Select a place in this document:	Chọn một vị trí trong tài liệu này:
+	This cannot be undone. Your original file stays unchanged.	Không thể hoàn tác thao tác này. Tệp gốc của bạn vẫn giữ nguyên.
+	Top of the Document	Đầu tài liệu
+	select a picture first	hãy chọn một ảnh trước

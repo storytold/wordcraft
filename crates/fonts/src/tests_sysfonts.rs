@@ -345,7 +345,8 @@ fn chinese_fonts_are_listed_by_their_chinese_names_in_a_chinese_interface() {
     // #505: the font list showed fonts only by their English names (SimSun, never 宋体). Here a
     // Chinese font is the second face of a collection, as in simsun.ttc and msyh.ttc.
     let dir = font_dir("localized");
-    let song = with_family_names("SourceSans3-Regular.ttf", &[(0x0409, "Songti Test"), (0x0804, "测试宋体"), (0x0404, "測試宋體")]);
+    let song =
+        with_family_names("SourceSans3-Regular.ttf", &[(0x0409, "Songti Test"), (0x0804, "测试宋体"), (0x0404, "測試宋體"), (0x0412, "테스트바탕")]);
     std::fs::write(dir.join("song.ttc"), collection(&[renamed("SourceSans3-Semibold.ttf"), song])).unwrap();
     let db = FontDb::with_font_dirs(vec![dir]);
     // English names in the English list; the Chinese names in place of them in a Chinese one.
@@ -354,6 +355,10 @@ fn chinese_fonts_are_listed_by_their_chinese_names_in_a_chinese_interface() {
     let hans = db.families_in("zh-hans");
     assert!(has(&hans, "测试宋体") && !has(&hans, "Songti Test") && has(&hans, FAMILY), "{hans:?}");
     assert!(has(&db.families_in("zh-hant"), "測試宋體"));
+    // A Korean interface lists it by its Korean name, and the Korean name finds it.
+    let ko = db.families_in("ko");
+    assert!(has(&ko, "테스트바탕") && !has(&ko, "Songti Test") && !has(&ko, "测试宋体"), "{ko:?}");
+    assert!(db.has_family("테스트바탕"));
     assert_eq!(db.localized_names("zh-hans"), [("Songti Test".to_string(), "测试宋体".to_string())]);
     // Either name finds the font, before and after it loads.
     assert!(db.has_family("测试宋体") && db.has_family("測試宋體"));
@@ -372,6 +377,9 @@ fn chinese_fonts_are_listed_by_their_chinese_names_in_a_chinese_interface() {
         ("zh-hant", "zh-Hans", false),
         ("ja", "ja-JP", true),
         ("ja", "ko-KR", false),
+        ("ko", "ko-KR", true),
+        ("ko", "ko", true),
+        ("ko", "ja-JP", false),
         ("en", "zh-Hans", false),
     ] {
         assert_eq!(name_language_matches(ui, tag), ok, "{ui} {tag}");

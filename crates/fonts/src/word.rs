@@ -66,7 +66,37 @@ fn substitutes(family: &str) -> &'static [&'static str] {
         "DejaVu Serif",
         "Source Serif 4",
     ];
+    // Korean document fonts (Batang, Gulim, Hancom's 함초롬 faces…): installed Korean faces, then
+    // open ones (Noto CJK KR, Nanum), so Hangul keeps a Korean design and the serif/sans split.
+    const KO_SERIF: &[&str] = &[
+        "Batang",
+        "Noto Serif CJK KR",
+        "Noto Serif KR",
+        "Source Han Serif K",
+        "NanumMyeongjo",
+        "AppleMyungjo",
+        "Malgun Gothic",
+        "Apple SD Gothic Neo",
+        "Noto Sans CJK KR",
+        "Noto Serif",
+        "Source Serif 4",
+    ];
+    const KO_SANS: &[&str] = &[
+        "Malgun Gothic",
+        "Apple SD Gothic Neo",
+        "Noto Sans CJK KR",
+        "Noto Sans KR",
+        "Source Han Sans K",
+        "NanumGothic",
+        "Gulim",
+        "Dotum",
+        "Noto Sans",
+        "Source Sans 3",
+    ];
     let f = family.to_ascii_lowercase();
+    if let Some(serif) = korean_serif(&f) {
+        return if serif { KO_SERIF } else { KO_SANS };
+    }
     if is_hebrew(&f) {
         return HEBREW;
     }
@@ -192,6 +222,22 @@ fn is_persian_sans(f: &str) -> bool {
         "arabic transparent",
     ];
     NAMES.contains(&f) || f.starts_with("iransans") || f.starts_with("iranyekan")
+}
+
+/// Korean document fonts: `Some(true)` for the serif (명조/바탕) designs, `Some(false)` for the
+/// sans (고딕/돋움/굴림) ones, `None` for anything else. `f` is lowercased.
+fn korean_serif(f: &str) -> Option<bool> {
+    const SERIF: &[&str] = &["batang", "batangche", "gungsuh", "gungsuhche", "hcr batang", "hcr batangext", "applemyungjo"];
+    const SANS: &[&str] =
+        &["gulim", "gulimche", "dotum", "dotumche", "malgun gothic", "hcr dotum", "hcr dotumext", "nanumgothic", "apple sd gothic neo"];
+    let has = |words: &[&str]| words.iter().any(|w| f.contains(w));
+    if SERIF.contains(&f) || has(&["바탕", "궁서", "명조", "myeongjo", "serif kr", "serif cjk kr"]) {
+        Some(true)
+    } else if SANS.contains(&f) || has(&["굴림", "돋움", "고딕", "sans kr", "sans cjk kr"]) {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 /// Hebrew document fonts.
@@ -362,5 +408,24 @@ mod tests {
         }
         // Generic names with "Hebrew" in them also get Hebrew substitutions
         assert!(substitutes("SomeFont Hebrew").contains(&"Noto Sans Hebrew"));
+    }
+
+    #[test]
+    fn korean_fonts_substitute_korean_faces_keeping_serif_and_sans() {
+        for f in ["Batang", "바탕", "BatangChe", "바탕체", "Gungsuh", "궁서", "함초롬바탕", "HCR Batang", "Noto Serif KR", "나눔명조"]
+        {
+            let list = substitutes(f);
+            assert!(list.contains(&"Noto Serif CJK KR") && list.contains(&"NanumMyeongjo"), "{f}");
+            // A Korean serif first, the Korean sans faces only after the serif ones.
+            assert!(list.iter().position(|x| *x == "Noto Serif KR") < list.iter().position(|x| *x == "Malgun Gothic"), "{f}");
+        }
+        for f in ["Gulim", "굴림", "Dotum", "돋움", "DotumChe", "Malgun Gothic", "맑은 고딕", "함초롬돋움", "HCR Dotum", "NanumGothic"] {
+            let list = substitutes(f);
+            assert_eq!(list.first(), Some(&"Malgun Gothic"), "{f}");
+            assert!(list.contains(&"Noto Sans CJK KR") && list.contains(&"NanumGothic") && !list.contains(&"Batang"), "{f}");
+        }
+        // Latin families are unchanged.
+        assert_eq!(substitutes("Georgia").first(), Some(&"Caladea"));
+        assert_eq!(substitutes("Calibri").first(), Some(&"Carlito"));
     }
 }

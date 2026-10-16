@@ -83,6 +83,8 @@ pub fn script_fallbacks(c: char) -> &'static [&'static str] {
         Script::Devanagari => &["Nirmala UI", "Mangal", "Kohinoor Devanagari", "Noto Sans Devanagari", "Noto Serif Devanagari", "Lohit Devanagari"],
         Script::Bengali => &["Nirmala UI", "Vrinda", "Kohinoor Bangla", "Noto Sans Bengali", "Noto Serif Bengali", "Lohit Bengali"],
         Script::Thai => &["Leelawadee UI", "Leelawadee", "Tahoma", "Thonburi", "Noto Sans Thai", "Noto Serif Thai"],
+        // Hangul: a Korean face rather than whichever Chinese or Japanese CJK font also has it.
+        Script::Hangul => &["Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans CJK KR", "Noto Sans KR", "Source Han Sans K", "NanumGothic"],
         Script::Lao => &["Leelawadee UI", "Lao UI", "Noto Sans Lao", "Noto Serif Lao", "Lao Sangam MN"],
         Script::Tamil | Script::Telugu | Script::Kannada | Script::Malayalam | Script::Gujarati | Script::Gurmukhi | Script::Oriya => &["Nirmala UI"],
         _ => &[],
@@ -131,5 +133,8 @@ mod tests {
         assert!(fallback_rank('မ', "Noto Sans Myanmar") < fallback_rank('မ', "Myanmar Sangam MN"));
         assert!(fallback_rank('த', "Noto Sans Tamil") < fallback_rank('த', "Arial"));
         assert_eq!(fallback_rank('a', "Arial"), fallback_rank('a', "Noto Sans"));
+        // Hangul looks for a Korean face first; Han ideographs keep the general order.
+        assert_eq!(script_fallbacks('한').first(), Some(&"Malgun Gothic"));
+        assert!(script_fallbacks('語').is_empty());
     }
 }

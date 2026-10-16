@@ -14,7 +14,7 @@ use crate::options::MeasureExt;
 use crate::theme::{Tokens, semibold};
 
 /// Number styles a level can have: OOXML name and a sample.
-const STYLES: [(&str, &str); 10] = [
+const STYLES: [(&str, &str); 14] = [
     ("decimal", "1, 2, 3, …"),
     ("lowerLetter", "a, b, c, …"),
     ("upperLetter", "A, B, C, …"),
@@ -23,9 +23,19 @@ const STYLES: [(&str, &str); 10] = [
     ("decimalZero", "01, 02, 03, …"),
     ("ordinal", "1st, 2nd, 3rd, …"),
     ("cardinalText", "One, Two, Three, …"),
+    ("ganada", "가, 나, 다, …"),
+    ("chosung", "ㄱ, ㄴ, ㄷ, …"),
+    ("koreanCounting", "일, 이, 삼, …"),
+    ("koreanLegal", "하나, 둘, 셋, …"),
     ("bullet", "•"),
     ("none", ""),
 ];
+
+/// Is style `k` offered for a level now set to `current`? The Korean styles are, with a Korean
+/// interface or when the level already uses one.
+fn offered(k: &str, current: &str) -> bool {
+    !matches!(k, "ganada" | "chosung" | "koreanCounting" | "koreanLegal") || k == current || crate::i18n::current().prefers_korean()
+}
 
 /// One level of the Define New Multilevel List form. Positions are in the interface unit.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -196,7 +206,8 @@ pub fn define_list(app: &mut WordApp, ui: &mut Ui, f: &mut ListForm) -> bool {
         ui.label(tl!("Number style for this level:"));
         let current = STYLES.iter().find(|(k, _)| *k == l.format).map(|(_, s)| *s).unwrap_or("");
         egui::ComboBox::from_id_salt("mll_style").selected_text(style_label(current)).show_ui(ui, |ui| {
-            for (k, s) in STYLES {
+            let was = l.format.clone();
+            for (k, s) in STYLES.into_iter().filter(|(k, _)| offered(k, &was)) {
                 if ui.selectable_label(l.format == k, style_label(s)).clicked() {
                     // A new style puts this level's number in the text if it had none (a bullet
                     // its character).
@@ -571,6 +582,32 @@ mod tests {
         let mut b = app();
         assert!(b.execute("list.define", json!({})).is_err());
         assert!(b.dialog.is_none());
+    }
+
+    /// Korean number styles (가, 나, 다 / ㄱ, ㄴ, ㄷ / 일, 이, 삼 / 하나, 둘, 셋) are offered with a
+    /// Korean interface, or when the level already has one, and define a list numbered that way.
+    #[test]
+    fn korean_number_styles_are_offered_with_a_korean_interface() {
+        let korean = ["ganada", "chosung", "koreanCounting", "koreanLegal"];
+        assert!(korean.iter().all(|k| !super::offered(k, "decimal")) && super::offered("decimal", "decimal"));
+        assert!(super::offered("ganada", "ganada") && !super::offered("chosung", "ganada"));
+        let ko = crate::i18n::Lang::from_code("ko");
+        crate::i18n::set_current(ko.unwrap_or(crate::i18n::Lang::EN));
+        let offered = korean.iter().all(|k| super::offered(k, "decimal"));
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        assert!(offered);
+        let mut a = app();
+        a.run("text.insert", json!({"text": "Intro"})).unwrap();
+        a.run("list.define", json!({})).unwrap();
+        let Some(Dialog::DefineList { form }) = &mut a.dialog else { panic!("dialog") };
+        form.levels[0].format = "ganada".into();
+        form.levels[1].format = "chosung".into();
+        assert_eq!((form.sample(0), form.sample(1)), ("가.".to_string(), "ㄱ.".to_string()));
+        let params = form.params();
+        a.dialog = None;
+        a.run("list.define", params).unwrap();
+        let got = a.session.run("list.get", &json!({})).unwrap();
+        assert_eq!(got["levels"][0]["format"].as_str(), Some("ganada"));
     }
 
     /// #328: the Tracking group's launcher opens Track Changes Options; OK changes the per-user

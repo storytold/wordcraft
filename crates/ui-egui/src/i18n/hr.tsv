@@ -2632,3 +2632,23 @@ preview	Title	Naslov
 	Bottom Right Cell	Donja desna ćelija
 	Inside Horizontal Border	Unutarnji vodoravni obrub
 	Inside Vertical Border	Unutarnji okomiti obrub
+# Recovery page, Insert Link places, crop and save messages
+	Bookmarks	Knjižne oznake
+	Continue without restoring	Nastavi bez vraćanja
+	Couldn't save {name}, so it is still open and nothing was lost: {error}	Spremanje dokumenta {name} nije uspjelo, pa je i dalje otvoren i ništa nije izgubljeno: {error}
+	Crop on the page works on unturned pictures: set Rotation to 0° first, or use the crop boxes	Obrezivanje na stranici radi samo na nezakrenutim slikama: najprije postavite zakretanje na 0° ili upotrijebite okvire za obrezivanje
+	Discard	Odbaci
+	Discard the recovery copy of {name}?	Odbaciti kopiju za oporavak dokumenta {name}?
+	Discard…	Odbaci…
+	Local recovery is unavailable or still loading.	Lokalni oporavak nije dostupan ili se još učitava.
+	No recovery copies.	Nema kopija za oporavak.
+	Nothing of this type in the document.	U dokumentu nema ničega ove vrste.
+	Recover documents	Oporavak dokumenata
+	Recovery copy	Kopija za oporavak
+	Recovery is disabled while this document has a password.	Oporavak je isključen dok ovaj dokument ima lozinku.
+	Restore	Vrati
+	Restore opens an unsaved copy. Your original file stays unchanged.	Vraćanje otvara nespremljenu kopiju. Izvorna datoteka ostaje nepromijenjena.
+	Select a place in this document:	Odaberite mjesto u ovom dokumentu:
+	This cannot be undone. Your original file stays unchanged.	Ovo se ne može poništiti. Izvorna datoteka ostaje nepromijenjena.
+	Top of the Document	Početak dokumenta
+	select a picture first	najprije odaberite sliku
