@@ -282,6 +282,7 @@
 	Design	Entwurf
 	development build	Entwicklungsbuild
 	Diagonal	Diagonal
+	Diagram	Diagramm
 	Diamond	Raute
 	Dictate	Diktieren
 	Different First Page	Andere erste Seite
@@ -856,6 +857,7 @@
 	Undo {n} Actions	{n} Aktionen rückgängig
 	Ungroup	Gruppierung aufheben
 	Up	Nach oben
+	Update Diagram	Diagramm aktualisieren
 	Update Field	Feld aktualisieren
 	Update Index	Index aktualisieren
 	Update Style to Match Selection	Formatvorlage an Auswahl anpassen
@@ -1307,6 +1309,7 @@
 	Darkroom	Darkroom
 	Gallery	Gallery
 	Sketchbook	Sketchbook
+	Edit Diagram	Diagramm bearbeiten
 	Change Picture…	Bild ändern…
 	Font…	Schriftart…
 	Paragraph…	Absatz…

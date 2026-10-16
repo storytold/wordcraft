@@ -9,6 +9,7 @@ pub mod column;
 pub mod connectors;
 pub mod controls;
 pub mod design;
+pub mod diagram;
 pub mod draw;
 pub mod edit;
 pub mod equation;
@@ -95,6 +96,7 @@ pub fn registry() -> Registry {
     v.extend(canvas::specs());
     v.extend(wordart::specs());
     v.extend(connectors::specs());
+    v.extend(diagram::specs());
     v.extend(tools::specs());
     v.extend(templates::specs());
     v.extend(protect::specs());

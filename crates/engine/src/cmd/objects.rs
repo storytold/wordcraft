@@ -12,7 +12,7 @@ use wordcraft_geom::Spin;
 use super::sel_result;
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
-fn has_picture(s: &Session) -> Option<&'static str> {
+pub(crate) fn has_picture(s: &Session) -> Option<&'static str> {
     match selected(s) {
         Some((_, InlineObject::Image { .. })) => None,
         _ => Some("select a picture first"),
@@ -917,7 +917,7 @@ fn alt_text(s: &mut Session, v: &Value) -> CmdResult {
     })
 }
 
-fn with_obj(s: &mut Session, f: impl Fn(&mut InlineObject)) -> CmdResult {
+pub(crate) fn with_obj(s: &mut Session, f: impl Fn(&mut InlineObject)) -> CmdResult {
     let (pos, _) = selected(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
     let o = edit_obj(s, &pos, f)?;
     Ok(json!({"object": serde_json::to_value(o).unwrap_or(Value::Null)}))

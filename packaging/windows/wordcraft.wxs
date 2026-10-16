@@ -5,10 +5,12 @@
   Built by package.ps1:
 
     wix build wordcraft.wxs -arch x64 -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext
-      -d Version=1.2.3 -d BinDir=... -d IconPath=... -d LicenseRtf=... -o out.msi
+      -d Version=1.2.3 -d BinDir=... -d IconPath=... -d LicenseRtf=... [-d DrawioDir=...] -o out.msi
 
   Per-machine install into Program Files with a Start Menu shortcut. The installer shows the
-  standard WiX dialogs: welcome + license, progress, and a finish page.
+  standard WiX dialogs: welcome + license, progress, and a finish page. `DrawioDir` is optional:
+  given (by package.ps1, when vendor/drawio is staged) the draw.io app the diagram editor runs is
+  harvested into the install folder.
 
   UpgradeCode and the component GUIDs below belong to WordCraft alone. Never copy them from (or
   into) a sibling Craft app: Windows Installer treats every package sharing an UpgradeCode as one
@@ -61,6 +63,14 @@
 
     <Feature Id="Main" Title="WordCraft" Level="1">
       <ComponentGroupRef Id="WordcraftFiles" />
+<?ifdef DrawioDir?>
+      <!-- The draw.io web app the diagram editor runs (Apache-2.0; see ATTRIBUTION.md). It is a
+           folder of static files, so it is harvested rather than listed file by file, into `drawio`
+           beside wordcraft.exe, which is where the app looks for it. package.ps1 passes DrawioDir
+           only when vendor/drawio is staged: without the app the editor falls back to draw.io's
+           embed site, so a build with none still installs. -->
+      <Files Directory="INSTALLFOLDER" Subdirectory="drawio" Include="$(var.DrawioDir)\**" />
+<?endif?>
     </Feature>
   </Package>
 

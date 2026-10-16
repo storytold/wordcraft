@@ -317,6 +317,7 @@
 	No document is open. Create a document or open one first.	Není otevřen žádný dokument. Nejprve dokument vytvořte nebo otevřete.
 	development build	vývojové sestavení
 	Diagonal	Diagonální
+	Diagram	Diagram
 	Diamond	Kosočtverec
 	Dictate	Diktovat
 	Different First Page	Jiné na první stránce
@@ -1279,6 +1280,7 @@
 	Ungroup	Oddělit
 	Unlink\nCitations	Odpojit\ncitace
 	Up	Nahoru
+	Update Diagram	Aktualizovat diagram
 	Update Field	Aktualizovat pole
 	Update Index	Aktualizovat rejstřík
 	Update Style to Match Selection	Aktualizovat styl podle výběru
@@ -1690,6 +1692,7 @@
 	Darkroom	Temná komora
 	Gallery	Galerie
 	Sketchbook	Skicák
+	Edit Diagram	Upravit diagram
 	Change Picture…	Změnit obrázek…
 	Font…	Písmo…
 	Paragraph…	Odstavec…

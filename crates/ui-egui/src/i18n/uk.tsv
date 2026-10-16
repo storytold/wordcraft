@@ -348,6 +348,7 @@
 	WordCraft is now the default app for Word documents.	WordCraft тепер типова програма для документів Word.
 	development build	Збірка для розробки
 	Diagonal	Діагональ
+	Diagram	Діаграма
 	Diamond	Ромб
 	Dictate	Диктувати
 	Different First Page	Інша перша сторінка
@@ -955,6 +956,7 @@
 	Ungroup	Розгрупувати
 	Unformatted Text	Неформатований текст
 	Up	Угору
+	Update Diagram	Оновити діаграму
 	Update Field	Оновити поле
 	Update Index	Оновити покажчик
 	Update Style to Match Selection	Оновити стиль за виділенням
@@ -1398,6 +1400,7 @@
 	Darkroom	Фотолабораторія
 	Gallery	Галерея
 	Sketchbook	Альбом для ескізів
+	Edit Diagram	Редагувати діаграму
 	Change Picture…	Змінити зображення…
 	Font…	Шрифт…
 	Paragraph…	Абзац…

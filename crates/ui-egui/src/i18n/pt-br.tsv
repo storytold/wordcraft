@@ -341,6 +341,7 @@
 	WordCraft is now the default app for Word documents.	O WordCraft agora é o aplicativo padrão para documentos do Word.
 	development build	versão de desenvolvimento
 	Diagonal	Diagonal
+	Diagram	Diagrama
 	Diamond	Losango
 	Dictate	Ditar
 	Different First Page	Primeira página diferente
@@ -927,6 +928,7 @@
 	Undo {n} Actions	Desfazer {n} ações
 	Ungroup	Desagrupar
 	Up	Para cima
+	Update Diagram	Atualizar diagrama
 	Update Field	Atualizar campo
 	Update Index	Atualizar índice
 	Update Style to Match Selection	Atualizar estilo para corresponder à seleção
@@ -1398,6 +1400,7 @@
 	Darkroom	Câmara escura
 	Gallery	Galeria
 	Sketchbook	Caderno de esboços
+	Edit Diagram	Editar diagrama
 	Change Picture…	Alterar imagem…
 	Font…	Fonte…
 	Paragraph…	Parágrafo…

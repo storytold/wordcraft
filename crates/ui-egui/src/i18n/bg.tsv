@@ -275,6 +275,7 @@
 	Delete Table	Изтриване на таблица
 	Design	Дизайн
 	Diagonal	Диагонал
+	Diagram	Диаграма
 	Diamond	Ромб
 	Dictate	Диктуване
 	Different First Page	Различна първа страница
@@ -886,6 +887,7 @@
 	Undo {action}	Отмяна: {action}
 	Unformatted Text	Неформатиран текст
 	Up	Нагоре
+	Update Diagram	Актуализиране на диаграма
 	Update Field	Актуализиране на полето
 	Update Index	Актуализиране на индекса
 	Update Style to Match Selection	Актуализиране на стила според избраното
@@ -1326,6 +1328,7 @@
 	Darkroom	Тъмна стая
 	Gallery	Галерия
 	Sketchbook	Скицник
+	Edit Diagram	Редактиране на диаграма
 	Change Picture…	Смяна на изображението…
 	Font…	Шрифт…
 	Paragraph…	Абзац…

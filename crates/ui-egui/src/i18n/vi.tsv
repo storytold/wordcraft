@@ -269,6 +269,7 @@
 	Delete Table	Xóa bảng
 	Design	Thiết kế
 	Diagonal	Chéo
+	Diagram	Sơ đồ
 	Diamond	Hình thoi
 	Dictate	Soạn bằng giọng nói
 	Different First Page	Trang đầu khác biệt
@@ -878,6 +879,7 @@
 	Undo {action}	Hoàn tác {action}
 	Unformatted Text	Văn bản không định dạng
 	Up	Lên
+	Update Diagram	Cập nhật sơ đồ
 	Update Field	Cập nhật trường
 	Update Index	Cập nhật chỉ mục
 	Update Style to Match Selection	Cập nhật kiểu theo vùng chọn
@@ -1318,6 +1320,7 @@
 	Darkroom	Darkroom
 	Gallery	Gallery
 	Sketchbook	Sketchbook
+	Edit Diagram	Sửa sơ đồ
 	Change Picture…	Đổi ảnh…
 	Font…	Phông chữ…
 	Paragraph…	Đoạn…

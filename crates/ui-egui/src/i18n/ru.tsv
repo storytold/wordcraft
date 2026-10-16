@@ -199,6 +199,7 @@
 	Title Bar	Строка заголовка
 	development build	сборка для разработки
 	Diagonal	Диагональ
+	Diagram	Диаграмма
 	Diamond	Ромб
 	Dictate	Диктовка
 	Different First Page	Особая первая страница
@@ -795,6 +796,7 @@ preview	Title	Пример
 	Undo 1 Action	Отменить действие
 	Undo {n} Actions	Отменить действий: {n}
 	Up	Вверх
+	Update Diagram	Обновить диаграмму
 	Update Field	Обновить поле
 	Update Index	Обновить указатель
 	Update Style to Match Selection	Обновить стиль по выделенному фрагменту
@@ -1542,6 +1544,7 @@ preview	Title	Пример
 	PRs	PR
 	First	Первый
 	Last	Последний
+	Edit Diagram	Изменить диаграмму
 	Change Picture…	Заменить рисунок…
 	Size and Crop…	Размер и обрезка…
 	Insert Columns to the Left	Вставить столбцы слева

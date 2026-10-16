@@ -34,6 +34,7 @@ pub mod control;
 pub mod credits;
 pub mod crop;
 pub mod desktop_theme;
+pub mod diagram;
 pub mod dialogs;
 pub mod dialogs_chart;
 pub mod dialogs_controls;
@@ -424,6 +425,8 @@ pub struct WordApp {
     pub printing: printing::State,
     print_feedback_seen: Option<printing::Feedback>,
     pub canvas: canvas::CanvasState,
+    /// The draw.io editor opened over a picture in the document (`diagram`).
+    pub diagram: diagram::Diagram,
     /// Content control frames, check boxes and lists on the page.
     pub controls: content_controls::ControlUi,
     pub dialog: Option<dialogs::Dialog>,
@@ -630,6 +633,7 @@ impl WordApp {
             saves_in_flight: Vec::new(),
             awaiting_save: None,
             change_picture_target: None,
+            diagram: diagram::Diagram::default(),
             recipient_list_pending: false,
             font_generation: wordcraft_fonts::FontDb::global().generation(),
             dialog_pick: None,
@@ -1335,6 +1339,33 @@ impl WordApp {
                 self.pick_picture();
                 json!({"pending": self.change_picture_target.is_some()})
             }
+            // A draw.io picture (its PNG carries the diagram's XML): edit it where it is, as
+            // Word opens a Visio object in place. Opens on the next frame, which is the first
+            // one with the window (`WordApp::diagram_frame`).
+            "ui.editDiagram" => {
+                // With `media` the caller already knows the picture (the double-click path);
+                // without it, the selected one is edited.
+                let media = match p.get("media").and_then(|v| v.as_str()) {
+                    Some(m) => m.to_owned(),
+                    None => {
+                        let Some(media) = self.selected_picture_media() else {
+                            log::warn!("diagram: edit asked for, but no picture is selected");
+                            return Some(Err("select a picture first".into()));
+                        };
+                        media
+                    }
+                };
+                if !self.session.doc.media.get(&media).is_some_and(|b| wordcraft_diagram::png::is_drawio(b)) {
+                    log::warn!("diagram: picture {media} carries no draw.io data");
+                    return Some(Err("the picture isn't a draw.io diagram: export it from draw.io as a PNG with a copy of the diagram in it".into()));
+                }
+                if let Some(why) = crate::diagram::unsupported() {
+                    return Some(Err(why.into()));
+                }
+                log::info!("diagram: opening the editor for picture {media}");
+                self.diagram.request(media.clone());
+                json!({"pending": "editDiagram", "media": media})
+            }
             // The page's context menu at the caret, as Shift+F10 or the Menu key opens it (#821).
             "ui.contextMenu" => {
                 self.canvas.context_menu_from_keys = true;
@@ -1975,6 +2006,48 @@ impl WordApp {
         raw.events.extend(self.synthetic.drain(..n));
     }
 
+    /// The diagram editor's share of a frame: open it now that the window is at hand, take what
+    /// draw.io says, and keep the view over the document area. The host calls this after
+    /// [`Self::ui`], with the window the editor goes inside (`eframe::Frame`, a winit window);
+    /// a host with no such window (the browser) calls it never, and nothing is opened.
+    pub fn diagram_frame(&mut self, window: &impl raw_window_handle::HasWindowHandle) {
+        use crate::diagram::editor::{Event, Window};
+        // Open: the request waited for a frame that has the window, which is this one.
+        if let Some(media) = self.diagram.pending().map(str::to_owned) {
+            match self.session.doc.media.get(&media).cloned() {
+                Some(png) => {
+                    let w = Window::new(window);
+                    if let Err(e) = self.diagram.open(&w, &png) {
+                        log::warn!("diagram: the editor didn't open: {e}");
+                        self.status(e);
+                        self.diagram.cancel();
+                    }
+                }
+                // The picture went away between the request and this frame.
+                None => self.diagram.cancel(),
+            }
+        }
+        for event in self.diagram.poll() {
+            match event {
+                Event::Ready => {}
+                // Save: the edited picture takes the place of the one it came from.
+                Event::Exported(png) => {
+                    self.diagram.close();
+                    diagram::apply(self, png);
+                }
+                // draw.io's own Exit asked for nothing, so the picture is left as it was.
+                Event::Closed => self.diagram.close(),
+                Event::Failed(e) => {
+                    self.diagram.close();
+                    self.status(e);
+                }
+            }
+        }
+        if let Some(rect) = self.diagram.placement() {
+            self.diagram.place(rect);
+        }
+    }
+
     /// Lay out the window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         let t0 = now_ms();
@@ -2018,6 +2091,9 @@ impl WordApp {
             }
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
                 canvas::show(self, ui);
+                // After the page: the strip that says how to leave the editor can't be painted
+                // over by it. The area the editor covers is `diagram`'s to hand to the window.
+                diagram::show(self, ui);
             });
         }
         content_controls::popup(self, &ctx);

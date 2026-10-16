@@ -8,3 +8,5 @@ plan/
 /.claude/
 /target-*/
 /craft-fonts/
+# The draw.io web app the diagram editor runs on: fetched by packaging/fetch-drawio.sh, not tracked.
+/vendor/

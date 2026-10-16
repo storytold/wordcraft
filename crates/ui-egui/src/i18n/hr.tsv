@@ -347,6 +347,7 @@
 	Change List Level	Promijeni razinu popisa
 	Change Password…	Promijeni lozinku…
 	Change Picture	Promijeni sliku
+	Edit Diagram	Uredi dijagram
 	Change Picture…	Promijeni sliku…
 	Change Shape	Promijeni oblik
 	Change Structure	Promijeni strukturu
@@ -641,6 +642,7 @@
 	Developer	Razvojni programer
 	Diagonal	Dijagonalno
 	Diagonal Dots	Dijagonalne točke
+	Diagram	Dijagram
 	Diamond	Romb
 	Dictate	Diktiraj
 	Different First Page	Drukčija prva stranica
@@ -2359,6 +2361,7 @@ preview	Title	Naslov
 	Up	Gore
 	Up Diagonal Dots	Dijagonalne točke prema gore
 	Up one level	Jedna razina gore
+	Update Diagram	Ažuriraj dijagram
 	Update Field	Ažuriraj polje
 	Update Index	Ažuriraj kazalo
 	Update Style to Match Selection	Ažuriraj stil prema odabiru

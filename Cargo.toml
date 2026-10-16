@@ -18,6 +18,7 @@ wordcraft-fonts = { path = "crates/fonts" }
 wordcraft-layout = { path = "crates/layout" }
 wordcraft-docx = { path = "crates/docx" }
 wordcraft-docbin = { path = "crates/docbin" }
+wordcraft-diagram = { path = "crates/diagram" }
 wordcraft-formats = { path = "crates/formats" }
 wordcraft-render = { path = "crates/render" }
 wordcraft-pdf = { path = "crates/pdf" }

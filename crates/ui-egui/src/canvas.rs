@@ -2886,6 +2886,10 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
         ui.separator();
     }
     if picture {
+        // A draw.io PNG carries the diagram it was exported from: edit it in place.
+        if crate::diagram::is_drawio_selected(app) {
+            item(ui, app, "Edit Diagram", "ui.editDiagram", json!({}));
+        }
         item(ui, app, "Change Picture…", "ui.changePicture", json!({}));
         item(ui, app, "Reset Picture", "picture.reset", json!({}));
         item(ui, app, "Size and Crop…", "ui.tab", json!({"tab": "Picture Format"}));

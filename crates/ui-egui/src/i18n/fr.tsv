@@ -292,6 +292,7 @@
 	Search for templates	Rechercher des modèles
 	development build	version de développement
 	Diagonal	Diagonale
+	Diagram	Diagramme
 	Diamond	Losange
 	Dictate	Dicter
 	Different First Page	Première page différente
@@ -887,6 +888,7 @@
 	Ungroup	Dissocier
 	Unformatted Text	Texte non mis en forme
 	Up	Vers le haut
+	Update Diagram	Mettre à jour le diagramme
 	Update Field	Mettre à jour le champ
 	Update Index	Mettre à jour l’index
 	Update Style to Match Selection	Mettre à jour le style pour qu’il corresponde à la sélection
@@ -1321,6 +1323,7 @@
 	Darkroom	Chambre noire
 	Gallery	Galerie
 	Sketchbook	Carnet de croquis
+	Edit Diagram	Modifier le diagramme
 	Change Picture…	Modifier l’image…
 	Font…	Police…
 	Paragraph…	Paragraphe…

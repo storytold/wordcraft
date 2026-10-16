@@ -196,6 +196,7 @@
 	Delete Table	Usuń tabelę
 	Design	Projektowanie
 	Diagonal	Ukośna
+	Diagram	Diagram
 	Diamond	Romb
 	Dictate	Dyktuj
 	Different First Page	Inna pierwsza strona
@@ -781,6 +782,7 @@
 	Undo {action}	Cofnij: {action}
 	Unformatted Text	Tekst niesformatowany
 	Up	W górę
+	Update Diagram	Aktualizuj diagram
 	Update Field	Aktualizuj pole
 	Update Index	Aktualizuj indeks
 	Update Style to Match Selection	Aktualizuj styl, aby pasował do zaznaczenia
@@ -1065,6 +1067,7 @@
 	Font…	Czcionka…
 	Paragraph…	Akapit…
 	Link…	Link…
+	Edit Diagram	Edytuj diagram
 	Change Picture…	Zmień obraz…
 	Size and Crop…	Rozmiar i przycinanie…
 	Insert Rows Above	Wstaw wiersze powyżej

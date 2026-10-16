@@ -152,6 +152,18 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
     if let Some(taken) = crate::crop::pointer(app, ui, resp, pages, layout, scale, at) {
         return taken;
     }
+    // A double-click on a draw.io picture edits it where it is, as Word opens a Visio object in
+    // place (a double-click on anything else still selects a word). egui counts the clicks as the
+    // button comes back up, so this lands on the frame the drag a first click started is still in
+    // hand: it is asked about before that drag is finished. A drag that moved the picture is a
+    // drag, not a double-click.
+    if resp.double_clicked()
+        && !app.canvas.obj_drag.as_ref().is_some_and(|d| d.drag.moved)
+        && let Some(media) = diagram_at(app, layout, pages, scale, at)
+    {
+        app.canvas.obj_drag = None;
+        return edit_diagram(app, media);
+    }
     if let Some(mut d) = app.canvas.obj_drag.take() {
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             return true; // cancelled: dropped without a change
@@ -292,6 +304,32 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         }
     }
     true
+}
+
+/// The draw.io picture under `at`, by its media key: a picture whose PNG carries the diagram's
+/// XML, which a double-click edits where it is. Anything else under the pointer isn't one, and
+/// the double-click carries on to the text.
+fn diagram_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Pos2) -> Option<String> {
+    let (hit, _) = grab_at(app, layout, pages, scale, at)?;
+    let pos = hit.pos();
+    let Some(InlineObject::Image { media, .. }) = app.session.doc.para_at(&pos).and_then(|p| p.object_at(pos.off)) else {
+        return None;
+    };
+    app.session.doc.media.get(media).is_some_and(|b| wordcraft_diagram::png::is_drawio(b)).then(|| media.clone())
+}
+
+/// Open the editor over the picture `media` (`ui.editDiagram`), as Word opens a Visio object in
+/// place. The command is told which picture is meant: the double-click can land before the click
+/// that selects the object has been processed, so the selection isn't relied on here.
+fn edit_diagram(app: &mut WordApp, media: String) -> bool {
+    match app.run("ui.editDiagram", json!({"media": media})) {
+        Ok(_) => true,
+        Err(e) => {
+            log::warn!("diagram: opening the editor failed: {e}");
+            app.status(e);
+            false
+        }
+    }
 }
 
 /// Snap a moved object's bounds (rotated ones by their turned box) to the guides of the page
