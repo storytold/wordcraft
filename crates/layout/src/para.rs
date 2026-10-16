@@ -671,9 +671,11 @@ fn east_asian(c: char) -> bool {
 const MISSING_ROMAN_FONT: &str = "Cambria";
 
 /// The family to look `font` up as: [`MISSING_ROMAN_FONT`] for a missing roman font, else `font`.
+/// A font with substitutes of its own keeps them (Times New Roman → Liberation Serif, Book
+/// Antiqua → a Palatino look-alike): Word has those fonts, so it never draws them in Cambria (#2191).
 fn lookup_family<'f>(doc: &Document, font: &'f str) -> &'f str {
     let db = wordcraft_fonts::FontDb::global();
-    let roman = doc.settings.roman_fonts.iter().any(|f| f.eq_ignore_ascii_case(font));
+    let roman = doc.settings.roman_fonts.iter().any(|f| f.eq_ignore_ascii_case(font)) && !wordcraft_fonts::word::has_own_substitutes(font);
     if roman && !db.has_family(font) && !db.has_family(wordcraft_fonts::word::charset_base_family(font)) { MISSING_ROMAN_FONT } else { font }
 }
 

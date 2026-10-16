@@ -751,6 +751,22 @@ fn a_missing_roman_font_is_drawn_as_word_draws_it() {
 }
 
 #[test]
+fn a_roman_font_with_its_own_substitutes_keeps_them() {
+    // Word's font tables class Times New Roman and Book Antiqua as roman. Word has them, so where
+    // they aren't installed they take their own substitutes, not Cambria (#2191).
+    for font in ["Times New Roman", "Book Antiqua"] {
+        let mut d = Document::from_text("Serif");
+        d.settings.roman_fonts = vec![font.into()];
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.runs[0].props.font = Some(font.into());
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no text") };
+        let first = para.clusters.first().expect("a cluster");
+        assert_eq!(para.styles[first.style as usize].face, wordcraft_fonts::word::resolve(font, false, false).face, "{font}");
+    }
+}
+
+#[test]
 fn an_empty_section_mark_stays_on_a_full_page() {
     use wordcraft_doc::section::SectionProps;
     // Measured in Word: a page filled to the bottom, then an empty paragraph carrying a next-page

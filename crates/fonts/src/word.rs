@@ -114,6 +114,13 @@ pub fn charset_base_family(family: &str) -> &str {
         .map_or(family, str::trim_end)
 }
 
+/// Whether `family` (or the font its charset name stands for) has substitutes of its own: Times
+/// New Roman, Book Antiqua, Courier New, the symbol, Hebrew and Persian fonts… rather than the
+/// generic list a font we don't know gets.
+pub fn has_own_substitutes(family: &str) -> bool {
+    substitutes(charset_base_family(family)) != substitutes("")
+}
+
 /// Naskh-style Persian/Arabic document fonts (the "B …" family names come from the common
 /// Persian font packs; matched by name only).
 fn is_persian_naskh(f: &str) -> bool {
@@ -323,6 +330,27 @@ mod tests {
         assert_eq!(charset_base_family("Cyr"), "Cyr");
         assert_eq!(charset_base_family("Calibri"), "Calibri");
         assert_eq!(substitutes(charset_base_family("Times New Roman Cyr")), substitutes("Times New Roman"));
+    }
+
+    #[test]
+    fn fonts_known_by_name_have_their_own_substitutes() {
+        for f in [
+            "Times New Roman",
+            "times",
+            "Times New Roman Cyr",
+            "Book Antiqua",
+            "Palatino Linotype",
+            "Courier New",
+            "Arial",
+            "Georgia",
+            "Wingdings",
+            "David",
+        ] {
+            assert!(has_own_substitutes(f), "{f}");
+        }
+        for f in ["No Such Brand Font", "NewCenturySchlbk", ""] {
+            assert!(!has_own_substitutes(f), "{f}");
+        }
     }
 
     #[test]
