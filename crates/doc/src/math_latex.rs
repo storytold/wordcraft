@@ -6,7 +6,7 @@
 //! spacing and every named symbol in [`crate::math_symbols`]. Unknown commands stay as text.
 
 use crate::math::{
-    Arg, FracKind, MAX_DEPTH, MNode, MRun, MScr, MSty, ScriptKind, WRAP_DEPTH, any_too_deep, is_nary_char, math_class, merge_runs, too_deep,
+    Arg, ColJc, FracKind, MAX_DEPTH, MNode, MRun, MScr, MSty, ScriptKind, WRAP_DEPTH, any_too_deep, is_nary_char, math_class, merge_runs, too_deep,
 };
 use crate::math_linear::{FUNCTION_NAMES, map_args};
 use crate::math_symbols::{name_of, symbol};
@@ -380,9 +380,30 @@ impl Lp {
                 one(MNode::Run(MRun { text: t, nor: true, sty: Some(MSty::Italic), ..Default::default() }))
             }
             "operatorname" => {
+                let starred = self.peek() == Some(&Tok::Ch('*'));
+                if starred {
+                    self.i += 1;
+                }
                 let t = self.raw_arg();
                 let name = vec![MNode::Run(MRun::plain(t))];
-                self.apply(name)
+                if starred && self.peek() == Some(&Tok::Sub) {
+                    self.i += 1;
+                    let lim = self.arg();
+                    vec![MNode::Lim { upper: false, e: name, lim }]
+                } else {
+                    self.apply(name)
+                }
+            }
+            "tag" => {
+                let starred = self.peek() == Some(&Tok::Ch('*'));
+                if starred {
+                    self.i += 1;
+                }
+                let t = self.raw_arg();
+                let num_str = if starred { format!("#{t}") } else { format!("# ({t})") };
+                let mut r = MRun::new(num_str);
+                r.lit = false;
+                vec![MNode::Run(r)]
             }
             "mathrm" | "rm" => {
                 let a = self.arg();
@@ -540,6 +561,22 @@ impl Lp {
     }
 
     fn environment(&mut self, env: &str) -> Arg {
+        let base = env.trim_end_matches('*');
+        let mut col_jc = Vec::new();
+        if base == "array" || base == "tabular" {
+            let _ = self.opt();
+            let spec = self.raw_arg();
+            for ch in spec.chars() {
+                match ch {
+                    'l' | 'L' => col_jc.push(ColJc::Left),
+                    'r' | 'R' => col_jc.push(ColJc::Right),
+                    'c' | 'C' => col_jc.push(ColJc::Center),
+                    _ => {}
+                }
+            }
+        } else if base == "aligned" {
+            let _ = self.opt();
+        }
         // Rows of `&`-separated cells up to `\end{…}`.
         let mut rows: Vec<Vec<Arg>> = vec![vec![]];
         loop {
@@ -567,7 +604,6 @@ impl Lp {
         if rows.len() > 1 && rows.last().is_some_and(|r| r.iter().all(|c| c.is_empty())) {
             rows.pop();
         }
-        let base = env.trim_end_matches('*');
         let delims = match base {
             "pmatrix" => Some((Some('('), Some(')'))),
             "bmatrix" => Some((Some('['), Some(']'))),
@@ -585,8 +621,8 @@ impl Lp {
             elems: vec![vec![inner]],
         };
         match base {
-            "matrix" | "pmatrix" | "bmatrix" | "Bmatrix" | "vmatrix" | "Vmatrix" | "smallmatrix" | "array" => {
-                let m = MNode::Matrix { rows, col_jc: Vec::new() };
+            "matrix" | "pmatrix" | "bmatrix" | "Bmatrix" | "vmatrix" | "Vmatrix" | "smallmatrix" | "array" | "tabular" => {
+                let m = MNode::Matrix { rows, col_jc };
                 match delims {
                     Some((b, e)) => vec![wrap(m, b, e)],
                     None => vec![m],
@@ -877,12 +913,16 @@ fn node(n: &MNode, s: &mut String, depth: usize) {
             s.push(' ');
             braced(e, s, depth);
         }
-        MNode::Delim { beg, end, elems, .. } => {
+        MNode::Delim { beg, end, sep, elems, .. } => {
             s.push_str("\\left");
             s.push_str(&delim_tex(*beg));
+            let mid = match sep {
+                Some(c) => format!("\\middle{}", delim_tex(Some(*c))),
+                None => "\\middle|".to_string(),
+            };
             for (i, e) in elems.iter().enumerate() {
                 if i > 0 {
-                    s.push_str("\\middle|");
+                    s.push_str(&mid);
                 }
                 arg(e, s, depth);
             }
@@ -1048,5 +1088,47 @@ mod tests {
         let _ = parse_latex(&deep);
         let deep = "\\hat".repeat(5000) + "x";
         let _ = parse_latex(&deep);
+    }
+
+    #[test]
+    fn array_column_specs_and_aligned_optional_args() {
+        let n = parse_latex(r"\begin{array}{lcr} a & b & c \\ d & e & f \end{array}");
+        let MNode::Matrix { rows, col_jc } = &n[0] else { panic!("{n:#?}") };
+        assert_eq!(col_jc, &[ColJc::Left, ColJc::Center, ColJc::Right]);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(crate::math::to_linear(&rows[0][0]), "a");
+        assert_eq!(crate::math::to_linear(&rows[0][1]), "b");
+        assert_eq!(crate::math::to_linear(&rows[0][2]), "c");
+
+        let n = parse_latex(r"\begin{aligned}[t] x &= 1 \\ y &= 2 \end{aligned}");
+        assert!(matches!(&n[0], MNode::EqArr { rows } if rows.len() == 2));
+    }
+
+    #[test]
+    fn operatorname_starred_and_tag() {
+        let n = parse_latex(r"\operatorname*{argmin}_{x} f(x)");
+        assert!(matches!(&n[0], MNode::Lim { upper: false, .. }));
+
+        let n = parse_latex(r"E=mc^2 \tag{1}");
+        let MNode::EqArr { rows } = &n[0] else { panic!("{n:#?}") };
+        assert!(crate::math::has_number_mark(&rows[0]));
+
+        let n = parse_latex(r"E=mc^2 \tag*{(A)}");
+        let MNode::EqArr { rows } = &n[0] else { panic!("{n:#?}") };
+        assert!(crate::math::has_number_mark(&rows[0]));
+    }
+
+    #[test]
+    fn delim_preserves_custom_separator() {
+        let delim = MNode::Delim {
+            beg: Some('{'),
+            end: Some('}'),
+            sep: Some('‖'),
+            grow: true,
+            shp_match: false,
+            elems: vec![vec![MNode::Run(MRun::new("x"))], vec![MNode::Run(MRun::new("y"))]],
+        };
+        let tex = to_latex(&[delim]);
+        assert!(tex.contains(r"\middle\|"), "Expected \\middle\\|, got: {tex}");
     }
 }
