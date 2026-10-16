@@ -1142,7 +1142,7 @@ impl Writer<'_> {
                     ("relativeHeight", &self.z.to_string()),
                     ("behindDoc", behind),
                     ("locked", "0"),
-                    ("layoutInCell", "1"),
+                    ("layoutInCell", if float.outside_cell { "0" } else { "1" }),
                     ("allowOverlap", "1"),
                 ],
             );

@@ -1732,6 +1732,8 @@ fn anchor_float(c: &El) -> Float {
     f.dist = dist("distL").max(dist("distR"));
     f.dist_top = dist("distT");
     f.dist_bottom = dist("distB");
+    // Required by the schema; a file leaving it out lays out in the cell, as before.
+    f.outside_cell = !on_off_attr(c, "layoutInCell") && c.attr("layoutInCell").is_some();
     f
 }
 
@@ -1846,6 +1848,8 @@ fn vml_float(shape: &El, style: &str) -> Float {
         dist_top: dist("mso-wrap-distance-top"),
         dist_bottom: dist("mso-wrap-distance-bottom"),
         hidden,
+        // Word's picture and text watermarks: placed on the page even from a table cell.
+        outside_cell: shape.attr("o:allowincell").is_some_and(|v| matches!(v, "f" | "false" | "0")),
         ..Float::default()
     };
     f.set_spin(vml_spin(style));

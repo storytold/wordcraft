@@ -1007,6 +1007,60 @@ fn word_watermark_survives_save() {
     assert_eq!(d2.settings.watermark, None);
 }
 
+/// Issue #1775: a picture watermark in a header that starts with a table is anchored in a cell
+/// but placed on the page: VML `o:allowincell="f"` (Word's picture watermark) or DrawingML
+/// `layoutInCell="0"`. That survives save and reopen; a shape laid out in its cell stays so.
+#[test]
+fn header_cell_picture_placed_on_the_page() {
+    let vml = |allow: &str| {
+        format!(
+            r##"<w:r><w:pict><v:shape id="WordPictureWatermark1" o:spid="_x0000_s2049" type="#_x0000_t75" style="position:absolute;margin-left:0;margin-top:0;width:300pt;height:200pt;z-index:-251657216;mso-position-horizontal:center;mso-position-horizontal-relative:margin;mso-position-vertical:center;mso-position-vertical-relative:margin" {allow}><v:imagedata r:id="rIdP" o:title="" gain="19661f" blacklevel="22938f"/></v:shape></w:pict></w:r>"##
+        )
+    };
+    let anchor = |in_cell: &str| {
+        format!(
+            r#"<w:r><w:drawing><wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="1" behindDoc="1" locked="0" layoutInCell="{in_cell}" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="margin"><wp:align>center</wp:align></wp:positionH><wp:positionV relativeFrom="margin"><wp:align>center</wp:align></wp:positionV><wp:extent cx="3810000" cy="2540000"/><wp:wrapNone/><wp:docPr id="1" name="Picture 1"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="1" name="p.png"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rIdP"/></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="3810000" cy="2540000"/></a:xfrm><a:prstGeom prst="rect"/></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>"#
+        )
+    };
+    let read = |run: &str| {
+        let hdr = format!(
+            r#"<w:hdr {W_NS}><w:tbl><w:tblGrid><w:gridCol w:w="4680"/><w:gridCol w:w="4680"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>Left</w:t></w:r></w:p></w:tc><w:tc><w:p>{run}<w:r><w:t>Right</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/></w:hdr>"#
+        );
+        let hrels = rels(&[("rIdP", "image", "media/p.png")]);
+        let body = r#"<w:p><w:r><w:t>Body</w:t></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="rIdH"/></w:sectPr>"#;
+        let parts = [("word/header1.xml", hdr.as_str()), ("word/_rels/header1.xml.rels", hrels.as_str()), ("word/media/p.png", "\u{89}PNG stand-in")];
+        wordcraft_docx::read(&docx(body, &[("rIdH", "header", "header1.xml")], &parts)).unwrap()
+    };
+    let floats = |d: &Document| -> Vec<(bool, Wrap)> {
+        let hid = d.last_section.headers.default.unwrap();
+        let mut out = Vec::new();
+        for b in &d.parts[&hid].blocks {
+            if let Block::Table(t) = &**b {
+                for c in &t.rows[0].cells {
+                    for p in c.blocks.iter().filter_map(|b| b.as_para()) {
+                        out.extend(p.objects.iter().filter_map(|o| o.frame()).map(|(_, _, f)| (f.outside_cell, f.wrap)));
+                    }
+                }
+            }
+        }
+        out
+    };
+    for (run, outside) in [
+        (vml(r#"o:allowincell="f""#), true),
+        (vml(r#"o:allowincell="false""#), true),
+        (vml(""), false),
+        (vml(r#"o:allowincell="t""#), false),
+        (anchor("0"), true),
+        (anchor("false"), true),
+        (anchor("1"), false),
+    ] {
+        let d = read(&run);
+        assert_eq!(floats(&d), vec![(outside, Wrap::BehindText)], "{run}");
+        let d2 = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+        assert_eq!(floats(&d2), vec![(outside, Wrap::BehindText)], "saved: {run}");
+    }
+}
+
 /// Issue #149: an absolutely positioned VML text box in a header floats where its style puts it
 /// (relative to the page here, behind the text at a negative z-index, no wrapping) instead of
 /// sitting inline in the header's flow, and it keeps that placement when saved and read back.
