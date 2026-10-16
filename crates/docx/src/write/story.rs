@@ -1021,13 +1021,25 @@ impl Writer<'_> {
         }
         let alpha = geom.map_or(1.0, |f| f.alpha);
         let ink = geom.is_some_and(|f| f.is_ink());
-        match fill.filter(|_| !ink && !kind.is_open()) {
-            Some(c) => {
-                w.open("a:solidFill", &[]);
-                w.empty("a:srgbClr", &[("val", &c.hex())]);
-                w.close("a:solidFill");
+        if let Some(pattern) = extra.pattern.filter(|_| !ink && !kind.is_open()) {
+            w.open("a:pattFill", &[("prst", pattern.kind.ooxml())]);
+            for (tag, color) in [("a:fgClr", pattern.foreground), ("a:bgClr", pattern.background)] {
+                w.open(tag, &[]);
+                w.open("a:srgbClr", &[("val", &color.color.hex())]);
+                w.empty("a:alpha", &[("val", &color.alpha.min(wordcraft_doc::pattern::ALPHA_SCALE).to_string())]);
+                w.close("a:srgbClr");
+                w.close(tag);
             }
-            None => w.empty("a:noFill", &[]),
+            w.close("a:pattFill");
+        } else {
+            match fill.filter(|_| !ink && !kind.is_open()) {
+                Some(c) => {
+                    w.open("a:solidFill", &[]);
+                    w.empty("a:srgbClr", &[("val", &c.hex())]);
+                    w.close("a:solidFill");
+                }
+                None => w.empty("a:noFill", &[]),
+            }
         }
         match stroke {
             Some(c) => {

@@ -38,6 +38,9 @@ pub struct ShapeExtra {
     /// 100000ths of the shorter side, at most [`MAX_CORNER`]; `None` draws [`DEFAULT_CORNER`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub corner: Option<u32>,
+    /// DrawingML preset pattern colors, including their independent opacity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<crate::pattern::PatternFill>,
 }
 
 fn is_zero(v: &u32) -> bool {

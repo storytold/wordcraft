@@ -2830,3 +2830,18 @@ fn row_table_borders_round_trip() {
     let again = wordcraft_docx::read(&saved).unwrap();
     assert_eq!(d.body, again.body);
 }
+
+/// Pattern foreground/background opacity must survive editing, not become a solid fill.
+#[test]
+fn ltvert_fill_roundtrips() {
+    let paint = r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:pattFill prst="ltVert"><a:fgClr><a:srgbClr val="9BBB59"><a:alpha val="80000"/></a:srgbClr></a:fgClr><a:bgClr><a:srgbClr val="FFFFFF"><a:alpha val="40000"/></a:srgbClr></a:bgClr></a:pattFill>"#;
+    let d = read_body(&format!("<w:p>{}</w:p>", anchored_wsp("Pattern", 254000, 254000, paint, "", "<wps:cNvSpPr/>")));
+    let saved = wordcraft_docx::write(&d).unwrap();
+    let xml = text(&unzip(&saved), "word/document.xml");
+    assert!(xml.contains("<a:pattFill prst=\"ltVert\">"), "pattern was flattened: {xml}");
+    assert!(xml.contains("<a:bgClr>"));
+    assert!(xml.contains("val=\"80000\""));
+    assert!(xml.contains("val=\"40000\""));
+    let again = wordcraft_docx::read(&saved).unwrap();
+    assert_eq!(d.body, again.body);
+}
