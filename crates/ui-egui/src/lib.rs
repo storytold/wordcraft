@@ -6015,6 +6015,24 @@ mod tests {
         assert!(theme::Tokens::get(&ctx).dark);
     }
 
+    /// #537: where winit reports no OS theme (Linux), System follows the desktop portal's answer
+    /// and pins the window to it, so GNOME's client-side title bar matches the interface and
+    /// follows a theme switch made while the app runs.
+    #[test]
+    fn system_theme_pins_the_title_bar_to_the_desktop_answer() {
+        use egui::{SystemTheme, ViewportCommand};
+        let ctx = egui::Context::default();
+        let mut a = app();
+        a.run("ui.theme", json!({"value": "system"})).unwrap();
+        for dark in [false, true, false] {
+            a.desktop_dark = Some(dark);
+            let sent = theme_frame(&ctx, &mut a, None);
+            let want = if dark { SystemTheme::Dark } else { SystemTheme::Light };
+            assert!(sent.contains(&ViewportCommand::SetTheme(want)), "desktop dark {dark}: {sent:?}");
+            assert_eq!(theme::Tokens::get(&ctx).dark, dark);
+        }
+    }
+
     /// #312: Dark page darkens only the pages; the interface keeps following its own setting.
     #[test]
     fn dark_page_leaves_the_interface_theme_alone() {
