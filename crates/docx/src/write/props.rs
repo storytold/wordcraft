@@ -81,11 +81,12 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     if let Some(h) = c.highlight {
         w.val("w:highlight", if h == Highlight::None { "none" } else { h.ooxml() });
     }
-    if let Some(u) = c.underline {
-        match c.underline_color {
-            Some(col) => w.empty("w:u", &[("w:val", u.ooxml()), ("w:color", &col.hex())]),
-            None => w.val("w:u", u.ooxml()),
-        }
+    match (c.underline, c.underline_color) {
+        (Some(u), Some(col)) => w.empty("w:u", &[("w:val", u.ooxml()), ("w:color", &col.hex())]),
+        (Some(u), None) => w.val("w:u", u.ooxml()),
+        // A colour-only w:u, as read: keep it without inventing an underline
+        (None, Some(col)) => w.empty("w:u", &[("w:color", &col.hex())]),
+        (None, None) => {}
     }
     if let Some(b) = &c.border {
         border_el(w, "w:bdr", b);
