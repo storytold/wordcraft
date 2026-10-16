@@ -5432,6 +5432,26 @@ fn note_options_per_section_and_convert_notes() {
     assert!(s.run("references.convertNotes", &json!({"to": "sideways"})).is_err());
 }
 
+#[test]
+fn next_footnote_skips_endnotes() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "A"}));
+    run(&mut s, "references.footnote", json!({"text": "Fn1"}));
+    s.sel = crate::Selection::caret(s.doc.end_of(StoryRef::Body));
+    run(&mut s, "text.insert", json!({"text": "B"}));
+    run(&mut s, "references.endnote", json!({"text": "En1"}));
+    s.sel = crate::Selection::caret(s.doc.end_of(StoryRef::Body));
+    run(&mut s, "text.insert", json!({"text": "C"}));
+    run(&mut s, "references.footnote", json!({"text": "Fn2"}));
+
+    s.sel = crate::Selection::caret(Pos::body(0, 0));
+    run(&mut s, "references.nextFootnote", json!({}));
+    assert_eq!(s.sel.focus.off, 1);
+
+    run(&mut s, "references.nextFootnote", json!({}));
+    assert_eq!(s.sel.focus.off, 9);
+}
+
 /// A tiny synthetic Polish Hunspell dictionary (written for these tests). Real dictionaries are
 /// installed on the system, never bundled; every Polish test installs this same one.
 fn polish_test_dictionary() {

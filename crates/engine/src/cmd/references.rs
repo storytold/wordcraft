@@ -53,7 +53,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"to": "endnote" (footnotes become endnotes) | "footnote" (endnotes become footnotes) | "swap"}"#),
         CommandSpec::new("references.nextFootnote", "Next Footnote", "References › Footnotes", |s, _| {
             let caret = s.sel.focus.clone();
-            let refs = note_refs(s);
+            let refs = note_refs(s, Some(NoteKind::Footnote));
             if let Some(p) = refs.iter().find(|p| **p > caret).or(refs.first()) {
                 s.sel = Selection::caret(p.clone());
             }
@@ -719,13 +719,15 @@ pub(super) fn note_options(s: &mut Session, v: &Value) -> CmdResult {
     }))
 }
 
-fn note_refs(s: &Session) -> Vec<Pos> {
+fn note_refs(s: &Session, kind: Option<NoteKind>) -> Vec<Pos> {
     let mut v = Vec::new();
     for path in s.doc.para_paths(StoryRef::Body) {
         let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
         for o in p.object_offsets() {
-            if matches!(p.object_at(o), Some(InlineObject::NoteRef { .. })) {
-                v.push(Pos { story: StoryRef::Body, path: path.clone(), off: o });
+            if let Some(InlineObject::NoteRef { kind: k, .. }) = p.object_at(o) {
+                if kind.is_none() || kind == Some(*k) {
+                    v.push(Pos { story: StoryRef::Body, path: path.clone(), off: o });
+                }
             }
         }
     }
