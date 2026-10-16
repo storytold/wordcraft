@@ -354,14 +354,16 @@ struct SysFallback {
 #[cfg(not(target_arch = "wasm32"))]
 const SYS_MISSES_MAX: usize = 65_536;
 
-/// Installed font files larger than this are not searched for fallback characters.
+/// Installed font files larger than this are not loaded for a fallback character the coverage
+/// index finds in them (a preferred fallback family loads whatever its size).
 #[cfg(not(target_arch = "wasm32"))]
 const SYS_FALLBACK_MAX_FILE: u64 = 40 << 20;
 
 /// Which characters each cataloged font file maps (#605). Before it, every distinct character no
 /// loaded font covered read and parsed every installed font file again: 500 distinct Tangut
-/// characters froze the app for most of a minute. Now each file is read once, when a search
-/// first gets to it, and later searches answer from its ranges, reading only a file that matches.
+/// characters froze the app for most of a minute. Now each file's character maps are read once,
+/// when a search first gets to it, and later searches answer from its ranges, loading only a file
+/// that matches. The system fallback asks it too before loading a preferred family.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 struct CoverageIndex {
@@ -369,15 +371,30 @@ struct CoverageIndex {
     generation: Option<u32>,
     /// The cataloged font files, sorted.
     files: Vec<IndexedFile>,
-    /// Font files read by fallback searches (each at most once to index it, once more to load it).
+    /// Font files whose character maps fallback searches read (each at most once).
     reads: usize,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl CoverageIndex {
+    /// Does the cataloged file at `path` map `cp`? Its character maps are read the first time.
+    fn file_holds(&mut self, path: &std::path::Path, cp: u32) -> bool {
+        let Ok(i) = self.files.binary_search_by(|f| f.path.as_path().cmp(path)) else { return false };
+        let reads = &mut self.reads;
+        let Some(file) = self.files.get_mut(i) else { return false };
+        let ranges = file.ranges.get_or_insert_with(|| {
+            *reads += 1;
+            file_coverage(&file.path)
+        });
+        ranges_hold(ranges, cp)
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 struct IndexedFile {
     path: std::path::PathBuf,
     /// The code points the file's faces map, as sorted, disjoint inclusive ranges (`None` until
-    /// the file is read; empty when it can't be read or is too large).
+    /// its character maps are read; empty when they can't be).
     ranges: Option<Box<[(u32, u32)]>>,
     /// Loaded for a character it covers: its faces are searched as loaded fonts from then on.
     used: bool,
@@ -390,56 +407,89 @@ fn ranges_hold(ranges: &[(u32, u32)], cp: u32) -> bool {
     ranges.get(i).is_some_and(|r| r.0 <= cp)
 }
 
-/// The code points mapped by the faces of `data` (a font file or collection), as sorted,
-/// disjoint, inclusive ranges. Bounded however damaged the file: at most 256 faces, a budget of
-/// mappings read across them, and a cap on the ranges kept.
+/// The code points a font file's faces map, gathered face by face into sorted, disjoint,
+/// inclusive ranges. Bounded however damaged the file: a budget of mappings read across its
+/// faces, and a cap on the ranges kept.
 #[cfg(not(target_arch = "wasm32"))]
-fn coverage_ranges(data: &[u8]) -> Box<[(u32, u32)]> {
-    const MAX_FACES: u32 = 256;
+#[derive(Default)]
+struct Coverage {
+    ranges: Vec<(u32, u32)>,
+    mappings: usize,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Coverage {
     const MAX_MAPPINGS: usize = 4 * 0x11_0000;
     const MAX_RANGES: usize = 1 << 17;
-    fn compact(r: &mut Vec<(u32, u32)>) {
-        r.sort_unstable();
-        let mut out: Vec<(u32, u32)> = Vec::with_capacity(r.len());
-        for &(s, e) in r.iter() {
+
+    /// Add the code points `f` maps. False once a bound is reached: later faces are left out.
+    fn add(&mut self, f: &skrifa::FontRef<'_>) -> bool {
+        for (cp, _) in f.charmap().mappings() {
+            if self.mappings >= Self::MAX_MAPPINGS {
+                return false;
+            }
+            self.mappings += 1;
+            match self.ranges.last_mut() {
+                Some(last) if last.1.checked_add(1) == Some(cp) => last.1 = cp,
+                Some(last) if last.0 <= cp && cp <= last.1 => {}
+                _ => {
+                    if self.ranges.len() >= Self::MAX_RANGES {
+                        self.compact();
+                        if self.ranges.len() >= Self::MAX_RANGES {
+                            return false;
+                        }
+                    }
+                    self.ranges.push((cp, cp));
+                }
+            }
+        }
+        true
+    }
+
+    fn compact(&mut self) {
+        self.ranges.sort_unstable();
+        let mut out: Vec<(u32, u32)> = Vec::with_capacity(self.ranges.len());
+        for &(s, e) in self.ranges.iter() {
             match out.last_mut() {
                 Some(last) if s <= last.1.saturating_add(1) => last.1 = last.1.max(e),
                 _ => out.push((s, e)),
             }
         }
-        *r = out;
+        self.ranges = out;
     }
-    let count = match FileRef::new(data) {
-        Ok(FileRef::Font(_)) => 1,
-        Ok(FileRef::Collection(c)) => c.len().min(MAX_FACES),
-        Err(_) => 0,
-    };
-    let mut ranges: Vec<(u32, u32)> = Vec::new();
-    let mut budget = MAX_MAPPINGS;
-    'faces: for i in 0..count {
-        let Ok(f) = skrifa::FontRef::from_index(data, i) else { continue };
-        for (cp, _) in f.charmap().mappings() {
-            budget = match budget.checked_sub(1) {
-                Some(b) => b,
-                None => break 'faces,
-            };
-            match ranges.last_mut() {
-                Some(last) if last.1.checked_add(1) == Some(cp) => last.1 = cp,
-                Some(last) if last.0 <= cp && cp <= last.1 => {}
-                _ => {
-                    if ranges.len() >= MAX_RANGES {
-                        compact(&mut ranges);
-                        if ranges.len() >= MAX_RANGES {
-                            break 'faces;
-                        }
-                    }
-                    ranges.push((cp, cp));
-                }
-            }
+
+    fn finish(mut self) -> Box<[(u32, u32)]> {
+        self.compact();
+        self.ranges.into_boxed_slice()
+    }
+}
+
+/// The code points the faces of the font file at `path` map, as sorted, disjoint, inclusive
+/// ranges, read from their character maps (`cmap`) alone: Apple Color Emoji's 180 MB cost a few
+/// kilobytes. Empty when the file can't be read.
+#[cfg(not(target_arch = "wasm32"))]
+fn file_coverage(path: &std::path::Path) -> Box<[(u32, u32)]> {
+    /// The longest character map read (a format 12 map of every code point is 13 MB).
+    const MAX_CMAP: u32 = 16 << 20;
+    let mut coverage = Coverage::default();
+    let Some(mut file) = TableReader::open(path) else { return coverage.finish() };
+    // The faces of a collection often share one map: each is read once.
+    let mut read: Vec<(u32, u32)> = Vec::new();
+    for face in 0..file.faces.len() {
+        let Some(at) = file.locate(face, b"cmap") else { continue };
+        if read.contains(&at) {
+            continue;
+        }
+        read.push(at);
+        let Some(cmap) = file.read(at, MAX_CMAP) else { continue };
+        // A font holding just the map, to read it as the font itself would.
+        let font = mini_font(&[(*b"cmap", cmap)]);
+        let Ok(f) = skrifa::FontRef::new(&font) else { continue };
+        if !coverage.add(&f) {
+            break;
         }
     }
-    compact(&mut ranges);
-    ranges.into_boxed_slice()
+    coverage.finish()
 }
 
 /// An installed font file's bytes, `None` when it can't be read or is larger than
@@ -630,40 +680,12 @@ pub(crate) fn legacy_family(family: &str, style: &str) -> String {
 /// as it does loaded.
 #[cfg(not(target_arch = "wasm32"))]
 fn file_face_names(path: &std::path::Path) -> Vec<Found> {
-    use std::io::{Read, Seek, SeekFrom};
-    /// Caps on what a (possibly damaged) file can make the scan read.
-    const MAX_FACES: u32 = 256;
+    /// The longest `name`, `OS/2` or `fvar` table read.
     const MAX_TABLE: u32 = 1 << 20;
-    let Ok(mut file) = std::fs::File::open(path) else { return vec![] };
-    let mut read_at = |offset: u64, len: usize| -> Option<Vec<u8>> {
-        let mut buf = vec![0; len];
-        file.seek(SeekFrom::Start(offset)).ok()?;
-        file.read_exact(&mut buf).ok()?;
-        Some(buf)
-    };
-    let be32 = |b: &[u8], at: usize| b.get(at..at + 4).and_then(|s| s.try_into().ok()).map(u32::from_be_bytes);
-    let Some(head) = read_at(0, 12) else { return vec![] };
-    // A collection lists where each face's table directory starts.
-    let starts: Vec<u32> = if head.starts_with(b"ttcf") {
-        let n = be32(&head, 8).unwrap_or(0).min(MAX_FACES) as usize;
-        read_at(12, n * 4).map(|b| b.as_chunks::<4>().0.iter().map(|c| u32::from_be_bytes(*c)).collect()).unwrap_or_default()
-    } else {
-        vec![0]
-    };
-    starts
-        .into_iter()
-        .filter_map(|start| {
-            let dir = read_at(start.into(), 12)?;
-            let tables = u16::from_be_bytes(dir.get(4..6)?.try_into().ok()?) as usize;
-            let records = read_at(u64::from(start) + 12, tables * 16)?;
-            let mut table = |tag: &[u8; 4]| -> Option<Vec<u8>> {
-                let rec = records.as_chunks::<16>().0.iter().find(|r| r.starts_with(tag))?;
-                let (offset, len) = (be32(rec, 8)?, be32(rec, 12)?);
-                if len > MAX_TABLE {
-                    return None;
-                }
-                read_at(offset.into(), len as usize)
-            };
+    let Some(mut file) = TableReader::open(path) else { return vec![] };
+    (0..file.faces.len())
+        .filter_map(|face| {
+            let mut table = |tag: &[u8; 4]| file.locate(face, tag).and_then(|at| file.read(at, MAX_TABLE));
             let name = table(b"name")?;
             // Variable fonts: the named instances; OS/2: the code pages (East Asian fonts).
             let mut tables: Vec<([u8; 4], Vec<u8>)> = table(b"OS/2").map(|t| (*b"OS/2", t)).into_iter().collect();
@@ -675,6 +697,79 @@ fn file_face_names(path: &std::path::Path) -> Vec<Found> {
         })
         .flatten()
         .collect()
+}
+
+/// A font file (or collection) read table by table instead of whole: the font folder scan and
+/// the fallback coverage index open hundreds of files, many of them megabytes long (CJK
+/// collections run to 20 MB and more, Apple Color Emoji to 180 MB).
+#[cfg(not(target_arch = "wasm32"))]
+struct TableReader {
+    file: std::fs::File,
+    /// Each face's table records (tag, checksum, offset, length), for the faces whose table
+    /// directory could be read.
+    faces: Vec<Vec<[u8; 16]>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl TableReader {
+    /// Most faces read from a (possibly damaged) collection.
+    const MAX_FACES: u32 = 256;
+
+    /// Open the font file at `path` and read its table directories; `None` when it can't be read.
+    fn open(path: &std::path::Path) -> Option<TableReader> {
+        let file = std::fs::File::open(path).ok()?;
+        let mut reader = TableReader { file, faces: Vec::new() };
+        let head = reader.read_at(0, 12)?;
+        // A collection lists where each face's table directory starts.
+        let starts: Vec<u32> = if head.starts_with(b"ttcf") {
+            let n = be32(&head, 8).unwrap_or(0).min(Self::MAX_FACES) as usize;
+            reader.read_at(12, n * 4).map(|b| b.as_chunks::<4>().0.iter().map(|c| u32::from_be_bytes(*c)).collect()).unwrap_or_default()
+        } else {
+            vec![0]
+        };
+        for start in starts {
+            if let Some(records) = reader.directory(start) {
+                reader.faces.push(records);
+            }
+        }
+        Some(reader)
+    }
+
+    /// The table records of the face whose table directory starts at `start`.
+    fn directory(&mut self, start: u32) -> Option<Vec<[u8; 16]>> {
+        let dir = self.read_at(start.into(), 12)?;
+        let tables = u16::from_be_bytes(dir.get(4..6)?.try_into().ok()?) as usize;
+        let records = self.read_at(u64::from(start) + 12, tables * 16)?;
+        Some(records.as_chunks::<16>().0.to_vec())
+    }
+
+    /// Where face `face`'s table `tag` is: (offset, length).
+    fn locate(&self, face: usize, tag: &[u8; 4]) -> Option<(u32, u32)> {
+        let rec = self.faces.get(face)?.iter().find(|r| r.starts_with(tag))?;
+        Some((be32(rec, 8)?, be32(rec, 12)?))
+    }
+
+    /// The table at `(offset, length)`; `None` when it is longer than `max_len` or can't be read.
+    fn read(&mut self, (offset, len): (u32, u32), max_len: u32) -> Option<Vec<u8>> {
+        if len > max_len {
+            return None;
+        }
+        self.read_at(offset.into(), len as usize)
+    }
+
+    fn read_at(&mut self, offset: u64, len: usize) -> Option<Vec<u8>> {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut buf = vec![0; len];
+        self.file.seek(SeekFrom::Start(offset)).ok()?;
+        self.file.read_exact(&mut buf).ok()?;
+        Some(buf)
+    }
+}
+
+/// The big-endian `u32` at `at` in `b`.
+#[cfg(not(target_arch = "wasm32"))]
+fn be32(b: &[u8], at: usize) -> Option<u32> {
+    b.get(at..at.checked_add(4)?).and_then(|s| s.try_into().ok()).map(u32::from_be_bytes)
 }
 
 /// A font file holding just `tables` (sorted by tag), each padded to four bytes.
@@ -1182,20 +1277,24 @@ impl FontDb {
         if self.is_loaded(family) {
             return true;
         }
-        let paths: Vec<std::path::PathBuf> = {
-            let cat = self.read_catalog();
-            let families: Vec<&str> = cat
-                .iter()
-                .filter(|c| c.family.eq_ignore_ascii_case(family) || c.legacy.eq_ignore_ascii_case(family))
-                .map(|c| c.family.as_str())
-                .collect();
-            let mut p: Vec<_> = cat.iter().filter(|c| families.iter().any(|f| c.family.eq_ignore_ascii_case(f))).map(|c| c.path.clone()).collect();
-            p.sort();
-            p.dedup();
-            p
-        };
-        let files = paths.iter().filter_map(|p| std::fs::read(p).ok()).collect();
+        let files = self.family_paths(family).iter().filter_map(|p| std::fs::read(p).ok()).collect();
         self.add_fonts(files) > 0
+    }
+
+    /// The files of the installed `family`, sorted: the whole typographic family, also when asked
+    /// for by a legacy name ("Roboto Light" gives Roboto's files).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn family_paths(&self, family: &str) -> Vec<std::path::PathBuf> {
+        let cat = self.read_catalog();
+        let families: Vec<&str> = cat
+            .iter()
+            .filter(|c| c.family.eq_ignore_ascii_case(family) || c.legacy.eq_ignore_ascii_case(family))
+            .map(|c| c.family.as_str())
+            .collect();
+        let mut p: Vec<_> = cat.iter().filter(|c| families.iter().any(|f| c.family.eq_ignore_ascii_case(f))).map(|c| c.path.clone()).collect();
+        p.sort();
+        p.dedup();
+        p
     }
 
     /// Resolve a family + style to a face, falling back to the closest style of the family, then to
@@ -1574,7 +1673,7 @@ impl FontDb {
     }
 
     /// Load a system font covering `c` (preferred fallback families first, then any cataloged
-    /// file under 40 MB, found through the coverage index). Returns true if one was loaded.
+    /// file under 40 MB, both found through the coverage index). Returns true if one was loaded.
     /// Misses are remembered.
     #[cfg(not(target_arch = "wasm32"))]
     fn system_fallback(&self, c: char) -> bool {
@@ -1596,6 +1695,11 @@ impl FontDb {
             if self.is_loaded(fam) || !cataloged.iter().any(|f| f.eq_ignore_ascii_case(fam)) {
                 continue;
             }
+            // A family none of whose files maps `c` is not loaded for it: it would stay loaded
+            // and help nothing (an emoji loaded every CJK family a Mac has first, 500 MB).
+            if !self.family_maps(fam, c) {
+                continue;
+            }
             if !self.sys.lock().unwrap_or_else(|e| e.into_inner()).tried.insert(fam) {
                 continue;
             }
@@ -1615,11 +1719,18 @@ impl FontDb {
         false
     }
 
-    /// Load the first cataloged font file (in path order) that maps `c`, reading each file not
-    /// yet indexed as the search reaches it. Returns whether a loaded face now covers `c`.
+    /// Does a file of the installed `family` map `c`? Answered by the coverage index, which reads
+    /// a file's character maps the first time it is asked about it.
     #[cfg(not(target_arch = "wasm32"))]
-    fn indexed_fallback(&self, c: char) -> bool {
-        let cp = u32::from(c);
+    fn family_maps(&self, family: &str, c: char) -> bool {
+        let paths = self.family_paths(family);
+        let mut index = self.coverage_index();
+        paths.iter().any(|p| index.file_holds(p, u32::from(c)))
+    }
+
+    /// The coverage index, its file list brought up to date with the catalog.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn coverage_index(&self) -> std::sync::MutexGuard<'_, CoverageIndex> {
         let mut index = self.coverage.lock().unwrap_or_else(|e| e.into_inner());
         let generation = self.catalog_gen.load(Ordering::Acquire);
         if index.generation != Some(generation) {
@@ -1632,30 +1743,28 @@ impl FontDb {
             index.files = paths.into_iter().map(|path| known.remove(&path).unwrap_or(IndexedFile { path, ranges: None, used: false })).collect();
             index.generation = Some(generation);
         }
+        index
+    }
+
+    /// Load the first cataloged font file (in path order) that maps `c`, reading the character
+    /// maps of each file not yet indexed as the search reaches it. Returns whether a loaded face
+    /// now covers `c`.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn indexed_fallback(&self, c: char) -> bool {
+        let cp = u32::from(c);
+        let mut index = self.coverage_index();
         let CoverageIndex { files, reads, .. } = &mut *index;
         for file in files.iter_mut().filter(|f| !f.used) {
-            let mut data = None;
-            match &file.ranges {
-                Some(r) if !ranges_hold(r, cp) => continue,
-                Some(_) => {}
-                None => {
-                    *reads += 1;
-                    data = read_fallback_file(&file.path);
-                    let ranges = data.as_deref().map(coverage_ranges).unwrap_or_default();
-                    let hit = ranges_hold(&ranges, cp);
-                    file.ranges = Some(ranges);
-                    if !hit {
-                        continue;
-                    }
-                }
+            let ranges = file.ranges.get_or_insert_with(|| {
+                *reads += 1;
+                file_coverage(&file.path)
+            });
+            if !ranges_hold(ranges, cp) {
+                continue;
             }
             // The file maps `c`: load it (once; its faces are loaded fonts from now on).
             file.used = true;
-            if data.is_none() {
-                *reads += 1;
-                data = read_fallback_file(&file.path);
-            }
-            if let Some(data) = data
+            if let Some(data) = read_fallback_file(&file.path)
                 && self.add_font(data) > 0
                 && self.read_faces().iter().any(|f| f.covers(c))
             {
