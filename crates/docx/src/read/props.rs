@@ -353,11 +353,11 @@ impl PropCtx {
 }
 
 pub fn align(v: &str) -> Align {
-    match v {
+    match v.trim().to_ascii_lowercase().as_str() {
         "center" => Align::Center,
         "right" | "end" => Align::Right,
-        "both" | "justify" | "lowKashida" | "mediumKashida" | "highKashida" => Align::Justify,
-        "distribute" | "thaiDistribute" => Align::Distribute,
+        "both" | "justify" | "lowkashida" | "mediumkashida" | "highkashida" => Align::Justify,
+        "distribute" | "thaidistribute" => Align::Distribute,
         _ => Align::Left,
     }
 }
@@ -422,8 +422,18 @@ pub fn borders(e: &El) -> Borders {
 
 /// Margins element (`w:tblCellMar`, `w:tcMar`) → [top, left, bottom, right].
 pub fn margins(e: &El) -> [f32; 4] {
-    let get = |names: &[&str]| names.iter().find_map(|n| e.child(n)).and_then(|c| tw(c, "w:w")).unwrap_or(0.0).clamp(0.0, 1584.0);
-    [get(&["w:top"]), get(&["w:left", "w:start"]), get(&["w:bottom"]), get(&["w:right", "w:end"])]
+    let mut m = [0.0f32; 4];
+    for k in e.els() {
+        let val = tw(k, "w:w").unwrap_or(0.0).clamp(0.0, 1584.0);
+        match k.local() {
+            "top" => m[0] = val,
+            "left" | "start" => m[1] = val,
+            "bottom" => m[2] = val,
+            "right" | "end" => m[3] = val,
+            _ => {}
+        }
+    }
+    m
 }
 
 impl PropCtx {
@@ -551,8 +561,21 @@ pub fn tcpr(pc: &PropCtx, e: &El) -> (CellProps, bool) {
                 _ => {}
             },
             "w:gridSpan" => c.span = k.attr("w:val").and_then(u32_of).unwrap_or(1).clamp(1, 63),
-            "w:hMerge" => hcont = k.attr("w:val") != Some("restart"),
-            "w:vMerge" => c.vmerge = if k.attr("w:val") == Some("restart") { VMerge::Restart } else { VMerge::Continue },
+            "w:hMerge" => {
+                let val = k.attr("w:val").map(|v| v.trim().to_ascii_lowercase());
+                hcont = match val.as_deref() {
+                    Some("restart") | Some("none") => false,
+                    _ => true,
+                };
+            }
+            "w:vMerge" => {
+                let val = k.attr("w:val").map(|v| v.trim().to_ascii_lowercase());
+                c.vmerge = match val.as_deref() {
+                    Some("restart") => VMerge::Restart,
+                    Some("none") => VMerge::None,
+                    _ => VMerge::Continue,
+                };
+            }
             "w:tcBorders" => c.borders = Some(borders(k)),
             "w:shd" => c.shading = pc.shd_fill(k),
             "w:noWrap" => c.no_wrap = on_off(k),
@@ -563,11 +586,12 @@ pub fn tcpr(pc: &PropCtx, e: &El) -> (CellProps, bool) {
                 c.text_direction_set = k.attr("w:val") == Some("lrTb");
             }
             "w:vAlign" => {
-                c.valign = Some(match k.attr("w:val") {
+                let val = k.attr("w:val").map(|v| v.trim().to_ascii_lowercase());
+                c.valign = Some(match val.as_deref() {
                     Some("center") => VAlign::Center,
                     Some("bottom") => VAlign::Bottom,
                     _ => VAlign::Top,
-                })
+                });
             }
             _ => {}
         }
@@ -740,5 +764,48 @@ fn table_float(e: &El) -> TableFloat {
         v_align: align("w:tblpYSpec"),
         dist: [dist("w:leftFromText"), dist("w:topFromText"), dist("w:rightFromText"), dist("w:bottomFromText")],
         overlap: true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const W_NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""#;
+
+    fn parse_el(xml: &str) -> El {
+        crate::xml::parse(xml.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn tcpr_merges_and_alignments() {
+        let pc = PropCtx::default();
+        let el_none = parse_el(&format!(r#"<w:tcPr {W_NS}><w:vMerge w:val="none"/><w:hMerge w:val="none"/><w:vAlign w:val="Center"/></w:tcPr>"#));
+        let (c, hcont) = tcpr(&pc, &el_none);
+        assert_eq!(c.vmerge, VMerge::None);
+        assert!(!hcont);
+        assert_eq!(c.valign, Some(VAlign::Center));
+
+        let el_restart = parse_el(&format!(r#"<w:tcPr {W_NS}><w:vMerge w:val="Restart"/><w:hMerge w:val="Restart"/><w:vAlign w:val="BOTTOM"/></w:tcPr>"#));
+        let (c, hcont) = tcpr(&pc, &el_restart);
+        assert_eq!(c.vmerge, VMerge::Restart);
+        assert!(!hcont);
+        assert_eq!(c.valign, Some(VAlign::Bottom));
+
+        let el_cont = parse_el(&format!(r#"<w:tcPr {W_NS}><w:vMerge/><w:hMerge/></w:tcPr>"#));
+        let (c, hcont) = tcpr(&pc, &el_cont);
+        assert_eq!(c.vmerge, VMerge::Continue);
+        assert!(hcont);
+    }
+
+    #[test]
+    fn margins_and_align_tolerance() {
+        let el_mar = parse_el(&format!(r#"<w:tcMar {W_NS}><w:top w:w="120"/><w:left w:w="240"/><w:bottom w:w="360"/><w:right w:w="480"/></w:tcMar>"#));
+        assert_eq!(margins(&el_mar), [6.0, 12.0, 18.0, 24.0]);
+
+        assert_eq!(align("  Center  "), Align::Center);
+        assert_eq!(align("RIGHT"), Align::Right);
+        assert_eq!(align("Both"), Align::Justify);
+        assert_eq!(align("ThaiDistribute"), Align::Distribute);
     }
 }
