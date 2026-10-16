@@ -2629,3 +2629,43 @@ preview	Title	Örnek
 # Reading Mode column widths (#1040)
 	Narrow	Dar
 	Medium	Orta
+
+
+# Font dialog and pending defaults/effects. Clean-room translations.
+	pt and above	pt ve üzeri
+	All new blank documents	Tüm yeni boş belgeler
+	Bold Italic	Kalın italik
+	By:	Miktar:
+	Clear Text Effects	Metin efektlerini temizle
+	Condensed	Sıkıştırılmış
+	Default change pending	Varsayılan değişikliği bekliyor
+	Dot dot dash	Nokta-nokta-çizgi
+	Double wave	Çift dalga
+	Expanded	Genişletilmiş
+	Font size must be between 1 and 1638 pt.	Yazı tipi boyutu 1 ile 1638 pt arasında olmalıdır.
+	Font style:	Yazı tipi stili:
+	Historical and Discretionary	Tarihsel ve isteğe bağlı
+	Kerning for fonts:	Yazı tipleri için karakter aralığı:
+	Ligatures:	Bitişik harfler:
+	Lining	Eşit yükseklikte rakamlar
+	Lowered	Alçaltılmış
+	Number forms:	Rakam biçimleri:
+	Number spacing:	Rakam aralığı:
+	Old-style	Eski stil rakamlar
+	OpenType Features	OpenType özellikleri
+	Proportional	Orantılı
+	Raised	Yükseltilmiş
+	Regular	Normal
+	Scale:	Ölçek:
+	Standard and Contextual	Standart ve bağlamsal
+	Standard only	Yalnızca standart
+	Stylistic sets:	Stil kümeleri:
+	Tabular	Tablolu
+	Text Effects…	Metin efektleri…
+	Theme font	Tema yazı tipi
+	This document only	Yalnızca bu belge
+	Underline color:	Alt çizgi rengi:
+	Underline style:	Alt çizgi stili:
+	Use Contextual Alternates	Bağlamsal alternatifleri kullan
+	Use the pending font settings as the default for:	Bekleyen yazı tipi ayarlarını şunun için varsayılan yap:
+	Preview unavailable	Önizleme kullanılamıyor

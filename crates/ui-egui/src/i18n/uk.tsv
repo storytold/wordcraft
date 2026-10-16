@@ -2245,3 +2245,44 @@
 # Reading Mode column widths (#1040)
 	Narrow	Вузька
 	Medium	Середня
+
+
+# Font dialog and pending defaults/effects. Clean-room translations.
+	pt and above	пт і більше
+	All new blank documents	Усі нові порожні документи
+	Bold Italic	Жирний курсив
+	By:	На:
+	Clear Text Effects	Очистити ефекти тексту
+	Condensed	Ущільнений
+	Default change pending	Зміна типових налаштувань очікує застосування
+	Dot dot dash	Крапка-крапка-риска
+	Double wave	Подвійна хвиля
+	Expanded	Розріджений
+	Font size must be between 1 and 1638 pt.	Розмір шрифту має бути від 1 до 1638 пт.
+	Font style:	Накреслення:
+	Historical and Discretionary	Історичні й необов’язкові
+	Kerning for fonts:	Кернінг для шрифтів:
+	Ligatures:	Лігатури:
+	Lining	Цифри однакової висоти
+	Lowered	Опущений
+	Normal	Звичайний
+	Number forms:	Форми цифр:
+	Number spacing:	Інтервали цифр:
+	Old-style	Старостильні цифри
+	OpenType Features	Можливості OpenType
+	Proportional	Пропорційні
+	Raised	Піднятий
+	Regular	Звичайний
+	Scale:	Масштаб:
+	Standard and Contextual	Стандартні й контекстні
+	Standard only	Лише стандартні
+	Stylistic sets:	Стилістичні набори:
+	Tabular	Табличні
+	Text Effects…	Ефекти тексту…
+	Theme font	Шрифт теми
+	This document only	Лише цей документ
+	Underline color:	Колір підкреслення:
+	Underline style:	Стиль підкреслення:
+	Use Contextual Alternates	Використовувати контекстні варіанти
+	Use the pending font settings as the default for:	Використовувати очікувані налаштування шрифту як типові для:
+	Preview unavailable	Попередній перегляд недоступний

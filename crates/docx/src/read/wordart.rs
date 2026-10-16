@@ -41,7 +41,7 @@ pub(crate) fn read(e: &El, theme: &[Rgb], fx: &mut TextEffects) -> bool {
         }
         "w14:glow" => {
             let (color, transparency) = color(e, theme).unwrap_or((Glow::default().color, 60.0));
-            fx.glow = Some(Glow { color, size: emu(e, "w14:rad"), transparency }.sanitized()).filter(|g| g.size > 0.0);
+            fx.glow = Some(Glow { color, size: emu(e, "w14:rad"), transparency }.sanitized());
         }
         "w14:reflection" => {
             // Start opacity and the end position of the fade (both 1000ths of a percent).
@@ -95,7 +95,7 @@ fn fill(e: &El, theme: &[Rgb]) -> Option<TextFill> {
 }
 
 /// The colour element inside `e` (`w14:srgbClr`, `w14:schemeClr`) with its modifiers, and its
-/// transparency (percent, from `w14:alpha`).
+/// transparency (percent, converted from `w14:alpha` opacity).
 fn color(e: &El, theme: &[Rgb]) -> Option<(Rgb, f32)> {
     let c = e.els().find(|c| matches!(c.name.as_str(), "w14:srgbClr" | "w14:schemeClr"))?;
     let val = c.attr("w14:val")?;
@@ -106,10 +106,28 @@ fn color(e: &El, theme: &[Rgb]) -> Option<(Rgb, f32)> {
         match m.name.as_str() {
             "w14:lumMod" => rgb = super::drawing_color::lum(rgb, |l| l * v),
             "w14:lumOff" => rgb = super::drawing_color::lum(rgb, |l| l + v),
-            // Unlike DrawingML's `a:alpha`, `w14:alpha` is the transparency.
-            "w14:alpha" => transparency = (v.clamp(0.0, 1.0) * 100.0) as f32,
+            // MS-DOCX CT_SRgbColor defines alpha as opacity.
+            "w14:alpha" => transparency = ((1.0 - v.clamp(0.0, 1.0)) * 100.0) as f32,
             _ => {}
         }
     }
     Some((rgb, transparency))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn imported_alpha_is_opacity_not_transparency() {
+        for (alpha, transparency) in [(0, 100.0), (25000, 75.0), (100000, 0.0)] {
+            let xml = format!(
+                r#"<w14:shadow xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"><w14:srgbClr w14:val="204060"><w14:alpha w14:val="{alpha}"/></w14:srgbClr></w14:shadow>"#
+            );
+            let e = crate::xml::parse(xml.as_bytes()).unwrap();
+            let mut fx = TextEffects::default();
+            assert!(read(&e, &[], &mut fx));
+            assert_eq!(fx.shadow.unwrap().transparency, transparency);
+        }
+    }
 }

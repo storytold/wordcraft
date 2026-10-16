@@ -140,7 +140,7 @@ impl TextEffects {
     pub fn is_empty(&self) -> bool {
         *self == TextEffects::default()
     }
-    /// Finite, in range; zero-size glows dropped.
+    /// Finite, in range; zero-size effects remain explicit inheritance overrides.
     pub fn sanitized(&self) -> TextEffects {
         TextEffects {
             fill: self.fill.as_ref().and_then(TextFill::sanitized),
@@ -150,7 +150,7 @@ impl TextEffects {
                 transparency: clamp(o.transparency, 0.0, 100.0, 0.0),
             }),
             shadow: self.shadow.map(Shadow::sanitized),
-            glow: self.glow.map(Glow::sanitized).filter(|g| g.size > 0.0),
+            glow: self.glow.map(Glow::sanitized),
             reflection: self.reflection.map(|r| Reflection {
                 transparency: clamp(r.transparency, 0.0, 100.0, 50.0),
                 size: clamp(r.size, 0.0, 100.0, 50.0),
@@ -159,6 +159,16 @@ impl TextEffects {
             }),
         }
     }
+    /// Rendering drops invisible overrides after the style cascade has applied them.
+    pub fn visible(&self) -> TextEffects {
+        let mut fx = self.sanitized();
+        fx.outline = fx.outline.filter(|o| o.color.is_some() && o.width > 0.0 && o.transparency < 100.0);
+        fx.shadow = fx.shadow.filter(|s| s.transparency < 100.0);
+        fx.glow = fx.glow.filter(|g| g.size > 0.0 && g.transparency < 100.0);
+        fx.reflection = fx.reflection.filter(|r| r.size > 0.0 && r.transparency < 100.0);
+        fx
+    }
+
     /// Apply every `Some` field of `patch` on top of `self` (style, then direct formatting).
     pub fn overlay(&mut self, patch: &TextEffects) {
         if patch.fill.is_some() {

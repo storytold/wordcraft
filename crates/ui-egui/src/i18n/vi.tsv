@@ -2672,3 +2672,42 @@ template	Letter	Thư
 # Reading Mode column widths (#1040)
 	Narrow	Hẹp
 	Medium	Trung bình
+
+# Font dialog and pending defaults/effects. Clean-room translations.
+	pt and above	pt trở lên
+	All new blank documents	Tất cả tài liệu trống mới
+	Bold Italic	Đậm nghiêng
+	By:	Theo:
+	Clear Text Effects	Xóa hiệu ứng văn bản
+	Condensed	Thu hẹp
+	Default change pending	Đang chờ thay đổi mặc định
+	Dot dot dash	Chấm chấm gạch
+	Double wave	Sóng kép
+	Expanded	Mở rộng
+	Font size must be between 1 and 1638 pt.	Cỡ phông phải từ 1 đến 1638 pt.
+	Font style:	Kiểu phông:
+	Historical and Discretionary	Lịch sử và tùy chọn
+	Kerning for fonts:	Giãn cách cặp ký tự cho phông:
+	Ligatures:	Chữ ghép:
+	Lining	Chữ số cùng chiều cao
+	Lowered	Hạ thấp
+	Number forms:	Dạng chữ số:
+	Number spacing:	Khoảng cách chữ số:
+	Old-style	Chữ số kiểu cổ
+	OpenType Features	Tính năng OpenType
+	Proportional	Theo tỷ lệ
+	Raised	Nâng cao
+	Regular	Thường
+	Scale:	Tỷ lệ:
+	Standard and Contextual	Tiêu chuẩn và theo ngữ cảnh
+	Standard only	Chỉ tiêu chuẩn
+	Stylistic sets:	Bộ kiểu dáng:
+	Tabular	Dạng bảng
+	Text Effects…	Hiệu ứng văn bản…
+	Theme font	Phông chủ đề
+	This document only	Chỉ tài liệu này
+	Underline color:	Màu gạch dưới:
+	Underline style:	Kiểu gạch dưới:
+	Use Contextual Alternates	Dùng ký tự thay thế theo ngữ cảnh
+	Use the pending font settings as the default for:	Dùng thiết đặt phông đang chờ làm mặc định cho:
+	Preview unavailable	Không có bản xem trước

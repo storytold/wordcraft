@@ -20,11 +20,11 @@ fn len(pt: f32) -> String {
     emu(wordcraft_geom::finite(pt).clamp(0.0, 2000.0))
 }
 
-/// `w14:srgbClr` with its transparency (`w14:alpha` is the transparency, not the opacity).
+/// `w14:srgbClr` with opacity converted from the model's transparency.
 fn color(w: &mut W, c: Rgb, transparency: f32) {
     if transparency > 0.0 {
         w.open("w14:srgbClr", &[("w14:val", &c.hex())]);
-        w.empty("w14:alpha", &[("w14:val", &pct(transparency))]);
+        w.empty("w14:alpha", &[("w14:val", &pct(100.0 - transparency))]);
         w.close("w14:srgbClr");
     } else {
         w.empty("w14:srgbClr", &[("w14:val", &c.hex())]);

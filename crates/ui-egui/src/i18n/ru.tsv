@@ -2630,3 +2630,43 @@ preview	Title	Пример
 # Reading Mode column widths (#1040)
 	Narrow	Узкая
 	Medium	Средняя
+
+
+# Font dialog and pending defaults/effects. Clean-room translations.
+	pt and above	пт и больше
+	All new blank documents	Все новые пустые документы
+	Bold Italic	Полужирный курсив
+	By:	На:
+	Clear Text Effects	Очистить эффекты текста
+	Condensed	Уплотнённый
+	Default change pending	Изменение настроек по умолчанию ожидает применения
+	Dot dot dash	Точка-точка-тире
+	Double wave	Двойная волна
+	Expanded	Разреженный
+	Font size must be between 1 and 1638 pt.	Размер шрифта должен быть от 1 до 1638 пт.
+	Font style:	Начертание:
+	Historical and Discretionary	Исторические и необязательные
+	Kerning for fonts:	Кернинг для шрифтов:
+	Ligatures:	Лигатуры:
+	Lining	Цифры одной высоты
+	Lowered	Опущенный
+	Number forms:	Формы цифр:
+	Number spacing:	Интервалы цифр:
+	Old-style	Старостильные цифры
+	OpenType Features	Возможности OpenType
+	Proportional	Пропорциональные
+	Raised	Поднятый
+	Regular	Обычный
+	Scale:	Масштаб:
+	Standard and Contextual	Стандартные и контекстные
+	Standard only	Только стандартные
+	Stylistic sets:	Стилистические наборы:
+	Tabular	Табличные
+	Text Effects…	Эффекты текста…
+	Theme font	Шрифт темы
+	This document only	Только этот документ
+	Underline color:	Цвет подчёркивания:
+	Underline style:	Стиль подчёркивания:
+	Use Contextual Alternates	Использовать контекстные варианты
+	Use the pending font settings as the default for:	Использовать ожидающие настройки шрифта по умолчанию для:
+	Preview unavailable	Предварительный просмотр недоступен

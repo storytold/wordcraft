@@ -596,7 +596,7 @@ impl SymbolForm {
             .session
             .doc
             .para_at(&app.session.sel.focus)
-            .map(|p| app.session.doc.styles.resolve_char(p.props.style.as_deref(), &app.session.typing_props()).font)
+            .map(|p| app.session.doc.resolve_char(p.props.style.as_deref(), &app.session.typing_props()).font)
             .unwrap_or_else(|| wordcraft_doc::styles::BODY_FONT.to_string());
         let recent = app.ui.recent_symbols.first().cloned();
         let font = recent.as_ref().map(|r| r.font.clone()).unwrap_or_default();

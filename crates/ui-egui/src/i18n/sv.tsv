@@ -2647,3 +2647,42 @@ preview	Title	Titel
 	Bottom Right Cell	Nedre högra cellen
 	Inside Horizontal Border	Inre vågrät kantlinje
 	Inside Vertical Border	Inre lodrät kantlinje
+
+# Font dialog and pending defaults/effects. Clean-room translations.
+	pt and above	pt och större
+	All new blank documents	Alla nya tomma dokument
+	Bold Italic	Fet kursiv
+	By:	Med:
+	Clear Text Effects	Rensa texteffekter
+	Condensed	Tät
+	Default change pending	Standardändring väntar
+	Dot dot dash	Punkt punkt streck
+	Double wave	Dubbel våg
+	Expanded	Gles
+	Font size must be between 1 and 1638 pt.	Teckenstorleken måste vara mellan 1 och 1638 pt.
+	Font style:	Teckenstil:
+	Historical and Discretionary	Historiska och diskretionära
+	Kerning for fonts:	Kerning för tecken:
+	Ligatures:	Ligaturer:
+	Lining	Versala siffror
+	Lowered	Sänkt
+	Number forms:	Sifferformer:
+	Number spacing:	Sifferavstånd:
+	Old-style	Gemenstilssiffror
+	OpenType Features	OpenType-funktioner
+	Proportional	Proportionellt
+	Raised	Höjt
+	Regular	Normal
+	Scale:	Skala:
+	Standard and Contextual	Standard och kontextuella
+	Standard only	Endast standard
+	Stylistic sets:	Stilistiska uppsättningar:
+	Tabular	Tabell
+	Text Effects…	Texteffekter…
+	Theme font	Temateckensnitt
+	This document only	Endast detta dokument
+	Underline color:	Understrykningsfärg:
+	Underline style:	Understrykningsstil:
+	Use Contextual Alternates	Använd kontextuella alternativ
+	Use the pending font settings as the default for:	Använd de väntande teckeninställningarna som standard för:
+	Preview unavailable	Förhandsvisning saknas

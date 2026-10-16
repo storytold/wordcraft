@@ -538,7 +538,15 @@ fn hash_of<T: Hash>(t: &T) -> u64 {
 }
 
 fn env_hash(doc: &Document, opts: &LayoutOptions) -> u64 {
-    let s = serde_json::to_string(&(&doc.styles, &doc.numbering, doc.settings.default_tab, &doc.settings.footnote_format)).unwrap_or_default();
+    let s = serde_json::to_string(&(
+        &doc.styles,
+        &doc.numbering,
+        doc.settings.default_tab,
+        &doc.settings.footnote_format,
+        &doc.settings.major_font,
+        &doc.settings.minor_font,
+    ))
+    .unwrap_or_default();
     // Outline view lays paragraphs out changed (no indents; plain without text formatting).
     let outline = (opts.view == ViewMode::Outline).then(|| opts.outline.as_ref().is_some_and(|o| o.plain));
     hash_of(&(

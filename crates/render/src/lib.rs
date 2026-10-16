@@ -701,6 +701,8 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             match stroke {
                 Stroke::Dotted => st = st.with_dashes(0.0, [w, w * 2.0]),
                 Stroke::Dashed => st = st.with_dashes(0.0, [w * 4.0, w * 2.0]),
+                Stroke::DotDash => st = st.with_dashes(0.0, [w * 4.0, w * 2.0, w, w * 2.0]),
+                Stroke::DotDotDash => st = st.with_dashes(0.0, [w * 4.0, w * 2.0, w, w * 2.0, w, w * 2.0]),
                 _ => {}
             }
             let line = |ctx: &mut RenderContext, dy: f64| {
@@ -709,12 +711,17 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 p.line_to((*x1 as f64, *y1 as f64 + dy));
                 ctx.stroke_path(&p);
             };
-            if *stroke == Stroke::Wave {
+            if matches!(stroke, Stroke::Wave | Stroke::DoubleWave) {
                 let (a, b) = ((*x0).min(*x1) as f64, (*x0).max(*x1) as f64);
                 let amp = (w * 1.2).max(0.8);
-                let p = wave_path(a, b, *y0 as f64, amp);
                 ctx.set_stroke(kurbo::Stroke::new(w * 0.8));
-                ctx.stroke_path(&p);
+                if *stroke == Stroke::DoubleWave {
+                    for dy in [-amp * 1.4, amp * 1.4] {
+                        ctx.stroke_path(&wave_path(a, b, *y0 as f64 + dy, amp));
+                    }
+                } else {
+                    ctx.stroke_path(&wave_path(a, b, *y0 as f64, amp));
+                }
                 return;
             }
             if *stroke == Stroke::Double {

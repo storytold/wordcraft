@@ -2628,3 +2628,43 @@
 # Reading Mode column widths (#1040)
 	Narrow	Keskeny
 	Medium	Közepes
+
+
+# Font dialog and pending defaults/effects. Clean-room translations.
+	pt and above	pt és nagyobb
+	All new blank documents	Minden új üres dokumentum
+	Bold Italic	Félkövér dőlt
+	By:	Mérték:
+	Clear Text Effects	Szövegeffektusok törlése
+	Condensed	Sűrített
+	Default change pending	Alapértelmezés módosítása függőben
+	Dot dot dash	Pont-pont-vonal
+	Double wave	Kettős hullám
+	Expanded	Ritkított
+	Font size must be between 1 and 1638 pt.	A betűméretnek 1 és 1638 pt között kell lennie.
+	Font style:	Betűstílus:
+	Historical and Discretionary	Történeti és választható
+	Kerning for fonts:	Alávágás betűtípusokhoz:
+	Ligatures:	Ligatúrák:
+	Lining	Azonos magasságú számok
+	Lowered	Süllyesztett
+	Number forms:	Számformák:
+	Number spacing:	Számközök:
+	Old-style	Ugráló számok
+	OpenType Features	OpenType-funkciók
+	Proportional	Arányos
+	Raised	Emelt
+	Regular	Normál
+	Scale:	Méretezés:
+	Standard and Contextual	Szokásos és környezetfüggő
+	Standard only	Csak szokásos
+	Stylistic sets:	Stíluskészletek:
+	Tabular	Táblázatos
+	Text Effects…	Szövegeffektusok…
+	Theme font	Téma betűtípusa
+	This document only	Csak ez a dokumentum
+	Underline color:	Aláhúzás színe:
+	Underline style:	Aláhúzás stílusa:
+	Use Contextual Alternates	Környezetfüggő változatok használata
+	Use the pending font settings as the default for:	A függőben lévő betűbeállítások legyenek alapértelmezettek itt:
+	Preview unavailable	Az előnézet nem érhető el

@@ -15,6 +15,8 @@ use crate::theme::{Tokens, regular};
 #[derive(Default)]
 pub struct Previews {
     tex: HashMap<String, TextureHandle>,
+    /// Keep only the current Font dialog raster while its values change.
+    font_dialog: Option<(String, TextureHandle)>,
     /// The font list, for the interface language it was made in.
     families: Option<(&'static str, Vec<String>)>,
     font_gen: u64,
@@ -214,6 +216,7 @@ impl Previews {
     /// `families` (an entry drawn before its font was added shows the fallback face).
     pub fn fonts_changed(&mut self, ctx: &egui::Context, families: impl Iterator<Item = String>) {
         self.families = None;
+        self.font_dialog = None;
         self.east_asian = None;
         ctx.data_mut(|d| {
             for f in families {
@@ -453,6 +456,123 @@ fn snippet_blocks(
     let img = wordcraft_render::render_area(&d, page, 0.0, 0.0, w + 2.0 * margin, h + margin, ppp, &opts);
     let px = img.to_straight();
     Some(egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &px))
+}
+
+/// A single-line Font dialog preview, using the same command, shaping and decorations as the page.
+pub fn font_preview(app: &mut WordApp, ui: &mut Ui, sample: &str, changes: &Value) {
+    let size = vec2(ui.available_width().clamp(120.0, 640.0), 96.0);
+    let ppp = ui.ctx().pixels_per_point().clamp(0.5, 4.0);
+    let props = app.session.typing_props().formatting();
+    let style = app.session.doc.para_at(&app.session.sel.focus).and_then(|p| p.props.style.clone());
+    let doc = &app.session.doc;
+    let styles = app.previews.styles_key(doc, app.session.rev());
+    let key = serde_json::to_string(&(
+        changes,
+        sample,
+        &props,
+        &style,
+        styles,
+        &doc.settings.major_font,
+        &doc.settings.minor_font,
+        wordcraft_fonts::FontDb::global().generation(),
+        size.x,
+        ppp,
+    ))
+    .unwrap_or_default();
+    let image_width = size.x - 88.0;
+    if app.previews.font_dialog.as_ref().is_none_or(|(k, _)| k != &key) {
+        let image = font_image(doc, &props, style.as_deref(), changes, sample, image_width, size.y, ppp);
+        match image {
+            Some(image) => {
+                if let Some((k, texture)) = &mut app.previews.font_dialog {
+                    texture.set(image, egui::TextureOptions::LINEAR);
+                    *k = key;
+                } else {
+                    app.previews.font_dialog = Some((key, ui.ctx().load_texture("font_dialog_preview", image, egui::TextureOptions::LINEAR)));
+                }
+            }
+            None => {
+                app.previews.font_dialog = None;
+            }
+        }
+    }
+    let t = Tokens::get(ui.ctx());
+    let (r, response) = ui.allocate_exact_size(size, Sense::hover());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Image, true, tl!("Preview")));
+    ui.painter().rect(r, 2.0, egui::Color32::WHITE, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    if let Some((_, texture)) = &app.previews.font_dialog {
+        let image = Rect::from_min_size(r.min + vec2(44.0, 0.0), vec2(image_width, size.y));
+        ui.painter().with_clip_rect(r.shrink(1.0)).image(
+            texture.id(),
+            image,
+            Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+        let y = r.top() + size.y * 0.65;
+        for (x0, x1) in [(r.left() + 8.0, image.left() - 6.0), (image.right() + 6.0, r.right() - 8.0)] {
+            ui.painter().line_segment([pos2(x0, y), pos2(x1, y)], Stroke::new(0.75, t.border_strong));
+        }
+    } else {
+        ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, tl!("Preview unavailable"), regular(12.0), t.text_dim);
+    }
+}
+
+fn font_image(
+    base: &Document,
+    props: &CharProps,
+    style: Option<&str>,
+    changes: &Value,
+    sample: &str,
+    w: f32,
+    h: f32,
+    ppp: f32,
+) -> Option<egui::ColorImage> {
+    let mut d = Document::new();
+    d.styles = base.styles.clone();
+    // Paragraph layout must not bring list labels, borders, indents or pagination into this tile.
+    d.styles.default_para = Default::default();
+    for s in &mut d.styles.styles {
+        s.para = Default::default();
+    }
+    d.settings.major_font = base.settings.major_font.clone();
+    d.settings.minor_font = base.settings.minor_font.clone();
+    let mut para = Paragraph::with_text(sample, props.clone());
+    para.props.style = style.map(str::to_string);
+    para.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
+    d.body = vec![para_block(para)];
+    d.last_section.page_w = 1_000_000.0;
+    d.last_section.page_h = 20_000.0;
+    d.last_section.margin_left = 0.0;
+    d.last_section.margin_right = 0.0;
+    d.last_section.margin_top = 0.0;
+    d.last_section.margin_bottom = 0.0;
+    let mut scratch = wordcraft_engine::Session::new(d);
+    scratch.sel = wordcraft_engine::Selection {
+        anchor: scratch.doc.start_of(wordcraft_doc::StoryRef::Body),
+        focus: scratch.doc.end_of(wordcraft_doc::StoryRef::Body),
+    };
+    scratch.run("format.set", changes).ok()?;
+    let opts = wordcraft_layout::LayoutOptions { show_hidden: true, ..Default::default() };
+    let layout = wordcraft_layout::layout(&scratch.doc, &mut wordcraft_layout::LayoutCache::new(), &opts);
+    let page = layout.pages.first()?;
+    let (para, y) = page.items.iter().find_map(|item| match item {
+        wordcraft_layout::Placed::Lines { para, y, .. } => Some((para, *y)),
+        _ => None,
+    })?;
+    let line = para.lines.first()?;
+    let (left, right) = line.xs.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), x| (a.min(*x), b.max(*x)));
+    if ![left, right, line.baseline, y].into_iter().all(f32::is_finite) {
+        return None;
+    }
+    // Keep the chosen point size at the canvas's 100% scale; the tile clips overflow.
+    let scale = crate::canvas::PX_PER_PT;
+    let baseline = h * 0.65;
+    let x = (left + right) / 2.0 - w / (2.0 * scale);
+    let y = y + line.baseline - baseline / scale;
+    let mut render = crate::canvas::screen_render_options();
+    render.display.always.hidden = true;
+    let img = wordcraft_render::render_area(&scratch.doc, page, x, y, w / scale, h / scale, ppp * scale, &render);
+    Some(egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.to_straight()))
 }
 
 /// Manage Styles' preview of one style (`ty`: the `styles.manage` type), `size` points wide and
@@ -965,5 +1085,57 @@ mod tests {
             }
             assert_eq!(images, 1, "{theme:?}: the entry draws its rendered name");
         }
+    }
+    #[test]
+    fn font_dialog_preview_keeps_document_size_and_script_baselines() {
+        let bounds = |img: &egui::ColorImage| {
+            let mut points =
+                img.pixels.iter().enumerate().filter(|(_, p)| p.r().max(p.g()).max(p.b()) < 128).map(|(i, _)| (i % img.size[0], i / img.size[0]));
+            let (x, y) = points.next().expect("visible text");
+            points.fold((x, y, x, y), |(l, t, r, b), (x, y)| (l.min(x), t.min(y), r.max(x), b.max(y)))
+        };
+        let base = Document::new();
+        for size in [12.0, 28.0, 48.0] {
+            let props = CharProps { font: Some("Inter".into()), size: Some(size), ..Default::default() };
+            let preview = font_image(&base, &props, None, &json!({"props":{}}), "office", 400.0, 96.0, 2.0).unwrap();
+            let mut doc = Document::new();
+            doc.body = vec![para_block(Paragraph::with_text("office", props.clone()))];
+            doc.last_section.margin_left = 0.0;
+            doc.last_section.margin_top = 0.0;
+            let layout = wordcraft_layout::layout(&doc, &mut wordcraft_layout::LayoutCache::new(), &Default::default());
+            let scale = crate::canvas::PX_PER_PT;
+            let rendered = wordcraft_render::render_area(
+                &doc,
+                &layout.pages[0],
+                0.0,
+                0.0,
+                400.0 / scale,
+                96.0 / scale,
+                2.0 * scale,
+                &crate::canvas::screen_render_options(),
+            );
+            let document = egui::ColorImage::from_rgba_unmultiplied([rendered.width as usize, rendered.height as usize], &rendered.to_straight());
+            let (l, t, r, b) = bounds(&preview);
+            let (dl, dt, dr, db) = bounds(&document);
+            assert!((r - l).abs_diff(dr - dl) <= 1 && (b - t).abs_diff(db - dt) <= 1, "{size}pt preview must match document glyph size");
+            if size == 28.0 {
+                for (script, above) in [("superscript", true), ("subscript", false)] {
+                    let image = font_image(&base, &props, None, &json!({"props":{"vertAlign":script}}), "office", 400.0, 96.0, 2.0).unwrap();
+                    let (_, st, _, sb) = bounds(&image);
+                    assert!(sb - st < b - t, "{script} uses smaller glyphs");
+                    assert_eq!(st + sb < t + b, above, "{script} shifts from the normal baseline");
+                }
+            }
+        }
+        let props = CharProps { font: Some("Inter".into()), size: Some(12.0), ..Default::default() };
+        let before = base.clone();
+        let short = font_image(&base, &props, None, &json!({"props":{}}), "office", 120.0, 96.0, 2.0).unwrap();
+        let selected = font_image(&base, &props, None, &json!({"props":{"font":"Source Sans 3"}}), "office", 120.0, 96.0, 2.0).unwrap();
+        assert_ne!(short.pixels, selected.pixels, "the pending family changes the rendered glyphs");
+        let long = font_image(&base, &props, None, &json!({"props":{}}), &"office ".repeat(30), 120.0, 96.0, 2.0).unwrap();
+        let (_, t, _, b) = bounds(&short);
+        let (_, lt, _, lb) = bounds(&long);
+        assert!((b - t).abs_diff(lb - lt) <= 1, "long samples clip without shrinking");
+        assert_eq!(base, before, "previewing pending formatting never edits the source document");
     }
 }

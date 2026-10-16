@@ -47,16 +47,20 @@ fn emoji_keep_their_colours_on_a_dark_page() {
     }
 }
 
-/// "Emoji test: 🧠 brain, ✅ check." rendered at 2x with `opts`, and each emoji glyph's box in
+/// Two emoji rendered at 2x with `opts`, and each emoji glyph's box in
 /// pixels; None (the test skips) when no colour emoji font is installed.
 #[cfg(not(target_arch = "wasm32"))]
 fn emoji_page(opts: &RenderOptions) -> Option<(Rendered, Vec<(u32, u32, u32, u32)>)> {
-    let has_colour_font = FontDb::global().fallback_for('🧠', u32::MAX).is_some_and(|f| COLOR_EMOJI.contains(&f.family.as_str()));
-    if !has_colour_font {
+    let Some(face) = FontDb::global().fallback_for('🧠', u32::MAX).filter(|f| COLOR_EMOJI.contains(&f.family.as_str())) else {
         eprintln!("skipped: no colour emoji font installed");
         return None;
-    }
-    let d = Document::from_text("Emoji test: 🧠 brain, ✅ check.");
+    };
+    // Request the colour face so Windows cannot choose a monochrome symbol fallback for ✅.
+    let mut d = Document::new();
+    d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(
+        "🧠✅",
+        wordcraft_doc::CharProps { font: Some(face.family.clone()), ..Default::default() },
+    ))];
     let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
     let page = &l.pages[0];
     let scale = 2.0;

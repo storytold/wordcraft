@@ -688,6 +688,9 @@ impl WordApp {
 
     /// Restore preferences saved by [`WordApp::prefs`].
     pub fn apply_prefs(&mut self, ui: UiState) {
+        let blank = !self.session.dirty
+            && self.session.path.is_none()
+            && (self.session.doc == wordcraft_doc::Document::new() || self.session.doc == wordcraft_engine::blank_document(&self.session.region()));
         self.ui = ui;
         self.ui.backstage = false;
         // Word opens on Home every launch, so the tab `ui.json` holds is not restored. Going File
@@ -715,6 +718,9 @@ impl WordApp {
             }
         }
         self.session.prefs = std::mem::take(&mut self.ui.editing);
+        if blank {
+            self.session.set_document(self.session.blank_document());
+        }
         // The saved dictionaries folder (#1063) is searched from the start.
         if let Some(f) = self.session.prefs.dictionaries_folder.as_deref() {
             wordcraft_engine::cmd::options::use_dictionaries_folder(Some(f));

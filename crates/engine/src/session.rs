@@ -487,6 +487,8 @@ pub struct MathEdit {
 pub struct Prefs {
     /// Word Count includes text boxes, footnotes and endnotes (Word's default).
     pub count_notes: bool,
+    /// Font dialog defaults for new blank documents, saved with user preferences.
+    pub font_defaults: Option<CharProps>,
     /// Track Changes Options: what markup shows and how revisions are drawn (per user, as in
     /// Word).
     pub markup: wordcraft_layout::display::MarkupOptions,
@@ -531,6 +533,7 @@ impl Default for Prefs {
     fn default() -> Self {
         Prefs {
             count_notes: true,
+            font_defaults: None,
             markup: Default::default(),
             print_markup: false,
             typing_replaces_selection: true,
@@ -990,7 +993,14 @@ impl Session {
     /// A new blank document (the Normal template) on the region's paper: Letter in the US and
     /// other Letter regions, A4 elsewhere (#838). Margins stay 2.54 cm (1") all round.
     pub fn blank_document(&self) -> Document {
-        blank_document(&self.region())
+        let mut doc = blank_document(&self.region());
+        if let Some(props) = &self.prefs.font_defaults {
+            doc.styles.default_chr.overlay(props);
+            if let Some(normal) = doc.styles.get_mut("Normal") {
+                normal.chr.overlay(props);
+            }
+        }
+        doc
     }
 
     /// Replace the document (open/new).

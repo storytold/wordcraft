@@ -17,8 +17,11 @@ pub enum Stroke {
     Solid,
     Dotted,
     Dashed,
+    DotDash,
+    DotDotDash,
     Double,
     Wave,
+    DoubleWave,
 }
 
 #[derive(Clone, Debug)]
@@ -334,9 +337,12 @@ pub fn revision_color(i: u32) -> Rgb {
 fn stroke_of(u: Underline) -> Stroke {
     match u {
         Underline::Dotted => Stroke::Dotted,
-        Underline::Dash | Underline::DotDash | Underline::DotDotDash => Stroke::Dashed,
+        Underline::Dash => Stroke::Dashed,
+        Underline::DotDash => Stroke::DotDash,
+        Underline::DotDotDash => Stroke::DotDotDash,
         Underline::Double => Stroke::Double,
-        Underline::Wave | Underline::DoubleWave => Stroke::Wave,
+        Underline::Wave => Stroke::Wave,
+        Underline::DoubleWave => Stroke::DoubleWave,
         _ => Stroke::Solid,
     }
 }
@@ -930,7 +936,8 @@ fn lines(
             };
             let double = rc.double_strike || del_mark == Some(DeleteMark::DoubleStrikethrough);
             let struck = rc.strike || double || ins_mark == Some(InsertMark::Strikethrough) || del_mark == Some(DeleteMark::Strikethrough);
-            let spans = if underline != Underline::None || struck { line.spans(run_start, end_k) } else { Vec::new() };
+            let hidden_mark = rc.hidden && opts.always.shown(opts.marks).hidden;
+            let spans = if underline != Underline::None || struck || hidden_mark { line.spans(run_start, end_k) } else { Vec::new() };
             for (x0, x1) in spans.into_iter().map(|(a, b)| (x + a, x + b)).filter(|(a, b)| b > a) {
                 if underline != Underline::None {
                     let uy = base - st.shift + st.size * 0.12;
@@ -952,6 +959,10 @@ fn lines(
                         let w = if underline == Underline::Thick { thick * 2.0 } else { thick };
                         out.push(Draw::Line { x0, y0: uy, x1, y1: uy, width: w, color: ucolor, stroke: stroke_of(underline), alpha, text_bg });
                     }
+                }
+                if hidden_mark {
+                    let uy = base - st.shift + st.size * 0.18;
+                    out.push(Draw::Line { x0, y0: uy, x1, y1: uy, width: thick * 0.7, color, stroke: Stroke::Dotted, alpha, text_bg });
                 }
                 if struck {
                     let sy = base - st.shift - st.size * 0.28;

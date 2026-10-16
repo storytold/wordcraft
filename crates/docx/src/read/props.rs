@@ -4,8 +4,9 @@ use std::collections::HashMap;
 
 use wordcraft_doc::para::cap_alt;
 use wordcraft_doc::props::{
-    Align, Border, BorderStyle, Borders, CellProps, CharProps, HeightRule, Highlight, LineSpacing, NumRef, ParaProps, Rgb, RowProps, TabAlign,
-    TabLeader, TabStop, TableFloat, TableLook, TableProps, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
+    Align, Border, BorderStyle, Borders, CellProps, CharProps, HeightRule, Highlight, Ligatures, LineSpacing, NumRef, NumberForm, NumberSpacing,
+    ParaProps, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextColor, TextDirection, Underline, VAlign, VMerge,
+    VertAlign,
 };
 use wordcraft_doc::section::{
     Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, MAX_CHAR_SPACE, MAX_GRID_PITCH, NotePos, NoteProps, NoteRestart, NumFormat,
@@ -168,6 +169,11 @@ impl PropCtx {
                                 .map(str::to_string)
                             },
                         );
+                    c.font_theme = k.attr("w:asciiTheme").or_else(|| k.attr("w:hAnsiTheme")).and_then(|v| match v {
+                        "majorAscii" | "majorHAnsi" => Some(wordcraft_doc::props::ThemeFont::Headings),
+                        "minorAscii" | "minorHAnsi" => Some(wordcraft_doc::props::ThemeFont::Body),
+                        _ => None,
+                    });
                     // The complex-script font (Persian, Arabic, Hebrew text). A `w:cstheme` font is
                     // left to inherit: the theme's per-script fonts aren't read.
                     c.font_cs = k.attr("w:cs").filter(|f| !f.is_empty() && f.len() < 256).map(str::to_string);
@@ -212,6 +218,7 @@ impl PropCtx {
                     } else {
                         c.underline = Some(Underline::Single);
                     }
+                    c.underline_auto = k.attr("w:color").map(|v| v == "auto" && k.attr("w:themeColor").is_none());
                     c.underline_color =
                         self.theme_color(k, "w:themeColor", "w:themeTint", "w:themeShade").or_else(|| k.attr("w:color").and_then(Rgb::parse));
                 }
@@ -228,6 +235,38 @@ impl PropCtx {
                     c.lang = k.attr("w:val").filter(|v| !v.is_empty() && v.len() < 64).map(str::to_string);
                     c.lang_bidi = k.attr("w:bidi").filter(|v| !v.is_empty() && v.len() < 64).map(str::to_string);
                 }
+                "w14:ligatures" => c.ligatures = k.attr("w14:val").and_then(Ligatures::from_ooxml),
+                "w14:numSpacing" => {
+                    c.number_spacing = k.attr("w14:val").and_then(|s| match s {
+                        "default" => Some(NumberSpacing::Default),
+                        "proportional" => Some(NumberSpacing::Proportional),
+                        "tabular" => Some(NumberSpacing::Tabular),
+                        _ => None,
+                    })
+                }
+                "w14:numForm" => {
+                    c.number_form = k.attr("w14:val").and_then(|s| match s {
+                        "default" => Some(NumberForm::Default),
+                        "lining" => Some(NumberForm::Lining),
+                        "oldStyle" => Some(NumberForm::OldStyle),
+                        _ => None,
+                    })
+                }
+                "w14:stylisticSets" => {
+                    let mut sets = 0u32;
+                    for set in k.children("w14:styleSet") {
+                        if let Some(id) = set.attr("w14:id").and_then(|v| v.parse::<u32>().ok()).filter(|v| (1..=20).contains(v)) {
+                            let mask = 1u32 << (id - 1);
+                            if matches!(set.attr("w14:val"), Some("0" | "false")) {
+                                sets &= !mask;
+                            } else {
+                                sets |= mask;
+                            }
+                        }
+                    }
+                    c.stylistic_sets = Some(sets);
+                }
+                "w14:cntxtAlts" => c.contextual_alternates = Some(!matches!(k.attr("w14:val"), Some("0" | "false"))),
                 n if n.starts_with("w14:") => {
                     let fx = c.text_effects.get_or_insert_with(Default::default);
                     super::wordart::read(k, &self.theme, fx);

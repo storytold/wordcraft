@@ -2243,3 +2243,44 @@
 # Reading Mode column widths (#1040)
 	Narrow	Uska
 	Medium	Srednja
+
+
+# Font dialog and pending defaults/effects. Clean-room translations.
+	pt and above	pt i veće
+	All new blank documents	Svi novi prazni dokumenti
+	Bold Italic	Podebljano kurzivno
+	By:	Za:
+	Clear Text Effects	Ukloni tekstualne efekte
+	Condensed	Zbijeno
+	Default change pending	Promena podrazumevanih postavki na čekanju
+	Dot dot dash	Tačka-tačka-crta
+	Double wave	Dvostruki talas
+	Expanded	Razmaknuto
+	Font size must be between 1 and 1638 pt.	Veličina fonta mora biti između 1 i 1638 pt.
+	Font style:	Stil fonta:
+	Historical and Discretionary	Istorijske i izborne
+	Kerning for fonts:	Kerning za fontove:
+	Ligatures:	Ligature:
+	Lining	Cifre jednake visine
+	Lowered	Spušteno
+	Normal	Normalno
+	Number forms:	Oblici cifara:
+	Number spacing:	Razmak cifara:
+	Old-style	Starostilske cifre
+	OpenType Features	OpenType mogućnosti
+	Proportional	Proporcionalno
+	Raised	Podignuto
+	Regular	Obično
+	Scale:	Razmera:
+	Standard and Contextual	Standardne i kontekstne
+	Standard only	Samo standardne
+	Stylistic sets:	Stilski skupovi:
+	Tabular	Tabelarno
+	Text Effects…	Tekstualni efekti…
+	Theme font	Font teme
+	This document only	Samo ovaj dokument
+	Underline color:	Boja podvlačenja:
+	Underline style:	Stil podvlačenja:
+	Use Contextual Alternates	Koristi kontekstne alternative
+	Use the pending font settings as the default for:	Koristi postavke fonta na čekanju kao podrazumevane za:
+	Preview unavailable	Pregled nije dostupan

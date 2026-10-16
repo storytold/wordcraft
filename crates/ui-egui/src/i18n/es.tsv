@@ -2599,3 +2599,43 @@ preview	Title	Título
 # Reading Mode column widths (#1040)
 	Narrow	Estrecha
 	Medium	Media
+
+
+# Font dialog and pending defaults/effects. Clean-room translations.
+	pt and above	pt o más
+	All new blank documents	Todos los documentos nuevos en blanco
+	Bold Italic	Negrita cursiva
+	By:	En:
+	Clear Text Effects	Borrar efectos de texto
+	Condensed	Condensado
+	Default change pending	Cambio de valor predeterminado pendiente
+	Dot dot dash	Punto-punto-guion
+	Double wave	Onda doble
+	Expanded	Expandido
+	Font size must be between 1 and 1638 pt.	El tamaño de fuente debe estar entre 1 y 1638 pt.
+	Font style:	Estilo de fuente:
+	Historical and Discretionary	Históricas y discrecionales
+	Kerning for fonts:	Interletraje para fuentes:
+	Ligatures:	Ligaduras:
+	Lining	Cifras alineadas
+	Lowered	Bajado
+	Number forms:	Formas de números:
+	Number spacing:	Espaciado de números:
+	Old-style	Cifras antiguas
+	OpenType Features	Funciones OpenType
+	Proportional	Proporcional
+	Raised	Elevado
+	Regular	Normal
+	Scale:	Escala:
+	Standard and Contextual	Estándar y contextuales
+	Standard only	Solo estándar
+	Stylistic sets:	Conjuntos estilísticos:
+	Tabular	Tabular
+	Text Effects…	Efectos de texto…
+	Theme font	Fuente del tema
+	This document only	Solo este documento
+	Underline color:	Color del subrayado:
+	Underline style:	Estilo del subrayado:
+	Use Contextual Alternates	Usar alternativas contextuales
+	Use the pending font settings as the default for:	Usar los ajustes de fuente pendientes como predeterminados para:
+	Preview unavailable	Vista previa no disponible

@@ -1,8 +1,8 @@
 //! Property writers, in ECMA-376 schema element order.
 
 use wordcraft_doc::props::{
-    Align, Border, BorderStyle, Borders, CellProps, CharProps, HeightRule, Highlight, LineSpacing, ParaProps, RowProps, TabAlign, TabLeader,
-    TableFloat, TableLook, TableProps, TextColor, VAlign, VMerge, VertAlign,
+    Align, Border, BorderStyle, Borders, CellProps, CharProps, HeightRule, Highlight, LineSpacing, NumberForm, NumberSpacing, ParaProps, RowProps,
+    TabAlign, TabLeader, TableFloat, TableLook, TableProps, TextColor, VAlign, VMerge, VertAlign,
 };
 
 use crate::units::{n, twips};
@@ -30,6 +30,14 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     let mut fonts: Vec<(&str, &str)> = Vec::new();
     if let Some(f) = &c.font {
         fonts.extend([("w:ascii", f.as_str()), ("w:hAnsi", f.as_str())]);
+    }
+    let theme = match c.font_theme {
+        Some(wordcraft_doc::props::ThemeFont::Body) => Some(("minorAscii", "minorHAnsi")),
+        Some(wordcraft_doc::props::ThemeFont::Headings) => Some(("majorAscii", "majorHAnsi")),
+        _ => None,
+    };
+    if let Some((ascii, hansi)) = theme {
+        fonts.extend([("w:asciiTheme", ascii), ("w:hAnsiTheme", hansi)]);
     }
     if let Some(ea) = &c.font_ea {
         fonts.push(("w:eastAsia", ea));
@@ -82,8 +90,9 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
         w.val("w:highlight", if h == Highlight::None { "none" } else { h.ooxml() });
     }
     if let Some(u) = c.underline {
-        match c.underline_color {
+        match c.underline_color.filter(|_| c.underline_auto != Some(true)) {
             Some(col) => w.empty("w:u", &[("w:val", u.ooxml()), ("w:color", &col.hex())]),
+            None if c.underline_auto == Some(true) => w.empty("w:u", &[("w:val", u.ooxml()), ("w:color", "auto")]),
             None => w.val("w:u", u.ooxml()),
         }
     }
@@ -113,6 +122,47 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     }
     if let Some(fx) = &c.text_effects {
         super::wordart::rpr_effects(w, fx);
+    }
+    if let Some(v) = c.ligatures {
+        w.empty("w14:ligatures", &[("w14:val", v.ooxml())]);
+    }
+    if let Some(v) = c.number_form {
+        w.empty(
+            "w14:numForm",
+            &[(
+                "w14:val",
+                match v {
+                    NumberForm::Default => "default",
+                    NumberForm::Lining => "lining",
+                    NumberForm::OldStyle => "oldStyle",
+                },
+            )],
+        );
+    }
+    if let Some(v) = c.number_spacing {
+        w.empty(
+            "w14:numSpacing",
+            &[(
+                "w14:val",
+                match v {
+                    NumberSpacing::Default => "default",
+                    NumberSpacing::Proportional => "proportional",
+                    NumberSpacing::Tabular => "tabular",
+                },
+            )],
+        );
+    }
+    if let Some(sets) = c.stylistic_sets {
+        w.open("w14:stylisticSets", &[]);
+        for id in 1..=20 {
+            if sets & (1u32 << (id - 1)) != 0 {
+                w.empty("w14:styleSet", &[("w14:id", &id.to_string()), ("w14:val", "1")]);
+            }
+        }
+        w.close("w14:stylisticSets");
+    }
+    if let Some(on) = c.contextual_alternates {
+        w.empty("w14:cntxtAlts", &[("w14:val", if on { "1" } else { "0" })]);
     }
 }
 

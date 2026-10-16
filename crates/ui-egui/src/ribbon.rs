@@ -634,7 +634,7 @@ pub(crate) fn caret_language(app: &WordApp) -> String {
 fn caret_lang_tag(app: &WordApp) -> Option<String> {
     let s = &app.session;
     let style = s.doc.para_at(&s.sel.focus).and_then(|p| p.props.style.clone());
-    s.doc.styles.resolve_char(style.as_deref(), &s.typing_props()).lang
+    s.doc.resolve_char(style.as_deref(), &s.typing_props()).lang
 }
 
 /// The Hunspell dictionary the caret's language needs but doesn't have (`pl_PL`), if any (#1167).

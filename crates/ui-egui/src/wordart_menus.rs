@@ -92,10 +92,16 @@ pub fn style_gallery(ui: &mut Ui, app: &mut WordApp, cmd: &str) {
 /// Text Fill: automatic (the text's colour), a colour, no fill (hollow), or a gradient of
 /// theme colours.
 pub fn fill_menu(ui: &mut Ui, app: &mut WordApp, theme: &[Rgb]) {
-    mi(ui, app, "Automatic", "format.textEffects", json!({"fill": null}));
-    mi(ui, app, "No Fill", "format.textEffects", json!({"fill": "none"}));
+    fill_menu_choices(ui, theme, &mut |v| {
+        let _ = app.run("format.textEffects", v);
+    });
+}
+
+pub fn fill_menu_choices(ui: &mut Ui, theme: &[Rgb], emit: &mut impl FnMut(serde_json::Value)) {
+    effect_item(ui, emit, "Automatic", json!({"fill": null}));
+    effect_item(ui, emit, "No Fill", json!({"fill": "none"}));
     if let Some(hex) = color_grid(ui, theme) {
-        let _ = app.run("format.textEffects", json!({"fill": hex}));
+        emit(json!({"fill": hex}));
         ui.close();
     }
     ui.add_space(4.0);
@@ -113,7 +119,7 @@ pub fn fill_menu(ui: &mut Ui, app: &mut WordApp, theme: &[Rgb]) {
                 }
             });
             if clicked {
-                let _ = app.run("format.textEffects", json!({"fill": {"gradient": [a.hex(), b.hex()], "angle": 90}}));
+                emit(json!({"fill": {"gradient": [a.hex(), b.hex()], "angle": 90}}));
                 ui.close();
             }
         }
@@ -122,18 +128,24 @@ pub fn fill_menu(ui: &mut Ui, app: &mut WordApp, theme: &[Rgb]) {
 
 /// Text Outline: automatic (none set), no outline, a colour, a weight.
 pub fn outline_menu(ui: &mut Ui, app: &mut WordApp, theme: &[Rgb], current: Option<(Rgb, f32)>) {
-    mi(ui, app, "Automatic", "format.textEffects", json!({"outline": null}));
-    mi(ui, app, "No Outline", "format.textEffects", json!({"outline": "none"}));
+    outline_menu_choices(ui, theme, current, &mut |v| {
+        let _ = app.run("format.textEffects", v);
+    });
+}
+
+pub fn outline_menu_choices(ui: &mut Ui, theme: &[Rgb], current: Option<(Rgb, f32)>, emit: &mut impl FnMut(serde_json::Value)) {
+    effect_item(ui, emit, "Automatic", json!({"outline": null}));
+    effect_item(ui, emit, "No Outline", json!({"outline": "none"}));
     let width = current.map_or(0.75, |c| c.1);
     if let Some(hex) = color_grid(ui, theme) {
-        let _ = app.run("format.textEffects", json!({"outline": {"color": hex, "width": width}}));
+        emit(json!({"outline": {"color": hex, "width": width}}));
         ui.close();
     }
     ui.separator();
     ui.menu_button(crate::tl!("Weight"), |ui| {
         let color = current.map_or(Rgb::BLACK, |c| c.0).hex();
         for w in [0.25, 0.5, 0.75, 1.0, 1.5, 2.25, 3.0] {
-            mi(ui, app, &format!("{w} pt"), "format.textEffects", json!({"outline": {"color": color, "width": w}}));
+            effect_item(ui, emit, &format!("{w} pt"), json!({"outline": {"color": color, "width": w}}));
         }
     });
 }
@@ -158,37 +170,43 @@ fn paint_warp(p: &egui::Painter, r: Rect, preset: &str, c: Color32) {
 
 /// Text Effects: Shadow, Glow and Reflection (and Transform, for a shape's text).
 pub fn effects_menu(ui: &mut Ui, app: &mut WordApp, theme: &[Rgb], transform: bool) {
+    effects_choices(ui, theme, &mut |v| {
+        let _ = app.run("format.textEffects", v);
+    });
+    if transform {
+        ui.menu_button(crate::tl!("Transform"), |ui| transform_menu(ui, app));
+    }
+}
+
+pub fn effects_choices(ui: &mut Ui, theme: &[Rgb], emit: &mut impl FnMut(serde_json::Value)) {
     ui.menu_button(crate::tl!("Shadow"), |ui| {
-        mi(ui, app, "No Shadow", "format.textEffects", json!({"shadow": null}));
+        effect_item(ui, emit, "No Shadow", json!({"shadow": null}));
         ui.separator();
         for (id, label) in wordcraft_doc::effects::SHADOW_PRESETS {
-            mi(ui, app, label, "format.textEffects", json!({"shadow": id}));
+            effect_item(ui, emit, label, json!({"shadow": id}));
         }
     });
     ui.menu_button(crate::tl!("Glow"), |ui| {
-        mi(ui, app, "No Glow", "format.textEffects", json!({"glow": null}));
+        effect_item(ui, emit, "No Glow", json!({"glow": null}));
         ui.separator();
         for size in [3.0, 5.0, 8.0, 11.0] {
-            mi(ui, app, &format!("{size} pt"), "format.textEffects", json!({"glow": size}));
+            effect_item(ui, emit, &format!("{size} pt"), json!({"glow": size}));
         }
         ui.separator();
         ui.menu_button(crate::tl!("Glow Colors"), |ui| {
             if let Some(hex) = color_grid(ui, theme) {
-                let _ = app.run("format.textEffects", json!({"glow": {"color": hex, "size": 5.0}}));
+                emit(json!({"glow": {"color": hex, "size": 5.0}}));
                 ui.close();
             }
         });
     });
     ui.menu_button(crate::tl!("Reflection"), |ui| {
-        mi(ui, app, "No Reflection", "format.textEffects", json!({"reflection": null}));
+        effect_item(ui, emit, "No Reflection", json!({"reflection": null}));
         ui.separator();
         for size in [25.0, 50.0, 90.0] {
-            mi(ui, app, &format!("{size:.0}%"), "format.textEffects", json!({"reflection": {"size": size}}));
+            effect_item(ui, emit, &format!("{size:.0}%"), json!({"reflection": {"size": size}}));
         }
     });
-    if transform {
-        ui.menu_button(crate::tl!("Transform"), |ui| transform_menu(ui, app));
-    }
 }
 
 /// Text Effects › Transform: the warps WordCraft bends text along, as previews.
@@ -219,4 +237,11 @@ pub fn current_outline(app: &WordApp) -> Option<(Rgb, f32)> {
     let para = app.session.doc.para_at(&start)?;
     let fx = para.props_at(0).text_effects.as_deref()?;
     fx.outline.and_then(|o| o.color.map(|c| (c, o.width)))
+}
+
+fn effect_item(ui: &mut Ui, emit: &mut impl FnMut(serde_json::Value), label: &str, params: serde_json::Value) {
+    if ui.button(crate::tl!(label)).clicked() {
+        emit(params);
+        ui.close();
+    }
 }

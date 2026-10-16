@@ -114,6 +114,13 @@ fn every_char_prop_round_trips() {
         ins: None,
         del: None,
         fmt_change: None,
+        font_theme: None,
+        underline_auto: Some(false),
+        ligatures: None,
+        number_spacing: None,
+        number_form: None,
+        stylistic_sets: None,
+        contextual_alternates: None,
     };
     let auto =
         CharProps { color: Some(TextColor::Auto), highlight: Some(Highlight::None), vert_align: Some(VertAlign::Subscript), ..Default::default() };
@@ -2584,6 +2591,65 @@ fn replace_part(zip_bytes: &[u8], name: &str, data: &[u8]) -> Vec<u8> {
         }
     }
     out.finish().unwrap().into_inner()
+}
+
+#[test]
+fn font_dialog_theme_and_every_ligature_combination_round_trip() {
+    use wordcraft_doc::props::{Ligatures, NumberForm, NumberSpacing, ThemeFont};
+    for (i, ligatures) in Ligatures::ALL.into_iter().enumerate() {
+        let props = CharProps {
+            font: Some("Theme fallback".into()),
+            font_theme: Some(if i % 2 == 0 { ThemeFont::Body } else { ThemeFont::Headings }),
+            ligatures: Some(ligatures),
+            number_spacing: Some(NumberSpacing::Tabular),
+            number_form: Some(NumberForm::OldStyle),
+            stylistic_sets: Some((1 << 19) | 1),
+            contextual_alternates: Some(false),
+            underline: Some(Underline::DoubleWave),
+            underline_auto: Some(true),
+            scale: Some(125.0),
+            spacing: Some(-0.5),
+            position: Some(2.5),
+            kern: Some(14.0),
+            ..Default::default()
+        };
+        let d = doc_with(vec![Paragraph::with_text("office 0123456789", props.clone())]);
+        let result = rt(&d);
+        let c = paras(&result)[0].props_of_char(0);
+        assert_eq!(c.font_theme, props.font_theme);
+        assert_eq!(c.ligatures, Some(ligatures));
+        assert_eq!(
+            (c.number_spacing, c.number_form, c.stylistic_sets, c.contextual_alternates),
+            (props.number_spacing, props.number_form, props.stylistic_sets, props.contextual_alternates)
+        );
+        assert_eq!((c.scale, c.spacing, c.position, c.kern), (props.scale, props.spacing, props.position, props.kern));
+        assert_eq!((c.underline, c.underline_auto), (props.underline, props.underline_auto));
+        assert_eq!(ligatures.bits(), i as u8);
+    }
+}
+
+#[test]
+fn text_effect_alpha_exports_opacity_and_preserves_explicit_off_values() {
+    use wordcraft_doc::effects::{Glow, Shadow};
+    use wordcraft_doc::wordart::{Reflection, TextEffects};
+    let props = CharProps {
+        text_effects: Some(Box::new(TextEffects {
+            shadow: Some(Shadow { transparency: 60.0, ..Default::default() }),
+            glow: Some(Glow { size: 0.0, ..Default::default() }),
+            reflection: Some(Reflection { transparency: 100.0, size: 0.0, ..Default::default() }),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    let d = doc_with(vec![Paragraph::with_text("Opacity", props.clone())]);
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<w14:alpha w14:val="40000"/>"#), "{xml}");
+    assert!(xml.contains(r#"<w14:glow w14:rad="0">"#), "{xml}");
+    assert!(xml.contains(r#"w14:stA="0""#), "{xml}");
+    assert_eq!(paras(&rt(&d))[0].props_of_char(0).text_effects, props.text_effects);
 }
 
 /// A texture or picture page background (`v:background/v:fill`) survives a save (#999): the image

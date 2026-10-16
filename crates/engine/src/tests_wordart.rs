@@ -139,3 +139,29 @@ fn wordart_is_inserted_styled_and_bent() {
     );
     run(&mut s, "wordArt.transform", json!({"preset": "none"}));
 }
+
+#[test]
+fn font_effect_removal_suppresses_inherited_decorations_after_docx_roundtrip() {
+    use wordcraft_doc::wordart::TextEffects;
+    let mut s = Session::new(Document::new());
+    s.doc.styles.get_mut("Normal").unwrap().chr.text_effects = Some(Box::new(TextEffects {
+        shadow: Some(Default::default()),
+        glow: Some(Default::default()),
+        reflection: Some(Default::default()),
+        outline: Some(Default::default()),
+        ..Default::default()
+    }));
+    run(&mut s, "text.insert", json!({"text":"Inherited decorations"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.set", json!({"props":{},"effects":{"glow":null}}));
+    let state = super::cmd::format::state(&s);
+    assert!(state["textEffects"].get("glow").is_none());
+    assert!(state["textEffects"].get("shadow").is_some());
+    let mut reopened = Session::new(wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap());
+    run(&mut reopened, "select.all", json!({}));
+    assert_eq!(super::cmd::format::state(&reopened)["textEffects"], state["textEffects"]);
+    run(&mut reopened, "format.set", json!({"props":{},"effects":{"clear":true}}));
+    let mut cleared = Session::new(wordcraft_docx::read(&wordcraft_docx::write(&reopened.doc).unwrap()).unwrap());
+    run(&mut cleared, "select.all", json!({}));
+    assert!(super::cmd::format::state(&cleared)["textEffects"].is_null());
+}

@@ -427,7 +427,7 @@ impl Grid {
     /// The grid of section `s` of `doc` (its default font size from the Normal style).
     pub fn of(doc: &Document, s: &wordcraft_doc::SectionProps) -> Grid {
         let Some(line) = s.grid_line_pitch() else { return Grid::default() };
-        let size = doc.styles.resolve_char(Some("Normal"), &CharProps::default()).size;
+        let size = doc.resolve_char(Some("Normal"), &CharProps::default()).size;
         let font_size = if size.is_finite() { size.clamp(1.0, 1584.0) } else { 10.5 };
         let chars = s.grid_char_pitch(font_size);
         let snap_all = s.doc_grid.is_some_and(|g| g.kind == wordcraft_doc::section::DocGridType::SnapToChars);
@@ -834,7 +834,6 @@ impl<'a> Builder<'a> {
         if let Some(p) = cur {
             segs.push((seg_start, text.len(), p));
         }
-        let no_kern = [wordcraft_fonts::feature_value(b"kern", 0)];
         for (a, b, key) in segs {
             let Some(sub) = text.get(a..b) else { continue };
             let rc = match (&rc_cs, key.complex) {
@@ -883,11 +882,37 @@ impl<'a> Builder<'a> {
                 }
             };
             // The shaper kerns by default; Word kerns only when Kerning for fonts covers the size.
-            let features: &[wordcraft_fonts::Feature] = if rc.kerned() { &[] } else { &no_kern };
+            let mut features = Vec::new();
+            if !rc.kerned() {
+                features.push(wordcraft_fonts::feature_value(b"kern", 0));
+            }
+            if let Some(ligatures) = rc.ligatures {
+                for (tag, bit) in [(b"liga", 1), (b"clig", 2), (b"hlig", 4), (b"dlig", 8)] {
+                    features.push(wordcraft_fonts::feature_value(tag, u32::from(ligatures.bits() & bit != 0)));
+                }
+            }
+            use wordcraft_doc::props::{NumberForm, NumberSpacing};
+            if rc.number_spacing != NumberSpacing::Default {
+                features.push(wordcraft_fonts::feature_value(b"pnum", u32::from(rc.number_spacing == NumberSpacing::Proportional)));
+                features.push(wordcraft_fonts::feature_value(b"tnum", u32::from(rc.number_spacing == NumberSpacing::Tabular)));
+            }
+            if rc.number_form != NumberForm::Default {
+                features.push(wordcraft_fonts::feature_value(b"lnum", u32::from(rc.number_form == NumberForm::Lining)));
+                features.push(wordcraft_fonts::feature_value(b"onum", u32::from(rc.number_form == NumberForm::OldStyle)));
+            }
+            for id in 1u8..=20 {
+                if rc.stylistic_sets & (1u32 << (id - 1)) != 0 {
+                    let tag = [b's', b's', b'0' + id / 10, b'0' + id % 10];
+                    features.push(wordcraft_fonts::feature_value(&tag, 1));
+                }
+            }
+            if let Some(on) = rc.contextual_alternates {
+                features.push(wordcraft_fonts::feature_value(b"calt", u32::from(on)));
+            }
             let shaped = if use_levels {
-                wordcraft_fonts::shape_run(&st.face, shape_text, features, map, key.rtl)
+                wordcraft_fonts::shape_run(&st.face, shape_text, &features, map, key.rtl)
             } else {
-                wordcraft_fonts::shape(&st.face, shape_text, features, map)
+                wordcraft_fonts::shape(&st.face, shape_text, &features, map)
             };
             let k = st.size / st.face.upem.max(1.0) as f32;
             let hscale = rc.scale / 100.0;
@@ -1207,7 +1232,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let table_chr = env.table.map(|t| &t.chr);
     // Indents in characters are measured in the paragraph mark's font size.
     if rp.indent_chars.iter().any(|c| *c != 0.0) {
-        rp.set_char_unit(doc.styles.resolve_char_in(para_style, table_chr, &p.mark).size);
+        rp.set_char_unit(doc.resolve_char_in(para_style, table_chr, &p.mark).size);
     }
     // List level indents apply unless the paragraph sets its own, or, for a list from the style,
     // the style giving the list (or one based on it) does (`indents_over_list`). A paragraph
@@ -1231,7 +1256,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
             rp.indent_first = 0.0;
         }
     }
-    let resolve = |c: &CharProps| -> Arc<ResolvedChar> { Arc::new(doc.styles.resolve_char_in(para_style, table_chr, c)) };
+    let resolve = |c: &CharProps| -> Arc<ResolvedChar> { Arc::new(doc.resolve_char_in(para_style, table_chr, c)) };
     let levels = bidi_levels(&p.text, rp.bidi);
     let mut b =
         Builder { env, styles: Vec::new(), style_index: Default::default(), glyphs: Vec::new(), clusters: Vec::new(), levels, shown: Vec::new() };
@@ -2653,7 +2678,7 @@ impl ProofRun {
 /// formatting ([`CellText::chr`]) for a paragraph in a table, as layout resolves it.
 pub fn proof_runs(doc: &Document, p: &Paragraph, table: Option<&CharProps>) -> Vec<ProofRun> {
     let style = p.props.style.as_deref();
-    p.run_ranges().map(|(r, c)| ProofRun::of(r, &doc.styles.resolve_char_in(style, table, c))).collect()
+    p.run_ranges().map(|(r, c)| ProofRun::of(r, &doc.resolve_char_in(style, table, c))).collect()
 }
 
 /// The language of the run holding byte `off` (English past the last run).

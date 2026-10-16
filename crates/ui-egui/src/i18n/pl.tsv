@@ -2622,3 +2622,43 @@ preview	Title	Tytuł
 # Reading Mode column widths (#1040)
 	Narrow	Wąska
 	Medium	Średnia
+
+
+# Font dialog and pending defaults/effects. Clean-room translations.
+	pt and above	pkt i więcej
+	All new blank documents	Wszystkie nowe puste dokumenty
+	Bold Italic	Pogrubiona kursywa
+	By:	O:
+	Clear Text Effects	Wyczyść efekty tekstu
+	Condensed	Zagęszczone
+	Default change pending	Oczekująca zmiana ustawień domyślnych
+	Dot dot dash	Kropka-kropka-kreska
+	Double wave	Podwójna fala
+	Expanded	Rozszerzone
+	Font size must be between 1 and 1638 pt.	Rozmiar czcionki musi wynosić od 1 do 1638 pkt.
+	Font style:	Styl czcionki:
+	Historical and Discretionary	Historyczne i uznaniowe
+	Kerning for fonts:	Kerning dla czcionek:
+	Ligatures:	Ligatury:
+	Lining	Cyfry równej wysokości
+	Lowered	Obniżone
+	Number forms:	Formy cyfr:
+	Number spacing:	Odstępy cyfr:
+	Old-style	Cyfry nautyczne
+	OpenType Features	Funkcje OpenType
+	Proportional	Proporcjonalne
+	Raised	Podwyższone
+	Regular	Zwykła
+	Scale:	Skala:
+	Standard and Contextual	Standardowe i kontekstowe
+	Standard only	Tylko standardowe
+	Stylistic sets:	Zestawy stylistyczne:
+	Tabular	Tabelaryczne
+	Text Effects…	Efekty tekstu…
+	Theme font	Czcionka motywu
+	This document only	Tylko ten dokument
+	Underline color:	Kolor podkreślenia:
+	Underline style:	Styl podkreślenia:
+	Use Contextual Alternates	Używaj wariantów kontekstowych
+	Use the pending font settings as the default for:	Użyj oczekujących ustawień czcionki jako domyślnych dla:
+	Preview unavailable	Podgląd jest niedostępny

@@ -2624,3 +2624,43 @@ preview	Title	Ukázka
 # Reading Mode column widths (#1040)
 	Narrow	Úzká
 	Medium	Střední
+
+
+# Font dialog and pending defaults/effects. Clean-room translations.
+	pt and above	b. a větší
+	All new blank documents	Všechny nové prázdné dokumenty
+	Bold Italic	Tučná kurzíva
+	By:	O:
+	Clear Text Effects	Vymazat textové efekty
+	Condensed	Zúžené
+	Default change pending	Čeká změna výchozího nastavení
+	Dot dot dash	Tečka-tečka-čárka
+	Double wave	Dvojitá vlnovka
+	Expanded	Rozšířené
+	Font size must be between 1 and 1638 pt.	Velikost písma musí být od 1 do 1638 b.
+	Font style:	Styl písma:
+	Historical and Discretionary	Historické a volitelné
+	Kerning for fonts:	Kerning pro písma:
+	Ligatures:	Ligatury:
+	Lining	Verzálkové číslice
+	Lowered	Snížené
+	Number forms:	Tvary číslic:
+	Number spacing:	Rozestupy číslic:
+	Old-style	Minuskové číslice
+	OpenType Features	Funkce OpenType
+	Proportional	Proporcionální
+	Raised	Zvýšené
+	Regular	Obyčejné
+	Scale:	Měřítko:
+	Standard and Contextual	Standardní a kontextové
+	Standard only	Pouze standardní
+	Stylistic sets:	Stylistické sady:
+	Tabular	Tabulkové
+	Text Effects…	Textové efekty…
+	Theme font	Písmo motivu
+	This document only	Pouze tento dokument
+	Underline color:	Barva podtržení:
+	Underline style:	Styl podtržení:
+	Use Contextual Alternates	Používat kontextové alternativy
+	Use the pending font settings as the default for:	Použít čekající nastavení písma jako výchozí pro:
+	Preview unavailable	Náhled není dostupný

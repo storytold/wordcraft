@@ -2232,3 +2232,44 @@
 # Reading Mode column widths (#1040)
 	Narrow	Schmal
 	Medium	Mittel
+
+
+# Font dialog and pending defaults/effects. Clean-room translations.
+	pt and above	pt und größer
+	All new blank documents	Alle neuen leeren Dokumente
+	Bold Italic	Fett kursiv
+	By:	Um:
+	Clear Text Effects	Texteffekte entfernen
+	Condensed	Verengt
+	Default change pending	Standardänderung vorgemerkt
+	Dot dot dash	Punkt-Punkt-Strich
+	Double wave	Doppelte Welle
+	Expanded	Erweitert
+	Font size must be between 1 and 1638 pt.	Die Schriftgröße muss zwischen 1 und 1638 pt liegen.
+	Font style:	Schriftschnitt:
+	Historical and Discretionary	Historisch und optional
+	Kerning for fonts:	Kerning für Schriften:
+	Ligatures:	Ligaturen:
+	Lining	Versalziffern
+	Lowered	Tiefer
+	Normal	Normal
+	Number forms:	Ziffernformen:
+	Number spacing:	Ziffernabstand:
+	Old-style	Mediävalziffern
+	OpenType Features	OpenType-Funktionen
+	Proportional	Proportional
+	Raised	Höher
+	Regular	Normal
+	Scale:	Skalierung:
+	Standard and Contextual	Standard und kontextabhängig
+	Standard only	Nur Standard
+	Stylistic sets:	Stilsets:
+	Tabular	Tabellarisch
+	Text Effects…	Texteffekte…
+	Theme font	Designschrift
+	This document only	Nur dieses Dokument
+	Underline color:	Unterstreichungsfarbe:
+	Underline style:	Unterstreichungsart:
+	Use Contextual Alternates	Kontextabhängige Alternativen verwenden
+	Use the pending font settings as the default for:	Vorgemerkte Schrifteinstellungen als Standard verwenden für:
+	Preview unavailable	Vorschau nicht verfügbar

@@ -277,6 +277,105 @@ impl Highlight {
     }
 }
 
+/// A Latin font linked to the document theme.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ThemeFont {
+    Body,
+    Headings,
+}
+
+/// Optional ligature groups, in the bit order used by Word's `w14:ligatures` values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Ligatures {
+    #[default]
+    None,
+    Standard,
+    Contextual,
+    StandardContextual,
+    Historical,
+    StandardHistorical,
+    ContextualHistorical,
+    StandardContextualHistorical,
+    Discretional,
+    StandardDiscretional,
+    ContextualDiscretional,
+    StandardContextualDiscretional,
+    HistoricalDiscretional,
+    StandardHistoricalDiscretional,
+    ContextualHistoricalDiscretional,
+    All,
+}
+
+impl Ligatures {
+    pub const ALL: [Self; 16] = [
+        Self::None,
+        Self::Standard,
+        Self::Contextual,
+        Self::StandardContextual,
+        Self::Historical,
+        Self::StandardHistorical,
+        Self::ContextualHistorical,
+        Self::StandardContextualHistorical,
+        Self::Discretional,
+        Self::StandardDiscretional,
+        Self::ContextualDiscretional,
+        Self::StandardContextualDiscretional,
+        Self::HistoricalDiscretional,
+        Self::StandardHistoricalDiscretional,
+        Self::ContextualHistoricalDiscretional,
+        Self::All,
+    ];
+
+    pub fn bits(self) -> u8 {
+        self as u8
+    }
+
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Standard => "standard",
+            Self::Contextual => "contextual",
+            Self::StandardContextual => "standardContextual",
+            Self::Historical => "historical",
+            Self::StandardHistorical => "standardHistorical",
+            Self::ContextualHistorical => "contextualHistorical",
+            Self::StandardContextualHistorical => "standardContextualHistorical",
+            Self::Discretional => "discretional",
+            Self::StandardDiscretional => "standardDiscretional",
+            Self::ContextualDiscretional => "contextualDiscretional",
+            Self::StandardContextualDiscretional => "standardContextualDiscretional",
+            Self::HistoricalDiscretional => "historicalDiscretional",
+            Self::StandardHistoricalDiscretional => "standardHistoricalDiscretional",
+            Self::ContextualHistoricalDiscretional => "contextualHistoricalDiscretional",
+            Self::All => "all",
+        }
+    }
+
+    pub fn from_ooxml(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|v| v.ooxml() == s)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NumberSpacing {
+    #[default]
+    Default,
+    Proportional,
+    Tabular,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NumberForm {
+    #[default]
+    Default,
+    Lining,
+    OldStyle,
+}
+
 /// Character formatting (direct or in a style). `None` = inherit.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -286,6 +385,8 @@ pub struct CharProps {
     pub style: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_theme: Option<ThemeFont>,
     /// Points.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<f32>,
@@ -297,6 +398,9 @@ pub struct CharProps {
     pub underline: Option<Underline>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub underline_color: Option<Rgb>,
+    /// Explicit Automatic overrides an underline colour inherited from a style.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub underline_auto: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub strike: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -331,6 +435,17 @@ pub struct CharProps {
     /// Kerning for fonts at or above this size (points); 0 = off.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kern: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ligatures: Option<Ligatures>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub number_spacing: Option<NumberSpacing>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub number_form: Option<NumberForm>,
+    /// A bit per OpenType set, ss01 through ss20. Zero explicitly disables inherited sets.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stylistic_sets: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contextual_alternates: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outline: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -440,8 +555,8 @@ impl CharProps {
     /// The fields of `self` that differ from `base` (equal ones unset): what `self` adds when
     /// overlaid on `base`.
     pub fn minus(mut self, base: &CharProps) -> CharProps {
-        drop_same_fields!(self, base; style, font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
-            shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl,
+        drop_same_fields!(self, base; style, font, font_theme, size, bold, italic, underline, underline_color, underline_auto, strike, double_strike, color, highlight,
+            shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, ligatures, number_spacing, number_form, stylistic_sets, contextual_alternates, outline, shadow, emboss, engrave, lang, no_proof, rtl,
             cs, font_cs, size_cs, bold_cs, italic_cs, lang_bidi, link, ins, del);
         self
     }
@@ -451,8 +566,11 @@ impl CharProps {
     /// Plain and complex-script properties inherit independently. Commands that intend to
     /// format both scripts must set both values explicitly.
     pub fn overlay(&mut self, patch: &CharProps) {
-        overlay_fields!(self, patch; style, font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
-            shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl,
+        if patch.font.is_some() {
+            self.font_theme = None;
+        }
+        overlay_fields!(self, patch; style, font, font_theme, size, bold, italic, underline, underline_color, underline_auto, strike, double_strike, color, highlight,
+            shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, ligatures, number_spacing, number_form, stylistic_sets, contextual_alternates, outline, shadow, emboss, engrave, lang, no_proof, rtl,
             cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, link, ins, del, fmt_change);
         if let Some(p) = &patch.text_effects {
             self.text_effects.get_or_insert_with(Default::default).overlay(p);

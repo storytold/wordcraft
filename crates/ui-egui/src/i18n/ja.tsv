@@ -2233,3 +2233,44 @@
 # Reading Mode column widths (#1040)
 	Narrow	狭い
 	Medium	中
+
+
+# Font dialog and pending defaults/effects. Clean-room translations.
+	pt and above	pt 以上
+	All new blank documents	すべての新しい空白文書
+	Bold Italic	太字斜体
+	By:	量:
+	Clear Text Effects	文字効果を解除
+	Condensed	狭く
+	Default change pending	既定値の変更を保留中
+	Dot dot dash	二点鎖線
+	Double wave	二重波線
+	Expanded	広く
+	Font size must be between 1 and 1638 pt.	フォントサイズは 1～1638 pt にしてください。
+	Font style:	書体:
+	Historical and Discretionary	歴史的および任意
+	Kerning for fonts:	カーニングの対象:
+	Ligatures:	合字:
+	Lining	等高数字
+	Lowered	下げる
+	Normal	標準
+	Number forms:	数字の字形:
+	Number spacing:	数字の間隔:
+	Old-style	オールドスタイル数字
+	OpenType Features	OpenType 機能
+	Proportional	プロポーショナル
+	Raised	上げる
+	Regular	標準
+	Scale:	倍率:
+	Standard and Contextual	標準および文脈依存
+	Standard only	標準のみ
+	Stylistic sets:	字形セット:
+	Tabular	等幅
+	Text Effects…	文字効果…
+	Theme font	テーマのフォント
+	This document only	この文書のみ
+	Underline color:	下線の色:
+	Underline style:	下線の種類:
+	Use Contextual Alternates	文脈に応じた代替字形を使う
+	Use the pending font settings as the default for:	保留中のフォント設定を次の既定値として使う:
+	Preview unavailable	プレビューを表示できません

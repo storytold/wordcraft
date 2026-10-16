@@ -2267,3 +2267,44 @@
 # Reading Mode column widths (#1040)
 	Narrow	Kitsas
 	Medium	Keskmine
+
+
+# Font dialog and pending defaults/effects. Clean-room translations.
+	pt and above	p ja suuremad
+	All new blank documents	Kõik uued tühjad dokumendid
+	Bold Italic	Paks kaldkiri
+	By:	Võrra:
+	Clear Text Effects	Eemalda tekstiefektid
+	Condensed	Tihendatud
+	Default change pending	Vaikesätte muudatus ootel
+	Dot dot dash	Punkt-punkt-kriips
+	Double wave	Topeltlaine
+	Expanded	Laiendatud
+	Font size must be between 1 and 1638 pt.	Fondi suurus peab olema 1 kuni 1638 p.
+	Font style:	Fondi laad:
+	Historical and Discretionary	Ajaloolised ja valikulised
+	Kerning for fonts:	Fondi kerning:
+	Ligatures:	Ligatuurid:
+	Lining	Ühekõrgused numbrid
+	Lowered	Langetatud
+	Normal	Tavaline
+	Number forms:	Numbrikujud:
+	Number spacing:	Numbrivahed:
+	Old-style	Vanastiili numbrid
+	OpenType Features	OpenType’i võimalused
+	Proportional	Proportsionaalne
+	Raised	Tõstetud
+	Regular	Tavaline
+	Scale:	Skaala:
+	Standard and Contextual	Tavalised ja kontekstipõhised
+	Standard only	Ainult tavalised
+	Stylistic sets:	Stiilikomplektid:
+	Tabular	Tabelinumbrid
+	Text Effects…	Tekstiefektid…
+	Theme font	Kujunduse font
+	This document only	Ainult see dokument
+	Underline color:	Allajoonimise värv:
+	Underline style:	Allajoonimise laad:
+	Use Contextual Alternates	Kasuta kontekstipõhiseid variante
+	Use the pending font settings as the default for:	Kasuta ootel fondisätteid vaikesättena järgmiste jaoks:
+	Preview unavailable	Eelvaade pole saadaval

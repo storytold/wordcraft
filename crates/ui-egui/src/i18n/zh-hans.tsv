@@ -2245,3 +2245,44 @@
 # Reading Mode column widths (#1040)
 	Narrow	窄
 	Medium	中等
+
+
+# Font dialog and pending defaults/effects. Clean-room translations.
+	pt and above	磅及以上
+	All new blank documents	所有新建空白文档
+	Bold Italic	粗斜体
+	By:	幅度：
+	Clear Text Effects	清除文字效果
+	Condensed	紧缩
+	Default change pending	默认值更改待确认
+	Dot dot dash	双点划线
+	Double wave	双波浪线
+	Expanded	加宽
+	Font size must be between 1 and 1638 pt.	字号必须在 1 到 1638 磅之间。
+	Font style:	字体样式：
+	Historical and Discretionary	历史及可选
+	Kerning for fonts:	字距调整适用字号：
+	Ligatures:	连字：
+	Lining	等高数字
+	Lowered	降低
+	Normal	正常
+	Number forms:	数字字形：
+	Number spacing:	数字间距：
+	Old-style	旧式数字
+	OpenType Features	OpenType 功能
+	Proportional	比例
+	Raised	升高
+	Regular	常规
+	Scale:	缩放：
+	Standard and Contextual	标准及上下文
+	Standard only	仅标准
+	Stylistic sets:	样式集：
+	Tabular	等宽
+	Text Effects…	文字效果…
+	Theme font	主题字体
+	This document only	仅此文档
+	Underline color:	下划线颜色：
+	Underline style:	下划线样式：
+	Use Contextual Alternates	使用上下文替代字形
+	Use the pending font settings as the default for:	将待确认的字体设置用作以下默认值：
+	Preview unavailable	无法预览

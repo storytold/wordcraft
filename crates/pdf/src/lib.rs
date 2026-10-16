@@ -1141,6 +1141,14 @@ impl Exporter<'_> {
                 s.set_stroke(Some(stroke(w, Some(StrokeDash { array: vec![w * 4.0, w * 2.0], offset: 0.0 }), LineCap::Butt)));
                 seg(s, 0.0, 0.0);
             }
+            LineStyle::DotDash | LineStyle::DotDotDash => {
+                let mut array = vec![w * 4.0, w * 2.0, w, w * 2.0];
+                if style == LineStyle::DotDotDash {
+                    array.extend([w, w * 2.0]);
+                }
+                s.set_stroke(Some(stroke(w, Some(StrokeDash { array, offset: 0.0 }), LineCap::Butt)));
+                seg(s, 0.0, 0.0);
+            }
             LineStyle::Double => {
                 // Two thinner lines either side of the centre line.
                 let (dx, dy) = (x1 - x0, y1 - y0);
@@ -1149,6 +1157,11 @@ impl Exporter<'_> {
                 s.set_stroke(Some(stroke(w * 0.6, None, LineCap::Butt)));
                 seg(s, nx, ny);
                 seg(s, -nx, -ny);
+            }
+            LineStyle::DoubleWave => {
+                let offset = (w * 1.2).max(0.8) * 1.4;
+                self.line(s, (x0, y0 - offset, x1, y1 - offset), w, c, LineStyle::Wave, alpha);
+                self.line(s, (x0, y0 + offset, x1, y1 + offset), w, c, LineStyle::Wave, alpha);
             }
             LineStyle::Wave => {
                 let (a, b) = (x0.min(x1), x0.max(x1));

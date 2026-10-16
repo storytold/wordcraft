@@ -52,16 +52,38 @@ pub fn specs() -> Vec<CommandSpec> {
             underline(s, &json!({"style": "words"}))
         })
         .key("Mod+Shift+W"),
-        CommandSpec::new("format.strikethrough", "Strikethrough", "Home › Font", |s, v| toggle(s, v, |r| r.strike, |c, on| c.strike = Some(on)))
-            .key("Mod+Shift+X")
-            .params(r#"{"value"?: bool}"#),
+        CommandSpec::new("format.strikethrough", "Strikethrough", "Home › Font", |s, v| {
+            toggle(
+                s,
+                v,
+                |r| r.strike,
+                |c, on| {
+                    c.strike = Some(on);
+                    if on {
+                        c.double_strike = Some(false);
+                    }
+                },
+            )
+        })
+        .key("Mod+Shift+X")
+        .params(r#"{"value"?: bool}"#),
         // Note: off clears the direct property only; a border inherited from a character style stays on.
         CommandSpec::new("format.border", "Character Border", "Home › Font", |s, v| {
             toggle(s, v, |r| r.border.is_some(), |c, on| c.border = on.then(|| Border::single(0.5)))
         })
         .params(r#"{"value"?: bool}"#),
         CommandSpec::new("format.doubleStrikethrough", "Double Strikethrough", "Home › Font › Font", |s, v| {
-            toggle(s, v, |r| r.double_strike, |c, on| c.double_strike = Some(on))
+            toggle(
+                s,
+                v,
+                |r| r.double_strike,
+                |c, on| {
+                    c.double_strike = Some(on);
+                    if on {
+                        c.strike = Some(false);
+                    }
+                },
+            )
         }),
         CommandSpec::new("format.subscript", "Subscript", "Home › Font", |s, v| {
             toggle(
@@ -135,7 +157,7 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"points": number}"#),
         CommandSpec::new("format.charStyle", "Apply Character Style", "Home › Styles", char_style).params(r#"{"style": string}"#),
-        CommandSpec::new("format.set", "Set Character Formatting", "Home › Font › Font", set).params(r#"{"props": CharProps}"#),
+        CommandSpec::new("format.set", "Set Character Formatting", "Home › Font › Font", set).params(r#"{"props": CharProps, "effects"?: format.textEffects parameters, "defaultScope"?: "document"|"future", "defaultProps"?: CharProps} (defaults commit with the selection; future also saves the blank-document font)"#),
         CommandSpec::new("format.fontDialog", "Font Dialog", "Home › Font", |s, _| {
             s.ui_requests.push(json!({"open": "font"}));
             sel_result(s)
@@ -225,11 +247,11 @@ fn resolved(s: &Session) -> Vec<ResolvedChar> {
             let Some(p) = s.doc.para_at(&a) else { continue };
             // An empty cell: its mark's formatting.
             if a == b {
-                out.push(s.doc.styles.resolve_char(p.props.style.as_deref(), &p.mark));
+                out.push(s.doc.resolve_char(p.props.style.as_deref(), &p.mark));
             }
             for (r, c) in p.run_ranges() {
                 if r.end > a.off && r.start < b.off {
-                    out.push(s.doc.styles.resolve_char(p.props.style.as_deref(), c));
+                    out.push(s.doc.resolve_char(p.props.style.as_deref(), c));
                 }
             }
             if out.len() > 10_000 {
@@ -243,7 +265,7 @@ fn resolved(s: &Session) -> Vec<ResolvedChar> {
     let Some((a, b)) = target(s) else {
         let f = &s.sel.focus;
         let style = s.doc.para_at(f).and_then(|p| p.props.style.clone());
-        out.push(s.doc.styles.resolve_char(style.as_deref(), &s.typing_props()));
+        out.push(s.doc.resolve_char(style.as_deref(), &s.typing_props()));
         return out;
     };
     for path in s.doc.paths_between(&a, &b) {
@@ -252,7 +274,7 @@ fn resolved(s: &Session) -> Vec<ResolvedChar> {
         let to = if path == b.path { b.off } else { p.len() };
         for (r, c) in p.run_ranges() {
             if r.end > from && r.start < to {
-                out.push(s.doc.styles.resolve_char(p.props.style.as_deref(), c));
+                out.push(s.doc.resolve_char(p.props.style.as_deref(), c));
             }
         }
         if out.len() > 10_000 {
@@ -261,7 +283,7 @@ fn resolved(s: &Session) -> Vec<ResolvedChar> {
     }
     if out.is_empty() {
         let style = s.doc.para_at(&a).and_then(|p| p.props.style.clone());
-        out.push(s.doc.styles.resolve_char(style.as_deref(), &s.typing_props()));
+        out.push(s.doc.resolve_char(style.as_deref(), &s.typing_props()));
     }
     out
 }
@@ -312,6 +334,7 @@ fn font(s: &mut Session, v: &Value) -> CmdResult {
     apply(s, &|c| {
         if let Some(n) = &name {
             c.font = Some(n.clone());
+            c.font_theme = None;
             c.font_cs = Some(n.clone());
         }
         if let Some(n) = &ea {
@@ -649,14 +672,72 @@ fn char_style(s: &mut Session, v: &Value) -> CmdResult {
     apply(s, &|c| c.style = Some(id.clone()))
 }
 
-fn set(s: &mut Session, v: &Value) -> CmdResult {
-    let mut props: CharProps = serde_json::from_value(v.get("props").cloned().unwrap_or(Value::Null)).map_err(|e| CmdError::Params(e.to_string()))?;
+fn checked_props(v: &Value) -> Result<CharProps, CmdError> {
+    let mut props: CharProps = serde_json::from_value(v.clone()).map_err(|e| CmdError::Params(e.to_string()))?;
+    for (name, value, min, max) in [
+        ("size", props.size, 1.0, 1638.0),
+        ("sizeCs", props.size_cs, 1.0, 1638.0),
+        ("spacing", props.spacing, -100.0, 100.0),
+        ("scale", props.scale, 1.0, 600.0),
+        ("position", props.position, -800.0, 800.0),
+        ("kern", props.kern, 0.0, 1638.0),
+    ] {
+        if value.is_some_and(|v| !v.is_finite() || !(min..=max).contains(&v)) {
+            return Err(CmdError::Params(format!("{name} must be between {min} and {max}")));
+        }
+    }
+    if props.stylistic_sets.is_some_and(|v| v > 0xFFFFF) {
+        return Err(CmdError::Params("stylisticSets supports ss01 through ss20".into()));
+    }
+    if props.strike == Some(true) && props.double_strike == Some(true) {
+        return Err(CmdError::Params("strikethrough and double strikethrough are mutually exclusive".into()));
+    }
+    if props.strike == Some(true) {
+        props.double_strike = Some(false);
+    }
+    if props.double_strike == Some(true) {
+        props.strike = Some(false);
+    }
+    if props.underline_color.is_some() && props.underline_auto.is_none() {
+        props.underline_auto = Some(false);
+    }
     // The font dialog and callers supplying one value format both scripts. Explicit
     // complex-script values still take precedence; importing a DOCX never uses this command.
     props.size_cs = props.size_cs.or(props.size);
     props.bold_cs = props.bold_cs.or(props.bold);
     props.italic_cs = props.italic_cs.or(props.italic);
-    apply(s, &|c| c.overlay(&props))
+    Ok(props)
+}
+
+fn set(s: &mut Session, v: &Value) -> CmdResult {
+    let props = checked_props(v.get("props").unwrap_or(&Value::Null))?;
+    let effects = super::wordart::effect_patch(&s.doc.settings.theme_colors, v.get("effects").unwrap_or(&Value::Null))?;
+    let scope = match v.get("defaultScope") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(x)) if x == "document" || x == "future" => Some(x.as_str()),
+        _ => return Err(CmdError::Params("defaultScope must be document or future".into())),
+    };
+    let defaults = scope.map(|_| checked_props(v.get("defaultProps").unwrap_or(&Value::Null))).transpose()?;
+    let result = apply(s, &|c| {
+        c.overlay(&props);
+        effects(c);
+    })?;
+    if let Some(mut defaults) = defaults {
+        effects(&mut defaults);
+        s.doc.styles.default_chr.overlay(&defaults);
+        s.doc.styles.default_chr.text_effects.clone_from(&defaults.text_effects);
+        if let Some(normal) = s.doc.styles.get_mut("Normal") {
+            normal.chr.overlay(&defaults);
+            normal.chr.text_effects.clone_from(&defaults.text_effects);
+        }
+        if scope == Some("future") {
+            let mut saved = s.prefs.font_defaults.clone().unwrap_or_default();
+            saved.overlay(&defaults);
+            saved.text_effects.clone_from(&defaults.text_effects);
+            s.prefs.font_defaults = Some(saved);
+        }
+    }
+    Ok(result)
 }
 
 /// What the ribbon shows: the formatting at the selection (mixed values are null).
@@ -671,13 +752,26 @@ pub fn state(s: &Session) -> Value {
     let style = s.doc.para_at(&s.sel.focus).and_then(|p| p.props.style.clone()).unwrap_or_else(|| "Normal".into());
     let style_name = s.doc.styles.get(&style).map(|st| st.name.clone()).unwrap_or(style.clone());
     json!({
+        "textEffects": same(&|r| json!(r.text_effects)),
         "font": same(&|r| json!(r.font)),
+        "fontTheme": same(&|r| json!(r.font_theme)),
         "fontEastAsia": same(&|r| json!(r.font_ea)),
         "size": same(&|r| json!(r.size)),
         "bold": all.iter().all(|r| r.bold),
         "italic": all.iter().all(|r| r.italic),
         "underline": all.iter().all(|r| r.underline != Underline::None),
         "strike": all.iter().all(|r| r.strike),
+        "doubleStrike": same(&|r| json!(r.double_strike)),
+        "underlineStyle": same(&|r| json!(r.underline)),
+        "underlineColor": same(&|r| json!(r.underline_color.map(|c| c.hex()).unwrap_or_else(|| "auto".into()))),
+        "scale": same(&|r| json!(r.scale)),
+        "position": same(&|r| json!(r.position)),
+        "kern": same(&|r| json!(r.kern)),
+        "ligatures": same(&|r| json!(r.ligatures)),
+        "numberSpacing": same(&|r| json!(r.number_spacing)),
+        "numberForm": same(&|r| json!(r.number_form)),
+        "stylisticSets": same(&|r| json!(r.stylistic_sets)),
+        "contextualAlternates": same(&|r| json!(r.contextual_alternates)),
         "border": all.iter().all(|r| r.border.is_some()),
         "subscript": all.iter().all(|r| r.vert_align == VertAlign::Subscript),
         "superscript": all.iter().all(|r| r.vert_align == VertAlign::Superscript),

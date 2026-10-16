@@ -2632,3 +2632,42 @@ preview	Title	Naslov
 	Bottom Right Cell	Donja desna ćelija
 	Inside Horizontal Border	Unutarnji vodoravni obrub
 	Inside Vertical Border	Unutarnji okomiti obrub
+
+# Font dialog and pending defaults/effects. Clean-room translations.
+	pt and above	pt i više
+	All new blank documents	Svi novi prazni dokumenti
+	Bold Italic	Podebljano kurziv
+	By:	Za:
+	Clear Text Effects	Ukloni tekstne efekte
+	Condensed	Suženo
+	Default change pending	Promjena zadanih postavki na čekanju
+	Dot dot dash	Točka točka crtica
+	Double wave	Dvostruki val
+	Expanded	Prošireno
+	Font size must be between 1 and 1638 pt.	Veličina fonta mora biti između 1 i 1638 pt.
+	Font style:	Stil fonta:
+	Historical and Discretionary	Povijesne i diskrecijske
+	Kerning for fonts:	Kerning za fontove:
+	Ligatures:	Ligature:
+	Lining	Poravnate brojke
+	Lowered	Spušteno
+	Number forms:	Oblici brojeva:
+	Number spacing:	Razmak brojeva:
+	Old-style	Starinske brojke
+	OpenType Features	OpenType značajke
+	Proportional	Proporcionalno
+	Raised	Podignuto
+	Regular	Obično
+	Scale:	Mjerilo:
+	Standard and Contextual	Standardne i kontekstualne
+	Standard only	Samo standardne
+	Stylistic sets:	Stilski skupovi:
+	Tabular	Tablično
+	Text Effects…	Tekstni efekti…
+	Theme font	Font teme
+	This document only	Samo ovaj dokument
+	Underline color:	Boja podcrtavanja:
+	Underline style:	Stil podcrtavanja:
+	Use Contextual Alternates	Koristi kontekstualne alternative
+	Use the pending font settings as the default for:	Koristi postavke fonta na čekanju kao zadane za:
+	Preview unavailable	Pretpregled nije dostupan

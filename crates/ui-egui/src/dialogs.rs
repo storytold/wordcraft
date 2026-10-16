@@ -34,6 +34,28 @@ pub struct FindExtra {
     pub to_replace: bool,
 }
 
+/// Pending Advanced-tab values. Applied together with the Font tab on OK.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FontAdvanced {
+    scale: f32,
+    position: f32,
+    kern: f32,
+    ligatures: Option<wordcraft_doc::props::Ligatures>,
+    number_spacing: wordcraft_doc::props::NumberSpacing,
+    number_form: wordcraft_doc::props::NumberForm,
+    stylistic_sets: u32,
+    contextual_alternates: bool,
+}
+
+/// Nested editors own drafts until accepted; the outer Cancel discards every draft.
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum FontChild {
+    Defaults { future: bool },
+    Effects { patch: serde_json::Map<String, Value> },
+}
+
 /// The tabs of the Find and Replace dialog (#712).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -161,8 +183,17 @@ pub enum Dialog {
         size: String,
         bold: bool,
         italic: bool,
-        underline: bool,
+        underline: wordcraft_doc::props::Underline,
+        underline_color: String,
         strike: bool,
+        double_strike: bool,
+        tab: u8,
+        advanced: FontAdvanced,
+        effects: serde_json::Map<String, Value>,
+        default_scope: Option<String>,
+        child: Option<FontChild>,
+        font_list_ready: bool,
+        sample: String,
         sup: bool,
         sub: bool,
         small_caps: bool,
@@ -880,10 +911,19 @@ impl Dialog {
         let b = |k: &str| st.get(k).and_then(Value::as_bool).unwrap_or(false);
         Some(match name {
             "font" => {
-                let font = app.previews.font_shown(&s("font"));
+                let font = match st.get("fontTheme").and_then(Value::as_str) {
+                    Some("body") => "+Body".to_string(),
+                    Some("headings") => "+Headings".to_string(),
+                    _ => app.previews.font_shown(&s("font")),
+                };
                 let font_ea = app.previews.font_shown(&s("fontEastAsia"));
                 let lang = crate::i18n::current().code();
                 let text = app.session.selected_text();
+                let mut sample: String =
+                    text.chars().filter(|c| *c != wordcraft_doc::para::OBJ).map(|c| if c.is_control() { ' ' } else { c }).take(64).collect();
+                if sample.trim().is_empty() {
+                    sample = format!("{} fi fl 0123456789", tl!("AaBbYyZz"));
+                }
                 let text = if text.is_empty() {
                     app.session.doc.para_at(&app.session.sel.focus).map(|p| p.plain_text().to_string()).unwrap_or_default()
                 } else {
@@ -899,8 +939,28 @@ impl Dialog {
                     size: st.get("size").and_then(Value::as_f64).map(|v| v.to_string()).unwrap_or_default(),
                     bold: b("bold"),
                     italic: b("italic"),
-                    underline: b("underline"),
+                    underline: serde_json::from_value(st["underlineStyle"].clone()).unwrap_or_default(),
+                    underline_color: s("underlineColor"),
                     strike: b("strike"),
+                    double_strike: b("doubleStrike"),
+                    tab: 0,
+                    effects: Default::default(),
+                    default_scope: None,
+                    child: None,
+                    font_list_ready: false,
+                    sample,
+                    advanced: FontAdvanced {
+                        scale: st.get("scale").and_then(Value::as_f64).unwrap_or(100.0) as f32,
+                        position: st.get("position").and_then(Value::as_f64).unwrap_or(0.0) as f32,
+                        kern: st.get("kern").and_then(Value::as_f64).unwrap_or(0.0) as f32,
+                        ligatures: serde_json::from_value::<wordcraft_doc::props::Ligatures>(st["ligatures"].clone())
+                            .ok()
+                            .or(Some(wordcraft_doc::props::Ligatures::StandardContextual)),
+                        number_spacing: serde_json::from_value(st["numberSpacing"].clone()).unwrap_or_default(),
+                        number_form: serde_json::from_value(st["numberForm"].clone()).unwrap_or_default(),
+                        stylistic_sets: st.get("stylisticSets").and_then(Value::as_u64).unwrap_or(0) as u32,
+                        contextual_alternates: b("contextualAlternates"),
+                    },
                     sup: b("superscript"),
                     sub: b("subscript"),
                     small_caps: b("smallCaps"),
@@ -988,7 +1048,7 @@ impl Dialog {
                     Some(DocGridType::SnapToChars) => 3,
                     _ => 0,
                 };
-                let size = app.session.doc.styles.resolve_char(Some("Normal"), &Default::default()).size;
+                let size = app.session.doc.resolve_char(Some("Normal"), &Default::default()).size;
                 let grid = (kind, sp.grid_lines_per_page().min(1000), sp.grid_chars_per_line(size).min(1000));
                 let paper = (sp.page_w / crate::options::unit().pt_per_unit(), sp.page_h / crate::options::unit().pt_per_unit());
                 Dialog::PageSetup {
@@ -1131,7 +1191,7 @@ impl Dialog {
 
     pub fn modify_style(app: &WordApp, id: &str) -> Option<Dialog> {
         let st = app.session.doc.styles.get(id)?;
-        let rc = app.session.doc.styles.resolve_char(
+        let rc = app.session.doc.resolve_char(
             if st.kind == wordcraft_doc::StyleKind::Paragraph { Some(id) } else { None },
             &wordcraft_doc::CharProps {
                 style: if st.kind == wordcraft_doc::StyleKind::Character { Some(id.into()) } else { None },
@@ -1236,6 +1296,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         ctx.data_mut(|d| d.remove::<(egui::Id, u8)>(dialog_top_key()));
         return;
     };
+    let child_open = matches!(&d, Dialog::Font { child: Some(_), .. });
     let mut open = true;
     let mut close = false;
     let title = match &d {
@@ -1298,6 +1359,13 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     });
     if shown.is_some() {
         count_dialog_frame(ctx, id);
+    }
+    if !open
+        && child_open
+        && let Dialog::Font { child, .. } = &mut d
+    {
+        *child = None;
+        open = true;
     }
     if open && !close {
         app.dialog = Some(d);
@@ -1427,12 +1495,16 @@ fn page_paper_group(ui: &mut Ui, paper: &mut (f32, f32), landscape: &mut bool, c
 }
 
 pub(crate) fn buttons(ui: &mut Ui, ok: &str) -> (bool, bool) {
+    buttons_keys(ui, ok, true)
+}
+
+fn buttons_keys(ui: &mut Ui, ok: &str, keys: bool) -> (bool, bool) {
     let mut r = (false, false);
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             // Enter and Escape belong to the Colors dialog while it is open above this one.
-            let keys = !crate::colors::is_open(ui.ctx());
+            let keys = keys && !crate::colors::is_open(ui.ctx()) && !egui::Popup::is_any_open(ui.ctx());
             if ui.button(tl!("Cancel")).clicked() || (keys && ui.input(|i| i.key_pressed(egui::Key::Escape))) {
                 r.1 = true;
             }
@@ -1447,14 +1519,49 @@ pub(crate) fn buttons(ui: &mut Ui, ok: &str) -> (bool, bool) {
 
 /// The character properties the Font dialog's fields stand for.
 fn font_props(d: &Dialog) -> serde_json::Map<String, Value> {
-    let Dialog::Font { font, font_ea, size, bold, italic, underline, strike, sup, sub, small_caps, caps, hidden, color, spacing, .. } = d else {
+    let Dialog::Font {
+        font,
+        font_ea,
+        size,
+        bold,
+        italic,
+        underline,
+        underline_color,
+        strike,
+        double_strike,
+        advanced,
+        sup,
+        sub,
+        small_caps,
+        caps,
+        hidden,
+        color,
+        spacing,
+        ..
+    } = d
+    else {
         return serde_json::Map::new();
     };
     let mut props = serde_json::Map::new();
     props.insert("bold".into(), json!(*bold));
     props.insert("italic".into(), json!(*italic));
     props.insert("strike".into(), json!(*strike));
-    props.insert("underline".into(), json!(if *underline { "single" } else { "none" }));
+    props.insert("underline".into(), json!(underline));
+    props.insert("doubleStrike".into(), json!(double_strike));
+    props.insert("underlineAuto".into(), json!(underline_color.eq_ignore_ascii_case("auto")));
+    if let Some(c) = wordcraft_doc::Rgb::parse(underline_color) {
+        props.insert("underlineColor".into(), json!(c));
+    }
+    props.insert("scale".into(), json!(advanced.scale));
+    props.insert("position".into(), json!(advanced.position));
+    props.insert("kern".into(), json!(advanced.kern));
+    if let Some(v) = advanced.ligatures {
+        props.insert("ligatures".into(), json!(v));
+    }
+    props.insert("numberSpacing".into(), json!(advanced.number_spacing));
+    props.insert("numberForm".into(), json!(advanced.number_form));
+    props.insert("stylisticSets".into(), json!(advanced.stylistic_sets));
+    props.insert("contextualAlternates".into(), json!(advanced.contextual_alternates));
     let vert = if *sup {
         "superscript"
     } else if *sub {
@@ -1494,24 +1601,166 @@ fn east_asian_char(c: char) -> bool {
 /// The Font dialog's OK: one formatting step that sets only the properties the user changed, so
 /// formatting the dialog can't show or left alone stays as it is. Fonts are set by their stored
 /// (English) names, the Latin font for Persian/Arabic text too (as `format.font`).
-fn apply_font(app: &mut WordApp, d: &Dialog) {
-    let Dialog::Font { start, .. } = d else { return };
+fn apply_font(app: &mut WordApp, d: &Dialog) -> bool {
+    let Dialog::Font { size, effects, default_scope, .. } = d else { return false };
+    if !size.trim().is_empty() && !size.trim().parse::<f32>().is_ok_and(|v| v.is_finite() && (1.0..=1638.0).contains(&v)) {
+        app.session.status = tl!("Font size must be between 1 and 1638 pt.").into();
+        return false;
+    }
+    let changed = font_changes(app, d);
+    if changed.is_empty() && effects.is_empty() && default_scope.is_none() {
+        return true;
+    }
+    let mut params = font_params(app, d);
+    if let Some(scope) = default_scope {
+        let mut full = d.clone();
+        if let Dialog::Font { start, .. } = &mut full {
+            start.clear();
+        }
+        params["defaultScope"] = json!(scope);
+        params["defaultProps"] = json!(font_changes(app, &full));
+        let state = wordcraft_engine::cmd::format::state(&app.session);
+        params["defaultProps"]["textEffects"] = state.get("textEffects").cloned().unwrap_or(Value::Null);
+    }
+    app.run("format.set", params).is_ok()
+}
+
+/// The same stored-property patch drives OK and the scratch document used by Preview.
+fn font_changes(app: &mut WordApp, d: &Dialog) -> serde_json::Map<String, Value> {
+    let Dialog::Font { start, .. } = d else { return Default::default() };
     let mut changed: serde_json::Map<String, Value> = font_props(d).into_iter().filter(|(k, v)| start.get(k) != Some(v)).collect();
+    if (changed.contains_key("underlineColor") || changed.contains_key("underlineAuto"))
+        && !changed.contains_key("underline")
+        && let Some(value) = font_props(d).get("underline")
+    {
+        changed.insert("underline".into(), value.clone());
+    }
     if let Some(f) = changed.get("font").and_then(Value::as_str).map(str::to_string) {
-        let f = app.previews.font_stored(&f);
+        let (f, theme) = match f.as_str() {
+            "+Body" => (app.session.doc.settings.minor_font.clone(), Some(wordcraft_doc::props::ThemeFont::Body)),
+            "+Headings" => (app.session.doc.settings.major_font.clone(), Some(wordcraft_doc::props::ThemeFont::Headings)),
+            _ => (app.previews.font_stored(&f), None),
+        };
         changed.insert("font".into(), json!(f));
+        changed.insert("fontTheme".into(), json!(theme));
         changed.insert("fontCs".into(), json!(f));
     }
     if let Some(f) = changed.get("fontEa").and_then(Value::as_str).map(str::to_string) {
         changed.insert("fontEa".into(), json!(app.previews.font_stored(&f)));
     }
-    if !changed.is_empty() {
-        let _ = app.run("format.set", json!({"props": changed}));
+    changed
+}
+
+fn font_params(app: &mut WordApp, d: &Dialog) -> Value {
+    let props = font_changes(app, d);
+    let mut params = json!({"props": props});
+    if let Dialog::Font { effects, .. } = d
+        && !effects.is_empty()
+    {
+        params["effects"] = json!(effects);
     }
+    params
+}
+
+fn font_child(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog, mut child: FontChild) {
+    let keys = !egui::Popup::is_any_open(ui.ctx());
+    ui.set_min_width(500.0);
+    match &mut child {
+        FontChild::Defaults { future } => {
+            ui.heading(tl!("Set As Default"));
+            ui.label(tl!("Use the pending font settings as the default for:"));
+            ui.radio_value(future, false, tl!("This document only"));
+            ui.radio_value(future, true, tl!("All new blank documents"));
+        }
+        FontChild::Effects { patch } => {
+            ui.heading(tl!("Text Effects"));
+            let theme = app.session.doc.settings.theme_colors.clone();
+            let outline = patch
+                .get("outline")
+                .and_then(|v| v.get("color"))
+                .and_then(Value::as_str)
+                .and_then(wordcraft_doc::Rgb::parse)
+                .map(|c| (c, patch["outline"]["width"].as_f64().unwrap_or(0.75) as f32))
+                .or_else(|| app.session.typing_props().text_effects.as_deref().and_then(|fx| fx.outline).and_then(|o| o.color.map(|c| (c, o.width))));
+            let mut emit = |v: Value| {
+                if let Some(values) = v.as_object() {
+                    patch.extend(values.clone());
+                }
+            };
+            ui.horizontal(|ui| {
+                ui.menu_button(tl!("Text Fill"), |ui| crate::wordart_menus::fill_menu_choices(ui, &theme, &mut emit));
+                ui.menu_button(tl!("Text Outline"), |ui| crate::wordart_menus::outline_menu_choices(ui, &theme, outline, &mut emit));
+                ui.menu_button(tl!("Text Effects"), |ui| crate::wordart_menus::effects_choices(ui, &theme, &mut emit));
+            });
+            if ui.button(tl!("Clear Text Effects")).clicked() {
+                patch.clear();
+                patch.insert("clear".into(), json!(true));
+            }
+            let mut preview = d.clone();
+            if let Dialog::Font { effects, .. } = &mut preview {
+                *effects = patch.clone();
+            }
+            let params = font_params(app, &preview);
+            if let Dialog::Font { sample, .. } = &preview {
+                ui.separator();
+                ui.label(tl!("Preview"));
+                crate::previews::font_preview(app, ui, sample, &params);
+            }
+        }
+    }
+    let (ok, cancel) = buttons_keys(ui, tl!("OK"), keys);
+    if let Dialog::Font { child: slot, default_scope, effects, .. } = d {
+        if ok {
+            match child {
+                FontChild::Defaults { future } => *default_scope = Some(if future { "future" } else { "document" }.into()),
+                FontChild::Effects { patch } => *effects = patch,
+            }
+        } else if !cancel {
+            *slot = Some(child);
+        }
+    }
+}
+
+fn font_choice<T: PartialEq + Clone>(ui: &mut Ui, id: &str, value: &mut T, choices: &[(T, &str)]) {
+    let label = choices.iter().find(|(v, _)| v == value).map_or("Custom", |(_, label)| *label);
+    egui::ComboBox::from_id_salt(id).selected_text(tl!(label)).show_ui(ui, |ui| {
+        for (v, label) in choices {
+            ui.selectable_value(value, v.clone(), tl!(label));
+        }
+    });
+}
+
+fn font_offset(ui: &mut Ui, id: &str, value: &mut f32, positive: &str, negative: &str, limit: f32) {
+    ui.horizontal(|ui| {
+        let mut mode = if *value > 0.0 {
+            1
+        } else if *value < 0.0 {
+            -1
+        } else {
+            0
+        };
+        let was = mode;
+        font_choice(ui, id, &mut mode, &[(0, "Normal"), (1, positive), (-1, negative)]);
+        if mode != was {
+            *value = mode as f32 * value.abs().max(1.0);
+        }
+        let mut amount = value.abs();
+        ui.label(tl!("By:"));
+        if ui.add_enabled(mode != 0, egui::DragValue::new(&mut amount).range(0.0..=limit).speed(0.05).suffix(" pt")).changed() {
+            *value = mode as f32 * amount;
+        }
+    });
 }
 
 /// Returns true to close.
 fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
+    let keys = !egui::Popup::is_any_open(ui.ctx());
+    if let Dialog::Font { child, .. } = d
+        && let Some(child) = child.take()
+    {
+        font_child(app, ui, d, child);
+        return false;
+    }
     match d {
         Dialog::RenameDocument { name, message, focus } => {
             ui.label(tl!("Document name"));
@@ -1539,98 +1788,307 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             false
         }
 
-        Dialog::Font { font, font_ea, asian, size, bold, italic, underline, strike, sup, sub, small_caps, caps, hidden, color, spacing, .. } => {
-            // Build the sample text format for the preview pane below.
-            let preview_size = size.trim().parse::<f32>().unwrap_or(12.0).clamp(6.0, 72.0);
-            let preview_color = wordcraft_doc::Rgb::parse(color).map(crate::theme::c32).unwrap_or_else(|| ui.visuals().text_color());
-            let mut fmt = egui::TextFormat {
-                font_id: egui::FontId::new(preview_size, egui::FontFamily::Proportional),
-                color: preview_color,
-                ..Default::default()
-            };
-            if *bold {
-                fmt.font_id = crate::theme::semibold(preview_size);
-            }
-            if *italic {
-                fmt.italics = true;
-            }
-            if *underline {
-                fmt.underline = egui::Stroke::new(1.0, preview_color);
-            }
-            if *strike {
-                fmt.strikethrough = egui::Stroke::new(1.0, preview_color);
-            }
-            egui::Grid::new("fontdlg").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-                // Word's two font boxes when East Asian text is in use: the Latin text font and
-                // the Asian text font, each with its own list (type to find a font).
+        Dialog::Font {
+            font,
+            font_ea,
+            asian,
+            size,
+            bold,
+            italic,
+            underline,
+            underline_color,
+            strike,
+            double_strike,
+            tab,
+            advanced,
+            font_list_ready,
+            sup,
+            sub,
+            small_caps,
+            caps,
+            hidden,
+            color,
+            spacing,
+            ..
+        } => {
+            use wordcraft_doc::props::{Ligatures, NumberForm, NumberSpacing, Underline};
+            ui.set_min_width(500.0);
+            ui.horizontal(|ui| {
+                ui.selectable_value(tab, 0, tl!("Font"));
+                ui.selectable_value(tab, 1, tl!("Advanced"));
+            });
+            ui.separator();
+            let content_top = ui.cursor().top();
+            if *tab == 0 {
                 let prev = app.previews.font_preview_fn();
                 if *asian {
                     ui.label(tl!("Asian text font:"));
-                    let fams = app.previews.east_asian_families();
-                    if let Some(f) = crate::widgets::font_combo(ui, "fontdlg_asian", 220.0, font_ea, &fams, Some(&*prev)) {
+                    if let Some(f) =
+                        crate::widgets::font_combo(ui, "fontdlg_asian", 230.0, font_ea, &app.previews.east_asian_families(), Some(&*prev))
+                    {
                         if f == crate::widgets::ADD_FONT {
                             let _ = app.run("font.add", json!({}));
                         } else if f == crate::widgets::LOAD_SYSTEM_FONTS {
                             let _ = app.run("font.loadSystem", json!({}));
                         } else {
-                            *font_ea = f;
+                            *font_ea = app.previews.font_stored(&f);
                         }
                     }
-                    ui.end_row();
                 }
-                ui.label(if *asian { tl!("Latin text font:") } else { tl!("Font:") });
-                let fams = app.previews.families();
-                if let Some(f) = crate::widgets::font_combo(ui, "fontdlg_font", 220.0, font, &fams, Some(&*prev)) {
-                    if f == crate::widgets::ADD_FONT {
-                        let _ = app.run("font.add", json!({}));
-                    } else if f == crate::widgets::LOAD_SYSTEM_FONTS {
-                        let _ = app.run("font.loadSystem", json!({}));
-                    } else {
-                        *font = f;
-                    }
+                let initialize_lists = !*font_list_ready;
+                ui.horizontal_top(|ui| {
+                    ui.vertical(|ui| {
+                        ui.set_width(230.0);
+                        ui.label(if *asian { tl!("Latin text font:") } else { tl!("Font:") });
+                        let mut fams = app.previews.families();
+                        fams.splice(0..0, ["+Body".into(), "+Headings".into()]);
+                        if let Some(f) = crate::widgets::font_combo(ui, "fontdlg_font", 230.0, font, &fams, Some(&*prev)) {
+                            if f == crate::widgets::ADD_FONT {
+                                let _ = app.run("font.add", json!({}));
+                            } else if f == crate::widgets::LOAD_SYSTEM_FONTS {
+                                let _ = app.run("font.loadSystem", json!({}));
+                            } else {
+                                *font = app.previews.font_stored(&f);
+                            }
+                        }
+                        egui::Frame::group(ui.style()).show(ui, |ui| {
+                            ui.set_width(216.0);
+                            let mut scroll = egui::ScrollArea::vertical().id_salt("fontdlg_families").auto_shrink([false, false]);
+                            if !*font_list_ready {
+                                scroll = scroll.vertical_scroll_offset(
+                                    fams.iter().position(|f| f == font).unwrap_or(0) as f32 * (20.0 + ui.spacing().item_spacing.y),
+                                );
+                                *font_list_ready = true;
+                            }
+                            scroll.max_height(100.0).min_scrolled_height(100.0).show_rows(ui, 20.0, fams.len(), |ui, rows| {
+                                for i in rows {
+                                    if let Some(f) = fams.get(i)
+                                        && ui.add(egui::Button::selectable(font == f, f).truncate()).on_hover_text(f).clicked()
+                                    {
+                                        *font = app.previews.font_stored(f);
+                                    }
+                                }
+                            });
+                        });
+                    });
+                    ui.vertical(|ui| {
+                        ui.set_width(130.0);
+                        ui.label(tl!("Font style:"));
+                        let style = match (*bold, *italic) {
+                            (false, false) => "Regular",
+                            (true, false) => "Bold",
+                            (false, true) => "Italic",
+                            (true, true) => "Bold Italic",
+                        };
+                        ui.add_sized([130.0, ui.spacing().interact_size.y], egui::Label::new(tl!(style)));
+                        egui::Frame::group(ui.style()).show(ui, |ui| {
+                            ui.set_min_size(vec2(116.0, 100.0));
+                            for (name, b, i) in
+                                [("Regular", false, false), ("Italic", false, true), ("Bold", true, false), ("Bold Italic", true, true)]
+                            {
+                                if ui.selectable_label(*bold == b && *italic == i, tl!(name)).clicked() {
+                                    *bold = b;
+                                    *italic = i;
+                                }
+                            }
+                        });
+                    });
+                    ui.vertical(|ui| {
+                        ui.set_width(80.0);
+                        ui.label(tl!("Size:"));
+                        ui.add(egui::TextEdit::singleline(size).desired_width(80.0));
+                        egui::Frame::group(ui.style()).show(ui, |ui| {
+                            ui.set_width(66.0);
+                            let mut scroll = egui::ScrollArea::vertical().id_salt("fontdlg_sizes").auto_shrink([false, false]);
+                            if initialize_lists {
+                                let selected =
+                                    wordcraft_engine::cmd::format::SIZES.iter().position(|v| size.parse::<f32>().ok() == Some(*v)).unwrap_or(0);
+                                scroll =
+                                    scroll.vertical_scroll_offset(selected as f32 * (ui.spacing().interact_size.y + ui.spacing().item_spacing.y));
+                            }
+                            scroll.max_height(100.0).min_scrolled_height(100.0).show(ui, |ui| {
+                                for v in wordcraft_engine::cmd::format::SIZES {
+                                    if ui.selectable_label(size.parse::<f32>().ok() == Some(v), v.to_string()).clicked() {
+                                        *size = v.to_string();
+                                    }
+                                }
+                            });
+                        });
+                    });
+                });
+                if font == "+Body" || font == "+Headings" {
+                    let family = if font == "+Body" { &app.session.doc.settings.minor_font } else { &app.session.doc.settings.major_font };
+                    ui.label(format!("{}: {}", tl!("Theme font"), family));
                 }
-                ui.end_row();
-                ui.label(tl!("Size:"));
-                ui.text_edit_singleline(size);
-                ui.end_row();
-                ui.label(tl!("Font color:"));
                 let theme = app.session.doc.settings.theme_colors.clone();
-                color_field(ui, &theme, color, "Automatic", "auto");
-                ui.end_row();
-                ui.label(tl!("Spacing (pt):"));
-                ui.add(egui::DragValue::new(spacing).speed(0.1).range(-20.0..=20.0));
-                ui.end_row();
-            });
-            ui.separator();
-            ui.label(egui::RichText::new(tl!("Effects")).font(semibold(12.5)));
-            egui::Grid::new("fx").num_columns(2).show(ui, |ui| {
-                ui.checkbox(bold, tl!("Bold"));
-                ui.checkbox(italic, tl!("Italic"));
-                ui.end_row();
-                ui.checkbox(underline, tl!("Underline"));
-                ui.checkbox(strike, tl!("Strikethrough"));
-                ui.end_row();
-                ui.checkbox(sup, tl!("Superscript"));
-                ui.checkbox(sub, tl!("Subscript"));
-                ui.end_row();
-                ui.checkbox(small_caps, tl!("Small caps"));
-                ui.checkbox(caps, tl!("All caps"));
-                ui.end_row();
-                ui.checkbox(hidden, tl!("Hidden"));
-                ui.end_row();
-            });
-            // Live preview of the chosen font/size/colour/effects.
+                ui.horizontal_top(|ui| {
+                    ui.vertical(|ui| {
+                        ui.set_width(150.0);
+                        ui.label(tl!("Font color:"));
+                        color_field(ui, &theme, color, "Automatic", "auto");
+                    });
+                    ui.vertical(|ui| {
+                        ui.set_width(150.0);
+                        ui.label(tl!("Underline style:"));
+                        font_choice(
+                            ui,
+                            "fontdlg_underline",
+                            underline,
+                            &[
+                                (Underline::None, "None"),
+                                (Underline::Single, "Single"),
+                                (Underline::Words, "Words only"),
+                                (Underline::Double, "Double"),
+                                (Underline::Thick, "Thick"),
+                                (Underline::Dotted, "Dotted"),
+                                (Underline::Dash, "Dashed"),
+                                (Underline::DotDash, "Dot dash"),
+                                (Underline::DotDotDash, "Dot dot dash"),
+                                (Underline::Wave, "Wave"),
+                                (Underline::DoubleWave, "Double wave"),
+                            ],
+                        );
+                    });
+                    ui.vertical(|ui| {
+                        ui.set_width(150.0);
+                        ui.label(tl!("Underline color:"));
+                        ui.add_enabled_ui(*underline != Underline::None, |ui| {
+                            color_field(ui, &theme, underline_color, "Automatic", "auto");
+                        });
+                    });
+                });
+                ui.separator();
+                ui.label(egui::RichText::new(tl!("Effects")).font(semibold(12.5)));
+                egui::Grid::new("fontdlg_effects").num_columns(2).spacing(vec2(40.0, 4.0)).show(ui, |ui| {
+                    if ui.checkbox(strike, tl!("Strikethrough")).changed() && *strike {
+                        *double_strike = false;
+                    }
+                    ui.checkbox(small_caps, tl!("Small caps"));
+                    ui.end_row();
+                    if ui.checkbox(double_strike, tl!("Double strikethrough")).changed() && *double_strike {
+                        *strike = false;
+                    }
+                    ui.checkbox(caps, tl!("All caps"));
+                    ui.end_row();
+                    if ui.checkbox(sup, tl!("Superscript")).changed() && *sup {
+                        *sub = false;
+                    }
+                    ui.checkbox(hidden, tl!("Hidden"));
+                    ui.end_row();
+                    if ui.checkbox(sub, tl!("Subscript")).changed() && *sub {
+                        *sup = false;
+                    }
+                    ui.end_row();
+                });
+            } else {
+                ui.label(egui::RichText::new(tl!("Character Spacing")).font(semibold(12.5)));
+                egui::Grid::new("fontdlg_spacing").num_columns(2).spacing(vec2(12.0, 8.0)).show(ui, |ui| {
+                    ui.label(tl!("Scale:"));
+                    ui.add(egui::DragValue::new(&mut advanced.scale).range(1.0..=600.0).suffix("%"));
+                    ui.end_row();
+                    ui.label(tl!("Spacing:"));
+                    font_offset(ui, "fontdlg_spacing_mode", spacing, "Expanded", "Condensed", 100.0);
+                    ui.end_row();
+                    ui.label(tl!("Position:"));
+                    font_offset(ui, "fontdlg_position", &mut advanced.position, "Raised", "Lowered", 800.0);
+                    ui.end_row();
+                    let mut kerned = advanced.kern > 0.0;
+                    if ui.checkbox(&mut kerned, tl!("Kerning for fonts:")).changed() {
+                        advanced.kern = if kerned { 1.0 } else { 0.0 };
+                    }
+                    ui.add_enabled_ui(kerned, |ui| {
+                        ui.add(egui::DragValue::new(&mut advanced.kern).range(0.5..=1638.0).speed(0.5).suffix(format!(" {}", tl!("pt and above"))));
+                    });
+                    ui.end_row();
+                });
+                ui.add_space(16.0);
+                ui.label(egui::RichText::new(tl!("OpenType Features")).font(semibold(12.5)));
+                egui::Grid::new("fontdlg_opentype").num_columns(2).spacing(vec2(12.0, 8.0)).show(ui, |ui| {
+                    ui.label(tl!("Ligatures:"));
+                    let choices = [
+                        (Some(Ligatures::None), "None"),
+                        (Some(Ligatures::Standard), "Standard only"),
+                        (Some(Ligatures::StandardContextual), "Standard and Contextual"),
+                        (Some(Ligatures::HistoricalDiscretional), "Historical and Discretionary"),
+                        (Some(Ligatures::All), "All"),
+                    ];
+                    font_choice(ui, "fontdlg_ligatures", &mut advanced.ligatures, &choices);
+                    ui.end_row();
+                    ui.label(tl!("Number spacing:"));
+                    font_choice(
+                        ui,
+                        "fontdlg_number_spacing",
+                        &mut advanced.number_spacing,
+                        &[(NumberSpacing::Default, "Default"), (NumberSpacing::Proportional, "Proportional"), (NumberSpacing::Tabular, "Tabular")],
+                    );
+                    ui.end_row();
+                    ui.label(tl!("Number forms:"));
+                    font_choice(
+                        ui,
+                        "fontdlg_number_form",
+                        &mut advanced.number_form,
+                        &[(NumberForm::Default, "Default"), (NumberForm::Lining, "Lining"), (NumberForm::OldStyle, "Old-style")],
+                    );
+                    ui.end_row();
+                    ui.label(tl!("Stylistic sets:"));
+                    let label = if advanced.stylistic_sets == 0 {
+                        tl!("Default").to_string()
+                    } else {
+                        (1..=20)
+                            .filter(|id| advanced.stylistic_sets & (1u32 << (id - 1)) != 0)
+                            .map(|id| id.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    };
+                    egui::ComboBox::from_id_salt("fontdlg_sets").selected_text(label).show_ui(ui, |ui| {
+                        if ui.selectable_label(advanced.stylistic_sets == 0, tl!("Default")).clicked() {
+                            advanced.stylistic_sets = 0;
+                        }
+                        for id in 1..=20 {
+                            let mask = 1u32 << (id - 1);
+                            let mut on = advanced.stylistic_sets & mask != 0;
+                            if ui.checkbox(&mut on, id.to_string()).changed() {
+                                if on {
+                                    advanced.stylistic_sets |= mask;
+                                } else {
+                                    advanced.stylistic_sets &= !mask;
+                                }
+                            }
+                        }
+                    });
+                    ui.end_row();
+                });
+                ui.checkbox(&mut advanced.contextual_alternates, tl!("Use Contextual Alternates"));
+            }
+            ui.add_space((380.0 - (ui.cursor().top() - content_top)).max(0.0));
             ui.separator();
             ui.label(egui::RichText::new(tl!("Preview")).small().weak());
-            let sample = if *caps { tl!("AaBbYyZz").to_uppercase() } else { tl!("AaBbYyZz").to_string() };
-            let mut job = egui::text::LayoutJob::single_section(sample, fmt);
-            job.wrap.max_width = ui.available_width().min(400.0);
-            ui.label(job);
-            let (ok, cancel) = buttons(ui, tl!("OK"));
-            if ok {
-                apply_font(app, d);
+            if size.trim().is_empty() || size.trim().parse::<f32>().is_ok_and(|v| v.is_finite() && (1.0..=1638.0).contains(&v)) {
+                let changed = font_params(app, d);
+                if let Dialog::Font { sample, .. } = d {
+                    crate::previews::font_preview(app, ui, sample, &changed);
+                }
+            } else {
+                ui.weak(tl!("Font size must be between 1 and 1638 pt."));
             }
-            ok || cancel
+            ui.horizontal(|ui| {
+                if let Dialog::Font { child, default_scope, effects, .. } = d {
+                    if ui.button(tl!("Set As Default")).clicked() {
+                        *child = Some(FontChild::Defaults { future: default_scope.as_deref() == Some("future") });
+                    }
+                    if ui.button(tl!("Text Effects…")).clicked() {
+                        *child = Some(FontChild::Effects { patch: effects.clone() });
+                    }
+                    if default_scope.is_some() {
+                        ui.weak(tl!("Default change pending"));
+                    }
+                }
+            });
+            let (ok, cancel) = buttons_keys(ui, tl!("OK"), keys);
+            if ok {
+                return apply_font(app, d);
+            }
+            cancel
         }
         Dialog::Paragraph {
             rtl,
@@ -4133,6 +4591,30 @@ mod tests {
         assert_eq!((c.small_caps, c.caps, c.size), (Some(false), Some(true), Some(14.0)));
     }
 
+    #[test]
+    fn font_dialog_size_change_preserves_mixed_advanced_formatting() {
+        use wordcraft_doc::Pos;
+        let mut app = app_with("Mixed text");
+        for (from, to, kern, ligatures) in [(0, 5, 14, "standard"), (5, 10, 0, "all")] {
+            app.run("select.range", json!({"anchor":Pos::body(0,from),"focus":Pos::body(0,to)})).unwrap();
+            app.run("format.set", json!({"props":{"kern":kern,"ligatures":ligatures}})).unwrap();
+        }
+        app.run("select.all", json!({})).unwrap();
+        let state = wordcraft_engine::cmd::format::state(&app.session);
+        assert!(state["kern"].is_null() && state["ligatures"].is_null());
+        let mut d = Dialog::open("font", &mut app).unwrap();
+        let Dialog::Font { size, .. } = &mut d else { panic!() };
+        *size = "18".into();
+        assert!(apply_font(&mut app, &d));
+        let p = app.session.doc.para_at(&Pos::body(0, 0)).unwrap();
+        for (off, kern, ligatures) in [(0, 14.0, wordcraft_doc::props::Ligatures::Standard), (5, 0.0, wordcraft_doc::props::Ligatures::All)] {
+            let props = p.props_of_char(off);
+            assert_eq!(props.size, Some(18.0));
+            assert_eq!(props.kern, Some(kern));
+            assert_eq!(props.ligatures, Some(ligatures));
+        }
+    }
+
     /// #1178: Modify Style's font box is the ribbon's font box, so typing part of a name picks the
     /// installed family instead of storing the typed text.
     #[test]
@@ -4208,6 +4690,14 @@ mod tests {
         assert!((after.min.y - (before.min.y + 120.0)).abs() <= 1.0, "moved down: {before:?} -> {after:?}");
     }
 
+    fn font_harness() -> egui_kittest::Harness<'static, WordApp> {
+        let mut app = app_with("Font draft");
+        app.ui.language = "en".into();
+        app.run("select.all", json!({})).unwrap();
+        app.dialog = Dialog::open("font", &mut app);
+        app_harness(app)
+    }
+
     fn app_harness(app: WordApp) -> egui_kittest::Harness<'static, WordApp> {
         egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
             |ui, app: &mut WordApp| {
@@ -4217,6 +4707,117 @@ mod tests {
             },
             app,
         )
+    }
+
+    #[test]
+    fn font_dialog_nested_cancel_preserves_the_parent_and_outer_cancel_discards_all_drafts() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = font_harness();
+        h.run_steps(4);
+        let before = h.state().session.doc.clone();
+        let prefs = h.state().session.prefs.clone();
+        if let Some(Dialog::Font { size, .. }) = &mut h.state_mut().dialog {
+            *size = "18".into();
+        }
+        h.get_by_label("Text Effects…").click();
+        h.run_steps(4);
+        h.get_by_label("Text Fill").click();
+        h.run_steps(4);
+        h.key_press(egui::Key::Escape);
+        h.run_steps(4);
+        assert!(matches!(&h.state().dialog, Some(Dialog::Font { child: Some(FontChild::Effects { .. }), .. })));
+        h.key_press(egui::Key::Escape);
+        h.run_steps(4);
+        assert!(matches!(&h.state().dialog,Some(Dialog::Font { child:None,size,effects,.. }) if size=="18" && effects.is_empty()));
+        h.get_by_label("Text Effects…").click();
+        h.run_steps(4);
+        h.get_by_label("Clear Text Effects").click();
+        h.run_steps(4);
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "OK").click();
+        h.run_steps(4);
+        assert!(matches!(&h.state().dialog,Some(Dialog::Font { effects,.. }) if effects.get("clear")==Some(&json!(true))));
+        h.get_by_label("Set As Default").click();
+        h.run_steps(4);
+        assert!(h.query_by_label("Changes are saved when you click OK in the Font dialog.").is_none());
+        h.get_by_label("All new blank documents").click();
+        h.run_steps(4);
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "OK").click();
+        h.run_steps(4);
+        assert!(matches!(&h.state().dialog,Some(Dialog::Font { default_scope:Some(scope),.. }) if scope=="future"));
+        assert_eq!(h.state().session.doc, before);
+        assert_eq!(h.state().session.prefs, prefs);
+        h.get_by_label("Cancel").click();
+        h.run_steps(4);
+        assert!(h.state().dialog.is_none());
+        assert_eq!(h.state().session.doc, before);
+        assert_eq!(h.state().session.prefs, prefs);
+    }
+
+    #[test]
+    fn font_dialog_ui_enforces_exclusive_effects_and_keeps_values_across_tabs() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = font_harness();
+        h.run_steps(4);
+        for name in ["Strikethrough", "Double strikethrough", "Superscript", "Subscript", "Hidden"] {
+            h.get_by_role_and_label(egui::accesskit::Role::CheckBox, name).click();
+            h.run_steps(4);
+        }
+        assert!(matches!(&h.state().dialog, Some(Dialog::Font { strike: false, double_strike: true, sup: false, sub: true, hidden: true, .. })));
+        assert!(h.query_by_label("Hidden text is shown with a dotted underline.").is_none());
+        h.get_by_label("Advanced").click();
+        h.run_steps(4);
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "Font").click();
+        h.run_steps(4);
+        assert!(matches!(&h.state().dialog, Some(Dialog::Font { double_strike: true, sub: true, hidden: true, .. })));
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "OK").click();
+        h.run_steps(4);
+        let state = wordcraft_engine::cmd::format::state(&h.state().session);
+        assert_eq!((state["strike"].clone(), state["doubleStrike"].clone()), (json!(false), json!(true)));
+        assert_eq!((state["superscript"].clone(), state["subscript"].clone()), (json!(false), json!(true)));
+        assert_eq!(state["hidden"], true);
+    }
+
+    #[test]
+    fn font_dialog_defaults_and_both_tabs_commit_once_and_restore_after_restart() {
+        use wordcraft_doc::props::{Ligatures, NumberForm, NumberSpacing};
+        let mut app = app_with("Defaults");
+        app.run("select.all", json!({})).unwrap();
+        let before = app.session.doc.clone();
+        let mut d = Dialog::open("font", &mut app).unwrap();
+        let Dialog::Font { font, size, sup, underline, underline_color, advanced, effects, default_scope, .. } = &mut d else { panic!() };
+        *font = "+Body".into();
+        *size = "18".into();
+        *sup = true;
+        *underline = wordcraft_doc::props::Underline::DoubleWave;
+        *underline_color = "2468AC".into();
+        advanced.scale = 125.0;
+        advanced.position = 2.5;
+        advanced.ligatures = Some(Ligatures::All);
+        advanced.number_form = NumberForm::OldStyle;
+        advanced.number_spacing = NumberSpacing::Tabular;
+        advanced.stylistic_sets = (1 << 19) | 1;
+        advanced.contextual_alternates = true;
+        effects.insert("fill".into(), json!("C03050"));
+        *default_scope = Some("future".into());
+        assert!(apply_font(&mut app, &d));
+        let state = wordcraft_engine::cmd::format::state(&app.session);
+        assert_eq!(state["fontTheme"], "body");
+        assert_eq!(state["size"], 18.0);
+        assert_eq!(state["ligatures"], "all");
+        assert_eq!(state["stylisticSets"], (1 << 19) | 1);
+        assert_eq!(state["scale"], 125.0);
+        assert_eq!(state["numberForm"], "oldStyle");
+        assert_eq!(state["textEffects"]["fill"]["color"], json!([192, 48, 80]));
+        let saved = serde_json::to_vec(&app.prefs()).unwrap();
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(app.session.doc, before);
+        let mut restart = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        restart.apply_prefs(serde_json::from_slice(&saved).unwrap());
+        let state = wordcraft_engine::cmd::format::state(&restart.session);
+        assert_eq!(state["size"], 18.0);
+        assert_eq!(state["superscript"], true);
+        assert_eq!(state["ligatures"], "all");
+        assert_eq!(state["textEffects"]["fill"]["color"], json!([192, 48, 80]));
     }
 
     /// The Page Setup paper size as opened, in points, and the Paper size entry it shows.

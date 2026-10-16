@@ -2621,3 +2621,43 @@
 # Reading Mode column widths (#1040)
 	Narrow	Тясна
 	Medium	Средна
+
+
+# Font dialog and pending defaults/effects. Clean-room translations.
+	pt and above	пт и повече
+	All new blank documents	Всички нови празни документи
+	Bold Italic	Получер курсив
+	By:	С:
+	Clear Text Effects	Изчистване на текстовите ефекти
+	Condensed	Сгъстено
+	Default change pending	Чака промяна на настройките по подразбиране
+	Dot dot dash	Точка-точка-тире
+	Double wave	Двойна вълна
+	Expanded	Разредено
+	Font size must be between 1 and 1638 pt.	Размерът на шрифта трябва да е от 1 до 1638 пт.
+	Font style:	Стил на шрифта:
+	Historical and Discretionary	Исторически и незадължителни
+	Kerning for fonts:	Кернинг за шрифтове:
+	Ligatures:	Лигатури:
+	Lining	Цифри с еднаква височина
+	Lowered	Снижено
+	Number forms:	Форми на цифрите:
+	Number spacing:	Разстояние между цифрите:
+	Old-style	Старостилни цифри
+	OpenType Features	Функции на OpenType
+	Proportional	Пропорционално
+	Raised	Повдигнато
+	Regular	Обикновен
+	Scale:	Мащаб:
+	Standard and Contextual	Стандартни и контекстни
+	Standard only	Само стандартни
+	Stylistic sets:	Стилови набори:
+	Tabular	Таблично
+	Text Effects…	Текстови ефекти…
+	Theme font	Шрифт на темата
+	This document only	Само този документ
+	Underline color:	Цвят на подчертаването:
+	Underline style:	Стил на подчертаването:
+	Use Contextual Alternates	Използване на контекстни алтернативи
+	Use the pending font settings as the default for:	Използване на чакащите настройки на шрифта по подразбиране за:
+	Preview unavailable	Прегледът не е наличен
