@@ -1840,6 +1840,10 @@ impl PageBuilder<'_> {
     fn new_page(&mut self, first_block: usize, body_top: f32) {
         self.apply_valign();
         self.flush_notes();
+        // The page before is done: it gives back the room its items grew for.
+        if let Some(p) = self.pages.last_mut() {
+            p.items.shrink_to_fit();
+        }
         self.beneath = self.sect_beneath;
         self.excl.clear();
         self.float_tables.clear();
@@ -3676,16 +3680,19 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
     // table (e.g. 3 header rows over 30 000 pages).
     const MAX_HEADER_REPEATS: usize = 200_000;
     let mut header_repeats = 0usize;
-    let place = |pb: &mut PageBuilder, row: &table::RowLayout| {
+    // The rows move onto the pages rather than being copied there: a long table would otherwise
+    // be held twice until it is placed. Only the repeated header rows are copied.
+    let rows = std::mem::take(&mut tl.rows);
+    let headers: Vec<(f32, Vec<Placed>)> = rows.iter().take(header_rows.len()).map(|r| (r.height, r.items.clone())).collect();
+    let place = |pb: &mut PageBuilder, height: f32, items: Vec<Placed>| {
         let (x, y) = (pb.col_x() + tl.x, pb.y);
         if let Some(pg) = pb.page() {
-            for it in &row.items {
-                let mut it = it.clone();
+            pg.items.extend(items.into_iter().map(|mut it| {
                 it.translate(x, y);
-                pg.items.push(it);
-            }
+                it
+            }));
         }
-        pb.y += row.height;
+        pb.y += height;
         pb.content_bottom = pb.content_bottom.max(pb.y);
     };
     // Like Word, repeated header rows don't stay alone at the bottom of a page: when the first row
@@ -3693,15 +3700,15 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
     let first = header_rows.len();
     if !header_rows.is_empty()
         && !pb.at_top()
-        && let Some(row) = tl.rows.get(first)
+        && let Some(row) = rows.get(first)
     {
-        let room = pb.bottom - pb.y - tl.rows.iter().take(first).map(|r| r.height).sum::<f32>();
+        let room = pb.bottom - pb.y - rows.iter().take(first).map(|r| r.height).sum::<f32>();
         let splittable = !t.rows.get(first).is_some_and(|r| r.props.cant_split);
         if row.height > room + 0.01 && !(splittable && table::split_row(row, room).is_some()) {
             pb.advance(block, body_top);
         }
     }
-    for (ri, row) in tl.rows.iter().enumerate() {
+    for (ri, row) in rows.into_iter().enumerate() {
         // Word never splits a row of an exact height: it moves on whole.
         let splittable = !header_rows.contains(&ri)
             && !t
@@ -3713,7 +3720,7 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
         let mut fresh = false;
         // Each pass places the part of the row that fits, then breaks the page.
         for _ in 0..1000 {
-            let cur = rest.as_ref().unwrap_or(row);
+            let cur = rest.as_ref().unwrap_or(&row);
             if pb.y + cur.height <= pb.bottom + 0.01 {
                 break;
             }
@@ -3728,8 +3735,8 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
             let split = if splittable && !short_of_min { table::split_row(cur, room) } else { None };
             match split {
                 Some((a, b)) => {
-                    place(pb, &a);
                     table_notes(ctx, pb, &a.items);
+                    place(pb, a.height, a.items);
                     rest = Some(b);
                 }
                 // Like Word, a row that does not fit on an empty page, or under the header rows
@@ -3740,21 +3747,19 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
             pb.advance(block, body_top);
             // Repeat header rows, up to this table's cap.
             if !header_rows.contains(&ri) && header_repeats < MAX_HEADER_REPEATS {
-                for hr in &header_rows {
+                for (h, items) in &headers {
                     if header_repeats >= MAX_HEADER_REPEATS {
                         break;
                     }
-                    if let Some(h) = tl.rows.get(*hr) {
-                        place(pb, h);
-                        header_repeats += 1;
-                    }
+                    place(pb, *h, items.clone());
+                    header_repeats += 1;
                 }
             }
             fresh = true;
         }
-        let last = rest.as_ref().unwrap_or(row);
-        place(pb, last);
+        let last = rest.unwrap_or(row);
         table_notes(ctx, pb, &last.items);
+        place(pb, last.height, last.items);
     }
 }
 

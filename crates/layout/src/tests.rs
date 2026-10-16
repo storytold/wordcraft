@@ -265,6 +265,37 @@ fn empty_doc_has_one_page() {
     assert!(c.top >= 72.0 && c.height > 8.0);
 }
 
+/// Paragraph layouts are kept in the cache and on the pages: their vectors hold no spare room.
+#[test]
+fn paragraph_layouts_keep_no_spare_capacity() {
+    let text = "The quick brown fox jumps over the lazy dog. ".repeat(40);
+    let d = Document::from_text(&format!("{text}\nShort line\n{text}"));
+    let l = lay(&d);
+    let mut seen = 0;
+    for it in l.pages.iter().flat_map(|p| &p.items) {
+        let Placed::Lines { para, .. } = it else { continue };
+        seen += 1;
+        assert_eq!(para.styles.capacity(), para.styles.len());
+        assert_eq!(para.glyphs.capacity(), para.glyphs.len());
+        assert_eq!(para.clusters.capacity(), para.clusters.len());
+        assert_eq!(para.issues.capacity(), para.issues.len());
+        assert_eq!(para.lines.capacity(), para.lines.len());
+        assert!(para.lines.iter().all(|line| line.xs.capacity() == line.xs.len()));
+    }
+    assert!(seen >= 3, "{seen}");
+}
+
+/// A finished page's items hold no spare room: a long document keeps every page.
+#[test]
+fn finished_pages_keep_no_spare_capacity() {
+    let d = Document::from_text(&"Line of text\n".repeat(400));
+    let l = lay(&d);
+    assert!(l.pages.len() >= 3, "{}", l.pages.len());
+    for p in &l.pages[..l.pages.len() - 1] {
+        assert_eq!(p.items.capacity(), p.items.len());
+    }
+}
+
 #[test]
 fn hidden_marks_take_no_space() {
     let mut d = Document::new();
