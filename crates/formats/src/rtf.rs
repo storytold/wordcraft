@@ -243,7 +243,8 @@ impl Writer {
         match p.align {
             Some(Align::Center) => out.push_str("\\qc"),
             Some(Align::Right) => out.push_str("\\qr"),
-            Some(Align::Justify) | Some(Align::Distribute) => out.push_str("\\qj"),
+            Some(Align::Justify) => out.push_str("\\qj"),
+            Some(Align::Distribute) => out.push_str("\\qd"),
             _ => out.push_str("\\ql"),
         }
         if p.page_break {
@@ -261,7 +262,26 @@ impl Writer {
                 out.push_str(&format!("\\sb240\\sa80\\keepn\\b\\fs{}", (sz * 2.0) as i32));
             }
             Kind::Title => out.push_str("\\sa80\\fs56"),
-            Kind::Normal => {}
+            Kind::Normal => {
+                if p.list.is_none() {
+                    let tw = |v: f32| (v * 20.0).round() as i32;
+                    if let Some(sb) = p.spacing.before {
+                        out.push_str(&format!("\\sb{}", tw(sb)));
+                    }
+                    if let Some(sa) = p.spacing.after {
+                        out.push_str(&format!("\\sa{}", tw(sa)));
+                    }
+                    if let Some(li) = p.spacing.left {
+                        out.push_str(&format!("\\li{}", tw(li)));
+                    }
+                    if let Some(ri) = p.spacing.right {
+                        out.push_str(&format!("\\ri{}", tw(ri)));
+                    }
+                    if let Some(fi) = p.spacing.first {
+                        out.push_str(&format!("\\fi{}", tw(fi)));
+                    }
+                }
+            }
         }
         if let (Some(li), Some((n, label))) = (p.list, &ls) {
             let lv = li.level.min(8);
@@ -1606,16 +1626,27 @@ impl Reader {
             "emspace" => self.ch('\u{2003}'),
             "enspace" => self.ch('\u{2002}'),
             "qmspace" => self.ch('\u{2005}'),
+            "thinspace" => self.ch('\u{2009}'),
+            "nonbreakingspace" => self.ch('\u{00A0}'),
+            "optionalhyphen" => self.ch('\u{00AD}'),
+            "nonbreakinghyphen" => self.ch('\u{2011}'),
             "zwj" => self.ch('\u{200D}'),
             "zwnj" => self.ch('\u{200C}'),
             "u" => {
                 let u = (pv as i64).rem_euclid(65_536) as u16;
                 if (0xD800..0xDC00).contains(&u) {
+                    if self.pending_high.take().is_some() {
+                        self.ch('\u{FFFD}');
+                    }
                     self.pending_high = Some(u);
                 } else {
                     let c = match self.pending_high.take() {
                         Some(h) if (0xDC00..0xE000).contains(&u) => char::decode_utf16([h, u]).next().and_then(|r| r.ok()).unwrap_or('\u{FFFD}'),
-                        _ => char::from_u32(u32::from(u)).unwrap_or('\u{FFFD}'),
+                        Some(_) => {
+                            self.ch('\u{FFFD}');
+                            char::from_u32(u32::from(u)).unwrap_or('\u{FFFD}')
+                        }
+                        None => char::from_u32(u32::from(u)).unwrap_or('\u{FFFD}'),
                     };
                     self.ch(c);
                 }
@@ -1692,7 +1723,8 @@ impl Reader {
             "ql" => self.st.align = Some(Align::Left),
             "qc" => self.st.align = Some(Align::Center),
             "qr" => self.st.align = Some(Align::Right),
-            "qj" | "qd" => self.st.align = Some(Align::Justify),
+            "qj" => self.st.align = Some(Align::Justify),
+            "qd" | "qk" => self.st.align = Some(Align::Distribute),
             "s" => self.st.style = pv,
             "outlinelevel" => self.st.outline = Some(pv.clamp(0, 9) as u8),
             "pagebb" => self.st.pagebb = on,
@@ -2684,5 +2716,41 @@ mod tests {
     #[test]
     fn escapes() {
         assert_eq!(esc("a{b}\\c\té😀"), "a\\{b\\}\\\\c\\tab \\u233?\\u-10179?\\u-8704?");
+    }
+
+    #[test]
+    fn distribute_align_and_paragraph_spacing() {
+        let rtf = br"{\rtf1\ansi\pard\qd\sb120\sa240\li360\ri180\fi720 Distribute text\par\pard\qk Word2000 distribute\par}";
+        let doc = import(rtf).unwrap();
+        let p0 = doc.body[0].as_para().unwrap();
+        assert_eq!(p0.props.align, Some(Align::Distribute));
+        assert_eq!(p0.props.space_before, Some(6.0));
+        assert_eq!(p0.props.space_after, Some(12.0));
+        assert_eq!(p0.props.indent_left, Some(18.0));
+        assert_eq!(p0.props.indent_right, Some(9.0));
+        assert_eq!(p0.props.indent_first, Some(36.0));
+
+        let p1 = doc.body[1].as_para().unwrap();
+        assert_eq!(p1.props.align, Some(Align::Distribute));
+
+        let exported = export(&doc);
+        assert!(exported.contains("\\qd"));
+        assert!(exported.contains("\\sb120"));
+        assert!(exported.contains("\\sa240"));
+        assert!(exported.contains("\\li360"));
+        assert!(exported.contains("\\ri180"));
+        assert!(exported.contains("\\fi720"));
+    }
+
+    #[test]
+    fn special_characters_and_surrogates() {
+        let rtf = br"{\rtf1\ansi A\thinspace B\nonbreakingspace C\optionalhyphen D\nonbreakinghyphen E\par}";
+        let doc = import(rtf).unwrap();
+        assert_eq!(doc.body[0].as_para().unwrap().text, "A\u{2009}B\u{00A0}C\u{00AD}D\u{2011}E");
+
+        // Consecutive high surrogates: first high surrogate emits replacement char
+        let rtf_surrogates = br"{\rtf1\ansi\u-10179?\u-10179?\u-8704?\par}";
+        let doc_surr = import(rtf_surrogates).unwrap();
+        assert_eq!(doc_surr.body[0].as_para().unwrap().text, "\u{FFFD}😀");
     }
 }
