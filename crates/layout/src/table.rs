@@ -671,10 +671,20 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             {
                 items.push(Placed::Fill { rect, color: f });
             }
+            // Behind-text frames count towards vertical alignment even without inline content.
+            // They do not increase the row's flow height.
+            let align_h = c
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    Placed::Object { rect, wrap: wordcraft_doc::para::Wrap::BehindText, .. } => Some(rect.bottom()),
+                    _ => None,
+                })
+                .fold(c.h, f32::max);
             let mut dy = match c.valign {
                 VAlign::Top => 0.0,
-                VAlign::Center => ((span_h - c.h) / 2.0).max(0.0),
-                VAlign::Bottom => (span_h - c.h).max(0.0),
+                VAlign::Center => ((span_h - align_h) / 2.0).max(0.0),
+                VAlign::Bottom => (span_h - align_h).max(0.0),
             };
             let end = (c.vmerge != VMerge::Continue && c.turned.is_none()).then_some(c.end + dy);
             let mut cell_items = c.items;
