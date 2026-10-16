@@ -7,6 +7,7 @@ mod math;
 mod props;
 mod sdt;
 mod story;
+pub(crate) use story::toc_span;
 mod watermark;
 mod wordart;
 

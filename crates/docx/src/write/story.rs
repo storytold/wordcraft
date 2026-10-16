@@ -1613,7 +1613,7 @@ fn is_toc(instr: &str) -> bool {
 
 /// The engine's TOC: a paragraph holding an empty `TOC` field, then its TOC-styled entries.
 /// Returns (heading, last entry) so the field can be written spanning the entries, as Word does.
-fn toc_span(bl: &Blocks) -> Option<(usize, usize)> {
+pub(crate) fn toc_span(bl: &Blocks) -> Option<(usize, usize)> {
     let start = bl.iter().position(|b| {
         b.as_para().is_some_and(|p| {
             p.section.is_none()

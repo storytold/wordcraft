@@ -15,6 +15,7 @@ mod wordart;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
+use wordcraft_doc::control::{ControlEvent, ControlKind, control_events, pair_events};
 use wordcraft_doc::graphic::{Graphic, GraphicKind};
 use wordcraft_doc::numbering::{AbstractNum, Level, LevelSuffix, Num};
 use wordcraft_doc::para::NoteKind;
@@ -261,6 +262,7 @@ pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
         r.flush_pending(&mut sc, &mut blocks);
         r.doc.body = blocks;
         unstyle_toc_links(&mut r.doc);
+        toc_control_to_toc(&mut r.doc.body);
         toc_field_to_heading(&mut r.doc.body);
         if let Some(s) = body.child("w:sectPr") {
             r.doc.last_section = r.read_section(s, &rels);
@@ -434,6 +436,40 @@ fn unstyle_toc_links(doc: &mut Document) {
                 }
             });
         }
+    }
+}
+
+/// Word's Table of Contents content control belongs to the TOC: the writer puts it back around
+/// the TOC heading and its entries (`toc_span`), which References › Update Table rebuilds. It is
+/// handed to the TOC only when the writer would put it back around the same paragraphs; any other
+/// is kept as read, or saving would drop it (#2427).
+fn toc_control_to_toc(body: &mut Blocks) {
+    let span = {
+        let events = control_events(body);
+        let (pairs, _) = pair_events(&events);
+        pairs.iter().find_map(|&(o, c, depth)| {
+            let (ControlEvent::Open { block: s, off: Some(0), control }, ControlEvent::Close { block: e, off: Some(off) }) =
+                (events.get(o)?, events.get(c)?)
+            else {
+                return None;
+            };
+            let toc = matches!(&control.kind, ControlKind::Gallery { list: false, gallery, .. } if gallery == "Table of Contents");
+            let at_end = body.get(*e)?.as_para()?.len() == off.checked_add(OBJ.len_utf8())?;
+            (depth == 0 && toc && at_end).then_some((*s, *e, *off))
+        })
+    };
+    let Some((s, e, off)) = span else { return };
+    let mut toc = body.clone();
+    // The end first: both markers may be in the same paragraph.
+    if let Some(Block::Para(p)) = toc.get_mut(e).map(Arc::make_mut) {
+        let _ = p.delete(off, p.len());
+    }
+    if let Some(Block::Para(p)) = toc.get_mut(s).map(Arc::make_mut) {
+        let _ = p.delete(0, OBJ.len_utf8());
+    }
+    toc_field_to_heading(&mut toc);
+    if crate::write::toc_span(&toc) == Some((s, e)) {
+        *body = toc;
     }
 }
 
