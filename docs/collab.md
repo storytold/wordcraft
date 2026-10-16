@@ -1,6 +1,6 @@
 # Live sessions (co-editing)
 
-> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** major (created: plugin protocol 2 in WordCraft, schema 1) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-16 · **Change:** minor (document chat, protocol 2.1; previously major: created: plugin protocol 2 in WordCraft, schema 1) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 Several people edit one document at the same time, each in their own WordCraft, and see each
 other's carets, selections and edits as they happen. This is WordCraft's equivalent of Word's
@@ -197,6 +197,68 @@ they stay with their text.
   `sync1` so peers fetch it; a larger remote one is refused), awareness 64 KiB, one room per
   document.
 
+## Document chat
+
+The people editing a document talk in a chat panel beside it ([craft-collab
+`docs/chat.md`](https://github.com/sirmmo/craft-collab/blob/main/docs/chat.md), protocol 2.1, the
+same in GridCraft and DeckCraft). The chat **belongs to the document**: it's shared live through
+the room, saved inside the file, and stays until someone clears it. Outside a live session it
+works too, as notes left in the file.
+
+**In the interface.** The title bar's chat button sits between Share and the people circles,
+with the number of messages others sent while the panel was closed (a mention of you, `@Your
+Name`, also makes it flash). It shows in a session, and outside one when the file has a chat;
+View › Show › Chat opens the panel at any time. The panel (at the right, where task panes go)
+lists the messages oldest first: the author's circle and colour, name, time (relative for today:
+"just now", "5 min ago", "3 h ago"; older ones as date and time, local in the browser, UTC on
+the desktop), the text (selectable; links clickable; `@Name` highlighted when it names someone
+in the room or the chat), the message it answers quoted, and "edited" / "Message deleted"
+markers. Right-click a message to Reply, Copy, or (your own) Edit or Delete. Who's typing shows
+under the list ("Bo is typing…"). The box at the bottom sends with Enter; Shift+Enter starts a
+new line. The panel's menu has **Export** (copies the chat as text), **Clear chat…** (asks
+"Remove the whole chat from the document for everyone?") and the note "Kept in the file; Office
+drops it when it saves".
+
+**Commands** (everything is a command; programmatic calls never ask):
+
+| Command | Params | Does |
+|---|---|---|
+| `chat.list` | `{since?, limit?}` | `{messages, clearedAt?, count}`, newest last: the messages after the one whose id is `since` (or, with a number, sent after that time in ms), the newest `limit` of them |
+| `chat.send` | `{text, replyTo?}` | `{id}`. 1–4,000 characters (UTF-16 units), newlines allowed |
+| `chat.edit` | `{id, text}` | The author only (their user id), not a deleted message |
+| `chat.delete` | `{id}` | The author only; the entry stays as "Message deleted" |
+| `chat.clear` | `{}` | `{removed}`: every message goes, for everyone; `clearedAt` is set |
+| `chat.export` | `{format?: text\|json}` | The chat as text (`[time] Name: text`) or JSON |
+| `chat.typing` | `{typing}` | Tells the others you're typing (awareness `typing: true`) |
+| `view.chat` | `{value?}` | Shows or hides the panel |
+
+Refused, with nothing sent: empty or too long text, a `replyTo` or `id` not in the chat, someone
+else's message, a full chat (10,000 messages: "The chat is full: clear it to go on"; a deleted
+message still counts, clearing frees it). The author is the room's user in a session, the app's
+own user (File › Options › General name, the live-session id and colour) outside one.
+
+**Undo and saving.** Chat changes are never undo steps, and Undo never removes a message (in a
+session the chat is outside the per-person undo's scope; outside one Undo and Redo keep the chat
+as it is). They do mark the document modified: it has to be saved for the chat to be kept.
+
+**In the shared document.** A root `chat` (`Y.Array`) of message maps `{id, author (JSON text
+{id, name, color}), at, text, replyTo?, edited?, deleted?}` and a root map `chatMeta`
+(`clearedAt`), as craft-collab's `docs/chat.md` says; messages are only appended, so concurrent
+sends land in the same order everywhere. Readers skip malformed entries (not a map, a bad id,
+author, time or text, a duplicated id) and keep the first 10,000. Sharing seeds `chat` from the
+file's chat; joining brings the room's chat into the document; others' messages mark it modified.
+In an encrypted room the chat travels encrypted like every other update. The awareness state
+carries `typing: true` while you write in the box (it goes after a 5-second pause, or when you
+send).
+
+**In the file.** DOCX (and `.docm`, `.dotx`, `.dotm`, Flat OPC): the part `/craft/chat.json`,
+content type `application/vnd.craft.chat+json`, related from the package root with relationship
+type `urn:craft:relationships:chat`: `{"version": 1, "clearedAt"?, "messages": [...]}`. It's
+modelled (`Document::chat`), never kept as an opaque part. An empty chat writes no part; a
+malformed part is skipped with a warning and the document opens. WordCraft's native JSON keeps
+the same object under `chat`. Microsoft Word doesn't know the part and drops it when it saves;
+the other formats (RTF, ODT, HTML, `.doc`…) don't carry the chat.
+
 ## Tests
 
 - `crates/collab/src/tests.rs`: sharing and joining (tables, headers, objects), typing as small
@@ -222,6 +284,17 @@ they stay with their text.
   leaving.
 - `crates/engine/tests/collab_loopback.rs`: two WordCraft processes through craft-collab's
   loopback transport (`CRAFT_COLLAB_LOOPBACK` = the built plugin).
+- Chat: `crates/doc/src/chat.rs` (validation, limits, the JSON form, `chat.list`),
+  `crates/docx/tests/chat.rs` (the part round trips modelled, an empty chat writes none, a
+  malformed part is ignored), `crates/engine/tests/collab_chat.rs` (the commands outside a
+  session, refusals, the 10,000-message limit, undo leaving the chat alone, saving to DOCX and
+  the native JSON; two and three people chatting concurrently with replies, edits, deletes and
+  typing mixed in, converging and a newcomer getting the same chat; sharing seeding the room from
+  the file's chat and joining bringing it in; clearing; an encrypted room with nothing readable on
+  the wire; typing in awareness), craft-collab's `wordcraft-1-chat` and `wordcraft-1-chat-share`
+  transcripts in the conformance replay, and `crates/ui-egui/tests/chat_panel.rs` (the button,
+  the panel, Enter and Shift+Enter, the menu and its confirmation, the unread count, the mention
+  flash, who's typing).
 - `crates/ui-egui/tests/live_session.rs`: the Share button without and with a transport, the
   Share dialog, a session through a fake transport with the state on Share and people's circles
   in the title bar, the session popover's Copy Invitation and Leave.
@@ -243,4 +316,5 @@ they stay with their text.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | Document chat (craft-collab `docs/chat.md`, protocol 2.1): the shared `chat`/`chatMeta`, the `chat.*` commands and `view.chat`, the DOCX part `/craft/chat.json`, the panel and the title bar's chat button with its unread count |
 | 2026-10-15 | major | Created: plugin protocol 2 (2.0.1) in WordCraft: push channel, rooms, schema 1 (Yjs XML stories, text with formatting attributes, tables, story and comment maps, per-client id blocks), encryption, per-user undo, awareness with relative positions, recovery; Share and the session's people in the title bar |

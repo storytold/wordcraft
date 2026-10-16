@@ -29,6 +29,7 @@ pub mod autoscroll;
 pub mod backstage;
 pub mod canvas;
 pub mod caret_glide;
+pub mod chat_ui;
 pub mod chrome;
 pub mod collab_ui;
 pub mod colors;

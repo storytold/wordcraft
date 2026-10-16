@@ -227,7 +227,9 @@ impl Session {
         }
         self.undo_evicted = evicted;
         self.autocap = None;
+        let chat = self.doc.chat.clone();
         self.doc = doc;
+        self.doc.chat = chat;
         self.sel = sel;
         self.also_selected.clear();
         self.member = None;

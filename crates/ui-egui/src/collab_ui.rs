@@ -32,6 +32,7 @@ pub fn color(hex: &str) -> Color32 {
 
 /// Runs the engine's co-editing between frames.
 pub fn pump(app: &mut WordApp, ctx: &egui::Context) {
+    crate::chat_ui::track(app);
     if app.session.collab.room.is_none() && !wordcraft_plugin::push::pending() {
         return;
     }
@@ -67,6 +68,8 @@ pub struct CollabUi {
     pub highlights: Vec<(StoryRef, Path, f64)>,
     /// When the room's state was last kept for recovery.
     pub recovery_at: f64,
+    /// The document chat's panel and button.
+    pub chat: crate::chat_ui::ChatUi,
 }
 
 /// The session's state in words.
@@ -91,8 +94,13 @@ fn has_transport() -> bool {
     !wordcraft_plugin::transports().is_empty()
 }
 
-/// The people in a live session, in the title bar (right-to-left layout): nothing outside one.
+/// The title bar's chat button (with its unread count) and the people in a live session, in the
+/// title bar's right-to-left layout.
 pub fn title_bar(app: &mut WordApp, ui: &mut Ui, control_h: f32) {
+    if crate::chat_ui::has_button(app) {
+        crate::chat_ui::button(app, ui, control_h);
+        ui.add_space(4.0);
+    }
     if app.session.active_room().is_some() {
         people(app, ui, control_h);
     }
