@@ -353,18 +353,19 @@ impl PropCtx {
 }
 
 pub fn align(v: &str) -> Align {
-    match v {
+    match v.to_ascii_lowercase().as_str() {
         "center" => Align::Center,
         "right" | "end" => Align::Right,
-        "both" | "justify" | "lowKashida" | "mediumKashida" | "highKashida" => Align::Justify,
-        "distribute" | "thaiDistribute" => Align::Distribute,
+        "both" | "justify" | "lowkashida" | "mediumkashida" | "highkashida" => Align::Justify,
+        "distribute" | "thaidistribute" => Align::Distribute,
         _ => Align::Left,
     }
 }
 
 fn tab_stop(t: &El) -> Option<TabStop> {
     let pos = tw(t, "w:pos")?;
-    let align = match t.attr("w:val").unwrap_or("left") {
+    let align_str = t.attr("w:val").unwrap_or("left");
+    let align = match align_str.to_ascii_lowercase().as_str() {
         "center" => TabAlign::Center,
         "right" | "end" => TabAlign::Right,
         "decimal" => TabAlign::Decimal,
@@ -372,11 +373,12 @@ fn tab_stop(t: &El) -> Option<TabStop> {
         "clear" => TabAlign::Clear,
         _ => TabAlign::Left,
     };
-    let leader = match t.attr("w:leader").unwrap_or("none") {
+    let leader_str = t.attr("w:leader").unwrap_or("none");
+    let leader = match leader_str.to_ascii_lowercase().as_str() {
         "dot" => TabLeader::Dot,
         "hyphen" => TabLeader::Hyphen,
         "underscore" | "heavy" => TabLeader::Underscore,
-        "middleDot" => TabLeader::MiddleDot,
+        "middledot" => TabLeader::MiddleDot,
         _ => TabLeader::None,
     };
     Some(TabStop { pos, align, leader })
@@ -435,28 +437,27 @@ impl PropCtx {
                 "w:tblW" => {
                     let ty = k.attr("w:type").unwrap_or("dxa");
                     let w = k.attr("w:w").unwrap_or("0");
-                    match ty {
-                        "pct" => {
-                            t.width_pct = if let Some(p) = w.strip_suffix('%') { measure(p, 1.0) } else { measure(w, 50.0) }
-                                .map(|v| v.clamp(0.0, 1000.0))
-                                .filter(|v| *v > 0.0)
-                        }
-                        "auto" | "nil" => {}
-                        _ => t.width = measure(w, 20.0).filter(|v| *v > 0.0),
+                    if ty.eq_ignore_ascii_case("pct") {
+                        t.width_pct = if let Some(p) = w.strip_suffix('%') { measure(p, 1.0) } else { measure(w, 50.0) }
+                            .map(|v| v.clamp(0.0, 1000.0))
+                            .filter(|v| *v > 0.0);
+                    } else if ty.eq_ignore_ascii_case("auto") || ty.eq_ignore_ascii_case("nil") {
+                    } else {
+                        t.width = measure(w, 20.0).filter(|v| *v > 0.0);
                     }
                 }
                 "w:jc" => t.align = k.attr("w:val").map(align),
                 "w:tblInd" => t.indent = tw(k, "w:w"),
                 "w:tblBorders" => t.borders = Some(borders(k)),
                 "w:shd" => t.shading = self.shd_fill(k),
-                "w:tblLayout" => t.fixed = k.attr("w:type") == Some("fixed"),
+                "w:tblLayout" => t.fixed = k.attr("w:type").is_some_and(|v| v.eq_ignore_ascii_case("fixed")),
                 "w:bidiVisual" => t.bidi_visual = on_off(k),
                 "w:tblCellMar" => t.cell_margins = Some(margins(k)),
                 "w:tblLook" => t.look = look(k),
                 "w:tblpPr" => t.float = Some(table_float(k)),
                 "w:tblOverlap" => {
                     if let Some(f) = t.float.as_mut() {
-                        f.overlap = k.attr("w:val") != Some("never");
+                        f.overlap = !k.attr("w:val").is_some_and(|v| v.eq_ignore_ascii_case("never"));
                     }
                 }
                 "w:tblCaption" => t.caption = k.attr("w:val").map(cap_alt),
@@ -540,7 +541,7 @@ pub fn tcpr(pc: &PropCtx, e: &El) -> (CellProps, bool) {
     let mut hcont = false;
     for k in e.els() {
         match k.name.as_str() {
-            "w:tcW" => match k.attr("w:type") {
+            "w:tcW" => match k.attr("w:type").map(str::to_ascii_lowercase).as_deref() {
                 None | Some("dxa") => c.width = tw(k, "w:w").filter(|v| *v > 0.0),
                 Some("pct") => {
                     let w = k.attr("w:w").unwrap_or("0");
@@ -551,19 +552,32 @@ pub fn tcpr(pc: &PropCtx, e: &El) -> (CellProps, bool) {
                 _ => {}
             },
             "w:gridSpan" => c.span = k.attr("w:val").and_then(u32_of).unwrap_or(1).clamp(1, 63),
-            "w:hMerge" => hcont = k.attr("w:val") != Some("restart"),
-            "w:vMerge" => c.vmerge = if k.attr("w:val") == Some("restart") { VMerge::Restart } else { VMerge::Continue },
+            "w:hMerge" => {
+                let v = k.attr("w:val").unwrap_or("continue");
+                hcont = v.eq_ignore_ascii_case("continue");
+            }
+            "w:vMerge" => {
+                let v = k.attr("w:val").unwrap_or("continue");
+                if v.eq_ignore_ascii_case("restart") {
+                    c.vmerge = VMerge::Restart;
+                } else if v.eq_ignore_ascii_case("continue") {
+                    c.vmerge = VMerge::Continue;
+                } else {
+                    c.vmerge = VMerge::None;
+                }
+            }
             "w:tcBorders" => c.borders = Some(borders(k)),
             "w:shd" => c.shading = pc.shd_fill(k),
             "w:noWrap" => c.no_wrap = on_off(k),
             "w:hideMark" => c.hide_mark = on_off(k),
             "w:tcMar" => c.margins = Some(margins(k)),
             "w:textDirection" => {
-                c.text_direction = TextDirection::from_ooxml(k.attr("w:val").unwrap_or(""));
-                c.text_direction_set = k.attr("w:val") == Some("lrTb");
+                let v = k.attr("w:val").unwrap_or("");
+                c.text_direction = TextDirection::from_ooxml(v);
+                c.text_direction_set = v.eq_ignore_ascii_case("lrTb");
             }
             "w:vAlign" => {
-                c.valign = Some(match k.attr("w:val") {
+                c.valign = Some(match k.attr("w:val").map(str::to_ascii_lowercase).as_deref() {
                     Some("center") => VAlign::Center,
                     Some("bottom") => VAlign::Bottom,
                     _ => VAlign::Top,
@@ -740,5 +754,99 @@ fn table_float(e: &El) -> TableFloat {
         v_align: align("w:tblpYSpec"),
         dist: [dist("w:leftFromText"), dist("w:topFromText"), dist("w:rightFromText"), dist("w:bottomFromText")],
         overlap: true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wordcraft_doc::props::{Align, TabAlign, TabLeader, VAlign, VMerge};
+
+    fn el(xml: &str) -> El {
+        let ns = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""#;
+        let s = if xml.contains("xmlns:w=") {
+            xml.to_string()
+        } else {
+            let (first, rest) = xml.split_once('>').unwrap();
+            format!("{first} {ns}>{rest}")
+        };
+        crate::xml::parse(s.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn tcpr_vmerge_and_hmerge_handling() {
+        let pc = PropCtx::default();
+
+        // vMerge "none" should NOT continue a merge
+        let (c_vnone, h_vnone) = tcpr(&pc, &el(r#"<w:tcPr><w:vMerge w:val="none"/></w:tcPr>"#));
+        assert_eq!(c_vnone.vmerge, VMerge::None);
+        assert!(!h_vnone);
+
+        // vMerge "None" case-insensitive
+        let (c_vnone_case, _) = tcpr(&pc, &el(r#"<w:tcPr><w:vMerge w:val="None"/></w:tcPr>"#));
+        assert_eq!(c_vnone_case.vmerge, VMerge::None);
+
+        // vMerge "restart" and "Restart"
+        let (c_vrestart, _) = tcpr(&pc, &el(r#"<w:tcPr><w:vMerge w:val="Restart"/></w:tcPr>"#));
+        assert_eq!(c_vrestart.vmerge, VMerge::Restart);
+
+        // vMerge omitted val defaults to continue
+        let (c_vomit, _) = tcpr(&pc, &el(r#"<w:tcPr><w:vMerge/></w:tcPr>"#));
+        assert_eq!(c_vomit.vmerge, VMerge::Continue);
+
+        // hMerge "none" should NOT continue horizontal merge (previously bug caused cell deletion)
+        let (_, h_none) = tcpr(&pc, &el(r#"<w:tcPr><w:hMerge w:val="none"/></w:tcPr>"#));
+        assert!(!h_none);
+
+        let (_, h_none_case) = tcpr(&pc, &el(r#"<w:tcPr><w:hMerge w:val="None"/></w:tcPr>"#));
+        assert!(!h_none_case);
+
+        // hMerge "restart"
+        let (_, h_restart) = tcpr(&pc, &el(r#"<w:tcPr><w:hMerge w:val="restart"/></w:tcPr>"#));
+        assert!(!h_restart);
+
+        // hMerge omitted val defaults to continue
+        let (_, h_omit) = tcpr(&pc, &el(r#"<w:tcPr><w:hMerge/></w:tcPr>"#));
+        assert!(h_omit);
+
+        // hMerge "continue" and "Continue"
+        let (_, h_continue) = tcpr(&pc, &el(r#"<w:tcPr><w:hMerge w:val="Continue"/></w:tcPr>"#));
+        assert!(h_continue);
+    }
+
+    #[test]
+    fn tcpr_units_and_valign_case_insensitivity() {
+        let pc = PropCtx::default();
+
+        let (c_dxa, _) = tcpr(&pc, &el(r#"<w:tcPr><w:tcW w:w="720" w:type="DXA"/></w:tcPr>"#));
+        assert_eq!(c_dxa.width, Some(36.0));
+
+        let (c_pct, _) = tcpr(&pc, &el(r#"<w:tcPr><w:tcW w:w="50%" w:type="PCT"/></w:tcPr>"#));
+        assert_eq!(c_pct.width_pct, Some(50.0));
+
+        let (c_valign, _) = tcpr(&pc, &el(r#"<w:tcPr><w:vAlign w:val="Center"/></w:tcPr>"#));
+        assert_eq!(c_valign.valign, Some(VAlign::Center));
+    }
+
+    #[test]
+    fn align_and_tab_stop_case_insensitivity() {
+        assert_eq!(align("CENTER"), Align::Center);
+        assert_eq!(align("Right"), Align::Right);
+        assert_eq!(align("Justify"), Align::Justify);
+        assert_eq!(align("Distribute"), Align::Distribute);
+
+        let ts = tab_stop(&el(r#"<w:tab w:pos="1440" w:val="Right" w:leader="Dot"/>"#)).unwrap();
+        assert_eq!(ts.pos, 72.0);
+        assert_eq!(ts.align, TabAlign::Right);
+        assert_eq!(ts.leader, TabLeader::Dot);
+    }
+
+    #[test]
+    fn tblpr_case_insensitivity() {
+        let pc = PropCtx::default();
+        let props = pc.tblpr(&el(r#"<w:tblPr><w:tblpPr/><w:tblW w:w="5000" w:type="PCT"/><w:tblLayout w:type="Fixed"/><w:tblOverlap w:val="Never"/></w:tblPr>"#));
+        assert_eq!(props.width_pct, Some(100.0));
+        assert!(props.fixed);
+        assert_eq!(props.float.as_ref().map(|f| f.overlap), Some(false));
     }
 }
