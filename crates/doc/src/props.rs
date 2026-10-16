@@ -1133,6 +1133,9 @@ pub struct CellProps {
     pub valign: Option<VAlign>,
     /// Cell margins override (top, left, bottom, right), points.
     pub margins: Option<[f32; 4]>,
+    /// Per-side overrides when `margins` is absent; omitted sides inherit table defaults.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub partial_margins: Option<[Option<f32>; 4]>,
     /// Which way the cell's text runs.
     pub text_direction: TextDirection,
     /// The file states the horizontal direction (`lrTb`) outright; saving writes it back.
@@ -1146,6 +1149,17 @@ pub struct CellProps {
     /// Tracked formatting change (`w:tcPrChange`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fmt_change: Option<Box<PropChange<CellProps>>>,
+}
+
+impl CellProps {
+    /// Resolve top, left, bottom and right margins against the current table defaults.
+    /// A complete override takes precedence over per-side overrides.
+    pub fn resolved_margins(&self, defaults: [f32; 4]) -> [f32; 4] {
+        if let Some(margins) = self.margins {
+            return margins;
+        }
+        self.partial_margins.map_or(defaults, |sides| std::array::from_fn(|i| sides[i].unwrap_or(defaults[i])))
+    }
 }
 
 #[cfg(test)]

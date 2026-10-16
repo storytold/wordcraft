@@ -367,9 +367,15 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
 }
 
 pub fn margins(w: &mut W, tag: &str, m: &[f32; 4]) {
+    margin_sides(w, tag, &m.map(Some));
+}
+
+fn margin_sides(w: &mut W, tag: &str, m: &[Option<f32>; 4]) {
     w.open(tag, &[]);
-    for (name, v) in ["w:top", "w:left", "w:bottom", "w:right"].iter().zip(m.iter()) {
-        w.empty(name, &[("w:w", &twips(v.clamp(0.0, 1584.0))), ("w:type", "dxa")]);
+    for (name, value) in ["w:top", "w:left", "w:bottom", "w:right"].iter().zip(m.iter()) {
+        if let Some(v) = value {
+            w.empty(name, &[("w:w", &twips(v.clamp(0.0, 1584.0))), ("w:type", "dxa")]);
+        }
     }
     w.close(tag);
 }
@@ -573,6 +579,8 @@ fn tcpr_inner(w: &mut W, c: &CellProps) {
     }
     if let Some(m) = &c.margins {
         margins(w, "w:tcMar", m);
+    } else if let Some(m) = &c.partial_margins {
+        margin_sides(w, "w:tcMar", m);
     }
     if c.text_direction.is_turned() || c.text_direction_set {
         w.val("w:textDirection", c.text_direction.ooxml());

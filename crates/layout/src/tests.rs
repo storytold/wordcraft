@@ -7263,3 +7263,33 @@ fn row_nil_overrides_style() {
     d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
     assert_eq!(rules_on_page0(&lay(&d)), vec![2.0]);
 }
+
+#[test]
+fn partial_margins_inherit() {
+    let height = |top, bottom| {
+        let mut table = Table::new(1, 1, 200.0);
+        table.props.style = None;
+        table.props.cell_margins = Some([top, 2.25, bottom, 2.75]);
+        let cell = &mut table.rows[0].cells[0];
+        cell.props.margins = None;
+        cell.props.partial_margins = Some([None, Some(0.0), None, None]);
+        let mut para = Paragraph::with_text("Point", Default::default());
+        para.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Exactly(11.0));
+        para.props.space_before = Some(0.0);
+        para.props.space_after = Some(0.0);
+        cell.blocks = vec![wordcraft_doc::para_block(para)];
+        let mut doc = Document::new();
+        doc.body = vec![std::sync::Arc::new(Block::Table(table))];
+        let layout = lay(&doc);
+        layout.pages[0]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Placed::Cell { rect, .. } => Some(rect.h),
+                _ => None,
+            })
+            .unwrap()
+    };
+    assert!((height(2.75, 2.75) - 16.5).abs() < 0.01);
+    assert!((height(6.0, 8.0) - 25.0).abs() < 0.01);
+}
