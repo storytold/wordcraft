@@ -222,6 +222,9 @@ pub(crate) fn check_before(s: &Session, id: &str, params: &Value) -> Result<bool
         "comments" if comment_ok => Ok(false),
         "comments" if exceptions() => Ok(true),
         "comments" => Err(CmdError::Disabled(format!("{id}: only comments are allowed in this document"))),
+        "trackedChanges" if matches!(id, "review.accept" | "review.reject" | "review.acceptAll" | "review.rejectAll" | "review.trackChanges") => {
+            Err(CmdError::Disabled(format!("{id}: changes to this document are tracked")))
+        }
         _ => Ok(false),
     }
 }
@@ -261,11 +264,24 @@ enum HoleMode {
 }
 
 /// Did a command leave everything outside the editable regions as it was? Compares the text,
-/// run formatting and paragraph formatting outside the ranges `author` may edit, in every story.
+/// run formatting and paragraph formatting outside the ranges `author` may edit, in every story,
+/// and what reaches the whole document: page setup, the document defaults and the existing
+/// styles (applying a style may add one).
 pub(crate) fn outside_unchanged(before: &Document, after: &Document, author: &str) -> bool {
     // Protection can't change mid-command (`protection_lifted` guards undo and redo).
     let mode = if Some("forms") == before.settings.protection.as_deref() { HoleMode::Controls } else { HoleMode::Perms(author.into()) };
-    outside(before, &mode) == outside(after, &mode)
+    let (b, a) = (&before.styles, &after.styles);
+    before.last_section == after.last_section
+        && sections(before) == sections(after)
+        && b.default_chr == a.default_chr
+        && b.default_para == a.default_para
+        && b.styles.iter().all(|st| a.get(&st.id) == Some(st))
+        && outside(before, &mode) == outside(after, &mode)
+}
+
+/// The section properties paragraphs end, in order.
+fn sections(doc: &Document) -> Vec<&wordcraft_doc::SectionProps> {
+    doc.para_paths(StoryRef::Body).iter().filter_map(|path| doc.para(StoryRef::Body, path)?.section.as_deref()).collect()
 }
 
 /// One piece of protected content: text with its formatting, or a paragraph mark's formatting.
@@ -429,6 +445,38 @@ mod tests {
             let _ = s.run("edit.undo", &json!({}));
         }
         assert_eq!(s.doc.settings.protection.as_deref(), Some("readOnly"));
+    }
+
+    /// Page setup and style definitions reach text outside the exceptions too, so an exception
+    /// doesn't let them change; applying a character style inside one still works.
+    #[test]
+    fn read_only_exception_does_not_open_page_setup_or_styles() {
+        let mut s = Session::new(Document::from_text("Locked intro.\nFill in here.\nLocked end."));
+        select(&mut s, "Fill in here.");
+        s.run("review.restrict", &json!({"exception": "add"})).unwrap();
+        s.run("review.restrict", &json!({"mode": "readOnly"})).unwrap();
+        select(&mut s, "here");
+        let before = s.doc.clone();
+        assert!(s.run("layout.orientation", &json!({"value": "landscape"})).is_err());
+        assert!(s.run("layout.margins", &json!({"preset": "narrow"})).is_err());
+        assert!(s.run("styles.modify", &json!({"style": "Normal", "chr": {"bold": true}})).is_err());
+        assert_eq!(s.doc, before);
+        s.run("format.charStyle", &json!({"style": "Strong"})).unwrap();
+    }
+
+    /// Protected for tracked changes: every edit is tracked, and the changes can't be accepted,
+    /// rejected or untracked (Word disables them too).
+    #[test]
+    fn tracked_changes_protection_keeps_revisions() {
+        let mut s = Session::new(Document::from_text("Some text."));
+        s.run("review.restrict", &json!({"mode": "trackedChanges"})).unwrap();
+        select(&mut s, "text");
+        s.run("text.insert", &json!({"text": "words"})).unwrap();
+        let before = s.doc.clone();
+        for id in ["review.acceptAll", "review.rejectAll", "review.accept", "review.reject", "review.trackChanges"] {
+            assert!(s.run(id, &json!({})).is_err(), "{id}");
+        }
+        assert_eq!(s.doc, before);
     }
 
     #[test]
