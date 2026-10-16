@@ -135,7 +135,7 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
         "engine.commands" => {
             let reg = app.session.registry.clone();
             let mut commands: Vec<Value> = reg.all().iter()
-                .map(|c| json!({"id": c.id, "label": c.label, "location": c.location, "shortcut": c.shortcut, "params": c.params, "enabled": (c.enabled)(&app.session).is_none()}))
+                .map(|c| json!({"id": c.id, "label": c.label, "location": c.location, "shortcut": c.shortcut, "params": c.params, "enabled": app.session.unavailable(c).is_none()}))
                 .collect();
             commands.extend(crate::printing::commands(app));
             let search = s("search").unwrap_or("").to_ascii_lowercase();

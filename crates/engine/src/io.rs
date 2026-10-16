@@ -309,6 +309,15 @@ pub fn save_bytes(name: &str, doc: &Document) -> Result<Vec<u8>, String> {
 /// [`save_bytes`] with export options (Print Markup).
 pub fn save_bytes_opts(name: &str, doc: &Document, opts: &ExportOptions) -> Result<Vec<u8>, String> {
     let ext = ext_of(name);
+    // Markdown source view: Markdown and text get the text exactly as it stands, native JSON the
+    // document as it is, everything else the document the text describes.
+    if doc.settings.markdown_source {
+        match ext.as_str() {
+            "md" | "markdown" | "txt" | "text" => return Ok(crate::cmd::markdown::source_text(doc).into_bytes()),
+            "json" => {}
+            _ => return save_bytes_opts(name, &crate::cmd::markdown::rendered(doc), opts),
+        }
+    }
     match ext.as_str() {
         // List paragraphs get their label and a tab, as in Word's plain-text save.
         "txt" | "text" => {

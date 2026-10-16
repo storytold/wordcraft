@@ -514,11 +514,16 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     ui.add_space(10.0);
                     let mode = app.session.view.mode;
                     let read = app.session.view.read_mode;
-                    for (icon, id, name, on) in [
+                    let mut views = vec![
                         ("webLayout", "view.webLayout", tl!("Web Layout"), mode == wordcraft_layout::ViewMode::Web),
                         ("printLayout", "view.printLayout", tl!("Print Layout"), mode == wordcraft_layout::ViewMode::Print && !read),
                         ("readMode", "view.readMode", tl!("Read Mode"), read),
-                    ] {
+                    ];
+                    // A Markdown document's text, beside the views (beyond Word).
+                    if crate::widgets::enabled(app, "view.markdownSource") {
+                        views.insert(0, ("markdownSource", "view.markdownSource", tl!("Markdown Source"), app.session.doc.settings.markdown_source));
+                    }
+                    for (icon, id, name, on) in views {
                         let (r, resp) = ui.allocate_exact_size(vec2(22.0, 20.0), Sense::click());
                         if on {
                             ui.painter().rect_filled(r, 3.0, t.checked);

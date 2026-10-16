@@ -345,6 +345,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             if !app.has_document() && app.ui.tab != "Help" {
                 ui.disable();
             }
+            // Markdown source view: these tabs only format or insert objects, which the text can't keep.
+            if app.session.doc.settings.markdown_source && matches!(app.ui.tab.as_str(), "Insert" | "Draw" | "Design" | "References" | "Mailings") {
+                ui.disable();
+            }
             let bg = ui.interact(ui.max_rect(), ui.id().with("ribbon_background"), Sense::click());
             bg.context_menu(|ui| crate::widgets::customize_menu_items(ui, app));
             let entry = user_tabs.iter().find(|e| e.name == app.ui.tab);
@@ -743,6 +747,8 @@ pub(crate) fn wrap_text_items(ui: &mut Ui, app: &mut WordApp) {
 fn home(app: &mut WordApp, ui: &mut Ui) {
     let st = app.session.run("format.state", &json!({})).unwrap_or_default();
     let flag = |k: &str| st.get(k).and_then(Value::as_bool).unwrap_or(false);
+    // Markdown source view keeps only text: fonts, paragraphs and styles don't apply.
+    let source = app.session.doc.settings.markdown_source;
     group(ui, "Clipboard", Some("edit.clipboardPane"), app, |ui, app| {
         menu_button(ui, app, "paste", Some("Paste"), "Paste (⌘V)", true, "edit.paste", |ui, app| {
             mi(ui, app, "Paste", "edit.paste", json!({}));
@@ -758,6 +764,9 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Font", Some("format.fontDialog"), app, |ui, app| {
+        if source {
+            ui.disable();
+        }
         stack(ui, |ui| {
             crate::widgets::row(ui, |ui| {
                 let font = st.get("font").and_then(Value::as_str).unwrap_or("").to_string();
@@ -869,6 +878,9 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Paragraph", Some("para.dialog"), app, |ui, app| {
+        if source {
+            ui.disable();
+        }
         let rp = app.session.doc.para_at(&app.session.sel.focus).map(|p| app.session.doc.styles.resolve_para(&p.props));
         // The buttons show alignment as seen on the page (Align Right is a right-to-left paragraph's start).
         let align = rp.as_ref().map(|r| r.align.visual(r.bidi)).unwrap_or_default();
@@ -976,6 +988,9 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Styles", Some("styles.pane"), app, |ui, app| {
+        if source {
+            ui.disable();
+        }
         crate::previews::style_gallery(app, ui, &st);
     });
     group(ui, "Editing", None, app, |ui, app| {
@@ -1871,6 +1886,10 @@ fn view(app: &mut WordApp, ui: &mut Ui) {
             small(ui, app, "outline", Some("Outline"), "Outline", "view.outline", json!({}), false);
             small(ui, app, "draft", Some("Draft"), "Draft", "view.draft", json!({}), false);
         });
+        // Markdown documents only: their text, as a code editor shows it (beyond Word).
+        if crate::widgets::enabled(app, "view.markdownSource") {
+            big_toggle(ui, app, "markdownSource", "Markdown\nSource", "view.markdownSource", app.session.doc.settings.markdown_source);
+        }
     });
     group(ui, "Immersive", None, app, |ui, app| {
         big(ui, app, "focus", "Focus", "view.focus", json!({}), false);

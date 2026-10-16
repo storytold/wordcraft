@@ -969,6 +969,14 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.line(&[(12.5, 15.5), (17.0, 15.5)]);
         }
         "draft" => pen.lines(3.0, 17.0, &[4.0, 7.0, 10.0, 13.0, 16.0]),
+        // A page of text marked with a hash: Markdown's own text.
+        "markdownSource" => {
+            pen.page(4.0, 2.0, 16.0, 18.0);
+            pen.line_c(&[(9.0, 6.5), (8.0, 14.5)], a);
+            pen.line_c(&[(12.5, 6.5), (11.5, 14.5)], a);
+            pen.line_c(&[(6.8, 9.0), (14.0, 9.0)], a);
+            pen.line_c(&[(6.3, 12.0), (13.5, 12.0)], a);
+        }
         "focus" => {
             pen.line(&[(3.0, 7.0), (3.0, 3.0), (7.0, 3.0)]);
             pen.line(&[(13.0, 3.0), (17.0, 3.0), (17.0, 7.0)]);

@@ -23,7 +23,7 @@ use wordcraft_doc::props::CharProps;
 use wordcraft_doc::{Document, Path, Pos, StoryRef, Table};
 use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, NumeralMode, ViewMode};
 
-use crate::{CmdError, Registry};
+use crate::{CmdError, CommandSpec, Registry};
 
 /// A selection: anchor (where it started) and focus (where the caret is).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -466,6 +466,9 @@ pub struct Session {
     edit_marks: Vec<Pos>,
     /// How many Go Back presses since the last edit (which place comes next).
     go_back_step: usize,
+    /// The text the formatted Markdown document was read from (opened, or left source view
+    /// with), for source view while the document is unchanged since (`cmd::markdown`).
+    pub(crate) markdown_origin: Option<crate::cmd::markdown::Origin>,
 }
 
 /// The number of edit locations Go Back cycles through (Word: four).
@@ -650,6 +653,7 @@ impl Session {
             widened: None,
             edit_marks: Vec::new(),
             go_back_step: 0,
+            markdown_origin: None,
         }
     }
 
@@ -799,7 +803,11 @@ impl Session {
             comment_balloons: false,
             field_codes: self.view.field_codes,
             outline: outline.clone(),
-            proof: wordcraft_layout::ProofOptions { grammar: self.prefs.mark_grammar, spelling: self.prefs.spelling() },
+            // Markdown source pads tables and indents with runs of spaces; only spelling is marked.
+            proof: wordcraft_layout::ProofOptions {
+                grammar: self.prefs.mark_grammar && !self.doc.settings.markdown_source,
+                spelling: self.prefs.spelling(),
+            },
         };
         let l = Arc::new(wordcraft_layout::layout(&self.doc, &mut self.cache, &opts));
         self.layout = Some((self.rev, width, height, mode, spacing, l.clone(), self.view.proofing, outline, deleted, self.view.numeral));
@@ -1010,6 +1018,7 @@ impl Session {
         self.edit_marks.clear();
         self.new_header_parts.clear();
         self.go_back_step = 0;
+        self.markdown_origin = None;
         self.view.outline.collapsed.clear();
         self.reset_history();
         self.touch();
@@ -1103,6 +1112,8 @@ impl Session {
             // Go Back's places, like the caret history: not part of the document.
             edit_marks: _,
             go_back_step: _,
+            // Keyed to the document's content, so it can't outlive the text it belongs to.
+            markdown_origin: _,
         } = self;
         let head = if history.len() + SNAPSHOT_HEAD > MAX_UNDO { history.iter().take(SNAPSHOT_HEAD).cloned().collect() } else { Vec::new() };
         EditSnapshot {
@@ -1168,7 +1179,7 @@ impl Session {
         let join = std::mem::take(&mut self.join_next);
         let reg = self.registry.clone();
         let Some(spec) = reg.get(id) else { return Err(CmdError::Unknown(id.to_string())) };
-        if let Some(why) = (spec.enabled)(self) {
+        if let Some(why) = self.unavailable(spec) {
             return Err(CmdError::Disabled(format!("{id}: {why}")));
         }
         // Restrict Editing: refused outright, or allowed as long as it only edits the exceptions.
@@ -1236,6 +1247,7 @@ impl Session {
             self.pending_move = None;
         }
         let sel_before = self.sel.clone();
+        let dirty_before = self.dirty;
         let run = spec.run;
         let mutates = spec.mutates;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::cmd::column::dispatch(self, id, mutates, run, params)));
@@ -1262,6 +1274,11 @@ impl Session {
                         crate::cmd::fmt_revisions::record(self, id, before);
                     }
                     self.touch();
+                    // Switching to or from Markdown source view changes how the text is shown,
+                    // not what the file holds: no unsaved changes come of it.
+                    if id == "view.markdownSource" {
+                        self.dirty = dirty_before;
+                    }
                     self.doc.ensure_nonempty();
                     self.doc.prune_text_boxes();
                     // Glued connectors follow the shapes they join.
@@ -1300,6 +1317,13 @@ impl Session {
             }
         }
         result
+    }
+
+    /// Why the command can't run now, if it can't: its own `enabled` check, then Markdown source
+    /// view, where only text commands work (`cmd::markdown`). Front ends grey out what this
+    /// refuses.
+    pub fn unavailable(&self, spec: &CommandSpec) -> Option<&'static str> {
+        (spec.enabled)(self).or_else(|| crate::cmd::markdown::refuses(self, spec.id))
     }
 
     /// The paragraph path the caret is in.

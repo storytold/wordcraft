@@ -189,6 +189,9 @@ fn cut(s: &mut Session, v: &Value) -> CmdResult {
 /// Paste keeps the source formatting: our own copy while the system clipboard still holds it,
 /// else another program's HTML or RTF (#687), else the system clipboard's text.
 fn paste(s: &mut Session, v: &Value) -> CmdResult {
+    if s.doc.settings.markdown_source {
+        return super::markdown::paste(s, v);
+    }
     let frag = super::paste::paste_fragment(s, v)?;
     super::paste::insert(s, frag)?;
     sel_result(s)
@@ -196,6 +199,9 @@ fn paste(s: &mut Session, v: &Value) -> CmdResult {
 
 /// Merge Formatting: the pasted text takes the destination's formatting, keeping its emphasis.
 fn paste_merge(s: &mut Session, v: &Value) -> CmdResult {
+    if s.doc.settings.markdown_source {
+        return super::markdown::paste(s, v);
+    }
     let mut frag = super::paste::paste_fragment(s, v)?;
     super::paste::merge_formatting(s, &mut frag);
     super::paste::insert(s, frag)?;

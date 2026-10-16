@@ -43,7 +43,7 @@ pub fn key_text(sc: &str) -> String {
 fn tooltip(app: &WordApp, resp: Response, label: &str, id: &str) -> Response {
     let sc = shortcut_text(app, id);
     let desc = app.session.registry.get(id).map(|s| crate::i18n::location(s.location)).unwrap_or_default();
-    let enabled = app.session.registry.get(id).map(|s| (s.enabled)(&app.session).is_none()).unwrap_or(true);
+    let enabled = app.session.registry.get(id).map(|s| app.session.unavailable(s).is_none()).unwrap_or(true);
     resp.on_hover_ui(|ui| {
         ui.set_max_width(260.0);
         if sc.is_empty() {
@@ -95,7 +95,7 @@ pub fn enabled(app: &WordApp, id: &str) -> bool {
         return false;
     }
     match app.session.registry.get(id) {
-        Some(s) => (s.enabled)(&app.session).is_none(),
+        Some(s) => app.session.unavailable(s).is_none(),
         // Zotero: one command at a time, and only in the desktop app.
         None if id.starts_with("ui.zotero.") => app.zotero.busy.is_none() && !cfg!(target_arch = "wasm32"),
         None if id == "ui.linkTextBox" => enabled(app, "shape.link"),

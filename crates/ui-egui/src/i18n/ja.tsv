@@ -553,6 +553,8 @@
 	Mark\nCitation	引用文のマーク
 	Mark\nEntry	索引登録
 	Markdown (*.md)	Markdown (*.md)
+	Markdown Source	Markdown ソース
+	Markdown\nSource	Markdown\nソース
 	Match case	大文字と小文字を区別する
 	Match Fields	フィールドの対応
 	Matrix	行列

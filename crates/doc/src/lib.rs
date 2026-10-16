@@ -534,6 +534,11 @@ pub struct Settings {
     /// comments and tracked changes are saved without `w:date`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub remove_date_time: bool,
+    /// WordCraft's Markdown source view (`view.markdownSource`): the body is a Markdown file's
+    /// text, one paragraph per line. Never written to Word or other formats, which save the
+    /// document the text describes; native JSON keeps it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub markdown_source: bool,
 }
 
 /// A saved zoom: a percentage, or a fit mode (the percentage it last came to).
@@ -648,6 +653,7 @@ impl Default for Settings {
             zoom: None,
             remove_personal_info: false,
             remove_date_time: false,
+            markdown_source: false,
         }
     }
 }

@@ -228,6 +228,9 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
         doc.styles.default_chr.lang = Some(lang.clone());
     }
     s.set_document(doc);
+    if matches!(ext.as_str(), "md" | "markdown") {
+        super::markdown::remember_opened(s, path, p::str(v, "data"));
+    }
     if let Some(z) = s.doc.settings.zoom {
         super::view::restore_zoom(s, z);
     }

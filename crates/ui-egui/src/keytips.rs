@@ -323,6 +323,7 @@ fn controls(tab: &str) -> Vec<Control> {
             c("Web Layout", "view.webLayout"),
             c("Outline", "view.outline"),
             c("Draft", "view.draft"),
+            c("Markdown Source", "view.markdownSource"),
             c("Focus", "view.focus"),
             c("Immersive Reader", "view.immersive"),
             c("Vertical", "view.vertical"),

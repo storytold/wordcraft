@@ -1140,3 +1140,22 @@ fn typing_after_a_citation_goes_outside_its_field() {
     let inside = Pos { off: f[0].start.off + wordcraft_doc::para::OBJ.len_utf8(), ..f[0].start.clone() };
     assert_eq!(s.doc.copy_range(&inside, &f[0].end).plain_text(), "(Smith 2020)");
 }
+
+/// Markdown source view (beyond Word): the keys type the text as it is. None of the AutoFormat
+/// and AutoCorrect rules above fire, since each would rewrite Markdown syntax.
+#[test]
+fn markdown_source_view_types_literally() {
+    let mut s = s();
+    s.file_name = Some("notes.md".into());
+    run(&mut s, "view.markdownSource", json!({}));
+    typ(&mut s, "* item\n1. first\n> quote\n---\n+---+---+\n\"quoted\" 'single' -- teh (c) :)\n\tindented");
+    assert_eq!(crate::cmd::markdown::source_text(&s.doc), "* item\n1. first\n> quote\n---\n+---+---+\n\"quoted\" 'single' -- teh (c) :)\n\tindented",);
+    assert!(paras(&s).iter().all(|(_, level, list_para)| level.is_none() && !list_para), "no lists");
+    assert!(s.doc.body.iter().filter_map(|b| b.as_para()).all(|p| p.props.borders.is_none()), "no border lines");
+    assert!(s.doc.body.iter().all(|b| b.as_para().is_some()), "no tables");
+    // Back in the formatted view the same keys format again.
+    run(&mut s, "view.markdownSource", json!({}));
+    run(&mut s, "caret.docEnd", json!({}));
+    typ(&mut s, "\n\"q\"");
+    assert!(s.doc.plain_text(StoryRef::Body).contains("\u{201C}q\u{201D}"), "smart quotes again");
+}

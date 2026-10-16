@@ -1311,6 +1311,8 @@ template	Letter	Pismo
 	Mark\nCitation	Označi\ncitat
 	Mark\nEntry	Označi\nunos
 	Markdown (*.md)	Markdown (*.md)
+	Markdown Source	Izvorni Markdown
+	Markdown\nSource	Izvorni\nMarkdown
 	Match Fields	Uskladi polja
 	Match case	Razlikuj velika i mala slova
 	Match prefix	Podudaranje prefiksa

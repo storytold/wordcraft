@@ -90,7 +90,8 @@ fn typing_options(s: &mut Session, text: &str) {
 
 fn insert(s: &mut Session, v: &Value) -> CmdResult {
     let text = p::req_str(v, "text")?;
-    let raw = p::bool(v, "raw").unwrap_or(false);
+    // Markdown source view types its text as it is: no smart quotes, lists, dashes or AutoCorrect.
+    let raw = p::bool(v, "raw").unwrap_or(false) || s.doc.settings.markdown_source;
     typing_options(s, text);
     let t = if raw { None } else { autoformat(s, text) };
     type_text(s, t.as_deref().unwrap_or(text))?;
@@ -562,7 +563,10 @@ fn new_paragraph(s: &mut Session, _: &Value) -> CmdResult {
         return sel_result(s);
     }
     let mut at = delete_selection(s)?;
-    let auto = border_line(s, &at).map(EnterAutoFormat::Border).or_else(|| table_line(s, &at).map(EnterAutoFormat::Table));
+    // Markdown source view: `---` or `+--+` and Enter is a line of the text, never a border or table.
+    let literal = s.doc.settings.markdown_source;
+    let auto =
+        if literal { None } else { border_line(s, &at).map(EnterAutoFormat::Border).or_else(|| table_line(s, &at).map(EnterAutoFormat::Table)) };
     if let Some(auto) = auto {
         // Word: Undo right after reverts only the AutoFormat, so the typed characters come back
         // and the Enter stays. Record that plain Enter as its own undo step.
@@ -580,7 +584,7 @@ fn new_paragraph(s: &mut Session, _: &Value) -> CmdResult {
         return sel_result(s);
     }
     // Enter finishes a word like a space does ("teh" → "the", sentence capitals, links).
-    if s.sel.is_collapsed() && at.off > 0 {
+    if s.sel.is_collapsed() && at.off > 0 && !literal {
         super::tools::autocorrect_word(s, true)?;
         at = s.sel.focus.clone();
     }
