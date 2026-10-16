@@ -1044,6 +1044,17 @@ fn symbol_font_bullet_without_the_font_draws_a_bullet() {
 }
 
 #[test]
+fn pcl6_symbol_draws_greater_equal() {
+    let mut d = Document::from_text("\u{F0B3}");
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, 3), &|c| c.font = Some("Symbol (PCL6)".into())).unwrap();
+    let l = lay(&d);
+    let items = display::page_display(&d, &l.pages[0], &display::DisplayOptions::default());
+    let text: String = items.iter().filter_map(|i| if let display::Draw::Glyphs { text, .. } = i { Some(text.as_str()) } else { None }).collect();
+    assert_eq!(text, "≥");
+    assert_eq!(d.plain_text(StoryRef::Body), "\u{F0B3}");
+}
+
+#[test]
 fn wingdings_text_draws_and_reads_as_its_unicode_symbols() {
     // Word stores symbol-font text both ways: plain codes ("J" = smiley) and private-use codes
     // (U+F0FC = check mark, what `w:sym` writes).

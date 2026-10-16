@@ -674,7 +674,15 @@ const MISSING_ROMAN_FONT: &str = "Cambria";
 fn lookup_family<'f>(doc: &Document, font: &'f str) -> &'f str {
     let db = wordcraft_fonts::FontDb::global();
     let roman = doc.settings.roman_fonts.iter().any(|f| f.eq_ignore_ascii_case(font));
-    if roman && !db.has_family(font) && !db.has_family(wordcraft_fonts::word::charset_base_family(font)) { MISSING_ROMAN_FONT } else { font }
+    if roman
+        && !wordcraft_doc::symbol_fonts::is_symbol_font(font)
+        && !db.has_family(font)
+        && !db.has_family(wordcraft_fonts::word::charset_base_family(font))
+    {
+        MISSING_ROMAN_FONT
+    } else {
+        font
+    }
 }
 
 impl<'a> Builder<'a> {
@@ -2794,5 +2802,20 @@ mod label_spacing_tests {
         for line in &lines[1..] {
             assert!((line.height - 17.52).abs() <= 0.25, "{}", line.height);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn symbols_ignore_roman_hint() {
+        let mut d = Document::new();
+        d.settings.roman_fonts = vec!["Symbol (PCL6)".into(), "Wingdings".into(), "No Such Roman Font".into()];
+        for family in ["Symbol (PCL6)", "Wingdings"] {
+            assert_eq!(lookup_family(&d, family), family);
+        }
+        assert_eq!(lookup_family(&d, "No Such Roman Font"), MISSING_ROMAN_FONT);
     }
 }

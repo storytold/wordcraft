@@ -227,7 +227,8 @@ pub fn resolve(family: &str, bold: bool, italic: bool) -> Resolved {
             return *r;
         }
     }
-    let base = charset_base_family(family);
+    // Printer-driver Symbol aliases use the same encoding as Symbol.
+    let base = if family.trim().eq_ignore_ascii_case("Symbol (PCL6)") { "Symbol" } else { charset_base_family(family) };
     let (fam, substituted) = if db.has_family(family) {
         (family.to_string(), false)
     } else if base != family && db.has_family(base) {
@@ -323,6 +324,20 @@ mod tests {
         assert_eq!(charset_base_family("Cyr"), "Cyr");
         assert_eq!(charset_base_family("Calibri"), "Calibri");
         assert_eq!(substitutes(charset_base_family("Times New Roman Cyr")), substitutes("Times New Roman"));
+    }
+
+    #[test]
+    fn pcl6_symbol_resolves_as_symbol() {
+        let actual = resolve("Symbol (PCL6)", false, false);
+        let db = FontDb::global();
+        if db.has_family("Symbol (PCL6)") {
+            assert_eq!(actual.face.id(), db.face("Symbol (PCL6)", "Regular").id());
+            assert!(!actual.substituted);
+            return;
+        }
+        let expected = resolve("Symbol", false, false);
+        assert_eq!(actual.face.id(), expected.face.id());
+        assert_eq!(actual.substituted, expected.substituted);
     }
 
     #[test]

@@ -237,6 +237,19 @@ fn symbol_font_text_reads_as_unicode_and_round_trips_unchanged() {
 }
 
 #[test]
+fn pcl6_symbol_roundtrip() {
+    let body = r#"<w:p><w:r><w:sym w:font="Symbol (PCL6)" w:char="F0B3"/></w:r></w:p>"#;
+    let d = wordcraft_docx::read(&docx(body, &[], &[])).unwrap();
+    let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    for doc in [&d, &again] {
+        let p = paras(doc)[0];
+        assert_eq!(p.text, "\u{F0B3}");
+        assert_eq!(p.props_of_char(0).font.as_deref(), Some("Symbol (PCL6)"));
+        assert_eq!(p.shown_text(), "≥");
+    }
+}
+
+#[test]
 fn alternate_content_choice_and_fallback() {
     let body = r#"
 <w:p><w:r><mc:AlternateContent>
