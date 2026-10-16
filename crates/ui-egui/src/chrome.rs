@@ -483,7 +483,12 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     let ztxt = format!("{z}%");
                     let zfont = TypeRung::Caption.regular();
                     let ztrack = TypeRung::Caption.tracking();
-                    let zw = text_width(ui.painter(), &ztxt, &zfont, ztrack, t.text_dim);
+                    // The readout keeps the width of its widest value, so the slider beside it never
+                    // moves when the digits change. A slider that moved under a held pointer read a
+                    // new zoom from it, which moved it back: the zoom flipped every frame (#2256).
+                    let zw = (0..10)
+                        .map(|d| text_width(ui.painter(), &format!("{d}{d}{d}%"), &zfont, ztrack, t.text_dim))
+                        .fold(text_width(ui.painter(), &ztxt, &zfont, ztrack, t.text_dim), f32::max);
                     let (zr, zresp) = ui.allocate_exact_size(vec2(zw + 1.0, TypeRung::Caption.line_height()), Sense::click());
                     paint_text(ui.painter(), pos2(zr.min.x, zr.min.y), Align2::LEFT_TOP, &ztxt, &zfont, ztrack, t.text_dim);
                     if zresp.clicked() && !reading {
