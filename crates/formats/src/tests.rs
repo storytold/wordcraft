@@ -484,7 +484,7 @@ fn garbage_never_panics() {
                 seed as u8
             })
             .collect();
-        for ext in ["txt", "md", "html", "rtf", "odt", "tex"] {
+        for ext in ["txt", "md", "html", "rtf", "odt", "tex", "hwp", "hwpx"] {
             let _ = import(ext, &bytes);
         }
         let mut rtf = b"{\\rtf1".to_vec();

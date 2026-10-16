@@ -20,6 +20,8 @@ pub const OPEN_EXTS: &[&str] = &[
     "htm",
     "rtf",
     "odt",
+    "hwp",
+    "hwpx",
     "tex",
     "latex",
     "ltx",
@@ -178,8 +180,21 @@ fn load_embedded_fonts(doc: &Document) {
     }
 }
 
+/// `hwp` or `hwpx` when the bytes are a Hangul document, whatever the file is called: Hangul
+/// files are compound files and ZIP packages like Word's, so they are told apart by what they
+/// hold, not their name.
+fn hangul_kind(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(OLE_SIG) && wordcraft_formats::hwp::is_hwp(bytes) {
+        Some("hwp")
+    } else if bytes.starts_with(ZIP_SIG) && wordcraft_formats::hwpx::is_hwpx(bytes) {
+        Some("hwpx")
+    } else {
+        None
+    }
+}
+
 fn read_bytes(name: &str, bytes: &[u8], password: Option<&str>, page: &wordcraft_doc::SectionProps) -> Result<(Document, bool), String> {
-    let ext = ext_of(name);
+    let ext = hangul_kind(bytes).map_or_else(|| ext_of(name), String::from);
     if matches!(ext.as_str(), "docx" | "docm" | "dotx" | "dotm" | "doc" | "dot") && wordcraft_docx::is_encrypted(bytes) {
         let mut doc = wordcraft_docx::read_with_password(bytes, password).map_err(|e| e.to_string())?;
         opened(&mut doc);

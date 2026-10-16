@@ -32,7 +32,8 @@ pub enum FileDialogRequest {
 pub type FileDialogAnswer = Result<Option<String>, String>;
 
 const PICTURES: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "wmf", "emf"];
-const DOCUMENTS: &[&str] = &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "rtf", "txt", "md", "html", "htm", "tex", "json", "xml"];
+const DOCUMENTS: &[&str] =
+    &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "hwp", "hwpx", "rtf", "txt", "md", "html", "htm", "tex", "json", "xml"];
 
 /// The file types Open offers, as (label, extensions; `*` is any file): pictures for Insert/Change
 /// Picture, recipient lists for Select Recipients › Use an Existing List…, documents otherwise.

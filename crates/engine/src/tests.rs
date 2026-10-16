@@ -7232,3 +7232,22 @@ fn vertical_align_command_sets_justified() {
         assert_eq!(serde_json::to_value(crate::cmd::page::sect(&s)).unwrap()["valign"], json!(name));
     }
 }
+
+/// Hangul documents open by extension and, since their containers look like Word's, by what they
+/// hold: a `.hwp` named `.doc`, a `.hwpx` named `.docx` or with no extension at all.
+#[test]
+fn hangul_documents_open_by_name_and_content() {
+    let hwp = wordcraft_formats::hangul_samples::hwp(true);
+    let hwpx = wordcraft_formats::hangul_samples::hwpx();
+    for (name, bytes) in
+        [("a.hwp", &hwp), ("a.HWPX", &hwpx), ("renamed.doc", &hwp), ("renamed.docx", &hwpx), ("noext", &hwp), ("noext", &hwpx), ("a.hwpx", &hwp)]
+    {
+        let doc = crate::io::open_bytes(name, bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let text = doc.plain_text(StoryRef::Body);
+        assert!(text.contains("Hello bold") && text.contains("merged"), "{name}: {text}");
+    }
+    assert!(crate::io::OPEN_EXTS.contains(&"hwp") && crate::io::OPEN_EXTS.contains(&"hwpx"));
+    // A damaged Hangul file says what went wrong.
+    let err = crate::io::open_bytes("x.hwp", b"HWP Document File V3.00").unwrap_err();
+    assert!(err.contains("HWP"), "{err}");
+}

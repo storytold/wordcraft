@@ -966,7 +966,7 @@ fn length(v: &str) -> Option<f32> {
     }
 }
 
-type Attrs = Vec<(String, String)>;
+pub(crate) type Attrs = Vec<(String, String)>;
 
 fn attrs_of(e: &BytesStart<'_>) -> Attrs {
     let mut v = Vec::new();
@@ -979,22 +979,22 @@ fn attrs_of(e: &BytesStart<'_>) -> Attrs {
     v
 }
 
-fn get<'a>(a: &'a Attrs, k: &str) -> Option<&'a str> {
+pub(crate) fn get<'a>(a: &'a Attrs, k: &str) -> Option<&'a str> {
     a.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str())
 }
 
-fn local(q: &str) -> &str {
+pub(crate) fn local(q: &str) -> &str {
     q.rsplit(':').next().unwrap_or(q)
 }
 
-enum Ev {
+pub(crate) enum Ev {
     Start(String, Attrs),
     End(String),
     Text(String),
 }
 
 /// Stream XML events (empty elements become start + end). Malformed XML ends the stream.
-fn events(xml: &[u8], mut f: impl FnMut(Ev)) {
+pub(crate) fn events(xml: &[u8], mut f: impl FnMut(Ev)) {
     let mut r = quick_xml::Reader::from_reader(xml);
     let cfg = r.config_mut();
     cfg.trim_text(false);
@@ -2051,7 +2051,7 @@ fn change_mark(regions: &HashMap<String, Region>, open: &mut Vec<(String, RevMar
     }
 }
 
-fn read_entry(z: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Option<Vec<u8>> {
+pub(crate) fn read_entry(z: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Option<Vec<u8>> {
     let f = z.by_name(name).ok()?;
     if f.size() > MAX_ENTRY {
         return None;
@@ -2065,7 +2065,7 @@ fn read_entry(z: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Option<Vec<
 /// at most once, and only when the size it declares fits in what is left; the bytes inflated
 /// (even from an entry bigger than it declares) and every later copy are charged, so repeated
 /// references and lying entries can't go past the budget, and nothing is inflated after it.
-struct Pictures {
+pub(crate) struct Pictures {
     /// Entry name → its bytes (`None`: missing, unreadable or over the budget; not retried).
     seen: HashMap<String, Option<Vec<u8>>>,
     /// Bytes still allowed.
@@ -2073,12 +2073,12 @@ struct Pictures {
 }
 
 impl Pictures {
-    fn new(budget: u64) -> Self {
+    pub(crate) fn new(budget: u64) -> Self {
         Pictures { seen: HashMap::new(), room: budget }
     }
 
     /// The bytes of entry `name`, or `None` when it can't be read or doesn't fit.
-    fn get(&mut self, z: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Option<Vec<u8>> {
+    pub(crate) fn get(&mut self, z: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Option<Vec<u8>> {
         if let Some(hit) = self.seen.get(name) {
             let d = hit.as_ref().filter(|d| d.len() as u64 <= self.room)?;
             self.room = self.room.saturating_sub(d.len() as u64);
