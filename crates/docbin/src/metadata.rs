@@ -27,7 +27,7 @@ fn u32_at(bytes: &[u8], offset: usize) -> Option<u32> {
 }
 
 fn parse(bytes: &[u8]) -> Option<CoreProps> {
-    if bytes.get(..2)? != [0xfe, 0xff] || bytes.get(28..44)? != SUMMARY_FMTID || u32_at(bytes, 24)? != 1 {
+    if bytes.get(..2)? != [0xfe, 0xff] || bytes.get(28..44)? != SUMMARY_FMTID || u32_at(bytes, 24)? < 1 {
         return None;
     }
     if u16::from_le_bytes(bytes.get(2..4)?.try_into().ok()?) > 1 {
@@ -65,12 +65,18 @@ fn parse(bytes: &[u8]) -> Option<CoreProps> {
             .min(set.len());
         set.get(start..end)
     };
-    let cp = property(1)?;
-    if u32_at(cp, 0)? != 2 {
-        return None;
-    } // VT_I2
-    let codepage = u16::from_le_bytes(cp.get(4..6)?.try_into().ok()?);
+    let codepage = property(1)
+        .and_then(|cp| {
+            let vt = u32_at(cp, 0)?;
+            if vt == 2 || vt == 3 {
+                Some(u16::from_le_bytes(cp.get(4..6)?.try_into().ok()?))
+            } else {
+                None
+            }
+        })
+        .unwrap_or(1252);
     let get = |id| property(id).and_then(|value| text(value, codepage)).unwrap_or_default();
+    let get_filetime = |id| property(id).and_then(filetime_iso).unwrap_or_default();
     Some(CoreProps {
         title: get(2),
         subject: get(3),
@@ -79,8 +85,45 @@ fn parse(bytes: &[u8]) -> Option<CoreProps> {
         description: get(6),
         last_modified_by: get(8),
         revision: get(9).parse().unwrap_or_default(),
+        created: get_filetime(12),
+        modified: get_filetime(13),
         ..Default::default()
     })
+}
+
+fn civil(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
+    let doe = (z - era * 146_097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = y + i64::from(m <= 2);
+    (y, m, d)
+}
+
+fn filetime_iso(value: &[u8]) -> Option<String> {
+    let kind = u32_at(value, 0)?;
+    if kind != 64 {
+        return None;
+    }
+    let ft_low = u32_at(value, 4)? as u64;
+    let ft_high = u32_at(value, 8)? as u64;
+    let ft = (ft_high << 32) | ft_low;
+    if ft == 0 {
+        return None;
+    }
+    const EPOCH_DIFFERENCE: u64 = 116_444_736_000_000_000;
+    let unix_100ns = ft.checked_sub(EPOCH_DIFFERENCE)?;
+    let unix_secs = unix_100ns / 10_000_000;
+    let days = (unix_secs / 86_400) as i64;
+    let secs_of_day = (unix_secs % 86_400) as u32;
+    let (h, mi, s) = (secs_of_day / 3600, (secs_of_day / 60) % 60, secs_of_day % 60);
+    let (y, m, d) = civil(days);
+    Some(format!("{y:04}-{m:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z"))
 }
 
 fn text(value: &[u8], codepage: u16) -> Option<String> {
