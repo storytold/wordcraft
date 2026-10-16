@@ -663,8 +663,9 @@ mod tests {
         assert!(!is_global_shortcut(Key::Q, m(false, false, true)), "Shift+letter is typing");
     }
 
-    /// Alt held, keypad 0 2 3 3, Alt released: é is typed, the digits aren't, and keytips stay
-    /// off (#961). Linux sends each digit's text too; Windows may send the composed character.
+    /// Alt held, keypad 0 2 3 3, Alt released: é (й on a Russian system) is typed, the digits
+    /// aren't, and keytips stay off (#961). Linux sends each digit's text too; Windows may send the
+    /// composed character.
     #[test]
     fn alt_numpad_code_types_its_character_without_keytips() {
         if cfg!(target_os = "macos") {
@@ -673,6 +674,15 @@ mod tests {
         let doc_text = |a: &WordApp| a.session.doc.plain_text(wordcraft_doc::StoryRef::Body);
         let ctx = egui::Context::default();
         let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        // Windows reads codes in the system locale's code pages (0233 is é in 1252 and 1250, й in
+        // 1251); elsewhere the ANSI page is 1252 and the OEM page the locale's own. The app records
+        // the locale when it starts, so ask after `WordApp::new`.
+        let (ansi, oem_page) = if cfg!(target_os = "windows") {
+            wordcraft_engine::cmd::text::system_code_pages()
+        } else {
+            (1252, wordcraft_engine::cmd::text::system_oem_code_page())
+        };
+        let typed = wordcraft_engine::cmd::text::alt_code_char("0233", ansi, oem_page).unwrap_or('?');
         let alt = Modifiers { alt: true, ..Default::default() };
         let key = |key, pressed, modifiers| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers };
         let frame = |a: &mut WordApp, events: Vec<egui::Event>| {
@@ -688,25 +698,20 @@ mod tests {
         }
         assert_eq!(doc_text(&a).trim_end(), "", "nothing typed while Alt is held");
         frame(&mut a, vec![key(Key::AltLeft, false, alt), egui::Event::ModifiersChanged(Modifiers::NONE)]);
-        assert_eq!(doc_text(&a).trim_end(), "é");
+        assert_eq!(doc_text(&a).trim_end(), typed.to_string());
         assert_eq!(a.ui.keytips, crate::keytips::Phase::Off, "an Alt code doesn't open keytips");
         // The platform's own composed character isn't typed twice; the next typing is.
-        frame(&mut a, vec![egui::Event::Text("é".into())]);
+        frame(&mut a, vec![egui::Event::Text(typed.to_string())]);
         frame(&mut a, vec![key(Key::E, true, Modifiers::NONE), egui::Event::Text("é".into())]);
-        assert_eq!(doc_text(&a).trim_end(), "éé");
+        assert_eq!(doc_text(&a).trim_end(), format!("{typed}é"));
         // Without the leading zero: the system locale's OEM code page (233 is Θ in 437, Ú in 850).
         frame(&mut a, vec![egui::Event::ModifiersChanged(alt), key(Key::AltLeft, true, alt)]);
         for k in [Key::Num2, Key::Num3, Key::Num3] {
             frame(&mut a, vec![key(k, true, alt), key(k, false, alt)]);
         }
         frame(&mut a, vec![key(Key::AltLeft, false, alt), egui::Event::ModifiersChanged(Modifiers::NONE)]);
-        let pages = wordcraft_engine::cmd::text::system_code_pages();
-        let oem = wordcraft_engine::cmd::text::alt_code_char(
-            "233",
-            1252,
-            if cfg!(target_os = "windows") { pages.1 } else { wordcraft_engine::cmd::text::system_oem_code_page() },
-        );
-        assert_eq!(doc_text(&a).trim_end(), format!("éé{}", oem.unwrap_or('?')));
+        let oem = wordcraft_engine::cmd::text::alt_code_char("233", ansi, oem_page);
+        assert_eq!(doc_text(&a).trim_end(), format!("{typed}é{}", oem.unwrap_or('?')));
         // A bare Alt tap still opens keytips.
         frame(&mut a, vec![egui::Event::ModifiersChanged(alt), key(Key::AltLeft, true, alt)]);
         frame(&mut a, vec![key(Key::AltLeft, false, alt), egui::Event::ModifiersChanged(Modifiers::NONE)]);
