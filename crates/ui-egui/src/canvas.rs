@@ -827,6 +827,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         app.canvas.alt_code.clear();
     }
     crate::ink::replay_tick(app, ui.ctx());
+    // An input method's composition is laid out in the text; any command takes it out, so put it back.
+    if app.session.composition().map_or("", |c| c.0) != app.canvas.ime_preedit {
+        app.session.set_composition(&app.canvas.ime_preedit);
+    }
     let layout = app.session.layout();
     if let Some(anchor) = reflow_anchor
         && let Some(page) = reading_anchor_page(&layout, &anchor)
@@ -1384,8 +1388,19 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         Some(egui::output::IMEOutput { rect: cr, cursor_rect: cr, purpose: Default::default(), should_interrupt_composition: false });
                 });
             }
-            if !app.canvas.ime_preedit.is_empty() {
-                // The composition is interface text, but it may be in a script the interface fonts lack
+            if let Some((_, a, b)) = app.session.composition() {
+                // The composition is in the text (`Session::set_composition`): underline it.
+                let color = caret_color(app);
+                for (pi, r) in layout.selection_rects(&app.session.doc, &a, &b, app.session.page_hint) {
+                    if let Some(pr) = rects.get(pi) {
+                        let scale = layout.pages.get(pi).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
+                        let y = pr.min.y + (r.y + r.h) * scale - 1.0;
+                        painter.line_segment([pos2(pr.min.x + r.x * scale, y), pos2(pr.min.x + (r.x + r.w) * scale, y)], Stroke::new(1.0, color));
+                    }
+                }
+            } else if !app.canvas.ime_preedit.is_empty() {
+                // Where typing is refused (equations, protection) the composition is interface text
+                // drawn at the caret, but it may be in a script the interface fonts lack
                 // (Bangla, Thai ...): borrow the document fonts' fallback faces, or it draws as boxes (#565).
                 let new = crate::theme::faces_for_preedit(
                     &app.canvas.ime_preedit,
@@ -4786,6 +4801,75 @@ mod tests {
             h.step();
         }
         assert_eq!(ime_interrupted(&h), Some(true), "a click still interrupts composition");
+    }
+
+    /// macOS Vietnamese Telex: a click during a composition leaves the composed word where it
+    /// was typed. It used to stay on screen and follow the caret, and the input method, cut off
+    /// by the click, never committed it.
+    #[test]
+    fn a_click_commits_the_composition_where_it_was() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("document.setText", json!({"text": "Nghỉ "})).unwrap();
+        app.run("caret.docEnd", json!({})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        for _ in 0..8 {
+            h.step();
+        }
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "dưỡng".into(), active_range_chars: None }));
+        h.step();
+        assert_eq!(h.state().canvas.ime_preedit, "dưỡng");
+        assert_eq!(h.state().session.composition().map(|c| c.0), Some("dưỡng"), "laid out in the text, not drawn over it (#1888)");
+        let at = h.state().canvas.page_rects.first().map(|r| r.center()).expect("a page");
+        h.event(egui::Event::PointerMoved(at));
+        h.step();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+            h.step();
+        }
+        assert!(h.state().canvas.ime_preedit.is_empty(), "the composition no longer follows the caret");
+        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Nghỉ dưỡng");
+    }
+
+    /// macOS Vietnamese Telex: focus going to another window (a screenshot tool) during a
+    /// composition stops the canvas asking for the input method, which drops its composition.
+    /// The word stays where it was typed; it used to stay composing, and the next key typed
+    /// in front of it.
+    #[test]
+    fn leaving_the_window_commits_the_composition() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("document.setText", json!({"text": "Thứ "})).unwrap();
+        app.run("caret.docEnd", json!({})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        for _ in 0..8 {
+            h.step();
+        }
+        h.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: "Đêm".into(), active_range_chars: None }));
+        h.step();
+        h.input_mut().focused = false;
+        h.event(egui::Event::WindowFocused(false));
+        h.step();
+        h.step();
+        h.input_mut().focused = true;
+        h.event(egui::Event::WindowFocused(true));
+        h.step();
+        assert!(h.state().canvas.ime_preedit.is_empty(), "the composition ended with the focus");
+        h.event(egui::Event::Text(" ".into()));
+        h.step();
+        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Thứ Đêm ");
     }
 
     fn page_at_index(rects: &[Rect], p: Pos2) -> Option<usize> {

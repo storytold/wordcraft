@@ -398,6 +398,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 | 2026-10-05 | M0–M12 first versions: model, layout, render, engine with 200+ commands, Word-style UI, DOCX I/O, PDF and other formats, references, review, mailings, CLI, MCP, web |
 | 2026-10-12 | Mail-merge recipients (#778): legacy Excel .xls workbooks; CSV/TXT lists in GBK, Big5, Shift_JIS, UTF-16 and other encodings read correctly (plain-text import too); Edit Recipient List filters (equal, not equal, less, greater, blank, contains… joined by And/Or) and sorts, and preview, Finish & Merge and labels use only the matching records in that order (`mailings.filterRecipients`, `mailings.sortRecipients`) |
 | 2026-10-13 | The interface-translation audit runs in CI again (#1128): the size labels of Envelopes, Labels and Layout › Size are translated (`4,13 × 9,5 дюйма`) and use the region's decimal separator, and status-bar messages (table split and merge, ink replay, citations, SmartArt, Researcher, Design defaults), the Reading Mode toolbar, Go To and Search's Suggested heading are translated in every interface language, and the Read Aloud player no longer shows a speech error a frame before the status bar does, the race behind the audit's rare failure under load |
+| 2026-10-15 | Input methods (#1888): the composition is laid out in the paragraph in the text's own font instead of drawn over the following text, and a click or the window losing focus ends it where it was typed (macOS Vietnamese Telex no longer leaves a word composing that follows the caret) |
 
 ## Revision history
 
@@ -590,3 +591,4 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 | 2026-10-09 | minor | Recently landed: RTL, Ukrainian and Brazilian Portuguese |
 | 2026-10-06 | major | First honest estimate: 88% catalog, ~62% real parity, alpha ~85% of the way |
 | 2026-10-12 | trivial | Progress log: recipient filter and sort, .xls and legacy-encoding recipient lists (#778) |
+| 2026-10-15 | trivial | Progress log: input-method compositions laid out in the text (#1888) |

@@ -5,7 +5,8 @@
 //!
 //! The script is JSON lines: control-channel requests (`{"method": …, "params": …}`, see
 //! `docs/control-protocol.md`), `{"shot": "/abs/out.png"}` to save the window as PNG, or
-//! `{"steps": n}` to run extra frames, or `{"wait": ms}` to keep running frames for a while (for
+//! `{"steps": n}` to run extra frames, `{"preedit": "ương"}` to show an input method's
+//! composition at the caret, or `{"wait": ms}` to keep running frames for a while (for
 //! background work such as a Zotero session). The window is 1440×900 pt at 2× and opens the sample
 //! document unless the first line is `{"empty": true}`; `{"empty": true, "startScreen": true}`
 //! starts the way the desktop app does with nothing to open (File › Home, #766).
@@ -58,6 +59,9 @@ fn main() {
                 }
                 Err(e) => eprintln!("render failed: {e}"),
             }
+        } else if let Some(t) = l.get("preedit").and_then(|v| v.as_str()) {
+            harness.event(egui::Event::Ime(egui::ImeEvent::Preedit { text: t.into(), active_range_chars: None }));
+            step_n(&mut harness, 2);
         } else if let Some(n) = l.get("steps").and_then(|v| v.as_u64()) {
             step_n(&mut harness, n as usize);
         } else if let Some(ms) = l.get("wait").and_then(|v| v.as_u64()) {

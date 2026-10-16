@@ -255,7 +255,17 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                 }
             }
             // Focus elsewhere (another window) ends an Alt code unfinished.
-            egui::Event::WindowFocused(false) => app.canvas.alt_code.clear(),
+            egui::Event::WindowFocused(false) if app.canvas.ime_preedit.is_empty() => app.canvas.alt_code.clear(),
+            // A click, or focus going to another window (a screenshot tool), ends a composition
+            // where it is, as Mac text views do: the word stays put instead of following the caret
+            // (macOS Vietnamese Telex). Either then interrupts the input method, which sends no
+            // commit of its own.
+            egui::Event::PointerButton { pressed: true, .. } | egui::Event::WindowFocused(false) if !app.canvas.ime_preedit.is_empty() => {
+                app.canvas.alt_code.clear();
+                let text = std::mem::take(&mut app.canvas.ime_preedit);
+                let id = if app.session.math.is_some() { "equation.type" } else { "text.insert" };
+                let _ = app.run(id, json!({"text": text}));
+            }
             _ => {}
         }
         if alt_codes && app.session.math.is_none() && alt_code_event(app, &e) {

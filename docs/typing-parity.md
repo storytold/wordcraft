@@ -1,6 +1,6 @@
 # Typing parity with Word
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-14 · **Change:** trivial (Shift+Delete cuts the selection on every platform, #1669; previously trivial: Select All then Delete removes a table the document starts with, #1198; previously trivial: Alt+numpad character codes, #961; previously trivial: Down and Up from a line start beside a table go into it, #1007; previously trivial: sample-text formulas on Enter, #1067; previously trivial: Track Changes: Accept All after a tracked delete from a paragraph end keeps the next paragraph; Reject All after typing into an empty paragraph keeps it (#864); previously minor: Correct TWo INitial CApitals, cAPS LOCK and table-cell capitals, #544; previously trivial: complex-script caret and Backspace, #604; Move Paragraph Up/Down, Promote/Demote, Go Back and Alt+X keys, #343) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-15 · **Change:** minor (input-method compositions are laid out in the text and end where they were typed on a click or when the window loses focus, #1888; previously trivial: Shift+Delete cuts the selection on every platform, #1669; previously trivial: Select All then Delete removes a table the document starts with, #1198; previously trivial: Alt+numpad character codes, #961; previously trivial: Down and Up from a line start beside a table go into it, #1007; previously trivial: sample-text formulas on Enter, #1067; previously trivial: Track Changes: Accept All after a tracked delete from a paragraph end keeps the next paragraph; Reject All after typing into an empty paragraph keeps it (#864); previously minor: Correct TWo INitial CApitals, cAPS LOCK and table-cell capitals, #544; previously trivial: complex-script caret and Backspace, #604; Move Paragraph Up/Down, Promote/Demote, Go Back and Alt+X keys, #343) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 What Word does when you type, observed black-box (same keystrokes typed into Word and
 WordCraft, results read back paragraph by paragraph) and pinned by tests in
@@ -171,6 +171,20 @@ Word.
   `myanmar_typing_steps_by_syllable_and_backspaces_by_sign`,
   `indic_and_khmer_backspace_removes_one_character`).
 
+## Input methods (#1888)
+
+- An input method's composition (Chinese pinyin, macOS Vietnamese Telex…) is laid out in the
+  paragraph at the caret in the text's own font, underlined, and pushes the following text along,
+  as in Word; it used to be drawn over the following text in a fallback font. It isn't an edit:
+  no undo step, the document stays unmodified, and any command takes it out first
+  (`composition_sits_in_the_text_until_committed`).
+- A click, or the window losing focus (a screenshot tool, another app), ends the composition
+  where it was typed; it used to stay composing, follow the caret, and the next keys typed in
+  front of it (`a_click_commits_the_composition_where_it_was`,
+  `leaving_the_window_commits_the_composition`).
+- macOS Telex also needs the winit fixes in #787 so the key that ends a word (Space, an arrow)
+  isn't swallowed. Telex leaves the first key after the app starts uncomposed, in every app.
+
 ## Known gaps
 
 - Word's body font Aptos isn't installed outside Office; our substitute (Carlito, else Helvetica
@@ -196,6 +210,7 @@ Word.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | Input methods: the composition is laid out in the text (no overlap, the text's font) and ends where it was typed on a click or when the window loses focus (#1888) |
 | 2026-10-14 | trivial | Shift+Delete cuts the selection, and does nothing without one, on macOS and Linux too, as in Word for Windows (#1669); Shift+Backspace already erased (#707) |
 | 2026-10-13 | trivial | Select All then Delete or Backspace removes a table the document starts with (#1198) |
 | 2026-10-12 | trivial | Editing keys: Down and Up from the start of a line beside a table go into it instead of skipping it (#1007) |

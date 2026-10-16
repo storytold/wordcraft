@@ -1140,3 +1140,30 @@ fn typing_after_a_citation_goes_outside_its_field() {
     let inside = Pos { off: f[0].start.off + wordcraft_doc::para::OBJ.len_utf8(), ..f[0].start.clone() };
     assert_eq!(s.doc.copy_range(&inside, &f[0].end).plain_text(), "(Smith 2020)");
 }
+
+/// An input method's composition (macOS Vietnamese Telex, Chinese pinyin) sits in the text while
+/// it is being composed, pushing what follows along (#1888), but is not an edit: committing
+/// leaves one copy and one undo step, and cancelling leaves nothing.
+#[test]
+fn composition_sits_in_the_text_until_committed() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Every word"}));
+    run(&mut s, "caret.docStart", json!({}));
+    let depth = s.undo_depth();
+    s.dirty = false;
+    s.set_composition("ương");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "ươngEvery word", "laid out in the paragraph, before what follows");
+    let (text, start, end) = s.composition().expect("composing");
+    assert_eq!((text, start.off, end.off), ("ương", 0, "ương".len()));
+    assert_eq!((s.undo_depth(), s.dirty), (depth, false), "not an edit");
+    s.set_composition("Dương ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Dương Every word", "replaced as it changes");
+    run(&mut s, "text.insert", json!({"text": "Dương "}));
+    assert!(s.composition().is_none());
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Dương Every word", "committed once");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Every word", "one undo step");
+    s.set_composition("ư");
+    s.set_composition("");
+    assert_eq!((s.doc.plain_text(StoryRef::Body).as_str(), s.composition().is_none()), ("Every word", true), "cancelled");
+}

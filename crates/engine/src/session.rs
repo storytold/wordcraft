@@ -466,6 +466,9 @@ pub struct Session {
     edit_marks: Vec<Pos>,
     /// How many Go Back presses since the last edit (which place comes next).
     go_back_step: usize,
+    /// An input method's composition shown in the text (see [`Session::set_composition`]): the
+    /// state before it, the composed text and where it ends.
+    composing: Option<(EditSnapshot, String, Pos)>,
 }
 
 /// The number of edit locations Go Back cycles through (Word: four).
@@ -650,6 +653,7 @@ impl Session {
             widened: None,
             edit_marks: Vec::new(),
             go_back_step: 0,
+            composing: None,
         }
     }
 
@@ -996,6 +1000,7 @@ impl Session {
     /// Replace the document (open/new).
     pub fn set_document(&mut self, doc: Document) {
         self.document_id = self.document_id.wrapping_add(1);
+        self.composing = None;
         self.bib_style = doc_bib_style(&doc);
         self.doc = doc;
         self.doc.ensure_nonempty();
@@ -1103,6 +1108,8 @@ impl Session {
             // Go Back's places, like the caret history: not part of the document.
             edit_marks: _,
             go_back_step: _,
+            // Has its own snapshot, and `run` ends it before any command.
+            composing: _,
         } = self;
         let head = if history.len() + SNAPSHOT_HEAD > MAX_UNDO { history.iter().take(SNAPSHOT_HEAD).cloned().collect() } else { Vec::new() };
         EditSnapshot {
@@ -1123,6 +1130,8 @@ impl Session {
     /// is recomputed.
     pub fn restore(&mut self, snap: EditSnapshot) {
         let EditSnapshot { doc, sel, history_len, evicted, head, redo, typing_open, join_next, dirty } = snap;
+        // A composition's own snapshot is older than this document: putting it back later would lose it.
+        self.composing = None;
         let gone = usize::try_from(self.undo_evicted.saturating_sub(evicted)).unwrap_or(usize::MAX);
         if gone > 0 {
             let back = gone.min(head.len());
@@ -1138,6 +1147,43 @@ impl Session {
         self.join_next = join_next;
         self.touch();
         self.dirty = dirty;
+    }
+
+    /// Show an input method's composition (marked text) in the document at the caret, so it is
+    /// laid out in the paragraph's font and pushes the text after it along, as Word does (#1888).
+    /// It is not an edit: the next command, or an empty `text`, takes it out again, leaving no
+    /// trace in undo or the dirty flag; committing types it for real with `text.insert`. Where
+    /// typing is refused (protection, equations) nothing is shown and the front end draws it.
+    pub fn set_composition(&mut self, text: &str) {
+        self.end_composition();
+        let text: String = text.chars().filter(|c| !c.is_control()).collect();
+        let typable = self.registry.get("text.insert").is_some_and(|spec| (spec.enabled)(self).is_none());
+        if text.is_empty() || !typable || self.math.is_some() || self.doc.settings.protection.is_some() {
+            return;
+        }
+        let snap = self.edit_snapshot();
+        let dirty = self.dirty;
+        if crate::cmd::type_text(self, &text).is_err() {
+            self.restore(snap);
+            return;
+        }
+        self.touch();
+        self.dirty = dirty;
+        self.composing = Some((snap, text, self.sel.focus.clone()));
+    }
+
+    /// Take the composition shown by [`Session::set_composition`] out of the document.
+    pub fn end_composition(&mut self) {
+        if let Some((snap, ..)) = self.composing.take() {
+            self.restore(snap);
+        }
+    }
+
+    /// The composition shown in the document and where it runs, if any.
+    pub fn composition(&self) -> Option<(&str, Pos, Pos)> {
+        let (_, text, end) = self.composing.as_ref()?;
+        let start = Pos { off: end.off.saturating_sub(text.len()), ..end.clone() };
+        Some((text, start, end.clone()))
     }
 
     /// Make the selection valid for the current document.
@@ -1165,6 +1211,7 @@ impl Session {
     /// control channel). Mutating commands are undoable; a failed command leaves the document as
     /// it was; a panic inside a command becomes an error.
     pub fn run(&mut self, id: &str, params: &Value) -> Result<Value, CmdError> {
+        self.end_composition();
         let join = std::mem::take(&mut self.join_next);
         let reg = self.registry.clone();
         let Some(spec) = reg.get(id) else { return Err(CmdError::Unknown(id.to_string())) };
