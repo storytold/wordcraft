@@ -160,10 +160,24 @@ fn copy(s: &mut Session, _: &Value) -> CmdResult {
         return Ok(json!({"text": ""}));
     }
     let f = s.doc.copy_range(&a, &b);
-    s.clipboard_text = f.clipboard_text();
+    s.clipboard_text = clipboard_text(&s.doc, &f);
     s.clip_history.push(&f, &s.clipboard_text);
     s.clipboard = Some(f);
     Ok(copy_result(s))
+}
+
+/// The plain text Copy puts on the clipboard. A list paragraph carries its label and a tab, as
+/// Word does and as the `.txt` export already did, so pasting a list into a text editor keeps
+/// its numbers and bullets (#2015). Without a list the document's own shown text is used
+/// unchanged, so nothing else about a copy moves.
+fn clipboard_text(src: &wordcraft_doc::Document, f: &wordcraft_doc::edit::Fragment) -> String {
+    // A fragment carries blocks but no styles or numbering definitions, so the label of a list
+    // paragraph can only be resolved against the document it came from.
+    let mut doc = f.to_document();
+    doc.styles = src.styles.clone();
+    doc.numbering = src.numbering.clone();
+    let (lines, listed) = wordcraft_formats::txt::export_lines(&doc, "\n");
+    if listed { lines.join("\n") } else { f.clipboard_text() }
 }
 
 /// What Copy and Cut return: the clipboard's text, and the copy as HTML (equations as MathML,

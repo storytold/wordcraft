@@ -7232,3 +7232,52 @@ fn vertical_align_command_sets_justified() {
         assert_eq!(serde_json::to_value(crate::cmd::page::sect(&s)).unwrap()["valign"], json!(name));
     }
 }
+
+#[test]
+fn copying_a_list_keeps_its_numbers_and_bullets() {
+    // Pasting a list into another editor should bring its labels, as Word does and as the .txt
+    // export already did (#2015).
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Item 1\nItem 2"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "para.numbering", json!({}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "edit.copy", json!({}));
+    assert_eq!(s.clipboard_text, "1.\tItem 1\n2.\tItem 2");
+
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "para.bullets", json!({}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "edit.copy", json!({}));
+    assert_eq!(s.clipboard_text, "\u{2022}\tItem 1\n\u{2022}\tItem 2");
+
+    // What Copy puts on the clipboard and what Save as .txt writes now agree, apart from the
+    // line ending each of them uses.
+    let txt = String::from_utf8_lossy(&wordcraft_formats::txt::export(&s.doc)).replace("\r\n", "\n");
+    assert_eq!(txt, s.clipboard_text);
+}
+
+#[test]
+fn copying_text_that_is_not_a_list_is_unchanged() {
+    // The guard: a copy with no list paragraph keeps the document's own shown text, so tables,
+    // fields and partial selections are untouched by #2015.
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "alpha beta\ngamma"}));
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 6}, "focus": {"block": 1, "off": 2}}));
+    run(&mut s, "edit.copy", json!({}));
+    assert_eq!(s.clipboard_text, "beta\nga");
+}
+
+#[test]
+fn copying_part_of_a_list_numbers_from_the_copy() {
+    // Known limit, shared with the `.txt` export: the label counts from the start of what is
+    // rendered, so items 3 and 4 copy as 1 and 2. Word puts their own numbers on the clipboard.
+    // Pinned here so the behaviour is a decision and not a surprise (#2015).
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "One\nTwo\nThree\nFour"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "para.numbering", json!({}));
+    run(&mut s, "select.range", json!({"anchor": {"block": 2, "off": 0}, "focus": {"block": 3, "off": 4}}));
+    run(&mut s, "edit.copy", json!({}));
+    assert_eq!(s.clipboard_text, "1.\tThree\n2.\tFour");
+}
