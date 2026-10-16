@@ -231,7 +231,7 @@ struct TocEntry {
 /// breaks): what Insert › Link › Place in This Document lists.
 pub(crate) fn headings(s: &Session) -> Vec<(usize, u8, String, usize)> {
     let f = FieldCode::parse("TOC \\o \"1-9\" \\u");
-    toc_entries(s, &f).into_iter().map(|e| (e.path.last(), e.level.saturating_add(1), e.text, e.lead)).collect()
+    toc_entries(s, &f).into_iter().filter(|e| e.path.depth() == 0).map(|e| (e.path.last(), e.level.saturating_add(1), e.text, e.lead)).collect()
 }
 
 /// The heading level (1–9) of a built-in heading style.
@@ -272,9 +272,6 @@ fn toc_entries(s: &Session, f: &FieldCode) -> Vec<TocEntry> {
                 LevelSuffix::Space => format!("{label} "),
                 LevelSuffix::Nothing => label,
             });
-        if path.depth() > 0 {
-            continue;
-        }
         let style = p.props.style.as_deref().unwrap_or("Normal");
         if style.starts_with("TOC") {
             continue;
@@ -461,8 +458,12 @@ fn insert_toc(s: &mut Session, v: &Value) -> CmdResult {
 /// A hidden `_Toc` bookmark around the heading at body block `i` (after its leading page breaks),
 /// reusing one already there; its name.
 pub(crate) fn toc_bookmark(s: &mut Session, i: usize, lead: usize) -> Result<String, CmdError> {
+    bookmark_heading(s, &Path::top(i), lead)
+}
+
+fn bookmark_heading(s: &mut Session, path: &Path, lead: usize) -> Result<String, CmdError> {
     const MARK: usize = wordcraft_doc::para::OBJ.len_utf8();
-    let para = s.doc.para(StoryRef::Body, &Path::top(i)).ok_or_else(|| CmdError::Failed("heading is gone".into()))?;
+    let para = s.doc.para(StoryRef::Body, path).ok_or_else(|| CmdError::Failed("heading is gone".into()))?;
     if let Some(InlineObject::BookmarkStart { name }) = para.object_at(lead)
         && name.starts_with("_Toc")
     {
@@ -473,12 +474,12 @@ pub(crate) fn toc_bookmark(s: &mut Session, i: usize, lead: usize) -> Result<Str
     let name = format!("_Toc{next:09}");
     let end = para.len();
     let props = CharProps::default();
-    let pos = |off| Pos { story: StoryRef::Body, path: Path::top(i), off };
+    let pos = |off| Pos { story: StoryRef::Body, path: path.clone(), off };
     s.doc.insert_object(&pos(end), InlineObject::BookmarkEnd { name: name.clone() }, &props)?;
     s.doc.insert_object(&pos(lead), InlineObject::BookmarkStart { name: name.clone() }, &props)?;
     // The caret in that paragraph stays on the same text.
     let shift = |p: &mut Pos| {
-        if p.story == StoryRef::Body && p.path == Path::top(i) {
+        if p.story == StoryRef::Body && &p.path == path {
             if p.off > end {
                 p.off = p.off.saturating_add(2 * MARK);
             } else if p.off >= lead && p.off > 0 {
@@ -538,7 +539,7 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>) -> Result<(), CmdE
         for e in &entries {
             // TC fields link to their paragraph's start.
             let lead = s.doc.para(StoryRef::Body, &e.path).map_or(0, |p| p.text.bytes().take_while(|b| *b == 0x0C).count());
-            v.push(Some(format!("#{}", toc_bookmark(s, e.path.last(), lead)?)));
+            v.push(Some(format!("#{}", bookmark_heading(s, &e.path, lead)?)));
         }
         v
     } else {
@@ -559,7 +560,12 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>) -> Result<(), CmdE
         }
         let shift = if pass == 0 { 0 } else { entries.len() };
         for (k, e) in entries.iter().enumerate() {
-            let target = Path::top(e.path.last() + if e.path.last() > start { shift } else { 0 });
+            let mut target = e.path.clone();
+            if let Some(top) = target.0.first_mut()
+                && (*top as usize) > start
+            {
+                *top = top.saturating_add(u32::try_from(shift).unwrap_or(u32::MAX));
+            }
             let page =
                 l.caret(&Pos { story: StoryRef::Body, path: target, off: e.lead }).and_then(|c| l.pages.get(c.page)).map(|pg| pg.number).unwrap_or(1);
             let show_page = no_pages.is_none_or(|(a, b)| !(a..=b).contains(&(e.level + 1)));
