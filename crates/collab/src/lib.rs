@@ -91,17 +91,18 @@ pub fn b64_decode(text: &str) -> Result<Vec<u8>, CollabError> {
         .map_err(|e| CollabError::Corrupt(format!("base64: {e}")))
 }
 
-/// Fills `buf` with random bytes from the operating system. The browser build has no source
-/// here (and no transports): it fails there.
+/// Fills `buf` with random bytes from the operating system (the browser's
+/// `crypto.getRandomValues` in the web build, which joins craft-live rooms). Fails on other
+/// wasm hosts, which have no source.
 pub fn random_bytes(buf: &mut [u8]) -> Result<(), CollabError> {
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(any(not(target_arch = "wasm32"), target_os = "unknown"))]
     {
         getrandom::fill(buf).map_err(|e| CollabError::Other(format!("no random numbers: {e}")))
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_os = "unknown")))]
     {
         let _ = buf;
-        Err(CollabError::Other("live sessions need the desktop app".into()))
+        Err(CollabError::Other("no random numbers on this platform".into()))
     }
 }
 

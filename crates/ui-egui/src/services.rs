@@ -94,6 +94,20 @@ pub struct Services {
     /// used while File › Options names none. File › New lists personal templates from it and Save
     /// as Word Template starts in it. `None` (web) hides personal templates.
     pub templates_dir: Option<std::path::PathBuf>,
+    /// Web, inside craft-live (a Nextcloud file edited live, `docs/collab.md`): the page that
+    /// embeds the app saves and closes the document. File › Save (Ctrl+S) asks the room to save
+    /// into Nextcloud, File › Close (Ctrl+W) and the title bar's Close button hand the document
+    /// back to Nextcloud; Save As still downloads a copy. `None` everywhere else.
+    pub host: Option<Box<dyn Fn(HostRequest)>>,
+}
+
+/// What [`Services::host`] is asked to do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostRequest {
+    /// Save the document where it lives (craft-live: the room saves into Nextcloud).
+    Save,
+    /// Close the document (craft-live: Nextcloud closes the editor).
+    Close,
 }
 
 /// Files delivered asynchronously.

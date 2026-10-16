@@ -7,13 +7,14 @@ use std::rc::Rc;
 use wasm_bindgen::JsCast as _;
 use wordcraft_engine::Session;
 use wordcraft_ui_egui::async_saves::{AsyncSaves, SaveOutcome};
-use wordcraft_ui_egui::{Inbox, Services, WordApp};
+use wordcraft_ui_egui::{HostRequest, Inbox, Services, WordApp};
 
 const DOC_EXTS: &[&str] =
     &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "ott", "fodt", "rtf", "txt", "md", "html", "htm", "mht", "mhtml", "tex", "json", "xml"];
 const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "wmf", "emf"];
 const RECIPIENT_EXTS: &[&str] = wordcraft_engine::cmd::mailings::RECIPIENT_EXTENSIONS;
 mod font_store;
+mod live_io;
 const CANVAS_ID: &str = "wordcraft_canvas";
 const LOADING_ID: &str = "wordcraft_loading";
 
@@ -32,9 +33,14 @@ pub fn start() {
         // what it saves (`host`). That page guards leaving it, so this one doesn't.
         let bridge = if query_param("host").as_deref() == Some("parent") { crate::host::Bridge::new() } else { None };
         let app_bridge = bridge.clone();
+        // craft-live mode (a `#craft-live=1&…` fragment): tell the shell at once that this build
+        // speaks the embed contract, and listen for it.
+        let live = if bridge.is_none() { live_mode() } else { None };
         let dirty = Rc::new(Cell::new(false));
         let saves = AsyncSaves::default();
+        // Inside craft-live the room keeps every edit: no leave-page prompt.
         if bridge.is_none()
+            && live.is_none()
             && let Err(e) = guard_unload(dirty.clone(), saves.clone())
         {
             log::error!("no unsaved-changes guard: {e}");
@@ -74,6 +80,18 @@ pub fn start() {
                         bridge.connect(&mut services, inbox.clone(), cc.egui_ctx.clone());
                     }
                     let mut app = WordApp::new(session, services);
+                    let live = live.map(|(events, config)| {
+                        events.set_context(cc.egui_ctx.clone());
+                        let ev = events.clone();
+                        // Save and Close belong to Nextcloud's file.
+                        app.services.host = Some(Box::new(move |r| {
+                            ev.push(match r {
+                                HostRequest::Save => wordcraft_web::live::Event::Save,
+                                HostRequest::Close => wordcraft_web::live::Event::Close,
+                            })
+                        }));
+                        LiveShell { io: live_io::LiveIo::new(events), live: None, config, started: false }
+                    });
                     // Pasted pictures wait apart from dropped files: the app inserts one only when the page is the edit target (#1349).
                     app.services.pasted = Some(pasted);
                     app.autosave = false;
@@ -87,8 +105,9 @@ pub fn start() {
                         app.session.set_document(doc);
                     }
                     let mut prefs = crate::prefs::PrefsSync::new(stored);
-                    // No document to show: start on File › Home, as the desktop app does (#766).
-                    if !sample {
+                    // No document to show: start on File › Home, as the desktop app does (#766). A
+                    // live document arrives from the room instead.
+                    if !sample && live.is_none() {
                         app.start_screen();
                     }
                     // The host's name for the user signs this visit's work, but isn't stored as the
@@ -100,7 +119,7 @@ pub fn start() {
                         crate::host::Bridge::set_author(&mut app, &author);
                         prefs.keep_own_author(&app.session.author, &own);
                     }
-                    Ok(Box::new(WebShell { app, inbox, messages, prefs }))
+                    Ok(Box::new(WebShell { app, inbox, messages, prefs, live }))
                 }),
             )
             .await;
@@ -128,13 +147,75 @@ fn query_param(key: &str) -> Option<String> {
     web_sys::UrlSearchParams::new_with_str(&query()).ok()?.get(key)
 }
 
+/// craft-live mode: the fragment's configuration (or why it can't be used: the shell's
+/// `craft-live:config` may still bring one), with `craft-live:hello` sent and the shell listened
+/// to. `None`: an ordinary page.
+fn live_mode() -> Option<(live_io::Events, Result<wordcraft_web::live::Config, String>)> {
+    let hash = web_sys::window().and_then(|w| w.location().hash().ok()).unwrap_or_default();
+    let config = wordcraft_web::live::Config::from_fragment(&hash)?;
+    let events = live_io::Events::default();
+    if let Err(e) = live_io::listen_to_shell(events.clone()) {
+        log::error!("craft-live: can't hear the shell: {e}");
+    }
+    live_io::post_to_shell(&wordcraft_web::live::Live::hello());
+    Some((events, config))
+}
+
+/// craft-live mode's state in the shell.
+struct LiveShell {
+    io: live_io::LiveIo,
+    live: Option<wordcraft_web::live::Live>,
+    /// The fragment's configuration, until the session starts.
+    config: Result<wordcraft_web::live::Config, String>,
+    /// Said once that the configuration is awaited.
+    started: bool,
+}
+
+impl LiveShell {
+    /// Feeds what happened to the session and carries out what it asks.
+    fn step(&mut self, app: &mut WordApp, events: Vec<wordcraft_web::live::Event>) {
+        use wordcraft_web::live::{Config, Event, Live, Phase};
+        let now = js_sys::Date::now().max(0.0) as u64;
+        if self.live.is_none() {
+            // Without a usable fragment, the shell's `craft-live:config` brings the configuration.
+            for e in &events {
+                if let Event::Shell(m) = e
+                    && m.get("type").and_then(serde_json::Value::as_str) == Some("craft-live:config")
+                    && self.config.is_err()
+                {
+                    self.config = Config::from_json(m.get("config").unwrap_or(&serde_json::Value::Null));
+                }
+            }
+            match &self.config {
+                Ok(c) => self.live = Some(Live::new(c.clone())),
+                Err(e) => {
+                    if !self.started {
+                        self.started = true;
+                        log::warn!("{e}; waiting for craft-live:config");
+                    }
+                    return;
+                }
+            }
+        }
+        let Some(live) = self.live.as_mut() else { return };
+        if live.phase == Phase::Idle {
+            live.start(&mut app.session, now);
+        }
+        live.handle_all(&mut app.session, events, now);
+        live.tick(&mut app.session, now);
+        let actions = live.take_actions();
+        self.io.run(actions, app);
+    }
+}
+
 /// Wraps the app to read dropped files asynchronously (browsers can't read them synchronously)
-/// and feed them through the inbox.
+/// and feed them through the inbox, and to run craft-live mode.
 struct WebShell {
     app: WordApp,
     inbox: Inbox,
     messages: Rc<RefCell<Vec<String>>>,
     prefs: crate::prefs::PrefsSync,
+    live: Option<LiveShell>,
 }
 
 fn local_storage() -> Option<web_sys::Storage> {
@@ -155,7 +236,16 @@ impl eframe::App for WebShell {
         for msg in msgs {
             self.app.status(msg);
         }
+        if let Some(l) = self.live.as_mut() {
+            let events = l.io.events.take();
+            l.step(&mut self.app, events);
+            // Reconnection timers: look again soon.
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        }
         self.app.logic(ctx);
+        if let Some(l) = self.live.as_mut() {
+            l.step(&mut self.app, Vec::new());
+        }
         // Store changed preferences straight away: a reload or closed tab runs no exit code (#2132).
         if let Some(json) = self.prefs.changed(&self.app) {
             match local_storage() {
@@ -198,6 +288,10 @@ impl eframe::App for WebShell {
             }
         }
         self.app.ui(ui);
+        // Edits made in this pass go to the room now (one update per command).
+        if let Some(l) = self.live.as_mut() {
+            l.step(&mut self.app, Vec::new());
+        }
     }
 }
 

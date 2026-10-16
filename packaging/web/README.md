@@ -73,6 +73,24 @@ Local test: `python3 -m http.server 8765` inside the folder, then open http://lo
   downloads) are blocked.
 - Don't send `X-Frame-Options: DENY` or a `frame-ancestors` CSP that excludes the embedding page.
 
+## Inside Nextcloud Office (craft-live)
+
+[craft-live](https://github.com/sirmmo/craft-live) serves this same folder as its WordCraft
+editor: Nextcloud Office opens documents in it, edited live
+([docs/collab.md](../../docs/collab.md#in-nextcloud-office-craft-live)). Point craft-live's
+configuration at the unpacked folder (or at `dist/web` after `trunk build --release` in
+`apps/wordcraft-web`):
+
+```toml
+[apps]
+wordcraft = "/srv/craft-live/apps/wordcraft-web-<version>"
+```
+
+craft-live serves it at `/apps/wordcraft/`, framed by its own editor page (same origin), and
+opens `index.html#craft-live=1&…`: the fragment switches the build into live mode. Nothing in
+the folder changes; the relative URLs above make the sub-path work. craft-live sends the
+`.wasm` with `application/wasm` itself; put compression in the reverse proxy in front of it.
+
 ## Renderer selection and fallback flags
 
 WordCraft renders with wgpu. It uses **WebGPU** when the browser has it and falls back to

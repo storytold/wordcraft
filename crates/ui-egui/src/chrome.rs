@@ -360,7 +360,7 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                     ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
                         // The chat button and the people in a live session (protocol 2; Share is on
                         // the tab strip).
-                        if app.has_document() && (app.session.active_room().is_some() || crate::chat_ui::has_button(app)) {
+                        if app.has_document() && (app.session.active_room().is_some() || crate::chat_ui::has_button(app) || app.services.host.is_some()) {
                             crate::collab_ui::title_bar(app, ui, control_h);
                             ui.add_space(10.0);
                         }
