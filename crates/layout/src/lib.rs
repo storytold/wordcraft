@@ -3020,11 +3020,25 @@ fn para_notes(doc: &Document, p: &Paragraph, pl: &ParaLayout) -> Vec<(usize, u32
     notes
 }
 
-/// Place a body paragraph. An empty paragraph that only carries a section break before a
-/// continuous section takes no room (Word for Windows: the text after it follows right on, and
-/// columns balanced above it don't count it).
+/// A closing mark before a continuous section takes no room after content. An otherwise empty
+/// section starting a new page retains its paragraph line.
 fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, body_top: f32) {
     if !pb.web && ctx.quiet_marks.binary_search(&block).is_ok() {
+        let follows_section = block.checked_sub(1).and_then(|i| ctx.doc.body.get(i)).and_then(|b| b.as_para()).is_some_and(|p| p.section.is_some());
+        let section = pb.sect_idx;
+        let own_page = pb.page().is_some_and(|page| page.section == section);
+        // Word keeps the line when a new page's section contains only this mark.
+        if p.section.is_some()
+            && p.objects.is_empty()
+            && (ctx.opts.show_hidden || !ctx.doc.styles.resolve_char(p.props.style.as_deref(), &p.mark).hidden)
+            && !ctx.has_label(p)
+            && (block == 0 || follows_section)
+            && pb.at_top()
+            && own_page
+        {
+            place_para_in_flow(ctx, pb, p, block, body_top);
+            return;
+        }
         // Its (empty) line stays where the text ended, even at the bottom of a full column.
         let (y, prev, bottom, content_bottom, at) = (pb.y, pb.prev.clone(), pb.bottom, pb.content_bottom, (pb.pages.len(), pb.col));
         pb.bottom = f32::MAX / 4.0;
