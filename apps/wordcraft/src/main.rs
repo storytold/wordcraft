@@ -45,6 +45,21 @@ impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
         apple_events::poll(&self.4, &mut self.0, ctx);
+        // The native traffic lights' size, so the header and Backstage reserve the space AppKit
+        // actually uses. eframe's `WindowChromeMetrics` is a safe API over the window handle; when the
+        // window cannot report it (or the value is nonsense) the UI keeps its conservative fallback.
+        // Read every pass: the value is in native-scale points and depends on the display, not on our
+        // interface zoom, so caching it would go stale.
+        #[cfg(target_os = "macos")]
+        {
+            use raw_window_handle::HasWindowHandle;
+            self.0.native_lights = frame
+                .window_handle()
+                .ok()
+                .and_then(|h| eframe::WindowChromeMetrics::from_window_handle(&h.as_raw()))
+                .map(|m| m.traffic_lights_size)
+                .filter(|s| s.x.is_finite() && s.y.is_finite() && s.x > 0.0 && s.y > 0.0);
+        }
         self.0.logic(ctx);
         self.3.show(frame);
         // A window that doesn't fit on its screen (the default size on a laptop) shrinks to fit

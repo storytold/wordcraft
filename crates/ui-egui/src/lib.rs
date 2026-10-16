@@ -446,7 +446,13 @@ pub struct WordApp {
     pub(crate) dialog_pick: Option<String>,
     /// macOS: the window has no title bar; leave room for the traffic lights.
     pub integrated_titlebar: bool,
-    /// macOS: the title bar's height and where its content starts, around the traffic lights.
+    /// The native macOS traffic lights' size in native-scale points, read from the window each frame
+    /// (see `chrome::native_reservation`). `None` off macOS or when the window cannot report it, in
+    /// which case the conservative fallback is used. Never saved to preferences.
+    pub native_lights: Option<egui::Vec2>,
+    /// macOS: the title bar's height and where its content starts, around the traffic lights, measured
+    /// by the app at startup (`MacTitleBar`). The header and Backstage use it; a nonsense value keeps
+    /// the standard layout (see `chrome::sanitised_mac_title_bar`).
     pub mac_titlebar: chrome::MacTitleBar,
     control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
     shot_token: u64,
@@ -584,6 +590,7 @@ impl WordApp {
             status_msg: None,
             previews: previews::Previews::default(),
             integrated_titlebar: false,
+            native_lights: None,
             mac_titlebar: chrome::MacTitleBar::default(),
             control_rx: None,
             shot_token: 0,

@@ -11,6 +11,19 @@ use crate::{WordApp, icons};
 
 pub const TABS: [&str; 13] = wordcraft_engine::ribbon::TABS;
 
+/// Home's Font and Paragraph groups stack two 22-point control rows as a compact block centred in
+/// the content height: the rows are [`HOME_TWO_ROW_GAP`] apart with [`HOME_TWO_ROW_PADDING`] of
+/// padding above and below, so the block is 22 + 10 + 22 = 54 of the 66 points and the caption keeps
+/// its place under the band. The toolbar itself stays [`CONTENT_H`] + [`LABEL_H`] + 10 points tall.
+const HOME_ROW_H: f32 = 22.0;
+const HOME_TWO_ROW_GAP: f32 = 10.0;
+const HOME_TWO_ROW_PADDING: f32 = (CONTENT_H - 2.0 * HOME_ROW_H - HOME_TWO_ROW_GAP) / 2.0;
+const _: () = assert!(HOME_TWO_ROW_PADDING >= 0.0, "two Home rows and their gap must fit inside the ribbon content height");
+const _: () = assert!(
+    2.0 * HOME_ROW_H + HOME_TWO_ROW_GAP + 2.0 * HOME_TWO_ROW_PADDING == CONTENT_H,
+    "the centred Home rows, their gap and their padding must fill the ribbon content height exactly"
+);
+
 /// True when the caret/selection touches a picture (#147).
 pub fn has_picture_selected(s: &wordcraft_engine::Session) -> bool {
     matches!(wordcraft_engine::cmd::objects::selected(s), Some((_, wordcraft_doc::para::InlineObject::Image { .. })))
@@ -339,6 +352,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin { left: 8, right: 8, top: 4, bottom: 4 }).stroke(Stroke::new(1.0, t.border)),
         )
         .show(ui, |ui| {
+            // Tests measure the toolbar's exact height (and that it never changes) from this rect.
+            #[cfg(test)]
+            RIBBON_PANEL.with(|p| *p.borrow_mut() = Some(ui.clip_rect()));
             // Right-click on the ribbon (outside a button): Customize Ribbon. Registered first, so
             // the buttons drawn over it keep their own clicks.
             // No document open (#1129): every command is greyed out but Help's.
@@ -483,6 +499,24 @@ pub(crate) fn size_menu(ui: &mut Ui, app: &mut WordApp) {
     }
     ui.separator();
     mi(ui, app, crate::dialogs::PAPER_LABELS.more, "ui.dialog", json!({"name": "pageSetup"}));
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The Home Font and Paragraph control rows drawn in the last frame, by name: `top()` is where
+    /// the row begins in the group's content and `bottom()` the next item's top, which is the
+    /// height the group's content is measured from.
+    pub(crate) static HOME_ROWS: std::cell::RefCell<Vec<(&'static str, Rect)>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// The ribbon panel's rect in the last frame: the whole toolbar, margins included.
+    pub(crate) static RIBBON_PANEL: std::cell::RefCell<Option<Rect>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Records a Home row just drawn, from the vertical cursor it occupied (`top` was the cursor before
+/// the row). Tests use it to check the two rows of Font and Paragraph fill the content height.
+#[cfg(test)]
+fn note_row(name: &'static str, top: f32, ui: &Ui) {
+    let x = ui.cursor().min.x;
+    HOME_ROWS.with(|r| r.borrow_mut().push((name, Rect::from_min_max(pos2(x, top), pos2(x, ui.cursor().min.y)))));
 }
 
 pub(crate) fn mi(ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: Value) {
@@ -759,6 +793,9 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Font", Some("format.fontDialog"), app, |ui, app| {
         stack(ui, |ui| {
+            ui.add_space(HOME_TWO_ROW_PADDING);
+            #[cfg(test)]
+            let font_row_1 = ui.cursor().min.y;
             crate::widgets::row(ui, |ui| {
                 let font = st.get("font").and_then(Value::as_str).unwrap_or("").to_string();
                 let font = app.previews.font_shown(&font);
@@ -781,12 +818,15 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                     .unwrap_or_default();
                 let sizes: Vec<String> =
                     wordcraft_engine::cmd::format::SIZES.iter().map(|s| if s.fract() == 0.0 { format!("{s:.0}") } else { s.to_string() }).collect();
+                // The size field stays its own box, 4 points (1 point of row spacing plus 3) from
+                // the font field.
+                ui.add_space(3.0);
                 if let Some(v) = combo(ui, "size", 52.0, &size, &sizes, None)
                     && let Ok(x) = v.trim().parse::<f64>()
                 {
                     let _ = app.run("format.size", json!({"size": x}));
                 }
-                ui.add_space(3.0);
+                crate::widgets::icon_separator(ui);
                 small(ui, app, "grow", None, "Increase Font Size", "format.growFont", json!({}), false);
                 small(ui, app, "shrink", None, "Decrease Font Size", "format.shrinkFont", json!({}), false);
                 menu_button(ui, app, "case", None, "Change Case", false, "format.changeCase", |ui, app| {
@@ -796,10 +836,15 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                     mi(ui, app, "Capitalize Each Word", "format.changeCase", json!({"mode": "title"}));
                     mi(ui, app, "tOGGLE cASE", "format.changeCase", json!({"mode": "toggle"}));
                 });
+                crate::widgets::icon_separator(ui);
                 small(ui, app, "clear", None, "Clear All Formatting", "format.clear", json!({}), false);
                 small(ui, app, "phonetic", None, "Phonetic Guide", "format.phonetic", json!({}), false);
             });
-            ui.add_space(3.0);
+            #[cfg(test)]
+            note_row("Font row 1", font_row_1, ui);
+            ui.add_space(HOME_TWO_ROW_GAP);
+            #[cfg(test)]
+            let font_row_2 = ui.cursor().min.y;
             crate::widgets::row(ui, |ui| {
                 small(ui, app, "bold", None, "Bold", "format.bold", json!({}), flag("bold"));
                 small(ui, app, "italic", None, "Italic", "format.italic", json!({}), flag("italic"));
@@ -820,9 +865,10 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                 small(ui, app, "strike", None, "Strikethrough", "format.strikethrough", json!({}), flag("strike"));
                 small(ui, app, "subscript", None, "Subscript", "format.subscript", json!({}), flag("subscript"));
                 small(ui, app, "superscript", None, "Superscript", "format.superscript", json!({}), flag("superscript"));
+                crate::widgets::icon_separator(ui);
                 small(ui, app, "charborder", None, "Character Border", "format.border", json!({}), flag("border"));
                 small(ui, app, "enclose", None, "Enclose Characters", "format.enclose", json!({}), false);
-                ui.add_space(4.0);
+                crate::widgets::icon_separator(ui);
                 menu_button(ui, app, "effects", None, "Text Effects and Typography", false, "", |ui, app| {
                     let theme = app.session.doc.settings.theme_colors.clone();
                     crate::wordart_menus::style_gallery(ui, app, "format.textEffects");
@@ -866,6 +912,9 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                     crate::colors::menu(ui, app, &theme, Target::cmd("format.color").remember(Remember::FontColor));
                 });
             });
+            #[cfg(test)]
+            note_row("Font row 2", font_row_2, ui);
+            ui.add_space(HOME_TWO_ROW_PADDING);
         });
     });
     group(ui, "Paragraph", Some("para.dialog"), app, |ui, app| {
@@ -875,6 +924,9 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
         let rtl = rp.as_ref().is_some_and(|r| r.bidi);
         let lists = wordcraft_engine::cmd::para::list_buttons(&app.session.doc, rp.as_ref().and_then(|r| r.numbering));
         stack(ui, |ui| {
+            ui.add_space(HOME_TWO_ROW_PADDING);
+            #[cfg(test)]
+            let para_row_1 = ui.cursor().min.y;
             crate::widgets::row(ui, |ui| {
                 split(ui, app, "bullets", "Bullets", "para.bullets", json!({}), lists.bullets, None, |ui, app| {
                     ui.label(egui::RichText::new(tl!("Bullet Library")).small().weak());
@@ -922,25 +974,29 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                         mi(ui, app, &format!("Change to Level {}", lv + 1), "para.listLevel", json!({"level": lv}));
                     }
                 });
-                ui.add_space(4.0);
+                crate::widgets::icon_separator(ui);
                 small(ui, app, "outdent", None, "Decrease Indent", "para.outdent", json!({}), false);
                 small(ui, app, "indent", None, "Increase Indent", "para.indent", json!({}), false);
-                ui.add_space(4.0);
+                crate::widgets::icon_separator(ui);
                 small(ui, app, "sort", None, "Sort", "para.sort", json!({}), false);
                 let marks = app.session.view.marks;
                 small(ui, app, "pilcrow", None, "Show/Hide ¶", "view.marks", json!({}), marks);
             });
-            ui.add_space(3.0);
+            #[cfg(test)]
+            note_row("Paragraph row 1", para_row_1, ui);
+            ui.add_space(HOME_TWO_ROW_GAP);
+            #[cfg(test)]
+            let para_row_2 = ui.cursor().min.y;
             crate::widgets::row(ui, |ui| {
                 use wordcraft_doc::Align as A;
                 small(ui, app, "alignLeft", None, "Align Left", "para.alignLeft", json!({}), align == A::Left);
                 small(ui, app, "alignCenter", None, "Center", "para.alignCenter", json!({}), align == A::Center);
                 small(ui, app, "alignRight", None, "Align Right", "para.alignRight", json!({}), align == A::Right);
                 small(ui, app, "justify", None, "Justify", "para.justify", json!({}), align == A::Justify);
-                ui.add_space(4.0);
+                crate::widgets::icon_separator(ui);
                 small(ui, app, "textLtr", None, "Left-to-Right Text Direction", "para.ltr", json!({}), !rtl);
                 small(ui, app, "textRtl", None, "Right-to-Left Text Direction", "para.rtl", json!({}), rtl);
-                ui.add_space(4.0);
+                crate::widgets::icon_separator(ui);
                 menu_button(ui, app, "lineSpacing", None, "Line and Paragraph Spacing", false, "para.lineSpacing", |ui, app| {
                     for v in [1.0, 1.15, 1.5, 2.0, 2.5, 3.0] {
                         mi(ui, app, &format!("{v}"), "para.lineSpacing", json!({"value": v}));
@@ -950,6 +1006,7 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                     mi(ui, app, "Remove Space After Paragraph", "para.removeSpaceAfter", json!({}));
                     mi(ui, app, "Line Spacing Options…", "para.dialog", json!({}));
                 });
+                crate::widgets::icon_separator(ui);
                 split(ui, app, "shading", "Shading", "para.shading", json!({"color": app.canvas.last_shading.clone()}), false, None, |ui, app| {
                     mi(ui, app, "No Color", "para.shading", json!({"color": null}));
                     let theme = app.session.doc.settings.theme_colors.clone();
@@ -973,6 +1030,9 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                     mi(ui, app, "Borders and Shading…", "para.borders", json!({}));
                 });
             });
+            #[cfg(test)]
+            note_row("Paragraph row 2", para_row_2, ui);
+            ui.add_space(HOME_TWO_ROW_PADDING);
         });
     });
     group(ui, "Styles", Some("styles.pane"), app, |ui, app| {
@@ -2977,6 +3037,368 @@ mod tests {
         assert!(h.state().ui.backstage, "File › Options opened");
         assert_eq!(h.state().ui.options_pane, "language");
         assert_eq!(language_name(Some("de-DE")), "German (Germany)");
+    }
+
+    /// One settled Home frame at `size`: the four control-row rects, every group's label row, the
+    /// ribbon panel rect and the canvas top. The recorders are cleared after the frame settles, so
+    /// only the measured frame's own draws are reported.
+    fn home_frame(theme: &str, lang: &str, size: egui::Vec2) -> (Vec<(&'static str, Rect)>, Vec<crate::widgets::GroupLabel>, Rect, f32) {
+        let mut app = WordApp::new(Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
+        app.run("ui.theme", json!({"value": theme})).unwrap();
+        app.run("ui.language", json!({"value": lang})).unwrap();
+        app.run("ui.tab", json!({"tab": "Home"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(size).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(3);
+        crate::widgets::GROUP_LABELS.with(|g| g.borrow_mut().clear());
+        crate::widgets::SEPARATORS.with(|s| s.borrow_mut().clear());
+        HOME_ROWS.with(|r| r.borrow_mut().clear());
+        RIBBON_PANEL.with(|p| *p.borrow_mut() = None);
+        h.run_steps(1);
+        let rows = HOME_ROWS.with(|r| r.take());
+        let labels = crate::widgets::GROUP_LABELS.with(|g| g.take());
+        let panel = RIBBON_PANEL.with(|p| *p.borrow()).expect("the ribbon panel is drawn on Home");
+        let canvas_top = h.state().canvas.canvas_rect.map_or(f32::NAN, |c| c.top());
+        (rows, labels, panel, canvas_top)
+    }
+
+    /// Home's Font and Paragraph groups hold a compact, centred block inside the 66-point content
+    /// height: two 22-point rows, a 10-point gap between them and 6 points of padding above and
+    /// below, so the rows' centres are 32 points apart and the caption keeps its place under the
+    /// band. The approved numbers are spelled out here rather than read from the layout constants,
+    /// so the test measures the drawn geometry instead of restating the source.
+    /// Dark and light, English and Russian, a wide window and two narrow ones.
+    #[test]
+    fn home_two_row_groups_are_centered_in_their_content_band() {
+        const ROW_H: f32 = 22.0;
+        const GAP: f32 = 10.0;
+        const PADDING: f32 = 6.0;
+        const CAPTION_GAP: f32 = 8.5;
+        for (theme, lang, size) in [
+            ("dark", "en", vec2(1440.0, 900.0)),
+            ("light", "en", vec2(1440.0, 900.0)),
+            ("dark", "ru", vec2(1440.0, 900.0)),
+            ("dark", "en", vec2(900.0, 900.0)),
+            ("dark", "en", vec2(700.0, 900.0)),
+        ] {
+            let (rows, labels, _, _) = home_frame(theme, lang, size);
+            let names: Vec<&str> = rows.iter().map(|(n, _)| *n).collect();
+            assert_eq!(
+                names,
+                ["Font row 1", "Font row 2", "Paragraph row 1", "Paragraph row 2"],
+                "{theme}/{lang}/{size:?}: Home draws two rows in Font and Paragraph"
+            );
+            // Every Home group shares the content band; the labels are translated, so the band is
+            // read from all of them rather than from an English title.
+            let content_top = labels.iter().map(|l| l.footer.top()).fold(f32::INFINITY, f32::min);
+            let content_bottom = labels.iter().map(|l| l.footer.bottom()).fold(f32::NEG_INFINITY, f32::max) - LABEL_H;
+            assert!(
+                (content_bottom - content_top - CONTENT_H).abs() < 0.5,
+                "{theme}/{lang}/{size:?}: the content band is {:.1} points, not {CONTENT_H}",
+                content_bottom - content_top
+            );
+            for group in ["Font", "Paragraph"] {
+                let rect = |n: &str| rows.iter().find(|(name, _)| *name == n).unwrap_or_else(|| panic!("{n} was not drawn")).1;
+                let (row1, row2) = (rect(&format!("{group} row 1")), rect(&format!("{group} row 2")));
+                let drawn = format!(
+                    "{group} drew row 1 [{:.1}..{:.1}] and row 2 [{:.1}..{:.1}] in the content band {content_top:.1}..{content_bottom:.1}",
+                    row1.top(),
+                    row1.bottom(),
+                    row2.top(),
+                    row2.bottom()
+                );
+                assert!(
+                    (row1.height() - ROW_H).abs() < 0.5,
+                    "{theme}/{lang}/{size:?}: {drawn}: row 1 is {:.1} points tall, not {ROW_H}",
+                    row1.height()
+                );
+                assert!(
+                    (row2.height() - ROW_H).abs() < 0.5,
+                    "{theme}/{lang}/{size:?}: {drawn}: row 2 is {:.1} points tall, not {ROW_H}",
+                    row2.height()
+                );
+                let padding_top = row1.top() - content_top;
+                let gap = row2.top() - row1.bottom();
+                let padding_bottom = content_bottom - row2.bottom();
+                let centers = row2.center().y - row1.center().y;
+                assert!(
+                    (padding_top - PADDING).abs() < 0.5,
+                    "{theme}/{lang}/{size:?}: {drawn}: {padding_top:.1} points of padding above row 1, not the approved {PADDING}"
+                );
+                assert!((gap - GAP).abs() < 0.5, "{theme}/{lang}/{size:?}: {drawn}: the rows are {gap:.1} points apart, not the approved {GAP}");
+                assert!(
+                    (padding_bottom - PADDING).abs() < 0.5,
+                    "{theme}/{lang}/{size:?}: {drawn}: {padding_bottom:.1} points of padding below row 2, not the approved {PADDING}"
+                );
+                assert!(
+                    (centers - (ROW_H + GAP)).abs() < 0.5,
+                    "{theme}/{lang}/{size:?}: {drawn}: the rows' centres are {centers:.1} points apart, not the approved {}",
+                    ROW_H + GAP
+                );
+                // The caption and launcher live in the label row under the content band: no overlap,
+                // and the label keeps the 8.5 points the approved block leaves under row 2.
+                let label = labels
+                    .iter()
+                    .find(|l| l.caption.top() > content_bottom)
+                    .unwrap_or_else(|| panic!("{theme}/{lang}: no group drew a caption under the content band"));
+                assert!(
+                    label.caption.top() > row2.bottom(),
+                    "{theme}/{lang}/{size:?}: the caption at {:.1} overlaps row 2 ending at {:.1}",
+                    label.caption.top(),
+                    row2.bottom()
+                );
+                let caption_gap = label.caption.top() - row2.bottom();
+                assert!(
+                    (caption_gap - CAPTION_GAP).abs() < 2.0,
+                    "{theme}/{lang}/{size:?}: {drawn}: {caption_gap:.1} points between row 2 and the caption, not the approved ~{CAPTION_GAP}"
+                );
+            }
+        }
+    }
+
+    /// Home groups its icons into clusters with nine thin separators: four across the two top rows
+    /// (after the combos and after Change Case in Font; after Multilevel List and after Increase
+    /// Indent in Paragraph) and five in the lower rows (after Superscript and after Enclose
+    /// Characters; after Justify, after Text Direction and after Line Spacing). They are 7x22 gaps
+    /// centred in their row, and they leave the compact row geometry alone.
+    #[test]
+    fn home_has_nine_cluster_separators() {
+        let (_, _, panel, canvas_top) = home_frame("dark", "en", vec2(1440.0, 900.0));
+        let seps = crate::widgets::SEPARATORS.with(|s| s.borrow().clone());
+        assert_eq!(seps.len(), 9, "Home draws nine cluster separators: {seps:?}");
+        for r in &seps {
+            assert!((r.width() - 7.0).abs() < 0.01 && (r.height() - 22.0).abs() < 0.01, "a separator is {r:?}, not 7x22");
+            let cy = r.center().y;
+            assert!((87.0..=109.0).contains(&cy) || (119.0..=141.0).contains(&cy), "a separator sits outside the two rows: {r:?}");
+        }
+        let top = seps.iter().filter(|r| r.center().y < 115.0).count();
+        assert_eq!((top, seps.len() - top), (4, 5), "four separators in the top row and five in the lower: {seps:?}");
+        // The toolbar keeps its exact height and the canvas its origin.
+        assert!((panel.height() - (CONTENT_H + LABEL_H + 10.0)).abs() < 0.5, "the panel is {:.1} points tall", panel.height());
+        assert!((canvas_top - 192.0).abs() < 0.5, "the canvas starts at {canvas_top:.1}");
+
+        // They are Home's own boundaries: another tab draws none.
+        let mut app = WordApp::new(Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
+        app.run("ui.tab", json!({"tab": "Insert"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(2);
+        crate::widgets::SEPARATORS.with(|s| s.borrow_mut().clear());
+        h.run_steps(1);
+        assert!(crate::widgets::SEPARATORS.with(|s| s.borrow().is_empty()), "the Insert tab drew inline separators");
+    }
+
+    /// The font and size fields stay two separate boxes of their own width, four points apart (one
+    /// point of row spacing plus three): they are distinct controls, not one combined field.
+    #[test]
+    fn home_font_and_size_fields_are_separate_boxes_a_four_point_gap_apart() {
+        let (_, _, _, _) = home_frame("dark", "en", vec2(1440.0, 900.0));
+        let rects = crate::widgets::COMBO_RECTS.with(|c| c.borrow().clone());
+        let outer = |id: &str| rects.iter().find(|(n, ..)| n == id).unwrap_or_else(|| panic!("the {id} field was drawn")).1;
+        let (font, size) = (outer("font"), outer("size"));
+        assert!((font.width() - 150.0).abs() < 0.01, "the font field is {} wide, not 150", font.width());
+        assert!((size.width() - 52.0).abs() < 0.01, "the size field is {} wide, not 52", size.width());
+        assert!((font.height() - crate::widgets::COMBO_H).abs() < 0.01 && (size.height() - crate::widgets::COMBO_H).abs() < 0.01);
+        let gap = size.left() - font.right();
+        assert!((gap - 4.0).abs() < 0.01, "the two fields are {gap:.1} points apart, not 4");
+        assert!(font.top() >= 87.0 - 0.01 && font.bottom() <= 109.0 + 0.01, "the font field left row 1: {font:?}");
+        assert!(size.top() >= 87.0 - 0.01 && size.bottom() <= 109.0 + 0.01, "the size field left row 1: {size:?}");
+    }
+
+    /// A narrow window scrolls the ribbon sideways; it must not make the toolbar taller, and the
+    /// relocated lower rows still start inside the viewport.
+    #[test]
+    fn home_ribbon_scrolls_sideways_without_growing() {
+        let (rows, labels, panel, _) = home_frame("dark", "en", vec2(700.0, 900.0));
+        assert!((panel.height() - (CONTENT_H + LABEL_H + 10.0)).abs() < 0.5, "the toolbar grew to {:.1} points in a narrow window", panel.height());
+        assert!(
+            labels.iter().any(|l| l.footer.right() > panel.right() + 0.5),
+            "nothing overflows a 700-point window, so the sideways-scroll case is not exercised: {labels:#?}"
+        );
+        let font = labels.iter().find(|l| l.title == "Font").expect("the Font group is drawn");
+        assert!(font.footer.right() <= panel.right() + 0.5, "the Font group left the viewport: {:?}", font.footer);
+        for (name, r) in &rows {
+            assert!(r.left() >= panel.left() - 0.5 && r.left() <= panel.right() + 0.5, "{name} starts outside the viewport: {r:?}");
+        }
+    }
+
+    /// Clicks at a point the way kittest clicks a node: the pointer moves, presses and releases in
+    /// one frame each, then the frames that react to it.
+    fn click_at(h: &mut egui_kittest::Harness<'_, WordApp>, pos: egui::Pos2) {
+        for e in [egui::Event::PointerMoved(pos)].into_iter().chain([true, false].map(|pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        })) {
+            h.input_mut().events.push(e);
+            h.run_steps(1);
+        }
+        h.run_steps(2);
+    }
+
+    /// The rows that moved are still live controls: clicking Bold in the lower Font row and Center
+    /// in the lower Paragraph row changes the document, through real pointer events on the widgets.
+    #[test]
+    fn home_lower_row_buttons_still_run_their_commands() {
+        use egui_kittest::kittest::Queryable;
+        // The formatting the ribbon's own Bold button reflects (`format.state`), read from the model.
+        let bold =
+            |h: &egui_kittest::Harness<'_, WordApp>| wordcraft_engine::cmd::format::state(&h.state().session)["bold"].as_bool().unwrap_or(false);
+        let mut app = WordApp::new(Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
+        app.run("ui.theme", json!({"value": "dark"})).unwrap();
+        app.run("ui.tab", json!({"tab": "Home"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(3);
+        h.state_mut().run("select.all", json!({})).unwrap();
+        h.run_steps(2);
+        // The label "Bold" is not unique (the Styles gallery shows one too), so take the button that
+        // sits in the lower Font row — the row this fix moved.
+        let row2 = |group: &str| {
+            HOME_ROWS
+                .with(|r| r.borrow().clone())
+                .into_iter()
+                .find(|(n, _)| *n == format!("{group} row 2"))
+                .unwrap_or_else(|| panic!("{group} row 2 was drawn"))
+                .1
+        };
+        let font_row2 = row2("Font");
+        assert!(!bold(&h), "the sample document does not start bold");
+        h.query_all_by_label("Bold")
+            .find(|n| (n.rect().center().y - font_row2.center().y).abs() < 4.0)
+            .expect("the Bold button in the lower Font row")
+            .click();
+        h.run_steps(3);
+        assert!(bold(&h), "clicking the relocated Bold button bolded the selection");
+        let para_row2 = row2("Paragraph");
+        h.query_all_by_label("Center")
+            .find(|n| (n.rect().center().y - para_row2.center().y).abs() < 4.0)
+            .expect("the Center button in the lower Paragraph row")
+            .click();
+        h.run_steps(3);
+        let align =
+            h.state().session.doc.para_at(&h.state().session.sel.focus).map(|p| h.state().session.doc.styles.resolve_para(&p.props)).map(|r| r.align);
+        assert_eq!(align, Some(wordcraft_doc::Align::Center), "clicking the relocated Center button centred the paragraph");
+    }
+
+    /// The relocated lower row's drop-down still opens its menu, and the Font and Paragraph
+    /// launchers in the label row still open their dialogs — all through pointer events.
+    #[test]
+    fn home_lower_row_dropdown_and_launchers_still_open() {
+        use egui_kittest::kittest::Queryable;
+        // `format.state` again: the underline the ribbon's own Underline button reflects.
+        let underline =
+            |h: &egui_kittest::Harness<'_, WordApp>| wordcraft_engine::cmd::format::state(&h.state().session)["underline"].as_bool().unwrap_or(false);
+        let mut app = WordApp::new(Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
+        app.run("ui.theme", json!({"value": "dark"})).unwrap();
+        app.run("ui.tab", json!({"tab": "Home"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(3);
+        let launcher_of = |title: &str| {
+            crate::widgets::GROUP_LABELS
+                .with(|g| g.borrow().clone())
+                .into_iter()
+                .find(|l| l.title == title)
+                .and_then(|l| l.launcher)
+                .unwrap_or_else(|| panic!("the {title} group shows a launcher"))
+                .center()
+        };
+        let font_launcher = launcher_of("Font");
+        click_at(&mut h, font_launcher);
+        assert_eq!(h.state().dialog.as_ref().map(crate::dialogs::Dialog::name), Some("font"), "the Font launcher opens the Font dialog");
+        h.state_mut().run("ui.closeDialog", json!({})).unwrap();
+        h.run_steps(2);
+        let paragraph_launcher = launcher_of("Paragraph");
+        click_at(&mut h, paragraph_launcher);
+        assert_eq!(
+            h.state().dialog.as_ref().map(crate::dialogs::Dialog::name),
+            Some("paragraph"),
+            "the Paragraph launcher opens the Paragraph dialog"
+        );
+        h.state_mut().run("ui.closeDialog", json!({})).unwrap();
+        h.run_steps(2);
+        // The Underline split's arrow in the lower Font row: a real drop-down in the moved row.
+        // Its menu items carry their shortcut in the accessible name, so match on a substring.
+        h.state_mut().run("select.all", json!({})).unwrap();
+        h.run_steps(2);
+        assert!(!underline(&h), "the sample document does not start underlined");
+        let arrow = crate::widgets::SPLIT_ARROWS
+            .with(|a| a.borrow().clone())
+            .into_iter()
+            .find(|(id, _)| id == "format.underline")
+            .expect("the Underline split button is drawn")
+            .1;
+        click_at(&mut h, arrow.center());
+        assert!(h.query_all_by_label_contains("Words only").count() >= 1, "the Underline drop-down opened its menu");
+        h.query_all_by_label_contains("Words only").next().expect("the Words only item").click();
+        h.run_steps(3);
+        assert!(underline(&h), "the drop-down's item underlined the selection");
+    }
+
+    /// The toolbar keeps its exact height and its label row wherever the two rows sit: the panel is
+    /// 94 points, the canvas starts where it did, every group's caption stays at its place in the
+    /// label row and the launchers stay centred on it. English and Russian, dark and light.
+    #[test]
+    fn home_ribbon_panel_and_captions_keep_their_place() {
+        // The canvas top this harness produces for the sample document; the `ui_shot` example adds
+        // its own integrated title bar and reports 182 in `ui.inspect` (recorded under
+        // `.local/home-ribbon-spacing/before-shots.log`).
+        const CANVAS_TOP: f32 = 192.0;
+        for (theme, lang) in [("dark", "en"), ("light", "en"), ("dark", "ru")] {
+            let (_, labels, panel, canvas_top) = home_frame(theme, lang, vec2(1440.0, 900.0));
+            assert!(
+                (panel.height() - (CONTENT_H + LABEL_H + 10.0)).abs() < 0.5,
+                "{theme}/{lang}: the ribbon panel is {:.1} points tall",
+                panel.height()
+            );
+            assert!((canvas_top - CANVAS_TOP).abs() < 0.5, "{theme}/{lang}: the canvas starts at {canvas_top:.1}, not {CANVAS_TOP}");
+            let captions: Vec<&crate::widgets::GroupLabel> = labels.iter().filter(|l| l.launcher.is_some()).collect();
+            assert!(captions.len() >= 3, "{theme}/{lang}: Home shows its launchers: {labels:#?}");
+            for l in &labels {
+                assert!(
+                    (l.caption.center().y - (l.footer.bottom() - LABEL_H / 2.0)).abs() < 0.5,
+                    "{theme}/{lang}: {} caption sits at {:.1}, not in the label row under {:.1}",
+                    l.title,
+                    l.caption.center().y,
+                    l.footer.bottom()
+                );
+                assert!(l.caption.top() >= l.footer.top(), "{theme}/{lang}: {} caption starts above the content band", l.title);
+                if let Some(launcher) = l.launcher {
+                    assert!((launcher.center().y - l.caption.center().y).abs() < 0.5, "{theme}/{lang}: {} launcher left the label row", l.title);
+                    assert!(
+                        (launcher.right() - (l.footer.right() - 0.5)).abs() < 1.0,
+                        "{theme}/{lang}: {} launcher left the group's right edge",
+                        l.title
+                    );
+                }
+            }
+        }
     }
 
     #[test]

@@ -34,6 +34,11 @@ winresource = "0.1"
 # by PdfCraft and PhotoCraft) registers the handler (Objective-C interop needs unsafe, which our
 # workspace forbids) behind a safe API. Pinned exactly: review the diff before bumping.
 fmv-macos-events = "=0.1.0"
+# The window handle eframe's safe chrome-metrics API needs (`WindowChromeMetrics::from_window_handle`),
+# so the editor header and Backstage reserve exactly the space AppKit's traffic lights take instead of
+# guessing it. Already in the build through eframe and winit at this version; this adds only the
+# direct dependency (no new package, version or source).
+raw-window-handle = "=0.6.2"
 # The system's Reduce motion setting (System Settings › Accessibility › Display), read through
 # NSWorkspace: a safe call in these bindings. Already in the build through eframe, rfd and arboard,
 # at this version; this adds the `NSAccessibility` bindings and, to fit the title bar around the

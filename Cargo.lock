@@ -5146,6 +5146,7 @@ dependencies = [
  "objc2-app-kit 0.3.2",
  "open",
  "pollster 0.4.0",
+ "raw-window-handle",
  "rfd",
  "serde_json",
  "windows",

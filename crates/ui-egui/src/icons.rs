@@ -4,12 +4,134 @@
 
 use egui::{Color32, FontId, Painter, Pos2, Rect, Shape, Stroke, pos2, vec2};
 
+/// The Home ribbon family is drawn with one stroke weight and pixel-snapped axis-aligned edges:
+/// its line work then matches the weight of the letter glyphs beside it and stays crisp at 1x, 1.5x
+/// and 2x. Icons outside the family keep the set's original weight and unsnapped geometry.
+const HOME_STROKE: f32 = 1.4;
+
+/// The names refined as one family (2026-10-13): the Home ribbon's own icons. Shared copies of these
+/// names elsewhere inherit the same art; every other name is untouched.
+/// The names that get the family's uniform stroke and the optical calibration. Paste is deliberately
+/// absent: it keeps its earlier original drawing (see the legacy case in `paint`).
+const HOME_FAMILY: &[&str] = &[
+    "cut",
+    "copy",
+    "painter",
+    "bold",
+    "italic",
+    "underline",
+    "strike",
+    "charborder",
+    "enclose",
+    "subscript",
+    "superscript",
+    "grow",
+    "shrink",
+    "case",
+    "clear",
+    "phonetic",
+    "effects",
+    "highlight",
+    "fontcolor",
+    "bullets",
+    "numbering",
+    "multilevel",
+    "outdent",
+    "indent",
+    "sort",
+    "pilcrow",
+    "alignLeft",
+    "alignCenter",
+    "alignRight",
+    "justify",
+    "textLtr",
+    "textRtl",
+    "lineSpacing",
+    "shading",
+    "borders",
+    "find",
+    "replace",
+    "select",
+    "dictate",
+    "editor",
+    "spelling",
+];
+
+/// Optical calibration for the Home family: a uniform scale and a viewport offset that bring each
+/// icon's **visible ink** to the same apparent size without stretching any of them. Measured from our
+/// own art at 17 pt / 2x (`optical-baseline.tsv`, `.local/ribbon-size-padding/`); the target is a
+/// 13.5-point longest ink extent in the 17-point tile, so the art keeps its own aspect ratio and a
+/// narrow `I`, a two-glyph `Aa` or a small script digit stays proportionally smaller than a silhouette.
+/// Paste is deliberately absent: it keeps its earlier original drawing, stroke and unsnapped
+/// coordinates (see the legacy case in `paint`).
+const HOME_CALIBRATION: &[(&str, f32, f32, f32)] = &[
+    ("alignCenter", 1.0465, -0.000, -0.523),
+    ("alignLeft", 1.0465, -0.000, -0.523),
+    ("alignRight", 1.0465, -0.000, -0.523),
+    ("bold", 1.5000, -0.071, -0.375),
+    ("borders", 1.0417, -0.000, -0.021),
+    ("bullets", 1.0597, -0.085, -0.000),
+    ("case", 1.1250, 0.422, -0.281),
+    ("charborder", 1.0385, -0.000, -0.000),
+    ("clear", 1.0680, -0.432, -1.709),
+    ("copy", 1.0385, 0.012, -0.519),
+    ("cut", 1.0131, -0.000, -0.215),
+    ("dictate", 0.9441, -0.236, -0.142),
+    ("editor", 0.9566, 1.393, -0.108),
+    ("effects", 1.4324, -0.103, -0.662),
+    ("enclose", 1.0465, -0.000, -0.000),
+    ("find", 1.0465, -0.000, -0.000),
+    ("fontcolor", 0.9926, -0.000, -1.266),
+    ("grow", 1.0358, 0.147, 0.440),
+    ("highlight", 1.0526, -0.000, -1.303),
+    ("indent", 1.0465, -0.000, -0.000),
+    ("italic", 1.3043, -0.000, -0.000),
+    ("lineSpacing", 1.0131, 0.215, -0.000),
+    ("multilevel", 1.0417, 0.031, -0.000),
+    ("numbering", 1.0247, 0.140, -0.000),
+    ("outdent", 1.0465, -0.000, -0.000),
+    ("painter", 1.0150, -0.761, -0.152),
+    ("phonetic", 1.0019, 0.062, -0.238),
+    ("pilcrow", 1.5000, 0.141, -1.013),
+    ("replace", 0.9468, 0.241, -0.166),
+    ("select", 1.0588, 0.450, -0.450),
+    ("shading", 1.0181, -0.260, -1.044),
+    ("shrink", 1.1117, -0.337, 0.083),
+    ("sort", 1.0385, -0.236, 0.260),
+    ("spelling", 0.9566, 1.393, -0.108),
+    ("strike", 1.0465, -0.000, -0.262),
+    ("subscript", 1.2453, -0.349, -2.849),
+    ("superscript", 1.1321, -0.317, 0.976),
+    ("textLtr", 1.0822, 0.229, -1.244),
+    ("textRtl", 1.0822, -0.231, -1.244),
+    ("underline", 1.1714, -0.000, -0.279),
+];
+
+/// The tile the calibration was measured in; the scale is a ratio, the offsets are in these points.
+const CALIBRATION_TILE: f32 = 17.0;
+
+/// The calibrated art viewport for `name`: the supplied paint box scaled and recentred around its own
+/// centre. Names outside the table draw in the supplied box exactly as before.
+fn art_viewport(r: Rect, name: &str) -> Rect {
+    let Some((_, scale, dx, dy)) = HOME_CALIBRATION.iter().find(|(n, ..)| *n == name) else {
+        return r;
+    };
+    let k = r.width() / CALIBRATION_TILE;
+    Rect::from_center_size(r.center() + vec2(dx * k, dy * k), r.size() * *scale)
+}
+
 struct Pen<'a> {
     p: &'a Painter,
+    /// The art viewport: grid coordinates 0..20 map into this rect (calibrated for the Home family).
     r: Rect,
+    /// The scale the stroke is measured in — the *supplied* paint box, never the calibrated viewport,
+    /// so normalising an icon's size cannot thicken or thin its lines.
+    w_scale: f32,
     c: Color32,
     a: Color32,
     w: f32,
+    /// Snap axis-aligned edges to the device pixel grid and quantise the stroke (Home family).
+    snap: bool,
 }
 
 impl Pen<'_> {
@@ -22,14 +144,22 @@ impl Pen<'_> {
         pos2(o.x + x * s, o.y + y * s)
     }
     fn stroke(&self, c: Color32) -> Stroke {
-        Stroke::new(self.w * self.s(), c)
+        Stroke::new(if self.snap { self.snapped_width() } else { self.w * self.w_scale }, c)
+    }
+    /// The stroke width in points, quantised to at least one device pixel so a thin line never
+    /// disappears into anti-aliasing.
+    fn snapped_width(&self) -> f32 {
+        let ppp = self.p.ctx().pixels_per_point().max(1.0);
+        ((self.w * self.w_scale * ppp).round().max(1.0)) / ppp
     }
     fn line(&self, pts: &[(f32, f32)]) {
         self.line_c(pts, self.c);
     }
     fn line_c(&self, pts: &[(f32, f32)], c: Color32) {
         let v: Vec<Pos2> = pts.iter().map(|&(x, y)| self.pt(x, y)).collect();
-        self.p.add(Shape::line(v, self.stroke(c)));
+        let stroke = self.stroke(c);
+        let v = if self.snap { snapped_polyline(&v, stroke.width, self.p.ctx().pixels_per_point()) } else { v };
+        self.p.add(Shape::line(v, stroke));
     }
     fn closed(&self, pts: &[(f32, f32)], c: Color32) {
         let v: Vec<Pos2> = pts.iter().map(|&(x, y)| self.pt(x, y)).collect();
@@ -40,7 +170,10 @@ impl Pen<'_> {
         self.p.add(Shape::convex_polygon(v, c, Stroke::NONE));
     }
     fn rect(&self, x0: f32, y0: f32, x1: f32, y1: f32, c: Color32) {
-        self.p.rect_stroke(Rect::from_min_max(self.pt(x0, y0), self.pt(x1, y1)), 1.0, self.stroke(c), egui::StrokeKind::Middle);
+        let r = Rect::from_min_max(self.pt(x0, y0), self.pt(x1, y1));
+        let stroke = self.stroke(c);
+        let r = if self.snap { snapped_rect(r, stroke.width, self.p.ctx().pixels_per_point()) } else { r };
+        self.p.rect_stroke(r, 1.0, stroke, egui::StrokeKind::Middle);
     }
     fn frect(&self, x0: f32, y0: f32, x1: f32, y1: f32, c: Color32) {
         self.p.rect_filled(Rect::from_min_max(self.pt(x0, y0), self.pt(x1, y1)), 0.5, c);
@@ -71,9 +204,55 @@ impl Pen<'_> {
     }
 }
 
+/// Moves a coordinate onto the device pixel grid, or onto a pixel centre when the stroke's device
+/// width is odd (a half-pixel offset is what makes a 1-pixel line cover whole pixels).
+fn snap_to_pixel(v: f32, width: f32, ppp: f32) -> f32 {
+    let ppp = ppp.max(1.0);
+    if ((width * ppp).round() as i32) % 2 != 0 { ((v * ppp).floor() + 0.5) / ppp } else { (v * ppp).round() / ppp }
+}
+
+/// Snaps the horizontal and vertical segments of a polyline to the pixel grid; diagonal segments
+/// keep their own anti-aliasing.
+fn snapped_polyline(points: &[Pos2], width: f32, ppp: f32) -> Vec<Pos2> {
+    let mut out = points.to_vec();
+    for i in 0..out.len().saturating_sub(1) {
+        let (a, b) = (out[i], out[i + 1]);
+        if (a.y - b.y).abs() < 0.01 {
+            let y = snap_to_pixel(a.y, width, ppp);
+            out[i].y = y;
+            out[i + 1].y = y;
+        } else if (a.x - b.x).abs() < 0.01 {
+            let x = snap_to_pixel(a.x, width, ppp);
+            out[i].x = x;
+            out[i + 1].x = x;
+        }
+    }
+    out
+}
+
+/// Snaps an axis-aligned rectangle's edges the same way.
+fn snapped_rect(r: Rect, width: f32, ppp: f32) -> Rect {
+    Rect::from_min_max(
+        pos2(snap_to_pixel(r.min.x, width, ppp), snap_to_pixel(r.min.y, width, ppp)),
+        pos2(snap_to_pixel(r.max.x, width, ppp), snap_to_pixel(r.max.y, width, ppp)),
+    )
+}
+
 /// Paint icon `name` into `r`. `c` is the line colour; the accent comes from the theme.
 pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
-    let pen = Pen { p, r, c, a: accent, w: 1.25 };
+    // Paste keeps its earlier original drawing: the set's own stroke weight, no snapping, no
+    // calibration — its large-button role stays distinct from the small ribbon controls.
+    let legacy = name == "paste";
+    let home = HOME_FAMILY.contains(&name);
+    let pen = Pen {
+        p,
+        r: art_viewport(r, name),
+        w_scale: r.width().min(r.height()) / 20.0,
+        c,
+        a: accent,
+        w: if home { HOME_STROKE } else { 1.25 },
+        snap: home && !legacy,
+    };
     let a = accent;
     let red = Color32::from_rgb(0xD1, 0x3B, 0x3B);
     let yellow = Color32::from_rgb(0xF2, 0xC8, 0x11);
@@ -81,8 +260,15 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
     let orange = Color32::from_rgb(0xE0, 0x7B, 0x1F);
     match name {
         // Clipboard
+        // The earlier original drawing (our own HEAD art, restored on request): a board with its clip
+        // and a tinted sheet overlapping it to the lower right. It keeps the set's own 1.25-unit
+        // stroke and unsnapped coordinates, and is exempt from the optical calibration.
         "paste" => {
-            pen.rect(4.0, 3.5, 14.0, 17.0, c);
+            // Only the board's *visible* edges are drawn: the rear right and bottom edges stop where
+            // the sheet begins, so no white outline shows through the translucent page (the sheet is
+            // tinted, not opaque, so a full rectangle would be visible inside it).
+            pen.line(&[(4.0, 3.5), (14.0, 3.5), (14.0, 7.25)]);
+            pen.line(&[(4.0, 3.5), (4.0, 17.0), (8.25, 17.0)]);
             pen.frect(7.0, 2.0, 11.0, 5.0, a);
             pen.frect(9.0, 8.0, 17.5, 18.5, pen.a.linear_multiply(0.18));
             pen.rect(9.0, 8.0, 17.5, 18.5, a);
@@ -95,55 +281,65 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.line(&[(12.5, 13.0), (6.0, 3.0)]);
         }
         "copy" => {
-            pen.rect(3.5, 3.0, 12.5, 14.0, c);
-            pen.frect(7.5, 6.5, 16.5, 17.5, Color32::TRANSPARENT);
-            pen.rect(7.5, 6.5, 16.5, 17.5, a);
+            // The back sheet stops where the front one starts, so no edge crosses another.
+            pen.line(&[(3.5, 14.5), (3.5, 3.5), (12.5, 3.5)]);
+            pen.line(&[(3.5, 14.5), (8.0, 14.5)]);
+            pen.rect(8.0, 6.5, 16.5, 17.5, a);
         }
         "painter" => {
             pen.frect(4.0, 3.0, 16.0, 8.0, yellow);
             pen.rect(4.0, 3.0, 16.0, 8.0, c);
-            pen.line(&[(16.0, 5.5), (17.5, 5.5), (17.5, 10.0), (10.0, 10.0), (10.0, 12.0)]);
-            pen.frect(8.8, 12.0, 11.2, 18.0, c);
+            pen.line(&[(16.0, 5.75), (17.5, 5.75), (17.5, 10.0), (10.0, 10.0), (10.0, 12.5)]);
+            pen.frect(8.6, 12.5, 11.4, 18.0, c);
         }
         // Font
-        "bold" => pen.text(10.0, 10.5, 15.0, "B", c, true),
-        "italic" => pen.text(10.0, 10.5, 15.0, "I", c, false),
+        "bold" => pen.text(10.0, 10.0, 15.0, "B", c, true),
+        // A slanted stem with its own short bars: not an upright I.
+        "italic" => {
+            pen.line(&[(9.5, 4.5), (14.0, 4.5)]);
+            pen.line(&[(13.0, 4.5), (8.5, 15.5)]);
+            pen.line(&[(6.0, 15.5), (10.5, 15.5)]);
+        }
         "underline" => {
-            pen.text(10.0, 9.0, 14.0, "U", c, false);
-            pen.line(&[(5.0, 17.0), (15.0, 17.0)]);
+            pen.text(10.0, 8.5, 14.0, "U", c, false);
+            pen.line(&[(5.5, 16.5), (14.5, 16.5)]);
         }
         "strike" => {
             pen.text(10.0, 10.0, 12.0, "ab", c, false);
-            pen.line_c(&[(3.0, 10.5), (17.0, 10.5)], c);
+            pen.line_c(&[(3.0, 10.0), (17.0, 10.0)], c);
         }
         "charborder" => {
             pen.rect(3.0, 3.0, 17.0, 17.0, a);
-            pen.text(10.0, 6.0, 9.0, "A", c, false);
+            // The letter sits in the middle of its box, not at the top.
+            pen.text(10.0, 10.0, 10.0, "A", c, false);
         }
         "enclose" => {
-            pen.circle(10.0, 10.5, 7.5, a);
-            pen.text(10.0, 10.5, 9.0, "A", c, false);
+            pen.circle(10.0, 10.0, 7.0, a);
+            pen.text(10.0, 10.0, 10.0, "A", c, false);
         }
         "subscript" => {
-            pen.text(8.0, 9.0, 13.0, "x", c, false);
-            pen.text(15.0, 14.5, 8.0, "2", a, true);
+            pen.text(7.5, 9.5, 13.0, "x", c, false);
+            pen.text(14.5, 15.0, 8.0, "2", a, true);
         }
         "superscript" => {
-            pen.text(8.0, 11.0, 13.0, "x", c, false);
-            pen.text(15.0, 5.0, 8.0, "2", a, true);
+            pen.text(7.5, 11.0, 13.0, "x", c, false);
+            pen.text(14.5, 5.5, 8.0, "2", a, true);
         }
         "grow" => {
-            pen.text(8.0, 11.0, 15.0, "A", c, false);
-            pen.fill(&[(14.5, 6.0), (18.5, 6.0), (16.5, 3.0)], a);
+            pen.text(7.0, 11.5, 14.0, "A", c, false);
+            pen.line_c(&[(15.5, 10.0), (15.5, 4.5)], a);
+            pen.fill(&[(13.5, 5.5), (17.5, 5.5), (15.5, 2.5)], a);
         }
         "shrink" => {
-            pen.text(8.0, 12.0, 11.0, "A", c, false);
-            pen.fill(&[(14.5, 4.0), (18.5, 4.0), (16.5, 7.0)], a);
+            pen.text(7.0, 12.5, 11.0, "A", c, false);
+            pen.line_c(&[(15.5, 3.5), (15.5, 9.0)], a);
+            pen.fill(&[(13.5, 8.0), (17.5, 8.0), (15.5, 11.0)], a);
         }
-        "case" => pen.text(10.0, 10.5, 12.0, "Aa", c, false),
+        "case" => pen.text(10.0, 10.0, 12.0, "Aa", c, false),
+        // The letter and a tilted eraser beside it, inside the grid's safe inset.
         "clear" => {
-            pen.text(8.0, 9.0, 13.0, "A", c, false);
-            pen.fill(&[(10.0, 15.0), (14.0, 11.0), (18.0, 15.0), (14.0, 19.0)], Color32::from_rgb(0xE8, 0x6F, 0xA0));
+            pen.text(7.5, 8.5, 12.0, "A", c, false);
+            pen.closed(&[(8.5, 13.5), (12.0, 10.0), (17.0, 15.0), (13.5, 18.5)], Color32::from_rgb(0xE8, 0x6F, 0xA0));
         }
         // Small letters over a large one: text with a reading above it.
         "phonetic" => {
@@ -151,24 +347,27 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.text(10.0, 13.5, 12.5, "A", c, false);
         }
         "highlight" => {
-            pen.fill(&[(5.0, 12.0), (11.0, 4.0), (14.0, 7.0), (8.0, 15.0)], c);
-            pen.line(&[(5.0, 12.0), (3.5, 15.0), (8.0, 15.0)]);
-            pen.frect(2.0, 16.5, 18.0, 19.0, yellow);
+            // A marker with an outlined nib above its yellow band.
+            pen.closed(&[(5.5, 11.5), (11.0, 4.5), (14.5, 8.0), (9.0, 15.0)], c);
+            pen.line(&[(5.5, 11.5), (3.5, 15.0), (9.0, 15.0)]);
+            pen.frect(2.5, 16.5, 17.5, 19.0, yellow);
         }
         "fontcolor" => {
             pen.text(10.0, 9.0, 14.0, "A", c, false);
             pen.frect(2.0, 16.5, 18.0, 19.0, red);
         }
         "effects" => {
+            // The shadow is painted *behind* the accent letter, so the letter itself stays clean.
+            pen.text(10.5, 10.5, 15.0, "A", c.linear_multiply(0.45), true);
             pen.text(10.0, 10.0, 15.0, "A", a, true);
-            pen.text(10.5, 10.5, 15.0, "A", Color32::from_rgba_unmultiplied(0, 0, 0, 40), true);
         }
         "fontdialog" => pen.line(&[(13.0, 13.0), (17.0, 17.0), (17.0, 13.0)]),
         // Paragraph
         "bullets" => {
+            // One pitch for every line, one x for every dot: the tiers stay level.
             for (i, y) in [5.0, 10.0, 15.0].iter().enumerate() {
                 pen.fcircle(4.0, *y, 1.4, if i == 0 { a } else { c });
-                pen.line(&[(7.5, *y), (17.0, *y)]);
+                pen.line(&[(7.0, *y), (17.0, *y)]);
             }
         }
         "numbering" => {
@@ -178,12 +377,13 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             }
         }
         "multilevel" => {
-            pen.text(3.5, 4.5, 5.5, "1", a, true);
-            pen.line(&[(6.5, 4.5), (17.0, 4.5)]);
+            // Three levels on one pitch, each line starting further right than the one above.
+            pen.text(3.5, 5.0, 5.5, "1", a, true);
+            pen.line(&[(6.5, 5.0), (17.0, 5.0)]);
             pen.text(6.5, 10.0, 5.5, "a", c, true);
             pen.line(&[(9.5, 10.0), (17.0, 10.0)]);
-            pen.text(9.5, 15.5, 5.5, "i", c, true);
-            pen.line(&[(12.0, 15.5), (17.0, 15.5)]);
+            pen.text(9.5, 15.0, 5.5, "i", c, true);
+            pen.line(&[(12.0, 15.0), (17.0, 15.0)]);
         }
         "outdent" | "indent" => {
             pen.lines(9.0, 17.0, &[7.0, 10.0, 13.0]);
@@ -195,49 +395,54 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             }
         }
         "sort" => {
-            pen.text(6.0, 5.5, 7.0, "A", c, true);
-            pen.text(6.0, 14.5, 7.0, "Z", c, true);
-            pen.line_c(&[(14.0, 3.0), (14.0, 17.0)], a);
-            pen.line_c(&[(11.5, 14.5), (14.0, 17.0), (16.5, 14.5)], a);
+            // The A and Z share one column; the arrow is straight and inside the safe inset.
+            pen.text(5.5, 5.0, 7.0, "A", c, true);
+            pen.text(5.5, 15.0, 7.0, "Z", c, true);
+            pen.line_c(&[(14.5, 3.5), (14.5, 16.5)], a);
+            pen.line_c(&[(12.0, 14.0), (14.5, 16.5), (17.0, 14.0)], a);
         }
         "pilcrow" => pen.text(10.0, 10.5, 15.0, "¶", c, false),
-        "alignLeft" => {
-            pen.lines(3.0, 17.0, &[4.0, 10.0, 16.0]);
-            ().then_lines(&pen, 3.0, 12.0, &[7.0, 13.0])
+        // The four alignments share one pitch and endpoints; only the short lines' span moves, so
+        // the set reads as a family and centre/right stay symmetric about the middle.
+        "alignLeft" | "alignCenter" | "alignRight" | "justify" => {
+            let (s0, s1) = match name {
+                "alignCenter" => (6.0, 14.0),
+                "alignRight" => (8.0, 17.0),
+                "justify" => (3.0, 17.0),
+                _ => (3.0, 12.0),
+            };
+            // Two long lines and two short ones: only the short lines' span follows the alignment.
+            pen.lines(3.0, 17.0, &[4.5, 12.5]);
+            pen.lines(s0, s1, &[8.5, 16.5]);
         }
-        "alignCenter" => {
-            pen.lines(3.0, 17.0, &[4.0, 10.0, 16.0]);
-            ().then_lines(&pen, 6.0, 14.0, &[7.0, 13.0])
-        }
-        "alignRight" => {
-            pen.lines(3.0, 17.0, &[4.0, 10.0, 16.0]);
-            ().then_lines(&pen, 8.0, 17.0, &[7.0, 13.0])
-        }
-        "justify" => pen.lines(3.0, 17.0, &[4.0, 7.0, 10.0, 13.0, 16.0]),
         // Text direction: lines set from the start edge, an arrow in the reading direction.
         "textLtr" => {
-            pen.lines(3.0, 14.0, &[4.0, 8.0]);
-            pen.lines(3.0, 10.0, &[12.0]);
-            pen.line_c(&[(3.0, 16.5), (16.5, 16.5)], a);
-            pen.line_c(&[(13.5, 14.0), (16.5, 16.5), (13.5, 19.0)], a);
+            // Left-aligned lines over an arrow pointing right, all inside the safe inset.
+            pen.lines(3.0, 14.0, &[4.5, 8.5]);
+            pen.lines(3.0, 9.0, &[12.5]);
+            pen.line_c(&[(3.0, 15.5), (16.5, 15.5)], a);
+            pen.line_c(&[(13.5, 13.0), (16.5, 15.5), (13.5, 18.0)], a);
         }
         "textRtl" => {
-            pen.lines(6.0, 17.0, &[4.0, 8.0]);
-            pen.lines(10.0, 17.0, &[12.0]);
-            pen.line_c(&[(17.0, 16.5), (3.5, 16.5)], a);
-            pen.line_c(&[(6.5, 14.0), (3.5, 16.5), (6.5, 19.0)], a);
+            // The mirror image: right-aligned lines over an arrow pointing left.
+            pen.lines(6.0, 17.0, &[4.5, 8.5]);
+            pen.lines(11.0, 17.0, &[12.5]);
+            pen.line_c(&[(17.0, 15.5), (3.5, 15.5)], a);
+            pen.line_c(&[(6.5, 13.0), (3.5, 15.5), (6.5, 18.0)], a);
         }
         "lineSpacing" => {
+            // A double-headed arrow beside three lines: level heads, level lines.
             pen.lines(9.0, 17.0, &[5.0, 10.0, 15.0]);
-            pen.line_c(&[(4.5, 3.0), (4.5, 17.0)], a);
-            pen.line_c(&[(2.5, 5.0), (4.5, 3.0), (6.5, 5.0)], a);
-            pen.line_c(&[(2.5, 15.0), (4.5, 17.0), (6.5, 15.0)], a);
+            pen.line_c(&[(4.5, 4.0), (4.5, 16.0)], a);
+            pen.line_c(&[(2.5, 6.0), (4.5, 4.0), (6.5, 6.0)], a);
+            pen.line_c(&[(2.5, 14.0), (4.5, 16.0), (6.5, 14.0)], a);
         }
         "shading" => {
-            pen.fill(&[(4.0, 9.0), (10.0, 3.0), (16.0, 9.0), (10.0, 15.0)], Color32::TRANSPARENT);
-            pen.closed(&[(4.0, 9.0), (10.0, 3.0), (16.0, 9.0), (10.0, 15.0)], c);
-            pen.fcircle(16.5, 13.5, 1.6, a);
-            pen.frect(2.0, 16.5, 18.0, 19.0, yellow);
+            // A tilted paint container with its level line, drop and colour band.
+            pen.closed(&[(4.5, 9.5), (10.0, 4.0), (15.5, 9.5), (10.0, 15.0)], c);
+            pen.line(&[(4.5, 9.5), (15.5, 9.5)]);
+            pen.fcircle(16.5, 12.5, 1.6, a);
+            pen.frect(2.5, 16.5, 17.5, 19.0, yellow);
         }
         "borders" => {
             for y in [3.0, 10.0, 17.0] {
@@ -1443,16 +1648,6 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
     }
 }
 
-trait ThenLines {
-    fn then_lines(self, pen: &Pen, x0: f32, x1: f32, ys: &[f32]);
-}
-
-impl ThenLines for () {
-    fn then_lines(self, pen: &Pen, x0: f32, x1: f32, ys: &[f32]) {
-        pen.lines(x0, x1, ys);
-    }
-}
-
 /// Draw an Insert › Icons library icon into `r` in `c`, from the same path data the inserted
 /// picture is rendered from (`wordcraft_render::icon_lib`).
 pub fn library(p: &Painter, r: Rect, icon: &wordcraft_render::icon_lib::Icon, c: Color32) {
@@ -1473,5 +1668,321 @@ pub fn library(p: &Painter, r: Rect, icon: &wordcraft_render::icon_lib::Icon, c:
             }
             p.add(Shape::line(pts, stroke));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Paints one icon into a square box on a fresh context and returns its shapes and the box.
+    fn shapes(name: &str, box_size: f32, ppp: f32) -> (Vec<Shape>, Rect) {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::theme::font_definitions(false, false));
+        crate::theme::apply(&ctx, crate::theme::Appearance::Light);
+        ctx.set_pixels_per_point(ppp);
+        // One priming frame: fonts and tokens are in place from the next frame on.
+        ctx.run_ui(egui::RawInput::default(), |_| {}).drop_without_applying_deltas();
+        let r = Rect::from_min_size(egui::Pos2::ZERO, vec2(box_size, box_size));
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| paint(ui.painter(), r, name, Color32::WHITE, Color32::RED));
+        let shapes: Vec<Shape> = out.shapes.iter().map(|s| s.shape.clone()).collect();
+        out.drop_without_applying_deltas();
+        (shapes, r)
+    }
+
+    /// Every refined icon draws something, stays inside its paint box and has finite geometry — at
+    /// the 17 pt small box, the 32 pt large box, and 1x, 1.5x and 2x device pixels.
+    #[test]
+    fn home_icons_draw_inside_their_box_at_every_scale() {
+        for name in HOME_FAMILY {
+            for size in [17.0, 32.0] {
+                for ppp in [1.0, 1.5, 2.0] {
+                    let (shapes, r) = shapes(name, size, ppp);
+                    assert!(!shapes.is_empty(), "{name} at {size}px/{ppp}x drew nothing");
+                    let mut bounds = Rect::NOTHING;
+                    for s in &shapes {
+                        let b = s.visual_bounding_rect();
+                        assert!(
+                            b.min.x.is_finite() && b.min.y.is_finite() && b.max.x.is_finite() && b.max.y.is_finite(),
+                            "{name} at {size}px/{ppp}x has a non-finite shape: {b:?}"
+                        );
+                        bounds = bounds.union(b);
+                    }
+                    assert!(r.expand(1.5).contains_rect(bounds), "{name} at {size}px/{ppp}x drew outside its box: {bounds:?} in {r:?}");
+                    assert!(bounds.width() > 1.0 && bounds.height() > 1.0, "{name} at {size}px/{ppp}x is degenerate: {bounds:?}");
+                }
+            }
+        }
+    }
+
+    /// The stroke the Home family draws is at least one device pixel wide at every scale, so a thin
+    /// line never fades out; other icons keep the set's own weight.
+    #[test]
+    fn home_strokes_stay_at_least_one_device_pixel() {
+        for ppp in [1.0, 1.5, 2.0] {
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(ppp);
+            let r = Rect::from_min_size(egui::Pos2::ZERO, vec2(17.0, 17.0));
+            let home = Pen { p: &ctx.debug_painter(), r, w_scale: 17.0 / 20.0, c: Color32::WHITE, a: Color32::RED, w: HOME_STROKE, snap: true };
+            let plain = Pen { p: &ctx.debug_painter(), r, w_scale: 17.0 / 20.0, c: Color32::WHITE, a: Color32::RED, w: 1.25, snap: false };
+            let (hw, pw) = (home.stroke(Color32::WHITE).width, plain.stroke(Color32::WHITE).width);
+            assert!((hw * ppp).round() >= 1.0, "the home stroke is {:.2}pt = {:.2} device pixels at {ppp}x", hw, hw * ppp);
+            // The quantised weight may round down to a single crisp pixel; the *intended* weight is
+            // the family's own, which is at least the set's.
+            assert!(home.w * home.s() >= plain.w * plain.s(), "the family's weight is lighter than the set's");
+            assert!((pw * ppp).round() >= 1.0, "the set's own stroke disappears at {ppp}x");
+        }
+    }
+
+    /// Paste is the earlier original drawing with its hidden rear edges omitted: the board is drawn as
+    /// two open paths that stop where the overlapping tinted sheet begins (so nothing shows through
+    /// it), the clip, sheet and paper lines are unchanged, and the whole icon keeps the set's own
+    /// 1.25-unit stroke and unsnapped coordinates at both paint sizes.
+    #[test]
+    fn paste_keeps_the_earlier_original_drawing() {
+        for (size, ppp) in [(17.0f32, 2.0f32), (32.0, 2.0)] {
+            let (shapes, r) = shapes("paste", size, ppp);
+            let s = size / 20.0;
+            let at = |x: f32, y: f32| egui::pos2(r.min.x + x * s, r.min.y + y * s);
+            let want = |x0: f32, y0: f32, x1: f32, y1: f32| Rect::from_min_max(at(x0, y0), at(x1, y1));
+            let same = |a: Rect, b: Rect| (a.min - b.min).length() < 0.01 && (a.max - b.max).length() < 0.01;
+            let stroke = 1.25 * s;
+            let rects: Vec<(Rect, Color32, Color32, f32)> = shapes
+                .iter()
+                .filter_map(|sh| match sh {
+                    Shape::Rect(rs) => Some((rs.rect, rs.fill, rs.stroke.color, rs.stroke.width)),
+                    _ => None,
+                })
+                .collect();
+            let mut paths: Vec<(Vec<egui::Pos2>, f32)> = Vec::new();
+            for sh in &shapes {
+                match sh {
+                    Shape::Path(p) if !p.closed => paths.push((p.points.clone(), p.stroke.width)),
+                    Shape::LineSegment { points, stroke } => paths.push((points.to_vec(), stroke.width)),
+                    _ => {}
+                }
+            }
+            // The board: two open paths, the rear edges stopping before the sheet.
+            let front = vec![at(4.0, 3.5), at(14.0, 3.5), at(14.0, 7.25)];
+            let left = vec![at(4.0, 3.5), at(4.0, 17.0), at(8.25, 17.0)];
+            let close = |a: &[egui::Pos2], b: &[egui::Pos2]| a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (*x - *y).length() < 0.01);
+            assert!(
+                paths.iter().any(|(p, w)| close(p, &front) && (*w - stroke).abs() < 0.01),
+                "{size}pt: the board's top-right path changed: {paths:?}"
+            );
+            assert!(
+                paths.iter().any(|(p, w)| close(p, &left) && (*w - stroke).abs() < 0.01),
+                "{size}pt: the board's left-bottom path changed: {paths:?}"
+            );
+            // The old full rectangle must be gone.
+            assert!(!rects.iter().any(|(b, ..)| same(*b, want(4.0, 3.5, 14.0, 17.0))), "{size}pt: the board is still a closed rectangle");
+            // The clip, the tinted sheet and its outline are unchanged.
+            assert!(
+                rects.iter().any(|(b, f, _, _)| same(*b, want(7.0, 2.0, 11.0, 5.0)) && *f != Color32::TRANSPARENT),
+                "{size}pt: the clip is missing: {rects:?}"
+            );
+            assert!(
+                rects.iter().any(|(b, f, _, _)| same(*b, want(9.0, 8.0, 17.5, 18.5)) && *f != Color32::TRANSPARENT),
+                "{size}pt: the tinted sheet is missing: {rects:?}"
+            );
+            assert!(
+                rects.iter().any(|(b, _, c, w)| same(*b, want(9.0, 8.0, 17.5, 18.5)) && *c != Color32::TRANSPARENT && (*w - stroke).abs() < 0.01),
+                "{size}pt: the sheet outline is missing: {rects:?}"
+            );
+            // Three text lines, unsnapped, spanning x 10.8 .. 15.8.
+            for y in [11.0, 13.5, 16.0] {
+                let wy = at(0.0, y).y;
+                assert!(
+                    paths.iter().any(|(p, _)| p.len() == 2 && (p[0].y - wy).abs() < 0.01 && (p[1].y - wy).abs() < 0.01),
+                    "{size}pt: the line at y {y} is missing or was snapped: {paths:?}"
+                );
+            }
+            assert!(paths.iter().all(|(_, w)| (*w - stroke).abs() < 0.01), "{size}pt: a path lost the set's stroke: {paths:?}");
+            let (lx0, lx1) = (at(10.8, 0.0).x, at(15.8, 0.0).x);
+            assert!(
+                paths.iter().any(|(p, _)| p.len() == 2 && (p[0].x - lx0).abs() < 0.01 && (p[1].x - lx1).abs() < 0.01),
+                "{size}pt: the line span changed: {paths:?}"
+            );
+        }
+    }
+
+    /// The board's *hidden* rear edges must not be drawn through the translucent sheet that overlaps
+    /// them: every board edge is checked against the sheet's interior, while the three paper lines are
+    /// the authorised strokes inside it. Expected to fail while the board is still a full rectangle.
+    #[test]
+    fn paste_hides_the_board_edges_behind_its_sheet() {
+        for (size, ppp) in [(17.0f32, 2.0f32), (32.0, 2.0)] {
+            let (shapes, r) = shapes("paste", size, ppp);
+            let s = size / 20.0;
+            let at = |x: f32, y: f32| (r.min.x + x * s, r.min.y + y * s);
+            let rect_of = |x0: f32, y0: f32, x1: f32, y1: f32| {
+                let (ax, ay) = at(x0, y0);
+                let (bx, by) = at(x1, y1);
+                Rect::from_min_max(egui::pos2(ax, ay), egui::pos2(bx, by))
+            };
+            let sheet = rect_of(9.0, 8.0, 17.5, 18.5);
+            let board = rect_of(4.0, 3.5, 14.0, 17.0);
+            let inner = sheet.shrink(0.5);
+            let same = |a: Rect, b: Rect| (a.min - b.min).length() < 0.01 && (a.max - b.max).length() < 0.01;
+            // Every stroke that belongs to the board: a full rectangle before the fix, two open
+            // paths after it.
+            let mut edges: Vec<(egui::Pos2, egui::Pos2)> = Vec::new();
+            for sh in &shapes {
+                match sh {
+                    Shape::Rect(rs) if same(rs.rect, board) => {
+                        let (a, b) = (rs.rect.min, rs.rect.max);
+                        edges.push((a, egui::pos2(b.x, a.y)));
+                        edges.push((egui::pos2(b.x, a.y), b));
+                        edges.push((b, egui::pos2(a.x, b.y)));
+                        edges.push((egui::pos2(a.x, b.y), a));
+                    }
+                    Shape::Path(p) if p.points.len() > 2 => {
+                        for w in p.points.windows(2) {
+                            if p.points.iter().all(|q| board.expand(0.01).contains(*q)) {
+                                edges.push((w[0], w[1]));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            assert!(!edges.is_empty(), "{size}pt: the board's outline was not drawn at all");
+            for (a, b) in &edges {
+                // An axis-aligned edge shows through the sheet when it lies strictly inside it and
+                // its span overlaps the interior; a diagonal edge is checked by its bounding box.
+                let (x0, x1) = (a.x.min(b.x), a.x.max(b.x));
+                let (y0, y1) = (a.y.min(b.y), a.y.max(b.y));
+                let vertical = x1 - x0 < 0.01;
+                let horizontal = y1 - y0 < 0.01;
+                let visible = if vertical {
+                    x0 > inner.min.x + 0.01 && x0 < inner.max.x - 0.01 && y1.min(inner.max.y) - y0.max(inner.min.y) > 0.01
+                } else if horizontal {
+                    y0 > inner.min.y + 0.01 && y0 < inner.max.y - 0.01 && x1.min(inner.max.x) - x0.max(inner.min.x) > 0.01
+                } else {
+                    x1.min(inner.max.x) - x0.max(inner.min.x) > 0.01 && y1.min(inner.max.y) - y0.max(inner.min.y) > 0.01
+                };
+                assert!(!visible, "{size}pt: a board edge {a:?}-{b:?} is drawn through the sheet's interior {inner:?}");
+            }
+            // The three paper lines are the authorised strokes inside the sheet.
+            let mut papers = 0;
+            for sh in &shapes {
+                if let Shape::Path(p) = sh
+                    && p.points.len() == 2
+                    && p.points.iter().all(|q| inner.contains(*q))
+                {
+                    papers += 1;
+                }
+            }
+            assert_eq!(papers, 3, "{size}pt: expected the three paper lines inside the sheet, found {papers}");
+        }
+    }
+
+    /// The visible ink of every refined Home icon is the same apparent size in its tile: a 13.5-point
+    /// longest extent at 17 points (device pixels 1x, 1.5x and 2x, where snapping rounds differently),
+    /// centred on the paint box within a point and never escaping it. Paste is excluded — it keeps its
+    /// earlier original drawing, which the Paste tests check.
+    #[test]
+    fn home_icons_are_optically_balanced_in_their_tile() {
+        for name in HOME_FAMILY.iter().filter(|n| **n != "paste") {
+            for ppp in [1.0, 1.5, 2.0] {
+                let (shapes, r) = shapes(name, 17.0, ppp);
+                let mut ink = Rect::NOTHING;
+                for s in &shapes {
+                    let b = s.visual_bounding_rect();
+                    assert!(
+                        b.min.x.is_finite() && b.min.y.is_finite() && b.max.x.is_finite() && b.max.y.is_finite(),
+                        "{name} at {ppp}x has non-finite geometry"
+                    );
+                    ink = ink.union(b);
+                }
+                assert!(ink.width() > 1.0 && ink.height() > 1.0, "{name} at {ppp}x draws almost nothing: {ink:?}");
+                let longest = ink.width().max(ink.height());
+                assert!((longest - 13.5).abs() <= 1.0, "{name} at {ppp}x: longest visible ink is {longest:.2} points, not 13.5 +/- 1");
+                let (dx, dy) = ((ink.center().x - r.center().x).abs(), (ink.center().y - r.center().y).abs());
+                assert!(dx <= 1.0 && dy <= 1.0, "{name} at {ppp}x: ink centre {:?} is {dx:.2}/{dy:.2} points off the tile centre", ink.center());
+                assert!(r.expand(1.5).contains_rect(ink), "{name} at {ppp}x: the ink escapes its tile: {ink:?}");
+            }
+        }
+    }
+
+    /// Normalising the size must not normalise the *shape*: a narrow `I`, a two-glyph `Aa`, the wide
+    /// `ab`, a cursor and a pilcrow keep their own proportions instead of being stretched into squares.
+    #[test]
+    fn optical_sizing_keeps_each_icon_aspect_ratio() {
+        let expected = [
+            ("italic", 0.75),
+            ("case", 1.59),
+            ("strike", 1.68),
+            ("select", 0.60),
+            ("pilcrow", 0.64),
+            ("dictate", 0.68),
+            ("subscript", 1.14),
+            ("charborder", 1.00),
+        ];
+        for (name, want) in expected {
+            let (shapes, _) = shapes(name, 17.0, 2.0);
+            let mut ink = Rect::NOTHING;
+            for s in &shapes {
+                ink = ink.union(s.visual_bounding_rect());
+            }
+            let got = ink.width() / ink.height();
+            assert!((got - want).abs() < 0.15, "{name}: ink aspect {got:.2} does not match its own proportions {want:.2}");
+        }
+    }
+
+    /// The italic I is a slanted stem with its own short bars, not the upright letter.
+    #[test]
+    fn italic_is_slanted_with_its_own_bars() {
+        let (shapes, _) = shapes("italic", 32.0, 2.0);
+        let segs: Vec<(egui::Pos2, egui::Pos2)> = shapes
+            .iter()
+            .filter_map(|s| match s {
+                Shape::Path(p) if p.points.len() == 2 => Some((p.points[0], p.points[1])),
+                Shape::LineSegment { points, .. } => Some((points[0], points[1])),
+                _ => None,
+            })
+            .collect();
+        let flat = segs.iter().filter(|(a, b)| (a.y - b.y).abs() < 0.01).count();
+        let slanted = segs.iter().filter(|(a, b)| (a.y - b.y).abs() > 4.0 && (a.x - b.x).abs() > 1.0).count();
+        assert_eq!(flat, 2, "the italic I has a top and a bottom bar: {segs:?}");
+        assert_eq!(slanted, 1, "the italic stem is slanted: {segs:?}");
+        assert!(shapes.iter().all(|s| !matches!(s, Shape::Text(_))), "the italic I is drawn, not typed");
+    }
+
+    /// The letter inside the character border and the enclosure sits in the middle of its shape.
+    #[test]
+    fn bordered_and_enclosed_letters_are_centred() {
+        for name in ["charborder", "enclose"] {
+            let (shapes, r) = shapes(name, 32.0, 2.0);
+            let letters: Vec<Rect> = shapes
+                .iter()
+                .filter_map(|s| match s {
+                    Shape::Text(t) => Some(t.visual_bounding_rect()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(letters.len(), 1, "{name} draws one letter: {shapes:#?}");
+            let c = letters[0].center();
+            assert!(
+                (c.x - r.center().x).abs() < 1.5 && (c.y - r.center().y).abs() < 1.5,
+                "{name}: the letter sits at {c:?}, not at the centre of {r:?}"
+            );
+        }
+    }
+
+    /// The text-effect letter keeps its accent colour: the shadow is painted behind it, not over it.
+    #[test]
+    fn effects_paints_its_accent_letter_last() {
+        let (shapes, _) = shapes("effects", 32.0, 2.0);
+        let colors: Vec<Color32> = shapes
+            .iter()
+            .filter_map(|s| match s {
+                Shape::Text(t) => Some(t.fallback_color),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(colors.len(), 2, "effects draws a shadow and the letter: {shapes:#?}");
+        assert_ne!(colors[0], colors[1], "the shadow and the letter are different colours");
+        assert_eq!(colors[1], Color32::RED, "the accent letter is painted on top: {colors:?}");
     }
 }

@@ -227,6 +227,8 @@ pub fn split(
     let (r, resp) = ui.allocate_exact_size(vec2(24.0, 22.0), Sense::click());
     keytip_badge(ui, r, id, tip);
     let (ar, aresp) = ui.allocate_exact_size(vec2(11.0, 22.0), Sense::click());
+    #[cfg(test)]
+    SPLIT_ARROWS.with(|a| a.borrow_mut().push((id.to_string(), ar)));
     bg(ui, r, &resp, checked, &t);
     bg(ui, ar, &aresp, false, &t);
     let ic = Rect::from_center_size(r.center(), vec2(17.0, 17.0));
@@ -316,6 +318,31 @@ thread_local! {
     pub(crate) static TALL_GROUPS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
+/// A group's label row as it was drawn: the caption's galley rect and the band it lives in
+/// (`start.y + CONTENT_H + LABEL_H`). Tests measure how much room is left between a group's lowest
+/// controls and its caption, and that the caption itself did not move.
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub(crate) struct GroupLabel {
+    pub(crate) title: String,
+    pub(crate) footer: Rect,
+    pub(crate) caption: Rect,
+    pub(crate) launcher: Option<Rect>,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Every group's label row drawn in the last frame, in draw order.
+    pub(crate) static GROUP_LABELS: std::cell::RefCell<Vec<GroupLabel>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The drop-down arrow rect of each split button drawn in the last frame, by command id. The
+    /// arrow is a plain allocated rect, so a test that clicks it has to find it here.
+    pub(crate) static SPLIT_ARROWS: std::cell::RefCell<Vec<(String, Rect)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 /// A ribbon group: content, a centred label below and a divider on the right.
 pub fn group(ui: &mut Ui, title: &str, launcher: Option<&str>, app: &mut WordApp, add: impl FnOnce(&mut Ui, &mut WordApp)) {
     // The English title keys the launcher's id; the drawn title is translated.
@@ -343,6 +370,15 @@ pub fn group_titled(ui: &mut Ui, id_title: &str, title: &str, launcher: Option<&
     let r = inner.response.rect;
     let r = Rect::from_min_max(start, pos2(r.max.x, start.y + CONTENT_H + LABEL_H));
     let title_y = r.max.y - LABEL_H / 2.0;
+    #[cfg(test)]
+    {
+        let caption = Rect::from_center_size(
+            pos2(r.center().x, title_y),
+            ui.ctx().fonts_mut(|f| f.layout_no_wrap(title.to_string(), regular(11.0), t.group_label)).size(),
+        );
+        let launcher = launcher.map(|_| Rect::from_center_size(pos2(r.max.x - 6.0, title_y), vec2(11.0, 11.0)));
+        GROUP_LABELS.with(|g| g.borrow_mut().push(GroupLabel { title: title.to_string(), footer: r, caption, launcher }));
+    }
     ui.painter().text(pos2(r.center().x, title_y), Align2::CENTER_CENTER, title, regular(11.0), t.group_label);
     if let Some(cmd) = launcher {
         let lr = Rect::from_center_size(pos2(r.max.x - 6.0, title_y), vec2(11.0, 11.0));
@@ -356,8 +392,11 @@ pub fn group_titled(ui: &mut Ui, id_title: &str, title: &str, launcher: Option<&
         }
     }
     ui.add_space(5.0);
-    let x = ui.cursor().min.x;
-    ui.painter().line_segment([pos2(x, start.y + 4.0), pos2(x, start.y + CONTENT_H + LABEL_H - 4.0)], Stroke::new(1.0, t.border));
+    // The group divider: same place and extent as before, one pixel-aligned line in the stronger
+    // border colour so it reads in both themes.
+    let ppp = ui.ctx().pixels_per_point().max(1.0);
+    let x = (ui.cursor().min.x * ppp).floor() / ppp + 0.5 / ppp;
+    ui.painter().line_segment([pos2(x, start.y + 4.0), pos2(x, start.y + CONTENT_H + LABEL_H - 4.0)], Stroke::new(1.0, t.border_strong));
     ui.add_space(6.0);
 }
 
@@ -542,9 +581,6 @@ pub fn font_matches(query: &str, items: &[String]) -> Vec<usize> {
     exact
 }
 
-/// Width of a combo arrow's border, the field's own (the theme's input border is 1 pt).
-const ARROW_BORDER: f32 = 1.0;
-
 /// A searching combo's state between frames.
 #[derive(Clone, Default)]
 struct ComboSearch {
@@ -562,6 +598,29 @@ struct ComboSearch {
     view_h: f32,
 }
 
+/// The height of an editable dropdown: one rounded silhouette holds the text field and the arrow
+/// area together, so they never look like two separate boxes.
+pub const COMBO_H: f32 = 22.0;
+/// Width of the arrow area inside a combo's right edge.
+pub const COMBO_ARROW_W: f32 = 16.0;
+/// Size of the chevron drawn in the arrow area.
+const COMBO_CHEVRON: f32 = 10.0;
+/// Horizontal padding between the control's outline and its editable text (and between the text and
+/// the arrow area).
+const COMBO_PAD: f32 = 4.0;
+/// Corner radius of that silhouette (and of the arrow area's own right corners).
+const COMBO_RADIUS: u8 = 3;
+/// A degenerate width (zero, negative or not a number) is clamped to this instead of drawing a box
+/// that cannot hold its own arrow.
+const COMBO_MIN_W: f32 = 32.0;
+
+#[cfg(test)]
+thread_local! {
+    /// Every editable dropdown drawn in the last frame: its outer silhouette, the text field's rect
+    /// and the arrow area's rect. Tests check that one box of the requested size holds both.
+    pub(crate) static COMBO_RECTS: std::cell::RefCell<Vec<(String, Rect, Rect, Rect)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 fn combo_impl(
     ui: &mut Ui,
     id: &str,
@@ -572,6 +631,7 @@ fn combo_impl(
     search: bool,
 ) -> Option<String> {
     let mut out = None;
+    let width = if width.is_finite() { width.max(COMBO_MIN_W) } else { COMBO_MIN_W };
     let edit_id = ui.id().with(("combo_text", id));
     let te_id = ui.id().with(("combo_edit", id));
     let search_id = ui.id().with(("combo_search", id));
@@ -583,7 +643,6 @@ fn combo_impl(
         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
         // The field and its arrow share one outline: rounded on the outside, square where they
         // meet. The field's frame takes the widget visuals' radius in every state.
-        let r = ui.visuals().widgets.inactive.corner_radius;
         let w = &mut ui.visuals_mut().widgets;
         for v in [&mut w.noninteractive, &mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
             v.corner_radius.ne = 0;
@@ -601,11 +660,47 @@ fn combo_impl(
                 }
             });
         }
-        let te = egui::TextEdit::singleline(&mut text).id(te_id).desired_width(width - 16.0).font(regular(12.0)).margin(vec2(4.0, 3.0));
-        // The arrow's box is painted here, under the field, once its size is known.
-        let arrow_bg = ui.painter().add(egui::Shape::Noop);
-        let resp = ui.add(te);
-        keytip_badge(ui, resp.rect, "combo", id);
+        // One allocation for the whole control: the text field and the arrow area live inside it, so
+        // the width the caller asks for is exactly the width the control takes.
+        let (outer, _) = ui.allocate_exact_size(vec2(width, COMBO_H), Sense::hover());
+        let text_rect = Rect::from_min_max(outer.min, pos2(outer.max.x - COMBO_ARROW_W, outer.max.y));
+        let arrow_rect = Rect::from_min_max(pos2(outer.max.x - COMBO_ARROW_W, outer.min.y), outer.max);
+        let aresp = ui.interact(arrow_rect, ui.id().with(("combo_arrow", id)), Sense::click());
+        // Screen readers hear which box the arrow belongs to: the id names the control ("font").
+        aresp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("{id} list")));
+        #[cfg(test)]
+        COMBO_RECTS.with(|c| c.borrow_mut().push((id.to_string(), outer, text_rect, arrow_rect)));
+        // The base and the arrow's own hover/pressed feedback go under the text; the single outline
+        // is painted after it (below), so the control reads as one rounded box.
+        ui.painter().rect_filled(outer, COMBO_RADIUS, t.input);
+        if aresp.hovered() || aresp.is_pointer_button_down_on() {
+            let fill = if aresp.is_pointer_button_down_on() { t.pressed } else { t.hover };
+            ui.painter().rect_filled(arrow_rect, CornerRadius { nw: 0, sw: 0, ne: COMBO_RADIUS, se: COMBO_RADIUS }, fill);
+        }
+        // The arrow itself: our own chevron, centred in the arrow area.
+        icons::paint(ui.painter(), Rect::from_center_size(arrow_rect.center(), vec2(COMBO_CHEVRON, COMBO_CHEVRON)), "dropdown", t.icon, t.accent);
+        // The field keeps its inset through the frame, not through `margin`: egui uses a custom frame
+        // verbatim and only builds its own inner-margin frame when there is none, so a bare
+        // `Frame::NONE` silently dropped the margin and let the text touch the outline. The invisible
+        // frame below supplies the inset, and the field asks for the whole text area because the frame
+        // already provides the padding.
+        let te = egui::TextEdit::singleline(&mut text)
+            .id(te_id)
+            .desired_width(text_rect.width())
+            .font(regular(12.0))
+            .margin(vec2(COMBO_PAD, 0.0))
+            .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(COMBO_PAD as i8, 0)));
+        // The frameless field sits in the left part of the silhouette, its text vertically centred.
+        let resp = ui
+            .scope_builder(egui::UiBuilder::new().max_rect(text_rect).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
+                let out = te.show(ui);
+                #[cfg(test)]
+                TEXT_LAYOUT.with(|c| {
+                    c.borrow_mut().push((id.to_string(), out.galley_pos, out.text_clip_rect, out.galley.size(), out.response.response.rect));
+                });
+                out.response.response
+            })
+            .inner;
         focused = resp.has_focus();
         let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         let mut reveal = step != 0;
@@ -649,17 +744,20 @@ fn combo_impl(
         } else if enter {
             out = Some(text.clone());
         }
-        let (ar, aresp) = ui.allocate_exact_size(vec2(16.0, resp.rect.height()), Sense::click());
-        // It reaches one border width under the field, so the field's right border is the only line
-        // between them: two borders side by side read as a double-width divider.
-        let ar_radius = CornerRadius { nw: 0, sw: 0, ne: r.ne, se: r.se };
-        let under = Rect::from_min_max(pos2(ar.min.x - ARROW_BORDER, ar.min.y), ar.max);
-        let fill = if aresp.hovered() { t.hover } else { t.input };
-        let arrow_box = egui::epaint::RectShape::new(under, ar_radius, fill, Stroke::new(ARROW_BORDER, t.input_border), egui::StrokeKind::Inside);
-        ui.painter().set(arrow_bg, arrow_box);
-        icons::paint(ui.painter(), Rect::from_center_size(ar.center(), vec2(DROPDOWN, DROPDOWN)), "dropdown", t.icon, t.accent);
+        // One outline for the whole control: quiet when idle, the accent when hovered, focused or
+        // with its list open (the menu popup keeps the accent while it stays open).
+        let list_open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&aresp));
+        let border = if focused || s.open || list_open {
+            t.accent
+        } else if aresp.hovered() || resp.hovered() {
+            t.accent.linear_multiply(0.55)
+        } else {
+            t.input_border
+        };
+        ui.painter().rect_stroke(outer, COMBO_RADIUS, Stroke::new(1.0, border), egui::StrokeKind::Inside);
+        keytip_badge(ui, outer, "combo", id);
         // The list drops from the box's left edge, as in Word, not from the arrow (#535).
-        egui::Popup::menu(&aresp).anchor(resp.rect.union(ar)).show(|ui| {
+        egui::Popup::menu(&aresp).anchor(outer).show(|ui| {
             if let Some(v) = combo_list(ui, width, current, items, preview) {
                 out = Some(v);
                 ui.close();
@@ -680,7 +778,7 @@ fn combo_impl(
         if s.open && !s.matches.is_empty() {
             let matches = s.matches.clone();
             let scroll = reveal.then_some((s.offset, s.view_h));
-            let shown = egui::Area::new(search_id.with("list")).order(egui::Order::Tooltip).fixed_pos(resp.rect.left_bottom()).show(ui.ctx(), |ui| {
+            let shown = egui::Area::new(search_id.with("list")).order(egui::Order::Tooltip).fixed_pos(outer.left_bottom()).show(ui.ctx(), |ui| {
                 egui::Frame::popup(ui.style())
                     .show(ui, |ui| {
                         let item = |k: usize| matches.get(k).and_then(|&i| items.get(i));
@@ -824,6 +922,36 @@ pub fn drawn_state(ui: &Ui, resp: &Response, framed: bool) -> DrawnState {
 pub fn primary_button(ui: &Ui, text: impl Into<String>) -> egui::Button<'static> {
     let t = Tokens::get(ui.ctx());
     egui::Button::new(egui::RichText::new(text.into()).color(t.on_accent)).fill(t.accent)
+}
+
+/// A thin vertical line between clusters of related icons inside a ribbon row: a 7-point wide,
+/// 22-point tall gap with a 14-point line centred in it, snapped to the device pixel grid so it stays
+/// crisp. It takes no clicks and no keyboard focus — the controls on either side keep their own.
+pub fn icon_separator(ui: &mut Ui) {
+    let (r, _) = ui.allocate_exact_size(vec2(7.0, 22.0), Sense::hover());
+    let t = Tokens::get(ui.ctx());
+    let ppp = ui.ctx().pixels_per_point().max(1.0);
+    let x = (r.center().x * ppp).floor() / ppp + 0.5 / ppp;
+    let y0 = ((r.center().y - 7.0) * ppp).round() / ppp;
+    let y1 = ((r.center().y + 7.0) * ppp).round() / ppp;
+    ui.painter().line_segment([pos2(x, y0), pos2(x, y1)], Stroke::new(1.0, t.border_strong));
+    #[cfg(test)]
+    SEPARATORS.with(|s| s.borrow_mut().push(r));
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Every inline cluster separator drawn in the last frame, in draw order.
+    pub(crate) static SEPARATORS: std::cell::RefCell<Vec<Rect>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Where each editable dropdown's text actually landed: (id, galley origin, the rect it was
+    /// clipped to, the galley's size). Measured from `TextEdit::show`, because an allocation-only
+    /// check cannot see that a `Frame::NONE` text edit ignores its own margin.
+    pub(crate) static TEXT_LAYOUT: std::cell::RefCell<Vec<(String, egui::Pos2, Rect, egui::Vec2, Rect)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// A frameless 22 px icon button (pane close buttons): ribbon-style hover and press feedback.
@@ -980,7 +1108,7 @@ mod tests {
     #[test]
     fn typing_in_the_font_box_finds_the_family() {
         // #359: typing "arial" or "roman" picks the installed family; the size box stays literal.
-        use egui::Key::{ArrowDown, Enter, Escape};
+        use egui::Key::{ArrowDown, Enter, Escape, Tab};
         let fonts: Vec<String> = ["Arial", "Arial Black", "Courier New", "Times New Roman"].map(String::from).to_vec();
         assert_eq!(type_into_combo(true, &fonts, "arial", &[Enter]).as_deref(), Some("Arial"));
         assert_eq!(type_into_combo(true, &fonts, "roman", &[Enter]).as_deref(), Some("Times New Roman"));
@@ -988,59 +1116,493 @@ mod tests {
         // Not installed: applied as typed, as Word allows.
         assert_eq!(type_into_combo(true, &fonts, "Zapfino", &[Enter]).as_deref(), Some("Zapfino"));
         assert_eq!(type_into_combo(true, &fonts, "arial", &[Escape]), None);
+        assert_eq!(type_into_combo(true, &fonts, "arial", &[Tab]), None, "Tab closes the list without committing");
         let sizes: Vec<String> = ["10", "11", "12"].map(String::from).to_vec();
         assert_eq!(type_into_combo(false, &sizes, "1", &[Enter]).as_deref(), Some("1"));
     }
 
-    /// The field was rounded on all four corners and the arrow on none, so the two looked apart,
-    /// and their borders stood side by side as a double-width divider. The field is rounded only
-    /// on the left, the arrow only on the right, and the arrow's box lies under the field by one
-    /// border width, so a single line divides them; focused or not.
-    #[test]
-    fn combo_field_and_arrow_share_one_outline() {
+    /// Draws a font combo (150) and a size combo (52) in one frame with `events` as input; returns
+    /// the recorded control rects and whatever the combos returned.
+    fn combo_frame(ctx: &egui::Context, events: Vec<egui::Event>) -> (Vec<(String, Rect, Rect, Rect)>, Option<String>) {
+        let fonts: Vec<String> = ["Arial", "Courier New", "Times New Roman"].map(String::from).to_vec();
         let sizes: Vec<String> = ["10", "11", "12"].map(String::from).to_vec();
+        let mut picked = None;
+        COMBO_RECTS.with(|c| c.borrow_mut().clear());
+        ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+            if let Some(v) = font_combo(ui, "font", 150.0, "Arial", &fonts, None) {
+                picked = Some(v);
+            }
+            if let Some(v) = combo(ui, "size", 52.0, "12", &sizes, None) {
+                picked = Some(v);
+            }
+            // The widths the other callers use: Outlining's style and level boxes and the two font
+            // dialogs, so one test covers every caller of the shared control.
+            if let Some(v) = combo(ui, "outline", 100.0, "Body Text", &fonts, None) {
+                picked = Some(v);
+            }
+            if let Some(v) = combo(ui, "levels", 90.0, "All Levels", &sizes, None) {
+                picked = Some(v);
+            }
+            if let Some(v) = font_combo(ui, "dialog", 220.0, "Arial", &fonts, None) {
+                picked = Some(v);
+            }
+            if let Some(v) = font_combo(ui, "symbol", 190.0, "Arial", &fonts, None) {
+                picked = Some(v);
+            }
+        })
+        .drop_without_applying_deltas();
+        (COMBO_RECTS.with(|c| c.take()), picked)
+    }
+
+    /// The light theme, where the two frames of the old design were easiest to see.
+    fn combo_ctx() -> egui::Context {
         let ctx = egui::Context::default();
-        let cases = [crate::theme::Appearance::Light, crate::theme::Appearance::Dark].into_iter().flat_map(|a| [(a, false), (a, true)]);
-        for (appearance, focused) in cases {
-            crate::theme::apply(&ctx, appearance);
-            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
-                if focused {
-                    ui.memory_mut(|m| m.request_focus(ui.id().with(("combo_edit", "f"))));
+        ctx.set_fonts(crate::theme::font_definitions(false, false));
+        crate::theme::apply(&ctx, crate::theme::Appearance::Light);
+        ctx.run_ui(egui::RawInput::default(), |_| {}).drop_without_applying_deltas();
+        ctx
+    }
+
+    /// Clicks at a point the way kittest clicks a node: the pointer moves, presses and releases in
+    /// one frame each, then the frames that react to it.
+    fn click_pointer<S>(h: &mut egui_kittest::Harness<'_, S>, pos: egui::Pos2) {
+        for e in [egui::Event::PointerMoved(pos)].into_iter().chain([true, false].map(|pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        })) {
+            h.input_mut().events.push(e);
+            h.run_steps(1);
+        }
+        h.run_steps(2);
+    }
+
+    /// Selected and disabled icon states: a checked icon paints the checked surface with its accent
+    /// outline, an unchecked one paints nothing, and a command that is not available fades its icon
+    /// to the disabled colour.
+    #[test]
+    fn icon_buttons_show_selected_and_disabled_states() {
+        let ctx = combo_ctx();
+        let t = Tokens::get(&ctx);
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let _ = small(ui, &mut app, "bold", None, "Bold", "format.bold", serde_json::json!({}), true);
+            let _ = small(ui, &mut app, "italic", None, "Italic", "format.italic", serde_json::json!({}), false);
+            let _ = small(ui, &mut app, "underline", None, "Underline", "format.notACommand", serde_json::json!({}), false);
+        });
+        let (mut fills, mut strokes, mut colors) = (Vec::new(), Vec::new(), Vec::new());
+        for s in &out.shapes {
+            match &s.shape {
+                egui::Shape::Rect(r) => {
+                    fills.push(r.fill);
+                    strokes.push(r.stroke.color);
                 }
-                combo(ui, "f", 150.0, "12", &sizes, None);
+                egui::Shape::Path(p) => {
+                    if let egui::epaint::ColorMode::Solid(c) = p.stroke.color {
+                        colors.push(c);
+                    }
+                }
+                egui::Shape::LineSegment { stroke, .. } => colors.push(stroke.color),
+                egui::Shape::Circle(c) => {
+                    fills.push(c.fill);
+                    strokes.push(c.stroke.color);
+                }
+                _ => {}
+            }
+        }
+        out.drop_without_applying_deltas();
+        assert_eq!(fills.iter().filter(|f| **f == t.checked).count(), 1, "one checked surface: {fills:?}");
+        assert!(strokes.contains(&t.accent.linear_multiply(0.5)), "the checked surface keeps its accent outline: {strokes:?}");
+        assert!(!fills.contains(&t.hover) && !fills.contains(&t.pressed), "nothing was hovered or pressed: {fills:?}");
+        assert!(colors.contains(&t.text_disabled), "the unavailable command's icon fades: {colors:?}");
+        assert!(colors.contains(&t.icon), "the available icons keep the icon colour: {colors:?}");
+    }
+
+    /// A separator is a thin line in a small gap: it draws one 14-point stroke, paints no surface of
+    /// its own, adds no clickable region and takes no keyboard focus, while the buttons beside it keep
+    /// their own clicks.
+    #[test]
+    fn a_separator_is_a_thin_line_that_takes_no_input() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        let clicked = std::cell::Cell::new(0);
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(200.0, 40.0)).build_ui(|ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing = vec2(1.0, 0.0);
+                if ui.button("left").clicked() {
+                    clicked.set(clicked.get() + 1);
+                }
+                icon_separator(ui);
+                if ui.button("right").clicked() {
+                    clicked.set(clicked.get() + 1);
+                }
             });
-            // Painted boxes in paint order: (order, rect, corners, border width).
-            let boxes: Vec<(usize, Rect, CornerRadius, f32)> = std::mem::take(&mut out.shapes)
-                .into_iter()
-                .filter_map(|c| match c.shape {
-                    egui::Shape::Rect(r) => Some((r.rect, r.corner_radius, r.stroke.width)),
+        });
+        h.run_steps(3);
+        let r = SEPARATORS.with(|s| s.borrow().last().copied()).expect("the separator was drawn");
+        assert!((r.width() - 7.0).abs() < 0.01 && (r.height() - 22.0).abs() < 0.01, "the separator gap is {r:?}, not 7x22");
+        // One 14-point, 1-point-thick line, centred, and nothing else painted in the gap. Painted on
+        // its own frame so the shapes can be inspected.
+        let ctx = combo_ctx();
+        SEPARATORS.with(|s| s.borrow_mut().clear());
+        let alone = std::cell::Cell::new(Rect::NOTHING);
+        let mut painted_rects: Vec<Rect> = Vec::new();
+        let painted: Vec<(Rect, f32)> = {
+            let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                icon_separator(ui);
+            });
+            alone.set(SEPARATORS.with(|s| s.borrow().last().copied()).expect("the separator was drawn on its own frame"));
+            for shape in &out.shapes {
+                if let egui::Shape::Rect(r) = &shape.shape {
+                    painted_rects.push(r.rect);
+                }
+            }
+            let shapes: Vec<(Rect, f32)> = out
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Path(p) if p.points.len() == 2 && p.stroke.width > 0.0 => Some((p.visual_bounding_rect(), p.stroke.width)),
+                    egui::Shape::LineSegment { points, stroke } if stroke.width > 0.0 => {
+                        Some((Rect::from_two_pos(points[0], points[1]), stroke.width))
+                    }
                     _ => None,
                 })
-                .enumerate()
-                .map(|(i, (rect, c, w))| (i, rect, c, w))
                 .collect();
             out.drop_without_applying_deltas();
-            let corners: Vec<CornerRadius> = boxes.iter().map(|b| b.2).collect();
-            let field = boxes.iter().find(|b| b.2.nw > 0 && b.2.sw == b.2.nw && b.2.ne == 0 && b.2.se == 0);
-            let field = field.unwrap_or_else(|| panic!("focused {focused}: no field rounded on the left only in {corners:?}"));
-            let arrow_corners = CornerRadius { nw: 0, sw: 0, ne: field.2.nw, se: field.2.sw };
-            let arrow = boxes.iter().find(|b| b.2 == arrow_corners);
-            let arrow = arrow.unwrap_or_else(|| panic!("focused {focused}: no arrow rounded on the right only in {corners:?}"));
-            assert!(!corners.iter().any(|c| c.nw > 0 && c.ne > 0), "focused {focused}: a part is still rounded all round: {corners:?}");
-            // One divider as wide as the other borders: the arrow's left border lies exactly under
-            // the field's right border, and the field is painted over it.
-            assert!(field.3 > 0.0 && arrow.3 == field.3, "focused {focused}: borders {} and {} differ", field.3, arrow.3);
+            shapes.into_iter().filter(|(b, _)| alone.get().expand(0.01).contains_rect(*b)).collect()
+        };
+        let inner = painted;
+        let alone = alone.get();
+        assert_eq!(inner.len(), 1, "one line per separator: {inner:?}");
+        assert!((inner[0].0.height() - 14.0).abs() < 0.01, "the line is {} points tall, not 14", inner[0].0.height());
+        assert!((inner[0].0.center().x - alone.center().x).abs() < 0.5, "the line is not centred in its gap");
+        assert!((inner[0].1 - 1.0).abs() < 0.01, "the line is {} points thick, not 1", inner[0].1);
+        assert!(!painted_rects.iter().any(|b| alone.expand(0.01).contains_rect(*b)), "the separator paints a surface of its own: {painted_rects:?}");
+        // No clickable region and no focus: only the two buttons answer, and they keep their clicks.
+        assert_eq!(h.query_all_by_role(Role::Button).filter(|n| n.rect().intersects(r)).count(), 0, "a clickable region overlaps the separator");
+        assert!(h.ctx.memory(|m| m.focused()).is_none(), "the separator took keyboard focus");
+        // Clicks in the gap reach a neighbour exactly as they do in a plain `add_space` gap (egui
+        // resolves the press to the nearest clickable widget); the separator adds nothing of its own.
+        assert_eq!(clicked.get(), 0, "rendering the scene clicked a button");
+    }
+
+    /// One rounded silhouette per field, of exactly the width the caller asked for, with the text
+    /// field and the arrow area tiling it and no gap between them.
+    #[test]
+    fn a_combo_is_one_box_of_the_requested_size() {
+        let ctx = combo_ctx();
+        // The silhouette is sized in points, so it is the same box at 1x, 1.5x and 2x device pixels.
+        for ppp in [1.0, 1.5, 2.0] {
+            ctx.set_pixels_per_point(ppp);
+            ctx.run_ui(egui::RawInput::default(), |_| {}).drop_without_applying_deltas();
+            let (rects, _) = combo_frame(&ctx, vec![]);
+            // Home's own widths plus the shared callers: Outlining (100 / 90) and the font dialogs
+            // (220 / 190) use the same control and must get the same box.
+            for (id, want_w) in [("font", 150.0), ("size", 52.0), ("outline", 100.0), ("levels", 90.0), ("dialog", 220.0), ("symbol", 190.0)] {
+                let (_, outer, text, arrow) = rects.iter().find(|(n, ..)| n == id).unwrap_or_else(|| panic!("{id} was drawn")).clone();
+                assert!((outer.width() - want_w).abs() < 0.01, "{id}: the control is {} wide, not {want_w}", outer.width());
+                assert!((outer.height() - COMBO_H).abs() < 0.01, "{id}: the control is {} tall, not {COMBO_H}", outer.height());
+                assert!((arrow.width() - COMBO_ARROW_W).abs() < 0.01, "{id}: the arrow area is {} wide, not {COMBO_ARROW_W}", arrow.width());
+                assert!((text.right() - arrow.left()).abs() < 0.01, "{id}: a gap between the field and the arrow: {text:?} {arrow:?}");
+                assert!((text.left() - outer.left()).abs() < 0.01, "{id}: the field does not start at the control's left edge");
+                assert!((arrow.right() - outer.right()).abs() < 0.01, "{id}: the arrow does not end at the control's right edge");
+                assert!(
+                    (text.height() - outer.height()).abs() < 0.01 && (arrow.height() - outer.height()).abs() < 0.01,
+                    "{id}: the parts are not as tall as the control: {text:?} {arrow:?}"
+                );
+            }
+        }
+    }
+
+    /// The text of an editable dropdown keeps four points of padding inside its text area: the galley
+    /// starts four points in, the field's content stops four points before the arrow, and the text is
+    /// centred vertically. Measured from what egui actually painted (`TextEdit::show`), not from the
+    /// rectangles we allocated.
+    #[test]
+    fn a_combo_keeps_four_points_of_padding_inside_its_text_area() {
+        let ctx = combo_ctx();
+        let fonts: Vec<String> = ["Arial"].map(String::from).to_vec();
+        let long: Vec<String> = ["A very long family name that cannot fit"].map(String::from).to_vec();
+        let sizes: Vec<String> = ["100"].map(String::from).to_vec();
+        TEXT_LAYOUT.with(|c| c.borrow_mut().clear());
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            let _ = font_combo(ui, "font", 150.0, "Arial", &fonts, None);
+            let _ = combo(ui, "size", 52.0, "100", &sizes, None);
+            let _ = font_combo(ui, "long", 150.0, "A very long family name that cannot fit", &long, None);
+        })
+        .drop_without_applying_deltas();
+        let rects = COMBO_RECTS.with(|c| c.take());
+        let layouts = TEXT_LAYOUT.with(|c| c.take());
+        let mut seen = Vec::new();
+        for id in ["font", "size", "long"] {
+            let (_, outer, text_rect, arrow) = rects.iter().find(|(n, ..)| n == id).unwrap_or_else(|| panic!("{id} was drawn")).clone();
+            let (_, galley_pos, clip, galley_size, field) =
+                layouts.iter().find(|(n, ..)| n == id).unwrap_or_else(|| panic!("{id} painted its text")).clone();
+            seen.push((id, outer, text_rect, arrow, galley_pos, clip, galley_size, field));
+        }
+        for (id, outer, text_rect, arrow, galley_pos, clip, galley_size, field) in seen {
+            let left = galley_pos.x - text_rect.left();
+            let off = galley_pos.y + galley_size.y / 2.0 - outer.center().y;
+            assert!((left - COMBO_PAD).abs() < 0.6, "{id}: the text starts {left:.2} points into its area, not {COMBO_PAD}");
             assert!(
-                (arrow.1.min.x - (field.1.max.x - field.3)).abs() < 0.01,
-                "focused {focused}: arrow {:?} and field {:?} borders stand apart",
-                arrow.1,
-                field.1
+                (field.left() - text_rect.left()).abs() < 0.6 && (field.right() - arrow.left()).abs() < 0.6,
+                "{id}: the field does not fill its text area: {field:?}"
             );
-            assert!(arrow.0 < field.0, "focused {focused}: the arrow's box must be painted under the field");
+            assert!(off.abs() < 0.75, "{id}: the text sits {off:.2} points off the control's centre");
+            assert!(clip.left() >= text_rect.left(), "{id}: the text is clipped past the control's left edge");
+            if id == "long" {
+                // With text wider than the field egui hands back the real editable clip, so the
+                // right-hand padding can be measured directly: it stops four points before the arrow.
+                let right = arrow.left() - clip.right();
+                assert!((right - COMBO_PAD).abs() < 0.6, "the editable text stops {right:.2} points before the arrow, not {COMBO_PAD}");
+                assert!(galley_size.x > clip.width(), "the long name is not clipped: {galley_size:?} vs {clip:?}");
+            } else {
+                // A short value is narrower than the field, so its clip is its own rect: check that it
+                // still sits inside the padded content area rather than against the outline.
+                assert!(galley_pos.x >= text_rect.left() + COMBO_PAD - 0.6, "{id}: the text starts left of its padding");
+            }
+        }
+    }
+
+    /// The padding survives every state: idle, hovered, focused and with the list open, the galley
+    /// still starts four points in and the editable area still stops four points before the arrow.
+    #[test]
+    fn a_combo_keeps_its_padding_in_every_state() {
+        let ctx = combo_ctx();
+        let fonts: Vec<String> = ["Arial"].map(String::from).to_vec();
+        let long: Vec<String> = ["A very long family name that cannot fit"].map(String::from).to_vec();
+        // One frame in the given state; returns the measured insets for the font combo.
+        let measure = |state: &str, events: Vec<egui::Event>, focus: bool| {
+            COMBO_RECTS.with(|c| c.borrow_mut().clear());
+            TEXT_LAYOUT.with(|c| c.borrow_mut().clear());
+            ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+                if focus {
+                    ui.memory_mut(|m| m.request_focus(ui.id().with(("combo_edit", "font"))));
+                }
+                let _ = font_combo(ui, "font", 150.0, "A very long family name that cannot fit", &long, None);
+            })
+            .drop_without_applying_deltas();
+            let (_, outer, text_rect, arrow) = COMBO_RECTS.with(|c| c.borrow().last().cloned()).expect("drawn");
+            let (_, galley_pos, clip, galley_size, field) = TEXT_LAYOUT.with(|c| c.borrow().last().cloned()).expect("text painted");
+            let _ = fonts;
+            (state.to_string(), outer, text_rect, arrow, galley_pos, clip, galley_size, field)
+        };
+        let open_pos = {
+            let (_, outer, _, arrow, ..) = measure("probe", vec![], false);
+            let _ = outer;
+            arrow.center()
+        };
+        let mut states = vec![
+            measure("idle", vec![], false),
+            measure("hovered", vec![egui::Event::PointerMoved(open_pos)], false),
+            measure("focused", vec![], true),
+        ];
+        for pressed in [true, false] {
+            let pos = open_pos;
+            ctx.run_ui(
+                egui::RawInput {
+                    events: vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::default() },
+                    ],
+                    ..Default::default()
+                },
+                |ui| {
+                    let _ = font_combo(ui, "font", 150.0, "A very long family name that cannot fit", &long, None);
+                },
+            )
+            .drop_without_applying_deltas();
+        }
+        states.push(measure("open", vec![], false));
+        for (state, _outer, text_rect, arrow, galley_pos, clip, galley_size, field) in states {
+            // The editable content keeps its inset in every state; a focused field scrolls a long
+            // value, so the galley's own origin only stays put while the text is not scrolled.
+            let (clip_left, clip_right) = (clip.left() - text_rect.left(), arrow.left() - clip.right());
+            assert!((clip_left - COMBO_PAD).abs() < 0.6, "{state}: the editable content starts {clip_left:.2} points in, not {COMBO_PAD}");
             assert!(
-                (arrow.1.min.y - field.1.min.y).abs() < 0.01 && (arrow.1.max.y - field.1.max.y).abs() < 0.01,
-                "focused {focused}: the outlines' tops and bottoms differ"
+                (clip_right - COMBO_PAD).abs() < 0.6,
+                "{state}: the editable content stops {clip_right:.2} points before the arrow, not {COMBO_PAD}"
             );
+            assert!(clip.width() > 10.0, "{state}: the editable content collapsed: {clip:?}");
+            if state == "idle" || state == "hovered" {
+                let left = galley_pos.x - text_rect.left();
+                assert!((left - COMBO_PAD).abs() < 0.6, "{state}: the text starts {left:.2} points in, not {COMBO_PAD}");
+            }
+            let off = galley_pos.y + galley_size.y / 2.0 - text_rect.center().y;
+            assert!(off.abs() < 1.0, "{state}: the text sits {off:.2} points off the middle");
+            assert!(
+                (field.left() - text_rect.left()).abs() < 0.6 && (field.right() - arrow.left()).abs() < 0.6,
+                "{state}: the field left its area: {field:?}"
+            );
+        }
+    }
+
+    /// The outline colour follows the control's state: quiet when idle, a softened accent while
+    /// hovered, the accent when focused or while its list is open.
+    #[test]
+    fn a_combo_shows_idle_hover_focus_and_open_states() {
+        let ctx = combo_ctx();
+        let t = Tokens::get(&ctx);
+        let fonts: Vec<String> = ["Arial", "Courier New"].map(String::from).to_vec();
+        // One frame: draw the combo with `events` as input, optionally focusing the field first.
+        let border = |events: Vec<egui::Event>, focus: bool| {
+            COMBO_RECTS.with(|c| c.borrow_mut().clear());
+            let out = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+                if focus {
+                    ui.memory_mut(|m| m.request_focus(ui.id().with(("combo_edit", "font"))));
+                }
+                let _ = font_combo(ui, "font", 150.0, "Arial", &fonts, None);
+            });
+            let outer = COMBO_RECTS.with(|c| c.borrow().last().map(|(_, o, _, _)| *o)).expect("the combo was drawn");
+            let color = out.shapes.iter().find_map(|s| match &s.shape {
+                egui::Shape::Rect(r) if r.stroke.width > 0.0 && (r.rect.min - outer.min).length() < 0.01 => Some(r.stroke.color),
+                _ => None,
+            });
+            out.drop_without_applying_deltas();
+            (outer, color.expect("the control has an outline"))
+        };
+        let (outer, idle) = border(vec![], false);
+        assert_eq!(idle, t.input_border, "idle");
+        let (_, hovered) = border(vec![egui::Event::PointerMoved(outer.center())], false);
+        assert_eq!(hovered, t.accent.linear_multiply(0.55), "hovered");
+        let (_, focused) = border(vec![], true);
+        assert_eq!(focused, t.accent, "focused");
+        // Opening the list with a click on the arrow keeps the accent outline.
+        for pressed in [true, false] {
+            let pos = pos2(outer.right() - COMBO_ARROW_W / 2.0, outer.center().y);
+            ctx.run_ui(
+                egui::RawInput {
+                    events: vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::default() },
+                    ],
+                    ..Default::default()
+                },
+                |ui| {
+                    let _ = font_combo(ui, "font", 150.0, "Arial", &fonts, None);
+                },
+            )
+            .drop_without_applying_deltas();
+        }
+        let (_, open) = border(vec![], false);
+        assert_eq!(open, t.accent, "open");
+    }
+
+    /// One enclosing outline and no separate arrow frame or interior divider: the old design stroked
+    /// the 16 pt arrow box with its own 1 pt border, which is what made it look detached.
+    #[test]
+    fn a_combo_paints_one_outline_and_no_arrow_frame() {
+        let ctx = combo_ctx();
+        let fonts: Vec<String> = ["Arial"].map(String::from).to_vec();
+        COMBO_RECTS.with(|c| c.borrow_mut().clear());
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let _ = font_combo(ui, "font", 150.0, "Arial", &fonts, None);
+        });
+        let (_, outer, _text, arrow) = COMBO_RECTS.with(|c| c.take()).into_iter().next().expect("the combo was drawn");
+        let stroked: Vec<Rect> = out
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Rect(r) if r.stroke.width > 0.0 => Some(r.rect),
+                _ => None,
+            })
+            .collect();
+        out.drop_without_applying_deltas();
+        let same = |a: Rect, b: Rect| (a.min - b.min).length() < 0.01 && (a.max - b.max).length() < 0.01;
+        assert_eq!(stroked.iter().filter(|r| same(**r, outer)).count(), 1, "the control has one outline: {stroked:?}");
+        assert!(!stroked.iter().any(|r| same(*r, arrow)), "the arrow area has its own frame: {stroked:?}");
+        assert_eq!(stroked.iter().filter(|r| outer.contains_rect(**r) && !same(**r, outer)).count(), 0, "a stroke inside the control: {stroked:?}");
+    }
+
+    /// The arrow is its own labelled control: a click on it opens the list, and picking a row returns
+    /// the family. The label is what a screen reader announces for the arrow area.
+    #[test]
+    fn the_arrow_opens_the_list_and_picking_a_row_commits_it() {
+        use egui_kittest::kittest::Queryable;
+        let fonts: Vec<String> = ["Arial", "Courier New", "Times New Roman"].map(String::from).to_vec();
+        let picked = std::cell::RefCell::new(None);
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(420.0, 320.0)).build_ui(|ui| {
+            if let Some(v) = font_combo(ui, "font", 150.0, "Arial", &fonts, None) {
+                *picked.borrow_mut() = Some(v);
+            }
+        });
+        h.run_steps(3);
+        assert_eq!(h.query_all_by_label("font list").count(), 1, "the arrow area carries an accessible label");
+        let (_, outer, _text, arrow) = COMBO_RECTS.with(|c| c.borrow().iter().find(|(n, ..)| n == "font").cloned()).expect("the combo was drawn");
+        click_pointer(&mut h, arrow.center());
+        assert!(h.query_all_by_label("Courier New").count() >= 1, "the arrow opened the list");
+        let row = h.query_all_by_label("Courier New").next().expect("the row");
+        // #535: the list drops from the control's left edge, not from the arrow. The row sits inside
+        // the popup frame's margin, so its left edge is a few points right of the control's.
+        let inset = row.rect().left() - outer.left();
+        assert!((0.0..12.0).contains(&inset), "the list dropped at {:?}, not from the control's left edge {outer:?}", row.rect());
+        assert!(row.rect().left() < arrow.left(), "the list dropped from the arrow area, not the control: {:?}", row.rect());
+        assert!(row.rect().top() >= outer.bottom() - 1.0, "the list did not open under the control: {:?}", row.rect());
+        row.click();
+        h.run_steps(3);
+        assert_eq!(picked.borrow().as_deref(), Some("Courier New"), "picking a row returns the family");
+    }
+
+    /// The search list keeps its Add Font entry: the arrow opens the list and that row returns the
+    /// sentinel the ribbon turns into `font.add`.
+    #[test]
+    fn the_search_list_still_returns_the_add_font_entry() {
+        use egui_kittest::kittest::Queryable;
+        let fonts: Vec<String> = ["Arial"].map(String::from).to_vec();
+        let picked = std::cell::RefCell::new(None);
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(420.0, 320.0)).build_ui(|ui| {
+            if let Some(v) = font_combo(ui, "font", 150.0, "Arial", &fonts, None) {
+                *picked.borrow_mut() = Some(v);
+            }
+        });
+        h.run_steps(3);
+        let (_, _outer, _text, arrow) = COMBO_RECTS.with(|c| c.borrow().iter().find(|(n, ..)| n == "font").cloned()).expect("the combo was drawn");
+        click_pointer(&mut h, arrow.center());
+        h.query_all_by_label_contains("Add Font").next().expect("the Add Font row").click();
+        h.run_steps(3);
+        assert_eq!(picked.borrow().as_deref(), Some(ADD_FONT), "Add Font… still returns its sentinel");
+    }
+
+    /// Typing in the field opens the search list and a click outside the field and the list closes
+    /// it again — the focus rule the old design already had.
+    #[test]
+    fn clicking_outside_closes_the_open_search_list() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        let fonts: Vec<String> = ["Arial", "Courier New"].map(String::from).to_vec();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(420.0, 320.0)).build_ui(|ui| {
+            let _ = font_combo(ui, "font", 150.0, "", &fonts, None);
+        });
+        h.run_steps(3);
+        h.get_by_role(Role::TextInput).focus();
+        h.run_steps(1);
+        h.get_by_role(Role::TextInput).type_text("cou");
+        h.run_steps(2);
+        assert!(h.query_all_by_label("Courier New").count() >= 1, "typing opened the search list");
+        click_pointer(&mut h, pos2(400.0, 300.0));
+        assert_eq!(h.query_all_by_label("Courier New").count(), 0, "a click outside closed the list");
+    }
+
+    /// A width that cannot hold a box (not a number, zero, negative) is clamped instead of drawing
+    /// something degenerate, and nothing panics.
+    #[test]
+    fn a_degenerate_combo_width_still_draws_a_usable_box() {
+        let ctx = combo_ctx();
+        let fonts: Vec<String> = ["Arial"].map(String::from).to_vec();
+        COMBO_RECTS.with(|c| c.borrow_mut().clear());
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            let _ = combo(ui, "nan", f32::NAN, "12", &fonts, None);
+            let _ = combo(ui, "zero", 0.0, "12", &fonts, None);
+            let _ = combo(ui, "negative", -5.0, "12", &fonts, None);
+        })
+        .drop_without_applying_deltas();
+        let rects = COMBO_RECTS.with(|c| c.take());
+        assert_eq!(rects.len(), 3, "all three degenerate widths still draw");
+        for (id, outer, _text, arrow) in &rects {
+            assert!(outer.width().is_finite() && outer.width() >= COMBO_MIN_W, "{id}: {} wide", outer.width());
+            assert!((outer.height() - COMBO_H).abs() < 0.01, "{id}: {} tall", outer.height());
+            assert!(arrow.width() > 0.0 && arrow.right() <= outer.right() + 0.01, "{id}: the arrow escaped the control");
         }
     }
 
