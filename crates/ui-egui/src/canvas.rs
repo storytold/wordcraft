@@ -2890,6 +2890,10 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
         item(ui, app, "Reset Picture", "picture.reset", json!({}));
         item(ui, app, "Size and Crop…", "ui.tab", json!({"tab": "Picture Format"}));
     }
+    if picture || object {
+        // A numbered caption under (or over) the picture, shape, text box or chart (#1230).
+        item(ui, app, "Insert Caption…", "references.caption", json!({}));
+    }
     if object {
         ui.menu_button(tl!("Wrap Text"), |ui| crate::ribbon::wrap_text_items(ui, app));
     }
@@ -4210,6 +4214,46 @@ mod tests {
         assert_menu(&h, &["Split Cells", "Merge Cells"], false);
         pick(&mut h, &["Delete", "Delete Table"]);
         assert!(h.state().session.doc.body.iter().all(|b| b.as_table().is_none()));
+    }
+
+    /// #1230: right-clicking a picture offers Insert Caption…, as in Word. For a picture in a
+    /// table cell the dialog proposes a Figure caption (not Table), and the caption goes under
+    /// the picture in that cell.
+    #[test]
+    fn right_click_on_a_picture_offers_insert_caption() {
+        let mut h = table_window();
+        h.state_mut().run("caret.end", json!({})).unwrap();
+        let mut png = Vec::new();
+        let img = image::RgbaImage::from_pixel(40, 20, image::Rgba([30, 90, 200, 255]));
+        image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        h.state_mut().run("insert.picture", json!({"data": wordcraft_engine::cmd::insert::base64_encode(&png), "width": 60})).unwrap();
+        let pos = wordcraft_engine::cmd::objects::selected(&h.state().session).unwrap().0;
+        h.state_mut().session.sel = wordcraft_engine::Selection::caret(Pos::body(1, 0));
+        steps(&mut h, 4);
+        let rect = h.state_mut().session.layout().object(&pos, 0).expect("the picture is laid out").rect;
+        let at = crate::frame::to_screen(h.state().canvas.page_rects[0], h.state().canvas.scale, rect).center();
+        right_click(&mut h, at);
+        assert!(wordcraft_engine::cmd::objects::object_selection(&h.state().session).is_some(), "the right-click selected the picture");
+        assert_menu(&h, &["Insert Caption…", "Wrap Text"], true);
+        pick(&mut h, &["Insert Caption…"]);
+        let form = match &h.state().dialog {
+            Some(crate::dialogs::Dialog::Refs(d)) => match &**d {
+                crate::dialogs_refs::RefsDialog::Caption(f) => f.clone(),
+                d => panic!("not the caption dialog: {d:?}"),
+            },
+            d => panic!("no caption dialog: {d:?}"),
+        };
+        assert_eq!(form.label, "Figure", "a picture in a table gets a figure caption");
+        h.state_mut().dialog = None;
+        h.state_mut().run("references.caption", form.params()).unwrap();
+        let (table, r, c) = pos.path.cell().unwrap();
+        let cell: Vec<String> = h.state().session.doc.table(StoryRef::Body, &table).unwrap().rows[r].cells[c]
+            .blocks
+            .iter()
+            .filter_map(|b| b.as_para())
+            .map(|p| p.plain_text())
+            .collect();
+        assert_eq!(cell.last().map(String::as_str), Some("Figure 1"), "{cell:?}");
     }
 
     /// With just the caret in a cell, right-click › Delete › Delete Table removes the table, in

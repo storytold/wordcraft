@@ -265,6 +265,10 @@ pub enum Dialog {
         message: String,
         /// Vertical alignment (`layout.verticalAlign`, applied only if changed).
         valign: wordcraft_doc::section::PageVAlign,
+        /// Headers and footers: different odd and even pages (the document's) and a different
+        /// first page (the section's), applied only if changed (#1230).
+        odd_even: bool,
+        first_page: bool,
     },
     Link {
         url: String,
@@ -1006,6 +1010,8 @@ impl Dialog {
                     grid_was: grid,
                     rtl: sp.rtl,
                     valign: sp.valign,
+                    odd_even: app.session.doc.settings.even_odd_headers,
+                    first_page: sp.title_page,
                 }
             }
             "link" => Dialog::Link { url: "https://".into(), text: app.session.selected_text(), place: false, targets: None, pick: None },
@@ -1927,7 +1933,24 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             ok || cancel
         }
-        Dialog::PageSetup { top, bottom, left, right, landscape, mirror, rtl, grid, grid_was, paper, paper_was, paper_custom, message, valign } => {
+        Dialog::PageSetup {
+            top,
+            bottom,
+            left,
+            right,
+            landscape,
+            mirror,
+            rtl,
+            grid,
+            grid_was,
+            paper,
+            paper_was,
+            paper_custom,
+            message,
+            valign,
+            odd_even,
+            first_page,
+        } => {
             ui.label(egui::RichText::new(tl!("Margins")).font(semibold(12.5)));
             egui::Grid::new("ps").num_columns(4).show(ui, |ui| {
                 ui.label(tl!("Top:"));
@@ -1974,6 +1997,10 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 ui.label(egui::RichText::new(message.as_str()).small().color(ui.visuals().error_fg_color));
             }
             page_valign_combo(ui, valign);
+            // Word's Page Setup › Layout: a title page without the page number (#1230).
+            ui.label(egui::RichText::new(tl!("Headers and footers")).font(semibold(12.5)));
+            ui.checkbox(odd_even, tl!("Different Odd & Even Pages"));
+            ui.checkbox(first_page, tl!("Different First Page"));
             let (mut ok, cancel) = buttons(ui, tl!("OK"));
             if ok {
                 // Everything OK changes is one undo step; a refused command applies nothing.
@@ -2000,6 +2027,12 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                         }
                         if *valign != wordcraft_engine::cmd::page::sect(&app.session).valign {
                             commands.push(("layout.verticalAlign", json!({"value": page_valign_value(*valign)})));
+                        }
+                        if *odd_even != app.session.doc.settings.even_odd_headers {
+                            commands.push(("layout.differentOddEven", json!({"value": *odd_even})));
+                        }
+                        if *first_page != wordcraft_engine::cmd::page::sect(&app.session).title_page {
+                            commands.push(("layout.differentFirstPage", json!({"value": *first_page})));
                         }
                         run_as_one_step(app, commands)
                     });
@@ -4501,5 +4534,48 @@ mod tests {
             h.step();
         }
         assert_eq!(wordcraft_engine::cmd::page::sect(&h.state().session).valign, PageVAlign::Justify);
+    }
+
+    /// #1230: Page Setup's Different first page check box gives the title page no page number
+    /// (its footer is the empty first-page one), in one undo step.
+    #[test]
+    fn page_setup_different_first_page_leaves_the_title_page_unnumbered() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = app_with("Title");
+        app.run("insert.pageBreak", json!({})).unwrap();
+        app.run("text.insert", json!({"text": "Body"})).unwrap();
+        app.run("insert.pageNumber", json!({"position": "bottom", "align": "center"})).unwrap();
+        let _ = app.run("insert.closeHeader", json!({}));
+        assert!(app.session.layout().pages[0].footer_story.is_some(), "page 1 is numbered");
+        app.dialog = Dialog::open("pageSetup", &mut app);
+        assert!(matches!(app.dialog, Some(Dialog::PageSetup { first_page: false, odd_even: false, .. })));
+        let depth = app.session.undo_depth();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        for _ in 0..4 {
+            h.step();
+        }
+        assert!(h.query_by_label("Different Odd & Even Pages").is_some(), "the dialog has both check boxes");
+        h.get_by_label("Different First Page").click();
+        for _ in 0..2 {
+            h.step();
+        }
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "OK").click();
+        for _ in 0..4 {
+            h.step();
+        }
+        let s = &mut h.state_mut().session;
+        assert!(wordcraft_engine::cmd::page::sect(s).title_page);
+        assert!(!s.doc.settings.even_odd_headers, "left as it was");
+        assert_eq!(s.undo_depth(), depth + 1);
+        let pages = &s.layout().pages;
+        assert!(pages[0].footer_story.is_none(), "the title page shows no page number");
+        assert!(pages[1].footer_story.is_some(), "the next page keeps its number");
     }
 }
