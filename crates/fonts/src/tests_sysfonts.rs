@@ -456,3 +456,31 @@ fn font_list_previews_load_nothing_for_good() {
     assert_eq!(db.loaded_font_bytes(), used, "memory stays bounded across previews");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn catalog_postscript_names() {
+    let dir = font_dir("postscript");
+    for path in [dir.join("Sysfont-Regular.ttf"), dir.join("Sub/Sysfont-Bold.TTF")] {
+        let mut bytes = std::fs::read(&path).unwrap();
+        for (from, to) in [
+            (b"SourceSans3".to_vec(), b"SysfontSans".to_vec()),
+            ("SourceSans3".encode_utf16().flat_map(u16::to_be_bytes).collect(), "SysfontSans".encode_utf16().flat_map(u16::to_be_bytes).collect()),
+        ] {
+            let mut offset = 0;
+            while let Some(at) = bytes[offset..].windows(from.len()).position(|w| w == from) {
+                bytes[offset + at..offset + at + to.len()].copy_from_slice(&to);
+                offset += at + to.len();
+            }
+        }
+        std::fs::write(path, bytes).unwrap();
+    }
+    let db = FontDb::with_font_dirs(vec![dir.clone()]);
+    assert!(!db.is_loaded("SysfontSans-Bold"));
+    assert!(db.has_family("SysfontSans-Bold"));
+    let face = db.face("SysfontSans-Bold", "Regular");
+    assert_eq!((face.family.as_str(), face.style.as_str()), (FAMILY, "Bold"));
+    assert_eq!(db.face("sysfontsans-bold", "Italic").id(), face.id());
+    assert_eq!(db.face(FAMILY, "Regular").style, "Regular");
+    assert!(!has(&db.families(), "SysfontSans-Bold"));
+    std::fs::remove_dir_all(dir).unwrap();
+}

@@ -60,6 +60,8 @@ pub struct FontFace {
     /// The family's names in other languages (宋体 for SimSun), from the `name` table. Lookups by
     /// family name accept them; the font list shows them in a matching interface language.
     pub local_names: Vec<LocalName>,
+    /// Exact OpenType name ID 6, distinct from family and style names.
+    postscript: Option<String>,
     /// usWeightClass-style weight (400 = regular).
     pub weight: f32,
     pub italic: bool,
@@ -179,9 +181,11 @@ impl FontFace {
         }
         pen.0
     }
-    /// Is `family` this face's typographic or legacy family name?
+    /// Is `family` this face's typographic, legacy or PostScript name?
     pub fn named(&self, family: &str) -> bool {
-        self.family.eq_ignore_ascii_case(family) || self.legacy_family.eq_ignore_ascii_case(family)
+        self.family.eq_ignore_ascii_case(family)
+            || self.legacy_family.eq_ignore_ascii_case(family)
+            || self.postscript.as_ref().is_some_and(|n| n.eq_ignore_ascii_case(family))
     }
     /// Does the face map `c` to a glyph?
     pub fn covers(&self, c: char) -> bool {
@@ -290,6 +294,7 @@ struct CatalogEntry {
     family: String,
     style: String,
     legacy: String,
+    postscript: Option<String>,
     local: Vec<LocalName>,
     /// A Chinese, Japanese or Korean font ([`FontFace::is_east_asian`]).
     east_asian: bool,
@@ -748,6 +753,8 @@ struct Found {
     style: String,
     /// The legacy family name ([`FontFace::legacy_family`]).
     legacy: String,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    postscript: Option<String>,
     /// The family's names in other languages ([`FontFace::local_names`]).
     local: Vec<LocalName>,
     /// A Chinese, Japanese or Korean font ([`FontFace::is_east_asian`]); the scan's catalog keeps it.
@@ -775,13 +782,13 @@ fn font_faces(f: &skrifa::FontRef<'_>, index: u32) -> Vec<Found> {
         let legacy = legacy_family(&family, &style);
         // Name ID 1 names the default instance only: keep the names of the whole family.
         let local = local.iter().filter(|n| n.english.eq_ignore_ascii_case(&family)).cloned().collect();
-        named.push(Found { index, family: family.clone(), style, legacy, local, east_asian, coords });
+        named.push(Found { index, family: family.clone(), style, legacy, postscript: None, local, east_asian, coords });
     }
     if !named.is_empty() {
         return named;
     }
     let legacy = id1.filter(|n| !n.eq_ignore_ascii_case(&family)).unwrap_or_else(|| legacy_family(&family, &style));
-    vec![Found { index, family, style, legacy, local, east_asian, coords: Vec::new() }]
+    vec![Found { index, family, style, legacy, postscript: name(f, &[StringId::POSTSCRIPT_NAME]), local, east_asian, coords: Vec::new() }]
 }
 
 /// Parse every face in `data` (a font file or collection); a variable font yields one face per
@@ -835,6 +842,7 @@ fn make_face(bytes: FontBytes, index: u32, family: String, style: String, legacy
         style,
         legacy_family,
         local_names: Vec::new(),
+        postscript: coords.is_empty().then(|| name(&f, &[StringId::POSTSCRIPT_NAME])).flatten(),
         weight,
         italic,
         upem: m.units_per_em.max(1) as f64,
@@ -1158,6 +1166,7 @@ impl FontDb {
                         family: f.family,
                         style: f.style,
                         legacy: f.legacy,
+                        postscript: f.postscript,
                         local: f.local,
                         east_asian: f.east_asian,
                         path: p.clone(),
@@ -1186,7 +1195,11 @@ impl FontDb {
             let cat = self.read_catalog();
             let families: Vec<&str> = cat
                 .iter()
-                .filter(|c| c.family.eq_ignore_ascii_case(family) || c.legacy.eq_ignore_ascii_case(family))
+                .filter(|c| {
+                    c.family.eq_ignore_ascii_case(family)
+                        || c.legacy.eq_ignore_ascii_case(family)
+                        || c.postscript.as_ref().is_some_and(|n| n.eq_ignore_ascii_case(family))
+                })
                 .map(|c| c.family.as_str())
                 .collect();
             let mut p: Vec<_> = cat.iter().filter(|c| families.iter().any(|f| c.family.eq_ignore_ascii_case(f))).map(|c| c.path.clone()).collect();
@@ -1201,7 +1214,7 @@ impl FontDb {
     /// Resolve a family + style to a face, falling back to the closest style of the family, then to
     /// Source Sans 3 Regular. `family` is a typographic family ("Roboto") or a face's legacy family
     /// name ("Roboto Light", whose styles are Light and Light Italic). Installed system fonts are
-    /// found by name whatever ran before.
+    /// found by name whatever ran before. An exact PostScript name selects its face.
     pub fn face(&self, family: &str, style: &str) -> Arc<FontFace> {
         if let Some(f) = self.find(family, style) {
             return f;
@@ -1299,19 +1312,23 @@ impl FontDb {
     }
 
     /// Is `family` available (loaded, or installed on the system)? English and localized family
-    /// names both count.
+    /// names and exact PostScript face names count.
     pub fn has_family(&self, family: &str) -> bool {
         if self.is_loaded(family) {
             return true;
         }
         #[cfg(not(target_arch = "wasm32"))]
-        if self.read_catalog().iter().any(|c| c.family.eq_ignore_ascii_case(family) || c.legacy.eq_ignore_ascii_case(family)) {
+        if self.read_catalog().iter().any(|c| {
+            c.family.eq_ignore_ascii_case(family)
+                || c.legacy.eq_ignore_ascii_case(family)
+                || c.postscript.as_ref().is_some_and(|n| n.eq_ignore_ascii_case(family))
+        }) {
             return true;
         }
         self.english_family(family).is_some()
     }
 
-    /// Is a face named `family` (its typographic or legacy family) loaded?
+    /// Is a face named `family` (its typographic, legacy or PostScript name) loaded?
     pub fn is_loaded(&self, family: &str) -> bool {
         self.read_faces().iter().any(|f| f.named(family))
     }
@@ -1375,7 +1392,8 @@ impl FontDb {
             cands = faces.iter().filter(|f| f.legacy_family.eq_ignore_ascii_case(family)).collect();
         }
         if cands.is_empty() {
-            return None;
+            // A PostScript name selects one exact face, regardless of the requested style.
+            return faces.iter().find(|f| f.postscript.as_ref().is_some_and(|n| n.eq_ignore_ascii_case(family))).cloned();
         }
         let ns = norm(style);
         if let Some(f) = cands.iter().find(|f| norm(&f.style) == ns) {
@@ -1789,5 +1807,21 @@ mod tests {
         let b = db.face("Inter Medium", "Medium {wght:520}");
         assert_eq!(a.id(), b.id());
         assert_eq!(a.legacy_family, "Inter Medium");
+    }
+
+    #[test]
+    fn postscript_names_select_faces() {
+        let db = FontDb::with_font_dirs(vec![]);
+        for style in ["Regular", "Bold", "Italic", "Bold Italic"] {
+            let expected = db.face("Source Serif 4", style);
+            let f = expected.skrifa().unwrap();
+            let ps = name(&f, &[StringId::POSTSCRIPT_NAME]).unwrap();
+            assert!(db.has_family(&ps), "{ps}");
+            let actual = db.face(&ps, "Regular");
+            assert_eq!(actual.id(), expected.id(), "{ps}");
+            assert_eq!(db.face(&ps.to_ascii_lowercase(), "Bold").id(), expected.id());
+        }
+        assert!(!db.has_family("NotAFont-Bold"));
+        assert_eq!(db.face("Source Serif 4", "Regular").style, "Regular");
     }
 }
