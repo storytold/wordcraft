@@ -913,6 +913,7 @@ struct StyleInfo {
     fmt: FmtDelta,
     align: Option<Align>,
     page_break: bool,
+    page_break_after: bool,
     outline: Option<u8>,
     border_bottom: bool,
     /// `fo:background-color` of a table-cell style's `style:table-cell-properties`.
@@ -942,7 +943,7 @@ fn columns_of(a: &Attrs) -> Columns {
 
 /// A `style:column-sep` (ODF 1.3 §17.13) draws a line between columns unless its style is "none".
 fn column_sep(a: &Attrs) -> bool {
-    get(a, "style:style") != Some("none")
+    !get(a, "style:style").is_some_and(|s| s.trim().eq_ignore_ascii_case("none"))
 }
 
 /// Length → points.
@@ -1062,23 +1063,25 @@ impl Styles {
                     if let Some((_, s)) = &mut cur {
                         let d = &mut s.fmt;
                         if let Some(w) = get(&a, "fo:font-weight") {
-                            d.bold = Some(w == "bold" || w.parse::<u32>().is_ok_and(|n| n >= 600));
+                            let w = w.trim();
+                            d.bold = Some(w.eq_ignore_ascii_case("bold") || w.parse::<u32>().is_ok_and(|n| n >= 600));
                         }
                         if let Some(v) = get(&a, "fo:font-style") {
-                            d.italic = Some(v == "italic" || v == "oblique");
+                            let v = v.trim();
+                            d.italic = Some(v.eq_ignore_ascii_case("italic") || v.eq_ignore_ascii_case("oblique"));
                         }
                         if let Some(v) = get(&a, "style:text-underline-style") {
-                            d.underline = Some(v != "none");
+                            d.underline = Some(!v.trim().eq_ignore_ascii_case("none"));
                         }
                         if let Some(v) = get(&a, "style:text-line-through-style") {
-                            d.strike = Some(v != "none");
+                            d.strike = Some(!v.trim().eq_ignore_ascii_case("none"));
                         }
                         if let Some(v) = get(&a, "style:text-position") {
                             let v = v.trim();
                             let first = v.split_whitespace().next().unwrap_or("");
                             let pct = first.trim_end_matches('%').parse::<f32>().unwrap_or(0.0);
-                            d.sup = Some(first == "super" || pct > 0.0);
-                            d.sub = Some(first == "sub" || pct < 0.0);
+                            d.sup = Some(first.eq_ignore_ascii_case("super") || pct > 0.0);
+                            d.sub = Some(first.eq_ignore_ascii_case("sub") || pct < 0.0);
                         }
                         if let Some(c) = get(&a, "fo:color").and_then(model::parse_color) {
                             d.color = Some(c);
@@ -1091,7 +1094,7 @@ impl Styles {
                         }
                         if let Some(fam) = get(&a, "fo:font-family").or_else(|| get(&a, "style:font-name")) {
                             let fam = fam.split(',').next().unwrap_or("").trim().trim_matches(['\'', '"']).to_string();
-                            if model::is_mono(&fam) || get(&a, "style:font-pitch") == Some("fixed") {
+                            if model::is_mono(&fam) || get(&a, "style:font-pitch").is_some_and(|p| p.trim().eq_ignore_ascii_case("fixed")) {
                                 d.code = Some(true);
                             } else if !fam.is_empty() {
                                 d.font = Some(fam);
@@ -1100,10 +1103,16 @@ impl Styles {
                     }
                 }
                 "table-properties" => {
-                    if let Some((_, s)) = &mut cur
-                        && let Some(v) = get(&a, "style:page-number")
-                    {
-                        s.page_number = Some(v.trim().parse::<u32>().ok().map(|n| n.min(32_767)));
+                    if let Some((_, s)) = &mut cur {
+                        if let Some(v) = get(&a, "style:page-number") {
+                            s.page_number = Some(v.trim().parse::<u32>().ok().map(|n| n.min(32_767)));
+                        }
+                        if get(&a, "fo:break-before").is_some_and(|v| v.trim().eq_ignore_ascii_case("page")) {
+                            s.page_break = true;
+                        }
+                        if get(&a, "fo:break-after").is_some_and(|v| v.trim().eq_ignore_ascii_case("page")) {
+                            s.page_break_after = true;
+                        }
                     }
                 }
                 "table-cell-properties" => {
@@ -1115,20 +1124,23 @@ impl Styles {
                 }
                 "paragraph-properties" => {
                     if let Some((_, s)) = &mut cur {
-                        s.align = match get(&a, "fo:text-align") {
+                        s.align = match get(&a, "fo:text-align").map(|v| v.trim().to_ascii_lowercase()).as_deref() {
                             Some("center") => Some(Align::Center),
                             Some("end") | Some("right") => Some(Align::Right),
                             Some("justify") => Some(Align::Justify),
                             Some("start") | Some("left") => Some(Align::Left),
                             _ => s.align,
                         };
-                        if get(&a, "fo:break-before") == Some("page") {
+                        if get(&a, "fo:break-before").is_some_and(|v| v.trim().eq_ignore_ascii_case("page")) {
                             s.page_break = true;
+                        }
+                        if get(&a, "fo:break-after").is_some_and(|v| v.trim().eq_ignore_ascii_case("page")) {
+                            s.page_break_after = true;
                         }
                         if let Some(v) = get(&a, "style:page-number") {
                             s.page_number = Some(v.trim().parse::<u32>().ok().map(|n| n.min(32_767)));
                         }
-                        if get(&a, "fo:border-bottom").is_some_and(|b| b != "none") {
+                        if get(&a, "fo:border-bottom").is_some_and(|b| !matches!(b.trim().to_ascii_lowercase().as_str(), "none" | "hidden" | "0" | "0pt" | "0px")) {
                             s.border_bottom = true;
                         }
                     }
@@ -1226,7 +1238,7 @@ impl Styles {
     /// the style that gives the paragraph its kind and that style's ancestors: their formatting
     /// is the kind's own look (a heading's size and colour), not direct formatting. `Standard`,
     /// the default paragraph style, holds document defaults and is left out too.
-    fn para(&self, name: &str) -> (Kind, Option<Align>, bool, bool, Fmt) {
+    fn para(&self, name: &str) -> (Kind, Option<Align>, bool, bool, bool, Fmt) {
         let chain = self.chain(name);
         let mut kind = Kind::Normal;
         let mut kind_at = chain.len();
@@ -1256,12 +1268,20 @@ impl Styles {
         }
         let align = chain.iter().find_map(|(_, s)| s.align);
         let pb = chain.iter().take_while(|(_, s)| s.auto).any(|(_, s)| s.page_break);
+        let pb_after = chain.iter().take_while(|(_, s)| s.auto).any(|(_, s)| s.page_break_after);
         let rule = chain.iter().any(|(_, s)| s.border_bottom);
         let mut f = Fmt::default();
         for (_, s) in chain.iter().take(kind_at).rev().filter(|(n, s)| s.auto || *n != "Standard") {
             s.fmt.apply(&mut f);
         }
-        (kind, align, pb, rule, f)
+        (kind, align, pb, pb_after, rule, f)
+    }
+
+    fn table_page_break(&self, name: &str) -> (bool, bool) {
+        let chain = self.chain(name);
+        let pb = chain.iter().take_while(|(_, s)| s.auto).any(|(_, s)| s.page_break);
+        let pb_after = chain.iter().take_while(|(_, s)| s.auto).any(|(_, s)| s.page_break_after);
+        (pb, pb_after)
     }
 }
 
@@ -1310,6 +1330,7 @@ struct Body<'a> {
     fmt: Vec<Fmt>,
     para: Option<Para>,
     para_cont: bool,
+    pending_page_break: bool,
     /// Open lists: (style name, item open, item used).
     lists: Vec<(Option<String>, bool)>,
     item_used: Vec<bool>,
@@ -1418,7 +1439,12 @@ impl Body<'_> {
 
     fn start_para(&mut self, style: Option<&str>, heading: Option<u8>) {
         self.end_para();
-        let (mut kind, align, mut pb, rule, base) = style.map(|s| self.styles.para(s)).unwrap_or((Kind::Normal, None, false, false, Fmt::default()));
+        let (mut kind, align, mut pb, pb_after, rule, base) =
+            style.map(|s| self.styles.para(s)).unwrap_or((Kind::Normal, None, false, false, false, Fmt::default()));
+        pb |= std::mem::take(&mut self.pending_page_break);
+        if pb_after {
+            self.pending_page_break = true;
+        }
         // The section break starts the new page; no page break besides.
         if let Some(next) = style.and_then(|s| self.page_section(s))
             && self.break_section(next)
@@ -1710,6 +1736,11 @@ impl Body<'_> {
                 // A body table whose style names a master page starts that page (ODF 1.3 §19.509).
                 if let Some(next) = get(a, "table:style-name").and_then(|s| self.page_section(s)) {
                     self.break_section(next);
+                }
+                if let Some((pb, pb_after)) = get(a, "table:style-name").map(|s| self.styles.table_page_break(s)) {
+                    if pb || pb_after {
+                        self.pending_page_break = true;
+                    }
                 }
                 if self.tables.len() >= model::MAX_DEPTH {
                     self.skip = 1;
@@ -2173,6 +2204,7 @@ fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>), Str
         fmt: Vec::new(),
         para: None,
         para_cont: false,
+        pending_page_break: false,
         lists: Vec::new(),
         lists_saved: Vec::new(),
         item_used: Vec::new(),
@@ -2335,7 +2367,7 @@ fn apply_layout(a: &Attrs, sec: &mut SectionProps) {
         sec.page_w = w;
         sec.page_h = h;
     }
-    sec.landscape = match get(a, "style:print-orientation") {
+    sec.landscape = match get(a, "style:print-orientation").map(|s| s.trim().to_ascii_lowercase()).as_deref() {
         Some("landscape") => true,
         Some("portrait") => false,
         _ => sec.page_w > sec.page_h,
@@ -2713,6 +2745,37 @@ mod tests {
         assert!(matches!(doc.body.get(3).map(|b| &**b), Some(wordcraft_doc::Block::Table(_))));
         // A one-column page layout keeps the default column gap.
         assert_eq!(secs[0].1.columns, wordcraft_doc::section::Columns::default());
+    }
+
+    #[test]
+    fn break_after_and_case_insensitive_styles() {
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:automatic-styles>
+            <style:style style:name="BreakAfter" style:family="paragraph"><style:paragraph-properties fo:break-after="Page" fo:text-align=" Center "/></style:style>
+            <style:style style:name="BreakBefore" style:family="paragraph"><style:paragraph-properties fo:break-before=" page "/></style:style>
+            <style:style style:name="StyledText" style:family="text"><style:text-properties fo:font-weight=" BOLD " fo:font-style=" Italic " style:text-underline-style=" None "/></style:style>
+            </office:automatic-styles><office:body><office:text>
+            <text:p text:style-name="BreakAfter"><text:span text:style-name="StyledText">P1</text:span></text:p>
+            <text:p>P2</text:p>
+            <text:p text:style-name="BreakBefore">P3</text:p>
+            </office:text></office:body></office:document-content>"#
+        );
+        let doc = import(&package(&content, None)).unwrap();
+        assert_eq!(doc.body.len(), 3);
+        let p1 = match &*doc.body[0] { wordcraft_doc::Block::Para(p) => p, _ => panic!() };
+        let p2 = match &*doc.body[1] { wordcraft_doc::Block::Para(p) => p, _ => panic!() };
+        let p3 = match &*doc.body[2] { wordcraft_doc::Block::Para(p) => p, _ => panic!() };
+        assert_eq!(p1.props.align, Some(wordcraft_doc::props::Align::Center));
+        assert_eq!(p1.props.page_break_before, None);
+        // p2 broke after p1:
+        assert_eq!(p2.props.page_break_before, Some(true));
+        // p3 broke before:
+        assert_eq!(p3.props.page_break_before, Some(true));
+        // font weight and style case-insensitivity:
+        let r = &p1.runs[0];
+        assert_eq!(r.props.bold, Some(true));
+        assert_eq!(r.props.italic, Some(true));
+        assert_eq!(r.props.underline, None);
     }
 
     // --- Tracked changes (ODF 1.3 Part 3 §5.5) -------------------------------------------------
