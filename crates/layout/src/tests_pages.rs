@@ -504,3 +504,29 @@ fn widow_control_moves_a_three_line_paragraph_whole() {
     }
     assert!(split4, "the sweep never took the paragraph across a page break");
 }
+
+#[test]
+fn footer_border_limits_body() {
+    use wordcraft_doc::props::{Border, Borders, HeightRule};
+    let mut d = Document::from_text(&"Body line\n".repeat(40));
+    d.last_section.page_h = 400.0;
+    d.last_section.margin_bottom = 36.0;
+    d.last_section.footer = 16.0;
+    let mut table = wordcraft_doc::Table::new(1, 1, d.last_section.text_width());
+    table.rows[0].props.height = Some(160.0);
+    table.rows[0].props.height_rule = HeightRule::Exact;
+    table.props.borders = Some(Borders::all(Border::single(4.0)));
+    let id = d.add_part(PartKind::Footer, vec![Arc::new(Block::Table(table))]);
+    d.last_section.footers.default = Some(id);
+    for page in &lay(&d).pages {
+        let top = page
+            .footer
+            .iter()
+            .filter_map(|item| match item {
+                Placed::Rule { y0, y1, border, .. } if (y0 - y1).abs() < 0.01 => Some(y0 - border.width / 2.0),
+                _ => None,
+            })
+            .fold(f32::MAX, f32::min);
+        assert!(page.body.bottom() <= top + 0.01, "body {}, footer stroke {top}", page.body.bottom());
+    }
+}
