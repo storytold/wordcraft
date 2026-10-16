@@ -27,6 +27,8 @@ pub struct RowLayout {
 
 /// A cell of a [`RowLayout`].
 pub struct CellPart {
+    /// Top cell margin and visible border band retained on a continuation.
+    pub(crate) top: f32,
     /// Its items in the row's `items` (its fill, text, borders and cell area).
     pub items: std::ops::Range<usize>,
     /// Where its content ends below the row's top, its last paragraph's space after included
@@ -745,7 +747,8 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                 story,
                 clip: exact && c.h > span_h + 0.01,
             });
-            parts.push(CellPart { items: first..items.len(), end });
+            let top = c.margins[0] + c.borders.top.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0));
+            parts.push(CellPart { top, items: first..items.len(), end });
         }
         out.push(RowLayout { height: rh, items, bottom: bottoms.get(ri).copied().unwrap_or(0.0), cells: parts });
     }
@@ -839,13 +842,11 @@ pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
     if !kept_any || first_moved == f32::MAX {
         return None;
     }
-    // How far up things move: each cell's first line that moves on goes to the top of the
-    // continuation, keeping a little of the cell's top margin.
-    let shift_to = |top: f32| (top - 2.0).max(0.0);
-    let shifts: Vec<f32> = moved.iter().map(|&m| shift_to(if m < f32::MAX { m } else { first_moved })).collect();
+    // Each cell resumes below its own top margin and border band.
+    let shifts: Vec<f32> = moved.iter().zip(&row.cells).map(|(&m, c)| ((if m < f32::MAX { m } else { first_moved }) - c.top).max(0.0)).collect();
     // The continuation is as tall as the cell needing the most room (what it moves on and the
     // bottom margin, the rest of the row for turned text), and at least the rest of the row.
-    let full = (row.height - shift_to(first_moved)).max(4.0);
+    let full = (row.height - shifts.iter().copied().fold(f32::MAX, f32::min)).max(4.0);
     let mut need = row.height - cut;
     for ((c, &m), &s) in row.cells.iter().zip(&moved).zip(&shifts) {
         if m < f32::MAX {
@@ -955,7 +956,7 @@ pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
                 }
             }
         }
-        parts.push(CellPart { items: start..b.len(), end: c.end.map(|e| e - shift) });
+        parts.push(CellPart { top: c.top, items: start..b.len(), end: c.end.map(|e| e - shift) });
     }
     // The part left on the page is placed and never split again.
     Some((
