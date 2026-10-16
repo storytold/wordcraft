@@ -178,3 +178,40 @@ fn own_margins_and_resize_to_fit_keep_the_text_in_view() {
     let (shown, ..) = two(20.0, TextBody { inset: Some([u32::MAX; 4]), ..Default::default() });
     assert!(shown >= 1);
 }
+
+/// #2191: a floating box that resizes to fit its text and doesn't wrap it (Wrap text in shape
+/// off) is as wide as its line and as deep as its text, whatever size the file gives it: Word's
+/// figure caption on one line, not a 144 pt square of three lines pushing the text beside it.
+/// Without Resize shape to fit text the box keeps its size and the line runs on past its side;
+/// a box whose text wraps keeps its size too.
+#[test]
+fn a_box_fitting_text_it_doesnt_wrap_takes_the_size_of_its_line() {
+    let caption = "(Figure 1.1) A time line of the important vaccines, on one line";
+    let at = |body: TextBody| {
+        let mut d = Document::from_text("x");
+        let id = text_box(&mut d, 0, caption, 144.0, 144.0, body);
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        if let Some(f) = p.objects.iter_mut().find_map(InlineObject::float_mut) {
+            f.wrap = wordcraft_doc::para::Wrap::Square;
+        }
+        p.touch();
+        let l = lay(&d);
+        let line = l.pages[0].items.iter().find_map(|it| match it {
+            Placed::Lines { story: StoryRef::Part(s), para, .. } if *s == id => Some((para.lines.len(), natural_width(para))),
+            _ => None,
+        });
+        (line.unwrap(), frame_of(&l, id))
+    };
+    let [l, t, r, b] = TextBody::default().insets_pt();
+    let ((n, wide), frame) = at(TextBody { auto_fit: true, no_wrap: true, ..Default::default() });
+    assert_eq!(n, 1, "one line");
+    assert!(wide > 200.0, "the line is wider than the box was: {wide}");
+    assert!((frame.w - (wide + l + r)).abs() < 1.0, "as wide as its line: {frame:?}, line {wide}");
+    assert!(frame.h > t + b + 5.0 && frame.h < t + b + 20.0, "one line deep: {frame:?}");
+    let ((n, wide), frame) = at(TextBody { no_wrap: true, ..Default::default() });
+    assert_eq!(n, 1, "one line, past the box's side");
+    assert!(wide > 200.0 && (frame.w - 144.0).abs() < 0.01 && (frame.h - 144.0).abs() < 0.01, "its own size: {frame:?}");
+    let ((n, _), frame) = at(TextBody { auto_fit: true, ..Default::default() });
+    assert!(n > 1, "the text wraps");
+    assert!((frame.w - 144.0).abs() < 0.01 && (frame.h - 144.0).abs() < 0.01, "its own size: {frame:?}");
+}

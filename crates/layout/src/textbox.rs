@@ -11,10 +11,10 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use wordcraft_doc::props::{TextDirection, TextVert, VAlign};
-use wordcraft_doc::{Block, Blocks, Path, StoryRef, TextBody};
+use wordcraft_doc::{Block, Blocks, InlineObject, PartKind, Path, StoryRef, TextBody};
 use wordcraft_geom::Rect;
 
-use crate::{BoxContext, Ctx, Placed, fit_box, layout_box};
+use crate::{BoxContext, Ctx, Placed, fit_box, layout_box, natural_width};
 
 /// Linked text boxes for one layout, worked out when a linked box is first laid out.
 #[derive(Default)]
@@ -95,14 +95,63 @@ fn lay(ctx: &mut Ctx, id: u32, blocks: &Blocks, len: f32, vert: TextVert, depth:
     layout_box(ctx, story, blocks, &[], len, BoxContext::Other, depth + 1, None).items
 }
 
+/// How long a line of text that doesn't wrap may run (the largest page side).
+const NO_WRAP_LEN: f32 = 1584.0;
+/// Room a box fitted to text that doesn't wrap keeps past its widest line, so the line still fits.
+const FIT_SLACK: f32 = 0.5;
+
+/// The widest line and the depth of text box `id`'s text when it doesn't wrap (Wrap text in
+/// shape off). None when it can't be told here, so the box keeps its own size: text running up,
+/// down or stacked, a linked box, or text holding tables or text boxes.
+fn unwrapped_extent(ctx: &mut Ctx, id: u32, depth: usize) -> Option<(f32, f32)> {
+    let part = ctx.doc.parts.get(&id)?;
+    if !part.body.no_wrap || part.body.vert != TextVert::Horz || part.body.next.is_some() {
+        return None;
+    }
+    let nested = |b: &Arc<Block>| match &**b {
+        Block::Para(p) => p.objects.iter().any(|o| !o.text_boxes().is_empty()),
+        Block::Table(_) => true,
+    };
+    if part.blocks.iter().any(nested) || shown_story(ctx, id) != id {
+        return None;
+    }
+    let blocks = part.blocks.clone();
+    // Measured apart from where the text is shown: list numbers and equation numbers count once.
+    let snap = (ctx.counters.clone(), ctx.eq_count);
+    let items = layout_box(ctx, StoryRef::Part(id), &blocks, &[], NO_WRAP_LEN, BoxContext::Other, depth + 1, None).items;
+    (ctx.counters, ctx.eq_count) = snap;
+    let widest = items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Lines { para, .. } => Some(natural_width(para)),
+            _ => None,
+        })
+        .fold(0.0f32, f32::max);
+    Some((widest, extent(&items)))
+}
+
+/// The size Word gives a text box that resizes to fit its text and doesn't wrap it: its widest
+/// line and its text's depth, inside its margins (#2191). None: the shape's own size.
+pub(crate) fn fitted_size(ctx: &mut Ctx, o: &InlineObject, depth: usize) -> Option<(f32, f32)> {
+    let InlineObject::Shape { story: Some(id), .. } = o else { return None };
+    let body = ctx.doc.parts.get(id).filter(|p| p.kind == PartKind::TextBox && p.body.auto_fit)?.body;
+    let (widest, deep) = unwrapped_extent(ctx, *id, depth)?;
+    let [l, t, r, b] = body.insets_pt();
+    Some(((widest + FIT_SLACK + l + r).clamp(1.0, NO_WRAP_LEN), (deep + t + b).clamp(1.0, NO_WRAP_LEN)))
+}
+
 /// The items showing text box `id` in its frame `rect` (page coordinates): its text, or its
 /// share of a linked chain's, cut to what fits, aligned and turned as the box says.
 pub(crate) fn box_items(ctx: &mut Ctx, id: u32, rect: Rect, depth: usize) -> Vec<Placed> {
     let body = ctx.doc.parts.get(&id).map(|p| p.body).unwrap_or_default();
-    let (len, across) = frame(&body, rect.w, rect.h);
+    let (mut len, across) = frame(&body, rect.w, rect.h);
     let items = match chain_share(ctx, id, depth) {
         Some(items) => items,
         None => {
+            // Text that doesn't wrap runs on to its widest line, past the box's side if need be.
+            if let Some((widest, _)) = unwrapped_extent(ctx, id, depth) {
+                len = len.max(widest + FIT_SLACK);
+            }
             if !ctx.boxes.enter(id) {
                 return Vec::new();
             }

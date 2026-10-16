@@ -310,6 +310,9 @@ pub struct TextBody {
     /// Resize shape to fit text (`a:spAutoFit`, VML `mso-fit-shape-to-text`): Word grows the
     /// box to its text, so none of the text is cut.
     pub auto_fit: bool,
+    /// Wrap text in shape off (`wps:bodyPr wrap="none"`): each paragraph stays on one line, past
+    /// the box's sides if need be; with `auto_fit` the box is as wide as the widest line.
+    pub no_wrap: bool,
 }
 
 /// Word's default text box margins (left, top, right, bottom), EMU: 0.1" and 0.05".

@@ -1326,6 +1326,7 @@ impl Reader<'_> {
             }
             part.body.inset = (inset != wordcraft_doc::TEXT_BOX_INSET).then_some(inset);
             part.body.auto_fit = bp.child("a:spAutoFit").is_some();
+            part.body.no_wrap = bp.attr("wrap") == Some("none");
         }
         let mut extra = ShapeExtra::default();
         // A rounded rectangle's own corner (`adj`, ECMA-376 §20.1.10.56); other presets drawn as
