@@ -41,7 +41,7 @@ pub fn decode_entity(name: &str) -> Option<String> {
         "lt" | "LT" => '<',
         "gt" | "GT" => '>',
         "quot" | "QUOT" => '"',
-        "apos" => '\'',
+        "apos" | "APOS" => '\'',
         "nbsp" => '\u{00A0}',
         "ensp" => '\u{2002}',
         "emsp" => '\u{2003}',
@@ -126,6 +126,71 @@ pub fn decode_entity(name: &str) -> Option<String> {
         "mu" => 'μ',
         "Omega" => 'Ω',
         "omega" => 'ω',
+        "minus" => '−',
+        "radic" => '√',
+        "sdot" => '⋅',
+        "lowast" => '∗',
+        "prime" => '′',
+        "Prime" => '″',
+        "permil" => '‰',
+        "asymp" => '≈',
+        "equiv" => '≡',
+        "sim" => '∼',
+        "sum" => '∑',
+        "prod" => '∏',
+        "part" => '∂',
+        "nabla" => '∇',
+        "exist" => '∃',
+        "forall" => '∀',
+        "empty" => '∅',
+        "isin" => '∈',
+        "notin" => '∉',
+        "sub" => '⊂',
+        "sup" => '⊃',
+        "sube" => '⊆',
+        "supe" => '⊇',
+        "cap" => '∩',
+        "cup" => '∪',
+        "ang" => '∠',
+        "perp" => '⊥',
+        "Alpha" => 'Α',
+        "Beta" => 'Β',
+        "Gamma" => 'Γ',
+        "Delta" => 'Δ',
+        "Epsilon" => 'Ε',
+        "Zeta" => 'Ζ',
+        "Eta" => 'Η',
+        "Theta" => 'Θ',
+        "Iota" => 'Ι',
+        "Kappa" => 'Κ',
+        "Lambda" => 'Λ',
+        "Mu" => 'Μ',
+        "Nu" => 'Ν',
+        "Xi" => 'Ξ',
+        "Omicron" => 'Ο',
+        "Pi" => 'Π',
+        "Rho" => 'Ρ',
+        "Sigma" => 'Σ',
+        "Tau" => 'Τ',
+        "Upsilon" => 'Υ',
+        "Phi" => 'Φ',
+        "Chi" => 'Χ',
+        "Psi" => 'Ψ',
+        "theta" => 'θ',
+        "lambda" => 'λ',
+        "phi" => 'φ',
+        "psi" => 'ψ',
+        "rho" => 'ρ',
+        "tau" => 'τ',
+        "eta" => 'η',
+        "zeta" => 'ζ',
+        "epsilon" => 'ε',
+        "chi" => 'χ',
+        "kappa" => 'κ',
+        "iota" => 'ι',
+        "xi" => 'ξ',
+        "nu" => 'ν',
+        "upsilon" => 'υ',
         "zwj" => '\u{200D}',
         "zwnj" => '\u{200C}',
         _ => return None,
@@ -305,7 +370,7 @@ impl Lexer<'_> {
                     }
                     _ => {
                         let v0 = i;
-                        while b.get(i).is_some_and(|c| !c.is_ascii_whitespace() && *c != b'>') {
+                        while b.get(i).is_some_and(|c| !c.is_ascii_whitespace() && *c != b'>' && !(*c == b'/' && b.get(i + 1) == Some(&b'>'))) {
                             i += 1;
                         }
                         val = unescape(rest.get(v0..i).unwrap_or(""));
@@ -1784,5 +1849,29 @@ mod tests {
     #[test]
     fn entities() {
         assert_eq!(unescape("a &lt;b&gt; &#65;&#x42; &bogus; &"), "a <b> AB &bogus; &");
+        assert_eq!(unescape("&minus; &plusmn; &Delta; &alpha; &APOS; &radic;"), "− ± Δ α ' √");
+    }
+
+    #[test]
+    fn unquoted_attribute_self_closing_tag() {
+        let mut lx = Lexer { s: "<img src=foo.png/><script src=bar.js/><p>Hello</p>", pos: 0 };
+        match lx.next().unwrap() {
+            Tok::Start { name, attrs, self_close } => {
+                assert_eq!(name, "img");
+                assert_eq!(attrs, vec![("src".into(), "foo.png".into())]);
+                assert!(self_close);
+            }
+            other => panic!("expected Start, got {other:?}"),
+        }
+        match lx.next().unwrap() {
+            Tok::Start { name, attrs, self_close } => {
+                assert_eq!(name, "script");
+                assert_eq!(attrs, vec![("src".into(), "bar.js".into())]);
+                assert!(self_close);
+            }
+            other => panic!("expected Start, got {other:?}"),
+        }
+        let f = parse("<script src=test.js/><p>Kept text</p>");
+        assert_eq!(texts(&f), vec!["NormalNone:Kept text"]);
     }
 }
