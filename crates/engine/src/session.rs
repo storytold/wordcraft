@@ -587,6 +587,15 @@ impl Session {
         }
     }
 
+    /// The view a window opens with: One Page, one page per row fitted to the window, like other
+    /// word processors (#1867). Interactive hosts call this at start-up; [`Session::new`] keeps
+    /// the neutral view that tests, the CLI and headless renders rely on.
+    pub fn open_on_one_page(&mut self) {
+        self.view.fit = "onePage".into();
+        self.view.single_column = true;
+        self.view.multi_page = false;
+    }
+
     pub fn new(doc: Document) -> Self {
         let start = doc.start_of(StoryRef::Body);
         let bib_style = doc_bib_style(&doc);

@@ -1977,6 +1977,11 @@ impl WordApp {
 
     /// Lay out the window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
+        self.ui_frame(ui);
+        a11y::ensure_focus_node(ui.ctx());
+    }
+
+    fn ui_frame(&mut self, ui: &mut egui::Ui) {
         let t0 = now_ms();
         let ctx = ui.ctx().clone();
         i18n::set_current(i18n::Lang::from_pref(&self.ui.language));

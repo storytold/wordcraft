@@ -71,6 +71,16 @@ pub fn page_window(rects: &[Rect], view: Rect) -> Option<(usize, usize)> {
     Some((first.saturating_sub(1), (last + 2).min(rects.len())))
 }
 
+/// Give the focused widget an AccessKit node, drawn this frame or not. egui names the focused
+/// widget in every tree update, and AccessKit panics when that node is missing from it: focus
+/// left on a widget that is no longer shown (the ribbon after a tab change, the canvas under the
+/// Start screen) crashed the app with a screen reader or UI Automation client attached.
+pub fn ensure_focus_node(ctx: &egui::Context) {
+    if let Some(id) = ctx.memory(|m| m.focused()) {
+        ctx.accesskit_node_builder(id, |_| {});
+    }
+}
+
 /// Describe the document under the canvas widget `doc_id` to AccessKit for this frame.
 /// `rects` are the pages' screen rectangles, `view` the visible part of the canvas.
 pub fn expose(app: &mut crate::WordApp, ctx: &egui::Context, doc_id: Id, layout: &Arc<DocLayout>, rects: &[Rect], view: Rect) {
@@ -706,5 +716,24 @@ mod tests {
         assert!(!t.nodes.is_empty() && t.nodes.len() <= MAX_NODES);
         assert!(t.selection.is_some(), "an offset past the end lands at the end");
         assert!(page_window(&rects, Rect::NOTHING).is_none());
+    }
+
+    /// Focus left on a widget that is not shown this frame (the ribbon after a tab change, the
+    /// canvas under the Start screen) must still have a node in the update: AccessKit panics on a
+    /// focus id it does not know, which crashed the app with a screen reader attached.
+    #[test]
+    fn focused_widget_that_is_not_shown_still_has_a_node() {
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx);
+        let ghost = Id::new("a widget that was removed from the screen");
+        ctx.memory_mut(|m| m.request_focus(ghost));
+        let update = described(&mut app, &ctx);
+        let focus = update.focus;
+        assert!(
+            focus == egui::accesskit_root_id().accesskit_id() || update.nodes.iter().any(|(id, _)| *id == focus),
+            "the update focuses {focus:?}, which it does not describe"
+        );
+        let _ = ghost;
     }
 }

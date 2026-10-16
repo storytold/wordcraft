@@ -498,11 +498,49 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     }
                     // Reading zoom changes only reading presentation, never the normal view zoom.
                     let mut v = if reading { app.session.view.read_zoom } else { app.canvas.scale / crate::canvas::PX_PER_PT };
-                    let slider = egui::Slider::new(&mut v, if reading { 0.75..=1.5 } else { 0.1..=5.0 }).logarithmic(!reading).show_value(false);
-                    ui.spacing_mut().slider_width = 110.0;
-                    if ui.add(slider).changed() {
-                        let command = if reading { "view.readTextSize" } else { "view.zoom" };
-                        let _ = app.run(command, json!({"value": (v * 100.0).round()}));
+                    ui.spacing_mut().slider_width = 130.0;
+                    let slider_resp = if reading {
+                        let slider = egui::Slider::new(&mut v, 0.75..=1.5).show_value(false);
+                        let r = ui.add(slider);
+                        if r.changed() {
+                            let _ = app.run("view.readTextSize", json!({"value": (v * 100.0).round()}));
+                        }
+                        r
+                    } else {
+                        // Word's mapping: 100% in the middle, 10-100% on the left half and
+                        // 100-500% on the right, so the slider is finest where people work.
+                        let mut t = zoom_to_slider(v);
+                        let slider = egui::Slider::new(&mut t, 0.0..=1.0).show_value(false);
+                        let r = ui.add(slider);
+                        if r.changed() {
+                            let _ = app.run("view.zoom", json!({"value": (slider_to_zoom(t) * 100.0).round()}));
+                        }
+                        r
+                    };
+                    // The wheel over the slider zooms by 10% a notch and does not scroll the page.
+                    if slider_resp.hovered() {
+                        // Raw wheel events, not the eased scroll delta, so a notch is one step.
+                        let dy: f32 = ui.input(|i| {
+                            i.events
+                                .iter()
+                                .filter_map(|e| match e {
+                                    egui::Event::MouseWheel { delta, phase: egui::TouchPhase::Move, .. } => Some(delta.y),
+                                    _ => None,
+                                })
+                                .sum()
+                        });
+                        if dy != 0.0 && dy.is_finite() {
+                            ui.input_mut(|i| {
+                                i.smooth_scroll_delta = egui::Vec2::ZERO;
+                                i.events.retain(|e| !matches!(e, egui::Event::MouseWheel { .. }));
+                            });
+                            let up = dy > 0.0;
+                            if reading {
+                                let _ = app.run("view.readTextSize", json!({"value": if up { (z + 10.0).min(150.0) } else { (z - 10.0).max(75.0) }}));
+                            } else {
+                                let _ = app.run(if up { "view.zoomIn" } else { "view.zoomOut" }, json!({}));
+                            }
+                        }
                     }
                     if small_icon(ui, "minus", tl!("Zoom Out")) {
                         if reading {
@@ -663,5 +701,43 @@ mod tests {
         assert_eq!(bar.content_left, 89.0);
         // Never tighter than the standard layout.
         assert_eq!(MacTitleBar::around_lights(40.0, 10.0, 12.0), MacTitleBar::default());
+    }
+}
+
+/// Zoom (1.0 = 100%) to the zoom slider's 0..=1 position: 10-100% fills the left half and 100-500%
+/// the right, as in Word.
+fn zoom_to_slider(zoom: f32) -> f32 {
+    if !zoom.is_finite() {
+        return 0.5;
+    }
+    let z = zoom.clamp(0.1, 5.0);
+    if z <= 1.0 { 0.5 * (z - 0.1) / 0.9 } else { 0.5 + 0.5 * (z - 1.0) / 4.0 }
+}
+
+/// The zoom (1.0 = 100%) at slider position `t`; the inverse of [`zoom_to_slider`].
+fn slider_to_zoom(t: f32) -> f32 {
+    if !t.is_finite() {
+        return 1.0;
+    }
+    let t = t.clamp(0.0, 1.0);
+    if t <= 0.5 { 0.1 + 0.9 * (t / 0.5) } else { 1.0 + 4.0 * ((t - 0.5) / 0.5) }
+}
+
+#[cfg(test)]
+mod zoom_slider_tests {
+    use super::*;
+
+    #[test]
+    fn slider_puts_100_percent_in_the_middle_and_round_trips() {
+        assert!((zoom_to_slider(1.0) - 0.5).abs() < 1e-6);
+        assert!((zoom_to_slider(0.1)).abs() < 1e-6 && (zoom_to_slider(5.0) - 1.0).abs() < 1e-6);
+        for pct in [10, 25, 50, 74, 100, 150, 245, 500] {
+            let z = pct as f32 / 100.0;
+            assert_eq!((slider_to_zoom(zoom_to_slider(z)) * 100.0).round() as i32, pct, "{pct}% survives a trip through the slider");
+        }
+        // Junk positions and zooms clamp instead of escaping the 10-500% range.
+        assert_eq!(slider_to_zoom(f32::NAN), 1.0);
+        assert_eq!(zoom_to_slider(f32::INFINITY), 0.5);
+        assert!((slider_to_zoom(9.0) - 5.0).abs() < 1e-6 && (slider_to_zoom(-3.0) - 0.1).abs() < 1e-6);
     }
 }
