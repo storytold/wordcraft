@@ -1,6 +1,6 @@
 //! The ribbon: tab strip and every tab's groups. Each control runs a command by id.
 
-use egui::{Align2, Rect, Sense, Stroke, Ui, pos2, vec2};
+use egui::{Align2, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use serde_json::{Value, json};
 
 use crate::colors::{Remember, Target};
@@ -8,6 +8,7 @@ use crate::options::MeasureExt;
 use crate::theme::{Tokens, medium, regular, semibold};
 use crate::widgets::{CONTENT_H, LABEL_H, big, big_toggle, combo, font_combo, group, menu_button, small, split};
 use crate::{WordApp, icons};
+use wordcraft_doc::para::ShapeKind;
 
 pub const TABS: [&str; 13] = wordcraft_engine::ribbon::TABS;
 
@@ -1029,34 +1030,7 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Illustrations", None, app, |ui, app| {
         big(ui, app, "picture", "Pictures", "insert.picture", json!({}), false);
-        menu_button(ui, app, "shapes", Some("Shapes"), "Shapes", true, "insert.shape", |ui, app| {
-            for (l, k) in [
-                ("Rectangle", "rectangle"),
-                ("Rounded Rectangle", "roundedRectangle"),
-                ("Oval", "ellipse"),
-                ("Triangle", "triangle"),
-                ("Diamond", "diamond"),
-                ("Line", "line"),
-                ("Arrow", "arrow"),
-                ("Star", "star"),
-                ("Heart", "heart"),
-            ] {
-                mi(ui, app, l, "insert.shape", json!({"kind": k}));
-            }
-            ui.separator();
-            mi(ui, app, "New Drawing Canvas", "insert.canvas", json!({}));
-            // Connectors: glue their ends to shapes by dragging them (shape.connect).
-            for (l, k, arrow) in [
-                ("Straight Connector", "straightConnector", "none"),
-                ("Straight Arrow Connector", "straightConnector", "end"),
-                ("Elbow Connector", "elbowConnector", "none"),
-                ("Elbow Arrow Connector", "elbowConnector", "end"),
-                ("Curved Connector", "curvedConnector", "none"),
-                ("Curved Arrow Connector", "curvedConnector", "end"),
-            ] {
-                mi(ui, app, l, "insert.shape", json!({"kind": k, "arrow": arrow}));
-            }
-        });
+        shapes_picker(ui, app);
         stack(ui, |ui| {
             small(ui, app, "icons", Some("Icons"), "Icons", "insert.icon", json!({}), false);
             small(ui, app, "smartArt", Some("SmartArt"), "SmartArt", "insert.smartArt", json!({}), false);
@@ -1155,6 +1129,279 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
             ui.separator();
             mi(ui, app, "More Symbols…", "ui.dialog", json!({"name": "symbol"}));
         });
+    });
+}
+
+fn shapes_picker(ui: &mut Ui, app: &mut WordApp) {
+    menu_button(ui, app, "shapes", Some("Shapes"), "Shapes", true, "insert.shape", |ui, app| {
+        ui.set_width(260.0);
+        egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+            shape_section(
+                ui,
+                app,
+                "Recently Used Shapes",
+                &[
+                    ShapeKind::Rectangle,
+                    ShapeKind::RoundedRectangle,
+                    ShapeKind::Ellipse,
+                    ShapeKind::Line,
+                    ShapeKind::Arrow,
+                    ShapeKind::Triangle,
+                    ShapeKind::Diamond,
+                    ShapeKind::Heart,
+                    ShapeKind::Star,
+                    ShapeKind::SmileyFace,
+                ],
+            );
+            shape_section(
+                ui,
+                app,
+                "Lines",
+                &[
+                    ShapeKind::Line,
+                    ShapeKind::Arrow,
+                    ShapeKind::DoubleArrow,
+                    ShapeKind::StraightConnector,
+                    ShapeKind::ElbowConnector,
+                    ShapeKind::ElbowArrow,
+                    ShapeKind::ElbowDoubleArrow,
+                    ShapeKind::CurvedConnector,
+                    ShapeKind::CurvedArrow,
+                    ShapeKind::CurvedDoubleArrow,
+                    ShapeKind::Curve,
+                    ShapeKind::Freeform,
+                    ShapeKind::Scribble,
+                ],
+            );
+            shape_section(
+                ui,
+                app,
+                "Rectangles",
+                &[
+                    ShapeKind::Rectangle,
+                    ShapeKind::RoundedRectangle,
+                    ShapeKind::SingleCornerSnipped,
+                    ShapeKind::TopCornersSnipped,
+                    ShapeKind::DiagonalCornersSnipped,
+                    ShapeKind::SnippedAndRounded,
+                    ShapeKind::RoundSingleCorner,
+                    ShapeKind::RoundSameSideCorner,
+                    ShapeKind::RoundDiagonalCorner,
+                ],
+            );
+            shape_section(
+                ui,
+                app,
+                "Basic Shapes",
+                &[
+                    ShapeKind::TextBox,
+                    ShapeKind::Ellipse,
+                    ShapeKind::Triangle,
+                    ShapeKind::RightTriangle,
+                    ShapeKind::Parallelogram,
+                    ShapeKind::Trapezoid,
+                    ShapeKind::Diamond,
+                    ShapeKind::Pentagon,
+                    ShapeKind::Hexagon,
+                    ShapeKind::Heptagon,
+                    ShapeKind::Octagon,
+                    ShapeKind::Decagon,
+                    ShapeKind::Dodecagon,
+                    ShapeKind::Pie,
+                    ShapeKind::Chord,
+                    ShapeKind::Teardrop,
+                    ShapeKind::Frame,
+                    ShapeKind::HalfFrame,
+                    ShapeKind::LShape,
+                    ShapeKind::DiagonalStripe,
+                    ShapeKind::Cross,
+                    ShapeKind::Plaque,
+                    ShapeKind::Cylinder,
+                    ShapeKind::Cube,
+                    ShapeKind::Bevel,
+                    ShapeKind::Donut,
+                    ShapeKind::NoSymbol,
+                    ShapeKind::BlockArc,
+                    ShapeKind::FoldedCorner,
+                    ShapeKind::SmileyFace,
+                    ShapeKind::Heart,
+                    ShapeKind::LightningBolt,
+                    ShapeKind::Sun,
+                    ShapeKind::Moon,
+                    ShapeKind::Cloud,
+                    ShapeKind::Arc,
+                    ShapeKind::DoubleBracket,
+                    ShapeKind::DoubleBrace,
+                    ShapeKind::LeftBracket,
+                    ShapeKind::RightBracket,
+                    ShapeKind::LeftBrace,
+                    ShapeKind::RightBrace,
+                ],
+            );
+            shape_section(
+                ui,
+                app,
+                "Block Arrows",
+                &[
+                    ShapeKind::Arrow,
+                    ShapeKind::LeftArrow,
+                    ShapeKind::UpArrow,
+                    ShapeKind::DownArrow,
+                    ShapeKind::LeftRightArrow,
+                    ShapeKind::UpDownArrow,
+                    ShapeKind::QuadArrow,
+                    ShapeKind::LeftRightUpArrow,
+                    ShapeKind::BentArrow,
+                    ShapeKind::UTurnArrow,
+                    ShapeKind::LeftUpArrow,
+                    ShapeKind::BentUpArrow,
+                    ShapeKind::StripedRightArrow,
+                    ShapeKind::NotchedRightArrow,
+                    ShapeKind::PentagonArrow,
+                    ShapeKind::Chevron,
+                    ShapeKind::RightArrowCallout,
+                    ShapeKind::DownArrowCallout,
+                    ShapeKind::LeftArrowCallout,
+                    ShapeKind::UpArrowCallout,
+                    ShapeKind::LeftRightArrowCallout,
+                    ShapeKind::QuadArrowCallout,
+                    ShapeKind::CircularArrow,
+                ],
+            );
+            shape_section(
+                ui,
+                app,
+                "Equation Shapes",
+                &[
+                    ShapeKind::MathPlus,
+                    ShapeKind::MathMinus,
+                    ShapeKind::MathMultiply,
+                    ShapeKind::MathDivide,
+                    ShapeKind::MathEqual,
+                    ShapeKind::MathNotEqual,
+                ],
+            );
+            shape_section(
+                ui,
+                app,
+                "Flowchart",
+                &[
+                    ShapeKind::FlowchartProcess,
+                    ShapeKind::FlowchartAlternateProcess,
+                    ShapeKind::FlowchartDecision,
+                    ShapeKind::FlowchartData,
+                    ShapeKind::FlowchartPredefinedProcess,
+                    ShapeKind::FlowchartInternalStorage,
+                    ShapeKind::FlowchartDocument,
+                    ShapeKind::FlowchartMultidocument,
+                    ShapeKind::FlowchartTerminator,
+                    ShapeKind::FlowchartPreparation,
+                    ShapeKind::FlowchartManualInput,
+                    ShapeKind::FlowchartManualOperation,
+                    ShapeKind::FlowchartConnector,
+                    ShapeKind::FlowchartOffpageConnector,
+                    ShapeKind::FlowchartCard,
+                    ShapeKind::FlowchartPunchedTape,
+                    ShapeKind::FlowchartSummingJunction,
+                    ShapeKind::FlowchartOr,
+                    ShapeKind::FlowchartCollate,
+                    ShapeKind::FlowchartSort,
+                    ShapeKind::FlowchartExtract,
+                    ShapeKind::FlowchartMerge,
+                    ShapeKind::FlowchartStoredData,
+                    ShapeKind::FlowchartDelay,
+                    ShapeKind::FlowchartSequentialData,
+                    ShapeKind::FlowchartMagneticDisk,
+                    ShapeKind::FlowchartDirectAccessStorage,
+                    ShapeKind::FlowchartDisplay,
+                ],
+            );
+            shape_section(
+                ui,
+                app,
+                "Stars and Banners",
+                &[
+                    ShapeKind::Explosion1,
+                    ShapeKind::Explosion2,
+                    ShapeKind::Star4,
+                    ShapeKind::Star,
+                    ShapeKind::Star6,
+                    ShapeKind::Star7,
+                    ShapeKind::Star8,
+                    ShapeKind::Star10,
+                    ShapeKind::Star12,
+                    ShapeKind::Star16,
+                    ShapeKind::Star24,
+                    ShapeKind::Star32,
+                    ShapeKind::UpRibbon,
+                    ShapeKind::DownRibbon,
+                    ShapeKind::CurvedUpRibbon,
+                    ShapeKind::CurvedDownRibbon,
+                    ShapeKind::VerticalScroll,
+                    ShapeKind::HorizontalScroll,
+                    ShapeKind::Wave,
+                    ShapeKind::DoubleWave,
+                ],
+            );
+            shape_section(
+                ui,
+                app,
+                "Callouts",
+                &[
+                    ShapeKind::RectangularCallout,
+                    ShapeKind::RoundedRectangularCallout,
+                    ShapeKind::OvalCallout,
+                    ShapeKind::CloudCallout,
+                    ShapeKind::LineCallout1,
+                    ShapeKind::LineCallout2,
+                    ShapeKind::LineCallout3,
+                    ShapeKind::LineCallout4,
+                    ShapeKind::LineCallout1AccentBar,
+                    ShapeKind::LineCallout2AccentBar,
+                    ShapeKind::LineCallout3AccentBar,
+                    ShapeKind::LineCallout4AccentBar,
+                ],
+            );
+            ui.separator();
+            mi(ui, app, "New Drawing Canvas", "insert.canvas", json!({}));
+        });
+    });
+}
+
+fn shape_section(ui: &mut Ui, app: &mut WordApp, title: &str, shapes: &[ShapeKind]) {
+    let t = Tokens::get(ui.ctx());
+    ui.add_space(2.0);
+    ui.label(egui::RichText::new(tl!(title)).font(regular(11.0)).color(t.text_dim));
+    egui::Grid::new(title).spacing(vec2(2.0, 2.0)).show(ui, |ui| {
+        for (i, &k) in shapes.iter().enumerate() {
+            let (r, resp) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
+            if resp.hovered() {
+                ui.painter().rect_filled(r, 2.0, t.hover);
+            }
+            let stroke_c = if resp.hovered() { t.accent_text } else { t.text };
+            let fill_c = if !k.is_line_like() { t.accent.linear_multiply(0.12) } else { egui::Color32::TRANSPARENT };
+            let inner = r.shrink(4.0);
+            for (closed, pts) in wordcraft_render::shape_preview_contours(k, inner.width(), inner.height()) {
+                let screen_pts: Vec<Pos2> = pts.into_iter().map(|(x, y)| pos2(inner.min.x + x, inner.min.y + y)).collect();
+                if closed {
+                    if !k.is_line_like() {
+                        ui.painter().add(egui::Shape::convex_polygon(screen_pts.clone(), fill_c, Stroke::NONE));
+                    }
+                    ui.painter().add(egui::Shape::closed_line(screen_pts, Stroke::new(1.0, stroke_c)));
+                } else {
+                    ui.painter().add(egui::Shape::line(screen_pts, Stroke::new(1.2, stroke_c)));
+                }
+            }
+            if resp.on_hover_text(tl!(k.label())).clicked() {
+                // Arms the shape tool: the next canvas drag draws it.
+                app.canvas.shape_tool = Some(k);
+                app.status(crate::shape_tool::tool_hint(k));
+                ui.close();
+            }
+            if i % 10 == 9 {
+                ui.end_row();
+            }
+        }
     });
 }
 

@@ -52,6 +52,9 @@ use wordcraft_layout::wordart::ArtPaint;
 use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, Page, Placed, layout};
 use wordcraft_metafile::{Picture, PlacedItem};
 
+mod shapes;
+use shapes::shape_path;
+
 /// Largest page side we write (200", the PDF limit).
 const MAX_SIDE: f32 = 14_400.0;
 /// Largest picture side we embed (pixels).
@@ -527,110 +530,6 @@ fn shape_effects(
     s.set_stroke(None);
 }
 
-/// Outline of a basic shape in a rectangle (same geometry as the raster renderer); `corner` is a
-/// rounded rectangle's ([`wordcraft_doc::connector::ShapeExtra::corner`]).
-fn shape_path(kind: ShapeKind, r: &Rect, corner: Option<u32>) -> Option<Path> {
-    let flat_ok = kind.is_open() && r.w.max(r.h) > 0.0 && r.w.min(r.h) >= 0.0;
-    if !(ok(r.x) && ok(r.y) && ok(r.w) && ok(r.h)) || !(flat_ok || r.w > 0.0 && r.h > 0.0) {
-        return None;
-    }
-    let (x0, y0, x1, y1) = (r.x, r.y, r.x + r.w, r.y + r.h);
-    let (cx, cy) = (x0 + r.w / 2.0, y0 + r.h / 2.0);
-    let mut pb = PathBuilder::new();
-    let poly = |pb: &mut PathBuilder, pts: &[(f32, f32)]| {
-        for (i, (x, y)) in pts.iter().enumerate() {
-            if i == 0 {
-                pb.move_to(*x, *y);
-            } else {
-                pb.line_to(*x, *y);
-            }
-        }
-        pb.close();
-    };
-    const K: f32 = 0.552_284_8;
-    let ellipse = |pb: &mut PathBuilder, cx: f32, cy: f32, rx: f32, ry: f32| {
-        pb.move_to(cx + rx, cy);
-        pb.cubic_to(cx + rx, cy + ry * K, cx + rx * K, cy + ry, cx, cy + ry);
-        pb.cubic_to(cx - rx * K, cy + ry, cx - rx, cy + ry * K, cx - rx, cy);
-        pb.cubic_to(cx - rx, cy - ry * K, cx - rx * K, cy - ry, cx, cy - ry);
-        pb.cubic_to(cx + rx * K, cy - ry, cx + rx, cy - ry * K, cx + rx, cy);
-        pb.close();
-    };
-    match kind {
-        // A freeform is drawn from its own paths; without them, its frame.
-        ShapeKind::Rectangle | ShapeKind::TextBox | ShapeKind::Freeform => poly(&mut pb, &[(x0, y0), (x1, y0), (x1, y1), (x0, y1)]),
-        ShapeKind::RoundedRectangle => {
-            let rad = wordcraft_doc::connector::corner_radius(corner, r.w, r.h);
-            let k = rad * (1.0 - K);
-            pb.move_to(x0 + rad, y0);
-            pb.line_to(x1 - rad, y0);
-            pb.cubic_to(x1 - k, y0, x1, y0 + k, x1, y0 + rad);
-            pb.line_to(x1, y1 - rad);
-            pb.cubic_to(x1, y1 - k, x1 - k, y1, x1 - rad, y1);
-            pb.line_to(x0 + rad, y1);
-            pb.cubic_to(x0 + k, y1, x0, y1 - k, x0, y1 - rad);
-            pb.line_to(x0, y0 + rad);
-            pb.cubic_to(x0, y0 + k, x0 + k, y0, x0 + rad, y0);
-            pb.close();
-        }
-        ShapeKind::Ellipse => ellipse(&mut pb, cx, cy, r.w / 2.0, r.h / 2.0),
-        ShapeKind::FlowchartOr => {
-            ellipse(&mut pb, cx, cy, r.w / 2.0, r.h / 2.0);
-            pb.move_to(x0, cy);
-            pb.line_to(x1, cy);
-            pb.move_to(cx, y0);
-            pb.line_to(cx, y1);
-        }
-        ShapeKind::Triangle => poly(&mut pb, &[(cx, y0), (x1, y1), (x0, y1)]),
-        ShapeKind::RightTriangle => poly(&mut pb, &[(x0, y0), (x1, y1), (x0, y1)]),
-        ShapeKind::Diamond => poly(&mut pb, &[(cx, y0), (x1, cy), (cx, y1), (x0, cy)]),
-        // DrawingML's `line`: top-left to bottom-right (flips give the other directions).
-        ShapeKind::Line => {
-            pb.move_to(x0, y0);
-            pb.line_to(x1, y1);
-        }
-        // Connectors are drawn as paths (`Draw::Path`); this is their frame's diagonal.
-        ShapeKind::StraightConnector | ShapeKind::ElbowConnector | ShapeKind::CurvedConnector => {
-            pb.move_to(x0, y0);
-            pb.line_to(x1, y1);
-        }
-        ShapeKind::Arrow => {
-            let h = r.h;
-            poly(
-                &mut pb,
-                &[
-                    (x0, cy - h * 0.2),
-                    (x1 - h * 0.5, cy - h * 0.2),
-                    (x1 - h * 0.5, y0),
-                    (x1, cy),
-                    (x1 - h * 0.5, y1),
-                    (x1 - h * 0.5, cy + h * 0.2),
-                    (x0, cy + h * 0.2),
-                ],
-            )
-        }
-        ShapeKind::Star => {
-            let pts: Vec<(f32, f32)> = (0..10)
-                .map(|i| {
-                    let a = std::f32::consts::PI * i as f32 / 5.0 - std::f32::consts::FRAC_PI_2;
-                    let rad = if i % 2 == 0 { 1.0 } else { 0.4 };
-                    (cx + a.cos() * r.w / 2.0 * rad, cy + a.sin() * r.h / 2.0 * rad)
-                })
-                .collect();
-            poly(&mut pb, &pts);
-        }
-        ShapeKind::Heart => {
-            let (w, h) = (r.w, r.h);
-            pb.move_to(cx, y0 + h * 0.3);
-            pb.cubic_to(cx, y0, x0, y0, x0, y0 + h * 0.3);
-            pb.cubic_to(x0, y0 + h * 0.6, cx - w * 0.1, y0 + h * 0.75, cx, y1);
-            pb.cubic_to(cx + w * 0.1, y0 + h * 0.75, x1, y0 + h * 0.6, x1, y0 + h * 0.3);
-            pb.cubic_to(x1, y0, cx, y0, cx, y0 + h * 0.3);
-            pb.close();
-        }
-    }
-    pb.finish()
-}
 
 /// A structure element being collected (one per paragraph, in reading order).
 struct TagEntry {
@@ -991,7 +890,7 @@ impl Exporter<'_> {
             }
             Draw::Shape { rect, kind, fill: f, stroke, stroke_width, effects, corner } => {
                 let Some(p) = shape_path(*kind, rect, *corner) else { return };
-                let can_fill = *kind != ShapeKind::Line;
+                let can_fill = !kind.is_line_like();
                 let fx = effects.sanitized();
                 if !fx.is_empty() && (f.is_some() && can_fill || stroke.is_some()) {
                     shape_effects(s, *kind, *corner, rect, &fx, f.is_some() && can_fill, stroke.is_some(), *stroke_width);

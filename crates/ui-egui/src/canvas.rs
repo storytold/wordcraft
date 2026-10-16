@@ -157,6 +157,10 @@ pub struct CanvasState {
     pub(crate) link_from: Option<wordcraft_doc::Pos>,
     /// What screen readers were last told about the document (#488).
     pub(crate) a11y: crate::a11y::A11yCache,
+    /// The shape tool is armed (`shape_tool`): drag to draw on page.
+    pub shape_tool: Option<wordcraft_doc::para::ShapeKind>,
+    /// Shape drag in progress.
+    pub(crate) shape_drawing: Option<crate::shape_tool::ShapeDrawing>,
     /// A press on a table's selection area or move handle, held (`table_mouse`).
     pub(crate) table_drag: Option<crate::table_mouse::TableDrag>,
     /// The kind of tab stop a click on the ruler sets (the selector in the rulers' corner).
@@ -248,6 +252,8 @@ impl Default for CanvasState {
             table_resize: None,
             link_from: None,
             a11y: Default::default(),
+            shape_tool: None,
+            shape_drawing: None,
             table_drag: None,
             tab_kind: Default::default(),
             tab_drag: None,
@@ -1413,6 +1419,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         crate::ink::paint(app, &painter, &rects, &layout, geo.scale);
         crate::table_pen::paint(app, &painter, &t, &layout, &rects, geo.scale);
         crate::table_resize::paint(app, &painter, &t, &layout, &rects, geo.scale);
+        crate::shape_tool::paint(app, &painter, &t, &layout, &rects, geo.scale);
         crate::table_mouse::paint(app, &painter, &t, &layout, &rects, geo.scale);
         (resp, rects)
     });
@@ -1473,9 +1480,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         && on_page_gap(&rects, &geo.bands, p)
     {
         let _ = app.run("view.hideWhiteSpace", json!({"value": !app.session.view.hide_white_space}));
-    } else
-    // Draw Table / Eraser own the mouse while on (no caret moves); else the usual editing.
-    if !middle_gesture && !crate::table_pen::pointer(app, ui, &resp, &rects, &layout, geo.scale) {
+    } else if !middle_gesture
+        && !crate::table_pen::pointer(app, ui, &resp, &rects, &layout, geo.scale)
+        && !crate::shape_tool::pointer(app, ui, &resp, &rects, &layout, geo.scale)
+    {
         mouse(app, ui, &resp, &rects, &layout, geo.scale);
     }
     // A click on a check box ticks it; on a list's button opens the list.
@@ -1571,6 +1579,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     crate::table_resize::cursor(app, ui, &resp, &layout, &rects, geo.scale);
     crate::table_mouse::cursor(app, ui, &resp, &layout, &rects, geo.scale);
     crate::table_pen::cursor(app, ui, &resp);
+    crate::shape_tool::cursor(app, ui, &resp);
     app.canvas.auto_scroll.paint(ui, area);
     let _ = origin;
     if let (Some(h), Some(v)) = (hruler, vruler) {

@@ -987,22 +987,7 @@ impl Writer<'_> {
         }
         w.open("wps:spPr", &[]);
         xfrm(w, off, *sw, *sh, float.spin());
-        let prst = match kind {
-            ShapeKind::Rectangle | ShapeKind::TextBox | ShapeKind::Freeform => "rect",
-            ShapeKind::RoundedRectangle => "roundRect",
-            ShapeKind::Ellipse => "ellipse",
-            ShapeKind::FlowchartOr => "flowChartOr",
-            ShapeKind::Triangle => "triangle",
-            ShapeKind::RightTriangle => "rtTriangle",
-            ShapeKind::Diamond => "diamond",
-            ShapeKind::Line => "line",
-            ShapeKind::StraightConnector => "straightConnector1",
-            ShapeKind::ElbowConnector => "bentConnector3",
-            ShapeKind::CurvedConnector => "curvedConnector3",
-            ShapeKind::Arrow => "rightArrow",
-            ShapeKind::Star => "star5",
-            ShapeKind::Heart => "heart",
-        };
+        let prst = kind.ooxml_prst();
         match geom {
             Some(f) => cust_geom(w, f, *sw, *sh),
             None => {

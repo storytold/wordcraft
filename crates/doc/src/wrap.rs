@@ -122,6 +122,7 @@ pub fn shape_outline(kind: ShapeKind, w: f32, h: f32, corner: Option<u32>) -> Op
             }
             pts
         }
+        _ => return None,
     };
     Some(pts)
 }

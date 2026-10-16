@@ -8,6 +8,7 @@ use vello_cpu::kurbo::{self, Affine, BezPath, Shape};
 use vello_cpu::peniko;
 use vello_cpu::{Pixmap, RenderContext, Resources};
 use wordcraft_doc::Document;
+#[cfg(test)]
 use wordcraft_doc::para::ShapeKind;
 use wordcraft_doc::props::Rgb;
 use wordcraft_fonts::FontDb;
@@ -18,6 +19,8 @@ use wordcraft_metafile::{Item, Picture, PlacedItem, Seg};
 
 mod color_glyph;
 pub mod icon_lib;
+pub mod shapes;
+pub use shapes::{shape_path, shape_preview_contours};
 
 /// Worker threads for rasterising (0 on the web, where there are no threads).
 pub fn default_threads() -> u16 {
@@ -909,7 +912,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             let path = shape_path(*kind, r, *corner);
             ctx.set_transform(view);
             let fx = effects.sanitized();
-            let can_fill = *kind != ShapeKind::Line && fill.is_some();
+            let can_fill = !kind.is_line_like() && fill.is_some();
             if !fx.is_empty() && (can_fill || stroke.is_some()) {
                 let sw = if stroke_width.is_finite() { stroke_width.clamp(0.25, 200.0) as f64 } else { 0.75 };
                 // The shape's silhouette grown by `g` points and moved by `d`, in the current paint.
@@ -1014,89 +1017,6 @@ fn ink_path(pts: &[(f32, f32)]) -> Option<BezPath> {
     Some(p)
 }
 
-/// Outline of a basic shape in a rectangle; `corner` is a rounded rectangle's
-/// ([`wordcraft_doc::connector::ShapeExtra::corner`]).
-pub fn shape_path(kind: ShapeKind, r: kurbo::Rect, corner: Option<u32>) -> BezPath {
-    let (cx, cy) = (r.center().x, r.center().y);
-    let poly = |pts: &[(f64, f64)]| {
-        let mut p = BezPath::new();
-        for (i, (x, y)) in pts.iter().enumerate() {
-            if i == 0 {
-                p.move_to((*x, *y));
-            } else {
-                p.line_to((*x, *y));
-            }
-        }
-        p.close_path();
-        p
-    };
-    match kind {
-        // A freeform is drawn from its own paths; without them, its frame.
-        ShapeKind::Rectangle | ShapeKind::TextBox | ShapeKind::Freeform => r.to_path(0.1),
-        ShapeKind::RoundedRectangle => {
-            let radius = wordcraft_doc::connector::corner_radius(corner, r.width() as f32, r.height() as f32);
-            kurbo::RoundedRect::from_rect(r, f64::from(radius)).to_path(0.1)
-        }
-        ShapeKind::Ellipse => kurbo::Ellipse::from_rect(r).to_path(0.1),
-        ShapeKind::FlowchartOr => {
-            let mut p = kurbo::Ellipse::from_rect(r).to_path(0.1);
-            p.move_to((r.x0, cy));
-            p.line_to((r.x1, cy));
-            p.move_to((cx, r.y0));
-            p.line_to((cx, r.y1));
-            p
-        }
-        ShapeKind::Triangle => poly(&[(cx, r.y0), (r.x1, r.y1), (r.x0, r.y1)]),
-        ShapeKind::RightTriangle => poly(&[(r.x0, r.y0), (r.x1, r.y1), (r.x0, r.y1)]),
-        ShapeKind::Diamond => poly(&[(cx, r.y0), (r.x1, cy), (cx, r.y1), (r.x0, cy)]),
-        // DrawingML's `line`: top-left to bottom-right (flips give the other directions).
-        ShapeKind::Line => {
-            let mut p = BezPath::new();
-            p.move_to((r.x0, r.y0));
-            p.line_to((r.x1, r.y1));
-            p
-        }
-        // Connectors are drawn as paths (`Draw::Path`); this is their frame's diagonal.
-        ShapeKind::StraightConnector | ShapeKind::ElbowConnector | ShapeKind::CurvedConnector => {
-            let mut p = BezPath::new();
-            p.move_to((r.x0, r.y0));
-            p.line_to((r.x1, r.y1));
-            p
-        }
-        ShapeKind::Arrow => {
-            let h = r.height();
-            poly(&[
-                (r.x0, cy - h * 0.2),
-                (r.x1 - h * 0.5, cy - h * 0.2),
-                (r.x1 - h * 0.5, r.y0),
-                (r.x1, cy),
-                (r.x1 - h * 0.5, r.y1),
-                (r.x1 - h * 0.5, cy + h * 0.2),
-                (r.x0, cy + h * 0.2),
-            ])
-        }
-        ShapeKind::Star => {
-            let mut pts = Vec::new();
-            for i in 0..10 {
-                let a = std::f64::consts::PI * (i as f64) / 5.0 - std::f64::consts::FRAC_PI_2;
-                let rad = if i % 2 == 0 { 1.0 } else { 0.4 };
-                pts.push((cx + a.cos() * r.width() / 2.0 * rad, cy + a.sin() * r.height() / 2.0 * rad));
-            }
-            poly(&pts)
-        }
-        ShapeKind::Heart => {
-            let (w, h) = (r.width(), r.height());
-            let mut p = BezPath::new();
-            p.move_to((cx, r.y0 + h * 0.3));
-            p.curve_to((cx, r.y0), (r.x0, r.y0), (r.x0, r.y0 + h * 0.3));
-            p.curve_to((r.x0, r.y0 + h * 0.6), (cx - w * 0.1, r.y0 + h * 0.75), (cx, r.y1));
-            p.curve_to((cx + w * 0.1, r.y0 + h * 0.75), (r.x1, r.y0 + h * 0.6), (r.x1, r.y0 + h * 0.3));
-            p.curve_to((r.x1, r.y0), (cx, r.y0), (cx, r.y0 + h * 0.3));
-            p.close_path();
-            p
-        }
-    }
-}
 
 /// Render the page area (`x`, `y`, `w`×`h` points) at `scale` px/pt — for previews and thumbnails.
 pub fn render_area(doc: &Document, page: &Page, x: f32, y: f32, w: f32, h: f32, scale: f32, opts: &RenderOptions) -> Rendered {
@@ -1623,9 +1543,160 @@ mod tests {
     #[test]
     fn shapes_have_paths() {
         let r = kurbo::Rect::new(0.0, 0.0, 10.0, 10.0);
-        for k in
-            [ShapeKind::Rectangle, ShapeKind::Ellipse, ShapeKind::FlowchartOr, ShapeKind::Star, ShapeKind::Heart, ShapeKind::Arrow, ShapeKind::Line]
-        {
+        for k in [
+            ShapeKind::Rectangle,
+            ShapeKind::RoundedRectangle,
+            ShapeKind::SingleCornerSnipped,
+            ShapeKind::TopCornersSnipped,
+            ShapeKind::DiagonalCornersSnipped,
+            ShapeKind::SnippedAndRounded,
+            ShapeKind::RoundSingleCorner,
+            ShapeKind::RoundSameSideCorner,
+            ShapeKind::RoundDiagonalCorner,
+            ShapeKind::Ellipse,
+            ShapeKind::Triangle,
+            ShapeKind::RightTriangle,
+            ShapeKind::Parallelogram,
+            ShapeKind::Trapezoid,
+            ShapeKind::Diamond,
+            ShapeKind::Pentagon,
+            ShapeKind::Hexagon,
+            ShapeKind::Heptagon,
+            ShapeKind::Octagon,
+            ShapeKind::Decagon,
+            ShapeKind::Dodecagon,
+            ShapeKind::Pie,
+            ShapeKind::Chord,
+            ShapeKind::Teardrop,
+            ShapeKind::Frame,
+            ShapeKind::HalfFrame,
+            ShapeKind::LShape,
+            ShapeKind::DiagonalStripe,
+            ShapeKind::Cross,
+            ShapeKind::Plaque,
+            ShapeKind::Cylinder,
+            ShapeKind::Cube,
+            ShapeKind::Bevel,
+            ShapeKind::Donut,
+            ShapeKind::NoSymbol,
+            ShapeKind::BlockArc,
+            ShapeKind::FoldedCorner,
+            ShapeKind::SmileyFace,
+            ShapeKind::Heart,
+            ShapeKind::LightningBolt,
+            ShapeKind::Sun,
+            ShapeKind::Moon,
+            ShapeKind::Cloud,
+            ShapeKind::Arc,
+            ShapeKind::DoubleBracket,
+            ShapeKind::DoubleBrace,
+            ShapeKind::LeftBracket,
+            ShapeKind::RightBracket,
+            ShapeKind::LeftBrace,
+            ShapeKind::RightBrace,
+            ShapeKind::TextBox,
+            ShapeKind::Line,
+            ShapeKind::Arrow,
+            ShapeKind::DoubleArrow,
+            ShapeKind::ElbowConnector,
+            ShapeKind::ElbowArrow,
+            ShapeKind::ElbowDoubleArrow,
+            ShapeKind::CurvedConnector,
+            ShapeKind::CurvedArrow,
+            ShapeKind::CurvedDoubleArrow,
+            ShapeKind::Curve,
+            ShapeKind::Freeform,
+            ShapeKind::Scribble,
+            ShapeKind::LeftArrow,
+            ShapeKind::UpArrow,
+            ShapeKind::DownArrow,
+            ShapeKind::LeftRightArrow,
+            ShapeKind::UpDownArrow,
+            ShapeKind::QuadArrow,
+            ShapeKind::LeftRightUpArrow,
+            ShapeKind::BentArrow,
+            ShapeKind::UTurnArrow,
+            ShapeKind::LeftUpArrow,
+            ShapeKind::BentUpArrow,
+            ShapeKind::StripedRightArrow,
+            ShapeKind::NotchedRightArrow,
+            ShapeKind::PentagonArrow,
+            ShapeKind::Chevron,
+            ShapeKind::RightArrowCallout,
+            ShapeKind::DownArrowCallout,
+            ShapeKind::LeftArrowCallout,
+            ShapeKind::UpArrowCallout,
+            ShapeKind::LeftRightArrowCallout,
+            ShapeKind::QuadArrowCallout,
+            ShapeKind::CircularArrow,
+            ShapeKind::MathPlus,
+            ShapeKind::MathMinus,
+            ShapeKind::MathMultiply,
+            ShapeKind::MathDivide,
+            ShapeKind::MathEqual,
+            ShapeKind::MathNotEqual,
+            ShapeKind::FlowchartProcess,
+            ShapeKind::FlowchartAlternateProcess,
+            ShapeKind::FlowchartDecision,
+            ShapeKind::FlowchartData,
+            ShapeKind::FlowchartPredefinedProcess,
+            ShapeKind::FlowchartInternalStorage,
+            ShapeKind::FlowchartDocument,
+            ShapeKind::FlowchartMultidocument,
+            ShapeKind::FlowchartTerminator,
+            ShapeKind::FlowchartPreparation,
+            ShapeKind::FlowchartManualInput,
+            ShapeKind::FlowchartManualOperation,
+            ShapeKind::FlowchartConnector,
+            ShapeKind::FlowchartOffpageConnector,
+            ShapeKind::FlowchartCard,
+            ShapeKind::FlowchartPunchedTape,
+            ShapeKind::FlowchartSummingJunction,
+            ShapeKind::FlowchartOr,
+            ShapeKind::FlowchartCollate,
+            ShapeKind::FlowchartSort,
+            ShapeKind::FlowchartExtract,
+            ShapeKind::FlowchartMerge,
+            ShapeKind::FlowchartStoredData,
+            ShapeKind::FlowchartDelay,
+            ShapeKind::FlowchartSequentialData,
+            ShapeKind::FlowchartMagneticDisk,
+            ShapeKind::FlowchartDirectAccessStorage,
+            ShapeKind::FlowchartDisplay,
+            ShapeKind::Explosion1,
+            ShapeKind::Explosion2,
+            ShapeKind::Star4,
+            ShapeKind::Star,
+            ShapeKind::Star6,
+            ShapeKind::Star7,
+            ShapeKind::Star8,
+            ShapeKind::Star10,
+            ShapeKind::Star12,
+            ShapeKind::Star16,
+            ShapeKind::Star24,
+            ShapeKind::Star32,
+            ShapeKind::UpRibbon,
+            ShapeKind::DownRibbon,
+            ShapeKind::CurvedUpRibbon,
+            ShapeKind::CurvedDownRibbon,
+            ShapeKind::VerticalScroll,
+            ShapeKind::HorizontalScroll,
+            ShapeKind::Wave,
+            ShapeKind::DoubleWave,
+            ShapeKind::RectangularCallout,
+            ShapeKind::RoundedRectangularCallout,
+            ShapeKind::OvalCallout,
+            ShapeKind::CloudCallout,
+            ShapeKind::LineCallout1,
+            ShapeKind::LineCallout2,
+            ShapeKind::LineCallout3,
+            ShapeKind::LineCallout4,
+            ShapeKind::LineCallout1AccentBar,
+            ShapeKind::LineCallout2AccentBar,
+            ShapeKind::LineCallout3AccentBar,
+            ShapeKind::LineCallout4AccentBar,
+            ShapeKind::DrawingCanvas,
+        ] {
             assert!(!shape_path(k, r, None).elements().is_empty());
         }
     }
