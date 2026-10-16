@@ -2728,12 +2728,12 @@ pub fn editing_header_footer(app: &WordApp, layout: &DocLayout) -> bool {
     matches!(part_kind(app, story), Some(PartKind::Header | PartKind::Footer))
 }
 
-/// The body is dimmed while editing anything but the body (or a text box in it).
+/// Notes share the body editing context; other non-body stories dim the body.
 fn dims_body(app: &WordApp, layout: &DocLayout) -> bool {
     match app.session.sel.focus.story {
         StoryRef::Body => false,
         StoryRef::Part(_) if in_text_box(app) => editing_header_footer(app, layout),
-        StoryRef::Part(_) => true,
+        StoryRef::Part(_) => !matches!(part_kind(app, app.session.sel.focus.story), Some(PartKind::Footnote | PartKind::Endnote)),
     }
 }
 
@@ -3062,6 +3062,44 @@ fn is_followable_link(url: &str) -> bool {
 mod tests {
     use super::*;
     use crate::table_resize::tests::{H, cell, screen, steps, table_window};
+
+    /// #2545: notes belong to the body editing context, not the faded header/footer context.
+    #[test]
+    fn editing_notes_keeps_the_body_and_active_note_opaque() {
+        use wordcraft_layout::display::{Draw, page_display};
+        for command in ["references.footnote", "references.endnote"] {
+            let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Body marker.")), Default::default());
+            app.run(command, json!({"text": "Note marker."})).unwrap();
+            let note = app.session.sel.focus.story;
+            assert!(matches!(part_kind(&app, note), Some(PartKind::Footnote | PartKind::Endnote)));
+            app.run("insert.header", json!({"text": "Header marker."})).unwrap();
+            let header = app.session.sel.focus.story;
+            for story in [note, StoryRef::Body, header] {
+                app.session.sel = wordcraft_engine::Selection::caret(app.session.doc.end_of(story));
+                let layout = app.session.layout();
+                for dark in [false, true] {
+                    app.session.view.dark_mode = dark;
+                    let opts = page_render_options(&app, dims_body(&app, &layout));
+                    let draws = page_display(&app.session.doc, &layout.pages[0], &opts.display);
+                    for marker in ["Body", "Note", "Header"] {
+                        let alphas: Vec<f32> = draws
+                            .iter()
+                            .filter_map(|d| match d {
+                                Draw::Glyphs { text, alpha, .. } if text.contains(marker) => Some(*alpha),
+                                _ => None,
+                            })
+                            .collect();
+                        assert!(!alphas.is_empty(), "{command}: {marker} is drawn");
+                        let active = if marker == "Header" { story == header } else { story != header };
+                        assert!(
+                            alphas.iter().all(|a| if active { *a == 1.0 } else { *a > 0.0 && *a < 1.0 }),
+                            "{command}, {story:?}, dark={dark}, {marker}: {alphas:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     /// What `page_image` replaced: the raster un-premultiplied, for egui to premultiply again.
     fn by_straight_alpha(img: &wordcraft_render::Rendered) -> egui::ColorImage {
