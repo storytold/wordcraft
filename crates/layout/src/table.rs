@@ -543,11 +543,18 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             } else if turn.is_turned() {
                 collapsed = false;
                 // Turned text: its lines run along the cell's height. An exact row height sets
-                // their length; otherwise they get the length the text needs unwrapped and the row
-                // grows to fit (the second pass lays them out again if the row ends up taller).
+                // their length. A minimum height wraps text when it fits across the column;
+                // otherwise the row grows to fit its unwrapped text.
                 let snap = (ctx.counters.clone(), ctx.eq_count);
-                let len = match (row.props.height, row.props.height_rule) {
-                    (Some(h), HeightRule::Exact) if h > 0.0 => (h + row_bottom - insets).clamp(4.0, TURNED_LIMIT),
+                let preferred = row.props.height.filter(|h| h.is_finite() && *h > 0.0).map(|h| h.clamp(4.0, TURNED_LIMIT));
+                let wrapped = preferred.filter(|_| row.props.height_rule != HeightRule::Exact).filter(|h| {
+                    let probe = layout_box(ctx, story, &cell.blocks, &cpath, *h, BoxContext::Cell(text), depth, None);
+                    (ctx.counters, ctx.eq_count) = (snap.0.clone(), snap.1);
+                    probe.height.max(probe.floats_bottom) <= cw + 0.01
+                });
+                let len = match (row.props.height, row.props.height_rule, wrapped) {
+                    (Some(h), HeightRule::Exact, _) if h > 0.0 => (h + row_bottom - insets).clamp(4.0, TURNED_LIMIT),
+                    (_, _, Some(h)) => h,
                     _ => {
                         let probe = layout_box(ctx, story, &cell.blocks, &cpath, TURNED_MAX, BoxContext::Cell(text), depth, None).items;
                         (ctx.counters, ctx.eq_count) = (snap.0.clone(), snap.1);
