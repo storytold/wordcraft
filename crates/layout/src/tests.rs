@@ -3482,6 +3482,64 @@ fn justified_lines_shrink_spaces_in_word_2013_mode() {
 }
 
 #[test]
+fn space_shrink_quarter() {
+    fn first_para(l: &DocLayout) -> &para::ParaLayout {
+        l.pages[0]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Placed::Lines { para, .. } => Some(&**para),
+                _ => None,
+            })
+            .unwrap()
+    }
+
+    for prefix in ["Amber blue", "Amber copper indigo silver violet green orange yellow white black blue"] {
+        let text = format!("{prefix} tail tail.");
+        for font in ["Source Sans 3", "Segoe UI", "Arial", "Times New Roman", "Calibri", "Cambria"] {
+            for kern in [0.0, 1.0] {
+                let paragraph = |text: &str| {
+                    let mut p = wordcraft_doc::Paragraph::with_text(
+                        text,
+                        wordcraft_doc::CharProps { font: Some(font.into()), size: Some(11.0), kern: Some(kern), ..Default::default() },
+                    );
+                    p.props.align = Some(Align::Justify);
+                    p
+                };
+                let mut doc = Document::new();
+                doc.body = vec![wordcraft_doc::para_block(paragraph(prefix))];
+                doc.last_section.page_w = 1000.0;
+                let broad = lay(&doc);
+                let para = first_para(&broad);
+                let natural: f32 = para.clusters.iter().map(|c| c.adv).sum();
+                let spaces: f32 = para.clusters.iter().filter(|c| c.kind == para::ClKind::Space).map(|c| c.adv).sum();
+                // Measure each font so metric-compatible substitutes exercise the same boundary.
+                let boundary = natural - spaces * 0.25;
+                let margins = doc.last_section.margin_left + doc.last_section.margin_right;
+                doc.body = vec![wordcraft_doc::para_block(paragraph(&text))];
+                for mode in [12, 14, 15] {
+                    doc.settings.compat_mode = mode;
+                    for offset in [-0.1, 0.1] {
+                        let width = boundary + offset;
+                        doc.last_section.page_w = width + margins;
+                        let laid = lay(&doc);
+                        let para = first_para(&laid);
+                        let line = &para.lines[0];
+                        let shown = text[line.start..line.stop].trim_end();
+                        let fits = shown.ends_with("blue");
+                        assert_eq!(fits, mode == 15 && offset > 0.0, "{prefix}, {font}, kern {kern}, mode {mode}, offset {offset}");
+                        if fits {
+                            let end = para.x_of(0, line.start + shown.len()).unwrap();
+                            assert!((end - width).abs() < 0.05, "compressed line ends at {end}, width {width}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn space_shrinking_is_only_for_justified_text() {
     let text = "We tie the spend to a pipe and to the books, so it is in an ad hoc view of all of it. ".repeat(40);
     for align in [Align::Left, Align::Center, Align::Right] {
