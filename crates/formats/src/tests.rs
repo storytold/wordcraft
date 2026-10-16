@@ -225,6 +225,33 @@ fn html_round_trip() {
 }
 
 #[test]
+fn html_ruby_round_trip() {
+    // #1681: a phonetic guide exports as `<ruby>` and opens back as one ruby object, its base
+    // text still in the paragraph.
+    let props = CharProps::default();
+    let mut p = Paragraph::with_text("I read ", props.clone());
+    let n = p.len();
+    p.insert_object(n, model::ruby_object("漢字".into(), "かんじ".into(), 20.0), &props).unwrap();
+    let n = p.len();
+    p.insert_text(n, " daily.", &props).unwrap();
+    let mut d = Document::new();
+    d.body = vec![para_block(p)];
+
+    let html = String::from_utf8(export("html", &d).unwrap().unwrap()).unwrap();
+    assert!(html.contains("<ruby>漢字<rt>かんじ</rt></ruby>"), "{html}");
+    let back = import("html", html.as_bytes()).unwrap().unwrap();
+    assert_eq!(back.plain_text(Default::default()), "I read 漢字 daily.");
+    let ruby = back.body.iter().find_map(|b| match &**b {
+        Block::Para(p) => p.objects.iter().find_map(|o| match o {
+            InlineObject::Ruby { base, ruby, .. } => Some((base.as_str(), ruby.as_str())),
+            _ => None,
+        }),
+        _ => None,
+    });
+    assert_eq!(ruby, Some(("漢字", "かんじ")));
+}
+
+#[test]
 fn rtf_round_trip() {
     check_round_trip("rtf", true);
     let back = import("rtf", &export("rtf", &sample()).unwrap().unwrap()).unwrap().unwrap();

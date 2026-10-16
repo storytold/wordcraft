@@ -1134,7 +1134,9 @@ fn inlines_md_table(inlines: &[Inline]) -> String {
 fn inlines_md_impl(inlines: &[Inline], in_table: bool) -> String {
     // Split into (text, fmt) pieces with whitespace moved outside emphasis.
     let mut pieces: Vec<(String, Fmt, Option<String>)> = Vec::new();
-    let inlines = crate::model::equations_as_text(inlines);
+    let eq = crate::model::equations_as_text(inlines);
+    // Markdown keeps no ruby: its base text goes through the text path below.
+    let inlines = crate::model::ruby_as_text(&eq);
     for i in inlines.iter() {
         match i {
             Inline::Text(t, f) => {
@@ -1167,6 +1169,8 @@ fn inlines_md_impl(inlines: &[Inline], in_table: bool) -> String {
             }
             Inline::Figure(alt) => pieces.push((String::new(), Fmt::default(), Some(format!("![{}]()", escape(alt))))),
             Inline::Equation { .. } => {}
+            // Read as its base text by `ruby_as_text` above.
+            Inline::Ruby { .. } => {}
         }
     }
     let mut out = String::new();

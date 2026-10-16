@@ -224,6 +224,8 @@ impl Writer {
                     let a = esc(a);
                     out.push_str(&format!("{{\\*\\bkmkstart {a}}}{{\\*\\bkmkend {a}}}"));
                 }
+                // RTF keeps no ruby yet: its base text, in the run's formatting.
+                Inline::Ruby { base, fmt, .. } => self.run(base, fmt, out),
                 Inline::Figure(_) | Inline::Equation { .. } => {}
             }
         }

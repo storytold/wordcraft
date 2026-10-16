@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use wordcraft_doc::numbering::{AbstractNum, Level, ListKind, Num, levels_for};
-use wordcraft_doc::para::{InlineObject, OBJ, PAGE_BREAK, Run};
+use wordcraft_doc::para::{InlineObject, OBJ, PAGE_BREAK, RubyAlign, Run, ruby_raise};
 use wordcraft_doc::props::{
     Border, BorderStyle, Borders, CellProps, CharProps, NumRef, ParaProps, RowProps, TextColor, Underline, VMerge, VertAlign,
 };
@@ -81,6 +81,34 @@ pub enum Inline {
         linear: String,
         display: bool,
     },
+    /// Ruby (phonetic guide): `ruby` text (furigana, pinyin…) over `base` text, in the formatting
+    /// of the run it sits in (#1681). Formats without ruby write the base text
+    /// ([`ruby_as_text`]).
+    Ruby {
+        base: String,
+        ruby: String,
+        fmt: Fmt,
+    },
+}
+
+/// Base text size (points) a phonetic guide falls back to when the source states none: the
+/// Phonetic Guide command's own fallback for an unresolved size
+/// (`crates/engine/src/cmd/phonetic.rs`).
+pub const RUBY_BASE_SIZE: f32 = 10.5;
+
+/// Ruby text size for a base of `base_size` points: half the base size, rounded down to a half
+/// point, as the Phonetic Guide command sets it.
+fn ruby_default_size(base_size: f32) -> f32 {
+    (base_size.floor() / 2.0).max(1.0)
+}
+
+/// The ruby a format without its own ruby markup gets: a [`InlineObject::Ruby`] over `base` with
+/// the Phonetic Guide's defaults (centred, half the base size, raised clear of the base text).
+pub fn ruby_object(base: String, ruby: String, base_size: f32) -> InlineObject {
+    let base_size = if base_size.is_finite() { base_size.clamp(1.0, 1584.0) } else { RUBY_BASE_SIZE };
+    let size = ruby_default_size(base_size);
+    let raise = ruby_raise(0.0, base_size, size).clamp(0.0, 1584.0);
+    InlineObject::Ruby { base, ruby, align: RubyAlign::default(), size, raise, base_size, lang: String::new(), props: Default::default() }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -153,12 +181,13 @@ impl Para {
         }
         self.inlines.push(Inline::Text(s.to_string(), f.clone()));
     }
-    /// The plain text (images and anchors left out; equations as their linear text).
+    /// The plain text (images and anchors left out; equations as their linear text, ruby as its
+    /// base text).
     pub fn text(&self) -> String {
         let mut s = String::new();
         for i in &self.inlines {
             match i {
-                Inline::Text(t, _) | Inline::Equation { linear: t, .. } => s.push_str(t),
+                Inline::Text(t, _) | Inline::Equation { linear: t, .. } | Inline::Ruby { base: t, .. } => s.push_str(t),
                 Inline::Image(_) | Inline::Anchor(_) | Inline::Figure(_) => {}
             }
         }
@@ -174,7 +203,7 @@ impl Para {
                     Some(font) if wordcraft_doc::symbol_fonts::is_symbol_font(font) => s.push_str(&wordcraft_doc::symbol_fonts::map_text(font, t)),
                     _ => s.push_str(t),
                 },
-                Inline::Equation { linear: t, .. } => s.push_str(t),
+                Inline::Equation { linear: t, .. } | Inline::Ruby { base: t, .. } => s.push_str(t),
                 Inline::Image(_) | Inline::Anchor(_) | Inline::Figure(_) => {}
             }
         }
@@ -340,6 +369,22 @@ pub fn equations_as_text(inlines: &[Inline]) -> std::borrow::Cow<'_, [Inline]> {
         match i {
             Inline::Equation { linear, .. } => p.push_text(linear, &Fmt::default()),
             Inline::Text(t, f) => p.push_text(t, f),
+            other => p.inlines.push(other.clone()),
+        }
+    }
+    std::borrow::Cow::Owned(p.inlines)
+}
+
+/// `inlines` with ruby as its base text, for formats that have no ruby markup: the base text (and
+/// everything around it) keeps its formatting, and the reading is left out.
+pub fn ruby_as_text(inlines: &[Inline]) -> std::borrow::Cow<'_, [Inline]> {
+    if !inlines.iter().any(|i| matches!(i, Inline::Ruby { .. })) {
+        return std::borrow::Cow::Borrowed(inlines);
+    }
+    let mut p = Para::default();
+    for i in inlines {
+        match i {
+            Inline::Ruby { base, fmt, .. } => p.push_text(base, fmt),
             other => p.inlines.push(other.clone()),
         }
     }
@@ -515,6 +560,20 @@ impl<'a> Builder<'a> {
                     if !linear.is_empty() {
                         let obj = InlineObject::Equation { linear, display: *display, math: Default::default() };
                         append(&mut out, "", &CharProps::default(), Some(obj));
+                    }
+                }
+                Inline::Ruby { base, ruby, fmt } => {
+                    let (base, ruby) = (clean_text(base), clean_text(ruby));
+                    let cp = char_props(fmt);
+                    // A source without a base or without a reading (malformed markup) is just its
+                    // text: a guide that annotates nothing is no guide.
+                    if base.is_empty() || ruby.is_empty() {
+                        append(&mut out, if base.is_empty() { &ruby } else { &base }, &cp, None);
+                    } else {
+                        // Ruby attributes a format without them doesn't state (HTML): the
+                        // Phonetic Guide's defaults for a new guide over this run's text.
+                        let obj = ruby_object(base, ruby, cp.size.unwrap_or(RUBY_BASE_SIZE));
+                        append(&mut out, "", &cp, Some(obj));
                     }
                 }
             }
@@ -911,6 +970,14 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool) -> Vec<Para> {
                     // structure gets it from there.
                     let linear = if linear.is_empty() { wordcraft_doc::math::to_linear(&math.nodes) } else { linear.clone() };
                     out.inlines.push(Inline::Equation { linear, display: *display });
+                }
+                Some(InlineObject::Ruby { base, ruby, .. }) => {
+                    if !buf.is_empty() {
+                        out.push_text(&std::mem::take(&mut buf), &f);
+                    }
+                    // The base text and reading, in the run's formatting; the guide's own
+                    // attributes (alignment, size, raise) stay in the document model.
+                    out.inlines.push(Inline::Ruby { base: base.clone(), ruby: ruby.clone(), fmt: f.clone() });
                 }
                 Some(InlineObject::BookmarkStart { name }) if name != "_GoBack" => {
                     if !buf.is_empty() {
