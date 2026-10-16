@@ -425,10 +425,35 @@ fn level_def(ordered: bool, l: usize) -> String {
 }
 
 fn rtf_date(s: &str) -> Option<String> {
-    let num = |a: usize, b: usize| s.get(a..b).and_then(|x| x.parse::<u32>().ok());
+    let num = |a: usize, b: usize| s.get(a..b).filter(|t| t.bytes().all(|c| c.is_ascii_digit())).and_then(|x| x.parse::<u32>().ok());
+    let sep = |i: usize, c: &[&str]| s.get(i..i + 1).is_some_and(|t| c.contains(&t));
     let (y, mo, d) = (num(0, 4)?, num(5, 7)?, num(8, 10)?);
-    let (h, mi) = (num(11, 13).unwrap_or(0), num(14, 16).unwrap_or(0));
-    Some(format!("\\yr{y}\\mo{mo}\\dy{d}\\hr{h}\\min{mi}"))
+    if !sep(4, &["-"]) || !sep(7, &["-"]) {
+        return None;
+    }
+    let (h, mi, sec) = if s.len() > 10 {
+        if !sep(10, &["T", " "]) || !sep(13, &[":"]) {
+            return None;
+        }
+        let h = num(11, 13)?;
+        let mi = num(14, 16)?;
+        let sec = if s.len() >= 19 && sep(16, &[":"]) {
+            num(17, 19).unwrap_or(0)
+        } else {
+            0
+        };
+        (h, mi, sec)
+    } else {
+        (0, 0, 0)
+    };
+    if mo == 0 || mo > 12 || d == 0 || d > days_in_month(y, mo) || h > 23 || mi > 59 || sec > 59 {
+        return None;
+    }
+    if sec > 0 {
+        Some(format!("\\yr{y}\\mo{mo}\\dy{d}\\hr{h}\\min{mi}\\sec{sec}"))
+    } else {
+        Some(format!("\\yr{y}\\mo{mo}\\dy{d}\\hr{h}\\min{mi}"))
+    }
 }
 
 fn days_in_month(y: u32, m: u32) -> u32 {
@@ -876,8 +901,9 @@ struct Reader {
     defs: Vec<CellDef>,
     def_cur: CellDef,
     row_header: bool,
-    created: Option<(u32, u32, u32, u32, u32)>,
+    created: Option<(u32, u32, u32, u32, u32, u32)>,
     in_creatim: bool,
+    creatim_depth: Option<usize>,
     rule_pending: bool,
     info_depth: Option<usize>,
 }
@@ -1042,6 +1068,10 @@ impl Reader {
         if self.pict_depth.is_some_and(|d| self.depth() < d) {
             self.pict_depth = None;
             self.finish_pict();
+        }
+        if self.creatim_depth.is_some_and(|d| self.depth() < d) {
+            self.creatim_depth = None;
+            self.in_creatim = false;
         }
         if let Some((d, _)) = &self.bkmk
             && self.depth() < *d
@@ -1382,13 +1412,14 @@ impl Reader {
         if self.st.dest == Dest::Skip && !(self.in_info() && matches!(w, "title" | "author" | "subject" | "keywords" | "doccomm" | "creatim")) {
             if self.in_creatim {
                 let v = pv.clamp(0, 9999) as u32;
-                let c = self.created.get_or_insert((0, 1, 1, 0, 0));
+                let c = self.created.get_or_insert((0, 1, 1, 0, 0, 0));
                 match w {
                     "yr" => c.0 = v,
                     "mo" => c.1 = v,
                     "dy" => c.2 = v,
                     "hr" => c.3 = v,
                     "min" => c.4 = v,
+                    "sec" => c.5 = v,
                     _ => {}
                 }
             }
@@ -1427,12 +1458,13 @@ impl Reader {
             }
             "header" | "footer" | "headerl" | "headerr" | "headerf" | "footerl" | "footerr" | "footerf" | "footnote" | "annotation" | "pntext"
             | "listtext" | "object" | "nonshppict" | "xe" | "tc" | "txe" | "private" | "bkmkend" | "atnid" | "atnauthor" | "comment" | "shpinst"
-            | "do" | "operator" | "company" | "manager" | "category" | "hlinkbase" | "revtime" | "printim" | "buptim" | "version" | "nofpages"
+            | "do" | "operator" | "company" | "manager" | "category" | "hlinkbase" | "revtime" | "revtim" | "printim" | "buptim" | "version" | "nofpages"
             | "nofwords" | "nofchars" | "edmins" | "vern" | "themedata" | "colorschememapping" | "latentstyles" | "datastore" | "xmlnstbl"
             | "rsidtbl" | "generator" | "mmathPr" | "pgdsctbl" | "filetbl" | "listpicture" | "userprops" | "docvar" | "objdata" | "fontemb"
             | "fontfile" | "panose" | "falt" | "mhtmltag" | "htmltag" | "pnseclvl" | "background" | "sp" | "pn" | "pgptbl" => Some(Dest::Skip),
             "creatim" if self.in_info() => {
                 self.in_creatim = true;
+                self.creatim_depth = Some(self.depth());
                 Some(Dest::Skip)
             }
             _ => None,
@@ -1469,13 +1501,14 @@ impl Reader {
             Dest::Skip => {
                 if self.in_creatim {
                     let v = pv.clamp(0, 9999) as u32;
-                    let c = self.created.get_or_insert((0, 1, 1, 0, 0));
+                    let c = self.created.get_or_insert((0, 1, 1, 0, 0, 0));
                     match w {
                         "yr" => c.0 = v,
                         "mo" => c.1 = v,
                         "dy" => c.2 = v,
                         "hr" => c.3 = v,
                         "min" => c.4 = v,
+                        "sec" => c.5 = v,
                         _ => {}
                     }
                 }
@@ -1924,7 +1957,7 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
                     }
                     if r.skip_chars > 0
                         && matches!(r.st.dest, Dest::Body | Dest::Info(_) | Dest::FldInst | Dest::Bookmark | Dest::FontTbl)
-                        && !matches!(word, "par" | "pard" | "cell" | "row")
+                        && matches!(word, "emdash" | "endash" | "bullet" | "lquote" | "rquote" | "ldblquote" | "rdblquote" | "emspace" | "enspace" | "qmspace" | "zwj" | "zwnj" | "line" | "tab" | "page")
                     {
                         r.skip_chars -= 1;
                         first_in_group = false;
@@ -2009,10 +2042,12 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
         r.end_para(false);
     }
     r.close_table();
-    if let Some((y, mo, d, h, mi)) = r.created
+    if let Some((y, mo, d, h, mi, sec)) = r.created
         && y > 0
     {
-        r.meta.created = format!("{y:04}-{:02}-{:02}T{:02}:{:02}:00Z", mo.clamp(1, 12), d.clamp(1, 31), h.min(23), mi.min(59));
+        let mo = mo.clamp(1, 12);
+        let max_d = days_in_month(y, mo).max(1);
+        r.meta.created = format!("{y:04}-{mo:02}-{:02}T{:02}:{:02}:{:02}Z", d.clamp(1, max_d), h.min(23), mi.min(59), sec.min(59));
     }
     let mut blocks = std::mem::take(&mut r.body);
     // A file that ends with `\sect` ends its last section there: no empty one follows, and
@@ -2684,5 +2719,31 @@ mod tests {
     #[test]
     fn escapes() {
         assert_eq!(esc("a{b}\\c\té😀"), "a\\{b\\}\\\\c\\tab \\u233?\\u-10179?\\u-8704?");
+    }
+
+    #[test]
+    fn rtf_date_validation_and_seconds() {
+        assert_eq!(rtf_date("2024-03-15T10:30:45Z").as_deref(), Some("\\yr2024\\mo3\\dy15\\hr10\\min30\\sec45"));
+        assert_eq!(rtf_date("2024-03-15T10:30:00Z").as_deref(), Some("\\yr2024\\mo3\\dy15\\hr10\\min30"));
+        assert_eq!(rtf_date("2024-03-15").as_deref(), Some("\\yr2024\\mo3\\dy15\\hr0\\min0"));
+        assert_eq!(rtf_date("not-a-date"), None);
+        assert_eq!(rtf_date("2024/03/15"), None);
+        assert_eq!(rtf_date("2024-02-30"), None); // Feb 30 invalid
+        assert_eq!(rtf_date("2024-13-01"), None); // Month 13 invalid
+    }
+
+    #[test]
+    fn rtf_creatim_revtim_and_skip_chars() {
+        // creatim with seconds and revtim skip
+        let rtf = br#"{\rtf1\ansi{\info{\creatim\yr2024\mo3\dy15\hr10\min30\sec45}{\revtim\yr2024\mo3\dy16\hr11\min0\sec0}}Hello\par}"#;
+        let f = parse(rtf).unwrap();
+        assert_eq!(f.meta.created, "2024-03-15T10:30:45Z");
+        assert_eq!(texts(&f), vec!["Normal:Hello"]);
+
+        // Character-producing control words (like \bullet) are consumed as fallback, but formatting control words (\b) are preserved
+        let rtf2 = br#"{\rtf1\ansi\uc1 \u8364\bullet \b Bold\b0\par}"#;
+        let f2 = parse(rtf2).unwrap();
+        let FBlock::Para(p) = &f2.blocks[0] else { panic!() };
+        assert!(p.inlines.iter().any(|i| matches!(i, Inline::Text(t, f) if t == "Bold" && f.bold)));
     }
 }
