@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 use wordcraft_doc::para::{Float, InlineObject, ShapeKind, Wrap};
-use wordcraft_doc::props::{Align, CharProps, Rgb, TabAlign, TabStop, TextColor};
+use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, CharProps, HeightRule, Rgb, TabAlign, TabStop, TextColor};
 use wordcraft_doc::{Block, Paragraph, PartKind, Path, Pos, StoryRef, Table, para_block};
 
 use super::{delete_selection, sel_result, split_para, type_text};
@@ -23,7 +23,9 @@ pub fn specs() -> Vec<CommandSpec> {
             sel_result(s)
         }),
         CommandSpec::new("insert.coverPage", "Cover Page", "Insert › Pages", cover_page).params(r#"{"title"?: string, "subtitle"?: string, "author"?: string}"#),
-        CommandSpec::new("insert.table", "Table", "Insert › Tables", table).params(r#"{"rows": n, "cols": n, "style"?: string}"#),
+        CommandSpec::new("insert.table", "Table", "Insert › Tables", table).params(
+            r#"{"rows": n, "cols": n, "style"?: string, "width"?: "column"|"paragraph"|pt (Hangul's Create Table: fit to the column, fit between the paragraph's indents, or a width), "rowHeight"?: pt (at least), "look"?: "hangul" (solid 0.12 mm lines, cells padded 1.8 mm × 0.5 mm)}"#,
+        ),
         CommandSpec::new("insert.picture", "Pictures", "Insert › Illustrations", picture).params(r#"{"path"?: string, "data"?: base64, "width"?: pt, "alt"?: string}"#),
         CommandSpec::new("insert.icon", "Icons", "Insert › Illustrations", icon)
             .params(r#"{"id"?: string (omit to list the library), "color"?: "RRGGBB", "size"?: pt, "query"?: string, "category"?: string}"#),
@@ -153,11 +155,48 @@ fn insert_block_at_caret(s: &mut Session, block: Block) -> Result<Path, CmdError
 fn table(s: &mut Session, v: &Value) -> CmdResult {
     let rows = p::u64(v, "rows").unwrap_or(2).clamp(1, 1000) as usize;
     let cols = p::u64(v, "cols").unwrap_or(2).clamp(1, 63) as usize;
-    let width = s.doc.sections().first().map(|(_, sp)| sp.text_width()).unwrap_or(468.0);
+    // The caret's section, not the first one.
+    let column = super::page::sect(s).text_width().max(36.0);
+    // Hangul's Create Table width choices: fit to the column, fit to the caret's paragraph
+    // (between its indents), or a width in points.
+    let (width, indent) = match v.get("width") {
+        None | Some(Value::Null) => (column, None),
+        Some(Value::String(w)) if w == "column" => (column, None),
+        Some(Value::String(w)) if w == "paragraph" => {
+            let rp = s.doc.para_at(&s.sel.focus).map(|x| s.doc.styles.resolve_para(&x.props));
+            let (l, r) = rp.map(|rp| (rp.indent_left.max(0.0), rp.indent_right.max(0.0))).unwrap_or((0.0, 0.0));
+            ((column - l - r).max(column * 0.1), (l > 0.0).then_some(l))
+        }
+        Some(w) => match w.as_f64().filter(|w| w.is_finite()) {
+            Some(w) => ((w as f32).clamp(cols as f32 * 7.2, 1584.0), None),
+            None => return Err(CmdError::Params("`width` is \"column\", \"paragraph\" or points".into())),
+        },
+    };
     let mut t = Table::new(rows, cols, width);
+    if width != column {
+        t.props.width = Some(width);
+    }
+    t.props.indent = indent;
     if let Some(st) = p::str(v, "style") {
         let id = s.doc.styles.find(st).map(|x| x.id.clone()).ok_or_else(|| CmdError::Params(format!("no table style `{st}`")))?;
         t.props.style = Some(id);
+    }
+    match p::str(v, "look") {
+        None => {}
+        Some("hangul") => {
+            // Hangul's new-table look: every line solid 0.12 mm black; cells padded 1.8 mm left
+            // and right, 0.5 mm top and bottom.
+            let line = Border { style: BorderStyle::Single, width: 0.12 * MM, color: Some(Rgb(0, 0, 0)), space: 0.0 };
+            t.props.borders = Some(Borders::all(line));
+            t.props.cell_margins = Some([0.5 * MM, 1.8 * MM, 0.5 * MM, 1.8 * MM]);
+        }
+        Some(other) => return Err(CmdError::Params(format!("unknown table look `{other}` (try \"hangul\")"))),
+    }
+    if let Some(h) = p::f32(v, "rowHeight").filter(|h| *h > 0.0) {
+        for row in &mut t.rows {
+            row.props.height = Some(h.clamp(2.0, 1584.0));
+            row.props.height_rule = HeightRule::AtLeast;
+        }
     }
     let story = s.sel.focus.story;
     let path = insert_block_at_caret(s, Block::Table(t))?;
@@ -166,6 +205,9 @@ fn table(s: &mut Session, v: &Value) -> CmdResult {
     s.sel = Selection::caret(Pos { story, path: Path(first), off: 0 });
     Ok(json!({"table": path.0}))
 }
+
+/// Points per millimetre.
+const MM: f32 = 72.0 / 25.4;
 
 /// Minimal base64 (standard alphabet, padding optional, whitespace ignored).
 pub fn base64_decode(s: &str) -> Option<Vec<u8>> {

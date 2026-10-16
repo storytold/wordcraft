@@ -241,6 +241,17 @@ pub enum Dialog {
         rows: u32,
         cols: u32,
     },
+    /// Hangul-style Create Table: size, width fit, row height and Hangul's table look.
+    CreateTable {
+        rows: u32,
+        cols: u32,
+        /// `"column"`, `"paragraph"` or `"custom"`.
+        fit: &'static str,
+        width: f32,
+        at_least: bool,
+        height: f32,
+        hangul: bool,
+    },
     PageSetup {
         top: f32,
         bottom: f32,
@@ -799,6 +810,7 @@ impl Dialog {
             Dialog::Find { tab: FindTab::Replace, .. } => "replace",
             Dialog::Find { tab: FindTab::GoTo, .. } => "goto",
             Dialog::InsertTable { .. } => "insertTable",
+            Dialog::CreateTable { .. } => "createTable",
             Dialog::PageSetup { .. } => "pageSetup",
             Dialog::Link { .. } => "link",
             Dialog::Bookmark { .. } => "bookmark",
@@ -979,6 +991,15 @@ impl Dialog {
                 focus: true,
             },
             "insertTable" => Dialog::InsertTable { rows: 2, cols: 5 },
+            "createTable" => Dialog::CreateTable {
+                rows: 5,
+                cols: 5,
+                fit: "column",
+                width: wordcraft_engine::cmd::page::sect(&app.session).text_width(),
+                at_least: false,
+                height: 20.0,
+                hangul: true,
+            },
             "pageSetup" => {
                 let sp = wordcraft_engine::cmd::page::sect(&app.session);
                 use wordcraft_doc::section::DocGridType;
@@ -1246,6 +1267,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::Borders { .. } => "Borders and Shading",
         Dialog::Find { .. } => "Find and Replace",
         Dialog::InsertTable { .. } => "Insert Table",
+        Dialog::CreateTable { .. } => "Create Table",
         Dialog::PageSetup { .. } => "Page Setup",
         Dialog::Link { .. } => "Insert Hyperlink",
         Dialog::Bookmark { .. } => "Bookmark",
@@ -1924,6 +1946,51 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             let (ok, cancel) = buttons(ui, tl!("OK"));
             if ok {
                 let _ = app.run("insert.table", json!({"rows": *rows, "cols": *cols}));
+            }
+            ok || cancel
+        }
+        Dialog::CreateTable { rows, cols, fit, width, at_least, height, hangul } => {
+            let unit = crate::options::unit();
+            let speed = 3.6 / unit.pt_per_unit();
+            egui::Grid::new("ct").num_columns(2).show(ui, |ui| {
+                ui.label(tl!("Number of rows:"));
+                ui.add(egui::DragValue::new(rows).range(1..=1000));
+                ui.end_row();
+                ui.label(tl!("Number of columns:"));
+                ui.add(egui::DragValue::new(cols).range(1..=63));
+                ui.end_row();
+            });
+            ui.separator();
+            ui.label(egui::RichText::new(tl!("Size")).font(semibold(12.5)));
+            egui::Grid::new("ct-size").num_columns(2).show(ui, |ui| {
+                ui.label(tl!("Width:"));
+                ui.horizontal(|ui| {
+                    ui.radio_value(fit, "column", tl!("Fit to column"));
+                    ui.radio_value(fit, "paragraph", tl!("Fit to paragraph"));
+                    ui.radio_value(fit, "custom", tl!("Custom"));
+                    ui.add_enabled(*fit == "custom", egui::DragValue::new(width).speed(speed).range(7.2..=1584.0).measure(unit).max_decimals(2));
+                });
+                ui.end_row();
+                ui.label(tl!("Height:"));
+                ui.horizontal(|ui| {
+                    ui.radio_value(at_least, false, tl!("Auto"));
+                    ui.radio_value(at_least, true, tl!("At least"));
+                    ui.add_enabled(*at_least, egui::DragValue::new(height).speed(speed).range(2.0..=1584.0).measure(unit).max_decimals(2));
+                });
+                ui.end_row();
+            });
+            ui.checkbox(hangul, tl!("Hangul table look (thin black lines, roomy cells)"));
+            let (ok, cancel) = buttons(ui, tl!("OK"));
+            if ok {
+                let mut params = json!({"rows": *rows, "cols": *cols});
+                params["width"] = if *fit == "custom" { json!(*width) } else { json!(*fit) };
+                if *at_least {
+                    params["rowHeight"] = json!(*height);
+                }
+                if *hangul {
+                    params["look"] = json!("hangul");
+                }
+                let _ = app.run("insert.table", params);
             }
             ok || cancel
         }

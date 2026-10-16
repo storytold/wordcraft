@@ -1017,6 +1017,7 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
             crate::dialogs::table_grid_picker(ui, app);
             ui.separator();
             mi(ui, app, "Insert Table…", "ui.dialog", json!({"name": "insertTable"}));
+            mi(ui, app, "Create Table (Hangul Style)…", "ui.dialog", json!({"name": "createTable"}));
             let drawing = app.canvas.table_tool == Some(crate::table_pen::TableTool::Draw);
             mi_check(ui, app, "Draw Table", drawing, "table.draw", json!({}));
             mi(ui, app, "Convert Text to Table…", "table.fromText", json!({}));

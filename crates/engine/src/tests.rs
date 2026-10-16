@@ -1339,6 +1339,46 @@ fn tables_commands() {
     assert!(s.run("table.merge", &json!({})).is_err());
 }
 
+#[test]
+fn hangul_style_create_table_sets_width_height_and_look() {
+    use wordcraft_doc::props::{BorderStyle, HeightRule, Rgb};
+    let table = |x: &Session| x.doc.body.iter().find_map(|b| b.as_table()).cloned().unwrap();
+    let column = crate::cmd::page::sect(&s()).text_width();
+
+    // Fit to the column with Hangul's look: solid 0.12 mm black lines, 1.8 mm × 0.5 mm padding.
+    let mut sess = s();
+    run(&mut sess, "insert.table", json!({"rows": 5, "cols": 5, "width": "column", "look": "hangul"}));
+    let t = table(&sess);
+    assert_eq!((t.rows.len(), t.cols()), (5, 5));
+    assert!((t.grid.iter().sum::<f32>() - column).abs() < 0.01);
+    let b = t.props.borders.unwrap();
+    for line in [b.top, b.left, b.bottom, b.right, b.between, b.inside_v] {
+        let line = line.unwrap();
+        assert_eq!((line.style, line.color), (BorderStyle::Single, Some(Rgb(0, 0, 0))));
+        assert!((line.width - 0.34).abs() < 0.01, "{}", line.width);
+    }
+    let m = t.props.cell_margins.unwrap();
+    assert!((m[0] - 1.42).abs() < 0.01 && (m[1] - 5.10).abs() < 0.01 && m[0] == m[2] && m[1] == m[3], "{m:?}");
+
+    // Fit to the paragraph: between the caret paragraph's indents, starting at its left indent.
+    let mut sess = s();
+    run(&mut sess, "para.indents", json!({"left": 36, "right": 18}));
+    run(&mut sess, "insert.table", json!({"rows": 2, "cols": 3, "width": "paragraph", "rowHeight": 24}));
+    let t = table(&sess);
+    assert_eq!(t.props.indent, Some(36.0));
+    assert_eq!(t.props.width, Some(column - 54.0));
+    assert!((t.grid.iter().sum::<f32>() - (column - 54.0)).abs() < 0.01);
+    assert!(t.rows.iter().all(|r| r.props.height == Some(24.0) && r.props.height_rule == HeightRule::AtLeast));
+    assert!(t.props.borders.is_none(), "no look asked for: the style draws the lines");
+
+    // A width in points (clamped to at least 0.1" per column); bad values are refused.
+    let mut sess = s();
+    run(&mut sess, "insert.table", json!({"rows": 1, "cols": 2, "width": 200}));
+    assert_eq!(table(&sess).props.width, Some(200.0));
+    assert!(sess.run("insert.table", &json!({"rows": 1, "cols": 2, "width": "wide"})).is_err());
+    assert!(sess.run("insert.table", &json!({"rows": 1, "cols": 2, "look": "fancy"})).is_err());
+}
+
 fn cells(s: &Session) -> Option<((usize, usize), (usize, usize))> {
     s.cell_range().map(|x| (x.rows, x.cols))
 }
