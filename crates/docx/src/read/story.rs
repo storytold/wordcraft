@@ -1654,7 +1654,7 @@ fn placeholder_of(s: &str) -> String {
 }
 
 fn on_off_attr(e: &El, name: &str) -> bool {
-    e.attr(name).is_some_and(|v| !matches!(v, "0" | "false" | "off"))
+    e.attr(name).is_some_and(|v| !matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "off"))
 }
 
 /// The alternative text of a `wp:docPr`, `pic:cNvPr` or `wps:cNvPr` (ECMA-376
