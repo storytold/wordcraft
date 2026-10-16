@@ -2830,3 +2830,19 @@ fn row_table_borders_round_trip() {
     let again = wordcraft_docx::read(&saved).unwrap();
     assert_eq!(d.body, again.body);
 }
+
+/// A fill's `a:alpha` is its opacity: a translucent white wash over a picture stayed opaque and
+/// hid the picture.
+#[test]
+fn a_shape_fill_keeps_its_transparency() {
+    let fill =
+        r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="FFFFFF"><a:alpha val="30980"/></a:srgbClr></a:solidFill>"#;
+    let d = read_body(&format!("<w:p>{}</w:p>", anchored_wsp("Wash", 1270000, 635000, fill, "", "<wps:cNvSpPr/>")));
+    let transparency = |d: &Document| match &paras(d)[0].objects[0] {
+        InlineObject::Shape { fill, extra, .. } => (*fill, extra.fill_transparency),
+        o => panic!("{o:?}"),
+    };
+    assert_eq!(transparency(&d), (Some(Rgb(255, 255, 255)), 69.02));
+    let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(transparency(&again), (Some(Rgb(255, 255, 255)), 69.02));
+}

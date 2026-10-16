@@ -989,7 +989,7 @@ impl Exporter<'_> {
                 s.draw_path(&p);
                 s.set_stroke(None);
             }
-            Draw::Shape { rect, kind, fill: f, stroke, stroke_width, effects, corner } => {
+            Draw::Shape { rect, kind, fill: f, stroke, stroke_width, effects, corner, fill_alpha } => {
                 let Some(p) = shape_path(*kind, rect, *corner) else { return };
                 let can_fill = *kind != ShapeKind::Line;
                 let fx = effects.sanitized();
@@ -1009,7 +1009,7 @@ impl Exporter<'_> {
                     s.set_fill(None);
                     return;
                 }
-                s.set_fill(f.filter(|_| can_fill).map(|c| fill(c, 1.0)));
+                s.set_fill(f.filter(|_| can_fill).map(|c| fill(c, *fill_alpha)));
                 s.set_stroke(stroke.map(|c| Stroke {
                     paint: rgb::Color::new(c.0, c.1, c.2).into(),
                     width: if stroke_width.is_finite() { stroke_width.clamp(0.25, 200.0) } else { 0.75 },

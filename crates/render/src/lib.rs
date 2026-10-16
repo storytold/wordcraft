@@ -541,15 +541,15 @@ fn blend_backgrounds(items: &[Draw], p: wordcraft_geom::Point, opts: &RenderOpti
     for it in items {
         let (color, alpha) = match it {
             Draw::Fill { rect, color, alpha, .. } if rect.contains(p) => (*color, *alpha),
-            // The shape's own outline (an ellipse's corners are not inside it). Shape fills are
-            // drawn opaque (the model has no fill transparency), so they cover what's beneath.
-            Draw::Shape { rect, kind, fill: Some(fill), corner, .. }
+            // The shape's own outline (an ellipse's corners are not inside it), at its fill's
+            // opacity.
+            Draw::Shape { rect, kind, fill: Some(fill), fill_alpha, corner, .. }
                 if *kind != ShapeKind::Line && rect.contains(p) && {
                     let r = kurbo::Rect::new(rect.x as f64, rect.y as f64, rect.right() as f64, rect.bottom() as f64);
                     kurbo::Shape::contains(&shape_path(*kind, r, *corner), kurbo::Point::new(p.x as f64, p.y as f64))
                 } =>
             {
-                (*fill, 1.0)
+                (*fill, *fill_alpha)
             }
             Draw::Clip { rect, items } if rect.contains(p) => {
                 blend_backgrounds(items, p, opts, bg, depth + 1);
@@ -904,7 +904,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             ctx.set_stroke(kurbo::Stroke::new(w as f64).with_caps(kurbo::Cap::Round).with_join(kurbo::Join::Round));
             ctx.stroke_path(&path);
         }
-        Draw::Shape { rect, kind, fill, stroke, stroke_width, effects, corner } => {
+        Draw::Shape { rect, kind, fill, stroke, stroke_width, effects, corner, fill_alpha } => {
             let r = kurbo::Rect::new(rect.x as f64, rect.y as f64, rect.right() as f64, rect.bottom() as f64);
             let path = shape_path(*kind, r, *corner);
             ctx.set_transform(view);
@@ -953,7 +953,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 return;
             }
             if let Some(f) = fill {
-                ctx.set_paint(color(opts.ink(*f), 1.0));
+                ctx.set_paint(color(opts.ink(*f), *fill_alpha));
                 ctx.fill_path(&path);
             }
             if let Some(s) = stroke {
@@ -1174,6 +1174,7 @@ mod tests {
             stroke_width: 0.0,
             effects: Default::default(),
             corner: None,
+            fill_alpha: 1.0,
         };
         let at = |x: f32, y: f32| {
             let mut bg = [255.0; 3];
