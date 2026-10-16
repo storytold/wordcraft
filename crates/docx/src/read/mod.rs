@@ -816,9 +816,6 @@ impl Reader<'_> {
         for s in root.children("w:style").take(10_000) {
             let Some(raw_id) = s.attr("w:styleId").filter(|i| !i.is_empty()) else { continue };
             let id = self.pc.style_id(raw_id);
-            if sheet.get(&id).is_some() {
-                continue;
-            }
             let kind = match s.attr("w:type").unwrap_or("paragraph") {
                 "character" => StyleKind::Character,
                 "table" => StyleKind::Table,
@@ -860,7 +857,13 @@ impl Reader<'_> {
                 let parts = self.table_style_parts(s, &mut st);
                 st.table = (parts != TableStyleParts::default()).then_some(parts);
             }
-            sheet.styles.push(st);
+            // A style defined twice (some generators write their own Heading 1 after a
+            // placeholder one) is the last definition, whole: Word drops the earlier one rather
+            // than merging the two (observed with synthetic documents).
+            match sheet.styles.iter_mut().find(|s| s.id == id) {
+                Some(earlier) => *earlier = st,
+                None => sheet.styles.push(st),
+            }
         }
         // Styles that give only a list level take the list from the style they are based on
         // (Heading 3: level 3 of Heading 2's outline list).

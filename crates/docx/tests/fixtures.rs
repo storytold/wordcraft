@@ -560,6 +560,26 @@ fn empty_tbl_borders_elements_leave_sides_unset() {
     assert!(b.top.is_some() && b.between.is_some() && b.inside_v.is_some());
 }
 
+/// A style ID defined twice is its last definition, whole (Word drops the earlier one rather
+/// than merging: observed with synthetic documents). Generators that write a placeholder
+/// Heading 1 and then their own made headings come out in the placeholder's font and size.
+#[test]
+fn a_style_defined_twice_is_its_last_definition() {
+    let styles = format!(
+        r#"<w:styles {W_NS}>
+<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:pPr><w:jc w:val="center"/></w:pPr><w:rPr><w:i/><w:color w:val="FF0000"/><w:sz w:val="40"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:rPr><w:b/><w:color w:val="0000FF"/><w:sz w:val="24"/></w:rPr></w:style>
+</w:styles>"#
+    );
+    let body = r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Probe</w:t></w:r></w:p>"#;
+    let d = wordcraft_docx::read(&docx(body, &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)])).unwrap();
+    assert_eq!(d.styles.styles.iter().filter(|s| s.id == "Heading1").count(), 1);
+    let h = d.styles.get("Heading1").unwrap();
+    assert_eq!((h.chr.bold, h.chr.italic, h.chr.size), (Some(true), None, Some(12.0)));
+    assert_eq!(h.chr.color, Some(TextColor::Rgb(Rgb(0, 0, 0xFF))));
+    assert_eq!(h.para.align, None, "nothing kept from the first definition");
+}
+
 #[test]
 fn vml_image_and_inline_drawing() {
     let png: &[u8] = b"\x89PNG\r\n\x1a\nnot really a png";
