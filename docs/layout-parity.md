@@ -200,6 +200,7 @@ No overall parity estimate changes from these probes.
 | 2026-10-12 | trivial | Continuous section breaks: an empty paragraph carrying only the break takes no room (text after it follows on; balanced columns ignore it) |
 | 2026-10-12 | trivial | Floats relative to a paragraph (or its line) are measured from the paragraph's start above its space before |
 | 2026-10-12 | trivial | Text after a column break in unequal columns is broken for its new column's width |
+| 2026-10-16 | trivial | A paragraph running on into a column of another width (no column break) is broken for that column's width (#2382) |
 | 2026-10-12 | trivial | Space before at the top of a page after page breaks, measured in Word for Windows in compatibility modes 12 and 15 (32 cases) |
 | 2026-10-12 | trivial | No automatic (HTML-style) spacing between two list items, of one list or two, at any level; the first item keeps its automatic space before and the last its space after |
 | 2026-10-12 | trivial | Kerning only where the document asks for it, and automatic (HTML-style) paragraph spacing, both measured in Word for Windows against real .gov documents |

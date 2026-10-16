@@ -468,6 +468,8 @@ struct Key {
     page: Option<(u32, u32, u32, u32, u64)>,
     /// The pages a split paragraph's fields are on after its first (`FieldCtx::page_from`).
     page_from: u64,
+    /// The widths a split paragraph's lines are broken for after its first column (#2382).
+    width_from: u64,
     table: u64,
     notes: u64,
     excl: u64,
@@ -661,6 +663,9 @@ struct Ctx<'a> {
     /// Cache-key hashes of the table-style text formatting cells were laid out with
     /// ([`Ctx::table_key`]).
     table_keys: Vec<(para::CellText, u64)>,
+    /// The widths a split body paragraph's lines are broken for after its first column
+    /// (`ParaEnv::width_from`), lent only while that paragraph itself is laid out (#2382).
+    width_from: Vec<(usize, u32)>,
 }
 
 impl Ctx<'_> {
@@ -710,6 +715,7 @@ impl Ctx<'_> {
             read_line_spacing: None,
             grid: para::Grid::default(),
             fit_objects: false,
+            width_from: &[],
         };
         let pl = Arc::new(para::layout_para(&p, &env));
         self.numbers.insert(n, pl.clone());
@@ -807,6 +813,7 @@ impl Ctx<'_> {
             label: label.map(|(t, l)| format!("{t}|{}|{}|{:?}|{:?}|{:?}|{:?}", l.indent, l.hanging, l.suffix, l.align, l.tab, l.chr)),
             page_from: if page.is_some() && !self.fields.page_from.is_empty() { hash_of(&self.fields.page_from) } else { 0 },
             page,
+            width_from: if self.width_from.is_empty() { 0 } else { hash_of(&self.width_from) },
             table: table.map(|t| self.table_key(t)).unwrap_or(0),
             notes: if p.objects.iter().any(|o| matches!(o, InlineObject::NoteRef { .. })) { self.notes_hash } else { 0 },
             excl: if exclusions.is_empty() { 0 } else { hash_of(&format!("{exclusions:?}")) },
@@ -859,6 +866,7 @@ impl Ctx<'_> {
             read_line_spacing: if self.opts.view == ViewMode::Read { self.opts.read_line_spacing } else { None },
             grid: self.grid,
             fit_objects: self.boxes.inside(),
+            width_from: &self.width_from,
         }
     }
 }
@@ -2024,6 +2032,7 @@ fn layout_pass(
         quiet_marks: Vec::new(),
         mirror: false,
         table_keys: Vec::new(),
+        width_from: Vec::new(),
     };
     let sections = doc.sections();
     let web = matches!(opts.view, ViewMode::Web | ViewMode::Draft | ViewMode::Outline);
@@ -3061,6 +3070,9 @@ thread_local! {
     /// How many wrap relays (#1374) the layouts on this thread made: tests check none happen
     /// without something new to wrap around.
     static WRAP_RELAYS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many times the layouts on this thread broke a paragraph's lines again for a column of
+    /// another width (#2382).
+    static WIDTH_RELAYS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// The wrap areas for a paragraph laid out against `rel` (relative to its top) whose lines from the
@@ -3079,11 +3091,14 @@ fn continued_exclusions(rel: &[para::Exclusion], excl: &[WrapArea], x0: f32, y: 
     before.chain(here).collect()
 }
 
-/// Run `f` with `map` as the field context's page map (`FieldCtx::page_from`), then take it back.
-fn with_page_map<T>(ctx: &mut Ctx, map: &mut Vec<(usize, u32)>, f: impl FnOnce(&mut Ctx) -> T) -> T {
+/// Run `f` with `map` as the field context's page map (`FieldCtx::page_from`) and `widths` as the
+/// widths of the later columns (`Ctx::width_from`), then take them back.
+fn with_page_map<T>(ctx: &mut Ctx, map: &mut Vec<(usize, u32)>, widths: &mut Vec<(usize, u32)>, f: impl FnOnce(&mut Ctx) -> T) -> T {
     ctx.fields.page_from = std::mem::take(map);
+    ctx.width_from = std::mem::take(widths);
     let out = f(ctx);
     *map = std::mem::take(&mut ctx.fields.page_from);
+    *widths = std::mem::take(&mut ctx.width_from);
     out
 }
 
@@ -3109,6 +3124,10 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     let mut page_relays = 0usize;
     // How many times its lines were broken again for the wrap areas of a later column (#1374).
     let mut wrap_relays = 0usize;
+    // The widths its lines are broken for in the later columns, when they differ from the first's
+    // (`ParaEnv::width_from`), and how many times they were broken again for one (#2382).
+    let mut width_from: Vec<(usize, u32)> = Vec::new();
+    let mut width_relays = 0usize;
     // The anchor paragraph's top (above its space before) the floats were placed from.
     let mut anchor_y = pb.y;
     let spot = |pb: &PageBuilder| (pb.pages.len(), pb.col);
@@ -3196,6 +3215,35 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     let mut after_on_page: Option<f32> = None;
     let mut l0 = 0;
     while l0 < n {
+        // The lines going into a column of another width (unequal columns: Word's Left and Right
+        // presets) were broken for the one before: break them again for this one. The lines
+        // before stay as they were, so the rest still starts with the same line, and so do the
+        // paragraph's own floating objects (#2382).
+        if l0 > 0
+            && !pb.web
+            && width_relays < MAX_WRAP_RELAYS
+            && (pb.col_w() - width_from.last().map_or(laid_width, |e| f32::from_bits(e.1))).abs() > 0.5
+            && let Some(resume) = pl.lines.get(l0).map(|l| l.start)
+        {
+            width_relays += 1;
+            #[cfg(test)]
+            WIDTH_RELAYS.with(|c| c.set(c.get() + 1));
+            width_from.push((resume, pb.col_w().to_bits()));
+            ctx.fields.page = laid_page;
+            let relaid = with_page_map(ctx, &mut page_map, &mut width_from, |ctx| {
+                again(ctx, eq_start, |ctx| ctx.para_labelled(p, laid_width, None, &rel, label.clone()))
+            });
+            match relaid.lines.iter().position(|l| l.start == resume) {
+                Some(k) => {
+                    pl = relaid;
+                    n = pl.lines.len();
+                    l0 = k;
+                }
+                None => {
+                    width_from.pop();
+                }
+            }
+        }
         // The lines going into a new column (or page) were broken around the wrap areas where the
         // paragraph started: break them again around this column's (the lines before stay as they
         // were, and so do the paragraph's own floating objects), when they differ (#1374).
@@ -3204,14 +3252,15 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
             && wrap_relays < MAX_WRAP_RELAYS
             && let Some((resume, t)) = pl.lines.get(l0).map(|l| (l.start, l.top))
         {
-            let here = continued_exclusions(&rel, &pb.excl, pb.col_x(), pb.y, t, laid_width);
+            let here = continued_exclusions(&rel, &pb.excl, pb.col_x(), pb.y, t, pb.col_w());
             if here != rel {
                 wrap_relays += 1;
                 ctx.fields.page = laid_page;
                 #[cfg(test)]
                 WRAP_RELAYS.with(|c| c.set(c.get() + 1));
-                let relaid =
-                    with_page_map(ctx, &mut page_map, |ctx| again(ctx, eq_start, |ctx| ctx.para_labelled(p, laid_width, None, &here, label.clone())));
+                let relaid = with_page_map(ctx, &mut page_map, &mut width_from, |ctx| {
+                    again(ctx, eq_start, |ctx| ctx.para_labelled(p, laid_width, None, &here, label.clone()))
+                });
                 // Only if the rest still starts at the same line, at the same height (an outline
                 // reaching above it could move the lines before down, and the column's areas with them).
                 if let Some(k) = relaid.lines.iter().position(|l| l.start == resume)
@@ -3238,8 +3287,9 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
             page_relays += 1;
             page_map.push((resume, pb.number));
             ctx.fields.page = laid_page;
-            let relaid =
-                with_page_map(ctx, &mut page_map, |ctx| again(ctx, eq_start, |ctx| ctx.para_labelled(p, laid_width, None, &rel, label.clone())));
+            let relaid = with_page_map(ctx, &mut page_map, &mut width_from, |ctx| {
+                again(ctx, eq_start, |ctx| ctx.para_labelled(p, laid_width, None, &rel, label.clone()))
+            });
             match relaid.lines.iter().position(|l| l.start == resume) {
                 Some(k) => {
                     pl = relaid;
@@ -3396,11 +3446,13 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
             pb.bottom = pb.body_floor().max(placed_bottom).min(pb.orig_bottom);
         }
         let mut items = Vec::new();
-        push_para(&mut items, StoryRef::Body, &[block as u32], &pl, l0, l1, x, y, width);
+        // This column's width: the paragraph may have run into a column of another width.
+        let col_w = pb.col_w();
+        push_para(&mut items, StoryRef::Body, &[block as u32], &pl, l0, l1, x, y, col_w);
         // Pictures, shapes and text boxes in these lines (web view: floats placed by this piece).
         let at = ObjFrame {
             page: Some(PageFrame { sect: pb.sect, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror }),
-            col: (x, width),
+            col: (x, col_w),
             para_y: if pb.web { y } else { anchor_y },
             table_chr: None,
         };
@@ -3473,14 +3525,20 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
                     && let Some(resume) = pl.lines.get(l0).map(|l| l.start)
                 {
                     let y0 = pb.y;
-                    let (rects, relaid, relaid_rel) =
-                        with_page_map(ctx, &mut page_map, |ctx| again(ctx, eq_start, |ctx| anchor_floats(ctx, pb, p, y0, 0.0, excl_mark, &label)));
+                    // Laid out again from the start for this column's width: the widths of
+                    // columns it ran into before (#2382) don't apply to it any more.
+                    let kept = std::mem::take(&mut width_from);
+                    let (rects, relaid, relaid_rel) = with_page_map(ctx, &mut page_map, &mut width_from, |ctx| {
+                        again(ctx, eq_start, |ctx| anchor_floats(ctx, pb, p, y0, 0.0, excl_mark, &label))
+                    });
                     if let Some(k) = relaid.lines.iter().position(|l| l.start == resume) {
                         (float_rects, pl, rel) = (rects, relaid, relaid_rel);
                         (laid_page, laid_width) = (pb.number, pb.col_w());
                         anchor_y = y0;
                         n = pl.lines.len();
                         l0 = k;
+                    } else {
+                        width_from = kept;
                     }
                 }
             }
@@ -3622,6 +3680,7 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize) -> f32
                 read_line_spacing: if ctx.opts.view == ViewMode::Read { ctx.opts.read_line_spacing } else { None },
                 grid: ctx.grid,
                 fit_objects: false,
+                width_from: &[],
             };
             let _ = rp;
             let pl = para::layout_para(p, &env);

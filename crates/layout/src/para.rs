@@ -408,6 +408,10 @@ pub struct ParaEnv<'a> {
     /// Shrink inline drawings wider than the line to fit it: in text boxes, which don't clip what
     /// runs past their sides. Elsewhere such a drawing keeps its size and the page edge clips it.
     pub fit_objects: bool,
+    /// Where a body paragraph runs on into columns of other widths: from text offset `.0` on, its
+    /// lines are broken for the width with bits `.1` (ascending offsets; on a tie the last one
+    /// counts). Empty except while a paragraph split across unequal columns is laid out (#2382).
+    pub width_from: &'a [(usize, u32)],
 }
 
 /// The section's document grid as layout applies it (`w:docGrid`, ECMA-376 §17.6.5).
@@ -1615,8 +1619,8 @@ fn next_tab(x: f32, tabs: &[TabStop], default_tab: f32, hanging_at: Option<f32>)
 fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Option<&Level>) {
     let suffix = level.map(|l| l.suffix);
     let rp = pl.rp.clone();
-    let width = env.width.max(12.0);
-    let base_right = (width - rp.indent_right).max(1.0);
+    let mut width = env.width.max(12.0);
+    let mut base_right = (width - rp.indent_right).max(1.0);
     let default_tab = env.doc.settings.default_tab;
     let first_left = rp.indent_left + rp.indent_first;
     // Word 2013+ (compatibility mode 15) fits more text on a justified line by shrinking its
@@ -1635,10 +1639,8 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
     let grid = Some(env.grid).filter(|g| g.line.is_some() && rp.snap_to_grid);
     let grid = grid.as_ref();
     let bidi = rtl_para || !pl.bidi_levels.is_empty();
-    let mirrored: Vec<Exclusion>;
-    let exclusions: &[Exclusion] = if rtl_para {
-        mirrored = env
-            .exclusions
+    let mirror = |width: f32| -> Vec<Exclusion> {
+        env.exclusions
             .iter()
             .map(|e| Exclusion {
                 left: width - e.right,
@@ -1652,11 +1654,9 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                 },
                 ..e.clone()
             })
-            .collect();
-        &mirrored
-    } else {
-        env.exclusions
+            .collect()
     };
+    let mut exclusions: std::borrow::Cow<[Exclusion]> = if rtl_para { mirror(width).into() } else { env.exclusions.into() };
     let mut first_x0: Option<f32> = None;
     let mut hcache: Vec<(u32, u32, f32)> = Vec::new();
     let mut lines: Vec<Line> = Vec::new();
@@ -1675,6 +1675,20 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
     // Spans skipped in a row because the next word didn't fit (see `skip`).
     let mut skipped = 0;
     loop {
+        // A new row in a column of another width (#2382): its lines are broken for that width
+        // from here on. The areas above were cut off where it starts (`continued_exclusions`), so
+        // mirroring them all for the new width moves none the lines here go around.
+        if row_rest.is_empty() && !env.width_from.is_empty() {
+            let off = pl.clusters.get(i).map_or(pl.text_len, |c| c.start);
+            let w = env.width_from.iter().rev().find(|(from, _)| *from <= off).map_or(env.width, |(_, w)| f32::from_bits(*w)).max(12.0);
+            if (w - width).abs() > f32::EPSILON {
+                width = w;
+                base_right = (width - rp.indent_right).max(1.0);
+                if rtl_para {
+                    exclusions = mirror(width).into();
+                }
+            }
+        }
         // A line already sits on this row (a span before this one may have been skipped).
         let beside = !row_rest.is_empty() && lines.len() > row_first;
         // The span is narrowed by a floating object.
@@ -1692,7 +1706,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                 {
                     lo = first_left.max(rp.indent_left) + dw;
                 }
-                match row_spans(exclusions, top, est_h, lo, base_right).map(|mut spans| (spans.pop_front(), spans)) {
+                match row_spans(&exclusions, top, est_h, lo, base_right).map(|mut spans| (spans.pop_front(), spans)) {
                     Ok((Some((a, b)), rest)) => {
                         narrowed = !rest.is_empty() || a > lo || b < base_right;
                         row_rest = rest;
@@ -2214,8 +2228,9 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
             }
         }
     }
+    // The label is on the first line, broken for the paragraph's own width.
     if rtl_para && let Some(lab) = pl.label.as_mut() {
-        lab.x = width - lab.x - lab.width;
+        lab.x = env.width.max(12.0) - lab.x - lab.width;
     }
     pl.height = top;
     pl.lines = lines;
@@ -2726,6 +2741,7 @@ mod label_spacing_tests {
             numeral: crate::NumeralMode::default(),
             read_line_spacing: None,
             fit_objects: false,
+            width_from: &[],
         };
         let mut p = Paragraph::with_text(if wrap { "Alpha probe synthetic business text repeated" } else { "Alpha probe" }, Default::default());
         p.props.line_spacing = Some(spacing);

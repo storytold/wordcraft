@@ -7263,3 +7263,94 @@ fn row_nil_overrides_style() {
     d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
     assert_eq!(rules_on_page0(&lay(&d)), vec![2.0]);
 }
+
+/// One paragraph of `words` words in a section with these column `widths` (Word's Left and
+/// Right presets are a narrow and a wide column), on a landscape page so three columns fit.
+fn unequal_columns_doc(widths: Vec<(f32, f32)>, text: &str) -> Document {
+    let mut d = Document::new();
+    d.last_section.page_w = 792.0;
+    d.last_section.columns = wordcraft_doc::section::Columns { count: widths.len() as u32, space: 24.0, separator: false, widths };
+    d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))];
+    d
+}
+
+fn words(n: usize) -> String {
+    (0..n).map(|i| ["lorem", "ipsum", "dolor", "sit", "amet"][i % 5]).collect::<Vec<_>>().join(" ")
+}
+
+/// The pieces of the paragraph on the first page: (x, lines, widest line), a line's width
+/// measured to its last cluster that isn't a space (a trailing space may run past the edge).
+fn pieces(l: &DocLayout) -> Vec<(f32, usize, f32)> {
+    l.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| {
+            let Placed::Lines { story: StoryRef::Body, para, l0, l1, x, .. } = it else { return None };
+            let widest = para.lines[*l0..*l1]
+                .iter()
+                .filter_map(|line| {
+                    let k = (line.c0..line.c1).rev().find(|k| !matches!(para.clusters[*k].kind, para::ClKind::Space | para::ClKind::Marker))?;
+                    Some(line.xs[k - line.c0] + para.clusters[k].adv)
+                })
+                .fold(0.0f32, f32::max);
+            Some((*x, l1 - l0, widest))
+        })
+        .collect()
+}
+
+/// Lays out `n` words in two columns `first_w` and `second_w` wide and checks the paragraph starts
+/// in the first and runs into the second, each piece's lines as wide as its column at most;
+/// returns the second piece's widest line.
+fn runs_into_the_second_column(first_w: f32, second_w: f32, n: usize) -> f32 {
+    let l = lay(&unequal_columns_doc(vec![(first_w, 24.0), (second_w, 0.0)], &words(n)));
+    let p = pieces(&l);
+    let [(x0, lines0, w0), (x1, lines1, w1), ..] = p[..] else { panic!("two pieces on the first page: {p:?}") };
+    // Not moved whole for an orphan: the paragraph starts in the first column.
+    assert!(lines0 >= 2 && (x0 - 72.0).abs() < 0.5, "first piece in the first column: {p:?}");
+    assert!((x1 - (96.0 + first_w)).abs() < 0.5 && lines1 >= 2, "second piece in the second column: {p:?}");
+    assert!(w0 <= first_w + 0.5, "the first column's lines fit it: {p:?}");
+    assert!(w1 <= second_w + 0.5, "the second column's lines fit it: {p:?}");
+    w1
+}
+
+/// Word's Left preset (#2382): a paragraph running on from a narrow column into a wide one is
+/// broken for the wide one. WordCraft kept the narrow column's lines down the wide column.
+#[test]
+fn a_paragraph_running_into_a_wider_column_takes_its_width() {
+    let w = runs_into_the_second_column(100.0, 524.0, 300);
+    assert!(w > 400.0, "broken for the 524 pt column, not the 100 pt one: widest line {w}");
+}
+
+/// Word's Right preset (#2382): a paragraph running on from a wide column into a narrow one is
+/// broken for the narrow one. WordCraft kept the wide lines, running over the column into the margin.
+#[test]
+fn a_paragraph_running_into_a_narrower_column_takes_its_width() {
+    runs_into_the_second_column(524.0, 100.0, 1100);
+}
+
+/// A paragraph running from a narrow column into a wide one, then on after a column break into a
+/// third, narrower than the second: the text after the break is broken for the third column only,
+/// not for the second's width it ran into before (#2382, with #934's column break).
+#[test]
+fn a_column_break_after_running_into_a_wider_column_takes_the_third_column_s_width() {
+    let brk = wordcraft_doc::para::COLUMN_BREAK;
+    let text = format!("{}{brk}{}", words(200), words(120));
+    WIDTH_RELAYS.with(|c| c.set(0));
+    let l = lay(&unequal_columns_doc(vec![(100.0, 24.0), (300.0, 24.0), (200.0, 0.0)], &text));
+    // Broken again once, for the second column: the break lays it out afresh for the third.
+    assert_eq!(WIDTH_RELAYS.with(|c| c.get()), 1, "one relay for the second column");
+    let p = pieces(&l);
+    let [(x0, lines0, _), (x1, lines1, w1), (x2, lines2, w2)] = p[..] else { panic!("three pieces on the first page: {p:?}") };
+    assert!(lines0 >= 2 && (x0 - 72.0).abs() < 0.5, "starts in the first column: {p:?}");
+    assert!((x1 - 196.0).abs() < 0.5 && lines1 >= 2 && w1 > 200.0 && w1 <= 300.5, "runs into the 300 pt column: {p:?}");
+    assert!((x2 - 520.0).abs() < 0.5 && lines2 >= 2 && w2 <= 200.5, "after the break, broken for the 200 pt column: {p:?}");
+}
+
+/// Equal columns: a paragraph running from one into the next is not broken again (#2382).
+#[test]
+fn a_paragraph_running_into_a_column_of_the_same_width_is_not_broken_again() {
+    WIDTH_RELAYS.with(|c| c.set(0));
+    let l = lay(&unequal_columns_doc(vec![(312.0, 24.0), (312.0, 0.0)], &words(800)));
+    assert!(pieces(&l).len() >= 2, "runs into the second column");
+    assert_eq!(WIDTH_RELAYS.with(|c| c.get()), 0);
+}
