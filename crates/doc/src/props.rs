@@ -144,12 +144,14 @@ impl Underline {
         }
     }
     pub fn from_ooxml(s: &str) -> Underline {
-        Underline::ALL.iter().copied().find(|u| u.ooxml() == s).unwrap_or(match s {
-            "thickDash" | "dashLong" | "dashedHeavy" | "dashLongHeavy" => Underline::Dash,
-            "dottedHeavy" => Underline::Dotted,
-            "wavyHeavy" => Underline::Wave,
-            "dashDotHeavy" => Underline::DotDash,
-            "dashDotDotHeavy" => Underline::DotDotDash,
+        Underline::ALL.iter().copied().find(|u| u.ooxml().eq_ignore_ascii_case(s)).unwrap_or_else(|| match s.to_ascii_lowercase().as_str() {
+            "nil" => Underline::None,
+            "thickdash" | "dashlong" | "dashedheavy" | "dashlongheavy" => Underline::Dash,
+            "dottedheavy" => Underline::Dotted,
+            "wavyheavy" => Underline::Wave,
+            "wavydouble" | "doublewave" => Underline::DoubleWave,
+            "dashdotheavy" | "dotdash" => Underline::DotDash,
+            "dashdotdotheavy" | "dotdotdash" => Underline::DotDotDash,
             _ => Underline::Single,
         })
     }
@@ -252,7 +254,13 @@ impl Highlight {
         }
     }
     pub fn from_ooxml(s: &str) -> Highlight {
-        Highlight::ALL.iter().copied().find(|h| h.ooxml() == s).unwrap_or(Highlight::None)
+        Highlight::ALL.iter().copied().find(|h| h.ooxml().eq_ignore_ascii_case(s)).unwrap_or_else(|| match s.to_ascii_lowercase().as_str() {
+            "teal" => Highlight::Teal,
+            "turquoise" => Highlight::Turquoise,
+            "pink" => Highlight::Pink,
+            "violet" => Highlight::Violet,
+            _ => Highlight::None,
+        })
     }
     pub fn name(self) -> &'static str {
         match self {
@@ -598,15 +606,15 @@ impl BorderStyle {
         }
     }
     pub fn from_ooxml(s: &str) -> BorderStyle {
-        match s {
+        match s.to_ascii_lowercase().as_str() {
             "nil" | "none" => BorderStyle::None,
             "double" => BorderStyle::Double,
             "dotted" => BorderStyle::Dotted,
-            "dashed" | "dashSmallGap" => BorderStyle::Dashed,
+            "dashed" | "dashsmallgap" => BorderStyle::Dashed,
             "thick" => BorderStyle::Thick,
             "triple" => BorderStyle::Triple,
-            "dotDash" | "dotDotDash" => BorderStyle::DotDash,
-            "wave" | "doubleWave" => BorderStyle::Wave,
+            "dotdash" | "dotdotdash" | "dashdotstroked" => BorderStyle::DotDash,
+            "wave" | "doublewave" => BorderStyle::Wave,
             _ => BorderStyle::Single,
         }
     }

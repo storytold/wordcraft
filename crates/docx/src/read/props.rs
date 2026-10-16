@@ -215,7 +215,7 @@ impl PropCtx {
                     c.underline_color =
                         self.theme_color(k, "w:themeColor", "w:themeTint", "w:themeShade").or_else(|| k.attr("w:color").and_then(Rgb::parse));
                 }
-                "w:bdr" => c.border = Some(border(k)),
+                "w:bdr" => c.border = Some(border_with(k, Some(self))),
                 "w:shd" => c.shading = self.shd_fill(k),
                 "w:vertAlign" => {
                     c.vert_align = k.attr("w:val").map(|v| match v {
@@ -285,7 +285,7 @@ impl PropCtx {
                         (None, None) => {}
                     }
                 }
-                "w:pBdr" => p.borders = Some(borders(k)),
+                "w:pBdr" => p.borders = Some(borders_with(k, Some(self))),
                 "w:shd" => p.shading = self.shd_fill(k),
                 "w:tabs" => {
                     let tabs: Vec<TabStop> = k.children("w:tab").take(64).filter_map(tab_stop).collect();
@@ -395,25 +395,36 @@ fn shd_fill(e: &El) -> Option<Rgb> {
     None
 }
 
+#[allow(dead_code)]
 pub fn border(e: &El) -> Border {
+    border_with(e, None)
+}
+
+pub fn border_with(e: &El, pc: Option<&PropCtx>) -> Border {
     let style = BorderStyle::from_ooxml(e.attr("w:val").unwrap_or("single"));
     let width = e.attr("w:sz").and_then(|v| measure(v, 8.0)).unwrap_or(0.5).clamp(0.0, 12.0);
-    let color = e.attr("w:color").and_then(Rgb::parse);
+    let color = pc
+        .and_then(|c| c.theme_color(e, "w:themeColor", "w:themeTint", "w:themeShade"))
+        .or_else(|| e.attr("w:color").and_then(Rgb::parse));
     let space = e.attr("w:space").and_then(|v| measure(v, 1.0)).unwrap_or(0.0).clamp(0.0, 31.0);
     Border { style, width, color, space }
 }
 
 /// `w:pBdr`, `w:tblBorders`, `w:tcBorders`, `w:pgBorders`.
 pub fn borders(e: &El) -> Borders {
+    borders_with(e, None)
+}
+
+pub fn borders_with(e: &El, pc: Option<&PropCtx>) -> Borders {
     let mut b = Borders::default();
     for k in e.els() {
         match k.local() {
-            "top" => b.top = Some(border(k)),
-            "left" | "start" => b.left = Some(border(k)),
-            "bottom" => b.bottom = Some(border(k)),
-            "right" | "end" => b.right = Some(border(k)),
-            "between" | "insideH" => b.between = Some(border(k)),
-            "insideV" => b.inside_v = Some(border(k)),
+            "top" => b.top = Some(border_with(k, pc)),
+            "left" | "start" => b.left = Some(border_with(k, pc)),
+            "bottom" => b.bottom = Some(border_with(k, pc)),
+            "right" | "end" => b.right = Some(border_with(k, pc)),
+            "between" | "insideH" => b.between = Some(border_with(k, pc)),
+            "insideV" => b.inside_v = Some(border_with(k, pc)),
             _ => {}
         }
     }
@@ -447,7 +458,7 @@ impl PropCtx {
                 }
                 "w:jc" => t.align = k.attr("w:val").map(align),
                 "w:tblInd" => t.indent = tw(k, "w:w"),
-                "w:tblBorders" => t.borders = Some(borders(k)),
+                "w:tblBorders" => t.borders = Some(borders_with(k, Some(self))),
                 "w:shd" => t.shading = self.shd_fill(k),
                 "w:tblLayout" => t.fixed = k.attr("w:type") == Some("fixed"),
                 "w:bidiVisual" => t.bidi_visual = on_off(k),
@@ -553,7 +564,7 @@ pub fn tcpr(pc: &PropCtx, e: &El) -> (CellProps, bool) {
             "w:gridSpan" => c.span = k.attr("w:val").and_then(u32_of).unwrap_or(1).clamp(1, 63),
             "w:hMerge" => hcont = k.attr("w:val") != Some("restart"),
             "w:vMerge" => c.vmerge = if k.attr("w:val") == Some("restart") { VMerge::Restart } else { VMerge::Continue },
-            "w:tcBorders" => c.borders = Some(borders(k)),
+            "w:tcBorders" => c.borders = Some(borders_with(k, Some(pc))),
             "w:shd" => c.shading = pc.shd_fill(k),
             "w:noWrap" => c.no_wrap = on_off(k),
             "w:hideMark" => c.hide_mark = on_off(k),
@@ -740,5 +751,50 @@ fn table_float(e: &El) -> TableFloat {
         v_align: align("w:tblpYSpec"),
         dist: [dist("w:leftFromText"), dist("w:topFromText"), dist("w:rightFromText"), dist("w:bottomFromText")],
         overlap: true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ooxml_enum_parsing_case_insensitivity_and_aliases() {
+        assert_eq!(Underline::from_ooxml("dotdash"), Underline::DotDash);
+        assert_eq!(Underline::from_ooxml("DOTDASH"), Underline::DotDash);
+        assert_eq!(Underline::from_ooxml("doubleWave"), Underline::DoubleWave);
+        assert_eq!(Underline::from_ooxml("doublewave"), Underline::DoubleWave);
+        assert_eq!(Underline::from_ooxml("wavydouble"), Underline::DoubleWave);
+        assert_eq!(Underline::from_ooxml("nil"), Underline::None);
+
+        assert_eq!(Highlight::from_ooxml("darkblue"), Highlight::DarkBlue);
+        assert_eq!(Highlight::from_ooxml("DARKBLUE"), Highlight::DarkBlue);
+        assert_eq!(Highlight::from_ooxml("teal"), Highlight::Teal);
+        assert_eq!(Highlight::from_ooxml("turquoise"), Highlight::Turquoise);
+        assert_eq!(Highlight::from_ooxml("pink"), Highlight::Pink);
+        assert_eq!(Highlight::from_ooxml("violet"), Highlight::Violet);
+
+        assert_eq!(BorderStyle::from_ooxml("dotdash"), BorderStyle::DotDash);
+        assert_eq!(BorderStyle::from_ooxml("dashDotStroked"), BorderStyle::DotDash);
+        assert_eq!(BorderStyle::from_ooxml("dashsmallgap"), BorderStyle::Dashed);
+    }
+
+    #[test]
+    fn theme_colored_borders_resolve_theme_color() {
+        let ctx = PropCtx {
+            theme_colors: vec![
+                Rgb(0, 0, 0),       // 0: dark1
+                Rgb(255, 255, 255), // 1: light1
+                Rgb(30, 30, 30),    // 2: dark2
+                Rgb(240, 240, 240), // 3: light2
+                Rgb(128, 0, 128),   // 4: accent1
+            ],
+            ..Default::default()
+        };
+        let xml = r#"<w:pPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:pBdr><w:bottom w:val="single" w:sz="12" w:themeColor="accent1"/></w:pBdr></w:pPr>"#;
+        let el = crate::xml::parse(xml.as_bytes()).unwrap();
+        let (pp, _) = ctx.ppr(&el);
+        let bdr = pp.borders.expect("borders present");
+        assert_eq!(bdr.bottom.expect("bottom border").color, Some(Rgb(128, 0, 128)));
     }
 }
