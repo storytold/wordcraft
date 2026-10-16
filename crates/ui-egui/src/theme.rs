@@ -276,6 +276,11 @@ pub struct Tokens {
     pub red: Color32,
     pub green: Color32,
     pub orange: Color32,
+    /// A window's close box while the pointer is over it (the red of a Windows caption button),
+    /// while pressed, and the ✕ drawn on it then (#1885).
+    pub close_hover: Color32,
+    pub close_pressed: Color32,
+    pub on_close: Color32,
 }
 
 impl Tokens {
@@ -319,6 +324,9 @@ impl Tokens {
             red: Color32::from_rgb(0xD1, 0x3B, 0x3B),
             green: Color32::from_rgb(0x2E, 0x8B, 0x57),
             orange: Color32::from_rgb(0xE0, 0x7B, 0x1F),
+            close_hover: Color32::from_rgb(0xC4, 0x2B, 0x1C),
+            close_pressed: Color32::from_rgb(0xA6, 0x23, 0x16),
+            on_close: Color32::WHITE,
         }
     }
     pub fn dark() -> Self {
@@ -363,6 +371,10 @@ impl Tokens {
             red: Color32::from_rgb(0xEE, 0x6A, 0x6A),
             green: Color32::from_rgb(0x5B, 0xC0, 0x8A),
             orange: Color32::from_rgb(0xF0, 0xA0, 0x50),
+            // A little lighter than the light theme's red, so it reads against the dark window.
+            close_hover: Color32::from_rgb(0xD6, 0x3C, 0x2C),
+            close_pressed: Color32::from_rgb(0xB3, 0x30, 0x23),
+            on_close: Color32::WHITE,
         }
     }
     pub fn get(ctx: &egui::Context) -> Tokens {
@@ -730,6 +742,17 @@ mod tests {
         };
         let (x, y) = (lum(a), lum(b));
         (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
+    /// #1885: the ✕ on a window's close box reads on its hover and pressed reds in both themes.
+    #[test]
+    fn close_box_glyph_reads_on_its_reds() {
+        for t in [super::Tokens::light(), super::Tokens::dark()] {
+            for (name, bg) in [("close_hover", t.close_hover), ("close_pressed", t.close_pressed)] {
+                let r = contrast(t.on_close, bg);
+                assert!(r >= 4.5, "dark={}: on_close on {name} is {r:.2}:1", t.dark);
+            }
+        }
     }
 
     /// #655: text and knobs on filled accent controls (Share, avatar, AutoSave, keytips) reach 4.5:1

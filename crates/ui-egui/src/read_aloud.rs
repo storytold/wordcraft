@@ -57,84 +57,82 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let state = app.session.read_aloud.state();
     let (index, count) = app.session.read_aloud.progress();
-    let mut open = true;
     let mut run: Option<(&str, serde_json::Value)> = None;
     let right_top = app.canvas.canvas_rect.map_or(ctx.content_rect().right_top() + vec2(-24.0, 160.0), |r| r.right_top() + vec2(-24.0, 16.0));
-    egui::Window::new(tl!("Read Aloud"))
+    let window = egui::Window::new(tl!("Read Aloud"))
         .id(egui::Id::new("read-aloud-player"))
-        .open(&mut open)
         .collapsible(false)
         .resizable(false)
         .pivot(egui::Align2::RIGHT_TOP)
-        .default_pos(right_top)
-        .show(ctx, |ui| {
-            ui.set_width(236.0);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                if button(ui, &t, "mediaPrev", tl!("Previous sentence"), count > 0 && index > 0) {
-                    run = Some(("readAloud.previous", json!({})));
-                }
-                let (icon, tip) = if state == State::Playing { ("mediaPause", tl!("Pause")) } else { ("mediaPlay", tl!("Play")) };
-                if button(ui, &t, icon, tip, true) {
-                    run = Some(("readAloud.playPause", json!({})));
-                }
-                if button(ui, &t, "mediaNext", tl!("Next sentence"), index + 1 < count) {
-                    run = Some(("readAloud.next", json!({})));
-                }
-                if button(ui, &t, "mediaStop", tl!("Stop"), true) {
-                    run = Some(("readAloud.stop", json!({})));
-                }
-                ui.add_space(4.0);
-                let what = match state {
-                    State::Playing => format!("{} {} / {}", tl!("Sentence"), (index + 1).min(count), count),
-                    State::Paused => tl!("Paused").to_string(),
-                    State::Stopped if count > 0 && index >= count => tl!("Finished").to_string(),
-                    State::Stopped => tl!("Stopped").to_string(),
-                };
-                ui.label(egui::RichText::new(what).color(t.text_dim).small());
-            });
-            ui.add_space(6.0);
-            // Speed: applied when the slider is let go, so dragging doesn't restart the sentence
-            // on every frame.
-            let id = egui::Id::new("read-aloud-rate");
-            let mut rate = ui.data(|d| d.get_temp::<f32>(id)).unwrap_or_else(|| app.session.read_aloud.rate());
-            ui.horizontal(|ui| {
-                ui.label(tl!("Speed"));
-                ui.spacing_mut().slider_width = 110.0;
-                let r = ui.add(
-                    egui::Slider::new(&mut rate, MIN_RATE..=MAX_RATE)
-                        .step_by(0.05)
-                        .trailing_fill(true)
-                        .custom_formatter(|v, _| format!("{v:.2}×"))
-                        .custom_parser(|s| s.trim().trim_end_matches(['×', 'x']).trim().parse().ok()),
-                );
-                if r.dragged() {
-                    ui.data_mut(|d| d.insert_temp(id, rate));
-                } else {
-                    ui.data_mut(|d| d.remove::<f32>(id));
-                    if r.changed() || r.drag_stopped() {
-                        run = Some(("readAloud.speed", json!({"value": rate})));
-                    }
-                }
-                if ui.small_button("1×").on_hover_text(tl!("Normal speed")).clicked() {
-                    run = Some(("readAloud.speed", json!({"value": 1.0})));
-                }
-            });
-            let mut skip = app.session.read_aloud.skip_citations;
-            if ui
-                .checkbox(&mut skip, tl!("Skip citations & bibliography"))
-                .on_hover_text(tl!("Don't read Zotero, Mendeley or EndNote citations and bibliographies"))
-                .changed()
-            {
-                run = Some(("readAloud.skipCitations", json!({"value": skip})));
+        .default_pos(right_top);
+    let shown = crate::window_close::window(ctx, window).show(ctx, |ui| {
+        ui.set_width(236.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            if button(ui, &t, "mediaPrev", tl!("Previous sentence"), count > 0 && index > 0) {
+                run = Some(("readAloud.previous", json!({})));
             }
-            // The error `poll` saw this frame, not the worker's latest: the player thread can set
-            // one between the two, and the window would show a message the status bar hasn't.
-            if let Some(e) = app.read_aloud_error.as_ref().filter(|e| app.session.read_aloud.error().as_ref() == Some(*e)) {
-                ui.label(egui::RichText::new(e.as_str()).color(t.red).small());
+            let (icon, tip) = if state == State::Playing { ("mediaPause", tl!("Pause")) } else { ("mediaPlay", tl!("Play")) };
+            if button(ui, &t, icon, tip, true) {
+                run = Some(("readAloud.playPause", json!({})));
+            }
+            if button(ui, &t, "mediaNext", tl!("Next sentence"), index + 1 < count) {
+                run = Some(("readAloud.next", json!({})));
+            }
+            if button(ui, &t, "mediaStop", tl!("Stop"), true) {
+                run = Some(("readAloud.stop", json!({})));
+            }
+            ui.add_space(4.0);
+            let what = match state {
+                State::Playing => format!("{} {} / {}", tl!("Sentence"), (index + 1).min(count), count),
+                State::Paused => tl!("Paused").to_string(),
+                State::Stopped if count > 0 && index >= count => tl!("Finished").to_string(),
+                State::Stopped => tl!("Stopped").to_string(),
+            };
+            ui.label(egui::RichText::new(what).color(t.text_dim).small());
+        });
+        ui.add_space(6.0);
+        // Speed: applied when the slider is let go, so dragging doesn't restart the sentence
+        // on every frame.
+        let id = egui::Id::new("read-aloud-rate");
+        let mut rate = ui.data(|d| d.get_temp::<f32>(id)).unwrap_or_else(|| app.session.read_aloud.rate());
+        ui.horizontal(|ui| {
+            ui.label(tl!("Speed"));
+            ui.spacing_mut().slider_width = 110.0;
+            let r = ui.add(
+                egui::Slider::new(&mut rate, MIN_RATE..=MAX_RATE)
+                    .step_by(0.05)
+                    .trailing_fill(true)
+                    .custom_formatter(|v, _| format!("{v:.2}×"))
+                    .custom_parser(|s| s.trim().trim_end_matches(['×', 'x']).trim().parse().ok()),
+            );
+            if r.dragged() {
+                ui.data_mut(|d| d.insert_temp(id, rate));
+            } else {
+                ui.data_mut(|d| d.remove::<f32>(id));
+                if r.changed() || r.drag_stopped() {
+                    run = Some(("readAloud.speed", json!({"value": rate})));
+                }
+            }
+            if ui.small_button("1×").on_hover_text(tl!("Normal speed")).clicked() {
+                run = Some(("readAloud.speed", json!({"value": 1.0})));
             }
         });
-    if !open {
+        let mut skip = app.session.read_aloud.skip_citations;
+        if ui
+            .checkbox(&mut skip, tl!("Skip citations & bibliography"))
+            .on_hover_text(tl!("Don't read Zotero, Mendeley or EndNote citations and bibliographies"))
+            .changed()
+        {
+            run = Some(("readAloud.skipCitations", json!({"value": skip})));
+        }
+        // The error `poll` saw this frame, not the worker's latest: the player thread can set
+        // one between the two, and the window would show a message the status bar hasn't.
+        if let Some(e) = app.read_aloud_error.as_ref().filter(|e| app.session.read_aloud.error().as_ref() == Some(*e)) {
+            ui.label(egui::RichText::new(e.as_str()).color(t.red).small());
+        }
+    });
+    if shown.is_some_and(|s| crate::window_close::show(ctx, &s.response, &t)) {
         run = Some(("readAloud.stop", json!({})));
     }
     if let Some((id, params)) = run {

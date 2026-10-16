@@ -1236,7 +1236,6 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         ctx.data_mut(|d| d.remove::<(egui::Id, u8)>(dialog_top_key()));
         return;
     };
-    let mut open = true;
     let mut close = false;
     let title = match &d {
         Dialog::RenameDocument { .. } => "Rename Document",
@@ -1292,17 +1291,19 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::Layout(d) => d.title(),
     };
     let id = egui::Id::new(("dialog", title));
-    let shown = place_dialog(ctx, id, egui::Window::new(tl!(title)).id(id).collapsible(false).resizable(false)).open(&mut open).show(ctx, |ui| {
+    let window = crate::window_close::window(ctx, egui::Window::new(tl!(title)).id(id).collapsible(false).resizable(false));
+    let shown = place_dialog(ctx, id, window).show(ctx, |ui| {
         ui.set_min_width(340.0);
         close = body(app, ui, &mut d);
     });
-    if shown.is_some() {
+    if let Some(shown) = &shown {
         count_dialog_frame(ctx, id);
+        close |= crate::window_close::show(ctx, &shown.response, &Tokens::get(ctx));
     }
-    if open && !close {
-        app.dialog = Some(d);
-    } else {
+    if close {
         app.canvas.want_focus = true;
+    } else {
+        app.dialog = Some(d);
     }
 }
 
@@ -4206,6 +4207,52 @@ mod tests {
         let after = h.ctx.memory(|m| m.area_rect(id)).expect("dialog is still open");
         assert!((after.min.x - (before.min.x - 200.0)).abs() <= 1.0, "moved left: {before:?} -> {after:?}");
         assert!((after.min.y - (before.min.y + 120.0)).abs() <= 1.0, "moved down: {before:?} -> {after:?}");
+    }
+
+    /// #1885: the close control is the whole box at the title bar's right end, as on a Windows
+    /// dialog, not only the ✕. A click 6 px from the window's right edge, mid title bar, closes
+    /// the dialog; one just under the title bar leaves it open; a drag that starts on the box
+    /// doesn't move the dialog. The box spans the title bar egui lays out.
+    #[test]
+    fn the_title_bar_close_box_is_the_whole_corner() {
+        fn press(h: &mut egui_kittest::Harness<'_, WordApp>, from: egui::Pos2, to: egui::Pos2) {
+            let button =
+                |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+            h.event(egui::Event::PointerMoved(from));
+            h.step();
+            h.event(button(from, true));
+            h.step();
+            if to != from {
+                h.event(egui::Event::PointerMoved(to));
+                h.step();
+            }
+            h.event(button(to, false));
+            for _ in 0..4 {
+                h.step();
+            }
+        }
+        let mut app = app_with("Some text");
+        app.dialog = Dialog::open("wordCount", &mut app);
+        let mut h = app_harness(app);
+        for _ in 0..4 {
+            h.step();
+        }
+        let id = egui::Id::new(("dialog", "Word Count"));
+        let before = h.ctx.memory(|m| m.area_rect(id)).expect("dialog is open");
+        let bx = crate::window_close::close_rect(before, 1.0, crate::window_close::geometry(&h.ctx));
+        let title = h.ctx.read_response(id.with("__title_click")).expect("egui's title bar").rect;
+        assert!((bx.top() - before.top()).abs() <= 1.5 && (bx.bottom() - title.bottom()).abs() <= 1.5, "box {bx:?} spans the title bar {title:?}");
+        assert!(bx.width() >= 1.5 * bx.height() && bx.right() + 1.5 >= before.right(), "a wide box at the right end: {bx:?} in {before:?}");
+        let under = egui::pos2(before.right() - 6.0, bx.bottom() + 4.0);
+        press(&mut h, under, under);
+        assert!(h.state().dialog.is_some(), "a click under the title bar keeps the dialog");
+        let at = egui::pos2(before.right() - 6.0, bx.center().y);
+        press(&mut h, at, at + vec2(-150.0, 90.0));
+        assert!(h.state().dialog.is_some(), "a drag from the box isn't a click");
+        let after = h.ctx.memory(|m| m.area_rect(id)).expect("dialog is still open");
+        assert!((after.min - before.min).length() <= 1.0, "the box isn't a drag handle: {before:?} -> {after:?}");
+        press(&mut h, at, at);
+        assert!(h.state().dialog.is_none(), "a click in the box, away from the X, closes the dialog");
     }
 
     fn app_harness(app: WordApp) -> egui_kittest::Harness<'static, WordApp> {

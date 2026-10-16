@@ -302,19 +302,17 @@ impl WordApp {
 pub(crate) fn show(app: &mut WordApp, ctx: &egui::Context) {
     let Some(mut b) = app.file_browser.open.take() else { return };
     let t = Tokens::get(ctx);
-    let mut open = true;
     let mut done: Option<Option<PathBuf>> = None;
-    egui::Window::new(tl!(b.title()))
+    let window = egui::Window::new(tl!(b.title()))
         .id(egui::Id::new("builtin_file_browser"))
         .collapsible(false)
         .resizable(false)
-        .anchor(Align2::CENTER_CENTER, vec2(0.0, -20.0))
-        .open(&mut open)
-        .show(ctx, |ui| {
-            ui.set_width(620.0);
-            done = body(ui, &mut b, &t);
-        });
-    if !open {
+        .anchor(Align2::CENTER_CENTER, vec2(0.0, -20.0));
+    let shown = crate::window_close::window(ctx, window).show(ctx, |ui| {
+        ui.set_width(620.0);
+        done = body(ui, &mut b, &t);
+    });
+    if shown.is_some_and(|s| crate::window_close::show(ctx, &s.response, &t)) {
         done = Some(None);
     }
     app.file_browser.open = Some(b);
