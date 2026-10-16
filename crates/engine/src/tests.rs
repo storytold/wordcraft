@@ -2253,6 +2253,29 @@ fn comments() {
     assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().objects.len(), 0);
 }
 
+/// A hostile comment id is refused, not wrapped: `4294967296 as u32` is 0, so truncating
+/// would reply to, resolve or delete the first comment instead of erroring.
+#[test]
+fn comment_ids_are_refused_not_truncated() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Some text here"}));
+    run(&mut s, "select.text", json!({"text": "text"}));
+    let id = run(&mut s, "review.newComment", json!({"text": "Keep me"}))["id"].as_u64().unwrap();
+    // Away from the comment, so `comment_at_caret`'s fallback can't answer for the bad id.
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.newParagraph", json!({}));
+    let big = id + 4294967296;
+    for (cmd, params) in [
+        ("review.deleteComment", json!({"id": big})),
+        ("review.reply", json!({"id": big, "text": "?"})),
+        ("review.resolveComment", json!({"id": big})),
+    ] {
+        assert!(s.run(cmd, &params).is_err(), "{cmd} accepted a wrapped id");
+    }
+    assert_eq!(s.doc.comments.len(), 1, "the comment is untouched");
+    assert!(!s.doc.comments.get(&(id as u32)).unwrap().resolved, "not resolved");
+}
+
 /// #1085: a new comment with no text, in an empty document or on a word, goes with Review ›
 /// Delete at the caret (no id) and by id.
 #[test]

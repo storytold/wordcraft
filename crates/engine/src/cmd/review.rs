@@ -16,7 +16,10 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("review.editComment", "Edit Comment", "Review › Comments", edit_comment).params(r#"{"id": n, "text": string}"#),
         CommandSpec::new("review.deleteComment", "Delete", "Review › Comments", delete_comment).params(r#"{"id"?: n, "all"?: bool}"#),
         CommandSpec::new("review.resolveComment", "Resolve", "Review › Comments", |s, v| {
-            let id = p::u64(v, "id").map(|x| x as u32).or_else(|| comment_at_caret(s)).ok_or_else(|| CmdError::Params("`id` required".into()))?;
+            let id = p::u64(v, "id")
+                .and_then(|x| u32::try_from(x).ok())
+                .or_else(|| comment_at_caret(s))
+                .ok_or_else(|| CmdError::Params("`id` required".into()))?;
             let c = s.doc.comments.get_mut(&id).ok_or_else(|| CmdError::Params("no such comment".into()))?;
             c.resolved = p::bool(v, "value").unwrap_or(!c.resolved);
             sel_result(s)
@@ -145,7 +148,7 @@ fn new_comment(s: &mut Session, v: &Value) -> CmdResult {
 }
 
 fn reply(s: &mut Session, v: &Value) -> CmdResult {
-    let parent = p::u64(v, "id").map(|x| x as u32).ok_or_else(|| CmdError::Params("`id` required".into()))?;
+    let parent = p::u64(v, "id").and_then(|x| u32::try_from(x).ok()).ok_or_else(|| CmdError::Params("`id` required".into()))?;
     if !s.doc.comments.contains_key(&parent) {
         return Err(CmdError::Params("no such comment".into()));
     }
@@ -261,7 +264,10 @@ fn delete_comment(s: &mut Session, v: &Value) -> CmdResult {
     let ids: Vec<u32> = if p::bool(v, "all").unwrap_or(false) {
         s.doc.comments.keys().copied().collect()
     } else {
-        let id = p::u64(v, "id").map(|x| x as u32).or_else(|| comment_at_caret(s)).ok_or_else(|| CmdError::Params("no comment here".into()))?;
+        let id = p::u64(v, "id")
+            .and_then(|x| u32::try_from(x).ok())
+            .or_else(|| comment_at_caret(s))
+            .ok_or_else(|| CmdError::Params("no comment here".into()))?;
         thread_of(s, id)
     };
     remove_anchors(s, &ids.iter().copied().collect())?;
