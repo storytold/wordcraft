@@ -506,10 +506,18 @@ fn custom_date(code: &str) -> Option<DateKind> {
                 }
             }
             '[' => {
+                let mut bracket = String::new();
                 for q in chars.by_ref() {
                     if q == ']' {
                         break;
                     }
+                    bracket.push(q);
+                }
+                match bracket.trim().to_ascii_lowercase().as_str() {
+                    "h" | "hh" => plain.push('h'),
+                    "m" | "mm" => plain.push('m'),
+                    "s" | "ss" => plain.push('s'),
+                    _ => {}
                 }
             }
             '\\' | '_' | '*' => {
@@ -763,22 +771,41 @@ fn iso_datetime(v: &str) -> Option<String> {
     Some(out)
 }
 
-/// An ISO 8601 duration time (`PT13H45M00S`) as `hh:mm[:ss]`.
+/// An ISO 8601 duration (`PT13H45M00S`) or XMLSchema time (`13:45:00`) as `hh:mm[:ss]`.
 fn iso_time(v: &str) -> Option<String> {
-    let t = v.trim().strip_prefix("PT")?;
-    let (mut h, mut m, mut s) = (0u64, 0u64, 0f64);
-    let mut num = String::new();
-    for c in t.chars() {
-        match c {
-            'H' => h = std::mem::take(&mut num).parse().ok()?,
-            'M' => m = std::mem::take(&mut num).parse().ok()?,
-            'S' => s = std::mem::take(&mut num).parse().ok()?,
-            c if num.len() < 20 => num.push(c),
-            _ => return None,
+    let v = v.trim();
+    if let Some(t) = v.strip_prefix("PT") {
+        let (mut h, mut m, mut s) = (0u64, 0u64, 0f64);
+        let mut num = String::new();
+        for c in t.chars() {
+            match c {
+                'H' => h = std::mem::take(&mut num).parse().ok()?,
+                'M' => m = std::mem::take(&mut num).parse().ok()?,
+                'S' => s = std::mem::take(&mut num).parse().ok()?,
+                c if num.len() < 20 => num.push(c),
+                _ => return None,
+            }
         }
+        let s = s.round() as u64;
+        Some(if s == 0 { format!("{h:02}:{m:02}") } else { format!("{h:02}:{m:02}:{s:02}") })
+    } else {
+        // XMLSchema time: hh:mm[:ss[.sss]][Z|(+|-)hh:mm]
+        let time_part = if let Some(idx) = v.rfind(['+', '-']) {
+            if idx >= 5 { &v[..idx] } else { v }
+        } else {
+            v.strip_suffix('Z').unwrap_or(v)
+        }.trim();
+        let mut parts = time_part.split(':');
+        let h: u32 = parts.next()?.parse().ok()?;
+        let m: u32 = parts.next()?.parse().ok()?;
+        let s_part = parts.next().unwrap_or("0");
+        let s: f64 = s_part.parse().ok()?;
+        let s = s.round() as u32;
+        if h > 24 || m >= 60 || s >= 60 {
+            return None;
+        }
+        Some(if s == 0 { format!("{h:02}:{m:02}") } else { format!("{h:02}:{m:02}:{s:02}") })
     }
-    let s = s.round() as u64;
-    Some(if s == 0 { format!("{h:02}:{m:02}") } else { format!("{h:02}:{m:02}:{s:02}") })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -828,10 +855,11 @@ fn ods_read(xml: &[u8], want: Option<usize>) -> Result<(Vec<String>, Vec<Vec<Str
                     let repeat = attr(e, b"number-columns-repeated").and_then(|v| v.trim().parse().ok()).unwrap_or(1u64).max(1);
                     let kind = attr(e, b"value-type").unwrap_or_default();
                     let value = match kind.as_str() {
-                        "float" => attr(e, b"value"),
+                        "float" | "percentage" | "currency" => attr(e, b"value"),
                         "date" => attr(e, b"date-value"),
                         "time" => attr(e, b"time-value"),
                         "boolean" => attr(e, b"boolean-value"),
+                        "string" => attr(e, b"string-value"),
                         _ => None,
                     };
                     // A covered cell's own content is hidden by the merge.
@@ -937,6 +965,10 @@ fn ods_value(c: &OCell) -> String {
     let v = c.value.as_deref().map(str::trim);
     match (c.kind.as_str(), v) {
         ("float", Some(v)) => v.parse::<f64>().map(number).unwrap_or_else(|_| c.text.clone()),
+        ("currency" | "percentage", Some(v)) if c.text.is_empty() => {
+            v.parse::<f64>().map(number).unwrap_or_else(|_| c.text.clone())
+        }
+        ("string", Some(v)) if c.text.is_empty() => v.to_string(),
         ("date", Some(v)) => iso_datetime(v).unwrap_or_else(|| c.text.clone()),
         ("time", Some(v)) => iso_time(v).unwrap_or_else(|| c.text.clone()),
         ("boolean", Some(v)) => if v.eq_ignore_ascii_case("true") || v == "1" { "TRUE" } else { "FALSE" }.into(),
@@ -1059,11 +1091,36 @@ mod tests {
         assert_eq!(custom_date("\"days\" 0.00"), None);
         assert_eq!(custom_date("General"), None);
         assert_eq!(custom_date("[Red]#,##0.00"), None);
+        assert_eq!(custom_date("[h]:mm"), Some(DateKind::Time));
+        assert_eq!(custom_date("[hh]:mm:ss"), Some(DateKind::Time));
+        assert_eq!(custom_date("[m]:ss"), Some(DateKind::Time));
+        assert_eq!(custom_date("yyyy-mm-dd [h]:mm"), Some(DateKind::DateTime));
+        assert_eq!(iso_time("13:45:00").as_deref(), Some("13:45"));
+        assert_eq!(iso_time("13:45:30").as_deref(), Some("13:45:30"));
+        assert_eq!(iso_time("13:45:00Z").as_deref(), Some("13:45"));
+        assert_eq!(iso_time("13:45:00+02:00").as_deref(), Some("13:45"));
         assert_eq!(serial_date(61.0, false, DateKind::Date).as_deref(), Some("1900-03-01"));
         assert_eq!(serial_date(0.0, true, DateKind::Date).as_deref(), Some("1904-01-01"));
         assert_eq!(serial_date(0.75, false, DateKind::Time).as_deref(), Some("18:00"));
         assert_eq!(serial_date(-1.0, false, DateKind::Date), None);
         assert_eq!(number(1234567.0), "1234567");
         assert_eq!(number(0.1 + 0.2), "0.3");
+    }
+
+    #[test]
+    fn ods_string_value_currency_and_xmlschema_time() {
+        let content = r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><office:body><office:spreadsheet>
+            <table:table table:name="Types">
+              <table:table-row>
+                <table:table-cell office:value-type="string" office:string-value="AttrString"/>
+                <table:table-cell office:value-type="currency" office:value="19.99" office:currency="USD"/>
+                <table:table-cell office:value-type="percentage" office:value="0.15"/>
+                <table:table-cell office:value-type="time" office:time-value="14:30:00"/>
+              </table:table-row>
+            </table:table></office:spreadsheet></office:body></office:document-content>"#;
+        let book = zip(&[("mimetype", "application/vnd.oasis.opendocument.spreadsheet"), ("content.xml", content)]);
+        let (_, rows) = read_rows(&book, Pick::Index(0)).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0], ["AttrString", "19.99", "0.15", "14:30"]);
     }
 }
