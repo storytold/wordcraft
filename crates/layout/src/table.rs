@@ -1204,9 +1204,49 @@ fn autofit(grid: &mut [f32], content: &[(f32, f32)], t: &Table, avail: f32) {
     if short < 0.01 {
         return;
     }
-    let spare: f32 = grid.iter().zip(content).map(|(w, c)| (*w - c.0).max(0.0)).sum();
-    let give = (short / spare.max(0.01)).min(1.0);
+    // Donors give equal widths until they reach their own content minimum.
+    let mut rooms: Vec<_> = grid.iter().zip(content).map(|(w, c)| *w - c.0).filter(|room| *room > 0.0).collect();
+    rooms.sort_by(f32::total_cmp);
+    let mut remaining = short;
+    let mut share = 0.0;
+    for (i, room) in rooms.iter().enumerate() {
+        share = remaining / (rooms.len() - i) as f32;
+        if share <= *room {
+            break;
+        }
+        remaining -= room;
+    }
     for (w, c) in grid.iter_mut().zip(content) {
-        *w = if *w < c.0 { c.0 } else { *w - (*w - c.0) * give };
+        *w = if *w < c.0 { c.0 } else { *w - (*w - c.0).min(share) };
+    }
+}
+
+#[cfg(test)]
+mod width_tests {
+    use super::*;
+
+    #[test]
+    fn autofit_shares_donor_loss() {
+        let table = Table::new(1, 4, 260.0);
+        let mut grid = [30.0, 120.0, 20.0, 90.0];
+        let content = [(28.0, 28.0), (40.0, 120.0), (40.0, 40.0), (30.0, 90.0)];
+        autofit(&mut grid, &content, &table, 260.0);
+        assert_eq!(grid, [28.0, 111.0, 40.0, 81.0]);
+    }
+
+    #[test]
+    fn autofit_exhausts_donors() {
+        let table = Table::new(1, 2, 50.0);
+        let mut grid = [30.0, 20.0];
+        autofit(&mut grid, &[(25.0, 25.0), (40.0, 40.0)], &table, 50.0);
+        assert_eq!(grid, [25.0, 40.0]);
+    }
+
+    #[test]
+    fn autofit_keeps_fitting_widths() {
+        let table = Table::new(1, 3, 120.0);
+        let mut grid = [30.0, 40.0, 50.0];
+        autofit(&mut grid, &[(10.0, 10.0), (20.0, 20.0), (30.0, 30.0)], &table, 120.0);
+        assert_eq!(grid, [30.0, 40.0, 50.0]);
     }
 }
