@@ -1005,9 +1005,10 @@ fn layout_box(
     // Deletions in balloons leave the body's text only: a header, note or text box keeps its own
     // inline (restored for the story around this box when it's done).
     let outer_hide = std::mem::replace(&mut ctx.hide_deleted, ctx.opts.hides_deleted(story));
+    let empty_cell = para::CellText::default();
     let (table, in_cell) = match context {
         BoxContext::Other => (None, false),
-        BoxContext::Cell(table) => (table, true),
+        BoxContext::Cell(table) => (Some(table.unwrap_or(&empty_cell)), true),
     };
     // Word 16.113.3: the override applies in modes 11/12/14, but not mode 15.
     let allow_same_style_space =

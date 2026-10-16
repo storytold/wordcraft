@@ -7263,3 +7263,115 @@ fn row_nil_overrides_style() {
     d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
     assert_eq!(rules_on_page0(&lay(&d)), vec![2.0]);
 }
+
+fn cell_break_doc(text: &str) -> Document {
+    use wordcraft_doc::props::{HeightRule, LineSpacing, VAlign};
+    let mut d = Document::new();
+    d.last_section.page_w = 344.0;
+    d.last_section.margin_left = 72.0;
+    d.last_section.margin_right = 72.0;
+    let mut p = Paragraph::with_text(text, CharProps { size: Some(11.0), ..Default::default() });
+    p.props.line_spacing = Some(LineSpacing::Exactly(12.0));
+    p.props.space_before = Some(3.0);
+    p.props.space_after = Some(3.0);
+    let prefix = text.bytes().take_while(|&c| c == wordcraft_doc::para::PAGE_BREAK as u8 || c == b'\n').count();
+    p.format(0, prefix, &|props| props.size = Some(3.0)).unwrap();
+    let mut t = Table::new(1, 1, 200.0);
+    t.props.cell_margins = Some([0.0; 4]);
+    t.rows[0].props.height = Some(20.0);
+    t.rows[0].props.height_rule = HeightRule::AtLeast;
+    t.rows[0].cells[0].props.valign = Some(VAlign::Center);
+    t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+    d.body = vec![Arc::new(Block::Table(t))];
+    d
+}
+
+#[test]
+fn cell_breaks_take_no_height() {
+    let height = |d: &Document| {
+        lay(d).pages[0]
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Placed::Cell { rect, .. } => Some(rect.h),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let plain = height(&cell_break_doc("Heading"));
+    for text in ["\u{000c}Heading", "\u{000c}\u{000c}\u{000c}Heading", "Head\u{000c}ing", "Heading\u{000c}\u{000c}\u{000c}", "é\u{000c}界"] {
+        let d = cell_break_doc(text);
+        assert_eq!(height(&d), plain, "cell page breaks take no height: {text:?}");
+        let l = lay(&d);
+        let para = l.pages[0]
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Placed::Lines { para, .. } => Some(para),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(para.lines.len(), 1);
+        assert!(!para.clusters.iter().any(|c| c.kind == para::ClKind::PageBreak));
+        for c in &para.clusters {
+            assert!(text.is_char_boundary(c.start) && text.is_char_boundary(c.end));
+            if text.get(c.start..c.end) == Some("\u{000c}") {
+                assert_eq!(c.kind, para::ClKind::Marker);
+            }
+        }
+        let starts: Vec<_> = para.clusters.iter().filter(|c| c.kind == para::ClKind::Text).map(|c| c.start).collect();
+        let expected: Vec<_> = text.char_indices().filter_map(|(i, c)| (c != '\u{000c}').then_some(i)).collect();
+        assert_eq!(starts, expected, "visible clusters retain source offsets");
+    }
+    assert!(height(&cell_break_doc("\n\n\nHeading")) > plain, "ordinary line breaks retain their lines");
+}
+
+#[test]
+fn cell_break_cache_is_scoped() {
+    let mut d = cell_break_doc("\u{000c}Heading");
+    let Block::Table(t) = &*d.body[0] else { panic!("table") };
+    let p = t.rows[0].cells[0].blocks[0].clone();
+    d.body.push(p);
+    assert_eq!(lay(&d).pages.len(), 2, "a reused paragraph's body page break still starts a page");
+}
+
+#[test]
+fn cell_breaks_with_bookmarks() {
+    for offset in [0, 1, 3] {
+        let mut d = cell_break_doc("\u{000c}\u{000c}\u{000c}Heading");
+        let Block::Table(t) = Arc::make_mut(&mut d.body[0]) else { panic!("table") };
+        let Block::Para(p) = Arc::make_mut(&mut t.rows[0].cells[0].blocks[0]) else { panic!("paragraph") };
+        p.insert_object(offset, InlineObject::BookmarkStart { name: "control".into() }, &Default::default()).unwrap();
+        let original = p.clone();
+        let l = lay(&d);
+        let para = l.pages[0]
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Placed::Lines { para, .. } => Some(para),
+                _ => None,
+            })
+            .unwrap();
+        assert!(!para.clusters.iter().any(|c| c.kind == para::ClKind::PageBreak));
+        assert_eq!(para.lines.len(), 1);
+        assert_eq!(para.clusters.iter().find(|c| c.kind == para::ClKind::Text).unwrap().start, 6);
+        let Block::Table(t) = &*d.body[0] else { panic!("table") };
+        let Block::Para(p) = &*t.rows[0].cells[0].blocks[0] else { panic!("paragraph") };
+        assert_eq!(p, &original, "layout preserves bookmark objects and source bytes");
+    }
+}
+
+#[test]
+fn cell_break_only_is_marker() {
+    let d = cell_break_doc("\u{000c}");
+    let l = lay(&d);
+    let para = l.pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Placed::Lines { para, .. } => Some(para),
+            _ => None,
+        })
+        .unwrap();
+    assert!(para.clusters.iter().all(|c| c.kind == para::ClKind::Marker));
+}

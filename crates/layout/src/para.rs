@@ -1344,6 +1344,8 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
             match c {
                 '\t' => push(&mut b, ClKind::Tab, 0.0, 0.0),
                 LINE_BREAK | '\r' => push(&mut b, ClKind::LineBreak, 0.0, 0.0),
+                // Word ignores explicit page breaks in cells, preserving their source offsets.
+                PAGE_BREAK if env.table.is_some() => push(&mut b, ClKind::Marker, 0.0, 0.0),
                 PAGE_BREAK => push(&mut b, ClKind::PageBreak, 0.0, 0.0),
                 COLUMN_BREAK => push(&mut b, ClKind::ColumnBreak, 0.0, 0.0),
                 _ => {
