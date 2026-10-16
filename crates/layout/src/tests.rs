@@ -7263,3 +7263,37 @@ fn row_nil_overrides_style() {
     d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
     assert_eq!(rules_on_page0(&lay(&d)), vec![2.0]);
 }
+
+#[test]
+fn header_margin_tracks_body_top() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    use wordcraft_doc::props::LineSpacing;
+    for margin in [60.0, 120.0] {
+        for anchor in [Anchor::Margin, Anchor::Page, Anchor::Paragraph] {
+            let mut d = Document::from_text("Body");
+            d.last_section.margin_top = margin;
+            d.last_section.header = 36.0;
+            let mut hp = Paragraph::with_text("One\nTwo\nThree\nFour\nFive", Default::default());
+            hp.props.line_spacing = Some(LineSpacing::Exactly(10.0));
+            hp.props.space_before = Some(0.0);
+            hp.props.space_after = Some(0.0);
+            let float = Float { wrap: Wrap::BehindText, h_rel: Anchor::Page, v_rel: anchor, x: 300.0, y: -20.0, ..Default::default() };
+            hp.insert_object(0, rect_shape(40.0, 10.0, float), &Default::default()).unwrap();
+            let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(hp)]);
+            d.last_section.headers.default = Some(id);
+            let l = lay(&d);
+            let page = &l.pages[0];
+            let expected = match anchor {
+                Anchor::Margin => page.body.y - 20.0,
+                Anchor::Page => -20.0,
+                _ => 16.0,
+            };
+            assert!(
+                (shapes(&page.header)[0].y - expected).abs() < 0.01,
+                "margin {margin}, anchor {anchor:?}: {:?}, body {:?}",
+                shapes(&page.header),
+                page.body
+            );
+        }
+    }
+}
